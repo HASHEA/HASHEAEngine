@@ -1,0 +1,12 @@
+# ignore files
+*.vs
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.bak
+
+
+# ignore directories
+bin
+bin-int
