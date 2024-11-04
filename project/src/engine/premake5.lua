@@ -22,6 +22,8 @@ project "Engine"
 		thirdparty .. "/ImGui/**.h",
 		thirdparty .. "/ImGui/**.hpp",
 		thirdparty .. "/ImGui/**.cpp",
+		thirdparty .. "/tlsf/**.h",
+		thirdparty .. "/tlsf/**.c",
 	}
 	
 	includedirs
@@ -46,6 +48,9 @@ project "Engine"
 		thirdparty .. "/tracy",
 		thirdparty .. "/Eigen",
 		thirdparty .. "/meshoptimizer/include",
+		thirdparty .. "/tlsf",
+		thirdparty .. "/wyhash",
+		thirdparty .. "/thsvs",
 		assetsdir,
 	}
 

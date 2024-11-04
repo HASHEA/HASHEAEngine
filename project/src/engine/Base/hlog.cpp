@@ -4,7 +4,7 @@
 #include "spdlog/sinks/basic_file_sink.h"
 namespace HASHEAENGINE
 {
-	LogService              s_log_service;
+	static LogService s_log_service;
 
 	LogService* LogService::instance() {
 		return &s_log_service;

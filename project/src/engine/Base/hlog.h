@@ -14,18 +14,18 @@ namespace HASHEAENGINE
 		HASHEA_DECLARE_SERVICE(LogService);
 		auto Init(void* conif) -> bool override;
 		auto Shutdown() -> bool override;
-	private:
-		auto _getEngineLogger() -> spdlog::logger* { return m_pEngineLogger; }
-		auto _getAppLogger() -> spdlog::logger* { return m_pAppLogger; }
+	public:
+		auto GetEngineLogger() -> spdlog::logger* { return m_pEngineLogger; }
+		auto GetAppLogger() -> spdlog::logger* { return m_pAppLogger; }
 	private:
 		spdlog::logger* m_pEngineLogger = nullptr;
 		spdlog::logger* m_pAppLogger = nullptr;
 	};
 };
 #if HASHEA_ENGINE
-#define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->_getEngineLogger()
+#define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->GetEngineLogger()
 #else
-#define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->_getAppLogger()
+#define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->GetAppLogger()
 #endif // HASHEA_ENGINE
 
 #define HLogTrace(sinfo,...)		GET_HASHEA_LOGGER->trace(sinfo,__VA_ARGS__)
