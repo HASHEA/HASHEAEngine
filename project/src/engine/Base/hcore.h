@@ -11,6 +11,13 @@
 #define HASHEA_API __declspec(dllimport)
 #endif // HASHEA_ENGINE
 
+#define NO_COPYABLE(TypeName) \
+	TypeName(const TypeName &) = delete;   \
+	TypeName(TypeName &&) = delete;	\
+	TypeName& operator=(TypeName &&) = delete;	\
+	TypeName& operator=(const TypeName &) = delete
+
+
 enum HS_Result
 {
 	HS_OK,
