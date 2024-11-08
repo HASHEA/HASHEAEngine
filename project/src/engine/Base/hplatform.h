@@ -16,3 +16,5 @@
 #define HASHEA_LINE_STRING                          HASHEA_MAKESTRING( __LINE__ ) 
 #define HASHEA_FILELINE(MESSAGE)                    __FILE__ "(" HASHEA_LINE_STRING ") : " MESSAGE
 #define HASHEA_UNIQUE_SUFFIX(PARAM)                 HASHEA_CONCAT(PARAM, __LINE__ )
+
+typedef const char* cstring;

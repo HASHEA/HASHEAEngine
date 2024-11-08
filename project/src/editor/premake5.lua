@@ -5,8 +5,8 @@ project "Editor"
 	kind "ConsoleApp"
 	staticruntime "off"
 
-	targetdir ("%{wks.location}/bin/target" .. outputdir .. "/%{prj.name}")
-	objdir ("%{wks.location}/bin/obj" .. outputdir .. "/%{prj.name}")
+	targetdir ("%{wks.location}/bin/target/" .. outputdir .. "/%{prj.name}")
+	objdir ("%{wks.location}/bin/obj/" .. outputdir .. "/%{prj.name}")
 
 	includedirs
 	{
@@ -20,8 +20,8 @@ project "Editor"
 
 	files
 	{
-		"src/**.h",
-		"src/**.cpp",
+		"**.h",
+		"**.cpp",
 
 		"**.lua",
 	}
@@ -32,6 +32,11 @@ project "Editor"
 
 	}
 	
+		postbuildcommands
+		{
+			("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.dll   %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
+		}
+
 	filter "system:windows"
 		system "Windows"
 		systemversion "latest"

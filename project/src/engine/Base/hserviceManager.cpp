@@ -1,4 +1,3 @@
-#pragma once
 #include "hserviceManager.h"
 namespace HASHEAENGINE
 {

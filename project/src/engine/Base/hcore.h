@@ -10,3 +10,13 @@
 #else
 #define HASHEA_API __declspec(dllimport)
 #endif // HASHEA_ENGINE
+
+enum HS_Result
+{
+	HS_OK,
+	HS_FAIL,
+};
+
+#define HS_CHECK_FAILED(cond)\
+	(HS_Result)(cond) != HS_OK
+		

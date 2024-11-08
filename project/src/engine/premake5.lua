@@ -1,6 +1,5 @@
 project "Engine"
 	language "C++"
-	cppdialect "c++17"
 	architecture "x64"
 	kind "SharedLib"
 	staticruntime "off"
@@ -83,10 +82,7 @@ project "Engine"
 		"spirv-cross",
 		"meshoptimizer"
 	}
-	postbuildcommands
-		{
-			("{COPY} %{cfg.buildtarget.relpath}  %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
-		}
+
 	filter "configurations:Debug"
 		defines
 		{

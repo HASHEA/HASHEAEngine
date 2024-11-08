@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <iostream>
 #include <string>
 #include <stdarg.h>
@@ -12,14 +13,14 @@ namespace HASHEAENGINE
 	public:
 		static constexpr const char*  k_name = "log_service";
 		HASHEA_DECLARE_SERVICE(LogService);
-		auto Init(void* conif) -> bool override;
-		auto Shutdown() -> bool override;
+		auto Init(void* conif) -> HS_Result override;
+		auto Shutdown() -> HS_Result override;
 	public:
-		auto GetEngineLogger() -> spdlog::logger* { return m_pEngineLogger; }
-		auto GetAppLogger() -> spdlog::logger* { return m_pAppLogger; }
+		auto GetEngineLogger() -> std::shared_ptr<spdlog::logger> { return m_pEngineLogger; }
+		auto GetAppLogger() -> std::shared_ptr<spdlog::logger> { return m_pAppLogger; }
 	private:
-		spdlog::logger* m_pEngineLogger = nullptr;
-		spdlog::logger* m_pAppLogger = nullptr;
+		std::shared_ptr<spdlog::logger> m_pEngineLogger = nullptr;
+		std::shared_ptr<spdlog::logger> m_pAppLogger = nullptr;
 	};
 };
 #if HASHEA_ENGINE
@@ -33,3 +34,6 @@ namespace HASHEAENGINE
 #define HLogWarning(sinfo,...)		GET_HASHEA_LOGGER->warn(sinfo,__VA_ARGS__)
 #define HLogError(sinfo,...)		GET_HASHEA_LOGGER->error(sinfo,__VA_ARGS__)
 
+#define HS_PROCESS_AND_LOG_RESULT(cond)\
+	if((HS_Result)(cond) != HS_OK)\
+		HLogError("failed check hsresult at {0},{1}",__FILE__, __LINE__);
