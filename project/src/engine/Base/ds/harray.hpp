@@ -45,9 +45,10 @@ namespace HASHEAENGINE
     private:
         auto                        Grow(uint32_t new_capacity) -> HS_Result;
 
-    private:
+    public:
         Allocator* m_pAllocator = nullptr;
         T* m_pData = nullptr;
+        
     };
 
 

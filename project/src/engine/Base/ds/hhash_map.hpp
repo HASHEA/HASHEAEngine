@@ -65,7 +65,7 @@ namespace HASHEAENGINE
 		FlatHashMapIterator Find(const K& key);
 	
 		template <typename K1, typename V1>
-		auto Insert(K1&& key, V1&& value)->std::enable_if_t<std::is_base_of_v<std::decay_t<K>, K1>&& std::is_base_of_v<std::decay_t<V>, V1>, HS_Result>
+		auto Insert(K1&& key, V1&& value) -> std::enable_if_t<std::is_same_v<std::decay_t<K>, std::decay_t<K1>> && (std::is_base_of_v<std::decay_t<V>, std::decay_t<V1>> || std::is_same_v<std::decay_t<V>, std::decay_t<V1>>), HS_Result>
 		{
 			const FoundResult find_result = _FindOrPrepareInsert(key);
 			if (find_result.bFreeIndex) {
@@ -82,7 +82,7 @@ namespace HASHEAENGINE
 		}
 
 		template <typename K1, typename V1>
-		auto Emplace(K1&& key, V1&& value) -> std::enable_if_t<std::is_base_of_v<std::decay_t<K>,K1> && std::is_base_of_v<std::decay_t<V>,V1>,HS_Result>
+		auto Emplace(K1&& key, V1&& value) -> std::enable_if_t<std::is_same_v<std::decay_t<K>, std::decay_t<K1>> && (std::is_base_of_v<std::decay_t<V>, std::decay_t<V1>> || std::is_same_v<std::decay_t<V>, std::decay_t<V1>>), HS_Result>
 		{
 			const FoundResult find_result = _FindOrPrepareInsert(key);
 			if (find_result.bFreeIndex) {
@@ -414,7 +414,7 @@ namespace HASHEAENGINE
 			_ReHashAndGrowIfNecessaty();
 			find_info = _FindFirstNonFull(hash);
 		}
-		++size;
+		++m_uSize;
 
 		growthLeft -= ControlIsEmpty(controlBytes[find_info.offset]) ? 1 : 0;
 		_SetCtrl(find_info.offset, Hash_2(hash));
@@ -424,7 +424,7 @@ namespace HASHEAENGINE
 	template <typename K, typename V>
 	auto FlatHashMap<K, V>::_ReHashAndGrowIfNecessaty() -> void{
 		if (m_uCapacity == 0) {
-			resize(1);
+			_Resize(1);
 		}
 		else if (m_uSize <= CapacityToGrowth(m_uCapacity) / 2) {
 			// Squash DELETED without growing if there is enough capacity.
@@ -512,7 +512,7 @@ namespace HASHEAENGINE
 	template <typename K, typename V>
 	auto FlatHashMap<K, V>::_InitializeSlots() -> void{
 
-		char* new_memory = (char*)Hashea_Alloc(m_pAllocator,calculate_size(m_uCapacity),1);
+		char* new_memory = (char*)Hashea_Alloc(m_pAllocator,_CalculateSize(m_uCapacity),1);
 
 		controlBytes = reinterpret_cast<int8_t*>(new_memory);
 		slots_ = reinterpret_cast<KeyValue*>(new_memory + m_uCapacity + GroupSse2Impl::kWidth);
@@ -526,7 +526,7 @@ namespace HASHEAENGINE
 		//assert( IsValidCapacity( new_capacity ) );
 		int8_t* old_control_bytes = controlBytes;
 		KeyValue* old_slots = slots_;
-		const u64 old_capacity = m_uCapacity;
+		const uint64_t old_capacity = m_uCapacity;
 
 		m_uCapacity = new_capacity;
 
@@ -543,7 +543,7 @@ namespace HASHEAENGINE
 				uint64_t new_i = find_info.offset;
 				total_probe_length += find_info.probeLength;
 
-				_SetCtrl(new_i, hash_2(hash));
+				_SetCtrl(new_i, Hash_2(hash));
 
 				MemoryCopy(slots_ + new_i, old_slots + i, sizeof(KeyValue));
 			}
@@ -618,8 +618,8 @@ namespace HASHEAENGINE
 	inline auto FlatHashMap<K, V>::_IteratorSkipEmptyOrDeleted(FlatHashMapIterator& it) -> void {
 		int8_t* ctrl = controlBytes + it.index;
 
-		while (control_is_empty_or_deleted(*ctrl)) {
-			u32 shift = GroupSse2Impl{ ctrl }.CountLeadingEmptyOrDeleted();
+		while (ControlIsEmptyOrDeleted(*ctrl)) {
+			uint32_t shift = GroupSse2Impl{ ctrl }.CountLeadingEmptyOrDeleted();
 			ctrl += shift;
 			it.index += shift;
 		}

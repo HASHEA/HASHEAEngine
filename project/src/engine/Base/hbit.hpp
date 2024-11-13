@@ -1,4 +1,6 @@
 #pragma once
+#include <type_traits>
+#include <limits>
 #include "hcore.h"
 #include "hplatform.h"
 #include "hlog.h"
@@ -21,6 +23,29 @@ namespace HASHEAENGINE
     auto            PrintBinary(uint64_t n) -> void;
     auto            PrintBinary(uint32_t n) -> void;
 
+
+#if !_HAS_CXX20
+    template <typename T>
+    constexpr int bit_width(T x) {
+        H_ASSERTLOG(std::is_integral<T>::value && std::is_unsigned<T>::value, "bit_width requires an unsigned integral type.");
+        if (x == 0) return 0;
+#if defined(__GNUC__) || defined(__clang__)
+        return std::numeric_limits<T>::digits - __builtin_clz(x);
+#elif defined(_MSC_VER)
+        unsigned long index;
+        _BitScanReverse(&index, x);
+        return index + 1;
+#else
+        // general iml
+        int width = 0;
+        while (x != 0) {
+            x >>= 1;
+            ++width;
+        }
+        return width;
+#endif
+    }
+#endif
     // class BitMask //////////////////////////////////////////////////////
 
 // An abstraction over a bitmask. It provides an easy way to iterate through the
@@ -53,7 +78,7 @@ namespace HASHEAENGINE
             return LowestBitSet();
         }
         uint32_t LowestBitSet() const {
-            return trailing_zeros_u32(mask_) >> Shift;
+            return TrailingZeroesU32(mask_) >> Shift;
         }
         uint32_t HighestBitSet() const {
             return static_cast<uint32_t>((bit_width(mask_) - 1) >> Shift);

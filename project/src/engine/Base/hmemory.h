@@ -180,23 +180,43 @@ namespace HASHEAENGINE
 
 //if nullptr, use system allocator
 #define Hashea_Alloc(allocater,size,align/*set 1 to no align*/)\
-	((allocater) == nullptr ? ((MemoryService::instance()->GetSystemAllocator())->Allocate( size, align, __FILE__, __LINE__ )):((allocater)->Allocate( size, align, __FILE__, __LINE__ )))
+	((allocater) == nullptr ? ((MemoryService::instance()->GetSystemAllocator())->Allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->Allocate( size, align, __FILE__, __LINE__ )))
 	
-#define Hashea_New(allocater,type,...)\
-	((allocater) == nullptr? (_OriginalPlacementNew<type>((type*)((MemoryService::instance()->GetSystemAllocator()))->Allocate( sizeof(type), 1, __FILE__, __LINE__ ),__VA_ARGS__)) :  (_OriginalPlacementNew<type>((type*)(allocater)->Allocate( sizeof(type), 1, __FILE__, __LINE__ ),__VA_ARGS__)))
+//#define Hashea_New(allocater,type,...)\
+//	(\
+//		(allocater) == nullptr ? \
+//		_OriginalPlacementNew<type>(static_cast<type*>(MemoryService::instance()->GetSystemAllocator()->Allocate( sizeof(type), 1, __FILE__, __LINE__ )),__VA_ARGS__) \
+//		:_OriginalPlacementNew<type>(static_cast<type*>((allocater)->Allocate( sizeof(type), 1, __FILE__, __LINE__ )),__VA_ARGS__)\
+//	)
 
-#define Hashea_Free(allocator,pObject)\
-	Allocator* l_pAlloc = allocator;\
+template<typename T, typename... Args>
+T* Hashea_New(Allocator* allocator = nullptr,Args&&... args) {
+	if (allocator == nullptr) {
+		return _OriginalPlacementNew<T>(static_cast<T*>(MemoryService::instance()->GetSystemAllocator()->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+	}
+	else {
+		return _OriginalPlacementNew<T>(static_cast<T*>(allocator->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+	}
+}
+
+
+#define Hashea_Free(_allocator,pObject)\
+{\
+	Allocator* l_pAlloc = (_allocator);\
 	if(!(l_pAlloc))\
 		(l_pAlloc) = (MemoryService::instance()->GetSystemAllocator());\
-	(l_pAlloc)->Deallocate(pObject)
+	(l_pAlloc)->Deallocate(pObject);\
+}
+
 #define Hashea_Delete(allocator,pObject)\
+{\
 	Allocator* l_pAlloc = allocater;\
 	if(!(l_pAlloc))\
 			(l_pAlloc) = (MemoryService::instance()->GetSystemAllocator());\
 	_OriginalDestroy(pObject);\
 	(l_pAlloc)->Deallocate(pObject);\
-	 pObject = nullptr
+	 pObject = nullptr;\
+}
 
 
 

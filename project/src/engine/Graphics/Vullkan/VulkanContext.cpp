@@ -6,18 +6,23 @@ namespace RHI
 {
 	auto GetRequiredLayers() -> std::vector<const char*>&
 	{
+		return std::vector<const char*>();
 	}
 
 	auto GetRequiredExtensions() -> std::vector<const char*>&
 	{
+		return std::vector<const char*>();
+
 	}
 
 	auto CheckValidationLayerSupport(std::vector<VkLayerProperties>& i, std::vector<const char*>& in)  -> bool
 	{
+		return false;
 
 	}
 	auto CheckExtensionSupport(std::vector<VkExtensionProperties>& i, std::vector<const char*>& in) -> bool
 	{
+		return false;
 
 	}
 	auto VulkanInstance::Init(void* config) -> void

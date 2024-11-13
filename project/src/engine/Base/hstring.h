@@ -22,14 +22,14 @@ namespace HASHEAENGINE
 		auto Init(size_t size,Allocator* allocator) -> void;
 		auto Shutdown() -> void;
 		auto Append(const char* string) -> void;
-		auto Append(const StringView& test) -> void;
+		auto Append(const StringView& text) -> void;
 		auto Append(void* memory, size_t size) -> void;
 		auto Append(const StringBuffer& otherBuffer) -> void;
 		auto Append(const char* format,...) -> void;
 
 		auto AppendGet(const char* string) -> char*;
 		auto AppendGet(const char* format, ...) -> char*;
-		auto AppendGet(const StringView& test) -> char*;
+		auto AppendGet(const StringView& text) -> char*;
 		auto AppendGetSubstring(const char* string, uint32_t start_index, uint32_t end_index) -> char*;
 		auto CloseCurrentString() -> void;
 		auto GetIndex(const char* text) const -> uint32_t ;
@@ -55,8 +55,8 @@ namespace HASHEAENGINE
 		auto HasNextString(FlatHashMapIterator* it)const -> bool;
 		auto Intern(const char* string) -> const char*;
 
-		FlatHashMap<uint64_t, uint32_t>* string2Index;
-		FlatHashMapIterator* stringsIterator;
+		FlatHashMap<uint64_t, uint32_t>* string2Index = nullptr;
+		FlatHashMapIterator* stringsIterator = nullptr;
 
 		char* m_pData = nullptr;
 		uint32_t                         m_uBufferSize = 1024;
