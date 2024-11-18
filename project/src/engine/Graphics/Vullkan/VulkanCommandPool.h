@@ -1,6 +1,16 @@
 #pragma once
-int main(int argc, char* argv[])
+#include "Graphics/CommandPool.h"
+#include "VulkanHelper.hpp"
+#include "VulkanWrapper.h"
+namespace RHI
 {
-	return 1;
+	class VulkanCommandPool : public CommandPool
+	{
+	public:
+		VulkanCommandPool();
+		~VulkanCommandPool();
 
-}
+	private:
+
+	};
+};

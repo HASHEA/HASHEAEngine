@@ -88,6 +88,8 @@ project "Engine"
 		{
 			"HASHEA_DEBUG",
 			"TRACY_ENABLE",
+			"VULKAN_SYNCHRONIZATION_VALIDATION",
+			"VULKAN_DEBUG_REPORT",
 		}
 		links
 		{
