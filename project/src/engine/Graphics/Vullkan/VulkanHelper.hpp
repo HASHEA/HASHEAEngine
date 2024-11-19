@@ -1,7 +1,7 @@
 #pragma once
 #include "Base/hassert.h"
 #include "Base/hlog.h"
-
+#include "VulkanWrapper.h"
 namespace RHI
 {
 

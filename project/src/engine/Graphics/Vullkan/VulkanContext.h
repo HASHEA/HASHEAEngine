@@ -15,14 +15,13 @@ namespace RHI
 
 	class VulkanCommandBuffer;
 	class VulkanCommandPool;
-	struct FrameData
+	struct FramePool
 	{
-		std::shared_ptr<VulkanCommandPool> cmdPool;
-		std::shared_ptr<VulkanCommandBuffer> cmdBuffer;
-		VkQueryPool                     vulkanTimestampQueryPool = nullptr;
-		VkQueryPool                     vulkanPipelineStatsQueryPool = nullptr;
-		VkSemaphore presentSemaphore = VK_NULL_HANDLE;
+		std::shared_ptr<VulkanCommandPool>	cmdPool;
+		VkQueryPool							vulkanTimestampQueryPool     = nullptr;
+		VkQueryPool							vulkanPipelineStatsQueryPool = nullptr;
 	};
+
 
 	struct VulkanContextInitConfig
 	{
@@ -31,6 +30,7 @@ namespace RHI
 		uint16_t                             width = 1;
 		uint16_t                             height = 1;
 		uint16_t                             num_threads = 1;
+		uint16_t							 queryCount = 32;
 	};
 	class VulkanContext
 	{
@@ -67,7 +67,7 @@ namespace RHI
 		auto VulkanContext::_CreateDevice()->HS_Result;
 		auto VulkanContext::_CreateVMA()->HS_Result;
 		auto VulkanContext::_CreateDescriptorPool(const GpuDescriptorPoolCreation& dspci)->HS_Result;
-		auto VulkanContext::_CreateFrameData(uint16_t numThread)->HS_Result;
+		auto VulkanContext::_CreateFramePoolAndData(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
 	private:
 		BitSetFixed<4> featureSwitchFlags;
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties;
@@ -94,8 +94,7 @@ namespace RHI
 		VkDescriptorPool                vulkanDescriptorPool				= VK_NULL_HANDLE;
 		VkDescriptorPool                vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
-		FrameData						frameDatas[MAX_SWAPCHAIN_BUFFERS];
-		Array<FrameData>				thread_frame_pools;
+		Array<FramePool>				framePools;
 	private:
 	
 		float                           gpuTimestampFrequency = 0.f;

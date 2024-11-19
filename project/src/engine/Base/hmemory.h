@@ -3,7 +3,7 @@
 #include <stdarg.h>
 #include "hcore.h"
 #include "hservice.h"
-
+#include <memory>
 namespace HASHEAENGINE
 {
 
@@ -198,6 +198,33 @@ T* Hashea_New(Allocator* allocator = nullptr,Args&&... args) {
 		return _OriginalPlacementNew<T>(static_cast<T*>(allocator->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 	}
 }
+
+template<typename T, typename... Args>
+std::shared_ptr<T> Hashea_New_Shared(Args&&... args) {
+	T* pO = nullptr;
+	pO = _OriginalPlacementNew<T>(static_cast<T*>(MemoryService::instance()->GetSystemAllocator()->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+
+	auto Deleter = [](T* pObject) {
+		auto allocator = (MemoryService::instance()->GetSystemAllocator());
+		allocator->Deallocate(pObject); 
+	};
+	std::shared_ptr<T> sp(pO, Deleter);
+	return sp;
+}
+
+template<typename T, typename... Args>
+std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
+	T* pO = nullptr;
+	pO = _OriginalPlacementNew<T>(static_cast<T*>(MemoryService::instance()->GetSystemAllocator()->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+
+	auto Deleter = [](T* pObject) {
+		auto allocator = (MemoryService::instance()->GetSystemAllocator());
+		allocator->Deallocate(pObject);
+		};
+	std::unique_ptr<T, decltype(Deleter)> sp(pO, Deleter);
+	return sp;
+}
+
 
 
 #define Hashea_Free(_allocator,pObject)\

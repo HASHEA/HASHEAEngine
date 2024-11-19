@@ -7,10 +7,12 @@ namespace RHI
 	class VulkanCommandPool : public CommandPool
 	{
 	public:
-		VulkanCommandPool();
+		VulkanCommandPool(VkDevice device,uint32_t queueFamily, VkCommandPoolCreateFlags flag, VkAllocationCallbacks* allocationCallbacks);
 		~VulkanCommandPool();
-
+		NO_COPYABLE(VulkanCommandPool);
+	public:
+		auto GetHandle() -> VkCommandPool { return commandPool; }
 	private:
-
+		VkCommandPool commandPool = VK_NULL_HANDLE;
 	};
 };

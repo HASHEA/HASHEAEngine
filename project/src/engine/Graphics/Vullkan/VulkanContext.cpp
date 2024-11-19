@@ -1,6 +1,9 @@
 #pragma once
-#include "VulkanContext.h"
 #include "Base/hlog.h"
+
+#include "VulkanContext.h"
+#include "VulkanCommandPool.h"
+
 #include <vector>
 namespace RHI
 {
@@ -595,7 +598,8 @@ namespace RHI
 	{
 		VkDescriptorPoolSize poolSizes[] =
 		{
-			{ VK_DESCRIPTOR_TYPE_SAMPLER, dspci.samplers },
+			{ VK_DESCRIPTOR_TYPE_SAMPLER, dspci
+			.samplers },
 			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, dspci.combinedImageSamplers },
 			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, dspci.sampledImage },
 			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, dspci.storageImage },
@@ -632,13 +636,36 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanContext::_CreateFrameData(uint16_t numThread) -> HS_Result
+	auto VulkanContext::_CreateFramePoolAndData(uint16_t numThread, uint16_t numQueryTimes) -> HS_Result
 	{
 		const uint32_t num_pools = numThread * k_max_frames;
-		thread_frame_pools.Init(nullptr/*default allocator*/, num_pools, num_pools);
-		for (uint32_t i = 0; i < thread_frame_pools.m_uSize; i++)
+		framePools.Init(nullptr/*default allocator*/, num_pools, num_pools);
+		for (uint32_t i = 0; i < framePools.m_uSize; i++)
 		{
+			FramePool& pool = framePools[i];
+			pool.cmdPool = Hashea_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+			VkQueryPoolCreateInfo timestampPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+			timestampPoolCI.pNext = nullptr;
+			timestampPoolCI.flags = 0;
+			timestampPoolCI.queryType = VK_QUERY_TYPE_TIMESTAMP;
+			timestampPoolCI.queryCount = numQueryTimes;
+			timestampPoolCI.pipelineStatistics = 0;
+			VK_CHECK_RESULT(vkCreateQueryPool(vulkanDevice, &timestampPoolCI, vulkanAllocationCallbacks, &pool.vulkanTimestampQueryPool));
 
+			VkQueryPoolCreateInfo pipelineStatisticPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+			pipelineStatisticPoolCI.pNext = nullptr;
+			pipelineStatisticPoolCI.flags = 0;
+			pipelineStatisticPoolCI.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+			pipelineStatisticPoolCI.queryCount = 7;
+			pipelineStatisticPoolCI.pipelineStatistics = 0;
+			pipelineStatisticPoolCI.pipelineStatistics = VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+				VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
+				VK_QUERY_PIPELINE_STATISTIC_VERTEX_SHADER_INVOCATIONS_BIT |
+				VK_QUERY_PIPELINE_STATISTIC_CLIPPING_INVOCATIONS_BIT |
+				VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+				VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT |
+				VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
+			VK_CHECK_RESULT(vkCreateQueryPool(vulkanDevice, &pipelineStatisticPoolCI, vulkanAllocationCallbacks, &pool.vulkanPipelineStatsQueryPool));
 		}
 		return HS_OK;
 	}
@@ -689,6 +716,12 @@ namespace RHI
 			return result;
 		}
 		
+		result = _CreateFramePoolAndData(vkConfig.num_threads, vkConfig.queryCount);
+		if (HS_CHECK_FAILED(result))
+		{
+			HLogError("Fatal : Failed to create FrameData !");
+			return result;
+		}
 
 
 	}
