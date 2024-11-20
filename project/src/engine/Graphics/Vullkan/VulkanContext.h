@@ -15,24 +15,29 @@ namespace RHI
 
 	class VulkanCommandBuffer;
 	class VulkanCommandPool;
+	struct GPUTimeQuery;
+	struct GpuTimeQueryTree;
+	struct GpuPipelineStatistics;
+	struct GPUTimeQueriesManager;
 	struct FramePool
 	{
 		std::shared_ptr<VulkanCommandPool>	cmdPool;
 		VkQueryPool							vulkanTimestampQueryPool     = nullptr;
 		VkQueryPool							vulkanPipelineStatsQueryPool = nullptr;
+		GpuTimeQueryTree*					timeQueries = nullptr;
 	};
 
 
 	struct VulkanContextInitConfig
 	{
 		GpuDescriptorPoolCreation descriptorPoolCreation{};
-		void* window = nullptr;
+		void*								 window = nullptr;
 		uint16_t                             width = 1;
 		uint16_t                             height = 1;
 		uint16_t                             num_threads = 1;
 		uint16_t							 queryCount = 32;
 	};
-	class VulkanContext
+	class VulkanContext : public GraphicsContext
 	{
 	public:
 		auto Init(void* config = nullptr) -> HS_Result;
@@ -51,6 +56,11 @@ namespace RHI
 			return vulkanDevice;
 		}
 
+		inline const auto GetVulkanInstance()
+		{
+			return vulkanInstance;
+		}
+	
 	private:
 		StringView stringBuffer{};
 	//vk handles
@@ -95,6 +105,7 @@ namespace RHI
 		VkDescriptorPool                vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
 		Array<FramePool>				framePools;
+		std::shared_ptr<GPUTimeQueriesManager> gpuTimeQueryManager = nullptr;
 	private:
 	
 		float                           gpuTimestampFrequency = 0.f;
@@ -105,5 +116,10 @@ namespace RHI
 		VkExtent2D                      minFragmentShadingRateTexelSize;
 
 	};
+
+
+
+
+
 
 };

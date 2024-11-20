@@ -1,5 +1,6 @@
 #pragma once
 #include "Base/hplatform.h"
+#include <memory>
 namespace RHI {
     struct GpuDescriptorPoolCreation {
 
@@ -16,4 +17,24 @@ namespace RHI {
         uint16_t                             inputAttachments = 256;
 
     };
+    class VulkanContext;
+    class GraphicsContext
+    {
+    public:
+        GraphicsContext() {};
+        ~GraphicsContext() {}; 
+    protected:
+      
+    };
+
+
+
+
+
+    GraphicsContext* g_pGraphicsContext = nullptr;
+
+#ifdef HASHEA_VULKAN
+    VulkanContext* g_pVulkanContext = nullptr;
+#endif // HASHEA_VULKAN
+
 };

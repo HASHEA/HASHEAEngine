@@ -206,6 +206,7 @@ std::shared_ptr<T> Hashea_New_Shared(Args&&... args) {
 
 	auto Deleter = [](T* pObject) {
 		auto allocator = (MemoryService::instance()->GetSystemAllocator());
+		_OriginalDestroy(pObject);
 		allocator->Deallocate(pObject); 
 	};
 	std::shared_ptr<T> sp(pO, Deleter);
@@ -219,6 +220,7 @@ std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
 
 	auto Deleter = [](T* pObject) {
 		auto allocator = (MemoryService::instance()->GetSystemAllocator());
+		_OriginalDestroy(pObject);
 		allocator->Deallocate(pObject);
 		};
 	std::unique_ptr<T, decltype(Deleter)> sp(pO, Deleter);

@@ -3,7 +3,7 @@
 
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
-
+#include "GpuProfiler.h"
 #include <vector>
 namespace RHI
 {
@@ -638,8 +638,11 @@ namespace RHI
 
 	auto VulkanContext::_CreateFramePoolAndData(uint16_t numThread, uint16_t numQueryTimes) -> HS_Result
 	{
+		
 		const uint32_t num_pools = numThread * k_max_frames;
 		framePools.Init(nullptr/*default allocator*/, num_pools, num_pools);
+		gpuTimeQueryManager = Hashea_New_Shared<GPUTimeQueriesManager>();
+		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
 		for (uint32_t i = 0; i < framePools.m_uSize; i++)
 		{
 			FramePool& pool = framePools[i];
@@ -672,6 +675,8 @@ namespace RHI
 
 	auto VulkanContext::Init(void* config) -> HS_Result
 	{	
+		g_pGraphicsContext = this;
+		g_pVulkanContext = this;
 		VulkanContextInitConfig vkConfig = *(VulkanContextInitConfig*)config;
 		H_ASSERT(&vkConfig);
 		//load vulkan by volk;

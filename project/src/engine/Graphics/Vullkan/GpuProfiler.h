@@ -26,9 +26,9 @@ namespace RHI
     struct GpuTimeQueryTree {
 
         void                            reset();
-        void                            set_queries(GPUTimeQuery* time_queries, u32 count);
+        void                            set_queries(GPUTimeQuery* time_queries, uint32_t count);
 
-        GPUTimeQuery* push(cstring name);
+        GPUTimeQuery* push(const char* name);
         GPUTimeQuery* pop();
 
         ArrayView<GPUTimeQuery>         time_queries; // Allocated externally
@@ -93,7 +93,7 @@ namespace RHI
         void                        init(Allocator* allocator, uint32_t max_frames, uint32_t max_queries_per_frame);
         void                        shutdown();
 
-        void                        update(GraphicsContext& context);
+        void                        update(VulkanContext& context);
 
         void                        imgui_draw();
 
