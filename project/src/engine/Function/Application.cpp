@@ -1,6 +1,6 @@
 #pragma once
-int main(int argc, char* argv[])
+#include "Application.h"
+namespace HASHEAENGINE
 {
-	return 1;
 
-}
+};
