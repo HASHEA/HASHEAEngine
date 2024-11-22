@@ -8,16 +8,16 @@ namespace RHI
 		VulkanFence(bool createSignaled = true);
 		~VulkanFence();
 		NO_COPYABLE(VulkanFence);
-		auto Reset() -> void;
-		auto Wait() -> bool;
-		auto WaitAndReset() -> void;
-		auto CheckState() -> bool;
-		auto IsSignaled() -> bool;
-		inline auto GetHandle() const
+		auto reset() -> void;
+		auto wait() -> bool;
+		auto wait_and_reset() -> void;
+		auto check_state() -> bool;
+		auto is_signaled() -> bool;
+		inline auto get_handle() const
 		{
 			return fence;
 		}
-		inline auto SetSignaled(bool signaled)
+		inline auto set_signaled(bool signaled)
 		{
 			this->signaled = signaled;
 		}

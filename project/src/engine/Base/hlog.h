@@ -13,18 +13,18 @@ namespace HASHEAENGINE
 	public:
 		static constexpr const char*  k_name = "log_service";
 		HASHEA_DECLARE_SERVICE(LogService);
-		auto Init(void* conif) -> HS_Result override;
-		auto Shutdown() -> HS_Result override;
+		auto init(void* conif) -> HS_Result override;
+		auto shutdown() -> HS_Result override;
 	public:
-		auto GetEngineLogger() -> std::shared_ptr<spdlog::logger> { return m_pEngineLogger; }
-		auto GetAppLogger() -> std::shared_ptr<spdlog::logger> { return m_pAppLogger; }
+		auto get_engine_logger() -> std::shared_ptr<spdlog::logger> { return m_pEngineLogger; }
+		auto get_app_logger() -> std::shared_ptr<spdlog::logger> { return m_pAppLogger; }
 	private:
 		std::shared_ptr<spdlog::logger> m_pEngineLogger = nullptr;
 		std::shared_ptr<spdlog::logger> m_pAppLogger = nullptr;
 	};
 };
 #if HASHEA_ENGINE
-#define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->GetEngineLogger()
+#define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->get_engine_logger()
 #else
 #define GET_HASHEA_LOGGER HASHEAENGINE::LogService::instance()->GetAppLogger()
 #endif // HASHEA_ENGINE

@@ -3,7 +3,7 @@
 
 namespace HASHEAENGINE
 {
-	auto LeadingZeroesU32(uint32_t x)->uint32_t
+	auto leading_zeros_u32(uint32_t x)->uint32_t
 	{
 #if defined(_MSC_VER)
 		return __lzcnt(x);
@@ -12,7 +12,7 @@ namespace HASHEAENGINE
 #endif
 	}
 #if defined(_MSC_VER)
-	auto LeadingZeroesU32MSVC(uint32_t x) -> uint32_t
+	auto leading_zeros_u32_msvc(uint32_t x) -> uint32_t
 	{
 		unsigned long result = 0;  // NOLINT(runtime/int)
 		if (_BitScanReverse(&result, x)) {
@@ -21,7 +21,7 @@ namespace HASHEAENGINE
 		return 32;
 	}
 #endif
-	auto             TrailingZeroesU32(uint32_t x) -> uint32_t
+	auto             trailing_zeros_u32(uint32_t x) -> uint32_t
 	{
 #if defined(_MSC_VER)
 		return _tzcnt_u32(x);
@@ -29,7 +29,7 @@ namespace HASHEAENGINE
 		return __builtin_ctz(x);
 #endif
 	}
-	auto TrailingZeroesU64(uint64_t x) -> uint32_t
+	auto trailing_zeros_u64(uint64_t x) -> uint32_t
 	{
 #if defined(_MSC_VER)
 		return _tzcnt_u64(x);
@@ -37,12 +37,12 @@ namespace HASHEAENGINE
 		return __builtin_ctzl(x);
 #endif
 	}
-	auto RoundUpToPowerOf2(uint32_t v) -> uint32_t
+	auto round_up_to_power_of_2(uint32_t v) -> uint32_t
 	{
-		uint32_t nv = 1 << (32 - LeadingZeroesU32(v));
+		uint32_t nv = 1 << (32 - leading_zeros_u32(v));
 		return nv;
 	}
-	auto PrintBinary(uint64_t n) -> void
+	auto print_binary(uint64_t n) -> void
 	{
 		HLogInfo("0b");
 		for (uint32_t i = 0; i < 64; ++i) {
@@ -51,7 +51,7 @@ namespace HASHEAENGINE
 		}
 		HLogInfo(" ");
 	}
-	auto PrintBinary(uint32_t n) -> void
+	auto print_binary(uint32_t n) -> void
 	{
 		HLogInfo("0b");
 		for (uint32_t i = 0; i < 32; ++i) {
@@ -62,19 +62,19 @@ namespace HASHEAENGINE
 	}
 
 	// BitSet /////////////////////////////////////////////////////////////////
-	void BitSet::Init(Allocator* allocator_, uint32_t totalBits) {
+	void BitSet::init(Allocator* allocator_, uint32_t totalBits) {
 		m_pAllocator = allocator_;
 		bits = nullptr;
 		size = 0;
 
-		Resize(totalBits);
+		resize(totalBits);
 	}
-	auto BitSet::Shutdown() -> void
+	auto BitSet::shutdown() -> void
 	{
 		Hashea_Free(m_pAllocator, bits);
 
 	}
-	auto BitSet::Resize(uint32_t totalBits) -> void
+	auto BitSet::resize(uint32_t totalBits) -> void
 	{
 		uint8_t* oldBits = bits;
 		const uint32_t new_size = (totalBits + 7) / 8;

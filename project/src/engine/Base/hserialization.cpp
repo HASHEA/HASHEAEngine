@@ -4,7 +4,7 @@
 #include "hmemory.h"
 namespace HASHEAENGINE
 {
-	auto Serializer::WriteCommon(Allocator* _allocator, uint32_t serializer_version, size_t size) -> void
+	auto Serializer::write_common(Allocator* _allocator, uint32_t serializer_version, size_t size) -> void
 	{
 		allocator = _allocator;
 		blobMemory = (char*)Hashea_Alloc(allocator,size + sizeof(BlobHeader),1);
@@ -16,12 +16,12 @@ namespace HASHEAENGINE
 		dataVersion = serializer_version;
 		isReading = 0;
 		isMappable = 0;
-		BlobHeader* l_pHeader = (BlobHeader*)AllocateStatic(sizeof(BlobHeader));
+		BlobHeader* l_pHeader = (BlobHeader*)allocate_static(sizeof(BlobHeader));
 		l_pHeader->version = serializerVersion;
 		l_pHeader->mappable = isMappable;
 		serializedOffset = allocatedOffset;
 	}
-	auto Serializer::Shutdown() -> void
+	auto Serializer::shutdown() -> void
 	{
 		if (isReading) {
 			if (blobMemory && hasAllocatedMemory/*if false, map*/)
@@ -38,14 +38,14 @@ namespace HASHEAENGINE
 		serializedOffset = allocatedOffset = 0;
 	}
 
-	auto Serializer::Serialize(RelativeString* data) -> void
+	auto Serializer::serialize(RelativeString* data) -> void
 	{
 		if (isReading) {
 			// Blob --> Data
-			Serialize(&data->size);
+			serialize(&data->size);
 
 			int32_t source_data_offset;
-			Serialize(&source_data_offset);
+			serialize(&source_data_offset);
 
 			if (source_data_offset > 0) {
 				// Cache serialized
@@ -53,10 +53,10 @@ namespace HASHEAENGINE
 
 				serializedOffset = allocatedOffset;
 
-				data->data.offset = GetRelativeDataOffset(data) - 4;
+				data->data.offset = get_relative_data_offset(data) - 4;
 
 				// Reserve memory + string ending
-				AllocateStatic((size_t)data->size + 1);
+				allocate_static((size_t)data->size + 1);
 
 				char* source_data = blobMemory + cached_serialized + source_data_offset - 4;
 				memcpy((char*)data->c_str(), source_data, (size_t)data->size + 1);
@@ -69,16 +69,16 @@ namespace HASHEAENGINE
 		}
 		else {
 			// Data --> Blob
-			Serialize(&data->size);
+			serialize(&data->size);
 			// Data will be copied at the end of the current blob
 			int32_t data_offset = allocatedOffset - serializedOffset;
-			Serialize(&data_offset);
+			serialize(&data_offset);
 
 			uint32_t cached_serialized = serializedOffset;
 			// Move serialization to at the end of the blob.
 			serializedOffset = allocatedOffset;
 			// Allocate memory in the blob
-			AllocateStatic((size_t)data->size + 1);
+			allocate_static((size_t)data->size + 1);
 
 			char* destination_data = blobMemory + serializedOffset;
 			memcpy(destination_data, (char*)data->c_str(), (size_t)data->size + 1);
@@ -87,7 +87,7 @@ namespace HASHEAENGINE
 		}
 	}
 
-	auto Serializer::AllocateStatic(size_t size) -> char*
+	auto Serializer::allocate_static(size_t size) -> char*
 	{
 		if (allocatedOffset + size > totalSize)
 		{
@@ -99,7 +99,7 @@ namespace HASHEAENGINE
 		return isReading ? dataMemory + offset : blobMemory + offset;
 	}
 
-	auto Serializer::AllocateAndSet(RelativeString& string, cstring format, ...) -> void
+	auto Serializer::allocate_and_set(RelativeString& string, cstring format, ...) -> void
 	{
 		uint32_t cached_offset = allocatedOffset;
 
@@ -127,7 +127,7 @@ namespace HASHEAENGINE
 		string.set(dst + cached_offset, written_chars);
 	}
 
-	auto Serializer::AllocateAndSet(RelativeString& string, char* text, uint32_t length) -> void
+	auto Serializer::allocate_and_set(RelativeString& string, char* text, uint32_t length) -> void
 	{
 		if (allocatedOffset + length > totalSize) {
 			HLogError("New string too big for current buffer! Please allocate more size.\n");
@@ -149,14 +149,14 @@ namespace HASHEAENGINE
 
 	}
 
-	auto Serializer::GetRelativeDataOffset(void* data) -> int32_t
+	auto Serializer::get_relative_data_offset(void* data) -> int32_t
 	{
 		const int32_t data_offset_from_start = (int32_t)((char*)data - dataMemory);
 		const int32_t data_offset = allocatedOffset - data_offset_from_start;
 		return data_offset;
 	}
 
-	auto Serializer::Serialize(char* data) -> void
+	auto Serializer::serialize(char* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(char));
@@ -168,7 +168,7 @@ namespace HASHEAENGINE
 		serializedOffset += sizeof(char);
 	}
 
-	auto Serializer::Serialize(const char* data) -> void
+	auto Serializer::serialize(const char* data) -> void
 	{
 		/*size_t len = strlen(data);
 		if (isReading) {
@@ -181,7 +181,7 @@ namespace HASHEAENGINE
 		serializedOffset += sizeof(char);*/
 		//useless...
 	}
-	auto Serializer::Serialize(int8_t* data) -> void
+	auto Serializer::serialize(int8_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(int8_t));
@@ -192,7 +192,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(int8_t);
 	}
-	auto Serializer::Serialize(uint8_t* data) -> void
+	auto Serializer::serialize(uint8_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(uint8_t));
@@ -203,7 +203,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(uint8_t);
 	}
-	auto Serializer::Serialize(int16_t* data) -> void
+	auto Serializer::serialize(int16_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(int16_t));
@@ -214,7 +214,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(int16_t);
 	}
-	auto Serializer::Serialize(uint16_t* data) -> void
+	auto Serializer::serialize(uint16_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(uint16_t));
@@ -225,7 +225,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(uint16_t);
 	}
-	auto Serializer::Serialize(int32_t* data) -> void
+	auto Serializer::serialize(int32_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(int32_t));
@@ -236,7 +236,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(int32_t);
 	}
-	auto Serializer::Serialize(uint32_t* data) -> void
+	auto Serializer::serialize(uint32_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(uint32_t));
@@ -247,7 +247,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(uint32_t);
 	}
-	auto Serializer::Serialize(int64_t* data) -> void
+	auto Serializer::serialize(int64_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(int64_t));
@@ -258,7 +258,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(int64_t);
 	}
-	auto Serializer::Serialize(uint64_t* data) -> void
+	auto Serializer::serialize(uint64_t* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(uint64_t));
@@ -269,7 +269,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(uint64_t);
 	}
-	auto Serializer::Serialize(float* data) -> void
+	auto Serializer::serialize(float* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(float));
@@ -280,7 +280,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(float);
 	}
-	auto Serializer::Serialize(double* data) -> void
+	auto Serializer::serialize(double* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(double));
@@ -291,7 +291,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(double);
 	}
-	auto Serializer::Serialize(bool* data) -> void
+	auto Serializer::serialize(bool* data) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], sizeof(bool));
@@ -302,7 +302,7 @@ namespace HASHEAENGINE
 
 		serializedOffset += sizeof(bool);
 	}
-	auto Serializer::SerializeMemroy(void* data, size_t size) -> void
+	auto Serializer::serialize_memory(void* data, size_t size) -> void
 	{
 		if (isReading) {
 			memcpy(data, &blobMemory[serializedOffset], size);
@@ -313,20 +313,20 @@ namespace HASHEAENGINE
 
 		serializedOffset += size;
 	}
-	auto Serializer::SerializeMemoryBlock(void** data, uint32_t* size) -> void
+	auto Serializer::serialize_memory_block(void** data, uint32_t* size) -> void
 	{
 		//write /read size first and move the  serialized pointer
-		Serialize(size);
+		serialize(size);
 		if (isReading)
 		{
 			//read the offset first
 			int32_t offset = 0;
-			Serialize(&offset);
+			serialize(&offset);
 			if (offset > 0)
 			{
 				uint32_t cachedSerializedOffset = serializedOffset;
 				serializedOffset = allocatedOffset;
-				AllocateStatic(*size);
+				allocate_static(*size);
 				*data = dataMemory + serializedOffset;
 				char* srcData = blobMemory + cachedSerializedOffset + offset - sizeof(int32_t);//[-sizeof(int32_t)]here for when writing we calculate the offset before sz it, 
 				//which means when reading,we should return back the size of offset before we apply the offset;
@@ -344,12 +344,12 @@ namespace HASHEAENGINE
 			int32_t offset = allocatedOffset - serializedOffset;
 			//write the offset at the position instead of the value of the absolute pointer
 			//and move the serialized pointer
-			Serialize(&offset);
+			serialize(&offset);
 			//cache the serialized offset pointer
 			uint32_t cachedSerializedOffset = serializedOffset;
 			serializedOffset = allocatedOffset;
 			//allocate the data mem in the blob
-			AllocateStatic(*size);
+			allocate_static(*size);
 			char* destData = blobMemory + serializedOffset;
 			memcpy(destData,*data,*size);
 			serializedOffset = cachedSerializedOffset;

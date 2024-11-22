@@ -9,7 +9,7 @@ namespace HASHEAENGINE
 		return &s_log_service;
 	}
 
-	auto LogService::Init(void* conif) -> HS_Result
+	auto LogService::init(void* conif) -> HS_Result
 	{
 		std::vector<spdlog::sink_ptr> logSinksEngine;
 		logSinksEngine.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
@@ -33,7 +33,7 @@ namespace HASHEAENGINE
 		return HS_OK;
 	}
 
-	auto LogService::Shutdown() -> HS_Result
+	auto LogService::shutdown() -> HS_Result
 	{
 		return HS_OK;
 	}

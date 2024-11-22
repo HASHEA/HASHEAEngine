@@ -10,18 +10,18 @@ namespace HASHEAENGINE
 	struct Allocator;
 
     // Common methods /////////////////////////////////////////////////////
-    auto             LeadingZeroesU32(uint32_t x) -> uint32_t;
+    auto             leading_zeros_u32(uint32_t x) -> uint32_t;
 
 #if defined(_MSC_VER)
-    auto             LeadingZeroesU32MSVC(uint32_t x) -> uint32_t;
+    auto             leading_zeros_u32_msvc(uint32_t x) -> uint32_t;
 #endif
-    auto             TrailingZeroesU32(uint32_t x) -> uint32_t;
-    auto             TrailingZeroesU64(uint64_t x) -> uint32_t;
+    auto             trailing_zeros_u32(uint32_t x) -> uint32_t;
+    auto             trailing_zeros_u64(uint64_t x) -> uint32_t;
 
-    auto             RoundUpToPowerOf2(uint32_t v) -> uint32_t;
+    auto             round_up_to_power_of_2(uint32_t v) -> uint32_t;
 
-    auto            PrintBinary(uint64_t n) -> void;
-    auto            PrintBinary(uint32_t n) -> void;
+    auto            print_binary(uint64_t n) -> void;
+    auto            print_binary(uint32_t n) -> void;
 
 
 #if !_HAS_CXX20
@@ -75,12 +75,12 @@ namespace HASHEAENGINE
             return mask_ != 0;
         }
         int operator*() const {
-            return LowestBitSet();
+            return lowest_bitset();
         }
-        uint32_t LowestBitSet() const {
-            return TrailingZeroesU32(mask_) >> Shift;
+        uint32_t lowest_bitset() const {
+            return trailing_zeros_u32(mask_) >> Shift;
         }
-        uint32_t HighestBitSet() const {
+        uint32_t highest_bitset() const {
             return static_cast<uint32_t>((bit_width(mask_) - 1) >> Shift);
         }
 
@@ -91,12 +91,12 @@ namespace HASHEAENGINE
             return BitMask(0);
         }
 
-        uint32_t TrailingZeros() const {
-            return TrailingZeroesU32(mask_);// >> Shift;
+        uint32_t trailing_zeros() const {
+            return trailing_zeros_u32(mask_);// >> Shift;
         }
 
-        uint32_t LeadingZeros() const {
-            return LeadingZeroesU32(mask_);// >> Shift;
+        uint32_t leading_zeros() const {
+            return leading_zeros_u32(mask_);// >> Shift;
         }
 
     private:
@@ -109,16 +109,16 @@ namespace HASHEAENGINE
         T mask_;
     }; // class BitMask
     // Utility methods
-    inline uint32_t              BitMask8(uint32_t bit) { return 1 << (bit & 7); }
-    inline uint32_t              BitSlot8(uint32_t bit) { return bit / 8; }
+    inline uint32_t              bit_mask_8(uint32_t bit) { return 1 << (bit & 7); }
+    inline uint32_t              bit_slot_8(uint32_t bit) { return bit / 8; }
     struct BitSet
     {
-        auto Init(Allocator* allocator, uint32_t totalBits) -> void;
-        auto Shutdown() -> void;
-        auto Resize(uint32_t totalBits) -> void;
-        auto SetBit(uint32_t index) -> void { bits[index / 8] |= BitMask8(index); };
-        auto ClearBit(uint32_t index) -> void { bits[index / 8] &= ~BitMask8(index); };
-        auto GetBit(uint32_t index) -> uint8_t { return bits[index / 8] & BitMask8(index); }
+        auto init(Allocator* allocator, uint32_t totalBits) -> void;
+        auto shutdown() -> void;
+        auto resize(uint32_t totalBits) -> void;
+        auto set_bit(uint32_t index) -> void { bits[index / 8] |= bit_mask_8(index); };
+        auto clear_bit(uint32_t index) -> void { bits[index / 8] &= ~bit_mask_8(index); };
+        auto get_bit(uint32_t index) -> uint8_t { return bits[index / 8] & bit_mask_8(index); }
         Allocator* m_pAllocator = nullptr;
         uint8_t* bits = nullptr;
         uint32_t                 size = 0;
@@ -127,9 +127,9 @@ namespace HASHEAENGINE
     template <uint32_t SizeInBytes>
     struct BitSetFixed
     {
-        auto SetBit(uint32_t index) -> void { bits[index / 8] |= BitMask8(index); };
-        auto ClearBit(uint32_t index) -> void { bits[index / 8] &= ~BitMask8(index); };
-        auto GetBit(uint32_t index) -> uint8_t { return bits[index / 8] & BitMask8(index); }
+        auto set_bit(uint32_t index) -> void { bits[index / 8] |= bit_mask_8(index); };
+        auto clear_bit(uint32_t index) -> void { bits[index / 8] &= ~bit_mask_8(index); };
+        auto get_bit(uint32_t index) -> uint8_t { return bits[index / 8] & bit_mask_8(index); }
 
         uint8_t                  bits[SizeInBytes];
     };

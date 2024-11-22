@@ -25,13 +25,13 @@ namespace RHI
 		VkResult res = (f);                                                                                                       \
 		if (res != VK_SUCCESS)                                                                                                    \
 		{                                                                                                                         \
-			HLogError("Fatal : VK CALL ERROR : VkResult is \" {0} \" in {1} at line {2}", VulkanErrorString(res).c_str(), __FILE__, __LINE__); \
+			HLogError("Fatal : VK CALL ERROR : VkResult is \" {0} \" in {1} at line {2}", vulkan_error_string(res).c_str(), __FILE__, __LINE__); \
 			H_ASSERT(res == VK_SUCCESS);                                                                                            \
 		}                                                                                                                         \
 	}
 
 
-	std::string VulkanErrorString(VkResult errorCode)
+	std::string vulkan_error_string(VkResult errorCode)
 	{
 		switch (errorCode)
 		{

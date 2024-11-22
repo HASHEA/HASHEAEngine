@@ -6,23 +6,23 @@ namespace RHI
 	{
 		VkFenceCreateInfo fenceCreateInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
 		fenceCreateInfo.flags = createSignaled ? VK_FENCE_CREATE_SIGNALED_BIT : 0;
-		vkCreateFence(g_pVulkanContext->GetVulkanDevice(), &fenceCreateInfo, nullptr, &fence);
+		vkCreateFence(VulkanContext::get_vulkan_device(), &fenceCreateInfo, nullptr, &fence);
 	}
 	VulkanFence::~VulkanFence()
 	{
-		vkDestroyFence(g_pVulkanContext->GetVulkanDevice(), fence, nullptr);
+		vkDestroyFence(VulkanContext::get_vulkan_device(), fence, nullptr);
 	}
 	auto VulkanFence::Reset() -> void
 	{
 		if (signaled)
-			VK_CHECK_RESULT(vkResetFences(g_pVulkanContext->GetVulkanDevice(), 1, &fence));
+			VK_CHECK_RESULT(vkResetFences(VulkanContext::get_vulkan_device(), 1, &fence));
 		signaled = false;
 	}
 	auto VulkanFence::Wait() -> bool
 	{
 		H_ASSERTLOG(!signaled, "Fence Signaled");
 
-		const VkResult result = vkWaitForFences(g_pVulkanContext->GetVulkanDevice(), 1, &fence, true, UINT32_MAX);
+		const VkResult result = vkWaitForFences(VulkanContext::get_vulkan_device(), 1, &fence, true, UINT32_MAX);
 
 		//VK_CHECK_RESULT(result);
 		if (result == VK_SUCCESS)
@@ -43,7 +43,7 @@ namespace RHI
 
 		H_ASSERTLOG(!signaled, "Fence Signaled");
 
-		const VkResult result = vkGetFenceStatus(g_pVulkanContext->GetVulkanDevice(), fence);
+		const VkResult result = vkGetFenceStatus(VulkanContext::get_vulkan_device(), fence);
 		if (result == VK_SUCCESS)
 		{
 			signaled = true;

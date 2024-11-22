@@ -145,7 +145,7 @@ namespace RHI
 		return VK_FALSE;
 	}
 
-	auto VulkanContext::_CreateInstance() -> HS_Result
+	auto VulkanContext::_create_instance() -> HS_Result
 	{
 		VkApplicationInfo appInfo{};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -201,7 +201,7 @@ namespace RHI
 		return HS_OK;
 	}
 #ifdef VULKAN_DEBUG_REPORT
-	auto VulkanContext::_CreateDebugUtilMessengerExt() -> HS_Result
+	auto VulkanContext::_create_debug_util_messenger_ext() -> HS_Result
 	{
 		// Create new debug utils callback
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
@@ -214,7 +214,7 @@ namespace RHI
 	}
 #endif
 
-	auto VulkanContext::_SelectAndPreparePhysicalDevice() -> HS_Result
+	auto VulkanContext::_select_and_prepare_physical_device() -> HS_Result
 	{
 		uint32_t numPhysicalDevice = 0;
 		VK_CHECK_RESULT(vkEnumeratePhysicalDevices(vulkanInstance, &numPhysicalDevice, NULL));
@@ -240,15 +240,15 @@ namespace RHI
 		}
 		HLogInfo("GPU used : {}", vulkanPhysicalDeviceProperties.deviceName);
 		gpuTimestampFrequency = vulkanPhysicalDeviceProperties.limits.timestampPeriod / (1000*1000);
-		_FilterDeviceSelectableExtension();
+		_filter_device_selectable_extension();
 		//Query Properties Supported
-		_QuerySurpportedProperties();
+		_query_supported_props();
 		//Query Feature supported
-		_QuerySurpportedFeatures();
+		_query_supported_features();
 		return retCode;
 	}
 
-	auto VulkanContext::_FilterDeviceSelectableExtension() -> HS_Result
+	auto VulkanContext::_filter_device_selectable_extension() -> HS_Result
 	{
 		uint32_t deviceExtensionCount = 0;
 		vkEnumerateDeviceExtensionProperties(vulkanPhysicalDevice, nullptr, &deviceExtensionCount, nullptr);
@@ -259,49 +259,49 @@ namespace RHI
 		for (size_t i = 0; i < deviceExtensionCount; i++) {
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::DynamicRendering);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::DynamicRendering);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::TimelineSemaphore);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::TimelineSemaphore);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::Synchronization2);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::Synchronization2);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_NV_MESH_SHADER_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::MeshShaders);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::MeshShaders);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_MULTIVIEW_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::Multiview);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::Multiview);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::FragmentShadingRate);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::FragmentShadingRate);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::RayTracing);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::RayTracing);
 				continue;
 			}
 
 			if (!strcmp(extensions[i].extensionName, VK_KHR_RAY_QUERY_EXTENSION_NAME)) {
-				featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::RayQuery);
+				featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::RayQuery);
 				continue;
 			}
 		}
 		return HS_OK;
 	}
 
-	auto VulkanContext::_QuerySurpportedProperties() -> HS_Result
+	auto VulkanContext::_query_supported_props() -> HS_Result
 	{
 		VkPhysicalDeviceSubgroupProperties subGroupProperties{};
 		subGroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
@@ -311,14 +311,14 @@ namespace RHI
 		void* physicalDevicePropertiesNext = nullptr;
 		physicalDevicePropertiesNext = &subgroupProperties;
 		fragmentShadingRateProperties = VkPhysicalDeviceFragmentShadingRatePropertiesKHR{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
 		{
 			fragmentShadingRateProperties.pNext = physicalDevicePropertiesNext;
 			physicalDevicePropertiesNext = &fragmentShadingRateProperties;
 		}
 
 		rayTracingPipelineProperties = VkPhysicalDeviceRayTracingPipelinePropertiesKHR{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::RayTracing))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::RayTracing))
 		{
 			rayTracingPipelineProperties.pNext = physicalDevicePropertiesNext;
 			physicalDevicePropertiesNext = &rayTracingPipelineProperties;
@@ -327,7 +327,7 @@ namespace RHI
 		physicalDeviceProperties2.pNext = physicalDevicePropertiesNext;
 		vkGetPhysicalDeviceProperties2(vulkanPhysicalDevice, &physicalDeviceProperties2);
 		subgroupSize = subGroupProperties.subgroupSize;
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
 		{
 			minFragmentShadingRateTexelSize = fragmentShadingRateProperties.minFragmentShadingRateAttachmentTexelSize;
 		}
@@ -337,7 +337,7 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanContext::_QuerySurpportedFeatures() -> HS_Result
+	auto VulkanContext::_query_supported_features() -> HS_Result
 	{
 		// Query bindless extension, called Descriptor Indexing (https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VK_EXT_descriptor_indexing.html)
 		VkPhysicalDeviceDescriptorIndexingFeatures indexingFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES };
@@ -348,7 +348,7 @@ namespace RHI
 		accelerationStructureFeatures = VkPhysicalDeviceAccelerationStructureFeaturesKHR{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR };
 		rayTracingPipelineFeatures = VkPhysicalDeviceRayTracingPipelineFeaturesKHR{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR };
 		rayQueryFeatures = VkPhysicalDeviceRayQueryFeaturesKHR{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::RayTracing))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::RayTracing))
 		{
 			indexingFeatures.pNext = &accelerationStructureFeatures;
 			accelerationStructureFeatures.pNext = &rayTracingPipelineFeatures;
@@ -359,13 +359,13 @@ namespace RHI
 		// as some entries in the bindless array will be empty, and SpirV runtime descriptors.
 		if (indexingFeatures.descriptorBindingPartiallyBound && indexingFeatures.runtimeDescriptorArray)
 		{
-			featureSwitchFlags.SetBit(DeviceExtensionAndFeaturesFlags::Bindless);
+			featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::Bindless);
 		}
 		
 		return HS_OK;
 	}
 
-	auto VulkanContext::_CreateDevice() -> HS_Result
+	auto VulkanContext::_create_device() -> HS_Result
 	{
 		//Create logical device
 		uint32_t queueFamilyCount = 0;
@@ -418,33 +418,33 @@ namespace RHI
 		std::vector<const char*> deviceExtension;
 		deviceExtension.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 		deviceExtension.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
 			deviceExtension.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
 		{
 			deviceExtension.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::Synchronization2))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2))
 		{
 			deviceExtension.push_back(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::MeshShaders))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::MeshShaders))
 		{
 			deviceExtension.push_back(VK_NV_MESH_SHADER_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::Multiview))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Multiview))
 		{
 			deviceExtension.push_back(VK_KHR_MULTIVIEW_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
 		{
 			deviceExtension.push_back(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
 			deviceExtension.push_back(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
 			deviceExtension.push_back(VK_KHR_MAINTENANCE2_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::RayTracing))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::RayTracing))
 		{
 			deviceExtension.push_back(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME);
 			deviceExtension.push_back(VK_KHR_SPIRV_1_4_EXTENSION_NAME);
@@ -452,7 +452,7 @@ namespace RHI
 			deviceExtension.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
 			deviceExtension.push_back(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
 		}
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::RayQuery))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::RayQuery))
 		{
 			deviceExtension.push_back(VK_KHR_RAY_QUERY_EXTENSION_NAME);
 		}
@@ -492,19 +492,19 @@ namespace RHI
 		vulkan13Features.pNext = currentPNext;
 		currentPNext = &vulkan13Features;
 		VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
 			dynamicRenderingFeatures.pNext = currentPNext;
 			currentPNext = &dynamicRenderingFeatures;
 		}
 
 		VkPhysicalDeviceSynchronization2FeaturesKHR synchronization2_features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::Synchronization2)) {
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2)) {
 			synchronization2_features.pNext = currentPNext;
 			currentPNext = &synchronization2_features;
 		}
 
 		VkPhysicalDeviceMeshShaderFeaturesNV mesh_shaders_features = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_NV };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::MeshShaders)) {
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::MeshShaders)) {
 			mesh_shaders_features.taskShader = true;
 			mesh_shaders_features.meshShader = true;
 
@@ -513,7 +513,7 @@ namespace RHI
 		}
 
 		VkPhysicalDeviceFragmentShadingRateFeaturesKHR shading_rate_features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR };
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate)) {
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate)) {
 			shading_rate_features.attachmentFragmentShadingRate = true;
 			shading_rate_features.pipelineFragmentShadingRate = true;
 
@@ -521,14 +521,14 @@ namespace RHI
 			currentPNext = &shading_rate_features;
 		}
 
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::RayTracing)) {
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::RayTracing)) {
 			rayTracingPipelineFeatures.pNext = &accelerationStructureFeatures;
 			accelerationStructureFeatures.pNext = currentPNext;
 
 			currentPNext = &rayTracingPipelineFeatures;
 		}
 
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::RayQuery)) {
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::RayQuery)) {
 			rayQueryFeatures.pNext = currentPNext;
 			currentPNext = &rayQueryFeatures;
 		}
@@ -555,7 +555,7 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanContext::_CreateVMA() -> HS_Result
+	auto VulkanContext::_create_vulkan_memory_allocator() -> HS_Result
 	{
 		//load vma funcs
 		VmaAllocatorCreateInfo allocatorCI = {};
@@ -594,7 +594,7 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanContext::_CreateDescriptorPool(const GpuDescriptorPoolCreation& dspci) -> HS_Result
+	auto VulkanContext::_create_descriptor_pool(const GpuDescriptorPoolCreation& dspci) -> HS_Result
 	{
 		VkDescriptorPoolSize poolSizes[] =
 		{
@@ -618,7 +618,7 @@ namespace RHI
 		CI.pPoolSizes = poolSizes;
 		VK_CHECK_RESULT(vkCreateDescriptorPool(vulkanDevice,&CI,vulkanAllocationCallbacks,&vulkanDescriptorPool));
 		//if enable bindless
-		if (GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags::Bindless))
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Bindless))
 		{
 			VkDescriptorPoolSize poolSizesBindless[] =
 			{
@@ -636,14 +636,14 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanContext::_CreateFramePoolAndData(uint16_t numThread, uint16_t numQueryTimes) -> HS_Result
+	auto VulkanContext::_create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes) -> HS_Result
 	{
 		
 		const uint32_t num_pools = numThread * k_max_frames;
-		framePools.Init(nullptr/*default allocator*/, num_pools, num_pools);
+		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
 		gpuTimeQueryManager = Hashea_New_Shared<GPUTimeQueriesManager>();
 		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
-		for (uint32_t i = 0; i < framePools.m_uSize; i++)
+		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
 			pool.cmdPool = Hashea_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
@@ -673,55 +673,53 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanContext::Init(void* config) -> HS_Result
+	auto VulkanContext::init(void* config) -> HS_Result
 	{	
-		g_pGraphicsContext = this;
-		g_pVulkanContext = this;
-		VulkanContextInitConfig vkConfig = *(VulkanContextInitConfig*)config;
+		GraphicsContextInitConfig vkConfig = *(GraphicsContextInitConfig*)config;
 		H_ASSERT(&vkConfig);
 		//load vulkan by volk;
 		VK_CHECK_RESULT(volkInitialize());
 		//create vkinstance
-		HS_Result result = _CreateInstance();
+		HS_Result result = _create_instance();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create instance !");
 			return result;
 		}
 #ifdef VULKAN_DEBUG_REPORT
-		result = _CreateDebugUtilMessengerExt();
+		result = _create_debug_util_messenger_ext();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create DebugUtilMessengerExt !");
 			return result;
 		}
 #endif
-		result = _SelectAndPreparePhysicalDevice();
+		result = _select_and_prepare_physical_device();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to select Physical Device !");
 			return result;
 		}
-		result = _CreateDevice();
+		result = _create_device();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create Device !");
 			return result;
 		}
-		result = _CreateVMA();
+		result = _create_vulkan_memory_allocator();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create VMA Allocator !");
 			return result;
 		}
-		result = _CreateDescriptorPool(vkConfig.descriptorPoolCreation);
+		result = _create_descriptor_pool(vkConfig.descriptorPoolCreation);
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create DescriptorPool !");
 			return result;
 		}
 		
-		result = _CreateFramePoolAndData(vkConfig.num_threads, vkConfig.queryCount);
+		result = _create_frame_pool_and_data(vkConfig.num_threads, vkConfig.queryCount);
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create FrameData !");
@@ -730,7 +728,9 @@ namespace RHI
 
 
 	}
-	auto VulkanContext::Shutdown() -> HS_Result
+	auto VulkanContext::shutdown() -> HS_Result
 	{
 	}
+
+	VulkanContext* VulkanContext::instance = nullptr;
 };

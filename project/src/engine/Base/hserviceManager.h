@@ -1,5 +1,7 @@
 #pragma once
+#include "hplatform.h"
 #include "hcore.h"
+#include"ds/hhash_map.hpp"
 namespace HASHEAENGINE
 {
 	class Allocator;
@@ -7,13 +9,13 @@ namespace HASHEAENGINE
 
 	struct ServiceManager
 	{
-		auto Init(Allocator* allocator) -> bool;
-		auto Shutdown() -> bool;
+		auto init(Allocator* allocator) -> bool;
+		auto shutdown() -> bool;
 
-		auto RegisterService(Service* service, const char* name) -> bool;
-		auto CancelService(const char* name) -> bool;
+		auto register_service(Service* service, const char* name) -> bool;
+		auto cancel_service(const char* name) -> bool;
 
-		Service* GetService(const char* name);
+		Service* get_service(const char* name);
 
 		template<typename T>
 		T* get();
@@ -29,5 +31,6 @@ namespace HASHEAENGINE
 
 		static ServiceManager* instance;
 		Allocator* allocator = nullptr;
+		FlatHashMap<uint64_t, Service*> services;
 	};
 };

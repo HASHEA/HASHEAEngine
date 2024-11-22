@@ -17,24 +17,26 @@ namespace RHI {
         uint16_t                             inputAttachments = 256;
 
     };
+    struct GraphicsContextInitConfig
+    {
+        GpuDescriptorPoolCreation descriptorPoolCreation{};
+        void* window = nullptr;
+        uint16_t                             width = 1;
+        uint16_t                             height = 1;
+        uint16_t                             num_threads = 1;
+        uint16_t							 queryCount = 32;
+    };
     class VulkanContext;
     class GraphicsContext
     {
     public:
         GraphicsContext() {};
         ~GraphicsContext() {}; 
+
+        virtual auto init(void* config) -> HS_Result = 0;
+        virtual auto shutdown() -> HS_Result = 0;
+        static std::shared_ptr<GraphicsContext> create();
     protected:
       
     };
-
-
-
-
-
-    GraphicsContext* g_pGraphicsContext = nullptr;
-
-#ifdef HASHEA_VULKAN
-    VulkanContext* g_pVulkanContext = nullptr;
-#endif // HASHEA_VULKAN
-
 };

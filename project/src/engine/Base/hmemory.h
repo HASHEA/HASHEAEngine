@@ -8,11 +8,11 @@ namespace HASHEAENGINE
 {
 
 	// Memory Methods /////////////////////////////////////////////////////
-	void MemoryCopy(void* destination, void* source, size_t size);
+	void memory_copy(void* destination, void* source, size_t size);
 
 	//
 	//  Calculate aligned memory size.
-	size_t MemoryAlign(size_t size, size_t alignment);
+	size_t memory_align(size_t size, size_t alignment);
 
 
 	enum AllocType
@@ -25,10 +25,10 @@ namespace HASHEAENGINE
 	struct Allocator 
 	{
 		virtual ~Allocator() { }
-		virtual auto Allocate(size_t size, size_t alignment) -> void* = 0;
-		virtual auto Allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void* = 0;
+		virtual auto allocate(size_t size, size_t alignment) -> void* = 0;
+		virtual auto allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void* = 0;
 
-		virtual auto Deallocate(void* pointer) -> HS_Result = 0;
+		virtual auto deallocate(void* pointer) -> HS_Result = 0;
 	}; // struct Allocator
 
 	struct MemoryStatistics {
@@ -37,7 +37,7 @@ namespace HASHEAENGINE
 
 		uint32_t                         m_uAllocationCounts;
 
-		auto Add(size_t a) -> HS_Result {
+		auto add(size_t a) -> HS_Result {
 			if (a) {
 				m_szAllocatedbytes += a;
 				++m_uAllocationCounts;
@@ -51,17 +51,17 @@ namespace HASHEAENGINE
 	public:
 		~HeapAllocator() override;
 
-		auto Init(size_t size) -> HS_Result;
-		auto Shutdown()-> HS_Result;
+		auto init(size_t size) -> HS_Result;
+		auto shutdown()-> HS_Result;
 
 #ifdef HASHEA_DEBUG
-		auto OnGUI() -> void;
+		auto on_gui() -> void;
 #endif // HASHEA_DEBUG
 
-		auto Allocate(size_t size, size_t alignment) -> void* override;
-		auto Allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
+		auto allocate(size_t size, size_t alignment) -> void* override;
+		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
-		auto Deallocate(void* pointer)-> HS_Result override;
+		auto deallocate(void* pointer)-> HS_Result override;
 	private:
 		void* m_pTlsfHandle = nullptr;
 		void* m_pMemory = nullptr;
@@ -72,18 +72,18 @@ namespace HASHEAENGINE
 	class StackAllocator : public Allocator
 	{
 	public:
-		auto                        Init(size_t size) -> HS_Result;
-		auto                        Shutdown() -> HS_Result;
+		auto                        init(size_t size) -> HS_Result;
+		auto                        shutdown() -> HS_Result;
 
-		auto Allocate(size_t size, size_t alignment)-> void* override;
-		auto Allocate(size_t size, size_t alignment, char* file, uint32_t line)-> void* override;
+		auto allocate(size_t size, size_t alignment)-> void* override;
+		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)-> void* override;
 
-		auto                        Deallocate(void* pointer)-> HS_Result override;
+		auto                        deallocate(void* pointer)-> HS_Result override;
 
-		auto                       GetMarker() -> size_t;
-		auto                        FreeMarker(size_t marker) -> HS_Result;
+		auto                       get_marker() -> size_t;
+		auto                        free_marker(size_t marker) -> HS_Result;
 
-		auto                        Clear() -> HS_Result;
+		auto                        clear() -> HS_Result;
 	private:
 		uint8_t* m_pMemory = nullptr;
 		size_t                       m_szTotalSize = 0;
@@ -99,15 +99,15 @@ namespace HASHEAENGINE
 	public:
 		~LinearAllocator();
 
-		auto                        Init(size_t size) -> HS_Result;
-		auto                        Shutdown()-> HS_Result;
+		auto                        init(size_t size) -> HS_Result;
+		auto                        shutdown()-> HS_Result;
 
-		auto Allocate(size_t size, size_t alignment)->void* override;
-		auto Allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
+		auto allocate(size_t size, size_t alignment)->void* override;
+		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
-		auto                        Deallocate(void* pointer)-> HS_Result override;
+		auto                        deallocate(void* pointer)-> HS_Result override;
 
-		auto                        Clear()-> HS_Result;
+		auto                        clear()-> HS_Result;
 	private:
 		uint8_t* m_pMemory = nullptr;
 		size_t                       m_szTotalSize = 0;
@@ -122,18 +122,18 @@ namespace HASHEAENGINE
 	{
 	public:
 		static constexpr char* k_name = "memory_service";
-		auto Init(void* configuration) -> HS_Result override;
-		auto Shutdown() -> HS_Result override;
+		auto init(void* configuration) -> HS_Result override;
+		auto shutdown() -> HS_Result override;
 #ifdef HASHEA_DEBUG
-		auto OnGUI() -> void override;
+		auto on_gui() -> void override;
 #endif // HASHEA_DEBUG
 		HASHEA_DECLARE_SERVICE(MemoryService);
-		auto GetSystemAllocator() -> HeapAllocator*
+		auto get_system_allocator() -> HeapAllocator*
 		{
 			return &m_heapAllocator;
 		};
 
-		auto GetStackAllocator() -> StackAllocator*
+		auto get_stack_allocator() -> StackAllocator*
 		{
 			return &m_stackAllocator;
 		};
@@ -167,20 +167,20 @@ namespace HASHEAENGINE
 	//}
 
 	template<typename T, typename ...Args>
-	T* _OriginalPlacementNew(void* pvAddress, Args&& ... args) {
+	T* _original_placement_new(void* pvAddress, Args&& ... args) {
 		T* pResult = new (pvAddress) T(std::forward<Args>(args) ...);
 		return pResult;
 	}
 
 	template<typename T>
-	void _OriginalDestroy(T* pObject)
+	void _original_destroy(T* pObject)
 	{
 		pObject->~T();
 	}
 
 //if nullptr, use system allocator
 #define Hashea_Alloc(allocater,size,align/*set 1 to no align*/)\
-	((allocater) == nullptr ? ((MemoryService::instance()->GetSystemAllocator())->Allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->Allocate( size, align, __FILE__, __LINE__ )))
+	((allocater) == nullptr ? ((MemoryService::instance()->get_system_allocator())->allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->allocate( size, align, __FILE__, __LINE__ )))
 	
 //#define Hashea_New(allocater,type,...)\
 //	(\
@@ -192,22 +192,22 @@ namespace HASHEAENGINE
 template<typename T, typename... Args>
 T* Hashea_New(Allocator* allocator = nullptr,Args&&... args) {
 	if (allocator == nullptr) {
-		return _OriginalPlacementNew<T>(static_cast<T*>(MemoryService::instance()->GetSystemAllocator()->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 	}
 	else {
-		return _OriginalPlacementNew<T>(static_cast<T*>(allocator->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 	}
 }
 
 template<typename T, typename... Args>
 std::shared_ptr<T> Hashea_New_Shared(Args&&... args) {
 	T* pO = nullptr;
-	pO = _OriginalPlacementNew<T>(static_cast<T*>(MemoryService::instance()->GetSystemAllocator()->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 
 	auto Deleter = [](T* pObject) {
-		auto allocator = (MemoryService::instance()->GetSystemAllocator());
-		_OriginalDestroy(pObject);
-		allocator->Deallocate(pObject); 
+		auto allocator = (MemoryService::instance()->get_system_allocator());
+		_original_destroy(pObject);
+		allocator->deallocate(pObject); 
 	};
 	std::shared_ptr<T> sp(pO, Deleter);
 	return sp;
@@ -216,12 +216,12 @@ std::shared_ptr<T> Hashea_New_Shared(Args&&... args) {
 template<typename T, typename... Args>
 std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
 	T* pO = nullptr;
-	pO = _OriginalPlacementNew<T>(static_cast<T*>(MemoryService::instance()->GetSystemAllocator()->Allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 
 	auto Deleter = [](T* pObject) {
-		auto allocator = (MemoryService::instance()->GetSystemAllocator());
-		_OriginalDestroy(pObject);
-		allocator->Deallocate(pObject);
+		auto allocator = (MemoryService::instance()->get_system_allocator());
+		_original_destroy(pObject);
+		allocator->deallocate(pObject);
 		};
 	std::unique_ptr<T, decltype(Deleter)> sp(pO, Deleter);
 	return sp;
@@ -233,17 +233,17 @@ std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
 {\
 	Allocator* l_pAlloc = (_allocator);\
 	if(!(l_pAlloc))\
-		(l_pAlloc) = (MemoryService::instance()->GetSystemAllocator());\
-	(l_pAlloc)->Deallocate(pObject);\
+		(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
+	(l_pAlloc)->deallocate(pObject);\
 }
 
 #define Hashea_Delete(allocator,pObject)\
 {\
 	Allocator* l_pAlloc = allocater;\
 	if(!(l_pAlloc))\
-			(l_pAlloc) = (MemoryService::instance()->GetSystemAllocator());\
-	_OriginalDestroy(pObject);\
-	(l_pAlloc)->Deallocate(pObject);\
+			(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
+	_original_destroy(pObject);\
+	(l_pAlloc)->deallocate(pObject);\
 	 pObject = nullptr;\
 }
 

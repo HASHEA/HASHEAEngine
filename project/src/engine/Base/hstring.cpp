@@ -6,16 +6,16 @@ namespace HASHEAENGINE
 {
 
 
-	bool HASHEAENGINE::StringView::Equals(const StringView& a, const StringView& b)
+	bool HASHEAENGINE::StringView::equals(const StringView& a, const StringView& b)
 	{
 		return false;
 	}
 
-	void StringView::CopyTo(const StringView& a, char* buffer, size_t bufferSize)
+	void StringView::copy_to(const StringView& a, char* buffer, size_t bufferSize)
 	{	 
 	}	 
 		 
-	auto StringBuffer::Init(size_t size, Allocator* allocator) -> void
+	auto StringBuffer::init(size_t size, Allocator* allocator) -> void
 	{	 
 		if  (m_pData)
 		{ 
@@ -34,18 +34,18 @@ namespace HASHEAENGINE
 		m_uCurrentSize = 0;
 	}	 
 		 
-	auto StringBuffer::Shutdown() -> void
+	auto StringBuffer::shutdown() -> void
 	{	 
 		Hashea_Free(m_pAllocator,m_pData);
 		m_uBufferSize = m_uCurrentSize = 0;
 	}	 
 		 
-	auto StringBuffer::Append(const char* string) -> void
+	auto StringBuffer::append(const char* string) -> void
 	{	 
-		Append("%s", string);
+		append("%s", string);
 	}	 
 		 
-	auto StringBuffer::Append(const StringView& text) -> void
+	auto StringBuffer::append(const StringView& text) -> void
 	{	 
 		const size_t maxLength = (m_uCurrentSize + text.length) < m_uBufferSize ? text.length : m_uBufferSize - m_uCurrentSize;
 		if (maxLength == 0 || maxLength >= m_uBufferSize)//cannot equal because 0 at the end
@@ -60,7 +60,7 @@ namespace HASHEAENGINE
 		m_pData[m_uCurrentSize] = 0;
 	}	 
 		 
-	auto StringBuffer::Append(void* memory, size_t size) -> void
+	auto StringBuffer::append(void* memory, size_t size) -> void
 	{	 
 		if (m_uCurrentSize + size >= m_uBufferSize) {
 			HLogError("Buffer full! Please allocate more size.\n");
@@ -71,7 +71,7 @@ namespace HASHEAENGINE
 		m_uCurrentSize += (uint32_t)size;
 	}	 
 		 
-	auto StringBuffer::Append(const StringBuffer& otherBuffer) -> void
+	auto StringBuffer::append(const StringBuffer& otherBuffer) -> void
 	{	 
 		if (otherBuffer.m_uCurrentSize == 0) {
 			return;
@@ -84,7 +84,7 @@ namespace HASHEAENGINE
 		m_uCurrentSize += otherBuffer.m_uCurrentSize;
 	}	 
 		 
-	auto StringBuffer::Append(const char* format, ...) -> void
+	auto StringBuffer::append(const char* format, ...) -> void
 	{	 
 		if (m_uCurrentSize >= m_uBufferSize)
 		{
@@ -105,12 +105,12 @@ namespace HASHEAENGINE
 		}
 	}	 
 		 
-	auto StringBuffer::AppendGet(const char* string) -> char*
+	auto StringBuffer::append_get(const char* string) -> char*
 	{	 
-		return AppendGet("%s", string);;
+		return append_get("%s", string);;
 	}	 
 		 
-	auto StringBuffer::AppendGet(const char* format, ...) -> char*
+	auto StringBuffer::append_get(const char* format, ...) -> char*
 	{	 
 		uint32_t cached_offset = this->m_uCurrentSize;
 
@@ -143,17 +143,17 @@ namespace HASHEAENGINE
 		return this->m_pData + cached_offset;
 	}	 
 		 
-	auto StringBuffer::AppendGet(const StringView& text) -> char*
+	auto StringBuffer::append_get(const StringView& text) -> char*
 	{	 
 		uint32_t cached_offset = this->m_uCurrentSize;
 
-		Append(text);
+		append(text);
 		++m_uCurrentSize;
 
 		return this->m_pData + cached_offset;
 	}	 
 		 
-	auto StringBuffer::AppendGetSubstring(const char* string, uint32_t start_index, uint32_t end_index) -> char*
+	auto StringBuffer::append_get_substring(const char* string, uint32_t start_index, uint32_t end_index) -> char*
 	{	 
 		uint32_t size = end_index - start_index;
 		if (m_uCurrentSize + size >= m_uBufferSize) {
@@ -172,26 +172,26 @@ namespace HASHEAENGINE
 		return this->m_pData + cached_offset;
 	}	 
 		 
-	auto StringBuffer::CloseCurrentString() -> void
+	auto StringBuffer::close_current_string() -> void
 	{	 
 		m_pData[m_uCurrentSize] = 0;
 		++m_uCurrentSize;
 	}	 
 		 
-	auto StringBuffer::GetIndex(const char* text) const -> uint32_t
+	auto StringBuffer::get_index(const char* text) const -> uint32_t
 	{	 
 		uint64_t text_distance = text - m_pData;
 		return text_distance < m_uCurrentSize ? uint32_t(text_distance) : UINT32_MAX;
 	}	 
 		 
-	auto StringBuffer::GetText(uint32_t index) const -> const char*
+	auto StringBuffer::get_text(uint32_t index) const -> const char*
 	{	 
 		//why buffer size? not current size ?
 		return index < m_uCurrentSize ? cstring(m_pData + index) : nullptr;
 
 	}	 
 		 
-	auto StringBuffer::Reserve(size_t size) -> char*
+	auto StringBuffer::reserve(size_t size) -> char*
 	{	 
 		if (m_uCurrentSize + size >= m_uBufferSize)
 			return nullptr;
@@ -202,52 +202,52 @@ namespace HASHEAENGINE
 		return m_pData + offset;
 	}	 
 		 
-	auto StringBuffer::Clear() -> void
+	auto StringBuffer::clear() -> void
 	{	 
 		m_uCurrentSize = 0;
 		m_pData[0] = 0;
 	}	 
 		 
-	auto StringArray::Init(uint32_t size, Allocator* allocator)
+	auto StringArray::init(uint32_t size, Allocator* allocator)
 	{	 
 		m_pAllocator = allocator;
 		// Allocate also memory for the hash map
 		char* allocated_memory = (char*)Hashea_Alloc(m_pAllocator, size + sizeof(FlatHashMap<uint64_t, uint32_t>) + sizeof(FlatHashMapIterator),1);
 		string2Index = (FlatHashMap<uint64_t, uint32_t>*)allocated_memory;
-		string2Index->Init(allocator, 8);
-		string2Index->SetDefaultValue(UINT32_MAX);
+		string2Index->init(allocator, 8);
+		string2Index->set_default_value(UINT32_MAX);
 		stringsIterator = (FlatHashMapIterator*)(allocated_memory + sizeof(FlatHashMap<uint64_t, uint32_t>));
 		m_pData = allocated_memory + sizeof(FlatHashMap<uint64_t, uint32_t>) + sizeof(FlatHashMapIterator);
 		m_uBufferSize = size;
 		m_uCurrentSize = 0;
 	}	 
 		 
-	auto StringArray::Shutdown() -> void
+	auto StringArray::shutdown() -> void
 	{	 
 		// string_to_index contains ALL the memory including data.
 		Hashea_Free(m_pAllocator, string2Index);
 		m_uBufferSize = m_uCurrentSize = 0;
 	}	 
 		 
-	auto StringArray::Clear() -> void
+	auto StringArray::clear() -> void
 	{	 
 		m_uCurrentSize = 0;
 
-		string2Index->Clear();
+		string2Index->clear();
 	}	 
 		 
-	auto StringArray::BeginStringIteration() -> FlatHashMapIterator*
+	auto StringArray::begin_string_iteration() -> FlatHashMapIterator*
 	{	 
-		*stringsIterator = string2Index->IteratorBegin();
+		*stringsIterator = string2Index->iterator_begin();
 		return stringsIterator;
 	}	 
 		 
-	auto StringArray::GetStringCount() const -> size_t
+	auto StringArray::get_string_count() const -> size_t
 	{	 
-		return string2Index->Size();
+		return string2Index->size();
 	}	 
 		 
-	auto StringArray::GetString(uint32_t index) const -> const char*
+	auto StringArray::get_string(uint32_t index) const -> const char*
 	{	 
 		uint32_t data_index = index;
 		if (data_index < m_uCurrentSize) {
@@ -256,26 +256,26 @@ namespace HASHEAENGINE
 		return nullptr;
 	}	 
 		 
-	auto StringArray::GetNextString(FlatHashMapIterator* it) const -> const char*
+	auto StringArray::get_next_string(FlatHashMapIterator* it) const -> const char*
 	{	 
-		uint32_t index = string2Index->Get(*it);
-		string2Index->IteratorAdvance(*it);
-		cstring string = GetString(index);
+		uint32_t index = string2Index->get(*it);
+		string2Index->iterator_advance(*it);
+		cstring string = get_string(index);
 		return string;
 	}	 
 		 
-	auto StringArray::HasNextString(FlatHashMapIterator* it) const -> bool
+	auto StringArray::has_next_string(FlatHashMapIterator* it) const -> bool
 	{	 
-		return it->isValid();
+		return it->is_valid();
 	}	 
 		 
-	auto StringArray::Intern(const char* string) -> const char*
+	auto StringArray::intern(const char* string) -> const char*
 	{	 
 		static size_t seed = 0xf2ea4ffad;
 		const size_t length = strlen(string);
-		uint64_t hashed_string = HashBytes((void*)string, length, seed);
+		uint64_t hashed_string = hash_bytes((void*)string, length, seed);
 
-		uint32_t string_index = string2Index->Get(hashed_string);
+		uint32_t string_index = string2Index->get(hashed_string);
 		if (string_index != UINT32_MAX) {
 			return m_pData + string_index;
 		}
@@ -285,7 +285,7 @@ namespace HASHEAENGINE
 		m_uCurrentSize += (uint32_t)length + 1; // null termination
 		strcpy(m_pData + string_index, string);
 		// Update hash map
-		HS_Result ret = string2Index->Insert(hashed_string, string_index);
+		HS_Result ret = string2Index->insert(hashed_string, string_index);
 		if (HS_CHECK_FAILED(ret))
 		{
 			HLogError("insert failed at {0} {1}, index : {2}",__FILE__,__LINE__, string_index);

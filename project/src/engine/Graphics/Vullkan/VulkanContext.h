@@ -28,37 +28,44 @@ namespace RHI
 	};
 
 
-	struct VulkanContextInitConfig
-	{
-		GpuDescriptorPoolCreation descriptorPoolCreation{};
-		void*								 window = nullptr;
-		uint16_t                             width = 1;
-		uint16_t                             height = 1;
-		uint16_t                             num_threads = 1;
-		uint16_t							 queryCount = 32;
-	};
+	
 	class VulkanContext : public GraphicsContext
 	{
 	public:
-		auto Init(void* config = nullptr) -> HS_Result;
-		auto Shutdown() -> HS_Result;
+		auto init(void* config) -> HS_Result override;
+		auto shutdown() -> HS_Result override;
 
-		VulkanContext() {}
+		VulkanContext() { instance = this; }
 		~VulkanContext() {}
 	public:
-		auto GetDeviceExtensionEnabled(DeviceExtensionAndFeaturesFlags extension) -> bool
+		auto get_device_extension_enabled(DeviceExtensionAndFeaturesFlags extension) -> bool
 		{
-			return featureSwitchFlags.GetBit(extension);
+			return featureSwitchFlags.get_bit(extension);
 		}
 
-		inline const auto GetVulkanDevice()
+		inline const auto get_vulkan_device_internal()
 		{
 			return vulkanDevice;
 		}
 
-		inline const auto GetVulkanInstance()
+		inline const auto get_vulkan_instance_internal()
 		{
 			return vulkanInstance;
+		}
+
+		inline static const auto get_vulkan_device()
+		{
+			return instance->get_vulkan_device_internal();
+		}
+
+		inline static const auto get_vulkan_instance()
+		{
+			return instance->get_vulkan_instance_internal();
+		}
+
+		inline static const auto get()
+		{
+			return instance;
 		}
 	
 	private:
@@ -66,18 +73,18 @@ namespace RHI
 	//vk handles
 	private:
 		//manually in the calling order
-		auto VulkanContext::_CreateInstance()->HS_Result;
+		auto VulkanContext::_create_instance()->HS_Result;
 #ifdef VULKAN_DEBUG_REPORT
-		auto VulkanContext::_CreateDebugUtilMessengerExt()->HS_Result;
+		auto VulkanContext::_create_debug_util_messenger_ext()->HS_Result;
 #endif
-		auto VulkanContext::_SelectAndPreparePhysicalDevice()->HS_Result;
-		auto VulkanContext::_FilterDeviceSelectableExtension()->HS_Result;
-		auto VulkanContext::_QuerySurpportedProperties()->HS_Result;
-		auto VulkanContext::_QuerySurpportedFeatures()->HS_Result;
-		auto VulkanContext::_CreateDevice()->HS_Result;
-		auto VulkanContext::_CreateVMA()->HS_Result;
-		auto VulkanContext::_CreateDescriptorPool(const GpuDescriptorPoolCreation& dspci)->HS_Result;
-		auto VulkanContext::_CreateFramePoolAndData(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
+		auto VulkanContext::_select_and_prepare_physical_device()->HS_Result;
+		auto VulkanContext::_filter_device_selectable_extension()->HS_Result;
+		auto VulkanContext::_query_supported_props()->HS_Result;
+		auto VulkanContext::_query_supported_features()->HS_Result;
+		auto VulkanContext::_create_device()->HS_Result;
+		auto VulkanContext::_create_vulkan_memory_allocator()->HS_Result;
+		auto VulkanContext::_create_descriptor_pool(const GpuDescriptorPoolCreation& dspci)->HS_Result;
+		auto VulkanContext::_create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
 	private:
 		BitSetFixed<4> featureSwitchFlags;
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties;
@@ -115,6 +122,8 @@ namespace RHI
 		uint32_t                        maxFramebufferLayers = 1;
 		VkExtent2D                      minFragmentShadingRateTexelSize;
 
+
+		static VulkanContext* instance;
 	};
 
 

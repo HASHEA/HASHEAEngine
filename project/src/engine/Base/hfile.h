@@ -35,36 +35,36 @@ namespace HASHEAENGINE
     struct Allocator;
     struct StringArray;
 
-    auto FileReadBinary(const char* fileName , Allocator* allocator, size_t* size) -> char*;
-    auto FileReadText(const char* fileName , Allocator* allocator, size_t* size) -> char*;
-    auto FileReadBinary(const char* fileName , Allocator* allocator) -> FileReadResult;
-    auto FileReadText(const char* fileName , Allocator* allocator) -> FileReadResult;
-    auto FileWriteBinary(const char* fileName, void* memory, size_t size) -> void;
-    auto FileExists(const char* fileName) -> bool;
-    auto FileOpen(const char* fileName, const char* mode, FileHandle* file) -> void;
-    auto FileClose(FileHandle file)-> void;
-    auto FileWrite(uint8_t* memory,uint32_t elementSize,uint32_t count,FileHandle file) -> size_t;
-    auto FileDelete(const char* filePath) -> bool;
+    auto file_read_binary(const char* fileName , Allocator* allocator, size_t* size) -> char*;
+    auto file_read_text(const char* fileName , Allocator* allocator, size_t* size) -> char*;
+    auto file_read_binary(const char* fileName , Allocator* allocator) -> FileReadResult;
+    auto file_read_text(const char* fileName , Allocator* allocator) -> FileReadResult;
+    auto file_write_binary(const char* fileName, void* memory, size_t size) -> void;
+    auto file_exists(const char* fileName) -> bool;
+    auto file_open(const char* fileName, const char* mode, FileHandle* file) -> void;
+    auto file_close(FileHandle file)-> void;
+    auto file_write(uint8_t* memory,uint32_t elementSize,uint32_t count,FileHandle file) -> size_t;
+    auto file_delete(const char* filePath) -> bool;
 #if defined(_WIN64)
-    auto FileLastWriteTime(const char* filename) -> FileTime;
+    auto file_last_write_time(const char* filename) -> FileTime;
 #endif
-    auto FileResolveToFullPath(const char* path, char* outFullPath, uint32_t maxSize) -> uint32_t;
-    auto FileDirectoryFromPath(char* path) -> void;
-    auto FileNameFromPath(char* path) -> void;
-    auto FileExtensionFromPath(char* path) -> char*;
+    auto file_resolve_to_full_path(const char* path, char* outFullPath, uint32_t maxSize) -> uint32_t;
+    auto file_directory_from_path(char* path) -> void;
+    auto file_name_from_path(char* path) -> void;
+    auto file_extension_from_path(char* path) -> char*;
 
-    auto DirectoryExists(const char* path) -> bool;
-    auto DirectoryCreate(const char* path) -> bool;
-    auto DirectoryDelete(const char* path) -> bool;
-    auto DirectoryCurrent(Directory* directory) -> void;
-    auto DirectoryChange(const char* path) -> HS_Result;
-    auto FileOpenDirectory(const char* path, Directory* outDirectory) -> HS_Result;
-    auto FileCloseDirectory(Directory* directory) -> HS_Result;
-    auto FileParentDirectory(Directory* directory) -> void;
-    auto FileSubDirectory(Directory* directory, const char* subDirectoryName) -> HS_Result;
-    auto FileFindFilesInPath(const char* filePattern,StringArray& files) -> void;
-    auto FileFindFilesInPath(const char* extension,const char* searchPattern, StringArray& files, StringArray& directories) -> void;
-    auto EnvironmentVariableGet(const char* name, char* output, uint32_t outputSize) -> void;
+    auto directory_exists(const char* path) -> bool;
+    auto directory_create(const char* path) -> bool;
+    auto directory_delete(const char* path) -> bool;
+    auto directory_current(Directory* directory) -> void;
+    auto directory_change(const char* path) -> HS_Result;
+    auto file_open_directory(const char* path, Directory* outDirectory) -> HS_Result;
+    auto file_close_directory(Directory* directory) -> HS_Result;
+    auto file_parent_directory(Directory* directory) -> void;
+    auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> HS_Result;
+    auto file_find_files_in_path(const char* filePattern,StringArray& files) -> void;
+    auto file_find_files_in_path(const char* extension,const char* searchPattern, StringArray& files, StringArray& directories) -> void;
+    auto env_var_get(const char* name, char* output, uint32_t outputSize) -> void;
     struct ScopedFile
     {
         ScopedFile(const char* fileName, const char* mode);

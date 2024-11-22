@@ -4,10 +4,10 @@ namespace HASHEAENGINE
 {
     struct Service {
 
-        virtual auto Init(void* configuration) -> HS_Result { return HS_OK; }
-        virtual auto Shutdown() -> HS_Result { return HS_OK; }
+        virtual auto init(void* configuration) -> HS_Result = 0;
+        virtual auto shutdown() -> HS_Result = 0;
 #ifdef HASHEA_DEBUG
-        virtual auto OnGUI() -> void {};
+        virtual auto on_gui() -> void {};
 #endif
     }; // struct Service
 

@@ -13,37 +13,39 @@ namespace HASHEAENGINE
         Array();
         ~Array();
 
-        auto                        Init(Allocator* allocator, uint32_t initial_capacity, uint32_t initial_size = 0) -> HS_Result;
-        auto                        Shutdown() -> HS_Result;
+        auto                        init(Allocator* allocator, uint32_t initial_capacity, uint32_t initial_size = 0) -> HS_Result;
+        auto                        shutdown() -> HS_Result;
 
-        auto                        Push(const T& element) -> HS_Result;
-        auto PushUse() -> T&;                 // Grow the size and return T to be filled.
+        auto                        push_back(const T& element) -> HS_Result;
+        auto push_use() -> T&;                 // Grow the size and return T to be filled.
 
-        auto                        Pop() -> HS_Result;
-        auto                        DeleteSwap(uint32_t index) -> HS_Result;
+        auto                        pop() -> HS_Result;
+        auto                        delete_swap(uint32_t index) -> HS_Result;
 
         T& operator[](uint32_t index);
         const T& operator[](uint32_t index) const;
 
-        auto                        Clear() -> HS_Result;
-        auto                        SetSize(uint32_t new_size) -> HS_Result;
-        auto                        SetCapacity(uint32_t new_capacity) -> HS_Result;
+        auto                        clear() -> HS_Result;
+        auto                        set_size(uint32_t new_size) -> HS_Result;
+        auto                        set_capacity(uint32_t new_capacity) -> HS_Result;
 
-        T& Back();
-        const T& Back() const;
+        T& back();
+        const T& back() const;
 
-        T& Front();
-        const T& Front() const;
+        T& front();
+        const T& front() const;
 
-        auto                         SizeInBytes() const -> uint32_t;
-        auto                         CapacityInBytes() const -> uint32_t;
+        auto                         size_in_bytes() const -> uint32_t;
+        auto                         capacity_in_bytes() const -> uint32_t;
 
-
-      
+        auto size() { return m_uSize; }
+        auto capacity() { return m_uCapacity; }
+        auto set_capacity_no_grow(uint32_t capacity) { m_uCapacity  = capacity};
+    private:
         uint32_t                         m_uSize = 0;       // Occupied size
         uint32_t                         m_uCapacity = 0;   // Allocated capacity
     private:
-        auto                        Grow(uint32_t new_capacity) -> HS_Result;
+        auto                        grow(uint32_t new_capacity) -> HS_Result;
 
     public:
         Allocator* m_pAllocator = nullptr;
@@ -61,7 +63,7 @@ namespace HASHEAENGINE
     public:
         ArrayView(T* data, uint32_t size);
 
-        auto Set(T* data, uint32_t size) -> void;
+        auto set(T* data, uint32_t size) -> void;
 
         T& operator[](uint32_t index);
         const T& operator[](uint32_t index) const;
@@ -82,22 +84,22 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Array<T>::Init(Allocator* allocator_, uint32_t initial_capacity, uint32_t initial_size)->HS_Result {
+    inline auto Array<T>::init(Allocator* allocator_, uint32_t initial_capacity, uint32_t initial_size)->HS_Result {
         m_pData = nullptr;
         m_uSize = initial_size;
         m_uCapacity = 0;
         m_pAllocator = allocator_;
         HS_Result ret = HS_OK;
         if (initial_capacity > 0) {
-            ret = Grow(initial_capacity);
+            ret = grow(initial_capacity);
         }
         return ret;
     }
 
     template<typename T>
-    inline auto Array<T>::Shutdown() -> HS_Result {
+    inline auto Array<T>::shutdown() -> HS_Result {
         if (m_uCapacity > 0) {
-            m_pAllocator->Deallocate(m_pData);
+            m_pAllocator->deallocate(m_pData);
         }
         m_pData = nullptr;
         m_uSize = m_uCapacity = 0;
@@ -105,10 +107,10 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Array<T>::Push(const T& element) -> HS_Result {
+    inline auto Array<T>::push_back(const T& element) -> HS_Result {
         HS_Result ret = HS_OK;
         if (m_uSize >= m_uCapacity) {
-            ret = Grow(m_uCapacity + 1);
+            ret = grow(m_uCapacity + 1);
         }
 
         m_pData[size++] = element;
@@ -116,11 +118,11 @@ namespace HASHEAENGINE
     }
     // push and return back
     template<typename T>
-    inline auto Array<T>::PushUse() -> T&{
+    inline auto Array<T>::push_use() -> T&{
         HS_Result ret = HS_OK;
 
         if (m_uSize >= m_uCapacity) {
-            ret = Grow(m_uCapacity + 1);
+            ret = grow(m_uCapacity + 1);
             HS_PROCESS_AND_LOG_RESULT(ret);
         }
         ++m_uSize;
@@ -128,7 +130,7 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Array<T>::Pop() ->HS_Result{
+    inline auto Array<T>::pop() ->HS_Result{
         H_ASSERT(m_uSize > 0);
         --m_uSize;
         return HS_OK;
@@ -136,7 +138,7 @@ namespace HASHEAENGINE
 
     //no order 
     template<typename T>
-    inline auto Array<T>::DeleteSwap(uint32_t index) -> HS_Result {
+    inline auto Array<T>::delete_swap(uint32_t index) -> HS_Result {
         H_ASSERT(m_uSize > 0 && index < m_uSize);
         m_pData[index] = m_pData[--m_uSize];
         return HS_OK;
@@ -155,18 +157,18 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Array<T>::Clear() -> HS_Result{
+    inline auto Array<T>::clear() -> HS_Result{
         m_uSize = 0;
         return HS_OK;
     }
 
 
     template<typename T>
-    inline auto Array<T>::SetSize(uint32_t new_size) -> HS_Result {
+    inline auto Array<T>::set_size(uint32_t new_size) -> HS_Result {
         HS_Result ret = HS_OK;
 
         if (new_size > m_uCapacity) {
-            ret = Grow(new_size);
+            ret = grow(new_size);
             HS_PROCESS_AND_LOG_RESULT(ret);
         }
         m_uSize = new_size;
@@ -174,18 +176,18 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Array<T>::SetCapacity(uint32_t new_capacity) -> HS_Result {
+    inline auto Array<T>::set_capacity(uint32_t new_capacity) -> HS_Result {
         HS_Result ret = HS_OK;
 
         if (new_capacity > m_uCapacity) {
-            ret = Grow(new_capacity);
+            ret = grow(new_capacity);
             HS_PROCESS_AND_LOG_RESULT(ret);
         }
         return ret;
     }
 
     template<typename T>
-    inline auto Array<T>::Grow(uint32_t new_capacity) ->HS_Result{
+    inline auto Array<T>::grow(uint32_t new_capacity) ->HS_Result{
         HS_Result ret = HS_OK;
 
         if (new_capacity <= (m_uCapacity * 1.5f)) {
@@ -195,11 +197,11 @@ namespace HASHEAENGINE
             new_capacity = 4;
         }
 
-        T* new_data = (T*)m_pAllocator->Allocate(new_capacity * sizeof(T), alignof(T));
+        T* new_data = (T*)m_pAllocator->allocate(new_capacity * sizeof(T), alignof(T));
         if (m_uCapacity) {
-            MemoryCopy(new_data, m_pData, m_uCapacity * sizeof(T));
+            memory_copy(new_data, m_pData, m_uCapacity * sizeof(T));
 
-            ret = m_pAllocator->Deallocate(m_pData);
+            ret = m_pAllocator->deallocate(m_pData);
             HS_PROCESS_AND_LOG_RESULT(ret);
 
         }
@@ -210,37 +212,37 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Array<T>::Back() ->T& {
+    inline auto Array<T>::back() ->T& {
         H_ASSERT(m_uSize);
         return m_pData[m_uSize - 1];
     }
 
 
     template<typename T>
-    inline auto Array<T>::Back() const -> const T& {
+    inline auto Array<T>::back() const -> const T& {
         H_ASSERT(m_uSize);
         return m_pData[m_uSize - 1];
     }
 
     template<typename T>
-    inline auto Array<T>::Front() -> T& {
+    inline auto Array<T>::front() -> T& {
         H_ASSERT(m_uSize);
         return m_pData[0];
     }
 
     template<typename T>
-    inline auto Array<T>::Front() const -> const T& {
+    inline auto Array<T>::front() const -> const T& {
         H_ASSERT(m_uSize);
         return m_pData[0];
     }
 
     template<typename T>
-    inline auto Array<T>::SizeInBytes() const -> uint32_t {
+    inline auto Array<T>::size_in_bytes() const -> uint32_t {
         return m_uSize * sizeof(T);
     }
 
     template<typename T>
-    inline auto Array<T>::CapacityInBytes() const -> uint32_t {
+    inline auto Array<T>::capacity_in_bytes() const -> uint32_t {
         return m_uCapacity * sizeof(T);
     }
 
@@ -251,7 +253,7 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline void ArrayView<T>::Set(T* data_, uint32_t size_) {
+    inline void ArrayView<T>::set(T* data_, uint32_t size_) {
         m_pData = data_;
         m_uSize = size_;
     }
@@ -275,7 +277,7 @@ namespace HASHEAENGINE
         Array<T>* ptr = nullptr;
         ptr = Hashea_New(nullptr, Array<T>);
         H_ASSERT(ptr);
-        result = ptr->Init(&(MemoryService::instance()->GetSystemAllocator()),0,0);
+        result = ptr->init(&(MemoryService::instance()->get_system_allocator()),0,0);
         HS_PROCESS_AND_LOG_RESULT(result);
         H_ASSERT(result == HS_OK);
         return ptr

@@ -147,68 +147,68 @@ namespace HASHEAENGINE
     struct Serializer {
 
         template <typename T>
-        auto WriteAndPrepare(Allocator* allocator, uint32_t serializer_version, size_t size) -> T*;
+        auto write_and_prepare(Allocator* allocator, uint32_t serializer_version, size_t size) -> T*;
 
         template <typename T>
-        auto WriteAndSerialize(Allocator* allocator, uint32_t serializer_version, size_t size, T* root_data) -> void;
+        auto write_and_serialize(Allocator* allocator, uint32_t serializer_version, size_t size, T* root_data) -> void;
 
-        auto WriteCommon(Allocator* allocator, uint32_t serializer_version, size_t size) -> void;
+        auto write_common(Allocator* allocator, uint32_t serializer_version, size_t size) -> void;
 
         template <typename T>
-        auto Read(Allocator* allocator, uint32_t serializer_version, size_t size, char* blob_memory, bool force_serialization = false) -> T*;
-        auto Shutdown() -> void;
+        auto read(Allocator* allocator, uint32_t serializer_version, size_t size, char* blob_memory, bool force_serialization = false) -> T*;
+        auto shutdown() -> void;
         //FILE* file_handle;
         //uint32_t             data_version;
         //uint8_t              is_writing;
 
-        auto Serialize(char* data) -> void;
-        auto Serialize(const char* data) -> void;
-        auto Serialize(int8_t* data) -> void;
-        auto Serialize(uint8_t* data) -> void;
-        auto Serialize(int16_t* data) -> void;
-        auto Serialize(uint16_t* data) -> void;
-        auto Serialize(int32_t* data) -> void;
-        auto Serialize(uint32_t* data) -> void;
-        auto Serialize(int64_t* data) -> void;
-        auto Serialize(uint64_t* data) -> void;
-        auto Serialize(float* data) -> void;
-        auto Serialize(double* data) -> void;
-        auto Serialize(bool* data) -> void;
+        auto serialize(char* data) -> void;
+        auto serialize(const char* data) -> void;
+        auto serialize(int8_t* data) -> void;
+        auto serialize(uint8_t* data) -> void;
+        auto serialize(int16_t* data) -> void;
+        auto serialize(uint16_t* data) -> void;
+        auto serialize(int32_t* data) -> void;
+        auto serialize(uint32_t* data) -> void;
+        auto serialize(int64_t* data) -> void;
+        auto serialize(uint64_t* data) -> void;
+        auto serialize(float* data) -> void;
+        auto serialize(double* data) -> void;
+        auto serialize(bool* data) -> void;
 
-        auto SerializeMemroy(void* data, size_t size) -> void;
-        auto SerializeMemoryBlock(void** data, uint32_t* size) -> void;
-
-        template <typename T>
-        auto Serialize(RelativePointer<T>* data) -> void;
+        auto serialize_memory(void* data, size_t size) -> void;
+        auto serialize_memory_block(void** data, uint32_t* size) -> void;
 
         template <typename T>
-        auto Serialize(RelativeArray<T>* data) -> void;
+        auto serialize(RelativePointer<T>* data) -> void;
 
         template <typename T>
-        auto                Serialize(Array<T>* data) -> void;
+        auto serialize(RelativeArray<T>* data) -> void;
 
         template <typename T>
-        auto                Serialize(T* data) -> void;
+        auto                serialize(Array<T>* data) -> void;
 
-        auto                Serialize(RelativeString* data) -> void;
+        template <typename T>
+        auto                serialize(T* data) -> void;
+
+        auto                serialize(RelativeString* data) -> void;
 
         // Static allocation from the blob allocated memory.
-        auto AllocateStatic(size_t size) -> char*;  // Just allocate size bytes and return. Used to fill in structures.
+        auto allocate_static(size_t size) -> char*;  // Just allocate size bytes and return. Used to fill in structures.
 
         template <typename T>
-        auto AllocateStatic() -> T*;
+        auto allocate_static() -> T*;
 
         template <typename T>
-        auto                AllocateAndSet(RelativePointer<T>& data, void* source_data = nullptr) -> void;
+        auto                allocate_and_set(RelativePointer<T>& data, void* source_data = nullptr) -> void;
 
 
         template <typename T>
-        auto                AllocateAndSet(RelativeArray<T>& data, uint32_t num_elements, void* source_data = nullptr) -> void;
+        auto                allocate_and_set(RelativeArray<T>& data, uint32_t num_elements, void* source_data = nullptr) -> void;
 
-        auto                AllocateAndSet(RelativeString& string, cstring format, ...) -> void;            // Allocate and set a static string.
-        auto                AllocateAndSet(RelativeString& string, char* text, uint32_t length) -> void;      // Allocate and set a static string.
+        auto                allocate_and_set(RelativeString& string, cstring format, ...) -> void;            // Allocate and set a static string.
+        auto                allocate_and_set(RelativeString& string, char* text, uint32_t length) -> void;      // Allocate and set a static string.
 
-        auto GetRelativeDataOffset(void* data) -> int32_t;
+        auto get_relative_data_offset(void* data) -> int32_t;
 
         char* blobMemory = nullptr;
         char* dataMemory = nullptr;
@@ -224,26 +224,26 @@ namespace HASHEAENGINE
     };
     
     template<typename T>
-    inline auto Serializer::WriteAndPrepare(Allocator* allocator, uint32_t serializer_version, size_t size) -> T*
+    inline auto Serializer::write_and_prepare(Allocator* allocator, uint32_t serializer_version, size_t size) -> T*
     {
-        WriteCommon(allocator, serializer_version, size);
-        AllocateStatic(sizeof(T) - sizeof(BlobHeader));
+        write_common(allocator, serializer_version, size);
+        allocate_static(sizeof(T) - sizeof(BlobHeader));
         data_memory = nullptr;
         return (T*)blobMemory;
     }
 
     template<typename T>
-    inline auto Serializer::WriteAndSerialize(Allocator* allocator, uint32_t serializer_version, size_t size, T* root_data) -> void
+    inline auto Serializer::write_and_serialize(Allocator* allocator, uint32_t serializer_version, size_t size, T* root_data) -> void
     {
         H_ASSERT(root_data);
-        WriteCommon(allocator, serializer_version, size);
-        AllocateStatic(sizeof(T) - sizeof(BlobHeader));
+        write_common(allocator, serializer_version, size);
+        allocate_static(sizeof(T) - sizeof(BlobHeader));
         data_memory = char* (root_data);
         Serialize(root_data);
     }
 
     template<typename T>
-    inline auto Serializer::Read(Allocator* _allocator, uint32_t serializer_version, size_t size, char* blob_memory, bool force_serialization) -> T*
+    inline auto Serializer::read(Allocator* _allocator, uint32_t serializer_version, size_t size, char* blob_memory, bool force_serialization) -> T*
     {
         allocator = _allocator;
         blobMemory = blob_memory;
@@ -266,7 +266,7 @@ namespace HASHEAENGINE
         dataMemory = (char*)Hashea_Alloc(allocator,size,1);
         T* dst = (T*)dataMemory;
         serializedOffset += sizeof(BlobHeader);
-        AllocateStatic(sizeof(T));
+        allocate_static(sizeof(T));
         Serialize(dst);
         return dst;
     }
@@ -274,20 +274,20 @@ namespace HASHEAENGINE
     
 
     template<typename T>
-    inline auto Serializer::Serialize(RelativePointer<T>* data) -> void
+    inline auto Serializer::serialize(RelativePointer<T>* data) -> void
     {
         if (isReading)
         {
             //the offset in the blob
             int offset = 0;
-            Serialize(&offset);
+            serialize(&offset);
             if (offset == 0)
             {
                 data->offset = 0;
                 return;
             }
             //the offset in the data memory
-            data->offset = GetRelativeDataOffset(data);
+            data->offset = get_relative_data_offset(data);
             AllocateStatic<T>();
             uint32_t cachedSerializeOffet = serializedOffset;
             serializedOffset = cachedSerializeOffet + offset - sizeof(uint32_t);
@@ -297,7 +297,7 @@ namespace HASHEAENGINE
         else
         {
             int32_t offset = allocatedOffset - serializedOffset;
-            Serialize(&offset);
+            serialize(&offset);
             uint32_t cachedSerializedOffset = serializedOffset;
             serializedOffset = allocatedOffset;
             AllocateStatic<T>();
@@ -307,16 +307,16 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Serializer::Serialize(RelativeArray<T>* data) -> void
+    inline auto Serializer::serialize(RelativeArray<T>* data) -> void
     {
         if (isReading)
         {
-            Serialize(&(data->size));
+            serialize(&(data->size));
             int32_t offset = 0;
-            Serialize(&offset);
+            serialize(&offset);
             uint32_t cachedSerializedOffset = serializedOffset;
-            data->data.offset = GetRelativeDataOffset(data) - sizeof(uint32_t);
-            AllocateStatic(data->size*sizeof(T));
+            data->data.offset = get_relative_data_offset(data) - sizeof(uint32_t);
+            allocate_static(data->size*sizeof(T));
             //when writing , the sz offset is the offset that before sz (offset), so we need to walk back the sizeof (offset)
             //or we can record the cached sz offset before we sz (offset) when reading
             serializedOffset = cachedSerializedOffset + offset - sizeof(uint32_t);
@@ -329,12 +329,12 @@ namespace HASHEAENGINE
         }
         else
         {
-            Serialize(&(data->size));
+            serialize(&(data->size));
             int32_t offset = allocatedOffset - serializedOffset;
-            Serialize(&offset);
+            serialize(&offset);
             uint32_t cachedSerializedOffset = serializedOffset;
             serializedOffset = allocatedOffset;
-            AllocateStatic(data->size * sizeof(T));
+            allocate_static(data->size * sizeof(T));
             for (uint32_t i = 0; i < data->size; i++)
             {
                 T* srcData = &data->get()[i];
@@ -345,23 +345,23 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Serializer::Serialize(Array<T>* data) -> void
+    inline auto Serializer::serialize(Array<T>* data) -> void
     {
         if (isReading)
         {
-            Serialize(&(data->m_uSize));
+            Serialize(&(data->size()));
             uint64_t pad = 0;
-            Serialize(&pad);
-            Serialize(&pad);
+            serialize(&pad);
+            serialize(&pad);
             uint32_t offset = 0;
-            Serialize(&offset);
+            serialize(&offset);
             uint32_t cacheSerializedOffset = serializedOffset;
             data->m_pAllocator = nullptr;
-            data->m_uCapacity = data->m_uSize;
+            data->set_capacity_no_grow(data->size());
             data->m_pData = (T*)(dataMemory + allocatedOffset);
-            AllocateStatic(data->m_uSize * sizeof(T));
+            AllocateStatic(data->size() * sizeof(T));
             serialized_offset = cacheSerializedOffset + offset - sizeof(uint32_t);
-            for (uint32_t i = 0; i < data->m_uSize; i++)
+            for (uint32_t i = 0; i < data->size(); i++)
             {
                 T* dst = &((*data)[i]);
                 Serialize(dst);
@@ -370,17 +370,17 @@ namespace HASHEAENGINE
         }
         else
         {
-            Serialize(&(data->m_uSize));
+            Serialize(&(data->size()));
             //for 2 pointer member - -!
             uint64_t serializationPad = 0;
-            Serialize(&serializationPad);
-            Serialize(&serializationPad);
+            serialize(&serializationPad);
+            serialize(&serializationPad);
             int32_t offset = allocatedOffset - serializedOffset;
-            Serialize(&offset);
+            serialize(&offset);
             uint32_t cachedSerializedOffset = serializedOffset;
             serializedOffset = allocatedOffset;
-            AllocateStatic(data->m_uSize * sizeof(T));
-            for (uint32_t i = 0; i < data->m_uSize; i++)
+            AllocateStatic(data->size() * sizeof(T));
+            for (uint32_t i = 0; i < data->size(); i++)
             {
                 T* src = &((*data)[i]);
                 Serialize(src);
@@ -390,36 +390,36 @@ namespace HASHEAENGINE
     }
 
     template<typename T>
-    inline auto Serializer::Serialize(T* data) -> void
+    inline auto Serializer::serialize(T* data) -> void
     {
         H_ASSERTLOG(false,"No Serialize impl for type : {}", typeid(T).name());
     }
 
     template<typename T>
-    inline auto Serializer::AllocateStatic() -> T*
+    inline auto Serializer::allocate_static() -> T*
     {
-        return (T*)AllocateStatic(sizeof(T));
+        return (T*)allocate_static(sizeof(T));
     }
 
     template<typename T>
-    inline auto Serializer::AllocateAndSet(RelativePointer<T>& data, void* source_data) -> void
+    inline auto Serializer::allocate_and_set(RelativePointer<T>& data, void* source_data) -> void
     {
-        char* dst = AllocateStatic(sizeof(T));
+        char* dst = allocate_static(sizeof(T));
         data.set(dst);
 
         if (source_data) {
-            MemoryCopy(dst, source_data, sizeof(T));
+            memory_copy(dst, source_data, sizeof(T));
         }
     }
 
     template<typename T>
-    inline auto Serializer::AllocateAndSet(RelativeArray<T>& data, uint32_t num_elements, void* source_data) -> void
+    inline auto Serializer::allocate_and_set(RelativeArray<T>& data, uint32_t num_elements, void* source_data) -> void
     {
-        char* dst = AllocateStatic(sizeof(T) * num_elements);
+        char* dst = allocate_static(sizeof(T) * num_elements);
         data.set(dst,num_elements);
 
         if (source_data) {
-            MemoryCopy(dst, source_data, sizeof(T)* num_elements);
+            memory_copy(dst, source_data, sizeof(T)* num_elements);
         }
     }
 

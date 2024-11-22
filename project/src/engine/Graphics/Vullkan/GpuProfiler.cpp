@@ -24,14 +24,14 @@ namespace RHI
 
         memset(per_frame_active, 0, sizeof(uint16_t) * max_frames);
 
-        name_to_color.Init(allocator, 16);
-        name_to_color.SetDefaultValue(UINT32_MAX);
+        name_to_color.init(allocator, 16);
+        name_to_color.set_default_value(UINT32_MAX);
     }
 
 
     void GpuVisualProfiler::shutdown() {
 
-        name_to_color.Shutdown();
+        name_to_color.shutdown();
 
         Hashea_Free(allocator,timestamps);
         Hashea_Free(allocator,per_frame_active);
@@ -300,7 +300,7 @@ namespace RHI
         memset(timestamps, 0, sizeof(GPUTimeQuery) * total_time_queries);
 
         const uint32_t num_pools = num_threads * max_frames;
-        query_trees.Init(allocator, num_pools, num_pools);
+        query_trees.init(allocator, num_pools, num_pools);
 
         for (uint32_t i = 0; i < num_pools; ++i) {
 
@@ -312,7 +312,7 @@ namespace RHI
     }
 
     void GPUTimeQueriesManager::shutdown() {
-        query_trees.Shutdown();
+        query_trees.shutdown();
 
         Hashea_Free(allocator, timestamps);
     }
@@ -329,7 +329,7 @@ namespace RHI
             FramePool& thread_pools = thread_frame_pools[pool_index];
             GpuTimeQueryTree* time_query = thread_pools.timeQueries;
             if (time_query && time_query->allocated_time_query) {
-                MemoryCopy(timestamps_to_fill + copied_timestamps, &timestamps[pool_index * queries_per_thread], sizeof(GPUTimeQuery) * time_query->allocated_time_query);
+                memory_copy(timestamps_to_fill + copied_timestamps, &timestamps[pool_index * queries_per_thread], sizeof(GPUTimeQuery) * time_query->allocated_time_query);
                 copied_timestamps += time_query->allocated_time_query;
             }
         }
@@ -345,7 +345,7 @@ namespace RHI
     }
 
     void GpuTimeQueryTree::set_queries(GPUTimeQuery* time_queries_, uint32_t count) {
-        time_queries.Set(time_queries_, count);
+        time_queries.set(time_queries_, count);
 
         reset();
     }

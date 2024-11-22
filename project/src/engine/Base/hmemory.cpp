@@ -12,17 +12,17 @@ namespace HASHEAENGINE
 
 	void ExitWalker(void* ptr, size_t size, int used, void* user) {
 		MemoryStatistics* l_pStats = (MemoryStatistics*)user;
-		l_pStats->Add(used ? size : 0);
+		l_pStats->add(used ? size : 0);
 
 		if (used)
 			HLogInfo("Found active allocation {0}, {1}\n", ptr, size);
 	}
 
-	void MemoryCopy(void* destination, void* source, size_t size) {
+	void memory_copy(void* destination, void* source, size_t size) {
 		memcpy(destination, source, size);
 	}
 
-	size_t MemoryAlign(size_t size, size_t alignment) {
+	size_t memory_align(size_t size, size_t alignment) {
 		const size_t alignment_mask = alignment - 1;
 		return (size + alignment_mask) & ~alignment_mask;
 	}
@@ -31,17 +31,17 @@ namespace HASHEAENGINE
 		return &s_memory_service;
 	}
 	
-	auto MemoryService::Init(void* configuration) -> HS_Result
+	auto MemoryService::init(void* configuration) -> HS_Result
 	{
 		HLogInfo("Memory Service Init\n");
 		MemoryServiceConfiguration* memory_configuration = static_cast<MemoryServiceConfiguration*>(configuration);
-		HS_Result ret = m_heapAllocator.Init(memory_configuration ? memory_configuration->m_szMaxDynamicSize : s_size);
+		HS_Result ret = m_heapAllocator.init(memory_configuration ? memory_configuration->m_szMaxDynamicSize : s_size);
 		return ret;
 	}
-	auto MemoryService::Shutdown() -> HS_Result
+	auto MemoryService::shutdown() -> HS_Result
 	{
 		HLogInfo("Memory Service Shutdown...\n");
-		HS_Result ret = m_heapAllocator.Shutdown();
+		HS_Result ret = m_heapAllocator.shutdown();
 		if (HS_CHECK_FAILED(ret))
 		{
 			HLogError("Memory Service Shutdown Failed!\n");
@@ -51,7 +51,7 @@ namespace HASHEAENGINE
 	}
 
 #ifdef HASHEA_DEBUG
-	auto MemoryService::OnGUI() -> void
+	auto MemoryService::on_gui() -> void
 	{
 
 	}
@@ -64,7 +64,7 @@ namespace HASHEAENGINE
 	HeapAllocator::~HeapAllocator()
 	{
 	}
-	auto HeapAllocator::Init(size_t size) -> HS_Result
+	auto HeapAllocator::init(size_t size) -> HS_Result
 	{
 		H_ASSERT(size > 0);
 		m_pMemory = (uint8_t*)malloc(size);
@@ -79,7 +79,7 @@ namespace HASHEAENGINE
 		}
 		return ret;
 	}
-	auto HeapAllocator::Shutdown() -> HS_Result
+	auto HeapAllocator::shutdown() -> HS_Result
 	{
 		// Check memory at the application exit.
 		MemoryStatistics stats{ 0, m_szMaxSize };
@@ -99,13 +99,13 @@ namespace HASHEAENGINE
 		return HS_OK;
 	}
 #ifdef HASHEA_DEBUG
-	auto HeapAllocator::OnGUI() -> void
+	auto HeapAllocator::on_gui() -> void
 	{
 	}
 #endif // HASHEA_DEBUG
 
 	
-	auto HeapAllocator::Allocate(size_t size, size_t alignment)->void*
+	auto HeapAllocator::allocate(size_t size, size_t alignment)->void*
 	{
 		H_ASSERT(size > 0);
 		void* pAllocateMemory = alignment == 1? tlsf_malloc(m_pTlsfHandle, size) : tlsf_memalign(m_pTlsfHandle, alignment, size);
@@ -114,12 +114,12 @@ namespace HASHEAENGINE
 		m_szAllocatedSize += actualSize;
 		return pAllocateMemory;
 	}
-	auto HeapAllocator::Allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*
+	auto HeapAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*
 	{
 		H_ASSERT(size > 0);
-		return Allocate(size, alignment);
+		return allocate(size, alignment);
 	}
-	auto HeapAllocator::Deallocate(void* pointer)->HS_Result
+	auto HeapAllocator::deallocate(void* pointer)->HS_Result
 	{
 		H_ASSERT(pointer);
 		size_t actual_size = tlsf_block_size(pointer);
@@ -132,7 +132,7 @@ namespace HASHEAENGINE
 
 	/*************** Stack Allocator *****************/
 
-	auto StackAllocator::Init(size_t size) -> HS_Result
+	auto StackAllocator::init(size_t size) -> HS_Result
 	{
 		H_ASSERT(size > 0);
 		m_pMemory = (uint8_t*)malloc(size);
@@ -141,15 +141,15 @@ namespace HASHEAENGINE
 		m_szTotalSize = size;
 		return HS_OK;
 	}
-	auto StackAllocator::Shutdown() -> HS_Result
+	auto StackAllocator::shutdown() -> HS_Result
 	{
 		free(m_pMemory);
 		return HS_OK;
 	}
-	auto StackAllocator::Allocate(size_t size, size_t alignment) -> void*
+	auto StackAllocator::allocate(size_t size, size_t alignment) -> void*
 	{
 		H_ASSERT(size > 0);
-		const size_t newStart = MemoryAlign(m_szAllocatedSize,alignment);
+		const size_t newStart = memory_align(m_szAllocatedSize,alignment);
 		H_ASSERT(newStart < m_szTotalSize);
 		const size_t new_allocated_size = newStart + size;
 		if (new_allocated_size > m_szTotalSize)
@@ -157,11 +157,11 @@ namespace HASHEAENGINE
 		m_szAllocatedSize = new_allocated_size;
 		return m_pMemory + newStart;
 	}
-	auto StackAllocator::Allocate(size_t size, size_t alignment, char* file, uint32_t line)-> void*
+	auto StackAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)-> void*
 	{
-		return Allocate(size,alignment);
+		return allocate(size,alignment);
 	}
-	auto StackAllocator::Deallocate(void* pointer) -> HS_Result
+	auto StackAllocator::deallocate(void* pointer) -> HS_Result
 	{
 		H_ASSERT(pointer >= m_pMemory);
 		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
@@ -170,11 +170,11 @@ namespace HASHEAENGINE
 		m_szAllocatedSize = size_at_pointer;
 		return HS_OK;
 	}
-	auto StackAllocator::GetMarker() -> size_t
+	auto StackAllocator::get_marker() -> size_t
 	{
 		return m_szAllocatedSize;
 	}
-	auto StackAllocator::FreeMarker(size_t marker) -> HS_Result
+	auto StackAllocator::free_marker(size_t marker) -> HS_Result
 	{
 		const size_t difference = marker - m_szAllocatedSize;
 		if (difference > 0)
@@ -183,7 +183,7 @@ namespace HASHEAENGINE
 		}
 		return HS_OK;
 	}
-	auto StackAllocator::Clear()->HS_Result
+	auto StackAllocator::clear()->HS_Result
 	{
 		m_szAllocatedSize = 0;
 		return HS_OK;
@@ -195,7 +195,7 @@ namespace HASHEAENGINE
 	LinearAllocator::~LinearAllocator()
 	{
 	}
-	auto LinearAllocator::Init(size_t size) -> HS_Result
+	auto LinearAllocator::init(size_t size) -> HS_Result
 	{
 		H_ASSERT(size > 0);
 		m_pMemory = (uint8_t*)malloc(size);
@@ -205,17 +205,17 @@ namespace HASHEAENGINE
 		m_szAllocatedSize = 0;
 		return HS_OK;
 	}
-	auto LinearAllocator::Shutdown() -> HS_Result
+	auto LinearAllocator::shutdown() -> HS_Result
 	{
-		bool ret = Clear();
+		bool ret = clear();
 		H_ASSERT(ret);
 		free(m_pMemory);
 		return HS_OK;
 	}
-	auto LinearAllocator::Allocate(size_t size, size_t alignment)->void*
+	auto LinearAllocator::allocate(size_t size, size_t alignment)->void*
 	{
 		H_ASSERT(size > 0);
-		const size_t new_start = MemoryAlign(m_szAllocatedSize, alignment);
+		const size_t new_start = memory_align(m_szAllocatedSize, alignment);
 		H_ASSERT(new_start < m_szTotalSize);
 
 		const size_t new_allocated_size = new_start + size;
@@ -226,16 +226,16 @@ namespace HASHEAENGINE
 		m_szAllocatedSize = new_allocated_size;
 		return m_pMemory + new_start;
 	}
-	auto LinearAllocator::Allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void*
+	auto LinearAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void*
 	{
 		H_ASSERT(size > 0);
-		return Allocate(size, alignment);
+		return allocate(size, alignment);
 	}
-	auto LinearAllocator::Deallocate(void* pointer) -> HS_Result
+	auto LinearAllocator::deallocate(void* pointer) -> HS_Result
 	{
 		return HS_OK;
 	}
-	auto LinearAllocator::Clear() -> HS_Result
+	auto LinearAllocator::clear() -> HS_Result
 	{
 		m_szAllocatedSize = 0;
 		return HS_OK;

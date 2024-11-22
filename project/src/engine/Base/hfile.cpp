@@ -16,7 +16,7 @@
 #include <string.h>
 namespace HASHEAENGINE
 {
-	static long FileGetSize(FileHandle f) {
+	static long file_get_size(FileHandle f) {
 		long fileSizeSigned;
 
 		fseek(f, 0, SEEK_END);
@@ -26,19 +26,19 @@ namespace HASHEAENGINE
 		return fileSizeSigned;
 	}
 	
-	static bool StringEndsWithChar(const char* s, char c) {
+	static bool string_ends_with_char(const char* s, char c) {
 		cstring last_entry = strrchr(s, c);
 		const size_t index = last_entry - s;
 		return index == (strlen(s) - 1);
 	}
 
-	auto HASHEAENGINE::FileReadBinary(const char* fileName , Allocator* allocator, size_t* size) -> char*
+	auto file_read_binary(const char* fileName , Allocator* allocator, size_t* size) -> char*
 	{
 		char* outData = 0;
 		FILE* file = fopen(fileName, "rb");
 		if (file)
 		{
-			size_t fileSize = FileGetSize(file);
+			size_t fileSize = file_get_size(file);
 			outData = (char*)Hashea_Alloc(allocator,fileSize + 1 ,1);
 			fread(outData, fileSize,1,file);
 			outData[fileSize] = 0;
@@ -50,13 +50,13 @@ namespace HASHEAENGINE
 		}
 		return outData;
 	}
-	auto FileReadText(const char* fileName , Allocator* allocator, size_t* size) -> char*
+	auto file_read_text(const char* fileName , Allocator* allocator, size_t* size) -> char*
 	{
 		char* text = 0;
 		FILE* file = fopen(fileName, "r");
 		if (file)
 		{
-			size_t fileSize = FileGetSize(file);
+			size_t fileSize = file_get_size(file);
 			text = (char*)Hashea_Alloc(allocator, fileSize + 1, 1);
 			size_t bytes_read = fread(text, fileSize, 1, file);
 			text[bytes_read] = 0;
@@ -68,13 +68,13 @@ namespace HASHEAENGINE
 		}
 		return text;
 	}
-	auto FileReadBinary(const char* fileName , Allocator* allocator) -> FileReadResult
+	auto file_read_binary(const char* fileName , Allocator* allocator) -> FileReadResult
 	{
 		FileReadResult result{ nullptr, 0 };
 		FILE* file = fopen(fileName, "rb");
 		if (file)
 		{
-			size_t fileSize = FileGetSize(file);
+			size_t fileSize = file_get_size(file);
 			result.data = (char*)Hashea_Alloc(allocator, fileSize + 1, 1);
 			fread(result.data, fileSize, 1, file);
 			result.data[fileSize] = 0;//waste anyway
@@ -83,13 +83,13 @@ namespace HASHEAENGINE
 		}
 		return result;
 	}
-	auto FileReadText(const char* fileName , Allocator* allocator) -> FileReadResult
+	auto file_read_text(const char* fileName , Allocator* allocator) -> FileReadResult
 	{
 		FileReadResult result{ nullptr, 0 };
 		FILE* file = fopen(fileName, "r");
 		if (file)
 		{
-			size_t fileSize = FileGetSize(file);
+			size_t fileSize = file_get_size(file);
 			result.data = (char*)Hashea_Alloc(allocator, fileSize + 1, 1);
 			size_t byteRead = fread(result.data, fileSize, 1, file);
 			result.data[byteRead] = 0;
@@ -98,13 +98,13 @@ namespace HASHEAENGINE
 		}
 		return result;
 	}
-	auto FileWriteBinary(const char* fileName, void* memory, size_t size) -> void
+	auto file_write_binary(const char* fileName, void* memory, size_t size) -> void
 	{
 		FILE* file = fopen(fileName, "wb");
 		fwrite(memory, size, 1, file);
 		fclose(file);
 	}
-	auto FileExists(const char* fileName) -> bool
+	auto file_exists(const char* fileName) -> bool
 	{
 #if defined(_WIN64)
 		WIN32_FILE_ATTRIBUTE_DATA unused;
@@ -115,7 +115,7 @@ namespace HASHEAENGINE
 #endif // _WIN64
 		return false;
 	}
-	auto FileOpen(const char* fileName, const char* mode, FileHandle* file) -> void
+	auto file_open(const char* fileName, const char* mode, FileHandle* file) -> void
 	{
 #if defined(_WIN64)
 		fopen_s(file, fileName, mode);
@@ -123,16 +123,16 @@ namespace HASHEAENGINE
 		*file = fopen(fileName, mode);
 #endif
 	}
-	auto FileClose(FileHandle file) -> void
+	auto file_close(FileHandle file) -> void
 	{
 		if (file)
 			fclose(file);
 	}
-	auto FileWrite(uint8_t* memory, uint32_t elementSize, uint32_t count, FileHandle file) -> size_t
+	auto file_write(uint8_t* memory, uint32_t elementSize, uint32_t count, FileHandle file) -> size_t
 	{
 		return fwrite(memory, elementSize, count, file);
 	}
-	auto FileDelete(const char* filePath) -> bool
+	auto file_delete(const char* filePath) -> bool
 	{
 #if defined(_WIN64)
 		int result = remove(filePath);
@@ -143,7 +143,7 @@ namespace HASHEAENGINE
 #endif
 	}
 #if defined(_WIN64)
-	auto FileLastWriteTime(const char* filename) -> FileTime
+	auto file_last_write_time(const char* filename) -> FileTime
 	{
 		FILETIME lastWriteTime = {};
 
@@ -157,7 +157,7 @@ namespace HASHEAENGINE
 	}
 #endif
 
-	auto FileResolveToFullPath(const char* path, char* outFullPath, uint32_t maxSize) -> uint32_t
+	auto file_resolve_to_full_path(const char* path, char* outFullPath, uint32_t maxSize) -> uint32_t
 	{
 #if defined(_WIN64)
 		return GetFullPathNameA(path, maxSize, outFullPath, nullptr);
@@ -165,7 +165,7 @@ namespace HASHEAENGINE
 		return readlink(path, outFullPath, maxSize);
 #endif // _WIN64;
 	}
-	auto FileDirectoryFromPath(char* path) -> void
+	auto file_directory_from_path(char* path) -> void
 	{
 		char* last_point = strrchr(path, '.');
 		char* last_separator = strrchr(path, '/');
@@ -185,7 +185,7 @@ namespace HASHEAENGINE
 
 		}
 	}
-	auto FileNameFromPath(char* path) -> void
+	auto file_name_from_path(char* path) -> void
 	{
 		char* last_separator = strrchr(path, '/');
 		if (last_separator == nullptr) {
@@ -200,13 +200,13 @@ namespace HASHEAENGINE
 		}
 	}
 
-	auto FileExtensionFromPath(char* path) -> char*
+	auto file_extension_from_path(char* path) -> char*
 	{
 		char* last_separator = strrchr(path, '.');
 
 		return last_separator + 1;
 	}
-	auto DirectoryExists(const char* path) -> bool
+	auto directory_exists(const char* path) -> bool
 	{
 #if defined(_WIN64)
 		WIN32_FILE_ATTRIBUTE_DATA unused;
@@ -216,7 +216,7 @@ namespace HASHEAENGINE
 		return (result == 0);
 #endif // _WIN64
 	}
-	auto DirectoryCreate(const char* path) -> bool
+	auto directory_create(const char* path) -> bool
 	{
 #if defined(_WIN64)
 		int result = CreateDirectoryA(path, NULL);
@@ -226,7 +226,7 @@ namespace HASHEAENGINE
 		return (result == 0);
 #endif // _WIN64
 	}
-	auto DirectoryDelete(const char* path) -> bool
+	auto directory_delete(const char* path) -> bool
 	{
 #if defined(_WIN64)
 		int result = RemoveDirectoryA(path);
@@ -236,7 +236,7 @@ namespace HASHEAENGINE
 		return (result == 0);
 #endif // _WIN64
 	}
-	auto DirectoryCurrent(Directory* directory) -> void
+	auto directory_current(Directory* directory) -> void
 	{
 #if defined(_WIN64)
 		DWORD written_chars = GetCurrentDirectoryA(k_max_path, directory->path);
@@ -246,7 +246,7 @@ namespace HASHEAENGINE
 		getcwd(directory->path, k_max_path);
 #endif // _WIN64
 	}
-	auto DirectoryChange(const char* path) -> HS_Result
+	auto directory_change(const char* path) -> HS_Result
 	{
 #if defined(_WIN64)
 		if (!SetCurrentDirectoryA(path)) {
@@ -263,20 +263,20 @@ namespace HASHEAENGINE
 #endif // _WIN64
 		return HS_OK;
 	}
-	auto FileOpenDirectory(const char* path, Directory* outDirectory) -> HS_Result
+	auto file_open_directory(const char* path, Directory* outDirectory) -> HS_Result
 	{
 		// Open file trying to conver to full path instead of relative.
 		// If an error occurs, just copy the name.
-		if (FileResolveToFullPath(path, outDirectory->path, MAX_PATH) == 0) {
+		if (file_resolve_to_full_path(path, outDirectory->path, MAX_PATH) == 0) {
 			strcpy(outDirectory->path, path);
 		}
 
 		// Add '\\' if missing
-		if (!StringEndsWithChar(path, '\\')) {
+		if (!string_ends_with_char(path, '\\')) {
 			strcat(outDirectory->path, "\\");
 		}
 
-		if (!StringEndsWithChar(outDirectory->path, '*')) {
+		if (!string_ends_with_char(outDirectory->path, '*')) {
 			strcat(outDirectory->path, "*");
 		}
 
@@ -297,7 +297,7 @@ namespace HASHEAENGINE
 #endif
 		return HS_OK;
 	}
-	auto FileCloseDirectory(Directory* directory) -> HS_Result
+	auto file_close_directory(Directory* directory) -> HS_Result
 	{
 #if defined(_WIN64)
 		if (directory->os_handle) {
@@ -312,7 +312,7 @@ namespace HASHEAENGINE
 #endif
 		return HS_OK;
 	}
-	auto FileParentDirectory(Directory* directory) -> void
+	auto file_parent_directory(Directory* directory) -> void
 	{
 		Directory new_directory;
 
@@ -334,7 +334,7 @@ namespace HASHEAENGINE
 				new_directory.path[index] = 0;
 			}
 
-			HS_Result ret = FileOpenDirectory(new_directory.path, &new_directory);
+			HS_Result ret = file_open_directory(new_directory.path, &new_directory);
 			if (HS_CHECK_FAILED(ret))
 			{
 				HLogError("Failed to open directory : {}", new_directory.path);
@@ -350,15 +350,15 @@ namespace HASHEAENGINE
 #endif
 		}
 	}
-	auto FileSubDirectory(Directory* directory, const char* subDirectoryName) -> HS_Result
+	auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> HS_Result
 	{
 		// Remove the last '*' from the path. It will be re-added by the file_open.
-		if (StringEndsWithChar(directory->path, '*')) {
+		if (string_ends_with_char(directory->path, '*')) {
 			directory->path[strlen(directory->path) - 1] = 0;
 		}
 
 		strcat(directory->path, subDirectoryName);
-		HS_Result ret = FileOpenDirectory(directory->path, directory);
+		HS_Result ret = file_open_directory(directory->path, directory);
 		if (HS_CHECK_FAILED(ret))
 		{
 			HLogError("Failed to open directory : {}", directory->path);
@@ -366,7 +366,7 @@ namespace HASHEAENGINE
 		}
 		return HS_OK;
 	}
-	auto FileFindFilesInPath(const char* filePattern, StringArray& files) -> void
+	auto file_find_files_in_path(const char* filePattern, StringArray& files) -> void
 	{
 
 		files.Clear();
@@ -389,7 +389,7 @@ namespace HASHEAENGINE
 		H_ASSERTLOG(false, "Not implemented");
 #endif
 	}
-	auto FileFindFilesInPath(const char* extension, const char* searchPattern, StringArray& files, StringArray& directories) -> void
+	auto file_find_files_in_path(const char* extension, const char* searchPattern, StringArray& files, StringArray& directories) -> void
 	{
 		files.Clear();
 		directories.Clear();
@@ -420,7 +420,7 @@ namespace HASHEAENGINE
 #endif
 	}
 
-	auto EnvironmentVariableGet(const char* name, char* output, uint32_t outputSize) -> void
+	auto env_var_get(const char* name, char* output, uint32_t outputSize) -> void
 	{
 #if defined(_WIN64)
 		ExpandEnvironmentStringsA(name, output, outputSize);
@@ -432,12 +432,12 @@ namespace HASHEAENGINE
 
 	ScopedFile::ScopedFile(const char* fileName, const char* mode)
 	{
-		FileOpen(fileName, mode, &file);
+		file_open(fileName, mode, &file);
 	}
 
 	ScopedFile::~ScopedFile()
 	{
-		FileClose(file);
+		file_close(file);
 	}
 
 };
