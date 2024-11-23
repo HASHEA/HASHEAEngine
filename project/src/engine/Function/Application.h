@@ -24,7 +24,7 @@ namespace HASHEAENGINE
 			return Get()->graphicsContext;
 		}
 
-		auto Start() -> void;
+		auto start() -> void;
 	public:
 		static Application* app;
 	protected:
