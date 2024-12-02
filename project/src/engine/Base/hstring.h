@@ -2,14 +2,14 @@
 #include "hcore.h"
 #include "hplatform.h"
 
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	struct Allocator;
 	template <typename K, typename V>
 	struct FlatHashMap;
 	struct FlatHashMapIterator;
 
-	struct HASHEA_API StringView
+	struct ASH_API StringView
 	{
 		char* text;
 		size_t length;
@@ -23,9 +23,9 @@ namespace HASHEAENGINE
 		auto shutdown() -> void;
 		auto append(const char* string) -> void;
 		auto append(const StringView& text) -> void;
-		auto append(void* memory, size_t size) -> void;
+		auto append_m(void* memory, size_t size) -> void;
 		auto append(const StringBuffer& otherBuffer) -> void;
-		auto append(const char* format,...) -> void;
+		auto append_f(const char* format,...) -> void;
 
 		auto append_get(const char* string) -> char*;
 		auto append_get(const char* format, ...) -> char*;

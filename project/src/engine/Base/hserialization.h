@@ -4,7 +4,7 @@
 #include "hassert.h"
 #include "ds/harray.hpp"
 ////TODO : change impl to ylt struct_pack
-namespace HASHEAENGINE
+namespace AshEngine
 {
     struct Allocator;
 
@@ -263,7 +263,7 @@ namespace HASHEAENGINE
         }
         hasAllocatedMemory = 1;
         serializerVersion = dataVersion;
-        dataMemory = (char*)Hashea_Alloc(allocator,size,1);
+        dataMemory = (char*)Ash_Alloc(allocator,size,1);
         T* dst = (T*)dataMemory;
         serializedOffset += sizeof(BlobHeader);
         allocate_static(sizeof(T));

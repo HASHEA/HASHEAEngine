@@ -8,7 +8,7 @@
 #include "Base/ds/harray.hpp"
 #include <vector>
 #include <memory>
-using namespace HASHEAENGINE;
+using namespace AshEngine;
 namespace RHI
 {
 	constexpr uint32_t MAX_SWAPCHAIN_BUFFERS = 3;

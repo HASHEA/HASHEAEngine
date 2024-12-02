@@ -10,7 +10,7 @@
 #include <type_traits>  
 #include <utility> 
 #include <new> 
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	static const uint64_t k_iterator_end = UINT64_MAX;
 	struct FoundInfo
@@ -297,7 +297,7 @@ namespace HASHEAENGINE
 
 	template<typename K, typename V>
 	inline auto FlatHashMap<K, V>::shutdown() -> void {
-		Hashea_Free(m_pAllocator, controlBytes);
+		Ash_Free(m_pAllocator, controlBytes);
 	}
 
 	template <typename K, typename V>
@@ -512,7 +512,7 @@ namespace HASHEAENGINE
 	template <typename K, typename V>
 	auto FlatHashMap<K, V>::_initialize_slots() -> void{
 
-		char* new_memory = (char*)Hashea_Alloc(m_pAllocator,_calculate_size(m_uCapacity),1);
+		char* new_memory = (char*)Ash_Alloc(m_pAllocator,_calculate_size(m_uCapacity),1);
 
 		controlBytes = reinterpret_cast<int8_t*>(new_memory);
 		slots_ = reinterpret_cast<KeyValue*>(new_memory + m_uCapacity + GroupSse2Impl::kWidth);
@@ -550,7 +550,7 @@ namespace HASHEAENGINE
 		}
 
 		if (old_capacity) {
-			Hashea_Free(m_pAllocator, old_control_bytes);
+			Ash_Free(m_pAllocator, old_control_bytes);
 		}
 	}
 

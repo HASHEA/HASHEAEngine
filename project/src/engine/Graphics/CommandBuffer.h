@@ -4,8 +4,8 @@ namespace RHI
 	class CommandBuffer
 	{
 	public:
-		CommandBuffer();
-		~CommandBuffer();
+		CommandBuffer() = default;
+		virtual ~CommandBuffer() {}
 
 	private:
 

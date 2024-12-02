@@ -32,11 +32,7 @@ project "Editor"
 
 	}
 	
-		postbuildcommands
-		{
-			("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.dll   %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
-		}
-
+		
 	filter "system:windows"
 		system "Windows"
 		systemversion "latest"
@@ -47,19 +43,19 @@ project "Editor"
             "UNICODE",
 			"_CONSOLE",
 			"GLFW_INCLUDE_NONE",
-			"HASHEA_WINDOWS",
-			"HASHEA_EDITOR",
+			"ASH_WINDOWS",
+			"ASH_EDITOR",
 		}
 
 
 	filter "configurations:Debug"
-		defines "HASHEA_APP_DEBUG"
+		defines "ASH_APP_DEBUG"
 		runtime "Debug"
 		symbols "on"
 		editandcontinue "Off"
 		optimize "off"
 
 	filter "configurations:Release"
-		defines "HASHEA_APP_RELEASE"
+		defines "ASH_APP_RELEASE"
 		runtime "Release"
 		optimize "on"

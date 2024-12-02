@@ -4,7 +4,7 @@
 #include "hcore.h"
 #include "hservice.h"
 #include <memory>
-namespace HASHEAENGINE
+namespace AshEngine
 {
 
 	// Memory Methods /////////////////////////////////////////////////////
@@ -54,9 +54,9 @@ namespace HASHEAENGINE
 		auto init(size_t size) -> HS_Result;
 		auto shutdown()-> HS_Result;
 
-#ifdef HASHEA_DEBUG
+#ifdef ASH_DEBUG
 		auto on_gui() -> void;
-#endif // HASHEA_DEBUG
+#endif // ASH_DEBUG
 
 		auto allocate(size_t size, size_t alignment) -> void* override;
 		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
@@ -124,10 +124,10 @@ namespace HASHEAENGINE
 		static constexpr char* k_name = "memory_service";
 		auto init(void* configuration) -> HS_Result override;
 		auto shutdown() -> HS_Result override;
-#ifdef HASHEA_DEBUG
+#ifdef ASH_DEBUG
 		auto on_gui() -> void override;
-#endif // HASHEA_DEBUG
-		HASHEA_DECLARE_SERVICE(MemoryService);
+#endif // ASH_DEBUG
+		ASH_DECLARE_SERVICE(MemoryService);
 		auto get_system_allocator() -> HeapAllocator*
 		{
 			return &m_heapAllocator;
@@ -179,18 +179,11 @@ namespace HASHEAENGINE
 	}
 
 //if nullptr, use system allocator
-#define Hashea_Alloc(allocater,size,align/*set 1 to no align*/)\
+#define Ash_Alloc(allocater,size,align/*set 1 to no align*/)\
 	((allocater) == nullptr ? ((MemoryService::instance()->get_system_allocator())->allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->allocate( size, align, __FILE__, __LINE__ )))
 	
-//#define Hashea_New(allocater,type,...)\
-//	(\
-//		(allocater) == nullptr ? \
-//		_OriginalPlacementNew<type>(static_cast<type*>(MemoryService::instance()->GetSystemAllocator()->Allocate( sizeof(type), 1, __FILE__, __LINE__ )),__VA_ARGS__) \
-//		:_OriginalPlacementNew<type>(static_cast<type*>((allocater)->Allocate( sizeof(type), 1, __FILE__, __LINE__ )),__VA_ARGS__)\
-//	)
-
 template<typename T, typename... Args>
-T* Hashea_New(Allocator* allocator = nullptr,Args&&... args) {
+T* Ash_New(Allocator* allocator = nullptr,Args&&... args) {
 	if (allocator == nullptr) {
 		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 	}
@@ -200,7 +193,7 @@ T* Hashea_New(Allocator* allocator = nullptr,Args&&... args) {
 }
 
 template<typename T, typename... Args>
-std::shared_ptr<T> Hashea_New_Shared(Args&&... args) {
+std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 	T* pO = nullptr;
 	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 
@@ -210,26 +203,28 @@ std::shared_ptr<T> Hashea_New_Shared(Args&&... args) {
 		allocator->deallocate(pObject); 
 	};
 	std::shared_ptr<T> sp(pO, Deleter);
+	auto t = sp.use_count();
 	return sp;
 }
 
-template<typename T, typename... Args>
-std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
-	T* pO = nullptr;
-	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+//some problem can;t cover
+//template<typename T, typename... Args>
+//std::unique_ptr<T> Ash_New_Unique(Args&&... args) {
+//	T* pO = nullptr;
+//	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+//
+//	auto Deleter = [](T* pObject) {
+//		auto allocator = (MemoryService::instance()->get_system_allocator());
+//		_original_destroy(pObject);
+//		allocator->deallocate(pObject);
+//		};
+//	std::unique_ptr<T, decltype(Deleter)> sp(pO, Deleter);
+//	return sp;
+//}
 
-	auto Deleter = [](T* pObject) {
-		auto allocator = (MemoryService::instance()->get_system_allocator());
-		_original_destroy(pObject);
-		allocator->deallocate(pObject);
-		};
-	std::unique_ptr<T, decltype(Deleter)> sp(pO, Deleter);
-	return sp;
-}
 
 
-
-#define Hashea_Free(_allocator,pObject)\
+#define Ash_Free(_allocator,pObject)\
 {\
 	Allocator* l_pAlloc = (_allocator);\
 	if(!(l_pAlloc))\
@@ -237,7 +232,7 @@ std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
 	(l_pAlloc)->deallocate(pObject);\
 }
 
-#define Hashea_Delete(allocator,pObject)\
+#define Ash_Delete(allocator,pObject)\
 {\
 	Allocator* l_pAlloc = allocater;\
 	if(!(l_pAlloc))\
@@ -249,9 +244,9 @@ std::unique_ptr<T> Hashea_New_Unique(Args&&... args) {
 
 
 
-#define HASHEA_KILO(size)                 (size * 1024)
-#define HASHEA_MEGA(size)                 (size * 1024 * 1024)
-#define HASHEA_GIGA(size)                 (size * 1024 * 1024 * 1024)
+#define ASH_KILO(size)                 (size * 1024)
+#define ASH_MEGA(size)                 (size * 1024 * 1024)
+#define ASH_GIGA(size)                 (size * 1024 * 1024 * 1024)
 
 };
 

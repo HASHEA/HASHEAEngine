@@ -1,7 +1,7 @@
 #include "hbit.hpp"
 #include "hmemory.h"
 
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	auto leading_zeros_u32(uint32_t x)->uint32_t
 	{
@@ -71,7 +71,7 @@ namespace HASHEAENGINE
 	}
 	auto BitSet::shutdown() -> void
 	{
-		Hashea_Free(m_pAllocator, bits);
+		Ash_Free(m_pAllocator, bits);
 
 	}
 	auto BitSet::resize(uint32_t totalBits) -> void
@@ -81,12 +81,12 @@ namespace HASHEAENGINE
 		if (size == new_size) {
 			return;
 		}
-		bits = (uint8_t*)Hashea_Alloc(m_pAllocator, new_size, 1);
+		bits = (uint8_t*)Ash_Alloc(m_pAllocator, new_size, 1);
 
 
 		if (oldBits) {
 			memcpy(bits, oldBits, size);
-			Hashea_Free(m_pAllocator, oldBits);
+			Ash_Free(m_pAllocator, oldBits);
 		}
 		else {
 			memset(bits, 0, new_size);

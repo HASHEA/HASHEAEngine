@@ -2,7 +2,7 @@
 #include "hplatform.h"
 #include "hcore.h"
 #include"ds/hhash_map.hpp"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	class Allocator;
 	struct Service;

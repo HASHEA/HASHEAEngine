@@ -4,10 +4,10 @@
 #include "Base/hmemory.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
     template <typename T>
-    class HASHEA_API Array {
+    class ASH_API Array {
 
     public:
         Array();
@@ -197,13 +197,10 @@ namespace HASHEAENGINE
             new_capacity = 4;
         }
 
-        T* new_data = (T*)m_pAllocator->allocate(new_capacity * sizeof(T), alignof(T));
+        T* new_data = (T*) Ash_Alloc(m_pAllocator, new_capacity * sizeof(T), alignof(T));//(T*)m_pAllocator->allocate(new_capacity * sizeof(T), alignof(T));
         if (m_uCapacity) {
             memory_copy(new_data, m_pData, m_uCapacity * sizeof(T));
-
-            ret = m_pAllocator->deallocate(m_pData);
-            HS_PROCESS_AND_LOG_RESULT(ret);
-
+            Ash_Free(m_pAllocator, m_pData);
         }
 
         m_pData = new_data;
@@ -275,7 +272,7 @@ namespace HASHEAENGINE
     {
         HS_Result result;
         Array<T>* ptr = nullptr;
-        ptr = Hashea_New(nullptr, Array<T>);
+        ptr = Ash_New(nullptr, Array<T>);
         H_ASSERT(ptr);
         result = ptr->init(&(MemoryService::instance()->get_system_allocator()),0,0);
         HS_PROCESS_AND_LOG_RESULT(result);

@@ -54,9 +54,9 @@ namespace RHI
 	"",
 #endif // VULKAN_DEBUG_REPORT
 	};
-	inline auto CheckLayerSupport()->HS_Result
+	inline auto check_layer_support()->HS_Result
 	{
-		std::vector<VkLayerProperties>& layers{};
+		std::vector<VkLayerProperties> layers;
 		uint32_t layerCount = 0;
 		vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 
@@ -81,9 +81,9 @@ namespace RHI
 		}
 		return HS_OK;
 	}
-	inline auto CheckExtensionSupport() -> HS_Result
+	inline auto check_extension_support() -> HS_Result
 	{
-		std::vector<VkExtensionProperties>& properties{};
+		std::vector<VkExtensionProperties> properties;
 		uint32_t extensionCount = 0;
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
 
@@ -114,7 +114,7 @@ namespace RHI
 		}
 		return extensionSupported  ? HS_OK : HS_FAIL;
 	}
-	static VkBool32 VKDebugCallbacks(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+	static VkBool32 vk_debug_callbacks(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
 		VkDebugUtilsMessageTypeFlagsEXT types,
 		const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
 		void* user_data) {
@@ -150,18 +150,18 @@ namespace RHI
 		VkApplicationInfo appInfo{};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 		appInfo.pNext = nullptr;
-		appInfo.pApplicationName = "Hashea Engine";
+		appInfo.pApplicationName = "Ash Engine";
 		appInfo.applicationVersion = 1;
-		appInfo.pEngineName = "Hashea";
+		appInfo.pEngineName = "Ash";
 		appInfo.engineVersion = 1;
 		appInfo.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 0);
-		HS_Result result = CheckLayerSupport();
+		HS_Result result = check_layer_support();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Not all required layers are supported!");
 			return result;
 		}
-		result = CheckExtensionSupport();
+		result = check_extension_support();
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Not all required extensions are supported!");
@@ -180,7 +180,7 @@ namespace RHI
 		instanceCI.ppEnabledExtensionNames = lyorExCounts == 0 ? nullptr : s_requested_extensions;
 #ifdef VULKAN_DEBUG_REPORT
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		debugUtilCI.pfnUserCallback = VKDebugCallbacks;
+		debugUtilCI.pfnUserCallback = vk_debug_callbacks;
 		debugUtilCI.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
 		debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 #ifdef VULKAN_SYNCHRONIZATION_VALIDATION
@@ -205,7 +205,7 @@ namespace RHI
 	{
 		// Create new debug utils callback
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		debugUtilCI.pfnUserCallback = VKDebugCallbacks;
+		debugUtilCI.pfnUserCallback = vk_debug_callbacks;
 		debugUtilCI.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
 		debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 
@@ -383,9 +383,9 @@ namespace RHI
 			{
 				continue;
 			}
-#ifdef HASHEA_DEBUG
+#ifdef ASH_DEBUG
 			HLogInfo("Family {0}, flags {1} queue count {2}\n", i, qf.queueFlags, qf.queueCount);
-#endif // HASHEA_DEBUG
+#endif // ASH_DEBUG
 			// Search for a main queue that should be able to do all work (graphics, compute and transfer)
 			if ((qf.queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT )) == (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT )/* && mainQueueFamilyIndex == UINT32_MAX*/)
 			{
@@ -474,7 +474,7 @@ namespace RHI
 			computeQueueCI.pQueuePriorities = queuePriority;
 		}
 
-		if (vulkanTransferQueueFamily < queueCount) {
+		if (vulkanTransferQueueFamily < queueFamilyCount) {
 			VkDeviceQueueCreateInfo& transferQueueCI = queueInfo[queueCount++];
 			transferQueueCI.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 			transferQueueCI.queueFamilyIndex = transferQueueFamilyIndex;
@@ -485,12 +485,12 @@ namespace RHI
 		VkPhysicalDeviceFeatures2 physicalFeatures2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
 		VkPhysicalDeviceVulkan11Features vulkan11Features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES };
 		VkPhysicalDeviceVulkan12Features vulkan12Features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
-		VkPhysicalDeviceVulkan13Features vulkan13Features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
+		//VkPhysicalDeviceVulkan13Features vulkan13Features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
 		void* currentPNext = &vulkan11Features;
 		vulkan12Features.pNext = currentPNext;
 		currentPNext = &vulkan12Features;
-		vulkan13Features.pNext = currentPNext;
-		currentPNext = &vulkan13Features;
+		//vulkan13Features.pNext = currentPNext;
+		//currentPNext = &vulkan13Features;
 		VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRenderingFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
 			dynamicRenderingFeatures.pNext = currentPNext;
@@ -641,12 +641,12 @@ namespace RHI
 		
 		const uint32_t num_pools = numThread * k_max_frames;
 		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
-		gpuTimeQueryManager = Hashea_New_Shared<GPUTimeQueriesManager>();
+		gpuTimeQueryManager = Ash_New_Shared<GPUTimeQueriesManager>();
 		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
-			pool.cmdPool = Hashea_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+			pool.cmdPool = Ash_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 			VkQueryPoolCreateInfo timestampPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
 			timestampPoolCI.pNext = nullptr;
 			timestampPoolCI.flags = 0;
@@ -730,6 +730,7 @@ namespace RHI
 	}
 	auto VulkanContext::shutdown() -> HS_Result
 	{
+		return HS_OK;
 	}
 
 	VulkanContext* VulkanContext::instance = nullptr;

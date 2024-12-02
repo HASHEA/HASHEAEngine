@@ -2,7 +2,7 @@
 #include "Base/hplatform.h"
 #include "Base/hmemory.h"
 #include "Base/ds/harray.hpp"
-using namespace HASHEAENGINE;
+using namespace AshEngine;
 namespace RHI
 {
     // A single timestamp query, containing indices for the pool, resolved time, name and color.
@@ -85,7 +85,7 @@ namespace RHI
     }; // struct GPUTimeQueriesManager
 
     // GpuVisualProfiler //////////////////////////////////////////////////////
-    class GraphicsContext;
+    class VulkanContext;
     //
     // Collect per frame queries from GpuProfiler and create a visual representation.
     struct GpuVisualProfiler {

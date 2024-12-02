@@ -4,9 +4,9 @@ namespace RHI
 	class CommandPool
 	{
 	public:
-		CommandPool();
-		~CommandPool();
-		virtual auto Reset() -> void = 0;
+		CommandPool() =default;
+		virtual ~CommandPool() {};
+		virtual auto reset() -> void = 0;
 	private:
 
 	};

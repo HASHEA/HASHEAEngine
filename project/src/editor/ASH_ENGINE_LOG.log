@@ -1,0 +1,4 @@
+[19:20:04] [info] Engine: Memory Service Init
+
+[19:20:04] [error] Engine: New string too big for current buffer! Please allocate more size.
+

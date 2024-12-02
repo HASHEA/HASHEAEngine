@@ -2,11 +2,11 @@
 #include "hmemory.h"
 #include "ds/hhash_map.hpp"
 #include "hassert.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 
 
-	bool HASHEAENGINE::StringView::equals(const StringView& a, const StringView& b)
+	bool AshEngine::StringView::equals(const StringView& a, const StringView& b)
 	{
 		return false;
 	}
@@ -19,7 +19,7 @@ namespace HASHEAENGINE
 	{	 
 		if  (m_pData)
 		{ 
-			Hashea_Free(allocator, m_pData);
+			Ash_Free(allocator, m_pData);
 		} 
 		if (size < 1)
 		{
@@ -27,7 +27,7 @@ namespace HASHEAENGINE
 			return;
 		}
 		m_pAllocator = allocator;
-		m_pData = (char*) Hashea_Alloc(m_pAllocator,size + 1,1);
+		m_pData = (char*) Ash_Alloc(m_pAllocator,size + 1,1);
 		H_ASSERT(m_pData);
 		m_pData[0] = 0;
 		m_uBufferSize = (uint32_t)size;
@@ -36,13 +36,13 @@ namespace HASHEAENGINE
 		 
 	auto StringBuffer::shutdown() -> void
 	{	 
-		Hashea_Free(m_pAllocator,m_pData);
+		Ash_Free(m_pAllocator,m_pData);
 		m_uBufferSize = m_uCurrentSize = 0;
 	}	 
 		 
 	auto StringBuffer::append(const char* string) -> void
 	{	 
-		append("%s", string);
+		append_f("%s", string);
 	}	 
 		 
 	auto StringBuffer::append(const StringView& text) -> void
@@ -60,7 +60,7 @@ namespace HASHEAENGINE
 		m_pData[m_uCurrentSize] = 0;
 	}	 
 		 
-	auto StringBuffer::append(void* memory, size_t size) -> void
+	auto StringBuffer::append_m(void* memory, size_t size) -> void
 	{	 
 		if (m_uCurrentSize + size >= m_uBufferSize) {
 			HLogError("Buffer full! Please allocate more size.\n");
@@ -84,7 +84,7 @@ namespace HASHEAENGINE
 		m_uCurrentSize += otherBuffer.m_uCurrentSize;
 	}	 
 		 
-	auto StringBuffer::append(const char* format, ...) -> void
+	auto StringBuffer::append_f(const char* format, ...) -> void
 	{	 
 		if (m_uCurrentSize >= m_uBufferSize)
 		{
@@ -212,7 +212,7 @@ namespace HASHEAENGINE
 	{	 
 		m_pAllocator = allocator;
 		// Allocate also memory for the hash map
-		char* allocated_memory = (char*)Hashea_Alloc(m_pAllocator, size + sizeof(FlatHashMap<uint64_t, uint32_t>) + sizeof(FlatHashMapIterator),1);
+		char* allocated_memory = (char*)Ash_Alloc(m_pAllocator, size + sizeof(FlatHashMap<uint64_t, uint32_t>) + sizeof(FlatHashMapIterator),1);
 		string2Index = (FlatHashMap<uint64_t, uint32_t>*)allocated_memory;
 		string2Index->init(allocator, 8);
 		string2Index->set_default_value(UINT32_MAX);
@@ -225,7 +225,7 @@ namespace HASHEAENGINE
 	auto StringArray::shutdown() -> void
 	{	 
 		// string_to_index contains ALL the memory including data.
-		Hashea_Free(m_pAllocator, string2Index);
+		Ash_Free(m_pAllocator, string2Index);
 		m_uBufferSize = m_uCurrentSize = 0;
 	}	 
 		 

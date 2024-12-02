@@ -1,6 +1,13 @@
 #pragma once
-int main(int argc, char* argv[])
+namespace RHI
 {
-	return 1;
+	class Queue
+	{
+	public:
+		Queue() = default;
+		virtual ~Queue() {}
 
+	private:
+
+	};
 }

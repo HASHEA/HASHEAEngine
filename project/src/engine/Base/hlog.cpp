@@ -1,7 +1,7 @@
 #include "hlog.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/sinks/basic_file_sink.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	static LogService s_log_service;
 
@@ -13,13 +13,13 @@ namespace HASHEAENGINE
 	{
 		std::vector<spdlog::sink_ptr> logSinksEngine;
 		logSinksEngine.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
-		logSinksEngine.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>("HASHEA_ENGINE_LOG.log", true));
+		logSinksEngine.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>("ASH_ENGINE_LOG.log", true));
 		logSinksEngine[0]->set_pattern("%^[%T] %n: %v%$");
 		logSinksEngine[1]->set_pattern("[%T] [%l] %n: %v");
 
 		std::vector<spdlog::sink_ptr> logSinksApp;
 		logSinksApp.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
-		logSinksApp.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>("HASHEA_APP_LOG.log", true));
+		logSinksApp.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>("ASH_APP_LOG.log", true));
 		logSinksApp[0]->set_pattern("%^[%T] %n: %v%$");
 		logSinksApp[1]->set_pattern("[%T] [%l] %n: %v");
 		m_pEngineLogger = std::make_shared<spdlog::logger>("Engine", begin(logSinksEngine), end(logSinksEngine));

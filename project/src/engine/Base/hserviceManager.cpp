@@ -1,22 +1,22 @@
 #include "hserviceManager.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	static ServiceManager           s_service_manager;
 	ServiceManager* ServiceManager::instance = &s_service_manager;
 
-	auto ServiceManager::Init(Allocator* allocator_) -> bool
+	auto ServiceManager::init(Allocator* allocator_) -> bool
 	{
 		allocator = allocator_;
 
 		services.init(allocator, 8);
 		return true;
 	}
-	auto ServiceManager::Shutdown() -> bool
+	auto ServiceManager::shutdown() -> bool
 	{
 		services.shutdown();
 		return true;
 	}
-	auto ServiceManager::RegisterService(Service* service, const char* name) -> bool
+	auto ServiceManager::register_service(Service* service, const char* name) -> bool
 	{
 		uint64_t hash_name = hash_calculate(name);
 		FlatHashMapIterator it = services.find(hash_name);
@@ -24,13 +24,13 @@ namespace HASHEAENGINE
 		services.insert(hash_name, service);
 		return true;
 	}
-	auto ServiceManager::CancelService(const char* name) -> bool
+	auto ServiceManager::cancel_service(const char* name) -> bool
 	{
 		uint64_t hash_name = hash_calculate(name);
 		services.remove(hash_name);
 		return true;
 	}
-	Service* ServiceManager::GetService(const char* name)
+	Service* ServiceManager::get_service(const char* name)
 	{
 		uint64_t hash_name = hash_calculate(name);
 		return services.get(hash_name);

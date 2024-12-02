@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 #include <string.h>
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	static long file_get_size(FileHandle f) {
 		long fileSizeSigned;
@@ -39,7 +39,7 @@ namespace HASHEAENGINE
 		if (file)
 		{
 			size_t fileSize = file_get_size(file);
-			outData = (char*)Hashea_Alloc(allocator,fileSize + 1 ,1);
+			outData = (char*)Ash_Alloc(allocator,fileSize + 1 ,1);
 			fread(outData, fileSize,1,file);
 			outData[fileSize] = 0;
 			if (size)
@@ -57,7 +57,7 @@ namespace HASHEAENGINE
 		if (file)
 		{
 			size_t fileSize = file_get_size(file);
-			text = (char*)Hashea_Alloc(allocator, fileSize + 1, 1);
+			text = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
 			size_t bytes_read = fread(text, fileSize, 1, file);
 			text[bytes_read] = 0;
 			if (size)
@@ -75,7 +75,7 @@ namespace HASHEAENGINE
 		if (file)
 		{
 			size_t fileSize = file_get_size(file);
-			result.data = (char*)Hashea_Alloc(allocator, fileSize + 1, 1);
+			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
 			fread(result.data, fileSize, 1, file);
 			result.data[fileSize] = 0;//waste anyway
 			result.size = fileSize;
@@ -90,7 +90,7 @@ namespace HASHEAENGINE
 		if (file)
 		{
 			size_t fileSize = file_get_size(file);
-			result.data = (char*)Hashea_Alloc(allocator, fileSize + 1, 1);
+			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
 			size_t byteRead = fread(result.data, fileSize, 1, file);
 			result.data[byteRead] = 0;
 			result.size = byteRead;
@@ -369,7 +369,7 @@ namespace HASHEAENGINE
 	auto file_find_files_in_path(const char* filePattern, StringArray& files) -> void
 	{
 
-		files.Clear();
+		files.clear();
 
 #if defined(_WIN64)
 		WIN32_FIND_DATAA find_data;
@@ -377,7 +377,7 @@ namespace HASHEAENGINE
 		if ((hFind = FindFirstFileA(filePattern, &find_data)) != INVALID_HANDLE_VALUE) {
 			do {
 
-				files.Intern(find_data.cFileName);
+				files.intern(find_data.cFileName);
 
 			} while (FindNextFileA(hFind, &find_data) != 0);
 			FindClose(hFind);
@@ -391,8 +391,8 @@ namespace HASHEAENGINE
 	}
 	auto file_find_files_in_path(const char* extension, const char* searchPattern, StringArray& files, StringArray& directories) -> void
 	{
-		files.Clear();
-		directories.Clear();
+		files.clear();
+		directories.clear();
 
 #if defined(_WIN64)
 		WIN32_FIND_DATAA find_data;
@@ -400,12 +400,12 @@ namespace HASHEAENGINE
 		if ((hFind = FindFirstFileA(searchPattern, &find_data)) != INVALID_HANDLE_VALUE) {
 			do {
 				if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-					directories.Intern(find_data.cFileName);
+					directories.intern(find_data.cFileName);
 				}
 				else {
 					// If filename contains the extension, add it
 					if (strstr(find_data.cFileName, extension)) {
-						files.Intern(find_data.cFileName);
+						files.intern(find_data.cFileName);
 					}
 				}
 

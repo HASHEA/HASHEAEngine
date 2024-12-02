@@ -1,14 +1,15 @@
 #pragma once
+#include "Base/hcore.h"
 #include <memory>
 namespace RHI
 {
 	class GraphicsContext;
 }
 
-namespace HASHEAENGINE
+namespace AshEngine
 {
-	
-	class Application
+	class Window;
+	class ASH_API Application
 	{
 	public:
 		Application();
@@ -24,11 +25,17 @@ namespace HASHEAENGINE
 			return Get()->graphicsContext;
 		}
 
-		auto Start() -> void;
+		auto start() -> void;
+	protected:
+		virtual auto _on_update() -> void;
+		virtual auto _on_gui() -> void;
+		virtual auto _on_render_debug() -> void;
+
+
 	public:
 		static Application* app;
 	protected:
-
+		std::unique_ptr<Window>					 window;
 		std::shared_ptr<RHI::GraphicsContext>    graphicsContext;
 	};
 };

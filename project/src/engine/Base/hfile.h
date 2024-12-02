@@ -1,7 +1,8 @@
 #pragma once
 #include "hplatform.h"
+#include "hcore.h"
 #include <stdio.h>
-namespace HASHEAENGINE
+namespace AshEngine
 {
 
 #if defined(_WIN64)

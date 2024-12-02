@@ -2,12 +2,12 @@
 #include "hplatform.h"
 #include "hserialization.h"
 #include "hmemory.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	auto Serializer::write_common(Allocator* _allocator, uint32_t serializer_version, size_t size) -> void
 	{
 		allocator = _allocator;
-		blobMemory = (char*)Hashea_Alloc(allocator,size + sizeof(BlobHeader),1);
+		blobMemory = (char*)Ash_Alloc(allocator,size + sizeof(BlobHeader),1);
 		H_ASSERT(blobMemory);
 		hasAllocatedMemory = 1;
 		totalSize = (uint32_t)size + sizeof(BlobHeader);
@@ -26,13 +26,13 @@ namespace HASHEAENGINE
 		if (isReading) {
 			if (blobMemory && hasAllocatedMemory/*if false, map*/)
 			{
-				Hashea_Free(allocator, blobMemory);
+				Ash_Free(allocator, blobMemory);
 			}
 		}
 		else {
 			if (blobMemory)
 			{
-				Hashea_Free(allocator, blobMemory);
+				Ash_Free(allocator, blobMemory);
 			}		
 		}
 		serializedOffset = allocatedOffset = 0;

@@ -1,6 +1,14 @@
 #pragma once
-int main(int argc, char* argv[])
+namespace RHI
 {
-	return 1;
+	class Buffer
+	{
+	public:
+		Buffer() = default;
+		virtual ~Buffer() {}
+
+	private:
+
+	};
 
 }

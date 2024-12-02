@@ -12,13 +12,13 @@ namespace RHI
 	{
 		vkDestroyFence(VulkanContext::get_vulkan_device(), fence, nullptr);
 	}
-	auto VulkanFence::Reset() -> void
+	auto VulkanFence::reset() -> void
 	{
 		if (signaled)
 			VK_CHECK_RESULT(vkResetFences(VulkanContext::get_vulkan_device(), 1, &fence));
 		signaled = false;
 	}
-	auto VulkanFence::Wait() -> bool
+	auto VulkanFence::wait() -> bool
 	{
 		H_ASSERTLOG(!signaled, "Fence Signaled");
 
@@ -32,13 +32,13 @@ namespace RHI
 		}
 		return true;
 	}
-	auto VulkanFence::WaitAndReset() -> void
+	auto VulkanFence::wait_and_reset() -> void
 	{
-		if (!IsSignaled())
-			Wait();
-		Reset();
+		if (!is_signaled())
+			wait();
+		reset();
 	}
-	auto VulkanFence::CheckState() -> bool
+	auto VulkanFence::check_state() -> bool
 	{
 
 		H_ASSERTLOG(!signaled, "Fence Signaled");
@@ -52,7 +52,7 @@ namespace RHI
 
 		return false;
 	}
-	auto VulkanFence::IsSignaled() -> bool
+	auto VulkanFence::is_signaled() -> bool
 	{
 		if (signaled)
 		{
@@ -60,7 +60,7 @@ namespace RHI
 		}
 		else
 		{
-			return CheckState();
+			return check_state();
 		}
 	}
 };

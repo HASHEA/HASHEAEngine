@@ -5,7 +5,7 @@
 #include "hplatform.h"
 #include "hlog.h"
 #include "hassert.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 	struct Allocator;
 

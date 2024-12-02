@@ -1,4 +1,4 @@
-workspace "HASHEAEngine"
+workspace "AshEngine"
 	language "C++"
 	cppdialect "C++17"
 	architecture "x64"
@@ -11,8 +11,8 @@ workspace "HASHEAEngine"
 	}
 	defines
 		{
-			--"HASHEA_DIRECTX12",
-			"HASHEA_VULKAN",
+			--"ASH_DIRECTX12",
+			"ASH_VULKAN",
 			"GLM_FORCE_DEPTH_ZERO_TO_ONE",
 			"GLM_FORCE_LEFT_HANDED",
 		}

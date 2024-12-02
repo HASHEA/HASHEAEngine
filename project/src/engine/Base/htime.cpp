@@ -5,7 +5,7 @@
 #else
 #include <time.h>
 #endif
-namespace HASHEAENGINE
+namespace AshEngine
 {
 #if defined(_MSC_VER)
     // Cached frequency.

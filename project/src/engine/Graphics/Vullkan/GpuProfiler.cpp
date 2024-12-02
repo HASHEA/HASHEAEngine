@@ -13,8 +13,8 @@ namespace RHI
         allocator = allocator_;
         max_frames = max_frames_;
         max_queries_per_frame = max_queries_per_frame_;
-        timestamps = (GPUTimeQuery*)Hashea_Alloc(allocator,sizeof(GPUTimeQuery) * max_frames * max_queries_per_frame, 1);
-        per_frame_active = (uint16_t*)Hashea_Alloc(allocator, sizeof(uint16_t) * max_frames, 1);
+        timestamps = (GPUTimeQuery*)Ash_Alloc(allocator,sizeof(GPUTimeQuery) * max_frames * max_queries_per_frame, 1);
+        per_frame_active = (uint16_t*)Ash_Alloc(allocator, sizeof(uint16_t) * max_frames, 1);
 
         max_duration = 16.666f;
         current_frame = 0;
@@ -33,8 +33,8 @@ namespace RHI
 
         name_to_color.shutdown();
 
-        Hashea_Free(allocator,timestamps);
-        Hashea_Free(allocator,per_frame_active);
+        Ash_Free(allocator,timestamps);
+        Ash_Free(allocator,per_frame_active);
     }
 
     static float s_framebuffer_pixel_count = 0.f;
@@ -294,7 +294,7 @@ namespace RHI
 
         const uint32_t total_time_queries = queries_per_frame * max_frames;
         const size_t allocated_size = sizeof(GPUTimeQuery) * total_time_queries;
-        uint8_t* memory = (uint8_t*)Hashea_Alloc(allocator,allocated_size,1 );
+        uint8_t* memory = (uint8_t*)Ash_Alloc(allocator,allocated_size,1 );
 
         timestamps = (GPUTimeQuery*)memory;
         memset(timestamps, 0, sizeof(GPUTimeQuery) * total_time_queries);
@@ -314,7 +314,7 @@ namespace RHI
     void GPUTimeQueriesManager::shutdown() {
         query_trees.shutdown();
 
-        Hashea_Free(allocator, timestamps);
+        Ash_Free(allocator, timestamps);
     }
 
     void GPUTimeQueriesManager::reset() {

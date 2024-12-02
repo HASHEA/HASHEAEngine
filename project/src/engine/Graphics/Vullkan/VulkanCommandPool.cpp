@@ -9,4 +9,11 @@ namespace RHI
 		cmdPoolCI.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolCI, allocationCallbacks, &commandPool));
 	}
+	VulkanCommandPool::~VulkanCommandPool()
+	{
+	}
+	auto VulkanCommandPool::reset() -> void 
+	{
+		
+	}
 };

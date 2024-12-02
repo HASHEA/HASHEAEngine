@@ -2,12 +2,12 @@
 #include "tlsf.h"
 #include "hlog.h"
 #include "hassert.h"
-namespace HASHEAENGINE
+namespace AshEngine
 {
 
 	static MemoryService s_memory_service;
 	// Locals
-	static size_t s_size = HASHEA_MEGA(512) + tlsf_size() + 8;
+	static size_t s_size = ASH_MEGA(512) + tlsf_size() + 8;
 	static void ExitWalker(void* ptr, size_t size, int used, void* user);
 
 	void ExitWalker(void* ptr, size_t size, int used, void* user) {
@@ -50,12 +50,12 @@ namespace HASHEAENGINE
 		return ret;
 	}
 
-#ifdef HASHEA_DEBUG
+#ifdef ASH_DEBUG
 	auto MemoryService::on_gui() -> void
 	{
 
 	}
-#endif // HASHEA_DEBUG
+#endif // ASH_DEBUG
 
 	
 
@@ -98,11 +98,11 @@ namespace HASHEAENGINE
 		free(m_pMemory);
 		return HS_OK;
 	}
-#ifdef HASHEA_DEBUG
+#ifdef ASH_DEBUG
 	auto HeapAllocator::on_gui() -> void
 	{
 	}
-#endif // HASHEA_DEBUG
+#endif // ASH_DEBUG
 
 	
 	auto HeapAllocator::allocate(size_t size, size_t alignment)->void*

@@ -13,7 +13,7 @@ project "Engine"
 		"**.cpp",
 		"**.hpp",
 		"**.lua",
-		assetsdir.."/HASHEA-shaders/**.hshader",
+		assetsdir.."/ASH-shaders/**.hshader",
 		thirdparty .. "/glm/include/**.hpp",
 		thirdparty .. "/glm/include/**.inl",
 		thirdparty .. "/vulkanmemoryallocator/include/*.h",
@@ -54,7 +54,12 @@ project "Engine"
 	}
 
 
- 
+ postbuildcommands
+		{
+			("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.dll   %{wks.location}/bin/target/" .. outputdir .. "/Editor "),
+			("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.pdb   %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
+		}
+
   
 	filter "system:windows"
 		system "Windows"
@@ -67,8 +72,8 @@ project "Engine"
             "UNICODE",
 			"_CONSOLE",
 			"GLFW_INCLUDE_NONE",
-			"HASHEA_WINDOWS",
-			"HASHEA_ENGINE",
+			"ASH_WINDOWS",
+			"ASH_ENGINE",
 		}
 		
 	dependson "shaders"
@@ -86,7 +91,7 @@ project "Engine"
 	filter "configurations:Debug"
 		defines
 		{
-			"HASHEA_DEBUG",
+			"ASH_DEBUG",
 			"TRACY_ENABLE",
 			"VULKAN_SYNCHRONIZATION_VALIDATION",
 			"VULKAN_DEBUG_REPORT",
@@ -101,7 +106,7 @@ project "Engine"
 		optimize "off"
 
 	filter "configurations:Release"
-		defines "HASHEA_RELEASE"
+		defines "ASH_RELEASE"
 		runtime "Release"
 		optimize "on"	
 
