@@ -103,6 +103,7 @@ namespace RHI
 		VkPhysicalDeviceProperties      vulkanPhysicalDeviceProperties;
 		VkDevice                        vulkanDevice						= VK_NULL_HANDLE;
 		VkQueue                         vulkanMainQueue						= VK_NULL_HANDLE;
+		VkQueue							vulkanPresentQueue					= VK_NULL_HANDLE;
 		VkQueue                         vulkanComputeQueue					= VK_NULL_HANDLE;
 		VkQueue                         vulkanTransferQueue					= VK_NULL_HANDLE;
 		uint32_t						vulkanMainQueueFamily				= UINT32_MAX;

@@ -548,6 +548,7 @@ namespace RHI
 		VK_CHECK_RESULT(vkCreateDevice(vulkanPhysicalDevice,&deviceCI,vulkanAllocationCallbacks,&vulkanDevice));
 		volkLoadDevice(vulkanDevice);
 		vkGetDeviceQueue(vulkanDevice, mainQueueFamilyIndex, 0, &vulkanMainQueue);
+		vkGetDeviceQueue(vulkanDevice, mainQueueFamilyIndex, 0, &vulkanPresentQueue);
 		vkGetDeviceQueue(vulkanDevice, computeQueueFamilyIndex, computeQueueIndex, &vulkanComputeQueue);
 		if (vulkanTransferQueueFamily < queueFamilyCount) {
 			vkGetDeviceQueue(vulkanDevice, transferQueueFamilyIndex, 0, &vulkanTransferQueue);
