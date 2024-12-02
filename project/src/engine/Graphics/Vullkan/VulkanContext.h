@@ -21,7 +21,7 @@ namespace RHI
 	struct GPUTimeQueriesManager;
 	struct FramePool
 	{
-		std::shared_ptr<VulkanCommandPool>	cmdPool;
+		std::shared_ptr<VulkanCommandPool>	cmdPool{};
 		VkQueryPool							vulkanTimestampQueryPool     = nullptr;
 		VkQueryPool							vulkanPipelineStatsQueryPool = nullptr;
 		GpuTimeQueryTree*					timeQueries = nullptr;
@@ -112,6 +112,7 @@ namespace RHI
 		VkDescriptorPool                vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
 		Array<FramePool>				framePools;
+		std::vector<FramePool>			_frampool1;
 		std::shared_ptr<GPUTimeQueriesManager> gpuTimeQueryManager = nullptr;
 	private:
 	

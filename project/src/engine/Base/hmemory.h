@@ -180,7 +180,7 @@ namespace AshEngine
 
 //if nullptr, use system allocator
 #define Ash_Alloc(allocater,size,align/*set 1 to no align*/)\
-	((allocater) == nullptr ? ((MemoryService::instance()->get_system_allocator())->allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->allocate( size, align, __FILE__, __LINE__ )))
+	((allocater) == nullptr ? ((MemoryService::instance()->get_system_allocator())->allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->allocate( size, align, __FILE__, __LINE__ )));
 	
 template<typename T, typename... Args>
 T* Ash_New(Allocator* allocator = nullptr,Args&&... args) {

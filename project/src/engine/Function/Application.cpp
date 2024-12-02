@@ -33,10 +33,10 @@ namespace AshEngine
 	}
 	auto Application::start() -> void
 	{
-		/*while (1)
+		while (0)
 		{
 
-		}*/
+		}
 	}
 	auto Application::_on_update() -> void
 	{

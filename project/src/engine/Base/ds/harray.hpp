@@ -61,6 +61,11 @@ namespace AshEngine
     class ArrayView 
     {
     public:
+        ArrayView()
+        {
+            m_pData = nullptr;
+            m_uSize = 0;
+        };
         ArrayView(T* data, uint32_t size);
 
         auto set(T* data, uint32_t size) -> void;

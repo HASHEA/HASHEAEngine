@@ -112,6 +112,7 @@ namespace AshEngine
 		H_ASSERT(pAllocateMemory);
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
 		m_szAllocatedSize += actualSize;
+		memset(pAllocateMemory, 0, static_cast<size_t>(size));
 		return pAllocateMemory;
 	}
 	auto HeapAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*

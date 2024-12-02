@@ -1,4 +1,40 @@
-[19:20:04] [info] Engine: Memory Service Init
+[13:34:16] [info] Engine: Memory Service Init
 
-[19:20:04] [error] Engine: New string too big for current buffer! Please allocate more size.
+[13:34:16] [error] Engine: New string too big for current buffer! Please allocate more size.
+
+[13:34:16] [warning] Engine: [Vulkan Validation] - WARNING : MessageID: VUID_Undefined 2044605652
+Message: Validation Warning: [ VUID_Undefined ] Object 0: VK_NULL_HANDLE, type = VK_OBJECT_TYPE_INSTANCE; | MessageID = 0x79de34d4 | Unrecognized CreateInstance->pCreateInfo->pApplicationInfo.apiVersion number (0x00403000). Assuming VK_API_VERSION_1_2.
+
+
+[13:34:16] [info] Engine: GPU used : NVIDIA GeForce RTX 3060
+[13:34:16] [info] Engine: Family 0, flags 15 queue count 16
+
+[13:34:16] [info] Engine: Family 1, flags 12 queue count 2
+
+[13:34:16] [info] Engine: Family 2, flags 14 queue count 8
+
+[13:34:16] [info] Engine: Family 3, flags 268 queue count 1
+
+[13:34:17] [warning] Engine: [Vulkan Validation] - WARNING : MessageID: VUID_Undefined 2044605652
+Message: Validation Warning: [ VUID_Undefined ] Object 0: handle = 0x1dde7f4d840, type = VK_OBJECT_TYPE_DEVICE; | MessageID = 0x79de34d4 | Device Extension VK_KHR_dynamic_rendering support is incomplete, incorrect results are possible.
+
+
+[13:34:17] [info] Engine: Memory Service Shutdown...
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd80010a00, 1320
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd80010f30, 160
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd80010fd8, 120
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd80011058, 2048
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd80011860, 96
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd800118c8, 24
+
+[13:34:17] [info] Engine: Found active allocation 0x1dd800118e8, 24
+
+[13:34:17] [warning] Engine: Heap Allocator Shutdown Failed! Allocated Memory Detected ! Allocated 3792 bytes, total 536877456 bytes
+[13:34:17] [warning] Engine: F:\WorkSpace\AshEngine\AshEngine\project\src\engine\Base\hmemory.cpp(96) : FALSE
 

@@ -24,7 +24,6 @@ namespace RHI
     //
 // Query tree used mainly per thread-frame to retrieve time data.
     struct GpuTimeQueryTree {
-
         void                            reset();
         void                            set_queries(GPUTimeQuery* time_queries, uint32_t count);
 
