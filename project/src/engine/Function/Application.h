@@ -1,6 +1,6 @@
 #pragma once
 #include "Base/hcore.h"
-#include <memory>
+#include "Base/hplatform.h"
 namespace RHI
 {
 	class GraphicsContext;
@@ -38,7 +38,7 @@ namespace AshEngine
 	public:
 		static Application* app;
 	protected:
-		std::unique_ptr<Window>					 window;
-		std::shared_ptr<RHI::GraphicsContext>    graphicsContext;
+		Window*					 window					= nullptr;
+		RHI::GraphicsContext*    graphicsContext		= nullptr;
 	};
 };

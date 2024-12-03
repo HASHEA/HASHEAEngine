@@ -3,10 +3,10 @@
 #include "Base/hmemory.h"
 namespace AshEngine
 {
-	std::unique_ptr<Window> Window::create(const WindowData& data)
+	Window* Window::create(const WindowData& data)
 	{
 #ifdef ASH_WINDOWS
-		return std::make_unique<WindowWin>(data);
+		return Ash_New<WindowWin>(nullptr,data);
 #endif // Ash_Windows
 	}
 }

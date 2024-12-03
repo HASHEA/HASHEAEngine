@@ -1,6 +1,5 @@
 #pragma once
 #include "Base/hlog.h"
-
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
 #include "GpuProfiler.h"
@@ -690,13 +689,13 @@ namespace RHI
 	{
 		const uint32_t num_pools = numThread * k_max_frames;
 		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
-		gpuTimeQueryManager = Ash_New_Shared<GPUTimeQueriesManager>();
+		gpuTimeQueryManager = Ash_New<GPUTimeQueriesManager>();
 		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
 			pool.timeQueries = &gpuTimeQueryManager->query_trees[i];
-			pool.cmdPool = Ash_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+			pool.cmdPool = Ash_New<VulkanCommandPool>(nullptr,vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 			VkQueryPoolCreateInfo timestampPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
 			timestampPoolCI.pNext = nullptr;
 			timestampPoolCI.flags = 0;
@@ -727,7 +726,7 @@ namespace RHI
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
-			pool.cmdPool.reset();
+			Ash_Delete(nullptr,pool.cmdPool);
 			pool.timeQueries = nullptr;
 			if (pool.vulkanTimestampQueryPool != VK_NULL_HANDLE)
 			{
@@ -739,7 +738,7 @@ namespace RHI
 			}
 		}
 		gpuTimeQueryManager->shutdown();
-		gpuTimeQueryManager.reset();
+		Ash_Delete(nullptr,gpuTimeQueryManager);
 		framePools.shutdown();
 		return HS_OK;
 	}
@@ -813,6 +812,7 @@ namespace RHI
 		_shutdown_debug_util_messenger_ext();
 		//shutdown instance
 		_shutdown_instance();
+
 		return HS_OK;
 	}
 

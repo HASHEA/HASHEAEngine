@@ -231,9 +231,9 @@ std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 	(l_pAlloc)->deallocate(pObject);\
 }
 
-#define Ash_Delete(allocator,pObject)\
+#define Ash_Delete(_allocator,pObject)\
 {\
-	Allocator* l_pAlloc = allocater;\
+	Allocator* l_pAlloc = (_allocator);\
 	if(!(l_pAlloc))\
 			(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
 	_original_destroy(pObject);\

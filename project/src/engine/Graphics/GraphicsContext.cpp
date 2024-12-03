@@ -8,19 +8,19 @@
 #endif        // ASH_VULKAN
 namespace RHI {
    
-	std::shared_ptr<GraphicsContext> GraphicsContext::create()
+	GraphicsContext* GraphicsContext::create()
 	{
 #ifdef ASH_VULKAN
-		return Ash_New_Shared<VulkanContext>();
+		return Ash_New<VulkanContext>();
 #else
 		H_ASSERTLOG(false, "Unsupported Api!");
 #endif        // ASH_VULKAN
 	}
 
-	std::shared_ptr<Swapchain> Swapchain::create(uint32_t width, uint32_t height)
+	Swapchain* Swapchain::create(uint32_t width, uint32_t height)
 	{
 #ifdef ASH_VULKAN
-		return Ash_New_Shared<VulkanSwapChain>(width, height);
+		return Ash_New<VulkanSwapChain>(nullptr,width, height);
 #else
 		H_ASSERTLOG(false, "Unsupported Api!");
 #endif

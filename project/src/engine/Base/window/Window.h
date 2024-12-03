@@ -2,7 +2,6 @@
 #include "Base/hplatform.h"
 #include "Base/hcore.h"
 #include "Base/ds/harray.hpp"
-#include <memory>
 namespace AshEngine
 {
 	struct WindowData
@@ -28,7 +27,7 @@ namespace AshEngine
 		virtual auto get_native_interface() -> void* = 0;
 		virtual auto get_native_window() -> void* { return nullptr; }
 
-		static std::unique_ptr<Window> create(const WindowData& data);
+		static Window* create(const WindowData& data);
 		inline auto get_scale() const
 		{
 			return scale;

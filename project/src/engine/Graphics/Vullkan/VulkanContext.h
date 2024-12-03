@@ -7,7 +7,6 @@
 #include "Graphics/GraphicsContext.h"
 #include "Base/ds/harray.hpp"
 #include <vector>
-#include <memory>
 using namespace AshEngine;
 namespace RHI
 {
@@ -21,9 +20,9 @@ namespace RHI
 	struct GPUTimeQueriesManager;
 	struct FramePool
 	{
-		std::shared_ptr<VulkanCommandPool>	cmdPool{};
-		VkQueryPool							vulkanTimestampQueryPool     = nullptr;
-		VkQueryPool							vulkanPipelineStatsQueryPool = nullptr;
+		VulkanCommandPool*					cmdPool						 = nullptr;
+		VkQueryPool							vulkanTimestampQueryPool     = VK_NULL_HANDLE;
+		VkQueryPool							vulkanPipelineStatsQueryPool = VK_NULL_HANDLE;
 		GpuTimeQueryTree*					timeQueries = nullptr;
 	};
 
@@ -126,7 +125,7 @@ namespace RHI
 		VkDescriptorPool                vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
 		Array<FramePool>				framePools{};
-		std::shared_ptr<GPUTimeQueriesManager> gpuTimeQueryManager = nullptr;
+		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 	private:
 	
 		float                           gpuTimestampFrequency = 0.f;
