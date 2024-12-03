@@ -104,7 +104,7 @@ namespace AshEngine
     template<typename T>
     inline auto Array<T>::shutdown() -> HS_Result {
         if (m_uCapacity > 0) {
-            m_pAllocator->deallocate(m_pData);
+            Ash_Free(m_pAllocator, m_pData);
         }
         m_pData = nullptr;
         m_uSize = m_uCapacity = 0;

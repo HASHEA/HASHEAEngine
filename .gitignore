@@ -5,8 +5,9 @@
 *.vcxproj.user
 *.sln
 *.bak
-
+*.hlog
 
 # ignore directories
 bin
 bin-int
+LogFiles

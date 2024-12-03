@@ -118,6 +118,7 @@ namespace RHI
 		VkQueue                         vulkanMainQueue						= VK_NULL_HANDLE;
 		VkQueue                         vulkanComputeQueue					= VK_NULL_HANDLE;
 		VkQueue                         vulkanTransferQueue					= VK_NULL_HANDLE;
+		VkQueue							vulkanPresentQueue					= VK_NULL_HANDLE;
 		uint32_t						vulkanMainQueueFamily				= UINT32_MAX;
 		uint32_t						vulkanComputeQueueFamily			= UINT32_MAX;
 		uint32_t						vulkanTransferQueueFamily			= UINT32_MAX;
