@@ -203,7 +203,6 @@ std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 		allocator->deallocate(pObject); 
 	};
 	std::shared_ptr<T> sp(pO, Deleter);
-	auto t = sp.use_count();
 	return sp;
 }
 

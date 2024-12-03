@@ -3,6 +3,7 @@
 #include "GLFW/glfw3.h"
 namespace AshEngine
 {
+#define MAX_TITLE_LENGTH 128
 	//useless because we use glfwwindow to do cross platform
 	class ASH_API WindowWin : public Window
 	{

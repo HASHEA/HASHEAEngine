@@ -118,7 +118,11 @@ namespace AshEngine
 	auto HeapAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*
 	{
 		H_ASSERT(size > 0);
-		return allocate(size, alignment);
+		auto pdata = allocate(size, alignment);
+#ifdef ASH_DEBUG
+		HLogTrace("allocate new mem at : {0} size : {1} from : {2} - line : {3}",pdata, size,file,line);
+#endif //ASH_DEBUG
+		return pdata;
 	}
 	auto HeapAllocator::deallocate(void* pointer)->HS_Result
 	{

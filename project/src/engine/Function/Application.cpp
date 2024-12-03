@@ -27,13 +27,14 @@ namespace AshEngine
 	Application::~Application()
 	{
 		graphicsContext->shutdown();
+		graphicsContext.reset();
 		window->shutdown();
 		MemoryService::instance()->shutdown();
 		LogService::instance()->shutdown();
 	}
 	auto Application::start() -> void
 	{
-		while (0)
+		while (1)
 		{
 
 		}

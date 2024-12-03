@@ -59,7 +59,7 @@ namespace AshEngine
 	auto WindowWin::set_title(const char* title) -> void
 	{
 		StringBuffer sb{};
-		sb.init(2 * sizeof(title),nullptr); 
+		sb.init(MAX_TITLE_LENGTH,nullptr);
 		sb.append(title);
 #ifdef ASH_VULKAN// PENGINE_VULKAN
 		sb.append("(Vulkan)");
