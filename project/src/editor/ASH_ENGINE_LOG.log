@@ -1,4 +1,17 @@
-[19:20:04] [info] Engine: Memory Service Init
+[16:41:41] [info] Engine: Memory Service Init
 
-[19:20:04] [error] Engine: New string too big for current buffer! Please allocate more size.
+[16:41:41] [error] Engine: New string too big for current buffer! Please allocate more size.
+
+[16:41:46] [info] Engine: GPU used : NVIDIA GeForce RTX 4070 Ti
+[16:41:46] [info] Engine: Family 0, flags 15 queue count 16
+
+[16:41:46] [info] Engine: Family 1, flags 12 queue count 2
+
+[16:41:46] [info] Engine: Family 2, flags 14 queue count 8
+
+[16:41:46] [info] Engine: Family 3, flags 44 queue count 1
+
+[16:41:46] [info] Engine: Family 4, flags 76 queue count 2
+
+[16:41:46] [info] Engine: Family 5, flags 268 queue count 1
 

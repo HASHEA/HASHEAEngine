@@ -200,6 +200,14 @@ namespace RHI
 		volkLoadInstance(vulkanInstance);
 		return HS_OK;
 	}
+	auto VulkanContext::_shutdown_instance() -> HS_Result
+	{
+		if (vulkanInstance != VK_NULL_HANDLE)
+		{
+			vkDestroyInstance(vulkanInstance, vulkanAllocationCallbacks);
+		}
+		return HS_OK;
+	}
 #ifdef VULKAN_DEBUG_REPORT
 	auto VulkanContext::_create_debug_util_messenger_ext() -> HS_Result
 	{
@@ -210,6 +218,14 @@ namespace RHI
 		debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 
 		VK_CHECK_RESULT(vkCreateDebugUtilsMessengerEXT(vulkanInstance, &debugUtilCI, vulkanAllocationCallbacks, &vulkanDebugUtilMessenger));
+		return HS_OK;
+	}
+	auto VulkanContext::_shutdown_debug_util_messenger_ext() -> HS_Result
+	{
+		if (vulkanDebugUtilMessenger != VK_NULL_HANDLE)
+		{
+			vkDestroyDebugUtilsMessengerEXT(vulkanInstance, vulkanDebugUtilMessenger, vulkanAllocationCallbacks);
+		}
 		return HS_OK;
 	}
 #endif
@@ -555,6 +571,16 @@ namespace RHI
 		return HS_OK;
 	}
 
+	auto VulkanContext::_shutdown_device() -> HS_Result
+	{
+		if (vulkanDevice != VK_NULL_HANDLE)
+		{
+			vkDestroyDevice(vulkanDevice, vulkanAllocationCallbacks);
+		}
+		
+		return HS_OK;
+	}
+
 	auto VulkanContext::_create_vulkan_memory_allocator() -> HS_Result
 	{
 		//load vma funcs
@@ -591,6 +617,12 @@ namespace RHI
 		allocatorCI.pVulkanFunctions = &fn;
 		VK_CHECK_RESULT(vmaCreateAllocator(&allocatorCI, &vmaAllocator));
 
+		return HS_OK;
+	}
+
+	auto VulkanContext::_shutdown_vulkan_memory_allocator() -> HS_Result
+	{
+		vmaDestroyAllocator(vmaAllocator);
 		return HS_OK;
 	}
 
@@ -636,9 +668,25 @@ namespace RHI
 		return HS_OK;
 	}
 
+	auto VulkanContext::_shutdown_descriptor_pool() -> HS_Result
+	{
+		if (vulkanDescriptorPool != VK_NULL_HANDLE)
+		{
+			vkDestroyDescriptorPool(vulkanDevice, vulkanDescriptorPool, vulkanAllocationCallbacks);
+		}	
+		//if enable bindless
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Bindless))
+		{
+			if (vulkanBindlessDescriptorPool != VK_NULL_HANDLE)
+			{
+				vkDestroyDescriptorPool(vulkanDevice, vulkanBindlessDescriptorPool, vulkanAllocationCallbacks);
+			}
+		}
+		return HS_OK;
+	}
+
 	auto VulkanContext::_create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes) -> HS_Result
 	{
-		
 		const uint32_t num_pools = numThread * k_max_frames;
 		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
 		gpuTimeQueryManager = Ash_New_Shared<GPUTimeQueriesManager>();
@@ -646,6 +694,7 @@ namespace RHI
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
+			pool.timeQueries = &gpuTimeQueryManager->query_trees[i];
 			pool.cmdPool = Ash_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 			VkQueryPoolCreateInfo timestampPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
 			timestampPoolCI.pNext = nullptr;
@@ -654,7 +703,6 @@ namespace RHI
 			timestampPoolCI.queryCount = numQueryTimes;
 			timestampPoolCI.pipelineStatistics = 0;
 			VK_CHECK_RESULT(vkCreateQueryPool(vulkanDevice, &timestampPoolCI, vulkanAllocationCallbacks, &pool.vulkanTimestampQueryPool));
-
 			VkQueryPoolCreateInfo pipelineStatisticPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
 			pipelineStatisticPoolCI.pNext = nullptr;
 			pipelineStatisticPoolCI.flags = 0;
@@ -670,6 +718,28 @@ namespace RHI
 				VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
 			VK_CHECK_RESULT(vkCreateQueryPool(vulkanDevice, &pipelineStatisticPoolCI, vulkanAllocationCallbacks, &pool.vulkanPipelineStatsQueryPool));
 		}
+		return HS_OK;
+	}
+
+	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
+	{
+		for (uint32_t i = 0; i < framePools.size(); i++)
+		{
+			FramePool& pool = framePools[i];
+			pool.cmdPool.reset();
+			pool.timeQueries = nullptr;
+			if (pool.vulkanTimestampQueryPool != VK_NULL_HANDLE)
+			{
+				vkDestroyQueryPool(vulkanDevice, pool.vulkanTimestampQueryPool, vulkanAllocationCallbacks);
+			}
+			if (pool.vulkanPipelineStatsQueryPool != VK_NULL_HANDLE)
+			{
+				vkDestroyQueryPool(vulkanDevice, pool.vulkanPipelineStatsQueryPool, vulkanAllocationCallbacks);
+			}
+		}
+		gpuTimeQueryManager->shutdown();
+		gpuTimeQueryManager.reset();
+		framePools.shutdown();
 		return HS_OK;
 	}
 
@@ -730,6 +800,18 @@ namespace RHI
 	}
 	auto VulkanContext::shutdown() -> HS_Result
 	{
+		//shutdown framepool and datas
+		_shutdown_frame_pool_and_data();
+		//shutdown descriptor pool
+		_shutdown_descriptor_pool();
+		//shutdown vma
+		_shutdown_vulkan_memory_allocator();
+		//shutdown device
+		_shutdown_device();
+		//shutdown debugutilmsgr
+		_shutdown_debug_util_messenger_ext();
+		//shutdown instance
+		_shutdown_instance();
 		return HS_OK;
 	}
 

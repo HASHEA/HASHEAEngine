@@ -21,7 +21,7 @@ namespace RHI
 	struct GPUTimeQueriesManager;
 	struct FramePool
 	{
-		std::shared_ptr<VulkanCommandPool>	cmdPool;
+		std::shared_ptr<VulkanCommandPool>	cmdPool{};
 		VkQueryPool							vulkanTimestampQueryPool     = nullptr;
 		VkQueryPool							vulkanPipelineStatsQueryPool = nullptr;
 		GpuTimeQueryTree*					timeQueries = nullptr;
@@ -73,26 +73,39 @@ namespace RHI
 	//vk handles
 	private:
 		//manually in the calling order
-		auto VulkanContext::_create_instance()->HS_Result;
+		//instance
+		auto _create_instance()->HS_Result;
+		auto _shutdown_instance() -> HS_Result;
 #ifdef VULKAN_DEBUG_REPORT
-		auto VulkanContext::_create_debug_util_messenger_ext()->HS_Result;
+		//debug msg util
+		auto _create_debug_util_messenger_ext()->HS_Result;
+		auto _shutdown_debug_util_messenger_ext() -> HS_Result;
 #endif
-		auto VulkanContext::_select_and_prepare_physical_device()->HS_Result;
-		auto VulkanContext::_filter_device_selectable_extension()->HS_Result;
-		auto VulkanContext::_query_supported_props()->HS_Result;
-		auto VulkanContext::_query_supported_features()->HS_Result;
-		auto VulkanContext::_create_device()->HS_Result;
-		auto VulkanContext::_create_vulkan_memory_allocator()->HS_Result;
-		auto VulkanContext::_create_descriptor_pool(const GpuDescriptorPoolCreation& dspci)->HS_Result;
-		auto VulkanContext::_create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
+		//device
+		auto _select_and_prepare_physical_device()->HS_Result;
+		auto _filter_device_selectable_extension()->HS_Result;
+		auto _query_supported_props()->HS_Result;
+		auto _query_supported_features()->HS_Result;
+		auto _create_device()->HS_Result;
+		auto _shutdown_device() -> HS_Result;
+		//vma
+		auto _create_vulkan_memory_allocator()->HS_Result;
+		auto _shutdown_vulkan_memory_allocator() -> HS_Result;
+		//descriptor pool
+		auto _create_descriptor_pool(const GpuDescriptorPoolCreation& dspci)->HS_Result;
+		auto _shutdown_descriptor_pool() -> HS_Result;
+		//frame data
+		auto _create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
+		auto _shutdown_frame_pool_and_data() -> HS_Result;
+
 	private:
-		BitSetFixed<4> featureSwitchFlags;
-		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties;
-		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipelineProperties;
+		BitSetFixed<4> featureSwitchFlags{};
+		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};
+		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipelineProperties{};
 		//Features
-		VkPhysicalDeviceRayTracingPipelineFeaturesKHR   rayTracingPipelineFeatures;
-		VkPhysicalDeviceRayQueryFeaturesKHR             rayQueryFeatures;
-		VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures;
+		VkPhysicalDeviceRayTracingPipelineFeaturesKHR   rayTracingPipelineFeatures{};
+		VkPhysicalDeviceRayQueryFeaturesKHR             rayQueryFeatures{};
+		VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
 
 	private:
 		
@@ -100,7 +113,7 @@ namespace RHI
 		VkInstance                      vulkanInstance						= VK_NULL_HANDLE;
 		VkDebugUtilsMessengerEXT        vulkanDebugUtilMessenger			= VK_NULL_HANDLE;
 		VkPhysicalDevice                vulkanPhysicalDevice				= VK_NULL_HANDLE;
-		VkPhysicalDeviceProperties      vulkanPhysicalDeviceProperties;
+		VkPhysicalDeviceProperties      vulkanPhysicalDeviceProperties{};
 		VkDevice                        vulkanDevice						= VK_NULL_HANDLE;
 		VkQueue                         vulkanMainQueue						= VK_NULL_HANDLE;
 		VkQueue                         vulkanComputeQueue					= VK_NULL_HANDLE;
@@ -111,7 +124,7 @@ namespace RHI
 		VkDescriptorPool                vulkanDescriptorPool				= VK_NULL_HANDLE;
 		VkDescriptorPool                vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
-		Array<FramePool>				framePools;
+		Array<FramePool>				framePools{};
 		std::shared_ptr<GPUTimeQueriesManager> gpuTimeQueryManager = nullptr;
 	private:
 	
@@ -120,7 +133,7 @@ namespace RHI
 		size_t                          ssboAlignemnt = 256;
 		uint32_t                        subgroupSize = 32;
 		uint32_t                        maxFramebufferLayers = 1;
-		VkExtent2D                      minFragmentShadingRateTexelSize;
+		VkExtent2D                      minFragmentShadingRateTexelSize{};
 
 
 		static VulkanContext* instance;

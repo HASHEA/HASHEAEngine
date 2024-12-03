@@ -1,4 +1,5 @@
 #include "VulkanCommandPool.h"
+#include "VulkanContext.h"
 namespace RHI
 {
 	VulkanCommandPool::VulkanCommandPool(VkDevice device, uint32_t queueFamily, VkCommandPoolCreateFlags flag, VkAllocationCallbacks* allocationCallbacks)
@@ -11,9 +12,14 @@ namespace RHI
 	}
 	VulkanCommandPool::~VulkanCommandPool()
 	{
+		if (commandPool != VK_NULL_HANDLE)
+		{
+			vkDestroyCommandPool(VulkanContext::get_vulkan_device(), commandPool, nullptr);
+		}
+		
 	}
 	auto VulkanCommandPool::reset() -> void 
 	{
-		
+		VK_CHECK_RESULT(vkResetCommandPool(VulkanContext::get_vulkan_device(), commandPool, VK_COMMAND_POOL_RESET_RELEASE_RESOURCES_BIT));
 	}
 };
