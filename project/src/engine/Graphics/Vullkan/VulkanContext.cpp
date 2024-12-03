@@ -118,7 +118,7 @@ namespace RHI
 		VkDebugUtilsMessageTypeFlagsEXT types,
 		const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
 		void* user_data) {
-		bool triggerBreak = severity & (VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
+		bool triggerBreak = severity & (/*VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |*/ VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
 		triggerBreak = triggerBreak && (types & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
 		if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT)
 		{
@@ -564,6 +564,7 @@ namespace RHI
 		VK_CHECK_RESULT(vkCreateDevice(vulkanPhysicalDevice,&deviceCI,vulkanAllocationCallbacks,&vulkanDevice));
 		volkLoadDevice(vulkanDevice);
 		vkGetDeviceQueue(vulkanDevice, mainQueueFamilyIndex, 0, &vulkanMainQueue);
+		vkGetDeviceQueue(vulkanDevice, mainQueueFamilyIndex, 0, &vulkanPresentQueue);
 		vkGetDeviceQueue(vulkanDevice, computeQueueFamilyIndex, computeQueueIndex, &vulkanComputeQueue);
 		if (vulkanTransferQueueFamily < queueFamilyCount) {
 			vkGetDeviceQueue(vulkanDevice, transferQueueFamilyIndex, 0, &vulkanTransferQueue);
@@ -691,8 +692,11 @@ namespace RHI
 		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
 		gpuTimeQueryManager = Ash_New_Shared<GPUTimeQueriesManager>();
 		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
+		_frampool1.resize(framePools.size());
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
+			//FramePool& pool = _frampool1[i];
+			//pool.cmdPool = Ash_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
 			FramePool& pool = framePools[i];
 			pool.timeQueries = &gpuTimeQueryManager->query_trees[i];
 			pool.cmdPool = Ash_New_Shared<VulkanCommandPool>(vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);

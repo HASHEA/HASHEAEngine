@@ -24,7 +24,10 @@ namespace AshEngine
 		{
 			return Get()->graphicsContext;
 		}
-
+		inline static auto& GetWindow()
+		{
+			return Get()->window;
+		}
 		auto start() -> void;
 	protected:
 		virtual auto _on_update() -> void;
