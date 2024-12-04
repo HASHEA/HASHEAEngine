@@ -65,6 +65,11 @@ namespace RHI
 			return vulkanDevice;
 		}
 
+		inline const auto get_vulkan_physical_device_internal()
+		{
+			return vulkanPhysicalDevice;
+		}
+
 		inline const auto get_vulkan_instance_internal()
 		{
 			return vulkanInstance;
@@ -78,6 +83,11 @@ namespace RHI
 		inline static const auto get_vulkan_device()
 		{
 			return instance->get_vulkan_device_internal();
+		}
+
+		inline static const auto get_vulkan_physical_device()
+		{
+			return instance->get_vulkan_physical_device_internal();
 		}
 
 		inline static const auto get_vulkan_instance()
@@ -124,7 +134,6 @@ namespace RHI
 		//frame data
 		auto _create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
 		auto _shutdown_frame_pool_and_data() -> HS_Result;
-
 	private:
 		BitSetFixed<4> featureSwitchFlags{};
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};

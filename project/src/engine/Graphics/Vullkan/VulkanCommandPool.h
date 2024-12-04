@@ -12,7 +12,7 @@ namespace RHI
 		NO_COPYABLE(VulkanCommandPool);
 		virtual auto reset() -> void override;
 	public:
-		auto GetHandle() -> VkCommandPool { return commandPool; }
+		auto get_handle() -> VkCommandPool { return commandPool; }
 	private:
 		VkCommandPool commandPool = VK_NULL_HANDLE;
 	};

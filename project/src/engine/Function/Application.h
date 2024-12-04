@@ -4,6 +4,7 @@
 namespace RHI
 {
 	class GraphicsContext;
+	class Swapchain;
 }
 
 namespace AshEngine
@@ -38,7 +39,8 @@ namespace AshEngine
 	public:
 		static Application* app;
 	protected:
-		Window*					 window					= nullptr;
-		RHI::GraphicsContext*    graphicsContext		= nullptr;
+		Window*					window					= nullptr;
+		RHI::GraphicsContext*	graphicsContext			= nullptr;
+		RHI::Swapchain*			swapChain					= nullptr;
 	};
 };

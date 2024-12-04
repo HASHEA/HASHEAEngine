@@ -20,7 +20,7 @@ namespace RHI
 			const uint32_t frameIndex = i / (numCommandBuffersPerThread * numPoolsPerFrame);
 			const uint32_t threadIndex = (i / numCommandBuffersPerThread) % numPoolsPerFrame;
 			const uint32_t poolIndex = pool_from_indices(frameIndex, threadIndex);
-			cmd.commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->GetHandle();
+			cmd.commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->get_handle();
 			cmd.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 			cmd.commandBufferCount = 1;
 			VulkanCommandBuffer& cmdBuffer = commandBuffers[i];
@@ -32,7 +32,7 @@ namespace RHI
 		{
 			VkCommandBufferAllocateInfo cmd = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
 			cmd.pNext = nullptr;
-			cmd.commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->GetHandle();
+			cmd.commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->get_handle();
 			cmd.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
 			cmd.commandBufferCount = 1;
 			for (uint32_t scbIndex = 0; scbIndex < k_secondary_command_buffers_count; scbIndex++)

@@ -1,6 +1,7 @@
 #pragma once
 #include "Application.h"
 #include "Graphics/GraphicsContext.h"
+#include "Graphics/Swapchain.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
 #include "Base/window/Window.h"
@@ -22,7 +23,8 @@ namespace AshEngine
 		graphicsContext = RHI::GraphicsContext::create();
 		graphicsContext->init(&gfxConfig);
 
-
+		swapChain = RHI::Swapchain::create(window->get_width(),window->get_height());
+		swapChain->init(window->get_native_interface());
 	}
 	Application::~Application()
 	{
