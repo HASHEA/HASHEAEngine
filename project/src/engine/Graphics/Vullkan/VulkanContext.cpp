@@ -2,15 +2,12 @@
 #include "Base/hlog.h"
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
+#include "VulkanCommandBuffer.h"
+#include "VulkanFence.h"
 #include "GpuProfiler.h"
 #include <vector>
 namespace RHI
 {
-	static const uint32_t        k_bindless_texture_binding = 10;
-	static const uint32_t        k_bindless_image_binding = 11;
-	static const uint32_t        k_max_bindless_resources = 1024;
-	static const uint32_t        k_max_frames = 2;
-
 	static const char* s_requested_extensions[] = {
 	VK_KHR_SURFACE_EXTENSION_NAME,
 	// Platform specific extension
@@ -204,6 +201,7 @@ namespace RHI
 		if (vulkanInstance != VK_NULL_HANDLE)
 		{
 			vkDestroyInstance(vulkanInstance, vulkanAllocationCallbacks);
+			vulkanInstance = VK_NULL_HANDLE;
 		}
 		return HS_OK;
 	}
@@ -224,6 +222,7 @@ namespace RHI
 		if (vulkanDebugUtilMessenger != VK_NULL_HANDLE)
 		{
 			vkDestroyDebugUtilsMessengerEXT(vulkanInstance, vulkanDebugUtilMessenger, vulkanAllocationCallbacks);
+			vulkanDebugUtilMessenger = VK_NULL_HANDLE;
 		}
 		return HS_OK;
 	}
@@ -576,6 +575,7 @@ namespace RHI
 		if (vulkanDevice != VK_NULL_HANDLE)
 		{
 			vkDestroyDevice(vulkanDevice, vulkanAllocationCallbacks);
+			vulkanDevice = VK_NULL_HANDLE;
 		}
 		
 		return HS_OK;
@@ -673,6 +673,7 @@ namespace RHI
 		if (vulkanDescriptorPool != VK_NULL_HANDLE)
 		{
 			vkDestroyDescriptorPool(vulkanDevice, vulkanDescriptorPool, vulkanAllocationCallbacks);
+			vulkanDescriptorPool = VK_NULL_HANDLE;
 		}	
 		//if enable bindless
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Bindless))
@@ -680,6 +681,7 @@ namespace RHI
 			if (vulkanBindlessDescriptorPool != VK_NULL_HANDLE)
 			{
 				vkDestroyDescriptorPool(vulkanDevice, vulkanBindlessDescriptorPool, vulkanAllocationCallbacks);
+				vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 			}
 		}
 		return HS_OK;
@@ -691,6 +693,7 @@ namespace RHI
 		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
 		gpuTimeQueryManager = Ash_New<GPUTimeQueriesManager>();
 		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
+		commandBufferQueue.init(nullptr, k_command_buffer_queue_length, k_command_buffer_queue_length);
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
@@ -718,11 +721,70 @@ namespace RHI
 				VK_QUERY_PIPELINE_STATISTIC_COMPUTE_SHADER_INVOCATIONS_BIT;
 			VK_CHECK_RESULT(vkCreateQueryPool(vulkanDevice, &pipelineStatisticPoolCI, vulkanAllocationCallbacks, &pool.vulkanPipelineStatsQueryPool));
 		}
+		frameDatas.init(nullptr, k_max_frames, k_max_frames);
+		VkSemaphoreCreateInfo semaphore_info{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+		for (uint32_t i = 0; i < frameDatas.size(); i++)
+		{
+			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &frameDatas[i].vulkanRenderCompleteSemaphore));
+			if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
+				frameDatas[i].vulkanCommandBufferExecutedFence = Ash_New<VulkanFence>();
+			}
+		}
+		VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanImageAcquiredSemaphore));
+		VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanBindSemaphore));
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
+			VkSemaphoreTypeCreateInfo semaphore_type_info{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+			semaphore_type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+			semaphore_info.pNext = &semaphore_type_info;
+
+			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanGraphicsSemaphore));
+
+			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanComputeSemaphore));
+		}
+		else {
+			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanComputeSemaphore));
+			vulkanComputeFence = Ash_New<VulkanFence>();
+		}
+		vulkanImmediateFence = Ash_New<VulkanFence>();
+		//allocate commandbuffers
+		commandBufferRing = Ash_New<VulkanCommandBufferManager>();
+		commandBufferRing->init(numThread);
 		return HS_OK;
 	}
 
 	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
 	{
+		Ash_Delete(nullptr,vulkanImmediateFence);
+		Ash_Delete(nullptr, vulkanComputeFence);
+		if (vulkanComputeSemaphore != VK_NULL_HANDLE)
+		{
+			vkDestroySemaphore(vulkanDevice, vulkanComputeSemaphore, vulkanAllocationCallbacks);
+			vulkanComputeSemaphore = VK_NULL_HANDLE;
+		}
+		if (vulkanGraphicsSemaphore != VK_NULL_HANDLE)
+		{
+			vkDestroySemaphore(vulkanDevice, vulkanGraphicsSemaphore, vulkanAllocationCallbacks);
+			vulkanGraphicsSemaphore = VK_NULL_HANDLE;
+		}
+		if (vulkanBindSemaphore != VK_NULL_HANDLE)
+		{
+			vkDestroySemaphore(vulkanDevice, vulkanBindSemaphore, vulkanAllocationCallbacks);
+			vulkanBindSemaphore = VK_NULL_HANDLE;
+		}
+		if (vulkanImageAcquiredSemaphore != VK_NULL_HANDLE)
+		{
+			vkDestroySemaphore(vulkanDevice, vulkanImageAcquiredSemaphore, vulkanAllocationCallbacks);
+			vulkanImageAcquiredSemaphore = VK_NULL_HANDLE;
+		}
+		for (uint32_t i = 0; i < frameDatas.size(); i++)
+		{
+			vkDestroySemaphore(vulkanDevice, frameDatas[i].vulkanRenderCompleteSemaphore, vulkanAllocationCallbacks);
+			frameDatas[i].vulkanRenderCompleteSemaphore = VK_NULL_HANDLE;
+			if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
+				Ash_Delete(nullptr, frameDatas[i].vulkanCommandBufferExecutedFence);	
+			}
+		}
+		frameDatas.shutdown();
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
@@ -731,12 +793,15 @@ namespace RHI
 			if (pool.vulkanTimestampQueryPool != VK_NULL_HANDLE)
 			{
 				vkDestroyQueryPool(vulkanDevice, pool.vulkanTimestampQueryPool, vulkanAllocationCallbacks);
+				pool.vulkanTimestampQueryPool = VK_NULL_HANDLE;
 			}
 			if (pool.vulkanPipelineStatsQueryPool != VK_NULL_HANDLE)
 			{
 				vkDestroyQueryPool(vulkanDevice, pool.vulkanPipelineStatsQueryPool, vulkanAllocationCallbacks);
+				pool.vulkanPipelineStatsQueryPool = VK_NULL_HANDLE;
 			}
 		}
+		commandBufferQueue.shutdown();
 		gpuTimeQueryManager->shutdown();
 		Ash_Delete(nullptr,gpuTimeQueryManager);
 		framePools.shutdown();

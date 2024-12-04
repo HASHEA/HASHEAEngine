@@ -98,6 +98,10 @@ namespace AshEngine
         if (initial_capacity > 0) {
             ret = grow(initial_capacity);
         }
+        if (initial_size > 0)
+        {
+            memset(m_pData, 0, static_cast<size_t>(initial_size * sizeof(T)));
+        } 
         return ret;
     }
 
@@ -118,7 +122,7 @@ namespace AshEngine
             ret = grow(m_uCapacity + 1);
         }
 
-        m_pData[size++] = element;
+        m_pData[m_uSize++] = element;
         return HS_OK;
     }
     // push and return back

@@ -233,12 +233,15 @@ std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 
 #define Ash_Delete(_allocator,pObject)\
 {\
+	if(pObject)\
+	{\
 	Allocator* l_pAlloc = (_allocator);\
 	if(!(l_pAlloc))\
 			(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
 	_original_destroy(pObject);\
 	(l_pAlloc)->deallocate(pObject);\
 	 pObject = nullptr;\
+	}\
 }
 
 

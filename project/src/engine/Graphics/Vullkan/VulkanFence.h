@@ -22,7 +22,7 @@ namespace RHI
 			this->signaled = signaled;
 		}
 	private:
-		VkFence fence;
-		bool    signaled;
+		VkFence			fence				= VK_NULL_HANDLE;
+		bool			signaled			= false;
 	};
 };

@@ -11,19 +11,37 @@ using namespace AshEngine;
 namespace RHI
 {
 	constexpr uint32_t MAX_SWAPCHAIN_BUFFERS = 3;
+	constexpr uint32_t        k_bindless_texture_binding = 10;
+	constexpr uint32_t        k_bindless_image_binding = 11;
+	constexpr uint32_t        k_max_bindless_resources = 1024;
+	constexpr uint32_t        k_max_frames = 2;
+	constexpr uint32_t		  k_command_buffer_queue_length = 128;
 
 	class VulkanCommandBuffer;
 	class VulkanCommandPool;
+	class VulkanFence;
+	struct VulkanCommandBufferManager;
 	struct GPUTimeQuery;
 	struct GpuTimeQueryTree;
 	struct GpuPipelineStatistics;
 	struct GPUTimeQueriesManager;
+	//count = numThread * numFrame
 	struct FramePool
 	{
 		VulkanCommandPool*					cmdPool						 = nullptr;
 		VkQueryPool							vulkanTimestampQueryPool     = VK_NULL_HANDLE;
 		VkQueryPool							vulkanPipelineStatsQueryPool = VK_NULL_HANDLE;
 		GpuTimeQueryTree*					timeQueries = nullptr;
+	};
+	//attention that the count of framepool may not equal to the count of framedata because of the multi thread
+	//we can record in multi thread but submit in main thread
+	//frame data is the datas used for submit
+	//frame pool is stuffs used for record
+	//count = numFrame
+	struct FrameData
+	{
+		VkSemaphore		vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;
+		VulkanFence*	vulkanCommandBufferExecutedFence	= nullptr;
 	};
 
 
@@ -52,6 +70,11 @@ namespace RHI
 			return vulkanInstance;
 		}
 
+		inline auto get_frame_pool_internal(uint32_t index) -> const FramePool& const
+		{
+			return framePools[index];
+		}
+
 		inline static const auto get_vulkan_device()
 		{
 			return instance->get_vulkan_device_internal();
@@ -65,6 +88,11 @@ namespace RHI
 		inline static const auto get()
 		{
 			return instance;
+		}
+
+		inline static auto get_frame_pool(uint32_t index) -> const FramePool& const
+		{
+			return instance->get_frame_pool_internal(index);
 		}
 	
 	private:
@@ -122,10 +150,20 @@ namespace RHI
 		uint32_t						vulkanComputeQueueFamily			= UINT32_MAX;
 		uint32_t						vulkanTransferQueueFamily			= UINT32_MAX;
 		VkDescriptorPool                vulkanDescriptorPool				= VK_NULL_HANDLE;
-		VkDescriptorPool                vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
+		VkDescriptorPool                vulkanBindlessDescriptorPool		= VK_NULL_HANDLE;
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
 		Array<FramePool>				framePools{};
+		Array<FrameData>				frameDatas{};
+		Array<VulkanCommandBuffer>		commandBufferQueue{};
+		VkSemaphore                     vulkanImageAcquiredSemaphore		= VK_NULL_HANDLE;
+		VkSemaphore                     vulkanGraphicsSemaphore				= VK_NULL_HANDLE;
+		VkSemaphore                     vulkanBindSemaphore					= VK_NULL_HANDLE;
+		VkSemaphore                     vulkanComputeSemaphore				= VK_NULL_HANDLE;
+		VulkanFence*                    vulkanComputeFence					= nullptr;
+		VulkanFence*					vulkanImmediateFence				= nullptr;
+private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
+		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
 	private:
 	
 		float                           gpuTimestampFrequency = 0.f;
