@@ -8,8 +8,7 @@
 #include <GLFW/glfw3native.h>
 namespace RHI
 {
-	VulkanSwapChain::VulkanSwapChain(uint32_t width, uint32_t height)
-		:width(width), height(height)
+	VulkanSwapChain::VulkanSwapChain()
 	{
 	}
 
@@ -17,10 +16,28 @@ namespace RHI
 	{
 	}
 
-	auto VulkanSwapChain::init(void* config) -> HS_Result 
+	auto VulkanSwapChain::init(void* _config) -> HS_Result 
 	{
-		_create_surface((GLFWwindow*)config);
-		_create_swapchain();
+		SwapChainInitConfig config = *(SwapChainInitConfig*)_config;
+		width = config.width;
+		H_ASSERT(width > 0);
+		height = config.height;
+		H_ASSERT(height > 0);
+		if (config.colorFormatCount > 0)
+		{
+			H_ASSERTLOG(config.pColorFormat, "pColorFormat is nullptr but colorFormatCount > 0!");
+		}
+		if (config.colorSpaceCount > 0)
+		{
+			H_ASSERTLOG(config.pColorSpace, "pColorSpace is nullptr but colorSpaceCount > 0!");
+		}
+		if (config.presentModeCount > 0)
+		{
+			H_ASSERTLOG(config.pPresentMode, "pPresentMode is nullptr but presentModeCount > 0!");
+		}
+		HLogTrace("Create swapchain ...");
+		_create_surface((GLFWwindow*)config.window);
+		_create_swapchain(config);
 		return HS_OK;
 	}
 
@@ -38,12 +55,64 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanSwapChain::_create_swapchain() -> HS_Result
+	auto VulkanSwapChain::_create_swapchain(SwapChainInitConfig& config) -> HS_Result
 	{
 		SwapChainSupportDetails swapChainSupport{};
 		_query_swapchain_support(swapChainSupport);
-		_choose_swap_surface_format(swapChainSupport.formats);
-		_choose_swap_present_mode(swapChainSupport.presentModes);
+		bool bFound = false;
+		uint32_t i = 0;
+		for (i = 0; i < config.colorFormatCount; i++)
+		{
+			for (const auto& availableFormat : swapChainSupport.formats) {
+				if (availableFormat.format == ash_format_to_vk(config.pColorFormat[i])) {
+					uint32_t j = 0;
+					for (j = 0; j < config.colorSpaceCount; j++)
+					{
+						if (availableFormat.colorSpace == ash_color_space_to_vk(config.pColorSpace[j]))
+						{
+							surfaceFormat = availableFormat;
+							bFound = true;
+							break;
+						}
+					}
+					if (bFound)
+					{		
+						break;
+					}
+				}
+			}
+			if (bFound)
+			{
+				break;
+			}
+		}
+		if (!bFound)
+		{
+			surfaceFormat = swapChainSupport.formats[0];
+			HLogWarning("none of the required formats is supported! use the default format at index 0 ! ");
+		}
+		bFound = false;
+		i = 0;
+		for (i = 0; i < config.presentModeCount; i++)
+		{
+			for (const auto& availablePresentMode : swapChainSupport.presentModes) {
+				if (availablePresentMode == ash_present_mode_to_vk(config.pPresentMode[i])) {
+					presentMode = availablePresentMode;
+					bFound = true;
+					break;
+				}
+			}
+			if (bFound)
+			{
+				break;
+			}
+		}
+		if (!bFound)
+		{
+			presentMode = VK_PRESENT_MODE_FIFO_KHR;
+			HLogWarning("none of the required presentModes is supported! use the default presentmode : {} ! ", TYPE_TO_STRING(VK_PRESENT_MODE_FIFO_KHR));
+		}
+
 		_choose_swap_extent(swapChainSupport.capabilities);
 		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= MAX_SWAPCHAIN_BUFFERS && swapChainSupport.capabilities.minImageCount <= MAX_SWAPCHAIN_BUFFERS, "Unsupported Image Count:{}!", MAX_SWAPCHAIN_BUFFERS);
 		VkSwapchainCreateInfoKHR createInfo{};
@@ -87,28 +156,6 @@ namespace RHI
 			swapChainSupport.presentModes.resize(presentModeCount);
 			vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, swapChainSupport.presentModes.data());
 		}
-	}
-
-	auto VulkanSwapChain::_choose_swap_surface_format(const std::vector<VkSurfaceFormatKHR>& availableFormats) -> HS_Result
-	{
-		for (const auto& availableFormat : availableFormats) {
-			if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
-				surfaceFormat = availableFormat;
-			}
-		}
-		surfaceFormat = availableFormats[0];
-		return HS_OK;
-	}
-
-	auto VulkanSwapChain::_choose_swap_present_mode(const std::vector<VkPresentModeKHR>& availablePresentModes) -> HS_Result
-	{
-		for (const auto& availablePresentMode : availablePresentModes) {
-			if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-				presentMode = availablePresentMode;
-			}
-		}
-		presentMode = VK_PRESENT_MODE_FIFO_KHR;
-		return HS_OK;
 	}
 
 	auto VulkanSwapChain::_choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities) -> HS_Result

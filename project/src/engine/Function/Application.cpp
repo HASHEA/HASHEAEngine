@@ -5,6 +5,7 @@
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
 #include "Base/window/Window.h"
+#include "Graphics/RHICommon.h"
 namespace AshEngine
 {
 	Application* Application::app = nullptr;
@@ -29,8 +30,21 @@ namespace AshEngine
 		graphicsContext->init(&gfxConfig);
 
 		/*swapchain*/
-		swapChain = RHI::Swapchain::create(window->get_width(),window->get_height());
-		swapChain->init(window->get_native_interface());
+		std::vector<RHI::AshColorSpace> colorSpace = { RHI::ASH_COLOR_SPACE_SRGB_NONLINEAR_KHR };
+		std::vector<RHI::AshFormat> format = { RHI::ASH_FORMAT_B8G8R8A8_SRGB };
+		std::vector<RHI::AshPresentMode> presentMode = {RHI::ASH_PRESENT_MODE_MAILBOX_KHR };
+		RHI::SwapChainInitConfig scConfig{};
+		scConfig.window = window->get_native_interface();
+		scConfig.width = window->get_width();
+		scConfig.height = window->get_height();
+		scConfig.colorFormatCount = format.size();
+		scConfig.pColorFormat = format.data();
+		scConfig.colorSpaceCount = colorSpace.size();
+		scConfig.pColorSpace = colorSpace.data();
+		scConfig.presentModeCount = presentMode.size();
+		scConfig.pPresentMode = presentMode.data();
+		swapChain = RHI::Swapchain::create();
+		swapChain->init(&scConfig);
 	}
 	Application::~Application()
 	{

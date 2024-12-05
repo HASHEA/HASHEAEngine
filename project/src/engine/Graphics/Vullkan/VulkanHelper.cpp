@@ -40,9 +40,43 @@ namespace RHI
 
 	auto ash_format_to_vk(const AshFormat& format) -> VkFormat
 	{
+		VkFormat vkFormat = VkFormat::VK_FORMAT_UNDEFINED;
 		switch (format)
 		{
+		case ASH_FORMAT_B8G8R8A8_SRGB:
+			vkFormat = VkFormat::VK_FORMAT_B8G8R8A8_SRGB;
+			break;
 		}
-		return VkFormat::VK_FORMAT_UNDEFINED;
+		return vkFormat;
+	}
+
+	auto ash_color_space_to_vk(const AshColorSpace& colorSpace) -> VkColorSpaceKHR
+	{
+		VkColorSpaceKHR vkColorSpace = VkColorSpaceKHR::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+		switch (colorSpace)
+		{
+		case ASH_COLOR_SPACE_SRGB_NONLINEAR_KHR:
+			vkColorSpace = VkColorSpaceKHR::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+			break;
+		}
+		return vkColorSpace;
+	}
+
+	auto ash_present_mode_to_vk(const AshPresentMode& presentMode) -> VkPresentModeKHR
+	{
+		VkPresentModeKHR vkPresentMode = VkPresentModeKHR::VK_PRESENT_MODE_IMMEDIATE_KHR;
+		switch (presentMode)
+		{
+		case ASH_PRESENT_MODE_MAILBOX_KHR:
+			vkPresentMode = VkPresentModeKHR::VK_PRESENT_MODE_MAILBOX_KHR;
+			break;
+		case ASH_PRESENT_MODE_IMMEDIATE_KHR:
+			vkPresentMode = VkPresentModeKHR::VK_PRESENT_MODE_IMMEDIATE_KHR;
+			break;
+		case ASH_PRESENT_MODE_FIFO_KHR:
+			vkPresentMode = VkPresentModeKHR::VK_PRESENT_MODE_FIFO_KHR;
+			break;
+		}
+		return vkPresentMode;
 	}
 };

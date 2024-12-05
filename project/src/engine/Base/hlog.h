@@ -29,7 +29,7 @@ namespace AshEngine
 #define GET_ASH_LOGGER AshEngine::LogService::instance()->GetAppLogger()
 #endif // ASH_ENGINE
 
-#define HLogTrace(sinfo,...)		GET_ASH_LOGGER->trace(sinfo,__VA_ARGS__)
+#define HLogTrace(sinfo,...)		GET_ASH_LOGGER->trace(ASH_FILELINE(ASH_CONCAT(sinfo, "\n")),__VA_ARGS__)
 #define HLogInfo(sinfo,...)			GET_ASH_LOGGER->info(sinfo,__VA_ARGS__)
 #define HLogWarning(sinfo,...)		GET_ASH_LOGGER->warn(sinfo,__VA_ARGS__)
 #define HLogError(sinfo,...)		GET_ASH_LOGGER->error(sinfo,__VA_ARGS__)

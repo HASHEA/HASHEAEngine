@@ -32,5 +32,7 @@ namespace RHI
 	}
 
 	auto ash_format_to_vk(const AshFormat& format) -> VkFormat;
-	
+	auto ash_color_space_to_vk(const AshColorSpace& colorSpace) -> VkColorSpaceKHR;
+	auto ash_present_mode_to_vk(const AshPresentMode& presentMode)->VkPresentModeKHR;
+
 };

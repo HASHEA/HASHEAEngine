@@ -27,3 +27,4 @@ enum HS_Result
 #define HS_CHECK_FAILED(cond)\
 	(HS_Result)(cond) != HS_OK
 		
+#define TYPE_TO_STRING(val) #val

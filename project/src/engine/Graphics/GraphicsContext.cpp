@@ -17,10 +17,10 @@ namespace RHI {
 #endif        // ASH_VULKAN
 	}
 
-	Swapchain* Swapchain::create(uint32_t width, uint32_t height)
+	Swapchain* Swapchain::create()
 	{
 #ifdef ASH_VULKAN
-		return Ash_New<VulkanSwapChain>(nullptr,width, height);
+		return Ash_New<VulkanSwapChain>();
 #else
 		H_ASSERTLOG(false, "Unsupported Api!");
 #endif
