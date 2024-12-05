@@ -75,6 +75,11 @@ namespace RHI
 			return vulkanInstance;
 		}
 
+		inline const auto get_vulkan_allocation_callbacks_internal()
+		{
+			return vulkanAllocationCallbacks;
+		}
+
 		inline auto get_frame_pool_internal(uint32_t index) -> const FramePool& const
 		{
 			return framePools[index];
@@ -95,6 +100,11 @@ namespace RHI
 			return instance->get_vulkan_instance_internal();
 		}
 
+		inline static const auto get_vulkan_allocation_callbacks()
+		{
+			return instance->get_vulkan_allocation_callbacks_internal();
+		}
+
 		inline static const auto get()
 		{
 			return instance;
@@ -111,7 +121,7 @@ namespace RHI
 	private:
 		//manually in the calling order
 		//instance
-		auto _create_instance()->HS_Result;
+		auto _create_instance(const Array<const char*>& window_extensions)->HS_Result;
 		auto _shutdown_instance() -> HS_Result;
 #ifdef VULKAN_DEBUG_REPORT
 		//debug msg util

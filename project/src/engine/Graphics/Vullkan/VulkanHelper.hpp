@@ -2,6 +2,7 @@
 #include "Base/hassert.h"
 #include "Base/hlog.h"
 #include "VulkanWrapper.h"
+#include "Graphics/RHICommon.h"
 namespace RHI
 {
 	const char* vulkan_error_string(VkResult errorCode);
@@ -30,5 +31,6 @@ namespace RHI
 		}                                                                                                                         \
 	}
 
+	auto ash_format_to_vk(const AshFormat& format) -> VkFormat;
 	
 };

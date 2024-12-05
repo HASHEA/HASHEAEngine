@@ -37,9 +37,9 @@ namespace AshEngine
 
         auto                         size_in_bytes() const -> uint32_t;
         auto                         capacity_in_bytes() const -> uint32_t;
+        auto size() const -> uint32_t { return m_uSize; }
+		auto capacity() const -> uint32_t { return m_uCapacity; }
 
-        auto size() { return m_uSize; }
-        auto capacity() { return m_uCapacity; }
         auto set_capacity_no_grow(uint32_t capacity) { m_uCapacity  = capacity};
     private:
         uint32_t                         m_uSize = 0;       // Occupied size

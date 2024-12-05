@@ -25,7 +25,7 @@ namespace RHI
 	private:
 		auto _create_surface(GLFWwindow* window)->HS_Result;
 		auto _create_swapchain()->HS_Result;
-		auto _query_swapchain_support()->SwapChainSupportDetails;
+		auto _query_swapchain_support(SwapChainSupportDetails& swapChainSupport)->void;
 		auto _choose_swap_surface_format(const std::vector<VkSurfaceFormatKHR>& availableFormats)->HS_Result;
 		auto _choose_swap_present_mode(const std::vector<VkPresentModeKHR>& availablePresentModes)->HS_Result;
 		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->HS_Result;

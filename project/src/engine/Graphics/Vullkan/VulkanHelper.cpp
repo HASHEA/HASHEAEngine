@@ -37,4 +37,12 @@ namespace RHI
 			return "UNKNOWN_ERROR";
 		}
 	}
+
+	auto ash_format_to_vk(const AshFormat& format) -> VkFormat
+	{
+		switch (format)
+		{
+		}
+		return VkFormat::VK_FORMAT_UNDEFINED;
+	}
 };

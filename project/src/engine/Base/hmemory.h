@@ -6,7 +6,8 @@
 #include <memory>
 namespace AshEngine
 {
-
+//#define ASH_TRACE_MEM_ALLOCATE
+//#define ASH_TRACE_MEM_DEALLOCATE
 	// Memory Methods /////////////////////////////////////////////////////
 	void memory_copy(void* destination, void* source, size_t size);
 
@@ -28,6 +29,7 @@ namespace AshEngine
 		virtual auto allocate(size_t size, size_t alignment) -> void* = 0;
 		virtual auto allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void* = 0;
 
+		virtual auto deallocate(void* pointer, char* file, uint32_t line) -> HS_Result = 0;
 		virtual auto deallocate(void* pointer) -> HS_Result = 0;
 	}; // struct Allocator
 
@@ -61,7 +63,8 @@ namespace AshEngine
 		auto allocate(size_t size, size_t alignment) -> void* override;
 		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
-		auto deallocate(void* pointer)-> HS_Result override;
+		auto deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
+		auto deallocate(void* pointer) -> HS_Result override;
 	private:
 		void* m_pTlsfHandle = nullptr;
 		void* m_pMemory = nullptr;
@@ -78,9 +81,9 @@ namespace AshEngine
 		auto allocate(size_t size, size_t alignment)-> void* override;
 		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)-> void* override;
 
-		auto                        deallocate(void* pointer)-> HS_Result override;
-
-		auto                       get_marker() -> size_t;
+		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
+		auto						deallocate(void* pointer) -> HS_Result override;
+		auto						get_marker() -> size_t;
 		auto                        free_marker(size_t marker) -> HS_Result;
 
 		auto                        clear() -> HS_Result;
@@ -105,8 +108,8 @@ namespace AshEngine
 		auto allocate(size_t size, size_t alignment)->void* override;
 		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
-		auto                        deallocate(void* pointer)-> HS_Result override;
-
+		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
+		auto						deallocate(void* pointer) -> HS_Result override;
 		auto                        clear()-> HS_Result;
 	private:
 		uint8_t* m_pMemory = nullptr;
@@ -179,28 +182,52 @@ namespace AshEngine
 	}
 
 //if nullptr, use system allocator
+#ifdef ASH_TRACE_MEM_ALLOCATE
 #define Ash_Alloc(allocater,size,align/*set 1 to no align*/)\
 	((allocater) == nullptr ? ((MemoryService::instance()->get_system_allocator())->allocate( size, align, __FILE__, __LINE__ )):(static_cast<Allocator*>(allocater)->allocate( size, align, __FILE__, __LINE__ )));
-	
+#else
+#define Ash_Alloc(allocater,size,align/*set 1 to no align*/)\
+	((allocater) == nullptr ? ((MemoryService::instance()->get_system_allocator())->allocate( size, align)):(static_cast<Allocator*>(allocater)->allocate( size, align)));
+#endif
+
 template<typename T, typename... Args>
-T* Ash_New(Allocator* allocator = nullptr,Args&&... args) {
+inline T* Ash_New(Allocator* allocator = nullptr,Args&&... args) {
 	if (allocator == nullptr) {
+#ifdef ASH_TRACE_MEM_ALLOCATE
 		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+#else
+		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1)), std::forward<Args>(args)...);
+#endif
 	}
 	else {
+#ifdef ASH_TRACE_MEM_ALLOCATE
 		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+
+#else
+		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), 1)), std::forward<Args>(args)...);
+#endif
 	}
 }
 
 template<typename T, typename... Args>
-std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
+inline std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 	T* pO = nullptr;
+#ifdef ASH_TRACE_MEM_ALLOCATE
 	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
 
+#else
+	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1)), std::forward<Args>(args)...);
+#endif
 	auto Deleter = [](T* pObject) {
 		auto allocator = (MemoryService::instance()->get_system_allocator());
 		_original_destroy(pObject);
-		allocator->deallocate(pObject); 
+#ifdef ASH_TRACE_MEM_DEALLOCATE
+		return allocator->deallocate(pObject, __FILE__, __LINE__);
+
+#else
+		return allocator->deallocate(pObject);
+#endif
+		
 	};
 	std::shared_ptr<T> sp(pO, Deleter);
 	return sp;
@@ -222,7 +249,15 @@ std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 //}
 
 
-
+#ifdef ASH_TRACE_MEM_DEALLOCATE
+#define Ash_Free(_allocator,pObject)\
+{\
+	Allocator* l_pAlloc = (_allocator);\
+	if(!(l_pAlloc))\
+		(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
+	(l_pAlloc)->deallocate(pObject,__FILE__, __LINE__);\
+}
+#else
 #define Ash_Free(_allocator,pObject)\
 {\
 	Allocator* l_pAlloc = (_allocator);\
@@ -230,7 +265,22 @@ std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 		(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
 	(l_pAlloc)->deallocate(pObject);\
 }
+#endif
 
+#ifdef ASH_TRACE_MEM_DEALLOCATE
+#define Ash_Delete(_allocator,pObject)\
+{\
+	if(pObject)\
+	{\
+	Allocator* l_pAlloc = (_allocator);\
+	if(!(l_pAlloc))\
+			(l_pAlloc) = (MemoryService::instance()->get_system_allocator());\
+	_original_destroy(pObject);\
+	(l_pAlloc)->deallocate(pObject,__FILE__, __LINE__);\
+	 pObject = nullptr;\
+	}\
+}
+#else
 #define Ash_Delete(_allocator,pObject)\
 {\
 	if(pObject)\
@@ -243,6 +293,8 @@ std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 	 pObject = nullptr;\
 	}\
 }
+#endif
+
 
 
 

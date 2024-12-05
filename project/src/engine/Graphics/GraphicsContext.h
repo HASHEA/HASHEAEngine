@@ -1,6 +1,7 @@
 #pragma once
 #include "Base/hplatform.h"
 #include "Base/hcore.h"
+#include "Base/ds/harray.hpp"
 namespace RHI {
     struct GpuDescriptorPoolCreation {
 
@@ -25,6 +26,7 @@ namespace RHI {
         uint16_t                             height = 1;
         uint16_t                             num_threads = 1;
         uint16_t							 queryCount = 32;
+        AshEngine::Array<const char*>        addtionalExtensions{};
     };
     class VulkanContext;
     class GraphicsContext

@@ -15,19 +15,27 @@ namespace AshEngine
 		MemoryService::instance()->init(nullptr);
 
 		/*window*/
-		window = Window::create({ 1280, 720, false, "Ash Engine" });
-		window->init();
+		WindowConfig windowConfig = { 1280, 720, false, "Ash Engine" };
+		window = Window::create();
+		window->init(windowConfig);
 
 		/*gfx*/
 		RHI::GraphicsContextInitConfig gfxConfig{};
+		gfxConfig.window = window->get_native_interface();
+		gfxConfig.width = window->get_width();
+		gfxConfig.height = window->get_height();
+		gfxConfig.addtionalExtensions = window->get_extensions();
 		graphicsContext = RHI::GraphicsContext::create();
 		graphicsContext->init(&gfxConfig);
 
+		/*swapchain*/
 		swapChain = RHI::Swapchain::create(window->get_width(),window->get_height());
 		swapChain->init(window->get_native_interface());
 	}
 	Application::~Application()
 	{
+		swapChain->shutdown();
+		Ash_Delete(nullptr, swapChain);
 		graphicsContext->shutdown();
 		Ash_Delete(nullptr,graphicsContext);
 		window->shutdown();

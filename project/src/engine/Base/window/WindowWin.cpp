@@ -3,9 +3,6 @@
 #include "Base/hstring.h"
 namespace AshEngine
 {
-	WindowWin::WindowWin(const WindowData& w_data) : data(w_data)
-	{
-	}
 	auto WindowWin::on_update() -> void
 	{
 	}
@@ -20,6 +17,7 @@ namespace AshEngine
 	auto WindowWin::set_vsync(bool vsync) -> void
 	{
 #ifdef ASH_VULKAN
+		data.vsync = vsync;
 #else
 		H_ASSERTLOG(false,"Fatal : unknown API !");
 #endif // ASH_VULKAN
@@ -28,8 +26,9 @@ namespace AshEngine
 	{
 		return data.vsync;
 	}
-	auto WindowWin::init() -> void
+	auto WindowWin::init(const WindowConfig& w_data) -> void
 	{
+		data = w_data;
 		H_ASSERTLOG(glfwInit(),"Fatal : failed to init glfw !");
 #ifdef ASH_VULKAN
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -49,10 +48,14 @@ namespace AshEngine
 		register_native_event(data);
 		glfwSetInputMode(handle,GLFW_STICKY_KEYS,1);
 		glfwSetWindowUserPointer(handle,this);
-
+		uint32_t extensionCount = 0;
+		auto pEx = glfwGetRequiredInstanceExtensions(&extensionCount);
+		extensions.init(nullptr, extensionCount, extensionCount);
+		memory_copy(extensions.m_pData, pEx, extensionCount * sizeof(pEx[0]));
 	}
 	auto WindowWin::shutdown() -> void
 	{
+		extensions.shutdown();
 		glfwDestroyWindow(handle);
 		glfwTerminate();
 	}
@@ -73,7 +76,7 @@ namespace AshEngine
 	{
 		return handle;
 	}
-	auto WindowWin::register_native_event(const WindowData& data) -> void
+	auto WindowWin::register_native_event(const WindowConfig& data) -> void
 	{
 		glfwSetWindowSizeCallback(handle, [](GLFWwindow* win, int32_t w, int32_t h) {
 

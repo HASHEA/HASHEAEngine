@@ -8,7 +8,7 @@ namespace AshEngine
 	class ASH_API WindowWin : public Window
 	{
 	public:
-		WindowWin(const WindowData& w_data);
+		WindowWin() = default;
 		virtual ~WindowWin() {};
 
 	public:
@@ -22,7 +22,7 @@ namespace AshEngine
 
 		auto is_vsync() -> bool override;
 
-		auto init() -> void override;
+		auto init(const WindowConfig& w_data) -> void override;
 
 		auto shutdown() -> void override;
 
@@ -30,8 +30,8 @@ namespace AshEngine
 
 		auto get_native_interface() -> void* override;
 	private:
-		auto register_native_event(const WindowData& data) -> void;
-		WindowData data{};
+		auto register_native_event(const WindowConfig& data) -> void;
+		WindowConfig data{};
 		GLFWwindow* handle = nullptr;
 	};
 };

@@ -26,31 +26,26 @@ namespace RHI
 
 	auto VulkanSwapChain::shutdown() -> HS_Result 
 	{
+		vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(),swapChain, VulkanContext::get_vulkan_allocation_callbacks());
+		vkDestroySurfaceKHR(VulkanContext::get_vulkan_instance(),surface, VulkanContext::get_vulkan_allocation_callbacks());
 		return HS_OK;
 	}
 
 	auto VulkanSwapChain::_create_surface(GLFWwindow* window) -> HS_Result
 	{
 		auto instance = VulkanContext::get_vulkan_instance();
-		VK_CHECK_RESULT(glfwCreateWindowSurface(instance, window, nullptr, &surface));
-
+		VK_CHECK_RESULT(glfwCreateWindowSurface(instance, window, VulkanContext::get_vulkan_allocation_callbacks(), &surface));
 		return HS_OK;
 	}
 
 	auto VulkanSwapChain::_create_swapchain() -> HS_Result
 	{
-		SwapChainSupportDetails swapChainSupport;
-		swapChainSupport = _query_swapchain_support();
+		SwapChainSupportDetails swapChainSupport{};
+		_query_swapchain_support(swapChainSupport);
 		_choose_swap_surface_format(swapChainSupport.formats);
 		_choose_swap_present_mode(swapChainSupport.presentModes);
 		_choose_swap_extent(swapChainSupport.capabilities);
-		//uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
-		//if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) {
-		//	imageCount = swapChainSupport.capabilities.maxImageCount;
-		//}
-
 		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= MAX_SWAPCHAIN_BUFFERS && swapChainSupport.capabilities.minImageCount <= MAX_SWAPCHAIN_BUFFERS, "Unsupported Image Count:{}!", MAX_SWAPCHAIN_BUFFERS);
-
 		VkSwapchainCreateInfoKHR createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 		createInfo.surface = surface;
@@ -60,7 +55,6 @@ namespace RHI
 		createInfo.imageExtent = extent;
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
 		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		createInfo.queueFamilyIndexCount = 0; // Optional
 		createInfo.pQueueFamilyIndices = nullptr; // Optional
@@ -69,18 +63,13 @@ namespace RHI
 		createInfo.presentMode = presentMode;
 		createInfo.clipped = VK_TRUE;
 		createInfo.oldSwapchain = VK_NULL_HANDLE;
-
 		auto device = VulkanContext::get_vulkan_device();
-
-		VK_CHECK_RESULT(vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain));
-
-		return HS_Result();
+		VK_CHECK_RESULT(vkCreateSwapchainKHR(device, &createInfo, VulkanContext::get_vulkan_allocation_callbacks(), &swapChain));
+		return HS_OK;
 	}
 
-	auto VulkanSwapChain::_query_swapchain_support() -> SwapChainSupportDetails
+	auto VulkanSwapChain::_query_swapchain_support(SwapChainSupportDetails& swapChainSupport) -> void
 	{
-		SwapChainSupportDetails swapChainSupport;
-
 		auto device = VulkanContext::get_vulkan_physical_device();
 		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &swapChainSupport.capabilities);
 		uint32_t formatCount;
@@ -98,7 +87,6 @@ namespace RHI
 			swapChainSupport.presentModes.resize(presentModeCount);
 			vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, swapChainSupport.presentModes.data());
 		}
-		return swapChainSupport;
 	}
 
 	auto VulkanSwapChain::_choose_swap_surface_format(const std::vector<VkSurfaceFormatKHR>& availableFormats) -> HS_Result
@@ -129,19 +117,12 @@ namespace RHI
 			extent = capabilities.currentExtent;
 		}
 		else {
-			//int width, height;
-			//auto window = (GLFWwindow*)Application::GetWindow()->get_native_interface();
-
-			//glfwGetFramebufferSize(window, &width, &height);
-
 			VkExtent2D actualExtent = {
 				static_cast<uint32_t>(width),
 				static_cast<uint32_t>(height)
 			};
-
 			actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
 			actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
-
 			extent = actualExtent;
 		}
 		return HS_OK;

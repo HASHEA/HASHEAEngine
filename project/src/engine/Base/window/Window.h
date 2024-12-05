@@ -4,7 +4,7 @@
 #include "Base/ds/harray.hpp"
 namespace AshEngine
 {
-	struct WindowData
+	struct WindowConfig
 	{
 		uint32_t	width;
 		uint32_t	height;
@@ -21,13 +21,13 @@ namespace AshEngine
 		virtual auto get_height() -> uint32_t = 0;
 		virtual auto set_vsync(bool vsync) -> void = 0;
 		virtual auto is_vsync() -> bool = 0;
-		virtual auto init() -> void = 0;
+		virtual auto init(const WindowConfig& w_data) -> void = 0;
 		virtual auto shutdown() -> void = 0;
 		virtual auto set_title(const char* title) -> void = 0;
 		virtual auto get_native_interface() -> void* = 0;
 		virtual auto get_native_window() -> void* { return nullptr; }
 
-		static Window* create(const WindowData& data);
+		static Window* create();
 		inline auto get_scale() const
 		{
 			return scale;

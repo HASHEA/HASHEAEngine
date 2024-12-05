@@ -8,49 +8,49 @@
 #include <vector>
 namespace RHI
 {
-	static const char* s_requested_extensions[] = {
-	VK_KHR_SURFACE_EXTENSION_NAME,
-	// Platform specific extension
-#ifdef VK_USE_PLATFORM_WIN32_KHR
-		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_MACOS_MVK)
-		VK_MVK_MACOS_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_XCB_KHR)
-		VK_KHR_XCB_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-		VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_XLIB_KHR)
-		VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_XCB_KHR)
-		VK_KHR_XCB_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-		VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
-#elif (defined(VK_USE_PLATFORM_MIR_KHR) || defined(VK_USE_PLATFORM_DISPLAY_KHR))
-		VK_KHR_DISPLAY_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-		VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
-#elif defined(VK_USE_PLATFORM_IOS_MVK)
-		VK_MVK_IOS_SURFACE_EXTENSION_NAME,
-#endif // VK_USE_PLATFORM_WIN32_KHR
-#ifdef VULKAN_DEBUG_REPORT
-	VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
-	VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-#endif // VULKAN_DEBUG_REPORT
-	};
-	static const char* s_requested_layers[] = {
-#ifdef VULKAN_DEBUG_REPORT
-	"VK_LAYER_KHRONOS_validation",
-	//"VK_LAYER_AMD_switchable_graphics",
-	//"VK_LAYER_NV_optimus",
-	//"VK_LAYER_LUNARG_core_validation",
-	//"VK_LAYER_LUNARG_image",
-	//"VK_LAYER_LUNARG_parameter_validation",
-	//"VK_LAYER_LUNARG_object_tracker"
-#else
-	"",
-#endif // VULKAN_DEBUG_REPORT
-	};
-	inline auto check_layer_support()->HS_Result
+//	static const char* s_requested_extensions[] = {
+//	// Platform specific extension
+//#ifdef VK_USE_PLATFORM_WIN32_KHR
+//		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_MACOS_MVK)
+//		VK_MVK_MACOS_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_XCB_KHR)
+//		VK_KHR_XCB_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+//		VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_XLIB_KHR)
+//		VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_XCB_KHR)
+//		VK_KHR_XCB_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
+//		VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
+//#elif (defined(VK_USE_PLATFORM_MIR_KHR) || defined(VK_USE_PLATFORM_DISPLAY_KHR))
+//		VK_KHR_DISPLAY_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+//		VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
+//#elif defined(VK_USE_PLATFORM_IOS_MVK)
+//		VK_MVK_IOS_SURFACE_EXTENSION_NAME,
+//#endif // VK_USE_PLATFORM_WIN32_KHR
+//#ifdef VULKAN_DEBUG_REPORT
+//	VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
+//	VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+//#endif // VULKAN_DEBUG_REPORT
+//	};
+//
+//	static const char* s_requested_layers[] = {
+//#ifdef VULKAN_DEBUG_REPORT
+//	"VK_LAYER_KHRONOS_validation",
+//	//"VK_LAYER_AMD_switchable_graphics",
+//	//"VK_LAYER_NV_optimus",
+//	//"VK_LAYER_LUNARG_core_validation",
+//	//"VK_LAYER_LUNARG_image",
+//	//"VK_LAYER_LUNARG_parameter_validation",
+//	//"VK_LAYER_LUNARG_object_tracker"
+//#else
+//	"",
+//#endif // VULKAN_DEBUG_REPORT
+//	};
+	inline auto check_layer_support(const std::vector<const char*>& rqLayers)->HS_Result
 	{
 		std::vector<VkLayerProperties> layers;
 		uint32_t layerCount = 0;
@@ -59,7 +59,7 @@ namespace RHI
 		layers.resize(layerCount);
 		vkEnumerateInstanceLayerProperties(&layerCount, layers.data());
 
-		for (const char* layerName : s_requested_layers)
+		for (const char* layerName : rqLayers)
 		{
 			bool layerFound = false;
 			for (const auto& layerProperties : layers)
@@ -77,7 +77,7 @@ namespace RHI
 		}
 		return HS_OK;
 	}
-	inline auto check_extension_support() -> HS_Result
+	inline auto check_extension_support(const std::vector<const char*>& rqExtensions) -> HS_Result
 	{
 		std::vector<VkExtensionProperties> properties;
 		uint32_t extensionCount = 0;
@@ -87,10 +87,10 @@ namespace RHI
 		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, properties.data());
 
 		bool extensionSupported = true;
-		int size = ArraySize(s_requested_extensions);
+		int size = rqExtensions.size();
 		for (int i = 0; i < size; i++)
 		{
-			const char* extensionName = s_requested_extensions[i];
+			const char* extensionName = rqExtensions[i];
 			bool        layerFound = false;
 
 			for (const auto& layerProperties : properties)
@@ -141,7 +141,7 @@ namespace RHI
 		return VK_FALSE;
 	}
 
-	auto VulkanContext::_create_instance() -> HS_Result
+	auto VulkanContext::_create_instance(const Array<const char*>& additionalExtensions) -> HS_Result
 	{
 		VkApplicationInfo appInfo{};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -151,13 +151,54 @@ namespace RHI
 		appInfo.pEngineName = "Ash";
 		appInfo.engineVersion = 1;
 		appInfo.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 0);
-		HS_Result result = check_layer_support();
+		std::vector<const char*> rqLayers{};
+#ifdef VULKAN_DEBUG_REPORT
+		rqLayers.push_back("VK_LAYER_KHRONOS_validation");
+			//"VK_LAYER_AMD_switchable_graphics",
+			//"VK_LAYER_NV_optimus",
+			//"VK_LAYER_LUNARG_core_validation",
+			//"VK_LAYER_LUNARG_image",
+			//"VK_LAYER_LUNARG_parameter_validation",
+			//"VK_LAYER_LUNARG_object_tracker"
+#endif
+		HS_Result result = check_layer_support(rqLayers);
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Not all required layers are supported!");
 			return result;
 		}
-		result = check_extension_support();
+		std::vector<const char*> rqExtensions{};
+#ifdef VK_USE_PLATFORM_WIN32_KHR
+		rqExtensions.push_back(VK_KHR_WIN32_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_MACOS_MVK)
+		rqExtensions.push_back(VK_MVK_MACOS_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_XCB_KHR)
+		rqExtensions.push_back(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+		rqExtensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_XLIB_KHR)
+		rqExtensions.push_back(VK_KHR_XLIB_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_XCB_KHR)
+		rqExtensions.push_back(VK_KHR_XCB_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
+		rqExtensions.push_back(VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME);
+#elif (defined(VK_USE_PLATFORM_MIR_KHR) || defined(VK_USE_PLATFORM_DISPLAY_KHR))
+		rqExtensions.push_back(VK_KHR_DISPLAY_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+		rqExtensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
+#elif defined(VK_USE_PLATFORM_IOS_MVK)
+		rqExtensions.push_back(VK_MVK_IOS_SURFACE_EXTENSION_NAME);
+#endif // VK_USE_PLATFORM_WIN32_KHR
+#ifdef VULKAN_DEBUG_REPORT
+		rqExtensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+		rqExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#endif // VULKAN_DEBUG_REPORT
+		//insert additional extensions
+		for (uint32_t i = 0; i < additionalExtensions.size(); i++)
+		{
+			rqExtensions.push_back(additionalExtensions[i]);
+		}
+		result = check_extension_support(rqExtensions);
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Not all required extensions are supported!");
@@ -168,12 +209,12 @@ namespace RHI
 		instanceCI.pNext = nullptr;
 		instanceCI.flags = 0;
 		instanceCI.pApplicationInfo = &appInfo;
-		auto lyorExCounts = ArraySize(s_requested_layers);
+		auto lyorExCounts = rqLayers.size();
 		instanceCI.enabledLayerCount = lyorExCounts;
-		instanceCI.ppEnabledLayerNames = lyorExCounts == 0 ? nullptr : s_requested_layers;
-		lyorExCounts = ArraySize(s_requested_extensions);
+		instanceCI.ppEnabledLayerNames = lyorExCounts == 0 ? nullptr : rqLayers.data();
+		lyorExCounts = rqExtensions.size();
 		instanceCI.enabledExtensionCount = lyorExCounts;
-		instanceCI.ppEnabledExtensionNames = lyorExCounts == 0 ? nullptr : s_requested_extensions;
+		instanceCI.ppEnabledExtensionNames = lyorExCounts == 0 ? nullptr : rqExtensions.data();
 #ifdef VULKAN_DEBUG_REPORT
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
 		debugUtilCI.pfnUserCallback = vk_debug_callbacks;
@@ -754,6 +795,8 @@ namespace RHI
 
 	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
 	{
+		commandBufferRing->shutdown();
+		Ash_Delete(nullptr,commandBufferRing);
 		Ash_Delete(nullptr,vulkanImmediateFence);
 		Ash_Delete(nullptr, vulkanComputeFence);
 		if (vulkanComputeSemaphore != VK_NULL_HANDLE)
@@ -815,7 +858,7 @@ namespace RHI
 		//load vulkan by volk;
 		VK_CHECK_RESULT(volkInitialize());
 		//create vkinstance
-		HS_Result result = _create_instance();
+		HS_Result result = _create_instance(vkConfig.addtionalExtensions);
 		if (HS_CHECK_FAILED(result))
 		{
 			HLogError("Fatal : Failed to create instance !");
