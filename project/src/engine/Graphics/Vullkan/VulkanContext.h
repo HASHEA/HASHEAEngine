@@ -85,6 +85,11 @@ namespace RHI
 			return framePools[index];
 		}
 
+		inline auto get_vma_allocator_internal()
+		{
+			return vmaAllocator;
+		}
+		
 		inline static const auto get_vulkan_device()
 		{
 			return instance->get_vulkan_device_internal();
@@ -114,7 +119,19 @@ namespace RHI
 		{
 			return instance->get_frame_pool_internal(index);
 		}
+
+		inline static const auto get_vma_allocator()
+		{
+			return instance->get_vma_allocator_internal();
+		}
 	
+		auto set_resource_name_internal(VkObjectType type, uint64_t handle, const char* name) -> void;
+
+		inline static auto set_resource_name(VkObjectType type, uint64_t handle, const char* name) -> void
+		{
+			instance->set_resource_name_internal(type,handle,name);
+		}
+		
 	private:
 		StringView stringBuffer{};
 	//vk handles

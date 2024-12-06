@@ -28,7 +28,7 @@ namespace RHI {
         uint16_t							 queryCount = 32;
         AshEngine::Array<const char*>        addtionalExtensions{};
     };
-    class VulkanContext;
+
     class GraphicsContext
     {
     public:

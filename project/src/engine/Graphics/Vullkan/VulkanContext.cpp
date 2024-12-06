@@ -141,6 +141,17 @@ namespace RHI
 		return VK_FALSE;
 	}
 
+	auto VulkanContext::set_resource_name_internal(VkObjectType type, uint64_t handle, const char* name) -> void
+	{
+#ifdef VULKAN_DEBUG_REPORT
+		VkDebugUtilsObjectNameInfoEXT name_info = { VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
+		name_info.objectType = type;
+		name_info.objectHandle = handle;
+		name_info.pObjectName = name;
+		vkSetDebugUtilsObjectNameEXT(vulkanDevice, &name_info);
+#endif // VULKAN_DEBUG_REPORT
+	}
+
 	auto VulkanContext::_create_instance(const Array<const char*>& additionalExtensions) -> HS_Result
 	{
 		VkApplicationInfo appInfo{};
