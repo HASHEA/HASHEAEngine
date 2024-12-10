@@ -6,6 +6,7 @@
 #include "Base/hassert.h"
 #include <GLFW/glfw3.h> // must include after include vulkan because some key macro should be pre defined
 #include <GLFW/glfw3native.h>
+#include "VulkanTexture.h"
 namespace RHI
 {
 	VulkanSwapChain::VulkanSwapChain()
@@ -38,6 +39,20 @@ namespace RHI
 		HLogTrace("Create swapchain ...");
 		_create_surface((GLFWwindow*)config.window);
 		_create_swapchain(config);
+		//test texture creation
+		TextureCreation tc{};
+		tc.width = 1920;
+		tc.height = 1080;
+		tc.depth = 1;
+		tc.array_layer_count = 1;
+		tc.alias = nullptr;
+		tc.flags = 0;
+		tc.initial_data = nullptr;
+		tc.mip_level_count = 1;
+		tc.name = "test vk texture";
+		tc.type = Ash_Texture2D;
+		tc.format = ASH_FORMAT_R8G8B8A8_SRGB;
+		auto testVKTexture = VulkanTexture::create(tc);
 		return HS_OK;
 	}
 

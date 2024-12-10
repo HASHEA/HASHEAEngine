@@ -39,32 +39,7 @@ namespace RHI
 		}
 	}
 
-	//
-// Helper methods for texture formats
-//
-	namespace TextureFormat {
-
-		inline bool                     is_depth_stencil(VkFormat value) {
-			return value >= VK_FORMAT_D16_UNORM_S8_UINT && value < VK_FORMAT_BC1_RGB_UNORM_BLOCK;
-		}
-		inline bool                     is_depth_only(VkFormat value) {
-			return value >= VK_FORMAT_D16_UNORM && value < VK_FORMAT_S8_UINT;
-		}
-		inline bool                     is_stencil_only(VkFormat value) {
-			return value == VK_FORMAT_S8_UINT;
-		}
-
-		inline bool                     has_depth(VkFormat value) {
-			return is_depth_only(value) || is_depth_stencil(value);
-		}
-		inline bool                     has_stencil(VkFormat value) {
-			return value >= VK_FORMAT_S8_UINT && value <= VK_FORMAT_D32_SFLOAT_S8_UINT;
-		}
-		inline bool                     has_depth_or_stencil(VkFormat value) {
-			return value >= VK_FORMAT_D16_UNORM && value <= VK_FORMAT_D32_SFLOAT_S8_UINT;
-		}
-
-	} // namespace TextureFormat
+	
 
 	auto ash_image_type_to_vk(const AshImageType& type) -> VkImageType
 	{
@@ -90,6 +65,9 @@ namespace RHI
 			vktype = VkImageType::VK_IMAGE_TYPE_2D;
 			break;
 		case Ash_Texture_Cube_Array:
+			vktype = VkImageType::VK_IMAGE_TYPE_2D;
+			break;
+		default:
 			vktype = VkImageType::VK_IMAGE_TYPE_2D;
 			break;
 		}
@@ -354,5 +332,70 @@ namespace RHI
 			usage |= is_render_target ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0;
 		}
 		return usage;
+	}
+
+	auto ash_image_view_type_to_vk(const AshImageViewType& type) -> VkImageViewType
+	{
+		VkImageViewType vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_1D;
+		switch (type)
+		{
+		case ASH_IMAGE_VIEW_TYPE_1D:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_1D;
+			break;
+		case ASH_IMAGE_VIEW_TYPE_2D:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_2D;
+			break;
+		case ASH_IMAGE_VIEW_TYPE_3D:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_3D;
+			break;
+		case ASH_IMAGE_VIEW_TYPE_CUBE:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_CUBE;
+			break;
+		case ASH_IMAGE_VIEW_TYPE_1D_ARRAY:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+			break;
+		case ASH_IMAGE_VIEW_TYPE_2D_ARRAY:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+			break;
+		case ASH_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+			break;
+		default:
+			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_2D;
+			break;
+		}
+		return vktype;
+	}
+	auto ash_image_type_to_image_view_type(AshImageType& type) -> AshImageViewType
+	{
+		AshImageViewType oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_1D;
+		switch (type)
+		{
+		case Ash_Texture1D:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_1D;
+			break;
+		case Ash_Texture2D:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_2D;
+			break;
+		case Ash_Texture3D:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_3D;
+			break;
+		case Ash_TextureCube:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_CUBE;
+			break;
+		case Ash_Texture_1D_Array:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_1D_ARRAY;
+			break;
+		case Ash_Texture_2D_Array:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_2D_ARRAY;
+			break;
+		case Ash_Texture_Cube_Array:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+			break;
+		default:
+			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_2D;
+			break;
+		}
+		return oType;
 	}
 };
