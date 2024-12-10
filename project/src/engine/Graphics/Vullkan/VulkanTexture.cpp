@@ -222,6 +222,7 @@ namespace RHI
 	/********************* vulkan texture view *****************************/
 	VulkanTextureView::VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> _parentTexture)
 	{
+		HLogInfo("creating texture view : {} ...", ci.name);
 		parentTexture = std::weak_ptr<Texture>(_parentTexture);
 		viewType = ci.view_type;
 		VkImageViewCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
