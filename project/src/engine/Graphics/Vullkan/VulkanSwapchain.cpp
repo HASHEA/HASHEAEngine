@@ -7,6 +7,7 @@
 #include <GLFW/glfw3.h> // must include after include vulkan because some key macro should be pre defined
 #include <GLFW/glfw3native.h>
 #include "VulkanTexture.h"
+#include "VulkanSampler.h"
 namespace RHI
 {
 	VulkanSwapChain::VulkanSwapChain()
@@ -53,6 +54,9 @@ namespace RHI
 		tc.type = Ash_Texture2D;
 		tc.format = ASH_FORMAT_R8G8B8A8_SRGB;
 		auto testVKTexture = VulkanTexture::create(tc);
+		SamplerCreation sc{};
+		sc.name = "test sampler";
+		auto testSampler = VulkanSampler::create(sc);
 		return HS_OK;
 	}
 

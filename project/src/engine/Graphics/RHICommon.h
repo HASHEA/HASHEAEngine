@@ -3,7 +3,59 @@
 #include "Base/hcore.h"
 namespace RHI
 {
-	
+	enum ASH_API AshImageType {
+		Ash_Texture1D, Ash_Texture2D, Ash_Texture3D, Ash_TextureCube, Ash_Texture_1D_Array, Ash_Texture_2D_Array, Ash_Texture_Cube_Array, Count
+	};
+
+	namespace AshResourceUsageType {
+		enum Enum {
+			Immutable, Dynamic, Stream, Staging, Readback, Count
+		};
+
+		enum Mask {
+			Immutable_mask = 1 << 0, Dynamic_mask = 1 << 1, Stream_mask = 1 << 2, Staging_mask = 1 << 3, Readback_mask = 1 << 4, Count_mask = 1 << 5
+		};
+
+		static const char* s_value_names[] = {
+			"Immutable", "Dynamic", "Stream", "Staging", "Count"
+		};
+
+		static const char* to_string(Enum e) {
+			return ((uint32_t)e < Enum::Count ? s_value_names[(int)e] : "unsupported");
+		}
+	} // namespace ResourceUsageType
+
+	namespace AshTextureFlags {
+		enum Enum {
+			Default, RenderTarget, Compute, Sparse, ShadingRate, Count
+		};
+
+		enum Mask {
+			Default_mask = 1 << 0, RenderTarget_mask = 1 << 1, Compute_mask = 1 << 2, Sparse_mask = 1 << 3, ShadingRate_mask = 1 << 4
+		};
+
+		static const char* s_value_names[] = {
+			"Default", "RenderTarget", "Compute", "Count"
+		};
+
+		static const char* to_string(Enum e) {
+			return ((uint32_t)e < Enum::Count ? s_value_names[(int)e] : "unsupported");
+		}
+
+	} // namespace TextureFlags
+
+	typedef enum AshImageViewType {
+		ASH_IMAGE_VIEW_TYPE_1D = 0,
+		ASH_IMAGE_VIEW_TYPE_2D = 1,
+		ASH_IMAGE_VIEW_TYPE_3D = 2,
+		ASH_IMAGE_VIEW_TYPE_CUBE = 3,
+		ASH_IMAGE_VIEW_TYPE_1D_ARRAY = 4,
+		ASH_IMAGE_VIEW_TYPE_2D_ARRAY = 5,
+		ASH_IMAGE_VIEW_TYPE_CUBE_ARRAY = 6,
+		ASH_IMAGE_VIEW_TYPE_MAX_ENUM = 0x7FFFFFFF
+	} AshImageViewType;
+
+
 
 	typedef enum AshFormat {
 		ASH_FORMAT_UNDEFINED = 0,
@@ -87,7 +139,79 @@ namespace RHI
 		ASH_PRESENT_MODE_COUNT
 	} AshPresentMode;
 
+	typedef enum AshSamplerAddressMode {
+		ASH_SAMPLER_ADDRESS_MODE_REPEAT = 0,
+		ASH_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT = 1,
+		ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = 2,
+		ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER = 3,
+		ASH_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE = 4,
+		ASH_SAMPLER_ADDRESS_MODE_MAX_ENUM = 0x7FFFFFFF
+	} AshSamplerAddressMode;
 
+	typedef enum AshBorderColor {
+		ASH_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK = 0,
+		ASH_BORDER_COLOR_INT_TRANSPARENT_BLACK = 1,
+		ASH_BORDER_COLOR_FLOAT_OPAQUE_BLACK = 2,
+		ASH_BORDER_COLOR_INT_OPAQUE_BLACK = 3,
+		ASH_BORDER_COLOR_FLOAT_OPAQUE_WHITE = 4,
+		ASH_BORDER_COLOR_INT_OPAQUE_WHITE = 5,
+		ASH_BORDER_COLOR_FLOAT_CUSTOM_EXT = 1000287003,
+		ASH_BORDER_COLOR_INT_CUSTOM_EXT = 1000287004,
+		ASH_BORDER_COLOR_MAX_ENUM = 0x7FFFFFFF
+	} AshBorderColor;
+
+	typedef enum AshFilter {
+		ASH_FILTER_NEAREST = 0,
+		ASH_FILTER_LINEAR = 1,
+		ASH_FILTER_CUBIC_EXT = 1000015000,//only for min max
+		ASH_FILTER_MAX_ENUM = 0x7FFFFFFF
+	} AshFilter;
+
+	typedef enum AshCompareOp {
+		ASH_COMPARE_OP_NEVER = 0,
+		ASH_COMPARE_OP_LESS = 1,
+		ASH_COMPARE_OP_EQUAL = 2,
+		ASH_COMPARE_OP_LESS_OR_EQUAL = 3,
+		ASH_COMPARE_OP_GREATER = 4,
+		ASH_COMPARE_OP_NOT_EQUAL = 5,
+		ASH_COMPARE_OP_GREATER_OR_EQUAL = 6,
+		ASH_COMPARE_OP_ALWAYS = 7,
+		ASH_COMPARE_OP_MAX_ENUM = 0x7FFFFFFF
+	} AshCompareOp;
+
+	typedef enum AshSamplerReductionMode {
+		ASH_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE = 0,
+		ASH_SAMPLER_REDUCTION_MODE_MIN = 1,
+		ASH_SAMPLER_REDUCTION_MODE_MAX = 2,
+		ASH_SAMPLER_REDUCTION_MODE_MAX_ENUM = 0x7FFFFFFF
+	} AshSamplerReductionMode;
+
+	typedef enum AshBufferUsageFlagBits {
+		ASH_BUFFER_USAGE_TRANSFER_SRC_BIT = 0x00000001,
+		ASH_BUFFER_USAGE_TRANSFER_DST_BIT = 0x00000002,
+		ASH_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT = 0x00000004,
+		ASH_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT = 0x00000008,
+		ASH_BUFFER_USAGE_UNIFORM_BUFFER_BIT = 0x00000010,
+		ASH_BUFFER_USAGE_STORAGE_BUFFER_BIT = 0x00000020,
+		ASH_BUFFER_USAGE_INDEX_BUFFER_BIT = 0x00000040,
+		ASH_BUFFER_USAGE_VERTEX_BUFFER_BIT = 0x00000080,
+		ASH_BUFFER_USAGE_INDIRECT_BUFFER_BIT = 0x00000100,
+		ASH_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 0x00020000,
+		ASH_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR = 0x00002000,
+		ASH_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR = 0x00004000,
+		ASH_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT = 0x00000800,
+		ASH_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT = 0x00001000,
+		ASH_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT = 0x00000200,
+		ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR = 0x00080000,
+		ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR = 0x00100000,
+		ASH_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR = 0x00000400,
+		ASH_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT = 0x00200000,
+		ASH_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT = 0x00400000,
+		ASH_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT = 0x04000000,
+		ASH_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT = 0x00800000,
+		ASH_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT = 0x01000000,
+		ASH_BUFFER_USAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+	} AshBufferUsageFlagBits;
 }
 
 

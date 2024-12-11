@@ -915,7 +915,8 @@ namespace RHI
 			return result;
 		}
 
-
+		result = HS_OK;
+		return result;
 	}
 	auto VulkanContext::shutdown() -> HS_Result
 	{

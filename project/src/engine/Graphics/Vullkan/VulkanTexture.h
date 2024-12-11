@@ -64,8 +64,6 @@ namespace RHI
 
 		auto get_default_unordered_access_view() -> std::shared_ptr<TextureView> override;
 
-		auto get_default_sampler() -> std::shared_ptr<Sampler> override;
-
 		auto is_cube_map() -> bool override;
 
 		auto is_sparse() -> bool override;
@@ -108,10 +106,6 @@ namespace RHI
 			return ash_image_type_to_vk(type);
 		}
 
-		inline auto get_default_vk_sampler() -> std::shared_ptr<VulkanSampler>
-		{
-			return defaultVulkanSampler;
-		}
 		inline auto get_vma_allocation()
 		{
 			return vmaAllocation;
@@ -121,23 +115,22 @@ namespace RHI
 			return aliasTexture;
 		}
 	private:
-		const char*									name					= nullptr;
-		uint16_t									width					= 1;
-		uint16_t									height					= 1;
-		uint16_t									depth					= 1;
-		uint16_t									layerCount				= 0;
-		uint8_t										mipmaps					= 1;
-		uint8_t										render_target			= 0;
-		uint8_t										compute_access			= 0;
-		AshFormat									format					= ASH_FORMAT_UNDEFINED;
-		AshImageType								type					= AshImageType::Ash_Texture2D;
-		bool										sparse					= false;
-		bool										cube					= false;
-		VkImage										vkImage					= VK_NULL_HANDLE;
-		VmaAllocation								vmaAllocation			= VK_NULL_HANDLE;
+		const char*									name							= nullptr;
+		uint16_t									width							= 1;
+		uint16_t									height							= 1;
+		uint16_t									depth							= 1;
+		uint16_t									layerCount						= 0;
+		uint8_t										mipmaps							= 1;
+		uint8_t										render_target					= 0;
+		uint8_t										compute_access					= 0;
+		AshFormat									format							= ASH_FORMAT_UNDEFINED;
+		AshImageType								type							= AshImageType::Ash_Texture2D;
+		bool										sparse							= false;
+		bool										cube							= false;
+		VkImage										vkImage							= VK_NULL_HANDLE;
+		VmaAllocation								vmaAllocation					= VK_NULL_HANDLE;
 		std::shared_ptr<VulkanTextureView>			defaultVulkanTextureView		= nullptr;
-		std::shared_ptr<VulkanSampler>				defaultVulkanSampler			= nullptr;
-		std::shared_ptr<VulkanTexture>				aliasTexture			= nullptr;
+		std::shared_ptr<VulkanTexture>				aliasTexture					= nullptr;
 	
 	};
 }

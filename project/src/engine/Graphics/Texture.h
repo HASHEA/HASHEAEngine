@@ -22,7 +22,7 @@ namespace RHI
 	{
 	public:
 		TextureView() = default;
-		~TextureView() {};
+		virtual ~TextureView() {};
 	public:
 		/*virtual auto get_render_target_view() -> void* = 0;*/
 		virtual auto get_parent_texture() -> std::shared_ptr<Texture> = 0;
@@ -72,7 +72,6 @@ namespace RHI
 		virtual auto get_default_render_target_view() -> std::shared_ptr<TextureView> = 0;
 		virtual auto get_default_shader_resource_view() -> std::shared_ptr<TextureView> = 0;
 		virtual auto get_default_unordered_access_view() -> std::shared_ptr<TextureView> = 0;
-		virtual auto get_default_sampler() -> std::shared_ptr<Sampler> = 0;
 		virtual auto is_cube_map() -> bool = 0;
 		virtual auto is_sparse() -> bool = 0;
 		virtual auto get_format() -> AshFormat = 0;

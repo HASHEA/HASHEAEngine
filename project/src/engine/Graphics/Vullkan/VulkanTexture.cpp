@@ -72,10 +72,6 @@ namespace RHI
 		{
 			defaultVulkanTextureView.reset();
 		}
-		if (defaultVulkanSampler)
-		{
-			defaultVulkanSampler.reset();
-		}
 		if (vkImage != VK_NULL_HANDLE)
 		{
 			if (this->aliasTexture == nullptr)
@@ -212,13 +208,6 @@ namespace RHI
 		desc.type = type;
 	}
 	
-	auto VulkanTexture::get_default_sampler() -> std::shared_ptr <Sampler>
-	{
-		return defaultVulkanSampler;
-	}
-
-
-
 	/********************* vulkan texture view *****************************/
 	VulkanTextureView::VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> _parentTexture)
 	{
