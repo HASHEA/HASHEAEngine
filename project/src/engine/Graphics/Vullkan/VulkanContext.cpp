@@ -5,6 +5,7 @@
 #include "VulkanCommandBuffer.h"
 #include "VulkanFence.h"
 #include "GpuProfiler.h"
+#include "VulkanBuffer.h"
 #include <vector>
 namespace RHI
 {
@@ -862,6 +863,7 @@ namespace RHI
 		return HS_OK;
 	}
 
+
 	auto VulkanContext::init(void* config) -> HS_Result
 	{	
 		GraphicsContextInitConfig vkConfig = *(GraphicsContextInitConfig*)config;
@@ -935,6 +937,61 @@ namespace RHI
 
 		return HS_OK;
 	}
+
+	/********************************************************** RHI INTERFACE ******************************************************************************************************/
+
+	auto VulkanContext::map_buffer(const MapBufferParameters& params) -> void*
+	{
+		auto vulkanBuffer = std::dynamic_pointer_cast<VulkanBuffer>(params.buffer);
+		if (vulkanBuffer == nullptr)
+		{
+			return nullptr;
+		}
+		auto mappedData = vulkanBuffer->get_mapped_data();
+		if (mappedData != nullptr)
+		{
+			HLogWarning("trying to map a mapped buffer or persistent buffer, do nothing and return the mapped data !");
+			return mappedData;
+		}
+		if (params.buffer->is_dynamic())//dynamic buffer
+		{
+			return global_dynamic_buffer->dynamic_allocate_buffer(vulkanBuffer, params.size == 0? params.buffer->get_size() : params.size, uboAlignment);
+		}
+		void* data = nullptr;
+		vmaMapMemory(vmaAllocator, vulkanBuffer->get_vma_allocation(),&data);
+		return data;
+	}
+
+	auto VulkanContext::unmap_buffer(const MapBufferParameters& params) -> void*
+	{
+		return nullptr;
+	}
+
+	auto VulkanContext::update_buffer_data(const MapBufferParameters& params, void* data) -> void
+	{
+	}
+
+	auto VulkanContext::create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer>
+	{
+		return std::shared_ptr<Buffer>();
+	}
+
+	auto VulkanContext::create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture>
+	{
+		return std::shared_ptr<Texture>();
+	}
+
+	auto VulkanContext::create_view(const TextureViewCreation& ci) -> std::shared_ptr<TextureView>
+	{
+		return std::shared_ptr<TextureView>();
+	}
+
+	auto VulkanContext::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
+	{
+		return std::shared_ptr<Sampler>();
+	}
+
+	/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
 	VulkanContext* VulkanContext::instance = nullptr;
 };

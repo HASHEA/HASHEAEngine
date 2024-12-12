@@ -9,11 +9,14 @@ namespace RHI
 	class Texture;
 	class TextureView;
 	class Sampler;
+	class Buffer;
 
 
 	struct SamplerCreation;
 	struct TextureCreation;
 	struct TextureViewCreation;
+	struct BufferCreation;
+	struct MapBufferParameters;
 	class RHIResource 
 	{
 	public:

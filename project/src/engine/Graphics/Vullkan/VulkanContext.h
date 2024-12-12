@@ -7,6 +7,7 @@
 #include "Graphics/GraphicsContext.h"
 #include "Base/ds/harray.hpp"
 #include <vector>
+#include <memory>
 using namespace AshEngine;
 namespace RHI
 {
@@ -20,6 +21,8 @@ namespace RHI
 	class VulkanCommandBuffer;
 	class VulkanCommandPool;
 	class VulkanFence;
+	class VulkanBuffer;
+	class VulkanDynamicBuffer;
 	struct VulkanCommandBufferManager;
 	struct GPUTimeQuery;
 	struct GpuTimeQueryTree;
@@ -90,6 +93,16 @@ namespace RHI
 			return vmaAllocator;
 		}
 		
+		inline auto get_global_dynamic_buffer_internal()
+		{
+			return global_dynamic_buffer;
+		}
+
+		inline auto get_global_dynamic_buffer()
+		{
+			return instance->get_global_dynamic_buffer_internal();
+		}
+
 		inline static const auto get_vulkan_device()
 		{
 			return instance->get_vulkan_device_internal();
@@ -131,7 +144,18 @@ namespace RHI
 		{
 			instance->set_resource_name_internal(type,handle,name);
 		}
-		
+	public:
+		/********************************************************** RHI INTERFACE ******************************************************************************************************/
+
+		auto map_buffer(const MapBufferParameters& params) -> void* override;
+		auto unmap_buffer(const MapBufferParameters& params) -> void* override;
+		auto update_buffer_data(const MapBufferParameters& params, void* data) -> void override;
+		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
+		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
+		auto create_view(const TextureViewCreation& ci) -> std::shared_ptr<TextureView> override;
+		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
+		/********************************************************** RHI INTERFACE ******************************************************************************************************/
+
 	private:
 		StringView stringBuffer{};
 	//vk handles
@@ -170,8 +194,7 @@ namespace RHI
 		VkPhysicalDeviceRayQueryFeaturesKHR             rayQueryFeatures{};
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
 
-	private:
-		
+	private:		
 		VkAllocationCallbacks*			vulkanAllocationCallbacks			= nullptr;
 		VkInstance                      vulkanInstance						= VK_NULL_HANDLE;
 		VkDebugUtilsMessengerEXT        vulkanDebugUtilMessenger			= VK_NULL_HANDLE;
@@ -200,18 +223,19 @@ namespace RHI
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
-	private:
-	
-		float                           gpuTimestampFrequency = 0.f;
-		size_t                          uboAlignment = 256;
-		size_t                          ssboAlignemnt = 256;
-		uint32_t                        subgroupSize = 32;
-		uint32_t                        maxFramebufferLayers = 1;
-		VkExtent2D                      minFragmentShadingRateTexelSize{};
-
-
+private:
+		float									gpuTimestampFrequency = 0.f;
+		size_t									uboAlignment = 256;
+		size_t									ssboAlignemnt = 256;
+		uint32_t								subgroupSize = 32;
+		uint32_t								maxFramebufferLayers = 1;
+		VkExtent2D								minFragmentShadingRateTexelSize{};
+		std::shared_ptr<VulkanDynamicBuffer>	global_dynamic_buffer = nullptr;
+private:
 		static VulkanContext* instance;
-	};
+
+		
+};
 
 
 
