@@ -318,6 +318,202 @@ namespace RHI
 		}
 		return vkFormat;
 	}
+
+	inline auto vk_format_to_ash(const VkFormat& format) -> AshFormat
+	{
+		AshFormat ashFormat = AshFormat::ASH_FORMAT_UNDEFINED;
+		switch (format)
+		{
+		case VK_FORMAT_UNDEFINED:
+			ashFormat = AshFormat::ASH_FORMAT_UNDEFINED;
+			break;
+		case VK_FORMAT_R8_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R8_UNORM;
+			break;
+		case VK_FORMAT_R8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R8_UINT;
+			break;
+		case VK_FORMAT_R8_SRGB:
+			ashFormat = AshFormat::ASH_FORMAT_R8_SRGB;
+			break;
+		case VK_FORMAT_R8G8_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8_UNORM;
+			break;
+		case VK_FORMAT_R8G8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8_UINT;
+			break;
+		case VK_FORMAT_R8G8_SRGB:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8_SRGB;
+			break;
+		case VK_FORMAT_R8G8B8_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8B8_UNORM;
+			break;
+		case VK_FORMAT_R8G8B8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8B8_UINT;
+			break;
+		case VK_FORMAT_R8G8B8_SRGB:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8B8_SRGB;
+			break;
+		case VK_FORMAT_B8G8R8_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_B8G8R8_UNORM;
+			break;
+		case VK_FORMAT_B8G8R8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_B8G8R8_UINT;
+			break;
+		case VK_FORMAT_B8G8R8_SRGB:
+			ashFormat = AshFormat::ASH_FORMAT_B8G8R8_SRGB;
+			break;
+		case VK_FORMAT_R8G8B8A8_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8B8A8_UNORM;
+			break;
+		case VK_FORMAT_R8G8B8A8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8B8A8_UINT;
+			break;
+		case VK_FORMAT_R8G8B8A8_SRGB:
+			ashFormat = AshFormat::ASH_FORMAT_R8G8B8A8_SRGB;
+			break;
+		case VK_FORMAT_B8G8R8A8_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_B8G8R8A8_UNORM;
+			break;
+		case VK_FORMAT_B8G8R8A8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_B8G8R8A8_UINT;
+			break;
+		case VK_FORMAT_B8G8R8A8_SRGB:
+			ashFormat = AshFormat::ASH_FORMAT_B8G8R8A8_SRGB;
+			break;
+		case VK_FORMAT_R16_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R16_UNORM;
+			break;
+		case VK_FORMAT_R16_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R16_UINT;
+			break;
+		case VK_FORMAT_R16_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R16_SFLOAT;
+			break;
+		case VK_FORMAT_R16G16_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16_UNORM;
+			break;
+		case VK_FORMAT_R16G16_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16_UINT;
+			break;
+		case VK_FORMAT_R16G16_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16_SFLOAT;
+			break;
+		case VK_FORMAT_R16G16B16_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16B16_UNORM;
+			break;
+		case VK_FORMAT_R16G16B16_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16B16_UINT;
+			break;
+		case VK_FORMAT_R16G16B16_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16B16_SFLOAT;
+			break;
+		case VK_FORMAT_R16G16B16A16_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16B16A16_UNORM;
+			break;
+		case VK_FORMAT_R16G16B16A16_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16B16A16_UINT;
+			break;
+		case VK_FORMAT_R16G16B16A16_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R16G16B16A16_SFLOAT;
+			break;
+		case VK_FORMAT_R32_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32_UINT;
+			break;
+		case VK_FORMAT_R32_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32_SINT;
+			break;
+		case VK_FORMAT_R32_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R32_SFLOAT;
+			break;
+		case VK_FORMAT_R32G32_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32_UINT;
+			break;
+		case VK_FORMAT_R32G32_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32_SINT;
+			break;
+		case VK_FORMAT_R32G32_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32_SFLOAT;
+			break;
+		case VK_FORMAT_R32G32B32_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32B32_UINT;
+			break;
+		case VK_FORMAT_R32G32B32_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32B32_SINT;
+			break;
+		case VK_FORMAT_R32G32B32_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32B32_SFLOAT;
+			break;
+		case VK_FORMAT_R32G32B32A32_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32B32A32_UINT;
+			break;
+		case VK_FORMAT_R32G32B32A32_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32B32A32_SINT;
+			break;
+		case VK_FORMAT_R32G32B32A32_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R32G32B32A32_SFLOAT;
+			break;
+		case VK_FORMAT_R64_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64_UINT;
+			break;
+		case VK_FORMAT_R64_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64_SINT;
+			break;
+		case VK_FORMAT_R64_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R64_SFLOAT;
+			break;
+		case VK_FORMAT_R64G64_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64_UINT;
+			break;
+		case VK_FORMAT_R64G64_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64_SINT;
+			break;
+		case VK_FORMAT_R64G64_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64_SFLOAT;
+			break;
+		case VK_FORMAT_R64G64B64_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64B64_UINT;
+			break;
+		case VK_FORMAT_R64G64B64_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64B64_SINT;
+			break;
+		case VK_FORMAT_R64G64B64_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64B64_SFLOAT;
+			break;
+		case VK_FORMAT_R64G64B64A64_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64B64A64_UINT;
+			break;
+		case VK_FORMAT_R64G64B64A64_SINT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64B64A64_SINT;
+			break;
+		case VK_FORMAT_R64G64B64A64_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_R64G64B64A64_SFLOAT;
+			break;
+		case VK_FORMAT_D16_UNORM:
+			ashFormat = AshFormat::ASH_FORMAT_D16_UNORM;
+			break;
+		case VK_FORMAT_D32_SFLOAT:
+			ashFormat = AshFormat::ASH_FORMAT_D32_SFLOAT;
+			break;
+		case VK_FORMAT_S8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_S8_UINT;
+			break;
+		case VK_FORMAT_D16_UNORM_S8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_D16_UNORM_S8_UINT;
+			break;
+		case VK_FORMAT_D24_UNORM_S8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_D24_UNORM_S8_UINT;
+			break;
+		case VK_FORMAT_D32_SFLOAT_S8_UINT:
+			ashFormat = AshFormat::ASH_FORMAT_D32_SFLOAT_S8_UINT;
+			break;
+		default:
+			ashFormat = AshFormat::ASH_FORMAT_UNDEFINED;
+			break;
+		}
+		return ashFormat;
+	}
+
 	inline auto ash_color_space_to_vk(const AshColorSpace& colorSpace) -> VkColorSpaceKHR
 	{
 		VkColorSpaceKHR vkColorSpace = VkColorSpaceKHR::VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;

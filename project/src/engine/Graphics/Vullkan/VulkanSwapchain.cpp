@@ -10,15 +10,15 @@
 #include "VulkanSampler.h"
 namespace RHI
 {
-	VulkanSwapChain::VulkanSwapChain()
+	VulkanSwapchain::VulkanSwapchain()
 	{
 	}
 
-	VulkanSwapChain::~VulkanSwapChain()
+	VulkanSwapchain::~VulkanSwapchain()
 	{
 	}
 
-	auto VulkanSwapChain::init(void* _config) -> HS_Result 
+	auto VulkanSwapchain::init(void* _config) -> HS_Result 
 	{
 		SwapChainInitConfig config = *(SwapChainInitConfig*)_config;
 		width = config.width;
@@ -60,21 +60,24 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanSwapChain::shutdown() -> HS_Result 
+	auto VulkanSwapchain::shutdown() -> HS_Result 
 	{
-		vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(),swapChain, VulkanContext::get_vulkan_allocation_callbacks());
-		vkDestroySurfaceKHR(VulkanContext::get_vulkan_instance(),surface, VulkanContext::get_vulkan_allocation_callbacks());
+		_clean_swapchain();
+		if (surface != VK_NULL_HANDLE)
+		{
+			vkDestroySurfaceKHR(VulkanContext::get_vulkan_instance(), surface, VulkanContext::get_vulkan_allocation_callbacks());
+		}
 		return HS_OK;
 	}
 
-	auto VulkanSwapChain::_create_surface(GLFWwindow* window) -> HS_Result
+	auto VulkanSwapchain::_create_surface(GLFWwindow* window) -> HS_Result
 	{
 		auto instance = VulkanContext::get_vulkan_instance();
 		VK_CHECK_RESULT(glfwCreateWindowSurface(instance, window, VulkanContext::get_vulkan_allocation_callbacks(), &surface));
 		return HS_OK;
 	}
 
-	auto VulkanSwapChain::_create_swapchain(SwapChainInitConfig& config) -> HS_Result
+	auto VulkanSwapchain::_create_swapchain(SwapChainInitConfig& config) -> HS_Result
 	{
 		SwapChainSupportDetails swapChainSupport{};
 		_query_swapchain_support(swapChainSupport);
@@ -142,7 +145,7 @@ namespace RHI
 		createInfo.imageColorSpace = surfaceFormat.colorSpace;
 		createInfo.imageExtent = extent;
 		createInfo.imageArrayLayers = 1;
-		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		createInfo.queueFamilyIndexCount = 0; // Optional
 		createInfo.pQueueFamilyIndices = nullptr; // Optional
@@ -153,10 +156,36 @@ namespace RHI
 		createInfo.oldSwapchain = VK_NULL_HANDLE;
 		auto device = VulkanContext::get_vulkan_device();
 		VK_CHECK_RESULT(vkCreateSwapchainKHR(device, &createInfo, VulkanContext::get_vulkan_allocation_callbacks(), &swapChain));
+
+		std::vector<VkImage> vecVkImage;
+		uint32_t imageCount;
+		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+		vecVkImage.resize(imageCount);
+		swapChainImages.init(nullptr, imageCount, 0);
+		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, vecVkImage.data());
+		StringBuffer str;
+		str.init(128, nullptr);
+		for (size_t i = 0; i < imageCount; i++)
+		{
+			str.append_f("swapchain buffer [%u] ",i);
+			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
+			texture->width = width;
+			texture->height = height;
+			texture->aliasTexture = nullptr;
+			texture->format = vk_format_to_ash(surfaceFormat.format);
+			texture->render_target = 1;
+			texture->name = str.get_text(0);
+			texture->swapchain_texture = true;
+			texture->vkImage = vecVkImage[i];
+			swapChainImages.push_back(texture);
+			texture->init();
+			str.clear();
+		}
+		str.shutdown();
 		return HS_OK;
 	}
 
-	auto VulkanSwapChain::_query_swapchain_support(SwapChainSupportDetails& swapChainSupport) -> void
+	auto VulkanSwapchain::_query_swapchain_support(SwapChainSupportDetails& swapChainSupport) -> void
 	{
 		auto device = VulkanContext::get_vulkan_physical_device();
 		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &swapChainSupport.capabilities);
@@ -177,7 +206,7 @@ namespace RHI
 		}
 	}
 
-	auto VulkanSwapChain::_choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities) -> HS_Result
+	auto VulkanSwapchain::_choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities) -> HS_Result
 	{
 		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
 			extent = capabilities.currentExtent;
@@ -190,6 +219,30 @@ namespace RHI
 			actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
 			actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 			extent = actualExtent;
+		}
+		return HS_OK;
+	}
+
+	auto VulkanSwapchain::_recreate_swapchain()
+	{
+		auto device = VulkanContext::get_vulkan_device();
+		vkDeviceWaitIdle(device);
+
+		//_create_swapchain();
+	}
+
+	auto VulkanSwapchain::_clean_swapchain() ->HS_Result
+	{
+		auto device = VulkanContext::get_vulkan_device();
+
+		for (size_t i = 0; i < swapChainImages.size(); i++)
+		{
+			swapChainImages[i].reset();
+		}
+		swapChainImages.shutdown();
+		if (swapChain != VK_NULL_HANDLE)
+		{
+			vkDestroySwapchainKHR(device, swapChain, VulkanContext::get_vulkan_allocation_callbacks());
 		}
 		return HS_OK;
 	}

@@ -121,7 +121,7 @@ namespace AshEngine
         if (m_uSize >= m_uCapacity) {
             ret = grow(m_uCapacity + 1);
         }
-
+        memset(m_pData + m_uSize, 0, static_cast<size_t>(sizeof(T)));
         m_pData[m_uSize++] = element;
         return HS_OK;
     }

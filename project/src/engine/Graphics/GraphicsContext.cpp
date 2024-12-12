@@ -20,7 +20,7 @@ namespace RHI {
 	Swapchain* Swapchain::create()
 	{
 #ifdef ASH_VULKAN
-		return Ash_New<VulkanSwapChain>();
+		return Ash_New<VulkanSwapchain>();
 #else
 		H_ASSERTLOG(false, "Unsupported Api!");
 #endif

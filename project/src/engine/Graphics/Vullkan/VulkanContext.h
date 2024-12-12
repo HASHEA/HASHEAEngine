@@ -11,7 +11,7 @@
 using namespace AshEngine;
 namespace RHI
 {
-	constexpr uint32_t MAX_SWAPCHAIN_BUFFERS = 3;
+	constexpr uint32_t		  MAX_SWAPCHAIN_BUFFERS = 3;
 	constexpr uint32_t        k_bindless_texture_binding = 10;
 	constexpr uint32_t        k_bindless_image_binding = 11;
 	constexpr uint32_t        k_max_bindless_resources = 1024;

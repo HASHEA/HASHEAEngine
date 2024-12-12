@@ -72,7 +72,7 @@ namespace RHI
 		{
 			defaultVulkanTextureView.reset();
 		}
-		if (vkImage != VK_NULL_HANDLE)
+		if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
 		{
 			if (this->aliasTexture == nullptr)
 			{
@@ -92,7 +92,10 @@ namespace RHI
 			}
 		}
 		vkImage = VK_NULL_HANDLE;
-		aliasTexture.reset();
+		if (aliasTexture != nullptr)
+		{
+			aliasTexture.reset();
+		}
 	}
 
 	auto VulkanTexture::create(const TextureCreation& ci) -> std::shared_ptr<VulkanTexture>

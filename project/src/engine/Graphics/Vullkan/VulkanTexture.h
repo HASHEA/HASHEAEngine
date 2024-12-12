@@ -45,7 +45,9 @@ namespace RHI
 	};
 	class VulkanTexture : public Texture
 	{
+
 	public:
+		VulkanTexture() = default;
 		VulkanTexture(const TextureCreation& ci);
 		~VulkanTexture();
 		static auto create(const TextureCreation& ci) -> std::shared_ptr<VulkanTexture>;
@@ -114,12 +116,17 @@ namespace RHI
 		{
 			return aliasTexture;
 		}
+
+		inline auto is_swapchain_image() -> bool
+		{
+			return swapchain_texture;
+		}
 	private:
 		const char*									name							= nullptr;
 		uint16_t									width							= 1;
 		uint16_t									height							= 1;
 		uint16_t									depth							= 1;
-		uint16_t									layerCount						= 0;
+		uint16_t									layerCount						= 1;
 		uint8_t										mipmaps							= 1;
 		uint8_t										render_target					= 0;
 		uint8_t										compute_access					= 0;
@@ -127,10 +134,12 @@ namespace RHI
 		AshImageType								type							= AshImageType::Ash_Texture2D;
 		bool										sparse							= false;
 		bool										cube							= false;
+		bool										swapchain_texture				= false;
 		VkImage										vkImage							= VK_NULL_HANDLE;
 		VmaAllocation								vmaAllocation					= VK_NULL_HANDLE;
 		std::shared_ptr<VulkanTextureView>			defaultVulkanTextureView		= nullptr;
 		std::shared_ptr<VulkanTexture>				aliasTexture					= nullptr;
 	
+		friend class VulkanSwapchain;
 	};
 }
