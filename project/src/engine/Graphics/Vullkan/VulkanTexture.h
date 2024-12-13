@@ -10,6 +10,7 @@ namespace RHI
 	public:
 		VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture);
 		~VulkanTextureView();
+		static auto create(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture)->std::shared_ptr<VulkanTextureView>;
 	public:
 		// from TextureView 
 		auto get_parent_texture() -> std::shared_ptr<Texture> override;

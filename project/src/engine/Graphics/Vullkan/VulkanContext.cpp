@@ -6,6 +6,8 @@
 #include "VulkanFence.h"
 #include "GpuProfiler.h"
 #include "VulkanBuffer.h"
+#include "VulkanTexture.h"
+#include "VulkanSampler.h"
 #include <vector>
 namespace RHI
 {
@@ -802,11 +804,19 @@ namespace RHI
 		//allocate commandbuffers
 		commandBufferRing = Ash_New<VulkanCommandBufferManager>();
 		commandBufferRing->init(numThread);
+		
 		return HS_OK;
 	}
 
 	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
 	{
+		//flush deletion queue
+		for (int i = 0; i < k_max_frames; i++)
+		{
+			delayed_deletion_queues[i].flush();
+		}
+		
+
 		commandBufferRing->shutdown();
 		Ash_Delete(nullptr,commandBufferRing);
 		Ash_Delete(nullptr,vulkanImmediateFence);
@@ -863,6 +873,11 @@ namespace RHI
 		return HS_OK;
 	}
 
+	auto VulkanContext::destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void
+	{
+		resource->immediate_deletion = true;
+		resource.reset();
+	}
 
 	auto VulkanContext::init(void* config) -> HS_Result
 	{	
@@ -870,6 +885,8 @@ namespace RHI
 		H_ASSERT(&vkConfig);
 		//load vulkan by volk;
 		VK_CHECK_RESULT(volkInitialize());
+		currentFrame = 0;
+
 		//create vkinstance
 		HS_Result result = _create_instance(vkConfig.addtionalExtensions);
 		if (HS_CHECK_FAILED(result))
@@ -922,6 +939,8 @@ namespace RHI
 	}
 	auto VulkanContext::shutdown() -> HS_Result
 	{
+		//wait idle
+		wait_idle();
 		//shutdown framepool and datas
 		_shutdown_frame_pool_and_data();
 		//shutdown descriptor pool
@@ -958,37 +977,58 @@ namespace RHI
 			return global_dynamic_buffer->dynamic_allocate_buffer(vulkanBuffer, params.size == 0? params.buffer->get_size() : params.size, uboAlignment);
 		}
 		void* data = nullptr;
-		vmaMapMemory(vmaAllocator, vulkanBuffer->get_vma_allocation(),&data);
+		VK_CHECK_RESULT(vmaMapMemory(vmaAllocator, vulkanBuffer->get_vma_allocation(), &data));
 		return data;
 	}
 
-	auto VulkanContext::unmap_buffer(const MapBufferParameters& params) -> void*
+	auto VulkanContext::unmap_buffer(const MapBufferParameters& params) -> void
 	{
-		return nullptr;
+		auto vulkanBuffer = std::dynamic_pointer_cast<VulkanBuffer>(params.buffer);
+		if (vulkanBuffer == nullptr)
+		{
+			return;
+		}
+		if (vulkanBuffer->is_dynamic())
+		{
+			return;// don't unmap a dynamic buffer
+		}
+		vmaUnmapMemory(vmaAllocator, vulkanBuffer->get_vma_allocation());
 	}
 
 	auto VulkanContext::update_buffer_data(const MapBufferParameters& params, void* data) -> void
 	{
+		void* memory = map_buffer(params);
+		H_ASSERT((params.offset + params.size) <= params.buffer->get_size());
+		if (memory != nullptr)
+		{
+			memory_copy((uint8_t*)memory + params.offset, data , params.size);
+		}
+		unmap_buffer(params);
 	}
 
 	auto VulkanContext::create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer>
 	{
-		return std::shared_ptr<Buffer>();
+		return VulkanBuffer::create(ci);
 	}
 
 	auto VulkanContext::create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture>
 	{
-		return std::shared_ptr<Texture>();
+		return VulkanTexture::create(ci);
 	}
 
-	auto VulkanContext::create_view(const TextureViewCreation& ci) -> std::shared_ptr<TextureView>
+	auto VulkanContext::create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
 	{
-		return std::shared_ptr<TextureView>();
+		return VulkanTextureView::create(ci, parentTexture);
 	}
 
 	auto VulkanContext::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
 	{
-		return std::shared_ptr<Sampler>();
+		return VulkanSampler::create(ci);
+	}
+
+	auto VulkanContext::wait_idle() -> void 
+	{
+		VK_CHECK_RESULT(vkDeviceWaitIdle(vulkanDevice));
 	}
 
 	/********************************************************** RHI INTERFACE ******************************************************************************************************/

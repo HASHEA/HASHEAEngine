@@ -6,6 +6,7 @@
 #include "Base/hbit.hpp"
 #include "Graphics/GraphicsContext.h"
 #include "Base/ds/harray.hpp"
+#include "Base/hcommandQueue.hpp"
 #include <vector>
 #include <memory>
 using namespace AshEngine;
@@ -28,6 +29,7 @@ namespace RHI
 	struct GpuTimeQueryTree;
 	struct GpuPipelineStatistics;
 	struct GPUTimeQueriesManager;
+	
 	//count = numThread * numFrame
 	struct FramePool
 	{
@@ -54,7 +56,6 @@ namespace RHI
 	public:
 		auto init(void* config) -> HS_Result override;
 		auto shutdown() -> HS_Result override;
-
 		VulkanContext() { instance = this; }
 		~VulkanContext() {}
 	public:
@@ -98,9 +99,19 @@ namespace RHI
 			return global_dynamic_buffer;
 		}
 
+		inline auto get_current_frame_deletion_queue_internal() -> DelayCommandQueue&
+		{
+			return delayed_deletion_queues[currentFrame];
+		}
+
 		inline auto get_global_dynamic_buffer()
 		{
 			return instance->get_global_dynamic_buffer_internal();
+		}
+
+		inline static auto get_current_frame_deletion_queue() -> DelayCommandQueue&
+		{
+			return instance->get_current_frame_deletion_queue_internal();
 		}
 
 		inline static const auto get_vulkan_device()
@@ -148,12 +159,16 @@ namespace RHI
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
 		auto map_buffer(const MapBufferParameters& params) -> void* override;
-		auto unmap_buffer(const MapBufferParameters& params) -> void* override;
+		auto unmap_buffer(const MapBufferParameters& params) -> void override;
 		auto update_buffer_data(const MapBufferParameters& params, void* data) -> void override;
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
-		auto create_view(const TextureViewCreation& ci) -> std::shared_ptr<TextureView> override;
+		auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
 		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
+		//for non immediately deletion, just call smartpoint.reset
+		auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void override;
+		auto wait_idle() -> void override;
+
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
 	private:
@@ -214,6 +229,7 @@ namespace RHI
 		Array<FramePool>				framePools{};
 		Array<FrameData>				frameDatas{};
 		Array<VulkanCommandBuffer>		commandBufferQueue{};
+		DelayCommandQueue				delayed_deletion_queues[k_max_frames];
 		VkSemaphore                     vulkanImageAcquiredSemaphore		= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanGraphicsSemaphore				= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanBindSemaphore					= VK_NULL_HANDLE;
@@ -231,10 +247,17 @@ private:
 		uint32_t								maxFramebufferLayers = 1;
 		VkExtent2D								minFragmentShadingRateTexelSize{};
 		std::shared_ptr<VulkanDynamicBuffer>	global_dynamic_buffer = nullptr;
+		uint32_t								currentFrame = UINT32_MAX;
 private:
 		static VulkanContext* instance;
 
 		
+
+
+
+
+		
+
 };
 
 

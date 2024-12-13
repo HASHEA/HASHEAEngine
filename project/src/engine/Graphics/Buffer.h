@@ -8,7 +8,7 @@ namespace RHI
 
 	struct MapBufferParameters {
 		std::shared_ptr<Buffer>     buffer	= nullptr;
-		/*uint32_t					offset	= 0;*/ // vma does not support offset mapping
+		uint32_t					offset	= 0; // vma does not support offset mapping
 		uint32_t					size	= 0;
 
 	}; // struct MapBufferParameters

@@ -68,33 +68,71 @@ namespace RHI
 
 	VulkanTexture::~VulkanTexture()
 	{
-		if (defaultVulkanTextureView)
-		{
-			defaultVulkanTextureView.reset();
-		}
-		if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
-		{
-			if (this->aliasTexture == nullptr)
+		
+		if (immediate_deletion)
+		{	
+			if (defaultVulkanTextureView != nullptr)
 			{
-				if (sparse)
+				defaultVulkanTextureView->immediate_deletion = true;
+				defaultVulkanTextureView.reset();
+			}
+			if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
+			{
+				if (this->aliasTexture == nullptr)
 				{
-					vkDestroyImage(VulkanContext::get_vulkan_device(), vkImage, VulkanContext::get_vulkan_allocation_callbacks());
+					if (sparse)
+					{
+						vkDestroyImage(VulkanContext::get_vulkan_device(), vkImage, VulkanContext::get_vulkan_allocation_callbacks());
+					}
+					else
+					{
+						vmaDestroyImage(VulkanContext::get_vma_allocator(), vkImage, vmaAllocation);
+					}
 				}
 				else
 				{
+					//vma allocation = 0 witch mean vma won't free memory for this alias image
 					vmaDestroyImage(VulkanContext::get_vma_allocator(), vkImage, vmaAllocation);
 				}
 			}
-			else
+			if (aliasTexture.use_count() == 1)
 			{
-				//vma allocation = 0 witch mean vma won't free memory for this alias image
-				vmaDestroyImage(VulkanContext::get_vma_allocator(), vkImage, vmaAllocation);
+				aliasTexture->immediate_deletion = true;
 			}
+			vkImage = VK_NULL_HANDLE;
 		}
-		vkImage = VK_NULL_HANDLE;
-		if (aliasTexture != nullptr)
+		else
 		{
-			aliasTexture.reset();
+			if (defaultVulkanTextureView != nullptr)
+			{
+				defaultVulkanTextureView.reset();
+			}
+			//push deletor into deletion queue
+			auto handle = this->vkImage;
+			bool isAlias = this->aliasTexture == nullptr;
+			bool isSparse = sparse;
+			auto alloc = vmaAllocation;
+			if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
+			{
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle,isAlias, isSparse, alloc]() {
+					if (!isAlias)
+					{
+						if (isSparse)
+						{
+							vkDestroyImage(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks());
+						}
+						else
+						{
+							vmaDestroyImage(VulkanContext::get_vma_allocator(), handle, alloc);
+						}
+					}
+					else
+					{
+						//vma allocation = 0 witch mean vma won't free memory for this alias image
+						vmaDestroyImage(VulkanContext::get_vma_allocator(), handle, alloc);
+					}
+					});
+			}
 		}
 	}
 
@@ -239,10 +277,26 @@ namespace RHI
 
 	VulkanTextureView::~VulkanTextureView()
 	{
-		if (vkImageView != VK_NULL_HANDLE)
+		if (immediate_deletion)
 		{
-			vkDestroyImageView(VulkanContext::get_vulkan_device(), vkImageView, VulkanContext::get_vulkan_allocation_callbacks());
+			if (vkImageView != VK_NULL_HANDLE)
+			{
+				vkDestroyImageView(VulkanContext::get_vulkan_device(), vkImageView, VulkanContext::get_vulkan_allocation_callbacks());
+			}
+		}	
+		else
+		{
+			auto handle = this->vkImageView;
+			if (handle != VK_NULL_HANDLE)
+			{
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {vkDestroyImageView(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
+			}		
 		}
+	}
+
+	auto VulkanTextureView::create(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<VulkanTextureView>
+	{
+		return Ash_New_Shared<VulkanTextureView>(ci, parentTexture);
 	}
 
 	auto VulkanTextureView::get_parent_texture() -> std::shared_ptr<Texture>

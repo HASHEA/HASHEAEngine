@@ -57,6 +57,7 @@ namespace RHI
 		SamplerCreation sc{};
 		sc.name = "test sampler";
 		auto testSampler = VulkanSampler::create(sc);
+		VulkanContext::get()->destroy_rhi_resource_Immediately(testSampler);
 		return HS_OK;
 	}
 

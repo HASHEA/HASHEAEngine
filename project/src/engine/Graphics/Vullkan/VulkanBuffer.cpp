@@ -46,6 +46,19 @@ namespace RHI
 	}
 	VulkanBuffer::~VulkanBuffer()
 	{
+		if (immediate_deletion)
+		{
+			vmaDestroyBuffer(VulkanContext::get_vma_allocator(), vkBuffer, vmaAllocation);
+		}
+		else
+		{
+
+		}
+		ready = false;
+	}
+	auto VulkanBuffer::create(const BufferCreation& ci) -> std::shared_ptr<VulkanBuffer>
+	{
+		return Ash_New_Shared<VulkanBuffer>(ci);
 	}
 	auto VulkanBuffer::get_size() -> uint32_t
 	{

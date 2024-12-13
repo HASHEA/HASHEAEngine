@@ -9,6 +9,7 @@ namespace RHI
 	public:
 		VulkanBuffer(const BufferCreation& ci);
 		virtual ~VulkanBuffer();
+		static auto create(const BufferCreation& ci) -> std::shared_ptr<VulkanBuffer>;
 	public:
 		//interfaces from Buffer 
 		auto get_size() -> uint32_t override;

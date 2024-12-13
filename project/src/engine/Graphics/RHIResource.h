@@ -22,6 +22,8 @@ namespace RHI
 	public:
 		RHIResource() = default;
 		virtual ~RHIResource() {};
+	public:
+		bool immediate_deletion = false;
 	};
 	class RHIView : public RHIResource
 	{
