@@ -71,6 +71,7 @@ namespace RHI
 		
 		if (immediate_deletion)
 		{	
+			HLogInfo("deleting texture : {} ...", name);
 			if (defaultVulkanTextureView != nullptr)
 			{
 				defaultVulkanTextureView->immediate_deletion = true;
@@ -112,9 +113,11 @@ namespace RHI
 			bool isAlias = this->aliasTexture == nullptr;
 			bool isSparse = sparse;
 			auto alloc = vmaAllocation;
+			auto sname = name;
 			if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
 			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle,isAlias, isSparse, alloc]() {
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle,isAlias, isSparse, alloc, sname]() {
+					HLogInfo("deleting texture : {} ...", sname);
 					if (!isAlias)
 					{
 						if (isSparse)
@@ -253,6 +256,7 @@ namespace RHI
 	VulkanTextureView::VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> _parentTexture)
 	{
 		HLogInfo("creating texture view : {} ...", ci.name);
+		name = ci.name;
 		parentTexture = std::weak_ptr<Texture>(_parentTexture);
 		viewType = ci.view_type;
 		VkImageViewCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -281,15 +285,20 @@ namespace RHI
 		{
 			if (vkImageView != VK_NULL_HANDLE)
 			{
+				HLogInfo("deleting view : {} ...", name);
 				vkDestroyImageView(VulkanContext::get_vulkan_device(), vkImageView, VulkanContext::get_vulkan_allocation_callbacks());
 			}
 		}	
 		else
 		{
 			auto handle = this->vkImageView;
+			auto sname = name;
 			if (handle != VK_NULL_HANDLE)
 			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {vkDestroyImageView(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
+				
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle,sname]() {
+					HLogInfo("deleting view : {} ...", sname);
+					vkDestroyImageView(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
 			}		
 		}
 	}

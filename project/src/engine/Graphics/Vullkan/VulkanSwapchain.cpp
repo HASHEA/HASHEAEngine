@@ -8,6 +8,7 @@
 #include <GLFW/glfw3native.h>
 #include "VulkanTexture.h"
 #include "VulkanSampler.h"
+#include "VulkanBuffer.h"
 namespace RHI
 {
 	VulkanSwapchain::VulkanSwapchain()
@@ -58,6 +59,18 @@ namespace RHI
 		sc.name = "test sampler";
 		auto testSampler = VulkanSampler::create(sc);
 		VulkanContext::get()->destroy_rhi_resource_Immediately(testSampler);
+
+		BufferCreation bc{};
+		bc.type_flags = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+		bc.initial_data = nullptr;
+		bc.size = 1024;
+		bc.usage = AshResourceUsageType::Immutable;
+		bc.name = "test non dynamic buffer";
+		auto testBuffer1 = VulkanBuffer::create(bc);
+		bc.usage = AshResourceUsageType::Dynamic;
+		bc.type_flags = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+		bc.name = "test dynamic buffer";
+		auto testBuffer2 = VulkanBuffer::create(bc);
 		return HS_OK;
 	}
 
@@ -164,25 +177,20 @@ namespace RHI
 		vecVkImage.resize(imageCount);
 		swapChainImages.init(nullptr, imageCount, 0);
 		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, vecVkImage.data());
-		StringBuffer str;
-		str.init(128, nullptr);
 		for (size_t i = 0; i < imageCount; i++)
 		{
-			str.append_f("swapchain buffer [%u] ",i);
 			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
 			texture->width = width;
 			texture->height = height;
 			texture->aliasTexture = nullptr;
 			texture->format = vk_format_to_ash(surfaceFormat.format);
 			texture->render_target = 1;
-			texture->name = str.get_text(0);
+			texture->name = "swapchain buffer";
 			texture->swapchain_texture = true;
 			texture->vkImage = vecVkImage[i];
 			swapChainImages.push_back(texture);
 			texture->init();
-			str.clear();
 		}
-		str.shutdown();
 		return HS_OK;
 	}
 
@@ -246,6 +254,34 @@ namespace RHI
 			vkDestroySwapchainKHR(device, swapChain, VulkanContext::get_vulkan_allocation_callbacks());
 		}
 		return HS_OK;
+	}
+
+	auto VulkanSwapchain::get_width() -> uint32_t
+	{
+		return 0;
+	}
+
+	auto VulkanSwapchain::get_height() -> uint32_t
+	{
+		return 0;
+	}
+
+	auto VulkanSwapchain::get_swapchain_buffer() -> std::shared_ptr<Texture>
+	{
+		return std::shared_ptr<Texture>();
+	}
+
+	auto VulkanSwapchain::get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture>
+	{
+		return std::shared_ptr<Texture>();
+	}
+
+	auto VulkanSwapchain::resize_swapchain() -> void
+	{
+	}
+
+	auto VulkanSwapchain::present() -> void
+	{
 	}
 
 }

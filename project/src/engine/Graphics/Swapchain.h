@@ -6,6 +6,7 @@ namespace RHI
 	enum AshFormat;
 	enum AshColorSpace;
 	enum AshPresentMode;
+	class Texture;
 	struct SwapChainInitConfig
 	{
 		void* window = nullptr;
@@ -27,6 +28,14 @@ namespace RHI
 		virtual auto init(void* config)->HS_Result = 0;
 		virtual auto shutdown()->HS_Result = 0;
 		static Swapchain* create();
+	public:
+		/****** rhi interfaces ********/
+		virtual auto resize_swapchain() -> void = 0;
+		virtual auto present() -> void = 0;
+		virtual auto get_swapchain_buffer() -> std::shared_ptr<Texture> = 0;
+		virtual auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> = 0;
+		virtual auto get_width() -> uint32_t = 0;
+		virtual auto get_height() -> uint32_t = 0;
 	private:
 
 	};

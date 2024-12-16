@@ -805,18 +805,28 @@ namespace RHI
 		commandBufferRing = Ash_New<VulkanCommandBufferManager>();
 		commandBufferRing->init(numThread);
 		
+		//create dynamic Buffer
+		//TODO: make it dynamic alloc and dealloc
+		BufferCreation dc{};
+		dc.type_flags = k_dynamic_buffer_mask;
+		dc.usage = AshResourceUsageType::Immutable;
+		dc.name = "Dynamic Persistent Buffer";
+		dc.size = k_max_frames * 1024 * 1024 * 10;
+		dc.persistent = true;
+		global_dynamic_buffer = Ash_New_Shared<VulkanDynamicBuffer>(dc);
 		return HS_OK;
 	}
 
 	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
 	{
+		destroy_rhi_resource_Immediately(global_dynamic_buffer);
+		
 		//flush deletion queue
+		//delete all runtime resource here
 		for (int i = 0; i < k_max_frames; i++)
 		{
 			delayed_deletion_queues[i].flush();
 		}
-		
-
 		commandBufferRing->shutdown();
 		Ash_Delete(nullptr,commandBufferRing);
 		Ash_Delete(nullptr,vulkanImmediateFence);

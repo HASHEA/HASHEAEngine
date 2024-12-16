@@ -28,6 +28,7 @@ namespace AshEngine
 		}
 		m_pAllocator = allocator;
 		m_pData = (char*) Ash_Alloc(m_pAllocator,size + 1,1);
+		memset(m_pData, size,0);
 		H_ASSERT(m_pData);
 		m_pData[0] = 0;
 		m_uBufferSize = (uint32_t)size;

@@ -11,8 +11,10 @@ namespace RHI
 		size = ci.size;
 		ready = false;
 		const bool use_global_buffer = (ci.type_flags & k_dynamic_buffer_mask) != 0;
+		HLogInfo("creating buffer : {} ...", ci.name);
 		if (ci.usage == AshResourceUsageType::Dynamic && use_global_buffer)// create as dynamic buffer
 		{
+			H_ASSERTLOG(!(ci.initial_data), "Dynamic Buffer Can not use initial data !");
 			dynamic = true;
 		}
 		else
@@ -24,15 +26,24 @@ namespace RHI
 			// with MEMORY_PROPERTY_DEVICE_LOCAL_BIT and MEMORY_PROPERTY_HOST_VISIBLE_BIT
 			// but that's usually very small (256MB) unless resizable bar is enabled.
 			// We simply don't allow it for now.
-			H_ASSERTLOG(!(ci.persistent && ci.device_only), "Deivce only buffer can not be mappable !");
+			// validation
+			if (ci.device_only)
+			{
+				H_ASSERTLOG(!ci.persistent, "Device only buffer can not be mappable !");
+				H_ASSERTLOG((ci.usage == AshResourceUsageType::Dynamic || ci.usage == AshResourceUsageType::Stream), "Device only buffer only can be immutable or stream usage !");
+			}
 			VmaAllocationCreateInfo allocation_create_info{};
 			allocation_create_info.flags = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
+			if (ci.persistent) {
+				allocation_create_info.flags = allocation_create_info.flags | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+			}
 			if (ci.device_only) {
 				allocation_create_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 			}
 			else {
 				allocation_create_info.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
 			}
+			
 			VmaAllocationInfo allocation_info{};
 			VK_CHECK_RESULT(vmaCreateBuffer(VulkanContext::get_vma_allocator(),&buffer_info,&allocation_create_info,&vkBuffer,&vmaAllocation,&allocation_info));
 #ifdef ASH_DEBUG
@@ -40,8 +51,29 @@ namespace RHI
 #endif // ASH_DEBUG
 			VulkanContext::set_resource_name(VK_OBJECT_TYPE_BUFFER, (uint64_t)vkBuffer, name);
 			vkDeviceMemory = allocation_info.deviceMemory;
+			if (ci.persistent)
+			{
+				mappedData = static_cast<uint8_t*>(allocation_info.pMappedData);
+				H_ASSERTLOG(mappedData != nullptr, "Fatal: Init Mapped Buffer Failed !");
+			}
+			if (ci.initial_data)
+			{
+				if (!ci.persistent)
+				{
+					void* data;
+					vmaMapMemory(VulkanContext::get_vma_allocator(), vmaAllocation, &data);
+					memcpy(data, ci.initial_data, (size_t)ci.size);
+					vmaUnmapMemory(VulkanContext::get_vma_allocator(), vmaAllocation);
+				}
+				else
+				{
+					if (mappedData)
+					{
+						memcpy(mappedData, ci.initial_data, (size_t)ci.size);
+					}
+				}
+			}
 		}
-		
 		ready = true;
 	}
 	VulkanBuffer::~VulkanBuffer()
@@ -49,10 +81,20 @@ namespace RHI
 		if (immediate_deletion)
 		{
 			vmaDestroyBuffer(VulkanContext::get_vma_allocator(), vkBuffer, vmaAllocation);
+			HLogInfo("deleting buffer : {} ...", name);
 		}
 		else
 		{
-
+			if (vkBuffer != VK_NULL_HANDLE)
+			{
+				auto handle = vkBuffer;
+				auto alloc = vmaAllocation;
+				auto sname = name;
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle, alloc,sname]() {
+					HLogInfo("deleting buffer : {} ...", sname);
+					vmaDestroyBuffer(VulkanContext::get_vma_allocator(), handle, alloc);
+					});
+			}
 		}
 		ready = false;
 	}

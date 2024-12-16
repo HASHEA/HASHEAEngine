@@ -165,7 +165,7 @@ namespace RHI
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
 		auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
 		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
-		//for non immediately deletion, just call smartpoint.reset
+		//for non immediately deletion, just call smartpointer.reset
 		auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void override;
 		auto wait_idle() -> void override;
 

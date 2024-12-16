@@ -41,7 +41,7 @@ namespace RHI
 		std::weak_ptr<Texture> parentTexture;
 		AshImageViewType viewType{};
 		AshFormat viewFormat{};
-		
+		const char* name = nullptr;
 
 	};
 	class VulkanTexture : public Texture

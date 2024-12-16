@@ -37,10 +37,29 @@ namespace RHI
 	}
 	VulkanSampler::~VulkanSampler()
 	{
-		if (vkSampler != VK_NULL_HANDLE)
+		if (immediate_deletion)
 		{
-			vkDestroySampler(VulkanContext::get_vulkan_device(),vkSampler, VulkanContext::get_vulkan_allocation_callbacks());
+			if (vkSampler != VK_NULL_HANDLE)
+			{
+				HLogInfo("deleting sampler : {} ...", name);
+				vkDestroySampler(VulkanContext::get_vulkan_device(), vkSampler, VulkanContext::get_vulkan_allocation_callbacks());
+			}
 		}
+		else
+		{
+			auto handle = this->vkSampler;
+			auto alloc = VulkanContext::get_vulkan_allocation_callbacks();
+			auto sname = name;
+			if (vkSampler != VK_NULL_HANDLE)
+			{
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle,alloc, sname]() {
+					HLogInfo("deleting sampler : {} ...", sname);
+					vkDestroySampler(VulkanContext::get_vulkan_device(), handle, alloc);
+
+					});
+			}
+		}
+		
 	}
 	auto VulkanSampler::create(const SamplerCreation& ci) -> std::shared_ptr<VulkanSampler>
 	{
