@@ -819,8 +819,7 @@ namespace RHI
 
 	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
 	{
-		destroy_rhi_resource_Immediately(global_dynamic_buffer);
-		
+		global_dynamic_buffer.reset();
 		//flush deletion queue
 		//delete all runtime resource here
 		for (int i = 0; i < k_max_frames; i++)
@@ -881,12 +880,6 @@ namespace RHI
 		Ash_Delete(nullptr,gpuTimeQueryManager);
 		framePools.shutdown();
 		return HS_OK;
-	}
-
-	auto VulkanContext::destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void
-	{
-		resource->immediate_deletion = true;
-		resource.reset();
 	}
 
 	auto VulkanContext::init(void* config) -> HS_Result

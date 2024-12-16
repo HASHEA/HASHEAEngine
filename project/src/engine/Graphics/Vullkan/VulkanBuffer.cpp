@@ -130,7 +130,7 @@ namespace RHI
 	{
 	}
 	VulkanDynamicBuffer::~VulkanDynamicBuffer()
-	{
+	{	
 	}
 	auto VulkanDynamicBuffer::dynamic_allocate(uint32_t size, size_t alignment) -> void*
 	{

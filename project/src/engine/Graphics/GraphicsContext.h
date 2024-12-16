@@ -47,8 +47,7 @@ namespace RHI {
         virtual auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> = 0;
         virtual auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> = 0;
         virtual auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
-        virtual auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> = 0;
-        virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;
+        virtual auto create_sampler(const SamplerCreation& ci)->std::shared_ptr<Sampler> = 0;
   /*      virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;
         virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;
         virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;*/

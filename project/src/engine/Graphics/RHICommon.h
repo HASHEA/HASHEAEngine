@@ -3,6 +3,13 @@
 #include "Base/hcore.h"
 namespace RHI
 {
+	//for non immediately delete, just call smart pointer . reset() directly
+#define RHI_RELEASE_IMMEDIATELY(res)\
+{\
+	(res)->immediate_deletion = true;\
+	(res).reset();\
+}
+
 	enum ASH_API AshImageType {
 		Ash_Texture1D, Ash_Texture2D, Ash_Texture3D, Ash_TextureCube, Ash_Texture_1D_Array, Ash_Texture_2D_Array, Ash_Texture_Cube_Array, Count
 	};

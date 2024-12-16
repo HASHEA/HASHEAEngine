@@ -58,7 +58,7 @@ namespace RHI
 		SamplerCreation sc{};
 		sc.name = "test sampler";
 		auto testSampler = VulkanSampler::create(sc);
-		VulkanContext::get()->destroy_rhi_resource_Immediately(testSampler);
+		RHI_RELEASE_IMMEDIATELY(testSampler);
 
 		BufferCreation bc{};
 		bc.type_flags = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
