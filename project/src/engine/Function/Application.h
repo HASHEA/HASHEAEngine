@@ -29,6 +29,10 @@ namespace AshEngine
 		{
 			return Get()->window;
 		}
+		inline static auto get_swapchain()
+		{
+			return Get()->swapChain;
+		}
 		auto start() -> void;
 	protected:
 		virtual auto _on_update() -> void;

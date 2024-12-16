@@ -1,10 +1,13 @@
 #include "WindowWin.h"
 #include "Base/hassert.h"
 #include "Base/hstring.h"
+#include "Graphics/Swapchain.h"
+#include "Function/Application.h"
 namespace AshEngine
 {
 	auto WindowWin::on_update() -> void
 	{
+		glfwPollEvents();
 	}
 	auto WindowWin::get_width() -> uint32_t
 	{
@@ -79,6 +82,9 @@ namespace AshEngine
 	auto WindowWin::register_native_event(const WindowConfig& data) -> void
 	{
 		glfwSetWindowSizeCallback(handle, [](GLFWwindow* win, int32_t w, int32_t h) {
+
+			//test
+			Application::get_swapchain()->resize_swapchain(w,h);
 
 			});
 		glfwSetWindowIconifyCallback(handle, [](GLFWwindow* win, int minimized) {

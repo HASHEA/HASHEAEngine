@@ -30,7 +30,7 @@ namespace RHI
 		static Swapchain* create();
 	public:
 		/****** rhi interfaces ********/
-		virtual auto resize_swapchain() -> void = 0;
+		virtual auto resize_swapchain(uint32_t width, uint32_t height) -> void = 0;
 		virtual auto present() -> void = 0;
 		virtual auto get_swapchain_buffer() -> std::shared_ptr<Texture> = 0;
 		virtual auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> = 0;

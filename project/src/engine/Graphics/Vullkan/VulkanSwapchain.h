@@ -24,7 +24,7 @@ namespace RHI
 		virtual auto init(void* config)->HS_Result override;
 		virtual auto shutdown()->HS_Result override;
 	public:
-		auto resize_swapchain() -> void override;
+		auto resize_swapchain(uint32_t width, uint32_t height) -> void override;
 		auto present() -> void override;
 		auto get_swapchain_buffer() -> std::shared_ptr<Texture> override;
 		auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> override;
@@ -41,7 +41,7 @@ namespace RHI
 		auto _create_swapchain(SwapChainInitConfig& config)->HS_Result;
 		auto _query_swapchain_support(SwapChainSupportDetails& swapChainSupport)->void;
 		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->HS_Result;
-		auto _recreate_swapchain();
+		auto _recreate_swapchain() -> void;
 		auto _clean_swapchain() -> HS_Result;
 
 	private:
@@ -51,9 +51,9 @@ namespace RHI
 		VkSurfaceFormatKHR surfaceFormat{};
 		VkPresentModeKHR presentMode{};
 		VkExtent2D extent{};
+		VkSurfaceTransformFlagBitsKHR    preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 		VkSwapchainKHR swapChain = VK_NULL_HANDLE;
+		VkSwapchainKHR oldSwapChain = VK_NULL_HANDLE;
 		Array<std::shared_ptr<VulkanTexture>> swapChainImages;
-
-		
 	};
 }

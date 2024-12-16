@@ -104,6 +104,16 @@ namespace RHI
 			return delayed_deletion_queues[currentFrame];
 		}
 
+		inline auto get_current_frame_internal()
+		{
+			return currentFrame;
+		}
+
+		inline static auto get_current_frame()
+		{
+			return instance->get_current_frame_internal();
+		}
+
 		inline auto get_global_dynamic_buffer()
 		{
 			return instance->get_global_dynamic_buffer_internal();

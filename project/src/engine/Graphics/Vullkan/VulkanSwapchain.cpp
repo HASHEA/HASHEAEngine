@@ -21,7 +21,7 @@ namespace RHI
 
 	auto VulkanSwapchain::init(void* _config) -> HS_Result 
 	{
-		SwapChainInitConfig config = *(SwapChainInitConfig*)_config;
+		auto config = *(SwapChainInitConfig*)_config;
 		width = config.width;
 		H_ASSERT(width > 0);
 		height = config.height;
@@ -95,6 +95,7 @@ namespace RHI
 	{
 		SwapChainSupportDetails swapChainSupport{};
 		_query_swapchain_support(swapChainSupport);
+		preTransform = swapChainSupport.capabilities.currentTransform;
 		bool bFound = false;
 		uint32_t i = 0;
 		for (i = 0; i < config.colorFormatCount; i++)
@@ -151,46 +152,7 @@ namespace RHI
 
 		_choose_swap_extent(swapChainSupport.capabilities);
 		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= MAX_SWAPCHAIN_BUFFERS && swapChainSupport.capabilities.minImageCount <= MAX_SWAPCHAIN_BUFFERS, "Unsupported Image Count:{}!", MAX_SWAPCHAIN_BUFFERS);
-		VkSwapchainCreateInfoKHR createInfo{};
-		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-		createInfo.surface = surface;
-		createInfo.minImageCount = MAX_SWAPCHAIN_BUFFERS;
-		createInfo.imageFormat = surfaceFormat.format;
-		createInfo.imageColorSpace = surfaceFormat.colorSpace;
-		createInfo.imageExtent = extent;
-		createInfo.imageArrayLayers = 1;
-		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		createInfo.queueFamilyIndexCount = 0; // Optional
-		createInfo.pQueueFamilyIndices = nullptr; // Optional
-		createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
-		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-		createInfo.presentMode = presentMode;
-		createInfo.clipped = VK_TRUE;
-		createInfo.oldSwapchain = VK_NULL_HANDLE;
-		auto device = VulkanContext::get_vulkan_device();
-		VK_CHECK_RESULT(vkCreateSwapchainKHR(device, &createInfo, VulkanContext::get_vulkan_allocation_callbacks(), &swapChain));
-
-		std::vector<VkImage> vecVkImage;
-		uint32_t imageCount;
-		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
-		vecVkImage.resize(imageCount);
-		swapChainImages.init(nullptr, imageCount, 0);
-		vkGetSwapchainImagesKHR(device, swapChain, &imageCount, vecVkImage.data());
-		for (size_t i = 0; i < imageCount; i++)
-		{
-			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
-			texture->width = width;
-			texture->height = height;
-			texture->aliasTexture = nullptr;
-			texture->format = vk_format_to_ash(surfaceFormat.format);
-			texture->render_target = 1;
-			texture->name = "swapchain buffer";
-			texture->swapchain_texture = true;
-			texture->vkImage = vecVkImage[i];
-			swapChainImages.push_back(texture);
-			texture->init();
-		}
+		_recreate_swapchain();
 		return HS_OK;
 	}
 
@@ -232,18 +194,76 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanSwapchain::_recreate_swapchain()
+	auto VulkanSwapchain::_recreate_swapchain() -> void
 	{
-		auto device = VulkanContext::get_vulkan_device();
-		vkDeviceWaitIdle(device);
+		//int width = 0, height = 0;
+		//auto window = (GLFWwindow*)config.window;
+		//glfwGetFramebufferSize(window, &width, &height);
+		//while (width == 0 || height == 0) {
+		//	glfwGetFramebufferSize(window, &width, &height);
+		//	glfwWaitEvents();
+		//}
+		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
 
-		//_create_swapchain();
+		oldSwapChain = swapChain;
+		swapChain = VK_NULL_HANDLE;
+
+		VkSwapchainCreateInfoKHR createInfo{};
+		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+		createInfo.surface = surface;
+		createInfo.minImageCount = MAX_SWAPCHAIN_BUFFERS;
+		createInfo.imageFormat = surfaceFormat.format;
+		createInfo.imageColorSpace = surfaceFormat.colorSpace;
+		createInfo.imageExtent = extent;
+		createInfo.imageArrayLayers = 1;
+		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		createInfo.queueFamilyIndexCount = 0; // Optional
+		createInfo.pQueueFamilyIndices = nullptr; // Optional
+		createInfo.preTransform = preTransform;
+		createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+		createInfo.presentMode = presentMode;
+		createInfo.clipped = VK_TRUE;
+		createInfo.oldSwapchain = oldSwapChain;
+		VK_CHECK_RESULT(vkCreateSwapchainKHR(VulkanContext::get_vulkan_device(), &createInfo, VulkanContext::get_vulkan_allocation_callbacks(), &swapChain));
+
+		if (oldSwapChain != VK_NULL_HANDLE)
+		{
+			for (size_t i = 0; i < swapChainImages.size(); i++)
+			{
+				swapChainImages[i].reset();
+			}
+			swapChainImages.shutdown();
+
+			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), oldSwapChain, VulkanContext::get_vulkan_allocation_callbacks());
+			oldSwapChain = VK_NULL_HANDLE;
+		}
+
+		std::vector<VkImage> vecVkImage;
+		uint32_t imageCount;
+		vkGetSwapchainImagesKHR(VulkanContext::get_vulkan_device(), swapChain, &imageCount, nullptr);
+		vecVkImage.resize(imageCount);
+		swapChainImages.init(nullptr, imageCount, 0);
+		vkGetSwapchainImagesKHR(VulkanContext::get_vulkan_device(), swapChain, &imageCount, vecVkImage.data());
+		for (size_t i = 0; i < imageCount; i++)
+		{
+			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
+			texture->width = width;
+			texture->height = height;
+			texture->aliasTexture = nullptr;
+			texture->format = vk_format_to_ash(surfaceFormat.format);
+			texture->render_target = 1;
+			texture->name = "swapchain buffer";
+			texture->swapchain_texture = true;
+			texture->vkImage = vecVkImage[i];
+			swapChainImages.push_back(texture);
+			texture->init();
+		}
 	}
 
 	auto VulkanSwapchain::_clean_swapchain() ->HS_Result
 	{
-		auto device = VulkanContext::get_vulkan_device();
-
+		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
 		for (size_t i = 0; i < swapChainImages.size(); i++)
 		{
 			swapChainImages[i].reset();
@@ -251,37 +271,44 @@ namespace RHI
 		swapChainImages.shutdown();
 		if (swapChain != VK_NULL_HANDLE)
 		{
-			vkDestroySwapchainKHR(device, swapChain, VulkanContext::get_vulkan_allocation_callbacks());
+			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), swapChain, VulkanContext::get_vulkan_allocation_callbacks());
 		}
 		return HS_OK;
 	}
 
 	auto VulkanSwapchain::get_width() -> uint32_t
 	{
-		return 0;
+		return width;
 	}
 
 	auto VulkanSwapchain::get_height() -> uint32_t
 	{
-		return 0;
+		return height;
 	}
 
 	auto VulkanSwapchain::get_swapchain_buffer() -> std::shared_ptr<Texture>
 	{
-		return std::shared_ptr<Texture>();
+		uint32_t curFrame = VulkanContext::get_current_frame();
+		return swapChainImages[curFrame];
 	}
 
 	auto VulkanSwapchain::get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture>
 	{
-		return std::shared_ptr<Texture>();
+		H_ASSERT(index < swapChainImages.size());
+		return swapChainImages[index];
 	}
 
-	auto VulkanSwapchain::resize_swapchain() -> void
+	auto VulkanSwapchain::resize_swapchain(uint32_t width, uint32_t height) -> void
 	{
+		HLogInfo("resize swapchain with width  : {}, height : {}",width, height);
+		this->width = width;
+		this->height = height;
+		_recreate_swapchain();
 	}
 
 	auto VulkanSwapchain::present() -> void
 	{
+
 	}
 
 }

@@ -62,10 +62,14 @@ namespace AshEngine
 		while (0)
 		{
 
+
+
+			_on_update();
 		}
 	}
 	auto Application::_on_update() -> void
 	{
+		window->on_update();
 	}
 	auto Application::_on_gui() -> void
 	{
