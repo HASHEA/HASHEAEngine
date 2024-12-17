@@ -52,6 +52,8 @@ namespace RHI {
         virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;
         virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;*/
         virtual auto wait_idle() -> void = 0;
+		virtual auto begin_frame() -> void = 0;
+		virtual auto end_frame() -> void = 0;
     protected:
       
     };

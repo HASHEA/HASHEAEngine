@@ -259,6 +259,8 @@ private:
 private:
 		static VulkanContext* instance;
 
+
+		friend class VulkanSwapchain;
 		
 
 

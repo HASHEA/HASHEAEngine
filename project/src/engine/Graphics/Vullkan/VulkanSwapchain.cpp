@@ -40,37 +40,7 @@ namespace RHI
 		}
 		HLogTrace("Create swapchain ...");
 		_create_surface((GLFWwindow*)config.window);
-		_create_swapchain(config);
-		//test texture creation
-		TextureCreation tc{};
-		tc.width = 1920;
-		tc.height = 1080;
-		tc.depth = 1;
-		tc.array_layer_count = 1;
-		tc.alias = nullptr;
-		tc.flags = 0;
-		tc.initial_data = nullptr;
-		tc.mip_level_count = 1;
-		tc.name = "test vk texture";
-		tc.type = Ash_Texture2D;
-		tc.format = ASH_FORMAT_R8G8B8A8_SRGB;
-		auto testVKTexture = VulkanTexture::create(tc);
-		SamplerCreation sc{};
-		sc.name = "test sampler";
-		auto testSampler = VulkanSampler::create(sc);
-		RHI_RELEASE_IMMEDIATELY(testSampler);
-
-		BufferCreation bc{};
-		bc.type_flags = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-		bc.initial_data = nullptr;
-		bc.size = 1024;
-		bc.usage = AshResourceUsageType::Immutable;
-		bc.name = "test non dynamic buffer";
-		auto testBuffer1 = VulkanBuffer::create(bc);
-		bc.usage = AshResourceUsageType::Dynamic;
-		bc.type_flags = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-		bc.name = "test dynamic buffer";
-		auto testBuffer2 = VulkanBuffer::create(bc);
+		_init_swapchain(config);
 		return HS_OK;
 	}
 
@@ -91,7 +61,7 @@ namespace RHI
 		return HS_OK;
 	}
 
-	auto VulkanSwapchain::_create_swapchain(SwapChainInitConfig& config) -> HS_Result
+	auto VulkanSwapchain::_init_swapchain(SwapChainInitConfig& config) -> HS_Result
 	{
 		SwapChainSupportDetails swapChainSupport{};
 		_query_swapchain_support(swapChainSupport);
@@ -196,18 +166,8 @@ namespace RHI
 
 	auto VulkanSwapchain::_recreate_swapchain() -> void
 	{
-		//int width = 0, height = 0;
-		//auto window = (GLFWwindow*)config.window;
-		//glfwGetFramebufferSize(window, &width, &height);
-		//while (width == 0 || height == 0) {
-		//	glfwGetFramebufferSize(window, &width, &height);
-		//	glfwWaitEvents();
-		//}
-		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
-
 		oldSwapChain = swapChain;
 		swapChain = VK_NULL_HANDLE;
-
 		VkSwapchainCreateInfoKHR createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 		createInfo.surface = surface;
@@ -229,6 +189,7 @@ namespace RHI
 
 		if (oldSwapChain != VK_NULL_HANDLE)
 		{
+			vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
 			for (size_t i = 0; i < swapChainImages.size(); i++)
 			{
 				swapChainImages[i].reset();
@@ -274,6 +235,19 @@ namespace RHI
 			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), swapChain, VulkanContext::get_vulkan_allocation_callbacks());
 		}
 		return HS_OK;
+	}
+
+	auto VulkanSwapchain::_aquire_next_image() -> void
+	{
+	}
+
+	auto VulkanSwapchain::begin_frame() -> void
+	{
+		_aquire_next_image();
+	}
+
+	auto VulkanSwapchain::end_frame() -> void
+	{
 	}
 
 	auto VulkanSwapchain::get_width() -> uint32_t
