@@ -11,48 +11,6 @@
 #include <vector>
 namespace RHI
 {
-//	static const char* s_requested_extensions[] = {
-//	// Platform specific extension
-//#ifdef VK_USE_PLATFORM_WIN32_KHR
-//		VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_MACOS_MVK)
-//		VK_MVK_MACOS_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_XCB_KHR)
-//		VK_KHR_XCB_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-//		VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_XLIB_KHR)
-//		VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_XCB_KHR)
-//		VK_KHR_XCB_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_WAYLAND_KHR)
-//		VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
-//#elif (defined(VK_USE_PLATFORM_MIR_KHR) || defined(VK_USE_PLATFORM_DISPLAY_KHR))
-//		VK_KHR_DISPLAY_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
-//		VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
-//#elif defined(VK_USE_PLATFORM_IOS_MVK)
-//		VK_MVK_IOS_SURFACE_EXTENSION_NAME,
-//#endif // VK_USE_PLATFORM_WIN32_KHR
-//#ifdef VULKAN_DEBUG_REPORT
-//	VK_EXT_DEBUG_REPORT_EXTENSION_NAME,
-//	VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
-//#endif // VULKAN_DEBUG_REPORT
-//	};
-//
-//	static const char* s_requested_layers[] = {
-//#ifdef VULKAN_DEBUG_REPORT
-//	"VK_LAYER_KHRONOS_validation",
-//	//"VK_LAYER_AMD_switchable_graphics",
-//	//"VK_LAYER_NV_optimus",
-//	//"VK_LAYER_LUNARG_core_validation",
-//	//"VK_LAYER_LUNARG_image",
-//	//"VK_LAYER_LUNARG_parameter_validation",
-//	//"VK_LAYER_LUNARG_object_tracker"
-//#else
-//	"",
-//#endif // VULKAN_DEBUG_REPORT
-//	};
 	inline auto check_layer_support(const std::vector<const char*>& rqLayers)->HS_Result
 	{
 		std::vector<VkLayerProperties> layers;

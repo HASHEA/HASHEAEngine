@@ -305,6 +305,7 @@ namespace RHI
 		presentInfo.swapchainCount = 1;
 		presentInfo.pSwapchains = &swapChain;
 		presentInfo.pImageIndices = &acquireImageIndex;
+		//TEST PERIOD
 		/*presentInfo.waitSemaphoreCount = 1;
 		presentInfo.pWaitSemaphores = &(VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore);*/
 		presentInfo.pResults = nullptr;

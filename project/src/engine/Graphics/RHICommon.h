@@ -219,6 +219,15 @@ namespace RHI
 		ASH_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT = 0x01000000,
 		ASH_BUFFER_USAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
 	} AshBufferUsageFlagBits;
+
+	typedef enum AshCommandBufferState
+	{
+		ASH_Idle,
+		ASH_Recording,
+		ASH_Ended,
+		ASH_Submitted,
+		ASH_State_Count
+	}AshCommandBufferState;
 }
 
 

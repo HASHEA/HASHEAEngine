@@ -15,31 +15,20 @@ namespace RHI
 		secondaryCommandBuffers.init(nullptr, totalSecondaryBuffers,totalSecondaryBuffers);
 		for (uint32_t i = 0; i < totalBuffers; i++)
 		{
-			VkCommandBufferAllocateInfo cmd = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-			cmd.pNext = nullptr;
 			const uint32_t frameIndex = i / (numCommandBuffersPerThread * numPoolsPerFrame);
 			const uint32_t threadIndex = (i / numCommandBuffersPerThread) % numPoolsPerFrame;
 			const uint32_t poolIndex = pool_from_indices(frameIndex, threadIndex);
-			cmd.commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->get_handle();
-			cmd.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-			cmd.commandBufferCount = 1;
 			VulkanCommandBuffer& cmdBuffer = commandBuffers[i];
-			cmdBuffer.allocate_vulkan_command_buffer(&cmd);
-			cmdBuffer.init(i, &VulkanContext::get_frame_pool(poolIndex));
+			cmdBuffer.init(i,poolIndex,false);
 		}
 		uint32_t index = totalBuffers;
 		for (uint32_t poolIndex = 0; poolIndex < totalPools; poolIndex++)
 		{
-			VkCommandBufferAllocateInfo cmd = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-			cmd.pNext = nullptr;
-			cmd.commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->get_handle();
-			cmd.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
-			cmd.commandBufferCount = 1;
 			for (uint32_t scbIndex = 0; scbIndex < k_secondary_command_buffers_count; scbIndex++)
 			{
 				VulkanCommandBuffer& scb = secondaryCommandBuffers[index - totalBuffers];
-				scb.allocate_vulkan_command_buffer(&cmd);
-				scb.init(index++, &VulkanContext::get_frame_pool(poolIndex));
+				scb.init(index,poolIndex,true);
+				index++;
 			}
 		}
 	}
@@ -59,26 +48,76 @@ namespace RHI
 	auto VulkanCommandBufferManager::reset_pools(uint32_t frameIndex) -> void
 	{
 	}
-	auto VulkanCommandBufferManager::get_command_buffer(uint32_t frameIndex, uint32_t threadIndex, bool begin) -> VulkanCommandBuffer*
+	auto VulkanCommandBufferManager::get_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer
 	{
-		return nullptr;
+		auto poolIndex = pool_from_indices(frameIndex,threadIndex);
+		auto& curCount = usedBuffers[poolIndex];
+		H_ASSERTLOG(curCount <= numCommandBuffersPerThread, "used commandbuffer count exceed max count per thread {0} > {1}", curCount,numCommandBuffersPerThread);
+		curCount++;
+		VulkanCommandBuffer ret = commandBuffers[frameIndex];
+		commandBuffers.delete_swap(frameIndex);
+		return ret;
 	}
-	auto VulkanCommandBufferManager::get_secondary_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*
+	auto VulkanCommandBufferManager::get_secondary_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer
 	{
-		return nullptr;
+		return {};
 	}
 	uint32_t VulkanCommandBufferManager::pool_from_indices(uint32_t frame_index, uint32_t thread_index)
 	{
 		return frame_index * numPoolsPerFrame + thread_index;
 	}
-	auto VulkanCommandBuffer::init(uint32_t index,const FramePool* framePool) -> void
+	auto VulkanCommandBuffer::init(uint32_t allocIndex, uint32_t poolIndex, bool _secondary) -> void
 	{
+		this->index = allocIndex;
+		this->secondary = _secondary;
+		commandPool = VulkanContext::get_frame_pool(poolIndex).cmdPool->get_handle();
+		VkCommandBufferAllocateInfo cmd = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
+		cmd.pNext = nullptr;
+		cmd.commandPool = commandPool;
+		cmd.level = _secondary ? VK_COMMAND_BUFFER_LEVEL_SECONDARY : VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		cmd.commandBufferCount = 1;
+		VK_CHECK_RESULT(vkAllocateCommandBuffers(VulkanContext::get_vulkan_device(), &cmd, &commandBuffer));
 	}
 	auto VulkanCommandBuffer::shutdown() -> void
 	{
+		if (commandBuffer)
+			vkFreeCommandBuffers(VulkanContext::get_vulkan_device(), commandPool,1, &commandBuffer);
 	}
-	auto VulkanCommandBuffer::allocate_vulkan_command_buffer(const VkCommandBufferAllocateInfo* const cmd) -> void
+
+	auto VulkanCommandBuffer::begin() -> void
 	{
-		VK_CHECK_RESULT(vkAllocateCommandBuffers(VulkanContext::get_vulkan_device(), cmd, &commandBuffer));
+		if (secondary)
+		{
+			/*VkCommandBufferInheritanceInfo inheritanceInfo{};
+			inheritanceInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+			inheritanceInfo.subpass = 0;
+			inheritanceInfo.renderPass = *(VulkanRenderPass*)renderPass;
+			inheritanceInfo.framebuffer = *(VulkanFrameBuffer*)framebuffer;
+			VkCommandBufferBeginInfo beginCI{};
+			beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginCI.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
+			beginCI.pInheritanceInfo = &inheritanceInfo;
+
+			VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginCI));
+			*/
+		}
+		else
+		{
+			VkCommandBufferBeginInfo beginCI{};
+			beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginCI.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+			VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginCI));
+		}
+		state = AshCommandBufferState::ASH_Recording;
+	}
+	auto VulkanCommandBuffer::end() -> void
+	{
+		H_ASSERTLOG(state == AshCommandBufferState::ASH_Recording, "CommandBuffer ended before started recording");
+		VK_CHECK_RESULT(vkEndCommandBuffer(commandBuffer));
+		state = AshCommandBufferState::ASH_Ended;
+	}
+	auto VulkanCommandBuffer::get_state() -> AshCommandBufferState
+	{
+		return state;
 	}
 }
