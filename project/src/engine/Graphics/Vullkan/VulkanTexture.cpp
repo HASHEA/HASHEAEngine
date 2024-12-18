@@ -259,6 +259,7 @@ namespace RHI
 		name = ci.name;
 		parentTexture = std::weak_ptr<Texture>(_parentTexture);
 		viewType = ci.view_type;
+		viewFormat = ci.format;
 		VkImageViewCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
 		info.image = (VkImage)_parentTexture->get_native_texture_handle();
 		info.format = ash_format_to_vk(ci.format);

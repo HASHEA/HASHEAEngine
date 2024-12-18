@@ -20,6 +20,14 @@ namespace AshEditor
 		AshEngine::Application::_on_render_debug();
 
 	}
+	auto Editor::_on_render() -> void 
+	{
+		AshEngine::Application::_on_render();
+	}
+	auto Editor::_present() -> void 
+	{
+		AshEngine::Application::_present();
+	}
 }
 auto create_application() -> AshEngine::Application*
 {

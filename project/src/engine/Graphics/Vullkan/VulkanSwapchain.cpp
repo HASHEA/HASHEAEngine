@@ -22,10 +22,7 @@ namespace RHI
 	auto VulkanSwapchain::init(void* _config) -> HS_Result 
 	{
 		auto config = *(SwapChainInitConfig*)_config;
-		width = config.width;
-		H_ASSERT(width > 0);
-		height = config.height;
-		H_ASSERT(height > 0);
+		swapchainBufferCount = config.swapchainBufferCount;
 		if (config.colorFormatCount > 0)
 		{
 			H_ASSERTLOG(config.pColorFormat, "pColorFormat is nullptr but colorFormatCount > 0!");
@@ -119,9 +116,7 @@ namespace RHI
 			presentMode = VK_PRESENT_MODE_FIFO_KHR;
 			HLogWarning("none of the required presentModes is supported! use the default presentmode : {} ! ", TYPE_TO_STRING(VK_PRESENT_MODE_FIFO_KHR));
 		}
-
-		_choose_swap_extent(swapChainSupport.capabilities);
-		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= MAX_SWAPCHAIN_BUFFERS && swapChainSupport.capabilities.minImageCount <= MAX_SWAPCHAIN_BUFFERS, "Unsupported Image Count:{}!", MAX_SWAPCHAIN_BUFFERS);
+		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= swapchainBufferCount && swapChainSupport.capabilities.minImageCount <= swapchainBufferCount, "Unsupported Image Count:{}!", swapchainBufferCount);
 		_recreate_swapchain();
 		return HS_OK;
 	}
@@ -150,31 +145,34 @@ namespace RHI
 	auto VulkanSwapchain::_choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities) -> HS_Result
 	{
 		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
-			extent = capabilities.currentExtent;
+			swapchainExtents = capabilities.currentExtent;
 		}
 		else {
-			VkExtent2D actualExtent = {
-				static_cast<uint32_t>(width),
-				static_cast<uint32_t>(height)
-			};
-			actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
-			actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
-			extent = actualExtent;
+			swapchainExtents.width = std::clamp(swapchainExtents.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+			swapchainExtents.height = std::clamp(swapchainExtents.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 		}
 		return HS_OK;
 	}
 
 	auto VulkanSwapchain::_recreate_swapchain() -> void
 	{
+		VkSurfaceCapabilitiesKHR surface_properties{};
+		VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VulkanContext::get_vulkan_physical_device(), surface, &surface_properties));	
+		if (surface_properties.currentExtent.width == swapchainExtents.width &&
+			surface_properties.currentExtent.height == swapchainExtents.height)
+		{
+			return;
+		}
+		_choose_swap_extent(surface_properties);
 		oldSwapChain = swapChain;
 		swapChain = VK_NULL_HANDLE;
 		VkSwapchainCreateInfoKHR createInfo{};
 		createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 		createInfo.surface = surface;
-		createInfo.minImageCount = MAX_SWAPCHAIN_BUFFERS;
+		createInfo.minImageCount = swapchainBufferCount;
 		createInfo.imageFormat = surfaceFormat.format;
 		createInfo.imageColorSpace = surfaceFormat.colorSpace;
-		createInfo.imageExtent = extent;
+		createInfo.imageExtent = swapchainExtents;
 		createInfo.imageArrayLayers = 1;
 		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -209,8 +207,8 @@ namespace RHI
 		for (size_t i = 0; i < imageCount; i++)
 		{
 			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
-			texture->width = width;
-			texture->height = height;
+			texture->width = swapchainExtents.width;
+			texture->height = swapchainExtents.height;
 			texture->aliasTexture = nullptr;
 			texture->format = vk_format_to_ash(surfaceFormat.format);
 			texture->render_target = 1;
@@ -227,6 +225,7 @@ namespace RHI
 		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
 		for (size_t i = 0; i < swapChainImages.size(); i++)
 		{
+			swapChainImages[i]->immediate_deletion = true;
 			swapChainImages[i].reset();
 		}
 		swapChainImages.shutdown();
@@ -239,6 +238,28 @@ namespace RHI
 
 	auto VulkanSwapchain::_aquire_next_image() -> void
 	{
+		if (swapchainBufferCount == 1 && acquireImageIndex != UINT32_MAX)
+		{
+			return;
+		}
+		VkResult result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+		{
+			HLogWarning("Acquire Image result : {0}", result == VK_ERROR_OUT_OF_DATE_KHR ? "Out of Date" : "SubOptimal");
+
+			if (result == VK_ERROR_OUT_OF_DATE_KHR)
+			{
+				_recreate_swapchain();
+				result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
+			}
+			return;
+		}
+		VK_CHECK_RESULT(result);
+	}
+
+	auto VulkanSwapchain::get_swapchain_buffer_count() -> uint8_t
+	{
+		return swapchainBufferCount;
 	}
 
 	auto VulkanSwapchain::begin_frame() -> void
@@ -252,12 +273,12 @@ namespace RHI
 
 	auto VulkanSwapchain::get_width() -> uint32_t
 	{
-		return width;
+		return swapchainExtents.width;
 	}
 
 	auto VulkanSwapchain::get_height() -> uint32_t
 	{
-		return height;
+		return swapchainExtents.height;
 	}
 
 	auto VulkanSwapchain::get_swapchain_buffer() -> std::shared_ptr<Texture>
@@ -272,17 +293,28 @@ namespace RHI
 		return swapChainImages[index];
 	}
 
-	auto VulkanSwapchain::resize_swapchain(uint32_t width, uint32_t height) -> void
+	auto VulkanSwapchain::resize_swapchain(uint32_t i_width, uint32_t i_height) -> void
 	{
-		HLogInfo("resize swapchain with width  : {}, height : {}",width, height);
-		this->width = width;
-		this->height = height;
+		HLogInfo("resize swapchain to width  : {}, height : {}", i_width, i_height);
 		_recreate_swapchain();
 	}
 
 	auto VulkanSwapchain::present() -> void
 	{
-
+		VkPresentInfoKHR presentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
+		presentInfo.swapchainCount = 1;
+		presentInfo.pSwapchains = &swapChain;
+		presentInfo.pImageIndices = &acquireImageIndex;
+		/*presentInfo.waitSemaphoreCount = 1;
+		presentInfo.pWaitSemaphores = &(VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore);*/
+		presentInfo.pResults = nullptr;
+		//TODO: deal the image layout problem
+		//if layout != present_src, do transition.
+		VkResult result = vkQueuePresentKHR(VulkanContext::get_present_queue(), &presentInfo);
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+		{
+			_recreate_swapchain();
+		}
 	}
 
 }

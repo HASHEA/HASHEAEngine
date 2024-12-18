@@ -34,6 +34,7 @@ namespace AshEngine
 		std::vector<RHI::AshFormat> format = { RHI::ASH_FORMAT_B8G8R8A8_SRGB };
 		std::vector<RHI::AshPresentMode> presentMode = {RHI::ASH_PRESENT_MODE_MAILBOX_KHR };
 		RHI::SwapChainInitConfig scConfig{};
+		scConfig.swapchainBufferCount = 3;
 		scConfig.window = window->get_native_interface();
 		scConfig.width = window->get_width();
 		scConfig.height = window->get_height();
@@ -59,22 +60,44 @@ namespace AshEngine
 	}
 	auto Application::start() -> void
 	{
-		while (0)
+		while (!window->should_close())
 		{
-
-
-
+			// logic update, non about rendering
 			_on_update();
+
+			
+			_on_render();
+
+
+			_present();
 		}
 	}
 	auto Application::_on_update() -> void
 	{
-		window->on_update();
+		window->on_update();//handle event first
+
 	}
 	auto Application::_on_gui() -> void
 	{
 	}
 	auto Application::_on_render_debug() -> void
 	{
+	}
+	auto Application::_on_render() -> void
+	{
+		graphicsContext->begin_frame();
+		swapChain->begin_frame();
+		
+
+
+
+		_on_render_debug();
+		
+		swapChain->end_frame();
+		graphicsContext->end_frame();
+	}
+	auto Application::_present() -> void
+	{
+		swapChain->present();
 	}
 };

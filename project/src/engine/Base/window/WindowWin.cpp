@@ -46,6 +46,7 @@ namespace AshEngine
 			HLogError("Fatal : failed to create glfw window !");
 			return;
 		}
+		shouldClose = false;
 		set_title(data.title);
 		glfwMakeContextCurrent(handle);
 		register_native_event(data);
@@ -58,6 +59,7 @@ namespace AshEngine
 	}
 	auto WindowWin::shutdown() -> void
 	{
+		shouldClose = true;
 		extensions.shutdown();
 		glfwDestroyWindow(handle);
 		glfwTerminate();
@@ -124,5 +126,9 @@ namespace AshEngine
 		glfwSetScrollCallback(handle, [](GLFWwindow* win, double xOffset, double yOffset) {
 			
 			});
+	}
+	auto WindowWin::should_close() -> bool
+	{
+		return shouldClose;
 	}
 }

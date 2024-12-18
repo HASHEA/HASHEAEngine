@@ -11,6 +11,8 @@ namespace AshEditor
 		auto _on_update()-> void override;
 		auto _on_gui() -> void override;
 		auto _on_render_debug() -> void override;
+		auto _on_render() -> void override;
+		auto _present() -> void override;
 	private:
 
 	};

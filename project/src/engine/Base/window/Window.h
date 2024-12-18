@@ -26,7 +26,7 @@ namespace AshEngine
 		virtual auto set_title(const char* title) -> void = 0;
 		virtual auto get_native_interface() -> void* = 0;
 		virtual auto get_native_window() -> void* { return nullptr; }
-
+		virtual auto should_close() -> bool = 0;
 		static Window* create();
 		inline auto get_scale() const
 		{

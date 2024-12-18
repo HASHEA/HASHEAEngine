@@ -10,6 +10,7 @@ namespace RHI
 	struct SwapChainInitConfig
 	{
 		void* window = nullptr;
+		uint8_t swapchainBufferCount = 1;
 		uint16_t  width = 1;
 		uint16_t  height = 1;
 		uint32_t colorFormatCount = 0;
@@ -38,6 +39,7 @@ namespace RHI
 		virtual auto get_height() -> uint32_t = 0;
 		virtual auto begin_frame() -> void = 0;
 		virtual auto end_frame() -> void = 0;
+		virtual auto get_swapchain_buffer_count() -> uint8_t = 0;
 	private:
 
 	};

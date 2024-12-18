@@ -29,9 +29,15 @@ namespace AshEngine
 		auto set_title(const char* title) -> void override;
 
 		auto get_native_interface() -> void* override;
+
+		auto should_close() -> bool override;
 	private:
 		auto register_native_event(const WindowConfig& data) -> void;
 		WindowConfig data{};
 		GLFWwindow* handle = nullptr;
+		bool shouldClose = false;
+
+		
+
 	};
 };

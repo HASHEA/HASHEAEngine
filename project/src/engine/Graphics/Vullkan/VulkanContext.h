@@ -12,7 +12,6 @@
 using namespace AshEngine;
 namespace RHI
 {
-	constexpr uint32_t		  MAX_SWAPCHAIN_BUFFERS = 3;
 	constexpr uint32_t        k_bindless_texture_binding = 10;
 	constexpr uint32_t        k_bindless_image_binding = 11;
 	constexpr uint32_t        k_max_bindless_resources = 1024;
@@ -40,12 +39,13 @@ namespace RHI
 	};
 	//attention that the count of framepool may not equal to the count of framedata because of the multi thread
 	//we can record in multi thread but submit in main thread
-	//frame data is the datas used for submit
+	//frame data is the datas used for submit and present
 	//frame pool is stuffs used for record
 	//count = numFrame
 	struct FrameData
 	{
-		VkSemaphore		vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;
+		VkSemaphore     vulkanRenderBeginSemaphore			= VK_NULL_HANDLE;//wait for this Semaphore to begin render. normally triggered by swapchain acquireimages
+		VkSemaphore		vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;//trigger this seemaphore when complete render, normally waited by swapchain to present
 		VulkanFence*	vulkanCommandBufferExecutedFence	= nullptr;
 	};
 
@@ -86,7 +86,22 @@ namespace RHI
 
 		inline auto get_frame_pool_internal(uint32_t index) -> const FramePool& const
 		{
-			return framePools[index];
+			return framePools[index % k_max_frames];
+		}
+
+		inline auto get_frame_pool_internal() -> const FramePool& const
+		{
+			return framePools[currentFrame];
+		}
+
+		inline auto get_frame_data_internal() -> const FrameData& const
+		{
+			return frameDatas[currentFrame];
+		}
+
+		inline auto get_frame_data_internal(uint32_t index) -> const FrameData& const
+		{
+			return frameDatas[index % k_max_frames];
 		}
 
 		inline auto get_vma_allocator_internal()
@@ -154,6 +169,21 @@ namespace RHI
 			return instance->get_frame_pool_internal(index);
 		}
 
+		inline static auto get_frame_pool() -> const FramePool& const
+		{
+			return instance->get_frame_pool_internal();
+		}
+
+		inline static auto get_frame_data() -> const FrameData& const
+		{
+			return instance->get_frame_data_internal();
+		}
+
+		inline static auto get_frame_data(uint32_t index) -> const FrameData& const
+		{
+			return instance->get_frame_data_internal(index);
+		}
+
 		inline static const auto get_vma_allocator()
 		{
 			return instance->get_vma_allocator_internal();
@@ -165,6 +195,12 @@ namespace RHI
 		{
 			instance->set_resource_name_internal(type,handle,name);
 		}
+
+		inline static auto get_present_queue() -> VkQueue
+		{
+			return instance->vulkanPresentQueue;
+		}
+
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
@@ -176,7 +212,8 @@ namespace RHI
 		auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
 		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
-
+		auto begin_frame() -> void override;
+		auto end_frame() -> void override;
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
 	private:
@@ -238,7 +275,7 @@ namespace RHI
 		Array<FrameData>				frameDatas{};
 		Array<VulkanCommandBuffer>		commandBufferQueue{};
 		DelayCommandQueue				delayed_deletion_queues[k_max_frames];
-		VkSemaphore                     vulkanImageAcquiredSemaphore		= VK_NULL_HANDLE;
+		//VkSemaphore                     vulkanImageAcquiredSemaphore		= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanGraphicsSemaphore				= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanBindSemaphore					= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanComputeSemaphore				= VK_NULL_HANDLE;
@@ -264,6 +301,9 @@ private:
 		
 
 
+
+
+		
 
 
 		

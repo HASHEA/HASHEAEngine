@@ -38,8 +38,8 @@ namespace AshEngine
 		virtual auto _on_update() -> void;
 		virtual auto _on_gui() -> void;
 		virtual auto _on_render_debug() -> void;
-
-
+		virtual auto _on_render() -> void;
+		virtual auto _present() -> void;
 	public:
 		static Application* app;
 	protected:

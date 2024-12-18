@@ -781,11 +781,12 @@ namespace RHI
 		for (uint32_t i = 0; i < frameDatas.size(); i++)
 		{
 			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &frameDatas[i].vulkanRenderCompleteSemaphore));
+			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &frameDatas[i].vulkanRenderBeginSemaphore));
 			if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
 				frameDatas[i].vulkanCommandBufferExecutedFence = Ash_New<VulkanFence>();
 			}
 		}
-		VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanImageAcquiredSemaphore));
+		
 		VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanBindSemaphore));
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
 			VkSemaphoreTypeCreateInfo semaphore_type_info{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
@@ -845,13 +846,11 @@ namespace RHI
 			vkDestroySemaphore(vulkanDevice, vulkanBindSemaphore, vulkanAllocationCallbacks);
 			vulkanBindSemaphore = VK_NULL_HANDLE;
 		}
-		if (vulkanImageAcquiredSemaphore != VK_NULL_HANDLE)
-		{
-			vkDestroySemaphore(vulkanDevice, vulkanImageAcquiredSemaphore, vulkanAllocationCallbacks);
-			vulkanImageAcquiredSemaphore = VK_NULL_HANDLE;
-		}
+		
 		for (uint32_t i = 0; i < frameDatas.size(); i++)
 		{
+			vkDestroySemaphore(vulkanDevice, frameDatas[i].vulkanRenderBeginSemaphore, vulkanAllocationCallbacks);
+			frameDatas[i].vulkanRenderBeginSemaphore = VK_NULL_HANDLE;
 			vkDestroySemaphore(vulkanDevice, frameDatas[i].vulkanRenderCompleteSemaphore, vulkanAllocationCallbacks);
 			frameDatas[i].vulkanRenderCompleteSemaphore = VK_NULL_HANDLE;
 			if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
@@ -880,6 +879,14 @@ namespace RHI
 		Ash_Delete(nullptr,gpuTimeQueryManager);
 		framePools.shutdown();
 		return HS_OK;
+	}
+
+	auto VulkanContext::begin_frame() -> void
+	{
+	}
+
+	auto VulkanContext::end_frame() -> void
+	{
 	}
 
 	auto VulkanContext::init(void* config) -> HS_Result

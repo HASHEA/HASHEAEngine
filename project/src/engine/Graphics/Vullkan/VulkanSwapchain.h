@@ -33,6 +33,7 @@ namespace RHI
 		auto get_height() -> uint32_t override;
 		auto begin_frame() -> void override;
 		auto end_frame() -> void override;
+		auto get_swapchain_buffer_count() -> uint8_t override;
 	public:
 		//vulkan only
 		auto get_vk_suface()
@@ -48,17 +49,19 @@ namespace RHI
 		auto _clean_swapchain() -> HS_Result;
 		auto _aquire_next_image() -> void;
 	private:
-		uint32_t width = 0;
-		uint32_t height = 0;
+		uint8_t swapchainBufferCount = 0;
 		VkSurfaceKHR    surface = VK_NULL_HANDLE;
 		VkSurfaceFormatKHR surfaceFormat{};
 		VkPresentModeKHR presentMode{};
-		VkExtent2D extent{};
+		VkExtent2D swapchainExtents{};
 		VkSurfaceTransformFlagBitsKHR    preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 		VkSwapchainKHR swapChain = VK_NULL_HANDLE;
 		VkSwapchainKHR oldSwapChain = VK_NULL_HANDLE;
 		Array<std::shared_ptr<VulkanTexture>> swapChainImages;
-
+		uint32_t acquireImageIndex = UINT32_MAX;
 	
+
+		
+
 	};
 }
