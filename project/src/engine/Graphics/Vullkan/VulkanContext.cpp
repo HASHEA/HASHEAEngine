@@ -839,6 +839,29 @@ namespace RHI
 		return HS_OK;
 	}
 
+	/*auto VulkanContext::submit(const SubmitInfo& info) -> void
+	{
+	}*/
+
+	auto VulkanContext::submit_immediately(const SubmitInfo& info) -> void
+	{
+		H_ASSERTLOG(info.cmdCount == 1, " immediately submit can only submit one command once!");
+		//immediately submit and got result
+		const VkCommandBuffer cmds[] = {(VkCommandBuffer)info.cmds->get_native_handle()};
+		vulkanImmediateFence->reset();
+		VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		submit_info.waitSemaphoreCount = 0;
+		submit_info.pWaitSemaphores = nullptr;
+		submit_info.pWaitDstStageMask = nullptr;
+		submit_info.commandBufferCount = info.cmdCount;
+		submit_info.pCommandBuffers = cmds;
+		submit_info.signalSemaphoreCount = 0;
+		submit_info.pSignalSemaphores = nullptr;
+		VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, vulkanImmediateFence->get_handle()));
+		info.cmds->set_state(AshCommandBufferState::ASH_Submitted);
+		vulkanImmediateFence->wait();
+	}
+
 	auto VulkanContext::begin_frame() -> void
 	{
 	}

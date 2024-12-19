@@ -201,6 +201,29 @@ namespace RHI
 			return instance->vulkanPresentQueue;
 		}
 
+		inline static auto get_queue_family_index(AshQueueType::Enum queueType) -> uint32_t
+		{
+			uint32_t index = UINT32_MAX;
+			switch (queueType)
+			{
+			case RHI::AshQueueType::Graphics:
+				index = instance->vulkanMainQueueFamily;
+				break;
+			case RHI::AshQueueType::Compute:
+				index = instance->vulkanComputeQueueFamily;
+				break;
+			case RHI::AshQueueType::CopyTransfer:
+				index = instance->vulkanTransferQueueFamily;
+				break;
+			case RHI::AshQueueType::Ignored:
+				index = VK_QUEUE_FAMILY_IGNORED;
+				break;
+			default:
+				break;
+			}
+			return index;
+		}
+
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
@@ -214,6 +237,8 @@ namespace RHI
 		auto wait_idle() -> void override;
 		auto begin_frame() -> void override;
 		auto end_frame() -> void override;
+		//auto submit(const SubmitInfo& info) -> void override;
+		auto submit_immediately(const SubmitInfo& info) -> void override;
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
 	private:
@@ -280,7 +305,7 @@ namespace RHI
 		VkSemaphore                     vulkanBindSemaphore					= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanComputeSemaphore				= VK_NULL_HANDLE;
 		VulkanFence*                    vulkanComputeFence					= nullptr;
-		VulkanFence*					vulkanImmediateFence				= nullptr;
+		VulkanFence*					vulkanImmediateFence				= nullptr; //stuck here and wait
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
@@ -307,6 +332,8 @@ private:
 
 
 		
+
+
 
 };
 

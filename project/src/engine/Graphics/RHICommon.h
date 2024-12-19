@@ -51,6 +51,24 @@ namespace RHI
 
 	} // namespace TextureFlags
 
+	namespace AshQueueType {
+		enum Enum {
+			Graphics, Compute, CopyTransfer, Ignored, Count
+		};
+
+		enum Mask {
+			Graphics_mask = 1 << 0, Compute_mask = 1 << 1, CopyTransfer_mask = 1 << 2, Ignored_mask = 1 << 3,Count_mask = 1 << 4
+		};
+
+		static const char* s_value_names[] = {
+			"Graphics", "Compute", "CopyTransfer","Ignored", "Count"
+		};
+
+		static const char* to_string(Enum e) {
+			return ((uint32_t)e < Enum::Count ? s_value_names[(int)e] : "unsupported");
+		}
+	} // namespace QueueType
+
 	typedef enum AshImageViewType {
 		ASH_IMAGE_VIEW_TYPE_1D = 0,
 		ASH_IMAGE_VIEW_TYPE_2D = 1,
@@ -228,6 +246,28 @@ namespace RHI
 		ASH_Submitted,
 		ASH_State_Count
 	}AshCommandBufferState;
+
+	typedef enum AshResourceState {
+		ASH_RESOURCE_STATE_UNDEFINED = 0,
+		ASH_RESOURCE_STATE_GENERAL = 1,
+		ASH_RESOURCE_STATE_RENDER_TARGET = 2,
+		ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE = 3,
+		ASH_RESOURCE_STATE_DEPTH_STENCIL_READ = 4,
+		ASH_RESOURCE_STATE_SHADER_RESOURCE = 5,
+		ASH_RESOURCE_STATE_COPY_SOURCE = 6,
+		ASH_RESOURCE_STATE_COPY_DEST = 7,
+		ASH_RESOURCE_STATE_PREINITIALIZED = 8,
+		ASH_RESOURCE_STATE_UNORDERED_ACCESS = 9,
+		ASH_RESOURCE_STATE_DEPTH_WRITE,
+		ASH_RESOURCE_STATE_DEPTH_READ,
+		ASH_RESOURCE_STATE_STENCIL_WRITE,
+		ASH_RESOURCE_STATE_STENCIL_READ,
+		ASH_RESOURCE_STATE_PRESENT,
+		ASH_RESOURCE_STATE_FRAGMENT_SHADING_RATE_ATTACHMENT,
+		ASH_RESOURCE_STATE_MAX_ENUM = 0x7FFFFFFF
+	} AshResourceState;
+
+
 }
 
 

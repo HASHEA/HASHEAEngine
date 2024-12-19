@@ -89,6 +89,9 @@ namespace RHI
 
 		auto get_type() -> AshImageType override;
 
+		auto get_resource_state() -> AshResourceState override;
+
+		auto set_resource_state(AshResourceState state) -> void override;
 	public:
 		/*interfaces for vulkan*/
 		inline auto get_default_vk_image_view() -> std::shared_ptr<VulkanTextureView>
@@ -133,6 +136,7 @@ namespace RHI
 		uint8_t										compute_access					= 0;
 		AshFormat									format							= ASH_FORMAT_UNDEFINED;
 		AshImageType								type							= AshImageType::Ash_Texture2D;
+		AshResourceState							state							= AshResourceState::ASH_RESOURCE_STATE_UNDEFINED;
 		bool										sparse							= false;
 		bool										cube							= false;
 		bool										swapchain_texture				= false;
@@ -142,5 +146,10 @@ namespace RHI
 		std::shared_ptr<VulkanTexture>				aliasTexture					= nullptr;
 	
 		friend class VulkanSwapchain;
-	};
+
+		
+
+		
+
+};
 }

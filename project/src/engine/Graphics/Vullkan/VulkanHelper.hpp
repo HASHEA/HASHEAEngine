@@ -794,4 +794,213 @@ namespace RHI
 		}
 		return vktype;
 	}
+
+	inline auto ash_resource_state_to_vk_image_layout(const AshResourceState& state) -> VkImageLayout
+	{
+		VkImageLayout layout = VkImageLayout::VK_IMAGE_LAYOUT_UNDEFINED;
+		switch (state)
+		{
+		case AshResourceState::ASH_RESOURCE_STATE_UNDEFINED:
+			layout = VK_IMAGE_LAYOUT_UNDEFINED;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_GENERAL:
+			layout = VK_IMAGE_LAYOUT_GENERAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_RENDER_TARGET:
+			layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE:
+			layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_STENCIL_READ:
+			layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_SHADER_RESOURCE:
+			layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_COPY_SOURCE:
+			layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_COPY_DEST:
+			layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_PREINITIALIZED:
+			layout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_UNORDERED_ACCESS:
+			layout = VK_IMAGE_LAYOUT_GENERAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_WRITE:
+			layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_READ:
+			layout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_STENCIL_WRITE:
+			layout = VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_STENCIL_READ:
+			layout = VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_PRESENT:
+			layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+			break;
+		case AshResourceState::ASH_RESOURCE_STATE_FRAGMENT_SHADING_RATE_ATTACHMENT:
+			layout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+			break;
+		default:
+			HLogWarning("unsupported state, trans to undefined !");
+			break;
+		}
+		return layout;
+	}
+
+	inline auto ash_is_valid_transition(const AshResourceState& src, const AshResourceState& dst) -> bool
+	{
+		if (src == dst)
+		{
+			return false;
+		}
+		if (dst == AshResourceState::ASH_RESOURCE_STATE_UNDEFINED || AshResourceState::ASH_RESOURCE_STATE_PREINITIALIZED)
+		{
+			return false;
+		}
+		//TODO: add other rules to avoid useless transition
+		return true;
+	}
+
+	inline auto vk_layout_to_access_mask(const VkImageLayout& layout) -> VkPipelineStageFlags
+	{
+		VkPipelineStageFlags accessMask = 0;
+		switch (layout)
+		{
+		case VK_IMAGE_LAYOUT_UNDEFINED:
+			break;
+
+		case VK_IMAGE_LAYOUT_GENERAL:
+			accessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+			accessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+			accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+			accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+			accessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+			accessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+			accessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_PREINITIALIZED:
+			accessMask = VK_ACCESS_SHADER_READ_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL:
+			accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL:
+			accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL:
+			accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL:
+			accessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+			break;
+		case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+			accessMask = VK_ACCESS_MEMORY_READ_BIT;
+			break;
+
+		case VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR:
+			accessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			break;
+		default:
+			HLogWarning("Unexpected image layout");
+			break;
+		}
+
+		return accessMask;
+	}
+	inline VkPipelineStageFlags util_determine_pipeline_stage_flags(VkAccessFlags access_flags, AshQueueType::Enum queue_type) {
+		VkPipelineStageFlags flags = 0;
+
+		switch (queue_type) {
+		case AshQueueType::Graphics:
+		{
+			if ((access_flags & (VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT)) != 0)
+				flags |= VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+
+			if ((access_flags & (VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)) != 0) {
+				flags |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+				flags |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+				flags |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
+				// TODO(marco): check RT extension is present/enabled
+				flags |= VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+			}
+
+			if ((access_flags & VK_ACCESS_INPUT_ATTACHMENT_READ_BIT) != 0)
+				flags |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+
+			if ((access_flags & (VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR)) != 0)
+				flags |= VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+
+			if ((access_flags & (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)) != 0)
+				flags |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+			if ((access_flags & VK_ACCESS_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR) != 0)
+				flags = VK_PIPELINE_STAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
+
+			if ((access_flags & (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)) != 0)
+				flags |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+
+			break;
+		}
+		case AshQueueType::Compute:
+		{
+			if ((access_flags & (VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT)) != 0 ||
+				(access_flags & VK_ACCESS_INPUT_ATTACHMENT_READ_BIT) != 0 ||
+				(access_flags & (VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)) != 0 ||
+				(access_flags & (VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)) != 0)
+				return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+
+			if ((access_flags & (VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)) != 0)
+				flags |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+
+			break;
+		}
+		case AshQueueType::CopyTransfer:
+		case AshQueueType::Ignored: 
+			return VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+		default: break;
+		}
+
+		// Compatible with both compute and graphics queues
+		if ((access_flags & VK_ACCESS_INDIRECT_COMMAND_READ_BIT) != 0)
+			flags |= VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+
+		if ((access_flags & (VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)) != 0)
+			flags |= VK_PIPELINE_STAGE_TRANSFER_BIT;
+
+		if ((access_flags & (VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT)) != 0)
+			flags |= VK_PIPELINE_STAGE_HOST_BIT;
+
+		if (flags == 0)
+			flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+
+		return flags;
+	}
 };

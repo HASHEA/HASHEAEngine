@@ -10,7 +10,7 @@ namespace RHI
 	class TextureView;
 	class Sampler;
 	class Buffer;
-
+	class CommandBuffer;
 
 	struct SamplerCreation;
 	struct TextureCreation;

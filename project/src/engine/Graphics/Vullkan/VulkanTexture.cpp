@@ -35,7 +35,7 @@ namespace RHI
 		vkImageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
 		vkImageCI.usage = get_image_usage_vulkan(ci);
 		vkImageCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		vkImageCI.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		vkImageCI.initialLayout = ash_resource_state_to_vk_image_layout(ci.initial_state) ;
 		VmaAllocationCreateInfo memory_info{};
 		memory_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 		HLogInfo("creating texture : {} ...", ci.name);
@@ -63,7 +63,7 @@ namespace RHI
 			
 		}
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE, (uint64_t)vkImage, ci.name);
-		
+		state = ci.initial_state;
 	}
 
 	VulkanTexture::~VulkanTexture()
@@ -236,6 +236,16 @@ namespace RHI
 	auto VulkanTexture::get_type() -> AshImageType
 	{
 		return type;
+	}
+
+	auto VulkanTexture::get_resource_state() -> AshResourceState
+	{
+		return AshResourceState();
+	}
+
+	auto VulkanTexture::set_resource_state(AshResourceState _state) -> void
+	{
+		this->state = _state;
 	}
 
 	auto VulkanTexture::get_desciption(TextureDescription& desc) -> void 

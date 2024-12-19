@@ -30,6 +30,12 @@ namespace RHI {
         AshEngine::Array<const char*>        addtionalExtensions{};
     };
 
+    struct SubmitInfo
+    {
+        CommandBuffer* cmds = nullptr;
+        uint32_t cmdCount = 0;
+    };
+
     class GraphicsContext
     {
     public:
@@ -48,12 +54,11 @@ namespace RHI {
         virtual auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> = 0;
         virtual auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
         virtual auto create_sampler(const SamplerCreation& ci)->std::shared_ptr<Sampler> = 0;
-  /*      virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;
-        virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;
-        virtual auto destroy_rhi_resource_Immediately(std::shared_ptr<RHIResource> resource) -> void = 0;*/
         virtual auto wait_idle() -> void = 0;
 		virtual auto begin_frame() -> void = 0;
 		virtual auto end_frame() -> void = 0;
+        //virtual auto submit(const SubmitInfo& info) -> void = 0;
+        virtual auto submit_immediately(const SubmitInfo& info) -> void = 0;
     protected:
       
     };

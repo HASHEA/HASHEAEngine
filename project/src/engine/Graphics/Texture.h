@@ -56,6 +56,7 @@ namespace RHI
 		uint8_t                              flags = 0;    // TextureFlags bitmasks
 		AshFormat							 format = ASH_FORMAT_UNDEFINED;
 		AshImageType						 type = AshImageType::Ash_Texture2D;
+		AshResourceState					 initial_state = AshResourceState::ASH_RESOURCE_STATE_UNDEFINED;
 		std::shared_ptr<Texture>			 alias = nullptr;
 		const char*                          name = nullptr;
 	}; // struct TextureCreation
@@ -83,5 +84,7 @@ namespace RHI
 		virtual auto get_height() -> uint16_t = 0;
 		virtual auto get_name() -> const char* = 0;
 		virtual auto get_type() -> AshImageType = 0;
+		virtual auto get_resource_state() -> AshResourceState = 0;
+		virtual auto set_resource_state(AshResourceState state) -> void = 0;
 	};
 }
