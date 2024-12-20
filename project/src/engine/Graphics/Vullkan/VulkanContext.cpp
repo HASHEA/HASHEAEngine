@@ -740,9 +740,10 @@ namespace RHI
 		{
 			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &frameDatas[i].vulkanRenderCompleteSemaphore));
 			VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &frameDatas[i].vulkanRenderBeginSemaphore));
-			if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
+			/*if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
 				frameDatas[i].vulkanCommandBufferExecutedFence = Ash_New<VulkanFence>();
-			}
+			}*/
+			frameDatas[i].vulkanCommandBufferExecutedFence = Ash_New<VulkanFence>();
 		}
 		
 		VK_CHECK_RESULT(vkCreateSemaphore(vulkanDevice, &semaphore_info, vulkanAllocationCallbacks, &vulkanBindSemaphore));
@@ -811,9 +812,10 @@ namespace RHI
 			frameDatas[i].vulkanRenderBeginSemaphore = VK_NULL_HANDLE;
 			vkDestroySemaphore(vulkanDevice, frameDatas[i].vulkanRenderCompleteSemaphore, vulkanAllocationCallbacks);
 			frameDatas[i].vulkanRenderCompleteSemaphore = VK_NULL_HANDLE;
-			if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
+			/*if (!get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore)) {
 				Ash_Delete(nullptr, frameDatas[i].vulkanCommandBufferExecutedFence);	
-			}
+			}*/
+			Ash_Delete(nullptr, frameDatas[i].vulkanCommandBufferExecutedFence);
 		}
 		frameDatas.shutdown();
 		for (uint32_t i = 0; i < framePools.size(); i++)
@@ -854,6 +856,8 @@ namespace RHI
 		//enqueue vkCommandBuffer
 		for (size_t i = 0; i < info.cmdCount; i++)
 		{
+			H_ASSERTLOG(info.cmds[i].get_state() == AshCommandBufferState::ASH_Ended || 
+				info.cmds[i].get_state() == AshCommandBufferState::ASH_Idle,"Fatal: The submitted command buffer must be in the one of the state of ended or idle!");
 			commandBufferQueue.push_back(static_cast<VulkanCommandBuffer*>(&info.cmds[i]));
 		}
 	}
@@ -892,40 +896,41 @@ namespace RHI
 			currentFrame = (currentFrame + 1) % k_max_frames;
 			absoluteFrame++;
 		}
+		get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
 		commandBufferQueue.clear();
+
 	}
 
 	auto VulkanContext::end_frame() -> void
 	{
-		////submit all commands
-		////const VkCommandBuffer cmds[] = { (VkCommandBuffer)info.cmds->get_native_handle() };
-		//size_t count = commandBufferQueue.size();
-		//
-		//VkCommandBuffer cmds[k_command_buffer_queue_length] = {};
-		//if (count == 0)
-		//{
-		//	cmds[0] = 
-		//}
-		//else
-		//{
-		//	for (size_t i = 0; i < count; i++)
-		//	{
-		//		cmds[i] = (VkCommandBuffer)commandBufferQueue[i]->get_native_handle();
-		//	}
-		//}
-		//
-		//vulkanImmediateFence->reset();
-		//VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-		//submit_info.waitSemaphoreCount = 0;
-		//submit_info.pWaitSemaphores = nullptr;
-		//submit_info.pWaitDstStageMask = nullptr;
-		//submit_info.commandBufferCount = info.cmdCount;
-		//submit_info.pCommandBuffers = cmds;
-		//submit_info.signalSemaphoreCount = 0;
-		//submit_info.pSignalSemaphores = nullptr;
-		//VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, vulkanImmediateFence->get_handle()));
-		//info.cmds->set_state(AshCommandBufferState::ASH_Submitted);
-		//vulkanImmediateFence->wait();
+		//submit all commands
+		//const VkCommandBuffer cmds[] = { (VkCommandBuffer)info.cmds->get_native_handle() };
+		size_t count = commandBufferQueue.size();
+		
+		VkCommandBuffer cmds[k_command_buffer_queue_length] = {};
+		if (count == 0)
+		{
+			cmds[0] = VK_NULL_HANDLE;
+		}
+		else
+		{
+			for (size_t i = 0; i < count; i++)
+			{
+				cmds[i] = (VkCommandBuffer)commandBufferQueue[i]->get_native_handle();
+				commandBufferQueue[i]->set_state(AshCommandBufferState::ASH_Submitted);
+			}
+		}
+		VkPipelineStageFlags flag = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		vulkanImmediateFence->reset();
+		VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		submit_info.waitSemaphoreCount = 1;
+		submit_info.pWaitSemaphores = &get_frame_data_internal().vulkanRenderBeginSemaphore;
+		submit_info.pWaitDstStageMask = &flag;
+		submit_info.commandBufferCount = count;
+		submit_info.pCommandBuffers = cmds;
+		submit_info.signalSemaphoreCount = 1;
+		submit_info.pSignalSemaphores = &get_frame_data_internal().vulkanRenderCompleteSemaphore;
+		VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
 	}
 
 	auto VulkanContext::init(void* config) -> HS_Result

@@ -102,8 +102,15 @@ namespace RHI
 	}
 	auto VulkanCommandBuffer::shutdown() -> void
 	{
-		if (vkCommandBuffer)
-			vkFreeCommandBuffers(VulkanContext::get_vulkan_device(), vkCommandPool,1, &vkCommandBuffer);
+		if (vkCommandBuffer != VK_NULL_HANDLE)
+		{
+			vkFreeCommandBuffers(VulkanContext::get_vulkan_device(), vkCommandPool, 1, &vkCommandBuffer);
+		}
+		if (vk_descriptor_pool != VK_NULL_HANDLE)
+		{
+			vkDestroyDescriptorPool(VulkanContext::get_vulkan_device(), vk_descriptor_pool, VulkanContext::get_vulkan_allocation_callbacks());
+			vk_descriptor_pool = VK_NULL_HANDLE;
+		}
 	}
 
 	auto VulkanCommandBuffer::begin() -> void

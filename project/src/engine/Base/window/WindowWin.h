@@ -35,7 +35,7 @@ namespace AshEngine
 		auto register_native_event(const WindowConfig& data) -> void;
 		WindowConfig data{};
 		GLFWwindow* handle = nullptr;
-		bool shouldClose = false;
+		static bool shouldClose;
 
 		
 

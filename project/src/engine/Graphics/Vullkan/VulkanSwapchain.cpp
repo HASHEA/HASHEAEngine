@@ -284,7 +284,7 @@ namespace RHI
 
 	auto VulkanSwapchain::get_swapchain_buffer() -> std::shared_ptr<Texture>
 	{
-		uint32_t curFrame = VulkanContext::get_current_frame();
+		uint32_t curFrame = acquireImageIndex;
 		return swapChainImages[curFrame];
 	}
 
@@ -307,8 +307,8 @@ namespace RHI
 		presentInfo.pSwapchains = &swapChain;
 		presentInfo.pImageIndices = &acquireImageIndex;
 		//TEST PERIOD
-		/*presentInfo.waitSemaphoreCount = 1;
-		presentInfo.pWaitSemaphores = &(VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore);*/
+		presentInfo.waitSemaphoreCount = 1;
+		presentInfo.pWaitSemaphores = &(VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore);
 		presentInfo.pResults = nullptr;
 		//TODO: deal the image layout problem
 		//if layout != present_src, do transition.

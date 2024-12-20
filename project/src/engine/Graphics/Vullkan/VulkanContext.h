@@ -47,7 +47,6 @@ namespace RHI
 		VkSemaphore							vulkanRenderBeginSemaphore			= VK_NULL_HANDLE;//wait for this Semaphore to begin render. normally triggered by swapchain acquireimages
 		VkSemaphore							vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;//trigger this seemaphore when complete render, normally waited by swapchain to present
 		VulkanFence*						vulkanCommandBufferExecutedFence	= nullptr;
-		VulkanCommandBuffer*				emptyCommandBuffer					= nullptr;
 	};
 
 

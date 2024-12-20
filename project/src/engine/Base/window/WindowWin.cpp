@@ -5,6 +5,7 @@
 #include "Function/Application.h"
 namespace AshEngine
 {
+	bool WindowWin::shouldClose = true;
 	auto WindowWin::on_update() -> void
 	{
 		glfwPollEvents();
@@ -94,7 +95,7 @@ namespace AshEngine
 			});
 
 		glfwSetWindowCloseCallback(handle, [](GLFWwindow* win) {
-			
+			WindowWin::shouldClose = true;
 			});
 
 		glfwSetMouseButtonCallback(handle, [](GLFWwindow* window, int32_t btnId, int32_t state, int32_t mods) {
