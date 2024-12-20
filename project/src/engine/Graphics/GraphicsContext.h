@@ -57,7 +57,9 @@ namespace RHI {
         virtual auto wait_idle() -> void = 0;
 		virtual auto begin_frame() -> void = 0;
 		virtual auto end_frame() -> void = 0;
-        //virtual auto submit(const SubmitInfo& info) -> void = 0;
+        virtual auto get_command_buffer(uint32_t threadIndx) -> CommandBuffer* = 0;
+        virtual auto get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer* = 0;
+        virtual auto submit(const SubmitInfo& info) -> void = 0;
         virtual auto submit_immediately(const SubmitInfo& info) -> void = 0;
     protected:
       

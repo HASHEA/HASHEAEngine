@@ -103,8 +103,8 @@ namespace RHI
 
         uint32_t                        max_frames;
         uint32_t                        max_queries_per_frame;
-        uint32_t                        current_frame;
-
+        uint32_t                        current_frame = UINT32_MAX;
+        
         float                           max_time;
         float                           min_time;
         float                           average_time;

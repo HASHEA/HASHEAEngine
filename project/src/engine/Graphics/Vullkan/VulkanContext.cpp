@@ -706,7 +706,7 @@ namespace RHI
 		framePools.init(nullptr/*default allocator*/, num_pools, num_pools);
 		gpuTimeQueryManager = Ash_New<GPUTimeQueriesManager>();
 		gpuTimeQueryManager->init(framePools.m_pData, nullptr/*default allocator*/, numQueryTimes, numThread, k_max_frames);
-		commandBufferQueue.init(nullptr, k_command_buffer_queue_length, k_command_buffer_queue_length);
+		commandBufferQueue.init(nullptr, k_command_buffer_queue_length);
 		for (uint32_t i = 0; i < framePools.size(); i++)
 		{
 			FramePool& pool = framePools[i];
@@ -839,13 +839,29 @@ namespace RHI
 		return HS_OK;
 	}
 
-	/*auto VulkanContext::submit(const SubmitInfo& info) -> void
+	auto VulkanContext::get_command_buffer(uint32_t threadIndx) -> CommandBuffer*
 	{
-	}*/
+		return commandBufferRing->get_command_buffer(currentFrame, threadIndx);
+	}
+
+	auto VulkanContext::get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer*
+	{
+		return commandBufferRing->get_secondary_command_buffer(currentFrame, threadIndx);
+	}
+
+	auto VulkanContext::submit(const SubmitInfo& info) -> void
+	{
+		//enqueue vkCommandBuffer
+		for (size_t i = 0; i < info.cmdCount; i++)
+		{
+			commandBufferQueue.push_back(static_cast<VulkanCommandBuffer*>(&info.cmds[i]));
+		}
+	}
 
 	auto VulkanContext::submit_immediately(const SubmitInfo& info) -> void
 	{
 		H_ASSERTLOG(info.cmdCount == 1, " immediately submit can only submit one command once!");
+		H_ASSERTLOG(info.cmds->get_state() == AshCommandBufferState::ASH_Idle || info.cmds->get_state() == AshCommandBufferState::ASH_Ended, " comand buffer must be ended before submit!");
 		//immediately submit and got result
 		const VkCommandBuffer cmds[] = {(VkCommandBuffer)info.cmds->get_native_handle()};
 		vulkanImmediateFence->reset();
@@ -864,10 +880,52 @@ namespace RHI
 
 	auto VulkanContext::begin_frame() -> void
 	{
+		if (currentFrame == UINT32_MAX)
+		{
+			currentFrame = 0;
+			previousFrame = 0;
+			absoluteFrame = 0;
+		}
+		else
+		{
+			previousFrame = currentFrame;
+			currentFrame = (currentFrame + 1) % k_max_frames;
+			absoluteFrame++;
+		}
+		commandBufferQueue.clear();
 	}
 
 	auto VulkanContext::end_frame() -> void
 	{
+		////submit all commands
+		////const VkCommandBuffer cmds[] = { (VkCommandBuffer)info.cmds->get_native_handle() };
+		//size_t count = commandBufferQueue.size();
+		//
+		//VkCommandBuffer cmds[k_command_buffer_queue_length] = {};
+		//if (count == 0)
+		//{
+		//	cmds[0] = 
+		//}
+		//else
+		//{
+		//	for (size_t i = 0; i < count; i++)
+		//	{
+		//		cmds[i] = (VkCommandBuffer)commandBufferQueue[i]->get_native_handle();
+		//	}
+		//}
+		//
+		//vulkanImmediateFence->reset();
+		//VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		//submit_info.waitSemaphoreCount = 0;
+		//submit_info.pWaitSemaphores = nullptr;
+		//submit_info.pWaitDstStageMask = nullptr;
+		//submit_info.commandBufferCount = info.cmdCount;
+		//submit_info.pCommandBuffers = cmds;
+		//submit_info.signalSemaphoreCount = 0;
+		//submit_info.pSignalSemaphores = nullptr;
+		//VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, vulkanImmediateFence->get_handle()));
+		//info.cmds->set_state(AshCommandBufferState::ASH_Submitted);
+		//vulkanImmediateFence->wait();
 	}
 
 	auto VulkanContext::init(void* config) -> HS_Result
@@ -876,8 +934,6 @@ namespace RHI
 		H_ASSERT(&vkConfig);
 		//load vulkan by volk;
 		VK_CHECK_RESULT(volkInitialize());
-		currentFrame = 0;
-
 		//create vkinstance
 		HS_Result result = _create_instance(vkConfig.addtionalExtensions);
 		if (HS_CHECK_FAILED(result))

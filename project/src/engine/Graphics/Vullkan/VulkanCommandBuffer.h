@@ -17,7 +17,7 @@ namespace RHI
 	public:
 		VulkanCommandBuffer() = default;
 		~VulkanCommandBuffer() {};
-		NO_COPYABLE(VulkanCommandBuffer);
+		//NO_COPYABLE(VulkanCommandBuffer);
 	private:	
 		auto init(uint32_t poolIndex, bool secondary) -> void;
 		auto shutdown() -> void;

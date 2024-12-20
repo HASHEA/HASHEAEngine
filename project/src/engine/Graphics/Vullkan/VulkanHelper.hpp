@@ -861,7 +861,7 @@ namespace RHI
 		{
 			return false;
 		}
-		if (dst == AshResourceState::ASH_RESOURCE_STATE_UNDEFINED || AshResourceState::ASH_RESOURCE_STATE_PREINITIALIZED)
+		if (dst == AshResourceState::ASH_RESOURCE_STATE_UNDEFINED || dst == AshResourceState::ASH_RESOURCE_STATE_PREINITIALIZED)
 		{
 			return false;
 		}

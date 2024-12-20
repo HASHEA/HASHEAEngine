@@ -240,7 +240,7 @@ namespace RHI
 
 	auto VulkanTexture::get_resource_state() -> AshResourceState
 	{
-		return AshResourceState();
+		return state;
 	}
 
 	auto VulkanTexture::set_resource_state(AshResourceState _state) -> void

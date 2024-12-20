@@ -9,6 +9,7 @@
 #include "VulkanTexture.h"
 #include "VulkanSampler.h"
 #include "VulkanBuffer.h"
+#include "VulkanCommandBuffer.h"
 namespace RHI
 {
 	VulkanSwapchain::VulkanSwapchain()
@@ -311,6 +312,16 @@ namespace RHI
 		presentInfo.pResults = nullptr;
 		//TODO: deal the image layout problem
 		//if layout != present_src, do transition.
+		auto swapchainBuffer = get_swapchain_buffer();
+		if (swapchainBuffer->get_resource_state() != AshResourceState::ASH_RESOURCE_STATE_PRESENT)
+		{
+			auto cb = VulkanContext::get()->get_command_buffer(0);
+			cb->begin();
+			cb->transition_image_state(swapchainBuffer, AshResourceState::ASH_RESOURCE_STATE_PRESENT);
+			cb->end();
+			VulkanContext::get()->submit_immediately({ cb ,1});
+		}
+
 		VkResult result = vkQueuePresentKHR(VulkanContext::get_present_queue(), &presentInfo);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
 		{

@@ -100,14 +100,27 @@ namespace AshEngine
         }
         if (initial_size > 0)
         {
-            memset(m_pData, 0, static_cast<size_t>(initial_size * sizeof(T)));
+            //init memory
+			if constexpr (std::is_trivial<T>::value) {
+				memset(m_pData, 0, static_cast<size_t>(initial_size * sizeof(T)));
+			}
+			else {
+				for (uint32_t i = 0; i < initial_size; ++i) {
+					new (&m_pData[i]) T();
+				}
+			}
         } 
         return ret;
     }
 
     template<typename T>
     inline auto Array<T>::shutdown() -> HS_Result {
-        if (m_uCapacity > 0) {
+        if (m_pData) {
+			if constexpr (!std::is_trivially_destructible<T>::value) {
+				for (uint32_t i = 0; i < m_uSize; ++i) {
+					m_pData[i].~T();
+				}
+			}
             Ash_Free(m_pAllocator, m_pData);
         }
         m_pData = nullptr;
@@ -120,9 +133,18 @@ namespace AshEngine
         HS_Result ret = HS_OK;
         if (m_uSize >= m_uCapacity) {
             ret = grow(m_uCapacity + 1);
+            HS_PROCESS_AND_LOG_RESULT(ret);
         }
-        memset(m_pData + m_uSize, 0, static_cast<size_t>(sizeof(T)));
-        m_pData[m_uSize++] = element;
+        if constexpr (std::is_trivially_copy_assignable<T>::value)
+        {
+            m_pData[m_uSize++] = element;
+        }
+        else
+        {
+            new (&m_pData[m_uSize++]) T(element); // Construct element using copy constructor
+        }
+       
+        
         return HS_OK;
     }
     // push and return back
@@ -134,14 +156,22 @@ namespace AshEngine
             ret = grow(m_uCapacity + 1);
             HS_PROCESS_AND_LOG_RESULT(ret);
         }
-        ++m_uSize;
-        return Back();
+		if constexpr (std::is_trivially_default_constructible<T>::value) {
+			m_pData[m_uSize] = T(); 
+		}
+		else {
+			new (&m_pData[m_uSize]) T();
+		}
+		return m_pData[m_uSize++];
     }
 
     template<typename T>
     inline auto Array<T>::pop() ->HS_Result{
         H_ASSERT(m_uSize > 0);
         --m_uSize;
+		if constexpr (!std::is_trivially_destructible<T>::value) {
+			m_pData[m_uSize].~T();
+		}
         return HS_OK;
     }
 
@@ -149,7 +179,10 @@ namespace AshEngine
     template<typename T>
     inline auto Array<T>::delete_swap(uint32_t index) -> HS_Result {
         H_ASSERT(m_uSize > 0 && index < m_uSize);
-        m_pData[index] = m_pData[--m_uSize];
+		if constexpr (!std::is_trivially_destructible<T>::value) {
+			m_pData[index].~T();
+		}
+		new (&m_pData[index]) T(std::move(m_pData[--m_uSize])); // Move last element to the deleted slot
         return HS_OK;
     }
 
@@ -167,6 +200,11 @@ namespace AshEngine
 
     template<typename T>
     inline auto Array<T>::clear() -> HS_Result{
+		if constexpr (!std::is_trivially_destructible<T>::value) {
+			for (uint32_t i = 0; i < m_uSize; ++i) {
+				m_pData[i].~T();
+			}
+		}
         m_uSize = 0;
         return HS_OK;
     }
@@ -180,6 +218,17 @@ namespace AshEngine
             ret = grow(new_size);
             HS_PROCESS_AND_LOG_RESULT(ret);
         }
+		if constexpr (!std::is_trivially_default_constructible<T>::value) {
+			for (uint32_t i = m_uSize; i < new_size; ++i) {
+				new (&m_pData[i]) T();
+			}			
+		}
+		if constexpr (!std::is_trivially_destructible<T>::value)
+		{
+			for (uint32_t i = new_size; i < m_uSize; ++i) {
+				m_pData[i].~T();
+			}
+		}
         m_uSize = new_size;
         return ret;
     }
@@ -207,10 +256,23 @@ namespace AshEngine
         }
 
         T* new_data = (T*) Ash_Alloc(m_pAllocator, new_capacity * sizeof(T), alignof(T));//(T*)m_pAllocator->allocate(new_capacity * sizeof(T), alignof(T));
-        if (m_uCapacity) {
-            memory_copy(new_data, m_pData, m_uCapacity * sizeof(T));
-            Ash_Free(m_pAllocator, m_pData);
-        }
+		if (m_uSize > 0 && m_pData != nullptr) {
+			for (uint32_t i = 0; i < m_uSize; ++i) {
+				if constexpr (std::is_trivially_move_constructible<T>::value) {
+					new_data[i] = std::move(m_pData[i]);
+				}
+				else {
+					new (&new_data[i]) T(std::move(m_pData[i]));
+					if constexpr (!std::is_trivially_destructible<T>::value) {
+						m_pData[i].~T(); 
+					}
+				}
+			}
+		}
+
+		if (m_pData) {
+			Ash_Free(m_pAllocator, m_pData);
+		}
 
         m_pData = new_data;
         m_uCapacity = new_capacity;

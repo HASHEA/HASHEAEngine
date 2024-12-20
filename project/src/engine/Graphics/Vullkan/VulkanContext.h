@@ -44,9 +44,10 @@ namespace RHI
 	//count = numFrame
 	struct FrameData
 	{
-		VkSemaphore     vulkanRenderBeginSemaphore			= VK_NULL_HANDLE;//wait for this Semaphore to begin render. normally triggered by swapchain acquireimages
-		VkSemaphore		vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;//trigger this seemaphore when complete render, normally waited by swapchain to present
-		VulkanFence*	vulkanCommandBufferExecutedFence	= nullptr;
+		VkSemaphore							vulkanRenderBeginSemaphore			= VK_NULL_HANDLE;//wait for this Semaphore to begin render. normally triggered by swapchain acquireimages
+		VkSemaphore							vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;//trigger this seemaphore when complete render, normally waited by swapchain to present
+		VulkanFence*						vulkanCommandBufferExecutedFence	= nullptr;
+		VulkanCommandBuffer*				emptyCommandBuffer					= nullptr;
 	};
 
 
@@ -237,7 +238,9 @@ namespace RHI
 		auto wait_idle() -> void override;
 		auto begin_frame() -> void override;
 		auto end_frame() -> void override;
-		//auto submit(const SubmitInfo& info) -> void override;
+		auto get_command_buffer(uint32_t threadIndx) -> CommandBuffer* override;
+		auto get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer* override;
+		auto submit(const SubmitInfo& info) -> void override;
 		auto submit_immediately(const SubmitInfo& info) -> void override;
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
@@ -298,7 +301,7 @@ namespace RHI
 		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
 		Array<FramePool>				framePools{};
 		Array<FrameData>				frameDatas{};
-		Array<VulkanCommandBuffer>		commandBufferQueue{};
+		Array<VulkanCommandBuffer*>		commandBufferQueue{};
 		DelayCommandQueue				delayed_deletion_queues[k_max_frames];
 		//VkSemaphore                     vulkanImageAcquiredSemaphore		= VK_NULL_HANDLE;
 		VkSemaphore                     vulkanGraphicsSemaphore				= VK_NULL_HANDLE;
@@ -318,21 +321,13 @@ private:
 		VkExtent2D								minFragmentShadingRateTexelSize{};
 		std::shared_ptr<VulkanDynamicBuffer>	global_dynamic_buffer = nullptr;
 		uint32_t								currentFrame = UINT32_MAX;
+		uint32_t                        previousFrame = UINT32_MAX;
+		uint64_t                             absoluteFrame = UINT64_MAX;
 private:
 		static VulkanContext* instance;
 
 
 		friend class VulkanSwapchain;
-		
-
-
-
-
-		
-
-
-		
-
 
 
 };

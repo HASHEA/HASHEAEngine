@@ -52,10 +52,10 @@ namespace RHI
 	auto VulkanCommandBufferManager::get_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*
 	{
 		auto poolIndex = pool_from_indices(frameIndex,threadIndex);
-		auto& curCount = usedBuffers[poolIndex];
+		auto curCount = usedBuffers[poolIndex];
 		H_ASSERTLOG(curCount <= numCommandBuffersPerThread, "used commandbuffer count exceed max count per thread {0} > {1}", curCount,numCommandBuffersPerThread);
 		VulkanCommandBuffer* ret = &commandBuffers[frameIndex * numCommandBuffersPerThread + curCount];
-		curCount++;
+		usedBuffers[poolIndex] = curCount + 1;
 		return ret;
 	}
 	auto VulkanCommandBufferManager::get_secondary_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*
@@ -147,7 +147,7 @@ namespace RHI
 	{
 		H_ASSERTLOG(vkCommandBuffer != VK_NULL_HANDLE,"Fatal: try to access a invalid vkCommandBuffer !");
 		H_ASSERTLOG(state == ASH_Recording," you need call begin() before write any command ! ");
-		H_ASSERTLOG((srcQueueType != dstQueueType) && (dstQueueType == AshQueueType::Enum::Ignored), " invalid dst queue type ! ");
+		H_ASSERTLOG((srcQueueType == dstQueueType) || (dstQueueType != AshQueueType::Enum::Ignored), " invalid dst queue type ! ");
 		if (srcQueueType == dstQueueType)
 		{
 			if (!ash_is_valid_transition(texture->get_resource_state(), newlayout))
