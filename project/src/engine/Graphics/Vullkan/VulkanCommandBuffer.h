@@ -35,7 +35,6 @@ namespace RHI
 		virtual auto begin()  -> void override;
 		virtual auto end() -> void override;
 		virtual auto get_state() -> AshCommandBufferState override;
-		// Í¨¹ý CommandBuffer ¼Ì³Ð
 		auto set_state(AshCommandBufferState state) -> void override;
 
 		virtual auto transition_image_state(std::shared_ptr<Texture> texture, AshResourceState newlayout, TextureSubResource* region = nullptr,
@@ -49,22 +48,13 @@ namespace RHI
 		AshCommandBufferState state = AshCommandBufferState::ASH_Idle;
 		
 
-		friend class VulkanCommandBufferManager;
-
-
-		
-
-
-		
-
-
-		
+		friend class VulkanCommandBufferManager;		
 	};
 	struct VulkanCommandBufferManager
 	{
 		auto init(uint32_t numThread) -> void;
 		auto shutdown() -> void;
-		auto reset_pools(uint32_t frameIndex) -> void;
+		auto reset(uint32_t frameIndex) -> void;
 		auto get_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*;
 		auto get_secondary_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*;
 		Array<VulkanCommandBuffer>    commandBuffers;

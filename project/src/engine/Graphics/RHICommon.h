@@ -267,7 +267,17 @@ namespace RHI
 		ASH_RESOURCE_STATE_MAX_ENUM = 0x7FFFFFFF
 	} AshResourceState;
 
+	typedef enum AshSamplerState {
+		ASH_SAMPLER_STATE_DEFAULT = 0,
+		ASH_SAMPLER_STATE_MAX_ENUM
+	} AshSamplerState;
 
+	typedef enum AshLoadOption {
+		ASH_LOAD_DONT_CARE,
+		ASH_LOAD_LOAD,
+		ASH_LOAD_CLEAR,
+		ASH_LOAD_MAX_ENUM
+	} AshLoadOption;
 }
 
 

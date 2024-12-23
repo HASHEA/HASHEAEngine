@@ -8,7 +8,7 @@ namespace RHI
 		numPoolsPerFrame = numThread;
 		const uint32_t totalPools = numPoolsPerFrame * k_max_frames;
 		usedBuffers.init(nullptr, totalPools, totalPools);
-		usedSecondaryCommandBuffers.init(nullptr, totalPools);
+		usedSecondaryCommandBuffers.init(nullptr, totalPools, totalPools);
 		const uint32_t totalBuffers = totalPools * numCommandBuffersPerThread;
 		commandBuffers.init(nullptr, totalBuffers, totalBuffers);
 		const uint32_t totalSecondaryBuffers = totalPools * k_secondary_command_buffers_count;
@@ -45,8 +45,13 @@ namespace RHI
 		usedBuffers.shutdown();
 		usedSecondaryCommandBuffers.shutdown();
 	}
-	auto VulkanCommandBufferManager::reset_pools(uint32_t frameIndex) -> void
+	auto VulkanCommandBufferManager::reset(uint32_t frameIndex) -> void
 	{
+		for (uint32_t i = 0; i < numPoolsPerFrame; i++) {
+			const uint32_t pool_index = pool_from_indices(frameIndex, i);
+			usedBuffers[pool_index] = 0;
+			usedSecondaryCommandBuffers[pool_index] = 0;
+		}
 	}
 	//it's a out only get, u don't need to recycle it 
 	auto VulkanCommandBufferManager::get_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*

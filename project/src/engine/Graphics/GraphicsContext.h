@@ -53,7 +53,7 @@ namespace RHI {
         virtual auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> = 0;
         virtual auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> = 0;
         virtual auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
-        virtual auto create_sampler(const SamplerCreation& ci)->std::shared_ptr<Sampler> = 0;
+        virtual auto get_sampler(const AshSamplerState& ss)->std::shared_ptr<Sampler> = 0;
         virtual auto wait_idle() -> void = 0;
 		virtual auto begin_frame() -> void = 0;
 		virtual auto end_frame() -> void = 0;

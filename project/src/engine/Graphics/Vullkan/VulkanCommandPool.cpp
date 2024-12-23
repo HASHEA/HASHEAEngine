@@ -7,7 +7,7 @@ namespace RHI
 		VkCommandPoolCreateInfo cmdPoolCI = { VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO };
 		cmdPoolCI.pNext = nullptr;
 		cmdPoolCI.queueFamilyIndex = queueFamily;
-		cmdPoolCI.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+		cmdPoolCI.flags = flag;
 		VK_CHECK_RESULT(vkCreateCommandPool(device, &cmdPoolCI, allocationCallbacks, &commandPool));
 	}
 	VulkanCommandPool::~VulkanCommandPool()

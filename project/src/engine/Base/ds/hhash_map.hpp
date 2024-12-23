@@ -131,7 +131,7 @@ namespace AshEngine
 		KeyValue* slots_ = nullptr;
 		uint64_t growthLeft = 0;
 		Allocator* m_pAllocator = nullptr;
-		KeyValue defaultKeyValue = { (K)-1,0 };
+		KeyValue defaultKeyValue = { K(),V()};
 	};
 
 	template<typename T>
@@ -288,7 +288,7 @@ namespace AshEngine
 	inline auto FlatHashMap<K, V>::init(Allocator* allocator_, uint64_t initial_capacity) -> void {
 		m_pAllocator = allocator_;
 		m_uSize = m_uCapacity = growthLeft = 0;
-		defaultKeyValue = { (K)-1, (V)0 };
+		defaultKeyValue = { K(), V()};
 
 		controlBytes = group_init_empty();
 		slots_ = nullptr;

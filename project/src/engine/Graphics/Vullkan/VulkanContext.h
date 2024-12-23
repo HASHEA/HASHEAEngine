@@ -6,7 +6,9 @@
 #include "Base/hbit.hpp"
 #include "Graphics/GraphicsContext.h"
 #include "Base/ds/harray.hpp"
+#include "Base/ds/hhash_map.hpp"
 #include "Base/hcommandQueue.hpp"
+#include "Graphics/Sampler.h"
 #include <vector>
 #include <memory>
 using namespace AshEngine;
@@ -48,9 +50,6 @@ namespace RHI
 		VkSemaphore							vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;//trigger this seemaphore when complete render, normally waited by swapchain to present
 		VulkanFence*						vulkanCommandBufferExecutedFence	= nullptr;
 	};
-
-
-	
 	class VulkanContext : public GraphicsContext
 	{
 	public:
@@ -224,6 +223,8 @@ namespace RHI
 			return index;
 		}
 
+		auto create_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>;
+
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
@@ -233,7 +234,7 @@ namespace RHI
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
 		auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
-		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
+		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
 		auto begin_frame() -> void override;
 		auto end_frame() -> void override;
@@ -282,32 +283,32 @@ namespace RHI
 		VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{};
 
 	private:		
-		VkAllocationCallbacks*			vulkanAllocationCallbacks			= nullptr;
-		VkInstance                      vulkanInstance						= VK_NULL_HANDLE;
-		VkDebugUtilsMessengerEXT        vulkanDebugUtilMessenger			= VK_NULL_HANDLE;
-		VkPhysicalDevice                vulkanPhysicalDevice				= VK_NULL_HANDLE;
-		VkPhysicalDeviceProperties      vulkanPhysicalDeviceProperties{};
-		VkDevice                        vulkanDevice						= VK_NULL_HANDLE;
-		VkQueue                         vulkanMainQueue						= VK_NULL_HANDLE;
-		VkQueue                         vulkanComputeQueue					= VK_NULL_HANDLE;
-		VkQueue                         vulkanTransferQueue					= VK_NULL_HANDLE;
-		VkQueue							vulkanPresentQueue					= VK_NULL_HANDLE;
-		uint32_t						vulkanMainQueueFamily				= UINT32_MAX;
-		uint32_t						vulkanComputeQueueFamily			= UINT32_MAX;
-		uint32_t						vulkanTransferQueueFamily			= UINT32_MAX;
-		VkDescriptorPool                vulkanDescriptorPool				= VK_NULL_HANDLE;
-		VkDescriptorPool                vulkanBindlessDescriptorPool		= VK_NULL_HANDLE;
-		VmaAllocator                    vmaAllocator						= VK_NULL_HANDLE;
-		Array<FramePool>				framePools{};
-		Array<FrameData>				frameDatas{};
-		Array<VulkanCommandBuffer*>		commandBufferQueue{};
-		DelayCommandQueue				delayed_deletion_queues[k_max_frames];
-		//VkSemaphore                     vulkanImageAcquiredSemaphore		= VK_NULL_HANDLE;
-		VkSemaphore                     vulkanGraphicsSemaphore				= VK_NULL_HANDLE;
-		VkSemaphore                     vulkanBindSemaphore					= VK_NULL_HANDLE;
-		VkSemaphore                     vulkanComputeSemaphore				= VK_NULL_HANDLE;
-		VulkanFence*                    vulkanComputeFence					= nullptr;
-		VulkanFence*					vulkanImmediateFence				= nullptr; //stuck here and wait
+		VkAllocationCallbacks*									vulkanAllocationCallbacks				= nullptr;
+		VkInstance												vulkanInstance							= VK_NULL_HANDLE;
+		VkDebugUtilsMessengerEXT								vulkanDebugUtilMessenger				= VK_NULL_HANDLE;
+		VkPhysicalDevice										vulkanPhysicalDevice					= VK_NULL_HANDLE;
+		VkPhysicalDeviceProperties								vulkanPhysicalDeviceProperties{};
+		VkDevice												vulkanDevice							= VK_NULL_HANDLE;
+		VkQueue													vulkanMainQueue							= VK_NULL_HANDLE;
+		VkQueue													vulkanComputeQueue						= VK_NULL_HANDLE;
+		VkQueue													vulkanTransferQueue						= VK_NULL_HANDLE;
+		VkQueue													vulkanPresentQueue						= VK_NULL_HANDLE;
+		uint32_t												vulkanMainQueueFamily					= UINT32_MAX;
+		uint32_t												vulkanComputeQueueFamily				= UINT32_MAX;
+		uint32_t												vulkanTransferQueueFamily				= UINT32_MAX;
+		VkDescriptorPool										vulkanDescriptorPool					= VK_NULL_HANDLE;
+		VkDescriptorPool										vulkanBindlessDescriptorPool			= VK_NULL_HANDLE;
+		VmaAllocator											vmaAllocator							= VK_NULL_HANDLE;
+		Array<FramePool>										framePools{};
+		Array<FrameData>										frameDatas{};
+		Array<VulkanCommandBuffer*>								commandBufferQueue{};
+		DelayCommandQueue										delayed_deletion_queues[k_max_frames];
+		VkSemaphore												vulkanGraphicsSemaphore					= VK_NULL_HANDLE;
+		VkSemaphore												vulkanBindSemaphore						= VK_NULL_HANDLE;
+		VkSemaphore												vulkanComputeSemaphore					= VK_NULL_HANDLE;
+		VulkanFence*											vulkanComputeFence						= nullptr;
+		VulkanFence*											vulkanImmediateFence					= nullptr; //stuck here and wait
+		Array<std::shared_ptr<Sampler>>							samplerCache;
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
@@ -320,8 +321,9 @@ private:
 		VkExtent2D								minFragmentShadingRateTexelSize{};
 		std::shared_ptr<VulkanDynamicBuffer>	global_dynamic_buffer = nullptr;
 		uint32_t								currentFrame = UINT32_MAX;
-		uint32_t                        previousFrame = UINT32_MAX;
-		uint64_t                             absoluteFrame = UINT64_MAX;
+		uint32_t								previousFrame = UINT32_MAX;
+		uint64_t								absoluteFrame = UINT64_MAX;
+		uint16_t								num_thread = 0;
 private:
 		static VulkanContext* instance;
 
