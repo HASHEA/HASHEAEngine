@@ -1025,12 +1025,14 @@ namespace RHI
 
 	auto VulkanContext::get_command_buffer(uint32_t threadIndx) -> CommandBuffer*
 	{
-		return commandBufferRing->get_command_buffer(currentFrame, threadIndx);
+		auto current_frame = currentFrame != UINT32_MAX ? currentFrame : 0;
+		return commandBufferRing->get_command_buffer(current_frame, threadIndx);
 	}
 
 	auto VulkanContext::get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer*
 	{
-		return commandBufferRing->get_secondary_command_buffer(currentFrame, threadIndx);
+		auto current_frame = currentFrame != UINT32_MAX ? currentFrame : 0;
+		return commandBufferRing->get_secondary_command_buffer(current_frame, threadIndx);
 	}
 
 	auto VulkanContext::submit(const SubmitInfo& info) -> void
@@ -1108,6 +1110,8 @@ namespace RHI
 		{
 			get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
 		}
+		//flush deletion queue
+		delayed_deletion_queues[currentFrame].flush();
 		commandBufferQueue.clear();
 		//reset commandpool and commandbufferring
 		for (size_t i = 0; i < num_thread; i++)

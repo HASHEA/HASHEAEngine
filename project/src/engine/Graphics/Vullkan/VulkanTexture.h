@@ -15,7 +15,9 @@ namespace RHI
 		// from TextureView 
 		auto get_parent_texture() -> std::shared_ptr<Texture> override;
 
-		auto get_native_view_handle() -> void* override;
+		auto get_native_handle() -> void* override;
+
+		auto get_name() -> const char* override;
 
 		auto get_view_type() -> AshImageViewType override;
 
@@ -43,6 +45,9 @@ namespace RHI
 		AshFormat viewFormat{};
 		const char* name = nullptr;
 
+
+	
+
 	};
 	class VulkanTexture : public Texture
 	{
@@ -57,7 +62,7 @@ namespace RHI
 		// from texture
 		auto get_desciption(TextureDescription& desc) -> void override;
 
-		auto get_native_texture_handle() -> void* override;
+		auto get_native_handle() -> void* override;
 
 		auto get_alias_texture() -> std::shared_ptr<Texture> override;
 

@@ -15,7 +15,7 @@ namespace RHI
 		const char* name = nullptr;
 	public:
 		// from Sampler
-		auto get_native_sampler_handle() -> void* override;
+		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;
 	public:
 		//for vk

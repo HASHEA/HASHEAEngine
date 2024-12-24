@@ -16,7 +16,42 @@ namespace RHI
 		AshFormat                       color_formats[k_max_image_outputs];
 		AshResourceState                color_final_layouts[k_max_image_outputs];
 		AshLoadOption					color_operations[k_max_image_outputs];
+		inline RenderPassCreation& add_attachment(AshFormat format, AshResourceState layout, AshLoadOption load_op)
+		{
+			color_formats[num_render_targets] = format;
+			color_operations[num_render_targets] = load_op;
+			color_final_layouts[num_render_targets++] = layout;
 
+			return *this;
+		}
+		inline RenderPassCreation& add_shading_rate_image()
+		{
+			shading_rate_image_index = num_render_targets++;
+			return *this;
+		}
+		inline RenderPassCreation& set_depth_stencil_texture(AshFormat format, AshResourceState layout)
+		{
+			depth_stencil_format = format;
+			depth_stencil_final_layout = layout;
+			return *this;
+		}
+		inline RenderPassCreation& set_name(const char* _name)
+		{
+			name = _name;
+			return *this;
+		}
+		inline RenderPassCreation& set_depth_stencil_operations(AshLoadOption depth, AshLoadOption stencil)
+		{
+			depth_operation = depth;
+			stencil_operation = stencil;
+
+			return *this;
+		}
+		inline RenderPassCreation& set_multiview_mask(uint32_t mask)
+		{
+			multiview_mask = mask;
+			return *this;
+		}
 	}; // struct RenderPassCreation
 	class RenderPass : public RHIResource
 	{

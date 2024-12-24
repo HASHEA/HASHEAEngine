@@ -10,6 +10,8 @@
 #include "VulkanSampler.h"
 #include "VulkanBuffer.h"
 #include "VulkanCommandBuffer.h"
+#include "VulkanRenderPass.h"
+#include "VulkanFramebuffer.h"
 namespace RHI
 {
 	VulkanSwapchain::VulkanSwapchain()
@@ -44,7 +46,7 @@ namespace RHI
 
 	auto VulkanSwapchain::shutdown() -> HS_Result 
 	{
-		_clean_swapchain();
+		_clean_swapchain(swapChain);
 		if (surface != VK_NULL_HANDLE)
 		{
 			vkDestroySurfaceKHR(VulkanContext::get_vulkan_instance(), surface, VulkanContext::get_vulkan_allocation_callbacks());
@@ -188,15 +190,7 @@ namespace RHI
 
 		if (oldSwapChain != VK_NULL_HANDLE)
 		{
-			vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
-			for (size_t i = 0; i < swapChainImages.size(); i++)
-			{
-				swapChainImages[i].reset();
-			}
-			swapChainImages.shutdown();
-
-			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), oldSwapChain, VulkanContext::get_vulkan_allocation_callbacks());
-			oldSwapChain = VK_NULL_HANDLE;
+			_clean_swapchain(oldSwapChain);
 		}
 
 		std::vector<VkImage> vecVkImage;
@@ -204,7 +198,16 @@ namespace RHI
 		vkGetSwapchainImagesKHR(VulkanContext::get_vulkan_device(), swapChain, &imageCount, nullptr);
 		vecVkImage.resize(imageCount);
 		swapChainImages.init(nullptr, imageCount, 0);
+		swapChainFramebuffer.init(nullptr, imageCount, 0);
 		vkGetSwapchainImagesKHR(VulkanContext::get_vulkan_device(), swapChain, &imageCount, vecVkImage.data());
+		//create render pass
+		RenderPassCreation rci{};
+		rci.set_name("swapchain render pass").add_attachment(vk_format_to_ash(surfaceFormat.format), AshResourceState::ASH_RESOURCE_STATE_PRESENT, AshLoadOption::ASH_LOAD_CLEAR);
+			/*set_depth_stencil_texture(AshFormat::ASH_FORMAT_D32_SFLOAT, AshResourceState::ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE).set_depth_stencil_operations(ASH_LOAD_CLEAR, ASH_LOAD_CLEAR);*/
+		swapchainRenderPass = VulkanRenderPass::create(rci);
+		//create swapchain buffer proxy
+		
+		
 		for (size_t i = 0; i < imageCount; i++)
 		{
 			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
@@ -218,21 +221,31 @@ namespace RHI
 			texture->vkImage = vecVkImage[i];
 			swapChainImages.push_back(texture);
 			texture->init();
+			//create swapchain framebuffers
+			FramebufferCreation fci{};
+			fci.name = "swapchain framebuffer";
+			fci.renderPass = swapchainRenderPass;
+			fci.width = swapchainExtents.width;
+			fci.height = swapchainExtents.height;
+			fci.colorAttachments.init(nullptr, imageCount);
+			fci.colorAttachments.push_back(texture->get_default_render_target_view());
+			fci.layers = 1;
+			swapChainFramebuffer.push_back(VulkanFramebuffer::create(fci));
+			fci.colorAttachments.shutdown();
 		}
+	
 	}
 
-	auto VulkanSwapchain::_clean_swapchain() ->HS_Result
+	auto VulkanSwapchain::_clean_swapchain(VkSwapchainKHR& _swapchain) ->HS_Result
 	{
 		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
-		for (size_t i = 0; i < swapChainImages.size(); i++)
-		{
-			swapChainImages[i]->immediate_deletion = true;
-			swapChainImages[i].reset();
-		}
+		swapChainFramebuffer.shutdown();
 		swapChainImages.shutdown();
-		if (swapChain != VK_NULL_HANDLE)
+		swapchainRenderPass.reset();
+		if (_swapchain != VK_NULL_HANDLE)
 		{
-			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), swapChain, VulkanContext::get_vulkan_allocation_callbacks());
+			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), _swapchain, VulkanContext::get_vulkan_allocation_callbacks());
+			_swapchain = VK_NULL_HANDLE;
 		}
 		return HS_OK;
 	}
@@ -297,6 +310,10 @@ namespace RHI
 	auto VulkanSwapchain::resize_swapchain(uint32_t i_width, uint32_t i_height) -> void
 	{
 		HLogInfo("resize swapchain to width  : {}, height : {}", i_width, i_height);
+		if (i_width == 0 || i_height == 0)
+		{
+			return;
+		}
 		_recreate_swapchain();
 	}
 

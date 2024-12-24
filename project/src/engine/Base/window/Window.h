@@ -27,6 +27,7 @@ namespace AshEngine
 		virtual auto get_native_interface() -> void* = 0;
 		virtual auto get_native_window() -> void* { return nullptr; }
 		virtual auto should_close() -> bool = 0;
+		virtual auto is_minimized() -> bool = 0;
 		static Window* create();
 		inline auto get_scale() const
 		{

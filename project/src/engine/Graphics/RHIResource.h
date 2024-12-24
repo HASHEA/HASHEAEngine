@@ -11,7 +11,13 @@ namespace RHI
 	class Sampler;
 	class Buffer;
 	class CommandBuffer;
+	class RenderPass;
+	class Framebuffer;
+	class Pipeline;
 
+	struct RenderPassCreation;
+	struct FramebufferCreation;
+	struct PipelineCreation;
 	struct SamplerCreation;
 	struct TextureCreation;
 	struct TextureViewCreation;
@@ -22,6 +28,9 @@ namespace RHI
 	public:
 		RHIResource() = default;
 		virtual ~RHIResource() {};
+	public:
+		virtual auto get_native_handle() -> void* = 0;
+		virtual auto get_name() -> const char* = 0;
 	public:
 		bool immediate_deletion = false;
 	};

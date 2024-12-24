@@ -31,8 +31,7 @@ namespace RHI
 		virtual ~Sampler() {}
 
 	public:
-		virtual auto get_native_sampler_handle() -> void* = 0;
-		virtual auto get_name() -> const char* = 0;
+		
 	};
 
 }

@@ -5,7 +5,8 @@
 #include "Function/Application.h"
 namespace AshEngine
 {
-	bool WindowWin::shouldClose = true;
+	bool WindowWin::shouldClose = false;
+	bool WindowWin::minimized = false;
 	auto WindowWin::on_update() -> void
 	{
 		glfwPollEvents();
@@ -90,8 +91,8 @@ namespace AshEngine
 			Application::get_swapchain()->resize_swapchain(w,h);
 
 			});
-		glfwSetWindowIconifyCallback(handle, [](GLFWwindow* win, int minimized) {
-			
+		glfwSetWindowIconifyCallback(handle, [](GLFWwindow* win, int _minimized) {
+			WindowWin::minimized = _minimized == 1;
 			});
 
 		glfwSetWindowCloseCallback(handle, [](GLFWwindow* win) {
@@ -127,6 +128,10 @@ namespace AshEngine
 		glfwSetScrollCallback(handle, [](GLFWwindow* win, double xOffset, double yOffset) {
 			
 			});
+	}
+	auto WindowWin::is_minimized() -> bool
+	{
+		return minimized;
 	}
 	auto WindowWin::should_close() -> bool
 	{

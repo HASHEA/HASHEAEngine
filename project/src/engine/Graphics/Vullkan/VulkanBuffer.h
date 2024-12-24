@@ -18,6 +18,10 @@ namespace RHI
 		auto is_ready() -> bool override;
 		auto get_mapped_data() -> uint8_t* override;
 		auto is_dynamic() -> bool override;
+		inline auto get_native_handle() -> void* override
+		{
+			return vkBuffer;
+		}
 	public:
 		//interfaces for vk
 		inline auto get_vk_device_memory()

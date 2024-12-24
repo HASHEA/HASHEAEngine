@@ -69,7 +69,7 @@ namespace RHI
 	VulkanTexture::~VulkanTexture()
 	{
 		
-		if (immediate_deletion)
+		if (immediate_deletion || swapchain_texture)
 		{	
 			HLogInfo("deleting texture : {} ...", name);
 			if (defaultVulkanTextureView != nullptr)
@@ -158,7 +158,7 @@ namespace RHI
 		defaultVulkanTextureView = Ash_New_Shared<VulkanTextureView>(tvc, shared_from_this());
 	}
 
-	auto VulkanTexture::get_native_texture_handle() -> void*
+	auto VulkanTexture::get_native_handle() -> void*
 	{
 		return vkImage;
 	}
@@ -271,7 +271,7 @@ namespace RHI
 		viewType = ci.view_type;
 		viewFormat = ci.format;
 		VkImageViewCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
-		info.image = (VkImage)_parentTexture->get_native_texture_handle();
+		info.image = (VkImage)_parentTexture->get_native_handle();
 		info.format = ash_format_to_vk(ci.format);
 		if (TextureFormat::has_depth_or_stencil(info.format)) {
 
@@ -324,7 +324,7 @@ namespace RHI
 		return parentTexture.lock();
 	}
 
-	auto VulkanTextureView::get_native_view_handle() -> void*
+	auto VulkanTextureView::get_native_handle() -> void*
 	{
 		return vkImageView;
 	}
@@ -337,6 +337,11 @@ namespace RHI
 	auto VulkanTextureView::get_view_format() -> AshFormat
 	{
 		return viewFormat;
+	}
+
+	auto VulkanTextureView::get_name() -> const char*
+	{
+		return name;
 	}
 	
 }

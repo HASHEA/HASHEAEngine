@@ -11,6 +11,8 @@ namespace RHI
 {
 	class Texture;
 	class VulkanTexture;
+	class VulkanRenderPass;
+	class VulkanFramebuffer;
 	class VulkanSwapchain :public Swapchain
 	{
 		struct SwapChainSupportDetails {
@@ -46,7 +48,7 @@ namespace RHI
 		auto _query_swapchain_support(SwapChainSupportDetails& swapChainSupport)->void;
 		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->HS_Result;
 		auto _recreate_swapchain() -> void;
-		auto _clean_swapchain() -> HS_Result;
+		auto _clean_swapchain(VkSwapchainKHR& _swapchain) -> HS_Result;
 		auto _aquire_next_image() -> void;
 	private:
 		uint8_t swapchainBufferCount = 0;
@@ -58,8 +60,9 @@ namespace RHI
 		VkSwapchainKHR swapChain = VK_NULL_HANDLE;
 		VkSwapchainKHR oldSwapChain = VK_NULL_HANDLE;
 		Array<std::shared_ptr<VulkanTexture>> swapChainImages;
+		Array<std::shared_ptr<VulkanFramebuffer>> swapChainFramebuffer;
 		uint32_t acquireImageIndex = UINT32_MAX;
-	
+		std::shared_ptr<VulkanRenderPass> swapchainRenderPass = nullptr;
 
 		
 

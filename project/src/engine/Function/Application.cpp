@@ -66,10 +66,13 @@ namespace AshEngine
 			_on_update();
 
 			
-			_on_render();
+			if (!window->is_minimized())
+			{
+				_on_render();
 
 
-			_present();
+				_present();
+			}
 		}
 	}
 	auto Application::_on_update() -> void

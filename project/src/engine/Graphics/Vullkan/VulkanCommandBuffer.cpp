@@ -201,7 +201,7 @@ namespace RHI
 		imageMemoryBarrier.dstQueueFamilyIndex = VulkanContext::get_queue_family_index(dstQueueType);
 		imageMemoryBarrier.oldLayout = srcLayout;
 		imageMemoryBarrier.newLayout = dstLayout;
-		imageMemoryBarrier.image = (VkImage)(texture->get_native_texture_handle());
+		imageMemoryBarrier.image = (VkImage)(texture->get_native_handle());
 		imageMemoryBarrier.subresourceRange = subresourceRange;
 		imageMemoryBarrier.srcAccessMask = vk_layout_to_access_mask(srcLayout);
 		imageMemoryBarrier.dstAccessMask = vk_layout_to_access_mask(dstLayout);

@@ -26,7 +26,6 @@ namespace RHI
 	public:
 		/*virtual auto get_render_target_view() -> void* = 0;*/
 		virtual auto get_parent_texture() -> std::shared_ptr<Texture> = 0;
-		virtual auto get_native_view_handle() -> void* = 0;
 		virtual auto get_view_type() -> AshImageViewType = 0;
 		virtual auto get_view_format() -> AshFormat = 0;
 	};
@@ -68,7 +67,6 @@ namespace RHI
 		virtual ~Texture() {}
 	public:
 		virtual auto get_desciption(TextureDescription& desc) -> void = 0;
-		virtual auto get_native_texture_handle() -> void* = 0;
 		virtual auto get_alias_texture() -> std::shared_ptr<Texture> = 0;
 		virtual auto get_default_render_target_view() -> std::shared_ptr<TextureView> = 0;
 		virtual auto get_default_shader_resource_view() -> std::shared_ptr<TextureView> = 0;
@@ -82,7 +80,6 @@ namespace RHI
 		virtual auto get_depth() -> uint16_t = 0;
 		virtual auto get_width() -> uint16_t = 0;
 		virtual auto get_height() -> uint16_t = 0;
-		virtual auto get_name() -> const char* = 0;
 		virtual auto get_type() -> AshImageType = 0;
 		virtual auto get_resource_state() -> AshResourceState = 0;
 		virtual auto set_resource_state(AshResourceState state) -> void = 0;

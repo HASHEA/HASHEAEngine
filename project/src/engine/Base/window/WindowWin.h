@@ -31,13 +31,15 @@ namespace AshEngine
 		auto get_native_interface() -> void* override;
 
 		auto should_close() -> bool override;
+
+		auto is_minimized() -> bool override;
 	private:
 		auto register_native_event(const WindowConfig& data) -> void;
 		WindowConfig data{};
 		GLFWwindow* handle = nullptr;
 		static bool shouldClose;
+		static bool minimized;
 
 		
-
 	};
 };

@@ -65,7 +65,7 @@ namespace RHI
 	{
 		return Ash_New_Shared<VulkanSampler>(ci);
 	}
-	auto VulkanSampler::get_native_sampler_handle() -> void*
+	auto VulkanSampler::get_native_handle() -> void*
 	{
 		return vkSampler;
 	}
