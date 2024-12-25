@@ -165,4 +165,16 @@ namespace RHI
 	{
 		return name;
 	}
+	auto VulkanRenderPass::get_color_operations() -> const Array<AshLoadOption>&
+	{
+		return colorLoadOptions;
+	}
+	auto VulkanRenderPass::get_depth_stencil_operations() -> AshLoadOption
+	{
+		return depthStencilLoadOption;
+	}
+	auto VulkanRenderPass::get_depth_stencil_format() -> AshFormat
+	{
+		return depthStencilFormat;
+	}
 }

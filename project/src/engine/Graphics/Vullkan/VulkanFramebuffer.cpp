@@ -9,19 +9,20 @@ namespace RHI
 		width = ci.width;
 		height = ci.height;
 		layers = ci.layers;
+		renderPass = ci.renderPass;
 		Array<VkImageView> attachments;
 		attachments.init(nullptr, ci.colorAttachments.size());
-		attachmentsRef.init(nullptr, ci.colorAttachments.size());
+		colorAttachements.init(nullptr, ci.colorAttachments.size());
 		auto count = ci.colorAttachments.size();
 		for (size_t i = 0; i < count; i++)
 		{
-			attachments.push_back((VkImageView)ci.colorAttachments[i]->get_native_handle());
-			attachmentsRef.push_back(ci.colorAttachments[i]);
+			attachments.push_back((VkImageView)ci.colorAttachments[i]->get_default_render_target_view()->get_native_handle());
+			colorAttachements.push_back(ci.colorAttachments[i]);
 		}
 		if (ci.depthStencilAttachment != nullptr)
 		{
-			attachments.push_back((VkImageView)ci.depthStencilAttachment->get_native_handle());
-			attachmentsRef.push_back(ci.depthStencilAttachment);
+			attachments.push_back((VkImageView)ci.depthStencilAttachment->get_default_render_target_view()->get_native_handle());
+			depthStencilAttachment = ci.depthStencilAttachment;
 		}
 		VkFramebufferCreateInfo framebuffer_info{ VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
 		framebuffer_info.pNext = nullptr;
@@ -57,7 +58,7 @@ namespace RHI
 			}
 		}
 		//release ref of views after destroy framebuffers
-		attachmentsRef.shutdown();
+		colorAttachements.shutdown();
 	}
 	auto VulkanFramebuffer::create(const FramebufferCreation& ci) -> std::shared_ptr<VulkanFramebuffer>
 	{
@@ -70,5 +71,17 @@ namespace RHI
 	auto VulkanFramebuffer::get_name() -> const char*
 	{
 		return name;
+	}
+	auto VulkanFramebuffer::get_render_pass() -> std::shared_ptr<RenderPass>
+	{
+		return renderPass;
+	}
+	auto VulkanFramebuffer::get_render_targets() -> Array<std::shared_ptr<Texture>>&
+	{
+		return colorAttachements;
+	}
+	auto VulkanFramebuffer::get_depth_stencil() -> std::shared_ptr<Texture>
+	{
+		return depthStencilAttachment;
 	}
 }

@@ -934,7 +934,7 @@ namespace RHI
 
 		return accessMask;
 	}
-	inline VkPipelineStageFlags util_determine_pipeline_stage_flags(VkAccessFlags access_flags, AshQueueType::Enum queue_type) {
+	inline auto util_determine_pipeline_stage_flags(VkAccessFlags access_flags, AshQueueType::Enum queue_type) -> VkPipelineStageFlags {
 		VkPipelineStageFlags flags = 0;
 
 		switch (queue_type) {
@@ -1002,5 +1002,25 @@ namespace RHI
 			flags = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 
 		return flags;
+	}
+
+	inline auto  ash_load_operation_to_vk(const AshLoadOption& loadOP) -> VkAttachmentLoadOp
+	{
+		VkAttachmentLoadOp retOP = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		switch (loadOP)
+		{
+		case ASH_LOAD_DONT_CARE :
+			retOP = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+			break;
+		case ASH_LOAD_LOAD:
+			retOP = VK_ATTACHMENT_LOAD_OP_LOAD;
+			break;
+		case ASH_LOAD_CLEAR:
+			retOP = VK_ATTACHMENT_LOAD_OP_CLEAR;
+			break;
+		default:
+			break;
+		}
+		return retOP;
 	}
 };

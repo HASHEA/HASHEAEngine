@@ -228,7 +228,7 @@ namespace RHI
 			fci.width = swapchainExtents.width;
 			fci.height = swapchainExtents.height;
 			fci.colorAttachments.init(nullptr, imageCount);
-			fci.colorAttachments.push_back(texture->get_default_render_target_view());
+			fci.colorAttachments.push_back(texture);
 			fci.layers = 1;
 			swapChainFramebuffer.push_back(VulkanFramebuffer::create(fci));
 			fci.colorAttachments.shutdown();

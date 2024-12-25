@@ -105,8 +105,8 @@ namespace AshEngine
 		auto                        init(size_t size) -> HS_Result;
 		auto                        shutdown()-> HS_Result;
 
-		auto allocate(size_t size, size_t alignment)->void* override;
-		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
+		auto						allocate(size_t size, size_t alignment)->void* override;
+		auto						allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
 		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
 		auto						deallocate(void* pointer) -> HS_Result override;

@@ -1,5 +1,7 @@
 #pragma once
 #include "RHIResource.h"
+#include "Base/ds/harray.hpp"
+using namespace AshEngine;
 namespace RHI
 {
 	static const uint8_t                     k_max_image_outputs = 8;                // Maximum number of images/render_targets/fbo attachments usable.
@@ -58,7 +60,10 @@ namespace RHI
 	public:
 		RenderPass() = default;
 		virtual ~RenderPass() {}
-
+	public:
+		virtual auto get_color_operations() -> const Array<AshLoadOption> & = 0;
+		virtual auto get_depth_stencil_operations() -> AshLoadOption = 0;
+		virtual auto get_depth_stencil_format() -> AshFormat = 0;
 	private:
 
 	};

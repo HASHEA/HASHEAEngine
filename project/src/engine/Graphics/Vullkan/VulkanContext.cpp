@@ -1114,12 +1114,12 @@ namespace RHI
 		delayed_deletion_queues[currentFrame].flush();
 		commandBufferQueue.clear();
 		//reset commandpool and commandbufferring
+		commandBufferRing->reset(currentFrame);
 		for (size_t i = 0; i < num_thread; i++)
 		{
 			FramePool& pool = framePools[currentFrame * num_thread + i];
 			pool.cmdPool->reset();
 		}
-		commandBufferRing->reset(currentFrame);
 	}
 
 	auto VulkanContext::end_frame() -> void

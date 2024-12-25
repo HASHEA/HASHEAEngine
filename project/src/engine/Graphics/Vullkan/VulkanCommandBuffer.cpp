@@ -1,6 +1,8 @@
 #include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
 #include "VulkanContext.h"
+#include "VulkanFramebuffer.h"
+#include "VulkanRenderPass.h"
 namespace RHI
 {
 	auto VulkanCommandBufferManager::init(uint32_t numThread) -> void
@@ -120,6 +122,7 @@ namespace RHI
 
 	auto VulkanCommandBuffer::begin() -> void
 	{
+		H_ASSERTLOG(vkCommandBuffer != VK_NULL_HANDLE, "Fatal: try to access a invalid vkCommandBuffer !");
 		if (secondary)
 		{
 			/*VkCommandBufferInheritanceInfo inheritanceInfo{};
@@ -157,8 +160,7 @@ namespace RHI
 	auto VulkanCommandBuffer::transition_image_state(std::shared_ptr<Texture> texture, AshResourceState newlayout, TextureSubResource* region
 		, AshQueueType::Enum srcQueueType, AshQueueType::Enum dstQueueType ) -> void
 	{
-		H_ASSERTLOG(vkCommandBuffer != VK_NULL_HANDLE,"Fatal: try to access a invalid vkCommandBuffer !");
-		H_ASSERTLOG(state == ASH_Recording," you need call begin() before write any command ! ");
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		H_ASSERTLOG((srcQueueType == dstQueueType) || (dstQueueType != AshQueueType::Enum::Ignored), " invalid dst queue type ! ");
 		if (srcQueueType == dstQueueType)
 		{
@@ -219,6 +221,67 @@ namespace RHI
 	auto VulkanCommandBuffer::get_native_handle() -> void*
 	{
 		return vkCommandBuffer;
+	}
+	auto VulkanCommandBuffer::begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		//insure all attachment are in correct layout
+		auto colorAttachements = frameBuffer->get_render_targets();
+		auto count = frameBuffer->get_render_targets().size();
+		auto renderPass = frameBuffer->get_render_pass();
+		for (auto i = 0; i < count; i++)
+		{
+			transition_image_state(colorAttachements[i], ASH_RESOURCE_STATE_RENDER_TARGET);
+		}
+		if (frameBuffer->get_depth_stencil() != nullptr)
+		{
+			transition_image_state(frameBuffer->get_depth_stencil(), ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE);
+		}
+		
+		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
+		{
+			VkRenderingAttachmentInfoKHR color_attachments_info[k_max_image_outputs] = {};
+			for (auto i = 0; i < count; i++)
+			{
+				VkAttachmentLoadOp color_op{};
+				color_op = ash_load_operation_to_vk(renderPass->get_color_operations()[i]);
+				VkRenderingAttachmentInfoKHR& color_attachment_info = color_attachments_info[i];
+				color_attachment_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
+				color_attachment_info.imageView = (VkImageView)colorAttachements[i]->get_default_render_target_view()->get_native_handle();
+				color_attachment_info.imageLayout = VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2) ? VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+				color_attachment_info.resolveMode = VK_RESOLVE_MODE_NONE;
+				color_attachment_info.loadOp = color_op;
+				color_attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+				//color_attachment_info.clearValue = renderPass->get_color_operations()[i] == AshLoadOption::ASH_LOAD_CLEAR ? clear_values[a] : VkClearValue{ };
+			}
+		}
+		else
+		{
+			
+			if (currentBoundRenderPass != nullptr)
+			{
+				HLogWarning("the last render pass hasn't been ended ! It's ok if you want to automaticly end it and bind new one !");
+				end_render_pass();
+			}
+			if (renderPass == currentBoundRenderPass)
+			{
+				HLogWarning("Bind a render pass which is bound currently on this commandbuffer, do nothing and return !");
+				return;
+			}
+		}
+		
+
+
+	}
+	auto VulkanCommandBuffer::end_render_pass() -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+
+	}
+	auto VulkanCommandBuffer::bind_pipeline() -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+
 	}
 	auto VulkanCommandBuffer::set_state(AshCommandBufferState _state) -> void
 	{

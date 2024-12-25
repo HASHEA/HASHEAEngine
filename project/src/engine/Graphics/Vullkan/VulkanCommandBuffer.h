@@ -11,6 +11,7 @@ namespace RHI
 	static const uint32_t k_secondary_command_buffers_count = 2;
 	struct FramePool;
 	struct VulkanCommandBufferManager;
+	class RenderPass;
 	//TODO: improve command buffer store and get !!!!!!!
 	class VulkanCommandBuffer : public CommandBuffer
 	{
@@ -40,15 +41,22 @@ namespace RHI
 		virtual auto transition_image_state(std::shared_ptr<Texture> texture, AshResourceState newlayout, TextureSubResource* region = nullptr,
 			AshQueueType::Enum srcQueueType = AshQueueType::Enum::Ignored, AshQueueType::Enum dstQueueType = AshQueueType::Enum::Ignored) -> void override;
 		auto get_native_handle() -> void* override;
+
+		auto begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void override;
+		auto end_render_pass() -> void override;
+		auto bind_pipeline() -> void override;
 	private:
-		VkCommandBuffer			vkCommandBuffer				= VK_NULL_HANDLE;
-		VkCommandPool			vkCommandPool				= VK_NULL_HANDLE;
-		VkDescriptorPool		vk_descriptor_pool			= VK_NULL_HANDLE;
+		VkCommandBuffer				vkCommandBuffer				= VK_NULL_HANDLE;
+		VkCommandPool				vkCommandPool				= VK_NULL_HANDLE;
+		VkDescriptorPool			vk_descriptor_pool			= VK_NULL_HANDLE;
+		std::shared_ptr<RenderPass>	currentBoundRenderPass = nullptr;
 		bool secondary = false;
 		AshCommandBufferState state = AshCommandBufferState::ASH_Idle;
 		
 
 		friend class VulkanCommandBufferManager;		
+
+		
 	};
 	struct VulkanCommandBufferManager
 	{
