@@ -200,7 +200,7 @@ namespace RHI
 
 	auto VulkanTexture::is_render_target() -> bool
 	{
-		return render_target;
+		return state == ASH_RESOURCE_STATE_RENDER_TARGET;
 	}
 
 	auto VulkanTexture::get_mip_maps_count() -> uint8_t
@@ -256,7 +256,7 @@ namespace RHI
 		desc.height = height;
 		desc.depth = depth;
 		desc.mipmaps = mipmaps;
-		desc.render_target = render_target;
+		desc.render_target = state == ASH_RESOURCE_STATE_RENDER_TARGET;
 		desc.compute_access = compute_access;
 		desc.format = format;
 		desc.type = type;

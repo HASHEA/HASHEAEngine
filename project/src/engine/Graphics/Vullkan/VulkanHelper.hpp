@@ -1023,4 +1023,31 @@ namespace RHI
 		}
 		return retOP;
 	}
+
+	inline auto ash_color_value_to_vk(const AshColorValue& color) -> VkClearColorValue
+	{
+		VkClearColorValue clearColor = {};
+		for (int i = 0; i < 4; ++i) {
+			switch (color.v_type)
+			{
+			case RHI::AshColorValue::T_float32:
+				clearColor.float32[i] = color.float32[i];
+				break;
+			case RHI::AshColorValue::T_int32:
+				clearColor.int32[i] = color.int32[i];
+				break;
+			case RHI::AshColorValue::T_uint32:
+				clearColor.uint32[i] = color.uint32[i];
+				break;
+			default:
+				break;
+			}
+		}
+		return clearColor;
+	}
+	inline auto ash_depth_stencil_value_to_vk(const AshDepthStencilValue& color) -> VkClearDepthStencilValue
+	{
+		VkClearDepthStencilValue clearColor = { color .depth,color .stencil};
+		return clearColor;
+	}
 };

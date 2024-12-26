@@ -215,7 +215,6 @@ namespace RHI
 			texture->height = swapchainExtents.height;
 			texture->aliasTexture = nullptr;
 			texture->format = vk_format_to_ash(surfaceFormat.format);
-			texture->render_target = 1;
 			texture->name = "swapchain buffer";
 			texture->swapchain_texture = true;
 			texture->vkImage = vecVkImage[i];

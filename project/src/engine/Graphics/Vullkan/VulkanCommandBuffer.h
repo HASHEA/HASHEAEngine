@@ -46,10 +46,11 @@ namespace RHI
 		auto end_render_pass() -> void override;
 		auto bind_pipeline() -> void override;
 	private:
-		VkCommandBuffer				vkCommandBuffer				= VK_NULL_HANDLE;
-		VkCommandPool				vkCommandPool				= VK_NULL_HANDLE;
-		VkDescriptorPool			vk_descriptor_pool			= VK_NULL_HANDLE;
-		std::shared_ptr<RenderPass>	currentBoundRenderPass = nullptr;
+		VkCommandBuffer							vkCommandBuffer				= VK_NULL_HANDLE;
+		VkCommandPool							vkCommandPool				= VK_NULL_HANDLE;
+		VkDescriptorPool						vk_descriptor_pool			= VK_NULL_HANDLE;
+		std::shared_ptr<RenderPass>				currentBoundRenderPass		= nullptr;
+		std::shared_ptr<Framebuffer>			currentBoundFramebuffer		= nullptr;
 		bool secondary = false;
 		AshCommandBufferState state = AshCommandBufferState::ASH_Idle;
 		

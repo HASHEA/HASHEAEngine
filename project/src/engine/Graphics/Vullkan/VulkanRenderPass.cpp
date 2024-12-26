@@ -69,6 +69,7 @@ namespace RHI
 			VkAttachmentReference& color_attachment_ref = color_attachments_ref[c];
 			color_attachment_ref.attachment = c;
 			color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			color_final_layouts[c] = ci.color_final_layouts[c];
 		}
 		// Depth attachment
 		VkAttachmentDescription depth_attachment{};
@@ -85,6 +86,7 @@ namespace RHI
 			depth_attachment.finalLayout = ash_resource_state_to_vk_image_layout(ci.depth_stencil_final_layout);
 			depth_attachment_ref.attachment = c;
 			depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+			depth_stencil_final_layout = ci.depth_stencil_final_layout;
 		}
 		// Create subpass.
 		// TODO: for now is just a simple subpass, evolve API.
@@ -120,16 +122,20 @@ namespace RHI
 		//u32 num_external_dependencies = 0;
 		VkRenderPassMultiviewCreateInfo multiview_create_info{ VK_STRUCTURE_TYPE_RENDER_PASS_MULTIVIEW_CREATE_INFO };
 		if (ci.multiview_mask > 0 && VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Multiview)) {
-
+			multiviewMask = ci.multiview_mask;
 			multiview_create_info.subpassCount = 1;
 			multiview_create_info.pViewMasks = &ci.multiview_mask;
 			multiview_create_info.correlationMaskCount = 0;
 			multiview_create_info.pCorrelationMasks = nullptr;
 			render_pass_info.pNext = &multiview_create_info;
 		}
-		HLogInfo("creating render pass : {}", name);
-		VK_CHECK_RESULT(vkCreateRenderPass(VulkanContext::get_vulkan_device(), &render_pass_info, nullptr, &vkRenderPass));
-		VulkanContext::set_resource_name(VK_OBJECT_TYPE_RENDER_PASS, (uint64_t)vkRenderPass, name);
+	
+		if (!VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
+		{
+			HLogInfo("creating render pass : {}", name);
+			VK_CHECK_RESULT(vkCreateRenderPass(VulkanContext::get_vulkan_device(), &render_pass_info, nullptr, &vkRenderPass));
+			VulkanContext::set_resource_name(VK_OBJECT_TYPE_RENDER_PASS, (uint64_t)vkRenderPass, name);
+		}
 	}
 	VulkanRenderPass::~VulkanRenderPass()
 	{
@@ -176,5 +182,17 @@ namespace RHI
 	auto VulkanRenderPass::get_depth_stencil_format() -> AshFormat
 	{
 		return depthStencilFormat;
+	}
+	auto VulkanRenderPass::get_multiview_mask() -> uint32_t
+	{
+		return multiviewMask;
+	}
+	auto VulkanRenderPass::get_color_attachment_final_state(uint32_t index) -> AshResourceState
+	{
+		return color_final_layouts[index];
+	}
+	auto VulkanRenderPass::get_depth_stencil_attachment_final_state() -> AshResourceState
+	{
+		return depth_stencil_final_layout;
 	}
 }

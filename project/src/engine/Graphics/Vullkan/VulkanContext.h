@@ -200,6 +200,11 @@ namespace RHI
 			return instance->vulkanPresentQueue;
 		}
 
+		inline static auto get_fragment_shading_rate_texel_size()
+		{
+			return instance->minFragmentShadingRateTexelSize;
+		}
+
 		inline static auto get_queue_family_index(AshQueueType::Enum queueType) -> uint32_t
 		{
 			uint32_t index = UINT32_MAX;

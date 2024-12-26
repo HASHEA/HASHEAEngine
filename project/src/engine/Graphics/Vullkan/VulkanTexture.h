@@ -137,7 +137,6 @@ namespace RHI
 		uint16_t									depth							= 1;
 		uint16_t									layerCount						= 1;
 		uint8_t										mipmaps							= 1;
-		uint8_t										render_target					= 0;
 		uint8_t										compute_access					= 0;
 		AshFormat									format							= ASH_FORMAT_UNDEFINED;
 		AshImageType								type							= AshImageType::Ash_Texture2D;

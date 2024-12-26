@@ -64,6 +64,10 @@ namespace RHI
 		virtual auto get_color_operations() -> const Array<AshLoadOption> & = 0;
 		virtual auto get_depth_stencil_operations() -> AshLoadOption = 0;
 		virtual auto get_depth_stencil_format() -> AshFormat = 0;
+		virtual auto get_multiview_mask() -> uint32_t = 0;
+		virtual auto get_color_attachment_final_state(uint32_t index) -> AshResourceState = 0;
+		virtual auto get_depth_stencil_attachment_final_state() -> AshResourceState = 0;
+
 	private:
 
 	};

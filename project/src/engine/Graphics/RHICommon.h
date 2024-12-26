@@ -14,6 +14,64 @@ namespace RHI
 		Ash_Texture1D, Ash_Texture2D, Ash_Texture3D, Ash_TextureCube, Ash_Texture_1D_Array, Ash_Texture_2D_Array, Ash_Texture_Cube_Array, Count
 	};
 
+	typedef struct AshDepthStencilValue {
+		float       depth;
+		uint32_t    stencil;
+	} AshDepthStencilValue;
+
+	typedef union AshColorValue
+	{
+		enum valueType
+		{
+			T_float32,
+			T_int32,
+			T_uint32
+		};
+		valueType v_type = T_float32;
+		float float32[4];
+		int32_t int32[4];
+		uint32_t uint32[4];
+		AshColorValue()
+		{
+			for (int i = 0; i < 4; ++i) {
+				float32[i] = 0.0f; 
+			}
+			v_type = T_float32;
+		};
+		explicit AshColorValue(float value) {
+			for (int i = 0; i < 4; ++i) {
+				float32[i] = value;
+			}
+			v_type = T_float32;
+		}
+		explicit AshColorValue(int32_t value) {
+			for (int i = 0; i < 4; ++i) {
+				int32[i] = value;
+			}
+			v_type = T_int32;
+		}
+		explicit AshColorValue(uint32_t value) {
+			for (int i = 0; i < 4; ++i) {
+				uint32[i] = value;
+			}
+			v_type = T_uint32;
+		}
+		AshColorValue(float r, float g, float b, float a) {
+			float32[0] = r; float32[1] = g; float32[2] = b; float32[3] = a;
+			v_type = T_float32;
+		}
+
+		AshColorValue(int32_t r, int32_t g, int32_t b, int32_t a) {
+			int32[0] = r; int32[1] = g; int32[2] = b; int32[3] = a;
+			v_type = T_int32;
+		}
+
+		AshColorValue(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
+			uint32[0] = r; uint32[1] = g; uint32[2] = b; uint32[3] = a;
+			v_type = T_uint32;
+		}
+	};
+
 	namespace AshResourceUsageType {
 		enum Enum {
 			Immutable, Dynamic, Stream, Staging, Readback, Count

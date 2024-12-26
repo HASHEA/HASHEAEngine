@@ -16,6 +16,14 @@ namespace RHI
 		auto get_render_pass() -> std::shared_ptr<RenderPass> override;
 		auto get_render_targets() -> Array<std::shared_ptr<Texture>> & override;
 		auto get_depth_stencil() -> std::shared_ptr<Texture> override;
+		auto clear_render_target(uint32_t index, const AshColorValue& color) -> void override;
+		auto clear_depth_stencil(const AshDepthStencilValue& color) -> void override;
+		auto get_render_target_clear_color(uint32_t index) -> const AshColorValue& override;
+		auto get_depth_stencil_clear_color() -> const AshDepthStencilValue & override;
+		auto get_width() -> uint32_t override;
+		auto get_height() -> uint32_t override;
+		auto get_layer_count() -> uint32_t override;
+		auto get_shading_rate_attachment() -> std::shared_ptr<Texture> override;
 		/*rhi interfaces*/
 
 	private:
@@ -27,6 +35,19 @@ namespace RHI
 		uint16_t layers = 0;
 		//hold ref of attachments:
 		Array<std::shared_ptr<Texture>> colorAttachements;
-		std::shared_ptr<Texture> depthStencilAttachment;
+		std::shared_ptr<Texture> depthStencilAttachment = nullptr;
+		std::shared_ptr<Texture> shadingRateAttachment = nullptr;
+		Array<AshColorValue> colorClearColors;
+		AshDepthStencilValue depthClearColors{};
+
+		
+
+		
+
+
+		
+
+		
+
 	};
 }

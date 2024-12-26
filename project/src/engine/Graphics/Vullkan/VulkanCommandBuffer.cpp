@@ -157,6 +157,7 @@ namespace RHI
 	{
 		return state;
 	}
+	//TODO:: merge barriers
 	auto VulkanCommandBuffer::transition_image_state(std::shared_ptr<Texture> texture, AshResourceState newlayout, TextureSubResource* region
 		, AshQueueType::Enum srcQueueType, AshQueueType::Enum dstQueueType ) -> void
 	{
@@ -207,8 +208,6 @@ namespace RHI
 		imageMemoryBarrier.subresourceRange = subresourceRange;
 		imageMemoryBarrier.srcAccessMask = vk_layout_to_access_mask(srcLayout);
 		imageMemoryBarrier.dstAccessMask = vk_layout_to_access_mask(dstLayout);
-
-
 		const VkPipelineStageFlags source_stage_mask = util_determine_pipeline_stage_flags(imageMemoryBarrier.srcAccessMask, srcQueueType);
 		const VkPipelineStageFlags destination_stage_mask = util_determine_pipeline_stage_flags(imageMemoryBarrier.dstAccessMask, dstQueueType);
 
@@ -225,23 +224,39 @@ namespace RHI
 	auto VulkanCommandBuffer::begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void
 	{
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		auto renderPass = frameBuffer->get_render_pass();
+		if (currentBoundRenderPass != nullptr)
+		{
+			HLogWarning("the last render pass hasn't been ended ! It's ok if you want to automaticly end it and bind new one !");
+			end_render_pass();
+		}
+		if (renderPass == currentBoundRenderPass)
+		{
+			HLogWarning("Bind a render pass which is bound currently on this commandbuffer, do nothing and return !");
+			return;
+		}
 		//insure all attachment are in correct layout
 		auto colorAttachements = frameBuffer->get_render_targets();
-		auto count = frameBuffer->get_render_targets().size();
-		auto renderPass = frameBuffer->get_render_pass();
-		for (auto i = 0; i < count; i++)
-		{
-			transition_image_state(colorAttachements[i], ASH_RESOURCE_STATE_RENDER_TARGET);
-		}
-		if (frameBuffer->get_depth_stencil() != nullptr)
-		{
-			transition_image_state(frameBuffer->get_depth_stencil(), ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE);
-		}
-		
+		auto depthStencilAttachment = frameBuffer->get_depth_stencil();
+		auto shadingRateAttachment = frameBuffer->get_shading_rate_attachment();
+		auto renderTargetCount = frameBuffer->get_render_targets().size();
 		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
+			//only dynamic render need to transition images
+			for (auto i = 0; i < renderTargetCount; i++)
+			{
+				transition_image_state(colorAttachements[i], ASH_RESOURCE_STATE_RENDER_TARGET);
+			}
+			if (depthStencilAttachment != nullptr)
+			{
+				transition_image_state(depthStencilAttachment, ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE);
+			}
+			if (shadingRateAttachment != nullptr)
+			{
+				transition_image_state(shadingRateAttachment, ASH_RESOURCE_STATE_FRAGMENT_SHADING_RATE_ATTACHMENT);
+			}
 			VkRenderingAttachmentInfoKHR color_attachments_info[k_max_image_outputs] = {};
-			for (auto i = 0; i < count; i++)
+			for (auto i = 0; i < renderTargetCount; i++)
 			{
 				VkAttachmentLoadOp color_op{};
 				color_op = ash_load_operation_to_vk(renderPass->get_color_operations()[i]);
@@ -252,31 +267,96 @@ namespace RHI
 				color_attachment_info.resolveMode = VK_RESOLVE_MODE_NONE;
 				color_attachment_info.loadOp = color_op;
 				color_attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-				//color_attachment_info.clearValue = renderPass->get_color_operations()[i] == AshLoadOption::ASH_LOAD_CLEAR ? clear_values[a] : VkClearValue{ };
+				VkClearValue clearValue{ };
+				clearValue.color = ash_color_value_to_vk(frameBuffer->get_render_target_clear_color(i));
+				color_attachment_info.clearValue = renderPass->get_color_operations()[i] == AshLoadOption::ASH_LOAD_CLEAR ? clearValue : VkClearValue{ };
 			}
+			VkRenderingAttachmentInfoKHR depth_attachment_info{ VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR };
+			bool has_depth_attachment = depthStencilAttachment != nullptr;
+			if (has_depth_attachment) {
+				VkAttachmentLoadOp depth_op;
+				depth_op = ash_load_operation_to_vk(renderPass->get_depth_stencil_operations());
+				depth_attachment_info.imageView = (VkImageView)depthStencilAttachment->get_default_render_target_view()->get_native_handle();
+				depth_attachment_info.imageLayout = VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2) ? VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+				depth_attachment_info.resolveMode = VK_RESOLVE_MODE_NONE;
+				depth_attachment_info.loadOp = depth_op;
+				depth_attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+				VkClearValue clearValue{ };
+				clearValue.depthStencil = ash_depth_stencil_value_to_vk(frameBuffer->get_depth_stencil_clear_color());
+				depth_attachment_info.clearValue = renderPass->get_depth_stencil_operations() == AshLoadOption::ASH_LOAD_CLEAR ? clearValue : VkClearValue{ };
+			}
+			VkRenderingInfoKHR rendering_info{ VK_STRUCTURE_TYPE_RENDERING_INFO_KHR };
+			rendering_info.flags = secondary ? VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT_KHR : 0;
+			rendering_info.renderArea = { 0, 0, frameBuffer->get_width(), frameBuffer->get_height() };
+			rendering_info.layerCount = frameBuffer->get_layer_count();
+			rendering_info.viewMask = renderPass->get_multiview_mask();
+			rendering_info.colorAttachmentCount = renderTargetCount;
+			rendering_info.pColorAttachments = renderTargetCount > 0 ? color_attachments_info : nullptr;
+			rendering_info.pDepthAttachment = has_depth_attachment ? &depth_attachment_info : nullptr;
+			rendering_info.pStencilAttachment = nullptr;
+			VkRenderingFragmentShadingRateAttachmentInfoKHR shading_rate_info{ VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_SHADING_RATE_ATTACHMENT_INFO_KHR };
+			auto srattachment = frameBuffer->get_shading_rate_attachment();
+			if (srattachment != nullptr) {
+				shading_rate_info.imageView = (VkImageView)srattachment->get_default_render_target_view()->get_native_handle();
+				shading_rate_info.imageLayout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+				shading_rate_info.shadingRateAttachmentTexelSize = VulkanContext::get_fragment_shading_rate_texel_size();
+				rendering_info.pNext = (void*)&shading_rate_info;
+			}
+			vkCmdBeginRenderingKHR(vkCommandBuffer, &rendering_info);
 		}
 		else
 		{
-			
-			if (currentBoundRenderPass != nullptr)
+			VkRenderPassBeginInfo render_pass_begin{ VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+			render_pass_begin.framebuffer = (VkFramebuffer)frameBuffer->get_native_handle();
+			render_pass_begin.renderPass = (VkRenderPass)renderPass->get_native_handle();
+			render_pass_begin.renderArea.offset = { 0, 0 };
+			render_pass_begin.renderArea.extent = { frameBuffer->get_width(), frameBuffer->get_height() };
+			VkClearValue clearValues[k_max_image_outputs + 1];
+			uint32_t clearValueCount = renderTargetCount;
+			for (uint32_t i = 0; i < renderTargetCount; i++)
 			{
-				HLogWarning("the last render pass hasn't been ended ! It's ok if you want to automaticly end it and bind new one !");
-				end_render_pass();
+				clearValues[i].color = ash_color_value_to_vk(frameBuffer->get_render_target_clear_color(i));
 			}
-			if (renderPass == currentBoundRenderPass)
+			if (depthStencilAttachment != nullptr)
 			{
-				HLogWarning("Bind a render pass which is bound currently on this commandbuffer, do nothing and return !");
-				return;
+				clearValues[renderTargetCount].depthStencil = ash_depth_stencil_value_to_vk(frameBuffer->get_depth_stencil_clear_color());
+				clearValueCount++;
 			}
+			render_pass_begin.clearValueCount = clearValueCount;
+			render_pass_begin.pClearValues = clearValues;
+			vkCmdBeginRenderPass(vkCommandBuffer, &render_pass_begin, secondary ? VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS : VK_SUBPASS_CONTENTS_INLINE);
 		}
-		
-
-
+		currentBoundRenderPass = renderPass;
+		currentBoundFramebuffer = frameBuffer;
 	}
 	auto VulkanCommandBuffer::end_render_pass() -> void
 	{
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
-
+		if (currentBoundRenderPass == nullptr)
+		{
+			HLogWarning("end_render_pass : none renderpass are bound currently, do nothing and return !");
+			return;
+		}
+		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
+			vkCmdEndRenderingKHR(vkCommandBuffer);
+		}
+		else {
+			vkCmdEndRenderPass(vkCommandBuffer);
+			//manually set attachment state changed by renderpass for tracking state
+			auto colorAttachments = currentBoundFramebuffer->get_render_targets();
+			auto count = colorAttachments.size();
+			auto depthAttachment = currentBoundFramebuffer->get_depth_stencil();
+			for (auto i = 0; i < count; i++)
+			{
+				colorAttachments[i]->set_resource_state(currentBoundRenderPass->get_color_attachment_final_state(i));
+			}
+			if (depthAttachment != nullptr)
+			{
+				depthAttachment->set_resource_state(currentBoundRenderPass->get_depth_stencil_attachment_final_state());
+			}
+		}
+		currentBoundRenderPass = nullptr;
+		currentBoundFramebuffer = nullptr;
 	}
 	auto VulkanCommandBuffer::bind_pipeline() -> void
 	{
