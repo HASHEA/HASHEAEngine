@@ -10,8 +10,9 @@ namespace RHI
 		~VulkanPipeline();
 
 	private:
-		VkPipeline                      vk_pipeline;
-		VkPipelineLayout                vk_pipeline_layout;
-		VkPipelineBindPoint             vk_bind_point;
+		const char*						name				= nullptr;
+		VkPipeline                      vk_pipeline			= VK_NULL_HANDLE;
+		VkPipelineLayout                vk_pipeline_layout	= VK_NULL_HANDLE;
+		VkPipelineBindPoint             vk_bind_point{};
 	};
 }

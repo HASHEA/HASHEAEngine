@@ -4,7 +4,7 @@
 using namespace AshEngine;
 namespace RHI
 {
-	static const uint8_t                     k_max_image_outputs = 8;                // Maximum number of images/render_targets/fbo attachments usable.
+	
 	struct RenderPassCreation {
 
 		uint16_t                        num_render_targets							= 0;
