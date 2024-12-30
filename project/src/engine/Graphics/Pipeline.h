@@ -1,5 +1,7 @@
 #pragma once
 #include "RHICommon.h"
+#include "RHIResource.h"
+#include <memory>
 namespace RHI
 {
 	class RenderPass;
@@ -118,7 +120,7 @@ namespace RHI
 		uint16_t                             location	= 0;
 		uint16_t                             binding	= 0;
 		uint32_t                             offset		= 0;
-		AshVertexComponentFormat		     format		= AshVertexComponentFormat::Count;
+		AshVertexComponentFormat		     format		= AshVertexComponentFormat::FormatCount;
 
 	}; // struct VertexAttribute
 
@@ -193,7 +195,7 @@ namespace RHI
 		BlendStateCreation							blend_state;
 		VertexInputCreation							vertex_input;
 		ShaderStateCreation							shaders;
-		AshPrimitiveTopology						AshPrimitiveTopology::ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		AshPrimitiveTopology						primitiveTopology = AshPrimitiveTopology::ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 		uint32_t									flags;
 		std::shared_ptr<RenderPass>					render_pass;
 		std::shared_ptr<DescriptorSetLayout>		descriptor_set_layout[k_max_descriptor_set_layouts];

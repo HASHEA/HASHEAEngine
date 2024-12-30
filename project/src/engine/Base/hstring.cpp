@@ -108,10 +108,10 @@ namespace AshEngine
 		 
 	auto StringBuffer::append_get(const char* string) -> char*
 	{	 
-		return append_get("%s", string);;
+		return append_get_f("%s", string);;
 	}	 
 		 
-	auto StringBuffer::append_get(const char* format, ...) -> char*
+	auto StringBuffer::append_get_f(const char* format, ...) -> char*
 	{	 
 		uint32_t cached_offset = this->m_uCurrentSize;
 

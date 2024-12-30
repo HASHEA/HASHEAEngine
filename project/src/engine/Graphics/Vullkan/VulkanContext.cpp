@@ -1,5 +1,6 @@
 #pragma once
 #include "Base/hlog.h"
+#include "Base/hfile.h"
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
@@ -872,6 +873,53 @@ namespace RHI
 		return HS_OK;
 	}
 
+	auto VulkanContext::_load_cache() -> HS_Result
+	{
+		StringBuffer pathBuffer;
+		pathBuffer.init(1024, nullptr);
+		const char* pipelineCachePath = pathBuffer.append_get_f("%s/%s", ASH_ROOT_DIR, k_pipeline_cache_path);
+		//load pipeline cache
+		VkPipelineCacheCreateInfo pipeline_cache_create_info{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+		if (file_exists(pipelineCachePath))
+		{
+			FileReadResult read_result = file_read_binary(pipelineCachePath, nullptr);
+			VkPipelineCacheHeaderVersionOne* cache_header = (VkPipelineCacheHeaderVersionOne*)read_result.data;
+			if (cache_header->deviceID == vulkanPhysicalDeviceProperties.deviceID &&
+				cache_header->vendorID == vulkanPhysicalDeviceProperties.vendorID &&
+				memcmp(cache_header->pipelineCacheUUID, vulkanPhysicalDeviceProperties.pipelineCacheUUID, VK_UUID_SIZE) == 0)
+			{
+				pipeline_cache_create_info.initialDataSize = read_result.size;
+				pipeline_cache_create_info.pInitialData = read_result.data;
+			}
+			VK_CHECK_RESULT(vkCreatePipelineCache(vulkanDevice, &pipeline_cache_create_info, vulkanAllocationCallbacks, &vulkanPipelineCache));
+			Ash_Free(nullptr,read_result.data);
+		}
+		else
+		{
+			VK_CHECK_RESULT(vkCreatePipelineCache(vulkanDevice, &pipeline_cache_create_info, vulkanAllocationCallbacks, &vulkanPipelineCache));
+		}
+		pathBuffer.shutdown();
+		return HS_OK;
+	}
+
+	auto VulkanContext::_unload_cache() -> HS_Result
+	{
+		StringBuffer pathBuffer;
+		pathBuffer.init(1024, nullptr);
+		const char* pipelineCachePath = pathBuffer.append_get_f("%s/%s", ASH_ROOT_DIR, k_pipeline_cache_path);
+		size_t cache_data_size = 0;
+		VK_CHECK_RESULT(vkGetPipelineCacheData(vulkanDevice, vulkanPipelineCache, &cache_data_size, nullptr));
+
+		void* cache_data = Ash_Alloc(nullptr, cache_data_size,64);
+		VK_CHECK_RESULT(vkGetPipelineCacheData(vulkanDevice, vulkanPipelineCache, &cache_data_size, cache_data));
+
+		file_write_binary(pipelineCachePath, cache_data, cache_data_size);
+		Ash_Free(nullptr, cache_data);
+		vkDestroyPipelineCache(vulkanDevice, vulkanPipelineCache, vulkanAllocationCallbacks);
+		pathBuffer.shutdown();
+		return HS_Result();
+	}
+
 	auto VulkanContext::init(void* config) -> HS_Result
 	{	
 		GraphicsContextInitConfig vkConfig = *(GraphicsContextInitConfig*)config;
@@ -925,6 +973,13 @@ namespace RHI
 			return result;
 		}
 
+		result = _load_cache();
+		if (HS_CHECK_FAILED(result))
+		{
+			HLogError("Fatal : Failed to load cache !");
+			return result;
+		}
+
 		result = HS_OK;
 		return result;
 	}
@@ -932,6 +987,8 @@ namespace RHI
 	{
 		//wait idle
 		wait_idle();
+		//unload cache
+		_unload_cache();
 		//shutdown framepool and datas
 		_shutdown_frame_pool_and_data();
 		//shutdown descriptor pool

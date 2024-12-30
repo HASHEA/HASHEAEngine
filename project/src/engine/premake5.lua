@@ -74,6 +74,8 @@ project "Engine"
 			"GLFW_INCLUDE_NONE",
 			"ASH_WINDOWS",
 			"ASH_ENGINE",
+			"ASH_ROOT_DIR=\"%{wks.location}\"",
+			"ASH_ASSETS_DIR=\"%{wks.location}/assets\"",
 		}
 		
 	dependson "shaders"

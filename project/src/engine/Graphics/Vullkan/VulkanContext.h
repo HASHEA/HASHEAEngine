@@ -14,6 +14,7 @@
 using namespace AshEngine;
 namespace RHI
 {
+	constexpr const char*	  k_pipeline_cache_path = "Caches\\AshVulkan.pipelineCache";
 	constexpr uint32_t        k_bindless_texture_binding = 10;
 	constexpr uint32_t        k_bindless_image_binding = 11;
 	constexpr uint32_t        k_max_bindless_resources = 1024;
@@ -227,9 +228,13 @@ namespace RHI
 			}
 			return index;
 		}
-
 		auto create_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>;
 
+		inline static auto get_pipeline_cache() -> VkPipelineCache
+		{
+			return instance->vulkanPipelineCache;
+		}
+	
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
@@ -278,6 +283,9 @@ namespace RHI
 		//frame data
 		auto _create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
 		auto _shutdown_frame_pool_and_data() -> HS_Result;
+		//pipeline / or other cache
+		auto _load_cache() -> HS_Result;
+		auto _unload_cache() -> HS_Result;
 	private:
 		BitSetFixed<4> featureSwitchFlags{};
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};
@@ -314,6 +322,7 @@ namespace RHI
 		VulkanFence*											vulkanComputeFence						= nullptr;
 		VulkanFence*											vulkanImmediateFence					= nullptr; //stuck here and wait
 		Array<std::shared_ptr<Sampler>>							samplerCache;
+		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;

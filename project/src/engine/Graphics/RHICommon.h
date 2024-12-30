@@ -31,6 +31,9 @@ namespace RHI
 		float								min_depth = 0.0f;
 		float								max_depth = 0.0f;
 	}; // struct Viewport
+
+
+
 	//for non immediately delete, just call smart pointer . reset() directly
 #define RHI_RELEASE_IMMEDIATELY(res)\
 {\
@@ -380,7 +383,7 @@ namespace RHI
 	} AshFrontFace;
 
 	typedef enum AshFillMode {
-		Wireframe, Solid, Point, Count
+		Wireframe, Solid, Point, ModeCount
 	} AshFillMode;
 
 	typedef enum AshStencilOp {
@@ -474,15 +477,15 @@ namespace RHI
 	} AshBlendOp;
 
 	typedef enum AshColorWriteMask {
-		Red = 1 << 0, Green = 1 << 1, Blue = 1 << 2, Alpha = 1 << 3, All = Red | Green | Blue | Alpha, Count
+		Red = 1 << 0, Green = 1 << 1, Blue = 1 << 2, Alpha = 1 << 3, All = Red | Green | Blue | Alpha, ColorCount
 	} AshColorWriteMask;
 
 	typedef enum AshVertexInputRate {
-		PerVertex, PerInstance, Count
+		PerVertex, PerInstance, RateCount
 	} AshVertexInputRate;
 
 	typedef enum AshVertexComponentFormat {
-		Float, Float2, Float3, Float4, Mat4, Byte, Byte4N, UByte, UByte4N, Short2, Short2N, Short4, Short4N, Uint, Uint2, Uint4, Count
+		Float, Float2, Float3, Float4, Mat4, Byte, Byte4N, UByte, UByte4N, Short2, Short2N, Short4, Short4N, Uint, Uint2, Uint4, FormatCount
 	} AshVertexComponentFormat;
 
 	typedef enum AshShaderStageFlagBits {

@@ -28,7 +28,7 @@ namespace AshEngine
 		auto append_f(const char* format,...) -> void;
 
 		auto append_get(const char* string) -> char*;
-		auto append_get(const char* format, ...) -> char*;
+		auto append_get_f(const char* format, ...) -> char*;
 		auto append_get(const StringView& text) -> char*;
 		auto append_get_substring(const char* string, uint32_t start_index, uint32_t end_index) -> char*;
 		auto close_current_string() -> void;
