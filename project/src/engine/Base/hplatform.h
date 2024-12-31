@@ -17,4 +17,14 @@
 #define ASH_FILELINE(MESSAGE)                    __FILE__ "(" ASH_LINE_STRING ") : " MESSAGE
 #define ASH_UNIQUE_SUFFIX(PARAM)                 ASH_CONCAT(PARAM, __LINE__ )
 
+template <typename To, typename From>
+To safe_cast(From a) {
+	To result = (To)a;
+
+	From check = (From)result;
+	H_ASSERT(check == result);
+
+	return result;
+}
+
 typedef const char* cstring;
