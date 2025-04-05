@@ -105,6 +105,7 @@ namespace AshEngine
 			H_ASSERT(codeSize % sizeof(uint32_t) == 0);
 			binCode.resize(codeSize / sizeof(uint32_t));
 			memcpy(binCode.data(), binCodeChar, codeSize);
+			Ash_Free(nullptr, binCodeChar);
 		}
 		else
 		{
