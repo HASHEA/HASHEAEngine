@@ -14,7 +14,7 @@ namespace RHI
 	class RenderPass;
 	class Framebuffer;
 	class Pipeline;
-
+	class Shader;
 	struct RenderPassCreation;
 	struct FramebufferCreation;
 	struct PipelineCreation;
@@ -23,6 +23,8 @@ namespace RHI
 	struct TextureViewCreation;
 	struct BufferCreation;
 	struct MapBufferParameters;
+	struct DescriptorSetLayoutCreation;
+	struct ShaderCreation;
 	class RHIResource 
 	{
 	public:

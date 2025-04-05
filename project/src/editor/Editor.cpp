@@ -1,8 +1,10 @@
 #include "Editor.h"
+#include "Base/hlog.h"
 namespace AshEditor
 {
 	Editor::Editor()
 	{
+		HLogInfo("Ash Editor Start !");
 	}
 	Editor::~Editor()
 	{

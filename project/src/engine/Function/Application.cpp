@@ -4,13 +4,17 @@
 #include "Graphics/Swapchain.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
+#include "Base/hfile.h"
 #include "Base/window/Window.h"
+#include "Base/hcachedefine.h"
 #include "Graphics/RHICommon.h"
+#include "Function/MaterialSystem/ShaderManager.h"
 namespace AshEngine
 {
 	Application* Application::app = nullptr;
 	Application::Application()
 	{
+	
 		/*init at very first to ensure log*/
 		LogService::instance()->init(nullptr);
 		MemoryService::instance()->init(nullptr);
@@ -28,6 +32,11 @@ namespace AshEngine
 		gfxConfig.addtionalExtensions = window->get_extensions();
 		graphicsContext = RHI::GraphicsContext::create();
 		graphicsContext->init(&gfxConfig);
+
+		/*shader manager*/
+		ShaderManager::init();
+		//test shader load
+		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
 
 		/*swapchain*/
 		std::vector<RHI::AshColorSpace> colorSpace = { RHI::ASH_COLOR_SPACE_SRGB_NONLINEAR_KHR };
@@ -51,6 +60,7 @@ namespace AshEngine
 	{
 		swapChain->shutdown();
 		Ash_Delete(nullptr, swapChain);
+		ShaderManager::shutdown();
 		graphicsContext->shutdown();
 		Ash_Delete(nullptr,graphicsContext);
 		window->shutdown();
@@ -90,12 +100,7 @@ namespace AshEngine
 	{
 		graphicsContext->begin_frame();
 		swapChain->begin_frame();
-		
-
-
-
-		_on_render_debug();
-		
+		_on_render_debug();	
 		swapChain->end_frame();
 		graphicsContext->end_frame();
 	}
@@ -103,4 +108,5 @@ namespace AshEngine
 	{
 		swapChain->present();
 	}
+
 };

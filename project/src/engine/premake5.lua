@@ -53,31 +53,7 @@ project "Engine"
 		assetsdir,
 	}
 
-
- postbuildcommands
-		{
-			("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.dll   %{wks.location}/bin/target/" .. outputdir .. "/Editor "),
-			("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.pdb   %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
-		}
-
-  
-	filter "system:windows"
-		system "Windows"
-		systemversion "latest"
-		staticruntime "Off"
-		
-		defines
-		{
-			"_UNICODE",
-            "UNICODE",
-			"_CONSOLE",
-			"GLFW_INCLUDE_NONE",
-			"ASH_WINDOWS",
-			"ASH_ENGINE",
-			"ASH_ROOT_DIR=\"%{wks.location}\"",
-			"ASH_ASSETS_DIR=\"%{wks.location}/assets\"",
-		}
-		
+	
 	dependson "shaders"
 	links
 	{
@@ -89,8 +65,19 @@ project "Engine"
 		"spirv-cross",
 		"meshoptimizer"
 	}
-
-	filter "configurations:Debug"
+	filter {"system:windows", "configurations:Debug"}
+		system "Windows"
+		systemversion "latest"
+		staticruntime "Off"
+		defines
+		{
+			"_UNICODE",
+            "UNICODE",
+			"_CONSOLE",
+			"GLFW_INCLUDE_NONE",
+			"ASH_WINDOWS",
+			"ASH_ENGINE",
+		}
 		defines
 		{
 			"ASH_DEBUG",
@@ -106,10 +93,55 @@ project "Engine"
 		symbols "on"
 		editandcontinue "Off"
 		optimize "off"
+		includedirs
+		{
+			thirdparty .. "/glslang/debug/windows-x64/include",
+		}
+		links {
+			thirdparty.."/glslang/debug/windows-x64/lib/glslangd.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/SPIRVd.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/OGLCompilerd.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/MachineIndependentd.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/GenericCodeGend.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Toolsd.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Tools-optd.lib",
+			thirdparty.."/glslang/debug/windows-x64/lib/OSDependentd.lib",
 
-	filter "configurations:Release"
+		}						  
+
+	filter {"system:windows","configurations:Release"}
+		system "Windows"
+		systemversion "latest"
+		staticruntime "Off"
+		defines
+		{
+			"_UNICODE",
+            "UNICODE",
+			"_CONSOLE",
+			"GLFW_INCLUDE_NONE",
+			"ASH_WINDOWS",
+			"ASH_ENGINE",
+		}
 		defines "ASH_RELEASE"
 		runtime "Release"
 		optimize "on"	
+		includedirs
+		{
+			thirdparty .. "/glslang/release/windows-x64/include",
+		}
+		links {
+			thirdparty.."/glslang/release/windows-x64/lib/glslang.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/SPIRV.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/OGLCompiler.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/MachineIndependent.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/GenericCodeGen.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools-opt.lib",
+			thirdparty.."/glslang/release/windows-x64/lib/OSDependent.lib",
 
+		}	
+		
+		
+
+	
 	

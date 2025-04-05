@@ -14,7 +14,7 @@
 using namespace AshEngine;
 namespace RHI
 {
-	constexpr const char*	  k_pipeline_cache_path = "Caches\\AshVulkan.pipelineCache";
+
 	constexpr uint32_t        k_bindless_texture_binding = 10;
 	constexpr uint32_t        k_bindless_image_binding = 11;
 	constexpr uint32_t        k_max_bindless_resources = 1024;
@@ -237,13 +237,13 @@ namespace RHI
 	
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
-
 		auto map_buffer(const MapBufferParameters& params) -> void* override;
 		auto unmap_buffer(const MapBufferParameters& params) -> void override;
 		auto update_buffer_data(const MapBufferParameters& params, void* data) -> void override;
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
 		auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
+		auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> override;
 		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
 		auto begin_frame() -> void override;

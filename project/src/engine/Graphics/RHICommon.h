@@ -1,6 +1,7 @@
 #pragma once
 #include "Base/hplatform.h"
 #include "Base/hcore.h"
+#include "Base/hlog.h"
 namespace RHI
 {
 
@@ -31,9 +32,7 @@ namespace RHI
 		float								min_depth = 0.0f;
 		float								max_depth = 0.0f;
 	}; // struct Viewport
-
-
-
+	
 	//for non immediately delete, just call smart pointer . reset() directly
 #define RHI_RELEASE_IMMEDIATELY(res)\
 {\
@@ -235,6 +234,38 @@ namespace RHI
 		ASH_FORMAT_D32_SFLOAT_S8_UINT = 60,
 		ASH_FORMAT_COUNT
 	} AshFormat;
+	inline auto get_stride_from_ash_format(const AshFormat& format) -> uint32_t
+	{
+		switch (format)
+		{
+		case ASH_FORMAT_R32_SINT:
+			return sizeof(int);
+		case ASH_FORMAT_R32_SFLOAT:
+			return sizeof(float);
+		case ASH_FORMAT_R32G32_SFLOAT:
+			return sizeof(float) * 2;
+		case ASH_FORMAT_R32G32B32_SFLOAT:
+			return sizeof(float) * 3;
+		case ASH_FORMAT_R32G32B32A32_SFLOAT:
+			return sizeof(float) * 4;
+		case ASH_FORMAT_R32G32_SINT:
+			return sizeof(int) * 2;
+		case ASH_FORMAT_R32G32B32_SINT:
+			return sizeof(int) * 3;
+		case ASH_FORMAT_R32G32B32A32_SINT:
+			return sizeof(int) * 4;
+		case ASH_FORMAT_R32G32_UINT:
+			return sizeof(uint32_t) * 2;
+		case ASH_FORMAT_R32G32B32_UINT:
+			return sizeof(uint32_t) * 3;
+		case ASH_FORMAT_R32G32B32A32_UINT:
+			return sizeof(uint32_t) * 4;
+		default:
+			HLogWarning("Unsupported Format {0} , {1} : {2}", format, __FUNCTION__, __LINE__);
+			return 0;
+		}
+		return 0;
+	}
 
 	typedef enum AshColorSpace {
 		ASH_COLOR_SPACE_UNDEFINED = 0,
@@ -558,6 +589,59 @@ namespace RHI
 		ASH_PIPELINE_CREATE_PROTECTED_ACCESS_ONLY_BIT_EXT = 0x40000000,
 		ASH_PIPELINE_CREATE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
 	} AshPipelineCreateFlagBits;
+
+	typedef enum AshDescriptorType {
+		ASH_DESCRIPTOR_TYPE_SAMPLER = 0,
+		ASH_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER = 1,
+		ASH_DESCRIPTOR_TYPE_SAMPLED_IMAGE = 2,
+		ASH_DESCRIPTOR_TYPE_STORAGE_IMAGE = 3,
+		ASH_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER = 4,
+		ASH_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER = 5,
+		ASH_DESCRIPTOR_TYPE_UNIFORM_BUFFER = 6,
+		ASH_DESCRIPTOR_TYPE_STORAGE_BUFFER = 7,
+		ASH_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC = 8,
+		ASH_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC = 9,
+		ASH_DESCRIPTOR_TYPE_INPUT_ATTACHMENT = 10,
+		ASH_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK = 1000138000,
+		ASH_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE = 1000150000,
+		ASH_DESCRIPTOR_TYPE_MAX_ENUM = 0x7FFFFFFF
+	} AshDescriptorType;
+
+	typedef struct AshInputAttributeDescription
+	{
+		uint32_t    location = 0;
+		uint32_t    binding = 0;
+		AshFormat   format = ASH_FORMAT_UNDEFINED;
+		uint32_t    offset = 0;
+	}AshInputAttributeDescription;
+
+	typedef struct AshVertexInputBindingDescription {
+		uint32_t             binding = 0;
+		uint32_t             stride = 0;
+		AshVertexInputRate    inputRate = RateCount;
+	} AshVertexInputBindingDescription;
+	
+	typedef enum AshShaderDataType {
+		ASH_None,
+		ASH_Float32,
+		ASH_Vec2,
+		ASH_Vec3,
+		ASH_Vec4,
+		ASH_IVec2,
+		ASH_IVec3,
+		ASH_IVec4,
+		ASH_Mat3,
+		ASH_Mat4,
+		ASH_Int32,
+		ASH_Int,
+		ASH_UInt,
+		ASH_Bool,
+		ASH_Struct,
+		ASH_Mat4Array
+	} AshShaderDataType;
+
+
+	
 }
 
 

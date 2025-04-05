@@ -47,6 +47,7 @@ namespace RHI {
         static GraphicsContext* create();
     public:
         //RHI Interfaces
+        virtual auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> = 0;
         virtual auto map_buffer(const MapBufferParameters& params) -> void* = 0;
         virtual auto unmap_buffer(const MapBufferParameters& params) -> void = 0;
         virtual auto update_buffer_data(const MapBufferParameters& params, void* data) -> void = 0;

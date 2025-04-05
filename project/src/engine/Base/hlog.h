@@ -26,7 +26,7 @@ namespace AshEngine
 #if ASH_ENGINE
 #define GET_ASH_LOGGER AshEngine::LogService::instance()->get_engine_logger()
 #else
-#define GET_ASH_LOGGER AshEngine::LogService::instance()->GetAppLogger()
+#define GET_ASH_LOGGER AshEngine::LogService::instance()->get_app_logger()
 #endif // ASH_ENGINE
 
 #define HLogTrace(sinfo,...)		GET_ASH_LOGGER->trace(ASH_FILELINE(ASH_CONCAT(sinfo, "\n")),__VA_ARGS__)

@@ -32,7 +32,11 @@ project "Editor"
 
 	}
 	
-		
+	postbuildcommands
+	{
+		("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.dll   %{wks.location}/bin/target/" .. outputdir .. "/Editor "),
+		("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.pdb   %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
+	}
 	filter "system:windows"
 		system "Windows"
 		systemversion "latest"

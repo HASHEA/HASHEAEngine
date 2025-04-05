@@ -15,23 +15,22 @@ namespace AshEngine
 	public:
 		Application();
 		~Application();
-
-		inline static Application* Get()
+		inline static Application* get()
 		{
 			return app;
 		}
 	public:
-		inline static auto& GetGraphicsContext()
+		inline static auto& get_graphics_context()
 		{
-			return Get()->graphicsContext;
+			return get()->graphicsContext;
 		}
-		inline static auto& GetWindow()
+		inline static auto& get_window()
 		{
-			return Get()->window;
+			return get()->window;
 		}
 		inline static auto get_swapchain()
 		{
-			return Get()->swapChain;
+			return get()->swapChain;
 		}
 		auto start() -> void;
 	protected:

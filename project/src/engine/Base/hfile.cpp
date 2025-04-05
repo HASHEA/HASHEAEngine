@@ -4,7 +4,7 @@
 #include "hassert.h"
 #include "hstring.h"
 #include "hfile.h"
-
+#include <filesystem>
 #if defined(_WIN64)
 #include <windows.h>
 #else
@@ -40,7 +40,7 @@ namespace AshEngine
 		{
 			size_t fileSize = file_get_size(file);
 			outData = (char*)Ash_Alloc(allocator,fileSize + 1 ,1);
-			fread(outData, fileSize,1,file);
+			fread(outData, 1,fileSize,file);
 			outData[fileSize] = 0;
 			if (size)
 			{
@@ -58,7 +58,7 @@ namespace AshEngine
 		{
 			size_t fileSize = file_get_size(file);
 			text = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
-			size_t bytes_read = fread(text, fileSize, 1, file);
+			size_t bytes_read = fread(text, 1, fileSize, file);
 			text[bytes_read] = 0;
 			if (size)
 			{
@@ -76,7 +76,7 @@ namespace AshEngine
 		{
 			size_t fileSize = file_get_size(file);
 			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
-			fread(result.data, fileSize, 1, file);
+			fread(result.data, 1, fileSize, file);
 			result.data[fileSize] = 0;//waste anyway
 			result.size = fileSize;
 			fclose(file);
@@ -91,7 +91,7 @@ namespace AshEngine
 		{
 			size_t fileSize = file_get_size(file);
 			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
-			size_t byteRead = fread(result.data, fileSize, 1, file);
+			size_t byteRead = fread(result.data, 1, fileSize, file);
 			result.data[byteRead] = 0;
 			result.size = byteRead;
 			fclose(file);
@@ -101,8 +101,16 @@ namespace AshEngine
 	auto file_write_binary(const char* fileName, void* memory, size_t size) -> void
 	{
 		FILE* file = fopen(fileName, "wb");
-		fwrite(memory, size, 1, file);
-		fclose(file);
+		if (file)
+		{
+			fwrite(memory, 1, size, file);
+			fclose(file);
+		}
+		else
+		{
+			HLogError("Failed to write to file : {0} ! ", fileName);
+		}
+		
 	}
 	auto file_exists(const char* fileName) -> bool
 	{
@@ -218,13 +226,20 @@ namespace AshEngine
 	}
 	auto directory_create(const char* path) -> bool
 	{
-#if defined(_WIN64)
-		int result = CreateDirectoryA(path, NULL);
-		return result != 0;
-#else
-		int result = mkdir(path, S_IRWXU | S_IRWXG);
-		return (result == 0);
-#endif // _WIN64
+//#if defined(_WIN64)
+//		int result = CreateDirectoryA(path, NULL);
+//		return result != 0;
+//#else
+//		int result = mkdir(path, S_IRWXU | S_IRWXG);
+//		return (result == 0);
+//#endif // _WIN64
+		try {
+			return std::filesystem::create_directories(path);
+		}
+		catch (const std::filesystem::filesystem_error& e) {
+			std::cerr << "Failed to create directories !: " << e.what() << std::endl;
+			return false;
+		}
 	}
 	auto directory_delete(const char* path) -> bool
 	{

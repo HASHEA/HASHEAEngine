@@ -1,6 +1,7 @@
 #pragma once
 #include "Base/hlog.h"
 #include "Base/hfile.h"
+#include "Base/hcachedefine.h"
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
@@ -9,9 +10,11 @@
 #include "VulkanBuffer.h"
 #include "VulkanTexture.h"
 #include "VulkanSampler.h"
+#include "VulkanShader.h"
 #include <vector>
 namespace RHI
 {
+	constexpr const char* k_pipeline_cache_path = "Caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
 	inline auto check_layer_support(const std::vector<const char*>& rqLayers)->HS_Result
 	{
 		std::vector<VkLayerProperties> layers;
@@ -877,7 +880,7 @@ namespace RHI
 	{
 		StringBuffer pathBuffer;
 		pathBuffer.init(1024, nullptr);
-		const char* pipelineCachePath = pathBuffer.append_get_f("%s/%s", ASH_ROOT_DIR, k_pipeline_cache_path);
+		const char* pipelineCachePath = pathBuffer.append_get_f("%s", k_pipeline_cache_path);
 		//load pipeline cache
 		VkPipelineCacheCreateInfo pipeline_cache_create_info{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
 		if (file_exists(pipelineCachePath))
@@ -906,14 +909,19 @@ namespace RHI
 	{
 		StringBuffer pathBuffer;
 		pathBuffer.init(1024, nullptr);
-		const char* pipelineCachePath = pathBuffer.append_get_f("%s/%s", ASH_ROOT_DIR, k_pipeline_cache_path);
+		
 		size_t cache_data_size = 0;
 		VK_CHECK_RESULT(vkGetPipelineCacheData(vulkanDevice, vulkanPipelineCache, &cache_data_size, nullptr));
 
 		void* cache_data = Ash_Alloc(nullptr, cache_data_size,64);
 		VK_CHECK_RESULT(vkGetPipelineCacheData(vulkanDevice, vulkanPipelineCache, &cache_data_size, cache_data));
-
-		file_write_binary(pipelineCachePath, cache_data, cache_data_size);
+		char* pipelineCacheDirectory = pathBuffer.append_get_f("%s", k_pipeline_cache_path);
+		file_directory_from_path(pipelineCacheDirectory);
+		if (!directory_exists(pipelineCacheDirectory))
+		{
+			directory_create(pipelineCacheDirectory);
+		}
+		file_write_binary(k_pipeline_cache_path, cache_data, cache_data_size);
 		Ash_Free(nullptr, cache_data);
 		vkDestroyPipelineCache(vulkanDevice, vulkanPipelineCache, vulkanAllocationCallbacks);
 		pathBuffer.shutdown();
@@ -1068,6 +1076,11 @@ namespace RHI
 	auto VulkanContext::create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
 	{
 		return VulkanTextureView::create(ci, parentTexture);
+	}
+
+	auto VulkanContext::create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> 
+	{
+		return VulkanShader::create(ci);
 	}
 
 	auto VulkanContext::get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>

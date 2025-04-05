@@ -31,6 +31,8 @@ namespace AshEngine
 
 		virtual auto deallocate(void* pointer, char* file, uint32_t line) -> HS_Result = 0;
 		virtual auto deallocate(void* pointer) -> HS_Result = 0;
+		virtual auto deallocate(const void* pointer) -> HS_Result = 0;
+
 	}; // struct Allocator
 
 	struct MemoryStatistics {
@@ -65,6 +67,8 @@ namespace AshEngine
 
 		auto deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
 		auto deallocate(void* pointer) -> HS_Result override;
+		auto deallocate(const void* pointer) -> HS_Result override;
+
 	private:
 		void* m_pTlsfHandle = nullptr;
 		void* m_pMemory = nullptr;
@@ -83,6 +87,8 @@ namespace AshEngine
 
 		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
 		auto						deallocate(void* pointer) -> HS_Result override;
+		auto						deallocate(const void* pointer) -> HS_Result override;
+
 		auto						get_marker() -> size_t;
 		auto                        free_marker(size_t marker) -> HS_Result;
 
@@ -110,6 +116,8 @@ namespace AshEngine
 
 		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
 		auto						deallocate(void* pointer) -> HS_Result override;
+		auto						deallocate(const void* pointer) -> HS_Result override;
+
 		auto                        clear()-> HS_Result;
 	private:
 		uint8_t* m_pMemory = nullptr;
