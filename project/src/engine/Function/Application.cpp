@@ -35,9 +35,7 @@ namespace AshEngine
 
 		/*shader manager*/
 		ShaderManager::init();
-		//test shader load
-		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-
+		
 		/*swapchain*/
 		std::vector<RHI::AshColorSpace> colorSpace = { RHI::ASH_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 		std::vector<RHI::AshFormat> format = { RHI::ASH_FORMAT_B8G8R8A8_SRGB };
@@ -70,6 +68,12 @@ namespace AshEngine
 	}
 	auto Application::start() -> void
 	{
+		//test shader load
+		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+
 		while (!window->should_close())
 		{
 			// logic update, non about rendering

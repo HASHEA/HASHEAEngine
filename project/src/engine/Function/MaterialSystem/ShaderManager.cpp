@@ -1,16 +1,38 @@
 #include "ShaderManager.h"
+#include "Function/Application.h"
 #include "Base/hfile.h"
 #include "Base/hassert.h"
 #include "Base/hstring.h"
+#include "Graphics/GraphicsContext.h"
 #include "Graphics/Shader.h"
 #include "glslang/Public/ShaderLang.h"
 #include "glslang/SPIRV/GlslangToSpv.h"
 #include <filesystem>
 #include <string>
+#include <unordered_map>
 namespace AshEngine
 {
-#include <glslang/Public/ShaderLang.h>
-
+	const std::unordered_map<std::filesystem::path, RHI::AshShaderStageFlagBits> ext2stage = {
+	{".vert", RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_VERTEX_BIT},
+	{".frag", RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_FRAGMENT_BIT },
+	{".comp", RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_COMPUTE_BIT},
+	};
+	auto get_type_from_path(const char* path) -> RHI::AshShaderStageFlagBits
+	{
+		RHI::AshShaderStageFlagBits type = RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
+		std::filesystem::path path_(path);
+		auto ext = path_.extension();
+		auto iter = ext2stage.find(ext);
+		if (iter != ext2stage.end())
+		{
+			type = iter->second;
+		}
+		else
+		{
+			HLogError("Unknown ext of shader file : {0} !, skip loading !", path);
+		}
+		return type;
+	}
 	class AshIncluder : public glslang::TShader::Includer {
 	public:
 		// 包含目录列表
@@ -63,7 +85,7 @@ namespace AshEngine
 		return srcTime <= cacheTime;
 	}
 
-	auto ShaderManager::load_shader(const char* path) -> std::shared_ptr<Shader>
+	auto ShaderManager::load_shader(const char* path) -> std::shared_ptr<RHI::Shader>
 	{
 		return get()->_load_shader_internal(path);
 	}
@@ -79,62 +101,106 @@ namespace AshEngine
 	}
 	auto ShaderManager::_shutdown() -> void
 	{
+		m_mapShader.clear();
 		Ash_Delete(nullptr,includer);
 		_shutdown_glslang();
 	}
-	auto ShaderManager::_load_shader_internal(const char* path) -> std::shared_ptr<Shader>
+	auto ShaderManager::_load_shader_internal(const char* path) -> std::shared_ptr<RHI::Shader>
 	{
-		HLogInfo("Loading Shader : {0} !", path);
-		bool bNeedCompile = false;
-		std::vector<uint32_t> binCode;
-		size_t codeSize = 0;
-		StringBuffer pathBuffer;
-		pathBuffer.init(1024, nullptr);
-		char* shaderFileName = pathBuffer.append_get_f("%s", path);
-		file_name_from_path(shaderFileName);
-		std::filesystem::path internalPath(shaderFileName);
-		internalPath += k_shader_cache_extension;
-		std::filesystem::path absoluteCachePath(k_shader_cache_location);
-		absoluteCachePath = absoluteCachePath / internalPath;
-		std::string u8String = absoluteCachePath.u8string();
-		const char* cachePath = u8String.c_str();
-		if (validate_cache(path, cachePath))
+		std::filesystem::path shaderPath(path);
+		shaderPath = shaderPath.lexically_normal();
+		auto hashCode = std::hash<std::string>{}(shaderPath.string());
+		std::shared_ptr<RHI::Shader> pShader = nullptr;
+		auto iter = m_mapShader.find(hashCode);
+		if (iter != m_mapShader.end())
 		{
-			auto binCodeChar = file_read_binary(cachePath, nullptr, &codeSize);
-			H_ASSERT(binCodeChar);
-			H_ASSERT(codeSize % sizeof(uint32_t) == 0);
-			binCode.resize(codeSize / sizeof(uint32_t));
-			memcpy(binCode.data(), binCodeChar, codeSize);
-			Ash_Free(nullptr, binCodeChar);
+			pShader = iter->second;
 		}
 		else
 		{
-			bNeedCompile = true;
-		}
-		if (bNeedCompile)
-		{
-			binCode = _compile_shader(path, shaderFileName);
-			if (binCode.size() <= 0)
+			HLogInfo("Loading Shader : {0} !", path);
+			auto shaderType = get_type_from_path(path);
+			if (shaderType == RHI::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM)
 			{
-				HLogError("Compile Shader Failed When Compiling : {}", shaderFileName);
-				pathBuffer.shutdown();
 				return nullptr;
 			}
-			size_t byteSize = binCode.size() * sizeof(uint32_t);
-			file_write_binary(cachePath, binCode.data(), byteSize);
+			bool bNeedCompile = false;
+			std::vector<uint32_t> binCode;
+			StringBuffer pathBuffer;
+			pathBuffer.init(1024, nullptr);
+			char* shaderFileName = pathBuffer.append_get_f("%s", path);
+			file_name_from_path(shaderFileName);
+			std::filesystem::path internalPath(shaderFileName);
+			internalPath += k_shader_cache_extension;
+			std::filesystem::path absoluteCachePath(k_shader_cache_location);
+			absoluteCachePath = absoluteCachePath / internalPath;
+			std::string u8String = absoluteCachePath.u8string();
+			const char* cachePath = u8String.c_str();
+			if (validate_cache(path, cachePath))
+			{
+				size_t codeSize = 0;
+				auto binCodeChar = file_read_binary(cachePath, nullptr, &codeSize);
+				H_ASSERT(binCodeChar);
+				H_ASSERT(codeSize % sizeof(uint32_t) == 0);
+				binCode.resize(codeSize / sizeof(uint32_t));
+				memcpy(binCode.data(), binCodeChar, codeSize);
+				Ash_Free(nullptr, binCodeChar);
+			}
+			else
+			{
+				bNeedCompile = true;
+			}
+			if (bNeedCompile)
+			{
+				binCode = _compile_shader(path, shaderFileName, shaderType);
+				if (binCode.size() <= 0)
+				{
+					HLogError("Compile Shader Failed When Compiling : {}", shaderFileName);
+					pathBuffer.shutdown();
+					return nullptr;
+				}
+				size_t byteSize = binCode.size() * sizeof(uint32_t);
+				file_write_binary(cachePath, binCode.data(), byteSize);
+			}
+			pathBuffer.shutdown();
+			RHI::ShaderCreation sci{};
+			sci.binCode = binCode;
+			sci.codeSize = binCode.size();
+			sci.type = shaderType;
+			pShader = Application::get_graphics_context()->create_shader(sci);
+			H_ASSERTLOG(pShader,"Failed to create shader !");
+			m_mapShader.emplace(hashCode, pShader);
 		}
-		pathBuffer.shutdown();
-		RHI::ShaderCreation sci{};
-		return std::shared_ptr<Shader>();
+		return pShader;
 	}
-	auto ShaderManager::_compile_shader(const char* path, const char* name) -> std::vector<uint32_t>
+	auto ash_shader_type_to_glsl(RHI::AshShaderStageFlagBits type) -> EShLanguage
+	{
+		EShLanguage lang = EShLangCount;
+		switch (type)
+		{
+		case RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_VERTEX_BIT:
+			lang = EShLangVertex;
+			break;
+		case RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_FRAGMENT_BIT:
+			lang = EShLangFragment;
+			break;
+		case RHI::AshShaderStageFlagBits::ASH_SHADER_STAGE_COMPUTE_BIT:
+			lang = EShLangCompute;
+			break;
+		default:
+			H_ASSERTLOG(false,"invalid shader type !");
+			break;
+		}
+		return lang;
+	}
+	auto ShaderManager::_compile_shader(const char* path, const char* name, RHI::AshShaderStageFlagBits type) -> std::vector<uint32_t>
 	{
 		HLogInfo("Compiling Shader : {0} !", path);
 		std::vector<uint32_t> spirv;
 		//load file
 		size_t fileSize = 0;
 		char* src = file_read_text(path,nullptr, &fileSize);
-		EShLanguage lang = EShLangVertex;
+		EShLanguage lang = ash_shader_type_to_glsl(type);
 		glslang::TShader shader(lang);
 		shader.setStrings(&src, 1);
 		shader.setEntryPoint("main");

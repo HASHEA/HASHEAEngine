@@ -2,10 +2,14 @@
 #include <memory>
 #include "Base/hmemory.h"
 #include "Graphics/RHICommon.h"
-
-namespace AshEngine
+#include <unordered_map>
+namespace RHI
 {
 	class Shader;
+};
+namespace AshEngine
+{
+	
 	class AshIncluder;
 	class ShaderManager
 	{
@@ -14,7 +18,7 @@ namespace AshEngine
 		virtual ~ShaderManager() {};
 	public:
 		/*static interfaces*/
-		static auto load_shader(const char* path) -> std::shared_ptr<Shader>;
+		static auto load_shader(const char* path) -> std::shared_ptr<RHI::Shader>;
 		
 		static auto init() -> void
 		{
@@ -42,14 +46,15 @@ namespace AshEngine
 		};
 	
 	private:
-		auto _load_shader_internal(const char* path) -> std::shared_ptr<Shader>;
+		auto _load_shader_internal(const char* path) -> std::shared_ptr<RHI::Shader>;
 		auto _init() -> void;
 		auto _shutdown() -> void;
-		auto _compile_shader(const char* path,const char* name)-> std::vector<uint32_t>;
+		auto _compile_shader(const char* path,const char* name, RHI::AshShaderStageFlagBits)-> std::vector<uint32_t>;
 		auto _init_glslang() -> void;
 		auto _shutdown_glslang() -> void;
 	private:
 		static ShaderManager* instance;
 		AshIncluder* includer = nullptr;
+		std::unordered_map<uint64_t, std::shared_ptr<RHI::Shader>> m_mapShader;
 	};
 };
