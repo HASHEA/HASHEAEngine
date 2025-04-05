@@ -2,7 +2,7 @@
 #include "Base/hlog.h"
 namespace AshEditor
 {
-	Editor::Editor()
+	Editor::Editor(const AshEngine::EngineInitConfig& config) : AshEngine::Application(config)
 	{
 		HLogInfo("Ash Editor Start !");
 	}
@@ -33,7 +33,13 @@ namespace AshEditor
 }
 auto create_application() -> AshEngine::Application*
 {
-	return new AshEditor::Editor();
+	AshEngine::EngineInitConfig config{};
+	config.initWidth = 1920;
+	config.initHeight = 1080;
+	config.title = "Ash Engine Editor";
+	config.bVsync = false;
+	config.swapchainBufferCount = 3;
+	return new AshEditor::Editor(config);
 }
 
 auto destroy_application(AshEngine::Application* app) -> void

@@ -5,7 +5,7 @@ namespace AshEditor
 	class Editor final : public AshEngine::Application
 	{
 	public:
-		Editor();
+		Editor(const AshEngine::EngineInitConfig& config);
 		~Editor();
 	protected:
 		auto _on_update()-> void override;

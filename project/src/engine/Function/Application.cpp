@@ -12,7 +12,7 @@
 namespace AshEngine
 {
 	Application* Application::app = nullptr;
-	Application::Application()
+	Application::Application(const EngineInitConfig& config)
 	{
 	
 		/*init at very first to ensure log*/
@@ -20,7 +20,7 @@ namespace AshEngine
 		MemoryService::instance()->init(nullptr);
 
 		/*window*/
-		WindowConfig windowConfig = { 1280, 720, false, "Ash Engine" };
+		WindowConfig windowConfig = { config.initWidth,config.initHeight, config.bVsync, config.title };
 		window = Window::create();
 		window->init(windowConfig);
 
@@ -41,7 +41,7 @@ namespace AshEngine
 		std::vector<RHI::AshFormat> format = { RHI::ASH_FORMAT_B8G8R8A8_SRGB };
 		std::vector<RHI::AshPresentMode> presentMode = {RHI::ASH_PRESENT_MODE_MAILBOX_KHR };
 		RHI::SwapChainInitConfig scConfig{};
-		scConfig.swapchainBufferCount = 3;
+		scConfig.swapchainBufferCount = config.swapchainBufferCount;
 		scConfig.window = window->get_native_interface();
 		scConfig.width = window->get_width();
 		scConfig.height = window->get_height();

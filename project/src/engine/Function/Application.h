@@ -10,10 +10,18 @@ namespace RHI
 namespace AshEngine
 {
 	class Window;
+	struct ASH_API EngineInitConfig
+	{
+		uint32_t initWidth = 0;
+		uint32_t initHeight = 0;
+		uint32_t swapchainBufferCount = 3;
+		const char* title = nullptr;
+		bool bVsync = false;
+	};
 	class ASH_API Application
 	{
 	public:
-		Application();
+		Application(const EngineInitConfig& config);
 		~Application();
 		inline static Application* get()
 		{
