@@ -4,9 +4,9 @@ project "Editor"
 	architecture "x64"
 	kind "ConsoleApp"
 	staticruntime "off"
-
-	targetdir ("%{wks.location}/bin/target/" .. outputdir .. "/%{prj.name}")
-	objdir ("%{wks.location}/bin/obj/" .. outputdir .. "/%{prj.name}")
+	targetdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/target/%{prj.name}")
+	objdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/obj/%{prj.name}")
+	debugcommand ("%{wks.location}/_BUILD/"..outputdir.."/bin64/Editor.exe")   
 
 	includedirs
 	{
@@ -31,12 +31,15 @@ project "Editor"
 		"Engine",
 
 	}
-	
-	postbuildcommands
-	{
-		("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.dll   %{wks.location}/bin/target/" .. outputdir .. "/Editor "),
-		("{COPY} %{wks.location}/bin/target/" .. outputdir .. "/Engine/Engine.pdb   %{wks.location}/bin/target/" .. outputdir .. "/Editor ")
-	}
+	local source_dir = "%{wks.location}/_BUILD/"..outputdir.."/bin/target/Editor/"
+	local dest_dir = distdir
+	postbuildcommands {
+
+        "if not exist \""..dest_dir.."\" mkdir \""..dest_dir.."\"",
+        "robocopy \""..source_dir.."\" \""..dest_dir.."\" Editor.exe Editor.pdb /NFL /NDL /NJH /NJS >nul || exit 0"
+    }
+
+            
 	filter "system:windows"
 		system "Windows"
 		systemversion "latest"

@@ -4,8 +4,8 @@ project "Engine"
 	kind "SharedLib"
 	staticruntime "off"
 	
-	targetdir ("%{wks.location}/bin/target/" .. outputdir .. "/%{prj.name}")
-	objdir ("%{wks.location}/bin/obj/" .. outputdir .. "/%{prj.name}")
+	targetdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/target/%{prj.name}")
+	objdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/obj/%{prj.name}")
 	files
 	{
 		
@@ -52,9 +52,6 @@ project "Engine"
 		thirdparty .. "/thsvs",
 		assetsdir,
 	}
-
-	
-	dependson "shaders"
 	links
 	{
 		"GLFW",
@@ -65,6 +62,15 @@ project "Engine"
 		"spirv-cross",
 		"meshoptimizer"
 	}
+
+	local source_dir = "%{wks.location}/_BUILD/"..outputdir.."/bin/target/Engine/"
+	local dest_dir = distdir
+	postbuildcommands {
+
+        "if not exist \""..dest_dir.."\" mkdir \""..dest_dir.."\"",
+        "robocopy \""..source_dir.."\" \""..dest_dir.."\" Engine.dll Engine.pdb /NFL /NDL /NJH /NJS >nul || exit 0"
+    }
+
 	filter {"system:windows", "configurations:Debug"}
 		system "Windows"
 		systemversion "latest"

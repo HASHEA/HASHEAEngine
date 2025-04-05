@@ -20,10 +20,14 @@ workspace "AshEngine"
 thirdparty = "%{wks.location}/project/thirdparty"
 assetsdir = "%{wks.location}/assets"
 outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
+distdir = "%{wks.location}/_BUILD/"..outputdir.."/bin64"
+--os.mkdir(distdir)
 startproject "Editor"
 include "project/src/engine"
 include "project/src/editor"
 include "project/src/shader"
+	
+
 group "ThirdParty"
 	include "project/thirdparty/GLFW"
 	include "project/thirdparty/Glad"
@@ -34,3 +38,5 @@ group "ThirdParty"
 	include "project/thirdparty/SPIRV-Cross"
 	include "project/thirdparty/tracy"
 	include "project/thirdparty/meshoptimizer"
+
+

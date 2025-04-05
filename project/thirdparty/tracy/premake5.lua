@@ -4,8 +4,9 @@ project( "tracy" )
 	language "C"
 	kind "StaticLib"
 	
-	targetdir ("%{wks.location}/bin/target/" .. outputdir .. "/%{prj.name}")
-	objdir ("%{wks.location}/bin/obj/" .. outputdir .. "/%{prj.name}")
+
+	targetdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/target/%{prj.name}")
+	objdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/obj/%{prj.name}")
 
 	includedirs
 	{

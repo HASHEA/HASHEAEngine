@@ -1,15 +1,12 @@
 
--- GLSLC helpers
-dofile( "glslc.lua" )
 project "shaders"
 	kind "Utility"
-	targetdir ("%{wks.location}/bin/target/" .. outputdir .. "/%{prj.name}")
-	objdir ("%{wks.location}/bin/obj/" .. outputdir .. "/%{prj.name}")
+	targetdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/target/%{prj.name}")
+	objdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/obj/%{prj.name}")
 	local shaders = { 
-		"src/**.vert",
-		"src/**.frag"
+		"%{wks.location}/assets/Ash-shaders/**.vert",
+		"%{wks.location}/assets/Ash-shaders/**.glsl",
+		"%{wks.location}/assets/Ash-shaders/**.frag",
 	}
 
 	files( shaders )
-
-	handle_glsl_files( "-g", "assets/shaders/spv", {})

@@ -157,6 +157,18 @@ namespace AshEngine
 		tlsf_free(m_pTlsfHandle, dPoint);
 		return HS_OK;
 	}
+	auto HeapAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result
+	{
+		auto dPoint = const_cast<void*>(pointer);
+		H_ASSERT(dPoint);
+		size_t actual_size = tlsf_block_size(dPoint);
+		m_szAllocatedSize -= actual_size;
+		tlsf_free(m_pTlsfHandle, dPoint);
+#ifdef ASH_TRACE_MEM_DEALLOCATE
+		HLogTrace("deallocate mem at : {0}, size : {1}, from : {2} - line : {3}", pointer, actual_size, file, line);
+#endif //ASH_DEBUG
+		return HS_OK;
+	}
 
 
 
@@ -210,6 +222,15 @@ namespace AshEngine
 		return HS_OK;
 	}
 	auto StackAllocator::deallocate(const void* pointer) -> HS_Result
+	{
+		H_ASSERT(pointer >= m_pMemory);
+		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
+		H_ASSERTLOG(pointer < m_pMemory + m_szAllocatedSize, "Out of bound free on stack allocator (inside bounds, after allocated). Tempting to free {0}, {1} after beginning of buffer (memory {2} size {3}, allocated {4})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
+		const size_t size_at_pointer = (uint8_t*)pointer - m_pMemory;
+		m_szAllocatedSize = size_at_pointer;
+		return HS_OK;
+	}
+	auto StackAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result
 	{
 		H_ASSERT(pointer >= m_pMemory);
 		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
@@ -288,6 +309,10 @@ namespace AshEngine
 		return HS_OK;
 	}
 	auto LinearAllocator::deallocate(const void* pointer) -> HS_Result
+	{
+		return HS_OK;
+	}
+	auto LinearAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result
 	{
 		return HS_OK;
 	}
