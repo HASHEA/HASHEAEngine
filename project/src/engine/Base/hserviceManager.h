@@ -19,18 +19,16 @@ namespace AshEngine
 
 		template<typename T>
 		T* get();
-
-		template<typename T>
-		inline T* ServiceManager::get() {
-			T* service = (T*)get_service(T::k_name);
-			if (!service) {
-				register_service(T::instance(), T::k_name);
-			}
-			return T::instance();
-		}
-
 		static ServiceManager* instance;
 		Allocator* allocator = nullptr;
 		FlatHashMap<uint64_t, Service*> services;
 	};
+	template<typename T>
+	inline T* ServiceManager::get() {
+		T* service = (T*)get_service(T::k_name);
+		if (!service) {
+			register_service(T::instance(), T::k_name);
+		}
+		return T::instance();
+	}
 };

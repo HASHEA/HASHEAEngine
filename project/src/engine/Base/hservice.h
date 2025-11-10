@@ -4,8 +4,8 @@ namespace AshEngine
 {
     struct Service {
 
-        virtual auto init(void* configuration) -> HS_Result = 0;
-        virtual auto shutdown() -> HS_Result = 0;
+        virtual auto init(void* configuration) -> bool = 0;
+        virtual auto shutdown() -> bool = 0;
 #ifdef ASH_DEBUG
         virtual auto on_gui() -> void {};
 #endif

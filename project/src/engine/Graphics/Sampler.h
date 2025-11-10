@@ -2,6 +2,19 @@
 #include "RHIResource.h"
 namespace RHI
 {
+	class Sampler;
+	struct SamplerViewCreation
+	{
+
+	};
+	class SamplerView : public RHIView	
+	{
+	public:
+		SamplerView() = default;
+		~SamplerView() = default;
+	public:
+		virtual std::shared_ptr<Sampler> get_parent_sampler() = 0;
+	};
 	struct SamplerCreation
 	{
 		/*combine for dx12_filter* separate for vk*/
@@ -29,7 +42,6 @@ namespace RHI
 	public:
 		Sampler() = default;
 		virtual ~Sampler() {}
-
 	public:
 		
 	};

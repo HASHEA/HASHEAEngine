@@ -23,6 +23,7 @@ namespace RHI
 	}
 	VulkanShader::VulkanShader(const ShaderCreation& ci)
 	{
+
 	}
 	VulkanShader::~VulkanShader()
 	{

@@ -31,18 +31,18 @@ namespace AshEngine
 		return &s_memory_service;
 	}
 	
-	auto MemoryService::init(void* configuration) -> HS_Result
+	auto MemoryService::init(void* configuration) -> bool
 	{
 		HLogInfo("Memory Service Init\n");
 		MemoryServiceConfiguration* memory_configuration = static_cast<MemoryServiceConfiguration*>(configuration);
-		HS_Result ret = m_heapAllocator.init(memory_configuration ? memory_configuration->m_szMaxDynamicSize : s_size);
+		bool ret = m_heapAllocator.init(memory_configuration ? memory_configuration->m_szMaxDynamicSize : s_size);
 		return ret;
 	}
-	auto MemoryService::shutdown() -> HS_Result
+	auto MemoryService::shutdown() -> bool
 	{
 		HLogInfo("Memory Service Shutdown...\n");
-		HS_Result ret = m_heapAllocator.shutdown();
-		if (HS_CHECK_FAILED(ret))
+		bool ret = m_heapAllocator.shutdown();
+		if (!ret)
 		{
 			HLogError("Memory Service Shutdown Failed!\n");
 		}
@@ -64,22 +64,22 @@ namespace AshEngine
 	HeapAllocator::~HeapAllocator()
 	{
 	}
-	auto HeapAllocator::init(size_t size) -> HS_Result
+	auto HeapAllocator::init(size_t size) -> bool
 	{
 		H_ASSERT(size > 0);
 		m_pMemory = (uint8_t*)malloc(size);
 		H_ASSERT(m_pMemory);
 		m_szMaxSize = size;
 		m_pTlsfHandle = tlsf_create_with_pool(m_pMemory,size);
-		HS_Result ret = (m_pTlsfHandle != nullptr)? HS_OK : HS_FAIL;
-		if (HS_CHECK_FAILED(ret))
+		bool ret = (m_pTlsfHandle != nullptr)? true : false;
+		if (!ret)
 		{
 			free(m_pMemory);
 			HLogError("tlsf create pool failed with address : {0},  size : {1}", m_pMemory, size);
 		}
 		return ret;
 	}
-	auto HeapAllocator::shutdown() -> HS_Result
+	auto HeapAllocator::shutdown() -> bool
 	{
 		// Check memory at the application exit.
 		MemoryStatistics stats{ 0, m_szMaxSize };
@@ -96,7 +96,7 @@ namespace AshEngine
 		H_ASSERT(stats.m_szAllocatedbytes == 0);
 		tlsf_destroy(m_pTlsfHandle);
 		free(m_pMemory);
-		return HS_OK;
+		return true;
 	}
 #ifdef ASH_DEBUG
 	auto HeapAllocator::on_gui() -> void
@@ -126,7 +126,7 @@ namespace AshEngine
 #endif //ASH_DEBUG
 		return pAllocateMemory;
 	}
-	auto HeapAllocator::deallocate(void* pointer, char* file, uint32_t line)->HS_Result
+	auto HeapAllocator::deallocate(void* pointer, char* file, uint32_t line)->bool
 	{
 		H_ASSERT(pointer);
 		size_t actual_size = tlsf_block_size(pointer);
@@ -136,28 +136,28 @@ namespace AshEngine
 #ifdef ASH_TRACE_MEM_DEALLOCATE
 		HLogTrace("deallocate mem at : {0}, size : {1}, from : {2} - line : {3}", pointer, actual_size, file, line);
 #endif //ASH_DEBUG
-		return HS_OK;
+		return true;
 	}
 
-	auto HeapAllocator::deallocate(void* pointer) -> HS_Result 
+	auto HeapAllocator::deallocate(void* pointer) -> bool 
 	{
 		H_ASSERT(pointer);
 		size_t actual_size = tlsf_block_size(pointer);
 		m_szAllocatedSize -= actual_size;
 		tlsf_free(m_pTlsfHandle, pointer);
-		return HS_OK;
+		return true;
 	}
 
-	auto HeapAllocator::deallocate(const void* pointer) -> HS_Result
+	auto HeapAllocator::deallocate(const void* pointer) -> bool
 	{
 		auto dPoint = const_cast<void*>(pointer);
 		H_ASSERT(dPoint);
 		size_t actual_size = tlsf_block_size(dPoint);
 		m_szAllocatedSize -= actual_size;
 		tlsf_free(m_pTlsfHandle, dPoint);
-		return HS_OK;
+		return true;
 	}
-	auto HeapAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result
+	auto HeapAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> bool
 	{
 		auto dPoint = const_cast<void*>(pointer);
 		H_ASSERT(dPoint);
@@ -167,26 +167,26 @@ namespace AshEngine
 #ifdef ASH_TRACE_MEM_DEALLOCATE
 		HLogTrace("deallocate mem at : {0}, size : {1}, from : {2} - line : {3}", pointer, actual_size, file, line);
 #endif //ASH_DEBUG
-		return HS_OK;
+		return true;
 	}
 
 
 
 	/*************** Stack Allocator *****************/
 
-	auto StackAllocator::init(size_t size) -> HS_Result
+	auto StackAllocator::init(size_t size) -> bool
 	{
 		H_ASSERT(size > 0);
 		m_pMemory = (uint8_t*)malloc(size);
 		H_ASSERT(m_pMemory);
 		m_szAllocatedSize = 0;
 		m_szTotalSize = size;
-		return HS_OK;
+		return true;
 	}
-	auto StackAllocator::shutdown() -> HS_Result
+	auto StackAllocator::shutdown() -> bool
 	{
 		free(m_pMemory);
-		return HS_OK;
+		return true;
 	}
 	auto StackAllocator::allocate(size_t size, size_t alignment) -> void*
 	{
@@ -203,59 +203,59 @@ namespace AshEngine
 	{
 		return allocate(size,alignment);
 	}
-	auto StackAllocator::deallocate(void* pointer,char* file, uint32_t line) -> HS_Result
+	auto StackAllocator::deallocate(void* pointer,char* file, uint32_t line) -> bool
 	{
 		H_ASSERT(pointer >= m_pMemory);
 		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		H_ASSERTLOG(pointer < m_pMemory + m_szAllocatedSize, "Out of bound free on stack allocator (inside bounds, after allocated). Tempting to free {0}, {1} after beginning of buffer (memory {2} size {3}, allocated {4})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		const size_t size_at_pointer = (uint8_t*)pointer - m_pMemory;
 		m_szAllocatedSize = size_at_pointer;
-		return HS_OK;
+		return true;
 	}
-	auto StackAllocator::deallocate(void* pointer) -> HS_Result 
+	auto StackAllocator::deallocate(void* pointer) -> bool 
 	{
 		H_ASSERT(pointer >= m_pMemory);
 		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		H_ASSERTLOG(pointer < m_pMemory + m_szAllocatedSize, "Out of bound free on stack allocator (inside bounds, after allocated). Tempting to free {0}, {1} after beginning of buffer (memory {2} size {3}, allocated {4})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		const size_t size_at_pointer = (uint8_t*)pointer - m_pMemory;
 		m_szAllocatedSize = size_at_pointer;
-		return HS_OK;
+		return true;
 	}
-	auto StackAllocator::deallocate(const void* pointer) -> HS_Result
+	auto StackAllocator::deallocate(const void* pointer) -> bool
 	{
 		H_ASSERT(pointer >= m_pMemory);
 		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		H_ASSERTLOG(pointer < m_pMemory + m_szAllocatedSize, "Out of bound free on stack allocator (inside bounds, after allocated). Tempting to free {0}, {1} after beginning of buffer (memory {2} size {3}, allocated {4})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		const size_t size_at_pointer = (uint8_t*)pointer - m_pMemory;
 		m_szAllocatedSize = size_at_pointer;
-		return HS_OK;
+		return true;
 	}
-	auto StackAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result
+	auto StackAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> bool
 	{
 		H_ASSERT(pointer >= m_pMemory);
 		H_ASSERTLOG(pointer < m_pMemory + m_szTotalSize, "out of bounds free on stack allocator Tempting to free {0}, %llu after beginning of buffer (memory {1} size {2}, allocated {3})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		H_ASSERTLOG(pointer < m_pMemory + m_szAllocatedSize, "Out of bound free on stack allocator (inside bounds, after allocated). Tempting to free {0}, {1} after beginning of buffer (memory {2} size {3}, allocated {4})", (uint8_t*)pointer, (uint8_t*)pointer - m_pMemory, m_pMemory, m_szTotalSize, m_szAllocatedSize);
 		const size_t size_at_pointer = (uint8_t*)pointer - m_pMemory;
 		m_szAllocatedSize = size_at_pointer;
-		return HS_OK;
+		return true;
 	}
 	auto StackAllocator::get_marker() -> size_t
 	{
 		return m_szAllocatedSize;
 	}
-	auto StackAllocator::free_marker(size_t marker) -> HS_Result
+	auto StackAllocator::free_marker(size_t marker) -> bool
 	{
 		const size_t difference = marker - m_szAllocatedSize;
 		if (difference > 0)
 		{
 			m_szAllocatedSize = marker;
 		}
-		return HS_OK;
+		return true;
 	}
-	auto StackAllocator::clear()->HS_Result
+	auto StackAllocator::clear()->bool
 	{
 		m_szAllocatedSize = 0;
-		return HS_OK;
+		return true;
 	}
 
 	/************** Linear Allocator **********************/
@@ -264,7 +264,7 @@ namespace AshEngine
 	LinearAllocator::~LinearAllocator()
 	{
 	}
-	auto LinearAllocator::init(size_t size) -> HS_Result
+	auto LinearAllocator::init(size_t size) -> bool
 	{
 		H_ASSERT(size > 0);
 		m_pMemory = (uint8_t*)malloc(size);
@@ -272,14 +272,14 @@ namespace AshEngine
 		memset(m_pMemory, 0, size);
 		m_szTotalSize = size;
 		m_szAllocatedSize = 0;
-		return HS_OK;
+		return true;
 	}
-	auto LinearAllocator::shutdown() -> HS_Result
+	auto LinearAllocator::shutdown() -> bool
 	{
 		bool ret = clear();
 		H_ASSERT(ret);
 		free(m_pMemory);
-		return HS_OK;
+		return true;
 	}
 	auto LinearAllocator::allocate(size_t size, size_t alignment)->void*
 	{
@@ -300,25 +300,25 @@ namespace AshEngine
 		H_ASSERT(size > 0);
 		return allocate(size, alignment);
 	}
-	auto LinearAllocator::deallocate(void* pointer, char* file, uint32_t line) -> HS_Result
+	auto LinearAllocator::deallocate(void* pointer, char* file, uint32_t line) -> bool
 	{
-		return HS_OK;
+		return true;
 	}
-	auto LinearAllocator::deallocate(void* pointer) -> HS_Result 
+	auto LinearAllocator::deallocate(void* pointer) -> bool 
 	{
-		return HS_OK;
+		return true;
 	}
-	auto LinearAllocator::deallocate(const void* pointer) -> HS_Result
+	auto LinearAllocator::deallocate(const void* pointer) -> bool
 	{
-		return HS_OK;
+		return true;
 	}
-	auto LinearAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result
+	auto LinearAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> bool
 	{
-		return HS_OK;
+		return true;
 	}
-	auto LinearAllocator::clear() -> HS_Result
+	auto LinearAllocator::clear() -> bool
 	{
 		m_szAllocatedSize = 0;
-		return HS_OK;
+		return true;
 	}
 };

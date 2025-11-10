@@ -71,7 +71,7 @@ namespace AshEngine
 
 
 	constexpr const uint32_t GLSLVERSION = 460;
-	constexpr const char* k_shader_cache_location = "Caches\\ShaderCaches";
+	constexpr const char* k_shader_cache_location = "product\\caches\\ShaderCaches";
 	constexpr const char* k_shader_cache_extension = ".shadercache";
 	constexpr const char* k_shader_include_dir = "assets\\Ash-shaders";
 	

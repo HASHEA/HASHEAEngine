@@ -58,11 +58,11 @@ namespace AshEngine
     auto directory_create(const char* path) -> bool;
     auto directory_delete(const char* path) -> bool;
     auto directory_current(Directory* directory) -> void;
-    auto directory_change(const char* path) -> HS_Result;
-    auto file_open_directory(const char* path, Directory* outDirectory) -> HS_Result;
-    auto file_close_directory(Directory* directory) -> HS_Result;
+    auto directory_change(const char* path) -> bool;
+    auto file_open_directory(const char* path, Directory* outDirectory) -> bool;
+    auto file_close_directory(Directory* directory) -> bool;
     auto file_parent_directory(Directory* directory) -> void;
-    auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> HS_Result;
+    auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> bool;
     auto file_find_files_in_path(const char* filePattern,StringArray& files) -> void;
     auto file_find_files_in_path(const char* extension,const char* searchPattern, StringArray& files, StringArray& directories) -> void;
     auto env_var_get(const char* name, char* output, uint32_t outputSize) -> void;

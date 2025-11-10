@@ -24,8 +24,8 @@ namespace RHI
 		VulkanSwapchain();
 		~VulkanSwapchain();
 
-		virtual auto init(void* config)->HS_Result override;
-		virtual auto shutdown()->HS_Result override;
+		virtual auto init(void* config)->bool override;
+		virtual auto shutdown()->bool override;
 	public:
 		auto resize_swapchain(uint32_t width, uint32_t height) -> void override;
 		auto present() -> void override;
@@ -43,12 +43,12 @@ namespace RHI
 			return surface;
 		}
 	private:
-		auto _create_surface(GLFWwindow* window)->HS_Result;
-		auto _init_swapchain(SwapChainInitConfig& config)->HS_Result;
+		auto _create_surface(GLFWwindow* window)->bool;
+		auto _init_swapchain(SwapChainInitConfig& config)->bool;
 		auto _query_swapchain_support(SwapChainSupportDetails& swapChainSupport)->void;
-		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->HS_Result;
+		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->bool;
 		auto _recreate_swapchain() -> void;
-		auto _clean_swapchain(VkSwapchainKHR& _swapchain) -> HS_Result;
+		auto _clean_swapchain(VkSwapchainKHR& _swapchain) -> bool;
 		auto _aquire_next_image() -> void;
 	private:
 		uint8_t swapchainBufferCount = 0;

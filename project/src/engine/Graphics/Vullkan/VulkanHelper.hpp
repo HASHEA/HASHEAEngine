@@ -7,7 +7,17 @@
 #include "Graphics/Texture.h"
 namespace RHI
 {
-
+	struct AshTextureFormatInfo
+	{
+		AshFormat		  format;
+		uint32_t          uBytesPerBlock : 15;
+		uint32_t          uWidthPerBlock : 8;
+		uint32_t          uHeightPerBlock : 8;
+		uint32_t          uHasAlpha : 1;
+		VkFormat          vkFormat;
+		VkFormat          vkFormatSRGB;
+	};
+	static const AshTextureFormatInfo& get_vk_texture_format_info(AshFormat eFormat);
 	inline auto vulkan_error_string(VkResult errorCode) -> const char*
 	{
 		switch (errorCode)
@@ -54,6 +64,7 @@ namespace RHI
 		RayTracing,
 		RayQuery,
 		Bindless,
+		HostCoherentCached,
 	};
 #define VK_CHECK_RESULT(f)                                                                                                        \
 	{                                                                                                                             \
@@ -124,394 +135,385 @@ namespace RHI
 
 		return vktype;
 	}
-	inline auto ash_format_to_vk(const AshFormat& format) -> VkFormat
-	{
-		VkFormat vkFormat = VkFormat::VK_FORMAT_UNDEFINED;
-		switch (format)
-		{
-		case ASH_FORMAT_UNDEFINED:
-			vkFormat = VkFormat::VK_FORMAT_UNDEFINED;
-			break;
-		case ASH_FORMAT_R8_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R8_UNORM;
-			break;
-		case ASH_FORMAT_R8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R8_UINT;
-			break;
-		case ASH_FORMAT_R8_SRGB:
-			vkFormat = VkFormat::VK_FORMAT_R8_SRGB;
-			break;
-		case ASH_FORMAT_R8G8_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R8G8_UNORM;
-			break;
-		case ASH_FORMAT_R8G8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R8G8_UINT;
-			break;
-		case ASH_FORMAT_R8G8_SRGB:
-			vkFormat = VkFormat::VK_FORMAT_R8G8_SRGB;
-			break;
-		case ASH_FORMAT_R8G8B8_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R8G8B8_UNORM;
-			break;
-		case ASH_FORMAT_R8G8B8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R8G8B8_UINT;
-			break;
-		case ASH_FORMAT_R8G8B8_SRGB:
-			vkFormat = VkFormat::VK_FORMAT_R8G8B8_SRGB;
-			break;
-		case ASH_FORMAT_B8G8R8_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_B8G8R8_UNORM;
-			break;
-		case ASH_FORMAT_B8G8R8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_B8G8R8_UINT;
-			break;
-		case ASH_FORMAT_B8G8R8_SRGB:
-			vkFormat = VkFormat::VK_FORMAT_B8G8R8_SRGB;
-			break;
-		case ASH_FORMAT_R8G8B8A8_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
-			break;
-		case ASH_FORMAT_R8G8B8A8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R8G8B8A8_UINT;
-			break;
-		case ASH_FORMAT_R8G8B8A8_SRGB:
-			vkFormat = VkFormat::VK_FORMAT_R8G8B8A8_SRGB;
-			break;
-		case ASH_FORMAT_B8G8R8A8_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_B8G8R8A8_UNORM;
-			break;
-		case ASH_FORMAT_B8G8R8A8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_B8G8R8A8_UINT;
-			break;
-		case ASH_FORMAT_B8G8R8A8_SRGB:
-			vkFormat = VkFormat::VK_FORMAT_B8G8R8A8_SRGB;
-			break;
-		case ASH_FORMAT_R16_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R16_UNORM;
-			break;
-		case ASH_FORMAT_R16_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R16_UINT;
-			break;
-		case ASH_FORMAT_R16_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R16_SFLOAT;
-			break;
-		case ASH_FORMAT_R16G16_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R16G16_UNORM;
-			break;
-		case ASH_FORMAT_R16G16_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R16G16_UINT;
-			break;
-		case ASH_FORMAT_R16G16_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R16G16_SFLOAT;
-			break;
-		case ASH_FORMAT_R16G16B16_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R16G16B16_UNORM;
-			break;
-		case ASH_FORMAT_R16G16B16_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R16G16B16_UINT;
-			break;
-		case ASH_FORMAT_R16G16B16_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R16G16B16_SFLOAT;
-			break;
-		case ASH_FORMAT_R16G16B16A16_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_R16G16B16A16_UNORM;
-			break;
-		case ASH_FORMAT_R16G16B16A16_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R16G16B16A16_UINT;
-			break;
-		case ASH_FORMAT_R16G16B16A16_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R16G16B16A16_SFLOAT;
-			break;
-		case ASH_FORMAT_R32_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R32_UINT;
-			break;
-		case ASH_FORMAT_R32_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R32_SINT;
-			break;
-		case ASH_FORMAT_R32_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R32_SFLOAT;
-			break;
-		case ASH_FORMAT_R32G32_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32_UINT;
-			break;
-		case ASH_FORMAT_R32G32_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32_SINT;
-			break;
-		case ASH_FORMAT_R32G32_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32_SFLOAT;
-			break;
-		case ASH_FORMAT_R32G32B32_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32B32_UINT;
-			break;
-		case ASH_FORMAT_R32G32B32_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32B32_SINT;
-			break;
-		case ASH_FORMAT_R32G32B32_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32B32_SFLOAT;
-			break;
-		case ASH_FORMAT_R32G32B32A32_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32B32A32_UINT;
-			break;
-		case ASH_FORMAT_R32G32B32A32_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32B32A32_SINT;
-			break;
-		case ASH_FORMAT_R32G32B32A32_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R32G32B32A32_SFLOAT;
-			break;
-		case ASH_FORMAT_R64_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R64_UINT;
-			break;
-		case ASH_FORMAT_R64_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R64_SINT;
-			break;
-		case ASH_FORMAT_R64_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R64_SFLOAT;
-			break;
-		case ASH_FORMAT_R64G64_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64_UINT;
-			break;
-		case ASH_FORMAT_R64G64_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64_SINT;
-			break;
-		case ASH_FORMAT_R64G64_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64_SFLOAT;
-			break;
-		case ASH_FORMAT_R64G64B64_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64B64_UINT;
-			break;
-		case ASH_FORMAT_R64G64B64_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64B64_SINT;
-			break;
-		case ASH_FORMAT_R64G64B64_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64B64_SFLOAT;
-			break;
-		case ASH_FORMAT_R64G64B64A64_UINT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64B64A64_UINT;
-			break;
-		case ASH_FORMAT_R64G64B64A64_SINT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64B64A64_SINT;
-			break;
-		case ASH_FORMAT_R64G64B64A64_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_R64G64B64A64_SFLOAT;
-			break;
-		case ASH_FORMAT_D16_UNORM:
-			vkFormat = VkFormat::VK_FORMAT_D16_UNORM;
-			break;
-		case ASH_FORMAT_D32_SFLOAT:
-			vkFormat = VkFormat::VK_FORMAT_D32_SFLOAT;
-			break;
-		case ASH_FORMAT_S8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_S8_UINT;
-			break;
-		case ASH_FORMAT_D16_UNORM_S8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_D16_UNORM_S8_UINT;
-			break;
-		case ASH_FORMAT_D24_UNORM_S8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_D24_UNORM_S8_UINT;
-			break;
-		case ASH_FORMAT_D32_SFLOAT_S8_UINT:
-			vkFormat = VkFormat::VK_FORMAT_D32_SFLOAT_S8_UINT;
-			break;
-		default:
-			vkFormat = VkFormat::VK_FORMAT_UNDEFINED;
-			break;
-		}
-		return vkFormat;
-	}
 
 	inline auto vk_format_to_ash(const VkFormat& format) -> AshFormat
 	{
-		AshFormat ashFormat = AshFormat::ASH_FORMAT_UNDEFINED;
+		AshFormat retFmt = ASH_FORMAT_R8G8B8A8_UNORM;
 		switch (format)
 		{
-		case VK_FORMAT_UNDEFINED:
-			ashFormat = AshFormat::ASH_FORMAT_UNDEFINED;
-			break;
-		case VK_FORMAT_R8_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R8_UNORM;
-			break;
-		case VK_FORMAT_R8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R8_UINT;
-			break;
-		case VK_FORMAT_R8_SRGB:
-			ashFormat = AshFormat::ASH_FORMAT_R8_SRGB;
-			break;
-		case VK_FORMAT_R8G8_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8_UNORM;
-			break;
-		case VK_FORMAT_R8G8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8_UINT;
-			break;
-		case VK_FORMAT_R8G8_SRGB:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8_SRGB;
-			break;
-		case VK_FORMAT_R8G8B8_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8B8_UNORM;
-			break;
-		case VK_FORMAT_R8G8B8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8B8_UINT;
-			break;
-		case VK_FORMAT_R8G8B8_SRGB:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8B8_SRGB;
-			break;
-		case VK_FORMAT_B8G8R8_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_B8G8R8_UNORM;
-			break;
-		case VK_FORMAT_B8G8R8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_B8G8R8_UINT;
-			break;
-		case VK_FORMAT_B8G8R8_SRGB:
-			ashFormat = AshFormat::ASH_FORMAT_B8G8R8_SRGB;
-			break;
 		case VK_FORMAT_R8G8B8A8_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8B8A8_UNORM;
-			break;
-		case VK_FORMAT_R8G8B8A8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8B8A8_UINT;
-			break;
-		case VK_FORMAT_R8G8B8A8_SRGB:
-			ashFormat = AshFormat::ASH_FORMAT_R8G8B8A8_SRGB;
-			break;
+		{
+			retFmt = ASH_FORMAT_R8G8B8A8_UNORM;
+		}
+		break;
 		case VK_FORMAT_B8G8R8A8_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_B8G8R8A8_UNORM;
-			break;
-		case VK_FORMAT_B8G8R8A8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_B8G8R8A8_UINT;
-			break;
-		case VK_FORMAT_B8G8R8A8_SRGB:
-			ashFormat = AshFormat::ASH_FORMAT_B8G8R8A8_SRGB;
-			break;
-		case VK_FORMAT_R16_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R16_UNORM;
-			break;
-		case VK_FORMAT_R16_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R16_UINT;
-			break;
+		{
+			retFmt = ASH_FORMAT_B8G8R8A8_UNORM;
+		}
+		break;
+		case VK_FORMAT_R8_UNORM:
+		{
+			retFmt = ASH_FORMAT_R8_UNORM;
+		}
+		break;
+		case VK_FORMAT_R8G8_UNORM:
+		{
+			retFmt = ASH_FORMAT_R8G8_UNORM;
+		}
+		break;
+		case VK_FORMAT_B8G8R8_UNORM:
+		{
+			retFmt = ASH_FORMAT_B8G8R8_UNORM;
+		}
+		break;
 		case VK_FORMAT_R16_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R16_SFLOAT;
-			break;
-		case VK_FORMAT_R16G16_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16_UNORM;
-			break;
+		{
+			retFmt = ASH_FORMAT_R16_SFLOAT;
+		}
+		break;
+		case VK_FORMAT_R16_UINT:
+		{
+			retFmt = ASH_FORMAT_R16_UINT;
+		}
+		break;
 		case VK_FORMAT_R16G16_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16_UINT;
-			break;
-		case VK_FORMAT_R16G16_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16_SFLOAT;
-			break;
-		case VK_FORMAT_R16G16B16_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16B16_UNORM;
-			break;
-		case VK_FORMAT_R16G16B16_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16B16_UINT;
-			break;
-		case VK_FORMAT_R16G16B16_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16B16_SFLOAT;
-			break;
+		{
+			retFmt = ASH_FORMAT_R16G16_UINT;
+		}
+		break;
 		case VK_FORMAT_R16G16B16A16_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16B16A16_UNORM;
-			break;
-		case VK_FORMAT_R16G16B16A16_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16B16A16_UINT;
-			break;
+		{
+			retFmt = ASH_FORMAT_R16G16B16A16_UNORM;
+		}
+		break;
 		case VK_FORMAT_R16G16B16A16_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R16G16B16A16_SFLOAT;
-			break;
-		case VK_FORMAT_R32_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32_UINT;
-			break;
-		case VK_FORMAT_R32_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32_SINT;
-			break;
-		case VK_FORMAT_R32_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R32_SFLOAT;
-			break;
-		case VK_FORMAT_R32G32_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32_UINT;
-			break;
-		case VK_FORMAT_R32G32_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32_SINT;
-			break;
-		case VK_FORMAT_R32G32_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32_SFLOAT;
-			break;
-		case VK_FORMAT_R32G32B32_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32B32_UINT;
-			break;
-		case VK_FORMAT_R32G32B32_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32B32_SINT;
-			break;
-		case VK_FORMAT_R32G32B32_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32B32_SFLOAT;
-			break;
-		case VK_FORMAT_R32G32B32A32_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32B32A32_UINT;
-			break;
-		case VK_FORMAT_R32G32B32A32_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32B32A32_SINT;
-			break;
-		case VK_FORMAT_R32G32B32A32_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R32G32B32A32_SFLOAT;
-			break;
-		case VK_FORMAT_R64_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64_UINT;
-			break;
-		case VK_FORMAT_R64_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64_SINT;
-			break;
-		case VK_FORMAT_R64_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R64_SFLOAT;
-			break;
-		case VK_FORMAT_R64G64_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64_UINT;
-			break;
-		case VK_FORMAT_R64G64_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64_SINT;
-			break;
-		case VK_FORMAT_R64G64_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64_SFLOAT;
-			break;
-		case VK_FORMAT_R64G64B64_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64B64_UINT;
-			break;
-		case VK_FORMAT_R64G64B64_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64B64_SINT;
-			break;
-		case VK_FORMAT_R64G64B64_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64B64_SFLOAT;
-			break;
-		case VK_FORMAT_R64G64B64A64_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64B64A64_UINT;
-			break;
-		case VK_FORMAT_R64G64B64A64_SINT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64B64A64_SINT;
-			break;
-		case VK_FORMAT_R64G64B64A64_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_R64G64B64A64_SFLOAT;
-			break;
-		case VK_FORMAT_D16_UNORM:
-			ashFormat = AshFormat::ASH_FORMAT_D16_UNORM;
-			break;
-		case VK_FORMAT_D32_SFLOAT:
-			ashFormat = AshFormat::ASH_FORMAT_D32_SFLOAT;
-			break;
-		case VK_FORMAT_S8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_S8_UINT;
-			break;
-		case VK_FORMAT_D16_UNORM_S8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_D16_UNORM_S8_UINT;
-			break;
+		{
+			retFmt = ASH_FORMAT_R16G16B16A16_SFLOAT;
+		}
+		break;
 		case VK_FORMAT_D24_UNORM_S8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_D24_UNORM_S8_UINT;
-			break;
+		{
+			retFmt = ASH_FORMAT_D24_UNORM_S8_UINT;
+		}
+		break;
 		case VK_FORMAT_D32_SFLOAT_S8_UINT:
-			ashFormat = AshFormat::ASH_FORMAT_D32_SFLOAT_S8_UINT;
-			break;
+		{
+			retFmt = ASH_FORMAT_D32_SFLOAT_S8_UINT;
+		}
+		break;
+		case VK_FORMAT_D16_UNORM:
+		{
+			retFmt = ASH_FORMAT_D16_UNORM;
+		}
+		break;
+		case VK_FORMAT_D32_SFLOAT:
+		{
+			retFmt = ASH_FORMAT_D32_SFLOAT;
+		}
+		break;
+		case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+		{
+			retFmt = ASH_FORMAT_A2R10G10B10_UNORM_PACK32;
+		}
+		break;
+
+		case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+		{
+			retFmt = ASH_FORMAT_B10G11R11_UFLOAT_PACK32;
+		}
+		break;
+		case VK_FORMAT_R32_SFLOAT:
+		{
+			retFmt = ASH_FORMAT_R32_FLOAT;
+		}
+		break;
 		default:
-			ashFormat = AshFormat::ASH_FORMAT_UNDEFINED;
 			break;
 		}
-		return ashFormat;
+		return retFmt;
+	}
+	inline VkFormat get_texture_format_from_target_format(AshFormat srcfmt, bool& bColorAttach, bool& bDepth, bool& bStencil, uint32_t& bytesStride)
+	{
+		VkFormat fmt = VK_FORMAT_UNDEFINED;
+		bColorAttach = false;
+		bDepth = false;
+		bStencil = false;
+		bytesStride = 4;
+		switch (srcfmt)
+		{
+		case ASH_FORMAT_R8G8B8A8_UNORM:
+		{
+			fmt = VK_FORMAT_R8G8B8A8_UNORM;
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R8G8B8A8_SNORM:
+		{
+			fmt = VK_FORMAT_R8G8B8A8_SNORM;
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R8G8B8A8_SRGB:
+		{
+			fmt = VK_FORMAT_R8G8B8A8_SRGB;
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_B8G8R8_UNORM:
+		{
+			fmt = VK_FORMAT_B8G8R8_UNORM;
+			bytesStride = 3;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_B5G6R5_UNORM_PACK16:
+		{
+			fmt = VK_FORMAT_B5G6R5_UNORM_PACK16;
+			bytesStride = 2;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_B8G8R8A8_UNORM:
+		{
+			fmt = VK_FORMAT_B8G8R8A8_UNORM;
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_B8G8R8A8_SRGB:
+		{
+			fmt = VK_FORMAT_B8G8R8A8_SRGB;
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R8_UNORM:
+		{
+			fmt = VK_FORMAT_R8_UNORM;
+			bytesStride = 1;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R8G8_UNORM:
+		{
+			fmt = VK_FORMAT_R8G8_UNORM;
+			bytesStride = 2;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R16G16_UINT:
+		{
+			fmt = VK_FORMAT_R16G16_UINT;
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R16G16B16A16_UNORM:
+		{
+			fmt = VK_FORMAT_R16G16B16A16_UNORM;
+			bytesStride = 8;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+		}
+		break;
+		case ASH_FORMAT_R16G16B16A16_SFLOAT:
+		{
+			bytesStride = 8;
+			fmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R32G32B32A32_SFLOAT:
+		{
+			bytesStride = 16;
+			fmt = VK_FORMAT_R32G32B32A32_SFLOAT;
+			bColorAttach = TRUE;
+		}
+		break;
+		case ASH_FORMAT_BC7_SRGB_UNORM:
+		{
+			bytesStride = 16;
+			fmt = VK_FORMAT_BC7_SRGB_BLOCK;
+			bColorAttach = TRUE;
+		}
+		break;
+		case ASH_FORMAT_R32G32_UINT:
+			bytesStride = 8;
+			fmt = VK_FORMAT_R32G32_UINT;
+			bColorAttach = TRUE;
+			break;
+		case ASH_FORMAT_R32G32B32A32_UINT:
+			bytesStride = 16;
+			fmt = VK_FORMAT_R32G32B32A32_UINT;
+			bColorAttach = TRUE;
+			break;
+		case ASH_FORMAT_A2R10G10B10_UNORM_PACK32:
+		{
+			bytesStride = 8;
+			fmt = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_B10G11R11_UFLOAT_PACK32:
+		{
+			bytesStride = 8;
+			fmt = VK_FORMAT_B10G11R11_UFLOAT_PACK32;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R16G16_SFLOAT:
+		{
+			bytesStride = 8;
+			fmt = VK_FORMAT_R16G16_SFLOAT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R16_SFLOAT:
+		{
+			bytesStride = 2;
+			fmt = VK_FORMAT_R16_SFLOAT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R16_UINT:
+		{
+			bytesStride = 2;
+			fmt = VK_FORMAT_R16_UINT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R32_SINT:
+		{
+			bytesStride = 4;
+			fmt = VK_FORMAT_R32_SINT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R32_UINT:
+		{
+			bytesStride = 4;
+			fmt = VK_FORMAT_R32_UINT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_R32_FLOAT:
+		{
+			bytesStride = 4;
+			fmt = VK_FORMAT_R32_SFLOAT;
+			bColorAttach = true;
+		}
+		break;
+		case ASH_FORMAT_D24_UNORM_S8_UINT:
+		{
+			bytesStride = 4;
+			bDepth = true;
+			bStencil = true;
+			fmt = VK_FORMAT_D24_UNORM_S8_UINT;
+		}
+		break;
+		case ASH_FORMAT_D16_UNORM:
+		{
+			bytesStride = 2;
+			bDepth = true;
+			fmt = VK_FORMAT_D16_UNORM;
+		}
+		break;
+		case ASH_FORMAT_D32_SFLOAT:
+		{
+			bytesStride = 4;
+			bDepth = true;
+			fmt = VK_FORMAT_D32_SFLOAT;
+		}
+		break;
+		case ASH_FORMAT_D32_SFLOAT_S8_UINT:
+		{
+			bytesStride = 4;
+			bDepth = true;
+			bStencil = true;
+			fmt = VK_FORMAT_D32_SFLOAT_S8_UINT;
+		}
+		break;
+		case ASH_FORMAT_R16G16_UNORM:
+			bytesStride = 4;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+			fmt = VK_FORMAT_R16G16_UNORM;
+			break;
+		case ASH_FORMAT_R16_UNORM:
+			bytesStride = 2;
+			bColorAttach = true;
+			bDepth = false;
+			bStencil = false;
+			fmt = VK_FORMAT_R16_UNORM;
+			break;
+		case ASH_FORMAT_ETC2_R8G8B8_UNORM_BLOCK:
+			bytesStride = 8;
+			bDepth = false;
+			bStencil = false;
+			fmt = VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK:
+			bytesStride = 16;
+			bDepth = false;
+			bStencil = false;
+			fmt = VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_ETC2_RG_UNORM_BLOCK:
+			bytesStride = 16;
+			fmt = VK_FORMAT_EAC_R11G11_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_BC1_RGB_UNORM:
+			bytesStride = 8;
+			fmt = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_BC3_UNORM:
+			bytesStride = 16;
+			fmt = VK_FORMAT_BC3_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_BC5_UNORM:
+			bytesStride = 16;
+			fmt = VK_FORMAT_BC5_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_ASTC_4X4_UNORM_BLOCK:
+			bytesStride = 16;
+			fmt = VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_R8_UINT:
+			bytesStride = 1;
+			fmt = VK_FORMAT_R8_UINT;
+			bDepth = false;
+			bStencil = false;
+			break;
+		default:
+			H_ASSERT(false);
+			break;
+		}
+		return fmt;
 	}
 
 	inline auto ash_color_space_to_vk(const AshColorSpace& colorSpace) -> VkColorSpaceKHR
@@ -554,51 +556,53 @@ namespace RHI
 		}
 		return vkPresentMode;
 	}
-	inline auto get_image_usage_vulkan(const TextureCreation& creation) -> VkImageUsageFlags
+	// Converts TextureUsageFlags to VkImageUsageFlags
+	inline auto ash_texture_usage_to_vk(AshTextureUsageFlags usageFlags)
 	{
-		const bool is_render_target = (creation.flags & AshTextureFlags::RenderTarget_mask) == AshTextureFlags::RenderTarget_mask;
-		const bool is_compute_used = (creation.flags & AshTextureFlags::Compute_mask) == AshTextureFlags::Compute_mask;
-		const bool is_shading_rate_texture = (creation.flags & AshTextureFlags::ShadingRate_mask) == AshTextureFlags::ShadingRate_mask;
-		// Default to always readable from shader.
-		VkImageUsageFlags usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-		usage |= is_compute_used ? VK_IMAGE_USAGE_STORAGE_BIT : 0;
-		usage |= is_shading_rate_texture ? VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR : 0;
-		if (TextureFormat::has_depth_or_stencil(ash_format_to_vk(creation.format))) {
-			// Depth/Stencil textures are normally textures you render into.
-			usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
-			usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // TODO
-
-		}
-		else {
-			usage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT; // TODO
-			usage |= is_render_target ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0;
-		}
-		return usage;
+		VkImageUsageFlags vkUsage = 0;
+		if (usageFlags & ASH_TEXTURE_USAGE_TRANSFER_SRC_BIT)
+			vkUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_TRANSFER_DST_BIT)
+			vkUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_SAMPLED_BIT)
+			vkUsage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_STORAGE_BIT)
+			vkUsage |= VK_IMAGE_USAGE_STORAGE_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT)
+			vkUsage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+			vkUsage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_TRANSIENT_ATTACHMENT_BIT)
+			vkUsage |= VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+		if (usageFlags & ASH_TEXTURE_USAGE_INPUT_ATTACHMENT_BIT)
+			vkUsage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+		// Add more mappings if needed
+		return vkUsage;
 	}
-	inline auto ash_image_view_type_to_vk(const AshImageViewType& type) -> VkImageViewType
+	inline auto ash_image_view_dim_to_vk(const AshResourceViewDimension& type) -> VkImageViewType
 	{
 		VkImageViewType vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_1D;
 		switch (type)
 		{
-		case ASH_IMAGE_VIEW_TYPE_1D:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_1D;
 			break;
-		case ASH_IMAGE_VIEW_TYPE_2D:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_2D;
 			break;
-		case ASH_IMAGE_VIEW_TYPE_3D:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURE3D:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_3D;
 			break;
-		case ASH_IMAGE_VIEW_TYPE_CUBE:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURECUBE:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_CUBE;
 			break;
-		case ASH_IMAGE_VIEW_TYPE_1D_ARRAY:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D_ARRAY:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_1D_ARRAY;
 			break;
-		case ASH_IMAGE_VIEW_TYPE_2D_ARRAY:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D_ARRAY:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_2D_ARRAY;
 			break;
-		case ASH_IMAGE_VIEW_TYPE_CUBE_ARRAY:
+		case ASH_RESOURCE_VIEW_DIMENSION_TEXTURECUBE_ARRAY:
 			vktype = VkImageViewType::VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
 			break;
 		default:
@@ -607,34 +611,34 @@ namespace RHI
 		}
 		return vktype;
 	}
-	inline auto ash_image_type_to_image_view_type(const AshImageType& type) -> AshImageViewType
+	inline auto ash_image_type_to_image_view_type(const AshImageType& type) -> AshResourceViewDimension
 	{
-		AshImageViewType oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_1D;
+		AshResourceViewDimension oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D;
 		switch (type)
 		{
 		case Ash_Texture1D:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_1D;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D;
 			break;
 		case Ash_Texture2D:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_2D;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D;
 			break;
 		case Ash_Texture3D:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_3D;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE3D;
 			break;
 		case Ash_TextureCube:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_CUBE;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURECUBE;
 			break;
 		case Ash_Texture_1D_Array:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_1D_ARRAY;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D_ARRAY;
 			break;
 		case Ash_Texture_2D_Array:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_2D_ARRAY;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D_ARRAY;
 			break;
 		case Ash_Texture_Cube_Array:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURECUBE_ARRAY;
 			break;
 		default:
-			oType = AshImageViewType::ASH_IMAGE_VIEW_TYPE_2D;
+			oType = AshResourceViewDimension::ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D;
 			break;
 		}
 		return oType;
@@ -800,52 +804,34 @@ namespace RHI
 		VkImageLayout layout = VkImageLayout::VK_IMAGE_LAYOUT_UNDEFINED;
 		switch (state)
 		{
-		case AshResourceState::ASH_RESOURCE_STATE_UNDEFINED:
+		case AshResourceState::Unknown:
 			layout = VK_IMAGE_LAYOUT_UNDEFINED;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_GENERAL:
+		case AshResourceState::UAVMask:
 			layout = VK_IMAGE_LAYOUT_GENERAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_RENDER_TARGET:
+		case AshResourceState::RTV:
 			layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE:
+		case AshResourceState::DSVWrite:
 			layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_STENCIL_READ:
+		case AshResourceState::DSVRead:
 			layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_SHADER_RESOURCE:
+		case AshResourceState::SRVMask:
 			layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_COPY_SOURCE:
+		case AshResourceState::CopySrc:
 			layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_COPY_DEST:
+		case AshResourceState::CopyDst:
 			layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_PREINITIALIZED:
-			layout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-			break;
-		case AshResourceState::ASH_RESOURCE_STATE_UNORDERED_ACCESS:
-			layout = VK_IMAGE_LAYOUT_GENERAL;
-			break;
-		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_WRITE:
-			layout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-			break;
-		case AshResourceState::ASH_RESOURCE_STATE_DEPTH_READ:
-			layout = VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_OPTIMAL;
-			break;
-		case AshResourceState::ASH_RESOURCE_STATE_STENCIL_WRITE:
-			layout = VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
-			break;
-		case AshResourceState::ASH_RESOURCE_STATE_STENCIL_READ:
-			layout = VK_IMAGE_LAYOUT_STENCIL_READ_ONLY_OPTIMAL;
-			break;
-		case AshResourceState::ASH_RESOURCE_STATE_PRESENT:
+		case AshResourceState::Present:
 			layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 			break;
-		case AshResourceState::ASH_RESOURCE_STATE_FRAGMENT_SHADING_RATE_ATTACHMENT:
+		case AshResourceState::ShadingRateSource:
 			layout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
 			break;
 		default:
@@ -861,7 +847,7 @@ namespace RHI
 		{
 			return false;
 		}
-		if (dst == AshResourceState::ASH_RESOURCE_STATE_UNDEFINED || dst == AshResourceState::ASH_RESOURCE_STATE_PREINITIALIZED)
+		if (dst == AshResourceState::Unknown)
 		{
 			return false;
 		}
@@ -1050,4 +1036,22 @@ namespace RHI
 		VkClearDepthStencilValue clearColor = { color .depth,color .stencil};
 		return clearColor;
 	}
+
+	inline VkImageAspectFlags get_aspect_flags_from_format(AshFormat eAshFormat)
+	{
+		switch (eAshFormat)
+		{
+		case ASH_FORMAT_D24_UNORM_S8_UINT:
+			return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+		case ASH_FORMAT_D16_UNORM:
+			return VK_IMAGE_ASPECT_DEPTH_BIT;
+		case ASH_FORMAT_D32_SFLOAT:
+			return VK_IMAGE_ASPECT_DEPTH_BIT;
+		case ASH_FORMAT_D32_SFLOAT_S8_UINT:
+			return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+		default:
+			return VK_IMAGE_ASPECT_COLOR_BIT;
+		}
+	}
+	
 };

@@ -73,4 +73,30 @@ namespace RHI
 	{
 		return name;
 	}
+	VulkanSamplerView::VulkanSamplerView(char* name, std::shared_ptr<Sampler> parent)
+	{
+		parentSampler = parent;
+		m_pName = name;
+	}
+	VulkanSamplerView::~VulkanSamplerView()
+	{
+		parentSampler.reset();
+	}
+	std::shared_ptr<Sampler> VulkanSamplerView::get_parent_sampler()
+	{
+		return parentSampler.lock();
+	}
+	auto VulkanSamplerView::get_native_handle() -> void*
+	{
+		auto ptr = parentSampler.lock();
+		if (ptr)
+		{
+			return ptr->get_native_handle();
+		}
+		return nullptr;
+	}
+	auto VulkanSamplerView::get_name() -> const char*
+	{
+		return m_pName;
+	}
 }

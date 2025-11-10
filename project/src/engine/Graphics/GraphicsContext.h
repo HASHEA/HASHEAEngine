@@ -42,18 +42,16 @@ namespace RHI {
         GraphicsContext() = default;
         virtual ~GraphicsContext() {}; 
 
-        virtual auto init(void* config) -> HS_Result = 0;
-        virtual auto shutdown() -> HS_Result = 0;
+        virtual auto init(void* config) -> bool = 0;
+        virtual auto shutdown() -> bool = 0;
         static GraphicsContext* create();
     public:
-        //RHI Interfaces
+        //RHI Device Interfaces
         virtual auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> = 0;
-        virtual auto map_buffer(const MapBufferParameters& params) -> void* = 0;
-        virtual auto unmap_buffer(const MapBufferParameters& params) -> void = 0;
-        virtual auto update_buffer_data(const MapBufferParameters& params, void* data) -> void = 0;
         virtual auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> = 0;
+		virtual auto create_buffer_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
         virtual auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> = 0;
-        virtual auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
+        virtual auto create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
         virtual auto get_sampler(const AshSamplerState& ss)->std::shared_ptr<Sampler> = 0;
         virtual auto wait_idle() -> void = 0;
 		virtual auto begin_frame() -> void = 0;
@@ -62,6 +60,8 @@ namespace RHI {
         virtual auto get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer* = 0;
         virtual auto submit(const SubmitInfo& info) -> void = 0;
         virtual auto submit_immediately(const SubmitInfo& info) -> void = 0;
+
+
     protected:
       
     };

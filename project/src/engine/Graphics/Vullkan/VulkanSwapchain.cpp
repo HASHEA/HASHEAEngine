@@ -22,7 +22,7 @@ namespace RHI
 	{
 	}
 
-	auto VulkanSwapchain::init(void* _config) -> HS_Result 
+	auto VulkanSwapchain::init(void* _config) -> bool 
 	{
 		auto config = *(SwapChainInitConfig*)_config;
 		swapchainBufferCount = config.swapchainBufferCount;
@@ -41,27 +41,27 @@ namespace RHI
 		HLogTrace("Create swapchain ...");
 		_create_surface((GLFWwindow*)config.window);
 		_init_swapchain(config);
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanSwapchain::shutdown() -> HS_Result 
+	auto VulkanSwapchain::shutdown() -> bool 
 	{
 		_clean_swapchain(swapChain);
 		if (surface != VK_NULL_HANDLE)
 		{
 			vkDestroySurfaceKHR(VulkanContext::get_vulkan_instance(), surface, VulkanContext::get_vulkan_allocation_callbacks());
 		}
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanSwapchain::_create_surface(GLFWwindow* window) -> HS_Result
+	auto VulkanSwapchain::_create_surface(GLFWwindow* window) -> bool
 	{
 		auto instance = VulkanContext::get_vulkan_instance();
 		VK_CHECK_RESULT(glfwCreateWindowSurface(instance, window, VulkanContext::get_vulkan_allocation_callbacks(), &surface));
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanSwapchain::_init_swapchain(SwapChainInitConfig& config) -> HS_Result
+	auto VulkanSwapchain::_init_swapchain(SwapChainInitConfig& config) -> bool
 	{
 		SwapChainSupportDetails swapChainSupport{};
 		_query_swapchain_support(swapChainSupport);
@@ -71,7 +71,7 @@ namespace RHI
 		for (i = 0; i < config.colorFormatCount; i++)
 		{
 			for (const auto& availableFormat : swapChainSupport.formats) {
-				if (availableFormat.format == ash_format_to_vk(config.pColorFormat[i])) {
+				if (availableFormat.format == get_vk_texture_format_info(config.pColorFormat[i]).vkFormat) {
 					uint32_t j = 0;
 					for (j = 0; j < config.colorSpaceCount; j++)
 					{
@@ -121,7 +121,7 @@ namespace RHI
 		}
 		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= swapchainBufferCount && swapChainSupport.capabilities.minImageCount <= swapchainBufferCount, "Unsupported Image Count:{}!", swapchainBufferCount);
 		_recreate_swapchain();
-		return HS_OK;
+		return true;
 	}
 
 	auto VulkanSwapchain::_query_swapchain_support(SwapChainSupportDetails& swapChainSupport) -> void
@@ -145,7 +145,7 @@ namespace RHI
 		}
 	}
 
-	auto VulkanSwapchain::_choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities) -> HS_Result
+	auto VulkanSwapchain::_choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities) -> bool
 	{
 		if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
 			swapchainExtents = capabilities.currentExtent;
@@ -154,7 +154,7 @@ namespace RHI
 			swapchainExtents.width = std::clamp(swapchainExtents.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
 			swapchainExtents.height = std::clamp(swapchainExtents.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
 		}
-		return HS_OK;
+		return true;
 	}
 
 	auto VulkanSwapchain::_recreate_swapchain() -> void
@@ -202,7 +202,7 @@ namespace RHI
 		vkGetSwapchainImagesKHR(VulkanContext::get_vulkan_device(), swapChain, &imageCount, vecVkImage.data());
 		//create render pass
 		RenderPassCreation rci{};
-		rci.set_name("swapchain render pass").add_attachment(vk_format_to_ash(surfaceFormat.format), AshResourceState::ASH_RESOURCE_STATE_PRESENT, AshLoadOption::ASH_LOAD_CLEAR);
+		rci.set_name("swapchain render pass").add_attachment(vk_format_to_ash(surfaceFormat.format), AshResourceState::Present, AshLoadOption::ASH_LOAD_CLEAR);
 			/*set_depth_stencil_texture(AshFormat::ASH_FORMAT_D32_SFLOAT, AshResourceState::ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE).set_depth_stencil_operations(ASH_LOAD_CLEAR, ASH_LOAD_CLEAR);*/
 		swapchainRenderPass = VulkanRenderPass::create(rci);
 		//create swapchain buffer proxy
@@ -211,11 +211,11 @@ namespace RHI
 		for (size_t i = 0; i < imageCount; i++)
 		{
 			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
-			texture->width = swapchainExtents.width;
-			texture->height = swapchainExtents.height;
+			texture->m_sCreation.width = swapchainExtents.width;
+			texture->m_sCreation.height = swapchainExtents.height;
 			texture->aliasTexture = nullptr;
-			texture->format = vk_format_to_ash(surfaceFormat.format);
-			texture->name = "swapchain buffer";
+			texture->m_sCreation.format = vk_format_to_ash(surfaceFormat.format);
+			texture->m_sCreation.name = "swapchain buffer";
 			texture->swapchain_texture = true;
 			texture->vkImage = vecVkImage[i];
 			swapChainImages.push_back(texture);
@@ -235,7 +235,7 @@ namespace RHI
 	
 	}
 
-	auto VulkanSwapchain::_clean_swapchain(VkSwapchainKHR& _swapchain) ->HS_Result
+	auto VulkanSwapchain::_clean_swapchain(VkSwapchainKHR& _swapchain) ->bool
 	{
 		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
 		swapChainFramebuffer.shutdown();
@@ -246,7 +246,7 @@ namespace RHI
 			vkDestroySwapchainKHR(VulkanContext::get_vulkan_device(), _swapchain, VulkanContext::get_vulkan_allocation_callbacks());
 			_swapchain = VK_NULL_HANDLE;
 		}
-		return HS_OK;
+		return true;
 	}
 
 	auto VulkanSwapchain::_aquire_next_image() -> void
@@ -329,12 +329,11 @@ namespace RHI
 		//TODO: deal the image layout problem
 		//if layout != present_src, do transition.
 		auto swapchainBuffer = get_swapchain_buffer();
-		if (swapchainBuffer->get_resource_state() != AshResourceState::ASH_RESOURCE_STATE_PRESENT)
 		{
 			auto cb = VulkanContext::get()->get_command_buffer(0);
-			cb->begin();
-			cb->transition_image_state(swapchainBuffer, AshResourceState::ASH_RESOURCE_STATE_PRESENT);
-			cb->end();
+			cb->begin_record();
+			cb->cmd_transition_resource_state({swapchainBuffer, AshResourceState::Present});
+			cb->end_record();
 			VulkanContext::get()->submit_immediately({ cb ,1});
 		}
 

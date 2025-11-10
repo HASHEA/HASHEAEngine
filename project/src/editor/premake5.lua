@@ -6,8 +6,6 @@ project "Editor"
 	staticruntime "off"
 	targetdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/target/%{prj.name}")
 	objdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/obj/%{prj.name}")
-	debugcommand ("%{wks.location}/_BUILD/"..outputdir.."/bin64/Editor.exe")   
-
 	includedirs
 	{
 		"%{wks.location}/project/src/engine",
@@ -31,15 +29,6 @@ project "Editor"
 		"Engine",
 
 	}
-	local source_dir = "%{wks.location}/_BUILD/"..outputdir.."/bin/target/Editor/"
-	local dest_dir = distdir
-	postbuildcommands {
-
-        "if not exist \""..dest_dir.."\" mkdir \""..dest_dir.."\"",
-        "robocopy \""..source_dir.."\" \""..dest_dir.."\" Editor.exe Editor.pdb /NFL /NDL /NJH /NJS >nul || exit 0"
-    }
-
-            
 	filter "system:windows"
 		system "Windows"
 		systemversion "latest"
@@ -53,16 +42,27 @@ project "Editor"
 			"ASH_WINDOWS",
 			"ASH_EDITOR",
 		}
-
-
 	filter "configurations:Debug"
 		defines "ASH_APP_DEBUG"
 		runtime "Debug"
 		symbols "on"
 		editandcontinue "Off"
 		optimize "off"
-
+		debugcommand "%{wks.location}/product/bin64/Debug/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Debug"			  
+		postbuildcommands
+		{
+			("{MKDIR %{wks.location}/product/bin64/Debug"),
+			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Debug")
+		} 
 	filter "configurations:Release"
 		defines "ASH_APP_RELEASE"
 		runtime "Release"
 		optimize "on"
+		debugcommand "%{wks.location}/product/bin64/Release/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Release"			  
+		postbuildcommands
+		{
+			("{MKDIR %{wks.location}/product/bin64/Release"),
+			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Release")
+		}  

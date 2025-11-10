@@ -11,14 +11,14 @@ namespace AshEngine
 		return &s_log_service;
 	}
 
-	auto LogService::init(void* conif) -> HS_Result
+	auto LogService::init(void* conif) -> bool
 	{
 		std::vector<spdlog::sink_ptr> logSinksEngine;
 		logSinksEngine.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 
 		
 		logSinksEngine.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-			fmt::format("LogFiles/AshEngineLogFile_{:%Y%m%d_%H%M}.logfile",
+			fmt::format("product/logs/AshEngineLogFile_{:%Y%m%d_%H%M}.logfile",
 				std::chrono::system_clock::now()),
 			true
 		));
@@ -28,7 +28,7 @@ namespace AshEngine
 		std::vector<spdlog::sink_ptr> logSinksApp;
 		logSinksApp.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 		logSinksApp.emplace_back(std::make_shared<spdlog::sinks::basic_file_sink_mt>(
-			fmt::format("LogFiles/AshAppLogFile_{:%Y%m%d_%H%M}.logfile",
+			fmt::format("product/logs/AshAppLogFile_{:%Y%m%d_%H%M}.logfile",
 				std::chrono::system_clock::now()),
 			true
 		));
@@ -42,15 +42,15 @@ namespace AshEngine
 		m_pEngineLogger->flush_on(spdlog::level::trace);
 		m_pAppLogger->set_level(spdlog::level::trace);
 		m_pAppLogger->flush_on(spdlog::level::trace);
-		return HS_OK;
+		return true;
 	}
 
-	auto LogService::shutdown() -> HS_Result
+	auto LogService::shutdown() -> bool
 	{
 		m_pAppLogger->flush();
 		m_pEngineLogger->flush();
 		spdlog::shutdown();
-		return HS_OK;
+		return true;
 	}
 
 };

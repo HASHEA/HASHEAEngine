@@ -29,10 +29,10 @@ namespace AshEngine
 		virtual auto allocate(size_t size, size_t alignment) -> void* = 0;
 		virtual auto allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void* = 0;
 
-		virtual auto deallocate(void* pointer, char* file, uint32_t line) -> HS_Result = 0;
-		virtual auto deallocate(void* pointer) -> HS_Result = 0;
-		virtual auto deallocate(const void* pointer) -> HS_Result = 0;
-		virtual auto deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result = 0;
+		virtual auto deallocate(void* pointer, char* file, uint32_t line) -> bool = 0;
+		virtual auto deallocate(void* pointer) -> bool = 0;
+		virtual auto deallocate(const void* pointer) -> bool = 0;
+		virtual auto deallocate(const void* pointer, char* file, uint32_t line) -> bool = 0;
 	}; // struct Allocator
 
 	struct MemoryStatistics {
@@ -41,12 +41,12 @@ namespace AshEngine
 
 		uint32_t                         m_uAllocationCounts;
 
-		auto add(size_t a) -> HS_Result {
+		auto add(size_t a) -> bool {
 			if (a) {
 				m_szAllocatedbytes += a;
 				++m_uAllocationCounts;
 			}
-			return HS_OK;
+			return true;
 		}
 	}; // struct MemoryStatistics
 
@@ -55,8 +55,8 @@ namespace AshEngine
 	public:
 		~HeapAllocator() override;
 
-		auto init(size_t size) -> HS_Result;
-		auto shutdown()-> HS_Result;
+		auto init(size_t size) -> bool;
+		auto shutdown()-> bool;
 
 #ifdef ASH_DEBUG
 		auto on_gui() -> void;
@@ -65,10 +65,10 @@ namespace AshEngine
 		auto allocate(size_t size, size_t alignment) -> void* override;
 		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
-		auto deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
-		auto deallocate(void* pointer) -> HS_Result override;
-		auto deallocate(const void* pointer) -> HS_Result override;
-		auto deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result override;
+		auto deallocate(void* pointer, char* file, uint32_t line)-> bool override;
+		auto deallocate(void* pointer) -> bool override;
+		auto deallocate(const void* pointer) -> bool override;
+		auto deallocate(const void* pointer, char* file, uint32_t line) -> bool override;
 
 	private:
 		void* m_pTlsfHandle = nullptr;
@@ -80,20 +80,20 @@ namespace AshEngine
 	class StackAllocator : public Allocator
 	{
 	public:
-		auto                        init(size_t size) -> HS_Result;
-		auto                        shutdown() -> HS_Result;
+		auto                        init(size_t size) -> bool;
+		auto                        shutdown() -> bool;
 
 		auto allocate(size_t size, size_t alignment)-> void* override;
 		auto allocate(size_t size, size_t alignment, char* file, uint32_t line)-> void* override;
 
-		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
-		auto						deallocate(void* pointer) -> HS_Result override;
-		auto						deallocate(const void* pointer) -> HS_Result override;
-		auto						deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result override;
+		auto                        deallocate(void* pointer, char* file, uint32_t line)-> bool override;
+		auto						deallocate(void* pointer) -> bool override;
+		auto						deallocate(const void* pointer) -> bool override;
+		auto						deallocate(const void* pointer, char* file, uint32_t line) -> bool override;
 		auto						get_marker() -> size_t;
-		auto                        free_marker(size_t marker) -> HS_Result;
+		auto                        free_marker(size_t marker) -> bool;
 
-		auto                        clear() -> HS_Result;
+		auto                        clear() -> bool;
 	private:
 		uint8_t* m_pMemory = nullptr;
 		size_t                       m_szTotalSize = 0;
@@ -109,17 +109,17 @@ namespace AshEngine
 	public:
 		~LinearAllocator();
 
-		auto                        init(size_t size) -> HS_Result;
-		auto                        shutdown()-> HS_Result;
+		auto                        init(size_t size) -> bool;
+		auto                        shutdown()-> bool;
 
 		auto						allocate(size_t size, size_t alignment)->void* override;
 		auto						allocate(size_t size, size_t alignment, char* file, uint32_t line)->void* override;
 
-		auto                        deallocate(void* pointer, char* file, uint32_t line)-> HS_Result override;
-		auto						deallocate(void* pointer) -> HS_Result override;
-		auto						deallocate(const void* pointer) -> HS_Result override;
-		auto						deallocate(const void* pointer, char* file, uint32_t line) -> HS_Result override;
-		auto                        clear()-> HS_Result;
+		auto                        deallocate(void* pointer, char* file, uint32_t line)-> bool override;
+		auto						deallocate(void* pointer) -> bool override;
+		auto						deallocate(const void* pointer) -> bool override;
+		auto						deallocate(const void* pointer, char* file, uint32_t line) -> bool override;
+		auto                        clear()-> bool;
 	private:
 		uint8_t* m_pMemory = nullptr;
 		size_t                       m_szTotalSize = 0;
@@ -134,8 +134,8 @@ namespace AshEngine
 	{
 	public:
 		static constexpr char* k_name = "memory_service";
-		auto init(void* configuration) -> HS_Result override;
-		auto shutdown() -> HS_Result override;
+		auto init(void* configuration) -> bool override;
+		auto shutdown() -> bool override;
 #ifdef ASH_DEBUG
 		auto on_gui() -> void override;
 #endif // ASH_DEBUG

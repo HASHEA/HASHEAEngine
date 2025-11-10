@@ -11,11 +11,12 @@
 #include "VulkanTexture.h"
 #include "VulkanSampler.h"
 #include "VulkanShader.h"
+#include "VulkanStagingBuffer.h"
 #include <vector>
 namespace RHI
 {
-	constexpr const char* k_pipeline_cache_path = "Caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
-	inline auto check_layer_support(const std::vector<const char*>& rqLayers)->HS_Result
+	constexpr const char* k_pipeline_cache_path = "product\\caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
+	inline static auto check_layer_support(const std::vector<const char*>& rqLayers)->bool
 	{
 		std::vector<VkLayerProperties> layers;
 		uint32_t layerCount = 0;
@@ -37,12 +38,12 @@ namespace RHI
 			}
 			if (!layerFound)
 			{
-				return HS_FAIL;
+				return false;
 			}
 		}
-		return HS_OK;
+		return true;
 	}
-	inline auto check_extension_support(const std::vector<const char*>& rqExtensions) -> HS_Result
+	inline static auto check_extension_support(const std::vector<const char*>& rqExtensions) -> bool
 	{
 		std::vector<VkExtensionProperties> properties;
 		uint32_t extensionCount = 0;
@@ -73,7 +74,7 @@ namespace RHI
 				HLogError("Extension not supported {0}", extensionName);
 			}
 		}
-		return extensionSupported  ? HS_OK : HS_FAIL;
+		return extensionSupported  ? true : false;
 	}
 	static VkBool32 vk_debug_callbacks(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
 		VkDebugUtilsMessageTypeFlagsEXT types,
@@ -117,7 +118,7 @@ namespace RHI
 #endif // VULKAN_DEBUG_REPORT
 	}
 
-	auto VulkanContext::_create_instance(const Array<const char*>& additionalExtensions) -> HS_Result
+	auto VulkanContext::_create_instance(const Array<const char*>& additionalExtensions) -> bool
 	{
 		VkApplicationInfo appInfo{};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -137,8 +138,8 @@ namespace RHI
 			//"VK_LAYER_LUNARG_parameter_validation",
 			//"VK_LAYER_LUNARG_object_tracker"
 #endif
-		HS_Result result = check_layer_support(rqLayers);
-		if (HS_CHECK_FAILED(result))
+		bool result = check_layer_support(rqLayers);
+		if (!result)
 		{
 			HLogError("Not all required layers are supported!");
 			return result;
@@ -175,7 +176,7 @@ namespace RHI
 			rqExtensions.push_back(additionalExtensions[i]);
 		}
 		result = check_extension_support(rqExtensions);
-		if (HS_CHECK_FAILED(result))
+		if (!result)
 		{
 			HLogError("Not all required extensions are supported!");
 			return result;
@@ -211,19 +212,19 @@ namespace RHI
 		VK_CHECK_RESULT(vkCreateInstance(&instanceCI, vulkanAllocationCallbacks, &vulkanInstance));
 		//load instance apis
 		volkLoadInstance(vulkanInstance);
-		return HS_OK;
+		return true;
 	}
-	auto VulkanContext::_shutdown_instance() -> HS_Result
+	auto VulkanContext::_shutdown_instance() -> bool
 	{
 		if (vulkanInstance != VK_NULL_HANDLE)
 		{
 			vkDestroyInstance(vulkanInstance, vulkanAllocationCallbacks);
 			vulkanInstance = VK_NULL_HANDLE;
 		}
-		return HS_OK;
+		return true;
 	}
 #ifdef VULKAN_DEBUG_REPORT
-	auto VulkanContext::_create_debug_util_messenger_ext() -> HS_Result
+	auto VulkanContext::_create_debug_util_messenger_ext() -> bool
 	{
 		// Create new debug utils callback
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
@@ -232,20 +233,20 @@ namespace RHI
 		debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 
 		VK_CHECK_RESULT(vkCreateDebugUtilsMessengerEXT(vulkanInstance, &debugUtilCI, vulkanAllocationCallbacks, &vulkanDebugUtilMessenger));
-		return HS_OK;
+		return true;
 	}
-	auto VulkanContext::_shutdown_debug_util_messenger_ext() -> HS_Result
+	auto VulkanContext::_shutdown_debug_util_messenger_ext() -> bool
 	{
 		if (vulkanDebugUtilMessenger != VK_NULL_HANDLE)
 		{
 			vkDestroyDebugUtilsMessengerEXT(vulkanInstance, vulkanDebugUtilMessenger, vulkanAllocationCallbacks);
 			vulkanDebugUtilMessenger = VK_NULL_HANDLE;
 		}
-		return HS_OK;
+		return true;
 	}
 #endif
 
-	auto VulkanContext::_select_and_prepare_physical_device() -> HS_Result
+	auto VulkanContext::_select_and_prepare_physical_device() -> bool
 	{
 		uint32_t numPhysicalDevice = 0;
 		VK_CHECK_RESULT(vkEnumeratePhysicalDevices(vulkanInstance, &numPhysicalDevice, NULL));
@@ -253,14 +254,14 @@ namespace RHI
 		std::vector<VkPhysicalDevice> physicalDevices{};
 		physicalDevices.resize(numPhysicalDevice);
 		VK_CHECK_RESULT(vkEnumeratePhysicalDevices(vulkanInstance, &numPhysicalDevice, physicalDevices.data()));
-		HS_Result retCode = HS_FAIL;
+		bool retCode = false;
 		for (VkPhysicalDevice device : physicalDevices)
 		{
 			vkGetPhysicalDeviceProperties(device, &vulkanPhysicalDeviceProperties);
 			if (vulkanPhysicalDeviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU)
 			{
 				vulkanPhysicalDevice = device;
-				retCode = HS_OK;
+				retCode = true;
 				break;
 			}
 		}
@@ -271,6 +272,9 @@ namespace RHI
 		}
 		HLogInfo("GPU used : {}", vulkanPhysicalDeviceProperties.deviceName);
 		gpuTimestampFrequency = vulkanPhysicalDeviceProperties.limits.timestampPeriod / (1000*1000);
+		//query memory props
+		_query_device_memory_props();
+
 		_filter_device_selectable_extension();
 		//Query Properties Supported
 		_query_supported_props();
@@ -279,7 +283,7 @@ namespace RHI
 		return retCode;
 	}
 
-	auto VulkanContext::_filter_device_selectable_extension() -> HS_Result
+	auto VulkanContext::_filter_device_selectable_extension() -> bool
 	{
 		uint32_t deviceExtensionCount = 0;
 		vkEnumerateDeviceExtensionProperties(vulkanPhysicalDevice, nullptr, &deviceExtensionCount, nullptr);
@@ -329,10 +333,65 @@ namespace RHI
 				continue;
 			}
 		}
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_query_supported_props() -> HS_Result
+	auto VulkanContext::_query_device_memory_props() -> bool
+	{
+		{
+			// Memory properties are used regularly for creating all kinds of buffers
+			vkGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &vulkanPhysicalDeviceMemoryProperties);
+			float fGB = 0.0f;
+			bool  bLocalGpuMemory = false;
+			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; ++i)
+			{
+				if (vulkanPhysicalDeviceMemoryProperties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+				{
+					fGB += (float)((double)vulkanPhysicalDeviceMemoryProperties.memoryHeaps[i].size / (double)(1024 * 1024 * 1024));
+					bLocalGpuMemory = true;
+				}
+			}
+
+			if (bLocalGpuMemory)
+			{
+				local_gpu_memory_gb = fGB;
+			}
+
+			HLogInfo("VM size:%.2f", fGB);
+
+			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryTypeCount; i++)
+			{
+				if ((vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+				{
+					HLogInfo("Device support VK_MEMORY_PROPERTY_HOST_COHERENT_BIT");
+					break;
+				}
+			}
+
+			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryTypeCount && i < VK_MAX_MEMORY_TYPES; ++i)
+			{
+				if (vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+				{
+					HLogInfo("Device support VK_MEMORY_PROPERTY_HOST_CACHED_BIT");
+					break;
+				}
+			}
+
+			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryTypeCount && i < VK_MAX_MEMORY_TYPES; ++i)
+			{
+				if ((vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) &&
+					(vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
+				{
+					HLogInfo("Device Support VK_MEMORY_PROPERTY_HOST_COHERENT_BIT|VK_MEMORY_PROPERTY_HOST_CACHED_BIT");
+					featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::HostCoherentCached);
+					break;
+				}
+			}
+		}
+		return true;
+	}
+
+	auto VulkanContext::_query_supported_props() -> bool
 	{
 		VkPhysicalDeviceSubgroupProperties subGroupProperties{};
 		subGroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
@@ -365,10 +424,10 @@ namespace RHI
 		uboAlignment = vulkanPhysicalDeviceProperties.limits.minUniformBufferOffsetAlignment;
 		ssboAlignemnt = vulkanPhysicalDeviceProperties.limits.minStorageBufferOffsetAlignment;
 		maxFramebufferLayers = vulkanPhysicalDeviceProperties.limits.maxFramebufferLayers;
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_query_supported_features() -> HS_Result
+	auto VulkanContext::_query_supported_features() -> bool
 	{
 		// Query bindless extension, called Descriptor Indexing (https://www.khronos.org/registry/vulkan/specs/1.3-extensions/man/html/VK_EXT_descriptor_indexing.html)
 		VkPhysicalDeviceDescriptorIndexingFeatures indexingFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES };
@@ -393,10 +452,10 @@ namespace RHI
 			featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::Bindless);
 		}
 		
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_create_device() -> HS_Result
+	auto VulkanContext::_create_device() -> bool
 	{
 		//Create logical device
 		uint32_t queueFamilyCount = 0;
@@ -584,10 +643,10 @@ namespace RHI
 		if (vulkanTransferQueueFamily < queueFamilyCount) {
 			vkGetDeviceQueue(vulkanDevice, transferQueueFamilyIndex, 0, &vulkanTransferQueue);
 		}
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_shutdown_device() -> HS_Result
+	auto VulkanContext::_shutdown_device() -> bool
 	{
 		if (vulkanDevice != VK_NULL_HANDLE)
 		{
@@ -595,10 +654,10 @@ namespace RHI
 			vulkanDevice = VK_NULL_HANDLE;
 		}
 		
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_create_vulkan_memory_allocator() -> HS_Result
+	auto VulkanContext::_create_vulkan_memory_allocator() -> bool
 	{
 		//load vma funcs
 		VmaAllocatorCreateInfo allocatorCI = {};
@@ -634,16 +693,16 @@ namespace RHI
 		allocatorCI.pVulkanFunctions = &fn;
 		VK_CHECK_RESULT(vmaCreateAllocator(&allocatorCI, &vmaAllocator));
 
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_shutdown_vulkan_memory_allocator() -> HS_Result
+	auto VulkanContext::_shutdown_vulkan_memory_allocator() -> bool
 	{
 		vmaDestroyAllocator(vmaAllocator);
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_create_descriptor_pool(const GpuDescriptorPoolCreation& dspci) -> HS_Result
+	auto VulkanContext::_create_descriptor_pool(const GpuDescriptorPoolCreation& dspci) -> bool
 	{
 		VkDescriptorPoolSize poolSizes[] =
 		{
@@ -682,10 +741,10 @@ namespace RHI
 			CI.pPoolSizes = poolSizesBindless;
 			VK_CHECK_RESULT(vkCreateDescriptorPool(vulkanDevice, &CI, vulkanAllocationCallbacks, &vulkanBindlessDescriptorPool));
 		}
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_shutdown_descriptor_pool() -> HS_Result
+	auto VulkanContext::_shutdown_descriptor_pool() -> bool
 	{
 		if (vulkanDescriptorPool != VK_NULL_HANDLE)
 		{
@@ -701,10 +760,10 @@ namespace RHI
 				vulkanBindlessDescriptorPool = VK_NULL_HANDLE;
 			}
 		}
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes) -> HS_Result
+	auto VulkanContext::_create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes) -> bool
 	{
 		num_thread = numThread;
 		const uint32_t num_pools = numThread * k_max_frames;
@@ -771,20 +830,20 @@ namespace RHI
 		
 		//create dynamic Buffer
 		//TODO: make it dynamic alloc and dealloc
-		BufferCreation dc{};
-		dc.type_flags = k_dynamic_buffer_mask;
-		dc.usage = AshResourceUsageType::Immutable;
-		dc.name = "Dynamic Persistent Buffer";
-		dc.size = k_max_frames * 1024 * 1024 * 10;
-		dc.persistent = true;
-		global_dynamic_buffer = Ash_New_Shared<VulkanDynamicBuffer>(dc);
+		//BufferCreation dc{};
+		//dc.usage_flags = k_dynamic_buffer_mask;
+		//dc.usage_flags = AshResourceUsageType::Immutable;
+		//dc.name = "Dynamic Persistent Buffer";
+		//dc.size = k_max_frames * 1024 * 1024 * 10;
+		//dc.persistent = true;
+		//global_dynamic_buffer = Ash_New_Shared<VulkanDynamicBuffer>(dc);
 		//init sampler map
 		samplerCache.init(nullptr, AshSamplerState::ASH_SAMPLER_STATE_MAX_ENUM, AshSamplerState::ASH_SAMPLER_STATE_MAX_ENUM);
 		for (size_t i = 0; i < AshSamplerState::ASH_SAMPLER_STATE_MAX_ENUM; i++)
 		{
 			samplerCache[i] = create_sampler((AshSamplerState)i);
 		}
-		return HS_OK;
+		return true;
 
 	}
 
@@ -812,7 +871,121 @@ namespace RHI
 		return ret;
 	}
 
-	auto VulkanContext::_shutdown_frame_pool_and_data() -> HS_Result
+	auto VulkanContext::vma_create_buffer(VkDeviceSize uBufferSize, VkBufferUsageFlags eBufferUsage, VmaMemoryUsage eMemUsage, VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, void** ppData) -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		VkBufferCreateInfo      sBufferCreateInfo = {};
+		VmaAllocationCreateInfo vmaallocInfo = {};
+		VmaAllocationInfo       vmaAllocationInfo = {};
+		bool                    bMapped = (eMemUsage == VMA_MEMORY_USAGE_CPU_ONLY && ppData);
+		H_ASSERT(!pVkBuffer);
+		H_ASSERT(!pVMAllocation);
+		sBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		sBufferCreateInfo.size = uBufferSize;
+		sBufferCreateInfo.usage = eBufferUsage;
+		vmaallocInfo.usage = eMemUsage;
+		vmaallocInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
+		// https://gpuopen-librariesandsdks.github.io/VulkanMemoryAllocator/html/usage_patterns.html
+		if (bMapped)
+		{
+			vmaallocInfo.flags |= VMA_ALLOCATION_CREATE_MAPPED_BIT;
+		}
+		// allocate the buffer
+		VkResult vkRetCode = vmaCreateBuffer(
+			vmaAllocator,
+			&sBufferCreateInfo,
+			&vmaallocInfo,
+			&pVkBuffer,
+			&pVMAllocation,
+			&vmaAllocationInfo
+		);
+		VK_CHECK_RESULT(vkRetCode);
+		if (bMapped)
+		{
+			H_ASSERT(vmaAllocationInfo.pMappedData);
+			*ppData = vmaAllocationInfo.pMappedData;
+		}
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_destroy_buffer(VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation) -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		vmaDestroyBuffer(vmaAllocator, pVkBuffer, pVMAllocation);
+		pVkBuffer = nullptr;
+		pVMAllocation = nullptr;
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_destroy_buffer_v(VkBuffer pVkBuffer, VmaAllocation pVMAllocation) -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		vmaDestroyBuffer(vmaAllocator, pVkBuffer, pVMAllocation);
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_create_image(const VkImageCreateInfo& sImgCreateInfo, VmaMemoryUsage eMemUsage, VkImage& pVkImage, VmaAllocation& pVMAllocation) -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		VmaAllocationCreateInfo sVmaAllocCreateInfo = {};
+		sVmaAllocCreateInfo.flags = VMA_ALLOCATION_CREATE_STRATEGY_MIN_MEMORY_BIT;
+		ASH_PROCESS_ERROR_EXIT(!pVkImage);
+		ASH_PROCESS_ERROR_EXIT(!pVMAllocation);
+		ASH_PROCESS_ERROR_EXIT("FATAL ERROR" && sImgCreateInfo.extent.width > 0 && sImgCreateInfo.extent.height > 0);
+		ASH_PROCESS_ERROR_EXIT(eMemUsage > VmaMemoryUsage::VMA_MEMORY_USAGE_UNKNOWN && eMemUsage < VmaMemoryUsage::VMA_MEMORY_USAGE_MAX_ENUM);
+		sVmaAllocCreateInfo.usage = eMemUsage;
+		VkResult vkResult = vmaCreateImage(vmaAllocator, &sImgCreateInfo, &sVmaAllocCreateInfo, &pVkImage, &pVMAllocation, nullptr);
+		VK_CHECK_RESULT(vkResult);
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_destroy_image(VkImage pVkImage, VmaAllocation pVMAllocation) -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_PROCESS_ERROR_EXIT(pVkImage);
+		ASH_PROCESS_ERROR_EXIT(pVMAllocation);
+		vmaDestroyImage(vmaAllocator, pVkImage, pVMAllocation);
+		pVkImage = nullptr;
+		pVMAllocation = nullptr;
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_map_memory(VmaAllocation pVMAllocation, void** ppData) const -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_PROCESS_ERROR_EXIT(pVMAllocation && ppData);
+		VkResult vkRetCode = vmaMapMemory(vmaAllocator, pVMAllocation, ppData);
+		VK_CHECK_RESULT(vkRetCode);
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_unmap_memory(VmaAllocation pVMAllocation) const -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_PROCESS_ERROR_EXIT(pVMAllocation);
+		vmaUnmapMemory(vmaAllocator, pVMAllocation);
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::vma_flush_allocation(VmaAllocation pVMAllocation, VkDeviceSize uOffset, VkDeviceSize uSize) const -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		VkResult vkRetCode = VK_INCOMPLETE;
+		ASH_PROCESS_ERROR_EXIT(pVMAllocation);
+		vkRetCode = vmaFlushAllocation(vmaAllocator, pVMAllocation, uOffset, uSize);
+		ASH_PROCESS_ERROR_EXIT(vkRetCode == VK_SUCCESS);
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanContext::_shutdown_frame_pool_and_data() -> bool
 	{
 		samplerCache.shutdown();
 		global_dynamic_buffer.reset();
@@ -873,10 +1046,10 @@ namespace RHI
 		gpuTimeQueryManager->shutdown();
 		Ash_Delete(nullptr,gpuTimeQueryManager);
 		framePools.shutdown();
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_load_cache() -> HS_Result
+	auto VulkanContext::_load_cache() -> bool
 	{
 		StringBuffer pathBuffer;
 		pathBuffer.init(1024, nullptr);
@@ -902,10 +1075,10 @@ namespace RHI
 			VK_CHECK_RESULT(vkCreatePipelineCache(vulkanDevice, &pipeline_cache_create_info, vulkanAllocationCallbacks, &vulkanPipelineCache));
 		}
 		pathBuffer.shutdown();
-		return HS_OK;
+		return true;
 	}
 
-	auto VulkanContext::_unload_cache() -> HS_Result
+	auto VulkanContext::_unload_cache() -> bool
 	{
 		StringBuffer pathBuffer;
 		pathBuffer.init(1024, nullptr);
@@ -925,73 +1098,70 @@ namespace RHI
 		Ash_Free(nullptr, cache_data);
 		vkDestroyPipelineCache(vulkanDevice, vulkanPipelineCache, vulkanAllocationCallbacks);
 		pathBuffer.shutdown();
-		return HS_Result();
+		return bool();
 	}
 
-	auto VulkanContext::init(void* config) -> HS_Result
+	auto VulkanContext::_create_staging_buffer_pool() -> bool
+	{
+		vulkanStagingBufferPool = Ash_New<VulkanStagingBufferPool>();
+		return vulkanStagingBufferPool->init();
+	}
+
+	auto VulkanContext::_shutdown_staging_buffer_pool() -> bool
+	{
+		if (vulkanStagingBufferPool)
+		{
+			vulkanStagingBufferPool->uninit();
+			Ash_Delete(nullptr,vulkanStagingBufferPool);
+		}
+		return true;
+	}
+
+	auto VulkanContext::create_buffer_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
+	{
+		return std::shared_ptr<TextureView>();
+	}
+
+	auto VulkanContext::init(void* config) -> bool
 	{	
+		bool bRetCode = false;
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		GraphicsContextInitConfig vkConfig = *(GraphicsContextInitConfig*)config;
 		H_ASSERT(&vkConfig);
 		//load vulkan by volk;
 		VK_CHECK_RESULT(volkInitialize());
 		//create vkinstance
-		HS_Result result = _create_instance(vkConfig.addtionalExtensions);
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to create instance !");
-			return result;
-		}
+		bRetCode = _create_instance(vkConfig.addtionalExtensions);
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create instance !");
 #ifdef VULKAN_DEBUG_REPORT
-		result = _create_debug_util_messenger_ext();
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to create DebugUtilMessengerExt !");
-			return result;
-		}
+		bRetCode = _create_debug_util_messenger_ext();
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create DebugUtilMessengerExt !");
 #endif
-		result = _select_and_prepare_physical_device();
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to select Physical Device !");
-			return result;
-		}
-		result = _create_device();
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to create Device !");
-			return result;
-		}
-		result = _create_vulkan_memory_allocator();
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to create VMA Allocator !");
-			return result;
-		}
-		result = _create_descriptor_pool(vkConfig.descriptorPoolCreation);
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to create DescriptorPool !");
-			return result;
-		}
-		
-		result = _create_frame_pool_and_data(vkConfig.num_threads, vkConfig.queryCount);
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to create FrameData !");
-			return result;
-		}
+		bRetCode = _select_and_prepare_physical_device();
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to select Physical Device !");
 
-		result = _load_cache();
-		if (HS_CHECK_FAILED(result))
-		{
-			HLogError("Fatal : Failed to load cache !");
-			return result;
-		}
+		bRetCode = _create_device();
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create Device !");
 
-		result = HS_OK;
-		return result;
+		bRetCode = _create_vulkan_memory_allocator();
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create VMA Allocator !");
+
+		bRetCode = _create_descriptor_pool(vkConfig.descriptorPoolCreation);
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create DescriptorPool !");
+
+		bRetCode = _create_frame_pool_and_data(vkConfig.num_threads, vkConfig.queryCount);
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create FrameData !");
+
+		bRetCode = _load_cache();
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to load cache !");
+
+		bRetCode = _create_staging_buffer_pool();
+		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create staging buffer pool !");
+
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
 	}
-	auto VulkanContext::shutdown() -> HS_Result
+	auto VulkanContext::shutdown() -> bool
 	{
 		//wait idle
 		wait_idle();
@@ -1010,62 +1180,14 @@ namespace RHI
 		//shutdown instance
 		_shutdown_instance();
 
-		return HS_OK;
+		return true;
 	}
 
 	/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
-
-	auto VulkanContext::map_buffer(const MapBufferParameters& params) -> void*
-	{
-		auto vulkanBuffer = std::dynamic_pointer_cast<VulkanBuffer>(params.buffer);
-		if (vulkanBuffer == nullptr)
-		{
-			return nullptr;
-		}
-		auto mappedData = vulkanBuffer->get_mapped_data();
-		if (mappedData != nullptr)
-		{
-			HLogWarning("trying to map a mapped buffer or persistent buffer, do nothing and return the mapped data !");
-			return mappedData;
-		}
-		if (params.buffer->is_dynamic())//dynamic buffer
-		{
-			return global_dynamic_buffer->dynamic_allocate_buffer(vulkanBuffer, params.size == 0? params.buffer->get_size() : params.size, uboAlignment);
-		}
-		void* data = nullptr;
-		VK_CHECK_RESULT(vmaMapMemory(vmaAllocator, vulkanBuffer->get_vma_allocation(), &data));
-		return data;
-	}
-
-	auto VulkanContext::unmap_buffer(const MapBufferParameters& params) -> void
-	{
-		auto vulkanBuffer = std::dynamic_pointer_cast<VulkanBuffer>(params.buffer);
-		if (vulkanBuffer == nullptr)
-		{
-			return;
-		}
-		if (vulkanBuffer->is_dynamic())
-		{
-			return;// don't unmap a dynamic buffer
-		}
-		vmaUnmapMemory(vmaAllocator, vulkanBuffer->get_vma_allocation());
-	}
-
-	auto VulkanContext::update_buffer_data(const MapBufferParameters& params, void* data) -> void
-	{
-		void* memory = map_buffer(params);
-		H_ASSERT((params.offset + params.size) <= params.buffer->get_size());
-		if (memory != nullptr)
-		{
-			memory_copy((uint8_t*)memory + params.offset, data , params.size);
-		}
-		unmap_buffer(params);
-	}
-
 	auto VulkanContext::create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer>
 	{
-		return VulkanBuffer::create(ci);
+		return nullptr;// VulkanBuffer::create(ci);
 	}
 
 	auto VulkanContext::create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture>
@@ -1073,7 +1195,7 @@ namespace RHI
 		return VulkanTexture::create(ci);
 	}
 
-	auto VulkanContext::create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
+	auto VulkanContext::create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
 	{
 		return VulkanTextureView::create(ci, parentTexture);
 	}

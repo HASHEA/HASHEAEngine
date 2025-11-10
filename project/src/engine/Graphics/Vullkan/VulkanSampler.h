@@ -4,6 +4,19 @@
 #include <memory>
 namespace RHI
 {
+	class VulkanSamplerView : public SamplerView
+	{
+	public:
+		VulkanSamplerView(char* name, std::shared_ptr<Sampler> parent);
+		~VulkanSamplerView();
+	public:
+		std::shared_ptr<Sampler> get_parent_sampler() override;
+		auto get_native_handle() -> void* override;
+		auto get_name() -> const char* override;
+	private:
+		char* m_pName;
+		std::weak_ptr<Sampler> parentSampler;
+	};
 	class VulkanSampler : public Sampler
 	{
 	public:

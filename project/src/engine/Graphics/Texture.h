@@ -3,17 +3,11 @@
 #include "RHIResource.h"
 namespace RHI
 {
-	struct TextureSubResource {
-
-		uint16_t                             mip_base_level = 0;
-		uint16_t                             mip_level_count = 1;
-		uint16_t                             array_base_layer = 0;
-		uint16_t                             array_layer_count = 1;
-
-	}; // struct TextureSubResource
-	struct TextureViewCreation {
-		AshImageViewType                view_type = ASH_IMAGE_VIEW_TYPE_1D;
-		TextureSubResource              sub_resource{};
+	struct TextureViewCreation 
+	{
+		AshResourceViewType view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UNKNOWN;
+		AshResourceViewDimension                view_dim = ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D;
+		AshSubresourceRange              sub_resource{};
 		AshFormat                       format = ASH_FORMAT_UNDEFINED;
 		const char*                     name = nullptr;
 	}; // struct TextureViewCreation
@@ -26,23 +20,11 @@ namespace RHI
 	public:
 		/*virtual auto get_render_target_view() -> void* = 0;*/
 		virtual auto get_parent_texture() -> std::shared_ptr<Texture> = 0;
-		virtual auto get_view_type() -> AshImageViewType = 0;
+		virtual auto get_view_dim() -> AshResourceViewDimension = 0;
 		virtual auto get_view_format() -> AshFormat = 0;
+		virtual auto get_subresource_range() -> const AshSubresourceRange & = 0;
+		virtual auto get_view_type() -> AshResourceViewType = 0;
 	};
-
-	struct TextureDescription {
-
-		void*							native_handle = nullptr;
-		const char*                     name = nullptr;
-		uint16_t                        width = 1;
-		uint16_t                        height = 1;
-		uint16_t                        depth = 1;
-		uint8_t                         mipmaps = 1;
-		uint8_t                         render_target = 0;
-		uint8_t                         compute_access = 0;
-		AshFormat                       format = ASH_FORMAT_UNDEFINED;
-		AshImageType					type = AshImageType::Ash_Texture2D;
-	}; // struct TextureDescription
 
 	struct TextureCreation {
 
@@ -52,10 +34,14 @@ namespace RHI
 		uint16_t                             depth = 1;
 		uint16_t                             array_layer_count = 1;
 		uint8_t                              mip_level_count = 1;
-		uint8_t                              flags = 0;    // TextureFlags bitmasks
+		AshTextureCreateFlags                flags = 0;    // TextureFlags bitmasks
 		AshFormat							 format = ASH_FORMAT_UNDEFINED;
 		AshImageType						 type = AshImageType::Ash_Texture2D;
-		AshResourceState					 initial_state = AshResourceState::ASH_RESOURCE_STATE_UNDEFINED;
+		AshResourceState					 initial_state = AshResourceState::Unknown;
+		AshResourceAccessType				 memoryType = AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+		AshTextureUsageFlags				 uUsageFlags = 0;
+		AshSampleCountFlag					 eSampleCount = ASH_SAMPLE_COUNT_1_BIT;
+
 		std::shared_ptr<Texture>			 alias = nullptr;
 		const char*                          name = nullptr;
 	}; // struct TextureCreation
@@ -66,11 +52,11 @@ namespace RHI
 		Texture() = default;
 		virtual ~Texture() {}
 	public:
-		virtual auto get_desciption(TextureDescription& desc) -> void = 0;
+		virtual auto get_desciption()const ->const TextureCreation& = 0;
 		virtual auto get_alias_texture() -> std::shared_ptr<Texture> = 0;
-		virtual auto get_default_render_target_view() -> std::shared_ptr<TextureView> = 0;
-		virtual auto get_default_shader_resource_view() -> std::shared_ptr<TextureView> = 0;
-		virtual auto get_default_unordered_access_view() -> std::shared_ptr<TextureView> = 0;
+		virtual auto get_default_rtv() -> std::shared_ptr<TextureView> = 0;
+		virtual auto get_default_srv() -> std::shared_ptr<TextureView> = 0;
+		virtual auto get_default_uav() -> std::shared_ptr<TextureView> = 0;
 		virtual auto is_cube_map() -> bool = 0;
 		virtual auto is_sparse() -> bool = 0;
 		virtual auto get_format() -> AshFormat = 0;

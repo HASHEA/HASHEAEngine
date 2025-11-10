@@ -26,8 +26,8 @@ namespace RHI
 		Swapchain() = default;
 		virtual ~Swapchain() {}
 
-		virtual auto init(void* config)->HS_Result = 0;
-		virtual auto shutdown()->HS_Result = 0;
+		virtual auto init(void* config)->bool = 0;
+		virtual auto shutdown()->bool = 0;
 		static Swapchain* create();
 	public:
 		/****** rhi interfaces ********/

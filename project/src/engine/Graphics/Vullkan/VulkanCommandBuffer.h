@@ -33,18 +33,20 @@ namespace RHI
 		}
 	public:
 		//rhi interfaces
-		virtual auto begin()  -> void override;
-		virtual auto end() -> void override;
+		virtual auto begin_record()  -> void override;
+		virtual auto end_record() -> void override;
 		virtual auto get_state() -> AshCommandBufferState override;
 		auto set_state(AshCommandBufferState state) -> void override;
-
-		virtual auto transition_image_state(std::shared_ptr<Texture> texture, AshResourceState newlayout, TextureSubResource* region = nullptr,
-			AshQueueType::Enum srcQueueType = AshQueueType::Enum::Ignored, AshQueueType::Enum dstQueueType = AshQueueType::Enum::Ignored) -> void override;
 		auto get_native_handle() -> void* override;
+		auto cmd_transition_resource_state(const AshBarrier& barrierInfo) -> bool override;
 
-		auto begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void override;
-		auto end_render_pass() -> void override;
-		auto bind_pipeline() -> void override;
+		auto cmd_transition_resource_state(const std::initializer_list<AshBarrier>& lsBarrierInfoArrray) -> bool override;
+
+		auto cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool override;
+		auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void override;
+		auto cmd_end_render_pass() -> void override;
+		auto cmd_bind_pipeline() -> void override;
+		auto cmd_update_sub_resource(std::shared_ptr<Buffer>, uint32_t uOffset, uint32_t uSize, void* pData) -> bool override;
 	private:
 		VkCommandBuffer							vkCommandBuffer				= VK_NULL_HANDLE;
 		VkCommandPool							vkCommandPool				= VK_NULL_HANDLE;
@@ -56,8 +58,6 @@ namespace RHI
 		
 
 		friend class VulkanCommandBufferManager;		
-
-		
 	};
 	struct VulkanCommandBufferManager
 	{

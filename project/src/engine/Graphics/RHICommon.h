@@ -12,6 +12,18 @@ namespace RHI
 	static const uint8_t								k_max_vertex_streams = 16;
 	static const uint8_t								k_max_vertex_attributes = 16;
 
+
+#define RHI_ENUM_CLASS_OPERATORS(e_) \
+    static_assert(std::is_enum<e_>::value, "Must be enum type"); \
+    using _T = std::underlying_type_t<e_>; \
+    inline e_ operator&(e_ a, e_ b) { return static_cast<e_>(static_cast<_T>(a) & static_cast<_T>(b)); } \
+    inline e_ operator|(e_ a, e_ b) { return static_cast<e_>(static_cast<_T>(a) | static_cast<_T>(b)); } \
+    inline e_& operator|=(e_& a, e_ b) { a = a | b; return a; } \
+    inline e_& operator&=(e_& a, e_ b) { a = a & b; return a; } \
+    inline e_ operator~(e_ a) { return static_cast<e_>(~static_cast<_T>(a)); } \
+    inline bool is_set(e_ val, e_ flag) { return (val & flag) != static_cast<e_>(0); } \
+    inline void flip_bit(e_& val, e_ flag) { val = is_set(val, flag) ? (val & (~flag)) : (val | flag); }
+
 	struct Rect2D {
 		float                             x = 0.0f;
 		float                             y = 0.0f;
@@ -102,42 +114,7 @@ namespace RHI
 		}
 	};
 
-	namespace AshResourceUsageType {
-		enum Enum {
-			Immutable, Dynamic, Stream, Staging, Readback, Count
-		};
-
-		enum Mask {
-			Immutable_mask = 1 << 0, Dynamic_mask = 1 << 1, Stream_mask = 1 << 2, Staging_mask = 1 << 3, Readback_mask = 1 << 4, Count_mask = 1 << 5
-		};
-
-		static const char* s_value_names[] = {
-			"Immutable", "Dynamic", "Stream", "Staging", "Count"
-		};
-
-		static const char* to_string(Enum e) {
-			return ((uint32_t)e < Enum::Count ? s_value_names[(int)e] : "unsupported");
-		}
-	} // namespace ResourceUsageType
-
-	namespace AshTextureFlags {
-		enum Enum {
-			Default, RenderTarget, Compute, Sparse, ShadingRate, Count
-		};
-
-		enum Mask {
-			Default_mask = 1 << 0, RenderTarget_mask = 1 << 1, Compute_mask = 1 << 2, Sparse_mask = 1 << 3, ShadingRate_mask = 1 << 4
-		};
-
-		static const char* s_value_names[] = {
-			"Default", "RenderTarget", "Compute", "Count"
-		};
-
-		static const char* to_string(Enum e) {
-			return ((uint32_t)e < Enum::Count ? s_value_names[(int)e] : "unsupported");
-		}
-
-	} // namespace TextureFlags
+	
 
 	namespace AshQueueType {
 		enum Enum {
@@ -157,115 +134,94 @@ namespace RHI
 		}
 	} // namespace QueueType
 
-	typedef enum AshImageViewType {
-		ASH_IMAGE_VIEW_TYPE_1D = 0,
-		ASH_IMAGE_VIEW_TYPE_2D = 1,
-		ASH_IMAGE_VIEW_TYPE_3D = 2,
-		ASH_IMAGE_VIEW_TYPE_CUBE = 3,
-		ASH_IMAGE_VIEW_TYPE_1D_ARRAY = 4,
-		ASH_IMAGE_VIEW_TYPE_2D_ARRAY = 5,
-		ASH_IMAGE_VIEW_TYPE_CUBE_ARRAY = 6,
+	typedef enum AshResourceViewDimension : uint8_t
+	{
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D = 0,
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D = 1,
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURE3D = 2,
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURECUBE = 3,
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURE1D_ARRAY = 4,
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURE2D_ARRAY = 5,
+		ASH_RESOURCE_VIEW_DIMENSION_TEXTURECUBE_ARRAY = 6,
+		ASH_RESOURCE_VIEW_DIMENSION_BUFFER = 7,
 		ASH_IMAGE_VIEW_TYPE_MAX_ENUM = 0x7FFFFFFF
-	} AshImageViewType;
+	} AshResourceViewDimension;
 
 
 
 	typedef enum AshFormat {
 		ASH_FORMAT_UNDEFINED = 0,
-		ASH_FORMAT_R8_UNORM = 1,
-		ASH_FORMAT_R8_UINT = 2,
-		ASH_FORMAT_R8_SRGB = 3,
-		ASH_FORMAT_R8G8_UNORM = 4,
-		ASH_FORMAT_R8G8_UINT = 5,
-		ASH_FORMAT_R8G8_SRGB = 6,
-		ASH_FORMAT_R8G8B8_UNORM = 7,
-		ASH_FORMAT_R8G8B8_UINT = 8,
-		ASH_FORMAT_R8G8B8_SRGB = 9,
-		ASH_FORMAT_B8G8R8_UNORM = 10,
-		ASH_FORMAT_B8G8R8_UINT = 11,
-		ASH_FORMAT_B8G8R8_SRGB = 12,
-		ASH_FORMAT_R8G8B8A8_UNORM = 13,
-		ASH_FORMAT_R8G8B8A8_UINT = 14,
-		ASH_FORMAT_R8G8B8A8_SRGB = 15,
-		ASH_FORMAT_B8G8R8A8_UNORM = 16,
-		ASH_FORMAT_B8G8R8A8_UINT = 17,
-		ASH_FORMAT_B8G8R8A8_SRGB = 18,
-		ASH_FORMAT_R16_UNORM = 19,
-		ASH_FORMAT_R16_UINT = 20,
-		ASH_FORMAT_R16_SFLOAT = 21,
-		ASH_FORMAT_R16G16_UNORM = 22,
-		ASH_FORMAT_R16G16_UINT = 23,
-		ASH_FORMAT_R16G16_SFLOAT = 24,
-		ASH_FORMAT_R16G16B16_UNORM = 25,
-		ASH_FORMAT_R16G16B16_UINT = 26,
-		ASH_FORMAT_R16G16B16_SFLOAT = 27,
-		ASH_FORMAT_R16G16B16A16_UNORM = 28,
-		ASH_FORMAT_R16G16B16A16_UINT = 29,
-		ASH_FORMAT_R16G16B16A16_SFLOAT = 30,
-		ASH_FORMAT_R32_UINT = 31,
-		ASH_FORMAT_R32_SINT = 32,
-		ASH_FORMAT_R32_SFLOAT = 33,
-		ASH_FORMAT_R32G32_UINT = 34,
-		ASH_FORMAT_R32G32_SINT = 35,
-		ASH_FORMAT_R32G32_SFLOAT = 36,
-		ASH_FORMAT_R32G32B32_UINT = 37,
-		ASH_FORMAT_R32G32B32_SINT = 38,
-		ASH_FORMAT_R32G32B32_SFLOAT = 39,
-		ASH_FORMAT_R32G32B32A32_UINT = 40,
-		ASH_FORMAT_R32G32B32A32_SINT = 41,
-		ASH_FORMAT_R32G32B32A32_SFLOAT = 42,
-		ASH_FORMAT_R64_UINT = 43,
-		ASH_FORMAT_R64_SINT = 44,
-		ASH_FORMAT_R64_SFLOAT = 45,
-		ASH_FORMAT_R64G64_UINT = 46,
-		ASH_FORMAT_R64G64_SINT = 47,
-		ASH_FORMAT_R64G64_SFLOAT = 48,
-		ASH_FORMAT_R64G64B64_UINT = 49,
-		ASH_FORMAT_R64G64B64_SINT = 50,
-		ASH_FORMAT_R64G64B64_SFLOAT = 51,
-		ASH_FORMAT_R64G64B64A64_UINT = 52,
-		ASH_FORMAT_R64G64B64A64_SINT = 53,
-		ASH_FORMAT_R64G64B64A64_SFLOAT = 54,
-		ASH_FORMAT_D16_UNORM = 55,
-		ASH_FORMAT_D32_SFLOAT = 56,
-		ASH_FORMAT_S8_UINT = 57,
-		ASH_FORMAT_D16_UNORM_S8_UINT = 58,
-		ASH_FORMAT_D24_UNORM_S8_UINT = 59,
-		ASH_FORMAT_D32_SFLOAT_S8_UINT = 60,
+		ASH_FORMAT_R8G8B8A8_UNORM,
+		ASH_FORMAT_R8G8B8A8_SNORM,
+		ASH_FORMAT_R8G8B8A8_SRGB,
+		ASH_FORMAT_R8G8B8A8_UINT,
+
+		ASH_FORMAT_R8_UNORM,
+		ASH_FORMAT_R8G8_UNORM,
+		ASH_FORMAT_R16G16_UINT,
+		ASH_FORMAT_B8G8R8_UNORM,
+		ASH_FORMAT_R8G8B8_UNORM,
+
+		ASH_FORMAT_B8G8R8A8_UNORM,
+		ASH_FORMAT_B8G8R8A8_SRGB,
+		ASH_FORMAT_R16G16B16A16_UNORM,
+
+		ASH_FORMAT_R16G16B16A16_SFLOAT,
+		ASH_FORMAT_R32G32B32A32_SFLOAT,
+		ASH_FORMAT_R16_SFLOAT,
+		ASH_FORMAT_R16_UINT,
+
+		ASH_FORMAT_R16G16_SFLOAT,
+		ASH_FORMAT_R32_SINT,
+		ASH_FORMAT_R32_UINT,
+
+		ASH_FORMAT_R32_FLOAT,
+		ASH_FORMAT_D24_UNORM_S8_UINT,
+		ASH_FORMAT_D16_UNORM,
+		ASH_FORMAT_D32_SFLOAT,
+		ASH_FORMAT_D32_SFLOAT_S8_UINT,
+
+		ASH_FORMAT_R64_UINT,
+
+		ASH_FORMAT_BC1_RGB_UNORM,
+		ASH_FORMAT_BC1_RGBA_UNORM,
+		ASH_FORMAT_BC2_UNORM,
+		ASH_FORMAT_BC3_UNORM,
+
+		ASH_FORMAT_BC4_UNORM,
+		ASH_FORMAT_BC4_SNORM,
+		ASH_FORMAT_BC5_UNORM,
+		ASH_FORMAT_BC5_SNORM,
+		ASH_FORMAT_BC6H_UFLOAT,
+		ASH_FORMAT_BC6H_SFLOAT,
+		ASH_FORMAT_BC7_UNORM,
+		ASH_FORMAT_BC7_SRGB_UNORM,
+
+		ASH_FORMAT_B5G6R5_UNORM_PACK16,
+		ASH_FORMAT_A2R10G10B10_UNORM_PACK32,
+
+		ASH_FORMAT_B10G11R11_UFLOAT_PACK32,
+		ASH_FORMAT_ETC2_R8G8B8_UNORM_BLOCK,
+		ASH_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
+		ASH_FORMAT_ETC2_R_UNORM_BLOCK,
+		ASH_FORMAT_ETC2_R_SNORM_BLOCK,
+		ASH_FORMAT_ETC2_RG_UNORM_BLOCK,
+		ASH_FORMAT_ETC2_RG_SNORM_BLOCK,
+
+		ASH_FORMAT_ASTC_4X4_UNORM_BLOCK,
+		ASH_FORMAT_ASTC_6X6_UNORM_BLOCK,
+		ASH_FORMAT_ASTC_8X8_UNORM_BLOCK,
+		ASH_FORMAT_R32G32_UINT,
+		ASH_FORMAT_R32G32B32A32_UINT,
+
+		ASH_FORMAT_R16G16_UNORM,
+
+		ASH_FORMAT_R8_UINT,
+
+		ASH_FORMAT_R16_UNORM,
 		ASH_FORMAT_COUNT
 	} AshFormat;
-	inline auto get_stride_from_ash_format(const AshFormat& format) -> uint32_t
-	{
-		switch (format)
-		{
-		case ASH_FORMAT_R32_SINT:
-			return sizeof(int);
-		case ASH_FORMAT_R32_SFLOAT:
-			return sizeof(float);
-		case ASH_FORMAT_R32G32_SFLOAT:
-			return sizeof(float) * 2;
-		case ASH_FORMAT_R32G32B32_SFLOAT:
-			return sizeof(float) * 3;
-		case ASH_FORMAT_R32G32B32A32_SFLOAT:
-			return sizeof(float) * 4;
-		case ASH_FORMAT_R32G32_SINT:
-			return sizeof(int) * 2;
-		case ASH_FORMAT_R32G32B32_SINT:
-			return sizeof(int) * 3;
-		case ASH_FORMAT_R32G32B32A32_SINT:
-			return sizeof(int) * 4;
-		case ASH_FORMAT_R32G32_UINT:
-			return sizeof(uint32_t) * 2;
-		case ASH_FORMAT_R32G32B32_UINT:
-			return sizeof(uint32_t) * 3;
-		case ASH_FORMAT_R32G32B32A32_UINT:
-			return sizeof(uint32_t) * 4;
-		default:
-			HLogWarning("Unsupported Format {0} , {1} : {2}", format, __FUNCTION__, __LINE__);
-			return 0;
-		}
-		return 0;
-	}
+
 
 	typedef enum AshColorSpace {
 		ASH_COLOR_SPACE_UNDEFINED = 0,
@@ -331,32 +287,31 @@ namespace RHI
 		ASH_SAMPLER_REDUCTION_MODE_MAX_ENUM = 0x7FFFFFFF
 	} AshSamplerReductionMode;
 
-	typedef enum AshBufferUsageFlagBits {
+	typedef enum AshBufferUsageFlagBits : uint32_t
+	{
 		ASH_BUFFER_USAGE_TRANSFER_SRC_BIT = 0x00000001,
 		ASH_BUFFER_USAGE_TRANSFER_DST_BIT = 0x00000002,
-		ASH_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT = 0x00000004,
-		ASH_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT = 0x00000008,
+		ASH_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT = 0x00000004, // similar to shader resource view via Buffer<format> in hlsl
+		ASH_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT = 0x00000008, // similar to unorder resource view via RWBuffer<format> in hlsl
 		ASH_BUFFER_USAGE_UNIFORM_BUFFER_BIT = 0x00000010,
 		ASH_BUFFER_USAGE_STORAGE_BUFFER_BIT = 0x00000020,
 		ASH_BUFFER_USAGE_INDEX_BUFFER_BIT = 0x00000040,
 		ASH_BUFFER_USAGE_VERTEX_BUFFER_BIT = 0x00000080,
 		ASH_BUFFER_USAGE_INDIRECT_BUFFER_BIT = 0x00000100,
-		ASH_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 0x00020000,
-		ASH_BUFFER_USAGE_VIDEO_DECODE_SRC_BIT_KHR = 0x00002000,
-		ASH_BUFFER_USAGE_VIDEO_DECODE_DST_BIT_KHR = 0x00004000,
-		ASH_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT = 0x00000800,
-		ASH_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT = 0x00001000,
-		ASH_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT = 0x00000200,
 		ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR = 0x00080000,
-		ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR = 0x00100000,
-		ASH_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR = 0x00000400,
-		ASH_BUFFER_USAGE_SAMPLER_DESCRIPTOR_BUFFER_BIT_EXT = 0x00200000,
-		ASH_BUFFER_USAGE_RESOURCE_DESCRIPTOR_BUFFER_BIT_EXT = 0x00400000,
-		ASH_BUFFER_USAGE_PUSH_DESCRIPTORS_DESCRIPTOR_BUFFER_BIT_EXT = 0x04000000,
-		ASH_BUFFER_USAGE_MICROMAP_BUILD_INPUT_READ_ONLY_BIT_EXT = 0x00800000,
-		ASH_BUFFER_USAGE_MICROMAP_STORAGE_BIT_EXT = 0x01000000,
+		ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR = 0x00100000, // for ray tracing acceleration buffer creation ! enable in vk 1.3
+		ASH_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR = 0x00000400, // for ray tracing shader binding table buffer creation! enable in vk 1.3
+		ASH_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT = 0x00020000,
 		ASH_BUFFER_USAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
-	} AshBufferUsageFlagBits;
+	};
+	RHI_ENUM_CLASS_OPERATORS(AshBufferUsageFlagBits);
+	using AshBufferUsageFlags = uint32_t;
+	enum class AshResourceAccessType
+	{
+		ASH_RESOURCE_ACCESS_GPU_ONLY,
+		ASH_RESOURCE_ACCESS_READ,//read back
+		ASH_RESOURCE_ACCESS_WRITE,//cpu write gpu read
+	};
 
 	typedef enum AshCommandBufferState
 	{
@@ -367,25 +322,51 @@ namespace RHI
 		ASH_State_Count
 	}AshCommandBufferState;
 
-	typedef enum AshResourceState {
-		ASH_RESOURCE_STATE_UNDEFINED = 0,
-		ASH_RESOURCE_STATE_GENERAL = 1,
-		ASH_RESOURCE_STATE_RENDER_TARGET = 2,
-		ASH_RESOURCE_STATE_DEPTH_STENCIL_WRITE = 3,
-		ASH_RESOURCE_STATE_DEPTH_STENCIL_READ = 4,
-		ASH_RESOURCE_STATE_SHADER_RESOURCE = 5,
-		ASH_RESOURCE_STATE_COPY_SOURCE = 6,
-		ASH_RESOURCE_STATE_COPY_DEST = 7,
-		ASH_RESOURCE_STATE_PREINITIALIZED = 8,
-		ASH_RESOURCE_STATE_UNORDERED_ACCESS = 9,
-		ASH_RESOURCE_STATE_DEPTH_WRITE,
-		ASH_RESOURCE_STATE_DEPTH_READ,
-		ASH_RESOURCE_STATE_STENCIL_WRITE,
-		ASH_RESOURCE_STATE_STENCIL_READ,
-		ASH_RESOURCE_STATE_PRESENT,
-		ASH_RESOURCE_STATE_FRAGMENT_SHADING_RATE_ATTACHMENT,
-		ASH_RESOURCE_STATE_MAX_ENUM = 0x7FFFFFFF
-	} AshResourceState;
+	inline bool has_any_flags(uint32_t Flags, uint32_t Contains)
+	{
+		return (Flags & Contains) != 0;
+	}
+
+	enum AshTextureUsageFlagBits : uint32_t
+	{
+		ASH_TEXTURE_USAGE_TRANSFER_SRC_BIT = 0x00000001,
+		ASH_TEXTURE_USAGE_TRANSFER_DST_BIT = 0x00000002,
+		ASH_TEXTURE_USAGE_SAMPLED_BIT = 0x00000004,
+		ASH_TEXTURE_USAGE_STORAGE_BIT = 0x00000008,
+		ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT = 0x00000010,
+		ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT = 0x00000020,
+		ASH_TEXTURE_USAGE_TRANSIENT_ATTACHMENT_BIT = 0x00000040,
+		ASH_TEXTURE_USAGE_INPUT_ATTACHMENT_BIT = 0x00000080,
+		ASH_TEXTURE_USAGE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+	};
+
+	typedef uint32_t AshTextureUsageFlags;
+
+	//temply only one
+	enum AshTextureCreateFlagBits : uint8_t {
+		ASH_TEXTURE_CREATE_FLAG_SPARSE,
+		ASH_TEXTURE_CREATE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+	}; 
+	typedef uint8_t AshTextureCreateFlags;
+
+	enum AshTextureAspectFlagBits : uint32_t
+	{
+		ASH_TEXTURE_ASPECT_COLOR_BIT = 0x00000001,
+		ASH_TEXTURE_ASPECT_DEPTH_BIT = 0x00000002,
+		ASH_TEXTURE_ASPECT_STENCIL_BIT = 0x00000004,
+		ASH_TEXTURE_ASPECT_METADATA_BIT = 0x00000008,
+		ASH_TEXTURE_ASPECT_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
+	};
+	enum AshSampleCountFlag : uint32_t
+	{
+		ASH_SAMPLE_COUNT_1_BIT = 1,
+		ASH_SAMPLE_COUNT_2_BIT = 2,
+		ASH_SAMPLE_COUNT_4_BIT = 3,
+		ASH_SAMPLE_COUNT_8_BIT = 4,
+		ASH_SAMPLE_COUNT_16_BIT = 5,
+		ASH_SAMPLE_COUNT_32_BIT = 6,
+		ASH_SAMPLE_COUNT_64_BIT = 7
+	};
 
 	typedef enum AshSamplerState {
 		ASH_SAMPLER_STATE_DEFAULT = 0,
@@ -638,10 +619,9 @@ namespace RHI
 		ASH_Bool,
 		ASH_Struct,
 		ASH_Mat4Array
-	} AshShaderDataType;
+	} AshShaderDataType;	
 
 
-	
 }
 
 

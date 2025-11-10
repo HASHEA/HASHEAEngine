@@ -13,8 +13,8 @@ namespace AshEngine
 	public:
 		static constexpr const char*  k_name = "log_service";
 		ASH_DECLARE_SERVICE(LogService);
-		auto init(void* conif) -> HS_Result override;
-		auto shutdown() -> HS_Result override;
+		auto init(void* conif) -> bool override;
+		auto shutdown() -> bool override;
 	public:
 		auto get_engine_logger() -> std::shared_ptr<spdlog::logger> { return m_pEngineLogger; }
 		auto get_app_logger() -> std::shared_ptr<spdlog::logger> { return m_pAppLogger; }
@@ -35,5 +35,11 @@ namespace AshEngine
 #define HLogError(sinfo,...)		GET_ASH_LOGGER->error(sinfo,__VA_ARGS__)
 
 #define HS_PROCESS_AND_LOG_RESULT(cond)\
-	if((HS_Result)(cond) != HS_OK)\
+	if((bool)(cond) != true)\
 		HLogError("failed check hsresult at {0},{1}",__FILE__, __LINE__);
+
+#define ASH_LOG_PROCESS_ERROR(condition, ...) if(!condition) {__bInnerError = true;\
+	HLogError("ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
+	break;}
+#define ASH_PROCESS_ERROR_EXIT(condition,...) if(!condition){__bInnerError = true; H_ASSERTLOG(false, "ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
+	break;}

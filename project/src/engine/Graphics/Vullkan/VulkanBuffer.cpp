@@ -1,133 +1,268 @@
+#include "Graphics/CommandBuffer.h"
 #include "VulkanBuffer.h"
 #include "Base/hassert.h"
 #include "VulkanContext.h"
+#include "VulkanResourceTracker.h"
+#include <memory>
 namespace RHI
 {
-	VulkanBuffer::VulkanBuffer(const BufferCreation& ci)
+	namespace VKBufferHelper
 	{
-		name = ci.name;
-		usageFlags = ci.type_flags;
-		usage = ci.usage;
-		size = ci.size;
-		ready = false;
-		const bool use_global_buffer = (ci.type_flags & k_dynamic_buffer_mask) != 0;
-		HLogInfo("creating buffer : {} ...", ci.name);
-		if (ci.usage == AshResourceUsageType::Dynamic && use_global_buffer)// create as dynamic buffer
+		static VkBufferUsageFlags get_vk_buffer_usage_flags(AshBufferUsageFlags uUsageFlags)
 		{
-			H_ASSERTLOG(!(ci.initial_data), "Dynamic Buffer Can not use initial data !");
-			dynamic = true;
+			VkBufferUsageFlags uVkBufferUsageFlags = 0;
+
+			// These macros/constants should be defined in your engine or Vulkan headers
+			if (uUsageFlags & ASH_BUFFER_USAGE_TRANSFER_SRC_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_TRANSFER_DST_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_INDEX_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+			if (uUsageFlags & ASH_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+#ifdef VK_KHR_ray_tracing_pipeline
+			if (uUsageFlags & ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+			if (uUsageFlags & ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
+			if (uUsageFlags & ASH_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
+			if (uUsageFlags & ASH_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+				uVkBufferUsageFlags |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+#endif
+			// Add more mappings if your engine defines additional usage bits
+
+			return uVkBufferUsageFlags;
 		}
-		else
+
+		static AshBufferUsageFlags get_buffer_usage_flags_from_vk(VkBufferUsageFlags vkUsageFlags)
 		{
-			VkBufferCreateInfo buffer_info{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-			buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | ci.type_flags;
-			buffer_info.size = ci.size > 0 ? ci.size : 1;       // 0 sized creations are not permitted.
-			// NOTE: technically we could map a buffer if the device exposes a heap
-			// with MEMORY_PROPERTY_DEVICE_LOCAL_BIT and MEMORY_PROPERTY_HOST_VISIBLE_BIT
-			// but that's usually very small (256MB) unless resizable bar is enabled.
-			// We simply don't allow it for now.
-			// validation
-			if (ci.device_only)
-			{
-				H_ASSERTLOG(!ci.persistent, "Device only buffer can not be mappable !");
-				H_ASSERTLOG((ci.usage == AshResourceUsageType::Dynamic || ci.usage == AshResourceUsageType::Stream), "Device only buffer only can be immutable or stream usage !");
-			}
-			VmaAllocationCreateInfo allocation_create_info{};
-			allocation_create_info.flags = VMA_ALLOCATION_CREATE_STRATEGY_BEST_FIT_BIT;
-			if (ci.persistent) {
-				allocation_create_info.flags = allocation_create_info.flags | VMA_ALLOCATION_CREATE_MAPPED_BIT;
-			}
-			if (ci.device_only) {
-				allocation_create_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-			}
-			else {
-				allocation_create_info.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
-			}
-			
-			VmaAllocationInfo allocation_info{};
-			VK_CHECK_RESULT(vmaCreateBuffer(VulkanContext::get_vma_allocator(),&buffer_info,&allocation_create_info,&vkBuffer,&vmaAllocation,&allocation_info));
-#ifdef ASH_DEBUG
-			vmaSetAllocationName(VulkanContext::get_vma_allocator(), vmaAllocation, name);
-#endif // ASH_DEBUG
-			VulkanContext::set_resource_name(VK_OBJECT_TYPE_BUFFER, (uint64_t)vkBuffer, name);
-			vkDeviceMemory = allocation_info.deviceMemory;
-			if (ci.persistent)
-			{
-				mappedData = static_cast<uint8_t*>(allocation_info.pMappedData);
-				H_ASSERTLOG(mappedData != nullptr, "Fatal: Init Mapped Buffer Failed !");
-			}
-			if (ci.initial_data)
-			{
-				if (!ci.persistent)
-				{
-					void* data;
-					vmaMapMemory(VulkanContext::get_vma_allocator(), vmaAllocation, &data);
-					memcpy(data, ci.initial_data, (size_t)ci.size);
-					vmaUnmapMemory(VulkanContext::get_vma_allocator(), vmaAllocation);
-				}
-				else
-				{
-					if (mappedData)
-					{
-						memcpy(mappedData, ci.initial_data, (size_t)ci.size);
-					}
-				}
-			}
+			AshBufferUsageFlags usageFlags = 0;
+
+			if (vkUsageFlags & VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_TRANSFER_SRC_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_TRANSFER_DST_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_TRANSFER_DST_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_INDEX_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_INDEX_BUFFER_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+			if (vkUsageFlags & VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+#ifdef VK_KHR_ray_tracing_pipeline
+			if (vkUsageFlags & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR)
+				usageFlags |= ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+			if (vkUsageFlags & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR)
+				usageFlags |= ASH_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR;
+			if (vkUsageFlags & VK_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR)
+				usageFlags |= ASH_BUFFER_USAGE_SHADER_BINDING_TABLE_BIT_KHR;
+			if (vkUsageFlags & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT)
+				usageFlags |= ASH_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+#endif
+			// Add more mappings if your engine defines additional usage bits
+
+			return usageFlags;
 		}
-		ready = true;
-	}
+
+	};
 	VulkanBuffer::~VulkanBuffer()
+	{
+		destroy();
+	}
+	auto VulkanBuffer::create(const BufferCreation& ci) -> bool
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		m_pName = ci.name;
+		m_sCreationInfo = ci;
+		m_bReady = false;
+		HLogInfo("creating buffer : {} ...", ci.name);
+		bool bHostCoherent = false;
+		VmaMemoryUsage        eMemUsage = VMA_MEMORY_USAGE_UNKNOWN;
+		VkBufferUsageFlags    uBufferUsageFlags = VKBufferHelper::get_vk_buffer_usage_flags(ci.usage_flags);
+		switch (ci.access_type)
+		{
+		case AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY:
+		{
+			eMemUsage = VmaMemoryUsage::VMA_MEMORY_USAGE_GPU_ONLY;
+			uBufferUsageFlags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+			break;
+		}
+		case AshResourceAccessType::ASH_RESOURCE_ACCESS_READ:
+		{
+			eMemUsage = VmaMemoryUsage::VMA_MEMORY_USAGE_GPU_TO_CPU;
+			uBufferUsageFlags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+			bHostCoherent = true;
+			break;
+		}
+		case AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE:
+		{
+			eMemUsage = VmaMemoryUsage::VMA_MEMORY_USAGE_CPU_TO_GPU;
+			uBufferUsageFlags |= VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+			bHostCoherent = true;
+			break;
+		}
+		default:
+		{
+			H_ASSERT(false);
+			break;
+		}
+		}
+		m_sCreationInfo.usage_flags = VKBufferHelper::get_buffer_usage_flags_from_vk(uBufferUsageFlags);
+		//vma allocate buffer
+		{
+			bool bRetCode = VulkanContext::get()->vma_create_buffer(m_sCreationInfo.size, uBufferUsageFlags,
+				eMemUsage, m_pVkBuffer, m_pVMAAllocation, (void**)& m_pMappedData);
+			ASH_LOG_PROCESS_ERROR(bRetCode);
+		}
+		//validate result
+		{
+			VmaAllocationInfo     allocationInfo = {};
+			VkMemoryPropertyFlags memoryPropertyFlags = {};
+			vmaGetAllocationInfo(VulkanContext::get_vma_allocator(), m_pVMAAllocation, &allocationInfo);
+			ASH_LOG_PROCESS_ERROR(allocationInfo.memoryType < VulkanContext::get_device_memory_properties().memoryTypeCount && allocationInfo.memoryType < VK_MAX_MEMORY_TYPES);
+			vmaGetMemoryTypeProperties(VulkanContext::get_vma_allocator(), allocationInfo.memoryType, &memoryPropertyFlags);
+			m_bCoherent = (memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+			VmaAllocationInfo sAllocInfo;
+			vmaGetAllocationInfo(VulkanContext::get_vma_allocator(), m_pVMAAllocation, &sAllocInfo);
+			m_vkDeviceSize = sAllocInfo.size;
+			ASH_LOG_PROCESS_ERROR(m_vkDeviceSize > 0);
+		}
+		if (m_sCreationInfo.initial_data)
+		{
+			auto pCommandBuffer = VulkanContext::get()->get_command_buffer(0);
+			ASH_LOG_PROCESS_ERROR(pCommandBuffer);
+			pCommandBuffer->cmd_update_sub_resource(shared_from_this(), 0, m_sCreationInfo.size, m_sCreationInfo.initial_data);
+		}
+		if (m_bCoherent)
+		{
+			ASH_LOG_PROCESS_ERROR(bHostCoherent == m_bCoherent);
+			bool bRetCode = VulkanContext::get()->vma_map_memory(m_pVMAAllocation, (void**)&m_pMappedData);
+			ASH_LOG_PROCESS_ERROR(bRetCode);
+		}
+		//fill descriptor info structure
+		{
+			ASH_LOG_PROCESS_ERROR(m_pVkBuffer);
+			m_sDescriptorBufferInfo.buffer = m_pVkBuffer;
+			m_sDescriptorBufferInfo.offset = 0;
+			m_sDescriptorBufferInfo.range = m_sCreationInfo.size;
+		}
+		m_bReady = true;
+		m_resourceTracker = VulkanResourceTracker(AshResourceState::Unknown);
+		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			//process error
+			destroy();
+		}
+		return bResult;
+	}
+
+	auto VulkanBuffer::destroy() -> void
 	{
 		if (immediate_deletion)
 		{
-			vmaDestroyBuffer(VulkanContext::get_vma_allocator(), vkBuffer, vmaAllocation);
-			HLogInfo("deleting buffer : {} ...", name);
+			VulkanContext::get()->vma_destroy_buffer(m_pVkBuffer, m_pVMAAllocation);
+			HLogInfo("deleting buffer : {} ...", m_pName);
 		}
 		else
 		{
-			if (vkBuffer != VK_NULL_HANDLE)
+			if (m_pVkBuffer != VK_NULL_HANDLE)
 			{
-				auto handle = vkBuffer;
-				auto alloc = vmaAllocation;
-				auto sname = name;
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle, alloc,sname]() {
+				auto handle = m_pVkBuffer;
+				auto alloc = m_pVMAAllocation;
+				auto sname = m_pName;
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle, alloc, sname]() {
 					HLogInfo("deleting buffer : {} ...", sname);
-					vmaDestroyBuffer(VulkanContext::get_vma_allocator(), handle, alloc);
+					VulkanContext::get()->vma_destroy_buffer_v(handle, alloc);
 					});
+				m_pVkBuffer = VK_NULL_HANDLE;
+				m_pVMAAllocation = nullptr;
 			}
 		}
-		ready = false;
-	}
-	auto VulkanBuffer::create(const BufferCreation& ci) -> std::shared_ptr<VulkanBuffer>
-	{
-		return Ash_New_Shared<VulkanBuffer>(ci);
+		m_bReady = false;
 	}
 	auto VulkanBuffer::get_size() -> uint32_t
 	{
-		return size;
+		return m_sCreationInfo.size;
 	}
 	auto VulkanBuffer::get_name() -> const char*
 	{
-		return name;
+		return m_pName;
 	}
 	auto VulkanBuffer::get_global_offset() -> uint32_t
 	{
-		return globalOffset;
+		return 0;
 	}
 	auto VulkanBuffer::is_ready() -> bool
 	{
-		return ready;
+		return m_bReady;
 	}
 	auto VulkanBuffer::get_mapped_data() -> uint8_t*
 	{
-		return mappedData;
+		return m_pMappedData;
 	}
 	auto VulkanBuffer::is_dynamic() -> bool
 	{
 		return dynamic;
 	}
-	VulkanDynamicBuffer::VulkanDynamicBuffer(const BufferCreation& ci) : VulkanBuffer(ci)
+	auto VulkanBuffer::get_default_cbv() -> std::shared_ptr<BufferView>
 	{
+		return std::shared_ptr<BufferView>();
+	}
+	auto VulkanBuffer::get_default_srv() -> std::shared_ptr<BufferView>
+	{
+		return std::shared_ptr<BufferView>();
+	}
+	auto VulkanBuffer::get_default_uav() -> std::shared_ptr<BufferView>
+	{
+		return std::shared_ptr<BufferView>();
+	}
+	auto VulkanBuffer::update(uint32_t offset, uint32_t _size, void* pData) -> bool
+	{
+		bool bRetCode = false;
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		CommandBuffer* cmdBuffer = VulkanContext::get()->get_command_buffer(0);
+		ASH_LOG_PROCESS_ERROR(cmdBuffer);
+		bRetCode = cmdBuffer->cmd_update_sub_resource(shared_from_this(), offset, _size, pData);
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+	auto VulkanBuffer::flush_mapped_range() -> bool
+	{
+		if (!m_bCoherent)
+		{
+			return VulkanContext::get()->vma_flush_allocation(m_pVMAAllocation);
+		}
+		return true;
+	}
+	auto VulkanBuffer::get_buffer_device_address() -> uint64_t
+	{
+		return 0;
+	}
+	auto VulkanBuffer::get_buffer_creation_info() const -> const BufferCreation&
+	{
+		return m_sCreationInfo;
 	}
 	VulkanDynamicBuffer::~VulkanDynamicBuffer()
 	{	
@@ -153,11 +288,123 @@ namespace RHI
 		if (buffer->get_global_offset() == UINT32_MAX)
 		{
 			//allocate_new
-			buffer->globalOffset = dynamic_allocated_size;
+			//buffer->globalOffset = dynamic_allocated_size;
 			auto memeory = dynamic_allocate(buffer->get_size(), alignment);
 			//we consider that all dynamic buffers are persistent
-			buffer->mappedData = (uint8_t*)memeory;	
+			buffer->m_pMappedData = (uint8_t*)memeory;	
 		}
-		return buffer->mappedData;
+		return buffer->m_pMappedData;
+	}
+
+	auto VulkanDynamicBuffer::update(uint32_t offset, uint32_t size, void* pData) -> bool
+	{
+		return false;
+	}
+	VulkanBufferView::VulkanBufferView(const BufferViewCreation& ci, std::shared_ptr<Buffer> parent)
+	{
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_PROCESS_ERROR_EXIT(parent);
+		VkBufferViewCreateInfo       createInfo{ VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO };
+		auto& bufferDesc = parent->get_buffer_creation_info();
+		uint32_t                     uBytesRange = 0;
+		ASH_PROCESS_ERROR_EXIT(bufferDesc.size > ci.uByteOffset);
+	
+		uBytesRange = ci.uByteRange == 0 ? bufferDesc.size - ci.uByteOffset : ci.uByteRange;
+		ASH_PROCESS_ERROR_EXIT(bufferDesc.size > ci.uByteOffset);
+
+		ASH_PROCESS_ERROR_EXIT(bufferDesc.size >= ci.uByteOffset + uBytesRange);
+
+		auto pvkBuffer = (VkBuffer)parent->get_native_handle();
+		ASH_PROCESS_ERROR_EXIT(pvkBuffer);
+
+		if (ci.view_type == AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV)
+		{
+			ASH_PROCESS_ERROR_EXIT((bufferDesc.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY));
+		}
+
+		if (ci.format != ASH_FORMAT_UNDEFINED)
+		{
+			// Image Buffer
+			const AshTextureFormatInfo* textureFormatInfo = &get_vk_texture_format_info(ci.format);
+
+			createInfo.buffer = pvkBuffer;
+			createInfo.format = textureFormatInfo->vkFormat;
+			createInfo.offset = ci.uByteOffset;
+			createInfo.range = uBytesRange;
+
+			/*
+			offset and range must comply with VkPhysicalDeviceLimits::minTexelBufferOffsetAlignment
+			*/
+
+			{
+				bool              bColorAttach = false;
+				bool              bDepth = false;
+				bool              bStencil = false;
+				uint32_t          uBytesStride = 4;
+				AshFormat eTextureFormat = vk_format_to_ash(textureFormatInfo->vkFormat);
+				get_texture_format_from_target_format(eTextureFormat, bColorAttach, bDepth, bStencil, uBytesStride);
+				auto limitElements = VulkanContext::get_device_properties().limits.maxTexelBufferElements;
+				if ((createInfo.range / std::max<uint32_t>(uBytesStride, 1)) > limitElements)
+				{
+					ASH_PROCESS_ERROR_EXIT(false);
+				}
+			}
+
+			auto vkResult = vkCreateBufferView(VulkanContext::get_vulkan_device(), &createInfo, nullptr, &vkBufferView);
+			ASH_PROCESS_ERROR_EXIT(vkResult == VK_SUCCESS);
+
+			m_createInfo = createInfo;
+		}
+		parentBuffer = parent;
+
+		m_ViewCreation = ci;
+		m_ViewCreation.uByteRange = uBytesRange;
+
+		ASH_SAFE_EXECUTE_END(bResult);
+	}
+	VulkanBufferView::~VulkanBufferView()
+	{
+		if (immediate_deletion)
+		{
+			if (vkBufferView != VK_NULL_HANDLE)
+			{
+				vkDestroyBufferView(VulkanContext::get_vulkan_device(), vkBufferView, VulkanContext::get_vulkan_allocation_callbacks());
+			}
+		}
+		else
+		{
+			auto handle = this->vkBufferView;
+			if (handle != VK_NULL_HANDLE)
+			{
+
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {
+					vkDestroyBufferView(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
+			}
+		}
+		parentBuffer.reset();
+	}
+	auto VulkanBufferView::get_native_handle() -> void*
+	{
+		return vkBufferView;
+	}
+	auto VulkanBufferView::get_name() -> const char*
+	{
+		return nullptr;
+	}
+	auto VulkanBufferView::get_parent_buffer() -> std::shared_ptr<Buffer>
+	{
+		return parentBuffer.lock();
+	}
+	auto VulkanBufferView::get_view_type() -> AshResourceViewType
+	{
+		return m_ViewCreation.view_type;
+	}
+	auto VulkanBufferView::get_view_format() -> AshFormat
+	{
+		return m_ViewCreation.format;
+	}
+	auto VulkanBufferView::get_view_desc() -> const BufferViewCreation&
+	{
+		return m_ViewCreation;
 	}
 }

@@ -6,8 +6,10 @@ namespace RHI
 
 	struct ShaderCreation
 	{
-		std::vector<uint32_t> binCode;
-		size_t codeSize = 0;
+		const char* pBaseShaderPath = nullptr;
+		const char* pUserShaderPath = nullptr;
+		const char* pShaderDef = nullptr;
+		const char* pShaderMacro = nullptr;
 		AshShaderStageFlagBits	type = AshShaderStageFlagBits::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
 	};
 	class Shader : public RHIResource

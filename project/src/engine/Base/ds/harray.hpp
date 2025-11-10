@@ -13,21 +13,21 @@ namespace AshEngine
         Array();
         ~Array();
 
-        auto                        init(Allocator* allocator, uint32_t initial_capacity, uint32_t initial_size = 0) -> HS_Result;
-        auto                        shutdown() -> HS_Result;
+        auto                        init(Allocator* allocator, uint32_t initial_capacity, uint32_t initial_size = 0) -> bool;
+        auto                        shutdown() -> bool;
 
-        auto                        push_back(const T& element) -> HS_Result;
+        auto                        push_back(const T& element) -> bool;
         auto push_use() -> T&;                 // Grow the size and return T to be filled.
 
-        auto                        pop() -> HS_Result;
-        auto                        delete_swap(uint32_t index) -> HS_Result;
+        auto                        pop() -> bool;
+        auto                        delete_swap(uint32_t index) -> bool;
 
         T& operator[](uint32_t index);
         const T& operator[](uint32_t index) const;
 
-        auto                        clear() -> HS_Result;
-        auto                        set_size(uint32_t new_size) -> HS_Result;
-        auto                        set_capacity(uint32_t new_capacity) -> HS_Result;
+        auto                        clear() -> bool;
+        auto                        set_size(uint32_t new_size) -> bool;
+        auto                        set_capacity(uint32_t new_capacity) -> bool;
 
         T& back();
         const T& back() const;
@@ -45,7 +45,7 @@ namespace AshEngine
         uint32_t                         m_uSize = 0;       // Occupied size
         uint32_t                         m_uCapacity = 0;   // Allocated capacity
     private:
-        auto                        grow(uint32_t new_capacity) -> HS_Result;
+        auto                        grow(uint32_t new_capacity) -> bool;
 
     public:
         Allocator* m_pAllocator = nullptr;
@@ -89,12 +89,12 @@ namespace AshEngine
     }
 
     template<typename T>
-    inline auto Array<T>::init(Allocator* allocator_, uint32_t initial_capacity, uint32_t initial_size)->HS_Result {
+    inline auto Array<T>::init(Allocator* allocator_, uint32_t initial_capacity, uint32_t initial_size)->bool {
         m_pData = nullptr;
         m_uSize = initial_size;
         m_uCapacity = 0;
         m_pAllocator = allocator_;
-        HS_Result ret = HS_OK;
+        bool ret = true;
         if (initial_capacity > 0) {
             ret = grow(initial_capacity);
         }
@@ -114,7 +114,7 @@ namespace AshEngine
     }
 
     template<typename T>
-    inline auto Array<T>::shutdown() -> HS_Result {
+    inline auto Array<T>::shutdown() -> bool {
         if (m_pData) {
 			if constexpr (!std::is_trivially_destructible<T>::value) {
 				for (uint32_t i = 0; i < m_uSize; ++i) {
@@ -125,12 +125,12 @@ namespace AshEngine
         }
         m_pData = nullptr;
         m_uSize = m_uCapacity = 0;
-        return HS_OK;
+        return true;
     }
 
     template<typename T>
-    inline auto Array<T>::push_back(const T& element) -> HS_Result {
-        HS_Result ret = HS_OK;
+    inline auto Array<T>::push_back(const T& element) -> bool {
+        bool ret = true;
         if (m_uSize >= m_uCapacity) {
             ret = grow(m_uCapacity + 1);
             HS_PROCESS_AND_LOG_RESULT(ret);
@@ -145,12 +145,12 @@ namespace AshEngine
         }
        
         
-        return HS_OK;
+        return true;
     }
     // push and return back
     template<typename T>
     inline auto Array<T>::push_use() -> T&{
-        HS_Result ret = HS_OK;
+        bool ret = true;
 
         if (m_uSize >= m_uCapacity) {
             ret = grow(m_uCapacity + 1);
@@ -166,24 +166,24 @@ namespace AshEngine
     }
 
     template<typename T>
-    inline auto Array<T>::pop() ->HS_Result{
+    inline auto Array<T>::pop() ->bool{
         H_ASSERT(m_uSize > 0);
         --m_uSize;
 		if constexpr (!std::is_trivially_destructible<T>::value) {
 			m_pData[m_uSize].~T();
 		}
-        return HS_OK;
+        return true;
     }
 
     //no order 
     template<typename T>
-    inline auto Array<T>::delete_swap(uint32_t index) -> HS_Result {
+    inline auto Array<T>::delete_swap(uint32_t index) -> bool {
         H_ASSERT(m_uSize > 0 && index < m_uSize);
 		if constexpr (!std::is_trivially_destructible<T>::value) {
 			m_pData[index].~T();
 		}
 		new (&m_pData[index]) T(std::move(m_pData[--m_uSize])); // Move last element to the deleted slot
-        return HS_OK;
+        return true;
     }
 
     template<typename T>
@@ -199,20 +199,20 @@ namespace AshEngine
     }
 
     template<typename T>
-    inline auto Array<T>::clear() -> HS_Result{
+    inline auto Array<T>::clear() -> bool{
 		if constexpr (!std::is_trivially_destructible<T>::value) {
 			for (uint32_t i = 0; i < m_uSize; ++i) {
 				m_pData[i].~T();
 			}
 		}
         m_uSize = 0;
-        return HS_OK;
+        return true;
     }
 
 
     template<typename T>
-    inline auto Array<T>::set_size(uint32_t new_size) -> HS_Result {
-        HS_Result ret = HS_OK;
+    inline auto Array<T>::set_size(uint32_t new_size) -> bool {
+        bool ret = true;
 
         if (new_size > m_uCapacity) {
             ret = grow(new_size);
@@ -234,8 +234,8 @@ namespace AshEngine
     }
 
     template<typename T>
-    inline auto Array<T>::set_capacity(uint32_t new_capacity) -> HS_Result {
-        HS_Result ret = HS_OK;
+    inline auto Array<T>::set_capacity(uint32_t new_capacity) -> bool {
+        bool ret = true;
 
         if (new_capacity > m_uCapacity) {
             ret = grow(new_capacity);
@@ -245,8 +245,8 @@ namespace AshEngine
     }
 
     template<typename T>
-    inline auto Array<T>::grow(uint32_t new_capacity) ->HS_Result{
-        HS_Result ret = HS_OK;
+    inline auto Array<T>::grow(uint32_t new_capacity) ->bool{
+        bool ret = true;
 
         if (new_capacity <= (m_uCapacity * 1.5f)) {
             new_capacity = m_uCapacity * 1.5f;
@@ -341,13 +341,13 @@ namespace AshEngine
     template<typename T>
     Array<T>* NewArray()
     {
-        HS_Result result;
+        bool result;
         Array<T>* ptr = nullptr;
         ptr = Ash_New(nullptr, Array<T>);
         H_ASSERT(ptr);
         result = ptr->init(&(MemoryService::instance()->get_system_allocator()),0,0);
         HS_PROCESS_AND_LOG_RESULT(result);
-        H_ASSERT(result == HS_OK);
+        H_ASSERT(result == true);
         return ptr
     };
 };

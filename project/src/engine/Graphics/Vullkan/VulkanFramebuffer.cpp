@@ -17,13 +17,13 @@ namespace RHI
 		auto count = ci.colorAttachments.size();
 		for (size_t i = 0; i < count; i++)
 		{
-			attachments.push_back((VkImageView)ci.colorAttachments[i]->get_default_render_target_view()->get_native_handle());
+			attachments.push_back((VkImageView)ci.colorAttachments[i]->get_default_rtv()->get_native_handle());
 			colorAttachements.push_back(ci.colorAttachments[i]);
 			colorClearColors.push_back(AshColorValue());
 		}
 		if (ci.depthStencilAttachment != nullptr)
 		{
-			attachments.push_back((VkImageView)ci.depthStencilAttachment->get_default_render_target_view()->get_native_handle());
+			attachments.push_back((VkImageView)ci.depthStencilAttachment->get_default_rtv()->get_native_handle());
 			depthStencilAttachment = ci.depthStencilAttachment;
 		}
 		shadingRateAttachment = ci.shadingRateAttachment;

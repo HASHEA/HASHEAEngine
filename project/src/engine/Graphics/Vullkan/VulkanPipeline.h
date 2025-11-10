@@ -8,7 +8,7 @@ namespace RHI
 	public:
 		VulkanPipeline(const PipelineCreation& ci);
 		~VulkanPipeline();
-
+	
 	private:
 		const char*						name				= nullptr;
 		VkPipeline                      vk_pipeline			= VK_NULL_HANDLE;

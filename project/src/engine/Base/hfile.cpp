@@ -261,12 +261,12 @@ namespace AshEngine
 		getcwd(directory->path, k_max_path);
 #endif // _WIN64
 	}
-	auto directory_change(const char* path) -> HS_Result
+	auto directory_change(const char* path) -> bool
 	{
 #if defined(_WIN64)
 		if (!SetCurrentDirectoryA(path)) {
 			HLogInfo("Cannot change current directory to {}\n", path);
-			return HS_FAIL;
+			return false;
 		}
 		
 #else
@@ -276,9 +276,9 @@ namespace AshEngine
 
 		}
 #endif // _WIN64
-		return HS_OK;
+		return true;
 	}
-	auto file_open_directory(const char* path, Directory* outDirectory) -> HS_Result
+	auto file_open_directory(const char* path, Directory* outDirectory) -> bool
 	{
 		// Open file trying to conver to full path instead of relative.
 		// If an error occurs, just copy the name.
@@ -304,28 +304,28 @@ namespace AshEngine
 		}
 		else {
 			HLogWarning("Could not open directory {}\n", outDirectory->path);
-			return HS_FAIL;
+			return false;
 		}
 #else
 		H_ASSERTLOG(false, "Platform Not implemented");
 		return HS_FAIL;
 #endif
-		return HS_OK;
+		return true;
 	}
-	auto file_close_directory(Directory* directory) -> HS_Result
+	auto file_close_directory(Directory* directory) -> bool
 	{
 #if defined(_WIN64)
 		if (directory->os_handle) {
 			if (!FindClose(directory->os_handle))
 			{
 				HLogWarning("Failed to Close Directory!");
-				return HS_FAIL;
+				return false;
 			}
 		}
 #else
 		H_ASSERTLOG(false, "Not implemented");
 #endif
-		return HS_OK;
+		return true;
 	}
 	auto file_parent_directory(Directory* directory) -> void
 	{
@@ -349,8 +349,8 @@ namespace AshEngine
 				new_directory.path[index] = 0;
 			}
 
-			HS_Result ret = file_open_directory(new_directory.path, &new_directory);
-			if (HS_CHECK_FAILED(ret))
+			bool ret = file_open_directory(new_directory.path, &new_directory);
+			if (!ret)
 			{
 				HLogError("Failed to open directory : {}", new_directory.path);
 				return;
@@ -365,7 +365,7 @@ namespace AshEngine
 #endif
 		}
 	}
-	auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> HS_Result
+	auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> bool
 	{
 		// Remove the last '*' from the path. It will be re-added by the file_open.
 		if (string_ends_with_char(directory->path, '*')) {
@@ -373,13 +373,13 @@ namespace AshEngine
 		}
 
 		strcat(directory->path, subDirectoryName);
-		HS_Result ret = file_open_directory(directory->path, directory);
-		if (HS_CHECK_FAILED(ret))
+		bool ret = file_open_directory(directory->path, directory);
+		if (!ret)
 		{
 			HLogError("Failed to open directory : {}", directory->path);
-			return HS_FAIL;
+			return false;
 		}
-		return HS_OK;
+		return true;
 	}
 	auto file_find_files_in_path(const char* filePattern, StringArray& files) -> void
 	{

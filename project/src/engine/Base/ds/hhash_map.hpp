@@ -65,7 +65,7 @@ namespace AshEngine
 		FlatHashMapIterator find(const K& key);
 	
 		template <typename K1, typename V1>
-		auto insert(K1&& key, V1&& value) -> std::enable_if_t<std::is_same_v<std::decay_t<K>, std::decay_t<K1>> && (std::is_base_of_v<std::decay_t<V>, std::decay_t<V1>> || std::is_same_v<std::decay_t<V>, std::decay_t<V1>>), HS_Result>
+		auto insert(K1&& key, V1&& value) -> std::enable_if_t<std::is_same_v<std::decay_t<K>, std::decay_t<K1>> && (std::is_base_of_v<std::decay_t<V>, std::decay_t<V1>> || std::is_same_v<std::decay_t<V>, std::decay_t<V1>>), bool>
 		{
 			const FoundResult find_result = _find_or_prepare_insert(key);
 			if (find_result.bFreeIndex) {
@@ -76,13 +76,13 @@ namespace AshEngine
 			else {
 				// Replace existing value
 				HLogError("insert existed key");
-				return HS_FAIL;
+				return false;
 			}
-			return HS_OK;
+			return true;
 		}
 
 		template <typename K1, typename V1>
-		auto emplace(K1&& key, V1&& value) -> std::enable_if_t<std::is_same_v<std::decay_t<K>, std::decay_t<K1>> && (std::is_base_of_v<std::decay_t<V>, std::decay_t<V1>> || std::is_same_v<std::decay_t<V>, std::decay_t<V1>>), HS_Result>
+		auto emplace(K1&& key, V1&& value) -> std::enable_if_t<std::is_same_v<std::decay_t<K>, std::decay_t<K1>> && (std::is_base_of_v<std::decay_t<V>, std::decay_t<V1>> || std::is_same_v<std::decay_t<V>, std::decay_t<V1>>), bool>
 		{
 			const FoundResult find_result = _find_or_prepare_insert(key);
 			if (find_result.bFreeIndex) {
@@ -91,7 +91,7 @@ namespace AshEngine
 			else {
 				slots_[find_result.index].value = std::forward<V1>(value);
 			}
-			return HS_OK; 
+			return true; 
 		}
 
 		auto remove(const K& key) -> uint32_t;

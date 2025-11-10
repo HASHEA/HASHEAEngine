@@ -286,8 +286,8 @@ namespace AshEngine
 		m_uCurrentSize += (uint32_t)length + 1; // null termination
 		strcpy(m_pData + string_index, string);
 		// Update hash map
-		HS_Result ret = string2Index->insert(hashed_string, string_index);
-		if (HS_CHECK_FAILED(ret))
+		bool ret = string2Index->insert(hashed_string, string_index);
+		if (!ret)
 		{
 			HLogError("insert failed at {0} {1}, index : {2}",__FILE__,__LINE__, string_index);
 		}

@@ -63,13 +63,13 @@ project "Engine"
 		"meshoptimizer"
 	}
 
-	local source_dir = "%{wks.location}/_BUILD/"..outputdir.."/bin/target/Engine/"
-	local dest_dir = distdir
-	postbuildcommands {
+	-- local source_dir = "%{wks.location}/_BUILD/"..outputdir.."/bin/target/Engine/"
+	-- local dest_dir = distdir
+	-- postbuildcommands {
 
-        "if not exist \""..dest_dir.."\" mkdir \""..dest_dir.."\"",
-        "robocopy \""..source_dir.."\" \""..dest_dir.."\" Engine.dll Engine.pdb /NFL /NDL /NJH /NJS >nul || exit 0"
-    }
+    --     "if not exist \""..dest_dir.."\" mkdir \""..dest_dir.."\"",
+    --     "robocopy \""..source_dir.."\" \""..dest_dir.."\" Engine.dll Engine.pdb /NFL /NDL /NJH /NJS >nul || exit 0"
+    -- }
 
 	filter {"system:windows", "configurations:Debug"}
 		system "Windows"
@@ -113,8 +113,15 @@ project "Engine"
 			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Tools-optd.lib",
 			thirdparty.."/glslang/debug/windows-x64/lib/OSDependentd.lib",
 
-		}						  
-
+		}	
+		dest_dir = "%{wks.location}/product/bin64"	
+		debugcommand "%{wks.location}/product/bin64/Debug/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Debug"			  
+		postbuildcommands
+		{
+			("{MKDIR %{wks.location}/product/bin64/Debug"),
+			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Debug")
+		} 
 	filter {"system:windows","configurations:Release"}
 		system "Windows"
 		systemversion "latest"
@@ -144,8 +151,14 @@ project "Engine"
 			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools.lib",
 			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools-opt.lib",
 			thirdparty.."/glslang/release/windows-x64/lib/OSDependent.lib",
-
 		}	
+		debugcommand "%{wks.location}/product/bin64/Release/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Release"
+		postbuildcommands
+		{
+			("{MKDIR %{wks.location}/product/bin64/Release"),
+			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Release")
+		} 
 		
 		
 

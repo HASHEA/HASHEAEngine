@@ -4,26 +4,22 @@
 #include "VulkanSampler.h"
 namespace RHI
 {
-
+	
 	VulkanTexture::VulkanTexture(const TextureCreation& ci)
 	{
-		name = ci.name;
-		width = ci.width;
-		height = ci.height;
-		depth = ci.depth;
-		mipmaps = ci.mip_level_count;
-		format = ci.format;
-		type = ci.type;
+		m_sCreation = ci;
+		m_uAspectFlags = 0;
 		cube = false;
-		layerCount = ci.array_layer_count;
 		if (ci.type == AshImageType::Ash_TextureCube || ci.type == AshImageType::Ash_Texture_Cube_Array)
 		{
 			cube = true;
 		}
-		sparse = (ci.flags & AshTextureFlags::Sparse_mask) == AshTextureFlags::Sparse_mask;
+		sparse = (ci.flags & AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE) == AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE;
+		VkImageUsageFlags texUsageFlags = ash_resource_state_to_vk_image_layout(ci.initial_state);
+		texUsageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		//// Create the image
 		VkImageCreateInfo vkImageCI = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-		vkImageCI.format = ash_format_to_vk(ci.format);
+		vkImageCI.format = get_vk_texture_format_info(ci.format).vkFormat;
 		vkImageCI.flags = (cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0) | (sparse ? (VK_IMAGE_CREATE_SPARSE_RESIDENCY_BIT | VK_IMAGE_CREATE_SPARSE_BINDING_BIT) : 0);
 		vkImageCI.imageType = ash_image_type_to_vk(ci.type);
 		vkImageCI.extent.width = ci.width;
@@ -33,11 +29,25 @@ namespace RHI
 		vkImageCI.arrayLayers = ci.array_layer_count;
 		vkImageCI.samples = VK_SAMPLE_COUNT_1_BIT;
 		vkImageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
-		vkImageCI.usage = get_image_usage_vulkan(ci);
+		vkImageCI.usage = texUsageFlags;
 		vkImageCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		vkImageCI.initialLayout = ash_resource_state_to_vk_image_layout(ci.initial_state) ;
 		VmaAllocationCreateInfo memory_info{};
-		memory_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+		switch (ci.memoryType)
+		{
+		case AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY:
+			memory_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+			break;
+		case AshResourceAccessType::ASH_RESOURCE_ACCESS_READ:
+			memory_info.usage = VMA_MEMORY_USAGE_GPU_TO_CPU;
+			break;
+		case AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE:
+			memory_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+			break;
+		default:
+			memory_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+			break;
+		}
 		HLogInfo("creating texture : {} ...", ci.name);
 		if (ci.alias == nullptr)
 		{
@@ -63,7 +73,10 @@ namespace RHI
 			
 		}
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE, (uint64_t)vkImage, ci.name);
+		m_ResourceLayoutTracker = VulkanResourceTracker(AshResourceState::Unknown);
 		state = ci.initial_state;
+		m_uAspectFlags = get_aspect_flags_from_format(ci.format);
+
 	}
 
 	VulkanTexture::~VulkanTexture()
@@ -71,11 +84,21 @@ namespace RHI
 		
 		if (immediate_deletion || swapchain_texture)
 		{	
-			HLogInfo("deleting texture : {} ...", name);
-			if (defaultVulkanTextureView != nullptr)
+			HLogInfo("deleting texture : {} ...", m_sCreation.name);
+			if (defaultRTV != nullptr)
 			{
-				defaultVulkanTextureView->immediate_deletion = true;
-				defaultVulkanTextureView.reset();
+				defaultRTV->immediate_deletion = true;
+				defaultRTV.reset();
+			}
+			if (defaultSRV != nullptr)
+			{
+				defaultSRV->immediate_deletion = true;
+				defaultSRV.reset();
+			}
+			if (defaultUAV != nullptr)
+			{
+				defaultUAV->immediate_deletion = true;
+				defaultUAV.reset();
 			}
 			if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
 			{
@@ -104,16 +127,24 @@ namespace RHI
 		}
 		else
 		{
-			if (defaultVulkanTextureView != nullptr)
+			if (defaultRTV != nullptr)
 			{
-				defaultVulkanTextureView.reset();
+				defaultRTV.reset();
+			}
+			if (defaultSRV != nullptr)
+			{
+				defaultSRV.reset();
+			}
+			if (defaultUAV != nullptr)
+			{
+				defaultUAV.reset();
 			}
 			//push deletor into deletion queue
 			auto handle = this->vkImage;
 			bool isAlias = this->aliasTexture == nullptr;
 			bool isSparse = sparse;
 			auto alloc = vmaAllocation;
-			auto sname = name;
+			auto sname = m_sCreation.name;
 			if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
 			{
 				VulkanContext::get_current_frame_deletion_queue().emplace([handle,isAlias, isSparse, alloc, sname]() {
@@ -148,14 +179,7 @@ namespace RHI
 
 	auto VulkanTexture::init() -> void
 	{
-		//create a default view
-		TextureViewCreation tvc{};
-		tvc.sub_resource.mip_level_count = mipmaps;
-		tvc.sub_resource.array_layer_count = layerCount;
-		tvc.name = name;
-		tvc.view_type = ash_image_type_to_image_view_type(type);
-		tvc.format = format;
-		defaultVulkanTextureView = Ash_New_Shared<VulkanTextureView>(tvc, shared_from_this());
+		
 	}
 
 	auto VulkanTexture::get_native_handle() -> void*
@@ -168,19 +192,52 @@ namespace RHI
 		return aliasTexture;
 	}
 
-	auto VulkanTexture::get_default_render_target_view() -> std::shared_ptr<TextureView>
+	auto VulkanTexture::get_default_rtv() -> std::shared_ptr<TextureView>
 	{
-		return defaultVulkanTextureView;
+		if (!defaultRTV && (m_sCreation.uUsageFlags & ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT))
+		{
+			TextureViewCreation tvc{};
+			tvc.sub_resource.uMipCount = m_sCreation.mip_level_count;
+			tvc.sub_resource.uArrayCount = m_sCreation.array_layer_count;
+			tvc.name = m_sCreation.name;
+			tvc.view_dim = ash_image_type_to_image_view_type(m_sCreation.type);
+			tvc.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_RTV;
+			tvc.format = m_sCreation.format;
+			defaultRTV = Ash_New_Shared<VulkanTextureView>(tvc, shared_from_this());
+		}
+		return defaultRTV;
 	}
 
-	auto VulkanTexture::get_default_shader_resource_view() -> std::shared_ptr<TextureView>
+	auto VulkanTexture::get_default_srv() -> std::shared_ptr<TextureView>
 	{
-		return defaultVulkanTextureView;
+		if (!defaultSRV && (m_sCreation.uUsageFlags & ASH_TEXTURE_USAGE_SAMPLED_BIT))
+		{
+			TextureViewCreation tvc{};
+			tvc.sub_resource.uMipCount = m_sCreation.mip_level_count;
+			tvc.sub_resource.uArrayCount = m_sCreation.array_layer_count;
+			tvc.name = m_sCreation.name;
+			tvc.view_dim = ash_image_type_to_image_view_type(m_sCreation.type);
+			tvc.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV;
+			tvc.format = m_sCreation.format;
+			defaultSRV = Ash_New_Shared<VulkanTextureView>(tvc, shared_from_this());
+		}
+		return defaultSRV;
 	}
 
-	auto VulkanTexture::get_default_unordered_access_view() -> std::shared_ptr<TextureView>
+	auto VulkanTexture::get_default_uav() -> std::shared_ptr<TextureView>
 	{
-		return defaultVulkanTextureView;
+		if (!defaultUAV && (m_sCreation.uUsageFlags & ASH_TEXTURE_USAGE_STORAGE_BIT))
+		{
+			TextureViewCreation tvc{};
+			tvc.sub_resource.uMipCount = m_sCreation.mip_level_count;
+			tvc.sub_resource.uArrayCount = m_sCreation.array_layer_count;
+			tvc.name = m_sCreation.name;
+			tvc.view_dim = ash_image_type_to_image_view_type(m_sCreation.type);
+			tvc.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV;
+			tvc.format = m_sCreation.format;
+			defaultUAV = Ash_New_Shared<VulkanTextureView>(tvc, shared_from_this());
+		}
+		return defaultUAV;
 	}
 
 	auto VulkanTexture::is_cube_map() -> bool
@@ -195,47 +252,47 @@ namespace RHI
 
 	auto VulkanTexture::get_format() -> AshFormat
 	{
-		return format;
+		return m_sCreation.format;
 	}
 
 	auto VulkanTexture::is_render_target() -> bool
 	{
-		return state == ASH_RESOURCE_STATE_RENDER_TARGET;
+		return state == AshResourceState::RTV;
 	}
 
 	auto VulkanTexture::get_mip_maps_count() -> uint8_t
 	{
-		return mipmaps;
+		return m_sCreation.mip_level_count;
 	}
 
 	auto VulkanTexture::get_layer_count() -> uint16_t
 	{
-		return layerCount;
+		return m_sCreation.array_layer_count;
 	}
 
 	auto VulkanTexture::get_depth() -> uint16_t
 	{
-		return depth;
+		return m_sCreation.depth;
 	}
 
 	auto VulkanTexture::get_width() -> uint16_t
 	{
-		return width;
+		return m_sCreation.width;
 	}
 
 	auto VulkanTexture::get_height() -> uint16_t
 	{
-		return height;
+		return m_sCreation.height;
 	}
 
 	auto VulkanTexture::get_name() -> const char*
 	{
-		return name;
+		return m_sCreation.name;
 	}
 
 	auto VulkanTexture::get_type() -> AshImageType
 	{
-		return type;
+		return m_sCreation.type;
 	}
 
 	auto VulkanTexture::get_resource_state() -> AshResourceState
@@ -247,32 +304,39 @@ namespace RHI
 	{
 		this->state = _state;
 	}
-
-	auto VulkanTexture::get_desciption(TextureDescription& desc) -> void 
+	//fit
+	auto VulkanTexture::resolve_subresource_range(const AshSubresourceRange& range) const -> AshSubresourceRange
 	{
-		desc.native_handle = vkImage;
-		desc.name = name;
-		desc.width = width;
-		desc.height = height;
-		desc.depth = depth;
-		desc.mipmaps = mipmaps;
-		desc.render_target = state == ASH_RESOURCE_STATE_RENDER_TARGET;
-		desc.compute_access = compute_access;
-		desc.format = format;
-		desc.type = type;
+		AshSubresourceRange resolved = range;
+
+		resolved.uBaseMipLevel = std::min<uint32_t>(resolved.uBaseMipLevel, m_sCreation.mip_level_count - 1);
+		resolved.uMipCount = std::min<uint32_t>(resolved.uMipCount, m_sCreation.mip_level_count - resolved.uBaseMipLevel);
+
+		uint32_t arrayLayerCount = m_sCreation.array_layer_count;
+		resolved.uBaseArraySlice = std::min<uint32_t>(resolved.uBaseArraySlice, arrayLayerCount - 1);
+		resolved.uArrayCount = std::min<uint32_t>(resolved.uArrayCount, arrayLayerCount - resolved.uBaseArraySlice);
+
+		return resolved;
+	}
+
+	auto VulkanTexture::get_resource_tracker() -> VulkanResourceTracker&
+	{
+		return m_ResourceLayoutTracker;
+	}
+
+	auto VulkanTexture::get_desciption() const -> const TextureCreation&
+	{
+		return m_sCreation;
 	}
 	
 	/********************* vulkan texture view *****************************/
 	VulkanTextureView::VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> _parentTexture)
 	{
 		HLogInfo("creating texture view : {} ...", ci.name);
-		name = ci.name;
-		parentTexture = std::weak_ptr<Texture>(_parentTexture);
-		viewType = ci.view_type;
-		viewFormat = ci.format;
+		m_sInfo = ci;
 		VkImageViewCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
 		info.image = (VkImage)_parentTexture->get_native_handle();
-		info.format = ash_format_to_vk(ci.format);
+		info.format = get_vk_texture_format_info(ci.format).vkFormat;
 		if (TextureFormat::has_depth_or_stencil(info.format)) {
 
 			info.subresourceRange.aspectMask = TextureFormat::has_depth(info.format) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0;
@@ -280,11 +344,11 @@ namespace RHI
 		else {
 			info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		}
-		info.viewType = ash_image_view_type_to_vk(ci.view_type);
-		info.subresourceRange.baseMipLevel = ci.sub_resource.mip_base_level;
-		info.subresourceRange.levelCount = ci.sub_resource.mip_level_count;
-		info.subresourceRange.baseArrayLayer = ci.sub_resource.array_base_layer;
-		info.subresourceRange.layerCount = ci.sub_resource.array_layer_count;
+		info.viewType = ash_image_view_dim_to_vk(ci.view_dim);
+		info.subresourceRange.baseMipLevel = ci.sub_resource.uBaseMipLevel;
+		info.subresourceRange.levelCount = ci.sub_resource.uMipCount;
+		info.subresourceRange.baseArrayLayer = ci.sub_resource.uBaseArraySlice;
+		info.subresourceRange.layerCount = ci.sub_resource.uBaseArraySlice;
 		VK_CHECK_RESULT(vkCreateImageView(VulkanContext::get_vulkan_device(), &info, VulkanContext::get_vulkan_allocation_callbacks(), &vkImageView));
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)vkImageView, ci.name);
 
@@ -296,14 +360,14 @@ namespace RHI
 		{
 			if (vkImageView != VK_NULL_HANDLE)
 			{
-				HLogInfo("deleting view : {} ...", name);
+				HLogInfo("deleting view : {} ...", m_sInfo.name);
 				vkDestroyImageView(VulkanContext::get_vulkan_device(), vkImageView, VulkanContext::get_vulkan_allocation_callbacks());
 			}
 		}	
 		else
 		{
 			auto handle = this->vkImageView;
-			auto sname = name;
+			auto sname = m_sInfo.name;
 			if (handle != VK_NULL_HANDLE)
 			{
 				
@@ -312,6 +376,7 @@ namespace RHI
 					vkDestroyImageView(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
 			}		
 		}
+		parentTexture.reset();
 	}
 
 	auto VulkanTextureView::create(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<VulkanTextureView>
@@ -329,19 +394,29 @@ namespace RHI
 		return vkImageView;
 	}
 
-	auto VulkanTextureView::get_view_type() -> AshImageViewType
+	auto VulkanTextureView::get_view_dim() -> AshResourceViewDimension
 	{
-		return viewType;
+		return m_sInfo.view_dim;
 	}
 
 	auto VulkanTextureView::get_view_format() -> AshFormat
 	{
-		return viewFormat;
+		return m_sInfo.format;
+	}
+
+	auto VulkanTextureView::get_view_type() -> AshResourceViewType
+	{
+		return m_sInfo.view_type;
+	}
+
+	auto VulkanTextureView::get_subresource_range() -> const AshSubresourceRange&
+	{
+		return m_sInfo.sub_resource;
 	}
 
 	auto VulkanTextureView::get_name() -> const char*
 	{
-		return name;
+		return m_sInfo.name;
 	}
 	
 }

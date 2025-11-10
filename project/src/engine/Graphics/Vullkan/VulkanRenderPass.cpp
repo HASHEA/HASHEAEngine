@@ -58,7 +58,7 @@ namespace RHI
 				break;
 			}
 			VkAttachmentDescription& color_attachment = color_attachments[c];
-			color_attachment.format = ash_format_to_vk(ci.color_formats[c]);
+			color_attachment.format = get_vk_texture_format_info(ci.color_formats[c]).vkFormat;
 			color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
 			color_attachment.loadOp = color_op;
 			color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -76,7 +76,7 @@ namespace RHI
 		VkAttachmentReference depth_attachment_ref{};
 		if (ci.depth_stencil_format != VK_FORMAT_UNDEFINED)
 		{
-			depth_attachment.format = ash_format_to_vk(ci.depth_stencil_format);
+			depth_attachment.format = get_vk_texture_format_info(ci.depth_stencil_format).vkFormat;
 			depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
 			depth_attachment.loadOp = depth_op;
 			depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -104,7 +104,7 @@ namespace RHI
 		subpass.pDepthStencilAttachment = nullptr;
 
 		uint32_t depth_stencil_count = 0;
-		if (ash_format_to_vk(ci.depth_stencil_format) != VK_FORMAT_UNDEFINED) {
+		if (get_vk_texture_format_info(ci.depth_stencil_format).vkFormat != VK_FORMAT_UNDEFINED) {
 			attachments[subpass.colorAttachmentCount] = depth_attachment;
 			subpass.pDepthStencilAttachment = &depth_attachment_ref;
 			depth_stencil_count = 1;

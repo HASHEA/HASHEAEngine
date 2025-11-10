@@ -31,7 +31,7 @@ namespace RHI
 	struct GpuTimeQueryTree;
 	struct GpuPipelineStatistics;
 	struct GPUTimeQueriesManager;
-	
+	class VulkanStagingBufferPool;
 	//count = numThread * numFrame
 	struct FramePool
 	{
@@ -54,27 +54,55 @@ namespace RHI
 	class VulkanContext : public GraphicsContext
 	{
 	public:
-		auto init(void* config) -> HS_Result override;
-		auto shutdown() -> HS_Result override;
+		auto init(void* config) -> bool override;
+		auto shutdown() -> bool override;
 		VulkanContext() { instance = this; }
 		~VulkanContext() {}
 	public:
+		inline const auto get_absolute_frame_count_internal() const 
+		{
+			return absoluteFrame;
+		}
+		inline static const auto get_absolute_frame_count()
+		{
+			return instance->get_absolute_frame_count_internal();
+		}
+
+		inline const auto get_device_memory_properties_internal() const
+		{
+			return vulkanPhysicalDeviceMemoryProperties;
+		}
+
+		inline static const auto get_device_memory_properties() 
+		{
+			return instance->get_device_memory_properties_internal();
+		}
+
+		inline const auto get_device_properties_internal() const 
+		{
+			return vulkanPhysicalDeviceProperties;
+		}
+		inline static const auto get_device_properties()
+		{
+			return instance->get_device_properties_internal();
+		}
+
 		auto get_device_extension_enabled(DeviceExtensionAndFeaturesFlags extension) -> bool
 		{
 			return featureSwitchFlags.get_bit(extension);
 		}
 
-		inline const auto get_vulkan_device_internal()
+		inline const auto get_vulkan_device_internal() const
 		{
 			return vulkanDevice;
 		}
 
-		inline const auto get_vulkan_physical_device_internal()
+		inline const auto get_vulkan_physical_device_internal() const
 		{
 			return vulkanPhysicalDevice;
 		}
 
-		inline const auto get_vulkan_instance_internal()
+		inline const auto get_vulkan_instance_internal() const
 		{
 			return vulkanInstance;
 		}
@@ -234,15 +262,25 @@ namespace RHI
 		{
 			return instance->vulkanPipelineCache;
 		}
-	
+		auto vma_create_buffer(VkDeviceSize uBufferSize, VkBufferUsageFlags eBufferUsage, VmaMemoryUsage eMemUsage, VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, void** ppData = nullptr) -> bool;
+		auto vma_destroy_buffer(VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation) -> bool;
+		auto vma_destroy_buffer_v(VkBuffer pVkBuffer, VmaAllocation pVMAllocation) -> bool;
+		auto vma_create_image(const VkImageCreateInfo& sImgCreateInfo, VmaMemoryUsage eMemUsage, VkImage& pVkImage, VmaAllocation& pVMAllocation) -> bool;
+		auto vma_destroy_image(VkImage pVkImage, VmaAllocation pVMAllocation) -> bool;
+		auto vma_map_memory(VmaAllocation pVMAllocation, void** ppData) const -> bool;
+		auto vma_unmap_memory(VmaAllocation pVMAllocation) const -> bool;
+		auto vma_flush_allocation(VmaAllocation pVMAllocation, VkDeviceSize uOffset = 0, VkDeviceSize uSize = VK_WHOLE_SIZE) const -> bool;
+		inline auto get_vulkan_staging_buffer_pool() const
+		{
+			return vulkanStagingBufferPool;
+		}
+		
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
-		auto map_buffer(const MapBufferParameters& params) -> void* override;
-		auto unmap_buffer(const MapBufferParameters& params) -> void override;
-		auto update_buffer_data(const MapBufferParameters& params, void* data) -> void override;
+		auto create_buffer_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
-		auto create_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
+		auto create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
 		auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> override;
 		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
@@ -260,32 +298,37 @@ namespace RHI
 	private:
 		//manually in the calling order
 		//instance
-		auto _create_instance(const Array<const char*>& window_extensions)->HS_Result;
-		auto _shutdown_instance() -> HS_Result;
+		auto _create_instance(const Array<const char*>& window_extensions)->bool;
+		auto _shutdown_instance() -> bool;
 #ifdef VULKAN_DEBUG_REPORT
 		//debug msg util
-		auto _create_debug_util_messenger_ext()->HS_Result;
-		auto _shutdown_debug_util_messenger_ext() -> HS_Result;
+		auto _create_debug_util_messenger_ext()->bool;
+		auto _shutdown_debug_util_messenger_ext() -> bool;
 #endif
 		//device
-		auto _select_and_prepare_physical_device()->HS_Result;
-		auto _filter_device_selectable_extension()->HS_Result;
-		auto _query_supported_props()->HS_Result;
-		auto _query_supported_features()->HS_Result;
-		auto _create_device()->HS_Result;
-		auto _shutdown_device() -> HS_Result;
+		auto _select_and_prepare_physical_device()->bool;
+		auto _filter_device_selectable_extension()->bool;
+		auto _query_device_memory_props() -> bool;
+		auto _query_supported_props()->bool;
+		auto _query_supported_features()->bool;
+		auto _create_device()->bool;
+		auto _shutdown_device() -> bool;
 		//vma
-		auto _create_vulkan_memory_allocator()->HS_Result;
-		auto _shutdown_vulkan_memory_allocator() -> HS_Result;
+		auto _create_vulkan_memory_allocator()->bool;
+		auto _shutdown_vulkan_memory_allocator() -> bool;
 		//descriptor pool
-		auto _create_descriptor_pool(const GpuDescriptorPoolCreation& dspci)->HS_Result;
-		auto _shutdown_descriptor_pool() -> HS_Result;
+		auto _create_descriptor_pool(const GpuDescriptorPoolCreation& dspci)->bool;
+		auto _shutdown_descriptor_pool() -> bool;
 		//frame data
-		auto _create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->HS_Result;
-		auto _shutdown_frame_pool_and_data() -> HS_Result;
+		auto _create_frame_pool_and_data(uint16_t numThread, uint16_t numQueryTimes)->bool;
+		auto _shutdown_frame_pool_and_data() -> bool;
 		//pipeline / or other cache
-		auto _load_cache() -> HS_Result;
-		auto _unload_cache() -> HS_Result;
+		auto _load_cache() -> bool;
+		auto _unload_cache() -> bool;
+		//staging buffer poo
+
+		auto _create_staging_buffer_pool() -> bool;
+		auto _shutdown_staging_buffer_pool() -> bool;
 	private:
 		BitSetFixed<4> featureSwitchFlags{};
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};
@@ -301,6 +344,7 @@ namespace RHI
 		VkDebugUtilsMessengerEXT								vulkanDebugUtilMessenger				= VK_NULL_HANDLE;
 		VkPhysicalDevice										vulkanPhysicalDevice					= VK_NULL_HANDLE;
 		VkPhysicalDeviceProperties								vulkanPhysicalDeviceProperties{};
+		VkPhysicalDeviceMemoryProperties						vulkanPhysicalDeviceMemoryProperties{};
 		VkDevice												vulkanDevice							= VK_NULL_HANDLE;
 		VkQueue													vulkanMainQueue							= VK_NULL_HANDLE;
 		VkQueue													vulkanComputeQueue						= VK_NULL_HANDLE;
@@ -323,6 +367,7 @@ namespace RHI
 		VulkanFence*											vulkanImmediateFence					= nullptr; //stuck here and wait
 		Array<std::shared_ptr<Sampler>>							samplerCache;
 		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
+		VulkanStagingBufferPool*								vulkanStagingBufferPool					 = nullptr;
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
@@ -338,11 +383,12 @@ private:
 		uint32_t								previousFrame = UINT32_MAX;
 		uint64_t								absoluteFrame = UINT64_MAX;
 		uint16_t								num_thread = 0;
+		uint32_t								local_gpu_memory_gb = 0;
 private:
 		static VulkanContext* instance;
-
-
 		friend class VulkanSwapchain;
+
+
 
 
 };

@@ -9,7 +9,7 @@ namespace RHI
 
 		uint16_t                        num_render_targets							= 0;
 		AshFormat                       depth_stencil_format						= ASH_FORMAT_UNDEFINED;
-		AshResourceState                depth_stencil_final_layout					= AshResourceState::ASH_RESOURCE_STATE_UNDEFINED;
+		AshResourceState                depth_stencil_final_layout					= AshResourceState::Unknown;
 		uint32_t                        shading_rate_image_index					= UINT32_MAX;
 		AshLoadOption					depth_operation								= AshLoadOption::ASH_LOAD_DONT_CARE;
 		AshLoadOption					stencil_operation							= AshLoadOption::ASH_LOAD_DONT_CARE;
