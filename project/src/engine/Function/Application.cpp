@@ -6,9 +6,8 @@
 #include "Base/hmemory.h"
 #include "Base/hfile.h"
 #include "Base/window/Window.h"
-#include "Base/hcachedefine.h"
+#include "Base/hcache.h"
 #include "Graphics/RHICommon.h"
-#include "Function/MaterialSystem/ShaderManager.h"
 namespace AshEngine
 {
 	Application* Application::app = nullptr;
@@ -34,7 +33,6 @@ namespace AshEngine
 		graphicsContext->init(&gfxConfig);
 
 		/*shader manager*/
-		ShaderManager::init();
 		
 		/*swapchain*/
 		std::vector<RHI::AshColorSpace> colorSpace = { RHI::ASH_COLOR_SPACE_SRGB_NONLINEAR_KHR };
@@ -58,7 +56,6 @@ namespace AshEngine
 	{
 		swapChain->shutdown();
 		Ash_Delete(nullptr, swapChain);
-		ShaderManager::shutdown();
 		graphicsContext->shutdown();
 		Ash_Delete(nullptr,graphicsContext);
 		window->shutdown();
@@ -69,10 +66,10 @@ namespace AshEngine
 	auto Application::start() -> void
 	{
 		//test shader load
-		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-		ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
+		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
 
 		while (!window->should_close())
 		{

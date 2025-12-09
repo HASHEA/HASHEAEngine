@@ -1,0 +1,1 @@
+#error Your OS is not supported

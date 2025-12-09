@@ -32,7 +32,7 @@ namespace AshEngine
 		return index == (strlen(s) - 1);
 	}
 
-	auto file_read_binary(const char* fileName , Allocator* allocator, size_t* size) -> char*
+	auto file_read_binary(const char* fileName , size_t& size, Allocator* allocator) -> char*
 	{
 		char* outData = 0;
 		FILE* file = fopen(fileName, "rb");
@@ -42,15 +42,12 @@ namespace AshEngine
 			outData = (char*)Ash_Alloc(allocator,fileSize + 1 ,1);
 			fread(outData, 1,fileSize,file);
 			outData[fileSize] = 0;
-			if (size)
-			{
-				*size = fileSize;
-			}
+			size = fileSize;
 			fclose(file);
 		}
 		return outData;
 	}
-	auto file_read_text(const char* fileName , Allocator* allocator, size_t* size) -> char*
+	auto file_read_text(const char* fileName , size_t& size, Allocator* allocator) -> char*
 	{
 		char* text = 0;
 		FILE* file = fopen(fileName, "r");
@@ -60,10 +57,7 @@ namespace AshEngine
 			text = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
 			size_t bytes_read = fread(text, 1, fileSize, file);
 			text[bytes_read] = 0;
-			if (size)
-			{
-				*size = fileSize;
-			}
+			size = fileSize;
 			fclose(file);
 		}
 		return text;

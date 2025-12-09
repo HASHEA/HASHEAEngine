@@ -2,7 +2,7 @@
 #include "VulkanHelper.hpp"
 namespace RHI
 {
-	AshTextureFormatInfo g_ashTextureFormatInfo[] =
+	const AshTextureFormatInfo g_ashTextureFormatInfo[] =
 	{
 		// enumTextureFormat			    uBytesPerBlock	uWidthPerBlock  uHeightPerBlock uHasAlpha	VkFormat								VkFormat(SRGB)
 		{ASH_FORMAT_UNDEFINED,                      0u,  0u, 0u, 0u, VK_FORMAT_UNDEFINED,                 VK_FORMAT_UNDEFINED               },
@@ -79,7 +79,7 @@ namespace RHI
 	};
 
 
-	static const AshTextureFormatInfo& get_vk_texture_format_info(AshFormat eFormat)
+	const AshTextureFormatInfo& get_vk_texture_format_info(AshFormat eFormat)
 	{
 		H_ASSERT(eFormat < ASH_FORMAT_COUNT);
 		H_ASSERT(g_ashTextureFormatInfo[eFormat].format == eFormat);

@@ -1,5 +1,7 @@
 #pragma once
 #include <stdint.h>
+#include <type_traits>
+#include <string_view>
 #define BIT(x) (1 << x)
 #define NO_COPYABLE(TypeName) \
 	TypeName(const TypeName &) = delete;   \
@@ -30,4 +32,18 @@
 
 #define ASH_PROCESS_SUCCESS(condition) if(condition) break;
 #define ASH_PROCESS_ERROR(condition) if(!condition) {__bInnerError = true; break;}
+
+namespace ASH_HASH
+{
+	template <class T, class Hasher = std::hash<T>>
+	inline void hash_combine(std::size_t& seed, const T& v, Hasher hasher = Hasher{}) {
+		seed ^= hasher(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+	}
+	struct CStringHash {
+		std::size_t operator()(const char* str) const {
+			if (!str) return 0;
+			return std::hash<std::string_view>{}(std::string_view(str));
+		}
+	};
+}
 

@@ -35,7 +35,6 @@ namespace RHI {
         CommandBuffer* cmds = nullptr;
         uint32_t cmdCount = 0;
     };
-
     class GraphicsContext
     {
     public:
@@ -60,9 +59,5 @@ namespace RHI {
         virtual auto get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer* = 0;
         virtual auto submit(const SubmitInfo& info) -> void = 0;
         virtual auto submit_immediately(const SubmitInfo& info) -> void = 0;
-
-
-    protected:
-      
     };
 };

@@ -2,16 +2,11 @@
 #include "VulkanPipeline.h"
 #include "VulkanDescriptorSet.h"
 #include "Base/hmemory.h"
-#include "Base/hcachedefine.h"
+#include "Base/hcache.h"
 #include "Base/hfile.h"
 #include "Base/hstring.h"
 namespace RHI
 {
-	auto VulkanShader::create(const ShaderCreation& ci) -> std::shared_ptr<VulkanShader>
-	{
-		return Ash_New_Shared<VulkanShader>(ci);
-	}
-
 	auto VulkanShader::get_native_handle() -> void*
 	{
 		return nullptr;
@@ -23,6 +18,7 @@ namespace RHI
 	}
 	VulkanShader::VulkanShader(const ShaderCreation& ci)
 	{
+		ShaderCode _code = Shader::load_from_file(ci);
 
 	}
 	VulkanShader::~VulkanShader()

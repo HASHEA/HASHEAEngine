@@ -58,6 +58,11 @@ namespace AshEngine
 		{
 			K key;
 			V value;
+			template <typename K1, typename V1>
+			KeyValue(K1&& _key, V1&& _value)
+				: key(std::forward<K1>(_key)), 
+				value(std::forward<V1>(_value)) {
+			}
 		};
 		auto init(Allocator* allocator_, uint64_t initial_capacity) -> void;
 		auto shutdown()->void;
@@ -70,8 +75,7 @@ namespace AshEngine
 			const FoundResult find_result = _find_or_prepare_insert(key);
 			if (find_result.bFreeIndex) {
 				// Construct in place
-				slots_[find_result.index].key = std::forward<K1>(key);
-				slots_[find_result.index].value = std::forward<V1>(value);
+				new (&slots_[find_result.index]) KeyValue(std::forward<K1>(key), std::forward<V1>(value));
 			}
 			else {
 				// Replace existing value

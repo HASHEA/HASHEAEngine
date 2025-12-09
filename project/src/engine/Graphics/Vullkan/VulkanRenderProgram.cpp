@@ -4,6 +4,7 @@
 #include "VulkanShader.h"
 namespace RHI
 {
+	static IRenderProgramBinder default{};
 	bool VulkanGraphicsRenderProgram::create(std::shared_ptr<Shader>, const GraphicProgramCreateDesc& desc)
 	{
 		//do nothing but collect shader reflection info and create descriptorsets
@@ -19,7 +20,7 @@ namespace RHI
 	}
 	IRenderProgramBinder& VulkanGraphicsRenderProgram::begin_bind()
 	{
-		// TODO: 在此处插入 return 语句
+		return default;
 	}
 	bool VulkanGraphicsRenderProgram::end_bind()
 	{

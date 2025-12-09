@@ -153,6 +153,7 @@ namespace RHI
 		m_uMaxSet = maxSet;
 		m_uAllocedSet = 0;
 		m_bBindlessPool = false;
+		return *this;
 	}
 	bool VulkanDescriptorPool::end()
 	{
@@ -286,6 +287,7 @@ namespace RHI
 		descriptorPoolSize.type = get_descriptor_type(descriptorType);
 		descriptorPoolSize.descriptorCount = uCount * m_uMaxSet;
 		m_vecDescriptorPoolSize.push_back(descriptorPoolSize);
+		return *this;
 	}
 	VulkanDescriptorSet::VulkanDescriptorSet(VkDescriptorSetLayout layout, std::shared_ptr<VulkanDescriptorPoolContainer> poolContainer)
 	{
@@ -354,7 +356,7 @@ namespace RHI
 		//upper logic must avoid nullptr
 		H_ASSERT(srv);
 		auto& desc = srv->get_view_desc();
-		m_vecCachedBufferInfo.emplace_back((VkBuffer)srv->get_native_handle(), desc.uByteOffset, desc.uByteRange);
+		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{ (VkBuffer)srv->get_native_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange});
 		//transition
 		{
 			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(srv->get_parent_buffer());
@@ -375,7 +377,7 @@ namespace RHI
 	{
 		//upper logic must avoid nullptr
 		H_ASSERT(srv);
-		m_vecCachedImageAndSamplerInfo.emplace_back(nullptr, (VkImageView)srv->get_native_handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{(VkSampler)VK_NULL_HANDLE, (VkImageView)srv->get_native_handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
 		//transition
 		{
 			auto pVulkanTexture = std::static_pointer_cast<VulkanTexture>(srv->get_parent_texture());
@@ -398,7 +400,7 @@ namespace RHI
 		//upper logic must avoid nullptr
 		H_ASSERT(uav);
 		auto& desc = uav->get_view_desc();
-		m_vecCachedBufferInfo.emplace_back((VkBuffer)uav->get_native_handle(), desc.uByteOffset, desc.uByteRange);
+		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{(VkBuffer)uav->get_native_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange});
 		//transition
 		{
 			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(uav->get_parent_buffer());
@@ -419,7 +421,7 @@ namespace RHI
 	{
 		//upper logic must avoid nullptr
 		H_ASSERT(uav);
-		m_vecCachedImageAndSamplerInfo.emplace_back(nullptr, (VkImageView)uav->get_native_handle(), VK_IMAGE_LAYOUT_GENERAL);
+		m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{(VkSampler)VK_NULL_HANDLE, (VkImageView)uav->get_native_handle(), VK_IMAGE_LAYOUT_GENERAL});
 		//transition
 		{
 			auto pVulkanTexture = std::static_pointer_cast<VulkanTexture>(uav->get_parent_texture());
@@ -442,7 +444,7 @@ namespace RHI
 		//upper logic must avoid nullptr
 		H_ASSERT(cbv);
 		auto& desc = cbv->get_view_desc();
-		m_vecCachedBufferInfo.emplace_back((VkBuffer)cbv->get_native_handle(), desc.uByteOffset, desc.uByteRange);
+		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{(VkBuffer)cbv->get_native_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange});
 		//transition
 		{
 			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(cbv->get_parent_buffer());
@@ -463,7 +465,7 @@ namespace RHI
 	{
 		//upper logic must avoid nullptr
 		H_ASSERT(smaplerView);
-		m_vecCachedImageAndSamplerInfo.emplace_back((VkSampler)smaplerView->get_native_handle(), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{(VkSampler)smaplerView->get_native_handle(), (VkImageView)VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
 		//record write info
 		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
 		descriptorWrite.dstSet = m_pVkDescriptorSet;

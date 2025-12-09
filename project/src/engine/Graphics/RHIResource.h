@@ -169,6 +169,92 @@ namespace RHI
 		AshResourceState eDSTAccess = AshResourceState::Unknown;
 
 		AshBarrier() = default;
+		AshBarrier(const AshBarrier& other)
+			: AshSubresourceRange(other) 
+			, eType(other.eType)
+			, eSRCAccess(other.eSRCAccess)
+			, eDSTAccess(other.eDSTAccess)
+		{
+			if (other.eType == EType::Texture) {
+				new (&pTexture) std::shared_ptr<Texture>(other.pTexture);
+			}
+			else if (other.eType == EType::Buffer) {
+				new (&pBuffer) std::shared_ptr<Buffer>(other.pBuffer);
+			}
+		}
+
+		AshBarrier& operator=(const AshBarrier& other) {
+			if (this == &other) {
+				return *this; 
+			}
+
+			if (this->eType == EType::Texture) {
+				this->pTexture.~shared_ptr<Texture>();
+			}
+			else if (this->eType == EType::Buffer) {
+				this->pBuffer.~shared_ptr<Buffer>();
+			}
+
+			AshSubresourceRange::operator=(other);
+			this->eType = other.eType;
+			this->eSRCAccess = other.eSRCAccess;
+			this->eDSTAccess = other.eDSTAccess;
+
+			if (other.eType == EType::Texture) {
+				new (&this->pTexture) std::shared_ptr<Texture>(other.pTexture);
+			}
+			else if (other.eType == EType::Buffer) {
+				new (&this->pBuffer) std::shared_ptr<Buffer>(other.pBuffer);
+			}
+
+			return *this;
+		}
+
+		AshBarrier(AshBarrier&& other) noexcept
+			: AshSubresourceRange(std::move(other))
+			, eType(other.eType)
+			, eSRCAccess(other.eSRCAccess)
+			, eDSTAccess(other.eDSTAccess)
+		{
+			if (other.eType == EType::Texture) {
+				new (&pTexture) std::shared_ptr<Texture>(std::move(other.pTexture));
+			}
+			else if (other.eType == EType::Buffer) {
+				new (&pBuffer) std::shared_ptr<Buffer>(std::move(other.pBuffer));
+			}
+
+			other.eType = EType::Unknown;
+		}
+
+		AshBarrier& operator=(AshBarrier&& other) noexcept {
+			if (this == &other) {
+				return *this;
+			}
+
+			if (this->eType == EType::Texture) {
+				this->pTexture.~shared_ptr<Texture>();
+			}
+			else if (this->eType == EType::Buffer) {
+				this->pBuffer.~shared_ptr<Buffer>();
+			}
+
+			AshSubresourceRange::operator=(std::move(other));
+			this->eType = other.eType;
+			this->eSRCAccess = other.eSRCAccess;
+			this->eDSTAccess = other.eDSTAccess;
+
+			if (other.eType == EType::Texture) {
+				new (&this->pTexture) std::shared_ptr<Texture>(std::move(other.pTexture));
+			}
+			else if (other.eType == EType::Buffer) {
+				new (&this->pBuffer) std::shared_ptr<Buffer>(std::move(other.pBuffer));
+			}
+
+			other.eType = EType::Unknown;
+
+			return *this;
+		}
+
 		~AshBarrier()
 		{
 			if (eType == EType::Texture) {

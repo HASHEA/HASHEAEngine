@@ -17,7 +17,8 @@ namespace RHI
 		VkFormat          vkFormat;
 		VkFormat          vkFormatSRGB;
 	};
-	static const AshTextureFormatInfo& get_vk_texture_format_info(AshFormat eFormat);
+	extern const AshTextureFormatInfo g_ashTextureFormatInfo[];
+	const AshTextureFormatInfo& get_vk_texture_format_info(AshFormat eFormat);
 	inline auto vulkan_error_string(VkResult errorCode) -> const char*
 	{
 		switch (errorCode)

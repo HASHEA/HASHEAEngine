@@ -368,7 +368,8 @@ namespace RHI
 		Array<std::shared_ptr<Sampler>>							samplerCache;
 		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
 		VulkanStagingBufferPool*								vulkanStagingBufferPool					 = nullptr;
-private:
+		FlatHashMap<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;
+	private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
 private:

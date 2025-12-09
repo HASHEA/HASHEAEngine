@@ -36,10 +36,10 @@ namespace AshEngine
     struct Allocator;
     struct StringArray;
 
-    auto file_read_binary(const char* fileName , Allocator* allocator, size_t* size) -> char*;
-    auto file_read_text(const char* fileName , Allocator* allocator, size_t* size) -> char*;
-    auto file_read_binary(const char* fileName , Allocator* allocator) -> FileReadResult;
-    auto file_read_text(const char* fileName , Allocator* allocator) -> FileReadResult;
+    auto file_read_binary(const char* fileName , size_t& size, Allocator* allocator = nullptr) -> char*;
+    auto file_read_text(const char* fileName ,  size_t& size, Allocator* allocator = nullptr) -> char*;
+    auto file_read_binary(const char* fileName , Allocator* allocator = nullptr) -> FileReadResult;
+    auto file_read_text(const char* fileName , Allocator* allocator = nullptr) -> FileReadResult;
     auto file_write_binary(const char* fileName, void* memory, size_t size) -> void;
     auto file_exists(const char* fileName) -> bool;
     auto file_open(const char* fileName, const char* mode, FileHandle* file) -> void;
@@ -72,4 +72,5 @@ namespace AshEngine
         ~ScopedFile();
         FileHandle file;
     };
+    
 };

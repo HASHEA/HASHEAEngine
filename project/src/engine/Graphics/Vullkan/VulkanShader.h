@@ -31,7 +31,6 @@ namespace RHI
 	public:
 		VulkanShader(const ShaderCreation& ci);
 		~VulkanShader();
-		static auto create(const ShaderCreation& ci) -> std::shared_ptr<VulkanShader>;
 	private:
 		char name[k_max_name_length];
 		char path[k_max_path_length];

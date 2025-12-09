@@ -50,6 +50,7 @@ project "Engine"
 		thirdparty .. "/tlsf",
 		thirdparty .. "/wyhash",
 		thirdparty .. "/thsvs",
+		thirdparty .. "/dxc/inc",
 		assetsdir,
 	}
 	links
@@ -112,7 +113,7 @@ project "Engine"
 			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Toolsd.lib",
 			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Tools-optd.lib",
 			thirdparty.."/glslang/debug/windows-x64/lib/OSDependentd.lib",
-
+			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}	
 		dest_dir = "%{wks.location}/product/bin64"	
 		debugcommand "%{wks.location}/product/bin64/Debug/Editor.exe"
@@ -151,6 +152,7 @@ project "Engine"
 			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools.lib",
 			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools-opt.lib",
 			thirdparty.."/glslang/release/windows-x64/lib/OSDependent.lib",
+			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}	
 		debugcommand "%{wks.location}/product/bin64/Release/Editor.exe"
 		debugdir "%{wks.location}/product/bin64/Release"

@@ -1,7 +1,7 @@
 #pragma once
 #include "Base/hlog.h"
 #include "Base/hfile.h"
-#include "Base/hcachedefine.h"
+#include "Base/hcache.h"
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
@@ -1202,7 +1202,14 @@ namespace RHI
 
 	auto VulkanContext::create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> 
 	{
-		return VulkanShader::create(ci);
+		uint64_t uHashCode = get_shader_hash(ci);
+		std::shared_ptr<Shader> pRetShader = vulkanShaderPool.get(uHashCode);
+		if (!pRetShader)
+		{
+			pRetShader = Ash_New_Shared<VulkanShader>(ci);
+			vulkanShaderPool.emplace(uHashCode, pRetShader);
+		}
+		return pRetShader;
 	}
 
 	auto VulkanContext::get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>
