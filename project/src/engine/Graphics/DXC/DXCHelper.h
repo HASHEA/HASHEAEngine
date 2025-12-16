@@ -1,6 +1,47 @@
+#include <Windows.h>
+#include  <atlbase.h> 
+#include <atlcomcli.h>
 #include "dxcapi.h"
+#include "dxctools.h"
 #include "Base/hfile.h"
+#include <memory>
+#include <string>
 namespace RHI
 {
+	struct ShaderItem
+	{
+		const char* sourceShaderPath = nullptr;
+		const char* userShaderPath = nullptr;
+		const char* macroDefine = nullptr;
+		const char* entryPoint = nullptr;
+	};
+	struct ShaderFullTextResult
+	{
+		std::string resultShaderText;
+		std::string errorMsg;
+	};
+	class DXCIncludeHandler;
+	class AshDXCContext
+	{
+	public:
+		AshDXCContext() = default;
+		~AshDXCContext() = default;
+		bool init();
+		void uninit();
+	public:
+		bool preprocess_shader_file_to_full_text(ShaderItem const&  item, ShaderFullTextResult** result);
+		void create_compiler_for_target_platform();
+	private:
+		bool create_blob_from_text(const char* pText, IDxcBlobEncoding** ppBlob);
+		bool create_dxc_define_from_user_define(char const* userDefine, std::vector<DxcDefine>& dxcDefines);
+	public:
+		CComPtr<DXCIncludeHandler> get_default_includer();
+	private:
+		CComPtr<IDxcLibrary> m_pLibrary = nullptr;
+		CComPtr<IDxcUtils> m_pUtils = nullptr;
+		CComPtr<DXCIncludeHandler> m_pDefaultIncluder = nullptr;
+		CComPtr<IDxcRewriter> m_pRewriter = nullptr;
+		CComPtr<IDxcRewriter2> m_pRewriter2 = nullptr;
+	};
 	
 };

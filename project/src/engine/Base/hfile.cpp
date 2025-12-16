@@ -147,7 +147,7 @@ namespace AshEngine
 #if defined(_WIN64)
 	auto file_last_write_time(const char* filename) -> FileTime
 	{
-		FILETIME lastWriteTime = {};
+		ASHFILETIME lastWriteTime = {};
 
 		WIN32_FILE_ATTRIBUTE_DATA data{};
 		if (GetFileAttributesExA(filename, GetFileExInfoStandard, &data)) {

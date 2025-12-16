@@ -10,6 +10,7 @@ namespace RHI
 	}
 	DXCIncludeHandler::~DXCIncludeHandler()
 	{
+		Release();
 	}
 	HRESULT DXCIncludeHandler::LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource)
 	{
@@ -62,5 +63,22 @@ namespace RHI
 	void DXCIncludeHandler::set_include_root_path(const std::filesystem::path& path)
 	{
 		m_currentIncludeRootPath = path;
+	}
+	HRESULT __stdcall DXCIncludeHandler::QueryInterface(REFIID riid, void** ppvObject)
+	{
+		return DoBasicQueryInterface<IDxcIncludeHandler>(this, riid, ppvObject);
+	}
+	ULONG __stdcall DXCIncludeHandler::AddRef(void)
+	{
+		return static_cast<ULONG>(++m_dwRef);
+	}
+	ULONG __stdcall DXCIncludeHandler::Release(void)
+	{
+		ULONG result = static_cast<ULONG>(--m_dwRef);
+		if (result == 0)
+		{
+			delete this;
+		}
+		return result;
 	}
 };

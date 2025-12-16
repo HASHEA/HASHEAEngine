@@ -1,4 +1,4 @@
-﻿///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
 //                                                                           //
 // dxctools.h                                                                //
 // Copyright (C) Microsoft Corporation. All rights reserved.                 //
@@ -12,7 +12,7 @@
 #ifndef __DXC_TOOLS__
 #define __DXC_TOOLS__
 
-#include "dxcapi.h"
+#include "dxc/dxcapi.h"
 
 enum RewriterOptionMask {
   Default = 0,

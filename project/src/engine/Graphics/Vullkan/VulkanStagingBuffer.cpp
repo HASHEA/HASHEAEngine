@@ -2,6 +2,7 @@
 #include "VulkanContext.h"
 #include "VulkanCommandBuffer.h"
 #include <mutex>
+#include "Graphics/DXC/DXCHelper.h"
 constexpr uint32_t STAGING_BUFFER_POOL_DELAY_RELEASE_FRAME_COUNT = 16;
 namespace RHI
 {
@@ -108,6 +109,7 @@ namespace RHI
 	{
 		return true;
 	}
+	
 	auto VulkanStagingBufferPool::alloc_buffer(uint32_t uByteWidth,  void** ppMappedData, bool bReadOperation) -> VulkanStagingBuffer::PACK_BUFFER_ITEM
 	{
 		VulkanStagingBuffer::PACK_BUFFER_ITEM retBufferItem{};

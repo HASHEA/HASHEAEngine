@@ -7,12 +7,12 @@ namespace AshEngine
 
 #if defined(_WIN64)
 
-    typedef struct __FILETIME {
+    typedef struct __ASHFILETIME {
         unsigned long       dwLowDateTime;
         unsigned long       dwHighDateTime;
-    } FILETIME, * PFILETIME, * LPFILETIME;
+    } ASHFILETIME, * ASHPFILETIME, * ASHLPFILETIME;
 
-    using FileTime = __FILETIME;
+    using FileTime = __ASHFILETIME;
 
 #endif
     using FileHandle = FILE*;
