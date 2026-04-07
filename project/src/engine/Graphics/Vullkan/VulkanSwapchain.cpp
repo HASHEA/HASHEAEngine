@@ -65,6 +65,8 @@ namespace RHI
 	{
 		SwapChainSupportDetails swapChainSupport{};
 		_query_swapchain_support(swapChainSupport);
+		swapchainExtents.width = config.width;
+		swapchainExtents.height = config.height;
 		preTransform = swapChainSupport.capabilities.currentTransform;
 		bool bFound = false;
 		uint32_t i = 0;
@@ -119,7 +121,8 @@ namespace RHI
 			presentMode = VK_PRESENT_MODE_FIFO_KHR;
 			HLogWarning("none of the required presentModes is supported! use the default presentmode : {} ! ", TYPE_TO_STRING(VK_PRESENT_MODE_FIFO_KHR));
 		}
-		H_ASSERTLOG(swapChainSupport.capabilities.maxImageCount >= swapchainBufferCount && swapChainSupport.capabilities.minImageCount <= swapchainBufferCount, "Unsupported Image Count:{}!", swapchainBufferCount);
+		H_ASSERTLOG((swapChainSupport.capabilities.maxImageCount == 0 || swapChainSupport.capabilities.maxImageCount >= swapchainBufferCount) &&
+			swapChainSupport.capabilities.minImageCount <= swapchainBufferCount, "Unsupported Image Count:{}!", swapchainBufferCount);
 		_recreate_swapchain();
 		return true;
 	}
@@ -161,7 +164,8 @@ namespace RHI
 	{
 		VkSurfaceCapabilitiesKHR surface_properties{};
 		VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VulkanContext::get_vulkan_physical_device(), surface, &surface_properties));	
-		if (surface_properties.currentExtent.width == swapchainExtents.width &&
+		if (swapChain != VK_NULL_HANDLE &&
+			surface_properties.currentExtent.width == swapchainExtents.width &&
 			surface_properties.currentExtent.height == swapchainExtents.height)
 		{
 			return;
@@ -177,7 +181,7 @@ namespace RHI
 		createInfo.imageColorSpace = surfaceFormat.colorSpace;
 		createInfo.imageExtent = swapchainExtents;
 		createInfo.imageArrayLayers = 1;
-		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		createInfo.queueFamilyIndexCount = 0; // Optional
 		createInfo.pQueueFamilyIndices = nullptr; // Optional
@@ -199,7 +203,15 @@ namespace RHI
 		vecVkImage.resize(imageCount);
 		swapChainImages.init(nullptr, imageCount, 0);
 		swapChainFramebuffer.init(nullptr, imageCount, 0);
+		swapChainRenderCompleteSemaphores.init(nullptr, imageCount, 0);
 		vkGetSwapchainImagesKHR(VulkanContext::get_vulkan_device(), swapChain, &imageCount, vecVkImage.data());
+		VkSemaphoreCreateInfo semaphoreInfo{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
+		for (uint32_t i = 0; i < imageCount; ++i)
+		{
+			VkSemaphore renderCompleteSemaphore = VK_NULL_HANDLE;
+			VK_CHECK_RESULT(vkCreateSemaphore(VulkanContext::get_vulkan_device(), &semaphoreInfo, VulkanContext::get_vulkan_allocation_callbacks(), &renderCompleteSemaphore));
+			swapChainRenderCompleteSemaphores.push_back(renderCompleteSemaphore);
+		}
 		//create render pass
 		RenderPassCreation rci{};
 		rci.set_name("swapchain render pass").add_attachment(vk_format_to_ash(surfaceFormat.format), AshResourceState::Present, AshLoadOption::ASH_LOAD_CLEAR);
@@ -213,11 +225,20 @@ namespace RHI
 			std::shared_ptr<VulkanTexture> texture = Ash_New_Shared<VulkanTexture>();
 			texture->m_sCreation.width = swapchainExtents.width;
 			texture->m_sCreation.height = swapchainExtents.height;
+			texture->m_sCreation.depth = 1;
+			texture->m_sCreation.array_layer_count = 1;
+			texture->m_sCreation.mip_level_count = 1;
+			texture->m_sCreation.type = Ash_Texture2D;
 			texture->aliasTexture = nullptr;
 			texture->m_sCreation.format = vk_format_to_ash(surfaceFormat.format);
+			texture->m_sCreation.uUsageFlags = ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | ASH_TEXTURE_USAGE_TRANSFER_DST_BIT | ASH_TEXTURE_USAGE_TRANSFER_SRC_BIT;
+			texture->m_sCreation.initial_state = AshResourceState::Unknown;
 			texture->m_sCreation.name = "swapchain buffer";
 			texture->swapchain_texture = true;
 			texture->vkImage = vecVkImage[i];
+			texture->state = AshResourceState::Unknown;
+			texture->m_ResourceLayoutTracker = VulkanResourceTracker(AshResourceState::Unknown);
+			texture->m_uAspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
 			swapChainImages.push_back(texture);
 			texture->init();
 			//create swapchain framebuffers
@@ -238,8 +259,18 @@ namespace RHI
 	auto VulkanSwapchain::_clean_swapchain(VkSwapchainKHR& _swapchain) ->bool
 	{
 		vkDeviceWaitIdle(VulkanContext::get_vulkan_device());
+		acquireImageIndex = UINT32_MAX;
+		VulkanContext::get()->vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		swapChainFramebuffer.shutdown();
 		swapChainImages.shutdown();
+		for (uint32_t i = 0; i < swapChainRenderCompleteSemaphores.size(); ++i)
+		{
+			if (swapChainRenderCompleteSemaphores[i] != VK_NULL_HANDLE)
+			{
+				vkDestroySemaphore(VulkanContext::get_vulkan_device(), swapChainRenderCompleteSemaphores[i], VulkanContext::get_vulkan_allocation_callbacks());
+			}
+		}
+		swapChainRenderCompleteSemaphores.shutdown();
 		swapchainRenderPass.reset();
 		if (_swapchain != VK_NULL_HANDLE)
 		{
@@ -268,6 +299,7 @@ namespace RHI
 			return;
 		}
 		VK_CHECK_RESULT(result);
+		VulkanContext::get()->vulkanPresentCompleteSemaphore = swapChainRenderCompleteSemaphores[acquireImageIndex];
 	}
 
 	auto VulkanSwapchain::get_swapchain_buffer_count() -> uint8_t
@@ -313,6 +345,7 @@ namespace RHI
 		{
 			return;
 		}
+		swapchainExtents = { i_width, i_height };
 		_recreate_swapchain();
 	}
 
@@ -324,7 +357,11 @@ namespace RHI
 		presentInfo.pImageIndices = &acquireImageIndex;
 		//TEST PERIOD
 		presentInfo.waitSemaphoreCount = 1;
-		presentInfo.pWaitSemaphores = &(VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore);
+		const VkSemaphore presentWaitSemaphore =
+			VulkanContext::get()->vulkanPresentCompleteSemaphore != VK_NULL_HANDLE ?
+			VulkanContext::get()->vulkanPresentCompleteSemaphore :
+			VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore;
+		presentInfo.pWaitSemaphores = &presentWaitSemaphore;
 		presentInfo.pResults = nullptr;
 		//TODO: deal the image layout problem
 		//if layout != present_src, do transition.
@@ -338,6 +375,8 @@ namespace RHI
 		}
 
 		VkResult result = vkQueuePresentKHR(VulkanContext::get_present_queue(), &presentInfo);
+		acquireImageIndex = UINT32_MAX;
+		VulkanContext::get()->vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
 		{
 			_recreate_swapchain();

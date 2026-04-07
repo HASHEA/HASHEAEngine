@@ -6,6 +6,13 @@ namespace RHI
 	VulkanRenderPass::VulkanRenderPass(const RenderPassCreation& ci)
 	{
 		name = ci.name;
+		colorLoadOptions.init(nullptr, ci.num_render_targets, ci.num_render_targets);
+		for (uint32_t i = 0; i < ci.num_render_targets; ++i)
+		{
+			colorLoadOptions.push_back(ci.color_operations[i]);
+		}
+		depthStencilLoadOption = ci.depth_operation;
+		depthStencilFormat = ci.depth_stencil_format;
 		VkAttachmentDescription color_attachments[8] = {};
 		VkAttachmentReference color_attachments_ref[8] = {};
 		VkAttachmentLoadOp depth_op, stencil_op;
@@ -62,7 +69,7 @@ namespace RHI
 			color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
 			color_attachment.loadOp = color_op;
 			color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-			color_attachment.stencilLoadOp = stencil_op;
+			color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 			color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 			color_attachment.initialLayout = color_initial;
 			color_attachment.finalLayout = ash_resource_state_to_vk_image_layout(ci.color_final_layouts[c]);
@@ -74,7 +81,7 @@ namespace RHI
 		// Depth attachment
 		VkAttachmentDescription depth_attachment{};
 		VkAttachmentReference depth_attachment_ref{};
-		if (ci.depth_stencil_format != VK_FORMAT_UNDEFINED)
+		if (ci.depth_stencil_format != ASH_FORMAT_UNDEFINED)
 		{
 			depth_attachment.format = get_vk_texture_format_info(ci.depth_stencil_format).vkFormat;
 			depth_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -139,6 +146,7 @@ namespace RHI
 	}
 	VulkanRenderPass::~VulkanRenderPass()
 	{
+		colorLoadOptions.shutdown();
 		if (immediate_deletion)
 		{
 			if (vkRenderPass != VK_NULL_HANDLE)

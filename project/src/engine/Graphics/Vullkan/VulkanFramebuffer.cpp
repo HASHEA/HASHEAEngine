@@ -41,7 +41,7 @@ namespace RHI
 			framebuffer_info.height = ci.height;
 			framebuffer_info.layers = ci.layers;
 			framebuffer_info.pAttachments = attachments.m_pData;
-			framebuffer_info.attachmentCount = count;
+			framebuffer_info.attachmentCount = attachments.size();
 			HLogInfo("creating frame buffer : {} ...", name);
 			VK_CHECK_RESULT(vkCreateFramebuffer(VulkanContext::get_vulkan_device(), &framebuffer_info, VulkanContext::get_vulkan_allocation_callbacks(), &vkFramebuffer));
 			VulkanContext::set_resource_name(VK_OBJECT_TYPE_FRAMEBUFFER, (uint64_t)vkFramebuffer, name);

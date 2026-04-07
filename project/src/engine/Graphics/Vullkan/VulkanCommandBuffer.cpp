@@ -231,6 +231,14 @@ namespace RHI
 			const uint32_t pool_index = pool_from_indices(frameIndex, i);
 			usedBuffers[pool_index] = 0;
 			usedSecondaryCommandBuffers[pool_index] = 0;
+			for (uint32_t bufferIndex = 0; bufferIndex < numCommandBuffersPerThread; ++bufferIndex)
+			{
+				commandBuffers[pool_index * numCommandBuffersPerThread + bufferIndex].set_state(AshCommandBufferState::ASH_Idle);
+			}
+			for (uint32_t bufferIndex = 0; bufferIndex < k_secondary_command_buffers_count; ++bufferIndex)
+			{
+				secondaryCommandBuffers[pool_index * k_secondary_command_buffers_count + bufferIndex].set_state(AshCommandBufferState::ASH_Idle);
+			}
 		}
 	}
 	//it's a out only get, u don't need to recycle it 
@@ -238,14 +246,19 @@ namespace RHI
 	{
 		auto poolIndex = pool_from_indices(frameIndex,threadIndex);
 		auto curCount = usedBuffers[poolIndex];
-		H_ASSERTLOG(curCount <= numCommandBuffersPerThread, "used commandbuffer count exceed max count per thread {0} > {1}", curCount,numCommandBuffersPerThread);
-		VulkanCommandBuffer* ret = &commandBuffers[frameIndex * numCommandBuffersPerThread + curCount];
+		H_ASSERTLOG(curCount < numCommandBuffersPerThread, "used commandbuffer count exceed max count per thread {0} >= {1}", curCount, numCommandBuffersPerThread);
+		VulkanCommandBuffer* ret = &commandBuffers[poolIndex * numCommandBuffersPerThread + curCount];
 		usedBuffers[poolIndex] = curCount + 1;
 		return ret;
 	}
 	auto VulkanCommandBufferManager::get_secondary_command_buffer(uint32_t frameIndex, uint32_t threadIndex) -> VulkanCommandBuffer*
 	{
-		return {};
+		auto poolIndex = pool_from_indices(frameIndex, threadIndex);
+		auto curCount = usedSecondaryCommandBuffers[poolIndex];
+		H_ASSERTLOG(curCount < k_secondary_command_buffers_count, "used secondary commandbuffer count exceed max count per thread {0} >= {1}", curCount, k_secondary_command_buffers_count);
+		VulkanCommandBuffer* ret = &secondaryCommandBuffers[poolIndex * k_secondary_command_buffers_count + curCount];
+		usedSecondaryCommandBuffers[poolIndex] = curCount + 1;
+		return ret;
 	}
 	uint32_t VulkanCommandBufferManager::pool_from_indices(uint32_t frame_index, uint32_t thread_index)
 	{
@@ -290,6 +303,7 @@ namespace RHI
 		if (vkCommandBuffer != VK_NULL_HANDLE)
 		{
 			vkFreeCommandBuffers(VulkanContext::get_vulkan_device(), vkCommandPool, 1, &vkCommandBuffer);
+			vkCommandBuffer = VK_NULL_HANDLE;
 		}
 		if (vk_descriptor_pool != VK_NULL_HANDLE)
 		{
@@ -301,20 +315,16 @@ namespace RHI
 	auto VulkanCommandBuffer::begin_record() -> void
 	{
 		H_ASSERTLOG(vkCommandBuffer != VK_NULL_HANDLE, "Fatal: try to access a invalid vkCommandBuffer !");
+		VK_CHECK_RESULT(vkResetDescriptorPool(VulkanContext::get_vulkan_device(), vk_descriptor_pool, 0));
+		currentBoundRenderPass = nullptr;
+		currentBoundFramebuffer = nullptr;
 		if (secondary)
 		{
-			/*VkCommandBufferInheritanceInfo inheritanceInfo{};
-			inheritanceInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
-			inheritanceInfo.subpass = 0;
-			inheritanceInfo.renderPass = *(VulkanRenderPass*)renderPass;
-			inheritanceInfo.framebuffer = *(VulkanFrameBuffer*)framebuffer;
 			VkCommandBufferBeginInfo beginCI{};
 			beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			beginCI.flags = VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT;
-			beginCI.pInheritanceInfo = &inheritanceInfo;
-
-			VK_CHECK_RESULT(vkBeginCommandBuffer(commandBuffer, &beginCI));
-			*/
+			beginCI.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+			beginCI.pInheritanceInfo = nullptr;
+			VK_CHECK_RESULT(vkBeginCommandBuffer(vkCommandBuffer, &beginCI));
 		}
 		else
 		{
@@ -688,7 +698,7 @@ namespace RHI
 
 						if (Mip == (uint32_t)-1 && Slice == (uint32_t)-1)
 						{
-							// ¶ÔTextureÕûÌå×öImageBarrier
+							// ï¿½ï¿½Textureï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ImageBarrier
 							pTexture->get_resource_tracker().set_all_resource_state(InDstAccess);
 
 							VkImageSubresourceRange AllSubresourceRange{};

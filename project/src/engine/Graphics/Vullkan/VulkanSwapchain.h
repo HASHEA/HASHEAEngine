@@ -61,6 +61,7 @@ namespace RHI
 		VkSwapchainKHR oldSwapChain = VK_NULL_HANDLE;
 		Array<std::shared_ptr<VulkanTexture>> swapChainImages;
 		Array<std::shared_ptr<VulkanFramebuffer>> swapChainFramebuffer;
+		Array<VkSemaphore> swapChainRenderCompleteSemaphores;
 		uint32_t acquireImageIndex = UINT32_MAX;
 		std::shared_ptr<VulkanRenderPass> swapchainRenderPass = nullptr;
 

@@ -139,99 +139,16 @@ namespace RHI
 
 	inline auto vk_format_to_ash(const VkFormat& format) -> AshFormat
 	{
-		AshFormat retFmt = ASH_FORMAT_R8G8B8A8_UNORM;
-		switch (format)
+		for (uint32_t i = 0; i < ASH_FORMAT_COUNT; ++i)
 		{
-		case VK_FORMAT_R8G8B8A8_UNORM:
-		{
-			retFmt = ASH_FORMAT_R8G8B8A8_UNORM;
+			const AshTextureFormatInfo& formatInfo = g_ashTextureFormatInfo[i];
+			if (formatInfo.vkFormat == format)
+			{
+				return formatInfo.format;
+			}
 		}
-		break;
-		case VK_FORMAT_B8G8R8A8_UNORM:
-		{
-			retFmt = ASH_FORMAT_B8G8R8A8_UNORM;
-		}
-		break;
-		case VK_FORMAT_R8_UNORM:
-		{
-			retFmt = ASH_FORMAT_R8_UNORM;
-		}
-		break;
-		case VK_FORMAT_R8G8_UNORM:
-		{
-			retFmt = ASH_FORMAT_R8G8_UNORM;
-		}
-		break;
-		case VK_FORMAT_B8G8R8_UNORM:
-		{
-			retFmt = ASH_FORMAT_B8G8R8_UNORM;
-		}
-		break;
-		case VK_FORMAT_R16_SFLOAT:
-		{
-			retFmt = ASH_FORMAT_R16_SFLOAT;
-		}
-		break;
-		case VK_FORMAT_R16_UINT:
-		{
-			retFmt = ASH_FORMAT_R16_UINT;
-		}
-		break;
-		case VK_FORMAT_R16G16_UINT:
-		{
-			retFmt = ASH_FORMAT_R16G16_UINT;
-		}
-		break;
-		case VK_FORMAT_R16G16B16A16_UNORM:
-		{
-			retFmt = ASH_FORMAT_R16G16B16A16_UNORM;
-		}
-		break;
-		case VK_FORMAT_R16G16B16A16_SFLOAT:
-		{
-			retFmt = ASH_FORMAT_R16G16B16A16_SFLOAT;
-		}
-		break;
-		case VK_FORMAT_D24_UNORM_S8_UINT:
-		{
-			retFmt = ASH_FORMAT_D24_UNORM_S8_UINT;
-		}
-		break;
-		case VK_FORMAT_D32_SFLOAT_S8_UINT:
-		{
-			retFmt = ASH_FORMAT_D32_SFLOAT_S8_UINT;
-		}
-		break;
-		case VK_FORMAT_D16_UNORM:
-		{
-			retFmt = ASH_FORMAT_D16_UNORM;
-		}
-		break;
-		case VK_FORMAT_D32_SFLOAT:
-		{
-			retFmt = ASH_FORMAT_D32_SFLOAT;
-		}
-		break;
-		case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
-		{
-			retFmt = ASH_FORMAT_A2R10G10B10_UNORM_PACK32;
-		}
-		break;
-
-		case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
-		{
-			retFmt = ASH_FORMAT_B10G11R11_UFLOAT_PACK32;
-		}
-		break;
-		case VK_FORMAT_R32_SFLOAT:
-		{
-			retFmt = ASH_FORMAT_R32_FLOAT;
-		}
-		break;
-		default:
-			break;
-		}
-		return retFmt;
+		HLogWarning("Unsupported VkFormat {} in vk_format_to_ash, fallback to ASH_FORMAT_R8G8B8A8_UNORM.", static_cast<int32_t>(format));
+		return ASH_FORMAT_R8G8B8A8_UNORM;
 	}
 	inline VkFormat get_texture_format_from_target_format(AshFormat srcfmt, bool& bColorAttach, bool& bDepth, bool& bStencil, uint32_t& bytesStride)
 	{

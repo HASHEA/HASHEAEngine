@@ -114,12 +114,14 @@ namespace RHI
 
 		inline auto get_frame_pool_internal(uint32_t index) -> const FramePool& const
 		{
-			return framePools[index % k_max_frames];
+			H_ASSERT(framePools.size() > 0);
+			return framePools[index % framePools.size()];
 		}
 
 		inline auto get_frame_pool_internal() -> const FramePool& const
 		{
-			return framePools[currentFrame];
+			H_ASSERT(framePools.size() > 0);
+			return framePools[(currentFrame % k_max_frames) * num_thread];
 		}
 
 		inline auto get_frame_data_internal() -> const FrameData& const
@@ -277,7 +279,7 @@ namespace RHI
 		
 	public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
-		auto create_buffer_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
+		auto create_buffer_view(const BufferViewCreation& ci, std::shared_ptr<Buffer> parentBuffer) -> std::shared_ptr<BufferView> override;
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
 		auto create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
@@ -330,7 +332,7 @@ namespace RHI
 		auto _create_staging_buffer_pool() -> bool;
 		auto _shutdown_staging_buffer_pool() -> bool;
 	private:
-		BitSetFixed<4> featureSwitchFlags{};
+		BitSetFixed<16> featureSwitchFlags{};
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipelineProperties{};
 		//Features
@@ -363,6 +365,7 @@ namespace RHI
 		VkSemaphore												vulkanGraphicsSemaphore					= VK_NULL_HANDLE;
 		VkSemaphore												vulkanBindSemaphore						= VK_NULL_HANDLE;
 		VkSemaphore												vulkanComputeSemaphore					= VK_NULL_HANDLE;
+		VkSemaphore												vulkanPresentCompleteSemaphore			= VK_NULL_HANDLE;
 		VulkanFence*											vulkanComputeFence						= nullptr;
 		VulkanFence*											vulkanImmediateFence					= nullptr; //stuck here and wait
 		Array<std::shared_ptr<Sampler>>							samplerCache;

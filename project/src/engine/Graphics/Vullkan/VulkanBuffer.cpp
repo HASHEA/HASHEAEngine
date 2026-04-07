@@ -95,6 +95,7 @@ namespace RHI
 		m_pName = ci.name;
 		m_sCreationInfo = ci;
 		m_bReady = false;
+		dynamic = !ci.force_static && (ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE) && has_any_flags(ci.usage_flags, k_dynamic_buffer_mask);
 		HLogInfo("creating buffer : {} ...", ci.name);
 		bool bHostCoherent = false;
 		VmaMemoryUsage        eMemUsage = VMA_MEMORY_USAGE_UNKNOWN;
@@ -147,12 +148,6 @@ namespace RHI
 			m_vkDeviceSize = sAllocInfo.size;
 			ASH_LOG_PROCESS_ERROR(m_vkDeviceSize > 0);
 		}
-		if (m_sCreationInfo.initial_data)
-		{
-			auto pCommandBuffer = VulkanContext::get()->get_command_buffer(0);
-			ASH_LOG_PROCESS_ERROR(pCommandBuffer);
-			pCommandBuffer->cmd_update_sub_resource(shared_from_this(), 0, m_sCreationInfo.size, m_sCreationInfo.initial_data);
-		}
 		if (m_bCoherent)
 		{
 			ASH_LOG_PROCESS_ERROR(bHostCoherent == m_bCoherent);
@@ -168,6 +163,10 @@ namespace RHI
 		}
 		m_bReady = true;
 		m_resourceTracker = VulkanResourceTracker(AshResourceState::Unknown);
+		if (m_sCreationInfo.initial_data)
+		{
+			ASH_LOG_PROCESS_ERROR(update(0, m_sCreationInfo.size, m_sCreationInfo.initial_data));
+		}
 		ASH_SAFE_EXECUTE_END(bResult);
 		if (!bResult)
 		{
@@ -179,6 +178,9 @@ namespace RHI
 
 	auto VulkanBuffer::destroy() -> void
 	{
+		defaultCBV.reset();
+		defaultSRV.reset();
+		defaultUAV.reset();
 		if (immediate_deletion)
 		{
 			VulkanContext::get()->vma_destroy_buffer(m_pVkBuffer, m_pVMAAllocation);
@@ -227,24 +229,81 @@ namespace RHI
 	}
 	auto VulkanBuffer::get_default_cbv() -> std::shared_ptr<BufferView>
 	{
-		return std::shared_ptr<BufferView>();
+		if (!defaultCBV)
+		{
+			BufferViewCreation ci{};
+			ci.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_CBV;
+			defaultCBV = Ash_New_Shared<VulkanBufferView>(ci, shared_from_this());
+		}
+		return defaultCBV;
 	}
 	auto VulkanBuffer::get_default_srv() -> std::shared_ptr<BufferView>
 	{
-		return std::shared_ptr<BufferView>();
+		if (!defaultSRV)
+		{
+			BufferViewCreation ci{};
+			ci.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV;
+			if (m_sCreationInfo.struct_byte_stride > 0)
+			{
+				ci.uStructureStride = m_sCreationInfo.struct_byte_stride;
+			}
+			defaultSRV = Ash_New_Shared<VulkanBufferView>(ci, shared_from_this());
+		}
+		return defaultSRV;
 	}
 	auto VulkanBuffer::get_default_uav() -> std::shared_ptr<BufferView>
 	{
-		return std::shared_ptr<BufferView>();
+		if (!defaultUAV)
+		{
+			BufferViewCreation ci{};
+			ci.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV;
+			if (m_sCreationInfo.struct_byte_stride > 0)
+			{
+				ci.uStructureStride = m_sCreationInfo.struct_byte_stride;
+			}
+			defaultUAV = Ash_New_Shared<VulkanBufferView>(ci, shared_from_this());
+		}
+		return defaultUAV;
 	}
 	auto VulkanBuffer::update(uint32_t offset, uint32_t _size, void* pData) -> bool
 	{
 		bool bRetCode = false;
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		CommandBuffer* cmdBuffer = VulkanContext::get()->get_command_buffer(0);
-		ASH_LOG_PROCESS_ERROR(cmdBuffer);
-		bRetCode = cmdBuffer->cmd_update_sub_resource(shared_from_this(), offset, _size, pData);
-		ASH_LOG_PROCESS_ERROR(bRetCode);
+		ASH_LOG_PROCESS_ERROR(pData);
+		ASH_LOG_PROCESS_ERROR(offset + _size <= m_sCreationInfo.size);
+		if (m_sCreationInfo.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
+		{
+			CommandBuffer* cmdBuffer = VulkanContext::get()->get_command_buffer(0);
+			ASH_LOG_PROCESS_ERROR(cmdBuffer);
+			cmdBuffer->begin_record();
+			bRetCode = cmdBuffer->cmd_update_sub_resource(shared_from_this(), offset, _size, pData);
+			ASH_LOG_PROCESS_ERROR(bRetCode);
+			cmdBuffer->end_record();
+			VulkanContext::get()->submit_immediately({ cmdBuffer, 1 });
+		}
+		else
+		{
+			void* dst = nullptr;
+			bool mappedByThisCall = false;
+			if (m_pMappedData)
+			{
+				dst = m_pMappedData;
+			}
+			else
+			{
+				bRetCode = VulkanContext::get()->vma_map_memory(m_pVMAAllocation, &dst);
+				ASH_LOG_PROCESS_ERROR(bRetCode && dst);
+				mappedByThisCall = true;
+			}
+
+			memory_copy(static_cast<uint8_t*>(dst) + offset, pData, _size);
+			ASH_LOG_PROCESS_ERROR(flush_mapped_range());
+			if (mappedByThisCall)
+			{
+				VulkanContext::get()->vma_unmap_memory(m_pVMAAllocation);
+			}
+			bRetCode = true;
+		}
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
@@ -258,7 +317,13 @@ namespace RHI
 	}
 	auto VulkanBuffer::get_buffer_device_address() -> uint64_t
 	{
-		return 0;
+		if (!(m_sCreationInfo.usage_flags & ASH_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT))
+		{
+			return 0;
+		}
+		VkBufferDeviceAddressInfo addressInfo{ VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO };
+		addressInfo.buffer = m_pVkBuffer;
+		return vkGetBufferDeviceAddress(VulkanContext::get_vulkan_device(), &addressInfo);
 	}
 	auto VulkanBuffer::get_buffer_creation_info() const -> const BufferCreation&
 	{

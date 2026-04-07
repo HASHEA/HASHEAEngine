@@ -265,7 +265,13 @@ namespace RHI
 				break;
 			}
 		}
-		if (FAILED(retCode))
+		if (!retCode && !physicalDevices.empty())
+		{
+			vulkanPhysicalDevice = physicalDevices[0];
+			vkGetPhysicalDeviceProperties(vulkanPhysicalDevice, &vulkanPhysicalDeviceProperties);
+			retCode = true;
+		}
+		if (!retCode)
 		{
 			HLogError("No suitable GPU found!");
 			return retCode;
@@ -393,9 +399,6 @@ namespace RHI
 
 	auto VulkanContext::_query_supported_props() -> bool
 	{
-		VkPhysicalDeviceSubgroupProperties subGroupProperties{};
-		subGroupProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
-		subGroupProperties.pNext = VK_NULL_HANDLE;
 		VkPhysicalDeviceSubgroupProperties subgroupProperties{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES };
 		subgroupProperties.pNext = NULL;
 		void* physicalDevicePropertiesNext = nullptr;
@@ -416,7 +419,7 @@ namespace RHI
 		VkPhysicalDeviceProperties2 physicalDeviceProperties2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
 		physicalDeviceProperties2.pNext = physicalDevicePropertiesNext;
 		vkGetPhysicalDeviceProperties2(vulkanPhysicalDevice, &physicalDeviceProperties2);
-		subgroupSize = subGroupProperties.subgroupSize;
+		subgroupSize = subgroupProperties.subgroupSize;
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::FragmentShadingRate))
 		{
 			minFragmentShadingRateTexelSize = fragmentShadingRateProperties.minFragmentShadingRateAttachmentTexelSize;
@@ -500,6 +503,20 @@ namespace RHI
 				transferQueueFamilyIndex = i;
 				continue;
 			}
+		}
+		if (mainQueueFamilyIndex == UINT32_MAX)
+		{
+			HLogError("Failed to find a graphics queue family.");
+			return false;
+		}
+		if (computeQueueFamilyIndex == UINT32_MAX)
+		{
+			computeQueueFamilyIndex = mainQueueFamilyIndex;
+			computeQueueIndex = 0;
+		}
+		if (transferQueueFamilyIndex == UINT32_MAX)
+		{
+			transferQueueFamilyIndex = mainQueueFamilyIndex;
 		}
 		vulkanMainQueueFamily = mainQueueFamilyIndex;
 		vulkanComputeQueueFamily = computeQueueFamilyIndex;
@@ -625,9 +642,6 @@ namespace RHI
 
 		physicalFeatures2.pNext = currentPNext;
 		vkGetPhysicalDeviceFeatures2(vulkanPhysicalDevice, &physicalFeatures2);
-		H_ASSERT(physicalFeatures2.features.sparseBinding);
-		H_ASSERT(physicalFeatures2.features.sparseResidencyImage3D);
-		H_ASSERT(physicalFeatures2.features.sparseResidencyImage2D);
 		H_ASSERT(vulkan11Features.shaderDrawParameters == VK_TRUE);
 		VkDeviceCreateInfo deviceCI{ VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO };
 		deviceCI.queueCreateInfoCount = queueCount;
@@ -683,13 +697,11 @@ namespace RHI
 		fn.vkInvalidateMappedMemoryRanges = vkInvalidateMappedMemoryRanges;
 		fn.vkMapMemory = vkMapMemory;
 		fn.vkUnmapMemory = vkUnmapMemory;
-		fn.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2KHR;
-		fn.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2KHR;
-		fn.vkBindImageMemory2KHR = 0;
-		fn.vkBindBufferMemory2KHR = 0;
-		fn.vkGetPhysicalDeviceMemoryProperties2KHR = 0;
-		fn.vkGetImageMemoryRequirements2KHR = 0;
-		fn.vkGetBufferMemoryRequirements2KHR = 0;
+		fn.vkGetBufferMemoryRequirements2KHR = vkGetBufferMemoryRequirements2;
+		fn.vkGetImageMemoryRequirements2KHR = vkGetImageMemoryRequirements2;
+		fn.vkBindImageMemory2KHR = vkBindImageMemory2;
+		fn.vkBindBufferMemory2KHR = vkBindBufferMemory2;
+		fn.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
 		allocatorCI.pVulkanFunctions = &fn;
 		VK_CHECK_RESULT(vmaCreateAllocator(&allocatorCI, &vmaAllocator));
 
@@ -775,7 +787,7 @@ namespace RHI
 		{
 			FramePool& pool = framePools[i];
 			pool.timeQueries = &gpuTimeQueryManager->query_trees[i];
-			pool.cmdPool = Ash_New<VulkanCommandPool>(nullptr,vulkanDevice,vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+			pool.cmdPool = Ash_New<VulkanCommandPool>(nullptr, vulkanDevice, vulkanMainQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, vulkanAllocationCallbacks);
 			VkQueryPoolCreateInfo timestampPoolCI = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
 			timestampPoolCI.pNext = nullptr;
 			timestampPoolCI.flags = 0;
@@ -1097,8 +1109,9 @@ namespace RHI
 		file_write_binary(k_pipeline_cache_path, cache_data, cache_data_size);
 		Ash_Free(nullptr, cache_data);
 		vkDestroyPipelineCache(vulkanDevice, vulkanPipelineCache, vulkanAllocationCallbacks);
+		vulkanPipelineCache = VK_NULL_HANDLE;
 		pathBuffer.shutdown();
-		return bool();
+		return true;
 	}
 
 	auto VulkanContext::_create_staging_buffer_pool() -> bool
@@ -1117,9 +1130,9 @@ namespace RHI
 		return true;
 	}
 
-	auto VulkanContext::create_buffer_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
+	auto VulkanContext::create_buffer_view(const BufferViewCreation& ci, std::shared_ptr<Buffer> parentBuffer) -> std::shared_ptr<BufferView>
 	{
-		return std::shared_ptr<TextureView>();
+		return Ash_New_Shared<VulkanBufferView>(ci, parentBuffer);
 	}
 
 	auto VulkanContext::init(void* config) -> bool
@@ -1171,12 +1184,16 @@ namespace RHI
 		_shutdown_frame_pool_and_data();
 		//shutdown descriptor pool
 		_shutdown_descriptor_pool();
+		//shutdown staging pool
+		_shutdown_staging_buffer_pool();
 		//shutdown vma
 		_shutdown_vulkan_memory_allocator();
 		//shutdown device
 		_shutdown_device();
 		//shutdown debugutilmsgr
+#ifdef VULKAN_DEBUG_REPORT
 		_shutdown_debug_util_messenger_ext();
+#endif
 		//shutdown instance
 		_shutdown_instance();
 
@@ -1187,7 +1204,12 @@ namespace RHI
 
 	auto VulkanContext::create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer>
 	{
-		return nullptr;// VulkanBuffer::create(ci);
+		auto buffer = Ash_New_Shared<VulkanBuffer>();
+		if (!buffer->create(ci))
+		{
+			return nullptr;
+		}
+		return buffer;
 	}
 
 	auto VulkanContext::create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture>
@@ -1236,11 +1258,12 @@ namespace RHI
 
 	auto VulkanContext::submit(const SubmitInfo& info) -> void
 	{
+		H_ASSERTLOG(info.cmdCount <= k_command_buffer_queue_length, "Fatal: command count exceeds queue length.");
 		//enqueue vkCommandBuffer
 		for (size_t i = 0; i < info.cmdCount; i++)
 		{
-			H_ASSERTLOG(info.cmds[i].get_state() == AshCommandBufferState::ASH_Ended ||
-				info.cmds[i].get_state() == AshCommandBufferState::ASH_Idle, "Fatal: The submitted command buffer must be in the one of the state of ended or idle!");
+			H_ASSERTLOG(info.cmds[i].get_state() == AshCommandBufferState::ASH_Ended,
+				"Fatal: The submitted command buffer must be ended before submit!");
 			commandBufferQueue.push_back(static_cast<VulkanCommandBuffer*>(&info.cmds[i]));
 		}
 	}
@@ -1248,7 +1271,7 @@ namespace RHI
 	auto VulkanContext::submit_immediately(const SubmitInfo& info) -> void
 	{
 		H_ASSERTLOG(info.cmdCount == 1, " immediately submit can only submit one command once!");
-		H_ASSERTLOG(info.cmds->get_state() == AshCommandBufferState::ASH_Idle || info.cmds->get_state() == AshCommandBufferState::ASH_Ended, " comand buffer must be ended before submit!");
+		H_ASSERTLOG(info.cmds->get_state() == AshCommandBufferState::ASH_Ended, " comand buffer must be ended before submit!");
 		//immediately submit and got result
 		const VkCommandBuffer cmds[] = { (VkCommandBuffer)info.cmds->get_native_handle() };
 		vulkanImmediateFence->reset();
@@ -1309,6 +1332,7 @@ namespace RHI
 		{
 			get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
 		}
+		vulkanPresentCompleteSemaphore = get_frame_data_internal().vulkanRenderCompleteSemaphore;
 		//flush deletion queue
 		delayed_deletion_queues[currentFrame].flush();
 		commandBufferQueue.clear();
@@ -1338,6 +1362,10 @@ namespace RHI
 				commandBufferQueue[i]->set_state(AshCommandBufferState::ASH_Submitted);
 			}
 		}		
+		const VkSemaphore presentCompleteSemaphore =
+			vulkanPresentCompleteSemaphore != VK_NULL_HANDLE ?
+			vulkanPresentCompleteSemaphore :
+			get_frame_data_internal().vulkanRenderCompleteSemaphore;
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
 		{
 			bool wait_for_timeline_semaphore = absoluteFrame >= k_max_frames;
@@ -1355,7 +1383,7 @@ namespace RHI
 					wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame - (k_max_frames - 1), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR , 0 });
 				}
 				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 },
+					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 },
 					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame + 1, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR , 0 }
 				};
 				VkSubmitInfo2KHR submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR };
@@ -1384,7 +1412,7 @@ namespace RHI
 					wait_values.push_back(absoluteFrame - (k_max_frames - 1));
 					wait_stages.push_back(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
 				}
-				VkSemaphore signal_semaphores[] = { get_frame_data_internal().vulkanRenderCompleteSemaphore, vulkanGraphicsSemaphore };
+				VkSemaphore signal_semaphores[] = { presentCompleteSemaphore, vulkanGraphicsSemaphore };
 				uint64_t signal_values[] = { 0, absoluteFrame + 1 };
 				VkTimelineSemaphoreSubmitInfo semaphore_info{ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
 				semaphore_info.signalSemaphoreValueCount = 2;
@@ -1419,7 +1447,7 @@ namespace RHI
 				wait_semaphores.init(nullptr, 4);
 				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 });
 				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 },
+					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 },
 				};
 				VkSubmitInfo2KHR submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR };
 				submit_info.waitSemaphoreInfoCount = wait_semaphores.size();
@@ -1434,7 +1462,7 @@ namespace RHI
 			else
 			{
 				VkPipelineStageFlags flag = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-				vulkanImmediateFence->reset();
+				get_frame_data_internal().vulkanCommandBufferExecutedFence->reset();
 				VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 				submit_info.waitSemaphoreCount = 1;
 				submit_info.pWaitSemaphores = &get_frame_data_internal().vulkanRenderBeginSemaphore;
@@ -1442,7 +1470,7 @@ namespace RHI
 				submit_info.commandBufferCount = count;
 				submit_info.pCommandBuffers = cmds;
 				submit_info.signalSemaphoreCount = 1;
-				submit_info.pSignalSemaphores = &get_frame_data_internal().vulkanRenderCompleteSemaphore;
+				submit_info.pSignalSemaphores = &presentCompleteSemaphore;
 				VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
 			}		
 		}	

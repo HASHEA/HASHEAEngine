@@ -20,17 +20,19 @@ namespace RHI
 	}
 	auto VulkanFence::wait() -> bool
 	{
-		H_ASSERTLOG(!signaled, "Fence Signaled");
+		if (signaled)
+		{
+			return true;
+		}
 
-		const VkResult result = vkWaitForFences(VulkanContext::get_vulkan_device(), 1, &fence, true, UINT32_MAX);
+		const VkResult result = vkWaitForFences(VulkanContext::get_vulkan_device(), 1, &fence, true, UINT64_MAX);
 
-		//VK_CHECK_RESULT(result);
 		if (result == VK_SUCCESS)
 		{
 			signaled = true;
-			return false;
+			return true;
 		}
-		return true;
+		return false;
 	}
 	auto VulkanFence::wait_and_reset() -> void
 	{
@@ -40,8 +42,10 @@ namespace RHI
 	}
 	auto VulkanFence::check_state() -> bool
 	{
-
-		H_ASSERTLOG(!signaled, "Fence Signaled");
+		if (signaled)
+		{
+			return true;
+		}
 
 		const VkResult result = vkGetFenceStatus(VulkanContext::get_vulkan_device(), fence);
 		if (result == VK_SUCCESS)

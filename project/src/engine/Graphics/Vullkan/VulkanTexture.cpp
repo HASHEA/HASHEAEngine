@@ -15,7 +15,7 @@ namespace RHI
 			cube = true;
 		}
 		sparse = (ci.flags & AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE) == AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE;
-		VkImageUsageFlags texUsageFlags = ash_resource_state_to_vk_image_layout(ci.initial_state);
+		VkImageUsageFlags texUsageFlags = ash_texture_usage_to_vk(ci.uUsageFlags);
 		texUsageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		//// Create the image
 		VkImageCreateInfo vkImageCI = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
@@ -73,7 +73,7 @@ namespace RHI
 			
 		}
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE, (uint64_t)vkImage, ci.name);
-		m_ResourceLayoutTracker = VulkanResourceTracker(AshResourceState::Unknown);
+		m_ResourceLayoutTracker = VulkanResourceTracker(ci.initial_state);
 		state = ci.initial_state;
 		m_uAspectFlags = get_aspect_flags_from_format(ci.format);
 
@@ -141,7 +141,7 @@ namespace RHI
 			}
 			//push deletor into deletion queue
 			auto handle = this->vkImage;
-			bool isAlias = this->aliasTexture == nullptr;
+			bool isAlias = this->aliasTexture != nullptr;
 			bool isSparse = sparse;
 			auto alloc = vmaAllocation;
 			auto sname = m_sCreation.name;
@@ -194,14 +194,15 @@ namespace RHI
 
 	auto VulkanTexture::get_default_rtv() -> std::shared_ptr<TextureView>
 	{
-		if (!defaultRTV && (m_sCreation.uUsageFlags & ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT))
+		if (!defaultRTV && (m_sCreation.uUsageFlags & (ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT | ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
 		{
 			TextureViewCreation tvc{};
 			tvc.sub_resource.uMipCount = m_sCreation.mip_level_count;
 			tvc.sub_resource.uArrayCount = m_sCreation.array_layer_count;
 			tvc.name = m_sCreation.name;
 			tvc.view_dim = ash_image_type_to_image_view_type(m_sCreation.type);
-			tvc.view_type = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_RTV;
+			tvc.view_type = (m_sCreation.uUsageFlags & ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) ?
+				AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_DSV : AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_RTV;
 			tvc.format = m_sCreation.format;
 			defaultRTV = Ash_New_Shared<VulkanTextureView>(tvc, shared_from_this());
 		}
@@ -333,22 +334,33 @@ namespace RHI
 	VulkanTextureView::VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> _parentTexture)
 	{
 		HLogInfo("creating texture view : {} ...", ci.name);
+		parentTexture = _parentTexture;
 		m_sInfo = ci;
+		auto parentVulkanTexture = std::static_pointer_cast<VulkanTexture>(_parentTexture);
+		auto resolvedRange = parentVulkanTexture->resolve_subresource_range(ci.sub_resource);
+		m_sInfo.sub_resource = resolvedRange;
 		VkImageViewCreateInfo info = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
 		info.image = (VkImage)_parentTexture->get_native_handle();
 		info.format = get_vk_texture_format_info(ci.format).vkFormat;
 		if (TextureFormat::has_depth_or_stencil(info.format)) {
-
-			info.subresourceRange.aspectMask = TextureFormat::has_depth(info.format) ? VK_IMAGE_ASPECT_DEPTH_BIT : 0;
+			info.subresourceRange.aspectMask = 0;
+			if (TextureFormat::has_depth(info.format))
+			{
+				info.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_DEPTH_BIT;
+			}
+			if (TextureFormat::has_stencil(info.format))
+			{
+				info.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+			}
 		}
 		else {
 			info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 		}
 		info.viewType = ash_image_view_dim_to_vk(ci.view_dim);
-		info.subresourceRange.baseMipLevel = ci.sub_resource.uBaseMipLevel;
-		info.subresourceRange.levelCount = ci.sub_resource.uMipCount;
-		info.subresourceRange.baseArrayLayer = ci.sub_resource.uBaseArraySlice;
-		info.subresourceRange.layerCount = ci.sub_resource.uBaseArraySlice;
+		info.subresourceRange.baseMipLevel = resolvedRange.uBaseMipLevel;
+		info.subresourceRange.levelCount = resolvedRange.uMipCount;
+		info.subresourceRange.baseArrayLayer = resolvedRange.uBaseArraySlice;
+		info.subresourceRange.layerCount = resolvedRange.uArrayCount;
 		VK_CHECK_RESULT(vkCreateImageView(VulkanContext::get_vulkan_device(), &info, VulkanContext::get_vulkan_allocation_callbacks(), &vkImageView));
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)vkImageView, ci.name);
 

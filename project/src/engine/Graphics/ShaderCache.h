@@ -8,6 +8,7 @@ namespace RHI
 	inline constexpr const char kMagic[4] = { 'S', 'L', 'S', '$' };
 	inline constexpr uint32_t kVersion = 1;
 	inline std::filesystem::path CacheDirectoryDX12 = "cacheshader/dx12";
+	inline std::filesystem::path CacheDirectoryVulkan = "cacheshader/vulkan";
 
 	struct DigestUtil
 	{
@@ -116,8 +117,8 @@ namespace RHI
 		char Magic[4] = { kMagic[0],kMagic[1], kMagic[2], kMagic[3] };
 		uint32_t Version = kVersion;
 		uint32_t BlobSize = {};
-		SHA1::Digest CompilerHash = {}; /// shader±àÒëÊ±ºò¹Ø¼ü×ÖµÄhash
-		SHA1::Digest CacheHash = {};    /// »º´æÎÄ¼þÄÚÈÝµÄhash£¬ÓÃÀ´Ð£Ñé¶ÁÈ¡µÄÎÄ¼þÄÚÈÝÊÇ·ñ¶ªÊ§
+		SHA1::Digest CompilerHash = {}; /// shaderï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½Ø¼ï¿½ï¿½Öµï¿½hash
+		SHA1::Digest CacheHash = {};    /// ï¿½ï¿½ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½Ýµï¿½hashï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð£ï¿½ï¿½ï¿½È¡ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½Ê§
 
 		bool operator ==(const ShaderCacheIndexHeader& other) const
 		{

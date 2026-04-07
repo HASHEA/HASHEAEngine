@@ -1,11 +1,13 @@
+#pragma once
 #include <Windows.h>
 #include  <atlbase.h> 
 #include <atlcomcli.h>
-#include "dxcapi.h"
-#include "dxctools.h"
+#include "dxc/dxcapi.h"
+#include "dxc/dxctools.h"
 #include "Base/hfile.h"
 #include <memory>
 #include <string>
+#include <vector>
 namespace RHI
 {
 	struct ShaderItem

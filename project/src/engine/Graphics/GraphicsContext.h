@@ -4,6 +4,7 @@
 #include "Base/ds/harray.hpp"
 #include "RHIResource.h"
 namespace RHI {
+    struct BufferViewCreation;
     struct GpuDescriptorPoolCreation {
 
         uint16_t                             samplers = 256;
@@ -48,7 +49,7 @@ namespace RHI {
         //RHI Device Interfaces
         virtual auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> = 0;
         virtual auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> = 0;
-		virtual auto create_buffer_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
+		virtual auto create_buffer_view(const BufferViewCreation& ci, std::shared_ptr<Buffer> parentBuffer) -> std::shared_ptr<BufferView> = 0;
         virtual auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> = 0;
         virtual auto create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
         virtual auto get_sampler(const AshSamplerState& ss)->std::shared_ptr<Sampler> = 0;

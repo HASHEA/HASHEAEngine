@@ -2,6 +2,7 @@
 #include "Base/hplatform.h"
 #include "Graphics/RHICommon.h"
 #include "Graphics/ShaderCompiler.h"
+#include "Graphics/DXC/DXCHelper.h"
 #include "VulkanHelper.hpp"
 #include "SpvHelper.h"
 #include <memory>
@@ -14,7 +15,11 @@ namespace RHI
 	public:
 		bool init();
 		void uninit();
-		bool compile_shader_from_text(std::string const& pFullText);
+		bool compile_shader_from_text(std::string const& pFullText, const ShaderItem& item, std::vector<uint32_t>& outSpirv, std::string& outErrorMsg);
+	private:
+		CComPtr<IDxcCompiler3> m_pCompiler = nullptr;
+		CComPtr<IDxcUtils> m_pUtils = nullptr;
+		std::unique_ptr<AshDXCContext> m_pDxcContext = nullptr;
 	};
 
 	class Shader;
