@@ -13,7 +13,7 @@ namespace RHI
 		~VulkanBufferView();
 	public:
 
-		// ͨ�� BufferView �̳�
+		// BufferView overrides.
 		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;
 		auto get_parent_buffer() -> std::shared_ptr<Buffer> override;
@@ -48,7 +48,7 @@ namespace RHI
 		{
 			return m_pVkBuffer;
 		}
-		// ͨ�� Buffer �̳�
+		// Buffer overrides.
 		auto get_buffer_device_address() -> uint64_t override;
 		auto get_buffer_creation_info() const -> const BufferCreation & override;
 		auto get_default_cbv() -> std::shared_ptr<BufferView> override;

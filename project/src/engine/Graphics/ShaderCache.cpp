@@ -5,15 +5,57 @@ namespace RHI
 {
 	int DigestUtil::get_hex_digit_value(char c)
 	{
-		return 0;
+		if (c >= '0' && c <= '9')
+		{
+			return c - '0';
+		}
+		if (c >= 'a' && c <= 'f')
+		{
+			return 10 + (c - 'a');
+		}
+		if (c >= 'A' && c <= 'F')
+		{
+			return 10 + (c - 'A');
+		}
+		return -1;
 	}
 	std::string DigestUtil::digest_to_string(void const* digest, int digestSize)
 	{
-		return std::string();
+		if (!digest || digestSize <= 0)
+		{
+			return std::string();
+		}
+
+		static constexpr char k_hex_digits[] = "0123456789abcdef";
+		const uint8_t* bytes = static_cast<const uint8_t*>(digest);
+		std::string result;
+		result.resize(static_cast<size_t>(digestSize) * 2);
+		for (int i = 0; i < digestSize; ++i)
+		{
+			result[static_cast<size_t>(i) * 2] = k_hex_digits[(bytes[i] >> 4) & 0x0f];
+			result[static_cast<size_t>(i) * 2 + 1] = k_hex_digits[bytes[i] & 0x0f];
+		}
+		return result;
 	}
 	bool DigestUtil::string_to_digest(const char* _str, int strLength, void* digest, int digestSize)
 	{
-		return false;
+		if (!_str || !digest || digestSize <= 0 || strLength != digestSize * 2)
+		{
+			return false;
+		}
+
+		uint8_t* bytes = static_cast<uint8_t*>(digest);
+		for (int i = 0; i < digestSize; ++i)
+		{
+			const int high = get_hex_digit_value(_str[i * 2]);
+			const int low = get_hex_digit_value(_str[i * 2 + 1]);
+			if (high < 0 || low < 0)
+			{
+				return false;
+			}
+			bytes[i] = static_cast<uint8_t>((high << 4) | low);
+		}
+		return true;
 	}
 	void* ShaderCacheFileImpl::open_file(const char* szFilePath) const
 	{
@@ -41,9 +83,18 @@ namespace RHI
 	}
 	SHA1::SHA1()
 	{
+		init();
 	}
 	void SHA1::init()
 	{
+		m_index = 0;
+		m_bits = 0;
+		m_State[0] = 0x67452301;
+		m_State[1] = 0xEFCDAB89;
+		m_State[2] = 0x98BADCFE;
+		m_State[3] = 0x10325476;
+		m_State[4] = 0xC3D2E1F0;
+		memset(m_buf, 0, sizeof(m_buf));
 	}
 	void SHA1::update(const void* data, size_t size)
 	{

@@ -529,7 +529,7 @@ void ReportMsg(HRESULT l_Hr, Uint l_Hash, const DString& i_Code, bool l_bActualC
 		const char* szContent = i_Code.c_str();
 		int nContentLen = (int)strlen(szContent);
 		sprintf_s(szMsg, "HR:%x\r\nHash:%s\r\nActualCompile:%d\r\nShaderLen:%d\r\n", l_Hr, szGuid, l_bActualCompile, nContentLen);
-		MessageBoxA(NULL, szMsg, "请联系客服，并发送截图 和 客户端下的rc_shader_msg文件。", 0);
+		MessageBoxA(NULL, szMsg, "Shader compile failed. See rc_shader_msg.txt for details.", 0);
 
 		FILE* fp = NULL;
 		if (fopen_s(&fp, "rc_shader_msg.txt", "wb") == 0 && fp)

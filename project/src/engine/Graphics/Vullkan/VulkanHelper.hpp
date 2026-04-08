@@ -696,6 +696,189 @@ namespace RHI
 		}
 		return ret;
 	}
+	inline auto ash_stencil_op_to_vk(const AshStencilOp& op) -> VkStencilOp
+	{
+		switch (op)
+		{
+		case ASH_STENCIL_OP_KEEP: return VK_STENCIL_OP_KEEP;
+		case ASH_STENCIL_OP_ZERO: return VK_STENCIL_OP_ZERO;
+		case ASH_STENCIL_OP_REPLACE: return VK_STENCIL_OP_REPLACE;
+		case ASH_STENCIL_OP_INCREMENT_AND_CLAMP: return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+		case ASH_STENCIL_OP_DECREMENT_AND_CLAMP: return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+		case ASH_STENCIL_OP_INVERT: return VK_STENCIL_OP_INVERT;
+		case ASH_STENCIL_OP_INCREMENT_AND_WRAP: return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+		case ASH_STENCIL_OP_DECREMENT_AND_WRAP: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+		default: return VK_STENCIL_OP_KEEP;
+		}
+	}
+	inline auto ash_shader_stage_to_vk(AshShaderStageFlagBits stage) -> VkShaderStageFlagBits
+	{
+		switch (stage)
+		{
+		case ASH_SHADER_STAGE_VERTEX_BIT: return VK_SHADER_STAGE_VERTEX_BIT;
+		case ASH_SHADER_STAGE_TESSELLATION_CONTROL_BIT: return VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+		case ASH_SHADER_STAGE_TESSELLATION_EVALUATION_BIT: return VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+		case ASH_SHADER_STAGE_GEOMETRY_BIT: return VK_SHADER_STAGE_GEOMETRY_BIT;
+		case ASH_SHADER_STAGE_FRAGMENT_BIT: return VK_SHADER_STAGE_FRAGMENT_BIT;
+		case ASH_SHADER_STAGE_COMPUTE_BIT: return VK_SHADER_STAGE_COMPUTE_BIT;
+		case ASH_SHADER_STAGE_RAYGEN_BIT_KHR: return VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+		case ASH_SHADER_STAGE_ANY_HIT_BIT_KHR: return VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+		case ASH_SHADER_STAGE_CLOSEST_HIT_BIT_KHR: return VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+		case ASH_SHADER_STAGE_MISS_BIT_KHR: return VK_SHADER_STAGE_MISS_BIT_KHR;
+		case ASH_SHADER_STAGE_INTERSECTION_BIT_KHR: return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+		case ASH_SHADER_STAGE_CALLABLE_BIT_KHR: return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+		case ASH_SHADER_STAGE_TASK_BIT_EXT: return VK_SHADER_STAGE_TASK_BIT_EXT;
+		case ASH_SHADER_STAGE_MESH_BIT_EXT: return VK_SHADER_STAGE_MESH_BIT_EXT;
+		default: return VK_SHADER_STAGE_ALL;
+		}
+	}
+	inline auto ash_shader_stage_flags_to_vk(AshShaderStageFlagBits stage_flags) -> VkShaderStageFlags
+	{
+		VkShaderStageFlags flags = 0;
+		if (stage_flags & ASH_SHADER_STAGE_VERTEX_BIT) flags |= VK_SHADER_STAGE_VERTEX_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_TESSELLATION_CONTROL_BIT) flags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_TESSELLATION_EVALUATION_BIT) flags |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_GEOMETRY_BIT) flags |= VK_SHADER_STAGE_GEOMETRY_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_FRAGMENT_BIT) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_COMPUTE_BIT) flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_RAYGEN_BIT_KHR) flags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_ANY_HIT_BIT_KHR) flags |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_CLOSEST_HIT_BIT_KHR) flags |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_MISS_BIT_KHR) flags |= VK_SHADER_STAGE_MISS_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_INTERSECTION_BIT_KHR) flags |= VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_CALLABLE_BIT_KHR) flags |= VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_TASK_BIT_EXT) flags |= VK_SHADER_STAGE_TASK_BIT_EXT;
+		if (stage_flags & ASH_SHADER_STAGE_MESH_BIT_EXT) flags |= VK_SHADER_STAGE_MESH_BIT_EXT;
+		return flags;
+	}
+	inline auto ash_primitive_topology_to_vk(const AshPrimitiveTopology topology) -> VkPrimitiveTopology
+	{
+		switch (topology)
+		{
+		case ASH_PRIMITIVE_TOPOLOGY_POINT_LIST: return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+		case ASH_PRIMITIVE_TOPOLOGY_LINE_LIST: return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+		case ASH_PRIMITIVE_TOPOLOGY_LINE_STRIP: return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+		case ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		case ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+		case ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+		case ASH_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY: return VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY;
+		case ASH_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY: return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY;
+		case ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
+		case ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
+		case ASH_PRIMITIVE_TOPOLOGY_PATCH_LIST: return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
+		default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		}
+	}
+	inline auto ash_cull_mode_to_vk(const AshCullModeFlagBits mode) -> VkCullModeFlags
+	{
+		switch (mode)
+		{
+		case ASH_CULL_MODE_NONE: return VK_CULL_MODE_NONE;
+		case ASH_CULL_MODE_FRONT_BIT: return VK_CULL_MODE_FRONT_BIT;
+		case ASH_CULL_MODE_BACK_BIT: return VK_CULL_MODE_BACK_BIT;
+		case ASH_CULL_MODE_FRONT_AND_BACK: return VK_CULL_MODE_FRONT_AND_BACK;
+		default: return VK_CULL_MODE_NONE;
+		}
+	}
+	inline auto ash_front_face_to_vk(const AshFrontFace front_face) -> VkFrontFace
+	{
+		switch (front_face)
+		{
+		case ASH_FRONT_FACE_COUNTER_CLOCKWISE: return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		case ASH_FRONT_FACE_CLOCKWISE: return VK_FRONT_FACE_CLOCKWISE;
+		default: return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		}
+	}
+	inline auto ash_fill_mode_to_vk(const AshFillMode fill_mode) -> VkPolygonMode
+	{
+		switch (fill_mode)
+		{
+		case Wireframe: return VK_POLYGON_MODE_LINE;
+		case Point: return VK_POLYGON_MODE_POINT;
+		case Solid:
+		default:
+			return VK_POLYGON_MODE_FILL;
+		}
+	}
+	inline auto ash_blend_factor_to_vk(const AshBlendFactor factor) -> VkBlendFactor
+	{
+		switch (factor)
+		{
+		case ASH_BLEND_FACTOR_ZERO: return VK_BLEND_FACTOR_ZERO;
+		case ASH_BLEND_FACTOR_ONE: return VK_BLEND_FACTOR_ONE;
+		case ASH_BLEND_FACTOR_SRC_COLOR: return VK_BLEND_FACTOR_SRC_COLOR;
+		case ASH_BLEND_FACTOR_ONE_MINUS_SRC_COLOR: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+		case ASH_BLEND_FACTOR_DST_COLOR: return VK_BLEND_FACTOR_DST_COLOR;
+		case ASH_BLEND_FACTOR_ONE_MINUS_DST_COLOR: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+		case ASH_BLEND_FACTOR_SRC_ALPHA: return VK_BLEND_FACTOR_SRC_ALPHA;
+		case ASH_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		case ASH_BLEND_FACTOR_DST_ALPHA: return VK_BLEND_FACTOR_DST_ALPHA;
+		case ASH_BLEND_FACTOR_ONE_MINUS_DST_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+		case ASH_BLEND_FACTOR_CONSTANT_COLOR: return VK_BLEND_FACTOR_CONSTANT_COLOR;
+		case ASH_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+		case ASH_BLEND_FACTOR_CONSTANT_ALPHA: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+		case ASH_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+		case ASH_BLEND_FACTOR_SRC_ALPHA_SATURATE: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+		case ASH_BLEND_FACTOR_SRC1_COLOR: return VK_BLEND_FACTOR_SRC1_COLOR;
+		case ASH_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
+		case ASH_BLEND_FACTOR_SRC1_ALPHA: return VK_BLEND_FACTOR_SRC1_ALPHA;
+		case ASH_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+		default: return VK_BLEND_FACTOR_ONE;
+		}
+	}
+	inline auto ash_blend_op_to_vk(const AshBlendOp op) -> VkBlendOp
+	{
+		switch (op)
+		{
+		case ASH_BLEND_OP_ADD: return VK_BLEND_OP_ADD;
+		case ASH_BLEND_OP_SUBTRACT: return VK_BLEND_OP_SUBTRACT;
+		case ASH_BLEND_OP_REVERSE_SUBTRACT: return VK_BLEND_OP_REVERSE_SUBTRACT;
+		case ASH_BLEND_OP_MIN: return VK_BLEND_OP_MIN;
+		case ASH_BLEND_OP_MAX: return VK_BLEND_OP_MAX;
+		default: return VK_BLEND_OP_ADD;
+		}
+	}
+	inline auto ash_color_write_mask_to_vk(const AshColorWriteMask mask) -> VkColorComponentFlags
+	{
+		VkColorComponentFlags result = 0;
+		if (mask & Red) result |= VK_COLOR_COMPONENT_R_BIT;
+		if (mask & Green) result |= VK_COLOR_COMPONENT_G_BIT;
+		if (mask & Blue) result |= VK_COLOR_COMPONENT_B_BIT;
+		if (mask & Alpha) result |= VK_COLOR_COMPONENT_A_BIT;
+		return result;
+	}
+	inline auto ash_vertex_input_rate_to_vk(const AshVertexInputRate rate) -> VkVertexInputRate
+	{
+		switch (rate)
+		{
+		case PerInstance: return VK_VERTEX_INPUT_RATE_INSTANCE;
+		case PerVertex:
+		default:
+			return VK_VERTEX_INPUT_RATE_VERTEX;
+		}
+	}
+	inline auto ash_vertex_component_format_to_vk(const AshVertexComponentFormat format) -> VkFormat
+	{
+		switch (format)
+		{
+		case Float: return VK_FORMAT_R32_SFLOAT;
+		case Float2: return VK_FORMAT_R32G32_SFLOAT;
+		case Float3: return VK_FORMAT_R32G32B32_SFLOAT;
+		case Float4: return VK_FORMAT_R32G32B32A32_SFLOAT;
+		case Byte: return VK_FORMAT_R8_SINT;
+		case Byte4N: return VK_FORMAT_R8G8B8A8_SNORM;
+		case UByte: return VK_FORMAT_R8_UINT;
+		case UByte4N: return VK_FORMAT_R8G8B8A8_UNORM;
+		case Short2: return VK_FORMAT_R16G16_SINT;
+		case Short2N: return VK_FORMAT_R16G16_SNORM;
+		case Short4: return VK_FORMAT_R16G16B16A16_SINT;
+		case Short4N: return VK_FORMAT_R16G16B16A16_SNORM;
+		case Uint: return VK_FORMAT_R32_UINT;
+		case Uint2: return VK_FORMAT_R32G32_UINT;
+		case Uint4: return VK_FORMAT_R32G32B32A32_UINT;
+		default: return VK_FORMAT_UNDEFINED;
+		}
+	}
 	inline auto ash_sampler_reduction_mode_to_vk(const AshSamplerReductionMode& mode) -> VkSamplerReductionMode
 	{
 		VkSamplerReductionMode vktype = VkSamplerReductionMode::VK_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE;

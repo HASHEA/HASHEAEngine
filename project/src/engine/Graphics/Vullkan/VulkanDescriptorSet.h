@@ -1,11 +1,14 @@
 #pragma once
 #include "Base/hplatform.h"
 #include "Graphics/RHICommon.h"
+#include "Graphics/DescriptorSetLayout.h"
+#include "SpvHelper.h"
 #include "VulkanHelper.hpp"
 #include <set>
 #include <memory>
 namespace RHI
 {
+	class VulkanDescriptorSetLayout;
 	class VulkanDescriptorSet;
 	class VulkanDescriptorPool;
 	class TextureView;
@@ -14,11 +17,11 @@ namespace RHI
 	class AccelerationStructureView;
 	struct VulkanDescriptorPoolContainer
 	{
-		std::set<std::shared_ptr<VulkanDescriptorSet>> m_setAlloced;
+		std::set<VulkanDescriptorSet*> m_setAlloced;
 		std::shared_ptr<VulkanDescriptorPool> m_pDescriptorPool;
 		std::shared_ptr<VulkanDescriptorPool> get_descriptor_pool() const;
-		void add_allocated(std::shared_ptr<VulkanDescriptorSet> p);
-		void remove(std::shared_ptr<VulkanDescriptorSet> pSet);
+		void add_allocated(VulkanDescriptorSet* p);
+		void remove(VulkanDescriptorSet* pSet);
 		void clear();
 		VulkanDescriptorPoolContainer();
 		~VulkanDescriptorPoolContainer();
@@ -33,7 +36,7 @@ namespace RHI
 		VulkanDescriptorPool& begin(uint32_t maxSet = 16, bool bBindlessSet = false);
 		VulkanDescriptorPool& add_pool_item(AshDescriptorType descriptorType, uint32_t uCount = 1);
 		bool             end();
-		bool             free_descriptor_set(std::shared_ptr<VulkanDescriptorSet> pDescriptorSet);
+		bool             free_descriptor_set(VulkanDescriptorSet* pDescriptorSet);
 		VkDescriptorPool get_vk_pool() const;
 		void             increate_allocated_set();
 		bool             is_full() const;
@@ -46,7 +49,7 @@ namespace RHI
 		std::vector<VkDescriptorPoolSize> m_vecDescriptorPoolSize;
 		uint32_t                          m_uMaxSet = 0;
 		uint32_t                          m_uAllocedSet = 0;
-		VkDescriptorPool                  m_pDescriptorPool;
+		VkDescriptorPool                  m_pDescriptorPool = VK_NULL_HANDLE;
 		bool                              m_bBindlessPool = false;
 		uint32_t                          m_uPoolID = 0;
 
@@ -57,9 +60,31 @@ namespace RHI
 		// last pool
 		std::shared_ptr<VulkanDescriptorPool> m_pPreviousPool;
 
-		// 通过 RHIResource 继承
+		// RHIResource overrides.
 		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;
+	};
+	class VulkanDescriptorSetLayout : public DescriptorSetLayout
+	{
+	public:
+		VulkanDescriptorSetLayout() = default;
+		~VulkanDescriptorSetLayout() override;
+
+		static std::shared_ptr<VulkanDescriptorSetLayout> create(const DescriptorSetLayoutCreation& creation);
+		const DescriptorSetLayoutCreation& get_creation() const;
+		uint32_t get_set_index() const;
+		std::shared_ptr<VulkanDescriptorPoolContainer> get_pool_container() const;
+
+		auto get_native_handle() -> void* override;
+		auto get_name() -> const char* override;
+
+	private:
+		bool init(const DescriptorSetLayoutCreation& creation);
+
+	private:
+		DescriptorSetLayoutCreation m_creation{};
+		VkDescriptorSetLayout m_vkDescriptorSetLayout = VK_NULL_HANDLE;
+		std::shared_ptr<VulkanDescriptorPoolContainer> m_poolContainer = nullptr;
 	};
 	//set and pool stay on program
 	class VulkanDescriptorSet : public std::enable_shared_from_this<VulkanDescriptorSet>
@@ -70,17 +95,25 @@ namespace RHI
 		~VulkanDescriptorSet();
 	public:
 		VulkanDescriptorSet& begin_bind();
+		void prepare_write_capacity(uint32_t imageDescriptorCount, uint32_t bufferDescriptorCount, uint32_t writeCount);
 		VulkanDescriptorSet& add_bind_srv(uint32_t uBinding, std::shared_ptr<BufferView> srv);
 		VulkanDescriptorSet& add_bind_srv(uint32_t uBinding, std::shared_ptr<TextureView> srv);
+		VulkanDescriptorSet& add_bind_srv_array(uint32_t uBinding, const std::vector<std::shared_ptr<BufferView>>& srvs, AshDescriptorType descriptorType);
+		VulkanDescriptorSet& add_bind_srv_array(uint32_t uBinding, const std::vector<std::shared_ptr<TextureView>>& srvs, AshDescriptorType descriptorType);
 		VulkanDescriptorSet& add_bind_uav(uint32_t uBinding, std::shared_ptr<BufferView> uav);
 		VulkanDescriptorSet& add_bind_uav(uint32_t uBinding, std::shared_ptr<TextureView> uav);
+		VulkanDescriptorSet& add_bind_uav_array(uint32_t uBinding, const std::vector<std::shared_ptr<BufferView>>& uavs, AshDescriptorType descriptorType);
+		VulkanDescriptorSet& add_bind_uav_array(uint32_t uBinding, const std::vector<std::shared_ptr<TextureView>>& uavs, AshDescriptorType descriptorType);
 		VulkanDescriptorSet& add_bind_cbv(uint32_t uBinding, std::shared_ptr<BufferView> cbv);
 		VulkanDescriptorSet& add_bind_sampler(uint32_t uBinding, std::shared_ptr<SamplerView> smaplerView);
+		VulkanDescriptorSet& add_bind_sampler_array(uint32_t uBinding, const std::vector<std::shared_ptr<SamplerView>>& samplerViews);
 		VulkanDescriptorSet& add_bind_acceleration_structure(uint32_t uBinding, std::shared_ptr<AccelerationStructureView> acclerationStructureView);
 		bool end_bind();
 	public:
 		void clear_cache();
 		void clear_pool_container();
+		const std::vector<AshBarrier>& get_barriers() const;
+		VkDescriptorSet get_native_handle() const;
 	private:
 		//cache for valid address
 		std::vector<VkDescriptorImageInfo> m_vecCachedImageAndSamplerInfo; 
@@ -91,7 +124,7 @@ namespace RHI
 		VkDescriptorSetLayout m_pVkLayout = VK_NULL_HANDLE;
 		VkDescriptorSet m_pVkDescriptorSet = VK_NULL_HANDLE;
 		std::vector<VkWriteDescriptorSet> m_vecWriteDescriptorSets;
-		// 基类持有的只是header
+		// Header node of the descriptor-pool chain used for this set.
 		std::shared_ptr<VulkanDescriptorPool> m_pRealAllocPool;
 		std::vector<AshBarrier> m_vecBarrierCollection;
 	};

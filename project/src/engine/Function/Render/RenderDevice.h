@@ -1,0 +1,416 @@
+#pragma once
+#include "Base/hcore.h"
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <vector>
+
+namespace RHI
+{
+	class GraphicsContext;
+	class Swapchain;
+}
+
+namespace AshEngine
+{
+	class GraphicsProgram;
+	class ComputeProgram;
+
+	enum class RenderTextureFormat : uint8_t
+	{
+		Unknown = 0,
+		RGBA8_UNORM,
+		BGRA8_SRGB,
+		RGBA16_SFLOAT,
+		D24_UNORM_S8_UINT,
+		D32_SFLOAT
+	};
+
+	enum class RenderLoadAction : uint8_t
+	{
+		Load = 0,
+		Clear,
+		DontCare
+	};
+
+	enum class RenderCullMode : uint8_t
+	{
+		None = 0,
+		Front,
+		Back
+	};
+
+	enum class RenderPrimitiveTopology : uint8_t
+	{
+		TriangleList = 0,
+		TriangleStrip
+	};
+
+	enum class RenderIndexFormat : uint8_t
+	{
+		UInt16 = 0,
+		UInt32
+	};
+
+	enum class RenderSamplerState : uint8_t
+	{
+		Default = 0
+	};
+
+	struct RenderColorValue
+	{
+		float r = 0.0f;
+		float g = 0.0f;
+		float b = 0.0f;
+		float a = 1.0f;
+	};
+
+	struct RenderDepthStencilValue
+	{
+		float depth = 1.0f;
+		uint32_t stencil = 0;
+	};
+
+	struct RenderViewport
+	{
+		int16_t x = 0;
+		int16_t y = 0;
+		uint16_t width = 0;
+		uint16_t height = 0;
+		float min_depth = 0.0f;
+		float max_depth = 1.0f;
+	};
+
+	struct RenderScissor
+	{
+		int16_t x = 0;
+		int16_t y = 0;
+		uint16_t width = 0;
+		uint16_t height = 0;
+	};
+
+	struct GraphicsProgramState
+	{
+		RenderCullMode cull_mode = RenderCullMode::None;
+		RenderPrimitiveTopology primitive_topology = RenderPrimitiveTopology::TriangleList;
+		bool depth_test = false;
+		bool depth_write = false;
+	};
+
+	struct GraphicsProgramDesc
+	{
+		const char* shader_path = nullptr;
+		const char* vertex_entry = "VSMain";
+		const char* fragment_entry = "PSMain";
+		const char* shader_macro = nullptr;
+		GraphicsProgramState state{};
+		const char* name = nullptr;
+	};
+
+	struct RenderTargetDesc
+	{
+		uint16_t width = 1;
+		uint16_t height = 1;
+		RenderTextureFormat format = RenderTextureFormat::Unknown;
+		bool shader_resource = true;
+		bool unordered_access = false;
+		const char* name = nullptr;
+	};
+
+	struct UniformBufferDesc
+	{
+		uint32_t size = 0;
+		bool cpu_write = true;
+		const void* initial_data = nullptr;
+		const char* name = nullptr;
+	};
+
+	struct VertexBufferDesc
+	{
+		uint32_t size = 0;
+		uint32_t stride = 0;
+		bool cpu_write = false;
+		const void* initial_data = nullptr;
+		const char* name = nullptr;
+	};
+
+	struct IndexBufferDesc
+	{
+		uint32_t size = 0;
+		RenderIndexFormat format = RenderIndexFormat::UInt32;
+		bool cpu_write = false;
+		const void* initial_data = nullptr;
+		const char* name = nullptr;
+	};
+
+	struct StorageBufferDesc
+	{
+		uint32_t size = 0;
+		uint32_t stride = 0;
+		bool cpu_write = false;
+		const void* initial_data = nullptr;
+		const char* name = nullptr;
+	};
+
+	class ASH_API RenderTarget
+	{
+	public:
+		class Impl;
+
+	public:
+		RenderTarget();
+		~RenderTarget();
+
+	public:
+		uint32_t get_width() const;
+		uint32_t get_height() const;
+		RenderTextureFormat get_format() const;
+		bool is_depth_stencil() const;
+
+	private:
+		std::shared_ptr<Impl> m_impl;
+
+	private:
+		explicit RenderTarget(std::shared_ptr<Impl> impl);
+		friend class GraphicsProgram;
+		friend class ComputeProgram;
+		friend class RenderDevice;
+	};
+
+	class ASH_API UniformBuffer
+	{
+	public:
+		class Impl;
+
+	public:
+		UniformBuffer();
+		~UniformBuffer();
+
+	public:
+		uint32_t get_size() const;
+		bool update(uint32_t offset, uint32_t size, const void* data);
+
+	private:
+		std::shared_ptr<Impl> m_impl;
+
+	private:
+		explicit UniformBuffer(std::shared_ptr<Impl> impl);
+		friend class GraphicsProgram;
+		friend class ComputeProgram;
+		friend class RenderDevice;
+	};
+
+	class ASH_API VertexBuffer
+	{
+	public:
+		class Impl;
+
+	public:
+		VertexBuffer();
+		~VertexBuffer();
+
+	public:
+		uint32_t get_size() const;
+		uint32_t get_stride() const;
+		uint32_t get_vertex_count() const;
+		bool update(uint32_t offset, uint32_t size, const void* data);
+
+	private:
+		std::shared_ptr<Impl> m_impl;
+
+	private:
+		explicit VertexBuffer(std::shared_ptr<Impl> impl);
+		friend class RenderDevice;
+	};
+
+	class ASH_API IndexBuffer
+	{
+	public:
+		class Impl;
+
+	public:
+		IndexBuffer();
+		~IndexBuffer();
+
+	public:
+		uint32_t get_size() const;
+		uint32_t get_index_count() const;
+		RenderIndexFormat get_format() const;
+		bool update(uint32_t offset, uint32_t size, const void* data);
+
+	private:
+		std::shared_ptr<Impl> m_impl;
+
+	private:
+		explicit IndexBuffer(std::shared_ptr<Impl> impl);
+		friend class RenderDevice;
+	};
+
+	class ASH_API StorageBuffer
+	{
+	public:
+		class Impl;
+
+	public:
+		StorageBuffer();
+		~StorageBuffer();
+
+	public:
+		uint32_t get_size() const;
+		uint32_t get_stride() const;
+		uint32_t get_element_count() const;
+		bool update(uint32_t offset, uint32_t size, const void* data);
+
+	private:
+		std::shared_ptr<Impl> m_impl;
+
+	private:
+		explicit StorageBuffer(std::shared_ptr<Impl> impl);
+		friend class GraphicsProgram;
+		friend class ComputeProgram;
+		friend class RenderDevice;
+	};
+
+	class ASH_API GraphicsProgram
+	{
+	public:
+		class Impl;
+
+	public:
+		GraphicsProgram();
+		~GraphicsProgram();
+
+	public:
+		bool apply_render_state(const std::function<void(GraphicsProgramState&)>& fn);
+		bool set_const_data_block(uint32_t size, const void* data);
+		bool set_static_int(const char* name, int32_t value);
+		bool set_static_uint(const char* name, uint32_t value);
+		bool set_static_float(const char* name, float value);
+		bool set_uniform_buffer(const char* name, const std::shared_ptr<UniformBuffer>& buffer);
+		bool set_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer);
+		bool set_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers);
+		bool set_rw_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer);
+		bool set_rw_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers);
+		bool set_texture(const char* name, const std::shared_ptr<RenderTarget>& texture);
+		bool set_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
+		bool set_rw_texture(const char* name, const std::shared_ptr<RenderTarget>& texture);
+		bool set_rw_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
+		bool set_sampler(const char* name, RenderSamplerState sampler_state = RenderSamplerState::Default);
+		bool set_sampler_array(const char* name, const std::vector<RenderSamplerState>& sampler_states);
+
+	private:
+		std::unique_ptr<Impl> m_impl;
+
+	private:
+		explicit GraphicsProgram(std::unique_ptr<Impl> impl);
+		friend class RenderDevice;
+	};
+
+	struct ComputeProgramDesc
+	{
+		const char* shader_path = nullptr;
+		const char* compute_entry = "CSMain";
+		const char* shader_macro = nullptr;
+		const char* name = nullptr;
+	};
+
+	class ASH_API ComputeProgram
+	{
+	public:
+		class Impl;
+
+	public:
+		ComputeProgram();
+		~ComputeProgram();
+
+	public:
+		bool set_const_data_block(uint32_t size, const void* data);
+		bool set_static_int(const char* name, int32_t value);
+		bool set_static_uint(const char* name, uint32_t value);
+		bool set_static_float(const char* name, float value);
+		bool set_uniform_buffer(const char* name, const std::shared_ptr<UniformBuffer>& buffer);
+		bool set_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer);
+		bool set_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers);
+		bool set_rw_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer);
+		bool set_rw_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers);
+		bool set_texture(const char* name, const std::shared_ptr<RenderTarget>& texture);
+		bool set_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
+		bool set_rw_texture(const char* name, const std::shared_ptr<RenderTarget>& texture);
+		bool set_rw_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
+		bool set_sampler(const char* name, RenderSamplerState sampler_state = RenderSamplerState::Default);
+		bool set_sampler_array(const char* name, const std::vector<RenderSamplerState>& sampler_states);
+
+	private:
+		std::unique_ptr<Impl> m_impl;
+
+	private:
+		explicit ComputeProgram(std::unique_ptr<Impl> impl);
+		friend class RenderDevice;
+	};
+
+	struct PassColorAttachment
+	{
+		std::shared_ptr<RenderTarget> render_target = nullptr;
+		RenderLoadAction load_action = RenderLoadAction::Clear;
+		RenderColorValue clear_color{};
+	};
+
+	struct PassDepthAttachment
+	{
+		std::shared_ptr<RenderTarget> render_target = nullptr;
+		RenderLoadAction load_action = RenderLoadAction::Clear;
+		RenderDepthStencilValue clear_value{};
+	};
+
+	struct PassDesc
+	{
+		std::vector<PassColorAttachment> color_attachments;
+		PassDepthAttachment depth_attachment{};
+		const char* name = nullptr;
+	};
+
+	class ASH_API RenderDevice
+	{
+	public:
+		~RenderDevice();
+
+	public:
+		bool begin_frame();
+		bool end_frame();
+		void present();
+
+		std::shared_ptr<RenderTarget> get_back_buffer();
+		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
+		std::shared_ptr<RenderTarget> acquire_transient_render_target(const RenderTargetDesc& desc);
+		void release_transient_render_target(const std::shared_ptr<RenderTarget>& render_target);
+		void clear_transient_render_targets();
+
+		std::shared_ptr<UniformBuffer> create_uniform_buffer(const UniformBufferDesc& desc);
+		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
+		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
+		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+
+		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
+		std::unique_ptr<ComputeProgram> create_compute_program(const ComputeProgramDesc& desc);
+
+		bool begin_pass(const PassDesc& desc);
+		bool bind_graphics_program(GraphicsProgram* program);
+		bool bind_compute_program(ComputeProgram* program);
+		bool bind_vertex_buffer(uint32_t slot, const std::shared_ptr<VertexBuffer>& buffer, uint64_t offset = 0);
+		bool bind_index_buffer(const std::shared_ptr<IndexBuffer>& buffer, uint64_t offset = 0);
+		void set_viewport(const RenderViewport& viewport);
+		void set_scissor(const RenderScissor& scissor);
+		void draw(uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex = 0, uint32_t first_instance = 0);
+		void draw_indexed(uint32_t index_count, uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0);
+		void dispatch(uint32_t group_count_x, uint32_t group_count_y = 1, uint32_t group_count_z = 1);
+		void end_pass();
+
+	private:
+		RenderDevice(RHI::GraphicsContext* graphics_context, RHI::Swapchain* swapchain);
+
+	private:
+		class Impl;
+		std::unique_ptr<Impl> m_impl;
+		friend class Application;
+	};
+}

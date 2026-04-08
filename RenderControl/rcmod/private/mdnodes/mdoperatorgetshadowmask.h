@@ -3,7 +3,7 @@
 	filename:       mdoperatorgetshadowmask.h
 	author:         LJK
 	date:           2023-4-18
-	description:    将shadowmask贴图暴露到RC方便GPU节点使用
+	description:    Expose the shadowmask texture to RC GPU nodes.
 */
 #pragma once
 

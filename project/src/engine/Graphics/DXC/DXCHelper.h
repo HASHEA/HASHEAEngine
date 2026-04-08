@@ -5,8 +5,11 @@
 #include "dxc/dxcapi.h"
 #include "dxc/dxctools.h"
 #include "Base/hfile.h"
+#include "Graphics/RHICommon.h"
+#include "DXCIncludeHandler.h"
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 namespace RHI
 {
@@ -16,13 +19,13 @@ namespace RHI
 		const char* userShaderPath = nullptr;
 		const char* macroDefine = nullptr;
 		const char* entryPoint = nullptr;
+		AshShaderStageFlagBits stage = AshShaderStageFlagBits::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
 	};
 	struct ShaderFullTextResult
 	{
 		std::string resultShaderText;
 		std::string errorMsg;
 	};
-	class DXCIncludeHandler;
 	class AshDXCContext
 	{
 	public:
@@ -35,7 +38,7 @@ namespace RHI
 		void create_compiler_for_target_platform();
 	private:
 		bool create_blob_from_text(const char* pText, IDxcBlobEncoding** ppBlob);
-		bool create_dxc_define_from_user_define(char const* userDefine, std::vector<DxcDefine>& dxcDefines);
+		bool create_dxc_define_from_user_define(char const* userDefine, std::vector<std::pair<std::wstring, std::wstring>>& dxcDefineStorage, std::vector<DxcDefine>& dxcDefines);
 	public:
 		CComPtr<DXCIncludeHandler> get_default_includer();
 	private:

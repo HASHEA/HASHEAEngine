@@ -48,21 +48,21 @@ project "Editor"
 		symbols "on"
 		editandcontinue "Off"
 		optimize "off"
-		debugcommand "%{wks.location}/product/bin64/Debug/Editor.exe"
-		debugdir "%{wks.location}/product/bin64/Debug"			  
-		postbuildcommands
+		debugcommand "%{wks.location}/product/bin64/Debug-windows-x86_64/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Debug-windows-x86_64"			  
+		postbuildcommands 
 		{
-			("{MKDIR %{wks.location}/product/bin64/Debug"),
-			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Debug")
-		} 
+			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
+			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\"',
+		}
 	filter "configurations:Release"
 		defines "ASH_APP_RELEASE"
 		runtime "Release"
 		optimize "on"
-		debugcommand "%{wks.location}/product/bin64/Release/Editor.exe"
-		debugdir "%{wks.location}/product/bin64/Release"			  
-		postbuildcommands
+		debugcommand "%{wks.location}/product/bin64/Release-windows-x86_64/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Release-windows-x86_64"			  
+		postbuildcommands 
 		{
-			("{MKDIR %{wks.location}/product/bin64/Release"),
-			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Release")
-		}  
+			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
+			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\"',
+		}

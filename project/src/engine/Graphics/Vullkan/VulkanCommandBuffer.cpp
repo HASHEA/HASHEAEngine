@@ -45,8 +45,11 @@ namespace RHI
 			return;
 
 		case AshResourceState::Present:
-			StageFlags = bIsSourceState ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-			AccessFlags = VK_ACCESS_MEMORY_READ_BIT;
+			// Swapchain acquire waits are submitted with COLOR_ATTACHMENT_OUTPUT. Using TOP_OF_PIPE
+			// here leaves the present->render transition outside the waited stage scope and triggers
+			// WRITE_AFTER_READ hazards on the acquired image.
+			StageFlags = bIsSourceState ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+			AccessFlags = 0;
 			Layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 			return;
 
@@ -492,6 +495,64 @@ namespace RHI
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 
 	}
+	auto VulkanCommandBuffer::cmd_set_viewport(const Viewport& viewport) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		VkViewport vk_viewport{};
+		vk_viewport.x = static_cast<float>(viewport.rect.x);
+		vk_viewport.y = static_cast<float>(viewport.rect.y);
+		vk_viewport.width = static_cast<float>(viewport.rect.width);
+		vk_viewport.height = static_cast<float>(viewport.rect.height);
+		vk_viewport.minDepth = viewport.min_depth;
+		vk_viewport.maxDepth = viewport.max_depth;
+		vkCmdSetViewport(vkCommandBuffer, 0, 1, &vk_viewport);
+	}
+	auto VulkanCommandBuffer::cmd_set_scissor(const Rect2DInt& scissor) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		VkRect2D vk_scissor{};
+		vk_scissor.offset = { scissor.x, scissor.y };
+		vk_scissor.extent = { scissor.width, scissor.height };
+		vkCmdSetScissor(vkCommandBuffer, 0, 1, &vk_scissor);
+	}
+	auto VulkanCommandBuffer::cmd_bind_vertex_buffers(uint32_t firstBinding, uint32_t bindingCount, std::shared_ptr<Buffer>* buffers, const uint64_t* offsets) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		H_ASSERTLOG(buffers, "vertex buffer array is null");
+		std::vector<VkBuffer> vk_buffers(bindingCount);
+		std::vector<VkDeviceSize> vk_offsets(bindingCount);
+		for (uint32_t i = 0; i < bindingCount; ++i)
+		{
+			H_ASSERTLOG(buffers[i], "vertex buffer is null");
+			vk_buffers[i] = reinterpret_cast<VkBuffer>(buffers[i]->get_native_handle());
+			const uint64_t base_offset = static_cast<uint64_t>(buffers[i]->get_global_offset());
+			vk_offsets[i] = (offsets ? offsets[i] : 0ull) + (base_offset == UINT32_MAX ? 0ull : base_offset);
+		}
+		vkCmdBindVertexBuffers(vkCommandBuffer, firstBinding, bindingCount, vk_buffers.data(), vk_offsets.data());
+	}
+	auto VulkanCommandBuffer::cmd_bind_index_buffer(std::shared_ptr<Buffer> buffer, uint64_t offset, AshIndexType indexType) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		H_ASSERTLOG(buffer, "index buffer is null");
+		const uint64_t base_offset = static_cast<uint64_t>(buffer->get_global_offset());
+		const VkIndexType vk_index_type = indexType == ASH_INDEX_TYPE_UINT16 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT32;
+		vkCmdBindIndexBuffer(vkCommandBuffer, reinterpret_cast<VkBuffer>(buffer->get_native_handle()), offset + (base_offset == UINT32_MAX ? 0ull : base_offset), vk_index_type);
+	}
+	auto VulkanCommandBuffer::cmd_draw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex, uint32_t firstInstance) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		vkCmdDraw(vkCommandBuffer, vertexCount, instanceCount, firstVertex, firstInstance);
+	}
+	auto VulkanCommandBuffer::cmd_draw_indexed(uint32_t indexCount, uint32_t instanceCount, uint32_t firstIndex, int32_t vertexOffset, uint32_t firstInstance) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		vkCmdDrawIndexed(vkCommandBuffer, indexCount, instanceCount, firstIndex, vertexOffset, firstInstance);
+	}
+	auto VulkanCommandBuffer::cmd_dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		vkCmdDispatch(vkCommandBuffer, groupCountX, groupCountY, groupCountZ);
+	}
 	auto VulkanCommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> pBuffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
@@ -698,7 +759,7 @@ namespace RHI
 
 						if (Mip == (uint32_t)-1 && Slice == (uint32_t)-1)
 						{
-							// ��Texture������ImageBarrier
+							// Transition the whole texture with a single image barrier.
 							pTexture->get_resource_tracker().set_all_resource_state(InDstAccess);
 
 							VkImageSubresourceRange AllSubresourceRange{};

@@ -216,7 +216,7 @@ public:
 
 	/*
 	*	Reflection
-	*	1. input: GBufferA, GBufferB, GBufferC, GBufferD, ResovlemainDepth£¬ AmbientOcclusion, GBufferE
+	*	1. input: GBufferA, GBufferB, GBufferC, GBufferD, ResovlemainDepth, AmbientOcclusion, GBufferE
 	*	2. output: LightDiffuse, LightSpecular, DepthStencilView
 	*/
 	virtual bool	RenderReflection(
@@ -240,7 +240,7 @@ public:
 
 	/*
 	*	SSS
-	*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth£¬LightDiffuse, IBLDiffuse
+	*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth, LightDiffuse, IBLDiffuse
 	*	2. output: SSS, DepthStencilView
 	*/
 	virtual bool	RenderSSSDeferred(
@@ -264,7 +264,7 @@ public:
 
 	/*
 	*	SSGI
-	*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth£¬LightDiffuse, IBLDiffuse
+	*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth, LightDiffuse, IBLDiffuse
 	*	2. output: SSS, DepthStencilView
 	*/
 	virtual bool	RenderSSGI(
@@ -277,7 +277,7 @@ public:
 
 	/*
 *	SSGI
-*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth£¬LightDiffuse, IBLDiffuse
+*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth, LightDiffuse, IBLDiffuse
 *	2. output: SSS, DepthStencilView
 */
 	virtual bool	RenderVolumeGI(
@@ -289,7 +289,7 @@ public:
 
 	/*
 *	SSGI
-*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth£¬LightDiffuse, IBLDiffuse
+*	1. input: GBufferB, GBufferC, GBufferD, AmbientOcclusion, ResovlemainDepth, LightDiffuse, IBLDiffuse
 *	2. output: SSS, DepthStencilView
 */
 	virtual bool	RenderVolumeGIStatic(
@@ -319,7 +319,7 @@ public:
 
 	/*
 	*	Render Lights
-	*	1. input: GBufferA, GBufferB, GBufferC, AmbientOcclusion, SSS£¬LightDiffuse, IBLDiffuse, ResolveDepth
+	*	1. input: GBufferA, GBufferB, GBufferC, AmbientOcclusion, SSS, LightDiffuse, IBLDiffuse, ResolveDepth
 	*	2. output: SSS, DepthStencilView
 	*/
 	virtual bool	RenderCompositeResult(

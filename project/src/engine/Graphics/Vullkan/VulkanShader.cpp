@@ -1,27 +1,113 @@
 #include "VulkanShader.h"
-#include "VulkanPipeline.h"
+#include "VulkanContext.h"
 #include "VulkanDescriptorSet.h"
-#include "Base/hmemory.h"
-#include "Base/hcache.h"
-#include "Base/hfile.h"
-#include "Base/hstring.h"
+#include "Base/hlog.h"
+#include <cstring>
+
 namespace RHI
 {
+	VulkanShader::~VulkanShader()
+	{
+		if (m_shader_module != VK_NULL_HANDLE)
+		{
+			vkDestroyShaderModule(VulkanContext::get_vulkan_device(), m_shader_module, VulkanContext::get_vulkan_allocation_callbacks());
+			m_shader_module = VK_NULL_HANDLE;
+		}
+	}
+
+	bool VulkanShader::init(const ShaderCreation& ci)
+	{
+		m_creation = ci;
+		const char* shader_name = ci.pBaseShaderPath ? ci.pBaseShaderPath : "VulkanShader";
+		const size_t max_copy = sizeof(m_name) - 1;
+		const size_t name_length = std::min(strlen(shader_name), max_copy);
+		memcpy(m_name, shader_name, name_length);
+		m_name[name_length] = '\0';
+		m_reflection_data = ParseResult{};
+		m_spirv_binary.clear();
+		m_descriptor_set_layouts.clear();
+		m_shader_stage_info = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+		m_shader_stage_info.pName = ci.pEntryPoint ? ci.pEntryPoint : "main";
+		m_shader_stage_info.stage = ash_shader_stage_to_vk(ci.type);
+		return true;
+	}
+
+	void VulkanShader::set_compiled_binary(const ShaderCreation& ci, const std::vector<uint32_t>& spirv_binary, const ParseResult& reflection_data)
+	{
+		m_creation = ci;
+		m_spirv_binary = spirv_binary;
+		m_reflection_data = reflection_data;
+		m_descriptor_set_layouts.clear();
+		H_ASSERTLOG(!m_spirv_binary.empty(), "Compiled SPIR-V is empty for shader {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
+
+		if (m_shader_module != VK_NULL_HANDLE)
+		{
+			vkDestroyShaderModule(VulkanContext::get_vulkan_device(), m_shader_module, VulkanContext::get_vulkan_allocation_callbacks());
+			m_shader_module = VK_NULL_HANDLE;
+		}
+
+		VkShaderModuleCreateInfo create_info{ VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
+		create_info.codeSize = m_spirv_binary.size() * sizeof(uint32_t);
+		create_info.pCode = m_spirv_binary.data();
+		VK_CHECK_RESULT(vkCreateShaderModule(VulkanContext::get_vulkan_device(), &create_info, VulkanContext::get_vulkan_allocation_callbacks(), &m_shader_module));
+		VulkanContext::set_resource_name(VK_OBJECT_TYPE_SHADER_MODULE, (uint64_t)m_shader_module, get_name());
+
+		m_shader_stage_info = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
+		m_shader_stage_info.stage = ash_shader_stage_to_vk(ci.type);
+		m_shader_stage_info.module = m_shader_module;
+		m_shader_stage_info.pName = ci.pEntryPoint ? ci.pEntryPoint : "main";
+
+		for (uint32_t i = 0; i < m_reflection_data.set_count; ++i)
+		{
+			auto layout = VulkanDescriptorSetLayout::create(m_reflection_data.sets[i]);
+			H_ASSERT(layout);
+			m_descriptor_set_layouts.push_back(layout);
+		}
+	}
+
+	const std::vector<uint32_t>& VulkanShader::get_spirv_binary() const
+	{
+		return m_spirv_binary;
+	}
+
+	const ParseResult& VulkanShader::get_reflection_data() const
+	{
+		return m_reflection_data;
+	}
+
+	const VkPipelineShaderStageCreateInfo& VulkanShader::get_stage_info() const
+	{
+		return m_shader_stage_info;
+	}
+
+	AshShaderStageFlagBits VulkanShader::get_stage() const
+	{
+		return m_creation.type;
+	}
+
+	uint32_t VulkanShader::get_descriptor_set_layout_count() const
+	{
+		return static_cast<uint32_t>(m_descriptor_set_layouts.size());
+	}
+
+	std::shared_ptr<DescriptorSetLayout> VulkanShader::get_descriptor_set_layout(uint32_t index) const
+	{
+		H_ASSERT(index < m_descriptor_set_layouts.size());
+		return m_descriptor_set_layouts[index];
+	}
+
+	const VertexInputCreation& VulkanShader::get_vertex_input() const
+	{
+		return m_reflection_data.pipeline_info.vertex_input;
+	}
+
 	auto VulkanShader::get_native_handle() -> void*
 	{
-		return nullptr;
+		return m_shader_module;
 	}
 
 	auto VulkanShader::get_name() -> const char*
 	{
-		return nullptr;
-	}
-	VulkanShader::VulkanShader(const ShaderCreation& ci)
-	{
-		ShaderCode _code = Shader::load_from_file(ci);
-
-	}
-	VulkanShader::~VulkanShader()
-	{
+		return m_name;
 	}
 }

@@ -9,6 +9,16 @@
 
 namespace RHI
 {
+	static inline void free_file_read_result(AshEngine::FileReadResult& result)
+	{
+		if (result.data)
+		{
+			AshEngine::MemoryService::instance()->get_system_allocator()->deallocate(result.data);
+			result.data = nullptr;
+			result.size = 0;
+		}
+	}
+
 	static inline std::string wchar_to_utf8(LPCWSTR lpwstr)
 	{
 		int         len = WideCharToMultiByte(CP_UTF8, 0, lpwstr, -1, nullptr, 0, nullptr, nullptr);
@@ -19,7 +29,7 @@ namespace RHI
 		return str;
 	}
 
-	// std::string£¨UTF-8£©to std::wstring£¨UTF-16£©
+	// Convert UTF-8 std::string to UTF-16 std::wstring.
 	static inline std::wstring utf8_to_wstring(const std::string& str)
 	{
 		int          len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
@@ -105,27 +115,28 @@ namespace RHI
 	bool AshDXCContext::init()
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		if (m_pLibrary == nullptr)
+		if (!m_pLibrary)
 		{
 			HRESULT hrRes = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&m_pLibrary));
-			ASH_PROCESS_ERROR(hrRes);
+			ASH_PROCESS_ERROR(SUCCEEDED(hrRes) && static_cast<bool>(m_pLibrary));
 		}
-		if (m_pUtils == nullptr)
+		if (!m_pUtils)
 		{
 			HRESULT hrRes = DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&m_pUtils));
-			ASH_PROCESS_ERROR(hrRes);
+			ASH_PROCESS_ERROR(SUCCEEDED(hrRes) && static_cast<bool>(m_pUtils));
 		}
-		if (m_pDefaultIncluder == nullptr)
+		if (!m_pDefaultIncluder)
 		{
-			m_pDefaultIncluder = AshEngine::Ash_New<DXCIncludeHandler>();
+			m_pDefaultIncluder.Attach(AshEngine::Ash_New<DXCIncludeHandler>());
+			ASH_PROCESS_ERROR(m_pDefaultIncluder.p);
 		}
-		if (m_pRewriter == nullptr)
+		if (!m_pRewriter)
 		{
 			HRESULT hrRes = DxcCreateInstance(CLSID_DxcRewriter, IID_PPV_ARGS(&m_pRewriter));
-			ASH_PROCESS_ERROR(hrRes);
+			ASH_PROCESS_ERROR(SUCCEEDED(hrRes) && static_cast<bool>(m_pRewriter));
 
 			hrRes = m_pRewriter->QueryInterface(IID_PPV_ARGS(&m_pRewriter2));
-			ASH_PROCESS_ERROR(hrRes);
+			ASH_PROCESS_ERROR(SUCCEEDED(hrRes) && static_cast<bool>(m_pRewriter2));
 		}
 
 		ASH_SAFE_EXECUTE_END(bResult);
@@ -158,17 +169,20 @@ namespace RHI
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		bool bRetCode = false;
-		const char* szShaderSource = AshEngine::file_read_text(item.sourceShaderPath).data;
+		AshEngine::FileReadResult shader_source_text = AshEngine::file_read_text(item.sourceShaderPath);
+		const char* szShaderSource = shader_source_text.data;
 		const char* entryName = item.entryPoint;
 		const char* fileName = item.sourceShaderPath;
 		CComPtr<IDxcBlobEncoding> pSourceBlob = nullptr;
 		std::filesystem::path shaderPath = fileName;
+		ASH_PROCESS_ERROR(szShaderSource);
 		bRetCode = create_blob_from_text(szShaderSource, &pSourceBlob);
 		ASH_PROCESS_ERROR(bRetCode);
+		std::vector<std::pair<std::wstring, std::wstring>> defineStorage{};
 		std::vector<DxcDefine> vecDefines{};
 		std::wstring           entryNameW{};
 		entryNameW = utf8_to_wstring(entryName);
-		bRetCode = create_dxc_define_from_user_define(item.macroDefine, vecDefines);
+		bRetCode = create_dxc_define_from_user_define(item.macroDefine, defineStorage, vecDefines);
 		ASH_PROCESS_ERROR(bRetCode);
 		std::vector<LPCWSTR> rewriteArgs{};
 		rewriteArgs.emplace_back(L"-E");
@@ -176,26 +190,35 @@ namespace RHI
 		rewriteArgs.emplace_back(L"-remove-unused-globals");
 		rewriteArgs.emplace_back(L"-remove-unused-functions");
 		//set user shader for includer
-		m_pDefaultIncluder->set_current_user_shader_path(item.userShaderPath);
+		if (item.userShaderPath && *item.userShaderPath != '\0')
+		{
+			m_pDefaultIncluder.p->set_current_user_shader_path(item.userShaderPath);
+		}
+		else
+		{
+			m_pDefaultIncluder.p->set_current_user_shader_path(std::filesystem::path{});
+		}
+		m_pDefaultIncluder.p->set_include_root_path(shaderPath.parent_path());
 		CComPtr<IDxcOperationResult> pComplResult = nullptr;
 		HRESULT hRetCode = m_pRewriter2->RewriteWithOptions(pSourceBlob, shaderPath.filename().c_str(), rewriteArgs.data(), static_cast<uint32_t>(rewriteArgs.size()), 
-			vecDefines.data(), static_cast<uint32_t>(vecDefines.size()), m_pDefaultIncluder, &pComplResult);
+			vecDefines.data(), static_cast<uint32_t>(vecDefines.size()), m_pDefaultIncluder.p, &pComplResult);
 		ASH_PROCESS_ERROR(hRetCode == S_OK);
 		CComPtr<IDxcBlobEncoding>    pErrors = nullptr;
 		hRetCode = pComplResult->GetErrorBuffer(&pErrors);
 		ASH_PROCESS_ERROR(hRetCode == S_OK);
 		ASH_PROCESS_ERROR(*result);
-		if (pErrors != nullptr)
+		if (pErrors)
 		{
 			(*result)->errorMsg = blob_to_utf8(pErrors);
 		}
 		CComPtr<IDxcBlob>            pBlob = nullptr;
 		hRetCode = pComplResult->GetResult(&pBlob);
-		ASH_PROCESS_ERROR(hRetCode);
+		ASH_PROCESS_ERROR(SUCCEEDED(hRetCode));
 		if (pBlob)
 		{
 			(*result)->resultShaderText = blob_to_utf8(pBlob);
 		}
+		free_file_read_result(shader_source_text);
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
@@ -205,19 +228,27 @@ namespace RHI
 	bool AshDXCContext::create_blob_from_text(const char* pText, IDxcBlobEncoding** ppBlob)
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		bool    bRet = false;
+		ASH_PROCESS_ERROR(m_pUtils.p);
+		ASH_PROCESS_ERROR(pText);
+		ASH_PROCESS_ERROR(ppBlob);
 		HRESULT hrRes = E_FAIL;
 		hrRes = m_pUtils->CreateBlobFromPinned(pText, static_cast<uint32_t>(strlen(pText) + 1), CP_UTF8, ppBlob);
-		ASH_PROCESS_ERROR((hrRes == S_OK));
+		ASH_PROCESS_ERROR(SUCCEEDED(hrRes) && *ppBlob);
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
-	bool AshDXCContext::create_dxc_define_from_user_define(char const* userDefine, std::vector<DxcDefine>& dxcDefines)
+	bool AshDXCContext::create_dxc_define_from_user_define(char const* userDefine, std::vector<std::pair<std::wstring, std::wstring>>& dxcDefineStorage, std::vector<DxcDefine>& dxcDefines)
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		if (userDefine == nullptr || *userDefine == '\0')
+		{
+			return true;
+		}
 		//parse macros with ';'
 		std::vector<std::string> vecMacros;
 		split_by(';', userDefine, vecMacros);
+		dxcDefineStorage.reserve(vecMacros.size());
+		dxcDefines.reserve(vecMacros.size());
 		for (const auto& macro : vecMacros)
 		{
 			std::vector<std::string> vecSingleMacro;
@@ -227,11 +258,13 @@ namespace RHI
 			std::wstring key = utf8_to_wstring(vecSingleMacro[0]);
 			std::wstring value{};
 
-			if (!vecSingleMacro.size() > 1)
+			if (vecSingleMacro.size() > 1)
 			{
 				value = utf8_to_wstring(vecSingleMacro[1]);
 			}
-			dxcDefines.emplace_back(DxcDefine{key.c_str(), value.empty() ? nullptr : value.c_str()});
+			dxcDefineStorage.emplace_back(std::move(key), std::move(value));
+			const auto& definePair = dxcDefineStorage.back();
+			dxcDefines.emplace_back(DxcDefine{ definePair.first.c_str(), definePair.second.empty() ? nullptr : definePair.second.c_str() });
 		}
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;

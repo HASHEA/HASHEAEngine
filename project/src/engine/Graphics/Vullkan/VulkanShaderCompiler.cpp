@@ -83,6 +83,7 @@ namespace RHI
 		ASH_PROCESS_ERROR(memcmp(header.Magic, kMagic, 4) == 0);
 		ASH_PROCESS_ERROR((header.Version == kVersion));
 		ASH_PROCESS_ERROR((header.CompilerHash == textKey));
+		ASH_PROCESS_ERROR(header.BlobSize > 0);
 		ASH_PROCESS_ERROR((header.BlobSize % sizeof(uint32_t)) == 0);
 
 		// Read SPIR-V data
@@ -105,6 +106,7 @@ namespace RHI
 	static bool write_to_cache(const SHA1::Digest& passKey, const SHA1::Digest& textKey, const std::vector<uint32_t>& spirv)
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_PROCESS_ERROR(!spirv.empty());
 		std::filesystem::path cachePath = get_cache_path(passKey);
 		std::filesystem::path cacheDir = cachePath.parent_path();
 
@@ -149,6 +151,8 @@ namespace RHI
 		
 		ASH_PROCESS_ERROR(m_pDxcCompiler);
 		ASH_PROCESS_ERROR(pTargetShader);
+		auto pVulkanShader = std::dynamic_pointer_cast<VulkanShader>(pTargetShader);
+		ASH_PROCESS_ERROR(pVulkanShader);
 
 		// Build pass key hash (from shader file info)
 		DigestBuilder<SHA1> passKeyBuilder{};
@@ -156,36 +160,62 @@ namespace RHI
 		passKeyBuilder.append(fileInfo.userShaderPath ? fileInfo.userShaderPath : "");
 		passKeyBuilder.append(fileInfo.macroDefine ? fileInfo.macroDefine : "");
 		passKeyBuilder.append(fileInfo.entryPoint ? fileInfo.entryPoint : "");
+		passKeyBuilder.append(fileInfo.stage);
 		SHA1::Digest passKey = passKeyBuilder.finalize();
 
 		// Build shader text key hash (from full shader text + compiler version)
 		DigestBuilder<SHA1> shaderTextBuilder{};
 		shaderTextBuilder.append(shaderFullText);
-		// Add compiler version or other build args here if needed
+		shaderTextBuilder.append(fileInfo.stage);
+		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0"));
 		SHA1::Digest textKey = shaderTextBuilder.finalize();
 
 		// Try to read from cache
 		std::vector<uint32_t> spirvCode;
 		bool cacheHit = read_from_cache(passKey, textKey, spirvCode);
+		if (cacheHit && spirvCode.empty())
+		{
+			HLogWarning("Ignoring invalid empty shader cache for {}", fileInfo.sourceShaderPath ? fileInfo.sourceShaderPath : "<null>");
+			std::error_code remove_error{};
+			std::filesystem::remove(get_cache_path(passKey), remove_error);
+			cacheHit = false;
+		}
 
 		if (!cacheHit)
 		{
 			// Cache miss - compile shader
 			std::string errorMsg;
 			bool compileResult = m_pDxcCompiler->compile_shader_from_text(shaderFullText, fileInfo, spirvCode, errorMsg);
+			if (!compileResult && !errorMsg.empty())
+			{
+				HLogError("Failed to compile shader to SPIR-V: {}", errorMsg);
+			}
 			ASH_PROCESS_ERROR(compileResult);
 			ASH_PROCESS_ERROR(!spirvCode.empty());
 
 			// Write to cache
 			write_to_cache(passKey, textKey, spirvCode);
 		}
+		if (spirvCode.empty())
+		{
+			HLogError("Shader compile produced empty SPIR-V for {}", fileInfo.sourceShaderPath ? fileInfo.sourceShaderPath : "<null>");
+		}
+		ASH_PROCESS_ERROR(!spirvCode.empty());
 
-		// The compiled SPIR-V code is now available in spirvCode
-		// This can be used to create VkShaderModule in VulkanShader
-		// The integration with Shader::load_from_file should handle
-		// storing this code in the VulkanShader instance
-		// For now, the compilation and caching is complete
-		// The spirvCode vector contains the compiled SPIR-V binary
+		ParseResult reflection_data{};
+		bResult = parse_binary_spv(spirvCode.data(), spirvCode.size(), fileInfo.stage, &reflection_data);
+		ASH_PROCESS_ERROR(bResult);
+		pVulkanShader->set_compiled_binary(
+			{
+				fileInfo.sourceShaderPath,
+				fileInfo.userShaderPath,
+				nullptr,
+				fileInfo.macroDefine,
+				fileInfo.entryPoint,
+				fileInfo.stage
+			},
+			std::move(spirvCode),
+			reflection_data);
 
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
@@ -255,6 +285,9 @@ namespace RHI
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		
+		outSpirv.clear();
+		outErrorMsg.clear();
+
 		ASH_PROCESS_ERROR(m_pCompiler);
 		ASH_PROCESS_ERROR(m_pUtils);
 		ASH_PROCESS_ERROR(!pFullText.empty());
@@ -267,40 +300,32 @@ namespace RHI
 
 		// Prepare arguments for SPIR-V compilation
 		std::vector<std::wstring> argumentStrings;
+		argumentStrings.reserve(16);
+
 		std::vector<LPCWSTR> arguments;
+		arguments.reserve(16);
+
+		// Source file name for diagnostics.
+		std::filesystem::path shaderPath = item.sourceShaderPath ? item.sourceShaderPath : "shader.hlsl";
+		std::wstring sourceName = shaderPath.filename().wstring();
+		argumentStrings.push_back(sourceName);
 
 		// Entry point
 		std::wstring entryPointW = utf8_to_wstring(item.entryPoint);
 		argumentStrings.push_back(L"-E");
-		arguments.push_back(argumentStrings.back().c_str());
 		argumentStrings.push_back(entryPointW);
-		arguments.push_back(argumentStrings.back().c_str());
 
-		// Target profile - try to detect from shader text or use default
-		// For now, we'll use a heuristic or default to vs_6_0
-		// In a real implementation, this should be passed as a parameter
-		std::wstring profile = L"vs_6_0"; // Default
-		if (pFullText.find("SV_Target") != std::string::npos || pFullText.find("SV_Position") != std::string::npos)
-		{
-			// Try to detect from keywords
-			if (pFullText.find("SV_Target") != std::string::npos)
-				profile = L"ps_6_0";
-			else if (pFullText.find("SV_DispatchThreadID") != std::string::npos)
-				profile = L"cs_6_0";
-		}
+		std::wstring profile = get_spirv_profile(item.stage);
 		
 		argumentStrings.push_back(L"-T");
-		arguments.push_back(argumentStrings.back().c_str());
 		argumentStrings.push_back(profile);
-		arguments.push_back(argumentStrings.back().c_str());
 
 		// SPIR-V target
 		argumentStrings.push_back(L"-spirv");
-		arguments.push_back(argumentStrings.back().c_str());
 
 		// Additional options for Vulkan
 		argumentStrings.push_back(L"-fspv-target-env=vulkan1.0");
-		arguments.push_back(argumentStrings.back().c_str());
+		argumentStrings.push_back(L"-fvk-use-dx-layout");
 
 		// Prepare defines as command-line -D arguments for IDxcCompiler3.
 		if (item.macroDefine && strlen(item.macroDefine) > 0)
@@ -329,16 +354,12 @@ namespace RHI
 						value.erase(0, 1);
 					
 					argumentStrings.push_back(L"-D");
-					arguments.push_back(argumentStrings.back().c_str());
 					argumentStrings.push_back(utf8_to_wstring(name + "=" + value));
-					arguments.push_back(argumentStrings.back().c_str());
 				}
 				else if (!macro.empty())
 				{
 					argumentStrings.push_back(L"-D");
-					arguments.push_back(argumentStrings.back().c_str());
 					argumentStrings.push_back(utf8_to_wstring(macro));
-					arguments.push_back(argumentStrings.back().c_str());
 				}
 
 				if (semicolon == std::string::npos)
@@ -346,10 +367,10 @@ namespace RHI
 				start = semicolon + 1;
 			}
 		}
-
-		// Source file name
-		std::filesystem::path shaderPath = item.sourceShaderPath ? item.sourceShaderPath : "shader.hlsl";
-		std::wstring sourceName = shaderPath.filename().wstring();
+		for (const std::wstring& argument : argumentStrings)
+		{
+			arguments.push_back(argument.c_str());
+		}
 
 		// Get include handler
 		CComPtr<DXCIncludeHandler> pIncludeHandler = m_pDxcContext->get_default_includer();
@@ -363,8 +384,9 @@ namespace RHI
 
 		CComPtr<IDxcResult> pResults = nullptr;
 		hrRes = m_pCompiler->Compile(&sourceBuffer, arguments.data(), static_cast<uint32_t>(arguments.size()),
-			static_cast<IDxcIncludeHandler*>(pIncludeHandler.p), IID_PPV_ARGS(&pResults));
+			pIncludeHandler.p, IID_PPV_ARGS(&pResults));
 		ASH_PROCESS_ERROR(hrRes == S_OK);
+		ASH_PROCESS_ERROR(pResults);
 
 		// Get error buffer
 		CComPtr<IDxcBlobUtf8> pErrors = nullptr;
@@ -378,6 +400,10 @@ namespace RHI
 		HRESULT compileStatus = S_OK;
 		hrRes = pResults->GetStatus(&compileStatus);
 		ASH_PROCESS_ERROR(hrRes == S_OK);
+		if (FAILED(compileStatus) && outErrorMsg.empty())
+		{
+			outErrorMsg = "DXC compile failed without diagnostics.";
+		}
 		ASH_PROCESS_ERROR(compileStatus == S_OK);
 
 		// Get compiled SPIR-V
@@ -385,6 +411,10 @@ namespace RHI
 		hrRes = pResults->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pSpirvBlob), nullptr);
 		ASH_PROCESS_ERROR(hrRes == S_OK);
 		ASH_PROCESS_ERROR(pSpirvBlob);
+		if (pSpirvBlob && pSpirvBlob->GetBufferSize() == 0 && outErrorMsg.empty())
+		{
+			outErrorMsg = "DXC returned an empty shader object.";
+		}
 		ASH_PROCESS_ERROR(pSpirvBlob->GetBufferSize() > 0);
 		ASH_PROCESS_ERROR((pSpirvBlob->GetBufferSize() % sizeof(uint32_t)) == 0);
 

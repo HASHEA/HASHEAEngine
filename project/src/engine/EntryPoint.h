@@ -7,17 +7,22 @@ extern void destroy_application(AshEngine::Application* app);//impl in editor
 
 namespace fs = std::filesystem;
 
-// 查找最近的 AshEngine 文件夹路径
+static bool is_engine_root(const fs::path& path) {
+	return fs::exists(path / "AshEngine.sln") &&
+		fs::exists(path / "project") &&
+		fs::exists(path / "product");
+}
+
+// Search upward for the repository root instead of matching a folder name.
 fs::path find_dir(const fs::path& start_path) {
 	fs::path current_path = start_path;
-	//
 	const int max_depth = 16;
 	for (int i = 0; i < max_depth; ++i) {
-		if (fs::exists(current_path / "AshEngine")) {
-			return current_path / "AshEngine";
+		if (is_engine_root(current_path)) {
+			return current_path;
 		}
 
-		// 到达根目录时终止
+		// Stop once we reach the filesystem root.
 		if (current_path == current_path.parent_path()) {
 			break;
 		}
@@ -25,7 +30,7 @@ fs::path find_dir(const fs::path& start_path) {
 		current_path = current_path.parent_path();
 	}
 
-	throw std::runtime_error("Could not find the Dir");
+	throw std::runtime_error("Could not find the engine repository root.");
 }
 
 int init_dir()

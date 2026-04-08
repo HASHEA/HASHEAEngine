@@ -13,3 +13,6 @@ bin-int
 LogFiles
 Caches
 _BUILD
+product/bin64
+product/logs
+cacheshader

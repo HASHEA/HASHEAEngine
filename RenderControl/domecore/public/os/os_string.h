@@ -361,7 +361,7 @@ public:
         FNV-1 pseudocode
         hash = FNV_offset_basis
         for each byte_of_data to be hashed
-            hash = hash ¡Á FNV_prime
+            hash = hash * FNV_prime
             hash = hash XOR byte_of_data
         return hash
 
@@ -369,7 +369,7 @@ public:
         hash = FNV_offset_basis
         for each byte_of_data to be hashed
             hash = hash XOR byte_of_data
-            hash = hash ¡Á FNV_prime
+            hash = hash * FNV_prime
         return hash
 
         Where the constants FNV_offset_basis and FNV_prime depend on the return hash size you want:

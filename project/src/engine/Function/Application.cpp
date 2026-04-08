@@ -2,6 +2,8 @@
 #include "Application.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/Swapchain.h"
+#include "Function/Render/RenderDevice.h"
+#include "Function/Render/Renderer.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
 #include "Base/hfile.h"
@@ -13,6 +15,7 @@ namespace AshEngine
 	Application* Application::app = nullptr;
 	Application::Application(const EngineInitConfig& config)
 	{
+		app = this;
 	
 		/*init at very first to ensure log*/
 		LogService::instance()->init(nullptr);
@@ -51,9 +54,16 @@ namespace AshEngine
 		scConfig.pPresentMode = presentMode.data();
 		swapChain = RHI::Swapchain::create();
 		swapChain->init(&scConfig);
+		renderDevice = new RenderDevice(graphicsContext, swapChain);
+		renderer = new Renderer(renderDevice);
 	}
 	Application::~Application()
 	{
+		app = nullptr;
+		delete renderer;
+		renderer = nullptr;
+		delete renderDevice;
+		renderDevice = nullptr;
 		swapChain->shutdown();
 		Ash_Delete(nullptr, swapChain);
 		graphicsContext->shutdown();
@@ -99,15 +109,18 @@ namespace AshEngine
 	}
 	auto Application::_on_render() -> void
 	{
-		graphicsContext->begin_frame();
-		swapChain->begin_frame();
-		_on_render_debug();	
-		swapChain->end_frame();
-		graphicsContext->end_frame();
+		if (renderer && renderer->begin_frame())
+		{
+			_on_render_debug();
+			renderer->end_frame();
+		}
 	}
 	auto Application::_present() -> void
 	{
-		swapChain->present();
+		if (renderer)
+		{
+			renderer->present();
+		}
 	}
 
 };

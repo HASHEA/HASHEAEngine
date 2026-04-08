@@ -150,7 +150,8 @@ void            RCColorShiftNode::updateLutTex()
 #define ProcessError(Condition) if(!(Condition)) goto Exit0;
     
 
-// ¶ÁÈ¡iniµÄ´úÂë£ºSword3\Source\KG3DEngine\KG3DEngine\KG3DPostRenderEffectManager.cpp
+// Original INI loading logic reference:
+// Sword3\\Source\\KG3DEngine\\KG3DEngine\\KG3DPostRenderEffectManager.cpp
 const static char* s_strColorCurveConfig = "data\\public\\color_curve.ini";
 HRESULT RCColorShiftNode::LoadCurveStypeIni()
 {

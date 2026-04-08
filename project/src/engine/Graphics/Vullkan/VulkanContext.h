@@ -283,6 +283,10 @@ namespace RHI
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
 		auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> override;
 		auto create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> override;
+		auto create_render_pass(const RenderPassCreation& ci) -> std::shared_ptr<RenderPass> override;
+		auto create_framebuffer(const FramebufferCreation& ci) -> std::shared_ptr<Framebuffer> override;
+		auto create_graphics_render_program(const GraphicProgramCreateDesc& desc) -> std::unique_ptr<IGraphicsRenderProgram> override;
+		auto create_compute_render_program(const ComputeProgramCreateDesc& desc) -> std::unique_ptr<IComputeRenderProgram> override;
 		auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> override;
 		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;

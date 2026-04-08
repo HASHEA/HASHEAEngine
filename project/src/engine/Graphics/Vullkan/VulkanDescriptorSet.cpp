@@ -6,8 +6,11 @@
 #include "Graphics/Buffer.h"
 #include "Graphics/Texture.h"
 #include "base/hlog.h"
+#include <unordered_map>
 namespace RHI
 {
+	static std::unordered_map<size_t, std::weak_ptr<VulkanDescriptorSetLayout>> g_descriptor_set_layout_cache;
+
 	static VkDescriptorType get_descriptor_type(AshDescriptorType desc)
 	{
 		VkDescriptorType ret = VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -54,15 +57,173 @@ namespace RHI
 		}
 		return ret;
 	}
+
+	static VkDescriptorType get_buffer_descriptor_type(AshDescriptorType desc, VkDescriptorType fallback)
+	{
+		const VkDescriptorType descriptor_type = get_descriptor_type(desc);
+		return descriptor_type == VK_DESCRIPTOR_TYPE_MAX_ENUM ? fallback : descriptor_type;
+	}
+
+	static VkShaderStageFlags get_vk_shader_stage_flags(AshShaderStageFlagBits stage_flags)
+	{
+		VkShaderStageFlags flags = 0;
+		if (stage_flags & ASH_SHADER_STAGE_VERTEX_BIT) flags |= VK_SHADER_STAGE_VERTEX_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_TESSELLATION_CONTROL_BIT) flags |= VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_TESSELLATION_EVALUATION_BIT) flags |= VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_GEOMETRY_BIT) flags |= VK_SHADER_STAGE_GEOMETRY_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_FRAGMENT_BIT) flags |= VK_SHADER_STAGE_FRAGMENT_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_COMPUTE_BIT) flags |= VK_SHADER_STAGE_COMPUTE_BIT;
+		if (stage_flags & ASH_SHADER_STAGE_RAYGEN_BIT_KHR) flags |= VK_SHADER_STAGE_RAYGEN_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_ANY_HIT_BIT_KHR) flags |= VK_SHADER_STAGE_ANY_HIT_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_CLOSEST_HIT_BIT_KHR) flags |= VK_SHADER_STAGE_CLOSEST_HIT_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_MISS_BIT_KHR) flags |= VK_SHADER_STAGE_MISS_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_INTERSECTION_BIT_KHR) flags |= VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_CALLABLE_BIT_KHR) flags |= VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+		if (stage_flags & ASH_SHADER_STAGE_TASK_BIT_EXT) flags |= VK_SHADER_STAGE_TASK_BIT_EXT;
+		if (stage_flags & ASH_SHADER_STAGE_MESH_BIT_EXT) flags |= VK_SHADER_STAGE_MESH_BIT_EXT;
+		return flags;
+	}
+
+	static size_t hash_descriptor_set_layout_creation(const DescriptorSetLayoutCreation& creation)
+	{
+		size_t hash_code = 0;
+		ASH_HASH::hash_combine(hash_code, creation.set_index);
+		ASH_HASH::hash_combine(hash_code, creation.num_bindings);
+		ASH_HASH::hash_combine(hash_code, creation.bindless);
+		ASH_HASH::hash_combine(hash_code, creation.dynamic);
+		for (uint32_t i = 0; i < creation.num_bindings; ++i)
+		{
+			const auto& binding = creation.bindings[i];
+			ASH_HASH::hash_combine(hash_code, binding.type);
+			ASH_HASH::hash_combine(hash_code, binding.index);
+			ASH_HASH::hash_combine(hash_code, binding.count);
+			ASH_HASH::hash_combine(hash_code, binding.stage_flags);
+			ASH_HASH::hash_combine(hash_code, binding.bindless);
+			ASH_HASH::hash_combine(hash_code, binding.name, ASH_HASH::CStringHash{});
+		}
+		return hash_code;
+	}
+
+	std::shared_ptr<VulkanDescriptorSetLayout> VulkanDescriptorSetLayout::create(const DescriptorSetLayoutCreation& creation)
+	{
+		const size_t hash_code = hash_descriptor_set_layout_creation(creation);
+		auto it = g_descriptor_set_layout_cache.find(hash_code);
+		if (it != g_descriptor_set_layout_cache.end())
+		{
+			if (auto cached = it->second.lock())
+			{
+				return cached;
+			}
+		}
+
+		auto layout = Ash_New_Shared<VulkanDescriptorSetLayout>();
+		if (!layout->init(creation))
+		{
+			return nullptr;
+		}
+		g_descriptor_set_layout_cache[hash_code] = layout;
+		return layout;
+	}
+
+	bool VulkanDescriptorSetLayout::init(const DescriptorSetLayoutCreation& creation)
+	{
+		m_creation = creation;
+		m_poolContainer = Ash_New_Shared<VulkanDescriptorPoolContainer>();
+		auto descriptor_pool = Ash_New_Shared<VulkanDescriptorPool>();
+		descriptor_pool->begin(16, creation.bindless);
+
+		std::vector<VkDescriptorSetLayoutBinding> bindings;
+		bindings.reserve(creation.num_bindings);
+		std::vector<VkDescriptorBindingFlags> binding_flags;
+		binding_flags.reserve(creation.num_bindings);
+
+		for (uint32_t i = 0; i < creation.num_bindings; ++i)
+		{
+			const auto& src = creation.bindings[i];
+			VkDescriptorSetLayoutBinding binding{};
+			binding.binding = src.index;
+			binding.descriptorType = get_descriptor_type(src.type);
+			binding.descriptorCount = std::max<uint32_t>(src.count, 1u);
+			binding.stageFlags = get_vk_shader_stage_flags(src.stage_flags);
+			bindings.push_back(binding);
+			descriptor_pool->add_pool_item(src.type, std::max<uint32_t>(src.count, 1u));
+
+			VkDescriptorBindingFlags flags = 0;
+			if (src.bindless)
+			{
+				flags |= VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+				flags |= VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+				flags |= VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+			}
+			binding_flags.push_back(flags);
+		}
+
+		VkDescriptorSetLayoutBindingFlagsCreateInfo binding_flags_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO };
+		binding_flags_info.bindingCount = static_cast<uint32_t>(binding_flags.size());
+		binding_flags_info.pBindingFlags = binding_flags.empty() ? nullptr : binding_flags.data();
+
+		VkDescriptorSetLayoutCreateInfo create_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+		create_info.bindingCount = static_cast<uint32_t>(bindings.size());
+		create_info.pBindings = bindings.empty() ? nullptr : bindings.data();
+		create_info.pNext = binding_flags.empty() ? nullptr : &binding_flags_info;
+		if (creation.bindless)
+		{
+			create_info.flags |= VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+		}
+
+		VK_CHECK_RESULT(vkCreateDescriptorSetLayout(VulkanContext::get_vulkan_device(), &create_info, VulkanContext::get_vulkan_allocation_callbacks(), &m_vkDescriptorSetLayout));
+		if (!descriptor_pool->end())
+		{
+			return false;
+		}
+		m_poolContainer->m_pDescriptorPool = descriptor_pool;
+		return true;
+	}
+
+	VulkanDescriptorSetLayout::~VulkanDescriptorSetLayout()
+	{
+		m_poolContainer.reset();
+		if (m_vkDescriptorSetLayout != VK_NULL_HANDLE)
+		{
+			vkDestroyDescriptorSetLayout(VulkanContext::get_vulkan_device(), m_vkDescriptorSetLayout, VulkanContext::get_vulkan_allocation_callbacks());
+			m_vkDescriptorSetLayout = VK_NULL_HANDLE;
+		}
+	}
+
+	const DescriptorSetLayoutCreation& VulkanDescriptorSetLayout::get_creation() const
+	{
+		return m_creation;
+	}
+
+	uint32_t VulkanDescriptorSetLayout::get_set_index() const
+	{
+		return m_creation.set_index;
+	}
+
+	std::shared_ptr<VulkanDescriptorPoolContainer> VulkanDescriptorSetLayout::get_pool_container() const
+	{
+		return m_poolContainer;
+	}
+
+	auto VulkanDescriptorSetLayout::get_native_handle() -> void*
+	{
+		return m_vkDescriptorSetLayout;
+	}
+
+	auto VulkanDescriptorSetLayout::get_name() -> const char*
+	{
+		return m_creation.name;
+	}
+
 	std::shared_ptr<VulkanDescriptorPool> VulkanDescriptorPoolContainer::get_descriptor_pool() const
 	{
 		return m_pDescriptorPool;
 	}
-	void VulkanDescriptorPoolContainer::add_allocated(std::shared_ptr<VulkanDescriptorSet> p)
+	void VulkanDescriptorPoolContainer::add_allocated(VulkanDescriptorSet* p)
 	{
 		m_setAlloced.insert(p);
 	}
-	void VulkanDescriptorPoolContainer::remove(std::shared_ptr<VulkanDescriptorSet> pSet)
+	void VulkanDescriptorPoolContainer::remove(VulkanDescriptorSet* pSet)
 	{
 		auto pPool = get_descriptor_pool();
 		if (m_pDescriptorPool)
@@ -125,6 +286,7 @@ namespace RHI
 			if (m_pDescriptorPool)
 			{
 				vkDestroyDescriptorPool(pDevice, m_pDescriptorPool, nullptr);
+				m_pDescriptorPool = VK_NULL_HANDLE;
 			}
 			if (m_pNextPool)
 			{
@@ -139,6 +301,7 @@ namespace RHI
 			{
 				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {
 					vkDestroyDescriptorPool(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
+				m_pDescriptorPool = VK_NULL_HANDLE;
 			}
 			m_pNextPool.reset();
 		}
@@ -148,11 +311,12 @@ namespace RHI
 		if (m_pDescriptorPool)
 		{
 			vkDestroyDescriptorPool(VulkanContext::get_vulkan_device(), m_pDescriptorPool, nullptr);
+			m_pDescriptorPool = VK_NULL_HANDLE;
 		}
 		m_vecDescriptorPoolSize.clear();
 		m_uMaxSet = maxSet;
 		m_uAllocedSet = 0;
-		m_bBindlessPool = false;
+		m_bBindlessPool = bBindlessSet;
 		return *this;
 	}
 	bool VulkanDescriptorPool::end()
@@ -184,10 +348,10 @@ namespace RHI
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
-	bool VulkanDescriptorPool::free_descriptor_set(std::shared_ptr<VulkanDescriptorSet> pDescriptorSet)
+	bool VulkanDescriptorPool::free_descriptor_set(VulkanDescriptorSet* pDescriptorSet)
 	{
 		VkDevice pDevice = VulkanContext::get_vulkan_device();
-		std::shared_ptr<VulkanDescriptorPool> pPool = pDescriptorSet->m_pRealAllocPool;
+		std::shared_ptr<VulkanDescriptorPool> pPool = pDescriptorSet ? pDescriptorSet->m_pRealAllocPool : nullptr;
 		if (pPool && pPool->m_uAllocedSet > 0)
 		{
 			pPool->m_uAllocedSet--;
@@ -204,7 +368,7 @@ namespace RHI
 			{
 				if (pPool->m_pPreviousPool)
 				{
-					// 不是头结点就可以干掉了,自动删除子结点回收空间
+					// Non-head pool nodes can be released once they become empty.
 					auto pPrev = pPool->m_pPreviousPool;
 					auto pCur = pPool;
 					auto pNext = pPool->m_pNextPool;
@@ -254,6 +418,7 @@ namespace RHI
 		pNewPool->m_vecDescriptorPoolSize.assign(m_vecDescriptorPoolSize.begin(), m_vecDescriptorPoolSize.end());
 		pNewPool->m_uMaxSet = m_uMaxSet;
 		pNewPool->m_uAllocedSet = 0;
+		pNewPool->m_bBindlessPool = m_bBindlessPool;
 
 		VkDescriptorPoolCreateInfo descriptorPoolInfo{}; 
 		descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -261,6 +426,10 @@ namespace RHI
 		descriptorPoolInfo.poolSizeCount = (uint32_t)pNewPool->m_vecDescriptorPoolSize.size();
 		descriptorPoolInfo.pPoolSizes = pNewPool->m_vecDescriptorPoolSize.data();
 		descriptorPoolInfo.maxSets = pNewPool->m_uMaxSet; 
+		if (pNewPool->m_bBindlessPool)
+		{
+			descriptorPoolInfo.flags |= VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+		}
 
 		vkCreateDescriptorPool(pDevice, &descriptorPoolInfo, nullptr, &pNewPool->m_pDescriptorPool);
 		return pNewPool;
@@ -295,7 +464,7 @@ namespace RHI
 		H_ASSERT(poolContainer);
 		m_pVkLayout = layout;
 		m_pPoolContainer = poolContainer;
-		poolContainer->add_allocated(shared_from_this());
+		poolContainer->add_allocated(this);
 		m_pRealAllocPool = nullptr;
 		std::shared_ptr<VulkanDescriptorPool> pVulkanPoolHeader = m_pPoolContainer->get_descriptor_pool();
 		if (pVulkanPoolHeader)
@@ -328,7 +497,7 @@ namespace RHI
 	{
 		if (m_pPoolContainer)
 		{
-			m_pPoolContainer->remove(shared_from_this());
+			m_pPoolContainer->remove(this);
 		}
 		m_pPoolContainer = nullptr;
 	}
@@ -351,91 +520,121 @@ namespace RHI
 		ASH_SAFE_EXECUTE_END(bResult);
 		return *this;
 	}
+	void VulkanDescriptorSet::prepare_write_capacity(uint32_t imageDescriptorCount, uint32_t bufferDescriptorCount, uint32_t writeCount)
+	{
+		m_vecCachedImageAndSamplerInfo.reserve(imageDescriptorCount);
+		m_vecCachedBufferInfo.reserve(bufferDescriptorCount);
+		m_vecWriteDescriptorSets.reserve(writeCount);
+	}
 	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_srv(uint32_t uBinding, std::shared_ptr<BufferView> srv)
 	{
-		//upper logic must avoid nullptr
-		H_ASSERT(srv);
-		auto& desc = srv->get_view_desc();
-		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{ (VkBuffer)srv->get_native_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange});
-		//transition
-		{
-			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(srv->get_parent_buffer());
-			H_ASSERT(pVulkanBuffer);
-			m_vecBarrierCollection.emplace_back(srv->get_parent_buffer(), AshResourceState::SRVMask);
-		}
-		//record write info
-		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-		descriptorWrite.dstSet = m_pVkDescriptorSet;
-		descriptorWrite.dstBinding = uBinding;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		descriptorWrite.pBufferInfo = &m_vecCachedBufferInfo.back();
-		m_vecWriteDescriptorSets.push_back(descriptorWrite);
-		return *this;
+		return add_bind_srv_array(uBinding, { srv }, ASH_DESCRIPTOR_TYPE_STORAGE_BUFFER);
 	}
 	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_srv(uint32_t uBinding, std::shared_ptr<TextureView> srv)
 	{
-		//upper logic must avoid nullptr
-		H_ASSERT(srv);
-		m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{(VkSampler)VK_NULL_HANDLE, (VkImageView)srv->get_native_handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-		//transition
+		return add_bind_srv_array(uBinding, { srv }, ASH_DESCRIPTOR_TYPE_SAMPLED_IMAGE);
+	}
+	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_srv_array(uint32_t uBinding, const std::vector<std::shared_ptr<BufferView>>& srvs, AshDescriptorType descriptorType)
+	{
+		H_ASSERT(!srvs.empty());
+		const size_t start_index = m_vecCachedBufferInfo.size();
+		for (const auto& srv : srvs)
 		{
+			H_ASSERT(srv);
+			auto& desc = srv->get_view_desc();
+			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(srv->get_parent_buffer());
+			H_ASSERT(pVulkanBuffer);
+			m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{ pVulkanBuffer->get_vk_buffer_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange });
+			m_vecBarrierCollection.emplace_back(srv->get_parent_buffer(), AshResourceState::SRVMask);
+		}
+		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		descriptorWrite.dstSet = m_pVkDescriptorSet;
+		descriptorWrite.dstBinding = uBinding;
+		descriptorWrite.descriptorCount = static_cast<uint32_t>(srvs.size());
+		descriptorWrite.descriptorType = get_buffer_descriptor_type(descriptorType, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+		descriptorWrite.pBufferInfo = m_vecCachedBufferInfo.data() + start_index;
+		m_vecWriteDescriptorSets.push_back(descriptorWrite);
+		return *this;
+	}
+	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_srv_array(uint32_t uBinding, const std::vector<std::shared_ptr<TextureView>>& srvs, AshDescriptorType descriptorType)
+	{
+		H_ASSERT(!srvs.empty());
+		const size_t start_index = m_vecCachedImageAndSamplerInfo.size();
+		for (const auto& srv : srvs)
+		{
+			H_ASSERT(srv);
+			m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{ (VkSampler)VK_NULL_HANDLE, (VkImageView)srv->get_native_handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
 			auto pVulkanTexture = std::static_pointer_cast<VulkanTexture>(srv->get_parent_texture());
 			H_ASSERT(pVulkanTexture);
 			auto subRange = pVulkanTexture->resolve_subresource_range(srv->get_subresource_range());
 			m_vecBarrierCollection.emplace_back(srv->get_parent_texture(), AshResourceState::SRVMask, subRange);
 		}
-		//record write info
 		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
 		descriptorWrite.dstSet = m_pVkDescriptorSet;
 		descriptorWrite.dstBinding = uBinding;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-		descriptorWrite.pImageInfo = &m_vecCachedImageAndSamplerInfo.back();
+		descriptorWrite.descriptorCount = static_cast<uint32_t>(srvs.size());
+		descriptorWrite.descriptorType = get_descriptor_type(descriptorType);
+		if (descriptorWrite.descriptorType == VK_DESCRIPTOR_TYPE_MAX_ENUM)
+		{
+			descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+		}
+		descriptorWrite.pImageInfo = m_vecCachedImageAndSamplerInfo.data() + start_index;
 		m_vecWriteDescriptorSets.push_back(descriptorWrite);
 		return *this;
 	}
 	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_uav(uint32_t uBinding, std::shared_ptr<BufferView> uav)
 	{
-		//upper logic must avoid nullptr
-		H_ASSERT(uav);
-		auto& desc = uav->get_view_desc();
-		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{(VkBuffer)uav->get_native_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange});
-		//transition
-		{
-			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(uav->get_parent_buffer());
-			H_ASSERT(pVulkanBuffer);
-			m_vecBarrierCollection.emplace_back(uav->get_parent_buffer(), AshResourceState::UAVMask);
-		}
-		//record write info
-		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
-		descriptorWrite.dstSet = m_pVkDescriptorSet;
-		descriptorWrite.dstBinding = uBinding;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-		descriptorWrite.pBufferInfo = &m_vecCachedBufferInfo.back();
-		m_vecWriteDescriptorSets.push_back(descriptorWrite);
-		return *this;
+		return add_bind_uav_array(uBinding, { uav }, ASH_DESCRIPTOR_TYPE_STORAGE_BUFFER);
 	}
 	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_uav(uint32_t uBinding, std::shared_ptr<TextureView> uav)
 	{
-		//upper logic must avoid nullptr
-		H_ASSERT(uav);
-		m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{(VkSampler)VK_NULL_HANDLE, (VkImageView)uav->get_native_handle(), VK_IMAGE_LAYOUT_GENERAL});
-		//transition
+		return add_bind_uav_array(uBinding, { uav }, ASH_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+	}
+	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_uav_array(uint32_t uBinding, const std::vector<std::shared_ptr<BufferView>>& uavs, AshDescriptorType descriptorType)
+	{
+		H_ASSERT(!uavs.empty());
+		const size_t start_index = m_vecCachedBufferInfo.size();
+		for (const auto& uav : uavs)
 		{
+			H_ASSERT(uav);
+			auto& desc = uav->get_view_desc();
+			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(uav->get_parent_buffer());
+			H_ASSERT(pVulkanBuffer);
+			m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{ pVulkanBuffer->get_vk_buffer_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange });
+			m_vecBarrierCollection.emplace_back(uav->get_parent_buffer(), AshResourceState::UAVMask);
+		}
+		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		descriptorWrite.dstSet = m_pVkDescriptorSet;
+		descriptorWrite.dstBinding = uBinding;
+		descriptorWrite.descriptorCount = static_cast<uint32_t>(uavs.size());
+		descriptorWrite.descriptorType = get_buffer_descriptor_type(descriptorType, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER);
+		descriptorWrite.pBufferInfo = m_vecCachedBufferInfo.data() + start_index;
+		m_vecWriteDescriptorSets.push_back(descriptorWrite);
+		return *this;
+	}
+	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_uav_array(uint32_t uBinding, const std::vector<std::shared_ptr<TextureView>>& uavs, AshDescriptorType descriptorType)
+	{
+		H_ASSERT(!uavs.empty());
+		const size_t start_index = m_vecCachedImageAndSamplerInfo.size();
+		for (const auto& uav : uavs)
+		{
+			H_ASSERT(uav);
+			m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{ (VkSampler)VK_NULL_HANDLE, (VkImageView)uav->get_native_handle(), VK_IMAGE_LAYOUT_GENERAL });
 			auto pVulkanTexture = std::static_pointer_cast<VulkanTexture>(uav->get_parent_texture());
 			H_ASSERT(pVulkanTexture);
 			auto subRange = pVulkanTexture->resolve_subresource_range(uav->get_subresource_range());
 			m_vecBarrierCollection.emplace_back(uav->get_parent_texture(), AshResourceState::UAVMask, subRange);
 		}
-		//record write info
 		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
 		descriptorWrite.dstSet = m_pVkDescriptorSet;
 		descriptorWrite.dstBinding = uBinding;
-		descriptorWrite.descriptorCount = 1;
-		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-		descriptorWrite.pImageInfo = &m_vecCachedImageAndSamplerInfo.back();
+		descriptorWrite.descriptorCount = static_cast<uint32_t>(uavs.size());
+		descriptorWrite.descriptorType = get_descriptor_type(descriptorType);
+		if (descriptorWrite.descriptorType == VK_DESCRIPTOR_TYPE_MAX_ENUM)
+		{
+			descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+		}
+		descriptorWrite.pImageInfo = m_vecCachedImageAndSamplerInfo.data() + start_index;
 		m_vecWriteDescriptorSets.push_back(descriptorWrite);
 		return *this;
 	}
@@ -444,11 +643,11 @@ namespace RHI
 		//upper logic must avoid nullptr
 		H_ASSERT(cbv);
 		auto& desc = cbv->get_view_desc();
-		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{(VkBuffer)cbv->get_native_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange});
+		auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(cbv->get_parent_buffer());
+		H_ASSERT(pVulkanBuffer);
+		m_vecCachedBufferInfo.emplace_back(VkDescriptorBufferInfo{ pVulkanBuffer->get_vk_buffer_handle(), (VkDeviceSize)desc.uByteOffset, (VkDeviceSize)desc.uByteRange });
 		//transition
 		{
-			auto pVulkanBuffer = std::static_pointer_cast<VulkanBuffer>(cbv->get_parent_buffer());
-			H_ASSERT(pVulkanBuffer);
 			m_vecBarrierCollection.emplace_back(cbv->get_parent_buffer(), AshResourceState::ConstBuffer);
 		}
 		//record write info
@@ -463,16 +662,23 @@ namespace RHI
 	}
 	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_sampler(uint32_t uBinding, std::shared_ptr<SamplerView> smaplerView)
 	{
-		//upper logic must avoid nullptr
-		H_ASSERT(smaplerView);
-		m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{(VkSampler)smaplerView->get_native_handle(), (VkImageView)VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL});
-		//record write info
+		return add_bind_sampler_array(uBinding, { smaplerView });
+	}
+	VulkanDescriptorSet& VulkanDescriptorSet::add_bind_sampler_array(uint32_t uBinding, const std::vector<std::shared_ptr<SamplerView>>& samplerViews)
+	{
+		H_ASSERT(!samplerViews.empty());
+		const size_t start_index = m_vecCachedImageAndSamplerInfo.size();
+		for (const auto& samplerView : samplerViews)
+		{
+			H_ASSERT(samplerView);
+			m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{ (VkSampler)samplerView->get_native_handle(), (VkImageView)VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+		}
 		VkWriteDescriptorSet descriptorWrite{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
 		descriptorWrite.dstSet = m_pVkDescriptorSet;
 		descriptorWrite.dstBinding = uBinding;
-		descriptorWrite.descriptorCount = 1;
+		descriptorWrite.descriptorCount = static_cast<uint32_t>(samplerViews.size());
 		descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-		descriptorWrite.pImageInfo = &m_vecCachedImageAndSamplerInfo.back();
+		descriptorWrite.pImageInfo = m_vecCachedImageAndSamplerInfo.data() + start_index;
 		m_vecWriteDescriptorSets.push_back(descriptorWrite);
 		return *this;
 	}
@@ -492,10 +698,19 @@ namespace RHI
 		m_vecCachedBufferInfo.clear();
 		m_vecCachedImageAndSamplerInfo.clear();
 		m_vecWriteDescriptorSets.clear();
+		m_vecBarrierCollection.clear();
 	}
 	void VulkanDescriptorSet::clear_pool_container()
 	{
 		m_pPoolContainer = nullptr;
 		m_pRealAllocPool = nullptr;
+	}
+	const std::vector<AshBarrier>& VulkanDescriptorSet::get_barriers() const
+	{
+		return m_vecBarrierCollection;
+	}
+	VkDescriptorSet VulkanDescriptorSet::get_native_handle() const
+	{
+		return m_pVkDescriptorSet;
 	}
 }

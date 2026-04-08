@@ -1,5 +1,6 @@
 #include "Editor.h"
 #include "Base/hlog.h"
+#include "Function/Render/Renderer.h"
 namespace AshEditor
 {
 	Editor::Editor(const AshEngine::EngineInitConfig& config) : AshEngine::Application(config)
@@ -8,6 +9,7 @@ namespace AshEditor
 	}
 	Editor::~Editor()
 	{
+		m_codexLogoDemo.shutdown();
 	}
 	auto Editor::_on_update() -> void 
 	{
@@ -24,11 +26,21 @@ namespace AshEditor
 	}
 	auto Editor::_on_render() -> void 
 	{
-		AshEngine::Application::_on_render();
+		auto* renderer = AshEngine::Application::get_renderer();
+		if (!renderer || !renderer->begin_frame())
+		{
+			return;
+		}
+		_on_render_debug();
+		m_codexLogoDemo.render();
+		renderer->end_frame();
 	}
 	auto Editor::_present() -> void 
 	{
-		AshEngine::Application::_present();
+		if (auto* renderer = AshEngine::Application::get_renderer())
+		{
+			renderer->present();
+		}
 	}
 }
 auto create_application() -> AshEngine::Application*

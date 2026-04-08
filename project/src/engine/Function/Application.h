@@ -9,6 +9,8 @@ namespace RHI
 
 namespace AshEngine
 {
+	class RenderDevice;
+	class Renderer;
 	class Window;
 	struct ASH_API EngineInitConfig
 	{
@@ -28,17 +30,27 @@ namespace AshEngine
 			return app;
 		}
 	public:
-		inline static auto& get_graphics_context()
-		{
-			return get()->graphicsContext;
-		}
 		inline static auto& get_window()
 		{
 			return get()->window;
 		}
+#if defined(ASH_ENGINE)
+		inline static auto& get_graphics_context()
+		{
+			return get()->graphicsContext;
+		}
 		inline static auto get_swapchain()
 		{
 			return get()->swapChain;
+		}
+		inline static auto get_render_device()
+		{
+			return get()->renderDevice;
+		}
+#endif
+		inline static auto get_renderer()
+		{
+			return get()->renderer;
 		}
 		auto start() -> void;
 	protected:
@@ -52,6 +64,8 @@ namespace AshEngine
 	protected:
 		Window*					window					= nullptr;
 		RHI::GraphicsContext*	graphicsContext			= nullptr;
-		RHI::Swapchain*			swapChain					= nullptr;
+		RHI::Swapchain*			swapChain				= nullptr;
+		RenderDevice*			renderDevice			= nullptr;
+		Renderer*				renderer				= nullptr;
 	};
 };

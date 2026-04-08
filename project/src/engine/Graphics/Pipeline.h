@@ -6,6 +6,7 @@ namespace RHI
 {
 	class RenderPass;
 	class DescriptorSetLayout;
+	class Shader;
 	struct RasterizationCreation {
 
 		AshCullModeFlagBits             cull_mode = AshCullModeFlagBits::ASH_CULL_MODE_NONE;
@@ -148,6 +149,8 @@ namespace RHI
 		const char*								code		= nullptr;
 		uint32_t								code_size	= 0;
 		AshShaderStageFlagBits					type		= AshShaderStageFlagBits::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
+		const char*								entry_point = "main";
+		std::shared_ptr<Shader>					shader		= nullptr;
 
 	}; // struct ShaderStage
 
@@ -166,12 +169,37 @@ namespace RHI
 				if (stage.type == type) {
 					stage.code = code;
 					stage.code_size = (uint32_t)code_size;
+					stage.shader.reset();
+					stage.entry_point = "main";
 					return *this;
 				}
 			}
 			stages[stages_count].code = code;
 			stages[stages_count].code_size = (uint32_t)code_size;
 			stages[stages_count].type = type;
+			stages[stages_count].entry_point = "main";
+			stages[stages_count].shader.reset();
+			++stages_count;
+			return *this;
+		}
+		inline ShaderStateCreation& add_stage(std::shared_ptr<Shader> shader, AshShaderStageFlagBits type, const char* entry_point = nullptr)
+		{
+			for (uint32_t s = 0; s < stages_count; ++s) {
+				ShaderStage& stage = stages[s];
+
+				if (stage.type == type) {
+					stage.shader = shader;
+					stage.code = nullptr;
+					stage.code_size = 0;
+					stage.entry_point = entry_point ? entry_point : "main";
+					return *this;
+				}
+			}
+			stages[stages_count].shader = shader;
+			stages[stages_count].code = nullptr;
+			stages[stages_count].code_size = 0;
+			stages[stages_count].type = type;
+			stages[stages_count].entry_point = entry_point ? entry_point : "main";
 			++stages_count;
 			return *this;
 		}
@@ -196,7 +224,7 @@ namespace RHI
 		VertexInputCreation							vertex_input;
 		ShaderStateCreation							shaders;
 		AshPrimitiveTopology						primitiveTopology = AshPrimitiveTopology::ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-		uint32_t									flags;
+		uint32_t									flags = 0;
 		std::shared_ptr<RenderPass>					render_pass;
 		std::shared_ptr<DescriptorSetLayout>		descriptor_set_layout[k_max_descriptor_set_layouts];
 		const ViewportState*						viewport = nullptr;

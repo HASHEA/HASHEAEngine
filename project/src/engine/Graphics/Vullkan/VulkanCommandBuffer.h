@@ -46,6 +46,13 @@ namespace RHI
 		auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void override;
 		auto cmd_end_render_pass() -> void override;
 		auto cmd_bind_pipeline() -> void override;
+		auto cmd_set_viewport(const Viewport& viewport) -> void override;
+		auto cmd_set_scissor(const Rect2DInt& scissor) -> void override;
+		auto cmd_bind_vertex_buffers(uint32_t firstBinding, uint32_t bindingCount, std::shared_ptr<Buffer>* buffers, const uint64_t* offsets) -> void override;
+		auto cmd_bind_index_buffer(std::shared_ptr<Buffer> buffer, uint64_t offset, AshIndexType indexType) -> void override;
+		auto cmd_draw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0, uint32_t firstInstance = 0) -> void override;
+		auto cmd_draw_indexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0, int32_t vertexOffset = 0, uint32_t firstInstance = 0) -> void override;
+		auto cmd_dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) -> void override;
 		auto cmd_update_sub_resource(std::shared_ptr<Buffer>, uint32_t uOffset, uint32_t uSize, void* pData) -> bool override;
 	private:
 		VkCommandBuffer							vkCommandBuffer				= VK_NULL_HANDLE;

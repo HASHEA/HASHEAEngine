@@ -6,10 +6,12 @@ namespace RHI
 	VulkanRenderPass::VulkanRenderPass(const RenderPassCreation& ci)
 	{
 		name = ci.name;
-		colorLoadOptions.init(nullptr, ci.num_render_targets, ci.num_render_targets);
+		colorLoadOptions.init(nullptr, ci.num_render_targets, 0);
+		colorAttachmentCount = ci.num_render_targets;
 		for (uint32_t i = 0; i < ci.num_render_targets; ++i)
 		{
 			colorLoadOptions.push_back(ci.color_operations[i]);
+			colorFormats[i] = ci.color_formats[i];
 		}
 		depthStencilLoadOption = ci.depth_operation;
 		depthStencilFormat = ci.depth_stencil_format;
@@ -182,6 +184,15 @@ namespace RHI
 	auto VulkanRenderPass::get_color_operations() -> const Array<AshLoadOption>&
 	{
 		return colorLoadOptions;
+	}
+	auto VulkanRenderPass::get_color_attachment_count() -> uint32_t
+	{
+		return colorAttachmentCount;
+	}
+	auto VulkanRenderPass::get_color_attachment_format(uint32_t index) -> AshFormat
+	{
+		H_ASSERT(index < colorAttachmentCount);
+		return colorFormats[index];
 	}
 	auto VulkanRenderPass::get_depth_stencil_operations() -> AshLoadOption
 	{

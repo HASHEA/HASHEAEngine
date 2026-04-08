@@ -3,15 +3,16 @@
 #include <rc/public/rc.h>
 
 //////////////////////////////////////////////////////////////////////////
-///// 屏幕偏色posteffect
-// 1. shader：client\data\public\shader\PostRenderFinalPass.fx
+///// Screen color-shift post effect
+// 1. Shader: client\data\public\shader\PostRenderFinalPass.fx
 // technique FinalPassCurveCMYK
 // 
-// 2. 预设index，取值范围0 - 8，值在这里：client\data\public\color_curve.ini
-// 读取ini的代码：Sword3\Source\KG3DEngine\KG3DEngine\KG3DPostRenderEffectManager.cpp
+// 2. Preset index range: 0 - 8, configured in: client\data\public\color_curve.ini
+// Reference loader: Sword3\Source\KG3DEngine\KG3DEngine\KG3DPostRenderEffectManager.cpp
 // HRESULT KG3DPostRenderEffectManager::LoadCurveStype()
 // 
-// 3. 设置颜色的代码 HRESULT KG3DPostRenderEffectManager::SetActiveStype(int index, int bFlush)
+// 3. Runtime color-switch entry:
+// HRESULT KG3DPostRenderEffectManager::SetActiveStype(int index, int bFlush)
 
 RC_NAMESPACE_BEGIN
 

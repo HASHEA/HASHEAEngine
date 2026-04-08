@@ -13,6 +13,8 @@ namespace RHI
 		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;
 		auto get_color_operations() -> const Array<AshLoadOption> & override;
+		auto get_color_attachment_count() -> uint32_t override;
+		auto get_color_attachment_format(uint32_t index) -> AshFormat override;
 
 		auto get_depth_stencil_operations() -> AshLoadOption override;
 
@@ -27,6 +29,8 @@ namespace RHI
 		VkRenderPass vkRenderPass = VK_NULL_HANDLE;
 		const char* name = nullptr;
 		Array<AshLoadOption> colorLoadOptions;
+		AshFormat colorFormats[k_max_image_outputs]{};
+		uint32_t colorAttachmentCount = 0;
 		AshLoadOption depthStencilLoadOption = AshLoadOption::ASH_LOAD_DONT_CARE;
 		AshFormat depthStencilFormat = ASH_FORMAT_UNDEFINED;
 		uint32_t multiviewMask = 0;

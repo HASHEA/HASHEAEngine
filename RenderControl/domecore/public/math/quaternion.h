@@ -261,8 +261,8 @@ public:
         TQuaternion q1(i_Other);
         TYPE t = i_Ratio;
 
-        // Compute the ¡± cos ine of the angle ¡± between the
-        // quaternions , us ing the dot product
+        // Compute the cosine of the angle between the
+        // quaternions using the dot product.
         TYPE cosOmega = dotProduct(i_Other);
 
         // if negative dot, negate one of the input

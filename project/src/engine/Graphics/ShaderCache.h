@@ -117,8 +117,8 @@ namespace RHI
 		char Magic[4] = { kMagic[0],kMagic[1], kMagic[2], kMagic[3] };
 		uint32_t Version = kVersion;
 		uint32_t BlobSize = {};
-		SHA1::Digest CompilerHash = {}; /// shader����ʱ��ؼ��ֵ�hash
-		SHA1::Digest CacheHash = {};    /// �����ļ����ݵ�hash������У���ȡ���ļ������Ƿ�ʧ
+		SHA1::Digest CompilerHash = {}; /// Hash of shader-compiler key inputs.
+		SHA1::Digest CacheHash = {};    /// Hash of cached file contents for cache validation.
 
 		bool operator ==(const ShaderCacheIndexHeader& other) const
 		{

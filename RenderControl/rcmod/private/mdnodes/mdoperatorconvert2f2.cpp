@@ -112,7 +112,7 @@ MDOperandPtr        MDOperatorConvert2F2::execute(MDEffect* i_pMDEffect, Int i_P
         FRAMETIMER_END(FTT_RC_CAL_C2F2);
 		return l_pOperand;
 	}
-	else if (l_TypeID == RCGlobal::k_SimpleTypeID_DVector2f)							//-无需转换
+	else if (l_TypeID == RCGlobal::k_SimpleTypeID_DVector2f)							// identity conversion
 	{
 		o_pInputReleasePoint[0] = IRP_INFINISHCALLBACK;
         FRAMETIMER_END(FTT_RC_CAL_C2F2);
@@ -166,7 +166,7 @@ DResult             MDOperatorConvert2F2::destroyResult(MDEffect* i_pMDEffect, I
 
 	DSimpleTypeID l_TypeID = i_pParamList[0]->getDataType(0);
 
-	if (l_TypeID == RCGlobal::k_SimpleTypeID_DVector2f)									//-无需转换
+	if (l_TypeID == RCGlobal::k_SimpleTypeID_DVector2f)									// identity conversion
 	{
 		return R_SUCCESS;
 	}

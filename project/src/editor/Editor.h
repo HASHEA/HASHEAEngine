@@ -1,4 +1,5 @@
 #pragma once
+#include "CodexLogoDemoRenderer.h"
 #include "EntryPoint.h"
 namespace AshEditor
 {
@@ -14,6 +15,6 @@ namespace AshEditor
 		auto _on_render() -> void override;
 		auto _present() -> void override;
 	private:
-
+		CodexLogoDemoRenderer m_codexLogoDemo;
 	};
 }

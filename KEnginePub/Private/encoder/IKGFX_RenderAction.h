@@ -58,7 +58,7 @@ namespace gfx
         int           m_nRA_Size{0};
     };
 
-	// Fatal: tagRenderActon 子类成员都得是普通数据类型，不能含有模板容器等，才能满足二进制读写
+	// Keep tagRenderAction POD-like and compact; some external code paths serialize it directly.
 	//
 
 } // namespace gfx

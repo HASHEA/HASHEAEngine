@@ -62,6 +62,8 @@ namespace RHI
 		virtual ~RenderPass() {}
 	public:
 		virtual auto get_color_operations() -> const Array<AshLoadOption> & = 0;
+		virtual auto get_color_attachment_count() -> uint32_t = 0;
+		virtual auto get_color_attachment_format(uint32_t index) -> AshFormat = 0;
 		virtual auto get_depth_stencil_operations() -> AshLoadOption = 0;
 		virtual auto get_depth_stencil_format() -> AshFormat = 0;
 		virtual auto get_multiview_mask() -> uint32_t = 0;

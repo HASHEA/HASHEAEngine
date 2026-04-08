@@ -7,7 +7,7 @@
 namespace AshEngine
 {
     template <typename T>
-    class ASH_API Array {
+    class Array {
 
     public:
         Array();

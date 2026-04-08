@@ -2,15 +2,32 @@
 #include "Base/hfile.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
+#include "Base/hmemory.h"
 #include <string>
 namespace RHI
 {
+	static inline void free_include_file_text(AshEngine::FileReadResult& result)
+	{
+		if (result.data)
+		{
+			AshEngine::MemoryService::instance()->get_system_allocator()->deallocate(result.data);
+			result.data = nullptr;
+			result.size = 0;
+		}
+	}
+
 	DXCIncludeHandler::DXCIncludeHandler()
 	{
+		HRESULT hrRes = DxcCreateInstance(CLSID_DxcLibrary, IID_PPV_ARGS(&m_pLibrary));
+		H_ASSERTLOG(SUCCEEDED(hrRes) && m_pLibrary != nullptr, "Failed to create DXC library for include handler.");
 	}
 	DXCIncludeHandler::~DXCIncludeHandler()
 	{
-		Release();
+		if (m_pLibrary)
+		{
+			m_pLibrary->Release();
+			m_pLibrary = nullptr;
+		}
 	}
 	HRESULT DXCIncludeHandler::LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource)
 	{
@@ -45,16 +62,18 @@ namespace RHI
 		}
 		if (fileExist)
 		{
-			std::string szWholeFileString{};
-			szWholeFileString = AshEngine::file_read_text(findFilePathInclude.string().c_str()).data;
-			bHRRet = m_pLibrary->CreateBlobWithEncodingOnHeapCopy(szWholeFileString.data(), static_cast<uint32_t>(szWholeFileString.size()), codePage, ppBlob);
+			AshEngine::FileReadResult file_text = AshEngine::file_read_text(findFilePathInclude.string().c_str());
+			H_ASSERTLOG(file_text.data != nullptr, "Failed to read include file: {}", findFilePathInclude.string().c_str());
+			bHRRet = m_pLibrary->CreateBlobWithEncodingOnHeapCopy(file_text.data, static_cast<uint32_t>(file_text.size), codePage, ppBlob);
+			free_include_file_text(file_text);
 			H_ASSERTLOG(bHRRet == S_OK, "Failed to create blob!");
 		}
 		else
 		{
 			HLogError("Load Shader File Not Exist : {}", filePathInclude.string().c_str());
+			return E_FAIL;
 		}
-		return S_OK;;
+		return bHRRet;
 	}
 	void DXCIncludeHandler::set_current_user_shader_path(const std::filesystem::path& path)
 	{
@@ -77,7 +96,8 @@ namespace RHI
 		ULONG result = static_cast<ULONG>(--m_dwRef);
 		if (result == 0)
 		{
-			delete this;
+			this->~DXCIncludeHandler();
+			AshEngine::MemoryService::instance()->get_system_allocator()->deallocate(this);
 		}
 		return result;
 	}

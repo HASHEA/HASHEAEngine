@@ -8,10 +8,15 @@
 #include "VulkanFence.h"
 #include "GpuProfiler.h"
 #include "VulkanBuffer.h"
+#include "VulkanFramebuffer.h"
+#include "VulkanRenderPass.h"
+#include "VulkanRenderProgram.h"
 #include "VulkanTexture.h"
 #include "VulkanSampler.h"
 #include "VulkanShader.h"
+#include "VulkanShaderCompiler.h"
 #include "VulkanStagingBuffer.h"
+#include "Graphics/DXC/DXCHelper.h"
 #include <vector>
 namespace RHI
 {
@@ -1222,13 +1227,97 @@ namespace RHI
 		return VulkanTextureView::create(ci, parentTexture);
 	}
 
+	auto VulkanContext::create_render_pass(const RenderPassCreation& ci) -> std::shared_ptr<RenderPass>
+	{
+		return VulkanRenderPass::create(ci);
+	}
+
+	auto VulkanContext::create_framebuffer(const FramebufferCreation& ci) -> std::shared_ptr<Framebuffer>
+	{
+		return VulkanFramebuffer::create(ci);
+	}
+
+	auto VulkanContext::create_graphics_render_program(const GraphicProgramCreateDesc& desc) -> std::unique_ptr<IGraphicsRenderProgram>
+	{
+		auto program = std::make_unique<VulkanGraphicsRenderProgram>();
+		if (!program->create(desc))
+		{
+			return nullptr;
+		}
+		return program;
+	}
+
+	auto VulkanContext::create_compute_render_program(const ComputeProgramCreateDesc& desc) -> std::unique_ptr<IComputeRenderProgram>
+	{
+		auto program = std::make_unique<VulkanComputeRenderProgram>();
+		if (!program->create(desc))
+		{
+			return nullptr;
+		}
+		return program;
+	}
+
 	auto VulkanContext::create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> 
 	{
 		uint64_t uHashCode = get_shader_hash(ci);
 		std::shared_ptr<Shader> pRetShader = vulkanShaderPool.get(uHashCode);
 		if (!pRetShader)
 		{
-			pRetShader = Ash_New_Shared<VulkanShader>(ci);
+			auto pVulkanShader = Ash_New_Shared<VulkanShader>();
+			if (!pVulkanShader->init(ci))
+			{
+				return nullptr;
+			}
+
+			ShaderItem shader_item{};
+			shader_item.sourceShaderPath = ci.pBaseShaderPath;
+			shader_item.userShaderPath = ci.pUserShaderPath;
+			shader_item.macroDefine = ci.pShaderMacro;
+			shader_item.entryPoint = ci.pEntryPoint ? ci.pEntryPoint : "main";
+			shader_item.stage = ci.type;
+
+			ShaderFullTextResult shader_text_result{};
+			ShaderFullTextResult* shader_text_result_ptr = &shader_text_result;
+			AshDXCContext dxc_context{};
+			if (!dxc_context.init())
+			{
+				return nullptr;
+			}
+			bool preprocess_ok = dxc_context.preprocess_shader_file_to_full_text(shader_item, &shader_text_result_ptr);
+			dxc_context.uninit();
+			if (!preprocess_ok)
+			{
+				if (!shader_text_result.errorMsg.empty())
+				{
+					HLogError("Shader preprocess diagnostics for {}:\n{}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>", shader_text_result.errorMsg);
+				}
+				HLogError("Failed to preprocess shader {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
+				return nullptr;
+			}
+			if (!shader_text_result.errorMsg.empty())
+			{
+				HLogTrace("Shader preprocess diagnostics for {}:\n{}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>", shader_text_result.errorMsg);
+			}
+			if (shader_text_result.resultShaderText.empty())
+			{
+				HLogError("Shader preprocess result is empty for {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
+				return nullptr;
+			}
+
+			VulkanShaderCompiler shader_compiler{};
+			if (!shader_compiler.init())
+			{
+				return nullptr;
+			}
+			bool compile_ok = shader_compiler.check_and_compile_shader(shader_item, shader_text_result.resultShaderText, pVulkanShader);
+			shader_compiler.uninit();
+			if (!compile_ok)
+			{
+				HLogError("Failed to compile shader {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
+				return nullptr;
+			}
+
+			pRetShader = pVulkanShader;
 			vulkanShaderPool.emplace(uHashCode, pRetShader);
 		}
 		return pRetShader;

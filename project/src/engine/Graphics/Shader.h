@@ -26,6 +26,8 @@ namespace RHI
 		ASH_HASH::hash_combine(hashCode, ci.pUserShaderPath, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pShaderDef, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pShaderMacro, ASH_HASH::CStringHash{});
+		ASH_HASH::hash_combine(hashCode, ci.pEntryPoint, ASH_HASH::CStringHash{});
+		ASH_HASH::hash_combine(hashCode, ci.type);
 		return hashCode;
 	}
 	struct ShaderCode

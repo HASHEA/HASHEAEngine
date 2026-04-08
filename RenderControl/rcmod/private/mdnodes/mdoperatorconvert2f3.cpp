@@ -169,7 +169,7 @@ DResult             MDOperatorConvert2F3::destroyResult(MDEffect* i_pMDEffect, I
 
 	DSimpleTypeID l_TypeID = i_pParamList[0]->getDataType(0);
 
-	if (l_TypeID == RCGlobal::k_SimpleTypeID_DVector3f)									//-ÎÞÐè×ª»»
+	if (l_TypeID == RCGlobal::k_SimpleTypeID_DVector3f)									// identity conversion
 	{
 		return R_SUCCESS;
 	}

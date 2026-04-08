@@ -64,14 +64,6 @@ project "Engine"
 		"meshoptimizer"
 	}
 
-	-- local source_dir = "%{wks.location}/_BUILD/"..outputdir.."/bin/target/Engine/"
-	-- local dest_dir = distdir
-	-- postbuildcommands {
-
-    --     "if not exist \""..dest_dir.."\" mkdir \""..dest_dir.."\"",
-    --     "robocopy \""..source_dir.."\" \""..dest_dir.."\" Engine.dll Engine.pdb /NFL /NDL /NJH /NJS >nul || exit 0"
-    -- }
-
 	filter {"system:windows", "configurations:Debug"}
 		system "Windows"
 		systemversion "latest"
@@ -116,13 +108,13 @@ project "Engine"
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}	
 		dest_dir = "%{wks.location}/product/bin64"	
-		debugcommand "%{wks.location}/product/bin64/Debug/Editor.exe"
-		debugdir "%{wks.location}/product/bin64/Debug"			  
-		postbuildcommands
+		debugcommand "%{wks.location}/product/bin64/Debug-windows-x86_64/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Debug-windows-x86_64"			  
+		postbuildcommands 
 		{
-			("{MKDIR %{wks.location}/product/bin64/Debug"),
-			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Debug")
-		} 
+			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
+			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\"',
+		}
 	filter {"system:windows","configurations:Release"}
 		system "Windows"
 		systemversion "latest"
@@ -154,14 +146,13 @@ project "Engine"
 			thirdparty.."/glslang/release/windows-x64/lib/OSDependent.lib",
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}	
-		debugcommand "%{wks.location}/product/bin64/Release/Editor.exe"
-		debugdir "%{wks.location}/product/bin64/Release"
-		postbuildcommands
+		debugcommand "%{wks.location}/product/bin64/Release-windows-x86_64/Editor.exe"
+		debugdir "%{wks.location}/product/bin64/Release-windows-x86_64"
+		postbuildcommands 
 		{
-			("{MKDIR %{wks.location}/product/bin64/Release"),
-			("{COPYDIR} %{cfg.buildtarget.directory} %{wks.location}/product/bin64/Release")
-		} 
-		
+			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
+			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\"',
+		}
 		
 
 	

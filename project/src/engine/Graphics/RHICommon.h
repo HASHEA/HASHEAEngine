@@ -496,6 +496,12 @@ namespace RHI
 		PerVertex, PerInstance, RateCount
 	} AshVertexInputRate;
 
+	typedef enum AshIndexType {
+		ASH_INDEX_TYPE_UINT16,
+		ASH_INDEX_TYPE_UINT32,
+		ASH_INDEX_TYPE_MAX_ENUM = 0x7FFFFFFF
+	} AshIndexType;
+
 	typedef enum AshVertexComponentFormat {
 		Float, Float2, Float3, Float4, Mat4, Byte, Byte4N, UByte, UByte4N, Short2, Short2N, Short4, Short4N, Uint, Uint2, Uint4, FormatCount
 	} AshVertexComponentFormat;
@@ -623,6 +629,5 @@ namespace RHI
 
 
 }
-
 
 

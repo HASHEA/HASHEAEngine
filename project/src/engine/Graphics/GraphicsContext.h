@@ -3,8 +3,17 @@
 #include "Base/hcore.h"
 #include "Base/ds/harray.hpp"
 #include "RHIResource.h"
+#include <memory>
 namespace RHI {
     struct BufferViewCreation;
+    struct RenderPassCreation;
+    struct FramebufferCreation;
+    struct GraphicProgramCreateDesc;
+    struct ComputeProgramCreateDesc;
+    class RenderPass;
+    class Framebuffer;
+    class IGraphicsRenderProgram;
+    class IComputeRenderProgram;
     struct GpuDescriptorPoolCreation {
 
         uint16_t                             samplers = 256;
@@ -52,6 +61,10 @@ namespace RHI {
 		virtual auto create_buffer_view(const BufferViewCreation& ci, std::shared_ptr<Buffer> parentBuffer) -> std::shared_ptr<BufferView> = 0;
         virtual auto create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture> = 0;
         virtual auto create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView> = 0;
+        virtual auto create_render_pass(const RenderPassCreation& ci) -> std::shared_ptr<RenderPass> = 0;
+        virtual auto create_framebuffer(const FramebufferCreation& ci) -> std::shared_ptr<Framebuffer> = 0;
+        virtual auto create_graphics_render_program(const GraphicProgramCreateDesc& desc) -> std::unique_ptr<IGraphicsRenderProgram> = 0;
+        virtual auto create_compute_render_program(const ComputeProgramCreateDesc& desc) -> std::unique_ptr<IComputeRenderProgram> = 0;
         virtual auto get_sampler(const AshSamplerState& ss)->std::shared_ptr<Sampler> = 0;
         virtual auto wait_idle() -> void = 0;
 		virtual auto begin_frame() -> void = 0;

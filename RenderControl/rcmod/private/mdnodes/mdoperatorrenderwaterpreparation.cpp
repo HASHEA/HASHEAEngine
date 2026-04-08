@@ -190,7 +190,7 @@ MDOperandPtr        MDOperatorRenderWaterPreparation::execute(MDEffect* i_pMDEff
 	l_WaterUnifiedData.ThresholdsAboveWater.get(arrThresholdsUnderWater);
 	for (int i = 0; i < 9; ++i)
 	{
-		// 只支持海水打湿
+		// Current implementation scales every underwater threshold.
 		arrThresholdsUnderWater[i] *= 2;
 		/*
 		if (i != l_WaterUnifiedData.nOceanSurfaceIndex)
