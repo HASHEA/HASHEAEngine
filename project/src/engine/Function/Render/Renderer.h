@@ -42,6 +42,34 @@ namespace AshEngine
 	class ASH_API Renderer
 	{
 	public:
+		class ASH_API GraphicsPassContext
+		{
+		public:
+			GraphicsPassContext() = default;
+			~GraphicsPassContext();
+
+			GraphicsPassContext(const GraphicsPassContext&) = delete;
+			GraphicsPassContext& operator=(const GraphicsPassContext&) = delete;
+			GraphicsPassContext(GraphicsPassContext&& other) noexcept;
+			GraphicsPassContext& operator=(GraphicsPassContext&& other) noexcept;
+
+		public:
+			bool is_valid() const;
+			bool draw(const GraphicsDrawDesc& desc);
+			void end();
+
+		private:
+			explicit GraphicsPassContext(Renderer* renderer);
+
+		private:
+			Renderer* m_renderer = nullptr;
+			bool m_active = false;
+			PassDesc m_desc{};
+			std::vector<GraphicsDrawDesc> m_draw_calls;
+			friend class Renderer;
+		};
+
+	public:
 		explicit Renderer(RenderDevice* render_device);
 		~Renderer();
 
@@ -64,12 +92,16 @@ namespace AshEngine
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
 		std::unique_ptr<ComputeProgram> create_compute_program(const ComputeProgramDesc& desc);
 
-		bool begin_pass(const PassDesc& desc);
-		void end_pass();
+		bool begin_pass(const PassDesc& desc, GraphicsPassContext& pass_context);
 		bool draw(const GraphicsDrawDesc& desc);
 		bool dispatch(const ComputeDispatchDesc& desc);
+		bool is_in_pass() const;
+
+	private:
+		void end_active_pass(GraphicsPassContext* pass_context);
 
 	private:
 		RenderDevice* m_render_device = nullptr;
+		GraphicsPassContext* m_active_pass = nullptr;
 	};
 }

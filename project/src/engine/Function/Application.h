@@ -24,7 +24,7 @@ namespace AshEngine
 	{
 	public:
 		Application(const EngineInitConfig& config);
-		~Application();
+		virtual ~Application();
 		inline static Application* get()
 		{
 			return app;

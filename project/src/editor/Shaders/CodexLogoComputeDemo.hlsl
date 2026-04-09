@@ -7,7 +7,6 @@ struct VSOutput
 StructuredBuffer<float4> PaletteBuffer;
 RWTexture2D<float4> OutputTexture;
 Texture2D<float4> LogoTexture;
-SamplerState LogoSampler;
 
 static const float2 kFullscreenPositions[4] =
 {
@@ -145,5 +144,10 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
 
 float4 PSMain(VSOutput input) : SV_Target0
 {
-    return LogoTexture.Sample(LogoSampler, input.uv);
+    uint width;
+    uint height;
+    LogoTexture.GetDimensions(width, height);
+    float2 clampedUV = saturate(input.uv);
+    uint2 pixel = min(uint2(clampedUV * float2(width, height)), uint2(width - 1, height - 1));
+    return LogoTexture.Load(int3(pixel, 0));
 }

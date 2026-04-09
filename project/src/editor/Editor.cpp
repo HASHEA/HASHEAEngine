@@ -32,7 +32,10 @@ namespace AshEditor
 			return;
 		}
 		_on_render_debug();
-		m_codexLogoDemo.render();
+		if (!m_codexLogoDemo.render())
+		{
+			HLogError("Editor frame render path failed.");
+		}
 		renderer->end_frame();
 	}
 	auto Editor::_present() -> void 

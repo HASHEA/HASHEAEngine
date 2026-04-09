@@ -61,7 +61,8 @@ project "Engine"
 		"volk",
 		"OFBX",
 		"spirv-cross",
-		"meshoptimizer"
+		"meshoptimizer",
+		"dbghelp"
 	}
 
 	filter {"system:windows", "configurations:Debug"}

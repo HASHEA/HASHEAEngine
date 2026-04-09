@@ -72,6 +72,8 @@ namespace AshEngine
 				return RHI::ASH_FORMAT_B8G8R8A8_SRGB;
 			case RenderTextureFormat::RGBA16_SFLOAT:
 				return RHI::ASH_FORMAT_R16G16B16A16_SFLOAT;
+			case RenderTextureFormat::RGBA32_SFLOAT:
+				return RHI::ASH_FORMAT_R32G32B32A32_SFLOAT;
 			case RenderTextureFormat::D24_UNORM_S8_UINT:
 				return RHI::ASH_FORMAT_D24_UNORM_S8_UINT;
 			case RenderTextureFormat::D32_SFLOAT:
@@ -91,6 +93,8 @@ namespace AshEngine
 				return RenderTextureFormat::BGRA8_SRGB;
 			case RHI::ASH_FORMAT_R16G16B16A16_SFLOAT:
 				return RenderTextureFormat::RGBA16_SFLOAT;
+			case RHI::ASH_FORMAT_R32G32B32A32_SFLOAT:
+				return RenderTextureFormat::RGBA32_SFLOAT;
 			case RHI::ASH_FORMAT_D24_UNORM_S8_UINT:
 				return RenderTextureFormat::D24_UNORM_S8_UINT;
 			case RHI::ASH_FORMAT_D32_SFLOAT:
@@ -653,6 +657,147 @@ namespace AshEngine
 		const uint32_t const_data_size = static_cast<uint32_t>(bindings.const_data_block.size());
 		const void* const_data = const_data_size > 0 ? bindings.const_data_block.data() : nullptr;
 		return program.set_const_data_block(const_data_size, const_data);
+	}
+
+	static void append_buffer_barrier(std::vector<RHI::AshBarrier>& barriers, const std::shared_ptr<BufferResource>& resource, RHI::AshResourceState state)
+	{
+		if (resource && resource->buffer)
+		{
+			barriers.emplace_back(resource->buffer, state);
+		}
+	}
+
+	static void append_texture_barrier(std::vector<RHI::AshBarrier>& barriers, const std::shared_ptr<RenderTarget::Impl>& render_target, RHI::AshResourceState state)
+	{
+		if (!render_target)
+		{
+			return;
+		}
+
+		std::shared_ptr<RHI::Texture> texture = render_target->get_texture();
+		if (texture)
+		{
+			barriers.emplace_back(texture, state);
+		}
+	}
+
+	static bool collect_program_resource_barriers(const ProgramBindingState& bindings, bool graphics_pipeline, std::vector<RHI::AshBarrier>& out_barriers)
+	{
+		const RHI::AshResourceState srv_state = graphics_pipeline ? RHI::AshResourceState::SRVGraphics : RHI::AshResourceState::SRVCompute;
+		const RHI::AshResourceState uav_state = graphics_pipeline ? RHI::AshResourceState::UAVGraphics : RHI::AshResourceState::UAVCompute;
+
+		for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
+		{
+			(void)name;
+			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			{
+				return false;
+			}
+			append_buffer_barrier(out_barriers, buffer_impl->resource, RHI::AshResourceState::ConstBuffer);
+		}
+
+		for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
+		{
+			(void)name;
+			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			{
+				return false;
+			}
+			append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
+		}
+
+		for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
+		{
+			(void)name;
+			for (const auto& buffer_impl : buffer_impls)
+			{
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					return false;
+				}
+				append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
+			}
+		}
+
+		for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
+		{
+			(void)name;
+			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			{
+				return false;
+			}
+			append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
+		}
+
+		for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
+		{
+			(void)name;
+			for (const auto& buffer_impl : buffer_impls)
+			{
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					return false;
+				}
+				append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
+			}
+		}
+
+		for (const auto& [name, texture_impl] : bindings.texture_srvs)
+		{
+			(void)name;
+			if (!texture_impl || !texture_impl->get_texture())
+			{
+				return false;
+			}
+			append_texture_barrier(out_barriers, texture_impl, srv_state);
+		}
+
+		for (const auto& [name, texture_impls] : bindings.texture_srv_arrays)
+		{
+			(void)name;
+			for (const auto& texture_impl : texture_impls)
+			{
+				if (!texture_impl || !texture_impl->get_texture())
+				{
+					return false;
+				}
+				append_texture_barrier(out_barriers, texture_impl, srv_state);
+			}
+		}
+
+		for (const auto& [name, texture_impl] : bindings.texture_uavs)
+		{
+			(void)name;
+			if (!texture_impl || !texture_impl->get_texture())
+			{
+				return false;
+			}
+			append_texture_barrier(out_barriers, texture_impl, uav_state);
+		}
+
+		for (const auto& [name, texture_impls] : bindings.texture_uav_arrays)
+		{
+			(void)name;
+			for (const auto& texture_impl : texture_impls)
+			{
+				if (!texture_impl || !texture_impl->get_texture())
+				{
+					return false;
+				}
+				append_texture_barrier(out_barriers, texture_impl, uav_state);
+			}
+		}
+
+		return true;
+	}
+
+	static bool submit_resource_barriers(RHI::CommandBuffer* command_buffer, const std::vector<RHI::AshBarrier>& barriers)
+	{
+		if (!command_buffer || barriers.empty())
+		{
+			return command_buffer != nullptr;
+		}
+		return command_buffer->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
 	}
 
 	static std::unique_ptr<RHI::IGraphicsRenderProgram> create_rhi_graphics_program(GraphicsProgram::Impl& impl, RHI::GraphicsContext* graphics_context, const std::shared_ptr<RHI::RenderPass>& render_pass)
@@ -1425,7 +1570,21 @@ namespace AshEngine
 		m_impl->back_buffer_target->format = RenderTextureFormat::BGRA8_SRGB;
 	}
 
-	RenderDevice::~RenderDevice() = default;
+	RenderDevice::~RenderDevice()
+	{
+		if (!m_impl)
+		{
+			return;
+		}
+
+		m_impl->current_command_buffer = nullptr;
+		m_impl->current_framebuffer.reset();
+		m_impl->current_render_pass.reset();
+		m_impl->back_buffer_target.reset();
+		m_impl->transient_render_target_pool.clear();
+		m_impl->graphics_context = nullptr;
+		m_impl->swapchain = nullptr;
+	}
 
 	bool RenderDevice::begin_frame()
 	{
@@ -1956,6 +2115,58 @@ namespace AshEngine
 			return false;
 		}
 		return program->m_impl->program->apply(make_command_buffer_ref(m_impl->current_command_buffer));
+	}
+
+	bool RenderDevice::transition_graphics_program_resources(GraphicsProgram* program)
+	{
+		if (!program || !program->m_impl || !m_impl->current_command_buffer || m_impl->current_framebuffer)
+		{
+			return false;
+		}
+
+		std::vector<RHI::AshBarrier> barriers;
+		if (!collect_program_resource_barriers(program->m_impl->bindings, true, barriers))
+		{
+			return false;
+		}
+
+		return submit_resource_barriers(m_impl->current_command_buffer, barriers);
+	}
+
+	bool RenderDevice::transition_compute_program_resources(ComputeProgram* program)
+	{
+		if (!program || !program->m_impl || !m_impl->current_command_buffer || m_impl->current_framebuffer)
+		{
+			return false;
+		}
+
+		std::vector<RHI::AshBarrier> barriers;
+		if (!collect_program_resource_barriers(program->m_impl->bindings, false, barriers))
+		{
+			return false;
+		}
+
+		return submit_resource_barriers(m_impl->current_command_buffer, barriers);
+	}
+
+	bool RenderDevice::transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer)
+	{
+		if (!m_impl->current_command_buffer || !buffer || !buffer->m_impl || !buffer->m_impl->resource || !buffer->m_impl->resource->buffer || m_impl->current_framebuffer)
+		{
+			return false;
+		}
+
+		return m_impl->current_command_buffer->cmd_transition_resource_state({ buffer->m_impl->resource->buffer, RHI::AshResourceState::VertexBuffer });
+	}
+
+	bool RenderDevice::transition_index_buffer(const std::shared_ptr<IndexBuffer>& buffer)
+	{
+		if (!m_impl->current_command_buffer || !buffer || !buffer->m_impl || !buffer->m_impl->resource || !buffer->m_impl->resource->buffer || m_impl->current_framebuffer)
+		{
+			return false;
+		}
+
+		return m_impl->current_command_buffer->cmd_transition_resource_state({ buffer->m_impl->resource->buffer, RHI::AshResourceState::IndexBuffer });
 	}
 
 	bool RenderDevice::bind_vertex_buffer(uint32_t slot, const std::shared_ptr<VertexBuffer>& buffer, uint64_t offset)

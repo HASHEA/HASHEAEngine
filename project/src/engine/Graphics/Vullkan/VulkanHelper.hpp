@@ -900,47 +900,51 @@ namespace RHI
 		return vktype;
 	}
 
-	inline auto ash_resource_state_to_vk_image_layout(const AshResourceState& state) -> VkImageLayout
+inline auto ash_resource_state_to_vk_image_layout(const AshResourceState& state) -> VkImageLayout
+{
+	if (state == AshResourceState::Unknown)
 	{
-		VkImageLayout layout = VkImageLayout::VK_IMAGE_LAYOUT_UNDEFINED;
-		switch (state)
-		{
-		case AshResourceState::Unknown:
-			layout = VK_IMAGE_LAYOUT_UNDEFINED;
-			break;
-		case AshResourceState::UAVMask:
-			layout = VK_IMAGE_LAYOUT_GENERAL;
-			break;
-		case AshResourceState::RTV:
-			layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-			break;
-		case AshResourceState::DSVWrite:
-			layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-			break;
-		case AshResourceState::DSVRead:
-			layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-			break;
-		case AshResourceState::SRVMask:
-			layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			break;
-		case AshResourceState::CopySrc:
-			layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-			break;
-		case AshResourceState::CopyDst:
-			layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-			break;
-		case AshResourceState::Present:
-			layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-			break;
-		case AshResourceState::ShadingRateSource:
-			layout = VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
-			break;
-		default:
-			HLogWarning("unsupported state, trans to undefined !");
-			break;
-		}
-		return layout;
+		return VK_IMAGE_LAYOUT_UNDEFINED;
 	}
+	if (has_any_flags((uint32_t)state, (uint32_t)AshResourceState::UAVMask))
+	{
+		return VK_IMAGE_LAYOUT_GENERAL;
+	}
+	if (state == AshResourceState::RTV)
+	{
+		return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	}
+	if (has_any_flags((uint32_t)state, (uint32_t)AshResourceState::DSVWrite))
+	{
+		return VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	}
+	if (has_any_flags((uint32_t)state, (uint32_t)AshResourceState::DSVRead))
+	{
+		return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+	}
+	if (has_any_flags((uint32_t)state, (uint32_t)AshResourceState::SRVMask))
+	{
+		return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	}
+	if (has_any_flags((uint32_t)state, (uint32_t)(AshResourceState::CopySrc | AshResourceState::ResolveSrc)))
+	{
+		return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	}
+	if (has_any_flags((uint32_t)state, (uint32_t)(AshResourceState::CopyDst | AshResourceState::ResolveDst)))
+	{
+		return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+	}
+	if (state == AshResourceState::Present)
+	{
+		return VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	}
+	if (state == AshResourceState::ShadingRateSource)
+	{
+		return VK_IMAGE_LAYOUT_FRAGMENT_SHADING_RATE_ATTACHMENT_OPTIMAL_KHR;
+	}
+	HLogWarning("unsupported state, trans to undefined !");
+	return VK_IMAGE_LAYOUT_UNDEFINED;
+}
 
 	inline auto ash_is_valid_transition(const AshResourceState& src, const AshResourceState& dst) -> bool
 	{

@@ -29,97 +29,97 @@ namespace RHI
 
 			IRenderProgramBinder& add_bind_uav(const char* name, std::shared_ptr<BufferView> uav) override
 			{
-				m_owner.bind_uav(name, std::vector<std::shared_ptr<BufferView>>{ uav });
+				m_owner.record_binding_result(m_owner.bind_uav(name, std::vector<std::shared_ptr<BufferView>>{ uav }));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_uav(const char* name, std::shared_ptr<TextureView> uav) override
 			{
-				m_owner.bind_uav(name, std::vector<std::shared_ptr<TextureView>>{ uav });
+				m_owner.record_binding_result(m_owner.bind_uav(name, std::vector<std::shared_ptr<TextureView>>{ uav }));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_uav_array(const char* name, const std::vector<std::shared_ptr<BufferView>>& uavs) override
 			{
-				m_owner.bind_uav(name, uavs);
+				m_owner.record_binding_result(m_owner.bind_uav(name, uavs));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_uav_array(const char* name, const std::vector<std::shared_ptr<TextureView>>& uavs) override
 			{
-				m_owner.bind_uav(name, uavs);
+				m_owner.record_binding_result(m_owner.bind_uav(name, uavs));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_srv(const char* name, std::shared_ptr<BufferView> srv) override
 			{
-				m_owner.bind_srv(name, std::vector<std::shared_ptr<BufferView>>{ srv });
+				m_owner.record_binding_result(m_owner.bind_srv(name, std::vector<std::shared_ptr<BufferView>>{ srv }));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_srv(const char* name, std::shared_ptr<TextureView> srv) override
 			{
-				m_owner.bind_srv(name, std::vector<std::shared_ptr<TextureView>>{ srv });
+				m_owner.record_binding_result(m_owner.bind_srv(name, std::vector<std::shared_ptr<TextureView>>{ srv }));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_srv_array(const char* name, const std::vector<std::shared_ptr<BufferView>>& srvs) override
 			{
-				m_owner.bind_srv(name, srvs);
+				m_owner.record_binding_result(m_owner.bind_srv(name, srvs));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_srv_array(const char* name, const std::vector<std::shared_ptr<TextureView>>& srvs) override
 			{
-				m_owner.bind_srv(name, srvs);
+				m_owner.record_binding_result(m_owner.bind_srv(name, srvs));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_cbv(const char* name, std::shared_ptr<BufferView> cbv) override
 			{
-				m_owner.bind_cbv(name, cbv);
+				m_owner.record_binding_result(m_owner.bind_cbv(name, cbv));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_sampler(const char* name, std::shared_ptr<Sampler> sampler) override
 			{
-				m_owner.bind_sampler(name, std::vector<std::shared_ptr<Sampler>>{ sampler });
+				m_owner.record_binding_result(m_owner.bind_sampler(name, std::vector<std::shared_ptr<Sampler>>{ sampler }));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_sampler_array(const char* name, const std::vector<std::shared_ptr<Sampler>>& samplers) override
 			{
-				m_owner.bind_sampler(name, samplers);
+				m_owner.record_binding_result(m_owner.bind_sampler(name, samplers));
 				return *this;
 			}
 
 			IRenderProgramBinder& add_bind_acceleration_structure(const char* name, std::shared_ptr<AccelerationStructureView> acceleration_structure) override
 			{
-				m_owner.bind_acceleration_structure(name, acceleration_structure);
+				m_owner.record_binding_result(m_owner.bind_acceleration_structure(name, acceleration_structure));
 				return *this;
 			}
 
 			IRenderProgramBinder& set_const_data_block(uint32_t size, const void* data) override
 			{
-				m_owner.set_const_data_block_internal(size, data);
+				m_owner.record_binding_result(m_owner.set_const_data_block_internal(size, data));
 				return *this;
 			}
 
 			IRenderProgramBinder& set_immutable_const_value_int(const char* name, int32_t value) override
 			{
-				m_owner.set_immutable_const_int(name, value);
+				m_owner.record_binding_result(m_owner.set_immutable_const_int(name, value));
 				return *this;
 			}
 
 			IRenderProgramBinder& set_immutable_const_value_uint(const char* name, uint32_t value) override
 			{
-				m_owner.set_immutable_const_uint(name, value);
+				m_owner.record_binding_result(m_owner.set_immutable_const_uint(name, value));
 				return *this;
 			}
 
 			IRenderProgramBinder& set_immutable_const_value_float(const char* name, float value) override
 			{
-				m_owner.set_immutable_const_float(name, value);
+				m_owner.record_binding_result(m_owner.set_immutable_const_float(name, value));
 				return *this;
 			}
 
@@ -169,6 +169,11 @@ namespace RHI
 	VulkanComputeRenderProgram::VulkanComputeRenderProgram() = default;
 	VulkanComputeRenderProgram::~VulkanComputeRenderProgram() = default;
 
+	void VulkanRenderProgramBase::record_binding_result(bool success)
+	{
+		m_binding_failed = !success || m_binding_failed;
+	}
+
 	bool VulkanRenderProgramBase::begin_resource_binding()
 	{
 		if (m_is_binding)
@@ -177,6 +182,8 @@ namespace RHI
 		}
 
 		m_cached_sampler_views.clear();
+		m_bound_resource_names.clear();
+		m_binding_failed = false;
 		for (auto& descriptor_set_state : m_descriptor_sets)
 		{
 			if (!descriptor_set_state.has_bindings || !descriptor_set_state.layout)
@@ -204,7 +211,16 @@ namespace RHI
 	bool VulkanRenderProgramBase::bind_uav(const char* name, const std::vector<std::shared_ptr<BufferView>>& uavs)
 	{
 		VulkanProgramBindingInfo binding_info{};
-		if (!validate_binding_name(name, binding_info) || !validate_binding_count(name, binding_info, static_cast<uint32_t>(uavs.size())))
+		bool should_bind = false;
+		if (!validate_binding_name(name, binding_info, should_bind))
+		{
+			return false;
+		}
+		if (!should_bind)
+		{
+			return true;
+		}
+		if (!validate_binding_count(name, binding_info, static_cast<uint32_t>(uavs.size())))
 		{
 			return false;
 		}
@@ -212,13 +228,23 @@ namespace RHI
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
 		H_ASSERT(descriptor_set_state.descriptor_set);
 		descriptor_set_state.descriptor_set->add_bind_uav_array(binding_info.binding, uavs, binding_info.descriptor_type);
+		m_bound_resource_names.insert(name);
 		return true;
 	}
 
 	bool VulkanRenderProgramBase::bind_uav(const char* name, const std::vector<std::shared_ptr<TextureView>>& uavs)
 	{
 		VulkanProgramBindingInfo binding_info{};
-		if (!validate_binding_name(name, binding_info) || !validate_binding_count(name, binding_info, static_cast<uint32_t>(uavs.size())))
+		bool should_bind = false;
+		if (!validate_binding_name(name, binding_info, should_bind))
+		{
+			return false;
+		}
+		if (!should_bind)
+		{
+			return true;
+		}
+		if (!validate_binding_count(name, binding_info, static_cast<uint32_t>(uavs.size())))
 		{
 			return false;
 		}
@@ -226,13 +252,23 @@ namespace RHI
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
 		H_ASSERT(descriptor_set_state.descriptor_set);
 		descriptor_set_state.descriptor_set->add_bind_uav_array(binding_info.binding, uavs, binding_info.descriptor_type);
+		m_bound_resource_names.insert(name);
 		return true;
 	}
 
 	bool VulkanRenderProgramBase::bind_srv(const char* name, const std::vector<std::shared_ptr<BufferView>>& srvs)
 	{
 		VulkanProgramBindingInfo binding_info{};
-		if (!validate_binding_name(name, binding_info) || !validate_binding_count(name, binding_info, static_cast<uint32_t>(srvs.size())))
+		bool should_bind = false;
+		if (!validate_binding_name(name, binding_info, should_bind))
+		{
+			return false;
+		}
+		if (!should_bind)
+		{
+			return true;
+		}
+		if (!validate_binding_count(name, binding_info, static_cast<uint32_t>(srvs.size())))
 		{
 			return false;
 		}
@@ -240,13 +276,23 @@ namespace RHI
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
 		H_ASSERT(descriptor_set_state.descriptor_set);
 		descriptor_set_state.descriptor_set->add_bind_srv_array(binding_info.binding, srvs, binding_info.descriptor_type);
+		m_bound_resource_names.insert(name);
 		return true;
 	}
 
 	bool VulkanRenderProgramBase::bind_srv(const char* name, const std::vector<std::shared_ptr<TextureView>>& srvs)
 	{
 		VulkanProgramBindingInfo binding_info{};
-		if (!validate_binding_name(name, binding_info) || !validate_binding_count(name, binding_info, static_cast<uint32_t>(srvs.size())))
+		bool should_bind = false;
+		if (!validate_binding_name(name, binding_info, should_bind))
+		{
+			return false;
+		}
+		if (!should_bind)
+		{
+			return true;
+		}
+		if (!validate_binding_count(name, binding_info, static_cast<uint32_t>(srvs.size())))
 		{
 			return false;
 		}
@@ -254,27 +300,43 @@ namespace RHI
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
 		H_ASSERT(descriptor_set_state.descriptor_set);
 		descriptor_set_state.descriptor_set->add_bind_srv_array(binding_info.binding, srvs, binding_info.descriptor_type);
+		m_bound_resource_names.insert(name);
 		return true;
 	}
 
 	bool VulkanRenderProgramBase::bind_cbv(const char* name, std::shared_ptr<BufferView> cbv)
 	{
 		VulkanProgramBindingInfo binding_info{};
-		if (!validate_binding_name(name, binding_info))
+		bool should_bind = false;
+		if (!validate_binding_name(name, binding_info, should_bind))
 		{
 			return false;
+		}
+		if (!should_bind)
+		{
+			return true;
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
 		H_ASSERT(descriptor_set_state.descriptor_set);
 		descriptor_set_state.descriptor_set->add_bind_cbv(binding_info.binding, cbv);
+		m_bound_resource_names.insert(name);
 		return true;
 	}
 
 	bool VulkanRenderProgramBase::bind_sampler(const char* name, const std::vector<std::shared_ptr<Sampler>>& samplers)
 	{
 		VulkanProgramBindingInfo binding_info{};
-		if (!validate_binding_name(name, binding_info) || !validate_binding_count(name, binding_info, static_cast<uint32_t>(samplers.size())))
+		bool should_bind = false;
+		if (!validate_binding_name(name, binding_info, should_bind))
+		{
+			return false;
+		}
+		if (!should_bind)
+		{
+			return true;
+		}
+		if (!validate_binding_count(name, binding_info, static_cast<uint32_t>(samplers.size())))
 		{
 			return false;
 		}
@@ -297,6 +359,7 @@ namespace RHI
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
 		H_ASSERT(descriptor_set_state.descriptor_set);
 		descriptor_set_state.descriptor_set->add_bind_sampler_array(binding_info.binding, sampler_views);
+		m_bound_resource_names.insert(name);
 		return true;
 	}
 
@@ -369,6 +432,7 @@ namespace RHI
 		m_pipeline.reset();
 		m_binder.reset();
 		m_pipeline_creation = PipelineCreation{};
+		m_binding_failed = false;
 		m_specialization_dirty = false;
 		return true;
 	}
@@ -400,6 +464,12 @@ namespace RHI
 			return false;
 		}
 
+		if (m_binding_failed)
+		{
+			HLogError("Render program '{}' failed while building descriptor bindings.", m_debug_name.c_str());
+			return false;
+		}
+
 		for (auto& descriptor_set_state : m_descriptor_sets)
 		{
 			if (descriptor_set_state.descriptor_set)
@@ -408,7 +478,27 @@ namespace RHI
 			}
 		}
 		m_cached_sampler_views.clear();
+		for (const auto& [name, binding_info] : m_binding_infos)
+		{
+			if (m_bound_resource_names.find(name) == m_bound_resource_names.end())
+			{
+				HLogError(
+					"Render program '{}' requires reflected resource '{}' (set={}, binding={}) but C++ did not bind it.",
+					m_debug_name.c_str(),
+					name.c_str(),
+					binding_info.set_index,
+					binding_info.binding);
+				m_binding_failed = true;
+			}
+		}
+		if (m_binding_failed)
+		{
+			HLogError("Render program '{}' failed while building descriptor bindings.", m_debug_name.c_str());
+			return false;
+		}
+
 		m_is_binding = false;
+		m_bound_resource_names.clear();
 		return true;
 	}
 
@@ -452,12 +542,6 @@ namespace RHI
 			if (!descriptor_set_state.descriptor_set)
 			{
 				continue;
-			}
-
-			const auto& barriers = descriptor_set_state.descriptor_set->get_barriers();
-			if (!barriers.empty())
-			{
-				cb->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
 			}
 
 			VkDescriptorSet vk_descriptor_set = descriptor_set_state.descriptor_set->get_native_handle();
@@ -639,8 +723,9 @@ namespace RHI
 		return true;
 	}
 
-	bool VulkanRenderProgramBase::validate_binding_name(const char* name, VulkanProgramBindingInfo& binding_info) const
+	bool VulkanRenderProgramBase::validate_binding_name(const char* name, VulkanProgramBindingInfo& binding_info, bool& should_bind)
 	{
+		should_bind = false;
 		if (!m_is_binding)
 		{
 			HLogError("Render program '{}' resource binding was attempted before begin_bind().", m_debug_name.c_str());
@@ -654,10 +739,10 @@ namespace RHI
 		auto it = m_binding_infos.find(name);
 		if (it == m_binding_infos.end())
 		{
-			HLogError("Render program '{}' does not contain a reflected resource named '{}'.", m_debug_name.c_str(), name);
-			return false;
+			return true;
 		}
 		binding_info = it->second;
+		should_bind = true;
 		return true;
 	}
 

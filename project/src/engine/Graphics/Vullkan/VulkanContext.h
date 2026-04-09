@@ -11,6 +11,10 @@
 #include "Graphics/Sampler.h"
 #include <vector>
 #include <memory>
+#include <array>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 using namespace AshEngine;
 namespace RHI
 {
@@ -50,6 +54,18 @@ namespace RHI
 		VkSemaphore							vulkanRenderBeginSemaphore			= VK_NULL_HANDLE;//wait for this Semaphore to begin render. normally triggered by swapchain acquireimages
 		VkSemaphore							vulkanRenderCompleteSemaphore		= VK_NULL_HANDLE;//trigger this seemaphore when complete render, normally waited by swapchain to present
 		VulkanFence*						vulkanCommandBufferExecutedFence	= nullptr;
+	};
+	struct VmaTrackedAllocationInfo
+	{
+		VkObjectType objectType = VK_OBJECT_TYPE_UNKNOWN;
+		uint64_t resourceHandle = 0;
+		uint64_t allocationHandle = 0;
+		uint64_t size = 0;
+		std::string debugName{};
+		std::string file{};
+		std::string function{};
+		uint32_t line = 0;
+		std::vector<uint64_t> stackFrames{};
 	};
 	class VulkanContext : public GraphicsContext
 	{
@@ -264,11 +280,11 @@ namespace RHI
 		{
 			return instance->vulkanPipelineCache;
 		}
-		auto vma_create_buffer(VkDeviceSize uBufferSize, VkBufferUsageFlags eBufferUsage, VmaMemoryUsage eMemUsage, VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, void** ppData = nullptr) -> bool;
-		auto vma_destroy_buffer(VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation) -> bool;
-		auto vma_destroy_buffer_v(VkBuffer pVkBuffer, VmaAllocation pVMAllocation) -> bool;
-		auto vma_create_image(const VkImageCreateInfo& sImgCreateInfo, VmaMemoryUsage eMemUsage, VkImage& pVkImage, VmaAllocation& pVMAllocation) -> bool;
-		auto vma_destroy_image(VkImage pVkImage, VmaAllocation pVMAllocation) -> bool;
+		auto vma_create_buffer(VkDeviceSize uBufferSize, VkBufferUsageFlags eBufferUsage, VmaMemoryUsage eMemUsage, VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, void** ppData = nullptr, const char* debugName = nullptr, const char* file = nullptr, uint32_t line = 0, const char* function = nullptr) -> bool;
+		auto vma_destroy_buffer(VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, const char* file = nullptr, uint32_t line = 0, const char* function = nullptr) -> bool;
+		auto vma_destroy_buffer_v(VkBuffer pVkBuffer, VmaAllocation pVMAllocation, const char* file = nullptr, uint32_t line = 0, const char* function = nullptr) -> bool;
+		auto vma_create_image(const VkImageCreateInfo& sImgCreateInfo, VmaMemoryUsage eMemUsage, VkImage& pVkImage, VmaAllocation& pVMAllocation, const char* debugName = nullptr, const char* file = nullptr, uint32_t line = 0, const char* function = nullptr) -> bool;
+		auto vma_destroy_image(VkImage pVkImage, VmaAllocation pVMAllocation, const char* file = nullptr, uint32_t line = 0, const char* function = nullptr) -> bool;
 		auto vma_map_memory(VmaAllocation pVMAllocation, void** ppData) const -> bool;
 		auto vma_unmap_memory(VmaAllocation pVMAllocation) const -> bool;
 		auto vma_flush_allocation(VmaAllocation pVMAllocation, VkDeviceSize uOffset = 0, VkDeviceSize uSize = VK_WHOLE_SIZE) const -> bool;
@@ -335,6 +351,11 @@ namespace RHI
 
 		auto _create_staging_buffer_pool() -> bool;
 		auto _shutdown_staging_buffer_pool() -> bool;
+		auto _track_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, uint64_t size, const char* debugName, const char* file, uint32_t line, const char* function) -> void;
+		auto _untrack_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, const char* file, uint32_t line, const char* function) -> void;
+		auto _dump_vma_leaks() const -> void;
+		auto _capture_vma_allocation_stack(VmaTrackedAllocationInfo& info) const -> void;
+		auto _shutdown_shader_pool() -> bool;
 	private:
 		BitSetFixed<16> featureSwitchFlags{};
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};
@@ -392,6 +413,8 @@ private:
 		uint64_t								absoluteFrame = UINT64_MAX;
 		uint16_t								num_thread = 0;
 		uint32_t								local_gpu_memory_gb = 0;
+		mutable std::mutex						vmaTrackedAllocationsMutex{};
+		std::unordered_map<uint64_t, VmaTrackedAllocationInfo> vmaTrackedAllocations{};
 private:
 		static VulkanContext* instance;
 		friend class VulkanSwapchain;

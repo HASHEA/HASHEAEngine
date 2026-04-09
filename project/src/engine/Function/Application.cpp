@@ -64,12 +64,24 @@ namespace AshEngine
 		renderer = nullptr;
 		delete renderDevice;
 		renderDevice = nullptr;
-		swapChain->shutdown();
-		Ash_Delete(nullptr, swapChain);
-		graphicsContext->shutdown();
-		Ash_Delete(nullptr,graphicsContext);
-		window->shutdown();
-		Ash_Delete(nullptr, window);
+		if (swapChain)
+		{
+			swapChain->shutdown();
+			Ash_Delete(nullptr, swapChain);
+			swapChain = nullptr;
+		}
+		if (graphicsContext)
+		{
+			graphicsContext->shutdown();
+			Ash_Delete(nullptr,graphicsContext);
+			graphicsContext = nullptr;
+		}
+		if (window)
+		{
+			window->shutdown();
+			Ash_Delete(nullptr, window);
+			window = nullptr;
+		}
 		MemoryService::instance()->shutdown();
 		LogService::instance()->shutdown();
 	}

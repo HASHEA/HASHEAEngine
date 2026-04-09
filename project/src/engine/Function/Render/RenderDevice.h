@@ -15,6 +15,7 @@ namespace AshEngine
 {
 	class GraphicsProgram;
 	class ComputeProgram;
+	class Renderer;
 
 	enum class RenderTextureFormat : uint8_t
 	{
@@ -22,6 +23,7 @@ namespace AshEngine
 		RGBA8_UNORM,
 		BGRA8_SRGB,
 		RGBA16_SFLOAT,
+		RGBA32_SFLOAT,
 		D24_UNORM_S8_UINT,
 		D32_SFLOAT
 	};
@@ -406,11 +408,18 @@ namespace AshEngine
 		void end_pass();
 
 	private:
+		bool transition_graphics_program_resources(GraphicsProgram* program);
+		bool transition_compute_program_resources(ComputeProgram* program);
+		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);
+		bool transition_index_buffer(const std::shared_ptr<IndexBuffer>& buffer);
+
+	private:
 		RenderDevice(RHI::GraphicsContext* graphics_context, RHI::Swapchain* swapchain);
 
 	private:
 		class Impl;
 		std::unique_ptr<Impl> m_impl;
 		friend class Application;
+		friend class Renderer;
 	};
 }

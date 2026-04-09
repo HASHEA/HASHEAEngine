@@ -47,9 +47,17 @@ namespace AshEngine
 
 	auto LogService::shutdown() -> bool
 	{
-		m_pAppLogger->flush();
-		m_pEngineLogger->flush();
+		if (m_pAppLogger)
+		{
+			m_pAppLogger->flush();
+		}
+		if (m_pEngineLogger)
+		{
+			m_pEngineLogger->flush();
+		}
 		spdlog::shutdown();
+		m_pAppLogger.reset();
+		m_pEngineLogger.reset();
 		return true;
 	}
 

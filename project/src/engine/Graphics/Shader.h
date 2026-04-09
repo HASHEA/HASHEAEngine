@@ -39,7 +39,7 @@ namespace RHI
 	{
 	public:
 		Shader() = default;
-		virtual ~Shader() {};
+		virtual ~Shader() = default;
 	public:
 		static auto load_from_file(const ShaderCreation& ci) -> ShaderCode;
 	};

@@ -14,7 +14,7 @@ namespace RHI
 		{
 			cube = true;
 		}
-		sparse = (ci.flags & AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE) == AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE;
+		sparse = (ci.flags & AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE) != 0;
 		VkImageUsageFlags texUsageFlags = ash_texture_usage_to_vk(ci.uUsageFlags);
 		texUsageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		//// Create the image
@@ -57,10 +57,8 @@ namespace RHI
 			}
 			else
 			{
-				VK_CHECK_RESULT(vmaCreateImage(VulkanContext::get_vma_allocator(), &vkImageCI, &memory_info, &vkImage, &vmaAllocation, nullptr));
-#ifdef ASH_DEBUG
-				vmaSetAllocationName(VulkanContext::get_vma_allocator(), vmaAllocation, ci.name);
-#endif // ASH_DEBUG
+				const bool created = ASH_VMA_CREATE_IMAGE(VulkanContext::get(), vkImageCI, memory_info.usage, vkImage, vmaAllocation, ci.name);
+				H_ASSERT(created);
 			}
 		}
 		else
@@ -110,13 +108,13 @@ namespace RHI
 					}
 					else
 					{
-						vmaDestroyImage(VulkanContext::get_vma_allocator(), vkImage, vmaAllocation);
+						ASH_VMA_DESTROY_IMAGE(VulkanContext::get(), vkImage, vmaAllocation);
 					}
 				}
 				else
 				{
 					//vma allocation = 0 witch mean vma won't free memory for this alias image
-					vmaDestroyImage(VulkanContext::get_vma_allocator(), vkImage, vmaAllocation);
+					ASH_VMA_DESTROY_IMAGE(VulkanContext::get(), vkImage, vmaAllocation);
 				}
 			}
 			if (aliasTexture.use_count() == 1)
@@ -157,13 +155,13 @@ namespace RHI
 						}
 						else
 						{
-							vmaDestroyImage(VulkanContext::get_vma_allocator(), handle, alloc);
+							ASH_VMA_DESTROY_IMAGE(VulkanContext::get(), handle, alloc);
 						}
 					}
 					else
 					{
 						//vma allocation = 0 witch mean vma won't free memory for this alias image
-						vmaDestroyImage(VulkanContext::get_vma_allocator(), handle, alloc);
+						ASH_VMA_DESTROY_IMAGE(VulkanContext::get(), handle, alloc);
 					}
 					});
 			}

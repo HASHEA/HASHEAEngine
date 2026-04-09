@@ -15,10 +15,11 @@ namespace RHI
 		m_pVmaAllocation = allocated_item.m_pVmaAllocation;
 		m_u64DeviceMemorySize = allocated_item.u64DeviceSize;
 		m_bReadOption = allocated_item.m_bReadOption;
+		m_bPersistentMapping = m_pMappedPtr != nullptr;
 		//fill data
 		if (pData && pData->DataPtr)
 		{
-			bool bRetCode = this->map(0, this->get_device_memory_size());
+			bool bRetCode = this->map(0, static_cast<uint32_t>(this->get_device_memory_size()));
 			H_ASSERT(bRetCode);
 			memory_copy(this->m_pMappedPtr, pData->DataPtr, uByteWidth);
 			bRetCode = this->unmap();
@@ -40,7 +41,6 @@ namespace RHI
 					PACK_BUFFER_ITEM allocated_item{ handle ,alloc ,size ,bReadOption ,0};
 					pStagingBufferPool->free_buffer(allocated_item);
 				}
-				VulkanContext::get()->vma_destroy_buffer_v(handle, alloc);
 				});
 			m_vkBuffer = VK_NULL_HANDLE;
 			m_pVmaAllocation = nullptr;
@@ -59,10 +59,13 @@ namespace RHI
 	auto VulkanStagingBuffer::map(uint32_t uOffset, uint32_t uSize) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		ASH_LOG_PROCESS_ERROR(m_bMapped);
-		ASH_PROCESS_SUCCESS(m_bPersistentMapping);
-		bool bRetCode = VulkanContext::get()->vma_map_memory(m_pVmaAllocation, (void**)&m_pMappedPtr);
-		ASH_LOG_PROCESS_ERROR(bRetCode);
+		ASH_LOG_PROCESS_ERROR(!m_bMapped);
+		if (!m_bPersistentMapping)
+		{
+			bool bRetCode = VulkanContext::get()->vma_map_memory(m_pVmaAllocation, (void**)&m_pMappedPtr);
+			ASH_LOG_PROCESS_ERROR(bRetCode);
+		}
+		ASH_PROCESS_ERROR_EXIT(m_pMappedPtr);
 		ASH_SAFE_EXECUTE_END(bResult);
 		if (bResult)
 		{
@@ -77,9 +80,12 @@ namespace RHI
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		ASH_LOG_PROCESS_ERROR(m_bMapped);
-		ASH_PROCESS_SUCCESS(m_bPersistentMapping);
 		ASH_PROCESS_ERROR_EXIT(m_pVmaAllocation);
-		vmaUnmapMemory(VulkanContext::get_vma_allocator(), m_pVmaAllocation);
+		ASH_LOG_PROCESS_ERROR(VulkanContext::get()->vma_flush_allocation(m_pVmaAllocation, m_uMappedDstOffset, m_uMappedDstSize));
+		if (!m_bPersistentMapping)
+		{
+			vmaUnmapMemory(VulkanContext::get_vma_allocator(), m_pVmaAllocation);
+		}
 		ASH_SAFE_EXECUTE_END(bResult);
 		if (bResult)
 		{
@@ -107,6 +113,16 @@ namespace RHI
 	}
 	auto VulkanStagingBufferPool::uninit() -> bool
 	{
+		for (auto& iter : readOptionGroup.buffers)
+		{
+			_destroy_buffer(iter.vkBuffer, iter.m_pVmaAllocation);
+		}
+		readOptionGroup.buffers.clear();
+		for (auto& iter : normalGroup.buffers)
+		{
+			_destroy_buffer(iter.vkBuffer, iter.m_pVmaAllocation);
+		}
+		normalGroup.buffers.clear();
 		return true;
 	}
 	
@@ -133,9 +149,15 @@ namespace RHI
 		//no match free buffer, create new
 		if (!retBufferItem.vkBuffer)
 		{
-			bool bRetCode = VulkanContext::get()->vma_create_buffer(uByteWidth, vkUsageFlags, VmaMemoryUsage::VMA_MEMORY_USAGE_CPU_ONLY, retBufferItem.vkBuffer, retBufferItem.m_pVmaAllocation, ppMappedData);
+			bool bRetCode = ASH_VMA_CREATE_BUFFER(VulkanContext::get(), uByteWidth, vkUsageFlags, VmaMemoryUsage::VMA_MEMORY_USAGE_CPU_ONLY, retBufferItem.vkBuffer, retBufferItem.m_pVmaAllocation, ppMappedData, bReadOperation ? "VulkanStagingBuffer(Readback)" : "VulkanStagingBuffer(Upload)");
 			H_ASSERT(bRetCode);
 			retBufferItem.m_bReadOption = bReadOperation;
+		}
+		else if (ppMappedData)
+		{
+			VmaAllocationInfo allocationInfo{};
+			vmaGetAllocationInfo(VulkanContext::get_vma_allocator(), retBufferItem.m_pVmaAllocation, &allocationInfo);
+			*ppMappedData = allocationInfo.pMappedData;
 		}
 		H_ASSERT(retBufferItem.m_bReadOption == bReadOperation);
 		return retBufferItem;
@@ -145,7 +167,7 @@ namespace RHI
 		H_ASSERT(freeItem.vkBuffer);
 		H_ASSERT(freeItem.m_pVmaAllocation);
 		H_ASSERT(freeItem.u64DeviceSize);
-		freeItem.m_uTimeStamp = VulkanContext::get_absolute_frame_count();
+		freeItem.m_uTimeStamp = static_cast<uint32_t>(VulkanContext::get_absolute_frame_count());
 		if (freeItem.m_bReadOption)
 		{
 			readOptionGroup.buffers.emplace(freeItem);
@@ -167,25 +189,31 @@ namespace RHI
 		auto currentFrameCount = VulkanContext::get_absolute_frame_count();
 		auto ToBeFreedFrame = currentFrameCount - STAGING_BUFFER_POOL_DELAY_RELEASE_FRAME_COUNT;
 		ToBeFreedFrame = ToBeFreedFrame > 0 ? ToBeFreedFrame : 0;
-		for (auto& iter : readOptionGroup.buffers)
+		for (auto iter = readOptionGroup.buffers.begin(); iter != readOptionGroup.buffers.end();)
 		{
-			if (iter.m_uTimeStamp <= ToBeFreedFrame)
+			if (iter->m_uTimeStamp <= ToBeFreedFrame)
 			{
-				_destroy_buffer(iter.vkBuffer, iter.m_pVmaAllocation);
+				_destroy_buffer(iter->vkBuffer, iter->m_pVmaAllocation);
+				iter = readOptionGroup.buffers.erase(iter);
+				continue;
 			}
+			++iter;
 		}
-		for (auto& iter : normalGroup.buffers)
+		for (auto iter = normalGroup.buffers.begin(); iter != normalGroup.buffers.end();)
 		{
-			if (iter.m_uTimeStamp <= ToBeFreedFrame)
+			if (iter->m_uTimeStamp <= ToBeFreedFrame)
 			{
-				_destroy_buffer(iter.vkBuffer, iter.m_pVmaAllocation);
+				_destroy_buffer(iter->vkBuffer, iter->m_pVmaAllocation);
+				iter = normalGroup.buffers.erase(iter);
+				continue;
 			}
+			++iter;
 		}
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
 	auto VulkanStagingBufferPool::_destroy_buffer(VkBuffer vkBuffer, VmaAllocation pVMAAllocation) -> void
 	{
-		VulkanContext::get()->vma_destroy_buffer_v(vkBuffer, pVMAAllocation);
+		ASH_VMA_DESTROY_BUFFER_V(VulkanContext::get(), vkBuffer, pVMAAllocation);
 	}
 };

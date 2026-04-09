@@ -9,6 +9,7 @@ namespace AshEditor
 	namespace
 	{
 		static const char* k_demo_shader_path = "project/src/editor/Shaders/CodexLogoComputeDemo.hlsl";
+		static bool g_logged_demo_submit = false;
 
 		struct PaletteColor
 		{
@@ -52,6 +53,7 @@ namespace AshEditor
 		});
 		if (!m_graphics_program)
 		{
+			HLogError("Codex logo demo failed to create graphics program.");
 			return false;
 		}
 
@@ -63,6 +65,7 @@ namespace AshEditor
 		});
 		if (!m_compute_program)
 		{
+			HLogError("Codex logo demo failed to create compute program.");
 			return false;
 		}
 
@@ -75,6 +78,7 @@ namespace AshEditor
 		});
 		if (!m_palette_buffer)
 		{
+			HLogError("Codex logo demo failed to create palette buffer.");
 			return false;
 		}
 
@@ -97,6 +101,7 @@ namespace AshEditor
 	{
 		if (!renderer || width == 0 || height == 0)
 		{
+			HLogError("Codex logo demo received invalid compute target extent {}x{}.", width, height);
 			return false;
 		}
 
@@ -110,30 +115,30 @@ namespace AshEditor
 		m_compute_target = renderer->create_render_target({
 			static_cast<uint16_t>(width),
 			static_cast<uint16_t>(height),
-			AshEngine::RenderTextureFormat::RGBA8_UNORM,
+			AshEngine::RenderTextureFormat::RGBA32_SFLOAT,
 			true,
 			true,
 			"CodexLogoComputeTarget"
 		});
 		if (!m_compute_target)
 		{
+			HLogError("Codex logo demo failed to create compute target.");
 			return false;
 		}
 
 		if (!m_compute_program->set_rw_texture("OutputTexture", m_compute_target))
 		{
+			HLogError("Codex logo demo failed to bind compute OutputTexture.");
 			return false;
 		}
 		if (!m_compute_program->set_storage_buffer("PaletteBuffer", m_palette_buffer))
 		{
+			HLogError("Codex logo demo failed to bind compute PaletteBuffer.");
 			return false;
 		}
 		if (!m_graphics_program->set_texture("LogoTexture", m_compute_target))
 		{
-			return false;
-		}
-		if (!m_graphics_program->set_sampler("LogoSampler"))
-		{
+			HLogError("Codex logo demo failed to bind graphics LogoTexture.");
 			return false;
 		}
 		return true;
@@ -143,21 +148,25 @@ namespace AshEditor
 	{
 		if (!init())
 		{
+			HLogError("Codex logo demo init failed.");
 			return false;
 		}
 
 		auto* renderer = AshEngine::Application::get_renderer();
 		if (!renderer)
 		{
+			HLogError("Codex logo demo could not fetch renderer.");
 			return false;
 		}
 		m_back_buffer = renderer->get_back_buffer();
 		if (!m_back_buffer)
 		{
+			HLogError("Codex logo demo could not fetch back buffer.");
 			return false;
 		}
 		if (!ensure_compute_resources(renderer, m_back_buffer->get_width(), m_back_buffer->get_height()))
 		{
+			HLogError("Codex logo demo failed to prepare compute resources.");
 			return false;
 		}
 
@@ -168,6 +177,7 @@ namespace AshEditor
 		dispatch_desc.group_count_z = 1;
 		if (!renderer->dispatch(dispatch_desc))
 		{
+			HLogError("Codex logo demo compute dispatch failed.");
 			return false;
 		}
 
@@ -179,21 +189,29 @@ namespace AshEditor
 			{ 0.02f, 0.04f, 0.07f, 1.0f }
 		});
 
-		if (!renderer->begin_pass(pass_desc))
+		AshEngine::Renderer::GraphicsPassContext pass_context;
+		if (!renderer->begin_pass(pass_desc, pass_context))
 		{
+			HLogError("Codex logo demo failed to begin graphics pass.");
 			return false;
 		}
 
 		AshEngine::GraphicsDrawDesc draw_desc{};
 		draw_desc.program = m_graphics_program.get();
 		draw_desc.vertex_count = 4;
-		if (!renderer->draw(draw_desc))
+		if (!pass_context.draw(draw_desc))
 		{
-			renderer->end_pass();
+			HLogError("Codex logo demo failed to enqueue fullscreen draw.");
+			pass_context.end();
 			return false;
 		}
 
-		renderer->end_pass();
+		pass_context.end();
+		if (!g_logged_demo_submit)
+		{
+			HLogInfo("Codex logo demo submitted compute + fullscreen draw.");
+			g_logged_demo_submit = true;
+		}
 		return true;
 	}
 }

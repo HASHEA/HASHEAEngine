@@ -13,6 +13,8 @@ namespace RHI
 	static void get_vk_stage_and_access_flags(AshResourceState RHIAccess, AshBarrier::EType ResourceType, uint32_t UsageFlags,
 		bool bIsDepthStencil, VkPipelineStageFlags& StageFlags, VkAccessFlags& AccessFlags, VkImageLayout& Layout, bool bIsSourceState)
 	{
+		const bool use_sync2_attachment_layouts =
+			VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2);
 		// From Vulkan's point of view, when performing a multisample resolve via a render pass attachment, resolve targets are the same as render targets .
 		// The caller signals this situation by setting both the RTV and ResolveDst flags, and we simply remove ResolveDst in that case,
 		// to treat the resource as a render target.
@@ -56,7 +58,7 @@ namespace RHI
 		case AshResourceState::RTV:
 			StageFlags = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 			AccessFlags = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-			Layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+			Layout = use_sync2_attachment_layouts ? VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 			return;
 
 		case AshResourceState::CopyDst:
@@ -84,7 +86,7 @@ namespace RHI
 			H_ASSERT(bIsDepthStencil);
 			StageFlags = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 			AccessFlags = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-			Layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+			Layout = use_sync2_attachment_layouts ? VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 			return;
 		}
 
@@ -375,17 +377,50 @@ namespace RHI
 		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
 			//only dynamic render need to transition images
+			bool require_attachment_load_sync = false;
 			for (auto i = 0; i < renderTargetCount; i++)
 			{
 				cmd_transition_resource_state({colorAttachements[i], AshResourceState::RTV });
+				require_attachment_load_sync = require_attachment_load_sync || renderPass->get_color_operations()[i] == AshLoadOption::ASH_LOAD_LOAD;
 			}
 			if (depthStencilAttachment != nullptr)
 			{
 				cmd_transition_resource_state({ depthStencilAttachment, AshResourceState::DSVWrite });
+				require_attachment_load_sync = require_attachment_load_sync || renderPass->get_depth_stencil_operations() == AshLoadOption::ASH_LOAD_LOAD;
 			}
 			if (shadingRateAttachment != nullptr)
 			{
 				cmd_transition_resource_state({ shadingRateAttachment, AshResourceState::ShadingRateSource });
+			}
+			if (require_attachment_load_sync)
+			{
+				// Attachment loadOp reads happen at COLOR_ATTACHMENT_OUTPUT / EARLY/LATE_FRAGMENT_TESTS.
+				// When we transition an attachment into renderable layout immediately before begin rendering,
+				// add an explicit execution+memory dependency so the load is ordered after that transition.
+				VkMemoryBarrier attachment_load_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
+				attachment_load_barrier.srcAccessMask =
+					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+				attachment_load_barrier.dstAccessMask =
+					VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+				vkCmdPipelineBarrier(
+					vkCommandBuffer,
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+					VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+					VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+					0,
+					1,
+					&attachment_load_barrier,
+					0,
+					nullptr,
+					0,
+					nullptr);
 			}
 			VkRenderingAttachmentInfoKHR color_attachments_info[k_max_image_outputs] = {};
 			for (auto i = 0; i < renderTargetCount; i++)
@@ -469,23 +504,24 @@ namespace RHI
 			HLogWarning("end_render_pass : none renderpass are bound currently, do nothing and return !");
 			return;
 		}
+		auto colorAttachments = currentBoundFramebuffer->get_render_targets();
+		auto count = colorAttachments.size();
+		auto depthAttachment = currentBoundFramebuffer->get_depth_stencil();
 		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
 			vkCmdEndRenderingKHR(vkCommandBuffer);
 		}
 		else {
 			vkCmdEndRenderPass(vkCommandBuffer);
-			//manually set attachment state changed by renderpass for tracking state
-			auto colorAttachments = currentBoundFramebuffer->get_render_targets();
-			auto count = colorAttachments.size();
-			auto depthAttachment = currentBoundFramebuffer->get_depth_stencil();
-			for (auto i = 0; i < count; i++)
-			{
-				colorAttachments[i]->set_resource_state(currentBoundRenderPass->get_color_attachment_final_state(i));
-			}
-			if (depthAttachment != nullptr)
-			{
-				depthAttachment->set_resource_state(currentBoundRenderPass->get_depth_stencil_attachment_final_state());
-			}
+		}
+		// Keep the resource tracker aligned with the pass final states for both legacy render passes
+		// and dynamic rendering. Later barriers depend on these tracked states being accurate.
+		for (auto i = 0; i < count; i++)
+		{
+			colorAttachments[i]->set_resource_state(currentBoundRenderPass->get_color_attachment_final_state(i));
+		}
+		if (depthAttachment != nullptr)
+		{
+			depthAttachment->set_resource_state(currentBoundRenderPass->get_depth_stencil_attachment_final_state());
 		}
 		currentBoundRenderPass = nullptr;
 		currentBoundFramebuffer = nullptr;
@@ -568,25 +604,35 @@ namespace RHI
 		{	
 			if ((bufferDesc.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)) // use staging
 			{
-				auto pVulkanStaingBuffer = Ash_New_Shared<VulkanStagingBuffer>(uSize , nullptr, false);
-				ASH_LOG_PROCESS_ERROR(pVulkanStaingBuffer);
-				bool bRetCode = pVulkanStaingBuffer->map(0, uSize);
+				bool bRetCode = cmd_transition_resource_state({ pBuffer, AshResourceState::CopyDst });
 				ASH_LOG_PROCESS_ERROR(bRetCode);
-				memory_copy(pVulkanStaingBuffer->get_mapped_memory(), pData, uSize);
-				bRetCode = pVulkanStaingBuffer->unmap();
-				ASH_LOG_PROCESS_ERROR(bRetCode);
+				VkBuffer destBuffer = (VkBuffer)pBuffer->get_native_handle();
+				ASH_PROCESS_ERROR_EXIT(destBuffer);
+				const bool canUseCmdUpdate =
+					(uSize <= 65536u) &&
+					((uOffset & 0x3u) == 0u) &&
+					((uSize & 0x3u) == 0u);
+				if (canUseCmdUpdate)
 				{
+					vkCmdUpdateBuffer(vkCommandBuffer, destBuffer, uOffset, uSize, pData);
+				}
+				else
+				{
+					auto pVulkanStaingBuffer = Ash_New_Shared<VulkanStagingBuffer>(uSize, nullptr, false);
+					ASH_LOG_PROCESS_ERROR(pVulkanStaingBuffer);
+					bRetCode = pVulkanStaingBuffer->map(0, uSize);
+					ASH_LOG_PROCESS_ERROR(bRetCode);
+					memory_copy(pVulkanStaingBuffer->get_mapped_memory(), pData, uSize);
+					bRetCode = pVulkanStaingBuffer->unmap();
+					ASH_LOG_PROCESS_ERROR(bRetCode);
+
 					VkBufferCopy copyRegion{};
 					copyRegion.dstOffset = uOffset;
 					copyRegion.srcOffset = 0;
 					copyRegion.size = uSize;
-					VkBuffer       srcBuffer = pVulkanStaingBuffer->get_vkbuffer_handle();
-					VkBuffer       destBuffer = (VkBuffer)pBuffer->get_native_handle();
-					const uint32_t accessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
-						VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-					bRetCode = cmd_transition_resource_state({ pBuffer, AshResourceState::CopyDst});
-					ASH_LOG_PROCESS_ERROR(bRetCode);
-					vkCmdCopyBuffer(vkCommandBuffer,srcBuffer , destBuffer, 1, &copyRegion);
+					VkBuffer srcBuffer = pVulkanStaingBuffer->get_vkbuffer_handle();
+					ASH_PROCESS_ERROR_EXIT(srcBuffer);
+					vkCmdCopyBuffer(vkCommandBuffer, srcBuffer, destBuffer, 1, &copyRegion);
 				}
 			}
 			else

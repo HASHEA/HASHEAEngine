@@ -7,8 +7,8 @@ namespace RHI
 {
 	inline constexpr const char kMagic[4] = { 'S', 'L', 'S', '$' };
 	inline constexpr uint32_t kVersion = 1;
-	inline std::filesystem::path CacheDirectoryDX12 = "cacheshader/dx12";
-	inline std::filesystem::path CacheDirectoryVulkan = "cacheshader/vulkan";
+	inline std::filesystem::path CacheDirectoryDX12 = "product/caches/ShaderCaches/dx12";
+	inline std::filesystem::path CacheDirectoryVulkan = "product/caches/ShaderCaches/vulkan";
 
 	struct DigestUtil
 	{

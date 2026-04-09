@@ -6,6 +6,7 @@
 #include "Base/hmemory.h"
 #include <filesystem>
 #include <regex>
+#include <unordered_set>
 
 namespace RHI
 {
@@ -112,6 +113,127 @@ namespace RHI
 		}
 		ASH_SAFE_EXECUTE_END(bResult);
 	}
+
+	static size_t find_matching_brace(std::string_view text, size_t openBraceIndex)
+	{
+		if (openBraceIndex == std::string_view::npos || openBraceIndex >= text.size() || text[openBraceIndex] != '{')
+		{
+			return std::string_view::npos;
+		}
+
+		uint32_t braceDepth = 0;
+		for (size_t i = openBraceIndex; i < text.size(); ++i)
+		{
+			if (text[i] == '{')
+			{
+				++braceDepth;
+			}
+			else if (text[i] == '}')
+			{
+				H_ASSERTLOG(braceDepth > 0, "Invalid brace depth while parsing HLSL type declarations.");
+				--braceDepth;
+				if (braceDepth == 0)
+				{
+					return i;
+				}
+			}
+		}
+
+		return std::string_view::npos;
+	}
+
+	static bool contains_type_definition(std::string const& shaderText, std::string const& typeName)
+	{
+		const std::regex structPattern("\\bstruct\\s+" + typeName + "\\b");
+		const std::regex classPattern("\\bclass\\s+" + typeName + "\\b");
+		const std::regex enumPattern("\\benum(?:\\s+class)?\\s+" + typeName + "\\b");
+		return std::regex_search(shaderText, structPattern) ||
+			std::regex_search(shaderText, classPattern) ||
+			std::regex_search(shaderText, enumPattern);
+	}
+
+	static std::vector<std::pair<std::string, std::string>> extract_top_level_type_definitions(std::string_view shaderSource)
+	{
+		std::vector<std::pair<std::string, std::string>> definitions{};
+		const std::regex typePattern(R"(\b(struct|class|enum(?:\s+class)?)\s+([A-Za-z_]\w*)\b)");
+		const std::string shaderSourceText(shaderSource);
+		auto begin = std::sregex_iterator(shaderSourceText.begin(), shaderSourceText.end(), typePattern);
+		auto end = std::sregex_iterator();
+		std::unordered_set<std::string> emittedTypeNames{};
+
+		for (auto it = begin; it != end; ++it)
+		{
+			const std::smatch& match = *it;
+			if (match.size() < 3)
+			{
+				continue;
+			}
+
+			std::string typeName = match[2].str();
+			if (!emittedTypeNames.insert(typeName).second)
+			{
+				continue;
+			}
+
+			const size_t declarationStart = static_cast<size_t>(match.position(0));
+			const size_t searchStart = declarationStart + static_cast<size_t>(match.length(0));
+			const size_t braceIndex = shaderSource.find('{', searchStart);
+			const size_t declarationSemicolon = shaderSource.find(';', searchStart);
+			if (braceIndex == std::string_view::npos ||
+				(declarationSemicolon != std::string_view::npos && declarationSemicolon < braceIndex))
+			{
+				continue;
+			}
+
+			const size_t closeBraceIndex = find_matching_brace(shaderSource, braceIndex);
+			if (closeBraceIndex == std::string_view::npos)
+			{
+				continue;
+			}
+
+			const size_t trailingSemicolonIndex = shaderSource.find(';', closeBraceIndex);
+			if (trailingSemicolonIndex == std::string_view::npos)
+			{
+				continue;
+			}
+
+			definitions.emplace_back(
+				std::move(typeName),
+				std::string(shaderSource.substr(declarationStart, trailingSemicolonIndex - declarationStart + 1)));
+		}
+
+		return definitions;
+	}
+
+	static void merge_missing_type_definitions(std::string_view originalShaderSource, std::string& rewrittenShaderText)
+	{
+		if (rewrittenShaderText.empty())
+		{
+			return;
+		}
+
+		const auto definitions = extract_top_level_type_definitions(originalShaderSource);
+		if (definitions.empty())
+		{
+			return;
+		}
+
+		std::string preservedTypes{};
+		for (const auto& [typeName, definition] : definitions)
+		{
+			if (!contains_type_definition(rewrittenShaderText, typeName))
+			{
+				preservedTypes += definition;
+				preservedTypes += "\n\n";
+			}
+		}
+
+		if (!preservedTypes.empty())
+		{
+			rewrittenShaderText.insert(0, preservedTypes);
+		}
+	}
+
 	bool AshDXCContext::init()
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
@@ -217,6 +339,7 @@ namespace RHI
 		if (pBlob)
 		{
 			(*result)->resultShaderText = blob_to_utf8(pBlob);
+			merge_missing_type_definitions(szShaderSource, (*result)->resultShaderText);
 		}
 		free_file_read_result(shader_source_text);
 		ASH_SAFE_EXECUTE_END(bResult);

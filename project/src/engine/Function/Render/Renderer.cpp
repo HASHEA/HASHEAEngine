@@ -1,7 +1,73 @@
 #include "Renderer.h"
+#include "Base/hlog.h"
 
 namespace AshEngine
 {
+	Renderer::GraphicsPassContext::GraphicsPassContext(Renderer* renderer)
+		: m_renderer(renderer)
+	{
+	}
+
+	Renderer::GraphicsPassContext::~GraphicsPassContext()
+	{
+		end();
+	}
+
+	Renderer::GraphicsPassContext::GraphicsPassContext(GraphicsPassContext&& other) noexcept
+	{
+		*this = std::move(other);
+	}
+
+	Renderer::GraphicsPassContext& Renderer::GraphicsPassContext::operator=(GraphicsPassContext&& other) noexcept
+	{
+		if (this == &other)
+		{
+			return *this;
+		}
+
+		end();
+
+		m_renderer = other.m_renderer;
+		m_active = other.m_active;
+		m_desc = std::move(other.m_desc);
+		m_draw_calls = std::move(other.m_draw_calls);
+
+		if (m_active && m_renderer && m_renderer->m_active_pass == &other)
+		{
+			m_renderer->m_active_pass = this;
+		}
+
+		other.m_renderer = nullptr;
+		other.m_active = false;
+		other.m_desc = PassDesc{};
+		other.m_draw_calls.clear();
+		return *this;
+	}
+
+	bool Renderer::GraphicsPassContext::is_valid() const
+	{
+		return m_active && m_renderer != nullptr;
+	}
+
+	bool Renderer::GraphicsPassContext::draw(const GraphicsDrawDesc& desc)
+	{
+		if (!is_valid() || !desc.program)
+		{
+			return false;
+		}
+
+		m_draw_calls.push_back(desc);
+		return true;
+	}
+
+	void Renderer::GraphicsPassContext::end()
+	{
+		if (m_renderer)
+		{
+			m_renderer->end_active_pass(this);
+		}
+	}
+
 	Renderer::Renderer(RenderDevice* render_device)
 		: m_render_device(render_device)
 	{
@@ -16,6 +82,10 @@ namespace AshEngine
 
 	bool Renderer::end_frame()
 	{
+		if (m_active_pass)
+		{
+			end_active_pass(m_active_pass);
+		}
 		return m_render_device && m_render_device->end_frame();
 	}
 
@@ -88,60 +158,38 @@ namespace AshEngine
 		return m_render_device ? m_render_device->create_compute_program(desc) : nullptr;
 	}
 
-	bool Renderer::begin_pass(const PassDesc& desc)
+	bool Renderer::begin_pass(const PassDesc& desc, GraphicsPassContext& pass_context)
 	{
-		return m_render_device && m_render_device->begin_pass(desc);
-	}
-
-	void Renderer::end_pass()
-	{
-		if (m_render_device)
+		if (!m_render_device || m_active_pass || (desc.color_attachments.empty() && !desc.depth_attachment.render_target))
 		{
-			m_render_device->end_pass();
+			return false;
 		}
+
+		pass_context.end();
+		pass_context.m_renderer = this;
+		pass_context.m_active = true;
+		pass_context.m_desc = desc;
+		pass_context.m_draw_calls.clear();
+		m_active_pass = &pass_context;
+		return true;
 	}
 
 	bool Renderer::draw(const GraphicsDrawDesc& desc)
 	{
-		if (!m_render_device || !desc.program)
+		if (!m_active_pass || m_active_pass->m_renderer != this)
 		{
 			return false;
 		}
-		if (!m_render_device->bind_graphics_program(desc.program))
-		{
-			return false;
-		}
-		for (const VertexBufferBinding& binding : desc.vertex_buffers)
-		{
-			if (!binding.buffer || !m_render_device->bind_vertex_buffer(binding.slot, binding.buffer, binding.offset))
-			{
-				return false;
-			}
-		}
-		if (desc.has_viewport)
-		{
-			m_render_device->set_viewport(desc.viewport);
-		}
-		if (desc.has_scissor)
-		{
-			m_render_device->set_scissor(desc.scissor);
-		}
-		if (desc.index_buffer)
-		{
-			if (!m_render_device->bind_index_buffer(desc.index_buffer, desc.index_buffer_offset))
-			{
-				return false;
-			}
-			m_render_device->draw_indexed(desc.index_count, desc.instance_count, desc.first_index, desc.vertex_offset, desc.first_instance);
-			return true;
-		}
-		m_render_device->draw(desc.vertex_count, desc.instance_count, desc.first_vertex, desc.first_instance);
-		return true;
+		return m_active_pass->draw(desc);
 	}
 
 	bool Renderer::dispatch(const ComputeDispatchDesc& desc)
 	{
-		if (!m_render_device || !desc.program)
+		if (!m_render_device || !desc.program || m_active_pass)
+		{
+			return false;
+		}
+		if (!m_render_device->transition_compute_program_resources(desc.program))
 		{
 			return false;
 		}
@@ -151,5 +199,121 @@ namespace AshEngine
 		}
 		m_render_device->dispatch(desc.group_count_x, desc.group_count_y, desc.group_count_z);
 		return true;
+	}
+
+	bool Renderer::is_in_pass() const
+	{
+		return m_active_pass != nullptr;
+	}
+
+	void Renderer::end_active_pass(GraphicsPassContext* pass_context)
+	{
+		if (!pass_context || pass_context != m_active_pass)
+		{
+			return;
+		}
+
+		bool pass_started = false;
+		bool success = m_render_device != nullptr;
+
+		if (success)
+		{
+			for (const GraphicsDrawDesc& draw_desc : pass_context->m_draw_calls)
+			{
+				if (!draw_desc.program || !m_render_device->transition_graphics_program_resources(draw_desc.program))
+				{
+					success = false;
+					break;
+				}
+
+				for (const VertexBufferBinding& binding : draw_desc.vertex_buffers)
+				{
+					if (!binding.buffer || !m_render_device->transition_vertex_buffer(binding.buffer))
+					{
+						success = false;
+						break;
+					}
+				}
+				if (!success)
+				{
+					break;
+				}
+
+				if (draw_desc.index_buffer && !m_render_device->transition_index_buffer(draw_desc.index_buffer))
+				{
+					success = false;
+					break;
+				}
+			}
+		}
+
+		if (success)
+		{
+			success = m_render_device->begin_pass(pass_context->m_desc);
+			pass_started = success;
+		}
+
+		if (success)
+		{
+			for (const GraphicsDrawDesc& draw_desc : pass_context->m_draw_calls)
+			{
+				if (!m_render_device->bind_graphics_program(draw_desc.program))
+				{
+					success = false;
+					break;
+				}
+
+				for (const VertexBufferBinding& binding : draw_desc.vertex_buffers)
+				{
+					if (!binding.buffer || !m_render_device->bind_vertex_buffer(binding.slot, binding.buffer, binding.offset))
+					{
+						success = false;
+						break;
+					}
+				}
+				if (!success)
+				{
+					break;
+				}
+
+				if (draw_desc.has_viewport)
+				{
+					m_render_device->set_viewport(draw_desc.viewport);
+				}
+				if (draw_desc.has_scissor)
+				{
+					m_render_device->set_scissor(draw_desc.scissor);
+				}
+
+				if (draw_desc.index_buffer)
+				{
+					if (!m_render_device->bind_index_buffer(draw_desc.index_buffer, draw_desc.index_buffer_offset))
+					{
+						success = false;
+						break;
+					}
+					m_render_device->draw_indexed(draw_desc.index_count, draw_desc.instance_count, draw_desc.first_index, draw_desc.vertex_offset, draw_desc.first_instance);
+					continue;
+				}
+
+				m_render_device->draw(draw_desc.vertex_count, draw_desc.instance_count, draw_desc.first_vertex, draw_desc.first_instance);
+			}
+		}
+
+		if (pass_started)
+		{
+			m_render_device->end_pass();
+		}
+
+		if (!success)
+		{
+			HLogError("Renderer failed to submit graphics pass '{}'.", pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass");
+		}
+
+		pass_context->m_draw_calls.clear();
+		pass_context->m_desc = PassDesc{};
+		pass_context->m_active = false;
+		pass_context->m_renderer = nullptr;
+		m_active_pass = nullptr;
 	}
 }

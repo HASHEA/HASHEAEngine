@@ -17,10 +17,97 @@
 #include "VulkanShaderCompiler.h"
 #include "VulkanStagingBuffer.h"
 #include "Graphics/DXC/DXCHelper.h"
+#include <windows.h>
+#include <DbgHelp.h>
+#include <array>
+#include <mutex>
+#include <sstream>
 #include <vector>
+#pragma comment(lib, "Dbghelp.lib")
 namespace RHI
 {
 	constexpr const char* k_pipeline_cache_path = "product\\caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
+	namespace
+	{
+		constexpr uint32_t k_vma_stack_frame_skip = 2;
+		constexpr uint32_t k_vma_stack_frame_capture_count = 24;
+
+		static auto get_vma_allocation_key(VmaAllocation allocation) -> uint64_t
+		{
+			return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(allocation));
+		}
+
+		static auto get_vulkan_object_type_name(VkObjectType type) -> const char*
+		{
+			switch (type)
+			{
+			case VK_OBJECT_TYPE_BUFFER:
+				return "Buffer";
+			case VK_OBJECT_TYPE_IMAGE:
+				return "Image";
+			default:
+				return "Unknown";
+			}
+		}
+
+		static auto get_symbol_mutex() -> std::mutex&
+		{
+			static std::mutex mutex{};
+			return mutex;
+		}
+
+		static auto ensure_symbol_handler_initialized() -> bool
+		{
+			static bool initialized = false;
+			static bool attempted = false;
+			std::lock_guard<std::mutex> lock(get_symbol_mutex());
+			if (!attempted)
+			{
+				SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+				initialized = SymInitialize(GetCurrentProcess(), nullptr, TRUE) == TRUE;
+				attempted = true;
+			}
+			return initialized;
+		}
+
+		static auto format_stack_frame(uint64_t address) -> std::string
+		{
+			std::ostringstream stream{};
+			stream << "0x" << std::hex << std::uppercase << address;
+
+			if (!ensure_symbol_handler_initialized())
+			{
+				return stream.str();
+			}
+
+			std::lock_guard<std::mutex> lock(get_symbol_mutex());
+			HANDLE process = GetCurrentProcess();
+			DWORD64 displacement = 0;
+			std::array<char, sizeof(SYMBOL_INFO) + MAX_SYM_NAME> symbolStorage{};
+			SYMBOL_INFO* symbol = reinterpret_cast<SYMBOL_INFO*>(symbolStorage.data());
+			symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
+			symbol->MaxNameLen = MAX_SYM_NAME;
+
+			if (SymFromAddr(process, address, &displacement, symbol) == TRUE)
+			{
+				stream << " " << symbol->Name;
+				if (displacement != 0)
+				{
+					stream << " +0x" << std::hex << std::uppercase << displacement;
+				}
+			}
+
+			IMAGEHLP_LINE64 lineInfo{};
+			lineInfo.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+			DWORD lineDisplacement = 0;
+			if (SymGetLineFromAddr64(process, address, &lineDisplacement, &lineInfo) == TRUE)
+			{
+				stream << " [" << lineInfo.FileName << ":" << std::dec << lineInfo.LineNumber << "]";
+			}
+
+			return stream.str();
+		}
+	}
 	inline static auto check_layer_support(const std::vector<const char*>& rqLayers)->bool
 	{
 		std::vector<VkLayerProperties> layers;
@@ -352,6 +439,7 @@ namespace RHI
 		{
 			// Memory properties are used regularly for creating all kinds of buffers
 			vkGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &vulkanPhysicalDeviceMemoryProperties);
+			HLogInfo("Vulkan memory type count: {}", vulkanPhysicalDeviceMemoryProperties.memoryTypeCount);
 			float fGB = 0.0f;
 			bool  bLocalGpuMemory = false;
 			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; ++i)
@@ -715,7 +803,9 @@ namespace RHI
 
 	auto VulkanContext::_shutdown_vulkan_memory_allocator() -> bool
 	{
+		_dump_vma_leaks();
 		vmaDestroyAllocator(vmaAllocator);
+		vmaAllocator = VK_NULL_HANDLE;
 		return true;
 	}
 
@@ -888,7 +978,144 @@ namespace RHI
 		return ret;
 	}
 
-	auto VulkanContext::vma_create_buffer(VkDeviceSize uBufferSize, VkBufferUsageFlags eBufferUsage, VmaMemoryUsage eMemUsage, VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, void** ppData) -> bool
+	auto VulkanContext::_track_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, uint64_t size, const char* debugName, const char* file, uint32_t line, const char* function) -> void
+	{
+#if ASH_ENABLE_VMA_LEAK_TRACKING
+		if (!allocation)
+		{
+			return;
+		}
+
+		VmaTrackedAllocationInfo info{};
+		info.objectType = objectType;
+		info.resourceHandle = resourceHandle;
+		info.allocationHandle = get_vma_allocation_key(allocation);
+		info.size = size;
+		info.debugName = debugName ? debugName : "";
+		info.file = file ? file : "";
+		info.function = function ? function : "";
+		info.line = line;
+		_capture_vma_allocation_stack(info);
+
+		std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
+		vmaTrackedAllocations[info.allocationHandle] = std::move(info);
+#else
+		(void)allocation;
+		(void)objectType;
+		(void)resourceHandle;
+		(void)size;
+		(void)debugName;
+		(void)file;
+		(void)line;
+		(void)function;
+#endif
+	}
+
+	auto VulkanContext::_capture_vma_allocation_stack(VmaTrackedAllocationInfo& info) const -> void
+	{
+#if ASH_ENABLE_VMA_LEAK_STACKTRACE
+		void* frames[k_vma_stack_frame_capture_count]{};
+		const USHORT capturedFrameCount = CaptureStackBackTrace(k_vma_stack_frame_skip, k_vma_stack_frame_capture_count, frames, nullptr);
+		info.stackFrames.reserve(capturedFrameCount);
+		for (USHORT index = 0; index < capturedFrameCount; ++index)
+		{
+			info.stackFrames.push_back(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(frames[index])));
+		}
+#else
+		(void)info;
+#endif
+	}
+
+	auto VulkanContext::_shutdown_shader_pool() -> bool
+	{
+		// Pooled shaders (VkShaderModule + descriptor layouts) must be destroyed while the device is still valid.
+		// vulkanShaderPool holds the last strong refs after the app drops external shared_ptrs; without draining
+		// the pool here, ~VulkanShader never runs and validation reports leaked shader modules at device destroy.
+		while (vulkanShaderPool.size() > 0)
+		{
+			FlatHashMapIterator it = vulkanShaderPool.iterator_begin();
+			H_ASSERT(it.index != k_iterator_end);
+			vulkanShaderPool.get(it).reset();
+			vulkanShaderPool.remove(it);
+		}
+		vulkanShaderPool.shutdown();
+		// ~VulkanDescriptorPool (from layout teardown above) defers vkDestroyDescriptorPool to delayed_deletion_queues.
+		// Those callbacks are not run unless we flush again before vkDestroyDevice, otherwise VUID-vkDestroyDevice-device-05137.
+		for (int i = 0; i < k_max_frames; ++i)
+		{
+			delayed_deletion_queues[i].flush();
+		}
+		return true;
+	}
+
+	auto VulkanContext::_untrack_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, const char* file, uint32_t line, const char* function) -> void
+	{
+#if ASH_ENABLE_VMA_LEAK_TRACKING
+		if (!allocation)
+		{
+			return;
+		}
+
+		const uint64_t allocationHandle = get_vma_allocation_key(allocation);
+		std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
+		const auto iter = vmaTrackedAllocations.find(allocationHandle);
+		if (iter == vmaTrackedAllocations.end())
+		{
+			HLogWarning(
+				"VMA untrack missed allocation: type={}, allocation=0x{:X}, resource=0x{:X}, free_site={}:{} ({})",
+				get_vulkan_object_type_name(objectType),
+				allocationHandle,
+				resourceHandle,
+				file ? file : "<unknown>",
+				line,
+				function ? function : "<unknown>");
+			return;
+		}
+		vmaTrackedAllocations.erase(iter);
+#else
+		(void)allocation;
+		(void)objectType;
+		(void)resourceHandle;
+		(void)file;
+		(void)line;
+		(void)function;
+#endif
+	}
+
+	auto VulkanContext::_dump_vma_leaks() const -> void
+	{
+#if ASH_ENABLE_VMA_LEAK_TRACKING
+		std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
+		if (vmaTrackedAllocations.empty())
+		{
+			HLogInfo("VMA leak tracking: no live VMA allocations detected before allocator shutdown.");
+			return;
+		}
+
+		HLogError("Detected {} live VMA allocations before allocator shutdown.", vmaTrackedAllocations.size());
+		for (const auto& [allocationHandle, info] : vmaTrackedAllocations)
+		{
+			HLogError(
+				"VMA leak: type={}, name='{}', allocation=0x{:X}, resource=0x{:X}, size={}, allocated_at={}:{} ({})",
+				get_vulkan_object_type_name(info.objectType),
+				info.debugName.empty() ? "<unnamed>" : info.debugName,
+				allocationHandle,
+				info.resourceHandle,
+				info.size,
+				info.file.empty() ? "<unknown>" : info.file,
+				info.line,
+				info.function.empty() ? "<unknown>" : info.function);
+#if ASH_ENABLE_VMA_LEAK_STACKTRACE
+			for (size_t frameIndex = 0; frameIndex < info.stackFrames.size(); ++frameIndex)
+			{
+				HLogError("  [{}] {}", frameIndex, format_stack_frame(info.stackFrames[frameIndex]));
+			}
+#endif
+		}
+#endif
+	}
+
+	auto VulkanContext::vma_create_buffer(VkDeviceSize uBufferSize, VkBufferUsageFlags eBufferUsage, VmaMemoryUsage eMemUsage, VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, void** ppData, const char* debugName, const char* file, uint32_t line, const char* function) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		VkBufferCreateInfo      sBufferCreateInfo = {};
@@ -917,6 +1144,13 @@ namespace RHI
 			&vmaAllocationInfo
 		);
 		VK_CHECK_RESULT(vkRetCode);
+#ifdef ASH_DEBUG
+		if (pVMAllocation && debugName && debugName[0] != '\0')
+		{
+			vmaSetAllocationName(vmaAllocator, pVMAllocation, debugName);
+		}
+#endif
+		_track_vma_allocation(pVMAllocation, VK_OBJECT_TYPE_BUFFER, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pVkBuffer)), static_cast<uint64_t>(uBufferSize), debugName, file, line, function);
 		if (bMapped)
 		{
 			H_ASSERT(vmaAllocationInfo.pMappedData);
@@ -926,9 +1160,10 @@ namespace RHI
 		return bResult;
 	}
 
-	auto VulkanContext::vma_destroy_buffer(VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation) -> bool
+	auto VulkanContext::vma_destroy_buffer(VkBuffer& pVkBuffer, VmaAllocation& pVMAllocation, const char* file, uint32_t line, const char* function) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		_untrack_vma_allocation(pVMAllocation, VK_OBJECT_TYPE_BUFFER, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pVkBuffer)), file, line, function);
 		vmaDestroyBuffer(vmaAllocator, pVkBuffer, pVMAllocation);
 		pVkBuffer = nullptr;
 		pVMAllocation = nullptr;
@@ -936,15 +1171,16 @@ namespace RHI
 		return bResult;
 	}
 
-	auto VulkanContext::vma_destroy_buffer_v(VkBuffer pVkBuffer, VmaAllocation pVMAllocation) -> bool
+	auto VulkanContext::vma_destroy_buffer_v(VkBuffer pVkBuffer, VmaAllocation pVMAllocation, const char* file, uint32_t line, const char* function) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		_untrack_vma_allocation(pVMAllocation, VK_OBJECT_TYPE_BUFFER, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pVkBuffer)), file, line, function);
 		vmaDestroyBuffer(vmaAllocator, pVkBuffer, pVMAllocation);
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
 
-	auto VulkanContext::vma_create_image(const VkImageCreateInfo& sImgCreateInfo, VmaMemoryUsage eMemUsage, VkImage& pVkImage, VmaAllocation& pVMAllocation) -> bool
+	auto VulkanContext::vma_create_image(const VkImageCreateInfo& sImgCreateInfo, VmaMemoryUsage eMemUsage, VkImage& pVkImage, VmaAllocation& pVMAllocation, const char* debugName, const char* file, uint32_t line, const char* function) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		VmaAllocationCreateInfo sVmaAllocCreateInfo = {};
@@ -956,15 +1192,24 @@ namespace RHI
 		sVmaAllocCreateInfo.usage = eMemUsage;
 		VkResult vkResult = vmaCreateImage(vmaAllocator, &sImgCreateInfo, &sVmaAllocCreateInfo, &pVkImage, &pVMAllocation, nullptr);
 		VK_CHECK_RESULT(vkResult);
+#ifdef ASH_DEBUG
+		if (pVMAllocation && debugName && debugName[0] != '\0')
+		{
+			vmaSetAllocationName(vmaAllocator, pVMAllocation, debugName);
+		}
+#endif
+		VmaAllocationInfo allocationInfo{};
+		vmaGetAllocationInfo(vmaAllocator, pVMAllocation, &allocationInfo);
+		_track_vma_allocation(pVMAllocation, VK_OBJECT_TYPE_IMAGE, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pVkImage)), static_cast<uint64_t>(allocationInfo.size), debugName, file, line, function);
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
 
-	auto VulkanContext::vma_destroy_image(VkImage pVkImage, VmaAllocation pVMAllocation) -> bool
+	auto VulkanContext::vma_destroy_image(VkImage pVkImage, VmaAllocation pVMAllocation, const char* file, uint32_t line, const char* function) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		ASH_PROCESS_ERROR_EXIT(pVkImage);
-		ASH_PROCESS_ERROR_EXIT(pVMAllocation);
+		_untrack_vma_allocation(pVMAllocation, VK_OBJECT_TYPE_IMAGE, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pVkImage)), file, line, function);
 		vmaDestroyImage(vmaAllocator, pVkImage, pVMAllocation);
 		pVkImage = nullptr;
 		pVMAllocation = nullptr;
@@ -1183,6 +1428,7 @@ namespace RHI
 	{
 		//wait idle
 		wait_idle();
+	
 		//unload cache
 		_unload_cache();
 		//shutdown framepool and datas
@@ -1191,6 +1437,13 @@ namespace RHI
 		_shutdown_descriptor_pool();
 		//shutdown staging pool
 		_shutdown_staging_buffer_pool();
+		//shutdown shader pool
+		_shutdown_shader_pool();
+		//flush deletion queue at the very end to make sure all resources are destroyed before device destroy, otherwise VUID-vkDestroyDevice-device-05137.
+		for (auto& deletionQueue : delayed_deletion_queues)
+		{
+			deletionQueue.flush();
+		}
 		//shutdown vma
 		_shutdown_vulkan_memory_allocator();
 		//shutdown device

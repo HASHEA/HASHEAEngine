@@ -342,12 +342,12 @@ namespace RHI
 
 	typedef uint32_t AshTextureUsageFlags;
 
-	//temply only one
-	enum AshTextureCreateFlagBits : uint8_t {
-		ASH_TEXTURE_CREATE_FLAG_SPARSE,
+	// Texture creation flags are bitmasks.
+	enum AshTextureCreateFlagBits : uint32_t {
+		ASH_TEXTURE_CREATE_FLAG_SPARSE = 0x00000001,
 		ASH_TEXTURE_CREATE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
 	}; 
-	typedef uint8_t AshTextureCreateFlags;
+	typedef uint32_t AshTextureCreateFlags;
 
 	enum AshTextureAspectFlagBits : uint32_t
 	{
@@ -629,5 +629,4 @@ namespace RHI
 
 
 }
-
 

@@ -131,16 +131,34 @@ namespace RHI
 		m_sCreationInfo.usage_flags = VKBufferHelper::get_buffer_usage_flags_from_vk(uBufferUsageFlags);
 		//vma allocate buffer
 		{
-			bool bRetCode = VulkanContext::get()->vma_create_buffer(m_sCreationInfo.size, uBufferUsageFlags,
-				eMemUsage, m_pVkBuffer, m_pVMAAllocation, (void**)& m_pMappedData);
+			bool bRetCode = ASH_VMA_CREATE_BUFFER(VulkanContext::get(), m_sCreationInfo.size, uBufferUsageFlags,
+				eMemUsage, m_pVkBuffer, m_pVMAAllocation, (void**)&m_pMappedData, m_pName);
 			ASH_LOG_PROCESS_ERROR(bRetCode);
 		}
 		//validate result
 		{
 			VmaAllocationInfo     allocationInfo = {};
 			VkMemoryPropertyFlags memoryPropertyFlags = {};
+			VkPhysicalDeviceMemoryProperties queriedMemoryProperties{};
 			vmaGetAllocationInfo(VulkanContext::get_vma_allocator(), m_pVMAAllocation, &allocationInfo);
-			ASH_LOG_PROCESS_ERROR(allocationInfo.memoryType < VulkanContext::get_device_memory_properties().memoryTypeCount && allocationInfo.memoryType < VK_MAX_MEMORY_TYPES);
+			vkGetPhysicalDeviceMemoryProperties(VulkanContext::get_vulkan_physical_device(), &queriedMemoryProperties);
+			HLogInfo(
+				"Buffer '{}' allocation memoryType={}, cached memoryTypeCount={}, queried memoryTypeCount={}",
+				ci.name ? ci.name : "<unnamed>",
+				allocationInfo.memoryType,
+				VulkanContext::get_device_memory_properties().memoryTypeCount,
+				queriedMemoryProperties.memoryTypeCount);
+			const bool validMemoryType =
+				allocationInfo.memoryType < VulkanContext::get_device_memory_properties().memoryTypeCount &&
+				allocationInfo.memoryType < VK_MAX_MEMORY_TYPES;
+			HLogInfo(
+				"Buffer '{}' validMemoryType={} (memoryType={}, memoryTypeCount={}, vkMaxMemoryTypes={})",
+				ci.name ? ci.name : "<unnamed>",
+				validMemoryType,
+				allocationInfo.memoryType,
+				VulkanContext::get_device_memory_properties().memoryTypeCount,
+				VK_MAX_MEMORY_TYPES);
+			ASH_LOG_PROCESS_ERROR(validMemoryType);
 			vmaGetMemoryTypeProperties(VulkanContext::get_vma_allocator(), allocationInfo.memoryType, &memoryPropertyFlags);
 			m_bCoherent = (memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
 			VmaAllocationInfo sAllocInfo;
@@ -183,7 +201,7 @@ namespace RHI
 		defaultUAV.reset();
 		if (immediate_deletion)
 		{
-			VulkanContext::get()->vma_destroy_buffer(m_pVkBuffer, m_pVMAAllocation);
+			ASH_VMA_DESTROY_BUFFER(VulkanContext::get(), m_pVkBuffer, m_pVMAAllocation);
 			HLogInfo("deleting buffer : {} ...", m_pName);
 		}
 		else
@@ -195,7 +213,7 @@ namespace RHI
 				auto sname = m_pName;
 				VulkanContext::get_current_frame_deletion_queue().emplace([handle, alloc, sname]() {
 					HLogInfo("deleting buffer : {} ...", sname);
-					VulkanContext::get()->vma_destroy_buffer_v(handle, alloc);
+					ASH_VMA_DESTROY_BUFFER_V(VulkanContext::get(), handle, alloc);
 					});
 				m_pVkBuffer = VK_NULL_HANDLE;
 				m_pVMAAllocation = nullptr;
