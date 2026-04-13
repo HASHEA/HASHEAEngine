@@ -85,7 +85,7 @@ namespace AshEngine
 
     template<typename T>
     inline Array<T>::~Array() {
-        
+        shutdown();
     }
 
     template<typename T>
@@ -179,10 +179,25 @@ namespace AshEngine
     template<typename T>
     inline auto Array<T>::delete_swap(uint32_t index) -> bool {
         H_ASSERT(m_uSize > 0 && index < m_uSize);
-		if constexpr (!std::is_trivially_destructible<T>::value) {
-			m_pData[index].~T();
-		}
-		new (&m_pData[index]) T(std::move(m_pData[--m_uSize])); // Move last element to the deleted slot
+        const uint32_t last_index = m_uSize - 1;
+        if (index != last_index) {
+			if constexpr (!std::is_trivially_destructible<T>::value) {
+				m_pData[index].~T();
+			}
+			if constexpr (std::is_trivially_copyable<T>::value) {
+				m_pData[index] = std::move(m_pData[last_index]);
+			}
+			else {
+				new (&m_pData[index]) T(std::move(m_pData[last_index]));
+				if constexpr (!std::is_trivially_destructible<T>::value) {
+					m_pData[last_index].~T();
+				}
+			}
+        }
+        else if constexpr (!std::is_trivially_destructible<T>::value) {
+            m_pData[last_index].~T();
+        }
+        --m_uSize;
         return true;
     }
 
@@ -257,17 +272,17 @@ namespace AshEngine
 
         T* new_data = (T*) Ash_Alloc(m_pAllocator, new_capacity * sizeof(T), alignof(T));//(T*)m_pAllocator->allocate(new_capacity * sizeof(T), alignof(T));
 		if (m_uSize > 0 && m_pData != nullptr) {
-			for (uint32_t i = 0; i < m_uSize; ++i) {
-				if constexpr (std::is_trivially_move_constructible<T>::value) {
-					new_data[i] = std::move(m_pData[i]);
-				}
-				else {
+            if constexpr (std::is_trivially_copyable<T>::value) {
+                memory_copy(new_data, m_pData, m_uSize * sizeof(T));
+            }
+            else {
+			    for (uint32_t i = 0; i < m_uSize; ++i) {
 					new (&new_data[i]) T(std::move(m_pData[i]));
 					if constexpr (!std::is_trivially_destructible<T>::value) {
 						m_pData[i].~T(); 
 					}
-				}
-			}
+			    }
+            }
 		}
 
 		if (m_pData) {

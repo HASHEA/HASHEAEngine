@@ -1,5 +1,6 @@
 #pragma once
 #include "Application.h"
+#include "Graphics/DynamicRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/Swapchain.h"
 #include "Function/Render/RenderDevice.h"
@@ -12,6 +13,22 @@
 #include "Graphics/RHICommon.h"
 namespace AshEngine
 {
+	namespace
+	{
+		static auto resolve_application_rhi_config(const EngineInitConfig& config) -> RHI::RuntimeRHIConfig
+		{
+			RHI::RuntimeRHIConfig runtimeConfig = RHI::load_runtime_rhi_config(config.backendConfigPath);
+			if (config.backend != RHI::Backend::Default)
+			{
+				runtimeConfig.backend = config.backend;
+			}
+
+			runtimeConfig.backend = RHI::resolve_runtime_backend(runtimeConfig.backend);
+			H_ASSERTLOG(runtimeConfig.backend != RHI::Backend::Default, "Failed to resolve an available graphics backend.");
+			return runtimeConfig;
+		}
+	}
+
 	Application* Application::app = nullptr;
 	Application::Application(const EngineInitConfig& config)
 	{
@@ -21,8 +38,12 @@ namespace AshEngine
 		LogService::instance()->init(nullptr);
 		MemoryService::instance()->init(nullptr);
 
+		const RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(config);
+		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
+		HLogInfo("Initializing engine RHI backend: {}", RHI::backend_to_string(resolvedBackend));
+
 		/*window*/
-		WindowConfig windowConfig = { config.initWidth,config.initHeight, config.bVsync, config.title };
+		WindowConfig windowConfig = { config.initWidth, config.initHeight, config.bVsync, config.title, resolvedBackend };
 		window = Window::create();
 		window->init(windowConfig);
 
@@ -31,8 +52,21 @@ namespace AshEngine
 		gfxConfig.window = window->get_native_interface();
 		gfxConfig.width = window->get_width();
 		gfxConfig.height = window->get_height();
-		gfxConfig.addtionalExtensions = window->get_extensions();
-		graphicsContext = RHI::GraphicsContext::create();
+		gfxConfig.backend = resolvedBackend;
+		gfxConfig.vulkanValidation = runtimeRhiConfig.vulkanValidation;
+		gfxConfig.dx12Validation = runtimeRhiConfig.dx12Validation;
+		const auto& windowExtensions = window->get_extensions();
+		gfxConfig.addtionalExtensions.init(nullptr, windowExtensions.size(), 0);
+		for (uint32_t extensionIndex = 0; extensionIndex < windowExtensions.size(); ++extensionIndex)
+		{
+			gfxConfig.addtionalExtensions.push_back(windowExtensions[extensionIndex]);
+		}
+		graphicsContext = RHI::GraphicsContext::create(resolvedBackend);
+		H_ASSERTLOG(graphicsContext != nullptr, "Failed to create graphics context for backend '{}'.", RHI::backend_to_string(resolvedBackend));
+		if (!graphicsContext)
+		{
+			return;
+		}
 		graphicsContext->init(&gfxConfig);
 
 		/*shader manager*/
@@ -52,7 +86,12 @@ namespace AshEngine
 		scConfig.pColorSpace = colorSpace.data();
 		scConfig.presentModeCount = presentMode.size();
 		scConfig.pPresentMode = presentMode.data();
-		swapChain = RHI::Swapchain::create();
+		swapChain = RHI::Swapchain::create(resolvedBackend);
+		H_ASSERTLOG(swapChain != nullptr, "Failed to create swapchain for backend '{}'.", RHI::backend_to_string(resolvedBackend));
+		if (!swapChain)
+		{
+			return;
+		}
 		swapChain->init(&scConfig);
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
 		renderer = new Renderer(renderDevice);
@@ -60,6 +99,10 @@ namespace AshEngine
 	Application::~Application()
 	{
 		app = nullptr;
+		if (graphicsContext)
+		{
+			graphicsContext->wait_idle();
+		}
 		delete renderer;
 		renderer = nullptr;
 		delete renderDevice;
@@ -67,51 +110,163 @@ namespace AshEngine
 		if (swapChain)
 		{
 			swapChain->shutdown();
-			Ash_Delete(nullptr, swapChain);
+			swapChain->destroy();
 			swapChain = nullptr;
 		}
 		if (graphicsContext)
 		{
 			graphicsContext->shutdown();
-			Ash_Delete(nullptr,graphicsContext);
+			graphicsContext->destroy();
 			graphicsContext = nullptr;
 		}
 		if (window)
 		{
 			window->shutdown();
-			Ash_Delete(nullptr, window);
+			window->destroy();
 			window = nullptr;
 		}
 		MemoryService::instance()->shutdown();
 		LogService::instance()->shutdown();
 	}
+	auto Application::request_exit() -> void
+	{
+		exitRequested = true;
+	}
+	auto Application::set_max_frame_count(uint64_t inMaxFrameCount) -> void
+	{
+		maxFrameCount = inMaxFrameCount;
+	}
 	auto Application::start() -> void
 	{
-		//test shader load
-		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-		//ShaderManager::load_shader("assets/Ash-shaders/Graphics.vert");
-
-		while (!window->should_close())
+		if (started)
 		{
-			// logic update, non about rendering
-			_on_update();
+			return;
+		}
 
-			
-			if (!window->is_minimized())
+		started = true;
+		exitRequested = false;
+		frameIndex = 0;
+		_on_startup();
+
+		while (!_should_exit())
+		{
+			_pump_platform_events();
+			_tick_frame();
+
+			if (_should_render_frame())
 			{
-				_on_render();
+				_render_frame();
+				_present_frame();
+			}
 
-
-				_present();
+			++frameIndex;
+			if (maxFrameCount > 0 && frameIndex >= maxFrameCount)
+			{
+				HLogInfo("Application smoke frame limit reached: {}", maxFrameCount);
+				request_exit();
 			}
 		}
+
+		_on_shutdown();
+		started = false;
+	}
+	auto Application::_pump_platform_events() -> void
+	{
+		inputState.begin_frame();
+		if (!window)
+		{
+			return;
+		}
+
+		window->on_update();
+		_process_window_events();
+	}
+	auto Application::_tick_frame() -> void
+	{
+		_on_update();
+	}
+	auto Application::_render_frame() -> void
+	{
+		_on_render();
+	}
+	auto Application::_present_frame() -> void
+	{
+		_present();
+	}
+	auto Application::_should_render_frame() const -> bool
+	{
+		return window != nullptr && !window->is_minimized();
+	}
+	auto Application::_should_exit() const -> bool
+	{
+		return exitRequested || window == nullptr || window->should_close();
+	}
+	auto Application::_on_startup() -> void
+	{
+	}
+	auto Application::_on_shutdown() -> void
+	{
 	}
 	auto Application::_on_update() -> void
 	{
-		window->on_update();//handle event first
+	}
+	auto Application::_process_window_events() -> void
+	{
+		if (!window)
+		{
+			return;
+		}
 
+		WindowEvent event{};
+		while (window->poll_event(event))
+		{
+			_handle_window_event(event);
+		}
+	}
+	auto Application::_handle_window_event(const WindowEvent& event) -> void
+	{
+		switch (event.type)
+		{
+		case WindowEventType::Resize:
+			if (swapChain && event.width > 0 && event.height > 0)
+			{
+				swapChain->resize_swapchain(event.width, event.height);
+			}
+			break;
+		case WindowEventType::Minimized:
+			HLogInfo("Window minimized.");
+			break;
+		case WindowEventType::Restored:
+			HLogInfo("Window restored.");
+			break;
+		case WindowEventType::CloseRequested:
+			HLogInfo("Window close requested.");
+			request_exit();
+			break;
+		case WindowEventType::KeyPressed:
+			inputState.set_key_state(event.key, true, event.repeated);
+			break;
+		case WindowEventType::KeyReleased:
+			inputState.set_key_state(event.key, false, false);
+			break;
+		case WindowEventType::MouseButtonPressed:
+			inputState.set_mouse_position(event.mouseX, event.mouseY);
+			inputState.set_mouse_button_state(event.mouseButton, true);
+			break;
+		case WindowEventType::MouseButtonReleased:
+			inputState.set_mouse_position(event.mouseX, event.mouseY);
+			inputState.set_mouse_button_state(event.mouseButton, false);
+			break;
+		case WindowEventType::MouseMoved:
+			inputState.set_mouse_position(event.mouseX, event.mouseY);
+			break;
+		case WindowEventType::MouseScrolled:
+			inputState.add_scroll_delta(event.scrollX, event.scrollY);
+			break;
+		case WindowEventType::None:
+		default:
+			break;
+		}
 	}
 	auto Application::_on_gui() -> void
 	{

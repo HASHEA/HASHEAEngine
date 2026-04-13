@@ -26,6 +26,8 @@ namespace AshEngine
 
 		auto shutdown() -> void override;
 
+		auto destroy() -> void override;
+
 		auto set_title(const char* title) -> void override;
 
 		auto get_native_interface() -> void* override;
@@ -33,12 +35,14 @@ namespace AshEngine
 		auto should_close() -> bool override;
 
 		auto is_minimized() -> bool override;
+
+		auto poll_event(WindowEvent& outEvent) -> bool override;
 	private:
 		auto register_native_event(const WindowConfig& data) -> void;
 		WindowConfig data{};
 		GLFWwindow* handle = nullptr;
-		static bool shouldClose;
-		static bool minimized;
+		bool shouldClose = false;
+		bool minimized = false;
 
 		
 	};

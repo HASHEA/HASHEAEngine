@@ -141,7 +141,6 @@ namespace RHI
 	
 		if (!VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
-			HLogInfo("creating render pass : {}", name);
 			VK_CHECK_RESULT(vkCreateRenderPass(VulkanContext::get_vulkan_device(), &render_pass_info, nullptr, &vkRenderPass));
 			VulkanContext::set_resource_name(VK_OBJECT_TYPE_RENDER_PASS, (uint64_t)vkRenderPass, name);
 		}
@@ -153,18 +152,15 @@ namespace RHI
 		{
 			if (vkRenderPass != VK_NULL_HANDLE)
 			{
-				HLogInfo("deleting renderpass : {} ...", name);
 				vkDestroyRenderPass(VulkanContext::get_vulkan_device(),vkRenderPass,VulkanContext::get_vulkan_allocation_callbacks());
 			}
 		}
 		else
 		{
 			auto handle = this->vkRenderPass;
-			auto sname = name;
 			if (handle != VK_NULL_HANDLE)
 			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle, sname]() {
-					HLogInfo("deleting renderpass : {} ...", sname);
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {
 					vkDestroyRenderPass(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
 			}
 		}

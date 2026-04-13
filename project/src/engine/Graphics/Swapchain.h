@@ -1,6 +1,8 @@
 #pragma once
 #include "Base/hplatform.h"
 #include "Base/hcore.h"
+#include "RHIBackend.h"
+#include <memory>
 namespace RHI
 {
 	enum AshFormat;
@@ -28,7 +30,8 @@ namespace RHI
 
 		virtual auto init(void* config)->bool = 0;
 		virtual auto shutdown()->bool = 0;
-		static Swapchain* create();
+		virtual auto destroy() -> void = 0;
+		static Swapchain* create(Backend backend);
 	public:
 		/****** rhi interfaces ********/
 		virtual auto resize_swapchain(uint32_t width, uint32_t height) -> void = 0;

@@ -28,7 +28,7 @@ namespace RHI
 	{
 		DescriptorSetLayoutCreation layout_creation{};
 		std::shared_ptr<VulkanDescriptorSetLayout> layout = nullptr;
-		std::shared_ptr<VulkanDescriptorSet> descriptor_set = nullptr;
+		std::vector<std::shared_ptr<VulkanDescriptorSet>> descriptor_sets;
 		uint32_t image_descriptor_count = 0;
 		uint32_t buffer_descriptor_count = 0;
 		uint32_t write_count = 0;

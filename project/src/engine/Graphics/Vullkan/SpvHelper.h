@@ -107,6 +107,7 @@ namespace RHI
 		uint32_t specialization_constants_count = 0;
 		uint32_t push_constants_count = 0;
 		uint32_t push_constants_stride = 0;
+		char push_constant_name[64]{};
 
 		DescriptorSetLayoutCreation sets[k_max_reflected_descriptor_sets]{};
 		SpecializationConstant specialization_constants[k_max_specialization_constants]{};

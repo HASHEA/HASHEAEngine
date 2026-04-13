@@ -9,7 +9,6 @@ namespace AshEditor
 	namespace
 	{
 		static const char* k_demo_shader_path = "project/src/editor/Shaders/CodexLogoComputeDemo.hlsl";
-		static bool g_logged_demo_submit = false;
 
 		struct PaletteColor
 		{
@@ -207,11 +206,6 @@ namespace AshEditor
 		}
 
 		pass_context.end();
-		if (!g_logged_demo_submit)
-		{
-			HLogInfo("Codex logo demo submitted compute + fullscreen draw.");
-			g_logged_demo_submit = true;
-		}
 		return true;
 	}
 }

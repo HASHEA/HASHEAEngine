@@ -53,7 +53,10 @@ project "Editor"
 		postbuildcommands 
 		{
 			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
-			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\"',
+			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Editor.exe"',
+			'if exist "$(TargetDir)Editor.pdb" copy /Y "$(TargetDir)Editor.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Editor.pdb"',
+			'copy /Y "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.dll" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.dll"',
+			'if exist "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" copy /Y "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.pdb"',
 		}
 	filter "configurations:Release"
 		defines "ASH_APP_RELEASE"
@@ -64,5 +67,8 @@ project "Editor"
 		postbuildcommands 
 		{
 			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
-			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\"',
+			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Editor.exe"',
+			'if exist "$(TargetDir)Editor.pdb" copy /Y "$(TargetDir)Editor.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Editor.pdb"',
+			'copy /Y "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.dll" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.dll"',
+			'if exist "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" copy /Y "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.pdb"',
 		}

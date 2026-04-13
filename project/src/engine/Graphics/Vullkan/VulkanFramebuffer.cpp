@@ -11,9 +11,9 @@ namespace RHI
 		layers = ci.layers;
 		renderPass = ci.renderPass;
 		Array<VkImageView> attachments;
-		attachments.init(nullptr, ci.colorAttachments.size());
-		colorAttachements.init(nullptr, ci.colorAttachments.size());
-		colorClearColors.init(nullptr, ci.colorAttachments.size());
+		attachments.init(nullptr, ci.colorAttachments.size(), 0);
+		colorAttachements.init(nullptr, ci.colorAttachments.size(), 0);
+		colorClearColors.init(nullptr, ci.colorAttachments.size(), 0);
 		auto count = ci.colorAttachments.size();
 		for (size_t i = 0; i < count; i++)
 		{
@@ -42,7 +42,6 @@ namespace RHI
 			framebuffer_info.layers = ci.layers;
 			framebuffer_info.pAttachments = attachments.m_pData;
 			framebuffer_info.attachmentCount = attachments.size();
-			HLogInfo("creating frame buffer : {} ...", name);
 			VK_CHECK_RESULT(vkCreateFramebuffer(VulkanContext::get_vulkan_device(), &framebuffer_info, VulkanContext::get_vulkan_allocation_callbacks(), &vkFramebuffer));
 			VulkanContext::set_resource_name(VK_OBJECT_TYPE_FRAMEBUFFER, (uint64_t)vkFramebuffer, name);
 		}	
@@ -52,18 +51,15 @@ namespace RHI
 	{
 		if (immediate_deletion)
 		{
-			HLogInfo("deleting frame buffer : {}", name);
 			vkDestroyFramebuffer(VulkanContext::get_vulkan_device(),vkFramebuffer,VulkanContext::get_vulkan_allocation_callbacks());
 			
 		}
 		else
 		{
 			auto handle = this->vkFramebuffer;
-			auto sname = name;
 			if (handle != VK_NULL_HANDLE)
 			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle, sname]() {
-					HLogInfo("deleting frame buffer : {} ...", sname);
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {
 					vkDestroyFramebuffer(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); 
 					});
 			}

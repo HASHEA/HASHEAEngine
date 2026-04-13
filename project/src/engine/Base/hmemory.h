@@ -312,4 +312,3 @@ inline std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 #define ASH_GIGA(size)                 (size * 1024 * 1024 * 1024)
 
 };
-

@@ -2,6 +2,7 @@
 #include "Base/hlog.h"
 #include "Base/hfile.h"
 #include "Base/hcache.h"
+#include "Base/hmemory.h"
 #include "VulkanContext.h"
 #include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
@@ -16,14 +17,19 @@
 #include "VulkanShader.h"
 #include "VulkanShaderCompiler.h"
 #include "VulkanStagingBuffer.h"
+#if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
-#include <windows.h>
-#include <DbgHelp.h>
+#endif
 #include <array>
 #include <mutex>
 #include <sstream>
 #include <vector>
+
+#if defined(ASH_WINDOWS)
+#include <windows.h>
+#include <DbgHelp.h>
 #pragma comment(lib, "Dbghelp.lib")
+#endif
 namespace RHI
 {
 	constexpr const char* k_pipeline_cache_path = "product\\caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
@@ -58,6 +64,7 @@ namespace RHI
 
 		static auto ensure_symbol_handler_initialized() -> bool
 		{
+#if defined(ASH_WINDOWS)
 			static bool initialized = false;
 			static bool attempted = false;
 			std::lock_guard<std::mutex> lock(get_symbol_mutex());
@@ -68,6 +75,9 @@ namespace RHI
 				attempted = true;
 			}
 			return initialized;
+#else
+			return false;
+#endif
 		}
 
 		static auto format_stack_frame(uint64_t address) -> std::string
@@ -75,6 +85,7 @@ namespace RHI
 			std::ostringstream stream{};
 			stream << "0x" << std::hex << std::uppercase << address;
 
+#if defined(ASH_WINDOWS)
 			if (!ensure_symbol_handler_initialized())
 			{
 				return stream.str();
@@ -106,6 +117,9 @@ namespace RHI
 			}
 
 			return stream.str();
+#else
+			return stream.str();
+#endif
 		}
 	}
 	inline static auto check_layer_support(const std::vector<const char*>& rqLayers)->bool
@@ -172,17 +186,9 @@ namespace RHI
 		VkDebugUtilsMessageTypeFlagsEXT types,
 		const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
 		void* user_data) {
+		const VulkanValidationConfig* validationConfig = reinterpret_cast<const VulkanValidationConfig*>(user_data);
 		bool triggerBreak = severity & (/*VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |*/ VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT);
 		triggerBreak = triggerBreak && (types & VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT);
-		if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT)
-		{
-			HLogInfo("[Vulkan Validation] - VERBOSE : MessageID: {0} {1}\nMessage: {2}\n\n", callback_data->pMessageIdName, callback_data->messageIdNumber, callback_data->pMessage);
-		}
-		if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
-		{
-			HLogInfo("[Vulkan Validation] - INFO : MessageID: {0} {1}\nMessage: {2}\n\n", callback_data->pMessageIdName, callback_data->messageIdNumber, callback_data->pMessage);
-
-		}
 		if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
 		{
 			HLogWarning("[Vulkan Validation] - WARNING : MessageID: {0} {1}\nMessage: {2}\n\n", callback_data->pMessageIdName, callback_data->messageIdNumber, callback_data->pMessage);
@@ -193,7 +199,7 @@ namespace RHI
 			HLogError("[Vulkan Validation] - ERROR : MessageID: {0} {1}\nMessage: {2}\n\n", callback_data->pMessageIdName, callback_data->messageIdNumber, callback_data->pMessage);
 
 		}
-		if (triggerBreak) {
+		if (triggerBreak && validationConfig && validationConfig->breakOnValidationError) {
 			H_ASSERT(false);
 		}
 		return VK_FALSE;
@@ -202,6 +208,10 @@ namespace RHI
 	auto VulkanContext::set_resource_name_internal(VkObjectType type, uint64_t handle, const char* name) -> void
 	{
 #ifdef VULKAN_DEBUG_REPORT
+		if (!debugUtilsEnabled)
+		{
+			return;
+		}
 		VkDebugUtilsObjectNameInfoEXT name_info = { VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
 		name_info.objectType = type;
 		name_info.objectHandle = handle;
@@ -212,6 +222,7 @@ namespace RHI
 
 	auto VulkanContext::_create_instance(const Array<const char*>& additionalExtensions) -> bool
 	{
+		debugUtilsEnabled = false;
 		VkApplicationInfo appInfo{};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
 		appInfo.pNext = nullptr;
@@ -222,7 +233,10 @@ namespace RHI
 		appInfo.apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 0);
 		std::vector<const char*> rqLayers{};
 #ifdef VULKAN_DEBUG_REPORT
-		rqLayers.push_back("VK_LAYER_KHRONOS_validation");
+		if (validationConfig.enableValidation)
+		{
+			rqLayers.push_back("VK_LAYER_KHRONOS_validation");
+		}
 			//"VK_LAYER_AMD_switchable_graphics",
 			//"VK_LAYER_NV_optimus",
 			//"VK_LAYER_LUNARG_core_validation",
@@ -259,8 +273,12 @@ namespace RHI
 		rqExtensions.push_back(VK_MVK_IOS_SURFACE_EXTENSION_NAME);
 #endif // VK_USE_PLATFORM_WIN32_KHR
 #ifdef VULKAN_DEBUG_REPORT
-		rqExtensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-		rqExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+		if (validationConfig.enableValidation)
+		{
+			rqExtensions.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+			rqExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+			debugUtilsEnabled = true;
+		}
 #endif // VULKAN_DEBUG_REPORT
 		//insert additional extensions
 		for (uint32_t i = 0; i < additionalExtensions.size(); i++)
@@ -286,20 +304,40 @@ namespace RHI
 		instanceCI.ppEnabledExtensionNames = lyorExCounts == 0 ? nullptr : rqExtensions.data();
 #ifdef VULKAN_DEBUG_REPORT
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
-		debugUtilCI.pfnUserCallback = vk_debug_callbacks;
-		debugUtilCI.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
-		debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
-#ifdef VULKAN_SYNCHRONIZATION_VALIDATION
-		const VkValidationFeatureEnableEXT featuresRequested[] = { VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT, VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT/*, VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT*/ };
 		VkValidationFeaturesEXT features = {};
-		features.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
-		features.pNext = &debugUtilCI;
-		features.enabledValidationFeatureCount = _countof(featuresRequested);
-		features.pEnabledValidationFeatures = featuresRequested;
-		instanceCI.pNext = &features;
+		VkValidationFeatureEnableEXT featuresRequested[2] = {};
+		uint32_t featuresRequestedCount = 0;
+		if (validationConfig.enableValidation)
+		{
+			debugUtilCI.pfnUserCallback = vk_debug_callbacks;
+			debugUtilCI.pUserData = &validationConfig;
+			debugUtilCI.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+			debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+#ifdef VULKAN_SYNCHRONIZATION_VALIDATION
+			if (validationConfig.enableGpuAssisted)
+			{
+				featuresRequested[featuresRequestedCount++] = VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT;
+			}
+			if (validationConfig.enableSynchronizationValidation)
+			{
+				featuresRequested[featuresRequestedCount++] = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+			}
+			if (featuresRequestedCount > 0)
+			{
+				features.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+				features.pNext = &debugUtilCI;
+				features.enabledValidationFeatureCount = featuresRequestedCount;
+				features.pEnabledValidationFeatures = featuresRequested;
+				instanceCI.pNext = &features;
+			}
+			else
+			{
+				instanceCI.pNext = &debugUtilCI;
+			}
 #else
-		instanceCI.pNext = &debugUtilCI;
+			instanceCI.pNext = &debugUtilCI;
 #endif // VULKAN_SYNCHRONIZATION_VALIDATION
+		}
 #endif // VULKAN_DEBUG_REPORT
 		VK_CHECK_RESULT(vkCreateInstance(&instanceCI, vulkanAllocationCallbacks, &vulkanInstance));
 		//load instance apis
@@ -318,9 +356,14 @@ namespace RHI
 #ifdef VULKAN_DEBUG_REPORT
 	auto VulkanContext::_create_debug_util_messenger_ext() -> bool
 	{
+		if (!validationConfig.enableValidation)
+		{
+			return true;
+		}
 		// Create new debug utils callback
 		VkDebugUtilsMessengerCreateInfoEXT debugUtilCI = { VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT };
 		debugUtilCI.pfnUserCallback = vk_debug_callbacks;
+		debugUtilCI.pUserData = &validationConfig;
 		debugUtilCI.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
 		debugUtilCI.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 
@@ -439,7 +482,6 @@ namespace RHI
 		{
 			// Memory properties are used regularly for creating all kinds of buffers
 			vkGetPhysicalDeviceMemoryProperties(vulkanPhysicalDevice, &vulkanPhysicalDeviceMemoryProperties);
-			HLogInfo("Vulkan memory type count: {}", vulkanPhysicalDeviceMemoryProperties.memoryTypeCount);
 			float fGB = 0.0f;
 			bool  bLocalGpuMemory = false;
 			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryHeapCount && i < VK_MAX_MEMORY_HEAPS; ++i)
@@ -456,32 +498,11 @@ namespace RHI
 				local_gpu_memory_gb = fGB;
 			}
 
-			HLogInfo("VM size:%.2f", fGB);
-
-			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryTypeCount; i++)
-			{
-				if ((vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
-				{
-					HLogInfo("Device support VK_MEMORY_PROPERTY_HOST_COHERENT_BIT");
-					break;
-				}
-			}
-
-			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryTypeCount && i < VK_MAX_MEMORY_TYPES; ++i)
-			{
-				if (vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
-				{
-					HLogInfo("Device support VK_MEMORY_PROPERTY_HOST_CACHED_BIT");
-					break;
-				}
-			}
-
 			for (uint32_t i = 0; i < vulkanPhysicalDeviceMemoryProperties.memoryTypeCount && i < VK_MAX_MEMORY_TYPES; ++i)
 			{
 				if ((vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) &&
 					(vulkanPhysicalDeviceMemoryProperties.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT))
 				{
-					HLogInfo("Device Support VK_MEMORY_PROPERTY_HOST_COHERENT_BIT|VK_MEMORY_PROPERTY_HOST_CACHED_BIT");
 					featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::HostCoherentCached);
 					break;
 				}
@@ -569,9 +590,6 @@ namespace RHI
 			{
 				continue;
 			}
-#ifdef ASH_DEBUG
-			HLogInfo("Family {0}, flags {1} queue count {2}\n", i, qf.queueFlags, qf.queueCount);
-#endif // ASH_DEBUG
 			// Search for a main queue that should be able to do all work (graphics, compute and transfer)
 			if ((qf.queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT )) == (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT )/* && mainQueueFamilyIndex == UINT32_MAX*/)
 			{
@@ -1031,14 +1049,7 @@ namespace RHI
 		// Pooled shaders (VkShaderModule + descriptor layouts) must be destroyed while the device is still valid.
 		// vulkanShaderPool holds the last strong refs after the app drops external shared_ptrs; without draining
 		// the pool here, ~VulkanShader never runs and validation reports leaked shader modules at device destroy.
-		while (vulkanShaderPool.size() > 0)
-		{
-			FlatHashMapIterator it = vulkanShaderPool.iterator_begin();
-			H_ASSERT(it.index != k_iterator_end);
-			vulkanShaderPool.get(it).reset();
-			vulkanShaderPool.remove(it);
-		}
-		vulkanShaderPool.shutdown();
+		vulkanShaderPool.clear();
 		// ~VulkanDescriptorPool (from layout teardown above) defers vkDestroyDescriptorPool to delayed_deletion_queues.
 		// Those callbacks are not run unless we flush again before vkDestroyDevice, otherwise VUID-vkDestroyDevice-device-05137.
 		for (int i = 0; i < k_max_frames; ++i)
@@ -1389,8 +1400,9 @@ namespace RHI
 	{	
 		bool bRetCode = false;
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		GraphicsContextInitConfig vkConfig = *(GraphicsContextInitConfig*)config;
-		H_ASSERT(&vkConfig);
+		H_ASSERT(config);
+		const GraphicsContextInitConfig& vkConfig = *reinterpret_cast<const GraphicsContextInitConfig*>(config);
+		validationConfig = vkConfig.vulkanValidation;
 		//load vulkan by volk;
 		VK_CHECK_RESULT(volkInitialize());
 		//create vkinstance
@@ -1458,6 +1470,12 @@ namespace RHI
 		return true;
 	}
 
+auto VulkanContext::destroy() -> void
+{
+	VulkanContext* self = this;
+	Ash_Delete(nullptr, self);
+}
+
 	/********************************************************** RHI INTERFACE ******************************************************************************************************/
 
 	auto VulkanContext::create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer>
@@ -1513,7 +1531,13 @@ namespace RHI
 	auto VulkanContext::create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> 
 	{
 		uint64_t uHashCode = get_shader_hash(ci);
-		std::shared_ptr<Shader> pRetShader = vulkanShaderPool.get(uHashCode);
+		auto foundShader = vulkanShaderPool.find(uHashCode);
+		if (foundShader != vulkanShaderPool.end())
+		{
+			return foundShader->second;
+		}
+
+		std::shared_ptr<Shader> pRetShader = nullptr;
 		if (!pRetShader)
 		{
 			auto pVulkanShader = Ash_New_Shared<VulkanShader>();
@@ -1521,7 +1545,7 @@ namespace RHI
 			{
 				return nullptr;
 			}
-
+#if defined(ASH_HAS_DXC)
 			ShaderItem shader_item{};
 			shader_item.sourceShaderPath = ci.pBaseShaderPath;
 			shader_item.userShaderPath = ci.pUserShaderPath;
@@ -1547,15 +1571,15 @@ namespace RHI
 				HLogError("Failed to preprocess shader {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
 				return nullptr;
 			}
-			if (!shader_text_result.errorMsg.empty())
-			{
-				HLogTrace("Shader preprocess diagnostics for {}:\n{}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>", shader_text_result.errorMsg);
-			}
 			if (shader_text_result.resultShaderText.empty())
 			{
 				HLogError("Shader preprocess result is empty for {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
 				return nullptr;
 			}
+#else
+			HLogError("Vulkan shader preprocessing requires DXC, but this build was compiled without ASH_HAS_DXC.");
+			return nullptr;
+#endif
 
 			VulkanShaderCompiler shader_compiler{};
 			if (!shader_compiler.init())
@@ -1719,14 +1743,14 @@ namespace RHI
 					command_buffer_info[c].commandBuffer = (VkCommandBuffer)commandBufferQueue[c]->get_native_handle();
 				}
 				Array<VkSemaphoreSubmitInfoKHR> wait_semaphores;
-				wait_semaphores.init(nullptr, 4);
+				wait_semaphores.init(nullptr, 4, 0);
 				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 });
 				if (wait_for_timeline_semaphore) {
 					wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame - (k_max_frames - 1), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR , 0 });
 				}
 				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 },
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame + 1, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR , 0 }
+					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 },
+					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame + 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR , 0 }
 				};
 				VkSubmitInfo2KHR submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR };
 				submit_info.waitSemaphoreInfoCount = wait_semaphores.size();
@@ -1741,11 +1765,11 @@ namespace RHI
 			else
 			{
 				Array<VkSemaphore> wait_semaphores;
-				wait_semaphores.init(nullptr, 4);
+				wait_semaphores.init(nullptr, 4, 0);
 				Array<uint64_t> wait_values;
-				wait_values.init(nullptr, 4);
+				wait_values.init(nullptr, 4, 0);
 				Array<VkPipelineStageFlags> wait_stages;
-				wait_stages.init(nullptr, 4);
+				wait_stages.init(nullptr, 4, 0);
 				wait_semaphores.push_back(get_frame_data_internal().vulkanRenderBeginSemaphore);
 				wait_values.push_back(0);
 				wait_stages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
@@ -1786,10 +1810,10 @@ namespace RHI
 					command_buffer_info[c].commandBuffer = (VkCommandBuffer)commandBufferQueue[c]->get_native_handle();
 				}
 				Array<VkSemaphoreSubmitInfoKHR> wait_semaphores;
-				wait_semaphores.init(nullptr, 4);
+				wait_semaphores.init(nullptr, 4, 0);
 				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 });
 				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 },
+					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 },
 				};
 				VkSubmitInfo2KHR submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR };
 				submit_info.waitSemaphoreInfoCount = wait_semaphores.size();

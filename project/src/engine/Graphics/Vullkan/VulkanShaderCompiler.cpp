@@ -3,8 +3,10 @@
 #include "VulkanPipeline.h"
 #include "VulkanDescriptorSet.h"
 #include "Graphics/ShaderCache.h"
+#if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
 #include "Graphics/DXC/DXCIncludeHandler.h"
+#endif
 //
 #include "Base/hmemory.h"
 #include "Base/hcache.h"
@@ -19,6 +21,7 @@
 
 namespace RHI
 {
+#if defined(ASH_HAS_DXC)
 	// Helper function to convert UTF-8 to wide string
 	static inline std::wstring utf8_to_wstring(const std::string& str)
 	{
@@ -139,6 +142,7 @@ namespace RHI
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
+#endif
 
 	VulkanShaderCompiler::~VulkanShaderCompiler()
 	{
@@ -147,6 +151,7 @@ namespace RHI
 
 	bool VulkanShaderCompiler::check_and_compile_shader(ShaderItem const& fileInfo, const std::string& shaderFullText, std::shared_ptr<Shader> pTargetShader)
 	{
+#if defined(ASH_HAS_DXC)
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		
 		ASH_PROCESS_ERROR(m_pDxcCompiler);
@@ -219,16 +224,28 @@ namespace RHI
 
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
+#else
+		(void)fileInfo;
+		(void)shaderFullText;
+		(void)pTargetShader;
+		HLogError("Vulkan runtime shader compilation requires DXC, but this build was compiled without ASH_HAS_DXC.");
+		return false;
+#endif
 	}
 
 	bool VulkanShaderCompiler::init()
 	{
+#if defined(ASH_HAS_DXC)
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		m_pDxcCompiler = std::make_unique<DxcCompiler_VK>();
 		ASH_PROCESS_ERROR(m_pDxcCompiler);
 		bResult = m_pDxcCompiler->init();
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
+#else
+		HLogError("Vulkan shader compiler initialization failed because DXC is unavailable on this platform/build.");
+		return false;
+#endif
 	}
 
 	void VulkanShaderCompiler::uninit()
@@ -243,6 +260,7 @@ namespace RHI
 	/************* dxc compiler for vulkan ****************/
 	bool DxcCompiler_VK::init()
 	{
+#if defined(ASH_HAS_DXC)
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		
 		// Initialize DXC context
@@ -262,6 +280,9 @@ namespace RHI
 
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
+#else
+		return false;
+#endif
 	}
 
 	void DxcCompiler_VK::uninit()
@@ -283,6 +304,7 @@ namespace RHI
 
 	bool DxcCompiler_VK::compile_shader_from_text(std::string const& pFullText, const ShaderItem& item, std::vector<uint32_t>& outSpirv, std::string& outErrorMsg)
 	{
+#if defined(ASH_HAS_DXC)
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		
 		outSpirv.clear();
@@ -425,5 +447,12 @@ namespace RHI
 
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
+#else
+		(void)pFullText;
+		(void)item;
+		outSpirv.clear();
+		outErrorMsg = "DXC is unavailable on this platform/build.";
+		return false;
+#endif
 	}
 }

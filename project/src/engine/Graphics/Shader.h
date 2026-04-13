@@ -1,9 +1,37 @@
 #pragma once
 #include "RHIResource.h"
 #include "Base/hcore.h"
+#include <cstdint>
+#include <string>
 #include <vector>
 namespace RHI
 {
+	enum class ShaderParameterValueType : uint8_t
+	{
+		Unknown = 0,
+		Bool,
+		Int,
+		UInt,
+		Float
+	};
+
+	struct ShaderParameterMember
+	{
+		std::string name{};
+		uint32_t offset = 0;
+		uint32_t size = 0;
+		uint32_t array_size = 1;
+		ShaderParameterValueType value_type = ShaderParameterValueType::Unknown;
+	};
+
+	struct ShaderParameterBlockLayout
+	{
+		std::string name{};
+		uint32_t bind_point = 0;
+		uint32_t bind_space = 0;
+		uint32_t byte_size = 0;
+		std::vector<ShaderParameterMember> members{};
+	};
 
 	struct ShaderFile
 	{
@@ -42,6 +70,11 @@ namespace RHI
 		virtual ~Shader() = default;
 	public:
 		static auto load_from_file(const ShaderCreation& ci) -> ShaderCode;
+		virtual const std::vector<ShaderParameterBlockLayout>& get_parameter_block_layouts() const
+		{
+			static const std::vector<ShaderParameterBlockLayout> empty_layouts{};
+			return empty_layouts;
+		}
 	};
 
 }

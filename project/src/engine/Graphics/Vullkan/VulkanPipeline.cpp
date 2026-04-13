@@ -585,12 +585,34 @@ namespace RHI
 		m_descriptorSetLayouts.clear();
 		if (vk_pipeline != VK_NULL_HANDLE)
 		{
-			vkDestroyPipeline(VulkanContext::get_vulkan_device(), vk_pipeline, VulkanContext::get_vulkan_allocation_callbacks());
+			const uint32_t current_frame = VulkanContext::get_current_frame();
+			if (VulkanContext::get_vulkan_device() != VK_NULL_HANDLE && current_frame != UINT32_MAX)
+			{
+				const VkPipeline pipeline = vk_pipeline;
+				VulkanContext::get_current_frame_deletion_queue().emplace([pipeline]() {
+					vkDestroyPipeline(VulkanContext::get_vulkan_device(), pipeline, VulkanContext::get_vulkan_allocation_callbacks());
+				});
+			}
+			else if (VulkanContext::get_vulkan_device() != VK_NULL_HANDLE)
+			{
+				vkDestroyPipeline(VulkanContext::get_vulkan_device(), vk_pipeline, VulkanContext::get_vulkan_allocation_callbacks());
+			}
 			vk_pipeline = VK_NULL_HANDLE;
 		}
 		if (vk_pipeline_layout != VK_NULL_HANDLE)
 		{
-			vkDestroyPipelineLayout(VulkanContext::get_vulkan_device(), vk_pipeline_layout, VulkanContext::get_vulkan_allocation_callbacks());
+			const uint32_t current_frame = VulkanContext::get_current_frame();
+			if (VulkanContext::get_vulkan_device() != VK_NULL_HANDLE && current_frame != UINT32_MAX)
+			{
+				const VkPipelineLayout pipeline_layout = vk_pipeline_layout;
+				VulkanContext::get_current_frame_deletion_queue().emplace([pipeline_layout]() {
+					vkDestroyPipelineLayout(VulkanContext::get_vulkan_device(), pipeline_layout, VulkanContext::get_vulkan_allocation_callbacks());
+				});
+			}
+			else if (VulkanContext::get_vulkan_device() != VK_NULL_HANDLE)
+			{
+				vkDestroyPipelineLayout(VulkanContext::get_vulkan_device(), vk_pipeline_layout, VulkanContext::get_vulkan_allocation_callbacks());
+			}
 			vk_pipeline_layout = VK_NULL_HANDLE;
 		}
 	}

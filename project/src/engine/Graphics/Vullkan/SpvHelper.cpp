@@ -304,6 +304,7 @@ namespace RHI
 		const spirv_cross::Resource& resource = push_constant_buffers.front();
 		const spirv_cross::SPIRType& type = compiler.get_type(resource.base_type_id);
 		parse_result.push_constants_stride = static_cast<uint32_t>(compiler.get_declared_struct_size(type));
+		copy_name(parse_result.push_constant_name, sizeof(parse_result.push_constant_name), resource.name);
 
 		uint32_t member_count = std::min<uint32_t>(static_cast<uint32_t>(type.member_types.size()), k_max_reflected_buffer_members);
 		parse_result.push_constant_member_count = member_count;
@@ -480,6 +481,10 @@ namespace RHI
 			{
 				merged_result->push_constants_count = 1;
 				merged_result->push_constants_stride = std::max(merged_result->push_constants_stride, src.push_constants_stride);
+				if (merged_result->push_constant_name[0] == '\0' && src.push_constant_name[0] != '\0')
+				{
+					memcpy(merged_result->push_constant_name, src.push_constant_name, sizeof(merged_result->push_constant_name));
+				}
 				merged_result->push_constant_member_count = std::max(merged_result->push_constant_member_count, src.push_constant_member_count);
 				for (uint32_t member_index = 0; member_index < src.push_constant_member_count; ++member_index)
 				{

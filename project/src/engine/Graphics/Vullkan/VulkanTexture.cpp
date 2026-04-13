@@ -48,7 +48,6 @@ namespace RHI
 			memory_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 			break;
 		}
-		HLogInfo("creating texture : {} ...", ci.name);
 		if (ci.alias == nullptr)
 		{
 			if (sparse)
@@ -82,7 +81,6 @@ namespace RHI
 		
 		if (immediate_deletion || swapchain_texture)
 		{	
-			HLogInfo("deleting texture : {} ...", m_sCreation.name);
 			if (defaultRTV != nullptr)
 			{
 				defaultRTV->immediate_deletion = true;
@@ -142,11 +140,9 @@ namespace RHI
 			bool isAlias = this->aliasTexture != nullptr;
 			bool isSparse = sparse;
 			auto alloc = vmaAllocation;
-			auto sname = m_sCreation.name;
 			if (vkImage != VK_NULL_HANDLE && !swapchain_texture)
 			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle,isAlias, isSparse, alloc, sname]() {
-					HLogInfo("deleting texture : {} ...", sname);
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle,isAlias, isSparse, alloc]() {
 					if (!isAlias)
 					{
 						if (isSparse)
@@ -331,7 +327,6 @@ namespace RHI
 	/********************* vulkan texture view *****************************/
 	VulkanTextureView::VulkanTextureView(const TextureViewCreation& ci, std::shared_ptr<Texture> _parentTexture)
 	{
-		HLogInfo("creating texture view : {} ...", ci.name);
 		parentTexture = _parentTexture;
 		m_sInfo = ci;
 		auto parentVulkanTexture = std::static_pointer_cast<VulkanTexture>(_parentTexture);
@@ -370,19 +365,16 @@ namespace RHI
 		{
 			if (vkImageView != VK_NULL_HANDLE)
 			{
-				HLogInfo("deleting view : {} ...", m_sInfo.name);
 				vkDestroyImageView(VulkanContext::get_vulkan_device(), vkImageView, VulkanContext::get_vulkan_allocation_callbacks());
 			}
 		}	
 		else
 		{
 			auto handle = this->vkImageView;
-			auto sname = m_sInfo.name;
 			if (handle != VK_NULL_HANDLE)
 			{
 				
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle,sname]() {
-					HLogInfo("deleting view : {} ...", sname);
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {
 					vkDestroyImageView(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
 			}		
 		}

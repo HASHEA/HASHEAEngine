@@ -11,8 +11,6 @@ workspace "AshEngine"
 	}
 	defines
 		{
-			--"ASH_DIRECTX12",
-			"ASH_VULKAN",
 			"GLM_FORCE_DEPTH_ZERO_TO_ONE",
 			"GLM_FORCE_LEFT_HANDED",
 		}
@@ -38,5 +36,5 @@ group "ThirdParty"
 	include "project/thirdparty/SPIRV-Cross"
 	include "project/thirdparty/tracy"
 	include "project/thirdparty/meshoptimizer"
-
+	include "project/thirdparty/D3D12MA"
 

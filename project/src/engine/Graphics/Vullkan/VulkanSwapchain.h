@@ -26,6 +26,7 @@ namespace RHI
 
 		virtual auto init(void* config)->bool override;
 		virtual auto shutdown()->bool override;
+		virtual auto destroy() -> void override;
 	public:
 		auto resize_swapchain(uint32_t width, uint32_t height) -> void override;
 		auto present() -> void override;

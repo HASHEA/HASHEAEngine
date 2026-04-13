@@ -4,6 +4,8 @@ extern AshEngine::Application* create_application();//impl in editor
 extern void destroy_application(AshEngine::Application* app);//impl in editor
 #include <filesystem>
 #include <iostream>
+#include <cstdlib>
+#include <string>
 
 namespace fs = std::filesystem;
 
@@ -47,6 +49,42 @@ int init_dir()
 	}
 	return 0;
 }
+
+static uint64_t parse_smoke_test_frame_count(int argc, char* argv[])
+{
+	constexpr uint64_t defaultSmokeFrameCount = 3;
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument == "--smoke-test")
+		{
+			if (argumentIndex + 1 < argc)
+			{
+				const std::string nextArgument = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
+				if (!nextArgument.empty() && nextArgument[0] != '-')
+				{
+					return static_cast<uint64_t>(std::strtoull(nextArgument.c_str(), nullptr, 10));
+				}
+			}
+			return defaultSmokeFrameCount;
+		}
+
+		constexpr const char* smokePrefix = "--smoke-test=";
+		if (argument.rfind(smokePrefix, 0) == 0)
+		{
+			return static_cast<uint64_t>(std::strtoull(argument.substr(std::char_traits<char>::length(smokePrefix)).c_str(), nullptr, 10));
+		}
+	}
+
+	if (const char* envValue = std::getenv("ASH_ENGINE_SMOKE_TEST_FRAMES"))
+	{
+		const uint64_t parsedValue = static_cast<uint64_t>(std::strtoull(envValue, nullptr, 10));
+		return parsedValue > 0 ? parsedValue : defaultSmokeFrameCount;
+	}
+
+	return 0;
+}
+
 int32_t main(int argc, char* argv[])
 {
 	//initialize the working dir of the app
@@ -56,6 +94,11 @@ int32_t main(int argc, char* argv[])
 		return 1;
 	}
 	AshEngine::Application::app = create_application();
+	const uint64_t smokeTestFrameCount = parse_smoke_test_frame_count(argc, argv);
+	if (smokeTestFrameCount > 0)
+	{
+		AshEngine::Application::app->set_max_frame_count(smokeTestFrameCount);
+	}
 	AshEngine::Application::app->start();
 	destroy_application(AshEngine::Application::app);
 	return 0;

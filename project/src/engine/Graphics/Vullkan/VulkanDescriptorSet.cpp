@@ -358,8 +358,20 @@ namespace RHI
 			const VkDescriptorSet ps = pDescriptorSet->m_pVkDescriptorSet;
 			if (ps)
 			{
-				const VkDescriptorSet* pSet = &ps;
-				vkFreeDescriptorSets(pDevice, pPool->m_pDescriptorPool, 1, pSet);
+				const uint32_t current_frame = VulkanContext::get_current_frame();
+				if (pDevice != VK_NULL_HANDLE && current_frame != UINT32_MAX)
+				{
+					const VkDescriptorPool descriptor_pool = pPool->m_pDescriptorPool;
+					VulkanContext::get_current_frame_deletion_queue().emplace([pPool, descriptor_pool, ps]() {
+						const VkDescriptorSet set = ps;
+						vkFreeDescriptorSets(VulkanContext::get_vulkan_device(), descriptor_pool, 1, &set);
+					});
+				}
+				else if (pDevice != VK_NULL_HANDLE)
+				{
+					const VkDescriptorSet* pSet = &ps;
+					vkFreeDescriptorSets(pDevice, pPool->m_pDescriptorPool, 1, pSet);
+				}
 			}
 			pDescriptorSet->m_pVkDescriptorSet = VK_NULL_HANDLE;
 			pDescriptorSet->clear_cache();

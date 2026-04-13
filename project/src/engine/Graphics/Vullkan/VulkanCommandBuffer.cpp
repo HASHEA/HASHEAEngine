@@ -370,7 +370,7 @@ namespace RHI
 			return;
 		}
 		//insure all attachment are in correct layout
-		auto colorAttachements = frameBuffer->get_render_targets();
+		auto& colorAttachements = frameBuffer->get_render_targets();
 		auto depthStencilAttachment = frameBuffer->get_depth_stencil();
 		auto shadingRateAttachment = frameBuffer->get_shading_rate_attachment();
 		auto renderTargetCount = frameBuffer->get_render_targets().size();
@@ -504,7 +504,7 @@ namespace RHI
 			HLogWarning("end_render_pass : none renderpass are bound currently, do nothing and return !");
 			return;
 		}
-		auto colorAttachments = currentBoundFramebuffer->get_render_targets();
+		auto& colorAttachments = currentBoundFramebuffer->get_render_targets();
 		auto count = colorAttachments.size();
 		auto depthAttachment = currentBoundFramebuffer->get_depth_stencil();
 		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
@@ -517,6 +517,11 @@ namespace RHI
 		// and dynamic rendering. Later barriers depend on these tracked states being accurate.
 		for (auto i = 0; i < count; i++)
 		{
+			if (!colorAttachments[i])
+			{
+				HLogWarning("cmd_end_render_pass: framebuffer color attachment {} is null, skip resource state update.", i);
+				continue;
+			}
 			colorAttachments[i]->set_resource_state(currentBoundRenderPass->get_color_attachment_final_state(i));
 		}
 		if (depthAttachment != nullptr)

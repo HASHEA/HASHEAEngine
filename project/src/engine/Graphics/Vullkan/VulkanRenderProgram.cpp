@@ -1,6 +1,7 @@
 #include "VulkanRenderProgram.h"
 #include "Base/hlog.h"
 #include "VulkanCommandBuffer.h"
+#include "VulkanContext.h"
 #include "VulkanDescriptorSet.h"
 #include "VulkanHelper.hpp"
 #include "VulkanPipeline.h"
@@ -160,6 +161,18 @@ namespace RHI
 			}
 			return max_set_index;
 		}
+
+		static std::shared_ptr<VulkanDescriptorSet>& get_current_frame_descriptor_set(VulkanProgramDescriptorSetState& descriptor_set_state)
+		{
+			H_ASSERT(!descriptor_set_state.descriptor_sets.empty());
+			uint32_t current_frame = VulkanContext::get_current_frame();
+			if (current_frame == UINT32_MAX)
+			{
+				current_frame = 0;
+			}
+			const uint32_t frame_index = current_frame % static_cast<uint32_t>(descriptor_set_state.descriptor_sets.size());
+			return descriptor_set_state.descriptor_sets[frame_index];
+		}
 	}
 
 	VulkanRenderProgramBase::VulkanRenderProgramBase() = default;
@@ -191,15 +204,21 @@ namespace RHI
 				continue;
 			}
 
-			if (!descriptor_set_state.descriptor_set)
+			if (descriptor_set_state.descriptor_sets.empty())
 			{
-				descriptor_set_state.descriptor_set = Ash_New_Shared<VulkanDescriptorSet>(
+				descriptor_set_state.descriptor_sets.resize(k_max_frames);
+			}
+
+			auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+			if (!descriptor_set)
+			{
+				descriptor_set = Ash_New_Shared<VulkanDescriptorSet>(
 					reinterpret_cast<VkDescriptorSetLayout>(descriptor_set_state.layout->get_native_handle()),
 					descriptor_set_state.layout->get_pool_container());
 			}
 
-			descriptor_set_state.descriptor_set->begin_bind();
-			descriptor_set_state.descriptor_set->prepare_write_capacity(
+			descriptor_set->begin_bind();
+			descriptor_set->prepare_write_capacity(
 				descriptor_set_state.image_descriptor_count,
 				descriptor_set_state.buffer_descriptor_count,
 				descriptor_set_state.write_count);
@@ -226,8 +245,9 @@ namespace RHI
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
-		H_ASSERT(descriptor_set_state.descriptor_set);
-		descriptor_set_state.descriptor_set->add_bind_uav_array(binding_info.binding, uavs, binding_info.descriptor_type);
+		auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+		H_ASSERT(descriptor_set);
+		descriptor_set->add_bind_uav_array(binding_info.binding, uavs, binding_info.descriptor_type);
 		m_bound_resource_names.insert(name);
 		return true;
 	}
@@ -250,8 +270,9 @@ namespace RHI
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
-		H_ASSERT(descriptor_set_state.descriptor_set);
-		descriptor_set_state.descriptor_set->add_bind_uav_array(binding_info.binding, uavs, binding_info.descriptor_type);
+		auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+		H_ASSERT(descriptor_set);
+		descriptor_set->add_bind_uav_array(binding_info.binding, uavs, binding_info.descriptor_type);
 		m_bound_resource_names.insert(name);
 		return true;
 	}
@@ -274,8 +295,9 @@ namespace RHI
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
-		H_ASSERT(descriptor_set_state.descriptor_set);
-		descriptor_set_state.descriptor_set->add_bind_srv_array(binding_info.binding, srvs, binding_info.descriptor_type);
+		auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+		H_ASSERT(descriptor_set);
+		descriptor_set->add_bind_srv_array(binding_info.binding, srvs, binding_info.descriptor_type);
 		m_bound_resource_names.insert(name);
 		return true;
 	}
@@ -298,8 +320,9 @@ namespace RHI
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
-		H_ASSERT(descriptor_set_state.descriptor_set);
-		descriptor_set_state.descriptor_set->add_bind_srv_array(binding_info.binding, srvs, binding_info.descriptor_type);
+		auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+		H_ASSERT(descriptor_set);
+		descriptor_set->add_bind_srv_array(binding_info.binding, srvs, binding_info.descriptor_type);
 		m_bound_resource_names.insert(name);
 		return true;
 	}
@@ -318,8 +341,9 @@ namespace RHI
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
-		H_ASSERT(descriptor_set_state.descriptor_set);
-		descriptor_set_state.descriptor_set->add_bind_cbv(binding_info.binding, cbv);
+		auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+		H_ASSERT(descriptor_set);
+		descriptor_set->add_bind_cbv(binding_info.binding, cbv);
 		m_bound_resource_names.insert(name);
 		return true;
 	}
@@ -357,8 +381,9 @@ namespace RHI
 		}
 
 		auto& descriptor_set_state = m_descriptor_sets[binding_info.set_index];
-		H_ASSERT(descriptor_set_state.descriptor_set);
-		descriptor_set_state.descriptor_set->add_bind_sampler_array(binding_info.binding, sampler_views);
+		auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+		H_ASSERT(descriptor_set);
+		descriptor_set->add_bind_sampler_array(binding_info.binding, sampler_views);
 		m_bound_resource_names.insert(name);
 		return true;
 	}
@@ -472,9 +497,13 @@ namespace RHI
 
 		for (auto& descriptor_set_state : m_descriptor_sets)
 		{
-			if (descriptor_set_state.descriptor_set)
+			if (!descriptor_set_state.descriptor_sets.empty())
 			{
-				descriptor_set_state.descriptor_set->end_bind();
+				auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+				if (descriptor_set)
+				{
+					descriptor_set->end_bind();
+				}
 			}
 		}
 		m_cached_sampler_views.clear();
@@ -499,7 +528,7 @@ namespace RHI
 
 		m_is_binding = false;
 		m_bound_resource_names.clear();
-		return true;
+		return m_pipeline && m_pipeline->is_valid();
 	}
 
 	bool VulkanRenderProgramBase::apply_pipeline(std::shared_ptr<CommandBuffer> cb, const RenderState* render_state)
@@ -539,12 +568,18 @@ namespace RHI
 		for (uint32_t set_index = 0; set_index < m_descriptor_sets.size(); ++set_index)
 		{
 			auto& descriptor_set_state = m_descriptor_sets[set_index];
-			if (!descriptor_set_state.descriptor_set)
+			if (descriptor_set_state.descriptor_sets.empty())
 			{
 				continue;
 			}
 
-			VkDescriptorSet vk_descriptor_set = descriptor_set_state.descriptor_set->get_native_handle();
+			auto& descriptor_set = get_current_frame_descriptor_set(descriptor_set_state);
+			if (!descriptor_set)
+			{
+				continue;
+			}
+
+			VkDescriptorSet vk_descriptor_set = descriptor_set->get_native_handle();
 			if (vk_descriptor_set != VK_NULL_HANDLE)
 			{
 				vkCmdBindDescriptorSets(
@@ -681,7 +716,11 @@ namespace RHI
 			const DescriptorSetLayoutCreation& reflected_layout = m_reflection.sets[i];
 			auto& descriptor_set_state = m_descriptor_sets[reflected_layout.set_index];
 			descriptor_set_state.layout_creation = reflected_layout;
+			descriptor_set_state.image_descriptor_count = 0;
+			descriptor_set_state.buffer_descriptor_count = 0;
+			descriptor_set_state.write_count = 0;
 			descriptor_set_state.has_bindings = reflected_layout.num_bindings > 0;
+			descriptor_set_state.descriptor_sets.clear();
 
 			if (reflected_layout.set_index < creation.num_active_layouts && creation.descriptor_set_layout[reflected_layout.set_index])
 			{
@@ -695,6 +734,10 @@ namespace RHI
 			{
 				HLogError("Render program '{}' failed to create descriptor set layout {}.", m_debug_name.c_str(), reflected_layout.set_index);
 				return false;
+			}
+			if (descriptor_set_state.has_bindings)
+			{
+				descriptor_set_state.descriptor_sets.resize(k_max_frames);
 			}
 
 			for (uint32_t binding_index = 0; binding_index < reflected_layout.num_bindings; ++binding_index)
@@ -834,7 +877,7 @@ namespace RHI
 		{
 			fnRenderStateDefineCall(&m_render_state);
 		}
-		return refresh_pipeline();
+		return m_pipeline && m_pipeline->is_valid();
 	}
 
 	bool VulkanGraphicsRenderProgram::set_const_data_block(uint32_t size, const void* data)

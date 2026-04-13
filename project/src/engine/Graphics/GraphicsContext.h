@@ -2,9 +2,36 @@
 #include "Base/hplatform.h"
 #include "Base/hcore.h"
 #include "Base/ds/harray.hpp"
+#include "RHIBackend.h"
 #include "RHIResource.h"
 #include <memory>
 namespace RHI {
+    struct VulkanValidationConfig
+    {
+#ifdef ASH_DEBUG
+        bool enableValidation = true;
+        bool enableGpuAssisted = false;
+        bool enableSynchronizationValidation = true;
+        bool breakOnValidationError = true;
+#else
+        bool enableValidation = false;
+        bool enableGpuAssisted = false;
+        bool enableSynchronizationValidation = false;
+        bool breakOnValidationError = false;
+#endif
+    };
+
+    struct DX12ValidationConfig
+    {
+#ifdef ASH_DEBUG
+        bool enableDebugLayer = true;
+        bool enableGpuValidation = true;
+#else
+        bool enableDebugLayer = false;
+        bool enableGpuValidation = false;
+#endif
+    };
+
     struct BufferViewCreation;
     struct RenderPassCreation;
     struct FramebufferCreation;
@@ -37,6 +64,9 @@ namespace RHI {
         uint16_t                             height = 1;
         uint16_t                             num_threads = 1;
         uint16_t							 queryCount = 32;
+        Backend                              backend = Backend::Default;
+        VulkanValidationConfig               vulkanValidation{};
+        DX12ValidationConfig                 dx12Validation{};
         AshEngine::Array<const char*>        addtionalExtensions{};
     };
 
@@ -53,7 +83,8 @@ namespace RHI {
 
         virtual auto init(void* config) -> bool = 0;
         virtual auto shutdown() -> bool = 0;
-        static GraphicsContext* create();
+        virtual auto destroy() -> void = 0;
+        static GraphicsContext* create(Backend backend);
     public:
         //RHI Device Interfaces
         virtual auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> = 0;

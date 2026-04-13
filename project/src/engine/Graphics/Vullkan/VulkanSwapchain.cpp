@@ -12,6 +12,7 @@
 #include "VulkanCommandBuffer.h"
 #include "VulkanRenderPass.h"
 #include "VulkanFramebuffer.h"
+#include "Base/hmemory.h"
 namespace RHI
 {
 	VulkanSwapchain::VulkanSwapchain()
@@ -38,7 +39,6 @@ namespace RHI
 		{
 			H_ASSERTLOG(config.pPresentMode, "pPresentMode is nullptr but presentModeCount > 0!");
 		}
-		HLogTrace("Create swapchain ...");
 		_create_surface((GLFWwindow*)config.window);
 		_init_swapchain(config);
 		return true;
@@ -52,6 +52,12 @@ namespace RHI
 			vkDestroySurfaceKHR(VulkanContext::get_vulkan_instance(), surface, VulkanContext::get_vulkan_allocation_callbacks());
 		}
 		return true;
+	}
+
+	auto VulkanSwapchain::destroy() -> void
+	{
+		VulkanSwapchain* self = this;
+		Ash_Delete(nullptr, self);
 	}
 
 	auto VulkanSwapchain::_create_surface(GLFWwindow* window) -> bool
@@ -247,7 +253,7 @@ namespace RHI
 			fci.renderPass = swapchainRenderPass;
 			fci.width = swapchainExtents.width;
 			fci.height = swapchainExtents.height;
-			fci.colorAttachments.init(nullptr, imageCount);
+			fci.colorAttachments.init(nullptr, imageCount, 0);
 			fci.colorAttachments.push_back(texture);
 			fci.layers = 1;
 			swapChainFramebuffer.push_back(VulkanFramebuffer::create(fci));
@@ -351,11 +357,16 @@ namespace RHI
 
 	auto VulkanSwapchain::present() -> void
 	{
+		if (acquireImageIndex == UINT32_MAX)
+		{
+			HLogWarning("VulkanSwapchain: present skipped because no acquired image is available.");
+			return;
+		}
+
 		VkPresentInfoKHR presentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
 		presentInfo.swapchainCount = 1;
 		presentInfo.pSwapchains = &swapChain;
 		presentInfo.pImageIndices = &acquireImageIndex;
-		//TEST PERIOD
 		presentInfo.waitSemaphoreCount = 1;
 		const VkSemaphore presentWaitSemaphore =
 			VulkanContext::get()->vulkanPresentCompleteSemaphore != VK_NULL_HANDLE ?
@@ -363,24 +374,16 @@ namespace RHI
 			VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore;
 		presentInfo.pWaitSemaphores = &presentWaitSemaphore;
 		presentInfo.pResults = nullptr;
-		//TODO: deal the image layout problem
-		//if layout != present_src, do transition.
-		auto swapchainBuffer = get_swapchain_buffer();
-		{
-			auto cb = VulkanContext::get()->get_command_buffer(0);
-			cb->begin_record();
-			cb->cmd_transition_resource_state({swapchainBuffer, AshResourceState::Present});
-			cb->end_record();
-			VulkanContext::get()->submit_immediately({ cb ,1});
-		}
-
 		VkResult result = vkQueuePresentKHR(VulkanContext::get_present_queue(), &presentInfo);
 		acquireImageIndex = UINT32_MAX;
 		VulkanContext::get()->vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
 		{
 			_recreate_swapchain();
+			HLogWarning("VulkanSwapchain: present requested swapchain recreation.");
+			return;
 		}
+		VK_CHECK_RESULT(result);
 	}
 
 }

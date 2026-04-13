@@ -8,7 +8,7 @@ project "Engine"
 	objdir ("%{wks.location}/_BUILD/"..outputdir .."/bin/obj/%{prj.name}")
 	files
 	{
-		
+
 		"**.h",
 		"**.cpp",
 		"**.hpp",
@@ -24,7 +24,7 @@ project "Engine"
 		thirdparty .. "/tlsf/**.h",
 		thirdparty .. "/tlsf/**.c",
 	}
-	
+
 	includedirs
 	{
 		".",
@@ -50,7 +50,6 @@ project "Engine"
 		thirdparty .. "/tlsf",
 		thirdparty .. "/wyhash",
 		thirdparty .. "/thsvs",
-		thirdparty .. "/dxc/inc",
 		assetsdir,
 	}
 	links
@@ -62,7 +61,6 @@ project "Engine"
 		"OFBX",
 		"spirv-cross",
 		"meshoptimizer",
-		"dbghelp"
 	}
 
 	filter {"system:windows", "configurations:Debug"}
@@ -71,12 +69,23 @@ project "Engine"
 		staticruntime "Off"
 		defines
 		{
+			"ASH_HAS_VULKAN",
+			"ASH_HAS_DX12",
+			"ASH_HAS_DXC",
+		}
+		defines
+		{
 			"_UNICODE",
             "UNICODE",
 			"_CONSOLE",
 			"GLFW_INCLUDE_NONE",
 			"ASH_WINDOWS",
 			"ASH_ENGINE",
+		}
+		includedirs
+		{
+			thirdparty .. "/D3D12MA/include",
+			thirdparty .. "/dxc/inc",
 		}
 		defines
 		{
@@ -88,6 +97,11 @@ project "Engine"
 		links
 		{
 			"tracy",
+			"dbghelp",
+			"d3d12",
+			"dxgi",
+			"dxguid",
+			"D3D12MA",
 		}
 		runtime "Debug"
 		symbols "on"
@@ -114,12 +128,19 @@ project "Engine"
 		postbuildcommands 
 		{
 			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
-			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\"',
+			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.dll"',
+			'if exist "$(TargetDir)Engine.pdb" copy /Y "$(TargetDir)Engine.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.pdb"',
 		}
 	filter {"system:windows","configurations:Release"}
 		system "Windows"
 		systemversion "latest"
 		staticruntime "Off"
+		defines
+		{
+			"ASH_HAS_VULKAN",
+			"ASH_HAS_DX12",
+			"ASH_HAS_DXC",
+		}
 		defines
 		{
 			"_UNICODE",
@@ -129,6 +150,11 @@ project "Engine"
 			"ASH_WINDOWS",
 			"ASH_ENGINE",
 		}
+		includedirs
+		{
+			thirdparty .. "/D3D12MA/include",
+			thirdparty .. "/dxc/inc",
+		}
 		defines "ASH_RELEASE"
 		runtime "Release"
 		optimize "on"	
@@ -137,6 +163,11 @@ project "Engine"
 			thirdparty .. "/glslang/release/windows-x64/include",
 		}
 		links {
+			"dbghelp",
+			"d3d12",
+			"dxgi",
+			"dxguid",
+			"D3D12MA",
 			thirdparty.."/glslang/release/windows-x64/lib/glslang.lib",
 			thirdparty.."/glslang/release/windows-x64/lib/SPIRV.lib",
 			thirdparty.."/glslang/release/windows-x64/lib/OGLCompiler.lib",
@@ -152,7 +183,15 @@ project "Engine"
 		postbuildcommands 
 		{
 			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
-			'xcopy /Y /E /I "%{cfg.buildtarget.directory}\\*" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\"',
+			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.dll"',
+			'if exist "$(TargetDir)Engine.pdb" copy /Y "$(TargetDir)Engine.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.pdb"',
+		}
+
+	filter "system:not windows"
+		removefiles
+		{
+			"Graphics/DirectX12/**",
+			"Graphics/DXC/**",
 		}
 		
 

@@ -215,13 +215,15 @@ namespace AshEngine
 
 		bool pass_started = false;
 		bool success = m_render_device != nullptr;
-
+		const char* pass_name = pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass";
 		if (success)
 		{
-			for (const GraphicsDrawDesc& draw_desc : pass_context->m_draw_calls)
+			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
+				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
 				if (!draw_desc.program || !m_render_device->transition_graphics_program_resources(draw_desc.program))
 				{
+					HLogError("Renderer: transition_graphics_program_resources failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
@@ -230,6 +232,7 @@ namespace AshEngine
 				{
 					if (!binding.buffer || !m_render_device->transition_vertex_buffer(binding.buffer))
 					{
+						HLogError("Renderer: transition_vertex_buffer failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);
 						success = false;
 						break;
 					}
@@ -241,6 +244,7 @@ namespace AshEngine
 
 				if (draw_desc.index_buffer && !m_render_device->transition_index_buffer(draw_desc.index_buffer))
 				{
+					HLogError("Renderer: transition_index_buffer failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
@@ -255,10 +259,12 @@ namespace AshEngine
 
 		if (success)
 		{
-			for (const GraphicsDrawDesc& draw_desc : pass_context->m_draw_calls)
+			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
+				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
 				if (!m_render_device->bind_graphics_program(draw_desc.program))
 				{
+					HLogError("Renderer: bind_graphics_program failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
@@ -267,6 +273,7 @@ namespace AshEngine
 				{
 					if (!binding.buffer || !m_render_device->bind_vertex_buffer(binding.slot, binding.buffer, binding.offset))
 					{
+						HLogError("Renderer: bind_vertex_buffer failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);
 						success = false;
 						break;
 					}
@@ -289,6 +296,7 @@ namespace AshEngine
 				{
 					if (!m_render_device->bind_index_buffer(draw_desc.index_buffer, draw_desc.index_buffer_offset))
 					{
+						HLogError("Renderer: bind_index_buffer failed for pass '{}' draw {}.", pass_name, draw_index);
 						success = false;
 						break;
 					}
@@ -307,7 +315,7 @@ namespace AshEngine
 
 		if (!success)
 		{
-			HLogError("Renderer failed to submit graphics pass '{}'.", pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass");
+			HLogError("Renderer failed to submit graphics pass '{}'.", pass_name);
 		}
 
 		pass_context->m_draw_calls.clear();

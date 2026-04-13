@@ -23,6 +23,7 @@ namespace RHI
 		uint32_t get_descriptor_set_layout_count() const;
 		std::shared_ptr<DescriptorSetLayout> get_descriptor_set_layout(uint32_t index) const;
 		const VertexInputCreation& get_vertex_input() const;
+		const std::vector<ShaderParameterBlockLayout>& get_parameter_block_layouts() const override;
 
 		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;
@@ -31,6 +32,7 @@ namespace RHI
 		ShaderCreation m_creation{};
 		std::vector<uint32_t> m_spirv_binary;
 		ParseResult m_reflection_data{};
+		std::vector<ShaderParameterBlockLayout> m_parameter_block_layouts;
 		std::vector<std::shared_ptr<DescriptorSetLayout>> m_descriptor_set_layouts;
 		VkShaderModule m_shader_module = VK_NULL_HANDLE;
 		VkPipelineShaderStageCreateInfo m_shader_stage_info{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };

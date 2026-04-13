@@ -29,6 +29,7 @@ namespace AshEditor
 		auto* renderer = AshEngine::Application::get_renderer();
 		if (!renderer || !renderer->begin_frame())
 		{
+			HLogError("Editor failed to begin renderer frame.");
 			return;
 		}
 		_on_render_debug();

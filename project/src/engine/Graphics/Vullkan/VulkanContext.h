@@ -72,6 +72,7 @@ namespace RHI
 	public:
 		auto init(void* config) -> bool override;
 		auto shutdown() -> bool override;
+		auto destroy() -> void override;
 		VulkanContext() { instance = this; }
 		~VulkanContext() {}
 	public:
@@ -316,6 +317,8 @@ namespace RHI
 
 	private:
 		StringView stringBuffer{};
+		VulkanValidationConfig validationConfig{};
+		bool debugUtilsEnabled = false;
 	//vk handles
 	private:
 		//manually in the calling order
@@ -396,7 +399,7 @@ namespace RHI
 		Array<std::shared_ptr<Sampler>>							samplerCache;
 		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
 		VulkanStagingBufferPool*								vulkanStagingBufferPool					 = nullptr;
-		FlatHashMap<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;
+		std::unordered_map<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;
 	private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;

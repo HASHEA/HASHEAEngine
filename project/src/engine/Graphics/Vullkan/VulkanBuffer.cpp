@@ -96,7 +96,6 @@ namespace RHI
 		m_sCreationInfo = ci;
 		m_bReady = false;
 		dynamic = !ci.force_static && (ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE) && has_any_flags(ci.usage_flags, k_dynamic_buffer_mask);
-		HLogInfo("creating buffer : {} ...", ci.name);
 		bool bHostCoherent = false;
 		VmaMemoryUsage        eMemUsage = VMA_MEMORY_USAGE_UNKNOWN;
 		VkBufferUsageFlags    uBufferUsageFlags = VKBufferHelper::get_vk_buffer_usage_flags(ci.usage_flags);
@@ -142,22 +141,9 @@ namespace RHI
 			VkPhysicalDeviceMemoryProperties queriedMemoryProperties{};
 			vmaGetAllocationInfo(VulkanContext::get_vma_allocator(), m_pVMAAllocation, &allocationInfo);
 			vkGetPhysicalDeviceMemoryProperties(VulkanContext::get_vulkan_physical_device(), &queriedMemoryProperties);
-			HLogInfo(
-				"Buffer '{}' allocation memoryType={}, cached memoryTypeCount={}, queried memoryTypeCount={}",
-				ci.name ? ci.name : "<unnamed>",
-				allocationInfo.memoryType,
-				VulkanContext::get_device_memory_properties().memoryTypeCount,
-				queriedMemoryProperties.memoryTypeCount);
 			const bool validMemoryType =
 				allocationInfo.memoryType < VulkanContext::get_device_memory_properties().memoryTypeCount &&
 				allocationInfo.memoryType < VK_MAX_MEMORY_TYPES;
-			HLogInfo(
-				"Buffer '{}' validMemoryType={} (memoryType={}, memoryTypeCount={}, vkMaxMemoryTypes={})",
-				ci.name ? ci.name : "<unnamed>",
-				validMemoryType,
-				allocationInfo.memoryType,
-				VulkanContext::get_device_memory_properties().memoryTypeCount,
-				VK_MAX_MEMORY_TYPES);
 			ASH_LOG_PROCESS_ERROR(validMemoryType);
 			vmaGetMemoryTypeProperties(VulkanContext::get_vma_allocator(), allocationInfo.memoryType, &memoryPropertyFlags);
 			m_bCoherent = (memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
@@ -202,7 +188,6 @@ namespace RHI
 		if (immediate_deletion)
 		{
 			ASH_VMA_DESTROY_BUFFER(VulkanContext::get(), m_pVkBuffer, m_pVMAAllocation);
-			HLogInfo("deleting buffer : {} ...", m_pName);
 		}
 		else
 		{
@@ -210,9 +195,7 @@ namespace RHI
 			{
 				auto handle = m_pVkBuffer;
 				auto alloc = m_pVMAAllocation;
-				auto sname = m_pName;
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle, alloc, sname]() {
-					HLogInfo("deleting buffer : {} ...", sname);
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle, alloc]() {
 					ASH_VMA_DESTROY_BUFFER_V(VulkanContext::get(), handle, alloc);
 					});
 				m_pVkBuffer = VK_NULL_HANDLE;

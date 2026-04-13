@@ -64,6 +64,8 @@ namespace AshEngine
 				value(std::forward<V1>(_value)) {
 			}
 		};
+		FlatHashMap() = default;
+		~FlatHashMap();
 		auto init(Allocator* allocator_, uint64_t initial_capacity) -> void;
 		auto shutdown()->void;
 
@@ -112,6 +114,7 @@ namespace AshEngine
 		auto clear() -> void;
 		auto reserve(uint64_t newSize) -> void;
 	private:
+		auto _destroy_slot(uint64_t index) -> void;
 		auto _erase_meta(const FlatHashMapIterator& it) -> void;
 		auto _find_or_prepare_insert(const K& key) -> FoundResult;
 		auto _find_first_non_full(uint64_t hash) -> FoundInfo;
@@ -133,6 +136,7 @@ namespace AshEngine
 		uint64_t m_uCapacity = 0;
 		int8_t* controlBytes = group_init_empty();
 		KeyValue* slots_ = nullptr;
+		KeyValue* slotStorage = nullptr;
 		uint64_t growthLeft = 0;
 		Allocator* m_pAllocator = nullptr;
 		KeyValue defaultKeyValue = { K(),V()};
@@ -296,12 +300,31 @@ namespace AshEngine
 
 		controlBytes = group_init_empty();
 		slots_ = nullptr;
+		slotStorage = nullptr;
 		reserve(initial_capacity < 4 ? 4 : initial_capacity);
 	}
 
 	template<typename K, typename V>
+	inline FlatHashMap<K, V>::~FlatHashMap() {
+		shutdown();
+	}
+
+	template<typename K, typename V>
 	inline auto FlatHashMap<K, V>::shutdown() -> void {
-		Ash_Free(m_pAllocator, controlBytes);
+		clear();
+		if (controlBytes != group_init_empty()) {
+			Ash_Free(m_pAllocator, controlBytes);
+		}
+		if (slotStorage) {
+			Ash_Free(m_pAllocator, slotStorage);
+		}
+		controlBytes = group_init_empty();
+		slots_ = nullptr;
+		slotStorage = nullptr;
+		m_uSize = 0;
+		m_uCapacity = 0;
+		growthLeft = 0;
+		m_pAllocator = nullptr;
 	}
 
 	template <typename K, typename V>
@@ -327,6 +350,13 @@ namespace AshEngine
 		}
 
 		return { k_iterator_end };
+	}
+
+	template<typename K, typename V>
+	inline auto FlatHashMap<K, V>::_destroy_slot(uint64_t index) -> void {
+		if constexpr (!std::is_trivially_destructible_v<KeyValue>) {
+			slots_[index].~KeyValue();
+		}
 	}
 
 	template <typename K, typename V>
@@ -358,6 +388,7 @@ namespace AshEngine
 		if (iterator.index == k_iterator_end)
 			return 0;
 
+		_destroy_slot(iterator.index);
 		_erase_meta(iterator);
 		return 1;
 	}
@@ -367,6 +398,7 @@ namespace AshEngine
 		if (iterator.index == k_iterator_end)
 			return 0;
 
+		_destroy_slot(iterator.index);
 		_erase_meta(iterator);
 		return 1;
 	}
@@ -442,84 +474,20 @@ namespace AshEngine
 
 	template <typename K, typename V>
 	auto FlatHashMap<K, V>::_drop_deletes_widthout_resize() -> void{
-		// Algorithm:
-		// - mark all DELETED slots as EMPTY
-		// - mark all FULL slots as DELETED
-		// - for each slot marked as DELETED
-		//     hash = Hash(element)
-		//     target = find_first_non_full(hash)
-		//     if target is in the same group
-		//       mark slot as FULL
-		//     else if target is EMPTY
-		//       transfer element to target
-		//       mark slot as EMPTY
-		//       mark target as FULL
-		//     else if target is DELETED
-		//       swap current element with target element
-		//       mark target as FULL
-		//       repeat procedure for current slot with moved from element (target)
-		//ConvertDeletedToEmptyAndFullToDeleted( control_bytes, capacity );
-
-		alignas(KeyValue) unsigned char raw[sizeof(KeyValue)];
-		size_t total_probe_length = 0;
-		KeyValue* slot = reinterpret_cast<KeyValue*>(&raw);
-		for (size_t i = 0; i != m_uCapacity; ++i) {
-			if (!control_is_deleted(controlBytes[i])) {
-				continue;
-			}
-
-			const KeyValue* current_slot = slots_ + i;
-			size_t hash = hash_calculate(current_slot->key);
-			auto target = _find_first_non_full(hash);
-			size_t new_i = target.offset;
-			total_probe_length += target.probeLength;
-
-			// Verify if the old and new i fall within the same group wrt the hash.
-			// If they do, we don't need to move the object as it falls already in the
-			// best probe we can.
-			const auto probe_index = [&](size_t pos) {
-				return ((pos - _probe(hash).get_offset()) & m_uCapacity) / GroupSse2Impl::kWidth;
-			};
-
-			// Element doesn't move.
-			if ((probe_index(new_i) == probe_index(i))) {
-				_set_ctrl(i, hash_2(hash));
-				continue;
-			}
-			if (control_is_empty(controlBytes[new_i])) {
-				// Transfer element to the empty spot.
-				// set_ctrl poisons/unpoisons the slots so we have to call it at the
-				// right time.
-				_set_ctrl(new_i, hash_2(hash));
-				memcpy(slots_ + new_i, slots_ + i, sizeof(KeyValue));
-				_set_ctrl(i, k_control_bitmask_empty);
-			}
-			else {
-				//assert( control_is_deleted( control_bytes[ new_i ] ) );
-				_set_ctrl(new_i, hash_2(hash));
-				// Until we are done rehashing, DELETED marks previously FULL slots.
-				// Swap i and new_i elements.
-				memcpy(slot, slots_ + i, sizeof(KeyValue));
-				memcpy(slots_ + i, slots_ + new_i, sizeof(KeyValue));
-				memcpy(slots_ + new_i, slot, sizeof(KeyValue));
-				--i;  // repeat
-			}
-		}
-		_reset_grow_left();
+		_resize(m_uCapacity);
 	}
 
 	template <typename K, typename V>
 	auto FlatHashMap<K, V>::_calculate_size(uint64_t new_capacity) -> uint64_t{
-		return (new_capacity + GroupSse2Impl::kWidth + new_capacity * (sizeof(KeyValue)));
+		return (new_capacity + GroupSse2Impl::kWidth);
 	}
 
 	template <typename K, typename V>
 	auto FlatHashMap<K, V>::_initialize_slots() -> void{
-
-		char* new_memory = (char*)Ash_Alloc(m_pAllocator,_calculate_size(m_uCapacity),1);
-
-		controlBytes = reinterpret_cast<int8_t*>(new_memory);
-		slots_ = reinterpret_cast<KeyValue*>(new_memory + m_uCapacity + GroupSse2Impl::kWidth);
+		const uint32_t slot_alignment = static_cast<uint32_t>(std::alignment_of<KeyValue>::value);
+		controlBytes = (int8_t*)Ash_Alloc(m_pAllocator, _calculate_size(m_uCapacity), 1);
+		slotStorage = (KeyValue*)Ash_Alloc(m_pAllocator, m_uCapacity * sizeof(KeyValue), slot_alignment);
+		slots_ = slotStorage;
 
 		_reset_ctrl();
 		_reset_grow_left();
@@ -530,6 +498,7 @@ namespace AshEngine
 		//assert( IsValidCapacity( new_capacity ) );
 		int8_t* old_control_bytes = controlBytes;
 		KeyValue* old_slots = slots_;
+		KeyValue* old_slot_storage = slotStorage;
 		const uint64_t old_capacity = m_uCapacity;
 
 		m_uCapacity = new_capacity;
@@ -539,7 +508,7 @@ namespace AshEngine
 		size_t total_probe_length = 0;
 		for (size_t i = 0; i != old_capacity; ++i) {
 			if (control_is_full(old_control_bytes[i])) {
-				const KeyValue* old_value = old_slots + i;
+				KeyValue* old_value = old_slots + i;
 				uint64_t hash = hash_calculate(old_value->key);
 
 				FoundInfo find_info = _find_first_non_full(hash);
@@ -548,13 +517,21 @@ namespace AshEngine
 				total_probe_length += find_info.probeLength;
 
 				_set_ctrl(new_i, hash_2(hash));
-
-				memory_copy(slots_ + new_i, old_slots + i, sizeof(KeyValue));
+				if constexpr (std::is_trivially_copyable_v<KeyValue>) {
+					memory_copy(slots_ + new_i, old_slots + i, sizeof(KeyValue));
+				}
+				else {
+					new (&slots_[new_i]) KeyValue(std::move(*old_value));
+					_destroy_slot(i);
+				}
 			}
 		}
 
-		if (old_capacity) {
+		if (old_control_bytes != group_init_empty()) {
 			Ash_Free(m_pAllocator, old_control_bytes);
+		}
+		if (old_slot_storage) {
+			Ash_Free(m_pAllocator, old_slot_storage);
 		}
 	}
 
@@ -633,9 +610,19 @@ namespace AshEngine
 
 	template<typename K, typename V>
 	inline auto FlatHashMap<K, V>::clear() -> void{
+		for (uint64_t i = 0; i < m_uCapacity; ++i) {
+			if (control_is_full(controlBytes[i])) {
+				_destroy_slot(i);
+			}
+		}
 		m_uSize = 0;
-		_reset_ctrl();
-		_reset_grow_left();
+		if (controlBytes != group_init_empty()) {
+			_reset_ctrl();
+			_reset_grow_left();
+		}
+		else {
+			growthLeft = 0;
+		}
 	}
 
 	template<typename K, typename V>

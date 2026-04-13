@@ -31,7 +31,6 @@ namespace RHI
 			createInfoReduction.reductionMode = ash_sampler_reduction_mode_to_vk(ci.reductionMode);
 			create_info.pNext = &createInfoReduction;
 		}
-		HLogInfo("creating sampler : {} ...", ci.name);
 		VK_CHECK_RESULT(vkCreateSampler(VulkanContext::get_vulkan_device(), &create_info, VulkanContext::get_vulkan_allocation_callbacks(), &vkSampler));
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_SAMPLER, (uint64_t)vkSampler, name);
 	}
@@ -41,7 +40,6 @@ namespace RHI
 		{
 			if (vkSampler != VK_NULL_HANDLE)
 			{
-				HLogInfo("deleting sampler : {} ...", name);
 				vkDestroySampler(VulkanContext::get_vulkan_device(), vkSampler, VulkanContext::get_vulkan_allocation_callbacks());
 			}
 		}
@@ -49,11 +47,9 @@ namespace RHI
 		{
 			auto handle = this->vkSampler;
 			auto alloc = VulkanContext::get_vulkan_allocation_callbacks();
-			auto sname = name;
 			if (vkSampler != VK_NULL_HANDLE)
 			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle,alloc, sname]() {
-					HLogInfo("deleting sampler : {} ...", sname);
+				VulkanContext::get_current_frame_deletion_queue().emplace([handle,alloc]() {
 					vkDestroySampler(VulkanContext::get_vulkan_device(), handle, alloc);
 
 					});
