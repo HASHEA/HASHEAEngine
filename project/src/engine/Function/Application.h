@@ -3,6 +3,7 @@
 #include "Base/input/Input.h"
 #include "Base/hplatform.h"
 #include "Graphics/RHIBackend.h"
+#include <chrono>
 namespace RHI
 {
 	class GraphicsContext;
@@ -13,6 +14,7 @@ namespace AshEngine
 {
 	class RenderDevice;
 	class Renderer;
+	class UIContext;
 	class Window;
 	struct WindowEvent;
 	struct ASH_API EngineInitConfig
@@ -57,12 +59,25 @@ namespace AshEngine
 		{
 			return get()->renderer;
 		}
+		inline static auto get_ui_context()
+		{
+			return get() ? get()->uiContext : nullptr;
+		}
 		inline static auto& get_input()
 		{
 			return get()->inputState;
 		}
+		inline static auto get_rhi_backend() -> RHI::Backend
+		{
+			return get()->activeBackend;
+		}
+		inline static auto get_rhi_backend_name() -> const char*
+		{
+			return RHI::backend_to_string(get()->activeBackend);
+		}
 		auto request_exit() -> void;
 		auto set_max_frame_count(uint64_t inMaxFrameCount) -> void;
+		auto set_max_run_seconds(double inMaxRunSeconds) -> void;
 		auto get_frame_index() const -> uint64_t
 		{
 			return frameIndex;
@@ -92,9 +107,13 @@ namespace AshEngine
 		RHI::Swapchain*			swapChain				= nullptr;
 		RenderDevice*			renderDevice			= nullptr;
 		Renderer*				renderer				= nullptr;
+		UIContext*				uiContext				= nullptr;
+		RHI::Backend			activeBackend			= RHI::Backend::Default;
 		InputState				inputState{};
+		std::chrono::steady_clock::time_point runStartTime{};
 		uint64_t				frameIndex				= 0;
 		uint64_t				maxFrameCount			= 0;
+		double					maxRunSeconds			= 0.0;
 		bool					exitRequested			= false;
 		bool					started					= false;
 	};

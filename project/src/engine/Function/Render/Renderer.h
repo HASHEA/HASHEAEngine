@@ -1,5 +1,6 @@
 #pragma once
 #include "RenderDevice.h"
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -37,6 +38,16 @@ namespace AshEngine
 		uint32_t group_count_x = 1;
 		uint32_t group_count_y = 1;
 		uint32_t group_count_z = 1;
+	};
+
+	struct RendererFrameStats
+	{
+		uint32_t frame_width = 0;
+		uint32_t frame_height = 0;
+		uint32_t graphics_pass_count = 0;
+		uint32_t draw_call_count = 0;
+		uint32_t compute_dispatch_count = 0;
+		double cpu_frame_time_ms = 0.0;
 	};
 
 	class ASH_API Renderer
@@ -96,6 +107,7 @@ namespace AshEngine
 		bool draw(const GraphicsDrawDesc& desc);
 		bool dispatch(const ComputeDispatchDesc& desc);
 		bool is_in_pass() const;
+		const RendererFrameStats& get_frame_stats() const;
 
 	private:
 		void end_active_pass(GraphicsPassContext* pass_context);
@@ -103,5 +115,9 @@ namespace AshEngine
 	private:
 		RenderDevice* m_render_device = nullptr;
 		GraphicsPassContext* m_active_pass = nullptr;
+		RendererFrameStats m_frame_stats{};
+		RendererFrameStats m_last_completed_frame_stats{};
+		std::chrono::steady_clock::time_point m_frame_start_time{};
+		bool m_frame_in_progress = false;
 	};
 }

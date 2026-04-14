@@ -379,6 +379,7 @@ namespace AshEngine
 		RenderViewport viewport_override{};
 		bool scissor_override_active = false;
 		RenderScissor scissor_override{};
+		bool back_buffer_written_this_frame = false;
 	};
 
 	static void apply_program_state(GraphicsProgram::Impl& impl, RHI::IGraphicsRenderProgram& program)
@@ -1805,6 +1806,7 @@ namespace AshEngine
 		m_impl->current_render_pass.reset();
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
+		m_impl->back_buffer_written_this_frame = false;
 		return true;
 	}
 
@@ -2169,6 +2171,10 @@ namespace AshEngine
 				framebuffer_creation.colorAttachments.shutdown();
 				return false;
 			}
+			if (attachment.render_target->m_impl == m_impl->back_buffer_target || attachment.render_target->m_impl->kind == RenderTarget::Impl::Kind::BackBuffer)
+			{
+				m_impl->back_buffer_written_this_frame = true;
+			}
 
 			std::shared_ptr<RHI::Texture> texture = attachment.render_target->m_impl->get_texture();
 			if (!assign_pass_extent(texture))
@@ -2488,5 +2494,42 @@ namespace AshEngine
 		m_impl->current_render_pass.reset();
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
+	}
+
+	RHI::CommandBuffer* RenderDevice::get_current_command_buffer() const
+	{
+		return m_impl ? m_impl->current_command_buffer : nullptr;
+	}
+
+	std::shared_ptr<RHI::TextureView> RenderDevice::get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const
+	{
+		if (!render_target || !render_target->m_impl)
+		{
+			return nullptr;
+		}
+
+		std::shared_ptr<RHI::Texture> texture = render_target->m_impl->get_texture();
+		return texture ? texture->get_default_srv() : nullptr;
+	}
+
+	bool RenderDevice::transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target)
+	{
+		if (!m_impl->current_command_buffer || m_impl->current_framebuffer || !render_target || !render_target->m_impl)
+		{
+			return false;
+		}
+
+		std::shared_ptr<RHI::Texture> texture = render_target->m_impl->get_texture();
+		if (!texture)
+		{
+			return false;
+		}
+
+		return m_impl->current_command_buffer->cmd_transition_resource_state({ texture, RHI::AshResourceState::SRVGraphics });
+	}
+
+	bool RenderDevice::has_back_buffer_content() const
+	{
+		return m_impl && m_impl->back_buffer_written_this_frame;
 	}
 }

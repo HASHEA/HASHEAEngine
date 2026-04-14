@@ -248,6 +248,11 @@ namespace RHI
 			return instance->vulkanPresentQueue;
 		}
 
+		inline static auto get_graphics_queue() -> VkQueue
+		{
+			return instance->vulkanMainQueue;
+		}
+
 		inline static auto get_fragment_shading_rate_texel_size()
 		{
 			return instance->minFragmentShadingRateTexelSize;

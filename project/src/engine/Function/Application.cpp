@@ -3,6 +3,7 @@
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/Swapchain.h"
+#include "Function/Gui/UIContext.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/Renderer.h"
 #include "Base/hlog.h"
@@ -40,6 +41,7 @@ namespace AshEngine
 
 		const RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(config);
 		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
+		activeBackend = resolvedBackend;
 		HLogInfo("Initializing engine RHI backend: {}", RHI::backend_to_string(resolvedBackend));
 
 		/*window*/
@@ -95,6 +97,13 @@ namespace AshEngine
 		swapChain->init(&scConfig);
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
 		renderer = new Renderer(renderDevice);
+		uiContext = new UIContext();
+		if (!uiContext->init(window, graphicsContext, renderDevice))
+		{
+			HLogWarning("UIContext initialization failed. Engine UI facade will remain disabled.");
+			delete uiContext;
+			uiContext = nullptr;
+		}
 	}
 	Application::~Application()
 	{
@@ -105,6 +114,12 @@ namespace AshEngine
 		}
 		delete renderer;
 		renderer = nullptr;
+		if (uiContext)
+		{
+			uiContext->shutdown();
+			delete uiContext;
+			uiContext = nullptr;
+		}
 		delete renderDevice;
 		renderDevice = nullptr;
 		if (swapChain)
@@ -136,6 +151,10 @@ namespace AshEngine
 	{
 		maxFrameCount = inMaxFrameCount;
 	}
+	auto Application::set_max_run_seconds(double inMaxRunSeconds) -> void
+	{
+		maxRunSeconds = inMaxRunSeconds > 0.0 ? inMaxRunSeconds : 0.0;
+	}
 	auto Application::start() -> void
 	{
 		if (started)
@@ -146,6 +165,7 @@ namespace AshEngine
 		started = true;
 		exitRequested = false;
 		frameIndex = 0;
+		runStartTime = std::chrono::steady_clock::now();
 		_on_startup();
 
 		while (!_should_exit())
@@ -165,6 +185,15 @@ namespace AshEngine
 				HLogInfo("Application smoke frame limit reached: {}", maxFrameCount);
 				request_exit();
 			}
+			if (maxRunSeconds > 0.0)
+			{
+				const auto elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - runStartTime).count();
+				if (elapsedSeconds >= maxRunSeconds)
+				{
+					HLogInfo("Application smoke time limit reached: {:.2f}", maxRunSeconds);
+					request_exit();
+				}
+			}
 		}
 
 		_on_shutdown();
@@ -180,6 +209,10 @@ namespace AshEngine
 
 		window->on_update();
 		_process_window_events();
+		if (uiContext)
+		{
+			uiContext->begin_frame();
+		}
 	}
 	auto Application::_tick_frame() -> void
 	{
@@ -249,6 +282,8 @@ namespace AshEngine
 		case WindowEventType::KeyReleased:
 			inputState.set_key_state(event.key, false, false);
 			break;
+		case WindowEventType::TextInput:
+			break;
 		case WindowEventType::MouseButtonPressed:
 			inputState.set_mouse_position(event.mouseX, event.mouseY);
 			inputState.set_mouse_button_state(event.mouseButton, true);
@@ -267,6 +302,11 @@ namespace AshEngine
 		default:
 			break;
 		}
+
+		if (uiContext)
+		{
+			uiContext->handle_window_event(event);
+		}
 	}
 	auto Application::_on_gui() -> void
 	{
@@ -279,6 +319,7 @@ namespace AshEngine
 		if (renderer && renderer->begin_frame())
 		{
 			_on_render_debug();
+			_on_gui();
 			renderer->end_frame();
 		}
 	}

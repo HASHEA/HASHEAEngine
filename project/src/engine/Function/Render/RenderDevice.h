@@ -9,6 +9,8 @@ namespace RHI
 {
 	class GraphicsContext;
 	class Swapchain;
+	class CommandBuffer;
+	class TextureView;
 }
 
 namespace AshEngine
@@ -406,6 +408,11 @@ namespace AshEngine
 		void draw_indexed(uint32_t index_count, uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0);
 		void dispatch(uint32_t group_count_x, uint32_t group_count_y = 1, uint32_t group_count_z = 1);
 		void end_pass();
+
+		RHI::CommandBuffer* get_current_command_buffer() const;
+		std::shared_ptr<RHI::TextureView> get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const;
+		bool transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target);
+		bool has_back_buffer_content() const;
 
 	private:
 		bool transition_graphics_program_resources(GraphicsProgram* program);

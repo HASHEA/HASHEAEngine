@@ -1,5 +1,7 @@
 #include "Renderer.h"
 #include "Base/hlog.h"
+#include "Function/Application.h"
+#include "Function/Gui/UIContext.h"
 
 namespace AshEngine
 {
@@ -77,7 +79,21 @@ namespace AshEngine
 
 	bool Renderer::begin_frame()
 	{
-		return m_render_device && m_render_device->begin_frame();
+		if (!m_render_device || !m_render_device->begin_frame())
+		{
+			m_frame_in_progress = false;
+			return false;
+		}
+
+		m_frame_stats = {};
+		m_frame_start_time = std::chrono::steady_clock::now();
+		m_frame_in_progress = true;
+		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
+		{
+			m_frame_stats.frame_width = back_buffer->get_width();
+			m_frame_stats.frame_height = back_buffer->get_height();
+		}
+		return true;
 	}
 
 	bool Renderer::end_frame()
@@ -86,7 +102,24 @@ namespace AshEngine
 		{
 			end_active_pass(m_active_pass);
 		}
-		return m_render_device && m_render_device->end_frame();
+		bool ui_result = true;
+		if (Application::get() && Application::get_ui_context())
+		{
+			ui_result = Application::get_ui_context()->render();
+			if (!ui_result)
+			{
+				HLogError("Renderer: UIContext render failed.");
+			}
+		}
+		const bool result = m_render_device && m_render_device->end_frame();
+		if (m_frame_in_progress)
+		{
+			const auto frame_end_time = std::chrono::steady_clock::now();
+			m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
+			m_last_completed_frame_stats = m_frame_stats;
+			m_frame_in_progress = false;
+		}
+		return result && ui_result;
 	}
 
 	void Renderer::present()
@@ -198,12 +231,18 @@ namespace AshEngine
 			return false;
 		}
 		m_render_device->dispatch(desc.group_count_x, desc.group_count_y, desc.group_count_z);
+		++m_frame_stats.compute_dispatch_count;
 		return true;
 	}
 
 	bool Renderer::is_in_pass() const
 	{
 		return m_active_pass != nullptr;
+	}
+
+	const RendererFrameStats& Renderer::get_frame_stats() const
+	{
+		return m_last_completed_frame_stats;
 	}
 
 	void Renderer::end_active_pass(GraphicsPassContext* pass_context)
@@ -255,6 +294,10 @@ namespace AshEngine
 		{
 			success = m_render_device->begin_pass(pass_context->m_desc);
 			pass_started = success;
+			if (success)
+			{
+				++m_frame_stats.graphics_pass_count;
+			}
 		}
 
 		if (success)
@@ -301,10 +344,12 @@ namespace AshEngine
 						break;
 					}
 					m_render_device->draw_indexed(draw_desc.index_count, draw_desc.instance_count, draw_desc.first_index, draw_desc.vertex_offset, draw_desc.first_instance);
+					++m_frame_stats.draw_call_count;
 					continue;
 				}
 
 				m_render_device->draw(draw_desc.vertex_count, draw_desc.instance_count, draw_desc.first_vertex, draw_desc.first_instance);
+				++m_frame_stats.draw_call_count;
 			}
 		}
 

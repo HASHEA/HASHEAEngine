@@ -83,6 +83,13 @@ namespace
 	{
 		size_t begin = 0;
 		size_t end = value.size();
+		if (value.size() >= 3 &&
+			static_cast<unsigned char>(value[0]) == 0xEF &&
+			static_cast<unsigned char>(value[1]) == 0xBB &&
+			static_cast<unsigned char>(value[2]) == 0xBF)
+		{
+			begin = 3;
+		}
 		while (begin < end && std::isspace(static_cast<unsigned char>(value[begin])) != 0)
 		{
 			++begin;

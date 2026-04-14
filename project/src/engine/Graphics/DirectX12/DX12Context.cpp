@@ -19,6 +19,52 @@ namespace RHI
 {
 	DX12Context* DX12Context::s_instance = nullptr;
 
+	namespace
+	{
+		static bool upload_initial_buffer_data_immediately(
+			ID3D12Device5* device,
+			DX12Context& context,
+			const std::shared_ptr<Buffer>& buffer,
+			uint32_t size,
+			void* initial_data)
+		{
+			if (!device || !buffer || !initial_data || size == 0)
+			{
+				return false;
+			}
+
+			DX12CommandPool upload_allocator;
+			if (!upload_allocator.init(device, D3D12_COMMAND_LIST_TYPE_DIRECT))
+			{
+				HLogError("DX12Context: Failed to create temporary upload command allocator.");
+				return false;
+			}
+
+			DX12CommandBuffer upload_command_buffer;
+			if (!upload_command_buffer.init(device, D3D12_COMMAND_LIST_TYPE_DIRECT))
+			{
+				HLogError("DX12Context: Failed to create temporary upload command buffer.");
+				return false;
+			}
+
+			upload_command_buffer.set_allocator(upload_allocator.get_allocator());
+			upload_command_buffer.begin_record();
+			const bool transition_ok = upload_command_buffer.cmd_transition_resource_state({ buffer, AshResourceState::CopyDst });
+			const bool upload_ok = transition_ok && upload_command_buffer.cmd_update_sub_resource(buffer, 0, size, initial_data);
+			upload_command_buffer.end_record();
+			if (!upload_ok)
+			{
+				return false;
+			}
+
+			SubmitInfo submit_info{};
+			submit_info.cmds = &upload_command_buffer;
+			submit_info.cmdCount = 1;
+			context.submit_immediately(submit_info);
+			return true;
+		}
+	}
+
 	auto DX12Context::init(void* config) -> bool
 	{
 		const auto& cfg = *reinterpret_cast<const GraphicsContextInitConfig*>(config);
@@ -303,6 +349,11 @@ namespace RHI
 		// Reset shader-visible descriptor heaps
 		m_descriptorHeaps.begin_frame();
 
+		if (m_stagingBuffer)
+		{
+			m_stagingBuffer->reset();
+		}
+
 		// Process delayed deletions
 		m_delayedDeletionQueues[m_currentFrame].flush();
 	}
@@ -389,6 +440,16 @@ namespace RHI
 		auto buffer = std::make_shared<DX12Buffer>();
 		if (!buffer->init(ci, m_device.Get(), m_d3d12maAllocator, &m_descriptorHeaps))
 			return nullptr;
+
+		if (ci.initial_data && ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
+		{
+			if (!upload_initial_buffer_data_immediately(m_device.Get(), *this, buffer, ci.size, ci.initial_data))
+			{
+				HLogError("DX12Context: Failed to upload initial data for buffer '{}'.", ci.name ? ci.name : "UnnamedBuffer");
+				return nullptr;
+			}
+		}
+
 		return buffer;
 	}
 

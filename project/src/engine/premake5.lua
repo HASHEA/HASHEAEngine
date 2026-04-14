@@ -192,6 +192,8 @@ project "Engine"
 		{
 			"Graphics/DirectX12/**",
 			"Graphics/DXC/**",
+			thirdparty .. "/ImGui/imgui_impl_dx12.h",
+			thirdparty .. "/ImGui/imgui_impl_dx12.cpp",
 		}
 		
 

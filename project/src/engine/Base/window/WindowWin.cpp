@@ -190,6 +190,17 @@ namespace AshEngine
 				break;
 			}
 			});
+		glfwSetCharCallback(handle, [](GLFWwindow* window, uint32_t codepoint) {
+			auto* w = static_cast<WindowWin*>(glfwGetWindowUserPointer(window));
+			if (!w)
+			{
+				return;
+			}
+
+			WindowEvent event = make_window_event(WindowEventType::TextInput, w->data.width, w->data.height);
+			event.codepoint = codepoint;
+			w->push_event(event);
+			});
 		glfwSetScrollCallback(handle, [](GLFWwindow* win, double xOffset, double yOffset) {
 			auto* window = static_cast<WindowWin*>(glfwGetWindowUserPointer(win));
 			if (!window)

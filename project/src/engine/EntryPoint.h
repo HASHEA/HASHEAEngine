@@ -85,6 +85,40 @@ static uint64_t parse_smoke_test_frame_count(int argc, char* argv[])
 	return 0;
 }
 
+static double parse_smoke_test_seconds(int argc, char* argv[])
+{
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument == "--smoke-test-seconds")
+		{
+			if (argumentIndex + 1 < argc)
+			{
+				const std::string nextArgument = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
+				if (!nextArgument.empty() && nextArgument[0] != '-')
+				{
+					return std::strtod(nextArgument.c_str(), nullptr);
+				}
+			}
+			return 25.0;
+		}
+
+		constexpr const char* smokeSecondsPrefix = "--smoke-test-seconds=";
+		if (argument.rfind(smokeSecondsPrefix, 0) == 0)
+		{
+			return std::strtod(argument.substr(std::char_traits<char>::length(smokeSecondsPrefix)).c_str(), nullptr);
+		}
+	}
+
+	if (const char* envValue = std::getenv("ASH_ENGINE_SMOKE_TEST_SECONDS"))
+	{
+		const double parsedValue = std::strtod(envValue, nullptr);
+		return parsedValue > 0.0 ? parsedValue : 25.0;
+	}
+
+	return 0.0;
+}
+
 int32_t main(int argc, char* argv[])
 {
 	//initialize the working dir of the app
@@ -94,6 +128,11 @@ int32_t main(int argc, char* argv[])
 		return 1;
 	}
 	AshEngine::Application::app = create_application();
+	const double smokeTestSeconds = parse_smoke_test_seconds(argc, argv);
+	if (smokeTestSeconds > 0.0)
+	{
+		AshEngine::Application::app->set_max_run_seconds(smokeTestSeconds);
+	}
 	const uint64_t smokeTestFrameCount = parse_smoke_test_frame_count(argc, argv);
 	if (smokeTestFrameCount > 0)
 	{

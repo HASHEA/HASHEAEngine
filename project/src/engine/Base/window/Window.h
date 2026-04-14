@@ -15,6 +15,7 @@ namespace AshEngine
 		CloseRequested,
 		KeyPressed,
 		KeyReleased,
+		TextInput,
 		MouseButtonPressed,
 		MouseButtonReleased,
 		MouseMoved,
@@ -29,6 +30,7 @@ namespace AshEngine
 		int32_t key = -1;
 		int32_t scancode = 0;
 		int32_t mods = 0;
+		uint32_t codepoint = 0;
 		int32_t mouseButton = -1;
 		bool repeated = false;
 		double mouseX = 0.0;

@@ -2,6 +2,12 @@
 
 > 面向 Editor 层新开发者，帮助你快速理解项目架构、可用 API 与开发注意事项。
 
+> 维护约定：
+> - 本文档是 **Editor 侧长期维护主文档**。
+> - Editor 工作流、Editor 可直接使用的 Engine 接口、Editor 集成方式变化时，应同步更新本文档。
+> - Engine 架构、Runtime、RHI、渲染底层、DynamicRHI、Shader 编译与缓存等变化，请同步更新 `docs/EngineDeveloperGuide.md`。
+> - 若某次改动同时影响 Engine 与 Editor 边界，应同时更新两份文档。
+
 ---
 
 ## 1. 项目架构总览
