@@ -8,6 +8,8 @@
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Graphics/Framebuffer.h"
+#include "Graphics/TextureUploadUtils.h"
+#include <cstring>
 
 namespace RHI
 {
@@ -271,6 +273,14 @@ namespace RHI
 		}
 
 		// Otherwise use staging buffer
+		if (dx12Buf->get_buffer_creation_info().access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
+		{
+			if (!cmd_transition_resource_state({ buffer, AshResourceState::CopyDst }))
+			{
+				return false;
+			}
+		}
+
 		auto* staging = DX12Context::get()->get_staging_buffer();
 		auto [stagingResource, stagingOffset] = staging->stage_data(pData, uSize);
 		if (stagingResource)
@@ -283,6 +293,153 @@ namespace RHI
 		}
 
 		return false;
+	}
+
+	auto DX12CommandBuffer::cmd_update_texture_sub_resource(std::shared_ptr<Texture> texture, const void* pData) -> bool
+	{
+		if (!texture || !pData)
+		{
+			return false;
+		}
+
+		auto* dx12Texture = static_cast<DX12Texture*>(texture.get());
+		ID3D12Resource* textureResource = dx12Texture->get_resource();
+		if (!textureResource)
+		{
+			return false;
+		}
+
+		const TextureCreation& creation = dx12Texture->get_desciption();
+		if (creation.eSampleCount != ASH_SAMPLE_COUNT_1_BIT)
+		{
+			HLogError("DX12CommandBuffer: Texture upload only supports sample count 1 for '{}'.", texture->get_name());
+			return false;
+		}
+		if (DX12TextureFormat::is_depth_format(creation.format))
+		{
+			HLogError("DX12CommandBuffer: Depth/stencil texture upload is not supported for '{}'.", texture->get_name());
+			return false;
+		}
+
+		const AshDXGIFormatInfo& formatInfo = get_dxgi_format_info(creation.format);
+		if (formatInfo.dxgiFormat == DXGI_FORMAT_UNKNOWN ||
+			formatInfo.uBytesPerBlock == 0 ||
+			formatInfo.uWidthPerBlock == 0 ||
+			formatInfo.uHeightPerBlock == 0)
+		{
+			HLogError("DX12CommandBuffer: Unsupported upload format {} for texture '{}'.", static_cast<uint32_t>(creation.format), texture->get_name());
+			return false;
+		}
+
+		std::vector<TextureUploadSubresource> subresources{};
+		uint64_t tightPackedBytes = 0;
+		TextureUploadFormatInfo uploadFormatInfo{};
+		uploadFormatInfo.bytesPerBlock = formatInfo.uBytesPerBlock;
+		uploadFormatInfo.widthPerBlock = formatInfo.uWidthPerBlock;
+		uploadFormatInfo.heightPerBlock = formatInfo.uHeightPerBlock;
+		if (!build_tightly_packed_texture_upload_layout(creation, uploadFormatInfo, subresources, tightPackedBytes) || subresources.empty())
+		{
+			HLogError("DX12CommandBuffer: Failed to build upload layout for texture '{}'.", texture->get_name());
+			return false;
+		}
+
+		ID3D12Device* device = DX12Context::get()->get_device();
+		if (!device)
+		{
+			return false;
+		}
+
+		const UINT subresourceCount = static_cast<UINT>(subresources.size());
+		std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> layouts(subresourceCount);
+		std::vector<UINT> numRows(subresourceCount);
+		std::vector<UINT64> rowSizesInBytes(subresourceCount);
+		UINT64 totalUploadBytes = 0;
+		const D3D12_RESOURCE_DESC textureDesc = textureResource->GetDesc();
+		device->GetCopyableFootprints(
+			&textureDesc,
+			0,
+			subresourceCount,
+			0,
+			layouts.data(),
+			numRows.data(),
+			rowSizesInBytes.data(),
+			&totalUploadBytes);
+
+		if (totalUploadBytes == 0 || totalUploadBytes > UINT32_MAX)
+		{
+			HLogError("DX12CommandBuffer: Texture upload footprint size is invalid for '{}'.", texture->get_name());
+			return false;
+		}
+
+		std::vector<uint8_t> packedUploadData(static_cast<size_t>(totalUploadBytes), 0u);
+		const uint8_t* sourceData = static_cast<const uint8_t*>(pData);
+		for (UINT subresourceIndex = 0; subresourceIndex < subresourceCount; ++subresourceIndex)
+		{
+			const TextureUploadSubresource& subresource = subresources[subresourceIndex];
+			const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& layout = layouts[subresourceIndex];
+			if (rowSizesInBytes[subresourceIndex] < subresource.rowBytes || numRows[subresourceIndex] < subresource.rowCount)
+			{
+				HLogError("DX12CommandBuffer: Texture upload footprint mismatch for '{}', subresource {}.", texture->get_name(), subresourceIndex);
+				return false;
+			}
+
+			const uint64_t destinationSliceStride = static_cast<uint64_t>(layout.Footprint.RowPitch) * static_cast<uint64_t>(numRows[subresourceIndex]);
+			for (uint32_t depthSlice = 0; depthSlice < subresource.depth; ++depthSlice)
+			{
+				const uint8_t* srcSlice = sourceData + subresource.sourceOffset + static_cast<uint64_t>(depthSlice) * subresource.sliceBytes;
+				uint8_t* dstSlice = packedUploadData.data() + layout.Offset + static_cast<uint64_t>(depthSlice) * destinationSliceStride;
+				for (uint32_t row = 0; row < subresource.rowCount; ++row)
+				{
+					std::memcpy(
+						dstSlice + static_cast<uint64_t>(row) * layout.Footprint.RowPitch,
+						srcSlice + static_cast<uint64_t>(row) * subresource.rowBytes,
+						subresource.rowBytes);
+				}
+			}
+		}
+
+		auto* staging = DX12Context::get()->get_staging_buffer();
+		if (!staging)
+		{
+			return false;
+		}
+
+		auto [stagingResource, stagingOffset] = staging->stage_data(packedUploadData.data(), static_cast<uint32_t>(totalUploadBytes));
+		if (!stagingResource)
+		{
+			return false;
+		}
+
+		if (!cmd_transition_resource_state({ texture, AshResourceState::CopyDst }))
+		{
+			return false;
+		}
+
+		for (UINT subresourceIndex = 0; subresourceIndex < subresourceCount; ++subresourceIndex)
+		{
+			D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
+			sourceLocation.pResource = stagingResource;
+			sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+			sourceLocation.PlacedFootprint = layouts[subresourceIndex];
+			sourceLocation.PlacedFootprint.Offset += stagingOffset;
+
+			D3D12_TEXTURE_COPY_LOCATION destinationLocation{};
+			destinationLocation.pResource = textureResource;
+			destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+			destinationLocation.SubresourceIndex = subresourceIndex;
+
+			m_cmdList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+		}
+
+		if (creation.initial_state != AshResourceState::Unknown && creation.initial_state != AshResourceState::CopyDst)
+		{
+			if (!cmd_transition_resource_state({ texture, AshResourceState::CopyDst, creation.initial_state }))
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	void DX12CommandBuffer::set_descriptor_heaps(ID3D12DescriptorHeap* cbvSrvUavHeap, ID3D12DescriptorHeap* samplerHeap)

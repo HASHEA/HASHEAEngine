@@ -274,13 +274,8 @@ namespace RHI
 		ASH_LOG_PROCESS_ERROR(offset + _size <= m_sCreationInfo.size);
 		if (m_sCreationInfo.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
 		{
-			CommandBuffer* cmdBuffer = VulkanContext::get()->get_command_buffer(0);
-			ASH_LOG_PROCESS_ERROR(cmdBuffer);
-			cmdBuffer->begin_record();
-			bRetCode = cmdBuffer->cmd_update_sub_resource(shared_from_this(), offset, _size, pData);
+			bRetCode = VulkanContext::get()->queue_buffer_upload(shared_from_this(), offset, _size, pData);
 			ASH_LOG_PROCESS_ERROR(bRetCode);
-			cmdBuffer->end_record();
-			VulkanContext::get()->submit_immediately({ cmdBuffer, 1 });
 		}
 		else
 		{

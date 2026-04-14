@@ -13,55 +13,183 @@
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Base/hmemory.h"
+#include "Graphics/TextureUploadUtils.h"
 #include "D3D12MemAlloc.h"
+#include <cstring>
 
 namespace RHI
 {
 	DX12Context* DX12Context::s_instance = nullptr;
 
-	namespace
+	auto DX12Context::queue_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, void* data) -> bool
 	{
-		static bool upload_initial_buffer_data_immediately(
-			ID3D12Device5* device,
-			DX12Context& context,
-			const std::shared_ptr<Buffer>& buffer,
-			uint32_t size,
-			void* initial_data)
+		if (!buffer || !data || size == 0)
 		{
-			if (!device || !buffer || !initial_data || size == 0)
+			return false;
+		}
+
+		if (!m_frameActive || m_frameResources.empty())
+		{
+			return _enqueue_pending_buffer_upload(buffer, offset, size, data);
+		}
+
+		return _record_buffer_upload(m_frameResources[m_currentFrame], buffer, offset, size, data);
+	}
+
+	auto DX12Context::queue_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
+	{
+		if (!texture || !data)
+		{
+			return false;
+		}
+
+		const TextureCreation& creation = texture->get_desciption();
+		const AshDXGIFormatInfo& formatInfo = get_dxgi_format_info(creation.format);
+		if (creation.eSampleCount != ASH_SAMPLE_COUNT_1_BIT ||
+			DX12TextureFormat::is_depth_format(creation.format) ||
+			formatInfo.dxgiFormat == DXGI_FORMAT_UNKNOWN ||
+			formatInfo.uBytesPerBlock == 0 ||
+			formatInfo.uWidthPerBlock == 0 ||
+			formatInfo.uHeightPerBlock == 0)
+		{
+			return false;
+		}
+
+		if (!m_frameActive || m_frameResources.empty())
+		{
+			return _enqueue_pending_texture_upload(texture, data);
+		}
+
+		return _record_texture_upload(m_frameResources[m_currentFrame], texture, data);
+	}
+
+	auto DX12Context::_enqueue_pending_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool
+	{
+		if (!buffer || !data || size == 0)
+		{
+			return false;
+		}
+
+		PendingBufferUpload upload{};
+		upload.buffer = buffer;
+		upload.offset = offset;
+		upload.data.resize(size);
+		std::memcpy(upload.data.data(), data, size);
+		m_pendingBufferUploads.push_back(std::move(upload));
+		return true;
+	}
+
+	auto DX12Context::_enqueue_pending_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
+	{
+		if (!texture || !data)
+		{
+			return false;
+		}
+
+		const TextureCreation& creation = texture->get_desciption();
+		const AshDXGIFormatInfo& formatInfo = get_dxgi_format_info(creation.format);
+		TextureUploadFormatInfo uploadFormatInfo{};
+		uploadFormatInfo.bytesPerBlock = formatInfo.uBytesPerBlock;
+		uploadFormatInfo.widthPerBlock = formatInfo.uWidthPerBlock;
+		uploadFormatInfo.heightPerBlock = formatInfo.uHeightPerBlock;
+
+		std::vector<TextureUploadSubresource> subresources{};
+		uint64_t totalBytes = 0;
+		if (!build_tightly_packed_texture_upload_layout(creation, uploadFormatInfo, subresources, totalBytes) || totalBytes == 0 || totalBytes > UINT32_MAX)
+		{
+			return false;
+		}
+
+		PendingTextureUpload upload{};
+		upload.texture = texture;
+		upload.data.resize(static_cast<size_t>(totalBytes));
+		std::memcpy(upload.data.data(), data, static_cast<size_t>(totalBytes));
+		m_pendingTextureUploads.push_back(std::move(upload));
+		return true;
+	}
+
+	auto DX12Context::_ensure_upload_command_buffer_recording(DX12FrameResources& frameResources) -> bool
+	{
+		if (!frameResources.uploadCmdAllocator || !frameResources.uploadCmdBuffer)
+		{
+			return false;
+		}
+
+		if (!frameResources.uploadCommandsPending)
+		{
+			frameResources.uploadCmdBuffer->set_allocator(frameResources.uploadCmdAllocator->get_allocator());
+			frameResources.uploadCmdBuffer->begin_record();
+			frameResources.uploadCommandsPending = true;
+		}
+
+		return true;
+	}
+
+	auto DX12Context::_record_buffer_upload(DX12FrameResources& frameResources, const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool
+	{
+		if (!buffer || !data || size == 0)
+		{
+			return false;
+		}
+		if (!_ensure_upload_command_buffer_recording(frameResources))
+		{
+			return false;
+		}
+
+		return frameResources.uploadCmdBuffer->cmd_update_sub_resource(buffer, offset, size, const_cast<void*>(data));
+	}
+
+	auto DX12Context::_record_texture_upload(DX12FrameResources& frameResources, const std::shared_ptr<Texture>& texture, const void* data) -> bool
+	{
+		if (!texture || !data)
+		{
+			return false;
+		}
+		if (!_ensure_upload_command_buffer_recording(frameResources))
+		{
+			return false;
+		}
+
+		return frameResources.uploadCmdBuffer->cmd_update_texture_sub_resource(texture, data);
+	}
+
+	auto DX12Context::_flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool
+	{
+		for (const PendingBufferUpload& upload : m_pendingBufferUploads)
+		{
+			if (!_record_buffer_upload(frameResources, upload.buffer, upload.offset, static_cast<uint32_t>(upload.data.size()), upload.data.data()))
 			{
 				return false;
 			}
+		}
 
-			DX12CommandPool upload_allocator;
-			if (!upload_allocator.init(device, D3D12_COMMAND_LIST_TYPE_DIRECT))
-			{
-				HLogError("DX12Context: Failed to create temporary upload command allocator.");
-				return false;
-			}
+		m_pendingBufferUploads.clear();
+		return true;
+	}
 
-			DX12CommandBuffer upload_command_buffer;
-			if (!upload_command_buffer.init(device, D3D12_COMMAND_LIST_TYPE_DIRECT))
-			{
-				HLogError("DX12Context: Failed to create temporary upload command buffer.");
-				return false;
-			}
-
-			upload_command_buffer.set_allocator(upload_allocator.get_allocator());
-			upload_command_buffer.begin_record();
-			const bool transition_ok = upload_command_buffer.cmd_transition_resource_state({ buffer, AshResourceState::CopyDst });
-			const bool upload_ok = transition_ok && upload_command_buffer.cmd_update_sub_resource(buffer, 0, size, initial_data);
-			upload_command_buffer.end_record();
-			if (!upload_ok)
+	auto DX12Context::_flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool
+	{
+		for (const PendingTextureUpload& upload : m_pendingTextureUploads)
+		{
+			if (!_record_texture_upload(frameResources, upload.texture, upload.data.data()))
 			{
 				return false;
 			}
+		}
 
-			SubmitInfo submit_info{};
-			submit_info.cmds = &upload_command_buffer;
-			submit_info.cmdCount = 1;
-			context.submit_immediately(submit_info);
-			return true;
+		m_pendingTextureUploads.clear();
+		return true;
+	}
+
+	auto DX12Context::_finalize_upload_command_buffer(DX12FrameResources& frameResources) -> void
+	{
+		if (!frameResources.uploadCommandsPending || !frameResources.uploadCmdBuffer)
+		{
+			return;
+		}
+		if (frameResources.uploadCmdBuffer->get_state() == AshCommandBufferState::ASH_Recording)
+		{
+			frameResources.uploadCmdBuffer->end_record();
 		}
 	}
 
@@ -288,10 +416,15 @@ namespace RHI
 			auto& fr = m_frameResources[i];
 			fr.cmdAllocator = Ash_New<DX12CommandPool>();
 			fr.cmdAllocator->init(m_device.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+			fr.uploadCmdAllocator = Ash_New<DX12CommandPool>();
+			fr.uploadCmdAllocator->init(m_device.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
+			fr.uploadCmdBuffer = Ash_New<DX12CommandBuffer>();
+			fr.uploadCmdBuffer->init(m_device.Get(), D3D12_COMMAND_LIST_TYPE_DIRECT);
 
 			fr.fence = Ash_New<DX12Fence>();
 			fr.fence->init(m_device.Get(), 0);
 			fr.fenceValue = 0;
+			fr.uploadCommandsPending = false;
 		}
 
 		// Create command buffers (one per thread)
@@ -314,6 +447,18 @@ namespace RHI
 	{
 		for (auto& fr : m_frameResources)
 		{
+			if (fr.uploadCmdBuffer)
+			{
+				fr.uploadCmdBuffer->shutdown();
+				Ash_Delete(nullptr, fr.uploadCmdBuffer);
+				fr.uploadCmdBuffer = nullptr;
+			}
+			if (fr.uploadCmdAllocator)
+			{
+				fr.uploadCmdAllocator->shutdown();
+				Ash_Delete(nullptr, fr.uploadCmdAllocator);
+				fr.uploadCmdAllocator = nullptr;
+			}
 			if (fr.cmdAllocator)
 			{
 				fr.cmdAllocator->shutdown();
@@ -345,6 +490,12 @@ namespace RHI
 
 		// Reset command allocator for this frame
 		fr.cmdAllocator->reset();
+		fr.uploadCmdAllocator->reset();
+		if (fr.uploadCmdBuffer)
+		{
+			fr.uploadCmdBuffer->set_state(ASH_Idle);
+		}
+		fr.uploadCommandsPending = false;
 
 		// Reset shader-visible descriptor heaps
 		m_descriptorHeaps.begin_frame();
@@ -356,10 +507,32 @@ namespace RHI
 
 		// Process delayed deletions
 		m_delayedDeletionQueues[m_currentFrame].flush();
+		m_frameActive = true;
+		if (!_flush_pending_buffer_uploads(fr))
+		{
+			HLogError("DX12Context: Failed to flush pending buffer uploads for frame {}.", m_currentFrame);
+		}
+		if (!_flush_pending_texture_uploads(fr))
+		{
+			HLogError("DX12Context: Failed to flush pending texture uploads for frame {}.", m_currentFrame);
+		}
 	}
 
 	auto DX12Context::end_frame() -> void
 	{
+		auto& fr = m_frameResources[m_currentFrame];
+		if (fr.uploadCommandsPending)
+		{
+			_finalize_upload_command_buffer(fr);
+			std::vector<ID3D12CommandList*> uploadCmdLists{};
+			uploadCmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
+			m_graphicsQueue.execute_command_lists(static_cast<UINT>(uploadCmdLists.size()), uploadCmdLists.data());
+			fr.uploadCmdBuffer->set_state(ASH_Submitted);
+			fr.uploadCommandsPending = false;
+			fr.fence->signal(m_graphicsQueue.get_queue());
+		}
+
+		m_frameActive = false;
 		m_previousFrame = m_currentFrame;
 		m_absoluteFrame++;
 	}
@@ -393,10 +566,20 @@ namespace RHI
 	auto DX12Context::submit(const SubmitInfo& info) -> void
 	{
 		std::vector<ID3D12CommandList*> cmdLists;
+		auto& fr = m_frameResources[m_currentFrame];
+		if (fr.uploadCommandsPending)
+		{
+			_finalize_upload_command_buffer(fr);
+			cmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
+			fr.uploadCmdBuffer->set_state(ASH_Submitted);
+			fr.uploadCommandsPending = false;
+		}
+
 		for (uint32_t i = 0; i < info.cmdCount; ++i)
 		{
 			auto* dx12Cb = static_cast<DX12CommandBuffer*>(&info.cmds[i]);
 			cmdLists.push_back(dx12Cb->get_command_list());
+			dx12Cb->set_state(ASH_Submitted);
 		}
 
 		if (!cmdLists.empty())
@@ -405,7 +588,6 @@ namespace RHI
 		}
 
 		// Signal fence for this frame
-		auto& fr = m_frameResources[m_currentFrame];
 		fr.fence->signal(m_graphicsQueue.get_queue());
 	}
 
@@ -443,9 +625,9 @@ namespace RHI
 
 		if (ci.initial_data && ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
 		{
-			if (!upload_initial_buffer_data_immediately(m_device.Get(), *this, buffer, ci.size, ci.initial_data))
+			if (!queue_buffer_upload(buffer, 0, ci.size, ci.initial_data))
 			{
-				HLogError("DX12Context: Failed to upload initial data for buffer '{}'.", ci.name ? ci.name : "UnnamedBuffer");
+				HLogError("DX12Context: Failed to enqueue initial data upload for buffer '{}'.", ci.name ? ci.name : "UnnamedBuffer");
 				return nullptr;
 			}
 		}
@@ -466,6 +648,14 @@ namespace RHI
 		auto texture = std::make_shared<DX12Texture>();
 		if (!texture->init(ci, m_device.Get(), m_d3d12maAllocator, &m_descriptorHeaps))
 			return nullptr;
+		if (ci.initial_data)
+		{
+			if (!queue_texture_upload(texture, ci.initial_data))
+			{
+				HLogError("DX12Context: Failed to enqueue initial data upload for texture '{}'.", ci.name ? ci.name : "UnnamedTexture");
+				return nullptr;
+			}
+		}
 		return texture;
 	}
 

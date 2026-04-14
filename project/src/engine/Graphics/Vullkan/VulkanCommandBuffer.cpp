@@ -8,6 +8,9 @@
 #include "VulkanStagingBuffer.h"
 #include "Graphics/CommandBuffer.h"
 #include "Graphics/Buffer.h"
+#include "Graphics/TextureUploadUtils.h"
+#include <cstring>
+#include <numeric>
 namespace RHI
 {
 	static void get_vk_stage_and_access_flags(AshResourceState RHIAccess, AshBarrier::EType ResourceType, uint32_t UsageFlags,
@@ -654,6 +657,108 @@ namespace RHI
 				VulkanContext::get()->vma_unmap_memory(pVMAllocation);
 			}
 		}
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
+
+	auto VulkanCommandBuffer::cmd_update_texture_sub_resource(std::shared_ptr<Texture> pTexture, const void* pData) -> bool
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_LOG_PROCESS_ERROR(pTexture && pData);
+
+		auto pVulkanTexture = std::static_pointer_cast<VulkanTexture>(pTexture);
+		ASH_LOG_PROCESS_ERROR(pVulkanTexture);
+
+		const TextureCreation& creation = pVulkanTexture->get_desciption();
+		ASH_LOG_PROCESS_ERROR(creation.eSampleCount == ASH_SAMPLE_COUNT_1_BIT);
+		ASH_LOG_PROCESS_ERROR(!pVulkanTexture->is_sparse());
+
+		const AshTextureFormatInfo& formatInfo = get_vk_texture_format_info(creation.format);
+		ASH_LOG_PROCESS_ERROR(formatInfo.vkFormat != VK_FORMAT_UNDEFINED);
+		ASH_LOG_PROCESS_ERROR(!TextureFormat::has_depth_or_stencil(formatInfo.vkFormat));
+
+		TextureUploadFormatInfo uploadFormatInfo{};
+		uploadFormatInfo.bytesPerBlock = formatInfo.uBytesPerBlock;
+		uploadFormatInfo.widthPerBlock = formatInfo.uWidthPerBlock;
+		uploadFormatInfo.heightPerBlock = formatInfo.uHeightPerBlock;
+
+		std::vector<TextureUploadSubresource> subresources{};
+		uint64_t tightPackedBytes = 0;
+		ASH_LOG_PROCESS_ERROR(build_tightly_packed_texture_upload_layout(creation, uploadFormatInfo, subresources, tightPackedBytes));
+		ASH_LOG_PROCESS_ERROR(!subresources.empty() && tightPackedBytes > 0);
+
+		const uint32_t offsetAlignment = std::lcm<uint32_t>(4u, std::max<uint32_t>(1u, formatInfo.uBytesPerBlock));
+		auto align_up = [offsetAlignment](uint64_t value) -> uint64_t
+			{
+				const uint64_t alignment = static_cast<uint64_t>(offsetAlignment);
+				return (value + alignment - 1ull) / alignment * alignment;
+			};
+
+		std::vector<uint64_t> stagingOffsets(subresources.size(), 0ull);
+		uint64_t stagingSize = 0;
+		for (size_t index = 0; index < subresources.size(); ++index)
+		{
+			stagingSize = align_up(stagingSize);
+			stagingOffsets[index] = stagingSize;
+			stagingSize += subresources[index].sourceSize;
+		}
+
+		ASH_LOG_PROCESS_ERROR(stagingSize > 0 && stagingSize <= UINT32_MAX);
+		auto pVulkanStagingBuffer = Ash_New_Shared<VulkanStagingBuffer>(static_cast<uint32_t>(stagingSize), nullptr, false);
+		ASH_LOG_PROCESS_ERROR(pVulkanStagingBuffer);
+
+		bool bRetCode = pVulkanStagingBuffer->map(0, static_cast<uint32_t>(stagingSize));
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+		uint8_t* mappedData = reinterpret_cast<uint8_t*>(pVulkanStagingBuffer->get_mapped_memory());
+		ASH_PROCESS_ERROR_EXIT(mappedData);
+
+		const uint8_t* sourceData = reinterpret_cast<const uint8_t*>(pData);
+		for (size_t index = 0; index < subresources.size(); ++index)
+		{
+			const TextureUploadSubresource& subresource = subresources[index];
+			std::memcpy(
+				mappedData + stagingOffsets[index],
+				sourceData + subresource.sourceOffset,
+				static_cast<size_t>(subresource.sourceSize));
+		}
+
+		bRetCode = pVulkanStagingBuffer->unmap();
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+		bRetCode = cmd_transition_resource_state({ pTexture, AshResourceState::CopyDst });
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+
+		std::vector<VkBufferImageCopy> copyRegions(subresources.size());
+		for (size_t index = 0; index < subresources.size(); ++index)
+		{
+			const TextureUploadSubresource& subresource = subresources[index];
+			VkBufferImageCopy& copyRegion = copyRegions[index];
+			copyRegion.bufferOffset = stagingOffsets[index];
+			copyRegion.bufferRowLength = 0;
+			copyRegion.bufferImageHeight = 0;
+			copyRegion.imageSubresource.aspectMask = pVulkanTexture->get_vk_aspect_flags();
+			copyRegion.imageSubresource.mipLevel = subresource.mipLevel;
+			copyRegion.imageSubresource.baseArrayLayer = creation.type == Ash_Texture3D ? 0u : subresource.arrayLayer;
+			copyRegion.imageSubresource.layerCount = 1;
+			copyRegion.imageExtent.width = subresource.width;
+			copyRegion.imageExtent.height = subresource.height;
+			copyRegion.imageExtent.depth = subresource.depth;
+		}
+
+		vkCmdCopyBufferToImage(
+			vkCommandBuffer,
+			pVulkanStagingBuffer->get_vkbuffer_handle(),
+			pVulkanTexture->get_vk_image(),
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			static_cast<uint32_t>(copyRegions.size()),
+			copyRegions.data());
+
+		if (creation.initial_state != AshResourceState::Unknown && creation.initial_state != AshResourceState::CopyDst)
+		{
+			bRetCode = cmd_transition_resource_state({ pTexture, AshResourceState::CopyDst, creation.initial_state });
+			ASH_LOG_PROCESS_ERROR(bRetCode);
+		}
+
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}

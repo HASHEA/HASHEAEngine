@@ -298,8 +298,10 @@ namespace RHI
 		{
 			return vulkanStagingBufferPool;
 		}
+		auto queue_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, void* data) -> bool;
+		auto queue_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
 		
-	public:
+public:
 		/********************************************************** RHI INTERFACE ******************************************************************************************************/
 		auto create_buffer_view(const BufferViewCreation& ci, std::shared_ptr<Buffer> parentBuffer) -> std::shared_ptr<BufferView> override;
 		auto create_buffer(const BufferCreation& ci) -> std::shared_ptr<Buffer> override;
@@ -359,12 +361,33 @@ namespace RHI
 
 		auto _create_staging_buffer_pool() -> bool;
 		auto _shutdown_staging_buffer_pool() -> bool;
+		auto _enqueue_pending_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool;
+		auto _enqueue_pending_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
+		auto _ensure_upload_command_buffer_recording() -> bool;
+		auto _record_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool;
+		auto _record_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
+		auto _flush_pending_buffer_uploads() -> bool;
+		auto _flush_pending_texture_uploads() -> bool;
+		auto _finalize_upload_command_buffer() -> void;
 		auto _track_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, uint64_t size, const char* debugName, const char* file, uint32_t line, const char* function) -> void;
 		auto _untrack_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, const char* file, uint32_t line, const char* function) -> void;
 		auto _dump_vma_leaks() const -> void;
 		auto _capture_vma_allocation_stack(VmaTrackedAllocationInfo& info) const -> void;
 		auto _shutdown_shader_pool() -> bool;
-	private:
+private:
+		struct PendingBufferUpload
+		{
+			std::shared_ptr<Buffer> buffer = nullptr;
+			uint32_t offset = 0;
+			std::vector<uint8_t> data{};
+		};
+
+		struct PendingTextureUpload
+		{
+			std::shared_ptr<Texture> texture = nullptr;
+			std::vector<uint8_t> data{};
+		};
+
 		BitSetFixed<16> featureSwitchFlags{};
 		VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{};
 		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipelineProperties{};
@@ -405,9 +428,15 @@ namespace RHI
 		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
 		VulkanStagingBufferPool*								vulkanStagingBufferPool					 = nullptr;
 		std::unordered_map<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;
-	private:
+		std::vector<PendingBufferUpload>						pendingBufferUploads{};
+		std::vector<PendingTextureUpload>						pendingTextureUploads{};
+private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
+		VulkanCommandBuffer*		 currentUploadCommandBuffer = nullptr;
+		bool						 uploadCommandsPending = false;
+		bool						 uploadCommandQueued = false;
+		bool						 frameActive = false;
 private:
 		float									gpuTimestampFrequency = 0.f;
 		size_t									uboAlignment = 256;

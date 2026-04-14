@@ -356,6 +356,28 @@ GpuValidation=true
 
 如果以后改动这条规则，必须同时验证 Vulkan 与 DX12。
 
+### 6.5 GPU Upload Command Path
+
+当前 GPU 资源的 CPU->GPU 初始数据上传，统一不再走“创建/更新时立即提交并等待”的路径，而是改为：
+
+- 每帧维护一条专用 upload command buffer / command list
+- 当帧内发生 GPU-only buffer 的 `initial_data` / `update()`，或 texture 的 `initial_data` 上传时，把 copy/upload 命令记录到这条 upload cmd
+- 帧结束提交时，upload cmd 会先于主 render command buffer 提交
+- 如果上传请求发生在 frame 之外，则先把数据复制进 pending upload 队列，并在下一次 `begin_frame()` 时灌入 upload cmd
+
+当前这条路径覆盖：
+
+- GPU-only buffer 的创建初始数据上传
+- GPU-only buffer 的后续 `update()` 上传
+- texture 创建时的 `initial_data` 上传
+
+这样做的约束是：
+
+- 这些上传默认都是“随下一次帧提交生效”，不再是即时阻塞提交
+- 共享高层渲染路径应假定 upload cmd 与 render cmd 处于同一帧提交流水中
+- texture `initial_data` 当前按“整张纹理紧密排列的完整初始内容”解释，并在 backend 内部展开成各 subresource copy
+- 多采样纹理、深度/模板纹理、稀疏纹理的 `initial_data` 上传当前不走这条通路；如果以后要补，优先继续复用同一套 per-frame upload cmd 设计
+
 ---
 
 ## 7. Function 层高层渲染资源模型

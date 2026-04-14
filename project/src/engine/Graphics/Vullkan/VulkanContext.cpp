@@ -20,7 +20,9 @@
 #if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
 #endif
+#include "Graphics/TextureUploadUtils.h"
 #include <array>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -1488,9 +1490,198 @@ auto VulkanContext::destroy() -> void
 		return buffer;
 	}
 
+	auto VulkanContext::queue_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, void* data) -> bool
+	{
+		if (!buffer || !data || size == 0)
+		{
+			return false;
+		}
+
+		if (!frameActive)
+		{
+			return _enqueue_pending_buffer_upload(buffer, offset, size, data);
+		}
+
+		return _record_buffer_upload(buffer, offset, size, data);
+	}
+
+	auto VulkanContext::queue_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
+	{
+		if (!texture || !data)
+		{
+			return false;
+		}
+
+		const auto vulkanTexture = std::static_pointer_cast<VulkanTexture>(texture);
+		const TextureCreation& creation = vulkanTexture->get_desciption();
+		const AshTextureFormatInfo& formatInfo = get_vk_texture_format_info(creation.format);
+		if (creation.eSampleCount != ASH_SAMPLE_COUNT_1_BIT ||
+			vulkanTexture->is_sparse() ||
+			formatInfo.vkFormat == VK_FORMAT_UNDEFINED ||
+			TextureFormat::has_depth_or_stencil(formatInfo.vkFormat))
+		{
+			return false;
+		}
+
+		if (!frameActive)
+		{
+			return _enqueue_pending_texture_upload(texture, data);
+		}
+
+		return _record_texture_upload(texture, data);
+	}
+
+	auto VulkanContext::_enqueue_pending_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool
+	{
+		if (!buffer || !data || size == 0)
+		{
+			return false;
+		}
+
+		PendingBufferUpload upload{};
+		upload.buffer = buffer;
+		upload.offset = offset;
+		upload.data.resize(size);
+		std::memcpy(upload.data.data(), data, size);
+		pendingBufferUploads.push_back(std::move(upload));
+		return true;
+	}
+
+	auto VulkanContext::_enqueue_pending_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
+	{
+		if (!texture || !data)
+		{
+			return false;
+		}
+
+		const TextureCreation& creation = texture->get_desciption();
+		const AshTextureFormatInfo& formatInfo = get_vk_texture_format_info(creation.format);
+		TextureUploadFormatInfo uploadFormatInfo{};
+		uploadFormatInfo.bytesPerBlock = formatInfo.uBytesPerBlock;
+		uploadFormatInfo.widthPerBlock = formatInfo.uWidthPerBlock;
+		uploadFormatInfo.heightPerBlock = formatInfo.uHeightPerBlock;
+
+		std::vector<TextureUploadSubresource> subresources{};
+		uint64_t totalBytes = 0;
+		if (!build_tightly_packed_texture_upload_layout(creation, uploadFormatInfo, subresources, totalBytes) || totalBytes == 0 || totalBytes > UINT32_MAX)
+		{
+			return false;
+		}
+
+		PendingTextureUpload upload{};
+		upload.texture = texture;
+		upload.data.resize(static_cast<size_t>(totalBytes));
+		std::memcpy(upload.data.data(), data, static_cast<size_t>(totalBytes));
+		pendingTextureUploads.push_back(std::move(upload));
+		return true;
+	}
+
+	auto VulkanContext::_ensure_upload_command_buffer_recording() -> bool
+	{
+		if (!frameActive)
+		{
+			return false;
+		}
+
+		if (!uploadCommandsPending)
+		{
+			currentUploadCommandBuffer = static_cast<VulkanCommandBuffer*>(get_command_buffer(0));
+			if (!currentUploadCommandBuffer)
+			{
+				return false;
+			}
+			currentUploadCommandBuffer->begin_record();
+			uploadCommandsPending = true;
+			uploadCommandQueued = false;
+		}
+
+		return currentUploadCommandBuffer != nullptr;
+	}
+
+	auto VulkanContext::_record_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool
+	{
+		if (!buffer || !data || size == 0)
+		{
+			return false;
+		}
+		if (!_ensure_upload_command_buffer_recording())
+		{
+			return false;
+		}
+
+		return currentUploadCommandBuffer->cmd_update_sub_resource(buffer, offset, size, const_cast<void*>(data));
+	}
+
+	auto VulkanContext::_record_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
+	{
+		if (!texture || !data)
+		{
+			return false;
+		}
+		if (!_ensure_upload_command_buffer_recording())
+		{
+			return false;
+		}
+
+		return currentUploadCommandBuffer->cmd_update_texture_sub_resource(texture, data);
+	}
+
+	auto VulkanContext::_flush_pending_buffer_uploads() -> bool
+	{
+		for (const PendingBufferUpload& upload : pendingBufferUploads)
+		{
+			if (!_record_buffer_upload(upload.buffer, upload.offset, static_cast<uint32_t>(upload.data.size()), upload.data.data()))
+			{
+				return false;
+			}
+		}
+
+		pendingBufferUploads.clear();
+		return true;
+	}
+
+	auto VulkanContext::_flush_pending_texture_uploads() -> bool
+	{
+		for (const PendingTextureUpload& upload : pendingTextureUploads)
+		{
+			if (!_record_texture_upload(upload.texture, upload.data.data()))
+			{
+				return false;
+			}
+		}
+
+		pendingTextureUploads.clear();
+		return true;
+	}
+
+	auto VulkanContext::_finalize_upload_command_buffer() -> void
+	{
+		if (!uploadCommandsPending || !currentUploadCommandBuffer)
+		{
+			return;
+		}
+		if (currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Recording)
+		{
+			currentUploadCommandBuffer->end_record();
+		}
+	}
+
 	auto VulkanContext::create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture>
 	{
-		return VulkanTexture::create(ci);
+		std::shared_ptr<Texture> texture = VulkanTexture::create(ci);
+		if (!texture)
+		{
+			return nullptr;
+		}
+		if (ci.initial_data)
+		{
+			if (!queue_texture_upload(texture, ci.initial_data))
+			{
+				HLogError("VulkanContext: Failed to enqueue initial data upload for texture '{}'.", ci.name ? ci.name : "UnnamedTexture");
+				return nullptr;
+			}
+		}
+		return texture;
 	}
 
 	auto VulkanContext::create_texture_view(const TextureViewCreation& ci, std::shared_ptr<Texture> parentTexture) -> std::shared_ptr<TextureView>
@@ -1624,7 +1815,15 @@ auto VulkanContext::destroy() -> void
 
 	auto VulkanContext::submit(const SubmitInfo& info) -> void
 	{
-		H_ASSERTLOG(info.cmdCount <= k_command_buffer_queue_length, "Fatal: command count exceeds queue length.");
+		const uint32_t extraUploadCommandCount = (uploadCommandsPending && !uploadCommandQueued) ? 1u : 0u;
+		H_ASSERTLOG(commandBufferQueue.size() + info.cmdCount + extraUploadCommandCount <= k_command_buffer_queue_length, "Fatal: command count exceeds queue length.");
+		if (uploadCommandsPending && !uploadCommandQueued)
+		{
+			_finalize_upload_command_buffer();
+			H_ASSERTLOG(currentUploadCommandBuffer && currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Ended, "Fatal: upload command buffer must be ended before queue submit.");
+			commandBufferQueue.push_back(currentUploadCommandBuffer);
+			uploadCommandQueued = true;
+		}
 		//enqueue vkCommandBuffer
 		for (size_t i = 0; i < info.cmdCount; i++)
 		{
@@ -1709,10 +1908,31 @@ auto VulkanContext::destroy() -> void
 			FramePool& pool = framePools[currentFrame * num_thread + i];
 			pool.cmdPool->reset();
 		}
+		currentUploadCommandBuffer = nullptr;
+		uploadCommandsPending = false;
+		uploadCommandQueued = false;
+		frameActive = true;
+		if (!_flush_pending_buffer_uploads())
+		{
+			HLogError("VulkanContext: Failed to flush pending buffer uploads for frame {}.", currentFrame);
+		}
+		if (!_flush_pending_texture_uploads())
+		{
+			HLogError("VulkanContext: Failed to flush pending texture uploads for frame {}.", currentFrame);
+		}
 	}
 
 	auto VulkanContext::end_frame() -> void
 	{
+		if (uploadCommandsPending && !uploadCommandQueued)
+		{
+			_finalize_upload_command_buffer();
+			if (currentUploadCommandBuffer && currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Ended)
+			{
+				commandBufferQueue.push_back(currentUploadCommandBuffer);
+				uploadCommandQueued = true;
+			}
+		}
 		//submit all commands
 		size_t count = commandBufferQueue.size();
 		VkCommandBuffer cmds[k_command_buffer_queue_length] = {};
@@ -1839,7 +2059,11 @@ auto VulkanContext::destroy() -> void
 				submit_info.pSignalSemaphores = &presentCompleteSemaphore;
 				VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
 			}		
-		}	
+		}
+		frameActive = false;
+		currentUploadCommandBuffer = nullptr;
+		uploadCommandsPending = false;
+		uploadCommandQueued = false;
 	}
 
 	/********************************************************** RHI INTERFACE ******************************************************************************************************/

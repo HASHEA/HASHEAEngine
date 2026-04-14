@@ -147,6 +147,11 @@ namespace RHI
 			memcpy(m_mappedData + offset, pData, size);
 			return true;
 		}
+		if (m_creation.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
+		{
+			DX12Context* context = DX12Context::get();
+			return context ? context->queue_buffer_upload(shared_from_this(), offset, size, pData) : false;
+		}
 		return false;
 	}
 

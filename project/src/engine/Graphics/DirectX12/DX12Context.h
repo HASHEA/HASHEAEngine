@@ -34,8 +34,11 @@ namespace RHI
 	struct DX12FrameResources
 	{
 		DX12CommandPool* cmdAllocator = nullptr;
+		DX12CommandPool* uploadCmdAllocator = nullptr;
+		DX12CommandBuffer* uploadCmdBuffer = nullptr;
 		DX12Fence* fence = nullptr;
 		uint64_t fenceValue = 0;
+		bool uploadCommandsPending = false;
 	};
 
 	class DX12Context : public GraphicsContext
@@ -65,6 +68,9 @@ namespace RHI
 		{
 			return m_delayedDeletionQueues[m_currentFrame];
 		}
+
+		auto queue_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, void* data) -> bool;
+		auto queue_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
 
 	public:
 		// RHI Device Interfaces
@@ -96,8 +102,29 @@ namespace RHI
 		auto _create_frame_resources(uint16_t numThread) -> bool;
 		auto _enable_debug_layer() -> bool;
 		auto _shutdown_frame_resources() -> bool;
+		auto _enqueue_pending_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool;
+		auto _enqueue_pending_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
+		auto _ensure_upload_command_buffer_recording(DX12FrameResources& frameResources) -> bool;
+		auto _record_buffer_upload(DX12FrameResources& frameResources, const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool;
+		auto _record_texture_upload(DX12FrameResources& frameResources, const std::shared_ptr<Texture>& texture, const void* data) -> bool;
+		auto _flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool;
+		auto _flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool;
+		auto _finalize_upload_command_buffer(DX12FrameResources& frameResources) -> void;
 
 	private:
+		struct PendingBufferUpload
+		{
+			std::shared_ptr<Buffer> buffer = nullptr;
+			uint32_t offset = 0;
+			std::vector<uint8_t> data{};
+		};
+
+		struct PendingTextureUpload
+		{
+			std::shared_ptr<Texture> texture = nullptr;
+			std::vector<uint8_t> data{};
+		};
+
 		bool m_enableDebugLayer = false;
 		bool m_enableGpuValidation = false;
 		ComPtr<IDXGIFactory6> m_factory;
@@ -125,6 +152,8 @@ namespace RHI
 
 		// Staging buffer
 		DX12StagingBuffer* m_stagingBuffer = nullptr;
+		std::vector<PendingBufferUpload> m_pendingBufferUploads{};
+		std::vector<PendingTextureUpload> m_pendingTextureUploads{};
 
 		// Frame tracking
 		uint32_t m_currentFrame = 0;
@@ -132,6 +161,7 @@ namespace RHI
 		uint64_t m_absoluteFrame = 0;
 		uint16_t m_numThread = 0;
 		D3D_SHADER_MODEL m_highestShaderModel = D3D_SHADER_MODEL_6_0;
+		bool m_frameActive = false;
 
 	private:
 		static DX12Context* s_instance;
