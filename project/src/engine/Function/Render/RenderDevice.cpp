@@ -253,6 +253,24 @@ namespace AshEngine
 		{
 			return std::shared_ptr<RHI::CommandBuffer>(command_buffer, [](RHI::CommandBuffer*) {});
 		}
+
+		static bool is_srgb_format(RHI::AshFormat format)
+		{
+			switch (format)
+			{
+			case RHI::ASH_FORMAT_R8G8B8A8_SRGB:
+			case RHI::ASH_FORMAT_B8G8R8A8_SRGB:
+			case RHI::ASH_FORMAT_BC7_SRGB_UNORM:
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		static constexpr RenderTextureFormat k_public_back_buffer_format = RenderTextureFormat::BGRA8_SRGB;
+		static constexpr const char* k_public_back_buffer_name = "EngineBackBufferOffscreen";
+		static constexpr const char* k_back_buffer_present_shader_path = "project/src/engine/Function/Render/Shaders/BackBufferPresent.hlsl";
+		static constexpr const char* k_back_buffer_present_program_name = "EngineBackBufferPresentProgram";
 	}
 
 	class RenderTarget::Impl
@@ -374,13 +392,64 @@ namespace AshEngine
 		std::shared_ptr<RHI::RenderPass> current_render_pass = nullptr;
 		RenderPassSignature current_pass_signature{};
 		std::shared_ptr<RenderTarget::Impl> back_buffer_target = nullptr;
+		std::shared_ptr<RenderTarget::Impl> swapchain_target = nullptr;
 		std::unordered_map<uint64_t, std::vector<std::shared_ptr<RenderTarget>>> transient_render_target_pool;
 		bool viewport_override_active = false;
 		RenderViewport viewport_override{};
 		bool scissor_override_active = false;
 		RenderScissor scissor_override{};
 		bool back_buffer_written_this_frame = false;
+		std::unique_ptr<GraphicsProgram> present_program = nullptr;
+		bool present_program_output_is_srgb = false;
 	};
+
+	static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
+		RHI::GraphicsContext* graphics_context,
+		const RenderTargetDesc& desc)
+	{
+		if (!graphics_context || desc.width == 0 || desc.height == 0 || desc.format == RenderTextureFormat::Unknown)
+		{
+			return nullptr;
+		}
+
+		RHI::TextureCreation texture_creation{};
+		texture_creation.width = desc.width;
+		texture_creation.height = desc.height;
+		texture_creation.depth = 1;
+		texture_creation.array_layer_count = 1;
+		texture_creation.mip_level_count = 1;
+		texture_creation.format = to_rhi_format(desc.format);
+		texture_creation.type = RHI::Ash_Texture2D;
+		texture_creation.initial_state = RHI::AshResourceState::Unknown;
+		texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+		texture_creation.name = desc.name;
+
+		const bool depth_stencil = is_depth_format(desc.format);
+		texture_creation.uUsageFlags = depth_stencil ? RHI::ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : RHI::ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
+		if (desc.shader_resource)
+		{
+			texture_creation.uUsageFlags |= RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
+		}
+		if (desc.unordered_access)
+		{
+			texture_creation.uUsageFlags |= RHI::ASH_TEXTURE_USAGE_STORAGE_BIT;
+		}
+
+		std::shared_ptr<RHI::Texture> texture = graphics_context->create_texture(texture_creation);
+		if (!texture)
+		{
+			return nullptr;
+		}
+
+		auto impl = std::make_shared<RenderTarget::Impl>();
+		impl->kind = RenderTarget::Impl::Kind::Texture;
+		impl->texture = texture;
+		impl->shader_resource = desc.shader_resource;
+		impl->unordered_access = desc.unordered_access;
+		impl->depth_stencil = depth_stencil;
+		impl->format = desc.format;
+		return impl;
+	}
 
 	static void apply_program_state(GraphicsProgram::Impl& impl, RHI::IGraphicsRenderProgram& program)
 	{
@@ -1762,12 +1831,15 @@ namespace AshEngine
 		m_impl->graphics_context = graphics_context;
 		m_impl->swapchain = swapchain;
 		m_impl->back_buffer_target = std::make_shared<RenderTarget::Impl>();
-		m_impl->back_buffer_target->kind = RenderTarget::Impl::Kind::BackBuffer;
-		m_impl->back_buffer_target->swapchain = swapchain;
-		m_impl->back_buffer_target->shader_resource = false;
+		m_impl->back_buffer_target->kind = RenderTarget::Impl::Kind::Texture;
+		m_impl->back_buffer_target->shader_resource = true;
 		m_impl->back_buffer_target->unordered_access = false;
 		m_impl->back_buffer_target->depth_stencil = false;
-		m_impl->back_buffer_target->format = RenderTextureFormat::BGRA8_SRGB;
+		m_impl->back_buffer_target->format = k_public_back_buffer_format;
+
+		m_impl->swapchain_target = std::make_shared<RenderTarget::Impl>();
+		sync_swapchain_target();
+		ensure_back_buffer_target();
 	}
 
 	RenderDevice::~RenderDevice()
@@ -1780,7 +1852,9 @@ namespace AshEngine
 		m_impl->current_command_buffer = nullptr;
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
+		m_impl->present_program.reset();
 		m_impl->back_buffer_target.reset();
+		m_impl->swapchain_target.reset();
 		m_impl->transient_render_target_pool.clear();
 		m_impl->graphics_context = nullptr;
 		m_impl->swapchain = nullptr;
@@ -1795,6 +1869,11 @@ namespace AshEngine
 
 		m_impl->graphics_context->begin_frame();
 		m_impl->swapchain->begin_frame();
+		sync_swapchain_target();
+		if (!ensure_back_buffer_target())
+		{
+			return false;
+		}
 		m_impl->current_command_buffer = m_impl->graphics_context->get_command_buffer(0);
 		if (!m_impl->current_command_buffer)
 		{
@@ -1818,12 +1897,13 @@ namespace AshEngine
 		}
 
 		end_pass();
+		const bool present_pass_result = render_present_to_swapchain();
 		m_impl->current_command_buffer->end_record();
 		m_impl->graphics_context->submit({ m_impl->current_command_buffer, 1 });
 		m_impl->swapchain->end_frame();
 		m_impl->graphics_context->end_frame();
 		m_impl->current_command_buffer = nullptr;
-		return true;
+		return present_pass_result;
 	}
 
 	void RenderDevice::present()
@@ -1836,53 +1916,17 @@ namespace AshEngine
 
 	std::shared_ptr<RenderTarget> RenderDevice::get_back_buffer()
 	{
+		if (!ensure_back_buffer_target())
+		{
+			return nullptr;
+		}
 		return std::shared_ptr<RenderTarget>(new RenderTarget(m_impl->back_buffer_target));
 	}
 
 	std::shared_ptr<RenderTarget> RenderDevice::create_render_target(const RenderTargetDesc& desc)
 	{
-		if (!m_impl->graphics_context || desc.width == 0 || desc.height == 0 || desc.format == RenderTextureFormat::Unknown)
-		{
-			return nullptr;
-		}
-
-		RHI::TextureCreation texture_creation{};
-		texture_creation.width = desc.width;
-		texture_creation.height = desc.height;
-		texture_creation.depth = 1;
-		texture_creation.array_layer_count = 1;
-		texture_creation.mip_level_count = 1;
-		texture_creation.format = to_rhi_format(desc.format);
-		texture_creation.type = RHI::Ash_Texture2D;
-		texture_creation.initial_state = RHI::AshResourceState::Unknown;
-		texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
-		texture_creation.name = desc.name;
-
-		const bool depth_stencil = is_depth_format(desc.format);
-		texture_creation.uUsageFlags = depth_stencil ? RHI::ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : RHI::ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
-		if (desc.shader_resource)
-		{
-			texture_creation.uUsageFlags |= RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
-		}
-		if (desc.unordered_access)
-		{
-			texture_creation.uUsageFlags |= RHI::ASH_TEXTURE_USAGE_STORAGE_BIT;
-		}
-
-		std::shared_ptr<RHI::Texture> texture = m_impl->graphics_context->create_texture(texture_creation);
-		if (!texture)
-		{
-			return nullptr;
-		}
-
-		auto impl = std::make_shared<RenderTarget::Impl>();
-		impl->kind = RenderTarget::Impl::Kind::Texture;
-		impl->texture = texture;
-		impl->shader_resource = desc.shader_resource;
-		impl->unordered_access = desc.unordered_access;
-		impl->depth_stencil = depth_stencil;
-		impl->format = desc.format;
-		return std::shared_ptr<RenderTarget>(new RenderTarget(impl));
+		const std::shared_ptr<RenderTarget::Impl> impl = create_render_target_impl(m_impl->graphics_context, desc);
+		return impl ? std::shared_ptr<RenderTarget>(new RenderTarget(impl)) : nullptr;
 	}
 
 	std::shared_ptr<RenderTarget> RenderDevice::acquire_transient_render_target(const RenderTargetDesc& desc)
@@ -2128,6 +2172,170 @@ namespace AshEngine
 		return std::unique_ptr<ComputeProgram>(new ComputeProgram(std::move(impl)));
 	}
 
+	bool RenderDevice::ensure_back_buffer_target()
+	{
+		if (!m_impl || !m_impl->graphics_context || !m_impl->swapchain || !m_impl->back_buffer_target)
+		{
+			return false;
+		}
+
+		const uint32_t swapchain_width = m_impl->swapchain->get_width();
+		const uint32_t swapchain_height = m_impl->swapchain->get_height();
+		if (swapchain_width == 0 || swapchain_height == 0)
+		{
+			return false;
+		}
+
+		std::shared_ptr<RHI::Texture> texture = m_impl->back_buffer_target->texture;
+		if (texture &&
+			texture->get_width() == swapchain_width &&
+			texture->get_height() == swapchain_height &&
+			m_impl->back_buffer_target->format == k_public_back_buffer_format &&
+			m_impl->back_buffer_target->shader_resource &&
+			!m_impl->back_buffer_target->unordered_access &&
+			!m_impl->back_buffer_target->depth_stencil)
+		{
+			return true;
+		}
+
+		RenderTargetDesc desc{};
+		desc.width = static_cast<uint16_t>(swapchain_width);
+		desc.height = static_cast<uint16_t>(swapchain_height);
+		desc.format = k_public_back_buffer_format;
+		desc.shader_resource = true;
+		desc.unordered_access = false;
+		desc.name = k_public_back_buffer_name;
+
+		const std::shared_ptr<RenderTarget::Impl> new_target = create_render_target_impl(m_impl->graphics_context, desc);
+		if (!new_target || !new_target->texture)
+		{
+			HLogError("RenderDevice: failed to create engine offscreen back buffer {}x{}.", swapchain_width, swapchain_height);
+			return false;
+		}
+
+		m_impl->back_buffer_target->kind = RenderTarget::Impl::Kind::Texture;
+		m_impl->back_buffer_target->swapchain = nullptr;
+		m_impl->back_buffer_target->texture = new_target->texture;
+		m_impl->back_buffer_target->shader_resource = new_target->shader_resource;
+		m_impl->back_buffer_target->unordered_access = new_target->unordered_access;
+		m_impl->back_buffer_target->depth_stencil = new_target->depth_stencil;
+		m_impl->back_buffer_target->format = new_target->format;
+		return true;
+	}
+
+	void RenderDevice::sync_swapchain_target()
+	{
+		if (!m_impl || !m_impl->swapchain || !m_impl->swapchain_target)
+		{
+			return;
+		}
+
+		m_impl->swapchain_target->kind = RenderTarget::Impl::Kind::BackBuffer;
+		m_impl->swapchain_target->swapchain = m_impl->swapchain;
+		m_impl->swapchain_target->texture.reset();
+		m_impl->swapchain_target->shader_resource = false;
+		m_impl->swapchain_target->unordered_access = false;
+		m_impl->swapchain_target->depth_stencil = false;
+		m_impl->swapchain_target->format = from_rhi_format(m_impl->swapchain->get_format());
+	}
+
+	bool RenderDevice::ensure_present_program()
+	{
+		if (!m_impl || !m_impl->swapchain)
+		{
+			return false;
+		}
+
+		const bool output_is_srgb = is_srgb_format(m_impl->swapchain->get_format());
+		if (m_impl->present_program && m_impl->present_program_output_is_srgb == output_is_srgb)
+		{
+			return true;
+		}
+
+		const std::string shader_macro = output_is_srgb ? "PRESENT_OUTPUT_IS_SRGB=1" : "PRESENT_OUTPUT_IS_SRGB=0";
+		m_impl->present_program = create_graphics_program({
+			k_back_buffer_present_shader_path,
+			"VSMain",
+			"PSMain",
+			shader_macro.c_str(),
+			{ RenderCullMode::None, RenderPrimitiveTopology::TriangleStrip, false, false },
+			k_back_buffer_present_program_name
+		});
+		if (!m_impl->present_program)
+		{
+			HLogError("RenderDevice: failed to create internal present program for swapchain format {}.", static_cast<uint32_t>(m_impl->swapchain->get_format()));
+			return false;
+		}
+
+		m_impl->present_program_output_is_srgb = output_is_srgb;
+		return true;
+	}
+
+	bool RenderDevice::render_present_to_swapchain()
+	{
+		if (!m_impl || !m_impl->current_command_buffer || !m_impl->swapchain_target)
+		{
+			return false;
+		}
+
+		const std::shared_ptr<RenderTarget> swapchain_target(new RenderTarget(m_impl->swapchain_target));
+
+		PassDesc pass_desc{};
+		pass_desc.name = m_impl->back_buffer_written_this_frame ? "EngineBackBufferPresentPass" : "EngineSwapchainClearPass";
+		pass_desc.color_attachments.push_back({
+			swapchain_target,
+			RenderLoadAction::Clear,
+			{ 0.0f, 0.0f, 0.0f, 1.0f }
+		});
+
+		if (!m_impl->back_buffer_written_this_frame)
+		{
+			if (!begin_pass(pass_desc))
+			{
+				HLogError("RenderDevice: failed to begin internal swapchain clear pass.");
+				return false;
+			}
+			end_pass();
+			return true;
+		}
+
+		if (!ensure_back_buffer_target() || !ensure_present_program())
+		{
+			return false;
+		}
+
+		const std::shared_ptr<RenderTarget> source_target(new RenderTarget(m_impl->back_buffer_target));
+		if (!m_impl->present_program->set_texture("SourceTexture", source_target))
+		{
+			HLogError("RenderDevice: failed to bind SourceTexture for internal present program.");
+			return false;
+		}
+
+		if (!transition_graphics_program_resources(m_impl->present_program.get()))
+		{
+			HLogError("RenderDevice: failed to transition internal present program resources.");
+			return false;
+		}
+		if (!begin_pass(pass_desc))
+		{
+			HLogError("RenderDevice: failed to begin internal present pass.");
+			return false;
+		}
+
+		bool success = bind_graphics_program(m_impl->present_program.get());
+		if (!success)
+		{
+			HLogError("RenderDevice: failed to bind internal present program.");
+		}
+		else
+		{
+			draw(4);
+		}
+
+		end_pass();
+		return success;
+	}
+
 	bool RenderDevice::begin_pass(const PassDesc& desc)
 	{
 		if (!m_impl->current_command_buffer)
@@ -2171,7 +2379,7 @@ namespace AshEngine
 				framebuffer_creation.colorAttachments.shutdown();
 				return false;
 			}
-			if (attachment.render_target->m_impl == m_impl->back_buffer_target || attachment.render_target->m_impl->kind == RenderTarget::Impl::Kind::BackBuffer)
+			if (attachment.render_target->m_impl == m_impl->back_buffer_target)
 			{
 				m_impl->back_buffer_written_this_frame = true;
 			}

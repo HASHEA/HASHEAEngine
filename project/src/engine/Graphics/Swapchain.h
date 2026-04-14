@@ -38,6 +38,7 @@ namespace RHI
 		virtual auto present() -> void = 0;
 		virtual auto get_swapchain_buffer() -> std::shared_ptr<Texture> = 0;
 		virtual auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> = 0;
+		virtual auto get_format() -> AshFormat = 0;
 		virtual auto get_width() -> uint32_t = 0;
 		virtual auto get_height() -> uint32_t = 0;
 		virtual auto begin_frame() -> void = 0;

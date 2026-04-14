@@ -46,6 +46,7 @@ namespace RHI
 			default: preferredFormat = requestedFormat; break;
 			}
 		}
+		m_format = dxgi_to_ash_format(preferredFormat);
 
 		// Check tearing support
 		BOOL tearingSupported = FALSE;

@@ -32,6 +32,7 @@ namespace RHI
 		auto present() -> void override;
 		auto get_swapchain_buffer() -> std::shared_ptr<Texture> override;
 		auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> override;
+		auto get_format() -> AshFormat override { return vk_format_to_ash(surfaceFormat.format); }
 		auto get_width() -> uint32_t override;
 		auto get_height() -> uint32_t override;
 		auto begin_frame() -> void override;

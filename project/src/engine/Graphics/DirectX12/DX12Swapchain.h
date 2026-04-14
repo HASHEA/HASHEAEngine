@@ -22,6 +22,7 @@ namespace RHI
 		auto present() -> void override;
 		auto get_swapchain_buffer() -> std::shared_ptr<Texture> override;
 		auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> override;
+		auto get_format() -> AshFormat override { return m_format; }
 		auto get_width() -> uint32_t override { return m_width; }
 		auto get_height() -> uint32_t override { return m_height; }
 		auto begin_frame() -> void override;
@@ -40,6 +41,7 @@ namespace RHI
 		uint32_t m_currentBackBufferIndex = 0;
 		uint32_t m_width = 0;
 		uint32_t m_height = 0;
+		AshFormat m_format{};
 		uint32_t m_syncInterval = 1; // VSync by default
 		UINT m_presentFlags = 0;
 	};

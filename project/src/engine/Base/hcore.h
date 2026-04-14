@@ -59,7 +59,7 @@
 if (__bInnerError) bResult = false;
 
 #define ASH_PROCESS_SUCCESS(condition) if(condition) break;
-#define ASH_PROCESS_ERROR(condition) if(!condition) {__bInnerError = true; break;}
+#define ASH_PROCESS_ERROR(condition) if(!(condition)) {__bInnerError = true; break;}
 
 namespace ASH_HASH
 {
