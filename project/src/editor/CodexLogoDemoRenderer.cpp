@@ -81,9 +81,8 @@ namespace AshEditor
 			return false;
 		}
 
-		m_back_buffer = renderer->get_back_buffer();
-		m_initialized = m_back_buffer != nullptr;
-		return m_initialized;
+		m_initialized = true;
+		return true;
 	}
 
 	void CodexLogoDemoRenderer::shutdown()
@@ -92,7 +91,6 @@ namespace AshEditor
 		m_compute_program.reset();
 		m_palette_buffer.reset();
 		m_compute_target.reset();
-		m_back_buffer.reset();
 		m_initialized = false;
 	}
 
@@ -143,7 +141,7 @@ namespace AshEditor
 		return true;
 	}
 
-	bool CodexLogoDemoRenderer::render()
+	bool CodexLogoDemoRenderer::render(const std::shared_ptr<AshEngine::RenderTarget>& output_target)
 	{
 		if (!init())
 		{
@@ -157,13 +155,12 @@ namespace AshEditor
 			HLogError("Codex logo demo could not fetch renderer.");
 			return false;
 		}
-		m_back_buffer = renderer->get_back_buffer();
-		if (!m_back_buffer)
+		if (!output_target)
 		{
-			HLogError("Codex logo demo could not fetch back buffer.");
+			HLogWarning("Codex logo demo skipped because no viewport render target is available.");
 			return false;
 		}
-		if (!ensure_compute_resources(renderer, m_back_buffer->get_width(), m_back_buffer->get_height()))
+		if (!ensure_compute_resources(renderer, output_target->get_width(), output_target->get_height()))
 		{
 			HLogError("Codex logo demo failed to prepare compute resources.");
 			return false;
@@ -183,7 +180,7 @@ namespace AshEditor
 		AshEngine::PassDesc pass_desc{};
 		pass_desc.name = "CodexLogoDemoPass";
 		pass_desc.color_attachments.push_back({
-			m_back_buffer,
+			output_target,
 			AshEngine::RenderLoadAction::Clear,
 			{ 0.02f, 0.04f, 0.07f, 1.0f }
 		});

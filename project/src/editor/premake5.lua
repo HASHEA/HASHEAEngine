@@ -9,11 +9,13 @@ project "Editor"
 	includedirs
 	{
 		"%{wks.location}/project/src/engine",
+		"%{wks.location}/project/src/editor",
 		thirdparty .. "/spdlog/include",
 		thirdparty .. "/GLFW/include",
 		thirdparty .. "/ImGui",
 		thirdparty .. "/glm/include",
 		thirdparty .. "/entt/include",
+		thirdparty .. "/Json",
 	}
 
 	files
@@ -22,6 +24,14 @@ project "Editor"
 		"**.cpp",
 
 		"**.lua",
+	}
+	removefiles
+	{
+		"ImGui/EditorImGuiLayer.h",
+		"ImGui/EditorImGuiLayer.cpp",
+		"ImGui/EditorStyle.h",
+		"ImGui/EditorStyle.cpp",
+		"Scene/**",
 	}
 
 	links
