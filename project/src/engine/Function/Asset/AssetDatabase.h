@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Base/hplatform.h"
+#include "Function/Asset/AssetData.h"
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -20,6 +21,8 @@ namespace AshEngine
 		Shader,
 		Texture,
 		Mesh,
+		Model,
+		Prefab,
 		Material,
 		Text,
 		Binary
@@ -74,6 +77,12 @@ namespace AshEngine
 		bool load_text_by_path(const std::filesystem::path& path, std::string& out_text);
 		bool load_binary_by_id(AssetId id, std::vector<uint8_t>& out_bytes);
 		bool load_binary_by_path(const std::filesystem::path& path, std::vector<uint8_t>& out_bytes);
+		bool load_mesh_by_id(AssetId id, std::shared_ptr<const Mesh>& out_mesh);
+		bool load_mesh_by_path(const std::filesystem::path& path, std::shared_ptr<const Mesh>& out_mesh);
+		bool load_model_by_id(AssetId id, std::shared_ptr<const Model>& out_model);
+		bool load_model_by_path(const std::filesystem::path& path, std::shared_ptr<const Model>& out_model);
+		bool load_ashasset_by_id(AssetId id, std::shared_ptr<const AshAsset>& out_asset);
+		bool load_ashasset_by_path(const std::filesystem::path& path, std::shared_ptr<const AshAsset>& out_asset);
 
 	private:
 		std::shared_ptr<Impl> m_impl{};

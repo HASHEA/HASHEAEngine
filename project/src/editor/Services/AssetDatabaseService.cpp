@@ -68,6 +68,10 @@ namespace AshEditor
 			return "Texture";
 		case AshEngine::AssetType::Mesh:
 			return "Mesh";
+		case AshEngine::AssetType::Model:
+			return "Model";
+		case AshEngine::AssetType::Prefab:
+			return "Prefab";
 		case AshEngine::AssetType::Material:
 			return "Material";
 		case AshEngine::AssetType::Text:

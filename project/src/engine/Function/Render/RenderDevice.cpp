@@ -2205,8 +2205,7 @@ namespace AshEngine
 		desc.shader_resource = true;
 		desc.unordered_access = false;
 		desc.name = k_public_back_buffer_name;
-		desc.use_optimized_clear_value = true;
-		desc.optimized_clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
+		desc.use_optimized_clear_value = false;
 
 		const std::shared_ptr<RenderTarget::Impl> new_target = create_render_target_impl(m_impl->graphics_context, desc);
 		if (!new_target || !new_target->texture)
@@ -2393,10 +2392,13 @@ namespace AshEngine
 		for (uint32_t i = 0; i < desc.color_attachments.size(); ++i)
 		{
 			const PassColorAttachment& attachment = desc.color_attachments[i];
-			m_impl->current_framebuffer->clear_render_target(i, to_rhi_color_value(attachment.clear_color));
+			if (attachment.load_action == RenderLoadAction::Clear)
+			{
+				m_impl->current_framebuffer->clear_render_target(i, to_rhi_color_value(attachment.clear_color));
+			}
 		}
 
-		if (desc.depth_attachment.render_target)
+		if (desc.depth_attachment.render_target && desc.depth_attachment.load_action == RenderLoadAction::Clear)
 		{
 			m_impl->current_framebuffer->clear_depth_stencil({ desc.depth_attachment.clear_value.depth, desc.depth_attachment.clear_value.stencil });
 		}

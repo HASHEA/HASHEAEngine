@@ -13,7 +13,7 @@ namespace AshEngine
 	{
 		struct AssetLoadInfo
 		{
-			AssetLoadState state = AssetLoadState::Unknown;
+			AssetLoadState state = AssetLoadState::Unloaded;
 			std::string error{};
 		};
 
@@ -63,9 +63,17 @@ namespace AshEngine
 			{
 				return AssetType::Texture;
 			}
-			if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb")
+			if (ext == ".mesh" || ext == ".ashmesh")
 			{
 				return AssetType::Mesh;
+			}
+			if (ext == ".fbx" || ext == ".obj" || ext == ".gltf" || ext == ".glb")
+			{
+				return AssetType::Model;
+			}
+			if (ext == ".ashasset")
+			{
+				return AssetType::Prefab;
 			}
 			if (ext == ".mat" || ext == ".material")
 			{
@@ -87,6 +95,9 @@ namespace AshEngine
 		std::unordered_map<AssetId, size_t> index_by_id{};
 		std::unordered_map<std::string, size_t> index_by_key{};
 		std::unordered_map<AssetId, AssetLoadInfo> load_info_by_id{};
+		std::unordered_map<AssetId, std::shared_ptr<Mesh>> mesh_cache{};
+		std::unordered_map<AssetId, std::shared_ptr<Model>> model_cache{};
+		std::unordered_map<AssetId, std::shared_ptr<AshAsset>> ashasset_cache{};
 		std::string last_error{};
 	};
 
@@ -139,6 +150,9 @@ namespace AshEngine
 		m_impl->index_by_id.clear();
 		m_impl->index_by_key.clear();
 		m_impl->load_info_by_id.clear();
+		m_impl->mesh_cache.clear();
+		m_impl->model_cache.clear();
+		m_impl->ashasset_cache.clear();
 		m_impl->last_error.clear();
 
 		std::error_code exists_error{};
@@ -194,6 +208,10 @@ namespace AshEngine
 			const AssetInfo& info = m_impl->assets[index];
 			m_impl->index_by_id[info.id] = index;
 			m_impl->index_by_key[normalize_asset_key(info.relative_path)] = index;
+			if (!info.is_directory)
+			{
+				m_impl->load_info_by_id[info.id] = { AssetLoadState::Unloaded, {} };
+			}
 		}
 
 		return true;
@@ -352,6 +370,160 @@ namespace AshEngine
 		}
 
 		out_bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+		m_impl->last_error.clear();
+		m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
+		return true;
+	}
+
+	bool AssetDatabase::load_mesh_by_id(AssetId id, std::shared_ptr<const Mesh>& out_mesh)
+	{
+		const AssetInfo* info = find_asset_by_id(id);
+		if (!info)
+		{
+			if (m_impl)
+			{
+				m_impl->load_info_by_id[id] = { AssetLoadState::Missing, "Asset id was not found." };
+			}
+			return false;
+		}
+		return load_mesh_by_path(info->relative_path, out_mesh);
+	}
+
+	bool AssetDatabase::load_mesh_by_path(const std::filesystem::path& path, std::shared_ptr<const Mesh>& out_mesh)
+	{
+		const AssetInfo* info = find_asset_by_path(path);
+		if (!info || info->is_directory)
+		{
+			if (m_impl)
+			{
+				m_impl->last_error = "Asset path was not found in the asset database.";
+			}
+			return false;
+		}
+
+		if (const auto found = m_impl->mesh_cache.find(info->id); found != m_impl->mesh_cache.end())
+		{
+			out_mesh = found->second;
+			m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
+			return true;
+		}
+
+		auto mesh = std::make_shared<Mesh>();
+		std::string error{};
+		if (!load_mesh_from_file(m_impl->root_path / info->relative_path, *mesh, &error))
+		{
+			m_impl->last_error = error;
+			m_impl->load_info_by_id[info->id] = { AssetLoadState::Failed, error };
+			return false;
+		}
+
+		mesh->source_path = info->relative_path;
+		m_impl->mesh_cache[info->id] = mesh;
+		out_mesh = mesh;
+		m_impl->last_error.clear();
+		m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
+		return true;
+	}
+
+	bool AssetDatabase::load_model_by_id(AssetId id, std::shared_ptr<const Model>& out_model)
+	{
+		const AssetInfo* info = find_asset_by_id(id);
+		if (!info)
+		{
+			if (m_impl)
+			{
+				m_impl->load_info_by_id[id] = { AssetLoadState::Missing, "Asset id was not found." };
+			}
+			return false;
+		}
+		return load_model_by_path(info->relative_path, out_model);
+	}
+
+	bool AssetDatabase::load_model_by_path(const std::filesystem::path& path, std::shared_ptr<const Model>& out_model)
+	{
+		const AssetInfo* info = find_asset_by_path(path);
+		if (!info || info->is_directory)
+		{
+			if (m_impl)
+			{
+				m_impl->last_error = "Asset path was not found in the asset database.";
+			}
+			return false;
+		}
+
+		if (const auto found = m_impl->model_cache.find(info->id); found != m_impl->model_cache.end())
+		{
+			out_model = found->second;
+			m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
+			return true;
+		}
+
+		auto model = std::make_shared<Model>();
+		std::string error{};
+		if (!load_model_from_file(m_impl->root_path / info->relative_path, *model, &error))
+		{
+			m_impl->last_error = error;
+			m_impl->load_info_by_id[info->id] = { AssetLoadState::Failed, error };
+			return false;
+		}
+
+		model->source_path = info->relative_path;
+		for (Mesh& mesh : model->meshes)
+		{
+			mesh.source_path = info->relative_path;
+		}
+		m_impl->model_cache[info->id] = model;
+		out_model = model;
+		m_impl->last_error.clear();
+		m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
+		return true;
+	}
+
+	bool AssetDatabase::load_ashasset_by_id(AssetId id, std::shared_ptr<const AshAsset>& out_asset)
+	{
+		const AssetInfo* info = find_asset_by_id(id);
+		if (!info)
+		{
+			if (m_impl)
+			{
+				m_impl->load_info_by_id[id] = { AssetLoadState::Missing, "Asset id was not found." };
+			}
+			return false;
+		}
+		return load_ashasset_by_path(info->relative_path, out_asset);
+	}
+
+	bool AssetDatabase::load_ashasset_by_path(const std::filesystem::path& path, std::shared_ptr<const AshAsset>& out_asset)
+	{
+		const AssetInfo* info = find_asset_by_path(path);
+		if (!info || info->is_directory)
+		{
+			if (m_impl)
+			{
+				m_impl->last_error = "Asset path was not found in the asset database.";
+			}
+			return false;
+		}
+
+		if (const auto found = m_impl->ashasset_cache.find(info->id); found != m_impl->ashasset_cache.end())
+		{
+			out_asset = found->second;
+			m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
+			return true;
+		}
+
+		auto asset = std::make_shared<AshAsset>();
+		std::string error{};
+		if (!load_ashasset_from_file(m_impl->root_path / info->relative_path, *asset, &error))
+		{
+			m_impl->last_error = error;
+			m_impl->load_info_by_id[info->id] = { AssetLoadState::Failed, error };
+			return false;
+		}
+
+		asset->source_path = info->relative_path;
+		m_impl->ashasset_cache[info->id] = asset;
+		out_asset = asset;
 		m_impl->last_error.clear();
 		m_impl->load_info_by_id[info->id] = { AssetLoadState::Loaded, {} };
 		return true;

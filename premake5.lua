@@ -23,6 +23,7 @@ outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 startproject "Editor"
 include "project/src/engine"
 include "project/src/editor"
+include "project/src/sandbox"
 -- include "project/src/shader"
 	
 
@@ -37,4 +38,3 @@ group "ThirdParty"
 	include "project/thirdparty/tracy"
 	include "project/thirdparty/meshoptimizer"
 	include "project/thirdparty/D3D12MA"
-

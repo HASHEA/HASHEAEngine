@@ -56,6 +56,7 @@ AshEngine/HASHEAEngine/
     │   │   │   └── Scene/           # Scene / Entity / 组件描述
     │   │   └── Graphics/            # RHI 抽象与 Vulkan / DX12 后端
     │   └── editor/                  # Editor 可执行项目
+    │   └── sandbox/                 # Engine 自维护测试/验证可执行项目
     └── thirdparty/                  # 第三方库
 ```
 
@@ -128,6 +129,7 @@ AshEngine/HASHEAEngine/
 - 顶层 workspace：`premake5.lua`
 - Engine 项目：`project/src/engine/premake5.lua`
 - Editor 项目：`project/src/editor/premake5.lua`
+- Sandbox 项目：`project/src/sandbox/premake5.lua`
 
 ### 3.2 当前主要输出目录
 
@@ -136,6 +138,8 @@ AshEngine/HASHEAEngine/
 - 运行目录：`product/bin64/<Config>-windows-x86_64/`
 - 运行配置：`product/config/Engine.ini`
 - 日志目录：`product/logs/`
+- Sandbox 生成报告：`product/test-reports/sandbox/`
+- Sandbox 测试资产：`product/assets/models/gltfs/`
 - Shader Cache：`product/caches/ShaderCaches/`
 - Pipeline Cache：`product/caches/PipelineCaches/`
 
@@ -438,6 +442,7 @@ GpuValidation=true
 
 - 如果某张目标会长期通过 `RenderLoadAction::Clear` 以固定颜色/深度清屏，创建时应把 optimized clear value 设成与实际 clear 一致的值
 - 如果实际 clear 值和创建值不一致，DX12 仍然会给出 warning
+- Engine 的公共 offscreen back buffer 当前**不声明固定 optimized clear value**，因为它会被不同上层 pass 以不同背景色使用；如果某个 pass 本身会全屏覆盖输出，优先用 `RenderLoadAction::DontCare`/`Load`，不要为了“习惯”多做一次 clear
 
 ### 7.3 GraphicsProgram / ComputeProgram
 
@@ -602,48 +607,216 @@ GpuValidation=true
 
 ## 11. Asset 与 Scene 基础模块
 
-### 11.1 AssetDatabase
+### 11.1 AssetData：CPU 侧资源基础数据模型
 
-`AssetDatabase` 当前提供：
+当前 Engine 在 `project/src/engine/Function/Asset/AssetData.*` 中维护一套**纯 CPU 侧**资源数据结构：
+
+- `MeshVertex`
+- `MeshSection`
+- `MaterialSlot`
+- `Mesh`
+- `ModelNode`
+- `Model`
+- `AshAssetNode`
+- `AshAsset`
+
+它们的职责是：
+
+- 保存从外部资源文件导入出的原始几何、层级、材质槽与组件快照
+- 作为 Engine / Editor / 以后 Game 侧都可消费的中间数据模型
+- 明确与 GPU 资源生命周期解耦
+
+这层**不直接创建 GPU 资源**，也不暴露 Vulkan / DX12 / 底层 RHI 类型。
+
+### 11.2 当前导入与序列化能力
+
+当前公开 API 为：
+
+- `load_mesh_from_file()`
+- `load_model_from_file()`
+- `load_ashasset_from_file()`
+- `save_ashasset_to_file()`
+- `make_ashasset_from_model()`
+
+当前支持的模型源格式：
+
+- `.obj`
+- `.fbx`
+- `.gltf`
+- `.glb`
+
+当前行为约定：
+
+- `load_model_from_file()` 返回带层级的 `Model`
+- `load_mesh_from_file()` 走“先导入 `Model`，再按节点 world transform 合并成单 `Mesh`”的 CPU 路径
+- `OBJ` 通过 `tinyobjloader` 导入
+- `glTF/glb` 通过 `tinygltf` 导入
+- `FBX` 通过 `openFBX` 在 triangulate 模式下导入
+- 导入出的材质信息当前只保留为 `MaterialSlot` 与纹理路径，不直接生成 GPU 材质对象
+
+当前 `ashasset` 是 **prefab-style JSON 资源格式**，它保存：
+
+- 节点名
+- 父子层级
+- `TransformComponent`
+- 可选 `CameraComponent`
+- 可选 `LightComponent`
+- 可选 `MeshComponent`
+
+`make_ashasset_from_model()` 可把导入出的 `Model` 直接转成一个可实例化的 prefab 骨架。
+
+### 11.3 AssetDatabase：资源目录、类型识别与缓存
+
+`AssetDatabase` 现在不再只提供 text / binary 访问，而是同时承担 Engine 侧资源目录索引与轻量缓存职责。
+
+当前提供：
 
 - root path 管理
-- 目录扫描 / refresh
+- 目录扫描 / `refresh()`
 - `AssetInfo` 列表
 - 按 id / path 查询
 - text / binary 加载
-- load state 与 last error 查询
+- `Mesh / Model / AshAsset` 加载
+- per-asset load state / last error
+- `Mesh / Model / AshAsset` 内存缓存
 
-它更偏向 **编辑器资源浏览与轻量内容访问基础设施**，但目前仍位于 Engine 内维护。
+当前资源类型识别规则新增：
 
-### 11.2 Scene / Entity
+- `.obj/.fbx/.gltf/.glb` -> `AssetType::Model`
+- `.ashasset` -> `AssetType::Prefab`
 
-`Scene` 当前提供：
+当前缓存接口：
 
-- entity 创建、查找、销毁
-- 父子层级
-- 序列化 / 反序列化
-- dirty 状态
+- `load_mesh_by_id()` / `load_mesh_by_path()`
+- `load_model_by_id()` / `load_model_by_path()`
+- `load_ashasset_by_id()` / `load_ashasset_by_path()`
 
-`Entity` 当前提供：
+这一层的定位是：
 
-- Name
-- Transform
-- Camera
-- Light
-- Mesh
+- 给 Editor 资源浏览和轻量实例化提供统一入口
+- 给 Engine 内部场景/运行时提供基础资源查询入口
+- 不替代后续更完整的 asset cooking / streaming / async loading 系统
 
-并有组件 / 枚举描述接口，供上层做反射式编辑与展示。
+### 11.4 Scene / Entity：保留 facade，内部切到 ECS-style 存储
 
-### 11.3 当前定位
+`Scene` 的公共 facade 仍然保留 `Scene / Entity` 这套易用接口，但内部存储已切到 `entt` 驱动的 ECS-style 实现。
 
-Asset / Scene 当前更像 **运行时基础数据模型 + 编辑器支撑基础设施**，不是完整 gameplay framework。
+当前内部结构大致为：
 
-如果以后这里的职责扩大，需要在本文档中补上：
+- `entt::registry`
+- `EntityId -> entt::entity` 映射
+- 内部 `HierarchyComponent`
+- 内部 `EntityIdComponent`
+- 显式 `entity_order`
+
+当前公共能力包括：
+
+- entity 创建 / 查找 / 销毁
+- 父子层级维护
+- `reparent_entity()`
+- root entity 查询
+- 按组件查询实体
+- scene save / load
+- dirty 状态维护
+- `instantiate_model()`
+- `instantiate_ashasset()`
+- `instantiate_asset()`
+
+`Entity` 当前暴露的组件为：
+
+- `Name`
+- `Transform`
+- `Camera`
+- `Light`
+- `Mesh`
+
+其中：
+
+- `Name` 与 `Transform` 是默认存在的基础组件
+- `Camera` / `Light` / `Mesh` 是可选组件
+- `MeshComponent` 当前包含 `asset_path`、`mesh_index`、`visible`
+
+同时仍保留组件 / 枚举描述接口，供 Editor 侧做反射式展示与编辑。
+
+### 11.5 当前 prefab / scene 关系
+
+当前推荐关系是：
+
+- 外部模型文件 -> 导入成 `Model`
+- `Model` -> 可选转换成 `AshAsset`
+- `AshAsset` -> 通过 `Scene::instantiate_ashasset()` 实例化到场景
+- 运行中的 `Scene` -> 保存为 `.scene/.ashscene` 这类场景文件
+
+也就是说：
+
+- `Model` 更偏向“导入后的源数据”
+- `AshAsset` 更偏向“可重复实例化的 prefab 资源”
+- `Scene` 更偏向“运行时对象集合与层级状态”
+
+### 11.6 当前边界与后续扩展方向
+
+这套 Asset / Scene 基础模块当前的定位是：
+
+- **Engine 通用基础数据层**
+- **Editor 可直接依赖的场景/资源 facade**
+- **不是完整 gameplay/world framework**
+
+当前明确边界：
+
+- 这里不直接持有 GPU 资源
+- 这里不直接处理动画、skin、骨骼重定向、材质编译、streaming
+- 这里不把后端 RHI 类型暴露给上层
+
+以后如果这里继续扩展，需要同步在本文档补充：
 
 - ownership 模型
 - 线程模型
-- 生命周期
-- 序列化格式约束
+- async loading / asset cooking 约束
+- 动画 / skin / material asset 设计
+- scene/world 生命周期规则
+
+### 11.7 Sandbox：Engine 自维护测试工程
+
+当前仓库新增了 `project/src/sandbox`，它是一个**独立的 Engine 侧测试可执行项目**，定位是：
+
+- 快速验证引擎新功能，而不是把 demo/验证逻辑长期塞在 Editor 生命周期里
+- 承载 CPU 侧 asset/scene smoke test
+- 承载共享渲染路径 smoke test
+- 作为以后继续补充 runtime test case 的落点
+
+当前 `Sandbox` 复用了与 `Editor` 相同的 `EntryPoint.h + Application` 启动模式，并默认注册两类测试：
+
+- `AssetPipelineSmoke`
+  - 扫描 `product/assets`
+  - 加载 `product/assets/models/gltfs/` 下的 glTF 样例
+  - 验证 `load_model_from_file() / load_mesh_from_file() / make_ashasset_from_model() / save/load_ashasset / Scene::instantiate_* / scene save-load roundtrip`
+- `CodexLogoRender`
+  - 使用 compute + fullscreen draw 的共享渲染路径
+  - 直接在 `Renderer::get_back_buffer()` 返回的 Engine offscreen back buffer 上输出结果
+
+当前默认内置的 glTF 样例资产位于：
+
+- `product/assets/models/gltfs/Avocado/glTF/Avocado.gltf`
+- `product/assets/models/gltfs/BoomBox/glTF/BoomBox.gltf`
+- `product/assets/models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf`
+- `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
+
+当前 `Sandbox` 运行时会把生成出的中间验证产物写到：
+
+- `product/test-reports/sandbox/generated-assets/*.ashasset`
+- `product/test-reports/sandbox/generated-scenes/*.ashscene`
+
+推荐运行方式：
+
+```powershell
+product/bin64/Debug-windows-x86_64/Sandbox.exe --smoke-test-seconds=5
+```
+
+维护约定：
+
+- 以后需要快速验证 Engine 功能时，优先往 `Sandbox` 补测试，而不是继续把临时 demo 塞进 `Editor`
+- 如果是共享渲染/资源路径改动，建议至少用 `Sandbox` 跑一遍 Vulkan + DX12
+- `Sandbox` 中的 shader 文件默认作为源码资源存在，不作为 VS 的 FXC build step；运行期仍按相对路径从仓库读取
 
 ---
 
