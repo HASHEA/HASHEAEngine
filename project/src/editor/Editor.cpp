@@ -86,14 +86,17 @@ namespace AshEditor
 			return;
 		}
 
-		m_viewportRenderTarget = renderer->create_render_target({
-			static_cast<uint16_t>(desired_width),
-			static_cast<uint16_t>(desired_height),
-			target_format,
-			true,
-			false,
-			"EditorViewportRenderTarget"
-		});
+		AshEngine::RenderTargetDesc viewport_target_desc{};
+		viewport_target_desc.width = static_cast<uint16_t>(desired_width);
+		viewport_target_desc.height = static_cast<uint16_t>(desired_height);
+		viewport_target_desc.format = target_format;
+		viewport_target_desc.shader_resource = true;
+		viewport_target_desc.unordered_access = false;
+		viewport_target_desc.name = "EditorViewportRenderTarget";
+		viewport_target_desc.use_optimized_clear_value = true;
+		viewport_target_desc.optimized_clear_color = { 0.02f, 0.04f, 0.07f, 1.0f };
+
+		m_viewportRenderTarget = renderer->create_render_target(viewport_target_desc);
 
 		if (!m_viewportRenderTarget)
 		{

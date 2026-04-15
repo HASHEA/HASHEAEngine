@@ -291,6 +291,8 @@ GpuValidation=true
 
 - `DynamicRHI.cpp` 的 INI 解析已兼容 UTF-8 BOM；不要假设配置文件一定是无 BOM 文本。
 - 自动化验证脚本在切换 backend 时会重写 `Engine.ini`，并且会回读运行日志确认“请求 backend”和“实际启动 backend”一致。
+- 当 `DX12Validation.Enabled=true` 时，D3D12 debug layer 的 warning / error / corruption 会通过 `DX12Context` 直接写入引擎日志；DXGI 层消息则在 swapchain 创建 / resize / present 等节点被 drain 后写入同一套日志。
+- 为避免 DX12 debug-layer 在逐帧场景下刷爆日志，相同 warning / error 会按“首条立即打印，重复次数在 shutdown 时汇总”的方式输出。
 
 以后新增或删除配置项，必须同步更新本文档。
 
@@ -420,6 +422,22 @@ GpuValidation=true
 - depth-stencil target
 - shader resource
 - unordered access target
+
+当前 `RenderTargetDesc` 还支持声明“optimized clear value”：
+
+- `use_optimized_clear_value`
+- `optimized_clear_color`
+- `optimized_clear_depth_stencil`
+
+用途：
+
+- 给 DX12 render target / depth-stencil 资源传递匹配的 optimized clear value
+- 避免 `ClearRenderTargetView` / `ClearDepthStencilView` 的 debug-layer “missing/mismatching clear value” warning
+
+约束：
+
+- 如果某张目标会长期通过 `RenderLoadAction::Clear` 以固定颜色/深度清屏，创建时应把 optimized clear value 设成与实际 clear 一致的值
+- 如果实际 clear 值和创建值不一致，DX12 仍然会给出 warning
 
 ### 7.3 GraphicsProgram / ComputeProgram
 
@@ -663,6 +681,10 @@ DX12 支持：
 
 - Debug Layer
 - GPU Validation
+- D3D12 debug layer warning / error / corruption 通过 `ID3D12InfoQueue1` 回调直接进入引擎日志；如果运行环境不支持该接口，则退化为 `ID3D12InfoQueue` 轮询 drain
+- DXGI debug 消息通过 `IDXGIInfoQueue` 在 swapchain create / resize / present / destroy 节点写入引擎日志
+- 重复的 DX12 / DXGI debug 消息会被收敛，避免每帧写入同一条 warning
+- 对会执行 `RenderLoadAction::Clear` 的 color/depth render target，优先在 `RenderTargetDesc` 中配置匹配的 optimized clear value；否则 DX12 可能给出 clear-value warning
 - 对带 `initial_data` 的 GPU-only buffer，立即上传必须使用独立的临时 command allocator / command list；不要复用当前帧正在录制的 allocator，否则会命中 `ID3D12CommandAllocator::Reset` debug-layer 错误
 
 ### 12.3 Vulkan VMA 泄露定位

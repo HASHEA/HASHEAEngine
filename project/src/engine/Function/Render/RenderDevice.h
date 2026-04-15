@@ -119,6 +119,9 @@ namespace AshEngine
 		bool shader_resource = true;
 		bool unordered_access = false;
 		const char* name = nullptr;
+		bool use_optimized_clear_value = false;
+		RenderColorValue optimized_clear_color{};
+		RenderDepthStencilValue optimized_clear_depth_stencil{};
 	};
 
 	struct UniformBufferDesc

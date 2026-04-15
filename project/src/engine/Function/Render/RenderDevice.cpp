@@ -214,6 +214,21 @@ namespace AshEngine
 			}
 		}
 
+		static RHI::AshColorValue to_rhi_color_value(const RenderColorValue& value)
+		{
+			RHI::AshColorValue result{};
+			result.float32[0] = value.r;
+			result.float32[1] = value.g;
+			result.float32[2] = value.b;
+			result.float32[3] = value.a;
+			return result;
+		}
+
+		static RHI::AshDepthStencilValue to_rhi_depth_stencil_value(const RenderDepthStencilValue& value)
+		{
+			return { value.depth, value.stencil };
+		}
+
 		static RHI::Viewport to_rhi_viewport(const RenderViewport& viewport)
 		{
 			RHI::Viewport rhi_viewport{};
@@ -406,6 +421,9 @@ namespace AshEngine
 		texture_creation.initial_state = RHI::AshResourceState::Unknown;
 		texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
 		texture_creation.name = desc.name;
+		texture_creation.use_optimized_clear_value = desc.use_optimized_clear_value;
+		texture_creation.optimized_clear_color = to_rhi_color_value(desc.optimized_clear_color);
+		texture_creation.optimized_clear_depth_stencil = to_rhi_depth_stencil_value(desc.optimized_clear_depth_stencil);
 
 		const bool depth_stencil = is_depth_format(desc.format);
 		texture_creation.uUsageFlags = depth_stencil ? RHI::ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : RHI::ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -2187,6 +2205,8 @@ namespace AshEngine
 		desc.shader_resource = true;
 		desc.unordered_access = false;
 		desc.name = k_public_back_buffer_name;
+		desc.use_optimized_clear_value = true;
+		desc.optimized_clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 		const std::shared_ptr<RenderTarget::Impl> new_target = create_render_target_impl(m_impl->graphics_context, desc);
 		if (!new_target || !new_target->texture)
@@ -2373,7 +2393,7 @@ namespace AshEngine
 		for (uint32_t i = 0; i < desc.color_attachments.size(); ++i)
 		{
 			const PassColorAttachment& attachment = desc.color_attachments[i];
-			m_impl->current_framebuffer->clear_render_target(i, { attachment.clear_color.r, attachment.clear_color.g, attachment.clear_color.b, attachment.clear_color.a });
+			m_impl->current_framebuffer->clear_render_target(i, to_rhi_color_value(attachment.clear_color));
 		}
 
 		if (desc.depth_attachment.render_target)

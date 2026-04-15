@@ -44,6 +44,9 @@ namespace RHI
 
 		std::shared_ptr<Texture>			 alias = nullptr;
 		const char*                          name = nullptr;
+		bool								 use_optimized_clear_value = false;
+		AshColorValue						 optimized_clear_color{};
+		AshDepthStencilValue				 optimized_clear_depth_stencil{ 1.0f, 0 };
 	}; // struct TextureCreation
 	class Sampler;
 	class ASH_API Texture : public RHIResource,  public std::enable_shared_from_this<Texture>

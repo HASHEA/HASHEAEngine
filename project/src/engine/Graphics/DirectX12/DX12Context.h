@@ -30,6 +30,7 @@ namespace RHI
 
 	class DX12CommandBuffer;
 	class DX12StagingBuffer;
+	class DX12Swapchain;
 
 	struct DX12FrameResources
 	{
@@ -93,6 +94,8 @@ namespace RHI
 		auto submit_immediately(const SubmitInfo& info) -> void override;
 
 	private:
+		friend class DX12Swapchain;
+
 		auto _create_factory() -> bool;
 		auto _select_adapter() -> bool;
 		auto _create_device() -> bool;
@@ -101,6 +104,18 @@ namespace RHI
 		auto _create_descriptor_heaps() -> bool;
 		auto _create_frame_resources(uint16_t numThread) -> bool;
 		auto _enable_debug_layer() -> bool;
+		auto _setup_debug_message_logging() -> void;
+		auto _shutdown_debug_message_logging() -> void;
+		auto _drain_d3d12_debug_messages(const char* phase) -> void;
+		auto _drain_dxgi_debug_messages(const char* phase) -> void;
+		auto _report_d3d12_debug_message(
+			const char* phase,
+			D3D12_MESSAGE_CATEGORY category,
+			D3D12_MESSAGE_SEVERITY severity,
+			D3D12_MESSAGE_ID id,
+			LPCSTR description) -> void;
+		auto _report_dxgi_debug_message(const char* phase, const DXGI_INFO_QUEUE_MESSAGE& message) -> void;
+		auto _flush_suppressed_debug_messages() -> void;
 		auto _shutdown_frame_resources() -> bool;
 		auto _enqueue_pending_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, const void* data) -> bool;
 		auto _enqueue_pending_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
@@ -110,6 +125,12 @@ namespace RHI
 		auto _flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _finalize_upload_command_buffer(DX12FrameResources& frameResources) -> void;
+		static void __stdcall _d3d12_debug_message_callback(
+			D3D12_MESSAGE_CATEGORY category,
+			D3D12_MESSAGE_SEVERITY severity,
+			D3D12_MESSAGE_ID id,
+			LPCSTR description,
+			void* context);
 
 	private:
 		struct PendingBufferUpload
@@ -162,6 +183,29 @@ namespace RHI
 		uint16_t m_numThread = 0;
 		D3D_SHADER_MODEL m_highestShaderModel = D3D_SHADER_MODEL_6_0;
 		bool m_frameActive = false;
+
+#if defined(ASH_DEBUG)
+		struct SuppressedDebugMessage
+		{
+			std::string source{};
+			std::string severity{};
+			std::string category{};
+			int32_t messageId = 0;
+			std::string description{};
+			bool error = false;
+			uint64_t count = 0;
+		};
+
+		ComPtr<ID3D12InfoQueue> m_d3d12InfoQueue;
+#if defined(__ID3D12InfoQueue1_INTERFACE_DEFINED__)
+		ComPtr<ID3D12InfoQueue1> m_d3d12InfoQueue1;
+		DWORD m_d3d12MessageCallbackCookie = 0;
+#endif
+		bool m_d3d12MessageCallbackRegistered = false;
+		ComPtr<IDXGIInfoQueue> m_dxgiInfoQueue;
+		std::mutex m_debugMessageMutex{};
+		std::unordered_map<std::string, SuppressedDebugMessage> m_suppressedDebugMessages{};
+#endif
 
 	private:
 		static DX12Context* s_instance;

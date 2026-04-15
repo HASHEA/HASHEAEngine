@@ -56,11 +56,20 @@ namespace RHI
 
 		D3D12_CLEAR_VALUE clearValue = {};
 		D3D12_CLEAR_VALUE* pClearValue = nullptr;
-		if (ci.uUsageFlags & ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)
+		if ((ci.uUsageFlags & ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0)
 		{
 			clearValue.Format = ash_to_dxgi_format(ci.format);
-			clearValue.DepthStencil.Depth = 1.0f;
-			clearValue.DepthStencil.Stencil = 0;
+			clearValue.DepthStencil.Depth = ci.optimized_clear_depth_stencil.depth;
+			clearValue.DepthStencil.Stencil = static_cast<UINT8>(ci.optimized_clear_depth_stencil.stencil);
+			pClearValue = &clearValue;
+		}
+		else if (((ci.uUsageFlags & ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT) != 0) && ci.use_optimized_clear_value)
+		{
+			clearValue.Format = resourceDesc.Format;
+			clearValue.Color[0] = ci.optimized_clear_color.float32[0];
+			clearValue.Color[1] = ci.optimized_clear_color.float32[1];
+			clearValue.Color[2] = ci.optimized_clear_color.float32[2];
+			clearValue.Color[3] = ci.optimized_clear_color.float32[3];
 			pClearValue = &clearValue;
 		}
 

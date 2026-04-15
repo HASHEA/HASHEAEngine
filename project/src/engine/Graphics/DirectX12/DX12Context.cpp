@@ -21,6 +21,105 @@ namespace RHI
 {
 	DX12Context* DX12Context::s_instance = nullptr;
 
+	namespace
+	{
+		constexpr bool should_log_d3d12_debug_message(D3D12_MESSAGE_SEVERITY severity)
+		{
+			return severity == D3D12_MESSAGE_SEVERITY_WARNING ||
+				severity == D3D12_MESSAGE_SEVERITY_ERROR ||
+				severity == D3D12_MESSAGE_SEVERITY_CORRUPTION;
+		}
+
+		constexpr const char* d3d12_message_severity_to_string(D3D12_MESSAGE_SEVERITY severity)
+		{
+			switch (severity)
+			{
+			case D3D12_MESSAGE_SEVERITY_CORRUPTION: return "CORRUPTION";
+			case D3D12_MESSAGE_SEVERITY_ERROR: return "ERROR";
+			case D3D12_MESSAGE_SEVERITY_WARNING: return "WARNING";
+			case D3D12_MESSAGE_SEVERITY_INFO: return "INFO";
+			case D3D12_MESSAGE_SEVERITY_MESSAGE: return "MESSAGE";
+			default: return "UNKNOWN";
+			}
+		}
+
+		constexpr const char* d3d12_message_category_to_string(D3D12_MESSAGE_CATEGORY category)
+		{
+			switch (category)
+			{
+			case D3D12_MESSAGE_CATEGORY_APPLICATION_DEFINED: return "APPLICATION_DEFINED";
+			case D3D12_MESSAGE_CATEGORY_MISCELLANEOUS: return "MISCELLANEOUS";
+			case D3D12_MESSAGE_CATEGORY_INITIALIZATION: return "INITIALIZATION";
+			case D3D12_MESSAGE_CATEGORY_CLEANUP: return "CLEANUP";
+			case D3D12_MESSAGE_CATEGORY_COMPILATION: return "COMPILATION";
+			case D3D12_MESSAGE_CATEGORY_STATE_CREATION: return "STATE_CREATION";
+			case D3D12_MESSAGE_CATEGORY_STATE_SETTING: return "STATE_SETTING";
+			case D3D12_MESSAGE_CATEGORY_STATE_GETTING: return "STATE_GETTING";
+			case D3D12_MESSAGE_CATEGORY_RESOURCE_MANIPULATION: return "RESOURCE_MANIPULATION";
+			case D3D12_MESSAGE_CATEGORY_EXECUTION: return "EXECUTION";
+			case D3D12_MESSAGE_CATEGORY_SHADER: return "SHADER";
+			default: return "UNKNOWN";
+			}
+		}
+
+		constexpr bool should_log_dxgi_debug_message(DXGI_INFO_QUEUE_MESSAGE_SEVERITY severity)
+		{
+			return severity == DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING ||
+				severity == DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR ||
+				severity == DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION;
+		}
+
+		constexpr const char* dxgi_message_severity_to_string(DXGI_INFO_QUEUE_MESSAGE_SEVERITY severity)
+		{
+			switch (severity)
+			{
+			case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION: return "CORRUPTION";
+			case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR: return "ERROR";
+			case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING: return "WARNING";
+			case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_INFO: return "INFO";
+			case DXGI_INFO_QUEUE_MESSAGE_SEVERITY_MESSAGE: return "MESSAGE";
+			default: return "UNKNOWN";
+			}
+		}
+
+		constexpr const char* dxgi_message_category_to_string(DXGI_INFO_QUEUE_MESSAGE_CATEGORY category)
+		{
+			switch (category)
+			{
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_MISCELLANEOUS: return "MISCELLANEOUS";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_INITIALIZATION: return "INITIALIZATION";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_CLEANUP: return "CLEANUP";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_COMPILATION: return "COMPILATION";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_STATE_CREATION: return "STATE_CREATION";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_STATE_SETTING: return "STATE_SETTING";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_STATE_GETTING: return "STATE_GETTING";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_RESOURCE_MANIPULATION: return "RESOURCE_MANIPULATION";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_EXECUTION: return "EXECUTION";
+			case DXGI_INFO_QUEUE_MESSAGE_CATEGORY_SHADER: return "SHADER";
+			default: return "UNKNOWN";
+			}
+		}
+
+		const char* dxgi_producer_to_string(const DXGI_DEBUG_ID& producer)
+		{
+			if (IsEqualGUID(producer, DXGI_DEBUG_DXGI))
+			{
+				return "DXGI";
+			}
+			if (IsEqualGUID(producer, DXGI_DEBUG_DX))
+			{
+				return "DX";
+			}
+			if (IsEqualGUID(producer, DXGI_DEBUG_APP))
+			{
+				return "APP";
+			}
+
+			return "UNKNOWN";
+		}
+
+	}
+
 	auto DX12Context::queue_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, void* data) -> bool
 	{
 		if (!buffer || !data || size == 0)
@@ -205,6 +304,7 @@ namespace RHI
 		if (!_create_factory()) return false;
 		if (!_select_adapter()) return false;
 		if (!_create_device()) return false;
+		_setup_debug_message_logging();
 		if (!_create_command_queues()) return false;
 		if (!_create_memory_allocator()) return false;
 		if (!_create_descriptor_heaps()) return false;
@@ -254,6 +354,10 @@ namespace RHI
 
 		m_shaderPool.clear();
 		m_samplerCache.clear();
+		_drain_d3d12_debug_messages("shutdown");
+		_drain_dxgi_debug_messages("shutdown");
+		_flush_suppressed_debug_messages();
+		_shutdown_debug_message_logging();
 
 		m_device.Reset();
 		m_adapter.Reset();
@@ -294,6 +398,351 @@ namespace RHI
 			}
 		}
 		return true;
+	}
+
+	auto DX12Context::_setup_debug_message_logging() -> void
+	{
+#if defined(ASH_DEBUG)
+		if (!m_enableDebugLayer)
+		{
+			return;
+		}
+
+		if (!m_d3d12InfoQueue && m_device)
+		{
+			if (FAILED(m_device.As(&m_d3d12InfoQueue)))
+			{
+				HLogWarning("DX12Context: Failed to query ID3D12InfoQueue for debug message routing.");
+			}
+		}
+
+		if (m_d3d12InfoQueue)
+		{
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			_drain_d3d12_debug_messages("startup");
+#if defined(__ID3D12InfoQueue1_INTERFACE_DEFINED__)
+			if (!m_d3d12MessageCallbackRegistered && SUCCEEDED(m_d3d12InfoQueue.As(&m_d3d12InfoQueue1)) && m_d3d12InfoQueue1)
+			{
+				HRESULT hr = m_d3d12InfoQueue1->RegisterMessageCallback(
+					&DX12Context::_d3d12_debug_message_callback,
+					D3D12_MESSAGE_CALLBACK_FLAG_NONE,
+					this,
+					&m_d3d12MessageCallbackCookie);
+				if (SUCCEEDED(hr))
+				{
+					m_d3d12MessageCallbackRegistered = true;
+					HLogInfo("DX12Context: D3D12 debug-layer messages are routed to engine log.");
+				}
+				else
+				{
+					HLogWarning("DX12Context: Failed to register D3D12 debug callback. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+				}
+			}
+#endif
+		}
+
+		if (!m_dxgiInfoQueue)
+		{
+			const HRESULT hr = DXGIGetDebugInterface1(0, IID_PPV_ARGS(&m_dxgiInfoQueue));
+			if (FAILED(hr))
+			{
+				HLogWarning("DX12Context: Failed to query IDXGIInfoQueue for debug message routing. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+			}
+		}
+
+		if (m_dxgiInfoQueue)
+		{
+			m_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_DXGI, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			m_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_DXGI, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR, TRUE);
+			_drain_dxgi_debug_messages("startup");
+		}
+#endif
+	}
+
+	auto DX12Context::_shutdown_debug_message_logging() -> void
+	{
+#if defined(ASH_DEBUG)
+#if defined(__ID3D12InfoQueue1_INTERFACE_DEFINED__)
+		if (m_d3d12MessageCallbackRegistered && m_d3d12InfoQueue1)
+		{
+			const HRESULT hr = m_d3d12InfoQueue1->UnregisterMessageCallback(m_d3d12MessageCallbackCookie);
+			if (FAILED(hr))
+			{
+				HLogWarning("DX12Context: Failed to unregister D3D12 debug callback. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+			}
+		}
+		m_d3d12InfoQueue1.Reset();
+		m_d3d12MessageCallbackCookie = 0;
+#endif
+		m_d3d12MessageCallbackRegistered = false;
+		m_d3d12InfoQueue.Reset();
+		m_dxgiInfoQueue.Reset();
+#endif
+	}
+
+	auto DX12Context::_report_d3d12_debug_message(
+		const char* phase,
+		D3D12_MESSAGE_CATEGORY category,
+		D3D12_MESSAGE_SEVERITY severity,
+		D3D12_MESSAGE_ID id,
+		LPCSTR description) -> void
+	{
+#if defined(ASH_DEBUG)
+		if (!should_log_d3d12_debug_message(severity))
+		{
+			return;
+		}
+
+		const char* safePhase = phase ? phase : "runtime";
+		const char* safeDescription = description ? description : "";
+		const char* source = "D3D12";
+		const char* severityText = d3d12_message_severity_to_string(severity);
+		const char* categoryText = d3d12_message_category_to_string(category);
+		const bool isError = severity != D3D12_MESSAGE_SEVERITY_WARNING;
+
+		uint64_t occurrenceCount = 0;
+		{
+			std::lock_guard<std::mutex> lock(m_debugMessageMutex);
+			std::string key = std::string(source) + "|" + severityText + "|" + categoryText + "|" + std::to_string(static_cast<int>(id)) + "|" + safeDescription;
+			auto& entry = m_suppressedDebugMessages[key];
+			if (entry.count == 0)
+			{
+				entry.source = source;
+				entry.severity = severityText;
+				entry.category = categoryText;
+				entry.messageId = static_cast<int32_t>(id);
+				entry.description = safeDescription;
+				entry.error = isError;
+			}
+
+			++entry.count;
+			occurrenceCount = entry.count;
+		}
+
+		if (occurrenceCount > 1)
+		{
+			return;
+		}
+
+		if (isError)
+		{
+			HLogError("[DX12 Validation][{}][{}] {} : Category={} MessageID={} Message={}",
+				source,
+				safePhase,
+				severityText,
+				categoryText,
+				static_cast<int>(id),
+				safeDescription);
+			return;
+		}
+
+		HLogWarning("[DX12 Validation][{}][{}] {} : Category={} MessageID={} Message={}",
+			source,
+			safePhase,
+			severityText,
+			categoryText,
+			static_cast<int>(id),
+			safeDescription);
+#else
+		(void)phase;
+		(void)category;
+		(void)severity;
+		(void)id;
+		(void)description;
+#endif
+	}
+
+	auto DX12Context::_report_dxgi_debug_message(const char* phase, const DXGI_INFO_QUEUE_MESSAGE& message) -> void
+	{
+#if defined(ASH_DEBUG)
+		if (!should_log_dxgi_debug_message(message.Severity))
+		{
+			return;
+		}
+
+		const char* safePhase = phase ? phase : "runtime";
+		const char* safeDescription = message.pDescription ? message.pDescription : "";
+		const char* source = dxgi_producer_to_string(message.Producer);
+		const char* severityText = dxgi_message_severity_to_string(message.Severity);
+		const char* categoryText = dxgi_message_category_to_string(message.Category);
+		const bool isError = message.Severity != DXGI_INFO_QUEUE_MESSAGE_SEVERITY_WARNING;
+
+		uint64_t occurrenceCount = 0;
+		{
+			std::lock_guard<std::mutex> lock(m_debugMessageMutex);
+			std::string key = std::string(source) + "|" + severityText + "|" + categoryText + "|" + std::to_string(static_cast<int>(message.ID)) + "|" + safeDescription;
+			auto& entry = m_suppressedDebugMessages[key];
+			if (entry.count == 0)
+			{
+				entry.source = source;
+				entry.severity = severityText;
+				entry.category = categoryText;
+				entry.messageId = static_cast<int32_t>(message.ID);
+				entry.description = safeDescription;
+				entry.error = isError;
+			}
+
+			++entry.count;
+			occurrenceCount = entry.count;
+		}
+
+		if (occurrenceCount > 1)
+		{
+			return;
+		}
+
+		if (isError)
+		{
+			HLogError("[DX12 Validation][{}][{}] {} : Category={} MessageID={} Message={}",
+				source,
+				safePhase,
+				severityText,
+				categoryText,
+				static_cast<int>(message.ID),
+				safeDescription);
+			return;
+		}
+
+		HLogWarning("[DX12 Validation][{}][{}] {} : Category={} MessageID={} Message={}",
+			source,
+			safePhase,
+			severityText,
+			categoryText,
+			static_cast<int>(message.ID),
+			safeDescription);
+#else
+		(void)phase;
+		(void)message;
+#endif
+	}
+
+	auto DX12Context::_flush_suppressed_debug_messages() -> void
+	{
+#if defined(ASH_DEBUG)
+		std::unordered_map<std::string, SuppressedDebugMessage> suppressedMessages{};
+		{
+			std::lock_guard<std::mutex> lock(m_debugMessageMutex);
+			suppressedMessages.swap(m_suppressedDebugMessages);
+		}
+
+		for (const auto& [_, entry] : suppressedMessages)
+		{
+			if (entry.count <= 1)
+			{
+				continue;
+			}
+
+			const uint64_t suppressedCount = entry.count - 1;
+			if (entry.error)
+			{
+				HLogError("[DX12 Validation][{}] Suppressed {} repeated messages : {} Category={} MessageID={} Message={}",
+					entry.source,
+					suppressedCount,
+					entry.severity,
+					entry.category,
+					entry.messageId,
+					entry.description);
+				continue;
+			}
+
+			HLogWarning("[DX12 Validation][{}] Suppressed {} repeated messages : {} Category={} MessageID={} Message={}",
+				entry.source,
+				suppressedCount,
+				entry.severity,
+				entry.category,
+				entry.messageId,
+				entry.description);
+		}
+#endif
+	}
+
+	auto DX12Context::_drain_d3d12_debug_messages(const char* phase) -> void
+	{
+#if defined(ASH_DEBUG)
+		if (!m_enableDebugLayer || !m_d3d12InfoQueue || m_d3d12MessageCallbackRegistered)
+		{
+			return;
+		}
+
+		const UINT64 messageCount = m_d3d12InfoQueue->GetNumStoredMessages();
+		for (UINT64 messageIndex = 0; messageIndex < messageCount; ++messageIndex)
+		{
+			SIZE_T messageBytes = 0;
+			if (FAILED(m_d3d12InfoQueue->GetMessage(messageIndex, nullptr, &messageBytes)) || messageBytes == 0)
+			{
+				continue;
+			}
+
+			std::vector<uint8_t> messageStorage(messageBytes);
+			auto* message = reinterpret_cast<D3D12_MESSAGE*>(messageStorage.data());
+			if (FAILED(m_d3d12InfoQueue->GetMessage(messageIndex, message, &messageBytes)))
+			{
+				continue;
+			}
+
+			_report_d3d12_debug_message(phase, message->Category, message->Severity, message->ID, message->pDescription);
+		}
+
+		if (messageCount > 0)
+		{
+			m_d3d12InfoQueue->ClearStoredMessages();
+		}
+#else
+		(void)phase;
+#endif
+	}
+
+	auto DX12Context::_drain_dxgi_debug_messages(const char* phase) -> void
+	{
+#if defined(ASH_DEBUG)
+		if (!m_enableDebugLayer || !m_dxgiInfoQueue)
+		{
+			return;
+		}
+
+		const UINT64 messageCount = m_dxgiInfoQueue->GetNumStoredMessages(DXGI_DEBUG_DXGI);
+		for (UINT64 messageIndex = 0; messageIndex < messageCount; ++messageIndex)
+		{
+			SIZE_T messageBytes = 0;
+			if (FAILED(m_dxgiInfoQueue->GetMessage(DXGI_DEBUG_DXGI, messageIndex, nullptr, &messageBytes)) || messageBytes == 0)
+			{
+				continue;
+			}
+
+			std::vector<uint8_t> messageStorage(messageBytes);
+			auto* message = reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(messageStorage.data());
+			if (FAILED(m_dxgiInfoQueue->GetMessage(DXGI_DEBUG_DXGI, messageIndex, message, &messageBytes)))
+			{
+				continue;
+			}
+
+			_report_dxgi_debug_message(phase, *message);
+		}
+
+		if (messageCount > 0)
+		{
+			m_dxgiInfoQueue->ClearStoredMessages(DXGI_DEBUG_DXGI);
+		}
+#else
+		(void)phase;
+#endif
+	}
+
+	void __stdcall DX12Context::_d3d12_debug_message_callback(
+		D3D12_MESSAGE_CATEGORY category,
+		D3D12_MESSAGE_SEVERITY severity,
+		D3D12_MESSAGE_ID id,
+		LPCSTR description,
+		void* context)
+	{
+		auto* dx12Context = static_cast<DX12Context*>(context);
+		if (!dx12Context || !dx12Context->m_enableDebugLayer)
+		{
+			return;
+		}
+
+		dx12Context->_report_d3d12_debug_message("callback", category, severity, id, description);
 	}
 
 	auto DX12Context::_create_factory() -> bool
@@ -368,11 +817,10 @@ namespace RHI
 		}
 
 #ifdef ASH_DEBUG
-		ComPtr<ID3D12InfoQueue> infoQueue;
-		if (SUCCEEDED(m_device.As(&infoQueue)))
+		if (SUCCEEDED(m_device.As(&m_d3d12InfoQueue)) && m_d3d12InfoQueue)
 		{
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-			infoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
 		}
 #endif
 
@@ -531,6 +979,7 @@ namespace RHI
 			fr.uploadCommandsPending = false;
 			fr.fence->signal(m_graphicsQueue.get_queue());
 		}
+		_drain_d3d12_debug_messages("frame-end");
 
 		m_frameActive = false;
 		m_previousFrame = m_currentFrame;
@@ -589,6 +1038,7 @@ namespace RHI
 
 		// Signal fence for this frame
 		fr.fence->signal(m_graphicsQueue.get_queue());
+		_drain_d3d12_debug_messages("submit");
 	}
 
 	auto DX12Context::submit_immediately(const SubmitInfo& info) -> void

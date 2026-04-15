@@ -106,6 +106,11 @@ namespace RHI
 		if (FAILED(hr))
 		{
 			HLogError("DX12Swapchain: Failed to create swapchain. HRESULT: 0x{:08X}", (uint32_t)hr);
+			if (ctx)
+			{
+				ctx->_drain_dxgi_debug_messages("create-swapchain");
+				ctx->_drain_d3d12_debug_messages("create-swapchain");
+			}
 			return false;
 		}
 
@@ -116,10 +121,19 @@ namespace RHI
 		if (FAILED(hr))
 		{
 			HLogError("DX12Swapchain: Failed to query IDXGISwapChain4. HRESULT: 0x{:08X}", (uint32_t)hr);
+			if (ctx)
+			{
+				ctx->_drain_dxgi_debug_messages("create-swapchain");
+			}
 			return false;
 		}
 
 		_create_back_buffers();
+		if (ctx)
+		{
+			ctx->_drain_dxgi_debug_messages("create-swapchain");
+			ctx->_drain_d3d12_debug_messages("create-swapchain");
+		}
 
 		HLogInfo("DX12Swapchain: Created {}x{} with {} buffers.", m_width, m_height, (int)swapchainDesc.BufferCount);
 		return true;
@@ -127,7 +141,13 @@ namespace RHI
 
 	auto DX12Swapchain::shutdown() -> bool
 	{
+		auto* ctx = DX12Context::get();
 		_release_back_buffers();
+		if (ctx)
+		{
+			ctx->_drain_dxgi_debug_messages("destroy-swapchain");
+			ctx->_drain_d3d12_debug_messages("destroy-swapchain");
+		}
 		m_swapchain.Reset();
 		return true;
 	}
@@ -188,12 +208,22 @@ namespace RHI
 		if (FAILED(hr))
 		{
 			HLogError("DX12Swapchain: ResizeBuffers failed. HRESULT: 0x{:08X}", (uint32_t)hr);
+			if (ctx)
+			{
+				ctx->_drain_dxgi_debug_messages("resize-swapchain");
+				ctx->_drain_d3d12_debug_messages("resize-swapchain");
+			}
 			return;
 		}
 
 		m_width = width;
 		m_height = height;
 		_create_back_buffers();
+		if (ctx)
+		{
+			ctx->_drain_dxgi_debug_messages("resize-swapchain");
+			ctx->_drain_d3d12_debug_messages("resize-swapchain");
+		}
 	}
 
 	auto DX12Swapchain::present() -> void
@@ -202,6 +232,11 @@ namespace RHI
 		if (FAILED(hr))
 		{
 			HLogError("DX12Swapchain: Present failed. HRESULT: 0x{:08X}", (uint32_t)hr);
+		}
+		if (auto* ctx = DX12Context::get())
+		{
+			ctx->_drain_dxgi_debug_messages("present");
+			ctx->_drain_d3d12_debug_messages("present");
 		}
 	}
 
