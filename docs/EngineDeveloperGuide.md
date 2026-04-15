@@ -202,22 +202,114 @@ Windows Debug / Release 下，Engine 同时编入：
 
 1. `_pump_platform_events()`
 2. `_tick_frame()`
-3. `_render_frame()`
-4. `_present_frame()`
+3. `pump_render_commands()`
+4. `_render_frame()`
+5. `_present_frame()`
+6. `pump_render_commands()`
 
 补充说明：
 
 - `UIContext::begin_frame()` 在事件泵阶段启动
 - UI 绘制最终在 `Renderer::end_frame()` 内作为末尾 overlay 提交
 - 窗口最小化时会跳过实际渲染
+- 渲染线程即主线程，负责：
+  - 平台事件泵
+  - render command queue 执行
+  - `Renderer` 帧录制 / 提交 / present
 
-### 4.3 可重写钩子
+### 4.3 第一阶段线程模型
+
+当前主干已经接入一套 **UE 风格的第一阶段多线程骨架**，目标是先把“逻辑线程 + 渲染线程 + worker 线程池”建立起来，并给未来的 RHI 线程预留扩展点。
+
+当前线程角色定义在：
+
+- `project/src/engine/Base/hthreading.h`
+
+当前可用角色：
+
+- `Render`
+- `Logic`
+- `Worker`
+- `RHI`（仅保留角色位，尚未真正启用独立 RHI 线程）
+
+当前配置入口在 `EngineInitConfig.threading`：
+
+- `enable_logic_thread`
+- `worker_thread_count`
+- `logic_thread_idle_sleep_ms`
+
+当前行为约定：
+
+- `Application` 构造时会初始化 engine threading 基础设施与 worker 线程池
+- 如果 `enable_logic_thread=false`，行为保持单线程兼容：`_on_update()` 仍在主线程执行
+- 如果 `enable_logic_thread=true`：
+  - 主线程继续作为渲染线程
+  - `Application` 会拉起独立逻辑线程
+  - 默认 `Application::_on_logic_update()` 会转调 `_on_update()`
+  - 因此已有 app 可以通过“开启 logic thread”把 update 迁移到逻辑线程；若需要更细分职责，应显式覆写新的 logic hook
+
+### 4.4 Render Command Queue
+
+当前逻辑线程到渲染线程的通信方式，采用 UE 风格的 enqueue 模型：
+
+- `enqueue_render_command()`
+- `ASH_ENQUEUE_RENDER_COMMAND(Name, Lambda)`
+
+行为规则：
+
+- 如果当前已经在渲染线程内，render command 会立即执行
+- 如果当前在逻辑线程或 worker 线程内，command 会进入 render queue，等待主线程在每帧 pump 时执行
+- 线程系统 shutdown 期间，新的 render/worker command 会被拒绝，而不会错误地在非目标线程内联执行
+
+这条路径当前用于：
+
+- 逻辑线程通知渲染线程执行 render-side follow-up
+- 将来承接 scene proxy 创建、GPU 资源上传后的 render-side 接入等工作
+
+### 4.5 Logic Thread Hooks
+
+除了已有钩子外，`Application` 现在新增了逻辑线程生命周期钩子：
+
+- `_on_logic_startup()`
+- `_on_logic_update()`
+- `_on_logic_shutdown()`
+
+当前建议：
+
+- render-thread 专属工作继续放在：
+  - `_on_startup()`
+  - `_on_render()`
+  - `_on_gui()`
+  - `_present()`
+- scene/world/update/asset orchestration 逐步迁到：
+  - `_on_logic_startup()`
+  - `_on_logic_update()`
+  - `_on_logic_shutdown()`
+
+### 4.6 输入快照
+
+为避免逻辑线程直接读写主线程正在更新的输入状态，`Application` 当前做了第一阶段输入快照隔离：
+
+- 主线程维护真实 `InputState`
+- 每帧事件泵结束后，把输入状态复制到逻辑线程待消费快照
+- 逻辑线程在 update 前消费该快照
+- `Application::get_input()` 会按当前线程角色返回对应的输入状态引用
+
+这意味着：
+
+- 逻辑线程读到的是“上一轮事件泵发布的稳定快照”
+- 这套机制当前只解决 `InputState` 访问竞争，不代表其他高层系统已经自动线程安全
+
+### 4.7 可重写钩子
 
 当前主要虚函数：
 
 - `_on_startup()`
 - `_on_shutdown()`
 - `_on_update()`
+- `_on_logic_startup()`
+- `_on_logic_update()`
+- `_on_logic_shutdown()`
 - `_on_gui()`
 - `_on_render_debug()`
 - `_on_render()`
@@ -583,13 +675,15 @@ GpuValidation=true
 `UIContext` 当前只适合承载：
 
 - 通用 immediate-mode widget
+- 通用 docking / viewport 原语
 - 窗口 / 子窗口 / 菜单 / tabs / tables / popup
+- wrapped text / 多分量数值编辑 / 颜色编辑 / 稳定 id tree / richer table column 配置
 - RenderTarget 显示
 - 输入捕获查询
 
 它 **不再承载**：
 
-- workspace / dockspace policy
+- workspace / 默认 dockspace 布局 policy
 - panel 系统语义
 - property-grid / inspector 语义
 
@@ -601,6 +695,7 @@ GpuValidation=true
 ### 10.3 后续原则
 
 - Engine 继续维护 `ImGuiLayer` 与 `UIContext`
+- `UIContext` 可以继续补充“原语级”的 docking / viewport / widget 能力，但不要在这里固化 editor 的默认布局、面板编排或 property-grid 规则
 - Editor 如需更高层工作区接口，应在其上方再包 editor-specific facade
 
 ---
@@ -677,8 +772,10 @@ GpuValidation=true
 - 按 id / path 查询
 - text / binary 加载
 - `Mesh / Model / AshAsset` 加载
+- `Mesh / Model / AshAsset` 异步加载
 - per-asset load state / last error
 - `Mesh / Model / AshAsset` 内存缓存
+- worker-thread backed CPU 导入任务分发
 
 当前资源类型识别规则新增：
 
@@ -690,6 +787,27 @@ GpuValidation=true
 - `load_mesh_by_id()` / `load_mesh_by_path()`
 - `load_model_by_id()` / `load_model_by_path()`
 - `load_ashasset_by_id()` / `load_ashasset_by_path()`
+- `load_mesh_by_id_async()` / `load_mesh_by_path_async()`
+- `load_model_by_id_async()` / `load_model_by_path_async()`
+- `load_ashasset_by_id_async()` / `load_ashasset_by_path_async()`
+
+当前 `AssetLoadState` 新增：
+
+- `Loading`
+
+当前异步加载路径约定：
+
+- 由逻辑线程或其他高层线程发起 async request
+- 真正的磁盘 I/O / 模型解析在 engine worker 线程池中执行
+- 返回值是 `std::shared_future<std::shared_ptr<const ...>>`
+- 成功后资源会进入 `AssetDatabase` cache，并把 load state 更新为 `Loaded`
+- 失败时会回写 per-asset last error 与 `Failed`
+
+当前线程安全边界：
+
+- `Mesh / Model / AshAsset` 的同步/异步加载、load state、last error、内存 cache 已做互斥保护
+- `refresh()` / `set_root_path()` 仍应视为**逻辑线程持有的管理操作**
+- 当前不建议让 `refresh()` 与一批正在进行中的 async load 并发交错；以后如引入更完整的 streaming/cooking 系统，再补 generation/fence 语义
 
 这一层的定位是：
 
@@ -789,10 +907,19 @@ GpuValidation=true
 - `AssetPipelineSmoke`
   - 扫描 `product/assets`
   - 加载 `product/assets/models/gltfs/` 下的 glTF 样例
+  - 通过 `AssetDatabase::*_async()` 把模型/mesh 导入分发到 worker 线程
   - 验证 `load_model_from_file() / load_mesh_from_file() / make_ashasset_from_model() / save/load_ashasset / Scene::instantiate_* / scene save-load roundtrip`
 - `CodexLogoRender`
   - 使用 compute + fullscreen draw 的共享渲染路径
   - 直接在 `Renderer::get_back_buffer()` 返回的 Engine offscreen back buffer 上输出结果
+
+当前 `Sandbox` 还是第一阶段线程模型的首个落地用例：
+
+- `EngineInitConfig.threading.enable_logic_thread = true`
+- render thread 保持负责 `Renderer` 帧循环
+- startup asset smoke test 挪到 logic thread
+- 具体 glTF/mesh CPU 导入再继续扇出到 worker 线程池
+- startup 完成后，会通过 `ASH_ENQUEUE_RENDER_COMMAND` 向 render thread 回投一条确认消息
 
 当前默认内置的 glTF 样例资产位于：
 

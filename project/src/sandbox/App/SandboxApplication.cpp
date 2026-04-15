@@ -19,11 +19,17 @@ namespace AshSandbox
 
 	auto SandboxApplication::_on_startup() -> void
 	{
-		HLogInfo("Sandbox startup begin.");
+		HLogInfo("Sandbox render-thread startup begin.");
 		m_tests = create_default_sandbox_tests();
+	}
+
+	auto SandboxApplication::_on_logic_startup() -> void
+	{
+		HLogInfo("Sandbox logic-thread startup begin.");
 		if (!_initialize_paths_and_assets())
 		{
 			HLogError("Sandbox failed to initialize asset roots.");
+			m_startupSucceeded = false;
 			request_exit();
 			return;
 		}
@@ -35,7 +41,12 @@ namespace AshSandbox
 			return;
 		}
 
-		HLogInfo("Sandbox startup suite completed successfully.");
+		ASH_ENQUEUE_RENDER_COMMAND("SandboxLogicStartupComplete", []()
+		{
+			HLogInfo("Sandbox logic startup completion reached the render thread.");
+		});
+
+		HLogInfo("Sandbox logic-thread startup suite completed successfully.");
 	}
 
 	auto SandboxApplication::_on_shutdown() -> void

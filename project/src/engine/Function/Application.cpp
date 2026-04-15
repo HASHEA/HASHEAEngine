@@ -1,4 +1,3 @@
-#pragma once
 #include "Application.h"
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/GraphicsContext.h"
@@ -32,12 +31,24 @@ namespace AshEngine
 
 	Application* Application::app = nullptr;
 	Application::Application(const EngineInitConfig& config)
+		: threadingConfig(config.threading)
 	{
 		app = this;
 	
 		/*init at very first to ensure log*/
 		LogService::instance()->init(nullptr);
 		MemoryService::instance()->init(nullptr);
+		register_current_thread_role(EngineThreadRole::Render);
+		threadingInitialized = initialize_threading(threadingConfig);
+		if (!threadingInitialized)
+		{
+			HLogWarning("Engine threading initialization failed. Falling back to single-threaded application execution.");
+		}
+		logicThreadEnabled = threadingInitialized && threadingConfig.enable_logic_thread;
+		if (threadingConfig.enable_logic_thread && !logicThreadEnabled)
+		{
+			HLogWarning("Logic-thread mode was requested but is unavailable because engine threading initialization did not complete.");
+		}
 
 		const RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(config);
 		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
@@ -107,11 +118,16 @@ namespace AshEngine
 	}
 	Application::~Application()
 	{
-		app = nullptr;
+		_stop_logic_thread();
+		if (threadingInitialized && !is_threading_shutting_down())
+		{
+			flush_render_commands();
+		}
 		if (graphicsContext)
 		{
 			graphicsContext->wait_idle();
 		}
+		shutdown_threading();
 		delete renderer;
 		renderer = nullptr;
 		if (uiContext)
@@ -140,12 +156,13 @@ namespace AshEngine
 			window->destroy();
 			window = nullptr;
 		}
+		app = nullptr;
 		MemoryService::instance()->shutdown();
 		LogService::instance()->shutdown();
 	}
 	auto Application::request_exit() -> void
 	{
-		exitRequested = true;
+		exitRequested.store(true, std::memory_order_release);
 	}
 	auto Application::set_max_frame_count(uint64_t inMaxFrameCount) -> void
 	{
@@ -163,24 +180,37 @@ namespace AshEngine
 		}
 
 		started = true;
-		exitRequested = false;
-		frameIndex = 0;
+		exitRequested.store(false, std::memory_order_release);
+		logicThreadStopRequested.store(false, std::memory_order_release);
+		logicThreadFailed.store(false, std::memory_order_release);
+		frameIndex.store(0, std::memory_order_release);
+		logicThreadException = nullptr;
+		logicThreadFailureMessage.clear();
 		runStartTime = std::chrono::steady_clock::now();
 		_on_startup();
+		_start_logic_thread_if_needed();
 
 		while (!_should_exit())
 		{
 			_pump_platform_events();
 			_tick_frame();
+			_check_logic_thread_failure();
+			pump_render_commands();
 
 			if (_should_render_frame())
 			{
 				_render_frame();
 				_present_frame();
 			}
+			else if (!has_pending_render_commands())
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
 
-			++frameIndex;
-			if (maxFrameCount > 0 && frameIndex >= maxFrameCount)
+			pump_render_commands();
+
+			const uint64_t currentFrameIndex = frameIndex.fetch_add(1, std::memory_order_acq_rel) + 1;
+			if (maxFrameCount > 0 && currentFrameIndex >= maxFrameCount)
 			{
 				HLogInfo("Application smoke frame limit reached: {}", maxFrameCount);
 				request_exit();
@@ -196,6 +226,11 @@ namespace AshEngine
 			}
 		}
 
+		_stop_logic_thread();
+		if (threadingInitialized && !is_threading_shutting_down())
+		{
+			flush_render_commands();
+		}
 		_on_shutdown();
 		started = false;
 	}
@@ -209,6 +244,7 @@ namespace AshEngine
 
 		window->on_update();
 		_process_window_events();
+		_publish_logic_input_snapshot();
 		if (uiContext)
 		{
 			uiContext->begin_frame();
@@ -216,7 +252,10 @@ namespace AshEngine
 	}
 	auto Application::_tick_frame() -> void
 	{
-		_on_update();
+		if (!logicThreadEnabled)
+		{
+			_on_update();
+		}
 	}
 	auto Application::_render_frame() -> void
 	{
@@ -232,7 +271,11 @@ namespace AshEngine
 	}
 	auto Application::_should_exit() const -> bool
 	{
-		return exitRequested || window == nullptr || window->should_close();
+		return exitRequested.load(std::memory_order_acquire) || window == nullptr || window->should_close();
+	}
+	auto Application::_should_logic_exit() const -> bool
+	{
+		return exitRequested.load(std::memory_order_acquire) || logicThreadStopRequested.load(std::memory_order_acquire);
 	}
 	auto Application::_on_startup() -> void
 	{
@@ -242,6 +285,16 @@ namespace AshEngine
 	}
 	auto Application::_on_update() -> void
 	{
+	}
+	auto Application::_on_logic_startup() -> void
+	{
+	}
+	auto Application::_on_logic_shutdown() -> void
+	{
+	}
+	auto Application::_on_logic_update() -> void
+	{
+		_on_update();
 	}
 	auto Application::_process_window_events() -> void
 	{
@@ -307,6 +360,129 @@ namespace AshEngine
 		{
 			uiContext->handle_window_event(event);
 		}
+	}
+	auto Application::_start_logic_thread_if_needed() -> void
+	{
+		if (!logicThreadEnabled || logicThread.joinable())
+		{
+			return;
+		}
+
+		logicThreadStopRequested.store(false, std::memory_order_release);
+		logicThread = std::thread([this]()
+		{
+			_logic_thread_main();
+		});
+	}
+	auto Application::_stop_logic_thread() -> void
+	{
+		logicThreadStopRequested.store(true, std::memory_order_release);
+		if (logicThread.joinable())
+		{
+			logicThread.join();
+		}
+		logicThreadRunning.store(false, std::memory_order_release);
+	}
+	auto Application::_logic_thread_main() -> void
+	{
+		register_current_thread_role(EngineThreadRole::Logic);
+		logicThreadRunning.store(true, std::memory_order_release);
+		HLogInfo("Logic thread started.");
+
+		try
+		{
+			_consume_logic_input_snapshot();
+			_on_logic_startup();
+			while (!_should_logic_exit())
+			{
+				_consume_logic_input_snapshot();
+				_on_logic_update();
+				if (threadingConfig.logic_thread_idle_sleep_ms > 0)
+				{
+					std::this_thread::sleep_for(std::chrono::milliseconds(threadingConfig.logic_thread_idle_sleep_ms));
+				}
+			}
+			_on_logic_shutdown();
+		}
+		catch (...)
+		{
+			_capture_logic_thread_failure(std::current_exception());
+		}
+
+		logicThreadRunning.store(false, std::memory_order_release);
+		register_current_thread_role(EngineThreadRole::Unknown);
+		HLogInfo("Logic thread stopped.");
+	}
+	auto Application::_capture_logic_thread_failure(std::exception_ptr exception) -> void
+	{
+		std::string failureMessage = "Unknown logic-thread failure.";
+		if (exception)
+		{
+			try
+			{
+				std::rethrow_exception(exception);
+			}
+			catch (const std::exception& caughtException)
+			{
+				failureMessage = caughtException.what();
+			}
+			catch (...)
+			{
+				failureMessage = "Logic thread threw a non-standard exception.";
+			}
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(logicThreadFailureMutex);
+			logicThreadException = exception;
+			logicThreadFailureMessage = failureMessage;
+		}
+
+		logicThreadFailed.store(true, std::memory_order_release);
+		exitRequested.store(true, std::memory_order_release);
+		HLogError("Logic thread aborted: {}", failureMessage);
+	}
+	auto Application::_check_logic_thread_failure() -> void
+	{
+		if (logicThreadFailed.load(std::memory_order_acquire))
+		{
+			request_exit();
+		}
+	}
+	auto Application::_publish_logic_input_snapshot() -> void
+	{
+		if (!logicThreadEnabled)
+		{
+			return;
+		}
+
+		std::scoped_lock<std::mutex> lock(pendingLogicInputMutex);
+		pendingLogicInputState = inputState;
+		pendingLogicInputDirty = true;
+	}
+	auto Application::_consume_logic_input_snapshot() -> void
+	{
+		if (!logicThreadEnabled)
+		{
+			return;
+		}
+
+		std::scoped_lock<std::mutex> lock(pendingLogicInputMutex);
+		if (!pendingLogicInputDirty)
+		{
+			return;
+		}
+
+		logicInputState = pendingLogicInputState;
+		pendingLogicInputDirty = false;
+	}
+	auto Application::_get_thread_input_state() -> InputState&
+	{
+		if (logicThreadEnabled && is_in_logic_thread())
+		{
+			return logicInputState;
+		}
+		return inputState;
 	}
 	auto Application::_on_gui() -> void
 	{

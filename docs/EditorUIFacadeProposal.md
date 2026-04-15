@@ -66,7 +66,7 @@ Responsibilities:
 
 These APIs are useful for an editor, but they encode editor semantics and should not be treated as Engine-wide UI primitives:
 
-- workspace and dockspace orchestration
+- workspace orchestration and default dock graph policy
 - named panel abstractions
 - property-grid row helpers
 - inspector-specific label/value conventions
@@ -87,7 +87,9 @@ Examples:
 
 - windows and child windows
 - menus, tabs, tables, popups
+- raw docking and viewport primitives
 - text and common widgets
+- wrapped text, vec editors, color editors
 - tree controls
 - image and render-target display helpers
 - generic layout/style helpers
@@ -104,9 +106,20 @@ If the answer is "no" to any of those, the feature should likely live above `UIC
 
 ## About Docking
 
-Docking support can still be enabled internally in ImGui for future editor usage. That does not require exposing dockspace/workspace policy directly on `UIContext`.
+Raw docking helpers are acceptable on `UIContext` as long as they stay at the primitive layer:
 
-If the editor later needs dockspace helpers without touching ImGui directly, those helpers should be surfaced by an editor-specific facade built on top of `UIContext`, not by turning `UIContext` itself into an editor framework.
+- create a dock host window
+- create a dock space
+- split nodes
+- dock windows by name
+- finish a builder graph
+
+What should still stay above `UIContext`:
+
+- the editor's default layout recipe
+- panel naming/registration rules
+- layout reset policy
+- workspace persistence rules
 
 ## Relation To Runtime Game UI
 

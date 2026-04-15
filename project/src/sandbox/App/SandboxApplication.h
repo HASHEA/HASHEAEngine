@@ -18,6 +18,7 @@ namespace AshSandbox
 	protected:
 		auto _on_startup() -> void override;
 		auto _on_shutdown() -> void override;
+		auto _on_logic_startup() -> void override;
 		auto _on_render() -> void override;
 		auto _present() -> void override;
 

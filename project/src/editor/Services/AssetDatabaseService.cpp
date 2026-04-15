@@ -90,6 +90,8 @@ namespace AshEditor
 		{
 		case AshEngine::AssetLoadState::Unloaded:
 			return "Unloaded";
+		case AshEngine::AssetLoadState::Loading:
+			return "Loading";
 		case AshEngine::AssetLoadState::Loaded:
 			return "Loaded";
 		case AshEngine::AssetLoadState::Missing:

@@ -19,6 +19,15 @@ namespace AshSandbox
 			bool exercise_flattened_mesh = true;
 		};
 
+		struct PendingSampleLoad
+		{
+			std::filesystem::path sample_path{};
+			AshEngine::AssetId asset_id = 0;
+			bool exercise_flattened_mesh = false;
+			std::shared_future<std::shared_ptr<const AshEngine::Model>> model_future{};
+			std::shared_future<std::shared_ptr<const AshEngine::Mesh>> mesh_future{};
+		};
+
 		static constexpr std::array<SampleModelEntry, 4> k_sample_models =
 		{{
 			{ "models/gltfs/Avocado/glTF/Avocado.gltf", true },
@@ -60,36 +69,72 @@ namespace AshSandbox
 					return make_failure(out_error, "Failed to create generated-scenes report directory: " + createError.message());
 				}
 
+				std::vector<PendingSampleLoad> pendingLoads{};
+				pendingLoads.reserve(k_sample_models.size());
 				for (const SampleModelEntry& sample : k_sample_models)
 				{
 					const std::filesystem::path samplePath{ sample.path };
-					if (!context.asset_database->find_asset_by_path(samplePath))
+					const AshEngine::AssetInfo* assetInfo = context.asset_database->find_asset_by_path(samplePath);
+					if (!assetInfo)
 					{
 						return make_failure(out_error, "Sample asset is missing from AssetDatabase: " + samplePath.generic_string());
 					}
 
-					std::shared_ptr<const AshEngine::Model> model{};
-					if (!context.asset_database->load_model_by_path(samplePath, model) || !model || !model->is_valid())
-					{
-						return make_failure(out_error, "Failed to load model '" + samplePath.generic_string() + "': " + context.asset_database->get_last_error());
-					}
-
+					PendingSampleLoad pending{};
+					pending.sample_path = samplePath;
+					pending.asset_id = assetInfo->id;
+					pending.exercise_flattened_mesh = sample.exercise_flattened_mesh;
+					pending.model_future = context.asset_database->load_model_by_path_async(samplePath);
 					if (sample.exercise_flattened_mesh)
 					{
+						pending.mesh_future = context.asset_database->load_mesh_by_path_async(samplePath);
+					}
+					pendingLoads.push_back(std::move(pending));
+				}
+
+				for (const PendingSampleLoad& pending : pendingLoads)
+				{
+					const std::string samplePathString = pending.sample_path.generic_string();
+					std::shared_ptr<const AshEngine::Model> model{};
+					try
+					{
+						model = pending.model_future.get();
+					}
+					catch (const std::exception& exception)
+					{
+						return make_failure(out_error, "Model async load threw for '" + samplePathString + "': " + exception.what());
+					}
+					if (!model || !model->is_valid())
+					{
+						const std::string assetError = context.asset_database->get_asset_last_error(pending.asset_id);
+						return make_failure(out_error, "Failed to load model '" + samplePathString + "': " + (assetError.empty() ? "Unknown async load failure." : assetError));
+					}
+
+					if (pending.exercise_flattened_mesh)
+					{
 						std::shared_ptr<const AshEngine::Mesh> mesh{};
-						if (!context.asset_database->load_mesh_by_path(samplePath, mesh) || !mesh || !mesh->has_geometry())
+						try
 						{
-							return make_failure(out_error, "Failed to flatten mesh '" + samplePath.generic_string() + "': " + context.asset_database->get_last_error());
+							mesh = pending.mesh_future.get();
+						}
+						catch (const std::exception& exception)
+						{
+							return make_failure(out_error, "Mesh async load threw for '" + samplePathString + "': " + exception.what());
+						}
+						if (!mesh || !mesh->has_geometry())
+						{
+							const std::string assetError = context.asset_database->get_asset_last_error(pending.asset_id);
+							return make_failure(out_error, "Failed to flatten mesh '" + samplePathString + "': " + (assetError.empty() ? "Unknown async load failure." : assetError));
 						}
 					}
 
-					AshEngine::AshAsset prefab = AshEngine::make_ashasset_from_model(*model, samplePath);
+					AshEngine::AshAsset prefab = AshEngine::make_ashasset_from_model(*model, pending.sample_path);
 					if (!prefab.is_valid())
 					{
-						return make_failure(out_error, "Generated AshAsset is invalid for '" + samplePath.generic_string() + "'.");
+						return make_failure(out_error, "Generated AshAsset is invalid for '" + samplePathString + "'.");
 					}
 
-					const std::string sampleStem = samplePath.stem().string();
+					const std::string sampleStem = pending.sample_path.stem().string();
 					const std::filesystem::path prefabPath = context.report_root / "generated-assets" / (sampleStem + ".ashasset");
 					std::string ioError{};
 					if (!AshEngine::save_ashasset_to_file(prefab, prefabPath, &ioError))
@@ -106,15 +151,15 @@ namespace AshSandbox
 					AshEngine::Scene scene = AshEngine::Scene::create("SandboxAssetSmoke");
 					if (!scene.instantiate_model(*model).is_valid())
 					{
-						return make_failure(out_error, "Scene::instantiate_model failed for '" + samplePath.generic_string() + "'.");
+						return make_failure(out_error, "Scene::instantiate_model failed for '" + samplePathString + "'.");
 					}
 					if (!scene.instantiate_ashasset(reloadedPrefab).is_valid())
 					{
-						return make_failure(out_error, "Scene::instantiate_ashasset failed for '" + samplePath.generic_string() + "'.");
+						return make_failure(out_error, "Scene::instantiate_ashasset failed for '" + samplePathString + "'.");
 					}
-					if (!scene.instantiate_asset(*context.asset_database, samplePath).is_valid())
+					if (!scene.instantiate_asset(*context.asset_database, pending.sample_path).is_valid())
 					{
-						return make_failure(out_error, "Scene::instantiate_asset failed for '" + samplePath.generic_string() + "'.");
+						return make_failure(out_error, "Scene::instantiate_asset failed for '" + samplePathString + "'.");
 					}
 
 					const std::filesystem::path scenePath = context.report_root / "generated-scenes" / (sampleStem + ".ashscene");
@@ -131,7 +176,7 @@ namespace AshSandbox
 
 					HLogInfo(
 						"Sandbox sample '{}' passed. meshes={}, nodes={}, scene_entities={}.",
-						samplePath.generic_string(),
+						samplePathString,
 						model->meshes.size(),
 						model->nodes.size(),
 						reloadedScene.get_entity_count());

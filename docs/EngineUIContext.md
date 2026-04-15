@@ -20,7 +20,10 @@ Its target is shared tooling and debug UI that may be used by editor code, game-
   - `shutdown`
 - Common developer UI primitives:
   - windows, child windows, menus, tabs, tables, popups
+  - docking and viewport primitives
   - text, buttons, checkboxes, combo boxes, tree nodes
+  - wrapped text
+  - vec and color editing helpers
   - style color/style var helpers
   - cursor/layout helpers
 - Render target presentation:
@@ -40,12 +43,34 @@ Its target is shared tooling and debug UI that may be used by editor code, game-
 The following do not belong in `UIContext`:
 
 - editor workspace orchestration
-- dockspace layout policy
+- default dockspace layout policy and panel placement policy
 - panel registration/lifetime conventions
 - inspector/property-grid semantics
 - editor-only viewport conventions
 
 Those concerns should be handled by a dedicated editor/tool facade built on top of `UIContext`.
+
+## Generic Docking Boundary
+
+`UIContext` may expose raw, backend-agnostic docking and viewport primitives when they are still immediate-mode building blocks instead of editor policy.
+
+Good examples:
+
+- `begin_dockspace_host_window`
+- `dock_space`
+- `dock_builder_*`
+- `get_main_viewport_rect`
+- `get_main_viewport_id`
+- `set_next_window_viewport`
+
+These helpers are intentionally low level. They let higher layers stay off raw ImGui without forcing the Engine to own editor layout conventions.
+
+What still stays out:
+
+- the editor's default dock graph
+- named panel placement rules
+- workspace reset policy
+- panel persistence conventions
 
 ## Backend Model
 
@@ -72,6 +97,7 @@ Those concerns should be handled by a dedicated editor/tool facade built on top 
 
 - Open one or more windows for debug or tool workflows.
 - Compose tables, trees, menus, tabs, and images inside those windows.
+- Use the docking/viewport helpers when a tool wants full-window dock hosting without dropping to raw ImGui.
 - Use `draw_render_target_fill_available` for debug previews and tool viewports when a simple fit-to-region behavior is enough.
 
 ## Extension Rule

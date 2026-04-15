@@ -51,12 +51,23 @@ namespace AshEngine
 		void show_demo_window(bool* open = nullptr);
 
 		bool begin_window(const char* name, bool* open = nullptr, UIWindowFlags flags = UIWindowFlagBits::None);
+		bool begin_dockspace_host_window(const char* name, bool* open = nullptr, UIWindowFlags flags = UIWindowFlagBits::None);
 		void end_window();
 		bool begin_child(const char* str_id, const UIVec2& size = {}, UIChildFlags child_flags = UIChildFlagBits::None, UIWindowFlags window_flags = UIWindowFlagBits::None);
 		void end_child();
 
+		UIDockNodeId dock_space(const char* str_id, const UIVec2& size = {}, UIDockNodeFlags flags = UIDockNodeFlagBits::None);
+		UIDockNodeId dock_space(UIDockNodeId dockspace_id, const UIVec2& size = {}, UIDockNodeFlags flags = UIDockNodeFlagBits::None);
+		void dock_builder_remove_node(UIDockNodeId node_id);
+		void dock_builder_add_node(UIDockNodeId node_id, UIDockNodeFlags flags = UIDockNodeFlagBits::None);
+		void dock_builder_set_node_size(UIDockNodeId node_id, const UIVec2& size);
+		UIDockNodeId dock_builder_split_node(UIDockNodeId node_id, UIDirection direction, float size_ratio_for_node_at_dir, UIDockNodeId* out_id_at_dir = nullptr, UIDockNodeId* out_id_at_opposite_dir = nullptr);
+		void dock_builder_dock_window(const char* window_name, UIDockNodeId node_id);
+		void dock_builder_finish(UIDockNodeId node_id);
+
 		void set_next_window_position(const UIVec2& position, UIConditionFlags cond = UIConditionFlagBits::None, const UIVec2& pivot = {});
 		void set_next_window_size(const UIVec2& size, UIConditionFlags cond = UIConditionFlagBits::None);
+		void set_next_window_viewport(UIViewportId viewport_id);
 		void set_next_window_collapsed(bool collapsed, UIConditionFlags cond = UIConditionFlagBits::None);
 		void set_next_item_width(float width);
 
@@ -81,6 +92,7 @@ namespace AshEngine
 
 		void text_unformatted(const char* text);
 		void text(const char* format, ...);
+		void text_wrapped(const char* format, ...);
 		void text_colored(const UIColor& color, const char* format, ...);
 		void bullet_text(const char* format, ...);
 
@@ -90,14 +102,25 @@ namespace AshEngine
 		bool selectable(const char* label, bool selected = false, UISelectableFlags flags = UISelectableFlagBits::None, const UIVec2& size = {});
 		bool collapsing_header(const char* label, UITreeNodeFlags flags = UITreeNodeFlagBits::None);
 		bool tree_node(const char* label, UITreeNodeFlags flags = UITreeNodeFlagBits::None);
+		bool tree_node(const void* stable_id, const char* label, UITreeNodeFlags flags = UITreeNodeFlagBits::None);
 		void tree_pop();
 
 		bool input_text(const char* label, std::string& value, UIInputTextFlags flags = UIInputTextFlagBits::None);
 		bool input_text_multiline(const char* label, std::string& value, const UIVec2& size = {}, UIInputTextFlags flags = UIInputTextFlagBits::None);
 		bool input_int(const char* label, int32_t& value, int32_t step = 1, int32_t step_fast = 100);
 		bool input_float(const char* label, float& value, float step = 0.0f, float step_fast = 0.0f, const char* format = "%.3f");
+		bool input_float2(const char* label, float value[2], const char* format = "%.3f", UIInputTextFlags flags = UIInputTextFlagBits::None);
+		bool input_float3(const char* label, float value[3], const char* format = "%.3f", UIInputTextFlags flags = UIInputTextFlagBits::None);
+		bool input_float4(const char* label, float value[4], const char* format = "%.3f", UIInputTextFlags flags = UIInputTextFlagBits::None);
 		bool drag_float(const char* label, float& value, float speed = 1.0f, float min_value = 0.0f, float max_value = 0.0f, const char* format = "%.3f");
+		bool drag_float2(const char* label, float value[2], float speed = 1.0f, float min_value = 0.0f, float max_value = 0.0f, const char* format = "%.3f");
+		bool drag_float3(const char* label, float value[3], float speed = 1.0f, float min_value = 0.0f, float max_value = 0.0f, const char* format = "%.3f");
+		bool drag_float4(const char* label, float value[4], float speed = 1.0f, float min_value = 0.0f, float max_value = 0.0f, const char* format = "%.3f");
 		bool slider_float(const char* label, float& value, float min_value, float max_value, const char* format = "%.3f");
+		bool color_edit3(const char* label, float value[3]);
+		bool color_edit3(const char* label, UIColor& value);
+		bool color_edit4(const char* label, float value[4]);
+		bool color_edit4(const char* label, UIColor& value);
 		bool combo(const char* label, int32_t& current_index, const std::vector<const char*>& items, int32_t popup_max_height_in_items = -1);
 		bool combo(const char* label, int32_t& current_index, const std::vector<std::string>& items, int32_t popup_max_height_in_items = -1);
 
@@ -108,6 +131,7 @@ namespace AshEngine
 		bool begin_menu(const char* label, bool enabled = true);
 		void end_menu();
 		bool menu_item(const char* label, const char* shortcut = nullptr, bool selected = false, bool enabled = true);
+		bool menu_item(const char* label, const char* shortcut, bool* selected, bool enabled = true);
 
 		bool begin_tab_bar(const char* str_id, UITabBarFlags flags = UITabBarFlagBits::None);
 		void end_tab_bar();
@@ -119,6 +143,7 @@ namespace AshEngine
 		void table_next_row();
 		bool table_next_column();
 		void table_setup_column(const char* label, float init_width_or_weight = 0.0f);
+		void table_setup_column(const char* label, UITableColumnFlags flags, float init_width_or_weight = 0.0f);
 		void table_headers_row();
 
 		void open_popup(const char* str_id);
@@ -133,6 +158,8 @@ namespace AshEngine
 		bool is_window_hovered() const;
 
 		UIVec2 get_content_region_avail() const;
+		UIRect get_main_viewport_rect() const;
+		UIViewportId get_main_viewport_id() const;
 		UIVec2 get_cursor_pos() const;
 		void set_cursor_pos(const UIVec2& position);
 		float get_window_width() const;

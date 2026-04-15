@@ -5,6 +5,7 @@
 #include "Function/Asset/AssetData.h"
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -32,6 +33,7 @@ namespace AshEngine
 	{
 		Unknown = 0,
 		Unloaded,
+		Loading,
 		Loaded,
 		Missing,
 		Failed
@@ -79,10 +81,16 @@ namespace AshEngine
 		bool load_binary_by_path(const std::filesystem::path& path, std::vector<uint8_t>& out_bytes);
 		bool load_mesh_by_id(AssetId id, std::shared_ptr<const Mesh>& out_mesh);
 		bool load_mesh_by_path(const std::filesystem::path& path, std::shared_ptr<const Mesh>& out_mesh);
+		std::shared_future<std::shared_ptr<const Mesh>> load_mesh_by_id_async(AssetId id);
+		std::shared_future<std::shared_ptr<const Mesh>> load_mesh_by_path_async(const std::filesystem::path& path);
 		bool load_model_by_id(AssetId id, std::shared_ptr<const Model>& out_model);
 		bool load_model_by_path(const std::filesystem::path& path, std::shared_ptr<const Model>& out_model);
+		std::shared_future<std::shared_ptr<const Model>> load_model_by_id_async(AssetId id);
+		std::shared_future<std::shared_ptr<const Model>> load_model_by_path_async(const std::filesystem::path& path);
 		bool load_ashasset_by_id(AssetId id, std::shared_ptr<const AshAsset>& out_asset);
 		bool load_ashasset_by_path(const std::filesystem::path& path, std::shared_ptr<const AshAsset>& out_asset);
+		std::shared_future<std::shared_ptr<const AshAsset>> load_ashasset_by_id_async(AssetId id);
+		std::shared_future<std::shared_ptr<const AshAsset>> load_ashasset_by_path_async(const std::filesystem::path& path);
 
 	private:
 		std::shared_ptr<Impl> m_impl{};

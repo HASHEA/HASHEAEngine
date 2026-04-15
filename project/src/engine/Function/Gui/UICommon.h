@@ -12,6 +12,14 @@ namespace AshEngine
 		float y = 0.0f;
 	};
 
+	struct UIRect
+	{
+		float x = 0.0f;
+		float y = 0.0f;
+		float width = 0.0f;
+		float height = 0.0f;
+	};
+
 	struct UIColor
 	{
 		float r = 1.0f;
@@ -26,6 +34,18 @@ namespace AshEngine
 		Right = 1,
 		Middle = 2
 	};
+
+	enum class UIDirection : uint8_t
+	{
+		None = 0,
+		Left,
+		Right,
+		Up,
+		Down
+	};
+
+	using UIViewportId = uint32_t;
+	using UIDockNodeId = uint32_t;
 
 	enum class UIStyleColorKind : uint8_t
 	{
@@ -106,6 +126,21 @@ namespace AshEngine
 		constexpr UIWindowFlags MenuBar = 1u << 8u;
 		constexpr UIWindowFlags NoDocking = 1u << 9u;
 		constexpr UIWindowFlags AlwaysAutoResize = 1u << 10u;
+		constexpr UIWindowFlags NoBringToFrontOnFocus = 1u << 11u;
+		constexpr UIWindowFlags NoNavFocus = 1u << 12u;
+	}
+
+	using UIDockNodeFlags = uint32_t;
+	namespace UIDockNodeFlagBits
+	{
+		constexpr UIDockNodeFlags None = 0u;
+		constexpr UIDockNodeFlags KeepAliveOnly = 1u << 0u;
+		constexpr UIDockNodeFlags NoDockingOverCentralNode = 1u << 1u;
+		constexpr UIDockNodeFlags PassthruCentralNode = 1u << 2u;
+		constexpr UIDockNodeFlags NoDockingSplit = 1u << 3u;
+		constexpr UIDockNodeFlags NoResize = 1u << 4u;
+		constexpr UIDockNodeFlags AutoHideTabBar = 1u << 5u;
+		constexpr UIDockNodeFlags DockSpace = 1u << 6u;
 	}
 
 	using UIChildFlags = uint32_t;
@@ -157,6 +192,28 @@ namespace AshEngine
 		constexpr UITableFlags ScrollY = 1u << 9u;
 		constexpr UITableFlags SizingStretchProp = 1u << 10u;
 		constexpr UITableFlags SizingFixedFit = 1u << 11u;
+	}
+
+	using UITableColumnFlags = uint32_t;
+	namespace UITableColumnFlagBits
+	{
+		constexpr UITableColumnFlags None = 0u;
+		constexpr UITableColumnFlags Disabled = 1u << 0u;
+		constexpr UITableColumnFlags DefaultHide = 1u << 1u;
+		constexpr UITableColumnFlags DefaultSort = 1u << 2u;
+		constexpr UITableColumnFlags WidthStretch = 1u << 3u;
+		constexpr UITableColumnFlags WidthFixed = 1u << 4u;
+		constexpr UITableColumnFlags NoResize = 1u << 5u;
+		constexpr UITableColumnFlags NoReorder = 1u << 6u;
+		constexpr UITableColumnFlags NoHide = 1u << 7u;
+		constexpr UITableColumnFlags NoClip = 1u << 8u;
+		constexpr UITableColumnFlags NoSort = 1u << 9u;
+		constexpr UITableColumnFlags NoSortAscending = 1u << 10u;
+		constexpr UITableColumnFlags NoSortDescending = 1u << 11u;
+		constexpr UITableColumnFlags PreferSortAscending = 1u << 12u;
+		constexpr UITableColumnFlags PreferSortDescending = 1u << 13u;
+		constexpr UITableColumnFlags IndentEnable = 1u << 14u;
+		constexpr UITableColumnFlags IndentDisable = 1u << 15u;
 	}
 
 	using UIInputTextFlags = uint32_t;

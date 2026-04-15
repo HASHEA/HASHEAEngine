@@ -4,6 +4,7 @@
 #include "Function/Render/RenderDevice.h"
 #include "Graphics/Texture.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 #include <algorithm>
 #include <cstdarg>
 
@@ -69,6 +70,21 @@ namespace AshEngine
 			if (flags & UIWindowFlagBits::MenuBar) result |= ImGuiWindowFlags_MenuBar;
 			if (flags & UIWindowFlagBits::NoDocking) result |= ImGuiWindowFlags_NoDocking;
 			if (flags & UIWindowFlagBits::AlwaysAutoResize) result |= ImGuiWindowFlags_AlwaysAutoResize;
+			if (flags & UIWindowFlagBits::NoBringToFrontOnFocus) result |= ImGuiWindowFlags_NoBringToFrontOnFocus;
+			if (flags & UIWindowFlagBits::NoNavFocus) result |= ImGuiWindowFlags_NoNavFocus;
+			return result;
+		}
+
+		static auto to_imgui_dock_node_flags(UIDockNodeFlags flags) -> ImGuiDockNodeFlags
+		{
+			ImGuiDockNodeFlags result = ImGuiDockNodeFlags_None;
+			if (flags & UIDockNodeFlagBits::KeepAliveOnly) result |= ImGuiDockNodeFlags_KeepAliveOnly;
+			if (flags & UIDockNodeFlagBits::NoDockingOverCentralNode) result |= ImGuiDockNodeFlags_NoDockingOverCentralNode;
+			if (flags & UIDockNodeFlagBits::PassthruCentralNode) result |= ImGuiDockNodeFlags_PassthruCentralNode;
+			if (flags & UIDockNodeFlagBits::NoDockingSplit) result |= ImGuiDockNodeFlags_NoDockingSplit;
+			if (flags & UIDockNodeFlagBits::NoResize) result |= ImGuiDockNodeFlags_NoResize;
+			if (flags & UIDockNodeFlagBits::AutoHideTabBar) result |= ImGuiDockNodeFlags_AutoHideTabBar;
+			if (flags & UIDockNodeFlagBits::DockSpace) result |= ImGuiDockNodeFlags_DockSpace;
 			return result;
 		}
 
@@ -123,6 +139,28 @@ namespace AshEngine
 			return result;
 		}
 
+		static auto to_imgui_table_column_flags(UITableColumnFlags flags) -> ImGuiTableColumnFlags
+		{
+			ImGuiTableColumnFlags result = ImGuiTableColumnFlags_None;
+			if (flags & UITableColumnFlagBits::Disabled) result |= ImGuiTableColumnFlags_Disabled;
+			if (flags & UITableColumnFlagBits::DefaultHide) result |= ImGuiTableColumnFlags_DefaultHide;
+			if (flags & UITableColumnFlagBits::DefaultSort) result |= ImGuiTableColumnFlags_DefaultSort;
+			if (flags & UITableColumnFlagBits::WidthStretch) result |= ImGuiTableColumnFlags_WidthStretch;
+			if (flags & UITableColumnFlagBits::WidthFixed) result |= ImGuiTableColumnFlags_WidthFixed;
+			if (flags & UITableColumnFlagBits::NoResize) result |= ImGuiTableColumnFlags_NoResize;
+			if (flags & UITableColumnFlagBits::NoReorder) result |= ImGuiTableColumnFlags_NoReorder;
+			if (flags & UITableColumnFlagBits::NoHide) result |= ImGuiTableColumnFlags_NoHide;
+			if (flags & UITableColumnFlagBits::NoClip) result |= ImGuiTableColumnFlags_NoClip;
+			if (flags & UITableColumnFlagBits::NoSort) result |= ImGuiTableColumnFlags_NoSort;
+			if (flags & UITableColumnFlagBits::NoSortAscending) result |= ImGuiTableColumnFlags_NoSortAscending;
+			if (flags & UITableColumnFlagBits::NoSortDescending) result |= ImGuiTableColumnFlags_NoSortDescending;
+			if (flags & UITableColumnFlagBits::PreferSortAscending) result |= ImGuiTableColumnFlags_PreferSortAscending;
+			if (flags & UITableColumnFlagBits::PreferSortDescending) result |= ImGuiTableColumnFlags_PreferSortDescending;
+			if (flags & UITableColumnFlagBits::IndentEnable) result |= ImGuiTableColumnFlags_IndentEnable;
+			if (flags & UITableColumnFlagBits::IndentDisable) result |= ImGuiTableColumnFlags_IndentDisable;
+			return result;
+		}
+
 		static auto to_imgui_input_text_flags(UIInputTextFlags flags) -> ImGuiInputTextFlags
 		{
 			ImGuiInputTextFlags result = ImGuiInputTextFlags_None;
@@ -151,6 +189,18 @@ namespace AshEngine
 			if (flags & UITabItemFlagBits::SetSelected) result |= ImGuiTabItemFlags_SetSelected;
 			if (flags & UITabItemFlagBits::NoCloseWithMiddleMouseButton) result |= ImGuiTabItemFlags_NoCloseWithMiddleMouseButton;
 			return result;
+		}
+
+		static auto to_imgui_dir(UIDirection direction) -> ImGuiDir
+		{
+			switch (direction)
+			{
+			case UIDirection::Left: return ImGuiDir_Left;
+			case UIDirection::Right: return ImGuiDir_Right;
+			case UIDirection::Up: return ImGuiDir_Up;
+			case UIDirection::Down: return ImGuiDir_Down;
+			default: return ImGuiDir_None;
+			}
 		}
 
 		static auto to_imgui_style_color(UIStyleColorKind kind) -> ImGuiCol
@@ -381,6 +431,30 @@ namespace AshEngine
 		return is_frame_active() && name ? ImGui::Begin(name, open, to_imgui_window_flags(flags)) : false;
 	}
 
+	bool UIContext::begin_dockspace_host_window(const char* name, bool* open, UIWindowFlags flags)
+	{
+		if (!is_frame_active() || !name)
+		{
+			return false;
+		}
+
+		const UIWindowFlags resolved_flags =
+			flags |
+			UIWindowFlagBits::NoDocking |
+			UIWindowFlagBits::NoTitleBar |
+			UIWindowFlagBits::NoCollapse |
+			UIWindowFlagBits::NoResize |
+			UIWindowFlagBits::NoMove |
+			UIWindowFlagBits::NoBringToFrontOnFocus |
+			UIWindowFlagBits::NoNavFocus;
+
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+		const bool opened = ImGui::Begin(name, open, to_imgui_window_flags(resolved_flags));
+		ImGui::PopStyleVar(2);
+		return opened;
+	}
+
 	void UIContext::end_window()
 	{
 		if (is_frame_active())
@@ -404,6 +478,100 @@ namespace AshEngine
 		}
 	}
 
+	UIDockNodeId UIContext::dock_space(const char* str_id, const UIVec2& size, UIDockNodeFlags flags)
+	{
+		if (!is_frame_active() || !str_id)
+		{
+			return 0u;
+		}
+
+		return dock_space(static_cast<UIDockNodeId>(ImGui::GetID(str_id)), size, flags);
+	}
+
+	UIDockNodeId UIContext::dock_space(UIDockNodeId dockspace_id, const UIVec2& size, UIDockNodeFlags flags)
+	{
+		if (!is_frame_active() || dockspace_id == 0u)
+		{
+			return 0u;
+		}
+
+		ImGui::DockSpace(static_cast<ImGuiID>(dockspace_id), to_imvec2(size), to_imgui_dock_node_flags(flags));
+		return dockspace_id;
+	}
+
+	void UIContext::dock_builder_remove_node(UIDockNodeId node_id)
+	{
+		if (is_frame_active() && node_id != 0u)
+		{
+			ImGui::DockBuilderRemoveNode(static_cast<ImGuiID>(node_id));
+		}
+	}
+
+	void UIContext::dock_builder_add_node(UIDockNodeId node_id, UIDockNodeFlags flags)
+	{
+		if (is_frame_active() && node_id != 0u)
+		{
+			ImGui::DockBuilderAddNode(static_cast<ImGuiID>(node_id), to_imgui_dock_node_flags(flags));
+		}
+	}
+
+	void UIContext::dock_builder_set_node_size(UIDockNodeId node_id, const UIVec2& size)
+	{
+		if (is_frame_active() && node_id != 0u)
+		{
+			ImGui::DockBuilderSetNodeSize(static_cast<ImGuiID>(node_id), to_imvec2(size));
+		}
+	}
+
+	UIDockNodeId UIContext::dock_builder_split_node(UIDockNodeId node_id, UIDirection direction, float size_ratio_for_node_at_dir, UIDockNodeId* out_id_at_dir, UIDockNodeId* out_id_at_opposite_dir)
+	{
+		if (!is_frame_active() || node_id == 0u)
+		{
+			return 0u;
+		}
+
+		const ImGuiDir imgui_direction = to_imgui_dir(direction);
+		if (imgui_direction == ImGuiDir_None)
+		{
+			return 0u;
+		}
+
+		ImGuiID imgui_id_at_dir = 0u;
+		ImGuiID imgui_id_at_opposite_dir = 0u;
+		const ImGuiID split_id = ImGui::DockBuilderSplitNode(
+			static_cast<ImGuiID>(node_id),
+			imgui_direction,
+			size_ratio_for_node_at_dir,
+			out_id_at_dir ? &imgui_id_at_dir : nullptr,
+			out_id_at_opposite_dir ? &imgui_id_at_opposite_dir : nullptr);
+
+		if (out_id_at_dir)
+		{
+			*out_id_at_dir = static_cast<UIDockNodeId>(imgui_id_at_dir);
+		}
+		if (out_id_at_opposite_dir)
+		{
+			*out_id_at_opposite_dir = static_cast<UIDockNodeId>(imgui_id_at_opposite_dir);
+		}
+		return static_cast<UIDockNodeId>(split_id);
+	}
+
+	void UIContext::dock_builder_dock_window(const char* window_name, UIDockNodeId node_id)
+	{
+		if (is_frame_active() && window_name && node_id != 0u)
+		{
+			ImGui::DockBuilderDockWindow(window_name, static_cast<ImGuiID>(node_id));
+		}
+	}
+
+	void UIContext::dock_builder_finish(UIDockNodeId node_id)
+	{
+		if (is_frame_active() && node_id != 0u)
+		{
+			ImGui::DockBuilderFinish(static_cast<ImGuiID>(node_id));
+		}
+	}
+
 	void UIContext::set_next_window_position(const UIVec2& position, UIConditionFlags cond, const UIVec2& pivot)
 	{
 		if (is_frame_active())
@@ -417,6 +585,14 @@ namespace AshEngine
 		if (is_frame_active())
 		{
 			ImGui::SetNextWindowSize(to_imvec2(size), to_imgui_cond(cond));
+		}
+	}
+
+	void UIContext::set_next_window_viewport(UIViewportId viewport_id)
+	{
+		if (is_frame_active() && viewport_id != 0u)
+		{
+			ImGui::SetNextWindowViewport(static_cast<ImGuiID>(viewport_id));
 		}
 	}
 
@@ -613,6 +789,21 @@ namespace AshEngine
 		va_end(args);
 	}
 
+	void UIContext::text_wrapped(const char* format, ...)
+	{
+		if (!is_frame_active() || !format)
+		{
+			return;
+		}
+
+		va_list args;
+		va_start(args, format);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextV(format, args);
+		ImGui::PopTextWrapPos();
+		va_end(args);
+	}
+
 	void UIContext::text_colored(const UIColor& color, const char* format, ...)
 	{
 		if (!is_frame_active() || !format)
@@ -669,6 +860,13 @@ namespace AshEngine
 		return is_frame_active() && label ? ImGui::TreeNodeEx(label, to_imgui_tree_node_flags(flags)) : false;
 	}
 
+	bool UIContext::tree_node(const void* stable_id, const char* label, UITreeNodeFlags flags)
+	{
+		return is_frame_active() && stable_id && label ?
+			ImGui::TreeNodeEx(stable_id, to_imgui_tree_node_flags(flags), "%s", label) :
+			false;
+	}
+
 	void UIContext::tree_pop()
 	{
 		if (is_frame_active())
@@ -719,14 +917,76 @@ namespace AshEngine
 		return is_frame_active() && label ? ImGui::InputFloat(label, &value, step, step_fast, format ? format : "%.3f") : false;
 	}
 
+	bool UIContext::input_float2(const char* label, float value[2], const char* format, UIInputTextFlags flags)
+	{
+		return is_frame_active() && label && value ?
+			ImGui::InputFloat2(label, value, format ? format : "%.3f", to_imgui_input_text_flags(flags)) :
+			false;
+	}
+
+	bool UIContext::input_float3(const char* label, float value[3], const char* format, UIInputTextFlags flags)
+	{
+		return is_frame_active() && label && value ?
+			ImGui::InputFloat3(label, value, format ? format : "%.3f", to_imgui_input_text_flags(flags)) :
+			false;
+	}
+
+	bool UIContext::input_float4(const char* label, float value[4], const char* format, UIInputTextFlags flags)
+	{
+		return is_frame_active() && label && value ?
+			ImGui::InputFloat4(label, value, format ? format : "%.3f", to_imgui_input_text_flags(flags)) :
+			false;
+	}
+
 	bool UIContext::drag_float(const char* label, float& value, float speed, float min_value, float max_value, const char* format)
 	{
 		return is_frame_active() && label ? ImGui::DragFloat(label, &value, speed, min_value, max_value, format ? format : "%.3f") : false;
 	}
 
+	bool UIContext::drag_float2(const char* label, float value[2], float speed, float min_value, float max_value, const char* format)
+	{
+		return is_frame_active() && label && value ?
+			ImGui::DragFloat2(label, value, speed, min_value, max_value, format ? format : "%.3f") :
+			false;
+	}
+
+	bool UIContext::drag_float3(const char* label, float value[3], float speed, float min_value, float max_value, const char* format)
+	{
+		return is_frame_active() && label && value ?
+			ImGui::DragFloat3(label, value, speed, min_value, max_value, format ? format : "%.3f") :
+			false;
+	}
+
+	bool UIContext::drag_float4(const char* label, float value[4], float speed, float min_value, float max_value, const char* format)
+	{
+		return is_frame_active() && label && value ?
+			ImGui::DragFloat4(label, value, speed, min_value, max_value, format ? format : "%.3f") :
+			false;
+	}
+
 	bool UIContext::slider_float(const char* label, float& value, float min_value, float max_value, const char* format)
 	{
 		return is_frame_active() && label ? ImGui::SliderFloat(label, &value, min_value, max_value, format ? format : "%.3f") : false;
+	}
+
+	bool UIContext::color_edit3(const char* label, float value[3])
+	{
+		return is_frame_active() && label && value ? ImGui::ColorEdit3(label, value) : false;
+	}
+
+	bool UIContext::color_edit3(const char* label, UIColor& value)
+	{
+		return color_edit3(label, &value.r);
+	}
+
+	bool UIContext::color_edit4(const char* label, float value[4])
+	{
+		return is_frame_active() && label && value ? ImGui::ColorEdit4(label, value) : false;
+	}
+
+	bool UIContext::color_edit4(const char* label, UIColor& value)
+	{
+		return color_edit4(label, &value.r);
 	}
 
 	bool UIContext::combo(const char* label, int32_t& current_index, const std::vector<const char*>& items, int32_t popup_max_height_in_items)
@@ -793,6 +1053,11 @@ namespace AshEngine
 		return is_frame_active() && label ? ImGui::MenuItem(label, shortcut, selected, enabled) : false;
 	}
 
+	bool UIContext::menu_item(const char* label, const char* shortcut, bool* selected, bool enabled)
+	{
+		return is_frame_active() && label && selected ? ImGui::MenuItem(label, shortcut, selected, enabled) : false;
+	}
+
 	bool UIContext::begin_tab_bar(const char* str_id, UITabBarFlags flags)
 	{
 		return is_frame_active() && str_id ? ImGui::BeginTabBar(str_id, to_imgui_tab_bar_flags(flags)) : false;
@@ -852,6 +1117,14 @@ namespace AshEngine
 		if (is_frame_active() && label)
 		{
 			ImGui::TableSetupColumn(label, ImGuiTableColumnFlags_None, init_width_or_weight);
+		}
+	}
+
+	void UIContext::table_setup_column(const char* label, UITableColumnFlags flags, float init_width_or_weight)
+	{
+		if (is_frame_active() && label)
+		{
+			ImGui::TableSetupColumn(label, to_imgui_table_column_flags(flags), init_width_or_weight);
 		}
 	}
 
@@ -925,6 +1198,33 @@ namespace AshEngine
 		}
 		const ImVec2 value = ImGui::GetContentRegionAvail();
 		return { value.x, value.y };
+	}
+
+	UIRect UIContext::get_main_viewport_rect() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		if (!viewport)
+		{
+			return {};
+		}
+
+		return { viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y };
+	}
+
+	UIViewportId UIContext::get_main_viewport_id() const
+	{
+		if (!is_frame_active())
+		{
+			return 0u;
+		}
+
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		return viewport ? static_cast<UIViewportId>(viewport->ID) : 0u;
 	}
 
 	UIVec2 UIContext::get_cursor_pos() const
