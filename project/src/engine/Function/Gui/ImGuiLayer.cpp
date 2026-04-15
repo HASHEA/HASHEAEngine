@@ -505,17 +505,27 @@ namespace AshEngine
 			for (auto& [key, registration] : m_texture_registrations)
 			{
 				(void)key;
-				release_registration(registration);
+				release_registration(registration, true);
 			}
 			m_texture_registrations.clear();
 		}
 
-		void release_registration(TextureRegistration& registration)
+		void release_registration(TextureRegistration& registration, bool immediate = false)
 		{
 #if defined(ASH_HAS_VULKAN)
 			if (registration.descriptor_set != VK_NULL_HANDLE)
 			{
-				ImGui_ImplVulkan_RemoveTexture(registration.descriptor_set);
+				const VkDescriptorSet descriptor_set = registration.descriptor_set;
+				if (!immediate && m_backend == RHI::Backend::Vulkan && RHI::VulkanContext::get_current_frame() != UINT32_MAX)
+				{
+					RHI::VulkanContext::get_current_frame_deletion_queue().emplace([descriptor_set]() {
+						ImGui_ImplVulkan_RemoveTexture(descriptor_set);
+					});
+				}
+				else
+				{
+					ImGui_ImplVulkan_RemoveTexture(descriptor_set);
+				}
 				registration.descriptor_set = VK_NULL_HANDLE;
 				registration.image_view = VK_NULL_HANDLE;
 			}
@@ -658,7 +668,19 @@ namespace AshEngine
 
 			if (registration.descriptor_set != VK_NULL_HANDLE)
 			{
-				ImGui_ImplVulkan_RemoveTexture(registration.descriptor_set);
+				const VkDescriptorSet old_descriptor_set = registration.descriptor_set;
+				if (RHI::VulkanContext::get_current_frame() != UINT32_MAX)
+				{
+					RHI::VulkanContext::get_current_frame_deletion_queue().emplace([old_descriptor_set]() {
+						ImGui_ImplVulkan_RemoveTexture(old_descriptor_set);
+					});
+				}
+				else
+				{
+					ImGui_ImplVulkan_RemoveTexture(old_descriptor_set);
+				}
+				registration.descriptor_set = VK_NULL_HANDLE;
+				registration.image_view = VK_NULL_HANDLE;
 			}
 
 			registration.descriptor_set = ImGui_ImplVulkan_AddTexture(m_vk_sampler, image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);

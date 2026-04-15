@@ -57,6 +57,19 @@ namespace RHI
 			return vk_state;
 		}
 
+		static VkFrontFace flip_vk_front_face(VkFrontFace front_face)
+		{
+			switch (front_face)
+			{
+			case VK_FRONT_FACE_COUNTER_CLOCKWISE:
+				return VK_FRONT_FACE_CLOCKWISE;
+			case VK_FRONT_FACE_CLOCKWISE:
+				return VK_FRONT_FACE_COUNTER_CLOCKWISE;
+			default:
+				return front_face;
+			}
+		}
+
 		static bool collect_shader_stages(const PipelineCreation& ci,
 			std::vector<VkPipelineShaderStageCreateInfo>& stage_infos,
 			std::vector<ParseResult>& stage_reflections,
@@ -444,7 +457,7 @@ namespace RHI
 			rasterization_state.rasterizerDiscardEnable = VK_FALSE;
 			rasterization_state.polygonMode = ash_fill_mode_to_vk(ci.rasterization.fill);
 			rasterization_state.cullMode = ash_cull_mode_to_vk(ci.rasterization.cull_mode);
-			rasterization_state.frontFace = ash_front_face_to_vk(ci.rasterization.front);
+			rasterization_state.frontFace = flip_vk_front_face(ash_front_face_to_vk(ci.rasterization.front));
 			rasterization_state.depthBiasEnable = VK_FALSE;
 			rasterization_state.lineWidth = 1.0f;
 

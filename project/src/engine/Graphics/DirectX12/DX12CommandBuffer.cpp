@@ -260,6 +260,91 @@ namespace RHI
 		m_cmdList->Dispatch(groupCountX, groupCountY, groupCountZ);
 	}
 
+	auto DX12CommandBuffer::cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool
+	{
+		if (!source || !destination)
+		{
+			return false;
+		}
+
+		auto* sourceTexture = static_cast<DX12Texture*>(source.get());
+		auto* destinationTexture = static_cast<DX12Texture*>(destination.get());
+		ID3D12Resource* sourceResource = sourceTexture ? sourceTexture->get_resource() : nullptr;
+		ID3D12Resource* destinationResource = destinationTexture ? destinationTexture->get_resource() : nullptr;
+		if (!sourceResource || !destinationResource)
+		{
+			return false;
+		}
+
+		auto canonical_format = [](DXGI_FORMAT format) -> DXGI_FORMAT
+			{
+				switch (format)
+				{
+				case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+					return DXGI_FORMAT_R8G8B8A8_UNORM;
+				case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+					return DXGI_FORMAT_B8G8R8A8_UNORM;
+				case DXGI_FORMAT_BC1_UNORM_SRGB:
+					return DXGI_FORMAT_BC1_UNORM;
+				case DXGI_FORMAT_BC2_UNORM_SRGB:
+					return DXGI_FORMAT_BC2_UNORM;
+				case DXGI_FORMAT_BC3_UNORM_SRGB:
+					return DXGI_FORMAT_BC3_UNORM;
+				case DXGI_FORMAT_BC7_UNORM_SRGB:
+					return DXGI_FORMAT_BC7_UNORM;
+				default:
+					return format;
+				}
+			};
+
+		const D3D12_RESOURCE_DESC sourceDesc = sourceResource->GetDesc();
+		const D3D12_RESOURCE_DESC destinationDesc = destinationResource->GetDesc();
+		const bool dimensionsMatch =
+			sourceDesc.Dimension == destinationDesc.Dimension &&
+			sourceDesc.Width == destinationDesc.Width &&
+			sourceDesc.Height == destinationDesc.Height &&
+			sourceDesc.DepthOrArraySize == destinationDesc.DepthOrArraySize &&
+			sourceDesc.MipLevels == destinationDesc.MipLevels &&
+			sourceDesc.SampleDesc.Count == destinationDesc.SampleDesc.Count &&
+			sourceDesc.SampleDesc.Quality == destinationDesc.SampleDesc.Quality &&
+			canonical_format(sourceDesc.Format) == canonical_format(destinationDesc.Format);
+		if (!dimensionsMatch)
+		{
+			HLogError(
+				"DX12CommandBuffer: cmd_copy_texture requires compatible textures, source '{}' -> destination '{}'.",
+				source->get_name(),
+				destination->get_name());
+			return false;
+		}
+
+		if (!cmd_transition_resource_state({ source, AshResourceState::CopySrc }) ||
+			!cmd_transition_resource_state({ destination, AshResourceState::CopyDst }))
+		{
+			return false;
+		}
+
+		const uint32_t subresourceCount =
+			static_cast<uint32_t>(sourceDesc.MipLevels) *
+			(sourceDesc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? 1u : static_cast<uint32_t>(sourceDesc.DepthOrArraySize));
+
+		for (uint32_t subresourceIndex = 0; subresourceIndex < subresourceCount; ++subresourceIndex)
+		{
+			D3D12_TEXTURE_COPY_LOCATION sourceLocation{};
+			sourceLocation.pResource = sourceResource;
+			sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+			sourceLocation.SubresourceIndex = subresourceIndex;
+
+			D3D12_TEXTURE_COPY_LOCATION destinationLocation{};
+			destinationLocation.pResource = destinationResource;
+			destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+			destinationLocation.SubresourceIndex = subresourceIndex;
+
+			m_cmdList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+		}
+
+		return true;
+	}
+
 	auto DX12CommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> buffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		auto* dx12Buf = static_cast<DX12Buffer*>(buffer.get());

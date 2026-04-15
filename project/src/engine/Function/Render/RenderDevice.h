@@ -417,7 +417,6 @@ namespace AshEngine
 	private:
 		bool ensure_back_buffer_target();
 		void sync_swapchain_target();
-		bool ensure_present_program();
 		bool render_present_to_swapchain();
 		bool transition_graphics_program_resources(GraphicsProgram* program);
 		bool transition_compute_program_resources(ComputeProgram* program);

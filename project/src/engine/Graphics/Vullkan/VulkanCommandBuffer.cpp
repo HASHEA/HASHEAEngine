@@ -597,6 +597,75 @@ namespace RHI
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		vkCmdDispatch(vkCommandBuffer, groupCountX, groupCountY, groupCountZ);
 	}
+	auto VulkanCommandBuffer::cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_LOG_PROCESS_ERROR(source && destination);
+
+		auto sourceTexture = std::static_pointer_cast<VulkanTexture>(source);
+		auto destinationTexture = std::static_pointer_cast<VulkanTexture>(destination);
+		ASH_LOG_PROCESS_ERROR(sourceTexture && destinationTexture);
+		ASH_LOG_PROCESS_ERROR(!sourceTexture->is_sparse() && !destinationTexture->is_sparse());
+
+		const TextureCreation& sourceCreation = sourceTexture->get_desciption();
+		const TextureCreation& destinationCreation = destinationTexture->get_desciption();
+		const bool copyCompatible =
+			sourceCreation.type == destinationCreation.type &&
+			sourceCreation.format == destinationCreation.format &&
+			sourceCreation.width == destinationCreation.width &&
+			sourceCreation.height == destinationCreation.height &&
+			sourceCreation.depth == destinationCreation.depth &&
+			sourceCreation.array_layer_count == destinationCreation.array_layer_count &&
+			sourceCreation.mip_level_count == destinationCreation.mip_level_count &&
+			sourceCreation.eSampleCount == destinationCreation.eSampleCount;
+		ASH_LOG_PROCESS_ERROR(copyCompatible);
+
+		bool bRetCode = cmd_transition_resource_state({ source, AshResourceState::CopySrc });
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+		bRetCode = cmd_transition_resource_state({ destination, AshResourceState::CopyDst });
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+
+		std::vector<VkImageCopy> copyRegions{};
+		const bool is3DTexture = sourceCreation.type == Ash_Texture3D;
+		const uint32_t layerCount = is3DTexture ? 1u : static_cast<uint32_t>(sourceCreation.array_layer_count);
+		copyRegions.reserve(static_cast<size_t>(sourceCreation.mip_level_count) * layerCount);
+
+		for (uint32_t mipLevel = 0; mipLevel < sourceCreation.mip_level_count; ++mipLevel)
+		{
+			const uint32_t mipWidth = std::max<uint32_t>(1u, static_cast<uint32_t>(sourceCreation.width) >> mipLevel);
+			const uint32_t mipHeight = std::max<uint32_t>(1u, static_cast<uint32_t>(sourceCreation.height) >> mipLevel);
+			const uint32_t mipDepth = is3DTexture ? std::max<uint32_t>(1u, static_cast<uint32_t>(sourceCreation.depth) >> mipLevel) : 1u;
+
+			for (uint32_t layerIndex = 0; layerIndex < layerCount; ++layerIndex)
+			{
+				VkImageCopy copyRegion{};
+				copyRegion.srcSubresource.aspectMask = sourceTexture->get_vk_aspect_flags();
+				copyRegion.srcSubresource.mipLevel = mipLevel;
+				copyRegion.srcSubresource.baseArrayLayer = is3DTexture ? 0u : layerIndex;
+				copyRegion.srcSubresource.layerCount = 1u;
+				copyRegion.dstSubresource.aspectMask = destinationTexture->get_vk_aspect_flags();
+				copyRegion.dstSubresource.mipLevel = mipLevel;
+				copyRegion.dstSubresource.baseArrayLayer = is3DTexture ? 0u : layerIndex;
+				copyRegion.dstSubresource.layerCount = 1u;
+				copyRegion.extent = { mipWidth, mipHeight, mipDepth };
+				copyRegions.push_back(copyRegion);
+			}
+		}
+
+		ASH_LOG_PROCESS_ERROR(!copyRegions.empty());
+		vkCmdCopyImage(
+			vkCommandBuffer,
+			sourceTexture->get_vk_image(),
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			destinationTexture->get_vk_image(),
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			static_cast<uint32_t>(copyRegions.size()),
+			copyRegions.data());
+
+		ASH_SAFE_EXECUTE_END(bResult);
+		return bResult;
+	}
 	auto VulkanCommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> pBuffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");

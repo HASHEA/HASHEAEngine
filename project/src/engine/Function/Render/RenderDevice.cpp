@@ -254,23 +254,8 @@ namespace AshEngine
 			return std::shared_ptr<RHI::CommandBuffer>(command_buffer, [](RHI::CommandBuffer*) {});
 		}
 
-		static bool is_srgb_format(RHI::AshFormat format)
-		{
-			switch (format)
-			{
-			case RHI::ASH_FORMAT_R8G8B8A8_SRGB:
-			case RHI::ASH_FORMAT_B8G8R8A8_SRGB:
-			case RHI::ASH_FORMAT_BC7_SRGB_UNORM:
-				return true;
-			default:
-				return false;
-			}
-		}
-
 		static constexpr RenderTextureFormat k_public_back_buffer_format = RenderTextureFormat::BGRA8_SRGB;
 		static constexpr const char* k_public_back_buffer_name = "EngineBackBufferOffscreen";
-		static constexpr const char* k_back_buffer_present_shader_path = "project/src/engine/Function/Render/Shaders/BackBufferPresent.hlsl";
-		static constexpr const char* k_back_buffer_present_program_name = "EngineBackBufferPresentProgram";
 	}
 
 	class RenderTarget::Impl
@@ -399,8 +384,6 @@ namespace AshEngine
 		bool scissor_override_active = false;
 		RenderScissor scissor_override{};
 		bool back_buffer_written_this_frame = false;
-		std::unique_ptr<GraphicsProgram> present_program = nullptr;
-		bool present_program_output_is_srgb = false;
 	};
 
 	static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
@@ -1852,7 +1835,6 @@ namespace AshEngine
 		m_impl->current_command_buffer = nullptr;
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
-		m_impl->present_program.reset();
 		m_impl->back_buffer_target.reset();
 		m_impl->swapchain_target.reset();
 		m_impl->transient_render_target_pool.clear();
@@ -2239,101 +2221,52 @@ namespace AshEngine
 		m_impl->swapchain_target->format = from_rhi_format(m_impl->swapchain->get_format());
 	}
 
-	bool RenderDevice::ensure_present_program()
-	{
-		if (!m_impl || !m_impl->swapchain)
-		{
-			return false;
-		}
-
-		const bool output_is_srgb = is_srgb_format(m_impl->swapchain->get_format());
-		if (m_impl->present_program && m_impl->present_program_output_is_srgb == output_is_srgb)
-		{
-			return true;
-		}
-
-		const std::string shader_macro = output_is_srgb ? "PRESENT_OUTPUT_IS_SRGB=1" : "PRESENT_OUTPUT_IS_SRGB=0";
-		m_impl->present_program = create_graphics_program({
-			k_back_buffer_present_shader_path,
-			"VSMain",
-			"PSMain",
-			shader_macro.c_str(),
-			{ RenderCullMode::None, RenderPrimitiveTopology::TriangleStrip, false, false },
-			k_back_buffer_present_program_name
-		});
-		if (!m_impl->present_program)
-		{
-			HLogError("RenderDevice: failed to create internal present program for swapchain format {}.", static_cast<uint32_t>(m_impl->swapchain->get_format()));
-			return false;
-		}
-
-		m_impl->present_program_output_is_srgb = output_is_srgb;
-		return true;
-	}
-
 	bool RenderDevice::render_present_to_swapchain()
 	{
-		if (!m_impl || !m_impl->current_command_buffer || !m_impl->swapchain_target)
+		if (!m_impl || !m_impl->current_command_buffer || !m_impl->swapchain_target || !ensure_back_buffer_target())
 		{
 			return false;
 		}
-
-		const std::shared_ptr<RenderTarget> swapchain_target(new RenderTarget(m_impl->swapchain_target));
-
-		PassDesc pass_desc{};
-		pass_desc.name = m_impl->back_buffer_written_this_frame ? "EngineBackBufferPresentPass" : "EngineSwapchainClearPass";
-		pass_desc.color_attachments.push_back({
-			swapchain_target,
-			RenderLoadAction::Clear,
-			{ 0.0f, 0.0f, 0.0f, 1.0f }
-		});
 
 		if (!m_impl->back_buffer_written_this_frame)
 		{
-			if (!begin_pass(pass_desc))
+			const std::shared_ptr<RenderTarget> back_buffer_target(new RenderTarget(m_impl->back_buffer_target));
+			PassDesc clear_pass_desc{};
+			clear_pass_desc.name = "EngineBackBufferClearPass";
+			clear_pass_desc.color_attachments.push_back({
+				back_buffer_target,
+				RenderLoadAction::Clear,
+				{ 0.0f, 0.0f, 0.0f, 1.0f }
+			});
+
+			if (!begin_pass(clear_pass_desc))
 			{
-				HLogError("RenderDevice: failed to begin internal swapchain clear pass.");
+				HLogError("RenderDevice: failed to begin internal offscreen clear pass.");
 				return false;
 			}
 			end_pass();
-			return true;
 		}
 
-		if (!ensure_back_buffer_target() || !ensure_present_program())
+		const std::shared_ptr<RHI::Texture> source_texture = m_impl->back_buffer_target->get_texture();
+		const std::shared_ptr<RHI::Texture> destination_texture = m_impl->swapchain_target->get_texture();
+		if (!source_texture || !destination_texture)
 		{
+			HLogError("RenderDevice: present copy requires both offscreen and swapchain textures.");
 			return false;
 		}
 
-		const std::shared_ptr<RenderTarget> source_target(new RenderTarget(m_impl->back_buffer_target));
-		if (!m_impl->present_program->set_texture("SourceTexture", source_target))
+		if (!m_impl->current_command_buffer->cmd_copy_texture(source_texture, destination_texture))
 		{
-			HLogError("RenderDevice: failed to bind SourceTexture for internal present program.");
+			HLogError("RenderDevice: failed to copy internal back buffer to swapchain.");
 			return false;
 		}
 
-		if (!transition_graphics_program_resources(m_impl->present_program.get()))
+		if (!m_impl->current_command_buffer->cmd_transition_resource_state({ destination_texture, RHI::AshResourceState::CopyDst, RHI::AshResourceState::Present }))
 		{
-			HLogError("RenderDevice: failed to transition internal present program resources.");
+			HLogError("RenderDevice: failed to transition swapchain image to present.");
 			return false;
 		}
-		if (!begin_pass(pass_desc))
-		{
-			HLogError("RenderDevice: failed to begin internal present pass.");
-			return false;
-		}
-
-		bool success = bind_graphics_program(m_impl->present_program.get());
-		if (!success)
-		{
-			HLogError("RenderDevice: failed to bind internal present program.");
-		}
-		else
-		{
-			draw(4);
-		}
-
-		end_pass();
-		return success;
+		return true;
 	}
 
 	bool RenderDevice::begin_pass(const PassDesc& desc)

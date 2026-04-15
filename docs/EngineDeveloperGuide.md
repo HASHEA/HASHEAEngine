@@ -329,6 +329,16 @@ GpuValidation=true
 - 管理高层资源到 RHI 资源/视图的映射
 - 在合适时机执行资源状态转换
 
+当前还有两个重要约束：
+
+- `get_back_buffer()` 返回的是 **Engine 自己维护的 offscreen render target**，不是 swapchain image
+- `end_frame()` 末尾会把这张 offscreen back buffer 通过底层 copy 命令拷到私有 swapchain image，再由 `present()` 触发平台呈现
+
+这意味着：
+
+- Editor / Game / Client 上层不应假定自己拿到的是可直接 present 的 swapchain buffer
+- 引擎内部 final present 路径不再依赖额外的“fullscreen shader present pass”，而是走 backend copy + present state transition
+
 ### 6.3 Renderer
 
 `Renderer` 是更高一层的帧 orchestration facade，职责包括：
@@ -352,6 +362,7 @@ GpuValidation=true
 这样做的原因是：
 
 - Vulkan 不允许把某些 `vkCmdPipelineBarrier` 调用塞进 render pass / dynamic rendering 活跃区间
+- Vulkan final present 也不应依赖额外 graphics pass 去做纯搬运/翻转
 - 因此共享高层渲染路径必须保证 barrier 在 pass 外部完成
 
 如果以后改动这条规则，必须同时验证 Vulkan 与 DX12。
@@ -404,7 +415,7 @@ GpuValidation=true
 
 当前支持的典型用途：
 
-- back buffer 包装
+- Engine offscreen back buffer 包装
 - color render target
 - depth-stencil target
 - shader resource
@@ -448,6 +459,16 @@ GpuValidation=true
 - 通过 DXC 编译
 - Vulkan 路径消费 SPIR-V / SPIR-V 反射
 - DX12 路径消费 DXIL + DXC / D3D12 reflection
+
+其中 Vulkan graphics shader 额外约定为：
+
+- vertex / tess-eval / geometry / mesh 等会输出图元位置的 stage，编译时带 `-fvk-invert-y`
+- Vulkan pipeline 创建时同步翻转 front-face 约定，保证在沿用 DX 风格 HLSL clip-space 的前提下，culling 结果仍与 DX12 保持一致
+
+因此当前引擎对上层的约定是：
+
+- HLSL 仍按统一的 DX 风格坐标/手性语义编写
+- Vulkan/DX12 坐标差异由 backend 编译与 pipeline 层吸收，而不是靠某个特定 pass 做临时翻转补偿
 
 ### 8.2 反射驱动的内容
 

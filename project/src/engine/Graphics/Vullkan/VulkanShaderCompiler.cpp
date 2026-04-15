@@ -62,6 +62,20 @@ namespace RHI
 		}
 	}
 
+	static bool shader_stage_supports_vk_invert_y(AshShaderStageFlagBits stage)
+	{
+		switch (stage)
+		{
+		case ASH_SHADER_STAGE_VERTEX_BIT:
+		case ASH_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+		case ASH_SHADER_STAGE_GEOMETRY_BIT:
+		case ASH_SHADER_STAGE_MESH_BIT_EXT:
+			return true;
+		default:
+			return false;
+		}
+	}
+
 	// Helper function to get cache file path
 	static std::filesystem::path get_cache_path(const SHA1::Digest& passKey)
 	{
@@ -172,7 +186,7 @@ namespace RHI
 		DigestBuilder<SHA1> shaderTextBuilder{};
 		shaderTextBuilder.append(shaderFullText);
 		shaderTextBuilder.append(fileInfo.stage);
-		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0"));
+		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0-dxlayout-inverty"));
 		SHA1::Digest textKey = shaderTextBuilder.finalize();
 
 		// Try to read from cache
@@ -348,6 +362,10 @@ namespace RHI
 		// Additional options for Vulkan
 		argumentStrings.push_back(L"-fspv-target-env=vulkan1.0");
 		argumentStrings.push_back(L"-fvk-use-dx-layout");
+		if (shader_stage_supports_vk_invert_y(item.stage))
+		{
+			argumentStrings.push_back(L"-fvk-invert-y");
+		}
 
 		// Prepare defines as command-line -D arguments for IDxcCompiler3.
 		if (item.macroDefine && strlen(item.macroDefine) > 0)

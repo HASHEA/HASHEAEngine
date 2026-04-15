@@ -118,7 +118,6 @@ void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)
     }
 
     float2 uv = (float2(dispatchThreadID.xy) + 0.5) / float2(width, height);
-    uv.y = 1.0 - uv.y;
     float2 p = uv * 2.0 - 1.0;
     p.x *= (float)width / (float)height;
 
