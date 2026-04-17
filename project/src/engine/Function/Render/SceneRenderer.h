@@ -26,9 +26,11 @@ namespace AshEngine
 
 	private:
 		bool ensure_graphics_program();
+		bool ensure_depth_target(const std::shared_ptr<RenderTarget>& output_target);
 
 	private:
 		Renderer* m_renderer = nullptr;
 		std::unique_ptr<GraphicsProgram> m_graphics_program = nullptr;
+		std::shared_ptr<RenderTarget> m_depth_target = nullptr;
 	};
 }

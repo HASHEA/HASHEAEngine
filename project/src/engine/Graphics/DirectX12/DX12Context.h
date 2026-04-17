@@ -175,6 +175,7 @@ namespace RHI
 		DX12StagingBuffer* m_stagingBuffer = nullptr;
 		std::vector<PendingBufferUpload> m_pendingBufferUploads{};
 		std::vector<PendingTextureUpload> m_pendingTextureUploads{};
+		mutable std::mutex m_pendingUploadMutex{};
 
 		// Frame tracking
 		uint32_t m_currentFrame = 0;

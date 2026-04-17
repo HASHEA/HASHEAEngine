@@ -79,7 +79,6 @@ namespace RHI
 					stateBefore = ash_to_d3d12_resource_state(dx12Tex->get_resource_state());
 
 				if (stateBefore == stateAfter) continue;
-
 				d3dBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 				d3dBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
 				d3dBarrier.Transition.pResource = resource;

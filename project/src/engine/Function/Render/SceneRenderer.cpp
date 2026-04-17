@@ -1,6 +1,7 @@
 #include "Function/Render/SceneRenderer.h"
 
 #include "Base/hlog.h"
+#include "Graphics/VertexInputLayout.h"
 
 namespace AshEngine
 {
@@ -17,6 +18,7 @@ namespace AshEngine
 
 	void SceneRenderer::shutdown()
 	{
+		m_depth_target.reset();
 		m_graphics_program.reset();
 		m_renderer = nullptr;
 	}
@@ -27,6 +29,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_renderer);
 		ASH_PROCESS_ERROR(frame.output_target != nullptr);
 		ASH_PROCESS_ERROR(ensure_graphics_program());
+		ASH_PROCESS_ERROR(ensure_depth_target(frame.output_target));
 
 		PassDesc pass_desc{};
 		pass_desc.name = "SceneOpaquePass";
@@ -35,6 +38,11 @@ namespace AshEngine
 			RenderLoadAction::Clear,
 			{ 0.025f, 0.03f, 0.05f, 1.0f }
 		});
+		pass_desc.depth_attachment = {
+			m_depth_target,
+			RenderLoadAction::Clear,
+			{ 1.0f, 0u }
+		};
 
 		Renderer::GraphicsPassContext pass_context{};
 		ASH_PROCESS_ERROR(m_renderer->begin_pass(pass_desc, pass_context));
@@ -89,8 +97,9 @@ namespace AshEngine
 			"VSMain",
 			"PSMain",
 			nullptr,
-			{ RenderCullMode::Back, RenderPrimitiveTopology::TriangleList, false, false },
-			"SceneStaticMeshGraphicsProgram"
+			{ RenderCullMode::Back, RenderPrimitiveTopology::TriangleList, true, true },
+			"SceneStaticMeshGraphicsProgram",
+			RHI::make_vertex_input_scene_static_mesh_interleaved(),
 		});
 		ASH_PROCESS_ERROR(m_graphics_program != nullptr);
 		ASH_PROCESS_GUARD_END(bResult, false);
@@ -99,5 +108,35 @@ namespace AshEngine
 			HLogError("SceneRenderer failed to create graphics program '{}'.", k_scene_shader_path);
 		}
 		return bResult;
+	}
+
+	bool SceneRenderer::ensure_depth_target(const std::shared_ptr<RenderTarget>& output_target)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(output_target != nullptr);
+		ASH_PROCESS_ERROR(output_target->get_width() > 0);
+		ASH_PROCESS_ERROR(output_target->get_height() > 0);
+
+		if (m_depth_target &&
+			m_depth_target->get_width() == output_target->get_width() &&
+			m_depth_target->get_height() == output_target->get_height() &&
+			m_depth_target->get_format() == RenderTextureFormat::D32_SFLOAT)
+		{
+			break;
+		}
+
+		RenderTargetDesc depth_target_desc{};
+		depth_target_desc.width = static_cast<uint16_t>(output_target->get_width());
+		depth_target_desc.height = static_cast<uint16_t>(output_target->get_height());
+		depth_target_desc.format = RenderTextureFormat::D32_SFLOAT;
+		depth_target_desc.shader_resource = false;
+		depth_target_desc.unordered_access = false;
+		depth_target_desc.name = "SceneRendererDepthTarget";
+		depth_target_desc.use_optimized_clear_value = true;
+		depth_target_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
+		m_depth_target = m_renderer->create_render_target(depth_target_desc);
+		ASH_PROCESS_ERROR(m_depth_target != nullptr);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 }

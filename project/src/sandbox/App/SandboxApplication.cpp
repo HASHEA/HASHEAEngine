@@ -1,19 +1,30 @@
 #include "App/SandboxApplication.h"
 
+#include "Base/hthreading.h"
 #include "Base/hlog.h"
-#include "Function/Render/SceneView.h"
 #include "Function/Render/Renderer.h"
-#include <utility>
 #include <system_error>
 
 namespace AshSandbox
 {
 	namespace
 	{
-		static constexpr const char* k_scene_render_build_hook_message =
-			"Sandbox scene-render smoke requires a real logic-side visible-frame integration hook.";
-		static constexpr const char* k_scene_render_submit_hook_message =
-			"Sandbox scene-render smoke requires a real render-side scene submission hook.";
+		static auto get_standard_scene_load_state_name(SandboxStandardSceneLoadState load_state) -> const char*
+		{
+			switch (load_state)
+			{
+			case SandboxStandardSceneLoadState::Idle:
+				return "Idle";
+			case SandboxStandardSceneLoadState::LoadingModel:
+				return "LoadingModel";
+			case SandboxStandardSceneLoadState::Ready:
+				return "Ready";
+			case SandboxStandardSceneLoadState::Failed:
+				return "Failed";
+			default:
+				return "Unknown";
+			}
+		}
 	}
 
 	SandboxApplication::SandboxApplication(const AshEngine::EngineInitConfig& config)
@@ -23,15 +34,35 @@ namespace AshSandbox
 
 	SandboxApplication::~SandboxApplication()
 	{
-		_shutdown_tests();
-		_log_suite_summary();
+		_log_runtime_summary();
+		m_activeVisibleFrame.reset();
+		m_standardScene.reset();
 	}
 
 	auto SandboxApplication::_on_startup() -> void
 	{
 		HLogInfo("Sandbox render-thread startup begin.");
-		_initialize_scene_render_flow_hooks();
-		m_tests = create_default_sandbox_tests();
+		if (!is_logic_thread_enabled())
+		{
+			HLogWarning("Sandbox logic-thread mode is unavailable. Falling back to single-threaded scene ticking.");
+		}
+	}
+
+	auto SandboxApplication::_on_update() -> void
+	{
+		if (is_logic_thread_enabled())
+		{
+			return;
+		}
+
+		if (!m_logicBootstrapExecuted)
+		{
+			m_logicBootstrapExecuted = true;
+			_on_logic_startup();
+			return;
+		}
+
+		_on_logic_update();
 	}
 
 	auto SandboxApplication::_on_logic_startup() -> void
@@ -45,7 +76,7 @@ namespace AshSandbox
 			return;
 		}
 
-		m_startupSucceeded = _run_startup_suite();
+		m_startupSucceeded = _start_standard_scene();
 		if (!m_startupSucceeded)
 		{
 			request_exit();
@@ -62,7 +93,12 @@ namespace AshSandbox
 
 	auto SandboxApplication::_on_logic_update() -> void
 	{
-		if (!_run_logic_suite())
+		if (!m_startupSucceeded)
+		{
+			return;
+		}
+
+		if (!_tick_standard_scene_logic())
 		{
 			m_logicSucceeded = false;
 			request_exit();
@@ -71,8 +107,9 @@ namespace AshSandbox
 
 	auto SandboxApplication::_on_shutdown() -> void
 	{
-		_shutdown_tests();
-		_log_suite_summary();
+		_log_runtime_summary();
+		m_activeVisibleFrame.reset();
+		m_standardScene.reset();
 	}
 
 	auto SandboxApplication::_on_render() -> void
@@ -82,11 +119,13 @@ namespace AshSandbox
 		{
 			HLogError("Sandbox could not acquire renderer.");
 			m_renderSucceeded = false;
-			{
-				std::scoped_lock<std::mutex> flowLock(m_sceneRenderFlow.mutex);
-				m_sceneRenderFlow.status = SandboxSceneRenderFlowStatus::Failed;
-				m_sceneRenderFlow.status_detail = "Renderer is unavailable.";
-			}
+			request_exit();
+			return;
+		}
+		if (!_finalize_render_assets())
+		{
+			HLogError("Sandbox failed to finalize pending render assets on the render thread.");
+			m_renderSucceeded = false;
 			request_exit();
 			return;
 		}
@@ -94,26 +133,39 @@ namespace AshSandbox
 		{
 			HLogError("Sandbox failed to begin renderer frame.");
 			m_renderSucceeded = false;
-			{
-				std::scoped_lock<std::mutex> flowLock(m_sceneRenderFlow.mutex);
-				m_sceneRenderFlow.status = SandboxSceneRenderFlowStatus::Failed;
-				m_sceneRenderFlow.status_detail = "Renderer begin_frame failed.";
-			}
 			request_exit();
 			return;
 		}
 
-		bool renderSucceeded = true;
-		const std::shared_ptr<AshEngine::RenderTarget> outputTarget = renderer->get_back_buffer();
-		if (!_run_render_suite(outputTarget))
+		bool render_succeeded = true;
+		_consume_visible_frame_handoff();
+		const std::shared_ptr<AshEngine::RenderTarget> output_target = renderer->get_back_buffer();
+		if (!output_target)
 		{
-			renderSucceeded = false;
-			m_renderSucceeded = false;
+			HLogError("Sandbox could not acquire the renderer back buffer for standard-scene submission.");
+			render_succeeded = false;
+		}
+		else if (m_activeVisibleFrame)
+		{
+			render_succeeded = _submit_standard_scene(output_target);
+		}
+		else if (m_standardScene.get_load_state() == SandboxStandardSceneLoadState::Failed)
+		{
+			HLogError(
+				"Sandbox standard scene failed before any visible frame could be submitted: {}",
+				m_standardScene.get_failure_detail());
+			render_succeeded = false;
 		}
 
-		renderer->end_frame();
-		if (!renderSucceeded)
+		if (!renderer->end_frame())
 		{
+			HLogError("Sandbox failed to end the renderer frame.");
+			render_succeeded = false;
+		}
+
+		if (!render_succeeded)
+		{
+			m_renderSucceeded = false;
 			request_exit();
 		}
 	}
@@ -125,11 +177,11 @@ namespace AshSandbox
 
 	auto SandboxApplication::_initialize_paths_and_assets() -> bool
 	{
-		std::error_code createError{};
-		std::filesystem::create_directories(m_reportRoot, createError);
-		if (createError)
+		std::error_code create_error{};
+		std::filesystem::create_directories(m_reportRoot, create_error);
+		if (create_error)
 		{
-			HLogError("Sandbox failed to create report directory '{}': {}.", m_reportRoot.string(), createError.message());
+			HLogError("Sandbox failed to create report directory '{}': {}.", m_reportRoot.string(), create_error.message());
 			return false;
 		}
 
@@ -152,175 +204,115 @@ namespace AshSandbox
 		return true;
 	}
 
-	auto SandboxApplication::_make_test_context() -> SandboxTestContext
+	auto SandboxApplication::_start_standard_scene() -> bool
 	{
-		SandboxTestContext context{};
-		context.renderer = AshEngine::Application::get_renderer();
-		context.asset_database = &m_assetDatabase;
-		context.asset_root = m_assetRoot;
-		context.report_root = m_reportRoot;
-		context.frame_index = get_frame_index();
-		context.logic_thread_enabled = is_logic_thread_enabled();
-		context.request_exit = [this]()
+		AshEngine::Renderer* renderer = AshEngine::Application::get_renderer();
+		if (renderer == nullptr)
 		{
-			request_exit();
-		};
-		context.scene_render_flow = &m_sceneRenderFlow;
-		context.scene_render_hooks = &m_sceneRenderHooks;
-		return context;
-	}
-
-	auto SandboxApplication::_run_startup_suite() -> bool
-	{
-		bool allPassed = true;
-		for (const auto& test : m_tests)
-		{
-			if (!test)
-			{
-				continue;
-			}
-
-			std::string error{};
-			SandboxTestContext context = _make_test_context();
-			if (!test->on_startup(context, error))
-			{
-				allPassed = false;
-				HLogError("Sandbox startup test '{}' failed: {}", test->get_name(), error.empty() ? "Unknown error." : error);
-				continue;
-			}
-
-			HLogInfo("Sandbox startup test '{}' passed.", test->get_name());
-		}
-		return allPassed;
-	}
-
-	auto SandboxApplication::_run_logic_suite() -> bool
-	{
-		bool allPassed = true;
-		for (const auto& test : m_tests)
-		{
-			if (!test || !test->wants_logic_update())
-			{
-				continue;
-			}
-
-			std::string error{};
-			SandboxTestContext context = _make_test_context();
-			if (!test->on_logic_update(context, error))
-			{
-				allPassed = false;
-				HLogError("Sandbox logic test '{}' failed on frame {}: {}", test->get_name(), get_frame_index(), error.empty() ? "Unknown error." : error);
-			}
+			HLogError("Sandbox could not start the standard scene because the renderer is unavailable.");
+			return false;
 		}
 
-		return allPassed;
-	}
-
-	auto SandboxApplication::_run_render_suite(const std::shared_ptr<AshEngine::RenderTarget>& output_target) -> bool
-	{
-		bool allPassed = true;
-		for (const auto& test : m_tests)
+		if (!m_standardScene.start(m_assetDatabase, *renderer, get_render_asset_manager()))
 		{
-			if (!test || !test->wants_render())
-			{
-				continue;
-			}
-
-			std::string error{};
-			SandboxTestContext context = _make_test_context();
-			if (!test->on_render(context, output_target, error))
-			{
-				allPassed = false;
-				HLogError("Sandbox render test '{}' failed on frame {}: {}", test->get_name(), get_frame_index(), error.empty() ? "Unknown error." : error);
-			}
-		}
-		return allPassed;
-	}
-
-	auto SandboxApplication::_initialize_scene_render_flow_hooks() -> void
-	{
-		m_sceneRenderHooks.build_visible_frame =
-			[](SandboxTestContext& context, SandboxSceneRenderFlowState& state, std::string& out_error) -> bool
-		{
-			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-			ASH_PROCESS_ERROR(context.renderer != nullptr);
-			auto* application = static_cast<SandboxApplication*>(AshEngine::Application::get());
-			ASH_PROCESS_ERROR(application != nullptr);
-
-			state.render_scene = {};
-			ASH_PROCESS_ERROR(state.render_scene.rebuild_from_scene(state.scene, application->get_render_asset_manager()));
-
-			AshEngine::SceneViewDesc view_desc{};
-			const std::shared_ptr<AshEngine::RenderTarget> back_buffer = context.renderer->get_back_buffer();
-			ASH_PROCESS_ERROR(back_buffer != nullptr);
-			view_desc.viewport_width = back_buffer->get_width();
-			view_desc.viewport_height = back_buffer->get_height();
-			ASH_PROCESS_ERROR(AshEngine::build_primary_scene_view(state.scene, view_desc, state.scene_view));
-
-			auto visible_frame = std::make_shared<AshEngine::VisibleRenderFrame>();
-			ASH_PROCESS_ERROR(state.render_scene.build_visible_render_frame(context.frame_index, state.scene_view, back_buffer, *visible_frame));
-			ASH_PROCESS_ERROR(!visible_frame->static_mesh_draws.empty());
-
-			state.visible_frame = visible_frame;
-			state.visible_frame_ready = true;
-			state.status = SandboxSceneRenderFlowStatus::VisibleFrameReady;
-			state.status_detail = "Built a visible render frame from the logical scene.";
-			out_error.clear();
-			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-		};
-
-		m_sceneRenderHooks.submit_frame =
-			[](SandboxTestContext& context, SandboxSceneRenderFlowState& state, const std::shared_ptr<AshEngine::RenderTarget>& output_target, std::string& out_error) -> bool
-		{
-			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-			ASH_PROCESS_ERROR(output_target != nullptr);
-			auto* application = static_cast<SandboxApplication*>(AshEngine::Application::get());
-			ASH_PROCESS_ERROR(application != nullptr);
-			ASH_PROCESS_ERROR(state.visible_frame_ready);
-			ASH_PROCESS_ERROR(state.visible_frame != nullptr);
-
-			state.visible_frame->output_target = output_target;
-			ASH_PROCESS_ERROR(application->get_scene_renderer().render_visible_frame(*state.visible_frame));
-
-			state.render_submission_exercised = true;
-			state.status = SandboxSceneRenderFlowStatus::RenderSubmitted;
-			state.status_detail = "Submitted the visible render frame through SceneRenderer.";
-			out_error.clear();
-			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-		};
-	}
-
-	auto SandboxApplication::_shutdown_tests() -> void
-	{
-		if (m_tests.empty())
-		{
-			return;
+			const std::string failure_detail = m_standardScene.get_failure_detail();
+			HLogError(
+				"Sandbox failed to start the standard-scene runtime: {}",
+				failure_detail.empty() ? "Unknown error." : failure_detail);
+			return false;
 		}
 
-		SandboxTestContext context = _make_test_context();
-		for (auto& test : m_tests)
-		{
-			if (test)
-			{
-				test->on_shutdown(context);
-			}
-		}
-		m_tests.clear();
+		HLogInfo(
+			"Sandbox standard scene runtime is using '{}'.",
+			SandboxStandardScene::get_canonical_sample_asset_path().generic_string());
+		return true;
 	}
 
-	auto SandboxApplication::_log_suite_summary() -> void
+	auto SandboxApplication::_tick_standard_scene_logic() -> bool
+	{
+		if (!m_standardScene.update_logic(AshEngine::Application::get_input(), get_frame_index()))
+		{
+			const std::string failure_detail = m_standardScene.get_failure_detail();
+			HLogError(
+				"Sandbox standard-scene logic update failed on frame {}: {}",
+				get_frame_index(),
+				failure_detail.empty() ? "Unknown error." : failure_detail);
+			return false;
+		}
+
+		return true;
+	}
+
+	auto SandboxApplication::_finalize_render_assets() -> bool
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(AshEngine::is_in_render_thread());
+
+		AshEngine::RenderAssetManager& render_asset_manager = get_render_asset_manager();
+		render_asset_manager.finalize_pending_assets();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	auto SandboxApplication::_consume_visible_frame_handoff() -> void
+	{
+		std::shared_ptr<AshEngine::VisibleRenderFrame> pending_visible_frame{};
+		uint64_t pending_version = 0;
+		if (m_standardScene.take_pending_visible_frame(pending_visible_frame, pending_version) && pending_visible_frame != nullptr)
+		{
+			m_activeVisibleFrame = std::move(pending_visible_frame);
+			m_activeVisibleFrameVersion = pending_version;
+		}
+	}
+
+	auto SandboxApplication::_submit_standard_scene(const std::shared_ptr<AshEngine::RenderTarget>& output_target) -> bool
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(output_target != nullptr);
+		ASH_PROCESS_ERROR(m_activeVisibleFrame != nullptr);
+
+		m_activeVisibleFrame->output_target = output_target;
+		ASH_PROCESS_ERROR(get_scene_renderer().render_visible_frame(*m_activeVisibleFrame));
+		m_standardScene.note_visible_frame_submitted(m_activeVisibleFrameVersion);
+		ASH_PROCESS_GUARD_END(bResult, false);
+		if (!bResult)
+		{
+			HLogError(
+				"Sandbox failed to submit the current standard-scene visible frame version {}.",
+				m_activeVisibleFrameVersion);
+		}
+		return bResult;
+	}
+
+	auto SandboxApplication::_log_runtime_summary() -> void
 	{
 		if (m_summaryLogged)
 		{
 			return;
 		}
 		m_summaryLogged = true;
+
+		const SandboxStandardSceneSnapshot snapshot = m_standardScene.snapshot();
+		const bool scene_loaded = snapshot.scene.is_valid();
+		const bool visible_frames_built = snapshot.visible_frame.latest_snapshot_version > 0;
+		const bool frames_submitted = snapshot.visible_frame.latest_submitted_version > 0;
+		const bool clean_exit =
+			m_startupSucceeded &&
+			m_logicSucceeded &&
+			m_renderSucceeded &&
+			snapshot.load_state != SandboxStandardSceneLoadState::Failed;
+
 		HLogInfo(
-			"Sandbox summary: startup={}, logic={}, render={}, scene_render_status={}, reports='{}'.",
+			"Sandbox summary: startup={}, logic={}, render={}, scene_loaded={}, visible_frames_built={}, frames_submitted={}, clean_exit={}, load_state={}, sample='{}', reports='{}', failure='{}'.",
 			m_startupSucceeded ? "passed" : "failed",
 			m_logicSucceeded ? "passed" : "failed",
 			m_renderSucceeded ? "passed" : "failed",
-			get_sandbox_scene_render_flow_status_name(m_sceneRenderFlow.status),
-			m_reportRoot.string());
+			scene_loaded ? "yes" : "no",
+			visible_frames_built ? "yes" : "no",
+			frames_submitted ? "yes" : "no",
+			clean_exit ? "yes" : "no",
+			get_standard_scene_load_state_name(snapshot.load_state),
+			snapshot.sample_asset_path.generic_string(),
+			m_reportRoot.string(),
+			snapshot.failure_detail.empty() ? "None" : snapshot.failure_detail);
 	}
 }

@@ -17,14 +17,23 @@
 #include <filesystem>
 #include <fstream>
 #include <vector>
+#include <array>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <string_view>
 
 namespace RHI
 {
 #if defined(ASH_HAS_DXC)
 	namespace
 	{
+		struct HlslVertexInputField
+		{
+			std::string type_name{};
+			std::string semantic{};
+		};
+
 		static size_t find_matching_brace(std::string_view text, size_t open_brace_index)
 		{
 			if (open_brace_index == std::string_view::npos || open_brace_index >= text.size() || text[open_brace_index] != '{')
@@ -53,6 +62,34 @@ namespace RHI
 			return std::string_view::npos;
 		}
 
+		static size_t find_matching_parenthesis(std::string_view text, size_t open_parenthesis_index)
+		{
+			if (open_parenthesis_index == std::string_view::npos || open_parenthesis_index >= text.size() || text[open_parenthesis_index] != '(')
+			{
+				return std::string_view::npos;
+			}
+
+			uint32_t parenthesis_depth = 0;
+			for (size_t i = open_parenthesis_index; i < text.size(); ++i)
+			{
+				if (text[i] == '(')
+				{
+					++parenthesis_depth;
+				}
+				else if (text[i] == ')')
+				{
+					H_ASSERTLOG(parenthesis_depth > 0, "Invalid parenthesis depth while parsing Vulkan vertex input declarations.");
+					--parenthesis_depth;
+					if (parenthesis_depth == 0)
+					{
+						return i;
+					}
+				}
+			}
+
+			return std::string_view::npos;
+		}
+
 		static bool is_hlsl_identifier_char(char c)
 		{
 			const unsigned char ch = static_cast<unsigned char>(c);
@@ -62,6 +99,16 @@ namespace RHI
 		static bool is_root_constant_block_name(std::string_view name)
 		{
 			return name == "AshRootConstants" || name == "RootConstants";
+		}
+
+		static std::string to_ascii_lower_copy(std::string_view text)
+		{
+			std::string lowered(text);
+			for (char& c : lowered)
+			{
+				c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+			}
+			return lowered;
 		}
 
 		static std::string_view trim_string_view(std::string_view text)
@@ -79,6 +126,493 @@ namespace RHI
 			}
 
 			return text.substr(begin, end - begin);
+		}
+
+		static std::string strip_hlsl_comments(std::string_view text)
+		{
+			std::string stripped{};
+			stripped.reserve(text.size());
+			bool in_line_comment = false;
+			bool in_block_comment = false;
+			for (size_t i = 0; i < text.size(); ++i)
+			{
+				const char current_char = text[i];
+				const char next_char = (i + 1 < text.size()) ? text[i + 1] : '\0';
+				if (in_line_comment)
+				{
+					if (current_char == '\n')
+					{
+						in_line_comment = false;
+						stripped.push_back(current_char);
+					}
+					continue;
+				}
+				if (in_block_comment)
+				{
+					if (current_char == '*' && next_char == '/')
+					{
+						in_block_comment = false;
+						++i;
+					}
+					continue;
+				}
+
+				if (current_char == '/' && next_char == '/')
+				{
+					in_line_comment = true;
+					++i;
+					continue;
+				}
+				if (current_char == '/' && next_char == '*')
+				{
+					in_block_comment = true;
+					++i;
+					continue;
+				}
+
+				stripped.push_back(current_char);
+			}
+
+			return stripped;
+		}
+
+		static bool is_system_value_semantic(std::string_view semantic)
+		{
+			return semantic.size() >= 3 &&
+				(semantic[0] == 'S' || semantic[0] == 's') &&
+				(semantic[1] == 'V' || semantic[1] == 'v') &&
+				semantic[2] == '_';
+		}
+
+		static std::vector<std::string_view> split_top_level_list(std::string_view text, char delimiter)
+		{
+			std::vector<std::string_view> parts{};
+			size_t item_begin = 0;
+			uint32_t parenthesis_depth = 0;
+			uint32_t brace_depth = 0;
+			uint32_t bracket_depth = 0;
+			for (size_t i = 0; i < text.size(); ++i)
+			{
+				switch (text[i])
+				{
+				case '(':
+					++parenthesis_depth;
+					break;
+				case ')':
+					if (parenthesis_depth > 0)
+					{
+						--parenthesis_depth;
+					}
+					break;
+				case '{':
+					++brace_depth;
+					break;
+				case '}':
+					if (brace_depth > 0)
+					{
+						--brace_depth;
+					}
+					break;
+				case '[':
+					++bracket_depth;
+					break;
+				case ']':
+					if (bracket_depth > 0)
+					{
+						--bracket_depth;
+					}
+					break;
+				default:
+					break;
+				}
+
+				if (text[i] == delimiter &&
+					parenthesis_depth == 0 &&
+					brace_depth == 0 &&
+					bracket_depth == 0)
+				{
+					parts.push_back(trim_string_view(text.substr(item_begin, i - item_begin)));
+					item_begin = i + 1;
+				}
+			}
+
+			if (item_begin <= text.size())
+			{
+				parts.push_back(trim_string_view(text.substr(item_begin)));
+			}
+			return parts;
+		}
+
+		static std::string extract_first_identifier_token(std::string_view text)
+		{
+			text = trim_string_view(text);
+			size_t token_end = 0;
+			while (token_end < text.size() && is_hlsl_identifier_char(text[token_end]))
+			{
+				++token_end;
+			}
+			return token_end > 0 ? std::string(text.substr(0, token_end)) : std::string{};
+		}
+
+		static bool extract_type_and_name_from_declaration(std::string_view declaration, std::string& out_type_name, std::string& out_name)
+		{
+			declaration = trim_string_view(declaration);
+			if (declaration.empty() || declaration.find('[') != std::string_view::npos || declaration.find(']') != std::string_view::npos)
+			{
+				return false;
+			}
+
+			size_t name_end = declaration.size();
+			while (name_end > 0 && std::isspace(static_cast<unsigned char>(declaration[name_end - 1])) != 0)
+			{
+				--name_end;
+			}
+			size_t name_begin = name_end;
+			while (name_begin > 0 && is_hlsl_identifier_char(declaration[name_begin - 1]))
+			{
+				--name_begin;
+			}
+			if (name_begin == name_end)
+			{
+				return false;
+			}
+
+			out_name = std::string(declaration.substr(name_begin, name_end - name_begin));
+			std::string_view type_part = trim_string_view(declaration.substr(0, name_begin));
+			if (type_part.empty())
+			{
+				return false;
+			}
+
+			size_t type_end = type_part.size();
+			while (type_end > 0 && std::isspace(static_cast<unsigned char>(type_part[type_end - 1])) != 0)
+			{
+				--type_end;
+			}
+			size_t type_begin = type_end;
+			while (type_begin > 0 && !std::isspace(static_cast<unsigned char>(type_part[type_begin - 1])))
+			{
+				--type_begin;
+			}
+			if (type_begin == type_end)
+			{
+				return false;
+			}
+
+			out_type_name = std::string(type_part.substr(type_begin, type_end - type_begin));
+			return !out_type_name.empty();
+		}
+
+		static AshVertexComponentFormat hlsl_type_to_vertex_format(std::string_view type_name)
+		{
+			const std::string lowered = to_ascii_lower_copy(trim_string_view(type_name));
+			if (lowered.find('x') != std::string::npos)
+			{
+				return FormatCount;
+			}
+
+			auto ends_with = [&lowered](std::string_view suffix) -> bool
+			{
+				return lowered.size() >= suffix.size() &&
+					lowered.compare(lowered.size() - suffix.size(), suffix.size(), suffix) == 0;
+			};
+
+			const bool is_float_family =
+				lowered == "float" || lowered == "half" || lowered == "double" ||
+				lowered == "min16float" || lowered == "min10float" ||
+				ends_with("float") || ends_with("half");
+			const bool is_int_family =
+				lowered == "int" || lowered == "min16int" || (ends_with("int") && !ends_with("uint"));
+			const bool is_uint_family =
+				lowered == "uint" || lowered == "dword" || lowered == "min16uint" || ends_with("uint");
+
+			auto parse_vector_size = [&lowered]() -> uint32_t
+			{
+				size_t digit_begin = lowered.size();
+				while (digit_begin > 0 && std::isdigit(static_cast<unsigned char>(lowered[digit_begin - 1])) != 0)
+				{
+					--digit_begin;
+				}
+				if (digit_begin == lowered.size())
+				{
+					return 1;
+				}
+				return static_cast<uint32_t>(std::strtoul(lowered.c_str() + digit_begin, nullptr, 10));
+			};
+
+			const uint32_t vector_size = parse_vector_size();
+			if (is_float_family)
+			{
+				switch (vector_size)
+				{
+				case 1: return Float;
+				case 2: return Float2;
+				case 3: return Float3;
+				case 4: return Float4;
+				default: return FormatCount;
+				}
+			}
+			if (is_int_family || is_uint_family)
+			{
+				switch (vector_size)
+				{
+				case 1: return Uint;
+				case 2: return Uint2;
+				case 4: return Uint4;
+				default: return FormatCount;
+				}
+			}
+			return FormatCount;
+		}
+
+		static bool parse_hlsl_vertex_input_field(std::string_view statement, HlslVertexInputField& out_field)
+		{
+			statement = trim_string_view(statement);
+			if (statement.empty() || statement.find('(') != std::string_view::npos)
+			{
+				return false;
+			}
+
+			const size_t semantic_separator = statement.find(':');
+			if (semantic_separator == std::string_view::npos)
+			{
+				return false;
+			}
+
+			std::string type_name{};
+			std::string variable_name{};
+			if (!extract_type_and_name_from_declaration(statement.substr(0, semantic_separator), type_name, variable_name))
+			{
+				return false;
+			}
+
+			std::string semantic = extract_first_identifier_token(statement.substr(semantic_separator + 1));
+			if (semantic.empty() || is_system_value_semantic(semantic))
+			{
+				return false;
+			}
+
+			out_field.type_name = std::move(type_name);
+			out_field.semantic = std::move(semantic);
+			return true;
+		}
+
+		static bool append_declared_vertex_attribute(const HlslVertexInputField& field, uint16_t location, VertexInputCreation& out_vertex_input)
+		{
+			const AshVertexComponentFormat format = hlsl_type_to_vertex_format(field.type_name);
+			if (format == FormatCount || out_vertex_input.num_vertex_attributes >= k_max_vertex_attributes)
+			{
+				return false;
+			}
+
+			VertexAttribute attribute{};
+			attribute.location = location;
+			attribute.binding = 0;
+			attribute.offset = 0;
+			attribute.format = format;
+			out_vertex_input.add_vertex_attribute(attribute);
+			return true;
+		}
+
+		static bool extract_struct_vertex_input_fields(std::string_view shader_text, std::string_view type_name, std::vector<HlslVertexInputField>& out_fields)
+		{
+			const std::array<std::string_view, 2> keywords = { "struct", "class" };
+			for (std::string_view keyword : keywords)
+			{
+				size_t search_index = 0;
+				while (search_index < shader_text.size())
+				{
+					size_t keyword_index = shader_text.find(keyword, search_index);
+					if (keyword_index == std::string_view::npos)
+					{
+						break;
+					}
+					if ((keyword_index > 0 && is_hlsl_identifier_char(shader_text[keyword_index - 1])) ||
+						(keyword_index + keyword.size() < shader_text.size() && is_hlsl_identifier_char(shader_text[keyword_index + keyword.size()])))
+					{
+						search_index = keyword_index + keyword.size();
+						continue;
+					}
+
+					size_t declared_type_begin = keyword_index + keyword.size();
+					while (declared_type_begin < shader_text.size() && std::isspace(static_cast<unsigned char>(shader_text[declared_type_begin])) != 0)
+					{
+						++declared_type_begin;
+					}
+					size_t declared_type_end = declared_type_begin;
+					while (declared_type_end < shader_text.size() && is_hlsl_identifier_char(shader_text[declared_type_end]))
+					{
+						++declared_type_end;
+					}
+
+					if (trim_string_view(shader_text.substr(declared_type_begin, declared_type_end - declared_type_begin)) != type_name)
+					{
+						search_index = declared_type_end;
+						continue;
+					}
+
+					const size_t open_brace_index = shader_text.find('{', declared_type_end);
+					if (open_brace_index == std::string_view::npos)
+					{
+						return false;
+					}
+					const size_t close_brace_index = find_matching_brace(shader_text, open_brace_index);
+					if (close_brace_index == std::string_view::npos)
+					{
+						return false;
+					}
+
+					const std::string_view body = shader_text.substr(open_brace_index + 1, close_brace_index - open_brace_index - 1);
+					std::string current_statement{};
+					uint32_t nested_brace_depth = 0;
+					for (char current_char : body)
+					{
+						if (current_char == '{')
+						{
+							++nested_brace_depth;
+						}
+						else if (current_char == '}')
+						{
+							if (nested_brace_depth > 0)
+							{
+								--nested_brace_depth;
+							}
+						}
+
+						if (current_char == ';' && nested_brace_depth == 0)
+						{
+							HlslVertexInputField field{};
+							if (parse_hlsl_vertex_input_field(current_statement, field))
+							{
+								out_fields.push_back(std::move(field));
+							}
+							current_statement.clear();
+							continue;
+						}
+
+						current_statement.push_back(current_char);
+					}
+					return !out_fields.empty();
+				}
+			}
+
+			return false;
+		}
+
+		static bool extract_declared_vertex_input_from_hlsl(std::string_view shader_text, std::string_view entry_point, VertexInputCreation& out_vertex_input)
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_vertex_input = VertexInputCreation{};
+			ASH_PROCESS_ERROR(!entry_point.empty());
+
+			const std::string stripped_shader_text = strip_hlsl_comments(shader_text);
+			const std::string_view searchable_shader_text(stripped_shader_text);
+			size_t search_index = 0;
+			size_t open_parenthesis_index = std::string_view::npos;
+			while (search_index < searchable_shader_text.size())
+			{
+				const size_t entry_index = searchable_shader_text.find(entry_point, search_index);
+				if (entry_index == std::string_view::npos)
+				{
+					break;
+				}
+				const bool valid_prefix = entry_index == 0 || !is_hlsl_identifier_char(searchable_shader_text[entry_index - 1]);
+				const size_t entry_end = entry_index + entry_point.size();
+				const bool valid_suffix = entry_end >= searchable_shader_text.size() || !is_hlsl_identifier_char(searchable_shader_text[entry_end]);
+				if (valid_prefix && valid_suffix)
+				{
+					size_t candidate_parenthesis = entry_end;
+					while (candidate_parenthesis < searchable_shader_text.size() &&
+						std::isspace(static_cast<unsigned char>(searchable_shader_text[candidate_parenthesis])) != 0)
+					{
+						++candidate_parenthesis;
+					}
+					if (candidate_parenthesis < searchable_shader_text.size() && searchable_shader_text[candidate_parenthesis] == '(')
+					{
+						open_parenthesis_index = candidate_parenthesis;
+						break;
+					}
+				}
+				search_index = entry_end;
+			}
+
+			ASH_PROCESS_ERROR(open_parenthesis_index != std::string_view::npos);
+			const size_t close_parenthesis_index = find_matching_parenthesis(searchable_shader_text, open_parenthesis_index);
+			ASH_PROCESS_ERROR(close_parenthesis_index != std::string_view::npos);
+			const std::string_view parameter_list = searchable_shader_text.substr(open_parenthesis_index + 1, close_parenthesis_index - open_parenthesis_index - 1);
+			const std::vector<std::string_view> parameters = split_top_level_list(parameter_list, ',');
+
+			bool appended_any_field = false;
+			uint16_t location = 0;
+			for (const std::string_view parameter : parameters)
+			{
+				const std::string_view trimmed_parameter = trim_string_view(parameter);
+				if (trimmed_parameter.empty() || trimmed_parameter == "void")
+				{
+					continue;
+				}
+
+				HlslVertexInputField direct_field{};
+				if (parse_hlsl_vertex_input_field(trimmed_parameter, direct_field))
+				{
+					ASH_PROCESS_ERROR(append_declared_vertex_attribute(direct_field, location++, out_vertex_input));
+					appended_any_field = true;
+					continue;
+				}
+
+				std::string type_name{};
+				std::string variable_name{};
+				if (!extract_type_and_name_from_declaration(trimmed_parameter, type_name, variable_name))
+				{
+					continue;
+				}
+
+				std::vector<HlslVertexInputField> struct_fields{};
+				if (!extract_struct_vertex_input_fields(searchable_shader_text, type_name, struct_fields))
+				{
+					continue;
+				}
+
+				for (const HlslVertexInputField& field : struct_fields)
+				{
+					ASH_PROCESS_ERROR(append_declared_vertex_attribute(field, location++, out_vertex_input));
+					appended_any_field = true;
+				}
+			}
+
+			ASH_PROCESS_ERROR(appended_any_field);
+			finalize_vertex_input_layout(out_vertex_input);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		static bool declared_vertex_input_matches_reflection(const VertexInputCreation& declared_input, const VertexInputCreation& reflected_input)
+		{
+			if (declared_input.num_vertex_attributes < reflected_input.num_vertex_attributes)
+			{
+				return false;
+			}
+
+			for (uint32_t reflected_index = 0; reflected_index < reflected_input.num_vertex_attributes; ++reflected_index)
+			{
+				const VertexAttribute& reflected_attribute = reflected_input.vertex_attributes[reflected_index];
+				bool found_match = false;
+				for (uint32_t declared_index = 0; declared_index < declared_input.num_vertex_attributes; ++declared_index)
+				{
+					const VertexAttribute& declared_attribute = declared_input.vertex_attributes[declared_index];
+					if (declared_attribute.location == reflected_attribute.location &&
+						declared_attribute.format == reflected_attribute.format)
+					{
+						found_match = true;
+						break;
+					}
+				}
+				if (!found_match)
+				{
+					return false;
+				}
+			}
+
+			return true;
 		}
 
 		static std::string extract_root_constant_member_name(std::string_view statement)
@@ -534,6 +1068,12 @@ namespace RHI
 		auto pVulkanShader = std::dynamic_pointer_cast<VulkanShader>(pTargetShader);
 		ASH_PROCESS_ERROR(pVulkanShader);
 
+		VertexInputCreation declared_vertex_input{};
+		if (fileInfo.stage == ASH_SHADER_STAGE_VERTEX_BIT)
+		{
+			extract_declared_vertex_input_from_hlsl(shaderFullText, fileInfo.entryPoint ? fileInfo.entryPoint : "main", declared_vertex_input);
+		}
+
 		std::string vulkanShaderText = shaderFullText;
 		rewrite_root_constant_blocks_for_vulkan(vulkanShaderText);
 
@@ -602,6 +1142,11 @@ namespace RHI
 		ParseResult reflection_data{};
 		bResult = parse_binary_spv(spirvCode.data(), spirvCode.size(), fileInfo.stage, &reflection_data);
 		ASH_PROCESS_ERROR(bResult);
+		if (declared_vertex_input.num_vertex_attributes > 0 &&
+			declared_vertex_input_matches_reflection(declared_vertex_input, reflection_data.pipeline_info.vertex_input))
+		{
+			reflection_data.pipeline_info.vertex_input = declared_vertex_input;
+		}
 		pVulkanShader->set_compiled_binary(
 			{
 				fileInfo.sourceShaderPath,

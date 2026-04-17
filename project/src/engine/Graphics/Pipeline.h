@@ -116,12 +116,25 @@ namespace RHI
 
 	}; // struct VertexStream
 
+	/// HLSL semantic role for D3D12 input layout (Vulkan uses `location` only).
+	enum class AshVertexSemantic : uint8_t
+	{
+		Unspecified = 0,
+		Position,
+		Normal,
+		Tangent,
+		TexCoord0,
+		TexCoord1,
+		Color0,
+	};
+
 	struct VertexAttribute {
 
 		uint16_t                             location	= 0;
 		uint16_t                             binding	= 0;
 		uint32_t                             offset		= 0;
 		AshVertexComponentFormat		     format		= AshVertexComponentFormat::FormatCount;
+		AshVertexSemantic                    semantic	= AshVertexSemantic::Unspecified;
 
 	}; // struct VertexAttribute
 

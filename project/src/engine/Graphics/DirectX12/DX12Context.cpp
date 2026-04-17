@@ -14,6 +14,7 @@
 #include "Base/hassert.h"
 #include "Base/hmemory.h"
 #include "Graphics/TextureUploadUtils.h"
+#include "Base/hthreading.h"
 #include "D3D12MemAlloc.h"
 #include <cstring>
 
@@ -127,7 +128,7 @@ namespace RHI
 			return false;
 		}
 
-		if (!m_frameActive || m_frameResources.empty())
+		if (!AshEngine::is_in_render_thread() || !m_frameActive || m_frameResources.empty())
 		{
 			return _enqueue_pending_buffer_upload(buffer, offset, size, data);
 		}
@@ -154,7 +155,7 @@ namespace RHI
 			return false;
 		}
 
-		if (!m_frameActive || m_frameResources.empty())
+		if (!AshEngine::is_in_render_thread() || !m_frameActive || m_frameResources.empty())
 		{
 			return _enqueue_pending_texture_upload(texture, data);
 		}
@@ -174,7 +175,10 @@ namespace RHI
 		upload.offset = offset;
 		upload.data.resize(size);
 		std::memcpy(upload.data.data(), data, size);
-		m_pendingBufferUploads.push_back(std::move(upload));
+		{
+			std::scoped_lock<std::mutex> lock(m_pendingUploadMutex);
+			m_pendingBufferUploads.push_back(std::move(upload));
+		}
 		return true;
 	}
 
@@ -203,7 +207,10 @@ namespace RHI
 		upload.texture = texture;
 		upload.data.resize(static_cast<size_t>(totalBytes));
 		std::memcpy(upload.data.data(), data, static_cast<size_t>(totalBytes));
-		m_pendingTextureUploads.push_back(std::move(upload));
+		{
+			std::scoped_lock<std::mutex> lock(m_pendingUploadMutex);
+			m_pendingTextureUploads.push_back(std::move(upload));
+		}
 		return true;
 	}
 
@@ -254,7 +261,13 @@ namespace RHI
 
 	auto DX12Context::_flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool
 	{
-		for (const PendingBufferUpload& upload : m_pendingBufferUploads)
+		std::vector<PendingBufferUpload> uploads{};
+		{
+			std::scoped_lock<std::mutex> lock(m_pendingUploadMutex);
+			uploads.swap(m_pendingBufferUploads);
+		}
+
+		for (const PendingBufferUpload& upload : uploads)
 		{
 			if (!_record_buffer_upload(frameResources, upload.buffer, upload.offset, static_cast<uint32_t>(upload.data.size()), upload.data.data()))
 			{
@@ -262,13 +275,18 @@ namespace RHI
 			}
 		}
 
-		m_pendingBufferUploads.clear();
 		return true;
 	}
 
 	auto DX12Context::_flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool
 	{
-		for (const PendingTextureUpload& upload : m_pendingTextureUploads)
+		std::vector<PendingTextureUpload> uploads{};
+		{
+			std::scoped_lock<std::mutex> lock(m_pendingUploadMutex);
+			uploads.swap(m_pendingTextureUploads);
+		}
+
+		for (const PendingTextureUpload& upload : uploads)
 		{
 			if (!_record_texture_upload(frameResources, upload.texture, upload.data.data()))
 			{
@@ -276,7 +294,6 @@ namespace RHI
 			}
 		}
 
-		m_pendingTextureUploads.clear();
 		return true;
 	}
 

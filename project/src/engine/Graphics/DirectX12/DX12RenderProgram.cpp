@@ -74,6 +74,54 @@ namespace RHI
 			return name == k_dx12_root_constants_name || name == "RootConstants";
 		}
 
+		static D3D12_INPUT_CLASSIFICATION vertex_binding_input_class(const VertexInputCreation& vi, uint16_t binding)
+		{
+			for (uint32_t s = 0; s < vi.num_vertex_streams; ++s)
+			{
+				if (vi.vertex_streams[s].binding == binding)
+				{
+					return vi.vertex_streams[s].input_rate == AshVertexInputRate::PerInstance
+						? D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA
+						: D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+				}
+			}
+			return D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA;
+		}
+
+		static bool resolve_explicit_vertex_semantic(const VertexAttribute& attr, const char** out_name, UINT* out_index, const char* debug_name)
+		{
+			if (attr.semantic != AshVertexSemantic::Unspecified)
+			{
+				switch (attr.semantic)
+				{
+				case AshVertexSemantic::Position: *out_name = "POSITION"; *out_index = 0; return true;
+				case AshVertexSemantic::Normal: *out_name = "NORMAL"; *out_index = 0; return true;
+				case AshVertexSemantic::Tangent: *out_name = "TANGENT"; *out_index = 0; return true;
+				case AshVertexSemantic::TexCoord0: *out_name = "TEXCOORD"; *out_index = 0; return true;
+				case AshVertexSemantic::TexCoord1: *out_name = "TEXCOORD"; *out_index = 1; return true;
+				case AshVertexSemantic::Color0: *out_name = "COLOR"; *out_index = 0; return true;
+				default: break;
+				}
+				HLogError(
+					"DX12 render program '{}' has explicit vertex input with unknown AshVertexSemantic value.",
+					debug_name ? debug_name : "DX12GraphicsRenderProgram");
+				return false;
+			}
+			if (attr.location < 6)
+			{
+				static constexpr const char* k_names[] = { "POSITION", "NORMAL", "TANGENT", "TEXCOORD", "TEXCOORD", "COLOR" };
+				static constexpr UINT k_indices[] = { 0, 0, 0, 0, 1, 0 };
+				*out_name = k_names[attr.location];
+				*out_index = k_indices[attr.location];
+				return true;
+			}
+			HLogError(
+				"DX12 render program '{}' explicit vertex attribute at location {} has AshVertexSemantic::Unspecified; set semantic or use locations 0..5 with SceneStaticMesh ordering.",
+				debug_name ? debug_name : "DX12GraphicsRenderProgram",
+				static_cast<unsigned>(attr.location));
+			return false;
+		}
+
 		static bool merge_root_constants_info(
 			const DX12ShaderBindingInfo& binding,
 			DX12RootConstantsInfo& outRootConstants,
@@ -650,7 +698,40 @@ namespace RHI
 
 		std::vector<D3D12_INPUT_ELEMENT_DESC> inputElements;
 		std::vector<std::string> semanticStorage;
-		if (!m_vertexInputs.empty())
+		const VertexInputCreation& explicit_vi = m_desc.pipeline.vertex_input;
+		const bool use_explicit_vertex_layout = explicit_vi.num_vertex_attributes > 0 || explicit_vi.num_vertex_streams > 0;
+		if (use_explicit_vertex_layout)
+		{
+			inputElements.reserve(explicit_vi.num_vertex_attributes);
+			for (uint32_t i = 0; i < explicit_vi.num_vertex_attributes; ++i)
+			{
+				const VertexAttribute& attr = explicit_vi.vertex_attributes[i];
+				if (attr.format == AshVertexComponentFormat::FormatCount)
+				{
+					HLogError(
+						"DX12 render program '{}' explicit vertex attribute at location {} has invalid format.",
+						m_desc.pipeline.name ? m_desc.pipeline.name : "DX12GraphicsRenderProgram",
+						static_cast<unsigned>(attr.location));
+					return false;
+				}
+				const char* sem_name = nullptr;
+				UINT sem_index = 0;
+				if (!resolve_explicit_vertex_semantic(attr, &sem_name, &sem_index, m_desc.pipeline.name ? m_desc.pipeline.name : "DX12GraphicsRenderProgram"))
+				{
+					return false;
+				}
+				D3D12_INPUT_ELEMENT_DESC element{};
+				element.SemanticName = sem_name;
+				element.SemanticIndex = sem_index;
+				element.Format = ash_vertex_format_to_dxgi(attr.format);
+				element.InputSlot = attr.binding;
+				element.AlignedByteOffset = attr.offset;
+				element.InputSlotClass = vertex_binding_input_class(explicit_vi, attr.binding);
+				element.InstanceDataStepRate = element.InputSlotClass == D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA ? 1u : 0u;
+				inputElements.push_back(element);
+			}
+		}
+		else if (!m_vertexInputs.empty())
 		{
 			uint32_t offset = 0;
 			inputElements.reserve(m_vertexInputs.size());

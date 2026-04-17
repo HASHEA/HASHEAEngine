@@ -117,6 +117,7 @@ namespace RHI
 		PipelineReflectionInfo pipeline_info{};
 	};
 
+	void finalize_vertex_input_layout(VertexInputCreation& vertex_input);
 	bool parse_binary_spv(const uint32_t* data, size_t word_count, AshShaderStageFlagBits stage, ParseResult* parse_result);
 	bool merge_parse_results(const ParseResult* parse_results, uint32_t count, ParseResult* merged_result);
 }

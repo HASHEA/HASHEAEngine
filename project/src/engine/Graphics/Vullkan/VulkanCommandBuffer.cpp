@@ -13,6 +13,24 @@
 #include <numeric>
 namespace RHI
 {
+	namespace
+	{
+		static bool is_vk_access_read_only(VkAccessFlags access_flags)
+		{
+			static const VkAccessFlags k_read_mask =
+				VK_ACCESS_INDIRECT_COMMAND_READ_BIT |
+				VK_ACCESS_INDEX_READ_BIT |
+				VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
+				VK_ACCESS_UNIFORM_READ_BIT |
+				VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+				VK_ACCESS_SHADER_READ_BIT |
+				VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+				VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+				VK_ACCESS_TRANSFER_READ_BIT;
+			return (access_flags & (~k_read_mask)) == 0;
+		}
+	}
+
 	static void get_vk_stage_and_access_flags(AshResourceState RHIAccess, AshBarrier::EType ResourceType, uint32_t UsageFlags,
 		bool bIsDepthStencil, VkPipelineStageFlags& StageFlags, VkAccessFlags& AccessFlags, VkImageLayout& Layout, bool bIsSourceState)
 	{
@@ -960,21 +978,25 @@ namespace RHI
 							get_vk_stage_and_access_flags(has_any_flags((uint32_t)InDstAccess, (uint32_t)AshResourceState::SRVMask) ? AshResourceState::UAVMask : InDstAccess, iter.eType, uUsageFlags, bIsDepthStencil, dstStageMask, dstAccessFlags, dstLayout, false);
 						}
 
-						srcFinalStageMask |= srcStageMask;
-						dstFinalStageMask |= dstStageMask;
-
 						// If we're not transitioning across pipes and we don't need to perform layout transitions, we can express memory dependencies through a global memory barrier.
 						if (srcLayout == dstLayout)
 						{
-							static const VkAccessFlags sc_uReadMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
-								VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-								VK_ACCESS_TRANSFER_READ_BIT;
-
 							// We only need a memory barrier if the previous commands wrote to the buffer. In case of a transition from read, an execution barrier is enough.
-							const bool bSrcAccessIsRead = ((srcAccessFlags & (~sc_uReadMask)) == 0);
+							const bool bSrcAccessIsRead = is_vk_access_read_only(srcAccessFlags);
+							if (Mip == (uint32_t)-1 && Slice == (uint32_t)-1)
+							{
+								pTexture->get_resource_tracker().clear_subresource_state();
+								pTexture->get_resource_tracker().set_all_resource_state(InDstAccess);
+							}
+							else
+							{
+								pTexture->get_resource_tracker().set_texture_subresource_state(InDstAccess, Mip + texDesc.mip_level_count * Slice);
+							}
 
 							if (!bSrcAccessIsRead)
 							{
+								srcFinalStageMask |= srcStageMask;
+								dstFinalStageMask |= dstStageMask;
 								memBarrier.srcAccessMask |= srcAccessFlags;
 								memBarrier.dstAccessMask |= dstAccessFlags;
 								bMemBarrier = true;
@@ -985,6 +1007,9 @@ namespace RHI
 						if (Mip == (uint32_t)-1 && Slice == (uint32_t)-1)
 						{
 							// Transition the whole texture with a single image barrier.
+							srcFinalStageMask |= srcStageMask;
+							dstFinalStageMask |= dstStageMask;
+							pTexture->get_resource_tracker().clear_subresource_state();
 							pTexture->get_resource_tracker().set_all_resource_state(InDstAccess);
 
 							VkImageSubresourceRange AllSubresourceRange{};
@@ -1011,6 +1036,8 @@ namespace RHI
 						}
 						else
 						{
+							srcFinalStageMask |= srcStageMask;
+							dstFinalStageMask |= dstStageMask;
 							pTexture->get_resource_tracker().set_texture_subresource_state(InDstAccess, Mip + texDesc.mip_level_count* Slice);
 
 							bool bNewBarrier = true;
@@ -1093,21 +1120,17 @@ namespace RHI
 				get_vk_stage_and_access_flags(srcAccess, iter.eType, uUsageFlags, false, srcStageMask, srcAccessFlags, srcLayout, true);
 				get_vk_stage_and_access_flags(iter.eDSTAccess, iter.eType, uUsageFlags, false, dstStageMask, dstAccessFlags, dstLayout, false);
 
-				srcFinalStageMask |= srcStageMask;
-				dstFinalStageMask |= dstStageMask;
-
 				// If we're not transitioning across pipes and we don't need to perform layout transitions, we can express memory dependencies through a global memory barrier.
 				if (srcLayout == dstLayout)
 				{
-					static const VkAccessFlags sc_uReadMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
-						VK_ACCESS_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-						VK_ACCESS_TRANSFER_READ_BIT;
-
 					// We only need a memory barrier if the previous commands wrote to the buffer. In case of a transition from read, an execution barrier is enough.
-					const bool bSrcAccessIsRead = ((srcAccessFlags & (~sc_uReadMask)) == 0);
+					const bool bSrcAccessIsRead = is_vk_access_read_only(srcAccessFlags);
+					pBuffer->get_resource_tracker().set_all_resource_state(iter.eDSTAccess);
 
 					if (!bSrcAccessIsRead)
 					{
+						srcFinalStageMask |= srcStageMask;
+						dstFinalStageMask |= dstStageMask;
 						memBarrier.srcAccessMask |= srcAccessFlags;
 						memBarrier.dstAccessMask |= dstAccessFlags;
 						bMemBarrier = true;
@@ -1115,6 +1138,8 @@ namespace RHI
 					continue;
 				}
 
+				srcFinalStageMask |= srcStageMask;
+				dstFinalStageMask |= dstStageMask;
 				VkBufferMemoryBarrier bufferBarrier{};
 				bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
 				bufferBarrier.pNext = nullptr;
@@ -1131,7 +1156,7 @@ namespace RHI
 				continue;
 			}
 		}
-		if (srcFinalStageMask != 0 || dstFinalStageMask != 0 || bMemBarrier || !BufBarriers.empty() || !TexBarriers.empty())
+		if (bMemBarrier || !BufBarriers.empty() || !TexBarriers.empty())
 		{
 			vkCmdPipelineBarrier(vkCommandBuffer,
 				srcFinalStageMask,

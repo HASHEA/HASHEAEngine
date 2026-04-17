@@ -987,28 +987,41 @@ GpuValidation=true
 当前仓库新增了 `project/src/sandbox`，它是一个**独立的 Engine 侧测试可执行项目**，定位是：
 
 - 快速验证引擎新功能，而不是把 demo/验证逻辑长期塞在 Editor 生命周期里
-- 承载 CPU 侧 asset/scene smoke test
+- 承载 Scene -> Render 集成验证
 - 承载共享渲染路径 smoke test
 - 作为以后继续补充 runtime test case 的落点
 
-当前 `Sandbox` 复用了与 `Editor` 相同的 `EntryPoint.h + Application` 启动模式，并默认注册两类测试：
+当前 `Sandbox` 复用了与 `Editor` 相同的 `EntryPoint.h + Application` 启动模式，但默认运行路径已经收口为**单一标准场景运行时**，不再把旧的 asset-pipeline demo、Codex logo demo、bridge smoke test 作为默认启动链路。
 
-- `AssetPipelineSmoke`
-  - 扫描 `product/assets`
-  - 加载 `product/assets/models/gltfs/` 下的 glTF 样例
-  - 通过 `AssetDatabase::*_async()` 把模型/mesh 导入分发到 worker 线程
-  - 验证 `load_model_from_file() / load_mesh_from_file() / make_ashasset_from_model() / save/load_ashasset / Scene::instantiate_* / scene save-load roundtrip`
-- `CodexLogoRender`
-  - 使用 compute + fullscreen draw 的共享渲染路径
-  - 直接在 `Renderer::get_back_buffer()` 返回的 Engine offscreen back buffer 上输出结果
+当前默认标准场景为：
+
+- `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
+
+当前标准场景路径会真实走通：
+
+- `AssetDatabase` 异步模型加载
+- `Scene::instantiate_model()`
+- 逻辑线程相机更新
+- `SceneView` 重建
+- `RenderScene` 重建 / 可见帧生成
+- render thread 通过 `SceneRenderer::render_visible_frame()` 提交
+- 最终通过正常 present 路径显示到屏幕
+
+当前 `Sandbox` 的默认人工交互控制为：
+
+- `W / A / S / D`：平移
+- `Q / E`：下降 / 上升
+- 按住右键：鼠标视角
+- 滚轮：移动速度
+- `Shift`：加速
 
 当前 `Sandbox` 还是第一阶段线程模型的首个落地用例：
 
 - `EngineInitConfig.threading.enable_logic_thread = true`
 - render thread 保持负责 `Renderer` 帧循环
-- startup asset smoke test 挪到 logic thread
-- 具体 glTF/mesh CPU 导入再继续扇出到 worker 线程池
-- startup 完成后，会通过 `ASH_ENQUEUE_RENDER_COMMAND` 向 render thread 回投一条确认消息
+- logic thread 负责场景加载、自由相机更新、可见帧构建
+- render thread 只消费最新可见帧并提交 draw
+- startup 完成后，仍会通过 `ASH_ENQUEUE_RENDER_COMMAND` 向 render thread 回投一条确认消息
 
 当前默认内置的 glTF 样例资产位于：
 
@@ -1017,10 +1030,7 @@ GpuValidation=true
 - `product/assets/models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf`
 - `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
 
-当前 `Sandbox` 运行时会把生成出的中间验证产物写到：
-
-- `product/test-reports/sandbox/generated-assets/*.ashasset`
-- `product/test-reports/sandbox/generated-scenes/*.ashscene`
+当前版本的标准场景路径不再默认写出旧的 prefab / generated-scene 中间产物；`product/test-reports/sandbox/` 主要保留给运行验证和后续专项测试扩展使用。
 
 推荐运行方式：
 
@@ -1030,7 +1040,7 @@ product/bin64/Debug-windows-x86_64/Sandbox.exe --smoke-test-seconds=5
 
 维护约定：
 
-- 以后需要快速验证 Engine 功能时，优先往 `Sandbox` 补测试，而不是继续把临时 demo 塞进 `Editor`
+- 以后需要快速验证 Engine 功能时，优先把验证接到标准场景路径或往 `Sandbox` 增加专项模式，而不是继续把临时 demo 塞进 `Editor`
 - 如果是共享渲染/资源路径改动，建议至少用 `Sandbox` 跑一遍 Vulkan + DX12
 - `Sandbox` 中的 shader 文件默认作为源码资源存在，不作为 VS 的 FXC build step；运行期仍按相对路径从仓库读取
 

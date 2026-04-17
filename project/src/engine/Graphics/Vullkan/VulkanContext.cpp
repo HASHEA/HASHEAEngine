@@ -1498,7 +1498,7 @@ auto VulkanContext::destroy() -> void
 			return false;
 		}
 
-		if (!frameActive || !AshEngine::is_in_render_thread())
+		if (!AshEngine::is_in_render_thread() || !frameActive)
 		{
 			return _enqueue_pending_buffer_upload(buffer, offset, size, data);
 		}
@@ -1524,7 +1524,7 @@ auto VulkanContext::destroy() -> void
 			return false;
 		}
 
-		if (!frameActive || !AshEngine::is_in_render_thread())
+		if (!AshEngine::is_in_render_thread() || !frameActive)
 		{
 			return _enqueue_pending_texture_upload(texture, data);
 		}

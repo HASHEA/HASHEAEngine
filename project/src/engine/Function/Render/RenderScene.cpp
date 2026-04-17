@@ -18,7 +18,7 @@ namespace AshEngine
 		{
 			std::shared_ptr<StaticMeshRenderAsset> render_asset = render_asset_manager.request_static_mesh_asset(mesh_desc.asset_path, mesh_desc.mesh_index);
 			ASH_PROCESS_ERROR(render_asset);
-			ASH_PROCESS_ERROR(render_asset_manager.finalize_pending_static_mesh_asset(render_asset));
+			ASH_PROCESS_ERROR(render_asset->is_cpu_ready());
 
 			SceneMeshBounds local_bounds{};
 			ASH_PROCESS_ERROR(scene.try_get_mesh_local_bounds(asset_database, MeshComponent{

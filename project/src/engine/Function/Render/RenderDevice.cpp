@@ -372,6 +372,7 @@ namespace AshEngine
 		std::string name;
 		std::shared_ptr<RHI::Shader> vertex_shader = nullptr;
 		std::shared_ptr<RHI::Shader> fragment_shader = nullptr;
+		RHI::VertexInputCreation vertex_input{};
 		std::unordered_map<uint64_t, std::unique_ptr<RHI::IGraphicsRenderProgram>> programs;
 		ProgramBindingState bindings;
 	};
@@ -1113,6 +1114,10 @@ namespace AshEngine
 		for (uint32_t i = 0; i < attachment_count; ++i)
 		{
 			rhi_desc.pipeline.blend_state.blend_states[i].set_color_write_mask(RHI::AshColorWriteMask::All);
+		}
+		if (impl.vertex_input.num_vertex_attributes > 0 || impl.vertex_input.num_vertex_streams > 0)
+		{
+			rhi_desc.pipeline.vertex_input = impl.vertex_input;
 		}
 
 		std::unique_ptr<RHI::IGraphicsRenderProgram> program = graphics_context->create_graphics_render_program(rhi_desc);
@@ -2066,6 +2071,7 @@ namespace AshEngine
 		impl->name = desc.name ? desc.name : "EngineGraphicsProgram";
 		impl->vertex_shader = vertex_shader;
 		impl->fragment_shader = fragment_shader;
+		impl->vertex_input = desc.vertex_input;
 		if (!resolve_graphics_parameter_block_layout(impl->vertex_shader, impl->fragment_shader, impl->bindings.const_parameter_block))
 		{
 			HLogError("Graphics program '{}' found incompatible root parameter block layouts across shader stages.", impl->name);

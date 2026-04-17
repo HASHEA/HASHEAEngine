@@ -1,5 +1,6 @@
 #pragma once
 #include "Base/hcore.h"
+#include "Graphics/Pipeline.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -109,6 +110,9 @@ namespace AshEngine
 		const char* shader_macro = nullptr;
 		GraphicsProgramState state{};
 		const char* name = nullptr;
+		/// When `num_vertex_attributes > 0` or `num_vertex_streams > 0`, this layout is passed to the RHI graphics pipeline
+		/// (Vulkan + D3D12). Use helpers in `Graphics/VertexInputLayout.h` (KEngine-style presets).
+		RHI::VertexInputCreation vertex_input{};
 	};
 
 	struct RenderTargetDesc

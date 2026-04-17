@@ -189,7 +189,7 @@ namespace RHI
 		}
 	}
 
-	static void finalize_vertex_input_layout(VertexInputCreation& vertex_input)
+	void finalize_vertex_input_layout(VertexInputCreation& vertex_input)
 	{
 		if (vertex_input.num_vertex_attributes == 0)
 		{

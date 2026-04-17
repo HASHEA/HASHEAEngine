@@ -547,8 +547,10 @@ namespace RHI
 					pipeline_rendering_info.colorAttachmentCount = static_cast<uint32_t>(color_formats.size());
 					pipeline_rendering_info.pColorAttachmentFormats = color_formats.empty() ? nullptr : color_formats.data();
 					const VkFormat depth_stencil_format = get_vk_texture_format_info(ci.render_pass->get_depth_stencil_format()).vkFormat;
-					pipeline_rendering_info.depthAttachmentFormat = depth_stencil_format;
-					pipeline_rendering_info.stencilAttachmentFormat = depth_stencil_format;
+					const bool has_depth_component = TextureFormat::has_depth(depth_stencil_format);
+					const bool has_stencil_component = TextureFormat::has_stencil(depth_stencil_format);
+					pipeline_rendering_info.depthAttachmentFormat = has_depth_component ? depth_stencil_format : VK_FORMAT_UNDEFINED;
+					pipeline_rendering_info.stencilAttachmentFormat = has_stencil_component ? depth_stencil_format : VK_FORMAT_UNDEFINED;
 					pipeline_rendering_info.viewMask = ci.render_pass->get_multiview_mask();
 					create_info.pNext = &pipeline_rendering_info;
 				}

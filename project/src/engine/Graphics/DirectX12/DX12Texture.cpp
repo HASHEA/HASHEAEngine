@@ -87,6 +87,15 @@ namespace RHI
 			return false;
 		}
 
+		// Match m_resourceState to the actual D3D12 initial state. For depth formats, Unknown/COMMON is
+		// promoted to DEPTH_WRITE above; if we leave m_resourceState as Unknown, ash_to_d3d12 maps it to
+		// COMMON and the first pass begin_barrier emits COMMON→DSVWrite while the resource is already
+		// DEPTH_WRITE (RESOURCE_BARRIER_BEFORE_AFTER_MISMATCH on SceneRenderer / any depth RT pass).
+		if (initialState == D3D12_RESOURCE_STATE_DEPTH_WRITE)
+		{
+			m_resourceState = AshResourceState::DSVWrite;
+		}
+
 		_create_default_views(device, heapMgr);
 		return true;
 	}

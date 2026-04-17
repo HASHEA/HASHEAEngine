@@ -13,6 +13,7 @@ bin-int
 LogFiles
 Caches
 _BUILD
+.worktrees
 product/bin64
 product/logs
 product/caches
