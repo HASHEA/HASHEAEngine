@@ -15,4 +15,7 @@ Caches
 _BUILD
 product/bin64
 product/logs
+product/caches
+product/test-reports
+product/test-temp
 cacheshader
