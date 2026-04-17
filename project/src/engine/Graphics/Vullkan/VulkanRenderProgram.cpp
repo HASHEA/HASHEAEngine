@@ -876,6 +876,12 @@ namespace RHI
 		if (fnRenderStateDefineCall)
 		{
 			fnRenderStateDefineCall(&m_render_state);
+			// Must rebuild the VkPipeline: initial create() used default depth_stencil from the desc (often all-off).
+			// Engine applies depth/cull/blend via this callback after create (see RenderDevice::apply_program_state).
+			if (!refresh_pipeline())
+			{
+				return false;
+			}
 		}
 		return m_pipeline && m_pipeline->is_valid();
 	}
