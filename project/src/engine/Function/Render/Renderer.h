@@ -2,6 +2,7 @@
 #include "RenderDevice.h"
 #include <chrono>
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 namespace AshEngine
@@ -30,6 +31,8 @@ namespace AshEngine
 		uint32_t first_instance = 0;
 		uint32_t first_index = 0;
 		int32_t vertex_offset = 0;
+		uint32_t const_data_size = 0;
+		std::vector<uint8_t> const_data{};
 	};
 
 	struct ComputeDispatchDesc

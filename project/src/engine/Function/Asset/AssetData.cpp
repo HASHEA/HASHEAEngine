@@ -1620,42 +1620,48 @@ namespace AshEngine
 
 	bool load_mesh_from_file(const std::filesystem::path& path, Mesh& out_mesh, std::string* out_error)
 	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		Model model{};
-		if (!load_model_from_file(path, model, out_error))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(load_model_from_file(path, model, out_error));
 
 		out_mesh = merge_model_meshes(model);
 		out_mesh.source_path = path;
 		clear_error(out_error);
-		return out_mesh.has_geometry();
+		bResult = out_mesh.has_geometry();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool load_model_from_file(const std::filesystem::path& path, Model& out_model, std::string* out_error)
 	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, false, false);
 		const std::string extension = to_lower_copy(path.extension().string());
 		if (extension == ".obj")
 		{
-			return import_obj_model(path, out_model, out_error);
+			bResult = import_obj_model(path, out_model, out_error);
+			break;
 		}
 		if (extension == ".gltf" || extension == ".glb")
 		{
-			return import_gltf_model(path, out_model, out_error);
+			bResult = import_gltf_model(path, out_model, out_error);
+			break;
 		}
 		if (extension == ".fbx")
 		{
-			return import_fbx_model(path, out_model, out_error);
+			bResult = import_fbx_model(path, out_model, out_error);
+			break;
 		}
-		return make_error(out_error, "Unsupported model format.");
+		bResult = make_error(out_error, "Unsupported model format.");
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool load_ashasset_from_file(const std::filesystem::path& path, AshAsset& out_asset, std::string* out_error)
 	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		std::ifstream input(path);
 		if (!input.is_open())
 		{
-			return make_error(out_error, "Failed to open ashasset file.");
+			bResult = make_error(out_error, "Failed to open ashasset file.");
+			break;
 		}
 
 		json root{};
@@ -1665,19 +1671,22 @@ namespace AshEngine
 		}
 		catch (const std::exception& exception)
 		{
-			return make_error(out_error, exception.what());
+			bResult = make_error(out_error, exception.what());
+			break;
 		}
 
 		const uint32_t version = root.value("version", k_ashasset_file_version);
 		if (version > k_ashasset_file_version)
 		{
-			return make_error(out_error, "AshAsset file version is newer than this runtime supports.");
+			bResult = make_error(out_error, "AshAsset file version is newer than this runtime supports.");
+			break;
 		}
 
 		const json nodes_json = root.value("nodes", json::array());
 		if (!nodes_json.is_array())
 		{
-			return make_error(out_error, "AshAsset nodes entry is invalid.");
+			bResult = make_error(out_error, "AshAsset nodes entry is invalid.");
+			break;
 		}
 
 		AshAsset asset{};
@@ -1737,6 +1746,8 @@ namespace AshEngine
 				mesh.asset_path = mesh_json.value("asset_path", std::string{});
 				mesh.mesh_index = mesh_json.value("mesh_index", 0u);
 				mesh.visible = mesh_json.value("visible", true);
+				mesh.mobility = static_cast<SceneMobility>(mesh_json.value("mobility", static_cast<uint32_t>(mesh.mobility)));
+				mesh.layer_mask = mesh_json.value("layer_mask", mesh.layer_mask);
 				node.mesh = mesh;
 			}
 
@@ -1746,19 +1757,22 @@ namespace AshEngine
 		rebuild_ashasset_hierarchy(asset);
 		if (!asset.is_valid())
 		{
-			return make_error(out_error, "AshAsset file does not contain a valid node hierarchy.");
+			bResult = make_error(out_error, "AshAsset file does not contain a valid node hierarchy.");
+			break;
 		}
 
 		out_asset = std::move(asset);
 		clear_error(out_error);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool save_ashasset_to_file(const AshAsset& asset, const std::filesystem::path& path, std::string* out_error)
 	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		if (!asset.is_valid())
 		{
-			return make_error(out_error, "AshAsset is invalid.");
+			bResult = make_error(out_error, "AshAsset is invalid.");
+			break;
 		}
 
 		std::error_code create_error{};
@@ -1767,7 +1781,8 @@ namespace AshEngine
 			std::filesystem::create_directories(path.parent_path(), create_error);
 			if (create_error)
 			{
-				return make_error(out_error, create_error.message());
+				bResult = make_error(out_error, create_error.message());
+				break;
 			}
 		}
 
@@ -1824,6 +1839,8 @@ namespace AshEngine
 					{ "asset_path", mesh.asset_path },
 					{ "mesh_index", mesh.mesh_index },
 					{ "visible", mesh.visible },
+					{ "mobility", static_cast<uint32_t>(mesh.mobility) },
+					{ "layer_mask", mesh.layer_mask },
 				};
 			}
 
@@ -1833,7 +1850,8 @@ namespace AshEngine
 		std::ofstream output(path);
 		if (!output.is_open())
 		{
-			return make_error(out_error, "Failed to open ashasset output file.");
+			bResult = make_error(out_error, "Failed to open ashasset output file.");
+			break;
 		}
 
 		try
@@ -1842,11 +1860,12 @@ namespace AshEngine
 		}
 		catch (const std::exception& exception)
 		{
-			return make_error(out_error, exception.what());
+			bResult = make_error(out_error, exception.what());
+			break;
 		}
 
 		clear_error(out_error);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	AshAsset make_ashasset_from_model(const Model& model, std::filesystem::path source_asset_path)
@@ -1925,5 +1944,26 @@ namespace AshEngine
 		}
 
 		return asset;
+	}
+
+	const Mesh* get_model_mesh_by_index(const Model& model, uint32_t mesh_index)
+	{
+		return mesh_index < model.meshes.size() ? &model.meshes[mesh_index] : nullptr;
+	}
+
+	bool try_get_model_mesh_bounds(const Model& model, uint32_t mesh_index, glm::vec3& out_bounds_min, glm::vec3& out_bounds_max)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		const Mesh* mesh = get_model_mesh_by_index(model, mesh_index);
+		ASH_PROCESS_ERROR(mesh);
+
+		out_bounds_min = mesh->bounds_min;
+		out_bounds_max = mesh->bounds_max;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	const MaterialSlot* get_model_material_slot_by_index(const Model& model, uint32_t material_slot)
+	{
+		return material_slot < model.material_slots.size() ? &model.material_slots[material_slot] : nullptr;
 	}
 }

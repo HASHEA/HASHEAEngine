@@ -307,19 +307,14 @@ namespace AshEngine
 
 	bool UIContext::init(Window* window, RHI::GraphicsContext* graphics_context, RenderDevice* render_device, const UIContextConfig& config)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		if (m_impl->initialized)
 		{
-			return true;
+			break;
 		}
-		if (!window || !graphics_context || !render_device)
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(window && graphics_context && render_device);
 
 		m_impl->window = window;
 		m_impl->graphics_context = graphics_context;
@@ -331,11 +326,11 @@ namespace AshEngine
 			m_impl->window = nullptr;
 			m_impl->graphics_context = nullptr;
 			m_impl->render_device = nullptr;
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		m_impl->initialized = true;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void UIContext::shutdown()
@@ -360,29 +355,29 @@ namespace AshEngine
 
 	bool UIContext::begin_frame()
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
-
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 		m_impl->frame_render_targets.clear();
 		m_impl->frame_render_target_keys.clear();
-		return m_impl->layer ? m_impl->layer->begin_frame() : false;
+		ASH_PROCESS_ERROR(m_impl->layer);
+		bResult = m_impl->layer->begin_frame();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool UIContext::render()
 	{
-		bool result = true;
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
 		if (m_impl && m_impl->layer)
 		{
-			result = m_impl->layer->render(m_impl->frame_render_targets);
+			bResult = m_impl->layer->render(m_impl->frame_render_targets);
 		}
 		if (m_impl)
 		{
 			m_impl->frame_render_targets.clear();
 			m_impl->frame_render_target_keys.clear();
 		}
-		return result;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void UIContext::handle_window_event(const WindowEvent& event)

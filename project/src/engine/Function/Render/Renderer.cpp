@@ -53,13 +53,10 @@ namespace AshEngine
 
 	bool Renderer::GraphicsPassContext::draw(const GraphicsDrawDesc& desc)
 	{
-		if (!is_valid() || !desc.program)
-		{
-			return false;
-		}
-
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(is_valid() && desc.program);
 		m_draw_calls.push_back(desc);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void Renderer::GraphicsPassContext::end()
@@ -79,11 +76,8 @@ namespace AshEngine
 
 	bool Renderer::begin_frame()
 	{
-		if (!m_render_device || !m_render_device->begin_frame())
-		{
-			m_frame_in_progress = false;
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_render_device && m_render_device->begin_frame());
 
 		m_frame_stats = {};
 		m_frame_start_time = std::chrono::steady_clock::now();
@@ -93,7 +87,12 @@ namespace AshEngine
 			m_frame_stats.frame_width = back_buffer->get_width();
 			m_frame_stats.frame_height = back_buffer->get_height();
 		}
-		return true;
+		ASH_PROCESS_GUARD_END(bResult, false);
+		if (!bResult)
+		{
+			m_frame_in_progress = false;
+		}
+		return bResult;
 	}
 
 	bool Renderer::end_frame()
@@ -193,46 +192,35 @@ namespace AshEngine
 
 	bool Renderer::begin_pass(const PassDesc& desc, GraphicsPassContext& pass_context)
 	{
-		if (!m_render_device || m_active_pass || (desc.color_attachments.empty() && !desc.depth_attachment.render_target))
-		{
-			return false;
-		}
-
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_render_device && !m_active_pass && (!desc.color_attachments.empty() || desc.depth_attachment.render_target));
 		pass_context.end();
 		pass_context.m_renderer = this;
 		pass_context.m_active = true;
 		pass_context.m_desc = desc;
 		pass_context.m_draw_calls.clear();
 		m_active_pass = &pass_context;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool Renderer::draw(const GraphicsDrawDesc& desc)
 	{
-		if (!m_active_pass || m_active_pass->m_renderer != this)
-		{
-			return false;
-		}
-		return m_active_pass->draw(desc);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_active_pass && m_active_pass->m_renderer == this);
+		bResult = m_active_pass->draw(desc);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool Renderer::dispatch(const ComputeDispatchDesc& desc)
 	{
-		if (!m_render_device || !desc.program || m_active_pass)
-		{
-			return false;
-		}
-		if (!m_render_device->transition_compute_program_resources(desc.program))
-		{
-			return false;
-		}
-		if (!m_render_device->bind_compute_program(desc.program))
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_render_device && desc.program && !m_active_pass);
+		ASH_PROCESS_ERROR(m_render_device->transition_compute_program_resources(desc.program));
+		ASH_PROCESS_ERROR(m_render_device->bind_compute_program(desc.program));
+
 		m_render_device->dispatch(desc.group_count_x, desc.group_count_y, desc.group_count_z);
 		++m_frame_stats.compute_dispatch_count;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool Renderer::is_in_pass() const
@@ -305,6 +293,16 @@ namespace AshEngine
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
 				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
+				if (draw_desc.const_data_size > 0)
+				{
+					if (draw_desc.const_data.size() < draw_desc.const_data_size || !draw_desc.program->set_const_data_block(draw_desc.const_data_size, draw_desc.const_data.data()))
+					{
+						HLogError("Renderer: set_const_data_block failed for pass '{}' draw {}.", pass_name, draw_index);
+						success = false;
+						break;
+					}
+				}
+
 				if (!m_render_device->bind_graphics_program(draw_desc.program))
 				{
 					HLogError("Renderer: bind_graphics_program failed for pass '{}' draw {}.", pass_name, draw_index);

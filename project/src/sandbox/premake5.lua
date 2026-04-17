@@ -57,28 +57,22 @@ project "Sandbox"
 		symbols "on"
 		editandcontinue "Off"
 		optimize "off"
-		debugcommand "%{wks.location}/product/bin64/Debug-windows-x86_64/Sandbox.exe"
-		debugdir "%{wks.location}/product/bin64/Debug-windows-x86_64"
+		debugcommand (rootdir .. "/product/bin64/Debug-windows-x86_64/Sandbox.exe")
+		debugdir (rootdir .. "/product/bin64/Debug-windows-x86_64")
 		postbuildcommands
 		{
-			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
-			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Sandbox.exe"',
-			'if exist "$(TargetDir)Sandbox.pdb" copy /Y "$(TargetDir)Sandbox.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Sandbox.pdb"',
-			'copy /Y "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.dll" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.dll"',
-			'if exist "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" copy /Y "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.pdb"',
+			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Debug") .. "\\Sandbox.exe", false),
+			sync_runtime_artifact_command("$(TargetDir)Sandbox.pdb", product_runtime_dir("Debug") .. "\\Sandbox.pdb", true),
 		}
 
 	filter "configurations:Release"
 		defines "ASH_APP_RELEASE"
 		runtime "Release"
 		optimize "on"
-		debugcommand "%{wks.location}/product/bin64/Release-windows-x86_64/Sandbox.exe"
-		debugdir "%{wks.location}/product/bin64/Release-windows-x86_64"
+		debugcommand (rootdir .. "/product/bin64/Release-windows-x86_64/Sandbox.exe")
+		debugdir (rootdir .. "/product/bin64/Release-windows-x86_64")
 		postbuildcommands
 		{
-			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
-			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Sandbox.exe"',
-			'if exist "$(TargetDir)Sandbox.pdb" copy /Y "$(TargetDir)Sandbox.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Sandbox.pdb"',
-			'copy /Y "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.dll" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.dll"',
-			'if exist "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" copy /Y "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.pdb"',
+			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Release") .. "\\Sandbox.exe", false),
+			sync_runtime_artifact_command("$(TargetDir)Sandbox.pdb", product_runtime_dir("Release") .. "\\Sandbox.pdb", true),
 		}

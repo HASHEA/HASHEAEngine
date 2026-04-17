@@ -62,11 +62,8 @@ project "Editor"
 		debugdir "%{wks.location}/product/bin64/Debug-windows-x86_64"			  
 		postbuildcommands 
 		{
-			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
-			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Editor.exe"',
-			'if exist "$(TargetDir)Editor.pdb" copy /Y "$(TargetDir)Editor.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Editor.pdb"',
-			'copy /Y "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.dll" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.dll"',
-			'if exist "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" copy /Y "%{wks.location}\\_BUILD\\Debug-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.pdb"',
+			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Debug") .. "\\Editor.exe", false),
+			sync_runtime_artifact_command("$(TargetDir)Editor.pdb", product_runtime_dir("Debug") .. "\\Editor.pdb", true),
 		}
 	filter "configurations:Release"
 		defines "ASH_APP_RELEASE"
@@ -76,9 +73,6 @@ project "Editor"
 		debugdir "%{wks.location}/product/bin64/Release-windows-x86_64"			  
 		postbuildcommands 
 		{
-			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
-			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Editor.exe"',
-			'if exist "$(TargetDir)Editor.pdb" copy /Y "$(TargetDir)Editor.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Editor.pdb"',
-			'copy /Y "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.dll" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.dll"',
-			'if exist "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" copy /Y "%{wks.location}\\_BUILD\\Release-windows-x86_64\\bin\\target\\Engine\\Engine.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.pdb"',
+			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Release") .. "\\Editor.exe", false),
+			sync_runtime_artifact_command("$(TargetDir)Editor.pdb", product_runtime_dir("Release") .. "\\Editor.pdb", true),
 		}

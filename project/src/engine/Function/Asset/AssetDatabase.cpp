@@ -104,30 +104,34 @@ namespace AshEngine
 
 		static auto read_text_file(const std::filesystem::path& path, std::string& out_text, std::string& out_error) -> bool
 		{
-			std::ifstream input(path, std::ios::binary);
-			if (!input.is_open())
-			{
-				out_error = "Failed to open text asset.";
-				return false;
-			}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
+			std::ifstream input(path, std::ios::binary);
+			ASH_PROCESS_ERROR(input.is_open());
 			out_text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 			out_error.clear();
-			return true;
+			ASH_PROCESS_GUARD_END(bResult, false);
+			if (!bResult)
+			{
+				out_error = "Failed to open text asset.";
+			}
+			return bResult;
 		}
 
 		static auto read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>& out_bytes, std::string& out_error) -> bool
 		{
-			std::ifstream input(path, std::ios::binary);
-			if (!input.is_open())
-			{
-				out_error = "Failed to open binary asset.";
-				return false;
-			}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
+			std::ifstream input(path, std::ios::binary);
+			ASH_PROCESS_ERROR(input.is_open());
 			out_bytes.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 			out_error.clear();
-			return true;
+			ASH_PROCESS_GUARD_END(bResult, false);
+			if (!bResult)
+			{
+				out_error = "Failed to open binary asset.";
+			}
+			return bResult;
 		}
 	}
 
@@ -160,6 +164,23 @@ namespace AshEngine
 				return;
 			}
 			impl.load_info_by_id[id] = { state, error };
+		}
+
+		static auto set_load_failed_locked(AssetDatabase::Impl& impl, AssetId id, const std::string& error) -> void
+		{
+			set_last_error_locked(impl, error);
+			set_load_info_locked(impl, id, AssetLoadState::Failed, error);
+		}
+
+		static auto set_load_loading_locked(AssetDatabase::Impl& impl, AssetId id) -> void
+		{
+			set_load_info_locked(impl, id, AssetLoadState::Loading, {});
+		}
+
+		static auto set_load_success_locked(AssetDatabase::Impl& impl, AssetId id) -> void
+		{
+			set_last_error_locked(impl, {});
+			set_load_info_locked(impl, id, AssetLoadState::Loaded, {});
 		}
 
 		static auto resolve_asset_by_id_locked(const std::shared_ptr<AssetDatabase::Impl>& impl, AssetId id, ResolvedAssetInfo& out_resolved) -> bool
@@ -205,16 +226,18 @@ namespace AshEngine
 			ResolvedAssetInfo& out_resolved,
 			std::string& out_error) -> bool
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
 			std::scoped_lock<std::mutex> lock(impl->mutex);
 			if (!resolve_asset_by_id_locked(impl, id, out_resolved))
 			{
 				out_error = "Asset id was not found.";
 				set_load_info_locked(*impl, id, AssetLoadState::Missing, out_error);
 				set_last_error_locked(*impl, out_error);
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			out_error.clear();
-			return true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		static auto resolve_asset_by_path(
@@ -223,15 +246,17 @@ namespace AshEngine
 			ResolvedAssetInfo& out_resolved,
 			std::string& out_error) -> bool
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
 			std::scoped_lock<std::mutex> lock(impl->mutex);
 			if (!resolve_asset_by_path_locked(impl, path, out_resolved))
 			{
 				out_error = "Asset path was not found in the asset database.";
 				set_last_error_locked(*impl, out_error);
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			out_error.clear();
-			return true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		template <typename TResource, typename TCacheMap, typename LoaderFn, typename FinalizeFn>
@@ -243,18 +268,19 @@ namespace AshEngine
 			LoaderFn&& loader,
 			FinalizeFn&& finalize) -> bool
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
 			{
 				std::scoped_lock<std::mutex> lock(impl->mutex);
 				const auto cached = cache.find(resolved.info.id);
 				if (cached != cache.end())
 				{
 					out_resource = cached->second;
-					set_last_error_locked(*impl, {});
-					set_load_info_locked(*impl, resolved.info.id, AssetLoadState::Loaded, {});
-					return true;
+					set_load_success_locked(*impl, resolved.info.id);
+					break;
 				}
 
-				set_load_info_locked(*impl, resolved.info.id, AssetLoadState::Loading, {});
+				set_load_loading_locked(*impl, resolved.info.id);
 			}
 
 			auto resource = std::make_shared<TResource>();
@@ -262,9 +288,8 @@ namespace AshEngine
 			if (!loader(resolved.absolute_path, *resource, error))
 			{
 				std::scoped_lock<std::mutex> lock(impl->mutex);
-				set_last_error_locked(*impl, error);
-				set_load_info_locked(*impl, resolved.info.id, AssetLoadState::Failed, error);
-				return false;
+				set_load_failed_locked(*impl, resolved.info.id, error);
+				ASH_PROCESS_ERROR(false);
 			}
 
 			finalize(*resource);
@@ -273,10 +298,9 @@ namespace AshEngine
 				std::scoped_lock<std::mutex> lock(impl->mutex);
 				cache[resolved.info.id] = resource;
 				out_resource = resource;
-				set_last_error_locked(*impl, {});
-				set_load_info_locked(*impl, resolved.info.id, AssetLoadState::Loaded, {});
+				set_load_success_locked(*impl, resolved.info.id);
 			}
-			return true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 	}
 
@@ -321,10 +345,8 @@ namespace AshEngine
 
 	bool AssetDatabase::refresh()
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		std::error_code exists_error{};
 		const std::filesystem::path root_path = get_root_path();
@@ -339,13 +361,14 @@ namespace AshEngine
 			m_impl->model_cache.clear();
 			m_impl->ashasset_cache.clear();
 			m_impl->last_error = exists_error ? exists_error.message() : "Asset root path does not exist.";
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		std::vector<AssetInfo> assets{};
 		std::unordered_map<AssetId, size_t> index_by_id{};
 		std::unordered_map<std::string, size_t> index_by_key{};
 		std::unordered_map<AssetId, AssetLoadInfo> load_info_by_id{};
+		bool iterate_ok = true;
 
 		std::error_code iterate_error{};
 		for (std::filesystem::recursive_directory_iterator it(root_path, iterate_error), end; it != end; it.increment(iterate_error))
@@ -354,7 +377,8 @@ namespace AshEngine
 			{
 				std::scoped_lock<std::mutex> lock(m_impl->mutex);
 				m_impl->last_error = iterate_error.message();
-				return false;
+				iterate_ok = false;
+				break;
 			}
 
 			const std::filesystem::directory_entry& entry = *it;
@@ -363,7 +387,8 @@ namespace AshEngine
 			{
 				std::scoped_lock<std::mutex> lock(m_impl->mutex);
 				m_impl->last_error = iterate_error.message();
-				return false;
+				iterate_ok = false;
+				break;
 			}
 
 			const std::string key = normalize_asset_key(relative_path);
@@ -384,6 +409,7 @@ namespace AshEngine
 
 			assets.push_back(std::move(info));
 		}
+		ASH_PROCESS_ERROR(iterate_ok);
 
 		std::sort(assets.begin(), assets.end(), [](const AssetInfo& lhs, const AssetInfo& rhs)
 		{
@@ -410,7 +436,7 @@ namespace AshEngine
 		m_impl->model_cache.clear();
 		m_impl->ashasset_cache.clear();
 		m_impl->last_error.clear();
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	const std::vector<AssetInfo>& AssetDatabase::get_assets() const
@@ -491,160 +517,126 @@ namespace AshEngine
 
 	bool AssetDatabase::load_text_by_id(AssetId id, std::string& out_text)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return false;
-		}
-		return load_text_by_path(resolved.info.relative_path, out_text);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		bResult = load_text_by_path(resolved.info.relative_path, out_text);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_text_by_path(const std::filesystem::path& path, std::string& out_text)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		if (resolved.info.is_directory)
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			error = "Cannot load a directory as text.";
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loading, {});
+			set_load_loading_locked(*m_impl, resolved.info.id);
 		}
 
 		if (!read_text_file(resolved.absolute_path, out_text, error))
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
 		std::scoped_lock<std::mutex> lock(m_impl->mutex);
-		set_last_error_locked(*m_impl, {});
-		set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loaded, {});
-		return true;
+		set_load_success_locked(*m_impl, resolved.info.id);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_binary_by_id(AssetId id, std::vector<uint8_t>& out_bytes)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return false;
-		}
-		return load_binary_by_path(resolved.info.relative_path, out_bytes);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		bResult = load_binary_by_path(resolved.info.relative_path, out_bytes);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_binary_by_path(const std::filesystem::path& path, std::vector<uint8_t>& out_bytes)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		if (resolved.info.is_directory)
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			error = "Cannot load a directory as binary.";
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loading, {});
+			set_load_loading_locked(*m_impl, resolved.info.id);
 		}
 
 		if (!read_binary_file(resolved.absolute_path, out_bytes, error))
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
 		std::scoped_lock<std::mutex> lock(m_impl->mutex);
-		set_last_error_locked(*m_impl, {});
-		set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loaded, {});
-		return true;
+		set_load_success_locked(*m_impl, resolved.info.id);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_mesh_by_id(AssetId id, std::shared_ptr<const Mesh>& out_mesh)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return false;
-		}
-		return load_mesh_by_path(resolved.info.relative_path, out_mesh);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		bResult = load_mesh_by_path(resolved.info.relative_path, out_mesh);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_mesh_by_path(const std::filesystem::path& path, std::shared_ptr<const Mesh>& out_mesh)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		if (resolved.info.is_directory)
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			error = "Cannot load a directory as mesh.";
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
-		return load_cached_resource<Mesh>(
+		ASH_PROCESS_ERROR(load_cached_resource<Mesh>(
 			m_impl,
 			resolved,
 			m_impl->mesh_cache,
@@ -656,55 +648,49 @@ namespace AshEngine
 			[&resolved](Mesh& mesh) -> void
 			{
 				mesh.source_path = resolved.info.relative_path;
-			});
+			}));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	std::shared_future<std::shared_ptr<const Mesh>> AssetDatabase::load_mesh_by_id_async(AssetId id)
 	{
-		if (!m_impl)
-		{
-			return make_ready_future(std::shared_ptr<const Mesh>{});
-		}
+		const auto empty_future = make_ready_future(std::shared_ptr<const Mesh>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const Mesh>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return make_ready_future(std::shared_ptr<const Mesh>{});
-		}
-		return load_mesh_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		result = load_mesh_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
 	std::shared_future<std::shared_ptr<const Mesh>> AssetDatabase::load_mesh_by_path_async(const std::filesystem::path& path)
 	{
-		if (!m_impl)
-		{
-			return make_ready_future(std::shared_ptr<const Mesh>{});
-		}
+		const auto empty_future = make_ready_future(std::shared_ptr<const Mesh>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const Mesh>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return make_ready_future(std::shared_ptr<const Mesh>{});
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			const auto cached = m_impl->mesh_cache.find(resolved.info.id);
 			if (cached != m_impl->mesh_cache.end())
 			{
-				set_last_error_locked(*m_impl, {});
-				set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loaded, {});
-				return make_ready_future(std::shared_ptr<const Mesh>(cached->second));
+				set_load_success_locked(*m_impl, resolved.info.id);
+				result = make_ready_future(std::shared_ptr<const Mesh>(cached->second));
+				break;
 			}
 
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loading, {});
+			set_load_loading_locked(*m_impl, resolved.info.id);
 		}
 
 		AssetDatabase database(m_impl);
 		const std::filesystem::path relative_path = resolved.info.relative_path;
-		return dispatch_background_task("AssetDatabase::load_mesh_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const Mesh>
+		result = dispatch_background_task("AssetDatabase::load_mesh_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const Mesh>
 		{
 			std::shared_ptr<const Mesh> mesh{};
 			if (!database.load_mesh_by_path(relative_path, mesh))
@@ -713,48 +699,39 @@ namespace AshEngine
 			}
 			return mesh;
 		});
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
 	bool AssetDatabase::load_model_by_id(AssetId id, std::shared_ptr<const Model>& out_model)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return false;
-		}
-		return load_model_by_path(resolved.info.relative_path, out_model);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		bResult = load_model_by_path(resolved.info.relative_path, out_model);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_model_by_path(const std::filesystem::path& path, std::shared_ptr<const Model>& out_model)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		if (resolved.info.is_directory)
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			error = "Cannot load a directory as model.";
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
-		return load_cached_resource<Model>(
+		ASH_PROCESS_ERROR(load_cached_resource<Model>(
 			m_impl,
 			resolved,
 			m_impl->model_cache,
@@ -770,55 +747,49 @@ namespace AshEngine
 				{
 					mesh.source_path = resolved.info.relative_path;
 				}
-			});
+			}));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	std::shared_future<std::shared_ptr<const Model>> AssetDatabase::load_model_by_id_async(AssetId id)
 	{
-		if (!m_impl)
-		{
-			return make_ready_future(std::shared_ptr<const Model>{});
-		}
+		const auto empty_future = make_ready_future(std::shared_ptr<const Model>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const Model>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return make_ready_future(std::shared_ptr<const Model>{});
-		}
-		return load_model_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		result = load_model_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
 	std::shared_future<std::shared_ptr<const Model>> AssetDatabase::load_model_by_path_async(const std::filesystem::path& path)
 	{
-		if (!m_impl)
-		{
-			return make_ready_future(std::shared_ptr<const Model>{});
-		}
+		const auto empty_future = make_ready_future(std::shared_ptr<const Model>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const Model>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return make_ready_future(std::shared_ptr<const Model>{});
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			const auto cached = m_impl->model_cache.find(resolved.info.id);
 			if (cached != m_impl->model_cache.end())
 			{
-				set_last_error_locked(*m_impl, {});
-				set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loaded, {});
-				return make_ready_future(std::shared_ptr<const Model>(cached->second));
+				set_load_success_locked(*m_impl, resolved.info.id);
+				result = make_ready_future(std::shared_ptr<const Model>(cached->second));
+				break;
 			}
 
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loading, {});
+			set_load_loading_locked(*m_impl, resolved.info.id);
 		}
 
 		AssetDatabase database(m_impl);
 		const std::filesystem::path relative_path = resolved.info.relative_path;
-		return dispatch_background_task("AssetDatabase::load_model_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const Model>
+		result = dispatch_background_task("AssetDatabase::load_model_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const Model>
 		{
 			std::shared_ptr<const Model> model{};
 			if (!database.load_model_by_path(relative_path, model))
@@ -827,48 +798,39 @@ namespace AshEngine
 			}
 			return model;
 		});
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
 	bool AssetDatabase::load_ashasset_by_id(AssetId id, std::shared_ptr<const AshAsset>& out_asset)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return false;
-		}
-		return load_ashasset_by_path(resolved.info.relative_path, out_asset);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		bResult = load_ashasset_by_path(resolved.info.relative_path, out_asset);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool AssetDatabase::load_ashasset_by_path(const std::filesystem::path& path, std::shared_ptr<const AshAsset>& out_asset)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		if (resolved.info.is_directory)
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			error = "Cannot load a directory as ashasset.";
-			set_last_error_locked(*m_impl, error);
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Failed, error);
-			return false;
+			set_load_failed_locked(*m_impl, resolved.info.id, error);
+			ASH_PROCESS_ERROR(false);
 		}
 
-		return load_cached_resource<AshAsset>(
+		ASH_PROCESS_ERROR(load_cached_resource<AshAsset>(
 			m_impl,
 			resolved,
 			m_impl->ashasset_cache,
@@ -880,55 +842,49 @@ namespace AshEngine
 			[&resolved](AshAsset& asset) -> void
 			{
 				asset.source_path = resolved.info.relative_path;
-			});
+			}));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	std::shared_future<std::shared_ptr<const AshAsset>> AssetDatabase::load_ashasset_by_id_async(AssetId id)
 	{
-		if (!m_impl)
-		{
-			return make_ready_future(std::shared_ptr<const AshAsset>{});
-		}
+		const auto empty_future = make_ready_future(std::shared_ptr<const AshAsset>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const AshAsset>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_id(m_impl, id, resolved, error))
-		{
-			return make_ready_future(std::shared_ptr<const AshAsset>{});
-		}
-		return load_ashasset_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		result = load_ashasset_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
 	std::shared_future<std::shared_ptr<const AshAsset>> AssetDatabase::load_ashasset_by_path_async(const std::filesystem::path& path)
 	{
-		if (!m_impl)
-		{
-			return make_ready_future(std::shared_ptr<const AshAsset>{});
-		}
+		const auto empty_future = make_ready_future(std::shared_ptr<const AshAsset>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const AshAsset>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
 
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		if (!resolve_asset_by_path(m_impl, path, resolved, error))
-		{
-			return make_ready_future(std::shared_ptr<const AshAsset>{});
-		}
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			const auto cached = m_impl->ashasset_cache.find(resolved.info.id);
 			if (cached != m_impl->ashasset_cache.end())
 			{
-				set_last_error_locked(*m_impl, {});
-				set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loaded, {});
-				return make_ready_future(std::shared_ptr<const AshAsset>(cached->second));
+				set_load_success_locked(*m_impl, resolved.info.id);
+				result = make_ready_future(std::shared_ptr<const AshAsset>(cached->second));
+				break;
 			}
 
-			set_load_info_locked(*m_impl, resolved.info.id, AssetLoadState::Loading, {});
+			set_load_loading_locked(*m_impl, resolved.info.id);
 		}
 
 		AssetDatabase database(m_impl);
 		const std::filesystem::path relative_path = resolved.info.relative_path;
-		return dispatch_background_task("AssetDatabase::load_ashasset_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const AshAsset>
+		result = dispatch_background_task("AssetDatabase::load_ashasset_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const AshAsset>
 		{
 			std::shared_ptr<const AshAsset> asset{};
 			if (!database.load_ashasset_by_path(relative_path, asset))
@@ -937,5 +893,6 @@ namespace AshEngine
 			}
 			return asset;
 		});
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 }

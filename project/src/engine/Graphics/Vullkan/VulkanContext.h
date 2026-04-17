@@ -430,6 +430,7 @@ private:
 		std::unordered_map<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;
 		std::vector<PendingBufferUpload>						pendingBufferUploads{};
 		std::vector<PendingTextureUpload>						pendingTextureUploads{};
+		mutable std::mutex										pendingUploadMutex{};
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;

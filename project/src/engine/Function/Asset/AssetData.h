@@ -120,4 +120,7 @@ namespace AshEngine
 	ASH_API bool load_ashasset_from_file(const std::filesystem::path& path, AshAsset& out_asset, std::string* out_error = nullptr);
 	ASH_API bool save_ashasset_to_file(const AshAsset& asset, const std::filesystem::path& path, std::string* out_error = nullptr);
 	ASH_API AshAsset make_ashasset_from_model(const Model& model, std::filesystem::path source_asset_path = {});
+	ASH_API const Mesh* get_model_mesh_by_index(const Model& model, uint32_t mesh_index);
+	ASH_API bool try_get_model_mesh_bounds(const Model& model, uint32_t mesh_index, glm::vec3& out_bounds_min, glm::vec3& out_bounds_max);
+	ASH_API const MaterialSlot* get_model_material_slot_by_index(const Model& model, uint32_t material_slot);
 }

@@ -108,6 +108,8 @@ namespace AshEngine
 		swapChain->init(&scConfig);
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
 		renderer = new Renderer(renderDevice);
+		renderAssetManager.initialize(nullptr, renderer);
+		sceneRenderer.initialize(renderer);
 		uiContext = new UIContext();
 		if (!uiContext->init(window, graphicsContext, renderDevice))
 		{
@@ -128,6 +130,8 @@ namespace AshEngine
 			graphicsContext->wait_idle();
 		}
 		shutdown_threading();
+		sceneRenderer.shutdown();
+		renderAssetManager.shutdown();
 		delete renderer;
 		renderer = nullptr;
 		if (uiContext)

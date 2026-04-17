@@ -116,6 +116,36 @@ AshEngine/HASHEAEngine/
 - `UIContext` 仅保留通用 DevUI 能力
 - Editor-specific workspace / panel / property-grid 语义应放在更高一层
 
+### 2.5 Engine 侧错误处理风格
+
+当前 Engine 代码统一倾向于使用项目内已有的 process-error 风格来收口多失败路径函数，优先使用：
+
+- `ASH_PROCESS_ERROR`
+- `ASH_LOG_PROCESS_ERROR`
+- `ASH_PROCESS_ERROR_EXIT`
+- `ASH_PROCESS_GUARD_*`
+
+适用范围：
+
+- 资源创建
+- 初始化 / shutdown / begin / end
+- 绑定、提交、加载、状态转换
+- 其他存在多处失败出口的流程型函数
+
+不建议机械改写的范围：
+
+- 纯 getter
+- 轻量 value 转换
+- 一行包装器
+- 简单 UI widget 透传
+
+原则：
+
+- 优先集中失败处理与单一返回出口
+- 但不要为了“统一风格”牺牲可读性
+- 在循环体内要谨慎使用 `ASH_PROCESS_ERROR`
+- 如果失败需要终止整个函数，而不是只终止循环，应使用显式状态变量或把检查提升到循环外
+
 ---
 
 ## 3. 构建系统与输出目录
@@ -605,6 +635,17 @@ GpuValidation=true
 
 如果以后改动 parameter block 规则，需要同时看两套后端是否仍一致。
 
+补充说明：
+
+- DX12 路径当前允许把约定名为 `AshRootConstants` / `RootConstants` 的 HLSL constant block 视为 root constants
+- Vulkan 路径不能直接把同一份普通 `cbuffer` 反射成 push constants；当前主干做法是：
+  - 上层 HLSL 继续写 `cbuffer AshRootConstants` / `cbuffer RootConstants`
+  - Vulkan 运行时编译前，会把这类 block 重写为 `struct + [[vk::push_constant]]` 变量，并通过宏把原成员名映射回去
+  - Vulkan rewrite 时还会去掉 DXC 预处理后 `cbuffer` 成员自带的 `const`，否则改写后的 struct 会编译失败
+- 因此如果以后调整 root constants 命名、shader preprocess、cache key 或 parameter-block 规则，必须同时验证：
+  - DX12 root constants / root signature 路径
+  - Vulkan push constants / SPIR-V reflection 路径
+
 ### 8.4 当前缓存目录
 
 当前缓存目录为：
@@ -893,6 +934,54 @@ GpuValidation=true
 - 动画 / skin / material asset 设计
 - scene/world 生命周期规则
 
+### 11.8 Scene 到渲染的下一阶段方向
+
+当前主干已经具备：
+
+- 逻辑 `Scene` / `Entity` / ECS façade
+- `AssetDatabase` 的 CPU 资源加载
+- 第一阶段线程模型（logic/render/worker）
+- `Renderer` / `RenderDevice` 的高层提交流程
+
+但主干仍缺少“逻辑 Scene 真正转换为渲染提交”的正式桥接层。下一阶段的目标，是补齐一条 UE 风格但范围受控的流水线：
+
+- `RenderScene`
+- `SceneProxy`
+- `PrimitiveSceneProxy`
+- `SceneView`
+- `VisibleRenderFrame`
+- `SceneRenderer`
+
+当前约定的第一阶段范围为：
+
+- 只先支持静态 mesh 主链路
+- 单主相机 view
+- CPU 多线程 frustum culling
+- 逻辑线程构建可见帧数据
+- 渲染线程只消费不可变的 render frame 并提交 draw
+
+当前明确不在第一阶段完成的系统包括：
+
+- skeletal mesh / animation
+- 完整灯光渲染
+- 阴影
+- 动态材质实例
+- instancing
+- occlusion culling
+
+设计原则：
+
+- `Scene` 继续作为逻辑世界 source of truth
+- render thread 不直接读取 `Scene` / `entt`
+- scene 到 render 的跨线程同步，优先通过不可变 frame packet 完成
+- `Renderer` 保持通用 render facade 身份，不直接演化成 world 管理器
+- scene 渲染链路优先通过独立的 `SceneRenderer` 接入
+
+本阶段的详细设计说明，见：
+
+- `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design.md`
+- `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design-zh.md`
+
 ### 11.7 Sandbox：Engine 自维护测试工程
 
 当前仓库新增了 `project/src/sandbox`，它是一个**独立的 Engine 侧测试可执行项目**，定位是：
@@ -966,8 +1055,10 @@ product/bin64/Debug-windows-x86_64/Sandbox.exe --smoke-test-seconds=5
 
 - Premake 重新生成
 - 编译
-- Vulkan 运行 25 秒，并通过 `ASH_ENGINE_SMOKE_TEST_SECONDS` 走引擎内的优雅退出路径
-- DX12 运行 25 秒，并通过 `ASH_ENGINE_SMOKE_TEST_SECONDS` 走引擎内的优雅退出路径
+- `Sandbox` 在 Vulkan 下运行 25 秒，并通过 `ASH_ENGINE_SMOKE_TEST_SECONDS` 走引擎内的优雅退出路径
+- `Sandbox` 在 DX12 下运行 25 秒，并通过 `ASH_ENGINE_SMOKE_TEST_SECONDS` 走引擎内的优雅退出路径
+- `Editor` 在 Vulkan 下运行 25 秒，并通过 `ASH_ENGINE_SMOKE_TEST_SECONDS` 走引擎内的优雅退出路径
+- `Editor` 在 DX12 下运行 25 秒，并通过 `ASH_ENGINE_SMOKE_TEST_SECONDS` 走引擎内的优雅退出路径
 - 校验 validation / debug layer / 泄露 / backend 错配
 
 Vulkan 支持：
@@ -986,6 +1077,24 @@ DX12 支持：
 - 重复的 DX12 / DXGI debug 消息会被收敛，避免每帧写入同一条 warning
 - 对会执行 `RenderLoadAction::Clear` 的 color/depth render target，优先在 `RenderTargetDesc` 中配置匹配的 optimized clear value；否则 DX12 可能给出 clear-value warning
 - 对带 `initial_data` 的 GPU-only buffer，立即上传必须使用独立的临时 command allocator / command list；不要复用当前帧正在录制的 allocator，否则会命中 `ID3D12CommandAllocator::Reset` debug-layer 错误
+
+运行验证注意事项：
+
+- `Sandbox.exe` / `Editor.exe` 实际加载的是 `product/bin64/<Config>-windows-x86_64/Engine.dll`
+- 仅确认 `_BUILD/.../Engine.dll` 已编出还不够；如果 `product/bin64/.../Engine.dll` 没同步，运行时可能仍在执行旧引擎代码
+- 当出现“源码已改、构建已过，但运行现象完全没变化”的情况，优先检查：
+  - `product/bin64/.../Engine.dll` 与 `_BUILD/.../Engine.dll` 的时间戳 / 哈希是否一致
+  - 是否仍有残留 `Editor.exe` / `Sandbox.exe` 进程占用旧 DLL，导致 postbuild copy 失败
+
+当前默认验收基线：
+
+- 只要改动涉及 Engine 共享路径、Renderer、RenderDevice、Scene/Asset、Application 生命周期、DynamicRHI、配置、日志、验证、UI 后端或任一双后端共享抽象，就不再只跑 `Sandbox`
+- 默认需要同时验证：
+  - `Sandbox + Vulkan`
+  - `Sandbox + DX12`
+  - `Editor + Vulkan`
+  - `Editor + DX12`
+- 只有当改动可以被严格证明为“单后端私有”或“单可执行项目私有”时，才可以缩小验证矩阵
 
 ### 12.3 Vulkan VMA 泄露定位
 
@@ -1012,6 +1121,17 @@ DX12 支持：
 3. RenderDoc 抓帧看资源内容、layout、pass 输出
 4. Vulkan 问题看 resource tracker / barrier 位置
 5. 泄露问题看 VMA leak dump
+
+### 12.5 当前 Scene -> Render 垂直切片的最近修复点
+
+在当前 `Sandbox` 的 `SceneRenderFlowSmoke` 验证链路中，最近确认并修复过两类容易回归的问题：
+
+- Vulkan root constants 共享语义：
+  - 旧行为会把 `SceneStaticMesh` shader 中的 `AshRootConstants` 误当成普通 descriptor resource，进而报“C++ 未绑定”
+  - 当前已改为 Vulkan 编译前 rewrite 成真正的 push constants 语义
+- Vulkan staging buffer 池回收：
+  - `VulkanStagingBufferPool::alloc_buffer()` 新建 buffer 时必须补齐 `PACK_BUFFER_ITEM.u64DeviceSize`
+  - 若遗漏该字段，回收到 staging pool 时会命中 `free_buffer()` 的 `u64DeviceSize` 断言
 
 ---
 

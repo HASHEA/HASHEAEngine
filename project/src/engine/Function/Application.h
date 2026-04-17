@@ -4,6 +4,10 @@
 #include "Base/hplatform.h"
 #include "Base/hthreading.h"
 #include "Graphics/RHIBackend.h"
+#include "Function/Render/RenderAssetManager.h"
+#include "Function/Render/RenderScene.h"
+#include "Function/Render/SceneRenderer.h"
+#include "Function/Render/SceneView.h"
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -93,6 +97,14 @@ public:
 		{
 			return logicThreadEnabled;
 		}
+		auto get_render_asset_manager() -> RenderAssetManager&
+		{
+			return renderAssetManager;
+		}
+		auto get_scene_renderer() -> SceneRenderer&
+		{
+			return sceneRenderer;
+		}
 		auto start() -> void;
 	protected:
 		auto _pump_platform_events() -> void;
@@ -132,6 +144,8 @@ public:
 		Renderer*				renderer				= nullptr;
 		UIContext*				uiContext				= nullptr;
 		RHI::Backend			activeBackend			= RHI::Backend::Default;
+		RenderAssetManager		renderAssetManager{};
+		SceneRenderer			sceneRenderer{};
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
 		InputState				logicInputState{};

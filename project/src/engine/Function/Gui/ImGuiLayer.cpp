@@ -81,14 +81,13 @@ namespace AshEngine
 	public:
 		bool init(Window* window, RHI::GraphicsContext* graphics_context, RenderDevice* render_device, const UIContextConfig& config) override
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
 			if (m_initialized)
 			{
-				return true;
+				break;
 			}
-			if (!window || !graphics_context || !render_device)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(window && graphics_context && render_device);
 
 			m_window = window;
 			m_graphics_context = graphics_context;
@@ -123,12 +122,7 @@ namespace AshEngine
 				m_backend == RHI::Backend::Vulkan ?
 				ImGui_ImplGlfw_InitForVulkan(m_glfw_window, false) :
 				ImGui_ImplGlfw_InitForOther(m_glfw_window, false);
-			if (!glfw_ok)
-			{
-				ImGui::DestroyContext();
-				reset_state();
-				return false;
-			}
+			ASH_PROCESS_ERROR(glfw_ok);
 
 			bool backend_ok = false;
 			switch (m_backend)
@@ -147,8 +141,13 @@ namespace AshEngine
 				break;
 			}
 
-			if (!backend_ok)
+			ASH_PROCESS_ERROR(backend_ok);
+
+			m_initialized = true;
+			ASH_PROCESS_GUARD_END(bResult, false);
+			if (!bResult)
 			{
+				clear_texture_registrations();
 #if defined(ASH_HAS_VULKAN)
 				if (m_vk_descriptor_pool != VK_NULL_HANDLE)
 				{
@@ -168,13 +167,13 @@ namespace AshEngine
 				m_dx12_heap_gpu_start = {};
 #endif
 				ImGui_ImplGlfw_Shutdown();
-				ImGui::DestroyContext();
+				if (ImGui::GetCurrentContext())
+				{
+					ImGui::DestroyContext();
+				}
 				reset_state();
-				return false;
 			}
-
-			m_initialized = true;
-			return true;
+			return bResult;
 		}
 
 		void shutdown() override
@@ -238,10 +237,8 @@ namespace AshEngine
 
 		bool begin_frame() override
 		{
-			if (!m_initialized)
-			{
-				return false;
-			}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(m_initialized);
 
 			cleanup_dead_registrations();
 
@@ -272,18 +269,16 @@ namespace AshEngine
 			ImGui_ImplGlfw_NewFrame();
 			ImGui::NewFrame();
 			m_frame_active = true;
-			return true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		bool render(const std::vector<std::shared_ptr<RenderTarget>>& sampled_render_targets) override
 		{
-			if (!m_initialized)
-			{
-				return false;
-			}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(m_initialized);
 			if (!m_frame_active)
 			{
-				return true;
+				break;
 			}
 
 			ImGui::Render();
@@ -292,12 +287,9 @@ namespace AshEngine
 			ImDrawData* draw_data = ImGui::GetDrawData();
 			if (!draw_data || draw_data->TotalVtxCount == 0 || draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
 			{
-				return true;
+				break;
 			}
-			if (!m_render_device || !m_render_device->get_current_command_buffer())
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(m_render_device && m_render_device->get_current_command_buffer());
 
 			for (const auto& render_target : sampled_render_targets)
 			{
@@ -319,31 +311,28 @@ namespace AshEngine
 				m_render_device->has_back_buffer_content() ?
 				RenderLoadAction::Load :
 				RenderLoadAction::Clear;
-			pass_desc.color_attachments[0].clear_color = { 0.0f, 0.0f, 0.0f, 1.0f };
-			if (!m_render_device->begin_pass(pass_desc))
-			{
-				return false;
-			}
+			pass_desc.color_attachments[0].clear_color = get_engine_back_buffer_clear_color();
+			ASH_PROCESS_ERROR(m_render_device->begin_pass(pass_desc));
 
-			bool result = false;
 			switch (m_backend)
 			{
 #if defined(ASH_HAS_VULKAN)
 			case RHI::Backend::Vulkan:
-				result = render_vulkan(draw_data);
+				bResult = render_vulkan(draw_data);
 				break;
 #endif
 #if defined(ASH_HAS_DX12)
 			case RHI::Backend::DirectX12:
-				result = render_dx12(draw_data);
+				bResult = render_dx12(draw_data);
 				break;
 #endif
 			default:
+				bResult = false;
 				break;
 			}
 
 			m_render_device->end_pass();
-			return result;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		bool is_frame_active() const override
@@ -415,10 +404,8 @@ namespace AshEngine
 
 		UITextureHandle get_render_target_texture_id(const std::shared_ptr<RenderTarget>& render_target) override
 		{
-			if (!m_initialized || !render_target)
-			{
-				return nullptr;
-			}
+			ASH_PROCESS_GUARD_RETURN(UITextureHandle, texture_id, nullptr, nullptr);
+			ASH_PROCESS_ERROR(m_initialized && render_target);
 
 			cleanup_dead_registrations();
 
@@ -429,17 +416,19 @@ namespace AshEngine
 			{
 #if defined(ASH_HAS_VULKAN)
 			case RHI::Backend::Vulkan:
-				return ensure_vulkan_registration(registration, render_target);
+				texture_id = ensure_vulkan_registration(registration, render_target);
+				break;
 #endif
 #if defined(ASH_HAS_DX12)
 			case RHI::Backend::DirectX12:
-				return ensure_dx12_registration(registration, render_target);
+				texture_id = ensure_dx12_registration(registration, render_target);
+				break;
 #endif
 			default:
 				break;
 			}
 
-			return nullptr;
+			ASH_PROCESS_GUARD_RETURN_END(texture_id, nullptr);
 		}
 
 		bool wants_capture_mouse() const override
@@ -558,17 +547,13 @@ namespace AshEngine
 #if defined(ASH_HAS_VULKAN)
 		bool init_vulkan_backend()
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
 			auto* vulkan_context = static_cast<RHI::VulkanContext*>(m_graphics_context);
-			if (!vulkan_context)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(vulkan_context);
 
 			const std::shared_ptr<RenderTarget> back_buffer = m_render_device->get_back_buffer();
-			if (!back_buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(back_buffer);
 
 			const VkDescriptorPoolSize pool_size = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2048u };
 			VkDescriptorPoolCreateInfo pool_info{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
@@ -576,23 +561,14 @@ namespace AshEngine
 			pool_info.maxSets = 2048u;
 			pool_info.poolSizeCount = 1u;
 			pool_info.pPoolSizes = &pool_size;
-			if (vkCreateDescriptorPool(RHI::VulkanContext::get_vulkan_device(), &pool_info, RHI::VulkanContext::get_vulkan_allocation_callbacks(), &m_vk_descriptor_pool) != VK_SUCCESS)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(vkCreateDescriptorPool(RHI::VulkanContext::get_vulkan_device(), &pool_info, RHI::VulkanContext::get_vulkan_allocation_callbacks(), &m_vk_descriptor_pool) == VK_SUCCESS);
 
 			const RHI::AshFormat back_buffer_format = to_rhi_format(back_buffer->get_format());
 			const VkFormat vk_color_attachment_format = RHI::get_vk_texture_format_info(back_buffer_format).vkFormat;
-			if (vk_color_attachment_format == VK_FORMAT_UNDEFINED)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(vk_color_attachment_format != VK_FORMAT_UNDEFINED);
 
 			std::shared_ptr<RHI::Sampler> sampler = m_graphics_context->get_sampler(RHI::ASH_SAMPLER_STATE_DEFAULT);
-			if (!sampler)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(sampler);
 			m_vk_sampler = static_cast<RHI::VulkanSampler*>(sampler.get())->get_vk_sampler();
 
 			ImGui_ImplVulkan_LoadFunctions(
@@ -624,31 +600,28 @@ namespace AshEngine
 			if (use_dynamic_rendering)
 			{
 				init_info.ColorAttachmentFormat = vk_color_attachment_format;
-				return ImGui_ImplVulkan_Init(&init_info, VK_NULL_HANDLE);
+				bResult = ImGui_ImplVulkan_Init(&init_info, VK_NULL_HANDLE);
 			}
-
-			RHI::RenderPassCreation render_pass_creation{};
-			render_pass_creation.set_name("EngineImGuiRenderPass");
-			render_pass_creation.add_attachment(back_buffer_format, RHI::AshResourceState::Present, RHI::AshLoadOption::ASH_LOAD_LOAD);
-			m_vk_render_pass = m_graphics_context->create_render_pass(render_pass_creation);
-			if (!m_vk_render_pass)
+			else
 			{
-				return false;
+				RHI::RenderPassCreation render_pass_creation{};
+				render_pass_creation.set_name("EngineImGuiRenderPass");
+				render_pass_creation.add_attachment(back_buffer_format, RHI::AshResourceState::Present, RHI::AshLoadOption::ASH_LOAD_LOAD);
+				m_vk_render_pass = m_graphics_context->create_render_pass(render_pass_creation);
+				ASH_PROCESS_ERROR(m_vk_render_pass);
+				bResult = ImGui_ImplVulkan_Init(&init_info, reinterpret_cast<VkRenderPass>(m_vk_render_pass->get_native_handle()));
 			}
-
-			return ImGui_ImplVulkan_Init(&init_info, reinterpret_cast<VkRenderPass>(m_vk_render_pass->get_native_handle()));
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		bool render_vulkan(ImDrawData* draw_data)
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 			auto* command_buffer = static_cast<RHI::VulkanCommandBuffer*>(m_render_device->get_current_command_buffer());
-			if (!command_buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(command_buffer);
 
 			ImGui_ImplVulkan_RenderDrawData(draw_data, command_buffer->get_vkCommandBuffer());
-			return true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		UITextureHandle ensure_vulkan_registration(TextureRegistration& registration, const std::shared_ptr<RenderTarget>& render_target)
@@ -693,17 +666,12 @@ namespace AshEngine
 #if defined(ASH_HAS_DX12)
 		bool init_dx12_backend()
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 			auto* dx12_context = static_cast<RHI::DX12Context*>(m_graphics_context);
-			if (!dx12_context)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(dx12_context);
 
 			const std::shared_ptr<RenderTarget> back_buffer = m_render_device->get_back_buffer();
-			if (!back_buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(back_buffer);
 
 			m_dx12_descriptor_capacity = 2048u;
 			m_dx12_next_descriptor_index = 1u;
@@ -712,37 +680,33 @@ namespace AshEngine
 			heap_desc.NumDescriptors = m_dx12_descriptor_capacity;
 			heap_desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 			heap_desc.NodeMask = 0u;
-			if (FAILED(dx12_context->get_device()->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&m_dx12_srv_heap))))
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(SUCCEEDED(dx12_context->get_device()->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&m_dx12_srv_heap))));
 
 			m_dx12_descriptor_size = dx12_context->get_device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 			m_dx12_heap_cpu_start = m_dx12_srv_heap->GetCPUDescriptorHandleForHeapStart();
 			m_dx12_heap_gpu_start = m_dx12_srv_heap->GetGPUDescriptorHandleForHeapStart();
 
 			const DXGI_FORMAT rtv_format = RHI::ash_to_dxgi_format(to_rhi_format(back_buffer->get_format()));
-			return ImGui_ImplDX12_Init(
+			bResult = ImGui_ImplDX12_Init(
 				dx12_context->get_device(),
 				static_cast<int>(get_imgui_image_count()),
 				rtv_format,
 				m_dx12_srv_heap.Get(),
 				m_dx12_heap_cpu_start,
 				m_dx12_heap_gpu_start);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		bool render_dx12(ImDrawData* draw_data)
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 			auto* command_buffer = static_cast<RHI::DX12CommandBuffer*>(m_render_device->get_current_command_buffer());
-			if (!command_buffer || !m_dx12_srv_heap)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(command_buffer && m_dx12_srv_heap);
 
 			ID3D12DescriptorHeap* descriptor_heaps[] = { m_dx12_srv_heap.Get() };
 			command_buffer->get_command_list()->SetDescriptorHeaps(1u, descriptor_heaps);
 			ImGui_ImplDX12_RenderDrawData(draw_data, command_buffer->get_command_list());
-			return true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		auto make_dx12_cpu_handle(uint32_t descriptor_index) const -> D3D12_CPU_DESCRIPTOR_HANDLE

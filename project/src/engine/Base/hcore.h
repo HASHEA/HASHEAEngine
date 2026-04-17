@@ -58,6 +58,21 @@
 } while(false); \
 if (__bInnerError) bResult = false;
 
+#define ASH_PROCESS_GUARD_BEGIN(resultType, resultName, initialValue) \
+	resultType resultName = (initialValue); bool __bInnerError = false; \
+	do {
+
+#define ASH_PROCESS_GUARD_END(resultName, failureValue) \
+	} while(false); \
+	if (__bInnerError) resultName = (failureValue);
+
+#define ASH_PROCESS_GUARD_RETURN(resultType, resultName, initialValue, failureValue) \
+	ASH_PROCESS_GUARD_BEGIN(resultType, resultName, initialValue)
+
+#define ASH_PROCESS_GUARD_RETURN_END(resultName, failureValue) \
+	ASH_PROCESS_GUARD_END(resultName, failureValue) \
+	return resultName;
+
 #define ASH_PROCESS_SUCCESS(condition) if(condition) break;
 #define ASH_PROCESS_ERROR(condition) if(!(condition)) {__bInnerError = true; break;}
 

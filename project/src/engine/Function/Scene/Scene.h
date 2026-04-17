@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <glm/glm.hpp>
 
 namespace AshEngine
 {
@@ -18,6 +19,26 @@ namespace AshEngine
 	class AssetDatabase;
 	struct Model;
 	struct AshAsset;
+
+	struct Mesh;
+
+	struct ASH_API SceneMeshExtractionDesc
+	{
+		EntityId entity_id = 0;
+		std::string asset_path{};
+		uint32_t mesh_index = 0;
+		bool visible = true;
+		SceneMobility mobility = SceneMobility::Static;
+		uint32_t layer_mask = k_default_scene_layer_mask;
+		glm::mat4 world_transform{ 1.0f };
+	};
+
+	struct ASH_API SceneMeshBounds
+	{
+		bool is_valid = false;
+		glm::vec3 local_min{ 0.0f, 0.0f, 0.0f };
+		glm::vec3 local_max{ 0.0f, 0.0f, 0.0f };
+	};
 
 	class Scene;
 
@@ -104,6 +125,11 @@ namespace AshEngine
 		std::vector<Entity> get_entities_with_component(SceneComponentType type) const;
 		std::vector<Entity> get_entities_with_components(const std::vector<SceneComponentType>& required_types) const;
 		uint32_t get_entity_count() const;
+		glm::mat4 get_entity_local_transform(EntityId id) const;
+		glm::mat4 get_entity_world_transform(EntityId id) const;
+		std::vector<SceneMeshExtractionDesc> extract_mesh_entities() const;
+		std::vector<SceneMeshExtractionDesc> extract_visible_mesh_entities() const;
+		bool try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const;
 
 		Entity instantiate_model(const Model& model, const Entity& parent = {}, std::string_view root_name_override = {});
 		Entity instantiate_ashasset(const AshAsset& asset, const Entity& parent = {}, std::string_view root_name_override = {});

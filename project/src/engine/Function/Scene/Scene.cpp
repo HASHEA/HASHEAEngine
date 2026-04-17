@@ -4,11 +4,13 @@
 #include "Function/Asset/AssetDatabase.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <functional>
 #include <json.hpp>
 #include <unordered_map>
 #include <entt/entt.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 
@@ -98,6 +100,8 @@ namespace AshEngine
 			{ "asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(MeshComponent, asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr },
 			{ "mesh_index", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(MeshComponent, mesh_index)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr },
 			{ "visible", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(MeshComponent, visible)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "mobility", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(MeshComponent, mobility)), static_cast<uint32_t>(sizeof(SceneMobility)), nullptr },
+			{ "layer_mask", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(MeshComponent, layer_mask)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr },
 		};
 
 		static SceneComponentDesc k_scene_component_descs[] =
@@ -152,6 +156,15 @@ namespace AshEngine
 			}
 			return component;
 		}
+
+		static auto transform_component_to_matrix(const TransformComponent& component) -> glm::mat4
+		{
+			const glm::mat4 translation = glm::translate(glm::mat4(1.0f), component.position);
+			const glm::quat rotation = glm::quat(glm::radians(component.rotation_euler_degrees));
+			const glm::mat4 rotation_matrix = glm::mat4_cast(rotation);
+			const glm::mat4 scale = glm::scale(glm::mat4(1.0f), component.scale);
+			return translation * rotation_matrix * scale;
+		}
 	}
 
 	class Entity::Impl
@@ -166,6 +179,30 @@ namespace AshEngine
 
 	namespace
 	{
+		template <typename TComponent>
+		static auto emplace_or_replace_entity_component(const std::shared_ptr<Scene::Impl>& impl, EntityId id, const TComponent& component) -> bool
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			const entt::entity handle = find_handle(impl, id);
+			ASH_PROCESS_ERROR(handle != entt::null);
+
+			impl->storage.registry.emplace_or_replace<TComponent>(handle, component);
+			impl->storage.dirty = true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		template <typename TComponent>
+		static auto remove_entity_component_if_present(const std::shared_ptr<Scene::Impl>& impl, EntityId id) -> bool
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			const entt::entity handle = find_handle(impl, id);
+			ASH_PROCESS_ERROR(handle != entt::null && impl->storage.registry.any_of<TComponent>(handle));
+
+			impl->storage.registry.remove<TComponent>(handle);
+			impl->storage.dirty = true;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
 		static auto find_handle(const std::shared_ptr<Scene::Impl>& impl, EntityId id) -> entt::entity
 		{
 			if (!impl)
@@ -194,6 +231,32 @@ namespace AshEngine
 				return nullptr;
 			}
 			return impl->storage.registry.try_get<HierarchyComponent>(handle);
+		}
+
+		static auto get_entity_local_matrix(const std::shared_ptr<Scene::Impl>& impl, EntityId id) -> glm::mat4
+		{
+			const entt::entity handle = find_handle(impl, id);
+			if (handle == entt::null)
+			{
+				return glm::mat4(1.0f);
+			}
+
+			const TransformComponent* transform = impl->storage.registry.try_get<TransformComponent>(handle);
+			return transform ? transform_component_to_matrix(*transform) : glm::mat4(1.0f);
+		}
+
+		static auto get_entity_world_matrix(const std::shared_ptr<Scene::Impl>& impl, EntityId id) -> glm::mat4
+		{
+			glm::mat4 world = get_entity_local_matrix(impl, id);
+			const HierarchyComponent* hierarchy = find_hierarchy_const(impl, id);
+			EntityId parent = hierarchy ? hierarchy->parent : 0;
+			while (parent != 0)
+			{
+				world = get_entity_local_matrix(impl, parent) * world;
+				const HierarchyComponent* parent_hierarchy = find_hierarchy_const(impl, parent);
+				parent = parent_hierarchy ? parent_hierarchy->parent : 0;
+			}
+			return world;
 		}
 
 		static auto is_scene_descendant(const std::shared_ptr<Scene::Impl>& impl, EntityId potential_parent, EntityId id) -> bool
@@ -333,15 +396,7 @@ namespace AshEngine
 
 	bool Entity::set_name_component(const NameComponent& component)
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null)
-		{
-			return false;
-		}
-		impl->storage.registry.replace<NameComponent>(handle, component);
-		impl->storage.dirty = true;
-		return true;
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
 	}
 
 	std::string Entity::get_name() const
@@ -365,15 +420,7 @@ namespace AshEngine
 
 	bool Entity::set_transform_component(const TransformComponent& component)
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null)
-		{
-			return false;
-		}
-		impl->storage.registry.replace<TransformComponent>(handle, component);
-		impl->storage.dirty = true;
-		return true;
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
 	}
 
 	bool Entity::has_camera_component() const
@@ -399,15 +446,7 @@ namespace AshEngine
 
 	bool Entity::add_camera_component(const CameraComponent& component)
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null)
-		{
-			return false;
-		}
-		impl->storage.registry.emplace_or_replace<CameraComponent>(handle, component);
-		impl->storage.dirty = true;
-		return true;
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
 	}
 
 	bool Entity::set_camera_component(const CameraComponent& component)
@@ -417,15 +456,7 @@ namespace AshEngine
 
 	bool Entity::remove_camera_component()
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null || !impl->storage.registry.any_of<CameraComponent>(handle))
-		{
-			return false;
-		}
-		impl->storage.registry.remove<CameraComponent>(handle);
-		impl->storage.dirty = true;
-		return true;
+		return remove_entity_component_if_present<CameraComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
 	bool Entity::has_light_component() const
@@ -451,15 +482,7 @@ namespace AshEngine
 
 	bool Entity::add_light_component(const LightComponent& component)
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null)
-		{
-			return false;
-		}
-		impl->storage.registry.emplace_or_replace<LightComponent>(handle, component);
-		impl->storage.dirty = true;
-		return true;
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
 	}
 
 	bool Entity::set_light_component(const LightComponent& component)
@@ -469,15 +492,7 @@ namespace AshEngine
 
 	bool Entity::remove_light_component()
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null || !impl->storage.registry.any_of<LightComponent>(handle))
-		{
-			return false;
-		}
-		impl->storage.registry.remove<LightComponent>(handle);
-		impl->storage.dirty = true;
-		return true;
+		return remove_entity_component_if_present<LightComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
 	bool Entity::has_mesh_component() const
@@ -503,15 +518,7 @@ namespace AshEngine
 
 	bool Entity::add_mesh_component(const MeshComponent& component)
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null)
-		{
-			return false;
-		}
-		impl->storage.registry.emplace_or_replace<MeshComponent>(handle, component);
-		impl->storage.dirty = true;
-		return true;
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
 	}
 
 	bool Entity::set_mesh_component(const MeshComponent& component)
@@ -521,15 +528,7 @@ namespace AshEngine
 
 	bool Entity::remove_mesh_component()
 	{
-		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
-		const entt::entity handle = find_handle(impl, m_id);
-		if (handle == entt::null || !impl->storage.registry.any_of<MeshComponent>(handle))
-		{
-			return false;
-		}
-		impl->storage.registry.remove<MeshComponent>(handle);
-		impl->storage.dirty = true;
-		return true;
+		return remove_entity_component_if_present<MeshComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
 	bool Entity::has_component(SceneComponentType type) const
@@ -577,60 +576,113 @@ namespace AshEngine
 
 	bool Entity::read_component(SceneComponentType type, void* out_component, size_t component_size) const
 	{
-		if (!out_component)
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, false, false);
+		ASH_PROCESS_ERROR(out_component);
+
+		bool handled = true;
+		if (type == SceneComponentType::Name)
 		{
-			return false;
+			handled = component_size == sizeof(NameComponent);
+			if (handled)
+			{
+				*static_cast<NameComponent*>(out_component) = get_name_component();
+			}
+		}
+		else if (type == SceneComponentType::Transform)
+		{
+			handled = component_size == sizeof(TransformComponent);
+			if (handled)
+			{
+				*static_cast<TransformComponent*>(out_component) = get_transform_component();
+			}
+		}
+		else if (type == SceneComponentType::Camera)
+		{
+			handled = component_size == sizeof(CameraComponent) && has_camera_component();
+			if (handled)
+			{
+				*static_cast<CameraComponent*>(out_component) = get_camera_component();
+			}
+		}
+		else if (type == SceneComponentType::Light)
+		{
+			handled = component_size == sizeof(LightComponent) && has_light_component();
+			if (handled)
+			{
+				*static_cast<LightComponent*>(out_component) = get_light_component();
+			}
+		}
+		else if (type == SceneComponentType::Mesh)
+		{
+			handled = component_size == sizeof(MeshComponent) && has_mesh_component();
+			if (handled)
+			{
+				*static_cast<MeshComponent*>(out_component) = get_mesh_component();
+			}
+		}
+		else
+		{
+			handled = false;
 		}
 
-		switch (type)
-		{
-		case SceneComponentType::Name:
-			if (component_size != sizeof(NameComponent)) return false;
-			*static_cast<NameComponent*>(out_component) = get_name_component();
-			return true;
-		case SceneComponentType::Transform:
-			if (component_size != sizeof(TransformComponent)) return false;
-			*static_cast<TransformComponent*>(out_component) = get_transform_component();
-			return true;
-		case SceneComponentType::Camera:
-			if (component_size != sizeof(CameraComponent) || !has_camera_component()) return false;
-			*static_cast<CameraComponent*>(out_component) = get_camera_component();
-			return true;
-		case SceneComponentType::Light:
-			if (component_size != sizeof(LightComponent) || !has_light_component()) return false;
-			*static_cast<LightComponent*>(out_component) = get_light_component();
-			return true;
-		case SceneComponentType::Mesh:
-			if (component_size != sizeof(MeshComponent) || !has_mesh_component()) return false;
-			*static_cast<MeshComponent*>(out_component) = get_mesh_component();
-			return true;
-		default:
-			return false;
-		}
+		ASH_PROCESS_ERROR(handled);
+		bResult = true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool Entity::write_component(SceneComponentType type, const void* component_data, size_t component_size)
 	{
-		if (!component_data)
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, false, false);
+		ASH_PROCESS_ERROR(component_data);
+
+		bool handled = true;
+		if (type == SceneComponentType::Name)
 		{
-			return false;
+			handled = component_size == sizeof(NameComponent);
+			if (handled)
+			{
+				bResult = set_name_component(*static_cast<const NameComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Transform)
+		{
+			handled = component_size == sizeof(TransformComponent);
+			if (handled)
+			{
+				bResult = set_transform_component(*static_cast<const TransformComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Camera)
+		{
+			handled = component_size == sizeof(CameraComponent);
+			if (handled)
+			{
+				bResult = set_camera_component(*static_cast<const CameraComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Light)
+		{
+			handled = component_size == sizeof(LightComponent);
+			if (handled)
+			{
+				bResult = set_light_component(*static_cast<const LightComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Mesh)
+		{
+			handled = component_size == sizeof(MeshComponent);
+			if (handled)
+			{
+				bResult = set_mesh_component(*static_cast<const MeshComponent*>(component_data));
+			}
+		}
+		else
+		{
+			handled = false;
 		}
 
-		switch (type)
-		{
-		case SceneComponentType::Name:
-			return component_size == sizeof(NameComponent) && set_name_component(*static_cast<const NameComponent*>(component_data));
-		case SceneComponentType::Transform:
-			return component_size == sizeof(TransformComponent) && set_transform_component(*static_cast<const TransformComponent*>(component_data));
-		case SceneComponentType::Camera:
-			return component_size == sizeof(CameraComponent) && set_camera_component(*static_cast<const CameraComponent*>(component_data));
-		case SceneComponentType::Light:
-			return component_size == sizeof(LightComponent) && set_light_component(*static_cast<const LightComponent*>(component_data));
-		case SceneComponentType::Mesh:
-			return component_size == sizeof(MeshComponent) && set_mesh_component(*static_cast<const MeshComponent*>(component_data));
-		default:
-			return false;
-		}
+		ASH_PROCESS_ERROR(handled);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	Entity Entity::get_parent() const
@@ -663,22 +715,25 @@ namespace AshEngine
 
 	bool Entity::set_parent(const Entity& parent)
 	{
-		if (!is_valid() || !parent.is_valid() || std::static_pointer_cast<Scene::Impl>(parent.m_impl) != std::static_pointer_cast<Scene::Impl>(m_impl))
-		{
-			return false;
-		}
-		Scene scene(std::static_pointer_cast<Scene::Impl>(m_impl));
-		return scene.reparent_entity(m_id, parent.get_id());
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const auto parent_impl = std::static_pointer_cast<Scene::Impl>(parent.m_impl);
+		ASH_PROCESS_ERROR(is_valid() && parent.is_valid() && parent_impl == impl);
+
+		Scene scene(impl);
+		bResult = scene.reparent_entity(m_id, parent.get_id());
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool Entity::clear_parent()
 	{
-		if (!is_valid())
-		{
-			return false;
-		}
-		Scene scene(std::static_pointer_cast<Scene::Impl>(m_impl));
-		return scene.reparent_entity(m_id, 0);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		ASH_PROCESS_ERROR(is_valid());
+
+		Scene scene(impl);
+		bResult = scene.reparent_entity(m_id, 0);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	Entity Entity::create_child(std::string_view name)
@@ -711,11 +766,13 @@ namespace AshEngine
 
 	Scene Scene::load_from_file(const std::filesystem::path& path, std::string* out_error)
 	{
+		ASH_PROCESS_GUARD_RETURN(Scene, result, Scene{}, Scene{});
+
 		std::ifstream input(path);
 		if (!input.is_open())
 		{
 			make_scene_error(out_error, "Failed to open scene file.");
-			return {};
+			ASH_PROCESS_ERROR(false);
 		}
 
 		json root{};
@@ -726,7 +783,7 @@ namespace AshEngine
 		catch (const std::exception& exception)
 		{
 			make_scene_error(out_error, exception.what());
-			return {};
+			ASH_PROCESS_ERROR(false);
 		}
 
 		Scene scene = Scene::create(root.value("name", std::string("Untitled Scene")));
@@ -735,14 +792,14 @@ namespace AshEngine
 		if (version > k_scene_file_version)
 		{
 			make_scene_error(out_error, "Scene file version is newer than this runtime supports.");
-			return {};
+			ASH_PROCESS_ERROR(false);
 		}
 
 		const json entities_json = root.value("entities", json::array());
 		if (!entities_json.is_array())
 		{
 			make_scene_error(out_error, "Scene file contains an invalid entity list.");
-			return {};
+			ASH_PROCESS_ERROR(false);
 		}
 
 		std::unordered_map<EntityId, EntityId> desired_parents{};
@@ -804,6 +861,8 @@ namespace AshEngine
 				mesh.asset_path = mesh_json.value("asset_path", std::string{});
 				mesh.mesh_index = mesh_json.value("mesh_index", 0u);
 				mesh.visible = mesh_json.value("visible", true);
+				mesh.mobility = static_cast<SceneMobility>(mesh_json.value("mobility", static_cast<uint32_t>(mesh.mobility)));
+				mesh.layer_mask = mesh_json.value("layer_mask", mesh.layer_mask);
 				entity.add_mesh_component(mesh);
 			}
 		}
@@ -814,20 +873,25 @@ namespace AshEngine
 		{
 			scene.m_impl->storage.next_entity_id = std::max(scene.m_impl->storage.next_entity_id, saved_next_entity_id);
 		}
+		bool hierarchy_valid = true;
 		for (const auto& [id, parent] : desired_parents)
 		{
-			if (parent != 0)
+			if (parent != 0 && !scene.reparent_entity(id, parent))
 			{
-				scene.reparent_entity(id, parent);
+				make_scene_error(out_error, "Scene file contains an invalid hierarchy.");
+				hierarchy_valid = false;
+				break;
 			}
 		}
+		ASH_PROCESS_ERROR(hierarchy_valid);
 
 		scene.m_impl->storage.dirty = false;
 		if (out_error)
 		{
 			out_error->clear();
 		}
-		return scene;
+		result = std::move(scene);
+		ASH_PROCESS_GUARD_RETURN_END(result, Scene{});
 	}
 
 	bool Scene::is_valid() const
@@ -874,32 +938,23 @@ namespace AshEngine
 
 	bool Scene::destroy_entity(EntityId id)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
-		const bool destroyed = destroy_entity_recursive(m_impl->storage, id);
-		if (destroyed)
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
+
+		bResult = destroy_entity_recursive(m_impl->storage, id);
+		if (bResult)
 		{
 			m_impl->storage.dirty = true;
 		}
-		return destroyed;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool Scene::reparent_entity(EntityId id, EntityId new_parent_id)
 	{
-		if (!m_impl || id == 0 || id == new_parent_id)
-		{
-			return false;
-		}
-		if (find_handle(m_impl, id) == entt::null)
-		{
-			return false;
-		}
-		if (new_parent_id != 0 && (find_handle(m_impl, new_parent_id) == entt::null || is_scene_descendant(m_impl, id, new_parent_id)))
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && id != 0 && id != new_parent_id);
+		ASH_PROCESS_ERROR(find_handle(m_impl, id) != entt::null);
+		ASH_PROCESS_ERROR(new_parent_id == 0 || (find_handle(m_impl, new_parent_id) != entt::null && !is_scene_descendant(m_impl, id, new_parent_id)));
 
 		detach_from_parent(m_impl->storage, id);
 		if (new_parent_id != 0)
@@ -907,7 +962,7 @@ namespace AshEngine
 			attach_to_parent(m_impl->storage, id, new_parent_id);
 		}
 		m_impl->storage.dirty = true;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	Entity Scene::find_entity(EntityId id) const
@@ -988,6 +1043,85 @@ namespace AshEngine
 	uint32_t Scene::get_entity_count() const
 	{
 		return m_impl ? static_cast<uint32_t>(m_impl->storage.entities.size()) : 0;
+	}
+
+	glm::mat4 Scene::get_entity_local_transform(EntityId id) const
+	{
+		return get_entity_local_matrix(m_impl, id);
+	}
+
+	glm::mat4 Scene::get_entity_world_transform(EntityId id) const
+	{
+		return get_entity_world_matrix(m_impl, id);
+	}
+
+	std::vector<SceneMeshExtractionDesc> Scene::extract_mesh_entities() const
+	{
+		std::vector<SceneMeshExtractionDesc> result{};
+		if (!m_impl)
+		{
+			return result;
+		}
+
+		for (EntityId id : m_impl->storage.entity_order)
+		{
+			const entt::entity handle = find_handle(m_impl, id);
+			if (handle == entt::null)
+			{
+				continue;
+			}
+
+			const MeshComponent* mesh = m_impl->storage.registry.try_get<MeshComponent>(handle);
+			if (!mesh)
+			{
+				continue;
+			}
+
+			SceneMeshExtractionDesc desc{};
+			desc.entity_id = id;
+			desc.asset_path = mesh->asset_path;
+			desc.mesh_index = mesh->mesh_index;
+			desc.visible = mesh->visible;
+			desc.mobility = mesh->mobility;
+			desc.layer_mask = mesh->layer_mask;
+			desc.world_transform = get_entity_world_matrix(m_impl, id);
+			result.push_back(std::move(desc));
+		}
+
+		return result;
+	}
+
+	std::vector<SceneMeshExtractionDesc> Scene::extract_visible_mesh_entities() const
+	{
+		std::vector<SceneMeshExtractionDesc> result{};
+		for (const SceneMeshExtractionDesc& desc : extract_mesh_entities())
+		{
+			if (desc.visible)
+			{
+				result.push_back(desc);
+			}
+		}
+		return result;
+	}
+
+	bool Scene::try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		out_bounds = {};
+		ASH_PROCESS_ERROR(database.is_valid());
+		ASH_PROCESS_ERROR(!mesh_component.asset_path.empty());
+
+		std::shared_ptr<const Model> model{};
+		ASH_PROCESS_ERROR(database.load_model_by_path(mesh_component.asset_path, model));
+		ASH_PROCESS_ERROR(model);
+
+		glm::vec3 bounds_min{};
+		glm::vec3 bounds_max{};
+		ASH_PROCESS_ERROR(try_get_model_mesh_bounds(*model, mesh_component.mesh_index, bounds_min, bounds_max));
+		out_bounds.is_valid = true;
+		out_bounds.local_min = bounds_min;
+		out_bounds.local_max = bounds_max;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	Entity Scene::instantiate_model(const Model& model, const Entity& parent, std::string_view root_name_override)
@@ -1107,25 +1241,31 @@ namespace AshEngine
 
 	Entity Scene::instantiate_asset(AssetDatabase& database, const std::filesystem::path& path, const Entity& parent)
 	{
+		ASH_PROCESS_GUARD_RETURN(Entity, result, Entity{}, Entity{});
 		std::string extension = path.extension().string();
 		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
 		if (extension == ".ashasset")
 		{
 			std::shared_ptr<const AshAsset> asset{};
-			return database.load_ashasset_by_path(path, asset) ? instantiate_ashasset(*asset, parent) : Entity{};
+			ASH_PROCESS_ERROR(database.load_ashasset_by_path(path, asset));
+			result = instantiate_ashasset(*asset, parent);
+			break;
 		}
 
 		std::shared_ptr<const Model> model{};
-		return database.load_model_by_path(path, model) ? instantiate_model(*model, parent) : Entity{};
+		ASH_PROCESS_ERROR(database.load_model_by_path(path, model));
+		result = instantiate_model(*model, parent);
+		ASH_PROCESS_GUARD_RETURN_END(result, Entity{});
 	}
 
 	bool Scene::save_to_file(const std::filesystem::path& path, std::string* out_error)
 	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		if (!m_impl)
 		{
 			make_scene_error(out_error, "Scene is invalid.");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		std::error_code directory_error{};
@@ -1135,7 +1275,7 @@ namespace AshEngine
 			if (directory_error)
 			{
 				make_scene_error(out_error, directory_error.message());
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 		}
 
@@ -1201,6 +1341,8 @@ namespace AshEngine
 					{ "asset_path", mesh->asset_path },
 					{ "mesh_index", mesh->mesh_index },
 					{ "visible", mesh->visible },
+					{ "mobility", static_cast<uint32_t>(mesh->mobility) },
+					{ "layer_mask", mesh->layer_mask },
 				};
 			}
 
@@ -1211,7 +1353,7 @@ namespace AshEngine
 		if (!output.is_open())
 		{
 			make_scene_error(out_error, "Failed to open scene output file.");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		try
@@ -1221,7 +1363,7 @@ namespace AshEngine
 		catch (const std::exception& exception)
 		{
 			make_scene_error(out_error, exception.what());
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		m_impl->storage.source_path = path;
@@ -1230,7 +1372,7 @@ namespace AshEngine
 		{
 			out_error->clear();
 		}
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	const std::filesystem::path& Scene::get_source_path() const

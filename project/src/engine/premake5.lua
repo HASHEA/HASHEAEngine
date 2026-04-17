@@ -122,14 +122,13 @@ project "Engine"
 			thirdparty.."/glslang/debug/windows-x64/lib/OSDependentd.lib",
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}	
-		dest_dir = "%{wks.location}/product/bin64"	
-		debugcommand "%{wks.location}/product/bin64/Debug-windows-x86_64/Editor.exe"
-		debugdir "%{wks.location}/product/bin64/Debug-windows-x86_64"			  
+		dest_dir = rootdir .. "/product/bin64"	
+		debugcommand (rootdir .. "/product/bin64/Debug-windows-x86_64/Editor.exe")
+		debugdir (rootdir .. "/product/bin64/Debug-windows-x86_64")			  
 		postbuildcommands 
 		{
-			'mkdir "%{wks.location}\\product\\bin64\\Debug-windows-x86_64" 2>nul',
-			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.dll"',
-			'if exist "$(TargetDir)Engine.pdb" copy /Y "$(TargetDir)Engine.pdb" "%{wks.location}\\product\\bin64\\Debug-windows-x86_64\\Engine.pdb"',
+			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Debug") .. "\\Engine.dll", false),
+			sync_runtime_artifact_command("$(TargetDir)Engine.pdb", product_runtime_dir("Debug") .. "\\Engine.pdb", true),
 		}
 	filter {"system:windows","configurations:Release"}
 		system "Windows"
@@ -178,13 +177,12 @@ project "Engine"
 			thirdparty.."/glslang/release/windows-x64/lib/OSDependent.lib",
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}	
-		debugcommand "%{wks.location}/product/bin64/Release-windows-x86_64/Editor.exe"
-		debugdir "%{wks.location}/product/bin64/Release-windows-x86_64"
+		debugcommand (rootdir .. "/product/bin64/Release-windows-x86_64/Editor.exe")
+		debugdir (rootdir .. "/product/bin64/Release-windows-x86_64")
 		postbuildcommands 
 		{
-			'mkdir "%{wks.location}\\product\\bin64\\Release-windows-x86_64" 2>nul',
-			'copy /Y "$(TargetPath)" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.dll"',
-			'if exist "$(TargetDir)Engine.pdb" copy /Y "$(TargetDir)Engine.pdb" "%{wks.location}\\product\\bin64\\Release-windows-x86_64\\Engine.pdb"',
+			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Release") .. "\\Engine.dll", false),
+			sync_runtime_artifact_command("$(TargetDir)Engine.pdb", product_runtime_dir("Release") .. "\\Engine.pdb", true),
 		}
 
 	filter "system:not windows"

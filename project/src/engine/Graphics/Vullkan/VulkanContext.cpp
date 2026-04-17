@@ -21,6 +21,7 @@
 #include "Graphics/DXC/DXCHelper.h"
 #endif
 #include "Graphics/TextureUploadUtils.h"
+#include "Base/hthreading.h"
 #include <array>
 #include <cstring>
 #include <mutex>
@@ -1497,7 +1498,7 @@ auto VulkanContext::destroy() -> void
 			return false;
 		}
 
-		if (!frameActive)
+		if (!frameActive || !AshEngine::is_in_render_thread())
 		{
 			return _enqueue_pending_buffer_upload(buffer, offset, size, data);
 		}
@@ -1523,7 +1524,7 @@ auto VulkanContext::destroy() -> void
 			return false;
 		}
 
-		if (!frameActive)
+		if (!frameActive || !AshEngine::is_in_render_thread())
 		{
 			return _enqueue_pending_texture_upload(texture, data);
 		}
@@ -1543,7 +1544,10 @@ auto VulkanContext::destroy() -> void
 		upload.offset = offset;
 		upload.data.resize(size);
 		std::memcpy(upload.data.data(), data, size);
-		pendingBufferUploads.push_back(std::move(upload));
+		{
+			std::scoped_lock<std::mutex> lock(pendingUploadMutex);
+			pendingBufferUploads.push_back(std::move(upload));
+		}
 		return true;
 	}
 
@@ -1572,7 +1576,10 @@ auto VulkanContext::destroy() -> void
 		upload.texture = texture;
 		upload.data.resize(static_cast<size_t>(totalBytes));
 		std::memcpy(upload.data.data(), data, static_cast<size_t>(totalBytes));
-		pendingTextureUploads.push_back(std::move(upload));
+		{
+			std::scoped_lock<std::mutex> lock(pendingUploadMutex);
+			pendingTextureUploads.push_back(std::move(upload));
+		}
 		return true;
 	}
 
@@ -1628,7 +1635,13 @@ auto VulkanContext::destroy() -> void
 
 	auto VulkanContext::_flush_pending_buffer_uploads() -> bool
 	{
-		for (const PendingBufferUpload& upload : pendingBufferUploads)
+		std::vector<PendingBufferUpload> uploads{};
+		{
+			std::scoped_lock<std::mutex> lock(pendingUploadMutex);
+			uploads.swap(pendingBufferUploads);
+		}
+
+		for (const PendingBufferUpload& upload : uploads)
 		{
 			if (!_record_buffer_upload(upload.buffer, upload.offset, static_cast<uint32_t>(upload.data.size()), upload.data.data()))
 			{
@@ -1636,13 +1649,18 @@ auto VulkanContext::destroy() -> void
 			}
 		}
 
-		pendingBufferUploads.clear();
 		return true;
 	}
 
 	auto VulkanContext::_flush_pending_texture_uploads() -> bool
 	{
-		for (const PendingTextureUpload& upload : pendingTextureUploads)
+		std::vector<PendingTextureUpload> uploads{};
+		{
+			std::scoped_lock<std::mutex> lock(pendingUploadMutex);
+			uploads.swap(pendingTextureUploads);
+		}
+
+		for (const PendingTextureUpload& upload : uploads)
 		{
 			if (!_record_texture_upload(upload.texture, upload.data.data()))
 			{
@@ -1650,7 +1668,6 @@ auto VulkanContext::destroy() -> void
 			}
 		}
 
-		pendingTextureUploads.clear();
 		return true;
 	}
 

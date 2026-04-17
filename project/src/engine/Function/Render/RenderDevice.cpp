@@ -271,6 +271,12 @@ namespace AshEngine
 
 		static constexpr RenderTextureFormat k_public_back_buffer_format = RenderTextureFormat::BGRA8_SRGB;
 		static constexpr const char* k_public_back_buffer_name = "EngineBackBufferOffscreen";
+		static constexpr RenderColorValue k_engine_back_buffer_clear_color{ 0.025f, 0.03f, 0.05f, 1.0f };
+	}
+
+	RenderColorValue get_engine_back_buffer_clear_color()
+	{
+		return k_engine_back_buffer_clear_color;
 	}
 
 	class RenderTarget::Impl
@@ -472,20 +478,17 @@ namespace AshEngine
 		});
 	}
 
-	static bool set_program_const_data(ProgramBindingState& bindings, uint32_t size, const void* data)
-	{
-		if (size > 0 && !data)
+		static bool set_program_const_data(ProgramBindingState& bindings, uint32_t size, const void* data)
 		{
-			return false;
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(size == 0 || data);
+			bindings.const_data_block.resize(size);
+			if (size > 0)
+			{
+				std::memcpy(bindings.const_data_block.data(), data, size);
+			}
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
-
-		bindings.const_data_block.resize(size);
-		if (size > 0)
-		{
-			std::memcpy(bindings.const_data_block.data(), data, size);
-		}
-		return true;
-	}
 
 	static const RHI::ShaderParameterMember* find_parameter_member(const ProgramBindingState& bindings, const char* name)
 	{
@@ -505,110 +508,118 @@ namespace AshEngine
 		return nullptr;
 	}
 
-	template <typename TValue>
-	static bool write_parameter_member(ProgramBindingState& bindings, const char* name, const TValue& value)
-	{
-		const RHI::ShaderParameterMember* member = find_parameter_member(bindings, name);
-		if (!member)
+		template <typename TValue>
+		static bool write_parameter_member(ProgramBindingState& bindings, const char* name, const TValue& value)
 		{
-			return false;
-		}
-		if (!bindings.const_parameter_block)
-		{
-			return false;
-		}
-		if (member->offset + sizeof(TValue) > bindings.const_parameter_block->byte_size)
-		{
-			return false;
-		}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			const RHI::ShaderParameterMember* member = find_parameter_member(bindings, name);
+			ASH_PROCESS_ERROR(member);
+			ASH_PROCESS_ERROR(bindings.const_parameter_block);
+			ASH_PROCESS_ERROR(member->offset + sizeof(TValue) <= bindings.const_parameter_block->byte_size);
 
-		if (bindings.const_data_block.size() < bindings.const_parameter_block->byte_size)
-		{
+			if (bindings.const_data_block.size() < bindings.const_parameter_block->byte_size)
+			{
 			bindings.const_data_block.resize(bindings.const_parameter_block->byte_size, 0u);
+			}
+
+			std::memcpy(bindings.const_data_block.data() + member->offset, &value, sizeof(TValue));
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-		std::memcpy(bindings.const_data_block.data() + member->offset, &value, sizeof(TValue));
-		return true;
-	}
-
-	static bool collect_buffer_views(
-		const std::vector<std::shared_ptr<StorageBuffer::Impl>>& buffer_impls,
-		bool unordered_access,
-		std::vector<std::shared_ptr<RHI::BufferView>>& out_views)
-	{
-		out_views.clear();
-		out_views.reserve(buffer_impls.size());
-		for (const auto& buffer_impl : buffer_impls)
+		static bool collect_buffer_views(
+			const std::vector<std::shared_ptr<StorageBuffer::Impl>>& buffer_impls,
+			bool unordered_access,
+			std::vector<std::shared_ptr<RHI::BufferView>>& out_views)
 		{
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_views.clear();
+			out_views.reserve(buffer_impls.size());
+			bool views_valid = true;
+			for (const auto& buffer_impl : buffer_impls)
 			{
-				return false;
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					views_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::BufferView> view = unordered_access ?
+					buffer_impl->resource->buffer->get_default_uav() :
+					buffer_impl->resource->buffer->get_default_srv();
+				if (!view)
+				{
+					views_valid = false;
+					break;
+				}
+				out_views.push_back(view);
 			}
-			std::shared_ptr<RHI::BufferView> view = unordered_access ?
-				buffer_impl->resource->buffer->get_default_uav() :
-				buffer_impl->resource->buffer->get_default_srv();
-			if (!view)
-			{
-				return false;
-			}
-			out_views.push_back(view);
+			ASH_PROCESS_ERROR(views_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
-		return true;
-	}
 
-	static bool collect_texture_views(
-		const std::vector<std::shared_ptr<RenderTarget::Impl>>& texture_impls,
-		bool unordered_access,
-		std::vector<std::shared_ptr<RHI::TextureView>>& out_views)
-	{
-		out_views.clear();
-		out_views.reserve(texture_impls.size());
-		for (const auto& texture_impl : texture_impls)
+		static bool collect_texture_views(
+			const std::vector<std::shared_ptr<RenderTarget::Impl>>& texture_impls,
+			bool unordered_access,
+			std::vector<std::shared_ptr<RHI::TextureView>>& out_views)
 		{
-			if (!texture_impl)
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_views.clear();
+			out_views.reserve(texture_impls.size());
+			bool views_valid = true;
+			for (const auto& texture_impl : texture_impls)
 			{
-				return false;
+				if (!texture_impl)
+				{
+					views_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::Texture> texture = texture_impl->get_texture();
+				if (!texture)
+				{
+					views_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::TextureView> view = unordered_access ? texture->get_default_uav() : texture->get_default_srv();
+				if (!view)
+				{
+					views_valid = false;
+					break;
+				}
+				out_views.push_back(view);
 			}
-			std::shared_ptr<RHI::Texture> texture = texture_impl->get_texture();
-			if (!texture)
-			{
-				return false;
-			}
-			std::shared_ptr<RHI::TextureView> view = unordered_access ? texture->get_default_uav() : texture->get_default_srv();
-			if (!view)
-			{
-				return false;
-			}
-			out_views.push_back(view);
+			ASH_PROCESS_ERROR(views_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
-		return true;
-	}
 
-	static bool collect_samplers(
-		RHI::GraphicsContext* graphics_context,
-		const std::vector<RenderSamplerState>& sampler_states,
-		std::vector<std::shared_ptr<RHI::Sampler>>& out_samplers)
-	{
-		out_samplers.clear();
-		out_samplers.reserve(sampler_states.size());
-		for (RenderSamplerState sampler_state : sampler_states)
+		static bool collect_samplers(
+			RHI::GraphicsContext* graphics_context,
+			const std::vector<RenderSamplerState>& sampler_states,
+			std::vector<std::shared_ptr<RHI::Sampler>>& out_samplers)
 		{
-			std::shared_ptr<RHI::Sampler> sampler = graphics_context->get_sampler(to_rhi_sampler_state(sampler_state));
-			if (!sampler)
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_samplers.clear();
+			out_samplers.reserve(sampler_states.size());
+			bool samplers_valid = true;
+			for (RenderSamplerState sampler_state : sampler_states)
 			{
-				return false;
+				std::shared_ptr<RHI::Sampler> sampler = graphics_context->get_sampler(to_rhi_sampler_state(sampler_state));
+				if (!sampler)
+				{
+					samplers_valid = false;
+					break;
+				}
+				out_samplers.push_back(sampler);
 			}
-			out_samplers.push_back(sampler);
+			ASH_PROCESS_ERROR(samplers_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
-		return true;
-	}
 
-	static bool apply_program_bindings(ProgramBindingState& bindings, RHI::GraphicsContext* graphics_context, RHI::IRenderProgramBinder& binder)
-	{
-		bool success = true;
-		for (const auto& [name, value] : bindings.immutable_constants)
+		static bool apply_program_bindings(ProgramBindingState& bindings, RHI::GraphicsContext* graphics_context, RHI::IRenderProgramBinder& binder)
 		{
-			switch (value.type)
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			bool bindings_valid = true;
+			for (const auto& [name, value] : bindings.immutable_constants)
+			{
+				switch (value.type)
 			{
 			case ImmutableConstantValue::Type::Int:
 				binder.set_immutable_const_value_int(name.c_str(), value.value_i);
@@ -622,231 +633,227 @@ namespace AshEngine
 			}
 		}
 
-		for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
-		{
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
 			{
-				success = false;
-				break;
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_cbv(name.c_str(), buffer_impl->resource->buffer->get_default_cbv());
 			}
-			binder.add_bind_cbv(name.c_str(), buffer_impl->resource->buffer->get_default_cbv());
+
+			for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					bindings_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::BufferView> view = buffer_impl->resource->buffer->get_default_srv();
+				if (!view)
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_srv(name.c_str(), view);
+			}
+
+			for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::vector<std::shared_ptr<RHI::BufferView>> views;
+				if (!collect_buffer_views(buffer_impls, false, views))
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_srv_array(name.c_str(), views);
+			}
+
+			for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					bindings_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::BufferView> view = buffer_impl->resource->buffer->get_default_uav();
+				if (!view)
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_uav(name.c_str(), view);
+			}
+
+			for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::vector<std::shared_ptr<RHI::BufferView>> views;
+				if (!collect_buffer_views(buffer_impls, true, views))
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_uav_array(name.c_str(), views);
+			}
+
+			for (const auto& [name, texture_impl] : bindings.texture_srvs)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				if (!texture_impl)
+				{
+					bindings_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::Texture> texture = texture_impl->get_texture();
+				if (!texture || !texture->get_default_srv())
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_srv(name.c_str(), texture->get_default_srv());
+			}
+
+			for (const auto& [name, texture_impls] : bindings.texture_srv_arrays)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::vector<std::shared_ptr<RHI::TextureView>> views;
+				if (!collect_texture_views(texture_impls, false, views))
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_srv_array(name.c_str(), views);
+			}
+
+			for (const auto& [name, texture_impl] : bindings.texture_uavs)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				if (!texture_impl)
+				{
+					bindings_valid = false;
+					break;
+				}
+				std::shared_ptr<RHI::Texture> texture = texture_impl->get_texture();
+				if (!texture || !texture->get_default_uav())
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_uav(name.c_str(), texture->get_default_uav());
+			}
+
+			for (const auto& [name, texture_impls] : bindings.texture_uav_arrays)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::vector<std::shared_ptr<RHI::TextureView>> views;
+				if (!collect_texture_views(texture_impls, true, views))
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_uav_array(name.c_str(), views);
+			}
+
+			for (const auto& [name, sampler_state] : bindings.samplers)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::shared_ptr<RHI::Sampler> sampler = graphics_context->get_sampler(to_rhi_sampler_state(sampler_state));
+				if (!sampler)
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_sampler(name.c_str(), sampler);
+			}
+
+			for (const auto& [name, sampler_states] : bindings.sampler_arrays)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::vector<std::shared_ptr<RHI::Sampler>> samplers;
+				if (!collect_samplers(graphics_context, sampler_states, samplers))
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_sampler_array(name.c_str(), samplers);
+			}
+
+			ASH_PROCESS_ERROR(bindings_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-		for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
+		static bool resolve_graphics_parameter_block_layout(
+			const std::shared_ptr<RHI::Shader>& vertex_shader,
+			const std::shared_ptr<RHI::Shader>& fragment_shader,
+			const RHI::ShaderParameterBlockLayout*& out_layout)
 		{
-			if (!success)
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			const RHI::ShaderParameterBlockLayout* vertex_layout = find_root_parameter_block(vertex_shader);
+			const RHI::ShaderParameterBlockLayout* fragment_layout = find_root_parameter_block(fragment_shader);
+
+			if (vertex_layout && fragment_layout)
 			{
+				ASH_PROCESS_ERROR(
+					vertex_layout->name == fragment_layout->name &&
+					vertex_layout->bind_point == fragment_layout->bind_point &&
+					vertex_layout->bind_space == fragment_layout->bind_space &&
+					vertex_layout->byte_size == fragment_layout->byte_size &&
+					shader_parameter_members_match(*vertex_layout, *fragment_layout));
+				out_layout = vertex_layout;
 				break;
 			}
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
-			{
-				success = false;
-				break;
-			}
-			std::shared_ptr<RHI::BufferView> view = buffer_impl->resource->buffer->get_default_srv();
-			if (!view)
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_srv(name.c_str(), view);
+
+			out_layout = vertex_layout ? vertex_layout : fragment_layout;
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-		for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
+		template <typename ProgramType>
+		static bool commit_program_bindings(ProgramBindingState& bindings, RHI::GraphicsContext* graphics_context, ProgramType& program)
 		{
-			if (!success)
-			{
-				break;
-			}
-			std::vector<std::shared_ptr<RHI::BufferView>> views;
-			if (!collect_buffer_views(buffer_impls, false, views))
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_srv_array(name.c_str(), views);
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			RHI::IRenderProgramBinder& binder = program.begin_bind();
+			ASH_PROCESS_ERROR(apply_program_bindings(bindings, graphics_context, binder));
+			ASH_PROCESS_ERROR(program.end_bind());
+			const uint32_t const_data_size = static_cast<uint32_t>(bindings.const_data_block.size());
+			const void* const_data = const_data_size > 0 ? bindings.const_data_block.data() : nullptr;
+			bResult = program.set_const_data_block(const_data_size, const_data);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
-
-		for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
-		{
-			if (!success)
-			{
-				break;
-			}
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
-			{
-				success = false;
-				break;
-			}
-			std::shared_ptr<RHI::BufferView> view = buffer_impl->resource->buffer->get_default_uav();
-			if (!view)
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_uav(name.c_str(), view);
-		}
-
-		for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
-		{
-			if (!success)
-			{
-				break;
-			}
-			std::vector<std::shared_ptr<RHI::BufferView>> views;
-			if (!collect_buffer_views(buffer_impls, true, views))
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_uav_array(name.c_str(), views);
-		}
-
-		for (const auto& [name, texture_impl] : bindings.texture_srvs)
-		{
-			if (!success)
-			{
-				break;
-			}
-			if (!texture_impl)
-			{
-				success = false;
-				break;
-			}
-			std::shared_ptr<RHI::Texture> texture = texture_impl->get_texture();
-			if (!texture || !texture->get_default_srv())
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_srv(name.c_str(), texture->get_default_srv());
-		}
-
-		for (const auto& [name, texture_impls] : bindings.texture_srv_arrays)
-		{
-			if (!success)
-			{
-				break;
-			}
-			std::vector<std::shared_ptr<RHI::TextureView>> views;
-			if (!collect_texture_views(texture_impls, false, views))
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_srv_array(name.c_str(), views);
-		}
-
-		for (const auto& [name, texture_impl] : bindings.texture_uavs)
-		{
-			if (!success)
-			{
-				break;
-			}
-			if (!texture_impl)
-			{
-				success = false;
-				break;
-			}
-			std::shared_ptr<RHI::Texture> texture = texture_impl->get_texture();
-			if (!texture || !texture->get_default_uav())
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_uav(name.c_str(), texture->get_default_uav());
-		}
-
-		for (const auto& [name, texture_impls] : bindings.texture_uav_arrays)
-		{
-			if (!success)
-			{
-				break;
-			}
-			std::vector<std::shared_ptr<RHI::TextureView>> views;
-			if (!collect_texture_views(texture_impls, true, views))
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_uav_array(name.c_str(), views);
-		}
-
-		for (const auto& [name, sampler_state] : bindings.samplers)
-		{
-			if (!success)
-			{
-				break;
-			}
-			std::shared_ptr<RHI::Sampler> sampler = graphics_context->get_sampler(to_rhi_sampler_state(sampler_state));
-			if (!sampler)
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_sampler(name.c_str(), sampler);
-		}
-
-		for (const auto& [name, sampler_states] : bindings.sampler_arrays)
-		{
-			if (!success)
-			{
-				break;
-			}
-			std::vector<std::shared_ptr<RHI::Sampler>> samplers;
-			if (!collect_samplers(graphics_context, sampler_states, samplers))
-			{
-				success = false;
-				break;
-			}
-			binder.add_bind_sampler_array(name.c_str(), samplers);
-		}
-
-		return success;
-	}
-
-	static bool resolve_graphics_parameter_block_layout(
-		const std::shared_ptr<RHI::Shader>& vertex_shader,
-		const std::shared_ptr<RHI::Shader>& fragment_shader,
-		const RHI::ShaderParameterBlockLayout*& out_layout)
-	{
-		const RHI::ShaderParameterBlockLayout* vertex_layout = find_root_parameter_block(vertex_shader);
-		const RHI::ShaderParameterBlockLayout* fragment_layout = find_root_parameter_block(fragment_shader);
-
-		if (vertex_layout && fragment_layout)
-		{
-			if (vertex_layout->name != fragment_layout->name ||
-				vertex_layout->bind_point != fragment_layout->bind_point ||
-				vertex_layout->bind_space != fragment_layout->bind_space ||
-				vertex_layout->byte_size != fragment_layout->byte_size ||
-				!shader_parameter_members_match(*vertex_layout, *fragment_layout))
-			{
-				return false;
-			}
-			out_layout = vertex_layout;
-			return true;
-		}
-
-		out_layout = vertex_layout ? vertex_layout : fragment_layout;
-		return true;
-	}
-
-	template <typename ProgramType>
-	static bool commit_program_bindings(ProgramBindingState& bindings, RHI::GraphicsContext* graphics_context, ProgramType& program)
-	{
-		RHI::IRenderProgramBinder& binder = program.begin_bind();
-		if (!apply_program_bindings(bindings, graphics_context, binder))
-		{
-			return false;
-		}
-		if (!program.end_bind())
-		{
-			return false;
-		}
-		const uint32_t const_data_size = static_cast<uint32_t>(bindings.const_data_block.size());
-		const void* const_data = const_data_size > 0 ? bindings.const_data_block.data() : nullptr;
-		return program.set_const_data_block(const_data_size, const_data);
-	}
 
 	static void append_buffer_barrier(std::vector<RHI::AshBarrier>& barriers, const std::shared_ptr<BufferResource>& resource, RHI::AshResourceState state)
 	{
@@ -870,123 +877,170 @@ namespace AshEngine
 		}
 	}
 
-	static bool collect_program_resource_barriers(const ProgramBindingState& bindings, bool graphics_pipeline, std::vector<RHI::AshBarrier>& out_barriers)
-	{
-		const RHI::AshResourceState srv_state = graphics_pipeline ? RHI::AshResourceState::SRVGraphics : RHI::AshResourceState::SRVCompute;
-		const RHI::AshResourceState uav_state = graphics_pipeline ? RHI::AshResourceState::UAVGraphics : RHI::AshResourceState::UAVCompute;
-
-		for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
+		static bool collect_program_resource_barriers(const ProgramBindingState& bindings, bool graphics_pipeline, std::vector<RHI::AshBarrier>& out_barriers)
 		{
-			(void)name;
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
-			{
-				return false;
-			}
-			append_buffer_barrier(out_barriers, buffer_impl->resource, RHI::AshResourceState::ConstBuffer);
-		}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			const RHI::AshResourceState srv_state = graphics_pipeline ? RHI::AshResourceState::SRVGraphics : RHI::AshResourceState::SRVCompute;
+			const RHI::AshResourceState uav_state = graphics_pipeline ? RHI::AshResourceState::UAVGraphics : RHI::AshResourceState::UAVCompute;
+			bool barriers_valid = true;
 
-		for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
-		{
-			(void)name;
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
 			{
-				return false;
-			}
-			append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
-		}
-
-		for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
-		{
-			(void)name;
-			for (const auto& buffer_impl : buffer_impls)
-			{
+				(void)name;
 				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
 				{
-					return false;
+					barriers_valid = false;
+					break;
+				}
+				append_buffer_barrier(out_barriers, buffer_impl->resource, RHI::AshResourceState::ConstBuffer);
+			}
+
+			for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
+			{
+				(void)name;
+				if (!barriers_valid)
+				{
+					break;
+				}
+				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				{
+					barriers_valid = false;
+					break;
 				}
 				append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
 			}
-		}
 
-		for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
-		{
-			(void)name;
-			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
 			{
-				return false;
+				(void)name;
+				for (const auto& buffer_impl : buffer_impls)
+				{
+					if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+					{
+						barriers_valid = false;
+						break;
+					}
+					append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
+				}
+				if (!barriers_valid)
+				{
+					break;
+				}
 			}
-			append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
-		}
 
-		for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
-		{
-			(void)name;
-			for (const auto& buffer_impl : buffer_impls)
+			for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
 			{
+				(void)name;
+				if (!barriers_valid)
+				{
+					break;
+				}
 				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
 				{
-					return false;
+					barriers_valid = false;
+					break;
 				}
 				append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
 			}
-		}
 
-		for (const auto& [name, texture_impl] : bindings.texture_srvs)
-		{
-			(void)name;
-			if (!texture_impl || !texture_impl->get_texture())
+			for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
 			{
-				return false;
+				(void)name;
+				for (const auto& buffer_impl : buffer_impls)
+				{
+					if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+					{
+						barriers_valid = false;
+						break;
+					}
+					append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
+				}
+				if (!barriers_valid)
+				{
+					break;
+				}
 			}
-			append_texture_barrier(out_barriers, texture_impl, srv_state);
-		}
 
-		for (const auto& [name, texture_impls] : bindings.texture_srv_arrays)
-		{
-			(void)name;
-			for (const auto& texture_impl : texture_impls)
+			for (const auto& [name, texture_impl] : bindings.texture_srvs)
 			{
+				(void)name;
+				if (!barriers_valid)
+				{
+					break;
+				}
 				if (!texture_impl || !texture_impl->get_texture())
 				{
-					return false;
+					barriers_valid = false;
+					break;
 				}
 				append_texture_barrier(out_barriers, texture_impl, srv_state);
 			}
-		}
 
-		for (const auto& [name, texture_impl] : bindings.texture_uavs)
-		{
-			(void)name;
-			if (!texture_impl || !texture_impl->get_texture())
+			for (const auto& [name, texture_impls] : bindings.texture_srv_arrays)
 			{
-				return false;
+				(void)name;
+				for (const auto& texture_impl : texture_impls)
+				{
+					if (!texture_impl || !texture_impl->get_texture())
+					{
+						barriers_valid = false;
+						break;
+					}
+					append_texture_barrier(out_barriers, texture_impl, srv_state);
+				}
+				if (!barriers_valid)
+				{
+					break;
+				}
 			}
-			append_texture_barrier(out_barriers, texture_impl, uav_state);
-		}
 
-		for (const auto& [name, texture_impls] : bindings.texture_uav_arrays)
-		{
-			(void)name;
-			for (const auto& texture_impl : texture_impls)
+			for (const auto& [name, texture_impl] : bindings.texture_uavs)
 			{
+				(void)name;
+				if (!barriers_valid)
+				{
+					break;
+				}
 				if (!texture_impl || !texture_impl->get_texture())
 				{
-					return false;
+					barriers_valid = false;
+					break;
 				}
 				append_texture_barrier(out_barriers, texture_impl, uav_state);
 			}
-		}
 
-		return true;
-	}
+			for (const auto& [name, texture_impls] : bindings.texture_uav_arrays)
+			{
+				(void)name;
+				for (const auto& texture_impl : texture_impls)
+				{
+					if (!texture_impl || !texture_impl->get_texture())
+					{
+						barriers_valid = false;
+						break;
+					}
+					append_texture_barrier(out_barriers, texture_impl, uav_state);
+				}
+				if (!barriers_valid)
+				{
+					break;
+				}
+			}
+
+			ASH_PROCESS_ERROR(barriers_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
 
 		static bool submit_resource_barriers(RHI::CommandBuffer* command_buffer, const std::vector<RHI::AshBarrier>& barriers)
 		{
-			if (!command_buffer || barriers.empty())
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(command_buffer);
+			if (barriers.empty())
 			{
-				return command_buffer != nullptr;
+				break;
 			}
-			return command_buffer->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
+			bResult = command_buffer->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		static bool collect_pass_begin_barriers(
@@ -994,11 +1048,14 @@ namespace AshEngine
 			const std::shared_ptr<RenderTarget::Impl>& depth_attachment,
 			std::vector<RHI::AshBarrier>& out_barriers)
 		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			bool barriers_valid = true;
 			for (const auto& color_attachment : color_attachments)
 			{
 				if (!color_attachment)
 				{
-					return false;
+					barriers_valid = false;
+					break;
 				}
 				append_texture_barrier(out_barriers, color_attachment, RHI::AshResourceState::RTV);
 			}
@@ -1008,7 +1065,8 @@ namespace AshEngine
 				append_texture_barrier(out_barriers, depth_attachment, RHI::AshResourceState::DSVWrite);
 			}
 
-			return true;
+			ASH_PROCESS_ERROR(barriers_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		static bool collect_pass_end_barriers(
@@ -1016,18 +1074,18 @@ namespace AshEngine
 			const std::shared_ptr<RHI::RenderPass>& render_pass,
 			std::vector<RHI::AshBarrier>& out_barriers)
 		{
-			if (!framebuffer || !render_pass)
-			{
-				return false;
-			}
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(framebuffer && render_pass);
 
 			auto& color_attachments = framebuffer->get_render_targets();
 			const uint32_t color_attachment_count = render_pass->get_color_attachment_count();
+			bool barriers_valid = true;
 			for (uint32_t i = 0; i < color_attachment_count; ++i)
 			{
 				if (i >= color_attachments.size() || !color_attachments[i])
 				{
-					return false;
+					barriers_valid = false;
+					break;
 				}
 				out_barriers.emplace_back(color_attachments[i], render_pass->get_color_attachment_final_state(i));
 			}
@@ -1037,7 +1095,8 @@ namespace AshEngine
 				out_barriers.emplace_back(depth_attachment, render_pass->get_depth_stencil_attachment_final_state());
 			}
 
-			return true;
+			ASH_PROCESS_ERROR(barriers_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		static std::unique_ptr<RHI::IGraphicsRenderProgram> create_rhi_graphics_program(GraphicsProgram::Impl& impl, RHI::GraphicsContext* graphics_context, const std::shared_ptr<RHI::RenderPass>& render_pass)
@@ -1241,10 +1300,8 @@ namespace AshEngine
 
 	bool GraphicsProgram::apply_render_state(const std::function<void(GraphicsProgramState&)>& fn)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
 
 		GraphicsProgramState updated_state = m_impl->state;
 		if (fn)
@@ -1260,289 +1317,244 @@ namespace AshEngine
 				apply_program_state(*m_impl, *program);
 			}
 		}
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_const_data_block(uint32_t size, const void* data)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
-		if (!set_program_const_data(m_impl->bindings, size, data))
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
+		ASH_PROCESS_ERROR(set_program_const_data(m_impl->bindings, size, data));
 
 		for (auto& [_, program] : m_impl->programs)
 		{
 			if (program && !program->set_const_data_block(size, data))
 			{
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 		}
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_static_int(const char* name, int32_t value)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (write_parameter_member(m_impl->bindings, name, value))
 		{
 			m_impl->bindings.immutable_constants.erase(name);
-			return true;
+			break;
 		}
 		ImmutableConstantValue& constant = m_impl->bindings.immutable_constants[name];
 		constant.type = ImmutableConstantValue::Type::Int;
 		constant.value_i = value;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_static_uint(const char* name, uint32_t value)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (write_parameter_member(m_impl->bindings, name, value))
 		{
 			m_impl->bindings.immutable_constants.erase(name);
-			return true;
+			break;
 		}
 		ImmutableConstantValue& constant = m_impl->bindings.immutable_constants[name];
 		constant.type = ImmutableConstantValue::Type::UInt;
 		constant.value_u = value;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_static_float(const char* name, float value)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (write_parameter_member(m_impl->bindings, name, value))
 		{
 			m_impl->bindings.immutable_constants.erase(name);
-			return true;
+			break;
 		}
 		ImmutableConstantValue& constant = m_impl->bindings.immutable_constants[name];
 		constant.type = ImmutableConstantValue::Type::Float;
 		constant.value_f = value;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_uniform_buffer(const char* name, const std::shared_ptr<UniformBuffer>& buffer)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (!buffer)
 		{
 			m_impl->bindings.uniform_buffers.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.uniform_buffers[name] = buffer->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_srv_arrays.erase(name);
 		if (!buffer)
 		{
 			m_impl->bindings.storage_buffer_srvs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.storage_buffer_srvs[name] = buffer->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_srvs.erase(name);
 		if (buffers.empty())
 		{
 			m_impl->bindings.storage_buffer_srv_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<StorageBuffer::Impl>> buffer_impls;
 		buffer_impls.reserve(buffers.size());
 		for (const auto& buffer : buffers)
 		{
-			if (!buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(buffer);
 			buffer_impls.push_back(buffer->m_impl);
 		}
 		m_impl->bindings.storage_buffer_srv_arrays[name] = std::move(buffer_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_rw_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_uav_arrays.erase(name);
 		if (!buffer)
 		{
 			m_impl->bindings.storage_buffer_uavs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.storage_buffer_uavs[name] = buffer->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_rw_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_uavs.erase(name);
 		if (buffers.empty())
 		{
 			m_impl->bindings.storage_buffer_uav_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<StorageBuffer::Impl>> buffer_impls;
 		buffer_impls.reserve(buffers.size());
 		for (const auto& buffer : buffers)
 		{
-			if (!buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(buffer);
 			buffer_impls.push_back(buffer->m_impl);
 		}
 		m_impl->bindings.storage_buffer_uav_arrays[name] = std::move(buffer_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_texture(const char* name, const std::shared_ptr<RenderTarget>& texture)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_srv_arrays.erase(name);
 		if (!texture)
 		{
 			m_impl->bindings.texture_srvs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.texture_srvs[name] = texture->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_srvs.erase(name);
 		if (textures.empty())
 		{
 			m_impl->bindings.texture_srv_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<RenderTarget::Impl>> texture_impls;
 		texture_impls.reserve(textures.size());
 		for (const auto& texture : textures)
 		{
-			if (!texture)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(texture);
 			texture_impls.push_back(texture->m_impl);
 		}
 		m_impl->bindings.texture_srv_arrays[name] = std::move(texture_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_rw_texture(const char* name, const std::shared_ptr<RenderTarget>& texture)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_uav_arrays.erase(name);
 		if (!texture)
 		{
 			m_impl->bindings.texture_uavs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.texture_uavs[name] = texture->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_rw_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_uavs.erase(name);
 		if (textures.empty())
 		{
 			m_impl->bindings.texture_uav_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<RenderTarget::Impl>> texture_impls;
 		texture_impls.reserve(textures.size());
 		for (const auto& texture : textures)
 		{
-			if (!texture)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(texture);
 			texture_impls.push_back(texture->m_impl);
 		}
 		m_impl->bindings.texture_uav_arrays[name] = std::move(texture_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_sampler(const char* name, RenderSamplerState sampler_state)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.sampler_arrays.erase(name);
 		m_impl->bindings.samplers[name] = sampler_state;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool GraphicsProgram::set_sampler_array(const char* name, const std::vector<RenderSamplerState>& sampler_states)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.samplers.erase(name);
 		if (sampler_states.empty())
 		{
 			m_impl->bindings.sampler_arrays.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.sampler_arrays[name] = sampler_states;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	ComputeProgram::ComputeProgram() = default;
@@ -1554,276 +1566,232 @@ namespace AshEngine
 
 	bool ComputeProgram::set_const_data_block(uint32_t size, const void* data)
 	{
-		if (!m_impl)
-		{
-			return false;
-		}
-		if (!set_program_const_data(m_impl->bindings, size, data))
-		{
-			return false;
-		}
-		return !m_impl->program || m_impl->program->set_const_data_block(size, data);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
+		ASH_PROCESS_ERROR(set_program_const_data(m_impl->bindings, size, data));
+		bResult = !m_impl->program || m_impl->program->set_const_data_block(size, data);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_static_int(const char* name, int32_t value)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (write_parameter_member(m_impl->bindings, name, value))
 		{
 			m_impl->bindings.immutable_constants.erase(name);
-			return true;
+			break;
 		}
 		ImmutableConstantValue& constant = m_impl->bindings.immutable_constants[name];
 		constant.type = ImmutableConstantValue::Type::Int;
 		constant.value_i = value;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_static_uint(const char* name, uint32_t value)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (write_parameter_member(m_impl->bindings, name, value))
 		{
 			m_impl->bindings.immutable_constants.erase(name);
-			return true;
+			break;
 		}
 		ImmutableConstantValue& constant = m_impl->bindings.immutable_constants[name];
 		constant.type = ImmutableConstantValue::Type::UInt;
 		constant.value_u = value;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_static_float(const char* name, float value)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (write_parameter_member(m_impl->bindings, name, value))
 		{
 			m_impl->bindings.immutable_constants.erase(name);
-			return true;
+			break;
 		}
 		ImmutableConstantValue& constant = m_impl->bindings.immutable_constants[name];
 		constant.type = ImmutableConstantValue::Type::Float;
 		constant.value_f = value;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_uniform_buffer(const char* name, const std::shared_ptr<UniformBuffer>& buffer)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		if (!buffer)
 		{
 			m_impl->bindings.uniform_buffers.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.uniform_buffers[name] = buffer->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_srv_arrays.erase(name);
 		if (!buffer)
 		{
 			m_impl->bindings.storage_buffer_srvs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.storage_buffer_srvs[name] = buffer->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_srvs.erase(name);
 		if (buffers.empty())
 		{
 			m_impl->bindings.storage_buffer_srv_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<StorageBuffer::Impl>> buffer_impls;
 		buffer_impls.reserve(buffers.size());
 		for (const auto& buffer : buffers)
 		{
-			if (!buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(buffer);
 			buffer_impls.push_back(buffer->m_impl);
 		}
 		m_impl->bindings.storage_buffer_srv_arrays[name] = std::move(buffer_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_rw_storage_buffer(const char* name, const std::shared_ptr<StorageBuffer>& buffer)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_uav_arrays.erase(name);
 		if (!buffer)
 		{
 			m_impl->bindings.storage_buffer_uavs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.storage_buffer_uavs[name] = buffer->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_rw_storage_buffer_array(const char* name, const std::vector<std::shared_ptr<StorageBuffer>>& buffers)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.storage_buffer_uavs.erase(name);
 		if (buffers.empty())
 		{
 			m_impl->bindings.storage_buffer_uav_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<StorageBuffer::Impl>> buffer_impls;
 		buffer_impls.reserve(buffers.size());
 		for (const auto& buffer : buffers)
 		{
-			if (!buffer)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(buffer);
 			buffer_impls.push_back(buffer->m_impl);
 		}
 		m_impl->bindings.storage_buffer_uav_arrays[name] = std::move(buffer_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_texture(const char* name, const std::shared_ptr<RenderTarget>& texture)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_srv_arrays.erase(name);
 		if (!texture)
 		{
 			m_impl->bindings.texture_srvs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.texture_srvs[name] = texture->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_srvs.erase(name);
 		if (textures.empty())
 		{
 			m_impl->bindings.texture_srv_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<RenderTarget::Impl>> texture_impls;
 		texture_impls.reserve(textures.size());
 		for (const auto& texture : textures)
 		{
-			if (!texture)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(texture);
 			texture_impls.push_back(texture->m_impl);
 		}
 		m_impl->bindings.texture_srv_arrays[name] = std::move(texture_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_rw_texture(const char* name, const std::shared_ptr<RenderTarget>& texture)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_uav_arrays.erase(name);
 		if (!texture)
 		{
 			m_impl->bindings.texture_uavs.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.texture_uavs[name] = texture->m_impl;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_rw_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.texture_uavs.erase(name);
 		if (textures.empty())
 		{
 			m_impl->bindings.texture_uav_arrays.erase(name);
-			return true;
+			break;
 		}
 		std::vector<std::shared_ptr<RenderTarget::Impl>> texture_impls;
 		texture_impls.reserve(textures.size());
 		for (const auto& texture : textures)
 		{
-			if (!texture)
-			{
-				return false;
-			}
+			ASH_PROCESS_ERROR(texture);
 			texture_impls.push_back(texture->m_impl);
 		}
 		m_impl->bindings.texture_uav_arrays[name] = std::move(texture_impls);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_sampler(const char* name, RenderSamplerState sampler_state)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.sampler_arrays.erase(name);
 		m_impl->bindings.samplers[name] = sampler_state;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool ComputeProgram::set_sampler_array(const char* name, const std::vector<RenderSamplerState>& sampler_states)
 	{
-		if (!m_impl || !name)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.samplers.erase(name);
 		if (sampler_states.empty())
 		{
 			m_impl->bindings.sampler_arrays.erase(name);
-			return true;
+			break;
 		}
 		m_impl->bindings.sampler_arrays[name] = sampler_states;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	RenderDevice::RenderDevice(RHI::GraphicsContext* graphics_context, RHI::Swapchain* swapchain)
@@ -1862,23 +1830,15 @@ namespace AshEngine
 
 	bool RenderDevice::begin_frame()
 	{
-		if (!m_impl->graphics_context || !m_impl->swapchain)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain);
 
 		m_impl->graphics_context->begin_frame();
 		m_impl->swapchain->begin_frame();
 		sync_swapchain_target();
-		if (!ensure_back_buffer_target())
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(ensure_back_buffer_target());
 		m_impl->current_command_buffer = m_impl->graphics_context->get_command_buffer(0);
-		if (!m_impl->current_command_buffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(m_impl->current_command_buffer);
 
 		m_impl->current_command_buffer->begin_record();
 		m_impl->current_framebuffer.reset();
@@ -1886,24 +1846,22 @@ namespace AshEngine
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
 		m_impl->back_buffer_written_this_frame = false;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::end_frame()
 	{
-		if (!m_impl->current_command_buffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer);
 
 		end_pass();
-		const bool present_pass_result = render_present_to_swapchain();
+		bResult = render_present_to_swapchain();
 		m_impl->current_command_buffer->end_record();
 		m_impl->graphics_context->submit({ m_impl->current_command_buffer, 1 });
 		m_impl->swapchain->end_frame();
 		m_impl->graphics_context->end_frame();
 		m_impl->current_command_buffer = nullptr;
-		return present_pass_result;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void RenderDevice::present()
@@ -1916,17 +1874,20 @@ namespace AshEngine
 
 	std::shared_ptr<RenderTarget> RenderDevice::get_back_buffer()
 	{
-		if (!ensure_back_buffer_target())
-		{
-			return nullptr;
-		}
-		return std::shared_ptr<RenderTarget>(new RenderTarget(m_impl->back_buffer_target));
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderTarget>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(ensure_back_buffer_target());
+		result = std::shared_ptr<RenderTarget>(new RenderTarget(m_impl->back_buffer_target));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::shared_ptr<RenderTarget> RenderDevice::create_render_target(const RenderTargetDesc& desc)
 	{
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderTarget>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
 		const std::shared_ptr<RenderTarget::Impl> impl = create_render_target_impl(m_impl->graphics_context, desc);
-		return impl ? std::shared_ptr<RenderTarget>(new RenderTarget(impl)) : nullptr;
+		ASH_PROCESS_ERROR(impl);
+		result = std::shared_ptr<RenderTarget>(new RenderTarget(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::shared_ptr<RenderTarget> RenderDevice::acquire_transient_render_target(const RenderTargetDesc& desc)
@@ -1965,10 +1926,8 @@ namespace AshEngine
 
 	std::shared_ptr<UniformBuffer> RenderDevice::create_uniform_buffer(const UniformBufferDesc& desc)
 	{
-		if (!m_impl->graphics_context || desc.size == 0)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<UniformBuffer>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.size > 0);
 
 		RHI::BufferCreation buffer_creation{};
 		buffer_creation.size = desc.size;
@@ -1980,10 +1939,7 @@ namespace AshEngine
 		buffer_creation.name = desc.name;
 
 		std::shared_ptr<RHI::Buffer> buffer = m_impl->graphics_context->create_buffer(buffer_creation);
-		if (!buffer)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_ERROR(buffer);
 
 		auto resource = std::make_shared<BufferResource>();
 		resource->buffer = buffer;
@@ -1991,15 +1947,14 @@ namespace AshEngine
 
 		auto impl = std::make_shared<UniformBuffer::Impl>();
 		impl->resource = resource;
-		return std::shared_ptr<UniformBuffer>(new UniformBuffer(impl));
+		result = std::shared_ptr<UniformBuffer>(new UniformBuffer(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::shared_ptr<VertexBuffer> RenderDevice::create_vertex_buffer(const VertexBufferDesc& desc)
 	{
-		if (!m_impl->graphics_context || desc.size == 0 || desc.stride == 0)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<VertexBuffer>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.size > 0 && desc.stride > 0);
 
 		RHI::BufferCreation buffer_creation{};
 		buffer_creation.size = desc.size;
@@ -2011,10 +1966,7 @@ namespace AshEngine
 		buffer_creation.name = desc.name;
 
 		std::shared_ptr<RHI::Buffer> buffer = m_impl->graphics_context->create_buffer(buffer_creation);
-		if (!buffer)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_ERROR(buffer);
 
 		auto resource = std::make_shared<BufferResource>();
 		resource->buffer = buffer;
@@ -2023,15 +1975,14 @@ namespace AshEngine
 
 		auto impl = std::make_shared<VertexBuffer::Impl>();
 		impl->resource = resource;
-		return std::shared_ptr<VertexBuffer>(new VertexBuffer(impl));
+		result = std::shared_ptr<VertexBuffer>(new VertexBuffer(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::shared_ptr<IndexBuffer> RenderDevice::create_index_buffer(const IndexBufferDesc& desc)
 	{
-		if (!m_impl->graphics_context || desc.size == 0)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<IndexBuffer>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.size > 0);
 
 		RHI::BufferCreation buffer_creation{};
 		buffer_creation.size = desc.size;
@@ -2043,10 +1994,7 @@ namespace AshEngine
 		buffer_creation.name = desc.name;
 
 		std::shared_ptr<RHI::Buffer> buffer = m_impl->graphics_context->create_buffer(buffer_creation);
-		if (!buffer)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_ERROR(buffer);
 
 		auto resource = std::make_shared<BufferResource>();
 		resource->buffer = buffer;
@@ -2056,15 +2004,14 @@ namespace AshEngine
 
 		auto impl = std::make_shared<IndexBuffer::Impl>();
 		impl->resource = resource;
-		return std::shared_ptr<IndexBuffer>(new IndexBuffer(impl));
+		result = std::shared_ptr<IndexBuffer>(new IndexBuffer(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::shared_ptr<StorageBuffer> RenderDevice::create_storage_buffer(const StorageBufferDesc& desc)
 	{
-		if (!m_impl->graphics_context || desc.size == 0)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<StorageBuffer>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.size > 0);
 
 		RHI::BufferCreation buffer_creation{};
 		buffer_creation.size = desc.size;
@@ -2076,10 +2023,7 @@ namespace AshEngine
 		buffer_creation.name = desc.name;
 
 		std::shared_ptr<RHI::Buffer> buffer = m_impl->graphics_context->create_buffer(buffer_creation);
-		if (!buffer)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_ERROR(buffer);
 
 		auto resource = std::make_shared<BufferResource>();
 		resource->buffer = buffer;
@@ -2088,15 +2032,14 @@ namespace AshEngine
 
 		auto impl = std::make_shared<StorageBuffer::Impl>();
 		impl->resource = resource;
-		return std::shared_ptr<StorageBuffer>(new StorageBuffer(impl));
+		result = std::shared_ptr<StorageBuffer>(new StorageBuffer(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::unique_ptr<GraphicsProgram> RenderDevice::create_graphics_program(const GraphicsProgramDesc& desc)
 	{
-		if (!m_impl->graphics_context || !desc.shader_path)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_GUARD_RETURN(std::unique_ptr<GraphicsProgram>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.shader_path);
 
 		RHI::ShaderCreation vertex_shader_creation{};
 		vertex_shader_creation.pBaseShaderPath = desc.shader_path;
@@ -2112,10 +2055,7 @@ namespace AshEngine
 
 		std::shared_ptr<RHI::Shader> vertex_shader = m_impl->graphics_context->create_shader(vertex_shader_creation);
 		std::shared_ptr<RHI::Shader> fragment_shader = m_impl->graphics_context->create_shader(fragment_shader_creation);
-		if (!vertex_shader || !fragment_shader)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_ERROR(vertex_shader && fragment_shader);
 
 		auto impl = std::make_unique<GraphicsProgram::Impl>();
 		impl->state = desc.state;
@@ -2129,22 +2069,21 @@ namespace AshEngine
 		if (!resolve_graphics_parameter_block_layout(impl->vertex_shader, impl->fragment_shader, impl->bindings.const_parameter_block))
 		{
 			HLogError("Graphics program '{}' found incompatible root parameter block layouts across shader stages.", impl->name);
-			return nullptr;
+			ASH_PROCESS_ERROR(false);
 		}
 		if (impl->bindings.const_parameter_block && impl->bindings.const_parameter_block->byte_size > 0)
 		{
 			impl->bindings.const_data_block.resize(impl->bindings.const_parameter_block->byte_size, 0u);
 		}
 
-		return std::unique_ptr<GraphicsProgram>(new GraphicsProgram(std::move(impl)));
+		result = std::unique_ptr<GraphicsProgram>(new GraphicsProgram(std::move(impl)));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	std::unique_ptr<ComputeProgram> RenderDevice::create_compute_program(const ComputeProgramDesc& desc)
 	{
-		if (!m_impl->graphics_context || !desc.shader_path)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_GUARD_RETURN(std::unique_ptr<ComputeProgram>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.shader_path);
 
 		RHI::ShaderCreation compute_shader_creation{};
 		compute_shader_creation.pBaseShaderPath = desc.shader_path;
@@ -2153,10 +2092,7 @@ namespace AshEngine
 		compute_shader_creation.type = RHI::ASH_SHADER_STAGE_COMPUTE_BIT;
 
 		std::shared_ptr<RHI::Shader> compute_shader = m_impl->graphics_context->create_shader(compute_shader_creation);
-		if (!compute_shader)
-		{
-			return nullptr;
-		}
+		ASH_PROCESS_ERROR(compute_shader);
 
 		auto impl = std::make_unique<ComputeProgram::Impl>();
 		impl->shader_path = desc.shader_path;
@@ -2169,22 +2105,18 @@ namespace AshEngine
 		{
 			impl->bindings.const_data_block.resize(impl->bindings.const_parameter_block->byte_size, 0u);
 		}
-		return std::unique_ptr<ComputeProgram>(new ComputeProgram(std::move(impl)));
+		result = std::unique_ptr<ComputeProgram>(new ComputeProgram(std::move(impl)));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
 	bool RenderDevice::ensure_back_buffer_target()
 	{
-		if (!m_impl || !m_impl->graphics_context || !m_impl->swapchain || !m_impl->back_buffer_target)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain && m_impl->back_buffer_target);
 
 		const uint32_t swapchain_width = m_impl->swapchain->get_width();
 		const uint32_t swapchain_height = m_impl->swapchain->get_height();
-		if (swapchain_width == 0 || swapchain_height == 0)
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(swapchain_width > 0 && swapchain_height > 0);
 
 		std::shared_ptr<RHI::Texture> texture = m_impl->back_buffer_target->texture;
 		if (texture &&
@@ -2195,7 +2127,7 @@ namespace AshEngine
 			!m_impl->back_buffer_target->unordered_access &&
 			!m_impl->back_buffer_target->depth_stencil)
 		{
-			return true;
+			break;
 		}
 
 		RenderTargetDesc desc{};
@@ -2205,13 +2137,14 @@ namespace AshEngine
 		desc.shader_resource = true;
 		desc.unordered_access = false;
 		desc.name = k_public_back_buffer_name;
-		desc.use_optimized_clear_value = false;
+		desc.use_optimized_clear_value = true;
+		desc.optimized_clear_color = k_engine_back_buffer_clear_color;
 
 		const std::shared_ptr<RenderTarget::Impl> new_target = create_render_target_impl(m_impl->graphics_context, desc);
 		if (!new_target || !new_target->texture)
 		{
 			HLogError("RenderDevice: failed to create engine offscreen back buffer {}x{}.", swapchain_width, swapchain_height);
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		m_impl->back_buffer_target->kind = RenderTarget::Impl::Kind::Texture;
@@ -2221,7 +2154,7 @@ namespace AshEngine
 		m_impl->back_buffer_target->unordered_access = new_target->unordered_access;
 		m_impl->back_buffer_target->depth_stencil = new_target->depth_stencil;
 		m_impl->back_buffer_target->format = new_target->format;
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void RenderDevice::sync_swapchain_target()
@@ -2242,10 +2175,9 @@ namespace AshEngine
 
 	bool RenderDevice::render_present_to_swapchain()
 	{
-		if (!m_impl || !m_impl->current_command_buffer || !m_impl->swapchain_target || !ensure_back_buffer_target())
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && m_impl->swapchain_target);
+		ASH_PROCESS_ERROR(ensure_back_buffer_target());
 
 		if (!m_impl->back_buffer_written_this_frame)
 		{
@@ -2255,13 +2187,13 @@ namespace AshEngine
 			clear_pass_desc.color_attachments.push_back({
 				back_buffer_target,
 				RenderLoadAction::Clear,
-				{ 0.0f, 0.0f, 0.0f, 1.0f }
+				k_engine_back_buffer_clear_color
 			});
 
 			if (!begin_pass(clear_pass_desc))
 			{
 				HLogError("RenderDevice: failed to begin internal offscreen clear pass.");
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			end_pass();
 		}
@@ -2271,33 +2203,28 @@ namespace AshEngine
 		if (!source_texture || !destination_texture)
 		{
 			HLogError("RenderDevice: present copy requires both offscreen and swapchain textures.");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		if (!m_impl->current_command_buffer->cmd_copy_texture(source_texture, destination_texture))
 		{
 			HLogError("RenderDevice: failed to copy internal back buffer to swapchain.");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		if (!m_impl->current_command_buffer->cmd_transition_resource_state({ destination_texture, RHI::AshResourceState::CopyDst, RHI::AshResourceState::Present }))
 		{
 			HLogError("RenderDevice: failed to transition swapchain image to present.");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::begin_pass(const PassDesc& desc)
 	{
-		if (!m_impl->current_command_buffer)
-		{
-			return false;
-		}
-		if (desc.color_attachments.empty() && !desc.depth_attachment.render_target)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer);
+		ASH_PROCESS_ERROR(!desc.color_attachments.empty() || desc.depth_attachment.render_target);
 		RenderPassSignature signature{};
 		RHI::RenderPassCreation render_pass_creation{};
 		render_pass_creation.set_name(desc.name ? desc.name : "EngineRenderPass");
@@ -2329,7 +2256,7 @@ namespace AshEngine
 			if (!attachment.render_target || !attachment.render_target->m_impl || attachment.render_target->m_impl->depth_stencil)
 			{
 				framebuffer_creation.colorAttachments.shutdown();
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			if (attachment.render_target->m_impl == m_impl->back_buffer_target)
 			{
@@ -2340,7 +2267,7 @@ namespace AshEngine
 			if (!assign_pass_extent(texture))
 			{
 				framebuffer_creation.colorAttachments.shutdown();
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 
 			render_pass_creation.add_attachment(texture->get_format(), attachment.render_target->m_impl->get_final_resource_state(), to_rhi_load_action(attachment.load_action));
@@ -2353,13 +2280,13 @@ namespace AshEngine
 			if (!desc.depth_attachment.render_target->m_impl || !desc.depth_attachment.render_target->m_impl->depth_stencil)
 			{
 				framebuffer_creation.colorAttachments.shutdown();
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			std::shared_ptr<RHI::Texture> depth_texture = desc.depth_attachment.render_target->m_impl->get_texture();
 			if (!assign_pass_extent(depth_texture))
 			{
 				framebuffer_creation.colorAttachments.shutdown();
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			render_pass_creation.set_depth_stencil_texture(depth_texture->get_format(), desc.depth_attachment.render_target->m_impl->get_final_resource_state());
 			render_pass_creation.set_depth_stencil_operations(
@@ -2377,7 +2304,7 @@ namespace AshEngine
 		{
 			framebuffer_creation.colorAttachments.shutdown();
 			HLogError("RenderDevice: create_render_pass failed for '{}'.", desc.name ? desc.name : "EngineRenderPass");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		framebuffer_creation.renderPass = m_impl->current_render_pass;
@@ -2386,7 +2313,7 @@ namespace AshEngine
 		if (!m_impl->current_framebuffer)
 		{
 			HLogError("RenderDevice: create_framebuffer failed for '{}'.", desc.name ? desc.name : "EngineRenderPass");
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		for (uint32_t i = 0; i < desc.color_attachments.size(); ++i)
@@ -2419,22 +2346,20 @@ namespace AshEngine
 			HLogError("RenderDevice: begin_pass barriers failed for '{}'.", desc.name ? desc.name : "EngineRenderPass");
 			m_impl->current_framebuffer.reset();
 			m_impl->current_render_pass.reset();
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		m_impl->current_pass_signature = signature;
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
 		m_impl->current_command_buffer->cmd_begin_render_pass(m_impl->current_framebuffer);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::bind_graphics_program(GraphicsProgram* program)
 	{
-		if (!program || !program->m_impl || !m_impl->current_command_buffer || !m_impl->current_framebuffer || !m_impl->current_render_pass)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && m_impl->current_framebuffer && m_impl->current_render_pass);
 
 		const uint64_t signature_hash = hash_render_pass_signature(m_impl->current_pass_signature);
 		auto program_it = program->m_impl->programs.find(signature_hash);
@@ -2444,27 +2369,24 @@ namespace AshEngine
 			if (!rhi_program)
 			{
 				HLogError("RenderDevice: create graphics pipeline failed '{}'.", program->m_impl->name);
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 			program_it = program->m_impl->programs.emplace(signature_hash, std::move(rhi_program)).first;
 		}
 
 		RHI::IGraphicsRenderProgram* rhi_program = program_it->second.get();
-		if (!rhi_program)
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(rhi_program);
 
 		apply_program_state(*program->m_impl, *rhi_program);
 		if (!commit_program_bindings(program->m_impl->bindings, m_impl->graphics_context, *rhi_program))
 		{
 			HLogError("RenderDevice: commit graphics bindings failed '{}'.", program->m_impl->name);
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 		if (!rhi_program->apply(make_command_buffer_ref(m_impl->current_command_buffer)))
 		{
 			HLogError("RenderDevice: apply graphics render program failed '{}'.", program->m_impl->name);
-			return false;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		RenderViewport viewport{};
@@ -2496,106 +2418,90 @@ namespace AshEngine
 			scissor.height = static_cast<uint16_t>(m_impl->current_framebuffer->get_height());
 		}
 		m_impl->current_command_buffer->cmd_set_scissor(to_rhi_scissor(scissor));
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::bind_compute_program(ComputeProgram* program)
 	{
-		if (!program || !program->m_impl || !m_impl->current_command_buffer || m_impl->current_framebuffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
 
 		if (!program->m_impl->program)
 		{
 			program->m_impl->program = create_rhi_compute_program(*program->m_impl, m_impl->graphics_context);
 			if (!program->m_impl->program)
 			{
-				return false;
+				ASH_PROCESS_ERROR(false);
 			}
 		}
 
-		if (!commit_program_bindings(program->m_impl->bindings, m_impl->graphics_context, *program->m_impl->program))
-		{
-			return false;
-		}
-		return program->m_impl->program->apply(make_command_buffer_ref(m_impl->current_command_buffer));
+		ASH_PROCESS_ERROR(commit_program_bindings(program->m_impl->bindings, m_impl->graphics_context, *program->m_impl->program));
+		bResult = program->m_impl->program->apply(make_command_buffer_ref(m_impl->current_command_buffer));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::transition_graphics_program_resources(GraphicsProgram* program)
 	{
-		if (!program || !program->m_impl || !m_impl->current_command_buffer || m_impl->current_framebuffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
 
 		std::vector<RHI::AshBarrier> barriers;
-		if (!collect_program_resource_barriers(program->m_impl->bindings, true, barriers))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(collect_program_resource_barriers(program->m_impl->bindings, true, barriers));
 
-		return submit_resource_barriers(m_impl->current_command_buffer, barriers);
+		bResult = submit_resource_barriers(m_impl->current_command_buffer, barriers);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::transition_compute_program_resources(ComputeProgram* program)
 	{
-		if (!program || !program->m_impl || !m_impl->current_command_buffer || m_impl->current_framebuffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
 
 		std::vector<RHI::AshBarrier> barriers;
-		if (!collect_program_resource_barriers(program->m_impl->bindings, false, barriers))
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(collect_program_resource_barriers(program->m_impl->bindings, false, barriers));
 
-		return submit_resource_barriers(m_impl->current_command_buffer, barriers);
+		bResult = submit_resource_barriers(m_impl->current_command_buffer, barriers);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer)
 	{
-		if (!m_impl->current_command_buffer || !buffer || !buffer->m_impl || !buffer->m_impl->resource || !buffer->m_impl->resource->buffer || m_impl->current_framebuffer)
-		{
-			return false;
-		}
-
-		return m_impl->current_command_buffer->cmd_transition_resource_state({ buffer->m_impl->resource->buffer, RHI::AshResourceState::VertexBuffer });
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer &&
+			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
+		bResult = m_impl->current_command_buffer->cmd_transition_resource_state({ buffer->m_impl->resource->buffer, RHI::AshResourceState::VertexBuffer });
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::transition_index_buffer(const std::shared_ptr<IndexBuffer>& buffer)
 	{
-		if (!m_impl->current_command_buffer || !buffer || !buffer->m_impl || !buffer->m_impl->resource || !buffer->m_impl->resource->buffer || m_impl->current_framebuffer)
-		{
-			return false;
-		}
-
-		return m_impl->current_command_buffer->cmd_transition_resource_state({ buffer->m_impl->resource->buffer, RHI::AshResourceState::IndexBuffer });
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer &&
+			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
+		bResult = m_impl->current_command_buffer->cmd_transition_resource_state({ buffer->m_impl->resource->buffer, RHI::AshResourceState::IndexBuffer });
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::bind_vertex_buffer(uint32_t slot, const std::shared_ptr<VertexBuffer>& buffer, uint64_t offset)
 	{
-		if (!m_impl->current_command_buffer || !buffer || !buffer->m_impl || !buffer->m_impl->resource || !buffer->m_impl->resource->buffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer &&
+			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
 
 		std::shared_ptr<RHI::Buffer> rhi_buffer = buffer->m_impl->resource->buffer;
 		const uint64_t offsets[] = { offset };
 		m_impl->current_command_buffer->cmd_bind_vertex_buffers(slot, 1, &rhi_buffer, offsets);
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::bind_index_buffer(const std::shared_ptr<IndexBuffer>& buffer, uint64_t offset)
 	{
-		if (!m_impl->current_command_buffer || !buffer || !buffer->m_impl || !buffer->m_impl->resource || !buffer->m_impl->resource->buffer)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer &&
+			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
 
 		m_impl->current_command_buffer->cmd_bind_index_buffer(buffer->m_impl->resource->buffer, offset, to_rhi_index_type(buffer->m_impl->resource->index_format));
-		return true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void RenderDevice::set_viewport(const RenderViewport& viewport)
@@ -2677,18 +2583,14 @@ namespace AshEngine
 
 	bool RenderDevice::transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target)
 	{
-		if (!m_impl->current_command_buffer || m_impl->current_framebuffer || !render_target || !render_target->m_impl)
-		{
-			return false;
-		}
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer && render_target && render_target->m_impl);
 
 		std::shared_ptr<RHI::Texture> texture = render_target->m_impl->get_texture();
-		if (!texture)
-		{
-			return false;
-		}
+		ASH_PROCESS_ERROR(texture);
 
-		return m_impl->current_command_buffer->cmd_transition_resource_state({ texture, RHI::AshResourceState::SRVGraphics });
+		bResult = m_impl->current_command_buffer->cmd_transition_resource_state({ texture, RHI::AshResourceState::SRVGraphics });
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool RenderDevice::has_back_buffer_content() const

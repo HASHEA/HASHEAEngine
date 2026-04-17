@@ -1,0 +1,103 @@
+#include "Function/Render/SceneRenderer.h"
+
+#include "Base/hlog.h"
+
+namespace AshEngine
+{
+	namespace
+	{
+		static constexpr const char* k_scene_shader_path = "project/src/sandbox/Shaders/SceneStaticMesh.hlsl";
+	}
+
+	bool SceneRenderer::initialize(Renderer* renderer)
+	{
+		m_renderer = renderer;
+		return ensure_graphics_program();
+	}
+
+	void SceneRenderer::shutdown()
+	{
+		m_graphics_program.reset();
+		m_renderer = nullptr;
+	}
+
+	bool SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(frame.output_target != nullptr);
+		ASH_PROCESS_ERROR(ensure_graphics_program());
+
+		PassDesc pass_desc{};
+		pass_desc.name = "SceneOpaquePass";
+		pass_desc.color_attachments.push_back({
+			frame.output_target,
+			RenderLoadAction::Clear,
+			{ 0.025f, 0.03f, 0.05f, 1.0f }
+		});
+
+		Renderer::GraphicsPassContext pass_context{};
+		ASH_PROCESS_ERROR(m_renderer->begin_pass(pass_desc, pass_context));
+
+		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+		{
+			ASH_PROCESS_ERROR(draw.render_asset && draw.render_asset->is_gpu_ready());
+			ASH_PROCESS_ERROR(draw.render_asset->resource);
+			for (const StaticMeshRenderSection& section : draw.sections)
+			{
+				ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
+
+				SceneObjectConstants constants{};
+				constants.object_to_clip = frame.view_projection * draw.world_transform;
+				constants.base_color_factor = section.base_color_factor;
+
+				GraphicsDrawDesc draw_desc{};
+				draw_desc.program = m_graphics_program.get();
+				draw_desc.vertex_buffers.push_back({
+					0,
+					draw.render_asset->resource->vertex_buffer,
+					0
+				});
+				draw_desc.index_buffer = draw.render_asset->resource->index_buffer;
+				draw_desc.first_index = section.first_index;
+				draw_desc.index_count = section.index_count;
+				draw_desc.instance_count = 1;
+				draw_desc.vertex_offset = 0;
+				draw_desc.const_data_size = static_cast<uint32_t>(sizeof(SceneObjectConstants));
+				draw_desc.const_data.assign(
+					reinterpret_cast<const uint8_t*>(&constants),
+					reinterpret_cast<const uint8_t*>(&constants) + sizeof(SceneObjectConstants));
+				ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
+			}
+		}
+
+		pass_context.end();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool SceneRenderer::ensure_graphics_program()
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer);
+		if (m_graphics_program)
+		{
+			break;
+		}
+
+		m_graphics_program = m_renderer->create_graphics_program({
+			k_scene_shader_path,
+			"VSMain",
+			"PSMain",
+			nullptr,
+			{ RenderCullMode::Back, RenderPrimitiveTopology::TriangleList, false, false },
+			"SceneStaticMeshGraphicsProgram"
+		});
+		ASH_PROCESS_ERROR(m_graphics_program != nullptr);
+		ASH_PROCESS_GUARD_END(bResult, false);
+		if (!bResult)
+		{
+			HLogError("SceneRenderer failed to create graphics program '{}'.", k_scene_shader_path);
+		}
+		return bResult;
+	}
+}

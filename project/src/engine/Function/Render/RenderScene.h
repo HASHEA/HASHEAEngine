@@ -1,0 +1,54 @@
+#pragma once
+
+#include "Base/hcore.h"
+#include "Function/Render/RenderAssetManager.h"
+#include "Function/Render/SceneProxy.h"
+#include <memory>
+#include <vector>
+#include <glm/glm.hpp>
+
+namespace AshEngine
+{
+	struct SceneView;
+
+	struct ASH_API VisibleStaticMeshDraw
+	{
+		uint64_t primitive_id = 0;
+		EntityId entity_id = 0;
+		glm::mat4 world_transform{ 1.0f };
+		std::shared_ptr<StaticMeshRenderAsset> render_asset = nullptr;
+		std::vector<StaticMeshRenderSection> sections{};
+	};
+
+	struct ASH_API VisibleRenderFrame
+	{
+		uint64_t frame_index = 0;
+		SceneView* debug_view = nullptr;
+		glm::mat4 view{ 1.0f };
+		glm::mat4 projection{ 1.0f };
+		glm::mat4 view_projection{ 1.0f };
+		glm::vec3 camera_position{ 0.0f };
+		std::shared_ptr<class RenderTarget> output_target = nullptr;
+		std::vector<VisibleStaticMeshDraw> static_mesh_draws{};
+	};
+
+	class ASH_API RenderScene
+	{
+	public:
+		RenderScene() = default;
+
+	public:
+		bool rebuild_from_scene(Scene& scene, RenderAssetManager& render_asset_manager);
+		bool build_visible_render_frame(
+			uint64_t frame_index,
+			const SceneView& view,
+			const std::shared_ptr<RenderTarget>& output_target,
+			VisibleRenderFrame& out_frame) const;
+
+		const std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>>& get_static_mesh_primitives() const;
+
+	private:
+		uint64_t m_next_primitive_id = 1;
+		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> m_static_mesh_primitives{};
+	};
+}

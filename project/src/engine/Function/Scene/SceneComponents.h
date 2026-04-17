@@ -65,6 +65,15 @@ namespace AshEngine
 		Spot
 	};
 
+	enum class SceneMobility : uint8_t
+	{
+		Static = 0,
+		Stationary,
+		Movable
+	};
+
+	static constexpr uint32_t k_default_scene_layer_mask = 0x1u;
+
 	struct LightComponent
 	{
 		LightType type = LightType::Directional;
@@ -80,6 +89,8 @@ namespace AshEngine
 		std::string asset_path{};
 		uint32_t mesh_index = 0;
 		bool visible = true;
+		SceneMobility mobility = SceneMobility::Static;
+		uint32_t layer_mask = k_default_scene_layer_mask;
 	};
 
 	struct SceneEnumValueDesc

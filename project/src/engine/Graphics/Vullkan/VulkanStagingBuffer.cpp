@@ -151,6 +151,7 @@ namespace RHI
 		{
 			bool bRetCode = ASH_VMA_CREATE_BUFFER(VulkanContext::get(), uByteWidth, vkUsageFlags, VmaMemoryUsage::VMA_MEMORY_USAGE_CPU_ONLY, retBufferItem.vkBuffer, retBufferItem.m_pVmaAllocation, ppMappedData, bReadOperation ? "VulkanStagingBuffer(Readback)" : "VulkanStagingBuffer(Upload)");
 			H_ASSERT(bRetCode);
+			retBufferItem.u64DeviceSize = uByteWidth;
 			retBufferItem.m_bReadOption = bReadOperation;
 		}
 		else if (ppMappedData)

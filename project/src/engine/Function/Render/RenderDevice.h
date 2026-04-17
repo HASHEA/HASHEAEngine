@@ -376,6 +376,8 @@ namespace AshEngine
 		const char* name = nullptr;
 	};
 
+	ASH_API RenderColorValue get_engine_back_buffer_clear_color();
+
 	class ASH_API RenderDevice
 	{
 	public:
