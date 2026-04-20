@@ -3,6 +3,7 @@
 #include "Base/hcore.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Render/RenderDevice.h"
+#include "Function/Render/VertexDecl.h"
 #include <future>
 #include <memory>
 #include <mutex>
@@ -41,6 +42,7 @@ namespace AshEngine
 	{
 		std::shared_ptr<VertexBuffer> vertex_buffer = nullptr;
 		std::shared_ptr<IndexBuffer> index_buffer = nullptr;
+		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;
 		uint32_t vertex_count = 0;
 		uint32_t index_count = 0;
 		RenderIndexFormat index_format = RenderIndexFormat::UInt32;

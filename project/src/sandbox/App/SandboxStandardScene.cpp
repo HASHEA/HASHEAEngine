@@ -522,11 +522,6 @@ namespace AshSandbox
 			out_error = "Failed to build a VisibleRenderFrame for the Sandbox standard scene.";
 			ASH_PROCESS_ERROR(false);
 		}
-		if (visible_frame.static_mesh_draws.empty())
-		{
-			out_error = "Sandbox standard scene produced an empty VisibleRenderFrame.";
-			ASH_PROCESS_ERROR(false);
-		}
 
 		io_snapshot.visible_frame.latest_snapshot = make_visible_frame_copy(visible_frame, frame_index);
 		io_snapshot.visible_frame.pending_handoff = io_snapshot.visible_frame.latest_snapshot;
@@ -602,7 +597,7 @@ namespace AshSandbox
 		}
 		m_last_logic_tick_time = now;
 		m_has_logic_tick_time = true;
-		return std::clamp(delta_seconds, 1.0 / 240.0, 0.1);
+		return std::clamp(delta_seconds, 0.0, 0.1);
 	}
 
 	auto SandboxStandardScene::_set_failure_locked(std::string detail) -> void

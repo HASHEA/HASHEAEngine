@@ -488,6 +488,56 @@ namespace AshEngine
 		}
 		return inputState;
 	}
+	auto Application::draw_engine_overlay() -> void
+	{
+		if (uiContext == nullptr || renderer == nullptr || !uiContext->is_frame_active())
+		{
+			return;
+		}
+
+		const RendererFrameStats& frame_stats = renderer->get_frame_stats();
+		if (frame_stats.frame_width == 0 &&
+			frame_stats.frame_height == 0 &&
+			frame_stats.average_fps <= 0.0 &&
+			frame_stats.cpu_frame_time_ms <= 0.0)
+		{
+			return;
+		}
+
+		uiContext->set_next_window_position({ 10.0f, 10.0f }, UIConditionFlagBits::Always);
+		uiContext->push_style_color(UIStyleColorKind::WindowBg, { 0.04f, 0.05f, 0.06f, 0.82f });
+		uiContext->push_style_color(UIStyleColorKind::Border, { 0.20f, 0.22f, 0.24f, 0.90f });
+		const UIWindowFlags overlay_flags =
+			UIWindowFlagBits::NoDocking |
+			UIWindowFlagBits::NoTitleBar |
+			UIWindowFlagBits::NoResize |
+			UIWindowFlagBits::NoMove |
+			UIWindowFlagBits::NoScrollbar |
+			UIWindowFlagBits::NoScrollWithMouse |
+			UIWindowFlagBits::NoCollapse |
+			UIWindowFlagBits::NoSavedSettings |
+			UIWindowFlagBits::NoInputs |
+			UIWindowFlagBits::AlwaysAutoResize |
+			UIWindowFlagBits::NoBringToFrontOnFocus |
+			UIWindowFlagBits::NoNavFocus;
+
+		const bool window_visible = uiContext->begin_window("EngineFrameStatsOverlay", nullptr, overlay_flags);
+		if (window_visible)
+		{
+			const double display_fps = frame_stats.average_fps > 0.0 ? frame_stats.average_fps : frame_stats.instantaneous_fps;
+			const double display_ms =
+				frame_stats.average_cpu_frame_time_ms > 0.0 ? frame_stats.average_cpu_frame_time_ms : frame_stats.cpu_frame_time_ms;
+			uiContext->text("%s  %ux%u", get_rhi_backend_name(), frame_stats.frame_width, frame_stats.frame_height);
+			uiContext->text("FPS %.1f  Frame %.2f ms", display_fps, display_ms);
+			uiContext->text(
+				"Draws %u  Passes %u  Dispatch %u",
+				frame_stats.draw_call_count,
+				frame_stats.graphics_pass_count,
+				frame_stats.compute_dispatch_count);
+		}
+		uiContext->end_window();
+		uiContext->pop_style_color(2);
+	}
 	auto Application::_on_gui() -> void
 	{
 	}

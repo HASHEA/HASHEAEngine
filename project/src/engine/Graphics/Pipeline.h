@@ -10,6 +10,7 @@ namespace RHI
 	struct RasterizationCreation {
 
 		AshCullModeFlagBits             cull_mode = AshCullModeFlagBits::ASH_CULL_MODE_NONE;
+		/// Exterior winding of mesh triangles in model space (not raw D3D/VK flags). See `Graphics/RasterizerConvention.h`.
 		AshFrontFace                    front = AshFrontFace::ASH_FRONT_FACE_COUNTER_CLOCKWISE;
 		AshFillMode						fill = AshFillMode::Solid;
 	}; // struct RasterizationCreation
@@ -135,6 +136,8 @@ namespace RHI
 		uint32_t                             offset		= 0;
 		AshVertexComponentFormat		     format		= AshVertexComponentFormat::FormatCount;
 		AshVertexSemantic                    semantic	= AshVertexSemantic::Unspecified;
+		uint16_t                             semantic_index = 0;
+		char                                 semantic_name[32]{};
 
 	}; // struct VertexAttribute
 

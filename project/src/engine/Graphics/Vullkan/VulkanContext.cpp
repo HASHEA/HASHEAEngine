@@ -38,6 +38,20 @@ namespace RHI
 	constexpr const char* k_pipeline_cache_path = "product\\caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
 	namespace
 	{
+		static std::string append_vulkan_shader_macro(const char* shader_macro)
+		{
+			std::string combined_macro = shader_macro ? shader_macro : "";
+			if (combined_macro.find("ASH_VULKAN") == std::string::npos)
+			{
+				if (!combined_macro.empty() && combined_macro.back() != ';')
+				{
+					combined_macro.push_back(';');
+				}
+				combined_macro += "ASH_VULKAN=1";
+			}
+			return combined_macro;
+		}
+
 		constexpr uint32_t k_vma_stack_frame_skip = 2;
 		constexpr uint32_t k_vma_stack_frame_capture_count = 24;
 
@@ -1757,7 +1771,8 @@ auto VulkanContext::destroy() -> void
 			ShaderItem shader_item{};
 			shader_item.sourceShaderPath = ci.pBaseShaderPath;
 			shader_item.userShaderPath = ci.pUserShaderPath;
-			shader_item.macroDefine = ci.pShaderMacro;
+			const std::string vulkan_shader_macro = append_vulkan_shader_macro(ci.pShaderMacro);
+			shader_item.macroDefine = vulkan_shader_macro.c_str();
 			shader_item.entryPoint = ci.pEntryPoint ? ci.pEntryPoint : "main";
 			shader_item.stage = ci.type;
 

@@ -1,4 +1,5 @@
 #include "DX12RenderProgram.h"
+#include "Graphics/RasterizerConvention.h"
 #include "DX12Context.h"
 #include "DX12CommandBuffer.h"
 #include "DX12DescriptorHeap.h"
@@ -90,6 +91,12 @@ namespace RHI
 
 		static bool resolve_explicit_vertex_semantic(const VertexAttribute& attr, const char** out_name, UINT* out_index, const char* debug_name)
 		{
+			if (attr.semantic_name[0] != '\0')
+			{
+				*out_name = attr.semantic_name;
+				*out_index = attr.semantic_index;
+				return true;
+			}
 			if (attr.semantic != AshVertexSemantic::Unspecified)
 			{
 				switch (attr.semantic)
@@ -107,16 +114,8 @@ namespace RHI
 					debug_name ? debug_name : "DX12GraphicsRenderProgram");
 				return false;
 			}
-			if (attr.location < 6)
-			{
-				static constexpr const char* k_names[] = { "POSITION", "NORMAL", "TANGENT", "TEXCOORD", "TEXCOORD", "COLOR" };
-				static constexpr UINT k_indices[] = { 0, 0, 0, 0, 1, 0 };
-				*out_name = k_names[attr.location];
-				*out_index = k_indices[attr.location];
-				return true;
-			}
 			HLogError(
-				"DX12 render program '{}' explicit vertex attribute at location {} has AshVertexSemantic::Unspecified; set semantic or use locations 0..5 with SceneStaticMesh ordering.",
+				"DX12 render program '{}' explicit vertex attribute at location {} has no semantic binding information.",
 				debug_name ? debug_name : "DX12GraphicsRenderProgram",
 				static_cast<unsigned>(attr.location));
 			return false;
@@ -670,7 +669,8 @@ namespace RHI
 		const auto& raster = m_renderState.rasterization;
 		psoDesc.RasterizerState.FillMode = ash_to_d3d12_fill_mode(raster.fill);
 		psoDesc.RasterizerState.CullMode = ash_to_d3d12_cull_mode(raster.cull_mode);
-		psoDesc.RasterizerState.FrontCounterClockwise = raster.front == ASH_FRONT_FACE_COUNTER_CLOCKWISE ? TRUE : FALSE;
+		psoDesc.RasterizerState.FrontCounterClockwise =
+			mesh_winding_to_d3d12_front_counter_clockwise_bool(raster.front) ? TRUE : FALSE;
 		psoDesc.RasterizerState.DepthBias = 0;
 		psoDesc.RasterizerState.DepthBiasClamp = 0.0f;
 		psoDesc.RasterizerState.SlopeScaledDepthBias = 0.0f;

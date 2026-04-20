@@ -1,6 +1,7 @@
 #pragma once
 #include "RHIResource.h"
 #include "Base/hcore.h"
+#include "Graphics/Pipeline.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -74,6 +75,11 @@ namespace RHI
 		{
 			static const std::vector<ShaderParameterBlockLayout> empty_layouts{};
 			return empty_layouts;
+		}
+		virtual bool get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const
+		{
+			out_vertex_input = VertexInputCreation{};
+			return false;
 		}
 	};
 

@@ -388,6 +388,7 @@ namespace RHI
 		ASH_CULL_MODE_FLAG_BITS_MAX_ENUM = 0x7FFFFFFF
 	} AshCullModeFlagBits;
 
+	/// When used in `RasterizationCreation::front`, this is mesh/exterior winding (artist convention), not API-specific rasterizer wording.
 	typedef enum AshFrontFace {
 		ASH_FRONT_FACE_COUNTER_CLOCKWISE = 0,
 		ASH_FRONT_FACE_CLOCKWISE = 1,

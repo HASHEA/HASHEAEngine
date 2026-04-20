@@ -8,6 +8,7 @@
 #include "Graphics/Shader.h"
 #include "Graphics/Swapchain.h"
 #include "Graphics/Texture.h"
+#include "Graphics/VertexInputLayout.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -60,6 +61,143 @@ namespace AshEngine
 		static bool is_root_parameter_block_name(const std::string& name)
 		{
 			return name == "AshRootConstants" || name == "RootConstants";
+		}
+
+		static bool resolve_program_vertex_input(
+			const std::shared_ptr<const VertexDecl>& vertex_decl,
+			const RHI::VertexInputCreation& explicit_vertex_input,
+			const char* debug_name,
+			RHI::VertexInputCreation& out_vertex_input)
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_vertex_input = RHI::VertexInputCreation{};
+
+			if (vertex_decl)
+			{
+				const RHI::VertexInputCreation& decl_vertex_input = vertex_decl->get_vertex_input();
+				ASH_PROCESS_ERROR(RHI::validate_vertex_input_layout(decl_vertex_input, vertex_decl->get_name()));
+
+				if (RHI::has_explicit_vertex_input(explicit_vertex_input))
+				{
+					ASH_PROCESS_ERROR(RHI::validate_vertex_input_layout(explicit_vertex_input, debug_name));
+					ASH_PROCESS_ERROR(RHI::vertex_input_layouts_equal(explicit_vertex_input, decl_vertex_input));
+				}
+
+				out_vertex_input = decl_vertex_input;
+				break;
+			}
+
+			if (RHI::has_explicit_vertex_input(explicit_vertex_input))
+			{
+				ASH_PROCESS_ERROR(RHI::validate_vertex_input_layout(explicit_vertex_input, debug_name));
+				out_vertex_input = explicit_vertex_input;
+			}
+
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		static bool vertex_attribute_matches_active_input(
+			const RHI::VertexAttribute& explicit_attribute,
+			const RHI::VertexAttribute& active_input)
+		{
+			if (active_input.semantic_name[0] != '\0')
+			{
+				return explicit_attribute.semantic_name[0] != '\0' &&
+					std::strcmp(explicit_attribute.semantic_name, active_input.semantic_name) == 0 &&
+					explicit_attribute.semantic_index == active_input.semantic_index;
+			}
+
+			if (active_input.semantic != RHI::AshVertexSemantic::Unspecified)
+			{
+				return explicit_attribute.semantic == active_input.semantic &&
+					explicit_attribute.semantic_index == active_input.semantic_index;
+			}
+
+			return explicit_attribute.location == active_input.location;
+		}
+
+		static bool resolve_program_pipeline_vertex_input_for_shader(
+			const std::shared_ptr<RHI::Shader>& vertex_shader,
+			const RHI::VertexInputCreation& explicit_vertex_input,
+			const char* debug_name,
+			RHI::VertexInputCreation& out_pipeline_vertex_input)
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_pipeline_vertex_input = explicit_vertex_input;
+			if (!vertex_shader || !RHI::has_explicit_vertex_input(explicit_vertex_input))
+			{
+				break;
+			}
+
+			RHI::VertexInputCreation reflected_vertex_inputs{};
+			if (!vertex_shader->get_reflected_vertex_inputs(reflected_vertex_inputs) ||
+				!RHI::has_explicit_vertex_input(reflected_vertex_inputs))
+			{
+				break;
+			}
+
+			for (uint32_t attribute_index = 0; attribute_index < reflected_vertex_inputs.num_vertex_attributes; ++attribute_index)
+			{
+				ASH_PROCESS_ERROR(
+					reflected_vertex_inputs.vertex_attributes[attribute_index].format != RHI::AshVertexComponentFormat::FormatCount);
+			}
+
+			out_pipeline_vertex_input = RHI::VertexInputCreation{};
+			for (uint32_t active_attribute_index = 0; active_attribute_index < reflected_vertex_inputs.num_vertex_attributes; ++active_attribute_index)
+			{
+				const RHI::VertexAttribute& active_input = reflected_vertex_inputs.vertex_attributes[active_attribute_index];
+				const RHI::VertexAttribute* matched_attribute = nullptr;
+				for (uint32_t explicit_attribute_index = 0; explicit_attribute_index < explicit_vertex_input.num_vertex_attributes; ++explicit_attribute_index)
+				{
+					const RHI::VertexAttribute& explicit_attribute = explicit_vertex_input.vertex_attributes[explicit_attribute_index];
+					if (vertex_attribute_matches_active_input(explicit_attribute, active_input))
+					{
+						matched_attribute = &explicit_attribute;
+						break;
+					}
+				}
+
+				if (!matched_attribute || matched_attribute->format != active_input.format)
+				{
+					HLogError(
+						"Graphics program '{}' explicit vertex layout does not cover active vertex input location {}.",
+						debug_name ? debug_name : "<unnamed>",
+						static_cast<uint32_t>(active_input.location));
+					ASH_PROCESS_ERROR(false);
+				}
+
+				out_pipeline_vertex_input.add_vertex_attribute(*matched_attribute);
+			}
+
+			for (uint32_t stream_index = 0; stream_index < explicit_vertex_input.num_vertex_streams; ++stream_index)
+			{
+				const RHI::VertexStream& stream = explicit_vertex_input.vertex_streams[stream_index];
+				bool stream_is_used = false;
+				for (uint32_t attribute_index = 0; attribute_index < out_pipeline_vertex_input.num_vertex_attributes; ++attribute_index)
+				{
+					if (out_pipeline_vertex_input.vertex_attributes[attribute_index].binding == stream.binding)
+					{
+						stream_is_used = true;
+						break;
+					}
+				}
+
+				if (stream_is_used)
+				{
+					out_pipeline_vertex_input.add_vertex_stream(stream);
+				}
+			}
+
+			std::sort(
+				out_pipeline_vertex_input.vertex_attributes,
+				out_pipeline_vertex_input.vertex_attributes + out_pipeline_vertex_input.num_vertex_attributes,
+				[](const RHI::VertexAttribute& lhs, const RHI::VertexAttribute& rhs)
+				{
+					return lhs.location < rhs.location;
+				});
+
+			ASH_PROCESS_ERROR(RHI::validate_vertex_input_layout_basic(out_pipeline_vertex_input, debug_name));
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		static bool shader_parameter_members_match(const RHI::ShaderParameterBlockLayout& lhs, const RHI::ShaderParameterBlockLayout& rhs)
@@ -174,6 +312,17 @@ namespace AshEngine
 				return RHI::ASH_CULL_MODE_BACK_BIT;
 			default:
 				return RHI::ASH_CULL_MODE_NONE;
+			}
+		}
+
+		static RHI::AshFrontFace to_rhi_front_face(RenderFrontFace front_face)
+		{
+			switch (front_face)
+			{
+			case RenderFrontFace::Clockwise:
+				return RHI::ASH_FRONT_FACE_CLOCKWISE;
+			default:
+				return RHI::ASH_FRONT_FACE_COUNTER_CLOCKWISE;
 			}
 		}
 
@@ -372,6 +521,7 @@ namespace AshEngine
 		std::string name;
 		std::shared_ptr<RHI::Shader> vertex_shader = nullptr;
 		std::shared_ptr<RHI::Shader> fragment_shader = nullptr;
+		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;
 		RHI::VertexInputCreation vertex_input{};
 		std::unordered_map<uint64_t, std::unique_ptr<RHI::IGraphicsRenderProgram>> programs;
 		ProgramBindingState bindings;
@@ -463,6 +613,7 @@ namespace AshEngine
 	{
 		program.apply_render_state([&impl](RHI::RenderState* render_state) {
 			render_state->rasterization.cull_mode = to_rhi_cull_mode(impl.state.cull_mode);
+			render_state->rasterization.front = to_rhi_front_face(impl.state.front_face);
 			render_state->primitive_topology = to_rhi_topology(impl.state.primitive_topology);
 			render_state->clear_viewport_state();
 			if (impl.state.depth_test)
@@ -1109,16 +1260,14 @@ namespace AshEngine
 		rhi_desc.pipeline.shaders.add_stage(impl.fragment_shader, RHI::ASH_SHADER_STAGE_FRAGMENT_BIT, impl.fragment_entry.c_str());
 		rhi_desc.pipeline.primitiveTopology = to_rhi_topology(impl.state.primitive_topology);
 		rhi_desc.pipeline.rasterization.cull_mode = to_rhi_cull_mode(impl.state.cull_mode);
+		rhi_desc.pipeline.rasterization.front = to_rhi_front_face(impl.state.front_face);
 		const uint32_t attachment_count = render_pass ? render_pass->get_color_attachment_count() : 1u;
 		rhi_desc.pipeline.blend_state.active_states = attachment_count;
 		for (uint32_t i = 0; i < attachment_count; ++i)
 		{
 			rhi_desc.pipeline.blend_state.blend_states[i].set_color_write_mask(RHI::AshColorWriteMask::All);
 		}
-		if (impl.vertex_input.num_vertex_attributes > 0 || impl.vertex_input.num_vertex_streams > 0)
-		{
-			rhi_desc.pipeline.vertex_input = impl.vertex_input;
-		}
+		rhi_desc.pipeline.vertex_input = impl.vertex_input;
 
 		std::unique_ptr<RHI::IGraphicsRenderProgram> program = graphics_context->create_graphics_render_program(rhi_desc);
 		if (!program)
@@ -2071,7 +2220,10 @@ namespace AshEngine
 		impl->name = desc.name ? desc.name : "EngineGraphicsProgram";
 		impl->vertex_shader = vertex_shader;
 		impl->fragment_shader = fragment_shader;
-		impl->vertex_input = desc.vertex_input;
+		impl->vertex_decl = desc.vertex_decl;
+		RHI::VertexInputCreation resolved_vertex_input{};
+		ASH_PROCESS_ERROR(resolve_program_vertex_input(desc.vertex_decl, desc.vertex_input, impl->name.c_str(), resolved_vertex_input));
+		ASH_PROCESS_ERROR(resolve_program_pipeline_vertex_input_for_shader(impl->vertex_shader, resolved_vertex_input, impl->name.c_str(), impl->vertex_input));
 		if (!resolve_graphics_parameter_block_layout(impl->vertex_shader, impl->fragment_shader, impl->bindings.const_parameter_block))
 		{
 			HLogError("Graphics program '{}' found incompatible root parameter block layouts across shader stages.", impl->name);

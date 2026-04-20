@@ -780,6 +780,7 @@ namespace RHI
 		default: return VK_CULL_MODE_NONE;
 		}
 	}
+	/// Naive 1:1 mapping only. For **graphics pipelines** from HLSL with `-fvk-invert-y`, use `mesh_winding_to_vulkan_front_face` in `RasterizerConvention.h`.
 	inline auto ash_front_face_to_vk(const AshFrontFace front_face) -> VkFrontFace
 	{
 		switch (front_face)

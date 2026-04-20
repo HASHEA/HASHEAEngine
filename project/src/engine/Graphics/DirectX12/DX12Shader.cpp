@@ -2,6 +2,9 @@
 #include "DX12Context.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
+#include "Base/hmemory.h"
+#include "Graphics/DXC/DXCIncludeHandler.h"
+#include "Graphics/VertexInputLayout.h"
 #include <algorithm>
 #include <fstream>
 #include <filesystem>
@@ -90,6 +93,35 @@ namespace RHI
 		return true;
 	}
 
+	bool DX12Shader::get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const
+	{
+		out_vertex_input = VertexInputCreation{};
+		if (m_stage != ASH_SHADER_STAGE_VERTEX_BIT || m_reflectionData.vertexInputs.empty())
+		{
+			return false;
+		}
+
+		for (const DX12ShaderVertexInput& input : m_reflectionData.vertexInputs)
+		{
+			if (out_vertex_input.num_vertex_attributes >= k_max_vertex_attributes)
+			{
+				HLogWarning("DX12Shader '{}' reflected more vertex inputs than the shared RHI limit allows.", m_name);
+				break;
+			}
+
+			VertexAttribute attribute{};
+			attribute.location = static_cast<uint16_t>(input.registerIndex);
+			attribute.binding = 0;
+			attribute.offset = 0;
+			attribute.format = input.format;
+			attribute.semantic_index = static_cast<uint16_t>(input.semanticIndex);
+			RHI::copy_vertex_semantic_name(attribute.semantic_name, input.semanticName.c_str());
+			out_vertex_input.add_vertex_attribute(attribute);
+		}
+
+		return out_vertex_input.num_vertex_attributes > 0;
+	}
+
 	bool DX12Shader::_compile(const ShaderCreation& ci)
 	{
 		// Load DXIL from cache or compile via DXC
@@ -106,6 +138,7 @@ namespace RHI
 		// Compile using DXC
 		ComPtr<IDxcCompiler3> compiler;
 		ComPtr<IDxcUtils> utils;
+		ComPtr<DXCIncludeHandler> includeHandler;
 
 		HRESULT hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
 		if (FAILED(hr))
@@ -127,6 +160,13 @@ namespace RHI
 			shaderPath = ci.pUserShaderPath;
 		else if (ci.pBaseShaderPath)
 			shaderPath = ci.pBaseShaderPath;
+
+		includeHandler.Attach(AshEngine::Ash_New<DXCIncludeHandler>());
+		if (!includeHandler)
+		{
+			HLogError("DX12Shader: Failed to create DXC include handler for '{}'.", shaderPath);
+			return false;
+		}
 
 		ComPtr<IDxcBlobEncoding> sourceBlob;
 		hr = utils->LoadFile(std::wstring(shaderPath.begin(), shaderPath.end()).c_str(), nullptr, &sourceBlob);
@@ -197,15 +237,24 @@ namespace RHI
 
 		// Include path from shader directory
 		std::wstring includeDir;
-		if (ci.pBaseShaderPath)
+		if (!shaderPath.empty())
 		{
-			std::filesystem::path p(ci.pBaseShaderPath);
-			includeDir = p.parent_path().wstring();
+			std::filesystem::path shader_file_path(shaderPath);
+			includeDir = shader_file_path.parent_path().wstring();
 			if (!includeDir.empty())
 			{
 				args.push_back(L"-I");
 				args.push_back(includeDir.c_str());
 			}
+			includeHandler->set_include_root_path(shader_file_path.parent_path());
+		}
+		if (ci.pUserShaderPath && ci.pUserShaderPath[0] != '\0')
+		{
+			includeHandler->set_current_user_shader_path(ci.pUserShaderPath);
+		}
+		else
+		{
+			includeHandler->set_current_user_shader_path(std::filesystem::path{});
 		}
 
 		DxcBuffer sourceBuffer = {};
@@ -215,7 +264,7 @@ namespace RHI
 
 		ComPtr<IDxcResult> result;
 		hr = compiler->Compile(&sourceBuffer, args.data(), static_cast<UINT32>(args.size()),
-		                       nullptr, IID_PPV_ARGS(&result));
+		                       includeHandler.Get(), IID_PPV_ARGS(&result));
 
 		// Check for errors
 		ComPtr<IDxcBlobUtf8> errors;

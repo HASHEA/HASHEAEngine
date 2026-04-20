@@ -86,6 +86,7 @@ public:
 		{
 			return RHI::backend_to_string(get()->activeBackend);
 		}
+		auto draw_engine_overlay() -> void;
 		auto request_exit() -> void;
 		auto set_max_frame_count(uint64_t inMaxFrameCount) -> void;
 		auto set_max_run_seconds(double inMaxRunSeconds) -> void;

@@ -2,6 +2,7 @@
 
 #include "Base/hlog.h"
 #include "Function/Render/Renderer.h"
+#include "Function/Render/VertexLayoutPresets.h"
 
 namespace AshEngine
 {
@@ -199,6 +200,8 @@ namespace AshEngine
 		resource->vertex_count = static_cast<uint32_t>(asset->vertices.size());
 		resource->index_count = static_cast<uint32_t>(asset->indices.size());
 		resource->index_format = RenderIndexFormat::UInt32;
+		resource->vertex_decl = get_mesh_vertex_decl();
+		ASH_PROCESS_ERROR(resource->vertex_decl != nullptr);
 
 		asset->resource = resource;
 		asset->last_error.clear();

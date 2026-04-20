@@ -1,8 +1,10 @@
 #include "VulkanPipeline.h"
+#include "Graphics/RasterizerConvention.h"
 #include "VulkanContext.h"
 #include "VulkanDescriptorSet.h"
 #include "VulkanRenderPass.h"
 #include "VulkanShader.h"
+#include "Graphics/VertexInputLayout.h"
 #include "Base/hlog.h"
 #include <algorithm>
 #include <array>
@@ -55,19 +57,6 @@ namespace RHI
 			vk_state.writeMask = state.write_mask;
 			vk_state.reference = state.reference;
 			return vk_state;
-		}
-
-		static VkFrontFace flip_vk_front_face(VkFrontFace front_face)
-		{
-			switch (front_face)
-			{
-			case VK_FRONT_FACE_COUNTER_CLOCKWISE:
-				return VK_FRONT_FACE_CLOCKWISE;
-			case VK_FRONT_FACE_CLOCKWISE:
-				return VK_FRONT_FACE_COUNTER_CLOCKWISE;
-			default:
-				return front_face;
-			}
 		}
 
 		static bool collect_shader_stages(const PipelineCreation& ci,
@@ -302,6 +291,7 @@ namespace RHI
 			VK_CHECK_RESULT(vkCreatePipelineLayout(VulkanContext::get_vulkan_device(), &layout_create_info, VulkanContext::get_vulkan_allocation_callbacks(), &pipeline_layout));
 			return true;
 		}
+
 	}
 
 	VulkanPipeline::VulkanPipeline(const PipelineCreation& ci, const std::unordered_map<std::string, ConstantValue>* specialization_overrides)
@@ -373,208 +363,214 @@ namespace RHI
 		}
 		else
 		{
-			const VertexInputCreation& vertex_input = ci.vertex_input.num_vertex_attributes > 0 || ci.vertex_input.num_vertex_streams > 0 ?
+			const bool use_explicit_vertex_input =
+				ci.vertex_input.num_vertex_attributes > 0 || ci.vertex_input.num_vertex_streams > 0;
+			const VertexInputCreation& vertex_input = use_explicit_vertex_input ?
 				ci.vertex_input : merged_reflection.pipeline_info.vertex_input;
-
-			std::vector<VkVertexInputBindingDescription> binding_descriptions;
-			binding_descriptions.reserve(vertex_input.num_vertex_streams);
-			for (uint32_t i = 0; i < vertex_input.num_vertex_streams; ++i)
+			const bool vertex_input_valid = use_explicit_vertex_input ?
+				validate_vertex_input_layout(vertex_input, name) :
+				validate_vertex_input_layout_basic(vertex_input, name);
+			if (vertex_input_valid)
 			{
-				const VertexStream& stream = vertex_input.vertex_streams[i];
-				VkVertexInputBindingDescription description{};
-				description.binding = stream.binding;
-				description.stride = stream.stride;
-				description.inputRate = ash_vertex_input_rate_to_vk(stream.input_rate);
-				binding_descriptions.push_back(description);
-			}
-
-			std::vector<VkVertexInputAttributeDescription> attribute_descriptions;
-			attribute_descriptions.reserve(vertex_input.num_vertex_attributes);
-			for (uint32_t i = 0; i < vertex_input.num_vertex_attributes; ++i)
-			{
-				const VertexAttribute& attribute = vertex_input.vertex_attributes[i];
-				VkVertexInputAttributeDescription description{};
-				description.location = attribute.location;
-				description.binding = attribute.binding;
-				description.offset = attribute.offset;
-				description.format = ash_vertex_component_format_to_vk(attribute.format);
-				attribute_descriptions.push_back(description);
-			}
-
-			VkPipelineVertexInputStateCreateInfo vertex_input_state{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-			vertex_input_state.vertexBindingDescriptionCount = static_cast<uint32_t>(binding_descriptions.size());
-			vertex_input_state.pVertexBindingDescriptions = binding_descriptions.empty() ? nullptr : binding_descriptions.data();
-			vertex_input_state.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size());
-			vertex_input_state.pVertexAttributeDescriptions = attribute_descriptions.empty() ? nullptr : attribute_descriptions.data();
-
-			VkPipelineInputAssemblyStateCreateInfo input_assembly_state{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
-			input_assembly_state.topology = ash_primitive_topology_to_vk(ci.primitiveTopology);
-			input_assembly_state.primitiveRestartEnable = input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ||
-				input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
-				input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY ||
-				input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
-
-			std::vector<VkDynamicState> dynamic_states;
-			std::vector<VkViewport> viewports;
-			std::vector<VkRect2D> scissors;
-			VkPipelineViewportStateCreateInfo viewport_state{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
-			if (ci.viewport && ci.viewport->viewport && ci.viewport->scissors && ci.viewport->num_viewports > 0 && ci.viewport->num_scissors > 0)
-			{
-				viewports.reserve(ci.viewport->num_viewports);
-				for (uint32_t i = 0; i < ci.viewport->num_viewports; ++i)
+				std::vector<VkVertexInputBindingDescription> binding_descriptions;
+				binding_descriptions.reserve(vertex_input.num_vertex_streams);
+				for (uint32_t i = 0; i < vertex_input.num_vertex_streams; ++i)
 				{
-					const Viewport& viewport = ci.viewport->viewport[i];
-					VkViewport vk_viewport{};
-					vk_viewport.x = static_cast<float>(viewport.rect.x);
-					vk_viewport.y = static_cast<float>(viewport.rect.y);
-					vk_viewport.width = static_cast<float>(viewport.rect.width);
-					vk_viewport.height = static_cast<float>(viewport.rect.height);
-					vk_viewport.minDepth = viewport.min_depth;
-					vk_viewport.maxDepth = viewport.max_depth;
-					viewports.push_back(vk_viewport);
+					const VertexStream& stream = vertex_input.vertex_streams[i];
+					VkVertexInputBindingDescription description{};
+					description.binding = stream.binding;
+					description.stride = stream.stride;
+					description.inputRate = ash_vertex_input_rate_to_vk(stream.input_rate);
+					binding_descriptions.push_back(description);
 				}
-				scissors.reserve(ci.viewport->num_scissors);
-				for (uint32_t i = 0; i < ci.viewport->num_scissors; ++i)
+
+				std::vector<VkVertexInputAttributeDescription> attribute_descriptions;
+				attribute_descriptions.reserve(vertex_input.num_vertex_attributes);
+				for (uint32_t i = 0; i < vertex_input.num_vertex_attributes; ++i)
 				{
-					const Rect2DInt& scissor = ci.viewport->scissors[i];
-					scissors.push_back({ { scissor.x, scissor.y }, { scissor.width, scissor.height } });
+					const VertexAttribute& attribute = vertex_input.vertex_attributes[i];
+					VkVertexInputAttributeDescription description{};
+					description.location = attribute.location;
+					description.binding = attribute.binding;
+					description.offset = attribute.offset;
+					description.format = ash_vertex_component_format_to_vk(attribute.format);
+					attribute_descriptions.push_back(description);
 				}
-				viewport_state.viewportCount = static_cast<uint32_t>(viewports.size());
-				viewport_state.pViewports = viewports.data();
-				viewport_state.scissorCount = static_cast<uint32_t>(scissors.size());
-				viewport_state.pScissors = scissors.data();
-			}
-			else
-			{
-				dynamic_states.push_back(VK_DYNAMIC_STATE_VIEWPORT);
-				dynamic_states.push_back(VK_DYNAMIC_STATE_SCISSOR);
-				viewport_state.viewportCount = 1;
-				viewport_state.scissorCount = 1;
-			}
 
-			VkPipelineRasterizationStateCreateInfo rasterization_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
-			rasterization_state.depthClampEnable = VK_FALSE;
-			rasterization_state.rasterizerDiscardEnable = VK_FALSE;
-			rasterization_state.polygonMode = ash_fill_mode_to_vk(ci.rasterization.fill);
-			rasterization_state.cullMode = ash_cull_mode_to_vk(ci.rasterization.cull_mode);
-			rasterization_state.frontFace = flip_vk_front_face(ash_front_face_to_vk(ci.rasterization.front));
-			rasterization_state.depthBiasEnable = VK_FALSE;
-			rasterization_state.lineWidth = 1.0f;
+				VkPipelineVertexInputStateCreateInfo vertex_input_state{ VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+				vertex_input_state.vertexBindingDescriptionCount = static_cast<uint32_t>(binding_descriptions.size());
+				vertex_input_state.pVertexBindingDescriptions = binding_descriptions.empty() ? nullptr : binding_descriptions.data();
+				vertex_input_state.vertexAttributeDescriptionCount = static_cast<uint32_t>(attribute_descriptions.size());
+				vertex_input_state.pVertexAttributeDescriptions = attribute_descriptions.empty() ? nullptr : attribute_descriptions.data();
 
-			VkPipelineMultisampleStateCreateInfo multisample_state{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
-			multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-			multisample_state.sampleShadingEnable = VK_FALSE;
+				VkPipelineInputAssemblyStateCreateInfo input_assembly_state{ VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+				input_assembly_state.topology = ash_primitive_topology_to_vk(ci.primitiveTopology);
+				input_assembly_state.primitiveRestartEnable = input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP ||
+					input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
+					input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY ||
+					input_assembly_state.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
 
-			VkPipelineDepthStencilStateCreateInfo depth_stencil_state{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
-			depth_stencil_state.depthTestEnable = ci.depth_stencil.depth_enable ? VK_TRUE : VK_FALSE;
-			depth_stencil_state.depthWriteEnable = ci.depth_stencil.depth_write_enable ? VK_TRUE : VK_FALSE;
-			depth_stencil_state.depthCompareOp = ash_compare_option_to_vk(ci.depth_stencil.depth_comparison);
-			depth_stencil_state.depthBoundsTestEnable = VK_FALSE;
-			depth_stencil_state.stencilTestEnable = ci.depth_stencil.stencil_enable ? VK_TRUE : VK_FALSE;
-			depth_stencil_state.front = to_vk_stencil_state(ci.depth_stencil.front);
-			depth_stencil_state.back = to_vk_stencil_state(ci.depth_stencil.back);
-
-			uint32_t color_attachment_count = 0;
-			if (ci.render_pass)
-			{
-				color_attachment_count = ci.render_pass->get_color_attachment_count();
-			}
-			color_attachment_count = std::max(color_attachment_count, ci.blend_state.active_states);
-
-			std::vector<VkPipelineColorBlendAttachmentState> blend_attachments;
-			blend_attachments.resize(color_attachment_count);
-			for (uint32_t i = 0; i < color_attachment_count; ++i)
-			{
-				const BlendState& blend_state = i < ci.blend_state.active_states ? ci.blend_state.blend_states[i] : BlendState{};
-				VkPipelineColorBlendAttachmentState& attachment = blend_attachments[i];
-				attachment.blendEnable = blend_state.blend_enabled ? VK_TRUE : VK_FALSE;
-				attachment.srcColorBlendFactor = ash_blend_factor_to_vk(blend_state.source_color);
-				attachment.dstColorBlendFactor = ash_blend_factor_to_vk(blend_state.destination_color);
-				attachment.colorBlendOp = ash_blend_op_to_vk(blend_state.color_operation);
-				attachment.srcAlphaBlendFactor = ash_blend_factor_to_vk(blend_state.separate_blend ? blend_state.source_alpha : blend_state.source_color);
-				attachment.dstAlphaBlendFactor = ash_blend_factor_to_vk(blend_state.separate_blend ? blend_state.destination_alpha : blend_state.destination_color);
-				attachment.alphaBlendOp = ash_blend_op_to_vk(blend_state.separate_blend ? blend_state.alpha_operation : blend_state.color_operation);
-				attachment.colorWriteMask = ash_color_write_mask_to_vk(blend_state.color_write_mask);
-			}
-
-			VkPipelineColorBlendStateCreateInfo color_blend_state{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
-			color_blend_state.logicOpEnable = VK_FALSE;
-			color_blend_state.attachmentCount = static_cast<uint32_t>(blend_attachments.size());
-			color_blend_state.pAttachments = blend_attachments.empty() ? nullptr : blend_attachments.data();
-
-			VkPipelineDynamicStateCreateInfo dynamic_state_info{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
-			dynamic_state_info.dynamicStateCount = static_cast<uint32_t>(dynamic_states.size());
-			dynamic_state_info.pDynamicStates = dynamic_states.empty() ? nullptr : dynamic_states.data();
-
-			VkPipelineTessellationStateCreateInfo tessellation_state{ VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO };
-			VkPipelineTessellationStateCreateInfo* tessellation_state_ptr = nullptr;
-			if (ci.primitiveTopology == ASH_PRIMITIVE_TOPOLOGY_PATCH_LIST)
-			{
-				tessellation_state.patchControlPoints = 3;
-				tessellation_state_ptr = &tessellation_state;
-			}
-
-			VkGraphicsPipelineCreateInfo create_info{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
-			create_info.flags = static_cast<VkPipelineCreateFlags>(ci.flags);
-			create_info.stageCount = static_cast<uint32_t>(shader_stage_infos.size());
-			create_info.pStages = shader_stage_infos.data();
-			create_info.pVertexInputState = &vertex_input_state;
-			create_info.pInputAssemblyState = &input_assembly_state;
-			create_info.pTessellationState = tessellation_state_ptr;
-			create_info.pViewportState = &viewport_state;
-			create_info.pRasterizationState = &rasterization_state;
-			create_info.pMultisampleState = &multisample_state;
-			create_info.pDepthStencilState = &depth_stencil_state;
-			create_info.pColorBlendState = &color_blend_state;
-			create_info.pDynamicState = dynamic_states.empty() ? nullptr : &dynamic_state_info;
-			create_info.layout = vk_pipeline_layout;
-
-			VkPipelineRenderingCreateInfoKHR pipeline_rendering_info{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };
-			std::vector<VkFormat> color_formats;
-			if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
-			{
-				if (!ci.render_pass)
+				std::vector<VkDynamicState> dynamic_states;
+				std::vector<VkViewport> viewports;
+				std::vector<VkRect2D> scissors;
+				VkPipelineViewportStateCreateInfo viewport_state{ VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+				if (ci.viewport && ci.viewport->viewport && ci.viewport->scissors && ci.viewport->num_viewports > 0 && ci.viewport->num_scissors > 0)
 				{
-					HLogError("Pipeline '{}' requires a render pass description to derive dynamic rendering formats.", name ? name : "<unnamed>");
-				}
-				else
-				{
-					color_formats.reserve(ci.render_pass->get_color_attachment_count());
-					for (uint32_t i = 0; i < ci.render_pass->get_color_attachment_count(); ++i)
+					viewports.reserve(ci.viewport->num_viewports);
+					for (uint32_t i = 0; i < ci.viewport->num_viewports; ++i)
 					{
-						color_formats.push_back(get_vk_texture_format_info(ci.render_pass->get_color_attachment_format(i)).vkFormat);
+						const Viewport& viewport = ci.viewport->viewport[i];
+						VkViewport vk_viewport{};
+						vk_viewport.x = static_cast<float>(viewport.rect.x);
+						vk_viewport.y = static_cast<float>(viewport.rect.y);
+						vk_viewport.width = static_cast<float>(viewport.rect.width);
+						vk_viewport.height = static_cast<float>(viewport.rect.height);
+						vk_viewport.minDepth = viewport.min_depth;
+						vk_viewport.maxDepth = viewport.max_depth;
+						viewports.push_back(vk_viewport);
 					}
-					pipeline_rendering_info.colorAttachmentCount = static_cast<uint32_t>(color_formats.size());
-					pipeline_rendering_info.pColorAttachmentFormats = color_formats.empty() ? nullptr : color_formats.data();
-					const VkFormat depth_stencil_format = get_vk_texture_format_info(ci.render_pass->get_depth_stencil_format()).vkFormat;
-					const bool has_depth_component = TextureFormat::has_depth(depth_stencil_format);
-					const bool has_stencil_component = TextureFormat::has_stencil(depth_stencil_format);
-					pipeline_rendering_info.depthAttachmentFormat = has_depth_component ? depth_stencil_format : VK_FORMAT_UNDEFINED;
-					pipeline_rendering_info.stencilAttachmentFormat = has_stencil_component ? depth_stencil_format : VK_FORMAT_UNDEFINED;
-					pipeline_rendering_info.viewMask = ci.render_pass->get_multiview_mask();
-					create_info.pNext = &pipeline_rendering_info;
-				}
-			}
-			else
-			{
-				if (!ci.render_pass)
-				{
-					HLogError("Pipeline '{}' requires a VkRenderPass when dynamic rendering is unavailable.", name ? name : "<unnamed>");
+					scissors.reserve(ci.viewport->num_scissors);
+					for (uint32_t i = 0; i < ci.viewport->num_scissors; ++i)
+					{
+						const Rect2DInt& scissor = ci.viewport->scissors[i];
+						scissors.push_back({ { scissor.x, scissor.y }, { scissor.width, scissor.height } });
+					}
+					viewport_state.viewportCount = static_cast<uint32_t>(viewports.size());
+					viewport_state.pViewports = viewports.data();
+					viewport_state.scissorCount = static_cast<uint32_t>(scissors.size());
+					viewport_state.pScissors = scissors.data();
 				}
 				else
 				{
-					create_info.renderPass = reinterpret_cast<VkRenderPass>(ci.render_pass->get_native_handle());
-					create_info.subpass = 0;
+					dynamic_states.push_back(VK_DYNAMIC_STATE_VIEWPORT);
+					dynamic_states.push_back(VK_DYNAMIC_STATE_SCISSOR);
+					viewport_state.viewportCount = 1;
+					viewport_state.scissorCount = 1;
 				}
-			}
 
-			if ((VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering) && ci.render_pass) ||
-				(!VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering) && create_info.renderPass != VK_NULL_HANDLE))
-			{
-				VK_CHECK_RESULT(vkCreateGraphicsPipelines(VulkanContext::get_vulkan_device(), VulkanContext::get_pipeline_cache(), 1, &create_info, VulkanContext::get_vulkan_allocation_callbacks(), &vk_pipeline));
+				VkPipelineRasterizationStateCreateInfo rasterization_state{ VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+				rasterization_state.depthClampEnable = VK_FALSE;
+				rasterization_state.rasterizerDiscardEnable = VK_FALSE;
+				rasterization_state.polygonMode = ash_fill_mode_to_vk(ci.rasterization.fill);
+				rasterization_state.cullMode = ash_cull_mode_to_vk(ci.rasterization.cull_mode);
+				rasterization_state.frontFace = mesh_winding_to_vulkan_front_face(ci.rasterization.front);
+				rasterization_state.depthBiasEnable = VK_FALSE;
+				rasterization_state.lineWidth = 1.0f;
+
+				VkPipelineMultisampleStateCreateInfo multisample_state{ VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+				multisample_state.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+				multisample_state.sampleShadingEnable = VK_FALSE;
+
+				VkPipelineDepthStencilStateCreateInfo depth_stencil_state{ VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+				depth_stencil_state.depthTestEnable = ci.depth_stencil.depth_enable ? VK_TRUE : VK_FALSE;
+				depth_stencil_state.depthWriteEnable = ci.depth_stencil.depth_write_enable ? VK_TRUE : VK_FALSE;
+				depth_stencil_state.depthCompareOp = ash_compare_option_to_vk(ci.depth_stencil.depth_comparison);
+				depth_stencil_state.depthBoundsTestEnable = VK_FALSE;
+				depth_stencil_state.stencilTestEnable = ci.depth_stencil.stencil_enable ? VK_TRUE : VK_FALSE;
+				depth_stencil_state.front = to_vk_stencil_state(ci.depth_stencil.front);
+				depth_stencil_state.back = to_vk_stencil_state(ci.depth_stencil.back);
+
+				uint32_t color_attachment_count = 0;
+				if (ci.render_pass)
+				{
+					color_attachment_count = ci.render_pass->get_color_attachment_count();
+				}
+				color_attachment_count = std::max(color_attachment_count, ci.blend_state.active_states);
+
+				std::vector<VkPipelineColorBlendAttachmentState> blend_attachments;
+				blend_attachments.resize(color_attachment_count);
+				for (uint32_t i = 0; i < color_attachment_count; ++i)
+				{
+					const BlendState& blend_state = i < ci.blend_state.active_states ? ci.blend_state.blend_states[i] : BlendState{};
+					VkPipelineColorBlendAttachmentState& attachment = blend_attachments[i];
+					attachment.blendEnable = blend_state.blend_enabled ? VK_TRUE : VK_FALSE;
+					attachment.srcColorBlendFactor = ash_blend_factor_to_vk(blend_state.source_color);
+					attachment.dstColorBlendFactor = ash_blend_factor_to_vk(blend_state.destination_color);
+					attachment.colorBlendOp = ash_blend_op_to_vk(blend_state.color_operation);
+					attachment.srcAlphaBlendFactor = ash_blend_factor_to_vk(blend_state.separate_blend ? blend_state.source_alpha : blend_state.source_color);
+					attachment.dstAlphaBlendFactor = ash_blend_factor_to_vk(blend_state.separate_blend ? blend_state.destination_alpha : blend_state.destination_color);
+					attachment.alphaBlendOp = ash_blend_op_to_vk(blend_state.separate_blend ? blend_state.alpha_operation : blend_state.color_operation);
+					attachment.colorWriteMask = ash_color_write_mask_to_vk(blend_state.color_write_mask);
+				}
+
+				VkPipelineColorBlendStateCreateInfo color_blend_state{ VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+				color_blend_state.logicOpEnable = VK_FALSE;
+				color_blend_state.attachmentCount = static_cast<uint32_t>(blend_attachments.size());
+				color_blend_state.pAttachments = blend_attachments.empty() ? nullptr : blend_attachments.data();
+
+				VkPipelineDynamicStateCreateInfo dynamic_state_info{ VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+				dynamic_state_info.dynamicStateCount = static_cast<uint32_t>(dynamic_states.size());
+				dynamic_state_info.pDynamicStates = dynamic_states.empty() ? nullptr : dynamic_states.data();
+
+				VkPipelineTessellationStateCreateInfo tessellation_state{ VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO };
+				VkPipelineTessellationStateCreateInfo* tessellation_state_ptr = nullptr;
+				if (ci.primitiveTopology == ASH_PRIMITIVE_TOPOLOGY_PATCH_LIST)
+				{
+					tessellation_state.patchControlPoints = 3;
+					tessellation_state_ptr = &tessellation_state;
+				}
+
+				VkGraphicsPipelineCreateInfo create_info{ VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+				create_info.flags = static_cast<VkPipelineCreateFlags>(ci.flags);
+				create_info.stageCount = static_cast<uint32_t>(shader_stage_infos.size());
+				create_info.pStages = shader_stage_infos.data();
+				create_info.pVertexInputState = &vertex_input_state;
+				create_info.pInputAssemblyState = &input_assembly_state;
+				create_info.pTessellationState = tessellation_state_ptr;
+				create_info.pViewportState = &viewport_state;
+				create_info.pRasterizationState = &rasterization_state;
+				create_info.pMultisampleState = &multisample_state;
+				create_info.pDepthStencilState = &depth_stencil_state;
+				create_info.pColorBlendState = &color_blend_state;
+				create_info.pDynamicState = dynamic_states.empty() ? nullptr : &dynamic_state_info;
+				create_info.layout = vk_pipeline_layout;
+
+				VkPipelineRenderingCreateInfoKHR pipeline_rendering_info{ VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR };
+				std::vector<VkFormat> color_formats;
+				if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
+				{
+					if (!ci.render_pass)
+					{
+						HLogError("Pipeline '{}' requires a render pass description to derive dynamic rendering formats.", name ? name : "<unnamed>");
+					}
+					else
+					{
+						color_formats.reserve(ci.render_pass->get_color_attachment_count());
+						for (uint32_t i = 0; i < ci.render_pass->get_color_attachment_count(); ++i)
+						{
+							color_formats.push_back(get_vk_texture_format_info(ci.render_pass->get_color_attachment_format(i)).vkFormat);
+						}
+						pipeline_rendering_info.colorAttachmentCount = static_cast<uint32_t>(color_formats.size());
+						pipeline_rendering_info.pColorAttachmentFormats = color_formats.empty() ? nullptr : color_formats.data();
+						const VkFormat depth_stencil_format = get_vk_texture_format_info(ci.render_pass->get_depth_stencil_format()).vkFormat;
+						const bool has_depth_component = TextureFormat::has_depth(depth_stencil_format);
+						const bool has_stencil_component = TextureFormat::has_stencil(depth_stencil_format);
+						pipeline_rendering_info.depthAttachmentFormat = has_depth_component ? depth_stencil_format : VK_FORMAT_UNDEFINED;
+						pipeline_rendering_info.stencilAttachmentFormat = has_stencil_component ? depth_stencil_format : VK_FORMAT_UNDEFINED;
+						pipeline_rendering_info.viewMask = ci.render_pass->get_multiview_mask();
+						create_info.pNext = &pipeline_rendering_info;
+					}
+				}
+				else
+				{
+					if (!ci.render_pass)
+					{
+						HLogError("Pipeline '{}' requires a VkRenderPass when dynamic rendering is unavailable.", name ? name : "<unnamed>");
+					}
+					else
+					{
+						create_info.renderPass = reinterpret_cast<VkRenderPass>(ci.render_pass->get_native_handle());
+						create_info.subpass = 0;
+					}
+				}
+
+				if ((VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering) && ci.render_pass) ||
+					(!VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering) && create_info.renderPass != VK_NULL_HANDLE))
+				{
+					VK_CHECK_RESULT(vkCreateGraphicsPipelines(VulkanContext::get_vulkan_device(), VulkanContext::get_pipeline_cache(), 1, &create_info, VulkanContext::get_vulkan_allocation_callbacks(), &vk_pipeline));
+				}
 			}
 		}
-
 		for (auto& temporary_stage : temporary_stages)
 		{
 			if (temporary_stage.module != VK_NULL_HANDLE)

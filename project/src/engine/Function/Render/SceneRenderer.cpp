@@ -1,7 +1,7 @@
 #include "Function/Render/SceneRenderer.h"
 
 #include "Base/hlog.h"
-#include "Graphics/VertexInputLayout.h"
+#include "Function/Render/VertexLayoutPresets.h"
 
 namespace AshEngine
 {
@@ -51,6 +51,11 @@ namespace AshEngine
 		{
 			ASH_PROCESS_ERROR(draw.render_asset && draw.render_asset->is_gpu_ready());
 			ASH_PROCESS_ERROR(draw.render_asset->resource);
+			ASH_PROCESS_ERROR(draw.render_asset->resource->vertex_decl != nullptr);
+			ASH_PROCESS_ERROR(
+				RHI::vertex_input_layouts_equal(
+					draw.render_asset->resource->vertex_decl->get_vertex_input(),
+					get_mesh_vertex_decl()->get_vertex_input()));
 			for (const StaticMeshRenderSection& section : draw.sections)
 			{
 				ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
@@ -92,14 +97,23 @@ namespace AshEngine
 			break;
 		}
 
+		GraphicsProgramState program_state{};
+		program_state.cull_mode = RenderCullMode::Back;
+		program_state.primitive_topology = RenderPrimitiveTopology::TriangleList;
+		program_state.depth_test = true;
+		program_state.depth_write = true;
+		// glTF-style exterior = CCW in model space (`Graphics/RasterizerConvention.h` maps this to each RHI).
+		program_state.front_face = RenderFrontFace::CounterClockwise;
+
 		m_graphics_program = m_renderer->create_graphics_program({
 			k_scene_shader_path,
 			"VSMain",
 			"PSMain",
 			nullptr,
-			{ RenderCullMode::Back, RenderPrimitiveTopology::TriangleList, true, true },
+			program_state,
 			"SceneStaticMeshGraphicsProgram",
-			RHI::make_vertex_input_scene_static_mesh_interleaved(),
+			get_mesh_vertex_decl(),
+			{},
 		});
 		ASH_PROCESS_ERROR(m_graphics_program != nullptr);
 		ASH_PROCESS_GUARD_END(bResult, false);

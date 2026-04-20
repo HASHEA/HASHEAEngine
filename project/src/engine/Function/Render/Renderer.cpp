@@ -101,9 +101,21 @@ namespace AshEngine
 		{
 			end_active_pass(m_active_pass);
 		}
+
+		if (m_frame_in_progress)
+		{
+			const auto frame_end_time = std::chrono::steady_clock::now();
+			m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
+			m_frame_stats.instantaneous_fps =
+				m_frame_stats.cpu_frame_time_ms > 0.0 ? (1000.0 / m_frame_stats.cpu_frame_time_ms) : 0.0;
+			update_frame_timing_history(m_frame_stats.cpu_frame_time_ms);
+			m_last_completed_frame_stats = m_frame_stats;
+		}
+
 		bool ui_result = true;
 		if (Application::get() && Application::get_ui_context())
 		{
+			Application::get()->draw_engine_overlay();
 			ui_result = Application::get_ui_context()->render();
 			if (!ui_result)
 			{
@@ -113,9 +125,6 @@ namespace AshEngine
 		const bool result = m_render_device && m_render_device->end_frame();
 		if (m_frame_in_progress)
 		{
-			const auto frame_end_time = std::chrono::steady_clock::now();
-			m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
-			m_last_completed_frame_stats = m_frame_stats;
 			m_frame_in_progress = false;
 		}
 		return result && ui_result;
@@ -231,6 +240,28 @@ namespace AshEngine
 	const RendererFrameStats& Renderer::get_frame_stats() const
 	{
 		return m_last_completed_frame_stats;
+	}
+
+	void Renderer::update_frame_timing_history(double frame_time_ms)
+	{
+		if (m_frame_time_history_count < static_cast<uint32_t>(m_frame_time_history_ms.size()))
+		{
+			m_frame_time_history_ms[m_frame_time_history_head] = frame_time_ms;
+			m_frame_time_history_sum_ms += frame_time_ms;
+			++m_frame_time_history_count;
+		}
+		else
+		{
+			m_frame_time_history_sum_ms -= m_frame_time_history_ms[m_frame_time_history_head];
+			m_frame_time_history_ms[m_frame_time_history_head] = frame_time_ms;
+			m_frame_time_history_sum_ms += frame_time_ms;
+		}
+
+		m_frame_time_history_head = (m_frame_time_history_head + 1u) % static_cast<uint32_t>(m_frame_time_history_ms.size());
+		m_frame_stats.average_cpu_frame_time_ms =
+			m_frame_time_history_count > 0 ? (m_frame_time_history_sum_ms / static_cast<double>(m_frame_time_history_count)) : 0.0;
+		m_frame_stats.average_fps =
+			m_frame_stats.average_cpu_frame_time_ms > 0.0 ? (1000.0 / m_frame_stats.average_cpu_frame_time_ms) : 0.0;
 	}
 
 	void Renderer::end_active_pass(GraphicsPassContext* pass_context)

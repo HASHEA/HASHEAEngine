@@ -2,12 +2,46 @@
 #include "VulkanContext.h"
 #include "VulkanDescriptorSet.h"
 #include "Base/hlog.h"
+#include "spirv.hpp"
+#include "spirv_cross.hpp"
+#include <algorithm>
 #include <cstring>
 
 namespace RHI
 {
 	namespace
 	{
+		static AshVertexComponentFormat spirv_type_to_vertex_component_format(const spirv_cross::SPIRType& type)
+		{
+			switch (type.basetype)
+			{
+			case spirv_cross::SPIRType::Float:
+				switch (type.vecsize)
+				{
+				case 1: return Float;
+				case 2: return Float2;
+				case 3: return Float3;
+				case 4: return Float4;
+				default: break;
+				}
+				break;
+			case spirv_cross::SPIRType::UInt:
+			case spirv_cross::SPIRType::Int:
+				switch (type.vecsize)
+				{
+				case 1: return Uint;
+				case 2: return Uint2;
+				case 4: return Uint4;
+				default: break;
+				}
+				break;
+			default:
+				break;
+			}
+
+			return FormatCount;
+		}
+
 		static ShaderParameterValueType ash_shader_data_type_to_parameter_type(AshShaderDataType type)
 		{
 			switch (type)
@@ -162,6 +196,45 @@ namespace RHI
 	const std::vector<ShaderParameterBlockLayout>& VulkanShader::get_parameter_block_layouts() const
 	{
 		return m_parameter_block_layouts;
+	}
+
+	bool VulkanShader::get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const
+	{
+		out_vertex_input = VertexInputCreation{};
+		if (m_creation.type != ASH_SHADER_STAGE_VERTEX_BIT || m_spirv_binary.empty())
+		{
+			return false;
+		}
+
+		spirv_cross::Compiler compiler(m_spirv_binary);
+		const auto active_interface_variables = compiler.get_active_interface_variables();
+		const spirv_cross::ShaderResources resources = compiler.get_shader_resources(active_interface_variables);
+		for (const spirv_cross::Resource& input : resources.stage_inputs)
+		{
+			if (out_vertex_input.num_vertex_attributes >= k_max_vertex_attributes)
+			{
+				HLogWarning("VulkanShader '{}' reflected more active vertex inputs than the shared RHI limit allows.", m_name);
+				break;
+			}
+
+			const spirv_cross::SPIRType& input_type = compiler.get_type(input.type_id);
+			VertexAttribute attribute{};
+			attribute.location = static_cast<uint16_t>(compiler.get_decoration(input.id, spv::DecorationLocation));
+			attribute.binding = 0;
+			attribute.offset = 0;
+			attribute.format = spirv_type_to_vertex_component_format(input_type);
+			out_vertex_input.add_vertex_attribute(attribute);
+		}
+
+		std::sort(
+			out_vertex_input.vertex_attributes,
+			out_vertex_input.vertex_attributes + out_vertex_input.num_vertex_attributes,
+			[](const VertexAttribute& lhs, const VertexAttribute& rhs)
+			{
+				return lhs.location < rhs.location;
+			});
+
+		return out_vertex_input.num_vertex_attributes > 0;
 	}
 
 	auto VulkanShader::get_native_handle() -> void*

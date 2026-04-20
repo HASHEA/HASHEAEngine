@@ -605,10 +605,12 @@ GpuValidation=true
 - Vulkan 路径消费 SPIR-V / SPIR-V 反射
 - DX12 路径消费 DXIL + DXC / D3D12 reflection
 
-其中 Vulkan graphics shader 额外约定为：
+其中当前共享 scene/view/projection 路径的约定是：
 
-- vertex / tess-eval / geometry / mesh 等会输出图元位置的 stage，编译时带 `-fvk-invert-y`
-- Vulkan pipeline 创建时同步翻转 front-face 约定，保证在沿用 DX 风格 HLSL clip-space 的前提下，culling 结果仍与 DX12 保持一致
+- 共享数学路径使用 DX 风格的 left-handed + depth `[0, 1]`
+- vertex / tess-eval / geometry / mesh 等会输出图元位置的 Vulkan shader stage，编译时带 `-fvk-invert-y`
+- `-fvk-invert-y` 会改变 Vulkan 侧 framebuffer-space winding，因此 Vulkan pipeline 创建时需要补偿性翻转 front-face
+- DX12 不应额外翻转 front-face；它应直接消费共享的 `AshFrontFace` 定义
 
 因此当前引擎对上层的约定是：
 
@@ -622,8 +624,32 @@ GpuValidation=true
 - descriptor / resource binding 信息提取
 - Vulkan descriptor set layout 生成与缓存
 - DX12 root signature / descriptor range 生成
-- vertex input 生成
 - thread group size / parameter block 元信息提取
+
+关于 graphics vertex input，当前主干规则已经调整为：
+
+- shader reflection 仍会保留 vertex stage 的 active inputs 元信息
+- 但 **共享 graphics program 不再依赖 Vulkan SPIR-V reflection 去“补全”静态 mesh 这类预定义顶点布局**
+- 对于上层已经明确知道顶点结构的路径，应由 C++ 显式提供 `GraphicsProgramDesc.vertex_input`
+- 显式 layout 是 Vulkan 与 DX12 的共同权威输入
+- 只有当上层没有提供显式 layout 时，backend 才允许退回使用反射得到的 vertex input
+
+这条规则的原因是：
+
+- Vulkan / SPIR-V reflection 只能稳定看到 shader 当前真正活跃的输入
+- 如果某些顶点字段暂时未在 shader 中使用，它们可能不会出现在反射结果里
+- 对 `MeshVertex` 这类固定 CPU/GPU 顶点结构，依赖“活跃输入反射结果”来重建完整 input layout 是不可靠的
+
+当前推荐做法：
+
+- `Graphics/VertexInputLayout.h` 只负责低层通用 layout assembly 与合法性校验
+- Engine 侧应再维护一层稳定的 `VertexDecl` 抽象，作为预定义 vertex layout 的共享入口
+- 具体 vertex type 的 preset 应定义在 Engine 侧、并靠近拥有该 vertex type 的模块
+- 例如静态场景 mesh 当前使用 `Function/Render/VertexLayoutPresets.h` 中基于 `MeshVertex` 的 `VertexDecl`
+- `GraphicsProgramDesc` 可以直接携带 `VertexDecl`；若同时给了裸 `vertex_input`，则两者必须一致
+- 显式 layout 应优先使用 `sizeof(...)` / `offsetof(...)`，不要在 RHI 层硬编码 stride / offset
+- Vulkan 与 DX12 backend 都应优先消费这份显式 `VertexDecl`/`vertex_input`，只有上层未提供时才退回 shader reflection
+- 当上层显式提供 `VertexDecl`/`vertex_input` 时，Engine 会再用 shader reflection 做“active vertex inputs 是否被这份显式 layout 覆盖”的校验；对于 Vulkan，这份 active-input reflection 还会用于把最终 pipeline vertex input 收窄到 shader 实际消费的 attribute 子集，以避免 validation warning，但它不会再回写或篡改共享的静态顶点布局定义
 
 ### 8.3 ShaderParameterBlockLayout
 
@@ -1103,7 +1129,19 @@ DX12 支持：
   - `Sandbox + Vulkan`
   - `Sandbox + DX12`
   - `Editor + Vulkan`
-  - `Editor + DX12`
+- `Editor + DX12`
+
+### 12.4 Runtime Frame Stats Overlay
+
+- Engine 内建一套轻量 frame-stats 统计：
+  - frame size
+  - draw call count
+  - graphics pass count
+  - compute dispatch count
+  - instantaneous CPU frame time / FPS
+  - moving-average CPU frame time / FPS
+- 统计由 `Renderer` 维护，并通过引擎侧 `UIContext` 在窗口左上角绘制一个常驻 overlay。
+- 这层 overlay 属于 Engine runtime debug UI，不需要 Editor 自己实现，也不会暴露 backend-specific UI 细节。
 - 只有当改动可以被严格证明为“单后端私有”或“单可执行项目私有”时，才可以缩小验证矩阵
 
 ### 12.3 Vulkan VMA 泄露定位

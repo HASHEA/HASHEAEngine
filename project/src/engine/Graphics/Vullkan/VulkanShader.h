@@ -24,6 +24,7 @@ namespace RHI
 		std::shared_ptr<DescriptorSetLayout> get_descriptor_set_layout(uint32_t index) const;
 		const VertexInputCreation& get_vertex_input() const;
 		const std::vector<ShaderParameterBlockLayout>& get_parameter_block_layouts() const override;
+		bool get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const override;
 
 		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;

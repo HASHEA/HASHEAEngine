@@ -57,6 +57,7 @@ namespace RHI
 		const DX12ShaderReflectionData& get_reflection_data() const { return m_reflectionData; }
 		AshShaderStageFlagBits get_stage() const { return m_stage; }
 		const std::vector<ShaderParameterBlockLayout>& get_parameter_block_layouts() const override { return m_parameterBlockLayouts; }
+		bool get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const override;
 
 	public:
 		auto get_native_handle() -> void* override { return nullptr; }

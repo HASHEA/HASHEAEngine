@@ -1,9 +1,11 @@
 #pragma once
 #include "Base/hcore.h"
+#include "Function/Render/VertexDecl.h"
 #include "Graphics/Pipeline.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace RHI
@@ -43,6 +45,13 @@ namespace AshEngine
 		None = 0,
 		Front,
 		Back
+	};
+
+	/// Which winding is the mesh exterior in model space (maps through `RHI::RasterizerConvention.h` per backend).
+	enum class RenderFrontFace : uint8_t
+	{
+		CounterClockwise = 0,
+		Clockwise
 	};
 
 	enum class RenderPrimitiveTopology : uint8_t
@@ -100,6 +109,7 @@ namespace AshEngine
 		RenderPrimitiveTopology primitive_topology = RenderPrimitiveTopology::TriangleList;
 		bool depth_test = false;
 		bool depth_write = false;
+		RenderFrontFace front_face = RenderFrontFace::CounterClockwise;
 	};
 
 	struct GraphicsProgramDesc
@@ -110,9 +120,51 @@ namespace AshEngine
 		const char* shader_macro = nullptr;
 		GraphicsProgramState state{};
 		const char* name = nullptr;
+		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;
 		/// When `num_vertex_attributes > 0` or `num_vertex_streams > 0`, this layout is passed to the RHI graphics pipeline
-		/// (Vulkan + D3D12). Use helpers in `Graphics/VertexInputLayout.h` (KEngine-style presets).
+		/// (Vulkan + D3D12). Use `Graphics/VertexInputLayout.h` for low-level layout assembly, and define Engine-side presets
+		/// close to the owning vertex type (for example `Function/Render/VertexLayoutPresets.h`).
 		RHI::VertexInputCreation vertex_input{};
+
+		GraphicsProgramDesc() = default;
+
+		GraphicsProgramDesc(
+			const char* in_shader_path,
+			const char* in_vertex_entry,
+			const char* in_fragment_entry,
+			const char* in_shader_macro,
+			const GraphicsProgramState& in_state,
+			const char* in_name,
+			const RHI::VertexInputCreation& in_vertex_input = {})
+			: shader_path(in_shader_path)
+			, vertex_entry(in_vertex_entry)
+			, fragment_entry(in_fragment_entry)
+			, shader_macro(in_shader_macro)
+			, state(in_state)
+			, name(in_name)
+			, vertex_input(in_vertex_input)
+		{
+		}
+
+		GraphicsProgramDesc(
+			const char* in_shader_path,
+			const char* in_vertex_entry,
+			const char* in_fragment_entry,
+			const char* in_shader_macro,
+			const GraphicsProgramState& in_state,
+			const char* in_name,
+			std::shared_ptr<const VertexDecl> in_vertex_decl,
+			const RHI::VertexInputCreation& in_vertex_input = {})
+			: shader_path(in_shader_path)
+			, vertex_entry(in_vertex_entry)
+			, fragment_entry(in_fragment_entry)
+			, shader_macro(in_shader_macro)
+			, state(in_state)
+			, name(in_name)
+			, vertex_decl(std::move(in_vertex_decl))
+			, vertex_input(in_vertex_input)
+		{
+		}
 	};
 
 	struct RenderTargetDesc

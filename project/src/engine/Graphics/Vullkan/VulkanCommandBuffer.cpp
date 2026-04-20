@@ -1158,6 +1158,14 @@ namespace RHI
 		}
 		if (bMemBarrier || !BufBarriers.empty() || !TexBarriers.empty())
 		{
+			if (srcFinalStageMask == 0)
+			{
+				srcFinalStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+			}
+			if (dstFinalStageMask == 0)
+			{
+				dstFinalStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+			}
 			vkCmdPipelineBarrier(vkCommandBuffer,
 				srcFinalStageMask,
 				dstFinalStageMask,
