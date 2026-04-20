@@ -25,13 +25,15 @@ project "Editor"
 
 		"**.lua",
 	}
+	-- The runtime editor now renders through engine-side UIContext.
+	-- These legacy files owned a separate native ImGui host/context on the editor side,
+	-- so they stay excluded until UIContext grows equivalent extension points.
 	removefiles
 	{
 		"ImGui/EditorImGuiLayer.h",
 		"ImGui/EditorImGuiLayer.cpp",
 		"ImGui/EditorStyle.h",
 		"ImGui/EditorStyle.cpp",
-		"Scene/**",
 	}
 
 	links

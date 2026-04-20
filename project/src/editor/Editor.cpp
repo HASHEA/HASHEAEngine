@@ -4,8 +4,6 @@
 #include "Function/Application.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/Renderer.h"
-#include <algorithm>
-#include <limits>
 
 namespace AshEditor
 {
@@ -14,6 +12,52 @@ namespace AshEditor
 		bool should_trace_editor_frame(uint32_t frame_index)
 		{
 			return frame_index <= 2;
+		}
+
+		void ensure_viewport_render_target(
+			AshEngine::Renderer& renderer,
+			EditorViewportService& viewport_service,
+			EditorViewportInstance& viewport,
+			const std::shared_ptr<AshEngine::RenderTarget>& back_buffer)
+		{
+			const EditorViewportRenderRequest request = viewport_service.get_render_request(viewport.id, back_buffer);
+			if (!request.rebuild_required)
+			{
+				return;
+			}
+
+			AshEngine::RenderTargetDesc desc{};
+			desc.width = static_cast<uint16_t>(request.width);
+			desc.height = static_cast<uint16_t>(request.height);
+			desc.format = request.format;
+			desc.shader_resource = true;
+			desc.unordered_access = false;
+			desc.name = viewport.display_name.empty() ? "EditorViewportRenderTarget" : viewport.display_name.c_str();
+			desc.use_optimized_clear_value = true;
+			desc.optimized_clear_color = { 0.02f, 0.04f, 0.07f, 1.0f };
+			std::shared_ptr<AshEngine::RenderTarget> render_target = renderer.create_render_target(desc);
+
+			if (!render_target)
+			{
+				HLogError(
+					"Editor failed to create viewport render target '{}' {}x{}.",
+					viewport.id,
+					request.width,
+					request.height);
+				return;
+			}
+
+			const bool had_render_target = viewport.render_target != nullptr;
+			viewport_service.notify_render_target_updated(viewport.id, render_target);
+
+			HLogInfo(
+				"Editor viewport render target {}: id='{}', size={}x{}, format={}, ptr={}.",
+				had_render_target ? "rebuilt" : "created",
+				viewport.id,
+				request.width,
+				request.height,
+				static_cast<uint32_t>(request.format),
+				static_cast<const void*>(render_target.get()));
 		}
 	}
 
@@ -45,10 +89,9 @@ namespace AshEditor
 			m_editorApplication->shutdown();
 			m_editorApplication.reset();
 		}
-		m_viewportRenderTarget.reset();
 	}
 
-	void Editor::ensure_viewport_render_target()
+	void Editor::ensure_viewport_render_targets()
 	{
 		if (!m_editorApplication)
 		{
@@ -61,55 +104,17 @@ namespace AshEditor
 			return;
 		}
 
-		const EditorViewportState& viewport_state = m_editorApplication->get_viewport_state();
-		uint32_t desired_width = viewport_state.requested_width;
-		uint32_t desired_height = viewport_state.requested_height;
-
 		const std::shared_ptr<AshEngine::RenderTarget> back_buffer = renderer->get_back_buffer();
-		if ((desired_width == 0 || desired_height == 0) && back_buffer)
+		EditorViewportService& viewport_service = m_editorApplication->get_viewport_service();
+		for (EditorViewportInstance* viewport : viewport_service.get_viewports())
 		{
-			desired_width = back_buffer->get_width();
-			desired_height = back_buffer->get_height();
+			if (!viewport)
+			{
+				continue;
+			}
+
+			ensure_viewport_render_target(*renderer, viewport_service, *viewport, back_buffer);
 		}
-
-		desired_width = std::max<uint32_t>(1u, std::min<uint32_t>(desired_width, std::numeric_limits<uint16_t>::max()));
-		desired_height = std::max<uint32_t>(1u, std::min<uint32_t>(desired_height, std::numeric_limits<uint16_t>::max()));
-
-		const AshEngine::RenderTextureFormat target_format =
-			back_buffer ? back_buffer->get_format() : AshEngine::RenderTextureFormat::BGRA8_SRGB;
-
-		if (m_viewportRenderTarget &&
-			m_viewportRenderTarget->get_width() == desired_width &&
-			m_viewportRenderTarget->get_height() == desired_height &&
-			m_viewportRenderTarget->get_format() == target_format)
-		{
-			return;
-		}
-
-		AshEngine::RenderTargetDesc viewport_target_desc{};
-		viewport_target_desc.width = static_cast<uint16_t>(desired_width);
-		viewport_target_desc.height = static_cast<uint16_t>(desired_height);
-		viewport_target_desc.format = target_format;
-		viewport_target_desc.shader_resource = true;
-		viewport_target_desc.unordered_access = false;
-		viewport_target_desc.name = "EditorViewportRenderTarget";
-		viewport_target_desc.use_optimized_clear_value = true;
-		viewport_target_desc.optimized_clear_color = { 0.02f, 0.04f, 0.07f, 1.0f };
-
-		m_viewportRenderTarget = renderer->create_render_target(viewport_target_desc);
-
-		if (!m_viewportRenderTarget)
-		{
-			HLogError("Editor failed to create viewport render target {}x{}.", desired_width, desired_height);
-			return;
-		}
-
-		HLogInfo(
-			"Editor viewport render target created: {}x{}, format={}, ptr={}.",
-			desired_width,
-			desired_height,
-			static_cast<uint32_t>(target_format),
-			static_cast<const void*>(m_viewportRenderTarget.get()));
 	}
 
 	auto Editor::_on_update() -> void 
@@ -121,10 +126,10 @@ namespace AshEditor
 		}
 
 		AshEngine::Application::_on_update();
-		ensure_viewport_render_target();
+		ensure_viewport_render_targets();
 		if (m_editorApplication)
 		{
-			m_editorApplication->update(m_viewportRenderTarget);
+			m_editorApplication->update();
 		}
 
 		if (should_trace_editor_frame(m_updateFrameIndex))
@@ -132,7 +137,10 @@ namespace AshEditor
 			HLogInfo(
 				"Editor::_on_update frame {} end. viewport_rt={}.",
 				m_updateFrameIndex,
-				static_cast<const void*>(m_viewportRenderTarget.get()));
+				static_cast<const void*>(
+					m_editorApplication && m_editorApplication->get_primary_viewport()
+						? m_editorApplication->get_primary_viewport()->render_target.get()
+						: nullptr));
 		}
 	}
 
@@ -185,16 +193,23 @@ namespace AshEditor
 			HLogInfo("Editor::_on_render frame {} after render_debug.", m_renderFrameIndex);
 		}
 
-		if (m_viewportRenderTarget && !m_codexLogoDemo.render(m_viewportRenderTarget))
+		EditorViewportInstance* primary_viewport = m_editorApplication ? m_editorApplication->get_primary_viewport() : nullptr;
+		if (m_editorApplication)
 		{
-			HLogError("Editor frame render path failed.");
+			for (EditorViewportInstance* viewport : m_editorApplication->get_viewport_service().get_viewports())
+			{
+				if (viewport && viewport->render_target && !m_codexLogoDemo.render(viewport->render_target))
+				{
+					HLogError("Editor frame render path failed for viewport '{}'.", viewport->id);
+				}
+			}
 		}
 		if (should_trace_editor_frame(m_renderFrameIndex))
 		{
 			HLogInfo(
 				"Editor::_on_render frame {} after viewport render. viewport_rt={}.",
 				m_renderFrameIndex,
-				static_cast<const void*>(m_viewportRenderTarget.get()));
+				static_cast<const void*>(primary_viewport ? primary_viewport->render_target.get() : nullptr));
 		}
 
 		if (m_editorApplication)

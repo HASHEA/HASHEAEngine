@@ -26,7 +26,11 @@ namespace AshEditor
 
 		std::unique_ptr<EditorCommand> command = std::move(m_undoStack.back());
 		m_undoStack.pop_back();
-		command->undo(context);
+		if (!command->undo(context))
+		{
+			m_undoStack.push_back(std::move(command));
+			return false;
+		}
 		m_redoStack.push_back(std::move(command));
 		return true;
 	}
@@ -42,11 +46,18 @@ namespace AshEditor
 		m_redoStack.pop_back();
 		if (!command->execute(context))
 		{
+			m_redoStack.push_back(std::move(command));
 			return false;
 		}
 
 		m_undoStack.push_back(std::move(command));
 		return true;
+	}
+
+	void UndoRedoService::clear()
+	{
+		m_undoStack.clear();
+		m_redoStack.clear();
 	}
 
 	bool UndoRedoService::can_undo() const

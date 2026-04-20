@@ -1,16 +1,22 @@
 #include "App/EditorApplication.h"
 #include "Base/hlog.h"
+#include "Base/window/Window.h"
 #include "Core/EditorPanel.h"
 #include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Render/RenderDevice.h"
-#include "imgui.h"
-#include "imgui_internal.h"
+#include <fstream>
+#include <json.hpp>
 
 namespace AshEditor
 {
 	namespace
 	{
+		constexpr const char* k_workspaceHostWindowName = "Editor Workspace";
+		constexpr const char* k_workspaceDockspaceName = "EditorWorkspaceDockspace";
+		constexpr const char* k_viewportLayoutStateFile = "product/config/editor/ViewportLayout.json";
+		using json = nlohmann::json;
+
 		bool should_trace_gui_frame(uint32_t frame_index)
 		{
 			return frame_index <= 2;
@@ -26,6 +32,29 @@ namespace AshEditor
 			const std::filesystem::path workspace_root = settings_service.get_workspace_root();
 			const std::filesystem::path relative_path = std::filesystem::relative(path, workspace_root);
 			return relative_path.generic_string();
+		}
+
+		std::string make_viewport_kind_name(EditorViewportKind kind)
+		{
+			switch (kind)
+			{
+			case EditorViewportKind::Scene: return "scene";
+			case EditorViewportKind::Game: return "game";
+			default: return "auxiliary";
+			}
+		}
+
+		EditorViewportKind parse_viewport_kind_name(const std::string& kind)
+		{
+			if (kind == "scene")
+			{
+				return EditorViewportKind::Scene;
+			}
+			if (kind == "game")
+			{
+				return EditorViewportKind::Game;
+			}
+			return EditorViewportKind::Auxiliary;
 		}
 	}
 
@@ -44,14 +73,24 @@ namespace AshEditor
 			? m_settingsService.get_startup_scene_path()
 			: m_settingsService.resolve_workspace_path(settings.last_scene_path);
 
-		m_sceneService.initialize(startup_scene_path);
+		const bool startup_scene_loaded = m_sceneService.initialize(startup_scene_path);
 		m_assetDatabaseService.set_asset_root(m_settingsService.get_assets_root_path());
 		m_assetDatabaseService.refresh();
 
 		bootstrap_context();
-		select_default_entity();
+		reset_editor_state_after_scene_change();
+		m_viewportService.ensure_viewport("scene", "Scene");
+		m_viewportService.ensure_viewport("game", "Game");
+		m_viewportService.set_primary_viewport("scene");
+		load_viewport_layout_state();
 		bootstrap_panels();
+		apply_viewport_panel_open_state();
 		register_actions();
+
+		if (!startup_scene_loaded && !startup_scene_path.empty())
+		{
+			log_message("Failed to load startup scene. Editor fell back to a new default scene.");
+		}
 
 		if (!m_editorContext.gui_renderer_ready)
 		{
@@ -61,7 +100,7 @@ namespace AshEditor
 		{
 			log_message("Editor UI is running on the engine UIContext.");
 		}
-		log_message("Custom editor layout ini routing is reserved until engine UIContext exposes runtime config injection.");
+		log_message("Editor workspace is running through UIContext dockspace layout.");
 		log_message("Editor services initialized.");
 		log_message("Scene loaded: " + m_sceneService.get_active_scene().get_name());
 		log_message("Asset scan complete: " + std::to_string(m_assetDatabaseService.get_items().size()) + " items.");
@@ -78,14 +117,17 @@ namespace AshEditor
 		}
 
 		shutdown_panels();
+		save_viewport_layout_state();
+		m_viewportService.clear();
+		m_undoRedoService.clear();
 
 		m_settingsService.save();
 		m_initialized = false;
 	}
 
-	void EditorApplication::update(const std::shared_ptr<AshEngine::RenderTarget>& viewport_render_target)
+	void EditorApplication::update()
 	{
-		update_editor_context(viewport_render_target);
+		update_editor_context();
 		for (EditorPanel* panel : m_panels)
 		{
 			if (panel && panel->is_open())
@@ -95,9 +137,24 @@ namespace AshEditor
 		}
 	}
 
-	const EditorViewportState& EditorApplication::get_viewport_state() const
+	EditorViewportInstance* EditorApplication::get_primary_viewport()
 	{
-		return m_editorContext.viewport;
+		return m_viewportService.get_primary_viewport();
+	}
+
+	const EditorViewportInstance* EditorApplication::get_primary_viewport() const
+	{
+		return m_viewportService.get_primary_viewport();
+	}
+
+	EditorViewportService& EditorApplication::get_viewport_service()
+	{
+		return m_viewportService;
+	}
+
+	const EditorViewportService& EditorApplication::get_viewport_service() const
+	{
+		return m_viewportService;
 	}
 
 	void EditorApplication::draw_gui()
@@ -106,38 +163,24 @@ namespace AshEditor
 		if (should_trace_gui_frame(m_guiFrameIndex))
 		{
 			HLogInfo(
-				"EditorApplication::draw_gui frame {} begin. imgui_ctx={}, ui_ready={}, panels={}.",
+				"EditorApplication::draw_gui frame {} begin. ui_context={}, ui_ready={}, panels={}.",
 				m_guiFrameIndex,
-				static_cast<const void*>(ImGui::GetCurrentContext()),
+				static_cast<const void*>(m_editorContext.ui_context),
 				m_editorContext.gui_renderer_ready,
 				m_panels.size());
 		}
 
-		if (!m_editorContext.gui_renderer_ready || ImGui::GetCurrentContext() == nullptr)
+		if (!m_editorContext.gui_renderer_ready || !m_editorContext.ui_context || !m_editorContext.ui_context->is_frame_active())
 		{
 			if (should_trace_gui_frame(m_guiFrameIndex))
 			{
-				HLogWarning("EditorApplication::draw_gui frame {} skipped because UIContext/ImGui is unavailable.", m_guiFrameIndex);
+				HLogWarning("EditorApplication::draw_gui frame {} skipped because UIContext is unavailable.", m_guiFrameIndex);
 			}
 			return;
 		}
 
-		if (should_trace_gui_frame(m_guiFrameIndex))
-		{
-			HLogInfo("EditorApplication::draw_gui frame {} before dockspace.", m_guiFrameIndex);
-		}
-		draw_dockspace();
-		if (should_trace_gui_frame(m_guiFrameIndex))
-		{
-			HLogInfo("EditorApplication::draw_gui frame {} after dockspace.", m_guiFrameIndex);
-		}
-
+		draw_workspace_host();
 		draw_main_menu_bar();
-		if (should_trace_gui_frame(m_guiFrameIndex))
-		{
-			HLogInfo("EditorApplication::draw_gui frame {} after main menu.", m_guiFrameIndex);
-		}
-
 		for (EditorPanel* panel : m_panels)
 		{
 			if (panel && panel->is_open())
@@ -160,6 +203,7 @@ namespace AshEditor
 			}
 		}
 
+		m_resetLayoutRequested = false;
 		if (should_trace_gui_frame(m_guiFrameIndex))
 		{
 			HLogInfo("EditorApplication::draw_gui frame {} end.", m_guiFrameIndex);
@@ -174,6 +218,7 @@ namespace AshEditor
 		m_editorContext.command_service = &m_commandService;
 		m_editorContext.undo_redo_service = &m_undoRedoService;
 		m_editorContext.settings_service = &m_settingsService;
+		m_editorContext.viewport_service = &m_viewportService;
 		m_editorContext.ui_context = AshEngine::Application::get_ui_context();
 		m_editorContext.gui_renderer_ready = m_editorContext.ui_context != nullptr && m_editorContext.ui_context->is_initialized();
 	}
@@ -181,13 +226,15 @@ namespace AshEditor
 	void EditorApplication::bootstrap_panels()
 	{
 		m_panels.clear();
-		m_viewportPanel = std::make_unique<ViewportPanel>();
+		m_viewportPanel = std::make_unique<ViewportPanel>("scene", "scene_viewport", "Scene");
+		m_gameViewportPanel = std::make_unique<ViewportPanel>("game", "game_viewport", "Game");
 		m_sceneHierarchyPanel = std::make_unique<SceneHierarchyPanel>();
 		m_inspectorPanel = std::make_unique<InspectorPanel>();
 		m_consolePanel = std::make_unique<ConsolePanel>();
 		m_assetBrowserPanel = std::make_unique<AssetBrowserPanel>();
 
 		attach_panel(*m_viewportPanel);
+		attach_panel(*m_gameViewportPanel);
 		attach_panel(*m_sceneHierarchyPanel);
 		attach_panel(*m_inspectorPanel);
 		attach_panel(*m_consolePanel);
@@ -209,9 +256,10 @@ namespace AshEditor
 		m_consolePanel.reset();
 		m_inspectorPanel.reset();
 		m_sceneHierarchyPanel.reset();
+		m_gameViewportPanel.reset();
 		m_viewportPanel.reset();
 		m_resetLayoutRequested = false;
-		m_dockLayoutInitialized = false;
+		m_defaultDockLayoutBuilt = false;
 	}
 
 	void EditorApplication::attach_panel(EditorPanel& panel)
@@ -223,9 +271,12 @@ namespace AshEditor
 	void EditorApplication::register_actions()
 	{
 		m_commandService.register_action("file.new_scene", "New Scene", [this]() {
-			m_sceneService.new_scene("Untitled Scene");
-			select_default_entity();
+			activate_new_scene("Untitled Scene");
 			log_message("Created a new default scene.");
+		});
+
+		m_commandService.register_action("file.reload_scene", "Reload Scene", [this]() {
+			reload_active_scene();
 		});
 
 		m_commandService.register_action("file.save_scene", "Save Scene", [this]() {
@@ -257,13 +308,19 @@ namespace AshEditor
 
 		m_commandService.register_action("window.reset_layout", "Reset Layout", [this]() {
 			m_resetLayoutRequested = true;
-			log_message("Layout reset requested.");
+			m_viewportService.reset_presentations();
+			apply_viewport_panel_open_state();
+			log_message("Dockspace layout reset requested.");
 		});
 
 		m_commandService.register_action("edit.undo", "Undo", [this]() {
 			if (m_undoRedoService.undo(m_editorContext))
 			{
 				log_message("Undo executed.");
+			}
+			else
+			{
+				log_message("Undo failed.");
 			}
 		});
 
@@ -272,17 +329,81 @@ namespace AshEditor
 			{
 				log_message("Redo executed.");
 			}
+			else
+			{
+				log_message("Redo failed.");
+			}
 		});
 	}
 
-	void EditorApplication::update_editor_context(const std::shared_ptr<AshEngine::RenderTarget>& viewport_render_target)
+	void EditorApplication::activate_new_scene(const std::string& name)
+	{
+		m_sceneService.new_scene(name);
+		update_last_scene_path_setting({});
+		reset_editor_state_after_scene_change();
+	}
+
+	void EditorApplication::update_last_scene_path_setting(const std::filesystem::path& path)
+	{
+		m_settingsService.get_settings().last_scene_path = make_scene_path_for_settings(m_settingsService, path);
+		m_settingsService.save();
+	}
+
+	bool EditorApplication::load_scene_into_editor(const std::filesystem::path& path)
+	{
+		if (path.empty())
+		{
+			return false;
+		}
+
+		if (!m_sceneService.load_scene(path))
+		{
+			return false;
+		}
+
+		update_last_scene_path_setting(path);
+		reset_editor_state_after_scene_change();
+		return true;
+	}
+
+	bool EditorApplication::reload_active_scene()
+	{
+		const std::filesystem::path active_scene_path = m_sceneService.get_active_scene_path();
+		if (active_scene_path.empty())
+		{
+			log_message("Reload Scene skipped because the active scene has not been saved yet.");
+			return false;
+		}
+
+		const bool loaded = load_scene_into_editor(active_scene_path);
+		if (loaded)
+		{
+			log_message("Scene reloaded from " + active_scene_path.generic_string());
+		}
+		else
+		{
+			activate_new_scene("Untitled Scene");
+			log_message(
+				"Failed to reload scene from " +
+				active_scene_path.generic_string() +
+				". Editor fell back to a new default scene.");
+		}
+		return loaded;
+	}
+
+	void EditorApplication::update_editor_context()
 	{
 		m_editorContext.ui_context = AshEngine::Application::get_ui_context();
 		m_editorContext.gui_renderer_ready = m_editorContext.ui_context != nullptr && m_editorContext.ui_context->is_initialized();
-		if (m_viewportPanel)
-		{
-			m_viewportPanel->set_render_target(viewport_render_target);
-		}
+		const EditorViewportInstance* primary_viewport = m_viewportService.get_primary_viewport();
+		m_editorContext.viewport = primary_viewport ? primary_viewport->state : EditorViewportState{};
+	}
+
+	void EditorApplication::reset_editor_state_after_scene_change()
+	{
+		m_selectionService.clear();
+		m_undoRedoService.clear();
+		select_default_entity();
 	}
 
 	void EditorApplication::select_default_entity()
@@ -305,82 +426,93 @@ namespace AshEditor
 		}
 	}
 
-	void EditorApplication::draw_dockspace()
+	void EditorApplication::draw_workspace_host()
 	{
-		if (should_trace_gui_frame(m_guiFrameIndex))
-		{
-			HLogInfo("EditorApplication::draw_dockspace frame {} begin.", m_guiFrameIndex);
-		}
-
-		ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_None;
-		ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking;
-
-		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		ImGui::SetNextWindowPos(viewport->Pos);
-		ImGui::SetNextWindowSize(viewport->Size);
-		ImGui::SetNextWindowViewport(viewport->ID);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-		ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-		window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-		window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-
-		ImGui::Begin("EditorDockSpace", nullptr, window_flags);
-		ImGui::PopStyleVar(2);
-
-		const ImGuiID dockspace_id = ImGui::GetID("AshEditorDockSpace");
-		ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
-		build_default_layout(dockspace_id);
-		ImGui::End();
-
-		if (should_trace_gui_frame(m_guiFrameIndex))
-		{
-			HLogInfo("EditorApplication::draw_dockspace frame {} end. dockspace_id={}.", m_guiFrameIndex, dockspace_id);
-		}
-	}
-
-	void EditorApplication::draw_main_menu_bar()
-	{
-		if (!ImGui::BeginMainMenuBar())
+		if (!m_editorContext.ui_context)
 		{
 			return;
 		}
 
-		if (ImGui::BeginMenu("File"))
+		AshEngine::UIContext& ui = *m_editorContext.ui_context;
+		const AshEngine::UIRect main_viewport = ui.get_main_viewport_rect();
+		const AshEngine::UIVec2 workspace_size{ main_viewport.width, main_viewport.height };
+		ui.set_next_window_viewport(ui.get_main_viewport_id());
+		ui.set_next_window_position({ main_viewport.x, main_viewport.y }, AshEngine::UIConditionFlagBits::Always);
+		ui.set_next_window_size(workspace_size, AshEngine::UIConditionFlagBits::Always);
+		ui.push_style_var(AshEngine::UIStyleVarKind::WindowPadding, { 0.0f, 0.0f });
+		const bool host_open = ui.begin_dockspace_host_window(
+			k_workspaceHostWindowName,
+			nullptr,
+			AshEngine::UIWindowFlagBits::NoSavedSettings);
+		ui.pop_style_var();
+
+		if (!host_open)
 		{
-			if (ImGui::MenuItem("New Scene"))
+			ui.end_window();
+			return;
+		}
+
+		const AshEngine::UIDockNodeId dockspace_id = ui.dock_space(
+			k_workspaceDockspaceName,
+			{},
+			AshEngine::UIDockNodeFlagBits::PassthruCentralNode);
+		if (dockspace_id != 0u && (!m_defaultDockLayoutBuilt || m_resetLayoutRequested))
+		{
+			build_default_dock_layout(dockspace_id, workspace_size);
+			m_defaultDockLayoutBuilt = true;
+		}
+
+		ui.end_window();
+	}
+
+	void EditorApplication::draw_main_menu_bar()
+	{
+		if (!m_editorContext.ui_context || !m_editorContext.ui_context->begin_main_menu_bar())
+		{
+			return;
+		}
+
+		AshEngine::UIContext& ui = *m_editorContext.ui_context;
+		if (ui.begin_menu("File"))
+		{
+			if (ui.menu_item("New Scene"))
 			{
 				m_commandService.invoke("file.new_scene");
 			}
-			if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, true))
+			if (ui.menu_item("Reload Scene", nullptr, false, !m_sceneService.get_active_scene_path().empty()))
+			{
+				m_commandService.invoke("file.reload_scene");
+			}
+			if (ui.menu_item("Save Scene", "Ctrl+S", false, true))
 			{
 				m_commandService.invoke("file.save_scene");
 			}
-			ImGui::Separator();
-			ImGui::TextDisabled("Current Scene: %s", m_sceneService.get_active_scene().get_name().c_str());
-			ImGui::EndMenu();
+			ui.separator();
+			ui.text_colored({ 0.70f, 0.70f, 0.70f, 1.0f }, "Current Scene: %s", m_sceneService.get_active_scene().get_name().c_str());
+			ui.end_menu();
 		}
 
-		if (ImGui::BeginMenu("Edit"))
+		if (ui.begin_menu("Edit"))
 		{
-			if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_undoRedoService.can_undo()))
+			if (ui.menu_item("Undo", "Ctrl+Z", false, m_undoRedoService.can_undo()))
 			{
 				m_commandService.invoke("edit.undo");
 			}
-			if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_undoRedoService.can_redo()))
+			if (ui.menu_item("Redo", "Ctrl+Y", false, m_undoRedoService.can_redo()))
 			{
 				m_commandService.invoke("edit.redo");
 			}
-			ImGui::EndMenu();
+			ui.end_menu();
 		}
 
-		if (ImGui::BeginMenu("Window"))
+		if (ui.begin_menu("Window"))
 		{
-			if (ImGui::MenuItem("Reset Layout"))
+			if (ui.menu_item("Reset Layout"))
 			{
 				m_commandService.invoke("window.reset_layout");
 			}
 
-			ImGui::Separator();
+			ui.separator();
 			for (EditorPanel* panel : m_panels)
 			{
 				if (!panel)
@@ -389,97 +521,185 @@ namespace AshEditor
 				}
 
 				bool open = panel->is_open();
-				if (ImGui::MenuItem(panel->get_title().c_str(), nullptr, &open))
+				ui.menu_item(panel->get_title().c_str(), nullptr, &open);
+				panel->set_open(open);
+				if (panel == m_viewportPanel.get())
 				{
-					panel->set_open(open);
+					m_viewportService.set_panel_open("scene", open);
+				}
+				else if (panel == m_gameViewportPanel.get())
+				{
+					m_viewportService.set_panel_open("game", open);
 				}
 			}
-			ImGui::EndMenu();
+			ui.end_menu();
 		}
 
-		if (ImGui::BeginMenu("Assets"))
+		if (ui.begin_menu("Assets"))
 		{
-			if (ImGui::MenuItem("Refresh"))
+			if (ui.menu_item("Refresh"))
 			{
 				m_commandService.invoke("assets.refresh");
 			}
-			ImGui::EndMenu();
+			ui.end_menu();
 		}
 
-		ImGui::EndMainMenuBar();
+		ui.end_main_menu_bar();
 	}
 
-	void EditorApplication::build_default_layout(uint32_t dockspace_id)
+	void EditorApplication::build_default_dock_layout(AshEngine::UIDockNodeId dockspace_id, const AshEngine::UIVec2& size)
 	{
-		if (dockspace_id == 0)
+		if (!m_editorContext.ui_context || dockspace_id == 0u)
 		{
-			if (should_trace_gui_frame(m_guiFrameIndex))
-			{
-				HLogWarning("EditorApplication::build_default_layout frame {} skipped because dockspace id is 0.", m_guiFrameIndex);
-			}
 			return;
 		}
 
-		if (m_resetLayoutRequested)
-		{
-			ImGui::DockBuilderRemoveNode(dockspace_id);
-			m_resetLayoutRequested = false;
-			m_dockLayoutInitialized = false;
-		}
+		AshEngine::UIContext& ui = *m_editorContext.ui_context;
+		ui.dock_builder_remove_node(dockspace_id);
+		ui.dock_builder_add_node(dockspace_id, AshEngine::UIDockNodeFlagBits::DockSpace);
+		ui.dock_builder_set_node_size(dockspace_id, size);
 
-		if (m_dockLayoutInitialized)
+		AshEngine::UIDockNodeId left_node = 0u;
+		AshEngine::UIDockNodeId center_node = 0u;
+		ui.dock_builder_split_node(dockspace_id, AshEngine::UIDirection::Left, 0.18f, &left_node, &center_node);
+
+		AshEngine::UIDockNodeId inspector_node = 0u;
+		AshEngine::UIDockNodeId center_stack_node = 0u;
+		ui.dock_builder_split_node(center_node, AshEngine::UIDirection::Right, 0.22f, &inspector_node, &center_stack_node);
+
+		AshEngine::UIDockNodeId asset_node = 0u;
+		AshEngine::UIDockNodeId hierarchy_node = 0u;
+		ui.dock_builder_split_node(left_node, AshEngine::UIDirection::Down, 0.42f, &asset_node, &hierarchy_node);
+
+		AshEngine::UIDockNodeId lower_center_node = 0u;
+		AshEngine::UIDockNodeId scene_node = 0u;
+		ui.dock_builder_split_node(center_stack_node, AshEngine::UIDirection::Down, 0.50f, &lower_center_node, &scene_node);
+
+		AshEngine::UIDockNodeId console_node = 0u;
+		AshEngine::UIDockNodeId game_node = 0u;
+		ui.dock_builder_split_node(lower_center_node, AshEngine::UIDirection::Down, 0.54f, &console_node, &game_node);
+
+		ui.dock_builder_dock_window("Scene Hierarchy", hierarchy_node);
+		ui.dock_builder_dock_window("Asset Browser", asset_node);
+		ui.dock_builder_dock_window("Scene", scene_node);
+		ui.dock_builder_dock_window("Game", game_node);
+		ui.dock_builder_dock_window("Console", console_node);
+		ui.dock_builder_dock_window("Inspector", inspector_node);
+		ui.dock_builder_finish(dockspace_id);
+	}
+
+	std::filesystem::path EditorApplication::get_viewport_layout_state_path() const
+	{
+		return m_settingsService.get_workspace_root() / k_viewportLayoutStateFile;
+	}
+
+	void EditorApplication::load_viewport_layout_state()
+	{
+		const std::filesystem::path state_path = get_viewport_layout_state_path();
+		if (state_path.empty() || !std::filesystem::exists(state_path))
 		{
-			if (should_trace_gui_frame(m_guiFrameIndex))
-			{
-				HLogInfo("EditorApplication::build_default_layout frame {} skipped because layout is already initialized.", m_guiFrameIndex);
-			}
 			return;
 		}
 
-		if (should_trace_gui_frame(m_guiFrameIndex))
+		std::ifstream input(state_path);
+		if (!input.is_open())
 		{
-			HLogInfo("EditorApplication::build_default_layout frame {} begin for dockspace {}.", m_guiFrameIndex, dockspace_id);
+			log_message("Failed to open viewport layout state file.");
+			return;
 		}
 
-		ImGui::DockBuilderRemoveNode(dockspace_id);
-		ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+		json root{};
+		input >> root;
 
-		const ImGuiViewport* viewport = ImGui::GetMainViewport();
-		ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
-
-		ImGuiID center_id = dockspace_id;
-		ImGuiID left_id = ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Left, 0.20f, nullptr, &center_id);
-		ImGuiID right_id = ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Right, 0.25f, nullptr, &center_id);
-		ImGuiID bottom_id = ImGui::DockBuilderSplitNode(center_id, ImGuiDir_Down, 0.28f, nullptr, &center_id);
-		ImGuiID asset_id = ImGui::DockBuilderSplitNode(bottom_id, ImGuiDir_Right, 0.50f, nullptr, &bottom_id);
-
-		if (m_sceneHierarchyPanel)
+		std::vector<EditorViewportPersistenceState> states{};
+		if (root.contains("viewports") && root["viewports"].is_array())
 		{
-			ImGui::DockBuilderDockWindow(m_sceneHierarchyPanel->get_title().c_str(), left_id);
+			for (const json& entry : root["viewports"])
+			{
+				EditorViewportPersistenceState state{};
+				state.id = entry.value("id", std::string{});
+				if (state.id.empty())
+				{
+					continue;
+				}
+
+				state.panel_open = entry.value("panelOpen", true);
+				state.show_toolbar = entry.value("showToolbar", true);
+				state.preserve_aspect = entry.value("preserveAspect", false);
+				state.accepts_input = entry.value("acceptsInput", false);
+				state.show_stats = entry.value("showStats", true);
+				state.show_overlays = entry.value("showOverlays", false);
+				states.push_back(state);
+
+				if (EditorViewportPresentation* presentation = m_viewportService.get_presentation(state.id))
+				{
+					presentation->kind = parse_viewport_kind_name(entry.value("kind", std::string{}));
+				}
+			}
 		}
-		if (m_inspectorPanel)
+
+		m_viewportService.apply_persistence_state(states, root.value("primaryViewportId", std::string{ "scene" }));
+	}
+
+	void EditorApplication::save_viewport_layout_state() const
+	{
+		const std::filesystem::path state_path = get_viewport_layout_state_path();
+		if (state_path.empty())
 		{
-			ImGui::DockBuilderDockWindow(m_inspectorPanel->get_title().c_str(), right_id);
+			return;
 		}
+
+		std::filesystem::create_directories(state_path.parent_path());
+
+		json root{};
+		if (const EditorViewportInstance* primary_viewport = m_viewportService.get_primary_viewport())
+		{
+			root["primaryViewportId"] = primary_viewport->id;
+		}
+
+		root["viewports"] = json::array();
+		for (const EditorViewportPersistenceState& state : m_viewportService.capture_persistence_state())
+		{
+			json entry{};
+			entry["id"] = state.id;
+			entry["panelOpen"] = state.panel_open;
+			entry["showToolbar"] = state.show_toolbar;
+			entry["preserveAspect"] = state.preserve_aspect;
+			entry["acceptsInput"] = state.accepts_input;
+			entry["showStats"] = state.show_stats;
+			entry["showOverlays"] = state.show_overlays;
+			if (const EditorViewportPresentation* presentation = m_viewportService.get_presentation(state.id))
+			{
+				entry["kind"] = make_viewport_kind_name(presentation->kind);
+			}
+			root["viewports"].push_back(std::move(entry));
+		}
+
+		std::ofstream output(state_path, std::ios::out | std::ios::trunc);
+		if (!output.is_open())
+		{
+			return;
+		}
+
+		output << root.dump(2);
+	}
+
+	void EditorApplication::apply_viewport_panel_open_state()
+	{
 		if (m_viewportPanel)
 		{
-			ImGui::DockBuilderDockWindow(m_viewportPanel->get_title().c_str(), center_id);
-		}
-		if (m_consolePanel)
-		{
-			ImGui::DockBuilderDockWindow(m_consolePanel->get_title().c_str(), bottom_id);
-		}
-		if (m_assetBrowserPanel)
-		{
-			ImGui::DockBuilderDockWindow(m_assetBrowserPanel->get_title().c_str(), asset_id);
+			if (const EditorViewportPresentation* presentation = m_viewportService.get_presentation("scene"))
+			{
+				m_viewportPanel->set_open(presentation->panel_open);
+			}
 		}
 
-		ImGui::DockBuilderFinish(dockspace_id);
-		m_dockLayoutInitialized = true;
-
-		if (should_trace_gui_frame(m_guiFrameIndex))
+		if (m_gameViewportPanel)
 		{
-			HLogInfo("EditorApplication::build_default_layout frame {} end for dockspace {}.", m_guiFrameIndex, dockspace_id);
+			if (const EditorViewportPresentation* presentation = m_viewportService.get_presentation("game"))
+			{
+				m_gameViewportPanel->set_open(presentation->panel_open);
+			}
 		}
 	}
 }

@@ -1,5 +1,5 @@
 #include "Core/EditorPanel.h"
-#include "imgui.h"
+#include "Function/Gui/UIContext.h"
 #include <utility>
 
 namespace AshEditor
@@ -50,16 +50,27 @@ namespace AshEditor
 		(void)context;
 	}
 
-	bool EditorPanel::begin_panel_window()
+bool EditorPanel::begin_panel_window(EditorContext& context, AshEngine::UIWindowFlags flags)
+{
+	m_windowActiveThisFrame = false;
+	if (!context.ui_context || !context.ui_context->is_frame_active())
 	{
-		bool open = m_open;
-		const bool visible = ImGui::Begin(m_title.c_str(), &open);
-		m_open = open;
-		return visible;
-	}
+			return false;
+		}
 
-	void EditorPanel::end_panel_window()
+	bool open = m_open;
+	const bool visible = context.ui_context->begin_window(m_title.c_str(), &open, flags);
+	m_open = open;
+	m_windowActiveThisFrame = true;
+	return visible;
+}
+
+	void EditorPanel::end_panel_window(EditorContext& context)
 	{
-		ImGui::End();
+	if (m_windowActiveThisFrame && context.ui_context)
+	{
+		context.ui_context->end_window();
 	}
+	m_windowActiveThisFrame = false;
+}
 }

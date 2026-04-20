@@ -13,6 +13,7 @@ namespace AshEditor
 		bool execute(std::unique_ptr<EditorCommand> command, EditorContext& context);
 		bool undo(EditorContext& context);
 		bool redo(EditorContext& context);
+		void clear();
 
 		bool can_undo() const;
 		bool can_redo() const;

@@ -39,6 +39,11 @@ namespace AshEditor
 		return m_database.find_asset_by_id(id);
 	}
 
+	const AshEngine::AssetInfo* AssetDatabaseService::find_by_path(const std::filesystem::path& path) const
+	{
+		return m_database.find_asset_by_path(path);
+	}
+
 	AshEngine::AssetLoadState AssetDatabaseService::get_load_state(uint64_t id) const
 	{
 		return m_database.get_asset_load_state(id);
@@ -52,6 +57,21 @@ namespace AshEditor
 	std::string AssetDatabaseService::get_asset_last_error(uint64_t id) const
 	{
 		return m_database.get_asset_last_error(id);
+	}
+
+	std::filesystem::path AssetDatabaseService::resolve_asset_path(const std::filesystem::path& relative_path) const
+	{
+		if (relative_path.empty())
+		{
+			return {};
+		}
+
+		return relative_path.is_absolute() ? relative_path : (m_assetRoot / relative_path);
+	}
+
+	bool AssetDatabaseService::load_text_by_id(uint64_t id, std::string& out_text)
+	{
+		return m_database.load_text_by_id(id, out_text);
 	}
 
 	const char* AssetDatabaseService::get_type_label(AshEngine::AssetType type)

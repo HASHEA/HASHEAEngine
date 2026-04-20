@@ -1,9 +1,12 @@
 #pragma once
 #include <cstdint>
+#include <memory>
+#include <string>
 
 namespace AshEngine
 {
 	class UIContext;
+	class RenderTarget;
 }
 
 namespace AshEditor
@@ -11,6 +14,7 @@ namespace AshEditor
 	class AssetDatabaseService;
 	class CommandService;
 	class EditorSettingsService;
+	class EditorViewportService;
 	class SelectionService;
 	class SceneService;
 	class UndoRedoService;
@@ -25,6 +29,14 @@ namespace AshEditor
 		bool hovered = false;
 	};
 
+	struct EditorViewportInstance
+	{
+		std::string id{};
+		std::string display_name{};
+		EditorViewportState state{};
+		std::shared_ptr<AshEngine::RenderTarget> render_target = nullptr;
+	};
+
 	struct EditorContext
 	{
 		SelectionService* selection_service = nullptr;
@@ -33,6 +45,7 @@ namespace AshEditor
 		CommandService* command_service = nullptr;
 		UndoRedoService* undo_redo_service = nullptr;
 		EditorSettingsService* settings_service = nullptr;
+		EditorViewportService* viewport_service = nullptr;
 		AshEngine::UIContext* ui_context = nullptr;
 		EditorViewportState viewport{};
 		bool gui_renderer_ready = false;

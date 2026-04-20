@@ -22,11 +22,10 @@ namespace AshEditor
 	private:
 		void bootstrap_editor();
 		void shutdown_editor();
-		void ensure_viewport_render_target();
+		void ensure_viewport_render_targets();
 
 	private:
 		std::unique_ptr<EditorApplication> m_editorApplication = nullptr;
-		std::shared_ptr<AshEngine::RenderTarget> m_viewportRenderTarget = nullptr;
 		CodexLogoDemoRenderer m_codexLogoDemo;
 		uint32_t m_updateFrameIndex = 0;
 		uint32_t m_renderFrameIndex = 0;

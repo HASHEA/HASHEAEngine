@@ -1,3 +1,6 @@
+// Legacy editor-side ImGui style setup.
+// The active runtime editor goes through engine UIContext, so this file remains reference-only
+// until style customization is exposed by UIContext and re-integrated on that path.
 #include "ImGui/EditorStyle.h"
 #include "imgui.h"
 

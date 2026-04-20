@@ -11,6 +11,6 @@ namespace AshEditor
 
 		virtual const char* get_label() const = 0;
 		virtual bool execute(EditorContext& context) = 0;
-		virtual void undo(EditorContext& context) = 0;
+		virtual bool undo(EditorContext& context) = 0;
 	};
 }

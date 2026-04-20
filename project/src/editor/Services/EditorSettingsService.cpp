@@ -62,6 +62,12 @@ namespace AshEditor
 		m_settings.assets_root = root.value("assetsRoot", m_settings.assets_root);
 		m_settings.layout_ini_path = root.value("layoutIniPath", m_settings.layout_ini_path);
 		m_settings.startup_scene_path = root.value("startupScenePath", m_settings.startup_scene_path);
+		m_settings.asset_browser_search_text = root.value("assetBrowserSearchText", m_settings.asset_browser_search_text);
+		m_settings.asset_browser_active_directory = root.value("assetBrowserActiveDirectory", m_settings.asset_browser_active_directory);
+		m_settings.asset_browser_show_details = root.value("assetBrowserShowDetails", m_settings.asset_browser_show_details);
+		m_settings.asset_browser_type_filter = root.value("assetBrowserTypeFilter", m_settings.asset_browser_type_filter);
+		m_settings.console_filter_text = root.value("consoleFilterText", m_settings.console_filter_text);
+		m_settings.console_severity_filter = root.value("consoleSeverityFilter", m_settings.console_severity_filter);
 		return true;
 	}
 
@@ -79,6 +85,12 @@ namespace AshEditor
 		root["assetsRoot"] = m_settings.assets_root;
 		root["layoutIniPath"] = m_settings.layout_ini_path;
 		root["startupScenePath"] = m_settings.startup_scene_path;
+		root["assetBrowserSearchText"] = m_settings.asset_browser_search_text;
+		root["assetBrowserActiveDirectory"] = m_settings.asset_browser_active_directory;
+		root["assetBrowserShowDetails"] = m_settings.asset_browser_show_details;
+		root["assetBrowserTypeFilter"] = m_settings.asset_browser_type_filter;
+		root["consoleFilterText"] = m_settings.console_filter_text;
+		root["consoleSeverityFilter"] = m_settings.console_severity_filter;
 
 		std::ofstream output(m_settingsFilePath, std::ios::out | std::ios::trunc);
 		if (!output.is_open())

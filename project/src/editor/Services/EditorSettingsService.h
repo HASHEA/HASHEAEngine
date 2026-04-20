@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -10,6 +11,12 @@ namespace AshEditor
 		std::string assets_root = "product/assets";
 		std::string layout_ini_path = "product/config/editor/imgui.ini";
 		std::string startup_scene_path = "product/config/editor/Default.scene.json";
+		std::string asset_browser_search_text{};
+		std::string asset_browser_active_directory{};
+		bool asset_browser_show_details = true;
+		int32_t asset_browser_type_filter = 0;
+		std::string console_filter_text{};
+		int32_t console_severity_filter = 0;
 	};
 
 	class EditorSettingsService

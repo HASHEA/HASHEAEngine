@@ -1,4 +1,5 @@
 #include "Services/CommandService.h"
+#include <string_view>
 #include <utility>
 
 namespace AshEditor
@@ -30,6 +31,11 @@ namespace AshEditor
 		return true;
 	}
 
+	bool CommandService::has_action(const std::string& id) const
+	{
+		return find_action(id) != nullptr;
+	}
+
 	const EditorAction* CommandService::find_action(const std::string& id) const
 	{
 		for (const EditorAction& action : m_actions)
@@ -42,8 +48,27 @@ namespace AshEditor
 		return nullptr;
 	}
 
+	std::vector<const EditorAction*> CommandService::collect_actions_with_prefix(std::string_view prefix) const
+	{
+		std::vector<const EditorAction*> actions{};
+		for (const EditorAction& action : m_actions)
+		{
+			if (action.id.compare(0, prefix.size(), prefix.data(), prefix.size()) == 0)
+			{
+				actions.push_back(&action);
+			}
+		}
+		return actions;
+	}
+
 	const std::vector<EditorAction>& CommandService::get_actions() const
 	{
 		return m_actions;
+	}
+
+	std::string_view CommandService::get_action_category(std::string_view id)
+	{
+		const size_t separator = id.find('.');
+		return separator == std::string_view::npos ? id : id.substr(0, separator);
 	}
 }

@@ -18,6 +18,16 @@ namespace AshEditor
 		std::string label{};
 		std::string path{};
 
+		bool operator==(const EditorSelection& other) const
+		{
+			return kind == other.kind && id == other.id && label == other.label && path == other.path;
+		}
+
+		bool operator!=(const EditorSelection& other) const
+		{
+			return !(*this == other);
+		}
+
 		bool is_empty() const
 		{
 			return kind == EditorSelectionKind::None;

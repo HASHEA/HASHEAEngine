@@ -1,3 +1,6 @@
+// Legacy editor-owned ImGui host.
+// Kept only as reference while the runtime editor is hosted by engine UIContext.
+// This file is intentionally excluded from premake to avoid creating a second ImGui context.
 #include "ImGui/EditorImGuiLayer.h"
 #include "ImGui/EditorStyle.h"
 #include "GLFW/glfw3.h"

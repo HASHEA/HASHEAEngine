@@ -1,5 +1,6 @@
 #pragma once
 #include "Core/EditorContext.h"
+#include "Function/Gui/UICommon.h"
 #include <string>
 
 namespace AshEditor
@@ -22,12 +23,13 @@ namespace AshEditor
 		virtual void on_gui(EditorContext& context);
 
 	protected:
-		bool begin_panel_window();
-		void end_panel_window();
+		bool begin_panel_window(EditorContext& context, AshEngine::UIWindowFlags flags = AshEngine::UIWindowFlagBits::None);
+		void end_panel_window(EditorContext& context);
 
 	private:
 		std::string m_id{};
 		std::string m_title{};
 		bool m_open = true;
+		bool m_windowActiveThisFrame = false;
 	};
 }
