@@ -1,9 +1,6 @@
 #include "Panels/ViewportPanel.h"
 #include "Base/hlog.h"
-#include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
-#include "Function/Render/RenderDevice.h"
-#include "Function/Render/Renderer.h"
 #include "Services/EditorViewportService.h"
 #include <utility>
 
@@ -29,18 +26,6 @@ namespace AshEditor
 			static uint32_t s_logged_frames = 0;
 			++s_logged_frames;
 			return s_logged_frames <= 2;
-		}
-
-		bool is_sampling_back_buffer_unsafe(const std::shared_ptr<AshEngine::RenderTarget>& render_target)
-		{
-			AshEngine::Renderer* renderer = AshEngine::Application::get_renderer();
-			if (!renderer || !render_target)
-			{
-				return false;
-			}
-
-			const std::shared_ptr<AshEngine::RenderTarget> back_buffer = renderer->get_back_buffer();
-			return back_buffer && back_buffer.get() == render_target.get();
 		}
 	}
 
@@ -72,18 +57,22 @@ namespace AshEditor
 	void ViewportPanel::on_update(EditorContext& context)
 	{
 		EditorViewportInstance* viewport = resolve_viewport(context);
-		if (viewport && viewport->render_target)
+		if (!viewport)
 		{
-			viewport->state.width = viewport->render_target->get_width();
-			viewport->state.height = viewport->render_target->get_height();
 			return;
 		}
 
-		if (viewport)
+		const EditorViewportRenderState* render_state =
+			context.viewport_service ? context.viewport_service->get_render_state(m_viewportId) : nullptr;
+		if (render_state)
 		{
-			viewport->state.width = 0;
-			viewport->state.height = 0;
+			viewport->state.width = render_state->output_width;
+			viewport->state.height = render_state->output_height;
+			return;
 		}
+
+		viewport->state.width = 0u;
+		viewport->state.height = 0u;
 	}
 
 	void ViewportPanel::draw_toolbar(EditorContext& context, EditorViewportInstance& viewport)
@@ -159,12 +148,13 @@ namespace AshEditor
 			presentation->accepts_input ? "enabled" : "disabled",
 			presentation->show_overlays ? "visible" : "hidden");
 		ui.text(
-			"Allocated RT: %ux%u | Requested: %ux%u | Dirty: %s",
+			"Output: %ux%u | Requested: %ux%u | Surface: %s | PendingSync: %s",
 			viewport.state.width,
 			viewport.state.height,
 			viewport.state.requested_width,
 			viewport.state.requested_height,
-			render_state && render_state->pending_rebuild ? "yes" : "no");
+			viewport.surface.is_valid() ? "ready" : "none",
+			render_state && render_state->pending_sync ? "yes" : "no");
 		if (presentation->show_stats)
 		{
 			ui.text(
@@ -182,8 +172,8 @@ namespace AshEditor
 		if (trace_this_frame)
 		{
 			HLogInfo(
-				"ViewportPanel::on_gui begin. rt={}, ui_ready={}, requested={}x{}.",
-				static_cast<const void*>(viewport ? viewport->render_target.get() : nullptr),
+				"ViewportPanel::on_gui begin. surface={}, ui_ready={}, requested={}x{}.",
+				viewport ? viewport->surface.value : 0u,
 				context.gui_renderer_ready,
 				viewport ? viewport->state.requested_width : 0u,
 				viewport ? viewport->state.requested_height : 0u);
@@ -246,17 +236,7 @@ namespace AshEditor
 			}
 		}
 
-		if (viewport && is_sampling_back_buffer_unsafe(viewport->render_target))
-		{
-			if (trace_this_frame)
-			{
-				HLogWarning("ViewportPanel::on_gui detected unsafe back buffer sampling path.");
-			}
-			ui.text_wrapped("Viewport preview is temporarily disabled on the swapchain back buffer.");
-			ui.text_wrapped("DX12 will crash if the editor samples the same back buffer that the UI overlay pass is writing to.");
-			ui.text_wrapped("The next safe step is wiring a dedicated off-screen viewport render target.");
-		}
-		else if (viewport && viewport->render_target && context.ui_context && available.x > 2.0f && available.y > 2.0f)
+		if (viewport && viewport->surface.is_valid() && context.ui_context && available.x > 2.0f && available.y > 2.0f)
 		{
 			bool preserve_aspect = false;
 			if (const EditorViewportPresentation* presentation =
@@ -264,27 +244,38 @@ namespace AshEditor
 			{
 				preserve_aspect = presentation->preserve_aspect;
 			}
-			if (trace_this_frame)
+			if (viewport->state.width == 0u || viewport->state.height == 0u)
 			{
-				HLogInfo(
-					"ViewportPanel::on_gui sampling render target {} with available size {}x{}.",
-					static_cast<const void*>(viewport->render_target.get()),
-					available.x,
-					available.y);
+				if (trace_this_frame)
+				{
+					HLogWarning("ViewportPanel::on_gui is waiting for a synchronized scene surface.");
+				}
+				ui.text_wrapped("Scene surface is not available yet.");
 			}
-			context.ui_context->draw_render_target_fill_available(viewport->render_target, preserve_aspect);
-			if (trace_this_frame)
+			else
 			{
-				HLogInfo("ViewportPanel::on_gui finished sampling render target.");
+				if (trace_this_frame)
+				{
+					HLogInfo(
+						"ViewportPanel::on_gui drawing scene surface {} with available size {}x{}.",
+						viewport->surface.value,
+						available.x,
+						available.y);
+				}
+				context.ui_context->draw_surface_fill_available(viewport->surface, preserve_aspect);
+				if (trace_this_frame)
+				{
+					HLogInfo("ViewportPanel::on_gui finished drawing scene surface.");
+				}
 			}
 		}
-		else if (!viewport || !viewport->render_target)
+		else if (!viewport || !viewport->surface.is_valid())
 		{
 			if (trace_this_frame)
 			{
-				HLogWarning("ViewportPanel::on_gui has no render target to display.");
+				HLogWarning("ViewportPanel::on_gui has no scene surface to display.");
 			}
-			ui.text_wrapped("Render target is not available yet.");
+			ui.text_wrapped("Scene surface is not available yet.");
 		}
 		else
 		{

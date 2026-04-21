@@ -214,7 +214,9 @@ Windows Debug / Release 下，Engine 同时编入：
 6. 创建 `Swapchain`
 7. 创建 `RenderDevice`
 8. 创建 `Renderer`
-9. 创建并初始化 `UIContext`
+9. 初始化 `SceneRenderer`
+10. 初始化 `ScenePresentationSubsystem`
+11. 创建并初始化 `UIContext`
 
 补充说明：
 
@@ -240,6 +242,9 @@ Windows Debug / Release 下，Engine 同时编入：
 补充说明：
 
 - `UIContext::begin_frame()` 在事件泵阶段启动
+- 未启用 logic thread 时，`ScenePresentationSubsystem` 的 update phase 会在 `_on_update()` 之后执行
+- 启用 logic thread 时，`ScenePresentationSubsystem` 的 update phase 会跟在 `_on_logic_startup()` / `_on_logic_update()` 后执行
+- 默认 `Application::_on_render()` 会按 `begin_frame() -> _on_render_debug() -> scene presentation submit -> _on_gui() -> end_frame()` 的固定顺序运行
 - UI 绘制最终在 `Renderer::end_frame()` 内作为末尾 overlay 提交
 - 窗口最小化时会跳过实际渲染
 - 渲染线程即主线程，负责：
@@ -315,6 +320,7 @@ Windows Debug / Release 下，Engine 同时编入：
   - `_on_logic_startup()`
   - `_on_logic_update()`
   - `_on_logic_shutdown()`
+- scene presentation 的声明更新属于 logic/update 侧；scene-driven draw submit 继续走默认 `_on_render()` 内的固定提交阶段
 
 ### 4.6 输入快照
 
@@ -745,7 +751,7 @@ GpuValidation=true
 - 通用 docking / viewport 原语
 - 窗口 / 子窗口 / 菜单 / tabs / tables / popup
 - wrapped text / 多分量数值编辑 / 颜色编辑 / 稳定 id tree / richer table column 配置
-- RenderTarget 显示
+- RenderTarget / `UISurfaceHandle` 显示
 - 输入捕获查询
 
 它 **不再承载**：
@@ -960,7 +966,7 @@ GpuValidation=true
 - 动画 / skin / material asset 设计
 - scene/world 生命周期规则
 
-### 11.8 Scene 到渲染的下一阶段方向
+### 11.8 Scene 到渲染的当前主路径
 
 当前主干已经具备：
 
@@ -969,7 +975,14 @@ GpuValidation=true
 - 第一阶段线程模型（logic/render/worker）
 - `Renderer` / `RenderDevice` 的高层提交流程
 
-但主干仍缺少“逻辑 Scene 真正转换为渲染提交”的正式桥接层。下一阶段的目标，是补齐一条 UE 风格但范围受控的流水线：
+当前主干已经补齐了“逻辑 Scene 真正转换为 scene-driven 渲染提交”的正式桥接层。当前真实主路径是：
+
+- `Application` 持有 `ScenePresentationSubsystem`
+- 上层通过 `Application::get_scene_presentation()` 声明 `Scene + Camera + Output + 少量 per-view overrides`
+- 子系统内部维护 per-scene `RenderScene` cache、`SceneView` 构建、`VisibleRenderFrame` 构建与 render-thread submit
+- `RenderScene`、`SceneView`、`VisibleRenderFrame`、`SceneRenderer` 继续保留为 Engine 内部细节
+
+当前内部 scene 渲染链仍然由下列类型构成：
 
 - `RenderScene`
 - `SceneProxy`
@@ -978,10 +991,28 @@ GpuValidation=true
 - `VisibleRenderFrame`
 - `SceneRenderer`
 
-当前约定的第一阶段范围为：
+当前公共 scene presentation 入口包括：
+
+- `SceneOutputHandle`
+- `SceneViewBindingHandle`
+- `UISurfaceHandle`
+- `SceneOutputDesc`
+- `SceneCameraSelector`
+- `SceneViewOverrides`
+- `SceneViewBindingDesc`
+
+当前 update / submit 阶段约定为：
+
+- update phase：
+  - 无 logic thread 时，跟在 `_on_update()` 后执行
+  - 有 logic thread 时，跟在 `_on_logic_startup()` / `_on_logic_update()` 后执行
+- submit phase：
+  - 默认 `Application::_on_render()` 内按 `begin_frame() -> _on_render_debug() -> scene presentation submit -> _on_gui() -> end_frame()` 执行
+
+当前第一阶段范围为：
 
 - 只先支持静态 mesh 主链路
-- 默认单 view 路径继续可用，但 render thread 已支持同一帧顺序提交多个 `SceneView`
+- render thread 支持同一帧顺序提交多个 scene view
 - CPU 多线程 frustum culling
 - 逻辑线程构建可见帧数据
 - 渲染线程只消费不可变的 render frame 并提交 draw
@@ -1001,9 +1032,9 @@ GpuValidation=true
 - render thread 不直接读取 `Scene` / `entt`
 - scene 到 render 的跨线程同步，优先通过不可变 frame packet 完成
 - `Renderer` 保持通用 render facade 身份，不直接演化成 world 管理器
-- scene 渲染链路优先通过独立的 `SceneRenderer` 接入
+- scene-driven 上层入口收口到 `ScenePresentationSubsystem`
 
-当前 `SceneRenderer` 的提交约定已经更新为按 view 显式提交：
+当前 `SceneRenderer` 的内部提交约定仍然是按 view 显式提交：
 
 - `VisibleRenderFrame` 只保存 scene 可见性结果和 draw 所需的不可变数据，不再持有 `output_target`
 - render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`
@@ -1024,34 +1055,30 @@ GpuValidation=true
 
 - `viewport` / `scissor` 只约束 draw 的光栅化区域
 - `RenderLoadAction::Clear` 仍然是整 attachment clear，而不是 rect clear
-- 因此多个子视口共享同一输出附件时，如需局部清屏，需要调用方采用 `Load` 加额外 clear pass，或拆分为独立输出目标
+- 因此多个 binding 共享同一输出附件时，第一个 binding 适合 clear，后续 binding 默认应采用 preserve/load 语义
 
-本阶段的详细设计说明，见：
+当前 V1 同步策略为：
 
+- `Scene::get_change_version()` 专用于 render sync，不复用 `mark_clean()`
+- 内部按 `Scene*` 维护 `RenderScene`
+- 当 scene change version 变化或 binding 请求 refresh 时，允许按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 退化同步
+- `build_scene_view_for_camera_entity(...)` 已提供显式 camera entity 入口，`PrimaryCamera` 保留为便捷 fallback
+- `Window` output 不暴露 `UISurfaceHandle`
+- `Offscreen` output 通过 `UISurfaceHandle` 交给 `UIContext` 采样展示
+
+当前上层落地状态为：
+
+- `Sandbox` 主窗口已迁移到 `Window` output + persistent binding，不再手动驱动 `Renderer::begin_frame()` / `SceneRenderer`
+- `Editor` 的 scene/game viewports 已迁移到 engine-owned offscreen outputs + `UISurfaceHandle` 展示，不再直接持有 viewport `RenderTarget`
+- `CodexLogoDemoRenderer` 等 custom / non-scene renderer 继续走 `Renderer` 直接驱动路径
+
+相关设计与接入文档见：
+
+- `docs/ScenePresentationSubsystemGuide.md`
 - `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design.md`
 - `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design-zh.md`
 - `docs/superpowers/specs/2026-04-21-scene-renderer-multi-view-design-zh.md`
-
-需要明确的是：当前这条 explicit `SceneRenderer` 提交链仍然是**过渡阶段实现**，还不是长期上层公共接口。
-
-下一阶段规划中的方向是：
-
-- 在 `Application` 下新增一层通用的 `ScenePresentationSubsystem`
-- 上层只保留：
-  - `Scene`
-  - 组件更新
-  - `Scene + Camera + Output + 少量 per-view overrides` 的声明式 binding
-- `RenderScene`、`SceneView`、`VisibleRenderFrame`、`SceneRenderViewContext`、`SceneRenderer` 继续保留为 Engine 内部 scene-driven 渲染链路细节
-- `Renderer` 保持通用 frame/pass/present facade，不直接演化成 world manager
-
-这条规划的详细提案见：
-
 - `docs/superpowers/specs/2026-04-21-scene-presentation-subsystem-design-zh.md`
-
-在该提案落地前，当前主干事实仍然是：
-
-- `Sandbox` 与 `Editor` 仍会在宿主层面亲自驱动 scene viewport / standard-scene 的提交链
-- 新设计文档描述的是下一阶段目标边界，不应被误读为“当前已经实现”
 
 ### 11.7 Sandbox：Engine 自维护测试工程
 
@@ -1073,9 +1100,9 @@ GpuValidation=true
 - `AssetDatabase` 异步模型加载
 - `Scene::instantiate_model()`
 - 逻辑线程相机更新
-- `SceneView` 重建
-- `RenderScene` 重建 / 可见帧生成
-- render thread 构造 full-target 的 `SceneRenderViewContext`，并通过 `SceneRenderer::render_visible_frame(frame, view_context)` 提交
+- `Sandbox` 声明一个 `Window` output 和一个 persistent scene binding
+- `ScenePresentationSubsystem` 在 update phase 内完成 `RenderScene` / `SceneView` / `VisibleRenderFrame` 准备
+- render thread 在 scene presentation submit phase 内构造 `SceneRenderViewContext` 并提交
 - 最终通过正常 present 路径显示到屏幕
 
 当前 `Sandbox` 的默认人工交互控制为：
@@ -1090,8 +1117,8 @@ GpuValidation=true
 
 - `EngineInitConfig.threading.enable_logic_thread = true`
 - render thread 保持负责 `Renderer` 帧循环
-- logic thread 负责场景加载、自由相机更新、可见帧构建
-- render thread 只消费最新可见帧并提交 draw
+- logic thread 负责场景加载、自由相机更新与 scene presentation declaration/update
+- render thread 只消费 prepared packets 并提交 draw
 - startup 完成后，仍会通过 `ASH_ENQUEUE_RENDER_COMMAND` 向 render thread 回投一条确认消息
 
 当前默认内置的 glTF 样例资产位于：
@@ -1282,5 +1309,6 @@ DX12 支持：
 - Engine 总览：`docs/EngineDeveloperGuide.md`
 - Editor 总览：`docs/EditorDeveloperGuide.md`
 - Engine UI 分层：`docs/EngineUIContext.md`
+- Scene presentation 接入：`docs/ScenePresentationSubsystemGuide.md`
 - Editor UI 提案：`docs/EditorUIFacadeProposal.md`
 - 历史设计问题记录：`docs/CodeReview_DesignDefects_and_Risks.md`

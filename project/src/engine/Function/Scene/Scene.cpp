@@ -13,6 +13,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
+#include <atomic>
 
 namespace AshEngine
 {
@@ -40,9 +41,11 @@ namespace AshEngine
 			std::vector<EntityId> entity_order{};
 			EntityId next_entity_id = 1;
 			bool dirty = false;
+			uint64_t change_version = 0;
 		};
 
 		static constexpr uint32_t k_scene_file_version = 2;
+		static std::atomic<uint64_t> g_scene_change_version_seed{ 1 };
 
 		static SceneEnumValueDesc k_camera_projection_values[] =
 		{
@@ -140,6 +143,17 @@ namespace AshEngine
 			}
 		}
 
+		static auto allocate_scene_change_version() -> uint64_t
+		{
+			return g_scene_change_version_seed.fetch_add(1, std::memory_order_relaxed);
+		}
+
+		static auto mark_scene_storage_modified(SceneStorage& storage) -> void
+		{
+			storage.dirty = true;
+			storage.change_version = allocate_scene_change_version();
+		}
+
 		static auto matrix_to_transform_component(const glm::mat4& matrix) -> TransformComponent
 		{
 			TransformComponent component{};
@@ -187,7 +201,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(handle != entt::null);
 
 			impl->storage.registry.emplace_or_replace<TComponent>(handle, component);
-			impl->storage.dirty = true;
+			mark_scene_storage_modified(impl->storage);
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -199,7 +213,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(handle != entt::null && impl->storage.registry.any_of<TComponent>(handle));
 
 			impl->storage.registry.remove<TComponent>(handle);
-			impl->storage.dirty = true;
+			mark_scene_storage_modified(impl->storage);
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -761,6 +775,7 @@ namespace AshEngine
 	{
 		auto impl = std::make_shared<Impl>();
 		impl->storage.name = name.empty() ? "Untitled Scene" : std::string(name);
+		impl->storage.change_version = allocate_scene_change_version();
 		return Scene(std::move(impl));
 	}
 
@@ -886,6 +901,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(hierarchy_valid);
 
 		scene.m_impl->storage.dirty = false;
+		scene.m_impl->storage.change_version = allocate_scene_change_version();
 		if (out_error)
 		{
 			out_error->clear();
@@ -912,7 +928,7 @@ namespace AshEngine
 			return;
 		}
 		m_impl->storage.name = name.empty() ? "Untitled Scene" : std::string(name);
-		m_impl->storage.dirty = true;
+		mark_scene_storage_modified(m_impl->storage);
 	}
 
 	Entity Scene::create_entity(std::string_view name)
@@ -932,7 +948,7 @@ namespace AshEngine
 		{
 			reparent_entity(entity.get_id(), parent.get_id());
 		}
-		m_impl->storage.dirty = true;
+		mark_scene_storage_modified(m_impl->storage);
 		return entity;
 	}
 
@@ -944,7 +960,7 @@ namespace AshEngine
 		bResult = destroy_entity_recursive(m_impl->storage, id);
 		if (bResult)
 		{
-			m_impl->storage.dirty = true;
+			mark_scene_storage_modified(m_impl->storage);
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -961,7 +977,7 @@ namespace AshEngine
 		{
 			attach_to_parent(m_impl->storage, id, new_parent_id);
 		}
-		m_impl->storage.dirty = true;
+		mark_scene_storage_modified(m_impl->storage);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -1384,6 +1400,11 @@ namespace AshEngine
 	bool Scene::is_dirty() const
 	{
 		return m_impl ? m_impl->storage.dirty : false;
+	}
+
+	uint64_t Scene::get_change_version() const
+	{
+		return m_impl ? m_impl->storage.change_version : 0;
 	}
 
 	void Scene::mark_clean()

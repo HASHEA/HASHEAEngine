@@ -77,8 +77,9 @@ Application::get_swapchain()         // ✗ 不可用
 Application::get_render_device()     // ✗ 不可用
 
 // 以下方法在 Editor 中可用:
-Application::get_window()            // ✓ 可用
-Application::get_renderer()          // ✓ 可用 ← 你的主要渲染入口
+Application::get_window()                 // ✓ 可用
+Application::get_renderer()               // ✓ 可用 ← generic/custom rendering 入口
+Application::get_scene_presentation()     // ✓ 可用 ← scene-driven viewport 声明入口
 ```
 
 ### 构建步骤
@@ -157,36 +158,74 @@ protected:
     // ③ 调试渲染 — Gizmo、辅助线框等
     auto _on_render_debug() -> void override;
 
-    // ④ 主渲染 — 场景渲染流程
+    // ④ 主渲染 — 通常保留基类默认顺序:
+    // begin_frame -> _on_render_debug -> scene presentation submit -> _on_gui -> end_frame
     auto _on_render() -> void override;
 
-    // ⑤ 呈现 — 通常直接调用 renderer->present()
+    // ⑤ 呈现 — 通常直接调用 AshEngine::Application::_present()
     auto _present() -> void override;
 };
 ```
 
-**重要**: `_on_update()` 中务必调用 `AshEngine::Application::_on_update()` 以确保窗口事件被正确处理。
+**重要**:
+
+- `_on_update()` 中务必调用 `AshEngine::Application::_on_update()` 以确保窗口事件被正确处理。
+- 如果你走的是 scene-driven viewport 主路径，`_on_render()` / `_present()` 通常应直接保留基类默认实现。
 
 ---
 
 ## 4. 渲染 API 使用指南
 
-当前 Editor 的 **generic/custom rendering** 主要通过 `Renderer` 类进行操作。
+当前 Editor 有两条渲染路径：
 
-但需要特别说明的是：
-
-- 对于 `CodexLogoDemoRenderer` 这类自定义渲染路径，继续直接使用 `Renderer` 是合理的
-- 对于 scene-driven 3D viewport 主路径，当前主干虽然仍由 Editor 自己编排 scene submission，但这只是过渡状态
-- 下一阶段规划中的方向，是把 scene viewport 渲染收口到 Engine 侧的 `ScenePresentationSubsystem`
-
-这条规划提案见：
-
-- `docs/superpowers/specs/2026-04-21-scene-presentation-subsystem-design-zh.md`
+- scene-driven 3D viewport 主路径：通过 `ScenePresentationSubsystem`
+- generic/custom rendering：继续通过 `Renderer`
 
 因此当前建议是：
 
 - 如果你在做 generic/custom pass、compute、后处理、调试渲染，继续看本章 `Renderer` 用法
-- 如果你在做 scene-driven viewport / game view / 多相机视图，不要继续在 Editor 层扩散对 `RenderScene`、`SceneView`、`SceneRenderer` 的直接依赖；优先按该提案向 Engine 侧提需求
+- 如果你在做 scene-driven viewport / game view / 多相机视图，优先使用 `ScenePresentationSubsystem`
+
+相关接入说明见：
+
+- `docs/ScenePresentationSubsystemGuide.md`
+- `docs/EngineDeveloperGuide.md`
+- `docs/EngineUIContext.md`
+
+### Scene-driven viewport 主路径
+
+当前 `Scene` / `Game` 视口的真实边界是：
+
+- `EditorViewportService` 在 update 阶段维护每个 viewport 的 requested size、panel open、primary viewport 状态
+- service 通过 `Application::get_scene_presentation()` 为每个 viewport 创建或更新一个 `Offscreen` output 和一个 persistent binding
+- `ViewportPanel` 只负责 UI 语义和 surface 展示，不再直接持有 viewport `RenderTarget`
+- `Editor::_on_render()` / `_present()` 保持基类默认实现，Editor 不再自己 `begin_frame()` / `end_frame()` / `SceneRenderer::render_visible_frame(...)`
+
+典型 scene-driven 视口声明如下：
+
+```cpp
+auto* scene_presentation = AshEngine::Application::get_scene_presentation();
+
+AshEngine::SceneOutputDesc output_desc{};
+output_desc.debug_name = "EditorSceneViewport";
+output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
+output_desc.width = requested_width;
+output_desc.height = requested_height;
+
+const AshEngine::SceneOutputHandle output = scene_presentation->create_output(output_desc);
+
+AshEngine::SceneViewBindingDesc binding_desc{};
+binding_desc.debug_name = "EditorSceneViewportPrimaryCamera";
+binding_desc.scene = &active_scene;
+binding_desc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
+binding_desc.output = output;
+binding_desc.enabled = true;
+
+const AshEngine::SceneViewBindingHandle binding = scene_presentation->create_view_binding(binding_desc);
+const AshEngine::UISurfaceHandle surface = scene_presentation->get_ui_surface(output);
+
+ui->draw_surface_fill_available(surface, preserve_aspect);
+```
 
 ### 获取 Renderer
 
@@ -270,6 +309,8 @@ program->apply_render_state([](AshEngine::GraphicsProgramState& state) {
 
 ### 4.4 渲染流程 (一帧)
 
+以下示例适用于 generic/custom rendering 路径，不是 scene-driven viewport 主路径：
+
 ```cpp
 auto Editor::_on_render() -> void
 {
@@ -317,7 +358,8 @@ auto Editor::_on_render() -> void
 
 ### 4.5 关键注意事项
 
-- **每帧必须调用** `begin_frame()` / `end_frame()` / `present()` 且顺序不可打乱
+- **scene-driven viewport 主路径通常不应手动 `begin_frame()` / `end_frame()` / `present()`** — 保留 `Application::_on_render()` / `_present()` 默认流程
+- **generic/custom rendering 需要保持** `begin_frame()` / `end_frame()` / `present()` 对称
 - **Pass 必须显式关闭**: 调用 `pass_ctx.end()` 结束当前 Pass
 - **GraphicsPassContext 不可复制**, 只能移动
 - **Transient RenderTarget**: 临时使用的 RT 应使用 `acquire_transient_render_target()` / `release_transient_render_target()`，避免显存浪费
@@ -472,14 +514,17 @@ registry.emplace<MeshComponent>(entity, mesh_handle);
 - **不要直接调用 `RenderDevice`** — 在 Editor 中它不可见（被 `ASH_ENGINE` 宏保护），应使用 `Renderer`
 - **不要在 `_on_update()` 中执行渲染操作** — 渲染仅在 `_on_render()` 中进行
 - **不要忘记调用基类方法** — `_on_update()` 中必须调用 `Application::_on_update()` 以处理窗口事件
-- **不要忽略 `begin_frame()` 的返回值** — 返回 `false` 意味着帧获取失败（如 swapchain 过期），应跳过本帧
+- **不要在 scene-driven viewport 路径里自己分配 viewport `RenderTarget`** — output/surface 生命周期应由 `ScenePresentationSubsystem` 持有
+- **不要在 scene-driven viewport 路径里自己调 `SceneRenderer::render_visible_frame(...)`** — 这条提交链已经收回 Engine
+- **不要忽略 `begin_frame()` 的返回值** — 这条约束适用于 generic/custom rendering 路径
 - **不要在 `_on_render()` 外创建 transient 资源** — transient RT 的生命周期与当前帧绑定
-- **不要继续在 Editor 层扩大 scene viewport 对 `RenderScene` / `SceneView` / `SceneRenderer` 的直接依赖** — scene-driven 3D 视口的长期方向是收口到 Engine 侧 `ScenePresentationSubsystem`
+- **不要继续在 Editor 层扩大 scene viewport 对 `RenderScene` / `SceneView` / `SceneRenderer` 的直接依赖** — 当前主干已经收口到 Engine 侧 `ScenePresentationSubsystem`
 
 ### 要做
 
 - **资源提前创建，每帧复用** — GPU 资源创建开销大，应在初始化时创建，逐帧更新数据
 - **善用 `shared_ptr` 管理资源生命周期** — Engine 的资源 API 基于智能指针设计
+- **scene-driven viewport 展示请使用 `UISurfaceHandle` + `UIContext::draw_surface_fill_available(...)`**
 - **Shader 路径使用相对于引擎根目录的路径** — 如 `"project/src/editor/Shaders/XXX.hlsl"`
 - **渲染结束后务必调用 `pass_ctx.end()`** — 否则会导致未定义行为
 - **保持 `_on_render()` 中的 begin/end 对称** — `begin_frame` 配 `end_frame`，`begin_pass` 配 `pass_ctx.end()`
@@ -505,6 +550,9 @@ A: HLSL。Engine 内部通过 DXC 编译到 SPIR-V。不支持直接写 GLSL。
 
 **Q: 坐标系是什么？**
 A: 左手坐标系，深度范围 [0, 1]。
+
+**Q: Scene / Game viewport 应该怎么接？**
+A: 通过 `Application::get_scene_presentation()` 声明 `SceneOutputHandle` + `SceneViewBindingHandle`，UI 层只拿 `UISurfaceHandle` 调 `draw_surface_fill_available(...)`。不要自己维护 viewport `RenderTarget` 或直接调 `SceneRenderer`。
 
 **Q: 我想加一个新的渲染 Pass，流程是什么？**
 A: 创建 RenderTarget → 创建 GraphicsProgram → 在 `_on_render()` 中用 `begin_pass()` + `draw()` + `end()` 执行。参考 `CodexLogoDemoRenderer`。

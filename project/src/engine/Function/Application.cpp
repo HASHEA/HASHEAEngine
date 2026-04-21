@@ -109,6 +109,7 @@ namespace AshEngine
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
 		renderer = new Renderer(renderDevice);
 		sceneRenderer.initialize(renderer);
+		scenePresentation.initialize(renderer, &renderAssetManager, &sceneRenderer);
 		uiContext = new UIContext();
 		if (!uiContext->init(window, graphicsContext, renderDevice))
 		{
@@ -129,6 +130,7 @@ namespace AshEngine
 			graphicsContext->wait_idle();
 		}
 		shutdown_threading();
+		scenePresentation.shutdown();
 		sceneRenderer.shutdown();
 		renderAssetManager.shutdown();
 		delete renderer;
@@ -258,6 +260,7 @@ namespace AshEngine
 		if (!logicThreadEnabled)
 		{
 			_on_update();
+			_run_scene_presentation_update_phase();
 		}
 	}
 	auto Application::_render_frame() -> void
@@ -396,10 +399,12 @@ namespace AshEngine
 		{
 			_consume_logic_input_snapshot();
 			_on_logic_startup();
+			_run_scene_presentation_update_phase();
 			while (!_should_logic_exit())
 			{
 				_consume_logic_input_snapshot();
 				_on_logic_update();
+				_run_scene_presentation_update_phase();
 				if (threadingConfig.logic_thread_idle_sleep_ms > 0)
 				{
 					std::this_thread::sleep_for(std::chrono::milliseconds(threadingConfig.logic_thread_idle_sleep_ms));
@@ -548,8 +553,23 @@ namespace AshEngine
 		if (renderer && renderer->begin_frame())
 		{
 			_on_render_debug();
+			_run_scene_presentation_submit_phase();
 			_on_gui();
 			renderer->end_frame();
+		}
+	}
+	auto Application::_run_scene_presentation_update_phase() -> void
+	{
+		if (!scenePresentation.update_presentations())
+		{
+			HLogError("Application scene presentation update phase failed.");
+		}
+	}
+	auto Application::_run_scene_presentation_submit_phase() -> void
+	{
+		if (!scenePresentation.submit_presentations())
+		{
+			HLogError("Application scene presentation submit phase failed.");
 		}
 	}
 	auto Application::_present() -> void

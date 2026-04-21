@@ -26,13 +26,15 @@ Its target is shared tooling and debug UI that may be used by editor code, game-
   - vec and color editing helpers
   - style color/style var helpers
   - cursor/layout helpers
-- Render target presentation:
+- Render target and scene surface presentation:
   - `register_render_target`
   - `unregister_render_target`
   - `get_render_target_texture_id`
   - `image`
+  - `image_surface`
   - `draw_render_target`
   - `draw_render_target_fill_available`
+  - `draw_surface_fill_available`
 - Input capture queries:
   - `wants_capture_mouse`
   - `wants_capture_keyboard`
@@ -80,17 +82,21 @@ What still stays out:
 - Vulkan backend setup in `ImGuiLayer` must match the engine render path.
 - When the Vulkan RHI is using dynamic rendering, `ImGui_ImplVulkan_InitInfo::UseDynamicRendering` and the swapchain color attachment format must be filled explicitly.
 
-## Render Target Path
+## Render Target And Scene Surface Paths
 
-- Higher layers pass `RenderTarget` objects to `UIContext`.
-- `UIContext` forwards them to the internal backend layer.
+- Higher layers may pass `RenderTarget` objects to `UIContext` when they already own a generic/custom render target.
+- For scene-driven viewports, higher layers should pass a `UISurfaceHandle` obtained from `ScenePresentationSubsystem`.
+- `UIContext` resolves a `UISurfaceHandle` back to the current engine-owned offscreen `RenderTarget` internally.
+- `Window` outputs do not expose a valid `UISurfaceHandle`, because swapchain/back-buffer resources are not UI-sampled surfaces.
 - Backend descriptor/SRV registration is owned by the engine.
 - `UITextureHandle` is opaque and should be treated as transient backend data.
 
 ## Current Integration
 
 - `Application` owns one `UIContext`.
+- `Application` also owns one `ScenePresentationSubsystem`.
 - Window text/key/mouse events are forwarded into `UIContext`.
+- `UIContext` resolves scene surfaces through `Application::get_scene_presentation()`.
 - `Renderer::end_frame()` composes UI as the final overlay pass on the back buffer.
 
 ## Typical Usage Pattern
@@ -98,7 +104,8 @@ What still stays out:
 - Open one or more windows for debug or tool workflows.
 - Compose tables, trees, menus, tabs, and images inside those windows.
 - Use the docking/viewport helpers when a tool wants full-window dock hosting without dropping to raw ImGui.
-- Use `draw_render_target_fill_available` for debug previews and tool viewports when a simple fit-to-region behavior is enough.
+- Use `draw_render_target_fill_available` for generic/custom previews when a simple fit-to-region behavior is enough.
+- Use `draw_surface_fill_available` for scene-driven viewports backed by `ScenePresentationSubsystem`.
 
 ## Extension Rule
 

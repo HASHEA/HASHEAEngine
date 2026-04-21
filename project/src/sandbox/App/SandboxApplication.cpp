@@ -2,8 +2,7 @@
 
 #include "Base/hthreading.h"
 #include "Base/hlog.h"
-#include "Function/Render/Renderer.h"
-#include "Function/Render/SceneRenderView.h"
+#include "Function/Render/ScenePresentationSubsystem.h"
 #include <system_error>
 
 namespace AshSandbox
@@ -36,7 +35,7 @@ namespace AshSandbox
 	SandboxApplication::~SandboxApplication()
 	{
 		_log_runtime_summary();
-		m_activeVisibleFrame.reset();
+		_destroy_standard_scene_presentation();
 		m_standardScene.reset();
 	}
 
@@ -109,66 +108,13 @@ namespace AshSandbox
 	auto SandboxApplication::_on_shutdown() -> void
 	{
 		_log_runtime_summary();
-		m_activeVisibleFrame.reset();
+		_destroy_standard_scene_presentation();
 		m_standardScene.reset();
 	}
 
 	auto SandboxApplication::_on_render() -> void
 	{
-		auto* renderer = AshEngine::Application::get_renderer();
-		if (!renderer)
-		{
-			HLogError("Sandbox could not acquire renderer.");
-			m_renderSucceeded = false;
-			request_exit();
-			return;
-		}
-		if (!_finalize_render_assets())
-		{
-			HLogError("Sandbox failed to finalize pending render assets on the render thread.");
-			m_renderSucceeded = false;
-			request_exit();
-			return;
-		}
-		if (!renderer->begin_frame())
-		{
-			HLogError("Sandbox failed to begin renderer frame.");
-			m_renderSucceeded = false;
-			request_exit();
-			return;
-		}
-
-		bool render_succeeded = true;
-		_consume_visible_frame_handoff();
-		const std::shared_ptr<AshEngine::RenderTarget> output_target = renderer->get_back_buffer();
-		if (!output_target)
-		{
-			HLogError("Sandbox could not acquire the renderer back buffer for standard-scene submission.");
-			render_succeeded = false;
-		}
-		else if (m_activeVisibleFrame)
-		{
-			render_succeeded = _submit_standard_scene(output_target);
-		}
-		else if (m_standardScene.get_load_state() == SandboxStandardSceneLoadState::Failed)
-		{
-			HLogError(
-				"Sandbox standard scene failed before any visible frame could be submitted: {}",
-				m_standardScene.get_failure_detail());
-			render_succeeded = false;
-		}
-
-		if (!renderer->end_frame())
-		{
-			HLogError("Sandbox failed to end the renderer frame.");
-			render_succeeded = false;
-		}
-
-		if (!render_succeeded)
-		{
-			m_renderSucceeded = false;
-			request_exit();
-		}
+		AshEngine::Application::_on_render();
 	}
 
 	auto SandboxApplication::_present() -> void
@@ -207,19 +153,18 @@ namespace AshSandbox
 
 	auto SandboxApplication::_start_standard_scene() -> bool
 	{
-		AshEngine::Renderer* renderer = AshEngine::Application::get_renderer();
-		if (renderer == nullptr)
-		{
-			HLogError("Sandbox could not start the standard scene because the renderer is unavailable.");
-			return false;
-		}
-
-		if (!m_standardScene.start(m_assetDatabase, *renderer, get_render_asset_manager()))
+		if (!m_standardScene.start(m_assetDatabase))
 		{
 			const std::string failure_detail = m_standardScene.get_failure_detail();
 			HLogError(
 				"Sandbox failed to start the standard-scene runtime: {}",
 				failure_detail.empty() ? "Unknown error." : failure_detail);
+			return false;
+		}
+
+		if (!_register_standard_scene_presentation())
+		{
+			HLogError("Sandbox failed to register scene presentation bindings for the standard scene.");
 			return false;
 		}
 
@@ -244,51 +189,56 @@ namespace AshSandbox
 		return true;
 	}
 
-	auto SandboxApplication::_finalize_render_assets() -> bool
+	auto SandboxApplication::_register_standard_scene_presentation() -> bool
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(AshEngine::is_in_render_thread());
+		AshEngine::ScenePresentationSubsystem* scene_presentation = AshEngine::Application::get_scene_presentation();
+		ASH_PROCESS_ERROR(scene_presentation != nullptr);
 
-		AshEngine::RenderAssetManager& render_asset_manager = get_render_asset_manager();
-		render_asset_manager.finalize_pending_assets();
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-	}
+		_destroy_standard_scene_presentation();
 
-	auto SandboxApplication::_consume_visible_frame_handoff() -> void
-	{
-		std::shared_ptr<AshEngine::VisibleRenderFrame> pending_visible_frame{};
-		uint64_t pending_version = 0;
-		if (m_standardScene.take_pending_visible_frame(pending_visible_frame, pending_version) && pending_visible_frame != nullptr)
-		{
-			m_activeVisibleFrame = std::move(pending_visible_frame);
-			m_activeVisibleFrameVersion = pending_version;
-		}
-	}
+		AshEngine::SceneOutputDesc output_desc{};
+		output_desc.debug_name = "SandboxMainWindow";
+		output_desc.kind = AshEngine::SceneOutputKind::Window;
+		m_mainSceneOutput = scene_presentation->create_output(output_desc);
+		ASH_PROCESS_ERROR(m_mainSceneOutput.is_valid());
 
-	auto SandboxApplication::_submit_standard_scene(const std::shared_ptr<AshEngine::RenderTarget>& output_target) -> bool
-	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(output_target != nullptr);
-		ASH_PROCESS_ERROR(m_activeVisibleFrame != nullptr);
-
-		AshEngine::SceneRenderViewContext view_context{};
-		view_context.debug_name = "SandboxStandardSceneView";
-		view_context.output_target = output_target;
-		view_context.color_load_action = AshEngine::RenderLoadAction::Clear;
-		view_context.color_clear_value = { 0.025f, 0.03f, 0.05f, 1.0f };
-		view_context.depth_load_action = AshEngine::RenderLoadAction::Clear;
-		view_context.depth_clear_value = { 1.0f, 0u };
-
-		ASH_PROCESS_ERROR(get_scene_renderer().render_visible_frame(*m_activeVisibleFrame, view_context));
-		m_standardScene.note_visible_frame_submitted(m_activeVisibleFrameVersion);
+		AshEngine::SceneViewBindingDesc binding_desc{};
+		binding_desc.debug_name = "SandboxStandardScenePrimaryCamera";
+		binding_desc.scene = m_standardScene.get_scene();
+		binding_desc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
+		binding_desc.output = m_mainSceneOutput;
+		binding_desc.enabled = true;
+		m_mainSceneBinding = scene_presentation->create_view_binding(binding_desc);
+		ASH_PROCESS_ERROR(m_mainSceneBinding.is_valid());
 		ASH_PROCESS_GUARD_END(bResult, false);
 		if (!bResult)
 		{
-			HLogError(
-				"Sandbox failed to submit the current standard-scene visible frame version {}.",
-				m_activeVisibleFrameVersion);
+			_destroy_standard_scene_presentation();
 		}
 		return bResult;
+	}
+
+	auto SandboxApplication::_destroy_standard_scene_presentation() -> void
+	{
+		AshEngine::ScenePresentationSubsystem* scene_presentation = AshEngine::Application::get_scene_presentation();
+		if (!scene_presentation)
+		{
+			m_mainSceneBinding = {};
+			m_mainSceneOutput = {};
+			return;
+		}
+
+		if (m_mainSceneBinding.is_valid())
+		{
+			scene_presentation->destroy_view_binding(m_mainSceneBinding);
+			m_mainSceneBinding = {};
+		}
+		if (m_mainSceneOutput.is_valid())
+		{
+			scene_presentation->destroy_output(m_mainSceneOutput);
+			m_mainSceneOutput = {};
+		}
 	}
 
 	auto SandboxApplication::_log_runtime_summary() -> void
@@ -301,8 +251,8 @@ namespace AshSandbox
 
 		const SandboxStandardSceneSnapshot snapshot = m_standardScene.snapshot();
 		const bool scene_loaded = snapshot.scene.is_valid();
-		const bool visible_frames_built = snapshot.visible_frame.latest_snapshot_version > 0;
-		const bool frames_submitted = snapshot.visible_frame.latest_submitted_version > 0;
+		const bool scene_ready = snapshot.load_state == SandboxStandardSceneLoadState::Ready;
+		const bool presentation_registered = m_mainSceneOutput.is_valid() && m_mainSceneBinding.is_valid();
 		const bool clean_exit =
 			m_startupSucceeded &&
 			m_logicSucceeded &&
@@ -310,13 +260,13 @@ namespace AshSandbox
 			snapshot.load_state != SandboxStandardSceneLoadState::Failed;
 
 		HLogInfo(
-			"Sandbox summary: startup={}, logic={}, render={}, scene_loaded={}, visible_frames_built={}, frames_submitted={}, clean_exit={}, load_state={}, sample='{}', reports='{}', failure='{}'.",
+			"Sandbox summary: startup={}, logic={}, render={}, scene_loaded={}, scene_ready={}, presentation_registered={}, clean_exit={}, load_state={}, sample='{}', reports='{}', failure='{}'.",
 			m_startupSucceeded ? "passed" : "failed",
 			m_logicSucceeded ? "passed" : "failed",
 			m_renderSucceeded ? "passed" : "failed",
 			scene_loaded ? "yes" : "no",
-			visible_frames_built ? "yes" : "no",
-			frames_submitted ? "yes" : "no",
+			scene_ready ? "yes" : "no",
+			presentation_registered ? "yes" : "no",
 			clean_exit ? "yes" : "no",
 			get_standard_scene_load_state_name(snapshot.load_state),
 			snapshot.sample_asset_path.generic_string(),

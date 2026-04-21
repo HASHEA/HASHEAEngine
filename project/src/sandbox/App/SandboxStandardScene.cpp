@@ -60,14 +60,6 @@ namespace AshSandbox
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-		static auto make_visible_frame_copy(
-			const AshEngine::VisibleRenderFrame& source_frame,
-			uint64_t frame_index) -> std::shared_ptr<AshEngine::VisibleRenderFrame>
-		{
-			auto visible_frame = std::make_shared<AshEngine::VisibleRenderFrame>(source_frame);
-			visible_frame->frame_index = frame_index;
-			return visible_frame;
-		}
 	}
 
 	auto SandboxStandardScene::get_canonical_sample_asset_path() -> const std::filesystem::path&
@@ -77,9 +69,7 @@ namespace AshSandbox
 	}
 
 	auto SandboxStandardScene::start(
-		AshEngine::AssetDatabase& asset_database,
-		AshEngine::Renderer& renderer,
-		AshEngine::RenderAssetManager& render_asset_manager) -> bool
+		AshEngine::AssetDatabase& asset_database) -> bool
 	{
 		std::string failure_detail{};
 		const std::filesystem::path& sample_asset_path = get_canonical_sample_asset_path();
@@ -88,11 +78,6 @@ namespace AshSandbox
 		if (!asset_database.is_valid())
 		{
 			failure_detail = "Sandbox standard scene cannot start because the AssetDatabase is invalid.";
-			ASH_PROCESS_ERROR(false);
-		}
-		if (renderer.get_back_buffer() == nullptr)
-		{
-			failure_detail = "Sandbox standard scene cannot start because the renderer back buffer is unavailable.";
 			ASH_PROCESS_ERROR(false);
 		}
 
@@ -116,8 +101,6 @@ namespace AshSandbox
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_asset_database = &asset_database;
-			m_renderer = &renderer;
-			m_render_asset_manager = &render_asset_manager;
 			m_model_future = std::move(model_future);
 			m_snapshot = {};
 			m_snapshot.load_state = SandboxStandardSceneLoadState::LoadingModel;
@@ -147,8 +130,6 @@ namespace AshSandbox
 		m_snapshot = {};
 		m_snapshot.sample_asset_path = get_canonical_sample_asset_path();
 		m_asset_database = nullptr;
-		m_renderer = nullptr;
-		m_render_asset_manager = nullptr;
 		m_model_future = {};
 		m_free_camera_controller.reset();
 		m_has_logic_tick_time = false;
@@ -159,22 +140,16 @@ namespace AshSandbox
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
 		AshEngine::AssetDatabase* asset_database = nullptr;
-		AshEngine::Renderer* renderer = nullptr;
-		AshEngine::RenderAssetManager* render_asset_manager = nullptr;
 		std::shared_future<std::shared_ptr<const AshEngine::Model>> model_future{};
 		SandboxStandardSceneLoadState load_state = SandboxStandardSceneLoadState::Idle;
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			asset_database = m_asset_database;
-			renderer = m_renderer;
-			render_asset_manager = m_render_asset_manager;
 			model_future = m_model_future;
 			load_state = m_snapshot.load_state;
 		}
 
 		ASH_PROCESS_ERROR(asset_database != nullptr);
-		ASH_PROCESS_ERROR(renderer != nullptr);
-		ASH_PROCESS_ERROR(render_asset_manager != nullptr);
 
 		if (load_state == SandboxStandardSceneLoadState::Failed)
 		{
@@ -223,7 +198,7 @@ namespace AshSandbox
 
 			SandboxStandardSceneSnapshot ready_snapshot{};
 			std::string build_error{};
-			if (!_build_runtime_snapshot(model, frame_index, ready_snapshot, build_error))
+			if (!_build_runtime_snapshot(model, ready_snapshot, build_error))
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
 				_set_failure_locked(build_error.empty() ? "Failed to build Sandbox standard scene runtime state." : std::move(build_error));
@@ -231,10 +206,6 @@ namespace AshSandbox
 			}
 
 			uint32_t entity_count = ready_snapshot.scene.get_entity_count();
-			size_t visible_draw_count =
-				ready_snapshot.visible_frame.latest_snapshot
-				? ready_snapshot.visible_frame.latest_snapshot->static_mesh_draws.size()
-				: 0u;
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
 				m_snapshot = std::move(ready_snapshot);
@@ -245,10 +216,10 @@ namespace AshSandbox
 			}
 
 			HLogInfo(
-				"Sandbox standard scene is ready: sample='{}', entities={}, visible_draws={}.",
+				"Sandbox standard scene is ready: sample='{}', entities={}, camera_entity={}.",
 				get_canonical_sample_asset_path().generic_string(),
 				entity_count,
-				visible_draw_count);
+				m_free_camera_controller.get_camera_entity_id());
 
 			break;
 		}
@@ -274,17 +245,10 @@ namespace AshSandbox
 				_set_failure_locked(build_error.empty() ? "Failed to update the Sandbox standard scene free camera." : std::move(build_error));
 				ASH_PROCESS_ERROR(false);
 			}
-			if (!_rebuild_visible_frame(working_snapshot, frame_index, build_error))
-			{
-				std::scoped_lock<std::mutex> lock(m_mutex);
-				_set_failure_locked(build_error.empty() ? "Failed to rebuild Sandbox standard scene visible frame." : std::move(build_error));
-				ASH_PROCESS_ERROR(false);
-			}
 
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
-				m_snapshot.latest_scene_view = working_snapshot.latest_scene_view;
-				m_snapshot.visible_frame = std::move(working_snapshot.visible_frame);
+				m_snapshot = std::move(working_snapshot);
 			}
 		}
 
@@ -298,33 +262,6 @@ namespace AshSandbox
 			}
 		}
 		return bResult;
-	}
-
-	auto SandboxStandardScene::take_pending_visible_frame(
-		std::shared_ptr<AshEngine::VisibleRenderFrame>& out_visible_frame,
-		uint64_t& out_version) -> bool
-	{
-		out_visible_frame.reset();
-		out_version = 0;
-
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		if (!m_snapshot.visible_frame.pending_handoff)
-		{
-			return false;
-		}
-
-		out_visible_frame = m_snapshot.visible_frame.pending_handoff;
-		out_version = m_snapshot.visible_frame.latest_snapshot_version;
-		m_snapshot.visible_frame.pending_handoff.reset();
-		m_snapshot.visible_frame.latest_handoff_version = out_version;
-		return true;
-	}
-
-	auto SandboxStandardScene::note_visible_frame_submitted(uint64_t version) -> void
-	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		m_snapshot.visible_frame.latest_submitted_version =
-			std::max(m_snapshot.visible_frame.latest_submitted_version, version);
 	}
 
 	auto SandboxStandardScene::snapshot() const -> SandboxStandardSceneSnapshot
@@ -350,15 +287,23 @@ namespace AshSandbox
 		return get_load_state() == SandboxStandardSceneLoadState::Ready;
 	}
 
+	auto SandboxStandardScene::get_scene() -> AshEngine::Scene*
+	{
+		return &m_snapshot.scene;
+	}
+
+	auto SandboxStandardScene::get_scene() const -> const AshEngine::Scene*
+	{
+		return &m_snapshot.scene;
+	}
+
 	auto SandboxStandardScene::_build_runtime_snapshot(
 		const std::shared_ptr<const AshEngine::Model>& model,
-		uint64_t frame_index,
 		SandboxStandardSceneSnapshot& out_snapshot,
 		std::string& out_error) -> bool
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(model && model->is_valid());
-		ASH_PROCESS_ERROR(m_render_asset_manager != nullptr);
 		ASH_PROCESS_ERROR(m_asset_database != nullptr);
 
 		out_snapshot = {};
@@ -382,12 +327,6 @@ namespace AshSandbox
 			out_snapshot.primary_camera_entity_id,
 			out_snapshot.recommended_camera_move_speed,
 			out_error));
-		if (!out_snapshot.render_scene.rebuild_from_scene(out_snapshot.scene, *m_render_asset_manager))
-		{
-			out_error = "Failed to rebuild RenderScene from the Sandbox standard scene.";
-			ASH_PROCESS_ERROR(false);
-		}
-		ASH_PROCESS_ERROR(_rebuild_visible_frame(out_snapshot, frame_index, out_error));
 		out_snapshot.load_state = SandboxStandardSceneLoadState::Ready;
 		out_snapshot.failure_detail.clear();
 		out_error.clear();
@@ -484,48 +423,6 @@ namespace AshSandbox
 		}
 
 		out_recommended_move_speed = std::clamp(radius * 0.2f, 4.0f, 48.0f);
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-	}
-
-	auto SandboxStandardScene::_rebuild_visible_frame(
-		SandboxStandardSceneSnapshot& io_snapshot,
-		uint64_t frame_index,
-		std::string& out_error) -> bool
-	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_renderer != nullptr);
-		ASH_PROCESS_ERROR(io_snapshot.scene.is_valid());
-
-		const std::shared_ptr<AshEngine::RenderTarget> back_buffer = m_renderer->get_back_buffer();
-		if (!back_buffer)
-		{
-			out_error = "Renderer back buffer is unavailable for Sandbox standard scene visibility.";
-			ASH_PROCESS_ERROR(false);
-		}
-
-		AshEngine::SceneViewDesc view_desc{};
-		view_desc.viewport_width = back_buffer->get_width();
-		view_desc.viewport_height = back_buffer->get_height();
-		if (!AshEngine::build_primary_scene_view(io_snapshot.scene, view_desc, io_snapshot.latest_scene_view))
-		{
-			out_error = "Failed to build the primary SceneView for the Sandbox standard scene.";
-			ASH_PROCESS_ERROR(false);
-		}
-
-		AshEngine::VisibleRenderFrame visible_frame{};
-		if (!io_snapshot.render_scene.build_visible_render_frame(
-			frame_index,
-			io_snapshot.latest_scene_view,
-			visible_frame))
-		{
-			out_error = "Failed to build a VisibleRenderFrame for the Sandbox standard scene.";
-			ASH_PROCESS_ERROR(false);
-		}
-
-		io_snapshot.visible_frame.latest_snapshot = make_visible_frame_copy(visible_frame, frame_index);
-		io_snapshot.visible_frame.pending_handoff = io_snapshot.visible_frame.latest_snapshot;
-		++io_snapshot.visible_frame.latest_snapshot_version;
-		out_error.clear();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 

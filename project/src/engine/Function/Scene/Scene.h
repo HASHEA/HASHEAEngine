@@ -139,6 +139,7 @@ namespace AshEngine
 		const std::filesystem::path& get_source_path() const;
 
 		bool is_dirty() const;
+		uint64_t get_change_version() const;
 		void mark_clean();
 
 	private:

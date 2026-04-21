@@ -37,5 +37,10 @@ namespace AshEngine
 		std::vector<SceneView> views{};
 	};
 
+	ASH_API bool build_scene_view_for_camera_entity(
+		const Scene& scene,
+		EntityId camera_entity_id,
+		const SceneViewDesc& desc,
+		SceneView& out_view);
 	ASH_API bool build_primary_scene_view(const Scene& scene, const SceneViewDesc& desc, SceneView& out_view);
 }

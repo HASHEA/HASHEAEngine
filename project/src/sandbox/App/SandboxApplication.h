@@ -4,7 +4,6 @@
 #include "Function/Application.h"
 #include "Function/Asset/AssetDatabase.h"
 #include <filesystem>
-#include <memory>
 
 namespace AshSandbox
 {
@@ -27,9 +26,8 @@ namespace AshSandbox
 		auto _initialize_paths_and_assets() -> bool;
 		auto _start_standard_scene() -> bool;
 		auto _tick_standard_scene_logic() -> bool;
-		auto _finalize_render_assets() -> bool;
-		auto _consume_visible_frame_handoff() -> void;
-		auto _submit_standard_scene(const std::shared_ptr<AshEngine::RenderTarget>& output_target) -> bool;
+		auto _register_standard_scene_presentation() -> bool;
+		auto _destroy_standard_scene_presentation() -> void;
 		auto _log_runtime_summary() -> void;
 
 	private:
@@ -37,8 +35,8 @@ namespace AshSandbox
 		std::filesystem::path m_reportRoot = "product/test-reports/sandbox";
 		AshEngine::AssetDatabase m_assetDatabase{};
 		SandboxStandardScene m_standardScene{};
-		std::shared_ptr<AshEngine::VisibleRenderFrame> m_activeVisibleFrame = nullptr;
-		uint64_t m_activeVisibleFrameVersion = 0;
+		AshEngine::SceneOutputHandle m_mainSceneOutput{};
+		AshEngine::SceneViewBindingHandle m_mainSceneBinding{};
 		bool m_logicBootstrapExecuted = false;
 		bool m_startupSucceeded = false;
 		bool m_logicSucceeded = true;

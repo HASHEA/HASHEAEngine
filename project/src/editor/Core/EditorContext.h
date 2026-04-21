@@ -1,12 +1,11 @@
 #pragma once
+#include "Function/Render/ScenePresentationHandles.h"
 #include <cstdint>
-#include <memory>
 #include <string>
 
 namespace AshEngine
 {
 	class UIContext;
-	class RenderTarget;
 }
 
 namespace AshEditor
@@ -34,7 +33,9 @@ namespace AshEditor
 		std::string id{};
 		std::string display_name{};
 		EditorViewportState state{};
-		std::shared_ptr<AshEngine::RenderTarget> render_target = nullptr;
+		AshEngine::SceneOutputHandle output{};
+		AshEngine::SceneViewBindingHandle binding{};
+		AshEngine::UISurfaceHandle surface{};
 	};
 
 	struct EditorContext

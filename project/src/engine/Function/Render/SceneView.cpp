@@ -77,9 +77,6 @@ namespace AshEngine
 	bool build_primary_scene_view(const Scene& scene, const SceneViewDesc& desc, SceneView& out_view)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		out_view = {};
-		ASH_PROCESS_ERROR(scene.is_valid());
-
 		Entity camera_entity{};
 		for (const Entity& entity : scene.get_entities_with_component(SceneComponentType::Camera))
 		{
@@ -101,6 +98,24 @@ namespace AshEngine
 			}
 		}
 		ASH_PROCESS_ERROR(camera_entity.is_valid());
+		ASH_PROCESS_ERROR(build_scene_view_for_camera_entity(scene, camera_entity.get_id(), desc, out_view));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool build_scene_view_for_camera_entity(
+		const Scene& scene,
+		EntityId camera_entity_id,
+		const SceneViewDesc& desc,
+		SceneView& out_view)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		out_view = {};
+		ASH_PROCESS_ERROR(scene.is_valid());
+		ASH_PROCESS_ERROR(camera_entity_id != 0);
+
+		const Entity camera_entity = scene.find_entity(camera_entity_id);
+		ASH_PROCESS_ERROR(camera_entity.is_valid());
+		ASH_PROCESS_ERROR(camera_entity.has_camera_component());
 
 		const CameraComponent camera = camera_entity.get_camera_component();
 		const TransformComponent transform = camera_entity.get_transform_component();

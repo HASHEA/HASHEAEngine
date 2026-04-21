@@ -1,4 +1,6 @@
 #include "Services/EditorViewportService.h"
+#include "Base/hlog.h"
+#include "Function/Render/ScenePresentationSubsystem.h"
 #include <algorithm>
 #include <limits>
 
@@ -55,6 +57,30 @@ namespace AshEditor
 
 				return lhs->display_name < rhs->display_name;
 			});
+		}
+
+		uint32_t get_synced_output_extent(uint32_t requested_extent, uint32_t current_extent)
+		{
+			if (requested_extent > 0u)
+			{
+				return clamp_viewport_extent(requested_extent);
+			}
+
+			return current_extent > 0u ? clamp_viewport_extent(current_extent) : 1u;
+		}
+
+		std::string make_output_debug_name(const EditorViewportInstance& viewport)
+		{
+			return viewport.display_name.empty()
+				? "EditorViewportOutput"
+				: viewport.display_name + " Output";
+		}
+
+		std::string make_binding_debug_name(const EditorViewportInstance& viewport)
+		{
+			return viewport.display_name.empty()
+				? "EditorViewportBinding"
+				: viewport.display_name + " Binding";
 		}
 	}
 
@@ -242,74 +268,8 @@ namespace AshEditor
 
 		record->instance.state.requested_width = clamped_width;
 		record->instance.state.requested_height = clamped_height;
-		if (clamped_width > 0u && clamped_height > 0u)
-		{
-			record->render_state.pending_rebuild =
-				record->render_state.allocated_width != clamped_width ||
-				record->render_state.allocated_height != clamped_height;
-		}
+		record->render_state.pending_sync = true;
 		return true;
-	}
-
-	EditorViewportRenderRequest EditorViewportService::get_render_request(
-		const std::string& id,
-		const std::shared_ptr<AshEngine::RenderTarget>& back_buffer) const
-	{
-		EditorViewportRenderRequest request{};
-		const ViewportRecord* record = find_record(id);
-		if (!record)
-		{
-			return request;
-		}
-
-		uint32_t desired_width = record->instance.state.requested_width;
-		uint32_t desired_height = record->instance.state.requested_height;
-		if ((desired_width == 0u || desired_height == 0u) && back_buffer)
-		{
-			desired_width = back_buffer->get_width();
-			desired_height = back_buffer->get_height();
-		}
-
-		request.width = clamp_viewport_extent(desired_width == 0u ? 1u : desired_width);
-		request.height = clamp_viewport_extent(desired_height == 0u ? 1u : desired_height);
-		request.format = back_buffer ? back_buffer->get_format() : AshEngine::RenderTextureFormat::BGRA8_SRGB;
-		request.rebuild_required =
-			record->render_state.pending_rebuild ||
-			record->render_state.allocated_width != request.width ||
-			record->render_state.allocated_height != request.height ||
-			record->render_state.allocated_format != request.format ||
-			!record->instance.render_target;
-		return request;
-	}
-
-	void EditorViewportService::notify_render_target_updated(
-		const std::string& id,
-		const std::shared_ptr<AshEngine::RenderTarget>& render_target)
-	{
-		ViewportRecord* record = find_record(id);
-		if (!record)
-		{
-			return;
-		}
-
-		record->instance.render_target = render_target;
-		if (!render_target)
-		{
-			record->render_state.allocated_width = 0u;
-			record->render_state.allocated_height = 0u;
-			record->render_state.allocated_format = AshEngine::RenderTextureFormat::Unknown;
-			record->render_state.pending_rebuild = true;
-			record->instance.state.width = 0u;
-			record->instance.state.height = 0u;
-			return;
-		}
-
-		record->render_state.allocated_width = render_target->get_width();
-		record->render_state.allocated_height = render_target->get_height();
-		record->render_state.allocated_format = render_target->get_format();
-		record->render_state.pending_rebuild = false;
-		record->instance.state.width = render_target->get_width();
-		record->instance.state.height = render_target->get_height();
 	}
 
 	void EditorViewportService::set_panel_open(const std::string& id, bool open)
@@ -317,7 +277,150 @@ namespace AshEditor
 		ViewportRecord* record = find_record(id);
 		if (record)
 		{
+			if (record->presentation.panel_open != open)
+			{
+				record->render_state.pending_sync = true;
+			}
 			record->presentation.panel_open = open;
+		}
+	}
+
+	bool EditorViewportService::sync_scene_presentations(
+		AshEngine::ScenePresentationSubsystem& scene_presentation,
+		AshEngine::Scene& scene)
+	{
+		bool all_synced = true;
+		for (EditorViewportInstance* viewport : get_viewports())
+		{
+			if (!viewport)
+			{
+				continue;
+			}
+
+			ViewportRecord* record = find_record(viewport->id);
+			if (!record)
+			{
+				continue;
+			}
+
+			const bool has_requested_size =
+				record->instance.state.requested_width > 0u &&
+				record->instance.state.requested_height > 0u;
+			const uint32_t output_width = get_synced_output_extent(
+				record->instance.state.requested_width,
+				record->render_state.output_width);
+			const uint32_t output_height = get_synced_output_extent(
+				record->instance.state.requested_height,
+				record->render_state.output_height);
+
+			const std::string output_debug_name = make_output_debug_name(record->instance);
+			bool output_synced = true;
+			if (!record->instance.output.is_valid())
+			{
+				AshEngine::SceneOutputDesc output_desc{};
+				output_desc.debug_name = output_debug_name.c_str();
+				output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
+				output_desc.width = output_width;
+				output_desc.height = output_height;
+				record->instance.output = scene_presentation.create_output(output_desc);
+				record->render_state.pending_sync = true;
+				output_synced = record->instance.output.is_valid();
+			}
+			else if (
+				record->render_state.output_width != output_width ||
+				record->render_state.output_height != output_height)
+			{
+				AshEngine::SceneOutputDesc output_desc{};
+				output_desc.debug_name = output_debug_name.c_str();
+				output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
+				output_desc.width = output_width;
+				output_desc.height = output_height;
+				output_synced = scene_presentation.update_output(record->instance.output, output_desc);
+			}
+
+			if (!output_synced)
+			{
+				HLogError("Editor viewport '{}' failed to sync output presentation state.", record->instance.id);
+				record->render_state.pending_sync = true;
+				record->instance.surface = {};
+				record->instance.state.width = 0u;
+				record->instance.state.height = 0u;
+				all_synced = false;
+				continue;
+			}
+
+			record->instance.surface = scene_presentation.get_ui_surface(record->instance.output);
+
+			const std::string binding_debug_name = make_binding_debug_name(record->instance);
+			AshEngine::SceneViewBindingDesc binding_desc{};
+			binding_desc.debug_name = binding_debug_name.c_str();
+			binding_desc.scene = &scene;
+			binding_desc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
+			binding_desc.output = record->instance.output;
+			binding_desc.enabled = record->presentation.panel_open && has_requested_size;
+			binding_desc.sort_order = viewport_sort_priority(record->instance);
+
+			bool binding_synced = true;
+			if (!record->instance.binding.is_valid())
+			{
+				record->instance.binding = scene_presentation.create_view_binding(binding_desc);
+				binding_synced = record->instance.binding.is_valid();
+			}
+			else if (record->render_state.pending_sync)
+			{
+				binding_synced = scene_presentation.update_view_binding(record->instance.binding, binding_desc);
+			}
+
+			if (!binding_synced)
+			{
+				HLogError("Editor viewport '{}' failed to sync scene binding state.", record->instance.id);
+				record->render_state.pending_sync = true;
+				record->instance.state.width = 0u;
+				record->instance.state.height = 0u;
+				all_synced = false;
+				continue;
+			}
+
+			record->render_state.output_width = output_width;
+			record->render_state.output_height = output_height;
+			record->render_state.pending_sync = false;
+			record->instance.state.width = has_requested_size ? output_width : 0u;
+			record->instance.state.height = has_requested_size ? output_height : 0u;
+		}
+
+		return all_synced;
+	}
+
+	void EditorViewportService::destroy_scene_presentations(AshEngine::ScenePresentationSubsystem* scene_presentation)
+	{
+		for (auto& entry : m_viewports)
+		{
+			if (!entry.second)
+			{
+				continue;
+			}
+
+			EditorViewportInstance& instance = entry.second->instance;
+			if (scene_presentation)
+			{
+				if (instance.binding.is_valid())
+				{
+					scene_presentation->destroy_view_binding(instance.binding);
+				}
+				if (instance.output.is_valid())
+				{
+					scene_presentation->destroy_output(instance.output);
+				}
+			}
+
+			instance.binding = {};
+			instance.output = {};
+			instance.surface = {};
+			instance.state.width = 0u;
+			instance.state.height = 0u;
+			entry.second->render_state.output_width = 0u;
+			entry.second->render_state.output_height = 0u;
+			entry.second->render_state.pending_sync = true;
 		}
 	}
 
@@ -331,7 +434,7 @@ namespace AshEditor
 			}
 
 			entry.second->presentation = build_default_presentation(entry.second->instance.id);
-			entry.second->render_state.pending_rebuild = true;
+			entry.second->render_state.pending_sync = true;
 		}
 
 		if (find_viewport("scene"))
@@ -388,7 +491,7 @@ namespace AshEditor
 			record->presentation.accepts_input = state.accepts_input;
 			record->presentation.show_stats = state.show_stats;
 			record->presentation.show_overlays = state.show_overlays;
-			record->render_state.pending_rebuild = true;
+			record->render_state.pending_sync = true;
 		}
 
 		set_primary_viewport(primary_viewport_id);

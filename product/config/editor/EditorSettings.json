@@ -1,0 +1,12 @@
+{
+  "assetBrowserActiveDirectory": "models/gltfs/Sponza/glTF",
+  "assetBrowserSearchText": "",
+  "assetBrowserShowDetails": true,
+  "assetBrowserTypeFilter": 0,
+  "assetsRoot": "product/assets",
+  "consoleFilterText": "",
+  "consoleSeverityFilter": 0,
+  "lastScenePath": "",
+  "layoutIniPath": "product/config/editor/imgui.ini",
+  "startupScenePath": "product/config/editor/Default.scene.json"
+}

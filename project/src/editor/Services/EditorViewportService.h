@@ -1,10 +1,15 @@
 #pragma once
 #include "Core/EditorContext.h"
-#include "Function/Render/RenderDevice.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+namespace AshEngine
+{
+	class Scene;
+	class ScenePresentationSubsystem;
+}
 
 namespace AshEditor
 {
@@ -28,18 +33,9 @@ namespace AshEditor
 
 	struct EditorViewportRenderState
 	{
-		uint32_t allocated_width = 0;
-		uint32_t allocated_height = 0;
-		AshEngine::RenderTextureFormat allocated_format = AshEngine::RenderTextureFormat::Unknown;
-		bool pending_rebuild = true;
-	};
-
-	struct EditorViewportRenderRequest
-	{
-		uint32_t width = 1;
-		uint32_t height = 1;
-		AshEngine::RenderTextureFormat format = AshEngine::RenderTextureFormat::Unknown;
-		bool rebuild_required = true;
+		uint32_t output_width = 0;
+		uint32_t output_height = 0;
+		bool pending_sync = true;
 	};
 
 	struct EditorViewportPersistenceState
@@ -82,11 +78,11 @@ namespace AshEditor
 		EditorViewportRenderState* get_render_state(const std::string& id);
 		const EditorViewportRenderState* get_render_state(const std::string& id) const;
 		bool update_requested_size(const std::string& id, uint32_t width, uint32_t height);
-		EditorViewportRenderRequest get_render_request(
-			const std::string& id,
-			const std::shared_ptr<AshEngine::RenderTarget>& back_buffer) const;
-		void notify_render_target_updated(const std::string& id, const std::shared_ptr<AshEngine::RenderTarget>& render_target);
 		void set_panel_open(const std::string& id, bool open);
+		bool sync_scene_presentations(
+			AshEngine::ScenePresentationSubsystem& scene_presentation,
+			AshEngine::Scene& scene);
+		void destroy_scene_presentations(AshEngine::ScenePresentationSubsystem* scene_presentation);
 		void reset_presentations();
 		std::vector<EditorViewportPersistenceState> capture_persistence_state() const;
 		void apply_persistence_state(

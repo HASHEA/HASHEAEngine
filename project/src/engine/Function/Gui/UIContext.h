@@ -171,8 +171,10 @@ namespace AshEngine
 		UITextureHandle get_render_target_texture_id(const std::shared_ptr<RenderTarget>& render_target);
 		void image(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void image(UITextureHandle texture, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
+		void image_surface(UISurfaceHandle surface, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void draw_render_target(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size);
 		void draw_render_target_fill_available(const std::shared_ptr<RenderTarget>& render_target, bool preserve_aspect = false, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
+		void draw_surface_fill_available(UISurfaceHandle surface, bool preserve_aspect = false, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 
 	private:
 		void track_render_target_usage(const std::shared_ptr<RenderTarget>& render_target);

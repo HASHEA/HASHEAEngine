@@ -1293,6 +1293,12 @@ namespace AshEngine
 		ImGui::Image(texture, to_imvec2(size), to_imvec2(uv0), to_imvec2(uv1), to_imvec4(tint), to_imvec4(border));
 	}
 
+	void UIContext::image_surface(UISurfaceHandle surface, const UIVec2& size, const UIVec2& uv0, const UIVec2& uv1, const UIColor& tint, const UIColor& border)
+	{
+		ScenePresentationSubsystem* scene_presentation = Application::get_scene_presentation();
+		image(scene_presentation ? scene_presentation->resolve_surface_render_target(surface) : nullptr, size, uv0, uv1, tint, border);
+	}
+
 	void UIContext::draw_render_target(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size)
 	{
 		image(render_target, size);
@@ -1329,6 +1335,12 @@ namespace AshEngine
 		}
 
 		image(render_target, draw_size, { 0.0f, 0.0f }, { 1.0f, 1.0f }, tint, border);
+	}
+
+	void UIContext::draw_surface_fill_available(UISurfaceHandle surface, bool preserve_aspect, const UIColor& tint, const UIColor& border)
+	{
+		ScenePresentationSubsystem* scene_presentation = Application::get_scene_presentation();
+		draw_render_target_fill_available(scene_presentation ? scene_presentation->resolve_surface_render_target(surface) : nullptr, preserve_aspect, tint, border);
 	}
 
 	void UIContext::track_render_target_usage(const std::shared_ptr<RenderTarget>& render_target)

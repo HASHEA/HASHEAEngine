@@ -6,6 +6,16 @@ namespace AshEngine
 {
 	using UITextureHandle = void*;
 
+	struct UISurfaceHandle
+	{
+		uint32_t value = 0;
+
+		bool is_valid() const
+		{
+			return value != 0;
+		}
+	};
+
 	struct UIVec2
 	{
 		float x = 0.0f;

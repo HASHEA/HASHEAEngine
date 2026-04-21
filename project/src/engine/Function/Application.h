@@ -5,9 +5,8 @@
 #include "Base/hthreading.h"
 #include "Graphics/RHIBackend.h"
 #include "Function/Render/RenderAssetManager.h"
-#include "Function/Render/RenderScene.h"
+#include "Function/Render/ScenePresentationSubsystem.h"
 #include "Function/Render/SceneRenderer.h"
-#include "Function/Render/SceneView.h"
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -74,6 +73,10 @@ public:
 		{
 			return get() ? get()->uiContext : nullptr;
 		}
+		inline static auto get_scene_presentation()
+		{
+			return get() ? &get()->scenePresentation : nullptr;
+		}
 		inline static auto& get_input()
 		{
 			return get()->_get_thread_input_state();
@@ -125,6 +128,8 @@ public:
 		auto _publish_logic_input_snapshot() -> void;
 		auto _consume_logic_input_snapshot() -> void;
 		auto _get_thread_input_state() -> InputState&;
+		auto _run_scene_presentation_update_phase() -> void;
+		auto _run_scene_presentation_submit_phase() -> void;
 		virtual auto _on_startup() -> void;
 		virtual auto _on_shutdown() -> void;
 		virtual auto _on_update() -> void;
@@ -147,6 +152,7 @@ public:
 		RHI::Backend			activeBackend			= RHI::Backend::Default;
 		RenderAssetManager		renderAssetManager{};
 		SceneRenderer			sceneRenderer{};
+		ScenePresentationSubsystem scenePresentation{};
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
 		InputState				logicInputState{};
