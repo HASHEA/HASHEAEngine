@@ -11,6 +11,8 @@ namespace AshEditor
 		void set_asset_root(std::filesystem::path asset_root);
 		bool refresh();
 
+		AshEngine::AssetDatabase& get_database();
+		const AshEngine::AssetDatabase& get_database() const;
 		const std::filesystem::path& get_asset_root() const;
 		const std::vector<AshEngine::AssetInfo>& get_items() const;
 		const AshEngine::AssetInfo* find_by_id(uint64_t id) const;

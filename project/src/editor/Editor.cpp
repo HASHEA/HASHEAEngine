@@ -4,11 +4,14 @@
 #include "Function/Application.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/Renderer.h"
+#include <array>
 
 namespace AshEditor
 {
 	namespace
 	{
+		constexpr std::array<float, 4> k_editor_viewport_clear_color{ 0.025f, 0.03f, 0.05f, 1.0f };
+
 		bool should_trace_editor_frame(uint32_t frame_index)
 		{
 			return frame_index <= 2;
@@ -34,7 +37,12 @@ namespace AshEditor
 			desc.unordered_access = false;
 			desc.name = viewport.display_name.empty() ? "EditorViewportRenderTarget" : viewport.display_name.c_str();
 			desc.use_optimized_clear_value = true;
-			desc.optimized_clear_color = { 0.02f, 0.04f, 0.07f, 1.0f };
+			desc.optimized_clear_color = {
+				k_editor_viewport_clear_color[0],
+				k_editor_viewport_clear_color[1],
+				k_editor_viewport_clear_color[2],
+				k_editor_viewport_clear_color[3]
+			};
 			std::shared_ptr<AshEngine::RenderTarget> render_target = renderer.create_render_target(desc);
 
 			if (!render_target)
@@ -70,7 +78,6 @@ namespace AshEditor
 	Editor::~Editor()
 	{
 		shutdown_editor();
-		m_codexLogoDemo.shutdown();
 	}
 
 	void Editor::bootstrap_editor()
@@ -114,6 +121,136 @@ namespace AshEditor
 			}
 
 			ensure_viewport_render_target(*renderer, viewport_service, *viewport, back_buffer);
+		}
+	}
+
+	void Editor::sync_render_asset_manager(AshEngine::Renderer& renderer)
+	{
+		if (!m_editorApplication)
+		{
+			return;
+		}
+
+		AshEngine::AssetDatabase& asset_database = m_editorApplication->get_asset_database_service().get_database();
+		get_render_asset_manager().initialize(&asset_database, &renderer);
+	}
+
+	bool Editor::clear_viewport_render_target(
+		AshEngine::Renderer& renderer,
+		const std::shared_ptr<AshEngine::RenderTarget>& render_target,
+		const char* debug_label)
+	{
+		if (!render_target)
+		{
+			return false;
+		}
+
+		AshEngine::PassDesc pass_desc{};
+		pass_desc.name = debug_label;
+		pass_desc.color_attachments.push_back({
+			render_target,
+			AshEngine::RenderLoadAction::Clear,
+			{ k_editor_viewport_clear_color[0], k_editor_viewport_clear_color[1], k_editor_viewport_clear_color[2], k_editor_viewport_clear_color[3] }
+		});
+
+		AshEngine::Renderer::GraphicsPassContext pass_context{};
+		if (!renderer.begin_pass(pass_desc, pass_context))
+		{
+			return false;
+		}
+
+		pass_context.end();
+		return true;
+	}
+
+	void Editor::render_scene_viewports(AshEngine::Renderer& renderer)
+	{
+		if (!m_editorApplication)
+		{
+			return;
+		}
+
+		sync_render_asset_manager(renderer);
+
+		AshEngine::Scene& active_scene = m_editorApplication->get_scene_service().get_active_scene();
+		EditorViewportService& viewport_service = m_editorApplication->get_viewport_service();
+		const std::vector<EditorViewportInstance*> viewports = viewport_service.get_viewports();
+
+		if (!active_scene.is_valid())
+		{
+			for (EditorViewportInstance* viewport : viewports)
+			{
+				if (viewport && viewport->render_target)
+				{
+					clear_viewport_render_target(renderer, viewport->render_target, "EditorViewportInvalidSceneClear");
+				}
+			}
+			return;
+		}
+
+		if (!m_editorRenderScene.rebuild_from_scene(active_scene, get_render_asset_manager()))
+		{
+			HLogError("Editor failed to rebuild RenderScene from the active scene '{}'.", active_scene.get_name());
+			for (EditorViewportInstance* viewport : viewports)
+			{
+				if (viewport && viewport->render_target)
+				{
+					clear_viewport_render_target(renderer, viewport->render_target, "EditorViewportSceneRebuildFailedClear");
+				}
+			}
+			return;
+		}
+
+		get_render_asset_manager().finalize_pending_assets();
+
+		for (EditorViewportInstance* viewport : viewports)
+		{
+			if (!viewport || !viewport->render_target)
+			{
+				continue;
+			}
+
+			const EditorViewportPresentation* presentation = viewport_service.get_presentation(viewport->id);
+			if (presentation && !presentation->panel_open)
+			{
+				continue;
+			}
+
+			AshEngine::SceneViewDesc view_desc{};
+			view_desc.viewport_width = viewport->render_target->get_width();
+			view_desc.viewport_height = viewport->render_target->get_height();
+
+			AshEngine::SceneView scene_view{};
+			if (!AshEngine::build_primary_scene_view(active_scene, view_desc, scene_view))
+			{
+				HLogWarning(
+					"Editor viewport '{}' could not build a SceneView from scene '{}'. Falling back to clear-only output.",
+					viewport->id,
+					active_scene.get_name());
+				clear_viewport_render_target(renderer, viewport->render_target, "EditorViewportMissingCameraClear");
+				continue;
+			}
+
+			AshEngine::VisibleRenderFrame visible_frame{};
+			if (!m_editorRenderScene.build_visible_render_frame(
+				m_renderFrameIndex,
+				scene_view,
+				viewport->render_target,
+				visible_frame))
+			{
+				HLogError(
+					"Editor viewport '{}' failed to build a VisibleRenderFrame for scene '{}'.",
+					viewport->id,
+					active_scene.get_name());
+				clear_viewport_render_target(renderer, viewport->render_target, "EditorViewportBuildVisibleFrameFailedClear");
+				continue;
+			}
+
+			if (!get_scene_renderer().render_visible_frame(visible_frame))
+			{
+				HLogError("Editor viewport '{}' failed to submit the SceneRenderer path.", viewport->id);
+				break;
+			}
 		}
 	}
 
@@ -194,16 +331,7 @@ namespace AshEditor
 		}
 
 		EditorViewportInstance* primary_viewport = m_editorApplication ? m_editorApplication->get_primary_viewport() : nullptr;
-		if (m_editorApplication)
-		{
-			for (EditorViewportInstance* viewport : m_editorApplication->get_viewport_service().get_viewports())
-			{
-				if (viewport && viewport->render_target && !m_codexLogoDemo.render(viewport->render_target))
-				{
-					HLogError("Editor frame render path failed for viewport '{}'.", viewport->id);
-				}
-			}
-		}
+		render_scene_viewports(*renderer);
 		if (should_trace_editor_frame(m_renderFrameIndex))
 		{
 			HLogInfo(

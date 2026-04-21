@@ -24,6 +24,16 @@ namespace AshEditor
 		return m_database.refresh();
 	}
 
+	AshEngine::AssetDatabase& AssetDatabaseService::get_database()
+	{
+		return m_database;
+	}
+
+	const AshEngine::AssetDatabase& AssetDatabaseService::get_database() const
+	{
+		return m_database;
+	}
+
 	const std::filesystem::path& AssetDatabaseService::get_asset_root() const
 	{
 		return m_assetRoot;

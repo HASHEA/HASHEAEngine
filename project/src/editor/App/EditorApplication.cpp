@@ -147,6 +147,26 @@ namespace AshEditor
 		return m_viewportService.get_primary_viewport();
 	}
 
+	SceneService& EditorApplication::get_scene_service()
+	{
+		return m_sceneService;
+	}
+
+	const SceneService& EditorApplication::get_scene_service() const
+	{
+		return m_sceneService;
+	}
+
+	AssetDatabaseService& EditorApplication::get_asset_database_service()
+	{
+		return m_assetDatabaseService;
+	}
+
+	const AssetDatabaseService& EditorApplication::get_asset_database_service() const
+	{
+		return m_assetDatabaseService;
+	}
+
 	EditorViewportService& EditorApplication::get_viewport_service()
 	{
 		return m_viewportService;

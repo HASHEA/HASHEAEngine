@@ -34,6 +34,10 @@ namespace AshEditor
 		void draw_gui();
 		EditorViewportInstance* get_primary_viewport();
 		const EditorViewportInstance* get_primary_viewport() const;
+		SceneService& get_scene_service();
+		const SceneService& get_scene_service() const;
+		AssetDatabaseService& get_asset_database_service();
+		const AssetDatabaseService& get_asset_database_service() const;
 		EditorViewportService& get_viewport_service();
 		const EditorViewportService& get_viewport_service() const;
 
