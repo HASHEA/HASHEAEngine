@@ -49,7 +49,7 @@ namespace RHI
 
 		// The layout to use if SRV access is requested. In case of depth/stencil buffers, we don't need to worry about different states for the separate aspects, since that's handled explicitly elsewhere,
 		// and this function is never called for depth-only or stencil-only transitions.
-		const VkImageLayout SRVLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;//bIsDepthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		const VkImageLayout SRVLayout = bIsDepthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 		// States which cannot be combined.
 		switch (RHIAccess)

@@ -108,7 +108,6 @@ namespace AshEngine
 		swapChain->init(&scConfig);
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
 		renderer = new Renderer(renderDevice);
-		renderAssetManager.initialize(nullptr, renderer);
 		sceneRenderer.initialize(renderer);
 		uiContext = new UIContext();
 		if (!uiContext->init(window, graphicsContext, renderDevice))

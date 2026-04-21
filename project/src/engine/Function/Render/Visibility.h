@@ -1,16 +1,17 @@
 #pragma once
 
 #include "Base/hcore.h"
-#include "Function/Render/RenderScene.h"
+#include "Function/Render/SceneProxy.h"
 #include "Function/Render/SceneView.h"
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace AshEngine
 {
 	struct ASH_API VisibilityQuery
 	{
-		const RenderScene* render_scene = nullptr;
+		const std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>>* primitives = nullptr;
 		const SceneView* view = nullptr;
 	};
 

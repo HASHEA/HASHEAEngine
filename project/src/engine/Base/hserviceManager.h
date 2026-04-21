@@ -2,6 +2,7 @@
 #include "hplatform.h"
 #include "hcore.h"
 #include"ds/hhash_map.hpp"
+#include <mutex>
 namespace AshEngine
 {
 	class Allocator;
@@ -22,13 +23,19 @@ namespace AshEngine
 		static ServiceManager* instance;
 		Allocator* allocator = nullptr;
 		FlatHashMap<uint64_t, Service*> services;
+		std::mutex services_mutex;
 	};
 	template<typename T>
 	inline T* ServiceManager::get() {
-		T* service = (T*)get_service(T::k_name);
-		if (!service) {
-			register_service(T::instance(), T::k_name);
+		std::scoped_lock<std::mutex> lock(services_mutex);
+		uint64_t hash_name = hash_calculate(T::k_name);
+		Service* existing = services.get(hash_name);
+		if (existing)
+		{
+			return (T*)existing;
 		}
-		return T::instance();
+		T* service = T::instance();
+		services.insert(hash_name, service);
+		return service;
 	}
 };

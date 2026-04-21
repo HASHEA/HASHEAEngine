@@ -138,7 +138,7 @@ namespace RHI
 		m_allocation = nullptr;
 
 		DX12Context* context = DX12Context::get();
-		if (!context)
+		if (immediate_deletion || isSwapchainTexture || !context)
 		{
 			if (!isSwapchainTexture && deferredAllocation)
 			{

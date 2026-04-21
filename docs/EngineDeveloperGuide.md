@@ -1032,6 +1032,27 @@ GpuValidation=true
 - `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design-zh.md`
 - `docs/superpowers/specs/2026-04-21-scene-renderer-multi-view-design-zh.md`
 
+需要明确的是：当前这条 explicit `SceneRenderer` 提交链仍然是**过渡阶段实现**，还不是长期上层公共接口。
+
+下一阶段规划中的方向是：
+
+- 在 `Application` 下新增一层通用的 `ScenePresentationSubsystem`
+- 上层只保留：
+  - `Scene`
+  - 组件更新
+  - `Scene + Camera + Output + 少量 per-view overrides` 的声明式 binding
+- `RenderScene`、`SceneView`、`VisibleRenderFrame`、`SceneRenderViewContext`、`SceneRenderer` 继续保留为 Engine 内部 scene-driven 渲染链路细节
+- `Renderer` 保持通用 frame/pass/present facade，不直接演化成 world manager
+
+这条规划的详细提案见：
+
+- `docs/superpowers/specs/2026-04-21-scene-presentation-subsystem-design-zh.md`
+
+在该提案落地前，当前主干事实仍然是：
+
+- `Sandbox` 与 `Editor` 仍会在宿主层面亲自驱动 scene viewport / standard-scene 的提交链
+- 新设计文档描述的是下一阶段目标边界，不应被误读为“当前已经实现”
+
 ### 11.7 Sandbox：Engine 自维护测试工程
 
 当前仓库新增了 `project/src/sandbox`，它是一个**独立的 Engine 侧测试可执行项目**，定位是：

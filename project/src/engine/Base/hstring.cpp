@@ -8,11 +8,37 @@ namespace AshEngine
 
 	bool AshEngine::StringView::equals(const StringView& a, const StringView& b)
 	{
-		return false;
+		if (a.length != b.length)
+		{
+			return false;
+		}
+		if (a.length == 0)
+		{
+			return true;
+		}
+		if (a.text == b.text)
+		{
+			return true;
+		}
+		if (a.text == nullptr || b.text == nullptr)
+		{
+			return false;
+		}
+		return memcmp(a.text, b.text, a.length) == 0;
 	}
 
 	void StringView::copy_to(const StringView& a, char* buffer, size_t bufferSize)
-	{	 
+	{
+		if (buffer == nullptr || bufferSize == 0)
+		{
+			return;
+		}
+		const size_t copyLength = a.length < (bufferSize - 1) ? a.length : (bufferSize - 1);
+		if (copyLength > 0 && a.text != nullptr)
+		{
+			memcpy(buffer, a.text, copyLength);
+		}
+		buffer[copyLength] = 0;
 	}	 
 		 
 	auto StringBuffer::init(size_t size, Allocator* allocator) -> void
@@ -28,8 +54,8 @@ namespace AshEngine
 		}
 		m_pAllocator = allocator;
 		m_pData = (char*) Ash_Alloc(m_pAllocator,size + 1,1);
-		memset(m_pData, size,0);
 		H_ASSERT(m_pData);
+		memset(m_pData, 0, size + 1);
 		m_pData[0] = 0;
 		m_uBufferSize = (uint32_t)size;
 		m_uCurrentSize = 0;

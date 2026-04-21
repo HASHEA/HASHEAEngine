@@ -353,16 +353,4 @@ namespace AshEngine
         return m_pData[index];
     }
 
-    template<typename T>
-    Array<T>* NewArray()
-    {
-        bool result;
-        Array<T>* ptr = nullptr;
-        ptr = Ash_New(nullptr, Array<T>);
-        H_ASSERT(ptr);
-        result = ptr->init(&(MemoryService::instance()->get_system_allocator()),0,0);
-        HS_PROCESS_AND_LOG_RESULT(result);
-        H_ASSERT(result == true);
-        return ptr
-    };
 };

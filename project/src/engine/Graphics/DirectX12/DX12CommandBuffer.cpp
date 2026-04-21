@@ -79,16 +79,44 @@ namespace RHI
 					stateBefore = ash_to_d3d12_resource_state(dx12Tex->get_resource_state());
 
 				if (stateBefore == stateAfter) continue;
+
+				const uint32_t mipLevels = dx12Tex->get_mip_maps_count();
+				const uint32_t arraySize = dx12Tex->get_layer_count();
+				const bool wholeResource = barrier.IsWholeResource();
+				const uint32_t mipBase = barrier.uBaseMipLevel;
+				const uint32_t mipCount = barrier.uMipCount == AshSubresourceRange::s_All
+					? (mipLevels - mipBase) : barrier.uMipCount;
+				const uint32_t sliceBase = barrier.uBaseArraySlice;
+				const uint32_t sliceCount = barrier.uArrayCount == AshSubresourceRange::s_All
+					? (arraySize - sliceBase) : barrier.uArrayCount;
+
 				d3dBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
 				d3dBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
 				d3dBarrier.Transition.pResource = resource;
 				d3dBarrier.Transition.StateBefore = stateBefore;
 				d3dBarrier.Transition.StateAfter = stateAfter;
-				d3dBarrier.Transition.Subresource = barrier.IsWholeResource() ?
-					D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES : barrier.uBaseMipLevel;
+
+				if (wholeResource)
+				{
+					d3dBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+					d3dBarriers.push_back(d3dBarrier);
+				}
+				else
+				{
+					// D3D12 Subresource = mipLevel + arraySlice * mipLevels (planeSlice = 0).
+					// AshBarrier may cover a sub-range of mips/slices; emit one barrier per subresource.
+					for (uint32_t slice = 0; slice < sliceCount; ++slice)
+					{
+						for (uint32_t mip = 0; mip < mipCount; ++mip)
+						{
+							d3dBarrier.Transition.Subresource =
+								(mipBase + mip) + (sliceBase + slice) * mipLevels;
+							d3dBarriers.push_back(d3dBarrier);
+						}
+					}
+				}
 
 				dx12Tex->set_resource_state(barrier.eDSTAccess);
-				d3dBarriers.push_back(d3dBarrier);
 			}
 			else if (barrier.eType == AshBarrier::EType::Buffer && barrier.pBuffer)
 			{

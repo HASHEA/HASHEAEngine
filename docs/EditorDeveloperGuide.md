@@ -171,7 +171,22 @@ protected:
 
 ## 4. 渲染 API 使用指南
 
-Editor 通过 `Renderer` 类进行所有渲染操作。
+当前 Editor 的 **generic/custom rendering** 主要通过 `Renderer` 类进行操作。
+
+但需要特别说明的是：
+
+- 对于 `CodexLogoDemoRenderer` 这类自定义渲染路径，继续直接使用 `Renderer` 是合理的
+- 对于 scene-driven 3D viewport 主路径，当前主干虽然仍由 Editor 自己编排 scene submission，但这只是过渡状态
+- 下一阶段规划中的方向，是把 scene viewport 渲染收口到 Engine 侧的 `ScenePresentationSubsystem`
+
+这条规划提案见：
+
+- `docs/superpowers/specs/2026-04-21-scene-presentation-subsystem-design-zh.md`
+
+因此当前建议是：
+
+- 如果你在做 generic/custom pass、compute、后处理、调试渲染，继续看本章 `Renderer` 用法
+- 如果你在做 scene-driven viewport / game view / 多相机视图，不要继续在 Editor 层扩散对 `RenderScene`、`SceneView`、`SceneRenderer` 的直接依赖；优先按该提案向 Engine 侧提需求
 
 ### 获取 Renderer
 
@@ -459,6 +474,7 @@ registry.emplace<MeshComponent>(entity, mesh_handle);
 - **不要忘记调用基类方法** — `_on_update()` 中必须调用 `Application::_on_update()` 以处理窗口事件
 - **不要忽略 `begin_frame()` 的返回值** — 返回 `false` 意味着帧获取失败（如 swapchain 过期），应跳过本帧
 - **不要在 `_on_render()` 外创建 transient 资源** — transient RT 的生命周期与当前帧绑定
+- **不要继续在 Editor 层扩大 scene viewport 对 `RenderScene` / `SceneView` / `SceneRenderer` 的直接依赖** — scene-driven 3D 视口的长期方向是收口到 Engine 侧 `ScenePresentationSubsystem`
 
 ### 要做
 

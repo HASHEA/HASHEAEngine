@@ -61,7 +61,7 @@ namespace RHI
 		m_rootSignature.Reset();
 
 		DX12Context* context = DX12Context::get();
-		if (!context)
+		if (immediate_deletion || !context)
 		{
 			deferredRootSignature.Reset();
 			return;

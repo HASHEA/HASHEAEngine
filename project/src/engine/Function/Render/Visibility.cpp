@@ -34,10 +34,10 @@ namespace AshEngine
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		out_result = {};
-		ASH_PROCESS_ERROR(query.render_scene);
+		ASH_PROCESS_ERROR(query.primitives);
 		ASH_PROCESS_ERROR(query.view && query.view->is_valid);
 
-		for (const std::shared_ptr<StaticMeshPrimitiveProxy>& primitive : query.render_scene->get_static_mesh_primitives())
+		for (const std::shared_ptr<StaticMeshPrimitiveProxy>& primitive : *query.primitives)
 		{
 			if (!primitive || !primitive->is_visible())
 			{
