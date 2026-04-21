@@ -981,7 +981,7 @@ GpuValidation=true
 当前约定的第一阶段范围为：
 
 - 只先支持静态 mesh 主链路
-- 单主相机 view
+- 默认单 view 路径继续可用，但 render thread 已支持同一帧顺序提交多个 `SceneView`
 - CPU 多线程 frustum culling
 - 逻辑线程构建可见帧数据
 - 渲染线程只消费不可变的 render frame 并提交 draw
@@ -1003,10 +1003,34 @@ GpuValidation=true
 - `Renderer` 保持通用 render facade 身份，不直接演化成 world 管理器
 - scene 渲染链路优先通过独立的 `SceneRenderer` 接入
 
+当前 `SceneRenderer` 的提交约定已经更新为按 view 显式提交：
+
+- `VisibleRenderFrame` 只保存 scene 可见性结果和 draw 所需的不可变数据，不再持有 `output_target`
+- render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`
+- `SceneRenderViewContext` 负责描述 per-view 提交状态：
+  - `output_target`
+  - 可选 `depth_target`
+  - 可选 `viewport` / `scissor`
+  - color / depth 的 load action 与 clear value
+- `SceneRenderer` 的主入口为 `SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)`
+
+当前 depth 规则为：
+
+- 如果调用方传入 `depth_target`，则 `SceneRenderer` 直接使用该 depth，生命周期和跨 pass 语义由调用方负责
+- 如果调用方不传入 `depth_target`，则 `SceneRenderer` 会按输出目标尺寸和格式获取内部 scratch depth
+- 这张 scratch depth 只保证本次 scene pass 可用；如果后续 pass 需要继续读取或复用 depth，必须由调用方显式提供 depth target
+
+第一版多 view 仍有一个明确边界：
+
+- `viewport` / `scissor` 只约束 draw 的光栅化区域
+- `RenderLoadAction::Clear` 仍然是整 attachment clear，而不是 rect clear
+- 因此多个子视口共享同一输出附件时，如需局部清屏，需要调用方采用 `Load` 加额外 clear pass，或拆分为独立输出目标
+
 本阶段的详细设计说明，见：
 
 - `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design.md`
 - `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design-zh.md`
+- `docs/superpowers/specs/2026-04-21-scene-renderer-multi-view-design-zh.md`
 
 ### 11.7 Sandbox：Engine 自维护测试工程
 
@@ -1030,7 +1054,7 @@ GpuValidation=true
 - 逻辑线程相机更新
 - `SceneView` 重建
 - `RenderScene` 重建 / 可见帧生成
-- render thread 通过 `SceneRenderer::render_visible_frame()` 提交
+- render thread 构造 full-target 的 `SceneRenderViewContext`，并通过 `SceneRenderer::render_visible_frame(frame, view_context)` 提交
 - 最终通过正常 present 路径显示到屏幕
 
 当前 `Sandbox` 的默认人工交互控制为：

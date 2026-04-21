@@ -2,8 +2,10 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/RenderScene.h"
+#include "Function/Render/SceneRenderView.h"
 #include "Function/Render/Renderer.h"
 #include <memory>
+#include <vector>
 
 namespace AshEngine
 {
@@ -15,7 +17,7 @@ namespace AshEngine
 	public:
 		bool initialize(Renderer* renderer);
 		void shutdown();
-		bool render_visible_frame(const VisibleRenderFrame& frame);
+		bool render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
 
 	private:
 		struct SceneObjectConstants
@@ -26,11 +28,26 @@ namespace AshEngine
 
 	private:
 		bool ensure_graphics_program();
-		bool ensure_depth_target(const std::shared_ptr<RenderTarget>& output_target);
+		bool validate_view_context(const SceneRenderViewContext& view_context) const;
+		std::shared_ptr<RenderTarget> resolve_depth_target(const SceneRenderViewContext& view_context);
+
+	private:
+		struct ScratchDepthKey
+		{
+			uint32_t width = 0;
+			uint32_t height = 0;
+			RenderTextureFormat output_format = RenderTextureFormat::Unknown;
+		};
+
+		struct ScratchDepthEntry
+		{
+			ScratchDepthKey key{};
+			std::shared_ptr<RenderTarget> depth_target = nullptr;
+		};
 
 	private:
 		Renderer* m_renderer = nullptr;
 		std::unique_ptr<GraphicsProgram> m_graphics_program = nullptr;
-		std::shared_ptr<RenderTarget> m_depth_target = nullptr;
+		std::vector<ScratchDepthEntry> m_scratch_depth_targets{};
 	};
 }

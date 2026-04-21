@@ -4,6 +4,7 @@
 #include "Function/Application.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/Renderer.h"
+#include "Function/Render/SceneRenderView.h"
 #include <array>
 
 namespace AshEditor
@@ -235,7 +236,6 @@ namespace AshEditor
 			if (!m_editorRenderScene.build_visible_render_frame(
 				m_renderFrameIndex,
 				scene_view,
-				viewport->render_target,
 				visible_frame))
 			{
 				HLogError(
@@ -246,7 +246,20 @@ namespace AshEditor
 				continue;
 			}
 
-			if (!get_scene_renderer().render_visible_frame(visible_frame))
+			AshEngine::SceneRenderViewContext view_context{};
+			view_context.debug_name = viewport->display_name.empty() ? "EditorViewportSceneView" : viewport->display_name.c_str();
+			view_context.output_target = viewport->render_target;
+			view_context.color_load_action = AshEngine::RenderLoadAction::Clear;
+			view_context.color_clear_value = {
+				k_editor_viewport_clear_color[0],
+				k_editor_viewport_clear_color[1],
+				k_editor_viewport_clear_color[2],
+				k_editor_viewport_clear_color[3]
+			};
+			view_context.depth_load_action = AshEngine::RenderLoadAction::Clear;
+			view_context.depth_clear_value = { 1.0f, 0u };
+
+			if (!get_scene_renderer().render_visible_frame(visible_frame, view_context))
 			{
 				HLogError("Editor viewport '{}' failed to submit the SceneRenderer path.", viewport->id);
 				break;

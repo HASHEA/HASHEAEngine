@@ -4,6 +4,7 @@
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/SceneProxy.h"
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <glm/glm.hpp>
 
@@ -28,7 +29,6 @@ namespace AshEngine
 		glm::mat4 projection{ 1.0f };
 		glm::mat4 view_projection{ 1.0f };
 		glm::vec3 camera_position{ 0.0f };
-		std::shared_ptr<class RenderTarget> output_target = nullptr;
 		std::vector<VisibleStaticMeshDraw> static_mesh_draws{};
 	};
 
@@ -36,19 +36,27 @@ namespace AshEngine
 	{
 	public:
 		RenderScene() = default;
+		RenderScene(const RenderScene& other);
+		RenderScene(RenderScene&& other) noexcept;
+		RenderScene& operator=(const RenderScene& other);
+		RenderScene& operator=(RenderScene&& other) noexcept;
+		~RenderScene() = default;
 
 	public:
 		bool rebuild_from_scene(Scene& scene, RenderAssetManager& render_asset_manager);
 		bool build_visible_render_frame(
 			uint64_t frame_index,
 			const SceneView& view,
-			const std::shared_ptr<RenderTarget>& output_target,
 			VisibleRenderFrame& out_frame) const;
 
-		const std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>>& get_static_mesh_primitives() const;
+		// Returns a snapshot of the current primitive list. Safe to call from any
+		// thread; the caller owns the returned vector and is unaffected by later
+		// rebuilds. Each shared_ptr keeps the proxy alive for the snapshot's lifetime.
+		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> get_static_mesh_primitives_snapshot() const;
 
 	private:
 		uint64_t m_next_primitive_id = 1;
 		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> m_static_mesh_primitives{};
+		mutable std::mutex m_mutex{};
 	};
 }

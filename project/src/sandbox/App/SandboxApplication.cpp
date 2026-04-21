@@ -3,6 +3,7 @@
 #include "Base/hthreading.h"
 #include "Base/hlog.h"
 #include "Function/Render/Renderer.h"
+#include "Function/Render/SceneRenderView.h"
 #include <system_error>
 
 namespace AshSandbox
@@ -270,8 +271,15 @@ namespace AshSandbox
 		ASH_PROCESS_ERROR(output_target != nullptr);
 		ASH_PROCESS_ERROR(m_activeVisibleFrame != nullptr);
 
-		m_activeVisibleFrame->output_target = output_target;
-		ASH_PROCESS_ERROR(get_scene_renderer().render_visible_frame(*m_activeVisibleFrame));
+		AshEngine::SceneRenderViewContext view_context{};
+		view_context.debug_name = "SandboxStandardSceneView";
+		view_context.output_target = output_target;
+		view_context.color_load_action = AshEngine::RenderLoadAction::Clear;
+		view_context.color_clear_value = { 0.025f, 0.03f, 0.05f, 1.0f };
+		view_context.depth_load_action = AshEngine::RenderLoadAction::Clear;
+		view_context.depth_clear_value = { 1.0f, 0u };
+
+		ASH_PROCESS_ERROR(get_scene_renderer().render_visible_frame(*m_activeVisibleFrame, view_context));
 		m_standardScene.note_visible_frame_submitted(m_activeVisibleFrameVersion);
 		ASH_PROCESS_GUARD_END(bResult, false);
 		if (!bResult)

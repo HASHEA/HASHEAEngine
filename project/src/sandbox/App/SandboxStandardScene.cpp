@@ -516,7 +516,6 @@ namespace AshSandbox
 		if (!io_snapshot.render_scene.build_visible_render_frame(
 			frame_index,
 			io_snapshot.latest_scene_view,
-			back_buffer,
 			visible_frame))
 		{
 			out_error = "Failed to build a VisibleRenderFrame for the Sandbox standard scene.";
