@@ -10,6 +10,7 @@
 namespace RHI
 {
 	class GraphicsContext;
+	class TextureView;
 }
 
 namespace AshEngine
@@ -46,6 +47,8 @@ namespace AshEngine
 		bool wants_capture_mouse() const;
 		bool wants_capture_keyboard() const;
 		bool wants_text_input() const;
+		void apply_theme_preset(UIThemePreset preset);
+		UIThemePreset get_theme_preset() const;
 
 	public:
 		void show_demo_window(bool* open = nullptr);
@@ -64,11 +67,13 @@ namespace AshEngine
 		UIDockNodeId dock_builder_split_node(UIDockNodeId node_id, UIDirection direction, float size_ratio_for_node_at_dir, UIDockNodeId* out_id_at_dir = nullptr, UIDockNodeId* out_id_at_opposite_dir = nullptr);
 		void dock_builder_dock_window(const char* window_name, UIDockNodeId node_id);
 		void dock_builder_finish(UIDockNodeId node_id);
+		void ensure_dock_node_tab_bar_visible(UIDockNodeId node_id, bool recursive = false);
 
 		void set_next_window_position(const UIVec2& position, UIConditionFlags cond = UIConditionFlagBits::None, const UIVec2& pivot = {});
 		void set_next_window_size(const UIVec2& size, UIConditionFlags cond = UIConditionFlagBits::None);
 		void set_next_window_viewport(UIViewportId viewport_id);
 		void set_next_window_collapsed(bool collapsed, UIConditionFlags cond = UIConditionFlagBits::None);
+		void set_next_window_force_dock_tab_bar(bool enabled);
 		void set_next_item_width(float width);
 
 		void same_line(float offset_from_start_x = 0.0f, float spacing = -1.0f);
@@ -154,6 +159,8 @@ namespace AshEngine
 
 		bool is_item_hovered() const;
 		bool is_item_clicked(UIMouseButton button = UIMouseButton::Left) const;
+		bool is_item_active() const;
+		bool is_item_deactivated_after_edit() const;
 		bool is_window_focused() const;
 		bool is_window_hovered() const;
 
@@ -169,6 +176,9 @@ namespace AshEngine
 		UITextureHandle register_render_target(const std::shared_ptr<RenderTarget>& render_target);
 		void unregister_render_target(const std::shared_ptr<RenderTarget>& render_target);
 		UITextureHandle get_render_target_texture_id(const std::shared_ptr<RenderTarget>& render_target);
+		UITextureHandle register_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view);
+		void unregister_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view);
+		UITextureHandle get_texture_view_texture_id(const std::shared_ptr<RHI::TextureView>& texture_view);
 		void image(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void image(UITextureHandle texture, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void image_surface(UISurfaceHandle surface, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });

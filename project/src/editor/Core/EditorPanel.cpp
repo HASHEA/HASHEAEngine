@@ -50,27 +50,29 @@ namespace AshEditor
 		(void)context;
 	}
 
-bool EditorPanel::begin_panel_window(EditorContext& context, AshEngine::UIWindowFlags flags)
-{
-	m_windowActiveThisFrame = false;
-	if (!context.ui_context || !context.ui_context->is_frame_active())
+	bool EditorPanel::begin_panel_window(EditorContext& context, AshEngine::UIWindowFlags flags)
 	{
+		m_windowActiveThisFrame = false;
+		if (!context.ui_context || !context.ui_context->is_frame_active())
+		{
 			return false;
 		}
 
-	bool open = m_open;
-	const bool visible = context.ui_context->begin_window(m_title.c_str(), &open, flags);
-	m_open = open;
-	m_windowActiveThisFrame = true;
-	return visible;
-}
+		context.ui_context->set_next_window_force_dock_tab_bar(true);
+
+		bool open = m_open;
+		const bool visible = context.ui_context->begin_window(m_title.c_str(), &open, flags);
+		m_open = open;
+		m_windowActiveThisFrame = true;
+		return visible;
+	}
 
 	void EditorPanel::end_panel_window(EditorContext& context)
 	{
-	if (m_windowActiveThisFrame && context.ui_context)
-	{
-		context.ui_context->end_window();
+		if (m_windowActiveThisFrame && context.ui_context)
+		{
+			context.ui_context->end_window();
+		}
+		m_windowActiveThisFrame = false;
 	}
-	m_windowActiveThisFrame = false;
-}
 }

@@ -10,12 +10,14 @@ namespace AshEditor
 	{
 		std::string id{};
 		std::string label{};
+		std::string shortcut{};
 		std::function<void()> callback{};
 	};
 
 	class CommandService
 	{
 	public:
+		void register_action(std::string id, std::string label, std::string shortcut, std::function<void()> callback);
 		void register_action(std::string id, std::string label, std::function<void()> callback);
 		bool invoke(const std::string& id) const;
 		bool has_action(const std::string& id) const;

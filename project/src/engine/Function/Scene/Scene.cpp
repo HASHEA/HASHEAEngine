@@ -39,6 +39,7 @@ namespace AshEngine
 			entt::registry registry{};
 			std::unordered_map<EntityId, entt::entity> entities{};
 			std::vector<EntityId> entity_order{};
+			std::vector<EntityId> root_order{};
 			EntityId next_entity_id = 1;
 			bool dirty = false;
 			uint64_t change_version = 0;
@@ -342,7 +343,42 @@ namespace AshEngine
 			return false;
 		}
 
-		static auto detach_from_parent(SceneStorage& storage, EntityId id) -> void
+		static auto clamp_sibling_index(size_t sibling_count, uint32_t sibling_index) -> size_t
+		{
+			return sibling_index == k_scene_append_sibling_index
+				? sibling_count
+				: std::min<size_t>(sibling_count, sibling_index);
+		}
+
+		static auto erase_entity_id(std::vector<EntityId>& ids, EntityId id) -> bool
+		{
+			const auto it = std::find(ids.begin(), ids.end(), id);
+			if (it == ids.end())
+			{
+				return false;
+			}
+			ids.erase(it);
+			return true;
+		}
+
+		static auto find_sibling_ids(SceneStorage& storage, EntityId parent_id) -> std::vector<EntityId>*
+		{
+			if (parent_id == 0)
+			{
+				return &storage.root_order;
+			}
+
+			const auto parent_it = storage.entities.find(parent_id);
+			if (parent_it == storage.entities.end())
+			{
+				return nullptr;
+			}
+
+			HierarchyComponent* parent_hierarchy = storage.registry.try_get<HierarchyComponent>(parent_it->second);
+			return parent_hierarchy ? &parent_hierarchy->children : nullptr;
+		}
+
+		static auto detach_from_current_siblings(SceneStorage& storage, EntityId id) -> void
 		{
 			const auto found = storage.entities.find(id);
 			if (found == storage.entities.end())
@@ -351,42 +387,37 @@ namespace AshEngine
 			}
 
 			HierarchyComponent* hierarchy = storage.registry.try_get<HierarchyComponent>(found->second);
-			if (!hierarchy || hierarchy->parent == 0)
+			if (!hierarchy)
 			{
 				return;
 			}
 
-			const auto parent_it = storage.entities.find(hierarchy->parent);
-			if (parent_it != storage.entities.end())
+			if (std::vector<EntityId>* siblings = find_sibling_ids(storage, hierarchy->parent))
 			{
-				if (HierarchyComponent* parent_hierarchy = storage.registry.try_get<HierarchyComponent>(parent_it->second))
-				{
-					parent_hierarchy->children.erase(
-						std::remove(parent_hierarchy->children.begin(), parent_hierarchy->children.end(), id),
-						parent_hierarchy->children.end());
-				}
+				erase_entity_id(*siblings, id);
 			}
 			hierarchy->parent = 0;
 		}
 
-		static auto attach_to_parent(SceneStorage& storage, EntityId id, EntityId parent) -> void
+		static auto attach_to_parent(SceneStorage& storage, EntityId id, EntityId parent, uint32_t sibling_index) -> bool
 		{
 			const auto found = storage.entities.find(id);
-			const auto parent_found = storage.entities.find(parent);
-			if (found == storage.entities.end() || parent_found == storage.entities.end())
+			if (found == storage.entities.end())
 			{
-				return;
+				return false;
 			}
 
 			HierarchyComponent* hierarchy = storage.registry.try_get<HierarchyComponent>(found->second);
-			HierarchyComponent* parent_hierarchy = storage.registry.try_get<HierarchyComponent>(parent_found->second);
-			if (!hierarchy || !parent_hierarchy)
+			std::vector<EntityId>* siblings = find_sibling_ids(storage, parent);
+			if (!hierarchy || !siblings)
 			{
-				return;
+				return false;
 			}
 
 			hierarchy->parent = parent;
-			parent_hierarchy->children.push_back(id);
+			const size_t insert_index = clamp_sibling_index(siblings->size(), sibling_index);
+			siblings->insert(siblings->begin() + static_cast<ptrdiff_t>(insert_index), id);
+			return true;
 		}
 
 		static auto create_entity_internal(const std::shared_ptr<Scene::Impl>& impl, EntityId explicit_id, std::string_view name) -> Entity
@@ -410,6 +441,7 @@ namespace AshEngine
 			impl->storage.registry.emplace<HierarchyComponent>(handle, HierarchyComponent{});
 			impl->storage.entities.emplace(id, handle);
 			impl->storage.entity_order.push_back(id);
+			impl->storage.root_order.push_back(id);
 			return Entity(impl, id);
 		}
 
@@ -427,7 +459,7 @@ namespace AshEngine
 				destroy_entity_recursive(storage, child_id);
 			}
 
-			detach_from_parent(storage, id);
+			detach_from_current_siblings(storage, id);
 			storage.entity_order.erase(std::remove(storage.entity_order.begin(), storage.entity_order.end(), id), storage.entity_order.end());
 			storage.registry.destroy(found->second);
 			storage.entities.erase(found);
@@ -866,7 +898,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(false);
 		}
 
-		std::unordered_map<EntityId, EntityId> desired_parents{};
+		std::vector<std::pair<EntityId, EntityId>> desired_parents{};
 		EntityId max_id = 0;
 		for (const json& entity_json : entities_json)
 		{
@@ -882,7 +914,7 @@ namespace AshEngine
 				continue;
 			}
 
-			desired_parents.emplace(id, entity_json.value("parent", static_cast<EntityId>(0)));
+			desired_parents.emplace_back(id, entity_json.value("parent", static_cast<EntityId>(0)));
 			max_id = std::max(max_id, id);
 
 			const json transform_json = entity_json.value("transform", json::object());
@@ -988,6 +1020,11 @@ namespace AshEngine
 
 	Entity Scene::create_entity(std::string_view name, const Entity& parent)
 	{
+		return create_entity(name, parent, k_scene_append_sibling_index);
+	}
+
+	Entity Scene::create_entity(std::string_view name, const Entity& parent, uint32_t sibling_index)
+	{
 		if (!m_impl)
 		{
 			return {};
@@ -996,7 +1033,41 @@ namespace AshEngine
 		Entity entity = create_entity_internal(m_impl, 0, name);
 		if (entity.is_valid() && parent.is_valid() && std::static_pointer_cast<Scene::Impl>(parent.m_impl) == m_impl)
 		{
-			reparent_entity(entity.get_id(), parent.get_id());
+			reparent_entity(entity.get_id(), parent.get_id(), sibling_index);
+		}
+		else if (entity.is_valid() && sibling_index != k_scene_append_sibling_index)
+		{
+			reparent_entity(entity.get_id(), 0, sibling_index);
+		}
+		mark_scene_storage_modified(m_impl->storage);
+		return entity;
+	}
+
+	Entity Scene::create_entity_with_id(EntityId explicit_id, std::string_view name)
+	{
+		return create_entity_with_id(explicit_id, name, Entity{});
+	}
+
+	Entity Scene::create_entity_with_id(EntityId explicit_id, std::string_view name, const Entity& parent)
+	{
+		return create_entity_with_id(explicit_id, name, parent, k_scene_append_sibling_index);
+	}
+
+	Entity Scene::create_entity_with_id(EntityId explicit_id, std::string_view name, const Entity& parent, uint32_t sibling_index)
+	{
+		if (!m_impl || explicit_id == 0)
+		{
+			return {};
+		}
+
+		Entity entity = create_entity_internal(m_impl, explicit_id, name);
+		if (entity.is_valid() && parent.is_valid() && std::static_pointer_cast<Scene::Impl>(parent.m_impl) == m_impl)
+		{
+			reparent_entity(entity.get_id(), parent.get_id(), sibling_index);
+		}
+		else if (entity.is_valid() && sibling_index != k_scene_append_sibling_index)
+		{
+			reparent_entity(entity.get_id(), 0, sibling_index);
 		}
 		mark_scene_storage_modified(m_impl->storage);
 		return entity;
@@ -1017,18 +1088,54 @@ namespace AshEngine
 
 	bool Scene::reparent_entity(EntityId id, EntityId new_parent_id)
 	{
+		return reparent_entity(id, new_parent_id, k_scene_append_sibling_index);
+	}
+
+	bool Scene::reparent_entity(EntityId id, EntityId new_parent_id, uint32_t sibling_index)
+	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && id != 0 && id != new_parent_id);
 		ASH_PROCESS_ERROR(find_handle(m_impl, id) != entt::null);
 		ASH_PROCESS_ERROR(new_parent_id == 0 || (find_handle(m_impl, new_parent_id) != entt::null && !is_scene_descendant(m_impl, id, new_parent_id)));
 
-		detach_from_parent(m_impl->storage, id);
-		if (new_parent_id != 0)
+		detach_from_current_siblings(m_impl->storage, id);
+		if (!attach_to_parent(m_impl->storage, id, new_parent_id, sibling_index))
 		{
-			attach_to_parent(m_impl->storage, id, new_parent_id);
+			ASH_PROCESS_ERROR(false);
 		}
 		mark_scene_storage_modified(m_impl->storage);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	uint32_t Scene::get_entity_sibling_index(EntityId id) const
+	{
+		if (!m_impl || id == 0)
+		{
+			return 0;
+		}
+
+		const HierarchyComponent* hierarchy = find_hierarchy_const(m_impl, id);
+		if (!hierarchy)
+		{
+			return 0;
+		}
+
+		const std::vector<EntityId>* siblings =
+			hierarchy->parent == 0
+			? &m_impl->storage.root_order
+			: [&]() -> const std::vector<EntityId>* {
+				const HierarchyComponent* parent_hierarchy = find_hierarchy_const(m_impl, hierarchy->parent);
+				return parent_hierarchy ? &parent_hierarchy->children : nullptr;
+			}();
+		if (!siblings)
+		{
+			return 0;
+		}
+
+		const auto it = std::find(siblings->begin(), siblings->end(), id);
+		return it == siblings->end()
+			? 0u
+			: static_cast<uint32_t>(std::distance(siblings->begin(), it));
 	}
 
 	Entity Scene::find_entity(EntityId id) const
@@ -1061,9 +1168,10 @@ namespace AshEngine
 		{
 			return result;
 		}
-		for (EntityId id : m_impl->storage.entity_order)
+		result.reserve(m_impl->storage.root_order.size());
+		for (EntityId id : m_impl->storage.root_order)
 		{
-			if (const HierarchyComponent* hierarchy = find_hierarchy_const(m_impl, id); hierarchy && hierarchy->parent == 0)
+			if (find_handle(m_impl, id) != entt::null)
 			{
 				result.emplace_back(m_impl, id);
 			}
@@ -1352,12 +1460,12 @@ namespace AshEngine
 		root["next_entity_id"] = m_impl->storage.next_entity_id;
 		root["entities"] = json::array();
 
-		for (EntityId id : m_impl->storage.entity_order)
+		std::function<void(EntityId)> append_entity_json_recursive = [&](EntityId id)
 		{
 			const entt::entity handle = find_handle(m_impl, id);
 			if (handle == entt::null)
 			{
-				continue;
+				return;
 			}
 
 			const NameComponent& name = m_impl->storage.registry.get<NameComponent>(handle);
@@ -1418,6 +1526,15 @@ namespace AshEngine
 			}
 
 			root["entities"].push_back(std::move(entity_json));
+			for (EntityId child_id : hierarchy.children)
+			{
+				append_entity_json_recursive(child_id);
+			}
+		};
+
+		for (EntityId root_id : m_impl->storage.root_order)
+		{
+			append_entity_json_recursive(root_id);
 		}
 
 		std::ofstream output(path);

@@ -57,6 +57,8 @@ namespace AshEditor
 			EditorViewportInstance instance{};
 			EditorViewportPresentation presentation{};
 			EditorViewportRenderState render_state{};
+			AshEngine::SceneOutputHandle output{};
+			AshEngine::SceneViewBindingHandle binding{};
 		};
 
 		using ViewportStorage = std::unordered_map<std::string, std::unique_ptr<ViewportRecord>>;

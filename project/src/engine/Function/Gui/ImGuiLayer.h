@@ -8,6 +8,7 @@
 namespace RHI
 {
 	class GraphicsContext;
+	class TextureView;
 }
 
 namespace AshEngine
@@ -38,10 +39,15 @@ namespace AshEngine
 		virtual UITextureHandle register_render_target(const std::shared_ptr<RenderTarget>& render_target) = 0;
 		virtual void unregister_render_target(const std::shared_ptr<RenderTarget>& render_target) = 0;
 		virtual UITextureHandle get_render_target_texture_id(const std::shared_ptr<RenderTarget>& render_target) = 0;
+		virtual UITextureHandle register_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view) = 0;
+		virtual void unregister_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view) = 0;
+		virtual UITextureHandle get_texture_view_texture_id(const std::shared_ptr<RHI::TextureView>& texture_view) = 0;
 
 		virtual bool wants_capture_mouse() const = 0;
 		virtual bool wants_capture_keyboard() const = 0;
 		virtual bool wants_text_input() const = 0;
+		virtual void apply_theme_preset(UIThemePreset preset) = 0;
+		virtual UIThemePreset get_theme_preset() const = 0;
 	};
 
 	auto create_imgui_layer(RHI::Backend backend) -> std::unique_ptr<ImGuiLayer>;

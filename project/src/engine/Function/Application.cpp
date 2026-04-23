@@ -141,7 +141,10 @@ namespace AshEngine
 		sceneRenderer.initialize(renderer);
 		scenePresentation.initialize(renderer, &renderAssetManager, &sceneRenderer);
 		uiContext = new UIContext();
-		if (!uiContext->init(window, graphicsContext, renderDevice))
+		UIContextConfig uiConfig{};
+		uiConfig.ini_path = config.uiIniPath;
+		uiConfig.theme_preset = config.uiThemePreset;
+		if (!uiContext->init(window, graphicsContext, renderDevice, uiConfig))
 		{
 			HLogWarning("UIContext initialization failed. Engine UI facade will remain disabled.");
 			delete uiContext;

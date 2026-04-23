@@ -16,7 +16,8 @@ namespace AshEditor
 
 	private:
 		void draw_toolbar(EditorContext& context, EditorViewportInstance& viewport);
-		void draw_status(EditorContext& context, const EditorViewportInstance& viewport) const;
+		void draw_toggle_button(AshEngine::UIContext& ui, const char* label, bool& value) const;
+		void draw_overlay(EditorContext& context, const EditorViewportInstance& viewport) const;
 		EditorViewportInstance* resolve_viewport(EditorContext& context) const;
 		const EditorViewportInstance* resolve_viewport(const EditorContext& context) const;
 

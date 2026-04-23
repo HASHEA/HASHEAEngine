@@ -1,5 +1,15 @@
 # Editor UI Facade Proposal
 
+> 文档状态：**历史参考**
+>
+> 这份文档属于早期 UI 分层提案，保留用于回溯设计背景。
+>
+> 当前主线实现与协作口径请优先参考：
+>
+> - `docs/EditorDeveloperGuide.md`
+> - `docs/Editor.UIContextGapChecklist.md`
+> - `docs/EditorProgress.UIContextAcceptance.md`
+
 This note summarizes the recommended UI layering after narrowing `UIContext` back to Engine-safe responsibilities.
 
 ## Goal

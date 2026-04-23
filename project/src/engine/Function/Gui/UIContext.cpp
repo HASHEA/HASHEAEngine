@@ -256,6 +256,62 @@ namespace AshEngine
 			}
 		}
 
+		static void ensure_current_window_dock_tab_bar_visible()
+		{
+			ImGuiWindow* window = ImGui::GetCurrentWindow();
+			if (!window || !window->DockNode)
+			{
+				return;
+			}
+
+			ImGuiDockNode* node = window->DockNode;
+			const ImGuiDockNodeFlags clear_flags =
+				ImGuiDockNodeFlags_AutoHideTabBar |
+				ImGuiDockNodeFlags_HiddenTabBar |
+				ImGuiDockNodeFlags_NoTabBar;
+
+			const ImGuiDockNodeFlags local_flags = node->LocalFlags;
+			const ImGuiDockNodeFlags local_window_flags = node->LocalFlagsInWindows;
+			node->LocalFlags &= ~clear_flags;
+			node->LocalFlagsInWindows &= ~clear_flags;
+			node->WantHiddenTabBarUpdate = true;
+			node->WantHiddenTabBarToggle = false;
+			if (node->LocalFlags != local_flags || node->LocalFlagsInWindows != local_window_flags)
+			{
+				node->UpdateMergedFlags();
+			}
+		}
+
+		static void ensure_runtime_dock_node_tab_bar_visible(ImGuiDockNode* node, bool recursive)
+		{
+			if (!node)
+			{
+				return;
+			}
+
+			const ImGuiDockNodeFlags clear_flags =
+				ImGuiDockNodeFlags_AutoHideTabBar |
+				ImGuiDockNodeFlags_HiddenTabBar |
+				ImGuiDockNodeFlags_NoTabBar;
+
+			const ImGuiDockNodeFlags local_flags = node->LocalFlags;
+			const ImGuiDockNodeFlags local_window_flags = node->LocalFlagsInWindows;
+			node->LocalFlags &= ~clear_flags;
+			node->LocalFlagsInWindows &= ~clear_flags;
+			node->WantHiddenTabBarUpdate = true;
+			node->WantHiddenTabBarToggle = false;
+			if (node->LocalFlags != local_flags || node->LocalFlagsInWindows != local_window_flags)
+			{
+				node->UpdateMergedFlags();
+			}
+
+			if (recursive)
+			{
+				ensure_runtime_dock_node_tab_bar_visible(node->ChildNodes[0], true);
+				ensure_runtime_dock_node_tab_bar_visible(node->ChildNodes[1], true);
+			}
+		}
+
 		struct InputTextCallbackUserData
 		{
 			std::string* value = nullptr;
@@ -413,6 +469,19 @@ namespace AshEngine
 		return m_impl && m_impl->layer && m_impl->layer->wants_text_input();
 	}
 
+	void UIContext::apply_theme_preset(UIThemePreset preset)
+	{
+		if (m_impl && m_impl->layer)
+		{
+			m_impl->layer->apply_theme_preset(preset);
+		}
+	}
+
+	UIThemePreset UIContext::get_theme_preset() const
+	{
+		return (m_impl && m_impl->layer) ? m_impl->layer->get_theme_preset() : UIThemePreset::SlateStudio;
+	}
+
 	void UIContext::show_demo_window(bool* open)
 	{
 		if (is_frame_active())
@@ -423,7 +492,14 @@ namespace AshEngine
 
 	bool UIContext::begin_window(const char* name, bool* open, UIWindowFlags flags)
 	{
-		return is_frame_active() && name ? ImGui::Begin(name, open, to_imgui_window_flags(flags)) : false;
+		if (!is_frame_active() || !name)
+		{
+			return false;
+		}
+
+		const bool visible = ImGui::Begin(name, open, to_imgui_window_flags(flags));
+		ensure_current_window_dock_tab_bar_visible();
+		return visible;
 	}
 
 	bool UIContext::begin_dockspace_host_window(const char* name, bool* open, UIWindowFlags flags)
@@ -567,6 +643,16 @@ namespace AshEngine
 		}
 	}
 
+	void UIContext::ensure_dock_node_tab_bar_visible(UIDockNodeId node_id, bool recursive)
+	{
+		if (!is_frame_active() || node_id == 0u)
+		{
+			return;
+		}
+
+		ensure_runtime_dock_node_tab_bar_visible(ImGui::DockBuilderGetNode(static_cast<ImGuiID>(node_id)), recursive);
+	}
+
 	void UIContext::set_next_window_position(const UIVec2& position, UIConditionFlags cond, const UIVec2& pivot)
 	{
 		if (is_frame_active())
@@ -597,6 +683,18 @@ namespace AshEngine
 		{
 			ImGui::SetNextWindowCollapsed(collapsed, to_imgui_cond(cond));
 		}
+	}
+
+	void UIContext::set_next_window_force_dock_tab_bar(bool enabled)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+
+		ImGuiWindowClass window_class{};
+		window_class.DockingAlwaysTabBar = enabled;
+		ImGui::SetNextWindowClass(&window_class);
 	}
 
 	void UIContext::set_next_item_width(float width)
@@ -1175,6 +1273,16 @@ namespace AshEngine
 		return is_frame_active() && ImGui::IsItemClicked(static_cast<ImGuiMouseButton>(button));
 	}
 
+	bool UIContext::is_item_active() const
+	{
+		return is_frame_active() && ImGui::IsItemActive();
+	}
+
+	bool UIContext::is_item_deactivated_after_edit() const
+	{
+		return is_frame_active() && ImGui::IsItemDeactivatedAfterEdit();
+	}
+
 	bool UIContext::is_window_focused() const
 	{
 		return is_frame_active() && ImGui::IsWindowFocused();
@@ -1208,7 +1316,7 @@ namespace AshEngine
 			return {};
 		}
 
-		return { viewport->Pos.x, viewport->Pos.y, viewport->Size.x, viewport->Size.y };
+		return { viewport->WorkPos.x, viewport->WorkPos.y, viewport->WorkSize.x, viewport->WorkSize.y };
 	}
 
 	UIViewportId UIContext::get_main_viewport_id() const
@@ -1276,6 +1384,24 @@ namespace AshEngine
 			track_render_target_usage(render_target);
 		}
 		return texture_handle;
+	}
+
+	UITextureHandle UIContext::register_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view)
+	{
+		return m_impl && m_impl->layer ? m_impl->layer->register_texture_view(texture_view) : nullptr;
+	}
+
+	void UIContext::unregister_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view)
+	{
+		if (m_impl && m_impl->layer)
+		{
+			m_impl->layer->unregister_texture_view(texture_view);
+		}
+	}
+
+	UITextureHandle UIContext::get_texture_view_texture_id(const std::shared_ptr<RHI::TextureView>& texture_view)
+	{
+		return m_impl && m_impl->layer ? m_impl->layer->get_texture_view_texture_id(texture_view) : nullptr;
 	}
 
 	void UIContext::image(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size, const UIVec2& uv0, const UIVec2& uv1, const UIColor& tint, const UIColor& border)

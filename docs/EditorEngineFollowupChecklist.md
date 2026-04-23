@@ -1,5 +1,14 @@
 # 编辑器开发视角的引擎补充清单
 
+> 文档状态：**历史参考**
+>
+> 这份清单对应的是前一轮 Editor -> Engine 跟进记录，保留用于追溯“哪些问题当时已经补上、哪些问题曾经存在”。
+>
+> 当前仍有效的引擎补缺入口请优先参考：
+>
+> - `docs/EditorToEngineGapChecklist.md`
+> - `docs/EditorDeveloperGuide.md`
+
 > 范围说明
 >
 > - 只基于当前主线代码：`project/src/engine` + `project/src/editor`

@@ -315,16 +315,16 @@ namespace AshEditor
 
 			const std::string output_debug_name = make_output_debug_name(record->instance);
 			bool output_synced = true;
-			if (!record->instance.output.is_valid())
+			if (!record->output.is_valid())
 			{
 				AshEngine::SceneOutputDesc output_desc{};
 				output_desc.debug_name = output_debug_name.c_str();
 				output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
 				output_desc.width = output_width;
 				output_desc.height = output_height;
-				record->instance.output = scene_presentation.create_output(output_desc);
+				record->output = scene_presentation.create_output(output_desc);
 				record->render_state.pending_sync = true;
-				output_synced = record->instance.output.is_valid();
+				output_synced = record->output.is_valid();
 			}
 			else if (
 				record->render_state.output_width != output_width ||
@@ -335,7 +335,7 @@ namespace AshEditor
 				output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
 				output_desc.width = output_width;
 				output_desc.height = output_height;
-				output_synced = scene_presentation.update_output(record->instance.output, output_desc);
+				output_synced = scene_presentation.update_output(record->output, output_desc);
 			}
 
 			if (!output_synced)
@@ -349,26 +349,26 @@ namespace AshEditor
 				continue;
 			}
 
-			record->instance.surface = scene_presentation.get_ui_surface(record->instance.output);
+			record->instance.surface = scene_presentation.get_ui_surface(record->output);
 
 			const std::string binding_debug_name = make_binding_debug_name(record->instance);
 			AshEngine::SceneViewBindingDesc binding_desc{};
 			binding_desc.debug_name = binding_debug_name.c_str();
 			binding_desc.scene = &scene;
 			binding_desc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
-			binding_desc.output = record->instance.output;
+			binding_desc.output = record->output;
 			binding_desc.enabled = record->presentation.panel_open && has_requested_size;
 			binding_desc.sort_order = viewport_sort_priority(record->instance);
 
 			bool binding_synced = true;
-			if (!record->instance.binding.is_valid())
+			if (!record->binding.is_valid())
 			{
-				record->instance.binding = scene_presentation.create_view_binding(binding_desc);
-				binding_synced = record->instance.binding.is_valid();
+				record->binding = scene_presentation.create_view_binding(binding_desc);
+				binding_synced = record->binding.is_valid();
 			}
 			else if (record->render_state.pending_sync)
 			{
-				binding_synced = scene_presentation.update_view_binding(record->instance.binding, binding_desc);
+				binding_synced = scene_presentation.update_view_binding(record->binding, binding_desc);
 			}
 
 			if (!binding_synced)
@@ -400,24 +400,23 @@ namespace AshEditor
 				continue;
 			}
 
-			EditorViewportInstance& instance = entry.second->instance;
 			if (scene_presentation)
 			{
-				if (instance.binding.is_valid())
+				if (entry.second->binding.is_valid())
 				{
-					scene_presentation->destroy_view_binding(instance.binding);
+					scene_presentation->destroy_view_binding(entry.second->binding);
 				}
-				if (instance.output.is_valid())
+				if (entry.second->output.is_valid())
 				{
-					scene_presentation->destroy_output(instance.output);
+					scene_presentation->destroy_output(entry.second->output);
 				}
 			}
 
-			instance.binding = {};
-			instance.output = {};
-			instance.surface = {};
-			instance.state.width = 0u;
-			instance.state.height = 0u;
+			entry.second->binding = {};
+			entry.second->output = {};
+			entry.second->instance.surface = {};
+			entry.second->instance.state.width = 0u;
+			entry.second->instance.state.height = 0u;
 			entry.second->render_state.output_width = 0u;
 			entry.second->render_state.output_height = 0u;
 			entry.second->render_state.pending_sync = true;

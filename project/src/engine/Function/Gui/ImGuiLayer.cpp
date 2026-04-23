@@ -41,6 +41,136 @@ namespace AshEngine
 {
 	namespace
 	{
+		static auto make_color(float r, float g, float b, float a = 1.0f) -> ImVec4
+		{
+			return ImVec4(r, g, b, a);
+		}
+
+		static void apply_classic_dark_theme()
+		{
+			ImGui::StyleColorsDark();
+			ImGuiStyle& style = ImGui::GetStyle();
+			style.WindowPadding = ImVec2(10.0f, 8.0f);
+			style.FramePadding = ImVec2(8.0f, 6.0f);
+			style.ItemSpacing = ImVec2(8.0f, 6.0f);
+			style.WindowRounding = 6.0f;
+			style.ChildRounding = 5.0f;
+			style.PopupRounding = 5.0f;
+			style.FrameRounding = 4.0f;
+			style.TabRounding = 4.0f;
+			style.WindowBorderSize = 1.0f;
+			style.ChildBorderSize = 1.0f;
+			style.PopupBorderSize = 1.0f;
+			style.FrameBorderSize = 1.0f;
+		}
+
+		static void apply_slate_studio_theme()
+		{
+			ImGui::StyleColorsDark();
+
+			ImGuiStyle& style = ImGui::GetStyle();
+			style.WindowPadding = ImVec2(12.0f, 10.0f);
+			style.FramePadding = ImVec2(10.0f, 6.0f);
+			style.CellPadding = ImVec2(8.0f, 6.0f);
+			style.ItemSpacing = ImVec2(10.0f, 8.0f);
+			style.ItemInnerSpacing = ImVec2(8.0f, 6.0f);
+			style.IndentSpacing = 20.0f;
+			style.ScrollbarSize = 13.0f;
+			style.GrabMinSize = 10.0f;
+
+			style.WindowRounding = 7.0f;
+			style.ChildRounding = 6.0f;
+			style.PopupRounding = 6.0f;
+			style.FrameRounding = 5.0f;
+			style.ScrollbarRounding = 9.0f;
+			style.GrabRounding = 4.0f;
+			style.TabRounding = 5.0f;
+			style.TabBorderSize = 1.0f;
+			style.TabBarBorderSize = 1.0f;
+
+			style.WindowBorderSize = 1.0f;
+			style.ChildBorderSize = 1.0f;
+			style.PopupBorderSize = 1.0f;
+			style.FrameBorderSize = 1.0f;
+			style.WindowTitleAlign = ImVec2(0.0f, 0.5f);
+
+			ImVec4* colors = style.Colors;
+			colors[ImGuiCol_Text] = make_color(0.90f, 0.92f, 0.95f);
+			colors[ImGuiCol_TextDisabled] = make_color(0.60f, 0.64f, 0.70f);
+			colors[ImGuiCol_WindowBg] = make_color(0.07f, 0.09f, 0.11f);
+			colors[ImGuiCol_ChildBg] = make_color(0.09f, 0.11f, 0.14f);
+			colors[ImGuiCol_PopupBg] = make_color(0.10f, 0.13f, 0.16f, 0.98f);
+			colors[ImGuiCol_Border] = make_color(0.16f, 0.20f, 0.25f, 0.95f);
+			colors[ImGuiCol_BorderShadow] = make_color(0.00f, 0.00f, 0.00f, 0.00f);
+
+			colors[ImGuiCol_FrameBg] = make_color(0.12f, 0.15f, 0.19f);
+			colors[ImGuiCol_FrameBgHovered] = make_color(0.20f, 0.26f, 0.33f);
+			colors[ImGuiCol_FrameBgActive] = make_color(0.27f, 0.35f, 0.43f);
+
+			colors[ImGuiCol_TitleBg] = make_color(0.08f, 0.10f, 0.13f);
+			colors[ImGuiCol_TitleBgActive] = make_color(0.11f, 0.14f, 0.18f);
+			colors[ImGuiCol_TitleBgCollapsed] = make_color(0.08f, 0.10f, 0.13f, 0.80f);
+			colors[ImGuiCol_MenuBarBg] = make_color(0.09f, 0.11f, 0.14f);
+
+			colors[ImGuiCol_ScrollbarBg] = make_color(0.07f, 0.09f, 0.12f);
+			colors[ImGuiCol_ScrollbarGrab] = make_color(0.21f, 0.26f, 0.32f);
+			colors[ImGuiCol_ScrollbarGrabHovered] = make_color(0.27f, 0.33f, 0.41f);
+			colors[ImGuiCol_ScrollbarGrabActive] = make_color(0.31f, 0.39f, 0.48f);
+
+			colors[ImGuiCol_CheckMark] = make_color(0.47f, 0.67f, 0.88f);
+			colors[ImGuiCol_SliderGrab] = make_color(0.39f, 0.58f, 0.78f);
+			colors[ImGuiCol_SliderGrabActive] = make_color(0.49f, 0.70f, 0.92f);
+
+			colors[ImGuiCol_Button] = make_color(0.18f, 0.25f, 0.32f);
+			colors[ImGuiCol_ButtonHovered] = make_color(0.29f, 0.40f, 0.51f);
+			colors[ImGuiCol_ButtonActive] = make_color(0.37f, 0.52f, 0.65f);
+
+			colors[ImGuiCol_Header] = make_color(0.20f, 0.28f, 0.36f);
+			colors[ImGuiCol_HeaderHovered] = make_color(0.31f, 0.44f, 0.56f);
+			colors[ImGuiCol_HeaderActive] = make_color(0.39f, 0.55f, 0.70f);
+
+			colors[ImGuiCol_Separator] = make_color(0.18f, 0.23f, 0.29f);
+			colors[ImGuiCol_SeparatorHovered] = make_color(0.31f, 0.42f, 0.53f);
+			colors[ImGuiCol_SeparatorActive] = make_color(0.40f, 0.54f, 0.67f);
+
+			colors[ImGuiCol_ResizeGrip] = make_color(0.22f, 0.31f, 0.39f, 0.35f);
+			colors[ImGuiCol_ResizeGripHovered] = make_color(0.35f, 0.49f, 0.61f, 0.80f);
+			colors[ImGuiCol_ResizeGripActive] = make_color(0.44f, 0.61f, 0.76f, 0.95f);
+
+			colors[ImGuiCol_Tab] = make_color(0.12f, 0.16f, 0.20f);
+			colors[ImGuiCol_TabHovered] = make_color(0.26f, 0.38f, 0.49f);
+			colors[ImGuiCol_TabActive] = make_color(0.34f, 0.49f, 0.62f);
+			colors[ImGuiCol_TabUnfocused] = make_color(0.09f, 0.12f, 0.15f);
+			colors[ImGuiCol_TabUnfocusedActive] = make_color(0.23f, 0.33f, 0.42f);
+			colors[ImGuiCol_DockingPreview] = make_color(0.34f, 0.55f, 0.79f, 0.70f);
+			colors[ImGuiCol_DockingEmptyBg] = make_color(0.06f, 0.08f, 0.10f);
+
+			colors[ImGuiCol_TableHeaderBg] = make_color(0.11f, 0.14f, 0.18f);
+			colors[ImGuiCol_TableBorderStrong] = make_color(0.19f, 0.24f, 0.30f);
+			colors[ImGuiCol_TableBorderLight] = make_color(0.13f, 0.17f, 0.21f);
+			colors[ImGuiCol_TableRowBg] = make_color(0.00f, 0.00f, 0.00f, 0.00f);
+			colors[ImGuiCol_TableRowBgAlt] = make_color(1.00f, 1.00f, 1.00f, 0.03f);
+
+			colors[ImGuiCol_TextSelectedBg] = make_color(0.29f, 0.45f, 0.64f, 0.35f);
+			colors[ImGuiCol_DragDropTarget] = make_color(0.51f, 0.75f, 0.96f, 0.90f);
+			colors[ImGuiCol_NavHighlight] = make_color(0.41f, 0.61f, 0.83f, 0.85f);
+			colors[ImGuiCol_NavWindowingHighlight] = make_color(1.00f, 1.00f, 1.00f, 0.70f);
+		}
+
+		static void apply_imgui_theme_preset(UIThemePreset preset)
+		{
+			switch (preset)
+			{
+			case UIThemePreset::ClassicDark:
+				apply_classic_dark_theme();
+				break;
+			case UIThemePreset::SlateStudio:
+			default:
+				apply_slate_studio_theme();
+				break;
+			}
+		}
+
 		static auto to_rhi_format(RenderTextureFormat format) -> RHI::AshFormat
 		{
 			switch (format)
@@ -116,13 +246,19 @@ namespace AshEngine
 			if (config.enable_docking)
 			{
 				io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+				// Keep a visible tab handle for single-window dock nodes so editor panels
+				// can always be re-docked after users drag them into edge slots.
+				io.ConfigDockingAlwaysTabBar = true;
 			}
 			if (config.enable_viewports)
 			{
 				HLogWarning("UIContext requested multi-viewport support, but the engine UI facade currently keeps it disabled.");
 			}
-			io.IniFilename = config.ini_path;
-			ImGui::StyleColorsDark();
+			m_iniPath = config.ini_path;
+			io.IniFilename = m_iniPath.empty() ? nullptr : m_iniPath.c_str();
+			io.ConfigWindowsMoveFromTitleBarOnly = true;
+			m_themePreset = config.theme_preset;
+			apply_imgui_theme_preset(m_themePreset);
 
 			const bool glfw_ok =
 				m_backend == RHI::Backend::Vulkan ?
@@ -437,6 +573,59 @@ namespace AshEngine
 			ASH_PROCESS_GUARD_RETURN_END(texture_id, nullptr);
 		}
 
+		UITextureHandle register_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view) override
+		{
+			return get_texture_view_texture_id(texture_view);
+		}
+
+		void unregister_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view) override
+		{
+			if (!texture_view)
+			{
+				return;
+			}
+
+			auto it = m_texture_view_registrations.find(texture_view.get());
+			if (it == m_texture_view_registrations.end())
+			{
+				return;
+			}
+
+			release_registration(it->second);
+			m_texture_view_registrations.erase(it);
+		}
+
+		UITextureHandle get_texture_view_texture_id(const std::shared_ptr<RHI::TextureView>& texture_view) override
+		{
+			ASH_PROCESS_GUARD_RETURN(UITextureHandle, texture_id, nullptr, nullptr);
+			ASH_PROCESS_ERROR(m_initialized && texture_view);
+			ASH_PROCESS_ERROR(texture_view->get_view_type() == RHI::AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV);
+
+			cleanup_dead_registrations();
+
+			TextureRegistration& registration = m_texture_view_registrations[texture_view.get()];
+			registration.texture_view = texture_view;
+			registration.render_target.reset();
+
+			switch (m_backend)
+			{
+#if defined(ASH_HAS_VULKAN)
+			case RHI::Backend::Vulkan:
+				texture_id = ensure_vulkan_registration(registration, texture_view);
+				break;
+#endif
+#if defined(ASH_HAS_DX12)
+			case RHI::Backend::DirectX12:
+				texture_id = ensure_dx12_registration(registration, texture_view);
+				break;
+#endif
+			default:
+				break;
+			}
+
+			ASH_PROCESS_GUARD_RETURN_END(texture_id, nullptr);
+		}
+
 		bool wants_capture_mouse() const override
 		{
 			return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse;
@@ -452,10 +641,25 @@ namespace AshEngine
 			return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput;
 		}
 
+		void apply_theme_preset(UIThemePreset preset) override
+		{
+			m_themePreset = preset;
+			if (ImGui::GetCurrentContext())
+			{
+				apply_imgui_theme_preset(m_themePreset);
+			}
+		}
+
+		UIThemePreset get_theme_preset() const override
+		{
+			return m_themePreset;
+		}
+
 	private:
 		struct TextureRegistration
 		{
 			std::weak_ptr<RenderTarget> render_target;
+			std::weak_ptr<RHI::TextureView> texture_view;
 			UITextureHandle texture_id = nullptr;
 #if defined(ASH_HAS_VULKAN)
 			VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
@@ -468,6 +672,14 @@ namespace AshEngine
 #endif
 		};
 
+#if defined(ASH_HAS_DX12)
+		struct RetiredDx12Descriptor
+		{
+			uint32_t descriptor_index = UINT32_MAX;
+			uint64_t retire_frame = 0u;
+		};
+#endif
+
 	private:
 		void reset_state()
 		{
@@ -479,16 +691,33 @@ namespace AshEngine
 			m_frame_active = false;
 			m_backend = RHI::Backend::Default;
 			m_texture_registrations.clear();
+			m_texture_view_registrations.clear();
+#if defined(ASH_HAS_DX12)
+			m_dx12_retired_descriptor_indices.clear();
+#endif
 		}
 
 		void cleanup_dead_registrations()
 		{
+#if defined(ASH_HAS_DX12)
+			collect_retired_dx12_descriptors();
+#endif
 			for (auto it = m_texture_registrations.begin(); it != m_texture_registrations.end(); )
 			{
 				if (it->second.render_target.expired())
 				{
 					release_registration(it->second);
 					it = m_texture_registrations.erase(it);
+					continue;
+				}
+				++it;
+			}
+			for (auto it = m_texture_view_registrations.begin(); it != m_texture_view_registrations.end();)
+			{
+				if (it->second.texture_view.expired())
+				{
+					release_registration(it->second);
+					it = m_texture_view_registrations.erase(it);
 					continue;
 				}
 				++it;
@@ -503,6 +732,12 @@ namespace AshEngine
 				release_registration(registration, true);
 			}
 			m_texture_registrations.clear();
+			for (auto& [key, registration] : m_texture_view_registrations)
+			{
+				(void)key;
+				release_registration(registration, true);
+			}
+			m_texture_view_registrations.clear();
 		}
 
 		void release_registration(TextureRegistration& registration, bool immediate = false)
@@ -528,10 +763,7 @@ namespace AshEngine
 #if defined(ASH_HAS_DX12)
 			if (registration.descriptor_index != UINT32_MAX)
 			{
-				if (registration.descriptor_index != 0u)
-				{
-					m_dx12_free_descriptor_indices.push_back(registration.descriptor_index);
-				}
+				retire_dx12_descriptor_index(registration.descriptor_index, immediate);
 				registration.descriptor_index = UINT32_MAX;
 				registration.source_cpu_handle = {};
 				registration.gpu_handle = {};
@@ -539,6 +771,7 @@ namespace AshEngine
 #endif
 			registration.texture_id = nullptr;
 			registration.render_target.reset();
+			registration.texture_view.reset();
 		}
 
 		auto get_imgui_image_count() const -> uint32_t
@@ -637,7 +870,17 @@ namespace AshEngine
 			static std::mutex s_logged_texture_registration_mutex{};
 
 			std::shared_ptr<RHI::TextureView> shader_resource_view = m_render_device->get_shader_resource_view(render_target);
-			auto* vulkan_texture_view = shader_resource_view ? static_cast<RHI::VulkanTextureView*>(shader_resource_view.get()) : nullptr;
+			return ensure_vulkan_registration(registration, shader_resource_view);
+		}
+
+		UITextureHandle ensure_vulkan_registration(TextureRegistration& registration, const std::shared_ptr<RHI::TextureView>& texture_view)
+		{
+			if (!texture_view || texture_view->get_view_type() != RHI::AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV)
+			{
+				return nullptr;
+			}
+
+			auto* vulkan_texture_view = static_cast<RHI::VulkanTextureView*>(texture_view.get());
 			const VkImageView image_view = vulkan_texture_view ? vulkan_texture_view->get_vk_image_view() : VK_NULL_HANDLE;
 			if (image_view == VK_NULL_HANDLE || m_vk_sampler == VK_NULL_HANDLE)
 			{
@@ -777,6 +1020,8 @@ namespace AshEngine
 
 		auto allocate_dx12_descriptor_index() -> uint32_t
 		{
+			collect_retired_dx12_descriptors();
+
 			if (!m_dx12_free_descriptor_indices.empty())
 			{
 				const uint32_t descriptor_index = m_dx12_free_descriptor_indices.back();
@@ -791,6 +1036,46 @@ namespace AshEngine
 			return m_dx12_next_descriptor_index++;
 		}
 
+		void retire_dx12_descriptor_index(uint32_t descriptor_index, bool immediate)
+		{
+			if (descriptor_index == UINT32_MAX || descriptor_index == 0u)
+			{
+				return;
+			}
+
+			if (immediate || !Application::get())
+			{
+				m_dx12_free_descriptor_indices.push_back(descriptor_index);
+				return;
+			}
+
+			m_dx12_retired_descriptor_indices.push_back({
+				descriptor_index,
+				Application::get()->get_frame_index()
+			});
+		}
+
+		void collect_retired_dx12_descriptors()
+		{
+			if (m_dx12_retired_descriptor_indices.empty())
+			{
+				return;
+			}
+
+			const uint64_t current_frame = Application::get() ? Application::get()->get_frame_index() : 0u;
+			const uint64_t recycle_latency = static_cast<uint64_t>(std::max<uint32_t>(2u, get_imgui_image_count())) + 1u;
+			for (auto it = m_dx12_retired_descriptor_indices.begin(); it != m_dx12_retired_descriptor_indices.end();)
+			{
+				if (current_frame >= it->retire_frame + recycle_latency)
+				{
+					m_dx12_free_descriptor_indices.push_back(it->descriptor_index);
+					it = m_dx12_retired_descriptor_indices.erase(it);
+					continue;
+				}
+				++it;
+			}
+		}
+
 		UITextureHandle ensure_dx12_registration(TextureRegistration& registration, const std::shared_ptr<RenderTarget>& render_target)
 		{
 			auto* dx12_context = static_cast<RHI::DX12Context*>(m_graphics_context);
@@ -800,7 +1085,18 @@ namespace AshEngine
 			}
 
 			std::shared_ptr<RHI::TextureView> shader_resource_view = m_render_device->get_shader_resource_view(render_target);
-			auto* dx12_texture_view = shader_resource_view ? static_cast<RHI::DX12TextureView*>(shader_resource_view.get()) : nullptr;
+			return ensure_dx12_registration(registration, shader_resource_view);
+		}
+
+		UITextureHandle ensure_dx12_registration(TextureRegistration& registration, const std::shared_ptr<RHI::TextureView>& texture_view)
+		{
+			auto* dx12_context = static_cast<RHI::DX12Context*>(m_graphics_context);
+			if (!dx12_context || !m_dx12_srv_heap || !texture_view || texture_view->get_view_type() != RHI::AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV)
+			{
+				return nullptr;
+			}
+
+			auto* dx12_texture_view = static_cast<RHI::DX12TextureView*>(texture_view.get());
 			if (!dx12_texture_view)
 			{
 				return nullptr;
@@ -816,6 +1112,10 @@ namespace AshEngine
 				}
 				registration.gpu_handle = make_dx12_gpu_handle(registration.descriptor_index);
 				registration.texture_id = reinterpret_cast<UITextureHandle>(registration.gpu_handle.ptr);
+			}
+			else if (registration.source_cpu_handle.ptr == source_cpu_handle.ptr)
+			{
+				return registration.texture_id;
 			}
 
 			const D3D12_CPU_DESCRIPTOR_HANDLE destination_cpu_handle = make_dx12_cpu_handle(registration.descriptor_index);
@@ -834,7 +1134,10 @@ namespace AshEngine
 		RHI::Backend m_backend = RHI::Backend::Default;
 		bool m_initialized = false;
 		bool m_frame_active = false;
+		UIThemePreset m_themePreset = UIThemePreset::SlateStudio;
+		std::string m_iniPath{};
 		std::unordered_map<const RenderTarget*, TextureRegistration> m_texture_registrations{};
+		std::unordered_map<const RHI::TextureView*, TextureRegistration> m_texture_view_registrations{};
 
 #if defined(ASH_HAS_VULKAN)
 		VkDescriptorPool m_vk_descriptor_pool = VK_NULL_HANDLE;
@@ -849,6 +1152,7 @@ namespace AshEngine
 		uint32_t m_dx12_descriptor_capacity = 0u;
 		uint32_t m_dx12_next_descriptor_index = 1u;
 		std::vector<uint32_t> m_dx12_free_descriptor_indices{};
+		std::vector<RetiredDx12Descriptor> m_dx12_retired_descriptor_indices{};
 		D3D12_CPU_DESCRIPTOR_HANDLE m_dx12_heap_cpu_start{};
 		D3D12_GPU_DESCRIPTOR_HANDLE m_dx12_heap_gpu_start{};
 #endif

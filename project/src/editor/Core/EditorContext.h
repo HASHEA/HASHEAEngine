@@ -13,6 +13,7 @@ namespace AshEditor
 	class AssetDatabaseService;
 	class CommandService;
 	class EditorSettingsService;
+	class EditorIconService;
 	class EditorViewportService;
 	class SelectionService;
 	class SceneService;
@@ -33,8 +34,6 @@ namespace AshEditor
 		std::string id{};
 		std::string display_name{};
 		EditorViewportState state{};
-		AshEngine::SceneOutputHandle output{};
-		AshEngine::SceneViewBindingHandle binding{};
 		AshEngine::UISurfaceHandle surface{};
 	};
 
@@ -46,6 +45,7 @@ namespace AshEditor
 		CommandService* command_service = nullptr;
 		UndoRedoService* undo_redo_service = nullptr;
 		EditorSettingsService* settings_service = nullptr;
+		EditorIconService* icon_service = nullptr;
 		EditorViewportService* viewport_service = nullptr;
 		AshEngine::UIContext* ui_context = nullptr;
 		EditorViewportState viewport{};

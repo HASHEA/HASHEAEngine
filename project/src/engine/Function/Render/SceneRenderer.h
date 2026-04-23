@@ -48,6 +48,7 @@ namespace AshEngine
 		{
 			ScratchDepthKey key{};
 			std::shared_ptr<RenderTarget> depth_target = nullptr;
+			uint64_t last_used_frame = 0u;
 		};
 
 	private:

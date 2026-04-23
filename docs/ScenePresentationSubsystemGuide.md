@@ -147,7 +147,7 @@ Sandbox 标准场景主路径的推荐模式是：
 
 以下路径仍然继续使用 `Renderer` 直接驱动：
 
-- `CodexLogoDemoRenderer`
+- 已退役的 editor demo renderer
 - custom pass / compute / 后处理
 - 纯调试渲染
 - 非 scene-based 的特殊渲染器

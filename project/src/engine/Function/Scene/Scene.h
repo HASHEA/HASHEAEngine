@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -15,6 +16,7 @@
 namespace AshEngine
 {
 	using EntityId = uint64_t;
+	static constexpr uint32_t k_scene_append_sibling_index = std::numeric_limits<uint32_t>::max();
 
 	class AssetDatabase;
 	struct Model;
@@ -118,8 +120,14 @@ namespace AshEngine
 
 		Entity create_entity(std::string_view name = "Entity");
 		Entity create_entity(std::string_view name, const Entity& parent);
+		Entity create_entity(std::string_view name, const Entity& parent, uint32_t sibling_index);
+		Entity create_entity_with_id(EntityId explicit_id, std::string_view name = "Entity");
+		Entity create_entity_with_id(EntityId explicit_id, std::string_view name, const Entity& parent);
+		Entity create_entity_with_id(EntityId explicit_id, std::string_view name, const Entity& parent, uint32_t sibling_index);
 		bool destroy_entity(EntityId id);
 		bool reparent_entity(EntityId id, EntityId new_parent_id);
+		bool reparent_entity(EntityId id, EntityId new_parent_id, uint32_t sibling_index);
+		uint32_t get_entity_sibling_index(EntityId id) const;
 		Entity find_entity(EntityId id) const;
 		std::vector<Entity> get_entities() const;
 		std::vector<Entity> get_root_entities() const;

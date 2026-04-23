@@ -1,8 +1,8 @@
 #include "Editor.h"
 #include "Base/hlog.h"
-#include "Function/Application.h"
-#include "Function/Render/Renderer.h"
+#include "Services/EditorSettingsService.h"
 #include <array>
+#include <string>
 
 namespace AshEditor
 {
@@ -38,45 +38,8 @@ namespace AshEditor
 	{
 		if (m_editorApplication)
 		{
-			m_editorApplication->get_viewport_service().destroy_scene_presentations(
-				AshEngine::Application::get_scene_presentation());
 			m_editorApplication->shutdown();
 			m_editorApplication.reset();
-		}
-	}
-
-	void Editor::sync_render_asset_manager(AshEngine::Renderer& renderer)
-	{
-		if (!m_editorApplication)
-		{
-			return;
-		}
-
-		AshEngine::AssetDatabase& asset_database = m_editorApplication->get_asset_database_service().get_database();
-		get_render_asset_manager().initialize(&asset_database, &renderer);
-	}
-
-	void Editor::sync_scene_viewports()
-	{
-		if (!m_editorApplication)
-		{
-			return;
-		}
-
-		AshEngine::Renderer* renderer = AshEngine::Application::get_renderer();
-		AshEngine::ScenePresentationSubsystem* scene_presentation = AshEngine::Application::get_scene_presentation();
-		if (!renderer || !scene_presentation)
-		{
-			return;
-		}
-
-		sync_render_asset_manager(*renderer);
-
-		AshEngine::Scene& active_scene = m_editorApplication->get_scene_service().get_active_scene();
-		EditorViewportService& viewport_service = m_editorApplication->get_viewport_service();
-		if (!viewport_service.sync_scene_presentations(*scene_presentation, active_scene))
-		{
-			HLogError("Editor failed to synchronize scene viewport presentation bindings.");
 		}
 	}
 
@@ -92,7 +55,7 @@ namespace AshEditor
 		if (m_editorApplication)
 		{
 			m_editorApplication->update();
-			sync_scene_viewports();
+			m_editorApplication->sync_runtime_scene_presentations();
 		}
 
 		if (should_trace_editor_frame(m_updateFrameIndex))
@@ -100,10 +63,13 @@ namespace AshEditor
 			const EditorViewportInstance* primary_viewport =
 				m_editorApplication ? m_editorApplication->get_primary_viewport() : nullptr;
 			HLogInfo(
-				"Editor::_on_update frame {} end. viewport_output={}, viewport_surface={}.",
+				"Editor::_on_update frame {} end. viewport_surface={}, requested={}x{}, synced={}x{}.",
 				m_updateFrameIndex,
-				primary_viewport ? primary_viewport->output.value : 0u,
-				primary_viewport ? primary_viewport->surface.value : 0u);
+				primary_viewport ? primary_viewport->surface.value : 0u,
+				primary_viewport ? primary_viewport->state.requested_width : 0u,
+				primary_viewport ? primary_viewport->state.requested_height : 0u,
+				primary_viewport ? primary_viewport->state.width : 0u,
+				primary_viewport ? primary_viewport->state.height : 0u);
 		}
 	}
 
@@ -145,10 +111,11 @@ namespace AshEditor
 			const EditorViewportInstance* primary_viewport =
 				m_editorApplication ? m_editorApplication->get_primary_viewport() : nullptr;
 			HLogInfo(
-				"Editor::_on_render frame {} end. viewport_output={}, viewport_surface={}.",
+				"Editor::_on_render frame {} end. viewport_surface={}, synced={}x{}.",
 				m_renderFrameIndex,
-				primary_viewport ? primary_viewport->output.value : 0u,
-				primary_viewport ? primary_viewport->surface.value : 0u);
+				primary_viewport ? primary_viewport->surface.value : 0u,
+				primary_viewport ? primary_viewport->state.width : 0u,
+				primary_viewport ? primary_viewport->state.height : 0u);
 		}
 	}
 
@@ -173,6 +140,12 @@ namespace AshEditor
 auto create_application() -> AshEngine::Application*
 {
 	AshEngine::EngineInitConfig config{};
+	AshEditor::EditorSettingsService settings_service{};
+	const std::filesystem::path workspace_root = AshEditor::discover_editor_workspace_root();
+	settings_service.initialize(workspace_root);
+	const std::filesystem::path layout_ini_path = settings_service.get_layout_ini_path();
+	config.uiIniPath = layout_ini_path.empty() ? std::string{} : layout_ini_path.string();
+	config.uiThemePreset = AshEditor::parse_editor_ui_theme_preset(settings_service.get_settings().ui_theme_preset);
 	config.initWidth = 1920;
 	config.initHeight = 1080;
 	config.title = "Ash Engine Editor";

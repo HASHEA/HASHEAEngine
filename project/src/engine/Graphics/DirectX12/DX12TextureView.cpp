@@ -1,6 +1,7 @@
 #include "DX12TextureView.h"
 #include "DX12Texture.h"
 #include "DX12DescriptorHeap.h"
+#include "DX12Context.h"
 #include "Base/hlog.h"
 
 namespace RHI
@@ -196,13 +197,40 @@ namespace RHI
 	{
 		if (m_heapMgr && m_descriptorHandle.is_valid())
 		{
-			auto viewType = m_viewDesc.view_type;
-			if (viewType == AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_RTV)
-				m_heapMgr->cpuRtv.free(m_descriptorHandle);
-			else if (viewType == AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_DSV)
-				m_heapMgr->cpuDsv.free(m_descriptorHandle);
+			const auto descriptorHandle = m_descriptorHandle;
+			const auto viewType = m_viewDesc.view_type;
+			DX12DescriptorHeapManager* heapMgr = m_heapMgr;
+
+			auto free_descriptor = [heapMgr, descriptorHandle, viewType]() {
+				if (!heapMgr || !descriptorHandle.is_valid())
+				{
+					return;
+				}
+
+				if (viewType == AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_RTV)
+				{
+					heapMgr->cpuRtv.free(descriptorHandle);
+				}
+				else if (viewType == AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_DSV)
+				{
+					heapMgr->cpuDsv.free(descriptorHandle);
+				}
+				else
+				{
+					heapMgr->cpuCbvSrvUav.free(descriptorHandle);
+				}
+			};
+
+			DX12Context* context = DX12Context::get();
+			if (immediate_deletion || !context)
+			{
+				free_descriptor();
+			}
 			else
-				m_heapMgr->cpuCbvSrvUav.free(m_descriptorHandle);
+			{
+				context->get_current_frame_deletion_queue().emplace(std::move(free_descriptor));
+			}
+
 			m_descriptorHandle = {};
 		}
 		m_parentTexture.reset();

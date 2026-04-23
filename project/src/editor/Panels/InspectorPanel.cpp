@@ -14,6 +14,10 @@ namespace AshEditor
 {
 	namespace
 	{
+		constexpr AshEngine::UIColor k_inspectorAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
+		constexpr AshEngine::UIColor k_inspectorMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
+		constexpr AshEngine::UIColor k_inspectorWarningColor{ 0.95f, 0.80f, 0.48f, 1.0f };
+
 		// Keep the add/remove button flow identical across component sections.
 		auto draw_add_component_button(AshEngine::UIContext& ui, const char* label) -> bool
 		{
@@ -124,11 +128,56 @@ namespace AshEditor
 				: std::nullopt;
 		}
 
+		void draw_labeled_value(AshEngine::UIContext& ui, const char* label, const std::string& value)
+		{
+			ui.text_colored(k_inspectorMutedColor, "%s", label);
+			ui.same_line();
+			ui.text_wrapped("%s", value.empty() ? "-" : value.c_str());
+		}
+
+		void draw_labeled_bool(AshEngine::UIContext& ui, const char* label, bool value)
+		{
+			draw_labeled_value(ui, label, value ? "Yes" : "No");
+		}
+
+		void draw_panel_intro(AshEngine::UIContext& ui, const char* title, const char* description)
+		{
+			ui.text_colored(k_inspectorAccentColor, "%s", title);
+			ui.text_wrapped("%s", description);
+			ui.separator();
+		}
+
 		void draw_selection_summary(AshEngine::UIContext& ui, const EditorSelection& selection)
 		{
-			ui.text("Selection: %s", selection.label.c_str());
-			ui.text("Id: %llu", static_cast<unsigned long long>(selection.id));
+			const char* kind_label = "Selection";
+			switch (selection.kind)
+			{
+			case EditorSelectionKind::Entity:
+				kind_label = "Entity";
+				break;
+			case EditorSelectionKind::Asset:
+				kind_label = "Asset";
+				break;
+			default:
+				break;
+			}
+
+			ui.text_colored(k_inspectorAccentColor, "%s", selection.label.c_str());
+			ui.text_colored(k_inspectorMutedColor, "%s", kind_label);
+			ui.same_line();
+			ui.text_colored(k_inspectorMutedColor, "| Id %llu", static_cast<unsigned long long>(selection.id));
+			if (!selection.path.empty())
+			{
+				draw_labeled_value(ui, "Path", selection.path);
+			}
 			ui.separator();
+		}
+
+		void draw_empty_state(AshEngine::UIContext& ui)
+		{
+			draw_panel_intro(ui, "Inspector", "Select an entity or asset to inspect and edit its properties.");
+			ui.bullet_text("Entity selections show editable components and hierarchy data.");
+			ui.bullet_text("Asset selections show metadata from the asset database.");
 		}
 
 		void draw_hierarchy_section(AshEngine::UIContext& ui, const AshEngine::Entity& entity)
@@ -139,8 +188,8 @@ namespace AshEditor
 			}
 
 			const AshEngine::Entity parent = entity.get_parent();
-			ui.text("Parent Id: %llu", static_cast<unsigned long long>(parent.get_id()));
-			ui.text("Children: %u", static_cast<unsigned int>(entity.get_children().size()));
+			draw_labeled_value(ui, "Parent", parent.is_valid() ? std::to_string(parent.get_id()) : std::string("<Root>"));
+			draw_labeled_value(ui, "Children", std::to_string(entity.get_children().size()));
 		}
 
 		void draw_asset_inspector(EditorContext& context, AshEngine::UIContext& ui, const EditorSelection& selection)
@@ -152,12 +201,13 @@ namespace AshEditor
 				return;
 			}
 
-			ui.text("Type: %s", AssetDatabaseService::get_type_label(asset->type));
-			ui.text("Path: %s", asset->relative_path.generic_string().c_str());
-			ui.text("Parent: %s", asset->parent_path.generic_string().c_str());
-			ui.text("Directory: %s", asset->is_directory ? "true" : "false");
-			ui.text("File Size: %llu", static_cast<unsigned long long>(asset->file_size));
-			ui.text("Load State: %s", AssetDatabaseService::get_load_state_label(context.asset_database_service->get_load_state(asset->id)));
+			draw_panel_intro(ui, "Asset Details", "Metadata comes from the editor asset database.");
+			draw_labeled_value(ui, "Type", AssetDatabaseService::get_type_label(asset->type));
+			draw_labeled_value(ui, "Path", asset->relative_path.generic_string());
+			draw_labeled_value(ui, "Parent", asset->parent_path.empty() ? std::string("<Root>") : asset->parent_path.generic_string());
+			draw_labeled_bool(ui, "Directory", asset->is_directory);
+			draw_labeled_value(ui, "File Size", std::to_string(static_cast<unsigned long long>(asset->file_size)));
+			draw_labeled_value(ui, "Load State", AssetDatabaseService::get_load_state_label(context.asset_database_service->get_load_state(asset->id)));
 		}
 	}
 
@@ -296,7 +346,7 @@ namespace AshEditor
 
 	void InspectorPanel::draw_pending_change_hint(AshEngine::UIContext& ui, const char* label)
 	{
-		ui.text("%s", label);
+		ui.text_colored(k_inspectorWarningColor, "%s", label);
 	}
 
 	void InspectorPanel::draw_apply_revert_row(
@@ -311,9 +361,19 @@ namespace AshEditor
 		apply_clicked = false;
 		revert_clicked = false;
 
+		if (can_apply)
+		{
+			ui.push_style_color(AshEngine::UIStyleColorKind::Button, { 0.42f, 0.49f, 0.57f, 1.0f });
+			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, { 0.46f, 0.53f, 0.62f, 1.0f });
+			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, { 0.38f, 0.45f, 0.53f, 1.0f });
+		}
 		ui.begin_disabled(!can_apply);
 		apply_clicked = ui.button(apply_label);
 		ui.end_disabled();
+		if (can_apply)
+		{
+			ui.pop_style_color(3);
+		}
 		ui.same_line();
 		ui.begin_disabled(!has_pending_changes);
 		revert_clicked = ui.button(revert_label);
@@ -676,10 +736,11 @@ namespace AshEditor
 	{
 		if (!entity.is_valid())
 		{
-			ui.text_unformatted("Selected entity no longer exists.");
+			draw_panel_intro(ui, "Entity Details", "The selected entity is no longer available in the active scene.");
 			return;
 		}
 
+		draw_panel_intro(ui, "Entity Details", "Edit the selected entity and apply changes when you are ready.");
 		draw_component_sections(context, ui, entity);
 		draw_hierarchy_section(ui, entity);
 	}
@@ -702,7 +763,7 @@ namespace AshEditor
 		if (!context.selection_service || !context.selection_service->has_selection())
 		{
 			reset_entity_drafts();
-			ui.text_unformatted("Nothing selected.");
+			draw_empty_state(ui);
 			end_panel_window(context);
 			return;
 		}
@@ -727,7 +788,7 @@ namespace AshEditor
 		else
 		{
 			reset_entity_drafts();
-			ui.text_unformatted("Inspector adapter for this selection type is pending.");
+			draw_panel_intro(ui, "Inspector", "The current selection type does not have an inspector adapter yet.");
 		}
 
 		end_panel_window(context);

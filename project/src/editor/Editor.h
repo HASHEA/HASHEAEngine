@@ -21,8 +21,6 @@ namespace AshEditor
 	private:
 		void bootstrap_editor();
 		void shutdown_editor();
-		void sync_render_asset_manager(AshEngine::Renderer& renderer);
-		void sync_scene_viewports();
 
 	private:
 		std::unique_ptr<EditorApplication> m_editorApplication = nullptr;

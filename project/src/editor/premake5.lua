@@ -16,10 +16,13 @@ project "Editor"
 		thirdparty .. "/glm/include",
 		thirdparty .. "/entt/include",
 		thirdparty .. "/Json",
+		thirdparty .. "/stb",
 	}
 
 	files
 	{
+		-- Regenerate project files after adding new editor sources so the generated
+		-- Visual Studio project picks them up.
 		"**.h",
 		"**.cpp",
 

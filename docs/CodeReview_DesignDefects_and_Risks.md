@@ -1,5 +1,17 @@
 # AshEngine Code Review: Design Defects & Risk Analysis
 
+> 文档状态：**历史参考**
+>
+> This review is a dated audit snapshot from `2026-04-13`.
+>
+> It is useful for tracing background decisions and long-tail risks, but it should not be treated as the current source of truth for the editor architecture or current task status.
+>
+> Prefer these documents for the current editor baseline:
+>
+> - `docs/EditorDeveloperGuide.md`
+> - `docs/editor/README.md`
+> - `docs/EditorArchitectureAndRequirements.md`
+
 **Review Date**: 2026-04-13
 **Scope**: `project/src/engine/` & `project/src/editor/`
 **Files Reviewed**: ~1483 source files (.h/.hpp/.cpp)

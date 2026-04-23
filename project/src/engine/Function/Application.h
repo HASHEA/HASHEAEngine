@@ -3,6 +3,7 @@
 #include "Base/input/Input.h"
 #include "Base/hplatform.h"
 #include "Base/hthreading.h"
+#include "Function/Gui/UICommon.h"
 #include "Graphics/RHIBackend.h"
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/ScenePresentationSubsystem.h"
@@ -35,6 +36,8 @@ namespace AshEngine
 		bool bVsync = false;
 		RHI::Backend backend = RHI::Backend::Default;
 		const char* backendConfigPath = "product/config/Engine.ini";
+		std::string uiIniPath{};
+		UIThemePreset uiThemePreset = UIThemePreset::SlateStudio;
 		EngineThreadingConfig threading{};
 	};
 	class ASH_API Application
@@ -51,7 +54,6 @@ public:
 		{
 			return get()->window;
 		}
-#if defined(ASH_ENGINE)
 		inline static auto& get_graphics_context()
 		{
 			return get()->graphicsContext;
@@ -64,7 +66,6 @@ public:
 		{
 			return get()->renderDevice;
 		}
-#endif
 		inline static auto get_renderer()
 		{
 			return get()->renderer;

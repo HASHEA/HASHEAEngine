@@ -2,7 +2,11 @@
 #include "Base/hlog.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorViewportService.h"
+#include "imgui.h"
+#include <algorithm>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace AshEditor
 {
@@ -26,6 +30,52 @@ namespace AshEditor
 			static uint32_t s_logged_frames = 0;
 			++s_logged_frames;
 			return s_logged_frames <= 2;
+		}
+
+		auto make_overlay_lines(
+			const EditorViewportInstance& viewport,
+			const EditorViewportPresentation& presentation,
+			const EditorViewportRenderState* render_state,
+			bool is_primary) -> std::vector<std::string>
+		{
+			std::vector<std::string> lines{};
+			std::string header = viewport_kind_label(presentation.kind);
+			if (is_primary)
+			{
+				header += " | Primary";
+			}
+			if (presentation.accepts_input)
+			{
+				header += " | Input";
+			}
+			if (presentation.preserve_aspect)
+			{
+				header += " | Aspect";
+			}
+			lines.push_back(std::move(header));
+
+			lines.push_back(
+				"Output " +
+				std::to_string(viewport.state.width) +
+				"x" +
+				std::to_string(viewport.state.height) +
+				"  Req " +
+				std::to_string(viewport.state.requested_width) +
+				"x" +
+				std::to_string(viewport.state.requested_height));
+
+			if (presentation.show_stats)
+			{
+				lines.push_back(
+					"Focused " +
+					std::string(viewport.state.focused ? "yes" : "no") +
+					"  Hovered " +
+					std::string(viewport.state.hovered ? "yes" : "no") +
+					"  PendingSync " +
+					std::string(render_state && render_state->pending_sync ? "yes" : "no"));
+			}
+
+			return lines;
 		}
 	}
 
@@ -98,35 +148,37 @@ namespace AshEditor
 		}
 
 		ui.same_line();
-		bool preserve_aspect = presentation->preserve_aspect;
-		if (ui.checkbox("Aspect", preserve_aspect))
+		draw_toggle_button(ui, "Aspect", presentation->preserve_aspect);
+		ui.same_line();
+		draw_toggle_button(ui, "Input", presentation->accepts_input);
+		ui.same_line();
+		draw_toggle_button(ui, "Stats", presentation->show_stats);
+		ui.same_line();
+		draw_toggle_button(ui, "Overlay", presentation->show_overlays);
+	}
+
+	void ViewportPanel::draw_toggle_button(AshEngine::UIContext& ui, const char* label, bool& value) const
+	{
+		const bool was_enabled = value;
+		if (was_enabled)
 		{
-			presentation->preserve_aspect = preserve_aspect;
+			ui.push_style_color(AshEngine::UIStyleColorKind::Button, { 0.42f, 0.49f, 0.57f, 1.0f });
+			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, { 0.46f, 0.53f, 0.62f, 1.0f });
+			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, { 0.38f, 0.45f, 0.53f, 1.0f });
 		}
 
-		ui.same_line();
-		bool accepts_input = presentation->accepts_input;
-		if (ui.checkbox("Input", accepts_input))
+		if (ui.small_button(label))
 		{
-			presentation->accepts_input = accepts_input;
+			value = !value;
 		}
 
-		ui.same_line();
-		bool show_stats = presentation->show_stats;
-		if (ui.checkbox("Stats", show_stats))
+		if (was_enabled)
 		{
-			presentation->show_stats = show_stats;
-		}
-
-		ui.same_line();
-		bool show_overlays = presentation->show_overlays;
-		if (ui.checkbox("Overlay", show_overlays))
-		{
-			presentation->show_overlays = show_overlays;
+			ui.pop_style_color(3);
 		}
 	}
 
-	void ViewportPanel::draw_status(EditorContext& context, const EditorViewportInstance& viewport) const
+	void ViewportPanel::draw_overlay(EditorContext& context, const EditorViewportInstance& viewport) const
 	{
 		if (!context.ui_context || !context.viewport_service)
 		{
@@ -135,33 +187,61 @@ namespace AshEditor
 
 		const EditorViewportPresentation* presentation = context.viewport_service->get_presentation(m_viewportId);
 		const EditorViewportRenderState* render_state = context.viewport_service->get_render_state(m_viewportId);
-		if (!presentation)
+		if (!presentation || (!presentation->show_overlays && !presentation->show_stats))
 		{
 			return;
 		}
 
-		AshEngine::UIContext& ui = *context.ui_context;
-		ui.text(
-			"Mode: %s | Primary: %s | Input: %s | Overlay: %s",
-			viewport_kind_label(presentation->kind),
-			context.viewport_service->is_primary_viewport(viewport.id) ? "yes" : "no",
-			presentation->accepts_input ? "enabled" : "disabled",
-			presentation->show_overlays ? "visible" : "hidden");
-		ui.text(
-			"Output: %ux%u | Requested: %ux%u | Surface: %s | PendingSync: %s",
-			viewport.state.width,
-			viewport.state.height,
-			viewport.state.requested_width,
-			viewport.state.requested_height,
-			viewport.surface.is_valid() ? "ready" : "none",
-			render_state && render_state->pending_sync ? "yes" : "no");
-		if (presentation->show_stats)
+		const std::vector<std::string> lines = make_overlay_lines(
+			viewport,
+			*presentation,
+			render_state,
+			context.viewport_service->is_primary_viewport(viewport.id));
+		if (lines.empty())
 		{
-			ui.text(
-				"Focused: %s | Hovered: %s | PreserveAspect: %s",
-				viewport.state.focused ? "true" : "false",
-				viewport.state.hovered ? "true" : "false",
-				presentation->preserve_aspect ? "true" : "false");
+			return;
+		}
+
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (!draw_list)
+		{
+			return;
+		}
+
+		const ImVec2 item_min = ImGui::GetItemRectMin();
+		const float padding = 10.0f;
+		const float line_spacing = 4.0f;
+		float max_width = 0.0f;
+		float total_height = padding * 2.0f;
+		for (const std::string& line : lines)
+		{
+			const ImVec2 line_size = ImGui::CalcTextSize(line.c_str());
+			max_width = std::max(max_width, line_size.x);
+			total_height += line_size.y;
+		}
+		total_height += std::max(0.0f, static_cast<float>(lines.size() - 1)) * line_spacing;
+
+		const ImVec2 panel_min(item_min.x + 12.0f, item_min.y + 12.0f);
+		const ImVec2 panel_max(panel_min.x + max_width + padding * 2.0f, panel_min.y + total_height);
+		draw_list->AddRectFilled(
+			panel_min,
+			panel_max,
+			ImGui::GetColorU32(ImVec4(0.12f, 0.14f, 0.18f, 0.72f)),
+			6.0f);
+		draw_list->AddRect(
+			panel_min,
+			panel_max,
+			ImGui::GetColorU32(ImVec4(0.64f, 0.72f, 0.84f, 0.32f)),
+			6.0f);
+
+		float text_y = panel_min.y + padding;
+		for (const std::string& line : lines)
+		{
+			draw_list->AddText(
+				ImVec2(panel_min.x + padding, text_y),
+				ImGui::GetColorU32(ImGuiCol_Text),
+				line.c_str());
+			text_y += ImGui::CalcTextSize(line.c_str()).y + line_spacing;
 		}
 	}
 
@@ -218,12 +298,6 @@ namespace AshEditor
 			ui.end_menu_bar();
 		}
 
-		if (viewport)
-		{
-			draw_status(context, *viewport);
-			ui.separator();
-		}
-
 		const AshEngine::UIVec2 available = ui.get_content_region_avail();
 		if (viewport)
 		{
@@ -263,6 +337,7 @@ namespace AshEditor
 						available.y);
 				}
 				context.ui_context->draw_surface_fill_available(viewport->surface, preserve_aspect);
+				draw_overlay(context, *viewport);
 				if (trace_this_frame)
 				{
 					HLogInfo("ViewportPanel::on_gui finished drawing scene surface.");

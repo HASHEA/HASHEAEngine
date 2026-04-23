@@ -4,19 +4,25 @@
 
 namespace AshEditor
 {
-	void CommandService::register_action(std::string id, std::string label, std::function<void()> callback)
+	void CommandService::register_action(std::string id, std::string label, std::string shortcut, std::function<void()> callback)
 	{
 		for (EditorAction& action : m_actions)
 		{
 			if (action.id == id)
 			{
 				action.label = std::move(label);
+				action.shortcut = std::move(shortcut);
 				action.callback = std::move(callback);
 				return;
 			}
 		}
 
-		m_actions.push_back({ std::move(id), std::move(label), std::move(callback) });
+		m_actions.push_back({ std::move(id), std::move(label), std::move(shortcut), std::move(callback) });
+	}
+
+	void CommandService::register_action(std::string id, std::string label, std::function<void()> callback)
+	{
+		register_action(std::move(id), std::move(label), {}, std::move(callback));
 	}
 
 	bool CommandService::invoke(const std::string& id) const

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace AshEngine
 {
@@ -43,6 +44,12 @@ namespace AshEngine
 		Left = 0,
 		Right = 1,
 		Middle = 2
+	};
+
+	enum class UIThemePreset : uint8_t
+	{
+		ClassicDark = 0,
+		SlateStudio
 	};
 
 	enum class UIDirection : uint8_t
@@ -108,7 +115,8 @@ namespace AshEngine
 		bool enable_viewports = false;
 		bool enable_keyboard_navigation = true;
 		bool enable_gamepad_navigation = false;
-		const char* ini_path = nullptr;
+		std::string ini_path{};
+		UIThemePreset theme_preset = UIThemePreset::SlateStudio;
 	};
 
 	using UIConditionFlags = uint32_t;

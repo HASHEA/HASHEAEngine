@@ -2,6 +2,7 @@
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
+#include "Function/Application.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <cstring>
@@ -24,6 +25,7 @@ namespace AshEngine
 			return "<unnamed-material>";
 		}
 
+		static constexpr size_t k_max_scratch_depth_targets = 8u;
 	}
 
 	bool SceneRenderer::initialize(Renderer* renderer)
@@ -220,16 +222,18 @@ namespace AshEngine
 		const uint32_t output_width = view_context.output_target->get_width();
 		const uint32_t output_height = view_context.output_target->get_height();
 		const RenderTextureFormat output_format = view_context.output_target->get_format();
+		const uint64_t frame_index = Application::get() ? Application::get()->get_frame_index() : 0u;
 		ASH_PROCESS_ERROR(output_width <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
 		ASH_PROCESS_ERROR(output_height <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
 
-		for (const ScratchDepthEntry& entry : m_scratch_depth_targets)
+		for (ScratchDepthEntry& entry : m_scratch_depth_targets)
 		{
 			if (entry.key.width == output_width &&
 				entry.key.height == output_height &&
 				entry.key.output_format == output_format &&
 				entry.depth_target != nullptr)
 			{
+				entry.last_used_frame = frame_index;
 				depth_target = entry.depth_target;
 				break;
 			}
@@ -251,9 +255,27 @@ namespace AshEngine
 		depth_target_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
 		depth_target = m_renderer->create_render_target(depth_target_desc);
 		ASH_PROCESS_ERROR(depth_target != nullptr);
+		if (m_scratch_depth_targets.size() >= k_max_scratch_depth_targets)
+		{
+			auto eviction_it = m_scratch_depth_targets.begin();
+			for (auto it = m_scratch_depth_targets.begin(); it != m_scratch_depth_targets.end(); ++it)
+			{
+				if (!it->depth_target)
+				{
+					eviction_it = it;
+					break;
+				}
+				if (it->last_used_frame < eviction_it->last_used_frame)
+				{
+					eviction_it = it;
+				}
+			}
+			m_scratch_depth_targets.erase(eviction_it);
+		}
 		m_scratch_depth_targets.push_back({
 			{ output_width, output_height, output_format },
-			depth_target
+			depth_target,
+			frame_index
 		});
 		ASH_PROCESS_GUARD_RETURN_END(depth_target, nullptr);
 	}

@@ -7,6 +7,11 @@
 > - Editor 工作流、Editor 可直接使用的 Engine 接口、Editor 集成方式变化时，应同步更新本文档。
 > - Engine 架构、Runtime、RHI、渲染底层、DynamicRHI、Shader 编译与缓存等变化，请同步更新 `docs/EngineDeveloperGuide.md`。
 > - 若某次改动同时影响 Engine 与 Editor 边界，应同时更新两份文档。
+> - 开始新的 Editor 开发任务前，先阅读 `docs/README.md`、`docs/editor/README.md` 与本文档；若涉及 UI、Engine / Editor 边界或历史问题，再补读对应专题文档。
+> - 若本次协作涉及项目背景、目录边界、命令、验证方式、提交流程，请同步参考 `docs/EditorContributorGuide.md`。
+> - 若本次协作涉及主线程拆任务、多子线程并行、模块进度回写，请同步参考 `docs/EditorParallelCollaboration.md` 与对应模块进度文档。
+> - 若本次协作涉及阶段目标、里程碑和任务卡，请同步参考 `docs/EditorTaskPlanning.md`。
+> - 每次完成功能实现后，在提交或交付前至少回写本文档；若影响专题内容，再同步更新对应专题文档。
 
 ---
 
@@ -28,7 +33,6 @@ AshEngine/HASHEAEngine/
 │   │   │   └── EntryPoint.h         ← main() 入口与应用工厂
 │   │   └── editor/                  ← Editor 层 ★ 你的工作目录
 │   │       ├── Editor.h / .cpp      ← Editor 主类
-│   │       ├── CodexLogoDemoRenderer.h / .cpp  ← 参考示例: 完整的渲染流程
 │   │       ├── Shaders/             ← Editor 专属 Shader (HLSL)
 │   │       └── premake5.lua         ← Editor 构建配置
 │   └── thirdparty/                  ← 第三方库 (ImGui, entt, glm 等)
@@ -86,6 +90,20 @@ Application::get_scene_presentation()     // ✓ 可用 ← scene-driven viewpor
 1. 用 Premake5 生成 VS 解决方案: `premake5 vs2022`（在 `HASHEAEngine/` 根目录）
 2. 打开 `AshEngine.sln`，启动项目为 `Editor`
 3. 构建输出至 `product/bin64/<Config>/Editor.exe`
+
+### 开发工作流要求
+
+1. 开始实现前先阅读：
+   - `docs/README.md`
+   - `docs/EditorDeveloperGuide.md`
+   - 若本次涉及 UIContext / Editor 边界 / 历史设计问题，再补读相关专题文档
+2. 修改 Editor 代码或构建配置后：
+   - 运行 `premake5 vs2022`
+   - 再编译 `Editor` 目标确认无回归
+   - 若改动的是运行时 Editor UI，优先使用 `UIContext`，不要在活跃运行路径里重新引入 `ImGui::` / `imgui.h`
+3. 完成功能后：
+   - 至少更新本文档
+   - 若涉及 Engine / Editor 协作边界，同步更新 `docs/EngineDeveloperGuide.md` 或对应专题文档
 
 ### Editor 可用的第三方库 (已在 premake 中 include)
 
@@ -196,8 +214,8 @@ protected:
 当前 `Scene` / `Game` 视口的真实边界是：
 
 - `EditorViewportService` 在 update 阶段维护每个 viewport 的 requested size、panel open、primary viewport 状态
-- service 通过 `Application::get_scene_presentation()` 为每个 viewport 创建或更新一个 `Offscreen` output 和一个 persistent binding
-- `ViewportPanel` 只负责 UI 语义和 surface 展示，不再直接持有 viewport `RenderTarget`
+- service 通过 `Application::get_scene_presentation()` 为每个 viewport 创建或更新一个 `Offscreen` output 和一个 persistent binding；这两个句柄只保留在 service 内部，不再暴露给 UI-facing `EditorViewportInstance`
+- `ViewportPanel` 只负责 UI 语义和 `UISurfaceHandle` 展示，不再直接持有 viewport `RenderTarget`
 - `Editor::_on_render()` / `_present()` 保持基类默认实现，Editor 不再自己 `begin_frame()` / `end_frame()` / `SceneRenderer::render_visible_frame(...)`
 
 典型 scene-driven 视口声明如下：
@@ -441,19 +459,16 @@ StructuredBuffer<float4> Lights;
 
 ---
 
-## 8. 参考示例: CodexLogoDemoRenderer
+## 8. 自定义渲染路径
 
-`CodexLogoDemoRenderer` 是一个完整的渲染示例，展示了：
+Editor 侧旧的 `CodexLogoDemoRenderer` 已经从仓库移除，不再作为示例文件保留。
 
-1. **资源创建**: `create_storage_buffer`, `create_render_target`, `create_graphics_program`, `create_compute_program`
-2. **资源绑定**: `set_rw_texture`, `set_storage_buffer`, `set_texture`
-3. **Compute 后接 Graphics 的多 Pass 流程**
-4. **RenderTarget 尺寸变化时的资源重建**
-5. **延迟初始化模式** (`init()` 在首次 `render()` 时被调用)
+如果后续需要新增一条 custom / non-scene 渲染路径，建议直接基于引擎 `Renderer` 能力实现一个新的独立模块，并遵守以下约束：
 
-建议在开始写任何新功能之前，仔细阅读这两个文件：
-- `editor/CodexLogoDemoRenderer.h` — 接口设计
-- `editor/CodexLogoDemoRenderer.cpp` — 完整渲染管线示例
+1. **和正式 scene-driven viewport 主路径解耦**
+2. **不要重新把 demo renderer 挂回 Editor 正式主循环**
+3. **UI 展示仍通过 `UIContext` / `UISurfaceHandle` 接入**
+4. **需要新的可复用能力时，优先补 Engine / UIContext 正式接口**
 
 ---
 
@@ -464,23 +479,79 @@ StructuredBuffer<float4> Lights;
 ```
 editor/
 ├── Editor.h / .cpp              ← 主类, 管理生命周期
+├── Core/                        ← 共享命令与编辑器上下文
 ├── Panels/                      ← 各 UI 面板
 │   ├── SceneHierarchyPanel.h    ← 场景层级树
 │   ├── InspectorPanel.h         ← 属性检查器
 │   ├── ViewportPanel.h          ← 3D 视口
 │   ├── AssetBrowserPanel.h      ← 资源浏览器
 │   └── ConsolePanel.h           ← 日志/控制台
-├── Scene/                       ← 场景管理 (基于 entt)
-│   ├── Scene.h
-│   ├── Entity.h
-│   └── Components.h
+├── Services/                    ← Selection / Scene / UndoRedo / Viewport 等服务
 ├── Shaders/                     ← Editor 专属 Shader
 └── premake5.lua
 ```
 
+历史遗留的 `project/src/editor/Scene/**` 已归档到 `docs/editor/legacy-scene-runtime/`，不再保留在活跃源码树内。
+
 ### 关于 ImGui
 
-ImGui 已包含在 Engine 的编译中（Engine 的 premake 编译了 ImGui 源码），Editor 的 premake 中也已 include 了 ImGui 头文件路径。当前 `_on_gui()` 虚方法已预留，但 ImGui 的初始化和后端绑定（Vulkan backend）需要在 Engine 侧确认是否已经集成。如果尚未集成，需要与 Engine 开发者协调。
+ImGui 仍然是底层实现，但 **运行时 Editor 不应直接依赖原生 ImGui 接口**。当前约定如下：
+
+- Engine 内部拥有 ImGui 后端初始化与平台 / RHI 绑定。
+- Editor 运行时面板、菜单、dockspace、视口预览一律通过 `UIContext` 调用。
+- `project/src/editor/ImGui/EditorImGuiLayer.*` 与 `project/src/editor/ImGui/EditorStyle.*` 仅保留为历史参考实现，已在 `project/src/editor/premake5.lua` 中排除，不属于当前运行时路径。
+- 如果 Editor 新需求缺少某个“可复用、立即模式、后端无关”的 UI 原语，应先补到 `UIContext`，而不是在 Editor 里重新 `#include "imgui.h"`。
+
+### 当前 Editor UI 组织方式
+
+当前运行时编辑器工作区已经恢复为基于 `UIContext` 的 dockspace 布局：
+
+- `EditorApplication` 负责创建 dockspace host window，并通过 `dock_builder_*` 构建默认布局。
+- `ViewportPanel` 只负责呈现某个 `EditorViewportInstance`，不直接拥有全局唯一视口状态。
+- `EditorViewportService` 管理多视图实例，并在内部维护 scene presentation 的 output / binding 生命周期；面板层只消费 `UISurfaceHandle`。
+- `Editor::_on_update()` 通过 `EditorApplication` 同步 scene presentation 声明，`Editor::_on_render()` / `_present()` 保持基类默认帧流程，不再自己编排 `SceneRenderer`。
+- `EditorViewportService::get_viewports()` 会按稳定顺序发布 `scene -> game -> auxiliary`，避免 `unordered_map` 迭代顺序把渲染和 UI 排序变成非确定行为。
+- `Window -> Reset Layout` 会重建默认 dock graph，而不是再用早期的手工浮窗坐标布局。
+
+当前已经补上的面板可用性能力：
+
+- `SceneHierarchyPanel` 支持 `Add Root`、`Add Child`、`Delete Selected` 这类基础场景树编辑动作。
+- `AssetBrowserPanel` 支持按文本搜索、按资源类型过滤，以及带文件夹标识和层级缩进的目录树浏览。
+- `ConsolePanel` 支持文本过滤和清空消息，方便在 Editor 运行日志增多时快速聚焦问题。
+
+### 跨模块状态边界约定
+
+- `scene lifecycle`
+  - `startup scene load`
+  - `new scene`
+  - `reload active scene`
+
+  上述路径必须统一走 `EditorApplication` 的 scene-change helper，不允许各面板各自手工 reset。
+  `reload active scene` 失败时会真实回退到新的默认场景，并同步清掉 `last_scene_path`，不再只写一条与实际行为不一致的日志。
+
+- `selection / undo-redo / inspector draft`
+  - scene changed 时先清 `SelectionService`
+  - 再清 `UndoRedoService`
+  - 最后重新建立默认 selection
+  - 面板内部草稿状态必须依赖这条统一链路归零，不允许跨 scene 残留
+
+- `viewport shared state`
+  - `EditorContext.viewport` 只表示当前 primary viewport 的单份共享快照
+  - 共享快照由 `EditorApplication::update_editor_context()` 统一发布
+  - 非 primary viewport 的状态只能保留在各自 `EditorViewportInstance`
+  - 新消费者优先通过 `EditorViewportService + viewport id` 查询，不要继续扩展 `context.viewport`
+
+- `shared commands`
+  - 同一语义的编辑命令优先收口到共享 `EditorCommand`
+  - 不允许长期保留 `Inspector` / `Hierarchy` 各自维护一套同语义命令实现
+  - 当前已统一：`RenameEntityCommand`、`TransformEntityCommand`
+  - 当前也已统一：`SetCameraComponentCommand`、`SetLightComponentCommand`、`SetMeshComponentCommand`
+  - 当前也已统一：`CreateEntityCommand`、`ReparentEntityCommand`、`DeleteEntityCommand`
+
+- `undo / redo failure semantics`
+  - `EditorCommand::undo()` 必须返回 `bool`
+  - `UndoRedoService::undo()` 只有在命令真正撤销成功时才返回 `true`
+  - `UndoRedoService::redo()` 执行失败时必须把命令放回 redo 栈，不能悄悄丢失历史
 
 ### 关于 entt (ECS)
 
@@ -554,7 +625,7 @@ A: 左手坐标系，深度范围 [0, 1]。
 A: 通过 `Application::get_scene_presentation()` 声明 `SceneOutputHandle` + `SceneViewBindingHandle`，UI 层只拿 `UISurfaceHandle` 调 `draw_surface_fill_available(...)`。不要自己维护 viewport `RenderTarget` 或直接调 `SceneRenderer`。
 
 **Q: 我想加一个新的渲染 Pass，流程是什么？**
-A: 创建 RenderTarget → 创建 GraphicsProgram → 在 `_on_render()` 中用 `begin_pass()` + `draw()` + `end()` 执行。参考 `CodexLogoDemoRenderer`。
+A: 创建 RenderTarget → 创建 GraphicsProgram → 在 `_on_render()` 中用 `begin_pass()` + `draw()` + `end()` 执行；如果是 scene-driven viewport，则优先走 `ScenePresentationSubsystem`，不要再恢复旧 demo renderer。
 
 **Q: 如何与 Engine 开发者协作？**
 A: 如果你需要新的 Function 层接口（如新的资源类型、新的渲染特性），请向 Engine 开发者提需求。不要试图自己修改 Engine 代码。

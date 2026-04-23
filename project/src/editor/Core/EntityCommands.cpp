@@ -1,7 +1,6 @@
 #include "Core/EntityCommands.h"
 #include "Core/EditorContext.h"
 #include "Services/SceneService.h"
-#include "Services/SelectionService.h"
 #include <optional>
 #include <utility>
 
@@ -9,30 +8,6 @@ namespace AshEditor
 {
 	namespace
 	{
-		void select_entity_if_available(EditorContext& context, AshEngine::EntityId entity_id)
-		{
-			if (!context.selection_service)
-			{
-				return;
-			}
-
-			if (entity_id == 0)
-			{
-				context.selection_service->clear();
-				return;
-			}
-
-			const AshEngine::Entity entity = context.scene_service ? context.scene_service->find_entity(entity_id) : AshEngine::Entity{};
-			if (entity.is_valid())
-			{
-				context.selection_service->select({ EditorSelectionKind::Entity, entity.get_id(), entity.get_name(), {} });
-			}
-			else
-			{
-				context.selection_service->clear();
-			}
-		}
-
 		bool transform_components_equal(
 			const AshEngine::TransformComponent& lhs,
 			const AshEngine::TransformComponent& rhs)
@@ -201,28 +176,35 @@ namespace AshEditor
 			return false;
 		}
 
-		if (!context.scene_service->rename_entity(m_entityId, m_newName))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
-		return true;
+		return context.scene_service->rename_entity(m_entityId, m_newName);
 	}
 
 	bool RenameEntityCommand::undo(EditorContext& context)
 	{
-		if (!context.scene_service || !m_hasCapturedOldName)
+		return context.scene_service && m_hasCapturedOldName &&
+			context.scene_service->rename_entity(m_entityId, m_oldName);
+	}
+
+	bool RenameEntityCommand::try_merge(const EditorCommand& subsequent_command)
+	{
+		const auto* subsequent = dynamic_cast<const RenameEntityCommand*>(&subsequent_command);
+		if (!subsequent || subsequent->m_entityId != m_entityId || !m_hasCapturedOldName || !subsequent->m_hasCapturedOldName)
 		{
 			return false;
 		}
 
-		if (context.scene_service->rename_entity(m_entityId, m_oldName))
-		{
-			select_entity_if_available(context, m_entityId);
-			return true;
-		}
-		return false;
+		m_newName = subsequent->m_newName;
+		return true;
+	}
+
+	EditorCommandSelection RenameEntityCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	EditorCommandSelection RenameEntityCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
 	}
 
 	TransformEntityCommand::TransformEntityCommand(
@@ -248,13 +230,7 @@ namespace AshEditor
 		}
 
 		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!entity.is_valid() || !entity.set_transform_component(m_afterValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
-		return true;
+		return entity.is_valid() && entity.set_transform_component(m_afterValue);
 	}
 
 	bool TransformEntityCommand::undo(EditorContext& context)
@@ -265,13 +241,29 @@ namespace AshEditor
 		}
 
 		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!entity.is_valid() || !entity.set_transform_component(m_beforeValue))
+		return entity.is_valid() && entity.set_transform_component(m_beforeValue);
+	}
+
+	bool TransformEntityCommand::try_merge(const EditorCommand& subsequent_command)
+	{
+		const auto* subsequent = dynamic_cast<const TransformEntityCommand*>(&subsequent_command);
+		if (!subsequent || subsequent->m_entityId != m_entityId)
 		{
 			return false;
 		}
 
-		select_entity_if_available(context, m_entityId);
+		m_afterValue = subsequent->m_afterValue;
 		return true;
+	}
+
+	EditorCommandSelection TransformEntityCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	EditorCommandSelection TransformEntityCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
 	}
 
 	SetCameraComponentCommand::SetCameraComponentCommand(
@@ -305,31 +297,35 @@ namespace AshEditor
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!apply_camera_component_state(entity, m_afterValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
-		return true;
+		return apply_camera_component_state(context.scene_service->find_entity(m_entityId), m_afterValue);
 	}
 
 	bool SetCameraComponentCommand::undo(EditorContext& context)
 	{
-		if (!context.scene_service || m_entityId == 0)
+		return context.scene_service && m_entityId != 0 &&
+			apply_camera_component_state(context.scene_service->find_entity(m_entityId), m_beforeValue);
+	}
+
+	bool SetCameraComponentCommand::try_merge(const EditorCommand& subsequent_command)
+	{
+		const auto* subsequent = dynamic_cast<const SetCameraComponentCommand*>(&subsequent_command);
+		if (!subsequent || subsequent->m_entityId != m_entityId)
 		{
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!apply_camera_component_state(entity, m_beforeValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
+		m_afterValue = subsequent->m_afterValue;
 		return true;
+	}
+
+	EditorCommandSelection SetCameraComponentCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	EditorCommandSelection SetCameraComponentCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
 	}
 
 	SetLightComponentCommand::SetLightComponentCommand(
@@ -363,31 +359,35 @@ namespace AshEditor
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!apply_light_component_state(entity, m_afterValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
-		return true;
+		return apply_light_component_state(context.scene_service->find_entity(m_entityId), m_afterValue);
 	}
 
 	bool SetLightComponentCommand::undo(EditorContext& context)
 	{
-		if (!context.scene_service || m_entityId == 0)
+		return context.scene_service && m_entityId != 0 &&
+			apply_light_component_state(context.scene_service->find_entity(m_entityId), m_beforeValue);
+	}
+
+	bool SetLightComponentCommand::try_merge(const EditorCommand& subsequent_command)
+	{
+		const auto* subsequent = dynamic_cast<const SetLightComponentCommand*>(&subsequent_command);
+		if (!subsequent || subsequent->m_entityId != m_entityId)
 		{
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!apply_light_component_state(entity, m_beforeValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
+		m_afterValue = subsequent->m_afterValue;
 		return true;
+	}
+
+	EditorCommandSelection SetLightComponentCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	EditorCommandSelection SetLightComponentCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
 	}
 
 	SetMeshComponentCommand::SetMeshComponentCommand(
@@ -421,36 +421,44 @@ namespace AshEditor
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!apply_mesh_component_state(entity, m_afterValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
-		return true;
+		return apply_mesh_component_state(context.scene_service->find_entity(m_entityId), m_afterValue);
 	}
 
 	bool SetMeshComponentCommand::undo(EditorContext& context)
 	{
-		if (!context.scene_service || m_entityId == 0)
+		return context.scene_service && m_entityId != 0 &&
+			apply_mesh_component_state(context.scene_service->find_entity(m_entityId), m_beforeValue);
+	}
+
+	bool SetMeshComponentCommand::try_merge(const EditorCommand& subsequent_command)
+	{
+		const auto* subsequent = dynamic_cast<const SetMeshComponentCommand*>(&subsequent_command);
+		if (!subsequent || subsequent->m_entityId != m_entityId)
 		{
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		if (!apply_mesh_component_state(entity, m_beforeValue))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
+		m_afterValue = subsequent->m_afterValue;
 		return true;
 	}
 
-	CreateEntityCommand::CreateEntityCommand(std::string entity_name, AshEngine::EntityId parent_id)
+	EditorCommandSelection SetMeshComponentCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	EditorCommandSelection SetMeshComponentCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	CreateEntityCommand::CreateEntityCommand(
+		std::string entity_name,
+		AshEngine::EntityId parent_id,
+		uint32_t sibling_index)
 		: m_entityName(std::move(entity_name))
 		, m_parentId(parent_id)
+		, m_siblingIndex(sibling_index)
 	{
 	}
 
@@ -466,36 +474,45 @@ namespace AshEditor
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->create_entity(m_entityName, m_parentId);
+		AshEngine::Entity entity = m_createdEntityId != 0
+			? context.scene_service->create_entity_with_id(m_createdEntityId, m_entityName, m_parentId, m_siblingIndex)
+			: context.scene_service->create_entity(m_entityName, m_parentId, m_siblingIndex);
 		if (!entity.is_valid())
 		{
 			return false;
 		}
 
 		m_createdEntityId = entity.get_id();
-		select_entity_if_available(context, m_createdEntityId);
+		if (m_siblingIndex == AshEngine::k_scene_append_sibling_index)
+		{
+			m_siblingIndex = context.scene_service->get_entity_sibling_index(m_createdEntityId);
+		}
 		return true;
 	}
 
 	bool CreateEntityCommand::undo(EditorContext& context)
 	{
-		if (!context.scene_service || m_createdEntityId == 0)
-		{
-			return false;
-		}
-
-		if (!context.scene_service->destroy_entity(m_createdEntityId))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_parentId);
-		return true;
+		return context.scene_service && m_createdEntityId != 0 &&
+			context.scene_service->destroy_entity(m_createdEntityId);
 	}
 
-	ReparentEntityCommand::ReparentEntityCommand(AshEngine::EntityId entity_id, AshEngine::EntityId new_parent_id)
+	EditorCommandSelection CreateEntityCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_createdEntityId);
+	}
+
+	EditorCommandSelection CreateEntityCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_parentId);
+	}
+
+	ReparentEntityCommand::ReparentEntityCommand(
+		AshEngine::EntityId entity_id,
+		AshEngine::EntityId new_parent_id,
+		uint32_t new_sibling_index)
 		: m_entityId(entity_id)
 		, m_newParentId(new_parent_id)
+		, m_newSiblingIndex(new_sibling_index)
 	{
 	}
 
@@ -520,37 +537,66 @@ namespace AshEditor
 		if (!m_hasCapturedPreviousParent)
 		{
 			m_previousParentId = get_entity_parent_id(entity);
+			m_previousSiblingIndex = context.scene_service->get_entity_sibling_index(m_entityId);
 			m_hasCapturedPreviousParent = true;
 		}
 
-		if (m_previousParentId == m_newParentId)
+		if (m_previousParentId == m_newParentId &&
+			m_newSiblingIndex != AshEngine::k_scene_append_sibling_index &&
+			m_previousSiblingIndex == m_newSiblingIndex)
 		{
 			return false;
 		}
 
-		if (!context.scene_service->reparent_entity(m_entityId, m_newParentId))
+		if (m_previousParentId == m_newParentId &&
+			m_newSiblingIndex == AshEngine::k_scene_append_sibling_index)
 		{
 			return false;
 		}
 
-		select_entity_if_available(context, m_entityId);
+		const uint32_t execute_sibling_index =
+			m_newSiblingIndex == AshEngine::k_scene_append_sibling_index && m_previousParentId != m_newParentId
+			? AshEngine::k_scene_append_sibling_index
+			: m_newSiblingIndex;
+		if (!context.scene_service->reparent_entity(m_entityId, m_newParentId, execute_sibling_index))
+		{
+			return false;
+		}
+
+		if (m_newSiblingIndex == AshEngine::k_scene_append_sibling_index)
+		{
+			m_newSiblingIndex = context.scene_service->get_entity_sibling_index(m_entityId);
+		}
 		return true;
 	}
 
 	bool ReparentEntityCommand::undo(EditorContext& context)
 	{
-		if (!context.scene_service || !m_hasCapturedPreviousParent)
+		return context.scene_service && m_hasCapturedPreviousParent &&
+			context.scene_service->reparent_entity(m_entityId, m_previousParentId, m_previousSiblingIndex);
+	}
+
+	bool ReparentEntityCommand::try_merge(const EditorCommand& subsequent_command)
+	{
+		const auto* subsequent = dynamic_cast<const ReparentEntityCommand*>(&subsequent_command);
+		if (!subsequent || subsequent->m_entityId != m_entityId || !m_hasCapturedPreviousParent || !subsequent->m_hasCapturedPreviousParent)
 		{
 			return false;
 		}
 
-		if (!context.scene_service->reparent_entity(m_entityId, m_previousParentId))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_entityId);
+		m_newParentId = subsequent->m_newParentId;
+		m_newSiblingIndex = subsequent->m_newSiblingIndex;
 		return true;
+	}
+
+	EditorCommandSelection ReparentEntityCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
+	}
+
+	EditorCommandSelection ReparentEntityCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
 	}
 
 	DeleteEntityCommand::DeleteEntityCommand(AshEngine::EntityId entity_id)
@@ -584,13 +630,7 @@ namespace AshEditor
 
 		m_snapshot = snapshot;
 		m_parentId = get_entity_parent_id(entity);
-		if (!context.scene_service->destroy_entity(m_entityId))
-		{
-			return false;
-		}
-
-		select_entity_if_available(context, m_parentId);
-		return true;
+		return context.scene_service->destroy_entity(m_entityId);
 	}
 
 	bool DeleteEntityCommand::undo(EditorContext& context)
@@ -607,7 +647,16 @@ namespace AshEditor
 		}
 
 		m_entityId = restored.get_id();
-		select_entity_if_available(context, m_entityId);
 		return true;
+	}
+
+	EditorCommandSelection DeleteEntityCommand::get_selection_after_execute() const
+	{
+		return EditorCommandSelection::entity(m_parentId);
+	}
+
+	EditorCommandSelection DeleteEntityCommand::get_selection_after_undo() const
+	{
+		return EditorCommandSelection::entity(m_entityId);
 	}
 }

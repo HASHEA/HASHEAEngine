@@ -8,10 +8,12 @@
 #include "Services/AssetDatabaseService.h"
 #include "Services/CommandService.h"
 #include "Services/EditorSettingsService.h"
+#include "Services/EditorIconService.h"
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
 #include "Services/UndoRedoService.h"
+#include "imgui.h"
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -32,16 +34,20 @@ namespace AshEditor
 
 		void update();
 		void draw_gui();
+		void sync_runtime_scene_presentations();
 		EditorViewportInstance* get_primary_viewport();
 		const EditorViewportInstance* get_primary_viewport() const;
-		SceneService& get_scene_service();
-		const SceneService& get_scene_service() const;
-		AssetDatabaseService& get_asset_database_service();
-		const AssetDatabaseService& get_asset_database_service() const;
 		EditorViewportService& get_viewport_service();
 		const EditorViewportService& get_viewport_service() const;
 
 	private:
+		struct ShortcutBinding
+		{
+			const char* action_id = nullptr;
+			ImGuiKeyChord chord = 0;
+			bool allow_when_text_input = false;
+		};
+
 		void bootstrap_context();
 		void bootstrap_panels();
 		void shutdown_panels();
@@ -55,8 +61,13 @@ namespace AshEditor
 		void reset_editor_state_after_scene_change();
 		void select_default_entity();
 		void log_message(const std::string& message);
+		bool invoke_action(const char* action_id);
+		bool draw_action_menu_item(AshEngine::UIContext& ui, const char* action_id, bool enabled = true);
+		void handle_global_shortcuts();
 		void draw_workspace_host();
 		void draw_main_menu_bar();
+		void draw_theme_menu(AshEngine::UIContext& ui);
+		void apply_theme_preset(AshEngine::UIThemePreset preset);
 		void build_default_dock_layout(AshEngine::UIDockNodeId dockspace_id, const AshEngine::UIVec2& size);
 		void load_viewport_layout_state();
 		void save_viewport_layout_state() const;
@@ -71,6 +82,7 @@ namespace AshEditor
 		EditorViewportService m_viewportService{};
 		CommandService m_commandService{};
 		UndoRedoService m_undoRedoService{};
+		EditorIconService m_iconService{};
 		EditorContext m_editorContext{};
 		std::unique_ptr<ViewportPanel> m_viewportPanel = nullptr;
 		std::unique_ptr<ViewportPanel> m_gameViewportPanel = nullptr;

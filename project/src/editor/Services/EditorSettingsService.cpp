@@ -9,6 +9,40 @@ namespace AshEditor
 		using json = nlohmann::json;
 	}
 
+	AshEngine::UIThemePreset parse_editor_ui_theme_preset(std::string_view value)
+	{
+		if (value == "classic_dark")
+		{
+			return AshEngine::UIThemePreset::ClassicDark;
+		}
+
+		return AshEngine::UIThemePreset::SlateStudio;
+	}
+
+	const char* get_editor_ui_theme_preset_name(AshEngine::UIThemePreset preset)
+	{
+		switch (preset)
+		{
+		case AshEngine::UIThemePreset::ClassicDark:
+			return "classic_dark";
+		case AshEngine::UIThemePreset::SlateStudio:
+		default:
+			return "slate_studio";
+		}
+	}
+
+	const char* get_editor_ui_theme_preset_label(AshEngine::UIThemePreset preset)
+	{
+		switch (preset)
+		{
+		case AshEngine::UIThemePreset::ClassicDark:
+			return "Classic Dark";
+		case AshEngine::UIThemePreset::SlateStudio:
+		default:
+			return "Slate Studio";
+		}
+	}
+
 	std::filesystem::path discover_editor_workspace_root()
 	{
 		std::filesystem::path current = std::filesystem::current_path();
@@ -66,8 +100,10 @@ namespace AshEditor
 		m_settings.asset_browser_active_directory = root.value("assetBrowserActiveDirectory", m_settings.asset_browser_active_directory);
 		m_settings.asset_browser_show_details = root.value("assetBrowserShowDetails", m_settings.asset_browser_show_details);
 		m_settings.asset_browser_type_filter = root.value("assetBrowserTypeFilter", m_settings.asset_browser_type_filter);
+		m_settings.asset_browser_view_mode = root.value("assetBrowserViewMode", m_settings.asset_browser_view_mode);
 		m_settings.console_filter_text = root.value("consoleFilterText", m_settings.console_filter_text);
 		m_settings.console_severity_filter = root.value("consoleSeverityFilter", m_settings.console_severity_filter);
+		m_settings.ui_theme_preset = root.value("uiThemePreset", m_settings.ui_theme_preset);
 		return true;
 	}
 
@@ -89,8 +125,10 @@ namespace AshEditor
 		root["assetBrowserActiveDirectory"] = m_settings.asset_browser_active_directory;
 		root["assetBrowserShowDetails"] = m_settings.asset_browser_show_details;
 		root["assetBrowserTypeFilter"] = m_settings.asset_browser_type_filter;
+		root["assetBrowserViewMode"] = m_settings.asset_browser_view_mode;
 		root["consoleFilterText"] = m_settings.console_filter_text;
 		root["consoleSeverityFilter"] = m_settings.console_severity_filter;
+		root["uiThemePreset"] = m_settings.ui_theme_preset;
 
 		std::ofstream output(m_settingsFilePath, std::ios::out | std::ios::trunc);
 		if (!output.is_open())

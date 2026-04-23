@@ -16,6 +16,9 @@ namespace AshEditor
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		bool try_merge(const EditorCommand& subsequent_command) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;
@@ -35,6 +38,9 @@ namespace AshEditor
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		bool try_merge(const EditorCommand& subsequent_command) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;
@@ -53,6 +59,9 @@ namespace AshEditor
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		bool try_merge(const EditorCommand& subsequent_command) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;
@@ -71,6 +80,9 @@ namespace AshEditor
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		bool try_merge(const EditorCommand& subsequent_command) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;
@@ -89,6 +101,9 @@ namespace AshEditor
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		bool try_merge(const EditorCommand& subsequent_command) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;
@@ -99,31 +114,45 @@ namespace AshEditor
 	class CreateEntityCommand final : public EditorCommand
 	{
 	public:
-		CreateEntityCommand(std::string entity_name, AshEngine::EntityId parent_id);
+		CreateEntityCommand(
+			std::string entity_name,
+			AshEngine::EntityId parent_id,
+			uint32_t sibling_index = AshEngine::k_scene_append_sibling_index);
 
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		std::string m_entityName{};
 		AshEngine::EntityId m_parentId = 0;
+		uint32_t m_siblingIndex = AshEngine::k_scene_append_sibling_index;
 		AshEngine::EntityId m_createdEntityId = 0;
 	};
 
 	class ReparentEntityCommand final : public EditorCommand
 	{
 	public:
-		ReparentEntityCommand(AshEngine::EntityId entity_id, AshEngine::EntityId new_parent_id);
+		ReparentEntityCommand(
+			AshEngine::EntityId entity_id,
+			AshEngine::EntityId new_parent_id,
+			uint32_t new_sibling_index = AshEngine::k_scene_append_sibling_index);
 
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		bool try_merge(const EditorCommand& subsequent_command) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;
 		AshEngine::EntityId m_newParentId = 0;
+		uint32_t m_newSiblingIndex = AshEngine::k_scene_append_sibling_index;
 		AshEngine::EntityId m_previousParentId = 0;
+		uint32_t m_previousSiblingIndex = 0;
 		bool m_hasCapturedPreviousParent = false;
 	};
 
@@ -135,6 +164,8 @@ namespace AshEditor
 		const char* get_label() const override;
 		bool execute(EditorContext& context) override;
 		bool undo(EditorContext& context) override;
+		EditorCommandSelection get_selection_after_execute() const override;
+		EditorCommandSelection get_selection_after_undo() const override;
 
 	private:
 		AshEngine::EntityId m_entityId = 0;

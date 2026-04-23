@@ -1270,7 +1270,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - `Sandbox` 主窗口已迁移到 `Window` output + persistent binding，不再手动驱动 `Renderer::begin_frame()` / `SceneRenderer`
 - `Editor` 的 scene/game viewports 已迁移到 engine-owned offscreen outputs + `UISurfaceHandle` 展示，不再直接持有 viewport `RenderTarget`
-- `CodexLogoDemoRenderer` 等 custom / non-scene renderer 继续走 `Renderer` 直接驱动路径
+- custom / non-scene renderer 继续走 `Renderer` 直接驱动路径；Editor 侧旧的 `CodexLogoDemoRenderer` 已经移除，不再作为参考实现保留
 
 相关设计与接入文档见：
 

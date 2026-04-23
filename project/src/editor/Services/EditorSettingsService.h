@@ -1,7 +1,9 @@
 #pragma once
+#include "Function/Gui/UICommon.h"
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
 
 namespace AshEditor
 {
@@ -15,8 +17,10 @@ namespace AshEditor
 		std::string asset_browser_active_directory{};
 		bool asset_browser_show_details = true;
 		int32_t asset_browser_type_filter = 0;
+		int32_t asset_browser_view_mode = 0;
 		std::string console_filter_text{};
 		int32_t console_severity_filter = 0;
+		std::string ui_theme_preset = "slate_studio";
 	};
 
 	class EditorSettingsService
@@ -42,4 +46,7 @@ namespace AshEditor
 	};
 
 	std::filesystem::path discover_editor_workspace_root();
+	AshEngine::UIThemePreset parse_editor_ui_theme_preset(std::string_view value);
+	const char* get_editor_ui_theme_preset_name(AshEngine::UIThemePreset preset);
+	const char* get_editor_ui_theme_preset_label(AshEngine::UIThemePreset preset);
 }
