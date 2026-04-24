@@ -3,6 +3,11 @@ workspace "AshEngine"
 	cppdialect "C++17"
 	architecture "x64"
 
+	filter { "action:vs*", "system:windows" }
+		flags { "MultiProcessorCompile" }
+		buildoptions { "/FS" }
+	filter {}
+
 rootdir = path.getabsolute(".")
 rootdir_win = rootdir:gsub("/", "\\")
 
