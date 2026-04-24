@@ -27,6 +27,7 @@ namespace AshEngine
 		EntityId entity_id = 0;
 		std::string asset_path{};
 		uint32_t mesh_index = 0;
+		std::vector<MeshMaterialOverride> material_overrides{};
 		bool visible = true;
 		SceneMobility mobility = SceneMobility::Static;
 		uint32_t layer_mask = k_default_scene_layer_mask;

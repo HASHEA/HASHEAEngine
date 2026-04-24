@@ -4,7 +4,7 @@
 #include "DX12Texture.h"
 #include "DX12Framebuffer.h"
 #include "DX12RenderPass.h"
-#include "DX12StagingBuffer.h"
+#include "DX12StagingBufferPool.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Graphics/Framebuffer.h"
@@ -395,16 +395,12 @@ namespace RHI
 
 		auto* staging = DX12Context::get()->get_staging_buffer();
 		auto [stagingResource, stagingOffset] = staging->stage_data(pData, uSize);
-		if (stagingResource)
-		{
-			m_cmdList->CopyBufferRegion(
-				dx12Buf->get_resource(), uOffset,
-				stagingResource, stagingOffset,
-				uSize);
-			return true;
-		}
-
-		return false;
+		H_ASSERT(stagingResource);
+		m_cmdList->CopyBufferRegion(
+			dx12Buf->get_resource(), uOffset,
+			stagingResource, stagingOffset,
+			uSize);
+		return true;
 	}
 
 	auto DX12CommandBuffer::cmd_update_texture_sub_resource(std::shared_ptr<Texture> texture, const void* pData) -> bool
@@ -516,11 +512,11 @@ namespace RHI
 			return false;
 		}
 
-		auto [stagingResource, stagingOffset] = staging->stage_data(packedUploadData.data(), static_cast<uint32_t>(totalUploadBytes));
-		if (!stagingResource)
-		{
-			return false;
-		}
+		auto [stagingResource, stagingOffset] = staging->stage_data(
+			packedUploadData.data(),
+			static_cast<uint32_t>(totalUploadBytes),
+			D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+		H_ASSERT(stagingResource);
 
 		if (!cmd_transition_resource_state({ texture, AshResourceState::CopyDst }))
 		{

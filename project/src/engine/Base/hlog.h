@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <memory>
 #include <iostream>
 #include <string>
@@ -38,8 +38,8 @@ namespace AshEngine
 	if((bool)(cond) != true)\
 		HLogError("failed check hsresult at {0},{1}",__FILE__, __LINE__);
 
-#define ASH_LOG_PROCESS_ERROR(condition, ...) if(!condition) {__bInnerError = true;\
+#define ASH_LOG_PROCESS_ERROR(condition, ...) if(!(condition)) {__bInnerError = true;\
 	HLogError("ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
 	break;}
-#define ASH_PROCESS_ERROR_EXIT(condition,...) if(!condition){__bInnerError = true; H_ASSERTLOG(false, "ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
+#define ASH_PROCESS_ERROR_EXIT(condition,...) if(!(condition)){__bInnerError = true; H_ASSERTLOG(false, "ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
 	break;}

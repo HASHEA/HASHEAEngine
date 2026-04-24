@@ -18,7 +18,7 @@ namespace AshEngine
 		EntityId entity_id = 0;
 		glm::mat4 world_transform{ 1.0f };
 		std::shared_ptr<StaticMeshRenderAsset> render_asset = nullptr;
-		std::vector<StaticMeshRenderSection> sections{};
+		std::vector<ResolvedStaticMeshSection> sections{};
 	};
 
 	struct ASH_API VisibleRenderFrame

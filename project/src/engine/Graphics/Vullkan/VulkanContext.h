@@ -312,6 +312,7 @@ public:
 		auto create_graphics_render_program(const GraphicProgramCreateDesc& desc) -> std::unique_ptr<IGraphicsRenderProgram> override;
 		auto create_compute_render_program(const ComputeProgramCreateDesc& desc) -> std::unique_ptr<IComputeRenderProgram> override;
 		auto create_shader(const ShaderCreation& ci) -> std::shared_ptr<Shader> override;
+		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
 		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
 		auto begin_frame() -> void override;

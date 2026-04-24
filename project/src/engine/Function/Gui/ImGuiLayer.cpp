@@ -1,4 +1,4 @@
-#include "ImGuiLayer.h"
+﻿#include "ImGuiLayer.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Base/window/Window.h"
@@ -31,7 +31,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace AshEngine
@@ -626,11 +628,26 @@ namespace AshEngine
 
 		UITextureHandle ensure_vulkan_registration(TextureRegistration& registration, const std::shared_ptr<RenderTarget>& render_target)
 		{
+			static std::unordered_set<const RenderTarget*> s_logged_missing_texture_prereqs{};
+			static std::unordered_set<const RenderTarget*> s_logged_successful_texture_registrations{};
+
 			std::shared_ptr<RHI::TextureView> shader_resource_view = m_render_device->get_shader_resource_view(render_target);
 			auto* vulkan_texture_view = shader_resource_view ? static_cast<RHI::VulkanTextureView*>(shader_resource_view.get()) : nullptr;
 			const VkImageView image_view = vulkan_texture_view ? vulkan_texture_view->get_vk_image_view() : VK_NULL_HANDLE;
 			if (image_view == VK_NULL_HANDLE || m_vk_sampler == VK_NULL_HANDLE)
 			{
+				if (render_target && s_logged_missing_texture_prereqs.insert(render_target.get()).second)
+				{
+					HLogError(
+						"ImGuiLayer: Vulkan viewport texture registration prerequisites are missing. render_target={}, size={}x{}, format={}, has_srv={}, image_view=0x{:x}, sampler=0x{:x}.",
+						static_cast<const void*>(render_target.get()),
+						render_target->get_width(),
+						render_target->get_height(),
+						static_cast<int32_t>(render_target->get_format()),
+						shader_resource_view != nullptr,
+						static_cast<uint64_t>(reinterpret_cast<uintptr_t>(image_view)),
+						static_cast<uint64_t>(reinterpret_cast<uintptr_t>(m_vk_sampler)));
+				}
 				return nullptr;
 			}
 
@@ -657,8 +674,26 @@ namespace AshEngine
 			}
 
 			registration.descriptor_set = ImGui_ImplVulkan_AddTexture(m_vk_sampler, image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+			if (registration.descriptor_set == VK_NULL_HANDLE)
+			{
+				HLogError(
+					"ImGuiLayer: ImGui_ImplVulkan_AddTexture returned a null descriptor set for render_target={} image_view=0x{:x}.",
+					static_cast<const void*>(render_target.get()),
+					static_cast<uint64_t>(reinterpret_cast<uintptr_t>(image_view)));
+				return nullptr;
+			}
 			registration.image_view = image_view;
 			registration.texture_id = reinterpret_cast<UITextureHandle>(registration.descriptor_set);
+			if (render_target && s_logged_successful_texture_registrations.insert(render_target.get()).second)
+			{
+				HLogInfo(
+					"ImGuiLayer: Vulkan viewport texture registered successfully. render_target={}, size={}x{}, descriptor_set=0x{:x}, image_view=0x{:x}.",
+					static_cast<const void*>(render_target.get()),
+					render_target->get_width(),
+					render_target->get_height(),
+					static_cast<uint64_t>(reinterpret_cast<uintptr_t>(registration.descriptor_set)),
+					static_cast<uint64_t>(reinterpret_cast<uintptr_t>(image_view)));
+			}
 			return registration.texture_id;
 		}
 #endif

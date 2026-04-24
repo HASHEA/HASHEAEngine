@@ -4,6 +4,7 @@
 #include "Base/ds/harray.hpp"
 #include "RHIBackend.h"
 #include "RHIResource.h"
+#include "Sampler.h"
 #include <memory>
 namespace RHI {
     struct VulkanValidationConfig
@@ -96,6 +97,7 @@ namespace RHI {
         virtual auto create_framebuffer(const FramebufferCreation& ci) -> std::shared_ptr<Framebuffer> = 0;
         virtual auto create_graphics_render_program(const GraphicProgramCreateDesc& desc) -> std::unique_ptr<IGraphicsRenderProgram> = 0;
         virtual auto create_compute_render_program(const ComputeProgramCreateDesc& desc) -> std::unique_ptr<IComputeRenderProgram> = 0;
+        virtual auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> = 0;
         virtual auto get_sampler(const AshSamplerState& ss)->std::shared_ptr<Sampler> = 0;
         virtual auto wait_idle() -> void = 0;
 		virtual auto begin_frame() -> void = 0;

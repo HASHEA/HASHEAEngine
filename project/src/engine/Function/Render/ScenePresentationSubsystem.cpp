@@ -3,6 +3,8 @@
 #include "Base/hlog.h"
 #include "Base/window/Window.h"
 #include "Function/Application.h"
+#include "Function/Render/Material.h"
+#include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/Renderer.h"
@@ -104,6 +106,7 @@ namespace AshEngine
 		}
 
 		static auto resolve_output_format(
+			SceneOutputKind kind,
 			SceneOutputFormat format,
 			bool srgb,
 			const std::shared_ptr<RenderTarget>& back_buffer) -> RenderTextureFormat
@@ -111,16 +114,16 @@ namespace AshEngine
 			switch (format)
 			{
 			case SceneOutputFormat::SRGB8:
-				return RenderTextureFormat::BGRA8_SRGB;
+				return RenderTextureFormat::RGBA8_SRGB;
 			case SceneOutputFormat::RGBA16F:
 				return RenderTextureFormat::RGBA16_SFLOAT;
 			case SceneOutputFormat::Auto:
 			default:
-				if (back_buffer)
+				if (kind == SceneOutputKind::Window && back_buffer)
 				{
 					return back_buffer->get_format();
 				}
-				return srgb ? RenderTextureFormat::BGRA8_SRGB : RenderTextureFormat::RGBA8_UNORM;
+				return srgb ? RenderTextureFormat::RGBA8_SRGB : RenderTextureFormat::RGBA8_UNORM;
 			}
 		}
 
@@ -578,6 +581,7 @@ namespace AshEngine
 		const std::shared_ptr<RenderTarget> back_buffer = m_impl->renderer->get_back_buffer();
 		std::unordered_set<uint32_t> touched_outputs{};
 		touched_outputs.reserve(prepared_packets.size());
+		static std::unordered_set<uint32_t> s_logged_binding_submits{};
 
 		for (Impl::PreparedPacket& packet : prepared_packets)
 		{
@@ -595,7 +599,8 @@ namespace AshEngine
 			}
 			else
 			{
-				const RenderTextureFormat desired_format = resolve_output_format(output_state.format, output_state.srgb, back_buffer);
+				const RenderTextureFormat desired_format =
+					resolve_output_format(output_state.kind, output_state.format, output_state.srgb, back_buffer);
 				if (!output_state.render_target ||
 					output_state.allocated_width != packet.output_width ||
 					output_state.allocated_height != packet.output_height ||
@@ -616,6 +621,15 @@ namespace AshEngine
 						packet.overrides.clear_color.a
 					};
 					output_state.render_target = m_impl->renderer->create_render_target(render_target_desc);
+					if (!output_state.render_target)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to allocate offscreen output '{}' ({}x{}, format={}).",
+							output_state.debug_name,
+							packet.output_width,
+							packet.output_height,
+							static_cast<int32_t>(desired_format));
+					}
 					output_state.allocated_width = packet.output_width;
 					output_state.allocated_height = packet.output_height;
 					output_state.allocated_format = static_cast<uint32_t>(desired_format);
@@ -627,6 +641,60 @@ namespace AshEngine
 			if (!output_target || !packet.visible_frame)
 			{
 				continue;
+			}
+
+			if (s_logged_binding_submits.insert(packet.binding.value).second)
+			{
+				size_t total_section_count = 0;
+				for (const VisibleStaticMeshDraw& draw : packet.visible_frame->static_mesh_draws)
+				{
+					total_section_count += draw.sections.size();
+				}
+
+				HLogInfo(
+					"ScenePresentationSubsystem: submitting binding '{}' to output '{}' ({}x{}), draws={}, sections={}.",
+					packet.debug_name,
+					output_state.debug_name,
+					packet.output_width,
+					packet.output_height,
+					packet.visible_frame->static_mesh_draws.size(),
+					total_section_count);
+			}
+
+			for (VisibleStaticMeshDraw& draw : packet.visible_frame->static_mesh_draws)
+			{
+				for (ResolvedStaticMeshSection& section : draw.sections)
+				{
+					if (!section.material)
+					{
+						section.material = m_impl->render_asset_manager->request_material_asset(k_builtin_default_surface_material_path);
+					}
+					if (!section.material)
+					{
+						HLogError("ScenePresentationSubsystem: static mesh section is missing a resolved material.");
+						continue;
+					}
+
+					std::shared_ptr<MaterialRenderProxy> material_proxy =
+						m_impl->render_asset_manager->request_material_render_proxy(section.material);
+					if (!material_proxy)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
+							section.material->get_asset_path().generic_string());
+						continue;
+					}
+					if (!material_proxy->update_bindings(*m_impl->render_asset_manager) ||
+						!material_proxy->ensure_program(*m_impl->renderer))
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
+							section.material->get_asset_path().generic_string());
+						continue;
+					}
+
+					section.material_proxy = std::move(material_proxy);
+				}
 			}
 
 			const bool first_use_on_output = touched_outputs.insert(output_state.handle.value).second;

@@ -1,4 +1,4 @@
-#include "Application.h"
+﻿#include "Application.h"
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/Swapchain.h"

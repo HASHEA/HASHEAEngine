@@ -1,4 +1,4 @@
-#include "VulkanRenderProgram.h"
+﻿#include "VulkanRenderProgram.h"
 #include "Base/hlog.h"
 #include "VulkanCommandBuffer.h"
 #include "VulkanContext.h"
@@ -375,7 +375,7 @@ namespace RHI
 				return false;
 			}
 
-			auto sampler_view = Ash_New_Shared<VulkanSamplerView>(const_cast<char*>(sampler->get_name()), sampler);
+			auto sampler_view = Ash_New_Shared<VulkanSamplerView>(sampler->get_name(), sampler);
 			m_cached_sampler_views.push_back(sampler_view);
 			sampler_views.push_back(sampler_view);
 		}

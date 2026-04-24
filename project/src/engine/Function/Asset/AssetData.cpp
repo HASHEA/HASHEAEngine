@@ -41,7 +41,7 @@ namespace AshEngine
 	{
 		using json = nlohmann::json;
 
-		constexpr uint32_t k_ashasset_file_version = 1;
+		constexpr uint32_t k_ashasset_file_version = 2;
 
 		static auto make_error(std::string* out_error, std::string_view message) -> bool
 		{
@@ -91,6 +91,83 @@ namespace AshEngine
 			result.y = value[1].get<float>();
 			result.z = value[2].get<float>();
 			return result;
+		}
+
+		static auto serialize_material_overrides(const std::vector<MeshMaterialOverride>& overrides) -> json
+		{
+			json result = json::array();
+			for (const MeshMaterialOverride& override_desc : overrides)
+			{
+				if (override_desc.material_slot == k_invalid_material_slot || override_desc.material_path.empty())
+				{
+					continue;
+				}
+
+				result.push_back(
+				{
+					{ "material_slot", override_desc.material_slot },
+					{ "material_path", override_desc.material_path },
+				});
+			}
+			return result;
+		}
+
+		static auto deserialize_material_overrides(const json& value) -> std::vector<MeshMaterialOverride>
+		{
+			std::vector<MeshMaterialOverride> overrides{};
+			if (!value.is_array())
+			{
+				return overrides;
+			}
+
+			overrides.reserve(value.size());
+			for (const json& entry : value)
+			{
+				if (!entry.is_object())
+				{
+					continue;
+				}
+
+				MeshMaterialOverride override_desc{};
+				override_desc.material_slot = entry.value("material_slot", k_invalid_material_slot);
+				override_desc.material_path = entry.value("material_path", std::string{});
+				if (override_desc.material_slot == k_invalid_material_slot || override_desc.material_path.empty())
+				{
+					continue;
+				}
+
+				overrides.push_back(std::move(override_desc));
+			}
+
+			return overrides;
+		}
+
+		static auto ensure_model_default_material_references(Model& model) -> void
+		{
+			std::unordered_map<uint32_t, std::string> explicit_material_paths{};
+			explicit_material_paths.reserve(model.default_materials.size());
+			for (const ModelMaterialReference& reference : model.default_materials)
+			{
+				if (reference.material_slot == k_invalid_material_slot || reference.material_slot >= model.material_slots.size())
+				{
+					continue;
+				}
+
+				explicit_material_paths.emplace(reference.material_slot, reference.material_path);
+			}
+
+			model.default_materials.clear();
+			model.default_materials.reserve(model.material_slots.size());
+			for (uint32_t material_slot = 0; material_slot < model.material_slots.size(); ++material_slot)
+			{
+				ModelMaterialReference reference{};
+				reference.material_slot = material_slot;
+				if (const auto found = explicit_material_paths.find(material_slot); found != explicit_material_paths.end())
+				{
+					reference.material_path = found->second;
+				}
+				model.default_materials.push_back(std::move(reference));
+			}
 		}
 
 		static auto resolve_embedded_resource_path(const std::filesystem::path& base_path, std::string_view uri) -> std::string
@@ -234,6 +311,13 @@ namespace AshEngine
 				}
 			}
 			return result;
+		}
+
+		static auto make_material_texture_binding(std::string texture_path) -> MaterialTextureBinding
+		{
+			MaterialTextureBinding binding{};
+			binding.texture_path = std::move(texture_path);
+			return binding;
 		}
 
 		static auto append_mesh_instance(const Mesh& source, const glm::mat4& transform, std::string_view name_prefix, Mesh& destination) -> void
@@ -396,9 +480,9 @@ namespace AshEngine
 				slot.emissive_factor = glm::vec3(material.emission[0], material.emission[1], material.emission[2]);
 				slot.metallic_factor = clamp01(material.metallic);
 				slot.roughness_factor = material.roughness > 0.0f ? clamp01(material.roughness) : 1.0f;
-				slot.base_color_texture_path = resolve_embedded_resource_path(path, material.diffuse_texname);
-				slot.normal_texture_path = resolve_embedded_resource_path(path, material.normal_texname);
-				slot.emissive_texture_path = resolve_embedded_resource_path(path, material.emissive_texname);
+				slot.base_color_texture = make_material_texture_binding(resolve_embedded_resource_path(path, material.diffuse_texname));
+				slot.normal_texture = make_material_texture_binding(resolve_embedded_resource_path(path, material.normal_texname));
+				slot.emissive_texture = make_material_texture_binding(resolve_embedded_resource_path(path, material.emissive_texname));
 				model.material_slots.push_back(std::move(slot));
 			}
 
@@ -724,6 +808,162 @@ namespace AshEngine
 			return image.name;
 		}
 
+		static auto try_map_gltf_wrap_mode(
+			int value,
+			RenderSamplerAddressMode& out_mode) -> bool
+		{
+			switch (value)
+			{
+			case TINYGLTF_TEXTURE_WRAP_REPEAT:
+				out_mode = RenderSamplerAddressMode::Repeat;
+				return true;
+			case TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE:
+				out_mode = RenderSamplerAddressMode::ClampToEdge;
+				return true;
+			case TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT:
+				out_mode = RenderSamplerAddressMode::MirroredRepeat;
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		static auto try_map_gltf_mag_filter(
+			int value,
+			RenderSamplerFilter& out_filter) -> bool
+		{
+			switch (value)
+			{
+			case TINYGLTF_TEXTURE_FILTER_NEAREST:
+				out_filter = RenderSamplerFilter::Nearest;
+				return true;
+			case TINYGLTF_TEXTURE_FILTER_LINEAR:
+				out_filter = RenderSamplerFilter::Linear;
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		static auto try_map_gltf_min_filter(
+			int value,
+			RenderSamplerFilter& out_min_filter,
+			RenderSamplerFilter& out_mip_filter) -> bool
+		{
+			switch (value)
+			{
+			case TINYGLTF_TEXTURE_FILTER_NEAREST:
+			case TINYGLTF_TEXTURE_FILTER_NEAREST_MIPMAP_NEAREST:
+				out_min_filter = RenderSamplerFilter::Nearest;
+				out_mip_filter = RenderSamplerFilter::Nearest;
+				return true;
+			case TINYGLTF_TEXTURE_FILTER_LINEAR_MIPMAP_NEAREST:
+				out_min_filter = RenderSamplerFilter::Linear;
+				out_mip_filter = RenderSamplerFilter::Nearest;
+				return true;
+			case TINYGLTF_TEXTURE_FILTER_NEAREST_MIPMAP_LINEAR:
+				out_min_filter = RenderSamplerFilter::Nearest;
+				out_mip_filter = RenderSamplerFilter::Linear;
+				return true;
+			case TINYGLTF_TEXTURE_FILTER_LINEAR:
+			case TINYGLTF_TEXTURE_FILTER_LINEAR_MIPMAP_LINEAR:
+				out_min_filter = RenderSamplerFilter::Linear;
+				out_mip_filter = RenderSamplerFilter::Linear;
+				return true;
+			default:
+				return false;
+			}
+		}
+
+		static auto build_generated_sampler_name(size_t sampler_index) -> std::string
+		{
+			return "Sampler" + std::to_string(sampler_index);
+		}
+
+		static auto ensure_material_slot_sampler_definition(
+			MaterialSlot& material_slot,
+			const RenderSamplerDesc& desc) -> std::string
+		{
+			for (const MaterialSamplerDefinition& definition : material_slot.sampler_definitions)
+			{
+				if (definition.desc == desc)
+				{
+					return definition.name;
+				}
+			}
+
+			const std::string sampler_name = build_generated_sampler_name(material_slot.sampler_definitions.size());
+			material_slot.sampler_definitions.push_back(MaterialSamplerDefinition{
+				sampler_name,
+				sampler_name,
+				desc
+			});
+			return sampler_name;
+		}
+
+		static auto get_gltf_texture_binding(
+			const tinygltf::Model& model,
+			const std::filesystem::path& asset_path,
+			int texture_index,
+			MaterialSlot& material_slot) -> MaterialTextureBinding
+		{
+			MaterialTextureBinding binding{};
+			binding.texture_path = get_gltf_texture_path(model, asset_path, texture_index);
+			if (texture_index < 0 || static_cast<size_t>(texture_index) >= model.textures.size())
+			{
+				return binding;
+			}
+
+			const tinygltf::Texture& texture = model.textures[static_cast<size_t>(texture_index)];
+			if (texture.sampler < 0 || static_cast<size_t>(texture.sampler) >= model.samplers.size())
+			{
+				return binding;
+			}
+
+			RenderSamplerDesc sampler_desc{};
+
+			const tinygltf::Sampler& sampler = model.samplers[static_cast<size_t>(texture.sampler)];
+			if (sampler.wrapS >= 0 && !try_map_gltf_wrap_mode(sampler.wrapS, sampler_desc.address_u))
+			{
+				HLogWarning(
+					"glTF import warning: unsupported sampler wrapS {} for '{}' texture {}; using Repeat.",
+					sampler.wrapS,
+					asset_path.generic_string(),
+					texture_index);
+			}
+			if (sampler.wrapT >= 0 && !try_map_gltf_wrap_mode(sampler.wrapT, sampler_desc.address_v))
+			{
+				HLogWarning(
+					"glTF import warning: unsupported sampler wrapT {} for '{}' texture {}; using Repeat.",
+					sampler.wrapT,
+					asset_path.generic_string(),
+					texture_index);
+			}
+			if (sampler.magFilter >= 0 && !try_map_gltf_mag_filter(sampler.magFilter, sampler_desc.mag_filter))
+			{
+				HLogWarning(
+					"glTF import warning: unsupported sampler magFilter {} for '{}' texture {}; using Linear.",
+					sampler.magFilter,
+					asset_path.generic_string(),
+					texture_index);
+			}
+			if (sampler.minFilter >= 0 &&
+				!try_map_gltf_min_filter(
+					sampler.minFilter,
+					sampler_desc.min_filter,
+					sampler_desc.mip_filter))
+			{
+				HLogWarning(
+					"glTF import warning: unsupported sampler minFilter {} for '{}' texture {}; using Linear/Linear.",
+					sampler.minFilter,
+					asset_path.generic_string(),
+					texture_index);
+			}
+
+			binding.sampler_name = ensure_material_slot_sampler_definition(material_slot, sampler_desc);
+			return binding;
+		}
+
 		static auto convert_gltf_primitive_to_triangles(const std::vector<uint32_t>& source_indices, int primitive_mode, std::vector<uint32_t>& out_triangles) -> bool
 		{
 			out_triangles.clear();
@@ -852,10 +1092,10 @@ namespace AshEngine
 						static_cast<float>(material.emissiveFactor[1]),
 						static_cast<float>(material.emissiveFactor[2]));
 				}
-				slot.base_color_texture_path = get_gltf_texture_path(gltf_model, path, material.pbrMetallicRoughness.baseColorTexture.index);
-				slot.normal_texture_path = get_gltf_texture_path(gltf_model, path, material.normalTexture.index);
-				slot.metallic_roughness_texture_path = get_gltf_texture_path(gltf_model, path, material.pbrMetallicRoughness.metallicRoughnessTexture.index);
-				slot.emissive_texture_path = get_gltf_texture_path(gltf_model, path, material.emissiveTexture.index);
+				slot.base_color_texture = get_gltf_texture_binding(gltf_model, path, material.pbrMetallicRoughness.baseColorTexture.index, slot);
+				slot.normal_texture = get_gltf_texture_binding(gltf_model, path, material.normalTexture.index, slot);
+				slot.metallic_roughness_texture = get_gltf_texture_binding(gltf_model, path, material.pbrMetallicRoughness.metallicRoughnessTexture.index, slot);
+				slot.emissive_texture = get_gltf_texture_binding(gltf_model, path, material.emissiveTexture.index, slot);
 				model.material_slots.push_back(std::move(slot));
 			}
 
@@ -1284,10 +1524,10 @@ namespace AshEngine
 					clamp01(emissive.b * emissive_factor));
 				slot.metallic_factor = 0.0f;
 				slot.roughness_factor = 1.0f - clamp01(shininess / 100.0f);
-				slot.base_color_texture_path = resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::DIFFUSE));
-				slot.normal_texture_path = resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::NORMAL));
-				slot.emissive_texture_path = resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::EMISSIVE));
-				slot.metallic_roughness_texture_path = resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::SHININESS));
+				slot.base_color_texture = make_material_texture_binding(resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::DIFFUSE)));
+				slot.normal_texture = make_material_texture_binding(resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::NORMAL)));
+				slot.emissive_texture = make_material_texture_binding(resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::EMISSIVE)));
+				slot.metallic_roughness_texture = make_material_texture_binding(resolve_ofbx_texture_path(path, source_material->getTexture(ofbx::Texture::SHININESS)));
 
 				const uint32_t slot_index = static_cast<uint32_t>(model.material_slots.size());
 				model.material_slots.push_back(std::move(slot));
@@ -1597,6 +1837,15 @@ namespace AshEngine
 			}
 		}
 
+		for (const ModelMaterialReference& material_reference : default_materials)
+		{
+			if (material_reference.material_slot == k_invalid_material_slot
+				|| material_reference.material_slot >= material_slots.size())
+			{
+				return false;
+			}
+		}
+
 		return true;
 	}
 
@@ -1638,19 +1887,23 @@ namespace AshEngine
 		if (extension == ".obj")
 		{
 			bResult = import_obj_model(path, out_model, out_error);
-			break;
 		}
-		if (extension == ".gltf" || extension == ".glb")
+		else if (extension == ".gltf" || extension == ".glb")
 		{
 			bResult = import_gltf_model(path, out_model, out_error);
-			break;
 		}
-		if (extension == ".fbx")
+		else if (extension == ".fbx")
 		{
 			bResult = import_fbx_model(path, out_model, out_error);
-			break;
 		}
-		bResult = make_error(out_error, "Unsupported model format.");
+		else
+		{
+			bResult = make_error(out_error, "Unsupported model format.");
+		}
+		if (bResult)
+		{
+			ensure_model_default_material_references(out_model);
+		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -1745,6 +1998,7 @@ namespace AshEngine
 				MeshComponent mesh{};
 				mesh.asset_path = mesh_json.value("asset_path", std::string{});
 				mesh.mesh_index = mesh_json.value("mesh_index", 0u);
+				mesh.material_overrides = deserialize_material_overrides(mesh_json.value("material_overrides", json::array()));
 				mesh.visible = mesh_json.value("visible", true);
 				mesh.mobility = static_cast<SceneMobility>(mesh_json.value("mobility", static_cast<uint32_t>(mesh.mobility)));
 				mesh.layer_mask = mesh_json.value("layer_mask", mesh.layer_mask);
@@ -1842,6 +2096,10 @@ namespace AshEngine
 					{ "mobility", static_cast<uint32_t>(mesh.mobility) },
 					{ "layer_mask", mesh.layer_mask },
 				};
+				if (!mesh.material_overrides.empty())
+				{
+					node_json["mesh"]["material_overrides"] = serialize_material_overrides(mesh.material_overrides);
+				}
 			}
 
 			root["nodes"].push_back(std::move(node_json));

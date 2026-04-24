@@ -1,5 +1,6 @@
 #pragma once
 #include "Base/hcore.h"
+#include "Function/Render/Material.h"
 #include "Function/Render/VertexDecl.h"
 #include "Graphics/Pipeline.h"
 #include <cstdint>
@@ -26,6 +27,7 @@ namespace AshEngine
 	{
 		Unknown = 0,
 		RGBA8_UNORM,
+		RGBA8_SRGB,
 		BGRA8_SRGB,
 		RGBA16_SFLOAT,
 		RGBA32_SFLOAT,
@@ -178,6 +180,17 @@ namespace AshEngine
 		bool use_optimized_clear_value = false;
 		RenderColorValue optimized_clear_color{};
 		RenderDepthStencilValue optimized_clear_depth_stencil{};
+	};
+
+	struct TextureUploadDesc
+	{
+		uint16_t width = 1;
+		uint16_t height = 1;
+		RenderTextureFormat format = RenderTextureFormat::RGBA8_UNORM;
+		const void* initial_data = nullptr;
+		uint32_t row_pitch = 0;
+		bool srgb = false;
+		const char* name = nullptr;
 	};
 
 	struct UniformBufferDesc
@@ -334,6 +347,28 @@ namespace AshEngine
 		friend class RenderDevice;
 	};
 
+	class ASH_API RenderSampler
+	{
+	public:
+		class Impl;
+
+	public:
+		RenderSampler();
+		~RenderSampler();
+
+	public:
+		const RenderSamplerDesc& get_desc() const;
+
+	private:
+		std::shared_ptr<Impl> m_impl;
+
+	private:
+		explicit RenderSampler(std::shared_ptr<Impl> impl);
+		friend class GraphicsProgram;
+		friend class ComputeProgram;
+		friend class RenderDevice;
+	};
+
 	class ASH_API GraphicsProgram
 	{
 	public:
@@ -345,6 +380,7 @@ namespace AshEngine
 
 	public:
 		bool apply_render_state(const std::function<void(GraphicsProgramState&)>& fn);
+		bool get_reflected_sampler_names(std::vector<std::string>& out_names) const;
 		bool set_const_data_block(uint32_t size, const void* data);
 		bool set_static_int(const char* name, int32_t value);
 		bool set_static_uint(const char* name, uint32_t value);
@@ -358,6 +394,8 @@ namespace AshEngine
 		bool set_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
 		bool set_rw_texture(const char* name, const std::shared_ptr<RenderTarget>& texture);
 		bool set_rw_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
+		bool set_sampler(const char* name, const std::shared_ptr<RenderSampler>& sampler);
+		bool set_sampler_array(const char* name, const std::vector<std::shared_ptr<RenderSampler>>& samplers);
 		bool set_sampler(const char* name, RenderSamplerState sampler_state = RenderSamplerState::Default);
 		bool set_sampler_array(const char* name, const std::vector<RenderSamplerState>& sampler_states);
 
@@ -387,6 +425,7 @@ namespace AshEngine
 		~ComputeProgram();
 
 	public:
+		bool get_reflected_sampler_names(std::vector<std::string>& out_names) const;
 		bool set_const_data_block(uint32_t size, const void* data);
 		bool set_static_int(const char* name, int32_t value);
 		bool set_static_uint(const char* name, uint32_t value);
@@ -400,6 +439,8 @@ namespace AshEngine
 		bool set_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
 		bool set_rw_texture(const char* name, const std::shared_ptr<RenderTarget>& texture);
 		bool set_rw_texture_array(const char* name, const std::vector<std::shared_ptr<RenderTarget>>& textures);
+		bool set_sampler(const char* name, const std::shared_ptr<RenderSampler>& sampler);
+		bool set_sampler_array(const char* name, const std::vector<std::shared_ptr<RenderSampler>>& samplers);
 		bool set_sampler(const char* name, RenderSamplerState sampler_state = RenderSamplerState::Default);
 		bool set_sampler_array(const char* name, const std::vector<RenderSamplerState>& sampler_states);
 
@@ -446,6 +487,7 @@ namespace AshEngine
 
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
+		std::shared_ptr<RenderTarget> create_texture_2d(const TextureUploadDesc& desc);
 		std::shared_ptr<RenderTarget> acquire_transient_render_target(const RenderTargetDesc& desc);
 		void release_transient_render_target(const std::shared_ptr<RenderTarget>& render_target);
 		void clear_transient_render_targets();
@@ -454,6 +496,7 @@ namespace AshEngine
 		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
 		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
 		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+		std::shared_ptr<RenderSampler> create_sampler(const RenderSamplerDesc& desc, const char* debug_name = nullptr);
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
 		std::unique_ptr<ComputeProgram> create_compute_program(const ComputeProgramDesc& desc);

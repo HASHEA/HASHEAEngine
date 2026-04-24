@@ -148,6 +148,11 @@ namespace AshEngine
 		return m_render_device ? m_render_device->create_render_target(desc) : nullptr;
 	}
 
+	std::shared_ptr<RenderTarget> Renderer::create_texture_2d(const TextureUploadDesc& desc)
+	{
+		return m_render_device ? m_render_device->create_texture_2d(desc) : nullptr;
+	}
+
 	std::shared_ptr<RenderTarget> Renderer::acquire_transient_render_target(const RenderTargetDesc& desc)
 	{
 		return m_render_device ? m_render_device->acquire_transient_render_target(desc) : nullptr;
@@ -187,6 +192,11 @@ namespace AshEngine
 	std::shared_ptr<StorageBuffer> Renderer::create_storage_buffer(const StorageBufferDesc& desc)
 	{
 		return m_render_device ? m_render_device->create_storage_buffer(desc) : nullptr;
+	}
+
+	std::shared_ptr<RenderSampler> Renderer::create_sampler(const RenderSamplerDesc& desc, const char* debug_name)
+	{
+		return m_render_device ? m_render_device->create_sampler(desc, debug_name) : nullptr;
 	}
 
 	std::unique_ptr<GraphicsProgram> Renderer::create_graphics_program(const GraphicsProgramDesc& desc)

@@ -10,7 +10,9 @@ namespace RHI
 
 	bool DX12Sampler::init(const SamplerCreation& ci, ID3D12Device* device, DX12DescriptorHeapManager* heapMgr)
 	{
+		m_name_storage = ci.name ? ci.name : "";
 		m_creation = ci;
+		m_creation.name = m_name_storage.empty() ? nullptr : m_name_storage.c_str();
 		m_heapMgr = heapMgr;
 
 		m_descriptorHandle = heapMgr->cpuSampler.allocate();

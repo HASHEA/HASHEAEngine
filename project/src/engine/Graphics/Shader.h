@@ -16,6 +16,16 @@ namespace RHI
 		Float
 	};
 
+	enum class ShaderResourceBindingType : uint8_t
+	{
+		Unknown = 0,
+		ConstantBuffer,
+		ShaderResource,
+		UnorderedAccess,
+		Sampler,
+		CombinedImageSampler
+	};
+
 	struct ShaderParameterMember
 	{
 		std::string name{};
@@ -32,6 +42,15 @@ namespace RHI
 		uint32_t bind_space = 0;
 		uint32_t byte_size = 0;
 		std::vector<ShaderParameterMember> members{};
+	};
+
+	struct ShaderResourceBindingLayout
+	{
+		std::string name{};
+		ShaderResourceBindingType type = ShaderResourceBindingType::Unknown;
+		uint32_t bind_point = 0;
+		uint32_t bind_space = 0;
+		uint32_t bind_count = 1;
 	};
 
 	struct ShaderFile
@@ -74,6 +93,11 @@ namespace RHI
 		virtual const std::vector<ShaderParameterBlockLayout>& get_parameter_block_layouts() const
 		{
 			static const std::vector<ShaderParameterBlockLayout> empty_layouts{};
+			return empty_layouts;
+		}
+		virtual const std::vector<ShaderResourceBindingLayout>& get_resource_binding_layouts() const
+		{
+			static const std::vector<ShaderResourceBindingLayout> empty_layouts{};
 			return empty_layouts;
 		}
 		virtual bool get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const

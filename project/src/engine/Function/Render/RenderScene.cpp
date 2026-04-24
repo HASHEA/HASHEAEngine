@@ -63,16 +63,24 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(render_asset->is_cpu_ready());
 
 			SceneMeshBounds local_bounds{};
-			ASH_PROCESS_ERROR(scene.try_get_mesh_local_bounds(asset_database, MeshComponent{
-				mesh_desc.asset_path,
-				mesh_desc.mesh_index,
-				mesh_desc.visible,
-				mesh_desc.mobility,
-				mesh_desc.layer_mask
-			}, local_bounds));
+			MeshComponent mesh_component{};
+			mesh_component.asset_path = mesh_desc.asset_path;
+			mesh_component.mesh_index = mesh_desc.mesh_index;
+			mesh_component.material_overrides = mesh_desc.material_overrides;
+			mesh_component.visible = mesh_desc.visible;
+			mesh_component.mobility = mesh_desc.mobility;
+			mesh_component.layer_mask = mesh_desc.layer_mask;
+			ASH_PROCESS_ERROR(scene.try_get_mesh_local_bounds(asset_database, mesh_component, local_bounds));
+
+			std::vector<ResolvedStaticMeshSection> resolved_sections{};
+			ASH_PROCESS_ERROR(
+				render_asset_manager.resolve_static_mesh_primitive_sections(
+					*render_asset,
+					mesh_desc.material_overrides,
+					resolved_sections));
 
 			auto primitive = std::make_shared<StaticMeshPrimitiveProxy>();
-			primitive->initialize(next_primitive_id++, mesh_desc, render_asset, local_bounds);
+			primitive->initialize(next_primitive_id++, mesh_desc, render_asset, local_bounds, std::move(resolved_sections));
 			rebuilt_primitives.push_back(std::move(primitive));
 		}
 

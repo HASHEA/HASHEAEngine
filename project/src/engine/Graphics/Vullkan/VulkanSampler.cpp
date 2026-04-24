@@ -5,7 +5,8 @@ namespace RHI
 {
 	VulkanSampler::VulkanSampler(const SamplerCreation& ci)
 	{
-		
+		m_name_storage = ci.name ? ci.name : "";
+
 		VkSamplerCreateInfo create_info{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
 		create_info.minFilter					= ash_filter_to_min_mag_vk(ci.minFilter);
 		create_info.magFilter					= ash_filter_to_min_mag_vk(ci.magFilter);
@@ -25,14 +26,16 @@ namespace RHI
 		create_info.maxAnisotropy				= ci.max_anisotropy;
 		create_info.mipLodBias					= ci.mip_lod_bias;
 		create_info.borderColor					= ash_border_color_to_vk(ci.border_color);
-		name									= ci.name;
 		VkSamplerReductionModeCreateInfoEXT createInfoReduction = { VK_STRUCTURE_TYPE_SAMPLER_REDUCTION_MODE_CREATE_INFO_EXT };
 		if (ci.reductionMode != ASH_SAMPLER_REDUCTION_MODE_WEIGHTED_AVERAGE) {
 			createInfoReduction.reductionMode = ash_sampler_reduction_mode_to_vk(ci.reductionMode);
 			create_info.pNext = &createInfoReduction;
 		}
 		VK_CHECK_RESULT(vkCreateSampler(VulkanContext::get_vulkan_device(), &create_info, VulkanContext::get_vulkan_allocation_callbacks(), &vkSampler));
-		VulkanContext::set_resource_name(VK_OBJECT_TYPE_SAMPLER, (uint64_t)vkSampler, name);
+		VulkanContext::set_resource_name(
+			VK_OBJECT_TYPE_SAMPLER,
+			(uint64_t)vkSampler,
+			m_name_storage.empty() ? nullptr : m_name_storage.c_str());
 	}
 	VulkanSampler::~VulkanSampler()
 	{
@@ -67,12 +70,15 @@ namespace RHI
 	}
 	auto VulkanSampler::get_name() -> const char* 
 	{
-		return name;
+		return m_name_storage.empty() ? nullptr : m_name_storage.c_str();
 	}
-	VulkanSamplerView::VulkanSamplerView(char* name, std::shared_ptr<Sampler> parent)
+	VulkanSamplerView::VulkanSamplerView(const char* name, std::shared_ptr<Sampler> parent)
 	{
 		parentSampler = parent;
-		m_pName = name;
+		if (name)
+		{
+			m_name_storage = name;
+		}
 	}
 	VulkanSamplerView::~VulkanSamplerView()
 	{
@@ -93,6 +99,6 @@ namespace RHI
 	}
 	auto VulkanSamplerView::get_name() -> const char*
 	{
-		return m_pName;
+		return m_name_storage.empty() ? nullptr : m_name_storage.c_str();
 	}
 }

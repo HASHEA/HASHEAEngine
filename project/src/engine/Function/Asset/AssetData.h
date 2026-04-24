@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Base/hplatform.h"
+#include "Function/Render/Material.h"
 #include "Function/Scene/SceneComponents.h"
 #include <cstdint>
 #include <filesystem>
@@ -18,8 +19,6 @@ namespace AshEngine
 		Lines,
 		Points
 	};
-
-	static constexpr uint32_t k_invalid_material_slot = 0xffffffffu;
 
 	struct MeshVertex
 	{
@@ -49,10 +48,17 @@ namespace AshEngine
 		glm::vec3 emissive_factor{ 0.0f, 0.0f, 0.0f };
 		float metallic_factor = 0.0f;
 		float roughness_factor = 1.0f;
-		std::string base_color_texture_path{};
-		std::string normal_texture_path{};
-		std::string metallic_roughness_texture_path{};
-		std::string emissive_texture_path{};
+		std::vector<MaterialSamplerDefinition> sampler_definitions{};
+		MaterialTextureBinding base_color_texture{};
+		MaterialTextureBinding normal_texture{};
+		MaterialTextureBinding metallic_roughness_texture{};
+		MaterialTextureBinding emissive_texture{};
+	};
+
+	struct ModelMaterialReference
+	{
+		uint32_t material_slot = k_invalid_material_slot;
+		std::string material_path{};
 	};
 
 	struct Mesh
@@ -90,6 +96,7 @@ namespace AshEngine
 		std::vector<ModelNode> nodes{};
 		std::vector<uint32_t> root_nodes{};
 		std::vector<MaterialSlot> material_slots{};
+		std::vector<ModelMaterialReference> default_materials{};
 
 		ASH_API bool is_valid() const;
 	};

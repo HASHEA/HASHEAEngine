@@ -5,6 +5,8 @@
 #include "Function/Render/SceneRenderView.h"
 #include "Function/Render/Renderer.h"
 #include <memory>
+#include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace AshEngine
@@ -23,13 +25,12 @@ namespace AshEngine
 		struct SceneObjectConstants
 		{
 			glm::mat4 object_to_clip{ 1.0f };
-			glm::vec4 base_color_factor{ 1.0f, 1.0f, 1.0f, 1.0f };
 		};
 
 	private:
-		bool ensure_graphics_program();
 		bool validate_view_context(const SceneRenderViewContext& view_context) const;
 		std::shared_ptr<RenderTarget> resolve_depth_target(const SceneRenderViewContext& view_context);
+		void log_warning_once(const std::string& key, const std::string& message);
 
 	private:
 		struct ScratchDepthKey
@@ -47,7 +48,7 @@ namespace AshEngine
 
 	private:
 		Renderer* m_renderer = nullptr;
-		std::unique_ptr<GraphicsProgram> m_graphics_program = nullptr;
 		std::vector<ScratchDepthEntry> m_scratch_depth_targets{};
+		std::unordered_set<std::string> m_logged_warning_keys{};
 	};
 }

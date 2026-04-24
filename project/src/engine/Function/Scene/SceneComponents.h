@@ -4,6 +4,7 @@
 #include "Base/hplatform.h"
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <glm/glm.hpp>
 
 namespace AshEngine
@@ -73,6 +74,7 @@ namespace AshEngine
 	};
 
 	static constexpr uint32_t k_default_scene_layer_mask = 0x1u;
+	static constexpr uint32_t k_invalid_material_slot = 0xffffffffu;
 
 	struct LightComponent
 	{
@@ -84,10 +86,17 @@ namespace AshEngine
 		float outer_cone_angle_degrees = 45.0f;
 	};
 
+	struct MeshMaterialOverride
+	{
+		uint32_t material_slot = k_invalid_material_slot;
+		std::string material_path{};
+	};
+
 	struct MeshComponent
 	{
 		std::string asset_path{};
 		uint32_t mesh_index = 0;
+		std::vector<MeshMaterialOverride> material_overrides{};
 		bool visible = true;
 		SceneMobility mobility = SceneMobility::Static;
 		uint32_t layer_mask = k_default_scene_layer_mask;

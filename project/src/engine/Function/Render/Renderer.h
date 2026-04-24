@@ -98,6 +98,7 @@ namespace AshEngine
 
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
+		std::shared_ptr<RenderTarget> create_texture_2d(const TextureUploadDesc& desc);
 		std::shared_ptr<RenderTarget> acquire_transient_render_target(const RenderTargetDesc& desc);
 		void release_transient_render_target(const std::shared_ptr<RenderTarget>& render_target);
 		void clear_transient_render_targets();
@@ -106,6 +107,7 @@ namespace AshEngine
 		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
 		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
 		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+		std::shared_ptr<RenderSampler> create_sampler(const RenderSamplerDesc& desc, const char* debug_name = nullptr);
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
 		std::unique_ptr<ComputeProgram> create_compute_program(const ComputeProgramDesc& desc);

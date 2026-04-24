@@ -553,7 +553,7 @@ namespace RHI
 		DigestBuilder<SHA1> shaderTextBuilder{};
 		shaderTextBuilder.append(vulkanShaderText);
 		shaderTextBuilder.append(fileInfo.stage);
-		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0-dxlayout-inverty-rootconstrewrite-vertexdeclloc-v2"));
+		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0-dxlayout-bindingshift-inverty-rootconstrewrite-vertexdeclloc-v3"));
 		SHA1::Digest textKey = shaderTextBuilder.finalize();
 
 		// Try to read from cache
@@ -574,14 +574,22 @@ namespace RHI
 			bool compileResult = m_pDxcCompiler->compile_shader_from_text(vulkanShaderText, fileInfo, spirvCode, errorMsg);
 			if (!compileResult && !errorMsg.empty())
 			{
-				if (fileInfo.sourceShaderPath && strstr(fileInfo.sourceShaderPath, "SceneStaticMesh.hlsl") != nullptr)
+				if (fileInfo.sourceShaderPath != nullptr)
 				{
 					std::error_code dump_error{};
 					const std::filesystem::path dump_directory = "product/test-reports/shader-debug";
 					std::filesystem::create_directories(dump_directory, dump_error);
 					if (!dump_error)
 					{
-						std::ofstream dump_file(dump_directory / "SceneStaticMesh.vulkan.rewritten.hlsl", std::ios::binary);
+						std::filesystem::path source_path = fileInfo.sourceShaderPath;
+						std::string dump_name = source_path.stem().string();
+						if (dump_name.empty())
+						{
+							dump_name = "Shader";
+						}
+						std::ofstream dump_file(
+							dump_directory / (dump_name + ".vulkan.rewritten.hlsl"),
+							std::ios::binary);
 						if (dump_file.is_open())
 						{
 							dump_file.write(vulkanShaderText.data(), static_cast<std::streamsize>(vulkanShaderText.size()));
@@ -743,6 +751,19 @@ namespace RHI
 		// Additional options for Vulkan
 		argumentStrings.push_back(L"-fspv-target-env=vulkan1.0");
 		argumentStrings.push_back(L"-fvk-use-dx-layout");
+		argumentStrings.push_back(L"-fvk-auto-shift-bindings");
+		argumentStrings.push_back(L"-fvk-b-shift");
+		argumentStrings.push_back(L"0");
+		argumentStrings.push_back(L"all");
+		argumentStrings.push_back(L"-fvk-t-shift");
+		argumentStrings.push_back(L"128");
+		argumentStrings.push_back(L"all");
+		argumentStrings.push_back(L"-fvk-s-shift");
+		argumentStrings.push_back(L"256");
+		argumentStrings.push_back(L"all");
+		argumentStrings.push_back(L"-fvk-u-shift");
+		argumentStrings.push_back(L"384");
+		argumentStrings.push_back(L"all");
 		if (shader_stage_supports_vk_invert_y(item.stage))
 		{
 			argumentStrings.push_back(L"-fvk-invert-y");

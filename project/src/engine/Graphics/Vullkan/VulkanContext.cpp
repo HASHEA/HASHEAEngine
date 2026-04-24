@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "Base/hlog.h"
 #include "Base/hfile.h"
 #include "Base/hcache.h"
@@ -892,7 +892,7 @@ namespace RHI
 		{
 			vkDestroyDescriptorPool(vulkanDevice, vulkanDescriptorPool, vulkanAllocationCallbacks);
 			vulkanDescriptorPool = VK_NULL_HANDLE;
-		}	
+		}
 		//if enable bindless
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Bindless))
 		{
@@ -997,20 +997,25 @@ namespace RHI
 		switch (ss)
 		{
 		case ASH_SAMPLER_STATE_DEFAULT:
-			ci.address_mode_u = ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-			ci.address_mode_v = ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-			ci.address_mode_w = ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+			ci.address_mode_u = ASH_SAMPLER_ADDRESS_MODE_REPEAT;
+			ci.address_mode_v = ASH_SAMPLER_ADDRESS_MODE_REPEAT;
+			ci.address_mode_w = ASH_SAMPLER_ADDRESS_MODE_REPEAT;
 			ci.border_color = ASH_BORDER_COLOR_INT_OPAQUE_WHITE;
 			ci.minFilter = ASH_FILTER_LINEAR;
 			ci.magFilter = ASH_FILTER_LINEAR;
 			ci.mipFilter = ASH_FILTER_LINEAR;
 			ci.name = "default sampler";
-			ret = Ash_New_Shared<VulkanSampler>(ci);
+			ret = std::static_pointer_cast<VulkanSampler>(create_sampler(ci));
 			break;
 		default:
 			break;
 		}
 		return ret;
+	}
+
+	auto VulkanContext::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
+	{
+		return Ash_New_Shared<VulkanSampler>(ci);
 	}
 
 	auto VulkanContext::_track_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, uint64_t size, const char* debugName, const char* file, uint32_t line, const char* function) -> void
@@ -1067,12 +1072,6 @@ namespace RHI
 		// vulkanShaderPool holds the last strong refs after the app drops external shared_ptrs; without draining
 		// the pool here, ~VulkanShader never runs and validation reports leaked shader modules at device destroy.
 		vulkanShaderPool.clear();
-		// ~VulkanDescriptorPool (from layout teardown above) defers vkDestroyDescriptorPool to delayed_deletion_queues.
-		// Those callbacks are not run unless we flush again before vkDestroyDevice, otherwise VUID-vkDestroyDevice-device-05137.
-		for (int i = 0; i < k_max_frames; ++i)
-		{
-			delayed_deletion_queues[i].flush();
-		}
 		return true;
 	}
 
@@ -1279,12 +1278,6 @@ namespace RHI
 	{
 		samplerCache.shutdown();
 		global_dynamic_buffer.reset();
-		//flush deletion queue
-		//delete all runtime resource here
-		for (int i = 0; i < k_max_frames; i++)
-		{
-			delayed_deletion_queues[i].flush();
-		}
 		commandBufferRing->shutdown();
 		Ash_Delete(nullptr,commandBufferRing);
 		Ash_Delete(nullptr,vulkanImmediateFence);
@@ -1462,12 +1455,12 @@ namespace RHI
 		_unload_cache();
 		//shutdown framepool and datas
 		_shutdown_frame_pool_and_data();
-		//shutdown descriptor pool
-		_shutdown_descriptor_pool();
 		//shutdown staging pool
 		_shutdown_staging_buffer_pool();
 		//shutdown shader pool
 		_shutdown_shader_pool();
+		//shutdown descriptor pool
+		_shutdown_descriptor_pool();
 		//flush deletion queue at the very end to make sure all resources are destroyed before device destroy, otherwise VUID-vkDestroyDevice-device-05137.
 		for (auto& deletionQueue : delayed_deletion_queues)
 		{
@@ -1500,6 +1493,14 @@ auto VulkanContext::destroy() -> void
 		auto buffer = Ash_New_Shared<VulkanBuffer>();
 		if (!buffer->create(ci))
 		{
+			HLogError(
+				"VulkanContext: failed to create buffer '{}' (size={}, usage=0x{:X}, access_type={}, force_static={}, has_initial_data={}).",
+				ci.name ? ci.name : "UnnamedBuffer",
+				ci.size,
+				static_cast<uint32_t>(ci.usage_flags),
+				static_cast<uint32_t>(ci.access_type),
+				ci.force_static,
+				ci.initial_data != nullptr);
 			return nullptr;
 		}
 		return buffer;
@@ -1509,15 +1510,45 @@ auto VulkanContext::destroy() -> void
 	{
 		if (!buffer || !data || size == 0)
 		{
+			HLogError(
+				"VulkanContext: queue_buffer_upload rejected request (buffer={}, data={}, size={}, offset={}).",
+				buffer ? (buffer->get_name() ? buffer->get_name() : "UnnamedBuffer") : "<null>",
+				data != nullptr,
+				size,
+				offset);
 			return false;
 		}
 
 		if (!AshEngine::is_in_render_thread() || !frameActive)
 		{
-			return _enqueue_pending_buffer_upload(buffer, offset, size, data);
+			const bool queued = _enqueue_pending_buffer_upload(buffer, offset, size, data);
+			if (!queued)
+			{
+				HLogError(
+					"VulkanContext: failed to enqueue pending buffer upload for '{}' (offset={}, size={}, in_render_thread={}, frameActive={}).",
+					buffer->get_name() ? buffer->get_name() : "UnnamedBuffer",
+					offset,
+					size,
+					AshEngine::is_in_render_thread(),
+					frameActive);
+			}
+			return queued;
 		}
 
-		return _record_buffer_upload(buffer, offset, size, data);
+		const bool recorded = _record_buffer_upload(buffer, offset, size, data);
+		if (!recorded)
+		{
+			HLogError(
+				"VulkanContext: live buffer upload failed for '{}' (offset={}, size={}, uploadCommandsPending={}, uploadCommandQueued={}, currentUploadCommandBuffer={}, currentFrame={}).",
+				buffer->get_name() ? buffer->get_name() : "UnnamedBuffer",
+				offset,
+				size,
+				uploadCommandsPending,
+				uploadCommandQueued,
+				currentUploadCommandBuffer != nullptr,
+				currentFrame);
+		}
+		return recorded;
 	}
 
 	auto VulkanContext::queue_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
@@ -1601,6 +1632,7 @@ auto VulkanContext::destroy() -> void
 	{
 		if (!frameActive)
 		{
+			HLogError("VulkanContext: requested live upload command buffer while frameActive=false.");
 			return false;
 		}
 
@@ -1609,6 +1641,7 @@ auto VulkanContext::destroy() -> void
 			currentUploadCommandBuffer = static_cast<VulkanCommandBuffer*>(get_command_buffer(0));
 			if (!currentUploadCommandBuffer)
 			{
+				HLogError("VulkanContext: failed to acquire upload command buffer for frame {}.", currentFrame);
 				return false;
 			}
 			currentUploadCommandBuffer->begin_record();
@@ -1623,14 +1656,35 @@ auto VulkanContext::destroy() -> void
 	{
 		if (!buffer || !data || size == 0)
 		{
+			HLogError(
+				"VulkanContext: _record_buffer_upload rejected request (buffer={}, data={}, size={}, offset={}).",
+				buffer ? (buffer->get_name() ? buffer->get_name() : "UnnamedBuffer") : "<null>",
+				data != nullptr,
+				size,
+				offset);
 			return false;
 		}
 		if (!_ensure_upload_command_buffer_recording())
 		{
+			HLogError(
+				"VulkanContext: failed to start live buffer upload for '{}' (offset={}, size={}).",
+				buffer->get_name() ? buffer->get_name() : "UnnamedBuffer",
+				offset,
+				size);
 			return false;
 		}
 
-		return currentUploadCommandBuffer->cmd_update_sub_resource(buffer, offset, size, const_cast<void*>(data));
+		const bool updated = currentUploadCommandBuffer->cmd_update_sub_resource(buffer, offset, size, const_cast<void*>(data));
+		if (!updated)
+		{
+			HLogError(
+				"VulkanContext: cmd_update_sub_resource returned false for '{}' (offset={}, size={}, command_buffer_state={}).",
+				buffer->get_name() ? buffer->get_name() : "UnnamedBuffer",
+				offset,
+				size,
+				currentUploadCommandBuffer ? static_cast<uint32_t>(currentUploadCommandBuffer->get_state()) : UINT32_MAX);
+		}
+		return updated;
 	}
 
 	auto VulkanContext::_record_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
@@ -1932,6 +1986,10 @@ auto VulkanContext::destroy() -> void
 		vulkanPresentCompleteSemaphore = get_frame_data_internal().vulkanRenderCompleteSemaphore;
 		//flush deletion queue
 		delayed_deletion_queues[currentFrame].flush();
+		if (vulkanStagingBufferPool)
+		{
+			vulkanStagingBufferPool->frame_move();
+		}
 		commandBufferQueue.clear();
 		//reset commandpool and commandbufferring
 		commandBufferRing->reset(currentFrame);

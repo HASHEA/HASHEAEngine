@@ -1,4 +1,4 @@
-#include "VulkanDescriptorSet.h"
+﻿#include "VulkanDescriptorSet.h"
 #include "VulkanTexture.h"
 #include "VulkanBuffer.h"
 #include "VulkanSampler.h"
@@ -378,10 +378,9 @@ namespace RHI
 			pDescriptorSet->clear_pool_container();
 			if (pPool->m_uAllocedSet == 0)
 			{
-				if (pPool->m_pPreviousPool)
+				if (auto pPrev = pPool->m_pPreviousPool.lock())
 				{
 					// Non-head pool nodes can be released once they become empty.
-					auto pPrev = pPool->m_pPreviousPool;
 					auto pCur = pPool;
 					auto pNext = pPool->m_pNextPool;
 
@@ -391,7 +390,7 @@ namespace RHI
 						pNext->m_pPreviousPool = pPrev;
 					}
 					pCur->m_pNextPool = nullptr;
-					pCur->m_pPreviousPool = nullptr;
+					pCur->m_pPreviousPool.reset();
 					pCur.reset();
 				}
 			}

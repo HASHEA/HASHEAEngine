@@ -1,6 +1,7 @@
 #include "AssetDatabase.h"
 
 #include "Base/hthreading.h"
+#include "Function/Render/Material.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <mutex>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace AshEngine
 {
@@ -145,10 +147,190 @@ namespace AshEngine
 		std::unordered_map<AssetId, AssetLoadInfo> load_info_by_id{};
 		std::unordered_map<AssetId, std::shared_ptr<Mesh>> mesh_cache{};
 		std::unordered_map<AssetId, std::shared_ptr<Model>> model_cache{};
+		std::unordered_map<std::string, std::shared_ptr<MaterialInterface>> material_cache{};
 		std::unordered_map<AssetId, std::shared_ptr<AshAsset>> ashasset_cache{};
 		std::string last_error{};
 		mutable std::mutex mutex{};
 	};
+
+	namespace
+	{
+		static auto set_last_error_locked(AssetDatabase::Impl& impl, const std::string& error) -> void;
+		static auto set_load_failed_locked(AssetDatabase::Impl& impl, AssetId id, const std::string& error) -> void;
+		static auto set_load_loading_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
+		static auto set_load_success_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
+		static auto resolve_asset_by_path(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const std::filesystem::path& path,
+			ResolvedAssetInfo& out_resolved,
+			std::string& out_error) -> bool;
+
+		static auto try_get_cached_material_locked(
+			AssetDatabase::Impl& impl,
+			std::string_view cache_key,
+			std::shared_ptr<const MaterialInterface>& out_material) -> bool
+		{
+			const auto cached = impl.material_cache.find(std::string(cache_key));
+			if (cached == impl.material_cache.end())
+			{
+				return false;
+			}
+
+			out_material = cached->second;
+			return true;
+		}
+
+		static auto set_material_asset_path(
+			const std::shared_ptr<MaterialInterface>& material,
+			const std::filesystem::path& asset_path) -> void
+		{
+			if (!material)
+			{
+				return;
+			}
+
+			if (material->is_material_instance())
+			{
+				std::static_pointer_cast<MaterialInstance>(material)->set_asset_path(asset_path);
+				std::static_pointer_cast<MaterialInstance>(material)->reset_change_version();
+				return;
+			}
+
+			std::static_pointer_cast<Material>(material)->set_asset_path(asset_path);
+			std::static_pointer_cast<Material>(material)->reset_change_version();
+		}
+
+		static auto try_load_builtin_material(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const std::filesystem::path& path,
+			std::shared_ptr<const MaterialInterface>& out_material) -> bool
+		{
+			const std::string cache_key = normalize_asset_key(path);
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				if (try_get_cached_material_locked(*impl, cache_key, out_material))
+				{
+					set_last_error_locked(*impl, {});
+					return true;
+				}
+			}
+
+			std::shared_ptr<MaterialInterface> builtin_material = make_builtin_material(path.generic_string());
+			if (!builtin_material)
+			{
+				return false;
+			}
+
+			set_material_asset_path(builtin_material, builtin_material->get_asset_path().empty() ? path.lexically_normal() : builtin_material->get_asset_path());
+
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				impl->material_cache[cache_key] = builtin_material;
+				set_last_error_locked(*impl, {});
+				out_material = builtin_material;
+			}
+			return true;
+		}
+
+		static auto load_material_by_path_recursive(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const std::filesystem::path& path,
+			std::shared_ptr<const MaterialInterface>& out_material,
+			std::unordered_set<std::string>& loading_keys,
+			std::string& out_error) -> bool
+		{
+			const std::string cache_key = normalize_asset_key(path);
+			if (cache_key.empty())
+			{
+				out_error = "Material path is empty.";
+				return false;
+			}
+
+			if (try_load_builtin_material(impl, path, out_material))
+			{
+				out_error.clear();
+				return true;
+			}
+
+			ResolvedAssetInfo resolved{};
+			if (!resolve_asset_by_path(impl, path, resolved, out_error))
+			{
+				return false;
+			}
+
+			if (resolved.info.is_directory)
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				out_error = "Cannot load a directory as material.";
+				set_load_failed_locked(*impl, resolved.info.id, out_error);
+				return false;
+			}
+
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				if (try_get_cached_material_locked(*impl, cache_key, out_material))
+				{
+					set_load_success_locked(*impl, resolved.info.id);
+					out_error.clear();
+					return true;
+				}
+			}
+
+			if (!loading_keys.insert(cache_key).second)
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				out_error = "Detected cyclic material parent reference.";
+				set_load_failed_locked(*impl, resolved.info.id, out_error);
+				return false;
+			}
+
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				set_load_loading_locked(*impl, resolved.info.id);
+			}
+
+			std::shared_ptr<MaterialInterface> material{};
+			if (!load_material_from_file(resolved.absolute_path, material, &out_error))
+			{
+				loading_keys.erase(cache_key);
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				set_load_failed_locked(*impl, resolved.info.id, out_error);
+				return false;
+			}
+
+			set_material_asset_path(material, resolved.info.relative_path);
+
+			if (material && material->is_material_instance())
+			{
+				auto material_instance = std::static_pointer_cast<MaterialInstance>(material);
+				if (!material_instance->get_parent() && !material_instance->get_parent_asset_path().empty())
+				{
+					std::shared_ptr<const MaterialInterface> parent_material{};
+					if (!load_material_by_path_recursive(impl, material_instance->get_parent_asset_path(), parent_material, loading_keys, out_error))
+					{
+						loading_keys.erase(cache_key);
+						std::scoped_lock<std::mutex> lock(impl->mutex);
+						set_load_failed_locked(*impl, resolved.info.id, out_error);
+						return false;
+					}
+					material_instance->set_parent(parent_material);
+					material_instance->reset_change_version();
+				}
+			}
+
+			loading_keys.erase(cache_key);
+
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				impl->material_cache[cache_key] = material;
+				out_material = material;
+				set_load_success_locked(*impl, resolved.info.id);
+			}
+
+			out_error.clear();
+			return true;
+		}
+	}
 
 	namespace
 	{
@@ -359,6 +541,7 @@ namespace AshEngine
 			m_impl->load_info_by_id.clear();
 			m_impl->mesh_cache.clear();
 			m_impl->model_cache.clear();
+			m_impl->material_cache.clear();
 			m_impl->ashasset_cache.clear();
 			m_impl->last_error = exists_error ? exists_error.message() : "Asset root path does not exist.";
 			ASH_PROCESS_ERROR(false);
@@ -434,6 +617,7 @@ namespace AshEngine
 		m_impl->load_info_by_id = std::move(load_info_by_id);
 		m_impl->mesh_cache.clear();
 		m_impl->model_cache.clear();
+		m_impl->material_cache.clear();
 		m_impl->ashasset_cache.clear();
 		m_impl->last_error.clear();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -797,6 +981,86 @@ namespace AshEngine
 				return {};
 			}
 			return model;
+		});
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
+	}
+
+	bool AssetDatabase::load_material_by_id(AssetId id, std::shared_ptr<const MaterialInterface>& out_material)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		bResult = load_material_by_path(resolved.info.relative_path, out_material);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool AssetDatabase::load_material_by_path(const std::filesystem::path& path, std::shared_ptr<const MaterialInterface>& out_material)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
+
+		std::unordered_set<std::string> loading_keys{};
+		std::string error{};
+		ASH_PROCESS_ERROR(load_material_by_path_recursive(m_impl, path, out_material, loading_keys, error));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	std::shared_future<std::shared_ptr<const MaterialInterface>> AssetDatabase::load_material_by_id_async(AssetId id)
+	{
+		const auto empty_future = make_ready_future(std::shared_ptr<const MaterialInterface>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const MaterialInterface>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		ASH_PROCESS_ERROR(resolve_asset_by_id(m_impl, id, resolved, error));
+		result = load_material_by_path_async(resolved.info.relative_path);
+		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
+	}
+
+	std::shared_future<std::shared_ptr<const MaterialInterface>> AssetDatabase::load_material_by_path_async(const std::filesystem::path& path)
+	{
+		const auto empty_future = make_ready_future(std::shared_ptr<const MaterialInterface>{});
+		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const MaterialInterface>>, result, empty_future, empty_future);
+		ASH_PROCESS_ERROR(m_impl);
+
+		std::shared_ptr<const MaterialInterface> builtin_material{};
+		if (try_load_builtin_material(m_impl, path, builtin_material))
+		{
+			result = make_ready_future(builtin_material);
+			break;
+		}
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+
+		const std::string cache_key = normalize_asset_key(path);
+		{
+			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			if (try_get_cached_material_locked(*m_impl, cache_key, builtin_material))
+			{
+				set_load_success_locked(*m_impl, resolved.info.id);
+				result = make_ready_future(builtin_material);
+				break;
+			}
+
+			set_load_loading_locked(*m_impl, resolved.info.id);
+		}
+
+		AssetDatabase database(m_impl);
+		const std::filesystem::path relative_path = resolved.info.relative_path;
+		result = dispatch_background_task("AssetDatabase::load_material_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const MaterialInterface>
+		{
+			std::shared_ptr<const MaterialInterface> material{};
+			if (!database.load_material_by_path(relative_path, material))
+			{
+				return {};
+			}
+			return material;
 		});
 		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}

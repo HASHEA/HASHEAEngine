@@ -51,7 +51,8 @@ namespace AshEngine
 		uint64_t primitive_id,
 		const SceneMeshExtractionDesc& desc,
 		const std::shared_ptr<StaticMeshRenderAsset>& render_asset,
-		const SceneMeshBounds& local_bounds)
+		const SceneMeshBounds& local_bounds,
+		std::vector<ResolvedStaticMeshSection> sections)
 	{
 		m_entity_id = desc.entity_id;
 		m_primitive_id = primitive_id;
@@ -60,7 +61,7 @@ namespace AshEngine
 		m_mobility = desc.mobility;
 		m_visible = desc.visible;
 		m_render_asset = render_asset;
-		m_sections = render_asset ? render_asset->sections : std::vector<StaticMeshRenderSection>{};
+		m_sections = std::move(sections);
 		update_bounds(local_bounds);
 	}
 
@@ -69,7 +70,7 @@ namespace AshEngine
 		return m_render_asset;
 	}
 
-	const std::vector<StaticMeshRenderSection>& StaticMeshPrimitiveProxy::get_sections() const
+	const std::vector<ResolvedStaticMeshSection>& StaticMeshPrimitiveProxy::get_sections() const
 	{
 		return m_sections;
 	}

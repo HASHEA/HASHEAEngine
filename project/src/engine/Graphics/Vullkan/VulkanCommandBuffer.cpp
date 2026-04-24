@@ -1,4 +1,4 @@
-#include "VulkanCommandPool.h"
+﻿#include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
 #include "VulkanContext.h"
 #include "VulkanFramebuffer.h"
@@ -528,14 +528,17 @@ namespace RHI
 		auto& colorAttachments = currentBoundFramebuffer->get_render_targets();
 		auto count = colorAttachments.size();
 		auto depthAttachment = currentBoundFramebuffer->get_depth_stencil();
-		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering)) {
+		const bool dynamic_rendering =
+			VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering);
+		if (dynamic_rendering) {
 			vkCmdEndRenderingKHR(vkCommandBuffer);
 		}
 		else {
 			vkCmdEndRenderPass(vkCommandBuffer);
 		}
-		// Keep the resource tracker aligned with the pass final states for both legacy render passes
-		// and dynamic rendering. Later barriers depend on these tracked states being accurate.
+		// Legacy render passes perform implicit final-layout transitions on end, so the tracker can move
+		// directly to the declared final state here. Dynamic rendering does not; attachments stay in their
+		// renderable layouts until an explicit post-pass barrier is submitted outside the rendering scope.
 		for (auto i = 0; i < count; i++)
 		{
 			if (!colorAttachments[i])
@@ -543,11 +546,17 @@ namespace RHI
 				HLogWarning("cmd_end_render_pass: framebuffer color attachment {} is null, skip resource state update.", i);
 				continue;
 			}
-			colorAttachments[i]->set_resource_state(currentBoundRenderPass->get_color_attachment_final_state(i));
+			colorAttachments[i]->set_resource_state(
+				dynamic_rendering ?
+				AshResourceState::RTV :
+				currentBoundRenderPass->get_color_attachment_final_state(i));
 		}
 		if (depthAttachment != nullptr)
 		{
-			depthAttachment->set_resource_state(currentBoundRenderPass->get_depth_stencil_attachment_final_state());
+			depthAttachment->set_resource_state(
+				dynamic_rendering ?
+				AshResourceState::DSVWrite :
+				currentBoundRenderPass->get_depth_stencil_attachment_final_state());
 		}
 		currentBoundRenderPass = nullptr;
 		currentBoundFramebuffer = nullptr;
@@ -687,7 +696,10 @@ namespace RHI
 	auto VulkanCommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> pBuffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		const AshResourceAccessType accessType =
+			pBuffer ? pBuffer->get_buffer_creation_info().access_type : AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE;
 		ASH_SAFE_EXECUTE_BEGIN(bResult); 
+		ASH_LOG_PROCESS_ERROR(pBuffer);
 		const auto& bufferDesc = pBuffer->get_buffer_creation_info();
 		ASH_LOG_PROCESS_ERROR(uSize > 0);
 		ASH_LOG_PROCESS_ERROR((bufferDesc.access_type != AshResourceAccessType::ASH_RESOURCE_ACCESS_READ));
@@ -700,8 +712,22 @@ namespace RHI
 			if ((bufferDesc.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)) // use staging
 			{
 				bool bRetCode = cmd_transition_resource_state({ pBuffer, AshResourceState::CopyDst });
+				if (!bRetCode)
+				{
+					HLogError(
+						"VulkanCommandBuffer: failed to transition buffer '{}' to CopyDst before upload (offset={}, size={}).",
+						pBuffer->get_name() ? pBuffer->get_name() : "UnnamedBuffer",
+						uOffset,
+						uSize);
+				}
 				ASH_LOG_PROCESS_ERROR(bRetCode);
 				VkBuffer destBuffer = (VkBuffer)pBuffer->get_native_handle();
+				if (!destBuffer)
+				{
+					HLogError(
+						"VulkanCommandBuffer: destination VkBuffer handle is null for '{}' during upload.",
+						pBuffer->get_name() ? pBuffer->get_name() : "UnnamedBuffer");
+				}
 				ASH_PROCESS_ERROR_EXIT(destBuffer);
 				const bool canUseCmdUpdate =
 					(uSize <= 65536u) &&
@@ -723,7 +749,7 @@ namespace RHI
 
 					VkBufferCopy copyRegion{};
 					copyRegion.dstOffset = uOffset;
-					copyRegion.srcOffset = 0;
+					copyRegion.srcOffset = pVulkanStaingBuffer->get_buffer_offset();
 					copyRegion.size = uSize;
 					VkBuffer srcBuffer = pVulkanStaingBuffer->get_vkbuffer_handle();
 					ASH_PROCESS_ERROR_EXIT(srcBuffer);
@@ -745,6 +771,16 @@ namespace RHI
 			}
 		}
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			HLogError(
+				"VulkanCommandBuffer: cmd_update_sub_resource failed for '{}' (offset={}, size={}, access_type={}, dynamic={}).",
+				pBuffer && pBuffer->get_name() ? pBuffer->get_name() : "UnnamedBuffer",
+				uOffset,
+				uSize,
+				static_cast<uint32_t>(accessType),
+				pBuffer ? pBuffer->is_dynamic() : false);
+		}
 		return bResult;
 	}
 
@@ -816,11 +852,12 @@ namespace RHI
 		ASH_LOG_PROCESS_ERROR(bRetCode);
 
 		std::vector<VkBufferImageCopy> copyRegions(subresources.size());
+		const VkDeviceSize sliceBaseOffset = pVulkanStagingBuffer->get_buffer_offset();
 		for (size_t index = 0; index < subresources.size(); ++index)
 		{
 			const TextureUploadSubresource& subresource = subresources[index];
 			VkBufferImageCopy& copyRegion = copyRegions[index];
-			copyRegion.bufferOffset = stagingOffsets[index];
+			copyRegion.bufferOffset = sliceBaseOffset + stagingOffsets[index];
 			copyRegion.bufferRowLength = 0;
 			copyRegion.bufferImageHeight = 0;
 			copyRegion.imageSubresource.aspectMask = pVulkanTexture->get_vk_aspect_flags();

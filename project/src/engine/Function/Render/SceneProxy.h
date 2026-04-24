@@ -60,16 +60,17 @@ namespace AshEngine
 			uint64_t primitive_id,
 			const SceneMeshExtractionDesc& desc,
 			const std::shared_ptr<StaticMeshRenderAsset>& render_asset,
-			const SceneMeshBounds& local_bounds);
+			const SceneMeshBounds& local_bounds,
+			std::vector<ResolvedStaticMeshSection> sections);
 
 		const std::shared_ptr<StaticMeshRenderAsset>& get_render_asset() const;
-		const std::vector<StaticMeshRenderSection>& get_sections() const;
+		const std::vector<ResolvedStaticMeshSection>& get_sections() const;
 
 	private:
 		void update_bounds(const SceneMeshBounds& local_bounds);
 
 	private:
 		std::shared_ptr<StaticMeshRenderAsset> m_render_asset = nullptr;
-		std::vector<StaticMeshRenderSection> m_sections{};
+		std::vector<ResolvedStaticMeshSection> m_sections{};
 	};
 }

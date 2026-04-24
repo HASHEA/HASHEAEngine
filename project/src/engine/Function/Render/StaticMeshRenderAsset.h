@@ -13,6 +13,9 @@
 
 namespace AshEngine
 {
+	class MaterialInterface;
+	class MaterialRenderProxy;
+
 	enum class StaticMeshRenderAssetState : uint8_t
 	{
 		Uninitialized = 0,
@@ -28,7 +31,17 @@ namespace AshEngine
 		uint32_t index_count = 0;
 		uint32_t material_slot = k_invalid_material_slot;
 		MeshPrimitiveTopology topology = MeshPrimitiveTopology::Triangles;
-		glm::vec4 base_color_factor{ 1.0f, 1.0f, 1.0f, 1.0f };
+		std::shared_ptr<const MaterialInterface> material = nullptr;
+	};
+
+	struct ASH_API ResolvedStaticMeshSection
+	{
+		uint32_t first_index = 0;
+		uint32_t index_count = 0;
+		uint32_t material_slot = k_invalid_material_slot;
+		MeshPrimitiveTopology topology = MeshPrimitiveTopology::Triangles;
+		std::shared_ptr<const MaterialInterface> material = nullptr;
+		std::shared_ptr<MaterialRenderProxy> material_proxy = nullptr;
 	};
 
 	struct ASH_API StaticMeshRenderBounds

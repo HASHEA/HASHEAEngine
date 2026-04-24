@@ -94,6 +94,73 @@ namespace RHI
 
 			out_layouts.push_back(std::move(layout));
 		}
+
+		static ShaderResourceBindingType ash_descriptor_type_to_shader_resource_binding_type(AshDescriptorType descriptor_type)
+		{
+			switch (descriptor_type)
+			{
+			case ASH_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+			case ASH_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+				return ShaderResourceBindingType::ConstantBuffer;
+			case ASH_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+			case ASH_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+			case ASH_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+			case ASH_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+				return ShaderResourceBindingType::UnorderedAccess;
+			case ASH_DESCRIPTOR_TYPE_SAMPLER:
+				return ShaderResourceBindingType::Sampler;
+			case ASH_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+				return ShaderResourceBindingType::CombinedImageSampler;
+			case ASH_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+			case ASH_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+			case ASH_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+				return ShaderResourceBindingType::ShaderResource;
+			default:
+				return ShaderResourceBindingType::Unknown;
+			}
+		}
+
+		static void build_resource_binding_layouts_from_reflection(
+			const ParseResult& reflection_data,
+			std::vector<ShaderResourceBindingLayout>& out_layouts)
+		{
+			out_layouts.clear();
+			for (uint32_t set_index = 0; set_index < reflection_data.set_count; ++set_index)
+			{
+				const DescriptorSetLayoutCreation& descriptor_set = reflection_data.sets[set_index];
+				for (uint32_t binding_index = 0; binding_index < descriptor_set.num_bindings; ++binding_index)
+				{
+					const DescriptorSetLayoutCreation::Binding& binding = descriptor_set.bindings[binding_index];
+					ShaderResourceBindingLayout layout{};
+					layout.name = binding.name;
+					layout.type = ash_descriptor_type_to_shader_resource_binding_type(binding.type);
+					layout.bind_point = binding.index;
+					layout.bind_space = descriptor_set.set_index;
+					layout.bind_count = std::max<uint32_t>(binding.count, 1u);
+					out_layouts.push_back(std::move(layout));
+				}
+			}
+
+			std::sort(
+				out_layouts.begin(),
+				out_layouts.end(),
+				[](const ShaderResourceBindingLayout& lhs, const ShaderResourceBindingLayout& rhs)
+				{
+					if (lhs.bind_space != rhs.bind_space)
+					{
+						return lhs.bind_space < rhs.bind_space;
+					}
+					if (lhs.bind_point != rhs.bind_point)
+					{
+						return lhs.bind_point < rhs.bind_point;
+					}
+					if (lhs.type != rhs.type)
+					{
+						return static_cast<uint8_t>(lhs.type) < static_cast<uint8_t>(rhs.type);
+					}
+					return lhs.name < rhs.name;
+				});
+		}
 	}
 
 	VulkanShader::~VulkanShader()
@@ -116,6 +183,7 @@ namespace RHI
 		m_reflection_data = ParseResult{};
 		m_spirv_binary.clear();
 		m_parameter_block_layouts.clear();
+		m_resource_binding_layouts.clear();
 		m_descriptor_set_layouts.clear();
 		m_shader_stage_info = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
 		m_shader_stage_info.pName = ci.pEntryPoint ? ci.pEntryPoint : "main";
@@ -129,6 +197,7 @@ namespace RHI
 		m_spirv_binary = spirv_binary;
 		m_reflection_data = reflection_data;
 		build_parameter_block_layouts_from_reflection(m_reflection_data, m_parameter_block_layouts);
+		build_resource_binding_layouts_from_reflection(m_reflection_data, m_resource_binding_layouts);
 		m_descriptor_set_layouts.clear();
 		H_ASSERTLOG(!m_spirv_binary.empty(), "Compiled SPIR-V is empty for shader {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");
 
@@ -196,6 +265,11 @@ namespace RHI
 	const std::vector<ShaderParameterBlockLayout>& VulkanShader::get_parameter_block_layouts() const
 	{
 		return m_parameter_block_layouts;
+	}
+
+	const std::vector<ShaderResourceBindingLayout>& VulkanShader::get_resource_binding_layouts() const
+	{
+		return m_resource_binding_layouts;
 	}
 
 	bool VulkanShader::get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const

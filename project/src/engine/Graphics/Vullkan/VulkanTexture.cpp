@@ -4,9 +4,19 @@
 #include "VulkanSampler.h"
 namespace RHI
 {
+	namespace
+	{
+		static AshResourceState resolve_vulkan_texture_creation_state(const TextureCreation& ci)
+		{
+			// Textures with CPU-provided initial data are born in undefined layout and
+			// become their declared initial_state only after the upload command path runs.
+			return ci.initial_data ? AshResourceState::Unknown : ci.initial_state;
+		}
+	}
 	
 	VulkanTexture::VulkanTexture(const TextureCreation& ci)
 	{
+		const AshResourceState creation_state = resolve_vulkan_texture_creation_state(ci);
 		m_sCreation = ci;
 		m_uAspectFlags = 0;
 		cube = false;
@@ -31,7 +41,9 @@ namespace RHI
 		vkImageCI.tiling = VK_IMAGE_TILING_OPTIMAL;
 		vkImageCI.usage = texUsageFlags;
 		vkImageCI.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		vkImageCI.initialLayout = ash_resource_state_to_vk_image_layout(ci.initial_state) ;
+		vkImageCI.initialLayout = creation_state == AshResourceState::Unknown ?
+			VK_IMAGE_LAYOUT_UNDEFINED :
+			ash_resource_state_to_vk_image_layout(creation_state);
 		VmaAllocationCreateInfo memory_info{};
 		switch (ci.memoryType)
 		{
@@ -70,8 +82,8 @@ namespace RHI
 			
 		}
 		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE, (uint64_t)vkImage, ci.name);
-		m_ResourceLayoutTracker = VulkanResourceTracker(ci.initial_state);
-		state = ci.initial_state;
+		m_ResourceLayoutTracker = VulkanResourceTracker(creation_state);
+		state = creation_state;
 		m_uAspectFlags = get_aspect_flags_from_format(ci.format);
 
 	}

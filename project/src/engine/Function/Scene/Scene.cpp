@@ -44,7 +44,7 @@ namespace AshEngine
 			uint64_t change_version = 0;
 		};
 
-		static constexpr uint32_t k_scene_file_version = 2;
+		static constexpr uint32_t k_scene_file_version = 3;
 		static std::atomic<uint64_t> g_scene_change_version_seed{ 1 };
 
 		static SceneEnumValueDesc k_camera_projection_values[] =
@@ -133,6 +133,55 @@ namespace AshEngine
 			result.y = value[1].get<float>();
 			result.z = value[2].get<float>();
 			return result;
+		}
+
+		static auto serialize_material_overrides(const std::vector<MeshMaterialOverride>& overrides) -> json
+		{
+			json result = json::array();
+			for (const MeshMaterialOverride& override_desc : overrides)
+			{
+				if (override_desc.material_slot == k_invalid_material_slot || override_desc.material_path.empty())
+				{
+					continue;
+				}
+
+				result.push_back(
+				{
+					{ "material_slot", override_desc.material_slot },
+					{ "material_path", override_desc.material_path },
+				});
+			}
+			return result;
+		}
+
+		static auto deserialize_material_overrides(const json& value) -> std::vector<MeshMaterialOverride>
+		{
+			std::vector<MeshMaterialOverride> overrides{};
+			if (!value.is_array())
+			{
+				return overrides;
+			}
+
+			overrides.reserve(value.size());
+			for (const json& entry : value)
+			{
+				if (!entry.is_object())
+				{
+					continue;
+				}
+
+				MeshMaterialOverride override_desc{};
+				override_desc.material_slot = entry.value("material_slot", k_invalid_material_slot);
+				override_desc.material_path = entry.value("material_path", std::string{});
+				if (override_desc.material_slot == k_invalid_material_slot || override_desc.material_path.empty())
+				{
+					continue;
+				}
+
+				overrides.push_back(std::move(override_desc));
+			}
+
+			return overrides;
 		}
 
 		static auto make_scene_error(std::string* out_error, std::string_view message) -> void
@@ -875,6 +924,7 @@ namespace AshEngine
 				MeshComponent mesh{};
 				mesh.asset_path = mesh_json.value("asset_path", std::string{});
 				mesh.mesh_index = mesh_json.value("mesh_index", 0u);
+				mesh.material_overrides = deserialize_material_overrides(mesh_json.value("material_overrides", json::array()));
 				mesh.visible = mesh_json.value("visible", true);
 				mesh.mobility = static_cast<SceneMobility>(mesh_json.value("mobility", static_cast<uint32_t>(mesh.mobility)));
 				mesh.layer_mask = mesh_json.value("layer_mask", mesh.layer_mask);
@@ -1097,6 +1147,7 @@ namespace AshEngine
 			desc.entity_id = id;
 			desc.asset_path = mesh->asset_path;
 			desc.mesh_index = mesh->mesh_index;
+			desc.material_overrides = mesh->material_overrides;
 			desc.visible = mesh->visible;
 			desc.mobility = mesh->mobility;
 			desc.layer_mask = mesh->layer_mask;
@@ -1360,6 +1411,10 @@ namespace AshEngine
 					{ "mobility", static_cast<uint32_t>(mesh->mobility) },
 					{ "layer_mask", mesh->layer_mask },
 				};
+				if (!mesh->material_overrides.empty())
+				{
+					entity_json["mesh"]["material_overrides"] = serialize_material_overrides(mesh->material_overrides);
+				}
 			}
 
 			root["entities"].push_back(std::move(entity_json));

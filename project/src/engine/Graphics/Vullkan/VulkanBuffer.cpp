@@ -1,4 +1,4 @@
-#include "Graphics/CommandBuffer.h"
+﻿#include "Graphics/CommandBuffer.h"
 #include "VulkanBuffer.h"
 #include "Base/hassert.h"
 #include "VulkanContext.h"
@@ -275,6 +275,14 @@ namespace RHI
 		if (m_sCreationInfo.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY)
 		{
 			bRetCode = VulkanContext::get()->queue_buffer_upload(shared_from_this(), offset, _size, pData);
+			if (!bRetCode)
+			{
+				HLogError(
+					"VulkanBuffer: queue_buffer_upload returned false for '{}' (offset={}, size={}).",
+					m_pName ? m_pName : "UnnamedBuffer",
+					offset,
+					_size);
+			}
 			ASH_LOG_PROCESS_ERROR(bRetCode);
 		}
 		else
@@ -288,12 +296,34 @@ namespace RHI
 			else
 			{
 				bRetCode = VulkanContext::get()->vma_map_memory(m_pVMAAllocation, &dst);
+				if (!(bRetCode && dst))
+				{
+					HLogError(
+						"VulkanBuffer: failed to map allocation for '{}' (offset={}, size={}, coherent={}, allocation={}, mapped_data_cached={}).",
+						m_pName ? m_pName : "UnnamedBuffer",
+						offset,
+						_size,
+						m_bCoherent,
+						m_pVMAAllocation != nullptr,
+						m_pMappedData != nullptr);
+				}
 				ASH_LOG_PROCESS_ERROR(bRetCode && dst);
 				mappedByThisCall = true;
 			}
 
 			memory_copy(static_cast<uint8_t*>(dst) + offset, pData, _size);
-			ASH_LOG_PROCESS_ERROR(flush_mapped_range());
+			bRetCode = flush_mapped_range();
+			if (!bRetCode)
+			{
+				HLogError(
+					"VulkanBuffer: flush_mapped_range failed for '{}' (offset={}, size={}, coherent={}, mapped_by_call={}).",
+					m_pName ? m_pName : "UnnamedBuffer",
+					offset,
+					_size,
+					m_bCoherent,
+					mappedByThisCall);
+			}
+			ASH_LOG_PROCESS_ERROR(bRetCode);
 			if (mappedByThisCall)
 			{
 				VulkanContext::get()->vma_unmap_memory(m_pVMAAllocation);
@@ -301,6 +331,16 @@ namespace RHI
 			bRetCode = true;
 		}
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			HLogError(
+				"VulkanBuffer: update failed for '{}' (offset={}, size={}, access_type={}, dynamic={}).",
+				m_pName ? m_pName : "UnnamedBuffer",
+				offset,
+				_size,
+				static_cast<uint32_t>(m_sCreationInfo.access_type),
+				dynamic);
+		}
 		return bResult;
 	}
 	auto VulkanBuffer::flush_mapped_range() -> bool

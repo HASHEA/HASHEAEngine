@@ -1,26 +1,22 @@
 #include "Function/Render/SceneRenderer.h"
 
 #include "Base/hlog.h"
+#include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <limits>
 
 namespace AshEngine
 {
-	namespace
-	{
-		static constexpr const char* k_scene_shader_path = "project/src/sandbox/Shaders/SceneStaticMesh.hlsl";
-	}
-
 	bool SceneRenderer::initialize(Renderer* renderer)
 	{
 		m_renderer = renderer;
-		return ensure_graphics_program();
+		return m_renderer != nullptr;
 	}
 
 	void SceneRenderer::shutdown()
 	{
 		m_scratch_depth_targets.clear();
-		m_graphics_program.reset();
+		m_logged_warning_keys.clear();
 		m_renderer = nullptr;
 	}
 
@@ -28,7 +24,6 @@ namespace AshEngine
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
-		ASH_PROCESS_ERROR(ensure_graphics_program());
 		const std::shared_ptr<RenderTarget> depth_target = resolve_depth_target(view_context);
 		ASH_PROCESS_ERROR(depth_target != nullptr);
 
@@ -57,16 +52,46 @@ namespace AshEngine
 				RHI::vertex_input_layouts_equal(
 					draw.render_asset->resource->vertex_decl->get_vertex_input(),
 					get_mesh_vertex_decl()->get_vertex_input()));
-			for (const StaticMeshRenderSection& section : draw.sections)
+			for (const ResolvedStaticMeshSection& section : draw.sections)
 			{
 				ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
+				if (!section.material || !section.material_proxy)
+				{
+					HLogError("SceneRenderer: skipping static mesh section with incomplete material bindings.");
+					continue;
+				}
+
+				const MaterialResource& material_resource = section.material_proxy->get_resource();
+				if (!material_resource.pass_relevance.supports_surface ||
+					material_resource.pass_relevance.domain != MaterialDomain::Surface)
+				{
+					continue;
+				}
+				if (material_resource.pass_relevance.is_transparent)
+				{
+					const std::string material_key =
+						section.material->get_asset_path().empty() ?
+						section.material->get_name() :
+						section.material->get_asset_path().generic_string();
+					log_warning_once(
+						"transparent#" + material_key,
+						"SceneRenderer: skipping transparent material '" + material_key + "' in Surface V1.");
+					continue;
+				}
+				GraphicsProgram* program = section.material_proxy->get_program();
+				if (!program)
+				{
+					HLogError(
+						"SceneRenderer: skipping material '{}' because its graphics program is unavailable.",
+						section.material->get_asset_path().generic_string());
+					continue;
+				}
 
 				SceneObjectConstants constants{};
 				constants.object_to_clip = frame.view_projection * draw.world_transform;
-				constants.base_color_factor = section.base_color_factor;
 
 				GraphicsDrawDesc draw_desc{};
-				draw_desc.program = m_graphics_program.get();
+				draw_desc.program = program;
 				draw_desc.vertex_buffers.push_back({
 					0,
 					draw.render_asset->resource->vertex_buffer,
@@ -97,42 +122,6 @@ namespace AshEngine
 
 		pass_context.end();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-	}
-
-	bool SceneRenderer::ensure_graphics_program()
-	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_renderer);
-		if (m_graphics_program)
-		{
-			break;
-		}
-
-		GraphicsProgramState program_state{};
-		program_state.cull_mode = RenderCullMode::Back;
-		program_state.primitive_topology = RenderPrimitiveTopology::TriangleList;
-		program_state.depth_test = true;
-		program_state.depth_write = true;
-		// glTF-style exterior = CCW in model space (`Graphics/RasterizerConvention.h` maps this to each RHI).
-		program_state.front_face = RenderFrontFace::CounterClockwise;
-
-		m_graphics_program = m_renderer->create_graphics_program({
-			k_scene_shader_path,
-			"VSMain",
-			"PSMain",
-			nullptr,
-			program_state,
-			"SceneStaticMeshGraphicsProgram",
-			get_mesh_vertex_decl(),
-			{},
-		});
-		ASH_PROCESS_ERROR(m_graphics_program != nullptr);
-		ASH_PROCESS_GUARD_END(bResult, false);
-		if (!bResult)
-		{
-			HLogError("SceneRenderer failed to create graphics program '{}'.", k_scene_shader_path);
-		}
-		return bResult;
 	}
 
 	bool SceneRenderer::validate_view_context(const SceneRenderViewContext& view_context) const
@@ -233,5 +222,14 @@ namespace AshEngine
 			depth_target
 		});
 		ASH_PROCESS_GUARD_RETURN_END(depth_target, nullptr);
+	}
+
+	void SceneRenderer::log_warning_once(const std::string& key, const std::string& message)
+	{
+		if (!m_logged_warning_keys.insert(key).second)
+		{
+			return;
+		}
+		HLogWarning("{}", message);
 	}
 }

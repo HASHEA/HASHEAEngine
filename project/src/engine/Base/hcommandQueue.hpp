@@ -19,10 +19,20 @@ namespace AshEngine
 		//force flush
 		inline auto flush()
 		{
-			for (const auto& elem : command_queue) {
-				elem();
+			// Lambdas may emplace new entries into command_queue during execution
+			// (e.g. ~VulkanDescriptorPool queues vkDestroyDescriptorPool while a
+			// destructor cascade is being driven by flush itself). std::deque
+			// invalidates iterators on emplace_back, so iterate a local copy and
+			// re-drain until no new work was queued.
+			while (!command_queue.empty())
+			{
+				std::deque<std::function<void()>> drained;
+				drained.swap(command_queue);
+				for (const auto& elem : drained)
+				{
+					elem();
+				}
 			}
-			command_queue.clear();
 		}
 	};
 };

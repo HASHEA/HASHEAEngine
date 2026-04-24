@@ -1,4 +1,4 @@
-#include "RenderDevice.h"
+﻿#include "RenderDevice.h"
 #include "Graphics/Buffer.h"
 #include "Graphics/CommandBuffer.h"
 #include "Graphics/Framebuffer.h"
@@ -61,6 +61,12 @@ namespace AshEngine
 		static bool is_root_parameter_block_name(const std::string& name)
 		{
 			return name == "AshRootConstants" || name == "RootConstants";
+		}
+
+		static uint32_t align_uniform_buffer_allocation_size(uint32_t size)
+		{
+			constexpr uint32_t k_uniform_buffer_allocation_alignment = 256u;
+			return (size + k_uniform_buffer_allocation_alignment - 1u) & ~(k_uniform_buffer_allocation_alignment - 1u);
 		}
 
 		static bool resolve_program_vertex_input(
@@ -242,6 +248,48 @@ namespace AshEngine
 			return nullptr;
 		}
 
+		static void append_unique_shader_sampler_names(
+			const std::shared_ptr<RHI::Shader>& shader,
+			std::vector<std::string>& out_names)
+		{
+			if (!shader)
+			{
+				return;
+			}
+
+			for (const RHI::ShaderResourceBindingLayout& binding : shader->get_resource_binding_layouts())
+			{
+				if (binding.type != RHI::ShaderResourceBindingType::Sampler)
+				{
+					continue;
+				}
+
+				if (std::find(out_names.begin(), out_names.end(), binding.name) == out_names.end())
+				{
+					out_names.push_back(binding.name);
+				}
+			}
+		}
+
+		static std::vector<std::string> collect_graphics_program_sampler_names(
+			const std::shared_ptr<RHI::Shader>& vertex_shader,
+			const std::shared_ptr<RHI::Shader>& fragment_shader)
+		{
+			std::vector<std::string> names{};
+			append_unique_shader_sampler_names(vertex_shader, names);
+			append_unique_shader_sampler_names(fragment_shader, names);
+			std::sort(names.begin(), names.end());
+			return names;
+		}
+
+		static std::vector<std::string> collect_compute_program_sampler_names(const std::shared_ptr<RHI::Shader>& compute_shader)
+		{
+			std::vector<std::string> names{};
+			append_unique_shader_sampler_names(compute_shader, names);
+			std::sort(names.begin(), names.end());
+			return names;
+		}
+
 		static bool is_depth_format(RenderTextureFormat format)
 		{
 			return format == RenderTextureFormat::D24_UNORM_S8_UINT || format == RenderTextureFormat::D32_SFLOAT;
@@ -253,6 +301,8 @@ namespace AshEngine
 			{
 			case RenderTextureFormat::RGBA8_UNORM:
 				return RHI::ASH_FORMAT_R8G8B8A8_UNORM;
+			case RenderTextureFormat::RGBA8_SRGB:
+				return RHI::ASH_FORMAT_R8G8B8A8_SRGB;
 			case RenderTextureFormat::BGRA8_SRGB:
 				return RHI::ASH_FORMAT_B8G8R8A8_SRGB;
 			case RenderTextureFormat::RGBA16_SFLOAT:
@@ -274,6 +324,8 @@ namespace AshEngine
 			{
 			case RHI::ASH_FORMAT_R8G8B8A8_UNORM:
 				return RenderTextureFormat::RGBA8_UNORM;
+			case RHI::ASH_FORMAT_R8G8B8A8_SRGB:
+				return RenderTextureFormat::RGBA8_SRGB;
 			case RHI::ASH_FORMAT_B8G8R8A8_SRGB:
 				return RenderTextureFormat::BGRA8_SRGB;
 			case RHI::ASH_FORMAT_R16G16B16A16_SFLOAT:
@@ -363,14 +415,53 @@ namespace AshEngine
 			}
 		}
 
+		static RHI::AshSamplerAddressMode to_rhi_sampler_address_mode(RenderSamplerAddressMode mode)
+		{
+			switch (mode)
+			{
+			case RenderSamplerAddressMode::MirroredRepeat:
+				return RHI::ASH_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+			case RenderSamplerAddressMode::ClampToEdge:
+				return RHI::ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+			case RenderSamplerAddressMode::ClampToBorder:
+				return RHI::ASH_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+			case RenderSamplerAddressMode::MirrorClampToEdge:
+				return RHI::ASH_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
+			case RenderSamplerAddressMode::Repeat:
+			default:
+				return RHI::ASH_SAMPLER_ADDRESS_MODE_REPEAT;
+			}
+		}
+
+		static RHI::AshFilter to_rhi_sampler_filter(RenderSamplerFilter filter)
+		{
+			switch (filter)
+			{
+			case RenderSamplerFilter::Nearest:
+				return RHI::ASH_FILTER_NEAREST;
+			case RenderSamplerFilter::Linear:
+			default:
+				return RHI::ASH_FILTER_LINEAR;
+			}
+		}
+
+		static RHI::SamplerCreation to_rhi_sampler_creation(const RenderSamplerDesc& desc, const char* debug_name)
+		{
+			RHI::SamplerCreation creation{};
+			creation.minFilter = to_rhi_sampler_filter(desc.min_filter);
+			creation.magFilter = to_rhi_sampler_filter(desc.mag_filter);
+			creation.mipFilter = to_rhi_sampler_filter(desc.mip_filter);
+			creation.address_mode_u = to_rhi_sampler_address_mode(desc.address_u);
+			creation.address_mode_v = to_rhi_sampler_address_mode(desc.address_v);
+			creation.address_mode_w = to_rhi_sampler_address_mode(desc.address_w);
+			creation.max_lod = 16.0f;
+			creation.name = debug_name;
+			return creation;
+		}
+
 		static RHI::AshColorValue to_rhi_color_value(const RenderColorValue& value)
 		{
-			RHI::AshColorValue result{};
-			result.float32[0] = value.r;
-			result.float32[1] = value.g;
-			result.float32[2] = value.b;
-			result.float32[3] = value.a;
-			return result;
+			return RHI::AshColorValue(value.r, value.g, value.b, value.a);
 		}
 
 		static RHI::AshDepthStencilValue to_rhi_depth_stencil_value(const RenderDepthStencilValue& value)
@@ -492,6 +583,14 @@ namespace AshEngine
 		std::shared_ptr<BufferResource> resource = nullptr;
 	};
 
+	class RenderSampler::Impl
+	{
+	public:
+		RenderSamplerDesc desc{};
+		std::shared_ptr<RHI::Sampler> sampler = nullptr;
+		std::string debug_name{};
+	};
+
 	struct ProgramBindingState
 	{
 		std::unordered_map<std::string, std::shared_ptr<UniformBuffer::Impl>> uniform_buffers;
@@ -503,8 +602,10 @@ namespace AshEngine
 		std::unordered_map<std::string, std::vector<std::shared_ptr<RenderTarget::Impl>>> texture_srv_arrays;
 		std::unordered_map<std::string, std::shared_ptr<RenderTarget::Impl>> texture_uavs;
 		std::unordered_map<std::string, std::vector<std::shared_ptr<RenderTarget::Impl>>> texture_uav_arrays;
-		std::unordered_map<std::string, RenderSamplerState> samplers;
-		std::unordered_map<std::string, std::vector<RenderSamplerState>> sampler_arrays;
+		std::unordered_map<std::string, std::shared_ptr<RenderSampler::Impl>> samplers;
+		std::unordered_map<std::string, std::vector<std::shared_ptr<RenderSampler::Impl>>> sampler_arrays;
+		std::unordered_map<std::string, RenderSamplerState> legacy_samplers;
+		std::unordered_map<std::string, std::vector<RenderSamplerState>> legacy_sampler_arrays;
 		std::unordered_map<std::string, ImmutableConstantValue> immutable_constants;
 		std::vector<uint8_t> const_data_block;
 		const RHI::ShaderParameterBlockLayout* const_parameter_block = nullptr;
@@ -523,6 +624,7 @@ namespace AshEngine
 		std::shared_ptr<RHI::Shader> fragment_shader = nullptr;
 		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;
 		RHI::VertexInputCreation vertex_input{};
+		std::vector<std::string> reflected_sampler_names{};
 		std::unordered_map<uint64_t, std::unique_ptr<RHI::IGraphicsRenderProgram>> programs;
 		ProgramBindingState bindings;
 	};
@@ -535,6 +637,7 @@ namespace AshEngine
 		std::string shader_macro;
 		std::string name;
 		std::shared_ptr<RHI::Shader> compute_shader = nullptr;
+		std::vector<std::string> reflected_sampler_names{};
 		std::unique_ptr<RHI::IComputeRenderProgram> program = nullptr;
 		ProgramBindingState bindings;
 	};
@@ -558,9 +661,9 @@ namespace AshEngine
 		bool back_buffer_written_this_frame = false;
 	};
 
-	static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
-		RHI::GraphicsContext* graphics_context,
-		const RenderTargetDesc& desc)
+		static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
+			RHI::GraphicsContext* graphics_context,
+			const RenderTargetDesc& desc)
 	{
 		if (!graphics_context || desc.width == 0 || desc.height == 0 || desc.format == RenderTextureFormat::Unknown)
 		{
@@ -608,6 +711,101 @@ namespace AshEngine
 		impl->format = desc.format;
 		return impl;
 	}
+
+		static uint32_t get_texture_upload_bytes_per_pixel(RenderTextureFormat format)
+		{
+			switch (format)
+			{
+			case RenderTextureFormat::RGBA8_UNORM:
+			case RenderTextureFormat::RGBA8_SRGB:
+				return 4u;
+			case RenderTextureFormat::RGBA16_SFLOAT:
+				return 8u;
+			case RenderTextureFormat::RGBA32_SFLOAT:
+				return 16u;
+			default:
+				return 0u;
+			}
+		}
+
+		static RenderTextureFormat resolve_texture_upload_public_format(const TextureUploadDesc& desc)
+		{
+			if (desc.format == RenderTextureFormat::RGBA8_UNORM && desc.srgb)
+			{
+				return RenderTextureFormat::RGBA8_SRGB;
+			}
+			return desc.format;
+		}
+
+		static std::shared_ptr<RenderTarget::Impl> create_texture_2d_impl(
+			RHI::GraphicsContext* graphics_context,
+			const TextureUploadDesc& desc)
+		{
+			if (!graphics_context || desc.width == 0 || desc.height == 0)
+			{
+				return nullptr;
+			}
+
+			const RenderTextureFormat public_format = resolve_texture_upload_public_format(desc);
+			const uint32_t bytes_per_pixel = get_texture_upload_bytes_per_pixel(public_format);
+			if (bytes_per_pixel == 0u || is_depth_format(public_format))
+			{
+				return nullptr;
+			}
+
+			const uint32_t tight_row_pitch = static_cast<uint32_t>(desc.width) * bytes_per_pixel;
+			uint32_t source_row_pitch = desc.row_pitch == 0 ? tight_row_pitch : desc.row_pitch;
+			if (desc.initial_data && source_row_pitch < tight_row_pitch)
+			{
+				return nullptr;
+			}
+
+			const void* initial_data = desc.initial_data;
+			std::vector<uint8_t> repacked_upload_data{};
+			if (desc.initial_data && source_row_pitch != tight_row_pitch)
+			{
+				repacked_upload_data.resize(static_cast<size_t>(tight_row_pitch) * static_cast<size_t>(desc.height), 0u);
+				const uint8_t* src_rows = static_cast<const uint8_t*>(desc.initial_data);
+				for (uint16_t row = 0; row < desc.height; ++row)
+				{
+					std::memcpy(
+						repacked_upload_data.data() + static_cast<size_t>(row) * tight_row_pitch,
+						src_rows + static_cast<size_t>(row) * source_row_pitch,
+						tight_row_pitch);
+				}
+				initial_data = repacked_upload_data.data();
+				source_row_pitch = tight_row_pitch;
+			}
+
+			RHI::TextureCreation texture_creation{};
+			texture_creation.initial_data = const_cast<void*>(initial_data);
+			texture_creation.width = desc.width;
+			texture_creation.height = desc.height;
+			texture_creation.depth = 1;
+			texture_creation.array_layer_count = 1;
+			texture_creation.mip_level_count = 1;
+			texture_creation.format = to_rhi_format(public_format);
+			texture_creation.type = RHI::Ash_Texture2D;
+			texture_creation.initial_state = RHI::AshResourceState::SRVGraphics;
+			texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+			texture_creation.uUsageFlags = RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
+			texture_creation.name = desc.name;
+
+			std::shared_ptr<RHI::Texture> texture = graphics_context->create_texture(texture_creation);
+			if (!texture)
+			{
+				return nullptr;
+			}
+
+			auto impl = std::make_shared<RenderTarget::Impl>();
+			impl->kind = RenderTarget::Impl::Kind::Texture;
+			impl->texture = texture;
+			impl->shader_resource = true;
+			impl->unordered_access = false;
+			impl->depth_stencil = false;
+			impl->format = public_format;
+			return impl;
+		}
 
 	static void apply_program_state(GraphicsProgram::Impl& impl, RHI::IGraphicsRenderProgram& program)
 	{
@@ -743,6 +941,27 @@ namespace AshEngine
 		}
 
 		static bool collect_samplers(
+			const std::vector<std::shared_ptr<RenderSampler::Impl>>& sampler_impls,
+			std::vector<std::shared_ptr<RHI::Sampler>>& out_samplers)
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			out_samplers.clear();
+			out_samplers.reserve(sampler_impls.size());
+			bool samplers_valid = true;
+			for (const std::shared_ptr<RenderSampler::Impl>& sampler_impl : sampler_impls)
+			{
+				if (!sampler_impl || !sampler_impl->sampler)
+				{
+					samplers_valid = false;
+					break;
+				}
+				out_samplers.push_back(sampler_impl->sampler);
+			}
+			ASH_PROCESS_ERROR(samplers_valid);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		static bool collect_legacy_samplers(
 			RHI::GraphicsContext* graphics_context,
 			const std::vector<RenderSamplerState>& sampler_states,
 			std::vector<std::shared_ptr<RHI::Sampler>>& out_samplers)
@@ -941,13 +1160,12 @@ namespace AshEngine
 				{
 					break;
 				}
-				std::shared_ptr<RHI::Sampler> sampler = graphics_context->get_sampler(to_rhi_sampler_state(sampler_state));
-				if (!sampler)
+				if (!sampler_state || !sampler_state->sampler)
 				{
 					bindings_valid = false;
 					break;
 				}
-				binder.add_bind_sampler(name.c_str(), sampler);
+				binder.add_bind_sampler(name.c_str(), sampler_state->sampler);
 			}
 
 			for (const auto& [name, sampler_states] : bindings.sampler_arrays)
@@ -957,7 +1175,37 @@ namespace AshEngine
 					break;
 				}
 				std::vector<std::shared_ptr<RHI::Sampler>> samplers;
-				if (!collect_samplers(graphics_context, sampler_states, samplers))
+				if (!collect_samplers(sampler_states, samplers))
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_sampler_array(name.c_str(), samplers);
+			}
+
+			for (const auto& [name, sampler_state] : bindings.legacy_samplers)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::shared_ptr<RHI::Sampler> sampler = graphics_context->get_sampler(to_rhi_sampler_state(sampler_state));
+				if (!sampler)
+				{
+					bindings_valid = false;
+					break;
+				}
+				binder.add_bind_sampler(name.c_str(), sampler);
+			}
+
+			for (const auto& [name, sampler_states] : bindings.legacy_sampler_arrays)
+			{
+				if (!bindings_valid)
+				{
+					break;
+				}
+				std::vector<std::shared_ptr<RHI::Sampler>> samplers;
+				if (!collect_legacy_samplers(graphics_context, sampler_states, samplers))
 				{
 					bindings_valid = false;
 					break;
@@ -1445,6 +1693,19 @@ namespace AshEngine
 			m_impl->resource->buffer->update(offset, size, const_cast<void*>(data)) : false;
 	}
 
+	RenderSampler::RenderSampler() = default;
+	RenderSampler::RenderSampler(std::shared_ptr<Impl> impl)
+		: m_impl(std::move(impl))
+	{
+	}
+	RenderSampler::~RenderSampler() = default;
+
+	const RenderSamplerDesc& RenderSampler::get_desc() const
+	{
+		static const RenderSamplerDesc k_default_desc{};
+		return m_impl ? m_impl->desc : k_default_desc;
+	}
+
 	GraphicsProgram::GraphicsProgram() = default;
 	GraphicsProgram::GraphicsProgram(std::unique_ptr<Impl> impl)
 		: m_impl(std::move(impl))
@@ -1472,6 +1733,18 @@ namespace AshEngine
 			}
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool GraphicsProgram::get_reflected_sampler_names(std::vector<std::string>& out_names) const
+	{
+		out_names.clear();
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		out_names = m_impl->reflected_sampler_names;
+		return true;
 	}
 
 	bool GraphicsProgram::set_const_data_block(uint32_t size, const void* data)
@@ -1688,12 +1961,53 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool GraphicsProgram::set_sampler(const char* name, const std::shared_ptr<RenderSampler>& sampler)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
+		m_impl->bindings.sampler_arrays.erase(name);
+		m_impl->bindings.legacy_samplers.erase(name);
+		m_impl->bindings.legacy_sampler_arrays.erase(name);
+		if (!sampler)
+		{
+			m_impl->bindings.samplers.erase(name);
+			break;
+		}
+		m_impl->bindings.samplers[name] = sampler->m_impl;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool GraphicsProgram::set_sampler_array(const char* name, const std::vector<std::shared_ptr<RenderSampler>>& samplers)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
+		m_impl->bindings.samplers.erase(name);
+		m_impl->bindings.legacy_samplers.erase(name);
+		m_impl->bindings.legacy_sampler_arrays.erase(name);
+		if (samplers.empty())
+		{
+			m_impl->bindings.sampler_arrays.erase(name);
+			break;
+		}
+		std::vector<std::shared_ptr<RenderSampler::Impl>> sampler_impls;
+		sampler_impls.reserve(samplers.size());
+		for (const std::shared_ptr<RenderSampler>& sampler : samplers)
+		{
+			ASH_PROCESS_ERROR(sampler != nullptr);
+			sampler_impls.push_back(sampler->m_impl);
+		}
+		m_impl->bindings.sampler_arrays[name] = std::move(sampler_impls);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool GraphicsProgram::set_sampler(const char* name, RenderSamplerState sampler_state)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.sampler_arrays.erase(name);
-		m_impl->bindings.samplers[name] = sampler_state;
+		m_impl->bindings.samplers.erase(name);
+		m_impl->bindings.legacy_sampler_arrays.erase(name);
+		m_impl->bindings.legacy_samplers[name] = sampler_state;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -1702,12 +2016,13 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.samplers.erase(name);
+		m_impl->bindings.legacy_samplers.erase(name);
 		if (sampler_states.empty())
 		{
-			m_impl->bindings.sampler_arrays.erase(name);
+			m_impl->bindings.legacy_sampler_arrays.erase(name);
 			break;
 		}
-		m_impl->bindings.sampler_arrays[name] = sampler_states;
+		m_impl->bindings.legacy_sampler_arrays[name] = sampler_states;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -1725,6 +2040,18 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(set_program_const_data(m_impl->bindings, size, data));
 		bResult = !m_impl->program || m_impl->program->set_const_data_block(size, data);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool ComputeProgram::get_reflected_sampler_names(std::vector<std::string>& out_names) const
+	{
+		out_names.clear();
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		out_names = m_impl->reflected_sampler_names;
+		return true;
 	}
 
 	bool ComputeProgram::set_static_int(const char* name, int32_t value)
@@ -1925,12 +2252,53 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool ComputeProgram::set_sampler(const char* name, const std::shared_ptr<RenderSampler>& sampler)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
+		m_impl->bindings.sampler_arrays.erase(name);
+		m_impl->bindings.legacy_samplers.erase(name);
+		m_impl->bindings.legacy_sampler_arrays.erase(name);
+		if (!sampler)
+		{
+			m_impl->bindings.samplers.erase(name);
+			break;
+		}
+		m_impl->bindings.samplers[name] = sampler->m_impl;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool ComputeProgram::set_sampler_array(const char* name, const std::vector<std::shared_ptr<RenderSampler>>& samplers)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && name);
+		m_impl->bindings.samplers.erase(name);
+		m_impl->bindings.legacy_samplers.erase(name);
+		m_impl->bindings.legacy_sampler_arrays.erase(name);
+		if (samplers.empty())
+		{
+			m_impl->bindings.sampler_arrays.erase(name);
+			break;
+		}
+		std::vector<std::shared_ptr<RenderSampler::Impl>> sampler_impls;
+		sampler_impls.reserve(samplers.size());
+		for (const std::shared_ptr<RenderSampler>& sampler : samplers)
+		{
+			ASH_PROCESS_ERROR(sampler != nullptr);
+			sampler_impls.push_back(sampler->m_impl);
+		}
+		m_impl->bindings.sampler_arrays[name] = std::move(sampler_impls);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool ComputeProgram::set_sampler(const char* name, RenderSamplerState sampler_state)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.sampler_arrays.erase(name);
-		m_impl->bindings.samplers[name] = sampler_state;
+		m_impl->bindings.samplers.erase(name);
+		m_impl->bindings.legacy_sampler_arrays.erase(name);
+		m_impl->bindings.legacy_samplers[name] = sampler_state;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -1939,12 +2307,13 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && name);
 		m_impl->bindings.samplers.erase(name);
+		m_impl->bindings.legacy_samplers.erase(name);
 		if (sampler_states.empty())
 		{
-			m_impl->bindings.sampler_arrays.erase(name);
+			m_impl->bindings.legacy_sampler_arrays.erase(name);
 			break;
 		}
-		m_impl->bindings.sampler_arrays[name] = sampler_states;
+		m_impl->bindings.legacy_sampler_arrays[name] = sampler_states;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -2044,6 +2413,16 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
+	std::shared_ptr<RenderTarget> RenderDevice::create_texture_2d(const TextureUploadDesc& desc)
+	{
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderTarget>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
+		const std::shared_ptr<RenderTarget::Impl> impl = create_texture_2d_impl(m_impl->graphics_context, desc);
+		ASH_PROCESS_ERROR(impl);
+		result = std::shared_ptr<RenderTarget>(new RenderTarget(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
 	std::shared_ptr<RenderTarget> RenderDevice::acquire_transient_render_target(const RenderTargetDesc& desc)
 	{
 		const uint64_t hash_value = hash_render_target_desc(desc);
@@ -2082,18 +2461,23 @@ namespace AshEngine
 	{
 		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<UniformBuffer>, result, nullptr, nullptr);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.size > 0);
+		const char* buffer_name = desc.name ? desc.name : "UnnamedUniformBuffer";
+
+		const uint32_t allocation_size = align_uniform_buffer_allocation_size(desc.size);
+		const RHI::AshResourceAccessType requested_access_type =
+			desc.cpu_write ? RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE : RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
 
 		RHI::BufferCreation buffer_creation{};
-		buffer_creation.size = desc.size;
+		buffer_creation.size = allocation_size;
 		buffer_creation.struct_byte_stride = 0;
 		buffer_creation.usage_flags = RHI::ASH_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-		buffer_creation.access_type = desc.cpu_write ? RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE : RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+		buffer_creation.access_type = requested_access_type;
 		buffer_creation.force_static = true;
 		buffer_creation.initial_data = const_cast<void*>(desc.initial_data);
 		buffer_creation.name = desc.name;
 
 		std::shared_ptr<RHI::Buffer> buffer = m_impl->graphics_context->create_buffer(buffer_creation);
-		ASH_PROCESS_ERROR(buffer);
+		ASH_LOG_PROCESS_ERROR(buffer,"failed to create uniform buffer");
 
 		auto resource = std::make_shared<BufferResource>();
 		resource->buffer = buffer;
@@ -2190,6 +2574,28 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
+	std::shared_ptr<RenderSampler> RenderDevice::create_sampler(const RenderSamplerDesc& desc, const char* debug_name)
+	{
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderSampler>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
+
+		auto impl = std::make_shared<RenderSampler::Impl>();
+		impl->desc = desc;
+		if (debug_name)
+		{
+			impl->debug_name = debug_name;
+		}
+
+		RHI::SamplerCreation sampler_creation = to_rhi_sampler_creation(
+			desc,
+			impl->debug_name.empty() ? nullptr : impl->debug_name.c_str());
+		impl->sampler = m_impl->graphics_context->create_sampler(sampler_creation);
+		ASH_PROCESS_ERROR(impl->sampler != nullptr);
+
+		result = std::shared_ptr<RenderSampler>(new RenderSampler(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
 	std::unique_ptr<GraphicsProgram> RenderDevice::create_graphics_program(const GraphicsProgramDesc& desc)
 	{
 		ASH_PROCESS_GUARD_RETURN(std::unique_ptr<GraphicsProgram>, result, nullptr, nullptr);
@@ -2221,6 +2627,7 @@ namespace AshEngine
 		impl->vertex_shader = vertex_shader;
 		impl->fragment_shader = fragment_shader;
 		impl->vertex_decl = desc.vertex_decl;
+		impl->reflected_sampler_names = collect_graphics_program_sampler_names(vertex_shader, fragment_shader);
 		RHI::VertexInputCreation resolved_vertex_input{};
 		ASH_PROCESS_ERROR(resolve_program_vertex_input(desc.vertex_decl, desc.vertex_input, impl->name.c_str(), resolved_vertex_input));
 		ASH_PROCESS_ERROR(resolve_program_pipeline_vertex_input_for_shader(impl->vertex_shader, resolved_vertex_input, impl->name.c_str(), impl->vertex_input));
@@ -2258,6 +2665,7 @@ namespace AshEngine
 		impl->shader_macro = desc.shader_macro ? desc.shader_macro : "";
 		impl->name = desc.name ? desc.name : "EngineComputeProgram";
 		impl->compute_shader = compute_shader;
+		impl->reflected_sampler_names = collect_compute_program_sampler_names(compute_shader);
 		impl->bindings.const_parameter_block = find_root_parameter_block(impl->compute_shader);
 		if (impl->bindings.const_parameter_block && impl->bindings.const_parameter_block->byte_size > 0)
 		{

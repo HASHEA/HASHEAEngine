@@ -61,7 +61,7 @@ namespace RHI
 		uint32_t    stencil;
 	} AshDepthStencilValue;
 
-	typedef union AshColorValue
+	struct AshColorValue
 	{
 		enum valueType
 		{
@@ -69,48 +69,55 @@ namespace RHI
 			T_int32,
 			T_uint32
 		};
+
 		valueType v_type = T_float32;
-		float float32[4];
-		int32_t int32[4];
-		uint32_t uint32[4];
-		AshColorValue()
+		union
 		{
-			for (int i = 0; i < 4; ++i) {
-				float32[i] = 0.0f; 
-			}
-			v_type = T_float32;
+			float float32[4];
+			int32_t int32[4];
+			uint32_t uint32[4];
 		};
-		explicit AshColorValue(float value) {
-			for (int i = 0; i < 4; ++i) {
-				float32[i] = value;
-			}
-			v_type = T_float32;
-		}
-		explicit AshColorValue(int32_t value) {
-			for (int i = 0; i < 4; ++i) {
-				int32[i] = value;
-			}
-			v_type = T_int32;
-		}
-		explicit AshColorValue(uint32_t value) {
-			for (int i = 0; i < 4; ++i) {
-				uint32[i] = value;
-			}
-			v_type = T_uint32;
-		}
-		AshColorValue(float r, float g, float b, float a) {
-			float32[0] = r; float32[1] = g; float32[2] = b; float32[3] = a;
-			v_type = T_float32;
+
+		AshColorValue()
+			: v_type(T_float32)
+			, float32{ 0.0f, 0.0f, 0.0f, 0.0f }
+		{
 		}
 
-		AshColorValue(int32_t r, int32_t g, int32_t b, int32_t a) {
-			int32[0] = r; int32[1] = g; int32[2] = b; int32[3] = a;
-			v_type = T_int32;
+		explicit AshColorValue(float value)
+			: v_type(T_float32)
+			, float32{ value, value, value, value }
+		{
 		}
 
-		AshColorValue(uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
-			uint32[0] = r; uint32[1] = g; uint32[2] = b; uint32[3] = a;
-			v_type = T_uint32;
+		explicit AshColorValue(int32_t value)
+			: v_type(T_int32)
+			, int32{ value, value, value, value }
+		{
+		}
+
+		explicit AshColorValue(uint32_t value)
+			: v_type(T_uint32)
+			, uint32{ value, value, value, value }
+		{
+		}
+
+		AshColorValue(float r, float g, float b, float a)
+			: v_type(T_float32)
+			, float32{ r, g, b, a }
+		{
+		}
+
+		AshColorValue(int32_t r, int32_t g, int32_t b, int32_t a)
+			: v_type(T_int32)
+			, int32{ r, g, b, a }
+		{
+		}
+
+		AshColorValue(uint32_t r, uint32_t g, uint32_t b, uint32_t a)
+			: v_type(T_uint32)
+			, uint32{ r, g, b, a }
+		{
 		}
 	};
 
@@ -630,4 +637,3 @@ namespace RHI
 
 
 }
-

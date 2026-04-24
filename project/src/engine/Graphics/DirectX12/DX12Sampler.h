@@ -2,6 +2,7 @@
 #include "DX12Wrapper.h"
 #include "DX12Helper.hpp"
 #include "Graphics/Sampler.h"
+#include <string>
 
 namespace RHI
 {
@@ -27,5 +28,6 @@ namespace RHI
 		DX12DescriptorHandle m_descriptorHandle;
 		SamplerCreation m_creation{};
 		DX12DescriptorHeapManager* m_heapMgr = nullptr;
+		std::string m_name_storage{};
 	};
 }

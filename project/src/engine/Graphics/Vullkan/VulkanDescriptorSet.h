@@ -57,8 +57,12 @@ namespace RHI
 		// request next when current pool is full
 		std::shared_ptr<VulkanDescriptorPool> m_pNextPool;
 
-		// last pool
-		std::shared_ptr<VulkanDescriptorPool> m_pPreviousPool;
+		// Back-edge in the pool chain. Held weakly so the chain is owned
+		// strictly forward (header -> next -> next -> ...); the previous link
+		// must not extend the lifetime of an earlier node, otherwise the
+		// chain forms a shared_ptr cycle and ~VulkanDescriptorPool never runs
+		// (VUID-vkDestroyDevice-device-05137 at shutdown).
+		std::weak_ptr<VulkanDescriptorPool> m_pPreviousPool;
 
 		// RHIResource overrides.
 		auto get_native_handle() -> void* override;

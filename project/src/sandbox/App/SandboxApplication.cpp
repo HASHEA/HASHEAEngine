@@ -1,4 +1,4 @@
-#include "App/SandboxApplication.h"
+﻿#include "App/SandboxApplication.h"
 
 #include "Base/hthreading.h"
 #include "Base/hlog.h"
@@ -240,7 +240,7 @@ namespace AshSandbox
 			m_mainSceneOutput = {};
 		}
 	}
-
+	
 	auto SandboxApplication::_log_runtime_summary() -> void
 	{
 		if (m_summaryLogged)

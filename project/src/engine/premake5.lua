@@ -12,8 +12,9 @@ project "Engine"
 		"**.h",
 		"**.cpp",
 		"**.hpp",
+		"**.hlsl",
 		"**.lua",
-		assetsdir.."/ASH-shaders/**.hshader",
+		"**.hlsli",
 		thirdparty .. "/glm/include/**.hpp",
 		thirdparty .. "/glm/include/**.inl",
 		thirdparty .. "/vulkanmemoryallocator/include/*.h",
@@ -62,6 +63,11 @@ project "Engine"
 		"spirv-cross",
 		"meshoptimizer",
 	}
+
+	filter "files:**.hlsl"
+		buildaction "None"
+
+	filter {}
 
 	filter {"system:windows", "configurations:Debug"}
 		system "Windows"

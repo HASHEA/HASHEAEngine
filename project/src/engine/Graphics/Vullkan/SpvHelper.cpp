@@ -1,4 +1,4 @@
-#include "SpvHelper.h"
+﻿#include "SpvHelper.h"
 #include "Base/hlog.h"
 #include "spirv.hpp"
 #include "spirv_cross.hpp"
@@ -264,7 +264,7 @@ namespace RHI
 		binding.count = static_cast<uint16_t>(std::min<uint32_t>(descriptor_count, UINT16_MAX));
 		binding.stage_flags = stage;
 		binding.bindless = bindless;
-		copy_name(binding.name, sizeof(binding.name), resource.name);
+		copy_name(binding.name, sizeof(binding.name), compiler.get_name(resource.id));
 
 		DescriptorSetLayoutCreation* set = find_or_add_set(parse_result, set_index);
 		set->bindless = set->bindless || bindless;

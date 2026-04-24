@@ -13,6 +13,7 @@
 namespace AshEngine
 {
 	using AssetId = uint64_t;
+	class MaterialInterface;
 
 	enum class AssetType : uint8_t
 	{
@@ -87,6 +88,10 @@ namespace AshEngine
 		bool load_model_by_path(const std::filesystem::path& path, std::shared_ptr<const Model>& out_model);
 		std::shared_future<std::shared_ptr<const Model>> load_model_by_id_async(AssetId id);
 		std::shared_future<std::shared_ptr<const Model>> load_model_by_path_async(const std::filesystem::path& path);
+		bool load_material_by_id(AssetId id, std::shared_ptr<const MaterialInterface>& out_material);
+		bool load_material_by_path(const std::filesystem::path& path, std::shared_ptr<const MaterialInterface>& out_material);
+		std::shared_future<std::shared_ptr<const MaterialInterface>> load_material_by_id_async(AssetId id);
+		std::shared_future<std::shared_ptr<const MaterialInterface>> load_material_by_path_async(const std::filesystem::path& path);
 		bool load_ashasset_by_id(AssetId id, std::shared_ptr<const AshAsset>& out_asset);
 		bool load_ashasset_by_path(const std::filesystem::path& path, std::shared_ptr<const AshAsset>& out_asset);
 		std::shared_future<std::shared_ptr<const AshAsset>> load_ashasset_by_id_async(AssetId id);

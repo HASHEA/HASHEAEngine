@@ -57,6 +57,7 @@ namespace RHI
 		const DX12ShaderReflectionData& get_reflection_data() const { return m_reflectionData; }
 		AshShaderStageFlagBits get_stage() const { return m_stage; }
 		const std::vector<ShaderParameterBlockLayout>& get_parameter_block_layouts() const override { return m_parameterBlockLayouts; }
+		const std::vector<ShaderResourceBindingLayout>& get_resource_binding_layouts() const override { return m_resourceBindingLayouts; }
 		bool get_reflected_vertex_inputs(VertexInputCreation& out_vertex_input) const override;
 
 	public:
@@ -71,6 +72,7 @@ namespace RHI
 		std::vector<uint8_t> m_bytecode;
 		DX12ShaderReflectionData m_reflectionData;
 		std::vector<ShaderParameterBlockLayout> m_parameterBlockLayouts;
+		std::vector<ShaderResourceBindingLayout> m_resourceBindingLayouts;
 		AshShaderStageFlagBits m_stage = ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
 		std::string m_name;
 	};

@@ -6,6 +6,7 @@
 #include "Graphics/DXC/DXCIncludeHandler.h"
 #include "Graphics/VertexInputLayout.h"
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <filesystem>
 
@@ -79,6 +80,72 @@ namespace RHI
 			}
 
 			return AshVertexComponentFormat::FormatCount;
+		}
+
+		static ShaderResourceBindingType dx12_input_type_to_resource_binding_type(D3D_SHADER_INPUT_TYPE inputType)
+		{
+			switch (inputType)
+			{
+			case D3D_SIT_CBUFFER:
+				return ShaderResourceBindingType::ConstantBuffer;
+			case D3D_SIT_TEXTURE:
+			case D3D_SIT_STRUCTURED:
+			case D3D_SIT_BYTEADDRESS:
+				return ShaderResourceBindingType::ShaderResource;
+			case D3D_SIT_UAV_RWTYPED:
+			case D3D_SIT_UAV_RWSTRUCTURED:
+			case D3D_SIT_UAV_RWBYTEADDRESS:
+			case D3D_SIT_UAV_APPEND_STRUCTURED:
+			case D3D_SIT_UAV_CONSUME_STRUCTURED:
+			case D3D_SIT_UAV_RWSTRUCTURED_WITH_COUNTER:
+				return ShaderResourceBindingType::UnorderedAccess;
+			case D3D_SIT_SAMPLER:
+				return ShaderResourceBindingType::Sampler;
+			default:
+				return ShaderResourceBindingType::Unknown;
+			}
+		}
+
+		static void trim_ascii_whitespace(std::string& text)
+		{
+			while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+			{
+				text.erase(text.begin());
+			}
+			while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+			{
+				text.pop_back();
+			}
+		}
+
+		static void collect_dxc_define_values(const char* defineText, std::vector<std::wstring>& outDefineValues)
+		{
+			if (!defineText || defineText[0] == '\0')
+			{
+				return;
+			}
+
+			std::string defineString = defineText;
+			size_t start = 0;
+			while (start < defineString.length())
+			{
+				const size_t separator = defineString.find(';', start);
+				std::string defineValue =
+					separator == std::string::npos ?
+					defineString.substr(start) :
+					defineString.substr(start, separator - start);
+				trim_ascii_whitespace(defineValue);
+				if (!defineValue.empty())
+				{
+					outDefineValues.emplace_back(defineValue.begin(), defineValue.end());
+				}
+
+				if (separator == std::string::npos)
+				{
+					break;
+				}
+				start = separator + 1;
+			}
 		}
 	}
 
@@ -219,21 +286,9 @@ namespace RHI
 		args.push_back(L"-Zi"); // Debug info
 
 		// Add defines
-		std::vector<std::wstring> defineStrs;
-		if (ci.pShaderDef)
-		{
-			std::wstring def(ci.pShaderDef, ci.pShaderDef + strlen(ci.pShaderDef));
-			defineStrs.push_back(def);
-			args.push_back(L"-D");
-			args.push_back(defineStrs.back().c_str());
-		}
-		if (ci.pShaderMacro)
-		{
-			std::wstring macro(ci.pShaderMacro, ci.pShaderMacro + strlen(ci.pShaderMacro));
-			defineStrs.push_back(macro);
-			args.push_back(L"-D");
-			args.push_back(defineStrs.back().c_str());
-		}
+		std::vector<std::wstring> defineStrs{};
+		collect_dxc_define_values(ci.pShaderDef, defineStrs);
+		collect_dxc_define_values(ci.pShaderMacro, defineStrs);
 
 		// Include path from shader directory
 		std::wstring includeDir;
@@ -255,6 +310,12 @@ namespace RHI
 		else
 		{
 			includeHandler->set_current_user_shader_path(std::filesystem::path{});
+		}
+
+		for (const std::wstring& define : defineStrs)
+		{
+			args.push_back(L"-D");
+			args.push_back(define.c_str());
 		}
 
 		DxcBuffer sourceBuffer = {};
@@ -318,6 +379,7 @@ namespace RHI
 
 		m_reflectionData = DX12ShaderReflectionData{};
 		m_parameterBlockLayouts.clear();
+		m_resourceBindingLayouts.clear();
 
 		D3D12_SHADER_DESC shaderDesc;
 		reflection->GetDesc(&shaderDesc);
@@ -334,6 +396,13 @@ namespace RHI
 			info.bindCount = bindDesc.BindCount;
 			info.type = bindDesc.Type;
 			info.dimension = bindDesc.Dimension;
+
+			ShaderResourceBindingLayout resourceBinding{};
+			resourceBinding.name = info.name;
+			resourceBinding.type = dx12_input_type_to_resource_binding_type(bindDesc.Type);
+			resourceBinding.bind_point = info.bindPoint;
+			resourceBinding.bind_space = info.bindSpace;
+			resourceBinding.bind_count = info.bindCount > 0 ? info.bindCount : 1u;
 
 			switch (bindDesc.Type)
 			{
@@ -390,12 +459,14 @@ namespace RHI
 				}
 				m_reflectionData.cbuffers.push_back(info);
 				m_parameterBlockLayouts.push_back(std::move(parameterBlock));
+				m_resourceBindingLayouts.push_back(std::move(resourceBinding));
 				break;
 			}
 			case D3D_SIT_TEXTURE:
 			case D3D_SIT_STRUCTURED:
 			case D3D_SIT_BYTEADDRESS:
 				m_reflectionData.srvs.push_back(info);
+				m_resourceBindingLayouts.push_back(std::move(resourceBinding));
 				break;
 			case D3D_SIT_UAV_RWTYPED:
 			case D3D_SIT_UAV_RWSTRUCTURED:
@@ -404,9 +475,11 @@ namespace RHI
 			case D3D_SIT_UAV_CONSUME_STRUCTURED:
 			case D3D_SIT_UAV_RWSTRUCTURED_WITH_COUNTER:
 				m_reflectionData.uavs.push_back(info);
+				m_resourceBindingLayouts.push_back(std::move(resourceBinding));
 				break;
 			case D3D_SIT_SAMPLER:
 				m_reflectionData.samplers.push_back(info);
+				m_resourceBindingLayouts.push_back(std::move(resourceBinding));
 				break;
 			default:
 				break;

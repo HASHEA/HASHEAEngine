@@ -9,7 +9,7 @@
 #include "DX12RenderPass.h"
 #include "DX12Framebuffer.h"
 #include "DX12RenderProgram.h"
-#include "DX12StagingBuffer.h"
+#include "DX12StagingBufferPool.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Base/hmemory.h"
@@ -328,8 +328,8 @@ namespace RHI
 		if (!_create_frame_resources(cfg.num_threads)) return false;
 
 		// Create staging buffer
-		m_stagingBuffer = Ash_New<DX12StagingBuffer>();
-		m_stagingBuffer->init(m_device.Get(), m_d3d12maAllocator, 64 * 1024 * 1024); // 64MB staging
+		m_stagingBuffer = Ash_New<DX12StagingBufferPool>();
+		m_stagingBuffer->init(m_device.Get(), m_d3d12maAllocator);
 
 		HLogInfo("DX12Context: Initialization complete.");
 		return true;
@@ -965,13 +965,14 @@ namespace RHI
 		// Reset shader-visible descriptor heaps
 		m_descriptorHeaps.begin_frame();
 
-		if (m_stagingBuffer)
-		{
-			m_stagingBuffer->reset();
-		}
-
 		// Process delayed deletions
 		m_delayedDeletionQueues[m_currentFrame].flush();
+
+		if (m_stagingBuffer)
+		{
+			m_stagingBuffer->begin_frame(m_absoluteFrame);
+		}
+
 		m_frameActive = true;
 		if (!_flush_pending_buffer_uploads(fr))
 		{
@@ -1166,12 +1167,19 @@ namespace RHI
 		return program;
 	}
 
+	auto DX12Context::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
+	{
+		auto sampler = std::make_shared<DX12Sampler>();
+		if (!sampler->init(ci, m_device.Get(), &m_descriptorHeaps))
+			return nullptr;
+		return sampler;
+	}
+
 	auto DX12Context::get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>
 	{
 		if (ss < m_samplerCache.size() && m_samplerCache[ss] != nullptr)
 			return m_samplerCache[ss];
 
-		auto sampler = std::make_shared<DX12Sampler>();
 		SamplerCreation sc{};
 		// Default sampler for ASH_SAMPLER_STATE_DEFAULT
 		sc.minFilter = ASH_FILTER_LINEAR;
@@ -1183,8 +1191,10 @@ namespace RHI
 		sc.enable_anisotropy = true;
 		sc.max_anisotropy = 16.0f;
 		sc.max_lod = 16.0f;
+		sc.name = "default sampler";
 
-		if (!sampler->init(sc, m_device.Get(), &m_descriptorHeaps))
+		std::shared_ptr<Sampler> sampler = create_sampler(sc);
+		if (!sampler)
 			return nullptr;
 
 		if (ss >= m_samplerCache.size())

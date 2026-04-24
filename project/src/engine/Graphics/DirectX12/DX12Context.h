@@ -29,7 +29,7 @@ namespace RHI
 	constexpr uint32_t k_dx12_max_frames = 2;
 
 	class DX12CommandBuffer;
-	class DX12StagingBuffer;
+	class DX12StagingBufferPool;
 	class DX12Swapchain;
 
 	struct DX12FrameResources
@@ -62,7 +62,7 @@ namespace RHI
 		inline auto get_factory() const { return m_factory.Get(); }
 		inline auto get_current_frame() const { return m_currentFrame; }
 		inline auto get_absolute_frame_count() const { return m_absoluteFrame; }
-		inline auto get_staging_buffer() -> DX12StagingBuffer* { return m_stagingBuffer; }
+		inline auto get_staging_buffer() -> DX12StagingBufferPool* { return m_stagingBuffer; }
 		inline auto get_highest_shader_model() const { return m_highestShaderModel; }
 
 		inline auto get_current_frame_deletion_queue() -> DelayCommandQueue&
@@ -84,6 +84,7 @@ namespace RHI
 		auto create_framebuffer(const FramebufferCreation& ci) -> std::shared_ptr<Framebuffer> override;
 		auto create_graphics_render_program(const GraphicProgramCreateDesc& desc) -> std::unique_ptr<IGraphicsRenderProgram> override;
 		auto create_compute_render_program(const ComputeProgramCreateDesc& desc) -> std::unique_ptr<IComputeRenderProgram> override;
+		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
 		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
 		auto begin_frame() -> void override;
@@ -172,7 +173,7 @@ namespace RHI
 		std::unordered_map<uint64_t, std::shared_ptr<Shader>> m_shaderPool;
 
 		// Staging buffer
-		DX12StagingBuffer* m_stagingBuffer = nullptr;
+		DX12StagingBufferPool* m_stagingBuffer = nullptr;
 		std::vector<PendingBufferUpload> m_pendingBufferUploads{};
 		std::vector<PendingTextureUpload> m_pendingTextureUploads{};
 		mutable std::mutex m_pendingUploadMutex{};
