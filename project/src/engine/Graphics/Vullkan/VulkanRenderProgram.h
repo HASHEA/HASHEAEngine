@@ -24,11 +24,18 @@ namespace RHI
 		AshShaderStageFlagBits stage_flags = static_cast<AshShaderStageFlagBits>(0);
 	};
 
+	struct VulkanProgramDescriptorSetFrameBucket
+	{
+		std::vector<std::shared_ptr<VulkanDescriptorSet>> descriptor_sets;
+		uint64_t absolute_frame = UINT64_MAX;
+	};
+
 	struct VulkanProgramDescriptorSetState
 	{
 		DescriptorSetLayoutCreation layout_creation{};
 		std::shared_ptr<VulkanDescriptorSetLayout> layout = nullptr;
-		std::vector<std::shared_ptr<VulkanDescriptorSet>> descriptor_sets;
+		std::vector<VulkanProgramDescriptorSetFrameBucket> frame_buckets;
+		std::shared_ptr<VulkanDescriptorSet> current_descriptor_set = nullptr;
 		uint32_t image_descriptor_count = 0;
 		uint32_t buffer_descriptor_count = 0;
 		uint32_t write_count = 0;

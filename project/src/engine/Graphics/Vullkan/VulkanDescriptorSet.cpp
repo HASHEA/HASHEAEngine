@@ -11,6 +11,52 @@ namespace RHI
 {
 	static std::unordered_map<size_t, std::weak_ptr<VulkanDescriptorSetLayout>> g_descriptor_set_layout_cache;
 
+	namespace
+	{
+		static constexpr uint32_t k_descriptor_sets_per_layout_pool = 256;
+
+		static std::shared_ptr<VulkanDescriptorPool> find_or_create_available_pool(const std::shared_ptr<VulkanDescriptorPoolContainer>& pool_container)
+		{
+			if (!pool_container)
+			{
+				return nullptr;
+			}
+
+			std::shared_ptr<VulkanDescriptorPool> pool_header = pool_container->get_descriptor_pool();
+			if (!pool_header)
+			{
+				return nullptr;
+			}
+
+			std::shared_ptr<VulkanDescriptorPool> pool = pool_header;
+			std::shared_ptr<VulkanDescriptorPool> previous_pool = nullptr;
+			while (pool)
+			{
+				if (!pool->is_full())
+				{
+					return pool;
+				}
+
+				previous_pool = pool;
+				pool = pool->m_pNextPool;
+			}
+
+			std::shared_ptr<VulkanDescriptorPool> new_pool = pool_header->create_from_header();
+			if (!new_pool)
+			{
+				return nullptr;
+			}
+
+			if (previous_pool)
+			{
+				previous_pool->m_pNextPool = new_pool;
+				new_pool->m_pPreviousPool = previous_pool;
+			}
+
+			return new_pool;
+		}
+	}
+
 	static VkDescriptorType get_descriptor_type(AshDescriptorType desc)
 	{
 		VkDescriptorType ret = VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -125,12 +171,28 @@ namespace RHI
 		return layout;
 	}
 
+	void shutdown_vulkan_descriptor_set_layout_cache()
+	{
+		for (auto it = g_descriptor_set_layout_cache.begin(); it != g_descriptor_set_layout_cache.end();)
+		{
+			if (auto layout = it->second.lock())
+			{
+				layout->shutdown_pool_container();
+				++it;
+			}
+			else
+			{
+				it = g_descriptor_set_layout_cache.erase(it);
+			}
+		}
+	}
+
 	bool VulkanDescriptorSetLayout::init(const DescriptorSetLayoutCreation& creation)
 	{
 		m_creation = creation;
 		m_poolContainer = Ash_New_Shared<VulkanDescriptorPoolContainer>();
 		auto descriptor_pool = Ash_New_Shared<VulkanDescriptorPool>();
-		descriptor_pool->begin(16, creation.bindless);
+		descriptor_pool->begin(k_descriptor_sets_per_layout_pool, creation.bindless);
 
 		std::vector<VkDescriptorSetLayoutBinding> bindings;
 		bindings.reserve(creation.num_bindings);
@@ -182,10 +244,14 @@ namespace RHI
 
 	VulkanDescriptorSetLayout::~VulkanDescriptorSetLayout()
 	{
-		m_poolContainer.reset();
+		shutdown_pool_container();
 		if (m_vkDescriptorSetLayout != VK_NULL_HANDLE)
 		{
-			vkDestroyDescriptorSetLayout(VulkanContext::get_vulkan_device(), m_vkDescriptorSetLayout, VulkanContext::get_vulkan_allocation_callbacks());
+			const VkDevice device = VulkanContext::get_vulkan_device();
+			if (device != VK_NULL_HANDLE)
+			{
+				vkDestroyDescriptorSetLayout(device, m_vkDescriptorSetLayout, VulkanContext::get_vulkan_allocation_callbacks());
+			}
 			m_vkDescriptorSetLayout = VK_NULL_HANDLE;
 		}
 	}
@@ -203,6 +269,15 @@ namespace RHI
 	std::shared_ptr<VulkanDescriptorPoolContainer> VulkanDescriptorSetLayout::get_pool_container() const
 	{
 		return m_poolContainer;
+	}
+
+	void VulkanDescriptorSetLayout::shutdown_pool_container()
+	{
+		if (m_poolContainer)
+		{
+			m_poolContainer->clear();
+			m_poolContainer.reset();
+		}
 	}
 
 	auto VulkanDescriptorSetLayout::get_native_handle() -> void*
@@ -277,7 +352,7 @@ namespace RHI
 	VulkanDescriptorPool::~VulkanDescriptorPool()
 	{
 		VkDevice pDevice = VulkanContext::get_vulkan_device();
-		if (m_uAllocedSet > 0)
+		if (m_uLiveSet > 0)
 		{
 			HLogWarning( "some descriptorSet is not released !!");
 		}
@@ -315,8 +390,10 @@ namespace RHI
 		}
 		m_vecDescriptorPoolSize.clear();
 		m_uMaxSet = maxSet;
-		m_uAllocedSet = 0;
+		m_uLiveSet = 0;
+		m_uResidentSet = 0;
 		m_bBindlessPool = bBindlessSet;
+		m_bExhausted = false;
 		return *this;
 	}
 	bool VulkanDescriptorPool::end()
@@ -352,9 +429,9 @@ namespace RHI
 	{
 		VkDevice pDevice = VulkanContext::get_vulkan_device();
 		std::shared_ptr<VulkanDescriptorPool> pPool = pDescriptorSet ? pDescriptorSet->m_pRealAllocPool : nullptr;
-		if (pPool && pPool->m_uAllocedSet > 0)
+		if (pPool)
 		{
-			pPool->m_uAllocedSet--;
+			pPool->release_live_set();
 			const VkDescriptorSet ps = pDescriptorSet->m_pVkDescriptorSet;
 			if (ps)
 			{
@@ -364,19 +441,28 @@ namespace RHI
 					const VkDescriptorPool descriptor_pool = pPool->m_pDescriptorPool;
 					VulkanContext::get_current_frame_deletion_queue().emplace([pPool, descriptor_pool, ps]() {
 						const VkDescriptorSet set = ps;
-						vkFreeDescriptorSets(VulkanContext::get_vulkan_device(), descriptor_pool, 1, &set);
+						if (descriptor_pool != VK_NULL_HANDLE && VulkanContext::get_vulkan_device() != VK_NULL_HANDLE)
+						{
+							vkFreeDescriptorSets(VulkanContext::get_vulkan_device(), descriptor_pool, 1, &set);
+						}
+						pPool->release_resident_set();
 					});
 				}
 				else if (pDevice != VK_NULL_HANDLE)
 				{
 					const VkDescriptorSet* pSet = &ps;
 					vkFreeDescriptorSets(pDevice, pPool->m_pDescriptorPool, 1, pSet);
+					pPool->release_resident_set();
+				}
+				else
+				{
+					pPool->release_resident_set();
 				}
 			}
 			pDescriptorSet->m_pVkDescriptorSet = VK_NULL_HANDLE;
 			pDescriptorSet->clear_cache();
 			pDescriptorSet->clear_pool_container();
-			if (pPool->m_uAllocedSet == 0)
+			if (pPool->m_uLiveSet == 0)
 			{
 				if (auto pPrev = pPool->m_pPreviousPool.lock())
 				{
@@ -403,17 +489,37 @@ namespace RHI
 	}
 	void VulkanDescriptorPool::increate_allocated_set()
 	{
-		++m_uAllocedSet;
+		++m_uLiveSet;
+		++m_uResidentSet;
+	}
+	void VulkanDescriptorPool::release_live_set()
+	{
+		if (m_uLiveSet > 0)
+		{
+			--m_uLiveSet;
+		}
+	}
+	void VulkanDescriptorPool::release_resident_set()
+	{
+		if (m_uResidentSet > 0)
+		{
+			--m_uResidentSet;
+		}
+		m_bExhausted = false;
+	}
+	void VulkanDescriptorPool::mark_full()
+	{
+		m_bExhausted = true;
 	}
 	bool VulkanDescriptorPool::is_full() const
 	{
-		if (m_uAllocedSet < m_uMaxSet)
+		if (!m_bExhausted && m_uResidentSet < m_uMaxSet)
 		{
 			return false;
 		}
 		else
 		{
-			if (m_uAllocedSet > m_uMaxSet)
+			if (m_uResidentSet > m_uMaxSet)
 				H_ASSERT(false);
 			{
 			}
@@ -428,8 +534,10 @@ namespace RHI
 
 		pNewPool->m_vecDescriptorPoolSize.assign(m_vecDescriptorPoolSize.begin(), m_vecDescriptorPoolSize.end());
 		pNewPool->m_uMaxSet = m_uMaxSet;
-		pNewPool->m_uAllocedSet = 0;
+		pNewPool->m_uLiveSet = 0;
+		pNewPool->m_uResidentSet = 0;
 		pNewPool->m_bBindlessPool = m_bBindlessPool;
+		pNewPool->m_bExhausted = false;
 
 		VkDescriptorPoolCreateInfo descriptorPoolInfo{}; 
 		descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -442,7 +550,11 @@ namespace RHI
 			descriptorPoolInfo.flags |= VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 		}
 
-		vkCreateDescriptorPool(pDevice, &descriptorPoolInfo, nullptr, &pNewPool->m_pDescriptorPool);
+		if (vkCreateDescriptorPool(pDevice, &descriptorPoolInfo, nullptr, &pNewPool->m_pDescriptorPool) != VK_SUCCESS)
+		{
+			HLogError("VulkanDescriptorPool::create_from_header failed to create an overflow descriptor pool.");
+			return nullptr;
+		}
 		return pNewPool;
 	}
 	bool VulkanDescriptorPool::is_dirty_descriptor_pool(std::shared_ptr<VulkanDescriptorPool> pPool)
@@ -477,32 +589,6 @@ namespace RHI
 		m_pPoolContainer = poolContainer;
 		poolContainer->add_allocated(this);
 		m_pRealAllocPool = nullptr;
-		std::shared_ptr<VulkanDescriptorPool> pVulkanPoolHeader = m_pPoolContainer->get_descriptor_pool();
-		if (pVulkanPoolHeader)
-		{
-			std::shared_ptr<VulkanDescriptorPool> pNode = pVulkanPoolHeader;
-			std::shared_ptr<VulkanDescriptorPool> pPrevNode = nullptr;
-			while (pNode)
-			{
-				if (!pNode->is_full())
-				{
-					break;
-				}
-				pPrevNode = pNode;
-				pNode = pNode->m_pNextPool;
-			}
-			if (!pNode)
-			{
-				pNode = pVulkanPoolHeader->create_from_header();
-				if (pPrevNode)
-				{
-					pPrevNode->m_pNextPool = pNode;
-				}
-				pNode->m_pPreviousPool = pPrevNode;
-			}
-			pNode->increate_allocated_set();
-			m_pRealAllocPool = pNode;
-		}
 	}
 	VulkanDescriptorSet::~VulkanDescriptorSet()
 	{
@@ -515,16 +601,46 @@ namespace RHI
 	VulkanDescriptorSet& VulkanDescriptorSet::begin_bind()
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		ASH_LOG_PROCESS_ERROR(m_pRealAllocPool);
 		ASH_LOG_PROCESS_ERROR(m_pVkLayout);
 		if (!m_pVkDescriptorSet)
 		{
 			VkDescriptorSetAllocateInfo descriptorSetAllocateInfo{};
 			descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-			descriptorSetAllocateInfo.descriptorPool = m_pRealAllocPool->get_vk_pool();
 			descriptorSetAllocateInfo.pSetLayouts = &m_pVkLayout;
 			descriptorSetAllocateInfo.descriptorSetCount = 1;
-			VkResult vkResult = vkAllocateDescriptorSets(VulkanContext::get_vulkan_device(), &descriptorSetAllocateInfo,&m_pVkDescriptorSet);
+			VkResult vkResult = VK_ERROR_INITIALIZATION_FAILED;
+			uint32_t attempt_count = 0;
+			static constexpr uint32_t k_max_descriptor_set_allocate_attempts = 8;
+
+			for (; attempt_count < k_max_descriptor_set_allocate_attempts && !m_pVkDescriptorSet;)
+			{
+				++attempt_count;
+				std::shared_ptr<VulkanDescriptorPool> allocation_pool = find_or_create_available_pool(m_pPoolContainer);
+				ASH_LOG_PROCESS_ERROR(allocation_pool);
+				descriptorSetAllocateInfo.descriptorPool = allocation_pool->get_vk_pool();
+				ASH_LOG_PROCESS_ERROR(descriptorSetAllocateInfo.descriptorPool != VK_NULL_HANDLE);
+				vkResult = vkAllocateDescriptorSets(VulkanContext::get_vulkan_device(), &descriptorSetAllocateInfo, &m_pVkDescriptorSet);
+				if (vkResult == VK_SUCCESS)
+				{
+					m_pRealAllocPool = allocation_pool;
+					m_pRealAllocPool->increate_allocated_set();
+					break;
+				}
+
+				if (vkResult != VK_ERROR_OUT_OF_POOL_MEMORY && vkResult != VK_ERROR_FRAGMENTED_POOL)
+				{
+					break;
+				}
+
+				allocation_pool->mark_full();
+			}
+			if (vkResult != VK_SUCCESS)
+			{
+				HLogError(
+					"VulkanDescriptorSet::begin_bind failed to allocate a descriptor set after {} attempts. VkResult={}.",
+					attempt_count,
+					static_cast<int32_t>(vkResult));
+			}
 			ASH_PROCESS_ERROR_EXIT(vkResult == VK_SUCCESS);
 		}
 		clear_cache();
@@ -700,6 +816,11 @@ namespace RHI
 	}
 	bool VulkanDescriptorSet::end_bind()
 	{
+		if (m_pVkDescriptorSet == VK_NULL_HANDLE)
+		{
+			HLogError("VulkanDescriptorSet::end_bind called with a null descriptor set handle.");
+			return false;
+		}
 		vkUpdateDescriptorSets(VulkanContext::get_vulkan_device(), (uint32_t)m_vecWriteDescriptorSets.size(), m_vecWriteDescriptorSets.data(), 0, nullptr);
 		return true;
 	}

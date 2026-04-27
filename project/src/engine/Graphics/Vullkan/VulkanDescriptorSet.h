@@ -8,6 +8,8 @@
 #include <memory>
 namespace RHI
 {
+	void shutdown_vulkan_descriptor_set_layout_cache();
+
 	class VulkanDescriptorSetLayout;
 	class VulkanDescriptorSet;
 	class VulkanDescriptorPool;
@@ -39,6 +41,9 @@ namespace RHI
 		bool             free_descriptor_set(VulkanDescriptorSet* pDescriptorSet);
 		VkDescriptorPool get_vk_pool() const;
 		void             increate_allocated_set();
+		void             release_live_set();
+		void             release_resident_set();
+		void             mark_full();
 		bool             is_full() const;
 
 		std::shared_ptr<VulkanDescriptorPool> create_from_header();
@@ -48,9 +53,11 @@ namespace RHI
 	private:
 		std::vector<VkDescriptorPoolSize> m_vecDescriptorPoolSize;
 		uint32_t                          m_uMaxSet = 0;
-		uint32_t                          m_uAllocedSet = 0;
+		uint32_t                          m_uLiveSet = 0;
+		uint32_t                          m_uResidentSet = 0;
 		VkDescriptorPool                  m_pDescriptorPool = VK_NULL_HANDLE;
 		bool                              m_bBindlessPool = false;
+		bool                              m_bExhausted = false;
 		uint32_t                          m_uPoolID = 0;
 
 	public:
@@ -78,6 +85,7 @@ namespace RHI
 		const DescriptorSetLayoutCreation& get_creation() const;
 		uint32_t get_set_index() const;
 		std::shared_ptr<VulkanDescriptorPoolContainer> get_pool_container() const;
+		void shutdown_pool_container();
 
 		auto get_native_handle() -> void* override;
 		auto get_name() -> const char* override;

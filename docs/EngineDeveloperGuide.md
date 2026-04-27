@@ -1387,6 +1387,9 @@ DX12 支持：
 - Vulkan / DX12 clear color tag 存储：
   - `AshColorValue` 现在是 `v_type + payload union` 的 tagged 结构，不再把 `v_type` 与 `float32/int32/uint32` 共用同一层 `union`
   - Vulkan clear 值转换依赖 `v_type`，因此填充 clear color 时必须通过正确构造或显式维护 tag
+- Vulkan descriptor set 生命周期 / pool 复用：
+  - `VulkanRenderProgram` 不再在同一个 in-flight frame slot 内反复覆写单个 `VkDescriptorSet`；每次 resource binding 会保留独立 descriptor set 到当前 in-flight frame bucket，避免 command buffer 仍引用旧 set 时被 update / destroy
+  - `VulkanDescriptorPool` 现在区分“仍被高层对象持有的 live set 数”和“尚未真正归还给 Vulkan pool 的 resident set 数”；延迟 free 尚未 flush 前会避免错误复用已耗尽 pool，从而规避 `VK_ERROR_OUT_OF_POOL_MEMORY` 和 shutdown 期的 descriptor-pool validation
 
 ---
 

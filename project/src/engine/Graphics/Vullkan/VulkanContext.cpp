@@ -12,6 +12,7 @@
 #include "VulkanFramebuffer.h"
 #include "VulkanRenderPass.h"
 #include "VulkanRenderProgram.h"
+#include "VulkanDescriptorSet.h"
 #include "VulkanTexture.h"
 #include "VulkanSampler.h"
 #include "VulkanShader.h"
@@ -1459,6 +1460,9 @@ namespace RHI
 		_shutdown_staging_buffer_pool();
 		//shutdown shader pool
 		_shutdown_shader_pool();
+		//release any layout-owned descriptor pools that may still be held by
+		//live programs/layouts before we flush delayed deletion and destroy the device
+		shutdown_vulkan_descriptor_set_layout_cache();
 		//shutdown descriptor pool
 		_shutdown_descriptor_pool();
 		//flush deletion queue at the very end to make sure all resources are destroyed before device destroy, otherwise VUID-vkDestroyDevice-device-05137.
