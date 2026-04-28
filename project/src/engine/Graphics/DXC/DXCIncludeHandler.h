@@ -62,6 +62,7 @@ namespace RHI
 	public:
 		//clear each time compile
 		void set_current_user_shader_path(const std::filesystem::path& path);
+		void set_current_generated_bindings_path(const std::filesystem::path& path);
 
 		void set_include_root_path(const std::filesystem::path& path);
 	public:
@@ -71,8 +72,11 @@ namespace RHI
 	private:
 		const std::filesystem::path defaultUserShaderName = L"UserShader.hlsli";
 		const std::filesystem::path defaultUserShaderPath = L"assets/hlsl/include/UserShader.hlsli";
+		const std::filesystem::path defaultGeneratedBindingsName = L"GeneratedMaterialBindings.hlsli";
+		const std::filesystem::path defaultGeneratedBindingsPath = L"assets/hlsl/include/GeneratedMaterialBindings.hlsli";
 		IDxcLibrary* m_pLibrary = nullptr;
 		std::filesystem::path m_currentUserShaderPath{};
+		std::filesystem::path m_currentGeneratedBindingsPath{};
 		std::filesystem::path m_currentIncludeRootPath{};
 		volatile std::atomic<int32_t> m_dwRef{ 1 };
 

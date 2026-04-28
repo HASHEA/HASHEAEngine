@@ -85,7 +85,7 @@ namespace AshEngine
 			{
 				return AssetType::Prefab;
 			}
-			if (ext == ".mat" || ext == ".material")
+			if (ext == ".ashmat" || ext == ".ashmatins")
 			{
 				return AssetType::Material;
 			}

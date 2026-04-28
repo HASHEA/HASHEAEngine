@@ -3,6 +3,7 @@
 #include "Base/hcore.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Render/Material.h"
+#include "Function/Render/MaterialSystem.h"
 #include "Function/Render/StaticMeshRenderAsset.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Scene/SceneComponents.h"
@@ -52,6 +53,8 @@ namespace AshEngine
 
 		AssetDatabase* get_asset_database() const;
 		Renderer* get_renderer() const;
+		MaterialSystem* get_material_system();
+		const MaterialSystem* get_material_system() const;
 
 	private:
 		static std::string make_static_mesh_key(const std::string& asset_path, uint32_t mesh_index);
@@ -92,5 +95,6 @@ namespace AshEngine
 		std::shared_ptr<TextureAsset> m_default_white_texture{};
 		std::shared_ptr<TextureAsset> m_default_normal_texture{};
 		std::shared_ptr<TextureAsset> m_default_black_texture{};
+		MaterialSystem m_material_system{};
 	};
 }

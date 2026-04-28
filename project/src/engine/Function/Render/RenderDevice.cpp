@@ -290,6 +290,35 @@ namespace AshEngine
 			return names;
 		}
 
+		static void append_unique_shader_resource_binding_layouts(
+			const std::shared_ptr<RHI::Shader>& shader,
+			std::vector<RHI::ShaderResourceBindingLayout>& out_layouts)
+		{
+			if (!shader)
+			{
+				return;
+			}
+
+			for (const RHI::ShaderResourceBindingLayout& binding : shader->get_resource_binding_layouts())
+			{
+				const auto existing = std::find_if(
+					out_layouts.begin(),
+					out_layouts.end(),
+					[&binding](const RHI::ShaderResourceBindingLayout& rhs)
+					{
+						return rhs.name == binding.name &&
+							rhs.type == binding.type &&
+							rhs.bind_point == binding.bind_point &&
+							rhs.bind_space == binding.bind_space &&
+							rhs.bind_count == binding.bind_count;
+					});
+				if (existing == out_layouts.end())
+				{
+					out_layouts.push_back(binding);
+				}
+			}
+		}
+
 		static bool is_depth_format(RenderTextureFormat format)
 		{
 			return format == RenderTextureFormat::D24_UNORM_S8_UINT || format == RenderTextureFormat::D32_SFLOAT;
@@ -1747,6 +1776,47 @@ namespace AshEngine
 		return true;
 	}
 
+	bool GraphicsProgram::get_resource_binding_layouts(std::vector<RHI::ShaderResourceBindingLayout>& out_layouts) const
+	{
+		out_layouts.clear();
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		append_unique_shader_resource_binding_layouts(m_impl->vertex_shader, out_layouts);
+		append_unique_shader_resource_binding_layouts(m_impl->fragment_shader, out_layouts);
+		return true;
+	}
+
+	bool GraphicsProgram::get_parameter_block_layout(const char* name, RHI::ShaderParameterBlockLayout& out_layout) const
+	{
+		if (!m_impl || !name)
+		{
+			return false;
+		}
+
+		const auto try_copy_layout = [&](const std::shared_ptr<RHI::Shader>& shader) -> bool
+		{
+			if (!shader)
+			{
+				return false;
+			}
+
+			for (const RHI::ShaderParameterBlockLayout& layout : shader->get_parameter_block_layouts())
+			{
+				if (layout.name == name)
+				{
+					out_layout = layout;
+					return true;
+				}
+			}
+			return false;
+		};
+
+		return try_copy_layout(m_impl->vertex_shader) || try_copy_layout(m_impl->fragment_shader);
+	}
+
 	bool GraphicsProgram::set_const_data_block(uint32_t size, const void* data)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -2599,16 +2669,21 @@ namespace AshEngine
 	std::unique_ptr<GraphicsProgram> RenderDevice::create_graphics_program(const GraphicsProgramDesc& desc)
 	{
 		ASH_PROCESS_GUARD_RETURN(std::unique_ptr<GraphicsProgram>, result, nullptr, nullptr);
-		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && desc.shader_path);
+		const char* resolved_base_shader_path = desc.base_shader_path ? desc.base_shader_path : desc.shader_path;
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && resolved_base_shader_path);
 
 		RHI::ShaderCreation vertex_shader_creation{};
-		vertex_shader_creation.pBaseShaderPath = desc.shader_path;
+		vertex_shader_creation.pBaseShaderPath = resolved_base_shader_path;
+		vertex_shader_creation.pUserShaderPath = desc.user_shader_path;
+		vertex_shader_creation.pGeneratedBindingsPath = desc.generated_bindings_path;
 		vertex_shader_creation.pShaderMacro = desc.shader_macro;
 		vertex_shader_creation.pEntryPoint = desc.vertex_entry;
 		vertex_shader_creation.type = RHI::ASH_SHADER_STAGE_VERTEX_BIT;
 
 		RHI::ShaderCreation fragment_shader_creation{};
-		fragment_shader_creation.pBaseShaderPath = desc.shader_path;
+		fragment_shader_creation.pBaseShaderPath = resolved_base_shader_path;
+		fragment_shader_creation.pUserShaderPath = desc.user_shader_path;
+		fragment_shader_creation.pGeneratedBindingsPath = desc.generated_bindings_path;
 		fragment_shader_creation.pShaderMacro = desc.shader_macro;
 		fragment_shader_creation.pEntryPoint = desc.fragment_entry;
 		fragment_shader_creation.type = RHI::ASH_SHADER_STAGE_FRAGMENT_BIT;
@@ -2619,7 +2694,7 @@ namespace AshEngine
 
 		auto impl = std::make_unique<GraphicsProgram::Impl>();
 		impl->state = desc.state;
-		impl->shader_path = desc.shader_path;
+		impl->shader_path = resolved_base_shader_path;
 		impl->vertex_entry = desc.vertex_entry ? desc.vertex_entry : "VSMain";
 		impl->fragment_entry = desc.fragment_entry ? desc.fragment_entry : "PSMain";
 		impl->shader_macro = desc.shader_macro ? desc.shader_macro : "";

@@ -1,0 +1,45 @@
+{
+  "version": 2,
+  "class": "Material",
+  "name": "M_V2_DebugSurface",
+  "domain": "Surface",
+  "materialShader": "project/src/sandbox/Shaders/MaterialV2/M_V2_DebugSurface.hlsl",
+  "requiredCapabilities": [],
+  "staticSwitches": {},
+  "renderState": {
+    "blendMode": "Opaque",
+    "twoSided": false,
+    "cullMode": "Back",
+    "depthWrite": true,
+    "depthTest": "LessEqual",
+    "alphaCutoff": 0.5
+  },
+  "samplers": {
+    "WrapLinear": {
+      "address_u": "Repeat",
+      "address_v": "Repeat",
+      "address_w": "Repeat",
+      "min_filter": "Linear",
+      "mag_filter": "Linear",
+      "mip_filter": "Linear"
+    }
+  },
+  "parameters": {
+    "BaseColorTint": {
+      "type": "float4",
+      "value": [1.0, 1.0, 1.0, 1.0]
+    },
+    "RoughnessScale": {
+      "type": "float",
+      "value": 0.65
+    }
+  },
+  "resources": {
+    "BaseColorTex": {
+      "type": "Texture2D",
+      "path": "models/gltfs/DamagedHelmet/glTF/Default_albedo.jpg",
+      "sampler": "WrapLinear",
+      "colorSpace": "sRGB"
+    }
+  }
+}

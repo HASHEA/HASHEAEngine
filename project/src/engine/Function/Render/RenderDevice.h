@@ -15,6 +15,8 @@ namespace RHI
 	class Swapchain;
 	class CommandBuffer;
 	class TextureView;
+	struct ShaderParameterBlockLayout;
+	struct ShaderResourceBindingLayout;
 }
 
 namespace AshEngine
@@ -117,6 +119,9 @@ namespace AshEngine
 	struct GraphicsProgramDesc
 	{
 		const char* shader_path = nullptr;
+		const char* base_shader_path = nullptr;
+		const char* user_shader_path = nullptr;
+		const char* generated_bindings_path = nullptr;
 		const char* vertex_entry = "VSMain";
 		const char* fragment_entry = "PSMain";
 		const char* shader_macro = nullptr;
@@ -139,6 +144,7 @@ namespace AshEngine
 			const char* in_name,
 			const RHI::VertexInputCreation& in_vertex_input = {})
 			: shader_path(in_shader_path)
+			, base_shader_path(in_shader_path)
 			, vertex_entry(in_vertex_entry)
 			, fragment_entry(in_fragment_entry)
 			, shader_macro(in_shader_macro)
@@ -158,6 +164,7 @@ namespace AshEngine
 			std::shared_ptr<const VertexDecl> in_vertex_decl,
 			const RHI::VertexInputCreation& in_vertex_input = {})
 			: shader_path(in_shader_path)
+			, base_shader_path(in_shader_path)
 			, vertex_entry(in_vertex_entry)
 			, fragment_entry(in_fragment_entry)
 			, shader_macro(in_shader_macro)
@@ -381,6 +388,8 @@ namespace AshEngine
 	public:
 		bool apply_render_state(const std::function<void(GraphicsProgramState&)>& fn);
 		bool get_reflected_sampler_names(std::vector<std::string>& out_names) const;
+		bool get_resource_binding_layouts(std::vector<RHI::ShaderResourceBindingLayout>& out_layouts) const;
+		bool get_parameter_block_layout(const char* name, RHI::ShaderParameterBlockLayout& out_layout) const;
 		bool set_const_data_block(uint32_t size, const void* data);
 		bool set_static_int(const char* name, int32_t value);
 		bool set_static_uint(const char* name, uint32_t value);

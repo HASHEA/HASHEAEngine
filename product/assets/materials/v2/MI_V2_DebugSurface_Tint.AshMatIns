@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "class": "MaterialInstance",
+  "name": "MI_V2_DebugSurface_Tint",
+  "parent": "materials/v2/M_V2_DebugSurface.AshMat",
+  "overrides": {
+    "parameters": {
+      "BaseColorTint": [1.0, 0.45, 0.45, 1.0],
+      "RoughnessScale": 0.25
+    }
+  }
+}

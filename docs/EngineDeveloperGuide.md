@@ -676,6 +676,9 @@ GpuValidation=true
   - 上层 HLSL 继续写 `cbuffer AshRootConstants` / `cbuffer RootConstants`
   - Vulkan 运行时编译前，会把这类 block 重写为 `struct + [[vk::push_constant]]` 变量，并通过宏把原成员名映射回去
   - Vulkan rewrite 时还会去掉 DXC 预处理后 `cbuffer` 成员自带的 `const`，否则改写后的 struct 会编译失败
+- Vulkan shader reflection 现在不只会产出 push constants；对于普通 uniform-buffer constant block（例如材质侧的 `AshMaterialParameters`），也会从最终 SPIR-V 中补齐 `ShaderParameterBlockLayout`
+- 因此高层如果通过 `GraphicsProgram::get_parameter_block_layout(...)` 查询非 root constant block，Vulkan 与 DX12 都应该能返回同名 layout；不要再假设 Vulkan 只会在这条路径上暴露 `AshRootConstants`
+- 同一个逻辑 constant block 在 Vulkan / DX12 上的 `byte_size` 允许不同：DX12 reflection 可能保留 cbuffer 尾部 padding，而 Vulkan reflection 更接近声明结构体本体大小；高层打包参数时必须以反射出来的 member `offset/size` 为准，不要硬编码“两个后端 byte_size 必须相等”
 - 因此如果以后调整 root constants 命名、shader preprocess、cache key 或 parameter-block 规则，必须同时验证：
   - DX12 root constants / root signature 路径
   - Vulkan push constants / SPIR-V reflection 路径
@@ -823,9 +826,10 @@ GpuValidation=true
 - `glTF/glb` 通过 `tinygltf` 导入
 - `FBX` 通过 `openFBX` 在 triangulate 模式下导入
 - 导入出的材质信息当前仍保留为 `MaterialSlot` 与纹理路径这层 CPU 元数据
-- 正式 `.material` 运行时资产已经落地为独立的 `MaterialInterface / Material / MaterialInstance` 体系
+- 正式材质系统已经切到 V2-only 的 `MaterialInterface / Material / MaterialInstance`
+- V1 `.material/.mat` 运行时资产与兼容路径已移除
 - imported `MaterialSlot` 现在会在 render asset 同步阶段按 `material_slot` 稳定映射到默认 `MaterialInterface`
-- imported `MaterialSlot` 仍不是最终 GPU 材质对象；真正的 draw-time 绑定由 `MaterialRenderProxy` 在 render thread 上解析
+- imported `MaterialSlot` 仍不是最终 GPU 材质对象；真正的 draw-time 绑定由 `MaterialRenderProxy + MaterialSystem` 在 render thread 上解析
 
 当前 `ashasset` 是 **prefab-style JSON 资源格式**，它保存：
 
@@ -861,7 +865,7 @@ GpuValidation=true
 
 - `.obj/.fbx/.gltf/.glb` -> `AssetType::Model`
 - `.ashasset` -> `AssetType::Prefab`
-- `.mat/.material` -> `AssetType::Material`
+- `.ashmat/.ashmatins` -> `AssetType::Material`
 
 当前缓存接口：
 
@@ -900,55 +904,68 @@ GpuValidation=true
 
 当前材质资产补充约定：
 
-- `AssetDatabase` 现在会把 `.material` / `.mat` 加载为 `std::shared_ptr<const MaterialInterface>`
+- `AssetDatabase` 现在会把 `.AshMat` / `.AshMatIns` 加载为 `std::shared_ptr<const MaterialInterface>`
 - `MaterialInstance` 加载时会递归解析父材质链，并在内存里建立只读运行时对象关系
 - Engine 内置两个虚拟材质路径，优先于磁盘查找解析：
-  - `Engine/Materials/M_SurfacePBR.material`
-  - `Engine/Materials/M_DefaultSurface.material`
+  - `Engine/Materials/V2/M_SurfacePBR.AshMat`
+  - `Engine/Materials/V2/MI_DefaultSurface.AshMatIns`
 - 这两个内置材质不依赖 Sandbox 路径，属于 Engine 自身公共运行时资产
+- 当前正式落地的 V2 编译框架先服务于 `Surface.StaticMesh`
+- `UI` 与 `PostProcess` 当前明确不走这套材质系统，而是各自维护自己的 shader / 参数组织路径
 
 当前 `Material.*` 对象模型位于 `project/src/engine/Function/Render/Material.*`：
 
 - `MaterialInterface`
   - 上层统一持有接口
-  - 暴露 domain / blend mode / shading model / parameter 查询 / base material 解析 / change version
+  - 暴露 domain / blend mode / shading model / material shader / parameter / resource / sampler / base material 解析 / change version
 - `Material`
-  - 描述固定 PBR `Surface` 材质定义
-  - 当前支持 `Scalar / Vector4 / Texture` 三类参数
-  - 当前持有固定 PBR 输入绑定表，例如 `BaseColorFactor`、`BaseColorTexture`、`NormalTexture`、`Metallic`、`Roughness`
+  - 描述 V2 基材质定义
+  - 负责声明 `materialShader`、`renderState`、`requiredCapabilities`、`staticSwitches`
+  - 参数当前只支持 `float / float4`
+  - 贴图类输入必须声明在 `resources`，并通过 sampler 名称引用 `samplers`
 - `MaterialInstance`
   - 持有父 `MaterialInterface`
-  - 只允许覆写动态参数值，不允许覆写 domain / blend mode / shading model / two_sided 等静态渲染属性
+  - 只允许覆写动态参数值与资源绑定，不允许覆写 domain / blend mode / shading model / two_sided 等静态渲染属性
+  - 可在本地补充或覆写 sampler definitions；最终视图按“父 + 子覆盖”合并
+- 只有 `MaterialInstance(.AshMatIns)` 可以直接赋给 mesh section、`MeshComponent.material_overrides` 或 `Model.default_materials`
+- 如果显式绑定解析成 `.AshMat` 基材质，运行时会报错并回退到 generated/default instance
 
 当前 imported model 的默认材质映射补充约定：
 
 - `Model` 现在保留 `default_materials`
 - `default_materials` 以 `material_slot -> material_path` 的稳定映射保存显式默认材质
 - 如果 `default_materials` 未提供某个 slot，则 `RenderAssetManager` 会在运行时为该 `MaterialSlot` 生成一个临时 `MaterialInstance`
-- 生成材质的父对象固定为 `Engine/Materials/M_SurfacePBR.material`
+- 生成材质的父对象固定为 `Engine/Materials/V2/M_SurfacePBR.AshMat`
+- 生成材质的虚拟路径固定使用 `__generated__/materials/... .AshMatIns`
 - 生成材质的参数值来自导入 `MaterialSlot` 的颜色、金属度、粗糙度、法线/底色/发光纹理路径
 - 所有 section 的最终解析顺序为：
-  - `MeshComponent.material_overrides[material_slot]`
-  - `Model.default_materials[material_slot]`
+  - `MeshComponent.material_overrides[material_slot]`（要求 `.AshMatIns`）
+  - `Model.default_materials[material_slot]`（要求 `.AshMatIns`）
   - imported `MaterialSlot` 自动生成材质实例
-  - `Engine/Materials/M_DefaultSurface.material`
+  - `Engine/Materials/V2/MI_DefaultSurface.AshMatIns`
 
-当前 `.material` 文件格式约定：
+当前 V2 材质文件格式约定：
 
 - 仍使用 JSON 文本，与 `.scene` / `.ashasset` 的风格保持一致
-- `class = "Material"` 表示基材质定义
-- `class = "MaterialInstance"` 表示实例材质
-- 基材质当前用于声明参数描述表和固定 PBR 输入语义
-- 实例材质当前用于保存稀疏参数覆写与父材质引用
-- 贴图参数现在保存为 `MaterialTextureBinding { texture_path, sampler_name }`
-- sampler 定义现在独立保存为 `samplers[]`
-- 每个 sampler 定义包含：
-  - `name`
-  - `shader_sampler_name`
-  - `desc`
-- 同一个 sampler 可以被多个贴图参数复用；贴图参数只通过 `sampler_name` 引用它
-- 若贴图参数未显式引用 sampler，render-side 会补一个默认 `Repeat + Linear` sampler
-- 历史材质里“贴图对象内联 sampler desc”的旧格式仍会在加载时迁移成独立 sampler definition，以保持兼容
+- `version = 2`
+- `.AshMat` 必须搭配 `class = "Material"`
+- `.AshMatIns` 必须搭配 `class = "MaterialInstance"`
+- 基材质当前用于声明：
+  - `materialShader`
+  - `renderState`
+  - `requiredCapabilities`
+  - `staticSwitches`
+  - `parameters`
+  - `resources`
+  - `samplers`
+- 实例材质当前用于声明：
+  - `parent`
+  - 可选本地 `samplers`
+  - `overrides.parameters`
+  - `overrides.resources`
+- `overrides.parameters` 当前只接受 scalar / float4
+- 贴图类输入统一保存为 `MaterialTextureBinding { texture_path, sampler_name }`
+- sampler 必须通过名字引用；资源绑定不再接受旧式内联 sampler 对象
 
 当前贴图运行时补充约定：
 
@@ -958,7 +975,7 @@ GpuValidation=true
 - 该入口用于 sampled 2D texture 上传，不复用 `create_render_target()` 的 pass attachment 语义
 - 当前上传路径支持对非压缩 2D 纹理做 row-pitch 校验与必要的 tight repack，然后再走现有 Vulkan / DX12 共享上传逻辑
 
-当前 V1 贴图解码范围：
+当前贴图解码范围：
 
 - 支持：`.png`、`.jpg`、`.jpeg`、`.tga`、`.bmp`、`.hdr`
 - 解码库：`stb_image`
@@ -984,20 +1001,27 @@ GpuValidation=true
   - mesh CPU/ GPU 资源
   - `MaterialInterface`
   - `TextureAsset`
+  - `MaterialSystem`
   - `MaterialRenderProxy`
 - `StaticMeshRenderAsset` 只缓存共享几何和“默认 section 材质”，不缓存组件实例级 override 结果
 - `MeshComponent.material_overrides` 的最终解析发生在 `RenderScene::rebuild_from_scene(...)`
 - per-primitive / per-visible-section 会携带最终 `MaterialInterface` 与 `MaterialRenderProxy`
 - `MaterialRenderProxy` 在 render thread 上懒创建并缓存：
+  - `Surface.StaticMesh.BasePass` 与 `DepthOnly` 两套 `MaterialResource`
   - 每材质独立的 `GraphicsProgram`
-  - 固定 PBR 参数 `UniformBuffer`
-  - 解析后的贴图资源绑定
+  - 由参数 block 反射驱动的材质 `UniformBuffer`
+  - 解析后的资源贴图与 sampler 绑定快照
 - `MaterialRenderProxy` 现在还负责：
-  - 按材质实际使用到的 sampler definitions 生成 `SceneSurfacePBR.hlsl` 的 shader macro 变体
-  - 通过 `GraphicsProgram::get_reflected_sampler_names(...)` 读取 shader 反射得到的 sampler 集合
-  - 对“材质期望的 shader sampler 名称集合”和“shader 实际反射集合”做严格相等校验；不匹配直接报错
-- `SceneSurfacePBR.hlsl` 不再固定写死 4 个 sampler 槽位；它仍固定使用 4 张 surface 贴图资源，但 sampler 槽位集合由材质侧实际需要的名字驱动
-- 这样可以避免多材质、多 section、多 view 之间共享一个可变 `GraphicsProgram` 而发生状态互踩
+  - 向 `MaterialSystem` 申请/缓存按 `MaterialUsageDesc` 编译出的 V2 resource template
+  - 根据 shader 反射得到的 parameter block layout 打包材质参数
+  - 按 `resources + samplers` 解析最终贴图/采样器绑定
+- `MaterialSystem` 现在会把 engine shader family host、material shader 和生成的 `Bindings.generated.hlsli` 组合成最终编译单元
+- 当前静态 mesh `Surface` 使用的 engine-host shader 为：
+  - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshBasePass.hlsl`
+  - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshDepthOnly.hlsl`
+- 默认 surface PBR 材质 shader 为：
+  - `project/src/engine/Shaders/MaterialV2/Materials/M_SurfacePBR.hlsl`
+- 这样可以避免多材质、多 section、多 view 之间共享一个可变 `GraphicsProgram` 而发生状态互踩，并把 V1 `SceneSurfacePBR` 兼容路径从运行时彻底移除
 
 ### 11.4 Scene / Entity：保留 facade，内部切到 ECS-style 存储
 
@@ -1169,13 +1193,12 @@ GpuValidation=true
   - color / depth 的 load action 与 clear value
 - `SceneRenderer` 的主入口为 `SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)`
 - `SceneRenderer` 不再持有一个覆盖全场景的共享 `GraphicsProgram`
-- static mesh `Surface` V1 现在统一走 engine-owned shader：
-  - `project/src/engine/Shaders/SceneSurfacePBR.hlsl`
+- static mesh `Surface` 现在统一走 V2 `MaterialSystem + MaterialRenderProxy` 资源模板路径
 - `SceneRenderer` 当前只负责：
   - per-view render pass / depth 目标管理
   - per-draw object root constants
   - 消费 section 的 `MaterialRenderProxy`
-- `Transparent` 材质在当前 V1 会被显式跳过并告警一次；当前正式支持的是 `Opaque` 与 `Masked`
+- `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 `Surface.StaticMesh.BasePass` 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
 
 当前 depth 规则为：
 
@@ -1390,6 +1413,7 @@ DX12 支持：
 - Vulkan descriptor set 生命周期 / pool 复用：
   - `VulkanRenderProgram` 不再在同一个 in-flight frame slot 内反复覆写单个 `VkDescriptorSet`；每次 resource binding 会保留独立 descriptor set 到当前 in-flight frame bucket，避免 command buffer 仍引用旧 set 时被 update / destroy
   - `VulkanDescriptorPool` 现在区分“仍被高层对象持有的 live set 数”和“尚未真正归还给 Vulkan pool 的 resident set 数”；延迟 free 尚未 flush 前会避免错误复用已耗尽 pool，从而规避 `VK_ERROR_OUT_OF_POOL_MEMORY` 和 shutdown 期的 descriptor-pool validation
+  - 当最后一个 deferred descriptor-set free 释放掉 pool 的最终 `shared_ptr` 时，`VulkanDescriptorPool` 会立刻执行 `vkDestroyDescriptorPool`；不要再把 pool 析构本身做第二次 frame-queue 延迟，否则 shutdown 时可能把 destroy 落到错误的 deletion queue，重新触发 `VUID-vkDestroyDevice-device-05137`
 
 ---
 

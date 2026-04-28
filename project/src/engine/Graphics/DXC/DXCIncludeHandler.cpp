@@ -43,6 +43,11 @@ namespace RHI
 			findFilePathInclude = m_currentUserShaderPath;
 			fileExist = AshEngine::file_exists(findFilePathInclude.string().c_str());
 		}
+		else if (defaultGeneratedBindingsName == filePathInclude.filename())
+		{
+			findFilePathInclude = m_currentGeneratedBindingsPath;
+			fileExist = AshEngine::file_exists(findFilePathInclude.string().c_str());
+		}
 		else
 		{
 			std::filesystem::path tryPath = filePathInclude;
@@ -78,6 +83,10 @@ namespace RHI
 	void DXCIncludeHandler::set_current_user_shader_path(const std::filesystem::path& path)
 	{
 		m_currentUserShaderPath = path;
+	}
+	void DXCIncludeHandler::set_current_generated_bindings_path(const std::filesystem::path& path)
+	{
+		m_currentGeneratedBindingsPath = path;
 	}
 	void DXCIncludeHandler::set_include_root_path(const std::filesystem::path& path)
 	{

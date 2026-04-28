@@ -1,78 +1,61 @@
 #pragma once
 
 #include "Base/hcore.h"
-#include "Function/Render/Material.h"
-#include "Function/Render/RenderDevice.h"
+#include "Function/Render/MaterialShaderMap.h"
 #include <memory>
+#include <unordered_map>
+#include <vector>
 
 namespace AshEngine
 {
+	class MaterialSystem;
 	class RenderAssetManager;
 	class Renderer;
-	class TextureAsset;
-
-	struct ASH_API MaterialPassRelevance
-	{
-		bool supports_surface = false;
-		bool supports_depth_prepass = false;
-		bool supports_base_pass = false;
-		bool is_masked = false;
-		bool is_transparent = false;
-		MaterialDomain domain = MaterialDomain::Surface;
-	};
-
-	struct ASH_API MaterialResource
-	{
-		MaterialPassRelevance pass_relevance{};
-		MaterialBlendMode blend_mode = MaterialBlendMode::Opaque;
-		MaterialShadingModel shading_model = MaterialShadingModel::DefaultLit;
-		std::shared_ptr<UniformBuffer> material_uniforms = nullptr;
-	};
 
 	class ASH_API MaterialRenderProxy
 	{
 	public:
-		explicit MaterialRenderProxy(std::shared_ptr<const MaterialInterface> material);
+		struct MaterialBindingSnapshot
+		{
+			uint64_t version = 0;
+			std::vector<uint8_t> packed_parameter_data{};
+			std::unordered_map<std::string, std::shared_ptr<RenderTarget>> textures{};
+			std::unordered_map<std::string, std::shared_ptr<RenderSampler>> samplers{};
+		};
+
+	public:
+		explicit MaterialRenderProxy(
+			std::shared_ptr<const MaterialInterface> material,
+			MaterialSystem* material_system = nullptr);
 
 	public:
 		const std::shared_ptr<const MaterialInterface>& get_material() const;
-		const MaterialResource& get_resource() const;
-		GraphicsProgram* get_program() const;
+		const MaterialResource* get_surface_staticmesh_basepass_resource() const;
+		const MaterialResource* get_surface_staticmesh_depthonly_resource() const;
 		bool ensure_program(Renderer& renderer);
 		bool update_bindings(RenderAssetManager& asset_manager);
 
 	private:
-		struct MaterialUniformData
-		{
-			glm::vec4 base_color_factor{ 1.0f };
-			glm::vec4 emissive_factor_and_alpha_cutoff{ 0.0f, 0.0f, 0.0f, -1.0f };
-			glm::vec4 metallic_roughness_and_flags{ 0.0f, 1.0f, 0.0f, 0.0f };
-			glm::vec4 texture_flags{ 0.0f };
-		};
-
-		struct ResolvedSamplerBinding
-		{
-			std::string material_sampler_name{};
-			std::string shader_sampler_name{};
-			std::shared_ptr<RenderSampler> sampler = nullptr;
-		};
-
-	private:
-		bool bind_program_resources();
-		bool validate_program_sampler_layout(const std::string& material_asset_path) const;
+		bool ensure_v2_resource_templates();
+		bool create_v2_program_instance(
+			const MaterialResource& template_resource,
+			Renderer& renderer,
+			std::unique_ptr<GraphicsProgram>& out_program) const;
+		bool bind_v2_program_resources();
 
 	private:
 		std::shared_ptr<const MaterialInterface> m_material = nullptr;
-		MaterialResource m_resource{};
-		std::shared_ptr<TextureAsset> m_base_color_texture = nullptr;
-		std::shared_ptr<TextureAsset> m_normal_texture = nullptr;
-		std::shared_ptr<TextureAsset> m_metallic_roughness_texture = nullptr;
-		std::shared_ptr<TextureAsset> m_emissive_texture = nullptr;
-		std::vector<ResolvedSamplerBinding> m_sampler_bindings{};
-		std::unique_ptr<GraphicsProgram> m_program = nullptr;
-		MaterialUniformData m_uniform_data{};
+		MaterialSystem* m_material_system = nullptr;
+		MaterialBindingSnapshot m_binding_snapshot{};
+		std::shared_ptr<UniformBuffer> m_v2_material_uniforms = nullptr;
+		const MaterialResource* m_surface_staticmesh_basepass_template = nullptr;
+		const MaterialResource* m_surface_staticmesh_depthonly_template = nullptr;
+		MaterialResource m_surface_staticmesh_basepass_resource{};
+		MaterialResource m_surface_staticmesh_depthonly_resource{};
+		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_basepass_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_depthonly_program = nullptr;
+		uint64_t m_runtime_binding_version = 0;
 		uint64_t m_material_version = 0;
-		uint64_t m_program_state_key = 0;
-		std::string m_program_shader_macro{};
+		uint64_t m_v2_compile_hash = 0;
 	};
 }

@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "class": "MaterialInstance",
+  "name": "MI_V2_SurfacePBR_SamplerOverride",
+  "parent": "Engine/Materials/V2/M_SurfacePBR.AshMat",
+  "samplers": [
+    {
+      "name": "ClampLinear",
+      "shader_sampler_name": "ASH_ClampSampler",
+      "address_u": "ClampToEdge",
+      "address_v": "ClampToEdge",
+      "address_w": "ClampToEdge",
+      "min_filter": "Linear",
+      "mag_filter": "Linear",
+      "mip_filter": "Linear"
+    }
+  ],
+  "overrides": {
+    "resources": {
+      "BaseColorTexture": {
+        "path": "models/gltfs/DamagedHelmet/glTF/Default_albedo.jpg",
+        "sampler": "ClampLinear"
+      }
+    }
+  }
+}

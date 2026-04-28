@@ -356,28 +356,28 @@ namespace RHI
 		{
 			HLogWarning( "some descriptorSet is not released !!");
 		}
-		if (immediate_deletion)
+		if (m_uResidentSet > 0)
 		{
-			if (m_pDescriptorPool)
+			HLogWarning("VulkanDescriptorPool destroyed with {} resident descriptor sets still pending.", m_uResidentSet);
+		}
+
+		// Descriptor-pool destruction is already deferred by the descriptor-set
+		// free lambda that owns the final shared_ptr to this pool. Queueing a
+		// second deferred destroy here can strand vkDestroyDescriptorPool onto a
+		// different frame queue during shutdown, leaking the pool past
+		// vkDestroyDevice. Once the pool object itself is finally being destroyed,
+		// it is safe to release the VkDescriptorPool immediately.
+		if (m_pDescriptorPool)
+		{
+			if (pDevice != VK_NULL_HANDLE)
 			{
 				vkDestroyDescriptorPool(pDevice, m_pDescriptorPool, nullptr);
-				m_pDescriptorPool = VK_NULL_HANDLE;
 			}
-			if (m_pNextPool)
-			{
-				m_pNextPool->immediate_deletion = true;
-				m_pNextPool.reset();
-			}
+			m_pDescriptorPool = VK_NULL_HANDLE;
 		}
-		else
+		if (m_pNextPool)
 		{
-			auto handle = m_pDescriptorPool;
-			if (handle != VK_NULL_HANDLE)
-			{
-				VulkanContext::get_current_frame_deletion_queue().emplace([handle]() {
-					vkDestroyDescriptorPool(VulkanContext::get_vulkan_device(), handle, VulkanContext::get_vulkan_allocation_callbacks()); });
-				m_pDescriptorPool = VK_NULL_HANDLE;
-			}
+			m_pNextPool->immediate_deletion = true;
 			m_pNextPool.reset();
 		}
 	}

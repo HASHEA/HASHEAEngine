@@ -309,8 +309,6 @@ namespace RHI
 		std::vector<LPCWSTR> rewriteArgs{};
 		rewriteArgs.emplace_back(L"-E");
 		rewriteArgs.emplace_back(entryNameW.c_str());
-		rewriteArgs.emplace_back(L"-remove-unused-globals");
-		rewriteArgs.emplace_back(L"-remove-unused-functions");
 		//set user shader for includer
 		if (item.userShaderPath && *item.userShaderPath != '\0')
 		{
@@ -319,6 +317,14 @@ namespace RHI
 		else
 		{
 			m_pDefaultIncluder.p->set_current_user_shader_path(std::filesystem::path{});
+		}
+		if (item.generatedBindingsPath && *item.generatedBindingsPath != '\0')
+		{
+			m_pDefaultIncluder.p->set_current_generated_bindings_path(item.generatedBindingsPath);
+		}
+		else
+		{
+			m_pDefaultIncluder.p->set_current_generated_bindings_path(std::filesystem::path{});
 		}
 		m_pDefaultIncluder.p->set_include_root_path(shaderPath.parent_path());
 		CComPtr<IDxcOperationResult> pComplResult = nullptr;

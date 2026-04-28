@@ -613,15 +613,15 @@ namespace RHI
 		ParseResult reflection_data{};
 		bResult = parse_binary_spv(spirvCode.data(), spirvCode.size(), fileInfo.stage, &reflection_data);
 		ASH_PROCESS_ERROR(bResult);
+		ShaderCreation compiled_shader_creation{};
+		compiled_shader_creation.pBaseShaderPath = fileInfo.sourceShaderPath;
+		compiled_shader_creation.pUserShaderPath = fileInfo.userShaderPath;
+		compiled_shader_creation.pGeneratedBindingsPath = fileInfo.generatedBindingsPath;
+		compiled_shader_creation.pShaderMacro = fileInfo.macroDefine;
+		compiled_shader_creation.pEntryPoint = fileInfo.entryPoint;
+		compiled_shader_creation.type = fileInfo.stage;
 		pVulkanShader->set_compiled_binary(
-			{
-				fileInfo.sourceShaderPath,
-				fileInfo.userShaderPath,
-				nullptr,
-				fileInfo.macroDefine,
-				fileInfo.entryPoint,
-				fileInfo.stage
-			},
+			compiled_shader_creation,
 			std::move(spirvCode),
 			reflection_data);
 

@@ -6,6 +6,7 @@
 #include "spirv_cross.hpp"
 #include <algorithm>
 #include <cstring>
+#include <exception>
 
 namespace RHI
 {
@@ -66,33 +67,142 @@ namespace RHI
 			}
 		}
 
-		static void build_parameter_block_layouts_from_reflection(
-			const ParseResult& reflection_data,
+		static ShaderParameterValueType spirv_type_to_parameter_type(const spirv_cross::SPIRType& type)
+		{
+			switch (type.basetype)
+			{
+			case spirv_cross::SPIRType::Boolean:
+				return ShaderParameterValueType::Bool;
+			case spirv_cross::SPIRType::Int:
+				return ShaderParameterValueType::Int;
+			case spirv_cross::SPIRType::UInt:
+				return ShaderParameterValueType::UInt;
+			case spirv_cross::SPIRType::Float:
+				return ShaderParameterValueType::Float;
+			default:
+				return ShaderParameterValueType::Unknown;
+			}
+		}
+
+		static uint32_t spirv_member_array_size(spirv_cross::Compiler& compiler, const spirv_cross::SPIRType& type)
+		{
+			uint32_t array_size = 1;
+			for (size_t array_index = 0; array_index < type.array.size(); ++array_index)
+			{
+				uint32_t element_count = type.array[array_index];
+				if (element_count == 0)
+				{
+					element_count = 1;
+				}
+				else if (!type.array_size_literal.empty() &&
+					array_index < type.array_size_literal.size() &&
+					!type.array_size_literal[array_index])
+				{
+					try
+					{
+						element_count = compiler.get_constant(element_count).m.c[0].r[0].u32;
+					}
+					catch (...)
+					{
+						element_count = 1;
+					}
+				}
+
+				array_size *= std::max<uint32_t>(element_count, 1u);
+			}
+
+			return array_size;
+		}
+
+		static std::string get_reflected_resource_name(spirv_cross::Compiler& compiler, const spirv_cross::Resource& resource)
+		{
+			std::string name = compiler.get_name(resource.id);
+			if (name.empty())
+			{
+				name = resource.name;
+			}
+			if (name.empty())
+			{
+				name = compiler.get_name(resource.base_type_id);
+			}
+			return name;
+		}
+
+		static void append_spirv_uniform_parameter_block_layouts(
+			const std::vector<uint32_t>& spirv_binary,
 			std::vector<ShaderParameterBlockLayout>& out_layouts)
 		{
-			out_layouts.clear();
-			if (reflection_data.push_constants_count == 0 || reflection_data.push_constants_stride == 0)
+			if (spirv_binary.empty())
 			{
 				return;
 			}
 
-			ShaderParameterBlockLayout layout{};
-			layout.name = reflection_data.push_constant_name[0] != '\0' ? reflection_data.push_constant_name : "AshRootConstants";
-			layout.byte_size = reflection_data.push_constants_stride;
-
-			for (uint32_t member_index = 0; member_index < reflection_data.push_constant_member_count; ++member_index)
+			try
 			{
-				const AshBufferMemberInfo& src_member = reflection_data.push_constant_members[member_index];
-				ShaderParameterMember dst_member{};
-				dst_member.name = src_member.name;
-				dst_member.offset = src_member.offset;
-				dst_member.size = src_member.size;
-				dst_member.array_size = 1;
-				dst_member.value_type = ash_shader_data_type_to_parameter_type(src_member.type);
-				layout.members.push_back(std::move(dst_member));
+				spirv_cross::Compiler compiler(spirv_binary);
+				const spirv_cross::ShaderResources resources = compiler.get_shader_resources();
+				for (const spirv_cross::Resource& resource : resources.uniform_buffers)
+				{
+					const spirv_cross::SPIRType& type = compiler.get_type(resource.base_type_id);
+					ShaderParameterBlockLayout layout{};
+					layout.name = get_reflected_resource_name(compiler, resource);
+					layout.bind_space = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
+					layout.bind_point = compiler.get_decoration(resource.id, spv::DecorationBinding);
+					layout.byte_size = static_cast<uint32_t>(compiler.get_declared_struct_size(type));
+
+					for (uint32_t member_index = 0; member_index < static_cast<uint32_t>(type.member_types.size()); ++member_index)
+					{
+						const spirv_cross::SPIRType& member_type = compiler.get_type(type.member_types[member_index]);
+						ShaderParameterMember member{};
+						member.name = compiler.get_member_name(type.self, member_index);
+						member.offset = compiler.type_struct_member_offset(type, member_index);
+						member.size = static_cast<uint32_t>(compiler.get_declared_struct_member_size(type, member_index));
+						member.array_size = spirv_member_array_size(compiler, member_type);
+						member.value_type = spirv_type_to_parameter_type(member_type);
+						layout.members.push_back(std::move(member));
+					}
+
+					out_layouts.push_back(std::move(layout));
+				}
+			}
+			catch (const std::exception& exception)
+			{
+				HLogError("VulkanShader: Failed to reflect SPIR-V uniform parameter blocks: {}", exception.what());
+			}
+			catch (...)
+			{
+				HLogError("VulkanShader: Failed to reflect SPIR-V uniform parameter blocks due to an unknown error.");
+			}
+		}
+
+		static void build_parameter_block_layouts_from_reflection(
+			const std::vector<uint32_t>& spirv_binary,
+			const ParseResult& reflection_data,
+			std::vector<ShaderParameterBlockLayout>& out_layouts)
+		{
+			out_layouts.clear();
+			if (reflection_data.push_constants_count > 0 && reflection_data.push_constants_stride > 0)
+			{
+				ShaderParameterBlockLayout layout{};
+				layout.name = reflection_data.push_constant_name[0] != '\0' ? reflection_data.push_constant_name : "AshRootConstants";
+				layout.byte_size = reflection_data.push_constants_stride;
+
+				for (uint32_t member_index = 0; member_index < reflection_data.push_constant_member_count; ++member_index)
+				{
+					const AshBufferMemberInfo& src_member = reflection_data.push_constant_members[member_index];
+					ShaderParameterMember dst_member{};
+					dst_member.name = src_member.name;
+					dst_member.offset = src_member.offset;
+					dst_member.size = src_member.size;
+					dst_member.array_size = 1;
+					dst_member.value_type = ash_shader_data_type_to_parameter_type(src_member.type);
+					layout.members.push_back(std::move(dst_member));
+				}
+
+				out_layouts.push_back(std::move(layout));
 			}
 
-			out_layouts.push_back(std::move(layout));
+			append_spirv_uniform_parameter_block_layouts(spirv_binary, out_layouts);
 		}
 
 		static ShaderResourceBindingType ash_descriptor_type_to_shader_resource_binding_type(AshDescriptorType descriptor_type)
@@ -196,7 +306,7 @@ namespace RHI
 		m_creation = ci;
 		m_spirv_binary = spirv_binary;
 		m_reflection_data = reflection_data;
-		build_parameter_block_layouts_from_reflection(m_reflection_data, m_parameter_block_layouts);
+		build_parameter_block_layouts_from_reflection(m_spirv_binary, m_reflection_data, m_parameter_block_layouts);
 		build_resource_binding_layouts_from_reflection(m_reflection_data, m_resource_binding_layouts);
 		m_descriptor_set_layouts.clear();
 		H_ASSERTLOG(!m_spirv_binary.empty(), "Compiled SPIR-V is empty for shader {}", ci.pBaseShaderPath ? ci.pBaseShaderPath : "<null>");

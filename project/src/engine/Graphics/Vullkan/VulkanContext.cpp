@@ -1829,6 +1829,7 @@ auto VulkanContext::destroy() -> void
 			ShaderItem shader_item{};
 			shader_item.sourceShaderPath = ci.pBaseShaderPath;
 			shader_item.userShaderPath = ci.pUserShaderPath;
+			shader_item.generatedBindingsPath = ci.pGeneratedBindingsPath;
 			const std::string vulkan_shader_macro = append_vulkan_shader_macro(ci.pShaderMacro);
 			shader_item.macroDefine = vulkan_shader_macro.c_str();
 			shader_item.entryPoint = ci.pEntryPoint ? ci.pEntryPoint : "main";

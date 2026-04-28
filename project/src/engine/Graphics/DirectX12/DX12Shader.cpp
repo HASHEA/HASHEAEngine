@@ -223,10 +223,10 @@ namespace RHI
 
 		// Load shader source
 		std::string shaderPath;
-		if (ci.pUserShaderPath)
-			shaderPath = ci.pUserShaderPath;
-		else if (ci.pBaseShaderPath)
+		if (ci.pBaseShaderPath)
 			shaderPath = ci.pBaseShaderPath;
+		else if (ci.pUserShaderPath)
+			shaderPath = ci.pUserShaderPath;
 
 		includeHandler.Attach(AshEngine::Ash_New<DXCIncludeHandler>());
 		if (!includeHandler)
@@ -310,6 +310,14 @@ namespace RHI
 		else
 		{
 			includeHandler->set_current_user_shader_path(std::filesystem::path{});
+		}
+		if (ci.pGeneratedBindingsPath && ci.pGeneratedBindingsPath[0] != '\0')
+		{
+			includeHandler->set_current_generated_bindings_path(ci.pGeneratedBindingsPath);
+		}
+		else
+		{
+			includeHandler->set_current_generated_bindings_path(std::filesystem::path{});
 		}
 
 		for (const std::wstring& define : defineStrs)

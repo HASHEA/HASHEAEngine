@@ -62,6 +62,7 @@ namespace RHI
 	{
 		const char* pBaseShaderPath = nullptr;
 		const char* pUserShaderPath = nullptr;
+		const char* pGeneratedBindingsPath = nullptr;
 		const char* pShaderDef = nullptr;
 		const char* pShaderMacro = nullptr;
 		const char* pEntryPoint = nullptr;
@@ -72,6 +73,7 @@ namespace RHI
 		uint64_t hashCode = 0;
 		ASH_HASH::hash_combine(hashCode, ci.pBaseShaderPath, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pUserShaderPath, ASH_HASH::CStringHash{});
+		ASH_HASH::hash_combine(hashCode, ci.pGeneratedBindingsPath, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pShaderDef, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pShaderMacro, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pEntryPoint, ASH_HASH::CStringHash{});

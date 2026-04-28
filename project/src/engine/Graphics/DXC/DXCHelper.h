@@ -17,6 +17,7 @@ namespace RHI
 	{
 		const char* sourceShaderPath = nullptr;
 		const char* userShaderPath = nullptr;
+		const char* generatedBindingsPath = nullptr;
 		const char* macroDefine = nullptr;
 		const char* entryPoint = nullptr;
 		AshShaderStageFlagBits stage = AshShaderStageFlagBits::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;

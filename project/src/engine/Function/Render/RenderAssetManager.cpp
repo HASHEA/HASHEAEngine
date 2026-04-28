@@ -123,6 +123,17 @@ namespace AshEngine
 			}
 			return path;
 		}
+
+		static auto choose_default_material_fallback_path(const std::string& asset_path) -> const char*
+		{
+			(void)asset_path;
+			return k_builtin_default_surface_material_path;
+		}
+
+		static auto is_bindable_material_instance(const std::shared_ptr<const MaterialInterface>& material) -> bool
+		{
+			return material != nullptr && material->is_material_instance();
+		}
 	}
 
 	void RenderAssetManager::initialize(AssetDatabase* asset_database, Renderer* renderer)
@@ -130,6 +141,10 @@ namespace AshEngine
 		std::scoped_lock<std::mutex> lock(m_mutex);
 		m_asset_database = asset_database;
 		m_renderer = renderer;
+		if (!m_material_system.initialize(renderer))
+		{
+			HLogError("RenderAssetManager: failed to initialize MaterialSystem.");
+		}
 	}
 
 	void RenderAssetManager::shutdown()
@@ -145,6 +160,7 @@ namespace AshEngine
 		m_default_white_texture.reset();
 		m_default_normal_texture.reset();
 		m_default_black_texture.reset();
+		m_material_system.shutdown();
 		m_asset_database = nullptr;
 		m_renderer = nullptr;
 	}
@@ -207,7 +223,7 @@ namespace AshEngine
 			}
 		}
 
-		result = std::make_shared<MaterialRenderProxy>(resolved_material);
+		result = std::make_shared<MaterialRenderProxy>(resolved_material, &m_material_system);
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_material_proxies[key] = result;
@@ -349,7 +365,18 @@ namespace AshEngine
 				{
 					if (std::shared_ptr<const MaterialInterface> override_material = request_material_asset_internal(material_override->material_path, false))
 					{
-						resolved_section.material = override_material;
+						if (is_bindable_material_instance(override_material))
+						{
+							resolved_section.material = override_material;
+						}
+						else
+						{
+							HLogError(
+								"RenderAssetManager: material '{}' resolved to base material 'Material'. "
+								"Only '.AshMatIns' material instances can be assigned directly to mesh sections. "
+								"Keeping the section default material.",
+								material_override->material_path);
+						}
 					}
 					else
 					{
@@ -419,6 +446,16 @@ namespace AshEngine
 		return m_renderer;
 	}
 
+	MaterialSystem* RenderAssetManager::get_material_system()
+	{
+		return &m_material_system;
+	}
+
+	const MaterialSystem* RenderAssetManager::get_material_system() const
+	{
+		return &m_material_system;
+	}
+
 	std::string RenderAssetManager::make_static_mesh_key(const std::string& asset_path, uint32_t mesh_index)
 	{
 		return normalize_asset_key(asset_path) + "#" + std::to_string(mesh_index);
@@ -442,7 +479,7 @@ namespace AshEngine
 
 	std::string RenderAssetManager::make_generated_material_key(const std::string& asset_path, uint32_t material_slot)
 	{
-		return "__generated__/materials/" + normalize_asset_key(asset_path) + "#slot=" + std::to_string(material_slot) + ".material";
+		return "__generated__/materials/" + normalize_asset_key(asset_path) + "#slot=" + std::to_string(material_slot) + ".AshMatIns";
 	}
 
 	std::string RenderAssetManager::make_texture_key(const std::string& asset_path, TextureColorSpace color_space)
@@ -491,10 +528,11 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(false);
 		}
 
+		const char* fallback_material_path = choose_default_material_fallback_path(asset_path);
 		log_material_warning_once(
 			cache_key,
-			"RenderAssetManager: failed to load material '" + asset_path + "', falling back to '" + std::string(k_builtin_default_surface_material_path) + "'.");
-		ASH_PROCESS_ERROR(m_asset_database->load_material_by_path(k_builtin_default_surface_material_path, material));
+			"RenderAssetManager: failed to load material '" + asset_path + "', falling back to '" + std::string(fallback_material_path) + "'.");
+		ASH_PROCESS_ERROR(m_asset_database->load_material_by_path(fallback_material_path, material));
 		ASH_PROCESS_ERROR(material != nullptr);
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
@@ -539,22 +577,21 @@ namespace AshEngine
 		material_instance->set_scalar_override("Metallic", material_slot_data.metallic_factor);
 		material_instance->set_scalar_override("Roughness", material_slot_data.roughness_factor);
 		material_instance->set_vector_override("EmissiveColor", glm::vec4(material_slot_data.emissive_factor, 1.0f));
-		material_instance->set_scalar_override("OpacityMask", material_slot_data.base_color_factor.a);
 		if (!material_slot_data.base_color_texture.texture_path.empty() || !material_slot_data.base_color_texture.sampler_name.empty())
 		{
-			material_instance->set_texture_override("BaseColorTexture", material_slot_data.base_color_texture);
+			material_instance->set_resource_override("BaseColorTexture", material_slot_data.base_color_texture);
 		}
 		if (!material_slot_data.normal_texture.texture_path.empty() || !material_slot_data.normal_texture.sampler_name.empty())
 		{
-			material_instance->set_texture_override("NormalTexture", material_slot_data.normal_texture);
+			material_instance->set_resource_override("NormalTexture", material_slot_data.normal_texture);
 		}
 		if (!material_slot_data.metallic_roughness_texture.texture_path.empty() || !material_slot_data.metallic_roughness_texture.sampler_name.empty())
 		{
-			material_instance->set_texture_override("MetallicRoughnessTexture", material_slot_data.metallic_roughness_texture);
+			material_instance->set_resource_override("MetallicRoughnessTexture", material_slot_data.metallic_roughness_texture);
 		}
 		if (!material_slot_data.emissive_texture.texture_path.empty() || !material_slot_data.emissive_texture.sampler_name.empty())
 		{
-			material_instance->set_texture_override("EmissiveTexture", material_slot_data.emissive_texture);
+			material_instance->set_resource_override("EmissiveTexture", material_slot_data.emissive_texture);
 		}
 		material_instance->reset_change_version();
 
@@ -574,7 +611,16 @@ namespace AshEngine
 			{
 				if (std::shared_ptr<const MaterialInterface> explicit_material = request_material_asset_internal(default_reference->material_path, false))
 				{
-					return explicit_material;
+					if (is_bindable_material_instance(explicit_material))
+					{
+						return explicit_material;
+					}
+
+					HLogError(
+						"RenderAssetManager: material '{}' resolved to base material 'Material'. "
+						"Only '.AshMatIns' material instances can be assigned directly to mesh sections. "
+						"Falling back to generated or default material.",
+						default_reference->material_path);
 				}
 			}
 		}

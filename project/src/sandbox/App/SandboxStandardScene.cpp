@@ -1,5 +1,6 @@
 #include "App/SandboxStandardScene.h"
 
+#include "Function/Asset/AssetData.h"
 #include "Base/hlog.h"
 #include <algorithm>
 #include <chrono>
@@ -18,6 +19,7 @@ namespace AshSandbox
 		static constexpr char k_scene_name[] = "SandboxStandardScene";
 		static constexpr char k_scene_root_name[] = "SandboxStandardSceneRoot";
 		static constexpr char k_primary_camera_name[] = "SandboxStandardSceneCamera";
+		static constexpr char k_v2_debug_material_override_path[] = "materials/v2/MI_V2_DebugSurface_Tint.AshMatIns";
 		static const glm::vec3 k_primary_camera_position{ 0.0f, 1.5f, -6.0f };
 		static const glm::vec3 k_primary_camera_rotation_euler_degrees{ 0.0f, 0.0f, 0.0f };
 		static constexpr float k_default_camera_move_speed = 8.0f;
@@ -58,6 +60,25 @@ namespace AshSandbox
 			out_transform.scale = glm::vec3(1.0f, 1.0f, 1.0f);
 			out_transform.rotation_euler_degrees = glm::degrees(glm::eulerAngles(glm::normalize(rotation)));
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		static auto try_resolve_first_material_slot(
+			const AshEngine::Model& model,
+			const AshEngine::MeshComponent& mesh_component,
+			uint32_t& out_material_slot) -> bool
+		{
+			const AshEngine::Mesh* mesh = AshEngine::get_model_mesh_by_index(model, mesh_component.mesh_index);
+			if (!mesh || mesh->sections.empty())
+			{
+				return false;
+			}
+
+			out_material_slot = mesh->sections.front().material_slot;
+			if (out_material_slot == AshEngine::k_invalid_material_slot)
+			{
+				out_material_slot = 0u;
+			}
+			return true;
 		}
 
 	}
@@ -322,6 +343,52 @@ namespace AshSandbox
 			out_error = "Failed to instantiate the Sponza model into the Sandbox standard scene.";
 			ASH_PROCESS_ERROR(false);
 		}
+
+		bool injected_v2_override = false;
+		for (AshEngine::Entity entity : out_snapshot.scene.get_entities_with_component(AshEngine::SceneComponentType::Mesh))
+		{
+			if (!entity.is_valid())
+			{
+				continue;
+			}
+
+			AshEngine::MeshComponent mesh_component = entity.get_mesh_component();
+			if (mesh_component.asset_path.empty() || !mesh_component.material_overrides.empty())
+			{
+				continue;
+			}
+
+			uint32_t material_slot = 0u;
+			if (!try_resolve_first_material_slot(*model, mesh_component, material_slot))
+			{
+				continue;
+			}
+
+			mesh_component.material_overrides.push_back({
+				material_slot,
+				k_v2_debug_material_override_path
+			});
+			if (!entity.set_mesh_component(mesh_component))
+			{
+				out_error = "Failed to inject the Sandbox V2 material override.";
+				ASH_PROCESS_ERROR(false);
+			}
+
+			HLogInfo(
+				"Sandbox standard scene injected V2 material override '{}' on entity {} slot {}.",
+				k_v2_debug_material_override_path,
+				entity.get_id(),
+				material_slot);
+			injected_v2_override = true;
+			break;
+		}
+		if (!injected_v2_override)
+		{
+			HLogWarning(
+				"Sandbox standard scene did not find a mesh entity for V2 material override '{}'.",
+				k_v2_debug_material_override_path);
+		}
+
 		ASH_PROCESS_ERROR(_create_primary_camera(
 			out_snapshot.scene,
 			out_snapshot.primary_camera_entity_id,

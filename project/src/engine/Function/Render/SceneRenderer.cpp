@@ -7,6 +7,45 @@
 
 namespace AshEngine
 {
+	namespace
+	{
+		static auto build_material_label(const MaterialInterface& material) -> std::string
+		{
+			if (!material.get_asset_path().empty())
+			{
+				return material.get_asset_path().generic_string();
+			}
+			if (!material.get_name().empty())
+			{
+				return material.get_name();
+			}
+			return "<unnamed-material>";
+		}
+
+		static auto log_v2_basepass_usage_once(
+			const MaterialInterface& material,
+			const MaterialResource& resource) -> void
+		{
+			static std::unordered_set<std::string> s_logged_material_keys{};
+			const std::string material_label = build_material_label(material);
+			const std::string log_key =
+				material_label +
+				"#" +
+				std::to_string(resource.combined_source_hash);
+			if (!s_logged_material_keys.insert(log_key).second)
+			{
+				return;
+			}
+
+			HLogInfo(
+				"SceneRenderer: drawing Surface.StaticMesh.BasePass with V2 material '{}' "
+				"(program='{}', source_hash={}).",
+				material_label,
+				resource.program_name.empty() ? std::string("<unnamed-program>") : resource.program_name,
+				resource.combined_source_hash);
+		}
+	}
+
 	bool SceneRenderer::initialize(Renderer* renderer)
 	{
 		m_renderer = renderer;
@@ -61,13 +100,22 @@ namespace AshEngine
 					continue;
 				}
 
-				const MaterialResource& material_resource = section.material_proxy->get_resource();
-				if (!material_resource.pass_relevance.supports_surface ||
-					material_resource.pass_relevance.domain != MaterialDomain::Surface)
+				const MaterialResource* material_resource =
+					section.material_proxy->get_surface_staticmesh_basepass_resource();
+				if (!material_resource)
+				{
+					HLogError(
+						"SceneRenderer: skipping material '{}' because no render resource is available.",
+						section.material->get_asset_path().generic_string());
+					continue;
+				}
+
+				if (!material_resource->pass_relevance.supports_surface ||
+					material_resource->pass_relevance.domain != MaterialDomain::Surface)
 				{
 					continue;
 				}
-				if (material_resource.pass_relevance.is_transparent)
+				if (material_resource->pass_relevance.is_transparent)
 				{
 					const std::string material_key =
 						section.material->get_asset_path().empty() ?
@@ -75,10 +123,10 @@ namespace AshEngine
 						section.material->get_asset_path().generic_string();
 					log_warning_once(
 						"transparent#" + material_key,
-						"SceneRenderer: skipping transparent material '" + material_key + "' in Surface V1.");
+						"SceneRenderer: skipping transparent material '" + material_key + "' in Surface.StaticMesh.BasePass.");
 					continue;
 				}
-				GraphicsProgram* program = section.material_proxy->get_program();
+				GraphicsProgram* program = material_resource->program;
 				if (!program)
 				{
 					HLogError(
@@ -86,6 +134,8 @@ namespace AshEngine
 						section.material->get_asset_path().generic_string());
 					continue;
 				}
+
+				log_v2_basepass_usage_once(*section.material, *material_resource);
 
 				SceneObjectConstants constants{};
 				constants.object_to_clip = frame.view_projection * draw.world_transform;
