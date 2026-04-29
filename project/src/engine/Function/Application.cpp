@@ -10,6 +10,7 @@
 #include "Base/hfile.h"
 #include "Base/window/Window.h"
 #include "Base/hcache.h"
+#include "Base/hprofiler.h"
 #include "Graphics/RHICommon.h"
 namespace AshEngine
 {
@@ -184,6 +185,7 @@ namespace AshEngine
 			return;
 		}
 
+		ASH_PROFILE_THREAD("Render");
 		started = true;
 		exitRequested.store(false, std::memory_order_release);
 		logicThreadStopRequested.store(false, std::memory_order_release);
@@ -257,6 +259,7 @@ namespace AshEngine
 	}
 	auto Application::_tick_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("App::Tick", AshEngine::Profile::Color::Tick);
 		if (!logicThreadEnabled)
 		{
 			_on_update();
@@ -265,11 +268,15 @@ namespace AshEngine
 	}
 	auto Application::_render_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("App::Render", AshEngine::Profile::Color::Render);
 		_on_render();
 	}
 	auto Application::_present_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("App::Present", AshEngine::Profile::Color::Present);
 		_present();
+		// FrameMark 必须放在每帧 present 之后，标记一帧的边界。
+		ASH_PROFILE_FRAME();
 	}
 	auto Application::_should_render_frame() const -> bool
 	{
@@ -392,6 +399,7 @@ namespace AshEngine
 	auto Application::_logic_thread_main() -> void
 	{
 		register_current_thread_role(EngineThreadRole::Logic);
+		ASH_PROFILE_THREAD("Logic");
 		logicThreadRunning.store(true, std::memory_order_release);
 		HLogInfo("Logic thread started.");
 
@@ -560,6 +568,7 @@ namespace AshEngine
 	}
 	auto Application::_run_scene_presentation_update_phase() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("App::ScenePresentationUpdate", AshEngine::Profile::Color::Scene);
 		if (!scenePresentation.update_presentations())
 		{
 			HLogError("Application scene presentation update phase failed.");
@@ -567,6 +576,7 @@ namespace AshEngine
 	}
 	auto Application::_run_scene_presentation_submit_phase() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("App::ScenePresentationSubmit", AshEngine::Profile::Color::Submit);
 		if (!scenePresentation.submit_presentations())
 		{
 			HLogError("Application scene presentation submit phase failed.");

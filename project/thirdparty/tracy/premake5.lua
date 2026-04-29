@@ -1,7 +1,8 @@
 -- Third party projects
 
 project( "tracy" )
-	language "C"
+	language "C++"
+	cppdialect "C++20"
 	kind "StaticLib"
 	
 
@@ -26,10 +27,12 @@ project( "tracy" )
 	filter "system:windows"
 		systemversion "latest"
 		staticruntime "off"
+		editandcontinue "Off"
 
 	filter "configurations:Debug"
 		runtime "Debug"
 		symbols "on"
+		editandcontinue "Off"
 
 	filter "configurations:Release"
 		runtime "Release"

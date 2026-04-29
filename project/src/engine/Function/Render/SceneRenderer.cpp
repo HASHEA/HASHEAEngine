@@ -1,6 +1,7 @@
 #include "Function/Render/SceneRenderer.h"
 
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <limits>
@@ -61,6 +62,8 @@ namespace AshEngine
 
 	bool SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)
 	{
+		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_visible_frame", AshEngine::Profile::Color::Scene);
+		ASH_PROFILE_PLOT("Scene/StaticMeshDraws", static_cast<int64_t>(frame.static_mesh_draws.size()));
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
 		const std::shared_ptr<RenderTarget> depth_target = resolve_depth_target(view_context);

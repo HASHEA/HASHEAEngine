@@ -7,16 +7,13 @@
 #include <windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <dxgidebug.h>
 #include <d3d12shader.h>
 #include <dxcapi.h>
 #include <wrl/client.h>
 
 template<typename T>
 using ComPtr = Microsoft::WRL::ComPtr<T>;
-
-#ifdef ASH_DEBUG
-#include <dxgidebug.h>
-#endif
 
 #define DX12_CHECK_RESULT(hr)                                                                   \
     {                                                                                            \

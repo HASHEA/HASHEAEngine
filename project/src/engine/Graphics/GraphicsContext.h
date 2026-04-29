@@ -12,7 +12,8 @@ namespace RHI {
 #ifdef ASH_DEBUG
         bool enableValidation = true;
         bool enableGpuAssisted = false;
-        bool enableSynchronizationValidation = true;
+        // Sync validation放大 CPU 帧时间 5-10x，默认关闭，按需 opt-in。
+        bool enableSynchronizationValidation = false;
         bool breakOnValidationError = true;
 #else
         bool enableValidation = false;

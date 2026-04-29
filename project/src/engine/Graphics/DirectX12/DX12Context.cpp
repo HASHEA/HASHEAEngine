@@ -10,6 +10,8 @@
 #include "DX12Framebuffer.h"
 #include "DX12RenderProgram.h"
 #include "DX12StagingBufferPool.h"
+#include "DX12GpuProfiler.h"
+#include "Graphics/GpuProfilerRHI.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Base/hmemory.h"
@@ -331,6 +333,12 @@ namespace RHI
 		m_stagingBuffer = Ash_New<DX12StagingBufferPool>();
 		m_stagingBuffer->init(m_device.Get(), m_d3d12maAllocator);
 
+		// 安装 Tracy GPU profiler。绑到主图形 queue。
+		{
+			auto* profiler = new DX12GpuProfiler(m_device.Get(), m_graphicsQueue.get_queue(), "DX12");
+			gpu_profiler_install(profiler);
+		}
+
 		HLogInfo("DX12Context: Initialization complete.");
 		return true;
 	}
@@ -338,6 +346,13 @@ namespace RHI
 	auto DX12Context::shutdown() -> bool
 	{
 		wait_idle();
+
+		// 卸载 Tracy GPU profiler，必须在 device/queue 销毁之前。
+		if (auto* profiler = gpu_profiler_get())
+		{
+			gpu_profiler_install(nullptr);
+			delete profiler;
+		}
 
 		// Process all deletion queues
 		for (auto& q : m_delayedDeletionQueues)
@@ -998,6 +1013,13 @@ namespace RHI
 			fr.fence->signal(m_graphicsQueue.get_queue());
 		}
 		_drain_d3d12_debug_messages("frame-end");
+
+		// Tracy GPU collect。DX12 实现内部用 fence + readback 拿 timestamps，
+		// 不需要正在录制的 cmd list，每帧调用一次即可。
+		if (auto* profiler = gpu_profiler_get())
+		{
+			profiler->collect(nullptr);
+		}
 
 		m_frameActive = false;
 		m_previousFrame = m_currentFrame;

@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <atomic>
+#include <condition_variable>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
@@ -10,6 +11,8 @@
 #include "tracy_concurrentqueue.h"
 #include "tracy_SPSCQueue.h"
 #include "TracyCallstack.hpp"
+#include "TracyKCore.hpp"
+#include "TracyMangle.hpp"
 #include "TracySysPower.hpp"
 #include "TracySysTime.hpp"
 #include "TracyFastVector.hpp"
@@ -27,8 +30,20 @@
 #  include <mach/mach_time.h>
 #endif
 
-#if ( defined _WIN32 || ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ) || ( defined TARGET_OS_IOS && TARGET_OS_IOS == 1 ) )
-#  define TRACY_HW_TIMER
+#if ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
+#  define TRACY_HAS_RDTSC
+#elif defined _WIN32 && defined _M_ARM64
+#  define TRACY_HAS_CNTVCT
+#elif defined __APPLE__ && defined __MACH__ && TARGET_CPU_ARM64 // For now only supported on Apple devices
+#  define TRACY_HAS_CNTVCT
+#endif
+
+#if !defined TRACY_DISALLOW_HW_TIMER 
+#  if ( defined TRACY_HAS_RDTSC || defined TRACY_HAS_CNTVCT )
+#    define TRACY_HW_TIMER
+#  elif defined TARGET_OS_IOS && TARGET_OS_IOS == 1 // For now, !defined(TRACY_HW_TIMER) implies TRACY_TIMER_FALLBACK, so define TRACY_HW_TIMER to use mach_absolute_time() on iOS
+#    define TRACY_HW_TIMER
+#  endif
 #endif
 
 #ifdef __linux__
@@ -51,7 +66,14 @@ namespace tracy
 #if defined(TRACY_DELAYED_INIT) && defined(TRACY_MANUAL_LIFETIME)
 TRACY_API void StartupProfiler();
 TRACY_API void ShutdownProfiler();
+TRACY_API bool IsProfilerStarted();
+#  define TracyIsStarted tracy::IsProfilerStarted()
+#else
+#  define TracyIsStarted true
 #endif
+
+TRACY_API bool BeginSamplingProfiling();
+TRACY_API void EndSamplingProfiling();
 
 class GpuCtx;
 class Profiler;
@@ -64,7 +86,8 @@ struct GpuCtxWrapper
 };
 
 TRACY_API moodycamel::ConcurrentQueue<QueueItem>::ExplicitProducer* GetToken();
-TRACY_API Profiler& GetProfiler();
+TRACY_API Profiler& MANGLED_NAME_BASED_ON_CONFIG(GetProfiler)();
+tracy_force_inline Profiler& GetProfiler() { return MANGLED_NAME_BASED_ON_CONFIG(GetProfiler)(); }
 TRACY_API std::atomic<uint32_t>& GetLockCounter();
 TRACY_API std::atomic<uint8_t>& GetGpuCtxCounter();
 TRACY_API GpuCtxWrapper& GetGpuCtx();
@@ -73,7 +96,7 @@ TRACY_API bool ProfilerAvailable();
 TRACY_API bool ProfilerAllocatorAvailable();
 TRACY_API int64_t GetFrequencyQpc();
 
-#if defined TRACY_TIMER_FALLBACK && defined TRACY_HW_TIMER && ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
+#if defined TRACY_TIMER_FALLBACK && defined TRACY_HW_TIMER && defined TRACY_HAS_RDTSC
 TRACY_API bool HardwareSupportsInvariantTSC();  // check, if we need fallback scenario
 #else
 #  if defined TRACY_HW_TIMER
@@ -109,11 +132,11 @@ struct LuaZoneState
 
 
 #define TracyLfqPrepare( _type ) \
-    moodycamel::ConcurrentQueueDefaultTraits::index_t __magic; \
-    auto __token = GetToken(); \
+    tracy::moodycamel::ConcurrentQueueDefaultTraits::index_t __magic; \
+    auto __token = tracy::GetToken(); \
     auto& __tail = __token->get_tail_index(); \
     auto item = __token->enqueue_begin( __magic ); \
-    MemWrite( &item->hdr.type, _type );
+    tracy::MemWrite( &item->hdr.type, _type );
 
 #define TracyLfqCommit \
     __tail.store( __magic + 1, std::memory_order_release );
@@ -131,11 +154,11 @@ struct LuaZoneState
 
 #ifdef TRACY_FIBERS
 #  define TracyQueuePrepare( _type ) \
-    auto item = Profiler::QueueSerial(); \
-    MemWrite( &item->hdr.type, _type );
+    auto item = tracy::Profiler::QueueSerial(); \
+    tracy::MemWrite( &item->hdr.type, _type );
 #  define TracyQueueCommit( _name ) \
-    MemWrite( &item->_name.thread, GetThreadHandle() ); \
-    Profiler::QueueSerialFinish();
+    tracy::MemWrite( &item->_name.thread, tracy::GetThreadHandle() ); \
+    tracy::Profiler::QueueSerialFinish();
 #  define TracyQueuePrepareC( _type ) \
     auto item = tracy::Profiler::QueueSerial(); \
     tracy::MemWrite( &item->hdr.type, _type );
@@ -152,6 +175,27 @@ struct LuaZoneState
 
 typedef void(*ParameterCallback)( void* data, uint32_t idx, int32_t val );
 typedef char*(*SourceContentsCallback)( void* data, const char* filename, size_t& size );
+
+#if defined _WIN32 && defined TRACY_HAS_CNTVCT
+// NOTE: implementing timestamp_win_arm64_cntvct_el0() requires ARM64_CNTVCT_EL0,
+// which in turn would require including "Windows.h" here... instead, just bring
+// what's needed from "winnt.h"
+#  ifdef ARM64_CNTVCT_EL0
+#    define TRACY_WINARM64_CNTVCT_EL0 ARM64_CNTVCT_EL0
+#  else
+#    define TRACY_WINARM64_SYSREG( op0, op1, crn, crm, op2 ) \
+        ( ( ( op0 & 1 ) << 14 ) |                            \
+          ( ( op1 & 7 ) << 11 ) |                            \
+          ( ( crn & 15 ) << 7 ) |                            \
+          ( ( crm & 15 ) << 3 ) |                            \
+          ( ( op2 & 7 ) << 0 ) )
+#    define TRACY_WINARM64_CNTVCT_EL0 TRACY_WINARM64_SYSREG( 3, 3, 14, 0, 2 )
+#  endif
+tracy_force_inline int64_t timestamp_win_arm64_cntvct_el0()
+{
+    return _ReadStatusReg( TRACY_WINARM64_CNTVCT_EL0 );
+}
+#endif
 
 class Profiler
 {
@@ -192,10 +236,25 @@ public:
 #ifdef TRACY_HW_TIMER
 #  if defined TARGET_OS_IOS && TARGET_OS_IOS == 1
         if( HardwareSupportsInvariantTSC() ) return mach_absolute_time();
+#  elif defined __APPLE__ && defined __MACH__ && TARGET_CPU_ARM64
+        if( HardwareSupportsInvariantTSC() )
+        {
+            uint64_t value;
+            __asm__ __volatile__(
+               //"isb \n"              // ommitting "Instruction Synchronization Barrier"
+                "mrs %0, CNTVCT_EL0" 
+                : "=r" (value)          // Output: write 'register %0' to 'value'
+                :                       // No inputs
+                : "memory"              // Clobber list: memory (e.g., compiler barrier)
+            );
+            return value;
+        }
 #  elif defined _WIN32
 #    ifdef TRACY_TIMER_QPC
         return GetTimeQpc();
-#    else
+#    elif defined TRACY_HAS_CNTVCT
+        return timestamp_win_arm64_cntvct_el0();
+#    elif defined TRACY_HAS_RDTSC
         if( HardwareSupportsInvariantTSC() ) return int64_t( __rdtsc() );
 #    endif
 #  elif defined __i386 || defined _M_IX86
@@ -209,7 +268,22 @@ public:
         if( HardwareSupportsInvariantTSC() )
         {
             uint64_t rax, rdx;
+#ifdef TRACY_PATCHABLE_NOPSLEDS
+            // Some external tooling (such as rr) wants to patch our rdtsc and replace it by a
+            // branch to control the external input seen by a program. This kind of patching is
+            // not generally possible depending on the surrounding code and can lead to significant
+            // slowdowns if the compiler generated unlucky code and rr and tracy are used together.
+            // To avoid this, use the rr-safe `nopl 0(%rax, %rax, 1); rdtsc` instruction sequence,
+            // which rr promises will be patchable independent of the surrounding code.
+            asm volatile (
+                    // This is nopl 0(%rax, %rax, 1), but assemblers are inconsistent about whether
+                    // they emit that as a 4 or 5 byte sequence and we need to be guaranteed to use
+                    // the 5 byte one.
+                    ".byte 0x0f, 0x1f, 0x44, 0x00, 0x00\n\t"
+                    "rdtsc" : "=a" (rax), "=d" (rdx) );
+#else
             asm volatile ( "rdtsc" : "=a" (rax), "=d" (rdx) );
+#endif
             return (int64_t)(( rdx << 32 ) + rax);
         }
 #  else
@@ -231,6 +305,9 @@ public:
         return 0;  // unreachable branch
 #endif
     }
+
+    bool BeginSamplingProfiling();
+    void EndSamplingProfiling();
 
     tracy_force_inline uint32_t GetNextZoneId()
     {
@@ -289,7 +366,7 @@ public:
     {
 #ifndef TRACY_NO_FRAME_IMAGE
         auto& profiler = GetProfiler();
-        assert( profiler.m_frameCount.load( std::memory_order_relaxed ) < std::numeric_limits<uint32_t>::max() );
+        assert( profiler.m_frameCount.load( std::memory_order_relaxed ) < (std::numeric_limits<uint32_t>::max)() );
 #  ifdef TRACY_ON_DEMAND
         if( !profiler.IsConnected() ) return;
 #  endif
@@ -306,6 +383,12 @@ public:
         fi->flip = flip;
         profiler.m_fiQueue.commit_next();
         profiler.m_fiLock.unlock();
+#else
+        static_cast<void>(image); // unused
+        static_cast<void>(w); // unused
+        static_cast<void>(h); // unused
+        static_cast<void>(offset); // unused
+        static_cast<void>(flip); // unused
 #endif
     }
 
@@ -360,95 +443,85 @@ public:
 
         TracyLfqCommit;
     }
-
-    static tracy_force_inline void Message( const char* txt, size_t size, int callstack )
+    
+    static tracy_force_inline void LogString( MessageSourceType source, MessageSeverity severity, uint32_t color, int32_t callstack_depth, size_t txtLength, const char* txt )
     {
-        assert( size < std::numeric_limits<uint16_t>::max() );
+        assert( txtLength < (std::numeric_limits<uint16_t>::max)() );
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
-        if( callstack != 0 )
+        if( callstack_depth != 0 && has_callstack() )
         {
-            tracy::GetProfiler().SendCallstack( callstack );
+            tracy::GetProfiler().SendCallstack( callstack_depth );
         }
 
-        auto ptr = (char*)tracy_malloc( size );
-        memcpy( ptr, txt, size );
+        auto ptr = (char*)tracy_malloc( txtLength );
+        memcpy( ptr, txt, txtLength );
+        TaggedUserlandAddress taggedPtr{ (uint64_t)ptr, MakeMessageMetadata( source, severity ) };
 
-        TracyQueuePrepare( callstack == 0 ? QueueType::Message : QueueType::MessageCallstack );
-        MemWrite( &item->messageFat.time, GetTime() );
-        MemWrite( &item->messageFat.text, (uint64_t)ptr );
-        MemWrite( &item->messageFat.size, (uint16_t)size );
-        TracyQueueCommit( messageFatThread );
-    }
-
-    static tracy_force_inline void Message( const char* txt, int callstack )
-    {
-#ifdef TRACY_ON_DEMAND
-        if( !GetProfiler().IsConnected() ) return;
-#endif
-        if( callstack != 0 )
+        if( color != 0 )
         {
-            tracy::GetProfiler().SendCallstack( callstack );
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageColor : QueueType::MessageColorCallstack );
+            MemWrite( &item->messageColorFat.time, GetTime() );
+            MemWrite( &item->messageColorFat.textAndMetadata, taggedPtr );
+            MemWrite( &item->messageColorFat.b, uint8_t( ( color       ) & 0xFF ) );
+            MemWrite( &item->messageColorFat.g, uint8_t( ( color >> 8  ) & 0xFF ) );
+            MemWrite( &item->messageColorFat.r, uint8_t( ( color >> 16 ) & 0xFF ) );
+            MemWrite( &item->messageColorFat.size, (uint16_t)txtLength );
+            TracyQueueCommit( messageColorFatThread );
         }
-
-        TracyQueuePrepare( callstack == 0 ? QueueType::MessageLiteral : QueueType::MessageLiteralCallstack );
-        MemWrite( &item->messageLiteral.time, GetTime() );
-        MemWrite( &item->messageLiteral.text, (uint64_t)txt );
-        TracyQueueCommit( messageLiteralThread );
-    }
-
-    static tracy_force_inline void MessageColor( const char* txt, size_t size, uint32_t color, int callstack )
-    {
-        assert( size < std::numeric_limits<uint16_t>::max() );
-#ifdef TRACY_ON_DEMAND
-        if( !GetProfiler().IsConnected() ) return;
-#endif
-        if( callstack != 0 )
+        else
         {
-            tracy::GetProfiler().SendCallstack( callstack );
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::Message : QueueType::MessageCallstack );
+            MemWrite( &item->messageFat.time, GetTime() );
+            MemWrite( &item->messageFat.textAndMetadata, taggedPtr );
+            MemWrite( &item->messageFat.size, (uint16_t)txtLength );
+            TracyQueueCommit( messageFatThread );
         }
-
-        auto ptr = (char*)tracy_malloc( size );
-        memcpy( ptr, txt, size );
-
-        TracyQueuePrepare( callstack == 0 ? QueueType::MessageColor : QueueType::MessageColorCallstack );
-        MemWrite( &item->messageColorFat.time, GetTime() );
-        MemWrite( &item->messageColorFat.text, (uint64_t)ptr );
-        MemWrite( &item->messageColorFat.b, uint8_t( ( color       ) & 0xFF ) );
-        MemWrite( &item->messageColorFat.g, uint8_t( ( color >> 8  ) & 0xFF ) );
-        MemWrite( &item->messageColorFat.r, uint8_t( ( color >> 16 ) & 0xFF ) );
-        MemWrite( &item->messageColorFat.size, (uint16_t)size );
-        TracyQueueCommit( messageColorFatThread );
     }
 
-    static tracy_force_inline void MessageColor( const char* txt, uint32_t color, int callstack )
+    static tracy_force_inline void LogString( MessageSourceType source, MessageSeverity severity, uint32_t color, int32_t callstack_depth, const char* txt )
     {
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
-        if( callstack != 0 )
+        if( callstack_depth != 0 && has_callstack() )
         {
-            tracy::GetProfiler().SendCallstack( callstack );
+            tracy::GetProfiler().SendCallstack( callstack_depth );
         }
 
-        TracyQueuePrepare( callstack == 0 ? QueueType::MessageLiteralColor : QueueType::MessageLiteralColorCallstack );
-        MemWrite( &item->messageColorLiteral.time, GetTime() );
-        MemWrite( &item->messageColorLiteral.text, (uint64_t)txt );
-        MemWrite( &item->messageColorLiteral.b, uint8_t( ( color       ) & 0xFF ) );
-        MemWrite( &item->messageColorLiteral.g, uint8_t( ( color >> 8  ) & 0xFF ) );
-        MemWrite( &item->messageColorLiteral.r, uint8_t( ( color >> 16 ) & 0xFF ) );
-        TracyQueueCommit( messageColorLiteralThread );
+        TaggedUserlandAddress taggedPtr{ (uint64_t)txt, MakeMessageMetadata( source, severity ) };
+
+        if( color != 0 )
+        {
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageLiteralColor : QueueType::MessageLiteralColorCallstack );
+            MemWrite( &item->messageColorLiteral.time, GetTime() );
+            MemWrite( &item->messageColorLiteral.textAndMetadata, taggedPtr );
+            MemWrite( &item->messageColorLiteral.b, uint8_t( ( color       ) & 0xFF ) );
+            MemWrite( &item->messageColorLiteral.g, uint8_t( ( color >> 8  ) & 0xFF ) );
+            MemWrite( &item->messageColorLiteral.r, uint8_t( ( color >> 16 ) & 0xFF ) );
+            TracyQueueCommit( messageColorLiteralThread );
+        }
+        else
+        {
+            TracyQueuePrepare( callstack_depth == 0 ? QueueType::MessageLiteral : QueueType::MessageLiteralCallstack );
+            MemWrite( &item->messageLiteral.time, GetTime() );
+            MemWrite( &item->messageLiteral.textAndMetadata, taggedPtr );
+            TracyQueueCommit( messageLiteralThread );
+        }
     }
+
 
     static tracy_force_inline void MessageAppInfo( const char* txt, size_t size )
     {
-        assert( size < std::numeric_limits<uint16_t>::max() );
+        assert( size < (std::numeric_limits<uint16_t>::max)() );
         auto ptr = (char*)tracy_malloc( size );
         memcpy( ptr, txt, size );
+        TaggedUserlandAddress taggedPtr{ (uint64_t)ptr, MakeMessageMetadata( MessageSourceType::User, MessageSeverity::Info ) };
+
         TracyLfqPrepare( QueueType::MessageAppInfo );
         MemWrite( &item->messageFat.time, GetTime() );
-        MemWrite( &item->messageFat.text, (uint64_t)ptr );
+        MemWrite( &item->messageFat.textAndMetadata, taggedPtr );
         MemWrite( &item->messageFat.size, (uint16_t)size );
 
 #ifdef TRACY_ON_DEMAND
@@ -484,29 +557,31 @@ public:
         GetProfiler().m_serialLock.unlock();
     }
 
-    static tracy_force_inline void MemAllocCallstack( const void* ptr, size_t size, int depth, bool secure )
+    static tracy_force_inline void MemAllocCallstack( const void* ptr, size_t size, int32_t depth, bool secure )
     {
         if( secure && !ProfilerAvailable() ) return;
-#ifdef TRACY_HAS_CALLSTACK
-        auto& profiler = GetProfiler();
+        if( depth > 0 && has_callstack() )
+        {
+            auto& profiler = GetProfiler();
 #  ifdef TRACY_ON_DEMAND
-        if( !profiler.IsConnected() ) return;
+            if( !profiler.IsConnected() ) return;
 #  endif
-        const auto thread = GetThreadHandle();
+            const auto thread = GetThreadHandle();
 
-        auto callstack = Callstack( depth );
+            auto callstack = Callstack( depth );
 
-        profiler.m_serialLock.lock();
-        SendCallstackSerial( callstack );
-        SendMemAlloc( QueueType::MemAllocCallstack, thread, ptr, size );
-        profiler.m_serialLock.unlock();
-#else
-        static_cast<void>(depth); // unused
-        MemAlloc( ptr, size, secure );
-#endif
+            profiler.m_serialLock.lock();
+            SendCallstackSerial( callstack );
+            SendMemAlloc( QueueType::MemAllocCallstack, thread, ptr, size );
+            profiler.m_serialLock.unlock();
+        }
+        else
+        {
+            MemAlloc( ptr, size, secure );
+        }
     }
 
-    static tracy_force_inline void MemFreeCallstack( const void* ptr, int depth, bool secure )
+    static tracy_force_inline void MemFreeCallstack( const void* ptr, int32_t depth, bool secure )
     {
         if( secure && !ProfilerAvailable() ) return;
         if( !ProfilerAllocatorAvailable() )
@@ -514,23 +589,25 @@ public:
             MemFree( ptr, secure );
             return;
         }
-#ifdef TRACY_HAS_CALLSTACK
-        auto& profiler = GetProfiler();
+        if( depth > 0 && has_callstack() )
+        {
+            auto& profiler = GetProfiler();
 #  ifdef TRACY_ON_DEMAND
-        if( !profiler.IsConnected() ) return;
+            if( !profiler.IsConnected() ) return;
 #  endif
-        const auto thread = GetThreadHandle();
+            const auto thread = GetThreadHandle();
 
-        auto callstack = Callstack( depth );
+            auto callstack = Callstack( depth );
 
-        profiler.m_serialLock.lock();
-        SendCallstackSerial( callstack );
-        SendMemFree( QueueType::MemFreeCallstack, thread, ptr );
-        profiler.m_serialLock.unlock();
-#else
-        static_cast<void>(depth); // unused
-        MemFree( ptr, secure );
-#endif
+            profiler.m_serialLock.lock();
+            SendCallstackSerial( callstack );
+            SendMemFree( QueueType::MemFreeCallstack, thread, ptr );
+            profiler.m_serialLock.unlock();
+        }
+        else
+        {
+            MemFree( ptr, secure );
+        }
     }
 
     static tracy_force_inline void MemAllocNamed( const void* ptr, size_t size, bool secure, const char* name )
@@ -561,64 +638,101 @@ public:
         GetProfiler().m_serialLock.unlock();
     }
 
-    static tracy_force_inline void MemAllocCallstackNamed( const void* ptr, size_t size, int depth, bool secure, const char* name )
+    static tracy_force_inline void MemAllocCallstackNamed( const void* ptr, size_t size, int32_t depth, bool secure, const char* name )
     {
         if( secure && !ProfilerAvailable() ) return;
-#ifdef TRACY_HAS_CALLSTACK
-        auto& profiler = GetProfiler();
+        if( depth > 0 && has_callstack() )
+        {
+            auto& profiler = GetProfiler();
 #  ifdef TRACY_ON_DEMAND
-        if( !profiler.IsConnected() ) return;
+            if( !profiler.IsConnected() ) return;
 #  endif
-        const auto thread = GetThreadHandle();
+            const auto thread = GetThreadHandle();
 
-        auto callstack = Callstack( depth );
+            auto callstack = Callstack( depth );
 
-        profiler.m_serialLock.lock();
-        SendCallstackSerial( callstack );
-        SendMemName( name );
-        SendMemAlloc( QueueType::MemAllocCallstackNamed, thread, ptr, size );
-        profiler.m_serialLock.unlock();
-#else
-        static_cast<void>(depth); // unused
-        static_cast<void>(name); // unused
-        MemAlloc( ptr, size, secure );
-#endif
+            profiler.m_serialLock.lock();
+            SendCallstackSerial( callstack );
+            SendMemName( name );
+            SendMemAlloc( QueueType::MemAllocCallstackNamed, thread, ptr, size );
+            profiler.m_serialLock.unlock();
+        }
+        else
+        {
+            MemAllocNamed( ptr, size, secure, name );
+        }
     }
 
-    static tracy_force_inline void MemFreeCallstackNamed( const void* ptr, int depth, bool secure, const char* name )
+    static tracy_force_inline void MemFreeCallstackNamed( const void* ptr, int32_t depth, bool secure, const char* name )
     {
         if( secure && !ProfilerAvailable() ) return;
-#ifdef TRACY_HAS_CALLSTACK
-        auto& profiler = GetProfiler();
+        if( depth > 0 && has_callstack() )
+        {
+            auto& profiler = GetProfiler();
 #  ifdef TRACY_ON_DEMAND
-        if( !profiler.IsConnected() ) return;
+            if( !profiler.IsConnected() ) return;
 #  endif
-        const auto thread = GetThreadHandle();
+            const auto thread = GetThreadHandle();
 
-        auto callstack = Callstack( depth );
+            auto callstack = Callstack( depth );
 
-        profiler.m_serialLock.lock();
-        SendCallstackSerial( callstack );
-        SendMemName( name );
-        SendMemFree( QueueType::MemFreeCallstackNamed, thread, ptr );
-        profiler.m_serialLock.unlock();
-#else
-        static_cast<void>(depth); // unused
-        static_cast<void>(name); // unused
-        MemFree( ptr, secure );
-#endif
+            profiler.m_serialLock.lock();
+            SendCallstackSerial( callstack );
+            SendMemName( name );
+            SendMemFree( QueueType::MemFreeCallstackNamed, thread, ptr );
+            profiler.m_serialLock.unlock();
+        }
+        else
+        {
+            MemFreeNamed( ptr, secure, name );
+        }
     }
 
-    static tracy_force_inline void SendCallstack( int depth )
+    static tracy_force_inline void MemDiscard( const char* name, bool secure )
     {
-#ifdef TRACY_HAS_CALLSTACK
-        auto ptr = Callstack( depth );
-        TracyQueuePrepare( QueueType::Callstack );
-        MemWrite( &item->callstackFat.ptr, (uint64_t)ptr );
-        TracyQueueCommit( callstackFatThread );
-#else
-        static_cast<void>(depth); // unused
+        if( secure && !ProfilerAvailable() ) return;
+#ifdef TRACY_ON_DEMAND
+        if( !GetProfiler().IsConnected() ) return;
 #endif
+        const auto thread = GetThreadHandle();
+
+        GetProfiler().m_serialLock.lock();
+        SendMemDiscard( QueueType::MemDiscard, thread, name );
+        GetProfiler().m_serialLock.unlock();
+    }
+
+    static tracy_force_inline void MemDiscardCallstack( const char* name, bool secure, int32_t depth )
+    {
+        if( secure && !ProfilerAvailable() ) return;
+        if( depth > 0 && has_callstack() )
+        {
+#  ifdef TRACY_ON_DEMAND
+            if( !GetProfiler().IsConnected() ) return;
+#  endif
+            const auto thread = GetThreadHandle();
+
+            auto callstack = Callstack( depth );
+
+            GetProfiler().m_serialLock.lock();
+            SendCallstackSerial( callstack );
+            SendMemDiscard( QueueType::MemDiscard, thread, name );
+            GetProfiler().m_serialLock.unlock();
+        }
+        else
+        {
+            MemDiscard( name, secure );
+        }
+    }
+
+    static tracy_force_inline void SendCallstack( int32_t depth )
+    {
+        if( depth > 0 && has_callstack() )
+        {
+            auto ptr = Callstack( depth );
+            TracyQueuePrepare( QueueType::Callstack );
+            MemWrite( &item->callstackFat.ptr, (uint64_t)ptr );
+            TracyQueueCommit( callstackFatThread );
+        }
     }
 
     static tracy_force_inline void ParameterRegister( ParameterCallback cb, void* data )
@@ -651,24 +765,31 @@ public:
     }
 
 #ifdef TRACY_FIBERS
-    static tracy_force_inline void EnterFiber( const char* fiber )
+    static tracy_force_inline void EnterFiber( const char* fiber, int32_t groupHint )
     {
+#ifdef TRACY_ON_DEMAND
+        if( !GetProfiler().IsConnected() ) return;
+#endif
         TracyQueuePrepare( QueueType::FiberEnter );
         MemWrite( &item->fiberEnter.time, GetTime() );
         MemWrite( &item->fiberEnter.fiber, (uint64_t)fiber );
+        MemWrite( &item->fiberEnter.groupHint, groupHint );
         TracyQueueCommit( fiberEnter );
     }
 
     static tracy_force_inline void LeaveFiber()
     {
+#ifdef TRACY_ON_DEMAND
+        if( !GetProfiler().IsConnected() ) return;
+#endif
         TracyQueuePrepare( QueueType::FiberLeave );
         MemWrite( &item->fiberLeave.time, GetTime() );
         TracyQueueCommit( fiberLeave );
     }
 #endif
 
-    void SendCallstack( int depth, const char* skipBefore );
-    static void CutCallstack( void* callstack, const char* skipBefore );
+    void SendCallstack( int32_t depth, const char** skipBefore );
+    static void CutCallstack( void* callstack, const char** skipBefore );
 
     static bool ShouldExit();
 
@@ -720,29 +841,29 @@ public:
     //  1b  null terminator
     //  nsz zone name (optional)
 
-    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, const char* function )
+    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, const char* function, uint32_t color = 0 )
     {
-        return AllocSourceLocation( line, source, function, nullptr, 0 );
+        return AllocSourceLocation( line, source, function, nullptr, 0, color );
     }
 
-    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, const char* function, const char* name, size_t nameSz )
+    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, const char* function, const char* name, size_t nameSz, uint32_t color = 0 )
     {
-        return AllocSourceLocation( line, source, strlen(source), function, strlen(function), name, nameSz );
+        return AllocSourceLocation( line, source, strlen(source), function, strlen(function), name, nameSz, color );
     }
 
-    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz )
+    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, uint32_t color = 0 )
     {
-        return AllocSourceLocation( line, source, sourceSz, function, functionSz, nullptr, 0 );
+        return AllocSourceLocation( line, source, sourceSz, function, functionSz, nullptr, 0, color );
     }
 
-    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz )
+    static tracy_force_inline uint64_t AllocSourceLocation( uint32_t line, const char* source, size_t sourceSz, const char* function, size_t functionSz, const char* name, size_t nameSz, uint32_t color = 0 )
     {
         const auto sz32 = uint32_t( 2 + 4 + 4 + functionSz + 1 + sourceSz + 1 + nameSz );
-        assert( sz32 <= std::numeric_limits<uint16_t>::max() );
+        assert( sz32 <= (std::numeric_limits<uint16_t>::max)() );
         const auto sz = uint16_t( sz32 );
         auto ptr = (char*)tracy_malloc( sz );
         memcpy( ptr, &sz, 2 );
-        memset( ptr + 2, 0, 4 );
+        memcpy( ptr + 2, &color, 4 );
         memcpy( ptr + 6, &line, 4 );
         memcpy( ptr + 10, function, functionSz );
         ptr[10 + functionSz] = '\0';
@@ -772,6 +893,9 @@ private:
     void SymbolWorker();
     void HandleSymbolQueueItem( const SymbolQueueItem& si );
 #endif
+
+    void InstallCrashHandler();
+    void RemoveCrashHandler();
 
     void ClearQueues( tracy::moodycamel::ConsumerToken& token );
     void ClearSerial();
@@ -805,6 +929,21 @@ private:
         m_bufferOffset += int( len );
     }
 
+    char* SafeCopyProlog( const char* p, size_t size );
+    void SafeCopyEpilog( char* buf );
+
+    template<class Callable> // must be void( const char* buf, size_t size )
+    bool WithSafeCopy( const char* p, size_t size, Callable&& callable )
+    {
+        if( char* buf = SafeCopyProlog( p, size ) )
+        {
+            callable( buf, size );
+            SafeCopyEpilog( buf );
+            return true;
+        }
+        return false;
+    }
+
     bool SendData( const char* data, size_t len );
     void SendLongString( uint64_t ptr, const char* str, size_t len, QueueType type );
     void SendSourceLocation( uint64_t ptr );
@@ -834,14 +973,13 @@ private:
 
     static tracy_force_inline void SendCallstackSerial( void* ptr )
     {
-#ifdef TRACY_HAS_CALLSTACK
-        auto item = GetProfiler().m_serialQueue.prepare_next();
-        MemWrite( &item->hdr.type, QueueType::CallstackSerial );
-        MemWrite( &item->callstackFat.ptr, (uint64_t)ptr );
-        GetProfiler().m_serialQueue.commit_next();
-#else
-        static_cast<void>(ptr); // unused
-#endif
+        if( has_callstack() )
+        {
+            auto item = GetProfiler().m_serialQueue.prepare_next();
+            MemWrite( &item->hdr.type, QueueType::CallstackSerial );
+            MemWrite( &item->callstackFat.ptr, (uint64_t)ptr );
+            GetProfiler().m_serialQueue.commit_next();
+        }
     }
 
     static tracy_force_inline void SendMemAlloc( QueueType type, const uint32_t thread, const void* ptr, size_t size )
@@ -879,6 +1017,18 @@ private:
         GetProfiler().m_serialQueue.commit_next();
     }
 
+    static tracy_force_inline void SendMemDiscard( QueueType type, const uint32_t thread, const char* name )
+    {
+        assert( type == QueueType::MemDiscard || type == QueueType::MemDiscardCallstack );
+
+        auto item = GetProfiler().m_serialQueue.prepare_next();
+        MemWrite( &item->hdr.type, type );
+        MemWrite( &item->memDiscard.time, GetTime() );
+        MemWrite( &item->memDiscard.thread, thread );
+        MemWrite( &item->memDiscard.name, (uint64_t)name );
+        GetProfiler().m_serialQueue.commit_next();
+    }
+
     static tracy_force_inline void SendMemName( const char* name )
     {
         assert( name );
@@ -894,7 +1044,6 @@ private:
 
     double m_timerMul;
     uint64_t m_resolution;
-    uint64_t m_delay;
     std::atomic<int64_t> m_timeBegin;
     uint32_t m_mainThread;
     uint64_t m_epoch, m_exectime;
@@ -930,11 +1079,14 @@ private:
 #endif
 
     SPSCQueue<SymbolQueueItem> m_symbolQueue;
+    std::condition_variable m_symbolQueueSignal;
+    std::mutex m_symbolQueueMutex;
 
     std::atomic<uint64_t> m_frameCount;
     std::atomic<bool> m_isConnected;
 #ifdef TRACY_ON_DEMAND
     std::atomic<uint64_t> m_connectionId;
+    std::atomic<bool> m_symbolsBusy;
 
     TracyMutex m_deferredLock;
     FastVector<QueueItem> m_deferredQueue;
@@ -962,13 +1114,24 @@ private:
     char* m_queryData;
     char* m_queryDataPtr;
 
-#if defined _WIN32
-    void* m_exceptionHandler;
+#ifndef NDEBUG
+    // m_safeSendBuffer and m_pipe should only be used by the Tracy Profiler thread; this ensures that in debug builds.
+    std::atomic_bool m_inUse{ false };
 #endif
+    char* m_safeSendBuffer;
+
+#if defined _WIN32
+    void* m_prevHandler;
+#else
+    int m_pipe[2];
+    int m_pipeBufSize;
+#endif
+
 #ifdef __linux__
     struct {
         struct sigaction pwr, ill, fpe, segv, pipe, bus, abrt;
     } m_prevSignal;
+    KCore* m_kcore;
 #endif
     bool m_crashHandlerInstalled;
 

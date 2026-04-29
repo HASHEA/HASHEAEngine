@@ -87,6 +87,8 @@ project "Engine"
 			"GLFW_INCLUDE_NONE",
 			"ASH_WINDOWS",
 			"ASH_ENGINE",
+			"NOMINMAX",
+			"WIN32_LEAN_AND_MEAN",
 		}
 		includedirs
 		{
@@ -154,6 +156,8 @@ project "Engine"
 			"GLFW_INCLUDE_NONE",
 			"ASH_WINDOWS",
 			"ASH_ENGINE",
+			"NOMINMAX",
+			"WIN32_LEAN_AND_MEAN",
 		}
 		includedirs
 		{
@@ -161,13 +165,18 @@ project "Engine"
 			thirdparty .. "/dxc/inc",
 		}
 		defines "ASH_RELEASE"
+		defines
+		{
+			"TRACY_ENABLE",
+		}
 		runtime "Release"
-		optimize "on"	
+		optimize "on"
 		includedirs
 		{
 			thirdparty .. "/glslang/release/windows-x64/include",
 		}
 		links {
+			"tracy",
 			"dbghelp",
 			"d3d12",
 			"dxgi",

@@ -1,5 +1,6 @@
 #include "Function/Render/RenderScene.h"
 
+#include "Base/hprofiler.h"
 #include "Function/Render/SceneView.h"
 #include "Function/Render/Visibility.h"
 #include <unordered_map>
@@ -48,6 +49,7 @@ namespace AshEngine
 
 	bool RenderScene::rebuild_from_scene(Scene& scene, RenderAssetManager& render_asset_manager)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_from_scene", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(scene.is_valid());
 		ASH_PROCESS_ERROR(render_asset_manager.get_asset_database() != nullptr);
@@ -97,6 +99,7 @@ namespace AshEngine
 		const SceneView& view,
 		VisibleRenderFrame& out_frame) const
 	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::build_visible_render_frame", AshEngine::Profile::Color::Visibility);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		out_frame = {};
 		ASH_PROCESS_ERROR(view.is_valid);

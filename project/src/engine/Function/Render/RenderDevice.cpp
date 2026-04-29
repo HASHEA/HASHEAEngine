@@ -9,6 +9,8 @@
 #include "Graphics/Swapchain.h"
 #include "Graphics/Texture.h"
 #include "Graphics/VertexInputLayout.h"
+#include "Graphics/GpuProfilerRHI.h"
+#include "Base/hprofiler.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -688,6 +690,9 @@ namespace AshEngine
 		bool scissor_override_active = false;
 		RenderScissor scissor_override{};
 		bool back_buffer_written_this_frame = false;
+		RHI::GpuProfileZoneHandle current_pass_gpu_zone{};
+		bool current_pass_gpu_zone_active = false;
+		std::string current_pass_name;
 	};
 
 		static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
@@ -2423,6 +2428,7 @@ namespace AshEngine
 
 	bool RenderDevice::begin_frame()
 	{
+		ASH_PROFILE_SCOPE_NC("RenderDevice::begin_frame", AshEngine::Profile::Color::RHI);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain);
 
@@ -2444,6 +2450,7 @@ namespace AshEngine
 
 	bool RenderDevice::end_frame()
 	{
+		ASH_PROFILE_SCOPE_NC("RenderDevice::end_frame", AshEngine::Profile::Color::RHI);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer);
 
@@ -2863,6 +2870,7 @@ namespace AshEngine
 
 	bool RenderDevice::begin_pass(const PassDesc& desc)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderDevice::begin_pass", AshEngine::Profile::Color::Pipeline);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer);
 		ASH_PROCESS_ERROR(!desc.color_attachments.empty() || desc.depth_attachment.render_target);
@@ -2994,6 +3002,19 @@ namespace AshEngine
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
 		m_impl->current_command_buffer->cmd_begin_render_pass(m_impl->current_framebuffer);
+		m_impl->current_pass_name = desc.name ? desc.name : "EngineRenderPass";
+		if (RHI::IGpuProfilerContext* gpu_ctx = RHI::gpu_profiler_get())
+		{
+			gpu_ctx->begin_zone(
+				m_impl->current_command_buffer,
+				m_impl->current_pass_name.c_str(),
+				__FILE__,
+				static_cast<uint32_t>(__LINE__),
+				__FUNCTION__,
+				AshEngine::Profile::Color::Pipeline,
+				m_impl->current_pass_gpu_zone);
+			m_impl->current_pass_gpu_zone_active = true;
+		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -3191,8 +3212,18 @@ namespace AshEngine
 
 	void RenderDevice::end_pass()
 	{
+		ASH_PROFILE_SCOPE_NC("RenderDevice::end_pass", AshEngine::Profile::Color::Pipeline);
 		if (m_impl->current_command_buffer && m_impl->current_framebuffer)
 		{
+			if (m_impl->current_pass_gpu_zone_active)
+			{
+				if (RHI::IGpuProfilerContext* gpu_ctx = RHI::gpu_profiler_get())
+				{
+					gpu_ctx->end_zone(m_impl->current_command_buffer, m_impl->current_pass_gpu_zone);
+				}
+				m_impl->current_pass_gpu_zone_active = false;
+				m_impl->current_pass_gpu_zone = {};
+			}
 			m_impl->current_command_buffer->cmd_end_render_pass();
 
 			std::vector<RHI::AshBarrier> end_pass_barriers;

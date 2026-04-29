@@ -21,6 +21,9 @@
 #    pragma warning(disable:4267)
 #  endif
 #  define poll WSAPoll
+#  ifdef _MSC_VER
+#    pragma comment(lib, "ws2_32.lib")
+#  endif
 #else
 #  include <arpa/inet.h>
 #  include <sys/socket.h>
@@ -67,7 +70,7 @@ void InitWinSock()
 #endif
 
 
-enum { BufSize = 128 * 1024 };
+constexpr size_t BufSize = 128 * 1024;
 
 Socket::Socket()
     : m_buf( (char*)tracy_malloc( BufSize ) )
@@ -678,10 +681,10 @@ bool UdpListen::Listen( uint16_t port )
 #endif
 #if defined _WIN32
     unsigned long reuse = 1;
-    setsockopt( m_sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof( reuse ) );
+    setsockopt( sock, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof( reuse ) );
 #else
     int reuse = 1;
-    setsockopt( m_sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof( reuse ) );
+    setsockopt( sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof( reuse ) );
 #endif
 #if defined _WIN32
     unsigned long broadcast = 1;

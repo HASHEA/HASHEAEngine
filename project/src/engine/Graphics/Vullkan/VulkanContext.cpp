@@ -18,6 +18,8 @@
 #include "VulkanShader.h"
 #include "VulkanShaderCompiler.h"
 #include "VulkanStagingBuffer.h"
+#include "VulkanGpuProfiler.h"
+#include "Graphics/GpuProfilerRHI.h"
 #if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
 #endif
@@ -1444,6 +1446,19 @@ namespace RHI
 		bRetCode = _create_staging_buffer_pool();
 		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create staging buffer pool !");
 
+		// 安装 Tracy GPU profiler。需要在 device/queue 创建之后。
+		// 失败不致命：内部会保留空 ctx，所有 zone 退化为 no-op。
+		{
+			auto* profiler = new VulkanGpuProfiler(
+				vulkanInstance,
+				vulkanPhysicalDevice,
+				vulkanDevice,
+				vulkanMainQueue,
+				vulkanMainQueueFamily,
+				"Vulkan");
+			gpu_profiler_install(profiler);
+		}
+
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
@@ -1451,7 +1466,14 @@ namespace RHI
 	{
 		//wait idle
 		wait_idle();
-	
+
+		// 卸载 Tracy GPU profiler，必须在 device 销毁之前。
+		if (auto* profiler = gpu_profiler_get())
+		{
+			gpu_profiler_install(nullptr);
+			delete profiler;
+		}
+
 		//unload cache
 		_unload_cache();
 		//shutdown framepool and datas
@@ -1640,7 +1662,11 @@ auto VulkanContext::destroy() -> void
 			return false;
 		}
 
-		if (!uploadCommandsPending)
+		const bool needNewCmd =
+			!uploadCommandsPending ||
+			!currentUploadCommandBuffer ||
+			currentUploadCommandBuffer->get_state() != AshCommandBufferState::ASH_Recording;
+		if (needNewCmd)
 		{
 			currentUploadCommandBuffer = static_cast<VulkanCommandBuffer*>(get_command_buffer(0));
 			if (!currentUploadCommandBuffer)
@@ -2019,6 +2045,16 @@ auto VulkanContext::destroy() -> void
 
 	auto VulkanContext::end_frame() -> void
 	{
+		// Tracy GPU collect 需要一个正在录制的 cmdbuf。复用 upload cmdbuf；
+		// 没有就借机起一个，只为发 1 次 vkCmdResetQueryPool + 读 timestamp。
+		if (auto* profiler = gpu_profiler_get())
+		{
+			if (_ensure_upload_command_buffer_recording() && currentUploadCommandBuffer)
+			{
+				profiler->collect(currentUploadCommandBuffer);
+			}
+		}
+
 		if (uploadCommandsPending && !uploadCommandQueued)
 		{
 			_finalize_upload_command_buffer();

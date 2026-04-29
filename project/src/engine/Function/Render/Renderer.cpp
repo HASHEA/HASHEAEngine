@@ -1,7 +1,9 @@
 #include "Renderer.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
+#include <cstring>
 
 namespace AshEngine
 {
@@ -76,6 +78,7 @@ namespace AshEngine
 
 	bool Renderer::begin_frame()
 	{
+		ASH_PROFILE_SCOPE_NC("Renderer::begin_frame", AshEngine::Profile::Color::Render);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_render_device && m_render_device->begin_frame());
 
@@ -97,6 +100,7 @@ namespace AshEngine
 
 	bool Renderer::end_frame()
 	{
+		ASH_PROFILE_SCOPE_NC("Renderer::end_frame", AshEngine::Profile::Color::Render);
 		if (m_active_pass)
 		{
 			end_active_pass(m_active_pass);
@@ -127,6 +131,9 @@ namespace AshEngine
 		{
 			m_frame_in_progress = false;
 		}
+		ASH_PROFILE_PLOT("Render/DrawCalls", static_cast<int64_t>(m_frame_stats.draw_call_count));
+		ASH_PROFILE_PLOT("Render/Passes", static_cast<int64_t>(m_frame_stats.graphics_pass_count));
+		ASH_PROFILE_PLOT("Render/Dispatches", static_cast<int64_t>(m_frame_stats.compute_dispatch_count));
 		return result && ui_result;
 	}
 
@@ -281,9 +288,12 @@ namespace AshEngine
 			return;
 		}
 
+		const char* pass_name = pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass";
+		ASH_PROFILE_SCOPE_NC("Renderer::end_active_pass", AshEngine::Profile::Color::Submit);
+		ASH_PROFILE_SCOPE_TEXT(pass_name, std::strlen(pass_name));
+
 		bool pass_started = false;
 		bool success = m_render_device != nullptr;
-		const char* pass_name = pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass";
 		if (success)
 		{
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
