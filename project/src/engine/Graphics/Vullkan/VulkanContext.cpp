@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Base/hfile.h"
 #include "Base/hcache.h"
 #include "Base/hmemory.h"
@@ -228,7 +229,7 @@ namespace RHI
 	auto VulkanContext::set_resource_name_internal(VkObjectType type, uint64_t handle, const char* name) -> void
 	{
 #ifdef VULKAN_DEBUG_REPORT
-		if (!debugUtilsEnabled)
+		if (!debugUtilsEnabled || handle == 0 || !name || name[0] == '\0')
 		{
 			return;
 		}
@@ -1984,6 +1985,7 @@ auto VulkanContext::destroy() -> void
 
 	auto VulkanContext::begin_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanContext::begin_frame", AshEngine::Profile::Color::RHI);
 		if (currentFrame == UINT32_MAX)
 		{
 			currentFrame = 0;
@@ -1999,6 +2001,7 @@ auto VulkanContext::destroy() -> void
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
 		{
 			if (absoluteFrame >= k_max_frames) {
+				ASH_PROFILE_SCOPE_NC("VulkanContext::WaitFrameTimeline", AshEngine::Profile::Color::RHI);
 				uint64_t graphics_timeline_value = absoluteFrame - (k_max_frames - 1);
 				/*uint64_t compute_timeline_value = 0;*/
 				uint64_t wait_values[]{ graphics_timeline_value/*, compute_timeline_value*/ };
@@ -2012,6 +2015,7 @@ auto VulkanContext::destroy() -> void
 		}
 		else
 		{
+			ASH_PROFILE_SCOPE_NC("VulkanContext::WaitFrameFence", AshEngine::Profile::Color::RHI);
 			get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
 		}
 		vulkanPresentCompleteSemaphore = get_frame_data_internal().vulkanRenderCompleteSemaphore;
@@ -2045,6 +2049,7 @@ auto VulkanContext::destroy() -> void
 
 	auto VulkanContext::end_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanContext::end_frame", AshEngine::Profile::Color::RHI);
 		// Tracy GPU collect 需要一个正在录制的 cmdbuf。复用 upload cmdbuf；
 		// 没有就借机起一个，只为发 1 次 vkCmdResetQueryPool + 读 timestamp。
 		if (auto* profiler = gpu_profiler_get())
@@ -2110,7 +2115,11 @@ auto VulkanContext::destroy() -> void
 				submit_info.pCommandBufferInfos = command_buffer_info;
 				submit_info.signalSemaphoreInfoCount = 2;
 				submit_info.pSignalSemaphoreInfos = signal_semaphores;
-				VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+				{
+					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
+					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+				}
 				wait_semaphores.shutdown();
 			}
 			else
@@ -2145,7 +2154,11 @@ auto VulkanContext::destroy() -> void
 				submit_info.signalSemaphoreCount = 2;
 				submit_info.pSignalSemaphores = signal_semaphores;
 				submit_info.pNext = &semaphore_info;
-				VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+				{
+					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
+					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+				}
 				wait_semaphores.shutdown();
 				wait_values.shutdown();
 				wait_stages.shutdown();
@@ -2173,7 +2186,11 @@ auto VulkanContext::destroy() -> void
 				submit_info.pCommandBufferInfos = command_buffer_info;
 				submit_info.signalSemaphoreInfoCount = 1;
 				submit_info.pSignalSemaphoreInfos = signal_semaphores;
-				VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+				{
+					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
+					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+				}
 				wait_semaphores.shutdown();
 			}
 			else
@@ -2188,7 +2205,11 @@ auto VulkanContext::destroy() -> void
 				submit_info.pCommandBuffers = cmds;
 				submit_info.signalSemaphoreCount = 1;
 				submit_info.pSignalSemaphores = &presentCompleteSemaphore;
-				VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+				{
+					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
+					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+				}
 			}		
 		}
 		frameActive = false;

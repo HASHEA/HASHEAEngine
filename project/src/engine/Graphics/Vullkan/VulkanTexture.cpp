@@ -6,6 +6,23 @@ namespace RHI
 {
 	namespace
 	{
+		static const char* get_texture_view_suffix(AshResourceViewType view_type)
+		{
+			switch (view_type)
+			{
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_RTV:
+				return ".RTV";
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_DSV:
+				return ".DSV";
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV:
+				return ".SRV";
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV:
+				return ".UAV";
+			default:
+				return ".View";
+			}
+		}
+
 		static AshResourceState resolve_vulkan_texture_creation_state(const TextureCreation& ci)
 		{
 			// Textures with CPU-provided initial data are born in undefined layout and
@@ -17,7 +34,9 @@ namespace RHI
 	VulkanTexture::VulkanTexture(const TextureCreation& ci)
 	{
 		const AshResourceState creation_state = resolve_vulkan_texture_creation_state(ci);
+		m_nameStorage = ci.name ? ci.name : "UnnamedVulkanTexture";
 		m_sCreation = ci;
+		m_sCreation.name = m_nameStorage.c_str();
 		m_uAspectFlags = 0;
 		cube = false;
 		if (ci.type == AshImageType::Ash_TextureCube || ci.type == AshImageType::Ash_Texture_Cube_Array)
@@ -68,7 +87,7 @@ namespace RHI
 			}
 			else
 			{
-				const bool created = ASH_VMA_CREATE_IMAGE(VulkanContext::get(), vkImageCI, memory_info.usage, vkImage, vmaAllocation, ci.name);
+				const bool created = ASH_VMA_CREATE_IMAGE(VulkanContext::get(), vkImageCI, memory_info.usage, vkImage, vmaAllocation, m_sCreation.name);
 				H_ASSERT(created);
 			}
 		}
@@ -81,7 +100,7 @@ namespace RHI
 			VK_CHECK_RESULT(vmaCreateAliasingImage(VulkanContext::get_vma_allocator(), aliasTexture->get_vma_allocation(), &vkImageCI, &vkImage));
 			
 		}
-		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE, (uint64_t)vkImage, ci.name);
+		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE, (uint64_t)vkImage, m_sCreation.name);
 		m_ResourceLayoutTracker = VulkanResourceTracker(creation_state);
 		state = creation_state;
 		m_uAspectFlags = get_aspect_flags_from_format(ci.format);
@@ -341,6 +360,12 @@ namespace RHI
 	{
 		parentTexture = _parentTexture;
 		m_sInfo = ci;
+		if (m_sInfo.name == nullptr)
+		{
+			const char* parentName = _parentTexture && _parentTexture->get_name() ? _parentTexture->get_name() : "UnnamedVulkanTexture";
+			m_nameStorage = std::string(parentName) + get_texture_view_suffix(ci.view_type);
+			m_sInfo.name = m_nameStorage.c_str();
+		}
 		auto parentVulkanTexture = std::static_pointer_cast<VulkanTexture>(_parentTexture);
 		auto resolvedRange = parentVulkanTexture->resolve_subresource_range(ci.sub_resource);
 		m_sInfo.sub_resource = resolvedRange;
@@ -367,7 +392,7 @@ namespace RHI
 		info.subresourceRange.baseArrayLayer = resolvedRange.uBaseArraySlice;
 		info.subresourceRange.layerCount = resolvedRange.uArrayCount;
 		VK_CHECK_RESULT(vkCreateImageView(VulkanContext::get_vulkan_device(), &info, VulkanContext::get_vulkan_allocation_callbacks(), &vkImageView));
-		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)vkImageView, ci.name);
+		VulkanContext::set_resource_name(VK_OBJECT_TYPE_IMAGE_VIEW, (uint64_t)vkImageView, m_sInfo.name);
 
 	}
 

@@ -4,6 +4,26 @@
 
 namespace RHI
 {
+	namespace
+	{
+		const char* descriptor_heap_type_name(D3D12_DESCRIPTOR_HEAP_TYPE type)
+		{
+			switch (type)
+			{
+			case D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV:
+				return "CBV_SRV_UAV";
+			case D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER:
+				return "Sampler";
+			case D3D12_DESCRIPTOR_HEAP_TYPE_RTV:
+				return "RTV";
+			case D3D12_DESCRIPTOR_HEAP_TYPE_DSV:
+				return "DSV";
+			default:
+				return "Unknown";
+			}
+		}
+	}
+
 	// ──────────────────────────────────────────────────────────────
 	// DX12CPUDescriptorHeap
 	// ──────────────────────────────────────────────────────────────
@@ -26,6 +46,8 @@ namespace RHI
 			HLogError("DX12CPUDescriptorHeap: Failed to create heap. Type: {}, HRESULT: 0x{:08X}", (int)type, (uint32_t)hr);
 			return false;
 		}
+		const std::string debugName = std::string("DX12 CPU Descriptor Heap ") + descriptor_heap_type_name(type);
+		dx12_set_debug_name(m_heap.Get(), debugName.c_str());
 
 		m_cpuStart = m_heap->GetCPUDescriptorHandleForHeapStart();
 		return true;
@@ -91,6 +113,8 @@ namespace RHI
 			HLogError("DX12GPUDescriptorHeap: Failed to create shader-visible heap. Type: {}, HRESULT: 0x{:08X}", (int)type, (uint32_t)hr);
 			return false;
 		}
+		const std::string debugName = std::string("DX12 GPU Descriptor Heap ") + descriptor_heap_type_name(type);
+		dx12_set_debug_name(m_heap.Get(), debugName.c_str());
 
 		m_cpuStart = m_heap->GetCPUDescriptorHandleForHeapStart();
 		m_gpuStart = m_heap->GetGPUDescriptorHandleForHeapStart();

@@ -296,6 +296,8 @@ namespace AshEngine
 		bool success = m_render_device != nullptr;
 		if (success)
 		{
+			ASH_PROFILE_SCOPE_NC("Renderer::PassTransitions", AshEngine::Profile::Color::Barrier);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass_context->m_draw_calls.size()));
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
 				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
@@ -331,6 +333,7 @@ namespace AshEngine
 
 		if (success)
 		{
+			ASH_PROFILE_SCOPE_NC("Renderer::BeginPass", AshEngine::Profile::Color::Pipeline);
 			success = m_render_device->begin_pass(pass_context->m_desc);
 			pass_started = success;
 			if (success)
@@ -341,11 +344,14 @@ namespace AshEngine
 
 		if (success)
 		{
+			ASH_PROFILE_SCOPE_NC("Renderer::SubmitDraws", AshEngine::Profile::Color::Draw);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass_context->m_draw_calls.size()));
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
 				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
 				if (draw_desc.const_data_size > 0)
 				{
+					ASH_PROFILE_SCOPE_NC("Renderer::SetDrawConstants", AshEngine::Profile::Color::Submit);
 					if (draw_desc.const_data.size() < draw_desc.const_data_size || !draw_desc.program->set_const_data_block(draw_desc.const_data_size, draw_desc.const_data.data()))
 					{
 						HLogError("Renderer: set_const_data_block failed for pass '{}' draw {}.", pass_name, draw_index);

@@ -18,7 +18,7 @@ namespace RHI
 
 		bool init(const TextureCreation& ci, ID3D12Device* device, D3D12MA::Allocator* allocator, DX12DescriptorHeapManager* heapMgr);
 		// For swapchain textures
-		bool init_from_swapchain(ID3D12Resource* resource, AshFormat format, uint16_t width, uint16_t height, ID3D12Device* device, DX12DescriptorHeapManager* heapMgr);
+		bool init_from_swapchain(ID3D12Resource* resource, AshFormat format, uint16_t width, uint16_t height, ID3D12Device* device, DX12DescriptorHeapManager* heapMgr, const char* debugName = nullptr);
 		void shutdown();
 
 		ID3D12Resource* get_resource() const { return m_resource.Get(); }

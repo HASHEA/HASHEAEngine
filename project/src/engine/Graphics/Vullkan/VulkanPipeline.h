@@ -20,6 +20,7 @@ namespace RHI
 		VkPipelineBindPoint get_bind_point() const;
 	
 	private:
+		std::string						name_storage;
 		const char*						name				= nullptr;
 		VkPipeline                      vk_pipeline			= VK_NULL_HANDLE;
 		VkPipelineLayout                vk_pipeline_layout	= VK_NULL_HANDLE;

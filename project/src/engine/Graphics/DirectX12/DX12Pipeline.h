@@ -14,8 +14,8 @@ namespace RHI
 		DX12Pipeline() = default;
 		~DX12Pipeline();
 
-		bool init_graphics(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
-		bool init_compute(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc);
+		bool init_graphics(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc, const char* debugName = nullptr);
+		bool init_compute(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc, const char* debugName = nullptr);
 		void shutdown();
 
 		ID3D12PipelineState* get_pso() const { return m_pso.Get(); }

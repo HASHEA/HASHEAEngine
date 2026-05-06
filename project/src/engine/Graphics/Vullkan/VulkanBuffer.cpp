@@ -6,6 +6,24 @@
 #include <memory>
 namespace RHI
 {
+	namespace
+	{
+		static const char* get_buffer_view_suffix(AshResourceViewType view_type)
+		{
+			switch (view_type)
+			{
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_CBV:
+				return ".CBV";
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV:
+				return ".SRV";
+			case AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV:
+				return ".UAV";
+			default:
+				return ".View";
+			}
+		}
+	}
+
 	namespace VKBufferHelper
 	{
 		static VkBufferUsageFlags get_vk_buffer_usage_flags(AshBufferUsageFlags uUsageFlags)
@@ -92,8 +110,9 @@ namespace RHI
 	auto VulkanBuffer::create(const BufferCreation& ci) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		m_pName = ci.name;
+		m_nameStorage = ci.name ? ci.name : "UnnamedVulkanBuffer";
 		m_sCreationInfo = ci;
+		m_sCreationInfo.name = m_nameStorage.c_str();
 		m_bReady = false;
 		dynamic = !ci.force_static && (ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE) && has_any_flags(ci.usage_flags, k_dynamic_buffer_mask);
 		bool bHostCoherent = false;
@@ -131,9 +150,10 @@ namespace RHI
 		//vma allocate buffer
 		{
 			bool bRetCode = ASH_VMA_CREATE_BUFFER(VulkanContext::get(), m_sCreationInfo.size, uBufferUsageFlags,
-				eMemUsage, m_pVkBuffer, m_pVMAAllocation, (void**)&m_pMappedData, m_pName);
+				eMemUsage, m_pVkBuffer, m_pVMAAllocation, (void**)&m_pMappedData, m_sCreationInfo.name);
 			ASH_LOG_PROCESS_ERROR(bRetCode);
 		}
+		VulkanContext::set_resource_name(VK_OBJECT_TYPE_BUFFER, (uint64_t)m_pVkBuffer, m_sCreationInfo.name);
 		//validate result
 		{
 			VmaAllocationInfo     allocationInfo = {};
@@ -210,7 +230,7 @@ namespace RHI
 	}
 	auto VulkanBuffer::get_name() -> const char*
 	{
-		return m_pName;
+		return m_sCreationInfo.name;
 	}
 	auto VulkanBuffer::get_global_offset() -> uint32_t
 	{
@@ -279,7 +299,7 @@ namespace RHI
 			{
 				HLogError(
 					"VulkanBuffer: queue_buffer_upload returned false for '{}' (offset={}, size={}).",
-					m_pName ? m_pName : "UnnamedBuffer",
+					get_name() ? get_name() : "UnnamedBuffer",
 					offset,
 					_size);
 			}
@@ -300,7 +320,7 @@ namespace RHI
 				{
 					HLogError(
 						"VulkanBuffer: failed to map allocation for '{}' (offset={}, size={}, coherent={}, allocation={}, mapped_data_cached={}).",
-						m_pName ? m_pName : "UnnamedBuffer",
+						get_name() ? get_name() : "UnnamedBuffer",
 						offset,
 						_size,
 						m_bCoherent,
@@ -317,7 +337,7 @@ namespace RHI
 			{
 				HLogError(
 					"VulkanBuffer: flush_mapped_range failed for '{}' (offset={}, size={}, coherent={}, mapped_by_call={}).",
-					m_pName ? m_pName : "UnnamedBuffer",
+					get_name() ? get_name() : "UnnamedBuffer",
 					offset,
 					_size,
 					m_bCoherent,
@@ -335,7 +355,7 @@ namespace RHI
 		{
 			HLogError(
 				"VulkanBuffer: update failed for '{}' (offset={}, size={}, access_type={}, dynamic={}).",
-				m_pName ? m_pName : "UnnamedBuffer",
+				get_name() ? get_name() : "UnnamedBuffer",
 				offset,
 				_size,
 				static_cast<uint32_t>(m_sCreationInfo.access_type),
@@ -460,6 +480,12 @@ namespace RHI
 
 		m_ViewCreation = ci;
 		m_ViewCreation.uByteRange = uBytesRange;
+		const char* parentName = parent->get_name() ? parent->get_name() : "UnnamedVulkanBuffer";
+		m_nameStorage = std::string(parentName) + get_buffer_view_suffix(ci.view_type);
+		if (vkBufferView != VK_NULL_HANDLE)
+		{
+			VulkanContext::set_resource_name(VK_OBJECT_TYPE_BUFFER_VIEW, (uint64_t)vkBufferView, m_nameStorage.c_str());
+		}
 
 		ASH_SAFE_EXECUTE_END(bResult);
 	}
@@ -490,7 +516,7 @@ namespace RHI
 	}
 	auto VulkanBufferView::get_name() -> const char*
 	{
-		return nullptr;
+		return m_nameStorage.empty() ? "UnnamedVulkanBufferView" : m_nameStorage.c_str();
 	}
 	auto VulkanBufferView::get_parent_buffer() -> std::shared_ptr<Buffer>
 	{

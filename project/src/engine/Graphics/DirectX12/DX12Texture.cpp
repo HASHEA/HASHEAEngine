@@ -86,6 +86,7 @@ namespace RHI
 			HLogError("DX12Texture: Failed to create texture '{}'. HRESULT: 0x{:08X}", m_name, (uint32_t)hr);
 			return false;
 		}
+		dx12_set_debug_name(m_resource.Get(), m_name.c_str());
 
 		// Match m_resourceState to the actual D3D12 initial state. For depth formats, Unknown/COMMON is
 		// promoted to DEPTH_WRITE above; if we leave m_resourceState as Unknown, ash_to_d3d12 maps it to
@@ -100,7 +101,7 @@ namespace RHI
 		return true;
 	}
 
-	bool DX12Texture::init_from_swapchain(ID3D12Resource* resource, AshFormat format, uint16_t width, uint16_t height, ID3D12Device* device, DX12DescriptorHeapManager* heapMgr)
+	bool DX12Texture::init_from_swapchain(ID3D12Resource* resource, AshFormat format, uint16_t width, uint16_t height, ID3D12Device* device, DX12DescriptorHeapManager* heapMgr, const char* debugName)
 	{
 		m_resource = resource;
 		m_isSwapchainTexture = true;
@@ -113,7 +114,8 @@ namespace RHI
 		m_creation.mip_level_count = 1;
 		m_creation.type = Ash_Texture2D;
 		m_creation.uUsageFlags = ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
-		m_name = "SwapchainBackBuffer";
+		m_name = debugName && debugName[0] != '\0' ? debugName : "SwapchainBackBuffer";
+		dx12_set_debug_name(m_resource.Get(), m_name.c_str());
 
 		_create_default_views(device, heapMgr);
 		return true;

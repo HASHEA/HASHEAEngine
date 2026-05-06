@@ -1,6 +1,7 @@
 #pragma once
 #include "Graphics/RenderPass.h"
 #include <memory>
+#include <string>
 namespace RHI
 {
 	class VulkanRenderPass : public RenderPass
@@ -27,7 +28,7 @@ namespace RHI
 		auto get_depth_stencil_attachment_final_state() -> AshResourceState override;
 	private:
 		VkRenderPass vkRenderPass = VK_NULL_HANDLE;
-		const char* name = nullptr;
+		std::string nameStorage;
 		Array<AshLoadOption> colorLoadOptions;
 		AshFormat colorFormats[k_max_image_outputs]{};
 		uint32_t colorAttachmentCount = 0;

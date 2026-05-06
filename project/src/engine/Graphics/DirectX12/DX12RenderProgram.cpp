@@ -6,6 +6,7 @@
 #include "DX12RenderPass.h"
 #include "Base/hassert.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -265,6 +266,8 @@ namespace RHI
 			const std::unordered_map<std::string, DX12ProgramBindingInfo>& bindingInfos,
 			bool graphicsPipeline)
 		{
+			ASH_PROFILE_SCOPE_NC("DX12RenderProgram::ApplyDescriptorBinds", AshEngine::Profile::Color::Descriptor);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pendingBinds.size()));
 			for (const DX12PendingBind& bind : pendingBinds)
 			{
 				auto bindingIt = bindingInfos.find(bind.name);
@@ -437,6 +440,11 @@ namespace RHI
 
 	bool DX12GraphicsRenderProgram::apply(std::shared_ptr<CommandBuffer> cb)
 	{
+		ASH_PROFILE_SCOPE_NC("DX12GraphicsRenderProgram::Apply", AshEngine::Profile::Color::Pipeline);
+		if (m_desc.pipeline.name)
+		{
+			ASH_PROFILE_SCOPE_TEXT(m_desc.pipeline.name, std::strlen(m_desc.pipeline.name));
+		}
 		if (m_needsRebuild)
 		{
 			if (!_build_pso())
@@ -473,6 +481,7 @@ namespace RHI
 
 	bool DX12GraphicsRenderProgram::end_bind()
 	{
+		ASH_PROFILE_SCOPE_NC("DX12GraphicsRenderProgram::EndBind", AshEngine::Profile::Color::Descriptor);
 		m_binder.finish_binding();
 		return _validate_binding_state();
 	}
@@ -626,7 +635,14 @@ namespace RHI
 		rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
 		m_rootSignatureLayout = std::make_unique<DX12DescriptorSetLayout>();
-		return m_rootSignatureLayout->init(device, rootSigDesc);
+		const bool initialized = m_rootSignatureLayout->init(device, rootSigDesc);
+		if (initialized && m_rootSignatureLayout->get_root_signature())
+		{
+			std::string debugName = (m_desc.pipeline.name ? m_desc.pipeline.name : "DX12GraphicsRenderProgram");
+			debugName += ".RootSignature";
+			dx12_set_debug_name(m_rootSignatureLayout->get_root_signature(), debugName.c_str());
+		}
+		return initialized;
 	}
 
 	bool DX12GraphicsRenderProgram::_build_pso()
@@ -785,7 +801,7 @@ namespace RHI
 		psoDesc.SampleMask = UINT_MAX;
 
 		m_pipeline = std::make_unique<DX12Pipeline>();
-		return m_pipeline->init_graphics(device, psoDesc);
+		return m_pipeline->init_graphics(device, psoDesc, m_desc.pipeline.name);
 	}
 
 	void DX12GraphicsRenderProgram::_apply_bindings(DX12CommandBuffer* cmdBuf)
@@ -883,6 +899,11 @@ namespace RHI
 
 	bool DX12ComputeRenderProgram::apply(std::shared_ptr<CommandBuffer> cb)
 	{
+		ASH_PROFILE_SCOPE_NC("DX12ComputeRenderProgram::Apply", AshEngine::Profile::Color::Pipeline);
+		if (m_desc.pipeline.name)
+		{
+			ASH_PROFILE_SCOPE_TEXT(m_desc.pipeline.name, std::strlen(m_desc.pipeline.name));
+		}
 		if (!m_pipeline || !m_rootSignatureLayout)
 		{
 			return false;
@@ -910,6 +931,7 @@ namespace RHI
 
 	bool DX12ComputeRenderProgram::end_bind()
 	{
+		ASH_PROFILE_SCOPE_NC("DX12ComputeRenderProgram::EndBind", AshEngine::Profile::Color::Descriptor);
 		m_binder.finish_binding();
 		return _validate_binding_state();
 	}
@@ -1053,7 +1075,14 @@ namespace RHI
 		rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
 		m_rootSignatureLayout = std::make_unique<DX12DescriptorSetLayout>();
-		return m_rootSignatureLayout->init(device, rootSigDesc);
+		const bool initialized = m_rootSignatureLayout->init(device, rootSigDesc);
+		if (initialized && m_rootSignatureLayout->get_root_signature())
+		{
+			std::string debugName = (m_desc.pipeline.name ? m_desc.pipeline.name : "DX12ComputeRenderProgram");
+			debugName += ".RootSignature";
+			dx12_set_debug_name(m_rootSignatureLayout->get_root_signature(), debugName.c_str());
+		}
+		return initialized;
 	}
 
 	bool DX12ComputeRenderProgram::_build_pso()
@@ -1064,7 +1093,7 @@ namespace RHI
 		psoDesc.CS = m_computeShader->get_d3d12_bytecode();
 
 		m_pipeline = std::make_unique<DX12Pipeline>();
-		return m_pipeline->init_compute(device, psoDesc);
+		return m_pipeline->init_compute(device, psoDesc, m_desc.pipeline.name);
 	}
 
 	void DX12ComputeRenderProgram::_apply_bindings(DX12CommandBuffer* cmdBuf)

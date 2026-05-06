@@ -10,27 +10,31 @@ namespace RHI
 		shutdown();
 	}
 
-	bool DX12Pipeline::init_graphics(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
+	bool DX12Pipeline::init_graphics(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc, const char* debugName)
 	{
 		m_isCompute = false;
+		m_name = debugName && debugName[0] != '\0' ? debugName : "DX12GraphicsPipeline";
 		HRESULT hr = device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&m_pso));
 		if (FAILED(hr))
 		{
-			HLogError("DX12Pipeline: Failed to create graphics PSO. HRESULT: 0x{:08X}", (uint32_t)hr);
+			HLogError("DX12Pipeline: Failed to create graphics PSO '{}'. HRESULT: 0x{:08X}", m_name, (uint32_t)hr);
 			return false;
 		}
+		dx12_set_debug_name(m_pso.Get(), m_name.c_str());
 		return true;
 	}
 
-	bool DX12Pipeline::init_compute(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
+	bool DX12Pipeline::init_compute(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc, const char* debugName)
 	{
 		m_isCompute = true;
+		m_name = debugName && debugName[0] != '\0' ? debugName : "DX12ComputePipeline";
 		HRESULT hr = device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&m_pso));
 		if (FAILED(hr))
 		{
-			HLogError("DX12Pipeline: Failed to create compute PSO. HRESULT: 0x{:08X}", (uint32_t)hr);
+			HLogError("DX12Pipeline: Failed to create compute PSO '{}'. HRESULT: 0x{:08X}", m_name, (uint32_t)hr);
 			return false;
 		}
+		dx12_set_debug_name(m_pso.Get(), m_name.c_str());
 		return true;
 	}
 

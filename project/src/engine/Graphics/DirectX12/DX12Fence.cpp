@@ -18,6 +18,7 @@ namespace RHI
 			HLogError("DX12Fence: Failed to create fence. HRESULT: 0x{:08X}", (uint32_t)hr);
 			return false;
 		}
+		dx12_set_debug_name(m_fence.Get(), "DX12 Frame Fence");
 
 		m_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 		if (!m_fenceEvent)

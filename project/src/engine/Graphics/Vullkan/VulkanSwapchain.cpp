@@ -1,5 +1,6 @@
 #pragma once
 #include "VulkanSwapchain.h"
+#include "Base/hprofiler.h"
 #include "VulkanContext.h"
 #include "Base/window/Window.h"
 #include "Function/Application.h"
@@ -288,6 +289,7 @@ namespace RHI
 
 	auto VulkanSwapchain::_aquire_next_image() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanSwapchain::AcquireNextImage", AshEngine::Profile::Color::Present);
 		if (swapchainBufferCount == 1 && acquireImageIndex != UINT32_MAX)
 		{
 			return;
@@ -357,6 +359,7 @@ namespace RHI
 
 	auto VulkanSwapchain::present() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanSwapchain::Present", AshEngine::Profile::Color::Present);
 		if (acquireImageIndex == UINT32_MAX)
 		{
 			HLogWarning("VulkanSwapchain: present skipped because no acquired image is available.");

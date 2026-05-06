@@ -5,7 +5,7 @@ namespace RHI
 {
 	VulkanFramebuffer::VulkanFramebuffer(const FramebufferCreation& ci)
 	{
-		name = ci.name;
+		nameStorage = ci.name ? ci.name : "VulkanFramebuffer";
 		width = ci.width;
 		height = ci.height;
 		layers = ci.layers;
@@ -43,7 +43,7 @@ namespace RHI
 			framebuffer_info.pAttachments = attachments.m_pData;
 			framebuffer_info.attachmentCount = attachments.size();
 			VK_CHECK_RESULT(vkCreateFramebuffer(VulkanContext::get_vulkan_device(), &framebuffer_info, VulkanContext::get_vulkan_allocation_callbacks(), &vkFramebuffer));
-			VulkanContext::set_resource_name(VK_OBJECT_TYPE_FRAMEBUFFER, (uint64_t)vkFramebuffer, name);
+			VulkanContext::set_resource_name(VK_OBJECT_TYPE_FRAMEBUFFER, (uint64_t)vkFramebuffer, nameStorage.c_str());
 		}	
 		attachments.shutdown();
 	}
@@ -78,7 +78,7 @@ namespace RHI
 	}
 	auto VulkanFramebuffer::get_name() -> const char*
 	{
-		return name;
+		return nameStorage.c_str();
 	}
 	auto VulkanFramebuffer::get_render_pass() -> std::shared_ptr<RenderPass>
 	{

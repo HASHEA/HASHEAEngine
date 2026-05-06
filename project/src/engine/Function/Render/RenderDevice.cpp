@@ -642,6 +642,51 @@ namespace AshEngine
 		const RHI::ShaderParameterBlockLayout* const_parameter_block = nullptr;
 	};
 
+	static uint64_t count_program_bindings(const ProgramBindingState& bindings)
+	{
+		uint64_t count = bindings.uniform_buffers.size() +
+			bindings.storage_buffer_srvs.size() +
+			bindings.storage_buffer_uavs.size() +
+			bindings.texture_srvs.size() +
+			bindings.texture_uavs.size() +
+			bindings.samplers.size() +
+			bindings.legacy_samplers.size() +
+			bindings.immutable_constants.size();
+
+		for (const auto& [name, values] : bindings.storage_buffer_srv_arrays)
+		{
+			(void)name;
+			count += values.size();
+		}
+		for (const auto& [name, values] : bindings.storage_buffer_uav_arrays)
+		{
+			(void)name;
+			count += values.size();
+		}
+		for (const auto& [name, values] : bindings.texture_srv_arrays)
+		{
+			(void)name;
+			count += values.size();
+		}
+		for (const auto& [name, values] : bindings.texture_uav_arrays)
+		{
+			(void)name;
+			count += values.size();
+		}
+		for (const auto& [name, values] : bindings.sampler_arrays)
+		{
+			(void)name;
+			count += values.size();
+		}
+		for (const auto& [name, values] : bindings.legacy_sampler_arrays)
+		{
+			(void)name;
+			count += values.size();
+		}
+
+		return count;
+	}
+
 	class GraphicsProgram::Impl
 	{
 	public:
@@ -1280,12 +1325,27 @@ namespace AshEngine
 		static bool commit_program_bindings(ProgramBindingState& bindings, RHI::GraphicsContext* graphics_context, ProgramType& program)
 		{
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-			RHI::IRenderProgramBinder& binder = program.begin_bind();
-			ASH_PROCESS_ERROR(apply_program_bindings(bindings, graphics_context, binder));
-			ASH_PROCESS_ERROR(program.end_bind());
+			RHI::IRenderProgramBinder* binder_ptr = nullptr;
+			{
+				ASH_PROFILE_SCOPE_NC("RenderDevice::ProgramBeginBind", AshEngine::Profile::Color::Descriptor);
+				binder_ptr = &program.begin_bind();
+			}
+			ASH_PROCESS_ERROR(binder_ptr);
+			{
+				ASH_PROFILE_SCOPE_NC("RenderDevice::ApplyProgramBindings", AshEngine::Profile::Color::Descriptor);
+				ASH_PROFILE_SCOPE_VALUE(count_program_bindings(bindings));
+				ASH_PROCESS_ERROR(apply_program_bindings(bindings, graphics_context, *binder_ptr));
+			}
+			{
+				ASH_PROFILE_SCOPE_NC("RenderDevice::ProgramEndBind", AshEngine::Profile::Color::Descriptor);
+				ASH_PROCESS_ERROR(program.end_bind());
+			}
 			const uint32_t const_data_size = static_cast<uint32_t>(bindings.const_data_block.size());
 			const void* const_data = const_data_size > 0 ? bindings.const_data_block.data() : nullptr;
-			bResult = program.set_const_data_block(const_data_size, const_data);
+			{
+				ASH_PROFILE_SCOPE_NC("RenderDevice::SetProgramConstData", AshEngine::Profile::Color::Submit);
+				bResult = program.set_const_data_block(const_data_size, const_data);
+			}
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -1473,6 +1533,8 @@ namespace AshEngine
 			{
 				break;
 			}
+			ASH_PROFILE_SCOPE_NC("RenderDevice::SubmitResourceBarriers", AshEngine::Profile::Color::Barrier);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(barriers.size()));
 			bResult = command_buffer->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
@@ -2823,6 +2885,7 @@ namespace AshEngine
 
 	bool RenderDevice::render_present_to_swapchain()
 	{
+		ASH_PROFILE_SCOPE_NC("RenderDevice::present_copy_to_swapchain", AshEngine::Profile::Color::Present);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && m_impl->swapchain_target);
 		ASH_PROCESS_ERROR(ensure_back_buffer_target());
@@ -3024,9 +3087,15 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && m_impl->current_framebuffer && m_impl->current_render_pass);
 
 		const uint64_t signature_hash = hash_render_pass_signature(m_impl->current_pass_signature);
-		auto program_it = program->m_impl->programs.find(signature_hash);
+		auto program_it = program->m_impl->programs.end();
+		{
+			ASH_PROFILE_SCOPE_NC("RenderDevice::FindGraphicsProgramVariant", AshEngine::Profile::Color::Pipeline);
+			program_it = program->m_impl->programs.find(signature_hash);
+		}
 		if (program_it == program->m_impl->programs.end())
 		{
+			ASH_PROFILE_SCOPE_NC("RenderDevice::CreateGraphicsProgramVariant", AshEngine::Profile::Color::Pipeline);
+			ASH_PROFILE_SCOPE_TEXT(program->m_impl->name.c_str(), program->m_impl->name.size());
 			std::unique_ptr<RHI::IGraphicsRenderProgram> rhi_program = create_rhi_graphics_program(*program->m_impl, m_impl->graphics_context, m_impl->current_render_pass);
 			if (!rhi_program)
 			{
@@ -3039,16 +3108,26 @@ namespace AshEngine
 		RHI::IGraphicsRenderProgram* rhi_program = program_it->second.get();
 		ASH_PROCESS_ERROR(rhi_program);
 
-		apply_program_state(*program->m_impl, *rhi_program);
-		if (!commit_program_bindings(program->m_impl->bindings, m_impl->graphics_context, *rhi_program))
 		{
-			HLogError("RenderDevice: commit graphics bindings failed '{}'.", program->m_impl->name);
-			ASH_PROCESS_ERROR(false);
+			ASH_PROFILE_SCOPE_NC("RenderDevice::ApplyProgramState", AshEngine::Profile::Color::Pipeline);
+			apply_program_state(*program->m_impl, *rhi_program);
 		}
-		if (!rhi_program->apply(make_command_buffer_ref(m_impl->current_command_buffer)))
 		{
-			HLogError("RenderDevice: apply graphics render program failed '{}'.", program->m_impl->name);
-			ASH_PROCESS_ERROR(false);
+			ASH_PROFILE_SCOPE_NC("RenderDevice::CommitProgramBindings", AshEngine::Profile::Color::Descriptor);
+			ASH_PROFILE_SCOPE_TEXT(program->m_impl->name.c_str(), program->m_impl->name.size());
+			if (!commit_program_bindings(program->m_impl->bindings, m_impl->graphics_context, *rhi_program))
+			{
+				HLogError("RenderDevice: commit graphics bindings failed '{}'.", program->m_impl->name);
+				ASH_PROCESS_ERROR(false);
+			}
+		}
+		{
+			ASH_PROFILE_SCOPE_NC("RenderDevice::ApplyGraphicsProgram", AshEngine::Profile::Color::Pipeline);
+			if (!rhi_program->apply(make_command_buffer_ref(m_impl->current_command_buffer)))
+			{
+				HLogError("RenderDevice: apply graphics render program failed '{}'.", program->m_impl->name);
+				ASH_PROCESS_ERROR(false);
+			}
 		}
 
 		RenderViewport viewport{};

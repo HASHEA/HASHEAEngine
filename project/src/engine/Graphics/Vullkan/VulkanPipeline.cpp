@@ -296,7 +296,8 @@ namespace RHI
 
 	VulkanPipeline::VulkanPipeline(const PipelineCreation& ci, const std::unordered_map<std::string, ConstantValue>* specialization_overrides)
 	{
-		name = ci.name;
+		name_storage = ci.name ? ci.name : "VulkanPipeline";
+		name = name_storage.c_str();
 		vk_bind_point = VK_PIPELINE_BIND_POINT_GRAPHICS;
 
 		std::vector<VkPipelineShaderStageCreateInfo> shader_stage_infos;

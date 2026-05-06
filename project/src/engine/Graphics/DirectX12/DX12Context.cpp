@@ -13,6 +13,7 @@
 #include "DX12GpuProfiler.h"
 #include "Graphics/GpuProfilerRHI.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Base/hassert.h"
 #include "Base/hmemory.h"
 #include "Graphics/TextureUploadUtils.h"
@@ -961,12 +962,16 @@ namespace RHI
 	// ──────────────────────────────────────────────────────────────
 	auto DX12Context::begin_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("DX12Context::begin_frame", AshEngine::Profile::Color::RHI);
 		m_currentFrame = static_cast<uint32_t>(m_absoluteFrame % k_dx12_max_frames);
 
 		auto& fr = m_frameResources[m_currentFrame];
 
 		// Wait for this frame's previous work to complete
-		fr.fence->wait();
+		{
+			ASH_PROFILE_SCOPE_NC("DX12Context::WaitFrameFence", AshEngine::Profile::Color::RHI);
+			fr.fence->wait();
+		}
 
 		// Reset command allocator for this frame
 		fr.cmdAllocator->reset();
@@ -1001,13 +1006,18 @@ namespace RHI
 
 	auto DX12Context::end_frame() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("DX12Context::end_frame", AshEngine::Profile::Color::RHI);
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
 		{
 			_finalize_upload_command_buffer(fr);
 			std::vector<ID3D12CommandList*> uploadCmdLists{};
 			uploadCmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
-			m_graphicsQueue.execute_command_lists(static_cast<UINT>(uploadCmdLists.size()), uploadCmdLists.data());
+			{
+				ASH_PROFILE_SCOPE_NC("DX12Context::ExecuteUploadCommandLists", AshEngine::Profile::Color::RHI);
+				ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(uploadCmdLists.size()));
+				m_graphicsQueue.execute_command_lists(static_cast<UINT>(uploadCmdLists.size()), uploadCmdLists.data());
+			}
 			fr.uploadCmdBuffer->set_state(ASH_Submitted);
 			fr.uploadCommandsPending = false;
 			fr.fence->signal(m_graphicsQueue.get_queue());

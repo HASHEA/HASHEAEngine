@@ -5,6 +5,8 @@
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "Base/hmemory.h"
+#include "Base/hprofiler.h"
+#include <string>
 
 // GLFW
 #define GLFW_EXPOSE_NATIVE_WIN32
@@ -169,6 +171,7 @@ namespace RHI
 		{
 			ComPtr<ID3D12Resource> backBuffer;
 			m_swapchain->GetBuffer(i, IID_PPV_ARGS(&backBuffer));
+			const std::string debugName = "SwapchainBackBuffer[" + std::to_string(i) + "]";
 
 			m_backBuffers[i] = std::make_shared<DX12Texture>();
 			m_backBuffers[i]->init_from_swapchain(
@@ -177,7 +180,8 @@ namespace RHI
 				static_cast<uint16_t>(m_width),
 				static_cast<uint16_t>(m_height),
 				ctx->get_device(),
-				&ctx->get_descriptor_heaps());
+				&ctx->get_descriptor_heaps(),
+				debugName.c_str());
 		}
 	}
 
@@ -228,6 +232,7 @@ namespace RHI
 
 	auto DX12Swapchain::present() -> void
 	{
+		ASH_PROFILE_SCOPE_NC("DX12Swapchain::Present", AshEngine::Profile::Color::Present);
 		HRESULT hr = m_swapchain->Present(m_syncInterval, m_presentFlags);
 		if (FAILED(hr))
 		{

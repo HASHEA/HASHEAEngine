@@ -5,6 +5,7 @@
 #include "VulkanContext.h"
 #include "Graphics/Buffer.h"
 #include "Graphics/Texture.h"
+#include "Base/hprofiler.h"
 #include "base/hlog.h"
 #include <unordered_map>
 namespace RHI
@@ -600,6 +601,7 @@ namespace RHI
 	}
 	VulkanDescriptorSet& VulkanDescriptorSet::begin_bind()
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanDescriptorSet::BeginBind", AshEngine::Profile::Color::Descriptor);
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		ASH_LOG_PROCESS_ERROR(m_pVkLayout);
 		if (!m_pVkDescriptorSet)
@@ -816,6 +818,8 @@ namespace RHI
 	}
 	bool VulkanDescriptorSet::end_bind()
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanDescriptorSet::EndBind", AshEngine::Profile::Color::Descriptor);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(m_vecWriteDescriptorSets.size()));
 		if (m_pVkDescriptorSet == VK_NULL_HANDLE)
 		{
 			HLogError("VulkanDescriptorSet::end_bind called with a null descriptor set handle.");

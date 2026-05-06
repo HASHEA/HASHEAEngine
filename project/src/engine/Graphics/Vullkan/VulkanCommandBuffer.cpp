@@ -1,5 +1,6 @@
 ﻿#include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
+#include "Base/hprofiler.h"
 #include "VulkanContext.h"
 #include "VulkanFramebuffer.h"
 #include "VulkanRenderPass.h"
@@ -902,6 +903,8 @@ namespace RHI
 	}
 	auto VulkanCommandBuffer::cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanCommandBuffer::ApplyBarriers", AshEngine::Profile::Color::Barrier);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(uBarrierCount));
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		VkPipelineStageFlags srcFinalStageMask = 0;
 		VkPipelineStageFlags dstFinalStageMask = 0;

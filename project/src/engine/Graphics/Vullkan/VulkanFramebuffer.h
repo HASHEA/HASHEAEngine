@@ -1,6 +1,7 @@
 #pragma once
 #include "Graphics/Framebuffer.h"
 #include "VulkanHelper.hpp"
+#include <string>
 namespace RHI
 {
 	class VulkanFramebuffer : public Framebuffer	
@@ -29,7 +30,7 @@ namespace RHI
 	private:
 		VkFramebuffer vkFramebuffer = VK_NULL_HANDLE;
 		std::shared_ptr<RenderPass> renderPass = nullptr;
-		const char* name = nullptr;
+		std::string nameStorage;
 		uint16_t width = 0;
 		uint16_t height = 0;
 		uint16_t layers = 0;

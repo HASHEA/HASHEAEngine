@@ -5,7 +5,7 @@ namespace RHI
 {
 	VulkanRenderPass::VulkanRenderPass(const RenderPassCreation& ci)
 	{
-		name = ci.name;
+		nameStorage = ci.name ? ci.name : "VulkanRenderPass";
 		colorLoadOptions.init(nullptr, ci.num_render_targets, 0);
 		colorAttachmentCount = ci.num_render_targets;
 		for (uint32_t i = 0; i < ci.num_render_targets; ++i)
@@ -142,7 +142,7 @@ namespace RHI
 		if (!VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
 			VK_CHECK_RESULT(vkCreateRenderPass(VulkanContext::get_vulkan_device(), &render_pass_info, nullptr, &vkRenderPass));
-			VulkanContext::set_resource_name(VK_OBJECT_TYPE_RENDER_PASS, (uint64_t)vkRenderPass, name);
+			VulkanContext::set_resource_name(VK_OBJECT_TYPE_RENDER_PASS, (uint64_t)vkRenderPass, nameStorage.c_str());
 		}
 	}
 	VulkanRenderPass::~VulkanRenderPass()
@@ -175,7 +175,7 @@ namespace RHI
 	}
 	auto VulkanRenderPass::get_name() -> const char*
 	{
-		return name;
+		return nameStorage.c_str();
 	}
 	auto VulkanRenderPass::get_color_operations() -> const Array<AshLoadOption>&
 	{

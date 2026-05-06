@@ -2,6 +2,7 @@
 #include "VulkanWrapper.h"
 #include "Graphics/Buffer.h"
 #include "VulkanResourceTracker.h"
+#include <string>
 namespace RHI
 {
 
@@ -25,6 +26,7 @@ namespace RHI
 		VkBufferView vkBufferView = VK_NULL_HANDLE;
 		std::weak_ptr<Buffer> parentBuffer;
 		BufferViewCreation m_ViewCreation{};
+		std::string m_nameStorage;
 
 	};
 	class VulkanResourceTracker;
@@ -91,7 +93,7 @@ namespace RHI
 		uint8_t* m_pMappedData = nullptr;
 		bool m_bCoherent = false;
 
-		const char* m_pName = nullptr;
+		std::string m_nameStorage;
 		bool dynamic = false;
 		std::shared_ptr<VulkanBufferView> defaultCBV = nullptr;
 		std::shared_ptr<VulkanBufferView> defaultSRV = nullptr;

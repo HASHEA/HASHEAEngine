@@ -1349,6 +1349,23 @@ DX12 支持：
   - `product/bin64/.../Engine.dll` 与 `_BUILD/.../Engine.dll` 的时间戳 / 哈希是否一致
   - 是否仍有残留 `Editor.exe` / `Sandbox.exe` 进程占用旧 DLL，导致 postbuild copy 失败
 
+### 12.3 RHI Debug Name 与 Tracy Profiling
+
+Debug 构建下，RHI 资源名必须真正下沉到 native GPU object，而不是只停留在 Engine 对象字段里：
+
+- DX12 后端统一通过 `dx12_set_debug_name()` 调用 `ID3D12Object::SetName()`；新建 resource / PSO / root signature / descriptor heap / command queue / command allocator / fence / command list / swapchain back buffer 时都应设置可读名称
+- Vulkan 后端统一通过 `VulkanContext::set_resource_name()` 写入 debug utils 名称；新建 buffer / buffer view / image / image view / framebuffer / render pass / pipeline / pipeline layout / shader module / sampler 时都应设置可读名称
+- 如果 creation desc 里的 `const char* name` 可能来自临时字符串，后端对象必须自己持有 `std::string`，再把 desc 内部指针改成 owned storage 的 `c_str()`；不要缓存外部裸指针
+- `set_resource_name()` / `dx12_set_debug_name()` 必须容忍空 handle、空字符串和未启用 validation/debug-utils 的运行环境
+
+CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守以下粒度：
+
+- 在 `.cpp` 中 include `Base/hprofiler.h`，不要把 Tracy 头传播到公共头
+- 优先覆盖 hot path 边界：frame begin/end、present、resource barrier submit、pass begin/draw submit、program binding、descriptor update、pipeline apply/create
+- 对批量操作使用 `ASH_PROFILE_SCOPE_VALUE()` 记录 count，对 program / pipeline 这类有名字的对象用 `ASH_PROFILE_SCOPE_TEXT()` 附加名称
+- 避免在每个资源/每个 draw 内部无差别制造大量短 zone；确实需要细分时，应先确认 Tracy 视图里当前粒度仍无法定位瓶颈
+- `TRACY_ENABLE` 未定义时所有 profiling 宏必须保持 no-op，不应改变运行逻辑
+
 当前默认验收基线：
 
 - 只要改动涉及 Engine 共享路径、Renderer、RenderDevice、Scene/Asset、Application 生命周期、DynamicRHI、配置、日志、验证、UI 后端或任一双后端共享抽象，就不再只跑 `Sandbox`
@@ -1371,7 +1388,7 @@ DX12 支持：
 - 这层 overlay 属于 Engine runtime debug UI，不需要 Editor 自己实现，也不会暴露 backend-specific UI 细节。
 - 只有当改动可以被严格证明为“单后端私有”或“单可执行项目私有”时，才可以缩小验证矩阵
 
-### 12.3 Vulkan VMA 泄露定位
+### 12.5 Vulkan VMA 泄露定位
 
 当前 Vulkan 侧已经有基于宏开关的 VMA 泄露跟踪能力，关键实现位于：
 
@@ -1387,7 +1404,7 @@ DX12 支持：
 
 如果调整这套宏、日志格式或采样方式，需要更新本文档。
 
-### 12.4 调试建议
+### 12.6 调试建议
 
 遇到渲染 / validation / 泄露问题时，优先顺序建议：
 
@@ -1397,7 +1414,7 @@ DX12 支持：
 4. Vulkan 问题看 resource tracker / barrier 位置
 5. 泄露问题看 VMA leak dump
 
-### 12.5 当前 Scene -> Render 垂直切片的最近修复点
+### 12.7 当前 Scene -> Render 垂直切片的最近修复点
 
 在当前 `Sandbox` 的 `SceneRenderFlowSmoke` 验证链路中，最近确认并修复过两类容易回归的问题：
 

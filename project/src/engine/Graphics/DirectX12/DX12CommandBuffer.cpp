@@ -7,12 +7,31 @@
 #include "DX12StagingBufferPool.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
+#include "Base/hprofiler.h"
 #include "Graphics/Framebuffer.h"
 #include "Graphics/TextureUploadUtils.h"
 #include <cstring>
 
 namespace RHI
 {
+	namespace
+	{
+		const char* command_list_type_name(D3D12_COMMAND_LIST_TYPE type)
+		{
+			switch (type)
+			{
+			case D3D12_COMMAND_LIST_TYPE_DIRECT:
+				return "Direct";
+			case D3D12_COMMAND_LIST_TYPE_COMPUTE:
+				return "Compute";
+			case D3D12_COMMAND_LIST_TYPE_COPY:
+				return "Copy";
+			default:
+				return "Unknown";
+			}
+		}
+	}
+
 	DX12CommandBuffer::~DX12CommandBuffer()
 	{
 		shutdown();
@@ -27,6 +46,8 @@ namespace RHI
 			HLogError("DX12CommandBuffer: Failed to create command list. HRESULT: 0x{:08X}", (uint32_t)hr);
 			return false;
 		}
+		const std::string debugName = std::string("DX12 ") + command_list_type_name(type) + " Command List";
+		dx12_set_debug_name(m_cmdList.Get(), debugName.c_str());
 		return true;
 	}
 
@@ -58,6 +79,8 @@ namespace RHI
 
 	void DX12CommandBuffer::_apply_barriers(const AshBarrier* barriers, uint32_t count)
 	{
+		ASH_PROFILE_SCOPE_NC("DX12CommandBuffer::ApplyBarriers", AshEngine::Profile::Color::Barrier);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
 		std::vector<D3D12_RESOURCE_BARRIER> d3dBarriers;
 		d3dBarriers.reserve(count);
 

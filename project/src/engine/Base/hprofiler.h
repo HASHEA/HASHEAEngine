@@ -29,6 +29,7 @@
     #define ASH_PROFILE_SCOPE_NC(name, color)  ZoneScopedNC(name, color)
 
     #define ASH_PROFILE_SCOPE_TEXT(text, size) ZoneText(text, size)
+    #define ASH_PROFILE_SCOPE_VALUE(value)     ZoneValue(value)
 
     #define ASH_PROFILE_PLOT(name, value)      TracyPlot(name, value)
 
@@ -53,6 +54,7 @@
     #define ASH_PROFILE_SCOPE_NC(name, color)  ((void)0)
 
     #define ASH_PROFILE_SCOPE_TEXT(text, size) ((void)0)
+    #define ASH_PROFILE_SCOPE_VALUE(value)     ((void)0)
 
     #define ASH_PROFILE_PLOT(name, value)      ((void)0)
 

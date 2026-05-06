@@ -3,6 +3,7 @@
 #include "Graphics/Texture.h"
 #include "VulkanHelper.hpp"
 #include "VulkanResourceTracker.h"
+#include <string>
 namespace RHI
 {
 	class VulkanSampler;
@@ -46,6 +47,7 @@ namespace RHI
 		VkImageView vkImageView = VK_NULL_HANDLE;
 		std::weak_ptr<Texture> parentTexture;
 		TextureViewCreation m_sInfo{};
+		std::string m_nameStorage;
 	};
 	class VulkanTexture : public Texture
 	{
@@ -145,6 +147,7 @@ namespace RHI
 		std::shared_ptr<VulkanTexture>				aliasTexture					= nullptr;
 		VkImageAspectFlags      m_uAspectFlags = 0;
 		TextureCreation m_sCreation{};
+		std::string m_nameStorage;
 		VulkanResourceTracker m_ResourceLayoutTracker = { AshResourceState::Unknown };
 
 		friend class VulkanSwapchain;

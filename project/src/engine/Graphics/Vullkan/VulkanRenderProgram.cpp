@@ -1,5 +1,6 @@
 ﻿#include "VulkanRenderProgram.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "VulkanCommandBuffer.h"
 #include "VulkanContext.h"
 #include "VulkanDescriptorSet.h"
@@ -221,6 +222,8 @@ namespace RHI
 
 	bool VulkanRenderProgramBase::begin_resource_binding()
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanRenderProgram::BeginResourceBinding", AshEngine::Profile::Color::Descriptor);
+		ASH_PROFILE_SCOPE_TEXT(m_debug_name.c_str(), m_debug_name.size());
 		if (m_is_binding)
 		{
 			return true;
@@ -505,6 +508,8 @@ namespace RHI
 
 	bool VulkanRenderProgramBase::end_bind_internal()
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanRenderProgram::EndBind", AshEngine::Profile::Color::Descriptor);
+		ASH_PROFILE_SCOPE_TEXT(m_debug_name.c_str(), m_debug_name.size());
 		if (!m_is_binding)
 		{
 			return true;
@@ -555,6 +560,8 @@ namespace RHI
 
 	bool VulkanRenderProgramBase::apply_pipeline(std::shared_ptr<CommandBuffer> cb, const RenderState* render_state)
 	{
+		ASH_PROFILE_SCOPE_NC("VulkanRenderProgram::ApplyPipeline", AshEngine::Profile::Color::Pipeline);
+		ASH_PROFILE_SCOPE_TEXT(m_debug_name.c_str(), m_debug_name.size());
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		ASH_LOG_PROCESS_ERROR(cb);
 		ASH_LOG_PROCESS_ERROR(m_pipeline);
@@ -589,6 +596,7 @@ namespace RHI
 
 		for (uint32_t set_index = 0; set_index < m_descriptor_sets.size(); ++set_index)
 		{
+			ASH_PROFILE_SCOPE_NC("VulkanRenderProgram::BindDescriptorSet", AshEngine::Profile::Color::Descriptor);
 			auto& descriptor_set_state = m_descriptor_sets[set_index];
 			if (!descriptor_set_state.current_descriptor_set)
 			{

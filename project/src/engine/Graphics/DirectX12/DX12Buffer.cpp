@@ -69,6 +69,7 @@ namespace RHI
 			HLogError("DX12Buffer: Failed to create buffer '{}'. HRESULT: 0x{:08X}", m_name, (uint32_t)hr);
 			return false;
 		}
+		dx12_set_debug_name(m_resource.Get(), m_name.c_str());
 
 		// Persistent map for upload/readback heaps
 		if (ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE ||
