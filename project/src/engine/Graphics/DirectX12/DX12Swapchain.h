@@ -42,6 +42,7 @@ namespace RHI
 		uint32_t m_width = 0;
 		uint32_t m_height = 0;
 		AshFormat m_format{};
+		DXGI_FORMAT m_surfaceFormat = DXGI_FORMAT_UNKNOWN;
 		uint32_t m_syncInterval = 1; // VSync by default
 		UINT m_presentFlags = 0;
 	};

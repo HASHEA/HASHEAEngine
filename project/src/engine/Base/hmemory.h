@@ -4,6 +4,7 @@
 #include "hcore.h"
 #include "hservice.h"
 #include <memory>
+#include <mutex>
 namespace AshEngine
 {
 //#define ASH_TRACE_MEM_ALLOCATE
@@ -71,6 +72,7 @@ namespace AshEngine
 		auto deallocate(const void* pointer, char* file, uint32_t line) -> bool override;
 
 	private:
+		std::mutex m_mutex{};
 		void* m_pTlsfHandle = nullptr;
 		void* m_pMemory = nullptr;
 		size_t                       m_szAllocatedSize = 0;
@@ -203,17 +205,17 @@ template<typename T, typename... Args>
 inline T* Ash_New(Allocator* allocator = nullptr,Args&&... args) {
 	if (allocator == nullptr) {
 #ifdef ASH_TRACE_MEM_ALLOCATE
-		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T), __FILE__, __LINE__)), std::forward<Args>(args)...);
 #else
-		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1)), std::forward<Args>(args)...);
+		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T))), std::forward<Args>(args)...);
 #endif
 	}
 	else {
 #ifdef ASH_TRACE_MEM_ALLOCATE
-		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), alignof(T), __FILE__, __LINE__)), std::forward<Args>(args)...);
 
 #else
-		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), 1)), std::forward<Args>(args)...);
+		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), alignof(T))), std::forward<Args>(args)...);
 #endif
 	}
 }
@@ -222,10 +224,10 @@ template<typename T, typename... Args>
 inline std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
 	T* pO = nullptr;
 #ifdef ASH_TRACE_MEM_ALLOCATE
-	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1, __FILE__, __LINE__)), std::forward<Args>(args)...);
+	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T), __FILE__, __LINE__)), std::forward<Args>(args)...);
 
 #else
-	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), 1)), std::forward<Args>(args)...);
+	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T))), std::forward<Args>(args)...);
 #endif
 	auto Deleter = [](T* pObject) {
 		auto allocator = (MemoryService::instance()->get_system_allocator());

@@ -16,6 +16,7 @@ namespace RHI
 
 		void track_resource(ID3D12Resource* resource, D3D12_RESOURCE_STATES initialState, uint32_t numSubresources = 1);
 		void untrack_resource(ID3D12Resource* resource);
+		bool is_tracked(ID3D12Resource* resource) const;
 
 		D3D12_RESOURCE_STATES get_state(ID3D12Resource* resource, uint32_t subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES) const;
 		void set_state(ID3D12Resource* resource, D3D12_RESOURCE_STATES state, uint32_t subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES);

@@ -111,6 +111,7 @@ namespace RHI
 		bool apply(std::shared_ptr<CommandBuffer> cb) override;
 		IRenderProgramBinder& begin_bind() override;
 		bool end_bind() override;
+		bool requires_resource_binding_commit_per_apply() const override;
 
 	private:
 		bool refresh_pipeline();

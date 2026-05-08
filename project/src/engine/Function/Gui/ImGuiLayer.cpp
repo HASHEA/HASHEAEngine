@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "GLFW/glfw3.h"
+#include <mutex>
 
 #if defined(ASH_HAS_VULKAN)
 #include "Graphics/Vullkan/VulkanCommandBuffer.h"
@@ -46,6 +47,8 @@ namespace AshEngine
 			{
 			case RenderTextureFormat::RGBA8_UNORM:
 				return RHI::ASH_FORMAT_R8G8B8A8_UNORM;
+			case RenderTextureFormat::BGRA8_UNORM:
+				return RHI::ASH_FORMAT_B8G8R8A8_UNORM;
 			case RenderTextureFormat::BGRA8_SRGB:
 				return RHI::ASH_FORMAT_B8G8R8A8_SRGB;
 			case RenderTextureFormat::RGBA16_SFLOAT:
@@ -70,6 +73,7 @@ namespace AshEngine
 			}
 		}
 #endif
+
 	}
 
 	class NativeImGuiLayer final : public ImGuiLayer
@@ -630,13 +634,20 @@ namespace AshEngine
 		{
 			static std::unordered_set<const RenderTarget*> s_logged_missing_texture_prereqs{};
 			static std::unordered_set<const RenderTarget*> s_logged_successful_texture_registrations{};
+			static std::mutex s_logged_texture_registration_mutex{};
 
 			std::shared_ptr<RHI::TextureView> shader_resource_view = m_render_device->get_shader_resource_view(render_target);
 			auto* vulkan_texture_view = shader_resource_view ? static_cast<RHI::VulkanTextureView*>(shader_resource_view.get()) : nullptr;
 			const VkImageView image_view = vulkan_texture_view ? vulkan_texture_view->get_vk_image_view() : VK_NULL_HANDLE;
 			if (image_view == VK_NULL_HANDLE || m_vk_sampler == VK_NULL_HANDLE)
 			{
-				if (render_target && s_logged_missing_texture_prereqs.insert(render_target.get()).second)
+				bool should_log_missing_prereqs = false;
+				if (render_target)
+				{
+					std::scoped_lock<std::mutex> lock(s_logged_texture_registration_mutex);
+					should_log_missing_prereqs = s_logged_missing_texture_prereqs.insert(render_target.get()).second;
+				}
+				if (should_log_missing_prereqs)
 				{
 					HLogError(
 						"ImGuiLayer: Vulkan viewport texture registration prerequisites are missing. render_target={}, size={}x{}, format={}, has_srv={}, image_view=0x{:x}, sampler=0x{:x}.",
@@ -684,7 +695,13 @@ namespace AshEngine
 			}
 			registration.image_view = image_view;
 			registration.texture_id = reinterpret_cast<UITextureHandle>(registration.descriptor_set);
-			if (render_target && s_logged_successful_texture_registrations.insert(render_target.get()).second)
+			bool should_log_success = false;
+			if (render_target)
+			{
+				std::scoped_lock<std::mutex> lock(s_logged_texture_registration_mutex);
+				should_log_success = s_logged_successful_texture_registrations.insert(render_target.get()).second;
+			}
+			if (should_log_success)
 			{
 				HLogInfo(
 					"ImGuiLayer: Vulkan viewport texture registered successfully. render_target={}, size={}x{}, descriptor_set=0x{:x}, image_view=0x{:x}.",

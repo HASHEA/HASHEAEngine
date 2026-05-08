@@ -3,6 +3,7 @@
 #include "Base/hcore.h"
 #include "Graphics/Pipeline.h"
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <vector>
 namespace RHI
@@ -66,17 +67,51 @@ namespace RHI
 		const char* pShaderDef = nullptr;
 		const char* pShaderMacro = nullptr;
 		const char* pEntryPoint = nullptr;
+		uint64_t source_hash = 0;
 		AshShaderStageFlagBits	type = AshShaderStageFlagBits::ASH_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
 	};
+
+	inline void hash_shader_file_signature(uint64_t& hashCode, const char* path)
+	{
+		if (!path || path[0] == 0)
+		{
+			return;
+		}
+
+		std::error_code error{};
+		const std::filesystem::path file_path(path);
+		if (!std::filesystem::exists(file_path, error) || error)
+		{
+			return;
+		}
+
+		const auto file_size = std::filesystem::file_size(file_path, error);
+		if (!error)
+		{
+			ASH_HASH::hash_combine(hashCode, static_cast<uint64_t>(file_size));
+		}
+
+		error.clear();
+		const auto last_write_time = std::filesystem::last_write_time(file_path, error);
+		if (!error)
+		{
+			ASH_HASH::hash_combine(hashCode, static_cast<int64_t>(last_write_time.time_since_epoch().count()));
+		}
+	}
+
 	inline uint64_t get_shader_hash(const ShaderCreation& ci)
 	{
 		uint64_t hashCode = 0;
 		ASH_HASH::hash_combine(hashCode, ci.pBaseShaderPath, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pUserShaderPath, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pGeneratedBindingsPath, ASH_HASH::CStringHash{});
+		hash_shader_file_signature(hashCode, ci.pBaseShaderPath);
+		hash_shader_file_signature(hashCode, ci.pUserShaderPath);
+		hash_shader_file_signature(hashCode, ci.pGeneratedBindingsPath);
 		ASH_HASH::hash_combine(hashCode, ci.pShaderDef, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pShaderMacro, ASH_HASH::CStringHash{});
 		ASH_HASH::hash_combine(hashCode, ci.pEntryPoint, ASH_HASH::CStringHash{});
+		ASH_HASH::hash_combine(hashCode, ci.source_hash);
 		ASH_HASH::hash_combine(hashCode, ci.type);
 		return hashCode;
 	}

@@ -194,7 +194,8 @@ inline D3D12_RESOURCE_STATES ash_to_d3d12_resource_state(AshResourceState state)
 {
 	D3D12_RESOURCE_STATES d3dState = D3D12_RESOURCE_STATE_COMMON;
 
-	if (is_set(state, AshResourceState::CPURead))            d3dState |= D3D12_RESOURCE_STATE_COPY_DEST; // readback after copy
+	// CPURead is a host visibility semantic, not a D3D12 transition state.
+	// Readback resources stay in COPY_DEST through their heap/access type.
 	if (is_set(state, AshResourceState::Present))            d3dState |= D3D12_RESOURCE_STATE_PRESENT;
 	if (is_set(state, AshResourceState::IndirectArgs))       d3dState |= D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
 	if (is_set(state, AshResourceState::VertexBuffer))       d3dState |= D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;

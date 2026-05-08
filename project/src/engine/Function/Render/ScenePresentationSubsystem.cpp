@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <limits>
 #include <mutex>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -582,6 +583,7 @@ namespace AshEngine
 		std::unordered_set<uint32_t> touched_outputs{};
 		touched_outputs.reserve(prepared_packets.size());
 		static std::unordered_set<uint32_t> s_logged_binding_submits{};
+		static std::mutex s_logged_binding_submits_mutex{};
 
 		for (Impl::PreparedPacket& packet : prepared_packets)
 		{
@@ -643,7 +645,12 @@ namespace AshEngine
 				continue;
 			}
 
-			if (s_logged_binding_submits.insert(packet.binding.value).second)
+			bool should_log_binding_submit = false;
+			{
+				std::scoped_lock<std::mutex> lock(s_logged_binding_submits_mutex);
+				should_log_binding_submit = s_logged_binding_submits.insert(packet.binding.value).second;
+			}
+			if (should_log_binding_submit)
 			{
 				size_t total_section_count = 0;
 				for (const VisibleStaticMeshDraw& draw : packet.visible_frame->static_mesh_draws)
@@ -675,25 +682,28 @@ namespace AshEngine
 						continue;
 					}
 
-					std::shared_ptr<MaterialRenderProxy> material_proxy =
-						m_impl->render_asset_manager->request_material_render_proxy(section.material);
-					if (!material_proxy)
+					if (!section.material_proxy || section.material_proxy->needs_surface_staticmesh_preparation())
 					{
-						HLogError(
-							"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
-							section.material->get_asset_path().generic_string());
-						continue;
-					}
-					if (!material_proxy->update_bindings(*m_impl->render_asset_manager) ||
-						!material_proxy->ensure_program(*m_impl->renderer))
-					{
-						HLogError(
-							"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
-							section.material->get_asset_path().generic_string());
-						continue;
-					}
+						std::shared_ptr<MaterialRenderProxy> material_proxy =
+							m_impl->render_asset_manager->request_material_render_proxy(section.material);
+						if (!material_proxy)
+						{
+							HLogError(
+								"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
+								section.material->get_asset_path().generic_string());
+							continue;
+						}
+						if (!material_proxy->update_bindings(*m_impl->render_asset_manager) ||
+							!material_proxy->ensure_program(*m_impl->renderer))
+						{
+							HLogError(
+								"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
+								section.material->get_asset_path().generic_string());
+							continue;
+						}
 
-					section.material_proxy = std::move(material_proxy);
+						section.material_proxy = std::move(material_proxy);
+					}
 				}
 			}
 

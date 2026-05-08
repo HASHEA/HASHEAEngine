@@ -37,18 +37,16 @@ namespace RHI
 	}
 	void VulkanResourceTracker::traverse_texture_subresource(std::shared_ptr<VulkanTexture> pVulkanTex, const AshSubresourceRange& InSubRange, AshResourceState InSrcAccess, AshResourceState InDstAccess, std::function<void(uint32_t, uint32_t, AshResourceState, AshResourceState)> const& TransitionFunction)
 	{
-		uint32_t uSliceEnd = InSubRange.uBaseArraySlice + InSubRange.uArrayCount;
-		uint32_t uMipEnd = InSubRange.uBaseMipLevel + InSubRange.uMipCount;
+		AshSubresourceRange resolvedSubresource = pVulkanTex->resolve_subresource_range(InSubRange);
+		const uint32_t uSliceEnd = resolvedSubresource.uBaseArraySlice + resolvedSubresource.uArrayCount;
+		const uint32_t uMipEnd = resolvedSubresource.uBaseMipLevel + resolvedSubresource.uMipCount;
 
 		if (InSrcAccess == AshResourceState::Unknown)
 		{
-			AshSubresourceRange DstSub = InSubRange;
-			DstSub = pVulkanTex->resolve_subresource_range(DstSub);
-
 			uint32_t uMipCount = pVulkanTex->get_desciption().mip_level_count;
-			for (uint32_t Slice = InSubRange.uBaseArraySlice; Slice < uSliceEnd; ++Slice)
+			for (uint32_t Slice = resolvedSubresource.uBaseArraySlice; Slice < uSliceEnd; ++Slice)
 			{
-				for (uint32_t Mip = InSubRange.uBaseMipLevel; Mip < uMipEnd; ++Mip)
+				for (uint32_t Mip = resolvedSubresource.uBaseMipLevel; Mip < uMipEnd; ++Mip)
 				{
 					uint32_t Index = Mip + Slice * uMipCount;
 					AshResourceState SrcAccess = m_AllResourceState;
@@ -65,9 +63,9 @@ namespace RHI
 		}
 		else
 		{
-			for (uint32_t Slice = InSubRange.uBaseArraySlice; Slice < uSliceEnd; ++Slice)
+			for (uint32_t Slice = resolvedSubresource.uBaseArraySlice; Slice < uSliceEnd; ++Slice)
 			{
-				for (uint32_t Mip = InSubRange.uBaseMipLevel; Mip < uMipEnd; ++Mip)
+				for (uint32_t Mip = resolvedSubresource.uBaseMipLevel; Mip < uMipEnd; ++Mip)
 				{
 					TransitionFunction(Mip, Slice, InSrcAccess, InDstAccess);
 				}

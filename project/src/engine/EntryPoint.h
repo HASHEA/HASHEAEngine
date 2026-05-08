@@ -1,4 +1,5 @@
 #pragma once
+#include "Base/EngineSelfTests.h"
 #include "Function/Application.h"
 extern AshEngine::Application* create_application();//impl in editor
 extern void destroy_application(AshEngine::Application* app);//impl in editor
@@ -119,6 +120,19 @@ static double parse_smoke_test_seconds(int argc, char* argv[])
 	return 0.0;
 }
 
+static bool should_run_engine_self_tests(int argc, char* argv[])
+{
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument == "--engine-self-test")
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 int32_t main(int argc, char* argv[])
 {
 	//initialize the working dir of the app
@@ -127,7 +141,23 @@ int32_t main(int argc, char* argv[])
 		std::cerr << "Fatal Error: " << " Failed to initialize the working directories !" << std::endl;
 		return 1;
 	}
+	if (should_run_engine_self_tests(argc, argv))
+	{
+		return AshEngine::run_engine_base_self_tests();
+	}
 	AshEngine::Application::app = create_application();
+	if (!AshEngine::Application::app)
+	{
+		std::cerr << "Fatal Error: Failed to create application." << std::endl;
+		return 1;
+	}
+	if (!AshEngine::Application::app->is_initialized())
+	{
+		std::cerr << "Fatal Error: Application initialization failed." << std::endl;
+		destroy_application(AshEngine::Application::app);
+		AshEngine::Application::app = nullptr;
+		return 1;
+	}
 	const double smokeTestSeconds = parse_smoke_test_seconds(argc, argv);
 	if (smokeTestSeconds > 0.0)
 	{

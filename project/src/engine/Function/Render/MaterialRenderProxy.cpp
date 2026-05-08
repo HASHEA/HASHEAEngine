@@ -64,6 +64,30 @@ namespace AshEngine
 			nullptr;
 	}
 
+	bool MaterialRenderProxy::needs_surface_staticmesh_preparation() const
+	{
+		if (!m_material)
+		{
+			return true;
+		}
+		if (m_v2_compile_hash != m_material->get_compile_hash() ||
+			m_material_version != m_material->get_change_version())
+		{
+			return true;
+		}
+		if (!m_surface_staticmesh_basepass_template ||
+			!m_surface_staticmesh_depthonly_template ||
+			!m_surface_staticmesh_basepass_program ||
+			!m_surface_staticmesh_depthonly_program)
+		{
+			return true;
+		}
+		return m_binding_snapshot.version == 0 ||
+			m_bound_binding_version != m_binding_snapshot.version ||
+			m_surface_staticmesh_basepass_resource.program != m_surface_staticmesh_basepass_program.get() ||
+			m_surface_staticmesh_depthonly_resource.program != m_surface_staticmesh_depthonly_program.get();
+	}
+
 	bool MaterialRenderProxy::ensure_program(Renderer& renderer)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -88,7 +112,7 @@ namespace AshEngine
 			m_surface_staticmesh_depthonly_resource.program = m_surface_staticmesh_depthonly_program.get();
 		}
 
-		if (m_binding_snapshot.version != 0)
+		if (m_binding_snapshot.version != 0 && m_bound_binding_version != m_binding_snapshot.version)
 		{
 			ASH_PROCESS_ERROR(bind_v2_program_resources());
 		}
@@ -106,7 +130,8 @@ namespace AshEngine
 		const uint64_t material_version = m_material->get_change_version();
 		if (m_material_version == material_version && m_binding_snapshot.version != 0)
 		{
-			if (m_surface_staticmesh_basepass_program || m_surface_staticmesh_depthonly_program)
+			if ((m_surface_staticmesh_basepass_program || m_surface_staticmesh_depthonly_program) &&
+				m_bound_binding_version != m_binding_snapshot.version)
 			{
 				ASH_PROCESS_ERROR(bind_v2_program_resources());
 			}
@@ -342,6 +367,7 @@ namespace AshEngine
 		if (basepass_changed || depthonly_changed)
 		{
 			m_v2_material_uniforms.reset();
+			m_bound_binding_version = 0;
 		}
 
 		m_surface_staticmesh_basepass_template = basepass_template;
@@ -373,6 +399,7 @@ namespace AshEngine
 		program_desc.fragment_entry = "PSMain";
 		program_desc.shader_macro =
 			template_resource.shader_macro.empty() ? nullptr : template_resource.shader_macro.c_str();
+		program_desc.source_hash = template_resource.combined_source_hash;
 		program_desc.state = template_resource.program_state;
 		program_desc.name = template_resource.program_name.c_str();
 		program_desc.vertex_decl = template_resource.vertex_decl;
@@ -446,6 +473,7 @@ namespace AshEngine
 
 		ASH_PROCESS_ERROR(bind_program_resources(m_surface_staticmesh_basepass_resource, m_surface_staticmesh_basepass_program));
 		ASH_PROCESS_ERROR(bind_program_resources(m_surface_staticmesh_depthonly_resource, m_surface_staticmesh_depthonly_program));
+		m_bound_binding_version = m_binding_snapshot.version;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 }

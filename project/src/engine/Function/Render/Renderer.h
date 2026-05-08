@@ -17,6 +17,8 @@ namespace AshEngine
 
 	struct GraphicsDrawDesc
 	{
+		static constexpr uint32_t InlineConstDataCapacity = 256;
+
 		GraphicsProgram* program = nullptr;
 		std::vector<VertexBufferBinding> vertex_buffers;
 		std::shared_ptr<IndexBuffer> index_buffer = nullptr;
@@ -33,6 +35,8 @@ namespace AshEngine
 		uint32_t first_index = 0;
 		int32_t vertex_offset = 0;
 		uint32_t const_data_size = 0;
+		bool inline_const_data_valid = false;
+		std::array<uint8_t, InlineConstDataCapacity> inline_const_data{};
 		std::vector<uint8_t> const_data{};
 	};
 
@@ -111,6 +115,11 @@ namespace AshEngine
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
 		std::unique_ptr<ComputeProgram> create_compute_program(const ComputeProgramDesc& desc);
+		bool reflect_graphics_program(
+			const GraphicsProgramDesc& desc,
+			std::vector<RHI::ShaderResourceBindingLayout>& out_binding_layouts,
+			RHI::ShaderParameterBlockLayout* out_parameter_block_layout = nullptr,
+			const char* parameter_block_name = nullptr);
 
 		bool begin_pass(const PassDesc& desc, GraphicsPassContext& pass_context);
 		bool draw(const GraphicsDrawDesc& desc);

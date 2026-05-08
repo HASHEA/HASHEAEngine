@@ -1191,13 +1191,35 @@ namespace AshEngine
 					section.topology = MeshPrimitiveTopology::Triangles;
 
 					bool primitive_ok = true;
-					for (uint32_t vertex_index : triangle_indices)
+					bool primitive_has_normals = false;
+					bool primitive_has_tangents = false;
+					bool primitive_has_uv0 = false;
+					bool primitive_has_uv1 = false;
+					bool primitive_has_vertex_colors = false;
+					constexpr uint32_t invalid_vertex_index = std::numeric_limits<uint32_t>::max();
+					std::vector<uint32_t> vertex_remap(position_accessor.count, invalid_vertex_index);
+					mesh.vertices.reserve(mesh.vertices.size() + position_accessor.count);
+					mesh.indices.reserve(mesh.indices.size() + triangle_indices.size());
+
+					auto acquire_mesh_vertex_index = [&](uint32_t source_vertex_index, uint32_t& out_mesh_vertex_index) -> bool
 					{
-						std::array<float, 4> position_components{};
-						if (!read_gltf_components(gltf_model, position_accessor, vertex_index, position_components))
+						out_mesh_vertex_index = 0;
+						if (source_vertex_index >= position_accessor.count)
 						{
-							primitive_ok = false;
-							break;
+							return false;
+						}
+
+						uint32_t& remapped_index = vertex_remap[source_vertex_index];
+						if (remapped_index != invalid_vertex_index)
+						{
+							out_mesh_vertex_index = remapped_index;
+							return true;
+						}
+
+						std::array<float, 4> position_components{};
+						if (!read_gltf_components(gltf_model, position_accessor, source_vertex_index, position_components))
+						{
+							return false;
 						}
 
 						MeshVertex vertex{};
@@ -1206,59 +1228,72 @@ namespace AshEngine
 						if (normal_accessor)
 						{
 							std::array<float, 4> normal_components{};
-							if (read_gltf_components(gltf_model, *normal_accessor, vertex_index, normal_components))
+							if (read_gltf_components(gltf_model, *normal_accessor, source_vertex_index, normal_components))
 							{
 								vertex.normal = glm::vec3(normal_components[0], normal_components[1], normal_components[2]);
-								mesh.has_normals = true;
+								primitive_has_normals = true;
 							}
 						}
 
 						if (tangent_accessor)
 						{
 							std::array<float, 4> tangent_components{};
-							if (read_gltf_components(gltf_model, *tangent_accessor, vertex_index, tangent_components))
+							if (read_gltf_components(gltf_model, *tangent_accessor, source_vertex_index, tangent_components))
 							{
 								vertex.tangent = glm::vec4(tangent_components[0], tangent_components[1], tangent_components[2], tangent_components[3]);
-								mesh.has_tangents = true;
+								primitive_has_tangents = true;
 							}
 						}
 
 						if (uv0_accessor)
 						{
 							std::array<float, 4> uv_components{};
-							if (read_gltf_components(gltf_model, *uv0_accessor, vertex_index, uv_components))
+							if (read_gltf_components(gltf_model, *uv0_accessor, source_vertex_index, uv_components))
 							{
 								vertex.uv0 = glm::vec2(uv_components[0], uv_components[1]);
-								mesh.has_uv0 = true;
+								primitive_has_uv0 = true;
 							}
 						}
 
 						if (uv1_accessor)
 						{
 							std::array<float, 4> uv_components{};
-							if (read_gltf_components(gltf_model, *uv1_accessor, vertex_index, uv_components))
+							if (read_gltf_components(gltf_model, *uv1_accessor, source_vertex_index, uv_components))
 							{
 								vertex.uv1 = glm::vec2(uv_components[0], uv_components[1]);
-								mesh.has_uv1 = true;
+								primitive_has_uv1 = true;
 							}
 						}
 
 						if (color_accessor)
 						{
 							std::array<float, 4> color_components{};
-							if (read_gltf_components(gltf_model, *color_accessor, vertex_index, color_components))
+							if (read_gltf_components(gltf_model, *color_accessor, source_vertex_index, color_components))
 							{
 								vertex.color = glm::vec4(
 									color_components[0],
 									color_components[1],
 									color_components[2],
 									color_components[3] == 0.0f && tinygltf::GetNumComponentsInType(color_accessor->type) < 4 ? 1.0f : color_components[3]);
-								mesh.has_vertex_colors = true;
+								primitive_has_vertex_colors = true;
 							}
 						}
 
-						mesh.indices.push_back(static_cast<uint32_t>(mesh.vertices.size()));
+						remapped_index = static_cast<uint32_t>(mesh.vertices.size());
+						out_mesh_vertex_index = remapped_index;
 						mesh.vertices.push_back(vertex);
+						return true;
+					};
+
+					for (uint32_t vertex_index : triangle_indices)
+					{
+						uint32_t mesh_vertex_index = 0;
+						if (!acquire_mesh_vertex_index(vertex_index, mesh_vertex_index))
+						{
+							primitive_ok = false;
+							break;
+						}
+						mesh.indices.push_back(mesh_vertex_index);
 					}
 
 					if (!primitive_ok)
@@ -1268,6 +1303,11 @@ namespace AshEngine
 						continue;
 					}
 
+					mesh.has_normals = mesh.has_normals || primitive_has_normals;
+					mesh.has_tangents = mesh.has_tangents || primitive_has_tangents;
+					mesh.has_uv0 = mesh.has_uv0 || primitive_has_uv0;
+					mesh.has_uv1 = mesh.has_uv1 || primitive_has_uv1;
+					mesh.has_vertex_colors = mesh.has_vertex_colors || primitive_has_vertex_colors;
 					section.vertex_count = static_cast<uint32_t>(mesh.vertices.size()) - section.vertex_offset;
 					section.index_count = static_cast<uint32_t>(mesh.indices.size()) - section.index_offset;
 					mesh.sections.push_back(std::move(section));

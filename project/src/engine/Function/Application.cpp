@@ -28,6 +28,7 @@ namespace AshEngine
 			H_ASSERTLOG(runtimeConfig.backend != RHI::Backend::Default, "Failed to resolve an available graphics backend.");
 			return runtimeConfig;
 		}
+
 	}
 
 	Application* Application::app = nullptr;
@@ -59,7 +60,17 @@ namespace AshEngine
 		/*window*/
 		WindowConfig windowConfig = { config.initWidth, config.initHeight, config.bVsync, config.title, resolvedBackend };
 		window = Window::create();
+		if (!window)
+		{
+			HLogError("Failed to create engine window.");
+			return;
+		}
 		window->init(windowConfig);
+		if (!window->get_native_interface())
+		{
+			HLogError("Engine window initialization failed: native window handle is null.");
+			return;
+		}
 
 		/*gfx*/
 		RHI::GraphicsContextInitConfig gfxConfig{};
@@ -81,7 +92,11 @@ namespace AshEngine
 		{
 			return;
 		}
-		graphicsContext->init(&gfxConfig);
+		if (!graphicsContext->init(&gfxConfig))
+		{
+			HLogError("Failed to initialize graphics context for backend '{}'.", RHI::backend_to_string(resolvedBackend));
+			return;
+		}
 
 		/*shader manager*/
 		
@@ -106,9 +121,23 @@ namespace AshEngine
 		{
 			return;
 		}
-		swapChain->init(&scConfig);
+		if (!swapChain->init(&scConfig))
+		{
+			HLogError("Failed to initialize swapchain for backend '{}'.", RHI::backend_to_string(resolvedBackend));
+			return;
+		}
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
+		if (!renderDevice)
+		{
+			HLogError("Failed to create RenderDevice.");
+			return;
+		}
 		renderer = new Renderer(renderDevice);
+		if (!renderer)
+		{
+			HLogError("Failed to create Renderer.");
+			return;
+		}
 		sceneRenderer.initialize(renderer);
 		scenePresentation.initialize(renderer, &renderAssetManager, &sceneRenderer);
 		uiContext = new UIContext();
@@ -118,6 +147,7 @@ namespace AshEngine
 			delete uiContext;
 			uiContext = nullptr;
 		}
+		initialized = true;
 	}
 	Application::~Application()
 	{
@@ -180,6 +210,11 @@ namespace AshEngine
 	}
 	auto Application::start() -> void
 	{
+		if (!initialized)
+		{
+			HLogError("Application::start() called before successful initialization.");
+			return;
+		}
 		if (started)
 		{
 			return;

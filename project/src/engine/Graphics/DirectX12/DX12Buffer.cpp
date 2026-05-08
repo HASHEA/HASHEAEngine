@@ -79,7 +79,13 @@ namespace RHI
 			if (ci.access_type == AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE)
 				readRange = { 0, 0 }; // CPU won't read
 			void* pData = nullptr;
-			m_resource->Map(0, &readRange, &pData);
+			hr = m_resource->Map(0, &readRange, &pData);
+			if (FAILED(hr) || !pData)
+			{
+				HLogError("DX12Buffer: Failed to map buffer '{}'. HRESULT: 0x{:08X}", m_name, (uint32_t)hr);
+				shutdown();
+				return false;
+			}
 			m_mappedData = static_cast<uint8_t*>(pData);
 		}
 

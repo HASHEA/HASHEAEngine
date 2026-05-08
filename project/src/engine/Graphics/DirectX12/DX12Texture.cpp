@@ -5,6 +5,7 @@
 #include "Base/hlog.h"
 #include "Base/hassert.h"
 #include "D3D12MemAlloc.h"
+#include <algorithm>
 
 namespace RHI
 {
@@ -96,6 +97,13 @@ namespace RHI
 		{
 			m_resourceState = AshResourceState::DSVWrite;
 		}
+		if (DX12Context* context = DX12Context::get())
+		{
+			context->get_resource_tracker().track_resource(
+				m_resource.Get(),
+				ash_to_d3d12_resource_state(m_resourceState),
+				get_subresource_count());
+		}
 
 		_create_default_views(device, heapMgr);
 		return true;
@@ -116,6 +124,13 @@ namespace RHI
 		m_creation.uUsageFlags = ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
 		m_name = debugName && debugName[0] != '\0' ? debugName : "SwapchainBackBuffer";
 		dx12_set_debug_name(m_resource.Get(), m_name.c_str());
+		if (DX12Context* context = DX12Context::get())
+		{
+			context->get_resource_tracker().track_resource(
+				m_resource.Get(),
+				D3D12_RESOURCE_STATE_PRESENT,
+				get_subresource_count());
+		}
 
 		_create_default_views(device, heapMgr);
 		return true;
@@ -135,6 +150,10 @@ namespace RHI
 		ComPtr<ID3D12Resource> deferredResource = m_resource;
 		D3D12MA::Allocation* deferredAllocation = m_allocation;
 		const bool isSwapchainTexture = m_isSwapchainTexture;
+		if (DX12Context* context = DX12Context::get())
+		{
+			context->get_resource_tracker().untrack_resource(m_resource.Get());
+		}
 
 		m_resource.Reset();
 		m_allocation = nullptr;
@@ -223,5 +242,27 @@ namespace RHI
 			if (view->init(viewCI, std::static_pointer_cast<DX12Texture>(shared_from_this()), device, heapMgr))
 				m_defaultUAV = view;
 		}
+	}
+
+	auto DX12Texture::get_subresource_count() const -> uint32_t
+	{
+		const uint32_t mipLevels = m_creation.mip_level_count > 0 ? m_creation.mip_level_count : 1;
+		const uint32_t arrayLayers = m_creation.type == Ash_Texture3D ? 1 :
+			(m_creation.array_layer_count > 0 ? m_creation.array_layer_count : 1);
+		return mipLevels * arrayLayers;
+	}
+
+	auto DX12Texture::resolve_subresource_range(const AshSubresourceRange& range) const -> AshSubresourceRange
+	{
+		AshSubresourceRange resolved = range;
+		const uint32_t mipLevels = m_creation.mip_level_count > 0 ? m_creation.mip_level_count : 1;
+		const uint32_t arrayLayers = m_creation.type == Ash_Texture3D ? 1 :
+			(m_creation.array_layer_count > 0 ? m_creation.array_layer_count : 1);
+
+		resolved.uBaseMipLevel = std::min<uint32_t>(resolved.uBaseMipLevel, mipLevels - 1);
+		resolved.uMipCount = std::min<uint32_t>(resolved.uMipCount, mipLevels - resolved.uBaseMipLevel);
+		resolved.uBaseArraySlice = std::min<uint32_t>(resolved.uBaseArraySlice, arrayLayers - 1);
+		resolved.uArrayCount = std::min<uint32_t>(resolved.uArrayCount, arrayLayers - resolved.uBaseArraySlice);
+		return resolved;
 	}
 }

@@ -133,9 +133,19 @@ namespace RHI
 
 	DX12DescriptorHandle DX12GPUDescriptorHeap::allocate(uint32_t count)
 	{
-		H_ASSERT(m_currentOffset + count <= m_maxDescriptors);
-
 		DX12DescriptorHandle handle = {};
+		if (count == 0 || count > m_maxDescriptors - m_currentOffset)
+		{
+			HLogError(
+				"DX12GPUDescriptorHeap: descriptor heap overflow. type={}, requested={}, remaining={}, capacity={}.",
+				descriptor_heap_type_name(m_type),
+				count,
+				m_maxDescriptors - m_currentOffset,
+				m_maxDescriptors);
+			H_ASSERT(false);
+			return handle;
+		}
+
 		handle.cpuHandle.ptr = m_cpuStart.ptr + static_cast<SIZE_T>(m_currentOffset) * m_descriptorSize;
 		handle.gpuHandle.ptr = m_gpuStart.ptr + static_cast<UINT64>(m_currentOffset) * m_descriptorSize;
 		handle.heapIndex = m_currentOffset;

@@ -46,6 +46,89 @@ namespace AshEngine
 				lowered == ".bmp" ||
 				lowered == ".hdr";
 		}
+
+		static auto calculate_full_mip_count(uint32_t width, uint32_t height) -> uint8_t
+		{
+			uint8_t mip_count = 1;
+			while ((width > 1 || height > 1) && mip_count < 16)
+			{
+				width = std::max<uint32_t>(1u, width >> 1u);
+				height = std::max<uint32_t>(1u, height >> 1u);
+				++mip_count;
+			}
+			return mip_count;
+		}
+
+		static auto append_next_rgba8_mip(
+			std::vector<uint8_t>& mip_chain,
+			size_t previous_offset,
+			uint32_t previous_width,
+			uint32_t previous_height,
+			uint32_t next_width,
+			uint32_t next_height) -> void
+		{
+			const uint8_t* previous_pixels = mip_chain.data() + previous_offset;
+			std::vector<uint8_t> next_pixels(static_cast<size_t>(next_width) * static_cast<size_t>(next_height) * 4u, 0u);
+
+			for (uint32_t y = 0; y < next_height; ++y)
+			{
+				for (uint32_t x = 0; x < next_width; ++x)
+				{
+					const uint32_t src_x0 = std::min(previous_width - 1u, x * 2u);
+					const uint32_t src_x1 = std::min(previous_width - 1u, src_x0 + 1u);
+					const uint32_t src_y0 = std::min(previous_height - 1u, y * 2u);
+					const uint32_t src_y1 = std::min(previous_height - 1u, src_y0 + 1u);
+					uint32_t sum[4] = {};
+					uint32_t sample_count = 0;
+
+					for (uint32_t src_y = src_y0; src_y <= src_y1; ++src_y)
+					{
+						for (uint32_t src_x = src_x0; src_x <= src_x1; ++src_x)
+						{
+							const uint8_t* sample = previous_pixels +
+								(static_cast<size_t>(src_y) * previous_width + src_x) * 4u;
+							for (uint32_t channel = 0; channel < 4u; ++channel)
+							{
+								sum[channel] += sample[channel];
+							}
+							++sample_count;
+						}
+					}
+
+					uint8_t* output = next_pixels.data() + (static_cast<size_t>(y) * next_width + x) * 4u;
+					for (uint32_t channel = 0; channel < 4u; ++channel)
+					{
+						output[channel] = static_cast<uint8_t>((sum[channel] + sample_count / 2u) / sample_count);
+					}
+				}
+			}
+
+			mip_chain.insert(mip_chain.end(), next_pixels.begin(), next_pixels.end());
+		}
+
+		static auto build_rgba8_mip_chain(uint32_t width, uint32_t height, std::vector<uint8_t>& pixels) -> uint8_t
+		{
+			const uint8_t target_mips = calculate_full_mip_count(width, height);
+			size_t previous_offset = 0;
+			uint32_t previous_width = width;
+			uint32_t previous_height = height;
+			uint8_t generated_mips = 1;
+
+			while (generated_mips < target_mips)
+			{
+				const size_t previous_size =
+					static_cast<size_t>(previous_width) * static_cast<size_t>(previous_height) * 4u;
+				const uint32_t next_width = std::max<uint32_t>(1u, previous_width >> 1u);
+				const uint32_t next_height = std::max<uint32_t>(1u, previous_height >> 1u);
+				append_next_rgba8_mip(pixels, previous_offset, previous_width, previous_height, next_width, next_height);
+				previous_offset += previous_size;
+				previous_width = next_width;
+				previous_height = next_height;
+				++generated_mips;
+			}
+
+			return generated_mips;
+		}
 	}
 
 	bool TextureAsset::is_valid() const
@@ -96,6 +179,7 @@ namespace AshEngine
 			out_source.format = RenderTextureFormat::RGBA32_SFLOAT;
 			out_source.color_space = TextureColorSpace::Linear;
 			out_source.row_pitch = static_cast<uint32_t>(width) * 4u * static_cast<uint32_t>(sizeof(float));
+			out_source.mip_level_count = 1;
 			out_source.is_hdr = true;
 			out_source.pixel_data.resize(byte_count);
 			std::memcpy(out_source.pixel_data.data(), pixels, byte_count);
@@ -129,6 +213,7 @@ namespace AshEngine
 		out_source.pixel_data.resize(byte_count);
 		std::memcpy(out_source.pixel_data.data(), pixels, byte_count);
 		stbi_image_free(pixels);
+		out_source.mip_level_count = build_rgba8_mip_chain(out_source.width, out_source.height, out_source.pixel_data);
 
 		clear_error(out_error);
 		return true;

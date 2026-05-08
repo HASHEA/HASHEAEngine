@@ -4,7 +4,9 @@
 #include "Base/hprofiler.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/VertexLayoutPresets.h"
+#include <cstring>
 #include <limits>
+#include <mutex>
 
 namespace AshEngine
 {
@@ -28,11 +30,13 @@ namespace AshEngine
 			const MaterialResource& resource) -> void
 		{
 			static std::unordered_set<std::string> s_logged_material_keys{};
+			static std::mutex s_logged_material_keys_mutex{};
 			const std::string material_label = build_material_label(material);
 			const std::string log_key =
 				material_label +
 				"#" +
 				std::to_string(resource.combined_source_hash);
+			std::scoped_lock<std::mutex> lock(s_logged_material_keys_mutex);
 			if (!s_logged_material_keys.insert(log_key).second)
 			{
 				return;
@@ -71,6 +75,7 @@ namespace AshEngine
 
 		PassDesc pass_desc{};
 		pass_desc.name = view_context.debug_name ? view_context.debug_name : "SceneOpaquePass";
+		pass_desc.allow_reorder_draws = true;
 		pass_desc.color_attachments.push_back({
 			view_context.output_target,
 			view_context.color_load_action,
@@ -166,9 +171,9 @@ namespace AshEngine
 					draw_desc.scissor = view_context.scissor;
 				}
 				draw_desc.const_data_size = static_cast<uint32_t>(sizeof(SceneObjectConstants));
-				draw_desc.const_data.assign(
-					reinterpret_cast<const uint8_t*>(&constants),
-					reinterpret_cast<const uint8_t*>(&constants) + sizeof(SceneObjectConstants));
+				static_assert(sizeof(SceneObjectConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
+				std::memcpy(draw_desc.inline_const_data.data(), &constants, sizeof(SceneObjectConstants));
+				draw_desc.inline_const_data_valid = true;
 				ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
 			}
 		}

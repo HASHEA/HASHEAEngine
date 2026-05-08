@@ -27,22 +27,62 @@ namespace AshEngine
 	}
 	
 	static bool string_ends_with_char(const char* s, char c) {
+		if (!s || s[0] == 0)
+		{
+			return false;
+		}
 		cstring last_entry = strrchr(s, c);
-		const size_t index = last_entry - s;
-		return index == (strlen(s) - 1);
+		if (!last_entry)
+		{
+			return false;
+		}
+		return last_entry == (s + strlen(s) - 1);
+	}
+
+	static auto file_release_read_buffer(char* data, Allocator* allocator) -> void
+	{
+		if (!data)
+		{
+			return;
+		}
+		if (allocator)
+		{
+			allocator->deallocate(data);
+			return;
+		}
+		MemoryService::instance()->get_system_allocator()->deallocate(data);
 	}
 
 	auto file_read_binary(const char* fileName , size_t& size, Allocator* allocator) -> char*
 	{
+		size = 0;
+		if (!fileName)
+		{
+			return nullptr;
+		}
 		char* outData = 0;
 		FILE* file = fopen(fileName, "rb");
 		if (file)
 		{
-			size_t fileSize = file_get_size(file);
+			const long fileSizeSigned = file_get_size(file);
+			if (fileSizeSigned < 0)
+			{
+				fclose(file);
+				return nullptr;
+			}
+			size_t fileSize = static_cast<size_t>(fileSizeSigned);
 			outData = (char*)Ash_Alloc(allocator,fileSize + 1 ,1);
-			fread(outData, 1,fileSize,file);
-			outData[fileSize] = 0;
-			size = fileSize;
+			const size_t bytesRead = fread(outData, 1,fileSize,file);
+			if (bytesRead == fileSize)
+			{
+				outData[fileSize] = 0;
+				size = fileSize;
+			}
+			else
+			{
+				file_release_read_buffer(outData, allocator);
+				outData = nullptr;
+			}
 			fclose(file);
 		}
 		return outData;
@@ -65,14 +105,32 @@ namespace AshEngine
 	auto file_read_binary(const char* fileName , Allocator* allocator) -> FileReadResult
 	{
 		FileReadResult result{ nullptr, 0 };
+		if (!fileName)
+		{
+			return result;
+		}
 		FILE* file = fopen(fileName, "rb");
 		if (file)
 		{
-			size_t fileSize = file_get_size(file);
+			const long fileSizeSigned = file_get_size(file);
+			if (fileSizeSigned < 0)
+			{
+				fclose(file);
+				return result;
+			}
+			size_t fileSize = static_cast<size_t>(fileSizeSigned);
 			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
-			fread(result.data, 1, fileSize, file);
-			result.data[fileSize] = 0;//waste anyway
-			result.size = fileSize;
+			const size_t bytesRead = fread(result.data, 1, fileSize, file);
+			if (bytesRead == fileSize)
+			{
+				result.data[fileSize] = 0;//waste anyway
+				result.size = fileSize;
+			}
+			else
+			{
+				file_release_read_buffer(result.data, allocator);
+				result.data = nullptr;
+			}
 			fclose(file);
 		}
 		return result;
@@ -136,9 +194,13 @@ namespace AshEngine
 	}
 	auto file_delete(const char* filePath) -> bool
 	{
+		if (!filePath)
+		{
+			return false;
+		}
 #if defined(_WIN64)
 		int result = remove(filePath);
-		return result != 0;
+		return result == 0;
 #else
 		int result = remove(filePath);
 		return (result == 0);
@@ -323,41 +385,39 @@ namespace AshEngine
 	}
 	auto file_parent_directory(Directory* directory) -> void
 	{
-		Directory new_directory;
-
-		const char* last_directory_separator = strrchr(directory->path, '\\');
-		size_t index = last_directory_separator - directory->path;
-
-		if (index > 0) {
-
-			strncpy(new_directory.path, directory->path, index);
-			new_directory.path[index] = 0;
-
-			last_directory_separator = strrchr(new_directory.path, '\\');
-			size_t second_index = last_directory_separator - new_directory.path;
-
-			if (last_directory_separator) {
-				new_directory.path[second_index] = 0;
-			}
-			else {
-				new_directory.path[index] = 0;
-			}
-
-			bool ret = file_open_directory(new_directory.path, &new_directory);
-			if (!ret)
-			{
-				HLogError("Failed to open directory : {}", new_directory.path);
-				return;
-			}
-#if defined(_WIN64)
-			// Update directory
-			if (new_directory.os_handle) {
-				*directory = new_directory;
-			}
-#else
-			RASSERTM(false, "Not implemented");
-#endif
+		if (!directory || directory->path[0] == 0)
+		{
+			return;
 		}
+
+		std::filesystem::path current_path(directory->path);
+		if (current_path.filename() == "*")
+		{
+			current_path = current_path.parent_path();
+		}
+
+		const std::filesystem::path parent_path = current_path.parent_path();
+		if (parent_path.empty() || parent_path == current_path)
+		{
+			return;
+		}
+
+		Directory new_directory{};
+		const std::string parent_string = parent_path.string();
+		bool ret = file_open_directory(parent_string.c_str(), &new_directory);
+		if (!ret)
+		{
+			HLogError("Failed to open directory : {}", parent_string);
+			return;
+		}
+#if defined(_WIN64)
+		if (new_directory.os_handle) {
+			file_close_directory(directory);
+			*directory = new_directory;
+		}
+#else
+		RASSERTM(false, "Not implemented");
+#endif
 	}
 	auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> bool
 	{
@@ -435,6 +495,14 @@ namespace AshEngine
 		ExpandEnvironmentStringsA(name, output, outputSize);
 #else
 		const char* real_output = getenv(name);
+		if (!real_output)
+		{
+			if (outputSize > 0)
+			{
+				output[0] = 0;
+			}
+			return;
+		}
 		strncpy(output, real_output, outputSize);
 #endif
 	}

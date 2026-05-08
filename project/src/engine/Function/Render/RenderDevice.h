@@ -11,6 +11,7 @@
 
 namespace RHI
 {
+	struct AshBarrier;
 	class GraphicsContext;
 	class Swapchain;
 	class CommandBuffer;
@@ -30,6 +31,7 @@ namespace AshEngine
 		Unknown = 0,
 		RGBA8_UNORM,
 		RGBA8_SRGB,
+		BGRA8_UNORM,
 		BGRA8_SRGB,
 		RGBA16_SFLOAT,
 		RGBA32_SFLOAT,
@@ -125,6 +127,7 @@ namespace AshEngine
 		const char* vertex_entry = "VSMain";
 		const char* fragment_entry = "PSMain";
 		const char* shader_macro = nullptr;
+		uint64_t source_hash = 0;
 		GraphicsProgramState state{};
 		const char* name = nullptr;
 		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;
@@ -196,6 +199,7 @@ namespace AshEngine
 		RenderTextureFormat format = RenderTextureFormat::RGBA8_UNORM;
 		const void* initial_data = nullptr;
 		uint32_t row_pitch = 0;
+		uint8_t mip_level_count = 1;
 		bool srgb = false;
 		const char* name = nullptr;
 	};
@@ -422,6 +426,7 @@ namespace AshEngine
 		const char* compute_entry = "CSMain";
 		const char* shader_macro = nullptr;
 		const char* name = nullptr;
+		uint64_t source_hash = 0;
 	};
 
 	class ASH_API ComputeProgram
@@ -480,6 +485,7 @@ namespace AshEngine
 		std::vector<PassColorAttachment> color_attachments;
 		PassDepthAttachment depth_attachment{};
 		const char* name = nullptr;
+		bool allow_reorder_draws = false;
 	};
 
 	ASH_API RenderColorValue get_engine_back_buffer_clear_color();
@@ -509,6 +515,11 @@ namespace AshEngine
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
 		std::unique_ptr<ComputeProgram> create_compute_program(const ComputeProgramDesc& desc);
+		bool reflect_graphics_program(
+			const GraphicsProgramDesc& desc,
+			std::vector<RHI::ShaderResourceBindingLayout>& out_binding_layouts,
+			RHI::ShaderParameterBlockLayout* out_parameter_block_layout = nullptr,
+			const char* parameter_block_name = nullptr);
 
 		bool begin_pass(const PassDesc& desc);
 		bool bind_graphics_program(GraphicsProgram* program);
@@ -531,6 +542,10 @@ namespace AshEngine
 		bool ensure_back_buffer_target();
 		void sync_swapchain_target();
 		bool render_present_to_swapchain();
+		bool collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_vertex_buffer_barrier(const std::shared_ptr<VertexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
+		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool transition_graphics_program_resources(GraphicsProgram* program);
 		bool transition_compute_program_resources(ComputeProgram* program);
 		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);

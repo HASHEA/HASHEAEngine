@@ -23,6 +23,7 @@ namespace AshEngine
 		RenderTextureFormat format = RenderTextureFormat::Unknown;
 		TextureColorSpace color_space = TextureColorSpace::Linear;
 		uint32_t row_pitch = 0;
+		uint8_t mip_level_count = 1;
 		bool is_hdr = false;
 		std::vector<uint8_t> pixel_data{};
 	};

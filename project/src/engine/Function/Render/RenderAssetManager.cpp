@@ -1,6 +1,7 @@
 #include "Function/Render/RenderAssetManager.h"
 
 #include "Base/hlog.h"
+#include "Base/hthreading.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/Renderer.h"
@@ -134,6 +135,20 @@ namespace AshEngine
 		{
 			return material != nullptr && material->is_material_instance();
 		}
+
+		static auto require_render_thread_for_gpu_asset_work(const char* operation) -> bool
+		{
+			if (is_in_render_thread())
+			{
+				return true;
+			}
+
+			HLogError(
+				"RenderAssetManager: '{}' must run on the render thread, current thread role is '{}'.",
+				operation ? operation : "GPU asset work",
+				thread_role_to_string(get_current_thread_role()));
+			return false;
+		}
 	}
 
 	void RenderAssetManager::initialize(AssetDatabase* asset_database, Renderer* renderer)
@@ -155,6 +170,7 @@ namespace AshEngine
 		m_material_proxies.clear();
 		m_texture_assets.clear();
 		m_sampler_pool.clear();
+		m_failed_texture_requests.clear();
 		m_logged_material_warnings.clear();
 		m_logged_texture_warnings.clear();
 		m_default_white_texture.reset();
@@ -238,6 +254,7 @@ namespace AshEngine
 	{
 		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<TextureAsset>, result, nullptr, nullptr);
 		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(require_render_thread_for_gpu_asset_work("request_texture_asset"));
 
 		if (asset_path.empty())
 		{
@@ -246,6 +263,7 @@ namespace AshEngine
 		}
 
 		const std::string key = make_texture_key(asset_path, color_space);
+		bool has_cached_failure = false;
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			const auto found = m_texture_assets.find(key);
@@ -254,6 +272,15 @@ namespace AshEngine
 				result = found->second;
 				break;
 			}
+			if (m_failed_texture_requests.find(key) != m_failed_texture_requests.end())
+			{
+				has_cached_failure = true;
+			}
+		}
+		if (has_cached_failure)
+		{
+			result = get_fallback_texture(fallback_kind);
+			break;
 		}
 
 		TextureSourceData source{};
@@ -264,8 +291,22 @@ namespace AshEngine
 			log_texture_warning_once(
 				key,
 				"RenderAssetManager: failed to decode texture '" + asset_path + "': " + (error.empty() ? std::string("unsupported or invalid texture.") : error));
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				m_failed_texture_requests.insert(key);
+			}
 			result = get_fallback_texture(fallback_kind);
 			break;
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			const auto found = m_texture_assets.find(key);
+			if (found != m_texture_assets.end())
+			{
+				result = found->second;
+				break;
+			}
 		}
 
 		auto texture_asset = std::make_shared<TextureAsset>();
@@ -280,6 +321,7 @@ namespace AshEngine
 			source.format,
 			source.pixel_data.data(),
 			source.row_pitch,
+			source.mip_level_count,
 			source.color_space == TextureColorSpace::SRGB,
 			asset_path.c_str()
 		});
@@ -288,13 +330,22 @@ namespace AshEngine
 			log_texture_warning_once(
 				key,
 				"RenderAssetManager: failed to create GPU texture for '" + asset_path + "'.");
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				m_failed_texture_requests.insert(key);
+			}
 			result = get_fallback_texture(fallback_kind);
 			break;
 		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
-			m_texture_assets[key] = texture_asset;
+			const auto [it, inserted] = m_texture_assets.emplace(key, texture_asset);
+			m_failed_texture_requests.erase(key);
+			if (!inserted && it->second)
+			{
+				texture_asset = it->second;
+			}
 		}
 		result = texture_asset;
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
@@ -309,6 +360,7 @@ namespace AshEngine
 	{
 		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderSampler>, result, nullptr, nullptr);
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(require_render_thread_for_gpu_asset_work("request_sampler"));
 
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
@@ -392,6 +444,9 @@ namespace AshEngine
 				resolved_section.material = request_material_asset(k_builtin_default_surface_material_path);
 			}
 			ASH_PROCESS_ERROR(resolved_section.material != nullptr);
+			// RenderScene rebuild can run on the logic thread. Keep this stage CPU-only;
+			// ScenePresentation submit prepares/caches the GPU material proxy on the render thread.
+			resolved_section.material_proxy = nullptr;
 			out_sections.push_back(std::move(resolved_section));
 		}
 
@@ -713,6 +768,7 @@ namespace AshEngine
 			format,
 			pixel_data,
 			row_pitch,
+			1,
 			color_space == TextureColorSpace::SRGB,
 			debug_name
 		});
@@ -804,6 +860,7 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(asset);
 		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(require_render_thread_for_gpu_asset_work("create_gpu_mesh_resource"));
 		ASH_PROCESS_ERROR(!asset->vertices.empty());
 		ASH_PROCESS_ERROR(!asset->indices.empty());
 

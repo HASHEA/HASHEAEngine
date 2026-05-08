@@ -45,6 +45,12 @@ namespace RHI
 		std::string name;
 	};
 
+	struct DX12CommittedDescriptorTable
+	{
+		uint32_t rootIndex = UINT32_MAX;
+		D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {};
+	};
+
 	class DX12GraphicsRenderProgram : public IGraphicsRenderProgram
 	{
 	public:
@@ -78,6 +84,7 @@ namespace RHI
 		std::vector<DX12ShaderVertexInput> m_vertexInputs;
 		DX12RootConstantsInfo m_rootConstants;
 		std::vector<uint8_t> m_constDataBlock;
+		std::vector<DX12CommittedDescriptorTable> m_committedDescriptorTables;
 		std::vector<std::shared_ptr<DX12Shader>> m_shaders;
 		bool m_needsRebuild = true;
 	};
@@ -112,6 +119,7 @@ namespace RHI
 		std::unordered_set<std::string> m_boundResourceNames;
 		DX12RootConstantsInfo m_rootConstants;
 		std::vector<uint8_t> m_constDataBlock;
+		std::vector<DX12CommittedDescriptorTable> m_committedDescriptorTables;
 		std::shared_ptr<DX12Shader> m_computeShader;
 	};
 }

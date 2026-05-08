@@ -20,6 +20,7 @@
 #include "Base/hthreading.h"
 #include "D3D12MemAlloc.h"
 #include <cstring>
+#include <string>
 
 namespace RHI
 {
@@ -64,6 +65,28 @@ namespace RHI
 			case D3D12_MESSAGE_CATEGORY_SHADER: return "SHADER";
 			default: return "UNKNOWN";
 			}
+		}
+
+		static std::string wide_to_utf8(const wchar_t* text)
+		{
+			if (!text || text[0] == L'\0')
+			{
+				return {};
+			}
+
+			const int required_size = WideCharToMultiByte(CP_UTF8, 0, text, -1, nullptr, 0, nullptr, nullptr);
+			if (required_size <= 1)
+			{
+				return {};
+			}
+
+			std::string result(static_cast<size_t>(required_size), '\0');
+			WideCharToMultiByte(CP_UTF8, 0, text, -1, result.data(), required_size, nullptr, nullptr);
+			if (!result.empty() && result.back() == '\0')
+			{
+				result.pop_back();
+			}
+			return result;
 		}
 
 		constexpr bool should_log_dxgi_debug_message(DXGI_INFO_QUEUE_MESSAGE_SEVERITY severity)
@@ -316,8 +339,13 @@ namespace RHI
 	{
 		const auto& cfg = *reinterpret_cast<const GraphicsContextInitConfig*>(config);
 		m_numThread = cfg.num_threads;
+#if defined(ASH_DEBUG)
 		m_enableDebugLayer = cfg.dx12Validation.enableDebugLayer;
 		m_enableGpuValidation = cfg.dx12Validation.enableGpuValidation;
+#else
+		m_enableDebugLayer = false;
+		m_enableGpuValidation = false;
+#endif
 
 		_enable_debug_layer();
 
@@ -451,8 +479,9 @@ namespace RHI
 
 		if (m_d3d12InfoQueue)
 		{
-			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			// Route validation failures to logs instead of debugger breaks so smoke tests can shut down cleanly.
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
 			_drain_d3d12_debug_messages("startup");
 #if defined(__ID3D12InfoQueue1_INTERFACE_DEFINED__)
 			if (!m_d3d12MessageCallbackRegistered && SUCCEEDED(m_d3d12InfoQueue.As(&m_d3d12InfoQueue1)) && m_d3d12InfoQueue1)
@@ -486,8 +515,9 @@ namespace RHI
 
 		if (m_dxgiInfoQueue)
 		{
-			m_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_DXGI, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-			m_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_DXGI, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR, TRUE);
+			// Keep DXGI validation behavior aligned with D3D12: collect messages, do not interrupt execution.
+			m_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_DXGI, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+			m_dxgiInfoQueue->SetBreakOnSeverity(DXGI_DEBUG_DXGI, DXGI_INFO_QUEUE_MESSAGE_SEVERITY_ERROR, FALSE);
 			_drain_dxgi_debug_messages("startup");
 		}
 #endif
@@ -813,7 +843,7 @@ namespace RHI
 				adapter1.As(&m_adapter);
 				DXGI_ADAPTER_DESC1 adapterDesc;
 				m_adapter->GetDesc1(&adapterDesc);
-				HLogInfo("DX12Context: Selected adapter: {}", std::string(adapterDesc.Description, adapterDesc.Description + wcslen(adapterDesc.Description)));
+				HLogInfo("DX12Context: Selected adapter: {}", wide_to_utf8(adapterDesc.Description));
 				return true;
 			}
 		}
@@ -852,8 +882,9 @@ namespace RHI
 #ifdef ASH_DEBUG
 		if (SUCCEEDED(m_device.As(&m_d3d12InfoQueue)) && m_d3d12InfoQueue)
 		{
-			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, TRUE);
-			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, TRUE);
+			// Apply before full message routing is installed; validation failures are reported through the log path.
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_CORRUPTION, FALSE);
+			m_d3d12InfoQueue->SetBreakOnSeverity(D3D12_MESSAGE_SEVERITY_ERROR, FALSE);
 		}
 #endif
 
@@ -1209,8 +1240,9 @@ namespace RHI
 
 	auto DX12Context::get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>
 	{
-		if (ss < m_samplerCache.size() && m_samplerCache[ss] != nullptr)
-			return m_samplerCache[ss];
+		const uint32_t sampler_index = static_cast<uint32_t>(ss);
+		if (sampler_index < m_samplerCache.size() && m_samplerCache[sampler_index] != nullptr)
+			return m_samplerCache[sampler_index];
 
 		SamplerCreation sc{};
 		// Default sampler for ASH_SAMPLER_STATE_DEFAULT
@@ -1229,9 +1261,9 @@ namespace RHI
 		if (!sampler)
 			return nullptr;
 
-		if (ss >= m_samplerCache.size())
-			m_samplerCache.set_size(ss + 1);
-		m_samplerCache[ss] = sampler;
+		if (sampler_index >= m_samplerCache.size())
+			m_samplerCache.set_size(sampler_index + 1);
+		m_samplerCache[sampler_index] = sampler;
 		return sampler;
 	}
 }

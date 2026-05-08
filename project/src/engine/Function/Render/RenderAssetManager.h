@@ -90,6 +90,7 @@ namespace AshEngine
 		std::unordered_map<std::string, std::shared_ptr<MaterialRenderProxy>> m_material_proxies{};
 		std::unordered_map<std::string, std::shared_ptr<TextureAsset>> m_texture_assets{};
 		std::unordered_map<RenderSamplerDesc, std::shared_ptr<RenderSampler>, RenderSamplerDescHash> m_sampler_pool{};
+		std::unordered_set<std::string> m_failed_texture_requests{};
 		std::unordered_set<std::string> m_logged_material_warnings{};
 		std::unordered_set<std::string> m_logged_texture_warnings{};
 		std::shared_ptr<TextureAsset> m_default_white_texture{};

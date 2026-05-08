@@ -149,6 +149,10 @@ namespace AshEngine
 		std::unordered_map<AssetId, std::shared_ptr<Model>> model_cache{};
 		std::unordered_map<std::string, std::shared_ptr<MaterialInterface>> material_cache{};
 		std::unordered_map<AssetId, std::shared_ptr<AshAsset>> ashasset_cache{};
+		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const Mesh>>> inflight_mesh_loads{};
+		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const Model>>> inflight_model_loads{};
+		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const MaterialInterface>>> inflight_material_loads{};
+		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const AshAsset>>> inflight_ashasset_loads{};
 		std::string last_error{};
 		mutable std::mutex mutex{};
 	};
@@ -159,6 +163,7 @@ namespace AshEngine
 		static auto set_load_failed_locked(AssetDatabase::Impl& impl, AssetId id, const std::string& error) -> void;
 		static auto set_load_loading_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
 		static auto set_load_success_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
+		static auto try_get_cached_load_failure_locked(AssetDatabase::Impl& impl, AssetId id, std::string& out_error) -> bool;
 		static auto resolve_asset_by_path(
 			const std::shared_ptr<AssetDatabase::Impl>& impl,
 			const std::filesystem::path& path,
@@ -274,6 +279,10 @@ namespace AshEngine
 					out_error.clear();
 					return true;
 				}
+				if (try_get_cached_load_failure_locked(*impl, resolved.info.id, out_error))
+				{
+					return false;
+				}
 			}
 
 			if (!loading_keys.insert(cache_key).second)
@@ -363,6 +372,19 @@ namespace AshEngine
 		{
 			set_last_error_locked(impl, {});
 			set_load_info_locked(impl, id, AssetLoadState::Loaded, {});
+		}
+
+		static auto try_get_cached_load_failure_locked(AssetDatabase::Impl& impl, AssetId id, std::string& out_error) -> bool
+		{
+			const auto found = impl.load_info_by_id.find(id);
+			if (found == impl.load_info_by_id.end() || found->second.state != AssetLoadState::Failed)
+			{
+				return false;
+			}
+
+			out_error = found->second.error.empty() ? "Asset load failed previously." : found->second.error;
+			set_last_error_locked(impl, out_error);
+			return true;
 		}
 
 		static auto resolve_asset_by_id_locked(const std::shared_ptr<AssetDatabase::Impl>& impl, AssetId id, ResolvedAssetInfo& out_resolved) -> bool
@@ -461,6 +483,11 @@ namespace AshEngine
 					set_load_success_locked(*impl, resolved.info.id);
 					break;
 				}
+				std::string cached_error{};
+				if (try_get_cached_load_failure_locked(*impl, resolved.info.id, cached_error))
+				{
+					ASH_PROCESS_ERROR(false);
+				}
 
 				set_load_loading_locked(*impl, resolved.info.id);
 			}
@@ -543,6 +570,10 @@ namespace AshEngine
 			m_impl->model_cache.clear();
 			m_impl->material_cache.clear();
 			m_impl->ashasset_cache.clear();
+			m_impl->inflight_mesh_loads.clear();
+			m_impl->inflight_model_loads.clear();
+			m_impl->inflight_material_loads.clear();
+			m_impl->inflight_ashasset_loads.clear();
 			m_impl->last_error = exists_error ? exists_error.message() : "Asset root path does not exist.";
 			ASH_PROCESS_ERROR(false);
 		}
@@ -619,6 +650,10 @@ namespace AshEngine
 		m_impl->model_cache.clear();
 		m_impl->material_cache.clear();
 		m_impl->ashasset_cache.clear();
+		m_impl->inflight_mesh_loads.clear();
+		m_impl->inflight_model_loads.clear();
+		m_impl->inflight_material_loads.clear();
+		m_impl->inflight_ashasset_loads.clear();
 		m_impl->last_error.clear();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -859,6 +894,9 @@ namespace AshEngine
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
+		std::shared_ptr<std::promise<std::shared_ptr<const Mesh>>> mesh_promise{};
+		std::filesystem::path mesh_relative_path{};
+		AssetId mesh_asset_id = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			const auto cached = m_impl->mesh_cache.find(resolved.info.id);
@@ -869,20 +907,46 @@ namespace AshEngine
 				break;
 			}
 
+			const auto inflight = m_impl->inflight_mesh_loads.find(resolved.info.id);
+			if (inflight != m_impl->inflight_mesh_loads.end())
+			{
+				result = inflight->second;
+				break;
+			}
+
+			auto promise = std::make_shared<std::promise<std::shared_ptr<const Mesh>>>();
+			result = promise->get_future().share();
+			m_impl->inflight_mesh_loads[resolved.info.id] = result;
 			set_load_loading_locked(*m_impl, resolved.info.id);
+			mesh_promise = std::move(promise);
+			mesh_relative_path = resolved.info.relative_path;
+			mesh_asset_id = resolved.info.id;
 		}
 
-		AssetDatabase database(m_impl);
-		const std::filesystem::path relative_path = resolved.info.relative_path;
-		result = dispatch_background_task("AssetDatabase::load_mesh_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const Mesh>
+		if (mesh_promise)
 		{
-			std::shared_ptr<const Mesh> mesh{};
-			if (!database.load_mesh_by_path(relative_path, mesh))
+			AssetDatabase database(m_impl);
+			dispatch_background_task("AssetDatabase::load_mesh_by_path_async", [database, relative_path = std::move(mesh_relative_path), impl = m_impl, asset_id = mesh_asset_id, promise = std::move(mesh_promise)]() mutable -> void
 			{
-				return {};
-			}
-			return mesh;
-		});
+				std::shared_ptr<const Mesh> mesh{};
+				try
+				{
+					if (!database.load_mesh_by_path(relative_path, mesh))
+					{
+						mesh.reset();
+					}
+				}
+				catch (...)
+				{
+					mesh.reset();
+				}
+				promise->set_value(mesh);
+
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				impl->inflight_mesh_loads.erase(asset_id);
+			});
+		}
+
 		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
@@ -958,6 +1022,9 @@ namespace AshEngine
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
+		std::shared_ptr<std::promise<std::shared_ptr<const Model>>> model_promise{};
+		std::filesystem::path model_relative_path{};
+		AssetId model_asset_id = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			const auto cached = m_impl->model_cache.find(resolved.info.id);
@@ -968,20 +1035,45 @@ namespace AshEngine
 				break;
 			}
 
+			const auto inflight = m_impl->inflight_model_loads.find(resolved.info.id);
+			if (inflight != m_impl->inflight_model_loads.end())
+			{
+				result = inflight->second;
+				break;
+			}
+
+			auto promise = std::make_shared<std::promise<std::shared_ptr<const Model>>>();
+			result = promise->get_future().share();
+			m_impl->inflight_model_loads[resolved.info.id] = result;
 			set_load_loading_locked(*m_impl, resolved.info.id);
+			model_promise = std::move(promise);
+			model_relative_path = resolved.info.relative_path;
+			model_asset_id = resolved.info.id;
 		}
 
-		AssetDatabase database(m_impl);
-		const std::filesystem::path relative_path = resolved.info.relative_path;
-		result = dispatch_background_task("AssetDatabase::load_model_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const Model>
+		if (model_promise)
 		{
-			std::shared_ptr<const Model> model{};
-			if (!database.load_model_by_path(relative_path, model))
+			AssetDatabase database(m_impl);
+			dispatch_background_task("AssetDatabase::load_model_by_path_async", [database, relative_path = std::move(model_relative_path), impl = m_impl, asset_id = model_asset_id, promise = std::move(model_promise)]() mutable -> void
 			{
-				return {};
-			}
-			return model;
-		});
+				std::shared_ptr<const Model> model{};
+				try
+				{
+					if (!database.load_model_by_path(relative_path, model))
+					{
+						model.reset();
+					}
+				}
+				catch (...)
+				{
+					model.reset();
+				}
+				promise->set_value(model);
+
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				impl->inflight_model_loads.erase(asset_id);
+			});
+		}
 		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
@@ -1038,7 +1130,10 @@ namespace AshEngine
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
-		const std::string cache_key = normalize_asset_key(path);
+		const std::string cache_key = normalize_asset_key(resolved.info.relative_path);
+		std::shared_ptr<std::promise<std::shared_ptr<const MaterialInterface>>> material_promise{};
+		std::filesystem::path material_relative_path{};
+		AssetId material_asset_id = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			if (try_get_cached_material_locked(*m_impl, cache_key, builtin_material))
@@ -1048,20 +1143,45 @@ namespace AshEngine
 				break;
 			}
 
+			const auto inflight = m_impl->inflight_material_loads.find(resolved.info.id);
+			if (inflight != m_impl->inflight_material_loads.end())
+			{
+				result = inflight->second;
+				break;
+			}
+
+			auto promise = std::make_shared<std::promise<std::shared_ptr<const MaterialInterface>>>();
+			result = promise->get_future().share();
+			m_impl->inflight_material_loads[resolved.info.id] = result;
 			set_load_loading_locked(*m_impl, resolved.info.id);
+			material_promise = std::move(promise);
+			material_relative_path = resolved.info.relative_path;
+			material_asset_id = resolved.info.id;
 		}
 
-		AssetDatabase database(m_impl);
-		const std::filesystem::path relative_path = resolved.info.relative_path;
-		result = dispatch_background_task("AssetDatabase::load_material_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const MaterialInterface>
+		if (material_promise)
 		{
-			std::shared_ptr<const MaterialInterface> material{};
-			if (!database.load_material_by_path(relative_path, material))
+			AssetDatabase database(m_impl);
+			dispatch_background_task("AssetDatabase::load_material_by_path_async", [database, relative_path = std::move(material_relative_path), impl = m_impl, asset_id = material_asset_id, promise = std::move(material_promise)]() mutable -> void
 			{
-				return {};
-			}
-			return material;
-		});
+				std::shared_ptr<const MaterialInterface> material{};
+				try
+				{
+					if (!database.load_material_by_path(relative_path, material))
+					{
+						material.reset();
+					}
+				}
+				catch (...)
+				{
+					material.reset();
+				}
+				promise->set_value(material);
+
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				impl->inflight_material_loads.erase(asset_id);
+			});
+		}
 		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 
@@ -1133,6 +1253,9 @@ namespace AshEngine
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
 
+		std::shared_ptr<std::promise<std::shared_ptr<const AshAsset>>> ashasset_promise{};
+		std::filesystem::path ashasset_relative_path{};
+		AssetId ashasset_asset_id = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
 			const auto cached = m_impl->ashasset_cache.find(resolved.info.id);
@@ -1143,20 +1266,45 @@ namespace AshEngine
 				break;
 			}
 
+			const auto inflight = m_impl->inflight_ashasset_loads.find(resolved.info.id);
+			if (inflight != m_impl->inflight_ashasset_loads.end())
+			{
+				result = inflight->second;
+				break;
+			}
+
+			auto promise = std::make_shared<std::promise<std::shared_ptr<const AshAsset>>>();
+			result = promise->get_future().share();
+			m_impl->inflight_ashasset_loads[resolved.info.id] = result;
 			set_load_loading_locked(*m_impl, resolved.info.id);
+			ashasset_promise = std::move(promise);
+			ashasset_relative_path = resolved.info.relative_path;
+			ashasset_asset_id = resolved.info.id;
 		}
 
-		AssetDatabase database(m_impl);
-		const std::filesystem::path relative_path = resolved.info.relative_path;
-		result = dispatch_background_task("AssetDatabase::load_ashasset_by_path_async", [database, relative_path]() mutable -> std::shared_ptr<const AshAsset>
+		if (ashasset_promise)
 		{
-			std::shared_ptr<const AshAsset> asset{};
-			if (!database.load_ashasset_by_path(relative_path, asset))
+			AssetDatabase database(m_impl);
+			dispatch_background_task("AssetDatabase::load_ashasset_by_path_async", [database, relative_path = std::move(ashasset_relative_path), impl = m_impl, asset_id = ashasset_asset_id, promise = std::move(ashasset_promise)]() mutable -> void
 			{
-				return {};
-			}
-			return asset;
-		});
+				std::shared_ptr<const AshAsset> asset{};
+				try
+				{
+					if (!database.load_ashasset_by_path(relative_path, asset))
+					{
+						asset.reset();
+					}
+				}
+				catch (...)
+				{
+					asset.reset();
+				}
+				promise->set_value(asset);
+
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				impl->inflight_ashasset_loads.erase(asset_id);
+			});
+		}
 		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
 	}
 }

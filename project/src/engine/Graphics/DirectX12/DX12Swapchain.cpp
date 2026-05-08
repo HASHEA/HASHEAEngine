@@ -37,9 +37,11 @@ namespace RHI
 		// DX12 FLIP_DISCARD swapchains only support *_UNORM formats, not *_SRGB
 		// SRGB interpretation is done through the render target view format
 		DXGI_FORMAT preferredFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+		AshFormat requestedRenderTargetFormat = ASH_FORMAT_R8G8B8A8_UNORM;
 		if (cfg->colorFormatCount > 0 && cfg->pColorFormat)
 		{
-			DXGI_FORMAT requestedFormat = ash_to_dxgi_format(cfg->pColorFormat[0]);
+			requestedRenderTargetFormat = cfg->pColorFormat[0];
+			DXGI_FORMAT requestedFormat = ash_to_dxgi_format(requestedRenderTargetFormat);
 			// Convert SRGB to UNORM for swapchain surface
 			switch (requestedFormat)
 			{
@@ -48,7 +50,8 @@ namespace RHI
 			default: preferredFormat = requestedFormat; break;
 			}
 		}
-		m_format = dxgi_to_ash_format(preferredFormat);
+		m_surfaceFormat = preferredFormat;
+		m_format = requestedRenderTargetFormat;
 
 		// Check tearing support
 		BOOL tearingSupported = FALSE;
@@ -84,7 +87,7 @@ namespace RHI
 		DXGI_SWAP_CHAIN_DESC1 swapchainDesc = {};
 		swapchainDesc.Width = m_width;
 		swapchainDesc.Height = m_height;
-		swapchainDesc.Format = preferredFormat;
+		swapchainDesc.Format = m_surfaceFormat;
 		swapchainDesc.Stereo = FALSE;
 		swapchainDesc.SampleDesc.Count = 1;
 		swapchainDesc.SampleDesc.Quality = 0;
@@ -137,7 +140,13 @@ namespace RHI
 			ctx->_drain_d3d12_debug_messages("create-swapchain");
 		}
 
-		HLogInfo("DX12Swapchain: Created {}x{} with {} buffers.", m_width, m_height, (int)swapchainDesc.BufferCount);
+		HLogInfo(
+			"DX12Swapchain: Created {}x{} with {} buffers. surface_format={}, rtv_format={}.",
+			m_width,
+			m_height,
+			static_cast<int>(swapchainDesc.BufferCount),
+			static_cast<int>(m_surfaceFormat),
+			static_cast<int>(ash_to_dxgi_format(m_format)));
 		return true;
 	}
 
@@ -176,7 +185,7 @@ namespace RHI
 			m_backBuffers[i] = std::make_shared<DX12Texture>();
 			m_backBuffers[i]->init_from_swapchain(
 				backBuffer.Get(),
-				dxgi_to_ash_format(desc.Format),
+				m_format,
 				static_cast<uint16_t>(m_width),
 				static_cast<uint16_t>(m_height),
 				ctx->get_device(),

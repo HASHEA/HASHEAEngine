@@ -258,16 +258,16 @@ namespace RHI
 			return true;
 		}
 
-		static void apply_descriptor_binds(
+		static bool commit_descriptor_binds(
 			ID3D12Device* device,
 			DX12DescriptorHeapManager& heapMgr,
-			ID3D12GraphicsCommandList4* cmdList,
 			const std::vector<DX12PendingBind>& pendingBinds,
 			const std::unordered_map<std::string, DX12ProgramBindingInfo>& bindingInfos,
-			bool graphicsPipeline)
+			std::vector<DX12CommittedDescriptorTable>& outCommittedTables)
 		{
-			ASH_PROFILE_SCOPE_NC("DX12RenderProgram::ApplyDescriptorBinds", AshEngine::Profile::Color::Descriptor);
+			ASH_PROFILE_SCOPE_NC("DX12RenderProgram::CommitDescriptorBinds", AshEngine::Profile::Color::Descriptor);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pendingBinds.size()));
+			bool committed = true;
 			for (const DX12PendingBind& bind : pendingBinds)
 			{
 				auto bindingIt = bindingInfos.find(bind.name);
@@ -282,6 +282,16 @@ namespace RHI
 				const D3D12_DESCRIPTOR_HEAP_TYPE heapType = samplerBinding ? D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER : D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
 				DX12DescriptorHandle gpuHandle = targetHeap.allocate(descriptorCount);
+				if (!gpuHandle.is_shader_visible())
+				{
+					HLogError(
+						"DX12 render program failed to allocate {} shader-visible {} descriptors for binding '{}'.",
+						descriptorCount,
+						descriptor_range_type_to_string(bindingInfo.rangeType),
+						bind.name.c_str());
+					committed = false;
+					break;
+				}
 
 				if (bind.isArray)
 				{
@@ -297,13 +307,32 @@ namespace RHI
 					device->CopyDescriptorsSimple(1, gpuHandle.cpuHandle, bind.cpuHandle, heapType);
 				}
 
+				outCommittedTables.push_back({ bindingInfo.rootIndex, gpuHandle.gpuHandle });
+			}
+			return committed;
+		}
+
+		static void apply_committed_descriptor_tables(
+			ID3D12GraphicsCommandList4* cmdList,
+			const std::vector<DX12CommittedDescriptorTable>& committedTables,
+			bool graphicsPipeline)
+		{
+			ASH_PROFILE_SCOPE_NC("DX12RenderProgram::ApplyDescriptorTables", AshEngine::Profile::Color::Descriptor);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(committedTables.size()));
+			for (const DX12CommittedDescriptorTable& table : committedTables)
+			{
+				if (table.rootIndex == UINT32_MAX || table.gpuHandle.ptr == 0)
+				{
+					continue;
+				}
+
 				if (graphicsPipeline)
 				{
-					cmdList->SetGraphicsRootDescriptorTable(bindingInfo.rootIndex, gpuHandle.gpuHandle);
+					cmdList->SetGraphicsRootDescriptorTable(table.rootIndex, table.gpuHandle);
 				}
 				else
 				{
-					cmdList->SetComputeRootDescriptorTable(bindingInfo.rootIndex, gpuHandle.gpuHandle);
+					cmdList->SetComputeRootDescriptorTable(table.rootIndex, table.gpuHandle);
 				}
 			}
 		}
@@ -397,6 +426,7 @@ namespace RHI
 		m_vertexInputs.clear();
 		m_rootConstants = {};
 		m_constDataBlock.clear();
+		m_committedDescriptorTables.clear();
 		m_binder.clear();
 		m_needsRebuild = true;
 		return true;
@@ -483,7 +513,26 @@ namespace RHI
 	{
 		ASH_PROFILE_SCOPE_NC("DX12GraphicsRenderProgram::EndBind", AshEngine::Profile::Color::Descriptor);
 		m_binder.finish_binding();
-		return _validate_binding_state();
+		if (!_validate_binding_state())
+		{
+			m_binder.clear();
+			m_committedDescriptorTables.clear();
+			return false;
+		}
+
+		auto* device = DX12Context::get()->get_device();
+		auto& heapMgr = DX12Context::get()->get_descriptor_heaps();
+		m_committedDescriptorTables.clear();
+		m_committedDescriptorTables.reserve(m_binder.get_pending_binds().size() + m_binder.get_pending_sampler_binds().size());
+		const bool committed =
+			commit_descriptor_binds(device, heapMgr, m_binder.get_pending_binds(), m_bindingInfos, m_committedDescriptorTables) &&
+			commit_descriptor_binds(device, heapMgr, m_binder.get_pending_sampler_binds(), m_bindingInfos, m_committedDescriptorTables);
+		m_binder.clear();
+		if (!committed)
+		{
+			m_committedDescriptorTables.clear();
+		}
+		return committed;
 	}
 
 	bool DX12GraphicsRenderProgram::_cache_reflection_data()
@@ -806,13 +855,8 @@ namespace RHI
 
 	void DX12GraphicsRenderProgram::_apply_bindings(DX12CommandBuffer* cmdBuf)
 	{
-		auto* device = DX12Context::get()->get_device();
-		auto& heapMgr = DX12Context::get()->get_descriptor_heaps();
 		auto* cmdList = cmdBuf->get_command_list();
-
-		apply_descriptor_binds(device, heapMgr, cmdList, m_binder.get_pending_binds(), m_bindingInfos, true);
-		apply_descriptor_binds(device, heapMgr, cmdList, m_binder.get_pending_sampler_binds(), m_bindingInfos, true);
-		m_binder.clear();
+		apply_committed_descriptor_tables(cmdList, m_committedDescriptorTables, true);
 	}
 
 	DX12ComputeRenderProgram::~DX12ComputeRenderProgram()
@@ -866,6 +910,7 @@ namespace RHI
 		m_boundResourceNames.clear();
 		m_rootConstants = {};
 		m_constDataBlock.clear();
+		m_committedDescriptorTables.clear();
 		m_computeShader.reset();
 		m_binder.clear();
 		return true;
@@ -933,7 +978,26 @@ namespace RHI
 	{
 		ASH_PROFILE_SCOPE_NC("DX12ComputeRenderProgram::EndBind", AshEngine::Profile::Color::Descriptor);
 		m_binder.finish_binding();
-		return _validate_binding_state();
+		if (!_validate_binding_state())
+		{
+			m_binder.clear();
+			m_committedDescriptorTables.clear();
+			return false;
+		}
+
+		auto* device = DX12Context::get()->get_device();
+		auto& heapMgr = DX12Context::get()->get_descriptor_heaps();
+		m_committedDescriptorTables.clear();
+		m_committedDescriptorTables.reserve(m_binder.get_pending_binds().size() + m_binder.get_pending_sampler_binds().size());
+		const bool committed =
+			commit_descriptor_binds(device, heapMgr, m_binder.get_pending_binds(), m_bindingInfos, m_committedDescriptorTables) &&
+			commit_descriptor_binds(device, heapMgr, m_binder.get_pending_sampler_binds(), m_bindingInfos, m_committedDescriptorTables);
+		m_binder.clear();
+		if (!committed)
+		{
+			m_committedDescriptorTables.clear();
+		}
+		return committed;
 	}
 
 	bool DX12ComputeRenderProgram::_cache_reflection_data()
@@ -1098,12 +1162,7 @@ namespace RHI
 
 	void DX12ComputeRenderProgram::_apply_bindings(DX12CommandBuffer* cmdBuf)
 	{
-		auto* device = DX12Context::get()->get_device();
-		auto& heapMgr = DX12Context::get()->get_descriptor_heaps();
 		auto* cmdList = cmdBuf->get_command_list();
-
-		apply_descriptor_binds(device, heapMgr, cmdList, m_binder.get_pending_binds(), m_bindingInfos, false);
-		apply_descriptor_binds(device, heapMgr, cmdList, m_binder.get_pending_sampler_binds(), m_bindingInfos, false);
-		m_binder.clear();
+		apply_committed_descriptor_tables(cmdList, m_committedDescriptorTables, false);
 	}
 }

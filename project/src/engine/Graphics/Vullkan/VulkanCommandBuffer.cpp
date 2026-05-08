@@ -398,51 +398,11 @@ namespace RHI
 		auto renderTargetCount = frameBuffer->get_render_targets().size();
 		if (VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
-			//only dynamic render need to transition images
-			bool require_attachment_load_sync = false;
-			for (auto i = 0; i < renderTargetCount; i++)
-			{
-				cmd_transition_resource_state({colorAttachements[i], AshResourceState::RTV });
-				require_attachment_load_sync = require_attachment_load_sync || renderPass->get_color_operations()[i] == AshLoadOption::ASH_LOAD_LOAD;
-			}
-			if (depthStencilAttachment != nullptr)
-			{
-				cmd_transition_resource_state({ depthStencilAttachment, AshResourceState::DSVWrite });
-				require_attachment_load_sync = require_attachment_load_sync || renderPass->get_depth_stencil_operations() == AshLoadOption::ASH_LOAD_LOAD;
-			}
+			// RenderDevice owns pass attachment transitions and submits them before vkCmdBeginRendering.
+			// Keep command buffers from hiding extra barriers inside the begin-rendering path.
 			if (shadingRateAttachment != nullptr)
 			{
 				cmd_transition_resource_state({ shadingRateAttachment, AshResourceState::ShadingRateSource });
-			}
-			if (require_attachment_load_sync)
-			{
-				// Attachment loadOp reads happen at COLOR_ATTACHMENT_OUTPUT / EARLY/LATE_FRAGMENT_TESTS.
-				// When we transition an attachment into renderable layout immediately before begin rendering,
-				// add an explicit execution+memory dependency so the load is ordered after that transition.
-				VkMemoryBarrier attachment_load_barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER };
-				attachment_load_barrier.srcAccessMask =
-					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-				attachment_load_barrier.dstAccessMask =
-					VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-					VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-				vkCmdPipelineBarrier(
-					vkCommandBuffer,
-					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-					VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-					VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-					VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-					0,
-					1,
-					&attachment_load_barrier,
-					0,
-					nullptr,
-					0,
-					nullptr);
 			}
 			VkRenderingAttachmentInfoKHR color_attachments_info[k_max_image_outputs] = {};
 			for (auto i = 0; i < renderTargetCount; i++)

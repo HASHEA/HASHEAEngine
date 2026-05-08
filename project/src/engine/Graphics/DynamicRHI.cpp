@@ -314,6 +314,11 @@ namespace RHI
 			config.dx12Validation.enableGpuValidation = parse_bool_value(it->second, config.dx12Validation.enableGpuValidation);
 		}
 
+#if !defined(ASH_DEBUG)
+		config.dx12Validation.enableDebugLayer = false;
+		config.dx12Validation.enableGpuValidation = false;
+#endif
+
 		return config;
 	}
 

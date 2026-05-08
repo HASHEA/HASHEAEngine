@@ -5,6 +5,7 @@
 #include "DX12Queue.h"
 #include "DX12CommandPool.h"
 #include "DX12DescriptorHeap.h"
+#include "DX12ResourceTracker.h"
 #include "Base/hcore.h"
 #include "Base/hstring.h"
 #include "Base/hbit.hpp"
@@ -58,6 +59,7 @@ namespace RHI
 		inline auto get_compute_queue() -> DX12Queue& { return m_computeQueue; }
 		inline auto get_copy_queue() -> DX12Queue& { return m_copyQueue; }
 		inline auto get_descriptor_heaps() -> DX12DescriptorHeapManager& { return m_descriptorHeaps; }
+		inline auto get_resource_tracker() -> DX12ResourceTracker& { return m_resourceTracker; }
 		inline auto get_d3d12ma_allocator() -> D3D12MA::Allocator* { return m_d3d12maAllocator; }
 		inline auto get_factory() const { return m_factory.Get(); }
 		inline auto get_current_frame() const { return m_currentFrame; }
@@ -160,6 +162,7 @@ namespace RHI
 		D3D12MA::Allocator* m_d3d12maAllocator = nullptr;
 
 		DX12DescriptorHeapManager m_descriptorHeaps;
+		DX12ResourceTracker m_resourceTracker;
 
 		// Per-frame resources
 		std::vector<DX12FrameResources> m_frameResources;

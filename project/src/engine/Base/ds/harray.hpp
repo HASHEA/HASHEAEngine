@@ -4,6 +4,10 @@
 #include "Base/hmemory.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
+#include <cstring>
+#include <limits>
+#include <type_traits>
+#include <utility>
 namespace AshEngine
 {
     template <typename T>
@@ -40,7 +44,7 @@ namespace AshEngine
         auto size() const -> uint32_t { return m_uSize; }
 		auto capacity() const -> uint32_t { return m_uCapacity; }
 
-        auto set_capacity_no_grow(uint32_t capacity) { m_uCapacity  = capacity};
+        auto set_capacity_no_grow(uint32_t capacity) -> void { m_uCapacity = capacity; }
     private:
         uint32_t                         m_uSize = 0;       // Occupied size
         uint32_t                         m_uCapacity = 0;   // Allocated capacity
@@ -91,17 +95,24 @@ namespace AshEngine
     template<typename T>
     inline auto Array<T>::init(Allocator* allocator_, uint32_t initial_capacity, uint32_t initial_size)->bool {
         m_pData = nullptr;
-        m_uSize = initial_size;
+        m_uSize = 0;
         m_uCapacity = 0;
         m_pAllocator = allocator_;
         bool ret = true;
-        if (initial_capacity > 0) {
-            ret = grow(initial_capacity);
+        uint32_t required_capacity = initial_capacity;
+        if (required_capacity < initial_size) {
+            required_capacity = initial_size;
+        }
+        if (required_capacity > 0) {
+            ret = grow(required_capacity);
+            if (!ret) {
+                return false;
+            }
         }
         if (initial_size > 0)
         {
             //init memory
-			if constexpr (std::is_trivial<T>::value) {
+			if constexpr (std::is_trivially_default_constructible<T>::value) {
 				memset(m_pData, 0, static_cast<size_t>(initial_size * sizeof(T)));
 			}
 			else {
@@ -109,6 +120,7 @@ namespace AshEngine
 					new (&m_pData[i]) T();
 				}
 			}
+            m_uSize = initial_size;
         } 
         return ret;
     }
@@ -134,6 +146,9 @@ namespace AshEngine
         if (m_uSize >= m_uCapacity) {
             ret = grow(m_uCapacity + 1);
             HS_PROCESS_AND_LOG_RESULT(ret);
+            if (!ret) {
+                return false;
+            }
         }
         if constexpr (std::is_trivially_copy_assignable<T>::value)
         {
@@ -145,7 +160,7 @@ namespace AshEngine
         }
        
         
-        return true;
+        return ret;
     }
     // push and return back
     template<typename T>
@@ -155,6 +170,11 @@ namespace AshEngine
         if (m_uSize >= m_uCapacity) {
             ret = grow(m_uCapacity + 1);
             HS_PROCESS_AND_LOG_RESULT(ret);
+            if (!ret) {
+                alignas(T) static unsigned char fallback_storage[sizeof(T)]{};
+                H_ASSERTLOG(false, "Array::push_use failed to grow storage");
+                return *reinterpret_cast<T*>(fallback_storage);
+            }
         }
 		if constexpr (std::is_trivially_default_constructible<T>::value) {
 			m_pData[m_uSize] = T(); 
@@ -232,6 +252,9 @@ namespace AshEngine
         if (new_size > m_uCapacity) {
             ret = grow(new_size);
             HS_PROCESS_AND_LOG_RESULT(ret);
+            if (!ret) {
+                return false;
+            }
         }
 		if constexpr (!std::is_trivially_default_constructible<T>::value) {
 			for (uint32_t i = m_uSize; i < new_size; ++i) {
@@ -255,22 +278,42 @@ namespace AshEngine
         if (new_capacity > m_uCapacity) {
             ret = grow(new_capacity);
             HS_PROCESS_AND_LOG_RESULT(ret);
+            if (!ret) {
+                return false;
+            }
         }
         return ret;
     }
 
     template<typename T>
     inline auto Array<T>::grow(uint32_t new_capacity) ->bool{
-        bool ret = true;
-
-        if (new_capacity <= (m_uCapacity * 1.5f)) {
-            new_capacity = m_uCapacity * 1.5f;
-        }
-        else if (new_capacity < 4) {
-            new_capacity = 4;
+        if (new_capacity <= m_uCapacity) {
+            return true;
         }
 
-        T* new_data = (T*) Ash_Alloc(m_pAllocator, new_capacity * sizeof(T), alignof(T));//(T*)m_pAllocator->allocate(new_capacity * sizeof(T), alignof(T));
+        uint32_t grown_capacity = m_uCapacity + (m_uCapacity / 2u);
+        if (grown_capacity < 4u) {
+            grown_capacity = 4u;
+        }
+        if (grown_capacity < new_capacity) {
+            grown_capacity = new_capacity;
+        }
+        if (grown_capacity < m_uCapacity) {
+            HLogError("Array::grow capacity overflow");
+            return false;
+        }
+
+        if (sizeof(T) != 0 && grown_capacity > (std::numeric_limits<size_t>::max() / sizeof(T))) {
+            HLogError("Array::grow allocation size overflow");
+            return false;
+        }
+
+        T* new_data = (T*)Ash_Alloc(m_pAllocator, static_cast<size_t>(grown_capacity) * sizeof(T), alignof(T));
+        if (!new_data) {
+            HLogError("Array::grow allocation failed. capacity={}, element_size={}", grown_capacity, sizeof(T));
+            return false;
+        }
+
 		if (m_uSize > 0 && m_pData != nullptr) {
             if constexpr (std::is_trivially_copyable<T>::value) {
                 memory_copy(new_data, m_pData, m_uSize * sizeof(T));
@@ -290,8 +333,8 @@ namespace AshEngine
 		}
 
         m_pData = new_data;
-        m_uCapacity = new_capacity;
-        return ret;
+        m_uCapacity = grown_capacity;
+        return true;
     }
 
     template<typename T>

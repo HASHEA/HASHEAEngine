@@ -2,6 +2,7 @@
 #include "DX12Wrapper.h"
 #include "DX12Helper.hpp"
 #include "Graphics/Texture.h"
+#include <cstdint>
 
 namespace D3D12MA { class Allocation; class Allocator; }
 
@@ -43,6 +44,8 @@ namespace RHI
 		auto set_resource_state(AshResourceState state) -> void override { m_resourceState = state; }
 		auto get_native_handle() -> void* override { return m_resource.Get(); }
 		auto get_name() -> const char* override { return m_name.c_str(); }
+		auto get_subresource_count() const -> uint32_t;
+		auto resolve_subresource_range(const AshSubresourceRange& range) const -> AshSubresourceRange;
 
 	private:
 		void _create_default_views(ID3D12Device* device, DX12DescriptorHeapManager* heapMgr);

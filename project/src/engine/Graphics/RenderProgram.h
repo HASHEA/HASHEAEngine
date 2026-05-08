@@ -137,6 +137,7 @@ namespace RHI
 		virtual bool apply(std::shared_ptr<CommandBuffer> cb) = 0;
 		virtual IRenderProgramBinder& begin_bind() = 0;
 		virtual bool end_bind() = 0;
+		virtual bool requires_resource_binding_commit_per_apply() const { return true; }
 	};
 
 	class IComputeRenderProgram

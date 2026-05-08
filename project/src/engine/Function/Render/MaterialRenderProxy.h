@@ -34,6 +34,7 @@ namespace AshEngine
 		const MaterialResource* get_surface_staticmesh_depthonly_resource() const;
 		bool ensure_program(Renderer& renderer);
 		bool update_bindings(RenderAssetManager& asset_manager);
+		bool needs_surface_staticmesh_preparation() const;
 
 	private:
 		bool ensure_v2_resource_templates();
@@ -55,6 +56,7 @@ namespace AshEngine
 		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_basepass_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_depthonly_program = nullptr;
 		uint64_t m_runtime_binding_version = 0;
+		uint64_t m_bound_binding_version = 0;
 		uint64_t m_material_version = 0;
 		uint64_t m_v2_compile_hash = 0;
 	};

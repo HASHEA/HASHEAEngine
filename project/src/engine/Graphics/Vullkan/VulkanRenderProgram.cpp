@@ -901,8 +901,8 @@ namespace RHI
 		if (fnRenderStateDefineCall)
 		{
 			fnRenderStateDefineCall(&m_render_state);
-			// Must rebuild the VkPipeline: initial create() used default depth_stencil from the desc (often all-off).
-			// Engine applies depth/cull/blend via this callback after create (see RenderDevice::apply_program_state).
+			// Vulkan bakes these render-state fields into the VkPipeline.
+			// Keep this out of per-draw bind paths; it is only for explicit state changes.
 			if (!refresh_pipeline())
 			{
 				return false;
@@ -933,6 +933,11 @@ namespace RHI
 	bool VulkanGraphicsRenderProgram::end_bind()
 	{
 		return end_bind_internal();
+	}
+
+	bool VulkanGraphicsRenderProgram::requires_resource_binding_commit_per_apply() const
+	{
+		return false;
 	}
 
 	bool VulkanGraphicsRenderProgram::refresh_pipeline()

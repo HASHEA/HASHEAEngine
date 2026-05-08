@@ -97,6 +97,10 @@ public:
 		{
 			return frameIndex.load(std::memory_order_acquire);
 		}
+		auto is_initialized() const -> bool
+		{
+			return initialized;
+		}
 		auto is_logic_thread_enabled() const -> bool
 		{
 			return logicThreadEnabled;
@@ -174,5 +178,6 @@ public:
 		bool					logicThreadEnabled		= false;
 		bool					pendingLogicInputDirty	= false;
 		bool					started					= false;
+		bool					initialized				= false;
 	};
 };

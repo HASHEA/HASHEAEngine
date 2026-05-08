@@ -23,6 +23,10 @@ namespace AshEngine
 	}
 
 	size_t memory_align(size_t size, size_t alignment) {
+		if (alignment <= 1)
+		{
+			return size;
+		}
 		const size_t alignment_mask = alignment - 1;
 		return (size + alignment_mask) & ~alignment_mask;
 	}
@@ -81,6 +85,7 @@ namespace AshEngine
 	}
 	auto HeapAllocator::shutdown() -> bool
 	{
+		std::lock_guard<std::mutex> lock(m_mutex);
 		// Check memory at the application exit.
 		MemoryStatistics stats{ 0, m_szMaxSize };
 		pool_t pool = tlsf_get_pool(m_pTlsfHandle);
@@ -108,6 +113,7 @@ namespace AshEngine
 	auto HeapAllocator::allocate(size_t size, size_t alignment)->void*
 	{
 		H_ASSERT(size > 0);
+		std::lock_guard<std::mutex> lock(m_mutex);
 		void* pAllocateMemory = alignment == 1? tlsf_malloc(m_pTlsfHandle, size) : tlsf_memalign(m_pTlsfHandle, alignment, size);
 		H_ASSERT(pAllocateMemory);
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
@@ -117,6 +123,7 @@ namespace AshEngine
 	auto HeapAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*
 	{
 		H_ASSERT(size > 0);
+		std::lock_guard<std::mutex> lock(m_mutex);
 		void* pAllocateMemory = alignment == 1 ? tlsf_malloc(m_pTlsfHandle, size) : tlsf_memalign(m_pTlsfHandle, alignment, size);
 		H_ASSERT(pAllocateMemory);
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
@@ -129,6 +136,7 @@ namespace AshEngine
 	auto HeapAllocator::deallocate(void* pointer, char* file, uint32_t line)->bool
 	{
 		H_ASSERT(pointer);
+		std::lock_guard<std::mutex> lock(m_mutex);
 		size_t actual_size = tlsf_block_size(pointer);
 		m_szAllocatedSize -= actual_size;
 
@@ -142,6 +150,7 @@ namespace AshEngine
 	auto HeapAllocator::deallocate(void* pointer) -> bool 
 	{
 		H_ASSERT(pointer);
+		std::lock_guard<std::mutex> lock(m_mutex);
 		size_t actual_size = tlsf_block_size(pointer);
 		m_szAllocatedSize -= actual_size;
 		tlsf_free(m_pTlsfHandle, pointer);
@@ -152,6 +161,7 @@ namespace AshEngine
 	{
 		auto dPoint = const_cast<void*>(pointer);
 		H_ASSERT(dPoint);
+		std::lock_guard<std::mutex> lock(m_mutex);
 		size_t actual_size = tlsf_block_size(dPoint);
 		m_szAllocatedSize -= actual_size;
 		tlsf_free(m_pTlsfHandle, dPoint);
@@ -161,6 +171,7 @@ namespace AshEngine
 	{
 		auto dPoint = const_cast<void*>(pointer);
 		H_ASSERT(dPoint);
+		std::lock_guard<std::mutex> lock(m_mutex);
 		size_t actual_size = tlsf_block_size(dPoint);
 		m_szAllocatedSize -= actual_size;
 		tlsf_free(m_pTlsfHandle, dPoint);
@@ -245,11 +256,12 @@ namespace AshEngine
 	}
 	auto StackAllocator::free_marker(size_t marker) -> bool
 	{
-		const size_t difference = marker - m_szAllocatedSize;
-		if (difference > 0)
+		if (marker > m_szAllocatedSize)
 		{
-			m_szAllocatedSize = marker;
+			HLogWarning("StackAllocator rejected forward marker free. marker={}, allocated={}", marker, m_szAllocatedSize);
+			return false;
 		}
+		m_szAllocatedSize = marker;
 		return true;
 	}
 	auto StackAllocator::clear()->bool
@@ -302,19 +314,23 @@ namespace AshEngine
 	}
 	auto LinearAllocator::deallocate(void* pointer, char* file, uint32_t line) -> bool
 	{
-		return true;
+		HLogWarning("LinearAllocator does not support individual deallocate. Use clear() to reset the allocator.");
+		return false;
 	}
 	auto LinearAllocator::deallocate(void* pointer) -> bool 
 	{
-		return true;
+		HLogWarning("LinearAllocator does not support individual deallocate. Use clear() to reset the allocator.");
+		return false;
 	}
 	auto LinearAllocator::deallocate(const void* pointer) -> bool
 	{
-		return true;
+		HLogWarning("LinearAllocator does not support individual deallocate. Use clear() to reset the allocator.");
+		return false;
 	}
 	auto LinearAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> bool
 	{
-		return true;
+		HLogWarning("LinearAllocator does not support individual deallocate. Use clear() to reset the allocator.");
+		return false;
 	}
 	auto LinearAllocator::clear() -> bool
 	{

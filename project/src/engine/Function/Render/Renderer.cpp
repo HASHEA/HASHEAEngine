@@ -3,10 +3,60 @@
 #include "Base/hprofiler.h"
 #include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
+#include "Graphics/RHIResource.h"
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
+#include <unordered_set>
 
 namespace AshEngine
 {
+	namespace
+	{
+		static auto pointer_sort_key(const void* pointer) -> uintptr_t
+		{
+			return reinterpret_cast<uintptr_t>(pointer);
+		}
+
+		static auto compare_draw_state_key(const GraphicsDrawDesc& lhs, const GraphicsDrawDesc& rhs) -> bool
+		{
+			const uintptr_t lhs_program = pointer_sort_key(lhs.program);
+			const uintptr_t rhs_program = pointer_sort_key(rhs.program);
+			if (lhs_program != rhs_program)
+			{
+				return lhs_program < rhs_program;
+			}
+
+			const uintptr_t lhs_index = pointer_sort_key(lhs.index_buffer.get());
+			const uintptr_t rhs_index = pointer_sort_key(rhs.index_buffer.get());
+			if (lhs_index != rhs_index)
+			{
+				return lhs_index < rhs_index;
+			}
+
+			const size_t common_vertex_buffer_count = std::min(lhs.vertex_buffers.size(), rhs.vertex_buffers.size());
+			for (size_t index = 0; index < common_vertex_buffer_count; ++index)
+			{
+				if (lhs.vertex_buffers[index].slot != rhs.vertex_buffers[index].slot)
+				{
+					return lhs.vertex_buffers[index].slot < rhs.vertex_buffers[index].slot;
+				}
+				const uintptr_t lhs_vertex_buffer = pointer_sort_key(lhs.vertex_buffers[index].buffer.get());
+				const uintptr_t rhs_vertex_buffer = pointer_sort_key(rhs.vertex_buffers[index].buffer.get());
+				if (lhs_vertex_buffer != rhs_vertex_buffer)
+				{
+					return lhs_vertex_buffer < rhs_vertex_buffer;
+				}
+				if (lhs.vertex_buffers[index].offset != rhs.vertex_buffers[index].offset)
+				{
+					return lhs.vertex_buffers[index].offset < rhs.vertex_buffers[index].offset;
+				}
+			}
+
+			return lhs.vertex_buffers.size() < rhs.vertex_buffers.size();
+		}
+	}
+
 	Renderer::GraphicsPassContext::GraphicsPassContext(Renderer* renderer)
 		: m_renderer(renderer)
 	{
@@ -216,6 +266,22 @@ namespace AshEngine
 		return m_render_device ? m_render_device->create_compute_program(desc) : nullptr;
 	}
 
+	bool Renderer::reflect_graphics_program(
+		const GraphicsProgramDesc& desc,
+		std::vector<RHI::ShaderResourceBindingLayout>& out_binding_layouts,
+		RHI::ShaderParameterBlockLayout* out_parameter_block_layout,
+		const char* parameter_block_name)
+	{
+		out_binding_layouts.clear();
+		if (out_parameter_block_layout)
+		{
+			*out_parameter_block_layout = {};
+		}
+		return m_render_device ?
+			m_render_device->reflect_graphics_program(desc, out_binding_layouts, out_parameter_block_layout, parameter_block_name) :
+			false;
+	}
+
 	bool Renderer::begin_pass(const PassDesc& desc, GraphicsPassContext& pass_context)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -292,27 +358,58 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_NC("Renderer::end_active_pass", AshEngine::Profile::Color::Submit);
 		ASH_PROFILE_SCOPE_TEXT(pass_name, std::strlen(pass_name));
 
+		if (pass_context->m_desc.allow_reorder_draws && pass_context->m_draw_calls.size() > 1)
+		{
+			ASH_PROFILE_SCOPE_NC("Renderer::SortDraws", AshEngine::Profile::Color::Submit);
+			std::stable_sort(
+				pass_context->m_draw_calls.begin(),
+				pass_context->m_draw_calls.end(),
+				compare_draw_state_key);
+		}
+
 		bool pass_started = false;
 		bool success = m_render_device != nullptr;
 		if (success)
 		{
 			ASH_PROFILE_SCOPE_NC("Renderer::PassTransitions", AshEngine::Profile::Color::Barrier);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass_context->m_draw_calls.size()));
+			std::unordered_set<const GraphicsProgram*> transitioned_programs;
+			std::unordered_set<const VertexBuffer*> transitioned_vertex_buffers;
+			std::unordered_set<const IndexBuffer*> transitioned_index_buffers;
+			transitioned_programs.reserve(pass_context->m_draw_calls.size());
+			transitioned_vertex_buffers.reserve(pass_context->m_draw_calls.size());
+			transitioned_index_buffers.reserve(pass_context->m_draw_calls.size());
+			std::vector<RHI::AshBarrier> pass_barriers;
+			pass_barriers.reserve(pass_context->m_draw_calls.size() * 3u);
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
 				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
-				if (!draw_desc.program || !m_render_device->transition_graphics_program_resources(draw_desc.program))
+				if (!draw_desc.program)
 				{
-					HLogError("Renderer: transition_graphics_program_resources failed for pass '{}' draw {}.", pass_name, draw_index);
+					HLogError("Renderer: missing graphics program for pass '{}' draw {}.", pass_name, draw_index);
+					success = false;
+					break;
+				}
+				if (transitioned_programs.insert(draw_desc.program).second &&
+					!m_render_device->collect_graphics_program_resource_barriers(draw_desc.program, pass_barriers))
+				{
+					HLogError("Renderer: collect_graphics_program_resource_barriers failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
 
 				for (const VertexBufferBinding& binding : draw_desc.vertex_buffers)
 				{
-					if (!binding.buffer || !m_render_device->transition_vertex_buffer(binding.buffer))
+					if (!binding.buffer)
 					{
 						HLogError("Renderer: transition_vertex_buffer failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);
+						success = false;
+						break;
+					}
+					if (transitioned_vertex_buffers.insert(binding.buffer.get()).second &&
+						!m_render_device->collect_vertex_buffer_barrier(binding.buffer, pass_barriers))
+					{
+						HLogError("Renderer: collect_vertex_buffer_barrier failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);
 						success = false;
 						break;
 					}
@@ -322,12 +419,19 @@ namespace AshEngine
 					break;
 				}
 
-				if (draw_desc.index_buffer && !m_render_device->transition_index_buffer(draw_desc.index_buffer))
+				if (draw_desc.index_buffer &&
+					transitioned_index_buffers.insert(draw_desc.index_buffer.get()).second &&
+					!m_render_device->collect_index_buffer_barrier(draw_desc.index_buffer, pass_barriers))
 				{
-					HLogError("Renderer: transition_index_buffer failed for pass '{}' draw {}.", pass_name, draw_index);
+					HLogError("Renderer: collect_index_buffer_barrier failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
+			}
+			if (success && !m_render_device->submit_resource_barriers(pass_barriers))
+			{
+				HLogError("Renderer: submit pass resource barriers failed for pass '{}'.", pass_name);
+				success = false;
 			}
 		}
 
@@ -352,7 +456,17 @@ namespace AshEngine
 				if (draw_desc.const_data_size > 0)
 				{
 					ASH_PROFILE_SCOPE_NC("Renderer::SetDrawConstants", AshEngine::Profile::Color::Submit);
-					if (draw_desc.const_data.size() < draw_desc.const_data_size || !draw_desc.program->set_const_data_block(draw_desc.const_data_size, draw_desc.const_data.data()))
+					const uint8_t* const_data = nullptr;
+					if (!draw_desc.const_data.empty())
+					{
+						const_data = draw_desc.const_data.size() >= draw_desc.const_data_size ? draw_desc.const_data.data() : nullptr;
+					}
+					else if (draw_desc.inline_const_data_valid &&
+						draw_desc.const_data_size <= GraphicsDrawDesc::InlineConstDataCapacity)
+					{
+						const_data = draw_desc.inline_const_data.data();
+					}
+					if (!const_data || !draw_desc.program->set_const_data_block(draw_desc.const_data_size, const_data))
 					{
 						HLogError("Renderer: set_const_data_block failed for pass '{}' draw {}.", pass_name, draw_index);
 						success = false;

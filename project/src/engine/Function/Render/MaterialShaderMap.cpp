@@ -229,29 +229,31 @@ namespace AshEngine
 		program_desc.vertex_entry = "VSMain";
 		program_desc.fragment_entry = "PSMain";
 		program_desc.shader_macro = nullptr;
+		program_desc.source_hash = resource.combined_source_hash;
 		program_desc.state = resource.program_state;
 		program_desc.name = resource.program_name.c_str();
 		program_desc.vertex_decl = resource.vertex_decl;
 
-		std::unique_ptr<GraphicsProgram> reflection_program =
-			m_renderer->create_graphics_program(program_desc);
-		if (!reflection_program)
+		std::vector<RHI::ShaderResourceBindingLayout> reflected_layouts{};
+		RHI::ShaderParameterBlockLayout parameter_block_layout{};
+		if (!m_renderer->reflect_graphics_program(
+			program_desc,
+			reflected_layouts,
+			&parameter_block_layout,
+			k_material_parameter_block_name))
 		{
 			if (out_error)
 			{
-				*out_error = "Failed to create reflection graphics program for material permutation.";
+				*out_error = "Failed to reflect shaders for material permutation.";
 			}
 			return nullptr;
 		}
-
-		std::vector<RHI::ShaderResourceBindingLayout> reflected_layouts{};
-		if (reflection_program->get_resource_binding_layouts(reflected_layouts))
+		if (!reflected_layouts.empty())
 		{
 			append_unique_binding_layouts(reflected_layouts, resource.binding_layout);
 		}
 
-		RHI::ShaderParameterBlockLayout parameter_block_layout{};
-		if (reflection_program->get_parameter_block_layout(k_material_parameter_block_name, parameter_block_layout))
+		if (!parameter_block_layout.name.empty())
 		{
 			resource.parameter_block_name = k_material_parameter_block_name;
 			resource.parameter_block_layout = std::move(parameter_block_layout);
