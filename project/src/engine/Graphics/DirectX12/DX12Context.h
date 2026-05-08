@@ -127,7 +127,7 @@ namespace RHI
 		auto _record_texture_upload(DX12FrameResources& frameResources, const std::shared_ptr<Texture>& texture, const void* data) -> bool;
 		auto _flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool;
-		auto _finalize_upload_command_buffer(DX12FrameResources& frameResources) -> void;
+		auto _finalize_upload_command_buffer(DX12FrameResources& frameResources) -> bool;
 		static void __stdcall _d3d12_debug_message_callback(
 			D3D12_MESSAGE_CATEGORY category,
 			D3D12_MESSAGE_SEVERITY severity,

@@ -1809,6 +1809,13 @@ namespace AshEngine
 		{
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 			ASH_PROCESS_ERROR(command_buffer);
+			if (command_buffer->has_error())
+			{
+				HLogError(
+					"RenderDevice: cannot record resource barriers because CommandBuffer is already in error state: {}",
+					command_buffer->get_last_error().empty() ? "<unknown>" : command_buffer->get_last_error());
+				ASH_PROCESS_ERROR(false);
+			}
 			if (barriers.empty())
 			{
 				break;
@@ -1816,7 +1823,34 @@ namespace AshEngine
 			ASH_PROFILE_SCOPE_NC("RenderDevice::SubmitResourceBarriers", AshEngine::Profile::Color::Barrier);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(barriers.size()));
 			bResult = command_buffer->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
+			if (!bResult || command_buffer->has_error())
+			{
+				HLogError(
+					"RenderDevice: failed to record {} resource barrier(s). CommandBuffer error: {}",
+					barriers.size(),
+					command_buffer->get_last_error().empty() ? "<none>" : command_buffer->get_last_error());
+				ASH_PROCESS_ERROR(false);
+			}
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		static bool validate_command_buffer_status(RHI::CommandBuffer* command_buffer, const char* phase)
+		{
+			if (!command_buffer)
+			{
+				HLogError("RenderDevice: command buffer is null during '{}'.", phase ? phase : "<unknown>");
+				return false;
+			}
+			if (!command_buffer->has_error())
+			{
+				return true;
+			}
+
+			HLogError(
+				"RenderDevice: command buffer error during '{}': {}",
+				phase ? phase : "<unknown>",
+				command_buffer->get_last_error().empty() ? "<unknown>" : command_buffer->get_last_error());
+			return false;
 		}
 
 		static bool collect_pass_begin_barriers(
@@ -2824,6 +2858,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_impl->current_command_buffer);
 
 		m_impl->current_command_buffer->begin_record();
+		ASH_PROCESS_ERROR(validate_command_buffer_status(m_impl->current_command_buffer, "begin_frame::begin_record"));
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
@@ -2840,13 +2875,50 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer);
 
-		end_pass();
-		bResult = render_present_to_swapchain();
-		m_impl->current_command_buffer->end_record();
-		m_impl->graphics_context->submit({ m_impl->current_command_buffer, 1 });
+		RHI::CommandBuffer* command_buffer = m_impl->current_command_buffer;
+		bool frame_recording_success = true;
+
+		if (!end_pass())
+		{
+			frame_recording_success = false;
+		}
+
+		if (frame_recording_success && !render_present_to_swapchain())
+		{
+			frame_recording_success = false;
+		}
+		if (!validate_command_buffer_status(command_buffer, "end_frame::record"))
+		{
+			frame_recording_success = false;
+		}
+
+		if (command_buffer->get_state() == RHI::AshCommandBufferState::ASH_Recording)
+		{
+			command_buffer->end_record();
+			if (!validate_command_buffer_status(command_buffer, "end_frame::end_record"))
+			{
+				frame_recording_success = false;
+			}
+		}
+		else if (frame_recording_success)
+		{
+			HLogError("RenderDevice: command buffer is not recording at end_frame (state={}).", static_cast<uint32_t>(command_buffer->get_state()));
+			frame_recording_success = false;
+		}
+
+		if (frame_recording_success)
+		{
+			m_impl->graphics_context->submit({ command_buffer, 1 });
+		}
+		else
+		{
+			HLogError("RenderDevice: skipping command buffer submit because frame recording failed.");
+		}
+
 		m_impl->swapchain->end_frame();
 		m_impl->graphics_context->end_frame();
 		m_impl->current_command_buffer = nullptr;
+		bResult = frame_recording_success;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -3250,7 +3322,11 @@ namespace AshEngine
 				HLogError("RenderDevice: failed to begin internal swapchain clear pass.");
 				ASH_PROCESS_ERROR(false);
 			}
-			end_pass();
+			if (!end_pass())
+			{
+				HLogError("RenderDevice: failed to end internal swapchain clear pass.");
+				ASH_PROCESS_ERROR(false);
+			}
 			break;
 		}
 
@@ -3705,9 +3781,10 @@ namespace AshEngine
 		}
 	}
 
-	void RenderDevice::end_pass()
+	bool RenderDevice::end_pass()
 	{
 		ASH_PROFILE_SCOPE_NC("RenderDevice::end_pass", AshEngine::Profile::Color::Pipeline);
+		bool result = true;
 		if (m_impl->current_command_buffer && m_impl->current_framebuffer)
 		{
 			if (m_impl->current_pass_gpu_zone_active)
@@ -3722,15 +3799,20 @@ namespace AshEngine
 			m_impl->current_command_buffer->cmd_end_render_pass();
 
 			std::vector<RHI::AshBarrier> end_pass_barriers;
-			submit_rhi_resource_barriers(
-				m_impl->current_command_buffer,
-				collect_pass_end_barriers(m_impl->current_framebuffer, m_impl->current_render_pass, end_pass_barriers) ? end_pass_barriers : std::vector<RHI::AshBarrier>{});
+			if (!collect_pass_end_barriers(m_impl->current_framebuffer, m_impl->current_render_pass, end_pass_barriers) ||
+				!submit_rhi_resource_barriers(m_impl->current_command_buffer, end_pass_barriers) ||
+				!validate_command_buffer_status(m_impl->current_command_buffer, "end_pass"))
+			{
+				HLogError("RenderDevice: end_pass failed while recording final resource barriers.");
+				result = false;
+			}
 		}
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
+		return result;
 	}
 
 	RHI::CommandBuffer* RenderDevice::get_current_command_buffer() const

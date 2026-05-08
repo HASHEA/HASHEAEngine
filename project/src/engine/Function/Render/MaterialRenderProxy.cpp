@@ -88,6 +88,14 @@ namespace AshEngine
 			m_surface_staticmesh_depthonly_resource.program != m_surface_staticmesh_depthonly_program.get();
 	}
 
+	bool MaterialRenderProxy::prepare_surface_staticmesh(RenderAssetManager& asset_manager, Renderer& renderer)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(update_bindings(asset_manager));
+		ASH_PROCESS_ERROR(ensure_program(renderer));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool MaterialRenderProxy::ensure_program(Renderer& renderer)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);

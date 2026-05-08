@@ -6,7 +6,6 @@
 #include "Function/Render/VertexLayoutPresets.h"
 #include <cstring>
 #include <limits>
-#include <mutex>
 
 namespace AshEngine
 {
@@ -25,30 +24,6 @@ namespace AshEngine
 			return "<unnamed-material>";
 		}
 
-		static auto log_v2_basepass_usage_once(
-			const MaterialInterface& material,
-			const MaterialResource& resource) -> void
-		{
-			static std::unordered_set<std::string> s_logged_material_keys{};
-			static std::mutex s_logged_material_keys_mutex{};
-			const std::string material_label = build_material_label(material);
-			const std::string log_key =
-				material_label +
-				"#" +
-				std::to_string(resource.combined_source_hash);
-			std::scoped_lock<std::mutex> lock(s_logged_material_keys_mutex);
-			if (!s_logged_material_keys.insert(log_key).second)
-			{
-				return;
-			}
-
-			HLogInfo(
-				"SceneRenderer: drawing Surface.StaticMesh.BasePass with V2 material '{}' "
-				"(program='{}', source_hash={}).",
-				material_label,
-				resource.program_name.empty() ? std::string("<unnamed-program>") : resource.program_name,
-				resource.combined_source_hash);
-		}
 	}
 
 	bool SceneRenderer::initialize(Renderer* renderer)
@@ -61,6 +36,7 @@ namespace AshEngine
 	{
 		m_scratch_depth_targets.clear();
 		m_logged_warning_keys.clear();
+		m_logged_material_usage_keys.clear();
 		m_renderer = nullptr;
 	}
 
@@ -143,7 +119,7 @@ namespace AshEngine
 					continue;
 				}
 
-				log_v2_basepass_usage_once(*section.material, *material_resource);
+				log_basepass_usage_once(*section.material, *material_resource);
 
 				SceneObjectConstants constants{};
 				constants.object_to_clip = frame.view_projection * draw.world_transform;
@@ -289,5 +265,25 @@ namespace AshEngine
 			return;
 		}
 		HLogWarning("{}", message);
+	}
+
+	void SceneRenderer::log_basepass_usage_once(const MaterialInterface& material, const MaterialResource& resource)
+	{
+		const std::string material_label = build_material_label(material);
+		const std::string log_key =
+			material_label +
+			"#" +
+			std::to_string(resource.combined_source_hash);
+		if (!m_logged_material_usage_keys.insert(log_key).second)
+		{
+			return;
+		}
+
+		HLogInfo(
+			"SceneRenderer: drawing Surface.StaticMesh.BasePass with V2 material '{}' "
+			"(program='{}', source_hash={}).",
+			material_label,
+			resource.program_name.empty() ? std::string("<unnamed-program>") : resource.program_name,
+			resource.combined_source_hash);
 	}
 }

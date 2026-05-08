@@ -11,6 +11,9 @@
 
 namespace AshEngine
 {
+	class MaterialInterface;
+	struct MaterialResource;
+
 	class ASH_API SceneRenderer
 	{
 	public:
@@ -31,6 +34,7 @@ namespace AshEngine
 		bool validate_view_context(const SceneRenderViewContext& view_context) const;
 		std::shared_ptr<RenderTarget> resolve_depth_target(const SceneRenderViewContext& view_context);
 		void log_warning_once(const std::string& key, const std::string& message);
+		void log_basepass_usage_once(const MaterialInterface& material, const MaterialResource& resource);
 
 	private:
 		struct ScratchDepthKey
@@ -50,5 +54,6 @@ namespace AshEngine
 		Renderer* m_renderer = nullptr;
 		std::vector<ScratchDepthEntry> m_scratch_depth_targets{};
 		std::unordered_set<std::string> m_logged_warning_keys{};
+		std::unordered_set<std::string> m_logged_material_usage_keys{};
 	};
 }

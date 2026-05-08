@@ -12,6 +12,7 @@ bin
 bin-int
 LogFiles
 Caches
+Intermediate
 _BUILD
 .worktrees
 product/bin64

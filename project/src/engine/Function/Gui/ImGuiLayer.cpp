@@ -337,7 +337,7 @@ namespace AshEngine
 				break;
 			}
 
-			m_render_device->end_pass();
+			bResult = m_render_device->end_pass() && bResult;
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 

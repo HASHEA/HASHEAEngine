@@ -369,7 +369,7 @@ public:
 		auto _record_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool;
 		auto _flush_pending_buffer_uploads() -> bool;
 		auto _flush_pending_texture_uploads() -> bool;
-		auto _finalize_upload_command_buffer() -> void;
+		auto _finalize_upload_command_buffer() -> bool;
 		auto _track_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, uint64_t size, const char* debugName, const char* file, uint32_t line, const char* function) -> void;
 		auto _untrack_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, const char* file, uint32_t line, const char* function) -> void;
 		auto _dump_vma_leaks() const -> void;

@@ -14,7 +14,6 @@
 #include <algorithm>
 #include <limits>
 #include <mutex>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -83,6 +82,7 @@ namespace AshEngine
 		std::unordered_map<uint32_t, BindingState> bindings{};
 		std::unordered_map<Scene*, SceneState> scene_states{};
 		std::vector<PreparedPacket> prepared_packets{};
+		std::unordered_set<uint32_t> logged_binding_submits{};
 		uint32_t next_output_id = 1;
 		uint32_t next_binding_id = 1;
 		uint32_t next_surface_id = 1;
@@ -159,6 +159,57 @@ namespace AshEngine
 			const uint32_t right = static_cast<uint32_t>(rect.x) + rect.width;
 			const uint32_t bottom = static_cast<uint32_t>(rect.y) + rect.height;
 			return right <= output_width && bottom <= output_height;
+		}
+
+		static bool prepare_visible_frame_material_proxies(
+			VisibleRenderFrame& frame,
+			RenderAssetManager& asset_manager,
+			Renderer& renderer)
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
+			for (VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+			{
+				for (ResolvedStaticMeshSection& section : draw.sections)
+				{
+					if (!section.material)
+					{
+						section.material = asset_manager.request_material_asset(k_builtin_default_surface_material_path);
+					}
+					if (!section.material)
+					{
+						HLogError("ScenePresentationSubsystem: static mesh section is missing a resolved material.");
+						ASH_PROCESS_ERROR(false);
+					}
+
+					if (section.material_proxy && !section.material_proxy->needs_surface_staticmesh_preparation())
+					{
+						continue;
+					}
+
+					std::shared_ptr<MaterialRenderProxy> material_proxy =
+						asset_manager.request_material_render_proxy(section.material);
+					if (!material_proxy)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
+							section.material->get_asset_path().generic_string());
+						ASH_PROCESS_ERROR(false);
+					}
+
+					if (!material_proxy->prepare_surface_staticmesh(asset_manager, renderer))
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
+							section.material->get_asset_path().generic_string());
+						ASH_PROCESS_ERROR(false);
+					}
+
+					section.material_proxy = std::move(material_proxy);
+				}
+			}
+
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 	}
@@ -272,6 +323,7 @@ namespace AshEngine
 		m_impl->scene_states.clear();
 		m_impl->bindings.clear();
 		m_impl->outputs.clear();
+		m_impl->logged_binding_submits.clear();
 		m_impl->next_output_id = 1;
 		m_impl->next_binding_id = 1;
 		m_impl->next_surface_id = 1;
@@ -582,8 +634,6 @@ namespace AshEngine
 		const std::shared_ptr<RenderTarget> back_buffer = m_impl->renderer->get_back_buffer();
 		std::unordered_set<uint32_t> touched_outputs{};
 		touched_outputs.reserve(prepared_packets.size());
-		static std::unordered_set<uint32_t> s_logged_binding_submits{};
-		static std::mutex s_logged_binding_submits_mutex{};
 
 		for (Impl::PreparedPacket& packet : prepared_packets)
 		{
@@ -647,8 +697,8 @@ namespace AshEngine
 
 			bool should_log_binding_submit = false;
 			{
-				std::scoped_lock<std::mutex> lock(s_logged_binding_submits_mutex);
-				should_log_binding_submit = s_logged_binding_submits.insert(packet.binding.value).second;
+				std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+				should_log_binding_submit = m_impl->logged_binding_submits.insert(packet.binding.value).second;
 			}
 			if (should_log_binding_submit)
 			{
@@ -668,43 +718,15 @@ namespace AshEngine
 					total_section_count);
 			}
 
-			for (VisibleStaticMeshDraw& draw : packet.visible_frame->static_mesh_draws)
+			if (!prepare_visible_frame_material_proxies(
+				*packet.visible_frame,
+				*m_impl->render_asset_manager,
+				*m_impl->renderer))
 			{
-				for (ResolvedStaticMeshSection& section : draw.sections)
-				{
-					if (!section.material)
-					{
-						section.material = m_impl->render_asset_manager->request_material_asset(k_builtin_default_surface_material_path);
-					}
-					if (!section.material)
-					{
-						HLogError("ScenePresentationSubsystem: static mesh section is missing a resolved material.");
-						continue;
-					}
-
-					if (!section.material_proxy || section.material_proxy->needs_surface_staticmesh_preparation())
-					{
-						std::shared_ptr<MaterialRenderProxy> material_proxy =
-							m_impl->render_asset_manager->request_material_render_proxy(section.material);
-						if (!material_proxy)
-						{
-							HLogError(
-								"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
-								section.material->get_asset_path().generic_string());
-							continue;
-						}
-						if (!material_proxy->update_bindings(*m_impl->render_asset_manager) ||
-							!material_proxy->ensure_program(*m_impl->renderer))
-						{
-							HLogError(
-								"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
-								section.material->get_asset_path().generic_string());
-							continue;
-						}
-
-						section.material_proxy = std::move(material_proxy);
-					}
-				}
+				HLogError(
+					"ScenePresentationSubsystem: material preparation failed for binding '{}'.",
+					packet.debug_name);
+				continue;
 			}
 
 			const bool first_use_on_output = touched_outputs.insert(output_state.handle.value).second;

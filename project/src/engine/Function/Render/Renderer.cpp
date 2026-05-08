@@ -524,7 +524,7 @@ namespace AshEngine
 
 		if (pass_started)
 		{
-			m_render_device->end_pass();
+			success = m_render_device->end_pass() && success;
 		}
 
 		if (!success)

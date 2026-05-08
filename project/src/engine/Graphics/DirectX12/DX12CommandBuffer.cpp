@@ -12,6 +12,8 @@
 #include "Graphics/Framebuffer.h"
 #include "Graphics/TextureUploadUtils.h"
 #include <cstring>
+#include <string>
+#include <utility>
 
 namespace RHI
 {
@@ -59,12 +61,38 @@ namespace RHI
 
 	auto DX12CommandBuffer::begin_record() -> void
 	{
-		H_ASSERT(m_currentAllocator != nullptr);
-		m_cmdList->Reset(m_currentAllocator, nullptr);
+		clear_error();
+		if (!m_cmdList)
+		{
+			mark_error("DX12CommandBuffer: begin_record called with a null command list.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		if (!m_currentAllocator)
+		{
+			mark_error("DX12CommandBuffer: begin_record called without a command allocator.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+
+		HRESULT hr = m_cmdList->Reset(m_currentAllocator, nullptr);
+		if (FAILED(hr))
+		{
+			mark_error("DX12CommandBuffer: command list Reset failed.");
+			HLogError("DX12CommandBuffer: command list Reset failed. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+			return;
+		}
 		m_state = ASH_Recording;
 
 		// Set descriptor heaps
-		auto& heaps = DX12Context::get()->get_descriptor_heaps();
+		DX12Context* context = DX12Context::get();
+		if (!context)
+		{
+			mark_error("DX12CommandBuffer: begin_record could not resolve DX12Context.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		auto& heaps = context->get_descriptor_heaps();
 		ID3D12DescriptorHeap* descriptorHeaps[] = {
 			heaps.gpuCbvSrvUav.get_heap(),
 			heaps.gpuSampler.get_heap()
@@ -74,12 +102,50 @@ namespace RHI
 
 	auto DX12CommandBuffer::end_record() -> void
 	{
-		m_cmdList->Close();
+		if (!m_cmdList)
+		{
+			mark_error("DX12CommandBuffer: end_record called with a null command list.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		if (m_state != ASH_Recording)
+		{
+			mark_error("DX12CommandBuffer: end_record called before begin_record.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+
+		HRESULT hr = m_cmdList->Close();
+		if (FAILED(hr))
+		{
+			mark_error("DX12CommandBuffer: command list Close failed.");
+			HLogError("DX12CommandBuffer: command list Close failed. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
+			return;
+		}
 		m_state = ASH_Ended;
 	}
 
 	void DX12CommandBuffer::_apply_barriers(const AshBarrier* barriers, uint32_t count)
 	{
+		if (!m_cmdList)
+		{
+			mark_error("DX12CommandBuffer: cannot apply barriers with a null command list.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		if (m_state != ASH_Recording)
+		{
+			mark_error("DX12CommandBuffer: cannot apply barriers while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		if (!barriers && count > 0)
+		{
+			mark_error("DX12CommandBuffer: cannot apply a non-empty null barrier array.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+
 		ASH_PROFILE_SCOPE_NC("DX12CommandBuffer::ApplyBarriers", AshEngine::Profile::Color::Barrier);
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
 		std::vector<D3D12_RESOURCE_BARRIER> d3dBarriers;
@@ -225,19 +291,19 @@ namespace RHI
 	auto DX12CommandBuffer::cmd_transition_resource_state(const AshBarrier& barrierInfo) -> bool
 	{
 		_apply_barriers(&barrierInfo, 1);
-		return true;
+		return !has_error();
 	}
 
 	auto DX12CommandBuffer::cmd_transition_resource_state(const std::initializer_list<AshBarrier>& lsBarrierInfoArray) -> bool
 	{
 		_apply_barriers(lsBarrierInfoArray.begin(), static_cast<uint32_t>(lsBarrierInfoArray.size()));
-		return true;
+		return !has_error();
 	}
 
 	auto DX12CommandBuffer::cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool
 	{
 		_apply_barriers(pBarrierInfo, uBarrierCount);
-		return true;
+		return !has_error();
 	}
 
 	auto DX12CommandBuffer::cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void
@@ -352,9 +418,28 @@ namespace RHI
 
 	auto DX12CommandBuffer::cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool
 	{
-		if (!source || !destination)
+		auto fail = [this](std::string message) -> bool
+			{
+				mark_error(std::move(message));
+				HLogError("{}", get_last_error());
+				return false;
+			};
+
+		if (has_error())
 		{
 			return false;
+		}
+		if (!m_cmdList)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture called with a null command list.");
+		}
+		if (m_state != ASH_Recording)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture called while command buffer is not recording.");
+		}
+		if (!source || !destination)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture requires non-null source and destination textures.");
 		}
 
 		auto* sourceTexture = static_cast<DX12Texture*>(source.get());
@@ -363,7 +448,7 @@ namespace RHI
 		ID3D12Resource* destinationResource = destinationTexture ? destinationTexture->get_resource() : nullptr;
 		if (!sourceResource || !destinationResource)
 		{
-			return false;
+			return fail("DX12CommandBuffer: cmd_copy_texture requires valid source and destination resources.");
 		}
 
 		auto canonical_format = [](DXGI_FORMAT format) -> DXGI_FORMAT
@@ -404,13 +489,13 @@ namespace RHI
 				"DX12CommandBuffer: cmd_copy_texture requires compatible textures, source '{}' -> destination '{}'.",
 				source->get_name(),
 				destination->get_name());
-			return false;
+			return fail("DX12CommandBuffer: cmd_copy_texture rejected incompatible textures.");
 		}
 
 		if (!cmd_transition_resource_state({ source, AshResourceState::CopySrc }) ||
 			!cmd_transition_resource_state({ destination, AshResourceState::CopyDst }))
 		{
-			return false;
+			return fail("DX12CommandBuffer: cmd_copy_texture failed to transition copy resources.");
 		}
 
 		const uint32_t subresourceCount =
@@ -437,7 +522,35 @@ namespace RHI
 
 	auto DX12CommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> buffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
+		auto fail = [this](std::string message) -> bool
+			{
+				mark_error(std::move(message));
+				HLogError("{}", get_last_error());
+				return false;
+			};
+
+		if (has_error())
+		{
+			return false;
+		}
+		if (!buffer || !pData || uSize == 0)
+		{
+			return fail("DX12CommandBuffer: cmd_update_sub_resource requires a valid buffer, source data, and non-zero size.");
+		}
+		if (!m_cmdList)
+		{
+			return fail("DX12CommandBuffer: cmd_update_sub_resource called with a null command list.");
+		}
+		if (m_state != ASH_Recording)
+		{
+			return fail("DX12CommandBuffer: cmd_update_sub_resource called while command buffer is not recording.");
+		}
+
 		auto* dx12Buf = static_cast<DX12Buffer*>(buffer.get());
+		if (!dx12Buf || !dx12Buf->get_resource())
+		{
+			return fail("DX12CommandBuffer: cmd_update_sub_resource requires a valid DX12 buffer resource.");
+		}
 
 		// If the buffer is on upload heap, directly memcpy
 		auto* mappedData = dx12Buf->get_mapped_data();
@@ -452,13 +565,21 @@ namespace RHI
 		{
 			if (!cmd_transition_resource_state({ buffer, AshResourceState::CopyDst }))
 			{
-				return false;
+				return fail("DX12CommandBuffer: cmd_update_sub_resource failed to transition destination buffer.");
 			}
 		}
 
-		auto* staging = DX12Context::get()->get_staging_buffer();
+		DX12Context* context = DX12Context::get();
+		auto* staging = context ? context->get_staging_buffer() : nullptr;
+		if (!staging)
+		{
+			return fail("DX12CommandBuffer: cmd_update_sub_resource requires a valid staging buffer.");
+		}
 		auto [stagingResource, stagingOffset] = staging->stage_data(pData, uSize);
-		H_ASSERT(stagingResource);
+		if (!stagingResource)
+		{
+			return fail("DX12CommandBuffer: cmd_update_sub_resource failed to allocate staging memory.");
+		}
 		m_cmdList->CopyBufferRegion(
 			dx12Buf->get_resource(), uOffset,
 			stagingResource, stagingOffset,
@@ -468,28 +589,47 @@ namespace RHI
 
 	auto DX12CommandBuffer::cmd_update_texture_sub_resource(std::shared_ptr<Texture> texture, const void* pData) -> bool
 	{
-		if (!texture || !pData)
+		auto fail = [this](std::string message) -> bool
+			{
+				mark_error(std::move(message));
+				HLogError("{}", get_last_error());
+				return false;
+			};
+
+		if (has_error())
 		{
 			return false;
 		}
+		if (!m_cmdList)
+		{
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource called with a null command list.");
+		}
+		if (m_state != ASH_Recording)
+		{
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource called while command buffer is not recording.");
+		}
+		if (!texture || !pData)
+		{
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource requires a valid texture and source data.");
+		}
 
 		auto* dx12Texture = static_cast<DX12Texture*>(texture.get());
-		ID3D12Resource* textureResource = dx12Texture->get_resource();
+		ID3D12Resource* textureResource = dx12Texture ? dx12Texture->get_resource() : nullptr;
 		if (!textureResource)
 		{
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource requires a valid DX12 texture resource.");
 		}
 
 		const TextureCreation& creation = dx12Texture->get_desciption();
 		if (creation.eSampleCount != ASH_SAMPLE_COUNT_1_BIT)
 		{
 			HLogError("DX12CommandBuffer: Texture upload only supports sample count 1 for '{}'.", texture->get_name());
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource rejected unsupported sample count.");
 		}
 		if (DX12TextureFormat::is_depth_format(creation.format))
 		{
 			HLogError("DX12CommandBuffer: Depth/stencil texture upload is not supported for '{}'.", texture->get_name());
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource rejected depth/stencil texture upload.");
 		}
 
 		const AshDXGIFormatInfo& formatInfo = get_dxgi_format_info(creation.format);
@@ -499,7 +639,7 @@ namespace RHI
 			formatInfo.uHeightPerBlock == 0)
 		{
 			HLogError("DX12CommandBuffer: Unsupported upload format {} for texture '{}'.", static_cast<uint32_t>(creation.format), texture->get_name());
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource rejected unsupported texture format.");
 		}
 
 		std::vector<TextureUploadSubresource> subresources{};
@@ -511,13 +651,14 @@ namespace RHI
 		if (!build_tightly_packed_texture_upload_layout(creation, uploadFormatInfo, subresources, tightPackedBytes) || subresources.empty())
 		{
 			HLogError("DX12CommandBuffer: Failed to build upload layout for texture '{}'.", texture->get_name());
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource failed to build upload layout.");
 		}
 
-		ID3D12Device* device = DX12Context::get()->get_device();
+		DX12Context* context = DX12Context::get();
+		ID3D12Device* device = context ? context->get_device() : nullptr;
 		if (!device)
 		{
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource requires a valid D3D12 device.");
 		}
 
 		const UINT subresourceCount = static_cast<UINT>(subresources.size());
@@ -539,7 +680,7 @@ namespace RHI
 		if (totalUploadBytes == 0 || totalUploadBytes > UINT32_MAX)
 		{
 			HLogError("DX12CommandBuffer: Texture upload footprint size is invalid for '{}'.", texture->get_name());
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource computed an invalid footprint size.");
 		}
 
 		std::vector<uint8_t> packedUploadData(static_cast<size_t>(totalUploadBytes), 0u);
@@ -551,7 +692,7 @@ namespace RHI
 			if (rowSizesInBytes[subresourceIndex] < subresource.rowBytes || numRows[subresourceIndex] < subresource.rowCount)
 			{
 				HLogError("DX12CommandBuffer: Texture upload footprint mismatch for '{}', subresource {}.", texture->get_name(), subresourceIndex);
-				return false;
+				return fail("DX12CommandBuffer: cmd_update_texture_sub_resource computed an incompatible upload footprint.");
 			}
 
 			const uint64_t destinationSliceStride = static_cast<uint64_t>(layout.Footprint.RowPitch) * static_cast<uint64_t>(numRows[subresourceIndex]);
@@ -569,21 +710,24 @@ namespace RHI
 			}
 		}
 
-		auto* staging = DX12Context::get()->get_staging_buffer();
+		auto* staging = context ? context->get_staging_buffer() : nullptr;
 		if (!staging)
 		{
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource requires a valid staging buffer.");
 		}
 
 		auto [stagingResource, stagingOffset] = staging->stage_data(
 			packedUploadData.data(),
 			static_cast<uint32_t>(totalUploadBytes),
 			D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
-		H_ASSERT(stagingResource);
+		if (!stagingResource)
+		{
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource failed to allocate staging memory.");
+		}
 
 		if (!cmd_transition_resource_state({ texture, AshResourceState::CopyDst }))
 		{
-			return false;
+			return fail("DX12CommandBuffer: cmd_update_texture_sub_resource failed to transition destination texture.");
 		}
 
 		for (UINT subresourceIndex = 0; subresourceIndex < subresourceCount; ++subresourceIndex)
@@ -606,7 +750,7 @@ namespace RHI
 		{
 			if (!cmd_transition_resource_state({ texture, AshResourceState::CopyDst, creation.initial_state }))
 			{
-				return false;
+				return fail("DX12CommandBuffer: cmd_update_texture_sub_resource failed to restore initial texture state.");
 			}
 		}
 

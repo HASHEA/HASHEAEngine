@@ -7,11 +7,14 @@
 #include "VulkanBuffer.h"
 #include "VulkanTexture.h"
 #include "VulkanStagingBuffer.h"
+#include "Base/hlog.h"
 #include "Graphics/CommandBuffer.h"
 #include "Graphics/Buffer.h"
 #include "Graphics/TextureUploadUtils.h"
 #include <cstring>
 #include <numeric>
+#include <string>
+#include <utility>
 namespace RHI
 {
 	namespace
@@ -341,31 +344,64 @@ namespace RHI
 
 	auto VulkanCommandBuffer::begin_record() -> void
 	{
-		H_ASSERTLOG(vkCommandBuffer != VK_NULL_HANDLE, "Fatal: try to access a invalid vkCommandBuffer !");
-		VK_CHECK_RESULT(vkResetDescriptorPool(VulkanContext::get_vulkan_device(), vk_descriptor_pool, 0));
+		clear_error();
+		if (vkCommandBuffer == VK_NULL_HANDLE)
+		{
+			mark_error("VulkanCommandBuffer: begin_record called with a null VkCommandBuffer.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		if (vk_descriptor_pool == VK_NULL_HANDLE)
+		{
+			mark_error("VulkanCommandBuffer: begin_record called with a null descriptor pool.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+
+		VkResult result = vkResetDescriptorPool(VulkanContext::get_vulkan_device(), vk_descriptor_pool, 0);
+		if (result != VK_SUCCESS)
+		{
+			mark_error("VulkanCommandBuffer: vkResetDescriptorPool failed.");
+			HLogError("VulkanCommandBuffer: vkResetDescriptorPool failed: {}.", vulkan_error_string(result));
+			return;
+		}
 		currentBoundRenderPass = nullptr;
 		currentBoundFramebuffer = nullptr;
-		if (secondary)
+		VkCommandBufferBeginInfo beginCI{};
+		beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		beginCI.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+		beginCI.pInheritanceInfo = nullptr;
+		result = vkBeginCommandBuffer(vkCommandBuffer, &beginCI);
+		if (result != VK_SUCCESS)
 		{
-			VkCommandBufferBeginInfo beginCI{};
-			beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			beginCI.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-			beginCI.pInheritanceInfo = nullptr;
-			VK_CHECK_RESULT(vkBeginCommandBuffer(vkCommandBuffer, &beginCI));
-		}
-		else
-		{
-			VkCommandBufferBeginInfo beginCI{};
-			beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			beginCI.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-			VK_CHECK_RESULT(vkBeginCommandBuffer(vkCommandBuffer, &beginCI));
+			mark_error("VulkanCommandBuffer: vkBeginCommandBuffer failed.");
+			HLogError("VulkanCommandBuffer: vkBeginCommandBuffer failed: {}.", vulkan_error_string(result));
+			return;
 		}
 		state = AshCommandBufferState::ASH_Recording;
 	}
 	auto VulkanCommandBuffer::end_record() -> void
 	{
-		H_ASSERTLOG(state == AshCommandBufferState::ASH_Recording, "CommandBuffer ended before started recording");
-		VK_CHECK_RESULT(vkEndCommandBuffer(vkCommandBuffer));
+		if (vkCommandBuffer == VK_NULL_HANDLE)
+		{
+			mark_error("VulkanCommandBuffer: end_record called with a null VkCommandBuffer.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		if (state != AshCommandBufferState::ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: end_record called before begin_record.");
+			HLogError("{}", get_last_error());
+			return;
+		}
+
+		VkResult result = vkEndCommandBuffer(vkCommandBuffer);
+		if (result != VK_SUCCESS)
+		{
+			mark_error("VulkanCommandBuffer: vkEndCommandBuffer failed.");
+			HLogError("VulkanCommandBuffer: vkEndCommandBuffer failed: {}.", vulkan_error_string(result));
+			return;
+		}
 		state = AshCommandBufferState::ASH_Ended;
 	}
 	auto VulkanCommandBuffer::get_state() -> AshCommandBufferState
@@ -587,6 +623,16 @@ namespace RHI
 	}
 	auto VulkanCommandBuffer::cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool
 	{
+		if (has_error())
+		{
+			return false;
+		}
+		if (state != ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: cmd_copy_texture called while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		ASH_LOG_PROCESS_ERROR(source && destination);
@@ -652,15 +698,31 @@ namespace RHI
 			copyRegions.data());
 
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: cmd_copy_texture failed.");
+			HLogError("{}", get_last_error());
+		}
 		return bResult;
 	}
 	auto VulkanCommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> pBuffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
+		if (has_error())
+		{
+			return false;
+		}
+		if (state != ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: cmd_update_sub_resource called while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		const AshResourceAccessType accessType =
 			pBuffer ? pBuffer->get_buffer_creation_info().access_type : AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE;
 		ASH_SAFE_EXECUTE_BEGIN(bResult); 
 		ASH_LOG_PROCESS_ERROR(pBuffer);
+		ASH_LOG_PROCESS_ERROR(pData);
 		const auto& bufferDesc = pBuffer->get_buffer_creation_info();
 		ASH_LOG_PROCESS_ERROR(uSize > 0);
 		ASH_LOG_PROCESS_ERROR((bufferDesc.access_type != AshResourceAccessType::ASH_RESOURCE_ACCESS_READ));
@@ -734,6 +796,7 @@ namespace RHI
 		ASH_SAFE_EXECUTE_END(bResult);
 		if (!bResult)
 		{
+			mark_error("VulkanCommandBuffer: cmd_update_sub_resource failed.");
 			HLogError(
 				"VulkanCommandBuffer: cmd_update_sub_resource failed for '{}' (offset={}, size={}, access_type={}, dynamic={}).",
 				pBuffer && pBuffer->get_name() ? pBuffer->get_name() : "UnnamedBuffer",
@@ -747,6 +810,16 @@ namespace RHI
 
 	auto VulkanCommandBuffer::cmd_update_texture_sub_resource(std::shared_ptr<Texture> pTexture, const void* pData) -> bool
 	{
+		if (has_error())
+		{
+			return false;
+		}
+		if (state != ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: cmd_update_texture_sub_resource called while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		ASH_LOG_PROCESS_ERROR(pTexture && pData);
@@ -845,24 +918,62 @@ namespace RHI
 		}
 
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: cmd_update_texture_sub_resource failed.");
+			HLogError("{}", get_last_error());
+		}
 		return bResult;
 	}
 	auto VulkanCommandBuffer::cmd_transition_resource_state(const AshBarrier& barrierInfo) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		bool bretCode = cmd_transition_resource_state(&barrierInfo, 1);
+		bResult = bretCode;
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: failed to record resource transition.");
+		}
 		return bResult;
 	}
 	auto VulkanCommandBuffer::cmd_transition_resource_state(const std::initializer_list<AshBarrier>& lsBarrierInfoArrray) -> bool
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
 		bool bretCode = cmd_transition_resource_state(lsBarrierInfoArrray.begin(), (uint32_t)lsBarrierInfoArrray.size());
+		bResult = bretCode;
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: failed to record resource transition list.");
+		}
 		return bResult;
 	}
 	auto VulkanCommandBuffer::cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool
 	{
+		if (has_error())
+		{
+			return false;
+		}
+		if (state != ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: cmd_transition_resource_state called while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
+		if (!pBarrierInfo && uBarrierCount > 0)
+		{
+			mark_error("VulkanCommandBuffer: cannot apply a non-empty null barrier array.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
+		if (vkCommandBuffer == VK_NULL_HANDLE)
+		{
+			mark_error("VulkanCommandBuffer: cannot apply barriers with a null VkCommandBuffer.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
+
 		ASH_PROFILE_SCOPE_NC("VulkanCommandBuffer::ApplyBarriers", AshEngine::Profile::Color::Barrier);
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(uBarrierCount));
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
@@ -1176,6 +1287,10 @@ namespace RHI
 			);
 		}
 		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: failed to record resource barriers.");
+		}
 		return bResult;
 	}
 	auto VulkanCommandBuffer::set_state(AshCommandBufferState _state) -> void

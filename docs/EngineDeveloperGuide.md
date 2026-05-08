@@ -508,6 +508,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - Framebuffer cache 会在连续数帧未使用后清理；`clear_transient_render_targets()` 也会清掉 framebuffer cache，避免 transient / resize 路径长期压住旧 attachment
 - Vulkan dynamic rendering 下，`cmd_end_render_pass()` 结束后 attachment 仍停留在 renderable layout；resource tracker 必须先保持 `RTV` / `DSVWrite` 这类真实附件状态，再由 pass 外部显式 barrier 转到 `SRVGraphics` / `Present` 等 final state
 - DX12 texture transition 由 `DX12ResourceTracker` 维护 per-subresource 状态；当整资源 transition 遇到 mip/slice 混合状态时，必须展开成子资源 barrier，不能用某个旧整资源状态覆盖全部 subresource
+- RHI `CommandBuffer` 会记录首个命令录制错误；`RenderDevice` 在 `begin_record()`、barrier/copy/upload、`end_pass()` 和 `end_record()` 后必须检查 `has_error()`，有错时跳过 submit，不能把已知非法命令提交给 Vulkan/DX12 queue
 
 这样做的原因是：
 
@@ -1052,6 +1053,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
   - 向 `MaterialSystem` 申请/缓存按 `MaterialUsageDesc` 编译出的 V2 resource template
   - 根据 shader 反射得到的 parameter block layout 打包材质参数
   - 按 `resources + samplers` 解析最终贴图/采样器绑定
+  - 通过 `prepare_surface_staticmesh(...)` 收口 static mesh surface 的 binding 更新和 graphics program 准备
 - `MaterialSystem` 现在会把 engine shader family host、material shader 和生成的 `Bindings.generated.hlsli` 组合成最终编译单元
 - 当前静态 mesh `Surface` 使用的 engine-host shader 为：
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshBasePass.hlsl`
@@ -1221,7 +1223,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 当前 `SceneRenderer` 的内部提交约定仍然是按 view 显式提交：
 
 - `VisibleRenderFrame` 只保存 scene 可见性结果和 draw 所需的不可变数据，不再持有 `output_target`
-- `VisibleRenderFrame` 中的 static mesh section 携带最终 `MaterialInterface`；`MaterialRenderProxy` 在 render-thread submit phase 解析并缓存
+- `VisibleRenderFrame` 中的 static mesh section 携带最终 `MaterialInterface`；`ScenePresentationSubsystem` 在 render-thread submit phase 通过 `MaterialRenderProxy::prepare_surface_staticmesh(...)` 解析并缓存 draw-time proxy
 - render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`
 - `SceneRenderViewContext` 负责描述 per-view 提交状态：
   - `output_target`

@@ -1,5 +1,8 @@
 #pragma once
 #include "RHICommon.h"
+#include <string>
+#include <utility>
+
 namespace RHI
 {
 	struct TextureSubResource;
@@ -40,7 +43,27 @@ namespace RHI
 		virtual auto cmd_dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) -> void = 0;
 		virtual auto cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool = 0;
 		virtual auto cmd_update_sub_resource(std::shared_ptr<Buffer>, uint32_t uOffset, uint32_t uSize, void* pData) -> bool = 0;
-	private:
 
+		bool has_error() const { return m_has_error; }
+		const std::string& get_last_error() const { return m_last_error; }
+		void clear_error()
+		{
+			m_has_error = false;
+			m_last_error.clear();
+		}
+
+	protected:
+		void mark_error(std::string message)
+		{
+			if (!m_has_error)
+			{
+				m_last_error = std::move(message);
+			}
+			m_has_error = true;
+		}
+
+	private:
+		bool m_has_error = false;
+		std::string m_last_error{};
 	};
 };

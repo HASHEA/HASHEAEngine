@@ -251,6 +251,13 @@ namespace RHI
 		{
 			frameResources.uploadCmdBuffer->set_allocator(frameResources.uploadCmdAllocator->get_allocator());
 			frameResources.uploadCmdBuffer->begin_record();
+			if (frameResources.uploadCmdBuffer->has_error())
+			{
+				HLogError(
+					"DX12Context: failed to begin upload command buffer recording: {}",
+					frameResources.uploadCmdBuffer->get_last_error().empty() ? "<unknown>" : frameResources.uploadCmdBuffer->get_last_error());
+				return false;
+			}
 			frameResources.uploadCommandsPending = true;
 		}
 
@@ -323,16 +330,24 @@ namespace RHI
 		return true;
 	}
 
-	auto DX12Context::_finalize_upload_command_buffer(DX12FrameResources& frameResources) -> void
+	auto DX12Context::_finalize_upload_command_buffer(DX12FrameResources& frameResources) -> bool
 	{
 		if (!frameResources.uploadCommandsPending || !frameResources.uploadCmdBuffer)
 		{
-			return;
+			return true;
 		}
 		if (frameResources.uploadCmdBuffer->get_state() == AshCommandBufferState::ASH_Recording)
 		{
 			frameResources.uploadCmdBuffer->end_record();
+			if (frameResources.uploadCmdBuffer->has_error())
+			{
+				HLogError(
+					"DX12Context: failed to end upload command buffer recording: {}",
+					frameResources.uploadCmdBuffer->get_last_error().empty() ? "<unknown>" : frameResources.uploadCmdBuffer->get_last_error());
+				return false;
+			}
 		}
+		return !frameResources.uploadCmdBuffer->has_error();
 	}
 
 	auto DX12Context::init(void* config) -> bool
@@ -1041,17 +1056,23 @@ namespace RHI
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
 		{
-			_finalize_upload_command_buffer(fr);
 			std::vector<ID3D12CommandList*> uploadCmdLists{};
-			uploadCmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
+			if (_finalize_upload_command_buffer(fr) && fr.uploadCmdBuffer && !fr.uploadCmdBuffer->has_error())
 			{
-				ASH_PROFILE_SCOPE_NC("DX12Context::ExecuteUploadCommandLists", AshEngine::Profile::Color::RHI);
-				ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(uploadCmdLists.size()));
-				m_graphicsQueue.execute_command_lists(static_cast<UINT>(uploadCmdLists.size()), uploadCmdLists.data());
+				uploadCmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
+				{
+					ASH_PROFILE_SCOPE_NC("DX12Context::ExecuteUploadCommandLists", AshEngine::Profile::Color::RHI);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(uploadCmdLists.size()));
+					m_graphicsQueue.execute_command_lists(static_cast<UINT>(uploadCmdLists.size()), uploadCmdLists.data());
+				}
+				fr.uploadCmdBuffer->set_state(ASH_Submitted);
+				fr.fence->signal(m_graphicsQueue.get_queue());
 			}
-			fr.uploadCmdBuffer->set_state(ASH_Submitted);
+			else
+			{
+				HLogError("DX12Context: skipping errored upload command buffer submit in end_frame.");
+			}
 			fr.uploadCommandsPending = false;
-			fr.fence->signal(m_graphicsQueue.get_queue());
 		}
 		_drain_d3d12_debug_messages("frame-end");
 
@@ -1099,15 +1120,37 @@ namespace RHI
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
 		{
-			_finalize_upload_command_buffer(fr);
-			cmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
-			fr.uploadCmdBuffer->set_state(ASH_Submitted);
+			if (_finalize_upload_command_buffer(fr) && fr.uploadCmdBuffer && !fr.uploadCmdBuffer->has_error())
+			{
+				cmdLists.push_back(fr.uploadCmdBuffer->get_command_list());
+				fr.uploadCmdBuffer->set_state(ASH_Submitted);
+			}
+			else
+			{
+				HLogError("DX12Context: skipping errored upload command buffer submit.");
+			}
 			fr.uploadCommandsPending = false;
 		}
 
-		for (uint32_t i = 0; i < info.cmdCount; ++i)
+		uint32_t submitCount = info.cmdCount;
+		if (!info.cmds && submitCount > 0)
+		{
+			HLogError("DX12Context: submit received a null command buffer array with count {}.", submitCount);
+			submitCount = 0;
+		}
+
+		for (uint32_t i = 0; i < submitCount; ++i)
 		{
 			auto* dx12Cb = static_cast<DX12CommandBuffer*>(&info.cmds[i]);
+			if (!dx12Cb || dx12Cb->has_error() || dx12Cb->get_state() != AshCommandBufferState::ASH_Ended)
+			{
+				HLogError(
+					"DX12Context: skipping invalid command buffer submit at index {} (state={}, error={}).",
+					i,
+					dx12Cb ? static_cast<uint32_t>(dx12Cb->get_state()) : UINT32_MAX,
+					(dx12Cb && dx12Cb->has_error()) ? dx12Cb->get_last_error() : "<none>");
+				continue;
+			}
 			cmdLists.push_back(dx12Cb->get_command_list());
 			dx12Cb->set_state(ASH_Submitted);
 		}

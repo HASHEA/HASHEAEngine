@@ -1676,6 +1676,13 @@ auto VulkanContext::destroy() -> void
 				return false;
 			}
 			currentUploadCommandBuffer->begin_record();
+			if (currentUploadCommandBuffer->has_error())
+			{
+				HLogError(
+					"VulkanContext: failed to begin upload command buffer recording: {}",
+					currentUploadCommandBuffer->get_last_error().empty() ? "<unknown>" : currentUploadCommandBuffer->get_last_error());
+				return false;
+			}
 			uploadCommandsPending = true;
 			uploadCommandQueued = false;
 		}
@@ -1770,16 +1777,24 @@ auto VulkanContext::destroy() -> void
 		return true;
 	}
 
-	auto VulkanContext::_finalize_upload_command_buffer() -> void
+	auto VulkanContext::_finalize_upload_command_buffer() -> bool
 	{
 		if (!uploadCommandsPending || !currentUploadCommandBuffer)
 		{
-			return;
+			return true;
 		}
 		if (currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Recording)
 		{
 			currentUploadCommandBuffer->end_record();
+			if (currentUploadCommandBuffer->has_error())
+			{
+				HLogError(
+					"VulkanContext: failed to end upload command buffer recording: {}",
+					currentUploadCommandBuffer->get_last_error().empty() ? "<unknown>" : currentUploadCommandBuffer->get_last_error());
+				return false;
+			}
 		}
+		return !currentUploadCommandBuffer->has_error();
 	}
 
 	auto VulkanContext::create_texture(const TextureCreation& ci) -> std::shared_ptr<Texture>
@@ -1933,20 +1948,42 @@ auto VulkanContext::destroy() -> void
 
 	auto VulkanContext::submit(const SubmitInfo& info) -> void
 	{
+		const uint32_t submitCount = info.cmds ? info.cmdCount : 0u;
+		if (!info.cmds && info.cmdCount > 0)
+		{
+			HLogError("VulkanContext: submit received a null command buffer array with count {}.", info.cmdCount);
+		}
 		const uint32_t extraUploadCommandCount = (uploadCommandsPending && !uploadCommandQueued) ? 1u : 0u;
-		H_ASSERTLOG(commandBufferQueue.size() + info.cmdCount + extraUploadCommandCount <= k_command_buffer_queue_length, "Fatal: command count exceeds queue length.");
+		H_ASSERTLOG(commandBufferQueue.size() + submitCount + extraUploadCommandCount <= k_command_buffer_queue_length, "Fatal: command count exceeds queue length.");
 		if (uploadCommandsPending && !uploadCommandQueued)
 		{
-			_finalize_upload_command_buffer();
-			H_ASSERTLOG(currentUploadCommandBuffer && currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Ended, "Fatal: upload command buffer must be ended before queue submit.");
-			commandBufferQueue.push_back(currentUploadCommandBuffer);
-			uploadCommandQueued = true;
+			if (_finalize_upload_command_buffer() &&
+				currentUploadCommandBuffer &&
+				!currentUploadCommandBuffer->has_error() &&
+				currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Ended)
+			{
+				commandBufferQueue.push_back(currentUploadCommandBuffer);
+				uploadCommandQueued = true;
+			}
+			else
+			{
+				HLogError("VulkanContext: skipping errored upload command buffer submit.");
+				uploadCommandsPending = false;
+				uploadCommandQueued = false;
+			}
 		}
 		//enqueue vkCommandBuffer
-		for (size_t i = 0; i < info.cmdCount; i++)
+		for (size_t i = 0; i < submitCount; i++)
 		{
-			H_ASSERTLOG(info.cmds[i].get_state() == AshCommandBufferState::ASH_Ended,
-				"Fatal: The submitted command buffer must be ended before submit!");
+			if (info.cmds[i].has_error() || info.cmds[i].get_state() != AshCommandBufferState::ASH_Ended)
+			{
+				HLogError(
+					"VulkanContext: skipping invalid command buffer submit at index {} (state={}, error={}).",
+					i,
+					static_cast<uint32_t>(info.cmds[i].get_state()),
+					info.cmds[i].has_error() ? info.cmds[i].get_last_error() : "<none>");
+				continue;
+			}
 			commandBufferQueue.push_back(static_cast<VulkanCommandBuffer*>(&info.cmds[i]));
 		}
 	}
@@ -1954,7 +1991,14 @@ auto VulkanContext::destroy() -> void
 	auto VulkanContext::submit_immediately(const SubmitInfo& info) -> void
 	{
 		H_ASSERTLOG(info.cmdCount == 1, " immediately submit can only submit one command once!");
-		H_ASSERTLOG(info.cmds->get_state() == AshCommandBufferState::ASH_Ended, " comand buffer must be ended before submit!");
+		if (!info.cmds || info.cmds->has_error() || info.cmds->get_state() != AshCommandBufferState::ASH_Ended)
+		{
+			HLogError(
+				"VulkanContext: skipping invalid immediate command buffer submit (state={}, error={}).",
+				info.cmds ? static_cast<uint32_t>(info.cmds->get_state()) : UINT32_MAX,
+				(info.cmds && info.cmds->has_error()) ? info.cmds->get_last_error() : "<none>");
+			return;
+		}
 		//immediately submit and got result
 		const VkCommandBuffer cmds[] = { (VkCommandBuffer)info.cmds->get_native_handle() };
 		vulkanImmediateFence->reset();
@@ -2062,11 +2106,19 @@ auto VulkanContext::destroy() -> void
 
 		if (uploadCommandsPending && !uploadCommandQueued)
 		{
-			_finalize_upload_command_buffer();
-			if (currentUploadCommandBuffer && currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Ended)
+			if (_finalize_upload_command_buffer() &&
+				currentUploadCommandBuffer &&
+				!currentUploadCommandBuffer->has_error() &&
+				currentUploadCommandBuffer->get_state() == AshCommandBufferState::ASH_Ended)
 			{
 				commandBufferQueue.push_back(currentUploadCommandBuffer);
 				uploadCommandQueued = true;
+			}
+			else
+			{
+				HLogError("VulkanContext: skipping errored upload command buffer submit in end_frame.");
+				uploadCommandsPending = false;
+				uploadCommandQueued = false;
 			}
 		}
 		//submit all commands
