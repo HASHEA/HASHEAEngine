@@ -7,14 +7,25 @@
 #include "Graphics/Texture.h"
 #include "Base/hprofiler.h"
 #include "base/hlog.h"
+#include <mutex>
 #include <unordered_map>
 namespace RHI
 {
-	static std::unordered_map<size_t, std::weak_ptr<VulkanDescriptorSetLayout>> g_descriptor_set_layout_cache;
-
 	namespace
 	{
 		static constexpr uint32_t k_descriptor_sets_per_layout_pool = 256;
+
+		struct DescriptorSetLayoutCache
+		{
+			std::mutex mutex{};
+			std::unordered_map<size_t, std::weak_ptr<VulkanDescriptorSetLayout>> layouts{};
+		};
+
+		static DescriptorSetLayoutCache& get_descriptor_set_layout_cache()
+		{
+			static DescriptorSetLayoutCache cache{};
+			return cache;
+		}
 
 		static std::shared_ptr<VulkanDescriptorPool> find_or_create_available_pool(const std::shared_ptr<VulkanDescriptorPoolContainer>& pool_container)
 		{
@@ -154,13 +165,16 @@ namespace RHI
 	std::shared_ptr<VulkanDescriptorSetLayout> VulkanDescriptorSetLayout::create(const DescriptorSetLayoutCreation& creation)
 	{
 		const size_t hash_code = hash_descriptor_set_layout_creation(creation);
-		auto it = g_descriptor_set_layout_cache.find(hash_code);
-		if (it != g_descriptor_set_layout_cache.end())
+		DescriptorSetLayoutCache& cache = get_descriptor_set_layout_cache();
+		std::scoped_lock<std::mutex> lock(cache.mutex);
+		auto it = cache.layouts.find(hash_code);
+		if (it != cache.layouts.end())
 		{
 			if (auto cached = it->second.lock())
 			{
 				return cached;
 			}
+			cache.layouts.erase(it);
 		}
 
 		auto layout = Ash_New_Shared<VulkanDescriptorSetLayout>();
@@ -168,23 +182,30 @@ namespace RHI
 		{
 			return nullptr;
 		}
-		g_descriptor_set_layout_cache[hash_code] = layout;
+		cache.layouts[hash_code] = layout;
 		return layout;
 	}
 
 	void shutdown_vulkan_descriptor_set_layout_cache()
 	{
-		for (auto it = g_descriptor_set_layout_cache.begin(); it != g_descriptor_set_layout_cache.end();)
+		std::vector<std::shared_ptr<VulkanDescriptorSetLayout>> live_layouts{};
+		DescriptorSetLayoutCache& cache = get_descriptor_set_layout_cache();
 		{
-			if (auto layout = it->second.lock())
+			std::scoped_lock<std::mutex> lock(cache.mutex);
+			for (const auto& [hash_code, weak_layout] : cache.layouts)
 			{
-				layout->shutdown_pool_container();
-				++it;
+				(void)hash_code;
+				if (auto layout = weak_layout.lock())
+				{
+					live_layouts.push_back(std::move(layout));
+				}
 			}
-			else
-			{
-				it = g_descriptor_set_layout_cache.erase(it);
-			}
+			cache.layouts.clear();
+		}
+
+		for (const std::shared_ptr<VulkanDescriptorSetLayout>& layout : live_layouts)
+		{
+			layout->shutdown_pool_container();
 		}
 	}
 
@@ -301,19 +322,9 @@ namespace RHI
 	}
 	void VulkanDescriptorPoolContainer::remove(VulkanDescriptorSet* pSet)
 	{
-		auto pPool = get_descriptor_pool();
 		if (m_pDescriptorPool)
 		{
-			auto p = pPool;
-			while (p)
-			{
-				if (p == m_pDescriptorPool)
-				{
-					m_pDescriptorPool->free_descriptor_set(pSet);
-					break;
-				}
-				p = p->get_next();
-			}
+			m_pDescriptorPool->free_descriptor_set(pSet);
 		}
 		auto it = m_setAlloced.find(pSet);
 		if (it != m_setAlloced.end())
@@ -557,14 +568,6 @@ namespace RHI
 			return nullptr;
 		}
 		return pNewPool;
-	}
-	bool VulkanDescriptorPool::is_dirty_descriptor_pool(std::shared_ptr<VulkanDescriptorPool> pPool)
-	{
-		return false;
-	}
-	std::shared_ptr<VulkanDescriptorPool> VulkanDescriptorPool::get_next()
-	{
-		return std::shared_ptr<VulkanDescriptorPool>();
 	}
 	auto VulkanDescriptorPool::get_native_handle() -> void*
 	{

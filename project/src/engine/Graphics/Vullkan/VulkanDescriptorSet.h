@@ -30,8 +30,6 @@ namespace RHI
 	};
 	class VulkanDescriptorPool : public RHIResource
 	{
-		static std::set<std::shared_ptr<VulkanDescriptorPool>> m_dirtyPool;
-
 	public:
 		VulkanDescriptorPool();
 		~VulkanDescriptorPool();
@@ -47,8 +45,6 @@ namespace RHI
 		bool             is_full() const;
 
 		std::shared_ptr<VulkanDescriptorPool> create_from_header();
-		static bool            is_dirty_descriptor_pool(std::shared_ptr<VulkanDescriptorPool> pPool);
-		std::shared_ptr<VulkanDescriptorPool> get_next();
 
 	private:
 		std::vector<VkDescriptorPoolSize> m_vecDescriptorPoolSize;

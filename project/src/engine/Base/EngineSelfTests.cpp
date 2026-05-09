@@ -359,13 +359,24 @@ namespace AshEngine
 			}
 
 			AssetDatabase database = AssetDatabase::create(asset_root);
-			std::shared_ptr<const MaterialInterface> material{};
-			if (!database.load_material_by_path("materials/v2/M_SurfacePBR.AshMat", material) || !material)
+			std::shared_ptr<const MaterialInterface> sync_material{};
+			if (!database.load_material_by_path("materials/v2/M_SurfacePBR.AshMat", sync_material) || !sync_material)
 			{
 				return report_self_test_failure("Material disk asset priority", "failed to load disk material asset");
 			}
 
-			return material->get_name() == "M_DiskSurfacePBR" ||
+			if (sync_material->get_name() != "M_DiskSurfacePBR")
+			{
+				return report_self_test_failure("Material disk asset priority", "built-in fallback shadowed an existing disk material asset");
+			}
+
+			std::shared_ptr<const MaterialInterface> async_material = database.load_material_by_path_async("materials/v2/M_SurfacePBR.AshMat").get();
+			if (!async_material)
+			{
+				return report_self_test_failure("Material disk asset priority", "failed to async load disk material asset");
+			}
+
+			return async_material->get_name() == "M_DiskSurfacePBR" ||
 				report_self_test_failure("Material disk asset priority", "built-in fallback shadowed an existing disk material asset");
 		}
 

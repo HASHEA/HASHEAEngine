@@ -921,7 +921,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 同一个 asset 的重复 async request 会复用进行中的 in-flight `shared_future`，避免同一资源在 worker 线程池中被重复 decode/import
 - 成功后资源会进入 `AssetDatabase` cache，并把 load state 更新为 `Loaded`
 - 失败时会回写 per-asset last error 与 `Failed`
-- 同一个 asset 在 `Failed` 后、下一次 `refresh()` 前会命中失败缓存，后续同步/异步请求不再重复进入磁盘 IO 或 decode/import 热路径
+- 同一个 asset 在 `Failed` 后、下一次 `refresh()` 前会命中失败缓存，后续同步请求会直接失败，异步请求会直接返回 ready-null future，不再注册新的 worker job 或重复进入磁盘 IO / decode / import 热路径
 
 当前线程安全边界：
 
@@ -942,7 +942,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - Engine 默认 surface PBR 材质现在以真实资产形式落在 `product/assets/materials/v2/`：
   - `materials/v2/M_SurfacePBR.AshMat`
   - `materials/v2/MI_DefaultSurface.AshMatIns`
-- 代码中仍保留同路径的合成 builtin fallback；`AssetDatabase` 会优先读取磁盘材质，只有磁盘资产缺失时才使用 fallback
+- 代码中仍保留同路径的合成 builtin fallback；`AssetDatabase` 的同步和异步材质加载都会优先读取磁盘材质，只有磁盘资产缺失时才使用 fallback
 - 默认材质不依赖 Sandbox 路径，属于 Engine 公共运行时资产
 - 当前正式落地的 V2 编译框架先服务于 `Surface.StaticMesh`
 - `UI` 与 `PostProcess` 当前明确不走这套材质系统，而是各自维护自己的 shader / 参数组织路径
@@ -1009,6 +1009,9 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 该入口用于 sampled 2D texture 上传，不复用 `create_render_target()` 的 pass attachment 语义
 - 当前上传路径支持对非压缩 2D 纹理做 row-pitch 校验与必要的 tight repack，然后再走现有 Vulkan / DX12 共享上传逻辑
 - 普通 8-bit RGBA 贴图解码后会在 CPU 侧生成完整 mip chain，并以 tight-packed mip 初始数据一次上传；HDR 贴图当前仍只上传 mip0
+- `RenderAssetManager::request_texture_asset()` 在 cache miss 时不再在 render-thread 请求路径同步 decode 文件；它会先返回一个持有 fallback GPU 资源的 `TextureAsset(Loading)` 占位对象，并把 CPU decode 派发到 worker 线程
+- worker decode 完成后，render-thread `finalize_pending_assets()` 或下一次 texture request 会创建真实 GPU texture，并原地更新同一个 `TextureAsset` 的 resource / metadata / `change_version`
+- `MaterialRenderProxy` 会记录绑定时看到的 `TextureAsset::change_version`；如果占位贴图从 `Loading` 变为 `Ready`，或真实 resource 更新，下一帧 material proxy 会重新打包并重新绑定材质资源
 
 当前贴图解码范围：
 
@@ -1481,6 +1484,7 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
   - `VulkanRenderProgram` 不再在同一个 in-flight frame slot 内反复覆写单个 `VkDescriptorSet`；每次 resource binding 会保留独立 descriptor set 到当前 in-flight frame bucket，避免 command buffer 仍引用旧 set 时被 update / destroy
   - `VulkanDescriptorPool` 现在区分“仍被高层对象持有的 live set 数”和“尚未真正归还给 Vulkan pool 的 resident set 数”；延迟 free 尚未 flush 前会避免错误复用已耗尽 pool，从而规避 `VK_ERROR_OUT_OF_POOL_MEMORY` 和 shutdown 期的 descriptor-pool validation
   - 当最后一个 deferred descriptor-set free 释放掉 pool 的最终 `shared_ptr` 时，`VulkanDescriptorPool` 会立刻执行 `vkDestroyDescriptorPool`；不要再把 pool 析构本身做第二次 frame-queue 延迟，否则 shutdown 时可能把 destroy 落到错误的 deletion queue，重新触发 `VUID-vkDestroyDevice-device-05137`
+  - `VulkanDescriptorSetLayout` 的全局 layout cache 现在集中在一个 cpp-local owner 中，并由 mutex 保护；创建路径、过期 weak entry 清理和 `VulkanContext::shutdown()` 触发的 cache shutdown 都必须走这个 owner，shutdown 时会清空 cache map，不能把旧 device 的 layout 复用到下一次 context 初始化，也不能再散落新的 static map / set
 
 ---
 

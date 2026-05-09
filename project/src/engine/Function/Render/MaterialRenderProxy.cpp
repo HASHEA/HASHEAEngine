@@ -82,6 +82,18 @@ namespace AshEngine
 		{
 			return true;
 		}
+		for (const auto& [texture_name, texture_asset] : m_binding_snapshot.texture_assets)
+		{
+			const auto version = m_binding_snapshot.texture_versions.find(texture_name);
+			if (!texture_asset ||
+				!texture_asset->resource ||
+				texture_asset->state == TextureAssetState::Loading ||
+				version == m_binding_snapshot.texture_versions.end() ||
+				version->second != texture_asset->change_version)
+			{
+				return true;
+			}
+		}
 		return m_binding_snapshot.version == 0 ||
 			m_bound_binding_version != m_binding_snapshot.version ||
 			m_surface_staticmesh_basepass_resource.program != m_surface_staticmesh_basepass_program.get() ||
@@ -136,7 +148,22 @@ namespace AshEngine
 		const std::string material_asset_path =
 			m_material ? m_material->get_asset_path().generic_string() : std::string("<null>");
 		const uint64_t material_version = m_material->get_change_version();
-		if (m_material_version == material_version && m_binding_snapshot.version != 0)
+		bool texture_bindings_current = true;
+		for (const auto& [texture_name, texture_asset] : m_binding_snapshot.texture_assets)
+		{
+			const auto version = m_binding_snapshot.texture_versions.find(texture_name);
+			if (!texture_asset ||
+				!texture_asset->resource ||
+				texture_asset->state == TextureAssetState::Loading ||
+				version == m_binding_snapshot.texture_versions.end() ||
+				version->second != texture_asset->change_version)
+			{
+				texture_bindings_current = false;
+				break;
+			}
+		}
+
+		if (m_material_version == material_version && m_binding_snapshot.version != 0 && texture_bindings_current)
 		{
 			if ((m_surface_staticmesh_basepass_program || m_surface_staticmesh_depthonly_program) &&
 				m_bound_binding_version != m_binding_snapshot.version)
@@ -225,6 +252,8 @@ namespace AshEngine
 					material_asset_path);
 			}
 			ASH_PROCESS_ERROR(texture_asset != nullptr && texture_asset->resource != nullptr);
+			snapshot.texture_assets[resource_desc.name] = texture_asset;
+			snapshot.texture_versions[resource_desc.name] = texture_asset->change_version;
 			snapshot.textures[resource_desc.name] = texture_asset->resource;
 
 			if (binding.sampler_name.empty())

@@ -16,6 +16,13 @@ namespace AshEngine
 		SRGB
 	};
 
+	enum class TextureAssetState : uint8_t
+	{
+		Loading = 0,
+		Ready,
+		Failed
+	};
+
 	struct ASH_API TextureSourceData
 	{
 		uint32_t width = 0;
@@ -36,6 +43,8 @@ namespace AshEngine
 		uint32_t height = 0;
 		RenderTextureFormat format = RenderTextureFormat::Unknown;
 		TextureColorSpace color_space = TextureColorSpace::Linear;
+		TextureAssetState state = TextureAssetState::Ready;
+		std::string last_error{};
 		std::shared_ptr<RenderTarget> resource = nullptr;
 		uint64_t change_version = 1;
 

@@ -11,6 +11,7 @@ namespace AshEngine
 	class MaterialSystem;
 	class RenderAssetManager;
 	class Renderer;
+	class TextureAsset;
 
 	class ASH_API MaterialRenderProxy
 	{
@@ -19,6 +20,8 @@ namespace AshEngine
 		{
 			uint64_t version = 0;
 			std::vector<uint8_t> packed_parameter_data{};
+			std::unordered_map<std::string, std::shared_ptr<TextureAsset>> texture_assets{};
+			std::unordered_map<std::string, uint64_t> texture_versions{};
 			std::unordered_map<std::string, std::shared_ptr<RenderTarget>> textures{};
 			std::unordered_map<std::string, std::shared_ptr<RenderSampler>> samplers{};
 		};

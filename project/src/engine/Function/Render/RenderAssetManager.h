@@ -7,6 +7,7 @@
 #include "Function/Render/StaticMeshRenderAsset.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Scene/SceneComponents.h"
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -82,6 +83,19 @@ namespace AshEngine
 		void log_texture_warning_once(const std::string& warning_key, const std::string& message);
 
 	private:
+		struct TextureDecodeResult
+		{
+			bool succeeded = false;
+			TextureSourceData source{};
+			std::string error{};
+		};
+
+		bool try_finalize_pending_texture_decode(
+			const std::string& key,
+			const std::shared_ptr<TextureAsset>& texture_asset);
+		void finalize_pending_texture_decodes();
+
+	private:
 		AssetDatabase* m_asset_database = nullptr;
 		Renderer* m_renderer = nullptr;
 		std::mutex m_mutex{};
@@ -89,6 +103,7 @@ namespace AshEngine
 		std::unordered_map<std::string, std::shared_ptr<const MaterialInterface>> m_material_assets{};
 		std::unordered_map<std::string, std::shared_ptr<MaterialRenderProxy>> m_material_proxies{};
 		std::unordered_map<std::string, std::shared_ptr<TextureAsset>> m_texture_assets{};
+		std::unordered_map<std::string, std::shared_future<TextureDecodeResult>> m_pending_texture_decodes{};
 		std::unordered_map<RenderSamplerDesc, std::shared_ptr<RenderSampler>, RenderSamplerDescHash> m_sampler_pool{};
 		std::unordered_set<std::string> m_failed_texture_requests{};
 		std::unordered_set<std::string> m_logged_material_warnings{};

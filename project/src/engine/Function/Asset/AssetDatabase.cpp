@@ -906,6 +906,13 @@ namespace AshEngine
 				break;
 			}
 
+			std::string cached_error{};
+			if (try_get_cached_load_failure_locked(*m_impl, resolved.info.id, cached_error))
+			{
+				result = empty_future;
+				break;
+			}
+
 			const auto inflight = m_impl->inflight_mesh_loads.find(resolved.info.id);
 			if (inflight != m_impl->inflight_mesh_loads.end())
 			{
@@ -1034,6 +1041,13 @@ namespace AshEngine
 				break;
 			}
 
+			std::string cached_error{};
+			if (try_get_cached_load_failure_locked(*m_impl, resolved.info.id, cached_error))
+			{
+				result = empty_future;
+				break;
+			}
+
 			const auto inflight = m_impl->inflight_model_loads.find(resolved.info.id);
 			if (inflight != m_impl->inflight_model_loads.end())
 			{
@@ -1118,27 +1132,37 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(std::shared_future<std::shared_ptr<const MaterialInterface>>, result, empty_future, empty_future);
 		ASH_PROCESS_ERROR(m_impl);
 
-		std::shared_ptr<const MaterialInterface> builtin_material{};
-		if (try_load_builtin_material(m_impl, path, builtin_material))
-		{
-			result = make_ready_future(builtin_material);
-			break;
-		}
-
 		ResolvedAssetInfo resolved{};
 		std::string error{};
-		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (!resolve_asset_by_path(m_impl, path, resolved, error))
+		{
+			std::shared_ptr<const MaterialInterface> builtin_material{};
+			if (try_load_builtin_material(m_impl, path, builtin_material))
+			{
+				result = make_ready_future(builtin_material);
+				break;
+			}
+			ASH_PROCESS_ERROR(false);
+		}
 
 		const std::string cache_key = normalize_asset_key(resolved.info.relative_path);
+		std::shared_ptr<const MaterialInterface> cached_material{};
 		std::shared_ptr<std::promise<std::shared_ptr<const MaterialInterface>>> material_promise{};
 		std::filesystem::path material_relative_path{};
 		AssetId material_asset_id = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
-			if (try_get_cached_material_locked(*m_impl, cache_key, builtin_material))
+			if (try_get_cached_material_locked(*m_impl, cache_key, cached_material))
 			{
 				set_load_success_locked(*m_impl, resolved.info.id);
-				result = make_ready_future(builtin_material);
+				result = make_ready_future(cached_material);
+				break;
+			}
+
+			std::string cached_error{};
+			if (try_get_cached_load_failure_locked(*m_impl, resolved.info.id, cached_error))
+			{
+				result = empty_future;
 				break;
 			}
 
@@ -1262,6 +1286,13 @@ namespace AshEngine
 			{
 				set_load_success_locked(*m_impl, resolved.info.id);
 				result = make_ready_future(std::shared_ptr<const AshAsset>(cached->second));
+				break;
+			}
+
+			std::string cached_error{};
+			if (try_get_cached_load_failure_locked(*m_impl, resolved.info.id, cached_error))
+			{
+				result = empty_future;
 				break;
 			}
 

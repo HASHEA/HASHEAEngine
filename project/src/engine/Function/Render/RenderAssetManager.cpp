@@ -8,6 +8,7 @@
 #include "Function/Render/VertexLayoutPresets.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
@@ -169,6 +170,7 @@ namespace AshEngine
 		m_material_assets.clear();
 		m_material_proxies.clear();
 		m_texture_assets.clear();
+		m_pending_texture_decodes.clear();
 		m_sampler_pool.clear();
 		m_failed_texture_requests.clear();
 		m_logged_material_warnings.clear();
@@ -247,6 +249,134 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
+	bool RenderAssetManager::try_finalize_pending_texture_decode(
+		const std::string& key,
+		const std::shared_ptr<TextureAsset>& texture_asset)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(texture_asset != nullptr);
+
+		std::shared_future<TextureDecodeResult> decode_future{};
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			const auto pending = m_pending_texture_decodes.find(key);
+			if (pending == m_pending_texture_decodes.end())
+			{
+				break;
+			}
+			decode_future = pending->second;
+		}
+		ASH_PROCESS_ERROR(decode_future.valid());
+
+		if (decode_future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		{
+			bResult = false;
+			break;
+		}
+
+		TextureDecodeResult decode_result{};
+		try
+		{
+			decode_result = decode_future.get();
+		}
+		catch (const std::exception& exception)
+		{
+			decode_result.succeeded = false;
+			decode_result.error = exception.what();
+		}
+		catch (...)
+		{
+			decode_result.succeeded = false;
+			decode_result.error = "Texture decode worker failed with an unknown exception.";
+		}
+
+		if (!decode_result.succeeded)
+		{
+			log_texture_warning_once(
+				key,
+				"RenderAssetManager: failed to decode texture '" + texture_asset->asset_path + "': " +
+					(decode_result.error.empty() ? std::string("unsupported or invalid texture.") : decode_result.error));
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				texture_asset->state = TextureAssetState::Failed;
+				texture_asset->last_error = decode_result.error;
+				++texture_asset->change_version;
+				m_failed_texture_requests.insert(key);
+				m_pending_texture_decodes.erase(key);
+			}
+			break;
+		}
+
+		const TextureSourceData& source = decode_result.source;
+		std::shared_ptr<RenderTarget> resource = m_renderer->create_texture_2d({
+			static_cast<uint16_t>(source.width),
+			static_cast<uint16_t>(source.height),
+			source.format,
+			source.pixel_data.empty() ? nullptr : source.pixel_data.data(),
+			source.row_pitch,
+			source.mip_level_count,
+			source.color_space == TextureColorSpace::SRGB,
+			texture_asset->asset_path.c_str()
+		});
+		if (!resource)
+		{
+			log_texture_warning_once(
+				key,
+				"RenderAssetManager: failed to create GPU texture for '" + texture_asset->asset_path + "'.");
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				texture_asset->state = TextureAssetState::Failed;
+				texture_asset->last_error = "GPU texture creation failed.";
+				++texture_asset->change_version;
+				m_failed_texture_requests.insert(key);
+				m_pending_texture_decodes.erase(key);
+			}
+			break;
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			const auto cached = m_texture_assets.find(key);
+			ASH_PROCESS_ERROR(cached != m_texture_assets.end() && cached->second == texture_asset);
+			texture_asset->width = source.width;
+			texture_asset->height = source.height;
+			texture_asset->format = source.format;
+			texture_asset->color_space = source.color_space;
+			texture_asset->state = TextureAssetState::Ready;
+			texture_asset->last_error.clear();
+			texture_asset->resource = std::move(resource);
+			++texture_asset->change_version;
+			m_failed_texture_requests.erase(key);
+			m_pending_texture_decodes.erase(key);
+		}
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	void RenderAssetManager::finalize_pending_texture_decodes()
+	{
+		std::vector<std::pair<std::string, std::shared_ptr<TextureAsset>>> pending_textures{};
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			pending_textures.reserve(m_pending_texture_decodes.size());
+			for (const auto& [key, decode_future] : m_pending_texture_decodes)
+			{
+				(void)decode_future;
+				const auto found = m_texture_assets.find(key);
+				if (found != m_texture_assets.end() && found->second)
+				{
+					pending_textures.emplace_back(key, found->second);
+				}
+			}
+		}
+
+		for (const auto& [key, texture_asset] : pending_textures)
+		{
+			(void)try_finalize_pending_texture_decode(key, texture_asset);
+		}
+	}
+
 	std::shared_ptr<TextureAsset> RenderAssetManager::request_texture_asset(
 		const std::string& asset_path,
 		TextureColorSpace color_space,
@@ -264,18 +394,27 @@ namespace AshEngine
 
 		const std::string key = make_texture_key(asset_path, color_space);
 		bool has_cached_failure = false;
+		std::shared_ptr<TextureAsset> cached_texture{};
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			const auto found = m_texture_assets.find(key);
 			if (found != m_texture_assets.end())
 			{
-				result = found->second;
-				break;
+				cached_texture = found->second;
 			}
-			if (m_failed_texture_requests.find(key) != m_failed_texture_requests.end())
+			else if (m_failed_texture_requests.find(key) != m_failed_texture_requests.end())
 			{
 				has_cached_failure = true;
 			}
+		}
+		if (cached_texture)
+		{
+			if (cached_texture->state == TextureAssetState::Loading)
+			{
+				(void)try_finalize_pending_texture_decode(key, cached_texture);
+			}
+			result = cached_texture;
+			break;
 		}
 		if (has_cached_failure)
 		{
@@ -283,21 +422,34 @@ namespace AshEngine
 			break;
 		}
 
-		TextureSourceData source{};
-		std::string error{};
 		const std::filesystem::path texture_path = resolve_texture_asset_path(m_asset_database, asset_path);
-		if (!decode_texture_source_from_file(texture_path, color_space, source, &error))
-		{
-			log_texture_warning_once(
-				key,
-				"RenderAssetManager: failed to decode texture '" + asset_path + "': " + (error.empty() ? std::string("unsupported or invalid texture.") : error));
-			{
-				std::scoped_lock<std::mutex> lock(m_mutex);
-				m_failed_texture_requests.insert(key);
-			}
-			result = get_fallback_texture(fallback_kind);
-			break;
-		}
+
+		std::shared_ptr<TextureAsset> fallback_texture = get_fallback_texture(fallback_kind);
+		ASH_PROCESS_ERROR(fallback_texture != nullptr && fallback_texture->resource != nullptr);
+
+		auto texture_asset = std::make_shared<TextureAsset>();
+		texture_asset->asset_path = asset_path;
+		texture_asset->width = fallback_texture->width;
+		texture_asset->height = fallback_texture->height;
+		texture_asset->format = fallback_texture->format;
+		texture_asset->color_space = color_space;
+		texture_asset->state = TextureAssetState::Loading;
+		texture_asset->resource = fallback_texture->resource;
+
+		std::shared_future<TextureDecodeResult> decode_future =
+			dispatch_background_task(
+				"RenderAssetManager::decode_texture_source_async",
+				[texture_path, color_space]() -> TextureDecodeResult
+				{
+					TextureDecodeResult decode_result{};
+					decode_result.succeeded = decode_texture_source_from_file(
+						texture_path,
+						color_space,
+						decode_result.source,
+						&decode_result.error);
+					return decode_result;
+				});
+		ASH_PROCESS_ERROR(decode_future.valid());
 
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
@@ -307,46 +459,10 @@ namespace AshEngine
 				result = found->second;
 				break;
 			}
+			m_texture_assets[key] = texture_asset;
+			m_pending_texture_decodes[key] = std::move(decode_future);
 		}
 
-		auto texture_asset = std::make_shared<TextureAsset>();
-		texture_asset->asset_path = asset_path;
-		texture_asset->width = source.width;
-		texture_asset->height = source.height;
-		texture_asset->format = source.format;
-		texture_asset->color_space = source.color_space;
-		texture_asset->resource = m_renderer->create_texture_2d({
-			static_cast<uint16_t>(source.width),
-			static_cast<uint16_t>(source.height),
-			source.format,
-			source.pixel_data.data(),
-			source.row_pitch,
-			source.mip_level_count,
-			source.color_space == TextureColorSpace::SRGB,
-			asset_path.c_str()
-		});
-		if (!texture_asset->resource)
-		{
-			log_texture_warning_once(
-				key,
-				"RenderAssetManager: failed to create GPU texture for '" + asset_path + "'.");
-			{
-				std::scoped_lock<std::mutex> lock(m_mutex);
-				m_failed_texture_requests.insert(key);
-			}
-			result = get_fallback_texture(fallback_kind);
-			break;
-		}
-
-		{
-			std::scoped_lock<std::mutex> lock(m_mutex);
-			const auto [it, inserted] = m_texture_assets.emplace(key, texture_asset);
-			m_failed_texture_requests.erase(key);
-			if (!inserted && it->second)
-			{
-				texture_asset = it->second;
-			}
-		}
 		result = texture_asset;
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
@@ -470,6 +586,8 @@ namespace AshEngine
 
 	void RenderAssetManager::finalize_pending_assets()
 	{
+		finalize_pending_texture_decodes();
+
 		std::vector<std::shared_ptr<StaticMeshRenderAsset>> assets{};
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
