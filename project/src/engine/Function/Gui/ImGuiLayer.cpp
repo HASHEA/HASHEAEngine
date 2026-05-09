@@ -204,6 +204,9 @@ namespace AshEngine
 		}
 #endif
 
+		static std::unordered_set<const RenderTarget*> s_logged_missing_texture_prereqs{};
+		static std::unordered_set<const RenderTarget*> s_logged_successful_texture_registrations{};
+		static std::mutex s_logged_texture_registration_mutex{};
 	}
 
 	class NativeImGuiLayer final : public ImGuiLayer
@@ -611,7 +614,7 @@ namespace AshEngine
 			{
 #if defined(ASH_HAS_VULKAN)
 			case RHI::Backend::Vulkan:
-				texture_id = ensure_vulkan_registration(registration, texture_view);
+				texture_id = ensure_vulkan_registration(registration, {}, texture_view);
 				break;
 #endif
 #if defined(ASH_HAS_DX12)
@@ -865,15 +868,11 @@ namespace AshEngine
 
 		UITextureHandle ensure_vulkan_registration(TextureRegistration& registration, const std::shared_ptr<RenderTarget>& render_target)
 		{
-			static std::unordered_set<const RenderTarget*> s_logged_missing_texture_prereqs{};
-			static std::unordered_set<const RenderTarget*> s_logged_successful_texture_registrations{};
-			static std::mutex s_logged_texture_registration_mutex{};
-
 			std::shared_ptr<RHI::TextureView> shader_resource_view = m_render_device->get_shader_resource_view(render_target);
-			return ensure_vulkan_registration(registration, shader_resource_view);
+			return ensure_vulkan_registration(registration, render_target, shader_resource_view);
 		}
 
-		UITextureHandle ensure_vulkan_registration(TextureRegistration& registration, const std::shared_ptr<RHI::TextureView>& texture_view)
+		UITextureHandle ensure_vulkan_registration(TextureRegistration& registration, const std::shared_ptr<RenderTarget>& render_target, const std::shared_ptr<RHI::TextureView>& texture_view)
 		{
 			if (!texture_view || texture_view->get_view_type() != RHI::AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV)
 			{
@@ -898,7 +897,7 @@ namespace AshEngine
 						render_target->get_width(),
 						render_target->get_height(),
 						static_cast<int32_t>(render_target->get_format()),
-						shader_resource_view != nullptr,
+						texture_view != nullptr,
 						static_cast<uint64_t>(reinterpret_cast<uintptr_t>(image_view)),
 						static_cast<uint64_t>(reinterpret_cast<uintptr_t>(m_vk_sampler)));
 				}

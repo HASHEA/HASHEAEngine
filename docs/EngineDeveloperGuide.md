@@ -22,7 +22,7 @@
 
 - Editor 侧长期维护主文档：`docs/EditorDeveloperGuide.md`
 - Engine UI 专题文档：`docs/EngineUIContext.md`
-- Editor UI 分层建议：`docs/EditorUIFacadeProposal.md`
+- Scene presentation 专题：`docs/ScenePresentationSubsystemGuide.md`
 
 ### 维护规则
 
@@ -798,7 +798,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 相关专题说明见：
 
 - `docs/EngineUIContext.md`
-- `docs/EditorUIFacadeProposal.md`
+- `docs/EditorDeveloperGuide.md`
 
 ### 10.3 后续原则
 
@@ -1275,10 +1275,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 相关设计与接入文档见：
 
 - `docs/ScenePresentationSubsystemGuide.md`
-- `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design.md`
-- `docs/superpowers/specs/2026-04-16-scene-to-render-flow-design-zh.md`
-- `docs/superpowers/specs/2026-04-21-scene-renderer-multi-view-design-zh.md`
-- `docs/superpowers/specs/2026-04-21-scene-presentation-subsystem-design-zh.md`
+- `docs/EngineDeveloperGuide.md`
 
 ### 11.7 Sandbox：Engine 自维护测试工程
 
@@ -1543,5 +1540,3 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 - Editor 总览：`docs/EditorDeveloperGuide.md`
 - Engine UI 分层：`docs/EngineUIContext.md`
 - Scene presentation 接入：`docs/ScenePresentationSubsystemGuide.md`
-- Editor UI 提案：`docs/EditorUIFacadeProposal.md`
-- 历史设计问题记录：`docs/CodeReview_DesignDefects_and_Risks.md`

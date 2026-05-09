@@ -1,39 +1,35 @@
 #pragma once
+
 #include "Core/EditorSelection.h"
+
 #include <cstdint>
-#include <functional>
-#include <vector>
 
 namespace AshEditor
 {
-	using SelectionListenerId = uint64_t;
-	using SelectionChangedCallback = std::function<void(const EditorSelection& previous, const EditorSelection& current)>;
+	class EditorEventBus;
 
 	class SelectionService
 	{
 	public:
-		const EditorSelection& get_selection() const;
-		bool has_selection() const;
-		uint64_t get_revision() const;
+		// Returns the current selection snapshot. Valid even when HasSelection() is false.
+		const EditorSelection& GetSelection() const;
+		bool HasSelection() const;
 
-		void select(EditorSelection selection);
-		void clear();
-		SelectionListenerId subscribe(SelectionChangedCallback callback);
-		bool unsubscribe(SelectionListenerId listener_id);
+		// Optional event bus used to publish selection change events.
+		void SetEventBus(EditorEventBus* pEventBus);
 
-	private:
-		struct SelectionListener
-		{
-			SelectionListenerId id = 0;
-			SelectionChangedCallback callback{};
-		};
+		// Sets the current selection and publishes a change event when it differs from the previous value.
+		void Select(EditorSelection selection);
 
-		void notify_selection_changed(const EditorSelection& previous);
+		// Clears the current selection and publishes a change event if needed.
+		void Clear();
 
 	private:
-		EditorSelection m_selection{};
-		std::vector<SelectionListener> m_listeners{};
-		SelectionListenerId m_nextListenerId = 1;
-		uint64_t m_revision = 0;
+		void PublishSelectionChanged(const EditorSelection& refPreviousSelection) const;
+
+	private:
+		EditorEventBus* _pEventBus = nullptr;
+		EditorSelection _selection{};
+		uint64_t _uRevision = 0;
 	};
 }

@@ -1,14 +1,14 @@
 {
-  "assetBrowserActiveDirectory": "",
+  "assetBrowserActiveDirectory": "models",
   "assetBrowserSearchText": "",
   "assetBrowserShowDetails": true,
   "assetBrowserTypeFilter": 0,
-  "assetBrowserViewMode": 1,
+  "assetBrowserViewMode": 0,
   "assetsRoot": "product/assets",
   "consoleFilterText": "",
   "consoleSeverityFilter": 0,
   "lastScenePath": "",
   "layoutIniPath": "product/config/editor/imgui.ini",
   "startupScenePath": "product/config/editor/Default.scene.json",
-  "uiThemePreset": "slate_studio"
+  "uiThemePreset": "classic_dark"
 }

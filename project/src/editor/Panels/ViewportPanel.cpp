@@ -1,8 +1,13 @@
 #include "Panels/ViewportPanel.h"
+
 #include "Base/hlog.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
+#include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorViewportService.h"
-#include "imgui.h"
+#include "Widgets/EditorButtonWidgets.h"
+
 #include <algorithm>
 #include <string>
 #include <utility>
@@ -12,359 +17,397 @@ namespace AshEditor
 {
 	namespace
 	{
-		const char* viewport_kind_label(EditorViewportKind kind)
+		const char* GetViewportKindLabel(EditorViewportKind eKind)
 		{
-			switch (kind)
+			switch (eKind)
 			{
 			case EditorViewportKind::Scene:
-				return "Scene";
+				return EditorWindowTitles::Scene;
 			case EditorViewportKind::Game:
-				return "Game";
+				return EditorWindowTitles::Game;
 			default:
 				return "Aux";
 			}
 		}
 
-		bool should_trace_viewport_panel()
+		bool ShouldTraceViewportPanel()
 		{
-			static uint32_t s_logged_frames = 0;
-			++s_logged_frames;
-			return s_logged_frames <= 2;
+			static uint32_t uLoggedFrames = 0u;
+			++uLoggedFrames;
+			return uLoggedFrames <= 2u;
 		}
 
-		auto make_overlay_lines(
-			const EditorViewportInstance& viewport,
-			const EditorViewportPresentation& presentation,
-			const EditorViewportRenderState* render_state,
-			bool is_primary) -> std::vector<std::string>
+		std::vector<std::string> MakeOverlayLines(
+			const EditorViewportInstance& refViewport,
+			const EditorViewportPresentation& refPresentation,
+			const EditorViewportRenderState* pRenderState,
+			bool bIsPrimary)
 		{
-			std::vector<std::string> lines{};
-			std::string header = viewport_kind_label(presentation.kind);
-			if (is_primary)
+			std::vector<std::string> vecLines{};
+			std::string strHeader = GetViewportKindLabel(refPresentation.eKind);
+			if (bIsPrimary)
 			{
-				header += " | Primary";
+				strHeader += " | Primary";
 			}
-			if (presentation.accepts_input)
+			if (refPresentation.bAcceptsInput)
 			{
-				header += " | Input";
+				strHeader += " | Input";
 			}
-			if (presentation.preserve_aspect)
+			if (refPresentation.bPreserveAspect)
 			{
-				header += " | Aspect";
+				strHeader += " | Aspect";
 			}
-			lines.push_back(std::move(header));
+			vecLines.push_back(std::move(strHeader));
 
-			lines.push_back(
+			vecLines.push_back(
 				"Output " +
-				std::to_string(viewport.state.width) +
+				std::to_string(refViewport.state.uWidth) +
 				"x" +
-				std::to_string(viewport.state.height) +
+				std::to_string(refViewport.state.uHeight) +
 				"  Req " +
-				std::to_string(viewport.state.requested_width) +
+				std::to_string(refViewport.state.uRequestedWidth) +
 				"x" +
-				std::to_string(viewport.state.requested_height));
+				std::to_string(refViewport.state.uRequestedHeight));
 
-			if (presentation.show_stats)
+			if (refPresentation.bShowStats)
 			{
-				lines.push_back(
+				vecLines.push_back(
 					"Focused " +
-					std::string(viewport.state.focused ? "yes" : "no") +
+					std::string(refViewport.state.bFocused ? "yes" : "no") +
 					"  Hovered " +
-					std::string(viewport.state.hovered ? "yes" : "no") +
+					std::string(refViewport.state.bHovered ? "yes" : "no") +
 					"  PendingSync " +
-					std::string(render_state && render_state->pending_sync ? "yes" : "no"));
+					std::string(pRenderState && pRenderState->bPendingSync ? "yes" : "no"));
 			}
 
-			return lines;
+			return vecLines;
 		}
 	}
 
-	ViewportPanel::ViewportPanel(std::string viewport_id, std::string panel_id, std::string title)
-		: EditorPanel(std::move(panel_id), std::move(title))
-		, m_viewportId(std::move(viewport_id))
+	ViewportPanel::ViewportPanel(
+		std::string strViewportId,
+		std::string strPanelId,
+		std::string strTitle,
+		ViewportPanelDeps deps)
+		: EditorPanel(std::move(strPanelId), std::move(strTitle))
+		, _deps(deps)
+		, _strViewportId(std::move(strViewportId))
 	{
 	}
 
-	EditorViewportInstance* ViewportPanel::resolve_viewport(EditorContext& context) const
+	void ViewportPanel::BindEventBus(EditorEventBus* pEventBus)
 	{
-		return context.viewport_service ? context.viewport_service->find_viewport(m_viewportId) : nullptr;
-	}
-
-	const EditorViewportInstance* ViewportPanel::resolve_viewport(const EditorContext& context) const
-	{
-		return context.viewport_service ? context.viewport_service->find_viewport(m_viewportId) : nullptr;
-	}
-
-	void ViewportPanel::on_attach(EditorContext& context)
-	{
-		if (context.viewport_service)
+		if (_eventBindings.IsBoundTo(pEventBus))
 		{
-			context.viewport_service->ensure_viewport(m_viewportId, get_title());
+			return;
+		}
+
+		_eventBindings.Bind(pEventBus);
+		if (!pEventBus)
+		{
+			return;
+		}
+
+		_eventBindings.Subscribe<EditorViewportLayoutResetEvent>(
+			[this](const EditorViewportLayoutResetEvent&)
+			{
+				ResetRuntimeViewportState();
+			});
+	}
+
+	EditorViewportInstance* ViewportPanel::ResolveViewport()
+	{
+		return _deps.pViewportService ? _deps.pViewportService->FindViewport(_strViewportId) : nullptr;
+	}
+
+	const EditorViewportInstance* ViewportPanel::ResolveViewport() const
+	{
+		return _deps.pViewportService ? _deps.pViewportService->FindViewport(_strViewportId) : nullptr;
+	}
+
+	void ViewportPanel::ClearDeps()
+	{
+		_deps = {};
+	}
+
+	void ViewportPanel::OnAttach()
+	{
+		if (_deps.pViewportService)
+		{
+			_deps.pViewportService->EnsureViewport(_strViewportId, GetTitle());
 		}
 		HLogInfo("ViewportPanel attached.");
 	}
 
-	void ViewportPanel::on_update(EditorContext& context)
+	void ViewportPanel::OnDetach()
 	{
-		EditorViewportInstance* viewport = resolve_viewport(context);
-		if (!viewport)
-		{
-			return;
-		}
-
-		const EditorViewportRenderState* render_state =
-			context.viewport_service ? context.viewport_service->get_render_state(m_viewportId) : nullptr;
-		if (render_state)
-		{
-			viewport->state.width = render_state->output_width;
-			viewport->state.height = render_state->output_height;
-			return;
-		}
-
-		viewport->state.width = 0u;
-		viewport->state.height = 0u;
+		UnsubscribeEvents();
+		ClearDeps();
 	}
 
-	void ViewportPanel::draw_toolbar(EditorContext& context, EditorViewportInstance& viewport)
+	void ViewportPanel::UnsubscribeEvents()
 	{
-		if (!context.ui_context || !context.viewport_service)
-		{
-			return;
-		}
-
-		EditorViewportPresentation* presentation = context.viewport_service->get_presentation(m_viewportId);
-		if (!presentation || !presentation->show_toolbar)
-		{
-			return;
-		}
-
-		AshEngine::UIContext& ui = *context.ui_context;
-		ui.text_unformatted(viewport_kind_label(presentation->kind));
-		ui.same_line();
-		const bool is_primary = context.viewport_service->is_primary_viewport(viewport.id);
-		if (ui.small_button(is_primary ? "Primary" : "Set Primary"))
-		{
-			context.viewport_service->set_primary_viewport(m_viewportId);
-		}
-
-		ui.same_line();
-		draw_toggle_button(ui, "Aspect", presentation->preserve_aspect);
-		ui.same_line();
-		draw_toggle_button(ui, "Input", presentation->accepts_input);
-		ui.same_line();
-		draw_toggle_button(ui, "Stats", presentation->show_stats);
-		ui.same_line();
-		draw_toggle_button(ui, "Overlay", presentation->show_overlays);
+		_eventBindings.Clear();
 	}
 
-	void ViewportPanel::draw_toggle_button(AshEngine::UIContext& ui, const char* label, bool& value) const
+	void ViewportPanel::ResetRuntimeViewportState()
 	{
-		const bool was_enabled = value;
-		if (was_enabled)
+		EditorViewportInstance* pViewport = ResolveViewport();
+		if (!pViewport)
 		{
-			ui.push_style_color(AshEngine::UIStyleColorKind::Button, { 0.42f, 0.49f, 0.57f, 1.0f });
-			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, { 0.46f, 0.53f, 0.62f, 1.0f });
-			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, { 0.38f, 0.45f, 0.53f, 1.0f });
+			return;
 		}
 
-		if (ui.small_button(label))
-		{
-			value = !value;
-		}
-
-		if (was_enabled)
-		{
-			ui.pop_style_color(3);
-		}
+		pViewport->state.bFocused = false;
+		pViewport->state.bHovered = false;
+		pViewport->state.uRequestedWidth = 0;
+		pViewport->state.uRequestedHeight = 0;
 	}
 
-	void ViewportPanel::draw_overlay(EditorContext& context, const EditorViewportInstance& viewport) const
+	void ViewportPanel::OnUpdate()
 	{
-		if (!context.ui_context || !context.viewport_service)
+		EditorViewportInstance* pViewport = ResolveViewport();
+		if (!pViewport)
 		{
 			return;
 		}
 
-		const EditorViewportPresentation* presentation = context.viewport_service->get_presentation(m_viewportId);
-		const EditorViewportRenderState* render_state = context.viewport_service->get_render_state(m_viewportId);
-		if (!presentation || (!presentation->show_overlays && !presentation->show_stats))
+		const EditorViewportRenderState* pRenderState =
+			_deps.pViewportService ? _deps.pViewportService->GetRenderState(_strViewportId) : nullptr;
+		if (pRenderState)
+		{
+			pViewport->state.uWidth = pRenderState->uOutputWidth;
+			pViewport->state.uHeight = pRenderState->uOutputHeight;
+			return;
+		}
+
+		pViewport->state.uWidth = 0u;
+		pViewport->state.uHeight = 0u;
+	}
+
+	void ViewportPanel::DrawToolbar(const EditorFrameContext& refFrameContext, EditorViewportInstance& refViewport)
+	{
+		if (!refFrameContext.pUiContext || !_deps.pViewportService)
 		{
 			return;
 		}
 
-		const std::vector<std::string> lines = make_overlay_lines(
-			viewport,
-			*presentation,
-			render_state,
-			context.viewport_service->is_primary_viewport(viewport.id));
-		if (lines.empty())
+		EditorViewportPresentation* pPresentation = _deps.pViewportService->GetPresentation(_strViewportId);
+		if (!pPresentation || !pPresentation->bShowToolbar)
 		{
 			return;
 		}
 
-		ImDrawList* draw_list = ImGui::GetWindowDrawList();
-		if (!draw_list)
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		refUi.text_unformatted(GetViewportKindLabel(pPresentation->eKind));
+		refUi.same_line();
+		const bool bIsPrimary = _deps.pViewportService->IsPrimaryViewport(refViewport.strId);
+		if (refUi.small_button(bIsPrimary ? "Primary" : "Set Primary"))
+		{
+			_deps.pViewportService->SetPrimaryViewport(_strViewportId);
+		}
+
+		refUi.same_line();
+		DrawEditorToggleButton(refUi, "Aspect", pPresentation->bPreserveAspect);
+		refUi.same_line();
+		DrawEditorToggleButton(refUi, "Input", pPresentation->bAcceptsInput);
+		refUi.same_line();
+		DrawEditorToggleButton(refUi, "Stats", pPresentation->bShowStats);
+		refUi.same_line();
+		DrawEditorToggleButton(refUi, "Overlay", pPresentation->bShowOverlays);
+	}
+
+	void ViewportPanel::DrawOverlay(const EditorFrameContext& refFrameContext, const EditorViewportInstance& refViewport) const
+	{
+		if (!refFrameContext.pUiContext || !_deps.pViewportService)
 		{
 			return;
 		}
 
-		const ImVec2 item_min = ImGui::GetItemRectMin();
-		const float padding = 10.0f;
-		const float line_spacing = 4.0f;
-		float max_width = 0.0f;
-		float total_height = padding * 2.0f;
-		for (const std::string& line : lines)
+		const EditorViewportPresentation* pPresentation = _deps.pViewportService->GetPresentation(_strViewportId);
+		const EditorViewportRenderState* pRenderState = _deps.pViewportService->GetRenderState(_strViewportId);
+		if (!pPresentation || (!pPresentation->bShowOverlays && !pPresentation->bShowStats))
 		{
-			const ImVec2 line_size = ImGui::CalcTextSize(line.c_str());
-			max_width = std::max(max_width, line_size.x);
-			total_height += line_size.y;
+			return;
 		}
-		total_height += std::max(0.0f, static_cast<float>(lines.size() - 1)) * line_spacing;
 
-		const ImVec2 panel_min(item_min.x + 12.0f, item_min.y + 12.0f);
-		const ImVec2 panel_max(panel_min.x + max_width + padding * 2.0f, panel_min.y + total_height);
-		draw_list->AddRectFilled(
-			panel_min,
-			panel_max,
-			ImGui::GetColorU32(ImVec4(0.12f, 0.14f, 0.18f, 0.72f)),
+		const std::vector<std::string> vecLines = MakeOverlayLines(
+			refViewport,
+			*pPresentation,
+			pRenderState,
+			_deps.pViewportService->IsPrimaryViewport(refViewport.strId));
+		if (vecLines.empty())
+		{
+			return;
+		}
+
+		const AshEngine::UIRect rectItem = refFrameContext.pUiContext->get_item_rect();
+		const float fPadding = 10.0f;
+		const float fLineSpacing = 4.0f;
+		float fMaxWidth = 0.0f;
+		float fTotalHeight = fPadding * 2.0f;
+		for (const std::string& strLine : vecLines)
+		{
+			const AshEngine::UIVec2 vecLineSize = refFrameContext.pUiContext->calc_text_size(strLine.c_str());
+			fMaxWidth = std::max(fMaxWidth, vecLineSize.x);
+			fTotalHeight += vecLineSize.y;
+		}
+		fTotalHeight += std::max(0.0f, static_cast<float>(vecLines.size() - 1)) * fLineSpacing;
+
+		const AshEngine::UIRect rectOverlay{
+			rectItem.x + 12.0f,
+			rectItem.y + 12.0f,
+			fMaxWidth + fPadding * 2.0f,
+			fTotalHeight
+		};
+		refFrameContext.pUiContext->draw_window_rect_filled(
+			rectOverlay,
+			{ 0.12f, 0.14f, 0.18f, 0.72f },
 			6.0f);
-		draw_list->AddRect(
-			panel_min,
-			panel_max,
-			ImGui::GetColorU32(ImVec4(0.64f, 0.72f, 0.84f, 0.32f)),
+		refFrameContext.pUiContext->draw_window_rect(
+			rectOverlay,
+			{ 0.64f, 0.72f, 0.84f, 0.32f },
 			6.0f);
 
-		float text_y = panel_min.y + padding;
-		for (const std::string& line : lines)
+		float fTextY = rectOverlay.y + fPadding;
+		const AshEngine::UIColor colorText =
+			refFrameContext.pUiContext->get_style_color(AshEngine::UIStyleColorKind::Text);
+		for (const std::string& strLine : vecLines)
 		{
-			draw_list->AddText(
-				ImVec2(panel_min.x + padding, text_y),
-				ImGui::GetColorU32(ImGuiCol_Text),
-				line.c_str());
-			text_y += ImGui::CalcTextSize(line.c_str()).y + line_spacing;
+			refFrameContext.pUiContext->draw_window_text(
+				{ rectOverlay.x + fPadding, fTextY },
+				colorText,
+				strLine.c_str());
+			fTextY += refFrameContext.pUiContext->calc_text_size(strLine.c_str()).y + fLineSpacing;
 		}
 	}
 
-	void ViewportPanel::on_gui(EditorContext& context)
+	void ViewportPanel::OnGui(const EditorFrameContext& frameContext)
 	{
-		EditorViewportInstance* viewport = resolve_viewport(context);
-		const bool trace_this_frame = should_trace_viewport_panel();
-		if (trace_this_frame)
+		EditorViewportInstance* pViewport = ResolveViewport();
+		const bool bTraceThisFrame = ShouldTraceViewportPanel();
+		if (bTraceThisFrame)
 		{
 			HLogInfo(
-				"ViewportPanel::on_gui begin. surface={}, ui_ready={}, requested={}x{}.",
-				viewport ? viewport->surface.value : 0u,
-				context.gui_renderer_ready,
-				viewport ? viewport->state.requested_width : 0u,
-				viewport ? viewport->state.requested_height : 0u);
+				"ViewportPanel::OnGui begin. surface={}, ui_ready={}, requested={}x{}.",
+				pViewport ? pViewport->surface.value : 0u,
+				frameContext.bGuiRendererReady,
+				pViewport ? pViewport->state.uRequestedWidth : 0u,
+				pViewport ? pViewport->state.uRequestedHeight : 0u);
 		}
 
-		const bool window_visible = begin_panel_window(context, AshEngine::UIWindowFlagBits::MenuBar);
-		if (context.viewport_service)
+		const bool bWindowVisible = BeginPanelWindow(frameContext, AshEngine::UIWindowFlagBits::MenuBar);
+		if (_deps.pViewportService)
 		{
-			context.viewport_service->set_panel_open(m_viewportId, is_open());
+			_deps.pViewportService->SetPanelOpen(_strViewportId, IsOpen());
 		}
 
-		if (!window_visible)
+		if (!bWindowVisible)
 		{
-			if (trace_this_frame)
+			if (bTraceThisFrame)
 			{
-				HLogWarning("ViewportPanel::on_gui skipped because Begin returned false.");
+				HLogWarning("ViewportPanel::OnGui skipped because Begin returned false.");
 			}
-			end_panel_window(context);
+			EndPanelWindow(frameContext);
 			return;
 		}
 
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (viewport)
+		if (!frameContext.pUiContext)
 		{
-			viewport->state.focused = ui.is_window_focused();
-			viewport->state.hovered = ui.is_window_hovered();
-			if (context.viewport_service)
+			EndPanelWindow(frameContext);
+			return;
+		}
+
+		AshEngine::UIContext& refUi = *frameContext.pUiContext;
+		if (pViewport)
+		{
+			pViewport->state.bFocused = refUi.is_window_focused();
+			pViewport->state.bHovered = refUi.is_window_hovered();
+			if (_deps.pViewportService)
 			{
-				if (viewport->state.focused)
+				if (pViewport->state.bFocused)
 				{
-					context.viewport_service->set_primary_viewport(m_viewportId);
+					_deps.pViewportService->SetPrimaryViewport(_strViewportId);
 				}
 			}
 		}
 
-		if (ui.begin_menu_bar())
+		if (refUi.begin_menu_bar())
 		{
-			if (viewport)
+			if (pViewport)
 			{
-				draw_toolbar(context, *viewport);
+				DrawToolbar(frameContext, *pViewport);
 			}
-			ui.end_menu_bar();
+			refUi.end_menu_bar();
 		}
 
-		const AshEngine::UIVec2 available = ui.get_content_region_avail();
-		if (viewport)
+		const AshEngine::UIVec2 vecAvailableSize = refUi.get_content_region_avail();
+		if (pViewport)
 		{
-			if (context.viewport_service)
+			if (_deps.pViewportService)
 			{
-				context.viewport_service->update_requested_size(
-					m_viewportId,
-					available.x > 1.0f ? static_cast<uint32_t>(available.x) : 0u,
-					available.y > 1.0f ? static_cast<uint32_t>(available.y) : 0u);
+				_deps.pViewportService->UpdateRequestedSize(
+					_strViewportId,
+					vecAvailableSize.x > 1.0f ? static_cast<uint32_t>(vecAvailableSize.x) : 0u,
+					vecAvailableSize.y > 1.0f ? static_cast<uint32_t>(vecAvailableSize.y) : 0u);
 			}
 		}
 
-		if (viewport && viewport->surface.is_valid() && context.ui_context && available.x > 2.0f && available.y > 2.0f)
+		if (pViewport && pViewport->surface.is_valid() && frameContext.pUiContext && vecAvailableSize.x > 2.0f && vecAvailableSize.y > 2.0f)
 		{
-			bool preserve_aspect = false;
-			if (const EditorViewportPresentation* presentation =
-				context.viewport_service ? context.viewport_service->get_presentation(m_viewportId) : nullptr)
+			bool bPreserveAspect = false;
+			if (const EditorViewportPresentation* pPresentation =
+				_deps.pViewportService ? _deps.pViewportService->GetPresentation(_strViewportId) : nullptr)
 			{
-				preserve_aspect = presentation->preserve_aspect;
+				bPreserveAspect = pPresentation->bPreserveAspect;
 			}
-			if (viewport->state.width == 0u || viewport->state.height == 0u)
+			if (pViewport->state.uWidth == 0u || pViewport->state.uHeight == 0u)
 			{
-				if (trace_this_frame)
+				if (bTraceThisFrame)
 				{
-					HLogWarning("ViewportPanel::on_gui is waiting for a synchronized scene surface.");
+					HLogWarning("ViewportPanel::OnGui is waiting for a synchronized scene surface.");
 				}
-				ui.text_wrapped("Scene surface is not available yet.");
+				refUi.text_wrapped("Scene surface is not available yet.");
 			}
 			else
 			{
-				if (trace_this_frame)
+				if (bTraceThisFrame)
 				{
 					HLogInfo(
-						"ViewportPanel::on_gui drawing scene surface {} with available size {}x{}.",
-						viewport->surface.value,
-						available.x,
-						available.y);
+						"ViewportPanel::OnGui drawing scene surface {} with available size {}x{}.",
+						pViewport->surface.value,
+						vecAvailableSize.x,
+						vecAvailableSize.y);
 				}
-				context.ui_context->draw_surface_fill_available(viewport->surface, preserve_aspect);
-				draw_overlay(context, *viewport);
-				if (trace_this_frame)
+				frameContext.pUiContext->draw_surface_fill_available(pViewport->surface, bPreserveAspect);
+				DrawOverlay(frameContext, *pViewport);
+				if (bTraceThisFrame)
 				{
-					HLogInfo("ViewportPanel::on_gui finished drawing scene surface.");
+					HLogInfo("ViewportPanel::OnGui finished drawing scene surface.");
 				}
 			}
 		}
-		else if (!viewport || !viewport->surface.is_valid())
+		else if (!pViewport || !pViewport->surface.is_valid())
 		{
-			if (trace_this_frame)
+			if (bTraceThisFrame)
 			{
-				HLogWarning("ViewportPanel::on_gui has no scene surface to display.");
+				HLogWarning("ViewportPanel::OnGui has no scene surface to display.");
 			}
-			ui.text_wrapped("Scene surface is not available yet.");
+			refUi.text_wrapped("Scene surface is not available yet.");
 		}
 		else
 		{
-			if (trace_this_frame)
+			if (bTraceThisFrame)
 			{
-				HLogWarning("ViewportPanel::on_gui is waiting for UIContext or sufficient panel size.");
+				HLogWarning("ViewportPanel::OnGui is waiting for UIContext or sufficient panel size.");
 			}
-			ui.text_wrapped("Viewport preview is waiting for the engine UIContext.");
+			refUi.text_wrapped("Viewport preview is waiting for the engine UIContext.");
 		}
 
-		end_panel_window(context);
-		if (trace_this_frame)
+		EndPanelWindow(frameContext);
+		if (bTraceThisFrame)
 		{
-			HLogInfo("ViewportPanel::on_gui end.");
+			HLogInfo("ViewportPanel::OnGui end.");
 		}
 	}
 }

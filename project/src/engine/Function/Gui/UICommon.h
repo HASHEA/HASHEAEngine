@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace AshEngine
@@ -192,6 +193,7 @@ namespace AshEngine
 		constexpr UITreeNodeFlags OpenOnArrow = 1u << 3u;
 		constexpr UITreeNodeFlags SpanAvailWidth = 1u << 4u;
 		constexpr UITreeNodeFlags Leaf = 1u << 5u;
+		constexpr UITreeNodeFlags FramePadding = 1u << 6u;
 	}
 
 	using UITableFlags = uint32_t;
@@ -263,5 +265,103 @@ namespace AshEngine
 		constexpr UITabItemFlags SetSelected = 1u << 1u;
 		constexpr UITabItemFlags NoCloseWithMiddleMouseButton = 1u << 2u;
 	}
+
+	enum class UIKey : uint16_t
+	{
+		None = 0,
+		Backspace, Tab, Enter, Escape, Space,
+		A, B, C, D, E, F, G, H, I, J, K, L, M,
+		N, O, P, Q, R, S, T, U, V, W, X, Y, Z,
+		F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+		LeftArrow, RightArrow, UpArrow, DownArrow,
+		Insert, Delete, Home, End, PageUp, PageDown
+	};
+
+	using UIModifierFlags = uint32_t;
+	namespace UIModifierFlagBits
+	{
+		constexpr UIModifierFlags None = 0u;
+		constexpr UIModifierFlags Ctrl = 1u << 0u;
+		constexpr UIModifierFlags Shift = 1u << 1u;
+		constexpr UIModifierFlags Alt = 1u << 2u;
+		constexpr UIModifierFlags Super = 1u << 3u;
+	}
+
+	struct UIKeyChord
+	{
+		UIKey key = UIKey::None;
+		UIModifierFlags modifiers = UIModifierFlagBits::None;
+	};
+
+	inline uint32_t make_key_chord(UIKey key, UIModifierFlags modifiers = UIModifierFlagBits::None)
+	{
+		return (static_cast<uint32_t>(key) & 0xFFFFu) | ((modifiers & 0xFFFFu) << 16u);
+	}
+
+	using UIDragDropFlags = uint32_t;
+	namespace UIDragDropFlagBits
+	{
+		constexpr UIDragDropFlags None = 0u;
+		constexpr UIDragDropFlags SourceAllowNullID = 1u << 0u;
+		constexpr UIDragDropFlags SourceNoPreviewTooltip = 1u << 1u;
+		constexpr UIDragDropFlags AcceptNoDrawDefaultRect = 1u << 2u;
+		constexpr UIDragDropFlags AcceptBeforeDelivery = 1u << 3u;
+		constexpr UIDragDropFlags AcceptPeekOnly = AcceptBeforeDelivery | AcceptNoDrawDefaultRect;
+	}
+
+	struct UIDragDropPayload
+	{
+		static constexpr int kMaxInlineDataSize = 16;
+
+		const void* data = nullptr;
+		int data_size = 0;
+		bool is_preview = false;
+		bool is_delivery = false;
+
+		UIDragDropPayload() = default;
+
+		UIDragDropPayload(const UIDragDropPayload& other)
+			: data(other.data)
+			, data_size(other.data_size)
+			, is_preview(other.is_preview)
+			, is_delivery(other.is_delivery)
+		{
+			std::memcpy(inline_data, other.inline_data, kMaxInlineDataSize);
+			if (other.data == other.inline_data)
+				data = inline_data;
+		}
+
+		UIDragDropPayload& operator=(const UIDragDropPayload& other)
+		{
+			if (this != &other)
+			{
+				data = other.data;
+				data_size = other.data_size;
+				is_preview = other.is_preview;
+				is_delivery = other.is_delivery;
+				std::memcpy(inline_data, other.inline_data, kMaxInlineDataSize);
+				if (other.data == other.inline_data)
+					data = inline_data;
+			}
+			return *this;
+		}
+
+		bool is_valid() const { return data != nullptr && data_size > 0; }
+
+		// Copy payload data into inline buffer so it survives after
+		// the ImGui drag-drop target scope ends (ImGui clears its
+		// internal payload buffer on EndDragDropTarget during delivery).
+		void make_data_owned()
+		{
+			if (data && data_size > 0 && data_size <= kMaxInlineDataSize && data != inline_data)
+			{
+				std::memcpy(inline_data, data, static_cast<size_t>(data_size));
+				data = inline_data;
+			}
+		}
+
+	private:
+		alignas(8) char inline_data[kMaxInlineDataSize]{};
+	};
 
 }

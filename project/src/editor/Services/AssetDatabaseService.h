@@ -1,33 +1,37 @@
 #pragma once
+
 #include "Function/Asset/AssetDatabase.h"
+
+#include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace AshEditor
 {
 	class AssetDatabaseService
 	{
 	public:
-		void set_asset_root(std::filesystem::path asset_root);
-		bool refresh();
+		void SetAssetRoot(std::filesystem::path pathAssetRoot);
+		bool Refresh();
 
-		AshEngine::AssetDatabase& get_database();
-		const AshEngine::AssetDatabase& get_database() const;
-		const std::filesystem::path& get_asset_root() const;
-		const std::vector<AshEngine::AssetInfo>& get_items() const;
-		const AshEngine::AssetInfo* find_by_id(uint64_t id) const;
-		const AshEngine::AssetInfo* find_by_path(const std::filesystem::path& path) const;
-		AshEngine::AssetLoadState get_load_state(uint64_t id) const;
-		std::string get_last_error() const;
-		std::string get_asset_last_error(uint64_t id) const;
-		std::filesystem::path resolve_asset_path(const std::filesystem::path& relative_path) const;
-		bool load_text_by_id(uint64_t id, std::string& out_text);
+		AshEngine::AssetDatabase& GetDatabase();
+		const AshEngine::AssetDatabase& GetDatabase() const;
+		const std::filesystem::path& GetAssetRoot() const;
+		const std::vector<AshEngine::AssetInfo>& GetItems() const;
+		const AshEngine::AssetInfo* FindById(uint64_t uAssetId) const;
+		const AshEngine::AssetInfo* FindByPath(const std::filesystem::path& pathAssetRelativeOrAbsolute) const;
+		AshEngine::AssetLoadState GetLoadState(uint64_t uAssetId) const;
+		std::string GetLastError() const;
+		std::string GetAssetLastError(uint64_t uAssetId) const;
+		std::filesystem::path ResolveAssetPath(const std::filesystem::path& pathRelativeOrAbsolute) const;
+		bool LoadTextById(uint64_t uAssetId, std::string& outText);
 
-		static const char* get_type_label(AshEngine::AssetType type);
-		static const char* get_load_state_label(AshEngine::AssetLoadState state);
+		static const char* GetTypeLabel(AshEngine::AssetType type);
+		static const char* GetLoadStateLabel(AshEngine::AssetLoadState state);
 
 	private:
-		std::filesystem::path m_assetRoot{};
-		AshEngine::AssetDatabase m_database{};
+		std::filesystem::path _pathAssetRoot{};
+		AshEngine::AssetDatabase _database{};
 	};
 }

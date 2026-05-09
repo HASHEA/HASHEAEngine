@@ -1,96 +1,101 @@
 #include "Core/EditorCommand.h"
+
 #include "Core/EditorContext.h"
+
 #include <utility>
 
 namespace AshEditor
 {
-	CompositeCommand::CompositeCommand(std::string label)
-		: m_label(std::move(label))
+	CompositeCommand::CompositeCommand(std::string strLabel)
+		: _strLabel(std::move(strLabel))
 	{
 	}
 
-	void CompositeCommand::append(std::unique_ptr<EditorCommand> command)
+	void CompositeCommand::Append(std::unique_ptr<EditorCommand> upCommand)
 	{
-		if (command)
+		if (upCommand)
 		{
-			m_commands.push_back(std::move(command));
+			_vecCommands.push_back(std::move(upCommand));
 		}
 	}
 
-	bool CompositeCommand::is_empty() const
+	bool CompositeCommand::IsEmpty() const
 	{
-		return m_commands.empty();
+		return _vecCommands.empty();
 	}
 
-	size_t CompositeCommand::get_command_count() const
+	size_t CompositeCommand::GetCommandCount() const
 	{
-		return m_commands.size();
+		return _vecCommands.size();
 	}
 
-	std::unique_ptr<EditorCommand> CompositeCommand::release_single_command()
+	std::unique_ptr<EditorCommand> CompositeCommand::ReleaseSingleCommand()
 	{
-		if (m_commands.size() != 1)
+		if (_vecCommands.size() != 1)
 		{
 			return nullptr;
 		}
 
-		std::unique_ptr<EditorCommand> command = std::move(m_commands.front());
-		m_commands.clear();
-		return command;
+		std::unique_ptr<EditorCommand> upCommand = std::move(_vecCommands.front());
+		_vecCommands.clear();
+		return upCommand;
 	}
 
-	const char* CompositeCommand::get_label() const
+	const char* CompositeCommand::GetLabel() const
 	{
-		return m_label.empty() ? "Composite Command" : m_label.c_str();
+		return _strLabel.empty() ? "Composite Command" : _strLabel.c_str();
 	}
 
-	bool CompositeCommand::execute(EditorContext& context)
+	bool CompositeCommand::Execute(EditorContext& refContext)
 	{
-		size_t executed_count = 0;
-		for (std::unique_ptr<EditorCommand>& command : m_commands)
+		size_t uExecutedCount = 0;
+		for (std::unique_ptr<EditorCommand>& upCommand : _vecCommands)
 		{
-			if (!command || !command->execute(context))
+			if (!upCommand || !upCommand->Execute(refContext))
 			{
-				for (size_t rollback_index = executed_count; rollback_index > 0; --rollback_index)
+				for (size_t uRollbackIndex = uExecutedCount; uRollbackIndex > 0; --uRollbackIndex)
 				{
-					m_commands[rollback_index - 1]->undo(context);
+					_vecCommands[uRollbackIndex - 1]->Undo(refContext);
 				}
 				return false;
 			}
-			++executed_count;
+			++uExecutedCount;
 		}
 		return true;
 	}
 
-	bool CompositeCommand::undo(EditorContext& context)
+	bool CompositeCommand::Undo(EditorContext& refContext)
 	{
-		size_t undone_count = 0;
-		for (auto it = m_commands.rbegin(); it != m_commands.rend(); ++it)
+		size_t uUndoneCount = 0;
+		for (
+			std::vector<std::unique_ptr<EditorCommand>>::reverse_iterator itCommand = _vecCommands.rbegin();
+			itCommand != _vecCommands.rend();
+			++itCommand)
 		{
-			if (!(*it) || !(*it)->undo(context))
+			if (!(*itCommand) || !(*itCommand)->Undo(refContext))
 			{
-				for (size_t replay_index = 0; replay_index < undone_count; ++replay_index)
+				for (size_t uReplayIndex = 0; uReplayIndex < uUndoneCount; ++uReplayIndex)
 				{
-					m_commands[m_commands.size() - undone_count + replay_index]->execute(context);
+					_vecCommands[_vecCommands.size() - uUndoneCount + uReplayIndex]->Execute(refContext);
 				}
 				return false;
 			}
-			++undone_count;
+			++uUndoneCount;
 		}
 		return true;
 	}
 
-	EditorCommandSelection CompositeCommand::get_selection_after_execute() const
+	EditorCommandSelection CompositeCommand::GetSelectionAfterExecute() const
 	{
-		return m_commands.empty()
-			? EditorCommandSelection::keep()
-			: m_commands.back()->get_selection_after_execute();
+		return _vecCommands.empty()
+			? EditorCommandSelection::Keep()
+			: _vecCommands.back()->GetSelectionAfterExecute();
 	}
 
-	EditorCommandSelection CompositeCommand::get_selection_after_undo() const
+	EditorCommandSelection CompositeCommand::GetSelectionAfterUndo() const
 	{
-		return m_commands.empty()
-			? EditorCommandSelection::keep()
-			: m_commands.front()->get_selection_after_undo();
+		return _vecCommands.empty()
+			? EditorCommandSelection::Keep()
+			: _vecCommands.front()->GetSelectionAfterUndo();
 	}
 }

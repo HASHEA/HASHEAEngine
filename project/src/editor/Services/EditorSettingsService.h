@@ -1,52 +1,63 @@
 #pragma once
-#include "Function/Gui/UICommon.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
 
+namespace AshEngine
+{
+	enum class UIThemePreset : uint8_t;
+}
+
 namespace AshEditor
 {
 	struct EditorSettings
 	{
-		std::string last_scene_path{};
-		std::string assets_root = "product/assets";
-		std::string layout_ini_path = "product/config/editor/imgui.ini";
-		std::string startup_scene_path = "product/config/editor/Default.scene.json";
-		std::string asset_browser_search_text{};
-		std::string asset_browser_active_directory{};
-		bool asset_browser_show_details = true;
-		int32_t asset_browser_type_filter = 0;
-		int32_t asset_browser_view_mode = 0;
-		std::string console_filter_text{};
-		int32_t console_severity_filter = 0;
-		std::string ui_theme_preset = "slate_studio";
+		std::string strLastScenePath{};
+		std::string strAssetsRoot = "product/assets";
+		std::string strLayoutIniPath = "product/config/editor/imgui.ini";
+		std::string strStartupScenePath = "product/config/editor/Default.scene.json";
+		std::string strAssetBrowserSearchText{};
+		std::string strAssetBrowserActiveDirectory{};
+		bool bAssetBrowserShowDetails = true;
+		int32_t iAssetBrowserTypeFilter = 0;
+		int32_t iAssetBrowserViewMode = 0;
+		std::string strConsoleFilterText{};
+		int32_t iConsoleSeverityFilter = 0;
+		std::string strUiThemePreset = "slate_studio";
 	};
 
 	class EditorSettingsService
 	{
 	public:
-		bool initialize(const std::filesystem::path& workspace_root);
-		bool load();
-		bool save() const;
+		// Initializes workspace root and resolves default settings path.
+		bool Initialize(const std::filesystem::path& pathWorkspaceRoot);
 
-		EditorSettings& get_settings();
-		const EditorSettings& get_settings() const;
+		// Loads/saves settings from/to disk. Load() is called by Initialize().
+		bool Load();
+		bool Save() const;
 
-		const std::filesystem::path& get_workspace_root() const;
-		std::filesystem::path resolve_workspace_path(const std::filesystem::path& path) const;
-		std::filesystem::path get_assets_root_path() const;
-		std::filesystem::path get_layout_ini_path() const;
-		std::filesystem::path get_startup_scene_path() const;
+		// Accessors for the in-memory settings snapshot.
+		EditorSettings& GetSettings();
+		const EditorSettings& GetSettings() const;
+
+		// Workspace root and path helpers. ResolveWorkspacePath accepts relative or absolute paths.
+		const std::filesystem::path& GetWorkspaceRoot() const;
+		std::filesystem::path ResolveWorkspacePath(const std::filesystem::path& path) const;
+		std::filesystem::path GetAssetsRootPath() const;
+		std::filesystem::path GetLayoutIniPath() const;
+		std::filesystem::path GetStartupScenePath() const;
 
 	private:
-		std::filesystem::path m_workspaceRoot{};
-		std::filesystem::path m_settingsFilePath{};
-		EditorSettings m_settings{};
+		std::filesystem::path _pathWorkspaceRoot{};
+		std::filesystem::path _pathSettingsFilePath{};
+		EditorSettings _settings{};
 	};
 
-	std::filesystem::path discover_editor_workspace_root();
-	AshEngine::UIThemePreset parse_editor_ui_theme_preset(std::string_view value);
-	const char* get_editor_ui_theme_preset_name(AshEngine::UIThemePreset preset);
-	const char* get_editor_ui_theme_preset_label(AshEngine::UIThemePreset preset);
+	// Discovers workspace root (used by editor bootstrap).
+	std::filesystem::path DiscoverEditorWorkspaceRoot();
+	AshEngine::UIThemePreset ParseEditorUiThemePreset(std::string_view value);
+	const char* GetEditorUiThemePresetName(AshEngine::UIThemePreset preset);
+	const char* GetEditorUiThemePresetLabel(AshEngine::UIThemePreset preset);
 }

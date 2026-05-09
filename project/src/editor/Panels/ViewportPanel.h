@@ -1,27 +1,45 @@
 #pragma once
+#include "Core/EditorEventBindings.h"
+#include "Core/EditorFrameContext.h"
+#include "Core/EditorIds.h"
+#include "Core/PanelDeps/ViewportPanelDeps.h"
 #include "Core/EditorPanel.h"
+
 #include <string>
 
 namespace AshEditor
 {
+	class EditorEventBus;
+	struct EditorViewportInstance;
+
 	class ViewportPanel final : public EditorPanel
 	{
 	public:
-		ViewportPanel(std::string viewport_id = "scene", std::string panel_id = "viewport", std::string title = "Viewport");
+		ViewportPanel(
+			std::string strViewportId = EditorViewportIds::Scene,
+			std::string strPanelId = EditorPanelIds::Viewport,
+			std::string strTitle = "Viewport",
+			ViewportPanelDeps deps = {});
 
 	public:
-		void on_attach(EditorContext& context) override;
-		void on_update(EditorContext& context) override;
-		void on_gui(EditorContext& context) override;
+		void OnAttach() override;
+		void OnDetach() override;
+		void OnUpdate() override;
+		void OnGui(const EditorFrameContext& refFrameContext) override;
+		void BindEventBus(EditorEventBus* pEventBus);
 
 	private:
-		void draw_toolbar(EditorContext& context, EditorViewportInstance& viewport);
-		void draw_toggle_button(AshEngine::UIContext& ui, const char* label, bool& value) const;
-		void draw_overlay(EditorContext& context, const EditorViewportInstance& viewport) const;
-		EditorViewportInstance* resolve_viewport(EditorContext& context) const;
-		const EditorViewportInstance* resolve_viewport(const EditorContext& context) const;
+		void ClearDeps();
+		void UnsubscribeEvents();
+		void ResetRuntimeViewportState();
+		void DrawToolbar(const EditorFrameContext& refFrameContext, EditorViewportInstance& refViewport);
+		void DrawOverlay(const EditorFrameContext& refFrameContext, const EditorViewportInstance& refViewport) const;
+		EditorViewportInstance* ResolveViewport();
+		const EditorViewportInstance* ResolveViewport() const;
 
 	private:
-		std::string m_viewportId{};
+		ViewportPanelDeps _deps{};
+		EditorEventBindings _eventBindings{};
+		std::string _strViewportId{};
 	};
 }

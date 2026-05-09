@@ -1,8 +1,8 @@
 #pragma once
 
-#include "Function/Gui/UICommon.h"
+#include "Services/IEditorIconService.h"
+
 #include <array>
-#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -20,49 +20,38 @@ namespace AshEngine
 
 namespace AshEditor
 {
-	enum class EditorIconId : uint8_t
-	{
-		FolderClosed = 0,
-		FolderOpen,
-		File,
-		EntityActor,
-		EntityScene,
-		EntityCamera,
-		EntityLightDirectional,
-		EntityLightPoint,
-		EntityLightSpot,
-		EntityMesh,
-		Count
-	};
-
-	class EditorIconService
+	class EditorIconService final : public IEditorIconService
 	{
 	public:
-		bool initialize(const std::filesystem::path& workspace_root);
-		void shutdown(AshEngine::UIContext* ui_context = nullptr);
+		// Initializes icon paths relative to the workspace root.
+		bool Initialize(const std::filesystem::path& refWorkspaceRoot) override;
 
-		AshEngine::UITextureHandle get_icon(EditorIconId icon_id, AshEngine::UIContext& ui_context);
+		// Releases any registered UI handles. If pUiContext is provided and matches the registered one, handles are unregistered.
+		void Shutdown(AshEngine::UIContext* pUiContext = nullptr) override;
+
+		// Returns a UI texture handle for the given icon id. May return nullptr if the icon failed to load.
+		AshEngine::UITextureHandle GetIcon(EditorIconId eIconId, AshEngine::UIContext& refUiContext) override;
 
 	private:
 		struct IconEntry
 		{
-			std::filesystem::path file_path{};
-			std::string debug_name{};
-			std::shared_ptr<RHI::Texture> texture = nullptr;
-			std::shared_ptr<RHI::TextureView> texture_view = nullptr;
-			AshEngine::UITextureHandle handle = nullptr;
-			bool load_failed = false;
+			std::filesystem::path pathFile{};
+			std::string strDebugName{};
+			std::shared_ptr<RHI::Texture> spTexture = nullptr;
+			std::shared_ptr<RHI::TextureView> spTextureView = nullptr;
+			AshEngine::UITextureHandle pUiTextureHandle = nullptr;
+			bool bLoadFailed = false;
 		};
 
-		void register_default_icons();
-		void clear_handles();
-		bool ensure_icon_loaded(IconEntry& entry);
-		IconEntry& get_entry(EditorIconId icon_id);
+		void RegisterDefaultIcons();
+		void ClearHandles();
+		bool EnsureIconLoaded(IconEntry& refEntry);
+		IconEntry& GetEntry(EditorIconId eIconId);
 
 	private:
-		std::filesystem::path m_workspaceRoot{};
-		std::filesystem::path m_iconRoot{};
-		AshEngine::UIContext* m_registeredUiContext = nullptr;
-		std::array<IconEntry, static_cast<size_t>(EditorIconId::Count)> m_icons{};
+		std::filesystem::path _pathWorkspaceRoot{};
+		std::filesystem::path _pathIconRoot{};
+		AshEngine::UIContext* _pRegisteredUiContext = nullptr;
+		std::array<IconEntry, static_cast<size_t>(EditorIconId::Count)> _arrIcons{};
 	};
 }

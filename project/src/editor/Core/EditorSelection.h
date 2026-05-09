@@ -13,32 +13,36 @@ namespace AshEditor
 
 	struct EditorSelection
 	{
-		EditorSelectionKind kind = EditorSelectionKind::None;
-		uint64_t id = 0;
-		std::string label{};
-		std::string path{};
+		EditorSelectionKind eKind = EditorSelectionKind::None;
+		uint64_t uId = 0;
+		std::string strLabel{};
+		std::string strPath{};
 
-		bool operator==(const EditorSelection& other) const
+		bool operator==(const EditorSelection& refOther) const
 		{
-			return kind == other.kind && id == other.id && label == other.label && path == other.path;
+			return
+				eKind == refOther.eKind &&
+				uId == refOther.uId &&
+				strLabel == refOther.strLabel &&
+				strPath == refOther.strPath;
 		}
 
-		bool operator!=(const EditorSelection& other) const
+		bool operator!=(const EditorSelection& refOther) const
 		{
-			return !(*this == other);
+			return !(*this == refOther);
 		}
 
-		bool is_empty() const
+		bool IsEmpty() const
 		{
-			return kind == EditorSelectionKind::None;
+			return eKind == EditorSelectionKind::None;
 		}
 
-		void clear()
+		void Clear()
 		{
-			kind = EditorSelectionKind::None;
-			id = 0;
-			label.clear();
-			path.clear();
+			eKind = EditorSelectionKind::None;
+			uId = 0;
+			strLabel.clear();
+			strPath.clear();
 		}
 	};
 }

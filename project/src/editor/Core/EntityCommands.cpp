@@ -1,6 +1,9 @@
 #include "Core/EntityCommands.h"
+
+#include "Core/EditorComponentComparison.h"
 #include "Core/EditorContext.h"
 #include "Services/SceneService.h"
+
 #include <optional>
 #include <utility>
 
@@ -8,655 +11,592 @@ namespace AshEditor
 {
 	namespace
 	{
-		bool transform_components_equal(
-			const AshEngine::TransformComponent& lhs,
-			const AshEngine::TransformComponent& rhs)
-		{
-			return
-				lhs.position == rhs.position &&
-				lhs.rotation_euler_degrees == rhs.rotation_euler_degrees &&
-				lhs.scale == rhs.scale;
-		}
-
-		bool camera_components_equal(
-			const AshEngine::CameraComponent& lhs,
-			const AshEngine::CameraComponent& rhs)
-		{
-			return
-				lhs.primary == rhs.primary &&
-				lhs.projection == rhs.projection &&
-				lhs.fov_y_degrees == rhs.fov_y_degrees &&
-				lhs.near_plane == rhs.near_plane &&
-				lhs.far_plane == rhs.far_plane &&
-				lhs.orthographic_height == rhs.orthographic_height;
-		}
-
-		bool light_components_equal(
-			const AshEngine::LightComponent& lhs,
-			const AshEngine::LightComponent& rhs)
-		{
-			return
-				lhs.type == rhs.type &&
-				lhs.color == rhs.color &&
-				lhs.intensity == rhs.intensity &&
-				lhs.range == rhs.range &&
-				lhs.inner_cone_angle_degrees == rhs.inner_cone_angle_degrees &&
-				lhs.outer_cone_angle_degrees == rhs.outer_cone_angle_degrees;
-		}
-
-		bool mesh_components_equal(
-			const AshEngine::MeshComponent& lhs,
-			const AshEngine::MeshComponent& rhs)
-		{
-			return
-				lhs.asset_path == rhs.asset_path &&
-				lhs.mesh_index == rhs.mesh_index &&
-				lhs.visible == rhs.visible &&
-				lhs.mobility == rhs.mobility &&
-				lhs.layer_mask == rhs.layer_mask;
-		}
-
-		template<typename Component>
-		bool optional_components_equal(
-			const std::optional<Component>& lhs,
-			const std::optional<Component>& rhs,
-			bool (*equals_fn)(const Component&, const Component&))
-		{
-			if (lhs.has_value() != rhs.has_value())
-			{
-				return false;
-			}
-
-			if (!lhs.has_value())
-			{
-				return true;
-			}
-
-			return equals_fn(*lhs, *rhs);
-		}
-
-		bool apply_camera_component_state(AshEngine::Entity entity, const std::optional<AshEngine::CameraComponent>& value)
+		bool ApplyCameraComponentState(AshEngine::Entity entity, const std::optional<AshEngine::CameraComponent>& optValue)
 		{
 			if (!entity.is_valid())
 			{
 				return false;
 			}
 
-			if (!value.has_value())
+			if (!optValue.has_value())
 			{
 				return entity.has_camera_component() && entity.remove_camera_component();
 			}
 
 			return entity.has_camera_component()
-				? entity.set_camera_component(*value)
-				: entity.add_camera_component(*value);
+				? entity.set_camera_component(*optValue)
+				: entity.add_camera_component(*optValue);
 		}
 
-		bool apply_light_component_state(AshEngine::Entity entity, const std::optional<AshEngine::LightComponent>& value)
+		bool ApplyLightComponentState(AshEngine::Entity entity, const std::optional<AshEngine::LightComponent>& optValue)
 		{
 			if (!entity.is_valid())
 			{
 				return false;
 			}
 
-			if (!value.has_value())
+			if (!optValue.has_value())
 			{
 				return entity.has_light_component() && entity.remove_light_component();
 			}
 
 			return entity.has_light_component()
-				? entity.set_light_component(*value)
-				: entity.add_light_component(*value);
+				? entity.set_light_component(*optValue)
+				: entity.add_light_component(*optValue);
 		}
 
-		bool apply_mesh_component_state(AshEngine::Entity entity, const std::optional<AshEngine::MeshComponent>& value)
+		bool ApplyMeshComponentState(AshEngine::Entity entity, const std::optional<AshEngine::MeshComponent>& optValue)
 		{
 			if (!entity.is_valid())
 			{
 				return false;
 			}
 
-			if (!value.has_value())
+			if (!optValue.has_value())
 			{
 				return entity.has_mesh_component() && entity.remove_mesh_component();
 			}
 
 			return entity.has_mesh_component()
-				? entity.set_mesh_component(*value)
-				: entity.add_mesh_component(*value);
+				? entity.set_mesh_component(*optValue)
+				: entity.add_mesh_component(*optValue);
 		}
 
-		AshEngine::EntityId get_entity_parent_id(const AshEngine::Entity& entity)
+		SceneEntityId GetEntityParentId(const AshEngine::Entity& refEntity)
 		{
-			const AshEngine::Entity parent = entity.get_parent();
-			return parent.is_valid() ? parent.get_id() : 0;
+			const AshEngine::Entity parentEntity = refEntity.get_parent();
+			return parentEntity.is_valid() ? parentEntity.get_id() : 0;
 		}
 	}
 
-	RenameEntityCommand::RenameEntityCommand(AshEngine::EntityId entity_id, std::string new_name)
-		: m_entityId(entity_id)
-		, m_newName(std::move(new_name))
+	RenameEntityCommand::RenameEntityCommand(SceneEntityId uEntityId, std::string strNewName)
+		: _uEntityId(uEntityId)
+		, _strNewName(std::move(strNewName))
 	{
 	}
 
-	RenameEntityCommand::RenameEntityCommand(AshEngine::EntityId entity_id, std::string before_name, std::string after_name)
-		: m_entityId(entity_id)
-		, m_newName(std::move(after_name))
-		, m_oldName(std::move(before_name))
-		, m_hasCapturedOldName(true)
+	RenameEntityCommand::RenameEntityCommand(SceneEntityId uEntityId, std::string strBeforeName, std::string strAfterName)
+		: _uEntityId(uEntityId)
+		, _strNewName(std::move(strAfterName))
+		, _strOldName(std::move(strBeforeName))
+		, _bHasCapturedOldName(true)
 	{
 	}
 
-	const char* RenameEntityCommand::get_label() const
+	const char* RenameEntityCommand::GetLabel() const
 	{
 		return "Rename Entity";
 	}
 
-	bool RenameEntityCommand::execute(EditorContext& context)
+	bool RenameEntityCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0)
+		if (!refContext.pSceneService || _uEntityId == 0)
 		{
 			return false;
 		}
 
-		const AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
+		const AshEngine::Entity entity = refContext.pSceneService->FindEntity(_uEntityId);
 		if (!entity.is_valid())
 		{
 			return false;
 		}
 
-		if (!m_hasCapturedOldName)
+		if (!_bHasCapturedOldName)
 		{
-			m_oldName = entity.get_name();
-			m_hasCapturedOldName = true;
+			_strOldName = entity.get_name();
+			_bHasCapturedOldName = true;
 		}
 
-		if (m_oldName == m_newName)
-		{
-			return false;
-		}
-
-		return context.scene_service->rename_entity(m_entityId, m_newName);
-	}
-
-	bool RenameEntityCommand::undo(EditorContext& context)
-	{
-		return context.scene_service && m_hasCapturedOldName &&
-			context.scene_service->rename_entity(m_entityId, m_oldName);
-	}
-
-	bool RenameEntityCommand::try_merge(const EditorCommand& subsequent_command)
-	{
-		const auto* subsequent = dynamic_cast<const RenameEntityCommand*>(&subsequent_command);
-		if (!subsequent || subsequent->m_entityId != m_entityId || !m_hasCapturedOldName || !subsequent->m_hasCapturedOldName)
+		if (_strOldName == _strNewName)
 		{
 			return false;
 		}
 
-		m_newName = subsequent->m_newName;
+		return refContext.pSceneService->RenameEntity(_uEntityId, _strNewName);
+	}
+
+	bool RenameEntityCommand::Undo(EditorContext& refContext)
+	{
+		return refContext.pSceneService && _bHasCapturedOldName &&
+			refContext.pSceneService->RenameEntity(_uEntityId, _strOldName);
+	}
+
+	bool RenameEntityCommand::TryMerge(const EditorCommand& refSubsequentCommand)
+	{
+		const RenameEntityCommand* pSubsequent = dynamic_cast<const RenameEntityCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId || !_bHasCapturedOldName || !pSubsequent->_bHasCapturedOldName)
+		{
+			return false;
+		}
+
+		_strNewName = pSubsequent->_strNewName;
 		return true;
 	}
 
-	EditorCommandSelection RenameEntityCommand::get_selection_after_execute() const
+	EditorCommandSelection RenameEntityCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	EditorCommandSelection RenameEntityCommand::get_selection_after_undo() const
+	EditorCommandSelection RenameEntityCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
 	TransformEntityCommand::TransformEntityCommand(
-		AshEngine::EntityId entity_id,
-		AshEngine::TransformComponent before_value,
-		AshEngine::TransformComponent after_value)
-		: m_entityId(entity_id)
-		, m_beforeValue(before_value)
-		, m_afterValue(after_value)
+		SceneEntityId uEntityId,
+		AshEngine::TransformComponent beforeValue,
+		AshEngine::TransformComponent afterValue)
+		: _uEntityId(uEntityId)
+		, _beforeValue(beforeValue)
+		, _afterValue(afterValue)
 	{
 	}
 
-	const char* TransformEntityCommand::get_label() const
+	const char* TransformEntityCommand::GetLabel() const
 	{
 		return "Transform Entity";
 	}
 
-	bool TransformEntityCommand::execute(EditorContext& context)
+	bool TransformEntityCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0 || transform_components_equal(m_beforeValue, m_afterValue))
+		if (!refContext.pSceneService || _uEntityId == 0 || TransformComponentsEqual(_beforeValue, _afterValue))
 		{
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		return entity.is_valid() && entity.set_transform_component(m_afterValue);
+		AshEngine::Entity entity = refContext.pSceneService->FindEntity(_uEntityId);
+		return entity.is_valid() && entity.set_transform_component(_afterValue);
 	}
 
-	bool TransformEntityCommand::undo(EditorContext& context)
+	bool TransformEntityCommand::Undo(EditorContext& refContext)
 	{
-		if (!context.scene_service)
+		if (!refContext.pSceneService)
 		{
 			return false;
 		}
 
-		AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
-		return entity.is_valid() && entity.set_transform_component(m_beforeValue);
+		AshEngine::Entity entity = refContext.pSceneService->FindEntity(_uEntityId);
+		return entity.is_valid() && entity.set_transform_component(_beforeValue);
 	}
 
-	bool TransformEntityCommand::try_merge(const EditorCommand& subsequent_command)
+	bool TransformEntityCommand::TryMerge(const EditorCommand& refSubsequentCommand)
 	{
-		const auto* subsequent = dynamic_cast<const TransformEntityCommand*>(&subsequent_command);
-		if (!subsequent || subsequent->m_entityId != m_entityId)
+		const TransformEntityCommand* pSubsequent = dynamic_cast<const TransformEntityCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId)
 		{
 			return false;
 		}
 
-		m_afterValue = subsequent->m_afterValue;
+		_afterValue = pSubsequent->_afterValue;
 		return true;
 	}
 
-	EditorCommandSelection TransformEntityCommand::get_selection_after_execute() const
+	EditorCommandSelection TransformEntityCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	EditorCommandSelection TransformEntityCommand::get_selection_after_undo() const
+	EditorCommandSelection TransformEntityCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
 	SetCameraComponentCommand::SetCameraComponentCommand(
-		AshEngine::EntityId entity_id,
-		std::optional<AshEngine::CameraComponent> before_value,
-		std::optional<AshEngine::CameraComponent> after_value)
-		: m_entityId(entity_id)
-		, m_beforeValue(std::move(before_value))
-		, m_afterValue(std::move(after_value))
+		SceneEntityId uEntityId,
+		std::optional<AshEngine::CameraComponent> optBeforeValue,
+		std::optional<AshEngine::CameraComponent> optAfterValue)
+		: _uEntityId(uEntityId)
+		, _optBeforeValue(std::move(optBeforeValue))
+		, _optAfterValue(std::move(optAfterValue))
 	{
 	}
 
-	const char* SetCameraComponentCommand::get_label() const
+	const char* SetCameraComponentCommand::GetLabel() const
 	{
-		if (!m_beforeValue.has_value() && m_afterValue.has_value())
+		if (!_optBeforeValue.has_value() && _optAfterValue.has_value())
 		{
 			return "Add Camera Component";
 		}
-		if (m_beforeValue.has_value() && !m_afterValue.has_value())
+		if (_optBeforeValue.has_value() && !_optAfterValue.has_value())
 		{
 			return "Remove Camera Component";
 		}
 		return "Edit Camera Component";
 	}
 
-	bool SetCameraComponentCommand::execute(EditorContext& context)
+	bool SetCameraComponentCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0 ||
-			optional_components_equal(m_beforeValue, m_afterValue, &camera_components_equal))
+		if (!refContext.pSceneService || _uEntityId == 0 ||
+			OptionalComponentsEqual(_optBeforeValue, _optAfterValue, &CameraComponentsEqual))
 		{
 			return false;
 		}
 
-		return apply_camera_component_state(context.scene_service->find_entity(m_entityId), m_afterValue);
+		return ApplyCameraComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optAfterValue);
 	}
 
-	bool SetCameraComponentCommand::undo(EditorContext& context)
+	bool SetCameraComponentCommand::Undo(EditorContext& refContext)
 	{
-		return context.scene_service && m_entityId != 0 &&
-			apply_camera_component_state(context.scene_service->find_entity(m_entityId), m_beforeValue);
+		return refContext.pSceneService && _uEntityId != 0 &&
+			ApplyCameraComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optBeforeValue);
 	}
 
-	bool SetCameraComponentCommand::try_merge(const EditorCommand& subsequent_command)
+	bool SetCameraComponentCommand::TryMerge(const EditorCommand& refSubsequentCommand)
 	{
-		const auto* subsequent = dynamic_cast<const SetCameraComponentCommand*>(&subsequent_command);
-		if (!subsequent || subsequent->m_entityId != m_entityId)
+		const SetCameraComponentCommand* pSubsequent =
+			dynamic_cast<const SetCameraComponentCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId)
 		{
 			return false;
 		}
 
-		m_afterValue = subsequent->m_afterValue;
+		_optAfterValue = pSubsequent->_optAfterValue;
 		return true;
 	}
 
-	EditorCommandSelection SetCameraComponentCommand::get_selection_after_execute() const
+	EditorCommandSelection SetCameraComponentCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	EditorCommandSelection SetCameraComponentCommand::get_selection_after_undo() const
+	EditorCommandSelection SetCameraComponentCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
 	SetLightComponentCommand::SetLightComponentCommand(
-		AshEngine::EntityId entity_id,
-		std::optional<AshEngine::LightComponent> before_value,
-		std::optional<AshEngine::LightComponent> after_value)
-		: m_entityId(entity_id)
-		, m_beforeValue(std::move(before_value))
-		, m_afterValue(std::move(after_value))
+		SceneEntityId uEntityId,
+		std::optional<AshEngine::LightComponent> optBeforeValue,
+		std::optional<AshEngine::LightComponent> optAfterValue)
+		: _uEntityId(uEntityId)
+		, _optBeforeValue(std::move(optBeforeValue))
+		, _optAfterValue(std::move(optAfterValue))
 	{
 	}
 
-	const char* SetLightComponentCommand::get_label() const
+	const char* SetLightComponentCommand::GetLabel() const
 	{
-		if (!m_beforeValue.has_value() && m_afterValue.has_value())
+		if (!_optBeforeValue.has_value() && _optAfterValue.has_value())
 		{
 			return "Add Light Component";
 		}
-		if (m_beforeValue.has_value() && !m_afterValue.has_value())
+		if (_optBeforeValue.has_value() && !_optAfterValue.has_value())
 		{
 			return "Remove Light Component";
 		}
 		return "Edit Light Component";
 	}
 
-	bool SetLightComponentCommand::execute(EditorContext& context)
+	bool SetLightComponentCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0 ||
-			optional_components_equal(m_beforeValue, m_afterValue, &light_components_equal))
+		if (!refContext.pSceneService || _uEntityId == 0 ||
+			OptionalComponentsEqual(_optBeforeValue, _optAfterValue, &LightComponentsEqual))
 		{
 			return false;
 		}
 
-		return apply_light_component_state(context.scene_service->find_entity(m_entityId), m_afterValue);
+		return ApplyLightComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optAfterValue);
 	}
 
-	bool SetLightComponentCommand::undo(EditorContext& context)
+	bool SetLightComponentCommand::Undo(EditorContext& refContext)
 	{
-		return context.scene_service && m_entityId != 0 &&
-			apply_light_component_state(context.scene_service->find_entity(m_entityId), m_beforeValue);
+		return refContext.pSceneService && _uEntityId != 0 &&
+			ApplyLightComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optBeforeValue);
 	}
 
-	bool SetLightComponentCommand::try_merge(const EditorCommand& subsequent_command)
+	bool SetLightComponentCommand::TryMerge(const EditorCommand& refSubsequentCommand)
 	{
-		const auto* subsequent = dynamic_cast<const SetLightComponentCommand*>(&subsequent_command);
-		if (!subsequent || subsequent->m_entityId != m_entityId)
+		const SetLightComponentCommand* pSubsequent =
+			dynamic_cast<const SetLightComponentCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId)
 		{
 			return false;
 		}
 
-		m_afterValue = subsequent->m_afterValue;
+		_optAfterValue = pSubsequent->_optAfterValue;
 		return true;
 	}
 
-	EditorCommandSelection SetLightComponentCommand::get_selection_after_execute() const
+	EditorCommandSelection SetLightComponentCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	EditorCommandSelection SetLightComponentCommand::get_selection_after_undo() const
+	EditorCommandSelection SetLightComponentCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
 	SetMeshComponentCommand::SetMeshComponentCommand(
-		AshEngine::EntityId entity_id,
-		std::optional<AshEngine::MeshComponent> before_value,
-		std::optional<AshEngine::MeshComponent> after_value)
-		: m_entityId(entity_id)
-		, m_beforeValue(std::move(before_value))
-		, m_afterValue(std::move(after_value))
+		SceneEntityId uEntityId,
+		std::optional<AshEngine::MeshComponent> optBeforeValue,
+		std::optional<AshEngine::MeshComponent> optAfterValue)
+		: _uEntityId(uEntityId)
+		, _optBeforeValue(std::move(optBeforeValue))
+		, _optAfterValue(std::move(optAfterValue))
 	{
 	}
 
-	const char* SetMeshComponentCommand::get_label() const
+	const char* SetMeshComponentCommand::GetLabel() const
 	{
-		if (!m_beforeValue.has_value() && m_afterValue.has_value())
+		if (!_optBeforeValue.has_value() && _optAfterValue.has_value())
 		{
 			return "Add Mesh Component";
 		}
-		if (m_beforeValue.has_value() && !m_afterValue.has_value())
+		if (_optBeforeValue.has_value() && !_optAfterValue.has_value())
 		{
 			return "Remove Mesh Component";
 		}
 		return "Edit Mesh Component";
 	}
 
-	bool SetMeshComponentCommand::execute(EditorContext& context)
+	bool SetMeshComponentCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0 ||
-			optional_components_equal(m_beforeValue, m_afterValue, &mesh_components_equal))
+		if (!refContext.pSceneService || _uEntityId == 0 ||
+			OptionalComponentsEqual(_optBeforeValue, _optAfterValue, &MeshComponentsEqual))
 		{
 			return false;
 		}
 
-		return apply_mesh_component_state(context.scene_service->find_entity(m_entityId), m_afterValue);
+		return ApplyMeshComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optAfterValue);
 	}
 
-	bool SetMeshComponentCommand::undo(EditorContext& context)
+	bool SetMeshComponentCommand::Undo(EditorContext& refContext)
 	{
-		return context.scene_service && m_entityId != 0 &&
-			apply_mesh_component_state(context.scene_service->find_entity(m_entityId), m_beforeValue);
+		return refContext.pSceneService && _uEntityId != 0 &&
+			ApplyMeshComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optBeforeValue);
 	}
 
-	bool SetMeshComponentCommand::try_merge(const EditorCommand& subsequent_command)
+	bool SetMeshComponentCommand::TryMerge(const EditorCommand& refSubsequentCommand)
 	{
-		const auto* subsequent = dynamic_cast<const SetMeshComponentCommand*>(&subsequent_command);
-		if (!subsequent || subsequent->m_entityId != m_entityId)
+		const SetMeshComponentCommand* pSubsequent =
+			dynamic_cast<const SetMeshComponentCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId)
 		{
 			return false;
 		}
 
-		m_afterValue = subsequent->m_afterValue;
+		_optAfterValue = pSubsequent->_optAfterValue;
 		return true;
 	}
 
-	EditorCommandSelection SetMeshComponentCommand::get_selection_after_execute() const
+	EditorCommandSelection SetMeshComponentCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	EditorCommandSelection SetMeshComponentCommand::get_selection_after_undo() const
+	EditorCommandSelection SetMeshComponentCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
 	CreateEntityCommand::CreateEntityCommand(
-		std::string entity_name,
-		AshEngine::EntityId parent_id,
-		uint32_t sibling_index)
-		: m_entityName(std::move(entity_name))
-		, m_parentId(parent_id)
-		, m_siblingIndex(sibling_index)
+		std::string strEntityName,
+		SceneEntityId uParentId,
+		uint32_t uSiblingIndex)
+		: _strEntityName(std::move(strEntityName))
+		, _uParentId(uParentId)
+		, _uSiblingIndex(uSiblingIndex)
 	{
 	}
 
-	const char* CreateEntityCommand::get_label() const
+	const char* CreateEntityCommand::GetLabel() const
 	{
 		return "Create Entity";
 	}
 
-	bool CreateEntityCommand::execute(EditorContext& context)
+	bool CreateEntityCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service)
+		if (!refContext.pSceneService)
 		{
 			return false;
 		}
 
-		AshEngine::Entity entity = m_createdEntityId != 0
-			? context.scene_service->create_entity_with_id(m_createdEntityId, m_entityName, m_parentId, m_siblingIndex)
-			: context.scene_service->create_entity(m_entityName, m_parentId, m_siblingIndex);
+		AshEngine::Entity entity = _uCreatedEntityId != 0
+			? refContext.pSceneService->CreateEntityWithId(_uCreatedEntityId, _strEntityName, _uParentId, _uSiblingIndex)
+			: refContext.pSceneService->CreateEntity(_strEntityName, _uParentId, _uSiblingIndex);
 		if (!entity.is_valid())
 		{
 			return false;
 		}
 
-		m_createdEntityId = entity.get_id();
-		if (m_siblingIndex == AshEngine::k_scene_append_sibling_index)
+		_uCreatedEntityId = entity.get_id();
+		if (_uSiblingIndex == kSceneAppendSiblingIndex)
 		{
-			m_siblingIndex = context.scene_service->get_entity_sibling_index(m_createdEntityId);
+			_uSiblingIndex = refContext.pSceneService->GetEntitySiblingIndex(_uCreatedEntityId);
 		}
 		return true;
 	}
 
-	bool CreateEntityCommand::undo(EditorContext& context)
+	bool CreateEntityCommand::Undo(EditorContext& refContext)
 	{
-		return context.scene_service && m_createdEntityId != 0 &&
-			context.scene_service->destroy_entity(m_createdEntityId);
+		return refContext.pSceneService && _uCreatedEntityId != 0 &&
+			refContext.pSceneService->DestroyEntity(_uCreatedEntityId);
 	}
 
-	EditorCommandSelection CreateEntityCommand::get_selection_after_execute() const
+	EditorCommandSelection CreateEntityCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_createdEntityId);
+		return EditorCommandSelection::Entity(_uCreatedEntityId);
 	}
 
-	EditorCommandSelection CreateEntityCommand::get_selection_after_undo() const
+	EditorCommandSelection CreateEntityCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_parentId);
+		return EditorCommandSelection::Entity(_uParentId);
 	}
 
 	ReparentEntityCommand::ReparentEntityCommand(
-		AshEngine::EntityId entity_id,
-		AshEngine::EntityId new_parent_id,
-		uint32_t new_sibling_index)
-		: m_entityId(entity_id)
-		, m_newParentId(new_parent_id)
-		, m_newSiblingIndex(new_sibling_index)
+		SceneEntityId uEntityId,
+		SceneEntityId uNewParentId,
+		uint32_t uNewSiblingIndex)
+		: _uEntityId(uEntityId)
+		, _uNewParentId(uNewParentId)
+		, _uNewSiblingIndex(uNewSiblingIndex)
 	{
 	}
 
-	const char* ReparentEntityCommand::get_label() const
+	const char* ReparentEntityCommand::GetLabel() const
 	{
 		return "Reparent Entity";
 	}
 
-	bool ReparentEntityCommand::execute(EditorContext& context)
+	bool ReparentEntityCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0)
+		if (!refContext.pSceneService || _uEntityId == 0)
 		{
 			return false;
 		}
 
-		const AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
+		const AshEngine::Entity entity = refContext.pSceneService->FindEntity(_uEntityId);
 		if (!entity.is_valid())
 		{
 			return false;
 		}
 
-		if (!m_hasCapturedPreviousParent)
+		if (!_bHasCapturedPreviousParent)
 		{
-			m_previousParentId = get_entity_parent_id(entity);
-			m_previousSiblingIndex = context.scene_service->get_entity_sibling_index(m_entityId);
-			m_hasCapturedPreviousParent = true;
+			_uPreviousParentId = GetEntityParentId(entity);
+			_uPreviousSiblingIndex = refContext.pSceneService->GetEntitySiblingIndex(_uEntityId);
+			_bHasCapturedPreviousParent = true;
 		}
 
-		if (m_previousParentId == m_newParentId &&
-			m_newSiblingIndex != AshEngine::k_scene_append_sibling_index &&
-			m_previousSiblingIndex == m_newSiblingIndex)
+		if (_uPreviousParentId == _uNewParentId &&
+			_uNewSiblingIndex != kSceneAppendSiblingIndex &&
+			_uPreviousSiblingIndex == _uNewSiblingIndex)
 		{
 			return false;
 		}
 
-		if (m_previousParentId == m_newParentId &&
-			m_newSiblingIndex == AshEngine::k_scene_append_sibling_index)
+		if (_uPreviousParentId == _uNewParentId &&
+			_uNewSiblingIndex == kSceneAppendSiblingIndex)
 		{
 			return false;
 		}
 
-		const uint32_t execute_sibling_index =
-			m_newSiblingIndex == AshEngine::k_scene_append_sibling_index && m_previousParentId != m_newParentId
-			? AshEngine::k_scene_append_sibling_index
-			: m_newSiblingIndex;
-		if (!context.scene_service->reparent_entity(m_entityId, m_newParentId, execute_sibling_index))
+		const uint32_t uExecuteSiblingIndex =
+			_uNewSiblingIndex == kSceneAppendSiblingIndex && _uPreviousParentId != _uNewParentId
+			? kSceneAppendSiblingIndex
+			: _uNewSiblingIndex;
+		if (!refContext.pSceneService->ReparentEntity(_uEntityId, _uNewParentId, uExecuteSiblingIndex))
 		{
 			return false;
 		}
 
-		if (m_newSiblingIndex == AshEngine::k_scene_append_sibling_index)
+		if (_uNewSiblingIndex == kSceneAppendSiblingIndex)
 		{
-			m_newSiblingIndex = context.scene_service->get_entity_sibling_index(m_entityId);
+			_uNewSiblingIndex = refContext.pSceneService->GetEntitySiblingIndex(_uEntityId);
 		}
 		return true;
 	}
 
-	bool ReparentEntityCommand::undo(EditorContext& context)
+	bool ReparentEntityCommand::Undo(EditorContext& refContext)
 	{
-		return context.scene_service && m_hasCapturedPreviousParent &&
-			context.scene_service->reparent_entity(m_entityId, m_previousParentId, m_previousSiblingIndex);
+		return refContext.pSceneService && _bHasCapturedPreviousParent &&
+			refContext.pSceneService->ReparentEntity(_uEntityId, _uPreviousParentId, _uPreviousSiblingIndex);
 	}
 
-	bool ReparentEntityCommand::try_merge(const EditorCommand& subsequent_command)
+	bool ReparentEntityCommand::TryMerge(const EditorCommand& refSubsequentCommand)
 	{
-		const auto* subsequent = dynamic_cast<const ReparentEntityCommand*>(&subsequent_command);
-		if (!subsequent || subsequent->m_entityId != m_entityId || !m_hasCapturedPreviousParent || !subsequent->m_hasCapturedPreviousParent)
+		const ReparentEntityCommand* pSubsequent =
+			dynamic_cast<const ReparentEntityCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId || !_bHasCapturedPreviousParent || !pSubsequent->_bHasCapturedPreviousParent)
 		{
 			return false;
 		}
 
-		m_newParentId = subsequent->m_newParentId;
-		m_newSiblingIndex = subsequent->m_newSiblingIndex;
+		_uNewParentId = pSubsequent->_uNewParentId;
+		_uNewSiblingIndex = pSubsequent->_uNewSiblingIndex;
 		return true;
 	}
 
-	EditorCommandSelection ReparentEntityCommand::get_selection_after_execute() const
+	EditorCommandSelection ReparentEntityCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	EditorCommandSelection ReparentEntityCommand::get_selection_after_undo() const
+	EditorCommandSelection ReparentEntityCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
-	DeleteEntityCommand::DeleteEntityCommand(AshEngine::EntityId entity_id)
-		: m_entityId(entity_id)
+	DeleteEntityCommand::DeleteEntityCommand(SceneEntityId uEntityId)
+		: _uEntityId(uEntityId)
 	{
 	}
 
-	const char* DeleteEntityCommand::get_label() const
+	const char* DeleteEntityCommand::GetLabel() const
 	{
 		return "Delete Entity";
 	}
 
-	bool DeleteEntityCommand::execute(EditorContext& context)
+	bool DeleteEntityCommand::Execute(EditorContext& refContext)
 	{
-		if (!context.scene_service || m_entityId == 0)
+		if (!refContext.pSceneService || _uEntityId == 0)
 		{
 			return false;
 		}
 
-		const AshEngine::Entity entity = context.scene_service->find_entity(m_entityId);
+		const AshEngine::Entity entity = refContext.pSceneService->FindEntity(_uEntityId);
 		if (!entity.is_valid())
 		{
 			return false;
 		}
 
-		const std::optional<SceneEntitySnapshot> snapshot = context.scene_service->capture_entity_snapshot(m_entityId);
-		if (!snapshot.has_value())
+		const std::optional<SceneEntitySnapshot> optSnapshot = refContext.pSceneService->CaptureEntitySnapshot(_uEntityId);
+		if (!optSnapshot.has_value())
 		{
 			return false;
 		}
 
-		m_snapshot = snapshot;
-		m_parentId = get_entity_parent_id(entity);
-		return context.scene_service->destroy_entity(m_entityId);
+		_optSnapshot = optSnapshot;
+		_uParentId = GetEntityParentId(entity);
+		return refContext.pSceneService->DestroyEntity(_uEntityId);
 	}
 
-	bool DeleteEntityCommand::undo(EditorContext& context)
+	bool DeleteEntityCommand::Undo(EditorContext& refContext)
 	{
-		if (!context.scene_service || !m_snapshot.has_value())
+		if (!refContext.pSceneService || !_optSnapshot.has_value())
 		{
 			return false;
 		}
 
-		AshEngine::Entity restored = context.scene_service->restore_entity_snapshot(*m_snapshot, m_parentId);
+		AshEngine::Entity restored = refContext.pSceneService->RestoreEntitySnapshot(*_optSnapshot, _uParentId);
 		if (!restored.is_valid())
 		{
 			return false;
 		}
 
-		m_entityId = restored.get_id();
+		_uEntityId = restored.get_id();
 		return true;
 	}
 
-	EditorCommandSelection DeleteEntityCommand::get_selection_after_execute() const
+	EditorCommandSelection DeleteEntityCommand::GetSelectionAfterExecute() const
 	{
-		return EditorCommandSelection::entity(m_parentId);
+		return EditorCommandSelection::Entity(_uParentId);
 	}
 
-	EditorCommandSelection DeleteEntityCommand::get_selection_after_undo() const
+	EditorCommandSelection DeleteEntityCommand::GetSelectionAfterUndo() const
 	{
-		return EditorCommandSelection::entity(m_entityId);
+		return EditorCommandSelection::Entity(_uEntityId);
 	}
 }

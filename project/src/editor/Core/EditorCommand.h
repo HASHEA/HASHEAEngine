@@ -1,5 +1,7 @@
 #pragma once
-#include "Function/Scene/Scene.h"
+
+#include "Core/EditorSceneTypes.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -18,24 +20,24 @@ namespace AshEditor
 
 	struct EditorCommandSelection
 	{
-		EditorCommandSelectionMode mode = EditorCommandSelectionMode::Keep;
-		AshEngine::EntityId entity_id = 0;
+		EditorCommandSelectionMode eMode = EditorCommandSelectionMode::Keep;
+		SceneEntityId uEntityId = 0;
 
-		static EditorCommandSelection keep()
+		static EditorCommandSelection Keep()
 		{
 			return {};
 		}
 
-		static EditorCommandSelection clear()
+		static EditorCommandSelection Clear()
 		{
 			return { EditorCommandSelectionMode::Clear, 0 };
 		}
 
-		static EditorCommandSelection entity(AshEngine::EntityId entity_id)
+		static EditorCommandSelection Entity(SceneEntityId uEntityId)
 		{
-			return entity_id != 0
-				? EditorCommandSelection{ EditorCommandSelectionMode::Entity, entity_id }
-				: clear();
+			return uEntityId != 0
+				? EditorCommandSelection{ EditorCommandSelectionMode::Entity, uEntityId }
+				: Clear();
 		}
 	};
 
@@ -44,42 +46,42 @@ namespace AshEditor
 	public:
 		virtual ~EditorCommand() = default;
 
-		virtual const char* get_label() const = 0;
-		virtual bool execute(EditorContext& context) = 0;
-		virtual bool undo(EditorContext& context) = 0;
-		virtual bool try_merge(const EditorCommand& subsequent_command)
+		virtual const char* GetLabel() const = 0;
+		virtual bool Execute(EditorContext& refContext) = 0;
+		virtual bool Undo(EditorContext& refContext) = 0;
+		virtual bool TryMerge(const EditorCommand& refSubsequentCommand)
 		{
-			(void)subsequent_command;
+			(void)refSubsequentCommand;
 			return false;
 		}
-		virtual EditorCommandSelection get_selection_after_execute() const
+		virtual EditorCommandSelection GetSelectionAfterExecute() const
 		{
-			return EditorCommandSelection::keep();
+			return EditorCommandSelection::Keep();
 		}
-		virtual EditorCommandSelection get_selection_after_undo() const
+		virtual EditorCommandSelection GetSelectionAfterUndo() const
 		{
-			return EditorCommandSelection::keep();
+			return EditorCommandSelection::Keep();
 		}
 	};
 
 	class CompositeCommand final : public EditorCommand
 	{
 	public:
-		explicit CompositeCommand(std::string label = {});
+		explicit CompositeCommand(std::string strLabel = {});
 
-		void append(std::unique_ptr<EditorCommand> command);
-		bool is_empty() const;
-		size_t get_command_count() const;
-		std::unique_ptr<EditorCommand> release_single_command();
+		void Append(std::unique_ptr<EditorCommand> upCommand);
+		bool IsEmpty() const;
+		size_t GetCommandCount() const;
+		std::unique_ptr<EditorCommand> ReleaseSingleCommand();
 
-		const char* get_label() const override;
-		bool execute(EditorContext& context) override;
-		bool undo(EditorContext& context) override;
-		EditorCommandSelection get_selection_after_execute() const override;
-		EditorCommandSelection get_selection_after_undo() const override;
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
 
 	private:
-		std::string m_label{};
-		std::vector<std::unique_ptr<EditorCommand>> m_commands{};
+		std::string _strLabel{};
+		std::vector<std::unique_ptr<EditorCommand>> _vecCommands{};
 	};
 }

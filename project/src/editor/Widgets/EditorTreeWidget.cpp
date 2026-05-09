@@ -3,430 +3,455 @@
 #include "Function/Gui/UIContext.h"
 
 #include <algorithm>
-#include <functional>
+#include <string>
 
 namespace AshEditor
 {
 	namespace
 	{
-		auto to_im_color(const AshEngine::UIColor& color) -> ImU32
-		{
-			return ImGui::GetColorU32(ImVec4(color.r, color.g, color.b, color.a));
-		}
-
-		auto is_drop_valid(
-			const EditorTreeDropTargetDesc& desc,
-			const ImGuiPayload* payload,
-			EditorTreeDropVisual visual) -> bool
+		bool IsDropValid(
+			const EditorTreeDropTargetDesc& refDesc,
+			DragDropTransferId uTransferId,
+			EditorTreeDropVisual eVisual)
 		{
 			return
-				visual != EditorTreeDropVisual::None &&
-				(desc.validate_drop == nullptr || desc.validate_drop(payload, visual, desc.validation_user_data));
+				eVisual != EditorTreeDropVisual::None &&
+				uTransferId != 0 &&
+				(refDesc.pfnValidateDrop == nullptr || refDesc.pfnValidateDrop(uTransferId, eVisual, refDesc.pValidationUserData));
 		}
 	}
 
-	void EditorTreeWidgetState::reset_drag_state()
+	void EditorTreeWidgetState::ResetDragState()
 	{
-		hover_auto_expand_key = 0;
-		pending_auto_expand_key = 0;
-		hover_auto_expand_start_time = 0.0;
+		uHoverAutoExpandKey = 0;
+		uPendingAutoExpandKey = 0;
+		fHoverAutoExpandStartTimeSeconds = 0.0;
 	}
 
-	EditorTreeWidget::EditorTreeWidget(AshEngine::UIContext& ui, EditorTreeWidgetState& state, const EditorTreeWidgetStyle& style)
-		: m_ui(ui)
-		, m_state(state)
-		, m_style(style)
-		, m_treeStartX(ImGui::GetCursorScreenPos().x)
+	EditorTreeWidget::EditorTreeWidget(AshEngine::UIContext& refUi, EditorTreeWidgetState& refState, const EditorTreeWidgetStyle& refStyle)
+		: _refUi(refUi)
+		, _refState(refState)
+		, _style(refStyle)
 	{
-		const ImGuiStyle& imgui_style = ImGui::GetStyle();
-		const float min_padding_y = std::max(m_style.row_padding_y, 0.0f);
-		const float computed_padding_y =
-			m_style.row_height > 0.0f
-			? std::max(min_padding_y, (m_style.row_height - ImGui::GetFontSize()) * 0.5f)
-			: min_padding_y;
-		m_ui.push_style_var(
+	}
+
+	EditorTreeWidget::ScopedTreeStyle::ScopedTreeStyle(AshEngine::UIContext& refUi, const EditorTreeWidgetStyle& refStyle)
+		: _refUi(refUi)
+	{
+		const AshEngine::UIVec2 vecFramePadding = _refUi.get_style_frame_padding();
+		const AshEngine::UIVec2 vecItemSpacing = _refUi.get_style_item_spacing();
+		const float fMinPaddingY = std::max(refStyle.fRowPaddingY, 0.0f);
+		const float fComputedPaddingY =
+			refStyle.fRowHeight > 0.0f
+			? std::max(fMinPaddingY, (refStyle.fRowHeight - _refUi.get_font_size()) * 0.5f)
+			: fMinPaddingY;
+		_refUi.push_style_var(
 			AshEngine::UIStyleVarKind::FramePadding,
-			{ imgui_style.FramePadding.x, computed_padding_y });
-		m_ui.push_style_var(
+			{ vecFramePadding.x, fComputedPaddingY });
+		_refUi.push_style_var(
 			AshEngine::UIStyleVarKind::ItemSpacing,
-			{ imgui_style.ItemSpacing.x, m_style.row_spacing_y });
-		m_ui.push_style_var(AshEngine::UIStyleVarKind::IndentSpacing, m_style.indent_spacing);
+			{ vecItemSpacing.x, refStyle.fRowSpacingY });
+		_refUi.push_style_var(AshEngine::UIStyleVarKind::IndentSpacing, refStyle.fIndentSpacing);
+		_bActive = true;
 	}
 
-	EditorTreeWidget::~EditorTreeWidget()
+	EditorTreeWidget::ScopedTreeStyle::~ScopedTreeStyle()
 	{
-		m_ui.pop_style_var(3);
-	}
-
-	void EditorTreeWidget::reset_drag_state_if_inactive()
-	{
-		const ImGuiPayload* payload = ImGui::GetDragDropPayload();
-		if (!payload)
+		if (_bActive)
 		{
-			m_state.reset_drag_state();
+			_refUi.pop_style_var(3);
 		}
 	}
 
-	void EditorTreeWidget::push_level(bool ancestor_has_more_siblings)
+	void EditorTreeWidget::ResetDragStateIfInactive()
 	{
-		m_ancestorHasMoreSiblings.push_back(ancestor_has_more_siblings);
-	}
-
-	void EditorTreeWidget::pop_level()
-	{
-		if (!m_ancestorHasMoreSiblings.empty())
+		if (!_refUi.has_drag_drop_payload())
 		{
-			m_ancestorHasMoreSiblings.pop_back();
+			_refState.ResetDragState();
 		}
 	}
 
-	EditorTreeItemResult EditorTreeWidget::draw_item(const EditorTreeItemDesc& desc)
+	void EditorTreeWidget::PushLevel(bool bAncestorHasMoreSiblings)
 	{
+		_vecAncestorHasMoreSiblings.push_back(bAncestorHasMoreSiblings);
+	}
+
+	void EditorTreeWidget::PopLevel()
+	{
+		if (!_vecAncestorHasMoreSiblings.empty())
+		{
+			_vecAncestorHasMoreSiblings.pop_back();
+		}
+	}
+
+	void EditorTreeWidget::TreePop()
+	{
+		_refUi.push_style_var(AshEngine::UIStyleVarKind::IndentSpacing, _style.fIndentSpacing);
+		_refUi.tree_pop();
+		_refUi.pop_style_var(1);
+	}
+
+	EditorTreeItemResult EditorTreeWidget::DrawItem(const EditorTreeItemDesc& refDesc)
+	{
+		const ScopedTreeStyle scopeTreeStyle(_refUi, _style);
+		(void)scopeTreeStyle;
+
 		EditorTreeItemResult result{};
-		const uint64_t item_key = make_id_key(desc.unique_id);
-		if (desc.has_children && m_state.pending_auto_expand_key == item_key)
+		const uint64_t uItemKey = MakeIdKey(refDesc.svUniqueId);
+		if (refDesc.bHasChildren && _refState.uPendingAutoExpandKey == uItemKey)
 		{
-			ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+			_refUi.set_next_item_open(true, AshEngine::UIConditionFlagBits::Always);
 		}
 
-		float row_start_x = ImGui::GetCursorScreenPos().x;
-		ImGui::PushID(desc.unique_id.data(), desc.unique_id.data() + desc.unique_id.size());
+		const float fRowStartX = _refUi.get_cursor_screen_pos().x;
+		const std::string strUniqueId(refDesc.svUniqueId);
+		_refUi.push_id(strUniqueId.c_str());
 
-		ImGuiTreeNodeFlags flags =
-			ImGuiTreeNodeFlags_OpenOnArrow |
-			ImGuiTreeNodeFlags_SpanAvailWidth |
-			ImGuiTreeNodeFlags_FramePadding;
-		if (desc.selected)
+		AshEngine::UITreeNodeFlags flagsTreeNode =
+			AshEngine::UITreeNodeFlagBits::OpenOnArrow |
+			AshEngine::UITreeNodeFlagBits::SpanAvailWidth |
+			AshEngine::UITreeNodeFlagBits::FramePadding;
+		if (refDesc.bIsSelected)
 		{
-			flags |= ImGuiTreeNodeFlags_Selected;
+			flagsTreeNode |= AshEngine::UITreeNodeFlagBits::Selected;
 		}
-		if (!desc.has_children)
+		if (!refDesc.bHasChildren)
 		{
-			flags |= ImGuiTreeNodeFlags_Leaf;
+			flagsTreeNode |= AshEngine::UITreeNodeFlagBits::Leaf;
 		}
-		if (desc.default_open)
+		if (refDesc.bIsDefaultOpen)
 		{
-			flags |= ImGuiTreeNodeFlags_DefaultOpen;
+			flagsTreeNode |= AshEngine::UITreeNodeFlagBits::DefaultOpen;
 		}
 
-		result.opened = ImGui::TreeNodeEx("##tree_item", flags);
-		result.clicked = ImGui::IsItemClicked();
-		result.hovered = ImGui::IsItemHovered();
-		result.item_min = ImGui::GetItemRectMin();
-		result.item_max = ImGui::GetItemRectMax();
+		result.bOpened = _refUi.tree_node("##tree_item", flagsTreeNode);
+		result.bClicked = _refUi.is_item_clicked();
+		result.bHovered = _refUi.is_item_hovered();
+		result.rectItem = _refUi.get_item_rect();
 
-		draw_row_background(desc, result);
-		draw_guides(desc, result, row_start_x);
-		draw_item_content(desc, result, row_start_x);
+		DrawRowBackground(refDesc, result);
+		DrawGuides(refDesc, result, fRowStartX);
+		DrawItemContent(refDesc, result, fRowStartX);
 
-		if (desc.drag_source &&
-			desc.drag_source->payload_type &&
-			desc.drag_source->payload_data &&
-			desc.drag_source->payload_size > 0 &&
-			ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+		if (refDesc.pDragSource &&
+			refDesc.pDragSource->pPayloadType &&
+			refDesc.pDragSource->uTransferId != 0 &&
+			_refUi.begin_drag_drop_source(AshEngine::UIDragDropFlagBits::SourceAllowNullID))
 		{
-			ImGui::SetDragDropPayload(
-				desc.drag_source->payload_type,
-				desc.drag_source->payload_data,
-				static_cast<size_t>(desc.drag_source->payload_size));
-			if (desc.drag_source->preview_text)
+			_refUi.set_drag_drop_payload(
+				refDesc.pDragSource->pPayloadType,
+				&refDesc.pDragSource->uTransferId,
+				sizeof(DragDropTransferId));
+			if (refDesc.pDragSource->pPreviewText)
 			{
-				ImGui::TextUnformatted(desc.drag_source->preview_text);
+				_refUi.text_unformatted(refDesc.pDragSource->pPreviewText);
 			}
-			ImGui::EndDragDropSource();
+			_refUi.end_drag_drop_source();
 		}
 
-		if (desc.drop_target && desc.drop_target->payload_type && ImGui::BeginDragDropTarget())
+		if (refDesc.pDropTarget && refDesc.pDropTarget->pPayloadType && _refUi.begin_drag_drop_target())
 		{
-			const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
-				desc.drop_target->payload_type,
-				ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
-			if (payload)
+			const AshEngine::UIDragDropPayload payloadDrop = _refUi.accept_drag_drop_payload(
+				refDesc.pDropTarget->pPayloadType,
+				AshEngine::UIDragDropFlagBits::AcceptNoDrawDefaultRect | AshEngine::UIDragDropFlagBits::AcceptBeforeDelivery);
+			if (payloadDrop.is_valid() && payloadDrop.data_size == sizeof(DragDropTransferId))
 			{
-				result.drop_visual = resolve_drop_visual(*desc.drop_target, result.item_min, result.item_max);
-				if (is_drop_valid(*desc.drop_target, payload, result.drop_visual))
-				{
-					result.drop_hovered = true;
-					result.drop_delivered = payload->IsDelivery();
-					result.accepted_payload = payload;
-					draw_drop_preview(result.drop_visual, result.item_min, result.item_max);
+				const DragDropTransferId uTransferId = *static_cast<const DragDropTransferId*>(payloadDrop.data);
+				result.eDropVisual = ResolveDropVisual(*refDesc.pDropTarget, result.rectItem);
+				bool bValidDrop = IsDropValid(*refDesc.pDropTarget, uTransferId, result.eDropVisual);
 
-					if (result.drop_visual == EditorTreeDropVisual::Into &&
-						desc.drop_target->auto_expand_on_into_hover &&
-						desc.has_children &&
-						!result.opened)
+				// On delivery, if the resolved visual fails validation (mouse may have
+				// shifted between preview and release), try fallback visuals.
+				if (!bValidDrop && payloadDrop.is_delivery)
+				{
+					result.eDropVisual = ResolveDropVisualFallback(*refDesc.pDropTarget, uTransferId, result.rectItem);
+					bValidDrop = result.eDropVisual != EditorTreeDropVisual::None;
+				}
+
+				if (bValidDrop)
+				{
+					result.bDropHovered = true;
+					result.bDropDelivered = payloadDrop.is_delivery;
+					result.uDropTransferId = uTransferId;
+					DrawDropPreview(result.eDropVisual, result.rectItem);
+
+					if (result.eDropVisual == EditorTreeDropVisual::Into &&
+						refDesc.pDropTarget->bAutoExpandOnIntoHover &&
+						refDesc.bHasChildren &&
+						!result.bOpened)
 					{
-						update_auto_expand_hover(item_key);
+						UpdateAutoExpandHover(uItemKey);
 					}
 					else
 					{
-						clear_auto_expand_hover(item_key);
+						ClearAutoExpandHover(uItemKey);
 					}
 				}
 				else
 				{
-					clear_auto_expand_hover(item_key);
+					ClearAutoExpandHover(uItemKey);
 				}
 			}
 			else
 			{
-				clear_auto_expand_hover(item_key);
+				ClearAutoExpandHover(uItemKey);
 			}
-			ImGui::EndDragDropTarget();
+			_refUi.end_drag_drop_target();
 		}
 		else
 		{
-			clear_auto_expand_hover(item_key);
+			ClearAutoExpandHover(uItemKey);
 		}
 
-		if (result.opened && m_state.pending_auto_expand_key == item_key)
+		if (result.bOpened && _refState.uPendingAutoExpandKey == uItemKey)
 		{
-			m_state.pending_auto_expand_key = 0;
-			if (m_state.hover_auto_expand_key == item_key)
+			_refState.uPendingAutoExpandKey = 0;
+			if (_refState.uHoverAutoExpandKey == uItemKey)
 			{
-				m_state.hover_auto_expand_key = 0;
-				m_state.hover_auto_expand_start_time = 0.0;
+				_refState.uHoverAutoExpandKey = 0;
+				_refState.fHoverAutoExpandStartTimeSeconds = 0.0;
 			}
 		}
 
-		ImGui::PopID();
+		_refUi.pop_id();
 		return result;
 	}
 
-	EditorTreeDropSlotResult EditorTreeWidget::draw_drop_slot(const EditorTreeDropSlotDesc& desc, bool dragging_matching_payload)
+	EditorTreeDropSlotResult EditorTreeWidget::DrawDropSlot(const EditorTreeDropSlotDesc& refDesc, bool bDraggingMatchingPayload)
 	{
+		const ScopedTreeStyle scopeTreeStyle(_refUi, _style);
+		(void)scopeTreeStyle;
+
 		EditorTreeDropSlotResult result{};
-		float height = desc.height;
-		if (dragging_matching_payload && desc.expand_to_available_height_while_dragging)
+		float fHeight = refDesc.fHeight;
+		if (bDraggingMatchingPayload && refDesc.bExpandToAvailableHeightWhileDragging)
 		{
-			height = std::max(height, m_ui.get_content_region_avail().y);
+			fHeight = std::max(fHeight, _refUi.get_content_region_avail().y);
 		}
 
-		ImGui::PushID(desc.unique_id.data(), desc.unique_id.data() + desc.unique_id.size());
-		m_ui.dummy({ std::max(m_ui.get_content_region_avail().x, 1.0f), std::max(height, 1.0f) });
-		result.item_min = ImGui::GetItemRectMin();
-		result.item_max = ImGui::GetItemRectMax();
+		const std::string strUniqueId(refDesc.svUniqueId);
+		_refUi.push_id(strUniqueId.c_str());
+		_refUi.dummy({ std::max(_refUi.get_content_region_avail().x, 1.0f), std::max(fHeight, 1.0f) });
+		result.rectItem = _refUi.get_item_rect();
 
-		if (desc.drop_target && desc.drop_target->payload_type && ImGui::BeginDragDropTarget())
+		if (refDesc.pDropTarget && refDesc.pDropTarget->pPayloadType && _refUi.begin_drag_drop_target())
 		{
-			const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(
-				desc.drop_target->payload_type,
-				ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
-			if (payload && is_drop_valid(*desc.drop_target, payload, desc.preview_visual))
+			const AshEngine::UIDragDropPayload payloadDrop = _refUi.accept_drag_drop_payload(
+				refDesc.pDropTarget->pPayloadType,
+				AshEngine::UIDragDropFlagBits::AcceptNoDrawDefaultRect | AshEngine::UIDragDropFlagBits::AcceptBeforeDelivery);
+			if (payloadDrop.is_valid() && payloadDrop.data_size == sizeof(DragDropTransferId))
 			{
-				result.drop_visual = desc.preview_visual;
-				result.drop_hovered = true;
-				result.drop_delivered = payload->IsDelivery();
-				result.accepted_payload = payload;
-				draw_drop_preview(result.drop_visual, result.item_min, result.item_max);
+				const DragDropTransferId uTransferId = *static_cast<const DragDropTransferId*>(payloadDrop.data);
+				if (IsDropValid(*refDesc.pDropTarget, uTransferId, refDesc.ePreviewVisual))
+				{
+					result.eDropVisual = refDesc.ePreviewVisual;
+					result.bDropHovered = true;
+					result.bDropDelivered = payloadDrop.is_delivery;
+					result.uDropTransferId = uTransferId;
+					DrawDropPreview(result.eDropVisual, result.rectItem);
+				}
 			}
-			ImGui::EndDragDropTarget();
+			_refUi.end_drag_drop_target();
 		}
 
-		ImGui::PopID();
+		_refUi.pop_id();
 		return result;
 	}
 
-	uint64_t EditorTreeWidget::make_id_key(std::string_view unique_id) const
+	uint64_t EditorTreeWidget::MakeIdKey(std::string_view svUniqueId) const
 	{
-		return static_cast<uint64_t>(std::hash<std::string_view>{}(unique_id));
+		return static_cast<uint64_t>(std::hash<std::string_view>{}(svUniqueId));
 	}
 
-	EditorTreeDropVisual EditorTreeWidget::resolve_drop_visual(
-		const EditorTreeDropTargetDesc& desc,
-		const ImVec2& item_min,
-		const ImVec2& item_max) const
+	EditorTreeDropVisual EditorTreeWidget::ResolveDropVisual(
+		const EditorTreeDropTargetDesc& refDesc,
+		const AshEngine::UIRect& refItemRect) const
 	{
-		const float item_height = std::max(item_max.y - item_min.y, 1.0f);
-		const float zone_padding = std::clamp(item_height * m_style.drop_zone_ratio, 4.0f, 10.0f);
-		const float mouse_y = ImGui::GetMousePos().y;
-		if (desc.allow_before && mouse_y <= item_min.y + zone_padding)
+		const float fItemHeight = std::max(refItemRect.height, 1.0f);
+		const float fZonePadding = std::clamp(fItemHeight * _style.fDropZoneRatio, 4.0f, 10.0f);
+		const float fMouseY = _refUi.get_mouse_pos().y;
+		if (refDesc.bAllowBefore && fMouseY <= refItemRect.y + fZonePadding)
 		{
 			return EditorTreeDropVisual::Before;
 		}
-		if (desc.allow_after && mouse_y >= item_max.y - zone_padding)
+		if (refDesc.bAllowAfter && fMouseY >= refItemRect.y + refItemRect.height - fZonePadding)
 		{
 			return EditorTreeDropVisual::After;
 		}
-		return desc.allow_into ? EditorTreeDropVisual::Into : EditorTreeDropVisual::None;
+		return refDesc.bAllowInto ? EditorTreeDropVisual::Into : EditorTreeDropVisual::None;
 	}
 
-	void EditorTreeWidget::update_auto_expand_hover(uint64_t item_key)
+	EditorTreeDropVisual EditorTreeWidget::ResolveDropVisualFallback(
+		const EditorTreeDropTargetDesc& refDesc,
+		DragDropTransferId uTransferId,
+		const AshEngine::UIRect& refItemRect) const
 	{
-		if (m_state.hover_auto_expand_key != item_key)
+		// Try each allowed visual in proximity order (closest zone to mouse first).
+		const float fMouseY = _refUi.get_mouse_pos().y;
+		const float fCenterY = refItemRect.y + refItemRect.height * 0.5f;
+		const bool bAboveCenter = fMouseY < fCenterY;
+
+		const EditorTreeDropVisual eFallbacks[] = {
+			bAboveCenter ? EditorTreeDropVisual::Before : EditorTreeDropVisual::After,
+			bAboveCenter ? EditorTreeDropVisual::After : EditorTreeDropVisual::Before,
+			EditorTreeDropVisual::Into
+		};
+
+		for (EditorTreeDropVisual eCandidate : eFallbacks)
 		{
-			m_state.hover_auto_expand_key = item_key;
-			m_state.hover_auto_expand_start_time = ImGui::GetTime();
+			if (IsDropValid(refDesc, uTransferId, eCandidate))
+			{
+				return eCandidate;
+			}
+		}
+		return EditorTreeDropVisual::None;
+	}
+
+	void EditorTreeWidget::UpdateAutoExpandHover(uint64_t uItemKey)
+	{
+		if (_refState.uHoverAutoExpandKey != uItemKey)
+		{
+			_refState.uHoverAutoExpandKey = uItemKey;
+			_refState.fHoverAutoExpandStartTimeSeconds = _refUi.get_time_seconds();
 			return;
 		}
 
-		if (ImGui::GetTime() - m_state.hover_auto_expand_start_time >= m_style.auto_expand_hover_delay_seconds)
+		if (_refUi.get_time_seconds() - _refState.fHoverAutoExpandStartTimeSeconds >= _style.fAutoExpandHoverDelaySeconds)
 		{
-			m_state.pending_auto_expand_key = item_key;
+			_refState.uPendingAutoExpandKey = uItemKey;
 		}
 	}
 
-	void EditorTreeWidget::clear_auto_expand_hover(uint64_t item_key)
+	void EditorTreeWidget::ClearAutoExpandHover(uint64_t uItemKey)
 	{
-		if (m_state.hover_auto_expand_key == item_key)
+		if (_refState.uHoverAutoExpandKey == uItemKey)
 		{
-			m_state.hover_auto_expand_key = 0;
-			m_state.hover_auto_expand_start_time = 0.0;
+			_refState.uHoverAutoExpandKey = 0;
+			_refState.fHoverAutoExpandStartTimeSeconds = 0.0;
 		}
 	}
 
-	void EditorTreeWidget::draw_row_background(const EditorTreeItemDesc& desc, const EditorTreeItemResult& result) const
+	void EditorTreeWidget::DrawRowBackground(const EditorTreeItemDesc& refDesc, const EditorTreeItemResult& refResult) const
 	{
-		if (!desc.selected && !result.hovered)
+		if (!refDesc.bIsSelected && !refResult.bHovered)
 		{
 			return;
 		}
 
-		ImDrawList* draw_list = ImGui::GetWindowDrawList();
-		if (!draw_list)
+		const AshEngine::UIRect rectRowFill{
+			refResult.rectItem.x + 1.0f,
+			refResult.rectItem.y + 1.0f,
+			std::max(0.0f, refResult.rectItem.width - 2.0f),
+			std::max(0.0f, refResult.rectItem.height - 2.0f)
+		};
+
+		if (refDesc.bIsSelected)
 		{
+			_refUi.draw_window_rect_filled(rectRowFill, _style.colorRowSelectedFill, 4.0f);
+			_refUi.draw_window_rect(rectRowFill, _style.colorRowSelectedOutline, 4.0f, 1.0f);
 			return;
 		}
 
-		const ImVec2 fill_min(result.item_min.x + 1.0f, result.item_min.y + 1.0f);
-		const ImVec2 fill_max(result.item_max.x - 1.0f, result.item_max.y - 1.0f);
-		if (desc.selected)
-		{
-			draw_list->AddRectFilled(
-				fill_min,
-				fill_max,
-				to_im_color(m_style.row_selected_fill_color),
-				4.0f);
-			draw_list->AddRect(
-				fill_min,
-				fill_max,
-				to_im_color(m_style.row_selected_outline_color),
-				4.0f,
-				0,
-				1.0f);
-			return;
-		}
-
-		draw_list->AddRectFilled(
-			fill_min,
-			fill_max,
-			to_im_color(m_style.row_hover_fill_color),
-			4.0f);
-		draw_list->AddRect(
-			fill_min,
-			fill_max,
-			to_im_color(m_style.row_hover_outline_color),
-			4.0f,
-			0,
-			1.0f);
+		_refUi.draw_window_rect_filled(rectRowFill, _style.colorRowHoverFill, 4.0f);
+		_refUi.draw_window_rect(rectRowFill, _style.colorRowHoverOutline, 4.0f, 1.0f);
 	}
 
-	void EditorTreeWidget::draw_drop_preview(EditorTreeDropVisual visual, const ImVec2& item_min, const ImVec2& item_max) const
+	void EditorTreeWidget::DrawDropPreview(EditorTreeDropVisual eVisual, const AshEngine::UIRect& refItemRect) const
 	{
-		ImDrawList* draw_list = ImGui::GetWindowDrawList();
-		if (!draw_list)
-		{
-			return;
-		}
-
-		const ImU32 accent = to_im_color(m_style.drop_accent_color);
-		switch (visual)
+		switch (eVisual)
 		{
 		case EditorTreeDropVisual::Before:
-			draw_list->AddLine(ImVec2(item_min.x, item_min.y), ImVec2(item_max.x, item_min.y), accent, 2.0f);
+			_refUi.draw_window_line(
+				{ refItemRect.x, refItemRect.y },
+				{ refItemRect.x + refItemRect.width, refItemRect.y },
+				_style.colorDropAccent,
+				2.0f);
 			break;
 		case EditorTreeDropVisual::After:
-			draw_list->AddLine(ImVec2(item_min.x, item_max.y), ImVec2(item_max.x, item_max.y), accent, 2.0f);
+			_refUi.draw_window_line(
+				{ refItemRect.x, refItemRect.y + refItemRect.height },
+				{ refItemRect.x + refItemRect.width, refItemRect.y + refItemRect.height },
+				_style.colorDropAccent,
+				2.0f);
 			break;
 		case EditorTreeDropVisual::Into:
-			draw_list->AddRect(item_min, item_max, accent, 3.0f, 0, 2.0f);
+			_refUi.draw_window_rect(refItemRect, _style.colorDropAccent, 3.0f, 2.0f);
 			break;
 		default:
 			break;
 		}
 	}
 
-	void EditorTreeWidget::draw_guides(const EditorTreeItemDesc& desc, const EditorTreeItemResult& result, float row_start_x) const
+	void EditorTreeWidget::DrawGuides(const EditorTreeItemDesc& refDesc, const EditorTreeItemResult& refResult, float fRowStartX) const
 	{
-		if (m_ancestorHasMoreSiblings.empty() && desc.is_last_sibling)
+		const float fTreeStartX = fRowStartX - static_cast<float>(_vecAncestorHasMoreSiblings.size()) * _style.fIndentSpacing;
+		if (_vecAncestorHasMoreSiblings.empty() && refDesc.bIsLastSibling)
 		{
 			return;
 		}
 
-		ImDrawList* draw_list = ImGui::GetWindowDrawList();
-		if (!draw_list)
-		{
-			return;
-		}
+		const float fY0 = refResult.rectItem.y + _style.fGuideLinePaddingY;
+		const float fY1 = refResult.rectItem.y + refResult.rectItem.height - _style.fGuideLinePaddingY;
+		const float fCenterY = refResult.rectItem.y + refResult.rectItem.height * 0.5f;
 
-		const ImU32 color = to_im_color(m_style.guide_line_color);
-		const float y0 = result.item_min.y + m_style.guide_line_padding_y;
-		const float y1 = result.item_max.y - m_style.guide_line_padding_y;
-		const float center_y = (result.item_min.y + result.item_max.y) * 0.5f;
-
-		for (size_t index = 0; index < m_ancestorHasMoreSiblings.size(); ++index)
+		for (size_t uIndex = 0; uIndex < _vecAncestorHasMoreSiblings.size(); ++uIndex)
 		{
-			if (!m_ancestorHasMoreSiblings[index])
+			if (!_vecAncestorHasMoreSiblings[uIndex])
 			{
 				continue;
 			}
 
-			const float x = m_treeStartX + (static_cast<float>(index) + 0.5f) * m_style.indent_spacing;
-			draw_list->AddLine(ImVec2(x, y0), ImVec2(x, y1), color, m_style.guide_line_thickness);
+			const float fX = fTreeStartX + (static_cast<float>(uIndex) + 0.5f) * _style.fIndentSpacing;
+			_refUi.draw_window_line(
+				{ fX, fY0 },
+				{ fX, fY1 },
+				_style.colorGuideLine,
+				_style.fGuideLineThickness);
 		}
 
-		const size_t depth = m_ancestorHasMoreSiblings.size();
-		if (depth == 0)
+		const size_t uDepth = _vecAncestorHasMoreSiblings.size();
+		if (uDepth == 0)
 		{
 			return;
 		}
 
-		const float connector_x = m_treeStartX + (static_cast<float>(depth) - 0.5f) * m_style.indent_spacing;
-		draw_list->AddLine(
-			ImVec2(connector_x, y0),
-			ImVec2(connector_x, desc.is_last_sibling ? center_y : y1),
-			color,
-			m_style.guide_line_thickness);
+		const float fConnectorX = fTreeStartX + (static_cast<float>(uDepth) - 0.5f) * _style.fIndentSpacing;
+		_refUi.draw_window_line(
+			{ fConnectorX, fY0 },
+			{ fConnectorX, refDesc.bIsLastSibling ? fCenterY : fY1 },
+			_style.colorGuideLine,
+			_style.fGuideLineThickness);
 
-		const float horizontal_end_x = row_start_x - m_style.connector_horizontal_padding;
-		if (horizontal_end_x > connector_x)
+		const float fHorizontalEndX = fRowStartX - _style.fConnectorHorizontalPadding;
+		if (fHorizontalEndX > fConnectorX)
 		{
-			draw_list->AddLine(
-				ImVec2(connector_x, center_y),
-				ImVec2(horizontal_end_x, center_y),
-				color,
-				m_style.guide_line_thickness);
+			_refUi.draw_window_line(
+				{ fConnectorX, fCenterY },
+				{ fHorizontalEndX, fCenterY },
+				_style.colorGuideLine,
+				_style.fGuideLineThickness);
 		}
 	}
 
-	void EditorTreeWidget::draw_item_content(const EditorTreeItemDesc& desc, const EditorTreeItemResult& result, float row_start_x) const
+	void EditorTreeWidget::DrawItemContent(const EditorTreeItemDesc& refDesc, const EditorTreeItemResult& refResult, float fRowStartX) const
 	{
-		ImDrawList* draw_list = ImGui::GetWindowDrawList();
-		if (!draw_list)
+		const float fLabelStartX = fRowStartX + _refUi.get_tree_node_to_label_spacing();
+		const float fCenterY = refResult.rectItem.y + refResult.rectItem.height * 0.5f;
+		float fTextX = fLabelStartX;
+		AshEngine::UITextureHandle pIcon = refResult.bOpened && refDesc.pIconWhenOpen != nullptr ? refDesc.pIconWhenOpen : refDesc.pIcon;
+		if (pIcon != nullptr)
 		{
-			return;
+			const float fIconY = fCenterY - _style.fIconSize * 0.5f;
+			_refUi.draw_window_image(pIcon, { fLabelStartX, fIconY, _style.fIconSize, _style.fIconSize });
+			fTextX += _style.fIconSize + _style.fIconTextSpacing;
 		}
 
-		const float label_start_x = row_start_x + ImGui::GetTreeNodeToLabelSpacing();
-		const float center_y = (result.item_min.y + result.item_max.y) * 0.5f;
-		float text_x = label_start_x;
-		AshEngine::UITextureHandle icon = result.opened && desc.icon_when_open != nullptr ? desc.icon_when_open : desc.icon;
-		if (icon != nullptr)
-		{
-			const float icon_y = center_y - m_style.icon_size * 0.5f;
-			draw_list->AddImage(
-				icon,
-				ImVec2(label_start_x, icon_y),
-				ImVec2(label_start_x + m_style.icon_size, icon_y + m_style.icon_size));
-			text_x += m_style.icon_size + m_style.icon_text_spacing;
-		}
-
-		const ImVec2 text_size = ImGui::CalcTextSize(desc.label.data(), desc.label.data() + desc.label.size(), false);
-		const float text_y = center_y - text_size.y * 0.5f;
-		draw_list->AddText(
-			ImVec2(text_x, text_y),
-			ImGui::GetColorU32(ImGuiCol_Text),
-			desc.label.data(),
-			desc.label.data() + desc.label.size());
+		const std::string strLabel(refDesc.svLabel);
+		const AshEngine::UIVec2 vecTextSize = _refUi.calc_text_size(strLabel.c_str());
+		const float fTextY = fCenterY - vecTextSize.y * 0.5f;
+		_refUi.draw_window_text(
+			{ fTextX, fTextY },
+			_refUi.get_style_color(AshEngine::UIStyleColorKind::Text),
+			strLabel.c_str());
 	}
 }

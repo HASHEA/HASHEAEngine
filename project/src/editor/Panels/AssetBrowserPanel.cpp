@@ -1,17 +1,26 @@
 #include "Panels/AssetBrowserPanel.h"
+
 #include "Base/hlog.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
+#include "Core/EditorIds.h"
+#include "Core/EditorStringUtils.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/AssetDatabaseService.h"
 #include "Services/CommandService.h"
-#include "Services/EditorIconService.h"
 #include "Services/EditorSettingsService.h"
+#include "Services/EditorShortcutService.h"
+#include "Services/IEditorIconService.h"
 #include "Services/SelectionService.h"
-#include "imgui.h"
+#include "Widgets/EditorActionWidgets.h"
 #include <algorithm>
 #include <array>
-#include <cctype>
+#include <cstdint>
 #include <filesystem>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace AshEditor
@@ -20,12 +29,12 @@ namespace AshEditor
 	{
 		struct AssetTypeFilterOption
 		{
-			const char* label = "";
-			AshEngine::AssetType type = AshEngine::AssetType::Unknown;
-			bool match_all = false;
+			const char* pLabel = "";
+			AshEngine::AssetType eType = AshEngine::AssetType::Unknown;
+			bool bMatchAll = false;
 		};
 
-		constexpr std::array<AssetTypeFilterOption, 11> k_assetTypeFilters{ {
+		constexpr std::array<AssetTypeFilterOption, 11> kAssetTypeFilters{ {
 			{ "All", AshEngine::AssetType::Unknown, true },
 			{ "Folder", AshEngine::AssetType::Directory, false },
 			{ "Scene", AshEngine::AssetType::Scene, false },
@@ -41,186 +50,151 @@ namespace AshEditor
 
 		struct AssetDirectoryEntry
 		{
-			std::filesystem::path relative_path{};
-			std::filesystem::path parent_path{};
-			std::string label{};
-			uint32_t child_count = 0;
+			std::filesystem::path pathRelative{};
+			std::filesystem::path pathParent{};
+			std::string strPathKey{};
+			std::string strParentKey{};
+			std::string strLabel{};
+			uint32_t uChildCount = 0;
 		};
 
-		constexpr float k_assetBrowserIconSize = 16.0f;
-		constexpr float k_assetBrowserGridIconSize = 36.0f;
-		constexpr float k_assetBrowserGridCellWidth = 112.0f;
-		constexpr float k_assetBrowserGridCellHeight = 96.0f;
-		constexpr float k_assetBrowserGridSpacing = 10.0f;
-		constexpr float k_assetBrowserListIconTextSpacing = 6.0f;
-		constexpr const char* k_assetItemContextPopupId = "AssetBrowserItemContextMenu";
-		constexpr const char* k_assetContentContextPopupId = "AssetBrowserContentContextMenu";
-		constexpr AshEngine::UIColor k_assetItemSelectedFillColor{ 0.32f, 0.47f, 0.60f, 0.30f };
-		constexpr AshEngine::UIColor k_assetItemHoverFillColor{ 0.28f, 0.39f, 0.49f, 0.18f };
-		constexpr AshEngine::UIColor k_assetItemHoverOutlineColor{ 0.38f, 0.56f, 0.74f, 0.40f };
-		constexpr AshEngine::UIColor k_assetItemSelectedOutlineColor{ 0.43f, 0.64f, 0.85f, 0.92f };
-		constexpr AshEngine::UIColor k_assetToolbarSelectedButtonColor{ 0.34f, 0.42f, 0.50f, 1.0f };
-		constexpr AshEngine::UIColor k_assetToolbarSelectedButtonHoveredColor{ 0.38f, 0.46f, 0.55f, 1.0f };
-		constexpr AshEngine::UIColor k_assetToolbarSelectedButtonActiveColor{ 0.31f, 0.39f, 0.47f, 1.0f };
-		constexpr AshEngine::UIColor k_assetToolbarMutedTextColor{ 0.67f, 0.70f, 0.76f, 1.0f };
-
-		auto get_action_shortcut(const CommandService* command_service, const char* action_id) -> const char*
+		struct AssetDirectoryTreeData
 		{
-			if (!command_service || !action_id)
-			{
-				return nullptr;
-			}
+			std::vector<AssetDirectoryEntry> vecEntries{};
+			std::unordered_set<std::string> setDirectoryKeys{};
+			std::unordered_map<std::string, std::vector<size_t>> mapChildrenByParent{};
+		};
 
-			const EditorAction* action = command_service->find_action(action_id);
-			return action && !action->shortcut.empty() ? action->shortcut.c_str() : nullptr;
+		constexpr float kAssetBrowserIconSize = 16.0f;
+		constexpr float kAssetBrowserGridIconSize = 36.0f;
+		constexpr float kAssetBrowserGridCellWidth = 112.0f;
+		constexpr float kAssetBrowserGridCellHeight = 96.0f;
+		constexpr float kAssetBrowserGridSpacing = 10.0f;
+		constexpr float kAssetBrowserListIconTextSpacing = 6.0f;
+		constexpr const char* kAssetItemContextPopupId = "AssetBrowserItemContextMenu";
+		constexpr const char* kAssetContentContextPopupId = "AssetBrowserContentContextMenu";
+		constexpr AshEngine::UIColor kAssetItemSelectedFillColor{ 0.32f, 0.47f, 0.60f, 0.30f };
+		constexpr AshEngine::UIColor kAssetItemHoverFillColor{ 0.28f, 0.39f, 0.49f, 0.18f };
+		constexpr AshEngine::UIColor kAssetItemHoverOutlineColor{ 0.38f, 0.56f, 0.74f, 0.40f };
+		constexpr AshEngine::UIColor kAssetItemSelectedOutlineColor{ 0.43f, 0.64f, 0.85f, 0.92f };
+		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonColor{ 0.34f, 0.42f, 0.50f, 1.0f };
+		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonHoveredColor{ 0.38f, 0.46f, 0.55f, 1.0f };
+		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonActiveColor{ 0.31f, 0.39f, 0.47f, 1.0f };
+		constexpr AshEngine::UIColor kAssetToolbarMutedTextColor{ 0.67f, 0.70f, 0.76f, 1.0f };
+
+		void PushSelectedToolbarButtonStyle(AshEngine::UIContext& refUi)
+		{
+			refUi.push_style_color(AshEngine::UIStyleColorKind::Button, kAssetToolbarSelectedButtonColor);
+			refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, kAssetToolbarSelectedButtonHoveredColor);
+			refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, kAssetToolbarSelectedButtonActiveColor);
 		}
 
-		void push_selected_toolbar_button_style(AshEngine::UIContext& ui)
+		void PopSelectedToolbarButtonStyle(AshEngine::UIContext& refUi)
 		{
-			ui.push_style_color(AshEngine::UIStyleColorKind::Button, k_assetToolbarSelectedButtonColor);
-			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, k_assetToolbarSelectedButtonHoveredColor);
-			ui.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, k_assetToolbarSelectedButtonActiveColor);
+			refUi.pop_style_color(3);
 		}
 
-		void pop_selected_toolbar_button_style(AshEngine::UIContext& ui)
+		void DrawListItemIcon(AshEngine::UIContext& refUi, AshEngine::UITextureHandle iconHandle)
 		{
-			ui.pop_style_color(3);
-		}
-
-		void draw_list_item_icon(AshEngine::UITextureHandle icon_handle)
-		{
-			if (!icon_handle)
+			if (!iconHandle)
 			{
 				return;
 			}
 
-			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			const ImVec2 item_min = ImGui::GetItemRectMin();
-			const ImVec2 item_max = ImGui::GetItemRectMax();
-			const ImGuiStyle& style = ImGui::GetStyle();
-			const float x = item_min.x + style.FramePadding.x + 2.0f;
-			const float y = item_min.y + (item_max.y - item_min.y - k_assetBrowserIconSize) * 0.5f;
-			draw_list->AddImage(
-				icon_handle,
-				ImVec2(x, y),
-				ImVec2(x + k_assetBrowserIconSize, y + k_assetBrowserIconSize));
+			const AshEngine::UIRect rectItem = refUi.get_item_rect();
+			const AshEngine::UIVec2 vecFramePadding = refUi.get_style_frame_padding();
+			const float fX = rectItem.x + vecFramePadding.x + 2.0f;
+			const float fY = rectItem.y + (rectItem.height - kAssetBrowserIconSize) * 0.5f;
+			refUi.draw_window_image(iconHandle, { fX, fY, kAssetBrowserIconSize, kAssetBrowserIconSize });
 		}
 
-		void draw_list_item_label(AshEngine::UITextureHandle icon_handle, std::string_view label)
+		void DrawListItemLabel(AshEngine::UIContext& refUi, AshEngine::UITextureHandle iconHandle, std::string_view svLabel)
 		{
-			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			if (!draw_list)
+			if (svLabel.empty())
 			{
 				return;
 			}
 
-			const ImVec2 item_min = ImGui::GetItemRectMin();
-			const ImVec2 item_max = ImGui::GetItemRectMax();
-			const ImGuiStyle& style = ImGui::GetStyle();
-			float text_x = item_min.x + style.FramePadding.x;
-			if (icon_handle)
+			const AshEngine::UIRect rectItem = refUi.get_item_rect();
+			const AshEngine::UIVec2 vecFramePadding = refUi.get_style_frame_padding();
+			float fTextX = rectItem.x + vecFramePadding.x;
+			if (iconHandle)
 			{
-				text_x += k_assetBrowserIconSize + k_assetBrowserListIconTextSpacing;
+				fTextX += kAssetBrowserIconSize + kAssetBrowserListIconTextSpacing;
 			}
 
-			const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size(), false);
-			const float text_y = item_min.y + (item_max.y - item_min.y - text_size.y) * 0.5f;
-			const ImVec2 clip_min(text_x, item_min.y);
-			const ImVec2 clip_max(item_max.x, item_max.y);
-			draw_list->PushClipRect(clip_min, clip_max, true);
-			draw_list->AddText(
-				ImVec2(text_x, text_y),
-				ImGui::GetColorU32(ImGuiCol_Text),
-				label.data(),
-				label.data() + label.size());
-			draw_list->PopClipRect();
+			const std::string strText(svLabel);
+			const AshEngine::UIVec2 vecTextSize = refUi.calc_text_size(strText.c_str());
+			const float fTextY = rectItem.y + (rectItem.height - vecTextSize.y) * 0.5f;
+			const float fClipWidth = std::max(0.0f, rectItem.x + rectItem.width - fTextX);
+			refUi.push_window_clip_rect({ fTextX, rectItem.y, fClipWidth, rectItem.height });
+			refUi.draw_window_text(
+				{ fTextX, fTextY },
+				refUi.get_style_color(AshEngine::UIStyleColorKind::Text),
+				strText.c_str());
+			refUi.pop_window_clip_rect();
 		}
 
-		void draw_item_feedback(bool selected, float rounding = 4.0f)
+		void DrawItemFeedback(AshEngine::UIContext& refUi, bool bSelected, float fRounding = 4.0f)
 		{
-			if (!selected && !ImGui::IsItemHovered())
+			if (!bSelected && !refUi.is_item_hovered())
 			{
 				return;
 			}
 
-			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			const ImVec2 item_min = ImGui::GetItemRectMin();
-			const ImVec2 item_max = ImGui::GetItemRectMax();
-			const ImU32 fill_color = ImGui::GetColorU32(
-				ImVec4(
-					selected ? k_assetItemSelectedFillColor.r : k_assetItemHoverFillColor.r,
-					selected ? k_assetItemSelectedFillColor.g : k_assetItemHoverFillColor.g,
-					selected ? k_assetItemSelectedFillColor.b : k_assetItemHoverFillColor.b,
-					selected ? k_assetItemSelectedFillColor.a : k_assetItemHoverFillColor.a));
-			draw_list->AddRectFilled(item_min, item_max, fill_color, rounding);
-
-			const ImU32 outline_color = selected
-				? ImGui::GetColorU32(ImVec4(
-					k_assetItemSelectedOutlineColor.r,
-					k_assetItemSelectedOutlineColor.g,
-					k_assetItemSelectedOutlineColor.b,
-					k_assetItemSelectedOutlineColor.a))
-				: ImGui::GetColorU32(ImVec4(
-					k_assetItemHoverOutlineColor.r,
-					k_assetItemHoverOutlineColor.g,
-					k_assetItemHoverOutlineColor.b,
-					k_assetItemHoverOutlineColor.a));
-			draw_list->AddRect(
-				item_min,
-				item_max,
-				outline_color,
-				rounding,
-				0,
+			const AshEngine::UIRect rectItem = refUi.get_item_rect();
+			refUi.draw_window_rect_filled(
+				rectItem,
+				bSelected ? kAssetItemSelectedFillColor : kAssetItemHoverFillColor,
+				fRounding);
+			refUi.draw_window_rect(
+				rectItem,
+				bSelected ? kAssetItemSelectedOutlineColor : kAssetItemHoverOutlineColor,
+				fRounding,
 				1.0f);
 		}
 
-		auto get_asset_icon_id(const AshEngine::AssetInfo& item) -> EditorIconId
+		EditorIconId GetAssetIconId(const AshEngine::AssetInfo& refAsset)
 		{
-			return item.is_directory ? EditorIconId::FolderClosed : EditorIconId::File;
+			return refAsset.is_directory ? EditorIconId::FolderClosed : EditorIconId::File;
 		}
 
-		auto to_lower_copy(std::string value) -> std::string
+		bool AssetMatchesFilter(
+			const AshEngine::AssetInfo& refAsset,
+			const std::string& strLoweredSearchText,
+			const std::string& strLoweredName,
+			const std::string& strLoweredPath,
+			const AssetTypeFilterOption& refTypeFilter)
 		{
-			std::transform(
-				value.begin(),
-				value.end(),
-				value.begin(),
-				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-			return value;
-		}
-
-		auto asset_matches_filter(const AshEngine::AssetInfo& item, const std::string& search_text, const AssetTypeFilterOption& type_filter) -> bool
-		{
-			if (!type_filter.match_all && item.type != type_filter.type)
+			if (!refTypeFilter.bMatchAll && refAsset.type != refTypeFilter.eType)
 			{
 				return false;
 			}
 
-			if (search_text.empty())
+			if (strLoweredSearchText.empty())
 			{
 				return true;
 			}
 
-			const std::string lowered_search = to_lower_copy(search_text);
-			const std::string lowered_name = to_lower_copy(item.name);
-			const std::string lowered_path = to_lower_copy(item.relative_path.generic_string());
-			return lowered_name.find(lowered_search) != std::string::npos || lowered_path.find(lowered_search) != std::string::npos;
+			return
+				strLoweredName.find(strLoweredSearchText) != std::string::npos ||
+				strLoweredPath.find(strLoweredSearchText) != std::string::npos;
 		}
 
-		auto is_same_or_ancestor_path(
-			const std::filesystem::path& ancestor_path,
-			const std::filesystem::path& descendant_path) -> bool
+		bool IsSameOrAncestorPath(
+			const std::filesystem::path& pathAncestor,
+			const std::filesystem::path& pathDescendant)
 		{
-			if (ancestor_path.empty())
+			if (pathAncestor.empty())
 			{
 				return true;
 			}
 
-			auto ancestor_it = ancestor_path.begin();
-			auto descendant_it = descendant_path.begin();
-			for (; ancestor_it != ancestor_path.end(); ++ancestor_it, ++descendant_it)
+			std::filesystem::path::const_iterator itAncestor = pathAncestor.begin();
+			std::filesystem::path::const_iterator itDescendant = pathDescendant.begin();
+			for (; itAncestor != pathAncestor.end(); ++itAncestor, ++itDescendant)
 			{
-				if (descendant_it == descendant_path.end() || *ancestor_it != *descendant_it)
+				if (itDescendant == pathDescendant.end() || *itAncestor != *itDescendant)
 				{
 					return false;
 				}
@@ -229,62 +203,82 @@ namespace AshEditor
 			return true;
 		}
 
-		auto is_asset_in_directory(const AshEngine::AssetInfo& item, const std::filesystem::path& directory_path, bool include_descendants = false) -> bool
+		bool IsAssetInDirectory(
+			const AshEngine::AssetInfo& refAsset,
+			const std::filesystem::path& pathDirectory,
+			bool bIncludeDescendants = false)
 		{
-			if (include_descendants)
+			if (bIncludeDescendants)
 			{
-				return item.is_directory
-					? is_same_or_ancestor_path(directory_path, item.relative_path)
-					: is_same_or_ancestor_path(directory_path, item.parent_path);
+				return refAsset.is_directory
+					? IsSameOrAncestorPath(pathDirectory, refAsset.relative_path)
+					: IsSameOrAncestorPath(pathDirectory, refAsset.parent_path);
 			}
 
-			return item.parent_path == directory_path;
+			return refAsset.parent_path == pathDirectory;
 		}
 
-		auto build_directory_entries(const std::vector<AshEngine::AssetInfo>& items) -> std::vector<AssetDirectoryEntry>
+		AssetDirectoryTreeData BuildDirectoryTreeData(const std::vector<AshEngine::AssetInfo>& vecAssets)
 		{
-			std::vector<AssetDirectoryEntry> entries{};
-			entries.push_back({ {}, {}, "All Assets", static_cast<uint32_t>(items.size()) });
-			for (const AshEngine::AssetInfo& item : items)
+			std::unordered_map<std::string, uint32_t> mapChildCounts{};
+			mapChildCounts.reserve(vecAssets.size());
+			for (const AshEngine::AssetInfo& refAsset : vecAssets)
 			{
-				if (!item.is_directory)
+				++mapChildCounts[refAsset.parent_path.generic_string()];
+			}
+
+			AssetDirectoryTreeData data{};
+			data.vecEntries.reserve(vecAssets.size() + 1);
+			data.vecEntries.push_back({ {}, {}, "", "", "All Assets", static_cast<uint32_t>(vecAssets.size()) });
+			for (const AshEngine::AssetInfo& refAsset : vecAssets)
+			{
+				if (!refAsset.is_directory)
 				{
 					continue;
 				}
 
-				uint32_t child_count = 0;
-				for (const AshEngine::AssetInfo& child : items)
-				{
-					if (child.parent_path == item.relative_path)
-					{
-						++child_count;
-					}
-				}
+				const std::string strPathKey = refAsset.relative_path.generic_string();
+				const std::string strParentKey = refAsset.parent_path.generic_string();
+				const std::unordered_map<std::string, uint32_t>::const_iterator itChildCount = mapChildCounts.find(strPathKey);
+				const uint32_t uChildCount = itChildCount == mapChildCounts.end() ? 0u : itChildCount->second;
 
-				entries.push_back({
-					item.relative_path,
-					item.parent_path,
-					item.name.empty() ? item.relative_path.generic_string() : item.name,
-					child_count });
+				data.vecEntries.push_back({
+					refAsset.relative_path,
+					refAsset.parent_path,
+					strPathKey,
+					strParentKey,
+					refAsset.name.empty() ? refAsset.relative_path.generic_string() : refAsset.name,
+					uChildCount });
 			}
 
 			std::sort(
-				entries.begin() + 1,
-				entries.end(),
-				[](const AssetDirectoryEntry& lhs, const AssetDirectoryEntry& rhs) {
-					return lhs.relative_path.generic_string() < rhs.relative_path.generic_string();
+				data.vecEntries.begin() + 1,
+				data.vecEntries.end(),
+				[](const AssetDirectoryEntry& lhs, const AssetDirectoryEntry& rhs)
+				{
+					return lhs.strPathKey < rhs.strPathKey;
 				});
-			return entries;
+
+			data.setDirectoryKeys.reserve(data.vecEntries.size());
+			data.setDirectoryKeys.insert("");
+			for (size_t uIndex = 1; uIndex < data.vecEntries.size(); ++uIndex)
+			{
+				const AssetDirectoryEntry& refEntry = data.vecEntries[uIndex];
+				data.setDirectoryKeys.insert(refEntry.strPathKey);
+				data.mapChildrenByParent[refEntry.strParentKey].push_back(uIndex);
+			}
+
+			return data;
 		}
 
-		auto get_selected_asset(const AssetDatabaseService& service, uint64_t selected_id) -> const AshEngine::AssetInfo*
+		const AshEngine::AssetInfo* GetSelectedAsset(const AssetDatabaseService& refService, uint64_t uSelectedId)
 		{
-			return selected_id == 0 ? nullptr : service.find_by_id(selected_id);
+			return uSelectedId == 0 ? nullptr : refService.FindById(uSelectedId);
 		}
 
-		auto should_preview_text(const AshEngine::AssetInfo& item) -> bool
+		bool ShouldPreviewText(const AshEngine::AssetInfo& refAsset)
 		{
-			switch (item.type)
+			switch (refAsset.type)
 			{
 			case AshEngine::AssetType::Scene:
 			case AshEngine::AssetType::Shader:
@@ -296,410 +290,544 @@ namespace AshEditor
 			}
 		}
 
-		auto get_asset_display_label(const AshEngine::AssetInfo& item) -> std::string
+		std::string GetAssetDisplayLabel(const AshEngine::AssetInfo& refAsset)
 		{
-			if (!item.name.empty())
+			if (!refAsset.name.empty())
 			{
-				return item.name;
+				return refAsset.name;
 			}
 
-			const std::string filename = item.relative_path.filename().generic_string();
-			return filename.empty() ? item.relative_path.generic_string() : filename;
+			const std::string strFilename = refAsset.relative_path.filename().generic_string();
+			return strFilename.empty() ? refAsset.relative_path.generic_string() : strFilename;
 		}
 
-		auto directory_exists(const std::vector<AssetDirectoryEntry>& directories, const std::filesystem::path& directory_path) -> bool
+		bool DirectoryExists(const AssetDirectoryTreeData& refDirectoryTreeData, const std::filesystem::path& pathDirectory)
 		{
-			if (directory_path.empty())
-			{
-				return true;
-			}
+			return refDirectoryTreeData.setDirectoryKeys.find(pathDirectory.generic_string()) != refDirectoryTreeData.setDirectoryKeys.end();
+		}
 
-			for (const AssetDirectoryEntry& entry : directories)
+		std::vector<AssetBrowserVisibleItem> BuildVisibleItems(
+			const std::vector<AshEngine::AssetInfo>& vecAssets,
+			const std::filesystem::path& pathActiveDirectory,
+			const std::string& strLoweredSearchText,
+			const AssetTypeFilterOption& refTypeFilter)
+		{
+			const bool bSearchActive = !strLoweredSearchText.empty();
+			std::vector<AssetBrowserVisibleItem> vecVisibleItems{};
+			vecVisibleItems.reserve(vecAssets.size());
+			for (const AshEngine::AssetInfo& refAsset : vecAssets)
 			{
-				if (entry.relative_path == directory_path)
+				std::string strPathKey = refAsset.relative_path.generic_string();
+				std::string strLoweredName{};
+				std::string strLoweredPath{};
+				if (bSearchActive)
 				{
-					return true;
+					strLoweredName = ToLowerCopy(refAsset.name);
+					strLoweredPath = ToLowerCopy(strPathKey);
 				}
+
+				if (!AssetMatchesFilter(refAsset, strLoweredSearchText, strLoweredName, strLoweredPath, refTypeFilter))
+				{
+					continue;
+				}
+
+				if (!IsAssetInDirectory(refAsset, pathActiveDirectory, bSearchActive))
+				{
+					continue;
+				}
+
+				AssetBrowserVisibleItem item{};
+				item.pAsset = &refAsset;
+				item.strDisplayLabel = GetAssetDisplayLabel(refAsset);
+				item.strLoweredLabel = ToLowerCopy(item.strDisplayLabel);
+				item.strPathKey = std::move(strPathKey);
+				vecVisibleItems.push_back(std::move(item));
 			}
 
-			return false;
+			return vecVisibleItems;
 		}
 
-		auto should_include_asset_in_view(
-			const AshEngine::AssetInfo& item,
-			const std::filesystem::path& active_directory,
-			bool search_active,
-			const std::string& search_text,
-			const AssetTypeFilterOption& type_filter) -> bool
-		{
-			if (!asset_matches_filter(item, search_text, type_filter))
-			{
-				return false;
-			}
-
-			return is_asset_in_directory(item, active_directory, search_active);
-		}
-
-		void sort_visible_assets(std::vector<const AshEngine::AssetInfo*>& visible_items)
+		void SortVisibleAssets(std::vector<AssetBrowserVisibleItem>& vecVisibleItems)
 		{
 			std::stable_sort(
-				visible_items.begin(),
-				visible_items.end(),
-				[](const AshEngine::AssetInfo* lhs, const AshEngine::AssetInfo* rhs)
+				vecVisibleItems.begin(),
+				vecVisibleItems.end(),
+				[](const AssetBrowserVisibleItem& lhs, const AssetBrowserVisibleItem& rhs)
 				{
-					if (lhs == rhs)
+					if (lhs.pAsset == rhs.pAsset)
 					{
 						return false;
 					}
-					if (!lhs)
+					if (!lhs.pAsset)
 					{
 						return false;
 					}
-					if (!rhs)
+					if (!rhs.pAsset)
 					{
 						return true;
 					}
-					if (lhs->is_directory != rhs->is_directory)
+					if (lhs.pAsset->is_directory != rhs.pAsset->is_directory)
 					{
-						return lhs->is_directory && !rhs->is_directory;
+						return lhs.pAsset->is_directory && !rhs.pAsset->is_directory;
 					}
 
-					const std::string lhs_label = to_lower_copy(get_asset_display_label(*lhs));
-					const std::string rhs_label = to_lower_copy(get_asset_display_label(*rhs));
-					if (lhs_label != rhs_label)
+					if (lhs.strLoweredLabel != rhs.strLoweredLabel)
 					{
-						return lhs_label < rhs_label;
+						return lhs.strLoweredLabel < rhs.strLoweredLabel;
 					}
 
-					return lhs->relative_path.generic_string() < rhs->relative_path.generic_string();
+					return lhs.strPathKey < rhs.strPathKey;
 				});
 		}
 
-		auto get_asset_scope_label(const std::filesystem::path& directory_path) -> std::string
+		std::string GetAssetScopeLabel(const std::filesystem::path& pathDirectory)
 		{
-			return directory_path.empty() ? std::string("All Assets") : directory_path.generic_string();
+			return pathDirectory.empty() ? std::string("All Assets") : pathDirectory.generic_string();
 		}
 
-		void clear_if_asset_selected(EditorContext& context)
+		void ClearIfAssetSelected(SelectionService* pSelectionService)
 		{
-			if (context.selection_service && context.selection_service->get_selection().kind == EditorSelectionKind::Asset)
+			if (pSelectionService && pSelectionService->GetSelection().eKind == EditorSelectionKind::Asset)
 			{
-				context.selection_service->clear();
+				pSelectionService->Clear();
 			}
 		}
 
-		auto collect_child_directories(
-			const std::vector<AssetDirectoryEntry>& directories,
-			const std::filesystem::path& parent_path) -> std::vector<const AssetDirectoryEntry*>
-		{
-			std::vector<const AssetDirectoryEntry*> children{};
-			for (const AssetDirectoryEntry& entry : directories)
-			{
-				if (!entry.relative_path.empty() && entry.parent_path == parent_path)
-				{
-					children.push_back(&entry);
-				}
-			}
-			return children;
-		}
-
-		auto make_asset_browser_tree_style() -> EditorTreeWidgetStyle
+		EditorTreeWidgetStyle MakeAssetBrowserTreeStyle()
 		{
 			EditorTreeWidgetStyle style{};
-			style.row_height = 26.0f;
-			style.indent_spacing = 12.0f;
-			style.icon_size = k_assetBrowserIconSize;
-			style.icon_text_spacing = 4.0f;
-			style.row_padding_y = 6.0f;
-			style.row_spacing_y = 3.0f;
-			style.connector_horizontal_padding = 3.0f;
-			style.guide_line_padding_y = 0.0f;
-			style.guide_line_color = { 0.46f, 0.49f, 0.54f, 0.55f };
-			style.row_hover_fill_color = { 0.28f, 0.39f, 0.49f, 0.16f };
-			style.row_hover_outline_color = { 0.38f, 0.56f, 0.74f, 0.36f };
-			style.row_selected_fill_color = { 0.32f, 0.47f, 0.60f, 0.28f };
-			style.row_selected_outline_color = { 0.43f, 0.64f, 0.85f, 0.82f };
+			style.fRowHeight = 26.0f;
+			style.fIndentSpacing = 12.0f;
+			style.fIconSize = kAssetBrowserIconSize;
+			style.fIconTextSpacing = 4.0f;
+			style.fRowPaddingY = 6.0f;
+			style.fRowSpacingY = 3.0f;
+			style.fConnectorHorizontalPadding = 3.0f;
+			style.fGuideLinePaddingY = 0.0f;
+			style.colorGuideLine = { 0.46f, 0.49f, 0.54f, 0.55f };
+			style.colorRowHoverFill = { 0.28f, 0.39f, 0.49f, 0.16f };
+			style.colorRowHoverOutline = { 0.38f, 0.56f, 0.74f, 0.36f };
+			style.colorRowSelectedFill = { 0.32f, 0.47f, 0.60f, 0.28f };
+			style.colorRowSelectedOutline = { 0.43f, 0.64f, 0.85f, 0.82f };
 			return style;
 		}
 
-		void draw_directory_tree(
-			EditorTreeWidget& tree_widget,
-			AshEngine::UIContext& ui,
-			EditorIconService* icon_service,
-			const std::vector<AssetDirectoryEntry>& directories,
-			const AssetDirectoryEntry& entry,
-			const std::filesystem::path& active_directory,
-			std::string& active_directory_path,
-			bool is_last_sibling)
+		void DrawDirectoryTree(
+			EditorTreeWidget& refTreeWidget,
+			AshEngine::UIContext& refUi,
+			IEditorIconService* pIconService,
+			const AssetDirectoryTreeData& refDirectoryTreeData,
+			const AssetDirectoryEntry& refEntry,
+			const std::filesystem::path& pathActiveDirectory,
+			std::string& strActiveDirectoryPath,
+			bool bIsLastSibling)
 		{
-			const bool selected = entry.relative_path == active_directory;
-			const std::vector<const AssetDirectoryEntry*> child_directories = collect_child_directories(directories, entry.relative_path);
-			const bool has_child_directories = !child_directories.empty();
-			const std::string base_label = entry.label + " (" + std::to_string(entry.child_count) + ")";
-			const std::string stable_id = entry.relative_path.empty()
+			const bool bSelected = refEntry.pathRelative == pathActiveDirectory;
+			const std::unordered_map<std::string, std::vector<size_t>>::const_iterator itChildren =
+				refDirectoryTreeData.mapChildrenByParent.find(refEntry.strPathKey);
+			const bool bHasChildDirectories =
+				itChildren != refDirectoryTreeData.mapChildrenByParent.end() &&
+				!itChildren->second.empty();
+			const std::string strBaseLabel = refEntry.strLabel + " (" + std::to_string(refEntry.uChildCount) + ")";
+			const std::string strStableId = refEntry.pathRelative.empty()
 				? std::string("__asset_browser_root__")
-				: entry.relative_path.generic_string();
-			EditorTreeItemDesc desc{};
-			desc.unique_id = stable_id;
-			desc.label = base_label;
-			desc.icon = icon_service ? icon_service->get_icon(EditorIconId::FolderClosed, ui) : nullptr;
-			desc.icon_when_open = icon_service ? icon_service->get_icon(EditorIconId::FolderOpen, ui) : nullptr;
-			desc.selected = selected;
-			desc.has_children = has_child_directories;
-			desc.default_open = entry.relative_path.empty() || is_same_or_ancestor_path(entry.relative_path, active_directory);
-			desc.is_last_sibling = is_last_sibling;
-			const EditorTreeItemResult result = tree_widget.draw_item(desc);
-			if (result.clicked)
+				: refEntry.strPathKey;
+			EditorTreeItemDesc descItem{};
+			descItem.svUniqueId = strStableId;
+			descItem.svLabel = strBaseLabel;
+			descItem.pIcon = pIconService ? pIconService->GetIcon(EditorIconId::FolderClosed, refUi) : nullptr;
+			descItem.pIconWhenOpen = pIconService ? pIconService->GetIcon(EditorIconId::FolderOpen, refUi) : nullptr;
+			descItem.bIsSelected = bSelected;
+			descItem.bHasChildren = bHasChildDirectories;
+			descItem.bIsDefaultOpen = refEntry.pathRelative.empty() || IsSameOrAncestorPath(refEntry.pathRelative, pathActiveDirectory);
+			descItem.bIsLastSibling = bIsLastSibling;
+			const EditorTreeItemResult itemResult = refTreeWidget.DrawItem(descItem);
+			if (itemResult.bClicked)
 			{
-				active_directory_path = entry.relative_path.generic_string();
+				strActiveDirectoryPath = refEntry.pathRelative.generic_string();
 			}
 
-			if (!result.opened)
+			if (!itemResult.bOpened)
 			{
 				return;
 			}
 
-			if (has_child_directories)
+			if (bHasChildDirectories)
 			{
-				tree_widget.push_level(!is_last_sibling);
-				for (size_t child_index = 0; child_index < child_directories.size(); ++child_index)
+				refTreeWidget.PushLevel(!bIsLastSibling);
+				const std::vector<size_t>& vecChildIndices = itChildren->second;
+				for (size_t uChildIndex = 0; uChildIndex < vecChildIndices.size(); ++uChildIndex)
 				{
-					draw_directory_tree(
-						tree_widget,
-						ui,
-						icon_service,
-						directories,
-						*child_directories[child_index],
-						active_directory,
-						active_directory_path,
-						child_index + 1 == child_directories.size());
+					DrawDirectoryTree(
+						refTreeWidget,
+						refUi,
+						pIconService,
+						refDirectoryTreeData,
+						refDirectoryTreeData.vecEntries[vecChildIndices[uChildIndex]],
+						pathActiveDirectory,
+						strActiveDirectoryPath,
+						uChildIndex + 1 == vecChildIndices.size());
 				}
-				tree_widget.pop_level();
+				refTreeWidget.PopLevel();
 			}
-			ImGui::TreePop();
+			refUi.tree_pop();
 		}
 
-		auto is_selected_asset_visible(
-			const AshEngine::AssetInfo* selected_asset,
-			bool active_directory_exists,
-			const std::filesystem::path& active_directory,
-			const std::string& search_text,
-			const AssetTypeFilterOption& type_filter) -> bool
+		bool IsSelectedAssetVisible(
+			const AshEngine::AssetInfo* pSelectedAsset,
+			bool bActiveDirectoryExists,
+			const std::filesystem::path& pathActiveDirectory,
+			const std::string& strSearchText,
+			const AssetTypeFilterOption& refTypeFilter)
 		{
+			if (!pSelectedAsset || !bActiveDirectoryExists)
+			{
+				return false;
+			}
+
+			const bool bSearchActive = !strSearchText.empty();
+			std::string strLoweredName{};
+			std::string strLoweredPath{};
+			if (bSearchActive)
+			{
+				strLoweredName = ToLowerCopy(pSelectedAsset->name);
+				strLoweredPath = ToLowerCopy(pSelectedAsset->relative_path.generic_string());
+			}
+
 			return
-				selected_asset &&
-				active_directory_exists &&
-				should_include_asset_in_view(
-					*selected_asset,
-					active_directory,
-					!search_text.empty(),
-					search_text,
-					type_filter);
+				AssetMatchesFilter(
+					*pSelectedAsset,
+					ToLowerCopy(strSearchText),
+					strLoweredName,
+					strLoweredPath,
+					refTypeFilter) &&
+				IsAssetInDirectory(*pSelectedAsset, pathActiveDirectory, bSearchActive);
 		}
 
-		auto to_asset_browser_view_mode(int32_t value) -> AssetBrowserViewMode
+		AssetBrowserViewMode ToAssetBrowserViewMode(int32_t iValue)
 		{
-			return value == static_cast<int32_t>(AssetBrowserViewMode::Icons)
+			return iValue == static_cast<int32_t>(AssetBrowserViewMode::Icons)
 				? AssetBrowserViewMode::Icons
 				: AssetBrowserViewMode::List;
 		}
 	}
 
-	AssetBrowserPanel::AssetBrowserPanel()
-		: EditorPanel("asset_browser", "Asset Browser")
+	AssetBrowserPanel::AssetBrowserPanel(AssetBrowserPanelDeps deps)
+		: EditorPanel(EditorPanelIds::AssetBrowser, EditorWindowTitles::AssetBrowser)
+		, _deps(deps)
 	{
 	}
 
-	void AssetBrowserPanel::on_attach(EditorContext& context)
+	void AssetBrowserPanel::BindEventBus(EditorEventBus* pEventBus)
 	{
-		if (context.settings_service)
+		_pEventBus = pEventBus;
+		if (_eventBindings.IsBoundTo(pEventBus))
 		{
-			const EditorSettings& settings = context.settings_service->get_settings();
-			m_searchText = settings.asset_browser_search_text;
-			m_activeDirectoryPath = settings.asset_browser_active_directory;
-			m_showDetails = settings.asset_browser_show_details;
-			m_typeFilterIndex = settings.asset_browser_type_filter;
-			m_viewMode = to_asset_browser_view_mode(settings.asset_browser_view_mode);
+			return;
+		}
+
+		_eventBindings.Bind(pEventBus);
+		if (!pEventBus)
+		{
+			return;
+		}
+
+		_eventBindings.Subscribe<EditorSelectionChangedEvent>(
+			[this](const EditorSelectionChangedEvent& refEvent)
+			{
+				if (refEvent.currentSelection.eKind == EditorSelectionKind::Asset)
+				{
+					_uSelectedAssetId = refEvent.currentSelection.uId;
+				}
+				else if (refEvent.currentSelection.IsEmpty() && refEvent.previousSelection.eKind == EditorSelectionKind::Asset)
+				{
+					_uSelectedAssetId = 0;
+				}
+			});
+	}
+
+	void AssetBrowserPanel::OnAttach()
+	{
+		if (_deps.pSettingsService)
+		{
+			const EditorSettings& settings = _deps.pSettingsService->GetSettings();
+			_strSearchText = settings.strAssetBrowserSearchText;
+			_strActiveDirectoryPath = settings.strAssetBrowserActiveDirectory;
+			_bShowDetails = settings.bAssetBrowserShowDetails;
+			_iTypeFilterIndex = settings.iAssetBrowserTypeFilter;
+			_eViewMode = ToAssetBrowserViewMode(settings.iAssetBrowserViewMode);
 		}
 		HLogInfo("AssetBrowserPanel attached.");
 	}
 
-	bool AssetBrowserPanel::has_active_filters() const
+	void AssetBrowserPanel::OnDetach()
 	{
-		return !m_searchText.empty() || m_typeFilterIndex != 0 || !m_activeDirectoryPath.empty();
+		PublishContentShortcutScope(false);
+		UnsubscribeEvents();
+		_pEventBus = nullptr;
+		ClearDeps();
 	}
 
-	void AssetBrowserPanel::reset_filters()
+	void AssetBrowserPanel::ClearDeps()
 	{
-		m_searchText.clear();
-		m_activeDirectoryPath.clear();
-		m_typeFilterIndex = 0;
+		_deps = {};
 	}
 
-	void AssetBrowserPanel::sync_settings(EditorContext& context) const
+	void AssetBrowserPanel::UnsubscribeEvents()
 	{
-		if (!context.settings_service)
+		_eventBindings.Clear();
+	}
+
+	bool AssetBrowserPanel::CanExecuteOpenSelected() const
+	{
+		return
+			_deps.pAssetDatabaseService &&
+			GetSelectedAsset(*_deps.pAssetDatabaseService, _uSelectedAssetId) &&
+			_bSelectedAssetVisibleThisFrame;
+	}
+
+	void AssetBrowserPanel::ExecuteOpenSelected()
+	{
+		if (!_deps.pAssetDatabaseService)
 		{
 			return;
 		}
 
-		EditorSettings& settings = context.settings_service->get_settings();
-		settings.asset_browser_search_text = m_searchText;
-		settings.asset_browser_active_directory = m_activeDirectoryPath;
-		settings.asset_browser_show_details = m_showDetails;
-		settings.asset_browser_type_filter = m_typeFilterIndex;
-		settings.asset_browser_view_mode = static_cast<int32_t>(m_viewMode);
+		const AshEngine::AssetInfo* pSelectedAsset = GetSelectedAsset(*_deps.pAssetDatabaseService, _uSelectedAssetId);
+		if (!pSelectedAsset)
+		{
+			return;
+		}
+
+		OpenAssetItem(*pSelectedAsset);
 	}
 
-	void AssetBrowserPanel::select_asset(EditorContext& context, const AshEngine::AssetInfo& item)
+	bool AssetBrowserPanel::CanExecuteNavigateUp() const
 	{
-		m_selectedAssetId = item.id;
-		if (context.selection_service)
+		return _bActiveDirectoryExistsThisFrame && !_strActiveDirectoryPath.empty();
+	}
+
+	void AssetBrowserPanel::ExecuteNavigateUp()
+	{
+		if (!CanExecuteNavigateUp())
 		{
-			context.selection_service->select({
+			return;
+		}
+
+		NavigateToDirectory(std::filesystem::path(_strActiveDirectoryPath).parent_path());
+	}
+
+	void AssetBrowserPanel::DispatchContentShortcuts(const EditorFrameContext& refFrameContext, bool bContentFocused)
+	{
+		if (!bContentFocused || !_deps.pCommandService || !_deps.pShortcutService || !refFrameContext.pUiContext)
+		{
+			return;
+		}
+
+		// AssetBrowser content shortcuts must flow through the shared shortcut service so text-input suppression,
+		// logging source, and future scope priority rules stay on one path.
+		_deps.pShortcutService->DispatchScope(
+			*_deps.pCommandService,
+			EditorActionScope::AssetBrowserContent,
+			*refFrameContext.pUiContext);
+	}
+
+	void AssetBrowserPanel::PublishContentShortcutScope(bool bContentFocused)
+	{
+		if (_bContentShortcutScopeActive == bContentFocused)
+		{
+			return;
+		}
+
+		_bContentShortcutScopeActive = bContentFocused;
+		if (!_pEventBus)
+		{
+			return;
+		}
+
+		// The panel only publishes focus/scope ownership here. It does not invoke actions directly.
+		EditorShortcutScopeChangedEvent event{};
+		event.eScope = bContentFocused ? EditorShortcutScope::AssetBrowserContent : EditorShortcutScope::Global;
+		event.strOwnerPanelId = EditorPanelIds::AssetBrowser;
+		_pEventBus->Publish(event);
+	}
+
+	bool AssetBrowserPanel::HasActiveFilters() const
+	{
+		return !_strSearchText.empty() || _iTypeFilterIndex != 0 || !_strActiveDirectoryPath.empty();
+	}
+
+	void AssetBrowserPanel::ResetFilters()
+	{
+		_strSearchText.clear();
+		_strActiveDirectoryPath.clear();
+		_iTypeFilterIndex = 0;
+	}
+
+	void AssetBrowserPanel::SyncSettings() const
+	{
+		if (!_deps.pSettingsService)
+		{
+			return;
+		}
+
+		EditorSettings& settings = _deps.pSettingsService->GetSettings();
+		settings.strAssetBrowserSearchText = _strSearchText;
+		settings.strAssetBrowserActiveDirectory = _strActiveDirectoryPath;
+		settings.bAssetBrowserShowDetails = _bShowDetails;
+		settings.iAssetBrowserTypeFilter = _iTypeFilterIndex;
+		settings.iAssetBrowserViewMode = static_cast<int32_t>(_eViewMode);
+	}
+
+	void AssetBrowserPanel::SelectAsset(const AshEngine::AssetInfo& refItem)
+	{
+		_uSelectedAssetId = refItem.id;
+		if (_deps.pSelectionService)
+		{
+			_deps.pSelectionService->Select({
 				EditorSelectionKind::Asset,
-				item.id,
-				get_asset_display_label(item),
-				item.relative_path.generic_string() });
+				refItem.id,
+				GetAssetDisplayLabel(refItem),
+				refItem.relative_path.generic_string() });
 		}
 	}
 
-	void AssetBrowserPanel::clear_asset_selection(EditorContext& context)
+	void AssetBrowserPanel::ClearAssetSelection()
 	{
-		m_selectedAssetId = 0;
-		clear_if_asset_selected(context);
+		_uSelectedAssetId = 0u;
+		ClearIfAssetSelected(_deps.pSelectionService);
 	}
 
-	void AssetBrowserPanel::activate_asset(EditorContext& context, const AshEngine::AssetInfo& item)
+	void AssetBrowserPanel::ActivateAsset(const AshEngine::AssetInfo& refItem)
 	{
-		select_asset(context, item);
+		SelectAsset(refItem);
 	}
 
-	void AssetBrowserPanel::open_asset_item(EditorContext& context, const AshEngine::AssetInfo& item)
+	void AssetBrowserPanel::OpenAssetItem(const AshEngine::AssetInfo& refItem)
 	{
-		if (item.is_directory)
+		if (refItem.is_directory)
 		{
-			navigate_to_directory(item.relative_path);
+			NavigateToDirectory(refItem.relative_path);
 			return;
 		}
 
-		activate_asset(context, item);
+		ActivateAsset(refItem);
 	}
 
-	void AssetBrowserPanel::navigate_to_directory(const std::filesystem::path& directory_path)
+	void AssetBrowserPanel::NavigateToDirectory(const std::filesystem::path& refDirectoryPath)
 	{
-		m_activeDirectoryPath = directory_path.generic_string();
+		_strActiveDirectoryPath = refDirectoryPath.generic_string();
 	}
 
-	void AssetBrowserPanel::browse_to_asset_location(const AshEngine::AssetInfo& item)
+	void AssetBrowserPanel::BrowseToAssetLocation(const AshEngine::AssetInfo& refItem)
 	{
-		navigate_to_directory(item.is_directory ? item.relative_path : item.parent_path);
+		NavigateToDirectory(refItem.is_directory ? refItem.relative_path : refItem.parent_path);
 	}
 
-	void AssetBrowserPanel::handle_asset_item_interaction(
-		EditorContext& context,
-		const AshEngine::AssetInfo& item,
-		bool primary_activated,
-		bool double_clicked)
+	void AssetBrowserPanel::HandleAssetItemInteraction(
+		const EditorFrameContext& refFrameContext,
+		const AshEngine::AssetInfo& refAsset,
+		bool bPrimaryActivated,
+		bool bDoubleClicked)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (primary_activated)
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (bPrimaryActivated)
 		{
-			select_asset(context, item);
+			SelectAsset(refAsset);
 		}
-		if (double_clicked)
+		if (bDoubleClicked)
 		{
-			open_asset_item(context, item);
-		}
-
-		if (ui.is_item_clicked(AshEngine::UIMouseButton::Right))
-		{
-			select_asset(context, item);
-		}
-	}
-
-	void AssetBrowserPanel::draw_view_mode_toggle(AshEngine::UIContext& ui, const char* label, AssetBrowserViewMode mode)
-	{
-		const bool selected = m_viewMode == mode;
-		if (selected)
-		{
-			push_selected_toolbar_button_style(ui);
+			OpenAssetItem(refAsset);
 		}
 
-		if (ui.small_button(label))
+		if (refUi.is_item_clicked(AshEngine::UIMouseButton::Right))
 		{
-			m_viewMode = mode;
-		}
-
-		if (selected)
-		{
-			pop_selected_toolbar_button_style(ui);
+			SelectAsset(refAsset);
 		}
 	}
 
-	void AssetBrowserPanel::draw_breadcrumbs(AshEngine::UIContext& ui)
+	void AssetBrowserPanel::DrawViewModeToggle(AshEngine::UIContext& refUi, const char* pLabel, AssetBrowserViewMode eMode)
 	{
-		ui.text_colored(k_assetToolbarMutedTextColor, "Location");
-		ui.same_line();
-		const bool all_assets_selected = m_activeDirectoryPath.empty();
-		if (all_assets_selected)
+		const bool bSelected = _eViewMode == eMode;
+		if (bSelected)
 		{
-			push_selected_toolbar_button_style(ui);
-		}
-		if (ui.small_button("All Assets"))
-		{
-			navigate_to_directory({});
-		}
-		if (all_assets_selected)
-		{
-			pop_selected_toolbar_button_style(ui);
+			PushSelectedToolbarButtonStyle(refUi);
 		}
 
-		if (m_activeDirectoryPath.empty())
+		if (refUi.small_button(pLabel))
+		{
+			_eViewMode = eMode;
+		}
+
+		if (bSelected)
+		{
+			PopSelectedToolbarButtonStyle(refUi);
+		}
+	}
+
+	void AssetBrowserPanel::DrawBreadcrumbs(AshEngine::UIContext& refUi)
+	{
+		refUi.text_colored(kAssetToolbarMutedTextColor, "Location");
+		refUi.same_line();
+		const bool bAllAssetsSelected = _strActiveDirectoryPath.empty();
+		if (bAllAssetsSelected)
+		{
+			PushSelectedToolbarButtonStyle(refUi);
+		}
+		if (refUi.small_button("All Assets"))
+		{
+			NavigateToDirectory({});
+		}
+		if (bAllAssetsSelected)
+		{
+			PopSelectedToolbarButtonStyle(refUi);
+		}
+
+		if (_strActiveDirectoryPath.empty())
 		{
 			return;
 		}
 
-		std::filesystem::path current_path(m_activeDirectoryPath);
-		std::filesystem::path breadcrumb_path{};
-		for (const std::filesystem::path& part : current_path)
+		std::filesystem::path pathCurrent(_strActiveDirectoryPath);
+		std::filesystem::path pathBreadcrumb{};
+		for (const std::filesystem::path& refPart : pathCurrent)
 		{
-			breadcrumb_path /= part;
-			ui.same_line();
-			ui.text_unformatted("/");
-			ui.same_line();
-			const std::string label = part.generic_string();
-			const std::string path_id = breadcrumb_path.generic_string();
-			const bool is_current = path_id == m_activeDirectoryPath;
-			ui.push_id(path_id.c_str());
-			if (is_current)
+			pathBreadcrumb /= refPart;
+			refUi.same_line();
+			refUi.text_unformatted("/");
+			refUi.same_line();
+			const std::string strLabel = refPart.generic_string();
+			const std::string strPathId = pathBreadcrumb.generic_string();
+			const bool bIsCurrent = strPathId == _strActiveDirectoryPath;
+			refUi.push_id(strPathId.c_str());
+			if (bIsCurrent)
 			{
-				push_selected_toolbar_button_style(ui);
+				PushSelectedToolbarButtonStyle(refUi);
 			}
-			if (ui.small_button(label.c_str()))
+			if (refUi.small_button(strLabel.c_str()))
 			{
-				navigate_to_directory(breadcrumb_path);
+				NavigateToDirectory(pathBreadcrumb);
 			}
-			if (is_current)
+			if (bIsCurrent)
 			{
-				pop_selected_toolbar_button_style(ui);
+				PopSelectedToolbarButtonStyle(refUi);
 			}
-			ui.pop_id();
+			refUi.pop_id();
 		}
 	}
 
-	void AssetBrowserPanel::draw_asset_list_view(
-		EditorContext& context,
-		const std::vector<const AshEngine::AssetInfo*>& visible_items,
-		const AshEngine::AssetInfo* selected_asset)
+	void AssetBrowserPanel::DrawAssetListView(
+		const EditorFrameContext& refFrameContext,
+		const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
+		const AshEngine::AssetInfo* pSelectedAsset)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		const AshEngine::UIVec2 available_region = ui.get_content_region_avail();
-		const AshEngine::UIVec2 table_size = m_showDetails
-			? AshEngine::UIVec2{ 0.0f, std::max(120.0f, available_region.y * 0.55f) }
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		const AshEngine::UIVec2 vecAvailRegion = refUi.get_content_region_avail();
+		const AshEngine::UIVec2 vecTableSize = _bShowDetails
+			? AshEngine::UIVec2{ 0.0f, std::max(120.0f, vecAvailRegion.y * 0.55f) }
 			: AshEngine::UIVec2{};
 
-		if (!ui.begin_table(
+		if (!refUi.begin_table(
 			"AssetBrowserTable",
 			3,
 			AshEngine::UITableFlagBits::RowBg |
@@ -707,526 +835,553 @@ namespace AshEditor
 				AshEngine::UITableFlagBits::Resizable |
 				AshEngine::UITableFlagBits::SizingStretchProp |
 				AshEngine::UITableFlagBits::ScrollY,
-			table_size))
+			vecTableSize))
 		{
 			return;
 		}
 
-		ui.table_setup_column("Name", AshEngine::UITableColumnFlagBits::WidthStretch);
-		ui.table_setup_column("Type", AshEngine::UITableColumnFlagBits::WidthFixed, 110.0f);
-		ui.table_setup_column("State", AshEngine::UITableColumnFlagBits::WidthFixed, 90.0f);
-		ui.table_headers_row();
-		for (const AshEngine::AssetInfo* item_ptr : visible_items)
+		refUi.table_setup_column("Name", AshEngine::UITableColumnFlagBits::WidthStretch);
+		refUi.table_setup_column("Type", AshEngine::UITableColumnFlagBits::WidthFixed, 110.0f);
+		refUi.table_setup_column("State", AshEngine::UITableColumnFlagBits::WidthFixed, 90.0f);
+		refUi.table_headers_row();
+		for (const AssetBrowserVisibleItem& refVisibleItem : vecVisibleItems)
 		{
-			const AshEngine::AssetInfo& item = *item_ptr;
-			const bool selected = selected_asset && selected_asset->id == item.id;
-			AshEngine::UITextureHandle icon_handle = nullptr;
-			if (context.icon_service)
+			const AshEngine::AssetInfo& refAsset = *refVisibleItem.pAsset;
+			const bool bSelected = pSelectedAsset && pSelectedAsset->id == refAsset.id;
+			AshEngine::UITextureHandle iconHandle = nullptr;
+			if (_deps.pIconService)
 			{
-				icon_handle = context.icon_service->get_icon(get_asset_icon_id(item), ui);
+				iconHandle = _deps.pIconService->GetIcon(GetAssetIconId(refAsset), refUi);
 			}
 
-			const std::string display_label = get_asset_display_label(item);
-
-			ui.table_next_row();
-			ui.table_next_column();
-			const std::string item_id = std::to_string(item.id);
-			ui.push_id(item_id.c_str());
-			const bool primary_activated = ui.selectable(
+			refUi.table_next_row();
+			refUi.table_next_column();
+			const std::string strItemId = std::to_string(refAsset.id);
+			refUi.push_id(strItemId.c_str());
+			const bool bPrimaryActivated = refUi.selectable(
 				"##AssetListItem",
-				selected,
+				bSelected,
 				AshEngine::UISelectableFlagBits::SpanAllColumns);
-			const bool double_clicked = ui.is_item_hovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-			draw_item_feedback(selected);
-			draw_list_item_icon(icon_handle);
-			draw_list_item_label(icon_handle, display_label);
-			handle_asset_item_interaction(context, item, primary_activated, double_clicked);
-			draw_asset_item_context_menu(context, item);
-			ui.pop_id();
+			const bool bDoubleClicked = refUi.is_item_hovered() && refUi.is_mouse_double_clicked(AshEngine::UIMouseButton::Left);
+			DrawItemFeedback(refUi, bSelected);
+			DrawListItemIcon(refUi, iconHandle);
+			DrawListItemLabel(refUi, iconHandle, refVisibleItem.strDisplayLabel);
+			HandleAssetItemInteraction(refFrameContext, refAsset, bPrimaryActivated, bDoubleClicked);
+			DrawAssetItemContextMenu(refFrameContext, refAsset);
+			refUi.pop_id();
 
-			ui.table_next_column();
-			ui.text_unformatted(AssetDatabaseService::get_type_label(item.type));
-			ui.table_next_column();
-			ui.text_unformatted(AssetDatabaseService::get_load_state_label(context.asset_database_service->get_load_state(item.id)));
+			refUi.table_next_column();
+			refUi.text_unformatted(AssetDatabaseService::GetTypeLabel(refAsset.type));
+			refUi.table_next_column();
+			refUi.text_unformatted(AssetDatabaseService::GetLoadStateLabel(_deps.pAssetDatabaseService->GetLoadState(refAsset.id)));
 		}
 
-		ui.end_table();
+		refUi.end_table();
 	}
 
-	void AssetBrowserPanel::draw_asset_icon_view(
-		EditorContext& context,
-		const std::vector<const AshEngine::AssetInfo*>& visible_items,
-		const AshEngine::AssetInfo* selected_asset)
+	void AssetBrowserPanel::DrawAssetIconView(
+		const EditorFrameContext& refFrameContext,
+		const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
+		const AshEngine::AssetInfo* pSelectedAsset)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		const AshEngine::UIVec2 outer_region = ui.get_content_region_avail();
-		const float grid_height = m_showDetails
-			? std::max(140.0f, outer_region.y * 0.55f)
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		const AshEngine::UIVec2 vecOuterRegion = refUi.get_content_region_avail();
+		const float fGridHeight = _bShowDetails
+			? std::max(140.0f, vecOuterRegion.y * 0.55f)
 			: 0.0f;
 
-		if (!ui.begin_child("AssetBrowserIconView", { 0.0f, grid_height }, AshEngine::UIChildFlagBits::Border))
+		if (!refUi.begin_child("AssetBrowserIconView", { 0.0f, fGridHeight }, AshEngine::UIChildFlagBits::Border))
 		{
-			ui.end_child();
+			refUi.end_child();
 			return;
 		}
 
-		const float available_width = std::max(1.0f, ui.get_content_region_avail().x);
-		const float cell_span = k_assetBrowserGridCellWidth + k_assetBrowserGridSpacing;
-		const int32_t column_count = std::max(1, static_cast<int32_t>((available_width + k_assetBrowserGridSpacing) / cell_span));
-		int32_t column_index = 0;
-		for (size_t item_index = 0; item_index < visible_items.size(); ++item_index)
+		const float fAvailableWidth = std::max(1.0f, refUi.get_content_region_avail().x);
+		const float fCellSpan = kAssetBrowserGridCellWidth + kAssetBrowserGridSpacing;
+		const int32_t iColumnCount = std::max(1, static_cast<int32_t>((fAvailableWidth + kAssetBrowserGridSpacing) / fCellSpan));
+		int32_t iColumnIndex = 0;
+		for (size_t uAssetIndex = 0; uAssetIndex < vecVisibleItems.size(); ++uAssetIndex)
 		{
-			const AshEngine::AssetInfo& item = *visible_items[item_index];
-			const bool selected = selected_asset && selected_asset->id == item.id;
-			AshEngine::UITextureHandle icon_handle = nullptr;
-			if (context.icon_service)
+			const AssetBrowserVisibleItem& refVisibleItem = vecVisibleItems[uAssetIndex];
+			const AshEngine::AssetInfo& refAsset = *refVisibleItem.pAsset;
+			const bool bSelected = pSelectedAsset && pSelectedAsset->id == refAsset.id;
+			AshEngine::UITextureHandle iconHandle = nullptr;
+			if (_deps.pIconService)
 			{
-				icon_handle = context.icon_service->get_icon(get_asset_icon_id(item), ui);
+				iconHandle = _deps.pIconService->GetIcon(GetAssetIconId(refAsset), refUi);
 			}
 
-			const std::string display_label = get_asset_display_label(item);
-			const std::string item_id = std::to_string(item.id);
-			ui.push_id(item_id.c_str());
-			const bool primary_activated = ui.selectable(
+			const std::string strItemId = std::to_string(refAsset.id);
+			refUi.push_id(strItemId.c_str());
+			const bool bPrimaryActivated = refUi.selectable(
 				"##AssetIconItem",
-				selected,
+				bSelected,
 				AshEngine::UISelectableFlagBits::None,
-				{ k_assetBrowserGridCellWidth, k_assetBrowserGridCellHeight });
-			const bool double_clicked = ui.is_item_hovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-			draw_item_feedback(selected, 6.0f);
+				{ kAssetBrowserGridCellWidth, kAssetBrowserGridCellHeight });
+			const bool bDoubleClicked = refUi.is_item_hovered() && refUi.is_mouse_double_clicked(AshEngine::UIMouseButton::Left);
+			DrawItemFeedback(refUi, bSelected, 6.0f);
 
-			ImDrawList* draw_list = ImGui::GetWindowDrawList();
-			const ImVec2 item_min = ImGui::GetItemRectMin();
-			const ImVec2 item_max = ImGui::GetItemRectMax();
-			const float icon_x = item_min.x + (k_assetBrowserGridCellWidth - k_assetBrowserGridIconSize) * 0.5f;
-			const float icon_y = item_min.y + 10.0f;
-			if (icon_handle)
+			const AshEngine::UIRect rectItem = refUi.get_item_rect();
+			const float fIconX = rectItem.x + (kAssetBrowserGridCellWidth - kAssetBrowserGridIconSize) * 0.5f;
+			const float fIconY = rectItem.y + 10.0f;
+			if (iconHandle)
 			{
-				draw_list->AddImage(
-					icon_handle,
-					ImVec2(icon_x, icon_y),
-					ImVec2(icon_x + k_assetBrowserGridIconSize, icon_y + k_assetBrowserGridIconSize));
+				refUi.draw_window_image(
+					iconHandle,
+					{ fIconX, fIconY, kAssetBrowserGridIconSize, kAssetBrowserGridIconSize });
 			}
 
-			const ImVec2 text_min(item_min.x + 8.0f, icon_y + k_assetBrowserGridIconSize + 8.0f);
-			const ImVec2 text_max(item_max.x - 8.0f, item_max.y - 8.0f);
-			draw_list->PushClipRect(text_min, text_max, true);
-			draw_list->AddText(
-				nullptr,
-				0.0f,
-				text_min,
-				ImGui::GetColorU32(ImGuiCol_Text),
-				display_label.c_str(),
-				nullptr,
-				std::max(1.0f, text_max.x - text_min.x));
-			draw_list->PopClipRect();
+			const float fTextX = rectItem.x + 8.0f;
+			const float fTextY = fIconY + kAssetBrowserGridIconSize + 8.0f;
+			const float fTextWidth = std::max(1.0f, rectItem.width - 16.0f);
+			const float fTextHeight = std::max(1.0f, rectItem.y + rectItem.height - 8.0f - fTextY);
+			refUi.push_window_clip_rect({ fTextX, fTextY, fTextWidth, fTextHeight });
+			refUi.draw_window_text(
+				{ fTextX, fTextY },
+				refUi.get_style_color(AshEngine::UIStyleColorKind::Text),
+				refVisibleItem.strDisplayLabel.c_str(),
+				fTextWidth);
+			refUi.pop_window_clip_rect();
 
-			handle_asset_item_interaction(context, item, primary_activated, double_clicked);
-			draw_asset_item_context_menu(context, item);
-			ui.pop_id();
+			HandleAssetItemInteraction(refFrameContext, refAsset, bPrimaryActivated, bDoubleClicked);
+			DrawAssetItemContextMenu(refFrameContext, refAsset);
+			refUi.pop_id();
 
-			++column_index;
-			const bool end_of_row = column_index >= column_count;
-			const bool has_more_items = item_index + 1 < visible_items.size();
-			if (!end_of_row && has_more_items)
+			++iColumnIndex;
+			const bool bEndOfRow = iColumnIndex >= iColumnCount;
+			const bool bHasMoreItems = uAssetIndex + 1 < vecVisibleItems.size();
+			if (!bEndOfRow && bHasMoreItems)
 			{
-				ui.same_line(0.0f, k_assetBrowserGridSpacing);
+				refUi.same_line(0.0f, kAssetBrowserGridSpacing);
 			}
 			else
 			{
-				column_index = 0;
+				iColumnIndex = 0;
 			}
 		}
 
-		ui.end_child();
+		refUi.end_child();
 	}
 
-	void AssetBrowserPanel::draw_asset_item_context_menu(EditorContext& context, const AshEngine::AssetInfo& item)
+	void AssetBrowserPanel::DrawAssetItemContextMenu(const EditorFrameContext& refFrameContext, const AshEngine::AssetInfo& refAsset)
 	{
-		if (!ImGui::BeginPopupContextItem(k_assetItemContextPopupId, ImGuiPopupFlags_MouseButtonRight))
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (!refUi.begin_popup_context_item(kAssetItemContextPopupId))
 		{
 			return;
 		}
 
-		AshEngine::UIContext& ui = *context.ui_context;
-		select_asset(context, item);
-		const bool can_browse = item.is_directory || !item.parent_path.empty();
-		const bool can_refresh = context.command_service && context.command_service->has_action("assets.refresh");
+		SelectAsset(refAsset);
+		const bool bCanBrowse = refAsset.is_directory || !refAsset.parent_path.empty();
 
-		if (ui.menu_item("Select"))
+		if (refUi.menu_item("Select"))
 		{
-			select_asset(context, item);
-			ui.close_current_popup();
+			SelectAsset(refAsset);
+			refUi.close_current_popup();
 		}
-		if (ui.menu_item(item.is_directory ? "Open Folder" : "Open", nullptr, false, true))
+		if (refUi.menu_item(refAsset.is_directory ? "Open Folder" : "Open", nullptr, false, true))
 		{
-			open_asset_item(context, item);
-			ui.close_current_popup();
+			OpenAssetItem(refAsset);
+			refUi.close_current_popup();
 		}
-		if (ui.menu_item("Browse Location", nullptr, false, can_browse))
+		if (refUi.menu_item("Browse Location", nullptr, false, bCanBrowse))
 		{
-			browse_to_asset_location(item);
-			ui.close_current_popup();
+			BrowseToAssetLocation(refAsset);
+			refUi.close_current_popup();
 		}
-		ui.separator();
-		ui.menu_item("Show Details", nullptr, &m_showDetails);
-		if (ui.menu_item("Clear Selection"))
+		refUi.separator();
+		refUi.menu_item("Show Details", nullptr, &_bShowDetails);
+		if (refUi.menu_item("Clear Selection"))
 		{
-			clear_asset_selection(context);
-			ui.close_current_popup();
+			ClearAssetSelection();
+			refUi.close_current_popup();
 		}
-		if (ui.menu_item("Refresh", get_action_shortcut(context.command_service, "assets.refresh"), false, can_refresh))
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::AssetsRefresh,
+			"Refresh",
+			"asset_browser.item_context",
+			true))
 		{
-			context.command_service->invoke("assets.refresh");
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
 
-		ImGui::EndPopup();
+		refUi.end_popup();
 	}
 
-	void AssetBrowserPanel::draw_content_context_menu(
-		EditorContext& context,
-		bool active_directory_exists,
-		bool filters_active)
+	void AssetBrowserPanel::DrawContentContextMenu(
+		const EditorFrameContext& refFrameContext,
+		bool bActiveDirectoryExists,
+		bool bFiltersActive)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!ui.begin_popup(k_assetContentContextPopupId))
+		(void)bActiveDirectoryExists;
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (!refUi.begin_popup(kAssetContentContextPopupId))
 		{
 			return;
 		}
 
-		const bool can_go_up = active_directory_exists && !m_activeDirectoryPath.empty();
-		const bool can_refresh = context.command_service && context.command_service->has_action("assets.refresh");
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::AssetsNavigateUp,
+			"Up",
+			"asset_browser.content_context",
+			true))
+		{
+			refUi.close_current_popup();
+		}
+		refUi.separator();
 
-		if (ui.menu_item("Up", nullptr, false, can_go_up))
+		if (refUi.menu_item("List View", nullptr, _eViewMode == AssetBrowserViewMode::List))
 		{
-			navigate_to_directory(std::filesystem::path(m_activeDirectoryPath).parent_path());
-			ui.close_current_popup();
+			_eViewMode = AssetBrowserViewMode::List;
+			refUi.close_current_popup();
 		}
-		ui.separator();
+		if (refUi.menu_item("Icon View", nullptr, _eViewMode == AssetBrowserViewMode::Icons))
+		{
+			_eViewMode = AssetBrowserViewMode::Icons;
+			refUi.close_current_popup();
+		}
+		refUi.menu_item("Show Details", nullptr, &_bShowDetails);
 
-		if (ui.menu_item("List View", nullptr, m_viewMode == AssetBrowserViewMode::List))
+		refUi.separator();
+		if (refUi.menu_item("Reset Filters", nullptr, false, bFiltersActive))
 		{
-			m_viewMode = AssetBrowserViewMode::List;
-			ui.close_current_popup();
+			ResetFilters();
+			refUi.close_current_popup();
 		}
-		if (ui.menu_item("Icon View", nullptr, m_viewMode == AssetBrowserViewMode::Icons))
+		if (refUi.menu_item("Clear Selection"))
 		{
-			m_viewMode = AssetBrowserViewMode::Icons;
-			ui.close_current_popup();
+			ClearAssetSelection();
+			refUi.close_current_popup();
 		}
-		ui.menu_item("Show Details", nullptr, &m_showDetails);
-
-		ui.separator();
-		if (ui.menu_item("Reset Filters", nullptr, false, filters_active))
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::AssetsRefresh,
+			"Refresh",
+			"asset_browser.content_context",
+			true))
 		{
-			reset_filters();
-			ui.close_current_popup();
-		}
-		if (ui.menu_item("Clear Selection"))
-		{
-			clear_asset_selection(context);
-			ui.close_current_popup();
-		}
-		if (ui.menu_item("Refresh", get_action_shortcut(context.command_service, "assets.refresh"), false, can_refresh))
-		{
-			context.command_service->invoke("assets.refresh");
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
 
-		ui.end_popup();
+		refUi.end_popup();
 	}
 
-	void AssetBrowserPanel::on_gui(EditorContext& context)
+	void AssetBrowserPanel::OnGui(const EditorFrameContext& frameContext)
 	{
-		if (!begin_panel_window(context))
+		if (!BeginPanelWindow(frameContext))
 		{
-			end_panel_window(context);
+			EndPanelWindow(frameContext);
 			return;
 		}
 
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!context.asset_database_service)
+		_bActiveDirectoryExistsThisFrame = false;
+		_bSelectedAssetVisibleThisFrame = false;
+		if (!frameContext.pUiContext)
 		{
-			ui.text_unformatted("Asset database unavailable.");
-			end_panel_window(context);
+			EndPanelWindow(frameContext);
+			return;
+		}
+		AshEngine::UIContext& refUi = *frameContext.pUiContext;
+		if (!_deps.pAssetDatabaseService)
+		{
+			refUi.text_unformatted("Asset database unavailable.");
+			EndPanelWindow(frameContext);
 			return;
 		}
 
-		const auto& items = context.asset_database_service->get_items();
-		m_typeFilterIndex = std::clamp(m_typeFilterIndex, 0, static_cast<int32_t>(k_assetTypeFilters.size() - 1));
-		const AssetTypeFilterOption& type_filter = k_assetTypeFilters[m_typeFilterIndex];
-		const std::vector<AssetDirectoryEntry> directories = build_directory_entries(items);
-		const std::filesystem::path active_directory = m_activeDirectoryPath.empty() ? std::filesystem::path{} : std::filesystem::path(m_activeDirectoryPath);
-		const bool active_directory_exists = directory_exists(directories, active_directory);
-		const bool search_active = !m_searchText.empty();
-		const AshEngine::AssetInfo* selected_asset = get_selected_asset(*context.asset_database_service, m_selectedAssetId);
-		if (!selected_asset && context.selection_service && context.selection_service->get_selection().kind == EditorSelectionKind::Asset)
+		const std::vector<AshEngine::AssetInfo>& vecAssets = _deps.pAssetDatabaseService->GetItems();
+		_iTypeFilterIndex = std::clamp(_iTypeFilterIndex, 0, static_cast<int32_t>(kAssetTypeFilters.size() - 1));
+		const AssetTypeFilterOption& refTypeFilter = kAssetTypeFilters[_iTypeFilterIndex];
+		const AssetDirectoryTreeData directoryTreeData = BuildDirectoryTreeData(vecAssets);
+		const std::vector<AssetDirectoryEntry>& vecDirectories = directoryTreeData.vecEntries;
+		const std::filesystem::path pathActiveDirectory =
+			_strActiveDirectoryPath.empty() ? std::filesystem::path{} : std::filesystem::path(_strActiveDirectoryPath);
+		const bool bActiveDirectoryExists = DirectoryExists(directoryTreeData, pathActiveDirectory);
+		_bActiveDirectoryExistsThisFrame = bActiveDirectoryExists;
+		const AshEngine::AssetInfo* pSelectedAsset = GetSelectedAsset(*_deps.pAssetDatabaseService, _uSelectedAssetId);
+		if (!pSelectedAsset && _deps.pSelectionService && _deps.pSelectionService->GetSelection().eKind == EditorSelectionKind::Asset)
 		{
-			selected_asset = context.asset_database_service->find_by_id(context.selection_service->get_selection().id);
-			m_selectedAssetId = selected_asset ? selected_asset->id : 0;
+			pSelectedAsset = _deps.pAssetDatabaseService->FindById(_deps.pSelectionService->GetSelection().uId);
+			_uSelectedAssetId = pSelectedAsset ? pSelectedAsset->id : 0u;
 		}
 
-		const std::vector<const char*> type_labels{
+		const std::vector<const char*> vecTypeLabels{
 			"All", "Folder", "Scene", "Shader", "Texture", "Mesh", "Model", "Prefab", "Material", "Text", "Binary"
 		};
-		std::vector<const AshEngine::AssetInfo*> visible_items{};
-		visible_items.reserve(items.size());
-		for (const AshEngine::AssetInfo& item : items)
+		const std::string strLoweredSearchText = ToLowerCopy(_strSearchText);
+		std::vector<AssetBrowserVisibleItem> vecVisibleItems =
+			BuildVisibleItems(vecAssets, pathActiveDirectory, strLoweredSearchText, refTypeFilter);
+		SortVisibleAssets(vecVisibleItems);
+		const uint32_t uFilteredCount = static_cast<uint32_t>(vecVisibleItems.size());
+
+		bool bSelectedAssetVisible = IsSelectedAssetVisible(
+			pSelectedAsset,
+			bActiveDirectoryExists,
+			pathActiveDirectory,
+			_strSearchText,
+			refTypeFilter);
+		_bSelectedAssetVisibleThisFrame = bSelectedAssetVisible;
+
+		refUi.text("Root: %s", _deps.pAssetDatabaseService->GetAssetRoot().string().c_str());
+		const std::string strLastError = _deps.pAssetDatabaseService->GetLastError();
+		if (!strLastError.empty())
 		{
-			if (should_include_asset_in_view(item, active_directory, search_active, m_searchText, type_filter))
+			refUi.text_wrapped("Last Error: %s", strLastError.c_str());
+		}
+		refUi.separator();
+		refUi.set_next_item_width(240.0f);
+		refUi.input_text("Search", _strSearchText);
+		refUi.same_line();
+		refUi.set_next_item_width(140.0f);
+		refUi.combo("Type", _iTypeFilterIndex, vecTypeLabels);
+		refUi.same_line();
+		refUi.checkbox("Details", _bShowDetails);
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionSmallButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::AssetsNavigateUp,
+				"Up",
+				"asset_browser.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.small_button("Up");
+			refUi.end_disabled();
+		}
+		refUi.same_line();
+		refUi.text_unformatted("View");
+		refUi.same_line();
+		DrawViewModeToggle(refUi, "List", AssetBrowserViewMode::List);
+		refUi.same_line();
+		DrawViewModeToggle(refUi, "Icons", AssetBrowserViewMode::Icons);
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::AssetsRefresh,
+				"Refresh",
+				"asset_browser.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.button("Refresh");
+			refUi.end_disabled();
+		}
+		const bool bFiltersActive = HasActiveFilters();
+		refUi.same_line();
+		refUi.begin_disabled(!bFiltersActive);
+		if (refUi.button("Reset Filters"))
+		{
+			ResetFilters();
+		}
+		refUi.end_disabled();
+		refUi.separator();
+
+		const AshEngine::UIVec2 vecAvailRegion = refUi.get_content_region_avail();
+		const float fLeftWidth = std::max(180.0f, vecAvailRegion.x * 0.28f);
+
+		if (refUi.begin_child("AssetBrowserDirectories", { fLeftWidth, 0.0f }, AshEngine::UIChildFlagBits::Border))
+		{
+			refUi.text_unformatted("Directories");
+			refUi.separator();
+			if (!vecDirectories.empty())
 			{
-				visible_items.push_back(&item);
-			}
-		}
-		sort_visible_assets(visible_items);
-		const uint32_t filtered_count = static_cast<uint32_t>(visible_items.size());
-
-		bool selected_asset_visible = is_selected_asset_visible(
-			selected_asset,
-			active_directory_exists,
-			active_directory,
-			m_searchText,
-			type_filter);
-
-		ui.text("Root: %s", context.asset_database_service->get_asset_root().string().c_str());
-		const std::string last_error = context.asset_database_service->get_last_error();
-		if (!last_error.empty())
-		{
-			ui.text_wrapped("Last Error: %s", last_error.c_str());
-		}
-		ui.separator();
-		ui.set_next_item_width(240.0f);
-		ui.input_text("Search", m_searchText);
-		ui.same_line();
-		ui.set_next_item_width(140.0f);
-		ui.combo("Type", m_typeFilterIndex, type_labels);
-		ui.same_line();
-		ui.checkbox("Details", m_showDetails);
-		ui.same_line();
-		ui.begin_disabled(m_activeDirectoryPath.empty());
-		if (ui.small_button("Up"))
-		{
-			navigate_to_directory(std::filesystem::path(m_activeDirectoryPath).parent_path());
-		}
-		ui.end_disabled();
-		ui.same_line();
-		ui.text_unformatted("View");
-		ui.same_line();
-		draw_view_mode_toggle(ui, "List", AssetBrowserViewMode::List);
-		ui.same_line();
-		draw_view_mode_toggle(ui, "Icons", AssetBrowserViewMode::Icons);
-		ui.same_line();
-		ui.begin_disabled(!context.command_service || !context.command_service->has_action("assets.refresh"));
-		if (ui.button("Refresh"))
-		{
-			context.command_service->invoke("assets.refresh");
-		}
-		ui.end_disabled();
-		const bool filters_active = has_active_filters();
-		ui.same_line();
-		ui.begin_disabled(!filters_active);
-		if (ui.button("Reset Filters"))
-		{
-			reset_filters();
-		}
-		ui.end_disabled();
-		ui.separator();
-
-		const AshEngine::UIVec2 region = ui.get_content_region_avail();
-		const float left_width = std::max(180.0f, region.x * 0.28f);
-
-		if (ui.begin_child("AssetBrowserDirectories", { left_width, 0.0f }, AshEngine::UIChildFlagBits::Border))
-		{
-			ui.text_unformatted("Directories");
-			ui.separator();
-			if (!directories.empty())
-			{
-				EditorTreeWidget tree_widget(ui, m_directoryTreeState, make_asset_browser_tree_style());
-				tree_widget.reset_drag_state_if_inactive();
-				draw_directory_tree(
-					tree_widget,
-					ui,
-					context.icon_service,
-					directories,
-					directories.front(),
-					active_directory,
-					m_activeDirectoryPath,
+				EditorTreeWidget treeWidget(refUi, _treeStateDirectories, MakeAssetBrowserTreeStyle());
+				treeWidget.ResetDragStateIfInactive();
+				DrawDirectoryTree(
+					treeWidget,
+					refUi,
+					_deps.pIconService,
+					directoryTreeData,
+					directoryTreeData.vecEntries.front(),
+					pathActiveDirectory,
+					_strActiveDirectoryPath,
 					true);
 			}
 		}
-		ui.end_child();
-		ui.same_line();
+		refUi.end_child();
+		refUi.same_line();
 
-		if (ui.begin_child("AssetBrowserContent", {}, AshEngine::UIChildFlagBits::Border))
+		if (refUi.begin_child("AssetBrowserContent", {}, AshEngine::UIChildFlagBits::Border))
 		{
-			draw_breadcrumbs(ui);
-			ui.same_line();
-			ui.text_colored(
-				k_assetToolbarMutedTextColor,
+			DrawBreadcrumbs(refUi);
+			refUi.same_line();
+			refUi.text_colored(
+				kAssetToolbarMutedTextColor,
 				"| Showing %u of %u",
-				filtered_count,
-				static_cast<uint32_t>(items.size()));
-			ui.separator();
+				uFilteredCount,
+				static_cast<uint32_t>(vecAssets.size()));
+			refUi.separator();
 
-			if (!active_directory_exists)
+			if (!bActiveDirectoryExists)
 			{
-				ui.text_unformatted("The saved directory is no longer available.");
-				ui.text_unformatted("Reset the directory filter to return to the asset root.");
-				if (ui.button("Reset Directory"))
+				refUi.text_unformatted("The saved directory is no longer available.");
+				refUi.text_unformatted("Reset the directory filter to return to the asset root.");
+				if (refUi.button("Reset Directory"))
 				{
-					m_activeDirectoryPath.clear();
+					_strActiveDirectoryPath.clear();
 				}
 			}
-			else if (items.empty())
+			else if (vecAssets.empty())
 			{
-				if (!last_error.empty())
+				if (!strLastError.empty())
 				{
-					ui.text_unformatted("No assets are available because the last asset scan reported an error.");
-					ui.text_unformatted("Review the error above, then refresh the asset database.");
+					refUi.text_unformatted("No assets are available because the last asset scan reported an error.");
+					refUi.text_unformatted("Review the error above, then refresh the asset database.");
 				}
 				else
 				{
-					ui.text_unformatted("No assets are indexed yet.");
-					ui.text_unformatted("Refresh the asset database or confirm the asset root contains importable files.");
+					refUi.text_unformatted("No assets are indexed yet.");
+					refUi.text_unformatted("Refresh the asset database or confirm the asset root contains importable files.");
 				}
 			}
-			else if (filtered_count == 0)
+			else if (uFilteredCount == 0)
 			{
-				ui.text_unformatted("No assets match the current search, type filter, or directory.");
-				if (!m_searchText.empty())
+				refUi.text_unformatted("No assets match the current search, type filter, or directory.");
+				if (!_strSearchText.empty())
 				{
-					ui.text("Search: %s", m_searchText.c_str());
+					refUi.text("Search: %s", _strSearchText.c_str());
 				}
-				ui.text("Type Filter: %s", type_filter.label);
-				const std::string scope_label = get_asset_scope_label(active_directory);
-				ui.text("Directory: %s", scope_label.c_str());
-				ui.begin_disabled(!filters_active);
-				if (ui.button("Clear Search And Filters"))
+				refUi.text("Type Filter: %s", refTypeFilter.pLabel);
+				const std::string strScopeLabel = GetAssetScopeLabel(pathActiveDirectory);
+				refUi.text("Directory: %s", strScopeLabel.c_str());
+				refUi.begin_disabled(!bFiltersActive);
+				if (refUi.button("Clear Search And Filters"))
 				{
-					reset_filters();
+					ResetFilters();
 				}
-				ui.end_disabled();
-			}
-
-			if (selected_asset && !selected_asset_visible)
-			{
-				ui.separator();
-				ui.text_unformatted("The current asset selection is outside the visible browser scope.");
-				if (ui.button("Reveal Selection"))
-				{
-					m_searchText.clear();
-					m_typeFilterIndex = 0;
-					browse_to_asset_location(*selected_asset);
-				}
-				ui.same_line();
-				if (ui.button("Clear Selection"))
-				{
-					clear_asset_selection(context);
-					selected_asset = nullptr;
-				}
+				refUi.end_disabled();
 			}
 
-			if (active_directory_exists && filtered_count > 0)
+			if (pSelectedAsset && !bSelectedAssetVisible)
 			{
-				if (m_viewMode == AssetBrowserViewMode::Icons)
+				refUi.separator();
+				refUi.text_unformatted("The current asset selection is outside the visible browser scope.");
+				if (refUi.button("Reveal Selection"))
 				{
-					draw_asset_icon_view(context, visible_items, selected_asset);
+					_strSearchText.clear();
+					_iTypeFilterIndex = 0;
+					BrowseToAssetLocation(*pSelectedAsset);
+				}
+				refUi.same_line();
+				if (refUi.button("Clear Selection"))
+				{
+					ClearAssetSelection();
+					pSelectedAsset = nullptr;
+				}
+			}
+
+			if (bActiveDirectoryExists && uFilteredCount > 0)
+			{
+				if (_eViewMode == AssetBrowserViewMode::Icons)
+				{
+					DrawAssetIconView(frameContext, vecVisibleItems, pSelectedAsset);
 				}
 				else
 				{
-					draw_asset_list_view(context, visible_items, selected_asset);
+					DrawAssetListView(frameContext, vecVisibleItems, pSelectedAsset);
 				}
 			}
 
-			const bool open_content_menu =
-				ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-				!ImGui::IsAnyItemHovered() &&
-				!ImGui::IsAnyItemActive() &&
-				ImGui::IsMouseReleased(ImGuiMouseButton_Right);
-			const bool clear_content_selection =
-				ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-				!ImGui::IsAnyItemHovered() &&
-				!ImGui::IsAnyItemActive() &&
-				ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-			if (open_content_menu)
+			const bool bOpenContentMenu =
+				refUi.is_window_hovered_with_children() &&
+				!refUi.is_any_item_hovered() &&
+				!refUi.is_any_item_active() &&
+				refUi.is_mouse_released(AshEngine::UIMouseButton::Right);
+			const bool bClearContentSelection =
+				refUi.is_window_hovered_with_children() &&
+				!refUi.is_any_item_hovered() &&
+				!refUi.is_any_item_active() &&
+				refUi.is_mouse_released(AshEngine::UIMouseButton::Left);
+			if (bOpenContentMenu)
 			{
-				ui.open_popup(k_assetContentContextPopupId);
+				refUi.open_popup(kAssetContentContextPopupId);
 			}
-			if (clear_content_selection)
+			if (bClearContentSelection)
 			{
-				clear_asset_selection(context);
-				selected_asset = nullptr;
-			}
-
-			const bool content_focused =
-				ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
-				!ImGui::GetIO().WantTextInput;
-			if (content_focused && selected_asset && selected_asset_visible && ImGui::IsKeyPressed(ImGuiKey_Enter, false))
-			{
-				open_asset_item(context, *selected_asset);
-			}
-			if (content_focused && active_directory_exists && !m_activeDirectoryPath.empty() && ImGui::IsKeyPressed(ImGuiKey_Backspace, false))
-			{
-				navigate_to_directory(std::filesystem::path(m_activeDirectoryPath).parent_path());
+				ClearAssetSelection();
+				pSelectedAsset = nullptr;
 			}
 
-			draw_content_context_menu(context, active_directory_exists, filters_active);
+			const bool bContentFocused =
+				refUi.is_window_focused_with_children() &&
+				!refUi.wants_text_input();
+			PublishContentShortcutScope(bContentFocused);
+			DispatchContentShortcuts(frameContext, bContentFocused);
 
-			selected_asset = get_selected_asset(*context.asset_database_service, m_selectedAssetId);
-			selected_asset_visible = is_selected_asset_visible(
-				selected_asset,
-				active_directory_exists,
-				active_directory,
-				m_searchText,
-				type_filter);
-			if (m_showDetails && selected_asset_visible)
+			DrawContentContextMenu(frameContext, bActiveDirectoryExists, bFiltersActive);
+
+			pSelectedAsset = GetSelectedAsset(*_deps.pAssetDatabaseService, _uSelectedAssetId);
+			bSelectedAssetVisible = IsSelectedAssetVisible(
+				pSelectedAsset,
+				bActiveDirectoryExists,
+				pathActiveDirectory,
+				_strSearchText,
+				refTypeFilter);
+			_bSelectedAssetVisibleThisFrame = bSelectedAssetVisible;
+			if (_bShowDetails && bSelectedAssetVisible && pSelectedAsset)
 			{
-				ui.separator();
-				const std::string display_label = get_asset_display_label(*selected_asset);
-				ui.text("Selected: %s", display_label.c_str());
-				ui.text("Type: %s", AssetDatabaseService::get_type_label(selected_asset->type));
-				ui.text("Path: %s", selected_asset->relative_path.generic_string().c_str());
-				ui.text("Parent: %s", selected_asset->parent_path.generic_string().c_str());
-				ui.text("Load State: %s", AssetDatabaseService::get_load_state_label(context.asset_database_service->get_load_state(selected_asset->id)));
+				refUi.separator();
+				const std::string strDisplayLabel = GetAssetDisplayLabel(*pSelectedAsset);
+				refUi.text("Selected: %s", strDisplayLabel.c_str());
+				refUi.text("Type: %s", AssetDatabaseService::GetTypeLabel(pSelectedAsset->type));
+				refUi.text("Path: %s", pSelectedAsset->relative_path.generic_string().c_str());
+				refUi.text("Parent: %s", pSelectedAsset->parent_path.generic_string().c_str());
+				refUi.text("Load State: %s", AssetDatabaseService::GetLoadStateLabel(_deps.pAssetDatabaseService->GetLoadState(pSelectedAsset->id)));
 
-				const bool can_activate = !selected_asset->is_directory;
-				ui.begin_disabled(!can_activate);
-				if (ui.button("Activate"))
+				const bool bCanActivate = !pSelectedAsset->is_directory;
+				refUi.begin_disabled(!bCanActivate);
+				if (refUi.button("Activate"))
 				{
-					activate_asset(context, *selected_asset);
+					ActivateAsset(*pSelectedAsset);
 				}
-				ui.end_disabled();
+				refUi.end_disabled();
 
-				if (selected_asset->is_directory || !selected_asset->parent_path.empty())
+				if (pSelectedAsset->is_directory || !pSelectedAsset->parent_path.empty())
 				{
-					ui.same_line();
-					if (ui.button("Browse Location"))
+					refUi.same_line();
+					if (refUi.button("Browse Location"))
 					{
-						browse_to_asset_location(*selected_asset);
+						BrowseToAssetLocation(*pSelectedAsset);
 					}
 				}
 
-				if (should_preview_text(*selected_asset))
+				if (ShouldPreviewText(*pSelectedAsset))
 				{
-					std::string preview_text{};
-					if (context.asset_database_service->load_text_by_id(selected_asset->id, preview_text))
+					std::string strPreviewText{};
+					if (_deps.pAssetDatabaseService->LoadTextById(pSelectedAsset->id, strPreviewText))
 					{
-						if (preview_text.size() > 2048)
+						if (strPreviewText.size() > 2048)
 						{
-							preview_text.resize(2048);
-							preview_text += "\n...";
+							strPreviewText.resize(2048);
+							strPreviewText += "\n...";
 						}
-						ui.separator();
-						ui.text_unformatted("Preview");
-						ui.input_text_multiline("##asset_preview", preview_text, { 0.0f, 160.0f }, AshEngine::UIInputTextFlagBits::ReadOnly);
+						refUi.separator();
+						refUi.text_unformatted("Preview");
+						refUi.input_text_multiline(
+							"##asset_preview",
+							strPreviewText,
+							{ 0.0f, 160.0f },
+							AshEngine::UIInputTextFlagBits::ReadOnly);
 					}
 				}
 			}
 		}
-		ui.end_child();
+		refUi.end_child();
 
-		sync_settings(context);
-		end_panel_window(context);
+		SyncSettings();
+		EndPanelWindow(frameContext);
 	}
 }

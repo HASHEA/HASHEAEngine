@@ -163,6 +163,13 @@ namespace AshEngine
 		bool is_item_deactivated_after_edit() const;
 		bool is_window_focused() const;
 		bool is_window_hovered() const;
+		bool is_mouse_double_clicked(UIMouseButton button = UIMouseButton::Left) const;
+		bool is_mouse_released(UIMouseButton button = UIMouseButton::Left) const;
+		bool is_window_hovered_with_children() const;
+		bool is_window_focused_with_children() const;
+		bool is_any_item_hovered() const;
+		bool is_any_item_active() const;
+		bool begin_popup_context_item(const char* str_id = nullptr, UIMouseButton button = UIMouseButton::Right);
 
 		UIVec2 get_content_region_avail() const;
 		UIRect get_main_viewport_rect() const;
@@ -171,6 +178,33 @@ namespace AshEngine
 		void set_cursor_pos(const UIVec2& position);
 		float get_window_width() const;
 		float get_window_height() const;
+		UIRect get_item_rect() const;
+		UIVec2 get_style_frame_padding() const;
+		UIColor get_style_color(UIStyleColorKind kind) const;
+		float get_tree_node_to_label_spacing() const;
+		UIVec2 calc_text_size(const char* text) const;
+		UIVec2 get_cursor_screen_pos() const;
+		UIVec2 get_mouse_pos() const;
+		UIVec2 get_style_item_spacing() const;
+		float get_font_size() const;
+		float get_time_seconds() const;
+
+		bool is_key_chord_pressed(uint32_t chord) const;
+
+		void set_next_item_open(bool is_open, UIConditionFlags cond = UIConditionFlagBits::None);
+
+		void begin_tooltip();
+		void end_tooltip();
+
+		bool begin_drag_drop_source(UIDragDropFlags flags = UIDragDropFlagBits::None);
+		void end_drag_drop_source();
+		bool begin_drag_drop_target();
+		void end_drag_drop_target();
+		void set_drag_drop_payload(const char* type, const void* data, int size);
+		UIDragDropPayload accept_drag_drop_payload(const char* type, UIDragDropFlags flags = UIDragDropFlagBits::None);
+		bool has_drag_drop_payload() const;
+		bool has_drag_drop_payload(const char* type) const;
+		bool is_drag_drop_payload_active(const char* type) const;
 
 	public:
 		UITextureHandle register_render_target(const std::shared_ptr<RenderTarget>& render_target);
@@ -185,6 +219,15 @@ namespace AshEngine
 		void draw_render_target(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size);
 		void draw_render_target_fill_available(const std::shared_ptr<RenderTarget>& render_target, bool preserve_aspect = false, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void draw_surface_fill_available(UISurfaceHandle surface, bool preserve_aspect = false, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
+
+		void draw_window_rect(const UIRect& rect, const UIColor& color, float rounding = 0.0f, float thickness = 1.0f);
+		void draw_window_rect_filled(const UIRect& rect, const UIColor& color, float rounding = 0.0f);
+		void draw_window_line(const UIVec2& start, const UIVec2& end, const UIColor& color, float thickness = 1.0f);
+		void draw_window_text(const UIVec2& position, const UIColor& color, const char* text);
+		void draw_window_text(const UIVec2& position, const UIColor& color, const char* text, float max_width);
+		void draw_window_image(UITextureHandle texture, const UIRect& rect, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f });
+		void push_window_clip_rect(const UIRect& rect);
+		void pop_window_clip_rect();
 
 	private:
 		void track_render_target_usage(const std::shared_ptr<RenderTarget>& render_target);

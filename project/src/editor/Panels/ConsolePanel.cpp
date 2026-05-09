@@ -1,10 +1,15 @@
 #include "Panels/ConsolePanel.h"
+
 #include "Base/hlog.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
+#include "Core/EditorIds.h"
+#include "Core/EditorStringUtils.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorSettingsService.h"
+
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <utility>
 
 namespace AshEditor
@@ -13,12 +18,12 @@ namespace AshEditor
 	{
 		struct SeverityFilterOption
 		{
-			const char* label = "";
-			ConsoleMessageSeverity severity = ConsoleMessageSeverity::Info;
-			bool match_all = false;
+			const char* pLabel = "";
+			ConsoleMessageSeverity eSeverity = ConsoleMessageSeverity::Info;
+			bool bMatchAll = false;
 		};
 
-		constexpr std::array<SeverityFilterOption, 5> k_severityFilters{ {
+		constexpr std::array<SeverityFilterOption, 5> kSeverityFilters{ {
 			{ "All", ConsoleMessageSeverity::Info, true },
 			{ "Trace", ConsoleMessageSeverity::Trace, false },
 			{ "Info", ConsoleMessageSeverity::Info, false },
@@ -26,37 +31,27 @@ namespace AshEditor
 			{ "Error", ConsoleMessageSeverity::Error, false },
 		} };
 
-		auto to_lower_copy(std::string value) -> std::string
+		ConsoleMessageSeverity InferSeverityFromText(const std::string& strText)
 		{
-			std::transform(
-				value.begin(),
-				value.end(),
-				value.begin(),
-				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-			return value;
-		}
-
-		auto infer_severity_from_text(const std::string& text) -> ConsoleMessageSeverity
-		{
-			const std::string lowered = to_lower_copy(text);
-			if (lowered.find("error") != std::string::npos || lowered.find("failed") != std::string::npos)
+			const std::string strLowered = ToLowerCopy(strText);
+			if (strLowered.find("error") != std::string::npos || strLowered.find("failed") != std::string::npos)
 			{
 				return ConsoleMessageSeverity::Error;
 			}
-			if (lowered.find("warn") != std::string::npos || lowered.find("unsafe") != std::string::npos)
+			if (strLowered.find("warn") != std::string::npos || strLowered.find("unsafe") != std::string::npos)
 			{
 				return ConsoleMessageSeverity::Warning;
 			}
-			if (lowered.find("trace") != std::string::npos)
+			if (strLowered.find("trace") != std::string::npos)
 			{
 				return ConsoleMessageSeverity::Trace;
 			}
 			return ConsoleMessageSeverity::Info;
 		}
 
-		auto get_severity_label(ConsoleMessageSeverity severity) -> const char*
+		const char* GetSeverityLabel(ConsoleMessageSeverity eSeverity)
 		{
-			switch (severity)
+			switch (eSeverity)
 			{
 			case ConsoleMessageSeverity::Trace:
 				return "Trace";
@@ -71,9 +66,9 @@ namespace AshEditor
 			}
 		}
 
-		auto get_severity_color(ConsoleMessageSeverity severity) -> AshEngine::UIColor
+		AshEngine::UIColor GetSeverityColor(ConsoleMessageSeverity eSeverity)
 		{
-			switch (severity)
+			switch (eSeverity)
 			{
 			case ConsoleMessageSeverity::Trace:
 				return { 0.55f, 0.60f, 0.70f, 1.0f };
@@ -88,188 +83,240 @@ namespace AshEditor
 			}
 		}
 
-		auto matches_console_filter(const ConsoleMessage& message, const std::string& filter_text, const SeverityFilterOption& severity_filter) -> bool
+		bool MatchesConsoleFilter(
+			const ConsoleMessage& refMessage,
+			const std::string& strFilterText,
+			const SeverityFilterOption& refSeverityFilter)
 		{
-			if (!severity_filter.match_all && message.severity != severity_filter.severity)
+			if (!refSeverityFilter.bMatchAll && refMessage.eSeverity != refSeverityFilter.eSeverity)
 			{
 				return false;
 			}
 
-			if (filter_text.empty())
+			if (strFilterText.empty())
 			{
 				return true;
 			}
 
-			const std::string lowered_filter = to_lower_copy(filter_text);
+			const std::string strLoweredFilter = ToLowerCopy(strFilterText);
 			return
-				to_lower_copy(message.text).find(lowered_filter) != std::string::npos ||
-				to_lower_copy(message.source).find(lowered_filter) != std::string::npos ||
-				to_lower_copy(get_severity_label(message.severity)).find(lowered_filter) != std::string::npos;
+				ToLowerCopy(refMessage.strText).find(strLoweredFilter) != std::string::npos ||
+				ToLowerCopy(refMessage.strSource).find(strLoweredFilter) != std::string::npos ||
+				ToLowerCopy(GetSeverityLabel(refMessage.eSeverity)).find(strLoweredFilter) != std::string::npos;
 		}
 
 		struct ConsoleSeverityCounts
 		{
-			uint32_t trace = 0;
-			uint32_t info = 0;
-			uint32_t warning = 0;
-			uint32_t error = 0;
+			uint32_t uTraceCount = 0;
+			uint32_t uInfoCount = 0;
+			uint32_t uWarningCount = 0;
+			uint32_t uErrorCount = 0;
 		};
 
-		auto count_console_severities(const std::vector<ConsoleMessage>& messages) -> ConsoleSeverityCounts
+		ConsoleSeverityCounts CountConsoleSeverities(const std::vector<ConsoleMessage>& vecMessages)
 		{
-			ConsoleSeverityCounts counts{};
-			for (const ConsoleMessage& message : messages)
+			ConsoleSeverityCounts countsSeverity{};
+			for (const ConsoleMessage& refMessage : vecMessages)
 			{
-				switch (message.severity)
+				switch (refMessage.eSeverity)
 				{
 				case ConsoleMessageSeverity::Trace:
-					++counts.trace;
+					++countsSeverity.uTraceCount;
 					break;
 				case ConsoleMessageSeverity::Info:
-					++counts.info;
+					++countsSeverity.uInfoCount;
 					break;
 				case ConsoleMessageSeverity::Warning:
-					++counts.warning;
+					++countsSeverity.uWarningCount;
 					break;
 				case ConsoleMessageSeverity::Error:
-					++counts.error;
+					++countsSeverity.uErrorCount;
 					break;
 				default:
 					break;
 				}
 			}
-			return counts;
+			return countsSeverity;
 		}
 	}
 
-	ConsolePanel::ConsolePanel()
-		: EditorPanel("console", "Console")
+	ConsolePanel::ConsolePanel(ConsolePanelDeps deps)
+		: EditorPanel(EditorPanelIds::Console, EditorWindowTitles::Console)
+		, _deps(deps)
 	{
 	}
 
-	void ConsolePanel::add_message(std::string message, ConsoleMessageSeverity severity, std::string source)
+	void ConsolePanel::BindEventBus(EditorEventBus* pEventBus)
 	{
-		if (severity == ConsoleMessageSeverity::Info)
+		if (_eventBindings.IsBoundTo(pEventBus))
 		{
-			severity = infer_severity_from_text(message);
+			return;
 		}
 
-		m_messages.push_back({ severity, std::move(source), std::move(message) });
-	}
-
-	void ConsolePanel::clear_messages()
-	{
-		m_messages.clear();
-	}
-
-	const std::vector<ConsoleMessage>& ConsolePanel::get_messages() const
-	{
-		return m_messages;
-	}
-
-	void ConsolePanel::on_attach(EditorContext& context)
-	{
-		if (context.settings_service)
+		_eventBindings.Bind(pEventBus);
+		if (!pEventBus)
 		{
-			const EditorSettings& settings = context.settings_service->get_settings();
-			m_filterText = settings.console_filter_text;
-			m_severityFilterIndex = settings.console_severity_filter;
+			return;
+		}
+
+		_eventBindings.Subscribe<EditorNotificationEvent>(
+			[this](const EditorNotificationEvent& refEvent)
+			{
+				AddMessage(refEvent.strMessage, ConsoleMessageSeverity::Info, refEvent.strSource);
+			});
+	}
+
+	void ConsolePanel::ClearDeps()
+	{
+		_deps = {};
+	}
+
+	void ConsolePanel::AddMessage(std::string strMessage, ConsoleMessageSeverity eSeverity, std::string strSource)
+	{
+		if (eSeverity == ConsoleMessageSeverity::Info)
+		{
+			eSeverity = InferSeverityFromText(strMessage);
+		}
+
+		_vecMessages.push_back({ eSeverity, std::move(strSource), std::move(strMessage) });
+	}
+
+	void ConsolePanel::ClearMessages()
+	{
+		_vecMessages.clear();
+	}
+
+	const std::vector<ConsoleMessage>& ConsolePanel::GetMessages() const
+	{
+		return _vecMessages;
+	}
+
+	void ConsolePanel::OnAttach()
+	{
+		if (_deps.pSettingsService)
+		{
+			const EditorSettings& settings = _deps.pSettingsService->GetSettings();
+			_strFilterText = settings.strConsoleFilterText;
+			_iSeverityFilterIndex = settings.iConsoleSeverityFilter;
 		}
 		HLogInfo("ConsolePanel attached.");
 	}
 
-	void ConsolePanel::sync_settings(EditorContext& context) const
+	void ConsolePanel::OnDetach()
 	{
-		if (!context.settings_service)
+		UnsubscribeEvents();
+		ClearDeps();
+	}
+
+	void ConsolePanel::UnsubscribeEvents()
+	{
+		_eventBindings.Clear();
+	}
+
+	void ConsolePanel::SyncSettings() const
+	{
+		if (!_deps.pSettingsService)
 		{
 			return;
 		}
 
-		EditorSettings& settings = context.settings_service->get_settings();
-		settings.console_filter_text = m_filterText;
-		settings.console_severity_filter = m_severityFilterIndex;
+		EditorSettings& settings = _deps.pSettingsService->GetSettings();
+		settings.strConsoleFilterText = _strFilterText;
+		settings.iConsoleSeverityFilter = _iSeverityFilterIndex;
 	}
 
-	bool ConsolePanel::has_any_filters() const
+	bool ConsolePanel::HasAnyFilters() const
 	{
-		return !m_filterText.empty() || m_severityFilterIndex != 0;
+		return !_strFilterText.empty() || _iSeverityFilterIndex != 0;
 	}
 
-	void ConsolePanel::reset_filters()
+	void ConsolePanel::ResetFilters()
 	{
-		m_filterText.clear();
-		m_severityFilterIndex = 0;
+		_strFilterText.clear();
+		_iSeverityFilterIndex = 0;
 	}
 
-	void ConsolePanel::on_gui(EditorContext& context)
+	void ConsolePanel::OnGui(const EditorFrameContext& frameContext)
 	{
-		if (!begin_panel_window(context))
+		if (!BeginPanelWindow(frameContext))
 		{
-			end_panel_window(context);
+			EndPanelWindow(frameContext);
 			return;
 		}
 
-		AshEngine::UIContext& ui = *context.ui_context;
-		const SeverityFilterOption& severity_filter = k_severityFilters[std::clamp(m_severityFilterIndex, 0, static_cast<int32_t>(k_severityFilters.size() - 1))];
-		const std::vector<const char*> severity_labels{ "All", "Trace", "Info", "Warning", "Error" };
-		const ConsoleSeverityCounts counts = count_console_severities(m_messages);
-		uint32_t visible_message_count = 0;
-		for (const ConsoleMessage& message : m_messages)
+		if (!frameContext.pUiContext)
 		{
-			if (matches_console_filter(message, m_filterText, severity_filter))
+			EndPanelWindow(frameContext);
+			return;
+		}
+
+		AshEngine::UIContext& refUi = *frameContext.pUiContext;
+		const SeverityFilterOption& refSeverityFilter =
+			kSeverityFilters[std::clamp(_iSeverityFilterIndex, 0, static_cast<int32_t>(kSeverityFilters.size() - 1))];
+		const std::vector<const char*> vecSeverityLabels{ "All", "Trace", "Info", "Warning", "Error" };
+		const ConsoleSeverityCounts countsSeverity = CountConsoleSeverities(_vecMessages);
+		uint32_t uVisibleMessageCount = 0;
+		for (const ConsoleMessage& refMessage : _vecMessages)
+		{
+			if (MatchesConsoleFilter(refMessage, _strFilterText, refSeverityFilter))
 			{
-				++visible_message_count;
+				++uVisibleMessageCount;
 			}
 		}
 
-		ui.text("Messages: %u / %u", visible_message_count, static_cast<uint32_t>(m_messages.size()));
-		ui.same_line();
-		ui.text("T:%u I:%u W:%u E:%u", counts.trace, counts.info, counts.warning, counts.error);
-		ui.same_line();
-		ui.set_next_item_width(180.0f);
-		ui.input_text("Filter", m_filterText);
-		ui.same_line();
-		ui.set_next_item_width(120.0f);
-		ui.combo("Severity", m_severityFilterIndex, severity_labels);
-		ui.same_line();
-		if (ui.button("Clear"))
+		refUi.text("Messages: %u / %u", uVisibleMessageCount, static_cast<uint32_t>(_vecMessages.size()));
+		refUi.same_line();
+		refUi.text(
+			"T:%u I:%u W:%u E:%u",
+			countsSeverity.uTraceCount,
+			countsSeverity.uInfoCount,
+			countsSeverity.uWarningCount,
+			countsSeverity.uErrorCount);
+		refUi.same_line();
+		refUi.set_next_item_width(180.0f);
+		refUi.input_text("Filter", _strFilterText);
+		refUi.same_line();
+		refUi.set_next_item_width(120.0f);
+		refUi.combo("Severity", _iSeverityFilterIndex, vecSeverityLabels);
+		refUi.same_line();
+		if (refUi.button("Clear"))
 		{
-			clear_messages();
+			ClearMessages();
 		}
-		ui.same_line();
-		ui.begin_disabled(!has_any_filters());
-		if (ui.button("Reset Filters"))
+		refUi.same_line();
+		refUi.begin_disabled(!HasAnyFilters());
+		if (refUi.button("Reset Filters"))
 		{
-			reset_filters();
+			ResetFilters();
 		}
-		ui.end_disabled();
-		ui.separator();
-		sync_settings(context);
+		refUi.end_disabled();
+		refUi.separator();
+		SyncSettings();
 
-		const bool show_messages = ui.begin_child("ConsoleMessages", {}, AshEngine::UIChildFlagBits::Border);
-		if (show_messages)
+		const bool bShowMessages = refUi.begin_child("ConsoleMessages", {}, AshEngine::UIChildFlagBits::Border);
+		if (bShowMessages)
 		{
-			if (m_messages.empty())
+			if (_vecMessages.empty())
 			{
-				ui.text_unformatted("No console messages yet.");
-				ui.text_unformatted("Runtime and editor logs will appear here when available.");
+				refUi.text_unformatted("No console messages yet.");
+				refUi.text_unformatted("Runtime and editor logs will appear here when available.");
 			}
-			else if (visible_message_count == 0)
+			else if (uVisibleMessageCount == 0)
 			{
-				ui.text_unformatted("No messages match the current filter.");
-				ui.text("Severity: %s", severity_filter.label);
-				if (!m_filterText.empty())
+				refUi.text_unformatted("No messages match the current filter.");
+				refUi.text("Severity: %s", refSeverityFilter.pLabel);
+				if (!_strFilterText.empty())
 				{
-					ui.text("Filter: %s", m_filterText.c_str());
+					refUi.text("Filter: %s", _strFilterText.c_str());
 				}
-				ui.begin_disabled(!has_any_filters());
-				if (ui.button("Clear Console Filters"))
+				refUi.begin_disabled(!HasAnyFilters());
+				if (refUi.button("Clear Console Filters"))
 				{
-					reset_filters();
+					ResetFilters();
 				}
-				ui.end_disabled();
+				refUi.end_disabled();
 			}
-			else if (ui.begin_table(
+			else if (refUi.begin_table(
 				"ConsoleTable",
 				3,
 				AshEngine::UITableFlagBits::RowBg |
@@ -278,32 +325,32 @@ namespace AshEditor
 					AshEngine::UITableFlagBits::SizingStretchProp |
 					AshEngine::UITableFlagBits::ScrollY))
 			{
-				ui.table_setup_column("Severity", AshEngine::UITableColumnFlagBits::WidthFixed, 80.0f);
-				ui.table_setup_column("Source", AshEngine::UITableColumnFlagBits::WidthFixed, 110.0f);
-				ui.table_setup_column("Message", AshEngine::UITableColumnFlagBits::WidthStretch);
-				ui.table_headers_row();
+				refUi.table_setup_column("Severity", AshEngine::UITableColumnFlagBits::WidthFixed, 80.0f);
+				refUi.table_setup_column("Source", AshEngine::UITableColumnFlagBits::WidthFixed, 110.0f);
+				refUi.table_setup_column("Message", AshEngine::UITableColumnFlagBits::WidthStretch);
+				refUi.table_headers_row();
 
-				for (const ConsoleMessage& message : m_messages)
+				for (const ConsoleMessage& refMessage : _vecMessages)
 				{
-					if (!matches_console_filter(message, m_filterText, severity_filter))
+					if (!MatchesConsoleFilter(refMessage, _strFilterText, refSeverityFilter))
 					{
 						continue;
 					}
 
-					ui.table_next_row();
-					ui.table_next_column();
-					ui.text_colored(get_severity_color(message.severity), "%s", get_severity_label(message.severity));
-					ui.table_next_column();
-					ui.text_unformatted(message.source.c_str());
-					ui.table_next_column();
-					ui.text_wrapped("%s", message.text.c_str());
+					refUi.table_next_row();
+					refUi.table_next_column();
+					refUi.text_colored(GetSeverityColor(refMessage.eSeverity), "%s", GetSeverityLabel(refMessage.eSeverity));
+					refUi.table_next_column();
+					refUi.text_unformatted(refMessage.strSource.c_str());
+					refUi.table_next_column();
+					refUi.text_wrapped("%s", refMessage.strText.c_str());
 				}
 
-				ui.end_table();
+				refUi.end_table();
 			}
 		}
-		ui.end_child();
+		refUi.end_child();
 
-		end_panel_window(context);
+		EndPanelWindow(frameContext);
 	}
 }

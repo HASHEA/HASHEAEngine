@@ -2,89 +2,91 @@
 
 namespace AshEditor
 {
-	void AssetDatabaseService::set_asset_root(std::filesystem::path asset_root)
+	void AssetDatabaseService::SetAssetRoot(std::filesystem::path pathAssetRoot)
 	{
-		m_assetRoot = std::move(asset_root);
+		_pathAssetRoot = std::move(pathAssetRoot);
 	}
 
-	bool AssetDatabaseService::refresh()
+	bool AssetDatabaseService::Refresh()
 	{
-		if (m_assetRoot.empty())
+		if (_pathAssetRoot.empty())
 		{
 			return false;
 		}
 
-		if (!m_database.is_valid())
+		if (!_database.is_valid())
 		{
-			m_database = AshEngine::AssetDatabase::create(m_assetRoot);
-			return m_database.is_valid();
+			_database = AshEngine::AssetDatabase::create(_pathAssetRoot);
+			return _database.is_valid();
 		}
 
-		m_database.set_root_path(m_assetRoot);
-		return m_database.refresh();
+		_database.set_root_path(_pathAssetRoot);
+		return _database.refresh();
 	}
 
-	AshEngine::AssetDatabase& AssetDatabaseService::get_database()
+	AshEngine::AssetDatabase& AssetDatabaseService::GetDatabase()
 	{
-		return m_database;
+		return _database;
 	}
 
-	const AshEngine::AssetDatabase& AssetDatabaseService::get_database() const
+	const AshEngine::AssetDatabase& AssetDatabaseService::GetDatabase() const
 	{
-		return m_database;
+		return _database;
 	}
 
-	const std::filesystem::path& AssetDatabaseService::get_asset_root() const
+	const std::filesystem::path& AssetDatabaseService::GetAssetRoot() const
 	{
-		return m_assetRoot;
+		return _pathAssetRoot;
 	}
 
-	const std::vector<AshEngine::AssetInfo>& AssetDatabaseService::get_items() const
+	const std::vector<AshEngine::AssetInfo>& AssetDatabaseService::GetItems() const
 	{
-		return m_database.get_assets();
+		return _database.get_assets();
 	}
 
-	const AshEngine::AssetInfo* AssetDatabaseService::find_by_id(uint64_t id) const
+	const AshEngine::AssetInfo* AssetDatabaseService::FindById(const uint64_t uAssetId) const
 	{
-		return m_database.find_asset_by_id(id);
+		return _database.find_asset_by_id(uAssetId);
 	}
 
-	const AshEngine::AssetInfo* AssetDatabaseService::find_by_path(const std::filesystem::path& path) const
+	const AshEngine::AssetInfo* AssetDatabaseService::FindByPath(
+		const std::filesystem::path& pathAssetRelativeOrAbsolute) const
 	{
-		return m_database.find_asset_by_path(path);
+		return _database.find_asset_by_path(pathAssetRelativeOrAbsolute);
 	}
 
-	AshEngine::AssetLoadState AssetDatabaseService::get_load_state(uint64_t id) const
+	AshEngine::AssetLoadState AssetDatabaseService::GetLoadState(const uint64_t uAssetId) const
 	{
-		return m_database.get_asset_load_state(id);
+		return _database.get_asset_load_state(uAssetId);
 	}
 
-	std::string AssetDatabaseService::get_last_error() const
+	std::string AssetDatabaseService::GetLastError() const
 	{
-		return m_database.get_last_error();
+		return _database.get_last_error();
 	}
 
-	std::string AssetDatabaseService::get_asset_last_error(uint64_t id) const
+	std::string AssetDatabaseService::GetAssetLastError(const uint64_t uAssetId) const
 	{
-		return m_database.get_asset_last_error(id);
+		return _database.get_asset_last_error(uAssetId);
 	}
 
-	std::filesystem::path AssetDatabaseService::resolve_asset_path(const std::filesystem::path& relative_path) const
+	std::filesystem::path AssetDatabaseService::ResolveAssetPath(
+		const std::filesystem::path& pathRelativeOrAbsolute) const
 	{
-		if (relative_path.empty())
+		if (pathRelativeOrAbsolute.empty())
 		{
 			return {};
 		}
 
-		return relative_path.is_absolute() ? relative_path : (m_assetRoot / relative_path);
+		return pathRelativeOrAbsolute.is_absolute() ? pathRelativeOrAbsolute : (_pathAssetRoot / pathRelativeOrAbsolute);
 	}
 
-	bool AssetDatabaseService::load_text_by_id(uint64_t id, std::string& out_text)
+	bool AssetDatabaseService::LoadTextById(const uint64_t uAssetId, std::string& outText)
 	{
-		return m_database.load_text_by_id(id, out_text);
+		return _database.load_text_by_id(uAssetId, outText);
 	}
 
-	const char* AssetDatabaseService::get_type_label(AshEngine::AssetType type)
+	const char* AssetDatabaseService::GetTypeLabel(AshEngine::AssetType type)
 	{
 		switch (type)
 		{
@@ -114,7 +116,7 @@ namespace AshEditor
 		}
 	}
 
-	const char* AssetDatabaseService::get_load_state_label(AshEngine::AssetLoadState state)
+	const char* AssetDatabaseService::GetLoadStateLabel(AshEngine::AssetLoadState state)
 	{
 		switch (state)
 		{

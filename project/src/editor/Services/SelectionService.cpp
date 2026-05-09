@@ -1,94 +1,61 @@
 #include "Services/SelectionService.h"
+
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
 #include <utility>
 
 namespace AshEditor
 {
-	const EditorSelection& SelectionService::get_selection() const
+	const EditorSelection& SelectionService::GetSelection() const
 	{
-		return m_selection;
+		return _selection;
 	}
 
-	bool SelectionService::has_selection() const
+	bool SelectionService::HasSelection() const
 	{
-		return !m_selection.is_empty();
+		return !_selection.IsEmpty();
 	}
 
-	uint64_t SelectionService::get_revision() const
+	void SelectionService::SetEventBus(EditorEventBus* pEventBus)
 	{
-		return m_revision;
+		_pEventBus = pEventBus;
 	}
 
-	void SelectionService::select(EditorSelection selection)
+	void SelectionService::Select(EditorSelection selection)
 	{
-		const EditorSelection previous = m_selection;
-		m_selection = std::move(selection);
-		if (m_selection != previous)
+		// Preserve a monotonic revision so UI/event consumers can detect ordering and ignore stale updates.
+		const EditorSelection previousSelection = _selection;
+		_selection = std::move(selection);
+		if (_selection != previousSelection)
 		{
-			++m_revision;
-			notify_selection_changed(previous);
+			++_uRevision;
+			PublishSelectionChanged(previousSelection);
 		}
 	}
 
-	void SelectionService::clear()
+	void SelectionService::Clear()
 	{
-		if (m_selection.is_empty())
+		if (_selection.IsEmpty())
 		{
 			return;
 		}
 
-		const EditorSelection previous = m_selection;
-		m_selection.clear();
-		++m_revision;
-		notify_selection_changed(previous);
+		// Clear always increments revision even if only the selection payload changes (e.g. label updates).
+		const EditorSelection previousSelection = _selection;
+		_selection.Clear();
+		++_uRevision;
+		PublishSelectionChanged(previousSelection);
 	}
 
-	SelectionListenerId SelectionService::subscribe(SelectionChangedCallback callback)
+	void SelectionService::PublishSelectionChanged(const EditorSelection& refPreviousSelection) const
 	{
-		if (!callback)
+		if (_pEventBus)
 		{
-			return 0;
-		}
-
-		const SelectionListenerId listener_id = m_nextListenerId++;
-		m_listeners.push_back({ listener_id, std::move(callback) });
-		return listener_id;
-	}
-
-	bool SelectionService::unsubscribe(SelectionListenerId listener_id)
-	{
-		for (auto it = m_listeners.begin(); it != m_listeners.end(); ++it)
-		{
-			if (it->id == listener_id)
-			{
-				m_listeners.erase(it);
-				return true;
-			}
-		}
-		return false;
-	}
-
-	void SelectionService::notify_selection_changed(const EditorSelection& previous)
-	{
-		std::vector<SelectionListenerId> listener_ids{};
-		listener_ids.reserve(m_listeners.size());
-		for (const SelectionListener& listener : m_listeners)
-		{
-			listener_ids.push_back(listener.id);
-		}
-
-		for (SelectionListenerId listener_id : listener_ids)
-		{
-			for (const SelectionListener& listener : m_listeners)
-			{
-				if (listener.id == listener_id)
-				{
-					if (listener.callback)
-					{
-						listener.callback(previous, m_selection);
-					}
-					break;
-				}
-			}
+			EditorSelectionChangedEvent event{};
+			event.previousSelection = refPreviousSelection;
+			event.currentSelection = _selection;
+			event.uRevision = _uRevision;
+			_pEventBus->Publish(event);
 		}
 	}
 }

@@ -1,16 +1,23 @@
 #include "Panels/SceneHierarchyPanel.h"
+
 #include "Base/hlog.h"
 #include "Core/EditorCommand.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
+#include "Core/EditorIds.h"
 #include "Core/EntityCommands.h"
+#include "Core/IEditorCommandExecutor.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
 #include "Services/CommandService.h"
-#include "Services/EditorIconService.h"
+#include "Services/DragDropTransferService.h"
+#include "Services/IEditorIconService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
-#include "Services/UndoRedoService.h"
-#include "imgui.h"
+#include "Widgets/EditorActionWidgets.h"
+
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -20,77 +27,71 @@ namespace AshEditor
 {
 	namespace
 	{
-		constexpr AshEngine::UIColor k_sceneHierarchyAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
-		constexpr AshEngine::UIColor k_sceneHierarchyMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
-		constexpr const char* k_sceneEntityContextPopupId = "SceneHierarchyEntityContextMenu";
-		constexpr const char* k_sceneContentContextPopupId = "SceneHierarchyContentContextMenu";
+		constexpr AshEngine::UIColor kSceneHierarchyAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
+		constexpr AshEngine::UIColor kSceneHierarchyMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
+		constexpr const char* kSceneEntityContextPopupId = "SceneHierarchyEntityContextMenu";
+		constexpr const char* kSceneContentContextPopupId = "SceneHierarchyContentContextMenu";
 
-		auto get_action_shortcut(const CommandService* command_service, const char* action_id) -> const char*
+		SceneEntityId GetSelectedSceneEntityId(const SceneHierarchyPanelDeps& refDeps)
 		{
-			if (!command_service || !action_id)
+			if (!refDeps.pSelectionService)
 			{
-				return nullptr;
+				return 0;
 			}
 
-			const EditorAction* action = command_service->find_action(action_id);
-			return action && !action->shortcut.empty() ? action->shortcut.c_str() : nullptr;
-		}
-
-		auto get_selected_entity_id(const EditorContext& context) -> EntityId
-		{
+			const EditorSelection& refSelection = refDeps.pSelectionService->GetSelection();
 			return
-				context.selection_service &&
-					context.selection_service->get_selection().kind == EditorSelectionKind::Entity
-				? context.selection_service->get_selection().id
+				refSelection.eKind == EditorSelectionKind::Entity
+				? refSelection.uId
 				: 0;
 		}
 
-		EntityId get_entity_parent_id(const AshEngine::Entity& entity)
+		SceneEntityId GetEntityParentId(const AshEngine::Entity& refEntity)
 		{
-			const AshEngine::Entity parent = entity.get_parent();
-			return parent.is_valid() ? parent.get_id() : 0;
+			const AshEngine::Entity entityParent = refEntity.get_parent();
+			return entityParent.is_valid() ? entityParent.get_id() : 0;
 		}
 
-		uint32_t get_entity_sibling_index(const AshEngine::Entity& entity, const SceneService& scene_service)
+		uint32_t GetEntitySiblingIndex(const AshEngine::Entity& refEntity, const SceneService& refSceneService)
 		{
-			return entity.is_valid() ? scene_service.get_entity_sibling_index(entity.get_id()) : 0u;
+			return refEntity.is_valid() ? refSceneService.GetEntitySiblingIndex(refEntity.get_id()) : 0u;
 		}
 
-		uint32_t get_parent_child_count(const SceneService& scene_service, EntityId parent_id)
+		uint32_t GetParentChildCount(const SceneService& refSceneService, SceneEntityId uParentId)
 		{
-			if (parent_id == 0)
+			if (uParentId == 0)
 			{
-				return static_cast<uint32_t>(scene_service.get_active_scene().get_root_entities().size());
+				return static_cast<uint32_t>(refSceneService.GetActiveScene().get_root_entities().size());
 			}
 
-			const AshEngine::Entity parent = scene_service.find_entity(parent_id);
-			return parent.is_valid() ? static_cast<uint32_t>(parent.get_children().size()) : 0u;
+			const AshEngine::Entity entityParent = refSceneService.FindEntity(uParentId);
+			return entityParent.is_valid() ? static_cast<uint32_t>(entityParent.get_children().size()) : 0u;
 		}
 
-		uint32_t get_reparent_insert_index_max(
-			const SceneService& scene_service,
-			EntityId entity_id,
-			EntityId current_parent_id,
-			EntityId target_parent_id)
+		uint32_t GetReparentInsertIndexMax(
+			const SceneService& refSceneService,
+			SceneEntityId uSceneEntityId,
+			SceneEntityId uCurrentParentId,
+			SceneEntityId uTargetParentId)
 		{
-			uint32_t child_count = get_parent_child_count(scene_service, target_parent_id);
-			if (entity_id != 0 && current_parent_id == target_parent_id && child_count > 0)
+			uint32_t uChildCount = GetParentChildCount(refSceneService, uTargetParentId);
+			if (uSceneEntityId != 0 && uCurrentParentId == uTargetParentId && uChildCount > 0)
 			{
-				--child_count;
+				--uChildCount;
 			}
-			return child_count;
+			return uChildCount;
 		}
 
-		EditorIconId get_entity_icon_id(const AshEngine::Entity& entity)
+		EditorIconId GetEntityIconId(const AshEngine::Entity& refEntity)
 		{
-			if (entity.has_camera_component())
+			if (refEntity.has_camera_component())
 			{
 				return EditorIconId::EntityCamera;
 			}
-			if (entity.has_light_component())
+			if (refEntity.has_light_component())
 			{
-				const AshEngine::LightComponent& light = entity.get_light_component();
-				switch (light.type)
+				const AshEngine::LightComponent& refLightComponent = refEntity.get_light_component();
+				switch (refLightComponent.type)
 				{
 				case AshEngine::LightType::Directional:
 					return EditorIconId::EntityLightDirectional;
@@ -102,891 +103,1115 @@ namespace AshEditor
 					break;
 				}
 			}
-			if (entity.has_mesh_component())
+			if (refEntity.has_mesh_component())
 			{
 				return EditorIconId::EntityMesh;
 			}
 
-			return entity.get_parent().is_valid() ? EditorIconId::EntityActor : EditorIconId::EntityScene;
+			return refEntity.get_parent().is_valid() ? EditorIconId::EntityActor : EditorIconId::EntityScene;
 		}
 
-		constexpr const char* k_scene_hierarchy_drag_payload_type = "ASH_EDITOR_SCENE_ENTITY";
+		constexpr const char* kSceneHierarchyDragPayloadType = "ASH_EDITOR_SCENE_ENTITY";
 
 		struct SceneHierarchyDropRequest
 		{
-			EntityId entity_id = 0;
-			EntityId new_parent_id = 0;
-			uint32_t sibling_index = AshEngine::k_scene_append_sibling_index;
-			EditorTreeDropVisual visual = EditorTreeDropVisual::None;
-			bool valid = false;
+			SceneEntityId uSceneEntityId = 0;
+			SceneEntityId uNewParentId = 0;
+			uint32_t uSiblingIndex = kSceneAppendSiblingIndex;
+			EditorTreeDropVisual eVisual = EditorTreeDropVisual::None;
+			bool bValid = false;
 		};
 
 		struct SceneEntityDropValidationData
 		{
-			const SceneService* scene_service = nullptr;
-			EntityId target_entity_id = 0;
-			bool root_append_slot = false;
+			const SceneService* pSceneService = nullptr;
+			const DragDropTransferService* pDragDropTransferService = nullptr;
+			SceneEntityId uTargetSceneEntityId = 0;
+			bool bRootAppendSlot = false;
 		};
 
-		auto decode_dragged_entity_id(const ImGuiPayload* payload) -> EntityId
+		SceneEntityId DecodeDraggedSceneEntityId(const DragDropTransferService* pService, DragDropTransferId uTransferId)
 		{
-			return
-				payload &&
-				payload->Data &&
-				payload->DataSize == static_cast<int32_t>(sizeof(EntityId))
-				? *static_cast<const EntityId*>(payload->Data)
+			if (!pService || uTransferId == 0)
+			{
+				return 0;
+			}
+			const DragDropTransferData* pData = pService->Resolve(uTransferId);
+			return (pData && !pData->vecEntityIds.empty())
+				? static_cast<SceneEntityId>(pData->vecEntityIds[0])
 				: 0;
 		}
 
-		auto adjust_insert_index_for_move(
-			EntityId current_parent_id,
-			uint32_t current_sibling_index,
-			EntityId target_parent_id,
-			uint32_t insert_index) -> uint32_t
+		uint32_t AdjustInsertIndexForMove(
+			SceneEntityId uCurrentParentId,
+			uint32_t uCurrentSiblingIndex,
+			SceneEntityId uTargetParentId,
+			uint32_t uInsertIndex)
 		{
-			if (current_parent_id == target_parent_id && current_sibling_index < insert_index)
+			if (uCurrentParentId == uTargetParentId && uCurrentSiblingIndex < uInsertIndex)
 			{
-				return insert_index - 1u;
+				return uInsertIndex - 1u;
 			}
-			return insert_index;
+			return uInsertIndex;
 		}
 
-		auto build_drop_request_for_target(
-			const SceneService& scene_service,
-			EntityId dragged_entity_id,
-			const AshEngine::Entity& target_entity,
-			EditorTreeDropVisual visual) -> SceneHierarchyDropRequest
+		SceneHierarchyDropRequest BuildDropRequestForTarget(
+			const SceneService& refSceneService,
+			SceneEntityId uDraggedSceneEntityId,
+			const AshEngine::Entity& refTargetEntity,
+			EditorTreeDropVisual eVisual)
 		{
-			if (dragged_entity_id == 0 || !target_entity.is_valid() || dragged_entity_id == target_entity.get_id())
+			if (uDraggedSceneEntityId == 0 || !refTargetEntity.is_valid() || uDraggedSceneEntityId == refTargetEntity.get_id())
 			{
 				return {};
 			}
 
-			const AshEngine::Entity dragged_entity = scene_service.find_entity(dragged_entity_id);
-			if (!dragged_entity.is_valid())
+			const AshEngine::Entity entityDragged = refSceneService.FindEntity(uDraggedSceneEntityId);
+			if (!entityDragged.is_valid())
 			{
 				return {};
 			}
 
-			const EntityId current_parent_id = get_entity_parent_id(dragged_entity);
-			const uint32_t current_sibling_index = scene_service.get_entity_sibling_index(dragged_entity_id);
-			const EntityId target_parent_id = get_entity_parent_id(target_entity);
-			const uint32_t target_sibling_index = scene_service.get_entity_sibling_index(target_entity.get_id());
+			const SceneEntityId uCurrentParentId = GetEntityParentId(entityDragged);
+			const uint32_t uCurrentSiblingIndex = refSceneService.GetEntitySiblingIndex(uDraggedSceneEntityId);
+			const SceneEntityId uTargetParentId = GetEntityParentId(refTargetEntity);
+			const uint32_t uTargetSiblingIndex = refSceneService.GetEntitySiblingIndex(refTargetEntity.get_id());
 
 			SceneHierarchyDropRequest request{};
-			request.entity_id = dragged_entity_id;
+			request.uSceneEntityId = uDraggedSceneEntityId;
 
-			if (visual == EditorTreeDropVisual::Before || visual == EditorTreeDropVisual::After)
+			if (eVisual == EditorTreeDropVisual::Before || eVisual == EditorTreeDropVisual::After)
 			{
-				if (!scene_service.can_reparent_entity(dragged_entity_id, target_parent_id))
+				if (!refSceneService.CanReparentEntity(uDraggedSceneEntityId, uTargetParentId))
 				{
 					return {};
 				}
 
-				const uint32_t raw_insert_index = target_sibling_index + (visual == EditorTreeDropVisual::After ? 1u : 0u);
-				request.new_parent_id = target_parent_id;
-				request.sibling_index = adjust_insert_index_for_move(
-					current_parent_id,
-					current_sibling_index,
-					target_parent_id,
-					raw_insert_index);
-				request.visual = visual;
+				const uint32_t uRawInsertIndex = uTargetSiblingIndex + (eVisual == EditorTreeDropVisual::After ? 1u : 0u);
+				request.uNewParentId = uTargetParentId;
+				request.uSiblingIndex = AdjustInsertIndexForMove(
+					uCurrentParentId,
+					uCurrentSiblingIndex,
+					uTargetParentId,
+					uRawInsertIndex);
+				request.eVisual = eVisual;
 			}
-			else if (visual == EditorTreeDropVisual::Into)
+			else if (eVisual == EditorTreeDropVisual::Into)
 			{
-				if (!scene_service.can_reparent_entity(dragged_entity_id, target_entity.get_id()))
+				if (!refSceneService.CanReparentEntity(uDraggedSceneEntityId, refTargetEntity.get_id()))
 				{
 					return {};
 				}
 
-				request.new_parent_id = target_entity.get_id();
-				request.sibling_index = get_reparent_insert_index_max(
-					scene_service,
-					dragged_entity_id,
-					current_parent_id,
-					target_entity.get_id());
-				request.visual = EditorTreeDropVisual::Into;
+				request.uNewParentId = refTargetEntity.get_id();
+				request.uSiblingIndex = GetReparentInsertIndexMax(
+					refSceneService,
+					uDraggedSceneEntityId,
+					uCurrentParentId,
+					refTargetEntity.get_id());
+				request.eVisual = EditorTreeDropVisual::Into;
 			}
 			else
 			{
 				return {};
 			}
 
-			request.valid =
-				current_parent_id != request.new_parent_id ||
-				current_sibling_index != request.sibling_index;
+			request.bValid =
+				uCurrentParentId != request.uNewParentId ||
+				uCurrentSiblingIndex != request.uSiblingIndex;
 			return request;
 		}
 
-		auto build_root_append_drop_request(
-			const SceneService& scene_service,
-			EntityId dragged_entity_id) -> SceneHierarchyDropRequest
+		SceneHierarchyDropRequest BuildRootAppendDropRequest(
+			const SceneService& refSceneService,
+			SceneEntityId uDraggedSceneEntityId)
 		{
-			if (dragged_entity_id == 0)
+			if (uDraggedSceneEntityId == 0)
 			{
 				return {};
 			}
 
-			const AshEngine::Entity dragged_entity = scene_service.find_entity(dragged_entity_id);
-			if (!dragged_entity.is_valid())
+			const AshEngine::Entity entityDragged = refSceneService.FindEntity(uDraggedSceneEntityId);
+			if (!entityDragged.is_valid())
 			{
 				return {};
 			}
 
-			const EntityId current_parent_id = get_entity_parent_id(dragged_entity);
-			const uint32_t current_sibling_index = scene_service.get_entity_sibling_index(dragged_entity_id);
+			const SceneEntityId uCurrentParentId = GetEntityParentId(entityDragged);
+			const uint32_t uCurrentSiblingIndex = refSceneService.GetEntitySiblingIndex(uDraggedSceneEntityId);
 			SceneHierarchyDropRequest request{};
-			request.entity_id = dragged_entity_id;
-			request.new_parent_id = 0;
-			request.sibling_index = get_reparent_insert_index_max(scene_service, dragged_entity_id, current_parent_id, 0);
-			request.visual = EditorTreeDropVisual::Before;
-			request.valid = current_parent_id != 0 || current_sibling_index != request.sibling_index;
+			request.uSceneEntityId = uDraggedSceneEntityId;
+			request.uNewParentId = 0;
+			request.uSiblingIndex = GetReparentInsertIndexMax(refSceneService, uDraggedSceneEntityId, uCurrentParentId, 0);
+			request.eVisual = EditorTreeDropVisual::Before;
+			request.bValid = uCurrentParentId != 0 || uCurrentSiblingIndex != request.uSiblingIndex;
 			return request;
 		}
 
-		auto validate_scene_drop_target(
-			const ImGuiPayload* payload,
-			EditorTreeDropVisual visual,
-			void* user_data) -> bool
+		bool ValidateSceneDropTarget(
+			DragDropTransferId uTransferId,
+			EditorTreeDropVisual eVisual,
+			void* pUserData)
 		{
-			const auto* validation_data = static_cast<const SceneEntityDropValidationData*>(user_data);
-			if (!validation_data || !validation_data->scene_service)
+			const SceneEntityDropValidationData* pValidationData = static_cast<const SceneEntityDropValidationData*>(pUserData);
+			if (!pValidationData || !pValidationData->pSceneService)
 			{
 				return false;
 			}
 
-			const EntityId dragged_entity_id = decode_dragged_entity_id(payload);
-			if (validation_data->root_append_slot)
+			const SceneEntityId uDraggedSceneEntityId = DecodeDraggedSceneEntityId(
+				pValidationData->pDragDropTransferService, uTransferId);
+			if (pValidationData->bRootAppendSlot)
 			{
-				return build_root_append_drop_request(*validation_data->scene_service, dragged_entity_id).valid;
+				return BuildRootAppendDropRequest(*pValidationData->pSceneService, uDraggedSceneEntityId).bValid;
 			}
 
-			const AshEngine::Entity target_entity = validation_data->scene_service->find_entity(validation_data->target_entity_id);
-			return build_drop_request_for_target(*validation_data->scene_service, dragged_entity_id, target_entity, visual).valid;
+			const AshEngine::Entity entityTarget = pValidationData->pSceneService->FindEntity(pValidationData->uTargetSceneEntityId);
+			return BuildDropRequestForTarget(*pValidationData->pSceneService, uDraggedSceneEntityId, entityTarget, eVisual).bValid;
 		}
 
-		auto make_scene_tree_style() -> EditorTreeWidgetStyle
+		EditorTreeWidgetStyle MakeSceneTreeStyle()
 		{
 			EditorTreeWidgetStyle style{};
-			style.row_height = 24.0f;
-			style.indent_spacing = 12.0f;
-			style.icon_size = 16.0f;
-			style.icon_text_spacing = 4.0f;
-			style.row_padding_y = 5.0f;
-			style.row_spacing_y = 3.0f;
-			style.connector_horizontal_padding = 3.0f;
-			style.guide_line_padding_y = 0.0f;
-			style.guide_line_color = { 0.46f, 0.49f, 0.54f, 0.55f };
-			style.auto_expand_hover_delay_seconds = 0.45f;
-			style.row_hover_fill_color = { 0.28f, 0.39f, 0.49f, 0.16f };
-			style.row_hover_outline_color = { 0.38f, 0.56f, 0.74f, 0.38f };
-			style.row_selected_fill_color = { 0.32f, 0.47f, 0.60f, 0.28f };
-			style.row_selected_outline_color = { 0.43f, 0.64f, 0.85f, 0.84f };
+			style.fRowHeight = 24.0f;
+			style.fIndentSpacing = 12.0f;
+			style.fIconSize = 16.0f;
+			style.fIconTextSpacing = 4.0f;
+			style.fRowPaddingY = 5.0f;
+			style.fRowSpacingY = 3.0f;
+			style.fConnectorHorizontalPadding = 3.0f;
+			style.fDropZoneRatio = 0.35f;
+			style.fGuideLinePaddingY = 0.0f;
+			style.fDropZoneRatio = 0.34f;
+			style.colorGuideLine = { 0.46f, 0.49f, 0.54f, 0.55f };
+			style.fAutoExpandHoverDelaySeconds = 0.45f;
+			style.colorRowHoverFill = { 0.28f, 0.39f, 0.49f, 0.16f };
+			style.colorRowHoverOutline = { 0.38f, 0.56f, 0.74f, 0.38f };
+			style.colorRowSelectedFill = { 0.32f, 0.47f, 0.60f, 0.28f };
+			style.colorRowSelectedOutline = { 0.43f, 0.64f, 0.85f, 0.84f };
 			return style;
 		}
 
-		void draw_scene_summary(AshEngine::UIContext& ui, const AshEngine::Scene& scene, EntityId selected_entity_id)
+		void DrawSceneSummary(AshEngine::UIContext& refUi, const AshEngine::Scene& refScene, SceneEntityId uSelectedSceneEntityId)
 		{
-			ui.text_colored(k_sceneHierarchyAccentColor, "%s", scene.get_name().c_str());
-			ui.text_colored(
-				k_sceneHierarchyMutedColor,
+			refUi.text_colored(kSceneHierarchyAccentColor, "%s", refScene.get_name().c_str());
+			refUi.text_colored(
+				kSceneHierarchyMutedColor,
 				"%u entities | %u roots",
-				scene.get_entity_count(),
-				static_cast<unsigned int>(scene.get_root_entities().size()));
-			if (selected_entity_id != 0)
+				refScene.get_entity_count(),
+				static_cast<unsigned int>(refScene.get_root_entities().size()));
+			if (uSelectedSceneEntityId != 0)
 			{
-				ui.same_line();
-				ui.text_colored(k_sceneHierarchyMutedColor, "| Selected %llu", static_cast<unsigned long long>(selected_entity_id));
+				refUi.same_line();
+				refUi.text_colored(kSceneHierarchyMutedColor, "| Selected %llu", static_cast<unsigned long long>(uSelectedSceneEntityId));
 			}
-			ui.separator();
+			refUi.separator();
 		}
 
-		void draw_empty_scene_state(AshEngine::UIContext& ui)
+		void DrawEmptySceneState(AshEngine::UIContext& refUi)
 		{
-			ui.text_colored(k_sceneHierarchyMutedColor, "Scene is empty.");
-			ui.text_unformatted("Create a root entity to start building the scene.");
+			refUi.text_colored(kSceneHierarchyMutedColor, "Scene is empty.");
+			refUi.text_unformatted("Create a root entity to start building the scene.");
 		}
 
-		void append_reparent_candidates(
-			const SceneService& scene_service,
-			EntityId entity_id,
-			const AshEngine::Entity& entity,
-			std::vector<EntityId>& out_ids,
-			std::vector<std::string>& out_labels,
-			uint32_t depth)
+		void AppendReparentCandidates(
+			const SceneService& refSceneService,
+			SceneEntityId uSceneEntityId,
+			const AshEngine::Entity& refEntity,
+			std::vector<SceneEntityId>& vecOutIds,
+			std::vector<std::string>& vecOutLabels,
+			uint32_t uDepth)
 		{
-			if (entity.get_id() != entity_id && scene_service.can_reparent_entity(entity_id, entity.get_id()))
+			if (refEntity.get_id() != uSceneEntityId && refSceneService.CanReparentEntity(uSceneEntityId, refEntity.get_id()))
 			{
-				out_ids.push_back(entity.get_id());
-				out_labels.push_back(std::string(depth * 2, ' ') + entity.get_name());
+				vecOutIds.push_back(refEntity.get_id());
+				vecOutLabels.push_back(std::string(uDepth * 2, ' ') + refEntity.get_name());
 			}
 
-			for (const AshEngine::Entity& child : entity.get_children())
+			for (const AshEngine::Entity& refChild : refEntity.get_children())
 			{
-				append_reparent_candidates(scene_service, entity_id, child, out_ids, out_labels, depth + 1);
+				AppendReparentCandidates(refSceneService, uSceneEntityId, refChild, vecOutIds, vecOutLabels, uDepth + 1);
 			}
 		}
 
 	}
 
-	SceneHierarchyPanel::SceneHierarchyPanel()
-		: EditorPanel("scene_hierarchy", "Scene Hierarchy")
+	SceneHierarchyPanel::SceneHierarchyPanel(SceneHierarchyPanelDeps deps)
+		: EditorPanel(EditorPanelIds::SceneHierarchy, EditorWindowTitles::SceneHierarchy)
+		, _deps(deps)
 	{
 	}
 
-	void SceneHierarchyPanel::on_attach(EditorContext& context)
+	void SceneHierarchyPanel::BindEventBus(EditorEventBus* pEventBus)
 	{
-		(void)context;
+		if (_eventBindings.IsBoundTo(pEventBus))
+		{
+			return;
+		}
+
+		_eventBindings.Bind(pEventBus);
+		if (!pEventBus)
+		{
+			return;
+		}
+
+		_eventBindings.Subscribe<EditorSelectionChangedEvent>(
+			[this](const EditorSelectionChangedEvent& refEvent)
+			{
+				const SceneEntityId uSelectedSceneEntityId =
+					refEvent.currentSelection.eKind == EditorSelectionKind::Entity
+					? refEvent.currentSelection.uId
+					: 0;
+				if (_uPendingRenameEntityId != 0 && _uPendingRenameEntityId != uSelectedSceneEntityId)
+				{
+					ResetPendingRenameState();
+				}
+				if (_uPendingReparentEntityId != 0 && _uPendingReparentEntityId != uSelectedSceneEntityId)
+				{
+					ResetPendingReparentState();
+				}
+				if (_uPendingDeleteEntityId != 0 && _uPendingDeleteEntityId != uSelectedSceneEntityId)
+				{
+					ResetPendingDeleteState();
+				}
+			});
+		_eventBindings.Subscribe<EditorActiveSceneChangedEvent>(
+			[this](const EditorActiveSceneChangedEvent&)
+			{
+				ResetTransientState();
+			});
+	}
+
+	void SceneHierarchyPanel::OnAttach()
+	{
 		HLogInfo("SceneHierarchyPanel attached.");
 	}
 
-	void SceneHierarchyPanel::execute_create_root(EditorContext& context)
+	void SceneHierarchyPanel::OnDetach()
 	{
-		create_entity(context, 0);
+		UnsubscribeEvents();
+		ClearDeps();
 	}
 
-	void SceneHierarchyPanel::execute_create_child_from_selection(EditorContext& context)
+	void SceneHierarchyPanel::ClearDeps()
 	{
-		create_entity(context, get_selected_entity_id(context));
+		_deps = {};
 	}
 
-	void SceneHierarchyPanel::request_rename_selected(EditorContext& context)
+	void SceneHierarchyPanel::UnsubscribeEvents()
 	{
-		begin_rename_selected_entity(context);
+		_eventBindings.Clear();
 	}
 
-	void SceneHierarchyPanel::request_reparent_selected(EditorContext& context)
+	void SceneHierarchyPanel::ResetPendingRenameState()
+{
+	_uPendingRenameEntityId = 0;
+	_strPendingRenameValue.clear();
+	_bOpenRenamePopup = false;
+}
+
+	void SceneHierarchyPanel::ResetPendingReparentState()
 	{
-		begin_reparent_selected_entity(context);
+		_uPendingReparentEntityId = 0;
+		_iPendingReparentIndex = 0;
+		_iPendingReparentInsertIndex = 0;
+		_vecPendingReparentParentEntityIds.clear();
+		_vecPendingReparentParentLabels.clear();
+		_bOpenReparentPopup = false;
 	}
 
-	void SceneHierarchyPanel::request_delete_selected(EditorContext& context)
+	void SceneHierarchyPanel::ResetPendingDeleteState()
 	{
-		begin_delete_selected_entity(context);
+		_uPendingDeleteEntityId = 0;
+		_strPendingDeleteEntityName.clear();
+		_bOpenDeletePopup = false;
 	}
 
-	void SceneHierarchyPanel::begin_rename_selected_entity(EditorContext& context)
+	void SceneHierarchyPanel::ResetTransientState()
 	{
-		if (!context.scene_service)
+		ResetPendingRenameState();
+		ResetPendingReparentState();
+		ResetPendingDeleteState();
+		_treeWidgetStateEntities.ResetDragState();
+	}
+
+	void SceneHierarchyPanel::ExecuteCreateRoot()
+	{
+		CreateEntity(0);
+	}
+
+	void SceneHierarchyPanel::ExecuteCreateChildFromSelection()
+	{
+		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
+		CreateEntity(uSelectedSceneEntityId);
+	}
+
+	void SceneHierarchyPanel::RequestRenameSelected(AshEngine::UIContext* pUiContext)
+	{
+		BeginRenameSelectedEntity(pUiContext);
+	}
+
+	void SceneHierarchyPanel::RequestReparentSelected(AshEngine::UIContext* pUiContext)
+	{
+		BeginReparentSelectedEntity(pUiContext);
+	}
+
+	void SceneHierarchyPanel::RequestDeleteSelected(AshEngine::UIContext* pUiContext)
+	{
+		BeginDeleteSelectedEntity(pUiContext);
+	}
+
+	void SceneHierarchyPanel::BeginRenameSelectedEntity(AshEngine::UIContext* pUiContext)
+	{
+		if (!_deps.pSceneService)
 		{
+			HLogWarning("SceneHierarchyPanel rename requested, but SceneService is unavailable.");
 			return;
 		}
 
-		const EntityId selected_entity_id = get_selected_entity_id(context);
-		if (selected_entity_id == 0)
+		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
+		if (uSelectedSceneEntityId == 0)
 		{
+			HLogInfo("SceneHierarchyPanel rename requested, but no entity is selected.");
 			return;
 		}
 
-		const AshEngine::Entity entity = context.scene_service->find_entity(selected_entity_id);
-		if (!entity.is_valid())
+		const AshEngine::Entity entitySelected = _deps.pSceneService->FindEntity(uSelectedSceneEntityId);
+		if (!entitySelected.is_valid())
 		{
+			HLogWarning("SceneHierarchyPanel rename requested, but entity {} no longer exists.", static_cast<unsigned long long>(uSelectedSceneEntityId));
 			return;
 		}
 
-		m_pendingRenameEntityId = selected_entity_id;
-		m_pendingRenameValue = entity.get_name();
-		if (context.ui_context)
-		{
-			context.ui_context->open_popup("Rename Entity");
-		}
+		_uPendingRenameEntityId = uSelectedSceneEntityId;
+		_strPendingRenameValue = entitySelected.get_name();
+		_bOpenRenamePopup = true;
 	}
 
-	void SceneHierarchyPanel::begin_reparent_selected_entity(EditorContext& context)
+	void SceneHierarchyPanel::BeginReparentSelectedEntity(AshEngine::UIContext* pUiContext)
 	{
-		if (!context.scene_service)
+		if (!_deps.pSceneService)
 		{
+			HLogWarning("SceneHierarchyPanel reparent requested, but SceneService is unavailable.");
 			return;
 		}
 
-		const EntityId selected_entity_id = get_selected_entity_id(context);
-		if (selected_entity_id == 0)
+		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
+		if (uSelectedSceneEntityId == 0)
 		{
+			HLogInfo("SceneHierarchyPanel reparent requested, but no entity is selected.");
 			return;
 		}
 
-		const AshEngine::Entity entity = context.scene_service->find_entity(selected_entity_id);
-		if (!entity.is_valid())
+		const AshEngine::Entity entitySelected = _deps.pSceneService->FindEntity(uSelectedSceneEntityId);
+		if (!entitySelected.is_valid())
 		{
+			HLogWarning("SceneHierarchyPanel reparent requested, but entity {} no longer exists.", static_cast<unsigned long long>(uSelectedSceneEntityId));
 			return;
 		}
 
-		m_pendingReparentEntityId = selected_entity_id;
-		m_pendingReparentParentIds.clear();
-		m_pendingReparentParentLabels.clear();
-		m_pendingReparentParentIds.push_back(0);
-		m_pendingReparentParentLabels.push_back("<Root>");
+		_uPendingReparentEntityId = uSelectedSceneEntityId;
+		_vecPendingReparentParentEntityIds.clear();
+		_vecPendingReparentParentLabels.clear();
+		_vecPendingReparentParentEntityIds.push_back(0);
+		_vecPendingReparentParentLabels.push_back("<Root>");
 
-		for (const AshEngine::Entity& root : context.scene_service->get_active_scene().get_root_entities())
+		for (const AshEngine::Entity& refRoot : _deps.pSceneService->GetActiveScene().get_root_entities())
 		{
-			append_reparent_candidates(*context.scene_service, selected_entity_id, root, m_pendingReparentParentIds, m_pendingReparentParentLabels, 0);
+			AppendReparentCandidates(
+				*_deps.pSceneService,
+				uSelectedSceneEntityId,
+				refRoot,
+				_vecPendingReparentParentEntityIds,
+				_vecPendingReparentParentLabels,
+				0);
 		}
 
-		const EntityId current_parent_id = entity.get_parent().is_valid() ? entity.get_parent().get_id() : 0;
-		m_pendingReparentInsertIndex = static_cast<int32_t>(get_entity_sibling_index(entity, *context.scene_service));
-		m_pendingReparentIndex = 0;
-		for (size_t index = 0; index < m_pendingReparentParentIds.size(); ++index)
+		const AshEngine::Entity entityParent = entitySelected.get_parent();
+		const SceneEntityId uCurrentParentId = entityParent.is_valid() ? entityParent.get_id() : 0;
+		_iPendingReparentInsertIndex = static_cast<int32_t>(GetEntitySiblingIndex(entitySelected, *_deps.pSceneService));
+		_iPendingReparentIndex = 0;
+		for (size_t uIndex = 0; uIndex < _vecPendingReparentParentEntityIds.size(); ++uIndex)
 		{
-			if (m_pendingReparentParentIds[index] == current_parent_id)
+			if (_vecPendingReparentParentEntityIds[uIndex] == uCurrentParentId)
 			{
-				m_pendingReparentIndex = static_cast<int32_t>(index);
+				_iPendingReparentIndex = static_cast<int32_t>(uIndex);
 				break;
 			}
 		}
 
-		if (context.ui_context)
+		_bOpenReparentPopup = true;
+	}
+
+	void SceneHierarchyPanel::BeginDeleteSelectedEntity(AshEngine::UIContext* pUiContext)
+	{
+		if (!_deps.pSceneService)
 		{
-			context.ui_context->open_popup("Reparent Entity");
+			HLogWarning("SceneHierarchyPanel delete requested, but SceneService is unavailable.");
+			return;
+		}
+
+		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
+		if (uSelectedSceneEntityId == 0)
+		{
+			HLogInfo("SceneHierarchyPanel delete requested, but no entity is selected.");
+			return;
+		}
+
+		const AshEngine::Entity entitySelected = _deps.pSceneService->FindEntity(uSelectedSceneEntityId);
+		if (!entitySelected.is_valid())
+		{
+			HLogWarning("SceneHierarchyPanel delete requested, but entity {} no longer exists.", static_cast<unsigned long long>(uSelectedSceneEntityId));
+			return;
+		}
+
+		_uPendingDeleteEntityId = uSelectedSceneEntityId;
+		_strPendingDeleteEntityName = entitySelected.get_name();
+		_bOpenDeletePopup = true;
+	}
+
+	void SceneHierarchyPanel::CreateEntity(SceneEntityId uParentId)
+	{
+		if (!_deps.pSceneService || !_deps.pCommandExecutor)
+		{
+			HLogWarning(
+				"SceneHierarchyPanel create entity skipped (scene_service={}, command_executor={}).",
+				_deps.pSceneService != nullptr,
+				_deps.pCommandExecutor != nullptr);
+			return;
+		}
+
+		AshEngine::Scene& refScene = _deps.pSceneService->GetActiveScene();
+		const std::string strEntityName = "Entity " + std::to_string(refScene.get_entity_count() + 1);
+		if (!_deps.pCommandExecutor->ExecuteCommand(std::make_unique<CreateEntityCommand>(strEntityName, uParentId)))
+		{
+			HLogWarning("SceneHierarchyPanel failed to create entity '{}'.", strEntityName);
 		}
 	}
 
-	void SceneHierarchyPanel::begin_delete_selected_entity(EditorContext& context)
+	void SceneHierarchyPanel::DestroyEntity(SceneEntityId uSceneEntityId)
 	{
-		if (!context.scene_service)
+		if (!_deps.pSceneService || !_deps.pSelectionService || !_deps.pCommandExecutor)
 		{
+			HLogWarning(
+				"SceneHierarchyPanel delete entity skipped (scene_service={}, selection_service={}, command_executor={}).",
+				_deps.pSceneService != nullptr,
+				_deps.pSelectionService != nullptr,
+				_deps.pCommandExecutor != nullptr);
 			return;
 		}
 
-		const EntityId selected_entity_id = get_selected_entity_id(context);
-		if (selected_entity_id == 0)
+		if (uSceneEntityId == 0)
 		{
+			HLogInfo("SceneHierarchyPanel delete entity skipped because entityId is 0.");
 			return;
 		}
 
-		const AshEngine::Entity entity = context.scene_service->find_entity(selected_entity_id);
-		if (!entity.is_valid())
+		if (!_deps.pCommandExecutor->ExecuteCommand(std::make_unique<DeleteEntityCommand>(uSceneEntityId)))
 		{
-			return;
-		}
-
-		m_pendingDeleteEntityId = selected_entity_id;
-		m_pendingDeleteEntityName = entity.get_name();
-		if (context.ui_context)
-		{
-			context.ui_context->open_popup("Delete Entity");
+			HLogWarning("SceneHierarchyPanel failed to delete entity {}.", static_cast<unsigned long long>(uSceneEntityId));
 		}
 	}
 
-	void SceneHierarchyPanel::create_entity(EditorContext& context, EntityId parent_id)
+	void SceneHierarchyPanel::DrawToolbar(const EditorFrameContext& refFrameContext)
 	{
-		if (!context.scene_service || !context.undo_redo_service)
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+
+		refUi.text_colored(kSceneHierarchyMutedColor, "Actions");
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::SceneCreateRoot,
+				"Add Root",
+				"scene_hierarchy.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.button("Add Root");
+			refUi.end_disabled();
+		}
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::SceneCreateChild,
+				"Add Child",
+				"scene_hierarchy.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.button("Add Child");
+			refUi.end_disabled();
+		}
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::SelectionRename,
+				"Rename",
+				"scene_hierarchy.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.button("Rename");
+			refUi.end_disabled();
+		}
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::SelectionReparent,
+				"Reparent",
+				"scene_hierarchy.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.button("Reparent");
+			refUi.end_disabled();
+		}
+		refUi.same_line();
+		if (_deps.pCommandService)
+		{
+			DrawEditorActionButton(
+				refUi,
+				*_deps.pCommandService,
+				EditorActionIds::SelectionDelete,
+				"Delete",
+				"scene_hierarchy.toolbar");
+		}
+		else
+		{
+			refUi.begin_disabled(true);
+			refUi.button("Delete");
+			refUi.end_disabled();
+		}
+	}
+
+	bool SceneHierarchyPanel::IsSceneEntityDragActive(const AshEngine::UIContext* pUiContext) const
+	{
+		return pUiContext && pUiContext->is_drag_drop_payload_active(kSceneHierarchyDragPayloadType);
+	}
+
+	void SceneHierarchyPanel::HandleRootAppendDropTarget(
+		EditorTreeWidget& refTreeWidget,
+		bool bDraggingSceneEntity)
+	{
+		if (!_deps.pSceneService)
 		{
 			return;
 		}
 
-		AshEngine::Scene& scene = context.scene_service->get_active_scene();
-		const std::string entity_name = "Entity " + std::to_string(scene.get_entity_count() + 1);
-		context.undo_redo_service->execute(std::make_unique<CreateEntityCommand>(entity_name, parent_id), context);
-	}
+		SceneEntityDropValidationData validationData{};
+		validationData.pSceneService = _deps.pSceneService;
+		validationData.pDragDropTransferService = _deps.pDragDropTransferService;
+		validationData.bRootAppendSlot = true;
 
-	void SceneHierarchyPanel::destroy_entity(EditorContext& context, EntityId entity_id)
-	{
-		if (!context.scene_service || !context.selection_service || !context.undo_redo_service)
+		EditorTreeDropTargetDesc dropTarget{};
+		dropTarget.pPayloadType = kSceneHierarchyDragPayloadType;
+		dropTarget.pfnValidateDrop = ValidateSceneDropTarget;
+		dropTarget.pValidationUserData = &validationData;
+
+		EditorTreeDropSlotDesc slotDesc{};
+		slotDesc.svUniqueId = "__scene_hierarchy_root_append__";
+		slotDesc.fHeight = 18.0f;
+		slotDesc.bExpandToAvailableHeightWhileDragging = bDraggingSceneEntity;
+		slotDesc.ePreviewVisual = EditorTreeDropVisual::Before;
+		slotDesc.pDropTarget = &dropTarget;
+
+		const EditorTreeDropSlotResult slotResult = refTreeWidget.DrawDropSlot(slotDesc, bDraggingSceneEntity);
+		if (slotResult.bDropDelivered && slotResult.uDropTransferId != 0 && _deps.pCommandExecutor && _deps.pDragDropTransferService)
 		{
-			return;
-		}
-
-		if (entity_id == 0)
-		{
-			return;
-		}
-
-		context.undo_redo_service->execute(std::make_unique<DeleteEntityCommand>(entity_id), context);
-	}
-
-	void SceneHierarchyPanel::draw_toolbar(EditorContext& context, EntityId selected_entity_id)
-	{
-		AshEngine::UIContext& ui = *context.ui_context;
-
-		ui.text_colored(k_sceneHierarchyMutedColor, "Actions");
-		ui.same_line();
-		if (ui.button("Add Root"))
-		{
-			create_entity(context, 0);
-		}
-		ui.same_line();
-		ui.begin_disabled(selected_entity_id == 0);
-		if (ui.button("Add Child"))
-		{
-			create_entity(context, selected_entity_id);
-		}
-		ui.end_disabled();
-		ui.same_line();
-		ui.begin_disabled(selected_entity_id == 0);
-		if (ui.button("Rename"))
-		{
-			begin_rename_selected_entity(context);
-		}
-		ui.end_disabled();
-		ui.same_line();
-		ui.begin_disabled(selected_entity_id == 0);
-		if (ui.button("Reparent"))
-		{
-			begin_reparent_selected_entity(context);
-		}
-		ui.end_disabled();
-		ui.same_line();
-		ui.begin_disabled(selected_entity_id == 0);
-		if (ui.button("Delete"))
-		{
-			begin_delete_selected_entity(context);
-		}
-		ui.end_disabled();
-	}
-
-	bool SceneHierarchyPanel::is_scene_entity_drag_active() const
-	{
-		const ImGuiPayload* payload = ImGui::GetDragDropPayload();
-		return payload && payload->IsDataType(k_scene_hierarchy_drag_payload_type);
-	}
-
-	void SceneHierarchyPanel::handle_root_append_drop_target(
-		EditorTreeWidget& tree_widget,
-		EditorContext& context,
-		bool dragging_scene_entity)
-	{
-		if (!context.scene_service)
-		{
-			return;
-		}
-
-		SceneEntityDropValidationData validation_data{};
-		validation_data.scene_service = context.scene_service;
-		validation_data.root_append_slot = true;
-
-		EditorTreeDropTargetDesc drop_target{};
-		drop_target.payload_type = k_scene_hierarchy_drag_payload_type;
-		drop_target.validate_drop = validate_scene_drop_target;
-		drop_target.validation_user_data = &validation_data;
-
-		EditorTreeDropSlotDesc slot_desc{};
-		slot_desc.unique_id = "__scene_hierarchy_root_append__";
-		slot_desc.height = 18.0f;
-		slot_desc.expand_to_available_height_while_dragging = dragging_scene_entity;
-		slot_desc.preview_visual = EditorTreeDropVisual::Before;
-		slot_desc.drop_target = &drop_target;
-
-		const EditorTreeDropSlotResult result = tree_widget.draw_drop_slot(slot_desc, dragging_scene_entity);
-		if (result.drop_delivered && result.accepted_payload && context.undo_redo_service)
-		{
+			const SceneEntityId uDraggedId = DecodeDraggedSceneEntityId(_deps.pDragDropTransferService, slotResult.uDropTransferId);
 			const SceneHierarchyDropRequest request =
-				build_root_append_drop_request(*context.scene_service, decode_dragged_entity_id(result.accepted_payload));
-			if (request.valid)
+				BuildRootAppendDropRequest(*_deps.pSceneService, uDraggedId);
+			if (request.bValid)
 			{
-				context.undo_redo_service->execute(
+				const bool bExecuted = _deps.pCommandExecutor->ExecuteCommand(
 					std::make_unique<ReparentEntityCommand>(
-						request.entity_id,
-						request.new_parent_id,
-						request.sibling_index),
-					context);
+						request.uSceneEntityId,
+						request.uNewParentId,
+						request.uSiblingIndex));
+				if (!bExecuted)
+				{
+					HLogWarning(
+						"SceneHierarchyPanel failed to apply root drop reparent for entity {}.",
+						static_cast<unsigned long long>(request.uSceneEntityId));
+				}
 			}
 		}
 	}
 
-	void SceneHierarchyPanel::draw_entity_tree(
-		EditorTreeWidget& tree_widget,
-		EditorContext& context,
-		const AshEngine::Entity& entity,
-		bool is_last_sibling)
+	void SceneHierarchyPanel::DrawEntityTree(
+		EditorTreeWidget& refTreeWidget,
+		const EditorFrameContext& refFrameContext,
+		const AshEngine::Entity& refEntity,
+		bool bIsLastSibling)
 	{
-		const std::vector<AshEngine::Entity> children = entity.get_children();
-		const bool has_children = !children.empty();
-		const std::string entity_name = entity.get_name();
-		const bool selected =
-			context.selection_service &&
-			context.selection_service->get_selection().kind == EditorSelectionKind::Entity &&
-			context.selection_service->get_selection().id == entity.get_id();
-
-		AshEngine::UITextureHandle closed_icon = nullptr;
-		AshEngine::UITextureHandle open_icon = nullptr;
-		if (context.icon_service)
+		if (!_deps.pSceneService)
 		{
-			closed_icon = context.icon_service->get_icon(get_entity_icon_id(entity), *context.ui_context);
-			open_icon = closed_icon;
+			return;
 		}
 
-		const EntityId entity_id = entity.get_id();
-		SceneEntityDropValidationData validation_data{
-			context.scene_service,
-			entity_id,
-			false
-		};
-		const EditorTreeDragSourceDesc drag_source{
-			k_scene_hierarchy_drag_payload_type,
-			&entity_id,
-			static_cast<int32_t>(sizeof(entity_id)),
-			entity_name.c_str()
-		};
-		const EditorTreeDropTargetDesc drop_target{
-			k_scene_hierarchy_drag_payload_type,
-			true,
-			true,
-			true,
-			true,
-			validate_scene_drop_target,
-			const_cast<SceneEntityDropValidationData*>(&validation_data)
-		};
+		const std::vector<AshEngine::Entity> vecChildren = refEntity.get_children();
+		const bool bHasChildren = !vecChildren.empty();
+		const std::string strEntityName = refEntity.get_name();
+		const bool bSelected =
+			_deps.pSelectionService &&
+			_deps.pSelectionService->GetSelection().eKind == EditorSelectionKind::Entity &&
+			_deps.pSelectionService->GetSelection().uId == refEntity.get_id();
 
-		const std::string unique_id = std::to_string(entity_id);
-		EditorTreeItemDesc desc{};
-		desc.unique_id = unique_id;
-		desc.label = entity_name;
-		desc.icon = closed_icon;
-		desc.icon_when_open = open_icon;
-		desc.selected = selected;
-		desc.has_children = has_children;
-		desc.is_last_sibling = is_last_sibling;
-		desc.drag_source = &drag_source;
-		desc.drop_target = &drop_target;
-
-		const EditorTreeItemResult result = tree_widget.draw_item(desc);
-		if (result.clicked && context.selection_service)
+		AshEngine::UITextureHandle pIconClosed = nullptr;
+		AshEngine::UITextureHandle pIconOpen = nullptr;
+		if (_deps.pIconService && refFrameContext.pUiContext)
 		{
-			context.selection_service->select({ EditorSelectionKind::Entity, entity_id, entity_name, {} });
+			pIconClosed = _deps.pIconService->GetIcon(GetEntityIconId(refEntity), *refFrameContext.pUiContext);
+			pIconOpen = pIconClosed;
 		}
-		if (context.ui_context && context.ui_context->is_item_clicked(AshEngine::UIMouseButton::Right))
+
+		const SceneEntityId uSceneEntityId = refEntity.get_id();
+		SceneEntityDropValidationData validationData{};
+		validationData.pSceneService = _deps.pSceneService;
+		validationData.pDragDropTransferService = _deps.pDragDropTransferService;
+		validationData.uTargetSceneEntityId = uSceneEntityId;
+		const DragDropTransferId uDragTransferId = _deps.pDragDropTransferService
+			? _deps.pDragDropTransferService->Register(DragDropTransferData{ "SceneEntity", { uSceneEntityId }, {} })
+			: 0;
+		const EditorTreeDragSourceDesc dragSource{
+			kSceneHierarchyDragPayloadType,
+			uDragTransferId,
+			strEntityName.c_str()
+		};
+		EditorTreeDropTargetDesc dropTarget{};
+		dropTarget.pPayloadType = kSceneHierarchyDragPayloadType;
+		dropTarget.bAllowBefore = true;
+		dropTarget.bAllowAfter = true;
+		dropTarget.bAllowInto = true;
+		dropTarget.bAutoExpandOnIntoHover = true;
+		dropTarget.pfnValidateDrop = ValidateSceneDropTarget;
+		dropTarget.pValidationUserData = const_cast<SceneEntityDropValidationData*>(&validationData);
+
+		const std::string strUniqueId = std::to_string(uSceneEntityId);
+		EditorTreeItemDesc itemDesc{};
+		itemDesc.svUniqueId = strUniqueId;
+		itemDesc.svLabel = strEntityName;
+		itemDesc.pIcon = pIconClosed;
+		itemDesc.pIconWhenOpen = pIconOpen;
+		itemDesc.bIsSelected = bSelected;
+		itemDesc.bHasChildren = bHasChildren;
+		itemDesc.bIsLastSibling = bIsLastSibling;
+		itemDesc.pDragSource = &dragSource;
+		itemDesc.pDropTarget = &dropTarget;
+
+		const EditorTreeItemResult itemResult = refTreeWidget.DrawItem(itemDesc);
+		if (itemResult.bClicked && _deps.pSelectionService)
 		{
-			if (context.selection_service)
+			_deps.pSelectionService->Select({ EditorSelectionKind::Entity, uSceneEntityId, strEntityName, {} });
+		}
+		if (refFrameContext.pUiContext && refFrameContext.pUiContext->is_item_clicked(AshEngine::UIMouseButton::Right))
+		{
+			if (_deps.pSelectionService)
 			{
-				context.selection_service->select({ EditorSelectionKind::Entity, entity_id, entity_name, {} });
+				_deps.pSelectionService->Select({ EditorSelectionKind::Entity, uSceneEntityId, strEntityName, {} });
 			}
 		}
-		draw_entity_context_menu(context, entity);
+		DrawEntityContextMenu(refFrameContext, refEntity);
 
-		if (result.drop_delivered && result.accepted_payload && context.undo_redo_service)
+		if (itemResult.bDropDelivered && itemResult.uDropTransferId != 0 && _deps.pCommandExecutor && _deps.pDragDropTransferService)
 		{
-			const SceneHierarchyDropRequest request = build_drop_request_for_target(
-				*context.scene_service,
-				decode_dragged_entity_id(result.accepted_payload),
-				entity,
-				result.drop_visual);
-			if (request.valid)
+			const SceneEntityId uDraggedId = DecodeDraggedSceneEntityId(_deps.pDragDropTransferService, itemResult.uDropTransferId);
+			const SceneHierarchyDropRequest request = BuildDropRequestForTarget(
+				*_deps.pSceneService,
+				uDraggedId,
+				refEntity,
+				itemResult.eDropVisual);
+			if (request.bValid)
 			{
-				context.undo_redo_service->execute(
+				const bool bExecuted = _deps.pCommandExecutor->ExecuteCommand(
 					std::make_unique<ReparentEntityCommand>(
-						request.entity_id,
-						request.new_parent_id,
-						request.sibling_index),
-					context);
+						request.uSceneEntityId,
+						request.uNewParentId,
+						request.uSiblingIndex));
+				if (!bExecuted)
+				{
+					HLogWarning(
+						"SceneHierarchyPanel failed to apply drop reparent for entity {}.",
+						static_cast<unsigned long long>(request.uSceneEntityId));
+				}
 			}
 		}
 
-		if (!result.opened)
+		if (!itemResult.bOpened)
 		{
 			return;
 		}
 
-		if (has_children)
+		if (bHasChildren)
 		{
-			tree_widget.push_level(!is_last_sibling);
-			for (size_t child_index = 0; child_index < children.size(); ++child_index)
+			refTreeWidget.PushLevel(!bIsLastSibling);
+			for (size_t uChildIndex = 0; uChildIndex < vecChildren.size(); ++uChildIndex)
 			{
-				draw_entity_tree(tree_widget, context, children[child_index], child_index + 1 == children.size());
+				DrawEntityTree(refTreeWidget, refFrameContext, vecChildren[uChildIndex], uChildIndex + 1 == vecChildren.size());
 			}
-			tree_widget.pop_level();
+			refTreeWidget.PopLevel();
 		}
-		ImGui::TreePop();
+		refTreeWidget.TreePop();
 	}
 
-	void SceneHierarchyPanel::draw_entity_context_menu(EditorContext& context, const AshEngine::Entity& entity)
+	void SceneHierarchyPanel::DrawEntityContextMenu(const EditorFrameContext& refFrameContext, const AshEngine::Entity& refEntity)
 	{
-		if (!ImGui::BeginPopupContextItem(k_sceneEntityContextPopupId, ImGuiPopupFlags_MouseButtonRight))
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (!refUi.begin_popup_context_item(kSceneEntityContextPopupId))
 		{
 			return;
 		}
 
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (context.selection_service)
+		if (_deps.pSelectionService)
 		{
-			context.selection_service->select({ EditorSelectionKind::Entity, entity.get_id(), entity.get_name(), {} });
+			_deps.pSelectionService->Select({ EditorSelectionKind::Entity, refEntity.get_id(), refEntity.get_name(), {} });
 		}
 
-		if (ui.menu_item("Add Child", get_action_shortcut(context.command_service, "scene.create_child")))
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::SceneCreateChild,
+			"scene_hierarchy.entity_context"))
 		{
-			if (context.command_service)
-			{
-				context.command_service->invoke("scene.create_child");
-			}
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
-		if (ui.menu_item("Rename", get_action_shortcut(context.command_service, "selection.rename")))
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::SelectionRename,
+			"scene_hierarchy.entity_context"))
 		{
-			if (context.command_service)
-			{
-				context.command_service->invoke("selection.rename");
-			}
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
-		if (ui.menu_item("Reparent", get_action_shortcut(context.command_service, "selection.reparent")))
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::SelectionReparent,
+			"scene_hierarchy.entity_context"))
 		{
-			if (context.command_service)
-			{
-				context.command_service->invoke("selection.reparent");
-			}
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
-		ui.separator();
-		if (ui.menu_item("Delete", get_action_shortcut(context.command_service, "selection.delete")))
+		refUi.separator();
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::SelectionDelete,
+			"scene_hierarchy.entity_context"))
 		{
-			if (context.command_service)
-			{
-				context.command_service->invoke("selection.delete");
-			}
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
 
-		ImGui::EndPopup();
+		refUi.end_popup();
 	}
 
-	void SceneHierarchyPanel::draw_content_context_menu(EditorContext& context, EntityId selected_entity_id)
+	void SceneHierarchyPanel::DrawContentContextMenu(const EditorFrameContext& refFrameContext, SceneEntityId uSelectedSceneEntityId)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!ui.begin_popup(k_sceneContentContextPopupId))
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (!refUi.begin_popup(kSceneContentContextPopupId))
 		{
 			return;
 		}
 
-		if (ui.menu_item("Add Root", get_action_shortcut(context.command_service, "scene.create_root")))
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::SceneCreateRoot,
+			"scene_hierarchy.content_context"))
 		{
-			if (context.command_service)
-			{
-				context.command_service->invoke("scene.create_root");
-			}
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
 
-		ui.separator();
-		ui.begin_disabled(selected_entity_id == 0);
-		if (ui.menu_item("Add Child", get_action_shortcut(context.command_service, "scene.create_child")))
+		refUi.separator();
+		const bool bCanCreateChild = uSelectedSceneEntityId != 0;
+		if (_deps.pCommandService && DrawEditorActionMenuItem(
+			refUi,
+			*_deps.pCommandService,
+			EditorActionIds::SceneCreateChild,
+			"scene_hierarchy.content_context",
+			bCanCreateChild))
 		{
-			if (context.command_service)
-			{
-				context.command_service->invoke("scene.create_child");
-			}
-			ui.close_current_popup();
+			refUi.close_current_popup();
 		}
-		ui.end_disabled();
 
-		ui.end_popup();
+		refUi.end_popup();
 	}
 
-	void SceneHierarchyPanel::draw_rename_modal(EditorContext& context)
+	void SceneHierarchyPanel::DrawRenameModal(const EditorFrameContext& refFrameContext)
+{
+	AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+	if (_bOpenRenamePopup)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!ui.begin_popup_modal("Rename Entity"))
-		{
-			return;
-		}
-
-		ui.text_unformatted("Update the selected entity name.");
-		ui.input_text("Name", m_pendingRenameValue);
-		ui.separator();
-
-		bool can_apply = m_pendingRenameEntityId != 0 && !m_pendingRenameValue.empty();
-		if (can_apply && context.scene_service)
-		{
-			const AshEngine::Entity entity = context.scene_service->find_entity(m_pendingRenameEntityId);
-			can_apply = entity.is_valid() && entity.get_name() != m_pendingRenameValue;
-		}
-		ui.begin_disabled(!can_apply);
-		if (ui.button("Apply"))
-		{
-			if (context.undo_redo_service)
-			{
-				context.undo_redo_service->execute(
-					std::make_unique<RenameEntityCommand>(m_pendingRenameEntityId, m_pendingRenameValue),
-					context);
-			}
-			m_pendingRenameEntityId = 0;
-			m_pendingRenameValue.clear();
-			ui.close_current_popup();
-		}
-		ui.end_disabled();
-		ui.same_line();
-		if (ui.button("Cancel"))
-		{
-			m_pendingRenameEntityId = 0;
-			m_pendingRenameValue.clear();
-			ui.close_current_popup();
-		}
-		ui.end_popup();
+		refUi.open_popup("Rename Entity");
+		_bOpenRenamePopup = false;
+	}
+	if (!refUi.begin_popup_modal("Rename Entity"))
+	{
+		return;
 	}
 
-	void SceneHierarchyPanel::draw_reparent_modal(EditorContext& context)
+		refUi.text_unformatted("Update the selected entity name.");
+		if (_uPendingRenameEntityId == 0)
+		{
+			refUi.close_current_popup();
+			refUi.end_popup();
+			return;
+		}
+		refUi.input_text("Name", _strPendingRenameValue);
+		refUi.separator();
+
+		bool bCanApply = _uPendingRenameEntityId != 0 && !_strPendingRenameValue.empty();
+		if (bCanApply && _deps.pSceneService)
+		{
+			const AshEngine::Entity entity = _deps.pSceneService->FindEntity(_uPendingRenameEntityId);
+			bCanApply = entity.is_valid() && entity.get_name() != _strPendingRenameValue;
+		}
+		refUi.begin_disabled(!bCanApply);
+		if (refUi.button("Apply"))
+		{
+			if (_deps.pCommandExecutor)
+			{
+				const bool bExecuted = _deps.pCommandExecutor->ExecuteCommand(
+					std::make_unique<RenameEntityCommand>(_uPendingRenameEntityId, _strPendingRenameValue));
+				if (!bExecuted)
+				{
+					HLogWarning(
+						"SceneHierarchyPanel failed to rename entity {}.",
+						static_cast<unsigned long long>(_uPendingRenameEntityId));
+				}
+			}
+			else
+			{
+				HLogWarning("SceneHierarchyPanel rename apply clicked, but command executor is unavailable.");
+			}
+			ResetPendingRenameState();
+			refUi.close_current_popup();
+		}
+		refUi.end_disabled();
+		refUi.same_line();
+		if (refUi.button("Cancel"))
+		{
+			ResetPendingRenameState();
+			refUi.close_current_popup();
+		}
+		refUi.end_popup();
+	}
+
+	void SceneHierarchyPanel::DrawReparentModal(const EditorFrameContext& refFrameContext)
 	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!ui.begin_popup_modal("Reparent Entity"))
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (_bOpenReparentPopup)
+		{
+			refUi.open_popup("Reparent Entity");
+			_bOpenReparentPopup = false;
+		}
+		if (!refUi.begin_popup_modal("Reparent Entity"))
 		{
 			return;
 		}
 
-		ui.text_unformatted("Move the selected entity under another parent.");
-		ui.combo("Parent", m_pendingReparentIndex, m_pendingReparentParentLabels);
-		int32_t insert_index_max = 0;
-		EntityId target_parent_id = 0;
-		EntityId current_parent_id = 0;
-		ui.separator();
-
-		bool has_valid_target =
-			m_pendingReparentEntityId != 0 &&
-			m_pendingReparentIndex >= 0 &&
-			m_pendingReparentIndex < static_cast<int32_t>(m_pendingReparentParentIds.size());
-		if (has_valid_target && context.scene_service)
+		refUi.text_unformatted("Move the selected entity under another parent.");
+		if (_uPendingReparentEntityId == 0)
 		{
-			const AshEngine::Entity entity = context.scene_service->find_entity(m_pendingReparentEntityId);
-			has_valid_target = entity.is_valid();
-			if (has_valid_target)
+			refUi.close_current_popup();
+			refUi.end_popup();
+			return;
+		}
+		refUi.combo("Parent", _iPendingReparentIndex, _vecPendingReparentParentLabels);
+		int32_t iInsertIndexMax = 0;
+		SceneEntityId uTargetParentId = 0;
+		SceneEntityId uCurrentParentId = 0;
+		refUi.separator();
+
+		bool bHasValidTarget =
+			_uPendingReparentEntityId != 0 &&
+			_iPendingReparentIndex >= 0 &&
+			_iPendingReparentIndex < static_cast<int32_t>(_vecPendingReparentParentEntityIds.size());
+		if (bHasValidTarget && _deps.pSceneService)
+		{
+			const AshEngine::Entity entity = _deps.pSceneService->FindEntity(_uPendingReparentEntityId);
+			bHasValidTarget = entity.is_valid();
+			if (bHasValidTarget)
 			{
-				target_parent_id = m_pendingReparentParentIds[static_cast<size_t>(m_pendingReparentIndex)];
-				current_parent_id = get_entity_parent_id(entity);
-				insert_index_max = static_cast<int32_t>(get_reparent_insert_index_max(
-					*context.scene_service,
-					m_pendingReparentEntityId,
-					current_parent_id,
-					target_parent_id));
-				m_pendingReparentInsertIndex = std::clamp(m_pendingReparentInsertIndex, 0, insert_index_max);
-				const int32_t current_sibling_index = static_cast<int32_t>(get_entity_sibling_index(entity, *context.scene_service));
-				has_valid_target =
-					current_parent_id != target_parent_id ||
-					current_sibling_index != m_pendingReparentInsertIndex;
+				uTargetParentId = _vecPendingReparentParentEntityIds[static_cast<size_t>(_iPendingReparentIndex)];
+				uCurrentParentId = GetEntityParentId(entity);
+				iInsertIndexMax = static_cast<int32_t>(GetReparentInsertIndexMax(
+					*_deps.pSceneService,
+					_uPendingReparentEntityId,
+					uCurrentParentId,
+					uTargetParentId));
+				_iPendingReparentInsertIndex = std::clamp(_iPendingReparentInsertIndex, 0, iInsertIndexMax);
+				const int32_t iCurrentSiblingIndex = static_cast<int32_t>(GetEntitySiblingIndex(entity, *_deps.pSceneService));
+				bHasValidTarget =
+					uCurrentParentId != uTargetParentId ||
+					iCurrentSiblingIndex != _iPendingReparentInsertIndex;
 			}
 		}
 
-		ui.input_int("Insert At", m_pendingReparentInsertIndex);
-		m_pendingReparentInsertIndex = std::clamp(m_pendingReparentInsertIndex, 0, insert_index_max);
-		ui.text("Valid Range: 0 - %d", insert_index_max);
-		ui.text_unformatted("Insert At is the 0-based sibling slot under the target parent.");
-		ui.begin_disabled(!has_valid_target);
-		if (ui.button("Apply"))
+		refUi.input_int("Insert At", _iPendingReparentInsertIndex);
+		_iPendingReparentInsertIndex = std::clamp(_iPendingReparentInsertIndex, 0, iInsertIndexMax);
+		refUi.text("Valid Range: 0 - %d", iInsertIndexMax);
+		refUi.text_unformatted("Insert At is the 0-based sibling slot under the target parent.");
+		refUi.begin_disabled(!bHasValidTarget);
+		if (refUi.button("Apply"))
 		{
-			if (context.undo_redo_service && has_valid_target)
+			if (_deps.pCommandExecutor && bHasValidTarget)
 			{
-				context.undo_redo_service->execute(
+				const bool bExecuted = _deps.pCommandExecutor->ExecuteCommand(
 					std::make_unique<ReparentEntityCommand>(
-						m_pendingReparentEntityId,
-						target_parent_id,
-						static_cast<uint32_t>(m_pendingReparentInsertIndex)),
-					context);
+						_uPendingReparentEntityId,
+						uTargetParentId,
+						static_cast<uint32_t>(_iPendingReparentInsertIndex)));
+				if (!bExecuted)
+				{
+					HLogWarning(
+						"SceneHierarchyPanel failed to reparent entity {}.",
+						static_cast<unsigned long long>(_uPendingReparentEntityId));
+				}
 			}
-			m_pendingReparentEntityId = 0;
-			m_pendingReparentIndex = 0;
-			m_pendingReparentInsertIndex = 0;
-			m_pendingReparentParentIds.clear();
-			m_pendingReparentParentLabels.clear();
-			ui.close_current_popup();
-		}
-		ui.end_disabled();
-		ui.same_line();
-		if (ui.button("Cancel"))
-		{
-			m_pendingReparentEntityId = 0;
-			m_pendingReparentIndex = 0;
-			m_pendingReparentInsertIndex = 0;
-			m_pendingReparentParentIds.clear();
-			m_pendingReparentParentLabels.clear();
-			ui.close_current_popup();
-		}
-		ui.end_popup();
-	}
-
-	void SceneHierarchyPanel::draw_delete_modal(EditorContext& context)
-	{
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!ui.begin_popup_modal("Delete Entity"))
-		{
-			return;
-		}
-
-		ui.text_unformatted("Delete the selected entity?");
-		ui.text("Target: %s", m_pendingDeleteEntityName.empty() ? "<Unknown>" : m_pendingDeleteEntityName.c_str());
-		ui.text_unformatted("This action can be undone.");
-		ui.separator();
-
-		const bool can_delete = m_pendingDeleteEntityId != 0;
-		ui.begin_disabled(!can_delete);
-		if (ui.button("Delete"))
-		{
-			destroy_entity(context, m_pendingDeleteEntityId);
-			m_pendingDeleteEntityId = 0;
-			m_pendingDeleteEntityName.clear();
-			ui.close_current_popup();
-		}
-		ui.end_disabled();
-		ui.same_line();
-		if (ui.button("Cancel"))
-		{
-			m_pendingDeleteEntityId = 0;
-			m_pendingDeleteEntityName.clear();
-			ui.close_current_popup();
-		}
-		ui.end_popup();
-	}
-
-	void SceneHierarchyPanel::on_gui(EditorContext& context)
-	{
-		if (!begin_panel_window(context))
-		{
-			end_panel_window(context);
-			return;
-		}
-
-		AshEngine::UIContext& ui = *context.ui_context;
-		if (!context.scene_service)
-		{
-			ui.text_unformatted("Scene service unavailable.");
-			end_panel_window(context);
-			return;
-		}
-
-		AshEngine::Scene& scene = context.scene_service->get_active_scene();
-		const EntityId selected_entity_id = get_selected_entity_id(context);
-		const bool dragging_scene_entity = is_scene_entity_drag_active();
-		draw_scene_summary(ui, scene, selected_entity_id);
-
-		draw_toolbar(context, selected_entity_id);
-		ui.separator();
-
-		const std::vector<AshEngine::Entity> roots = scene.get_root_entities();
-		if (roots.empty())
-		{
-			draw_empty_scene_state(ui);
-		}
-
-		{
-			EditorTreeWidget tree_widget(ui, m_treeWidgetState, make_scene_tree_style());
-			tree_widget.reset_drag_state_if_inactive();
-			for (size_t root_index = 0; root_index < roots.size(); ++root_index)
+			else if (!_deps.pCommandExecutor && bHasValidTarget)
 			{
-				draw_entity_tree(tree_widget, context, roots[root_index], root_index + 1 == roots.size());
+				HLogWarning("SceneHierarchyPanel reparent apply clicked, but command executor is unavailable.");
+			}
+			ResetPendingReparentState();
+			refUi.close_current_popup();
+		}
+		refUi.end_disabled();
+		refUi.same_line();
+		if (refUi.button("Cancel"))
+		{
+			ResetPendingReparentState();
+			refUi.close_current_popup();
+		}
+		refUi.end_popup();
+	}
+
+	void SceneHierarchyPanel::DrawDeleteModal(const EditorFrameContext& refFrameContext)
+	{
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (_bOpenDeletePopup)
+		{
+			refUi.open_popup("Delete Entity");
+			_bOpenDeletePopup = false;
+		}
+		if (!refUi.begin_popup_modal("Delete Entity"))
+		{
+			return;
+		}
+
+		refUi.text_unformatted("Delete the selected entity?");
+		if (_uPendingDeleteEntityId == 0)
+		{
+			refUi.close_current_popup();
+			refUi.end_popup();
+			return;
+		}
+		refUi.text("Target: %s", _strPendingDeleteEntityName.empty() ? "<Unknown>" : _strPendingDeleteEntityName.c_str());
+		refUi.text_unformatted("This action can be undone.");
+		refUi.separator();
+
+		const bool bCanDelete = _uPendingDeleteEntityId != 0;
+		refUi.begin_disabled(!bCanDelete);
+		if (refUi.button("Delete"))
+		{
+			DestroyEntity(_uPendingDeleteEntityId);
+			ResetPendingDeleteState();
+			refUi.close_current_popup();
+		}
+		refUi.end_disabled();
+		refUi.same_line();
+		if (refUi.button("Cancel"))
+		{
+			ResetPendingDeleteState();
+			refUi.close_current_popup();
+		}
+		refUi.end_popup();
+	}
+
+	void SceneHierarchyPanel::OnGui(const EditorFrameContext& frameContext)
+	{
+		if (!BeginPanelWindow(frameContext))
+		{
+			EndPanelWindow(frameContext);
+			return;
+		}
+		if (!frameContext.pUiContext)
+		{
+			EndPanelWindow(frameContext);
+			return;
+		}
+		AshEngine::UIContext& refUi = *frameContext.pUiContext;
+		if (!_deps.pSceneService)
+		{
+			refUi.text_unformatted("Scene service unavailable.");
+			EndPanelWindow(frameContext);
+			return;
+		}
+
+		AshEngine::Scene& refScene = _deps.pSceneService->GetActiveScene();
+		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
+		const bool bDraggingSceneEntity = IsSceneEntityDragActive(frameContext.pUiContext);
+		DrawSceneSummary(refUi, refScene, uSelectedSceneEntityId);
+
+		DrawToolbar(frameContext);
+		refUi.separator();
+
+		const std::vector<AshEngine::Entity> vecRoots = refScene.get_root_entities();
+		if (vecRoots.empty())
+		{
+			DrawEmptySceneState(refUi);
+		}
+
+		{
+			EditorTreeWidget treeWidget(refUi, _treeWidgetStateEntities, MakeSceneTreeStyle());
+			treeWidget.ResetDragStateIfInactive();
+			for (size_t uRootIndex = 0; uRootIndex < vecRoots.size(); ++uRootIndex)
+			{
+				DrawEntityTree(treeWidget, frameContext, vecRoots[uRootIndex], uRootIndex + 1 == vecRoots.size());
 			}
 
-			handle_root_append_drop_target(tree_widget, context, dragging_scene_entity);
+			HandleRootAppendDropTarget(treeWidget, bDraggingSceneEntity);
 		}
 
-		const bool open_content_menu =
-			ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-			!ImGui::IsAnyItemHovered() &&
-			!ImGui::IsAnyItemActive() &&
-			ImGui::IsMouseReleased(ImGuiMouseButton_Right);
-		const bool clear_selection =
-			ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows) &&
-			!ImGui::IsAnyItemHovered() &&
-			!ImGui::IsAnyItemActive() &&
-			ImGui::IsMouseReleased(ImGuiMouseButton_Left);
-		if (open_content_menu)
+		const bool bOpenContentMenu =
+			refUi.is_window_hovered_with_children() &&
+			!refUi.is_any_item_hovered() &&
+			!refUi.is_any_item_active() &&
+			refUi.is_mouse_released(AshEngine::UIMouseButton::Right);
+		const bool bClearSelection =
+			refUi.is_window_hovered_with_children() &&
+			!refUi.is_any_item_hovered() &&
+			!refUi.is_any_item_active() &&
+			refUi.is_mouse_released(AshEngine::UIMouseButton::Left);
+		if (bOpenContentMenu)
 		{
-			ui.open_popup(k_sceneContentContextPopupId);
+			refUi.open_popup(kSceneContentContextPopupId);
 		}
-		if (clear_selection && context.selection_service)
+		if (bClearSelection && _deps.pSelectionService)
 		{
-			context.selection_service->clear();
+			_deps.pSelectionService->Clear();
 		}
 
-		draw_content_context_menu(context, get_selected_entity_id(context));
+		DrawContentContextMenu(frameContext, uSelectedSceneEntityId);
 
-		draw_rename_modal(context);
-		draw_reparent_modal(context);
-		draw_delete_modal(context);
-		end_panel_window(context);
+		DrawRenameModal(frameContext);
+		DrawReparentModal(frameContext);
+		DrawDeleteModal(frameContext);
+		EndPanelWindow(frameContext);
 	}
 }

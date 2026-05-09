@@ -1,6 +1,11 @@
 #include "Services/EditorViewportService.h"
+
 #include "Base/hlog.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
+#include "Core/EditorIds.h"
 #include "Function/Render/ScenePresentationSubsystem.h"
+
 #include <algorithm>
 #include <limits>
 
@@ -8,18 +13,18 @@ namespace AshEditor
 {
 	namespace
 	{
-		uint32_t clamp_viewport_extent(uint32_t value)
+		uint32_t ClampViewportExtent(uint32_t uValue)
 		{
-			return std::max<uint32_t>(1u, std::min<uint32_t>(value, std::numeric_limits<uint16_t>::max()));
+			return std::max<uint32_t>(1u, std::min<uint32_t>(uValue, std::numeric_limits<uint16_t>::max()));
 		}
 
-		int viewport_sort_priority(const AshEditor::EditorViewportInstance& viewport)
+		int GetViewportSortPriority(const AshEditor::EditorViewportInstance& refViewport)
 		{
-			if (viewport.id == "scene")
+			if (refViewport.strId == EditorViewportIds::Scene)
 			{
 				return 0;
 			}
-			if (viewport.id == "game")
+			if (refViewport.strId == EditorViewportIds::Game)
 			{
 				return 1;
 			}
@@ -27,478 +32,567 @@ namespace AshEditor
 		}
 
 		template<typename ViewportPtr>
-		void sort_viewports_stably(std::vector<ViewportPtr>& viewports)
+		void SortViewportsStably(std::vector<ViewportPtr>& refViewports)
 		{
-			std::sort(viewports.begin(), viewports.end(), [](const ViewportPtr lhs, const ViewportPtr rhs) {
-				if (lhs == rhs)
+			std::sort(refViewports.begin(), refViewports.end(), [](const ViewportPtr pLhs, const ViewportPtr pRhs) {
+				if (pLhs == pRhs)
 				{
 					return false;
 				}
-				if (!lhs)
+				if (!pLhs)
 				{
 					return false;
 				}
-				if (!rhs)
+				if (!pRhs)
 				{
 					return true;
 				}
 
-				const int lhs_priority = viewport_sort_priority(*lhs);
-				const int rhs_priority = viewport_sort_priority(*rhs);
-				if (lhs_priority != rhs_priority)
+				const int iLhsPriority = GetViewportSortPriority(*pLhs);
+				const int iRhsPriority = GetViewportSortPriority(*pRhs);
+				if (iLhsPriority != iRhsPriority)
 				{
-					return lhs_priority < rhs_priority;
+					return iLhsPriority < iRhsPriority;
 				}
 
-				if (lhs->id != rhs->id)
+				if (pLhs->strId != pRhs->strId)
 				{
-					return lhs->id < rhs->id;
+					return pLhs->strId < pRhs->strId;
 				}
 
-				return lhs->display_name < rhs->display_name;
+				return pLhs->strDisplayName < pRhs->strDisplayName;
 			});
 		}
 
-		uint32_t get_synced_output_extent(uint32_t requested_extent, uint32_t current_extent)
+		uint32_t GetSyncedOutputExtent(uint32_t uRequestedExtent, uint32_t uCurrentExtent)
 		{
-			if (requested_extent > 0u)
+			if (uRequestedExtent > 0u)
 			{
-				return clamp_viewport_extent(requested_extent);
+				return ClampViewportExtent(uRequestedExtent);
 			}
 
-			return current_extent > 0u ? clamp_viewport_extent(current_extent) : 1u;
+			return uCurrentExtent > 0u ? ClampViewportExtent(uCurrentExtent) : 1u;
 		}
 
-		std::string make_output_debug_name(const EditorViewportInstance& viewport)
+		std::string MakeOutputDebugName(const EditorViewportInstance& refViewport)
 		{
-			return viewport.display_name.empty()
+			return refViewport.strDisplayName.empty()
 				? "EditorViewportOutput"
-				: viewport.display_name + " Output";
+				: refViewport.strDisplayName + " Output";
 		}
 
-		std::string make_binding_debug_name(const EditorViewportInstance& viewport)
+		std::string MakeBindingDebugName(const EditorViewportInstance& refViewport)
 		{
-			return viewport.display_name.empty()
+			return refViewport.strDisplayName.empty()
 				? "EditorViewportBinding"
-				: viewport.display_name + " Binding";
+				: refViewport.strDisplayName + " Binding";
 		}
 	}
 
-	EditorViewportPresentation EditorViewportService::build_default_presentation(const std::string& id)
+	void EditorViewportService::SetEventBus(EditorEventBus* pEventBus)
+	{
+		_pEventBus = pEventBus;
+	}
+
+	EditorViewportPresentation EditorViewportService::BuildDefaultPresentation(const std::string& strViewportId)
 	{
 		EditorViewportPresentation presentation{};
-		if (id == "scene")
+		if (strViewportId == EditorViewportIds::Scene)
 		{
-			presentation.kind = EditorViewportKind::Scene;
-			presentation.preserve_aspect = false;
-			presentation.accepts_input = true;
-			presentation.show_stats = true;
-			presentation.show_overlays = true;
+			presentation.eKind = EditorViewportKind::Scene;
+			presentation.bPreserveAspect = false;
+			presentation.bAcceptsInput = true;
+			presentation.bShowStats = true;
+			presentation.bShowOverlays = true;
 			return presentation;
 		}
 
-		if (id == "game")
+		if (strViewportId == EditorViewportIds::Game)
 		{
-			presentation.kind = EditorViewportKind::Game;
-			presentation.preserve_aspect = true;
-			presentation.accepts_input = false;
-			presentation.show_stats = true;
-			presentation.show_overlays = false;
+			presentation.eKind = EditorViewportKind::Game;
+			presentation.bPreserveAspect = true;
+			presentation.bAcceptsInput = false;
+			presentation.bShowStats = true;
+			presentation.bShowOverlays = false;
 			return presentation;
 		}
 
-		presentation.kind = EditorViewportKind::Auxiliary;
-		presentation.preserve_aspect = false;
-		presentation.accepts_input = false;
-		presentation.show_stats = true;
-		presentation.show_overlays = false;
+		presentation.eKind = EditorViewportKind::Auxiliary;
+		presentation.bPreserveAspect = false;
+		presentation.bAcceptsInput = false;
+		presentation.bShowStats = true;
+		presentation.bShowOverlays = false;
 		return presentation;
 	}
 
-	EditorViewportService::ViewportRecord* EditorViewportService::find_record(const std::string& id)
+	EditorViewportService::ViewportRecord* EditorViewportService::FindRecord(const std::string& strViewportId)
 	{
-		const auto it = m_viewports.find(id);
-		return it != m_viewports.end() ? it->second.get() : nullptr;
+		const std::unordered_map<std::string, std::unique_ptr<ViewportRecord>>::iterator itRecord = _mapViewports.find(strViewportId);
+		return itRecord != _mapViewports.end() ? itRecord->second.get() : nullptr;
 	}
 
-	const EditorViewportService::ViewportRecord* EditorViewportService::find_record(const std::string& id) const
+	const EditorViewportService::ViewportRecord* EditorViewportService::FindRecord(const std::string& strViewportId) const
 	{
-		const auto it = m_viewports.find(id);
-		return it != m_viewports.end() ? it->second.get() : nullptr;
+		const std::unordered_map<std::string, std::unique_ptr<ViewportRecord>>::const_iterator itRecord = _mapViewports.find(strViewportId);
+		return itRecord != _mapViewports.end() ? itRecord->second.get() : nullptr;
 	}
 
-	EditorViewportInstance& EditorViewportService::ensure_viewport(std::string id, std::string display_name)
+	EditorViewportInstance& EditorViewportService::EnsureViewport(std::string strViewportId, std::string strDisplayName)
 	{
-		if (id.empty())
+		if (strViewportId.empty())
 		{
-			id = "viewport";
+			strViewportId = "viewport";
 		}
 
-		auto it = m_viewports.find(id);
-		if (it == m_viewports.end())
+		std::unordered_map<std::string, std::unique_ptr<ViewportRecord>>::iterator itRecord = _mapViewports.find(strViewportId);
+		if (itRecord == _mapViewports.end())
 		{
-			auto record = std::make_unique<ViewportRecord>();
-			record->instance.id = id;
-			record->instance.display_name = display_name.empty() ? id : std::move(display_name);
-			record->presentation = build_default_presentation(id);
-			it = m_viewports.emplace(id, std::move(record)).first;
+			std::unique_ptr<ViewportRecord> upRecord = std::make_unique<ViewportRecord>();
+			upRecord->viewportInstance.strId = strViewportId;
+			upRecord->viewportInstance.strDisplayName = strDisplayName.empty() ? strViewportId : std::move(strDisplayName);
+			upRecord->viewportPresentation = BuildDefaultPresentation(strViewportId);
+			itRecord = _mapViewports.emplace(strViewportId, std::move(upRecord)).first;
 		}
-		else if (!display_name.empty())
+		else if (!strDisplayName.empty())
 		{
-			it->second->instance.display_name = std::move(display_name);
-		}
-
-		if (m_primaryViewportId.empty())
-		{
-			m_primaryViewportId = id;
+			itRecord->second->viewportInstance.strDisplayName = std::move(strDisplayName);
 		}
 
-		return it->second->instance;
-	}
-
-	EditorViewportInstance* EditorViewportService::find_viewport(const std::string& id)
-	{
-		ViewportRecord* record = find_record(id);
-		return record ? &record->instance : nullptr;
-	}
-
-	const EditorViewportInstance* EditorViewportService::find_viewport(const std::string& id) const
-	{
-		const ViewportRecord* record = find_record(id);
-		return record ? &record->instance : nullptr;
-	}
-
-	std::vector<EditorViewportInstance*> EditorViewportService::get_viewports()
-	{
-		std::vector<EditorViewportInstance*> viewports{};
-		viewports.reserve(m_viewports.size());
-		for (auto& entry : m_viewports)
+		if (_strPrimaryViewportId.empty())
 		{
-			if (entry.second)
-			{
-				viewports.push_back(&entry.second->instance);
-			}
+			_strPrimaryViewportId = strViewportId;
 		}
-		sort_viewports_stably(viewports);
-		return viewports;
+
+		return itRecord->second->viewportInstance;
 	}
 
-	std::vector<const EditorViewportInstance*> EditorViewportService::get_viewports() const
+	EditorViewportInstance* EditorViewportService::FindViewport(const std::string& strViewportId)
 	{
-		std::vector<const EditorViewportInstance*> viewports{};
-		viewports.reserve(m_viewports.size());
-		for (const auto& entry : m_viewports)
+		ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? &pRecord->viewportInstance : nullptr;
+	}
+
+	const EditorViewportInstance* EditorViewportService::FindViewport(const std::string& strViewportId) const
+	{
+		const ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? &pRecord->viewportInstance : nullptr;
+	}
+
+	std::vector<EditorViewportInstance*> EditorViewportService::GetViewports()
+	{
+		std::vector<EditorViewportInstance*> vecViewports{};
+		vecViewports.reserve(_mapViewports.size());
+		for (std::pair<const std::string, std::unique_ptr<ViewportRecord>>& entry : _mapViewports)
 		{
 			if (entry.second)
 			{
-				viewports.push_back(&entry.second->instance);
+				vecViewports.push_back(&entry.second->viewportInstance);
 			}
 		}
-		sort_viewports_stably(viewports);
-		return viewports;
+		SortViewportsStably(vecViewports);
+		return vecViewports;
 	}
 
-	EditorViewportInstance* EditorViewportService::get_primary_viewport()
+	std::vector<const EditorViewportInstance*> EditorViewportService::GetViewports() const
 	{
-		return find_viewport(m_primaryViewportId);
-	}
-
-	const EditorViewportInstance* EditorViewportService::get_primary_viewport() const
-	{
-		return find_viewport(m_primaryViewportId);
-	}
-
-	const std::string& EditorViewportService::get_primary_viewport_id() const
-	{
-		return m_primaryViewportId;
-	}
-
-	bool EditorViewportService::is_primary_viewport(const std::string& id) const
-	{
-		return !id.empty() && id == m_primaryViewportId;
-	}
-
-	void EditorViewportService::set_primary_viewport(const std::string& id)
-	{
-		if (!id.empty() && find_viewport(id))
+		std::vector<const EditorViewportInstance*> vecViewports{};
+		vecViewports.reserve(_mapViewports.size());
+		for (const std::pair<const std::string, std::unique_ptr<ViewportRecord>>& entry : _mapViewports)
 		{
-			m_primaryViewportId = id;
+			if (entry.second)
+			{
+				vecViewports.push_back(&entry.second->viewportInstance);
+			}
+		}
+		SortViewportsStably(vecViewports);
+		return vecViewports;
+	}
+
+	EditorViewportInstance* EditorViewportService::GetPrimaryViewport()
+	{
+		return FindViewport(_strPrimaryViewportId);
+	}
+
+	const EditorViewportInstance* EditorViewportService::GetPrimaryViewport() const
+	{
+		return FindViewport(_strPrimaryViewportId);
+	}
+
+	const std::string& EditorViewportService::GetPrimaryViewportId() const
+	{
+		return _strPrimaryViewportId;
+	}
+
+	bool EditorViewportService::IsPrimaryViewport(const std::string& strViewportId) const
+	{
+		return !strViewportId.empty() && strViewportId == _strPrimaryViewportId;
+	}
+
+	void EditorViewportService::SetPrimaryViewport(const std::string& strViewportId)
+	{
+		if (!strViewportId.empty() && FindViewport(strViewportId))
+		{
+			if (_strPrimaryViewportId == strViewportId)
+			{
+				return;
+			}
+
+			const std::string strPreviousViewportId = _strPrimaryViewportId;
+			_strPrimaryViewportId = strViewportId;
+			NotifyPrimaryViewportChanged(strPreviousViewportId, _strPrimaryViewportId);
 		}
 	}
 
-	EditorViewportPresentation* EditorViewportService::get_presentation(const std::string& id)
+	EditorViewportPresentation* EditorViewportService::GetPresentation(const std::string& strViewportId)
 	{
-		ViewportRecord* record = find_record(id);
-		return record ? &record->presentation : nullptr;
+		ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? &pRecord->viewportPresentation : nullptr;
 	}
 
-	const EditorViewportPresentation* EditorViewportService::get_presentation(const std::string& id) const
+	const EditorViewportPresentation* EditorViewportService::GetPresentation(const std::string& strViewportId) const
 	{
-		const ViewportRecord* record = find_record(id);
-		return record ? &record->presentation : nullptr;
+		const ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? &pRecord->viewportPresentation : nullptr;
 	}
 
-	EditorViewportRenderState* EditorViewportService::get_render_state(const std::string& id)
+	EditorViewportRenderState* EditorViewportService::GetRenderState(const std::string& strViewportId)
 	{
-		ViewportRecord* record = find_record(id);
-		return record ? &record->render_state : nullptr;
+		ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? &pRecord->viewportRenderState : nullptr;
 	}
 
-	const EditorViewportRenderState* EditorViewportService::get_render_state(const std::string& id) const
+	const EditorViewportRenderState* EditorViewportService::GetRenderState(const std::string& strViewportId) const
 	{
-		const ViewportRecord* record = find_record(id);
-		return record ? &record->render_state : nullptr;
+		const ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? &pRecord->viewportRenderState : nullptr;
 	}
 
-	bool EditorViewportService::update_requested_size(const std::string& id, uint32_t width, uint32_t height)
+	bool EditorViewportService::UpdateRequestedSize(const std::string& strViewportId, uint32_t uWidth, uint32_t uHeight)
 	{
-		ViewportRecord* record = find_record(id);
-		if (!record)
+		ViewportRecord* pRecord = FindRecord(strViewportId);
+		if (!pRecord)
 		{
 			return false;
 		}
 
-		const uint32_t clamped_width = width > 0u ? clamp_viewport_extent(width) : 0u;
-		const uint32_t clamped_height = height > 0u ? clamp_viewport_extent(height) : 0u;
-		if (record->instance.state.requested_width == clamped_width &&
-			record->instance.state.requested_height == clamped_height)
+		// Clamp sizes to keep presentation outputs within a safe range. A 0 requested extent means "no valid size this frame".
+		const uint32_t uClampedWidth = uWidth > 0u ? ClampViewportExtent(uWidth) : 0u;
+		const uint32_t uClampedHeight = uHeight > 0u ? ClampViewportExtent(uHeight) : 0u;
+		if (pRecord->viewportInstance.state.uRequestedWidth == uClampedWidth &&
+			pRecord->viewportInstance.state.uRequestedHeight == uClampedHeight)
 		{
 			return false;
 		}
 
-		record->instance.state.requested_width = clamped_width;
-		record->instance.state.requested_height = clamped_height;
-		record->render_state.pending_sync = true;
+		pRecord->viewportInstance.state.uRequestedWidth = uClampedWidth;
+		pRecord->viewportInstance.state.uRequestedHeight = uClampedHeight;
+		pRecord->viewportRenderState.bPendingSync = true;
 		return true;
 	}
 
-	void EditorViewportService::set_panel_open(const std::string& id, bool open)
+	void EditorViewportService::SetPanelOpen(const std::string& strId, bool bOpen)
 	{
-		ViewportRecord* record = find_record(id);
-		if (record)
+		ViewportRecord* pRecord = FindRecord(strId);
+		if (pRecord)
 		{
-			if (record->presentation.panel_open != open)
+			if (pRecord->viewportPresentation.bPanelOpen != bOpen)
 			{
-				record->render_state.pending_sync = true;
+				pRecord->viewportRenderState.bPendingSync = true;
+				pRecord->viewportPresentation.bPanelOpen = bOpen;
+				NotifyPresentationChanged(strId, pRecord->viewportPresentation);
+				return;
 			}
-			record->presentation.panel_open = open;
 		}
 	}
 
-	bool EditorViewportService::sync_scene_presentations(
-		AshEngine::ScenePresentationSubsystem& scene_presentation,
-		AshEngine::Scene& scene)
+	bool EditorViewportService::SyncScenePresentations(
+		AshEngine::ScenePresentationSubsystem& refScenePresentation,
+		AshEngine::Scene& refScene)
 	{
-		bool all_synced = true;
-		for (EditorViewportInstance* viewport : get_viewports())
+		// This call owns the editor-side lifecycle for per-viewport outputs + view bindings:
+		// - Create/update offscreen outputs sized from the current requested extents.
+		// - Create/update view bindings when presentation state requires a resync.
+		// - Expose UI surfaces back to panels via EditorViewportInstance::surface.
+		bool bAllSynced = true;
+		for (EditorViewportInstance* pViewport : GetViewports())
 		{
-			if (!viewport)
+			if (!pViewport)
 			{
 				continue;
 			}
 
-			ViewportRecord* record = find_record(viewport->id);
-			if (!record)
+			ViewportRecord* pRecord = FindRecord(pViewport->strId);
+			if (!pRecord)
 			{
 				continue;
 			}
 
-			const bool has_requested_size =
-				record->instance.state.requested_width > 0u &&
-				record->instance.state.requested_height > 0u;
-			const uint32_t output_width = get_synced_output_extent(
-				record->instance.state.requested_width,
-				record->render_state.output_width);
-			const uint32_t output_height = get_synced_output_extent(
-				record->instance.state.requested_height,
-				record->render_state.output_height);
+			const bool bHasRequestedSize =
+				pRecord->viewportInstance.state.uRequestedWidth > 0u &&
+				pRecord->viewportInstance.state.uRequestedHeight > 0u;
+			const uint32_t uOutputWidth = GetSyncedOutputExtent(
+				pRecord->viewportInstance.state.uRequestedWidth,
+				pRecord->viewportRenderState.uOutputWidth);
+			const uint32_t uOutputHeight = GetSyncedOutputExtent(
+				pRecord->viewportInstance.state.uRequestedHeight,
+				pRecord->viewportRenderState.uOutputHeight);
 
-			const std::string output_debug_name = make_output_debug_name(record->instance);
-			bool output_synced = true;
-			if (!record->output.is_valid())
+			const std::string strOutputDebugName = MakeOutputDebugName(pRecord->viewportInstance);
+			bool bOutputSynced = true;
+			if (!pRecord->sceneOutput.is_valid())
 			{
-				AshEngine::SceneOutputDesc output_desc{};
-				output_desc.debug_name = output_debug_name.c_str();
-				output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
-				output_desc.width = output_width;
-				output_desc.height = output_height;
-				record->output = scene_presentation.create_output(output_desc);
-				record->render_state.pending_sync = true;
-				output_synced = record->output.is_valid();
+				AshEngine::SceneOutputDesc outputDesc{};
+				outputDesc.debug_name = strOutputDebugName.c_str();
+				outputDesc.kind = AshEngine::SceneOutputKind::Offscreen;
+				outputDesc.width = uOutputWidth;
+				outputDesc.height = uOutputHeight;
+				pRecord->sceneOutput = refScenePresentation.create_output(outputDesc);
+				pRecord->viewportRenderState.bPendingSync = true;
+				bOutputSynced = pRecord->sceneOutput.is_valid();
 			}
 			else if (
-				record->render_state.output_width != output_width ||
-				record->render_state.output_height != output_height)
+				pRecord->viewportRenderState.uOutputWidth != uOutputWidth ||
+				pRecord->viewportRenderState.uOutputHeight != uOutputHeight)
 			{
-				AshEngine::SceneOutputDesc output_desc{};
-				output_desc.debug_name = output_debug_name.c_str();
-				output_desc.kind = AshEngine::SceneOutputKind::Offscreen;
-				output_desc.width = output_width;
-				output_desc.height = output_height;
-				output_synced = scene_presentation.update_output(record->output, output_desc);
+				AshEngine::SceneOutputDesc outputDesc{};
+				outputDesc.debug_name = strOutputDebugName.c_str();
+				outputDesc.kind = AshEngine::SceneOutputKind::Offscreen;
+				outputDesc.width = uOutputWidth;
+				outputDesc.height = uOutputHeight;
+				bOutputSynced = refScenePresentation.update_output(pRecord->sceneOutput, outputDesc);
 			}
 
-			if (!output_synced)
+			if (!bOutputSynced)
 			{
-				HLogError("Editor viewport '{}' failed to sync output presentation state.", record->instance.id);
-				record->render_state.pending_sync = true;
-				record->instance.surface = {};
-				record->instance.state.width = 0u;
-				record->instance.state.height = 0u;
-				all_synced = false;
+				HLogError("Editor viewport '{}' failed to sync output presentation state.", pRecord->viewportInstance.strId);
+				pRecord->viewportRenderState.bPendingSync = true;
+				pRecord->viewportInstance.surface = {};
+				pRecord->viewportInstance.state.uWidth = 0u;
+				pRecord->viewportInstance.state.uHeight = 0u;
+				bAllSynced = false;
 				continue;
 			}
 
-			record->instance.surface = scene_presentation.get_ui_surface(record->output);
+			pRecord->viewportInstance.surface = refScenePresentation.get_ui_surface(pRecord->sceneOutput);
 
-			const std::string binding_debug_name = make_binding_debug_name(record->instance);
-			AshEngine::SceneViewBindingDesc binding_desc{};
-			binding_desc.debug_name = binding_debug_name.c_str();
-			binding_desc.scene = &scene;
-			binding_desc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
-			binding_desc.output = record->output;
-			binding_desc.enabled = record->presentation.panel_open && has_requested_size;
-			binding_desc.sort_order = viewport_sort_priority(record->instance);
+			const std::string strBindingDebugName = MakeBindingDebugName(pRecord->viewportInstance);
+			AshEngine::SceneViewBindingDesc bindingDesc{};
+			bindingDesc.debug_name = strBindingDebugName.c_str();
+			bindingDesc.scene = &refScene;
+			bindingDesc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
+			bindingDesc.output = pRecord->sceneOutput;
+			bindingDesc.enabled = pRecord->viewportPresentation.bPanelOpen && bHasRequestedSize;
+			bindingDesc.sort_order = GetViewportSortPriority(pRecord->viewportInstance);
 
-			bool binding_synced = true;
-			if (!record->binding.is_valid())
+			bool bBindingSynced = true;
+			if (!pRecord->sceneViewBinding.is_valid())
 			{
-				record->binding = scene_presentation.create_view_binding(binding_desc);
-				binding_synced = record->binding.is_valid();
+				pRecord->sceneViewBinding = refScenePresentation.create_view_binding(bindingDesc);
+				bBindingSynced = pRecord->sceneViewBinding.is_valid();
 			}
-			else if (record->render_state.pending_sync)
+			else if (pRecord->viewportRenderState.bPendingSync)
 			{
-				binding_synced = scene_presentation.update_view_binding(record->binding, binding_desc);
+				bBindingSynced = refScenePresentation.update_view_binding(pRecord->sceneViewBinding, bindingDesc);
 			}
 
-			if (!binding_synced)
+			if (!bBindingSynced)
 			{
-				HLogError("Editor viewport '{}' failed to sync scene binding state.", record->instance.id);
-				record->render_state.pending_sync = true;
-				record->instance.state.width = 0u;
-				record->instance.state.height = 0u;
-				all_synced = false;
+				HLogError("Editor viewport '{}' failed to sync scene binding state.", pRecord->viewportInstance.strId);
+				pRecord->viewportRenderState.bPendingSync = true;
+				pRecord->viewportInstance.state.uWidth = 0u;
+				pRecord->viewportInstance.state.uHeight = 0u;
+				bAllSynced = false;
 				continue;
 			}
 
-			record->render_state.output_width = output_width;
-			record->render_state.output_height = output_height;
-			record->render_state.pending_sync = false;
-			record->instance.state.width = has_requested_size ? output_width : 0u;
-			record->instance.state.height = has_requested_size ? output_height : 0u;
+			pRecord->viewportRenderState.uOutputWidth = uOutputWidth;
+			pRecord->viewportRenderState.uOutputHeight = uOutputHeight;
+			pRecord->viewportRenderState.bPendingSync = false;
+			pRecord->viewportInstance.state.uWidth = bHasRequestedSize ? uOutputWidth : 0u;
+			pRecord->viewportInstance.state.uHeight = bHasRequestedSize ? uOutputHeight : 0u;
 		}
 
-		return all_synced;
+		return bAllSynced;
 	}
 
-	void EditorViewportService::destroy_scene_presentations(AshEngine::ScenePresentationSubsystem* scene_presentation)
+	void EditorViewportService::DestroyScenePresentations(AshEngine::ScenePresentationSubsystem* pScenePresentation)
 	{
-		for (auto& entry : m_viewports)
+		for (std::pair<const std::string, std::unique_ptr<ViewportRecord>>& entry : _mapViewports)
 		{
 			if (!entry.second)
 			{
 				continue;
 			}
 
-			if (scene_presentation)
+			if (pScenePresentation)
 			{
-				if (entry.second->binding.is_valid())
+				if (entry.second->sceneViewBinding.is_valid())
 				{
-					scene_presentation->destroy_view_binding(entry.second->binding);
+					pScenePresentation->destroy_view_binding(entry.second->sceneViewBinding);
 				}
-				if (entry.second->output.is_valid())
+				if (entry.second->sceneOutput.is_valid())
 				{
-					scene_presentation->destroy_output(entry.second->output);
+					pScenePresentation->destroy_output(entry.second->sceneOutput);
 				}
 			}
 
-			entry.second->binding = {};
-			entry.second->output = {};
-			entry.second->instance.surface = {};
-			entry.second->instance.state.width = 0u;
-			entry.second->instance.state.height = 0u;
-			entry.second->render_state.output_width = 0u;
-			entry.second->render_state.output_height = 0u;
-			entry.second->render_state.pending_sync = true;
+			entry.second->sceneViewBinding = {};
+			entry.second->sceneOutput = {};
+			entry.second->viewportInstance.surface = {};
+			entry.second->viewportInstance.state.uWidth = 0u;
+			entry.second->viewportInstance.state.uHeight = 0u;
+			entry.second->viewportRenderState.uOutputWidth = 0u;
+			entry.second->viewportRenderState.uOutputHeight = 0u;
+			entry.second->viewportRenderState.bPendingSync = true;
 		}
 	}
 
-	void EditorViewportService::reset_presentations()
+	void EditorViewportService::ResetPresentations()
 	{
-		for (auto& entry : m_viewports)
+		bool bPrimaryChanged = false;
+		const std::string strPreviousPrimaryViewportId = _strPrimaryViewportId;
+		for (std::pair<const std::string, std::unique_ptr<ViewportRecord>>& entry : _mapViewports)
 		{
 			if (!entry.second)
 			{
 				continue;
 			}
 
-			entry.second->presentation = build_default_presentation(entry.second->instance.id);
-			entry.second->render_state.pending_sync = true;
+			EditorViewportPresentation defaultPresentation = BuildDefaultPresentation(entry.second->viewportInstance.strId);
+			if (entry.second->viewportPresentation.bShowToolbar != defaultPresentation.bShowToolbar ||
+				entry.second->viewportPresentation.bPreserveAspect != defaultPresentation.bPreserveAspect ||
+				entry.second->viewportPresentation.bAcceptsInput != defaultPresentation.bAcceptsInput ||
+				entry.second->viewportPresentation.bShowStats != defaultPresentation.bShowStats ||
+				entry.second->viewportPresentation.bShowOverlays != defaultPresentation.bShowOverlays ||
+				entry.second->viewportPresentation.bPanelOpen != defaultPresentation.bPanelOpen)
+			{
+				entry.second->viewportPresentation = defaultPresentation;
+				NotifyPresentationChanged(entry.second->viewportInstance.strId, entry.second->viewportPresentation);
+			}
+			entry.second->viewportRenderState.bPendingSync = true;
 		}
 
-		if (find_viewport("scene"))
+		if (FindViewport(EditorViewportIds::Scene))
 		{
-			m_primaryViewportId = "scene";
+			_strPrimaryViewportId = EditorViewportIds::Scene;
+			bPrimaryChanged = strPreviousPrimaryViewportId != _strPrimaryViewportId;
+		}
+
+		if (bPrimaryChanged)
+		{
+			NotifyPrimaryViewportChanged(strPreviousPrimaryViewportId, _strPrimaryViewportId);
 		}
 	}
 
-	std::vector<EditorViewportPersistenceState> EditorViewportService::capture_persistence_state() const
+	std::vector<EditorViewportPersistenceState> EditorViewportService::CapturePersistenceState() const
 	{
-		std::vector<EditorViewportPersistenceState> states{};
-		const std::vector<const EditorViewportInstance*> viewports = get_viewports();
-		states.reserve(viewports.size());
-		for (const EditorViewportInstance* viewport : viewports)
+		std::vector<EditorViewportPersistenceState> vecStates{};
+		const std::vector<const EditorViewportInstance*> vecViewports = GetViewports();
+		vecStates.reserve(vecViewports.size());
+		for (const EditorViewportInstance* pViewport : vecViewports)
 		{
-			if (!viewport)
+			if (!pViewport)
 			{
 				continue;
 			}
 
-			const ViewportRecord* record = find_record(viewport->id);
-			if (!record)
+			const ViewportRecord* pRecord = FindRecord(pViewport->strId);
+			if (!pRecord)
 			{
 				continue;
 			}
-			states.push_back({
-				record->instance.id,
-				record->presentation.panel_open,
-				record->presentation.show_toolbar,
-				record->presentation.preserve_aspect,
-				record->presentation.accepts_input,
-				record->presentation.show_stats,
-				record->presentation.show_overlays
+			vecStates.push_back({
+				pRecord->viewportInstance.strId,
+				pRecord->viewportPresentation.bPanelOpen,
+				pRecord->viewportPresentation.bShowToolbar,
+				pRecord->viewportPresentation.bPreserveAspect,
+				pRecord->viewportPresentation.bAcceptsInput,
+				pRecord->viewportPresentation.bShowStats,
+				pRecord->viewportPresentation.bShowOverlays
 			});
 		}
-		return states;
+		return vecStates;
 	}
 
-	void EditorViewportService::apply_persistence_state(
-		const std::vector<EditorViewportPersistenceState>& states,
-		const std::string& primary_viewport_id)
+	bool EditorViewportService::ApplyPresentationState(ViewportRecord& refRecord, const EditorViewportPersistenceState& refState)
 	{
-		for (const EditorViewportPersistenceState& state : states)
+		const bool bChanged =
+			refRecord.viewportPresentation.bPanelOpen != refState.bPanelOpen ||
+			refRecord.viewportPresentation.bShowToolbar != refState.bShowToolbar ||
+			refRecord.viewportPresentation.bPreserveAspect != refState.bPreserveAspect ||
+			refRecord.viewportPresentation.bAcceptsInput != refState.bAcceptsInput ||
+			refRecord.viewportPresentation.bShowStats != refState.bShowStats ||
+			refRecord.viewportPresentation.bShowOverlays != refState.bShowOverlays;
+
+		refRecord.viewportPresentation.bPanelOpen = refState.bPanelOpen;
+		refRecord.viewportPresentation.bShowToolbar = refState.bShowToolbar;
+		refRecord.viewportPresentation.bPreserveAspect = refState.bPreserveAspect;
+		refRecord.viewportPresentation.bAcceptsInput = refState.bAcceptsInput;
+		refRecord.viewportPresentation.bShowStats = refState.bShowStats;
+		refRecord.viewportPresentation.bShowOverlays = refState.bShowOverlays;
+		refRecord.viewportRenderState.bPendingSync = true;
+		return bChanged;
+	}
+
+	void EditorViewportService::ApplyPersistenceState(
+		const std::vector<EditorViewportPersistenceState>& vecStates,
+		const std::string& strPrimaryViewportId)
+	{
+		for (const EditorViewportPersistenceState& state : vecStates)
 		{
-			ViewportRecord* record = find_record(state.id);
-			if (!record)
+			ViewportRecord* pRecord = FindRecord(state.strId);
+			if (!pRecord)
 			{
 				continue;
 			}
 
-			record->presentation.panel_open = state.panel_open;
-			record->presentation.show_toolbar = state.show_toolbar;
-			record->presentation.preserve_aspect = state.preserve_aspect;
-			record->presentation.accepts_input = state.accepts_input;
-			record->presentation.show_stats = state.show_stats;
-			record->presentation.show_overlays = state.show_overlays;
-			record->render_state.pending_sync = true;
+			if (ApplyPresentationState(*pRecord, state))
+			{
+				NotifyPresentationChanged(state.strId, pRecord->viewportPresentation);
+			}
 		}
 
-		set_primary_viewport(primary_viewport_id);
+		SetPrimaryViewport(strPrimaryViewportId);
 	}
 
-	void EditorViewportService::clear()
+	void EditorViewportService::Clear()
 	{
-		m_viewports.clear();
-		m_primaryViewportId.clear();
+		_mapViewports.clear();
+		_strPrimaryViewportId.clear();
+	}
+
+	void EditorViewportService::NotifyPresentationChanged(
+		const std::string& strViewportId,
+		const EditorViewportPresentation& presentation) const
+	{
+		if (!_pEventBus)
+		{
+			return;
+		}
+
+		EditorViewportPresentationChangedEvent event{};
+		event.strViewportId = strViewportId;
+		event.bShowToolbar = presentation.bShowToolbar;
+		event.bPreserveAspect = presentation.bPreserveAspect;
+		event.bAcceptsInput = presentation.bAcceptsInput;
+		event.bShowStats = presentation.bShowStats;
+		event.bShowOverlays = presentation.bShowOverlays;
+		event.bPanelOpen = presentation.bPanelOpen;
+		_pEventBus->Publish(event);
+	}
+
+	void EditorViewportService::NotifyPrimaryViewportChanged(
+		const std::string& strPreviousViewportId,
+		const std::string& strCurrentViewportId) const
+	{
+		if (!_pEventBus || strPreviousViewportId == strCurrentViewportId)
+		{
+			return;
+		}
+
+		EditorPrimaryViewportChangedEvent event{};
+		event.strPreviousViewportId = strPreviousViewportId;
+		event.strCurrentViewportId = strCurrentViewportId;
+		_pEventBus->Publish(event);
 	}
 }

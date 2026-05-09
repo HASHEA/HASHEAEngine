@@ -22,6 +22,11 @@ namespace AshEngine
 			return ImVec4(value.r, value.g, value.b, value.a);
 		}
 
+		static auto to_imu32(const UIColor& value) -> ImU32
+		{
+			return ImGui::ColorConvertFloat4ToU32(ImVec4(value.r, value.g, value.b, value.a));
+		}
+
 		static auto fit_size_into_region(const UIVec2& region, float source_width, float source_height) -> UIVec2
 		{
 			if (region.x <= 0.0f || region.y <= 0.0f || source_width <= 0.0f || source_height <= 0.0f)
@@ -118,6 +123,7 @@ namespace AshEngine
 			if (flags & UITreeNodeFlagBits::OpenOnArrow) result |= ImGuiTreeNodeFlags_OpenOnArrow;
 			if (flags & UITreeNodeFlagBits::SpanAvailWidth) result |= ImGuiTreeNodeFlags_SpanAvailWidth;
 			if (flags & UITreeNodeFlagBits::Leaf) result |= ImGuiTreeNodeFlags_Leaf;
+			if (flags & UITreeNodeFlagBits::FramePadding) result |= ImGuiTreeNodeFlags_FramePadding;
 			return result;
 		}
 
@@ -254,6 +260,89 @@ namespace AshEngine
 			case UIStyleVarKind::GrabMinSize: return ImGuiStyleVar_GrabMinSize;
 			default: return ImGuiStyleVar_Alpha;
 			}
+		}
+
+		static auto to_imgui_key(UIKey key) -> ImGuiKey
+		{
+			switch (key)
+			{
+			case UIKey::Backspace: return ImGuiKey_Backspace;
+			case UIKey::Tab: return ImGuiKey_Tab;
+			case UIKey::Enter: return ImGuiKey_Enter;
+			case UIKey::Escape: return ImGuiKey_Escape;
+			case UIKey::Space: return ImGuiKey_Space;
+			case UIKey::A: return ImGuiKey_A;
+			case UIKey::B: return ImGuiKey_B;
+			case UIKey::C: return ImGuiKey_C;
+			case UIKey::D: return ImGuiKey_D;
+			case UIKey::E: return ImGuiKey_E;
+			case UIKey::F: return ImGuiKey_F;
+			case UIKey::G: return ImGuiKey_G;
+			case UIKey::H: return ImGuiKey_H;
+			case UIKey::I: return ImGuiKey_I;
+			case UIKey::J: return ImGuiKey_J;
+			case UIKey::K: return ImGuiKey_K;
+			case UIKey::L: return ImGuiKey_L;
+			case UIKey::M: return ImGuiKey_M;
+			case UIKey::N: return ImGuiKey_N;
+			case UIKey::O: return ImGuiKey_O;
+			case UIKey::P: return ImGuiKey_P;
+			case UIKey::Q: return ImGuiKey_Q;
+			case UIKey::R: return ImGuiKey_R;
+			case UIKey::S: return ImGuiKey_S;
+			case UIKey::T: return ImGuiKey_T;
+			case UIKey::U: return ImGuiKey_U;
+			case UIKey::V: return ImGuiKey_V;
+			case UIKey::W: return ImGuiKey_W;
+			case UIKey::X: return ImGuiKey_X;
+			case UIKey::Y: return ImGuiKey_Y;
+			case UIKey::Z: return ImGuiKey_Z;
+			case UIKey::F1: return ImGuiKey_F1;
+			case UIKey::F2: return ImGuiKey_F2;
+			case UIKey::F3: return ImGuiKey_F3;
+			case UIKey::F4: return ImGuiKey_F4;
+			case UIKey::F5: return ImGuiKey_F5;
+			case UIKey::F6: return ImGuiKey_F6;
+			case UIKey::F7: return ImGuiKey_F7;
+			case UIKey::F8: return ImGuiKey_F8;
+			case UIKey::F9: return ImGuiKey_F9;
+			case UIKey::F10: return ImGuiKey_F10;
+			case UIKey::F11: return ImGuiKey_F11;
+			case UIKey::F12: return ImGuiKey_F12;
+			case UIKey::LeftArrow: return ImGuiKey_LeftArrow;
+			case UIKey::RightArrow: return ImGuiKey_RightArrow;
+			case UIKey::UpArrow: return ImGuiKey_UpArrow;
+			case UIKey::DownArrow: return ImGuiKey_DownArrow;
+			case UIKey::Insert: return ImGuiKey_Insert;
+			case UIKey::Delete: return ImGuiKey_Delete;
+			case UIKey::Home: return ImGuiKey_Home;
+			case UIKey::End: return ImGuiKey_End;
+			case UIKey::PageUp: return ImGuiKey_PageUp;
+			case UIKey::PageDown: return ImGuiKey_PageDown;
+			default: return ImGuiKey_None;
+			}
+		}
+
+		static auto to_imgui_key_chord(uint32_t chord) -> ImGuiKeyChord
+		{
+			const auto key = static_cast<UIKey>(chord & 0xFFFFu);
+			const uint32_t modifiers = (chord >> 16u) & 0xFFFFu;
+			ImGuiKeyChord result = static_cast<ImGuiKeyChord>(to_imgui_key(key));
+			if (modifiers & UIModifierFlagBits::Ctrl) result |= ImGuiMod_Ctrl;
+			if (modifiers & UIModifierFlagBits::Shift) result |= ImGuiMod_Shift;
+			if (modifiers & UIModifierFlagBits::Alt) result |= ImGuiMod_Alt;
+			if (modifiers & UIModifierFlagBits::Super) result |= ImGuiMod_Super;
+			return result;
+		}
+
+		static auto to_imgui_drag_drop_flags(UIDragDropFlags flags) -> ImGuiDragDropFlags
+		{
+			ImGuiDragDropFlags result = ImGuiDragDropFlags_None;
+			if (flags & UIDragDropFlagBits::SourceAllowNullID) result |= ImGuiDragDropFlags_SourceAllowNullID;
+			if (flags & UIDragDropFlagBits::SourceNoPreviewTooltip) result |= ImGuiDragDropFlags_SourceNoPreviewTooltip;
+			if (flags & UIDragDropFlagBits::AcceptNoDrawDefaultRect) result |= ImGuiDragDropFlags_AcceptNoDrawDefaultRect;
+			if (flags & UIDragDropFlagBits::AcceptBeforeDelivery) result |= ImGuiDragDropFlags_AcceptBeforeDelivery;
+			return result;
 		}
 
 		static void ensure_current_window_dock_tab_bar_visible()
@@ -1293,6 +1382,41 @@ namespace AshEngine
 		return is_frame_active() && ImGui::IsWindowHovered();
 	}
 
+	bool UIContext::is_mouse_double_clicked(UIMouseButton button) const
+	{
+		return is_frame_active() && ImGui::IsMouseDoubleClicked(static_cast<ImGuiMouseButton>(button));
+	}
+
+	bool UIContext::is_mouse_released(UIMouseButton button) const
+	{
+		return is_frame_active() && ImGui::IsMouseReleased(static_cast<ImGuiMouseButton>(button));
+	}
+
+	bool UIContext::is_window_hovered_with_children() const
+	{
+		return is_frame_active() && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+	}
+
+	bool UIContext::is_window_focused_with_children() const
+	{
+		return is_frame_active() && ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows);
+	}
+
+	bool UIContext::is_any_item_hovered() const
+	{
+		return is_frame_active() && ImGui::IsAnyItemHovered();
+	}
+
+	bool UIContext::is_any_item_active() const
+	{
+		return is_frame_active() && ImGui::IsAnyItemActive();
+	}
+
+	bool UIContext::begin_popup_context_item(const char* str_id, UIMouseButton button)
+	{
+		return is_frame_active() && ImGui::BeginPopupContextItem(str_id, static_cast<ImGuiMouseButton>(button));
+	}
+
 	UIVec2 UIContext::get_content_region_avail() const
 	{
 		if (!is_frame_active())
@@ -1356,6 +1480,205 @@ namespace AshEngine
 	float UIContext::get_window_height() const
 	{
 		return is_frame_active() ? ImGui::GetWindowHeight() : 0.0f;
+	}
+
+	UIRect UIContext::get_item_rect() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+		const ImVec2 min = ImGui::GetItemRectMin();
+		const ImVec2 size = ImGui::GetItemRectSize();
+		return { min.x, min.y, size.x, size.y };
+	}
+
+	UIVec2 UIContext::get_style_frame_padding() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+		const ImVec2 value = ImGui::GetStyle().FramePadding;
+		return { value.x, value.y };
+	}
+
+	UIColor UIContext::get_style_color(UIStyleColorKind kind) const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+		const ImVec4& value = ImGui::GetStyleColorVec4(to_imgui_style_color(kind));
+		return { value.x, value.y, value.z, value.w };
+	}
+
+	float UIContext::get_tree_node_to_label_spacing() const
+	{
+		return is_frame_active() ? ImGui::GetTreeNodeToLabelSpacing() : 0.0f;
+	}
+
+	UIVec2 UIContext::calc_text_size(const char* text) const
+	{
+		if (!is_frame_active() || !text)
+		{
+			return {};
+		}
+		const ImVec2 value = ImGui::CalcTextSize(text);
+		return { value.x, value.y };
+	}
+
+	UIVec2 UIContext::get_cursor_screen_pos() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+		const ImVec2 value = ImGui::GetCursorScreenPos();
+		return { value.x, value.y };
+	}
+
+	UIVec2 UIContext::get_mouse_pos() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+		const ImVec2 value = ImGui::GetMousePos();
+		return { value.x, value.y };
+	}
+
+	UIVec2 UIContext::get_style_item_spacing() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+		const ImVec2 value = ImGui::GetStyle().ItemSpacing;
+		return { value.x, value.y };
+	}
+
+	float UIContext::get_font_size() const
+	{
+		return is_frame_active() ? ImGui::GetFontSize() : 0.0f;
+	}
+
+	float UIContext::get_time_seconds() const
+	{
+		return is_frame_active() ? static_cast<float>(ImGui::GetTime()) : 0.0f;
+	}
+
+	bool UIContext::is_key_chord_pressed(uint32_t chord) const
+	{
+		if (!is_frame_active())
+		{
+			return false;
+		}
+		const ImGuiKeyChord imgui_chord = to_imgui_key_chord(chord);
+		return ImGui::Shortcut(imgui_chord, ImGuiInputFlags_None);
+	}
+
+	void UIContext::set_next_item_open(bool is_open, UIConditionFlags cond)
+	{
+		if (is_frame_active())
+		{
+			ImGui::SetNextItemOpen(is_open, to_imgui_cond(cond));
+		}
+	}
+
+	void UIContext::begin_tooltip()
+	{
+		if (is_frame_active())
+		{
+			ImGui::BeginTooltip();
+		}
+	}
+
+	void UIContext::end_tooltip()
+	{
+		if (is_frame_active())
+		{
+			ImGui::EndTooltip();
+		}
+	}
+
+	bool UIContext::begin_drag_drop_source(UIDragDropFlags flags)
+	{
+		return is_frame_active() && ImGui::BeginDragDropSource(to_imgui_drag_drop_flags(flags));
+	}
+
+	void UIContext::end_drag_drop_source()
+	{
+		if (is_frame_active())
+		{
+			ImGui::EndDragDropSource();
+		}
+	}
+
+	bool UIContext::begin_drag_drop_target()
+	{
+		return is_frame_active() && ImGui::BeginDragDropTarget();
+	}
+
+	void UIContext::end_drag_drop_target()
+	{
+		if (is_frame_active())
+		{
+			ImGui::EndDragDropTarget();
+		}
+	}
+
+	void UIContext::set_drag_drop_payload(const char* type, const void* data, int size)
+	{
+		if (is_frame_active() && type)
+		{
+			ImGui::SetDragDropPayload(type, data, static_cast<size_t>(size));
+		}
+	}
+
+	UIDragDropPayload UIContext::accept_drag_drop_payload(const char* type, UIDragDropFlags flags)
+	{
+		if (!is_frame_active() || !type)
+		{
+			return {};
+		}
+		const ImGuiPayload* imgui_payload = ImGui::AcceptDragDropPayload(type, to_imgui_drag_drop_flags(flags));
+		if (!imgui_payload)
+		{
+			return {};
+		}
+		UIDragDropPayload result{};
+		result.data = imgui_payload->Data;
+		result.data_size = imgui_payload->DataSize;
+		result.is_preview = imgui_payload->Preview;
+		result.is_delivery = imgui_payload->Delivery;
+		result.make_data_owned();
+		return result;
+	}
+
+	bool UIContext::has_drag_drop_payload() const
+	{
+		if (!is_frame_active())
+		{
+			return false;
+		}
+		const ImGuiPayload* payload = ImGui::GetDragDropPayload();
+		return payload && payload->DataSize > 0;
+	}
+
+	bool UIContext::has_drag_drop_payload(const char* type) const
+	{
+		if (!is_frame_active() || !type)
+		{
+			return false;
+		}
+		const ImGuiPayload* payload = ImGui::GetDragDropPayload();
+		return payload && payload->IsDataType(type);
+	}
+
+	bool UIContext::is_drag_drop_payload_active(const char* type) const
+	{
+		return has_drag_drop_payload(type);
 	}
 
 	UITextureHandle UIContext::register_render_target(const std::shared_ptr<RenderTarget>& render_target)
@@ -1467,6 +1790,125 @@ namespace AshEngine
 	{
 		ScenePresentationSubsystem* scene_presentation = Application::get_scene_presentation();
 		draw_render_target_fill_available(scene_presentation ? scene_presentation->resolve_surface_render_target(surface) : nullptr, preserve_aspect, tint, border);
+	}
+
+	void UIContext::draw_window_rect(const UIRect& rect, const UIColor& color, float rounding, float thickness)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->AddRect(
+				ImVec2(rect.x, rect.y),
+				ImVec2(rect.x + rect.width, rect.y + rect.height),
+				to_imu32(color), rounding, 0, thickness);
+		}
+	}
+
+	void UIContext::draw_window_rect_filled(const UIRect& rect, const UIColor& color, float rounding)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->AddRectFilled(
+				ImVec2(rect.x, rect.y),
+				ImVec2(rect.x + rect.width, rect.y + rect.height),
+				to_imu32(color), rounding);
+		}
+	}
+
+	void UIContext::draw_window_line(const UIVec2& start, const UIVec2& end, const UIColor& color, float thickness)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->AddLine(to_imvec2(start), to_imvec2(end), to_imu32(color), thickness);
+		}
+	}
+
+	void UIContext::draw_window_text(const UIVec2& position, const UIColor& color, const char* text)
+	{
+		if (!is_frame_active() || !text)
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->AddText(to_imvec2(position), to_imu32(color), text);
+		}
+	}
+
+	void UIContext::draw_window_text(const UIVec2& position, const UIColor& color, const char* text, float max_width)
+	{
+		if (!is_frame_active() || !text)
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			ImFont* font = ImGui::GetFont();
+			const float font_size = ImGui::GetFontSize();
+			draw_list->AddText(font, font_size, to_imvec2(position), to_imu32(color), text, nullptr, max_width);
+		}
+	}
+
+	void UIContext::draw_window_image(UITextureHandle texture, const UIRect& rect, const UIVec2& uv0, const UIVec2& uv1, const UIColor& tint)
+	{
+		if (!is_frame_active() || !texture)
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->AddImage(
+				texture,
+				ImVec2(rect.x, rect.y),
+				ImVec2(rect.x + rect.width, rect.y + rect.height),
+				to_imvec2(uv0), to_imvec2(uv1), to_imu32(tint));
+		}
+	}
+
+	void UIContext::push_window_clip_rect(const UIRect& rect)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->PushClipRect(
+				ImVec2(rect.x, rect.y),
+				ImVec2(rect.x + rect.width, rect.y + rect.height),
+				true);
+		}
+	}
+
+	void UIContext::pop_window_clip_rect()
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+		ImDrawList* draw_list = ImGui::GetWindowDrawList();
+		if (draw_list)
+		{
+			draw_list->PopClipRect();
+		}
 	}
 
 	void UIContext::track_render_target_usage(const std::shared_ptr<RenderTarget>& render_target)

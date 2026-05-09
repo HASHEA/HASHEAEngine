@@ -1,5 +1,5 @@
 #pragma once
-#include "Core/EditorContext.h"
+#include "Core/EditorFrameContext.h"
 #include "Function/Gui/UICommon.h"
 #include <string>
 
@@ -8,28 +8,28 @@ namespace AshEditor
 	class EditorPanel
 	{
 	public:
-		EditorPanel(std::string id, std::string title);
+		EditorPanel(std::string strId, std::string strTitle);
 		virtual ~EditorPanel() = default;
 
 	public:
-		const std::string& get_id() const;
-		const std::string& get_title() const;
-		bool is_open() const;
-		void set_open(bool open);
+		const std::string& GetId() const;
+		const std::string& GetTitle() const;
+		bool IsOpen() const;
+		void SetOpen(bool bOpen);
 
-		virtual void on_attach(EditorContext& context);
-		virtual void on_detach(EditorContext& context);
-		virtual void on_update(EditorContext& context);
-		virtual void on_gui(EditorContext& context);
+		virtual void OnAttach();
+		virtual void OnDetach();
+		virtual void OnUpdate();
+		virtual void OnGui(const EditorFrameContext& refFrameContext);
 
 	protected:
-		bool begin_panel_window(EditorContext& context, AshEngine::UIWindowFlags flags = AshEngine::UIWindowFlagBits::None);
-		void end_panel_window(EditorContext& context);
+		bool BeginPanelWindow(const EditorFrameContext& refFrameContext, AshEngine::UIWindowFlags flags = AshEngine::UIWindowFlagBits::None);
+		void EndPanelWindow(const EditorFrameContext& refFrameContext);
 
 	private:
-		std::string m_id{};
-		std::string m_title{};
-		bool m_open = true;
-		bool m_windowActiveThisFrame = false;
+		std::string _strId{};
+		std::string _strTitle{};
+		bool _bOpen = true;
+		bool _bWindowActiveThisFrame = false;
 	};
 }

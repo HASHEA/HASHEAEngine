@@ -1,5 +1,10 @@
 #include "Services/SceneService.h"
+
 #include <json.hpp>
+
+#include <glm/glm.hpp>
+
+#include <cstdint>
 #include <string_view>
 
 namespace AshEditor
@@ -8,210 +13,216 @@ namespace AshEditor
 	{
 		using json = nlohmann::json;
 
-		auto to_json_vec2(const glm::vec2& value) -> json
+		json ToJsonVec2(const glm::vec2& refValue)
 		{
-			return json::array({ value.x, value.y });
+			return json::array({ refValue.x, refValue.y });
 		}
 
-		auto to_json_vec3(const glm::vec3& value) -> json
+		json ToJsonVec3(const glm::vec3& refValue)
 		{
-			return json::array({ value.x, value.y, value.z });
+			return json::array({ refValue.x, refValue.y, refValue.z });
 		}
 
-		auto to_json_vec4(const glm::vec4& value) -> json
+		json ToJsonVec4(const glm::vec4& refValue)
 		{
-			return json::array({ value.x, value.y, value.z, value.w });
+			return json::array({ refValue.x, refValue.y, refValue.z, refValue.w });
 		}
 
-		auto from_json_vec2(const json& value, const glm::vec2& fallback) -> glm::vec2
+		glm::vec2 FromJsonVec2(const json& refValue, const glm::vec2& refFallback)
 		{
-			if (!value.is_array() || value.size() != 2)
+			if (!refValue.is_array() || refValue.size() != 2)
 			{
-				return fallback;
+				return refFallback;
 			}
 
-			glm::vec2 result = fallback;
-			result.x = value[0].get<float>();
-			result.y = value[1].get<float>();
-			return result;
+			glm::vec2 vec2Result = refFallback;
+			vec2Result.x = refValue[0].get<float>();
+			vec2Result.y = refValue[1].get<float>();
+			return vec2Result;
 		}
 
-		auto from_json_vec3(const json& value, const glm::vec3& fallback) -> glm::vec3
+		glm::vec3 FromJsonVec3(const json& refValue, const glm::vec3& refFallback)
 		{
-			if (!value.is_array() || value.size() != 3)
+			if (!refValue.is_array() || refValue.size() != 3)
 			{
-				return fallback;
+				return refFallback;
 			}
 
-			glm::vec3 result = fallback;
-			result.x = value[0].get<float>();
-			result.y = value[1].get<float>();
-			result.z = value[2].get<float>();
-			return result;
+			glm::vec3 vec3Result = refFallback;
+			vec3Result.x = refValue[0].get<float>();
+			vec3Result.y = refValue[1].get<float>();
+			vec3Result.z = refValue[2].get<float>();
+			return vec3Result;
 		}
 
-		auto from_json_vec4(const json& value, const glm::vec4& fallback) -> glm::vec4
+		glm::vec4 FromJsonVec4(const json& refValue, const glm::vec4& refFallback)
 		{
-			if (!value.is_array() || value.size() != 4)
+			if (!refValue.is_array() || refValue.size() != 4)
 			{
-				return fallback;
+				return refFallback;
 			}
 
-			glm::vec4 result = fallback;
-			result.x = value[0].get<float>();
-			result.y = value[1].get<float>();
-			result.z = value[2].get<float>();
-			result.w = value[3].get<float>();
-			return result;
+			glm::vec4 vec4Result = refFallback;
+			vec4Result.x = refValue[0].get<float>();
+			vec4Result.y = refValue[1].get<float>();
+			vec4Result.z = refValue[2].get<float>();
+			vec4Result.w = refValue[3].get<float>();
+			return vec4Result;
 		}
 
-		auto read_unsigned_integral(const uint8_t* data, uint32_t size) -> uint64_t
+		uint64_t ReadUnsignedIntegral(const uint8_t* pData, const uint32_t uSize)
 		{
-			switch (size)
+			switch (uSize)
 			{
-			case 1: return *reinterpret_cast<const uint8_t*>(data);
-			case 2: return *reinterpret_cast<const uint16_t*>(data);
-			case 4: return *reinterpret_cast<const uint32_t*>(data);
-			case 8: return *reinterpret_cast<const uint64_t*>(data);
+			case 1: return *reinterpret_cast<const uint8_t*>(pData);
+			case 2: return *reinterpret_cast<const uint16_t*>(pData);
+			case 4: return *reinterpret_cast<const uint32_t*>(pData);
+			case 8: return *reinterpret_cast<const uint64_t*>(pData);
 			default: return 0;
 			}
 		}
 
-		auto read_signed_integral(const uint8_t* data, uint32_t size) -> int64_t
+		int64_t ReadSignedIntegral(const uint8_t* pData, const uint32_t uSize)
 		{
-			switch (size)
+			switch (uSize)
 			{
-			case 1: return *reinterpret_cast<const int8_t*>(data);
-			case 2: return *reinterpret_cast<const int16_t*>(data);
-			case 4: return *reinterpret_cast<const int32_t*>(data);
-			case 8: return *reinterpret_cast<const int64_t*>(data);
+			case 1: return *reinterpret_cast<const int8_t*>(pData);
+			case 2: return *reinterpret_cast<const int16_t*>(pData);
+			case 4: return *reinterpret_cast<const int32_t*>(pData);
+			case 8: return *reinterpret_cast<const int64_t*>(pData);
 			default: return 0;
 			}
 		}
 
-		void write_unsigned_integral(uint8_t* data, uint32_t size, uint64_t value)
+		void WriteUnsignedIntegral(uint8_t* pData, const uint32_t uSize, const uint64_t uValue)
 		{
-			switch (size)
+			switch (uSize)
 			{
 			case 1:
-				*reinterpret_cast<uint8_t*>(data) = static_cast<uint8_t>(value);
+				*reinterpret_cast<uint8_t*>(pData) = static_cast<uint8_t>(uValue);
 				return;
 			case 2:
-				*reinterpret_cast<uint16_t*>(data) = static_cast<uint16_t>(value);
+				*reinterpret_cast<uint16_t*>(pData) = static_cast<uint16_t>(uValue);
 				return;
 			case 4:
-				*reinterpret_cast<uint32_t*>(data) = static_cast<uint32_t>(value);
+				*reinterpret_cast<uint32_t*>(pData) = static_cast<uint32_t>(uValue);
 				return;
 			case 8:
-				*reinterpret_cast<uint64_t*>(data) = static_cast<uint64_t>(value);
+				*reinterpret_cast<uint64_t*>(pData) = static_cast<uint64_t>(uValue);
 				return;
 			default:
 				return;
 			}
 		}
 
-		void write_signed_integral(uint8_t* data, uint32_t size, int64_t value)
+		void WriteSignedIntegral(uint8_t* pData, const uint32_t uSize, const int64_t iValue)
 		{
-			switch (size)
+			switch (uSize)
 			{
 			case 1:
-				*reinterpret_cast<int8_t*>(data) = static_cast<int8_t>(value);
+				*reinterpret_cast<int8_t*>(pData) = static_cast<int8_t>(iValue);
 				return;
 			case 2:
-				*reinterpret_cast<int16_t*>(data) = static_cast<int16_t>(value);
+				*reinterpret_cast<int16_t*>(pData) = static_cast<int16_t>(iValue);
 				return;
 			case 4:
-				*reinterpret_cast<int32_t*>(data) = static_cast<int32_t>(value);
+				*reinterpret_cast<int32_t*>(pData) = static_cast<int32_t>(iValue);
 				return;
 			case 8:
-				*reinterpret_cast<int64_t*>(data) = static_cast<int64_t>(value);
+				*reinterpret_cast<int64_t*>(pData) = static_cast<int64_t>(iValue);
 				return;
 			default:
 				return;
 			}
 		}
 
-		auto serialize_component_payload(const void* component_data, const AshEngine::SceneComponentDesc& component_desc) -> json
+		json SerializeComponentPayload(const void* pComponentData, const AshEngine::SceneComponentDesc& refComponentDesc)
 		{
-			json component_json = json::object();
-			const uint8_t* base = static_cast<const uint8_t*>(component_data);
-			for (uint32_t property_index = 0; property_index < component_desc.property_count; ++property_index)
+			json jsonComponent = json::object();
+			const uint8_t* pBase = static_cast<const uint8_t*>(pComponentData);
+			for (uint32_t uPropertyIndex = 0; uPropertyIndex < refComponentDesc.property_count; ++uPropertyIndex)
 			{
-				const AshEngine::ScenePropertyDesc& property_desc = component_desc.properties[property_index];
-				const uint8_t* property_data = base + property_desc.offset;
-				switch (property_desc.type)
+				const AshEngine::ScenePropertyDesc& propertyDesc = refComponentDesc.properties[uPropertyIndex];
+				const uint8_t* pPropertyData = pBase + propertyDesc.offset;
+				switch (propertyDesc.type)
 				{
 				case AshEngine::ScenePropertyType::Bool:
-					component_json[property_desc.name] = *reinterpret_cast<const bool*>(property_data);
+					jsonComponent[propertyDesc.name] = *reinterpret_cast<const bool*>(pPropertyData);
 					break;
 				case AshEngine::ScenePropertyType::Int32:
-					component_json[property_desc.name] = read_signed_integral(property_data, property_desc.size);
+					jsonComponent[propertyDesc.name] = ReadSignedIntegral(pPropertyData, propertyDesc.size);
 					break;
 				case AshEngine::ScenePropertyType::UInt32:
 				case AshEngine::ScenePropertyType::Enum:
-					component_json[property_desc.name] = read_unsigned_integral(property_data, property_desc.size);
+					jsonComponent[propertyDesc.name] = ReadUnsignedIntegral(pPropertyData, propertyDesc.size);
 					break;
 				case AshEngine::ScenePropertyType::Float:
-					component_json[property_desc.name] = *reinterpret_cast<const float*>(property_data);
+					jsonComponent[propertyDesc.name] = *reinterpret_cast<const float*>(pPropertyData);
 					break;
 				case AshEngine::ScenePropertyType::Vec2:
-					component_json[property_desc.name] = to_json_vec2(*reinterpret_cast<const glm::vec2*>(property_data));
+					jsonComponent[propertyDesc.name] = ToJsonVec2(*reinterpret_cast<const glm::vec2*>(pPropertyData));
 					break;
 				case AshEngine::ScenePropertyType::Vec3:
-					component_json[property_desc.name] = to_json_vec3(*reinterpret_cast<const glm::vec3*>(property_data));
+					jsonComponent[propertyDesc.name] = ToJsonVec3(*reinterpret_cast<const glm::vec3*>(pPropertyData));
 					break;
 				case AshEngine::ScenePropertyType::Vec4:
-					component_json[property_desc.name] = to_json_vec4(*reinterpret_cast<const glm::vec4*>(property_data));
+					jsonComponent[propertyDesc.name] = ToJsonVec4(*reinterpret_cast<const glm::vec4*>(pPropertyData));
 					break;
 				case AshEngine::ScenePropertyType::String:
-					component_json[property_desc.name] = *reinterpret_cast<const std::string*>(property_data);
+					jsonComponent[propertyDesc.name] = *reinterpret_cast<const std::string*>(pPropertyData);
 					break;
 				default:
 					break;
 				}
 			}
-			return component_json;
+			return jsonComponent;
 		}
 
-		void deserialize_component_payload(const json& component_json, const AshEngine::SceneComponentDesc& component_desc, void* component_data)
+		void DeserializeComponentPayload(
+			const json& refComponentJson,
+			const AshEngine::SceneComponentDesc& refComponentDesc,
+			void* pComponentData)
 		{
-			uint8_t* base = static_cast<uint8_t*>(component_data);
-			for (uint32_t property_index = 0; property_index < component_desc.property_count; ++property_index)
+			uint8_t* pBase = static_cast<uint8_t*>(pComponentData);
+			for (uint32_t uPropertyIndex = 0; uPropertyIndex < refComponentDesc.property_count; ++uPropertyIndex)
 			{
-				const AshEngine::ScenePropertyDesc& property_desc = component_desc.properties[property_index];
-				if (!component_json.contains(property_desc.name))
+				const AshEngine::ScenePropertyDesc& propertyDesc = refComponentDesc.properties[uPropertyIndex];
+				if (!refComponentJson.contains(propertyDesc.name))
 				{
 					continue;
 				}
 
-				const json& property_json = component_json[property_desc.name];
-				uint8_t* property_data = base + property_desc.offset;
-				switch (property_desc.type)
+				const json& refPropertyJson = refComponentJson[propertyDesc.name];
+				uint8_t* pPropertyData = pBase + propertyDesc.offset;
+				switch (propertyDesc.type)
 				{
 				case AshEngine::ScenePropertyType::Bool:
-					*reinterpret_cast<bool*>(property_data) = property_json.get<bool>();
+					*reinterpret_cast<bool*>(pPropertyData) = refPropertyJson.get<bool>();
 					break;
 				case AshEngine::ScenePropertyType::Int32:
-					write_signed_integral(property_data, property_desc.size, property_json.get<int64_t>());
+					WriteSignedIntegral(pPropertyData, propertyDesc.size, refPropertyJson.get<int64_t>());
 					break;
 				case AshEngine::ScenePropertyType::UInt32:
 				case AshEngine::ScenePropertyType::Enum:
-					write_unsigned_integral(property_data, property_desc.size, property_json.get<uint64_t>());
+					WriteUnsignedIntegral(pPropertyData, propertyDesc.size, refPropertyJson.get<uint64_t>());
 					break;
 				case AshEngine::ScenePropertyType::Float:
-					*reinterpret_cast<float*>(property_data) = property_json.get<float>();
+					*reinterpret_cast<float*>(pPropertyData) = refPropertyJson.get<float>();
 					break;
 				case AshEngine::ScenePropertyType::Vec2:
-					*reinterpret_cast<glm::vec2*>(property_data) = from_json_vec2(property_json, *reinterpret_cast<glm::vec2*>(property_data));
+					*reinterpret_cast<glm::vec2*>(pPropertyData) =
+						FromJsonVec2(refPropertyJson, *reinterpret_cast<glm::vec2*>(pPropertyData));
 					break;
 				case AshEngine::ScenePropertyType::Vec3:
-					*reinterpret_cast<glm::vec3*>(property_data) = from_json_vec3(property_json, *reinterpret_cast<glm::vec3*>(property_data));
+					*reinterpret_cast<glm::vec3*>(pPropertyData) =
+						FromJsonVec3(refPropertyJson, *reinterpret_cast<glm::vec3*>(pPropertyData));
 					break;
 				case AshEngine::ScenePropertyType::Vec4:
-					*reinterpret_cast<glm::vec4*>(property_data) = from_json_vec4(property_json, *reinterpret_cast<glm::vec4*>(property_data));
+					*reinterpret_cast<glm::vec4*>(pPropertyData) =
+						FromJsonVec4(refPropertyJson, *reinterpret_cast<glm::vec4*>(pPropertyData));
 					break;
 				case AshEngine::ScenePropertyType::String:
-					*reinterpret_cast<std::string*>(property_data) = property_json.get<std::string>();
+					*reinterpret_cast<std::string*>(pPropertyData) = refPropertyJson.get<std::string>();
 					break;
 				default:
 					break;
@@ -220,116 +231,125 @@ namespace AshEditor
 		}
 
 		template<typename Component>
-		auto make_component_snapshot(AshEngine::SceneComponentType type, const Component& component) -> std::optional<SceneComponentSnapshot>
+		std::optional<SceneComponentSnapshot> MakeComponentSnapshot(
+			const AshEngine::SceneComponentType eType,
+			const Component& refComponent)
 		{
-			const AshEngine::SceneComponentDesc* component_desc = AshEngine::get_scene_component_descriptor(type);
-			if (!component_desc)
+			const AshEngine::SceneComponentDesc* pComponentDesc = AshEngine::get_scene_component_descriptor(eType);
+			if (!pComponentDesc)
 			{
 				return std::nullopt;
 			}
 
 			SceneComponentSnapshot snapshot{};
-			snapshot.type = type;
-			snapshot.serialized_value = serialize_component_payload(&component, *component_desc).dump();
+			snapshot.eType = eType;
+			snapshot.strSerializedValue = SerializeComponentPayload(&refComponent, *pComponentDesc).dump();
 			return snapshot;
 		}
 
-		auto capture_component_snapshot(const AshEngine::Entity& entity, AshEngine::SceneComponentType type) -> std::optional<SceneComponentSnapshot>
+		std::optional<SceneComponentSnapshot> CaptureComponentSnapshot(
+			const AshEngine::Entity& refEntity,
+			const AshEngine::SceneComponentType eType)
 		{
-			switch (type)
+			switch (eType)
 			{
 			case AshEngine::SceneComponentType::Name:
-				return make_component_snapshot(type, entity.get_name_component());
+				return MakeComponentSnapshot(eType, refEntity.get_name_component());
 			case AshEngine::SceneComponentType::Transform:
-				return make_component_snapshot(type, entity.get_transform_component());
+				return MakeComponentSnapshot(eType, refEntity.get_transform_component());
 			case AshEngine::SceneComponentType::Camera:
-				return entity.has_camera_component()
-					? make_component_snapshot(type, entity.get_camera_component())
+				return refEntity.has_camera_component()
+					? MakeComponentSnapshot(eType, refEntity.get_camera_component())
 					: std::nullopt;
 			case AshEngine::SceneComponentType::Light:
-				return entity.has_light_component()
-					? make_component_snapshot(type, entity.get_light_component())
+				return refEntity.has_light_component()
+					? MakeComponentSnapshot(eType, refEntity.get_light_component())
 					: std::nullopt;
 			case AshEngine::SceneComponentType::Mesh:
-				return entity.has_mesh_component()
-					? make_component_snapshot(type, entity.get_mesh_component())
+				return refEntity.has_mesh_component()
+					? MakeComponentSnapshot(eType, refEntity.get_mesh_component())
 					: std::nullopt;
 			default:
 				return std::nullopt;
 			}
 		}
 
-		auto capture_snapshot_recursive(const SceneService& scene_service, const AshEngine::Entity& entity) -> SceneEntitySnapshot
+		SceneEntitySnapshot CaptureSnapshotRecursive(
+			const SceneService& refSceneService,
+			const AshEngine::Entity& refEntity)
 		{
 			SceneEntitySnapshot snapshot{};
-			snapshot.entity_id = entity.get_id();
-			snapshot.sibling_index = scene_service.get_entity_sibling_index(entity.get_id());
+			snapshot.uEntityId = refEntity.get_id();
+			snapshot.uSiblingIndex = refSceneService.GetEntitySiblingIndex(refEntity.get_id());
 
-			for (AshEngine::SceneComponentType type : entity.get_component_types())
+			for (const AshEngine::SceneComponentType eType : refEntity.get_component_types())
 			{
-				if (std::optional<SceneComponentSnapshot> component_snapshot = capture_component_snapshot(entity, type); component_snapshot.has_value())
+				std::optional<SceneComponentSnapshot> optComponentSnapshot = CaptureComponentSnapshot(refEntity, eType);
+				if (optComponentSnapshot.has_value())
 				{
-					snapshot.components.push_back(std::move(*component_snapshot));
+					snapshot.vecComponents.push_back(std::move(*optComponentSnapshot));
 				}
 			}
 
-			for (const AshEngine::Entity& child : entity.get_children())
+			for (const AshEngine::Entity& refChild : refEntity.get_children())
 			{
-				snapshot.children.push_back(capture_snapshot_recursive(scene_service, child));
+				snapshot.vecChildren.push_back(CaptureSnapshotRecursive(refSceneService, refChild));
 			}
 			return snapshot;
 		}
 
 		template<typename Component>
-		bool apply_required_component(AshEngine::Entity entity, const SceneComponentSnapshot& snapshot)
+		bool ApplyRequiredComponent(AshEngine::Entity entity, const SceneComponentSnapshot& refSnapshot)
 		{
-			const AshEngine::SceneComponentDesc* component_desc = AshEngine::get_scene_component_descriptor(snapshot.type);
-			if (!component_desc)
+			const AshEngine::SceneComponentDesc* pComponentDesc =
+				AshEngine::get_scene_component_descriptor(refSnapshot.eType);
+			if (!pComponentDesc)
 			{
 				return false;
 			}
 
-			const json payload = json::parse(snapshot.serialized_value, nullptr, false);
-			if (payload.is_discarded())
+			const json payloadJson = json::parse(refSnapshot.strSerializedValue, nullptr, false);
+			if (payloadJson.is_discarded())
 			{
 				return false;
 			}
 
 			Component component{};
-			deserialize_component_payload(payload, *component_desc, &component);
-			return entity.write_component(snapshot.type, &component, sizeof(Component));
+			DeserializeComponentPayload(payloadJson, *pComponentDesc, &component);
+			return entity.write_component(refSnapshot.eType, &component, sizeof(Component));
 		}
 
 		template<typename Component>
-		bool apply_optional_component(
+		bool ApplyOptionalComponent(
 			AshEngine::Entity entity,
-			const SceneComponentSnapshot& snapshot,
-			bool (AshEngine::Entity::*has_fn)() const,
-			bool (AshEngine::Entity::*set_fn)(const Component&),
-			bool (AshEngine::Entity::*add_fn)(const Component&))
+			const SceneComponentSnapshot& refSnapshot,
+			bool (AshEngine::Entity::*pfnHas)() const,
+			bool (AshEngine::Entity::*pfnSet)(const Component&),
+			bool (AshEngine::Entity::*pfnAdd)(const Component&))
 		{
-			const AshEngine::SceneComponentDesc* component_desc = AshEngine::get_scene_component_descriptor(snapshot.type);
-			if (!component_desc)
+			const AshEngine::SceneComponentDesc* pComponentDesc =
+				AshEngine::get_scene_component_descriptor(refSnapshot.eType);
+			if (!pComponentDesc)
 			{
 				return false;
 			}
 
-			const json payload = json::parse(snapshot.serialized_value, nullptr, false);
-			if (payload.is_discarded())
+			const json payloadJson = json::parse(refSnapshot.strSerializedValue, nullptr, false);
+			if (payloadJson.is_discarded())
 			{
 				return false;
 			}
 
 			Component component{};
-			deserialize_component_payload(payload, *component_desc, &component);
-			return (entity.*has_fn)()
-				? (entity.*set_fn)(component)
-				: (entity.*add_fn)(component);
+			DeserializeComponentPayload(payloadJson, *pComponentDesc, &component);
+			return (entity.*pfnHas)()
+				? (entity.*pfnSet)(component)
+				: (entity.*pfnAdd)(component);
 		}
 
-		bool remove_optional_component(AshEngine::Entity entity, AshEngine::SceneComponentType type)
+		bool RemoveOptionalComponent(AshEngine::Entity entity, const AshEngine::SceneComponentType eType)
 		{
-			switch (type)
+			switch (eType)
 			{
 			case AshEngine::SceneComponentType::Camera:
 				return !entity.has_camera_component() || entity.remove_camera_component();
@@ -342,11 +362,11 @@ namespace AshEditor
 			}
 		}
 
-		bool snapshot_has_component(const SceneEntitySnapshot& snapshot, AshEngine::SceneComponentType type)
+		bool SnapshotHasComponent(const SceneEntitySnapshot& refSnapshot, const AshEngine::SceneComponentType eType)
 		{
-			for (const SceneComponentSnapshot& component_snapshot : snapshot.components)
+			for (const SceneComponentSnapshot& refComponentSnapshot : refSnapshot.vecComponents)
 			{
-				if (component_snapshot.type == type)
+				if (refComponentSnapshot.eType == eType)
 				{
 					return true;
 				}
@@ -354,47 +374,47 @@ namespace AshEditor
 			return false;
 		}
 
-		bool apply_entity_snapshot(AshEngine::Entity entity, const SceneEntitySnapshot& snapshot)
+		bool ApplyEntitySnapshot(AshEngine::Entity entity, const SceneEntitySnapshot& refSnapshot)
 		{
 			if (!entity.is_valid())
 			{
 				return false;
 			}
 
-			const AshEngine::SceneComponentType optional_types[] =
+			const AshEngine::SceneComponentType arrOptionalTypes[] =
 			{
 				AshEngine::SceneComponentType::Camera,
 				AshEngine::SceneComponentType::Light,
 				AshEngine::SceneComponentType::Mesh,
 			};
-			for (AshEngine::SceneComponentType type : optional_types)
+			for (const AshEngine::SceneComponentType eType : arrOptionalTypes)
 			{
-				if (!snapshot_has_component(snapshot, type) && !remove_optional_component(entity, type))
+				if (!SnapshotHasComponent(refSnapshot, eType) && !RemoveOptionalComponent(entity, eType))
 				{
 					return false;
 				}
 			}
 
-			for (const SceneComponentSnapshot& component_snapshot : snapshot.components)
+			for (const SceneComponentSnapshot& refComponentSnapshot : refSnapshot.vecComponents)
 			{
-				switch (component_snapshot.type)
+				switch (refComponentSnapshot.eType)
 				{
 				case AshEngine::SceneComponentType::Name:
-					if (!apply_required_component<AshEngine::NameComponent>(entity, component_snapshot))
+					if (!ApplyRequiredComponent<AshEngine::NameComponent>(entity, refComponentSnapshot))
 					{
 						return false;
 					}
 					break;
 				case AshEngine::SceneComponentType::Transform:
-					if (!apply_required_component<AshEngine::TransformComponent>(entity, component_snapshot))
+					if (!ApplyRequiredComponent<AshEngine::TransformComponent>(entity, refComponentSnapshot))
 					{
 						return false;
 					}
 					break;
 				case AshEngine::SceneComponentType::Camera:
-					if (!apply_optional_component<AshEngine::CameraComponent>(
+					if (!ApplyOptionalComponent<AshEngine::CameraComponent>(
 						entity,
-						component_snapshot,
+						refComponentSnapshot,
 						&AshEngine::Entity::has_camera_component,
 						&AshEngine::Entity::set_camera_component,
 						&AshEngine::Entity::add_camera_component))
@@ -403,9 +423,9 @@ namespace AshEditor
 					}
 					break;
 				case AshEngine::SceneComponentType::Light:
-					if (!apply_optional_component<AshEngine::LightComponent>(
+					if (!ApplyOptionalComponent<AshEngine::LightComponent>(
 						entity,
-						component_snapshot,
+						refComponentSnapshot,
 						&AshEngine::Entity::has_light_component,
 						&AshEngine::Entity::set_light_component,
 						&AshEngine::Entity::add_light_component))
@@ -414,9 +434,9 @@ namespace AshEditor
 					}
 					break;
 				case AshEngine::SceneComponentType::Mesh:
-					if (!apply_optional_component<AshEngine::MeshComponent>(
+					if (!ApplyOptionalComponent<AshEngine::MeshComponent>(
 						entity,
-						component_snapshot,
+						refComponentSnapshot,
 						&AshEngine::Entity::has_mesh_component,
 						&AshEngine::Entity::set_mesh_component,
 						&AshEngine::Entity::add_mesh_component))
@@ -432,23 +452,27 @@ namespace AshEditor
 			return true;
 		}
 
-		auto restore_snapshot_recursive(SceneService& scene_service, const SceneEntitySnapshot& snapshot, EntityId parent_id) -> AshEngine::Entity
+		AshEngine::Entity RestoreSnapshotRecursive(
+			SceneService& refSceneService,
+			const SceneEntitySnapshot& refSnapshot,
+			const SceneEntityId uParentId)
 		{
-			AshEngine::Entity entity = scene_service.create_entity_with_id(snapshot.entity_id, "Entity", parent_id, snapshot.sibling_index);
-			if (!entity.is_valid() || !apply_entity_snapshot(entity, snapshot))
+			AshEngine::Entity entity =
+				refSceneService.CreateEntityWithId(refSnapshot.uEntityId, "Entity", uParentId, refSnapshot.uSiblingIndex);
+			if (!entity.is_valid() || !ApplyEntitySnapshot(entity, refSnapshot))
 			{
 				if (entity.is_valid())
 				{
-					scene_service.destroy_entity(entity.get_id());
+					refSceneService.DestroyEntity(entity.get_id());
 				}
 				return {};
 			}
 
-			for (const SceneEntitySnapshot& child_snapshot : snapshot.children)
+			for (const SceneEntitySnapshot& refChildSnapshot : refSnapshot.vecChildren)
 			{
-				if (!restore_snapshot_recursive(scene_service, child_snapshot, entity.get_id()).is_valid())
+				if (!RestoreSnapshotRecursive(refSceneService, refChildSnapshot, entity.get_id()).is_valid())
 				{
-					scene_service.destroy_entity(entity.get_id());
+					refSceneService.DestroyEntity(entity.get_id());
 					return {};
 				}
 			}
@@ -456,137 +480,151 @@ namespace AshEditor
 		}
 	}
 
-	bool SceneService::initialize(const std::filesystem::path& startup_scene_path)
+	bool SceneService::Initialize(const std::filesystem::path& pathStartupScene)
 	{
-		if (!startup_scene_path.empty() && std::filesystem::exists(startup_scene_path))
+		if (!pathStartupScene.empty() && std::filesystem::exists(pathStartupScene))
 		{
-			if (load_scene(startup_scene_path))
+			if (LoadScene(pathStartupScene))
 			{
 				return true;
 			}
 
-			new_scene("Untitled Scene");
+			NewScene("Untitled Scene");
 			return false;
 		}
 
-		new_scene("Untitled Scene");
-		if (!startup_scene_path.empty())
+		NewScene("Untitled Scene");
+		if (!pathStartupScene.empty())
 		{
-			m_activeScenePath = startup_scene_path;
+			_pathActiveScene = pathStartupScene;
 		}
 		return true;
 	}
 
-	AshEngine::Scene& SceneService::get_active_scene()
+	AshEngine::Scene& SceneService::GetActiveScene()
 	{
-		return m_activeScene;
+		return _activeScene;
 	}
 
-	const AshEngine::Scene& SceneService::get_active_scene() const
+	const AshEngine::Scene& SceneService::GetActiveScene() const
 	{
-		return m_activeScene;
+		return _activeScene;
 	}
 
-	AshEngine::Entity SceneService::find_entity(EntityId id) const
+	AshEngine::Entity SceneService::FindEntity(const SceneEntityId uSceneEntityId) const
 	{
-		return m_activeScene.find_entity(id);
+		return _activeScene.find_entity(uSceneEntityId);
 	}
 
-	uint32_t SceneService::get_entity_sibling_index(EntityId id) const
+	uint32_t SceneService::GetEntitySiblingIndex(const SceneEntityId uSceneEntityId) const
 	{
-		return m_activeScene.get_entity_sibling_index(id);
+		return _activeScene.get_entity_sibling_index(uSceneEntityId);
 	}
 
-	AshEngine::Entity SceneService::create_entity(const std::string& name, EntityId parent_id)
+	AshEngine::Entity SceneService::CreateEntity(const std::string& strName, const SceneEntityId uParentId)
 	{
-		return create_entity(name, parent_id, AshEngine::k_scene_append_sibling_index);
+		return CreateEntity(strName, uParentId, kSceneAppendSiblingIndex);
 	}
 
-	AshEngine::Entity SceneService::create_entity(const std::string& name, EntityId parent_id, uint32_t sibling_index)
+	AshEngine::Entity SceneService::CreateEntity(
+		const std::string& strName,
+		const SceneEntityId uParentId,
+		const uint32_t uSiblingIndex)
 	{
-		const AshEngine::Entity parent = parent_id != 0 ? m_activeScene.find_entity(parent_id) : AshEngine::Entity{};
+		const AshEngine::Entity parent = uParentId != 0 ? _activeScene.find_entity(uParentId) : AshEngine::Entity{};
 		return parent.is_valid()
-			? m_activeScene.create_entity(name, parent, sibling_index)
-			: m_activeScene.create_entity(name, {}, sibling_index);
+			? _activeScene.create_entity(strName, parent, uSiblingIndex)
+			: _activeScene.create_entity(strName, {}, uSiblingIndex);
 	}
 
-	AshEngine::Entity SceneService::create_entity_with_id(EntityId id, const std::string& name, EntityId parent_id)
+	AshEngine::Entity SceneService::CreateEntityWithId(
+		const SceneEntityId uSceneEntityId,
+		const std::string& strName,
+		const SceneEntityId uParentId)
 	{
-		return create_entity_with_id(id, name, parent_id, AshEngine::k_scene_append_sibling_index);
+		return CreateEntityWithId(uSceneEntityId, strName, uParentId, kSceneAppendSiblingIndex);
 	}
 
-	AshEngine::Entity SceneService::create_entity_with_id(EntityId id, const std::string& name, EntityId parent_id, uint32_t sibling_index)
+	AshEngine::Entity SceneService::CreateEntityWithId(
+		const SceneEntityId uSceneEntityId,
+		const std::string& strName,
+		const SceneEntityId uParentId,
+		const uint32_t uSiblingIndex)
 	{
-		if (id == 0)
+		if (uSceneEntityId == 0)
 		{
 			return {};
 		}
 
-		const AshEngine::Entity parent = parent_id != 0 ? m_activeScene.find_entity(parent_id) : AshEngine::Entity{};
+		const AshEngine::Entity parent = uParentId != 0 ? _activeScene.find_entity(uParentId) : AshEngine::Entity{};
 		return parent.is_valid()
-			? m_activeScene.create_entity_with_id(id, name, parent, sibling_index)
-			: m_activeScene.create_entity_with_id(id, name, {}, sibling_index);
+			? _activeScene.create_entity_with_id(uSceneEntityId, strName, parent, uSiblingIndex)
+			: _activeScene.create_entity_with_id(uSceneEntityId, strName, {}, uSiblingIndex);
 	}
 
-	bool SceneService::rename_entity(EntityId id, std::string_view name)
+	bool SceneService::RenameEntity(const SceneEntityId uSceneEntityId, const std::string_view svName)
 	{
-		AshEngine::Entity entity = find_entity(id);
-		return entity.is_valid() && entity.set_name(name);
+		AshEngine::Entity entity = FindEntity(uSceneEntityId);
+		return entity.is_valid() && entity.set_name(svName);
 	}
 
-	bool SceneService::destroy_entity(EntityId id)
+	bool SceneService::DestroyEntity(const SceneEntityId uSceneEntityId)
 	{
-		return id != 0 && m_activeScene.destroy_entity(id);
+		return uSceneEntityId != 0 && _activeScene.destroy_entity(uSceneEntityId);
 	}
 
-	bool SceneService::reparent_entity(EntityId id, EntityId new_parent_id)
+	bool SceneService::ReparentEntity(const SceneEntityId uSceneEntityId, const SceneEntityId uNewParentId)
 	{
-		return reparent_entity(id, new_parent_id, AshEngine::k_scene_append_sibling_index);
+		return ReparentEntity(uSceneEntityId, uNewParentId, kSceneAppendSiblingIndex);
 	}
 
-	bool SceneService::reparent_entity(EntityId id, EntityId new_parent_id, uint32_t sibling_index)
+	bool SceneService::ReparentEntity(
+		const SceneEntityId uSceneEntityId,
+		const SceneEntityId uNewParentId,
+		const uint32_t uSiblingIndex)
 	{
-		return can_reparent_entity(id, new_parent_id) && m_activeScene.reparent_entity(id, new_parent_id, sibling_index);
+		return CanReparentEntity(uSceneEntityId, uNewParentId) &&
+			_activeScene.reparent_entity(uSceneEntityId, uNewParentId, uSiblingIndex);
 	}
 
-	bool SceneService::can_reparent_entity(EntityId id, EntityId new_parent_id) const
+	bool SceneService::CanReparentEntity(const SceneEntityId uSceneEntityId, const SceneEntityId uNewParentId) const
 	{
-		if (id == 0 || id == new_parent_id)
+		if (uSceneEntityId == 0 || uSceneEntityId == uNewParentId)
 		{
 			return false;
 		}
 
-		const AshEngine::Entity entity = find_entity(id);
+		const AshEngine::Entity entity = FindEntity(uSceneEntityId);
 		if (!entity.is_valid())
 		{
 			return false;
 		}
 
-		if (new_parent_id == 0)
+		if (uNewParentId == 0)
 		{
 			return true;
 		}
 
-		const AshEngine::Entity new_parent = find_entity(new_parent_id);
-		if (!new_parent.is_valid())
+		const AshEngine::Entity newParent = FindEntity(uNewParentId);
+		if (!newParent.is_valid())
 		{
 			return false;
 		}
 
-		return !is_descendant_of(new_parent_id, id);
+		return !IsDescendantOf(uNewParentId, uSceneEntityId);
 	}
 
-	bool SceneService::is_descendant_of(EntityId id, EntityId potential_ancestor_id) const
+	bool SceneService::IsDescendantOf(const SceneEntityId uSceneEntityId, const SceneEntityId uPotentialAncestorId) const
 	{
-		if (id == 0 || potential_ancestor_id == 0)
+		if (uSceneEntityId == 0 || uPotentialAncestorId == 0)
 		{
 			return false;
 		}
 
-		AshEngine::Entity current = find_entity(id).get_parent();
+		AshEngine::Entity current = FindEntity(uSceneEntityId).get_parent();
 		while (current.is_valid())
 		{
-			if (current.get_id() == potential_ancestor_id)
+			if (current.get_id() == uPotentialAncestorId)
 			{
 				return true;
 			}
@@ -595,76 +633,76 @@ namespace AshEditor
 		return false;
 	}
 
-	std::optional<SceneEntitySnapshot> SceneService::capture_entity_snapshot(EntityId id) const
+	std::optional<SceneEntitySnapshot> SceneService::CaptureEntitySnapshot(const SceneEntityId uSceneEntityId) const
 	{
-		const AshEngine::Entity entity = find_entity(id);
+		const AshEngine::Entity entity = FindEntity(uSceneEntityId);
 		if (!entity.is_valid())
 		{
 			return std::nullopt;
 		}
-		return capture_snapshot_recursive(*this, entity);
+		return CaptureSnapshotRecursive(*this, entity);
 	}
 
-	AshEngine::Entity SceneService::restore_entity_snapshot(const SceneEntitySnapshot& snapshot, EntityId parent_id)
+	AshEngine::Entity SceneService::RestoreEntitySnapshot(const SceneEntitySnapshot& refSnapshot, const SceneEntityId uParentId)
 	{
-		return restore_snapshot_recursive(*this, snapshot, parent_id);
+		return RestoreSnapshotRecursive(*this, refSnapshot, uParentId);
 	}
 
-	void SceneService::new_scene(const std::string& name)
+	void SceneService::NewScene(const std::string& strName)
 	{
-		m_activeScene = AshEngine::Scene::create(name);
-		m_activeScenePath.clear();
-		create_default_entities();
-		m_activeScene.mark_clean();
+		_activeScene = AshEngine::Scene::create(strName);
+		_pathActiveScene.clear();
+		CreateDefaultEntities();
+		_activeScene.mark_clean();
 	}
 
-	bool SceneService::load_scene(const std::filesystem::path& path)
+	bool SceneService::LoadScene(const std::filesystem::path& pathScene)
 	{
-		std::string error{};
-		AshEngine::Scene loaded_scene = AshEngine::Scene::load_from_file(path, &error);
-		if (!loaded_scene.is_valid())
+		std::string strError{};
+		AshEngine::Scene loadedScene = AshEngine::Scene::load_from_file(pathScene, &strError);
+		if (!loadedScene.is_valid())
 		{
 			return false;
 		}
 
-		m_activeScene = std::move(loaded_scene);
-		m_activeScenePath = path;
+		_activeScene = std::move(loadedScene);
+		_pathActiveScene = pathScene;
 		return true;
 	}
 
-	bool SceneService::save_scene(const std::filesystem::path& path)
+	bool SceneService::SaveScene(const std::filesystem::path& pathScene)
 	{
-		if (path.empty())
+		if (pathScene.empty())
 		{
 			return false;
 		}
 
-		std::string error{};
-		if (!m_activeScene.save_to_file(path, &error))
+		std::string strError{};
+		if (!_activeScene.save_to_file(pathScene, &strError))
 		{
 			return false;
 		}
 
-		m_activeScenePath = path;
+		_pathActiveScene = pathScene;
 		return true;
 	}
 
-	const std::filesystem::path& SceneService::get_active_scene_path() const
+	const std::filesystem::path& SceneService::GetActiveScenePath() const
 	{
-		return m_activeScenePath;
+		return _pathActiveScene;
 	}
 
-	void SceneService::create_default_entities()
+	void SceneService::CreateDefaultEntities()
 	{
-		AshEngine::Entity root = m_activeScene.create_entity("SceneRoot");
+		AshEngine::Entity root = _activeScene.create_entity("SceneRoot");
 
-		AshEngine::Entity camera = m_activeScene.create_entity("MainCamera", root);
+		AshEngine::Entity camera = _activeScene.create_entity("MainCamera", root);
 		AshEngine::TransformComponent camera_transform = camera.get_transform_component();
 		camera_transform.position = { 0.0f, 2.0f, -8.0f };
 		camera.set_transform_component(camera_transform);
 		camera.add_camera_component({});
 
-		AshEngine::Entity light = m_activeScene.create_entity("DirectionalLight", root);
+		AshEngine::Entity light = _activeScene.create_entity("DirectionalLight", root);
 		AshEngine::TransformComponent light_transform = light.get_transform_component();
 		light_transform.rotation_euler_degrees = { -45.0f, 0.0f, 0.0f };
 		light.set_transform_component(light_transform);

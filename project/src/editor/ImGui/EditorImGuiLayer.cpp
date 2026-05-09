@@ -9,14 +9,14 @@
 
 namespace AshEditor
 {
-	bool EditorImGuiLayer::init(void* native_window, const std::filesystem::path& ini_file_path)
+	bool EditorImGuiLayer::Init(void* pNativeWindow, const std::filesystem::path& pathIniFile)
 	{
-		if (m_initialized)
+		if (_bInitialized)
 		{
 			return true;
 		}
 
-		if (!native_window)
+		if (!pNativeWindow)
 		{
 			return false;
 		}
@@ -27,40 +27,40 @@ namespace AshEditor
 		io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 		io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-		std::filesystem::create_directories(ini_file_path.parent_path());
-		m_iniFilePath = ini_file_path.string();
-		io.IniFilename = m_iniFilePath.c_str();
+		std::filesystem::create_directories(pathIniFile.parent_path());
+		_strIniFilePath = pathIniFile.string();
+		io.IniFilename = _strIniFilePath.c_str();
 
-		EditorStyle::apply();
+		EditorStyle::Apply();
 
-		if (!ImGui_ImplGlfw_InitForOther(static_cast<GLFWwindow*>(native_window), true))
+		if (!ImGui_ImplGlfw_InitForOther(static_cast<GLFWwindow*>(pNativeWindow), true))
 		{
 			ImGui::DestroyContext();
 			return false;
 		}
 
-		m_initialized = true;
-		m_rendererBackendReady = false;
+		_bInitialized = true;
+		_bRendererBackendReady = false;
 		return true;
 	}
 
-	void EditorImGuiLayer::shutdown()
+	void EditorImGuiLayer::Shutdown()
 	{
-		if (!m_initialized)
+		if (!_bInitialized)
 		{
 			return;
 		}
 
 		ImGui_ImplGlfw_Shutdown();
 		ImGui::DestroyContext();
-		m_initialized = false;
-		m_rendererBackendReady = false;
-		m_iniFilePath.clear();
+		_bInitialized = false;
+		_bRendererBackendReady = false;
+		_strIniFilePath.clear();
 	}
 
-	bool EditorImGuiLayer::begin_frame()
+	bool EditorImGuiLayer::BeginFrame()
 	{
-		if (!m_initialized)
+		if (!_bInitialized)
 		{
 			return false;
 		}
@@ -70,9 +70,9 @@ namespace AshEditor
 		return true;
 	}
 
-	void EditorImGuiLayer::render()
+	void EditorImGuiLayer::Render()
 	{
-		if (!m_initialized)
+		if (!_bInitialized)
 		{
 			return;
 		}
@@ -80,13 +80,13 @@ namespace AshEditor
 		ImGui::Render();
 	}
 
-	bool EditorImGuiLayer::is_initialized() const
+	bool EditorImGuiLayer::IsInitialized() const
 	{
-		return m_initialized;
+		return _bInitialized;
 	}
 
-	bool EditorImGuiLayer::has_renderer_backend() const
+	bool EditorImGuiLayer::HasRendererBackend() const
 	{
-		return m_rendererBackendReady;
+		return _bRendererBackendReady;
 	}
 }

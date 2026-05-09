@@ -4,75 +4,72 @@
 
 namespace AshEditor
 {
-	EditorPanel::EditorPanel(std::string id, std::string title)
-		: m_id(std::move(id))
-		, m_title(std::move(title))
+	EditorPanel::EditorPanel(std::string strId, std::string strTitle)
+		: _strId(std::move(strId))
+		, _strTitle(std::move(strTitle))
 	{
 	}
 
-	const std::string& EditorPanel::get_id() const
+	const std::string& EditorPanel::GetId() const
 	{
-		return m_id;
+		return _strId;
 	}
 
-	const std::string& EditorPanel::get_title() const
+	const std::string& EditorPanel::GetTitle() const
 	{
-		return m_title;
+		return _strTitle;
 	}
 
-	bool EditorPanel::is_open() const
+	bool EditorPanel::IsOpen() const
 	{
-		return m_open;
+		return _bOpen;
 	}
 
-	void EditorPanel::set_open(bool open)
+	void EditorPanel::SetOpen(bool bOpen)
 	{
-		m_open = open;
+		_bOpen = bOpen;
 	}
 
-	void EditorPanel::on_attach(EditorContext& context)
+	void EditorPanel::OnAttach()
 	{
-		(void)context;
 	}
 
-	void EditorPanel::on_detach(EditorContext& context)
+	void EditorPanel::OnDetach()
 	{
-		(void)context;
 	}
 
-	void EditorPanel::on_update(EditorContext& context)
+	void EditorPanel::OnUpdate()
 	{
-		(void)context;
 	}
 
-	void EditorPanel::on_gui(EditorContext& context)
+	void EditorPanel::OnGui(const EditorFrameContext& refFrameContext)
 	{
-		(void)context;
+		(void)refFrameContext;
 	}
 
-	bool EditorPanel::begin_panel_window(EditorContext& context, AshEngine::UIWindowFlags flags)
+	bool EditorPanel::BeginPanelWindow(const EditorFrameContext& refFrameContext, AshEngine::UIWindowFlags flags)
 	{
-		m_windowActiveThisFrame = false;
-		if (!context.ui_context || !context.ui_context->is_frame_active())
+		_bWindowActiveThisFrame = false;
+		if (!refFrameContext.pUiContext || !refFrameContext.pUiContext->is_frame_active())
 		{
 			return false;
 		}
 
-		context.ui_context->set_next_window_force_dock_tab_bar(true);
+		refFrameContext.pUiContext->set_next_window_force_dock_tab_bar(true);
 
-		bool open = m_open;
-		const bool visible = context.ui_context->begin_window(m_title.c_str(), &open, flags);
-		m_open = open;
-		m_windowActiveThisFrame = true;
-		return visible;
+		bool bOpen = _bOpen;
+		const bool bVisible = refFrameContext.pUiContext->begin_window(_strTitle.c_str(), &bOpen, flags);
+		_bOpen = bOpen;
+		_bWindowActiveThisFrame = true;
+		return bVisible;
 	}
 
-	void EditorPanel::end_panel_window(EditorContext& context)
+	void EditorPanel::EndPanelWindow(const EditorFrameContext& refFrameContext)
 	{
-		if (m_windowActiveThisFrame && context.ui_context)
+		if (_bWindowActiveThisFrame && refFrameContext.pUiContext)
 		{
-			context.ui_context->end_window();
+			refFrameContext.pUiContext->end_window();
 		}
-		m_windowActiveThisFrame = false;
+		_bWindowActiveThisFrame = false;
 	}
 }

@@ -1,5 +1,8 @@
 #include "Services/EditorSettingsService.h"
+
+#include "Function/Gui/UICommon.h"
 #include <json.hpp>
+
 #include <fstream>
 
 namespace AshEditor
@@ -9,7 +12,7 @@ namespace AshEditor
 		using json = nlohmann::json;
 	}
 
-	AshEngine::UIThemePreset parse_editor_ui_theme_preset(std::string_view value)
+	AshEngine::UIThemePreset ParseEditorUiThemePreset(std::string_view value)
 	{
 		if (value == "classic_dark")
 		{
@@ -19,7 +22,7 @@ namespace AshEditor
 		return AshEngine::UIThemePreset::SlateStudio;
 	}
 
-	const char* get_editor_ui_theme_preset_name(AshEngine::UIThemePreset preset)
+	const char* GetEditorUiThemePresetName(const AshEngine::UIThemePreset preset)
 	{
 		switch (preset)
 		{
@@ -31,7 +34,7 @@ namespace AshEditor
 		}
 	}
 
-	const char* get_editor_ui_theme_preset_label(AshEngine::UIThemePreset preset)
+	const char* GetEditorUiThemePresetLabel(const AshEngine::UIThemePreset preset)
 	{
 		switch (preset)
 		{
@@ -43,7 +46,7 @@ namespace AshEditor
 		}
 	}
 
-	std::filesystem::path discover_editor_workspace_root()
+	std::filesystem::path DiscoverEditorWorkspaceRoot()
 	{
 		std::filesystem::path current = std::filesystem::current_path();
 		while (!current.empty())
@@ -65,26 +68,26 @@ namespace AshEditor
 		return std::filesystem::current_path();
 	}
 
-	bool EditorSettingsService::initialize(const std::filesystem::path& workspace_root)
+	bool EditorSettingsService::Initialize(const std::filesystem::path& pathWorkspaceRoot)
 	{
-		m_workspaceRoot = workspace_root;
-		m_settingsFilePath = m_workspaceRoot / "product" / "config" / "editor" / "EditorSettings.json";
-		return load();
+		_pathWorkspaceRoot = pathWorkspaceRoot;
+		_pathSettingsFilePath = _pathWorkspaceRoot / "product" / "config" / "editor" / "EditorSettings.json";
+		return Load();
 	}
 
-	bool EditorSettingsService::load()
+	bool EditorSettingsService::Load()
 	{
-		if (m_settingsFilePath.empty())
+		if (_pathSettingsFilePath.empty())
 		{
 			return false;
 		}
 
-		if (!std::filesystem::exists(m_settingsFilePath))
+		if (!std::filesystem::exists(_pathSettingsFilePath))
 		{
-			return save();
+			return Save();
 		}
 
-		std::ifstream input(m_settingsFilePath);
+		std::ifstream input(_pathSettingsFilePath);
 		if (!input.is_open())
 		{
 			return false;
@@ -92,45 +95,45 @@ namespace AshEditor
 
 		json root{};
 		input >> root;
-		m_settings.last_scene_path = root.value("lastScenePath", m_settings.last_scene_path);
-		m_settings.assets_root = root.value("assetsRoot", m_settings.assets_root);
-		m_settings.layout_ini_path = root.value("layoutIniPath", m_settings.layout_ini_path);
-		m_settings.startup_scene_path = root.value("startupScenePath", m_settings.startup_scene_path);
-		m_settings.asset_browser_search_text = root.value("assetBrowserSearchText", m_settings.asset_browser_search_text);
-		m_settings.asset_browser_active_directory = root.value("assetBrowserActiveDirectory", m_settings.asset_browser_active_directory);
-		m_settings.asset_browser_show_details = root.value("assetBrowserShowDetails", m_settings.asset_browser_show_details);
-		m_settings.asset_browser_type_filter = root.value("assetBrowserTypeFilter", m_settings.asset_browser_type_filter);
-		m_settings.asset_browser_view_mode = root.value("assetBrowserViewMode", m_settings.asset_browser_view_mode);
-		m_settings.console_filter_text = root.value("consoleFilterText", m_settings.console_filter_text);
-		m_settings.console_severity_filter = root.value("consoleSeverityFilter", m_settings.console_severity_filter);
-		m_settings.ui_theme_preset = root.value("uiThemePreset", m_settings.ui_theme_preset);
+		_settings.strLastScenePath = root.value("lastScenePath", _settings.strLastScenePath);
+		_settings.strAssetsRoot = root.value("assetsRoot", _settings.strAssetsRoot);
+		_settings.strLayoutIniPath = root.value("layoutIniPath", _settings.strLayoutIniPath);
+		_settings.strStartupScenePath = root.value("startupScenePath", _settings.strStartupScenePath);
+		_settings.strAssetBrowserSearchText = root.value("assetBrowserSearchText", _settings.strAssetBrowserSearchText);
+		_settings.strAssetBrowserActiveDirectory = root.value("assetBrowserActiveDirectory", _settings.strAssetBrowserActiveDirectory);
+		_settings.bAssetBrowserShowDetails = root.value("assetBrowserShowDetails", _settings.bAssetBrowserShowDetails);
+		_settings.iAssetBrowserTypeFilter = root.value("assetBrowserTypeFilter", _settings.iAssetBrowserTypeFilter);
+		_settings.iAssetBrowserViewMode = root.value("assetBrowserViewMode", _settings.iAssetBrowserViewMode);
+		_settings.strConsoleFilterText = root.value("consoleFilterText", _settings.strConsoleFilterText);
+		_settings.iConsoleSeverityFilter = root.value("consoleSeverityFilter", _settings.iConsoleSeverityFilter);
+		_settings.strUiThemePreset = root.value("uiThemePreset", _settings.strUiThemePreset);
 		return true;
 	}
 
-	bool EditorSettingsService::save() const
+	bool EditorSettingsService::Save() const
 	{
-		if (m_settingsFilePath.empty())
+		if (_pathSettingsFilePath.empty())
 		{
 			return false;
 		}
 
-		std::filesystem::create_directories(m_settingsFilePath.parent_path());
+		std::filesystem::create_directories(_pathSettingsFilePath.parent_path());
 
 		json root{};
-		root["lastScenePath"] = m_settings.last_scene_path;
-		root["assetsRoot"] = m_settings.assets_root;
-		root["layoutIniPath"] = m_settings.layout_ini_path;
-		root["startupScenePath"] = m_settings.startup_scene_path;
-		root["assetBrowserSearchText"] = m_settings.asset_browser_search_text;
-		root["assetBrowserActiveDirectory"] = m_settings.asset_browser_active_directory;
-		root["assetBrowserShowDetails"] = m_settings.asset_browser_show_details;
-		root["assetBrowserTypeFilter"] = m_settings.asset_browser_type_filter;
-		root["assetBrowserViewMode"] = m_settings.asset_browser_view_mode;
-		root["consoleFilterText"] = m_settings.console_filter_text;
-		root["consoleSeverityFilter"] = m_settings.console_severity_filter;
-		root["uiThemePreset"] = m_settings.ui_theme_preset;
+		root["lastScenePath"] = _settings.strLastScenePath;
+		root["assetsRoot"] = _settings.strAssetsRoot;
+		root["layoutIniPath"] = _settings.strLayoutIniPath;
+		root["startupScenePath"] = _settings.strStartupScenePath;
+		root["assetBrowserSearchText"] = _settings.strAssetBrowserSearchText;
+		root["assetBrowserActiveDirectory"] = _settings.strAssetBrowserActiveDirectory;
+		root["assetBrowserShowDetails"] = _settings.bAssetBrowserShowDetails;
+		root["assetBrowserTypeFilter"] = _settings.iAssetBrowserTypeFilter;
+		root["assetBrowserViewMode"] = _settings.iAssetBrowserViewMode;
+		root["consoleFilterText"] = _settings.strConsoleFilterText;
+		root["consoleSeverityFilter"] = _settings.iConsoleSeverityFilter;
+		root["uiThemePreset"] = _settings.strUiThemePreset;
 
-		std::ofstream output(m_settingsFilePath, std::ios::out | std::ios::trunc);
+		std::ofstream output(_pathSettingsFilePath, std::ios::out | std::ios::trunc);
 		if (!output.is_open())
 		{
 			return false;
@@ -140,43 +143,43 @@ namespace AshEditor
 		return output.good();
 	}
 
-	EditorSettings& EditorSettingsService::get_settings()
+	EditorSettings& EditorSettingsService::GetSettings()
 	{
-		return m_settings;
+		return _settings;
 	}
 
-	const EditorSettings& EditorSettingsService::get_settings() const
+	const EditorSettings& EditorSettingsService::GetSettings() const
 	{
-		return m_settings;
+		return _settings;
 	}
 
-	const std::filesystem::path& EditorSettingsService::get_workspace_root() const
+	const std::filesystem::path& EditorSettingsService::GetWorkspaceRoot() const
 	{
-		return m_workspaceRoot;
+		return _pathWorkspaceRoot;
 	}
 
-	std::filesystem::path EditorSettingsService::resolve_workspace_path(const std::filesystem::path& path) const
+	std::filesystem::path EditorSettingsService::ResolveWorkspacePath(const std::filesystem::path& path) const
 	{
 		if (path.empty())
 		{
 			return {};
 		}
 
-		return path.is_absolute() ? path : (m_workspaceRoot / path);
+		return path.is_absolute() ? path : (_pathWorkspaceRoot / path);
 	}
 
-	std::filesystem::path EditorSettingsService::get_assets_root_path() const
+	std::filesystem::path EditorSettingsService::GetAssetsRootPath() const
 	{
-		return resolve_workspace_path(m_settings.assets_root);
+		return ResolveWorkspacePath(_settings.strAssetsRoot);
 	}
 
-	std::filesystem::path EditorSettingsService::get_layout_ini_path() const
+	std::filesystem::path EditorSettingsService::GetLayoutIniPath() const
 	{
-		return resolve_workspace_path(m_settings.layout_ini_path);
+		return ResolveWorkspacePath(_settings.strLayoutIniPath);
 	}
 
-	std::filesystem::path EditorSettingsService::get_startup_scene_path() const
+	std::filesystem::path EditorSettingsService::GetStartupScenePath() const
 	{
-		return resolve_workspace_path(m_settings.startup_scene_path);
+		return ResolveWorkspacePath(_settings.strStartupScenePath);
 	}
 }

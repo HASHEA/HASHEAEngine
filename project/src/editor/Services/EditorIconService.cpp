@@ -7,23 +7,22 @@
 #include "Graphics/RHICommon.h"
 #include "Graphics/Texture.h"
 
-#define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
 namespace AshEditor
 {
 	namespace
 	{
-		constexpr const char* k_editorIconRoot = "product/assets/editor-temp/unreal-icons";
+		constexpr const char* kEditorIconRoot = "product/assets/editor-temp/unreal-icons";
 
 		struct EditorIconDefinition
 		{
-			EditorIconId id = EditorIconId::FolderClosed;
-			const char* relative_path = nullptr;
-			const char* debug_name = nullptr;
+			EditorIconId eIconId = EditorIconId::FolderClosed;
+			const char* pRelativePath = nullptr;
+			const char* pDebugName = nullptr;
 		};
 
-		constexpr std::array<EditorIconDefinition, static_cast<size_t>(EditorIconId::Count)> k_iconDefinitions{ {
+		constexpr std::array<EditorIconDefinition, static_cast<size_t>(EditorIconId::Count)> kIconDefinitions{ {
 			{ EditorIconId::FolderClosed, "folders/FolderClosed.png", "EditorIcon.FolderClosed" },
 			{ EditorIconId::FolderOpen, "folders/FolderOpen.png", "EditorIcon.FolderOpen" },
 			{ EditorIconId::File, "files/Default_16x.png", "EditorIcon.File" },
@@ -36,181 +35,181 @@ namespace AshEditor
 			{ EditorIconId::EntityMesh, "files/StaticMesh_16x.png", "EditorIcon.EntityMesh" },
 		} };
 
-		auto to_index(EditorIconId icon_id) -> size_t
+		size_t ToIndex(EditorIconId eIconId)
 		{
-			return static_cast<size_t>(icon_id);
+			return static_cast<size_t>(eIconId);
 		}
 	}
 
-	bool EditorIconService::initialize(const std::filesystem::path& workspace_root)
+	bool EditorIconService::Initialize(const std::filesystem::path& refWorkspaceRoot)
 	{
-		shutdown();
-		m_workspaceRoot = workspace_root;
-		m_iconRoot = workspace_root / k_editorIconRoot;
-		register_default_icons();
+		Shutdown();
+		_pathWorkspaceRoot = refWorkspaceRoot;
+		_pathIconRoot = refWorkspaceRoot / kEditorIconRoot;
+		RegisterDefaultIcons();
 		return true;
 	}
 
-	void EditorIconService::shutdown(AshEngine::UIContext* ui_context)
+	void EditorIconService::Shutdown(AshEngine::UIContext* pUiContext)
 	{
-		AshEngine::UIContext* active_ui_context = ui_context ? ui_context : m_registeredUiContext;
-		if (active_ui_context)
+		AshEngine::UIContext* pActiveUiContext = pUiContext ? pUiContext : _pRegisteredUiContext;
+		if (pActiveUiContext)
 		{
-			for (IconEntry& icon : m_icons)
+			for (IconEntry& refIcon : _arrIcons)
 			{
-				if (icon.handle && icon.texture_view)
+				if (refIcon.pUiTextureHandle && refIcon.spTextureView)
 				{
-					active_ui_context->unregister_texture_view(icon.texture_view);
+					pActiveUiContext->unregister_texture_view(refIcon.spTextureView);
 				}
 			}
 		}
 
-		for (IconEntry& icon : m_icons)
+		for (IconEntry& refIcon : _arrIcons)
 		{
-			icon = {};
+			refIcon = {};
 		}
 
-		m_registeredUiContext = nullptr;
-		m_iconRoot.clear();
-		m_workspaceRoot.clear();
+		_pRegisteredUiContext = nullptr;
+		_pathIconRoot.clear();
+		_pathWorkspaceRoot.clear();
 	}
 
-	AshEngine::UITextureHandle EditorIconService::get_icon(EditorIconId icon_id, AshEngine::UIContext& ui_context)
+	AshEngine::UITextureHandle EditorIconService::GetIcon(EditorIconId eIconId, AshEngine::UIContext& refUiContext)
 	{
-		if (m_registeredUiContext != &ui_context)
+		if (_pRegisteredUiContext != &refUiContext)
 		{
-			clear_handles();
-			m_registeredUiContext = &ui_context;
+			ClearHandles();
+			_pRegisteredUiContext = &refUiContext;
 		}
 
-		IconEntry& icon = get_entry(icon_id);
-		if (!ensure_icon_loaded(icon))
+		IconEntry& refIcon = GetEntry(eIconId);
+		if (!EnsureIconLoaded(refIcon))
 		{
 			return nullptr;
 		}
 
-		if (!icon.handle)
+		if (!refIcon.pUiTextureHandle)
 		{
-			icon.handle = ui_context.register_texture_view(icon.texture_view);
-			if (!icon.handle)
+			refIcon.pUiTextureHandle = refUiContext.register_texture_view(refIcon.spTextureView);
+			if (!refIcon.pUiTextureHandle)
 			{
-				HLogWarning("EditorIconService failed to register icon '{}'.", icon.file_path.generic_string());
+				HLogWarning("EditorIconService failed to register icon '{}'.", refIcon.pathFile.generic_string());
 			}
 		}
 
-		return icon.handle;
+		return refIcon.pUiTextureHandle;
 	}
 
-	void EditorIconService::register_default_icons()
+	void EditorIconService::RegisterDefaultIcons()
 	{
-		for (const EditorIconDefinition& definition : k_iconDefinitions)
+		for (const EditorIconDefinition& refDefinition : kIconDefinitions)
 		{
-			IconEntry& icon = get_entry(definition.id);
-			icon.file_path = m_iconRoot / definition.relative_path;
-			icon.debug_name = definition.debug_name ? definition.debug_name : "";
+			IconEntry& refIcon = GetEntry(refDefinition.eIconId);
+			refIcon.pathFile = _pathIconRoot / refDefinition.pRelativePath;
+			refIcon.strDebugName = refDefinition.pDebugName ? refDefinition.pDebugName : "";
 		}
 	}
 
-	void EditorIconService::clear_handles()
+	void EditorIconService::ClearHandles()
 	{
-		for (IconEntry& icon : m_icons)
+		for (IconEntry& refIcon : _arrIcons)
 		{
-			icon.handle = nullptr;
+			refIcon.pUiTextureHandle = nullptr;
 		}
 	}
 
-	bool EditorIconService::ensure_icon_loaded(IconEntry& entry)
+	bool EditorIconService::EnsureIconLoaded(IconEntry& refEntry)
 	{
-		if (entry.texture_view)
+		if (refEntry.spTextureView)
 		{
 			return true;
 		}
-		if (entry.load_failed)
+		if (refEntry.bLoadFailed)
 		{
 			return false;
 		}
-		if (entry.file_path.empty())
+		if (refEntry.pathFile.empty())
 		{
-			entry.load_failed = true;
+			refEntry.bLoadFailed = true;
 			return false;
 		}
-		if (!std::filesystem::exists(entry.file_path))
+		if (!std::filesystem::exists(refEntry.pathFile))
 		{
-			HLogWarning("EditorIconService could not find icon '{}'.", entry.file_path.generic_string());
-			entry.load_failed = true;
-			return false;
-		}
-
-		RHI::GraphicsContext* graphics_context = AshEngine::Application::get_graphics_context();
-		if (!graphics_context)
-		{
-			HLogWarning("EditorIconService skipped loading '{}' because GraphicsContext is unavailable.", entry.file_path.generic_string());
+			HLogWarning("EditorIconService could not find icon '{}'.", refEntry.pathFile.generic_string());
+			refEntry.bLoadFailed = true;
 			return false;
 		}
 
-		int width = 0;
-		int height = 0;
-		int channels = 0;
-		stbi_uc* pixels = stbi_load(entry.file_path.string().c_str(), &width, &height, &channels, 4);
-		if (!pixels)
+		RHI::GraphicsContext* pGraphicsContext = AshEngine::Application::get_graphics_context();
+		if (!pGraphicsContext)
+		{
+			HLogWarning("EditorIconService skipped loading '{}' because GraphicsContext is unavailable.", refEntry.pathFile.generic_string());
+			return false;
+		}
+
+		int iWidth = 0;
+		int iHeight = 0;
+		int iChannels = 0;
+		stbi_uc* pPixels = stbi_load(refEntry.pathFile.string().c_str(), &iWidth, &iHeight, &iChannels, 4);
+		if (!pPixels)
 		{
 			HLogWarning(
 				"EditorIconService failed to decode '{}': {}.",
-				entry.file_path.generic_string(),
+				refEntry.pathFile.generic_string(),
 				stbi_failure_reason() ? stbi_failure_reason() : "unknown");
-			entry.load_failed = true;
+			refEntry.bLoadFailed = true;
 			return false;
 		}
 
-		bool loaded = false;
+		bool bLoaded = false;
 		do
 		{
-			if (width <= 0 || height <= 0 || width > 65535 || height > 65535)
+			if (iWidth <= 0 || iHeight <= 0 || iWidth > 65535 || iHeight > 65535)
 			{
-				HLogWarning("EditorIconService rejected '{}' because the image size is invalid ({}x{}).", entry.file_path.generic_string(), width, height);
+				HLogWarning("EditorIconService rejected '{}' because the image size is invalid ({}x{}).", refEntry.pathFile.generic_string(), iWidth, iHeight);
 				break;
 			}
 
-			RHI::TextureCreation texture_creation{};
-			texture_creation.width = static_cast<uint16_t>(width);
-			texture_creation.height = static_cast<uint16_t>(height);
-			texture_creation.depth = 1;
-			texture_creation.array_layer_count = 1;
-			texture_creation.mip_level_count = 1;
-			texture_creation.format = RHI::ASH_FORMAT_R8G8B8A8_SRGB;
-			texture_creation.type = RHI::Ash_Texture2D;
-			texture_creation.initial_state = RHI::AshResourceState::SRVGraphics;
-			texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
-			texture_creation.uUsageFlags = RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
-			texture_creation.initial_data = pixels;
-			texture_creation.name = entry.debug_name.c_str();
+			RHI::TextureCreation descTexture{};
+			descTexture.width = static_cast<uint16_t>(iWidth);
+			descTexture.height = static_cast<uint16_t>(iHeight);
+			descTexture.depth = 1;
+			descTexture.array_layer_count = 1;
+			descTexture.mip_level_count = 1;
+			descTexture.format = RHI::ASH_FORMAT_R8G8B8A8_SRGB;
+			descTexture.type = RHI::Ash_Texture2D;
+			descTexture.initial_state = RHI::AshResourceState::SRVGraphics;
+			descTexture.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+			descTexture.uUsageFlags = RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
+			descTexture.initial_data = pPixels;
+			descTexture.name = refEntry.strDebugName.c_str();
 
-			entry.texture = graphics_context->create_texture(texture_creation);
-			if (!entry.texture)
+			refEntry.spTexture = pGraphicsContext->create_texture(descTexture);
+			if (!refEntry.spTexture)
 			{
-				HLogWarning("EditorIconService failed to create GPU texture for '{}'.", entry.file_path.generic_string());
+				HLogWarning("EditorIconService failed to create GPU texture for '{}'.", refEntry.pathFile.generic_string());
 				break;
 			}
 
-			entry.texture_view = entry.texture->get_default_srv();
-			if (!entry.texture_view)
+			refEntry.spTextureView = refEntry.spTexture->get_default_srv();
+			if (!refEntry.spTextureView)
 			{
-				HLogWarning("EditorIconService failed to create SRV for '{}'.", entry.file_path.generic_string());
-				entry.texture.reset();
+				HLogWarning("EditorIconService failed to create SRV for '{}'.", refEntry.pathFile.generic_string());
+				refEntry.spTexture.reset();
 				break;
 			}
 
-			loaded = true;
+			bLoaded = true;
 		} while (false);
 
-		stbi_image_free(pixels);
+		stbi_image_free(pPixels);
 
-		entry.load_failed = !loaded;
-		return loaded;
+		refEntry.bLoadFailed = !bLoaded;
+		return bLoaded;
 	}
 
-	EditorIconService::IconEntry& EditorIconService::get_entry(EditorIconId icon_id)
+	EditorIconService::IconEntry& EditorIconService::GetEntry(EditorIconId eIconId)
 	{
-		return m_icons[to_index(icon_id)];
+		return _arrIcons[ToIndex(eIconId)];
 	}
 }

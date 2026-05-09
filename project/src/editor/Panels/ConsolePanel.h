@@ -1,11 +1,17 @@
 #pragma once
+#include "Core/EditorEventBindings.h"
+#include "Core/EditorFrameContext.h"
+#include "Core/PanelDeps/ConsolePanelDeps.h"
 #include "Core/EditorPanel.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace AshEditor
 {
+	class EditorEventBus;
+
 	enum class ConsoleMessageSeverity : uint8_t
 	{
 		Trace = 0,
@@ -16,32 +22,38 @@ namespace AshEditor
 
 	struct ConsoleMessage
 	{
-		ConsoleMessageSeverity severity = ConsoleMessageSeverity::Info;
-		std::string source = "Editor";
-		std::string text{};
+		ConsoleMessageSeverity eSeverity = ConsoleMessageSeverity::Info;
+		std::string strSource = "Editor";
+		std::string strText{};
 	};
 
 	class ConsolePanel final : public EditorPanel
 	{
 	public:
-		ConsolePanel();
+		explicit ConsolePanel(ConsolePanelDeps deps = {});
 
 	public:
-		void add_message(std::string message, ConsoleMessageSeverity severity = ConsoleMessageSeverity::Info, std::string source = "Editor");
-		void clear_messages();
-		const std::vector<ConsoleMessage>& get_messages() const;
+		void AddMessage(std::string strMessage, ConsoleMessageSeverity eSeverity = ConsoleMessageSeverity::Info, std::string strSource = "Editor");
+		void ClearMessages();
+		const std::vector<ConsoleMessage>& GetMessages() const;
+		void BindEventBus(EditorEventBus* pEventBus);
 
-		void on_attach(EditorContext& context) override;
-		void on_gui(EditorContext& context) override;
-
-	private:
-		void reset_filters();
-		void sync_settings(EditorContext& context) const;
-		bool has_any_filters() const;
+		void OnAttach() override;
+		void OnDetach() override;
+		void OnGui(const EditorFrameContext& refFrameContext) override;
 
 	private:
-		std::string m_filterText{};
-		int32_t m_severityFilterIndex = 0;
-		std::vector<ConsoleMessage> m_messages{};
+		void ClearDeps();
+		void UnsubscribeEvents();
+		void ResetFilters();
+		void SyncSettings() const;
+		bool HasAnyFilters() const;
+
+	private:
+		ConsolePanelDeps _deps{};
+		EditorEventBindings _eventBindings{};
+		std::string _strFilterText{};
+		int32_t _iSeverityFilterIndex = 0;
+		std::vector<ConsoleMessage> _vecMessages{};
 	};
 }

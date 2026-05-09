@@ -10,17 +10,17 @@ namespace AshEditor
 		EditorImGuiLayer() = default;
 		~EditorImGuiLayer() = default;
 
-		bool init(void* native_window, const std::filesystem::path& ini_file_path);
-		void shutdown();
-		bool begin_frame();
-		void render();
+		bool Init(void* pNativeWindow, const std::filesystem::path& pathIniFile);
+		void Shutdown();
+		bool BeginFrame();
+		void Render();
 
-		bool is_initialized() const;
-		bool has_renderer_backend() const;
+		bool IsInitialized() const;
+		bool HasRendererBackend() const;
 
 	private:
-		std::string m_iniFilePath{};
-		bool m_initialized = false;
-		bool m_rendererBackendReady = false;
+		std::string _strIniFilePath{};
+		bool _bInitialized = false;
+		bool _bRendererBackendReady = false;
 	};
 }

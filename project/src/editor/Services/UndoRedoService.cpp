@@ -1,228 +1,366 @@
 #include "Services/UndoRedoService.h"
+
+#include "Base/hlog.h"
 #include "Core/EditorCommand.h"
 #include "Core/EditorContext.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+
 #include <utility>
 
 namespace AshEditor
 {
-	bool UndoRedoService::execute(std::unique_ptr<EditorCommand> command, EditorContext& context)
-	{
-		if (!command)
-		{
-			return false;
-		}
+	UndoRedoService::~UndoRedoService() = default;
 
-		return m_pendingTransaction
-			? execute_transactional(std::move(command), context)
-			: execute_standalone(std::move(command), context);
+	void UndoRedoService::SetEventBus(EditorEventBus* pEventBus)
+	{
+		_pEventBus = pEventBus;
 	}
 
-	bool UndoRedoService::undo(EditorContext& context)
+	bool UndoRedoService::Execute(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext)
 	{
-		if (m_pendingTransaction || m_undoStack.empty())
+		if (!upCommand)
 		{
 			return false;
 		}
 
-		std::unique_ptr<EditorCommand> command = std::move(m_undoStack.back());
-		m_undoStack.pop_back();
-		if (!command->undo(context))
+		// During an open transaction, commands are still executed immediately, but history is deferred until commit/cancel.
+		return _upPendingTransaction
+			? ExecuteTransactional(std::move(upCommand), refContext)
+			: ExecuteStandalone(std::move(upCommand), refContext);
+	}
+
+	bool UndoRedoService::Undo(EditorContext& refContext)
+	{
+		if (_upPendingTransaction || _vecUndoStack.empty())
 		{
-			m_undoStack.push_back(std::move(command));
 			return false;
 		}
 
-		apply_selection(context, command->get_selection_after_undo());
-		m_redoStack.push_back(std::move(command));
+		// Keep history stable on failure: if undo() fails, the command is pushed back onto the undo stack.
+		HistoryEntry entry = std::move(_vecUndoStack.back());
+		_vecUndoStack.pop_back();
+		if (!entry.upCommand || !entry.upCommand->Undo(refContext))
+		{
+			HLogWarning(
+				"Undo failed for command '{}'. History preserved. undoStack={}, redoStack={}.",
+				entry.upCommand ? entry.upCommand->GetLabel() : "<null>",
+				_vecUndoStack.size(),
+				_vecRedoStack.size());
+			_vecUndoStack.push_back(std::move(entry));
+			return false;
+		}
+
+		ApplySelection(refContext, entry.upCommand->GetSelectionAfterUndo());
+		_vecRedoStack.push_back(std::move(entry));
+		_uCurrentHistoryStateId = _vecUndoStack.empty() ? 0 : _vecUndoStack.back().uStateId;
+		NotifyHistoryChanged();
+		NotifyDocumentDirtyStateChanged();
 		return true;
 	}
 
-	bool UndoRedoService::redo(EditorContext& context)
+	bool UndoRedoService::Redo(EditorContext& refContext)
 	{
-		if (m_pendingTransaction || m_redoStack.empty())
+		if (_upPendingTransaction || _vecRedoStack.empty())
 		{
 			return false;
 		}
 
-		std::unique_ptr<EditorCommand> command = std::move(m_redoStack.back());
-		m_redoStack.pop_back();
-		if (!command->execute(context))
+		// Keep redo stable on failure: if execute() fails, the command is pushed back onto the redo stack.
+		HistoryEntry entry = std::move(_vecRedoStack.back());
+		_vecRedoStack.pop_back();
+		if (!entry.upCommand || !entry.upCommand->Execute(refContext))
 		{
-			m_redoStack.push_back(std::move(command));
+			HLogWarning(
+				"Redo failed for command '{}'. History preserved. undoStack={}, redoStack={}.",
+				entry.upCommand ? entry.upCommand->GetLabel() : "<null>",
+				_vecUndoStack.size(),
+				_vecRedoStack.size());
+			_vecRedoStack.push_back(std::move(entry));
 			return false;
 		}
 
-		apply_selection(context, command->get_selection_after_execute());
-		m_undoStack.push_back(std::move(command));
+		ApplySelection(refContext, entry.upCommand->GetSelectionAfterExecute());
+		_uCurrentHistoryStateId = entry.uStateId;
+		_vecUndoStack.push_back(std::move(entry));
+		NotifyHistoryChanged();
+		NotifyDocumentDirtyStateChanged();
 		return true;
 	}
 
-	bool UndoRedoService::begin_transaction(std::string label)
+	bool UndoRedoService::BeginTransaction(std::string strLabel)
 	{
-		if (m_pendingTransaction)
+		if (_upPendingTransaction)
 		{
 			return false;
 		}
 
-		m_pendingTransaction = std::make_unique<PendingTransaction>();
-		m_pendingTransaction->label = std::move(label);
+		_upPendingTransaction = std::make_unique<PendingTransaction>();
+		_upPendingTransaction->strLabel = std::move(strLabel);
+		NotifyHistoryChanged();
+		NotifyTransactionStateChanged();
 		return true;
 	}
 
-	bool UndoRedoService::commit_transaction()
+	bool UndoRedoService::CommitTransaction()
 	{
-		if (!m_pendingTransaction)
+		if (!_upPendingTransaction)
 		{
 			return false;
 		}
 
-		if (m_pendingTransaction->commands.empty())
+		if (_upPendingTransaction->vecCommands.empty())
 		{
-			m_pendingTransaction.reset();
+			_upPendingTransaction.reset();
+			NotifyHistoryChanged();
+			NotifyTransactionStateChanged();
 			return true;
 		}
 
-		if (m_pendingTransaction->commands.size() == 1)
+		const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
+		if (_upPendingTransaction->vecCommands.size() == 1)
 		{
-			push_undo_command(std::move(m_pendingTransaction->commands.front()));
-			m_pendingTransaction.reset();
+			PushUndoCommand(std::move(_upPendingTransaction->vecCommands.front()), uNewHistoryStateId);
+			_uCurrentHistoryStateId = uNewHistoryStateId;
+			_upPendingTransaction.reset();
+			NotifyHistoryChanged();
+			NotifyTransactionStateChanged();
+			NotifyDocumentDirtyStateChanged();
 			return true;
 		}
 
-		auto composite = std::make_unique<CompositeCommand>(m_pendingTransaction->label);
-		for (std::unique_ptr<EditorCommand>& command : m_pendingTransaction->commands)
+		std::unique_ptr<CompositeCommand> upComposite = std::make_unique<CompositeCommand>(_upPendingTransaction->strLabel);
+		for (std::unique_ptr<EditorCommand>& upCommand : _upPendingTransaction->vecCommands)
 		{
-			composite->append(std::move(command));
+			upComposite->Append(std::move(upCommand));
 		}
-		push_undo_command(std::move(composite));
-		m_pendingTransaction.reset();
+		PushUndoCommand(std::move(upComposite), uNewHistoryStateId);
+		_uCurrentHistoryStateId = uNewHistoryStateId;
+		_upPendingTransaction.reset();
+		NotifyHistoryChanged();
+		NotifyTransactionStateChanged();
+		NotifyDocumentDirtyStateChanged();
 		return true;
 	}
 
-	void UndoRedoService::cancel_transaction(EditorContext& context)
+	void UndoRedoService::CancelTransaction(EditorContext& refContext)
 	{
-		if (!m_pendingTransaction)
+		if (!_upPendingTransaction)
 		{
 			return;
 		}
 
-		for (auto it = m_pendingTransaction->commands.rbegin(); it != m_pendingTransaction->commands.rend(); ++it)
+		for (
+			std::vector<std::unique_ptr<EditorCommand>>::reverse_iterator itCommand = _upPendingTransaction->vecCommands.rbegin();
+			itCommand != _upPendingTransaction->vecCommands.rend();
+			++itCommand)
 		{
-			if (*it && (*it)->undo(context))
+			if (*itCommand && (*itCommand)->Undo(refContext))
 			{
-				apply_selection(context, (*it)->get_selection_after_undo());
+				ApplySelection(refContext, (*itCommand)->GetSelectionAfterUndo());
+			}
+			else if (*itCommand)
+			{
+				HLogWarning("CancelTransaction failed to undo command '{}'.", (*itCommand)->GetLabel());
 			}
 		}
-		m_pendingTransaction.reset();
+		_upPendingTransaction.reset();
+		NotifyHistoryChanged();
+		NotifyTransactionStateChanged();
+		NotifyDocumentDirtyStateChanged();
 	}
 
-	void UndoRedoService::clear()
+	void UndoRedoService::Clear()
 	{
-		m_pendingTransaction.reset();
-		m_undoStack.clear();
-		m_redoStack.clear();
+		_upPendingTransaction.reset();
+		_vecUndoStack.clear();
+		_vecRedoStack.clear();
+		_uCurrentHistoryStateId = 0;
+		_uSavedHistoryStateId = 0;
+		_uNextHistoryStateId = 1;
+		NotifyHistoryChanged();
+		NotifyTransactionStateChanged();
+		NotifyDocumentDirtyStateChanged();
 	}
 
-	bool UndoRedoService::can_undo() const
+	void UndoRedoService::MarkSaved()
 	{
-		return !m_pendingTransaction && !m_undoStack.empty();
+		_uSavedHistoryStateId = _uCurrentHistoryStateId;
+		NotifyDocumentDirtyStateChanged();
 	}
 
-	bool UndoRedoService::can_redo() const
+	bool UndoRedoService::CanUndo() const
 	{
-		return !m_pendingTransaction && !m_redoStack.empty();
+		return !_upPendingTransaction && !_vecUndoStack.empty();
 	}
 
-	bool UndoRedoService::has_open_transaction() const
+	bool UndoRedoService::CanRedo() const
 	{
-		return m_pendingTransaction != nullptr;
+		return !_upPendingTransaction && !_vecRedoStack.empty();
 	}
 
-	const std::string& UndoRedoService::get_open_transaction_label() const
+	bool UndoRedoService::HasOpenTransaction() const
+	{
+		return _upPendingTransaction != nullptr;
+	}
+
+	const std::string& UndoRedoService::GetOpenTransactionLabel() const
 	{
 		static const std::string k_empty_label{};
-		return m_pendingTransaction ? m_pendingTransaction->label : k_empty_label;
+		return _upPendingTransaction ? _upPendingTransaction->strLabel : k_empty_label;
 	}
 
-	bool UndoRedoService::execute_standalone(std::unique_ptr<EditorCommand> command, EditorContext& context)
+	bool UndoRedoService::IsDirty() const
 	{
-		if (!command || !command->execute(context))
+		return
+			(_upPendingTransaction && !_upPendingTransaction->vecCommands.empty()) ||
+			_uCurrentHistoryStateId != _uSavedHistoryStateId;
+	}
+
+	bool UndoRedoService::ExecuteStandalone(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext)
+	{
+		if (!upCommand || !upCommand->Execute(refContext))
 		{
 			return false;
 		}
 
-		m_redoStack.clear();
-		apply_selection(context, command->get_selection_after_execute());
-		push_undo_command(std::move(command));
+		_vecRedoStack.clear();
+		ApplySelection(refContext, upCommand->GetSelectionAfterExecute());
+		const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
+		PushUndoCommand(std::move(upCommand), uNewHistoryStateId);
+		_uCurrentHistoryStateId = uNewHistoryStateId;
+		NotifyHistoryChanged();
+		NotifyDocumentDirtyStateChanged();
 		return true;
 	}
 
-	bool UndoRedoService::execute_transactional(std::unique_ptr<EditorCommand> command, EditorContext& context)
+	bool UndoRedoService::ExecuteTransactional(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext)
 	{
-		if (!m_pendingTransaction || !command || !command->execute(context))
+		if (!_upPendingTransaction || !upCommand || !upCommand->Execute(refContext))
 		{
 			return false;
 		}
 
-		if (m_pendingTransaction->commands.empty())
+		if (_upPendingTransaction->vecCommands.empty())
 		{
-			m_redoStack.clear();
+			_vecRedoStack.clear();
 		}
 
-		apply_selection(context, command->get_selection_after_execute());
-		m_pendingTransaction->commands.push_back(std::move(command));
+		ApplySelection(refContext, upCommand->GetSelectionAfterExecute());
+		_upPendingTransaction->vecCommands.push_back(std::move(upCommand));
+		NotifyHistoryChanged();
+		NotifyTransactionStateChanged();
+		NotifyDocumentDirtyStateChanged();
 		return true;
 	}
 
-	void UndoRedoService::push_undo_command(std::unique_ptr<EditorCommand> command)
+	void UndoRedoService::PushUndoCommand(std::unique_ptr<EditorCommand> upCommand, uint64_t uStateId)
 	{
-		if (!command)
+		if (!upCommand)
 		{
 			return;
 		}
 
-		if (!m_undoStack.empty() && m_undoStack.back()->try_merge(*command))
+		if (!_vecUndoStack.empty() && _vecUndoStack.back().upCommand && _vecUndoStack.back().upCommand->TryMerge(*upCommand))
 		{
+			_vecUndoStack.back().uStateId = uStateId;
 			return;
 		}
 
-		m_undoStack.push_back(std::move(command));
+		_vecUndoStack.push_back(HistoryEntry{
+			std::move(upCommand),
+			uStateId
+		});
 	}
 
-	void UndoRedoService::apply_selection(EditorContext& context, const EditorCommandSelection& selection) const
+	void UndoRedoService::ApplySelection(EditorContext& refContext, const EditorCommandSelection& refSelection) const
 	{
-		if (!context.selection_service)
+		if (!refContext.pSelectionService)
 		{
 			return;
 		}
 
-		switch (selection.mode)
+		switch (refSelection.eMode)
 		{
 		case EditorCommandSelectionMode::Keep:
 			return;
 		case EditorCommandSelectionMode::Clear:
-			context.selection_service->clear();
+			refContext.pSelectionService->Clear();
 			return;
 		case EditorCommandSelectionMode::Entity:
-			if (!context.scene_service || selection.entity_id == 0)
+		{
+			if (!refContext.pSceneService || refSelection.uEntityId == 0)
 			{
-				context.selection_service->clear();
+				refContext.pSelectionService->Clear();
 				return;
 			}
 
-			if (const AshEngine::Entity entity = context.scene_service->find_entity(selection.entity_id); entity.is_valid())
+			const AshEngine::Entity entitySelected = refContext.pSceneService->FindEntity(refSelection.uEntityId);
+			if (entitySelected.is_valid())
 			{
-				context.selection_service->select({ EditorSelectionKind::Entity, entity.get_id(), entity.get_name(), {} });
+				refContext.pSelectionService->Select({
+					EditorSelectionKind::Entity,
+					entitySelected.get_id(),
+					entitySelected.get_name(),
+					{}
+				});
 			}
 			else
 			{
-				context.selection_service->clear();
+				refContext.pSelectionService->Clear();
 			}
 			return;
+		}
 		default:
 			return;
 		}
+	}
+
+	void UndoRedoService::NotifyHistoryChanged() const
+	{
+		if (!_pEventBus)
+		{
+			return;
+		}
+
+		EditorUndoHistoryChangedEvent event{};
+		event.bCanUndo = CanUndo();
+		event.bCanRedo = CanRedo();
+		event.bHasOpenTransaction = HasOpenTransaction();
+		event.strOpenTransactionLabel = GetOpenTransactionLabel();
+		_pEventBus->Publish(event);
+	}
+
+	void UndoRedoService::NotifyTransactionStateChanged() const
+	{
+		if (!_pEventBus)
+		{
+			return;
+		}
+
+		EditorTransactionStateChangedEvent event{};
+		event.bHasOpenTransaction = HasOpenTransaction();
+		event.strLabel = GetOpenTransactionLabel();
+		event.uPendingCommandCount = _upPendingTransaction ? _upPendingTransaction->vecCommands.size() : 0u;
+		_pEventBus->Publish(event);
+	}
+
+	void UndoRedoService::NotifyDocumentDirtyStateChanged() const
+	{
+		if (!_pEventBus)
+		{
+			return;
+		}
+
+		EditorActiveDocumentDirtyStateChangedEvent event{};
+		event.bDirty = IsDirty();
+		_pEventBus->Publish(event);
+	}
+
+	uint64_t UndoRedoService::AllocateHistoryStateId()
+	{
+		return _uNextHistoryStateId++;
 	}
 }

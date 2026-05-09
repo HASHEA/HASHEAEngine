@@ -5,6 +5,6 @@ namespace AshEditor
 	class EditorStyle
 	{
 	public:
-		static void apply();
+		static void Apply();
 	};
 }

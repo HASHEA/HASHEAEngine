@@ -2,7 +2,7 @@
   "primaryViewportId": "game",
   "viewports": [
     {
-      "acceptsInput": true,
+      "acceptsInput": false,
       "id": "scene",
       "kind": "scene",
       "panelOpen": true,
@@ -16,9 +16,9 @@
       "id": "game",
       "kind": "game",
       "panelOpen": true,
-      "preserveAspect": true,
-      "showOverlays": false,
-      "showStats": true,
+      "preserveAspect": false,
+      "showOverlays": true,
+      "showStats": false,
       "showToolbar": true
     }
   ]
