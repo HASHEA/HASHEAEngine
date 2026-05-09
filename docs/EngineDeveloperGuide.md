@@ -41,8 +41,7 @@
 AshEngine/HASHEAEngine/
 ├── premake5.lua                     # 顶层 Premake workspace
 ├── docs/                            # 长期维护文档
-├── assets/                          # 引擎/示例资源
-├── product/                         # 运行期配置、日志、缓存、最终可执行目录
+├── product/                         # 运行期配置、日志、缓存、最终可执行目录、运行期资产
 ├── _BUILD/                          # VS/MSBuild 中间产物与 target 输出
 └── project/
     ├── src/
@@ -940,10 +939,11 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - `AssetDatabase` 现在会把 `.AshMat` / `.AshMatIns` 加载为 `std::shared_ptr<const MaterialInterface>`
 - `MaterialInstance` 加载时会递归解析父材质链，并在内存里建立只读运行时对象关系
-- Engine 内置两个虚拟材质路径，优先于磁盘查找解析：
-  - `Engine/Materials/V2/M_SurfacePBR.AshMat`
-  - `Engine/Materials/V2/MI_DefaultSurface.AshMatIns`
-- 这两个内置材质不依赖 Sandbox 路径，属于 Engine 自身公共运行时资产
+- Engine 默认 surface PBR 材质现在以真实资产形式落在 `product/assets/materials/v2/`：
+  - `materials/v2/M_SurfacePBR.AshMat`
+  - `materials/v2/MI_DefaultSurface.AshMatIns`
+- 代码中仍保留同路径的合成 builtin fallback；`AssetDatabase` 会优先读取磁盘材质，只有磁盘资产缺失时才使用 fallback
+- 默认材质不依赖 Sandbox 路径，属于 Engine 公共运行时资产
 - 当前正式落地的 V2 编译框架先服务于 `Surface.StaticMesh`
 - `UI` 与 `PostProcess` 当前明确不走这套材质系统，而是各自维护自己的 shader / 参数组织路径
 
@@ -969,14 +969,14 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `Model` 现在保留 `default_materials`
 - `default_materials` 以 `material_slot -> material_path` 的稳定映射保存显式默认材质
 - 如果 `default_materials` 未提供某个 slot，则 `RenderAssetManager` 会在运行时为该 `MaterialSlot` 生成一个临时 `MaterialInstance`
-- 生成材质的父对象固定为 `Engine/Materials/V2/M_SurfacePBR.AshMat`
+- 生成材质的父对象固定为 `materials/v2/M_SurfacePBR.AshMat`
 - 生成材质的虚拟路径固定使用 `__generated__/materials/... .AshMatIns`
 - 生成材质的参数值来自导入 `MaterialSlot` 的颜色、金属度、粗糙度、法线/底色/发光纹理路径
 - 所有 section 的最终解析顺序为：
   - `MeshComponent.material_overrides[material_slot]`（要求 `.AshMatIns`）
   - `Model.default_materials[material_slot]`（要求 `.AshMatIns`）
   - imported `MaterialSlot` 自动生成材质实例
-  - `Engine/Materials/V2/MI_DefaultSurface.AshMatIns`
+  - `materials/v2/MI_DefaultSurface.AshMatIns`
 
 当前 V2 材质文件格式约定：
 
@@ -1058,8 +1058,11 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 当前静态 mesh `Surface` 使用的 engine-host shader 为：
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshBasePass.hlsl`
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshDepthOnly.hlsl`
-- 默认 surface PBR 材质 shader 为：
-  - `project/src/engine/Shaders/MaterialV2/Materials/M_SurfacePBR.hlsl`
+- 当前材质拼接占位 include 属于 Engine shader 内部文件：
+  - `project/src/engine/Shaders/MaterialV2/Includes/UserShader.hlsli`
+  - `project/src/engine/Shaders/MaterialV2/Includes/GeneratedMaterialBindings.hlsli`
+- 材质 shader 属于运行期资产，应与 `.AshMat/.AshMatIns` 同级维护；默认 surface PBR shader 为：
+  - `product/assets/materials/v2/M_SurfacePBR.hlsl`
 - 这样可以避免多材质、多 section、多 view 之间共享一个可变 `GraphicsProgram` 而发生状态互踩，并把 V1 `SceneSurfacePBR` 兼容路径从运行时彻底移除
 
 ### 11.4 Scene / Entity：保留 facade，内部切到 ECS-style 存储

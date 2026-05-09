@@ -32,7 +32,6 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 HASHEAEngine/
 ├── premake5.lua                     # 顶层 Premake workspace
 ├── docs/                            # 长期维护文档与专题设计文档
-├── assets/                          # 引擎/示例资源
 ├── product/                         # 运行配置、日志、缓存、可执行输出、运行期资产
 ├── scripts/                         # 构建、同步、验证辅助脚本
 ├── tools/                           # 本地工具
@@ -116,10 +115,16 @@ Scene 到渲染的主路径：
 材质 shader 由三部分拼合：
 
 1. Engine shader family host，例如 `SurfaceStaticMeshBasePass.hlsl`。
-2. 用户材质 shader，例如 `M_SurfacePBR.hlsl`。
+2. 用户材质 shader，例如 `product/assets/materials/v2/M_SurfacePBR.hlsl`。
 3. 由 `.AshMat` / `.AshMatIns` 生成的 bindings HLSL。
 
 当前不把 UI 和 PostProcess 纳入材质系统。PostProcess 更适合独立 screen-pass shader/effect 管线，UI 继续由 UIContext / ImGui 相关路径负责。
+
+目录规则：
+
+- Engine shader family、domain hlsli 和材质拼接占位 include 放在 `project/src/engine/Shaders/MaterialV2/`。
+- 材质 shader 是运行期资产，放在 `product/assets/materials/v2/`，与对应 `.AshMat/.AshMatIns` 同级。
+- 默认 PBR 基材质和默认实例分别是 `materials/v2/M_SurfacePBR.AshMat` 与 `materials/v2/MI_DefaultSurface.AshMatIns`。
 
 ## Asset 与示例资源
 

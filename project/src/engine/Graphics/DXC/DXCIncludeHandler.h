@@ -71,9 +71,9 @@ namespace RHI
 		ULONG __stdcall Release(void) override;
 	private:
 		const std::filesystem::path defaultUserShaderName = L"UserShader.hlsli";
-		const std::filesystem::path defaultUserShaderPath = L"assets/hlsl/include/UserShader.hlsli";
+		const std::filesystem::path defaultUserShaderPath = L"project/src/engine/Shaders/MaterialV2/Includes/UserShader.hlsli";
 		const std::filesystem::path defaultGeneratedBindingsName = L"GeneratedMaterialBindings.hlsli";
-		const std::filesystem::path defaultGeneratedBindingsPath = L"assets/hlsl/include/GeneratedMaterialBindings.hlsli";
+		const std::filesystem::path defaultGeneratedBindingsPath = L"project/src/engine/Shaders/MaterialV2/Includes/GeneratedMaterialBindings.hlsli";
 		IDxcLibrary* m_pLibrary = nullptr;
 		std::filesystem::path m_currentUserShaderPath{};
 		std::filesystem::path m_currentGeneratedBindingsPath{};

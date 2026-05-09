@@ -1381,7 +1381,7 @@ namespace AshEngine
 			material->set_name("M_SurfacePBR");
 			material->set_asset_path(k_builtin_surface_pbr_material_path);
 			material->set_domain(MaterialDomain::Surface);
-			material->set_material_shader_path("project/src/engine/Shaders/MaterialV2/Materials/M_SurfacePBR.hlsl");
+			material->set_material_shader_path("product/assets/materials/v2/M_SurfacePBR.hlsl");
 			material->set_static_render_state(MaterialStaticRenderStateDesc{});
 			material->set_parameter_descs({
 				MaterialParameterDesc{ "BaseColorFactor", MaterialParameterType::Vector4, {}, {}, {}, glm::vec4(1.0f), 0.0f },

@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "class": "MaterialInstance",
+  "name": "MI_DefaultSurface",
+  "parent": "materials/v2/M_SurfacePBR.AshMat"
+}

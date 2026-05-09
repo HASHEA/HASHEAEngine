@@ -13,8 +13,8 @@
 
 namespace AshEngine
 {
-	inline constexpr const char* k_builtin_surface_pbr_material_path = "Engine/Materials/V2/M_SurfacePBR.AshMat";
-	inline constexpr const char* k_builtin_default_surface_material_path = "Engine/Materials/V2/MI_DefaultSurface.AshMatIns";
+	inline constexpr const char* k_builtin_surface_pbr_material_path = "materials/v2/M_SurfacePBR.AshMat";
+	inline constexpr const char* k_builtin_default_surface_material_path = "materials/v2/MI_DefaultSurface.AshMatIns";
 
 	enum class RenderCullMode : uint8_t;
 

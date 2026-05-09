@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "class": "Material",
+  "name": "M_SurfacePBR",
+  "domain": "Surface",
+  "materialShader": "product/assets/materials/v2/M_SurfacePBR.hlsl",
+  "requiredCapabilities": [],
+  "staticSwitches": {},
+  "renderState": {
+    "blendMode": "Opaque",
+    "twoSided": false,
+    "cullMode": "Back",
+    "depthWrite": true,
+    "depthTest": "LessEqual",
+    "alphaCutoff": 0.5
+  },
+  "samplers": [
+    {
+      "name": "WrapLinear",
+      "shader_sampler_name": "ASH_SurfacePBRSampler",
+      "address_u": "Repeat",
+      "address_v": "Repeat",
+      "address_w": "Repeat",
+      "min_filter": "Linear",
+      "mag_filter": "Linear",
+      "mip_filter": "Linear"
+    }
+  ],
+  "parameters": {
+    "BaseColorFactor": {
+      "type": "float4",
+      "value": [1.0, 1.0, 1.0, 1.0]
+    },
+    "Metallic": {
+      "type": "float",
+      "value": 0.0
+    },
+    "Roughness": {
+      "type": "float",
+      "value": 1.0
+    },
+    "EmissiveColor": {
+      "type": "float4",
+      "value": [0.0, 0.0, 0.0, 0.0]
+    }
+  },
+  "resources": {
+    "BaseColorTexture": {
+      "type": "Texture2D",
+      "sampler": "WrapLinear",
+      "colorSpace": "sRGB"
+    },
+    "NormalTexture": {
+      "type": "Texture2D",
+      "sampler": "WrapLinear",
+      "colorSpace": "Linear"
+    },
+    "MetallicRoughnessTexture": {
+      "type": "Texture2D",
+      "sampler": "WrapLinear",
+      "colorSpace": "Linear"
+    },
+    "EmissiveTexture": {
+      "type": "Texture2D",
+      "sampler": "WrapLinear",
+      "colorSpace": "sRGB"
+    }
+  }
+}

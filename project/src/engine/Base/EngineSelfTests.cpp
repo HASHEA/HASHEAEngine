@@ -6,6 +6,8 @@
 #include "hlog.h"
 #include "hmemory.h"
 #include "Function/Asset/AssetData.h"
+#include "Function/Asset/AssetDatabase.h"
+#include "Function/Render/Material.h"
 #include "Function/Render/TextureAsset.h"
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/Shader.h"
@@ -333,6 +335,40 @@ namespace AshEngine
 				report_self_test_failure("glTF indexed import", "indexed primitive was expanded instead of preserving vertex reuse");
 		}
 
+		auto test_material_asset_database_prefers_disk_material_over_builtin_fallback() -> bool
+		{
+			const std::filesystem::path asset_root = "Intermediate/SelfTests/engine/material_asset_db";
+			const std::filesystem::path material_dir = asset_root / "materials" / "v2";
+			std::filesystem::create_directories(material_dir);
+
+			const std::filesystem::path material_path = material_dir / "M_SurfacePBR.AshMat";
+			{
+				std::ofstream material_file(material_path, std::ios::trunc);
+				if (!material_file)
+				{
+					return report_self_test_failure("Material disk asset priority", "failed to create disk material asset");
+				}
+				material_file <<
+					"{\n"
+					"  \"version\": 2,\n"
+					"  \"class\": \"Material\",\n"
+					"  \"name\": \"M_DiskSurfacePBR\",\n"
+					"  \"domain\": \"Surface\",\n"
+					"  \"materialShader\": \"product/assets/materials/v2/M_SurfacePBR.hlsl\"\n"
+					"}\n";
+			}
+
+			AssetDatabase database = AssetDatabase::create(asset_root);
+			std::shared_ptr<const MaterialInterface> material{};
+			if (!database.load_material_by_path("materials/v2/M_SurfacePBR.AshMat", material) || !material)
+			{
+				return report_self_test_failure("Material disk asset priority", "failed to load disk material asset");
+			}
+
+			return material->get_name() == "M_DiskSurfacePBR" ||
+				report_self_test_failure("Material disk asset priority", "built-in fallback shadowed an existing disk material asset");
+		}
+
 #if defined(ASH_HAS_DX12)
 		auto test_dx12_resource_tracker_preserves_partial_state() -> bool
 		{
@@ -394,6 +430,7 @@ namespace AshEngine
 		all_passed = test_texture_decode_generates_rgba8_mips() && all_passed;
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
+		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;
 #endif

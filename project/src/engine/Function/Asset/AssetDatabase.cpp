@@ -251,15 +251,14 @@ namespace AshEngine
 				return false;
 			}
 
-			if (try_load_builtin_material(impl, path, out_material))
-			{
-				out_error.clear();
-				return true;
-			}
-
 			ResolvedAssetInfo resolved{};
 			if (!resolve_asset_by_path(impl, path, resolved, out_error))
 			{
+				if (try_load_builtin_material(impl, path, out_material))
+				{
+					out_error.clear();
+					return true;
+				}
 				return false;
 			}
 

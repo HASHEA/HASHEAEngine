@@ -32,8 +32,7 @@ AshEngine/HASHEAEngine/
 │   │       ├── Shaders/             ← Editor 专属 Shader (HLSL)
 │   │       └── premake5.lua         ← Editor 构建配置
 │   └── thirdparty/                  ← 第三方库 (ImGui, entt, glm 等)
-├── assets/                          ← 资产目录
-└── product/                         ← 构建输出 & 运行目录
+└── product/                         ← 构建输出、运行目录与运行期资产
 ```
 
 ### 层级边界规则

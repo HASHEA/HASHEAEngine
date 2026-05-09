@@ -2,7 +2,7 @@
   "version": 2,
   "class": "MaterialInstance",
   "name": "MI_V2_SurfacePBR_SamplerOverride",
-  "parent": "Engine/Materials/V2/M_SurfacePBR.AshMat",
+  "parent": "materials/v2/M_SurfacePBR.AshMat",
   "samplers": [
     {
       "name": "ClampLinear",
