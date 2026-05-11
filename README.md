@@ -166,6 +166,8 @@ Editor 当前是引擎能力验证和工具化演进的基础壳，已具备：
 - 资产浏览过滤与搜索。
 - 视口输出由 `ScenePresentationSubsystem` 管理，Editor 面板只负责 UI 展示。
 
+Editor 启动顺序遵循 Engine `Application` 生命周期：`Editor` 构造函数只保存轻量配置，不执行日志或 runtime 依赖初始化；`EditorApplication` bootstrap 在 `_on_startup()` 中执行，此时日志、窗口、RHI 和 UIContext 已完成初始化，关闭逻辑在 `_on_shutdown()` 中对称清理。
+
 Editor 仍在开发中，不应视为完整关卡编辑器或生产工具链。
 
 ## Sandbox

@@ -8,8 +8,6 @@ namespace AshEditor
 	Editor::Editor(const AshEngine::EngineInitConfig& refConfig)
 		: AshEngine::Application(refConfig)
 	{
-		HLogInfo("Ash Editor Start !");
-		BootstrapEditor();
 	}
 
 	Editor::~Editor()
@@ -17,12 +15,32 @@ namespace AshEditor
 		ShutdownEditor();
 	}
 
+	void Editor::_on_startup()
+	{
+		AshEngine::Application::_on_startup();
+		HLogInfo("Ash Editor Start !");
+		BootstrapEditor();
+	}
+
+	void Editor::_on_shutdown()
+	{
+		ShutdownEditor();
+		AshEngine::Application::_on_shutdown();
+	}
+
 	void Editor::BootstrapEditor()
 	{
+		if (_upEditorApplication)
+		{
+			return;
+		}
+
 		_upEditorApplication = std::make_unique<EditorApplication>();
 		if (!_upEditorApplication->Initialize())
 		{
 			HLogError("Editor application bootstrap failed.");
+			ShutdownEditor();
+			request_exit();
 		}
 	}
 

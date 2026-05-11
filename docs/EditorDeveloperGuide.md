@@ -44,6 +44,10 @@
 
 - `EditorApplication`
   - 负责启动、关闭、装配、主循环编排
+- `Editor`
+  - 构造函数只能保存轻量配置，不得调用 `HLog*` 或初始化依赖 Engine runtime 的对象。
+  - `EditorApplication` 的启动必须放在 `Application::_on_startup()` 之后，此时日志、窗口、RHI、UIContext 等 Engine runtime 已完成初始化。
+  - `EditorApplication` 的关闭必须通过 `Application::_on_shutdown()` 对称执行，析构函数只保留幂等兜底清理。
 - `EditorPanel`
   - 负责 UI 展示、输入采集、把动作转给 service / command
 - `Service`

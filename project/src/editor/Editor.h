@@ -14,6 +14,8 @@ namespace AshEditor
 		Editor(const AshEngine::EngineInitConfig& refConfig);
 		~Editor() override;
 	protected:
+		void _on_startup() override;
+		void _on_shutdown() override;
 		void _on_update() override;
 		void _on_gui() override;
 		void _on_render_debug() override;
