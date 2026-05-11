@@ -297,10 +297,30 @@ namespace AshEngine
 			}
 			ASH_PROCESS_ERROR(sampler_definition != nullptr);
 
+			const MaterialSamplerDefinition* shader_sampler_definition =
+				find_material_sampler_definition(*m_material, resource_desc.sampler);
+			if (!shader_sampler_definition)
+			{
+				HLogError(
+					"MaterialRenderProxy: V2 resource '{}' on material '{}' references unknown shader sampler '{}'.",
+					resource_desc.name,
+					material_asset_path,
+					resource_desc.sampler);
+			}
+			ASH_PROCESS_ERROR(shader_sampler_definition != nullptr);
+
 			const std::string shader_sampler_name =
-				sampler_definition->shader_sampler_name.empty() ?
-				sampler_definition->name :
-				sampler_definition->shader_sampler_name;
+				shader_sampler_definition->shader_sampler_name.empty() ?
+				shader_sampler_definition->name :
+				shader_sampler_definition->shader_sampler_name;
+			if (shader_sampler_name.empty())
+			{
+				HLogError(
+					"MaterialRenderProxy: V2 resource '{}' on material '{}' resolved to an empty shader sampler name.",
+					resource_desc.name,
+					material_asset_path);
+			}
+			ASH_PROCESS_ERROR(!shader_sampler_name.empty());
 			std::shared_ptr<RenderSampler> sampler = asset_manager.request_sampler(sampler_definition->desc);
 			ASH_PROCESS_ERROR(sampler != nullptr);
 			snapshot.samplers[shader_sampler_name] = sampler;
@@ -550,6 +570,14 @@ namespace AshEngine
 				case RHI::ShaderResourceBindingType::Sampler:
 				{
 					const auto found_sampler = m_binding_snapshot.samplers.find(binding_entry.name);
+					if (found_sampler == m_binding_snapshot.samplers.end())
+					{
+						HLogError(
+							"MaterialRenderProxy: material '{}' is missing sampler binding '{}' required by usage '{}'.",
+							m_material ? build_material_label(*m_material) : std::string("<null-material>"),
+							binding_entry.name,
+							build_usage_name(resource.usage));
+					}
 					ASH_PROCESS_ERROR(found_sampler != m_binding_snapshot.samplers.end());
 					ASH_PROCESS_ERROR(found_sampler->second != nullptr);
 					ASH_PROCESS_ERROR(program->set_sampler(binding_entry.name.c_str(), found_sampler->second));

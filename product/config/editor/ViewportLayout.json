@@ -1,5 +1,5 @@
 {
-  "primaryViewportId": "game",
+  "primaryViewportId": "scene",
   "viewports": [
     {
       "acceptsInput": false,

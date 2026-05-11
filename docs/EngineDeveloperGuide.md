@@ -1012,6 +1012,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `overrides.parameters` 当前只接受 scalar / float4
 - 贴图类输入统一保存为 `MaterialTextureBinding { texture_path, sampler_name }`
 - sampler 必须通过名字引用；资源绑定不再接受旧式内联 sampler 对象
+- 材质实例可通过 `MaterialTextureBinding::sampler_name` 覆盖采样状态，但 shader sampler 变量名仍由基材质 `resources.*.sampler` 生成；`MaterialRenderProxy` 会把实例覆盖的 sampler state 绑定到生成 HLSL 实际声明的 shader sampler 名，避免 glTF sampler override 生成 `Sampler0` 后找不到 `ASH_SurfacePBRSampler` 这类父材质 sampler。
 
 当前贴图运行时补充约定：
 
@@ -1314,7 +1315,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
 
-Sandbox 会从 `product/assets/models/gltfs/` 下枚举 `.gltf` 模型，并在窗口内提供 `Sandbox Model` overlay 下拉框。运行时选择新模型时，Sandbox 会先销毁旧的 scene presentation binding/output，再 reset 旧标准场景状态并异步加载新模型；新模型 ready 后才重新注册窗口 output 和 primary-camera binding，避免切换后继续提交旧场景实体。
+Sandbox 会从 `product/assets/models/gltfs/` 下枚举 `.gltf` 模型，并在窗口内提供 `Sandbox Model` overlay 下拉框。也可以通过 `ASH_SANDBOX_MODEL` 指定启动模型，取值为相对 `product/assets` 的路径，例如 `models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf`。运行时选择新模型时，Sandbox 会先销毁旧的 scene presentation binding/output，再 reset 旧标准场景状态并异步加载新模型；新模型 ready 后才重新注册窗口 output 和 primary-camera binding，避免切换后继续提交旧场景实体。
 标准场景会保留 glTF 导入得到的材质槽和贴图绑定，不再为验证目的向 mesh 注入固定 debug material override；V2 材质链路由 glTF 默认材质生成的 `.AshMatIns` 覆盖。
 
 当前标准场景路径会真实走通：

@@ -116,6 +116,7 @@ Scene 到渲染的主路径：
 - `MaterialShaderMap` 负责不可变编译资源。
 - `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding。
 - `MaterialRenderProxy` 基于 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；shader 文件签名只按 proxy 周期性探测，不进入每个 section 的逐帧 filesystem 热路径，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
+- 材质实例的贴图 binding 可覆盖 sampler state；运行时会把该 sampler state 绑定到基材质资源声明实际生成的 shader sampler 名，避免 glTF sampler override 与生成 HLSL sampler 名不一致。
 - 当前正式主路径为 `Surface.StaticMesh.BasePass` 与 `DepthOnly`。
 
 材质 shader 由三部分拼合：
@@ -178,6 +179,7 @@ Sandbox 是 Engine 侧测试/验证可执行项目，目标是避免把引擎验
 
 - 默认加载 Sponza 作为标准场景，并在窗口 overlay 中提供模型下拉框，可切换 `product/assets/models/gltfs/` 下发现的 glTF。
 - 保留 glTF 自带材质槽和贴图绑定；标准场景不再强制注入 debug material override。
+- 可用 `ASH_SANDBOX_MODEL` 指定启动时默认模型，取值为相对 `product/assets` 的路径，例如 `models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf`。
 - 走逻辑 Scene -> ScenePresentationSubsystem -> SceneRenderer 的正式链路。
 - 用于验证静态网格渲染、材质 V2、资源加载、双后端 smoke test 和性能回归。
 

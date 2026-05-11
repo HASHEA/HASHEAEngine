@@ -5,6 +5,7 @@
 #include "Function/Gui/UIContext.h"
 #include "Function/Render/ScenePresentationSubsystem.h"
 #include <algorithm>
+#include <cstdlib>
 #include <system_error>
 
 namespace AshSandbox
@@ -26,6 +27,47 @@ namespace AshSandbox
 			default:
 				return "Unknown";
 			}
+		}
+
+		static auto get_startup_model_override() -> std::string
+		{
+#if defined(_WIN32)
+			char* value = nullptr;
+			size_t value_size = 0;
+			if (_dupenv_s(&value, &value_size, "ASH_SANDBOX_MODEL") != 0 || value == nullptr)
+			{
+				return {};
+			}
+			std::string result(value);
+			std::free(value);
+			return result;
+#else
+			const char* value = std::getenv("ASH_SANDBOX_MODEL");
+			return value ? std::string(value) : std::string{};
+#endif
+		}
+
+		static auto normalize_startup_model_path(
+			const std::string& startup_model_path,
+			const std::filesystem::path& asset_root) -> std::filesystem::path
+		{
+			if (startup_model_path.empty())
+			{
+				return {};
+			}
+
+			std::filesystem::path path = std::filesystem::path(startup_model_path).lexically_normal();
+			if (path.is_absolute())
+			{
+				std::error_code relative_error{};
+				const std::filesystem::path relative_path =
+					std::filesystem::relative(path, std::filesystem::absolute(asset_root), relative_error).lexically_normal();
+				if (!relative_error && !relative_path.empty())
+				{
+					path = relative_path;
+				}
+			}
+			return path.lexically_normal();
 		}
 	}
 
@@ -186,6 +228,31 @@ namespace AshSandbox
 				"Sandbox canonical sample '{}' was not found. Falling back to '{}'.",
 				canonical_path.generic_string(),
 				selected_it->generic_string());
+		}
+
+		const std::string startup_model = get_startup_model_override();
+		if (!startup_model.empty())
+		{
+			const std::filesystem::path requested_path =
+				normalize_startup_model_path(startup_model, m_assetRoot);
+			if (!requested_path.empty())
+			{
+				auto requested_it = std::find(asset_paths.begin(), asset_paths.end(), requested_path);
+				if (requested_it != asset_paths.end())
+				{
+					selected_it = requested_it;
+					HLogInfo(
+						"Sandbox startup model override selected '{}'.",
+						selected_it->generic_string());
+				}
+				else
+				{
+					HLogWarning(
+						"Sandbox startup model override '{}' was not found under '{}'.",
+						requested_path.generic_string(),
+						SandboxStandardScene::get_sample_asset_root_path().generic_string());
+				}
+			}
 		}
 
 		std::vector<std::string> labels{};
