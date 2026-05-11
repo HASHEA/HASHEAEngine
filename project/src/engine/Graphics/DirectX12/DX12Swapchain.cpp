@@ -15,6 +15,30 @@
 
 namespace RHI
 {
+	namespace
+	{
+		constexpr auto present_mode_to_string(AshPresentMode presentMode) -> const char*
+		{
+			switch (presentMode)
+			{
+			case ASH_PRESENT_MODE_MAILBOX_KHR: return "MAILBOX";
+			case ASH_PRESENT_MODE_IMMEDIATE_KHR: return "IMMEDIATE";
+			case ASH_PRESENT_MODE_FIFO_KHR: return "FIFO";
+			case ASH_PRESENT_MODE_FIFO_RELAXED_KHR: return "FIFO_RELAXED";
+			case ASH_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR: return "SHARED_DEMAND_REFRESH";
+			case ASH_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR: return "SHARED_CONTINUOUS_REFRESH";
+			case ASH_PRESENT_MODE_UNDEFINED:
+			default:
+				return "UNDEFINED";
+			}
+		}
+
+		constexpr auto bool_to_string(bool value) -> const char*
+		{
+			return value ? "true" : "false";
+		}
+	}
+
 	DX12Swapchain::~DX12Swapchain()
 	{
 		shutdown();
@@ -65,6 +89,8 @@ namespace RHI
 
 		// Determine present mode
 		m_syncInterval = 1;
+		m_presentFlags = 0;
+		AshPresentMode selectedPresentMode = ASH_PRESENT_MODE_FIFO_KHR;
 		if (cfg->presentModeCount > 0 && cfg->pPresentMode)
 		{
 			for (uint32_t i = 0; i < cfg->presentModeCount; ++i)
@@ -73,12 +99,26 @@ namespace RHI
 				{
 					m_syncInterval = 0;
 					if (tearingSupported)
+					{
 						m_presentFlags = DXGI_PRESENT_ALLOW_TEARING;
+					}
+					selectedPresentMode = cfg->pPresentMode[i];
 					break;
 				}
 				if (cfg->pPresentMode[i] == ASH_PRESENT_MODE_MAILBOX_KHR)
 				{
 					m_syncInterval = 0;
+					if (tearingSupported)
+					{
+						m_presentFlags = DXGI_PRESENT_ALLOW_TEARING;
+					}
+					selectedPresentMode = cfg->pPresentMode[i];
+					break;
+				}
+				if (cfg->pPresentMode[i] == ASH_PRESENT_MODE_FIFO_KHR ||
+					cfg->pPresentMode[i] == ASH_PRESENT_MODE_FIFO_RELAXED_KHR)
+				{
+					selectedPresentMode = cfg->pPresentMode[i];
 					break;
 				}
 			}
@@ -141,12 +181,16 @@ namespace RHI
 		}
 
 		HLogInfo(
-			"DX12Swapchain: Created {}x{} with {} buffers. surface_format={}, rtv_format={}.",
+			"DX12Swapchain: Created {}x{} with {} buffers. surface_format={}, rtv_format={}, present_mode={}, sync_interval={}, present_flags=0x{:X}, tearing_supported={}.",
 			m_width,
 			m_height,
 			static_cast<int>(swapchainDesc.BufferCount),
 			static_cast<int>(m_surfaceFormat),
-			static_cast<int>(ash_to_dxgi_format(m_format)));
+			static_cast<int>(ash_to_dxgi_format(m_format)),
+			present_mode_to_string(selectedPresentMode),
+			m_syncInterval,
+			m_presentFlags,
+			bool_to_string(tearingSupported == TRUE));
 		return true;
 	}
 

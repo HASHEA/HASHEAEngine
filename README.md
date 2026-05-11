@@ -70,13 +70,15 @@ HASHEAEngine/
 - Vulkan / DX12 运行时后端选择。
 - HLSL 主路径，通过 DXC 编译，Vulkan 消费 SPIR-V，DX12 消费 DXIL。
 - shader 反射驱动 descriptor / root signature / descriptor set layout / parameter block layout。
+- uniform buffer 创建会按 256 字节对齐分配，带初始数据时同步补零 padding，避免 Vulkan / DX12 后端按分配大小上传时越界读取。
 - render pass 与 framebuffer 缓存。
 - graphics program / pipeline variant 缓存。
 - descriptor / program binding 缓存。
 - pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
-- draw 排序、静态网格 instance batching 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
+- draw 排序、静态网格 instance batching、单可见静态网格 direct section submit fast path 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
+- DX12 将 `MAILBOX` / `IMMEDIATE` 映射为 `Present(0, DXGI_PRESENT_ALLOW_TEARING)`（硬件/系统支持 tearing 时），避免 benchmark 场景被隐式 vsync/compositor 同步限制。
 - Runtime frame stats overlay。
 
 ## Scene 与渲染主路径
@@ -100,7 +102,7 @@ Scene 到渲染的主路径：
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。skeletal mesh、完整灯光、阴影、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer，以避免当前 Sandbox/Sponza 基准场景的固定合批开销。skeletal mesh、完整灯光、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 
@@ -113,7 +115,7 @@ Scene 到渲染的主路径：
 - `MaterialSystem` 负责 domain / family / pass 的验证、fallback 和 resource template 获取。
 - `MaterialShaderMap` 负责不可变编译资源。
 - `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding。
-- `MaterialRenderProxy` 基于 material change version、compile hash、shader 文件签名、binding snapshot version 和 texture asset change version 判断脏状态，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
+- `MaterialRenderProxy` 基于 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；shader 文件签名只按 proxy 周期性探测，不进入每个 section 的逐帧 filesystem 热路径，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
 - 当前正式主路径为 `Surface.StaticMesh.BasePass` 与 `DepthOnly`。
 
 材质 shader 由三部分拼合：
@@ -297,8 +299,8 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | 模块 | 当前进度 |
 | --- | --- |
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
-| RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
-| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，静态网格 draw 排序、instance batching、barrier 去重和 pass/framebuffer cache 已接入。 |
+| RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、DX12 mailbox present 映射、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
+| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
 | Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通。 |
 | Material | V2 `Surface.StaticMesh` 主路径已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |

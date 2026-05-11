@@ -5,6 +5,7 @@
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/TextureAsset.h"
+#include <chrono>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -50,6 +51,8 @@ namespace AshEngine
 			return resource.shader_file_signature_hash != 0 &&
 				build_material_resource_file_signature_hash(resource) == resource.shader_file_signature_hash;
 		}
+
+		constexpr auto k_shader_file_signature_check_interval = std::chrono::seconds(1);
 	}
 
 	MaterialRenderProxy::MaterialRenderProxy(
@@ -97,8 +100,7 @@ namespace AshEngine
 		{
 			return true;
 		}
-		if (!material_resource_file_signatures_current(m_surface_staticmesh_basepass_resource) ||
-			!material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource))
+		if (!shader_file_signatures_current_throttled())
 		{
 			return true;
 		}
@@ -358,8 +360,7 @@ namespace AshEngine
 		if (m_surface_staticmesh_basepass_template != nullptr &&
 			m_surface_staticmesh_depthonly_template != nullptr &&
 			m_v2_compile_hash == compile_hash &&
-			material_resource_file_signatures_current(m_surface_staticmesh_basepass_resource) &&
-			material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource))
+			shader_file_signatures_current_throttled())
 		{
 			m_surface_staticmesh_basepass_resource.program = m_surface_staticmesh_basepass_program.get();
 			m_surface_staticmesh_depthonly_resource.program = m_surface_staticmesh_depthonly_program.get();
@@ -436,7 +437,40 @@ namespace AshEngine
 		m_surface_staticmesh_basepass_resource.material_uniforms.reset();
 		m_surface_staticmesh_depthonly_resource.material_uniforms.reset();
 		m_v2_compile_hash = compile_hash;
+		mark_shader_file_signatures_current();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool MaterialRenderProxy::shader_file_signatures_current_throttled() const
+	{
+		if (m_surface_staticmesh_basepass_template == nullptr ||
+			m_surface_staticmesh_depthonly_template == nullptr ||
+			m_surface_staticmesh_basepass_resource.shader_file_signature_hash == 0 ||
+			m_surface_staticmesh_depthonly_resource.shader_file_signature_hash == 0)
+		{
+			return false;
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		if (m_shader_file_signature_status_valid && now < m_next_shader_file_signature_check)
+		{
+			return m_shader_file_signatures_current;
+		}
+
+		m_shader_file_signatures_current =
+			material_resource_file_signatures_current(m_surface_staticmesh_basepass_resource) &&
+			material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource);
+		m_shader_file_signature_status_valid = true;
+		m_next_shader_file_signature_check = now + k_shader_file_signature_check_interval;
+		return m_shader_file_signatures_current;
+	}
+
+	void MaterialRenderProxy::mark_shader_file_signatures_current() const
+	{
+		m_shader_file_signatures_current = true;
+		m_shader_file_signature_status_valid = true;
+		m_next_shader_file_signature_check =
+			std::chrono::steady_clock::now() + k_shader_file_signature_check_interval;
 	}
 
 	bool MaterialRenderProxy::create_v2_program_instance(

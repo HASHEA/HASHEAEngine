@@ -488,6 +488,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - Editor / Game / Client 上层不应依赖 `get_back_buffer()` 具备 shader-resource 能力；需要采样的视口输出仍应显式创建 offscreen `RenderTarget`
 - 引擎内部 final present 路径不依赖额外的“fullscreen shader present pass”；直接写 swapchain 时由 pass end barrier 转到 `Present`，fallback offscreen 路径才走 backend copy + present state transition
+- DX12 不存在 Vulkan `MAILBOX` 的一一对应语义；当前将 `MAILBOX` / `IMMEDIATE` 作为低延迟 uncapped present 请求处理，在系统支持 tearing 时使用 `Present(0, DXGI_PRESENT_ALLOW_TEARING)`，否则退化为 `Present(0, 0)`，并在 swapchain 创建日志中输出最终 sync interval / flags / tearing support。
 
 ### 6.3 Renderer
 
@@ -569,6 +570,8 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 对上隐藏具体后端对象
 - 内部通过 `Impl` 持有 RHI 资源
 - 由 `Renderer` / `RenderDevice` 创建
+
+`UniformBuffer` 的底层 allocation 会按 256 字节对齐。高层创建时如果传入 `initial_data`，`RenderDevice::create_uniform_buffer()` 必须把逻辑数据拷贝到同等大小的 zero-padded 临时块后再交给 RHI，避免 Vulkan `vkCmdUpdateBuffer` 或 DX12 upload path 按分配大小读取时越界。
 
 ### 7.2 RenderTarget
 
@@ -1058,7 +1061,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `MeshComponent.material_overrides` 的最终解析发生在 `RenderScene::rebuild_from_scene(...)`
 - per-primitive / per-visible-section 会携带最终 `MaterialInterface` 和 CPU-only `MaterialRenderProxy` cache；GPU program、UBO、sampler 与 texture binding 只允许在 render thread 的 submit phase 准备或刷新
 - `RenderScene::rebuild_from_scene(...)` 可能运行在 logic thread，因此 section 解析阶段必须保持 CPU-only，不能创建材质 UBO、纹理、sampler 或 graphics program
-- submit 阶段在 proxy 缺失或材质 version / compile hash / shader 文件签名 / texture asset version 变化时，通过 `RenderAssetManager` 的 cache 准备/刷新 `MaterialRenderProxy`
+- submit 阶段在 proxy 缺失或材质 version / compile hash / shader 文件签名 / texture asset version 变化时，通过 `RenderAssetManager` 的 cache 准备/刷新 `MaterialRenderProxy`；shader 文件签名检查按 `MaterialRenderProxy` 节流，不能在每个可见 section、每帧都进行 filesystem probe
 - `MaterialRenderProxy` 在 render thread 上缓存：
   - `Surface.StaticMesh.BasePass` 与 `DepthOnly` 两套 `MaterialResource`
   - 每材质独立的 `GraphicsProgram`
@@ -1223,6 +1226,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 逻辑线程构建可见帧数据
 - 渲染线程只消费不可变的 render frame 并提交 draw
 - 静态网格主链路支持按 `program + render asset + section` 合批，并通过 per-instance vertex stream 传递 object-to-clip 矩阵
+- 当一个 view 只有 0 或 1 个可见静态网格 draw 时，`SceneRenderer` 会跳过 batch map 构建；单 draw 情况直接逐 section 提交，并复用一个单实例 vertex buffer，以降低 Sandbox/Sponza 这类单可见 mesh 帧的固定 CPU 开销
 
 当前明确不在第一阶段完成的系统包括：
 
@@ -1246,7 +1250,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `VisibleRenderFrame` 只保存 scene 可见性结果和 draw 所需的不可变数据，不再持有 `output_target`
 - `VisibleRenderFrame` 中的 static mesh section 携带最终 `MaterialInterface`；`ScenePresentationSubsystem` 在 render-thread submit phase 通过 `MaterialRenderProxy::prepare_surface_staticmesh(...)` 解析并缓存 draw-time proxy
 - `RenderScene` rebuild/sync 阶段会为 static mesh section 预取 CPU-only `MaterialRenderProxy`；render-thread submit 阶段只负责缺失兜底与 GPU program / texture binding preparation
-- `MaterialRenderProxy` 使用 material change version、compile hash、shader 文件签名、binding snapshot version 和 texture asset change version 判断脏状态；贴图仍处于 Loading 但 fallback resource/version 未变化时，不应每帧重新打包参数或重绑 program
+- `MaterialRenderProxy` 使用 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；贴图仍处于 Loading 但 fallback resource/version 未变化时，不应每帧重新打包参数或重绑 program，shader 文件签名也不应退化成逐 section 的每帧 filesystem 热路径
 - render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`
 - `SceneRenderViewContext` 负责描述 per-view 提交状态：
   - `output_target`
@@ -1258,8 +1262,9 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - static mesh `Surface` 现在统一走 V2 `MaterialSystem + MaterialRenderProxy` 资源模板路径
 - `SceneRenderer` 当前只负责：
   - per-view render pass / depth 目标管理
-  - 静态网格 batch 构建、instance buffer 更新和 instanced draw 提交
+  - 静态网格 batch 构建、单可见静态网格 direct section submit、instance buffer 更新和 draw 提交
   - 消费 section 的 `MaterialRenderProxy`
+- 当前 `Surface.StaticMesh` shader family 仍使用 instanced vertex layout，所以单可见 draw fast path 不是非 instanced shader 路径；它只绕过 batch lookup / instance vector 构建，并继续绑定 slot 1 的单实例 buffer
 - `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 `Surface.StaticMesh.BasePass` 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
 
 当前 depth 规则为：
@@ -1505,7 +1510,7 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 - `AssetDatabase` 对 Mesh / Model / Material / AshAsset async load 维护 in-flight `shared_future` 表，重复请求会复用同一个后台任务，失败结果会缓存到下一次 `refresh()`
 - `.AshAsset` JSON 读写与层级重建集中在 `Function/Asset/AshAssetSerializer.cpp`；`AssetData.cpp` 继续承担 OBJ/glTF/FBX 模型导入、mesh/model 基础方法和模型到 AshAsset 的转换
 - `MaterialShaderMap` 的 resource template 生成改为直接消费 shader reflection artifact，避免为了读取 reflection 创建临时 graphics program
-- `RenderScene` sync 阶段预取 CPU-only material proxy，render submit 只在 proxy 缺失、材质版本变化或贴图资源版本变化时准备 GPU program / binding
+- `RenderScene` sync 阶段预取 CPU-only material proxy，render submit 只在 proxy 缺失、材质版本变化、节流后的 shader 文件签名变化或贴图资源版本变化时准备 GPU program / binding
 
 ---
 

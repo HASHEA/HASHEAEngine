@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/MaterialShaderMap.h"
+#include <chrono>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -47,6 +48,8 @@ namespace AshEngine
 			Renderer& renderer,
 			std::unique_ptr<GraphicsProgram>& out_program) const;
 		bool bind_v2_program_resources();
+		bool shader_file_signatures_current_throttled() const;
+		void mark_shader_file_signatures_current() const;
 
 	private:
 		std::shared_ptr<const MaterialInterface> m_material = nullptr;
@@ -63,5 +66,8 @@ namespace AshEngine
 		uint64_t m_bound_binding_version = 0;
 		uint64_t m_material_version = 0;
 		uint64_t m_v2_compile_hash = 0;
+		mutable bool m_shader_file_signature_status_valid = false;
+		mutable bool m_shader_file_signatures_current = true;
+		mutable std::chrono::steady_clock::time_point m_next_shader_file_signature_check{};
 	};
 }

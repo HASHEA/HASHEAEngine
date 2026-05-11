@@ -77,6 +77,33 @@ namespace AshEngine
 			return data;
 		}
 
+		static void apply_view_context_to_draw_desc(GraphicsDrawDesc& draw_desc, const SceneRenderViewContext& view_context)
+		{
+			draw_desc.has_viewport = view_context.has_viewport;
+			if (view_context.has_viewport)
+			{
+				draw_desc.viewport = view_context.viewport;
+			}
+			draw_desc.has_scissor = view_context.has_scissor;
+			if (view_context.has_scissor)
+			{
+				draw_desc.scissor = view_context.scissor;
+			}
+		}
+
+		static auto validate_static_mesh_draw_asset(const VisibleStaticMeshDraw& draw) -> bool
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(draw.render_asset && draw.render_asset->is_gpu_ready());
+			ASH_PROCESS_ERROR(draw.render_asset->resource);
+			ASH_PROCESS_ERROR(draw.render_asset->resource->vertex_decl != nullptr);
+			ASH_PROCESS_ERROR(
+				RHI::vertex_input_layouts_equal(
+					draw.render_asset->resource->vertex_decl->get_vertex_input(),
+					get_mesh_vertex_decl()->get_vertex_input()));
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
 		static auto find_or_add_batch(
 			std::vector<StaticMeshDrawBatch>& batches,
 			std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash>& batch_lookup,
@@ -124,6 +151,50 @@ namespace AshEngine
 		m_renderer = nullptr;
 	}
 
+	bool SceneRenderer::should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count)
+	{
+		return visible_static_mesh_draw_count > 1;
+	}
+
+	std::shared_ptr<VertexBuffer> SceneRenderer::ensure_instance_buffer(
+		size_t buffer_index,
+		const SceneStaticMeshInstanceData* instances,
+		uint32_t instance_count)
+	{
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<VertexBuffer>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_renderer && instances && instance_count > 0);
+		const uint32_t instance_buffer_size =
+			static_cast<uint32_t>(sizeof(SceneStaticMeshInstanceData) * instance_count);
+		if (buffer_index >= m_instance_buffers.size())
+		{
+			m_instance_buffers.resize(buffer_index + 1);
+		}
+
+		SceneInstanceBufferEntry& instance_buffer_entry = m_instance_buffers[buffer_index];
+		if (!instance_buffer_entry.buffer || instance_buffer_entry.capacity < instance_count)
+		{
+			VertexBufferDesc instance_buffer_desc{};
+			instance_buffer_desc.size = instance_buffer_size;
+			instance_buffer_desc.stride = static_cast<uint32_t>(sizeof(SceneStaticMeshInstanceData));
+			instance_buffer_desc.cpu_write = true;
+			instance_buffer_desc.initial_data = instances;
+			instance_buffer_desc.name = "SceneStaticMeshInstanceBuffer";
+			instance_buffer_entry.buffer = m_renderer->create_vertex_buffer(instance_buffer_desc);
+			ASH_PROCESS_ERROR(instance_buffer_entry.buffer != nullptr);
+			instance_buffer_entry.capacity = instance_count;
+		}
+		else
+		{
+			ASH_PROCESS_ERROR(instance_buffer_entry.buffer->update(
+				0,
+				instance_buffer_size,
+				const_cast<SceneStaticMeshInstanceData*>(instances)));
+		}
+
+		result = instance_buffer_entry.buffer;
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
 	bool SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)
 	{
 		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_visible_frame", AshEngine::Profile::Color::Scene);
@@ -150,130 +221,179 @@ namespace AshEngine
 		Renderer::GraphicsPassContext pass_context{};
 		ASH_PROCESS_ERROR(m_renderer->begin_pass(pass_desc, pass_context));
 
-		std::vector<StaticMeshDrawBatch> batches{};
-		batches.reserve(frame.static_mesh_draws.size());
-		std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash> batch_lookup{};
-		batch_lookup.reserve(frame.static_mesh_draws.size());
-		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+		const bool use_instanced_static_mesh_path =
+			should_use_instanced_static_mesh_path(frame.static_mesh_draws.size());
+		if (!use_instanced_static_mesh_path)
 		{
-			ASH_PROCESS_ERROR(draw.render_asset && draw.render_asset->is_gpu_ready());
-			ASH_PROCESS_ERROR(draw.render_asset->resource);
-			ASH_PROCESS_ERROR(draw.render_asset->resource->vertex_decl != nullptr);
-			ASH_PROCESS_ERROR(
-				RHI::vertex_input_layouts_equal(
-					draw.render_asset->resource->vertex_decl->get_vertex_input(),
-					get_mesh_vertex_decl()->get_vertex_input()));
-			for (const ResolvedStaticMeshSection& section : draw.sections)
+			if (!frame.static_mesh_draws.empty())
 			{
-				ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
-				if (!section.material || !section.material_proxy)
-				{
-					HLogError("SceneRenderer: skipping static mesh section with incomplete material bindings.");
-					continue;
-				}
+				const VisibleStaticMeshDraw& draw = frame.static_mesh_draws.front();
+				ASH_PROCESS_ERROR(validate_static_mesh_draw_asset(draw));
+				const SceneStaticMeshInstanceData instance_data =
+					make_instance_data(frame.view_projection * draw.world_transform);
+				std::shared_ptr<VertexBuffer> instance_buffer = ensure_instance_buffer(0, &instance_data, 1);
+				ASH_PROCESS_ERROR(instance_buffer != nullptr);
 
-				const MaterialResource* material_resource =
-					section.material_proxy->get_surface_staticmesh_basepass_resource();
-				if (!material_resource)
+				for (const ResolvedStaticMeshSection& section : draw.sections)
 				{
-					HLogError(
-						"SceneRenderer: skipping material '{}' because no render resource is available.",
-						section.material->get_asset_path().generic_string());
-					continue;
-				}
+					ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
+					if (!section.material || !section.material_proxy)
+					{
+						HLogError("SceneRenderer: skipping static mesh section with incomplete material bindings.");
+						continue;
+					}
 
-				if (!material_resource->pass_relevance.supports_surface ||
-					material_resource->pass_relevance.domain != MaterialDomain::Surface)
-				{
-					continue;
-				}
-				if (material_resource->pass_relevance.is_transparent)
-				{
-					const std::string material_key =
-						section.material->get_asset_path().empty() ?
-						section.material->get_name() :
-						section.material->get_asset_path().generic_string();
-					log_warning_once(
-						"transparent#" + material_key,
-						"SceneRenderer: skipping transparent material '" + material_key + "' in Surface.StaticMesh.BasePass.");
-					continue;
-				}
-				GraphicsProgram* program = material_resource->program;
-				if (!program)
-				{
-					HLogError(
-						"SceneRenderer: skipping material '{}' because its graphics program is unavailable.",
-						section.material->get_asset_path().generic_string());
-					continue;
-				}
+					const MaterialResource* material_resource =
+						section.material_proxy->get_surface_staticmesh_basepass_resource();
+					if (!material_resource)
+					{
+						HLogError(
+							"SceneRenderer: skipping material '{}' because no render resource is available.",
+							section.material->get_asset_path().generic_string());
+						continue;
+					}
 
-				log_basepass_usage_once(*section.material, *material_resource);
+					if (!material_resource->pass_relevance.supports_surface ||
+						material_resource->pass_relevance.domain != MaterialDomain::Surface)
+					{
+						continue;
+					}
+					if (material_resource->pass_relevance.is_transparent)
+					{
+						const std::string material_key =
+							section.material->get_asset_path().empty() ?
+							section.material->get_name() :
+							section.material->get_asset_path().generic_string();
+						log_warning_once(
+							"transparent#" + material_key,
+							"SceneRenderer: skipping transparent material '" + material_key + "' in Surface.StaticMesh.BasePass.");
+						continue;
+					}
+					GraphicsProgram* program = material_resource->program;
+					if (!program)
+					{
+						HLogError(
+							"SceneRenderer: skipping material '{}' because its graphics program is unavailable.",
+							section.material->get_asset_path().generic_string());
+						continue;
+					}
 
-				StaticMeshDrawBatch& batch = find_or_add_batch(batches, batch_lookup, program, draw.render_asset, section);
-				batch.instances.push_back(make_instance_data(frame.view_projection * draw.world_transform));
+					log_basepass_usage_once(*section.material, *material_resource);
+
+					GraphicsDrawDesc draw_desc{};
+					draw_desc.program = program;
+					draw_desc.vertex_buffers.push_back({
+						0,
+						draw.render_asset->resource->vertex_buffer,
+						0
+					});
+					draw_desc.vertex_buffers.push_back({
+						1,
+						instance_buffer,
+						0
+					});
+					draw_desc.index_buffer = draw.render_asset->resource->index_buffer;
+					draw_desc.first_index = section.first_index;
+					draw_desc.index_count = section.index_count;
+					draw_desc.instance_count = 1;
+					draw_desc.vertex_offset = 0;
+					apply_view_context_to_draw_desc(draw_desc, view_context);
+					ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
+				}
 			}
+
+			ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(frame.static_mesh_draws.size()));
 		}
-
-		ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(batches.size()));
-		for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
+		else
 		{
-			StaticMeshDrawBatch& batch = batches[batch_index];
-			ASH_PROCESS_ERROR(batch.program && batch.vertex_buffer && batch.index_buffer && !batch.instances.empty());
-			const uint32_t instance_count = static_cast<uint32_t>(batch.instances.size());
-			const uint32_t instance_buffer_size =
-				static_cast<uint32_t>(sizeof(SceneStaticMeshInstanceData) * batch.instances.size());
+			std::vector<StaticMeshDrawBatch> batches{};
+			batches.reserve(frame.static_mesh_draws.size());
+			std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash> batch_lookup{};
+			batch_lookup.reserve(frame.static_mesh_draws.size());
+			for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+			{
+				ASH_PROCESS_ERROR(validate_static_mesh_draw_asset(draw));
+				for (const ResolvedStaticMeshSection& section : draw.sections)
+				{
+					ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
+					if (!section.material || !section.material_proxy)
+					{
+						HLogError("SceneRenderer: skipping static mesh section with incomplete material bindings.");
+						continue;
+					}
 
-			if (batch_index >= m_instance_buffers.size())
-			{
-				m_instance_buffers.resize(batch_index + 1);
+					const MaterialResource* material_resource =
+						section.material_proxy->get_surface_staticmesh_basepass_resource();
+					if (!material_resource)
+					{
+						HLogError(
+							"SceneRenderer: skipping material '{}' because no render resource is available.",
+							section.material->get_asset_path().generic_string());
+						continue;
+					}
+
+					if (!material_resource->pass_relevance.supports_surface ||
+						material_resource->pass_relevance.domain != MaterialDomain::Surface)
+					{
+						continue;
+					}
+					if (material_resource->pass_relevance.is_transparent)
+					{
+						const std::string material_key =
+							section.material->get_asset_path().empty() ?
+							section.material->get_name() :
+							section.material->get_asset_path().generic_string();
+						log_warning_once(
+							"transparent#" + material_key,
+							"SceneRenderer: skipping transparent material '" + material_key + "' in Surface.StaticMesh.BasePass.");
+						continue;
+					}
+					GraphicsProgram* program = material_resource->program;
+					if (!program)
+					{
+						HLogError(
+							"SceneRenderer: skipping material '{}' because its graphics program is unavailable.",
+							section.material->get_asset_path().generic_string());
+						continue;
+					}
+
+					log_basepass_usage_once(*section.material, *material_resource);
+
+					StaticMeshDrawBatch& batch = find_or_add_batch(batches, batch_lookup, program, draw.render_asset, section);
+					batch.instances.push_back(make_instance_data(frame.view_projection * draw.world_transform));
+				}
 			}
 
-			SceneInstanceBufferEntry& instance_buffer_entry = m_instance_buffers[batch_index];
-			if (!instance_buffer_entry.buffer || instance_buffer_entry.capacity < instance_count)
+			ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(batches.size()));
+			for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
 			{
-				VertexBufferDesc instance_buffer_desc{};
-				instance_buffer_desc.size = instance_buffer_size;
-				instance_buffer_desc.stride = static_cast<uint32_t>(sizeof(SceneStaticMeshInstanceData));
-				instance_buffer_desc.cpu_write = true;
-				instance_buffer_desc.initial_data = batch.instances.data();
-				instance_buffer_desc.name = "SceneStaticMeshInstanceBuffer";
-				instance_buffer_entry.buffer = m_renderer->create_vertex_buffer(instance_buffer_desc);
-				ASH_PROCESS_ERROR(instance_buffer_entry.buffer != nullptr);
-				instance_buffer_entry.capacity = instance_count;
-			}
-			else
-			{
-				ASH_PROCESS_ERROR(instance_buffer_entry.buffer->update(0, instance_buffer_size, batch.instances.data()));
-			}
+				StaticMeshDrawBatch& batch = batches[batch_index];
+				ASH_PROCESS_ERROR(batch.program && batch.vertex_buffer && batch.index_buffer && !batch.instances.empty());
+				const uint32_t instance_count = static_cast<uint32_t>(batch.instances.size());
+				std::shared_ptr<VertexBuffer> instance_buffer =
+					ensure_instance_buffer(batch_index, batch.instances.data(), instance_count);
+				ASH_PROCESS_ERROR(instance_buffer != nullptr);
 
-			GraphicsDrawDesc draw_desc{};
-			draw_desc.program = batch.program;
-			draw_desc.vertex_buffers.push_back({
-				0,
-				batch.vertex_buffer,
-				0
-			});
-			draw_desc.vertex_buffers.push_back({
-				1,
-				instance_buffer_entry.buffer,
-				0
-			});
-			draw_desc.index_buffer = batch.index_buffer;
-			draw_desc.first_index = batch.first_index;
-			draw_desc.index_count = batch.index_count;
-			draw_desc.instance_count = instance_count;
-			draw_desc.vertex_offset = 0;
-			draw_desc.has_viewport = view_context.has_viewport;
-			if (view_context.has_viewport)
-			{
-				draw_desc.viewport = view_context.viewport;
+				GraphicsDrawDesc draw_desc{};
+				draw_desc.program = batch.program;
+				draw_desc.vertex_buffers.push_back({
+					0,
+					batch.vertex_buffer,
+					0
+				});
+				draw_desc.vertex_buffers.push_back({
+					1,
+					instance_buffer,
+					0
+				});
+				draw_desc.index_buffer = batch.index_buffer;
+				draw_desc.first_index = batch.first_index;
+				draw_desc.index_count = batch.index_count;
+				draw_desc.instance_count = instance_count;
+				draw_desc.vertex_offset = 0;
+				apply_view_context_to_draw_desc(draw_desc, view_context);
+				ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
 			}
-			draw_desc.has_scissor = view_context.has_scissor;
-			if (view_context.has_scissor)
-			{
-				draw_desc.scissor = view_context.scissor;
-			}
-			ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
 		}
 
 		pass_context.end();

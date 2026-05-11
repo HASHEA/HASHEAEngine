@@ -8,6 +8,7 @@
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Render/Material.h"
+#include "Function/Render/SceneRenderer.h"
 #include "Function/Render/TextureAsset.h"
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/RHIResource.h"
@@ -597,6 +598,20 @@ namespace AshEngine
 				report_self_test_failure("Material disk asset priority", "built-in fallback shadowed an existing disk material asset");
 		}
 
+		auto test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() -> bool
+		{
+			if (SceneRenderer::should_use_instanced_static_mesh_path(0))
+			{
+				return report_self_test_failure("SceneRenderer batch policy", "empty frames should not use the instanced path");
+			}
+			if (SceneRenderer::should_use_instanced_static_mesh_path(1))
+			{
+				return report_self_test_failure("SceneRenderer batch policy", "single static mesh frames should use the direct draw path");
+			}
+			return SceneRenderer::should_use_instanced_static_mesh_path(2) ||
+				report_self_test_failure("SceneRenderer batch policy", "multiple static mesh draws should keep the instancing path available");
+		}
+
 #if defined(ASH_HAS_DX12)
 		auto test_dx12_resource_tracker_preserves_partial_state() -> bool
 		{
@@ -664,6 +679,7 @@ namespace AshEngine
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
+		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;
 #endif

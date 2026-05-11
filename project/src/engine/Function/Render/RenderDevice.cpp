@@ -3059,6 +3059,14 @@ namespace AshEngine
 		const uint32_t allocation_size = align_uniform_buffer_allocation_size(desc.size);
 		const RHI::AshResourceAccessType requested_access_type =
 			desc.cpu_write ? RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE : RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+		std::vector<uint8_t> padded_initial_data{};
+		const void* initial_data = desc.initial_data;
+		if (desc.initial_data && allocation_size > desc.size)
+		{
+			padded_initial_data.resize(allocation_size, 0);
+			std::memcpy(padded_initial_data.data(), desc.initial_data, desc.size);
+			initial_data = padded_initial_data.data();
+		}
 
 		RHI::BufferCreation buffer_creation{};
 		buffer_creation.size = allocation_size;
@@ -3066,7 +3074,7 @@ namespace AshEngine
 		buffer_creation.usage_flags = RHI::ASH_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 		buffer_creation.access_type = requested_access_type;
 		buffer_creation.force_static = true;
-		buffer_creation.initial_data = const_cast<void*>(desc.initial_data);
+		buffer_creation.initial_data = const_cast<void*>(initial_data);
 		buffer_creation.name = desc.name;
 
 		std::shared_ptr<RHI::Buffer> buffer = m_impl->graphics_context->create_buffer(buffer_creation);
