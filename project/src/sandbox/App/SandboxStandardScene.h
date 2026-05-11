@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace AshSandbox
 {
@@ -39,10 +40,16 @@ namespace AshSandbox
 		SandboxStandardScene() = default;
 
 	public:
+		static auto get_sample_asset_root_path() -> const std::filesystem::path&;
 		static auto get_canonical_sample_asset_path() -> const std::filesystem::path&;
+		static auto discover_sample_asset_paths(const AshEngine::AssetDatabase& asset_database) -> std::vector<std::filesystem::path>;
+		static auto make_sample_asset_label(const std::filesystem::path& sample_asset_path) -> std::string;
 
 		auto start(
 			AshEngine::AssetDatabase& asset_database) -> bool;
+		auto start(
+			AshEngine::AssetDatabase& asset_database,
+			const std::filesystem::path& sample_asset_path) -> bool;
 
 		auto reset() -> void;
 		auto update_logic(const AshEngine::InputState& input, uint64_t frame_index) -> bool;
@@ -57,6 +64,7 @@ namespace AshSandbox
 	private:
 		auto _build_runtime_snapshot(
 			const std::shared_ptr<const AshEngine::Model>& model,
+			const std::filesystem::path& sample_asset_path,
 			SandboxStandardSceneSnapshot& out_snapshot,
 			std::string& out_error) -> bool;
 		auto _compute_scene_world_bounds(

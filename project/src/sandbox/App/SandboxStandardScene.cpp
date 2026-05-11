@@ -10,6 +10,7 @@
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <limits>
+#include <set>
 #include <utility>
 
 namespace AshSandbox
@@ -19,7 +20,7 @@ namespace AshSandbox
 		static constexpr char k_scene_name[] = "SandboxStandardScene";
 		static constexpr char k_scene_root_name[] = "SandboxStandardSceneRoot";
 		static constexpr char k_primary_camera_name[] = "SandboxStandardSceneCamera";
-		static constexpr char k_v2_debug_material_override_path[] = "materials/v2/MI_V2_DebugSurface_Tint.AshMatIns";
+		static constexpr char k_sample_asset_root_path[] = "models/gltfs";
 		static const glm::vec3 k_primary_camera_position{ 0.0f, 1.5f, -6.0f };
 		static const glm::vec3 k_primary_camera_rotation_euler_degrees{ 0.0f, 0.0f, 0.0f };
 		static constexpr float k_default_camera_move_speed = 8.0f;
@@ -32,6 +33,23 @@ namespace AshSandbox
 				(corner_index & 1u) == 0u ? bounds.local_min.x : bounds.local_max.x,
 				(corner_index & 2u) == 0u ? bounds.local_min.y : bounds.local_max.y,
 				(corner_index & 4u) == 0u ? bounds.local_min.z : bounds.local_max.z);
+		}
+
+		static auto path_has_prefix(const std::filesystem::path& path, const std::filesystem::path& prefix) -> bool
+		{
+			const std::filesystem::path normalized_path = path.lexically_normal();
+			const std::filesystem::path normalized_prefix = prefix.lexically_normal();
+
+			auto path_it = normalized_path.begin();
+			auto prefix_it = normalized_prefix.begin();
+			for (; prefix_it != normalized_prefix.end(); ++prefix_it, ++path_it)
+			{
+				if (path_it == normalized_path.end() || *path_it != *prefix_it)
+				{
+					return false;
+				}
+			}
+			return true;
 		}
 
 		static auto make_transform_from_look_at(
@@ -62,25 +80,12 @@ namespace AshSandbox
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-		static auto try_resolve_first_material_slot(
-			const AshEngine::Model& model,
-			const AshEngine::MeshComponent& mesh_component,
-			uint32_t& out_material_slot) -> bool
-		{
-			const AshEngine::Mesh* mesh = AshEngine::get_model_mesh_by_index(model, mesh_component.mesh_index);
-			if (!mesh || mesh->sections.empty())
-			{
-				return false;
-			}
+	}
 
-			out_material_slot = mesh->sections.front().material_slot;
-			if (out_material_slot == AshEngine::k_invalid_material_slot)
-			{
-				out_material_slot = 0u;
-			}
-			return true;
-		}
-
+	auto SandboxStandardScene::get_sample_asset_root_path() -> const std::filesystem::path&
+	{
+		static const std::filesystem::path k_root_path = k_sample_asset_root_path;
+		return k_root_path;
 	}
 
 	auto SandboxStandardScene::get_canonical_sample_asset_path() -> const std::filesystem::path&
@@ -89,11 +94,57 @@ namespace AshSandbox
 		return k_sample_asset_path;
 	}
 
+	auto SandboxStandardScene::discover_sample_asset_paths(const AshEngine::AssetDatabase& asset_database) -> std::vector<std::filesystem::path>
+	{
+		std::set<std::string> sorted_paths{};
+		if (!asset_database.is_valid())
+		{
+			return {};
+		}
+
+		const std::filesystem::path& sample_root = get_sample_asset_root_path();
+		for (const AshEngine::AssetInfo& asset : asset_database.get_assets())
+		{
+			if (asset.is_directory)
+			{
+				continue;
+			}
+
+			std::filesystem::path relative_path = asset.relative_path.lexically_normal();
+			if (relative_path.extension() != ".gltf" || !path_has_prefix(relative_path, sample_root))
+			{
+				continue;
+			}
+
+			sorted_paths.insert(relative_path.generic_string());
+		}
+
+		std::vector<std::filesystem::path> result{};
+		result.reserve(sorted_paths.size());
+		for (const std::string& path : sorted_paths)
+		{
+			result.emplace_back(path);
+		}
+		return result;
+	}
+
+	auto SandboxStandardScene::make_sample_asset_label(const std::filesystem::path& sample_asset_path) -> std::string
+	{
+		return sample_asset_path.lexically_normal().generic_string();
+	}
+
 	auto SandboxStandardScene::start(
 		AshEngine::AssetDatabase& asset_database) -> bool
 	{
+		return start(asset_database, get_canonical_sample_asset_path());
+	}
+
+	auto SandboxStandardScene::start(
+		AshEngine::AssetDatabase& asset_database,
+		const std::filesystem::path& sample_asset_path) -> bool
+	{
 		std::string failure_detail{};
-		const std::filesystem::path& sample_asset_path = get_canonical_sample_asset_path();
+		const std::filesystem::path normalized_sample_asset_path = sample_asset_path.lexically_normal();
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
 		if (!asset_database.is_valid())
@@ -102,20 +153,26 @@ namespace AshSandbox
 			ASH_PROCESS_ERROR(false);
 		}
 
-		const AshEngine::AssetInfo* asset_info = asset_database.find_asset_by_path(sample_asset_path);
+		if (normalized_sample_asset_path.empty())
+		{
+			failure_detail = "Sandbox standard scene cannot start because the selected model path is empty.";
+			ASH_PROCESS_ERROR(false);
+		}
+
+		const AshEngine::AssetInfo* asset_info = asset_database.find_asset_by_path(normalized_sample_asset_path);
 		if (asset_info == nullptr)
 		{
 			failure_detail = "Sandbox standard scene asset was not found in the AssetDatabase: '" +
-				sample_asset_path.generic_string() + "'.";
+				normalized_sample_asset_path.generic_string() + "'.";
 			ASH_PROCESS_ERROR(false);
 		}
 
 		std::shared_future<std::shared_ptr<const AshEngine::Model>> model_future =
-			asset_database.load_model_by_path_async(sample_asset_path);
+			asset_database.load_model_by_path_async(normalized_sample_asset_path);
 		if (!model_future.valid())
 		{
 			failure_detail = "Sandbox standard scene failed to queue async model loading for '" +
-				sample_asset_path.generic_string() + "'.";
+				normalized_sample_asset_path.generic_string() + "'.";
 			ASH_PROCESS_ERROR(false);
 		}
 
@@ -125,18 +182,18 @@ namespace AshSandbox
 			m_model_future = std::move(model_future);
 			m_snapshot = {};
 			m_snapshot.load_state = SandboxStandardSceneLoadState::LoadingModel;
-			m_snapshot.sample_asset_path = sample_asset_path;
+			m_snapshot.sample_asset_path = normalized_sample_asset_path;
 			m_free_camera_controller.reset();
 			m_has_logic_tick_time = false;
 		}
 
-		HLogInfo("Sandbox standard scene started async load for '{}'.", sample_asset_path.generic_string());
+		HLogInfo("Sandbox standard scene started async load for '{}'.", normalized_sample_asset_path.generic_string());
 		ASH_PROCESS_GUARD_END(bResult, false);
 		if (!bResult)
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_snapshot = {};
-			m_snapshot.sample_asset_path = sample_asset_path;
+			m_snapshot.sample_asset_path = normalized_sample_asset_path;
 			_set_failure_locked(
 				failure_detail.empty()
 				? std::string("Sandbox standard scene failed to start.")
@@ -163,11 +220,13 @@ namespace AshSandbox
 		AshEngine::AssetDatabase* asset_database = nullptr;
 		std::shared_future<std::shared_ptr<const AshEngine::Model>> model_future{};
 		SandboxStandardSceneLoadState load_state = SandboxStandardSceneLoadState::Idle;
+		std::filesystem::path sample_asset_path{};
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			asset_database = m_asset_database;
 			model_future = m_model_future;
 			load_state = m_snapshot.load_state;
+			sample_asset_path = m_snapshot.sample_asset_path;
 		}
 
 		ASH_PROCESS_ERROR(asset_database != nullptr);
@@ -200,7 +259,7 @@ namespace AshSandbox
 			if (!model || !model->is_valid())
 			{
 				std::string asset_error = asset_database->get_last_error();
-				const AshEngine::AssetInfo* asset_info = asset_database->find_asset_by_path(get_canonical_sample_asset_path());
+				const AshEngine::AssetInfo* asset_info = asset_database->find_asset_by_path(sample_asset_path);
 				if (asset_info != nullptr)
 				{
 					const std::string per_asset_error = asset_database->get_asset_last_error(asset_info->id);
@@ -212,14 +271,14 @@ namespace AshSandbox
 
 				std::scoped_lock<std::mutex> lock(m_mutex);
 				_set_failure_locked(
-					"Failed to load standard scene model '" + get_canonical_sample_asset_path().generic_string() +
+					"Failed to load standard scene model '" + sample_asset_path.generic_string() +
 					"': " + (asset_error.empty() ? std::string("Unknown async load failure.") : asset_error));
 				ASH_PROCESS_ERROR(false);
 			}
 
 			SandboxStandardSceneSnapshot ready_snapshot{};
 			std::string build_error{};
-			if (!_build_runtime_snapshot(model, ready_snapshot, build_error))
+			if (!_build_runtime_snapshot(model, sample_asset_path, ready_snapshot, build_error))
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
 				_set_failure_locked(build_error.empty() ? "Failed to build Sandbox standard scene runtime state." : std::move(build_error));
@@ -238,7 +297,7 @@ namespace AshSandbox
 
 			HLogInfo(
 				"Sandbox standard scene is ready: sample='{}', entities={}, camera_entity={}.",
-				get_canonical_sample_asset_path().generic_string(),
+				sample_asset_path.generic_string(),
 				entity_count,
 				m_free_camera_controller.get_camera_entity_id());
 
@@ -320,6 +379,7 @@ namespace AshSandbox
 
 	auto SandboxStandardScene::_build_runtime_snapshot(
 		const std::shared_ptr<const AshEngine::Model>& model,
+		const std::filesystem::path& sample_asset_path,
 		SandboxStandardSceneSnapshot& out_snapshot,
 		std::string& out_error) -> bool
 	{
@@ -328,7 +388,7 @@ namespace AshSandbox
 		ASH_PROCESS_ERROR(m_asset_database != nullptr);
 
 		out_snapshot = {};
-		out_snapshot.sample_asset_path = get_canonical_sample_asset_path();
+		out_snapshot.sample_asset_path = sample_asset_path.lexically_normal();
 		out_snapshot.scene = AshEngine::Scene::create(k_scene_name);
 		if (!out_snapshot.scene.is_valid())
 		{
@@ -340,53 +400,8 @@ namespace AshSandbox
 			out_snapshot.scene.instantiate_model(*model, {}, k_scene_root_name);
 		if (!root_entity.is_valid())
 		{
-			out_error = "Failed to instantiate the Sponza model into the Sandbox standard scene.";
+			out_error = "Failed to instantiate the selected model into the Sandbox standard scene.";
 			ASH_PROCESS_ERROR(false);
-		}
-
-		bool injected_v2_override = false;
-		for (AshEngine::Entity entity : out_snapshot.scene.get_entities_with_component(AshEngine::SceneComponentType::Mesh))
-		{
-			if (!entity.is_valid())
-			{
-				continue;
-			}
-
-			AshEngine::MeshComponent mesh_component = entity.get_mesh_component();
-			if (mesh_component.asset_path.empty() || !mesh_component.material_overrides.empty())
-			{
-				continue;
-			}
-
-			uint32_t material_slot = 0u;
-			if (!try_resolve_first_material_slot(*model, mesh_component, material_slot))
-			{
-				continue;
-			}
-
-			mesh_component.material_overrides.push_back({
-				material_slot,
-				k_v2_debug_material_override_path
-			});
-			if (!entity.set_mesh_component(mesh_component))
-			{
-				out_error = "Failed to inject the Sandbox V2 material override.";
-				ASH_PROCESS_ERROR(false);
-			}
-
-			HLogInfo(
-				"Sandbox standard scene injected V2 material override '{}' on entity {} slot {}.",
-				k_v2_debug_material_override_path,
-				entity.get_id(),
-				material_slot);
-			injected_v2_override = true;
-			break;
-		}
-		if (!injected_v2_override)
-		{
-			HLogWarning(
-				"Sandbox standard scene did not find a mesh entity for V2 material override '{}'.",
-				k_v2_debug_material_override_path);
 		}
 
 		ASH_PROCESS_ERROR(_create_primary_camera(

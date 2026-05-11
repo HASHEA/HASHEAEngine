@@ -1314,12 +1314,15 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
 
+Sandbox 会从 `product/assets/models/gltfs/` 下枚举 `.gltf` 模型，并在窗口内提供 `Sandbox Model` overlay 下拉框。运行时选择新模型时，Sandbox 会先销毁旧的 scene presentation binding/output，再 reset 旧标准场景状态并异步加载新模型；新模型 ready 后才重新注册窗口 output 和 primary-camera binding，避免切换后继续提交旧场景实体。
+标准场景会保留 glTF 导入得到的材质槽和贴图绑定，不再为验证目的向 mesh 注入固定 debug material override；V2 材质链路由 glTF 默认材质生成的 `.AshMatIns` 覆盖。
+
 当前标准场景路径会真实走通：
 
 - `AssetDatabase` 异步模型加载
 - `Scene::instantiate_model()`
 - 逻辑线程相机更新
-- `Sandbox` 声明一个 `Window` output 和一个 persistent scene binding
+- `Sandbox` 在标准场景 ready 后声明一个 `Window` output 和一个 scene binding；模型切换期间会临时销毁该 binding/output
 - `ScenePresentationSubsystem` 在 update phase 内完成 `RenderScene` / `SceneView` / `VisibleRenderFrame` 准备
 - render thread 在 scene presentation submit phase 内构造 `SceneRenderViewContext` 并提交
 - 最终通过正常 present 路径显示到屏幕
@@ -1340,7 +1343,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - render thread 只消费 prepared packets 并提交 draw
 - startup 完成后，仍会通过 `ASH_ENQUEUE_RENDER_COMMAND` 向 render thread 回投一条确认消息
 
-当前默认内置的 glTF 样例资产位于：
+当前内置 glTF 样例资产位于：
 
 - `product/assets/models/gltfs/Avocado/glTF/Avocado.gltf`
 - `product/assets/models/gltfs/BoomBox/glTF/BoomBox.gltf`

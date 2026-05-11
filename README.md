@@ -12,7 +12,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 - Vulkan 与 DX12 双后端：运行时通过 `product/config/Engine.ini` 选择后端，Windows Debug / Release 构建同时编入 Vulkan、DX12、DXC。
 - Scene-driven 静态网格渲染：逻辑 `Scene` 通过 `ScenePresentationSubsystem` 转换为渲染线程可消费的不可变可见帧数据。
 - 材质 V2 基础链路：支持 `Surface.StaticMesh` 的材质 shader 与 engine shader family 拼合，`.AshMat` 作为基材质，`.AshMatIns` 作为可直接赋给物体的材质实例。
-- Asset 与 glTF 示例资源：支持示例模型加载，Sandbox 默认使用 Sponza 作为标准验证场景。
+- Asset 与 glTF 示例资源：支持示例模型加载，Sandbox 默认使用 Sponza 作为标准验证场景，并可在运行时通过 overlay 切换 `product/assets/models/gltfs/` 下的 glTF。
 - Editor 基础壳：具备 dockspace、Scene/Game 视口、层级、属性、控制台、资产浏览等基础面板。
 - 调试与性能工具：支持日志、Vulkan validation、DX12 debug layer、GPU debug names、RHI command-buffer 错误状态、Tracy CPU profiling、frame stats overlay、Vulkan VMA 泄露定位。
 
@@ -176,7 +176,8 @@ Sandbox 是 Engine 侧测试/验证可执行项目，目标是避免把引擎验
 
 当前 Sandbox：
 
-- 默认加载 Sponza 作为标准场景。
+- 默认加载 Sponza 作为标准场景，并在窗口 overlay 中提供模型下拉框，可切换 `product/assets/models/gltfs/` 下发现的 glTF。
+- 保留 glTF 自带材质槽和贴图绑定；标准场景不再强制注入 debug material override。
 - 走逻辑 Scene -> ScenePresentationSubsystem -> SceneRenderer 的正式链路。
 - 用于验证静态网格渲染、材质 V2、资源加载、双后端 smoke test 和性能回归。
 
@@ -307,7 +308,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | Material | V2 `Surface.StaticMesh` 主路径已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |
 | Editor | 基础 workspace 和常用面板已具备，当前更偏向引擎验证与工具雏形，完整编辑器能力仍在开发。 |
-| Sandbox | 已作为标准 Engine 验证程序，默认加载 Sponza 并走正式 ScenePresentation 渲染链。 |
+| Sandbox | 已作为标准 Engine 验证程序，默认加载 Sponza，支持 overlay 切换 glTF 示例模型，并走正式 ScenePresentation 渲染链。 |
 | Profiling / Debug | Tracy、validation、debug name、日志、frame stats、VMA leak tracking 已接入，粒度和自动化验收仍在扩展。 |
 
 ## 文档入口
