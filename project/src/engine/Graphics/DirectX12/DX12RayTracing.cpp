@@ -264,9 +264,9 @@ namespace RHI
 		// Map instance buffer and write D3D12_RAYTRACING_INSTANCE_DESC data
 		D3D12_RAYTRACING_INSTANCE_DESC* mappedData = nullptr;
 		HRESULT hr = m_instanceBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedData));
-		if (FAILED(hr))
+		if (FAILED(hr) || !mappedData)
 		{
-			HLogError("DX12TLAS: Failed to map instance buffer");
+			HLogError("DX12TLAS: Failed to map instance buffer. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
 			return false;
 		}
 
@@ -375,9 +375,9 @@ namespace RHI
 		// Copy data
 		void* mapped = nullptr;
 		HRESULT hr = outBuffer->Map(0, nullptr, &mapped);
-		if (FAILED(hr))
+		if (FAILED(hr) || !mapped)
 		{
-			HLogError("DX12ShaderBindingTable: Failed to map SBT buffer");
+			HLogError("DX12ShaderBindingTable: Failed to map SBT buffer. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
 			return false;
 		}
 		memcpy(mapped, data, size);

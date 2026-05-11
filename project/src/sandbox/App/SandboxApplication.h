@@ -32,7 +32,7 @@ namespace AshSandbox
 
 	private:
 		std::filesystem::path m_assetRoot = "product/assets";
-		std::filesystem::path m_reportRoot = "product/test-reports/sandbox";
+		std::filesystem::path m_reportRoot = "Intermediate/test-reports/sandbox";
 		AshEngine::AssetDatabase m_assetDatabase{};
 		SandboxStandardScene m_standardScene{};
 		AshEngine::SceneOutputHandle m_mainSceneOutput{};

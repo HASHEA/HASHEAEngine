@@ -40,9 +40,13 @@ namespace RHI
 		{ASH_FORMAT_R64_UINT,                  8u,  1u, 1u, 0u, VK_FORMAT_R64_UINT,                  VK_FORMAT_UNDEFINED               },
 
 		{ASH_FORMAT_BC1_RGB_UNORM,             8u,  4u, 4u, 0u, VK_FORMAT_BC1_RGB_UNORM_BLOCK,       VK_FORMAT_BC1_RGB_SRGB_BLOCK      },
+		{ASH_FORMAT_BC1_RGB_SRGB_UNORM,        8u,  4u, 4u, 0u, VK_FORMAT_BC1_RGB_SRGB_BLOCK,        VK_FORMAT_BC1_RGB_SRGB_BLOCK      },
 		{ASH_FORMAT_BC1_RGBA_UNORM,            8u,  4u, 4u, 0u, VK_FORMAT_BC1_RGBA_UNORM_BLOCK,      VK_FORMAT_BC1_RGBA_SRGB_BLOCK     },
+		{ASH_FORMAT_BC1_RGBA_SRGB_UNORM,       8u,  4u, 4u, 0u, VK_FORMAT_BC1_RGBA_SRGB_BLOCK,       VK_FORMAT_BC1_RGBA_SRGB_BLOCK     },
 		{ASH_FORMAT_BC2_UNORM,                 16u, 4u, 4u, 0u, VK_FORMAT_BC2_UNORM_BLOCK,           VK_FORMAT_BC2_SRGB_BLOCK          },
+		{ASH_FORMAT_BC2_SRGB_UNORM,            16u, 4u, 4u, 0u, VK_FORMAT_BC2_SRGB_BLOCK,            VK_FORMAT_BC2_SRGB_BLOCK          },
 		{ASH_FORMAT_BC3_UNORM,                 16u, 4u, 4u, 1u, VK_FORMAT_BC3_UNORM_BLOCK,           VK_FORMAT_BC3_SRGB_BLOCK          },
+		{ASH_FORMAT_BC3_SRGB_UNORM,            16u, 4u, 4u, 1u, VK_FORMAT_BC3_SRGB_BLOCK,            VK_FORMAT_BC3_SRGB_BLOCK          },
 
 		{ASH_FORMAT_BC4_UNORM,                 8u,  4u, 4u, 0u, VK_FORMAT_BC4_UNORM_BLOCK,           VK_FORMAT_UNDEFINED               },
 		{ASH_FORMAT_BC4_SNORM,                 8u,  4u, 4u, 0u, VK_FORMAT_BC4_SNORM_BLOCK,           VK_FORMAT_UNDEFINED               },

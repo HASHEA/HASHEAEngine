@@ -33,13 +33,47 @@ namespace AshEngine
 
 	Application* Application::app = nullptr;
 	Application::Application(const EngineInitConfig& config)
-		: threadingConfig(config.threading)
+		: initConfig(config)
+		, threadingConfig(config.threading)
 	{
 		app = this;
-	
+	}
+
+	Application::~Application()
+	{
+		_shutdown_runtime();
+	}
+
+	auto Application::initialize() -> bool
+	{
+		return initialize(initConfig);
+	}
+
+	auto Application::initialize(const EngineInitConfig& config) -> bool
+	{
+		if (initialized)
+		{
+			return true;
+		}
+
+		ASH_PROCESS_GUARD_BEGIN(bool, bResult, true);
+		app = this;
+		initConfig = config;
+		threadingConfig = config.threading;
+
 		/*init at very first to ensure log*/
-		LogService::instance()->init(nullptr);
-		MemoryService::instance()->init(nullptr);
+		if (!logServiceInitialized)
+		{
+			bResult = LogService::instance()->init(nullptr);
+			ASH_PROCESS_ERROR(bResult);
+			logServiceInitialized = true;
+		}
+		if (!memoryServiceInitialized)
+		{
+			bResult = MemoryService::instance()->init(nullptr);
+			ASH_PROCESS_ERROR(bResult);
+			memoryServiceInitialized = true;
+		}
 		register_current_thread_role(EngineThreadRole::Render);
 		threadingInitialized = initialize_threading(threadingConfig);
 		if (!threadingInitialized)
@@ -63,13 +97,13 @@ namespace AshEngine
 		if (!window)
 		{
 			HLogError("Failed to create engine window.");
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 		window->init(windowConfig);
 		if (!window->get_native_interface())
 		{
 			HLogError("Engine window initialization failed: native window handle is null.");
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		/*gfx*/
@@ -81,21 +115,29 @@ namespace AshEngine
 		gfxConfig.vulkanValidation = runtimeRhiConfig.vulkanValidation;
 		gfxConfig.dx12Validation = runtimeRhiConfig.dx12Validation;
 		const auto& windowExtensions = window->get_extensions();
-		gfxConfig.addtionalExtensions.init(nullptr, windowExtensions.size(), 0);
+		if (!gfxConfig.addtionalExtensions.init(nullptr, static_cast<uint32_t>(windowExtensions.size()), 0))
+		{
+			HLogError("Failed to allocate graphics context extension list.");
+			ASH_PROCESS_ERROR(false);
+		}
 		for (uint32_t extensionIndex = 0; extensionIndex < windowExtensions.size(); ++extensionIndex)
 		{
-			gfxConfig.addtionalExtensions.push_back(windowExtensions[extensionIndex]);
+			if (!gfxConfig.addtionalExtensions.push_back(windowExtensions[extensionIndex]))
+			{
+				HLogError("Failed to append graphics context extension '{}'.", windowExtensions[extensionIndex] ? windowExtensions[extensionIndex] : "<null>");
+				ASH_PROCESS_ERROR(false);
+			}
 		}
 		graphicsContext = RHI::GraphicsContext::create(resolvedBackend);
 		H_ASSERTLOG(graphicsContext != nullptr, "Failed to create graphics context for backend '{}'.", RHI::backend_to_string(resolvedBackend));
 		if (!graphicsContext)
 		{
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 		if (!graphicsContext->init(&gfxConfig))
 		{
 			HLogError("Failed to initialize graphics context for backend '{}'.", RHI::backend_to_string(resolvedBackend));
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 
 		/*shader manager*/
@@ -119,27 +161,35 @@ namespace AshEngine
 		H_ASSERTLOG(swapChain != nullptr, "Failed to create swapchain for backend '{}'.", RHI::backend_to_string(resolvedBackend));
 		if (!swapChain)
 		{
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 		if (!swapChain->init(&scConfig))
 		{
 			HLogError("Failed to initialize swapchain for backend '{}'.", RHI::backend_to_string(resolvedBackend));
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 		renderDevice = new RenderDevice(graphicsContext, swapChain);
 		if (!renderDevice)
 		{
 			HLogError("Failed to create RenderDevice.");
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
 		renderer = new Renderer(renderDevice);
 		if (!renderer)
 		{
 			HLogError("Failed to create Renderer.");
-			return;
+			ASH_PROCESS_ERROR(false);
 		}
-		sceneRenderer.initialize(renderer);
-		scenePresentation.initialize(renderer, &renderAssetManager, &sceneRenderer);
+		if (!sceneRenderer.initialize(renderer))
+		{
+			HLogError("Failed to initialize SceneRenderer.");
+			ASH_PROCESS_ERROR(false);
+		}
+		if (!scenePresentation.initialize(renderer, &renderAssetManager, &sceneRenderer))
+		{
+			HLogError("Failed to initialize ScenePresentationSubsystem.");
+			ASH_PROCESS_ERROR(false);
+		}
 		uiContext = new UIContext();
 		UIContextConfig uiConfig{};
 		uiConfig.ini_path = config.uiIniPath;
@@ -151,8 +201,15 @@ namespace AshEngine
 			uiContext = nullptr;
 		}
 		initialized = true;
+		ASH_PROCESS_GUARD_END(bResult, false);
+		if (!bResult)
+		{
+			HLogError("Application initialization failed.");
+		}
+		return bResult;
 	}
-	Application::~Application()
+
+	auto Application::_shutdown_runtime() -> void
 	{
 		_stop_logic_thread();
 		if (threadingInitialized && !is_threading_shutting_down())
@@ -195,9 +252,21 @@ namespace AshEngine
 			window->destroy();
 			window = nullptr;
 		}
+		initialized = false;
+		started = false;
+		threadingInitialized = false;
+		logicThreadEnabled = false;
 		app = nullptr;
-		MemoryService::instance()->shutdown();
-		LogService::instance()->shutdown();
+		if (memoryServiceInitialized)
+		{
+			MemoryService::instance()->shutdown();
+			memoryServiceInitialized = false;
+		}
+		if (logServiceInitialized)
+		{
+			LogService::instance()->shutdown();
+			logServiceInitialized = false;
+		}
 	}
 	auto Application::request_exit() -> void
 	{

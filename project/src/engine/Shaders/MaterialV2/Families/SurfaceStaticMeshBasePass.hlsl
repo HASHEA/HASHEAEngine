@@ -19,6 +19,10 @@ struct VSInput
     ASH_MESH_VERTEX_TEXCOORD0_ATTR float2 uv0 : TEXCOORD0;
     ASH_MESH_VERTEX_TEXCOORD1_ATTR float2 uv1 : TEXCOORD1;
     ASH_MESH_VERTEX_COLOR0_ATTR float4 color : COLOR0;
+    ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL0_ATTR float4 object_to_clip_col0 : TEXCOORD2;
+    ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL1_ATTR float4 object_to_clip_col1 : TEXCOORD3;
+    ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL2_ATTR float4 object_to_clip_col2 : TEXCOORD4;
+    ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL3_ATTR float4 object_to_clip_col3 : TEXCOORD5;
 };
 
 struct VSOutput
@@ -29,11 +33,6 @@ struct VSOutput
     float2 uv0 : TEXCOORD2;
     float2 uv1 : TEXCOORD3;
     float4 vertex_color : TEXCOORD4;
-};
-
-cbuffer AshRootConstants
-{
-    float4x4 ObjectToClip;
 };
 
 inline AshVertexParameters BuildSurfaceStaticMeshVertexParameters(VSInput input)
@@ -48,6 +47,15 @@ inline AshVertexParameters BuildSurfaceStaticMeshVertexParameters(VSInput input)
     return params;
 }
 
+inline float4 TransformSurfaceStaticMeshPositionToClip(VSInput input, float3 position_os)
+{
+    return
+        input.object_to_clip_col0 * position_os.x +
+        input.object_to_clip_col1 * position_os.y +
+        input.object_to_clip_col2 * position_os.z +
+        input.object_to_clip_col3;
+}
+
 inline VSOutput BuildSurfaceStaticMeshVertexOutput(
     VSInput input,
     AshVertexParameters params,
@@ -55,7 +63,7 @@ inline VSOutput BuildSurfaceStaticMeshVertexOutput(
 {
     VSOutput output;
     const float3 displaced_position_os = params.position_os + node.world_position_offset;
-    output.position = mul(ObjectToClip, float4(displaced_position_os, 1.0));
+    output.position = TransformSurfaceStaticMeshPositionToClip(input, displaced_position_os);
     output.normal_os = params.normal_os;
     output.tangent_os = params.tangent_os;
     output.uv0 = params.uv0;

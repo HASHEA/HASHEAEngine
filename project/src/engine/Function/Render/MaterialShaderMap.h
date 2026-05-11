@@ -44,6 +44,7 @@ namespace AshEngine
 		std::string generated_bindings_path{};
 		std::string shader_macro{};
 		std::string program_name{};
+		uint64_t shader_file_signature_hash = 0;
 		std::string parameter_block_name{};
 		GraphicsProgramState program_state{};
 		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;

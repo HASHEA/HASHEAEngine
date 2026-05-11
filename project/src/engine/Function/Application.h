@@ -45,6 +45,8 @@ namespace AshEngine
 public:
 		Application(const EngineInitConfig& config);
 		virtual ~Application();
+		auto initialize() -> bool;
+		auto initialize(const EngineInitConfig& config) -> bool;
 		inline static Application* get()
 		{
 			return app;
@@ -135,6 +137,7 @@ public:
 		auto _get_thread_input_state() -> InputState&;
 		auto _run_scene_presentation_update_phase() -> void;
 		auto _run_scene_presentation_submit_phase() -> void;
+		auto _shutdown_runtime() -> void;
 		virtual auto _on_startup() -> void;
 		virtual auto _on_shutdown() -> void;
 		virtual auto _on_update() -> void;
@@ -154,6 +157,7 @@ public:
 		RenderDevice*			renderDevice			= nullptr;
 		Renderer*				renderer				= nullptr;
 		UIContext*				uiContext				= nullptr;
+		EngineInitConfig		initConfig{};
 		RHI::Backend			activeBackend			= RHI::Backend::Default;
 		RenderAssetManager		renderAssetManager{};
 		SceneRenderer			sceneRenderer{};
@@ -180,5 +184,7 @@ public:
 		bool					pendingLogicInputDirty	= false;
 		bool					started					= false;
 		bool					initialized				= false;
+		bool					logServiceInitialized	= false;
+		bool					memoryServiceInitialized = false;
 	};
 };

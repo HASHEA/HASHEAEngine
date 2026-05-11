@@ -10,6 +10,7 @@
 #include "Function/Render/Material.h"
 #include "Function/Render/TextureAsset.h"
 #include "Graphics/DynamicRHI.h"
+#include "Graphics/RHIResource.h"
 #include "Graphics/Shader.h"
 #if defined(ASH_HAS_DX12)
 #include "Graphics/DirectX12/DX12ResourceTracker.h"
@@ -19,6 +20,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 #include <vector>
 
 namespace AshEngine
@@ -34,6 +36,13 @@ namespace AshEngine
 		{
 			HLogError("Engine base self-test '{}' failed: {}", test_name, reason);
 			return false;
+		}
+
+		auto engine_self_test_dir() -> std::filesystem::path
+		{
+			const std::filesystem::path test_dir = "Intermediate/test-temp/engine";
+			std::filesystem::create_directories(test_dir);
+			return test_dir;
 		}
 
 		auto test_assert_macro_is_statement_safe() -> bool
@@ -140,8 +149,7 @@ namespace AshEngine
 
 		auto test_file_delete_reports_success() -> bool
 		{
-			const std::filesystem::path test_dir = "product/test-reports/engine";
-			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path test_dir = engine_self_test_dir();
 			const std::filesystem::path test_file = test_dir / "file_delete_self_test.tmp";
 			file_write_binary(test_file.string().c_str(), const_cast<char*>("x"), 1);
 			const bool delete_result = file_delete(test_file.string().c_str());
@@ -151,10 +159,35 @@ namespace AshEngine
 				report_self_test_failure("file_delete", "successful delete did not return true");
 		}
 
+		auto test_file_read_text_and_extension_are_safe() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir();
+			const std::filesystem::path test_file = test_dir / "file_read_text_self_test.txt";
+			const char text[] = "AshEngineText";
+			file_write_binary(test_file.string().c_str(), const_cast<char*>(text), sizeof(text) - 1);
+
+			size_t text_size = 0;
+			char* text_data = file_read_text(test_file.string().c_str(), text_size, nullptr);
+			const bool text_ok =
+				text_data != nullptr &&
+				text_size == sizeof(text) - 1 &&
+				std::memcmp(text_data, text, sizeof(text) - 1) == 0;
+			if (text_data)
+			{
+				MemoryService::instance()->get_system_allocator()->deallocate(text_data);
+			}
+
+			char no_extension_path[] = "Intermediate/test-temp/engine/no_extension";
+			const bool extension_ok = file_extension_from_path(no_extension_path) == nullptr;
+
+			return (text_ok && extension_ok) ||
+				report_self_test_failure("file text helpers", "text read or extension parsing returned invalid data");
+		}
+
 		auto test_shader_hash_uses_explicit_source_hash() -> bool
 		{
 			RHI::ShaderCreation first{};
-			first.pBaseShaderPath = "product/test-reports/engine/self_test_shader.hlsl";
+			first.pBaseShaderPath = "Intermediate/test-temp/engine/self_test_shader.hlsl";
 			first.pEntryPoint = "VSMain";
 			first.type = RHI::ASH_SHADER_STAGE_VERTEX_BIT;
 			first.source_hash = 1;
@@ -166,10 +199,57 @@ namespace AshEngine
 				report_self_test_failure("Shader hash source version", "different source hashes produced the same shader key");
 		}
 
+		auto test_subresource_range_resolve_clamps_defaults() -> bool
+		{
+			RHI::AshSubresourceRange all{};
+			RHI::AshSubresourceRange resolved_all = all.resolve(4, 3);
+			const bool all_ok =
+				resolved_all.uBaseMipLevel == 0 &&
+				resolved_all.uMipCount == 4 &&
+				resolved_all.uBaseArraySlice == 0 &&
+				resolved_all.uArrayCount == 3;
+
+			RHI::AshSubresourceRange partial{ 8, 9, RHI::AshSubresourceRange::s_All, RHI::AshSubresourceRange::s_All };
+			RHI::AshSubresourceRange resolved_partial = partial.resolve(4, 3);
+			const bool clamp_ok =
+				resolved_partial.uBaseMipLevel == 3 &&
+				resolved_partial.uMipCount == 1 &&
+				resolved_partial.uBaseArraySlice == 2 &&
+				resolved_partial.uArrayCount == 1;
+
+			return (all_ok && clamp_ok) ||
+				report_self_test_failure("AshSubresourceRange resolve", "default or out-of-range subresource range did not resolve correctly");
+		}
+
+		auto test_ash_barrier_copy_move_is_safe() -> bool
+		{
+			RHI::AshBarrier empty_barrier{};
+			RHI::AshBarrier empty_copy = empty_barrier;
+			RHI::AshBarrier moved_copy = std::move(empty_copy);
+
+			const bool empty_ok =
+				moved_copy.eType == RHI::AshBarrier::EType::Unknown &&
+				!moved_copy.pTexture &&
+				!moved_copy.pBuffer;
+
+			RHI::AshBarrier texture_barrier{};
+			texture_barrier.eType = RHI::AshBarrier::EType::Texture;
+			texture_barrier.eDSTAccess = RHI::AshResourceState::SRVGraphics;
+			RHI::AshBarrier copied_texture_barrier = texture_barrier;
+
+			const bool typed_ok =
+				copied_texture_barrier.eType == RHI::AshBarrier::EType::Texture &&
+				!copied_texture_barrier.pTexture &&
+				!copied_texture_barrier.pBuffer &&
+				copied_texture_barrier.eDSTAccess == RHI::AshResourceState::SRVGraphics;
+
+			return (empty_ok && typed_ok) ||
+				report_self_test_failure("AshBarrier value semantics", "copy/move touched invalid barrier resource storage");
+		}
+
 		auto test_texture_decode_generates_rgba8_mips() -> bool
 		{
-			const std::filesystem::path test_dir = "product/test-reports/engine";
-			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path test_dir = engine_self_test_dir();
 			const std::filesystem::path bmp_path = test_dir / "mip_2x2.bmp";
 			auto append_u16_le = [](std::vector<uint8_t>& bytes, uint16_t value) -> void
 			{
@@ -230,10 +310,148 @@ namespace AshEngine
 				report_self_test_failure("Texture RGBA8 mip generation", "decoded texture did not contain the expected tight-packed mip chain");
 		}
 
+		auto test_texture_decode_supports_dds_bc1() -> bool
+		{
+			const std::filesystem::path dds_path = engine_self_test_dir() / "cooked_bc1.dds";
+			auto append_u32_le = [](std::vector<uint8_t>& bytes, uint32_t value) -> void
+			{
+				bytes.push_back(static_cast<uint8_t>(value & 0xffu));
+				bytes.push_back(static_cast<uint8_t>((value >> 8u) & 0xffu));
+				bytes.push_back(static_cast<uint8_t>((value >> 16u) & 0xffu));
+				bytes.push_back(static_cast<uint8_t>((value >> 24u) & 0xffu));
+			};
+			auto append_fourcc = [&append_u32_le](std::vector<uint8_t>& bytes, const char (&tag)[5]) -> void
+			{
+				append_u32_le(
+					bytes,
+					static_cast<uint32_t>(tag[0]) |
+					(static_cast<uint32_t>(tag[1]) << 8u) |
+					(static_cast<uint32_t>(tag[2]) << 16u) |
+					(static_cast<uint32_t>(tag[3]) << 24u));
+			};
+
+			std::vector<uint8_t> dds{};
+			append_fourcc(dds, "DDS ");
+			append_u32_le(dds, 124u);
+			append_u32_le(dds, 0x0002100Fu);
+			append_u32_le(dds, 4u);
+			append_u32_le(dds, 4u);
+			append_u32_le(dds, 8u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 1u);
+			for (uint32_t index = 0; index < 11u; ++index)
+			{
+				append_u32_le(dds, 0u);
+			}
+			append_u32_le(dds, 32u);
+			append_u32_le(dds, 0x00000004u);
+			append_fourcc(dds, "DXT1");
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0x00001000u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			append_u32_le(dds, 0u);
+			const uint8_t bc1_block[8] = { 0x00u, 0xF8u, 0xE0u, 0x07u, 0x00u, 0x00u, 0x00u, 0x00u };
+			dds.insert(dds.end(), bc1_block, bc1_block + sizeof(bc1_block));
+			{
+				std::ofstream dds_file(dds_path, std::ios::binary | std::ios::trunc);
+				dds_file.write(reinterpret_cast<const char*>(dds.data()), static_cast<std::streamsize>(dds.size()));
+			}
+
+			TextureSourceData source{};
+			std::string error{};
+			if (!decode_texture_source_from_file(dds_path, TextureColorSpace::SRGB, source, &error))
+			{
+				return report_self_test_failure("Texture DDS BC1 decode", error.empty() ? "failed to decode generated DDS" : error.c_str());
+			}
+
+			const bool ok =
+				source.width == 4 &&
+				source.height == 4 &&
+				source.format == RenderTextureFormat::BC1_RGBA_SRGB_UNORM &&
+				source.color_space == TextureColorSpace::SRGB &&
+				source.mip_level_count == 1 &&
+				source.row_pitch == 8 &&
+				source.pixel_data.size() == sizeof(bc1_block);
+			return ok ||
+				report_self_test_failure("Texture DDS BC1 decode", "decoded DDS metadata or payload layout was invalid");
+		}
+
+		auto test_texture_decode_supports_ktx2_bc7() -> bool
+		{
+			const std::filesystem::path ktx_path = engine_self_test_dir() / "cooked_bc7.ktx2";
+			auto append_u32_le = [](std::vector<uint8_t>& bytes, uint32_t value) -> void
+			{
+				bytes.push_back(static_cast<uint8_t>(value & 0xffu));
+				bytes.push_back(static_cast<uint8_t>((value >> 8u) & 0xffu));
+				bytes.push_back(static_cast<uint8_t>((value >> 16u) & 0xffu));
+				bytes.push_back(static_cast<uint8_t>((value >> 24u) & 0xffu));
+			};
+			auto append_u64_le = [](std::vector<uint8_t>& bytes, uint64_t value) -> void
+			{
+				for (uint32_t shift = 0; shift < 64u; shift += 8u)
+				{
+					bytes.push_back(static_cast<uint8_t>((value >> shift) & 0xffu));
+				}
+			};
+
+			std::vector<uint8_t> ktx{};
+			const uint8_t identifier[] = { 0xABu, 'K', 'T', 'X', ' ', '2', '0', 0xBBu, '\r', '\n', 0x1Au, '\n' };
+			ktx.insert(ktx.end(), identifier, identifier + sizeof(identifier));
+			append_u32_le(ktx, 145u);
+			append_u32_le(ktx, 1u);
+			append_u32_le(ktx, 4u);
+			append_u32_le(ktx, 4u);
+			append_u32_le(ktx, 0u);
+			append_u32_le(ktx, 0u);
+			append_u32_le(ktx, 1u);
+			append_u32_le(ktx, 1u);
+			append_u32_le(ktx, 0u);
+			append_u32_le(ktx, 0u);
+			append_u32_le(ktx, 0u);
+			append_u32_le(ktx, 0u);
+			append_u32_le(ktx, 0u);
+			append_u64_le(ktx, 0u);
+			append_u64_le(ktx, 0u);
+			append_u64_le(ktx, 104u);
+			append_u64_le(ktx, 16u);
+			append_u64_le(ktx, 16u);
+			const uint8_t bc7_block[16] = {
+				0x00u, 0x11u, 0x22u, 0x33u, 0x44u, 0x55u, 0x66u, 0x77u,
+				0x88u, 0x99u, 0xAAu, 0xBBu, 0xCCu, 0xDDu, 0xEEu, 0xFFu
+			};
+			ktx.insert(ktx.end(), bc7_block, bc7_block + sizeof(bc7_block));
+			{
+				std::ofstream ktx_file(ktx_path, std::ios::binary | std::ios::trunc);
+				ktx_file.write(reinterpret_cast<const char*>(ktx.data()), static_cast<std::streamsize>(ktx.size()));
+			}
+
+			TextureSourceData source{};
+			std::string error{};
+			if (!decode_texture_source_from_file(ktx_path, TextureColorSpace::Linear, source, &error))
+			{
+				return report_self_test_failure("Texture KTX2 BC7 decode", error.empty() ? "failed to decode generated KTX2" : error.c_str());
+			}
+
+			const bool ok =
+				source.width == 4 &&
+				source.height == 4 &&
+				source.format != RenderTextureFormat::Unknown &&
+				source.mip_level_count == 1 &&
+				source.row_pitch == 16 &&
+				source.pixel_data.size() == sizeof(bc7_block);
+			return ok ||
+				report_self_test_failure("Texture KTX2 BC7 decode", "decoded KTX2 metadata or payload layout was invalid");
+		}
+
 		auto test_dx12_validation_config_respects_build_type() -> bool
 		{
-			const std::filesystem::path test_dir = "product/test-reports/engine";
-			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path test_dir = engine_self_test_dir();
 			const std::filesystem::path config_path = test_dir / "rhi_validation_self_test.ini";
 			{
 				std::ofstream config_file(config_path, std::ios::trunc);
@@ -268,8 +486,7 @@ namespace AshEngine
 
 		auto test_gltf_import_preserves_index_reuse() -> bool
 		{
-			const std::filesystem::path test_dir = "product/test-reports/engine";
-			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path test_dir = engine_self_test_dir();
 			const std::filesystem::path bin_path = test_dir / "indexed_quad.bin";
 			const std::filesystem::path gltf_path = test_dir / "indexed_quad.gltf";
 
@@ -337,7 +554,7 @@ namespace AshEngine
 
 		auto test_material_asset_database_prefers_disk_material_over_builtin_fallback() -> bool
 		{
-			const std::filesystem::path asset_root = "Intermediate/SelfTests/engine/material_asset_db";
+			const std::filesystem::path asset_root = "Intermediate/test-temp/engine/material_asset_db";
 			const std::filesystem::path material_dir = asset_root / "materials" / "v2";
 			std::filesystem::create_directories(material_dir);
 
@@ -437,8 +654,13 @@ namespace AshEngine
 		all_passed = test_linear_allocator_deallocate_reports_unsupported() && all_passed;
 		all_passed = test_array_growth_and_initial_size() && all_passed;
 		all_passed = test_file_delete_reports_success() && all_passed;
+		all_passed = test_file_read_text_and_extension_are_safe() && all_passed;
 		all_passed = test_shader_hash_uses_explicit_source_hash() && all_passed;
+		all_passed = test_subresource_range_resolve_clamps_defaults() && all_passed;
+		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
 		all_passed = test_texture_decode_generates_rgba8_mips() && all_passed;
+		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
+		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;

@@ -50,13 +50,13 @@
   - own sampler debug-name storage instead of relying on external pointer lifetime
 - `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Sampler.cpp`
   - persist debug-name storage during initialization
-- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.h`
+- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.h`
   - declare explicit sampler creation override and rename `create_sampler(const AshSamplerState&)` to `create_cached_state_sampler(const AshSamplerState&)`
-- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.cpp`
+- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.cpp`
   - implement explicit sampler creation and normalize legacy default-sampler semantics
-- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanSampler.h`
+- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanSampler.h`
   - own sampler and sampler-view debug-name storage
-- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanSampler.cpp`
+- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanSampler.cpp`
   - persist debug-name storage during sampler construction
 - `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Shaders\SceneSurfacePBR.hlsl`
   - switch from one shared sampler to per-texture sampler bindings
@@ -426,10 +426,10 @@ Expected:
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Context.cpp`
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Sampler.h`
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Sampler.cpp`
-- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.h`
-- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.cpp`
-- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanSampler.h`
-- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanSampler.cpp`
+- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.h`
+- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.cpp`
+- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanSampler.h`
+- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanSampler.cpp`
 
 - [ ] Add a high-level `RenderSampler` wrapper and creation API next to the other public render resources.
 
@@ -846,7 +846,7 @@ Expected:
 
 **Files:**
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Context.cpp`
-- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.cpp`
+- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.cpp`
 
 - [ ] Change the Vulkan enum-based `ASH_SAMPLER_STATE_DEFAULT` creation path from clamp-to-edge to repeat so old call sites no longer diverge from the new material default semantics.
 

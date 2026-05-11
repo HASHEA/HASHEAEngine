@@ -145,31 +145,43 @@ int32_t main(int argc, char* argv[])
 	{
 		return AshEngine::run_engine_base_self_tests();
 	}
-	AshEngine::Application::app = create_application();
-	if (!AshEngine::Application::app)
+	AshEngine::Application* application = create_application();
+	if (!application)
 	{
 		std::cerr << "Fatal Error: Failed to create application." << std::endl;
 		return 1;
 	}
-	if (!AshEngine::Application::app->is_initialized())
+	if (AshEngine::Application::app != application)
+	{
+		AshEngine::Application::app = application;
+	}
+	if (!application->initialize())
 	{
 		std::cerr << "Fatal Error: Application initialization failed." << std::endl;
-		destroy_application(AshEngine::Application::app);
+		destroy_application(application);
+		AshEngine::Application::app = nullptr;
+		return 1;
+	}
+	if (!application->is_initialized())
+	{
+		std::cerr << "Fatal Error: Application initialization failed." << std::endl;
+		destroy_application(application);
 		AshEngine::Application::app = nullptr;
 		return 1;
 	}
 	const double smokeTestSeconds = parse_smoke_test_seconds(argc, argv);
 	if (smokeTestSeconds > 0.0)
 	{
-		AshEngine::Application::app->set_max_run_seconds(smokeTestSeconds);
+		application->set_max_run_seconds(smokeTestSeconds);
 	}
 	const uint64_t smokeTestFrameCount = parse_smoke_test_frame_count(argc, argv);
 	if (smokeTestFrameCount > 0)
 	{
-		AshEngine::Application::app->set_max_frame_count(smokeTestFrameCount);
+		application->set_max_frame_count(smokeTestFrameCount);
 	}
-	AshEngine::Application::app->start();
-	destroy_application(AshEngine::Application::app);
+	application->start();
+	destroy_application(application);
+	AshEngine::Application::app = nullptr;
 	return 0;
 
 }

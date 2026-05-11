@@ -167,7 +167,9 @@ AshEngine/HASHEAEngine/
 - 运行目录：`product/bin64/<Config>-windows-x86_64/`
 - 运行配置：`product/config/Engine.ini`
 - 日志目录：`product/logs/`
-- Sandbox 生成报告：`product/test-reports/sandbox/`
+- Sandbox 生成报告：`Intermediate/test-reports/sandbox/`
+- Engine self-test 临时资产：`Intermediate/test-temp/engine/`
+- Shader debug dump：`Intermediate/logs/shader-debug/`
 - Sandbox 测试资产：`product/assets/models/gltfs/`
 - Shader Cache：`product/caches/ShaderCaches/`
 - Pipeline Cache：`product/caches/PipelineCaches/`
@@ -221,8 +223,13 @@ Windows Debug / Release 下，Engine 同时编入：
 
 - `EntryPoint.h` 会先搜索仓库根目录，并把进程工作目录切到该根目录
 - 因此默认的 `product/...` 相对路径会稳定落在仓库内的 `product` 树下
+- `Application` 构造函数只保存 `EngineInitConfig` 并设置全局访问指针，不创建窗口、RHI 或渲染资源；初始化逻辑集中在 `Application::initialize()` / `Application::initialize(config)`
+- `EntryPoint.h` 在 `create_application()` 返回对象后显式调用 `initialize()`，再检查 `is_initialized()`；派生类构造函数不能依赖窗口、RHI、Renderer 或 `UIContext` 已存在
+- 需要依赖 Engine runtime 的派生类 bootstrap 应放在 `_on_startup()` 或之后，而不是放在派生类构造函数中
 - `create_application()` 返回空指针或 `Application::is_initialized()==false` 时，`EntryPoint.h` 会记录 fatal 到 stderr，销毁半初始化对象并返回非 0；不要在 `Application::start()` 内继续容忍半初始化运行
-- `Application` 构造阶段必须检查 `GraphicsContext::init()`、`Swapchain::init()` 等关键返回值；新增关键初始化步骤时，失败路径也要保持 `is_initialized()==false`
+- `EntryPoint.h` 用局部 `Application*` 持有 create/destroy ownership，`Application::app` 只作为运行期全局访问指针；不要把静态指针当成对象所有权来源
+- `Application::initialize()` 必须检查 `GraphicsContext::init()`、`Swapchain::init()`、`SceneRenderer::initialize()`、`ScenePresentationSubsystem::initialize()` 等关键返回值；新增关键初始化步骤时，失败路径也要保持 `is_initialized()==false`
+- `Application` 析构统一走 `_shutdown_runtime()` 幂等清理 partial runtime state；不要在局部失败路径里手写一套资源释放顺序
 - `EntryPoint.h` 还支持 smoke-run 自动退出：
   - `ASH_ENGINE_SMOKE_TEST_FRAMES`
   - `ASH_ENGINE_SMOKE_TEST_SECONDS`
@@ -278,7 +285,7 @@ Windows Debug / Release 下，Engine 同时编入：
 
 当前行为约定：
 
-- `Application` 构造时会初始化 engine threading 基础设施与 worker 线程池
+- `Application::initialize()` 会初始化 engine threading 基础设施与 worker 线程池；生命周期约束以 `initialize()` / `_shutdown_runtime()` 为准
 - 如果 `enable_logic_thread=false`，行为保持单线程兼容：`_on_update()` 仍在主线程执行
 - 如果 `enable_logic_thread=true`：
   - 主线程继续作为渲染线程
@@ -469,6 +476,8 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 管理高层资源到 RHI 资源/视图的映射
 - 在合适时机执行资源状态转换
 
+高层 `RenderTextureFormat` 到 RHI `AshFormat` 的映射统一维护在 `Function/Render/RenderFormatUtils.*`。`RenderDevice`、`TextureAsset`、`ImGuiLayer` 或其他 Function 层代码不应再各自复制一份 `to_rhi_format()` / `from_rhi_format()`；新增格式时必须同时更新 `RenderFormatUtils`、Vulkan/DX12 RHI 格式表和 self-test。
+
 当前窗口输出规则：
 
 - `get_back_buffer()` 返回当前帧窗口输出目标；主窗口路径默认直接返回 swapchain target
@@ -500,7 +509,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 真正的资源 transition 会在 pass 提交前统一完成
 - 然后才真正调用底层 `begin_pass()`
 - `PassDesc::allow_reorder_draws` 是显式 opt-in；只有顺序不敏感的 pass 才能开启。当前 `SceneRenderer` 的 opaque static mesh pass 会按 program / index buffer / vertex buffer 做稳定排序，以减少 pipeline 和 descriptor 重绑
-- pass 提交前会对同一个 `GraphicsProgram`、vertex buffer、index buffer 的 transition 做一次性处理；同一 pass 内重复使用的只读 draw 资源不应重复提交 barrier
+- pass 提交前会对同一个 `GraphicsProgram`、vertex buffer、index buffer 的 transition 做一次性处理；提交 RHI 前还会按 resource/range/state 合并重复的只读 barrier，UAV/RTV/DSV 等写状态 barrier 保持原顺序
 - RHI graphics program 的 raster/depth/topology 状态在 variant 创建时写入 `GraphicProgramCreateDesc::pipeline`；`RenderDevice::bind_graphics_program()` 不能逐 draw 调用 `apply_render_state()`，因为 DX12 会把它标记为 PSO rebuild，Vulkan 会直接重建 `VkPipeline`
 - `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；DX12 因 GPU descriptor heap 帧内线性分配仍按 pass 重新 commit，Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
 - `RenderDevice::begin_pass()` 会复用 RHI `RenderPass` 与 `Framebuffer`：RenderPass key 由 attachment format / load action / final state / multiview 等语义构成，Framebuffer key 由 render pass、attachment texture、extent 与 layer 构成；clear value 不属于 cache key，每次 begin pass 都会重新写入当前 clear 值
@@ -1007,18 +1016,21 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 这是一层给材质系统和 render asset 管理器使用的最小运行时贴图对象，不属于 Editor-facing RHI 接口
 - `Renderer` / `RenderDevice` 现在显式提供 `create_texture_2d(const TextureUploadDesc&)`
 - 该入口用于 sampled 2D texture 上传，不复用 `create_render_target()` 的 pass attachment 语义
-- 当前上传路径支持对非压缩 2D 纹理做 row-pitch 校验与必要的 tight repack，然后再走现有 Vulkan / DX12 共享上传逻辑
+- 当前上传路径支持 uncompressed 与 block-compressed 2D 纹理的 row/block pitch 校验；非压缩单 mip 可做必要的 tight repack，block-compressed / 多 mip 初始数据必须按 mip0、mip1... tight-packed
 - 普通 8-bit RGBA 贴图解码后会在 CPU 侧生成完整 mip chain，并以 tight-packed mip 初始数据一次上传；HDR 贴图当前仍只上传 mip0
+- runtime cooked texture 支持 2D 非数组 `.dds` 与 raw `.ktx2` 的 BC1 / BC2 / BC3 / BC4 / BC5 / BC6H / BC7 载入；BC1 / BC2 / BC3 / BC7 的 sRGB payload 会映射为真实 GPU sRGB 格式，而不是只保存 metadata；supercompressed KTX2 不在 runtime 解码，必须由 importer/offline pipeline 先转成可直接上传的 payload
+- DDS/KTX2 cooked payload 解析集中在 `Function/Render/TextureCookedDecoder.*`，`TextureAsset.cpp` 只保留公共贴图入口、stb 普通图片解码和 CPU mip 生成
 - `RenderAssetManager::request_texture_asset()` 在 cache miss 时不再在 render-thread 请求路径同步 decode 文件；它会先返回一个持有 fallback GPU 资源的 `TextureAsset(Loading)` 占位对象，并把 CPU decode 派发到 worker 线程
 - worker decode 完成后，render-thread `finalize_pending_assets()` 或下一次 texture request 会创建真实 GPU texture，并原地更新同一个 `TextureAsset` 的 resource / metadata / `change_version`
 - `MaterialRenderProxy` 会记录绑定时看到的 `TextureAsset::change_version`；如果占位贴图从 `Loading` 变为 `Ready`，或真实 resource 更新，下一帧 material proxy 会重新打包并重新绑定材质资源
 
 当前贴图解码范围：
 
-- 支持：`.png`、`.jpg`、`.jpeg`、`.tga`、`.bmp`、`.hdr`
-- 解码库：`stb_image`
+- 支持：`.png`、`.jpg`、`.jpeg`、`.tga`、`.bmp`、`.hdr`、`.dds`、`.ktx2`
+- 普通图片解码库：`stb_image`
 - `.hdr` 当前按 `RGBA32_SFLOAT` + Linear 路径处理
-- `.dds` 当前明确不在这条 V1 材质贴图链路内处理
+- `.dds` 当前支持 legacy FourCC 和 DX10 header 的 BCn cooked payload；legacy DXT1/DXT3/DXT5 会根据请求的 `TextureColorSpace` 选择 UNORM 或 sRGB GPU 格式
+- `.ktx2` 当前支持 `supercompressionScheme == 0` 且 `vkFormat` 为 BCn 的 raw payload；KTX2 中的 sRGB `vkFormat` 会保留为对应 sRGB GPU 格式
 
 当前 `RenderAssetManager` 贴图入口约定：
 
@@ -1044,9 +1056,9 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
   - `MaterialRenderProxy`
 - `StaticMeshRenderAsset` 只缓存共享几何和“默认 section 材质”，不缓存组件实例级 override 结果
 - `MeshComponent.material_overrides` 的最终解析发生在 `RenderScene::rebuild_from_scene(...)`
-- per-primitive / per-visible-section 会携带最终 `MaterialInterface`；`MaterialRenderProxy` 只允许在 render thread 的 submit phase 准备或刷新
+- per-primitive / per-visible-section 会携带最终 `MaterialInterface` 和 CPU-only `MaterialRenderProxy` cache；GPU program、UBO、sampler 与 texture binding 只允许在 render thread 的 submit phase 准备或刷新
 - `RenderScene::rebuild_from_scene(...)` 可能运行在 logic thread，因此 section 解析阶段必须保持 CPU-only，不能创建材质 UBO、纹理、sampler 或 graphics program
-- submit 阶段在 proxy 缺失或材质 version / compile hash 变化时，通过 `RenderAssetManager` 的 cache 准备/刷新 `MaterialRenderProxy`
+- submit 阶段在 proxy 缺失或材质 version / compile hash / shader 文件签名 / texture asset version 变化时，通过 `RenderAssetManager` 的 cache 准备/刷新 `MaterialRenderProxy`
 - `MaterialRenderProxy` 在 render thread 上缓存：
   - `Surface.StaticMesh.BasePass` 与 `DepthOnly` 两套 `MaterialResource`
   - 每材质独立的 `GraphicsProgram`
@@ -1058,6 +1070,8 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
   - 按 `resources + samplers` 解析最终贴图/采样器绑定
   - 通过 `prepare_surface_staticmesh(...)` 收口 static mesh surface 的 binding 更新和 graphics program 准备
 - `MaterialSystem` 现在会把 engine shader family host、material shader 和生成的 `Bindings.generated.hlsli` 组合成最终编译单元
+- `MaterialShaderMap` 创建 resource template 时只调用 shader compile/reflection 路径收集 binding layout 和 material parameter block layout，不再为了拿 reflection 创建临时 `GraphicsProgram`
+- builtin fallback 材质创建集中在 `Function/Render/MaterialBuiltins.cpp`；`Material.cpp` 继续承担材质对象、JSON 解析/序列化和运行时版本计算
 - 当前静态 mesh `Surface` 使用的 engine-host shader 为：
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshBasePass.hlsl`
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshDepthOnly.hlsl`
@@ -1208,6 +1222,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - CPU 多线程 frustum culling
 - 逻辑线程构建可见帧数据
 - 渲染线程只消费不可变的 render frame 并提交 draw
+- 静态网格主链路支持按 `program + render asset + section` 合批，并通过 per-instance vertex stream 传递 object-to-clip 矩阵
 
 当前明确不在第一阶段完成的系统包括：
 
@@ -1215,7 +1230,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 完整灯光渲染
 - 阴影
 - 动态材质实例
-- instancing
+- skeletal mesh / GPU-driven instancing
 - occlusion culling
 
 设计原则：
@@ -1230,6 +1245,8 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - `VisibleRenderFrame` 只保存 scene 可见性结果和 draw 所需的不可变数据，不再持有 `output_target`
 - `VisibleRenderFrame` 中的 static mesh section 携带最终 `MaterialInterface`；`ScenePresentationSubsystem` 在 render-thread submit phase 通过 `MaterialRenderProxy::prepare_surface_staticmesh(...)` 解析并缓存 draw-time proxy
+- `RenderScene` rebuild/sync 阶段会为 static mesh section 预取 CPU-only `MaterialRenderProxy`；render-thread submit 阶段只负责缺失兜底与 GPU program / texture binding preparation
+- `MaterialRenderProxy` 使用 material change version、compile hash、shader 文件签名、binding snapshot version 和 texture asset change version 判断脏状态；贴图仍处于 Loading 但 fallback resource/version 未变化时，不应每帧重新打包参数或重绑 program
 - render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`
 - `SceneRenderViewContext` 负责描述 per-view 提交状态：
   - `output_target`
@@ -1241,7 +1258,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - static mesh `Surface` 现在统一走 V2 `MaterialSystem + MaterialRenderProxy` 资源模板路径
 - `SceneRenderer` 当前只负责：
   - per-view render pass / depth 目标管理
-  - per-draw object root constants
+  - 静态网格 batch 构建、instance buffer 更新和 instanced draw 提交
   - 消费 section 的 `MaterialRenderProxy`
 - `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 `Surface.StaticMesh.BasePass` 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
 
@@ -1325,7 +1342,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `product/assets/models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf`
 - `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
 
-当前版本的标准场景路径不再默认写出旧的 prefab / generated-scene 中间产物；`product/test-reports/sandbox/` 主要保留给运行验证和后续专项测试扩展使用。
+当前版本的标准场景路径不再默认写出旧的 prefab / generated-scene 中间产物；Sandbox 运行验证和后续专项测试扩展生成物统一写入 `Intermediate/test-reports/sandbox/`。
 
 推荐运行方式：
 
@@ -1339,7 +1356,7 @@ Base 层自测方式：
 product/bin64/Debug-windows-x86_64/Sandbox.exe --engine-self-test
 ```
 
-当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` 返回值、shader pool source hash、RGBA8 texture mip 生成、DX12 validation build-type gating、glTF indexed primitive 顶点复用，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产。
+当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
 
 维护约定：
 
@@ -1442,8 +1459,8 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 
 当前 Vulkan 侧已经有基于宏开关的 VMA 泄露跟踪能力，关键实现位于：
 
-- `Graphics/Vullkan/VulkanContext.h`
-- `Graphics/Vullkan/VulkanContext.cpp`
+- `Graphics/Vulkan/VulkanContext.h`
+- `Graphics/Vulkan/VulkanContext.cpp`
 
 当前能力包括：
 
@@ -1482,6 +1499,13 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
   - `VulkanDescriptorPool` 现在区分“仍被高层对象持有的 live set 数”和“尚未真正归还给 Vulkan pool 的 resident set 数”；延迟 free 尚未 flush 前会避免错误复用已耗尽 pool，从而规避 `VK_ERROR_OUT_OF_POOL_MEMORY` 和 shutdown 期的 descriptor-pool validation
   - 当最后一个 deferred descriptor-set free 释放掉 pool 的最终 `shared_ptr` 时，`VulkanDescriptorPool` 会立刻执行 `vkDestroyDescriptorPool`；不要再把 pool 析构本身做第二次 frame-queue 延迟，否则 shutdown 时可能把 destroy 落到错误的 deletion queue，重新触发 `VUID-vkDestroyDevice-device-05137`
   - `VulkanDescriptorSetLayout` 的全局 layout cache 现在集中在一个 cpp-local owner 中，并由 mutex 保护；创建路径、过期 weak entry 清理和 `VulkanContext::shutdown()` 触发的 cache shutdown 都必须走这个 owner，shutdown 时会清空 cache map，不能把旧 device 的 layout 复用到下一次 context 初始化，也不能再散落新的 static map / set
+- Vulkan sampler cache：
+  - 固定枚举大小的 sampler cache 使用 `std::array`，不再使用项目自研 `Array`；后续只有 frame pool、command buffer queue 这类明确依赖底层 allocator / 固定帧资源语义的路径才保留自研容器
+- Asset / Material 架构收口：
+- `AssetDatabase` 对 Mesh / Model / Material / AshAsset async load 维护 in-flight `shared_future` 表，重复请求会复用同一个后台任务，失败结果会缓存到下一次 `refresh()`
+- `.AshAsset` JSON 读写与层级重建集中在 `Function/Asset/AshAssetSerializer.cpp`；`AssetData.cpp` 继续承担 OBJ/glTF/FBX 模型导入、mesh/model 基础方法和模型到 AshAsset 的转换
+- `MaterialShaderMap` 的 resource template 生成改为直接消费 shader reflection artifact，避免为了读取 reflection 创建临时 graphics program
+- `RenderScene` sync 阶段预取 CPU-only material proxy，render submit 只在 proxy 缺失、材质版本变化或贴图资源版本变化时准备 GPU program / binding
 
 ---
 

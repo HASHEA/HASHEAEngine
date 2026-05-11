@@ -425,7 +425,7 @@ private:
 		VkSemaphore												vulkanPresentCompleteSemaphore			= VK_NULL_HANDLE;
 		VulkanFence*											vulkanComputeFence						= nullptr;
 		VulkanFence*											vulkanImmediateFence					= nullptr; //stuck here and wait
-		Array<std::shared_ptr<Sampler>>							samplerCache;
+		std::array<std::shared_ptr<Sampler>, static_cast<size_t>(ASH_SAMPLER_STATE_MAX_ENUM)> samplerCache{};
 		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
 		VulkanStagingBufferPool*								vulkanStagingBufferPool					 = nullptr;
 		std::unordered_map<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;

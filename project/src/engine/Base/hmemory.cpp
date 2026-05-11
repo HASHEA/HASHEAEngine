@@ -70,15 +70,25 @@ namespace AshEngine
 	}
 	auto HeapAllocator::init(size_t size) -> bool
 	{
-		H_ASSERT(size > 0);
+		if (size == 0)
+		{
+			HLogError("HeapAllocator::init failed: size is zero.");
+			return false;
+		}
 		m_pMemory = (uint8_t*)malloc(size);
-		H_ASSERT(m_pMemory);
+		if (!m_pMemory)
+		{
+			HLogError("HeapAllocator::init failed: malloc returned null for {} bytes.", size);
+			return false;
+		}
 		m_szMaxSize = size;
 		m_pTlsfHandle = tlsf_create_with_pool(m_pMemory,size);
 		bool ret = (m_pTlsfHandle != nullptr)? true : false;
 		if (!ret)
 		{
 			free(m_pMemory);
+			m_pMemory = nullptr;
+			m_szMaxSize = 0;
 			HLogError("tlsf create pool failed with address : {0},  size : {1}", m_pMemory, size);
 		}
 		return ret;
@@ -86,6 +96,14 @@ namespace AshEngine
 	auto HeapAllocator::shutdown() -> bool
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			free(m_pMemory);
+			m_pMemory = nullptr;
+			m_szMaxSize = 0;
+			m_szAllocatedSize = 0;
+			return true;
+		}
 		// Check memory at the application exit.
 		MemoryStatistics stats{ 0, m_szMaxSize };
 		pool_t pool = tlsf_get_pool(m_pTlsfHandle);
@@ -101,6 +119,10 @@ namespace AshEngine
 		H_ASSERT(stats.m_szAllocatedbytes == 0);
 		tlsf_destroy(m_pTlsfHandle);
 		free(m_pMemory);
+		m_pTlsfHandle = nullptr;
+		m_pMemory = nullptr;
+		m_szMaxSize = 0;
+		m_szAllocatedSize = 0;
 		return true;
 	}
 #ifdef ASH_DEBUG
@@ -112,20 +134,46 @@ namespace AshEngine
 	
 	auto HeapAllocator::allocate(size_t size, size_t alignment)->void*
 	{
-		H_ASSERT(size > 0);
+		if (size == 0)
+		{
+			HLogError("HeapAllocator::allocate failed: size is zero.");
+			return nullptr;
+		}
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			HLogError("HeapAllocator::allocate failed: allocator is not initialized.");
+			return nullptr;
+		}
 		void* pAllocateMemory = alignment == 1? tlsf_malloc(m_pTlsfHandle, size) : tlsf_memalign(m_pTlsfHandle, alignment, size);
-		H_ASSERT(pAllocateMemory);
+		if (!pAllocateMemory)
+		{
+			HLogError("HeapAllocator::allocate failed: size={}, alignment={}.", size, alignment);
+			return nullptr;
+		}
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
 		m_szAllocatedSize += actualSize;
 		return pAllocateMemory;
 	}
 	auto HeapAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*
 	{
-		H_ASSERT(size > 0);
+		if (size == 0)
+		{
+			HLogError("HeapAllocator::allocate failed: size is zero at {}:{}.", file ? file : "<unknown>", line);
+			return nullptr;
+		}
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			HLogError("HeapAllocator::allocate failed: allocator is not initialized at {}:{}.", file ? file : "<unknown>", line);
+			return nullptr;
+		}
 		void* pAllocateMemory = alignment == 1 ? tlsf_malloc(m_pTlsfHandle, size) : tlsf_memalign(m_pTlsfHandle, alignment, size);
-		H_ASSERT(pAllocateMemory);
+		if (!pAllocateMemory)
+		{
+			HLogError("HeapAllocator::allocate failed: size={}, alignment={}, from {}:{}.", size, alignment, file ? file : "<unknown>", line);
+			return nullptr;
+		}
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
 		m_szAllocatedSize += actualSize;
 #ifdef ASH_TRACE_MEM_ALLOCATE
@@ -135,10 +183,18 @@ namespace AshEngine
 	}
 	auto HeapAllocator::deallocate(void* pointer, char* file, uint32_t line)->bool
 	{
-		H_ASSERT(pointer);
+		if (!pointer)
+		{
+			return false;
+		}
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			HLogError("HeapAllocator::deallocate failed: allocator is not initialized at {}:{}.", file ? file : "<unknown>", line);
+			return false;
+		}
 		size_t actual_size = tlsf_block_size(pointer);
-		m_szAllocatedSize -= actual_size;
+		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
 
 		tlsf_free(m_pTlsfHandle, pointer);
 #ifdef ASH_TRACE_MEM_DEALLOCATE
@@ -149,10 +205,18 @@ namespace AshEngine
 
 	auto HeapAllocator::deallocate(void* pointer) -> bool 
 	{
-		H_ASSERT(pointer);
+		if (!pointer)
+		{
+			return false;
+		}
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			HLogError("HeapAllocator::deallocate failed: allocator is not initialized.");
+			return false;
+		}
 		size_t actual_size = tlsf_block_size(pointer);
-		m_szAllocatedSize -= actual_size;
+		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
 		tlsf_free(m_pTlsfHandle, pointer);
 		return true;
 	}
@@ -160,20 +224,36 @@ namespace AshEngine
 	auto HeapAllocator::deallocate(const void* pointer) -> bool
 	{
 		auto dPoint = const_cast<void*>(pointer);
-		H_ASSERT(dPoint);
+		if (!dPoint)
+		{
+			return false;
+		}
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			HLogError("HeapAllocator::deallocate failed: allocator is not initialized.");
+			return false;
+		}
 		size_t actual_size = tlsf_block_size(dPoint);
-		m_szAllocatedSize -= actual_size;
+		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
 		tlsf_free(m_pTlsfHandle, dPoint);
 		return true;
 	}
 	auto HeapAllocator::deallocate(const void* pointer, char* file, uint32_t line) -> bool
 	{
 		auto dPoint = const_cast<void*>(pointer);
-		H_ASSERT(dPoint);
+		if (!dPoint)
+		{
+			return false;
+		}
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (!m_pTlsfHandle)
+		{
+			HLogError("HeapAllocator::deallocate failed: allocator is not initialized at {}:{}.", file ? file : "<unknown>", line);
+			return false;
+		}
 		size_t actual_size = tlsf_block_size(dPoint);
-		m_szAllocatedSize -= actual_size;
+		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
 		tlsf_free(m_pTlsfHandle, dPoint);
 #ifdef ASH_TRACE_MEM_DEALLOCATE
 		HLogTrace("deallocate mem at : {0}, size : {1}, from : {2} - line : {3}", pointer, actual_size, file, line);
@@ -187,9 +267,17 @@ namespace AshEngine
 
 	auto StackAllocator::init(size_t size) -> bool
 	{
-		H_ASSERT(size > 0);
+		if (size == 0)
+		{
+			HLogError("StackAllocator::init failed: size is zero.");
+			return false;
+		}
 		m_pMemory = (uint8_t*)malloc(size);
-		H_ASSERT(m_pMemory);
+		if (!m_pMemory)
+		{
+			HLogError("StackAllocator::init failed: malloc returned null for {} bytes.", size);
+			return false;
+		}
 		m_szAllocatedSize = 0;
 		m_szTotalSize = size;
 		return true;
@@ -197,15 +285,24 @@ namespace AshEngine
 	auto StackAllocator::shutdown() -> bool
 	{
 		free(m_pMemory);
+		m_pMemory = nullptr;
+		m_szAllocatedSize = 0;
+		m_szTotalSize = 0;
 		return true;
 	}
 	auto StackAllocator::allocate(size_t size, size_t alignment) -> void*
 	{
-		H_ASSERT(size > 0);
+		if (size == 0 || !m_pMemory)
+		{
+			return nullptr;
+		}
 		const size_t newStart = memory_align(m_szAllocatedSize,alignment);
-		H_ASSERT(newStart < m_szTotalSize);
+		if (newStart >= m_szTotalSize)
+		{
+			return nullptr;
+		}
 		const size_t new_allocated_size = newStart + size;
-		if (new_allocated_size > m_szTotalSize)
+		if (new_allocated_size < newStart || new_allocated_size > m_szTotalSize)
 			return nullptr;
 		m_szAllocatedSize = new_allocated_size;
 		return m_pMemory + newStart;
@@ -278,9 +375,17 @@ namespace AshEngine
 	}
 	auto LinearAllocator::init(size_t size) -> bool
 	{
-		H_ASSERT(size > 0);
+		if (size == 0)
+		{
+			HLogError("LinearAllocator::init failed: size is zero.");
+			return false;
+		}
 		m_pMemory = (uint8_t*)malloc(size);
-		H_ASSERT(m_pMemory);
+		if (!m_pMemory)
+		{
+			HLogError("LinearAllocator::init failed: malloc returned null for {} bytes.", size);
+			return false;
+		}
 		memset(m_pMemory, 0, size);
 		m_szTotalSize = size;
 		m_szAllocatedSize = 0;
@@ -291,16 +396,25 @@ namespace AshEngine
 		bool ret = clear();
 		H_ASSERT(ret);
 		free(m_pMemory);
+		m_pMemory = nullptr;
+		m_szTotalSize = 0;
+		m_szAllocatedSize = 0;
 		return true;
 	}
 	auto LinearAllocator::allocate(size_t size, size_t alignment)->void*
 	{
-		H_ASSERT(size > 0);
+		if (size == 0 || !m_pMemory)
+		{
+			return nullptr;
+		}
 		const size_t new_start = memory_align(m_szAllocatedSize, alignment);
-		H_ASSERT(new_start < m_szTotalSize);
+		if (new_start >= m_szTotalSize)
+		{
+			return nullptr;
+		}
 
 		const size_t new_allocated_size = new_start + size;
-		if (new_allocated_size > m_szTotalSize)
+		if (new_allocated_size < new_start || new_allocated_size > m_szTotalSize)
 		{
 			return nullptr;
 		}
@@ -309,7 +423,6 @@ namespace AshEngine
 	}
 	auto LinearAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line) -> void*
 	{
-		H_ASSERT(size > 0);
 		return allocate(size, alignment);
 	}
 	auto LinearAllocator::deallocate(void* pointer, char* file, uint32_t line) -> bool

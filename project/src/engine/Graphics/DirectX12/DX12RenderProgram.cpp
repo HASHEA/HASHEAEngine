@@ -278,33 +278,33 @@ namespace RHI
 
 				const DX12ProgramBindingInfo& bindingInfo = bindingIt->second;
 				const bool samplerBinding = bindingInfo.rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
-				DX12GPUDescriptorHeap& targetHeap = samplerBinding ? heapMgr.gpuSampler : heapMgr.gpuCbvSrvUav;
 				const D3D12_DESCRIPTOR_HEAP_TYPE heapType = samplerBinding ? D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER : D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
-				DX12DescriptorHandle gpuHandle = targetHeap.allocate(descriptorCount);
-				if (!gpuHandle.is_shader_visible())
+				std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> sourceHandles{};
+				if (bind.isArray)
+				{
+					sourceHandles = bind.cpuHandles;
+				}
+				else
+				{
+					sourceHandles.push_back(bind.cpuHandle);
+				}
+
+				DX12DescriptorHandle gpuHandle{};
+				if (!heapMgr.find_or_create_shader_visible_table(
+					device,
+					heapType,
+					sourceHandles.data(),
+					descriptorCount,
+					gpuHandle))
 				{
 					HLogError(
-						"DX12 render program failed to allocate {} shader-visible {} descriptors for binding '{}'.",
+						"DX12 render program failed to allocate/cache {} shader-visible {} descriptors for binding '{}'.",
 						descriptorCount,
 						descriptor_range_type_to_string(bindingInfo.rangeType),
 						bind.name.c_str());
 					committed = false;
 					break;
-				}
-
-				if (bind.isArray)
-				{
-					for (uint32_t i = 0; i < descriptorCount; ++i)
-					{
-						D3D12_CPU_DESCRIPTOR_HANDLE dstCpu = {};
-						dstCpu.ptr = gpuHandle.cpuHandle.ptr + static_cast<SIZE_T>(i) * targetHeap.get_descriptor_size();
-						device->CopyDescriptorsSimple(1, dstCpu, bind.cpuHandles[i], heapType);
-					}
-				}
-				else
-				{
-					device->CopyDescriptorsSimple(1, gpuHandle.cpuHandle, bind.cpuHandle, heapType);
 				}
 
 				outCommittedTables.push_back({ bindingInfo.rootIndex, gpuHandle.gpuHandle });

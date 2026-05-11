@@ -3,6 +3,7 @@
 #include "DX12Helper.hpp"
 #include <vector>
 #include <mutex>
+#include <unordered_map>
 
 namespace RHI
 {
@@ -69,6 +70,30 @@ namespace RHI
 	// Manages all descriptor heaps for the DX12 backend
 	struct DX12DescriptorHeapManager
 	{
+		struct DescriptorTableCacheKey
+		{
+			D3D12_DESCRIPTOR_HEAP_TYPE heapType = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+			std::vector<SIZE_T> cpuHandles{};
+
+			bool operator==(const DescriptorTableCacheKey& other) const
+			{
+				return heapType == other.heapType && cpuHandles == other.cpuHandles;
+			}
+		};
+
+		struct DescriptorTableCacheKeyHasher
+		{
+			size_t operator()(const DescriptorTableCacheKey& key) const
+			{
+				size_t hash = static_cast<size_t>(key.heapType);
+				for (SIZE_T handle : key.cpuHandles)
+				{
+					hash ^= static_cast<size_t>(handle) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+				}
+				return hash;
+			}
+		};
+
 		DX12CPUDescriptorHeap cpuCbvSrvUav;   // CPU-only staging for CBV/SRV/UAV
 		DX12CPUDescriptorHeap cpuSampler;     // CPU-only staging for Samplers
 		DX12CPUDescriptorHeap cpuRtv;         // RTV heap (always CPU-only)
@@ -79,5 +104,15 @@ namespace RHI
 		bool init(ID3D12Device* device);
 		void shutdown();
 		void begin_frame();
+		bool find_or_create_shader_visible_table(
+			ID3D12Device* device,
+			D3D12_DESCRIPTOR_HEAP_TYPE heapType,
+			const D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandles,
+			uint32_t descriptorCount,
+			DX12DescriptorHandle& outHandle);
+
+	private:
+		std::unordered_map<DescriptorTableCacheKey, DX12DescriptorHandle, DescriptorTableCacheKeyHasher> m_frameCbvSrvUavTableCache{};
+		std::unordered_map<DescriptorTableCacheKey, DX12DescriptorHandle, DescriptorTableCacheKeyHasher> m_frameSamplerTableCache{};
 	};
 }

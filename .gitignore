@@ -6,8 +6,10 @@
 *.sln
 *.bak
 *.hlog
+AGENTS.md
 
 # ignore directories
+.claude
 bin
 bin-int
 LogFiles

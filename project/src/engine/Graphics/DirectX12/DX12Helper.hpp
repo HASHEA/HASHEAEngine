@@ -63,9 +63,13 @@ inline const AshDXGIFormatInfo g_ashDXGIFormatInfo[] =
 	{ ASH_FORMAT_R64_UINT,                           8, 1, 1, 0, DXGI_FORMAT_UNKNOWN,                  DXGI_FORMAT_UNKNOWN }, // No DX12 equivalent
 
 	{ ASH_FORMAT_BC1_RGB_UNORM,                      8, 4, 4, 0, DXGI_FORMAT_BC1_UNORM,                DXGI_FORMAT_BC1_UNORM_SRGB },
+	{ ASH_FORMAT_BC1_RGB_SRGB_UNORM,                 8, 4, 4, 0, DXGI_FORMAT_BC1_UNORM_SRGB,           DXGI_FORMAT_BC1_UNORM_SRGB },
 	{ ASH_FORMAT_BC1_RGBA_UNORM,                     8, 4, 4, 1, DXGI_FORMAT_BC1_UNORM,                DXGI_FORMAT_BC1_UNORM_SRGB },
+	{ ASH_FORMAT_BC1_RGBA_SRGB_UNORM,                8, 4, 4, 1, DXGI_FORMAT_BC1_UNORM_SRGB,           DXGI_FORMAT_BC1_UNORM_SRGB },
 	{ ASH_FORMAT_BC2_UNORM,                         16, 4, 4, 1, DXGI_FORMAT_BC2_UNORM,                DXGI_FORMAT_BC2_UNORM_SRGB },
+	{ ASH_FORMAT_BC2_SRGB_UNORM,                    16, 4, 4, 1, DXGI_FORMAT_BC2_UNORM_SRGB,           DXGI_FORMAT_BC2_UNORM_SRGB },
 	{ ASH_FORMAT_BC3_UNORM,                         16, 4, 4, 1, DXGI_FORMAT_BC3_UNORM,                DXGI_FORMAT_BC3_UNORM_SRGB },
+	{ ASH_FORMAT_BC3_SRGB_UNORM,                    16, 4, 4, 1, DXGI_FORMAT_BC3_UNORM_SRGB,           DXGI_FORMAT_BC3_UNORM_SRGB },
 
 	{ ASH_FORMAT_BC4_UNORM,                          8, 4, 4, 0, DXGI_FORMAT_BC4_UNORM,                DXGI_FORMAT_UNKNOWN },
 	{ ASH_FORMAT_BC4_SNORM,                          8, 4, 4, 0, DXGI_FORMAT_BC4_SNORM,                DXGI_FORMAT_UNKNOWN },

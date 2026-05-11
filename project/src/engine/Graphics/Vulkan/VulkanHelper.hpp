@@ -409,9 +409,33 @@ namespace RHI
 			bytesStride = 8;
 			fmt = VK_FORMAT_BC1_RGB_UNORM_BLOCK;
 			break;
+		case ASH_FORMAT_BC1_RGB_SRGB_UNORM:
+			bytesStride = 8;
+			fmt = VK_FORMAT_BC1_RGB_SRGB_BLOCK;
+			break;
+		case ASH_FORMAT_BC1_RGBA_UNORM:
+			bytesStride = 8;
+			fmt = VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_BC1_RGBA_SRGB_UNORM:
+			bytesStride = 8;
+			fmt = VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+			break;
+		case ASH_FORMAT_BC2_UNORM:
+			bytesStride = 16;
+			fmt = VK_FORMAT_BC2_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_BC2_SRGB_UNORM:
+			bytesStride = 16;
+			fmt = VK_FORMAT_BC2_SRGB_BLOCK;
+			break;
 		case ASH_FORMAT_BC3_UNORM:
 			bytesStride = 16;
 			fmt = VK_FORMAT_BC3_UNORM_BLOCK;
+			break;
+		case ASH_FORMAT_BC3_SRGB_UNORM:
+			bytesStride = 16;
+			fmt = VK_FORMAT_BC3_SRGB_BLOCK;
 			break;
 		case ASH_FORMAT_BC5_UNORM:
 			bytesStride = 16;

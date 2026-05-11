@@ -333,16 +333,9 @@ namespace RHI
 	//fit
 	auto VulkanTexture::resolve_subresource_range(const AshSubresourceRange& range) const -> AshSubresourceRange
 	{
-		AshSubresourceRange resolved = range;
-
-		resolved.uBaseMipLevel = std::min<uint32_t>(resolved.uBaseMipLevel, m_sCreation.mip_level_count - 1);
-		resolved.uMipCount = std::min<uint32_t>(resolved.uMipCount, m_sCreation.mip_level_count - resolved.uBaseMipLevel);
-
-		uint32_t arrayLayerCount = m_sCreation.array_layer_count;
-		resolved.uBaseArraySlice = std::min<uint32_t>(resolved.uBaseArraySlice, arrayLayerCount - 1);
-		resolved.uArrayCount = std::min<uint32_t>(resolved.uArrayCount, arrayLayerCount - resolved.uBaseArraySlice);
-
-		return resolved;
+		const uint32_t mipLevels = m_sCreation.mip_level_count > 0 ? m_sCreation.mip_level_count : 1;
+		const uint32_t arrayLayerCount = m_sCreation.array_layer_count > 0 ? m_sCreation.array_layer_count : 1;
+		return range.resolve(mipLevels, arrayLayerCount);
 	}
 
 	auto VulkanTexture::get_resource_tracker() -> VulkanResourceTracker&

@@ -14,15 +14,15 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 - 材质 V2 基础链路：支持 `Surface.StaticMesh` 的材质 shader 与 engine shader family 拼合，`.AshMat` 作为基材质，`.AshMatIns` 作为可直接赋给物体的材质实例。
 - Asset 与 glTF 示例资源：支持示例模型加载，Sandbox 默认使用 Sponza 作为标准验证场景。
 - Editor 基础壳：具备 dockspace、Scene/Game 视口、层级、属性、控制台、资产浏览等基础面板。
-- 调试与性能工具：支持日志、Vulkan validation、DX12 debug layer、GPU debug names、Tracy CPU profiling、frame stats overlay、Vulkan VMA 泄露定位。
+- 调试与性能工具：支持日志、Vulkan validation、DX12 debug layer、GPU debug names、RHI command-buffer 错误状态、Tracy CPU profiling、frame stats overlay、Vulkan VMA 泄露定位。
 
 当前仍未完成或仅处于预留阶段：
 
 - Skeletal mesh / animation 尚未完成。
-- 完整 lighting、shadow、instancing、occlusion culling 尚未完成。
+- 完整 lighting、shadow、occlusion culling 尚未完成；静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
 - Transparent blend mode 已进入材质静态状态和编译键，但正式透明队列尚未接入 SceneRenderer。
 - PostProcess 与 UI 当前不纳入材质系统，后续应走各自的 shader/pass 与参数组织路径。
-- Asset cooking、streaming、完整资源生命周期管理仍在演进中。
+- Asset cooking pipeline、streaming、完整资源生命周期管理仍在演进中；runtime 已能直接加载部分 cooked texture payload。
 - Editor 还不是完整生产工具链，材质编辑器、复杂场景编辑、导入管线等仍待补齐。
 - 性能优化仍在进行中，当前渲染路径以架构正确性和双后端一致性为优先。
 
@@ -41,6 +41,8 @@ HASHEAEngine/
     │   ├── engine/
     │   │   ├── Base/                # 日志、内存、断言、窗口、输入、时间、文件、序列化、线程等
     │   │   ├── Graphics/            # RHI 抽象、Vulkan / DX12 后端、shader 编译反射、资源状态
+    │   │   │   ├── Vulkan/          # Vulkan 后端
+    │   │   │   └── DirectX12/       # DX12 后端
     │   │   └── Function/            # Application、Renderer、RenderDevice、UIContext、Scene、AssetDatabase
     │   ├── editor/                  # Editor 可执行项目
     │   └── sandbox/                 # Engine 侧验证/示例可执行项目
@@ -74,7 +76,7 @@ HASHEAEngine/
 - pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
-- draw 排序与只读资源 barrier 去重，用于降低静态网格场景 CPU 开销。
+- draw 排序、静态网格 instance batching 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
 - Runtime frame stats overlay。
 
 ## Scene 与渲染主路径
@@ -94,10 +96,11 @@ Scene 到渲染的主路径：
 - 逻辑线程负责 scene ownership 和可见帧构建。
 - worker 线程执行 CPU frustum culling。
 - render thread 只消费不可变 frame packet 并提交 draw。
+- `RenderScene` sync 阶段会为静态网格 section 预取 CPU-only 材质代理，render submit 只在代理缺失或资源版本变化时做 GPU program / texture binding 准备。
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路。skeletal mesh、完整灯光、阴影、instancing、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。skeletal mesh、完整灯光、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 
@@ -110,6 +113,7 @@ Scene 到渲染的主路径：
 - `MaterialSystem` 负责 domain / family / pass 的验证、fallback 和 resource template 获取。
 - `MaterialShaderMap` 负责不可变编译资源。
 - `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding。
+- `MaterialRenderProxy` 基于 material change version、compile hash、shader 文件签名、binding snapshot version 和 texture asset change version 判断脏状态，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
 - 当前正式主路径为 `Surface.StaticMesh.BasePass` 与 `DepthOnly`。
 
 材质 shader 由三部分拼合：
@@ -131,10 +135,12 @@ Scene 到渲染的主路径：
 当前资产能力包括：
 
 - `AssetDatabase` 做资源目录、类型识别和缓存。
+- `AssetDatabase` 的 Mesh / Model / Material / AshAsset 异步请求会复用同一 asset 的 in-flight `shared_future`，失败结果会缓存到下一次 `refresh()`，避免重复 worker job 和重复 decode/import。
 - 支持 glTF 示例模型，包含 Sponza、DamagedHelmet、BoomBox、Avocado。
-- 贴图 decode 覆盖 `png`、`jpg`、`jpeg`、`tga`、`bmp`、`hdr`。
+- 贴图 decode 覆盖 `png`、`jpg`、`jpeg`、`tga`、`bmp`、`hdr`，并支持 2D 非数组 `.dds` / raw `.ktx2` cooked BCn 载入；BC1/BC2/BC3/BC7 的 sRGB cooked payload 会保留为真实 GPU sRGB 格式。
 - `RenderAssetManager` 负责 static mesh CPU/GPU 资源桥接、贴图请求、fallback texture、sampler cache、材质代理准备。
 - 模型导入材质槽会生成或解析 `.AshMatIns`，draw-time 绑定由 `MaterialRenderProxy + MaterialSystem` 处理。
+- `.AshAsset` JSON 读写已从模型导入器中拆到 `AshAssetSerializer`，cooked texture DDS/KTX2 解析已从普通贴图入口拆到 `TextureCookedDecoder`。
 
 示例资源主要位于：
 
@@ -261,7 +267,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - 运行日志：`product/logs/`
 - Shader cache：`product/caches/ShaderCaches/`
 - Pipeline cache：`product/caches/PipelineCaches/`
-- 本地构建、cdb、测试、性能分析报告：`Intermediate/`
+- 本地构建、cdb、测试、shader debug dump、性能分析报告：`Intermediate/`，其中临时测试工作文件统一放在 `Intermediate/test-temp/`
 
 调试与性能工具：
 
@@ -281,16 +287,21 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - Editor + Vulkan。
 - Editor + DX12。
 
+文档维护约定：
+
+- 任何代码、资源、配置、构建、验证、架构或工作流变更，都需要在同一轮同步更新根目录 `README.md`，保证仓库入口描述与当前状态一致。
+- 重要项目状态、路径规则或工作流变化不应只记录在 `docs/` 文档或对话历史中。
+
 ## 开发进度
 
 | 模块 | 当前进度 |
 | --- | --- |
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
-| RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name 和 validation 正在持续完善。 |
-| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装，热路径性能仍在优化。 |
+| RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
+| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，静态网格 draw 排序、instance batching、barrier 去重和 pass/framebuffer cache 已接入。 |
 | Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通。 |
-| Material | V2 `Surface.StaticMesh` 主路径已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，透明、骨骼、decal 等仍待后续阶段。 |
-| Asset | glTF 示例模型、贴图 decode、static mesh render asset 桥接已具备，asset cooking / streaming 尚未完成。 |
+| Material | V2 `Surface.StaticMesh` 主路径已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
+| Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |
 | Editor | 基础 workspace 和常用面板已具备，当前更偏向引擎验证与工具雏形，完整编辑器能力仍在开发。 |
 | Sandbox | 已作为标准 Engine 验证程序，默认加载 Sponza 并走正式 ScenePresentation 渲染链。 |
 | Profiling / Debug | Tracy、validation、debug name、日志、frame stats、VMA leak tracking 已接入，粒度和自动化验收仍在扩展。 |

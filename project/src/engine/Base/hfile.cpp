@@ -72,6 +72,11 @@ namespace AshEngine
 			}
 			size_t fileSize = static_cast<size_t>(fileSizeSigned);
 			outData = (char*)Ash_Alloc(allocator,fileSize + 1 ,1);
+			if (!outData)
+			{
+				fclose(file);
+				return nullptr;
+			}
 			const size_t bytesRead = fread(outData, 1,fileSize,file);
 			if (bytesRead == fileSize)
 			{
@@ -89,15 +94,39 @@ namespace AshEngine
 	}
 	auto file_read_text(const char* fileName , size_t& size, Allocator* allocator) -> char*
 	{
+		size = 0;
+		if (!fileName)
+		{
+			return nullptr;
+		}
 		char* text = 0;
 		FILE* file = fopen(fileName, "r");
 		if (file)
 		{
-			size_t fileSize = file_get_size(file);
+			const long fileSizeSigned = file_get_size(file);
+			if (fileSizeSigned < 0)
+			{
+				fclose(file);
+				return nullptr;
+			}
+			size_t fileSize = static_cast<size_t>(fileSizeSigned);
 			text = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
+			if (!text)
+			{
+				fclose(file);
+				return nullptr;
+			}
 			size_t bytes_read = fread(text, 1, fileSize, file);
-			text[bytes_read] = 0;
-			size = fileSize;
+			if (bytes_read == fileSize || feof(file))
+			{
+				text[bytes_read] = 0;
+				size = bytes_read;
+			}
+			else
+			{
+				file_release_read_buffer(text, allocator);
+				text = nullptr;
+			}
 			fclose(file);
 		}
 		return text;
@@ -120,6 +149,11 @@ namespace AshEngine
 			}
 			size_t fileSize = static_cast<size_t>(fileSizeSigned);
 			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
+			if (!result.data)
+			{
+				fclose(file);
+				return result;
+			}
 			const size_t bytesRead = fread(result.data, 1, fileSize, file);
 			if (bytesRead == fileSize)
 			{
@@ -138,24 +172,56 @@ namespace AshEngine
 	auto file_read_text(const char* fileName , Allocator* allocator) -> FileReadResult
 	{
 		FileReadResult result{ nullptr, 0 };
+		if (!fileName)
+		{
+			return result;
+		}
 		FILE* file = fopen(fileName, "r");
 		if (file)
 		{
-			size_t fileSize = file_get_size(file);
+			const long fileSizeSigned = file_get_size(file);
+			if (fileSizeSigned < 0)
+			{
+				fclose(file);
+				return result;
+			}
+			size_t fileSize = static_cast<size_t>(fileSizeSigned);
 			result.data = (char*)Ash_Alloc(allocator, fileSize + 1, 1);
+			if (!result.data)
+			{
+				fclose(file);
+				return result;
+			}
 			size_t byteRead = fread(result.data, 1, fileSize, file);
-			result.data[byteRead] = 0;
-			result.size = byteRead;
+			if (byteRead == fileSize || feof(file))
+			{
+				result.data[byteRead] = 0;
+				result.size = byteRead;
+			}
+			else
+			{
+				file_release_read_buffer(result.data, allocator);
+				result.data = nullptr;
+			}
 			fclose(file);
 		}
 		return result;
 	}
 	auto file_write_binary(const char* fileName, void* memory, size_t size) -> void
 	{
+		if (!fileName || (!memory && size > 0))
+		{
+			HLogError("Failed to write binary file: invalid input.");
+			return;
+		}
 		FILE* file = fopen(fileName, "wb");
 		if (file)
 		{
-			fwrite(memory, 1, size, file);
+			const size_t written = fwrite(memory, 1, size, file);
+			if (written != size)
+			{
+				HLogError("Short write to file : {0} ! requested={1}, written={2}", fileName, size, written);
+			}
 			fclose(file);
 		}
 		else
@@ -267,7 +333,10 @@ namespace AshEngine
 	auto file_extension_from_path(char* path) -> char*
 	{
 		char* last_separator = strrchr(path, '.');
-
+		if (!last_separator)
+		{
+			return nullptr;
+		}
 		return last_separator + 1;
 	}
 	auto directory_exists(const char* path) -> bool

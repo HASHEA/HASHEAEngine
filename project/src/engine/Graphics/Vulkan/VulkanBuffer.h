@@ -92,6 +92,7 @@ namespace RHI
 		bool m_bReady = true;
 		uint8_t* m_pMappedData = nullptr;
 		bool m_bCoherent = false;
+		bool m_bOwnsPersistentMap = false;
 
 		std::string m_nameStorage;
 		bool dynamic = false;

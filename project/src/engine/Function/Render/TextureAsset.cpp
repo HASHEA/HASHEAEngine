@@ -1,5 +1,6 @@
 #include "Function/Render/TextureAsset.h"
 
+#include "Function/Render/TextureCookedDecoder.h"
 #include <stb_image.h>
 #include <algorithm>
 #include <cctype>
@@ -44,7 +45,8 @@ namespace AshEngine
 				lowered == ".jpeg" ||
 				lowered == ".tga" ||
 				lowered == ".bmp" ||
-				lowered == ".hdr";
+				lowered == ".hdr" ||
+				is_cooked_texture_extension(lowered);
 		}
 
 		static auto calculate_full_mip_count(uint32_t width, uint32_t height) -> uint8_t
@@ -147,9 +149,9 @@ namespace AshEngine
 		{
 			return make_error(out_error, "Texture path is empty.");
 		}
-		if (extension == ".dds")
+		if (is_cooked_texture_extension(extension))
 		{
-			return make_error(out_error, "DDS is not supported by the V1 material texture path.");
+			return decode_cooked_texture_source_from_file(path, color_space, out_source, out_error);
 		}
 		if (!is_supported_texture_extension(extension))
 		{

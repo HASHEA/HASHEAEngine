@@ -577,7 +577,7 @@ namespace RHI
 				if (fileInfo.sourceShaderPath != nullptr)
 				{
 					std::error_code dump_error{};
-					const std::filesystem::path dump_directory = "product/test-reports/shader-debug";
+					const std::filesystem::path dump_directory = "Intermediate/logs/shader-debug";
 					std::filesystem::create_directories(dump_directory, dump_error);
 					if (!dump_error)
 					{

@@ -35,6 +35,21 @@ namespace AshEngine
 			}
 			return "<unnamed-material>";
 		}
+
+		static auto build_material_resource_file_signature_hash(const MaterialResource& resource) -> uint64_t
+		{
+			uint64_t hash_value = 0;
+			RHI::hash_shader_file_signature(hash_value, resource.base_shader_path.c_str());
+			RHI::hash_shader_file_signature(hash_value, resource.user_shader_path.c_str());
+			RHI::hash_shader_file_signature(hash_value, resource.generated_bindings_path.c_str());
+			return hash_value;
+		}
+
+		static auto material_resource_file_signatures_current(const MaterialResource& resource) -> bool
+		{
+			return resource.shader_file_signature_hash != 0 &&
+				build_material_resource_file_signature_hash(resource) == resource.shader_file_signature_hash;
+		}
 	}
 
 	MaterialRenderProxy::MaterialRenderProxy(
@@ -82,12 +97,16 @@ namespace AshEngine
 		{
 			return true;
 		}
+		if (!material_resource_file_signatures_current(m_surface_staticmesh_basepass_resource) ||
+			!material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource))
+		{
+			return true;
+		}
 		for (const auto& [texture_name, texture_asset] : m_binding_snapshot.texture_assets)
 		{
 			const auto version = m_binding_snapshot.texture_versions.find(texture_name);
 			if (!texture_asset ||
 				!texture_asset->resource ||
-				texture_asset->state == TextureAssetState::Loading ||
 				version == m_binding_snapshot.texture_versions.end() ||
 				version->second != texture_asset->change_version)
 			{
@@ -154,7 +173,6 @@ namespace AshEngine
 			const auto version = m_binding_snapshot.texture_versions.find(texture_name);
 			if (!texture_asset ||
 				!texture_asset->resource ||
-				texture_asset->state == TextureAssetState::Loading ||
 				version == m_binding_snapshot.texture_versions.end() ||
 				version->second != texture_asset->change_version)
 			{
@@ -339,7 +357,9 @@ namespace AshEngine
 		const uint64_t compile_hash = m_material->get_compile_hash();
 		if (m_surface_staticmesh_basepass_template != nullptr &&
 			m_surface_staticmesh_depthonly_template != nullptr &&
-			m_v2_compile_hash == compile_hash)
+			m_v2_compile_hash == compile_hash &&
+			material_resource_file_signatures_current(m_surface_staticmesh_basepass_resource) &&
+			material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource))
 		{
 			m_surface_staticmesh_basepass_resource.program = m_surface_staticmesh_basepass_program.get();
 			m_surface_staticmesh_depthonly_resource.program = m_surface_staticmesh_depthonly_program.get();

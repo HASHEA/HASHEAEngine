@@ -25,9 +25,10 @@ namespace AshEngine
 		bool render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
 
 	private:
-		struct SceneObjectConstants
+		struct SceneInstanceBufferEntry
 		{
-			glm::mat4 object_to_clip{ 1.0f };
+			std::shared_ptr<VertexBuffer> buffer = nullptr;
+			uint32_t capacity = 0;
 		};
 
 	private:
@@ -54,6 +55,7 @@ namespace AshEngine
 	private:
 		Renderer* m_renderer = nullptr;
 		std::vector<ScratchDepthEntry> m_scratch_depth_targets{};
+		std::vector<SceneInstanceBufferEntry> m_instance_buffers{};
 		std::unordered_set<std::string> m_logged_warning_keys{};
 		std::unordered_set<std::string> m_logged_material_usage_keys{};
 	};

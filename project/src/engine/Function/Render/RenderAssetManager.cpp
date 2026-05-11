@@ -560,9 +560,10 @@ namespace AshEngine
 				resolved_section.material = request_material_asset(k_builtin_default_surface_material_path);
 			}
 			ASH_PROCESS_ERROR(resolved_section.material != nullptr);
-			// RenderScene rebuild can run on the logic thread. Keep this stage CPU-only;
-			// ScenePresentation submit prepares/caches the GPU material proxy on the render thread.
-			resolved_section.material_proxy = nullptr;
+			// RenderScene rebuild can run on the logic thread. Creating the proxy is
+			// CPU-only; GPU program and texture binding preparation stays in submit.
+			resolved_section.material_proxy = request_material_render_proxy(resolved_section.material);
+			ASH_PROCESS_ERROR(resolved_section.material_proxy != nullptr);
 			out_sections.push_back(std::move(resolved_section));
 		}
 

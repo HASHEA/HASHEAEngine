@@ -81,7 +81,7 @@ Follow-on plans are required after this phase lands for:
   - resolve `GeneratedMaterialBindings.hlsli` to the per-permutation generated file path
 - `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Shader.cpp`
   - pass the generated-bindings path into the DX12 include-handler flow
-- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.cpp`
+- `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.cpp`
   - pass the generated-bindings path into Vulkan preprocessing
 - `D:\workspace\AshEngine\HASHEAEngine\project\src\sandbox\App\SandboxStandardScene.cpp`
   - inject one explicit `.AshMat` override so Phase 1 runtime validation always exercises the V2 path
@@ -483,7 +483,7 @@ Expected:
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DXC\DXCIncludeHandler.h`
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DXC\DXCIncludeHandler.cpp`
 - Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\DirectX12\DX12Shader.cpp`
-- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vullkan\VulkanContext.cpp`
+- Modify: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Graphics\Vulkan\VulkanContext.cpp`
 - Create: `D:\workspace\AshEngine\HASHEAEngine\assets\hlsl\include\UserShader.hlsli`
 - Create: `D:\workspace\AshEngine\HASHEAEngine\assets\hlsl\include\GeneratedMaterialBindings.hlsli`
 - Create: `D:\workspace\AshEngine\HASHEAEngine\project\src\engine\Shaders\MaterialV2\Domains\AshSurfaceDomain.hlsli`

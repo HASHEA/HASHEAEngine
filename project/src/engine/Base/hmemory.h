@@ -203,32 +203,43 @@ namespace AshEngine
 
 template<typename T, typename... Args>
 inline T* Ash_New(Allocator* allocator = nullptr,Args&&... args) {
+	void* memory = nullptr;
 	if (allocator == nullptr) {
 #ifdef ASH_TRACE_MEM_ALLOCATE
-		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T), __FILE__, __LINE__)), std::forward<Args>(args)...);
+		memory = MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T), __FILE__, __LINE__);
 #else
-		return _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T))), std::forward<Args>(args)...);
+		memory = MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T));
 #endif
 	}
 	else {
 #ifdef ASH_TRACE_MEM_ALLOCATE
-		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), alignof(T), __FILE__, __LINE__)), std::forward<Args>(args)...);
+		memory = allocator->allocate(sizeof(T), alignof(T), __FILE__, __LINE__);
 
 #else
-		return _original_placement_new<T>(static_cast<T*>(allocator->allocate(sizeof(T), alignof(T))), std::forward<Args>(args)...);
+		memory = allocator->allocate(sizeof(T), alignof(T));
 #endif
 	}
+	if (!memory)
+	{
+		return nullptr;
+	}
+	return _original_placement_new<T>(static_cast<T*>(memory), std::forward<Args>(args)...);
 }
 
 template<typename T, typename... Args>
 inline std::shared_ptr<T> Ash_New_Shared(Args&&... args) {
-	T* pO = nullptr;
+	void* memory = nullptr;
 #ifdef ASH_TRACE_MEM_ALLOCATE
-	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T), __FILE__, __LINE__)), std::forward<Args>(args)...);
+	memory = MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T), __FILE__, __LINE__);
 
 #else
-	pO = _original_placement_new<T>(static_cast<T*>(MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T))), std::forward<Args>(args)...);
+	memory = MemoryService::instance()->get_system_allocator()->allocate(sizeof(T), alignof(T));
 #endif
+	if (!memory)
+	{
+		return {};
+	}
+	T* pO = _original_placement_new<T>(static_cast<T*>(memory), std::forward<Args>(args)...);
 	auto Deleter = [](T* pObject) {
 		auto allocator = (MemoryService::instance()->get_system_allocator());
 		_original_destroy(pObject);

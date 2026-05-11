@@ -11,8 +11,8 @@
 #endif
 
 #if defined(ASH_HAS_VULKAN)
-#include "Vullkan/VulkanContext.h"
-#include "Vullkan/VulkanSwapchain.h"
+#include "Vulkan/VulkanContext.h"
+#include "Vulkan/VulkanSwapchain.h"
 #endif
 
 #include <algorithm>

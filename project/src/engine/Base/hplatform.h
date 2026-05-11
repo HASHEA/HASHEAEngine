@@ -1,11 +1,16 @@
 #pragma once
 #include <stdint.h>
+#include <cstdlib>
 // Macros ////////////////////////////////////////////////////////////////
 
 #define ArraySize(array)        ( sizeof(array)/sizeof((array)[0]) )
 #define ASH_INLINE                               inline
 #define ASH_FINLINE                              __forceinline
+#if defined(ASH_DEBUG)
 #define ASH_DEBUG_BREAK                          __debugbreak();
+#else
+#define ASH_DEBUG_BREAK                          std::abort();
+#endif
 #define ASH_DISABLE_WARNING(warning_number)      __pragma( warning( disable : warning_number ) )
 #define ASH_CONCAT_OPERATOR(x, y)                x##y
 

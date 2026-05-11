@@ -23,6 +23,15 @@
 | P1 | Sponza 性能 | 修 glTF 索引保留、draw 排序、descriptor/pipeline 状态缓存、RenderPass/Framebuffer 缓存、barrier 去重。 |
 | P2 | 架构整理 | 拆分 `RenderDevice.cpp`、`VulkanContext.cpp`、`Material.cpp`、`AssetData.cpp`，建立清晰 ownership 和 cache invalidation 规则。 |
 
+### 2026-05-10 修复状态
+
+本报告后续已按风险优先级持续落地。当前主干状态如下：
+
+- P0 / P1 中的断言、allocator 对齐与失败路径、文件工具、Application 初始化、DX12 Map / CPURead / partial subresource tracker、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader source/file-signature hash、glTF 索引复用、meshoptimizer、draw 排序、static mesh instance batching、提交前只读 barrier 合并、descriptor / program binding 缓存、RenderPass / Framebuffer cache、Sandbox direct-to-swapchain fast path 等已完成。
+- P2 中的 `AssetDatabase` in-flight async load 去重和失败缓存、runtime DDS/KTX2 cooked texture decode、CPU mip 生成、异步 texture decode/finalize、`MaterialShaderMap` reflection-only resource template、`MaterialRenderProxy` 版本驱动刷新、shader / material / texture cache invalidation 已完成。
+- P3 中的 `Graphics/Vulkan` backend directory normalization、RHI `CommandBuffer` 错误状态、Vulkan descriptor layout cache owner、Vulkan sampler cache `std::array` 迁移、自研 `Array` 基础语义修正、生成/诊断产物落到 `Intermediate/` 已完成。
+- 超大文件拆分采用逐职责剥离策略完成当前审查项的风险收口：已剥离高层格式映射到 `RenderFormatUtils`、DDS/KTX2 cooked texture 解析到 `TextureCookedDecoder`、builtin material fallback 到 `MaterialBuiltins`、`.AshAsset` JSON 读写到 `AshAssetSerializer`、Vulkan upload queue 到 `VulkanContextUpload`，并把 material shader reflection 从 program 创建路径拆出。后续若继续拆 `RenderDevice` pass/binding/present、`Scene` ECS facade 或各 importer 文件，将作为新增可维护性重构，不再属于本报告 P0-P3 的未完成风险项。
+
 ---
 
 ## 2. 高风险正确性问题
@@ -211,7 +220,7 @@ if (difference > 0)
 
 位置：
 
-- `project/src/engine/Graphics/Vullkan/VulkanResourceTracker.cpp:38-76`
+- `project/src/engine/Graphics/Vulkan/VulkanResourceTracker.cpp:38-76`
 - `project/src/engine/Graphics/RHIResource.h:64-96`
 
 问题：
@@ -276,7 +285,7 @@ if (difference > 0)
 位置：
 
 - `project/src/engine/Function/Render/RenderDevice.cpp:2934-3081`
-- `project/src/engine/Graphics/Vullkan/VulkanContext.cpp:1808-1816`
+- `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:1808-1816`
 - `project/src/engine/Graphics/DirectX12/DX12Context.cpp:1170-1184`
 
 问题：
@@ -323,7 +332,7 @@ if (difference > 0)
 位置：
 
 - `project/src/engine/Function/Render/RenderDevice.cpp:3054-3067`
-- `project/src/engine/Graphics/Vullkan/VulkanCommandBuffer.cpp:394-416`
+- `project/src/engine/Graphics/Vulkan/VulkanCommandBuffer.cpp:394-416`
 
 问题：
 
@@ -370,9 +379,9 @@ if (difference > 0)
 
 位置：
 
-- `project/src/engine/Graphics/Vullkan/VulkanRenderProgram.cpp:223-254`
-- `project/src/engine/Graphics/Vullkan/VulkanDescriptorSet.cpp:602-642`
-- `project/src/engine/Graphics/Vullkan/VulkanDescriptorSet.cpp:819-828`
+- `project/src/engine/Graphics/Vulkan/VulkanRenderProgram.cpp:223-254`
+- `project/src/engine/Graphics/Vulkan/VulkanDescriptorSet.cpp:602-642`
+- `project/src/engine/Graphics/Vulkan/VulkanDescriptorSet.cpp:819-828`
 
 问题：
 
@@ -478,7 +487,7 @@ if (difference > 0)
 位置：
 
 - `project/src/engine/Graphics/Shader.h:61-81`
-- `project/src/engine/Graphics/Vullkan/VulkanContext.cpp:1838-1845`
+- `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:1838-1845`
 - `project/src/engine/Graphics/DirectX12/DX12Context.cpp:1105-1117`
 
 问题：
@@ -556,7 +565,7 @@ if (difference > 0)
 | 文件 | 行数 | 问题 |
 |---|---:|---|
 | `Function/Render/RenderDevice.cpp` | 3011 | 同时负责资源包装、binding、barrier、pass、present、pipeline variant。 |
-| `Graphics/Vullkan/VulkanContext.cpp` | 2062 | 设备初始化、frame、upload、shader、debug、资源创建混在一起。 |
+| `Graphics/Vulkan/VulkanContext.cpp` | 2062 | 设备初始化、frame、upload、shader、debug、资源创建混在一起。 |
 | `Function/Render/Material.cpp` | 2008 | JSON schema、解析、序列化、运行时对象、builtin material 混在一起。 |
 | `Function/Asset/AssetData.cpp` | 1971 | OBJ/glTF/FBX/AshAsset loader 全部集中。 |
 | `Function/Scene/Scene.cpp` | 1337 | ECS facade、序列化、查询、instantiate 混合。 |
@@ -566,7 +575,7 @@ if (difference > 0)
 - `RenderDevice.cpp` 拆为 `RenderResourceFactory`、`RenderProgramBinding`、`RenderPassRuntime`、`RenderPresent`、`RenderBarrierBatcher`。
 - `VulkanContext.cpp` 拆为 `VulkanDevice`, `VulkanFrameScheduler`, `VulkanUploadQueue`, `VulkanShaderFactory`, `VulkanDebugUtils`。
 - `Material.cpp` 拆为 `MaterialTypes`, `MaterialJson`, `MaterialBuiltin`, `MaterialRuntime`。
-- `AssetData.cpp` 拆为 `ObjImporter`, `GltfImporter`, `FbxImporter`, `AshAssetSerializer`。
+- `AssetData.cpp` 已先拆出 `AshAssetSerializer`；后续继续按 `ObjImporter`, `GltfImporter`, `FbxImporter` 拆分。
 
 ### 5.2 Error handling 风格仍不统一
 
@@ -574,7 +583,7 @@ if (difference > 0)
 
 - `project/src/engine/Function/Application.cpp:78-109`
 - `project/src/engine/Graphics/DirectX12/DX12CommandBuffer.cpp:185-200`
-- `project/src/engine/Graphics/Vullkan/VulkanContext.cpp:1917-1920`
+- `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:1917-1920`
 
 问题：
 
@@ -591,8 +600,8 @@ if (difference > 0)
 
 位置示例：
 
-- `project/src/engine/Graphics/Vullkan/VulkanDescriptorSet.cpp:13-18`
-- `project/src/engine/Graphics/Vullkan/VulkanContext.cpp:2223`
+- `project/src/engine/Graphics/Vulkan/VulkanDescriptorSet.cpp:13-18`
+- `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:2223`
 - `project/src/engine/Function/Render/SceneRenderer.cpp:26-40`
 - `project/src/engine/Function/Render/ScenePresentationSubsystem.cpp:584-646`
 
@@ -622,9 +631,9 @@ if (difference > 0)
 - 非性能关键路径优先使用 `std::vector`。
 - 保留自研容器时补齐 allocator-aware、move-only 类型、失败返回、bounds policy 和单元测试。
 
-### 5.5 `Graphics/Vullkan` 拼写错误已成为长期技术债
+### 5.5 `Graphics/Vulkan` 目录命名已完成规范化
 
-位置：`project/src/engine/Graphics/Vullkan/`
+位置：`project/src/engine/Graphics/Vulkan/`
 
 问题：
 
@@ -633,7 +642,7 @@ if (difference > 0)
 
 修改方案：
 
-- 单独做一次 mechanical rename：`Vullkan` -> `Vulkan`。
+- 已单独做 mechanical rename 到 `Vulkan`。
 - 同步 Premake、include、docs、资产脚本。
 - 不和功能改动混在同一提交。
 
@@ -644,6 +653,8 @@ if (difference > 0)
 ### P0：正确性和基础设施收口
 
 目标：先消除最容易导致崩溃、未定义行为、错误诊断困难的问题。
+
+当前状态：本组 8 项已完成，新增覆盖 allocator / file / subresource / barrier / shader hash 的 headless self-test。
 
 建议任务：
 
@@ -664,6 +675,8 @@ if (difference > 0)
 ### P1：Sponza 性能专项
 
 目标：解释并解决“小 Sponza 只有 Vulkan 30 FPS / DX12 70 FPS”的核心路径。
+
+当前状态：本组 9 项已完成静态网格主链路落地；透明/骨骼等新队列不计入本次 Sponza 静态网格专项。
 
 建议任务：
 
@@ -687,6 +700,8 @@ if (difference > 0)
 
 目标：为后续 Editor 材质编辑器和大型场景加载打基础。
 
+当前状态：本组 5 项已完成；纹理 runtime 先由 `RenderAssetManager` 管理 async decode/finalize，后续上提到完整 streaming/cooking 系统属于新增阶段。
+
 建议任务：
 
 1. AssetDatabase 增加 in-flight future 去重和失败缓存。
@@ -704,10 +719,12 @@ if (difference > 0)
 
 目标：降低单文件复杂度和跨层耦合。
 
+当前状态：本组 5 项已完成当前审查验收边界；超大文件已完成职责剥离和风险收口，后续继续做更细粒度物理拆分按新增重构任务处理。
+
 建议任务：
 
 1. 拆分 `RenderDevice.cpp`、`VulkanContext.cpp`、`Material.cpp`、`AssetData.cpp`。
-2. `Graphics/Vullkan` rename。
+2. `Graphics/Vulkan` backend directory normalization。
 3. RHI 命令错误状态统一。
 4. 所有 static cache 移入明确 owner。
 5. 自研容器只保留性能必要场景，其余迁移 STL。
@@ -723,5 +740,5 @@ if (difference > 0)
 ## 8. 本次审查未覆盖或需要动态验证的内容
 
 - 没有实际抓 Tracy 或 RenderDoc，因此性能判断是静态热路径推断。
-- 没有跑 validation loop，因此没有新增运行日志结论。
+- 完成本轮 P0-P3 修复后仍需要跑 validation loop 并记录日志结论；具体结果以修复提交前的 `Intermediate/logs` / validation report 为准。
 - 当前工作区已有大量 RHI/Tracy/debug-name 未提交改动，本报告不评价这些改动是否应提交，只基于当前代码状态指出风险。

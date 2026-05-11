@@ -187,8 +187,11 @@ namespace AshEngine
 						continue;
 					}
 
-					std::shared_ptr<MaterialRenderProxy> material_proxy =
-						asset_manager.request_material_render_proxy(section.material);
+					std::shared_ptr<MaterialRenderProxy> material_proxy = section.material_proxy;
+					if (!material_proxy)
+					{
+						material_proxy = asset_manager.request_material_render_proxy(section.material);
+					}
 					if (!material_proxy)
 					{
 						HLogError(

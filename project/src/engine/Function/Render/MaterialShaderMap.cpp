@@ -62,11 +62,45 @@ namespace AshEngine
 			const MaterialInterface& material,
 			const MaterialUsageDesc& usage,
 			const MaterialGeneratedSourcePaths& generated_source,
-			std::string_view host_shader_path) -> uint64_t
+			std::string_view host_shader_path,
+			uint64_t shader_file_signature_hash) -> uint64_t
 		{
 			uint64_t hash_value = 0;
 			ASH_HASH::hash_combine(hash_value, material.get_compile_hash());
 			ASH_HASH::hash_combine(hash_value, generated_source.combined_source_hash);
+			ASH_HASH::hash_combine(hash_value, shader_file_signature_hash);
+			ASH_HASH::hash_combine(hash_value, host_shader_path.data(), ASH_HASH::CStringHash{});
+			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(usage.domain));
+			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(usage.family));
+			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(usage.pass));
+			ASH_HASH::hash_combine(hash_value, usage.capability_mask);
+			return hash_value;
+		}
+
+		static auto build_shader_file_signature_hash(
+			std::string_view host_shader_path,
+			std::string_view user_shader_path,
+			std::string_view generated_bindings_path = {}) -> uint64_t
+		{
+			uint64_t hash_value = 0;
+			const std::string host_path(host_shader_path);
+			const std::string user_path(user_shader_path);
+			const std::string generated_path(generated_bindings_path);
+			RHI::hash_shader_file_signature(hash_value, host_path.c_str());
+			RHI::hash_shader_file_signature(hash_value, user_path.c_str());
+			RHI::hash_shader_file_signature(hash_value, generated_path.c_str());
+			return hash_value;
+		}
+
+		static auto build_permutation_cache_hash(
+			const MaterialInterface& material,
+			const MaterialUsageDesc& usage,
+			std::string_view host_shader_path,
+			uint64_t shader_file_signature_hash) -> uint64_t
+		{
+			uint64_t hash_value = 0;
+			ASH_HASH::hash_combine(hash_value, material.get_compile_hash());
+			ASH_HASH::hash_combine(hash_value, shader_file_signature_hash);
 			ASH_HASH::hash_combine(hash_value, host_shader_path.data(), ASH_HASH::CStringHash{});
 			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(usage.domain));
 			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(usage.family));
@@ -169,15 +203,6 @@ namespace AshEngine
 			return nullptr;
 		}
 
-		const MaterialPermutationKey key{
-			material.get_compile_hash(),
-			usage
-		};
-		if (const auto found = m_resources.find(key); found != m_resources.end())
-		{
-			return &found->second->resource;
-		}
-
 		const EngineShaderFamilyDesc* family_desc = m_family_registry->find(usage.family);
 		if (!family_desc)
 		{
@@ -185,13 +210,6 @@ namespace AshEngine
 			{
 				*out_error = "Engine shader family lookup failed.";
 			}
-			return nullptr;
-		}
-
-		MaterialGeneratedSourcePaths generated_source =
-			m_source_builder->build_source(material, usage, *m_family_registry, m_generated_source_root, out_error);
-		if (generated_source.bindings_include_path.empty())
-		{
 			return nullptr;
 		}
 
@@ -205,16 +223,45 @@ namespace AshEngine
 			return nullptr;
 		}
 
+		const std::string user_shader_path(material.get_material_shader_path());
+		const uint64_t permutation_file_signature_hash =
+			build_shader_file_signature_hash(host_shader_path, user_shader_path);
+		const MaterialPermutationKey key{
+			build_permutation_cache_hash(material, usage, host_shader_path, permutation_file_signature_hash),
+			usage
+		};
+		if (const auto found = m_resources.find(key); found != m_resources.end())
+		{
+			return &found->second->resource;
+		}
+
+		MaterialGeneratedSourcePaths generated_source =
+			m_source_builder->build_source(material, usage, *m_family_registry, m_generated_source_root, out_error);
+		if (generated_source.bindings_include_path.empty())
+		{
+			return nullptr;
+		}
+
 		MaterialResource resource{};
 		resource.usage = usage;
+		resource.shader_file_signature_hash =
+			build_shader_file_signature_hash(
+				host_shader_path,
+				user_shader_path,
+				generated_source.bindings_include_path.generic_string());
 		resource.combined_source_hash =
-			build_combined_source_hash(material, usage, generated_source, host_shader_path);
+			build_combined_source_hash(
+				material,
+				usage,
+				generated_source,
+				host_shader_path,
+				resource.shader_file_signature_hash);
 		resource.base_shader_path = host_shader_path;
-		resource.user_shader_path = std::string(material.get_material_shader_path());
+		resource.user_shader_path = user_shader_path;
 		resource.generated_bindings_path = generated_source.bindings_include_path.generic_string();
 		resource.program_name = build_program_name(material, usage);
 		resource.program_state = build_program_state(material.get_static_render_state());
-		resource.vertex_decl = get_mesh_vertex_decl();
+		resource.vertex_decl = get_instanced_mesh_vertex_decl();
 		resource.pass_relevance = build_pass_relevance(material, usage);
 		resource.blend_mode = material.get_blend_mode();
 		resource.shading_model = material.get_shading_model();

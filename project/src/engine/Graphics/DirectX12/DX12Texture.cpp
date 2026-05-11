@@ -254,15 +254,9 @@ namespace RHI
 
 	auto DX12Texture::resolve_subresource_range(const AshSubresourceRange& range) const -> AshSubresourceRange
 	{
-		AshSubresourceRange resolved = range;
 		const uint32_t mipLevels = m_creation.mip_level_count > 0 ? m_creation.mip_level_count : 1;
 		const uint32_t arrayLayers = m_creation.type == Ash_Texture3D ? 1 :
 			(m_creation.array_layer_count > 0 ? m_creation.array_layer_count : 1);
-
-		resolved.uBaseMipLevel = std::min<uint32_t>(resolved.uBaseMipLevel, mipLevels - 1);
-		resolved.uMipCount = std::min<uint32_t>(resolved.uMipCount, mipLevels - resolved.uBaseMipLevel);
-		resolved.uBaseArraySlice = std::min<uint32_t>(resolved.uBaseArraySlice, arrayLayers - 1);
-		resolved.uArrayCount = std::min<uint32_t>(resolved.uArrayCount, arrayLayers - resolved.uBaseArraySlice);
-		return resolved;
+		return range.resolve(mipLevels, arrayLayers);
 	}
 }

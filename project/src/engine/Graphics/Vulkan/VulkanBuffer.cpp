@@ -175,8 +175,12 @@ namespace RHI
 		if (m_bCoherent)
 		{
 			ASH_LOG_PROCESS_ERROR(bHostCoherent == m_bCoherent);
-			bool bRetCode = VulkanContext::get()->vma_map_memory(m_pVMAAllocation, (void**)&m_pMappedData);
-			ASH_LOG_PROCESS_ERROR(bRetCode);
+			if (!m_pMappedData)
+			{
+				bool bRetCode = VulkanContext::get()->vma_map_memory(m_pVMAAllocation, (void**)&m_pMappedData);
+				ASH_LOG_PROCESS_ERROR(bRetCode);
+				m_bOwnsPersistentMap = bRetCode;
+			}
 		}
 		//fill descriptor info structure
 		{
@@ -205,6 +209,20 @@ namespace RHI
 		defaultCBV.reset();
 		defaultSRV.reset();
 		defaultUAV.reset();
+		if (m_bOwnsPersistentMap && m_pVMAAllocation)
+		{
+			VulkanContext::get()->vma_unmap_memory(m_pVMAAllocation);
+			m_bOwnsPersistentMap = false;
+			m_pMappedData = nullptr;
+		}
+		if (m_pVkBuffer == VK_NULL_HANDLE || !m_pVMAAllocation)
+		{
+			m_pVkBuffer = VK_NULL_HANDLE;
+			m_pVMAAllocation = nullptr;
+			m_pMappedData = nullptr;
+			m_bReady = false;
+			return;
+		}
 		if (immediate_deletion)
 		{
 			ASH_VMA_DESTROY_BUFFER(VulkanContext::get(), m_pVkBuffer, m_pVMAAllocation);
@@ -222,6 +240,7 @@ namespace RHI
 				m_pVMAAllocation = nullptr;
 			}
 		}
+		m_pMappedData = nullptr;
 		m_bReady = false;
 	}
 	auto VulkanBuffer::get_size() -> uint32_t

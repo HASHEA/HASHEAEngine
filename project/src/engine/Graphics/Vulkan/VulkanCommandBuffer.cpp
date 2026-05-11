@@ -993,7 +993,9 @@ namespace RHI
 		for (uint32_t i = 0; i < uBarrierCount; i++)
 		{
 			auto& iter = pBarrierInfo[i];
-			if (!iter.pTexture && !iter.pBuffer)
+			if (iter.eType == AshBarrier::EType::Unknown ||
+				(iter.eType == AshBarrier::EType::Texture && !iter.pTexture) ||
+				(iter.eType == AshBarrier::EType::Buffer && !iter.pBuffer))
 				continue;
 
 			switch (iter.eType)
@@ -1016,7 +1018,9 @@ namespace RHI
 		for (uint32_t i = 0; i < uBarrierCount; i++)
 		{
 			auto& iter = pBarrierInfo[i];
-			if (!iter.pTexture && !iter.pBuffer)
+			if (iter.eType == AshBarrier::EType::Unknown ||
+				(iter.eType == AshBarrier::EType::Texture && !iter.pTexture) ||
+				(iter.eType == AshBarrier::EType::Buffer && !iter.pBuffer))
 				continue;
 
 

@@ -4,6 +4,7 @@
 #include "Base/window/Window.h"
 #include "Function/Application.h"
 #include "Function/Render/RenderDevice.h"
+#include "Function/Render/RenderFormatUtils.h"
 #include "Graphics/RenderPass.h"
 #include "Graphics/Swapchain.h"
 #include "Graphics/Texture.h"
@@ -13,12 +14,12 @@
 #include <mutex>
 
 #if defined(ASH_HAS_VULKAN)
-#include "Graphics/Vullkan/VulkanCommandBuffer.h"
-#include "Graphics/Vullkan/VulkanContext.h"
-#include "Graphics/Vullkan/VulkanHelper.hpp"
-#include "Graphics/Vullkan/VulkanRenderPass.h"
-#include "Graphics/Vullkan/VulkanSampler.h"
-#include "Graphics/Vullkan/VulkanTexture.h"
+#include "Graphics/Vulkan/VulkanCommandBuffer.h"
+#include "Graphics/Vulkan/VulkanContext.h"
+#include "Graphics/Vulkan/VulkanHelper.hpp"
+#include "Graphics/Vulkan/VulkanRenderPass.h"
+#include "Graphics/Vulkan/VulkanSampler.h"
+#include "Graphics/Vulkan/VulkanTexture.h"
 #include "imgui_impl_vulkan.h"
 #endif
 
@@ -170,30 +171,6 @@ namespace AshEngine
 				break;
 			}
 		}
-
-		static auto to_rhi_format(RenderTextureFormat format) -> RHI::AshFormat
-		{
-			switch (format)
-			{
-			case RenderTextureFormat::RGBA8_UNORM:
-				return RHI::ASH_FORMAT_R8G8B8A8_UNORM;
-			case RenderTextureFormat::BGRA8_UNORM:
-				return RHI::ASH_FORMAT_B8G8R8A8_UNORM;
-			case RenderTextureFormat::BGRA8_SRGB:
-				return RHI::ASH_FORMAT_B8G8R8A8_SRGB;
-			case RenderTextureFormat::RGBA16_SFLOAT:
-				return RHI::ASH_FORMAT_R16G16B16A16_SFLOAT;
-			case RenderTextureFormat::RGBA32_SFLOAT:
-				return RHI::ASH_FORMAT_R32G32B32A32_SFLOAT;
-			case RenderTextureFormat::D24_UNORM_S8_UINT:
-				return RHI::ASH_FORMAT_D24_UNORM_S8_UINT;
-			case RenderTextureFormat::D32_SFLOAT:
-				return RHI::ASH_FORMAT_D32_SFLOAT;
-			default:
-				return RHI::ASH_FORMAT_UNDEFINED;
-			}
-		}
-
 #if defined(ASH_HAS_VULKAN)
 		static void check_imgui_vk_result(VkResult result)
 		{
@@ -805,7 +782,7 @@ namespace AshEngine
 			pool_info.pPoolSizes = &pool_size;
 			ASH_PROCESS_ERROR(vkCreateDescriptorPool(RHI::VulkanContext::get_vulkan_device(), &pool_info, RHI::VulkanContext::get_vulkan_allocation_callbacks(), &m_vk_descriptor_pool) == VK_SUCCESS);
 
-			const RHI::AshFormat back_buffer_format = to_rhi_format(back_buffer->get_format());
+			const RHI::AshFormat back_buffer_format = render_texture_format_to_rhi(back_buffer->get_format());
 			const VkFormat vk_color_attachment_format = RHI::get_vk_texture_format_info(back_buffer_format).vkFormat;
 			ASH_PROCESS_ERROR(vk_color_attachment_format != VK_FORMAT_UNDEFINED);
 
@@ -980,7 +957,7 @@ namespace AshEngine
 			m_dx12_heap_cpu_start = m_dx12_srv_heap->GetCPUDescriptorHandleForHeapStart();
 			m_dx12_heap_gpu_start = m_dx12_srv_heap->GetGPUDescriptorHandleForHeapStart();
 
-			const DXGI_FORMAT rtv_format = RHI::ash_to_dxgi_format(to_rhi_format(back_buffer->get_format()));
+			const DXGI_FORMAT rtv_format = RHI::ash_to_dxgi_format(render_texture_format_to_rhi(back_buffer->get_format()));
 			bResult = ImGui_ImplDX12_Init(
 				dx12_context->get_device(),
 				static_cast<int>(get_imgui_image_count()),

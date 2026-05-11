@@ -12,10 +12,12 @@
 #include "Graphics/GpuProfilerRHI.h"
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
+#include "Function/Render/RenderFormatUtils.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -105,6 +107,130 @@ namespace AshEngine
 		static void hash_combine_uint64(uint64_t& seed, uint64_t value)
 		{
 			seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+		}
+
+		static bool is_read_only_barrier_state(RHI::AshResourceState state)
+		{
+			const RHI::AshResourceState read_mask =
+				RHI::AshResourceState::IndirectArgs |
+				RHI::AshResourceState::VertexBuffer |
+				RHI::AshResourceState::IndexBuffer |
+				RHI::AshResourceState::ConstBuffer |
+				RHI::AshResourceState::SRVCompute |
+				RHI::AshResourceState::SRVGraphicsPixel |
+				RHI::AshResourceState::SRVGraphicsNonPixel |
+				RHI::AshResourceState::CopySrc |
+				RHI::AshResourceState::ResolveSrc |
+				RHI::AshResourceState::DSVRead |
+				RHI::AshResourceState::BVHRead |
+				RHI::AshResourceState::SBTRead;
+
+			const RHI::AshResourceState write_mask =
+				RHI::AshResourceState::UAVCompute |
+				RHI::AshResourceState::UAVGraphics |
+				RHI::AshResourceState::RTV |
+				RHI::AshResourceState::CopyDst |
+				RHI::AshResourceState::ResolveDst |
+				RHI::AshResourceState::DSVWrite |
+				RHI::AshResourceState::BVHWrite |
+				RHI::AshResourceState::Discard;
+
+			return state != RHI::AshResourceState::Unknown &&
+				(state & write_mask) == RHI::AshResourceState::Unknown &&
+				(state & read_mask) != RHI::AshResourceState::Unknown;
+		}
+
+		struct ReadOnlyBarrierKey
+		{
+			const void* resource = nullptr;
+			RHI::AshBarrier::EType type = RHI::AshBarrier::EType::Unknown;
+			RHI::AshResourceState dst_state = RHI::AshResourceState::Unknown;
+			uint32_t base_mip = 0;
+			uint32_t base_slice = 0;
+			uint32_t mip_count = 0;
+			uint32_t slice_count = 0;
+
+			bool operator==(const ReadOnlyBarrierKey& other) const
+			{
+				return resource == other.resource &&
+					type == other.type &&
+					dst_state == other.dst_state &&
+					base_mip == other.base_mip &&
+					base_slice == other.base_slice &&
+					mip_count == other.mip_count &&
+					slice_count == other.slice_count;
+			}
+		};
+
+		struct ReadOnlyBarrierKeyHasher
+		{
+			size_t operator()(const ReadOnlyBarrierKey& key) const
+			{
+				uint64_t hash_value = reinterpret_cast<uintptr_t>(key.resource);
+				hash_combine_uint64(hash_value, static_cast<uint64_t>(key.type));
+				hash_combine_uint64(hash_value, static_cast<uint64_t>(key.dst_state));
+				hash_combine_uint64(hash_value, key.base_mip);
+				hash_combine_uint64(hash_value, key.base_slice);
+				hash_combine_uint64(hash_value, key.mip_count);
+				hash_combine_uint64(hash_value, key.slice_count);
+				return static_cast<size_t>(hash_value);
+			}
+		};
+
+		static bool make_read_only_barrier_key(const RHI::AshBarrier& barrier, ReadOnlyBarrierKey& out_key)
+		{
+			if (!is_read_only_barrier_state(barrier.eDSTAccess))
+			{
+				return false;
+			}
+
+			const void* resource = nullptr;
+			if (barrier.eType == RHI::AshBarrier::EType::Texture)
+			{
+				resource = barrier.pTexture.get();
+			}
+			else if (barrier.eType == RHI::AshBarrier::EType::Buffer)
+			{
+				resource = barrier.pBuffer.get();
+			}
+			if (!resource)
+			{
+				return false;
+			}
+
+			out_key.resource = resource;
+			out_key.type = barrier.eType;
+			out_key.dst_state = barrier.eDSTAccess;
+			out_key.base_mip = barrier.uBaseMipLevel;
+			out_key.base_slice = barrier.uBaseArraySlice;
+			out_key.mip_count = barrier.uMipCount;
+			out_key.slice_count = barrier.uArrayCount;
+			return true;
+		}
+
+		static void coalesce_read_only_barriers(
+			const std::vector<RHI::AshBarrier>& barriers,
+			std::vector<RHI::AshBarrier>& out_barriers)
+		{
+			out_barriers.clear();
+			if (barriers.empty())
+			{
+				return;
+			}
+
+			std::unordered_set<ReadOnlyBarrierKey, ReadOnlyBarrierKeyHasher> seen_read_only_barriers;
+			seen_read_only_barriers.reserve(barriers.size());
+			out_barriers.reserve(barriers.size());
+			for (const RHI::AshBarrier& barrier : barriers)
+			{
+				ReadOnlyBarrierKey key{};
+				if (make_read_only_barrier_key(barrier, key) &&
+					!seen_read_only_barriers.insert(key).second)
+				{
+					continue;
+				}
+				out_barriers.push_back(barrier);
+			}
 		}
 
 		struct RenderPassCacheKeyHasher
@@ -553,61 +679,6 @@ namespace AshEngine
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-		static bool is_depth_format(RenderTextureFormat format)
-		{
-			return format == RenderTextureFormat::D24_UNORM_S8_UINT || format == RenderTextureFormat::D32_SFLOAT;
-		}
-
-		static RHI::AshFormat to_rhi_format(RenderTextureFormat format)
-		{
-			switch (format)
-			{
-			case RenderTextureFormat::RGBA8_UNORM:
-				return RHI::ASH_FORMAT_R8G8B8A8_UNORM;
-			case RenderTextureFormat::RGBA8_SRGB:
-				return RHI::ASH_FORMAT_R8G8B8A8_SRGB;
-			case RenderTextureFormat::BGRA8_UNORM:
-				return RHI::ASH_FORMAT_B8G8R8A8_UNORM;
-			case RenderTextureFormat::BGRA8_SRGB:
-				return RHI::ASH_FORMAT_B8G8R8A8_SRGB;
-			case RenderTextureFormat::RGBA16_SFLOAT:
-				return RHI::ASH_FORMAT_R16G16B16A16_SFLOAT;
-			case RenderTextureFormat::RGBA32_SFLOAT:
-				return RHI::ASH_FORMAT_R32G32B32A32_SFLOAT;
-			case RenderTextureFormat::D24_UNORM_S8_UINT:
-				return RHI::ASH_FORMAT_D24_UNORM_S8_UINT;
-			case RenderTextureFormat::D32_SFLOAT:
-				return RHI::ASH_FORMAT_D32_SFLOAT;
-			default:
-				return RHI::ASH_FORMAT_UNDEFINED;
-			}
-		}
-
-		static RenderTextureFormat from_rhi_format(RHI::AshFormat format)
-		{
-			switch (format)
-			{
-			case RHI::ASH_FORMAT_R8G8B8A8_UNORM:
-				return RenderTextureFormat::RGBA8_UNORM;
-			case RHI::ASH_FORMAT_R8G8B8A8_SRGB:
-				return RenderTextureFormat::RGBA8_SRGB;
-			case RHI::ASH_FORMAT_B8G8R8A8_UNORM:
-				return RenderTextureFormat::BGRA8_UNORM;
-			case RHI::ASH_FORMAT_B8G8R8A8_SRGB:
-				return RenderTextureFormat::BGRA8_SRGB;
-			case RHI::ASH_FORMAT_R16G16B16A16_SFLOAT:
-				return RenderTextureFormat::RGBA16_SFLOAT;
-			case RHI::ASH_FORMAT_R32G32B32A32_SFLOAT:
-				return RenderTextureFormat::RGBA32_SFLOAT;
-			case RHI::ASH_FORMAT_D24_UNORM_S8_UINT:
-				return RenderTextureFormat::D24_UNORM_S8_UINT;
-			case RHI::ASH_FORMAT_D32_SFLOAT:
-				return RenderTextureFormat::D32_SFLOAT;
-			default:
-				return RenderTextureFormat::Unknown;
-			}
-		}
-
 		static RHI::AshLoadOption to_rhi_load_action(RenderLoadAction action)
 		{
 			switch (action)
@@ -1008,7 +1079,7 @@ namespace AshEngine
 		texture_creation.depth = 1;
 		texture_creation.array_layer_count = 1;
 		texture_creation.mip_level_count = 1;
-		texture_creation.format = to_rhi_format(desc.format);
+		texture_creation.format = render_texture_format_to_rhi(desc.format);
 		texture_creation.type = RHI::Ash_Texture2D;
 		texture_creation.initial_state = RHI::AshResourceState::Unknown;
 		texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
@@ -1017,7 +1088,7 @@ namespace AshEngine
 		texture_creation.optimized_clear_color = to_rhi_color_value(desc.optimized_clear_color);
 		texture_creation.optimized_clear_depth_stencil = to_rhi_depth_stencil_value(desc.optimized_clear_depth_stencil);
 
-		const bool depth_stencil = is_depth_format(desc.format);
+		const bool depth_stencil = is_depth_render_texture_format(desc.format);
 		texture_creation.uUsageFlags = depth_stencil ? RHI::ASH_TEXTURE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : RHI::ASH_TEXTURE_USAGE_COLOR_ATTACHMENT_BIT;
 		if (desc.shader_resource)
 		{
@@ -1044,33 +1115,6 @@ namespace AshEngine
 		return impl;
 	}
 
-		static uint32_t get_texture_upload_bytes_per_pixel(RenderTextureFormat format)
-		{
-			switch (format)
-			{
-			case RenderTextureFormat::RGBA8_UNORM:
-			case RenderTextureFormat::RGBA8_SRGB:
-			case RenderTextureFormat::BGRA8_UNORM:
-			case RenderTextureFormat::BGRA8_SRGB:
-				return 4u;
-			case RenderTextureFormat::RGBA16_SFLOAT:
-				return 8u;
-			case RenderTextureFormat::RGBA32_SFLOAT:
-				return 16u;
-			default:
-				return 0u;
-			}
-		}
-
-		static RenderTextureFormat resolve_texture_upload_public_format(const TextureUploadDesc& desc)
-		{
-			if (desc.format == RenderTextureFormat::RGBA8_UNORM && desc.srgb)
-			{
-				return RenderTextureFormat::RGBA8_SRGB;
-			}
-			return desc.format;
-		}
-
 		static std::shared_ptr<RenderTarget::Impl> create_texture_2d_impl(
 			RHI::GraphicsContext* graphics_context,
 			const TextureUploadDesc& desc)
@@ -1081,13 +1125,13 @@ namespace AshEngine
 			}
 
 			const RenderTextureFormat public_format = resolve_texture_upload_public_format(desc);
-			const uint32_t bytes_per_pixel = get_texture_upload_bytes_per_pixel(public_format);
-			if (bytes_per_pixel == 0u || is_depth_format(public_format))
+			const RenderTextureFormatBlockInfo block_info = get_render_texture_format_block_info(public_format);
+			if (block_info.bytes_per_block == 0u || block_info.width_per_block == 0u || block_info.height_per_block == 0u || is_depth_render_texture_format(public_format))
 			{
 				return nullptr;
 			}
 
-			const uint32_t tight_row_pitch = static_cast<uint32_t>(desc.width) * bytes_per_pixel;
+			const uint32_t tight_row_pitch = calculate_render_texture_tight_row_pitch(public_format, desc.width);
 			uint32_t source_row_pitch = desc.row_pitch == 0 ? tight_row_pitch : desc.row_pitch;
 			if (desc.initial_data && source_row_pitch < tight_row_pitch)
 			{
@@ -1103,7 +1147,8 @@ namespace AshEngine
 
 			const void* initial_data = desc.initial_data;
 			std::vector<uint8_t> repacked_upload_data{};
-			if (desc.initial_data && desc.mip_level_count == 1 && source_row_pitch != tight_row_pitch)
+			const bool can_repack_rows = block_info.width_per_block == 1u && block_info.height_per_block == 1u;
+			if (desc.initial_data && desc.mip_level_count == 1 && source_row_pitch != tight_row_pitch && can_repack_rows)
 			{
 				repacked_upload_data.resize(static_cast<size_t>(tight_row_pitch) * static_cast<size_t>(desc.height), 0u);
 				const uint8_t* src_rows = static_cast<const uint8_t*>(desc.initial_data);
@@ -1117,6 +1162,13 @@ namespace AshEngine
 				initial_data = repacked_upload_data.data();
 				source_row_pitch = tight_row_pitch;
 			}
+			if (desc.initial_data && source_row_pitch != tight_row_pitch)
+			{
+				HLogError(
+					"RenderDevice: texture uploads with block-compressed data or multiple mips must use tightly packed rows for '{}'.",
+					desc.name ? desc.name : "UnnamedTexture");
+				return nullptr;
+			}
 
 			RHI::TextureCreation texture_creation{};
 			texture_creation.initial_data = const_cast<void*>(initial_data);
@@ -1125,7 +1177,7 @@ namespace AshEngine
 			texture_creation.depth = 1;
 			texture_creation.array_layer_count = 1;
 			texture_creation.mip_level_count = desc.mip_level_count;
-			texture_creation.format = to_rhi_format(public_format);
+			texture_creation.format = render_texture_format_to_rhi(public_format);
 			texture_creation.type = RHI::Ash_Texture2D;
 			texture_creation.initial_state = RHI::AshResourceState::SRVGraphics;
 			texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
@@ -1820,14 +1872,19 @@ namespace AshEngine
 			{
 				break;
 			}
+			std::vector<RHI::AshBarrier> coalesced_barriers;
+			coalesce_read_only_barriers(barriers, coalesced_barriers);
+			const std::vector<RHI::AshBarrier>& barriers_to_submit =
+				coalesced_barriers.empty() ? barriers : coalesced_barriers;
+
 			ASH_PROFILE_SCOPE_NC("RenderDevice::SubmitResourceBarriers", AshEngine::Profile::Color::Barrier);
-			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(barriers.size()));
-			bResult = command_buffer->cmd_transition_resource_state(barriers.data(), static_cast<uint32_t>(barriers.size()));
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(barriers_to_submit.size()));
+			bResult = command_buffer->cmd_transition_resource_state(barriers_to_submit.data(), static_cast<uint32_t>(barriers_to_submit.size()));
 			if (!bResult || command_buffer->has_error())
 			{
 				HLogError(
 					"RenderDevice: failed to record {} resource barrier(s). CommandBuffer error: {}",
-					barriers.size(),
+					barriers_to_submit.size(),
 					command_buffer->get_last_error().empty() ? "<none>" : command_buffer->get_last_error());
 				ASH_PROCESS_ERROR(false);
 			}
@@ -3292,7 +3349,7 @@ namespace AshEngine
 		m_impl->swapchain_target->shader_resource = false;
 		m_impl->swapchain_target->unordered_access = false;
 		m_impl->swapchain_target->depth_stencil = false;
-		m_impl->swapchain_target->format = from_rhi_format(m_impl->swapchain->get_format());
+		m_impl->swapchain_target->format = render_texture_format_from_rhi(m_impl->swapchain->get_format());
 	}
 
 	bool RenderDevice::render_present_to_swapchain()

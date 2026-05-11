@@ -5,8 +5,9 @@
 #include "Function/Application.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/VertexLayoutPresets.h"
-#include <cstring>
+#include <cstdint>
 #include <limits>
+#include <unordered_map>
 
 namespace AshEngine
 {
@@ -26,6 +27,86 @@ namespace AshEngine
 		}
 
 		static constexpr size_t k_max_scratch_depth_targets = 8u;
+
+		struct StaticMeshDrawBatch
+		{
+			GraphicsProgram* program = nullptr;
+			std::shared_ptr<StaticMeshRenderAsset> render_asset = nullptr;
+			std::shared_ptr<VertexBuffer> vertex_buffer = nullptr;
+			std::shared_ptr<IndexBuffer> index_buffer = nullptr;
+			uint32_t first_index = 0;
+			uint32_t index_count = 0;
+			std::vector<SceneStaticMeshInstanceData> instances{};
+		};
+
+		struct StaticMeshDrawBatchKey
+		{
+			GraphicsProgram* program = nullptr;
+			StaticMeshRenderAsset* render_asset = nullptr;
+			uint32_t first_index = 0;
+			uint32_t index_count = 0;
+
+			bool operator==(const StaticMeshDrawBatchKey& rhs) const
+			{
+				return program == rhs.program &&
+					render_asset == rhs.render_asset &&
+					first_index == rhs.first_index &&
+					index_count == rhs.index_count;
+			}
+		};
+
+		struct StaticMeshDrawBatchKeyHash
+		{
+			size_t operator()(const StaticMeshDrawBatchKey& key) const
+			{
+				size_t hash_value = reinterpret_cast<uintptr_t>(key.program);
+				hash_value ^= reinterpret_cast<uintptr_t>(key.render_asset) + 0x9e3779b97f4a7c15ull + (hash_value << 6) + (hash_value >> 2);
+				hash_value ^= static_cast<size_t>(key.first_index) + 0x9e3779b97f4a7c15ull + (hash_value << 6) + (hash_value >> 2);
+				hash_value ^= static_cast<size_t>(key.index_count) + 0x9e3779b97f4a7c15ull + (hash_value << 6) + (hash_value >> 2);
+				return hash_value;
+			}
+		};
+
+		static auto make_instance_data(const glm::mat4& object_to_clip) -> SceneStaticMeshInstanceData
+		{
+			SceneStaticMeshInstanceData data{};
+			data.object_to_clip_col0 = object_to_clip[0];
+			data.object_to_clip_col1 = object_to_clip[1];
+			data.object_to_clip_col2 = object_to_clip[2];
+			data.object_to_clip_col3 = object_to_clip[3];
+			return data;
+		}
+
+		static auto find_or_add_batch(
+			std::vector<StaticMeshDrawBatch>& batches,
+			std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash>& batch_lookup,
+			GraphicsProgram* program,
+			const std::shared_ptr<StaticMeshRenderAsset>& render_asset,
+			const ResolvedStaticMeshSection& section) -> StaticMeshDrawBatch&
+		{
+			StaticMeshDrawBatchKey key{};
+			key.program = program;
+			key.render_asset = render_asset.get();
+			key.first_index = section.first_index;
+			key.index_count = section.index_count;
+			const auto found = batch_lookup.find(key);
+			if (found != batch_lookup.end())
+			{
+				return batches[found->second];
+			}
+
+			StaticMeshDrawBatch batch{};
+			batch.program = program;
+			batch.render_asset = render_asset;
+			batch.vertex_buffer = render_asset && render_asset->resource ? render_asset->resource->vertex_buffer : nullptr;
+			batch.index_buffer = render_asset && render_asset->resource ? render_asset->resource->index_buffer : nullptr;
+			batch.first_index = section.first_index;
+			batch.index_count = section.index_count;
+			batches.push_back(std::move(batch));
+			batch_lookup.emplace(key, batches.size() - 1);
+			return batches.back();
+		}
+
 	}
 
 	bool SceneRenderer::initialize(Renderer* renderer)
@@ -37,6 +118,7 @@ namespace AshEngine
 	void SceneRenderer::shutdown()
 	{
 		m_scratch_depth_targets.clear();
+		m_instance_buffers.clear();
 		m_logged_warning_keys.clear();
 		m_logged_material_usage_keys.clear();
 		m_renderer = nullptr;
@@ -68,6 +150,10 @@ namespace AshEngine
 		Renderer::GraphicsPassContext pass_context{};
 		ASH_PROCESS_ERROR(m_renderer->begin_pass(pass_desc, pass_context));
 
+		std::vector<StaticMeshDrawBatch> batches{};
+		batches.reserve(frame.static_mesh_draws.size());
+		std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash> batch_lookup{};
+		batch_lookup.reserve(frame.static_mesh_draws.size());
 		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
 		{
 			ASH_PROCESS_ERROR(draw.render_asset && draw.render_asset->is_gpu_ready());
@@ -123,37 +209,71 @@ namespace AshEngine
 
 				log_basepass_usage_once(*section.material, *material_resource);
 
-				SceneObjectConstants constants{};
-				constants.object_to_clip = frame.view_projection * draw.world_transform;
-
-				GraphicsDrawDesc draw_desc{};
-				draw_desc.program = program;
-				draw_desc.vertex_buffers.push_back({
-					0,
-					draw.render_asset->resource->vertex_buffer,
-					0
-				});
-				draw_desc.index_buffer = draw.render_asset->resource->index_buffer;
-				draw_desc.first_index = section.first_index;
-				draw_desc.index_count = section.index_count;
-				draw_desc.instance_count = 1;
-				draw_desc.vertex_offset = 0;
-				draw_desc.has_viewport = view_context.has_viewport;
-				if (view_context.has_viewport)
-				{
-					draw_desc.viewport = view_context.viewport;
-				}
-				draw_desc.has_scissor = view_context.has_scissor;
-				if (view_context.has_scissor)
-				{
-					draw_desc.scissor = view_context.scissor;
-				}
-				draw_desc.const_data_size = static_cast<uint32_t>(sizeof(SceneObjectConstants));
-				static_assert(sizeof(SceneObjectConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
-				std::memcpy(draw_desc.inline_const_data.data(), &constants, sizeof(SceneObjectConstants));
-				draw_desc.inline_const_data_valid = true;
-				ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
+				StaticMeshDrawBatch& batch = find_or_add_batch(batches, batch_lookup, program, draw.render_asset, section);
+				batch.instances.push_back(make_instance_data(frame.view_projection * draw.world_transform));
 			}
+		}
+
+		ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(batches.size()));
+		for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
+		{
+			StaticMeshDrawBatch& batch = batches[batch_index];
+			ASH_PROCESS_ERROR(batch.program && batch.vertex_buffer && batch.index_buffer && !batch.instances.empty());
+			const uint32_t instance_count = static_cast<uint32_t>(batch.instances.size());
+			const uint32_t instance_buffer_size =
+				static_cast<uint32_t>(sizeof(SceneStaticMeshInstanceData) * batch.instances.size());
+
+			if (batch_index >= m_instance_buffers.size())
+			{
+				m_instance_buffers.resize(batch_index + 1);
+			}
+
+			SceneInstanceBufferEntry& instance_buffer_entry = m_instance_buffers[batch_index];
+			if (!instance_buffer_entry.buffer || instance_buffer_entry.capacity < instance_count)
+			{
+				VertexBufferDesc instance_buffer_desc{};
+				instance_buffer_desc.size = instance_buffer_size;
+				instance_buffer_desc.stride = static_cast<uint32_t>(sizeof(SceneStaticMeshInstanceData));
+				instance_buffer_desc.cpu_write = true;
+				instance_buffer_desc.initial_data = batch.instances.data();
+				instance_buffer_desc.name = "SceneStaticMeshInstanceBuffer";
+				instance_buffer_entry.buffer = m_renderer->create_vertex_buffer(instance_buffer_desc);
+				ASH_PROCESS_ERROR(instance_buffer_entry.buffer != nullptr);
+				instance_buffer_entry.capacity = instance_count;
+			}
+			else
+			{
+				ASH_PROCESS_ERROR(instance_buffer_entry.buffer->update(0, instance_buffer_size, batch.instances.data()));
+			}
+
+			GraphicsDrawDesc draw_desc{};
+			draw_desc.program = batch.program;
+			draw_desc.vertex_buffers.push_back({
+				0,
+				batch.vertex_buffer,
+				0
+			});
+			draw_desc.vertex_buffers.push_back({
+				1,
+				instance_buffer_entry.buffer,
+				0
+			});
+			draw_desc.index_buffer = batch.index_buffer;
+			draw_desc.first_index = batch.first_index;
+			draw_desc.index_count = batch.index_count;
+			draw_desc.instance_count = instance_count;
+			draw_desc.vertex_offset = 0;
+			draw_desc.has_viewport = view_context.has_viewport;
+			if (view_context.has_viewport)
+			{
+				draw_desc.viewport = view_context.viewport;
+			}
+			draw_desc.has_scissor = view_context.has_scissor;
+			if (view_context.has_scissor)
+			{
+				draw_desc.scissor = view_context.scissor;
+			}
+			ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
 		}
 
 		pass_context.end();

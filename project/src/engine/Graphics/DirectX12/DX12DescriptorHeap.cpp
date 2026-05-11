@@ -1,6 +1,7 @@
 #include "DX12DescriptorHeap.h"
 #include "Base/hlog.h"
 #include "Base/hassert.h"
+#include <utility>
 
 namespace RHI
 {
@@ -174,6 +175,8 @@ namespace RHI
 
 	void DX12DescriptorHeapManager::shutdown()
 	{
+		m_frameCbvSrvUavTableCache.clear();
+		m_frameSamplerTableCache.clear();
 		cpuCbvSrvUav.shutdown();
 		cpuSampler.shutdown();
 		cpuRtv.shutdown();
@@ -184,7 +187,71 @@ namespace RHI
 
 	void DX12DescriptorHeapManager::begin_frame()
 	{
+		m_frameCbvSrvUavTableCache.clear();
+		m_frameSamplerTableCache.clear();
 		gpuCbvSrvUav.reset_frame_allocation();
 		gpuSampler.reset_frame_allocation();
+	}
+
+	bool DX12DescriptorHeapManager::find_or_create_shader_visible_table(
+		ID3D12Device* device,
+		D3D12_DESCRIPTOR_HEAP_TYPE heapType,
+		const D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandles,
+		uint32_t descriptorCount,
+		DX12DescriptorHandle& outHandle)
+	{
+		outHandle = {};
+		if (!device || !cpuHandles || descriptorCount == 0)
+		{
+			return false;
+		}
+
+		const bool samplerHeap = heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+		DX12GPUDescriptorHeap& targetHeap = samplerHeap ? gpuSampler : gpuCbvSrvUav;
+		auto& tableCache = samplerHeap ? m_frameSamplerTableCache : m_frameCbvSrvUavTableCache;
+
+		DescriptorTableCacheKey key{};
+		key.heapType = heapType;
+		key.cpuHandles.reserve(descriptorCount);
+		for (uint32_t index = 0; index < descriptorCount; ++index)
+		{
+			if (cpuHandles[index].ptr == 0)
+			{
+				HLogError("DX12DescriptorHeapManager: cannot cache a descriptor table with a null CPU handle.");
+				return false;
+			}
+			key.cpuHandles.push_back(cpuHandles[index].ptr);
+		}
+
+		const auto cached = tableCache.find(key);
+		if (cached != tableCache.end())
+		{
+			outHandle = cached->second;
+			return true;
+		}
+
+		DX12DescriptorHandle gpuHandle = targetHeap.allocate(descriptorCount);
+		if (!gpuHandle.is_shader_visible())
+		{
+			return false;
+		}
+
+		if (descriptorCount == 1)
+		{
+			device->CopyDescriptorsSimple(1, gpuHandle.cpuHandle, cpuHandles[0], heapType);
+		}
+		else
+		{
+			for (uint32_t index = 0; index < descriptorCount; ++index)
+			{
+				D3D12_CPU_DESCRIPTOR_HANDLE destination{};
+				destination.ptr = gpuHandle.cpuHandle.ptr + static_cast<SIZE_T>(index) * targetHeap.get_descriptor_size();
+				device->CopyDescriptorsSimple(1, destination, cpuHandles[index], heapType);
+			}
+		}
+
+		outHandle = gpuHandle;
+		tableCache.emplace(std::move(key), gpuHandle);
+		return true;
 	}
 }

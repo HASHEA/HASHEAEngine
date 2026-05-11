@@ -5,6 +5,7 @@
 #include "Base/hcore.h"
 #include <Base/hmemory.h>
 #include <memory>
+#include <utility>
 namespace RHI
 {
 
@@ -95,6 +96,36 @@ namespace RHI
 			return uBaseMipLevel == 0 && uBaseArraySlice == 0 && uMipCount == s_All && uArrayCount == s_All;
 		}
 
+		inline AshSubresourceRange resolve(uint32_t mipLevelCount, uint32_t arrayLayerCount) const
+		{
+			AshSubresourceRange resolved = *this;
+			if (mipLevelCount == 0)
+			{
+				resolved.uBaseMipLevel = 0;
+				resolved.uMipCount = 0;
+			}
+			else
+			{
+				resolved.uBaseMipLevel = resolved.uBaseMipLevel < mipLevelCount ? resolved.uBaseMipLevel : (mipLevelCount - 1);
+				const uint32_t remainingMips = mipLevelCount - resolved.uBaseMipLevel;
+				resolved.uMipCount = resolved.uMipCount == s_All || resolved.uMipCount > remainingMips ? remainingMips : resolved.uMipCount;
+			}
+
+			if (arrayLayerCount == 0)
+			{
+				resolved.uBaseArraySlice = 0;
+				resolved.uArrayCount = 0;
+			}
+			else
+			{
+				resolved.uBaseArraySlice = resolved.uBaseArraySlice < arrayLayerCount ? resolved.uBaseArraySlice : (arrayLayerCount - 1);
+				const uint32_t remainingLayers = arrayLayerCount - resolved.uBaseArraySlice;
+				resolved.uArrayCount = resolved.uArrayCount == s_All || resolved.uArrayCount > remainingLayers ? remainingLayers : resolved.uArrayCount;
+			}
+
+			return resolved;
+		}
+
 		inline bool operator==(AshSubresourceRange const& RHS) const
 		{
 			return uBaseMipLevel == RHS.uBaseMipLevel && uBaseArraySlice == RHS.uBaseArraySlice && uMipCount == RHS.uMipCount && uArrayCount == RHS.uArrayCount;
@@ -153,10 +184,8 @@ namespace RHI
 	RHI_ENUM_CLASS_OPERATORS(AshResourceState);
 	struct AshBarrier : public AshSubresourceRange
 	{
-		union {
-			std::shared_ptr<Texture> pTexture;
-			std::shared_ptr<Buffer> pBuffer;
-		};
+		std::shared_ptr<Texture> pTexture{};
+		std::shared_ptr<Buffer> pBuffer{};
 
 		enum class EType : uint8_t
 		{
@@ -169,101 +198,11 @@ namespace RHI
 		AshResourceState eDSTAccess = AshResourceState::Unknown;
 
 		AshBarrier() = default;
-		AshBarrier(const AshBarrier& other)
-			: AshSubresourceRange(other) 
-			, eType(other.eType)
-			, eSRCAccess(other.eSRCAccess)
-			, eDSTAccess(other.eDSTAccess)
-		{
-			if (other.eType == EType::Texture) {
-				new (&pTexture) std::shared_ptr<Texture>(other.pTexture);
-			}
-			else if (other.eType == EType::Buffer) {
-				new (&pBuffer) std::shared_ptr<Buffer>(other.pBuffer);
-			}
-		}
-
-		AshBarrier& operator=(const AshBarrier& other) {
-			if (this == &other) {
-				return *this; 
-			}
-
-			if (this->eType == EType::Texture) {
-				this->pTexture.~shared_ptr<Texture>();
-			}
-			else if (this->eType == EType::Buffer) {
-				this->pBuffer.~shared_ptr<Buffer>();
-			}
-
-			AshSubresourceRange::operator=(other);
-			this->eType = other.eType;
-			this->eSRCAccess = other.eSRCAccess;
-			this->eDSTAccess = other.eDSTAccess;
-
-			if (other.eType == EType::Texture) {
-				new (&this->pTexture) std::shared_ptr<Texture>(other.pTexture);
-			}
-			else if (other.eType == EType::Buffer) {
-				new (&this->pBuffer) std::shared_ptr<Buffer>(other.pBuffer);
-			}
-
-			return *this;
-		}
-
-		AshBarrier(AshBarrier&& other) noexcept
-			: AshSubresourceRange(std::move(other))
-			, eType(other.eType)
-			, eSRCAccess(other.eSRCAccess)
-			, eDSTAccess(other.eDSTAccess)
-		{
-			if (other.eType == EType::Texture) {
-				new (&pTexture) std::shared_ptr<Texture>(std::move(other.pTexture));
-			}
-			else if (other.eType == EType::Buffer) {
-				new (&pBuffer) std::shared_ptr<Buffer>(std::move(other.pBuffer));
-			}
-
-			other.eType = EType::Unknown;
-		}
-
-		AshBarrier& operator=(AshBarrier&& other) noexcept {
-			if (this == &other) {
-				return *this;
-			}
-
-			if (this->eType == EType::Texture) {
-				this->pTexture.~shared_ptr<Texture>();
-			}
-			else if (this->eType == EType::Buffer) {
-				this->pBuffer.~shared_ptr<Buffer>();
-			}
-
-			AshSubresourceRange::operator=(std::move(other));
-			this->eType = other.eType;
-			this->eSRCAccess = other.eSRCAccess;
-			this->eDSTAccess = other.eDSTAccess;
-
-			if (other.eType == EType::Texture) {
-				new (&this->pTexture) std::shared_ptr<Texture>(std::move(other.pTexture));
-			}
-			else if (other.eType == EType::Buffer) {
-				new (&this->pBuffer) std::shared_ptr<Buffer>(std::move(other.pBuffer));
-			}
-
-			other.eType = EType::Unknown;
-
-			return *this;
-		}
-
-		~AshBarrier()
-		{
-			if (eType == EType::Texture) {
-				pTexture.~shared_ptr<Texture>();
-			}
-			else if (eType == EType::Buffer) {
-				pBuffer.~shared_ptr<Buffer>();
-			}
-		}
+		AshBarrier(const AshBarrier& other) = default;
+		AshBarrier& operator=(const AshBarrier& other) = default;
+		AshBarrier(AshBarrier&& other) noexcept = default;
+		AshBarrier& operator=(AshBarrier&& other) noexcept = default;
+		~AshBarrier() = default;
 		AshBarrier(
 			std::shared_ptr<Texture> InTexture,
 			AshResourceState                   InPreviousState,
@@ -346,6 +285,4 @@ namespace RHI
 	};
 	
 }
-
-
 
