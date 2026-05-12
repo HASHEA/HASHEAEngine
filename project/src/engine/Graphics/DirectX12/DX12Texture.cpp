@@ -204,6 +204,12 @@ namespace RHI
 			auto view = std::make_shared<DX12TextureView>();
 			if (view->init(viewCI, std::static_pointer_cast<DX12Texture>(shared_from_this()), device, heapMgr))
 				m_defaultRTV = view; // DSV goes to defaultRTV for framebuffer usage
+
+			TextureViewCreation readOnlyViewCI = viewCI;
+			readOnlyViewCI.read_only_depth = true;
+			auto readOnlyView = std::make_shared<DX12TextureView>();
+			if (readOnlyView->init(readOnlyViewCI, std::static_pointer_cast<DX12Texture>(shared_from_this()), device, heapMgr))
+				m_defaultReadOnlyDSV = readOnlyView;
 		}
 
 		// SRV for sampled textures

@@ -1279,6 +1279,38 @@ namespace AshEngine
 		return result;
 	}
 
+	std::vector<SceneLightExtractionDesc> Scene::extract_light_entities() const
+	{
+		std::vector<SceneLightExtractionDesc> result{};
+		if (!m_impl)
+		{
+			return result;
+		}
+
+		for (EntityId id : m_impl->storage.entity_order)
+		{
+			const entt::entity handle = find_handle(m_impl, id);
+			if (handle == entt::null)
+			{
+				continue;
+			}
+
+			const LightComponent* light = m_impl->storage.registry.try_get<LightComponent>(handle);
+			if (!light)
+			{
+				continue;
+			}
+
+			SceneLightExtractionDesc desc{};
+			desc.entity_id = id;
+			desc.light = *light;
+			desc.world_transform = get_entity_world_matrix(m_impl, id);
+			result.push_back(std::move(desc));
+		}
+
+		return result;
+	}
+
 	bool Scene::try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);

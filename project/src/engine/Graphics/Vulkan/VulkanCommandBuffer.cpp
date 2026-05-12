@@ -461,8 +461,14 @@ namespace RHI
 			if (has_depth_attachment) {
 				VkAttachmentLoadOp depth_op;
 				depth_op = ash_load_operation_to_vk(renderPass->get_depth_stencil_operations());
+				const AshResourceState depth_final_state = renderPass->get_depth_stencil_attachment_final_state();
+				const bool depth_read_only =
+					has_any_flags((uint32_t)depth_final_state, (uint32_t)AshResourceState::DSVRead) &&
+					!has_any_flags((uint32_t)depth_final_state, (uint32_t)AshResourceState::DSVWrite);
 				depth_attachment_info.imageView = (VkImageView)depthStencilAttachment->get_default_rtv()->get_native_handle();
-				depth_attachment_info.imageLayout = VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2) ? VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+				depth_attachment_info.imageLayout = depth_read_only ?
+					VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+					(VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2) ? VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL_KHR : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 				depth_attachment_info.resolveMode = VK_RESOLVE_MODE_NONE;
 				depth_attachment_info.loadOp = depth_op;
 				depth_attachment_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -550,10 +556,14 @@ namespace RHI
 		}
 		if (depthAttachment != nullptr)
 		{
+			const AshResourceState depth_final_state = currentBoundRenderPass->get_depth_stencil_attachment_final_state();
+			const bool depth_read_only =
+				has_any_flags((uint32_t)depth_final_state, (uint32_t)AshResourceState::DSVRead) &&
+				!has_any_flags((uint32_t)depth_final_state, (uint32_t)AshResourceState::DSVWrite);
 			depthAttachment->set_resource_state(
 				dynamic_rendering ?
-				AshResourceState::DSVWrite :
-				currentBoundRenderPass->get_depth_stencil_attachment_final_state());
+				(depth_read_only ? depth_final_state : AshResourceState::DSVWrite) :
+				depth_final_state);
 		}
 		currentBoundRenderPass = nullptr;
 		currentBoundFramebuffer = nullptr;
@@ -1091,6 +1101,16 @@ namespace RHI
 						{
 							get_vk_stage_and_access_flags(has_any_flags((uint32_t)InSrcAccess, (uint32_t)AshResourceState::SRVMask) ? AshResourceState::UAVMask : InSrcAccess, iter.eType, uUsageFlags, bIsDepthStencil, srcStageMask, srcAccessFlags, srcLayout, true);
 							get_vk_stage_and_access_flags(has_any_flags((uint32_t)InDstAccess, (uint32_t)AshResourceState::SRVMask) ? AshResourceState::UAVMask : InDstAccess, iter.eType, uUsageFlags, bIsDepthStencil, dstStageMask, dstAccessFlags, dstLayout, false);
+						}
+						if (bIsDepthStencil &&
+							has_any_flags((uint32_t)InDstAccess, (uint32_t)AshResourceState::DSVWrite) &&
+							!has_any_flags((uint32_t)InSrcAccess, (uint32_t)AshResourceState::DSVWrite) &&
+							InSrcAccess != AshResourceState::Unknown)
+						{
+							// Reusing a depth target across frames can move from read-only back to writable;
+							// keep the source dependency conservative so prior depth writes are covered.
+							srcStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+							srcAccessFlags |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 						}
 
 						// If we're not transitioning across pipes and we don't need to perform layout transitions, we can express memory dependencies through a global memory barrier.

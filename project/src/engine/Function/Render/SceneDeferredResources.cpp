@@ -43,7 +43,8 @@ namespace AshEngine
 			m_height != height ||
 			m_layout_hash != layout.layout_hash ||
 			m_gbuffer_targets.size() != layout.attachments.size() ||
-			!m_depth_target;
+			!m_depth_target ||
+			!m_lighting_accum_target;
 		if (!needs_recreate)
 		{
 			break;
@@ -83,6 +84,18 @@ namespace AshEngine
 		m_depth_target = renderer.create_render_target(depth_desc);
 		ASH_PROCESS_ERROR(m_depth_target != nullptr);
 
+		RenderTargetDesc lighting_desc{};
+		lighting_desc.width = static_cast<uint16_t>(width);
+		lighting_desc.height = static_cast<uint16_t>(height);
+		lighting_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+		lighting_desc.shader_resource = true;
+		lighting_desc.unordered_access = false;
+		lighting_desc.name = "SceneDeferredLightingAccum";
+		lighting_desc.use_optimized_clear_value = true;
+		lighting_desc.optimized_clear_color = {};
+		m_lighting_accum_target = renderer.create_render_target(lighting_desc);
+		ASH_PROCESS_ERROR(m_lighting_accum_target != nullptr);
+
 		m_width = width;
 		m_height = height;
 		m_layout_hash = layout.layout_hash;
@@ -98,6 +111,7 @@ namespace AshEngine
 		m_layout = nullptr;
 		m_gbuffer_targets.clear();
 		m_depth_target.reset();
+		m_lighting_accum_target.reset();
 	}
 
 	const GBufferLayoutDesc* SceneDeferredResources::get_layout() const
@@ -113,5 +127,10 @@ namespace AshEngine
 	const std::shared_ptr<RenderTarget>& SceneDeferredResources::get_depth_target() const
 	{
 		return m_depth_target;
+	}
+
+	const std::shared_ptr<RenderTarget>& SceneDeferredResources::get_lighting_accum_target() const
+	{
+		return m_lighting_accum_target;
 	}
 }

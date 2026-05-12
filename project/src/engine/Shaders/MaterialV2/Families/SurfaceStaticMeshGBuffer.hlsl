@@ -11,6 +11,10 @@
 #define ASH_MATERIAL_ALPHA_CUTOFF 0.5
 #endif
 
+#ifndef ASH_MATERIAL_SHADING_MODEL_ID
+#define ASH_MATERIAL_SHADING_MODEL_ID 1
+#endif
+
 struct VSInput
 {
     ASH_MESH_VERTEX_POSITION_ATTR float3 position : POSITION;
@@ -132,7 +136,7 @@ inline AshGBufferOutput EncodeSurfaceStaticMeshGBuffer(AshPixelParameters params
 
     AshGBufferOutput output;
     const float3 normal = EvaluateSurfaceStaticMeshNormal(params, node);
-    output.target0 = float4(saturate(node.base_color), 0.0);
+    output.target0 = float4(saturate(node.base_color), ASH_MATERIAL_SHADING_MODEL_ID / 255.0);
     output.target1 = float4(saturate(node.metallic), saturate(node.roughness), saturate(node.ambient_occlusion), 0.5);
     output.target2 = float4(0.0, 0.0, 0.0, 0.0);
     output.target3 = float4(0.0, 0.0, 0.0, 0.0);

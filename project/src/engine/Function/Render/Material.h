@@ -35,7 +35,11 @@ namespace AshEngine
 
 	enum class MaterialShadingModel : uint8_t
 	{
-		DefaultLit = 0
+		Empty = 0,
+		DefaultLitGGX = 1,
+		Unlit = 2,
+		BlinnPhong = 3,
+		DefaultLit = DefaultLitGGX
 	};
 
 	enum class MaterialParameterType : uint8_t
@@ -119,6 +123,8 @@ namespace AshEngine
 			return hash_value;
 		}
 	};
+
+	ASH_API uint32_t get_material_shading_model_id(MaterialShadingModel shading_model);
 
 	struct ASH_API MaterialTextureBinding
 	{

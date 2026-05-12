@@ -121,7 +121,7 @@ namespace RHI
 			D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
 			dsvDesc.Format = ash_to_dxgi_format(ci.format);
 			dsvDesc.ViewDimension = ash_view_dim_to_d3d12_dsv_dim(ci.view_dim);
-			dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+			dsvDesc.Flags = ci.read_only_depth ? D3D12_DSV_FLAG_READ_ONLY_DEPTH : D3D12_DSV_FLAG_NONE;
 
 			switch (ci.view_dim)
 			{

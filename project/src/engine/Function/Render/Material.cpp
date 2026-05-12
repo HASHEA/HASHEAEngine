@@ -152,10 +152,16 @@ namespace AshEngine
 		{
 			switch (shading_model)
 			{
-			case MaterialShadingModel::DefaultLit:
-				return "DefaultLit";
+			case MaterialShadingModel::Empty:
+				return "Empty";
+			case MaterialShadingModel::DefaultLitGGX:
+				return "DefaultLitGGX";
+			case MaterialShadingModel::Unlit:
+				return "Unlit";
+			case MaterialShadingModel::BlinnPhong:
+				return "BlinnPhong";
 			default:
-				return "DefaultLit";
+				return "DefaultLitGGX";
 			}
 		}
 
@@ -755,9 +761,24 @@ namespace AshEngine
 		static auto try_parse_material_shading_model(const json& root, MaterialShadingModel& out_shading_model) -> bool
 		{
 			const std::string value = to_lower_copy(root.value("shading_model", std::string(material_shading_model_to_string(out_shading_model))));
-			if (value == "defaultlit")
+			if (value == "empty")
 			{
-				out_shading_model = MaterialShadingModel::DefaultLit;
+				out_shading_model = MaterialShadingModel::Empty;
+				return true;
+			}
+			if (value == "defaultlit" || value == "defaultlitggx" || value == "ggx")
+			{
+				out_shading_model = MaterialShadingModel::DefaultLitGGX;
+				return true;
+			}
+			if (value == "unlit")
+			{
+				out_shading_model = MaterialShadingModel::Unlit;
+				return true;
+			}
+			if (value == "blinnphong" || value == "blinn-phong")
+			{
+				out_shading_model = MaterialShadingModel::BlinnPhong;
 				return true;
 			}
 			return false;
@@ -1170,6 +1191,7 @@ namespace AshEngine
 		{
 			uint64_t hash_value = 0;
 			ASH_HASH::hash_combine(hash_value, material.get_domain());
+			ASH_HASH::hash_combine(hash_value, material.get_shading_model());
 			ASH_HASH::hash_combine(hash_value, material.get_material_shader_path().data(), ASH_HASH::CStringHash{});
 
 			const MaterialStaticRenderStateDesc& render_state = material.get_static_render_state();
@@ -1264,6 +1286,13 @@ namespace AshEngine
 				return make_error(out_error, "Material uses an unsupported domain.");
 			}
 			material.set_domain(domain);
+
+			MaterialShadingModel shading_model = MaterialShadingModel::DefaultLit;
+			if (!try_parse_material_shading_model(root, shading_model))
+			{
+				return make_error(out_error, "Material uses an unsupported shading model.");
+			}
+			material.set_shading_model(shading_model);
 
 			material.set_material_shader_path(root.value("materialShader", std::string{}));
 
@@ -1361,6 +1390,23 @@ namespace AshEngine
 	MaterialStaticRenderStateDesc::MaterialStaticRenderStateDesc()
 		: cull_mode(RenderCullMode::Back)
 	{
+	}
+
+	uint32_t get_material_shading_model_id(MaterialShadingModel shading_model)
+	{
+		switch (shading_model)
+		{
+		case MaterialShadingModel::Empty:
+			return 0u;
+		case MaterialShadingModel::DefaultLitGGX:
+			return 1u;
+		case MaterialShadingModel::Unlit:
+			return 2u;
+		case MaterialShadingModel::BlinnPhong:
+			return 3u;
+		default:
+			return 1u;
+		}
 	}
 
 	bool Material::is_material_instance() const
@@ -1683,7 +1729,7 @@ namespace AshEngine
 
 	MaterialShadingModel MaterialInstance::get_shading_model() const
 	{
-		return m_parent ? m_parent->get_shading_model() : MaterialShadingModel::DefaultLit;
+		return m_parent ? m_parent->get_shading_model() : MaterialShadingModel::DefaultLitGGX;
 	}
 
 	bool MaterialInstance::is_two_sided() const

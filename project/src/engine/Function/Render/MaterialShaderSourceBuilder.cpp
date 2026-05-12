@@ -128,6 +128,11 @@ namespace AshEngine
 		bindings << "#define ASH_MATERIAL_BLEND_MODE_TRANSPARENT " << (render_state.blend_mode == MaterialBlendMode::Transparent ? 1 : 0) << "\n";
 		bindings << "#define ASH_MATERIAL_TWO_SIDED " << (render_state.two_sided ? 1 : 0) << "\n";
 		bindings << "#define ASH_MATERIAL_ALPHA_CUTOFF " << render_state.alpha_cutoff << "\n";
+		bindings << "#define ASH_MATERIAL_SHADING_MODEL_ID " << get_material_shading_model_id(material.get_shading_model()) << "\n";
+		bindings << "#define ASH_MATERIAL_SHADING_MODEL_EMPTY " << (material.get_shading_model() == MaterialShadingModel::Empty ? 1 : 0) << "\n";
+		bindings << "#define ASH_MATERIAL_SHADING_MODEL_DEFAULT_LIT_GGX " << (material.get_shading_model() == MaterialShadingModel::DefaultLitGGX ? 1 : 0) << "\n";
+		bindings << "#define ASH_MATERIAL_SHADING_MODEL_UNLIT " << (material.get_shading_model() == MaterialShadingModel::Unlit ? 1 : 0) << "\n";
+		bindings << "#define ASH_MATERIAL_SHADING_MODEL_BLINN_PHONG " << (material.get_shading_model() == MaterialShadingModel::BlinnPhong ? 1 : 0) << "\n";
 
 		for (const MaterialStaticSwitchDesc& static_switch : material.get_static_switches())
 		{

@@ -3,6 +3,7 @@
   "class": "Material",
   "name": "M_V2_DebugSurface",
   "domain": "Surface",
+  "shading_model": "ggx",
   "materialShader": "product/assets/materials/v2/M_V2_DebugSurface.hlsl",
   "requiredCapabilities": [],
   "staticSwitches": {},

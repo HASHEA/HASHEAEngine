@@ -6,6 +6,9 @@ namespace RHI
 	VulkanRenderPass::VulkanRenderPass(const RenderPassCreation& ci)
 	{
 		nameStorage = ci.name ? ci.name : "VulkanRenderPass";
+		const bool depth_read_only =
+			has_any_flags((uint32_t)ci.depth_stencil_final_layout, (uint32_t)AshResourceState::DSVRead) &&
+			!has_any_flags((uint32_t)ci.depth_stencil_final_layout, (uint32_t)AshResourceState::DSVWrite);
 		colorLoadOptions.init(nullptr, ci.num_render_targets, 0);
 		colorAttachmentCount = ci.num_render_targets;
 		for (uint32_t i = 0; i < ci.num_render_targets; ++i)
@@ -23,7 +26,7 @@ namespace RHI
 		{
 		case AshLoadOption::ASH_LOAD_LOAD :
 			depth_op = VK_ATTACHMENT_LOAD_OP_LOAD;
-			depth_initial = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+			depth_initial = depth_read_only ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 			break;
 		case AshLoadOption::ASH_LOAD_CLEAR:
 			depth_op = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -94,7 +97,7 @@ namespace RHI
 			depth_attachment.initialLayout = depth_initial;
 			depth_attachment.finalLayout = ash_resource_state_to_vk_image_layout(ci.depth_stencil_final_layout);
 			depth_attachment_ref.attachment = c;
-			depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+			depth_attachment_ref.layout = depth_read_only ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 			depth_stencil_final_layout = ci.depth_stencil_final_layout;
 		}
 		// Create subpass.

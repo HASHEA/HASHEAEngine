@@ -28,6 +28,7 @@ namespace RHI
 		auto get_desciption() const -> const TextureCreation& override { return m_creation; }
 		auto get_alias_texture() -> std::shared_ptr<Texture> override { return m_alias; }
 		auto get_default_rtv() -> std::shared_ptr<TextureView> override { return m_defaultRTV; }
+		auto get_default_read_only_dsv() -> std::shared_ptr<TextureView> { return m_defaultReadOnlyDSV; }
 		auto get_default_srv() -> std::shared_ptr<TextureView> override { return m_defaultSRV; }
 		auto get_default_uav() -> std::shared_ptr<TextureView> override { return m_defaultUAV; }
 		auto is_cube_map() -> bool override { return m_creation.type == Ash_TextureCube || m_creation.type == Ash_Texture_Cube_Array; }
@@ -60,6 +61,7 @@ namespace RHI
 
 		std::shared_ptr<Texture> m_alias;
 		std::shared_ptr<TextureView> m_defaultRTV;
+		std::shared_ptr<TextureView> m_defaultReadOnlyDSV;
 		std::shared_ptr<TextureView> m_defaultSRV;
 		std::shared_ptr<TextureView> m_defaultUAV;
 	};

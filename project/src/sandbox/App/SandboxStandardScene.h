@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
-#include <glm/glm.hpp>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -67,20 +66,13 @@ namespace AshSandbox
 			const std::filesystem::path& sample_asset_path,
 			SandboxStandardSceneSnapshot& out_snapshot,
 			std::string& out_error) -> bool;
-		auto _compute_scene_world_bounds(
-			const AshEngine::Scene& scene,
-			glm::vec3& out_world_min,
-			glm::vec3& out_world_max,
-			std::string& out_error) const -> bool;
-		auto _make_default_camera_transform(
-			const glm::vec3& bounds_min,
-			const glm::vec3& bounds_max,
-			AshEngine::TransformComponent& out_transform,
-			float& out_recommended_move_speed) const -> bool;
 		auto _create_primary_camera(
 			AshEngine::Scene& scene,
 			AshEngine::EntityId& out_camera_entity_id,
 			float& out_recommended_move_speed,
+			std::string& out_error) const -> bool;
+		auto _create_default_lights(
+			AshEngine::Scene& scene,
 			std::string& out_error) const -> bool;
 		auto _consume_logic_delta_seconds() -> double;
 		auto _set_failure_locked(std::string detail) -> void;

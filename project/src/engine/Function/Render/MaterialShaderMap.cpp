@@ -140,6 +140,10 @@ namespace AshEngine
 			program_state.primitive_topology = RenderPrimitiveTopology::TriangleList;
 			program_state.depth_test = render_state.depth_test != MaterialCompareOp::Always;
 			program_state.depth_write = render_state.depth_write;
+			program_state.depth_compare = render_state.depth_test == MaterialCompareOp::Always ?
+				RenderCompareOp::Always :
+				RenderCompareOp::LessEqual;
+			program_state.blend_mode = RenderBlendMode::Opaque;
 			program_state.front_face = RenderFrontFace::CounterClockwise;
 			return program_state;
 		}

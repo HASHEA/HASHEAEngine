@@ -144,7 +144,6 @@ namespace AshEngine
 		{
 			const void* resource = nullptr;
 			RHI::AshBarrier::EType type = RHI::AshBarrier::EType::Unknown;
-			RHI::AshResourceState dst_state = RHI::AshResourceState::Unknown;
 			uint32_t base_mip = 0;
 			uint32_t base_slice = 0;
 			uint32_t mip_count = 0;
@@ -154,7 +153,6 @@ namespace AshEngine
 			{
 				return resource == other.resource &&
 					type == other.type &&
-					dst_state == other.dst_state &&
 					base_mip == other.base_mip &&
 					base_slice == other.base_slice &&
 					mip_count == other.mip_count &&
@@ -168,7 +166,6 @@ namespace AshEngine
 			{
 				uint64_t hash_value = reinterpret_cast<uintptr_t>(key.resource);
 				hash_combine_uint64(hash_value, static_cast<uint64_t>(key.type));
-				hash_combine_uint64(hash_value, static_cast<uint64_t>(key.dst_state));
 				hash_combine_uint64(hash_value, key.base_mip);
 				hash_combine_uint64(hash_value, key.base_slice);
 				hash_combine_uint64(hash_value, key.mip_count);
@@ -200,7 +197,6 @@ namespace AshEngine
 
 			out_key.resource = resource;
 			out_key.type = barrier.eType;
-			out_key.dst_state = barrier.eDSTAccess;
 			out_key.base_mip = barrier.uBaseMipLevel;
 			out_key.base_slice = barrier.uBaseArraySlice;
 			out_key.mip_count = barrier.uMipCount;
@@ -218,15 +214,22 @@ namespace AshEngine
 				return;
 			}
 
-			std::unordered_set<ReadOnlyBarrierKey, ReadOnlyBarrierKeyHasher> seen_read_only_barriers;
+			std::unordered_map<ReadOnlyBarrierKey, size_t, ReadOnlyBarrierKeyHasher> seen_read_only_barriers;
 			seen_read_only_barriers.reserve(barriers.size());
 			out_barriers.reserve(barriers.size());
 			for (const RHI::AshBarrier& barrier : barriers)
 			{
 				ReadOnlyBarrierKey key{};
-				if (make_read_only_barrier_key(barrier, key) &&
-					!seen_read_only_barriers.insert(key).second)
+				if (make_read_only_barrier_key(barrier, key))
 				{
+					auto [it, inserted] = seen_read_only_barriers.emplace(key, out_barriers.size());
+					if (!inserted)
+					{
+						RHI::AshBarrier& merged = out_barriers[it->second];
+						merged.eDSTAccess = merged.eDSTAccess | barrier.eDSTAccess;
+						continue;
+					}
+					out_barriers.push_back(barrier);
 					continue;
 				}
 				out_barriers.push_back(barrier);
@@ -727,6 +730,20 @@ namespace AshEngine
 			}
 		}
 
+		static RHI::AshCompareOp to_rhi_compare_op(RenderCompareOp compare_op)
+		{
+			switch (compare_op)
+			{
+			case RenderCompareOp::LessEqual:
+				return RHI::ASH_COMPARE_OP_LESS_OR_EQUAL;
+			case RenderCompareOp::GreaterEqual:
+				return RHI::ASH_COMPARE_OP_GREATER_OR_EQUAL;
+			case RenderCompareOp::Always:
+			default:
+				return RHI::ASH_COMPARE_OP_ALWAYS;
+			}
+		}
+
 		static RenderPrimitiveTopology from_rhi_topology(RHI::AshPrimitiveTopology topology)
 		{
 			switch (topology)
@@ -856,6 +873,21 @@ namespace AshEngine
 	RenderColorValue get_engine_back_buffer_clear_color()
 	{
 		return k_engine_back_buffer_clear_color;
+	}
+
+	RHI::AshResourceState get_depth_attachment_resource_state(bool read_only, bool shader_resource_capable)
+	{
+		if (!read_only)
+		{
+			return RHI::AshResourceState::DSVWrite;
+		}
+
+		RHI::AshResourceState state = RHI::AshResourceState::DSVRead;
+		if (shader_resource_capable)
+		{
+			state = state | RHI::AshResourceState::SRVGraphics;
+		}
+		return state;
 	}
 
 	class RenderTarget::Impl
@@ -1200,6 +1232,50 @@ namespace AshEngine
 			return impl;
 		}
 
+	void fill_pipeline_state_from_graphics_program_state(
+		const GraphicsProgramState& state,
+		RHI::PipelineCreation& pipeline,
+		uint32_t color_attachment_count)
+	{
+		pipeline.rasterization.cull_mode = to_rhi_cull_mode(state.cull_mode);
+		pipeline.rasterization.front = to_rhi_front_face(state.front_face);
+		pipeline.primitiveTopology = to_rhi_topology(state.primitive_topology);
+		if (state.depth_test)
+		{
+			pipeline.depth_stencil.depth_enable = 1;
+			pipeline.depth_stencil.depth_write_enable = state.depth_write ? 1 : 0;
+			pipeline.depth_stencil.depth_comparison = to_rhi_compare_op(state.depth_compare);
+		}
+		else
+		{
+			pipeline.depth_stencil.depth_enable = 0;
+			pipeline.depth_stencil.depth_write_enable = 0;
+			pipeline.depth_stencil.depth_comparison = RHI::ASH_COMPARE_OP_ALWAYS;
+		}
+
+		const uint32_t active_color_attachment_count = std::min<uint32_t>(
+			std::max<uint32_t>(color_attachment_count, 1u),
+			static_cast<uint32_t>(RHI::k_max_image_outputs));
+		pipeline.blend_state.active_states = active_color_attachment_count;
+		for (uint32_t i = 0; i < active_color_attachment_count; ++i)
+		{
+			RHI::BlendState& blend_state = pipeline.blend_state.blend_states[i];
+			blend_state = RHI::BlendState{};
+			blend_state.set_color_write_mask(RHI::AshColorWriteMask::All);
+			if (state.blend_mode == RenderBlendMode::Additive)
+			{
+				blend_state.set_color(
+					RHI::ASH_BLEND_FACTOR_ONE,
+					RHI::ASH_BLEND_FACTOR_ONE,
+					RHI::ASH_BLEND_OP_ADD);
+				blend_state.set_alpha(
+					RHI::ASH_BLEND_FACTOR_ONE,
+					RHI::ASH_BLEND_FACTOR_ONE,
+					RHI::ASH_BLEND_OP_ADD);
+			}
+		}
+	}
+
 	static void apply_program_state(GraphicsProgram::Impl& impl, RHI::IGraphicsRenderProgram& program)
 	{
 		program.apply_render_state([&impl](RHI::RenderState* render_state) {
@@ -1211,32 +1287,35 @@ namespace AshEngine
 			{
 				render_state->depth_stencil.depth_enable = 1;
 				render_state->depth_stencil.depth_write_enable = impl.state.depth_write ? 1 : 0;
-				render_state->depth_stencil.depth_comparison = RHI::ASH_COMPARE_OP_LESS_OR_EQUAL;
+				render_state->depth_stencil.depth_comparison = to_rhi_compare_op(impl.state.depth_compare);
 			}
 			else
 			{
 				render_state->depth_stencil.depth_enable = 0;
 				render_state->depth_stencil.depth_write_enable = 0;
+				render_state->depth_stencil.depth_comparison = RHI::ASH_COMPARE_OP_ALWAYS;
+			}
+
+			const uint32_t active_color_attachment_count = std::max<uint32_t>(render_state->blend_state.active_states, 1u);
+			render_state->blend_state.active_states = active_color_attachment_count;
+			for (uint32_t i = 0; i < active_color_attachment_count && i < RHI::k_max_image_outputs; ++i)
+			{
+				RHI::BlendState& blend_state = render_state->blend_state.blend_states[i];
+				blend_state = RHI::BlendState{};
+				blend_state.set_color_write_mask(RHI::AshColorWriteMask::All);
+				if (impl.state.blend_mode == RenderBlendMode::Additive)
+				{
+					blend_state.set_color(
+						RHI::ASH_BLEND_FACTOR_ONE,
+						RHI::ASH_BLEND_FACTOR_ONE,
+						RHI::ASH_BLEND_OP_ADD);
+					blend_state.set_alpha(
+						RHI::ASH_BLEND_FACTOR_ONE,
+						RHI::ASH_BLEND_FACTOR_ONE,
+						RHI::ASH_BLEND_OP_ADD);
+				}
 			}
 		});
-	}
-
-	static void fill_pipeline_state_from_program_state(const GraphicsProgramState& state, RHI::PipelineCreation& pipeline)
-	{
-		pipeline.rasterization.cull_mode = to_rhi_cull_mode(state.cull_mode);
-		pipeline.rasterization.front = to_rhi_front_face(state.front_face);
-		pipeline.primitiveTopology = to_rhi_topology(state.primitive_topology);
-		if (state.depth_test)
-		{
-			pipeline.depth_stencil.depth_enable = 1;
-			pipeline.depth_stencil.depth_write_enable = state.depth_write ? 1 : 0;
-			pipeline.depth_stencil.depth_comparison = RHI::ASH_COMPARE_OP_LESS_OR_EQUAL;
-		}
-		else
-		{
-			pipeline.depth_stencil.depth_enable = 0;
-			pipeline.depth_stencil.depth_write_enable = 0;
-		}
 	}
 
 	static bool set_program_const_data(ProgramBindingState& bindings, uint32_t size, const void* data)
@@ -1913,6 +1992,7 @@ namespace AshEngine
 		static bool collect_pass_begin_barriers(
 			const std::vector<std::shared_ptr<RenderTarget::Impl>>& color_attachments,
 			const std::shared_ptr<RenderTarget::Impl>& depth_attachment,
+			RHI::AshResourceState depth_attachment_state,
 			std::vector<RHI::AshBarrier>& out_barriers)
 		{
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -1929,7 +2009,7 @@ namespace AshEngine
 
 			if (depth_attachment)
 			{
-				append_texture_barrier(out_barriers, depth_attachment, RHI::AshResourceState::DSVWrite);
+				append_texture_barrier(out_barriers, depth_attachment, depth_attachment_state);
 			}
 
 			ASH_PROCESS_ERROR(barriers_valid);
@@ -1973,13 +2053,8 @@ namespace AshEngine
 		rhi_desc.pipeline.render_pass = render_pass;
 		rhi_desc.pipeline.shaders.add_stage(impl.vertex_shader, RHI::ASH_SHADER_STAGE_VERTEX_BIT, impl.vertex_entry.c_str());
 		rhi_desc.pipeline.shaders.add_stage(impl.fragment_shader, RHI::ASH_SHADER_STAGE_FRAGMENT_BIT, impl.fragment_entry.c_str());
-		fill_pipeline_state_from_program_state(impl.state, rhi_desc.pipeline);
 		const uint32_t attachment_count = render_pass ? render_pass->get_color_attachment_count() : 1u;
-		rhi_desc.pipeline.blend_state.active_states = attachment_count;
-		for (uint32_t i = 0; i < attachment_count; ++i)
-		{
-			rhi_desc.pipeline.blend_state.blend_states[i].set_color_write_mask(RHI::AshColorWriteMask::All);
-		}
+		fill_pipeline_state_from_graphics_program_state(impl.state, rhi_desc.pipeline, attachment_count);
 		rhi_desc.pipeline.vertex_input = impl.vertex_input;
 
 		std::unique_ptr<RHI::IGraphicsRenderProgram> program = graphics_context->create_graphics_render_program(rhi_desc);
@@ -3480,6 +3555,7 @@ namespace AshEngine
 
 		if (desc.depth_attachment.render_target)
 		{
+			ASH_PROCESS_ERROR(!desc.depth_attachment.read_only || desc.depth_attachment.load_action != RenderLoadAction::Clear);
 			if (!desc.depth_attachment.render_target->m_impl || !desc.depth_attachment.render_target->m_impl->depth_stencil)
 			{
 				framebuffer_creation.colorAttachments.shutdown();
@@ -3491,7 +3567,10 @@ namespace AshEngine
 				framebuffer_creation.colorAttachments.shutdown();
 				ASH_PROCESS_ERROR(false);
 			}
-			render_pass_creation.set_depth_stencil_texture(depth_texture->get_format(), desc.depth_attachment.render_target->m_impl->get_final_resource_state());
+			const RHI::AshResourceState depth_attachment_state = get_depth_attachment_resource_state(
+				desc.depth_attachment.read_only,
+				desc.depth_attachment.render_target->m_impl->shader_resource);
+			render_pass_creation.set_depth_stencil_texture(depth_texture->get_format(), depth_attachment_state);
 			render_pass_creation.set_depth_stencil_operations(
 				to_rhi_load_action(desc.depth_attachment.load_action),
 				to_rhi_load_action(desc.depth_attachment.load_action));
@@ -3570,9 +3649,19 @@ namespace AshEngine
 		}
 		const std::shared_ptr<RenderTarget::Impl> begin_pass_depth_attachment =
 			desc.depth_attachment.render_target ? desc.depth_attachment.render_target->m_impl : nullptr;
+		const RHI::AshResourceState begin_pass_depth_attachment_state =
+			begin_pass_depth_attachment ?
+			get_depth_attachment_resource_state(
+				desc.depth_attachment.read_only,
+				begin_pass_depth_attachment->shader_resource) :
+			RHI::AshResourceState::Unknown;
 
 		std::vector<RHI::AshBarrier> begin_pass_barriers;
-		if (!collect_pass_begin_barriers(begin_pass_color_attachments, begin_pass_depth_attachment, begin_pass_barriers) ||
+		if (!collect_pass_begin_barriers(
+				begin_pass_color_attachments,
+				begin_pass_depth_attachment,
+				begin_pass_depth_attachment_state,
+				begin_pass_barriers) ||
 			!submit_rhi_resource_barriers(m_impl->current_command_buffer, begin_pass_barriers))
 		{
 			HLogError("RenderDevice: begin_pass barriers failed for '{}'.", desc.name ? desc.name : "EngineRenderPass");
@@ -3730,6 +3819,18 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer &&
 			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
 		out_barriers.emplace_back(buffer->m_impl->resource->buffer, RHI::AshResourceState::IndexBuffer);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer &&
+			attachment.render_target && attachment.render_target->m_impl && attachment.render_target->m_impl->depth_stencil);
+		const RHI::AshResourceState depth_state = get_depth_attachment_resource_state(
+			attachment.read_only,
+			attachment.render_target->m_impl->shader_resource);
+		append_texture_barrier(out_barriers, attachment.render_target->m_impl, depth_state);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 

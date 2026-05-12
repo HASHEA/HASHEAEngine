@@ -3,6 +3,7 @@
   "class": "Material",
   "name": "M_SurfacePBR",
   "domain": "Surface",
+  "shading_model": "ggx",
   "materialShader": "product/assets/materials/v2/M_SurfacePBR.hlsl",
   "requiredCapabilities": [],
   "staticSwitches": {},

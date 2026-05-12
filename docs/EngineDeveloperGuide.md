@@ -514,6 +514,8 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - RHI graphics program 的 raster/depth/topology 状态在 variant 创建时写入 `GraphicProgramCreateDesc::pipeline`；`RenderDevice::bind_graphics_program()` 不能逐 draw 调用 `apply_render_state()`，因为 DX12 会把它标记为 PSO rebuild，Vulkan 会直接重建 `VkPipeline`
 - `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；DX12 因 GPU descriptor heap 帧内线性分配仍按 pass 重新 commit，Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
 - `RenderDevice::begin_pass()` 会复用 RHI `RenderPass` 与 `Framebuffer`：RenderPass key 由 attachment format / load action / final state / multiview 等语义构成，Framebuffer key 由 render pass、attachment texture、extent 与 layer 构成；clear value 不属于 cache key，每次 begin pass 都会重新写入当前 clear 值
+- `GraphicsProgramState` 显式描述 cull/topology/depth test/depth write/depth compare/blend mode；这些状态必须在 program variant / PSO 创建时落入后端 pipeline state。
+- `PassDepthAttachment::read_only=true` 表示本 pass 只读 depth attachment：RenderDevice 会把 depth final state 设为 `DSVRead`，如果该 depth target 可采样则同时包含 `SRVGraphics`。Vulkan 使用 depth-stencil read-only layout，DX12 使用 read-only DSV。
 - Framebuffer cache 会在连续数帧未使用后清理；`clear_transient_render_targets()` 也会清掉 framebuffer cache，避免 transient / resize 路径长期压住旧 attachment
 - Vulkan dynamic rendering 下，`cmd_end_render_pass()` 结束后 attachment 仍停留在 renderable layout；resource tracker 必须先保持 `RTV` / `DSVWrite` 这类真实附件状态，再由 pass 外部显式 barrier 转到 `SRVGraphics` / `Present` 等 final state
 - DX12 texture transition 由 `DX12ResourceTracker` 维护 per-subresource 状态；当整资源 transition 遇到 mip/slice 混合状态时，必须展开成子资源 barrier，不能用某个旧整资源状态覆盖全部 subresource
@@ -540,8 +542,11 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
   - `GBufferD`：`RGBA16_SFLOAT`，MotionVector3D.xyz + TemporalFlags.a
   - `GBufferE`：`RGBA16_SFLOAT`，NormalOct.xy + EmissiveOrCustom.zw
 - `MotionVector3D` 在当前设计里表示 screen-space velocity.xy + z，不是 world-space velocity；第一版 shader 先写 0，历史帧矩阵与 velocity 生成后续补齐。
-- `SceneDeferredResources` 按 view 输出尺寸和 layout hash 复用 / 重建 GBuffer targets，并创建可采样的 D32 depth。
-- `SceneRenderer` 先提交 `SceneGBufferPass`，再由 `DeferredLightingPass` 的 fullscreen triangle 采样 GBuffer 并写回 `SceneRenderViewContext.output_target`。
+- `SceneDeferredResources` 按 view 输出尺寸和 layout hash 复用 / 重建 GBuffer targets、可采样 D32 depth 和 `SceneDeferredLightingAccum` RGBA16F lighting accumulation target。
+- `SceneRenderer` 先提交 `SceneGBufferPass`，再由 `DeferredLightingPass` 执行 `SceneDeferredLightingAccumPass` 和 `SceneDeferredCompositePass`。
+- `SceneDeferredLightingAccumPass` 会先用 fullscreen base/emissive pass 写入自发光；directional light 使用 fullscreen additive pass；point light 使用 sphere volume；spot light 使用 cone volume。
+- point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
+- `SceneDeferredCompositePass` 采样 lighting accumulation 并写回 `SceneRenderViewContext.output_target`。
 - 原 `Surface.StaticMesh.BasePass` 前向路径保留为 fallback；透明材质仍不进入当前 deferred opaque path。
 
 材质边界保持不变：
@@ -550,6 +555,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 用户 shader 仍只提供 `CalculateVertexMainNode` 与 `CalculatePixelMainNode`。
 - Engine host shader `SurfaceStaticMeshGBuffer.hlsl` 调用用户节点并负责 GBuffer 打包。
 - `MaterialShaderSourceBuilder` 只给 GBuffer pass 注入 pass/layout 宏，供 engine host shader 使用。
+- 材质静态 shading model 来自 `.AshMat` 的 `shading_model` 字段，`.AshMatIns` 继承父材质，不做实例级覆盖。当前稳定 ID 为：`Empty=0`、`DefaultLitGGX=1`、`Unlit=2`、`BlinnPhong=3`；`DefaultLit` 是 `DefaultLitGGX` 的兼容别名。
 
 ### 6.6 GPU Upload Command Path
 
@@ -1022,6 +1028,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `.AshMatIns` 必须搭配 `class = "MaterialInstance"`
 - 基材质当前用于声明：
   - `materialShader`
+  - `shading_model`，随仓库提供的基材质资产当前显式写 `ggx`
   - `renderState`
   - `requiredCapabilities`
   - `staticSwitches`
@@ -1290,7 +1297,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
   - per-view render pass / deferred GBuffer / depth 目标管理
   - 静态网格 batch 构建、单可见静态网格 direct section submit、instance buffer 更新和 draw 提交
   - 消费 section 的 `MaterialRenderProxy`
-  - 第一版 fullscreen deferred lighting resolve
+  - 第一版 deferred lighting accumulation / composite
 - 当前 `Surface.StaticMesh` shader family 仍使用 instanced vertex layout，所以单可见 draw fast path 不是非 instanced shader 路径；它只绕过 batch lookup / instance vector 构建，并继续绑定 slot 1 的单实例 buffer
 - `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 deferred static mesh path 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
 
@@ -1298,7 +1305,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 - 前向 fallback 路径中，如果调用方传入 `depth_target`，`SceneRenderer` 直接使用该 depth，生命周期和跨 pass 语义由调用方负责
 - 前向 fallback 路径中，如果调用方不传入 `depth_target`，`SceneRenderer` 会按输出目标尺寸和格式获取内部 scratch depth
-- deferred 路径使用 `SceneDeferredResources` 持有的 D32 depth，它会作为 GBuffer pass depth attachment 并在 lighting pass 作为 shader resource 可用
+- deferred 路径使用 `SceneDeferredResources` 持有的 D32 depth，它会作为 GBuffer pass depth attachment，并在 lighting pass 以 shader resource + read-only depth attachment 形式同时可采样和硬件 depth test
 - scratch depth 只保证本次 scene pass 可用；如果后续 pass 需要继续读取或复用前向 fallback depth，必须由调用方显式提供 depth target
 
 第一版多 view 仍有一个明确边界：
@@ -1341,6 +1348,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 当前默认标准场景为：
 
 - `product/assets/models/gltfs/Sponza/glTF/Sponza.gltf`
+- 默认会创建 directional / point / spot 三类基础灯光，用于覆盖第一版 deferred lighting 路径
 
 Sandbox 会从 `product/assets/models/gltfs/` 下枚举 `.gltf` 模型，并在窗口内提供 `Sandbox Model` overlay 下拉框。也可以通过 `ASH_SANDBOX_MODEL` 指定启动模型，取值为相对 `product/assets` 的路径，例如 `models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf`。运行时选择新模型时，Sandbox 会先销毁旧的 scene presentation binding/output，再 reset 旧标准场景状态并异步加载新模型；新模型 ready 后才重新注册窗口 output 和 primary-camera binding，避免切换后继续提交旧场景实体。
 标准场景会保留 glTF 导入得到的材质槽和贴图绑定，不再为验证目的向 mesh 注入固定 debug material override；V2 材质链路由 glTF 默认材质生成的 `.AshMatIns` 覆盖。

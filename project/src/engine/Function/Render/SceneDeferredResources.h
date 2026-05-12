@@ -19,6 +19,7 @@ namespace AshEngine
 		const GBufferLayoutDesc* get_layout() const;
 		const std::vector<std::shared_ptr<RenderTarget>>& get_gbuffer_targets() const;
 		const std::shared_ptr<RenderTarget>& get_depth_target() const;
+		const std::shared_ptr<RenderTarget>& get_lighting_accum_target() const;
 
 	private:
 		uint32_t m_width = 0;
@@ -27,5 +28,6 @@ namespace AshEngine
 		const GBufferLayoutDesc* m_layout = nullptr;
 		std::vector<std::shared_ptr<RenderTarget>> m_gbuffer_targets{};
 		std::shared_ptr<RenderTarget> m_depth_target = nullptr;
+		std::shared_ptr<RenderTarget> m_lighting_accum_target = nullptr;
 	};
 }

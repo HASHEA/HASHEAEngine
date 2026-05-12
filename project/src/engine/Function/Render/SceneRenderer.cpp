@@ -295,6 +295,7 @@ namespace AshEngine
 
 			ASH_PROCESS_ERROR(m_deferred_lighting_pass.render(
 				*m_renderer,
+				frame,
 				m_deferred_resources,
 				view_context.output_target,
 				view_context));

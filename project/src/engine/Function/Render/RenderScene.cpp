@@ -3,15 +3,58 @@
 #include "Base/hprofiler.h"
 #include "Function/Render/SceneView.h"
 #include "Function/Render/Visibility.h"
+#include <algorithm>
+#include <cmath>
 #include <unordered_map>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace AshEngine
 {
+	namespace
+	{
+		static auto normalize_or_fallback(const glm::vec3& value, const glm::vec3& fallback) -> glm::vec3
+		{
+			const float length = glm::length(value);
+			return length > 0.0001f ? value / length : fallback;
+		}
+
+		static auto make_visible_light_data(const SceneLightExtractionDesc& desc, VisibleLightData& out_light) -> bool
+		{
+			const LightComponent& light = desc.light;
+			if (light.intensity <= 0.0f)
+			{
+				return false;
+			}
+			if ((light.type == LightType::Point || light.type == LightType::Spot) && light.range <= 0.0f)
+			{
+				return false;
+			}
+
+			out_light = {};
+			out_light.entity_id = desc.entity_id;
+			out_light.type = light.type;
+			out_light.position_ws = glm::vec3(desc.world_transform[3]);
+			out_light.direction_ws = normalize_or_fallback(
+				glm::vec3(desc.world_transform * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)),
+				glm::vec3(0.0f, 0.0f, 1.0f));
+			out_light.color = glm::max(light.color, glm::vec3(0.0f));
+			out_light.intensity = light.intensity;
+			out_light.range = std::max(light.range, 0.0f);
+
+			const float outer_degrees = std::clamp(light.outer_cone_angle_degrees, 0.1f, 89.0f);
+			const float inner_degrees = std::clamp(light.inner_cone_angle_degrees, 0.0f, outer_degrees);
+			out_light.inner_cone_cos = std::cos(glm::radians(inner_degrees));
+			out_light.outer_cone_cos = std::cos(glm::radians(outer_degrees));
+			return true;
+		}
+	}
+
 	RenderScene::RenderScene(const RenderScene& other)
 	{
 		std::scoped_lock<std::mutex> lock(other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
+		m_lights = other.m_lights;
 	}
 
 	RenderScene::RenderScene(RenderScene&& other) noexcept
@@ -19,6 +62,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex> lock(other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
+		m_lights = std::move(other.m_lights);
 		other.m_next_primitive_id = 1;
 	}
 
@@ -31,6 +75,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex, std::mutex> lock(m_mutex, other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
+		m_lights = other.m_lights;
 		return *this;
 	}
 
@@ -43,6 +88,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex, std::mutex> lock(m_mutex, other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
+		m_lights = std::move(other.m_lights);
 		other.m_next_primitive_id = 1;
 		return *this;
 	}
@@ -91,6 +137,30 @@ namespace AshEngine
 			m_static_mesh_primitives = std::move(rebuilt_primitives);
 			m_next_primitive_id = next_primitive_id;
 		}
+		ASH_PROCESS_ERROR(rebuild_lights_from_scene(scene));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderScene::rebuild_lights_from_scene(const Scene& scene)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_lights_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		std::vector<VisibleLightData> rebuilt_lights{};
+		for (const SceneLightExtractionDesc& light_desc : scene.extract_light_entities())
+		{
+			VisibleLightData visible_light{};
+			if (make_visible_light_data(light_desc, visible_light))
+			{
+				rebuilt_lights.push_back(visible_light);
+			}
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_lights = std::move(rebuilt_lights);
+		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -118,6 +188,7 @@ namespace AshEngine
 		out_frame.projection = view.projection;
 		out_frame.view_projection = view.view_projection;
 		out_frame.camera_position = view.camera_position;
+		ASH_PROCESS_ERROR(build_visible_light_frame(out_frame));
 
 		std::unordered_map<uint64_t, const StaticMeshPrimitiveProxy*> primitive_index;
 		primitive_index.reserve(primitives_snapshot.size());
@@ -149,6 +220,13 @@ namespace AshEngine
 		}
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderScene::build_visible_light_frame(VisibleRenderFrame& out_frame) const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		out_frame.lights = m_lights;
+		return true;
 	}
 
 	std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> RenderScene::get_static_mesh_primitives_snapshot() const

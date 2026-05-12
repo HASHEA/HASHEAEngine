@@ -1,4 +1,4 @@
-#include "App/SandboxStandardScene.h"
+﻿#include "App/SandboxStandardScene.h"
 
 #include "Function/Asset/AssetData.h"
 #include "Base/hlog.h"
@@ -9,7 +9,6 @@
 #include <glm/gtx/euler_angles.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
-#include <limits>
 #include <set>
 #include <utility>
 
@@ -20,20 +19,13 @@ namespace AshSandbox
 		static constexpr char k_scene_name[] = "SandboxStandardScene";
 		static constexpr char k_scene_root_name[] = "SandboxStandardSceneRoot";
 		static constexpr char k_primary_camera_name[] = "SandboxStandardSceneCamera";
+		static constexpr char k_directional_light_name[] = "SandboxStandardSceneDirectionalLight";
+		static constexpr char k_point_light_name[] = "SandboxStandardScenePointLight";
+		static constexpr char k_spot_light_name[] = "SandboxStandardSceneSpotLight";
 		static constexpr char k_sample_asset_root_path[] = "models/gltfs";
-		static const glm::vec3 k_primary_camera_position{ 0.0f, 1.5f, -6.0f };
+		static const glm::vec3 k_primary_camera_position{ 0.0f, 0.0f, 0.0f };
 		static const glm::vec3 k_primary_camera_rotation_euler_degrees{ 0.0f, 0.0f, 0.0f };
 		static constexpr float k_default_camera_move_speed = 8.0f;
-
-		static auto make_bounds_corner(
-			const AshEngine::SceneMeshBounds& bounds,
-			uint32_t corner_index) -> glm::vec3
-		{
-			return glm::vec3(
-				(corner_index & 1u) == 0u ? bounds.local_min.x : bounds.local_max.x,
-				(corner_index & 2u) == 0u ? bounds.local_min.y : bounds.local_max.y,
-				(corner_index & 4u) == 0u ? bounds.local_min.z : bounds.local_max.z);
-		}
 
 		static auto path_has_prefix(const std::filesystem::path& path, const std::filesystem::path& prefix) -> bool
 		{
@@ -409,102 +401,10 @@ namespace AshSandbox
 			out_snapshot.primary_camera_entity_id,
 			out_snapshot.recommended_camera_move_speed,
 			out_error));
+		ASH_PROCESS_ERROR(_create_default_lights(out_snapshot.scene, out_error));
 		out_snapshot.load_state = SandboxStandardSceneLoadState::Ready;
 		out_snapshot.failure_detail.clear();
 		out_error.clear();
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-	}
-
-	auto SandboxStandardScene::_compute_scene_world_bounds(
-		const AshEngine::Scene& scene,
-		glm::vec3& out_world_min,
-		glm::vec3& out_world_max,
-		std::string& out_error) const -> bool
-	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_asset_database != nullptr);
-		ASH_PROCESS_ERROR(scene.is_valid());
-
-		glm::vec3 world_min{
-			std::numeric_limits<float>::max(),
-			std::numeric_limits<float>::max(),
-			std::numeric_limits<float>::max()
-		};
-		glm::vec3 world_max{
-			std::numeric_limits<float>::lowest(),
-			std::numeric_limits<float>::lowest(),
-			std::numeric_limits<float>::lowest()
-		};
-		bool has_bounds = false;
-
-		for (const AshEngine::SceneMeshExtractionDesc& mesh_desc : scene.extract_visible_mesh_entities())
-		{
-			AshEngine::MeshComponent mesh_component{};
-			mesh_component.asset_path = mesh_desc.asset_path;
-			mesh_component.mesh_index = mesh_desc.mesh_index;
-			mesh_component.visible = mesh_desc.visible;
-			mesh_component.mobility = mesh_desc.mobility;
-			mesh_component.layer_mask = mesh_desc.layer_mask;
-
-			AshEngine::SceneMeshBounds local_bounds{};
-			if (!scene.try_get_mesh_local_bounds(*m_asset_database, mesh_component, local_bounds) || !local_bounds.is_valid)
-			{
-				out_error = "Failed to compute mesh bounds while preparing the Sandbox standard scene camera.";
-				ASH_PROCESS_ERROR(false);
-			}
-
-			for (uint32_t corner_index = 0; corner_index < 8; ++corner_index)
-			{
-				const glm::vec3 local_corner = make_bounds_corner(local_bounds, corner_index);
-				const glm::vec4 world_corner =
-					mesh_desc.world_transform * glm::vec4(local_corner.x, local_corner.y, local_corner.z, 1.0f);
-				world_min.x = std::min(world_min.x, world_corner.x);
-				world_min.y = std::min(world_min.y, world_corner.y);
-				world_min.z = std::min(world_min.z, world_corner.z);
-				world_max.x = std::max(world_max.x, world_corner.x);
-				world_max.y = std::max(world_max.y, world_corner.y);
-				world_max.z = std::max(world_max.z, world_corner.z);
-				has_bounds = true;
-			}
-		}
-
-		if (!has_bounds)
-		{
-			out_error = "The Sandbox standard scene did not produce any visible mesh bounds.";
-			ASH_PROCESS_ERROR(false);
-		}
-
-		out_world_min = world_min;
-		out_world_max = world_max;
-		out_error.clear();
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-	}
-
-	auto SandboxStandardScene::_make_default_camera_transform(
-		const glm::vec3& bounds_min,
-		const glm::vec3& bounds_max,
-		AshEngine::TransformComponent& out_transform,
-		float& out_recommended_move_speed) const -> bool
-	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-
-		const glm::vec3 center = (bounds_min + bounds_max) * 0.5f;
-		const glm::vec3 extent = glm::max(bounds_max - bounds_min, glm::vec3(0.1f, 0.1f, 0.1f));
-		const float radius = std::max({ extent.x, extent.y, extent.z }) * 0.5f;
-		const glm::vec3 target = center + glm::vec3(0.0f, extent.y * 0.1f, 0.0f);
-		const glm::vec3 position = target + glm::vec3(
-			0.0f,
-			std::max(radius * 0.2f, 1.5f),
-			-std::max(radius * 1.75f, 5.0f));
-
-		if (!make_transform_from_look_at(position, target, out_transform))
-		{
-			out_transform.position = k_primary_camera_position;
-			out_transform.rotation_euler_degrees = k_primary_camera_rotation_euler_degrees;
-			out_transform.scale = glm::vec3(1.0f, 1.0f, 1.0f);
-		}
-
-		out_recommended_move_speed = std::clamp(radius * 0.2f, 4.0f, 48.0f);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -525,24 +425,10 @@ namespace AshSandbox
 		}
 
 		AshEngine::TransformComponent transform = camera_entity.get_transform_component();
-		glm::vec3 bounds_min{};
-		glm::vec3 bounds_max{};
 		out_recommended_move_speed = k_default_camera_move_speed;
-		if (_compute_scene_world_bounds(scene, bounds_min, bounds_max, out_error))
-		{
-			ASH_PROCESS_ERROR(_make_default_camera_transform(
-				bounds_min,
-				bounds_max,
-				transform,
-				out_recommended_move_speed));
-		}
-		else
-		{
-			transform.position = k_primary_camera_position;
-			transform.rotation_euler_degrees = k_primary_camera_rotation_euler_degrees;
-			transform.scale = glm::vec3(1.0f, 1.0f, 1.0f);
-			out_error.clear();
-		}
+		transform.position = k_primary_camera_position;
+		transform.rotation_euler_degrees = k_primary_camera_rotation_euler_degrees;
+		transform.scale = glm::vec3(1.0f, 1.0f, 1.0f);
 		if (!camera_entity.set_transform_component(transform))
 		{
 			out_error = "Failed to configure the Sandbox standard scene primary camera transform.";
@@ -561,6 +447,72 @@ namespace AshSandbox
 		}
 
 		out_camera_entity_id = camera_entity.get_id();
+		out_error.clear();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	auto SandboxStandardScene::_create_default_lights(
+		AshEngine::Scene& scene,
+		std::string& out_error) const -> bool
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		AshEngine::Entity directional_entity = scene.create_entity(k_directional_light_name);
+		if (!directional_entity.is_valid())
+		{
+			out_error = "Failed to create the Sandbox standard scene directional light.";
+			ASH_PROCESS_ERROR(false);
+		}
+		AshEngine::TransformComponent directional_transform = directional_entity.get_transform_component();
+		const glm::vec3 directional_ray = glm::normalize(glm::vec3(-0.35f, -0.85f, 0.4f));
+		ASH_PROCESS_ERROR(make_transform_from_look_at(
+			-directional_ray,
+			glm::vec3(0.0f, 0.0f, 0.0f),
+			directional_transform));
+		ASH_PROCESS_ERROR(directional_entity.set_transform_component(directional_transform));
+		AshEngine::LightComponent directional_light{};
+		directional_light.type = AshEngine::LightType::Directional;
+		directional_light.color = { 1.0f, 0.95f, 0.88f };
+		directional_light.intensity = 2.5f;
+		ASH_PROCESS_ERROR(directional_entity.add_light_component(directional_light));
+
+		AshEngine::Entity point_entity = scene.create_entity(k_point_light_name);
+		if (!point_entity.is_valid())
+		{
+			out_error = "Failed to create the Sandbox standard scene point light.";
+			ASH_PROCESS_ERROR(false);
+		}
+		AshEngine::TransformComponent point_transform = point_entity.get_transform_component();
+		point_transform.position = glm::vec3(0.0f, 1.0f, 0.0f);
+		ASH_PROCESS_ERROR(point_entity.set_transform_component(point_transform));
+		AshEngine::LightComponent point_light{};
+		point_light.type = AshEngine::LightType::Point;
+		point_light.color = { 0.45f, 0.68f, 1.0f };
+		point_light.range = 12.0f;
+		point_light.intensity = 24.0f;
+		ASH_PROCESS_ERROR(point_entity.add_light_component(point_light));
+
+		AshEngine::Entity spot_entity = scene.create_entity(k_spot_light_name);
+		if (!spot_entity.is_valid())
+		{
+			out_error = "Failed to create the Sandbox standard scene spot light.";
+			ASH_PROCESS_ERROR(false);
+		}
+		AshEngine::TransformComponent spot_transform = spot_entity.get_transform_component();
+		spot_transform.position = glm::vec3(1.0f, 1.0f, 0.0f);
+		spot_transform.rotation_euler_degrees = glm::vec3(0.0f, 0.0f, 0.0f);
+		spot_transform.scale = glm::vec3(1.0f, 1.0f, 1.0f);
+		ASH_PROCESS_ERROR(spot_entity.set_transform_component(spot_transform));
+		AshEngine::LightComponent spot_light{};
+		spot_light.type = AshEngine::LightType::Spot;
+		spot_light.color = { 1.0f, 0.0f, 0.0f };
+		spot_light.range = 16.0f;
+		spot_light.intensity = 36.0f;
+		spot_light.inner_cone_angle_degrees = 18.0f;
+		spot_light.outer_cone_angle_degrees = 36.0f;
+		ASH_PROCESS_ERROR(spot_entity.add_light_component(spot_light));
+
 		out_error.clear();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}

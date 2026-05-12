@@ -10,6 +10,7 @@ namespace RHI
 		AshSubresourceRange              sub_resource{};
 		AshFormat                       format = ASH_FORMAT_UNDEFINED;
 		const char*                     name = nullptr;
+		bool                            read_only_depth = false;
 	}; // struct TextureViewCreation
 
 	class TextureView : public RHIView

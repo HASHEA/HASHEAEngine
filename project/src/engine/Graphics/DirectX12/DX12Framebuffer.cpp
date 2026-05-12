@@ -2,6 +2,7 @@
 #include "DX12Texture.h"
 #include "DX12TextureView.h"
 #include "DX12DescriptorHeap.h"
+#include "Graphics/RenderPass.h"
 
 namespace RHI
 {
@@ -35,7 +36,11 @@ namespace RHI
 		if (ci.depthStencilAttachment)
 		{
 			auto* dx12Tex = static_cast<DX12Texture*>(ci.depthStencilAttachment.get());
-			auto dsv = dx12Tex->get_default_rtv(); // DSV is stored in defaultRTV for depth textures
+			const AshResourceState depthState = ci.renderPass ? ci.renderPass->get_depth_stencil_attachment_final_state() : AshResourceState::DSVWrite;
+			const bool readOnlyDepth =
+				is_set(depthState, AshResourceState::DSVRead) &&
+				!is_set(depthState, AshResourceState::DSVWrite);
+			auto dsv = readOnlyDepth ? dx12Tex->get_default_read_only_dsv() : dx12Tex->get_default_rtv(); // DSV is stored in defaultRTV for depth textures
 			if (dsv)
 			{
 				auto* dx12View = static_cast<DX12TextureView*>(dsv.get());

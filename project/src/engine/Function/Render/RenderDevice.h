@@ -12,6 +12,7 @@
 namespace RHI
 {
 	struct AshBarrier;
+	enum class AshResourceState : uint32_t;
 	class GraphicsContext;
 	class Swapchain;
 	class CommandBuffer;
@@ -82,6 +83,19 @@ namespace AshEngine
 		TriangleStrip
 	};
 
+	enum class RenderCompareOp : uint8_t
+	{
+		Always = 0,
+		LessEqual,
+		GreaterEqual
+	};
+
+	enum class RenderBlendMode : uint8_t
+	{
+		Opaque = 0,
+		Additive
+	};
+
 	enum class RenderIndexFormat : uint8_t
 	{
 		UInt16 = 0,
@@ -131,6 +145,8 @@ namespace AshEngine
 		RenderPrimitiveTopology primitive_topology = RenderPrimitiveTopology::TriangleList;
 		bool depth_test = false;
 		bool depth_write = false;
+		RenderCompareOp depth_compare = RenderCompareOp::LessEqual;
+		RenderBlendMode blend_mode = RenderBlendMode::Opaque;
 		RenderFrontFace front_face = RenderFrontFace::CounterClockwise;
 	};
 
@@ -494,6 +510,7 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget> render_target = nullptr;
 		RenderLoadAction load_action = RenderLoadAction::Clear;
 		RenderDepthStencilValue clear_value{};
+		bool read_only = false;
 	};
 
 	struct PassDesc
@@ -505,6 +522,11 @@ namespace AshEngine
 	};
 
 	ASH_API RenderColorValue get_engine_back_buffer_clear_color();
+	ASH_API RHI::AshResourceState get_depth_attachment_resource_state(bool read_only, bool shader_resource_capable);
+	ASH_API void fill_pipeline_state_from_graphics_program_state(
+		const GraphicsProgramState& state,
+		RHI::PipelineCreation& pipeline,
+		uint32_t color_attachment_count = 1u);
 
 	class ASH_API RenderDevice
 	{
@@ -561,6 +583,7 @@ namespace AshEngine
 		bool collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_vertex_buffer_barrier(const std::shared_ptr<VertexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers);
 		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool transition_graphics_program_resources(GraphicsProgram* program);
 		bool transition_compute_program_resources(ComputeProgram* program);

@@ -43,6 +43,13 @@ namespace AshEngine
 		glm::vec3 local_max{ 0.0f, 0.0f, 0.0f };
 	};
 
+	struct ASH_API SceneLightExtractionDesc
+	{
+		EntityId entity_id = 0;
+		LightComponent light{};
+		glm::mat4 world_transform{ 1.0f };
+	};
+
 	class Scene;
 
 	class ASH_API Entity
@@ -138,6 +145,7 @@ namespace AshEngine
 		glm::mat4 get_entity_world_transform(EntityId id) const;
 		std::vector<SceneMeshExtractionDesc> extract_mesh_entities() const;
 		std::vector<SceneMeshExtractionDesc> extract_visible_mesh_entities() const;
+		std::vector<SceneLightExtractionDesc> extract_light_entities() const;
 		bool try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const;
 
 		Entity instantiate_model(const Model& model, const Entity& parent = {}, std::string_view root_name_override = {});

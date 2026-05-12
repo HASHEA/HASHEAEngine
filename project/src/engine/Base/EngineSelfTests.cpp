@@ -9,9 +9,13 @@
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/Material.h"
+#include "Function/Render/RenderDevice.h"
+#include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/TextureAsset.h"
+#include "Function/Scene/Scene.h"
 #include "Graphics/DynamicRHI.h"
+#include "Graphics/Pipeline.h"
 #include "Graphics/RHIResource.h"
 #include "Graphics/Shader.h"
 #if defined(ASH_HAS_DX12)
@@ -641,6 +645,135 @@ namespace AshEngine
 				report_self_test_failure("DeferredHQ GBuffer layout", "semantic mappings did not match the design contract");
 		}
 
+		auto test_deferred_shading_model_ids_are_stable() -> bool
+		{
+			const bool ok =
+				get_material_shading_model_id(MaterialShadingModel::Empty) == 0u &&
+				get_material_shading_model_id(MaterialShadingModel::DefaultLitGGX) == 1u &&
+				get_material_shading_model_id(MaterialShadingModel::Unlit) == 2u &&
+				get_material_shading_model_id(MaterialShadingModel::BlinnPhong) == 3u;
+			return ok ||
+				report_self_test_failure("Deferred shading model ids", "GBuffer shading model ids changed unexpectedly");
+		}
+
+		auto test_material_asset_loads_declared_shading_model() -> bool
+		{
+			const std::filesystem::path asset_root = "Intermediate/test-temp/engine/material_shading_model";
+			std::filesystem::create_directories(asset_root);
+
+			const std::filesystem::path material_path = asset_root / "M_Unlit.AshMat";
+			{
+				std::ofstream material_file(material_path, std::ios::trunc);
+				if (!material_file)
+				{
+					return report_self_test_failure("Material shading model load", "failed to create disk material asset");
+				}
+				material_file <<
+					"{\n"
+					"  \"version\": 2,\n"
+					"  \"class\": \"Material\",\n"
+					"  \"name\": \"M_Unlit\",\n"
+					"  \"domain\": \"Surface\",\n"
+					"  \"shading_model\": \"unlit\",\n"
+					"  \"materialShader\": \"product/assets/materials/v2/M_SurfacePBR.hlsl\"\n"
+					"}\n";
+			}
+
+			std::shared_ptr<MaterialInterface> material{};
+			std::string error{};
+			if (!load_material_from_file(material_path, material, &error) || !material)
+			{
+				return report_self_test_failure("Material shading model load", error.empty() ? "failed to load disk material asset" : error.c_str());
+			}
+
+			return material->get_shading_model() == MaterialShadingModel::Unlit ||
+				report_self_test_failure("Material shading model load", "declared shading_model was not applied");
+		}
+
+		auto test_graphics_program_state_maps_deferred_light_volume_state() -> bool
+		{
+			GraphicsProgramState state{};
+			state.cull_mode = RenderCullMode::None;
+			state.depth_test = true;
+			state.depth_write = false;
+			state.depth_compare = RenderCompareOp::GreaterEqual;
+			state.blend_mode = RenderBlendMode::Additive;
+
+			RHI::PipelineCreation pipeline{};
+			fill_pipeline_state_from_graphics_program_state(state, pipeline);
+			const bool depth_ok =
+				pipeline.depth_stencil.depth_enable == 1 &&
+				pipeline.depth_stencil.depth_write_enable == 0 &&
+				pipeline.depth_stencil.depth_comparison == RHI::ASH_COMPARE_OP_GREATER_OR_EQUAL;
+			const bool blend_ok =
+				pipeline.blend_state.active_states == 1u &&
+				pipeline.blend_state.blend_states[0].blend_enabled == 1 &&
+				pipeline.blend_state.blend_states[0].source_color == RHI::ASH_BLEND_FACTOR_ONE &&
+				pipeline.blend_state.blend_states[0].destination_color == RHI::ASH_BLEND_FACTOR_ONE;
+			return (depth_ok && blend_ok) ||
+				report_self_test_failure("Deferred light volume render state", "depth compare or additive blend mapping is invalid");
+		}
+
+		auto test_deferred_read_only_depth_attachment_state() -> bool
+		{
+			const RHI::AshResourceState sampled_read_only =
+				get_depth_attachment_resource_state(true, true);
+			const RHI::AshResourceState writeable =
+				get_depth_attachment_resource_state(false, true);
+			const bool ok =
+				(sampled_read_only & RHI::AshResourceState::DSVRead) == RHI::AshResourceState::DSVRead &&
+				(sampled_read_only & RHI::AshResourceState::SRVGraphics) == RHI::AshResourceState::SRVGraphics &&
+				(sampled_read_only & RHI::AshResourceState::DSVWrite) == RHI::AshResourceState::Unknown &&
+				writeable == RHI::AshResourceState::DSVWrite;
+			return ok ||
+				report_self_test_failure("Deferred read-only depth attachment", "read-only depth did not preserve DSV read plus shader read state");
+		}
+
+		auto test_render_scene_extracts_light_snapshot() -> bool
+		{
+			Scene scene = Scene::create("LightSnapshotSelfTest");
+			Entity directional = scene.create_entity("DirectionalLight");
+			TransformComponent directional_transform = directional.get_transform_component();
+			directional_transform.rotation_euler_degrees = { 0.0f, 90.0f, 0.0f };
+			directional.set_transform_component(directional_transform);
+			LightComponent directional_light{};
+			directional_light.type = LightType::Directional;
+			directional_light.color = { 0.25f, 0.5f, 1.0f };
+			directional_light.intensity = 2.0f;
+			directional.add_light_component(directional_light);
+
+			Entity point = scene.create_entity("PointLight");
+			TransformComponent point_transform = point.get_transform_component();
+			point_transform.position = { 1.0f, 2.0f, 3.0f };
+			point.set_transform_component(point_transform);
+			LightComponent point_light{};
+			point_light.type = LightType::Point;
+			point_light.range = 7.0f;
+			point_light.intensity = 3.0f;
+			point.add_light_component(point_light);
+
+			RenderScene render_scene{};
+			VisibleRenderFrame frame{};
+			if (!render_scene.rebuild_lights_from_scene(scene) || !render_scene.build_visible_light_frame(frame))
+			{
+				return report_self_test_failure("RenderScene light snapshot", "failed to build render-scene light snapshot");
+			}
+
+			if (frame.lights.size() != 2u)
+			{
+				return report_self_test_failure("RenderScene light snapshot", "visible frame did not contain the expected lights");
+			}
+			const bool directional_ok =
+				frame.lights[0].type == LightType::Directional &&
+				glm::length(frame.lights[0].direction_ws) > 0.9f;
+			const bool point_ok =
+				frame.lights[1].type == LightType::Point &&
+				frame.lights[1].position_ws == glm::vec3(1.0f, 2.0f, 3.0f) &&
+				frame.lights[1].range == 7.0f;
+			return (directional_ok && point_ok) ||
+				report_self_test_failure("RenderScene light snapshot", "light data was not extracted with stable transform data");
+		}
+
 #if defined(ASH_HAS_DX12)
 		auto test_dx12_resource_tracker_preserves_partial_state() -> bool
 		{
@@ -710,6 +843,11 @@ namespace AshEngine
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;
 		all_passed = test_deferred_hq_gbuffer_layout_contract() && all_passed;
+		all_passed = test_deferred_shading_model_ids_are_stable() && all_passed;
+		all_passed = test_material_asset_loads_declared_shading_model() && all_passed;
+		all_passed = test_graphics_program_state_maps_deferred_light_volume_state() && all_passed;
+		all_passed = test_deferred_read_only_depth_attachment_state() && all_passed;
+		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;
 #endif

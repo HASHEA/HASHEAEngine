@@ -428,6 +428,14 @@ namespace AshEngine
 					break;
 				}
 			}
+			if (success &&
+				pass_context->m_desc.depth_attachment.render_target &&
+				pass_context->m_desc.depth_attachment.read_only &&
+				!m_render_device->collect_depth_attachment_barrier(pass_context->m_desc.depth_attachment, pass_barriers))
+			{
+				HLogError("Renderer: collect_depth_attachment_barrier failed for pass '{}'.", pass_name);
+				success = false;
+			}
 			if (success && !m_render_device->submit_resource_barriers(pass_barriers))
 			{
 				HLogError("Renderer: submit pass resource barriers failed for pass '{}'.", pass_name);

@@ -718,7 +718,11 @@ namespace RHI
 		for (const auto& srv : srvs)
 		{
 			H_ASSERT(srv);
-			m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{ (VkSampler)VK_NULL_HANDLE, (VkImageView)srv->get_native_handle(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+			const VkFormat view_format = get_vk_texture_format_info(srv->get_view_format()).vkFormat;
+			const VkImageLayout image_layout = TextureFormat::has_depth_or_stencil(view_format) ?
+				VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL :
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			m_vecCachedImageAndSamplerInfo.emplace_back(VkDescriptorImageInfo{ (VkSampler)VK_NULL_HANDLE, (VkImageView)srv->get_native_handle(), image_layout });
 			auto pVulkanTexture = std::static_pointer_cast<VulkanTexture>(srv->get_parent_texture());
 			H_ASSERT(pVulkanTexture);
 			auto subRange = pVulkanTexture->resolve_subresource_range(srv->get_subresource_range());
