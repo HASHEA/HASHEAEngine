@@ -23,7 +23,7 @@ namespace AshSandbox
 		static constexpr char k_point_light_name[] = "SandboxStandardScenePointLight";
 		static constexpr char k_spot_light_name[] = "SandboxStandardSceneSpotLight";
 		static constexpr char k_sample_asset_root_path[] = "models/gltfs";
-		static const glm::vec3 k_primary_camera_position{ 0.0f, 0.0f, 0.0f };
+		static const glm::vec3 k_primary_camera_position{ 0.0f, 2.0f, 0.0f };
 		static const glm::vec3 k_primary_camera_rotation_euler_degrees{ 0.0f, 0.0f, 0.0f };
 		static constexpr float k_default_camera_move_speed = 8.0f;
 
