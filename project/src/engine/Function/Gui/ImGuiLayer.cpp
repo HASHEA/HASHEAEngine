@@ -660,6 +660,14 @@ namespace AshEngine
 		};
 #endif
 
+#if defined(ASH_HAS_VULKAN)
+		struct RetiredVulkanDescriptorSet
+		{
+			VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+			uint64_t retire_frame = 0u;
+		};
+#endif
+
 	private:
 		void reset_state()
 		{
@@ -672,6 +680,9 @@ namespace AshEngine
 			m_backend = RHI::Backend::Default;
 			m_texture_registrations.clear();
 			m_texture_view_registrations.clear();
+#if defined(ASH_HAS_VULKAN)
+			m_vk_retired_descriptor_sets.clear();
+#endif
 #if defined(ASH_HAS_DX12)
 			m_dx12_retired_descriptor_indices.clear();
 #endif
@@ -679,6 +690,9 @@ namespace AshEngine
 
 		void cleanup_dead_registrations()
 		{
+#if defined(ASH_HAS_VULKAN)
+			collect_retired_vulkan_descriptor_sets(false);
+#endif
 #if defined(ASH_HAS_DX12)
 			collect_retired_dx12_descriptors();
 #endif
@@ -718,6 +732,9 @@ namespace AshEngine
 				release_registration(registration, true);
 			}
 			m_texture_view_registrations.clear();
+#if defined(ASH_HAS_VULKAN)
+			collect_retired_vulkan_descriptor_sets(true);
+#endif
 		}
 
 		void release_registration(TextureRegistration& registration, bool immediate = false)
@@ -726,16 +743,7 @@ namespace AshEngine
 			if (registration.descriptor_set != VK_NULL_HANDLE)
 			{
 				const VkDescriptorSet descriptor_set = registration.descriptor_set;
-				if (!immediate && m_backend == RHI::Backend::Vulkan && RHI::VulkanContext::get_current_frame() != UINT32_MAX)
-				{
-					RHI::VulkanContext::get_current_frame_deletion_queue().emplace([descriptor_set]() {
-						ImGui_ImplVulkan_RemoveTexture(descriptor_set);
-					});
-				}
-				else
-				{
-					ImGui_ImplVulkan_RemoveTexture(descriptor_set);
-				}
+				retire_vulkan_descriptor_set(descriptor_set, immediate);
 				registration.descriptor_set = VK_NULL_HANDLE;
 				registration.image_view = VK_NULL_HANDLE;
 			}
@@ -764,6 +772,46 @@ namespace AshEngine
 		}
 
 #if defined(ASH_HAS_VULKAN)
+		void retire_vulkan_descriptor_set(VkDescriptorSet descriptor_set, bool immediate)
+		{
+			if (descriptor_set == VK_NULL_HANDLE)
+			{
+				return;
+			}
+
+			if (immediate || !Application::get() || m_backend != RHI::Backend::Vulkan)
+			{
+				ImGui_ImplVulkan_RemoveTexture(descriptor_set);
+				return;
+			}
+
+			m_vk_retired_descriptor_sets.push_back({
+				descriptor_set,
+				Application::get()->get_frame_index()
+			});
+		}
+
+		void collect_retired_vulkan_descriptor_sets(bool immediate)
+		{
+			if (m_vk_retired_descriptor_sets.empty())
+			{
+				return;
+			}
+
+			const uint64_t current_frame = Application::get() ? Application::get()->get_frame_index() : 0u;
+			const uint64_t recycle_latency = static_cast<uint64_t>(std::max<uint32_t>(2u, get_imgui_image_count())) + 1u;
+			for (auto it = m_vk_retired_descriptor_sets.begin(); it != m_vk_retired_descriptor_sets.end();)
+			{
+				if (immediate || current_frame >= it->retire_frame + recycle_latency)
+				{
+					ImGui_ImplVulkan_RemoveTexture(it->descriptor_set);
+					it = m_vk_retired_descriptor_sets.erase(it);
+					continue;
+				}
+				++it;
+			}
+		}
+
 		bool init_vulkan_backend()
 		{
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -889,16 +937,7 @@ namespace AshEngine
 			if (registration.descriptor_set != VK_NULL_HANDLE)
 			{
 				const VkDescriptorSet old_descriptor_set = registration.descriptor_set;
-				if (RHI::VulkanContext::get_current_frame() != UINT32_MAX)
-				{
-					RHI::VulkanContext::get_current_frame_deletion_queue().emplace([old_descriptor_set]() {
-						ImGui_ImplVulkan_RemoveTexture(old_descriptor_set);
-					});
-				}
-				else
-				{
-					ImGui_ImplVulkan_RemoveTexture(old_descriptor_set);
-				}
+				retire_vulkan_descriptor_set(old_descriptor_set, false);
 				registration.descriptor_set = VK_NULL_HANDLE;
 				registration.image_view = VK_NULL_HANDLE;
 			}
@@ -1120,6 +1159,7 @@ namespace AshEngine
 		VkSampler m_vk_sampler = VK_NULL_HANDLE;
 		std::shared_ptr<RHI::RenderPass> m_vk_render_pass = nullptr;
 		uint32_t m_vk_image_count = 0u;
+		std::vector<RetiredVulkanDescriptorSet> m_vk_retired_descriptor_sets{};
 #endif
 
 #if defined(ASH_HAS_DX12)

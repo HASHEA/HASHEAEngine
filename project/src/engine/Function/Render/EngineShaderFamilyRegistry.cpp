@@ -28,6 +28,8 @@ namespace AshEngine
 		{
 		case PassFamily::DepthOnly:
 			return depth_only_shader_path;
+		case PassFamily::GBuffer:
+			return gbuffer_shader_path;
 		case PassFamily::BasePass:
 		default:
 			return base_pass_shader_path;
@@ -43,6 +45,7 @@ namespace AshEngine
 			"Surface.StaticMesh",
 			"project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshBasePass.hlsl",
 			"project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshDepthOnly.hlsl",
+			"project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshGBuffer.hlsl",
 			to_capability_mask(MaterialCapability::VertexColor) |
 				to_capability_mask(MaterialCapability::UV1)
 		});

@@ -30,6 +30,7 @@ namespace AshEngine
 		bool supports_surface = false;
 		bool supports_depth_prepass = false;
 		bool supports_base_pass = false;
+		bool supports_gbuffer_pass = false;
 		bool is_masked = false;
 		bool is_transparent = false;
 		MaterialDomain domain = MaterialDomain::Surface;

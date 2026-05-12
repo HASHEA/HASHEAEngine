@@ -527,7 +527,31 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 如果以后改动这条规则，必须同时验证 Vulkan 与 DX12。
 
-### 6.5 GPU Upload Command Path
+### 6.5 DeferredHQ GBuffer 静态网格路径
+
+当前 `SceneRenderer` 的 opaque / masked `Surface.StaticMesh` 默认走第一版 DeferredHQ GBuffer 路径：
+
+- GBuffer layout 由 Function 层 `GBufferLayoutDesc / GBufferLayoutKey` 描述，选择粒度是 view / render feature 级别，不是 per-material 或 per-draw。
+- 当前落地的固定 preset 是 `DeferredHQ`，用于给后续动态 layout registry 打接口基础。
+- 第一版 `DeferredHQ` 使用 5 个 MRT：
+  - `GBufferA`：`RGBA8_UNORM`，BaseColor.rgb + ShadingModelId/Flags.a
+  - `GBufferB`：`RGBA8_UNORM`，Metallic / Roughness / AO / Specular
+  - `GBufferC`：`RGBA8_UNORM`，CustomData0..3
+  - `GBufferD`：`RGBA16_SFLOAT`，MotionVector3D.xyz + TemporalFlags.a
+  - `GBufferE`：`RGBA16_SFLOAT`，NormalOct.xy + EmissiveOrCustom.zw
+- `MotionVector3D` 在当前设计里表示 screen-space velocity.xy + z，不是 world-space velocity；第一版 shader 先写 0，历史帧矩阵与 velocity 生成后续补齐。
+- `SceneDeferredResources` 按 view 输出尺寸和 layout hash 复用 / 重建 GBuffer targets，并创建可采样的 D32 depth。
+- `SceneRenderer` 先提交 `SceneGBufferPass`，再由 `DeferredLightingPass` 的 fullscreen triangle 采样 GBuffer 并写回 `SceneRenderViewContext.output_target`。
+- 原 `Surface.StaticMesh.BasePass` 前向路径保留为 fallback；透明材质仍不进入当前 deferred opaque path。
+
+材质边界保持不变：
+
+- 用户材质 shader 不感知前向 / 延迟，也不 touch GBuffer。
+- 用户 shader 仍只提供 `CalculateVertexMainNode` 与 `CalculatePixelMainNode`。
+- Engine host shader `SurfaceStaticMeshGBuffer.hlsl` 调用用户节点并负责 GBuffer 打包。
+- `MaterialShaderSourceBuilder` 只给 GBuffer pass 注入 pass/layout 宏，供 engine host shader 使用。
+
+### 6.6 GPU Upload Command Path
 
 当前 GPU 资源的 CPU->GPU 初始数据上传，统一不再走“创建/更新时立即提交并等待”的路径，而是改为：
 
@@ -1064,7 +1088,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `RenderScene::rebuild_from_scene(...)` 可能运行在 logic thread，因此 section 解析阶段必须保持 CPU-only，不能创建材质 UBO、纹理、sampler 或 graphics program
 - submit 阶段在 proxy 缺失或材质 version / compile hash / shader 文件签名 / texture asset version 变化时，通过 `RenderAssetManager` 的 cache 准备/刷新 `MaterialRenderProxy`；shader 文件签名检查按 `MaterialRenderProxy` 节流，不能在每个可见 section、每帧都进行 filesystem probe
 - `MaterialRenderProxy` 在 render thread 上缓存：
-  - `Surface.StaticMesh.BasePass` 与 `DepthOnly` 两套 `MaterialResource`
+  - `Surface.StaticMesh.BasePass`、`DepthOnly` 与 `GBuffer` 三套 `MaterialResource`
   - 每材质独立的 `GraphicsProgram`
   - 由参数 block 反射驱动的材质 `UniformBuffer`
   - 解析后的资源贴图与 sampler 绑定快照
@@ -1079,6 +1103,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 当前静态 mesh `Surface` 使用的 engine-host shader 为：
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshBasePass.hlsl`
   - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshDepthOnly.hlsl`
+  - `project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshGBuffer.hlsl`
 - 当前材质拼接占位 include 属于 Engine shader 内部文件：
   - `project/src/engine/Shaders/MaterialV2/Includes/UserShader.hlsli`
   - `project/src/engine/Shaders/MaterialV2/Includes/GeneratedMaterialBindings.hlsli`
@@ -1262,17 +1287,19 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - `SceneRenderer` 不再持有一个覆盖全场景的共享 `GraphicsProgram`
 - static mesh `Surface` 现在统一走 V2 `MaterialSystem + MaterialRenderProxy` 资源模板路径
 - `SceneRenderer` 当前只负责：
-  - per-view render pass / depth 目标管理
+  - per-view render pass / deferred GBuffer / depth 目标管理
   - 静态网格 batch 构建、单可见静态网格 direct section submit、instance buffer 更新和 draw 提交
   - 消费 section 的 `MaterialRenderProxy`
+  - 第一版 fullscreen deferred lighting resolve
 - 当前 `Surface.StaticMesh` shader family 仍使用 instanced vertex layout，所以单可见 draw fast path 不是非 instanced shader 路径；它只绕过 batch lookup / instance vector 构建，并继续绑定 slot 1 的单实例 buffer
-- `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 `Surface.StaticMesh.BasePass` 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
+- `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 deferred static mesh path 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
 
 当前 depth 规则为：
 
-- 如果调用方传入 `depth_target`，则 `SceneRenderer` 直接使用该 depth，生命周期和跨 pass 语义由调用方负责
-- 如果调用方不传入 `depth_target`，则 `SceneRenderer` 会按输出目标尺寸和格式获取内部 scratch depth
-- 这张 scratch depth 只保证本次 scene pass 可用；如果后续 pass 需要继续读取或复用 depth，必须由调用方显式提供 depth target
+- 前向 fallback 路径中，如果调用方传入 `depth_target`，`SceneRenderer` 直接使用该 depth，生命周期和跨 pass 语义由调用方负责
+- 前向 fallback 路径中，如果调用方不传入 `depth_target`，`SceneRenderer` 会按输出目标尺寸和格式获取内部 scratch depth
+- deferred 路径使用 `SceneDeferredResources` 持有的 D32 depth，它会作为 GBuffer pass depth attachment 并在 lighting pass 作为 shader resource 可用
+- scratch depth 只保证本次 scene pass 可用；如果后续 pass 需要继续读取或复用前向 fallback depth，必须由调用方显式提供 depth target
 
 第一版多 view 仍有一个明确边界：
 

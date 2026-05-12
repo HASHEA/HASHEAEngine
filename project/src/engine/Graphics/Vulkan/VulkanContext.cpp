@@ -1397,6 +1397,7 @@ namespace RHI
 		{
 			vulkanStagingBufferPool->uninit();
 			Ash_Delete(nullptr,vulkanStagingBufferPool);
+			vulkanStagingBufferPool = nullptr;
 		}
 		return true;
 	}
@@ -1461,6 +1462,14 @@ namespace RHI
 	}
 	auto VulkanContext::shutdown() -> bool
 	{
+		const auto flush_delayed_deletion_queues = [this]()
+		{
+			for (uint32_t queue_index = 0; queue_index < k_max_frames; ++queue_index)
+			{
+				delayed_deletion_queues[queue_index].flush();
+			}
+		};
+
 		//wait idle
 		wait_idle();
 
@@ -1473,6 +1482,10 @@ namespace RHI
 
 		//unload cache
 		_unload_cache();
+		// App-level resource destructors enqueue per-frame deletion work while the
+		// device is idle during shutdown. Drain that work before backend-owned
+		// pools, such as the staging allocator, are torn down.
+		flush_delayed_deletion_queues();
 		//shutdown framepool and datas
 		_shutdown_frame_pool_and_data();
 		//shutdown staging pool
@@ -1485,10 +1498,7 @@ namespace RHI
 		//shutdown descriptor pool
 		_shutdown_descriptor_pool();
 		//flush deletion queue at the very end to make sure all resources are destroyed before device destroy, otherwise VUID-vkDestroyDevice-device-05137.
-		for (auto& deletionQueue : delayed_deletion_queues)
-		{
-			deletionQueue.flush();
-		}
+		flush_delayed_deletion_queues();
 		//shutdown vma
 		_shutdown_vulkan_memory_allocator();
 		//shutdown device

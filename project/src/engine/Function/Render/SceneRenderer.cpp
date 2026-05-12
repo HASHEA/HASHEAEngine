@@ -3,6 +3,7 @@
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Function/Application.h"
+#include "Function/Render/GBufferLayout.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <cstdint>
@@ -27,6 +28,58 @@ namespace AshEngine
 		}
 
 		static constexpr size_t k_max_scratch_depth_targets = 8u;
+
+		static auto get_staticmesh_pass_label(PassFamily pass_family) -> const char*
+		{
+			switch (pass_family)
+			{
+			case PassFamily::GBuffer:
+				return "Surface.StaticMesh.GBuffer";
+			case PassFamily::DepthOnly:
+				return "Surface.StaticMesh.DepthOnly";
+			case PassFamily::BasePass:
+			default:
+				return "Surface.StaticMesh.BasePass";
+			}
+		}
+
+		static auto select_staticmesh_material_resource(
+			const MaterialRenderProxy& material_proxy,
+			PassFamily pass_family) -> const MaterialResource*
+		{
+			switch (pass_family)
+			{
+			case PassFamily::GBuffer:
+				return material_proxy.get_surface_staticmesh_gbuffer_resource();
+			case PassFamily::DepthOnly:
+				return material_proxy.get_surface_staticmesh_depthonly_resource();
+			case PassFamily::BasePass:
+			default:
+				return material_proxy.get_surface_staticmesh_basepass_resource();
+			}
+		}
+
+		static auto supports_staticmesh_pass(
+			const MaterialResource& resource,
+			PassFamily pass_family) -> bool
+		{
+			if (!resource.pass_relevance.supports_surface ||
+				resource.pass_relevance.domain != MaterialDomain::Surface)
+			{
+				return false;
+			}
+
+			switch (pass_family)
+			{
+			case PassFamily::GBuffer:
+				return resource.pass_relevance.supports_gbuffer_pass;
+			case PassFamily::DepthOnly:
+				return resource.pass_relevance.supports_depth_prepass;
+			case PassFamily::BasePass:
+			default:
+				return resource.pass_relevance.supports_base_pass;
+			}
+		}
 
 		struct StaticMeshDrawBatch
 		{
@@ -138,12 +191,17 @@ namespace AshEngine
 
 	bool SceneRenderer::initialize(Renderer* renderer)
 	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		m_renderer = renderer;
-		return m_renderer != nullptr;
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void SceneRenderer::shutdown()
 	{
+		m_deferred_lighting_pass.shutdown();
+		m_deferred_resources.reset();
 		m_scratch_depth_targets.clear();
 		m_instance_buffers.clear();
 		m_logged_warning_keys.clear();
@@ -201,6 +259,48 @@ namespace AshEngine
 		ASH_PROFILE_PLOT("Scene/StaticMeshDraws", static_cast<int64_t>(frame.static_mesh_draws.size()));
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
+
+		if (m_use_deferred_static_mesh_path)
+		{
+			const uint32_t output_width = view_context.output_target->get_width();
+			const uint32_t output_height = view_context.output_target->get_height();
+			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
+			ASH_PROCESS_ERROR(m_deferred_resources.ensure(*m_renderer, output_width, output_height, layout));
+
+			PassDesc gbuffer_pass_desc{};
+			gbuffer_pass_desc.name = "SceneGBufferPass";
+			gbuffer_pass_desc.allow_reorder_draws = true;
+			for (const std::shared_ptr<RenderTarget>& target : m_deferred_resources.get_gbuffer_targets())
+			{
+				gbuffer_pass_desc.color_attachments.push_back({
+					target,
+					RenderLoadAction::Clear,
+					{}
+				});
+			}
+			gbuffer_pass_desc.depth_attachment = {
+				m_deferred_resources.get_depth_target(),
+				RenderLoadAction::Clear,
+				view_context.depth_clear_value
+			};
+
+			Renderer::GraphicsPassContext gbuffer_pass_context{};
+			ASH_PROCESS_ERROR(m_renderer->begin_pass(gbuffer_pass_desc, gbuffer_pass_context));
+			ASH_PROCESS_ERROR(render_static_meshes_to_pass(
+				frame,
+				view_context,
+				gbuffer_pass_context,
+				PassFamily::GBuffer));
+			gbuffer_pass_context.end();
+
+			ASH_PROCESS_ERROR(m_deferred_lighting_pass.render(
+				*m_renderer,
+				m_deferred_resources,
+				view_context.output_target,
+				view_context));
+			break;
+		}
+
 		const std::shared_ptr<RenderTarget> depth_target = resolve_depth_target(view_context);
 		ASH_PROCESS_ERROR(depth_target != nullptr);
 
@@ -220,7 +320,22 @@ namespace AshEngine
 
 		Renderer::GraphicsPassContext pass_context{};
 		ASH_PROCESS_ERROR(m_renderer->begin_pass(pass_desc, pass_context));
+		ASH_PROCESS_ERROR(render_static_meshes_to_pass(
+			frame,
+			view_context,
+			pass_context,
+			PassFamily::BasePass));
+		pass_context.end();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
 
+	bool SceneRenderer::render_static_meshes_to_pass(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		Renderer::GraphicsPassContext& pass_context,
+		PassFamily pass_family)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		const bool use_instanced_static_mesh_path =
 			should_use_instanced_static_mesh_path(frame.static_mesh_draws.size());
 		if (!use_instanced_static_mesh_path)
@@ -244,17 +359,17 @@ namespace AshEngine
 					}
 
 					const MaterialResource* material_resource =
-						section.material_proxy->get_surface_staticmesh_basepass_resource();
+						select_staticmesh_material_resource(*section.material_proxy, pass_family);
 					if (!material_resource)
 					{
 						HLogError(
-							"SceneRenderer: skipping material '{}' because no render resource is available.",
-							section.material->get_asset_path().generic_string());
+							"SceneRenderer: skipping material '{}' because no '{}' render resource is available.",
+							section.material->get_asset_path().generic_string(),
+							get_staticmesh_pass_label(pass_family));
 						continue;
 					}
 
-					if (!material_resource->pass_relevance.supports_surface ||
-						material_resource->pass_relevance.domain != MaterialDomain::Surface)
+					if (!supports_staticmesh_pass(*material_resource, pass_family))
 					{
 						continue;
 					}
@@ -266,7 +381,11 @@ namespace AshEngine
 							section.material->get_asset_path().generic_string();
 						log_warning_once(
 							"transparent#" + material_key,
-							"SceneRenderer: skipping transparent material '" + material_key + "' in Surface.StaticMesh.BasePass.");
+							"SceneRenderer: skipping transparent material '" +
+							material_key +
+							"' in " +
+							get_staticmesh_pass_label(pass_family) +
+							".");
 						continue;
 					}
 					GraphicsProgram* program = material_resource->program;
@@ -278,7 +397,7 @@ namespace AshEngine
 						continue;
 					}
 
-					log_basepass_usage_once(*section.material, *material_resource);
+					log_staticmesh_pass_usage_once(*section.material, *material_resource, pass_family);
 
 					GraphicsDrawDesc draw_desc{};
 					draw_desc.program = program;
@@ -323,17 +442,17 @@ namespace AshEngine
 					}
 
 					const MaterialResource* material_resource =
-						section.material_proxy->get_surface_staticmesh_basepass_resource();
+						select_staticmesh_material_resource(*section.material_proxy, pass_family);
 					if (!material_resource)
 					{
 						HLogError(
-							"SceneRenderer: skipping material '{}' because no render resource is available.",
-							section.material->get_asset_path().generic_string());
+							"SceneRenderer: skipping material '{}' because no '{}' render resource is available.",
+							section.material->get_asset_path().generic_string(),
+							get_staticmesh_pass_label(pass_family));
 						continue;
 					}
 
-					if (!material_resource->pass_relevance.supports_surface ||
-						material_resource->pass_relevance.domain != MaterialDomain::Surface)
+					if (!supports_staticmesh_pass(*material_resource, pass_family))
 					{
 						continue;
 					}
@@ -345,7 +464,11 @@ namespace AshEngine
 							section.material->get_asset_path().generic_string();
 						log_warning_once(
 							"transparent#" + material_key,
-							"SceneRenderer: skipping transparent material '" + material_key + "' in Surface.StaticMesh.BasePass.");
+							"SceneRenderer: skipping transparent material '" +
+							material_key +
+							"' in " +
+							get_staticmesh_pass_label(pass_family) +
+							".");
 						continue;
 					}
 					GraphicsProgram* program = material_resource->program;
@@ -357,7 +480,7 @@ namespace AshEngine
 						continue;
 					}
 
-					log_basepass_usage_once(*section.material, *material_resource);
+					log_staticmesh_pass_usage_once(*section.material, *material_resource, pass_family);
 
 					StaticMeshDrawBatch& batch = find_or_add_batch(batches, batch_lookup, program, draw.render_asset, section);
 					batch.instances.push_back(make_instance_data(frame.view_projection * draw.world_transform));
@@ -396,7 +519,6 @@ namespace AshEngine
 			}
 		}
 
-		pass_context.end();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -529,11 +651,16 @@ namespace AshEngine
 		HLogWarning("{}", message);
 	}
 
-	void SceneRenderer::log_basepass_usage_once(const MaterialInterface& material, const MaterialResource& resource)
+	void SceneRenderer::log_staticmesh_pass_usage_once(
+		const MaterialInterface& material,
+		const MaterialResource& resource,
+		PassFamily pass_family)
 	{
 		const std::string material_label = build_material_label(material);
 		const std::string log_key =
 			material_label +
+			"#" +
+			get_staticmesh_pass_label(pass_family) +
 			"#" +
 			std::to_string(resource.combined_source_hash);
 		if (!m_logged_material_usage_keys.insert(log_key).second)
@@ -542,8 +669,9 @@ namespace AshEngine
 		}
 
 		HLogInfo(
-			"SceneRenderer: drawing Surface.StaticMesh.BasePass with V2 material '{}' "
+			"SceneRenderer: drawing {} with V2 material '{}' "
 			"(program='{}', source_hash={}).",
+			get_staticmesh_pass_label(pass_family),
 			material_label,
 			resource.program_name.empty() ? std::string("<unnamed-program>") : resource.program_name,
 			resource.combined_source_hash);

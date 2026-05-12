@@ -59,7 +59,16 @@ namespace AshEngine
 			{
 			case EngineShaderFamily::SurfaceStaticMesh:
 			default:
-				return usage.pass == PassFamily::DepthOnly ? "SurfaceStaticMesh_DepthOnly" : "SurfaceStaticMesh_BasePass";
+				switch (usage.pass)
+				{
+				case PassFamily::DepthOnly:
+					return "SurfaceStaticMesh_DepthOnly";
+				case PassFamily::GBuffer:
+					return "SurfaceStaticMesh_GBuffer";
+				case PassFamily::BasePass:
+				default:
+					return "SurfaceStaticMesh_BasePass";
+				}
 			}
 		}
 
@@ -105,6 +114,13 @@ namespace AshEngine
 		bindings << "#define ASH_ENGINE_FAMILY_SURFACE_STATIC_MESH " << (usage.family == EngineShaderFamily::SurfaceStaticMesh ? 1 : 0) << "\n";
 		bindings << "#define ASH_PASS_BASE_PASS " << (usage.pass == PassFamily::BasePass ? 1 : 0) << "\n";
 		bindings << "#define ASH_PASS_DEPTH_ONLY " << (usage.pass == PassFamily::DepthOnly ? 1 : 0) << "\n";
+		bindings << "#define ASH_PASS_GBUFFER " << (usage.pass == PassFamily::GBuffer ? 1 : 0) << "\n";
+		if (usage.pass == PassFamily::GBuffer)
+		{
+			bindings << "#define ASH_GBUFFER_LAYOUT_DEFERRED_HQ 1\n";
+			bindings << "#define ASH_GBUFFER_OUTPUT_COUNT 5\n";
+			bindings << "#define ASH_GBUFFER_HAS_MOTION_VECTOR_3D 1\n";
+		}
 		bindings << "#define ASH_HAS_VERTEX_COLOR " << ((usage.capability_mask & static_cast<uint64_t>(MaterialCapability::VertexColor)) != 0 ? 1 : 0) << "\n";
 		bindings << "#define ASH_HAS_UV1 " << ((usage.capability_mask & static_cast<uint64_t>(MaterialCapability::UV1)) != 0 ? 1 : 0) << "\n";
 		bindings << "#define ASH_MATERIAL_BLEND_MODE_OPAQUE " << (render_state.blend_mode == MaterialBlendMode::Opaque ? 1 : 0) << "\n";

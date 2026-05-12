@@ -7,6 +7,7 @@
 #include "hmemory.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
+#include "Function/Render/GBufferLayout.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/TextureAsset.h"
@@ -612,6 +613,34 @@ namespace AshEngine
 				report_self_test_failure("SceneRenderer batch policy", "multiple static mesh draws should keep the instancing path available");
 		}
 
+		auto test_deferred_hq_gbuffer_layout_contract() -> bool
+		{
+			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
+			if (layout.attachments.size() != 5)
+			{
+				return report_self_test_failure("DeferredHQ GBuffer layout", "layout did not expose five color attachments");
+			}
+			if (layout.attachments[0].format != RenderTextureFormat::RGBA8_UNORM ||
+				layout.attachments[1].format != RenderTextureFormat::RGBA8_UNORM ||
+				layout.attachments[2].format != RenderTextureFormat::RGBA8_UNORM ||
+				layout.attachments[3].format != RenderTextureFormat::RGBA16_SFLOAT ||
+				layout.attachments[4].format != RenderTextureFormat::RGBA16_SFLOAT)
+			{
+				return report_self_test_failure("DeferredHQ GBuffer layout", "attachment formats changed unexpectedly");
+			}
+
+			const GBufferSemanticMapping* motion =
+				find_gbuffer_semantic_mapping(layout, GBufferSemantic::MotionVector3D);
+			const GBufferSemanticMapping* normal =
+				find_gbuffer_semantic_mapping(layout, GBufferSemantic::NormalOct);
+			const bool ok =
+				layout.layout_hash != 0 &&
+				motion && motion->attachment_index == 3 && motion->component_mask == 0x7u &&
+				normal && normal->attachment_index == 4 && normal->component_mask == 0x3u;
+			return ok ||
+				report_self_test_failure("DeferredHQ GBuffer layout", "semantic mappings did not match the design contract");
+		}
+
 #if defined(ASH_HAS_DX12)
 		auto test_dx12_resource_tracker_preserves_partial_state() -> bool
 		{
@@ -680,6 +709,7 @@ namespace AshEngine
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;
+		all_passed = test_deferred_hq_gbuffer_layout_contract() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;
 #endif

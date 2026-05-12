@@ -36,6 +36,7 @@ namespace AshEngine
 		const std::shared_ptr<const MaterialInterface>& get_material() const;
 		const MaterialResource* get_surface_staticmesh_basepass_resource() const;
 		const MaterialResource* get_surface_staticmesh_depthonly_resource() const;
+		const MaterialResource* get_surface_staticmesh_gbuffer_resource() const;
 		bool prepare_surface_staticmesh(RenderAssetManager& asset_manager, Renderer& renderer);
 		bool ensure_program(Renderer& renderer);
 		bool update_bindings(RenderAssetManager& asset_manager);
@@ -58,10 +59,13 @@ namespace AshEngine
 		std::shared_ptr<UniformBuffer> m_v2_material_uniforms = nullptr;
 		const MaterialResource* m_surface_staticmesh_basepass_template = nullptr;
 		const MaterialResource* m_surface_staticmesh_depthonly_template = nullptr;
+		const MaterialResource* m_surface_staticmesh_gbuffer_template = nullptr;
 		MaterialResource m_surface_staticmesh_basepass_resource{};
 		MaterialResource m_surface_staticmesh_depthonly_resource{};
+		MaterialResource m_surface_staticmesh_gbuffer_resource{};
 		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_basepass_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_depthonly_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_surface_staticmesh_gbuffer_program = nullptr;
 		uint64_t m_runtime_binding_version = 0;
 		uint64_t m_bound_binding_version = 0;
 		uint64_t m_material_version = 0;

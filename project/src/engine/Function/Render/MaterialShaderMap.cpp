@@ -16,7 +16,19 @@ namespace AshEngine
 				usage.family == EngineShaderFamily::SurfaceStaticMesh ?
 				"Surface.StaticMesh" :
 				"UnknownFamily";
-			usage_name += usage.pass == PassFamily::DepthOnly ? ".DepthOnly" : ".BasePass";
+			switch (usage.pass)
+			{
+			case PassFamily::DepthOnly:
+				usage_name += ".DepthOnly";
+				break;
+			case PassFamily::GBuffer:
+				usage_name += ".GBuffer";
+				break;
+			case PassFamily::BasePass:
+			default:
+				usage_name += ".BasePass";
+				break;
+			}
 			return usage_name;
 		}
 
@@ -54,7 +66,19 @@ namespace AshEngine
 				stream << "SurfaceStaticMesh";
 				break;
 			}
-			stream << "_" << (usage.pass == PassFamily::DepthOnly ? "DepthOnly" : "BasePass");
+			switch (usage.pass)
+			{
+			case PassFamily::DepthOnly:
+				stream << "_DepthOnly";
+				break;
+			case PassFamily::GBuffer:
+				stream << "_GBuffer";
+				break;
+			case PassFamily::BasePass:
+			default:
+				stream << "_BasePass";
+				break;
+			}
 			return stream.str();
 		}
 
@@ -129,6 +153,10 @@ namespace AshEngine
 			relevance.supports_base_pass =
 				relevance.supports_surface &&
 				usage.pass == PassFamily::BasePass &&
+				blend_mode != MaterialBlendMode::Transparent;
+			relevance.supports_gbuffer_pass =
+				relevance.supports_surface &&
+				usage.pass == PassFamily::GBuffer &&
 				blend_mode != MaterialBlendMode::Transparent;
 			relevance.supports_depth_prepass =
 				relevance.supports_surface &&

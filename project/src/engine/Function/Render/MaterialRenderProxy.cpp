@@ -20,7 +20,19 @@ namespace AshEngine
 				usage.family == EngineShaderFamily::SurfaceStaticMesh ?
 				"Surface.StaticMesh" :
 				"UnknownFamily";
-			usage_name += usage.pass == PassFamily::DepthOnly ? ".DepthOnly" : ".BasePass";
+			switch (usage.pass)
+			{
+			case PassFamily::DepthOnly:
+				usage_name += ".DepthOnly";
+				break;
+			case PassFamily::GBuffer:
+				usage_name += ".GBuffer";
+				break;
+			case PassFamily::BasePass:
+			default:
+				usage_name += ".BasePass";
+				break;
+			}
 			return usage_name;
 		}
 
@@ -82,6 +94,13 @@ namespace AshEngine
 			nullptr;
 	}
 
+	const MaterialResource* MaterialRenderProxy::get_surface_staticmesh_gbuffer_resource() const
+	{
+		return m_surface_staticmesh_gbuffer_template != nullptr ?
+			&m_surface_staticmesh_gbuffer_resource :
+			nullptr;
+	}
+
 	bool MaterialRenderProxy::needs_surface_staticmesh_preparation() const
 	{
 		if (!m_material)
@@ -95,8 +114,10 @@ namespace AshEngine
 		}
 		if (!m_surface_staticmesh_basepass_template ||
 			!m_surface_staticmesh_depthonly_template ||
+			!m_surface_staticmesh_gbuffer_template ||
 			!m_surface_staticmesh_basepass_program ||
-			!m_surface_staticmesh_depthonly_program)
+			!m_surface_staticmesh_depthonly_program ||
+			!m_surface_staticmesh_gbuffer_program)
 		{
 			return true;
 		}
@@ -118,7 +139,8 @@ namespace AshEngine
 		return m_binding_snapshot.version == 0 ||
 			m_bound_binding_version != m_binding_snapshot.version ||
 			m_surface_staticmesh_basepass_resource.program != m_surface_staticmesh_basepass_program.get() ||
-			m_surface_staticmesh_depthonly_resource.program != m_surface_staticmesh_depthonly_program.get();
+			m_surface_staticmesh_depthonly_resource.program != m_surface_staticmesh_depthonly_program.get() ||
+			m_surface_staticmesh_gbuffer_resource.program != m_surface_staticmesh_gbuffer_program.get();
 	}
 
 	bool MaterialRenderProxy::prepare_surface_staticmesh(RenderAssetManager& asset_manager, Renderer& renderer)
@@ -153,6 +175,15 @@ namespace AshEngine
 			m_surface_staticmesh_depthonly_resource.program = m_surface_staticmesh_depthonly_program.get();
 		}
 
+		if (!m_surface_staticmesh_gbuffer_program)
+		{
+			ASH_PROCESS_ERROR(create_v2_program_instance(
+				m_surface_staticmesh_gbuffer_resource,
+				renderer,
+				m_surface_staticmesh_gbuffer_program));
+			m_surface_staticmesh_gbuffer_resource.program = m_surface_staticmesh_gbuffer_program.get();
+		}
+
 		if (m_binding_snapshot.version != 0 && m_bound_binding_version != m_binding_snapshot.version)
 		{
 			ASH_PROCESS_ERROR(bind_v2_program_resources());
@@ -185,7 +216,9 @@ namespace AshEngine
 
 		if (m_material_version == material_version && m_binding_snapshot.version != 0 && texture_bindings_current)
 		{
-			if ((m_surface_staticmesh_basepass_program || m_surface_staticmesh_depthonly_program) &&
+			if ((m_surface_staticmesh_basepass_program ||
+					m_surface_staticmesh_depthonly_program ||
+					m_surface_staticmesh_gbuffer_program) &&
 				m_bound_binding_version != m_binding_snapshot.version)
 			{
 				ASH_PROCESS_ERROR(bind_v2_program_resources());
@@ -204,6 +237,10 @@ namespace AshEngine
 		else if (!m_surface_staticmesh_depthonly_resource.parameter_block_name.empty())
 		{
 			parameter_block_layout = &m_surface_staticmesh_depthonly_resource.parameter_block_layout;
+		}
+		else if (!m_surface_staticmesh_gbuffer_resource.parameter_block_name.empty())
+		{
+			parameter_block_layout = &m_surface_staticmesh_gbuffer_resource.parameter_block_layout;
 		}
 
 		if (parameter_block_layout && parameter_block_layout->byte_size > 0)
@@ -363,7 +400,9 @@ namespace AshEngine
 			m_binding_snapshot.packed_parameter_data.size(),
 			m_binding_snapshot.textures.size(),
 			m_binding_snapshot.samplers.size());
-		if (m_surface_staticmesh_basepass_program || m_surface_staticmesh_depthonly_program)
+		if (m_surface_staticmesh_basepass_program ||
+			m_surface_staticmesh_depthonly_program ||
+			m_surface_staticmesh_gbuffer_program)
 		{
 			ASH_PROCESS_ERROR(bind_v2_program_resources());
 		}
@@ -379,11 +418,13 @@ namespace AshEngine
 		const uint64_t compile_hash = m_material->get_compile_hash();
 		if (m_surface_staticmesh_basepass_template != nullptr &&
 			m_surface_staticmesh_depthonly_template != nullptr &&
+			m_surface_staticmesh_gbuffer_template != nullptr &&
 			m_v2_compile_hash == compile_hash &&
 			shader_file_signatures_current_throttled())
 		{
 			m_surface_staticmesh_basepass_resource.program = m_surface_staticmesh_basepass_program.get();
 			m_surface_staticmesh_depthonly_resource.program = m_surface_staticmesh_depthonly_program.get();
+			m_surface_staticmesh_gbuffer_resource.program = m_surface_staticmesh_gbuffer_program.get();
 			break;
 		}
 
@@ -400,6 +441,12 @@ namespace AshEngine
 			MaterialDomain::Surface,
 			EngineShaderFamily::SurfaceStaticMesh,
 			PassFamily::DepthOnly,
+			capability_mask
+		};
+		const MaterialUsageDesc gbuffer_usage{
+			MaterialDomain::Surface,
+			EngineShaderFamily::SurfaceStaticMesh,
+			PassFamily::GBuffer,
 			capability_mask
 		};
 
@@ -427,12 +474,27 @@ namespace AshEngine
 		}
 		ASH_PROCESS_ERROR(depthonly_template != nullptr);
 
+		error.clear();
+		const MaterialResource* gbuffer_template =
+			m_material_system->get_or_create_resource(*m_material, gbuffer_usage, &error);
+		if (!gbuffer_template)
+		{
+			HLogError(
+				"MaterialRenderProxy: failed to resolve V2 GBuffer template for material '{}': {}",
+				m_material->get_asset_path().generic_string(),
+				error.empty() ? std::string("unknown error") : error);
+		}
+		ASH_PROCESS_ERROR(gbuffer_template != nullptr);
+
 		const bool basepass_changed =
 			m_surface_staticmesh_basepass_template != basepass_template ||
 			m_surface_staticmesh_basepass_resource.combined_source_hash != basepass_template->combined_source_hash;
 		const bool depthonly_changed =
 			m_surface_staticmesh_depthonly_template != depthonly_template ||
 			m_surface_staticmesh_depthonly_resource.combined_source_hash != depthonly_template->combined_source_hash;
+		const bool gbuffer_changed =
+			m_surface_staticmesh_gbuffer_template != gbuffer_template ||
+			m_surface_staticmesh_gbuffer_resource.combined_source_hash != gbuffer_template->combined_source_hash;
 
 		if (basepass_changed)
 		{
@@ -442,7 +504,11 @@ namespace AshEngine
 		{
 			m_surface_staticmesh_depthonly_program.reset();
 		}
-		if (basepass_changed || depthonly_changed)
+		if (gbuffer_changed)
+		{
+			m_surface_staticmesh_gbuffer_program.reset();
+		}
+		if (basepass_changed || depthonly_changed || gbuffer_changed)
 		{
 			m_v2_material_uniforms.reset();
 			m_bound_binding_version = 0;
@@ -450,12 +516,16 @@ namespace AshEngine
 
 		m_surface_staticmesh_basepass_template = basepass_template;
 		m_surface_staticmesh_depthonly_template = depthonly_template;
+		m_surface_staticmesh_gbuffer_template = gbuffer_template;
 		m_surface_staticmesh_basepass_resource = *basepass_template;
 		m_surface_staticmesh_depthonly_resource = *depthonly_template;
+		m_surface_staticmesh_gbuffer_resource = *gbuffer_template;
 		m_surface_staticmesh_basepass_resource.program = m_surface_staticmesh_basepass_program.get();
 		m_surface_staticmesh_depthonly_resource.program = m_surface_staticmesh_depthonly_program.get();
+		m_surface_staticmesh_gbuffer_resource.program = m_surface_staticmesh_gbuffer_program.get();
 		m_surface_staticmesh_basepass_resource.material_uniforms.reset();
 		m_surface_staticmesh_depthonly_resource.material_uniforms.reset();
+		m_surface_staticmesh_gbuffer_resource.material_uniforms.reset();
 		m_v2_compile_hash = compile_hash;
 		mark_shader_file_signatures_current();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -465,8 +535,10 @@ namespace AshEngine
 	{
 		if (m_surface_staticmesh_basepass_template == nullptr ||
 			m_surface_staticmesh_depthonly_template == nullptr ||
+			m_surface_staticmesh_gbuffer_template == nullptr ||
 			m_surface_staticmesh_basepass_resource.shader_file_signature_hash == 0 ||
-			m_surface_staticmesh_depthonly_resource.shader_file_signature_hash == 0)
+			m_surface_staticmesh_depthonly_resource.shader_file_signature_hash == 0 ||
+			m_surface_staticmesh_gbuffer_resource.shader_file_signature_hash == 0)
 		{
 			return false;
 		}
@@ -479,7 +551,8 @@ namespace AshEngine
 
 		m_shader_file_signatures_current =
 			material_resource_file_signatures_current(m_surface_staticmesh_basepass_resource) &&
-			material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource);
+			material_resource_file_signatures_current(m_surface_staticmesh_depthonly_resource) &&
+			material_resource_file_signatures_current(m_surface_staticmesh_gbuffer_resource);
 		m_shader_file_signature_status_valid = true;
 		m_next_shader_file_signature_check = now + k_shader_file_signature_check_interval;
 		return m_shader_file_signatures_current;
@@ -592,6 +665,7 @@ namespace AshEngine
 
 		ASH_PROCESS_ERROR(bind_program_resources(m_surface_staticmesh_basepass_resource, m_surface_staticmesh_basepass_program));
 		ASH_PROCESS_ERROR(bind_program_resources(m_surface_staticmesh_depthonly_resource, m_surface_staticmesh_depthonly_program));
+		ASH_PROCESS_ERROR(bind_program_resources(m_surface_staticmesh_gbuffer_resource, m_surface_staticmesh_gbuffer_program));
 		m_bound_binding_version = m_binding_snapshot.version;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}

@@ -17,7 +17,8 @@ namespace AshEngine
 	enum class PassFamily : uint8_t
 	{
 		DepthOnly = 0,
-		BasePass
+		BasePass,
+		GBuffer
 	};
 
 	enum class MaterialCapability : uint64_t
@@ -55,6 +56,7 @@ namespace AshEngine
 		std::string name{};
 		std::string base_pass_shader_path{};
 		std::string depth_only_shader_path{};
+		std::string gbuffer_shader_path{};
 		uint64_t supported_capability_mask = 0;
 
 		std::string_view resolve_host_shader_path(PassFamily pass) const;

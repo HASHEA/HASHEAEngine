@@ -10,7 +10,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 
 - Engine 分层架构：`Base`、`Graphics`、`Function` 三层，Editor / Sandbox 通过 Function 层使用引擎能力。
 - Vulkan 与 DX12 双后端：运行时通过 `product/config/Engine.ini` 选择后端，Windows Debug / Release 构建同时编入 Vulkan、DX12、DXC。
-- Scene-driven 静态网格渲染：逻辑 `Scene` 通过 `ScenePresentationSubsystem` 转换为渲染线程可消费的不可变可见帧数据。
+- Scene-driven 静态网格渲染：逻辑 `Scene` 通过 `ScenePresentationSubsystem` 转换为渲染线程可消费的不可变可见帧数据，opaque / masked 静态网格可走 DeferredHQ GBuffer 路径。
 - 材质 V2 基础链路：支持 `Surface.StaticMesh` 的材质 shader 与 engine shader family 拼合，`.AshMat` 作为基材质，`.AshMatIns` 作为可直接赋给物体的材质实例。
 - Asset 与 glTF 示例资源：支持示例模型加载，Sandbox 默认使用 Sponza 作为标准验证场景，并可在运行时通过 overlay 切换 `product/assets/models/gltfs/` 下的 glTF。
 - Editor 基础壳：具备 dockspace、Scene/Game 视口、层级、属性、控制台、资产浏览等基础面板。
@@ -19,7 +19,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 当前仍未完成或仅处于预留阶段：
 
 - Skeletal mesh / animation 尚未完成。
-- 完整 lighting、shadow、occlusion culling 尚未完成；静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
+- 完整 lighting、shadow、occlusion culling 尚未完成；当前 deferred lighting 只是第一版 fullscreen resolve，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
 - Transparent blend mode 已进入材质静态状态和编译键，但正式透明队列尚未接入 SceneRenderer。
 - PostProcess 与 UI 当前不纳入材质系统，后续应走各自的 shader/pass 与参数组织路径。
 - Asset cooking pipeline、streaming、完整资源生命周期管理仍在演进中；runtime 已能直接加载部分 cooked texture payload。
@@ -77,6 +77,7 @@ HASHEAEngine/
 - pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
+- DeferredHQ GBuffer 静态网格路径：第一版使用 5 张 GBuffer（三张 `RGBA8_UNORM`、两张 `RGBA16_SFLOAT`）加 D32 depth，随后用 fullscreen deferred lighting pass 写回 view output。
 - draw 排序、静态网格 instance batching、单可见静态网格 direct section submit fast path 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
 - DX12 将 `MAILBOX` / `IMMEDIATE` 映射为 `Present(0, DXGI_PRESENT_ALLOW_TEARING)`（硬件/系统支持 tearing 时），避免 benchmark 场景被隐式 vsync/compositor 同步限制。
 - Runtime frame stats overlay。
@@ -102,7 +103,7 @@ Scene 到渲染的主路径：
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer，以避免当前 Sandbox/Sponza 基准场景的固定合批开销。skeletal mesh、完整灯光、阴影、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在先提交 `Surface.StaticMesh.GBuffer` MRT，再通过 `SceneDeferredLightingPass` 写回 view output；原 `BasePass` 前向路径仍保留为内部 fallback。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer，以避免当前 Sandbox/Sponza 基准场景的固定合批开销。skeletal mesh、完整灯光、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 
@@ -117,11 +118,11 @@ Scene 到渲染的主路径：
 - `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding。
 - `MaterialRenderProxy` 基于 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；shader 文件签名只按 proxy 周期性探测，不进入每个 section 的逐帧 filesystem 热路径，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
 - 材质实例的贴图 binding 可覆盖 sampler state；运行时会把该 sampler state 绑定到基材质资源声明实际生成的 shader sampler 名，避免 glTF sampler override 与生成 HLSL sampler 名不一致。
-- 当前正式主路径为 `Surface.StaticMesh.BasePass` 与 `DepthOnly`。
+- 当前正式静态网格主路径包含 `Surface.StaticMesh.BasePass`、`DepthOnly` 与 `GBuffer`；用户材质 shader 仍只实现材质节点接口，GBuffer MRT 编码由 Engine host shader 负责。
 
 材质 shader 由三部分拼合：
 
-1. Engine shader family host，例如 `SurfaceStaticMeshBasePass.hlsl`。
+1. Engine shader family host，例如 `SurfaceStaticMeshBasePass.hlsl` 或 `SurfaceStaticMeshGBuffer.hlsl`。
 2. 用户材质 shader，例如 `product/assets/materials/v2/M_SurfacePBR.hlsl`。
 3. 由 `.AshMat` / `.AshMatIns` 生成的 bindings HLSL。
 
@@ -305,9 +306,9 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | --- | --- |
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
 | RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、DX12 mailbox present 映射、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
-| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
+| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，DeferredHQ GBuffer 第一版、静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
 | Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通。 |
-| Material | V2 `Surface.StaticMesh` 主路径已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
+| Material | V2 `Surface.StaticMesh` BasePass、DepthOnly 与 GBuffer pass 已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |
 | Editor | 基础 workspace 和常用面板已具备，当前更偏向引擎验证与工具雏形，完整编辑器能力仍在开发。 |
 | Sandbox | 已作为标准 Engine 验证程序，默认加载 Sponza，支持 overlay 切换 glTF 示例模型，并走正式 ScenePresentation 渲染链。 |
@@ -320,6 +321,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - Scene Presentation 指南：[`docs/ScenePresentationSubsystemGuide.md`](docs/ScenePresentationSubsystemGuide.md)
 - Engine UIContext：[`docs/EngineUIContext.md`](docs/EngineUIContext.md)
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
+- Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - 静态代码审查与风险记录：[`docs/EngineStaticCodeReview_2026-05-06.md`](docs/EngineStaticCodeReview_2026-05-06.md)
 
 如果 README 与详细文档存在冲突，以 `docs/EngineDeveloperGuide.md` 和 `docs/EditorDeveloperGuide.md` 中的最新约定为准。
