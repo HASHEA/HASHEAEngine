@@ -1,14 +1,23 @@
 {
-  "assetBrowserActiveDirectory": "models/gltfs/Avocado/glTF",
+  "assetBrowserActiveDirectory": "models/gltfs/Avocado",
   "assetBrowserSearchText": "",
-  "assetBrowserShowDetails": true,
   "assetBrowserTypeFilter": 0,
-  "assetBrowserViewMode": 0,
+  "assetBrowserViewMode": 1,
   "assetsRoot": "product/assets",
   "consoleFilterText": "",
-  "consoleSeverityFilter": 0,
-  "lastScenePath": "",
+  "consoleSeverityFilter": 2,
+  "lastScenePath": "product/assets/scenes/Untitled Scene.scene.json",
   "layoutIniPath": "product/config/editor/imgui.ini",
+  "recentScenePaths": [
+    "product/assets/scenes/Untitled Scene.scene.json",
+    "product/assets/scenes/Untitled Scene 2.scene.json"
+  ],
   "startupScenePath": "product/config/editor/Default.scene.json",
-  "uiThemePreset": "classic_dark"
+  "uiFontMergePath": "product/assets/editor/fonts/NotoSansSC-Regular.otf",
+  "uiFontPath": "product/assets/editor/fonts/IBMPlexSans-Regular.ttf",
+  "uiFontSizePixels": 17.0,
+  "uiStrongFontMergePath": "product/assets/editor/fonts/NotoSansSC-Medium.otf",
+  "uiStrongFontPath": "product/assets/editor/fonts/IBMPlexSans-SemiBold.ttf",
+  "uiThemePreset": "slate_studio",
+  "uiUseFullChineseGlyphRange": false
 }

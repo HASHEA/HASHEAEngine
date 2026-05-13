@@ -71,6 +71,9 @@ namespace AshEngine
 
 		void set_next_window_position(const UIVec2& position, UIConditionFlags cond = UIConditionFlagBits::None, const UIVec2& pivot = {});
 		void set_next_window_size(const UIVec2& size, UIConditionFlags cond = UIConditionFlagBits::None);
+		// editor begin 修改原因：为编辑器 tooltip 和弹窗提供统一的尺寸约束接口。
+		void set_next_window_size_constraints(const UIVec2& min_size, const UIVec2& max_size);
+		// editor end
 		void set_next_window_viewport(UIViewportId viewport_id);
 		void set_next_window_collapsed(bool collapsed, UIConditionFlags cond = UIConditionFlagBits::None);
 		void set_next_window_force_dock_tab_bar(bool enabled);
@@ -94,12 +97,22 @@ namespace AshEngine
 		void push_style_var(UIStyleVarKind kind, float value);
 		void push_style_var(UIStyleVarKind kind, const UIVec2& value);
 		void pop_style_var(int count = 1);
+		// editor begin 修改原因：为编辑器提供字体切换、缩放文本与受控换行能力，支撑层级化信息展示。
+		void push_font(UIFontRole role);
+		void pop_font();
 
 		void text_unformatted(const char* text);
+		void text_unformatted_scaled(const char* text, float scale);
 		void text(const char* format, ...);
+		void text_scaled(float scale, const char* format, ...);
 		void text_wrapped(const char* format, ...);
+		void text_wrapped_scaled(float scale, const char* format, ...);
 		void text_colored(const UIColor& color, const char* format, ...);
+		void text_colored_scaled(float scale, const UIColor& color, const char* format, ...);
 		void bullet_text(const char* format, ...);
+		void push_text_wrap_pos(float wrap_local_pos_x = 0.0f);
+		void pop_text_wrap_pos();
+		// editor end
 
 		bool button(const char* label, const UIVec2& size = {});
 		bool small_button(const char* label);
@@ -194,6 +207,9 @@ namespace AshEngine
 		void set_next_item_open(bool is_open, UIConditionFlags cond = UIConditionFlagBits::None);
 
 		void begin_tooltip();
+		// editor begin 修改原因：让编辑器能按场景选择紧凑或详细 tooltip 的窗口参数。
+		void begin_tooltip(const UITooltipConfig& config);
+		// editor end
 		void end_tooltip();
 
 		bool begin_drag_drop_source(UIDragDropFlags flags = UIDragDropFlagBits::None);

@@ -46,6 +46,10 @@ namespace AshEngine
 		virtual bool wants_capture_mouse() const = 0;
 		virtual bool wants_capture_keyboard() const = 0;
 		virtual bool wants_text_input() const = 0;
+		// editor begin 修改原因：暴露字体栈操作给 UIContext，供编辑器实现标题、强调信息等分层排版。
+		virtual void push_font(UIFontRole role) = 0;
+		virtual void pop_font() = 0;
+		// editor end
 		virtual void apply_theme_preset(UIThemePreset preset) = 0;
 		virtual UIThemePreset get_theme_preset() const = 0;
 	};

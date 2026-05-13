@@ -110,6 +110,7 @@ namespace AshEditor
 		if (strViewportId == EditorViewportIds::Game)
 		{
 			presentation.eKind = EditorViewportKind::Game;
+			presentation.bPanelOpen = false;
 			presentation.bPreserveAspect = true;
 			presentation.bAcceptsInput = false;
 			presentation.bShowStats = true;
@@ -307,7 +308,8 @@ namespace AshEditor
 
 	bool EditorViewportService::SyncScenePresentations(
 		AshEngine::ScenePresentationSubsystem& refScenePresentation,
-		AshEngine::Scene& refScene)
+		AshEngine::Scene& refScene,
+		const IEditorViewportBindingResolver* pBindingResolver)
 	{
 		// This call owns the editor-side lifecycle for per-viewport outputs + view bindings:
 		// - Create/update offscreen outputs sized from the current requested extents.
@@ -380,17 +382,62 @@ namespace AshEditor
 			bindingDesc.debug_name = strBindingDebugName.c_str();
 			bindingDesc.scene = &refScene;
 			bindingDesc.camera.source = AshEngine::SceneCameraSource::PrimaryCamera;
+			const bool bRequiresResolvedCameraOverride =
+				pRecord->viewportInstance.strId == EditorViewportIds::Scene;
+			bool bHasResolvedBindingOverride = false;
+			if (pBindingResolver)
+			{
+				EditorViewportBindingOverride bindingOverride{};
+				if (pBindingResolver->TryResolveViewportBinding(pRecord->viewportInstance.strId, bindingOverride))
+				{
+					bHasResolvedBindingOverride = true;
+					if (bindingOverride.pScene)
+					{
+						bindingDesc.scene = bindingOverride.pScene;
+					}
+					bindingDesc.camera = bindingOverride.camera;
+
+					static uint32_t s_sceneViewportBindingLogCount = 0u;
+					if (pRecord->viewportInstance.strId == EditorViewportIds::Scene && s_sceneViewportBindingLogCount < 3u)
+					{
+						HLogInfo(
+							"Editor viewport '{}' is bound to editor camera entity {}.",
+							pRecord->viewportInstance.strId,
+							static_cast<unsigned long long>(bindingDesc.camera.entity_id));
+						++s_sceneViewportBindingLogCount;
+					}
+				}
+			}
 			bindingDesc.output = pRecord->sceneOutput;
-			bindingDesc.enabled = pRecord->viewportPresentation.bPanelOpen && bHasRequestedSize;
+			bindingDesc.enabled =
+				pRecord->viewportPresentation.bPanelOpen &&
+				bHasRequestedSize &&
+				(!bRequiresResolvedCameraOverride || bHasResolvedBindingOverride);
 			bindingDesc.sort_order = GetViewportSortPriority(pRecord->viewportInstance);
 
+			if (bRequiresResolvedCameraOverride && !bHasResolvedBindingOverride)
+			{
+				static uint32_t s_sceneViewportMissingBindingWarnCount = 0u;
+				if (s_sceneViewportMissingBindingWarnCount < 8u)
+				{
+					HLogWarning(
+						"Editor viewport '{}' did not resolve an editor camera binding. The scene viewport will stay disabled instead of falling back to the scene primary camera.",
+						pRecord->viewportInstance.strId);
+					++s_sceneViewportMissingBindingWarnCount;
+				}
+			}
+
 			bool bBindingSynced = true;
+			const bool bNeedsCameraOverrideSync =
+				bRequiresResolvedCameraOverride &&
+				bHasResolvedBindingOverride &&
+				!pRecord->viewportRenderState.bCameraOverrideApplied;
 			if (!pRecord->sceneViewBinding.is_valid())
 			{
 				pRecord->sceneViewBinding = refScenePresentation.create_view_binding(bindingDesc);
 				bBindingSynced = pRecord->sceneViewBinding.is_valid();
 			}
-			else if (pRecord->viewportRenderState.bPendingSync)
+			else if (pRecord->viewportRenderState.bPendingSync || (bRequiresResolvedCameraOverride && !bHasResolvedBindingOverride) || bNeedsCameraOverrideSync)
 			{
 				bBindingSynced = refScenePresentation.update_view_binding(pRecord->sceneViewBinding, bindingDesc);
 			}
@@ -408,6 +455,10 @@ namespace AshEditor
 			pRecord->viewportRenderState.uOutputWidth = uOutputWidth;
 			pRecord->viewportRenderState.uOutputHeight = uOutputHeight;
 			pRecord->viewportRenderState.bPendingSync = false;
+			if (bRequiresResolvedCameraOverride)
+			{
+				pRecord->viewportRenderState.bCameraOverrideApplied = bHasResolvedBindingOverride;
+			}
 			pRecord->viewportInstance.state.uWidth = bHasRequestedSize ? uOutputWidth : 0u;
 			pRecord->viewportInstance.state.uHeight = bHasRequestedSize ? uOutputHeight : 0u;
 		}

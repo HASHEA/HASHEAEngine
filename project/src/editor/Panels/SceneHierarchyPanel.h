@@ -14,6 +14,7 @@
 namespace AshEngine
 {
 	class Entity;
+	class Scene;
 	class UIContext;
 }
 
@@ -49,7 +50,7 @@ namespace AshEditor
 		void BeginRenameSelectedEntity(AshEngine::UIContext* pUiContext);
 		void BeginReparentSelectedEntity(AshEngine::UIContext* pUiContext);
 		void BeginDeleteSelectedEntity(AshEngine::UIContext* pUiContext);
-		void CreateEntity(SceneEntityId uParentId);
+		bool CreateEntity(SceneEntityId uParentId);
 		void DestroyEntity(SceneEntityId uEntityId);
 		void DrawToolbar(const EditorFrameContext& refFrameContext);
 		void DrawEntityTree(
@@ -66,10 +67,13 @@ namespace AshEditor
 		void DrawRenameModal(const EditorFrameContext& refFrameContext);
 		void DrawReparentModal(const EditorFrameContext& refFrameContext);
 		void DrawDeleteModal(const EditorFrameContext& refFrameContext);
+		void DrawSearchResults(const EditorFrameContext& refFrameContext, AshEngine::Scene& refScene, SceneEntityId uSelectedEntityId);
 
 	private:
 		SceneHierarchyPanelDeps _deps{};
 		EditorEventBindings _eventBindings{};
+		SceneEntityId _uCreateChildAnchorParentId = 0;
+		bool _bAwaitingCreateChildSelection = false;
 		SceneEntityId _uPendingRenameEntityId = 0;
 		std::string _strPendingRenameValue{};
 		SceneEntityId _uPendingReparentEntityId = 0;
@@ -79,6 +83,8 @@ namespace AshEditor
 		std::vector<std::string> _vecPendingReparentParentLabels{};
 		SceneEntityId _uPendingDeleteEntityId = 0;
 		std::string _strPendingDeleteEntityName{};
+		std::string _strSearchText{};
+		int32_t _iEntityTypeFilterIndex = 0;
 		EditorTreeWidgetState _treeWidgetStateEntities{};
 		bool _bOpenRenamePopup = false;
 		bool _bOpenReparentPopup = false;

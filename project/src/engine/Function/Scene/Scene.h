@@ -72,6 +72,9 @@ namespace AshEngine
 
 		TransformComponent get_transform_component() const;
 		bool set_transform_component(const TransformComponent& component);
+		// editor begin 修改原因：供编辑器预览相机等临时实体静默更新 Transform，避免走正式编辑变更路径。
+		bool set_transform_component_silent(const TransformComponent& component);
+		// editor end
 
 		bool has_camera_component() const;
 		CameraComponent get_camera_component() const;

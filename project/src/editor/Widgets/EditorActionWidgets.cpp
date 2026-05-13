@@ -4,11 +4,21 @@
 #include "Services/CommandService.h"
 
 #include "Function/Gui/UIContext.h"
+#include "Widgets/EditorTooltipWidgets.h"
 
 namespace AshEditor
 {
 	namespace
 	{
+		constexpr AshEngine::UITooltipConfig kEditorActionTooltipConfig{
+			{ 360.0f, 0.0f },
+			{},
+			{ 420.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+
 		void DrawActionTooltip(AshEngine::UIContext& refUi, const EditorAction& refAction)
 		{
 			if (!refUi.is_item_hovered())
@@ -16,16 +26,23 @@ namespace AshEditor
 				return;
 			}
 
-			refUi.begin_tooltip();
-			refUi.text_unformatted(refAction.strLabel.c_str());
-			if (!refAction.strShortcut.empty())
+			refUi.begin_tooltip(kEditorActionTooltipConfig);
+			DrawEditorTooltipTitle(refUi, refAction.strLabel, refAction.strId);
+			if (BeginEditorTooltipTable(refUi, "EditorActionTooltipTable"))
 			{
-				refUi.text("Shortcut: %s", refAction.strShortcut.c_str());
+				if (!refAction.strShortcut.empty())
+				{
+					DrawEditorTooltipRow(refUi, "Shortcut", refAction.strShortcut);
+				}
+				else
+				{
+					DrawEditorTooltipRow(refUi, "Shortcut", "None");
+				}
+				refUi.end_table();
 			}
 			if (!refAction.strDescription.empty())
 			{
-				refUi.separator();
-				refUi.text_wrapped("%s", refAction.strDescription.c_str());
+				DrawEditorTooltipDescription(refUi, refAction.strDescription);
 			}
 			refUi.end_tooltip();
 		}

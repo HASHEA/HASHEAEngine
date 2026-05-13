@@ -1,18 +1,23 @@
 #include "Panels/AssetBrowserPanel.h"
 
 #include "Base/hlog.h"
+#include "Core/AssetPresentationUtils.h"
 #include "Core/EditorEventBus.h"
 #include "Core/EditorEvents.h"
 #include "Core/EditorIds.h"
 #include "Core/EditorStringUtils.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/AssetDatabaseService.h"
+#include "Services/AssetPreviewService.h"
 #include "Services/CommandService.h"
+#include "Services/DragDropTransferService.h"
 #include "Services/EditorSettingsService.h"
 #include "Services/EditorShortcutService.h"
 #include "Services/IEditorIconService.h"
 #include "Services/SelectionService.h"
+#include "Shell/PanelManager.h"
 #include "Widgets/EditorActionWidgets.h"
+#include "Widgets/EditorTooltipWidgets.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -81,6 +86,53 @@ namespace AshEditor
 		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonHoveredColor{ 0.38f, 0.46f, 0.55f, 1.0f };
 		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonActiveColor{ 0.31f, 0.39f, 0.47f, 1.0f };
 		constexpr AshEngine::UIColor kAssetToolbarMutedTextColor{ 0.67f, 0.70f, 0.76f, 1.0f };
+		constexpr AshEngine::UIColor kAssetToolbarWarningTextColor{ 0.93f, 0.78f, 0.45f, 1.0f };
+		constexpr AshEngine::UITooltipConfig kAssetBrowserInfoTooltipConfig{
+			{ 560.0f, 0.0f },
+			{ 420.0f, 0.0f },
+			{ 760.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+		constexpr AshEngine::UITooltipConfig kAssetBrowserWarningTooltipConfig{
+			{ 420.0f, 0.0f },
+			{ 320.0f, 0.0f },
+			{ 640.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+		constexpr AshEngine::UITooltipConfig kAssetItemTooltipConfig{
+			{ 460.0f, 0.0f },
+			{ 300.0f, 0.0f },
+			{ 620.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+		constexpr AshEngine::UITooltipConfig kAssetItemCompactTooltipConfig{
+			{ 340.0f, 0.0f },
+			{ 220.0f, 0.0f },
+			{ 460.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+
+		bool ShouldUseCompactAssetTooltip(AshEngine::AssetType eType)
+		{
+			switch (eType)
+			{
+			case AshEngine::AssetType::Directory:
+			case AshEngine::AssetType::Text:
+			case AshEngine::AssetType::Binary:
+			case AshEngine::AssetType::Shader:
+				return true;
+			default:
+				return false;
+			}
+		}
 
 		void PushSelectedToolbarButtonStyle(AshEngine::UIContext& refUi)
 		{
@@ -92,6 +144,18 @@ namespace AshEditor
 		void PopSelectedToolbarButtonStyle(AshEngine::UIContext& refUi)
 		{
 			refUi.pop_style_color(3);
+		}
+
+		void DrawToolbarSeparator(AshEngine::UIContext& refUi)
+		{
+			refUi.same_line(0.0f, 10.0f);
+			refUi.text_colored(kAssetToolbarMutedTextColor, "|");
+			refUi.same_line(0.0f, 10.0f);
+		}
+
+		void DrawToolbarLabel(AshEngine::UIContext& refUi, const char* pLabel, const AshEngine::UIColor& color)
+		{
+			refUi.text_colored(color, "%s", pLabel);
 		}
 
 		void DrawListItemIcon(AshEngine::UIContext& refUi, AshEngine::UITextureHandle iconHandle)
@@ -276,31 +340,6 @@ namespace AshEditor
 			return uSelectedId == 0 ? nullptr : refService.FindById(uSelectedId);
 		}
 
-		bool ShouldPreviewText(const AshEngine::AssetInfo& refAsset)
-		{
-			switch (refAsset.type)
-			{
-			case AshEngine::AssetType::Scene:
-			case AshEngine::AssetType::Shader:
-			case AshEngine::AssetType::Material:
-			case AshEngine::AssetType::Text:
-				return true;
-			default:
-				return false;
-			}
-		}
-
-		std::string GetAssetDisplayLabel(const AshEngine::AssetInfo& refAsset)
-		{
-			if (!refAsset.name.empty())
-			{
-				return refAsset.name;
-			}
-
-			const std::string strFilename = refAsset.relative_path.filename().generic_string();
-			return strFilename.empty() ? refAsset.relative_path.generic_string() : strFilename;
-		}
-
 		bool DirectoryExists(const AssetDirectoryTreeData& refDirectoryTreeData, const std::filesystem::path& pathDirectory)
 		{
 			return refDirectoryTreeData.setDirectoryKeys.find(pathDirectory.generic_string()) != refDirectoryTreeData.setDirectoryKeys.end();
@@ -385,6 +424,57 @@ namespace AshEditor
 			return pathDirectory.empty() ? std::string("All Assets") : pathDirectory.generic_string();
 		}
 
+		std::string BuildFilterSummary(
+			const std::string& strSearchText,
+			const AssetTypeFilterOption& refTypeFilter,
+			AssetBrowserViewMode eViewMode)
+		{
+			std::string strSummary =
+				strSearchText.empty()
+					? std::string("Search: Any")
+					: std::string("Search: \"") + strSearchText + "\"";
+			strSummary += " | Type: ";
+			strSummary += refTypeFilter.pLabel;
+			strSummary += eViewMode == AssetBrowserViewMode::Icons ? " | View: Icons" : " | View: List";
+			return strSummary;
+		}
+
+		void DrawAssetBrowserInfoTooltip(
+			AshEngine::UIContext& refUi,
+			const std::filesystem::path& pathAssetRoot,
+			const std::string& strScopeLabel,
+			const std::string& strFilterSummary)
+		{
+			if (!refUi.is_item_hovered())
+			{
+				return;
+			}
+
+			refUi.begin_tooltip(kAssetBrowserInfoTooltipConfig);
+			DrawEditorTooltipTitle(refUi, "Asset Browser Scope", "Current browser context");
+			if (BeginEditorTooltipTable(refUi, "AssetBrowserInfoTooltip", 84.0f))
+			{
+				DrawEditorTooltipRow(refUi, "Root", pathAssetRoot.string());
+				DrawEditorTooltipRow(refUi, "Scope", strScopeLabel);
+				DrawEditorTooltipRow(refUi, "Filter", strFilterSummary);
+				refUi.end_table();
+			}
+			refUi.end_tooltip();
+		}
+
+		void DrawAssetBrowserWarningTooltip(AshEngine::UIContext& refUi, const std::string& strWarning)
+		{
+			if (!refUi.is_item_hovered())
+			{
+				return;
+			}
+
+			refUi.begin_tooltip(kAssetBrowserWarningTooltipConfig);
+			DrawEditorTooltipCompactTitle(refUi, "Asset Scan Warning");
+			DrawEditorTooltipCaption(refUi, strWarning);
+			refUi.end_tooltip();
+		}
+		
 		void ClearIfAssetSelected(SelectionService* pSelectionService)
 		{
 			if (pSelectionService && pSelectionService->GetSelection().eKind == EditorSelectionKind::Asset)
@@ -553,10 +643,10 @@ namespace AshEditor
 			const EditorSettings& settings = _deps.pSettingsService->GetSettings();
 			_strSearchText = settings.strAssetBrowserSearchText;
 			_strActiveDirectoryPath = settings.strAssetBrowserActiveDirectory;
-			_bShowDetails = settings.bAssetBrowserShowDetails;
 			_iTypeFilterIndex = settings.iAssetBrowserTypeFilter;
 			_eViewMode = ToAssetBrowserViewMode(settings.iAssetBrowserViewMode);
 		}
+		ResetDirectoryHistory();
 		HLogInfo("AssetBrowserPanel attached.");
 	}
 
@@ -674,7 +764,6 @@ namespace AshEditor
 		EditorSettings& settings = _deps.pSettingsService->GetSettings();
 		settings.strAssetBrowserSearchText = _strSearchText;
 		settings.strAssetBrowserActiveDirectory = _strActiveDirectoryPath;
-		settings.bAssetBrowserShowDetails = _bShowDetails;
 		settings.iAssetBrowserTypeFilter = _iTypeFilterIndex;
 		settings.iAssetBrowserViewMode = static_cast<int32_t>(_eViewMode);
 	}
@@ -714,9 +803,99 @@ namespace AshEditor
 		ActivateAsset(refItem);
 	}
 
+	void AssetBrowserPanel::OpenAssetPreview(const AshEngine::AssetInfo& refItem)
+	{
+		SelectAsset(refItem);
+		if (_deps.pAssetPreviewService)
+		{
+			_deps.pAssetPreviewService->SetPreviewAsset({
+				EditorSelectionKind::Asset,
+				refItem.id,
+				GetAssetDisplayLabel(refItem),
+				refItem.relative_path.generic_string() });
+		}
+
+		if (!_deps.pPanelManager)
+		{
+			HLogWarning("AssetBrowserPanel cannot open Asset Preview because PanelManager is unavailable. Asset={}.", refItem.relative_path.generic_string());
+			return;
+		}
+
+		_deps.pPanelManager->SetPanelOpen(EditorPanelIds::AssetPreview, true);
+	}
+
 	void AssetBrowserPanel::NavigateToDirectory(const std::filesystem::path& refDirectoryPath)
 	{
-		_strActiveDirectoryPath = refDirectoryPath.generic_string();
+		NavigateToDirectoryInternal(refDirectoryPath, true);
+	}
+
+	void AssetBrowserPanel::NavigateToDirectoryInternal(const std::filesystem::path& refDirectoryPath, bool bRecordHistory)
+	{
+		const std::string strNewPath = refDirectoryPath.generic_string();
+		if (strNewPath == _strActiveDirectoryPath)
+		{
+			return;
+		}
+
+		if (bRecordHistory)
+		{
+			if (_iDirectoryHistoryIndex >= 0 &&
+				_iDirectoryHistoryIndex + 1 < static_cast<int32_t>(_vecDirectoryHistory.size()))
+			{
+				_vecDirectoryHistory.erase(
+					_vecDirectoryHistory.begin() + (_iDirectoryHistoryIndex + 1),
+					_vecDirectoryHistory.end());
+			}
+
+			if (_vecDirectoryHistory.empty() || _vecDirectoryHistory.back() != strNewPath)
+			{
+				_vecDirectoryHistory.push_back(strNewPath);
+				_iDirectoryHistoryIndex = static_cast<int32_t>(_vecDirectoryHistory.size() - 1);
+			}
+		}
+
+		_strActiveDirectoryPath = strNewPath;
+	}
+
+	bool AssetBrowserPanel::CanNavigateDirectoryBack() const
+	{
+		return _iDirectoryHistoryIndex > 0 && !_vecDirectoryHistory.empty();
+	}
+
+	bool AssetBrowserPanel::CanNavigateDirectoryForward() const
+	{
+		return
+			_iDirectoryHistoryIndex >= 0 &&
+			_iDirectoryHistoryIndex + 1 < static_cast<int32_t>(_vecDirectoryHistory.size());
+	}
+
+	void AssetBrowserPanel::NavigateDirectoryBack()
+	{
+		if (!CanNavigateDirectoryBack())
+		{
+			return;
+		}
+
+		--_iDirectoryHistoryIndex;
+		NavigateToDirectoryInternal(std::filesystem::path(_vecDirectoryHistory[_iDirectoryHistoryIndex]), false);
+	}
+
+	void AssetBrowserPanel::NavigateDirectoryForward()
+	{
+		if (!CanNavigateDirectoryForward())
+		{
+			return;
+		}
+
+		++_iDirectoryHistoryIndex;
+		NavigateToDirectoryInternal(std::filesystem::path(_vecDirectoryHistory[_iDirectoryHistoryIndex]), false);
+	}
+
+	void AssetBrowserPanel::ResetDirectoryHistory()
+	{
+		_vecDirectoryHistory.clear();
+		_iDirectoryHistoryIndex = 0;
+		_vecDirectoryHistory.push_back(_strActiveDirectoryPath);
 	}
 
 	void AssetBrowserPanel::BrowseToAssetLocation(const AshEngine::AssetInfo& refItem)
@@ -822,10 +1001,7 @@ namespace AshEditor
 		const AshEngine::AssetInfo* pSelectedAsset)
 	{
 		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
-		const AshEngine::UIVec2 vecAvailRegion = refUi.get_content_region_avail();
-		const AshEngine::UIVec2 vecTableSize = _bShowDetails
-			? AshEngine::UIVec2{ 0.0f, std::max(120.0f, vecAvailRegion.y * 0.55f) }
-			: AshEngine::UIVec2{};
+		const AshEngine::UIVec2 vecTableSize{};
 
 		if (!refUi.begin_table(
 			"AssetBrowserTable",
@@ -863,9 +1039,24 @@ namespace AshEditor
 				bSelected,
 				AshEngine::UISelectableFlagBits::SpanAllColumns);
 			const bool bDoubleClicked = refUi.is_item_hovered() && refUi.is_mouse_double_clicked(AshEngine::UIMouseButton::Left);
+
+			// Asset drag source.
+			if (_deps.pDragDropTransferService && refUi.begin_drag_drop_source())
+			{
+				DragDropTransferData dragData{};
+				dragData.strPayloadType = EditorDragPayloadTypes::Asset;
+				dragData.vecEntityIds = { refAsset.id };
+				dragData.extraData = refAsset.relative_path.generic_string();
+				const DragDropTransferId uTransferId = _deps.pDragDropTransferService->Register(std::move(dragData));
+				refUi.set_drag_drop_payload(EditorDragPayloadTypes::Asset, &uTransferId, sizeof(DragDropTransferId));
+				refUi.text_unformatted(refVisibleItem.strDisplayLabel.c_str());
+				refUi.end_drag_drop_source();
+			}
+
 			DrawItemFeedback(refUi, bSelected);
 			DrawListItemIcon(refUi, iconHandle);
 			DrawListItemLabel(refUi, iconHandle, refVisibleItem.strDisplayLabel);
+			DrawAssetItemTooltip(refFrameContext, refAsset, refVisibleItem.strDisplayLabel);
 			HandleAssetItemInteraction(refFrameContext, refAsset, bPrimaryActivated, bDoubleClicked);
 			DrawAssetItemContextMenu(refFrameContext, refAsset);
 			refUi.pop_id();
@@ -885,10 +1076,7 @@ namespace AshEditor
 		const AshEngine::AssetInfo* pSelectedAsset)
 	{
 		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
-		const AshEngine::UIVec2 vecOuterRegion = refUi.get_content_region_avail();
-		const float fGridHeight = _bShowDetails
-			? std::max(140.0f, vecOuterRegion.y * 0.55f)
-			: 0.0f;
+		const float fGridHeight = 0.0f;
 
 		if (!refUi.begin_child("AssetBrowserIconView", { 0.0f, fGridHeight }, AshEngine::UIChildFlagBits::Border))
 		{
@@ -919,6 +1107,20 @@ namespace AshEditor
 				AshEngine::UISelectableFlagBits::None,
 				{ kAssetBrowserGridCellWidth, kAssetBrowserGridCellHeight });
 			const bool bDoubleClicked = refUi.is_item_hovered() && refUi.is_mouse_double_clicked(AshEngine::UIMouseButton::Left);
+
+			// Asset drag source.
+			if (_deps.pDragDropTransferService && refUi.begin_drag_drop_source())
+			{
+				DragDropTransferData dragData{};
+				dragData.strPayloadType = EditorDragPayloadTypes::Asset;
+				dragData.vecEntityIds = { refAsset.id };
+				dragData.extraData = refAsset.relative_path.generic_string();
+				const DragDropTransferId uTransferId = _deps.pDragDropTransferService->Register(std::move(dragData));
+				refUi.set_drag_drop_payload(EditorDragPayloadTypes::Asset, &uTransferId, sizeof(DragDropTransferId));
+				refUi.text_unformatted(refVisibleItem.strDisplayLabel.c_str());
+				refUi.end_drag_drop_source();
+			}
+
 			DrawItemFeedback(refUi, bSelected, 6.0f);
 
 			const AshEngine::UIRect rectItem = refUi.get_item_rect();
@@ -943,6 +1145,7 @@ namespace AshEditor
 				fTextWidth);
 			refUi.pop_window_clip_rect();
 
+			DrawAssetItemTooltip(refFrameContext, refAsset, refVisibleItem.strDisplayLabel);
 			HandleAssetItemInteraction(refFrameContext, refAsset, bPrimaryActivated, bDoubleClicked);
 			DrawAssetItemContextMenu(refFrameContext, refAsset);
 			refUi.pop_id();
@@ -961,6 +1164,70 @@ namespace AshEditor
 		}
 
 		refUi.end_child();
+	}
+
+	void AssetBrowserPanel::DrawAssetItemTooltip(
+		const EditorFrameContext& refFrameContext,
+		const AshEngine::AssetInfo& refAsset,
+		std::string_view svDisplayLabel)
+	{
+		if (!refFrameContext.pUiContext || !_deps.pAssetDatabaseService)
+		{
+			return;
+		}
+
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (!refUi.is_item_hovered())
+		{
+			return;
+		}
+
+		const std::string strTitle = svDisplayLabel.empty() ? GetAssetDisplayLabel(refAsset) : std::string(svDisplayLabel);
+		const std::string strSubtitle = refAsset.relative_path.generic_string();
+		const std::string strTypeLabel = AssetDatabaseService::GetTypeLabel(refAsset.type);
+		const std::string strParent =
+			refAsset.parent_path.empty()
+			? std::string("<Root>")
+			: refAsset.parent_path.generic_string();
+		const std::string strSizeLabel =
+			refAsset.is_directory ? std::string("-") : FormatAssetFileSize(refAsset.file_size);
+		const std::string strModifiedLabel =
+			FormatAssetLastWriteTime(*_deps.pAssetDatabaseService, refAsset);
+		const std::string strLoadState =
+			AssetDatabaseService::GetLoadStateLabel(_deps.pAssetDatabaseService->GetLoadState(refAsset.id));
+		const bool bUseCompactTooltip = ShouldUseCompactAssetTooltip(refAsset.type);
+
+		refUi.begin_tooltip(bUseCompactTooltip ? kAssetItemCompactTooltipConfig : kAssetItemTooltipConfig);
+		if (bUseCompactTooltip)
+		{
+			DrawEditorTooltipCompactTitle(refUi, strTitle, strTypeLabel);
+			if (!strSubtitle.empty())
+			{
+				DrawEditorTooltipCaption(refUi, strSubtitle);
+			}
+			refUi.separator();
+			DrawEditorTooltipCompactRow(refUi, "Modified", strModifiedLabel);
+			DrawEditorTooltipCompactRow(refUi, "Size", strSizeLabel);
+			if (refAsset.type != AshEngine::AssetType::Directory)
+			{
+				DrawEditorTooltipCompactRow(refUi, "State", strLoadState);
+			}
+		}
+		else
+		{
+			DrawEditorTooltipTitle(refUi, strTitle, strTypeLabel);
+			if (BeginEditorTooltipTable(refUi, "AssetBrowserItemTooltip", 88.0f))
+			{
+				DrawEditorTooltipRow(refUi, "Modified", strModifiedLabel);
+				DrawEditorTooltipRow(refUi, "Size", strSizeLabel);
+				DrawEditorTooltipRow(refUi, "Parent", strParent);
+				DrawEditorTooltipRow(refUi, "State", strLoadState);
+				DrawEditorTooltipRow(refUi, "Path", strSubtitle);
+				refUi.end_table();
+			}
+		}
+
+		refUi.end_tooltip();
 	}
 
 	void AssetBrowserPanel::DrawAssetItemContextMenu(const EditorFrameContext& refFrameContext, const AshEngine::AssetInfo& refAsset)
@@ -989,8 +1256,12 @@ namespace AshEditor
 			BrowseToAssetLocation(refAsset);
 			refUi.close_current_popup();
 		}
+		if (refUi.menu_item("Preview", nullptr, false, !refAsset.is_directory))
+		{
+			OpenAssetPreview(refAsset);
+			refUi.close_current_popup();
+		}
 		refUi.separator();
-		refUi.menu_item("Show Details", nullptr, &_bShowDetails);
 		if (refUi.menu_item("Clear Selection"))
 		{
 			ClearAssetSelection();
@@ -1044,7 +1315,6 @@ namespace AshEditor
 			_eViewMode = AssetBrowserViewMode::Icons;
 			refUi.close_current_popup();
 		}
-		refUi.menu_item("Show Details", nullptr, &_bShowDetails);
 
 		refUi.separator();
 		if (refUi.menu_item("Reset Filters", nullptr, false, bFiltersActive))
@@ -1114,10 +1384,13 @@ namespace AshEditor
 			"All", "Folder", "Scene", "Shader", "Texture", "Mesh", "Model", "Prefab", "Material", "Text", "Binary"
 		};
 		const std::string strLoweredSearchText = ToLowerCopy(_strSearchText);
+		const std::string strScopeLabel = GetAssetScopeLabel(pathActiveDirectory);
+		const std::string strFilterSummary = BuildFilterSummary(_strSearchText, refTypeFilter, _eViewMode);
 		std::vector<AssetBrowserVisibleItem> vecVisibleItems =
 			BuildVisibleItems(vecAssets, pathActiveDirectory, strLoweredSearchText, refTypeFilter);
 		SortVisibleAssets(vecVisibleItems);
 		const uint32_t uFilteredCount = static_cast<uint32_t>(vecVisibleItems.size());
+		const bool bFiltersActive = HasActiveFilters();
 
 		bool bSelectedAssetVisible = IsSelectedAssetVisible(
 			pSelectedAsset,
@@ -1127,20 +1400,33 @@ namespace AshEditor
 			refTypeFilter);
 		_bSelectedAssetVisibleThisFrame = bSelectedAssetVisible;
 
-		refUi.text("Root: %s", _deps.pAssetDatabaseService->GetAssetRoot().string().c_str());
 		const std::string strLastError = _deps.pAssetDatabaseService->GetLastError();
-		if (!strLastError.empty())
-		{
-			refUi.text_wrapped("Last Error: %s", strLastError.c_str());
-		}
-		refUi.separator();
-		refUi.set_next_item_width(240.0f);
+		refUi.set_next_item_width(220.0f);
 		refUi.input_text("Search", _strSearchText);
 		refUi.same_line();
-		refUi.set_next_item_width(140.0f);
+		refUi.set_next_item_width(124.0f);
 		refUi.combo("Type", _iTypeFilterIndex, vecTypeLabels);
 		refUi.same_line();
-		refUi.checkbox("Details", _bShowDetails);
+		refUi.begin_disabled(!bFiltersActive);
+		if (refUi.small_button("Reset"))
+		{
+			ResetFilters();
+		}
+		refUi.end_disabled();
+		DrawToolbarSeparator(refUi);
+		refUi.begin_disabled(!CanNavigateDirectoryBack());
+		if (refUi.small_button("<"))
+		{
+			NavigateDirectoryBack();
+		}
+		refUi.end_disabled();
+		refUi.same_line();
+		refUi.begin_disabled(!CanNavigateDirectoryForward());
+		if (refUi.small_button(">"))
+		{
+			NavigateDirectoryForward();
+		}
+		refUi.end_disabled();
 		refUi.same_line();
 		if (_deps.pCommandService)
 		{
@@ -1157,9 +1443,7 @@ namespace AshEditor
 			refUi.small_button("Up");
 			refUi.end_disabled();
 		}
-		refUi.same_line();
-		refUi.text_unformatted("View");
-		refUi.same_line();
+		DrawToolbarSeparator(refUi);
 		DrawViewModeToggle(refUi, "List", AssetBrowserViewMode::List);
 		refUi.same_line();
 		DrawViewModeToggle(refUi, "Icons", AssetBrowserViewMode::Icons);
@@ -1179,14 +1463,15 @@ namespace AshEditor
 			refUi.button("Refresh");
 			refUi.end_disabled();
 		}
-		const bool bFiltersActive = HasActiveFilters();
-		refUi.same_line();
-		refUi.begin_disabled(!bFiltersActive);
-		if (refUi.button("Reset Filters"))
+		DrawToolbarSeparator(refUi);
+		DrawToolbarLabel(refUi, "Info", kAssetToolbarMutedTextColor);
+		DrawAssetBrowserInfoTooltip(refUi, _deps.pAssetDatabaseService->GetAssetRoot(), strScopeLabel, strFilterSummary);
+		if (!strLastError.empty())
 		{
-			ResetFilters();
+			DrawToolbarSeparator(refUi);
+			DrawToolbarLabel(refUi, "Warning", kAssetToolbarWarningTextColor);
+			DrawAssetBrowserWarningTooltip(refUi, strLastError);
 		}
-		refUi.end_disabled();
 		refUi.separator();
 
 		const AshEngine::UIVec2 vecAvailRegion = refUi.get_content_region_avail();
@@ -1220,7 +1505,7 @@ namespace AshEditor
 			refUi.same_line();
 			refUi.text_colored(
 				kAssetToolbarMutedTextColor,
-				"| Showing %u of %u",
+				"| %u / %u",
 				uFilteredCount,
 				static_cast<uint32_t>(vecAssets.size()));
 			refUi.separator();
@@ -1255,7 +1540,6 @@ namespace AshEditor
 					refUi.text("Search: %s", _strSearchText.c_str());
 				}
 				refUi.text("Type Filter: %s", refTypeFilter.pLabel);
-				const std::string strScopeLabel = GetAssetScopeLabel(pathActiveDirectory);
 				refUi.text("Directory: %s", strScopeLabel.c_str());
 				refUi.begin_disabled(!bFiltersActive);
 				if (refUi.button("Clear Search And Filters"))
@@ -1331,53 +1615,6 @@ namespace AshEditor
 				_strSearchText,
 				refTypeFilter);
 			_bSelectedAssetVisibleThisFrame = bSelectedAssetVisible;
-			if (_bShowDetails && bSelectedAssetVisible && pSelectedAsset)
-			{
-				refUi.separator();
-				const std::string strDisplayLabel = GetAssetDisplayLabel(*pSelectedAsset);
-				refUi.text("Selected: %s", strDisplayLabel.c_str());
-				refUi.text("Type: %s", AssetDatabaseService::GetTypeLabel(pSelectedAsset->type));
-				refUi.text("Path: %s", pSelectedAsset->relative_path.generic_string().c_str());
-				refUi.text("Parent: %s", pSelectedAsset->parent_path.generic_string().c_str());
-				refUi.text("Load State: %s", AssetDatabaseService::GetLoadStateLabel(_deps.pAssetDatabaseService->GetLoadState(pSelectedAsset->id)));
-
-				const bool bCanActivate = !pSelectedAsset->is_directory;
-				refUi.begin_disabled(!bCanActivate);
-				if (refUi.button("Activate"))
-				{
-					ActivateAsset(*pSelectedAsset);
-				}
-				refUi.end_disabled();
-
-				if (pSelectedAsset->is_directory || !pSelectedAsset->parent_path.empty())
-				{
-					refUi.same_line();
-					if (refUi.button("Browse Location"))
-					{
-						BrowseToAssetLocation(*pSelectedAsset);
-					}
-				}
-
-				if (ShouldPreviewText(*pSelectedAsset))
-				{
-					std::string strPreviewText{};
-					if (_deps.pAssetDatabaseService->LoadTextById(pSelectedAsset->id, strPreviewText))
-					{
-						if (strPreviewText.size() > 2048)
-						{
-							strPreviewText.resize(2048);
-							strPreviewText += "\n...";
-						}
-						refUi.separator();
-						refUi.text_unformatted("Preview");
-						refUi.input_text_multiline(
-							"##asset_preview",
-							strPreviewText,
-							{ 0.0f, 160.0f },
-							AshEngine::UIInputTextFlagBits::ReadOnly);
-					}
-				}
-			}
 		}
 		refUi.end_child();
 

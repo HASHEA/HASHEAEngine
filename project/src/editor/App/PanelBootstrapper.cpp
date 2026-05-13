@@ -3,10 +3,12 @@
 #include "Core/EditorEventBus.h"
 #include "Core/EditorIds.h"
 #include "Panels/AssetBrowserPanel.h"
+#include "Panels/AssetPreviewPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ViewportPanel.h"
+#include "Services/EditorViewportCameraService.h"
 #include "Shell/PanelManager.h"
 
 namespace AshEditor
@@ -17,6 +19,11 @@ namespace AshEditor
 		{
 			ViewportPanelDeps deps{};
 			deps.pViewportService = refContext.pViewportService;
+			deps.pViewportCameraService = refContext.pViewportCameraService;
+			deps.pSceneService = refContext.pSceneService;
+			deps.pGizmoState = refContext.pGizmoState;
+			deps.pSelectionService = refContext.pSelectionService;
+			deps.pDragDropTransferService = refContext.pDragDropTransferService;
 			return deps;
 		}
 
@@ -27,15 +34,26 @@ namespace AshEditor
 			return deps;
 		}
 
-		AssetBrowserPanelDeps MakeAssetBrowserPanelDeps(const PanelBootstrapContext& refContext)
+		AssetBrowserPanelDeps MakeAssetBrowserPanelDeps(const PanelBootstrapContext& refContext, PanelManager& refPanelManager)
 		{
 			AssetBrowserPanelDeps deps{};
 			deps.pAssetDatabaseService = refContext.pAssetDatabaseService;
+			deps.pAssetPreviewService = refContext.pAssetPreviewService;
 			deps.pCommandService = refContext.pCommandService;
 			deps.pIconService = refContext.pIconService;
 			deps.pSelectionService = refContext.pSelectionService;
 			deps.pSettingsService = refContext.pSettingsService;
 			deps.pShortcutService = refContext.pShortcutService;
+			deps.pDragDropTransferService = refContext.pDragDropTransferService;
+			deps.pPanelManager = &refPanelManager;
+			return deps;
+		}
+
+		AssetPreviewPanelDeps MakeAssetPreviewPanelDeps(const PanelBootstrapContext& refContext)
+		{
+			AssetPreviewPanelDeps deps{};
+			deps.pAssetDatabaseService = refContext.pAssetDatabaseService;
+			deps.pAssetPreviewService = refContext.pAssetPreviewService;
 			return deps;
 		}
 
@@ -58,6 +76,7 @@ namespace AshEditor
 			deps.pSceneService = refContext.pSceneService;
 			deps.pAssetDatabaseService = refContext.pAssetDatabaseService;
 			deps.pCommandExecutor = refContext.pCommandExecutor;
+			deps.pDragDropTransferService = refContext.pDragDropTransferService;
 			return deps;
 		}
 	}
@@ -83,10 +102,12 @@ namespace AshEditor
 			MakeSceneHierarchyPanelDeps(refContext));
 		InspectorPanel* pInspectorPanel = refPanelManager.CreatePanel<InspectorPanel>(
 			MakeInspectorPanelDeps(refContext));
+		AssetPreviewPanel* pAssetPreviewPanel = refPanelManager.CreatePanel<AssetPreviewPanel>(
+			MakeAssetPreviewPanelDeps(refContext));
 		ConsolePanel* pConsolePanel = refPanelManager.CreatePanel<ConsolePanel>(
 			MakeConsolePanelDeps(refContext));
 		AssetBrowserPanel* pAssetBrowserPanel = refPanelManager.CreatePanel<AssetBrowserPanel>(
-			MakeAssetBrowserPanelDeps(refContext));
+			MakeAssetBrowserPanelDeps(refContext, refPanelManager));
 		result.pSceneHierarchyActionTarget = pSceneHierarchyPanel;
 		result.pAssetBrowserActionTarget = pAssetBrowserPanel;
 		if (pViewportPanel)
@@ -95,6 +116,7 @@ namespace AshEditor
 		}
 		if (pGameViewportPanel)
 		{
+			pGameViewportPanel->SetOpen(false);
 			pGameViewportPanel->BindEventBus(&refEventBus);
 		}
 		if (pSceneHierarchyPanel)
@@ -105,6 +127,7 @@ namespace AshEditor
 		{
 			pInspectorPanel->BindEventBus(&refEventBus);
 		}
+		(void)pAssetPreviewPanel;
 		if (pConsolePanel)
 		{
 			pConsolePanel->BindEventBus(&refEventBus);

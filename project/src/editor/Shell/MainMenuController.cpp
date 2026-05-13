@@ -23,6 +23,8 @@ namespace AshEditor
 		if (refContext.refUi.begin_menu("File"))
 		{
 			DrawActionMenuItem(refContext, EditorActionIds::FileNewScene);
+			DrawActionMenuItem(refContext, EditorActionIds::FileOpenScene);
+			DrawRecentScenesMenu(refContext);
 			DrawActionMenuItem(refContext, EditorActionIds::FileReloadScene);
 			DrawActionMenuItem(refContext, EditorActionIds::FileSaveScene);
 			refContext.refUi.separator();
@@ -109,6 +111,38 @@ namespace AshEditor
 			"main_menu",
 			refContext.pActionInvoker,
 			bEnabled);
+	}
+
+	void MainMenuController::DrawRecentScenesMenu(MainMenuControllerContext& refContext) const
+	{
+		if (!refContext.refUi.begin_menu("Recent Scenes", refContext.pSceneFileActionHandler != nullptr))
+		{
+			return;
+		}
+
+		const std::vector<std::filesystem::path> vecRecentScenePaths =
+			refContext.refSettingsService.GetRecentScenePaths();
+		if (vecRecentScenePaths.empty())
+		{
+			refContext.refUi.menu_item("No Recent Scenes", nullptr, false, false);
+			refContext.refUi.end_menu();
+			return;
+		}
+
+		for (const std::filesystem::path& pathScene : vecRecentScenePaths)
+		{
+			const std::string strDisplayName = pathScene.filename().string();
+			const std::string strMenuLabel =
+				(strDisplayName.empty() ? pathScene.generic_string() : strDisplayName) +
+				"##" +
+				pathScene.generic_string();
+			if (refContext.refUi.menu_item(strMenuLabel.c_str(), nullptr, false, true))
+			{
+				refContext.pSceneFileActionHandler->OpenSceneFromPath(pathScene, "main_menu_recent_scene");
+			}
+		}
+
+		refContext.refUi.end_menu();
 	}
 
 	void MainMenuController::DrawThemeMenu(MainMenuControllerContext& refContext) const

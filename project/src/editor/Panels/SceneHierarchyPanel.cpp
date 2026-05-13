@@ -5,6 +5,7 @@
 #include "Core/EditorEventBus.h"
 #include "Core/EditorEvents.h"
 #include "Core/EditorIds.h"
+#include "Core/EditorStringUtils.h"
 #include "Core/EntityCommands.h"
 #include "Core/IEditorCommandExecutor.h"
 #include "Function/Gui/UIContext.h"
@@ -17,6 +18,7 @@
 #include "Widgets/EditorActionWidgets.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -31,6 +33,13 @@ namespace AshEditor
 		constexpr AshEngine::UIColor kSceneHierarchyMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 		constexpr const char* kSceneEntityContextPopupId = "SceneHierarchyEntityContextMenu";
 		constexpr const char* kSceneContentContextPopupId = "SceneHierarchyContentContextMenu";
+		constexpr float kSceneHierarchySearchWidth = 220.0f;
+
+		struct SceneHierarchyEntityFilterOption
+		{
+			const char* pLabel = "";
+			bool (*pfnMatches)(const AshEngine::Entity& refEntity) = nullptr;
+		};
 
 		SceneEntityId GetSelectedSceneEntityId(const SceneHierarchyPanelDeps& refDeps)
 		{
@@ -110,6 +119,60 @@ namespace AshEditor
 
 			return refEntity.get_parent().is_valid() ? EditorIconId::EntityActor : EditorIconId::EntityScene;
 		}
+
+		std::string BuildEntityPathLabel(const AshEngine::Entity& refEntity)
+		{
+			if (!refEntity.is_valid())
+			{
+				return {};
+			}
+
+			std::vector<std::string> vecParts{};
+			AshEngine::Entity current = refEntity;
+			for (uint32_t uGuard = 0; uGuard < 64 && current.is_valid(); ++uGuard)
+			{
+				vecParts.push_back(current.get_name());
+				current = current.get_parent();
+			}
+
+			std::string strPath{};
+			for (std::vector<std::string>::reverse_iterator it = vecParts.rbegin(); it != vecParts.rend(); ++it)
+			{
+				if (!strPath.empty())
+				{
+					strPath += "/";
+				}
+				strPath += *it;
+			}
+			return strPath;
+		}
+
+		bool MatchesAllEntities(const AshEngine::Entity&)
+		{
+			return true;
+		}
+
+		bool MatchesCameraEntities(const AshEngine::Entity& refEntity)
+		{
+			return refEntity.has_camera_component();
+		}
+
+		bool MatchesLightEntities(const AshEngine::Entity& refEntity)
+		{
+			return refEntity.has_light_component();
+		}
+
+		bool MatchesMeshEntities(const AshEngine::Entity& refEntity)
+		{
+			return refEntity.has_mesh_component();
+		}
+
+		constexpr std::array<SceneHierarchyEntityFilterOption, 4> kSceneHierarchyEntityFilters{ {
+			{ "All", &MatchesAllEntities },
+			{ "Camera", &MatchesCameraEntities },
+			{ "Light", &MatchesLightEntities },
+			{ "Mesh", &MatchesMeshEntities },
+		} };
 
 		constexpr const char* kSceneHierarchyDragPayloadType = "ASH_EDITOR_SCENE_ENTITY";
 
@@ -294,24 +357,22 @@ namespace AshEditor
 
 		void DrawSceneSummary(AshEngine::UIContext& refUi, const AshEngine::Scene& refScene, SceneEntityId uSelectedSceneEntityId)
 		{
-			refUi.text_colored(kSceneHierarchyAccentColor, "%s", refScene.get_name().c_str());
-			refUi.text_colored(
+			(void)uSelectedSceneEntityId;
+			refUi.push_font(AshEngine::UIFontRole::Strong);
+			refUi.text_colored_scaled(1.05f, kSceneHierarchyAccentColor, "%s", refScene.get_name().c_str());
+			refUi.pop_font();
+			refUi.text_colored_scaled(
+				0.82f,
 				kSceneHierarchyMutedColor,
 				"%u entities | %u roots",
 				refScene.get_entity_count(),
 				static_cast<unsigned int>(refScene.get_root_entities().size()));
-			if (uSelectedSceneEntityId != 0)
-			{
-				refUi.same_line();
-				refUi.text_colored(kSceneHierarchyMutedColor, "| Selected %llu", static_cast<unsigned long long>(uSelectedSceneEntityId));
-			}
-			refUi.separator();
 		}
 
 		void DrawEmptySceneState(AshEngine::UIContext& refUi)
 		{
-			refUi.text_colored(kSceneHierarchyMutedColor, "Scene is empty.");
-			refUi.text_unformatted("Create a root entity to start building the scene.");
+			refUi.text_colored_scaled(0.92f, kSceneHierarchyMutedColor, "Scene is empty.");
+			refUi.text_wrapped_scaled(0.82f, "Create a root entity to start building the scene.");
 		}
 
 		void AppendReparentCandidates(
@@ -362,6 +423,18 @@ namespace AshEditor
 					refEvent.currentSelection.eKind == EditorSelectionKind::Entity
 					? refEvent.currentSelection.uId
 					: 0;
+				if (_bAwaitingCreateChildSelection)
+				{
+					_bAwaitingCreateChildSelection = false;
+					if (uSelectedSceneEntityId == 0)
+					{
+						_uCreateChildAnchorParentId = 0;
+					}
+				}
+				else if (_uCreateChildAnchorParentId != 0 && uSelectedSceneEntityId != _uCreateChildAnchorParentId)
+				{
+					_uCreateChildAnchorParentId = 0;
+				}
 				if (_uPendingRenameEntityId != 0 && _uPendingRenameEntityId != uSelectedSceneEntityId)
 				{
 					ResetPendingRenameState();
@@ -404,11 +477,11 @@ namespace AshEditor
 	}
 
 	void SceneHierarchyPanel::ResetPendingRenameState()
-{
-	_uPendingRenameEntityId = 0;
-	_strPendingRenameValue.clear();
-	_bOpenRenamePopup = false;
-}
+	{
+		_uPendingRenameEntityId = 0;
+		_strPendingRenameValue.clear();
+		_bOpenRenamePopup = false;
+	}
 
 	void SceneHierarchyPanel::ResetPendingReparentState()
 	{
@@ -429,6 +502,8 @@ namespace AshEditor
 
 	void SceneHierarchyPanel::ResetTransientState()
 	{
+		_uCreateChildAnchorParentId = 0;
+		_bAwaitingCreateChildSelection = false;
 		ResetPendingRenameState();
 		ResetPendingReparentState();
 		ResetPendingDeleteState();
@@ -437,13 +512,32 @@ namespace AshEditor
 
 	void SceneHierarchyPanel::ExecuteCreateRoot()
 	{
+		_uCreateChildAnchorParentId = 0;
+		_bAwaitingCreateChildSelection = false;
 		CreateEntity(0);
 	}
 
 	void SceneHierarchyPanel::ExecuteCreateChildFromSelection()
 	{
 		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
-		CreateEntity(uSelectedSceneEntityId);
+		if (uSelectedSceneEntityId == 0)
+		{
+			_uCreateChildAnchorParentId = 0;
+			_bAwaitingCreateChildSelection = false;
+			return;
+		}
+
+		if (_uCreateChildAnchorParentId == 0)
+		{
+			_uCreateChildAnchorParentId = uSelectedSceneEntityId;
+		}
+
+		_bAwaitingCreateChildSelection = true;
+		if (!CreateEntity(_uCreateChildAnchorParentId))
+		{
+			_uCreateChildAnchorParentId = 0;
+			_bAwaitingCreateChildSelection = false;
+		}
 	}
 
 	void SceneHierarchyPanel::RequestRenameSelected(AshEngine::UIContext* pUiContext)
@@ -570,7 +664,7 @@ namespace AshEditor
 		_bOpenDeletePopup = true;
 	}
 
-	void SceneHierarchyPanel::CreateEntity(SceneEntityId uParentId)
+	bool SceneHierarchyPanel::CreateEntity(SceneEntityId uParentId)
 	{
 		if (!_deps.pSceneService || !_deps.pCommandExecutor)
 		{
@@ -578,15 +672,18 @@ namespace AshEditor
 				"SceneHierarchyPanel create entity skipped (scene_service={}, command_executor={}).",
 				_deps.pSceneService != nullptr,
 				_deps.pCommandExecutor != nullptr);
-			return;
+			return false;
 		}
 
 		AshEngine::Scene& refScene = _deps.pSceneService->GetActiveScene();
 		const std::string strEntityName = "Entity " + std::to_string(refScene.get_entity_count() + 1);
-		if (!_deps.pCommandExecutor->ExecuteCommand(std::make_unique<CreateEntityCommand>(strEntityName, uParentId)))
+		const bool bExecuted =
+			_deps.pCommandExecutor->ExecuteCommand(std::make_unique<CreateEntityCommand>(strEntityName, uParentId));
+		if (!bExecuted)
 		{
 			HLogWarning("SceneHierarchyPanel failed to create entity '{}'.", strEntityName);
 		}
+		return bExecuted;
 	}
 
 	void SceneHierarchyPanel::DestroyEntity(SceneEntityId uSceneEntityId)
@@ -616,87 +713,20 @@ namespace AshEditor
 	void SceneHierarchyPanel::DrawToolbar(const EditorFrameContext& refFrameContext)
 	{
 		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
-
-		refUi.text_colored(kSceneHierarchyMutedColor, "Actions");
+		refUi.set_next_item_width(kSceneHierarchySearchWidth);
+		refUi.input_text("##SceneHierarchySearch", _strSearchText);
 		refUi.same_line();
-		if (_deps.pCommandService)
+		refUi.set_next_item_width(110.0f);
+		const std::vector<const char*> vecFilterLabels{ "All", "Camera", "Light", "Mesh" };
+		refUi.combo("##SceneHierarchyTypeFilter", _iEntityTypeFilterIndex, vecFilterLabels);
+		if (!_strSearchText.empty() || _iEntityTypeFilterIndex != 0)
 		{
-			DrawEditorActionButton(
-				refUi,
-				*_deps.pCommandService,
-				EditorActionIds::SceneCreateRoot,
-				"Add Root",
-				"scene_hierarchy.toolbar");
-		}
-		else
-		{
-			refUi.begin_disabled(true);
-			refUi.button("Add Root");
-			refUi.end_disabled();
-		}
-		refUi.same_line();
-		if (_deps.pCommandService)
-		{
-			DrawEditorActionButton(
-				refUi,
-				*_deps.pCommandService,
-				EditorActionIds::SceneCreateChild,
-				"Add Child",
-				"scene_hierarchy.toolbar");
-		}
-		else
-		{
-			refUi.begin_disabled(true);
-			refUi.button("Add Child");
-			refUi.end_disabled();
-		}
-		refUi.same_line();
-		if (_deps.pCommandService)
-		{
-			DrawEditorActionButton(
-				refUi,
-				*_deps.pCommandService,
-				EditorActionIds::SelectionRename,
-				"Rename",
-				"scene_hierarchy.toolbar");
-		}
-		else
-		{
-			refUi.begin_disabled(true);
-			refUi.button("Rename");
-			refUi.end_disabled();
-		}
-		refUi.same_line();
-		if (_deps.pCommandService)
-		{
-			DrawEditorActionButton(
-				refUi,
-				*_deps.pCommandService,
-				EditorActionIds::SelectionReparent,
-				"Reparent",
-				"scene_hierarchy.toolbar");
-		}
-		else
-		{
-			refUi.begin_disabled(true);
-			refUi.button("Reparent");
-			refUi.end_disabled();
-		}
-		refUi.same_line();
-		if (_deps.pCommandService)
-		{
-			DrawEditorActionButton(
-				refUi,
-				*_deps.pCommandService,
-				EditorActionIds::SelectionDelete,
-				"Delete",
-				"scene_hierarchy.toolbar");
-		}
-		else
-		{
-			refUi.begin_disabled(true);
-			refUi.button("Delete");
-			refUi.end_disabled();
+			refUi.same_line();
+			if (refUi.small_button("Reset"))
+			{
+				_strSearchText.clear();
+				_iEntityTypeFilterIndex = 0;
+			}
 		}
 	}
 
@@ -953,17 +983,17 @@ namespace AshEditor
 	}
 
 	void SceneHierarchyPanel::DrawRenameModal(const EditorFrameContext& refFrameContext)
-{
-	AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
-	if (_bOpenRenamePopup)
 	{
-		refUi.open_popup("Rename Entity");
-		_bOpenRenamePopup = false;
-	}
-	if (!refUi.begin_popup_modal("Rename Entity"))
-	{
-		return;
-	}
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+		if (_bOpenRenamePopup)
+		{
+			refUi.open_popup("Rename Entity");
+			_bOpenRenamePopup = false;
+		}
+		if (!refUi.begin_popup_modal("Rename Entity"))
+		{
+			return;
+		}
 
 		refUi.text_unformatted("Update the selected entity name.");
 		if (_uPendingRenameEntityId == 0)
@@ -1166,9 +1196,31 @@ namespace AshEditor
 		AshEngine::Scene& refScene = _deps.pSceneService->GetActiveScene();
 		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
 		const bool bDraggingSceneEntity = IsSceneEntityDragActive(frameContext.pUiContext);
-		DrawSceneSummary(refUi, refScene, uSelectedSceneEntityId);
 
+		const AshEngine::UIVec2 vecHeaderCursorPos = refUi.get_cursor_pos();
+		refUi.begin_group();
+		DrawSceneSummary(refUi, refScene, uSelectedSceneEntityId);
+		refUi.end_group();
+		const AshEngine::UIRect rectSummary = refUi.get_item_rect();
+
+		const float fDividerPadding = 14.0f;
+		const float fToolbarStartX = vecHeaderCursorPos.x + rectSummary.width + fDividerPadding * 2.0f;
+		refUi.same_line(fToolbarStartX, 0.0f);
+		refUi.begin_group();
 		DrawToolbar(frameContext);
+		refUi.end_group();
+		const AshEngine::UIRect rectToolbar = refUi.get_item_rect();
+
+		const float fDividerX = rectSummary.x + rectSummary.width + fDividerPadding;
+		const float fDividerTop = std::min(rectSummary.y, rectToolbar.y) + 2.0f;
+		const float fDividerBottom =
+			std::max(rectSummary.y + rectSummary.height, rectToolbar.y + rectToolbar.height) - 2.0f;
+		refUi.draw_window_line(
+			{ fDividerX, fDividerTop },
+			{ fDividerX, fDividerBottom },
+			{ 0.42f, 0.46f, 0.52f, 0.75f },
+			1.0f);
+
 		refUi.separator();
 
 		const std::vector<AshEngine::Entity> vecRoots = refScene.get_root_entities();
@@ -1177,6 +1229,12 @@ namespace AshEditor
 			DrawEmptySceneState(refUi);
 		}
 
+		// When search or type filtering is active, present a flat match list to avoid fighting the tree open-state.
+		if (!_strSearchText.empty() || _iEntityTypeFilterIndex != 0)
+		{
+			DrawSearchResults(frameContext, refScene, uSelectedSceneEntityId);
+		}
+		else
 		{
 			EditorTreeWidget treeWidget(refUi, _treeWidgetStateEntities, MakeSceneTreeStyle());
 			treeWidget.ResetDragStateIfInactive();
@@ -1213,5 +1271,91 @@ namespace AshEditor
 		DrawReparentModal(frameContext);
 		DrawDeleteModal(frameContext);
 		EndPanelWindow(frameContext);
+	}
+
+	void SceneHierarchyPanel::DrawSearchResults(
+		const EditorFrameContext& refFrameContext,
+		AshEngine::Scene& refScene,
+		SceneEntityId uSelectedEntityId)
+	{
+		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+
+		const std::string strLoweredSearch = ToLowerCopy(_strSearchText);
+		_iEntityTypeFilterIndex = std::clamp(
+			_iEntityTypeFilterIndex,
+			0,
+			static_cast<int32_t>(kSceneHierarchyEntityFilters.size() - 1));
+		const SceneHierarchyEntityFilterOption& refFilter = kSceneHierarchyEntityFilters[_iEntityTypeFilterIndex];
+		std::vector<AshEngine::Entity> vecMatches{};
+		for (const AshEngine::Entity& refEntity : refScene.get_entities())
+		{
+			const std::string strName = refEntity.get_name();
+			if (refFilter.pfnMatches && !refFilter.pfnMatches(refEntity))
+			{
+				continue;
+			}
+			if (!strLoweredSearch.empty() && ToLowerCopy(strName).find(strLoweredSearch) == std::string::npos)
+			{
+				continue;
+			}
+			vecMatches.push_back(refEntity);
+		}
+
+		refUi.text_colored(
+			kSceneHierarchyMutedColor,
+			"Matches: %u | Filter: %s",
+			static_cast<uint32_t>(vecMatches.size()),
+			refFilter.pLabel);
+		refUi.separator();
+
+		if (vecMatches.empty())
+		{
+			refUi.text_unformatted("No entities match the current search/filter.");
+			return;
+		}
+
+		if (!refUi.begin_table(
+			"SceneHierarchySearchResults",
+			2,
+			AshEngine::UITableFlagBits::RowBg |
+				AshEngine::UITableFlagBits::BordersInner |
+				AshEngine::UITableFlagBits::SizingStretchProp |
+				AshEngine::UITableFlagBits::ScrollY))
+		{
+			return;
+		}
+
+		refUi.table_setup_column("Name", AshEngine::UITableColumnFlagBits::WidthStretch);
+		refUi.table_setup_column("Path", AshEngine::UITableColumnFlagBits::WidthStretch);
+		refUi.table_headers_row();
+		for (const AshEngine::Entity& refEntity : vecMatches)
+		{
+			if (!refEntity.is_valid())
+			{
+				continue;
+			}
+
+			const SceneEntityId uEntityId = refEntity.get_id();
+			const bool bSelected = uEntityId != 0 && uEntityId == uSelectedEntityId;
+			const std::string strName = refEntity.get_name();
+			const std::string strPath = BuildEntityPathLabel(refEntity);
+
+			refUi.table_next_row();
+			refUi.table_next_column();
+			const std::string strId = std::to_string(uEntityId);
+			refUi.push_id(strId.c_str());
+			if (refUi.selectable(strName.c_str(), bSelected, AshEngine::UISelectableFlagBits::SpanAllColumns))
+			{
+				if (_deps.pSelectionService)
+				{
+					_deps.pSelectionService->Select({ EditorSelectionKind::Entity, uEntityId, strName, {} });
+				}
+			}
+			refUi.table_next_column();
+			refUi.text_unformatted(strPath.c_str());
+			refUi.pop_id();
+		}
+
+		refUi.end_table();
 	}
 }

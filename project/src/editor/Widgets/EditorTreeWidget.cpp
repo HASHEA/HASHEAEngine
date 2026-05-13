@@ -263,6 +263,15 @@ namespace AshEditor
 		return static_cast<uint64_t>(std::hash<std::string_view>{}(svUniqueId));
 	}
 
+	float EditorTreeWidget::GetGuideColumnBaseX(float fRowStartX) const
+	{
+		const float fArrowCenterOffsetX = std::max(0.0f, _refUi.get_tree_node_to_label_spacing() * 0.5f);
+		return
+			fRowStartX -
+			static_cast<float>(_vecAncestorHasMoreSiblings.size()) * _style.fIndentSpacing +
+			fArrowCenterOffsetX;
+	}
+
 	EditorTreeDropVisual EditorTreeWidget::ResolveDropVisual(
 		const EditorTreeDropTargetDesc& refDesc,
 		const AshEngine::UIRect& refItemRect) const
@@ -384,7 +393,7 @@ namespace AshEditor
 
 	void EditorTreeWidget::DrawGuides(const EditorTreeItemDesc& refDesc, const EditorTreeItemResult& refResult, float fRowStartX) const
 	{
-		const float fTreeStartX = fRowStartX - static_cast<float>(_vecAncestorHasMoreSiblings.size()) * _style.fIndentSpacing;
+		const float fGuideColumnBaseX = GetGuideColumnBaseX(fRowStartX);
 		if (_vecAncestorHasMoreSiblings.empty() && refDesc.bIsLastSibling)
 		{
 			return;
@@ -394,14 +403,15 @@ namespace AshEditor
 		const float fY1 = refResult.rectItem.y + refResult.rectItem.height - _style.fGuideLinePaddingY;
 		const float fCenterY = refResult.rectItem.y + refResult.rectItem.height * 0.5f;
 
-		for (size_t uIndex = 0; uIndex < _vecAncestorHasMoreSiblings.size(); ++uIndex)
+		const size_t uDepth = _vecAncestorHasMoreSiblings.size();
+		for (size_t uIndex = 0; uIndex + 1 < uDepth; ++uIndex)
 		{
 			if (!_vecAncestorHasMoreSiblings[uIndex])
 			{
 				continue;
 			}
 
-			const float fX = fTreeStartX + (static_cast<float>(uIndex) + 0.5f) * _style.fIndentSpacing;
+			const float fX = fGuideColumnBaseX + static_cast<float>(uIndex) * _style.fIndentSpacing;
 			_refUi.draw_window_line(
 				{ fX, fY0 },
 				{ fX, fY1 },
@@ -409,13 +419,12 @@ namespace AshEditor
 				_style.fGuideLineThickness);
 		}
 
-		const size_t uDepth = _vecAncestorHasMoreSiblings.size();
 		if (uDepth == 0)
 		{
 			return;
 		}
 
-		const float fConnectorX = fTreeStartX + (static_cast<float>(uDepth) - 0.5f) * _style.fIndentSpacing;
+		const float fConnectorX = fGuideColumnBaseX + static_cast<float>(uDepth - 1) * _style.fIndentSpacing;
 		_refUi.draw_window_line(
 			{ fConnectorX, fY0 },
 			{ fConnectorX, refDesc.bIsLastSibling ? fCenterY : fY1 },

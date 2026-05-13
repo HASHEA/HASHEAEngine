@@ -5,6 +5,7 @@ namespace AshEditor
 	namespace EditorActionIds
 	{
 		inline constexpr char FileNewScene[] = "file.new_scene";
+		inline constexpr char FileOpenScene[] = "file.open_scene";
 		inline constexpr char FileReloadScene[] = "file.reload_scene";
 		inline constexpr char FileSaveScene[] = "file.save_scene";
 		inline constexpr char AssetsRefresh[] = "assets.refresh";
@@ -35,6 +36,7 @@ namespace AshEditor
 		inline constexpr char GameViewport[] = "game_viewport";
 		inline constexpr char SceneHierarchy[] = "scene_hierarchy";
 		inline constexpr char Inspector[] = "inspector";
+		inline constexpr char AssetPreview[] = "asset_preview";
 		inline constexpr char Console[] = "console";
 		inline constexpr char AssetBrowser[] = "asset_browser";
 	}
@@ -45,8 +47,15 @@ namespace AshEditor
 		inline constexpr char Game[] = "Game";
 		inline constexpr char SceneHierarchy[] = "Scene Hierarchy";
 		inline constexpr char Inspector[] = "Inspector";
+		inline constexpr char AssetPreview[] = "Asset Preview";
 		inline constexpr char Console[] = "Console";
 		inline constexpr char AssetBrowser[] = "Asset Browser";
+	}
+
+	namespace EditorDragPayloadTypes
+	{
+		inline constexpr char SceneEntity[] = "ASH_EDITOR_SCENE_ENTITY";
+		inline constexpr char Asset[] = "ASH_EDITOR_ASSET";
 	}
 
 	inline constexpr char kUntitledSceneName[] = "Untitled Scene";

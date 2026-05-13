@@ -32,7 +32,9 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -171,6 +173,268 @@ namespace AshEngine
 				break;
 			}
 		}
+
+		// editor begin 修改原因：为编辑器加载自定义字体、中文回退字体与强调字重字体，统一 UI 排版基础能力。
+		static ImVector<ImWchar> s_cjk_merge_glyph_ranges{};
+
+		static bool is_cjk_merge_block(ImWchar uRangeStart, ImWchar uRangeEnd)
+		{
+			constexpr ImWchar arrRanges[][2] = {
+				{ 0x3000, 0x303F }, // CJK symbols and punctuation
+				{ 0x3400, 0x4DBF }, // CJK extension A
+				{ 0x4E00, 0x9FFF }, // CJK unified ideographs
+				{ 0xF900, 0xFAFF }, // CJK compatibility ideographs
+				{ 0xFF00, 0xFFEF }  // Full-width forms
+			};
+
+			for (const auto& refRange : arrRanges)
+			{
+				if (uRangeEnd >= refRange[0] && uRangeStart <= refRange[1])
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		static const ImWchar* build_cjk_merge_glyph_ranges(ImGuiIO& io, bool bUseFullChineseGlyphRange)
+		{
+			s_cjk_merge_glyph_ranges.clear();
+
+			const ImWchar* pSourceRanges =
+				bUseFullChineseGlyphRange
+				? io.Fonts->GetGlyphRangesChineseFull()
+				: io.Fonts->GetGlyphRangesChineseSimplifiedCommon();
+			for (int iRange = 0; pSourceRanges[iRange] != 0 && pSourceRanges[iRange + 1] != 0; iRange += 2)
+			{
+				const ImWchar uRangeStart = pSourceRanges[iRange];
+				const ImWchar uRangeEnd = pSourceRanges[iRange + 1];
+				if (!is_cjk_merge_block(uRangeStart, uRangeEnd))
+				{
+					continue;
+				}
+
+				s_cjk_merge_glyph_ranges.push_back(uRangeStart);
+				s_cjk_merge_glyph_ranges.push_back(uRangeEnd);
+			}
+
+			s_cjk_merge_glyph_ranges.push_back(0);
+			return s_cjk_merge_glyph_ranges.Data;
+		}
+
+		struct ImGuiLoadedFontSet
+		{
+			ImFont* pDefault = nullptr;
+			ImFont* pStrong = nullptr;
+		};
+
+		static std::filesystem::path replace_font_token(
+			const std::filesystem::path& pathFont,
+			std::string_view svFrom,
+			std::string_view svTo)
+		{
+			if (pathFont.empty())
+			{
+				return {};
+			}
+
+			std::string strFilename = pathFont.filename().string();
+			const size_t uTokenIndex = strFilename.find(svFrom);
+			if (uTokenIndex == std::string::npos)
+			{
+				return {};
+			}
+
+			strFilename.replace(uTokenIndex, svFrom.size(), svTo);
+			return pathFont.parent_path() / strFilename;
+		}
+
+		static std::filesystem::path resolve_existing_font_path(
+			const std::filesystem::path& pathConfigured,
+			const std::vector<std::filesystem::path>& vecFallbackCandidates)
+		{
+			if (!pathConfigured.empty() && std::filesystem::exists(pathConfigured))
+			{
+				return pathConfigured;
+			}
+
+			for (const std::filesystem::path& pathCandidate : vecFallbackCandidates)
+			{
+				if (!pathCandidate.empty() && std::filesystem::exists(pathCandidate))
+				{
+					return pathCandidate;
+				}
+			}
+
+			return {};
+		}
+
+		static std::vector<std::filesystem::path> build_strong_font_fallbacks(const std::string& strBaseFontPath)
+		{
+			const std::filesystem::path pathBaseFont(strBaseFontPath);
+			std::vector<std::filesystem::path> vecCandidates{};
+			vecCandidates.push_back(replace_font_token(pathBaseFont, "Regular", "SemiBold"));
+			vecCandidates.push_back(replace_font_token(pathBaseFont, "Regular", "Medium"));
+			vecCandidates.push_back(replace_font_token(pathBaseFont, "Regular", "Bold"));
+			vecCandidates.emplace_back("C:/Windows/Fonts/seguisb.ttf");
+			vecCandidates.emplace_back("C:/Windows/Fonts/arialbd.ttf");
+			return vecCandidates;
+		}
+
+		static std::vector<std::filesystem::path> build_strong_merge_font_fallbacks(const std::string& strMergeFontPath)
+		{
+			const std::filesystem::path pathMergeFont(strMergeFontPath);
+			std::vector<std::filesystem::path> vecCandidates{};
+			vecCandidates.push_back(replace_font_token(pathMergeFont, "Regular", "Medium"));
+			vecCandidates.push_back(replace_font_token(pathMergeFont, "Regular", "Bold"));
+			vecCandidates.emplace_back("C:/Windows/Fonts/msyhbd.ttc");
+			vecCandidates.emplace_back("C:/Windows/Fonts/Dengb.ttf");
+			vecCandidates.emplace_back("C:/Windows/Fonts/simhei.ttf");
+			return vecCandidates;
+		}
+
+		static ImFont* add_primary_font(
+			ImGuiIO& io,
+			const std::filesystem::path& pathFont,
+			float fFontSizePixels,
+			const char* pSuccessLabel,
+			const char* pFailureLabel)
+		{
+			if (pathFont.empty())
+			{
+				return nullptr;
+			}
+
+			ImFontConfig fontConfig{};
+			fontConfig.OversampleH = 2;
+			fontConfig.OversampleV = 1;
+			fontConfig.PixelSnapH = false;
+			ImFont* pFont = io.Fonts->AddFontFromFileTTF(
+				pathFont.string().c_str(),
+				fFontSizePixels,
+				&fontConfig,
+				io.Fonts->GetGlyphRangesDefault());
+			if (pFont)
+			{
+				HLogInfo(
+					"ImGuiLayer loaded {} '{}' at {:.1f}px.",
+					pSuccessLabel,
+					pathFont.generic_string(),
+					fFontSizePixels);
+			}
+			else
+			{
+				HLogWarning(
+					"ImGuiLayer failed to load {} '{}'.",
+					pFailureLabel,
+					pathFont.generic_string());
+			}
+			return pFont;
+		}
+
+		static bool merge_font_range(
+			ImGuiIO& io,
+			const std::filesystem::path& pathMergeFont,
+			float fFontSizePixels,
+			bool bUseFullChineseGlyphRange,
+			const char* pSuccessLabel,
+			const char* pFailureLabel)
+		{
+			if (pathMergeFont.empty())
+			{
+				return false;
+			}
+
+			ImFontConfig mergeConfig{};
+			mergeConfig.MergeMode = true;
+			mergeConfig.OversampleH = 2;
+			mergeConfig.OversampleV = 1;
+			mergeConfig.PixelSnapH = false;
+			const ImWchar* pMergeGlyphRanges =
+				build_cjk_merge_glyph_ranges(io, bUseFullChineseGlyphRange);
+			ImFont* pMergedFont = io.Fonts->AddFontFromFileTTF(
+				pathMergeFont.string().c_str(),
+				fFontSizePixels,
+				&mergeConfig,
+				pMergeGlyphRanges);
+			if (pMergedFont)
+			{
+				HLogInfo(
+					"ImGuiLayer merged {} '{}' at {:.1f}px.",
+					pSuccessLabel,
+					pathMergeFont.generic_string(),
+					fFontSizePixels);
+				return true;
+			}
+
+			HLogWarning(
+				"ImGuiLayer failed to merge {} '{}'.",
+				pFailureLabel,
+				pathMergeFont.generic_string());
+			return false;
+		}
+
+		static ImGuiLoadedFontSet configure_imgui_font(ImGuiIO& io, const UIContextConfig& config)
+		{
+			io.Fonts->Clear();
+
+			const float fFontSizePixels = std::max(config.font_size_pixels, 13.0f);
+			ImGuiLoadedFontSet fontSet{};
+
+			const std::filesystem::path pathRegularFont =
+				resolve_existing_font_path(std::filesystem::path(config.font_path), {});
+			fontSet.pDefault = add_primary_font(
+				io,
+				pathRegularFont,
+				fFontSizePixels,
+				"UI font",
+				"UI font");
+			if (!fontSet.pDefault)
+			{
+				fontSet.pDefault = io.Fonts->AddFontDefault();
+			}
+
+			merge_font_range(
+				io,
+				resolve_existing_font_path(std::filesystem::path(config.font_merge_path), {}),
+				fFontSizePixels,
+				config.use_full_chinese_glyph_range,
+				"CJK UI font",
+				"CJK UI font");
+
+			const std::filesystem::path pathStrongFont =
+				resolve_existing_font_path(
+					std::filesystem::path(config.strong_font_path),
+					build_strong_font_fallbacks(config.font_path));
+			fontSet.pStrong = add_primary_font(
+				io,
+				pathStrongFont,
+				fFontSizePixels,
+				"strong UI font",
+				"strong UI font");
+			if (!fontSet.pStrong)
+			{
+				fontSet.pStrong = fontSet.pDefault;
+				HLogWarning("ImGuiLayer could not resolve a dedicated strong UI font. Reusing the default UI font.");
+			}
+			else
+			{
+				merge_font_range(
+					io,
+					resolve_existing_font_path(
+						std::filesystem::path(config.strong_font_merge_path),
+						build_strong_merge_font_fallbacks(config.font_merge_path)),
+					fFontSizePixels,
+					config.use_full_chinese_glyph_range,
+					"strong CJK UI font",
+					"strong CJK UI font");
+			}
+
+			io.FontDefault = fontSet.pDefault;
+			return fontSet;
+		}
+		// editor end
 #if defined(ASH_HAS_VULKAN)
 		static void check_imgui_vk_result(VkResult result)
 		{
@@ -239,6 +503,11 @@ namespace AshEngine
 			io.ConfigWindowsMoveFromTitleBarOnly = true;
 			m_themePreset = config.theme_preset;
 			apply_imgui_theme_preset(m_themePreset);
+			// editor begin 修改原因：初始化编辑器专用字体集，并缓存默认/强调字体句柄供后续排版调用。
+			const ImGuiLoadedFontSet fontSet = configure_imgui_font(io, config);
+			m_pDefaultFont = fontSet.pDefault;
+			m_pStrongFont = fontSet.pStrong ? fontSet.pStrong : fontSet.pDefault;
+			// editor end
 
 			const bool glfw_ok =
 				m_backend == RHI::Backend::Vulkan ?
@@ -621,6 +890,41 @@ namespace AshEngine
 			return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantTextInput;
 		}
 
+		// editor begin 修改原因：给编辑器标题、状态提示等场景提供显式的字体切换能力。
+		void push_font(UIFontRole role) override
+		{
+			if (!ImGui::GetCurrentContext())
+			{
+				return;
+			}
+
+			ImFont* pFont = m_pDefaultFont;
+			switch (role)
+			{
+			case UIFontRole::Strong:
+				pFont = m_pStrongFont ? m_pStrongFont : m_pDefaultFont;
+				break;
+			case UIFontRole::Default:
+			default:
+				pFont = m_pDefaultFont;
+				break;
+			}
+
+			if (pFont)
+			{
+				ImGui::PushFont(pFont);
+			}
+		}
+
+		void pop_font() override
+		{
+			if (ImGui::GetCurrentContext())
+			{
+				ImGui::PopFont();
+			}
+		}
+		// editor end
+
 		void apply_theme_preset(UIThemePreset preset) override
 		{
 			m_themePreset = preset;
@@ -678,6 +982,10 @@ namespace AshEngine
 			m_initialized = false;
 			m_frame_active = false;
 			m_backend = RHI::Backend::Default;
+			// editor begin 修改原因：关闭 ImGuiLayer 时同步清空编辑器字体缓存，避免悬垂字体指针。
+			m_pDefaultFont = nullptr;
+			m_pStrongFont = nullptr;
+			// editor end
 			m_texture_registrations.clear();
 			m_texture_view_registrations.clear();
 #if defined(ASH_HAS_VULKAN)
@@ -1149,6 +1457,10 @@ namespace AshEngine
 		RHI::Backend m_backend = RHI::Backend::Default;
 		bool m_initialized = false;
 		bool m_frame_active = false;
+		// editor begin 修改原因：缓存编辑器默认字体和强调字体，避免每次排版时重复查找。
+		ImFont* m_pDefaultFont = nullptr;
+		ImFont* m_pStrongFont = nullptr;
+		// editor end
 		UIThemePreset m_themePreset = UIThemePreset::SlateStudio;
 		std::string m_iniPath{};
 		std::unordered_map<const RenderTarget*, TextureRegistration> m_texture_registrations{};

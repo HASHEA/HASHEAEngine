@@ -131,6 +131,7 @@ namespace AshEditor
 
 	private:
 		uint64_t MakeIdKey(std::string_view svUniqueId) const;
+		float GetGuideColumnBaseX(float fRowStartX) const;
 		EditorTreeDropVisual ResolveDropVisual(const EditorTreeDropTargetDesc& refDesc, const AshEngine::UIRect& refItemRect) const;
 		EditorTreeDropVisual ResolveDropVisualFallback(const EditorTreeDropTargetDesc& refDesc, DragDropTransferId uTransferId, const AshEngine::UIRect& refItemRect) const;
 		void UpdateAutoExpandHover(uint64_t uItemKey);

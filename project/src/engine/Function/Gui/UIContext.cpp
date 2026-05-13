@@ -6,6 +6,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <algorithm>
+#include <cfloat>
 #include <cstdarg>
 
 namespace AshEngine
@@ -39,6 +40,44 @@ namespace AshEngine
 			const float scale = std::min(width_ratio, height_ratio);
 			return { source_width * scale, source_height * scale };
 		}
+
+		// editor begin 修改原因：支持编辑器 tooltip 自动管理换行栈，并为缩放文本提供局部字体缩放辅助。
+		thread_local bool g_tooltipWrapPosPushed = false;
+
+		class ScopedWindowFontScale
+		{
+		public:
+			explicit ScopedWindowFontScale(float scale)
+			{
+				if (scale <= 0.0f)
+				{
+					return;
+				}
+
+				ImGuiWindow* pWindow = ImGui::GetCurrentWindowRead();
+				if (!pWindow)
+				{
+					return;
+				}
+
+				_fPreviousScale = pWindow->FontWindowScale;
+				ImGui::SetWindowFontScale(_fPreviousScale * scale);
+				_bApplied = true;
+			}
+
+			~ScopedWindowFontScale()
+			{
+				if (_bApplied)
+				{
+					ImGui::SetWindowFontScale(_fPreviousScale);
+				}
+			}
+
+		private:
+			float _fPreviousScale = 1.0f;
+			bool _bApplied = false;
+		};
+		// editor end
 
 		static auto to_imgui_cond(UIConditionFlags flags) -> ImGuiCond
 		{
@@ -758,6 +797,23 @@ namespace AshEngine
 		}
 	}
 
+	// editor begin 修改原因：给编辑器 tooltip、弹窗和资源预览窗口提供最小/最大尺寸约束。
+	void UIContext::set_next_window_size_constraints(const UIVec2& min_size, const UIVec2& max_size)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+
+		const ImVec2 vecMinSize{ std::max(0.0f, min_size.x), std::max(0.0f, min_size.y) };
+		const ImVec2 vecMaxSize{
+			max_size.x > 0.0f ? max_size.x : FLT_MAX,
+			max_size.y > 0.0f ? max_size.y : FLT_MAX
+		};
+		ImGui::SetNextWindowSizeConstraints(vecMinSize, vecMaxSize);
+	}
+	// editor end
+
 	void UIContext::set_next_window_viewport(UIViewportId viewport_id)
 	{
 		if (is_frame_active() && viewport_id != 0u)
@@ -950,12 +1006,40 @@ namespace AshEngine
 		}
 	}
 
+	// editor begin 修改原因：为编辑器的标题、说明文本和 tooltip 提供字体切换与缩放文本能力。
+	void UIContext::push_font(UIFontRole role)
+	{
+		if (is_frame_active() && m_impl && m_impl->layer)
+		{
+			m_impl->layer->push_font(role);
+		}
+	}
+
+	void UIContext::pop_font()
+	{
+		if (is_frame_active() && m_impl && m_impl->layer)
+		{
+			m_impl->layer->pop_font();
+		}
+	}
+
 	void UIContext::text_unformatted(const char* text)
 	{
 		if (is_frame_active() && text)
 		{
 			ImGui::TextUnformatted(text);
 		}
+	}
+
+	void UIContext::text_unformatted_scaled(const char* text, float scale)
+	{
+		if (!is_frame_active() || !text)
+		{
+			return;
+		}
+
+		const ScopedWindowFontScale fontScale(scale);
+		ImGui::TextUnformatted(text);
 	}
 
 	void UIContext::text(const char* format, ...)
@@ -965,6 +1049,20 @@ namespace AshEngine
 			return;
 		}
 
+		va_list args;
+		va_start(args, format);
+		ImGui::TextV(format, args);
+		va_end(args);
+	}
+
+	void UIContext::text_scaled(float scale, const char* format, ...)
+	{
+		if (!is_frame_active() || !format)
+		{
+			return;
+		}
+
+		const ScopedWindowFontScale fontScale(scale);
 		va_list args;
 		va_start(args, format);
 		ImGui::TextV(format, args);
@@ -986,6 +1084,22 @@ namespace AshEngine
 		va_end(args);
 	}
 
+	void UIContext::text_wrapped_scaled(float scale, const char* format, ...)
+	{
+		if (!is_frame_active() || !format)
+		{
+			return;
+		}
+
+		const ScopedWindowFontScale fontScale(scale);
+		va_list args;
+		va_start(args, format);
+		ImGui::PushTextWrapPos(0.0f);
+		ImGui::TextV(format, args);
+		ImGui::PopTextWrapPos();
+		va_end(args);
+	}
+
 	void UIContext::text_colored(const UIColor& color, const char* format, ...)
 	{
 		if (!is_frame_active() || !format)
@@ -993,6 +1107,20 @@ namespace AshEngine
 			return;
 		}
 
+		va_list args;
+		va_start(args, format);
+		ImGui::TextColoredV(to_imvec4(color), format, args);
+		va_end(args);
+	}
+
+	void UIContext::text_colored_scaled(float scale, const UIColor& color, const char* format, ...)
+	{
+		if (!is_frame_active() || !format)
+		{
+			return;
+		}
+
+		const ScopedWindowFontScale fontScale(scale);
 		va_list args;
 		va_start(args, format);
 		ImGui::TextColoredV(to_imvec4(color), format, args);
@@ -1011,6 +1139,23 @@ namespace AshEngine
 		ImGui::BulletTextV(format, args);
 		va_end(args);
 	}
+
+	void UIContext::push_text_wrap_pos(float wrap_local_pos_x)
+	{
+		if (is_frame_active())
+		{
+			ImGui::PushTextWrapPos(wrap_local_pos_x);
+		}
+	}
+
+	void UIContext::pop_text_wrap_pos()
+	{
+		if (is_frame_active())
+		{
+			ImGui::PopTextWrapPos();
+		}
+	}
+	// editor end
 
 	bool UIContext::button(const char* label, const UIVec2& size)
 	{
@@ -1575,7 +1720,9 @@ namespace AshEngine
 			return false;
 		}
 		const ImGuiKeyChord imgui_chord = to_imgui_key_chord(chord);
-		return ImGui::Shortcut(imgui_chord, ImGuiInputFlags_None);
+		// editor begin 修改原因：让编辑器快捷键在 Dock 焦点切换和多窗口场景下仍能稳定全局响应。
+		return ImGui::Shortcut(imgui_chord, 0, ImGuiInputFlags_RouteGlobal);
+		// editor end
 	}
 
 	void UIContext::set_next_item_open(bool is_open, UIConditionFlags cond)
@@ -1586,11 +1733,38 @@ namespace AshEngine
 		}
 	}
 
+	// editor begin 修改原因：支持编辑器按不同信息密度配置 tooltip 尺寸、换行和窗口标志。
 	void UIContext::begin_tooltip()
 	{
 		if (is_frame_active())
 		{
+			g_tooltipWrapPosPushed = false;
 			ImGui::BeginTooltip();
+		}
+	}
+
+	void UIContext::begin_tooltip(const UITooltipConfig& config)
+	{
+		if (!is_frame_active())
+		{
+			return;
+		}
+
+		if (config.size.x > 0.0f || config.size.y > 0.0f)
+		{
+			ImGui::SetNextWindowSize(to_imvec2(config.size), to_imgui_cond(config.size_condition));
+		}
+		if (config.min_size.x > 0.0f || config.min_size.y > 0.0f || config.max_size.x > 0.0f || config.max_size.y > 0.0f)
+		{
+			set_next_window_size_constraints(config.min_size, config.max_size);
+		}
+
+		g_tooltipWrapPosPushed = false;
+		ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, to_imgui_window_flags(config.window_flags));
+		if (config.wrap_width > 0.0f)
+		{
+			ImGui::PushTextWrapPos(config.wrap_width);
+			g_tooltipWrapPosPushed = true;
 		}
 	}
 
@@ -1598,9 +1772,15 @@ namespace AshEngine
 	{
 		if (is_frame_active())
 		{
+			if (g_tooltipWrapPosPushed)
+			{
+				ImGui::PopTextWrapPos();
+				g_tooltipWrapPosPushed = false;
+			}
 			ImGui::EndTooltip();
 		}
 	}
+	// editor end
 
 	bool UIContext::begin_drag_drop_source(UIDragDropFlags flags)
 	{

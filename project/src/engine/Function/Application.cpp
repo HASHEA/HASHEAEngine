@@ -194,6 +194,14 @@ namespace AshEngine
 		UIContextConfig uiConfig{};
 		uiConfig.ini_path = config.uiIniPath;
 		uiConfig.theme_preset = config.uiThemePreset;
+		// editor begin 修改原因：把编辑器字体配置注入 UIContext，支持中文与强调字重的编辑器排版。
+		uiConfig.font_path = config.uiFontPath;
+		uiConfig.font_merge_path = config.uiFontMergePath;
+		uiConfig.strong_font_path = config.uiStrongFontPath;
+		uiConfig.strong_font_merge_path = config.uiStrongFontMergePath;
+		uiConfig.font_size_pixels = config.uiFontSizePixels;
+		uiConfig.use_full_chinese_glyph_range = config.bUiUseFullChineseGlyphRange;
+		// editor end
 		if (!uiContext->init(window, graphicsContext, renderDevice, uiConfig))
 		{
 			HLogWarning("UIContext initialization failed. Engine UI facade will remain disabled.");

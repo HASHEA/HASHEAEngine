@@ -4,6 +4,7 @@
 #include "Core/EditorIds.h"
 #include "Core/PanelDeps/ViewportPanelDeps.h"
 #include "Core/EditorPanel.h"
+#include "Function/Gui/UICommon.h"
 
 #include <string>
 
@@ -34,6 +35,11 @@ namespace AshEditor
 		void ResetRuntimeViewportState();
 		void DrawToolbar(const EditorFrameContext& refFrameContext, EditorViewportInstance& refViewport);
 		void DrawOverlay(const EditorFrameContext& refFrameContext, const EditorViewportInstance& refViewport) const;
+		void HandleViewportInput(
+			const EditorFrameContext& refFrameContext,
+			const EditorViewportInstance& refViewport,
+			const AshEngine::UIRect& rectContent,
+			bool bContentHovered);
 		EditorViewportInstance* ResolveViewport();
 		const EditorViewportInstance* ResolveViewport() const;
 

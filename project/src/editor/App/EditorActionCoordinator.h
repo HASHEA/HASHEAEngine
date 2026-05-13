@@ -2,6 +2,7 @@
 
 #include "Core/IAssetBrowserActionTarget.h"
 #include "Core/IEditorActionHandler.h"
+#include "Core/ISceneFileActionHandler.h"
 #include "Core/ISceneHierarchyActionTarget.h"
 
 #include <cstdint>
@@ -42,7 +43,9 @@ namespace AshEditor
 		INotificationSink& refNotificationSink;
 	};
 
-	class EditorActionCoordinator final : public IEditorActionHandler
+	class EditorActionCoordinator final
+		: public IEditorActionHandler
+		, public ISceneFileActionHandler
 	{
 	public:
 		explicit EditorActionCoordinator(EditorActionCoordinatorContext context);
@@ -54,9 +57,12 @@ namespace AshEditor
 
 		bool CanExecuteAction(std::string_view svActionId) const override;
 		void ExecuteAction(std::string_view svActionId) override;
+		bool OpenSceneFromDialog(const char* pSource) override;
+		bool OpenSceneFromPath(const std::filesystem::path& pathScene, const char* pSource) override;
 
 	private:
 		void HandleNewScene();
+		void HandleOpenScene();
 		void HandleReloadScene();
 		void HandleSaveScene();
 		void HandleRefreshAssets();

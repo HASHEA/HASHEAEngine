@@ -18,12 +18,14 @@
 #include "Function/Render/Renderer.h"
 #include "Function/Render/ScenePresentationSubsystem.h"
 #include "Services/AssetDatabaseService.h"
+#include "Services/AssetPreviewService.h"
 #include "Services/CommandService.h"
 #include "Services/DragDropTransferService.h"
 #include "Services/EditorIconService.h"
 #include "Services/EditorSessionStateService.h"
 #include "Services/EditorSettingsService.h"
 #include "Services/EditorShortcutService.h"
+#include "Services/EditorViewportCameraService.h"
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
@@ -43,7 +45,9 @@ namespace AshEditor
 		, _upSelectionService(std::make_unique<SelectionService>())
 		, _upSceneService(std::make_unique<SceneService>())
 		, _upAssetDatabaseService(std::make_unique<AssetDatabaseService>())
+		, _upAssetPreviewService(std::make_unique<AssetPreviewService>())
 		, _upViewportService(std::make_unique<EditorViewportService>())
+		, _upViewportCameraService(std::make_unique<EditorViewportCameraService>())
 		, _upCommandService(std::make_unique<CommandService>())
 		, _upShortcutService(std::make_unique<EditorShortcutService>())
 		, _upUndoRedoService(std::make_unique<UndoRedoService>())
@@ -120,6 +124,7 @@ namespace AshEditor
 		_upViewportService->DestroyScenePresentations(AshEngine::Application::get_scene_presentation());
 		ShutdownPanels();
 		SavePersistentState();
+		_upViewportCameraService->Reset();
 		_upViewportService->Clear();
 		_upUndoRedoService->Clear();
 		_upSessionStateService->Clear();
@@ -151,8 +156,10 @@ namespace AshEditor
 			*_editorContext.pUiContext,
 			*_upCommandService,
 			*_upSessionStateService,
+			*_upSettingsService,
 			_upPanelManager->GetPanels(),
 			this,
+			_upActionCoordinator.get(),
 			_upPanelManager.get(),
 			this
 		};
@@ -186,7 +193,11 @@ namespace AshEditor
 
 		AshEngine::AssetDatabase& refAssetDatabase = _upAssetDatabaseService->GetDatabase();
 		AshEngine::Application::get()->get_render_asset_manager().initialize(&refAssetDatabase, pRenderer);
-		if (!_upViewportService->SyncScenePresentations(*pScenePresentation, _upSceneService->GetActiveScene()))
+		_upViewportCameraService->SyncFromScene(*_upSceneService);
+		if (!_upViewportService->SyncScenePresentations(
+			*pScenePresentation,
+			_upSceneService->GetActiveScene(),
+			_upViewportCameraService.get()))
 		{
 			HLogError("Editor failed to synchronize scene viewport presentation bindings.");
 		}
@@ -277,13 +288,16 @@ namespace AshEditor
 			_upSelectionService.get(),
 			_upSceneService.get(),
 			_upAssetDatabaseService.get(),
+			_upAssetPreviewService.get(),
 			_upCommandService.get(),
 			this,
 			_upSettingsService.get(),
 			_upIconService.get(),
 			_upShortcutService.get(),
 			_upViewportService.get(),
-			_upDragDropTransferService.get()
+			_upViewportCameraService.get(),
+			_upDragDropTransferService.get(),
+			&_gizmoState
 		};
 		const PanelBootstrapResult bootstrapResult =
 			PanelBootstrapper::CreateDefaultPanels(*_upPanelManager, bootstrapContext, *_upEventBus);

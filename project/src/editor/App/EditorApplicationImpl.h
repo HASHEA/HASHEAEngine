@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/EditorContext.h"
+#include "Core/EditorGizmoTypes.h"
 #include "Core/IActionInvoker.h"
 #include "Core/IEditorCommandExecutor.h"
 #include "Core/INotificationSink.h"
@@ -19,6 +20,7 @@ namespace AshEngine
 namespace AshEditor
 {
 	class AssetDatabaseService;
+	class AssetPreviewService;
 	class CommandService;
 	class DragDropTransferService;
 	class EditorActionCoordinator;
@@ -32,6 +34,7 @@ namespace AshEditor
 	struct EditorSettings;
 	class EditorSettingsService;
 	class EditorShortcutService;
+	class EditorViewportCameraService;
 	class EditorStatusBarController;
 	struct EditorViewportInstance;
 	class EditorViewportService;
@@ -92,7 +95,9 @@ namespace AshEditor
 		std::unique_ptr<SelectionService> _upSelectionService{};
 		std::unique_ptr<SceneService> _upSceneService{};
 		std::unique_ptr<AssetDatabaseService> _upAssetDatabaseService{};
+		std::unique_ptr<AssetPreviewService> _upAssetPreviewService{};
 		std::unique_ptr<EditorViewportService> _upViewportService{};
+		std::unique_ptr<EditorViewportCameraService> _upViewportCameraService{};
 		std::unique_ptr<CommandService> _upCommandService{};
 		std::unique_ptr<EditorShortcutService> _upShortcutService{};
 		std::unique_ptr<UndoRedoService> _upUndoRedoService{};
@@ -107,6 +112,7 @@ namespace AshEditor
 		std::unique_ptr<SceneWorkflowCoordinator> _upSceneWorkflowCoordinator{};
 		std::unique_ptr<EditorActionCoordinator> _upActionCoordinator{};
 		EditorContext _editorContext{};
+		EditorGizmoState _gizmoState{};
 		bool _bInitialized = false;
 	};
 }

@@ -10,6 +10,7 @@
 #include "Core/EditorIds.h"
 #include "Core/EditorScenePathUtils.h"
 #include "Core/INotificationSink.h"
+#include "Core/PlatformFileDialog.h"
 #include "Services/AssetDatabaseService.h"
 #include "Services/CommandService.h"
 #include "Services/EditorSettingsService.h"
@@ -29,6 +30,30 @@ namespace AshEditor
 {
 	namespace
 	{
+		static constexpr wchar_t kSceneFileDialogFilter[] =
+			L"Scene Files (*.scene.json)\0*.scene.json\0"
+			L"JSON Files (*.json)\0*.json\0"
+			L"All Files (*.*)\0*.*\0\0";
+
+		std::filesystem::path ResolveSceneOpenInitialDirectory(const EditorActionCoordinatorContext& context)
+		{
+			const std::filesystem::path pathActiveScene = context.refSceneService.GetActiveScenePath();
+			if (!pathActiveScene.empty())
+			{
+				return pathActiveScene.parent_path();
+			}
+
+			const std::filesystem::path pathSceneDirectory =
+				context.refSettingsService.GetAssetsRootPath() / "scenes";
+			std::error_code errorCode{};
+			if (std::filesystem::exists(pathSceneDirectory, errorCode) && !errorCode)
+			{
+				return pathSceneDirectory;
+			}
+
+			return context.refSettingsService.GetAssetsRootPath();
+		}
+
 		SceneWorkflowContext MakeSceneWorkflowContext(const EditorActionCoordinatorContext& context)
 		{
 			return SceneWorkflowContext{
@@ -116,6 +141,10 @@ namespace AshEditor
 		{
 			HandleNewScene();
 		}
+		else if (svActionId == EditorActionIds::FileOpenScene)
+		{
+			HandleOpenScene();
+		}
 		else if (svActionId == EditorActionIds::FileReloadScene)
 		{
 			HandleReloadScene();
@@ -198,8 +227,70 @@ namespace AshEditor
 	void EditorActionCoordinator::HandleNewScene()
 	{
 		SceneWorkflowContext sceneWorkflowContext = MakeSceneWorkflowContext(_context);
+		const std::filesystem::path pathNewScene =
+			_context.refSceneWorkflowCoordinator.CreateNewSceneFromStartupTemplate(
+				sceneWorkflowContext,
+				kUntitledSceneName);
+		if (!pathNewScene.empty())
+		{
+			Notify(_context, "Created a new scene from template: " + pathNewScene.generic_string());
+			return;
+		}
+
 		_context.refSceneWorkflowCoordinator.ActivateNewScene(sceneWorkflowContext, kUntitledSceneName);
-		Notify(_context, "Created a new default scene.");
+		Notify(_context, "Failed to copy the startup scene template. Created a new default scene instead.");
+	}
+
+	bool EditorActionCoordinator::OpenSceneFromDialog(const char* pSource)
+	{
+		OpenFileDialogOptions options{};
+		options.strTitle = L"Open Scene";
+		options.pFilter = kSceneFileDialogFilter;
+		options.strDefaultExtension = L"json";
+		options.pathInitialDirectory = ResolveSceneOpenInitialDirectory(_context);
+
+		const std::filesystem::path pathSelectedScene = OpenSingleFileDialog(options);
+		if (pathSelectedScene.empty())
+		{
+			return false;
+		}
+
+		return OpenSceneFromPath(pathSelectedScene, pSource);
+	}
+
+	bool EditorActionCoordinator::OpenSceneFromPath(const std::filesystem::path& pathScene, const char* pSource)
+	{
+		(void)pSource;
+		if (pathScene.empty())
+		{
+			return false;
+		}
+
+		std::error_code errorCode{};
+		if (!std::filesystem::exists(pathScene, errorCode) || errorCode)
+		{
+			if (_context.refSettingsService.RemoveRecentScenePath(pathScene))
+			{
+				_context.refSettingsService.Save();
+			}
+			Notify(_context, "Scene file was not found: " + pathScene.generic_string());
+			return false;
+		}
+
+		SceneWorkflowContext sceneWorkflowContext = MakeSceneWorkflowContext(_context);
+		if (_context.refSceneWorkflowCoordinator.LoadSceneIntoEditor(sceneWorkflowContext, pathScene))
+		{
+			Notify(_context, "Opened scene: " + pathScene.generic_string());
+			return true;
+		}
+
+		Notify(_context, "Failed to open scene: " + pathScene.generic_string());
+		return false;
+	}
+
+	void EditorActionCoordinator::HandleOpenScene()
+	{
+		OpenSceneFromDialog("action");
 	}
 
 	void EditorActionCoordinator::HandleReloadScene()
@@ -210,14 +301,30 @@ namespace AshEditor
 
 	void EditorActionCoordinator::HandleSaveScene()
 	{
-		const std::filesystem::path pathScene = _context.refSceneService.GetActiveScenePath().empty()
-			? _context.refSettingsService.GetStartupScenePath()
-			: _context.refSceneService.GetActiveScenePath();
+		const std::filesystem::path pathActiveScene = _context.refSceneService.GetActiveScenePath();
+		const std::string& strSceneName = _context.refSceneService.GetActiveScene().get_name();
+		const std::filesystem::path pathScene = pathActiveScene.empty()
+			? MakeUniqueSceneAssetPath(
+				_context.refSettingsService,
+				strSceneName.empty() ? kUntitledSceneName : strSceneName)
+			: pathActiveScene;
+		if (pathScene.empty())
+		{
+			_context.refEventBus.Publish(EditorDocumentOperationEvent{
+				EditorDocumentOperationKind::SaveScene,
+				EditorDocumentOperationResult::Failed,
+				_context.refSceneService.GetActiveScene().get_name(),
+				{}
+			});
+			Notify(_context, "Failed to choose a save path for the scene.");
+			return;
+		}
 		if (_context.refSceneService.SaveScene(pathScene))
 		{
 			_context.refUndoRedoService.MarkSaved();
 			_context.refSettingsService.GetSettings().strLastScenePath =
 				MakeScenePathForSettings(_context.refSettingsService, pathScene);
+			_context.refSettingsService.RecordRecentScenePath(pathScene);
 			_context.refSettingsService.Save();
 			_context.refEventBus.Publish(EditorDocumentOperationEvent{
 				EditorDocumentOperationKind::SaveScene,

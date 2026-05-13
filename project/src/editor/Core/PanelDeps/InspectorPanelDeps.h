@@ -3,6 +3,7 @@
 namespace AshEditor
 {
 	class AssetDatabaseService;
+	class DragDropTransferService;
 	class IEditorCommandExecutor;
 	class SceneService;
 	class SelectionService;
@@ -13,5 +14,6 @@ namespace AshEditor
 		SceneService* pSceneService = nullptr;
 		AssetDatabaseService* pAssetDatabaseService = nullptr;
 		IEditorCommandExecutor* pCommandExecutor = nullptr;
+		DragDropTransferService* pDragDropTransferService = nullptr;
 	};
 }

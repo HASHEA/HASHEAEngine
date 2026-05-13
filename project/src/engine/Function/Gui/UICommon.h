@@ -53,6 +53,14 @@ namespace AshEngine
 		SlateStudio
 	};
 
+	// editor begin 修改原因：为编辑器 UI 提供默认字重与强调字重的语义化字体角色。
+	enum class UIFontRole : uint8_t
+	{
+		Default = 0,
+		Strong
+	};
+	// editor end
+
 	enum class UIDirection : uint8_t
 	{
 		None = 0,
@@ -118,6 +126,14 @@ namespace AshEngine
 		bool enable_gamepad_navigation = false;
 		std::string ini_path{};
 		UIThemePreset theme_preset = UIThemePreset::SlateStudio;
+		// editor begin 修改原因：允许编辑器控制主字体、中文合并字体、强调字体和字号策略。
+		std::string font_path{};
+		std::string font_merge_path{};
+		std::string strong_font_path{};
+		std::string strong_font_merge_path{};
+		float font_size_pixels = 17.0f;
+		bool use_full_chinese_glyph_range = false;
+		// editor end
 	};
 
 	using UIConditionFlags = uint32_t;
@@ -148,6 +164,18 @@ namespace AshEngine
 		constexpr UIWindowFlags NoBringToFrontOnFocus = 1u << 11u;
 		constexpr UIWindowFlags NoNavFocus = 1u << 12u;
 	}
+
+	// editor begin 修改原因：支持编辑器为不同类型 tooltip 配置尺寸、换行和窗口行为。
+	struct UITooltipConfig
+	{
+		UIVec2 size{};
+		UIVec2 min_size{};
+		UIVec2 max_size{};
+		UIConditionFlags size_condition = UIConditionFlagBits::None;
+		float wrap_width = 0.0f;
+		UIWindowFlags window_flags = UIWindowFlagBits::None;
+	};
+	// editor end
 
 	using UIDockNodeFlags = uint32_t;
 	namespace UIDockNodeFlagBits

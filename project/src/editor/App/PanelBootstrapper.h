@@ -3,11 +3,13 @@
 namespace AshEditor
 {
 	class AssetDatabaseService;
+	class AssetPreviewService;
 	class CommandService;
 	class DragDropTransferService;
 	class EditorEventBus;
 	class EditorSettingsService;
 	class EditorShortcutService;
+	class EditorViewportCameraService;
 	class EditorViewportService;
 	class IAssetBrowserActionTarget;
 	class IEditorCommandExecutor;
@@ -16,19 +18,23 @@ namespace AshEditor
 	class PanelManager;
 	class SceneService;
 	class SelectionService;
+	struct EditorGizmoState;
 
 	struct PanelBootstrapContext
 	{
 		SelectionService* pSelectionService = nullptr;
 		SceneService* pSceneService = nullptr;
 		AssetDatabaseService* pAssetDatabaseService = nullptr;
+		AssetPreviewService* pAssetPreviewService = nullptr;
 		CommandService* pCommandService = nullptr;
 		IEditorCommandExecutor* pCommandExecutor = nullptr;
 		EditorSettingsService* pSettingsService = nullptr;
 		IEditorIconService* pIconService = nullptr;
 		EditorShortcutService* pShortcutService = nullptr;
 		EditorViewportService* pViewportService = nullptr;
+		EditorViewportCameraService* pViewportCameraService = nullptr;
 		DragDropTransferService* pDragDropTransferService = nullptr;
+		EditorGizmoState* pGizmoState = nullptr;
 	};
 
 	struct PanelBootstrapResult

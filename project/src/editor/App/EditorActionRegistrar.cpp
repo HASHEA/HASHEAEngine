@@ -39,6 +39,19 @@ namespace AshEditor
 		});
 
 		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::FileOpenScene,
+			"Open Scene",
+			"Open a scene file from disk and activate it in the editor.",
+			{},
+			{ MakeShortcutBinding("Ctrl+O", AshEngine::make_key_chord(AshEngine::UIKey::O, AshEngine::UIModifierFlagBits::Ctrl)) },
+			EditorActionScope::Global,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
 			EditorActionIds::FileReloadScene,
 			"Reload Scene",
 			"Reload the active scene from disk, or fall back to a new untitled scene if reload fails.",

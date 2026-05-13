@@ -63,7 +63,14 @@ namespace AshEditor
 		void ClearAssetSelection();
 		void ActivateAsset(const AshEngine::AssetInfo& refItem);
 		void OpenAssetItem(const AshEngine::AssetInfo& refItem);
+		void OpenAssetPreview(const AshEngine::AssetInfo& refItem);
 		void NavigateToDirectory(const std::filesystem::path& refDirectoryPath);
+		void NavigateToDirectoryInternal(const std::filesystem::path& refDirectoryPath, bool bRecordHistory);
+		bool CanNavigateDirectoryBack() const;
+		bool CanNavigateDirectoryForward() const;
+		void NavigateDirectoryBack();
+		void NavigateDirectoryForward();
+		void ResetDirectoryHistory();
 		void BrowseToAssetLocation(const AshEngine::AssetInfo& refItem);
 		void HandleAssetItemInteraction(
 			const EditorFrameContext& refFrameContext,
@@ -80,6 +87,10 @@ namespace AshEditor
 			const EditorFrameContext& refFrameContext,
 			const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
 			const AshEngine::AssetInfo* pSelectedAsset);
+		void DrawAssetItemTooltip(
+			const EditorFrameContext& refFrameContext,
+			const AshEngine::AssetInfo& refAsset,
+			std::string_view svDisplayLabel);
 		void DrawAssetItemContextMenu(const EditorFrameContext& refFrameContext, const AshEngine::AssetInfo& refAsset);
 		void DrawContentContextMenu(const EditorFrameContext& refFrameContext, bool bActiveDirectoryExists, bool bFiltersActive);
 		void DispatchContentShortcuts(const EditorFrameContext& refFrameContext, bool bContentFocused);
@@ -95,11 +106,12 @@ namespace AshEditor
 		EditorEventBindings _eventBindings{};
 		std::string _strSearchText{};
 		std::string _strActiveDirectoryPath{};
+		std::vector<std::string> _vecDirectoryHistory{};
+		int32_t _iDirectoryHistoryIndex = -1;
 		uint64_t _uSelectedAssetId = 0;
 		bool _bActiveDirectoryExistsThisFrame = false;
 		bool _bSelectedAssetVisibleThisFrame = false;
 		bool _bContentShortcutScopeActive = false;
-		bool _bShowDetails = true;
 		int32_t _iTypeFilterIndex = 0;
 		AssetBrowserViewMode _eViewMode = AssetBrowserViewMode::List;
 		EditorTreeWidgetState _treeStateDirectories{};

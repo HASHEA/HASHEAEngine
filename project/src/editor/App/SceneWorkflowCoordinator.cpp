@@ -11,10 +11,63 @@
 #include "Services/SelectionService.h"
 #include "Services/UndoRedoService.h"
 
+#include <fstream>
+#include <json.hpp>
+#include <system_error>
 #include <vector>
 
 namespace AshEditor
 {
+	namespace
+	{
+		using json = nlohmann::json;
+
+		std::string MakeSceneDisplayNameFromPath(const std::filesystem::path& pathScene)
+		{
+			const std::filesystem::path pathFirstStem = pathScene.stem();
+			const std::filesystem::path pathSecondStem = pathFirstStem.stem();
+			const std::string strDisplayName = pathSecondStem.empty()
+				? pathFirstStem.string()
+				: pathSecondStem.string();
+			return strDisplayName.empty() ? kUntitledSceneName : strDisplayName;
+		}
+
+		bool WriteSceneTemplateCopy(
+			const std::filesystem::path& pathTemplateScene,
+			const std::filesystem::path& pathDestinationScene)
+		{
+			std::ifstream input(pathTemplateScene);
+			if (!input.is_open())
+			{
+				return false;
+			}
+
+			json root = json::parse(input, nullptr, false);
+			if (root.is_discarded())
+			{
+				return false;
+			}
+
+			root["name"] = MakeSceneDisplayNameFromPath(pathDestinationScene);
+
+			std::error_code errorCode{};
+			std::filesystem::create_directories(pathDestinationScene.parent_path(), errorCode);
+			if (errorCode)
+			{
+				return false;
+			}
+
+			std::ofstream output(pathDestinationScene, std::ios::out | std::ios::trunc);
+			if (!output.is_open())
+			{
+				return false;
+			}
+
+			output << root.dump(2);
+			return output.good();
+		}
+	}
+
 	void SceneWorkflowCoordinator::ResetEditorStateAfterSceneChange(SceneWorkflowContext& context) const
 	{
 		// Keep selection/undo reset centralized so reload/new/load all leave the editor in the same lifecycle state.
@@ -32,26 +85,70 @@ namespace AshEditor
 		PublishDocumentOperation(context, EditorDocumentOperationKind::NewScene, EditorDocumentOperationResult::Succeeded, {});
 	}
 
+	std::filesystem::path SceneWorkflowCoordinator::CreateNewSceneFromStartupTemplate(
+		SceneWorkflowContext& context,
+		std::string_view svSceneName) const
+	{
+		const std::filesystem::path pathTemplateScene = context.refSettingsService.GetStartupScenePath();
+		if (pathTemplateScene.empty())
+		{
+			return {};
+		}
+
+		std::error_code errorCode{};
+		if (!std::filesystem::exists(pathTemplateScene, errorCode) || errorCode)
+		{
+			return {};
+		}
+
+		const std::filesystem::path pathScene = MakeUniqueSceneAssetPath(context.refSettingsService, svSceneName);
+		if (pathScene.empty())
+		{
+			return {};
+		}
+
+		if (!WriteSceneTemplateCopy(pathTemplateScene, pathScene))
+		{
+			return {};
+		}
+
+		if (!LoadSceneIntoEditor(context, pathScene, EditorDocumentOperationKind::NewScene))
+		{
+			std::filesystem::remove(pathScene, errorCode);
+			return {};
+		}
+
+		return pathScene;
+	}
+
 	bool SceneWorkflowCoordinator::LoadSceneIntoEditor(
 		SceneWorkflowContext& context,
 		const std::filesystem::path& pathScene) const
 	{
+		return LoadSceneIntoEditor(context, pathScene, EditorDocumentOperationKind::LoadScene);
+	}
+
+	bool SceneWorkflowCoordinator::LoadSceneIntoEditor(
+		SceneWorkflowContext& context,
+		const std::filesystem::path& pathScene,
+		EditorDocumentOperationKind eDocumentOperationKind) const
+	{
 		if (pathScene.empty())
 		{
-			PublishDocumentOperation(context, EditorDocumentOperationKind::LoadScene, EditorDocumentOperationResult::Skipped, pathScene);
+			PublishDocumentOperation(context, eDocumentOperationKind, EditorDocumentOperationResult::Skipped, pathScene);
 			return false;
 		}
 
 		if (!context.refSceneService.LoadScene(pathScene))
 		{
-			PublishDocumentOperation(context, EditorDocumentOperationKind::LoadScene, EditorDocumentOperationResult::Failed, pathScene);
+			PublishDocumentOperation(context, eDocumentOperationKind, EditorDocumentOperationResult::Failed, pathScene);
 			return false;
 		}
 
 		UpdateLastScenePathSetting(context, pathScene);
 		ResetEditorStateAfterSceneChange(context);
 		PublishActiveSceneChanged(context);
-		PublishDocumentOperation(context, EditorDocumentOperationKind::LoadScene, EditorDocumentOperationResult::Succeeded, pathScene);
+		PublishDocumentOperation(context, eDocumentOperationKind, EditorDocumentOperationResult::Succeeded, pathScene);
 		return true;
 	}
 
@@ -106,6 +203,7 @@ namespace AshEditor
 		EditorSettings& refSettings = context.refSettingsService.GetSettings();
 		refSettings.strLastScenePath =
 			MakeScenePathForSettings(context.refSettingsService, pathScene);
+		context.refSettingsService.RecordRecentScenePath(pathScene);
 		context.refSettingsService.Save();
 	}
 

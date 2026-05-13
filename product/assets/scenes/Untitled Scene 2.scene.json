@@ -1,0 +1,122 @@
+{
+  "entities": [
+    {
+      "id": 1,
+      "name": "SceneRoot",
+      "parent": 0,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_euler_degrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "camera": {
+        "far_plane": 1000.0,
+        "fov_y_degrees": 60.0,
+        "near_plane": 0.10000000149011612,
+        "orthographic_height": 10.0,
+        "primary": true,
+        "projection": 0
+      },
+      "id": 2,
+      "name": "MainCamera",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          2.0,
+          -8.0
+        ],
+        "rotation_euler_degrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "light": {
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "inner_cone_angle_degrees": 30.0,
+        "intensity": 1.0,
+        "outer_cone_angle_degrees": 45.0,
+        "range": 10.0,
+        "type": 0
+      },
+      "name": "DirectionalLight",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_euler_degrees": [
+          -45.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "mesh": {
+        "asset_path": "models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf",
+        "layer_mask": 1,
+        "mesh_index": 0,
+        "mobility": 0,
+        "visible": true
+      },
+      "name": "TestHelmet",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_euler_degrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    }
+  ],
+  "name": "Untitled Scene 2",
+  "next_entity_id": 5,
+  "version": 3
+}

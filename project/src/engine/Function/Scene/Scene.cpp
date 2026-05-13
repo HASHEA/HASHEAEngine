@@ -518,6 +518,18 @@ namespace AshEngine
 		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
 	}
 
+	// editor begin 修改原因：为编辑器预览相机提供静默更新 Transform 的能力，避免每帧操作触发正式编辑副作用。
+	bool Entity::set_transform_component_silent(const TransformComponent& component)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		ASH_PROCESS_ERROR(handle != entt::null);
+		impl->storage.registry.emplace_or_replace<TransformComponent>(handle, component);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+	// editor end
+
 	bool Entity::has_camera_component() const
 	{
 		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);

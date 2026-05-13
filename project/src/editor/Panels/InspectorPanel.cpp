@@ -9,14 +9,17 @@
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
 #include "Services/AssetDatabaseService.h"
+#include "Services/DragDropTransferService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
-#include "Widgets/EditorButtonWidgets.h"
+#include "Widgets/EditorTooltipWidgets.h"
 
+#include <algorithm>
 #include <array>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace AshEditor
@@ -63,6 +66,27 @@ namespace AshEditor
 		CameraDraft draftCamera{};
 		LightDraft draftLight{};
 		MeshDraft draftMesh{};
+
+		// Asset picker state.
+		std::vector<std::string> vecRecentMeshPaths{};
+		std::string strAssetPickerSearch{};
+
+		void PushRecentMeshPath(const std::string& strPath)
+		{
+			if (strPath.empty())
+			{
+				return;
+			}
+			// Remove duplicate if already in the list.
+			vecRecentMeshPaths.erase(
+				std::remove(vecRecentMeshPaths.begin(), vecRecentMeshPaths.end(), strPath),
+				vecRecentMeshPaths.end());
+			vecRecentMeshPaths.insert(vecRecentMeshPaths.begin(), strPath);
+			if (vecRecentMeshPaths.size() > 10)
+			{
+				vecRecentMeshPaths.resize(10);
+			}
+		}
 	};
 
 	namespace
@@ -70,26 +94,61 @@ namespace AshEditor
 		constexpr AshEngine::UIColor kInspectorAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
 		constexpr AshEngine::UIColor kInspectorMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 		constexpr AshEngine::UIColor kInspectorWarningColor{ 0.95f, 0.80f, 0.48f, 1.0f };
-
-		// Keep the add/remove button flow identical across component sections.
-		bool DrawAddComponentButton(AshEngine::UIContext& refUi, const char* pLabel)
-		{
-			return refUi.button(pLabel);
-		}
+		constexpr AshEngine::UITooltipConfig kInspectorCompactTooltipConfig{
+			{ 360.0f, 0.0f },
+			{ 220.0f, 0.0f },
+			{ 520.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+		constexpr AshEngine::UITooltipConfig kInspectorDetailTooltipConfig{
+			{ 520.0f, 0.0f },
+			{ 320.0f, 0.0f },
+			{ 720.0f, 0.0f },
+			AshEngine::UIConditionFlagBits::Always,
+			0.0f,
+			AshEngine::UIWindowFlagBits::None
+		};
+		constexpr float kInspectorSummaryLabelWidth = 112.0f;
+		constexpr AshEngine::UITableFlags kInspectorSummaryTableFlags =
+			AshEngine::UITableFlagBits::SizingStretchProp |
+			AshEngine::UITableFlagBits::BordersInner;
+		constexpr AshEngine::UIColor kInspectorDropZoneFillColor{ 0.24f, 0.31f, 0.39f, 0.38f };
+		constexpr AshEngine::UIColor kInspectorDropZoneHoverColor{ 0.30f, 0.42f, 0.54f, 0.52f };
+		constexpr AshEngine::UIColor kInspectorDropZoneActiveColor{ 0.36f, 0.50f, 0.64f, 0.68f };
+		constexpr AshEngine::UIColor kInspectorDropZoneBorderColor{ 0.47f, 0.60f, 0.75f, 0.62f };
+		constexpr const char* kInspectorCameraComponentMenuId = "InspectorCameraComponentMenu";
+		constexpr const char* kInspectorLightComponentMenuId = "InspectorLightComponentMenu";
+		constexpr const char* kInspectorMeshComponentMenuId = "InspectorMeshComponentMenu";
 
 		bool DrawRemoveComponentButton(AshEngine::UIContext& refUi, const char* pLabel)
 		{
-			return refUi.button(pLabel);
+			return refUi.small_button(pLabel);
+		}
+
+		bool DrawComponentHeaderContextMenu(
+			AshEngine::UIContext& refUi,
+			const char* pPopupId)
+		{
+			bool bRemoveRequested = false;
+			if (refUi.begin_popup_context_item(pPopupId))
+			{
+				bRemoveRequested = refUi.menu_item("Remove Component");
+				refUi.end_popup();
+			}
+			return bRemoveRequested;
+		}
+
+		bool DrawComponentRemoveAction(AshEngine::UIContext& refUi, const char* pIdSuffix)
+		{
+			const std::string strLabel = std::string("Remove Component##") + (pIdSuffix ? pIdSuffix : "Component");
+			return DrawRemoveComponentButton(refUi, strLabel.c_str());
 		}
 
 		bool EditNameComponent(AshEngine::UIContext& refUi, const char* pLabel, AshEngine::NameComponent& refComponent)
 		{
 			return refUi.input_text(pLabel, refComponent.value);
-		}
-
-		bool EditMeshPath(AshEngine::UIContext& refUi, AshEngine::MeshComponent& refComponent)
-		{
-			return refUi.input_text("Asset Path", refComponent.asset_path);
 		}
 
 		bool EditVec3(
@@ -130,26 +189,55 @@ namespace AshEditor
 				: std::nullopt;
 		}
 
-		void DrawLabeledValue(AshEngine::UIContext& refUi, const char* pLabel, const std::string& strValue)
+		bool MeshComponentHasValidAssetPath(const std::optional<AshEngine::MeshComponent>& optValue)
 		{
-			refUi.text_colored(kInspectorMutedColor, "%s", pLabel);
-			refUi.same_line();
-			refUi.text_wrapped("%s", strValue.empty() ? "-" : strValue.c_str());
+			return optValue.has_value() && !optValue->asset_path.empty();
 		}
 
-		void DrawLabeledBool(AshEngine::UIContext& refUi, const char* pLabel, bool bValue)
+		bool BeginSummaryTable(AshEngine::UIContext& refUi, const char* pTableId)
 		{
-			DrawLabeledValue(refUi, pLabel, bValue ? "Yes" : "No");
+			if (!refUi.begin_table(pTableId, 2, kInspectorSummaryTableFlags))
+			{
+				return false;
+			}
+
+			refUi.table_setup_column("Label", AshEngine::UITableColumnFlagBits::WidthFixed, kInspectorSummaryLabelWidth);
+			refUi.table_setup_column("Value", AshEngine::UITableColumnFlagBits::WidthStretch);
+			return true;
+		}
+
+		void DrawSummaryRow(
+			AshEngine::UIContext& refUi,
+			const char* pLabel,
+			std::string_view svValue)
+		{
+			refUi.table_next_row();
+			refUi.table_next_column();
+			refUi.text_colored(kInspectorMutedColor, "%s", pLabel);
+			refUi.table_next_column();
+			const std::string_view svDisplayValue = svValue.empty() ? std::string_view("-") : svValue;
+			const std::string strDisplayValue(svDisplayValue);
+			refUi.text_wrapped("%s", strDisplayValue.c_str());
+		}
+
+		void DrawSummaryBoolRow(AshEngine::UIContext& refUi, const char* pLabel, bool bValue)
+		{
+			DrawSummaryRow(refUi, pLabel, bValue ? "Yes" : "No");
 		}
 
 		void DrawPanelIntro(AshEngine::UIContext& refUi, const char* pTitle, const char* pDescription)
 		{
+			refUi.push_font(AshEngine::UIFontRole::Strong);
 			refUi.text_colored(kInspectorAccentColor, "%s", pTitle);
-			refUi.text_wrapped("%s", pDescription);
+			refUi.pop_font();
+			refUi.text_colored(kInspectorMutedColor, "%s", pDescription);
 			refUi.separator();
 		}
 
-		void DrawSelectionSummary(AshEngine::UIContext& refUi, const EditorSelection& refSelection)
+		void DrawSelectionSummary(
+			AshEngine::UIContext& refUi,
+			const EditorSelection& refSelection,
+			std::string_view svTooltipDescription = {})
 		{
 			const char* pKindLabel = "Selection";
 			switch (refSelection.eKind)
@@ -164,22 +252,60 @@ namespace AshEditor
 				break;
 			}
 
+			refUi.push_font(AshEngine::UIFontRole::Strong);
 			refUi.text_colored(kInspectorAccentColor, "%s", refSelection.strLabel.c_str());
-			refUi.text_colored(kInspectorMutedColor, "%s", pKindLabel);
-			refUi.same_line();
-			refUi.text_colored(kInspectorMutedColor, "| Id %llu", static_cast<unsigned long long>(refSelection.uId));
-			if (!refSelection.strPath.empty())
+			refUi.pop_font();
+			if (refUi.is_item_hovered())
 			{
-				DrawLabeledValue(refUi, "Path", refSelection.strPath);
+				const bool bUseDetailTooltip = !refSelection.strPath.empty();
+				refUi.begin_tooltip(bUseDetailTooltip ? kInspectorDetailTooltipConfig : kInspectorCompactTooltipConfig);
+				if (bUseDetailTooltip)
+				{
+					DrawEditorTooltipTitle(refUi, refSelection.strLabel, "Selection Details");
+					if (BeginEditorTooltipTable(refUi, "InspectorSelectionTooltip", 72.0f))
+					{
+						DrawEditorTooltipRow(refUi, "Kind", pKindLabel);
+						DrawEditorTooltipRow(refUi, "Id", std::to_string(static_cast<unsigned long long>(refSelection.uId)));
+						DrawEditorTooltipRow(refUi, "Path", refSelection.strPath);
+						refUi.end_table();
+					}
+				}
+				else
+				{
+					DrawEditorTooltipCompactTitle(refUi, refSelection.strLabel, pKindLabel);
+					DrawEditorTooltipCompactRow(
+						refUi,
+						"Id",
+						std::to_string(static_cast<unsigned long long>(refSelection.uId)));
+					if (!svTooltipDescription.empty())
+					{
+						refUi.separator();
+						DrawEditorTooltipCaption(refUi, svTooltipDescription);
+					}
+				}
+				if (bUseDetailTooltip && !svTooltipDescription.empty())
+				{
+					refUi.separator();
+					DrawEditorTooltipDescription(refUi, svTooltipDescription);
+				}
+				refUi.end_tooltip();
 			}
 			refUi.separator();
+		}
+
+		void DrawAssetInspector(
+			AshEngine::UIContext& refUi,
+			const EditorSelection& refSelection)
+		{
+			(void)refUi;
+			(void)refSelection;
 		}
 
 		void DrawEmptyState(AshEngine::UIContext& refUi)
 		{
 			DrawPanelIntro(refUi, "Inspector", "Select an entity or asset to inspect and edit its properties.");
 			refUi.bullet_text("Entity selections show editable components and hierarchy data.");
-			refUi.bullet_text("Asset selections show metadata from the asset database.");
+			refUi.bullet_text("Asset selections can be previewed from Asset Browser with the Preview context action.");
 		}
 
 		void DrawHierarchySection(AshEngine::UIContext& refUi, const AshEngine::Entity& refEntity)
@@ -190,35 +316,87 @@ namespace AshEditor
 			}
 
 			const AshEngine::Entity parent = refEntity.get_parent();
-			DrawLabeledValue(refUi, "Parent", parent.is_valid() ? std::to_string(parent.get_id()) : std::string("<Root>"));
-			DrawLabeledValue(refUi, "Children", std::to_string(refEntity.get_children().size()));
+			if (BeginSummaryTable(refUi, "InspectorHierarchySummary"))
+			{
+				DrawSummaryRow(
+					refUi,
+					"Parent",
+					parent.is_valid() ? std::to_string(parent.get_id()) : std::string("<Root>"));
+				DrawSummaryRow(refUi, "Children", std::to_string(refEntity.get_children().size()));
+				refUi.end_table();
+			}
 		}
 
-		void DrawAssetInspector(
-			AssetDatabaseService* pAssetDatabaseService,
-			AshEngine::UIContext& refUi,
-			const EditorSelection& refSelection)
+		bool CanAddCameraComponent(const AshEngine::Entity& refEntity)
 		{
-			if (!pAssetDatabaseService)
+			return !refEntity.has_camera_component();
+		}
+
+		bool CanAddLightComponent(const AshEngine::Entity& refEntity)
+		{
+			return !refEntity.has_light_component();
+		}
+
+		bool CanAddMeshComponent(const AshEngine::Entity& refEntity)
+		{
+			return !refEntity.has_mesh_component();
+		}
+
+		bool ApplyCameraComponentValue(
+			AshEngine::Entity entity,
+			const std::optional<AshEngine::CameraComponent>& optValue)
+		{
+			if (!entity.is_valid())
 			{
-				refUi.text_unformatted("Asset database service is not available.");
-				return;
+				return false;
 			}
 
-			const AshEngine::AssetInfo* asset = pAssetDatabaseService->FindById(refSelection.uId);
-			if (!asset)
+			if (!optValue.has_value())
 			{
-				refUi.text_unformatted("Selected asset no longer exists.");
-				return;
+				return entity.has_camera_component() && entity.remove_camera_component();
 			}
 
-			DrawPanelIntro(refUi, "Asset Details", "Metadata comes from the editor asset database.");
-			DrawLabeledValue(refUi, "Type", AssetDatabaseService::GetTypeLabel(asset->type));
-			DrawLabeledValue(refUi, "Path", asset->relative_path.generic_string());
-			DrawLabeledValue(refUi, "Parent", asset->parent_path.empty() ? std::string("<Root>") : asset->parent_path.generic_string());
-			DrawLabeledBool(refUi, "Directory", asset->is_directory);
-			DrawLabeledValue(refUi, "File Size", std::to_string(static_cast<unsigned long long>(asset->file_size)));
-			DrawLabeledValue(refUi, "Load State", AssetDatabaseService::GetLoadStateLabel(pAssetDatabaseService->GetLoadState(asset->id)));
+			return entity.has_camera_component()
+				? entity.set_camera_component(*optValue)
+				: entity.add_camera_component(*optValue);
+		}
+
+		bool ApplyLightComponentValue(
+			AshEngine::Entity entity,
+			const std::optional<AshEngine::LightComponent>& optValue)
+		{
+			if (!entity.is_valid())
+			{
+				return false;
+			}
+
+			if (!optValue.has_value())
+			{
+				return entity.has_light_component() && entity.remove_light_component();
+			}
+
+			return entity.has_light_component()
+				? entity.set_light_component(*optValue)
+				: entity.add_light_component(*optValue);
+		}
+
+		bool ApplyMeshComponentValue(
+			AshEngine::Entity entity,
+			const std::optional<AshEngine::MeshComponent>& optValue)
+		{
+			if (!entity.is_valid())
+			{
+				return false;
+			}
+
+			if (!optValue.has_value())
+			{
+				return entity.has_mesh_component() && entity.remove_mesh_component();
+			}
+
+			return entity.has_mesh_component()
+				? entity.set_mesh_component(*optValue)
+				: entity.add_mesh_component(*optValue);
 		}
 	}
 
@@ -395,106 +573,109 @@ namespace AshEditor
 
 	void InspectorPanel::DrawComponentSections(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
+		InspectorPanelState& state = GetState();
+		SyncCameraDraft(entity);
+		SyncLightDraft(entity);
+		SyncMeshDraft(entity);
+
+		const bool bShowCamera = state.draftCamera.uEntityId == entity.get_id() && state.draftCamera.optCurrentValue.has_value();
+		const bool bShowLight = state.draftLight.uEntityId == entity.get_id() && state.draftLight.optCurrentValue.has_value();
+		const bool bShowMesh = state.draftMesh.uEntityId == entity.get_id() && state.draftMesh.optCurrentValue.has_value();
+
+		DrawAddComponentMenu(refUi, entity);
+		refUi.separator();
 		DrawIdentitySection(refUi, entity);
 		refUi.separator();
 		DrawTransformSection(refUi, entity);
-		refUi.separator();
-		DrawCameraSection(refUi, entity);
-		refUi.separator();
-		DrawLightSection(refUi, entity);
-		refUi.separator();
-		DrawMeshSection(refUi, entity);
-		refUi.separator();
+
+		if (bShowCamera)
+		{
+			refUi.separator();
+			DrawCameraSection(refUi, entity);
+		}
+		if (bShowLight)
+		{
+			refUi.separator();
+			DrawLightSection(refUi, entity);
+		}
+		if (bShowMesh)
+		{
+			refUi.separator();
+			DrawMeshSection(refUi, entity);
+		}
 	}
 
-	void InspectorPanel::DrawPendingChangeHint(AshEngine::UIContext& refUi, const char* pLabel)
+	void InspectorPanel::DrawAddComponentMenu(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
-		refUi.text_colored(kInspectorWarningColor, "%s", pLabel);
-	}
+		InspectorPanelState& state = GetState();
+		const bool bCanAddCamera = CanAddCameraComponent(entity);
+		const bool bCanAddLight = CanAddLightComponent(entity);
+		const bool bHasPendingMeshDraft =
+			state.draftMesh.uEntityId == entity.get_id() &&
+			state.draftMesh.optCurrentValue.has_value();
+		const bool bCanAddMesh = CanAddMeshComponent(entity) && !bHasPendingMeshDraft;
+		const bool bHasAnyAddableComponent = bCanAddCamera || bCanAddLight || bCanAddMesh;
 
-	void InspectorPanel::DrawApplyRevertRow(
-		AshEngine::UIContext& refUi,
-		const char* pApplyLabel,
-		const char* pRevertLabel,
-		bool bCanApply,
-		bool bHasPendingChanges,
-		bool& bApplyClicked,
-		bool& bRevertClicked)
-	{
-		// Inspector edits are collected into draft state and only committed on Apply.
-		// This prevents immediate-mode widgets from generating one undo entry per keystroke or drag step.
-		bApplyClicked = false;
-		bRevertClicked = false;
-
-		if (bCanApply)
-		{
-			PushEditorButtonVisuals(refUi);
-		}
-		refUi.begin_disabled(!bCanApply);
-		bApplyClicked = refUi.button(pApplyLabel);
-		refUi.end_disabled();
-		if (bCanApply)
-		{
-			PopEditorButtonVisuals(refUi);
-		}
+		refUi.text_colored(kInspectorMutedColor, "Components");
 		refUi.same_line();
-		refUi.begin_disabled(!bHasPendingChanges);
-		bRevertClicked = refUi.button(pRevertLabel);
+		refUi.begin_disabled(!bHasAnyAddableComponent);
+		if (refUi.small_button("Add Component"))
+		{
+			refUi.open_popup("InspectorAddComponent");
+		}
 		refUi.end_disabled();
+
+		if (!refUi.begin_popup("InspectorAddComponent"))
+		{
+			return;
+		}
+
+		if (bCanAddCamera && refUi.menu_item("Camera"))
+		{
+			GetState().draftCamera.optCurrentValue = AshEngine::CameraComponent{};
+			CommitCameraDraft(entity);
+			refUi.close_current_popup();
+		}
+		if (bCanAddLight && refUi.menu_item("Light"))
+		{
+			GetState().draftLight.optCurrentValue = AshEngine::LightComponent{};
+			CommitLightDraft(entity);
+			refUi.close_current_popup();
+		}
+		if (bCanAddMesh && refUi.menu_item("Mesh"))
+		{
+			state.draftMesh.uEntityId = entity.get_id();
+			state.draftMesh.optOriginalValue = GetMeshComponentValue(entity);
+			state.draftMesh.optCurrentValue = AshEngine::MeshComponent{};
+			state.strAssetPickerSearch.clear();
+			refUi.open_popup("AssetPickerPopup");
+			refUi.close_current_popup();
+		}
+		if (!bHasAnyAddableComponent)
+		{
+			refUi.text_unformatted("All supported components are already present.");
+		}
+
+		refUi.end_popup();
 	}
 
 	void InspectorPanel::DrawIdentitySection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
 		InspectorPanelState& state = GetState();
 		SyncEntityDrafts(entity);
-		const bool bHasPendingChanges = HasPendingIdentityChanges();
-		const char* pSectionLabel = bHasPendingChanges ? "Identity *" : "Identity";
-		if (!refUi.collapsing_header(pSectionLabel, AshEngine::UITreeNodeFlagBits::DefaultOpen))
+		if (!refUi.collapsing_header("Identity", AshEngine::UITreeNodeFlagBits::DefaultOpen))
 		{
 			return;
 		}
 
-		refUi.input_text("Name", state.draftIdentity.strCurrentName);
-
-		if (bHasPendingChanges)
+		if (refUi.input_text("Name", state.draftIdentity.strCurrentName))
 		{
-			DrawPendingChangeHint(refUi, "Pending changes. Apply or revert to update the entity.");
-		}
-
-		const bool bCanApply = bHasPendingChanges && !state.draftIdentity.strCurrentName.empty();
-		bool bApplyClicked = false;
-		bool bRevertClicked = false;
-		DrawApplyRevertRow(refUi, "Apply Name", "Revert Name", bCanApply, bHasPendingChanges, bApplyClicked, bRevertClicked);
-		if (bApplyClicked)
-		{
-			const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
-			bool bApplied = false;
-			if (_deps.pCommandExecutor)
+			if (!state.draftIdentity.strCurrentName.empty())
 			{
-				bApplied = _deps.pCommandExecutor->ExecuteCommand(
-					std::make_unique<RenameEntityCommand>(
-						entity.get_id(),
-						state.draftIdentity.strOriginalName,
-						state.draftIdentity.strCurrentName));
-			}
-			else
-			{
-				// The editor still supports a "direct write" fallback so panels remain usable while services are
-				// being wired up. This path does not produce undo entries.
-				HLogWarning("InspectorPanel apply name clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.set_name(state.draftIdentity.strCurrentName);
-			}
-
-			if (bApplied)
-			{
-				state.draftIdentity.strOriginalName = state.draftIdentity.strCurrentName;
-			}
-			else
-			{
-				HLogWarning("InspectorPanel failed to apply Identity changes. Entity={}.", uEntityId);
+				CommitIdentityDraft(entity);
 			}
 		}
-		if (bRevertClicked)
+		if (state.draftIdentity.strCurrentName.empty() && refUi.is_item_deactivated_after_edit())
 		{
 			state.draftIdentity.strCurrentName = state.draftIdentity.strOriginalName;
 		}
@@ -504,343 +685,516 @@ namespace AshEditor
 	{
 		InspectorPanelState& state = GetState();
 		SyncEntityDrafts(entity);
-		const bool bHasPendingChanges = HasPendingTransformChanges();
-		const char* pSectionLabel = bHasPendingChanges ? "Transform *" : "Transform";
-		if (!refUi.collapsing_header(pSectionLabel, AshEngine::UITreeNodeFlagBits::DefaultOpen))
+		if (!refUi.collapsing_header("Transform", AshEngine::UITreeNodeFlagBits::DefaultOpen))
 		{
 			return;
 		}
 
 		AshEngine::TransformComponent& transform = state.draftTransform.currentValue;
-		EditVec3(refUi, "Position", transform.position, 0.1f, 0.0f, 0.0f);
-		EditVec3(refUi, "Rotation", transform.rotation_euler_degrees, 0.5f, 0.0f, 0.0f);
-		EditVec3(refUi, "Scale", transform.scale, 0.05f, 0.0f, 0.0f);
-
-		if (bHasPendingChanges)
+		bool bChanged = false;
+		bChanged = EditVec3(refUi, "Position", transform.position, 0.1f, 0.0f, 0.0f) || bChanged;
+		bChanged = EditVec3(refUi, "Rotation", transform.rotation_euler_degrees, 0.5f, 0.0f, 0.0f) || bChanged;
+		bChanged = EditVec3(refUi, "Scale", transform.scale, 0.05f, 0.0f, 0.0f) || bChanged;
+		if (bChanged)
 		{
-			DrawPendingChangeHint(refUi, "Pending changes. Apply or revert to update the entity.");
-		}
-
-		bool bApplyClicked = false;
-		bool bRevertClicked = false;
-		DrawApplyRevertRow(refUi, "Apply Transform", "Revert Transform", bHasPendingChanges, bHasPendingChanges, bApplyClicked, bRevertClicked);
-		if (bApplyClicked)
-		{
-			const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
-			bool bApplied = false;
-			if (_deps.pCommandExecutor)
-			{
-				bApplied = _deps.pCommandExecutor->ExecuteCommand(
-					std::make_unique<TransformEntityCommand>(
-						entity.get_id(),
-						state.draftTransform.originalValue,
-						state.draftTransform.currentValue));
-			}
-			else
-			{
-				HLogWarning("InspectorPanel apply transform clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.set_transform_component(state.draftTransform.currentValue);
-			}
-
-			if (bApplied)
-			{
-				state.draftTransform.originalValue = state.draftTransform.currentValue;
-			}
-			else
-			{
-				HLogWarning("InspectorPanel failed to apply Transform changes. Entity={}.", uEntityId);
-			}
-		}
-		if (bRevertClicked)
-		{
-			state.draftTransform.currentValue = state.draftTransform.originalValue;
+			CommitTransformDraft(entity);
 		}
 	}
 
-	void InspectorPanel::DrawCameraSection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
+	bool InspectorPanel::DrawCameraSection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
 		InspectorPanelState& state = GetState();
 		SyncCameraDraft(entity);
-		const bool bHasPendingChanges = HasPendingCameraChanges();
-		if (!state.draftCamera.optCurrentValue.has_value() && !bHasPendingChanges)
+		if (!state.draftCamera.optCurrentValue.has_value())
 		{
-			if (DrawAddComponentButton(refUi, "Add Camera"))
-			{
-				state.draftCamera.optCurrentValue = AshEngine::CameraComponent{};
-			}
-			return;
+			return false;
 		}
 
-		const char* pSectionLabel = bHasPendingChanges ? "Camera *" : "Camera";
-		if (!refUi.collapsing_header(pSectionLabel, AshEngine::UITreeNodeFlagBits::DefaultOpen))
+		const bool bOpen = refUi.collapsing_header("Camera", AshEngine::UITreeNodeFlagBits::DefaultOpen);
+		if (DrawComponentHeaderContextMenu(refUi, kInspectorCameraComponentMenuId))
 		{
-			return;
+			state.draftCamera.optCurrentValue.reset();
+			CommitCameraDraft(entity);
+			return false;
+		}
+		if (!bOpen)
+		{
+			return true;
 		}
 
-		if (state.draftCamera.optCurrentValue.has_value())
+		AshEngine::CameraComponent& camera = *state.draftCamera.optCurrentValue;
+		bool bChanged = false;
+		bChanged = refUi.checkbox("Primary", camera.primary) || bChanged;
+
+		int iProjection = static_cast<int>(camera.projection);
+		const std::vector<const char*> vecProjectionLabels{ "Perspective", "Orthographic" };
+		if (refUi.combo("Projection", iProjection, vecProjectionLabels))
 		{
-			AshEngine::CameraComponent& camera = *state.draftCamera.optCurrentValue;
-			refUi.checkbox("Primary", camera.primary);
-
-			int iProjection = static_cast<int>(camera.projection);
-			const std::vector<const char*> vecProjectionLabels{ "Perspective", "Orthographic" };
-			if (refUi.combo("Projection", iProjection, vecProjectionLabels))
-			{
-				camera.projection = static_cast<AshEngine::CameraProjectionType>(iProjection);
-			}
-
-			refUi.drag_float("FOV Y", camera.fov_y_degrees, 0.1f, 1.0f, 179.0f);
-			refUi.drag_float("Near Plane", camera.near_plane, 0.01f, 0.001f, camera.far_plane);
-			refUi.drag_float("Far Plane", camera.far_plane, 1.0f, camera.near_plane, 10000.0f);
-			refUi.drag_float("Ortho Height", camera.orthographic_height, 0.1f, 0.1f, 1000.0f);
-
-			if (DrawRemoveComponentButton(refUi, "Remove Camera"))
-			{
-				state.draftCamera.optCurrentValue.reset();
-			}
-		}
-		else
-		{
-			refUi.text_unformatted("Camera component will be removed after Apply.");
+			camera.projection = static_cast<AshEngine::CameraProjectionType>(iProjection);
+			bChanged = true;
 		}
 
-		if (bHasPendingChanges)
+		bChanged = refUi.drag_float("FOV Y", camera.fov_y_degrees, 0.1f, 1.0f, 179.0f) || bChanged;
+		bChanged = refUi.drag_float("Near Plane", camera.near_plane, 0.01f, 0.001f, camera.far_plane) || bChanged;
+		bChanged = refUi.drag_float("Far Plane", camera.far_plane, 1.0f, camera.near_plane, 10000.0f) || bChanged;
+		bChanged = refUi.drag_float("Ortho Height", camera.orthographic_height, 0.1f, 0.1f, 1000.0f) || bChanged;
+
+		if (bChanged)
 		{
-			DrawPendingChangeHint(refUi, "Pending changes. Apply or revert to update the entity.");
+			CommitCameraDraft(entity);
+		}
+		if (DrawComponentRemoveAction(refUi, "Camera"))
+		{
+			state.draftCamera.optCurrentValue.reset();
+			CommitCameraDraft(entity);
+			return false;
 		}
 
-		bool bApplyClicked = false;
-		bool bRevertClicked = false;
-		DrawApplyRevertRow(refUi, "Apply Camera", "Revert Camera", bHasPendingChanges, bHasPendingChanges, bApplyClicked, bRevertClicked);
-		if (bApplyClicked)
-		{
-			const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
-			bool bApplied = false;
-			if (_deps.pCommandExecutor)
-			{
-				bApplied = _deps.pCommandExecutor->ExecuteCommand(
-					std::make_unique<SetCameraComponentCommand>(
-						entity.get_id(),
-						state.draftCamera.optOriginalValue,
-						state.draftCamera.optCurrentValue));
-			}
-			else if (state.draftCamera.optCurrentValue.has_value())
-			{
-				HLogWarning("InspectorPanel apply camera clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.has_camera_component()
-					? entity.set_camera_component(*state.draftCamera.optCurrentValue)
-					: entity.add_camera_component(*state.draftCamera.optCurrentValue);
-			}
-			else
-			{
-				HLogWarning("InspectorPanel apply camera clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.has_camera_component() && entity.remove_camera_component();
-			}
-
-			if (bApplied)
-			{
-				state.draftCamera.optOriginalValue = state.draftCamera.optCurrentValue;
-			}
-			else
-			{
-				HLogWarning("InspectorPanel failed to apply Camera changes. Entity={}.", uEntityId);
-			}
-		}
-		if (bRevertClicked)
-		{
-			state.draftCamera.optCurrentValue = state.draftCamera.optOriginalValue;
-		}
+		return true;
 	}
 
-	void InspectorPanel::DrawLightSection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
+	bool InspectorPanel::DrawLightSection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
 		InspectorPanelState& state = GetState();
 		SyncLightDraft(entity);
-		const bool bHasPendingChanges = HasPendingLightChanges();
-		if (!state.draftLight.optCurrentValue.has_value() && !bHasPendingChanges)
+		if (!state.draftLight.optCurrentValue.has_value())
 		{
-			if (DrawAddComponentButton(refUi, "Add Light"))
-			{
-				state.draftLight.optCurrentValue = AshEngine::LightComponent{};
-			}
-			return;
+			return false;
 		}
 
-		const char* pSectionLabel = bHasPendingChanges ? "Light *" : "Light";
-		if (!refUi.collapsing_header(pSectionLabel, AshEngine::UITreeNodeFlagBits::DefaultOpen))
+		const bool bOpen = refUi.collapsing_header("Light", AshEngine::UITreeNodeFlagBits::DefaultOpen);
+		if (DrawComponentHeaderContextMenu(refUi, kInspectorLightComponentMenuId))
 		{
-			return;
+			state.draftLight.optCurrentValue.reset();
+			CommitLightDraft(entity);
+			return false;
+		}
+		if (!bOpen)
+		{
+			return true;
 		}
 
-		if (state.draftLight.optCurrentValue.has_value())
+		AshEngine::LightComponent& light = *state.draftLight.optCurrentValue;
+		bool bChanged = false;
+		int iLightType = static_cast<int>(light.type);
+		const std::vector<const char*> vecLightLabels{ "Directional", "Point", "Spot" };
+		if (refUi.combo("Light Type", iLightType, vecLightLabels))
 		{
-			AshEngine::LightComponent& light = *state.draftLight.optCurrentValue;
-			int iLightType = static_cast<int>(light.type);
-			const std::vector<const char*> vecLightLabels{ "Directional", "Point", "Spot" };
-			if (refUi.combo("Light Type", iLightType, vecLightLabels))
-			{
-				light.type = static_cast<AshEngine::LightType>(iLightType);
-			}
-
-			EditColor3(refUi, "Color", light.color);
-			refUi.drag_float("Intensity", light.intensity, 0.05f, 0.0f, 100.0f);
-			refUi.drag_float("Range", light.range, 0.1f, 0.0f, 1000.0f);
-			refUi.drag_float("Inner Cone", light.inner_cone_angle_degrees, 0.1f, 0.0f, 180.0f);
-			refUi.drag_float("Outer Cone", light.outer_cone_angle_degrees, 0.1f, 0.0f, 180.0f);
-
-			if (DrawRemoveComponentButton(refUi, "Remove Light"))
-			{
-				state.draftLight.optCurrentValue.reset();
-			}
-		}
-		else
-		{
-			refUi.text_unformatted("Light component will be removed after Apply.");
+			light.type = static_cast<AshEngine::LightType>(iLightType);
+			bChanged = true;
 		}
 
-		if (bHasPendingChanges)
+		bChanged = EditColor3(refUi, "Color", light.color) || bChanged;
+		bChanged = refUi.drag_float("Intensity", light.intensity, 0.05f, 0.0f, 100.0f) || bChanged;
+		bChanged = refUi.drag_float("Range", light.range, 0.1f, 0.0f, 1000.0f) || bChanged;
+		bChanged = refUi.drag_float("Inner Cone", light.inner_cone_angle_degrees, 0.1f, 0.0f, 180.0f) || bChanged;
+		bChanged = refUi.drag_float("Outer Cone", light.outer_cone_angle_degrees, 0.1f, 0.0f, 180.0f) || bChanged;
+
+		if (bChanged)
 		{
-			DrawPendingChangeHint(refUi, "Pending changes. Apply or revert to update the entity.");
+			CommitLightDraft(entity);
+		}
+		if (DrawComponentRemoveAction(refUi, "Light"))
+		{
+			state.draftLight.optCurrentValue.reset();
+			CommitLightDraft(entity);
+			return false;
 		}
 
-		bool bApplyClicked = false;
-		bool bRevertClicked = false;
-		DrawApplyRevertRow(refUi, "Apply Light", "Revert Light", bHasPendingChanges, bHasPendingChanges, bApplyClicked, bRevertClicked);
-		if (bApplyClicked)
-		{
-			const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
-			bool bApplied = false;
-			if (_deps.pCommandExecutor)
-			{
-				bApplied = _deps.pCommandExecutor->ExecuteCommand(
-					std::make_unique<SetLightComponentCommand>(
-						entity.get_id(),
-						state.draftLight.optOriginalValue,
-						state.draftLight.optCurrentValue));
-			}
-			else if (state.draftLight.optCurrentValue.has_value())
-			{
-				HLogWarning("InspectorPanel apply light clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.has_light_component()
-					? entity.set_light_component(*state.draftLight.optCurrentValue)
-					: entity.add_light_component(*state.draftLight.optCurrentValue);
-			}
-			else
-			{
-				HLogWarning("InspectorPanel apply light clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.has_light_component() && entity.remove_light_component();
-			}
-
-			if (bApplied)
-			{
-				state.draftLight.optOriginalValue = state.draftLight.optCurrentValue;
-			}
-			else
-			{
-				HLogWarning("InspectorPanel failed to apply Light changes. Entity={}.", uEntityId);
-			}
-		}
-		if (bRevertClicked)
-		{
-			state.draftLight.optCurrentValue = state.draftLight.optOriginalValue;
-		}
+		return true;
 	}
 
-	void InspectorPanel::DrawMeshSection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
+	bool InspectorPanel::DrawMeshSection(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
 		InspectorPanelState& state = GetState();
 		SyncMeshDraft(entity);
-		const bool bHasPendingChanges = HasPendingMeshChanges();
-		if (!state.draftMesh.optCurrentValue.has_value() && !bHasPendingChanges)
+		if (!state.draftMesh.optCurrentValue.has_value())
 		{
-			if (DrawAddComponentButton(refUi, "Add Mesh"))
+			return false;
+		}
+
+		const bool bOpen = refUi.collapsing_header("Mesh", AshEngine::UITreeNodeFlagBits::DefaultOpen);
+		if (DrawComponentHeaderContextMenu(refUi, kInspectorMeshComponentMenuId))
+		{
+			state.draftMesh.optCurrentValue.reset();
+			CommitMeshDraft(entity);
+			return false;
+		}
+		if (!bOpen)
+		{
+			return true;
+		}
+
+		AshEngine::MeshComponent& mesh = *state.draftMesh.optCurrentValue;
+		bool bChanged = false;
+		bChanged = DrawMeshAssetPathEditor(refUi, mesh) || bChanged;
+		if (mesh.asset_path.empty())
+		{
+			refUi.text_colored(kInspectorWarningColor, "Choose a mesh asset before this component is committed to the scene.");
+		}
+		refUi.push_style_color(AshEngine::UIStyleColorKind::Button, kInspectorDropZoneFillColor);
+		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, kInspectorDropZoneHoverColor);
+		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, kInspectorDropZoneActiveColor);
+		if (refUi.button(
+			mesh.asset_path.empty() ? "Drop mesh/model asset here" : "Drop mesh/model asset here to replace",
+			{ refUi.get_content_region_avail().x, 24.0f }))
+		{
+			refUi.open_popup("AssetPickerPopup");
+		}
+		refUi.pop_style_color(3);
+		const AshEngine::UIRect rectDropHint = refUi.get_item_rect();
+		refUi.draw_window_rect(rectDropHint, kInspectorDropZoneBorderColor, 4.0f, 1.0f);
+		if (_deps.pDragDropTransferService && refUi.begin_drag_drop_target())
+		{
+			const AshEngine::UIDragDropPayload payload =
+				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
+			if (payload.is_delivery && payload.data && payload.data_size == sizeof(DragDropTransferId))
 			{
-				state.draftMesh.optCurrentValue = AshEngine::MeshComponent{};
+				DragDropTransferId uTransferId = 0;
+				std::memcpy(&uTransferId, payload.data, sizeof(DragDropTransferId));
+				const DragDropTransferData* pData = _deps.pDragDropTransferService->Resolve(uTransferId);
+				if (pData && pData->extraData.has_value())
+				{
+					try
+					{
+						mesh.asset_path = std::any_cast<std::string>(pData->extraData);
+						state.strAssetPickerSearch.clear();
+						bChanged = true;
+					}
+					catch (const std::bad_any_cast&) {}
+				}
 			}
-			return;
+			refUi.end_drag_drop_target();
 		}
 
-		const char* pSectionLabel = bHasPendingChanges ? "Mesh *" : "Mesh";
-		if (!refUi.collapsing_header(pSectionLabel, AshEngine::UITreeNodeFlagBits::DefaultOpen))
+		// Asset picker popup.
+		if (refUi.begin_popup("AssetPickerPopup"))
 		{
-			return;
-		}
+			refUi.text_unformatted("Select Mesh Asset");
+			refUi.separator();
+			refUi.set_next_item_width(280.0f);
+			refUi.input_text("##PickerSearch", state.strAssetPickerSearch);
 
-		if (state.draftMesh.optCurrentValue.has_value())
-		{
-			AshEngine::MeshComponent& mesh = *state.draftMesh.optCurrentValue;
-			EditMeshPath(refUi, mesh);
-			refUi.checkbox("Visible", mesh.visible);
-
-			if (DrawRemoveComponentButton(refUi, "Remove Mesh"))
+			// Recent paths section.
+			if (!state.vecRecentMeshPaths.empty())
 			{
-				state.draftMesh.optCurrentValue.reset();
+				refUi.text_colored(kInspectorMutedColor, "Recent");
+				for (const std::string& strRecent : state.vecRecentMeshPaths)
+				{
+					if (refUi.selectable(strRecent.c_str()))
+					{
+						mesh.asset_path = strRecent;
+						state.PushRecentMeshPath(strRecent);
+						bChanged = true;
+						refUi.close_current_popup();
+					}
+				}
+				refUi.separator();
 			}
-		}
-		else
-		{
-			refUi.text_unformatted("Mesh component will be removed after Apply.");
-		}
 
-		if (bHasPendingChanges)
-		{
-			DrawPendingChangeHint(refUi, "Pending changes. Apply or revert to update the entity.");
-		}
-
-		bool bApplyClicked = false;
-		bool bRevertClicked = false;
-		DrawApplyRevertRow(refUi, "Apply Mesh", "Revert Mesh", bHasPendingChanges, bHasPendingChanges, bApplyClicked, bRevertClicked);
-		if (bApplyClicked)
-		{
-			const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
-			bool bApplied = false;
-			if (_deps.pCommandExecutor)
+			// Filtered asset list from database.
+			refUi.text_colored(kInspectorMutedColor, "Assets");
+			if (_deps.pAssetDatabaseService)
 			{
-				bApplied = _deps.pCommandExecutor->ExecuteCommand(
-					std::make_unique<SetMeshComponentCommand>(
-						entity.get_id(),
-						state.draftMesh.optOriginalValue,
-						state.draftMesh.optCurrentValue));
-			}
-			else if (state.draftMesh.optCurrentValue.has_value())
-			{
-				HLogWarning("InspectorPanel apply mesh clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.has_mesh_component()
-					? entity.set_mesh_component(*state.draftMesh.optCurrentValue)
-					: entity.add_mesh_component(*state.draftMesh.optCurrentValue);
+				if (refUi.begin_child("AssetPickerList", { 300.0f, 250.0f }))
+				{
+					const std::vector<AshEngine::AssetInfo>& vecAssets = _deps.pAssetDatabaseService->GetItems();
+					for (const AshEngine::AssetInfo& refAsset : vecAssets)
+					{
+						if (refAsset.type != AshEngine::AssetType::Mesh &&
+							refAsset.type != AshEngine::AssetType::Model)
+						{
+							continue;
+						}
+						const std::string strRelPath = refAsset.relative_path.generic_string();
+						if (!state.strAssetPickerSearch.empty())
+						{
+							if (strRelPath.find(state.strAssetPickerSearch) == std::string::npos &&
+								refAsset.name.find(state.strAssetPickerSearch) == std::string::npos)
+							{
+								continue;
+							}
+						}
+						if (refUi.selectable(strRelPath.c_str()))
+						{
+							mesh.asset_path = strRelPath;
+							state.PushRecentMeshPath(strRelPath);
+							state.strAssetPickerSearch.clear();
+							bChanged = true;
+							refUi.close_current_popup();
+						}
+					}
+				}
+				refUi.end_child();
 			}
 			else
 			{
-				HLogWarning("InspectorPanel apply mesh clicked, but UndoRedoService is unavailable. Falling back to direct write (non-undoable). Entity={}.", uEntityId);
-				bApplied = entity.has_mesh_component() && entity.remove_mesh_component();
+				refUi.text_colored(kInspectorWarningColor, "Asset database not available.");
 			}
 
-			if (bApplied)
-			{
-				state.draftMesh.optOriginalValue = state.draftMesh.optCurrentValue;
-			}
-			else
-			{
-				HLogWarning("InspectorPanel failed to apply Mesh changes. Entity={}.", uEntityId);
-			}
+			refUi.end_popup();
 		}
-		if (bRevertClicked)
+
+		bChanged = refUi.checkbox("Visible", mesh.visible) || bChanged;
+		refUi.same_line();
+		if (DrawComponentRemoveAction(refUi, "Mesh"))
 		{
-			state.draftMesh.optCurrentValue = state.draftMesh.optOriginalValue;
+			state.draftMesh.optCurrentValue.reset();
+			CommitMeshDraft(entity);
+			return false;
 		}
+
+		if (bChanged)
+		{
+			if (MeshComponentHasValidAssetPath(state.draftMesh.optCurrentValue))
+			{
+				CommitMeshDraft(entity);
+			}
+		}
+		return true;
 	}
 
 	void InspectorPanel::DrawEntityInspector(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
 		if (!entity.is_valid())
 		{
-			DrawPanelIntro(refUi, "Entity Details", "The selected entity is no longer available in the active scene.");
+			refUi.text_colored(kInspectorWarningColor, "The selected entity is no longer available in the active scene.");
 			return;
 		}
 
-		DrawPanelIntro(refUi, "Entity Details", "Edit the selected entity and apply changes when you are ready.");
 		DrawComponentSections(refUi, entity);
+		refUi.separator();
 		DrawHierarchySection(refUi, entity);
+	}
+
+	bool InspectorPanel::DrawMeshAssetPathEditor(AshEngine::UIContext& refUi, AshEngine::MeshComponent& meshComponent)
+	{
+		bool bChanged = false;
+		const float fAvail = refUi.get_content_region_avail().x;
+		const float fButtonWidth = 60.0f;
+		const float fSpacing = 4.0f;
+		const float fInputWidth = std::max(60.0f, fAvail - fButtonWidth - fSpacing);
+		refUi.set_next_item_width(fInputWidth);
+		bChanged = refUi.input_text("##AssetPath", meshComponent.asset_path) || bChanged;
+		if (_deps.pDragDropTransferService && refUi.begin_drag_drop_target())
+		{
+			const AshEngine::UIDragDropPayload payload =
+				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
+			if (payload.is_delivery && payload.data && payload.data_size == sizeof(DragDropTransferId))
+			{
+				DragDropTransferId uTransferId = 0;
+				std::memcpy(&uTransferId, payload.data, sizeof(DragDropTransferId));
+				const DragDropTransferData* pData = _deps.pDragDropTransferService->Resolve(uTransferId);
+				if (pData && pData->extraData.has_value())
+				{
+					try
+					{
+						meshComponent.asset_path = std::any_cast<std::string>(pData->extraData);
+						GetState().strAssetPickerSearch.clear();
+						bChanged = true;
+					}
+					catch (const std::bad_any_cast&) {}
+				}
+			}
+			refUi.end_drag_drop_target();
+		}
+		refUi.same_line(0.0f, fSpacing);
+		if (refUi.button("Browse", { fButtonWidth, 0.0f }))
+		{
+			refUi.open_popup("AssetPickerPopup");
+		}
+		return bChanged;
+	}
+
+	bool InspectorPanel::CommitIdentityDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() ||
+			state.draftIdentity.strCurrentName.empty() ||
+			!HasPendingIdentityChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<RenameEntityCommand>(
+					entity.get_id(),
+					state.draftIdentity.strOriginalName,
+					state.draftIdentity.strCurrentName));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate name edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = entity.set_name(state.draftIdentity.strCurrentName);
+		}
+
+		if (bApplied)
+		{
+			state.draftIdentity.strOriginalName = state.draftIdentity.strCurrentName;
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Identity changes. Entity={}.", uEntityId);
+		state.draftIdentity.strCurrentName = state.draftIdentity.strOriginalName;
+		return false;
+	}
+
+	bool InspectorPanel::CommitTransformDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingTransformChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<TransformEntityCommand>(
+					entity.get_id(),
+					state.draftTransform.originalValue,
+					state.draftTransform.currentValue));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate transform edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = entity.set_transform_component(state.draftTransform.currentValue);
+		}
+
+		if (bApplied)
+		{
+			state.draftTransform.originalValue = state.draftTransform.currentValue;
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Transform changes. Entity={}.", uEntityId);
+		state.draftTransform.currentValue = state.draftTransform.originalValue;
+		return false;
+	}
+
+	bool InspectorPanel::CommitCameraDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingCameraChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<SetCameraComponentCommand>(
+					entity.get_id(),
+					state.draftCamera.optOriginalValue,
+					state.draftCamera.optCurrentValue));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate camera edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = ApplyCameraComponentValue(entity, state.draftCamera.optCurrentValue);
+		}
+
+		if (bApplied)
+		{
+			state.draftCamera.optOriginalValue = state.draftCamera.optCurrentValue;
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Camera changes. Entity={}.", uEntityId);
+		state.draftCamera.optCurrentValue = state.draftCamera.optOriginalValue;
+		return false;
+	}
+
+	bool InspectorPanel::CommitLightDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingLightChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<SetLightComponentCommand>(
+					entity.get_id(),
+					state.draftLight.optOriginalValue,
+					state.draftLight.optCurrentValue));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate light edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = ApplyLightComponentValue(entity, state.draftLight.optCurrentValue);
+		}
+
+		if (bApplied)
+		{
+			state.draftLight.optOriginalValue = state.draftLight.optCurrentValue;
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Light changes. Entity={}.", uEntityId);
+		state.draftLight.optCurrentValue = state.draftLight.optOriginalValue;
+		return false;
+	}
+
+	bool InspectorPanel::CommitMeshDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingMeshChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<SetMeshComponentCommand>(
+					entity.get_id(),
+					state.draftMesh.optOriginalValue,
+					state.draftMesh.optCurrentValue));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate mesh edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = ApplyMeshComponentValue(entity, state.draftMesh.optCurrentValue);
+		}
+
+		if (bApplied)
+		{
+			state.draftMesh.optOriginalValue = state.draftMesh.optCurrentValue;
+			if (state.draftMesh.optCurrentValue.has_value())
+			{
+				state.PushRecentMeshPath(state.draftMesh.optCurrentValue->asset_path);
+			}
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Mesh changes. Entity={}.", uEntityId);
+		state.draftMesh.optCurrentValue = state.draftMesh.optOriginalValue;
+		return false;
 	}
 
 	void InspectorPanel::OnAttach()
@@ -877,10 +1231,13 @@ namespace AshEditor
 		}
 
 		const EditorSelection& refSelection = _deps.pSelectionService->GetSelection();
-		DrawSelectionSummary(refUi, refSelection);
 
 		if (refSelection.eKind == EditorSelectionKind::Entity && _deps.pSceneService)
 		{
+			DrawSelectionSummary(
+				refUi,
+				refSelection,
+				"Edit the selected entity. Property changes are applied immediately and can be undone with Ctrl+Z.");
 			AshEngine::Entity entity = _deps.pSceneService->FindEntity(refSelection.uId);
 			if (!entity.is_valid())
 			{
@@ -888,13 +1245,18 @@ namespace AshEditor
 			}
 			DrawEntityInspector(refUi, entity);
 		}
-		else if (refSelection.eKind == EditorSelectionKind::Asset && _deps.pAssetDatabaseService)
+		else if (refSelection.eKind == EditorSelectionKind::Asset)
 		{
+			DrawSelectionSummary(
+				refUi,
+				refSelection,
+				"Basic asset metadata is folded into this tooltip. Use Asset Browser Preview when you need a richer inspection view.");
 			ResetEntityDrafts();
-			DrawAssetInspector(_deps.pAssetDatabaseService, refUi, refSelection);
+			DrawAssetInspector(refUi, refSelection);
 		}
 		else
 		{
+			DrawSelectionSummary(refUi, refSelection);
 			ResetEntityDrafts();
 			DrawPanelIntro(refUi, "Inspector", "The current selection type does not have an inspector adapter yet.");
 		}

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/IEditorViewportBindingResolver.h"
 #include "Core/EditorViewportTypes.h"
 #include "Function/Render/ScenePresentationHandles.h"
 
@@ -42,6 +43,7 @@ namespace AshEditor
 		uint32_t uOutputWidth = 0;
 		uint32_t uOutputHeight = 0;
 		bool bPendingSync = true;
+		bool bCameraOverrideApplied = false;
 	};
 
 	struct EditorViewportPersistenceState
@@ -108,7 +110,8 @@ namespace AshEditor
 		// Returns true only if all viewports successfully synchronized.
 		bool SyncScenePresentations(
 			AshEngine::ScenePresentationSubsystem& refScenePresentation,
-			AshEngine::Scene& refScene);
+			AshEngine::Scene& refScene,
+			const IEditorViewportBindingResolver* pBindingResolver = nullptr);
 
 		// Destroys any created outputs/bindings and clears UI surfaces.
 		// Pass nullptr when the subsystem is already unavailable (handles will still be cleared locally).

@@ -1,12 +1,19 @@
 #include "Panels/ViewportPanel.h"
 
-#include "Base/hlog.h"
 #include "Core/EditorEventBus.h"
 #include "Core/EditorEvents.h"
+#include "Core/EditorGizmoTypes.h"
 #include "Core/EditorIds.h"
+#include "Core/EditorSelection.h"
+#include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
+#include "Services/DragDropTransferService.h"
+#include "Services/EditorViewportCameraService.h"
 #include "Services/EditorViewportService.h"
+#include "Services/SceneService.h"
+#include "Services/SelectionService.h"
 #include "Widgets/EditorButtonWidgets.h"
+#include "Widgets/ViewportAxisIndicator.h"
 
 #include <algorithm>
 #include <string>
@@ -30,11 +37,29 @@ namespace AshEditor
 			}
 		}
 
-		bool ShouldTraceViewportPanel()
+		const char* GetGizmoModeLabel(GizmoMode eMode)
 		{
-			static uint32_t uLoggedFrames = 0u;
-			++uLoggedFrames;
-			return uLoggedFrames <= 2u;
+			switch (eMode)
+			{
+			case GizmoMode::Move:   return "W:Move";
+			case GizmoMode::Rotate: return "E:Rotate";
+			case GizmoMode::Scale:  return "R:Scale";
+			default:                return "?";
+			}
+		}
+
+		bool DrawGizmoModeButton(AshEngine::UIContext& refUi, const char* pLabel, bool bActive)
+		{
+			if (bActive)
+			{
+				PushEditorButtonVisuals(refUi);
+			}
+			const bool bClicked = refUi.small_button(pLabel);
+			if (bActive)
+			{
+				PopEditorButtonVisuals(refUi);
+			}
+			return bClicked;
 		}
 
 		std::vector<std::string> MakeOverlayLines(
@@ -81,6 +106,59 @@ namespace AshEditor
 			}
 
 			return vecLines;
+		}
+
+		void DrawOperationHints(
+			AshEngine::UIContext& refUi,
+			float fContentOriginX,
+			float fContentOriginY,
+			float fContentWidth,
+			float fContentHeight)
+		{
+			const float fPadding = 6.0f;
+			const float fMargin = 12.0f;
+			const float fLineSpacing = 2.0f;
+
+			static const char* const kHints[] = {
+				"RMB+Drag: Rotate",
+				"Scroll: Zoom",
+				"WASD: Move",
+				"Shift: Fast",
+				"F: Focus"
+			};
+			static const int kHintCount = 5;
+
+			float fMaxWidth = 0.0f;
+			float fTotalHeight = fPadding * 2.0f;
+			float lineHeights[kHintCount] = {};
+			for (int i = 0; i < kHintCount; ++i)
+			{
+				const AshEngine::UIVec2 vecSize = refUi.calc_text_size(kHints[i]);
+				lineHeights[i] = vecSize.y;
+				if (vecSize.x > fMaxWidth) fMaxWidth = vecSize.x;
+				fTotalHeight += vecSize.y;
+			}
+			fTotalHeight += static_cast<float>(kHintCount - 1) * fLineSpacing;
+
+			const float fBoxWidth = fMaxWidth + fPadding * 2.0f;
+			const float fBoxX = fContentOriginX + fContentWidth - fBoxWidth - fMargin;
+			const float fBoxY = fContentOriginY + fContentHeight - fTotalHeight - fMargin;
+
+			if (fBoxX < fContentOriginX + fMargin || fBoxY < fContentOriginY + fMargin)
+			{
+				return;
+			}
+
+			const AshEngine::UIRect rectBg{ fBoxX, fBoxY, fBoxWidth, fTotalHeight };
+			refUi.draw_window_rect_filled(rectBg, { 0.10f, 0.12f, 0.16f, 0.55f }, 4.0f);
+
+			const AshEngine::UIColor colorHint{ 0.70f, 0.75f, 0.80f, 0.85f };
+			float fTextY = fBoxY + fPadding;
+			for (int i = 0; i < kHintCount; ++i)
+			{
+				refUi.draw_window_text({ fBoxX + fPadding, fTextY }, colorHint, kHints[i]);
+				fTextY += lineHeights[i] + fLineSpacing;
+			}
 		}
 	}
 
@@ -136,7 +214,6 @@ namespace AshEditor
 		{
 			_deps.pViewportService->EnsureViewport(_strViewportId, GetTitle());
 		}
-		HLogInfo("ViewportPanel attached.");
 	}
 
 	void ViewportPanel::OnDetach()
@@ -185,7 +262,7 @@ namespace AshEditor
 		pViewport->state.uHeight = 0u;
 	}
 
-	void ViewportPanel::DrawToolbar(const EditorFrameContext& refFrameContext, EditorViewportInstance& refViewport)
+		void ViewportPanel::DrawToolbar(const EditorFrameContext& refFrameContext, EditorViewportInstance& refViewport)
 	{
 		if (!refFrameContext.pUiContext || !_deps.pViewportService)
 		{
@@ -211,10 +288,67 @@ namespace AshEditor
 		DrawEditorToggleButton(refUi, "Aspect", pPresentation->bPreserveAspect);
 		refUi.same_line();
 		DrawEditorToggleButton(refUi, "Input", pPresentation->bAcceptsInput);
+
+		// Keep the toolbar compact. Less-frequent flags live behind an options popup.
 		refUi.same_line();
-		DrawEditorToggleButton(refUi, "Stats", pPresentation->bShowStats);
-		refUi.same_line();
-		DrawEditorToggleButton(refUi, "Overlay", pPresentation->bShowOverlays);
+		if (refUi.small_button("Options"))
+		{
+			refUi.open_popup("ViewportOptions");
+		}
+		if (refUi.begin_popup("ViewportOptions"))
+		{
+			refUi.menu_item("Show Stats", nullptr, &pPresentation->bShowStats, true);
+			refUi.menu_item("Show Overlay", nullptr, &pPresentation->bShowOverlays, true);
+			refUi.separator();
+			refUi.menu_item("Preserve Aspect", nullptr, &pPresentation->bPreserveAspect, true);
+			refUi.menu_item("Accept Input", nullptr, &pPresentation->bAcceptsInput, true);
+			refUi.end_popup();
+		}
+
+		// Gizmo toolbar — only for Scene viewports.
+		if (_deps.pGizmoState && pPresentation->eKind == EditorViewportKind::Scene)
+		{
+			EditorGizmoState& refGizmo = *_deps.pGizmoState;
+
+			refUi.same_line();
+			refUi.separator();
+			refUi.same_line();
+
+			if (DrawGizmoModeButton(refUi, "W:Move", refGizmo.eMode == GizmoMode::Move))
+			{
+				refGizmo.eMode = GizmoMode::Move;
+			}
+			refUi.same_line();
+			if (DrawGizmoModeButton(refUi, "E:Rotate", refGizmo.eMode == GizmoMode::Rotate))
+			{
+				refGizmo.eMode = GizmoMode::Rotate;
+			}
+			refUi.same_line();
+			if (DrawGizmoModeButton(refUi, "R:Scale", refGizmo.eMode == GizmoMode::Scale))
+			{
+				refGizmo.eMode = GizmoMode::Scale;
+			}
+
+			refUi.same_line();
+			refUi.separator();
+			refUi.same_line();
+
+			const bool bIsLocal = refGizmo.eSpace == GizmoCoordinateSpace::Local;
+			if (refUi.small_button(bIsLocal ? "Local" : "World"))
+			{
+				refGizmo.eSpace = bIsLocal ? GizmoCoordinateSpace::World : GizmoCoordinateSpace::Local;
+			}
+
+			refUi.same_line();
+			const bool bIsPivot = refGizmo.ePivot == GizmoPivotMode::Pivot;
+			if (refUi.small_button(bIsPivot ? "Pivot" : "Center"))
+			{
+				refGizmo.ePivot = bIsPivot ? GizmoPivotMode::Center : GizmoPivotMode::Pivot;
+			}
+
+			refUi.same_line();
+			DrawEditorToggleButton(refUi, "Snap", refGizmo.snap.bSnapEnabled);
+		}
 	}
 
 	void ViewportPanel::DrawOverlay(const EditorFrameContext& refFrameContext, const EditorViewportInstance& refViewport) const
@@ -254,12 +388,29 @@ namespace AshEditor
 		}
 		fTotalHeight += std::max(0.0f, static_cast<float>(vecLines.size() - 1)) * fLineSpacing;
 
-		const AshEngine::UIRect rectOverlay{
-			rectItem.x + 12.0f,
-			rectItem.y + 12.0f,
-			fMaxWidth + fPadding * 2.0f,
-			fTotalHeight
-		};
+		// Keep overlay inside the viewport rect so it doesn't get clipped by other docked windows.
+		const float fMargin = 12.0f;
+		const float fOverlayWidth = fMaxWidth + fPadding * 2.0f;
+		float fOverlayX = rectItem.x + fMargin;
+		float fOverlayY = rectItem.y + fMargin;
+		if (fOverlayX + fOverlayWidth > rectItem.x + rectItem.width - fMargin)
+		{
+			fOverlayX = rectItem.x + rectItem.width - fOverlayWidth - fMargin;
+		}
+		if (fOverlayX < rectItem.x + fMargin)
+		{
+			fOverlayX = rectItem.x + fMargin;
+		}
+		if (fOverlayY + fTotalHeight > rectItem.y + rectItem.height - fMargin)
+		{
+			fOverlayY = rectItem.y + rectItem.height - fTotalHeight - fMargin;
+		}
+		if (fOverlayY < rectItem.y + fMargin)
+		{
+			fOverlayY = rectItem.y + fMargin;
+		}
+
+		const AshEngine::UIRect rectOverlay{ fOverlayX, fOverlayY, fOverlayWidth, fTotalHeight };
 		refFrameContext.pUiContext->draw_window_rect_filled(
 			rectOverlay,
 			{ 0.12f, 0.14f, 0.18f, 0.72f },
@@ -282,20 +433,54 @@ namespace AshEditor
 		}
 	}
 
+	void ViewportPanel::HandleViewportInput(
+		const EditorFrameContext& refFrameContext,
+		const EditorViewportInstance& refViewport,
+		const AshEngine::UIRect& rectContent,
+		bool bContentHovered)
+	{
+		if (!refFrameContext.pUiContext || !_deps.pViewportService || !_deps.pViewportCameraService || !_deps.pSceneService)
+		{
+			return;
+		}
+
+		const EditorViewportPresentation* pPresentation = _deps.pViewportService->GetPresentation(_strViewportId);
+		if (!pPresentation || pPresentation->eKind != EditorViewportKind::Scene || !pPresentation->bAcceptsInput)
+		{
+			return;
+		}
+
+		AshEngine::Application* pApplication = AshEngine::Application::get();
+		if (!pApplication)
+		{
+			return;
+		}
+
+		EditorViewportCameraInputContext inputContext{};
+		inputContext.strViewportId = _strViewportId;
+		inputContext.rectContent = rectContent;
+		inputContext.bViewportFocused = refViewport.state.bFocused || bContentHovered;
+		inputContext.bViewportHovered = bContentHovered;
+		inputContext.bAcceptsInput = pPresentation->bAcceptsInput;
+		if (_deps.pSelectionService)
+		{
+			const EditorSelection& refSelection = _deps.pSelectionService->GetSelection();
+			inputContext.uFocusEntityId =
+				refSelection.eKind == EditorSelectionKind::Entity
+				? refSelection.uId
+				: 0;
+		}
+
+		_deps.pViewportCameraService->UpdateViewportInput(
+			*_deps.pSceneService,
+			AshEngine::Application::get_input(),
+			refFrameContext.pUiContext->get_time_seconds(),
+			inputContext);
+	}
+
 	void ViewportPanel::OnGui(const EditorFrameContext& frameContext)
 	{
 		EditorViewportInstance* pViewport = ResolveViewport();
-		const bool bTraceThisFrame = ShouldTraceViewportPanel();
-		if (bTraceThisFrame)
-		{
-			HLogInfo(
-				"ViewportPanel::OnGui begin. surface={}, ui_ready={}, requested={}x{}.",
-				pViewport ? pViewport->surface.value : 0u,
-				frameContext.bGuiRendererReady,
-				pViewport ? pViewport->state.uRequestedWidth : 0u,
-				pViewport ? pViewport->state.uRequestedHeight : 0u);
-		}
-
 		const bool bWindowVisible = BeginPanelWindow(frameContext, AshEngine::UIWindowFlagBits::MenuBar);
 		if (_deps.pViewportService)
 		{
@@ -304,10 +489,6 @@ namespace AshEditor
 
 		if (!bWindowVisible)
 		{
-			if (bTraceThisFrame)
-			{
-				HLogWarning("ViewportPanel::OnGui skipped because Begin returned false.");
-			}
 			EndPanelWindow(frameContext);
 			return;
 		}
@@ -361,53 +542,75 @@ namespace AshEditor
 			{
 				bPreserveAspect = pPresentation->bPreserveAspect;
 			}
+			const bool bOutputSizePending =
+				pViewport->state.uRequestedWidth > 0u &&
+				pViewport->state.uRequestedHeight > 0u &&
+				(pViewport->state.uWidth != pViewport->state.uRequestedWidth ||
+				 pViewport->state.uHeight != pViewport->state.uRequestedHeight);
 			if (pViewport->state.uWidth == 0u || pViewport->state.uHeight == 0u)
 			{
-				if (bTraceThisFrame)
-				{
-					HLogWarning("ViewportPanel::OnGui is waiting for a synchronized scene surface.");
-				}
 				refUi.text_wrapped("Scene surface is not available yet.");
+			}
+			else if (bOutputSizePending)
+			{
+				// Skip drawing the stale frame instead of stretching it to the new viewport extent.
+				refUi.dummy(vecAvailableSize);
+				const AshEngine::UIRect rectContent = refUi.get_item_rect();
+				refUi.draw_window_rect_filled(rectContent, { 0.05f, 0.06f, 0.08f, 1.0f }, 0.0f);
+				refUi.draw_window_text(
+					{ rectContent.x + 14.0f, rectContent.y + 12.0f },
+					{ 0.72f, 0.76f, 0.82f, 0.92f },
+					"Updating viewport...");
 			}
 			else
 			{
-				if (bTraceThisFrame)
-				{
-					HLogInfo(
-						"ViewportPanel::OnGui drawing scene surface {} with available size {}x{}.",
-						pViewport->surface.value,
-						vecAvailableSize.x,
-						vecAvailableSize.y);
-				}
 				frameContext.pUiContext->draw_surface_fill_available(pViewport->surface, bPreserveAspect);
+				const bool bContentHovered = refUi.is_item_hovered();
 				DrawOverlay(frameContext, *pViewport);
-				if (bTraceThisFrame)
-				{
-					HLogInfo("ViewportPanel::OnGui finished drawing scene surface.");
-				}
+
+				// Axis indicator (top-right corner) and operation hints (bottom-right corner).
+				const AshEngine::UIRect rectContent = frameContext.pUiContext->get_item_rect();
+				HandleViewportInput(frameContext, *pViewport, rectContent, bContentHovered);
+				DrawViewportAxisIndicator(
+					refUi,
+					rectContent.x, rectContent.y,
+					rectContent.width, rectContent.height);
+				DrawOperationHints(
+					refUi,
+					rectContent.x, rectContent.y,
+					rectContent.width, rectContent.height);
 			}
 		}
 		else if (!pViewport || !pViewport->surface.is_valid())
 		{
-			if (bTraceThisFrame)
-			{
-				HLogWarning("ViewportPanel::OnGui has no scene surface to display.");
-			}
 			refUi.text_wrapped("Scene surface is not available yet.");
 		}
 		else
 		{
-			if (bTraceThisFrame)
-			{
-				HLogWarning("ViewportPanel::OnGui is waiting for UIContext or sufficient panel size.");
-			}
 			refUi.text_wrapped("Viewport preview is waiting for the engine UIContext.");
 		}
 
-		EndPanelWindow(frameContext);
-		if (bTraceThisFrame)
+		// Accept scene entity drag from Hierarchy to select it.
+		if (_deps.pDragDropTransferService && _deps.pSelectionService && refUi.begin_drag_drop_target())
 		{
-			HLogInfo("ViewportPanel::OnGui end.");
+			const AshEngine::UIDragDropPayload payload =
+				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::SceneEntity);
+			if (payload.is_delivery && payload.data && payload.data_size == sizeof(DragDropTransferId))
+			{
+				DragDropTransferId uTransferId = 0;
+				std::memcpy(&uTransferId, payload.data, sizeof(DragDropTransferId));
+				const DragDropTransferData* pData = _deps.pDragDropTransferService->Resolve(uTransferId);
+				if (pData && !pData->vecEntityIds.empty())
+				{
+					EditorSelection sel{};
+					sel.eKind = EditorSelectionKind::Entity;
+					sel.uId = pData->vecEntityIds[0];
+					_deps.pSelectionService->Select(std::move(sel));
+				}
+			}
+			refUi.end_drag_drop_target();
 		}
+
+		EndPanelWindow(frameContext);
 	}
 }

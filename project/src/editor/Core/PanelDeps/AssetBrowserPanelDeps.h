@@ -4,9 +4,12 @@ namespace AshEditor
 {
 	class AssetDatabaseService;
 	class CommandService;
+	class DragDropTransferService;
+	class AssetPreviewService;
 	class EditorSettingsService;
 	class EditorShortcutService;
 	class IEditorIconService;
+	class PanelManager;
 	class SelectionService;
 
 	struct AssetBrowserPanelDeps
@@ -17,5 +20,8 @@ namespace AshEditor
 		SelectionService* pSelectionService = nullptr;
 		EditorSettingsService* pSettingsService = nullptr;
 		EditorShortcutService* pShortcutService = nullptr;
+		DragDropTransferService* pDragDropTransferService = nullptr;
+		AssetPreviewService* pAssetPreviewService = nullptr;
+		PanelManager* pPanelManager = nullptr;
 	};
 }

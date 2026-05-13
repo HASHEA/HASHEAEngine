@@ -10,6 +10,7 @@
 namespace AshEngine
 {
 	class Entity;
+	struct MeshComponent;
 	class UIContext;
 }
 
@@ -34,21 +35,14 @@ namespace AshEditor
 		void ClearDeps();
 		void UnsubscribeEvents();
 		void DrawEntityInspector(AshEngine::UIContext& refUi, AshEngine::Entity entity);
+		void DrawAddComponentMenu(AshEngine::UIContext& refUi, AshEngine::Entity entity);
 		void DrawComponentSections(AshEngine::UIContext& refUi, AshEngine::Entity entity);
-		void DrawPendingChangeHint(AshEngine::UIContext& refUi, const char* pLabel);
-		void DrawApplyRevertRow(
-			AshEngine::UIContext& refUi,
-			const char* pApplyLabel,
-			const char* pRevertLabel,
-			bool bCanApply,
-			bool bHasPendingChanges,
-			bool& bApplyClicked,
-			bool& bRevertClicked);
 		void DrawIdentitySection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
 		void DrawTransformSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
-		void DrawCameraSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
-		void DrawLightSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
-		void DrawMeshSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
+		bool DrawCameraSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
+		bool DrawLightSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
+		bool DrawMeshSection(AshEngine::UIContext& refUi, AshEngine::Entity entity);
+		bool DrawMeshAssetPathEditor(AshEngine::UIContext& refUi, AshEngine::MeshComponent& meshComponent);
 		bool HasPendingIdentityChanges() const;
 		bool HasPendingTransformChanges() const;
 		bool HasPendingCameraChanges() const;
@@ -59,6 +53,11 @@ namespace AshEditor
 		void SyncCameraDraft(const AshEngine::Entity& entity);
 		void SyncLightDraft(const AshEngine::Entity& entity);
 		void SyncMeshDraft(const AshEngine::Entity& entity);
+		bool CommitIdentityDraft(AshEngine::Entity entity);
+		bool CommitTransformDraft(AshEngine::Entity entity);
+		bool CommitCameraDraft(AshEngine::Entity entity);
+		bool CommitLightDraft(AshEngine::Entity entity);
+		bool CommitMeshDraft(AshEngine::Entity entity);
 		InspectorPanelState& GetState();
 		const InspectorPanelState& GetState() const;
 
