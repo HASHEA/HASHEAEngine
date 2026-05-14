@@ -1,6 +1,7 @@
 #include "Function/Render/MaterialRenderProxy.h"
 
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Function/Render/MaterialSystem.h"
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/Renderer.h"
@@ -145,6 +146,7 @@ namespace AshEngine
 
 	bool MaterialRenderProxy::prepare_surface_staticmesh(RenderAssetManager& asset_manager, Renderer& renderer)
 	{
+		ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::prepare_surface_staticmesh", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(update_bindings(asset_manager));
 		ASH_PROCESS_ERROR(ensure_program(renderer));
@@ -153,6 +155,7 @@ namespace AshEngine
 
 	bool MaterialRenderProxy::ensure_program(Renderer& renderer)
 	{
+		ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::ensure_program", AshEngine::Profile::Color::Pipeline);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_material != nullptr);
 		ASH_PROCESS_ERROR(ensure_v2_resource_templates());
@@ -193,6 +196,7 @@ namespace AshEngine
 
 	bool MaterialRenderProxy::update_bindings(RenderAssetManager& asset_manager)
 	{
+		ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::update_bindings", AshEngine::Profile::Color::Descriptor);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_material != nullptr);
 		ASH_PROCESS_ERROR(ensure_v2_resource_templates());
@@ -392,6 +396,8 @@ namespace AshEngine
 
 		m_binding_snapshot = std::move(snapshot);
 		m_material_version = material_version;
+		ASH_PROFILE_PLOT("Material/TextureBindings", static_cast<int64_t>(m_binding_snapshot.textures.size()));
+		ASH_PROFILE_PLOT("Material/SamplerBindings", static_cast<int64_t>(m_binding_snapshot.samplers.size()));
 		HLogInfo(
 			"MaterialRenderProxy: refreshed V2 bindings for material '{}' "
 			"(binding_version={}, parameter_bytes={}, textures={}, samplers={}).",
@@ -411,6 +417,7 @@ namespace AshEngine
 
 	bool MaterialRenderProxy::ensure_v2_resource_templates()
 	{
+		ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::ensure_v2_resource_templates", AshEngine::Profile::Color::Pipeline);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_material != nullptr);
 		ASH_PROCESS_ERROR(m_material_system != nullptr);
@@ -571,6 +578,8 @@ namespace AshEngine
 		Renderer& renderer,
 		std::unique_ptr<GraphicsProgram>& out_program) const
 	{
+		ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::create_v2_program_instance", AshEngine::Profile::Color::Pipeline);
+		ASH_PROFILE_SCOPE_TEXT(template_resource.program_name.c_str(), template_resource.program_name.size());
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		GraphicsProgramDesc program_desc{};
 		program_desc.shader_path = template_resource.base_shader_path.c_str();
@@ -604,10 +613,14 @@ namespace AshEngine
 
 	bool MaterialRenderProxy::bind_v2_program_resources()
 	{
+		ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::bind_v2_program_resources", AshEngine::Profile::Color::Descriptor);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
 		const auto bind_program_resources = [&](MaterialResource& resource, std::unique_ptr<GraphicsProgram>& program) -> bool
 		{
+			ASH_PROFILE_SCOPE_NC("MaterialRenderProxy::BindProgramResourceSet", AshEngine::Profile::Color::Descriptor);
+			ASH_PROFILE_SCOPE_TEXT(resource.program_name.c_str(), resource.program_name.size());
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(resource.binding_layout.size()));
 			ASH_PROCESS_GUARD_RETURN(bool, bind_result, true, false);
 			if (!program)
 			{

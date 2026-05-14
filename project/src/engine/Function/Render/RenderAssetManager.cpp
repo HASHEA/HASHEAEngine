@@ -1,6 +1,7 @@
 #include "Function/Render/RenderAssetManager.h"
 
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Base/hthreading.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/MaterialRenderProxy.h"
@@ -220,6 +221,7 @@ namespace AshEngine
 
 	std::shared_ptr<MaterialRenderProxy> RenderAssetManager::request_material_render_proxy(const std::shared_ptr<const MaterialInterface>& material)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderAssetManager::request_material_render_proxy", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<MaterialRenderProxy>, result, nullptr, nullptr);
 		std::shared_ptr<const MaterialInterface> resolved_material = material;
 		if (!resolved_material)
@@ -382,6 +384,7 @@ namespace AshEngine
 		TextureColorSpace color_space,
 		TextureFallbackKind fallback_kind)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderAssetManager::request_texture_asset", AshEngine::Profile::Color::Upload);
 		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<TextureAsset>, result, nullptr, nullptr);
 		ASH_PROCESS_ERROR(m_renderer);
 		ASH_PROCESS_ERROR(require_render_thread_for_gpu_asset_work("request_texture_asset"));
@@ -587,6 +590,7 @@ namespace AshEngine
 
 	void RenderAssetManager::finalize_pending_assets()
 	{
+		ASH_PROFILE_SCOPE_NC("RenderAssetManager::finalize_pending_assets", AshEngine::Profile::Color::Upload);
 		finalize_pending_texture_decodes();
 
 		std::vector<std::shared_ptr<StaticMeshRenderAsset>> assets{};
@@ -599,6 +603,7 @@ namespace AshEngine
 				assets.push_back(asset);
 			}
 		}
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(assets.size()));
 
 		for (const std::shared_ptr<StaticMeshRenderAsset>& asset : assets)
 		{

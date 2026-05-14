@@ -305,6 +305,8 @@ namespace AshEngine
 
 	bool Renderer::dispatch(const ComputeDispatchDesc& desc)
 	{
+		ASH_PROFILE_SCOPE_NC("Renderer::dispatch", AshEngine::Profile::Color::Submit);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(desc.group_count_x) * desc.group_count_y * desc.group_count_z);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_render_device && desc.program && !m_active_pass);
 		ASH_PROCESS_ERROR(m_render_device->transition_compute_program_resources(desc.program));

@@ -3957,6 +3957,8 @@ namespace AshEngine
 
 	void RenderDevice::dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderDevice::dispatch", AshEngine::Profile::Color::Draw);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(group_count_x) * group_count_y * group_count_z);
 		if (m_impl->current_command_buffer && !m_impl->current_framebuffer)
 		{
 			m_impl->current_command_buffer->cmd_dispatch(group_count_x, group_count_y, group_count_z);

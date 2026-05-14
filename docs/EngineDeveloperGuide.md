@@ -1486,6 +1486,7 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 
 - 在 `.cpp` 中 include `Base/hprofiler.h`，不要把 Tracy 头传播到公共头
 - 优先覆盖 hot path 边界：frame begin/end、present、resource barrier submit、pass begin/draw submit、program binding、descriptor update、pipeline apply/create
+- 新增或修改 render pass、RenderGraph raster/compute pass、compute dispatch 路径、scene submit 路径和明确性能热点时，必须同步补 Tracy scope；pass 名称应能直接对应到 RenderDoc / RenderGraph / 日志中的 pass 名
 - 对批量操作使用 `ASH_PROFILE_SCOPE_VALUE()` 记录 count，对 program / pipeline 这类有名字的对象用 `ASH_PROFILE_SCOPE_TEXT()` 附加名称
 - 避免在每个资源/每个 draw 内部无差别制造大量短 zone；确实需要细分时，应先确认 Tracy 视图里当前粒度仍无法定位瓶颈
 - `TRACY_ENABLE` 未定义时所有 profiling 宏必须保持 no-op，不应改变运行逻辑

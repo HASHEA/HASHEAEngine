@@ -1,5 +1,6 @@
 #include "Function/Render/RenderGraphCompiler.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include <algorithm>
 
 namespace AshEngine
@@ -33,6 +34,11 @@ namespace AshEngine
 		const std::vector<RenderGraphPassNode>& passes,
 		RenderGraphCompileResult& out_result)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderGraphCompiler::compile", AshEngine::Profile::Color::Submit);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(passes.size()));
+		ASH_PROFILE_PLOT("RenderGraph/DeclaredPasses", static_cast<int64_t>(passes.size()));
+		ASH_PROFILE_PLOT("RenderGraph/DeclaredTextures", static_cast<int64_t>(textures.size()));
+
 		out_result = {};
 		out_result.texture_lifetimes.resize(textures.size());
 		out_result.pass_barriers.resize(passes.size());
@@ -136,10 +142,12 @@ namespace AshEngine
 			}
 		}
 
+		uint32_t culled_pass_count = 0;
 		for (uint32_t pass_index = 0; pass_index < passes.size(); ++pass_index)
 		{
 			if (!live_passes[pass_index])
 			{
+				++culled_pass_count;
 				HLogInfo("RenderGraphCompiler: culled pass '{}'.", passes[pass_index].name);
 				continue;
 			}
@@ -176,6 +184,8 @@ namespace AshEngine
 			}
 		}
 
+		ASH_PROFILE_PLOT("RenderGraph/LivePasses", static_cast<int64_t>(out_result.live_pass_indices.size()));
+		ASH_PROFILE_PLOT("RenderGraph/CulledPasses", static_cast<int64_t>(culled_pass_count));
 		return true;
 	}
 }

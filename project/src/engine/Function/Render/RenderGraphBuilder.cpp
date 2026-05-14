@@ -1,6 +1,7 @@
 #include "Function/Render/RenderGraphBuilder.h"
 #include "Function/Render/RenderGraphCompiler.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include <utility>
 
 namespace AshEngine
@@ -81,8 +82,10 @@ namespace AshEngine
 		const std::function<void(RenderGraphRasterPassBuilder&)>& setup,
 		const std::function<bool(RenderGraphRasterContext&)>& execute)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderGraphBuilder::add_raster_pass", AshEngine::Profile::Color::Submit);
 		RenderGraphPassNode pass{};
 		pass.name = name ? name : "RasterPass";
+		ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
 		pass.kind = RenderGraphPassKind::Raster;
 		pass.flags = flags | RenderGraphPassFlags::Raster;
 		pass.raster_execute = execute;
@@ -101,8 +104,10 @@ namespace AshEngine
 		const std::function<void(RenderGraphComputePassBuilder&)>& setup,
 		const std::function<bool(RenderGraphComputeContext&)>& execute)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderGraphBuilder::add_compute_pass", AshEngine::Profile::Color::Submit);
 		RenderGraphPassNode pass{};
 		pass.name = name ? name : "ComputePass";
+		ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
 		pass.kind = RenderGraphPassKind::Compute;
 		pass.flags = flags | RenderGraphPassFlags::Compute;
 		pass.compute_execute = execute;
@@ -117,6 +122,9 @@ namespace AshEngine
 
 	bool RenderGraphBuilder::execute()
 	{
+		ASH_PROFILE_SCOPE_NC("RenderGraphBuilder::execute", AshEngine::Profile::Color::Render);
+		ASH_PROFILE_SCOPE_TEXT(m_name.c_str(), m_name.size());
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(m_passes.size()));
 		if (!m_renderer)
 		{
 			HLogError("RenderGraph '{}': execute requires a renderer.", m_name);

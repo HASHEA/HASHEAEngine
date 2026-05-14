@@ -1,6 +1,7 @@
 #include "Function/Render/ScenePresentationSubsystem.h"
 
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 #include "Base/window/Window.h"
 #include "Function/Application.h"
 #include "Function/Render/Material.h"
@@ -166,12 +167,16 @@ namespace AshEngine
 			RenderAssetManager& asset_manager,
 			Renderer& renderer)
 		{
+			ASH_PROFILE_SCOPE_NC("ScenePresentation::PrepareMaterialProxies", AshEngine::Profile::Color::Scene);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.static_mesh_draws.size()));
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
+			uint64_t prepared_section_count = 0;
 			for (VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
 			{
 				for (ResolvedStaticMeshSection& section : draw.sections)
 				{
+					++prepared_section_count;
 					if (!section.material)
 					{
 						section.material = asset_manager.request_material_asset(k_builtin_default_surface_material_path);
@@ -212,6 +217,7 @@ namespace AshEngine
 				}
 			}
 
+			ASH_PROFILE_PLOT("Scene/PreparedMaterialSections", static_cast<int64_t>(prepared_section_count));
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -457,6 +463,7 @@ namespace AshEngine
 
 	bool ScenePresentationSubsystem::update_presentations()
 	{
+		ASH_PROFILE_SCOPE_NC("ScenePresentationSubsystem::update_presentations", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl != nullptr);
 		ASH_PROCESS_ERROR(m_impl->renderer != nullptr);
@@ -475,14 +482,20 @@ namespace AshEngine
 			}
 			outputs = m_impl->outputs;
 		}
+		ASH_PROFILE_PLOT("ScenePresentation/Bindings", static_cast<int64_t>(bindings.size()));
+		ASH_PROFILE_PLOT("ScenePresentation/Outputs", static_cast<int64_t>(outputs.size()));
 
-		std::sort(bindings.begin(), bindings.end(), [](const Impl::BindingState& lhs, const Impl::BindingState& rhs) {
-			if (lhs.sort_order != rhs.sort_order)
-			{
-				return lhs.sort_order < rhs.sort_order;
-			}
-			return lhs.handle.value < rhs.handle.value;
-		});
+		{
+			ASH_PROFILE_SCOPE_NC("ScenePresentation::SortBindings", AshEngine::Profile::Color::Submit);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(bindings.size()));
+			std::sort(bindings.begin(), bindings.end(), [](const Impl::BindingState& lhs, const Impl::BindingState& rhs) {
+				if (lhs.sort_order != rhs.sort_order)
+				{
+					return lhs.sort_order < rhs.sort_order;
+				}
+				return lhs.handle.value < rhs.handle.value;
+			});
+		}
 
 		std::unordered_set<Scene*> referenced_scenes{};
 		referenced_scenes.reserve(bindings.size());
@@ -543,6 +556,8 @@ namespace AshEngine
 			bool scene_view_valid = false;
 			if (binding.scene != nullptr && binding.scene->is_valid())
 			{
+				ASH_PROFILE_SCOPE_NC("ScenePresentation::BuildVisibleFramePacket", AshEngine::Profile::Color::Visibility);
+				ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
 				const auto state_found = m_impl->scene_states.find(binding.scene);
 				Impl::SceneState* scene_state = nullptr;
 				if (state_found == m_impl->scene_states.end())
@@ -559,6 +574,8 @@ namespace AshEngine
 				const uint64_t scene_change_version = binding.scene->get_change_version();
 				if (binding.refresh_requested || !scene_state->render_scene_valid || scene_state->last_change_version != scene_change_version)
 				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderScene", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
 					scene_state->render_scene_valid = scene_state->render_scene.rebuild_from_scene(*binding.scene, *m_impl->render_asset_manager);
 					scene_state->last_change_version = scene_change_version;
 					if (!scene_state->render_scene_valid)
@@ -614,6 +631,7 @@ namespace AshEngine
 
 	bool ScenePresentationSubsystem::submit_presentations()
 	{
+		ASH_PROFILE_SCOPE_NC("ScenePresentationSubsystem::submit_presentations", AshEngine::Profile::Color::Submit);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl != nullptr);
 		ASH_PROCESS_ERROR(m_impl->renderer != nullptr);
@@ -627,6 +645,7 @@ namespace AshEngine
 			prepared_packets = m_impl->prepared_packets;
 			outputs = m_impl->outputs;
 		}
+		ASH_PROFILE_PLOT("ScenePresentation/PreparedPackets", static_cast<int64_t>(prepared_packets.size()));
 
 		if (prepared_packets.empty())
 		{
@@ -661,6 +680,8 @@ namespace AshEngine
 					output_state.allocated_height != packet.output_height ||
 					output_state.allocated_format != static_cast<uint32_t>(desired_format))
 				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::AllocateOffscreenOutput", AshEngine::Profile::Color::Upload);
+					ASH_PROFILE_SCOPE_TEXT(output_state.debug_name.c_str(), output_state.debug_name.size());
 					RenderTargetDesc render_target_desc{};
 					render_target_desc.width = static_cast<uint16_t>(packet.output_width);
 					render_target_desc.height = static_cast<uint16_t>(packet.output_height);
@@ -720,6 +741,10 @@ namespace AshEngine
 					packet.visible_frame->static_mesh_draws.size(),
 					total_section_count);
 			}
+
+			ASH_PROFILE_SCOPE_NC("ScenePresentation::SubmitBinding", AshEngine::Profile::Color::Submit);
+			ASH_PROFILE_SCOPE_TEXT(packet.debug_name.c_str(), packet.debug_name.size());
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(packet.visible_frame->static_mesh_draws.size()));
 
 			if (!prepare_visible_frame_material_proxies(
 				*packet.visible_frame,

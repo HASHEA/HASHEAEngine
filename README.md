@@ -288,6 +288,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - DX12 debug layer / GPU validation。
 - RenderDoc 抓帧。
 - Tracy profiling。
+- 新增或修改 render pass、RenderGraph pass、compute dispatch 路径和明确性能热点时，需要同步补 Tracy scope / count / name 打点，避免热点只靠事后猜测定位。
 - RHI native GPU object debug name。
 - Vulkan VMA leak tracking。
 - Runtime frame stats overlay。
@@ -316,7 +317,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |
 | Editor | 基础 workspace 和常用面板已具备，当前更偏向引擎验证与工具雏形，完整编辑器能力仍在开发。 |
 | Sandbox | 已作为标准 Engine 验证程序，默认加载 Sponza，支持 overlay 切换 glTF 示例模型，标准场景会创建 directional / point / spot 默认灯光，并走正式 ScenePresentation 渲染链。 |
-| Profiling / Debug | Tracy、validation、debug name、日志、frame stats、VMA leak tracking 已接入，粒度和自动化验收仍在扩展。 |
+| Profiling / Debug | Tracy、validation、debug name、日志、frame stats、VMA leak tracking 已接入；新增/修改 pass 与性能热点时应同步补 Tracy 打点，粒度和自动化验收仍在扩展。 |
 
 ## 文档入口
 

@@ -8,6 +8,7 @@
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <unordered_map>
 
@@ -253,13 +254,20 @@ namespace AshEngine
 	bool SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)
 	{
 		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_visible_frame", AshEngine::Profile::Color::Scene);
+		if (view_context.debug_name)
+		{
+			ASH_PROFILE_SCOPE_TEXT(view_context.debug_name, std::strlen(view_context.debug_name));
+		}
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.static_mesh_draws.size()));
 		ASH_PROFILE_PLOT("Scene/StaticMeshDraws", static_cast<int64_t>(frame.static_mesh_draws.size()));
+		ASH_PROFILE_PLOT("Scene/Lights", static_cast<int64_t>(frame.lights.size()));
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
 
 		const uint32_t output_width = view_context.output_target->get_width();
 		const uint32_t output_height = view_context.output_target->get_height();
 		const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
+		ASH_PROFILE_PLOT("Scene/GBufferTargets", static_cast<int64_t>(layout.attachments.size()));
 		ASH_PROCESS_ERROR(output_width <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
 		ASH_PROCESS_ERROR(output_height <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
 
@@ -315,6 +323,7 @@ namespace AshEngine
 			},
 			[this, &frame, &view_context](RenderGraphRasterContext& context) -> bool
 			{
+				ASH_PROFILE_SCOPE_NC("SceneGBufferPass", AshEngine::Profile::Color::Draw);
 				return render_static_meshes_to_pass(frame, view_context, context, PassFamily::GBuffer);
 			}));
 
@@ -334,6 +343,10 @@ namespace AshEngine
 		RenderGraphRasterContext& pass_context,
 		PassFamily pass_family)
 	{
+		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_static_meshes_to_pass", AshEngine::Profile::Color::Draw);
+		const char* pass_label = get_staticmesh_pass_label(pass_family);
+		ASH_PROFILE_SCOPE_TEXT(pass_label, std::strlen(pass_label));
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.static_mesh_draws.size()));
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		const bool use_instanced_static_mesh_path =
 			should_use_instanced_static_mesh_path(frame.static_mesh_draws.size());
@@ -424,6 +437,8 @@ namespace AshEngine
 		}
 		else
 		{
+			ASH_PROFILE_SCOPE_NC("SceneRenderer::BuildStaticMeshBatches", AshEngine::Profile::Color::Submit);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.static_mesh_draws.size()));
 			std::vector<StaticMeshDrawBatch> batches{};
 			batches.reserve(frame.static_mesh_draws.size());
 			std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash> batch_lookup{};

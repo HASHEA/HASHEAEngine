@@ -1,6 +1,7 @@
 #include "Function/Render/RenderGraphBuilder.h"
 #include "Function/Render/RenderGraphCompiler.h"
 #include "Base/hlog.h"
+#include "Base/hprofiler.h"
 
 namespace AshEngine
 {
@@ -71,15 +72,21 @@ namespace AshEngine
 
 	bool execute_render_graph(Renderer& renderer, std::vector<RenderGraphTextureNode>& textures, const std::vector<RenderGraphPassNode>& passes)
 	{
+		ASH_PROFILE_SCOPE_NC("RenderGraph::execute", AshEngine::Profile::Color::Render);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(passes.size()));
+
 		RenderGraphCompileResult compiled{};
 		if (!RenderGraphCompiler::compile(textures, passes, compiled))
 		{
 			return false;
 		}
+		ASH_PROFILE_PLOT("RenderGraph/ExecutedPasses", static_cast<int64_t>(compiled.live_pass_indices.size()));
 
 		std::vector<std::shared_ptr<RenderTarget>> allocated_transients{};
 		const auto release_allocated_transients = [&renderer, &allocated_transients]()
 		{
+			ASH_PROFILE_SCOPE_NC("RenderGraph::ReleaseTransients", AshEngine::Profile::Color::Upload);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(allocated_transients.size()));
 			for (const std::shared_ptr<RenderTarget>& render_target : allocated_transients)
 			{
 				renderer.release_transient_render_target(render_target);
@@ -87,34 +94,44 @@ namespace AshEngine
 			allocated_transients.clear();
 		};
 
-		for (uint32_t texture_index = 0; texture_index < textures.size(); ++texture_index)
+		uint32_t allocated_transient_count = 0;
 		{
-			RenderGraphTextureNode& texture = textures[texture_index];
-			const bool should_allocate =
-				!texture.external &&
-				texture_index < compiled.texture_lifetimes.size() &&
-				compiled.texture_lifetimes[texture_index].used;
-			if (!should_allocate)
+			ASH_PROFILE_SCOPE_NC("RenderGraph::AllocateTransients", AshEngine::Profile::Color::Upload);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(textures.size()));
+			for (uint32_t texture_index = 0; texture_index < textures.size(); ++texture_index)
 			{
-				continue;
-			}
+				RenderGraphTextureNode& texture = textures[texture_index];
+				const bool should_allocate =
+					!texture.external &&
+					texture_index < compiled.texture_lifetimes.size() &&
+					compiled.texture_lifetimes[texture_index].used;
+				if (!should_allocate)
+				{
+					continue;
+				}
 
-			RenderTargetDesc desc = texture.desc.to_render_target_desc(texture.name.c_str());
-			texture.external_texture = renderer.acquire_transient_render_target(desc);
-			if (!texture.external_texture)
-			{
-				HLogError("RenderGraph: failed to allocate transient texture '{}'.", texture.name);
-				release_allocated_transients();
-				return false;
+				RenderTargetDesc desc = texture.desc.to_render_target_desc(texture.name.c_str());
+				texture.external_texture = renderer.acquire_transient_render_target(desc);
+				if (!texture.external_texture)
+				{
+					HLogError("RenderGraph: failed to allocate transient texture '{}'.", texture.name);
+					release_allocated_transients();
+					return false;
+				}
+				allocated_transients.push_back(texture.external_texture);
+				++allocated_transient_count;
 			}
-			allocated_transients.push_back(texture.external_texture);
 		}
+		ASH_PROFILE_PLOT("RenderGraph/TransientTextures", static_cast<int64_t>(allocated_transient_count));
 
 		for (uint32_t pass_index : compiled.live_pass_indices)
 		{
 			const RenderGraphPassNode& pass = passes[pass_index];
 			if (pass.kind == RenderGraphPassKind::Compute)
 			{
+				ASH_PROFILE_SCOPE_NC("RenderGraph::ExecuteComputePass", AshEngine::Profile::Color::Submit);
+				ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
+				ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass.texture_usages.size()));
 				ComputeContext context(renderer, textures);
 				if (!pass.compute_execute || !pass.compute_execute(context))
 				{
@@ -124,6 +141,10 @@ namespace AshEngine
 				}
 				continue;
 			}
+
+			ASH_PROFILE_SCOPE_NC("RenderGraph::ExecuteRasterPass", AshEngine::Profile::Color::Submit);
+			ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass.texture_usages.size()));
 
 			PassDesc pass_desc{};
 			pass_desc.name = pass.name.c_str();
