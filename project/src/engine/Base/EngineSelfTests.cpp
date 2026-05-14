@@ -865,6 +865,14 @@ namespace AshEngine
 			ok = ok && result.texture_lifetimes[live_temp.index].first_pass == 0;
 			ok = ok && result.texture_lifetimes[live_temp.index].last_pass == 1;
 			ok = ok && result.texture_lifetimes[dead_temp.index].used == false;
+			ok = ok && result.pass_barriers[0].transitions.size() == 1;
+			ok = ok && result.pass_barriers[0].transitions[0].texture == live_temp;
+			ok = ok && result.pass_barriers[0].transitions[0].state == RHI::AshResourceState::RTV;
+			ok = ok && result.pass_barriers[1].transitions.size() == 2;
+			ok = ok && result.pass_barriers[1].transitions[0].texture == live_temp;
+			ok = ok && result.pass_barriers[1].transitions[0].state == RHI::AshResourceState::SRVGraphics;
+			ok = ok && result.pass_barriers[1].transitions[1].texture == output;
+			ok = ok && result.pass_barriers[1].transitions[1].state == RHI::AshResourceState::RTV;
 			return ok || report_self_test_failure("RenderGraph compiler culling", "compiler did not cull dead passes or preserve roots");
 		}
 

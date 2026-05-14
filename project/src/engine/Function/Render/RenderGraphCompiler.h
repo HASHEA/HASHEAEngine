@@ -14,9 +14,15 @@ namespace AshEngine
 		uint32_t last_pass = UINT32_MAX;
 	};
 
+	struct RenderGraphTextureTransition
+	{
+		RenderGraphTextureRef texture{};
+		RHI::AshResourceState state = RHI::AshResourceState::Unknown;
+	};
+
 	struct RenderGraphPassBarrierPlan
 	{
-		std::vector<RHI::AshBarrier> barriers{};
+		std::vector<RenderGraphTextureTransition> transitions{};
 		std::vector<RHI::AshResourceState> texture_states{};
 	};
 

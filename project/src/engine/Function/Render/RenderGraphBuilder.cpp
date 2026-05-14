@@ -5,6 +5,8 @@
 
 namespace AshEngine
 {
+	bool execute_render_graph(Renderer& renderer, std::vector<RenderGraphTextureNode>& textures, const std::vector<RenderGraphPassNode>& passes);
+
 	RenderGraphBuilder::RenderGraphBuilder(Renderer& renderer, const char* name)
 		: RenderGraphBuilder(&renderer, name)
 	{
@@ -115,8 +117,12 @@ namespace AshEngine
 
 	bool RenderGraphBuilder::execute()
 	{
-		HLogError("RenderGraph '{}': execute called before compiler/executor implementation is linked.", m_name);
-		return false;
+		if (!m_renderer)
+		{
+			HLogError("RenderGraph '{}': execute requires a renderer.", m_name);
+			return false;
+		}
+		return execute_render_graph(*m_renderer, m_textures, m_passes);
 	}
 
 	bool RenderGraphBuilder::compile_for_tests(RenderGraphCompileResult& out_result) const

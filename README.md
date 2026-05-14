@@ -77,7 +77,7 @@ HASHEAEngine/
 - pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
-- Render Graph v1 正在以 Function/Render 层 orchestration 形式接入，当前已建立 graph texture handle、texture desc、graph access 到 RHI resource state 的基础映射、headless builder/pass usage 记录模型、compiler pass culling / texture lifetime / per-pass texture-state plan，以及 RenderDevice attachment final-state 与 graph-only barrier hook，并由 `Sandbox --engine-self-test` 覆盖。
+- Render Graph v1 正在以 Function/Render 层 orchestration 形式接入，当前已建立 graph texture handle、texture desc、graph access 到 RHI resource state 的基础映射、headless builder/pass usage 记录模型、compiler pass culling / texture lifetime / per-pass texture-state plan、RenderDevice attachment final-state 与 graph-only barrier hook，以及通过 Renderer 执行 graph 的第一版 executor，并由 `Sandbox --engine-self-test` 与 Sandbox smoke 覆盖。
 - DeferredHQ GBuffer 静态网格路径：第一版使用 5 张 GBuffer（三张 `RGBA8_UNORM`、两张 `RGBA16_SFLOAT`）加 D32 depth，随后写入 `SceneDeferredLightingAccum` 并 composite 到 view output。
 - Deferred lighting 第一版支持 base/emissive、directional fullscreen、point sphere volume、spot cone volume；点光/聚光 volume 使用只读 depth attachment、硬件 depth test、depth write off、双面和 additive blend。
 - draw 排序、静态网格 instance batching、单可见静态网格 direct section submit fast path 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
@@ -309,7 +309,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | --- | --- |
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
 | RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、DX12 mailbox present 映射、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
-| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，Render Graph v1 已开始接入 core handle/texture desc/access-state 映射、builder/pass usage 记录、compiler culling/lifetime/state plan、attachment final-state 和 graph-only barrier hook，DeferredHQ GBuffer、第一版 deferred lighting、静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
+| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，Render Graph v1 已开始接入 core handle/texture desc/access-state 映射、builder/pass usage 记录、compiler culling/lifetime/state plan、attachment final-state、graph-only barrier hook 和通过 Renderer 执行 graph 的 executor，DeferredHQ GBuffer、第一版 deferred lighting、静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
 | Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通。 |
 | Material | V2 `Surface.StaticMesh` BasePass、DepthOnly 与 GBuffer pass 已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |

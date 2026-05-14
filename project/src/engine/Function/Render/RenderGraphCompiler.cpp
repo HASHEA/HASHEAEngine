@@ -158,13 +158,20 @@ namespace AshEngine
 					barrier_plan.texture_states.resize(textures.size(), RHI::AshResourceState::Unknown);
 				}
 
+				RHI::AshResourceState state = RHI::AshResourceState::Unknown;
 				if (usage.depth && usage.access == RenderGraphAccess::DepthStencilRead)
 				{
-					barrier_plan.texture_states[usage.texture.index] = render_graph_depth_read_state(usage.depth_read_mode);
+					state = render_graph_depth_read_state(usage.depth_read_mode);
 				}
 				else
 				{
-					barrier_plan.texture_states[usage.texture.index] = render_graph_access_to_rhi_state(usage.access);
+					state = render_graph_access_to_rhi_state(usage.access);
+				}
+
+				barrier_plan.texture_states[usage.texture.index] = state;
+				if (state != RHI::AshResourceState::Unknown)
+				{
+					barrier_plan.transitions.push_back({ usage.texture, state });
 				}
 			}
 		}

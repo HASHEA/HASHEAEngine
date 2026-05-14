@@ -1403,7 +1403,7 @@ git commit -m "Allow render graph attachment final states"
 - Modify: `project/src/engine/Function/Render/RenderGraphCompiler.cpp`
 - Modify: `project/src/engine/Function/Render/RenderGraphCompiler.h`
 
-- [ ] **Step 1: Add compile barrier materialization**
+- [x] **Step 1: Add compile barrier materialization**
 
 Modify `RenderGraphPassBarrierPlan` in `RenderGraphCompiler.h`:
 
@@ -1449,7 +1449,7 @@ if (state != RHI::AshResourceState::Unknown)
 }
 ```
 
-- [ ] **Step 2: Run build to catch compile errors**
+- [x] **Step 2: Run build to catch compile errors**
 
 Run:
 
@@ -1459,7 +1459,7 @@ Run:
 
 Expected: build succeeds after compiler struct users are updated. If it fails, update all references from `barriers` to `transitions`.
 
-- [ ] **Step 3: Add executor contexts**
+- [x] **Step 3: Add executor contexts**
 
 Create `project/src/engine/Function/Render/RenderGraphExecutor.cpp`:
 
@@ -1652,7 +1652,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 4: Wire builder execute**
+- [x] **Step 4: Wire builder execute**
 
 In `RenderGraphBuilder.cpp`, add a forward declaration above methods:
 
@@ -1677,7 +1677,7 @@ bool RenderGraphBuilder::execute()
 }
 ```
 
-- [ ] **Step 5: Run build and smoke test old direct path**
+- [x] **Step 5: Run build and smoke test old direct path**
 
 Run:
 
@@ -1689,7 +1689,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --smoke-test-seconds=5
 
 Expected: build succeeds, self-test exits with code `0`, and Sandbox smoke exits normally. At this point scene still uses the old direct path, so this validates that adding RDG did not break existing rendering.
 
-- [ ] **Step 6: Commit Task 5**
+- [x] **Step 6: Commit Task 5**
 
 ```powershell
 git add project/src/engine/Function/Render/RenderGraphExecutor.cpp project/src/engine/Function/Render/RenderGraphBuilder.cpp project/src/engine/Function/Render/RenderGraphCompiler.h project/src/engine/Function/Render/RenderGraphCompiler.cpp
