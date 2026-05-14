@@ -77,6 +77,16 @@ namespace AshEngine
 			return false;
 		}
 
+		std::vector<std::shared_ptr<RenderTarget>> allocated_transients{};
+		const auto release_allocated_transients = [&renderer, &allocated_transients]()
+		{
+			for (const std::shared_ptr<RenderTarget>& render_target : allocated_transients)
+			{
+				renderer.release_transient_render_target(render_target);
+			}
+			allocated_transients.clear();
+		};
+
 		for (uint32_t texture_index = 0; texture_index < textures.size(); ++texture_index)
 		{
 			RenderGraphTextureNode& texture = textures[texture_index];
@@ -90,12 +100,14 @@ namespace AshEngine
 			}
 
 			RenderTargetDesc desc = texture.desc.to_render_target_desc(texture.name.c_str());
-			texture.external_texture = renderer.create_render_target(desc);
+			texture.external_texture = renderer.acquire_transient_render_target(desc);
 			if (!texture.external_texture)
 			{
 				HLogError("RenderGraph: failed to allocate transient texture '{}'.", texture.name);
+				release_allocated_transients();
 				return false;
 			}
+			allocated_transients.push_back(texture.external_texture);
 		}
 
 		for (uint32_t pass_index : compiled.live_pass_indices)
@@ -107,6 +119,7 @@ namespace AshEngine
 				if (!pass.compute_execute || !pass.compute_execute(context))
 				{
 					HLogError("RenderGraph: compute pass '{}' failed.", pass.name);
+					release_allocated_transients();
 					return false;
 				}
 				continue;
@@ -119,6 +132,7 @@ namespace AshEngine
 				if (!usage.texture || usage.texture.index >= textures.size())
 				{
 					HLogError("RenderGraph: raster pass '{}' has invalid texture usage.", pass.name);
+					release_allocated_transients();
 					return false;
 				}
 
@@ -129,6 +143,7 @@ namespace AshEngine
 						"RenderGraph: raster pass '{}' references unallocated texture '{}'.",
 						pass.name,
 						textures[usage.texture.index].name);
+					release_allocated_transients();
 					return false;
 				}
 
@@ -137,6 +152,7 @@ namespace AshEngine
 					if (texture_is_depth_format(target->get_format()))
 					{
 						HLogError("RenderGraph: pass '{}' uses depth format as color attachment.", pass.name);
+						release_allocated_transients();
 						return false;
 					}
 					if (pass_desc.color_attachments.size() <= usage.color_slot)
@@ -147,13 +163,13 @@ namespace AshEngine
 					attachment.render_target = target;
 					attachment.load_action = usage.load_action;
 					attachment.clear_color = usage.clear_color;
-					attachment.final_state = RHI::AshResourceState::SRVGraphics;
 				}
 				else if (usage.access == RenderGraphAccess::DepthStencilWrite || usage.access == RenderGraphAccess::DepthStencilRead)
 				{
 					if (!texture_is_depth_format(target->get_format()))
 					{
 						HLogError("RenderGraph: pass '{}' uses color format as depth attachment.", pass.name);
+						release_allocated_transients();
 						return false;
 					}
 					pass_desc.depth_attachment.render_target = target;
@@ -171,6 +187,7 @@ namespace AshEngine
 			if (!renderer.begin_pass(pass_desc, pass_context))
 			{
 				HLogError("RenderGraph: begin raster pass '{}' failed.", pass.name);
+				release_allocated_transients();
 				return false;
 			}
 
@@ -180,10 +197,12 @@ namespace AshEngine
 			if (!pass_result)
 			{
 				HLogError("RenderGraph: raster pass '{}' failed.", pass.name);
+				release_allocated_transients();
 				return false;
 			}
 		}
 
+		release_allocated_transients();
 		return true;
 	}
 }

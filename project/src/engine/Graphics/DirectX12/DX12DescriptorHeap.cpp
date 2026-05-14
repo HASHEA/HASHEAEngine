@@ -127,21 +127,52 @@ namespace RHI
 		m_heap.Reset();
 	}
 
-	void DX12GPUDescriptorHeap::reset_frame_allocation()
+	void DX12GPUDescriptorHeap::begin_frame(uint32_t frameIndex, uint32_t frameCount)
 	{
-		m_currentOffset = 0;
+		if (frameCount == 0)
+		{
+			frameCount = 1;
+		}
+
+		const uint32_t frameCapacity = m_maxDescriptors / frameCount;
+		if (frameCapacity == 0)
+		{
+			HLogError(
+				"DX12GPUDescriptorHeap: descriptor heap capacity {} cannot be split across {} frame(s).",
+				m_maxDescriptors,
+				frameCount);
+			H_ASSERT(false);
+			m_frameStartOffset = 0;
+			m_frameEndOffset = m_maxDescriptors;
+			m_currentOffset = 0;
+			return;
+		}
+
+		const uint32_t safeFrameIndex = frameIndex % frameCount;
+		m_frameStartOffset = safeFrameIndex * frameCapacity;
+		m_frameEndOffset = safeFrameIndex == frameCount - 1 ? m_maxDescriptors : m_frameStartOffset + frameCapacity;
+		m_currentOffset = m_frameStartOffset;
 	}
 
 	DX12DescriptorHandle DX12GPUDescriptorHeap::allocate(uint32_t count)
 	{
 		DX12DescriptorHandle handle = {};
-		if (count == 0 || count > m_maxDescriptors - m_currentOffset)
+		if (m_frameEndOffset == 0)
+		{
+			m_frameStartOffset = 0;
+			m_frameEndOffset = m_maxDescriptors;
+			m_currentOffset = 0;
+		}
+
+		if (count == 0 || count > m_frameEndOffset - m_currentOffset)
 		{
 			HLogError(
-				"DX12GPUDescriptorHeap: descriptor heap overflow. type={}, requested={}, remaining={}, capacity={}.",
+				"DX12GPUDescriptorHeap: descriptor heap frame partition overflow. type={}, requested={}, remaining={}, frame_start={}, frame_end={}, capacity={}.",
 				descriptor_heap_type_name(m_type),
 				count,
-				m_maxDescriptors - m_currentOffset,
+				m_frameEndOffset - m_currentOffset,
+				m_frameStartOffset,
+				m_frameEndOffset,
 				m_maxDescriptors);
 			H_ASSERT(false);
 			return handle;
@@ -185,12 +216,12 @@ namespace RHI
 		gpuSampler.shutdown();
 	}
 
-	void DX12DescriptorHeapManager::begin_frame()
+	void DX12DescriptorHeapManager::begin_frame(uint32_t frameIndex, uint32_t frameCount)
 	{
 		m_frameCbvSrvUavTableCache.clear();
 		m_frameSamplerTableCache.clear();
-		gpuCbvSrvUav.reset_frame_allocation();
-		gpuSampler.reset_frame_allocation();
+		gpuCbvSrvUav.begin_frame(frameIndex, frameCount);
+		gpuSampler.begin_frame(frameIndex, frameCount);
 	}
 
 	bool DX12DescriptorHeapManager::find_or_create_shader_visible_table(

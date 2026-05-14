@@ -5,6 +5,8 @@
 #include "Function/Application.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/MaterialRenderProxy.h"
+#include "Function/Render/RenderGraph.h"
+#include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <cstdint>
 #include <limits>
@@ -201,7 +203,6 @@ namespace AshEngine
 	void SceneRenderer::shutdown()
 	{
 		m_deferred_lighting_pass.shutdown();
-		m_deferred_resources.reset();
 		m_scratch_depth_targets.clear();
 		m_instance_buffers.clear();
 		m_logged_warning_keys.clear();
@@ -265,40 +266,71 @@ namespace AshEngine
 			const uint32_t output_width = view_context.output_target->get_width();
 			const uint32_t output_height = view_context.output_target->get_height();
 			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
-			ASH_PROCESS_ERROR(m_deferred_resources.ensure(*m_renderer, output_width, output_height, layout));
+			ASH_PROCESS_ERROR(output_width <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
+			ASH_PROCESS_ERROR(output_height <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
 
-			PassDesc gbuffer_pass_desc{};
-			gbuffer_pass_desc.name = "SceneGBufferPass";
-			gbuffer_pass_desc.allow_reorder_draws = true;
-			for (const std::shared_ptr<RenderTarget>& target : m_deferred_resources.get_gbuffer_targets())
+			RenderGraphBuilder graph(*m_renderer, view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
+			RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
+
+			SceneDeferredGraphResources graph_resources{};
+			graph_resources.gbuffer_targets.reserve(layout.attachments.size());
+			for (const GBufferAttachmentDesc& attachment : layout.attachments)
 			{
-				gbuffer_pass_desc.color_attachments.push_back({
-					target,
-					RenderLoadAction::Clear,
-					{}
-				});
+				const std::string attachment_name{ attachment.name };
+				RenderGraphTextureDesc desc{};
+				desc.width = static_cast<uint16_t>(output_width);
+				desc.height = static_cast<uint16_t>(output_height);
+				desc.format = attachment.format;
+				desc.shader_resource = true;
+				desc.unordered_access = false;
+				desc.use_optimized_clear_value = true;
+				desc.optimized_clear_color = {};
+				graph_resources.gbuffer_targets.push_back(graph.create_texture(desc, attachment_name.c_str()));
 			}
-			gbuffer_pass_desc.depth_attachment = {
-				m_deferred_resources.get_depth_target(),
-				RenderLoadAction::Clear,
-				view_context.depth_clear_value
-			};
 
-			Renderer::GraphicsPassContext gbuffer_pass_context{};
-			ASH_PROCESS_ERROR(m_renderer->begin_pass(gbuffer_pass_desc, gbuffer_pass_context));
-			ASH_PROCESS_ERROR(render_static_meshes_to_pass(
-				frame,
-				view_context,
-				gbuffer_pass_context,
-				PassFamily::GBuffer));
-			gbuffer_pass_context.end();
+			RenderGraphTextureDesc depth_desc{};
+			depth_desc.width = static_cast<uint16_t>(output_width);
+			depth_desc.height = static_cast<uint16_t>(output_height);
+			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			depth_desc.shader_resource = true;
+			depth_desc.unordered_access = false;
+			depth_desc.use_optimized_clear_value = true;
+			depth_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
+			graph_resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
 
-			ASH_PROCESS_ERROR(m_deferred_lighting_pass.render(
-				*m_renderer,
+			RenderGraphTextureDesc lighting_desc{};
+			lighting_desc.width = static_cast<uint16_t>(output_width);
+			lighting_desc.height = static_cast<uint16_t>(output_height);
+			lighting_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			lighting_desc.shader_resource = true;
+			lighting_desc.unordered_access = false;
+			lighting_desc.use_optimized_clear_value = true;
+			lighting_desc.optimized_clear_color = {};
+			graph_resources.lighting_accum = graph.create_texture(lighting_desc, "SceneDeferredLightingAccum");
+
+			ASH_PROCESS_ERROR(graph.add_raster_pass(
+				"SceneGBufferPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (uint8_t index = 0; index < static_cast<uint8_t>(graph_resources.gbuffer_targets.size()); ++index)
+					{
+						pass.write_color(index, graph_resources.gbuffer_targets[index], RenderLoadAction::Clear, {});
+					}
+					pass.write_depth(graph_resources.depth, RenderLoadAction::Clear, view_context.depth_clear_value);
+				},
+				[this, &frame, &view_context](RenderGraphRasterContext& context) -> bool
+				{
+					return render_static_meshes_to_pass(frame, view_context, context, PassFamily::GBuffer);
+				}));
+
+			ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
+				graph,
 				frame,
-				m_deferred_resources,
-				view_context.output_target,
+				graph_resources,
+				output,
 				view_context));
+			ASH_PROCESS_ERROR(graph.execute());
 			break;
 		}
 
@@ -330,10 +362,11 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool SceneRenderer::render_static_meshes_to_pass(
+	template <typename PassContextT>
+	bool SceneRenderer::render_static_meshes_to_pass_body(
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
-		Renderer::GraphicsPassContext& pass_context,
+		PassContextT& pass_context,
 		PassFamily pass_family)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -521,6 +554,24 @@ namespace AshEngine
 		}
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool SceneRenderer::render_static_meshes_to_pass(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		Renderer::GraphicsPassContext& pass_context,
+		PassFamily pass_family)
+	{
+		return render_static_meshes_to_pass_body(frame, view_context, pass_context, pass_family);
+	}
+
+	bool SceneRenderer::render_static_meshes_to_pass(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphRasterContext& pass_context,
+		PassFamily pass_family)
+	{
+		return render_static_meshes_to_pass_body(frame, view_context, pass_context, pass_family);
 	}
 
 	bool SceneRenderer::validate_view_context(const SceneRenderViewContext& view_context) const

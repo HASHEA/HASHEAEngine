@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Base/hcore.h"
+#include "Function/Render/RenderGraphFwd.h"
+#include "Function/Render/SceneDeferredGraphResources.h"
 #include <memory>
 #include <vector>
 
@@ -10,8 +12,6 @@ namespace AshEngine
 	class IndexBuffer;
 	class RenderSampler;
 	class Renderer;
-	class RenderTarget;
-	class SceneDeferredResources;
 	class VertexBuffer;
 	struct SceneRenderViewContext;
 	struct VisibleRenderFrame;
@@ -22,11 +22,11 @@ namespace AshEngine
 		bool initialize(Renderer* renderer);
 		void shutdown();
 
-		bool render(
-			Renderer& renderer,
+		bool add_passes(
+			RenderGraphBuilder& graph,
 			const VisibleRenderFrame& frame,
-			const SceneDeferredResources& deferred_resources,
-			const std::shared_ptr<RenderTarget>& output_target,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
 			const SceneRenderViewContext& view_context);
 
 	private:

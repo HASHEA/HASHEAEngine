@@ -45,8 +45,8 @@ namespace RHI
 		bool init(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t maxDescriptors);
 		void shutdown();
 
-		// Reset allocation offset (call at frame begin)
-		void reset_frame_allocation();
+		// Reset allocation offset for the frame partition that is known idle.
+		void begin_frame(uint32_t frameIndex, uint32_t frameCount);
 
 		// Allocate a contiguous range of descriptors for this frame
 		DX12DescriptorHandle allocate(uint32_t count = 1);
@@ -63,6 +63,8 @@ namespace RHI
 		uint32_t m_descriptorSize = 0;
 		uint32_t m_maxDescriptors = 0;
 		uint32_t m_currentOffset = 0;
+		uint32_t m_frameStartOffset = 0;
+		uint32_t m_frameEndOffset = 0;
 		D3D12_CPU_DESCRIPTOR_HANDLE m_cpuStart = {};
 		D3D12_GPU_DESCRIPTOR_HANDLE m_gpuStart = {};
 	};
@@ -103,7 +105,7 @@ namespace RHI
 
 		bool init(ID3D12Device* device);
 		void shutdown();
-		void begin_frame();
+		void begin_frame(uint32_t frameIndex, uint32_t frameCount);
 		bool find_or_create_shader_visible_table(
 			ID3D12Device* device,
 			D3D12_DESCRIPTOR_HEAP_TYPE heapType,

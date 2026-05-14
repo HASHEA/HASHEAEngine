@@ -3,9 +3,9 @@
 #include "Base/hcore.h"
 #include "Function/Render/DeferredLightingPass.h"
 #include "Function/Render/EngineShaderFamilyRegistry.h"
+#include "Function/Render/RenderGraphFwd.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/Renderer.h"
-#include "Function/Render/SceneDeferredResources.h"
 #include "Function/Render/SceneRenderView.h"
 #include <cstddef>
 #include <memory>
@@ -46,6 +46,17 @@ namespace AshEngine
 			const SceneRenderViewContext& view_context,
 			Renderer::GraphicsPassContext& pass_context,
 			PassFamily pass_family);
+		bool render_static_meshes_to_pass(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			RenderGraphRasterContext& pass_context,
+			PassFamily pass_family);
+		template <typename PassContextT>
+		bool render_static_meshes_to_pass_body(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			PassContextT& pass_context,
+			PassFamily pass_family);
 		void log_warning_once(const std::string& key, const std::string& message);
 		void log_staticmesh_pass_usage_once(
 			const MaterialInterface& material,
@@ -69,7 +80,6 @@ namespace AshEngine
 
 	private:
 		Renderer* m_renderer = nullptr;
-		SceneDeferredResources m_deferred_resources{};
 		DeferredLightingPass m_deferred_lighting_pass{};
 		bool m_use_deferred_static_mesh_path = true;
 		std::vector<ScratchDepthEntry> m_scratch_depth_targets{};

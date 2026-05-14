@@ -1028,8 +1028,8 @@ namespace RHI
 		}
 		fr.uploadCommandsPending = false;
 
-		// Reset shader-visible descriptor heaps
-		m_descriptorHeaps.begin_frame();
+		// Reset only the shader-visible descriptor heap partition protected by this frame slot fence.
+		m_descriptorHeaps.begin_frame(m_currentFrame, k_dx12_max_frames);
 
 		// Process delayed deletions
 		m_delayedDeletionQueues[m_currentFrame].flush();

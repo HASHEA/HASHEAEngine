@@ -1,8 +1,9 @@
 #include "Function/Render/DeferredLightingPass.h"
 
 #include "Base/hlog.h"
+#include "Function/Render/RenderGraph.h"
 #include "Function/Render/Renderer.h"
-#include "Function/Render/SceneDeferredResources.h"
+#include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/SceneRenderView.h"
 #include "Function/Render/RenderScene.h"
 #include "Graphics/Shader.h"
@@ -471,119 +472,128 @@ namespace AshEngine
 		m_renderer = nullptr;
 	}
 
-	bool DeferredLightingPass::render(
-		Renderer& renderer,
+	bool DeferredLightingPass::add_passes(
+		RenderGraphBuilder& graph,
 		const VisibleRenderFrame& frame,
-		const SceneDeferredResources& deferred_resources,
-		const std::shared_ptr<RenderTarget>& output_target,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
 		const SceneRenderViewContext& view_context)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_renderer == &renderer);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(m_base_emissive_program && m_directional_program && m_point_program && m_spot_program && m_composite_program);
 		ASH_PROCESS_ERROR(m_point_clamp_sampler != nullptr);
 		ASH_PROCESS_ERROR(m_sphere_vertex_buffer && m_sphere_index_buffer && m_sphere_index_count > 0);
 		ASH_PROCESS_ERROR(m_cone_vertex_buffer && m_cone_index_buffer && m_cone_index_count > 0);
-		ASH_PROCESS_ERROR(output_target != nullptr);
-		ASH_PROCESS_ERROR(deferred_resources.get_lighting_accum_target() != nullptr);
+		ASH_PROCESS_ERROR(output_target);
+		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
+		ASH_PROCESS_ERROR(deferred_resources.depth);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_accum);
 
-		const std::vector<std::shared_ptr<RenderTarget>>& targets = deferred_resources.get_gbuffer_targets();
-		ASH_PROCESS_ERROR(targets.size() >= 5u);
-		ASH_PROCESS_ERROR(deferred_resources.get_depth_target() != nullptr);
-
-		for (GraphicsProgram* program : {
-			m_base_emissive_program.get(),
-			m_directional_program.get(),
-			m_point_program.get(),
-			m_spot_program.get()
-		})
-		{
-			ASH_PROCESS_ERROR(program != nullptr);
-			ASH_PROCESS_ERROR(program->set_texture("SceneGBufferA", targets[0]));
-			ASH_PROCESS_ERROR(program->set_texture("SceneGBufferB", targets[1]));
-			ASH_PROCESS_ERROR(program->set_texture("SceneGBufferC", targets[2]));
-			ASH_PROCESS_ERROR(program->set_texture("SceneGBufferD", targets[3]));
-			ASH_PROCESS_ERROR(program->set_texture("SceneGBufferE", targets[4]));
-			ASH_PROCESS_ERROR(program->set_texture("SceneDepth", deferred_resources.get_depth_target()));
-			ASH_PROCESS_ERROR(program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
-		}
-
-		ASH_PROCESS_ERROR(m_composite_program->set_texture("SceneLightingAccum", deferred_resources.get_lighting_accum_target()));
-		ASH_PROCESS_ERROR(m_composite_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
-
-		PassDesc lighting_pass_desc{};
-		lighting_pass_desc.name = "SceneDeferredLightingAccumPass";
-		lighting_pass_desc.allow_reorder_draws = false;
-		lighting_pass_desc.color_attachments.push_back({
-			deferred_resources.get_lighting_accum_target(),
-			RenderLoadAction::Clear,
-			k_lighting_accum_clear_color
-		});
-		lighting_pass_desc.depth_attachment = {
-			deferred_resources.get_depth_target(),
-			RenderLoadAction::Load,
-			view_context.depth_clear_value,
-			true
-		};
-
-		Renderer::GraphicsPassContext lighting_pass_context{};
-		ASH_PROCESS_ERROR(renderer.begin_pass(lighting_pass_desc, lighting_pass_context));
-
-		const DeferredLightingRootConstants base_constants = make_common_root_constants(frame, output_target);
-		ASH_PROCESS_ERROR(lighting_pass_context.draw(create_fullscreen_draw(
-			m_base_emissive_program.get(),
-			base_constants,
-			view_context)));
-
-		for (const VisibleLightData& light : frame.lights)
-		{
-			if (light.type == LightType::Directional)
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneDeferredLightingAccumPass",
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
 			{
-				ASH_PROCESS_ERROR(lighting_pass_context.draw(create_fullscreen_draw(
+				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
+				{
+					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+				}
+				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+				pass.write_color(0, deferred_resources.lighting_accum, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+			},
+			[this, &frame, &deferred_resources, &view_context, output_target](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				const std::vector<RenderGraphTextureRef>& gbuffer_refs = deferred_resources.gbuffer_targets;
+				std::shared_ptr<RenderTarget> gbuffer_a = context.get_texture(gbuffer_refs[0]);
+				std::shared_ptr<RenderTarget> gbuffer_b = context.get_texture(gbuffer_refs[1]);
+				std::shared_ptr<RenderTarget> gbuffer_c = context.get_texture(gbuffer_refs[2]);
+				std::shared_ptr<RenderTarget> gbuffer_d = context.get_texture(gbuffer_refs[3]);
+				std::shared_ptr<RenderTarget> gbuffer_e = context.get_texture(gbuffer_refs[4]);
+				std::shared_ptr<RenderTarget> depth = context.get_texture(deferred_resources.depth);
+				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+				ASH_PROCESS_ERROR(gbuffer_a && gbuffer_b && gbuffer_c && gbuffer_d && gbuffer_e && depth && output);
+
+				for (GraphicsProgram* program : {
+					m_base_emissive_program.get(),
 					m_directional_program.get(),
-					make_directional_constants(frame, output_target, light),
-					view_context)));
-			}
-			else if (light.type == LightType::Point)
-			{
-				ASH_PROCESS_ERROR(lighting_pass_context.draw(create_volume_draw(
 					m_point_program.get(),
-					m_sphere_vertex_buffer,
-					m_sphere_index_buffer,
-					m_sphere_index_count,
-					make_point_constants(frame, output_target, light),
+					m_spot_program.get()
+				})
+				{
+					ASH_PROCESS_ERROR(program != nullptr);
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferA", gbuffer_a));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferB", gbuffer_b));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferC", gbuffer_c));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferD", gbuffer_d));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferE", gbuffer_e));
+					ASH_PROCESS_ERROR(program->set_texture("SceneDepth", depth));
+					ASH_PROCESS_ERROR(program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
+				}
+
+				const DeferredLightingRootConstants base_constants = make_common_root_constants(frame, output);
+				ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+					m_base_emissive_program.get(),
+					base_constants,
 					view_context)));
-			}
-			else if (light.type == LightType::Spot)
+
+				for (const VisibleLightData& light : frame.lights)
+				{
+					if (light.type == LightType::Directional)
+					{
+						ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+							m_directional_program.get(),
+							make_directional_constants(frame, output, light),
+							view_context)));
+					}
+					else if (light.type == LightType::Point)
+					{
+						ASH_PROCESS_ERROR(context.draw(create_volume_draw(
+							m_point_program.get(),
+							m_sphere_vertex_buffer,
+							m_sphere_index_buffer,
+							m_sphere_index_count,
+							make_point_constants(frame, output, light),
+							view_context)));
+					}
+					else if (light.type == LightType::Spot)
+					{
+						ASH_PROCESS_ERROR(context.draw(create_volume_draw(
+							m_spot_program.get(),
+							m_cone_vertex_buffer,
+							m_cone_index_buffer,
+							m_cone_index_count,
+							make_spot_constants(frame, output, light),
+							view_context)));
+					}
+				}
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
+
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneDeferredCompositePass",
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
 			{
-				ASH_PROCESS_ERROR(lighting_pass_context.draw(create_volume_draw(
-					m_spot_program.get(),
-					m_cone_vertex_buffer,
-					m_cone_index_buffer,
-					m_cone_index_count,
-					make_spot_constants(frame, output_target, light),
-					view_context)));
-			}
-		}
-		lighting_pass_context.end();
-
-		PassDesc composite_pass_desc{};
-		composite_pass_desc.name = "SceneDeferredCompositePass";
-		composite_pass_desc.allow_reorder_draws = false;
-		composite_pass_desc.color_attachments.push_back({
-			output_target,
-			view_context.color_load_action,
-			view_context.color_clear_value
-		});
-
-		Renderer::GraphicsPassContext composite_pass_context{};
-		ASH_PROCESS_ERROR(renderer.begin_pass(composite_pass_desc, composite_pass_context));
-		ASH_PROCESS_ERROR(composite_pass_context.draw(create_fullscreen_draw(
-			m_composite_program.get(),
-			make_common_root_constants(frame, output_target),
-			view_context,
-			false)));
-		composite_pass_context.end();
+				pass.read_texture(deferred_resources.lighting_accum, RenderGraphAccess::GraphicsSRV);
+				pass.write_color(0, output_target, view_context.color_load_action, view_context.color_clear_value);
+			},
+			[this, &frame, &deferred_resources, &view_context, output_target](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				std::shared_ptr<RenderTarget> lighting = context.get_texture(deferred_resources.lighting_accum);
+				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+				ASH_PROCESS_ERROR(lighting && output);
+				ASH_PROCESS_ERROR(m_composite_program->set_texture("SceneLightingAccum", lighting));
+				ASH_PROCESS_ERROR(m_composite_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
+				ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+					m_composite_program.get(),
+					make_common_root_constants(frame, output),
+					view_context,
+					false)));
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 }

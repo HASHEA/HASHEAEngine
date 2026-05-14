@@ -12,6 +12,7 @@
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderScene.h"
+#include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Scene/Scene.h"
@@ -876,6 +877,105 @@ namespace AshEngine
 			return ok || report_self_test_failure("RenderGraph compiler culling", "compiler did not cull dead passes or preserve roots");
 		}
 
+		auto test_scene_deferred_graph_resources_describe_live_pass_chain() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("SceneDeferredGraphSelfTest");
+
+			RenderTargetDesc output_desc{};
+			output_desc.width = 64;
+			output_desc.height = 64;
+			output_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(output_desc, "SceneOutput");
+
+			SceneDeferredGraphResources resources{};
+			resources.gbuffer_targets.reserve(5u);
+			for (uint32_t index = 0; index < 5u; ++index)
+			{
+				RenderGraphTextureDesc gbuffer_desc{};
+				gbuffer_desc.width = 64;
+				gbuffer_desc.height = 64;
+				gbuffer_desc.format = RenderTextureFormat::RGBA8_UNORM;
+				gbuffer_desc.shader_resource = true;
+				resources.gbuffer_targets.push_back(graph.create_texture(gbuffer_desc, "SceneGBuffer"));
+			}
+
+			RenderGraphTextureDesc depth_desc{};
+			depth_desc.width = 64;
+			depth_desc.height = 64;
+			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			depth_desc.shader_resource = true;
+			resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
+
+			RenderGraphTextureDesc lighting_desc{};
+			lighting_desc.width = 64;
+			lighting_desc.height = 64;
+			lighting_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			lighting_desc.shader_resource = true;
+			resources.lighting_accum = graph.create_texture(lighting_desc, "SceneDeferredLightingAccum");
+
+			graph.add_raster_pass(
+				"SceneGBufferPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (uint8_t index = 0; index < static_cast<uint8_t>(resources.gbuffer_targets.size()); ++index)
+					{
+						pass.write_color(index, resources.gbuffer_targets[index], RenderLoadAction::Clear, {});
+					}
+					pass.write_depth(resources.depth, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredLightingAccumPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
+					{
+						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.read_depth(resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					pass.write_color(0, resources.lighting_accum, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredCompositePass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.lighting_accum, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, output, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			RenderGraphCompileResult result{};
+			const bool compiled = graph.compile_for_tests(result);
+			bool ok = compiled;
+			ok = ok && resources.gbuffer_targets.size() == 5u;
+			ok = ok && resources.depth;
+			ok = ok && resources.lighting_accum;
+			ok = ok && result.live_pass_indices.size() == 3u;
+			ok = ok && result.live_pass_indices[0] == 0u;
+			ok = ok && result.live_pass_indices[1] == 1u;
+			ok = ok && result.live_pass_indices[2] == 2u;
+			ok = ok && result.texture_lifetimes[resources.lighting_accum.index].first_pass == 1u;
+			ok = ok && result.texture_lifetimes[resources.lighting_accum.index].last_pass == 2u;
+			ok = ok && result.pass_barriers[1].transitions.size() >= 7u;
+			ok = ok && result.pass_barriers[2].transitions.size() == 2u;
+			return ok || report_self_test_failure("Scene deferred render graph resources", "deferred graph chain was not preserved through compilation");
+		}
+
 		auto test_render_pass_attachment_final_state_defaults_to_unknown() -> bool
 		{
 			PassColorAttachment color{};
@@ -1010,6 +1110,7 @@ namespace AshEngine
 		all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
 		all_passed = test_render_graph_builder_records_raster_usage() && all_passed;
 		all_passed = test_render_graph_compiler_culls_dead_passes_and_keeps_roots() && all_passed;
+		all_passed = test_scene_deferred_graph_resources_describe_live_pass_chain() && all_passed;
 		all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
 #if defined(ASH_HAS_DX12)
