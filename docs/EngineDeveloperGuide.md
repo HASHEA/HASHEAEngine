@@ -514,6 +514,8 @@ SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass
 
 External output 和 extracted texture 是 culling root；`NeverCull` pass 保留；无 root 依赖的 pass 会被 compiler 剔除。Graph transient texture 执行期通过 `Renderer` 的 transient render target pool 获取和释放，避免 pass lambda 仍引用的 SRV/RTV 提前析构。Vulkan 合法性要求所有 graph barrier 都在 active render pass 外提交；graph 不应强行把 external output 的 final state 改成 `SRVGraphics`，应由目标资源能力决定默认 final state，例如 swapchain/backbuffer 走 `Present`。
 
+具体使用流程、API 语义、pass 编写约束和常见错误记录在 `docs/RenderGraphAPISpec.md`；新增 graph pass 时应先按该文档的 checklist 补齐资源声明、Tracy 打点、错误处理和 Vulkan / DX12 验证。
+
 ### 6.5 当前 pass / dispatch 规则
 
 当前规则非常重要：

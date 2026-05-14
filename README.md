@@ -324,6 +324,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - Engine 开发指南：[`docs/EngineDeveloperGuide.md`](docs/EngineDeveloperGuide.md)
 - Editor 开发指南：[`docs/EditorDeveloperGuide.md`](docs/EditorDeveloperGuide.md)
 - Scene Presentation 指南：[`docs/ScenePresentationSubsystemGuide.md`](docs/ScenePresentationSubsystemGuide.md)
+- RenderGraph 使用教程与 API Spec：[`docs/RenderGraphAPISpec.md`](docs/RenderGraphAPISpec.md)
 - Engine UIContext：[`docs/EngineUIContext.md`](docs/EngineUIContext.md)
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)

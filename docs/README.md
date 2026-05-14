@@ -48,6 +48,7 @@
 
 - `docs/EngineDeveloperGuide.md`
 - `docs/EngineRuntimeRequirements.md`
+- `docs/RenderGraphAPISpec.md`
 - `docs/EngineUIContext.md`
 
 ## 4. 维护规则
