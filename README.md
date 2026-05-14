@@ -106,7 +106,7 @@ Scene 到渲染的主路径：
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass`，通过 graph transient GBuffer / depth / lighting accumulation 资源完成 deferred submit；原 `BasePass` 前向路径仍保留为内部 fallback。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer，以避免当前 Sandbox/Sponza 基准场景的固定合批开销。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass`，通过 graph transient GBuffer / depth / lighting accumulation 资源完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer，以避免当前 Sandbox/Sponza 基准场景的固定合批开销。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 
@@ -121,7 +121,7 @@ Scene 到渲染的主路径：
 - `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding。
 - `MaterialRenderProxy` 基于 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；shader 文件签名只按 proxy 周期性探测，不进入每个 section 的逐帧 filesystem 热路径，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
 - 材质实例的贴图 binding 可覆盖 sampler state；运行时会把该 sampler state 绑定到基材质资源声明实际生成的 shader sampler 名，避免 glTF sampler override 与生成 HLSL sampler 名不一致。
-- 当前正式静态网格主路径包含 `Surface.StaticMesh.BasePass`、`DepthOnly` 与 `GBuffer`；用户材质 shader 仍只实现材质节点接口，GBuffer MRT 编码由 Engine host shader 负责。`.AshMat` 可通过 `shading_model` 声明 `Empty`、`DefaultLitGGX`、`Unlit`、`BlinnPhong`，`DefaultLit` / `ggx` 作为 `DefaultLitGGX` 兼容别名；随仓库提供的基材质资产当前显式声明为 `ggx`。`.AshMatIns` 继承父材质 shading model，不做实例级覆盖。
+- 当前 `Surface.StaticMesh` 材质资源仍覆盖 `BasePass`、`DepthOnly` 与 `GBuffer`；`SceneRenderer` 的 opaque / masked 主提交路径使用 `GBuffer`，用户材质 shader 仍只实现材质节点接口，GBuffer MRT 编码由 Engine host shader 负责。`.AshMat` 可通过 `shading_model` 声明 `Empty`、`DefaultLitGGX`、`Unlit`、`BlinnPhong`，`DefaultLit` / `ggx` 作为 `DefaultLitGGX` 兼容别名；随仓库提供的基材质资产当前显式声明为 `ggx`。`.AshMatIns` 继承父材质 shading model，不做实例级覆盖。
 
 材质 shader 由三部分拼合：
 

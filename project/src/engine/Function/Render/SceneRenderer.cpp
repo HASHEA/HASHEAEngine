@@ -2,7 +2,6 @@
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
-#include "Function/Application.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/RenderGraph.h"
@@ -28,8 +27,6 @@ namespace AshEngine
 			}
 			return "<unnamed-material>";
 		}
-
-		static constexpr size_t k_max_scratch_depth_targets = 8u;
 
 		static auto get_staticmesh_pass_label(PassFamily pass_family) -> const char*
 		{
@@ -203,7 +200,6 @@ namespace AshEngine
 	void SceneRenderer::shutdown()
 	{
 		m_deferred_lighting_pass.shutdown();
-		m_scratch_depth_targets.clear();
 		m_instance_buffers.clear();
 		m_logged_warning_keys.clear();
 		m_logged_material_usage_keys.clear();
@@ -261,112 +257,81 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
 
-		if (m_use_deferred_static_mesh_path)
+		const uint32_t output_width = view_context.output_target->get_width();
+		const uint32_t output_height = view_context.output_target->get_height();
+		const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
+		ASH_PROCESS_ERROR(output_width <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
+		ASH_PROCESS_ERROR(output_height <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
+
+		RenderGraphBuilder graph(*m_renderer, view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
+		RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
+
+		SceneDeferredGraphResources graph_resources{};
+		graph_resources.gbuffer_targets.reserve(layout.attachments.size());
+		for (const GBufferAttachmentDesc& attachment : layout.attachments)
 		{
-			const uint32_t output_width = view_context.output_target->get_width();
-			const uint32_t output_height = view_context.output_target->get_height();
-			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
-			ASH_PROCESS_ERROR(output_width <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
-			ASH_PROCESS_ERROR(output_height <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
-
-			RenderGraphBuilder graph(*m_renderer, view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
-			RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
-
-			SceneDeferredGraphResources graph_resources{};
-			graph_resources.gbuffer_targets.reserve(layout.attachments.size());
-			for (const GBufferAttachmentDesc& attachment : layout.attachments)
-			{
-				const std::string attachment_name{ attachment.name };
-				RenderGraphTextureDesc desc{};
-				desc.width = static_cast<uint16_t>(output_width);
-				desc.height = static_cast<uint16_t>(output_height);
-				desc.format = attachment.format;
-				desc.shader_resource = true;
-				desc.unordered_access = false;
-				desc.use_optimized_clear_value = true;
-				desc.optimized_clear_color = {};
-				graph_resources.gbuffer_targets.push_back(graph.create_texture(desc, attachment_name.c_str()));
-			}
-
-			RenderGraphTextureDesc depth_desc{};
-			depth_desc.width = static_cast<uint16_t>(output_width);
-			depth_desc.height = static_cast<uint16_t>(output_height);
-			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
-			depth_desc.shader_resource = true;
-			depth_desc.unordered_access = false;
-			depth_desc.use_optimized_clear_value = true;
-			depth_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
-			graph_resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
-
-			RenderGraphTextureDesc lighting_desc{};
-			lighting_desc.width = static_cast<uint16_t>(output_width);
-			lighting_desc.height = static_cast<uint16_t>(output_height);
-			lighting_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
-			lighting_desc.shader_resource = true;
-			lighting_desc.unordered_access = false;
-			lighting_desc.use_optimized_clear_value = true;
-			lighting_desc.optimized_clear_color = {};
-			graph_resources.lighting_accum = graph.create_texture(lighting_desc, "SceneDeferredLightingAccum");
-
-			ASH_PROCESS_ERROR(graph.add_raster_pass(
-				"SceneGBufferPass",
-				RenderGraphPassFlags::None,
-				[&](RenderGraphRasterPassBuilder& pass)
-				{
-					for (uint8_t index = 0; index < static_cast<uint8_t>(graph_resources.gbuffer_targets.size()); ++index)
-					{
-						pass.write_color(index, graph_resources.gbuffer_targets[index], RenderLoadAction::Clear, {});
-					}
-					pass.write_depth(graph_resources.depth, RenderLoadAction::Clear, view_context.depth_clear_value);
-				},
-				[this, &frame, &view_context](RenderGraphRasterContext& context) -> bool
-				{
-					return render_static_meshes_to_pass(frame, view_context, context, PassFamily::GBuffer);
-				}));
-
-			ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
-				graph,
-				frame,
-				graph_resources,
-				output,
-				view_context));
-			ASH_PROCESS_ERROR(graph.execute());
-			break;
+			const std::string attachment_name{ attachment.name };
+			RenderGraphTextureDesc desc{};
+			desc.width = static_cast<uint16_t>(output_width);
+			desc.height = static_cast<uint16_t>(output_height);
+			desc.format = attachment.format;
+			desc.shader_resource = true;
+			desc.unordered_access = false;
+			desc.use_optimized_clear_value = true;
+			desc.optimized_clear_color = {};
+			graph_resources.gbuffer_targets.push_back(graph.create_texture(desc, attachment_name.c_str()));
 		}
 
-		const std::shared_ptr<RenderTarget> depth_target = resolve_depth_target(view_context);
-		ASH_PROCESS_ERROR(depth_target != nullptr);
+		RenderGraphTextureDesc depth_desc{};
+		depth_desc.width = static_cast<uint16_t>(output_width);
+		depth_desc.height = static_cast<uint16_t>(output_height);
+		depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+		depth_desc.shader_resource = true;
+		depth_desc.unordered_access = false;
+		depth_desc.use_optimized_clear_value = true;
+		depth_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
+		graph_resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
 
-		PassDesc pass_desc{};
-		pass_desc.name = view_context.debug_name ? view_context.debug_name : "SceneOpaquePass";
-		pass_desc.allow_reorder_draws = true;
-		pass_desc.color_attachments.push_back({
-			view_context.output_target,
-			view_context.color_load_action,
-			view_context.color_clear_value
-		});
-		pass_desc.depth_attachment = {
-			depth_target,
-			view_context.depth_load_action,
-			view_context.depth_clear_value
-		};
+		RenderGraphTextureDesc lighting_desc{};
+		lighting_desc.width = static_cast<uint16_t>(output_width);
+		lighting_desc.height = static_cast<uint16_t>(output_height);
+		lighting_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+		lighting_desc.shader_resource = true;
+		lighting_desc.unordered_access = false;
+		lighting_desc.use_optimized_clear_value = true;
+		lighting_desc.optimized_clear_color = {};
+		graph_resources.lighting_accum = graph.create_texture(lighting_desc, "SceneDeferredLightingAccum");
 
-		Renderer::GraphicsPassContext pass_context{};
-		ASH_PROCESS_ERROR(m_renderer->begin_pass(pass_desc, pass_context));
-		ASH_PROCESS_ERROR(render_static_meshes_to_pass(
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneGBufferPass",
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				for (uint8_t index = 0; index < static_cast<uint8_t>(graph_resources.gbuffer_targets.size()); ++index)
+				{
+					pass.write_color(index, graph_resources.gbuffer_targets[index], RenderLoadAction::Clear, {});
+				}
+				pass.write_depth(graph_resources.depth, RenderLoadAction::Clear, view_context.depth_clear_value);
+			},
+			[this, &frame, &view_context](RenderGraphRasterContext& context) -> bool
+			{
+				return render_static_meshes_to_pass(frame, view_context, context, PassFamily::GBuffer);
+			}));
+
+		ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
+			graph,
 			frame,
-			view_context,
-			pass_context,
-			PassFamily::BasePass));
-		pass_context.end();
+			graph_resources,
+			output,
+			view_context));
+		ASH_PROCESS_ERROR(graph.execute());
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	template <typename PassContextT>
-	bool SceneRenderer::render_static_meshes_to_pass_body(
+	bool SceneRenderer::render_static_meshes_to_pass(
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
-		PassContextT& pass_context,
+		RenderGraphRasterContext& pass_context,
 		PassFamily pass_family)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -556,24 +521,6 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool SceneRenderer::render_static_meshes_to_pass(
-		const VisibleRenderFrame& frame,
-		const SceneRenderViewContext& view_context,
-		Renderer::GraphicsPassContext& pass_context,
-		PassFamily pass_family)
-	{
-		return render_static_meshes_to_pass_body(frame, view_context, pass_context, pass_family);
-	}
-
-	bool SceneRenderer::render_static_meshes_to_pass(
-		const VisibleRenderFrame& frame,
-		const SceneRenderViewContext& view_context,
-		RenderGraphRasterContext& pass_context,
-		PassFamily pass_family)
-	{
-		return render_static_meshes_to_pass_body(frame, view_context, pass_context, pass_family);
-	}
-
 	bool SceneRenderer::validate_view_context(const SceneRenderViewContext& view_context) const
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -583,12 +530,6 @@ namespace AshEngine
 		const uint32_t output_height = view_context.output_target->get_height();
 		ASH_PROCESS_ERROR(output_width > 0);
 		ASH_PROCESS_ERROR(output_height > 0);
-
-		if (view_context.depth_target)
-		{
-			ASH_PROCESS_ERROR(view_context.depth_target->get_width() == output_width);
-			ASH_PROCESS_ERROR(view_context.depth_target->get_height() == output_height);
-		}
 
 		if (view_context.has_viewport)
 		{
@@ -617,81 +558,9 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_END(bResult, false);
 		if (!bResult)
 		{
-			HLogError("SceneRenderer: invalid view context for '{}'.", view_context.debug_name ? view_context.debug_name : "SceneOpaquePass");
+			HLogError("SceneRenderer: invalid view context for '{}'.", view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
 		}
 		return bResult;
-	}
-
-	std::shared_ptr<RenderTarget> SceneRenderer::resolve_depth_target(const SceneRenderViewContext& view_context)
-	{
-		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderTarget>, depth_target, nullptr, nullptr);
-		ASH_PROCESS_ERROR(m_renderer);
-		ASH_PROCESS_ERROR(view_context.output_target != nullptr);
-		if (view_context.depth_target)
-		{
-			depth_target = view_context.depth_target;
-			break;
-		}
-
-		const uint32_t output_width = view_context.output_target->get_width();
-		const uint32_t output_height = view_context.output_target->get_height();
-		const RenderTextureFormat output_format = view_context.output_target->get_format();
-		const uint64_t frame_index = Application::get() ? Application::get()->get_frame_index() : 0u;
-		ASH_PROCESS_ERROR(output_width <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
-		ASH_PROCESS_ERROR(output_height <= static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()));
-
-		for (ScratchDepthEntry& entry : m_scratch_depth_targets)
-		{
-			if (entry.key.width == output_width &&
-				entry.key.height == output_height &&
-				entry.key.output_format == output_format &&
-				entry.depth_target != nullptr)
-			{
-				entry.last_used_frame = frame_index;
-				depth_target = entry.depth_target;
-				break;
-			}
-		}
-
-		if (depth_target)
-		{
-			break;
-		}
-
-		RenderTargetDesc depth_target_desc{};
-		depth_target_desc.width = static_cast<uint16_t>(output_width);
-		depth_target_desc.height = static_cast<uint16_t>(output_height);
-		depth_target_desc.format = RenderTextureFormat::D32_SFLOAT;
-		depth_target_desc.shader_resource = false;
-		depth_target_desc.unordered_access = false;
-		depth_target_desc.name = "SceneRendererScratchDepthTarget";
-		depth_target_desc.use_optimized_clear_value = true;
-		depth_target_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
-		depth_target = m_renderer->create_render_target(depth_target_desc);
-		ASH_PROCESS_ERROR(depth_target != nullptr);
-		if (m_scratch_depth_targets.size() >= k_max_scratch_depth_targets)
-		{
-			auto eviction_it = m_scratch_depth_targets.begin();
-			for (auto it = m_scratch_depth_targets.begin(); it != m_scratch_depth_targets.end(); ++it)
-			{
-				if (!it->depth_target)
-				{
-					eviction_it = it;
-					break;
-				}
-				if (it->last_used_frame < eviction_it->last_used_frame)
-				{
-					eviction_it = it;
-				}
-			}
-			m_scratch_depth_targets.erase(eviction_it);
-		}
-		m_scratch_depth_targets.push_back({
-			{ output_width, output_height, output_format },
-			depth_target,
-			frame_index
-		});
-		ASH_PROCESS_GUARD_RETURN_END(depth_target, nullptr);
 	}
 
 	void SceneRenderer::log_warning_once(const std::string& key, const std::string& message)

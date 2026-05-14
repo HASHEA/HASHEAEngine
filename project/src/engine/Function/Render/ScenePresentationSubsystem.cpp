@@ -743,7 +743,6 @@ namespace AshEngine
 				packet.overrides.clear_color.b,
 				packet.overrides.clear_color.a
 			};
-			view_context.depth_load_action = resolve_load_action(packet.overrides.depth_clear_mode, first_use_on_output);
 			view_context.depth_clear_value = { packet.overrides.clear_depth, 0u };
 
 			if (packet.overrides.rect_mode == SceneViewRectMode::PixelRect &&

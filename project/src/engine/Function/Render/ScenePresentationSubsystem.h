@@ -86,7 +86,6 @@ namespace AshEngine
 		SceneClearMode color_clear_mode = SceneClearMode::Default;
 		glm::vec4 clear_color{ 0.025f, 0.03f, 0.05f, 1.0f };
 
-		SceneClearMode depth_clear_mode = SceneClearMode::Default;
 		float clear_depth = 1.0f;
 
 		SceneViewRectMode rect_mode = SceneViewRectMode::FullOutput;

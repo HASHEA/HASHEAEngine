@@ -560,7 +560,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - `SceneDeferredLightingAccumPass` 会先用 fullscreen base/emissive pass 写入自发光；directional light 使用 fullscreen additive pass；point light 使用 sphere volume；spot light 使用 cone volume。
 - point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
 - `SceneDeferredCompositePass` 采样 lighting accumulation 并写回 `SceneRenderViewContext.output_target`。
-- 原 `Surface.StaticMesh.BasePass` 前向路径保留为 fallback；透明材质仍不进入当前 deferred opaque path。
+- `SceneRenderer` 不再保留旧 `Surface.StaticMesh.BasePass` 前向 fallback；`BasePass` 仍作为材质 / shader family 能力保留，透明材质仍不进入当前 deferred opaque path。
 
 材质边界保持不变：
 
@@ -1300,9 +1300,9 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`
 - `SceneRenderViewContext` 负责描述 per-view 提交状态：
   - `output_target`
-  - 可选 `depth_target`
   - 可选 `viewport` / `scissor`
-  - color / depth 的 load action 与 clear value
+  - final composite output 的 color load action 与 clear value
+  - graph transient scene depth 的 clear value
 - `SceneRenderer` 的主入口为 `SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)`
 - `SceneRenderer` 不再持有一个覆盖全场景的共享 `GraphicsProgram`
 - static mesh `Surface` 现在统一走 V2 `MaterialSystem + MaterialRenderProxy` 资源模板路径
@@ -1316,10 +1316,10 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 
 当前 depth 规则为：
 
-- 前向 fallback 路径中，如果调用方传入 `depth_target`，`SceneRenderer` 直接使用该 depth，生命周期和跨 pass 语义由调用方负责
-- 前向 fallback 路径中，如果调用方不传入 `depth_target`，`SceneRenderer` 会按输出目标尺寸和格式获取内部 scratch depth
-- deferred graph 路径使用 graph transient D32 depth，它会作为 GBuffer pass depth attachment，并在 lighting pass 以 shader resource + read-only depth attachment 形式同时可采样和硬件 depth test
-- scratch depth 只保证本次 scene pass 可用；如果后续 pass 需要继续读取或复用前向 fallback depth，必须由调用方显式提供 depth target
+- `SceneRenderer` 不再接收外部 `depth_target`，也不维护旧前向 fallback 的内部 scratch depth
+- deferred graph 路径为每个 view 创建 graph transient D32 depth，并使用 `SceneRenderViewContext.depth_clear_value` 清除；生命周期由 `RenderGraph` 管理
+- 该 depth 会作为 GBuffer pass depth attachment，并在 lighting pass 以 shader resource + read-only depth attachment 形式同时可采样和硬件 depth test
+- 如果后续阶段需要跨 pass 或跨 view 复用 scene depth，应通过明确的 RenderGraph resource import / export 设计接入，而不是恢复 `SceneRenderer` 应用层 fallback depth
 
 第一版多 view 仍有一个明确边界：
 
