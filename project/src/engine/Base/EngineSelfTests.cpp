@@ -751,6 +751,44 @@ namespace AshEngine
 			return ok || report_self_test_failure("RenderGraph access mapping", "graph access did not map to the expected RHI state");
 		}
 
+		auto test_render_graph_builder_records_raster_usage() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RenderGraphBuilderSelfTest");
+
+			RenderTargetDesc external_desc{};
+			external_desc.width = 64;
+			external_desc.height = 64;
+			external_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(external_desc, "Output");
+
+			RenderGraphTextureDesc transient_desc{};
+			transient_desc.width = 64;
+			transient_desc.height = 64;
+			transient_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			transient_desc.shader_resource = true;
+			RenderGraphTextureRef intermediate = graph.create_texture(transient_desc, "Intermediate");
+
+			bool setup_called = false;
+			const bool added = graph.add_raster_pass(
+				"SelfTestRasterPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					setup_called = true;
+					pass.read_texture(intermediate, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, output, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			bool ok = added && setup_called;
+			ok = ok && graph.get_texture_count_for_tests() == 2;
+			ok = ok && graph.get_pass_count_for_tests() == 1;
+			return ok || report_self_test_failure("RenderGraph builder raster usage", "builder did not record expected pass/resource usage");
+		}
+
 		auto test_render_scene_extracts_light_snapshot() -> bool
 		{
 			Scene scene = Scene::create("LightSnapshotSelfTest");
@@ -870,6 +908,7 @@ namespace AshEngine
 		all_passed = test_graphics_program_state_maps_deferred_light_volume_state() && all_passed;
 		all_passed = test_deferred_read_only_depth_attachment_state() && all_passed;
 		all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
+		all_passed = test_render_graph_builder_records_raster_usage() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;

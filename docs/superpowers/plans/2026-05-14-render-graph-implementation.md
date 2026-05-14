@@ -364,7 +364,7 @@ git commit -m "Add render graph core resource types"
 - Modify: `project/src/engine/Function/Render/RenderGraph.h`
 - Modify: `project/src/engine/Base/EngineSelfTests.cpp`
 
-- [ ] **Step 1: Write the failing builder self-test**
+- [x] **Step 1: Write the failing builder self-test**
 
 Add this function near the Task 1 RenderGraph test:
 
@@ -414,7 +414,7 @@ Call it from `run_engine_base_self_tests()` after `test_render_graph_access_maps
 all_passed = test_render_graph_builder_records_raster_usage() && all_passed;
 ```
 
-- [ ] **Step 2: Run build to verify the test fails**
+- [x] **Step 2: Run build to verify the test fails**
 
 Run:
 
@@ -424,7 +424,7 @@ Run:
 
 Expected: build fails because `RenderGraphBuilder`, `RenderGraphPassFlags`, and pass builder classes do not exist.
 
-- [ ] **Step 3: Add pass declarations**
+- [x] **Step 3: Add pass declarations**
 
 Create `project/src/engine/Function/Render/RenderGraphPass.h`:
 
@@ -531,7 +531,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 4: Implement pass builders**
+- [x] **Step 4: Implement pass builders**
 
 Create `project/src/engine/Function/Render/RenderGraphPass.cpp`:
 
@@ -618,7 +618,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 5: Add builder declarations**
+- [x] **Step 5: Add builder declarations**
 
 Create `project/src/engine/Function/Render/RenderGraphBuilder.h`:
 
@@ -685,7 +685,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 6: Implement builder recording**
+- [x] **Step 6: Implement builder recording**
 
 Create `project/src/engine/Function/Render/RenderGraphBuilder.cpp`:
 
@@ -831,7 +831,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 7: Update umbrella include**
+- [x] **Step 7: Update umbrella include**
 
 Modify `project/src/engine/Function/Render/RenderGraph.h`:
 
@@ -844,7 +844,7 @@ Modify `project/src/engine/Function/Render/RenderGraph.h`:
 #include "Function/Render/RenderGraphBuilder.h"
 ```
 
-- [ ] **Step 8: Run build and self-test**
+- [x] **Step 8: Run build and self-test**
 
 Run:
 
@@ -855,7 +855,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 
 Expected: build succeeds and self-test exits with code `0`.
 
-- [ ] **Step 9: Commit Task 2**
+- [x] **Step 9: Commit Task 2**
 
 ```powershell
 git add project/src/engine/Function/Render/RenderGraphPass.h project/src/engine/Function/Render/RenderGraphPass.cpp project/src/engine/Function/Render/RenderGraphBuilder.h project/src/engine/Function/Render/RenderGraphBuilder.cpp project/src/engine/Function/Render/RenderGraph.h project/src/engine/Base/EngineSelfTests.cpp
