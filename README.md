@@ -106,7 +106,7 @@ Scene 到渲染的主路径：
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass`，通过 graph transient GBuffer / depth / lighting accumulation 资源完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer，以避免当前 Sandbox/Sponza 基准场景的固定合批开销。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass`，通过 graph transient GBuffer / depth / lighting accumulation 资源完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer；该 instance buffer slot 在同一 frame 内按 view/pass submit 分配，避免 Editor 同时打开 Scene/Game view 时后提交的 view 覆盖前一个 view 的 object-to-clip 数据。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 

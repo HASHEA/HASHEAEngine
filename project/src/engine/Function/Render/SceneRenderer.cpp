@@ -202,6 +202,8 @@ namespace AshEngine
 	{
 		m_deferred_lighting_pass.shutdown();
 		m_instance_buffers.clear();
+		m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
+		m_next_instance_buffer_slot = 0;
 		m_logged_warning_keys.clear();
 		m_logged_material_usage_keys.clear();
 		m_renderer = nullptr;
@@ -210,6 +212,34 @@ namespace AshEngine
 	bool SceneRenderer::should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count)
 	{
 		return visible_static_mesh_draw_count > 1;
+	}
+
+	size_t SceneRenderer::reserve_instance_buffer_slot_range(size_t& next_buffer_slot, size_t slot_count)
+	{
+		const size_t buffer_slot_base = next_buffer_slot;
+		next_buffer_slot += slot_count;
+		return buffer_slot_base;
+	}
+
+	size_t SceneRenderer::resolve_instance_buffer_slot(size_t buffer_slot_base, size_t local_buffer_index)
+	{
+		return buffer_slot_base + local_buffer_index;
+	}
+
+	void SceneRenderer::begin_instance_buffer_frame(uint64_t frame_index)
+	{
+		if (m_instance_buffer_frame_index == frame_index)
+		{
+			return;
+		}
+
+		m_instance_buffer_frame_index = frame_index;
+		m_next_instance_buffer_slot = 0;
+	}
+
+	size_t SceneRenderer::reserve_frame_instance_buffer_slot_range(size_t slot_count)
+	{
+		return reserve_instance_buffer_slot_range(m_next_instance_buffer_slot, slot_count);
 	}
 
 	std::shared_ptr<VertexBuffer> SceneRenderer::ensure_instance_buffer(
@@ -263,6 +293,7 @@ namespace AshEngine
 		ASH_PROFILE_PLOT("Scene/Lights", static_cast<int64_t>(frame.lights.size()));
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
+		begin_instance_buffer_frame(frame.frame_index);
 
 		const uint32_t output_width = view_context.output_target->get_width();
 		const uint32_t output_height = view_context.output_target->get_height();
@@ -358,7 +389,9 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(validate_static_mesh_draw_asset(draw));
 				const SceneStaticMeshInstanceData instance_data =
 					make_instance_data(frame.view_projection * draw.world_transform);
-				std::shared_ptr<VertexBuffer> instance_buffer = ensure_instance_buffer(0, &instance_data, 1);
+				const size_t instance_buffer_slot = reserve_frame_instance_buffer_slot_range(1);
+				std::shared_ptr<VertexBuffer> instance_buffer =
+					ensure_instance_buffer(instance_buffer_slot, &instance_data, 1);
 				ASH_PROCESS_ERROR(instance_buffer != nullptr);
 
 				for (const ResolvedStaticMeshSection& section : draw.sections)
@@ -502,13 +535,17 @@ namespace AshEngine
 			}
 
 			ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(batches.size()));
+			const size_t instance_buffer_slot_base = reserve_frame_instance_buffer_slot_range(batches.size());
 			for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
 			{
 				StaticMeshDrawBatch& batch = batches[batch_index];
 				ASH_PROCESS_ERROR(batch.program && batch.vertex_buffer && batch.index_buffer && !batch.instances.empty());
 				const uint32_t instance_count = static_cast<uint32_t>(batch.instances.size());
 				std::shared_ptr<VertexBuffer> instance_buffer =
-					ensure_instance_buffer(batch_index, batch.instances.data(), instance_count);
+					ensure_instance_buffer(
+						resolve_instance_buffer_slot(instance_buffer_slot_base, batch_index),
+						batch.instances.data(),
+						instance_count);
 				ASH_PROCESS_ERROR(instance_buffer != nullptr);
 
 				GraphicsDrawDesc draw_desc{};

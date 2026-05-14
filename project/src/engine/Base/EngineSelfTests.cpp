@@ -619,6 +619,29 @@ namespace AshEngine
 				report_self_test_failure("SceneRenderer batch policy", "multiple static mesh draws should keep the instancing path available");
 		}
 
+		auto test_scene_renderer_instance_buffer_slots_are_isolated_between_view_submits() -> bool
+		{
+			size_t next_slot = 0;
+			const size_t scene_view_base = SceneRenderer::reserve_instance_buffer_slot_range(next_slot, 1);
+			const size_t game_view_base = SceneRenderer::reserve_instance_buffer_slot_range(next_slot, 1);
+			const size_t scene_view_slot = SceneRenderer::resolve_instance_buffer_slot(scene_view_base, 0);
+			const size_t game_view_slot = SceneRenderer::resolve_instance_buffer_slot(game_view_base, 0);
+			if (scene_view_slot == game_view_slot)
+			{
+				return report_self_test_failure("SceneRenderer instance buffer slots", "two view submits reused the same instance buffer slot");
+			}
+
+			const size_t batched_view_base = SceneRenderer::reserve_instance_buffer_slot_range(next_slot, 3);
+			if (SceneRenderer::resolve_instance_buffer_slot(batched_view_base, 0) != batched_view_base ||
+				SceneRenderer::resolve_instance_buffer_slot(batched_view_base, 1) != batched_view_base + 1 ||
+				SceneRenderer::resolve_instance_buffer_slot(batched_view_base, 2) != batched_view_base + 2)
+			{
+				return report_self_test_failure("SceneRenderer instance buffer slots", "batched view slots were not contiguous");
+			}
+
+			return true;
+		}
+
 		auto test_deferred_hq_gbuffer_layout_contract() -> bool
 		{
 			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
@@ -1102,6 +1125,7 @@ namespace AshEngine
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;
+		all_passed = test_scene_renderer_instance_buffer_slots_are_isolated_between_view_submits() && all_passed;
 		all_passed = test_deferred_hq_gbuffer_layout_contract() && all_passed;
 		all_passed = test_deferred_shading_model_ids_are_stable() && all_passed;
 		all_passed = test_material_asset_loads_declared_shading_model() && all_passed;

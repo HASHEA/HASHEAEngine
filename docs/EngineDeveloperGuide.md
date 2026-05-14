@@ -1272,7 +1272,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - 逻辑线程构建可见帧数据
 - 渲染线程只消费不可变的 render frame 并提交 draw
 - 静态网格主链路支持按 `program + render asset + section` 合批，并通过 per-instance vertex stream 传递 object-to-clip 矩阵
-- 当一个 view 只有 0 或 1 个可见静态网格 draw 时，`SceneRenderer` 会跳过 batch map 构建；单 draw 情况直接逐 section 提交，并复用一个单实例 vertex buffer，以降低 Sandbox/Sponza 这类单可见 mesh 帧的固定 CPU 开销
+- 当一个 view 只有 0 或 1 个可见静态网格 draw 时，`SceneRenderer` 会跳过 batch map 构建；单 draw 情况直接逐 section 提交，并复用一个单实例 vertex buffer，以降低 Sandbox/Sponza 这类单可见 mesh 帧的固定 CPU 开销；同一 frame 内的多 view/pass submit 会从 frame-local slot 游标申请独立 instance buffer slot，避免后提交 view 覆盖前一个 view 的 object-to-clip 数据
 
 当前明确不在第一阶段完成的系统包括：
 
@@ -1308,10 +1308,11 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - static mesh `Surface` 现在统一走 V2 `MaterialSystem + MaterialRenderProxy` 资源模板路径
 - `SceneRenderer` 当前只负责：
   - per-view render pass / RenderGraph deferred GBuffer / depth 目标声明
-  - 静态网格 batch 构建、单可见静态网格 direct section submit、instance buffer 更新和 draw 提交
+  - 静态网格 batch 构建、单可见静态网格 direct section submit、frame-local instance buffer slot 分配 / 更新和 draw 提交
   - 消费 section 的 `MaterialRenderProxy`
   - 第一版 deferred lighting accumulation / composite
 - 当前 `Surface.StaticMesh` shader family 仍使用 instanced vertex layout，所以单可见 draw fast path 不是非 instanced shader 路径；它只绕过 batch lookup / instance vector 构建，并继续绑定 slot 1 的单实例 buffer
+- instance buffer 资源池仍由 `SceneRenderer` 复用，但 buffer slot 分配在 `VisibleRenderFrame::frame_index` 变化时重置；同一 frame 内顺序提交多个 scene view 时，每个 view/pass 使用不同 slot range，避免 CPU 更新后一个 view 的实例矩阵时影响前一个 view 已记录的 draw
 - `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 deferred static mesh path 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
 
 当前 depth 规则为：
