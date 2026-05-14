@@ -1,0 +1,38 @@
+#pragma once
+
+#include "Function/Render/RenderGraphBuilder.h"
+#include "Graphics/RHIResource.h"
+#include <cstdint>
+#include <vector>
+
+namespace AshEngine
+{
+	struct RenderGraphTextureLifetime
+	{
+		bool used = false;
+		uint32_t first_pass = UINT32_MAX;
+		uint32_t last_pass = UINT32_MAX;
+	};
+
+	struct RenderGraphPassBarrierPlan
+	{
+		std::vector<RHI::AshBarrier> barriers{};
+		std::vector<RHI::AshResourceState> texture_states{};
+	};
+
+	struct RenderGraphCompileResult
+	{
+		std::vector<uint32_t> live_pass_indices{};
+		std::vector<RenderGraphTextureLifetime> texture_lifetimes{};
+		std::vector<RenderGraphPassBarrierPlan> pass_barriers{};
+	};
+
+	class RenderGraphCompiler
+	{
+	public:
+		static bool compile(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphPassNode>& passes,
+			RenderGraphCompileResult& out_result);
+	};
+}

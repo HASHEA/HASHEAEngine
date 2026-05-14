@@ -874,7 +874,7 @@ git commit -m "Add render graph builder model"
 - Modify: `project/src/engine/Function/Render/RenderGraph.h`
 - Modify: `project/src/engine/Base/EngineSelfTests.cpp`
 
-- [ ] **Step 1: Write failing compiler self-tests**
+- [x] **Step 1: Write failing compiler self-tests**
 
 Add this function in `EngineSelfTests.cpp`:
 
@@ -951,7 +951,7 @@ Call it after the builder self-test:
 all_passed = test_render_graph_compiler_culls_dead_passes_and_keeps_roots() && all_passed;
 ```
 
-- [ ] **Step 2: Run build to verify failure**
+- [x] **Step 2: Run build to verify failure**
 
 Run:
 
@@ -961,7 +961,7 @@ Run:
 
 Expected: build fails because `RenderGraphCompileResult` and `compile_for_tests()` are undefined.
 
-- [ ] **Step 3: Add compiler declarations**
+- [x] **Step 3: Add compiler declarations**
 
 Create `project/src/engine/Function/Render/RenderGraphCompiler.h`:
 
@@ -1005,7 +1005,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 4: Implement culling and lifetimes**
+- [x] **Step 4: Implement culling and lifetimes**
 
 Create `project/src/engine/Function/Render/RenderGraphCompiler.cpp`:
 
@@ -1191,7 +1191,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 5: Expose compile_for_tests and update includes**
+- [x] **Step 5: Expose compile_for_tests and update includes**
 
 Modify `project/src/engine/Function/Render/RenderGraphBuilder.h`:
 
@@ -1226,7 +1226,7 @@ Modify `project/src/engine/Function/Render/RenderGraph.h`:
 #include "Function/Render/RenderGraphCompiler.h"
 ```
 
-- [ ] **Step 6: Run build and self-test**
+- [x] **Step 6: Run build and self-test**
 
 Run:
 
@@ -1237,7 +1237,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 
 Expected: build succeeds and self-test exits with code `0`.
 
-- [ ] **Step 7: Commit Task 3**
+- [x] **Step 7: Commit Task 3**
 
 ```powershell
 git add project/src/engine/Function/Render/RenderGraphCompiler.h project/src/engine/Function/Render/RenderGraphCompiler.cpp project/src/engine/Function/Render/RenderGraphBuilder.h project/src/engine/Function/Render/RenderGraphBuilder.cpp project/src/engine/Function/Render/RenderGraph.h project/src/engine/Base/EngineSelfTests.cpp

@@ -501,7 +501,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 统计 frame stats
 - 在 `end_frame()` 时渲染 UI
 
-Render Graph v1 正在作为 `Function/Render` 层的帧级 orchestration 层接入，位于 `Renderer` / `RenderDevice` 之上，目标是逐步接管 scene pass 声明、资源访问、pass culling、生命周期和 pass-boundary barrier plan。当前已经建立 graph texture handle、texture desc、`RenderGraphAccess` 到 `RHI::AshResourceState` 的基础映射，以及 headless builder/pass usage 记录模型；后续 graph executor 仍必须通过现有 `Renderer` / `RenderDevice` 路径提交，不能把 Vulkan / DX12 后端细节暴露到 Editor 或上层 scene 代码。
+Render Graph v1 正在作为 `Function/Render` 层的帧级 orchestration 层接入，位于 `Renderer` / `RenderDevice` 之上，目标是逐步接管 scene pass 声明、资源访问、pass culling、生命周期和 pass-boundary barrier plan。当前已经建立 graph texture handle、texture desc、`RenderGraphAccess` 到 `RHI::AshResourceState` 的基础映射、headless builder/pass usage 记录模型，以及 compiler pass culling / texture lifetime / per-pass texture-state plan；后续 graph executor 仍必须通过现有 `Renderer` / `RenderDevice` 路径提交，不能把 Vulkan / DX12 后端细节暴露到 Editor 或上层 scene 代码。
 
 ### 6.4 当前 pass / dispatch 规则
 

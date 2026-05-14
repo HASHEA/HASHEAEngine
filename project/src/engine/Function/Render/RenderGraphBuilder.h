@@ -7,6 +7,8 @@
 
 namespace AshEngine
 {
+	struct RenderGraphCompileResult;
+
 	struct RenderGraphTextureNode
 	{
 		std::string name{};
@@ -43,6 +45,7 @@ namespace AshEngine
 			const std::function<bool(RenderGraphComputeContext&)>& execute);
 
 		bool execute();
+		bool compile_for_tests(RenderGraphCompileResult& out_result) const;
 
 		size_t get_texture_count_for_tests() const;
 		size_t get_pass_count_for_tests() const;

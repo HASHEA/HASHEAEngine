@@ -789,6 +789,85 @@ namespace AshEngine
 			return ok || report_self_test_failure("RenderGraph builder raster usage", "builder did not record expected pass/resource usage");
 		}
 
+		auto test_render_graph_compiler_culls_dead_passes_and_keeps_roots() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RenderGraphCompilerSelfTest");
+
+			RenderTargetDesc output_desc{};
+			output_desc.width = 64;
+			output_desc.height = 64;
+			output_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(output_desc, "Output");
+
+			RenderGraphTextureDesc temp_desc{};
+			temp_desc.width = 64;
+			temp_desc.height = 64;
+			temp_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			temp_desc.shader_resource = true;
+			RenderGraphTextureRef live_temp = graph.create_texture(temp_desc, "LiveTemp");
+			RenderGraphTextureRef dead_temp = graph.create_texture(temp_desc, "DeadTemp");
+
+			graph.add_raster_pass(
+				"LiveProducer",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.write_color(0, live_temp, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"LiveConsumer",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(live_temp, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, output, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"DeadProducer",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.write_color(0, dead_temp, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_compute_pass(
+				"SideEffectCompute",
+				RenderGraphPassFlags::NeverCull,
+				[](RenderGraphComputePassBuilder&)
+				{
+				},
+				[](RenderGraphComputeContext&)
+				{
+					return true;
+				});
+
+			RenderGraphCompileResult result{};
+			const bool compiled = graph.compile_for_tests(result);
+			bool ok = compiled;
+			ok = ok && result.live_pass_indices.size() == 3;
+			ok = ok && result.live_pass_indices[0] == 0;
+			ok = ok && result.live_pass_indices[1] == 1;
+			ok = ok && result.live_pass_indices[2] == 3;
+			ok = ok && result.texture_lifetimes[live_temp.index].first_pass == 0;
+			ok = ok && result.texture_lifetimes[live_temp.index].last_pass == 1;
+			ok = ok && result.texture_lifetimes[dead_temp.index].used == false;
+			return ok || report_self_test_failure("RenderGraph compiler culling", "compiler did not cull dead passes or preserve roots");
+		}
+
 		auto test_render_scene_extracts_light_snapshot() -> bool
 		{
 			Scene scene = Scene::create("LightSnapshotSelfTest");
@@ -909,6 +988,7 @@ namespace AshEngine
 		all_passed = test_deferred_read_only_depth_attachment_state() && all_passed;
 		all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
 		all_passed = test_render_graph_builder_records_raster_usage() && all_passed;
+		all_passed = test_render_graph_compiler_culls_dead_passes_and_keeps_roots() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;

@@ -4,3 +4,4 @@
 #include "Function/Render/RenderGraphResource.h"
 #include "Function/Render/RenderGraphPass.h"
 #include "Function/Render/RenderGraphBuilder.h"
+#include "Function/Render/RenderGraphCompiler.h"

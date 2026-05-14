@@ -1,4 +1,5 @@
 #include "Function/Render/RenderGraphBuilder.h"
+#include "Function/Render/RenderGraphCompiler.h"
 #include "Base/hlog.h"
 #include <utility>
 
@@ -116,6 +117,11 @@ namespace AshEngine
 	{
 		HLogError("RenderGraph '{}': execute called before compiler/executor implementation is linked.", m_name);
 		return false;
+	}
+
+	bool RenderGraphBuilder::compile_for_tests(RenderGraphCompileResult& out_result) const
+	{
+		return RenderGraphCompiler::compile(m_textures, m_passes, out_result);
 	}
 
 	size_t RenderGraphBuilder::get_texture_count_for_tests() const
