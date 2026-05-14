@@ -1255,7 +1255,7 @@ git commit -m "Add render graph compiler culling"
 - Modify: `project/src/engine/Function/Render/Renderer.cpp`
 - Modify: `project/src/engine/Base/EngineSelfTests.cpp`
 
-- [ ] **Step 1: Write the failing final-state self-test**
+- [x] **Step 1: Write the failing final-state self-test**
 
 Add this function in `EngineSelfTests.cpp`:
 
@@ -1280,7 +1280,7 @@ Call it after `test_render_graph_compiler_culls_dead_passes_and_keeps_roots()`:
 all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 ```
 
-- [ ] **Step 2: Run build to verify failure**
+- [x] **Step 2: Run build to verify failure**
 
 Run:
 
@@ -1290,7 +1290,7 @@ Run:
 
 Expected: build fails because `PassColorAttachment::final_state` and `PassDepthAttachment::final_state` do not exist.
 
-- [ ] **Step 3: Add final state fields**
+- [x] **Step 3: Add final state fields**
 
 Modify `project/src/engine/Function/Render/RenderDevice.h`:
 
@@ -1313,7 +1313,7 @@ struct PassDepthAttachment
 };
 ```
 
-- [ ] **Step 4: Use final state in RenderDevice begin_pass**
+- [x] **Step 4: Use final state in RenderDevice begin_pass**
 
 In `RenderDevice::begin_pass()` color attachment setup, replace the final-state argument with:
 
@@ -1338,7 +1338,7 @@ const RHI::AshResourceState depth_final_state =
 render_pass_creation.set_depth_stencil_texture(depth_texture->get_format(), depth_final_state);
 ```
 
-- [ ] **Step 5: Add graph barrier submit helpers**
+- [x] **Step 5: Add graph barrier submit helpers**
 
 Modify `project/src/engine/Function/Render/RenderDevice.h` private section:
 
@@ -1375,7 +1375,7 @@ bool Renderer::submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>
 
 Add `friend class RenderGraphBuilder;` and `friend class RenderGraphExecutor;` to `Renderer` if the helper remains non-public. Prefer friend access over making raw barrier submission a general public API.
 
-- [ ] **Step 6: Run build and self-test**
+- [x] **Step 6: Run build and self-test**
 
 Run:
 
@@ -1386,7 +1386,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 
 Expected: build succeeds and self-test exits with code `0`.
 
-- [ ] **Step 7: Commit Task 4**
+- [x] **Step 7: Commit Task 4**
 
 ```powershell
 git add project/src/engine/Function/Render/RenderDevice.h project/src/engine/Function/Render/RenderDevice.cpp project/src/engine/Function/Render/Renderer.h project/src/engine/Function/Render/Renderer.cpp project/src/engine/Base/EngineSelfTests.cpp

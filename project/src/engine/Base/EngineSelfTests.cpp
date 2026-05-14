@@ -868,6 +868,19 @@ namespace AshEngine
 			return ok || report_self_test_failure("RenderGraph compiler culling", "compiler did not cull dead passes or preserve roots");
 		}
 
+		auto test_render_pass_attachment_final_state_defaults_to_unknown() -> bool
+		{
+			PassColorAttachment color{};
+			PassDepthAttachment depth{};
+			bool ok = color.final_state == RHI::AshResourceState::Unknown;
+			ok = ok && depth.final_state == RHI::AshResourceState::Unknown;
+			color.final_state = RHI::AshResourceState::SRVGraphics;
+			depth.final_state = RHI::AshResourceState::DSVRead | RHI::AshResourceState::SRVGraphics;
+			ok = ok && color.final_state == RHI::AshResourceState::SRVGraphics;
+			ok = ok && depth.final_state == (RHI::AshResourceState::DSVRead | RHI::AshResourceState::SRVGraphics);
+			return ok || report_self_test_failure("RenderGraph attachment final state", "attachment final states are not configurable");
+		}
+
 		auto test_render_scene_extracts_light_snapshot() -> bool
 		{
 			Scene scene = Scene::create("LightSnapshotSelfTest");
@@ -989,6 +1002,7 @@ namespace AshEngine
 		all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
 		all_passed = test_render_graph_builder_records_raster_usage() && all_passed;
 		all_passed = test_render_graph_compiler_culls_dead_passes_and_keeps_roots() && all_passed;
+		all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;

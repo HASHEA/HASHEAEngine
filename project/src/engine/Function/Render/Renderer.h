@@ -128,6 +128,7 @@ namespace AshEngine
 		const RendererFrameStats& get_frame_stats() const;
 
 	private:
+		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		void end_active_pass(GraphicsPassContext* pass_context);
 
 	private:
@@ -144,5 +145,8 @@ namespace AshEngine
 		uint32_t m_frame_time_history_count = 0;
 		uint32_t m_frame_time_history_head = 0;
 		double m_frame_time_history_sum_ms = 0.0;
+
+		friend class RenderGraphBuilder;
+		friend class RenderGraphExecutor;
 	};
 }

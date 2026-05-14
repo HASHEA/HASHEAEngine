@@ -3548,7 +3548,11 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(false);
 			}
 
-			render_pass_creation.add_attachment(texture->get_format(), attachment.render_target->m_impl->get_final_resource_state(), to_rhi_load_action(attachment.load_action));
+			const RHI::AshResourceState color_final_state =
+				attachment.final_state != RHI::AshResourceState::Unknown ?
+				attachment.final_state :
+				attachment.render_target->m_impl->get_final_resource_state();
+			render_pass_creation.add_attachment(texture->get_format(), color_final_state, to_rhi_load_action(attachment.load_action));
 			framebuffer_creation.colorAttachments.push_back(texture);
 			signature.color_formats[signature.color_count++] = texture->get_format();
 		}
@@ -3570,7 +3574,11 @@ namespace AshEngine
 			const RHI::AshResourceState depth_attachment_state = get_depth_attachment_resource_state(
 				desc.depth_attachment.read_only,
 				desc.depth_attachment.render_target->m_impl->shader_resource);
-			render_pass_creation.set_depth_stencil_texture(depth_texture->get_format(), depth_attachment_state);
+			const RHI::AshResourceState depth_final_state =
+				desc.depth_attachment.final_state != RHI::AshResourceState::Unknown ?
+				desc.depth_attachment.final_state :
+				depth_attachment_state;
+			render_pass_creation.set_depth_stencil_texture(depth_texture->get_format(), depth_final_state);
 			render_pass_creation.set_depth_stencil_operations(
 				to_rhi_load_action(desc.depth_attachment.load_action),
 				to_rhi_load_action(desc.depth_attachment.load_action));
@@ -3835,6 +3843,14 @@ namespace AshEngine
 	}
 
 	bool RenderDevice::submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
+		bResult = submit_rhi_resource_barriers(m_impl->current_command_buffer, barriers);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);

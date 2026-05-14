@@ -503,6 +503,7 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget> render_target = nullptr;
 		RenderLoadAction load_action = RenderLoadAction::Clear;
 		RenderColorValue clear_color{};
+		RHI::AshResourceState final_state = RHI::AshResourceState::Unknown;
 	};
 
 	struct PassDepthAttachment
@@ -511,6 +512,7 @@ namespace AshEngine
 		RenderLoadAction load_action = RenderLoadAction::Clear;
 		RenderDepthStencilValue clear_value{};
 		bool read_only = false;
+		RHI::AshResourceState final_state = RHI::AshResourceState::Unknown;
 	};
 
 	struct PassDesc
@@ -585,6 +587,7 @@ namespace AshEngine
 		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers);
 		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
+		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool transition_graphics_program_resources(GraphicsProgram* program);
 		bool transition_compute_program_resources(ComputeProgram* program);
 		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);

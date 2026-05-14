@@ -325,6 +325,11 @@ namespace AshEngine
 		return m_last_completed_frame_stats;
 	}
 
+	bool Renderer::submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers)
+	{
+		return m_render_device && m_render_device->submit_graph_resource_barriers(barriers);
+	}
+
 	void Renderer::update_frame_timing_history(double frame_time_ms)
 	{
 		if (m_frame_time_history_count < static_cast<uint32_t>(m_frame_time_history_ms.size()))
