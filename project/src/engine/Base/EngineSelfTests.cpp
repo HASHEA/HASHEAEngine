@@ -10,6 +10,7 @@
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/RenderDevice.h"
+#include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/TextureAsset.h"
@@ -729,6 +730,27 @@ namespace AshEngine
 				report_self_test_failure("Deferred read-only depth attachment", "read-only depth did not preserve DSV read plus shader read state");
 		}
 
+		auto test_render_graph_access_maps_to_rhi_states() -> bool
+		{
+			bool ok = true;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::GraphicsSRV) == RHI::AshResourceState::SRVGraphics;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::ComputeSRV) == RHI::AshResourceState::SRVCompute;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::GraphicsUAV) == RHI::AshResourceState::UAVGraphics;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::ComputeUAV) == RHI::AshResourceState::UAVCompute;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::ColorAttachmentWrite) == RHI::AshResourceState::RTV;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::DepthStencilWrite) == RHI::AshResourceState::DSVWrite;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::DepthStencilRead) == RHI::AshResourceState::DSVRead;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::CopySrc) == RHI::AshResourceState::CopySrc;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::CopyDst) == RHI::AshResourceState::CopyDst;
+			ok = ok && render_graph_access_to_rhi_state(RenderGraphAccess::Present) == RHI::AshResourceState::Present;
+
+			const RHI::AshResourceState depth_sample_state =
+				render_graph_depth_read_state(RenderGraphDepthReadMode::DepthTestAndShaderResource);
+			ok = ok && depth_sample_state == (RHI::AshResourceState::DSVRead | RHI::AshResourceState::SRVGraphics);
+
+			return ok || report_self_test_failure("RenderGraph access mapping", "graph access did not map to the expected RHI state");
+		}
+
 		auto test_render_scene_extracts_light_snapshot() -> bool
 		{
 			Scene scene = Scene::create("LightSnapshotSelfTest");
@@ -847,6 +869,7 @@ namespace AshEngine
 		all_passed = test_material_asset_loads_declared_shading_model() && all_passed;
 		all_passed = test_graphics_program_state_maps_deferred_light_volume_state() && all_passed;
 		all_passed = test_deferred_read_only_depth_attachment_state() && all_passed;
+		all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;

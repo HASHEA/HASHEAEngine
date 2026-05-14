@@ -46,7 +46,7 @@
 - Create: `project/src/engine/Function/Render/RenderGraph.h`
 - Modify: `project/src/engine/Base/EngineSelfTests.cpp`
 
-- [ ] **Step 1: Write the failing access-mapping self-test**
+- [x] **Step 1: Write the failing access-mapping self-test**
 
 Add this include near the other render includes in `project/src/engine/Base/EngineSelfTests.cpp`:
 
@@ -85,7 +85,7 @@ Call it from `run_engine_base_self_tests()` after `test_deferred_read_only_depth
 all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
 ```
 
-- [ ] **Step 2: Run the build to verify the test fails before implementation**
+- [x] **Step 2: Run the build to verify the test fails before implementation**
 
 Run:
 
@@ -95,7 +95,7 @@ Run:
 
 Expected: build fails because `Function/Render/RenderGraph.h` or `RenderGraphAccess` is not defined.
 
-- [ ] **Step 3: Add forward handles**
+- [x] **Step 3: Add forward handles**
 
 Create `project/src/engine/Function/Render/RenderGraphFwd.h`:
 
@@ -140,7 +140,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 4: Add resource descriptors and state mapping declarations**
+- [x] **Step 4: Add resource descriptors and state mapping declarations**
 
 Create `project/src/engine/Function/Render/RenderGraphResource.h`:
 
@@ -201,7 +201,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 5: Implement the mapping**
+- [x] **Step 5: Implement the mapping**
 
 Create `project/src/engine/Function/Render/RenderGraphResource.cpp`:
 
@@ -323,7 +323,7 @@ namespace AshEngine
 }
 ```
 
-- [ ] **Step 6: Add the umbrella include**
+- [x] **Step 6: Add the umbrella include**
 
 Create `project/src/engine/Function/Render/RenderGraph.h`:
 
@@ -334,7 +334,7 @@ Create `project/src/engine/Function/Render/RenderGraph.h`:
 #include "Function/Render/RenderGraphResource.h"
 ```
 
-- [ ] **Step 7: Run build and self-test**
+- [x] **Step 7: Run build and self-test**
 
 Run:
 
@@ -345,7 +345,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 
 Expected: build succeeds and self-test exits with code `0`.
 
-- [ ] **Step 8: Commit Task 1**
+- [x] **Step 8: Commit Task 1**
 
 ```powershell
 git add project/src/engine/Function/Render/RenderGraphFwd.h project/src/engine/Function/Render/RenderGraphResource.h project/src/engine/Function/Render/RenderGraphResource.cpp project/src/engine/Function/Render/RenderGraph.h project/src/engine/Base/EngineSelfTests.cpp
