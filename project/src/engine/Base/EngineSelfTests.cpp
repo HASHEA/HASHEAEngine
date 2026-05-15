@@ -8,6 +8,7 @@
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Render/GBufferLayout.h"
+#include "Function/Render/DebugDrawService.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderGraph.h"
@@ -722,6 +723,7 @@ namespace AshEngine
 		{
 			GraphicsProgramState state{};
 			state.cull_mode = RenderCullMode::None;
+			state.primitive_topology = RenderPrimitiveTopology::LineList;
 			state.depth_test = true;
 			state.depth_write = false;
 			state.depth_compare = RenderCompareOp::GreaterEqual;
@@ -738,8 +740,9 @@ namespace AshEngine
 				pipeline.blend_state.blend_states[0].blend_enabled == 1 &&
 				pipeline.blend_state.blend_states[0].source_color == RHI::ASH_BLEND_FACTOR_ONE &&
 				pipeline.blend_state.blend_states[0].destination_color == RHI::ASH_BLEND_FACTOR_ONE;
-			return (depth_ok && blend_ok) ||
-				report_self_test_failure("Deferred light volume render state", "depth compare or additive blend mapping is invalid");
+			const bool topology_ok = pipeline.primitiveTopology == RHI::ASH_PRIMITIVE_TOPOLOGY_LINE_LIST;
+			return (depth_ok && blend_ok && topology_ok) ||
+				report_self_test_failure("Deferred light volume render state", "depth compare, additive blend, or line-list topology mapping is invalid");
 		}
 
 		auto test_deferred_read_only_depth_attachment_state() -> bool
@@ -1060,6 +1063,71 @@ namespace AshEngine
 				report_self_test_failure("RenderScene light snapshot", "light data was not extracted with stable transform data");
 		}
 
+		auto test_debug_draw_service_records_and_clears_frame_lines() -> bool
+		{
+			DebugDrawService debug_draw{};
+			debug_draw.draw_line(
+				glm::vec3(0.0f, 0.0f, 0.0f),
+				glm::vec3(1.0f, 0.0f, 0.0f),
+				glm::vec4(1.0f, 0.0f, 0.0f, 1.0f),
+				2.0f);
+
+			std::vector<DebugDrawLine> lines{};
+			debug_draw.snapshot_lines(lines);
+			if (lines.size() != 1u ||
+				lines.front().start != glm::vec3(0.0f, 0.0f, 0.0f) ||
+				lines.front().end != glm::vec3(1.0f, 0.0f, 0.0f) ||
+				lines.front().color != glm::vec4(1.0f, 0.0f, 0.0f, 1.0f) ||
+				lines.front().thickness != 2.0f)
+			{
+				return report_self_test_failure("DebugDrawService frame lines", "draw_line did not preserve submitted line data");
+			}
+
+			debug_draw.clear_frame();
+			lines.clear();
+			debug_draw.snapshot_lines(lines);
+			return lines.empty() ||
+				report_self_test_failure("DebugDrawService frame lines", "clear_frame did not remove frame-local lines");
+		}
+
+		auto test_debug_draw_service_expands_shapes_to_line_list() -> bool
+		{
+			DebugDrawService debug_draw{};
+			debug_draw.draw_box(
+				glm::vec3(-1.0f, -2.0f, -3.0f),
+				glm::vec3(1.0f, 2.0f, 3.0f),
+				glm::vec4(0.0f, 1.0f, 0.0f, 1.0f));
+			debug_draw.draw_circle(
+				glm::vec3(0.0f),
+				glm::vec3(0.0f, 1.0f, 0.0f),
+				2.0f,
+				glm::vec4(0.0f, 0.0f, 1.0f, 1.0f),
+				8);
+			debug_draw.draw_cone(
+				glm::vec3(0.0f),
+				glm::vec3(0.0f, 0.0f, 1.0f),
+				3.0f,
+				30.0f,
+				glm::vec4(1.0f, 1.0f, 0.0f, 1.0f),
+				8);
+
+			std::vector<DebugDrawLine> lines{};
+			debug_draw.snapshot_lines(lines);
+			constexpr size_t expected_box_lines = 12u;
+			constexpr size_t expected_circle_lines = 8u;
+			constexpr size_t expected_cone_lines = 16u;
+			if (lines.size() != expected_box_lines + expected_circle_lines + expected_cone_lines)
+			{
+				return report_self_test_failure("DebugDrawService shape expansion", "shape helpers did not expand to the expected line count");
+			}
+
+			const bool box_has_first_edge =
+				lines.front().start == glm::vec3(-1.0f, -2.0f, -3.0f) &&
+				lines.front().end == glm::vec3(1.0f, -2.0f, -3.0f);
+			return box_has_first_edge ||
+				report_self_test_failure("DebugDrawService shape expansion", "box edges were not emitted in stable min/max order");
+		}
+
 		auto write_scene_query_bounds_model(const std::filesystem::path& root_dir) -> std::filesystem::path
 		{
 			const std::filesystem::path bin_path = root_dir / "scene_query_bounds_box.bin";
@@ -1354,6 +1422,8 @@ namespace AshEngine
 		all_passed = test_scene_deferred_graph_resources_describe_live_pass_chain() && all_passed;
 		all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
+		all_passed = test_debug_draw_service_records_and_clears_frame_lines() && all_passed;
+		all_passed = test_debug_draw_service_expands_shapes_to_line_list() && all_passed;
 		all_passed = test_scene_view_builds_from_override_matrices() && all_passed;
 		all_passed = test_scene_query_bounds_ray_and_picking() && all_passed;
 		all_passed = test_scene_instantiates_asset_id_with_world_transform() && all_passed;

@@ -180,7 +180,7 @@ namespace AshEngine
 			HLogError("Failed to create Renderer.");
 			ASH_PROCESS_ERROR(false);
 		}
-		if (!sceneRenderer.initialize(renderer))
+		if (!sceneRenderer.initialize(renderer, &debugDrawService))
 		{
 			HLogError("Failed to initialize SceneRenderer.");
 			ASH_PROCESS_ERROR(false);
@@ -231,6 +231,7 @@ namespace AshEngine
 		shutdown_threading();
 		scenePresentation.shutdown();
 		sceneRenderer.shutdown();
+		debugDrawService.clear_frame();
 		renderAssetManager.shutdown();
 		delete renderer;
 		renderer = nullptr;
@@ -679,6 +680,7 @@ namespace AshEngine
 			_run_scene_presentation_submit_phase();
 			_on_gui();
 			renderer->end_frame();
+			debugDrawService.clear_frame();
 		}
 	}
 	auto Application::_run_scene_presentation_update_phase() -> void

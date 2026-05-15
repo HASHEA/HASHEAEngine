@@ -5,6 +5,7 @@
 #include "Base/hthreading.h"
 #include "Function/Gui/UICommon.h"
 #include "Graphics/RHIBackend.h"
+#include "Function/Render/DebugDrawService.h"
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/ScenePresentationSubsystem.h"
 #include "Function/Render/SceneRenderer.h"
@@ -88,6 +89,10 @@ public:
 		{
 			return get() ? &get()->scenePresentation : nullptr;
 		}
+		inline static auto get_debug_draw_service()
+		{
+			return get() ? &get()->debugDrawService : nullptr;
+		}
 		inline static auto& get_input()
 		{
 			return get()->_get_thread_input_state();
@@ -170,6 +175,7 @@ public:
 		RenderAssetManager		renderAssetManager{};
 		SceneRenderer			sceneRenderer{};
 		ScenePresentationSubsystem scenePresentation{};
+		DebugDrawService		debugDrawService{};
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
 		InputState				logicInputState{};

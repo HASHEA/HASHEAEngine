@@ -18,16 +18,12 @@
 | Mesh 本地 bounds | `Scene::try_get_mesh_local_bounds()` | 需要 `AssetDatabase`，当前只按 `MeshComponent` 查本地 bounds |
 | Prefab-style 资源实例化 | `Scene::instantiate_ashasset()` / `instantiate_asset()` | `.ashasset` 已可实例化到 Scene |
 | 组件基础反射 | `get_scene_component_descriptor()` | Inspector 基础字段展示已可复用 |
+| Debug draw overlay | `Application::get_debug_draw_service()` / `DebugDrawService` | Engine 侧 frame-local 线框提交与 SceneRenderer overlay pass 已接入 |
 
 ### 仍需补齐
 
 | 优先级 | 缺口 | 当前症状 | 推荐处理 |
 |--------|------|----------|----------|
-| P0 | Scene view matrix override | Editor camera 目前需要 clone preview scene 并创建临时 camera entity | 在 `SceneCameraSelector` 中加入显式 view/projection override |
-| P0 | Scene query / world bounds | F 聚焦只能用 entity position，无法按几何 bounds 调整距离 | 新增 Engine 侧 `SceneWorldBounds` 查询 |
-| P1 | Screen ray + CPU picking | Viewport 点击选择、Gizmo hit test、资源拖入放置缺公共算法 | 新增 `SceneRay`、`screen_to_world_ray()`、`ray_cast_scene()` |
-| P1 | Prefab placement facade | 已能按 path 实例化，但缺 `AssetId + parent + world placement` 高层入口 | 新增 `SceneInstantiationDesc` 或等价重载 |
-| P2 | Debug draw overlay | 原生 3D gizmo、bounds 可视化、调试线框缺 overlay pass | 后续接 RenderGraph/SceneRenderer overlay |
 | P2 | GPU ID buffer picking | CPU AABB picking 精度有限 | 后续作为 GPU picking 升级，不阻塞第一阶段 |
 
 ---
@@ -36,27 +32,28 @@
 
 ### 当前状态
 
-`ScenePresentationSubsystem` 目前的相机选择只有：
+`ScenePresentationSubsystem` 的相机选择已支持：
 
 ```cpp
 enum class SceneCameraSource : uint8_t
 {
     PrimaryCamera = 0,
-    EntityId
+    EntityId,
+    Override
 };
 ```
 
-`SceneViewOverrides` 已存在，但只负责 clear、pixel rect、show flags，不包含 camera/view/projection。
+`SceneCameraSelector::override_view` 已承载显式 view/projection/camera position；`SceneViewOverrides` 继续只负责 clear、pixel rect、show flags。
 
-Editor 目前通过 `EditorViewportCameraService` 复制 active scene 到 preview scene，再创建一个临时 `EditorCamera` entity，并以 `SceneCameraSource::EntityId` 绑定。这是可运行的临时方案，但长期问题明显：
+Editor 侧如果仍在通过 `EditorViewportCameraService` 复制 active scene 并创建临时 `EditorCamera` entity，那已经属于 Editor 接入迁移任务，不再是 Engine 接口缺口。长期建议仍然是让 Editor camera 直接走 `SceneCameraSource::Override`，避免：
 
 - 每次 scene change 都要 clone scene。
 - Editor camera 被表达成 scene entity，污染了 scene presentation 的语义。
 - 后续多 Scene viewport、多 editor camera、多 preview mode 时成本会继续放大。
 
-### 推荐接口
+### 已落地接口
 
-把显式矩阵作为 camera selector 的一种来源，而不是额外做 `SceneViewBinding` 命令式 setter。
+显式矩阵作为 camera selector 的一种来源，而不是额外做 `SceneViewBinding` 命令式 setter。
 
 ```cpp
 enum class SceneCameraSource : uint8_t
@@ -82,7 +79,7 @@ struct SceneCameraSelector
 };
 ```
 
-实现侧新增公共 helper：
+实现侧公共 helper：
 
 ```cpp
 bool build_scene_view_from_matrices(
@@ -111,11 +108,11 @@ Engine 已有：
 - `Scene::try_get_mesh_local_bounds(AssetDatabase&, const MeshComponent&, SceneMeshBounds&)`
 - Render 侧 `PrimitiveBounds` 的 world AABB 计算逻辑
 
-缺口是：这些能力没有形成 Editor 可直接调用的 Scene 查询 API。
+这些能力已形成 Editor 可直接调用的 Scene 查询 API。
 
-### 推荐接口
+### 已落地接口
 
-新增 Engine 侧 scene query API，建议放在：
+Engine 侧 scene query API 位于：
 
 ```text
 project/src/engine/Function/Scene/SceneQuery.h
@@ -157,9 +154,9 @@ bool get_entity_subtree_world_bounds(
 
 ## P1-1: Screen Ray 与 CPU Picking
 
-### 推荐接口
+### 已落地接口
 
-继续放在 `SceneQuery.*`：
+接口位于 `SceneQuery.*`：
 
 ```cpp
 struct SceneRay
@@ -215,14 +212,14 @@ GPU ID buffer picking 可作为 P2/P3 升级项：
 
 `.ashasset` 已是 prefab-style JSON 资源，`AssetDatabase` 可按 id/path 加载，`Scene` 可实例化 `AshAsset`。
 
-当前缺的是编辑器拖拽放置所需的高层入口：
+编辑器拖拽放置所需的高层入口已接入：
 
 - 以 `AssetId` 为输入。
 - 可指定 parent。
 - 可指定 world position / rotation / scale。
 - 返回 root entity。
 
-### 推荐接口
+### 已落地接口
 
 ```cpp
 struct SceneInstantiationDesc
@@ -253,41 +250,52 @@ Entity instantiate_asset(
 
 ## P2: DebugDrawService
 
-### 保留目标
+### 当前状态
+
+Engine 侧第一版已接入：
 
 ```cpp
 class DebugDrawService
 {
 public:
     void draw_line(const glm::vec3& start, const glm::vec3& end, const glm::vec4& color, float thickness = 1.0f);
-    void draw_circle(const glm::vec3& center, const glm::vec3& normal, float radius, const glm::vec4& color, int segments = 32);
-    void draw_cone(const glm::vec3& apex, const glm::vec3& direction, float length, float angle, const glm::vec4& color);
-    void draw_aabb(const glm::vec3& min, const glm::vec3& max, const glm::vec4& color);
-    void draw_sphere(const glm::vec3& center, float radius, const glm::vec4& color, int segments = 16);
+    void draw_box(const glm::vec3& minimum, const glm::vec3& maximum, const glm::vec4& color, float thickness = 1.0f);
+    void draw_circle(const glm::vec3& center, const glm::vec3& normal, float radius, const glm::vec4& color, uint32_t segments = 32, float thickness = 1.0f);
+    void draw_cone(const glm::vec3& apex, const glm::vec3& direction, float length, float angle_degrees, const glm::vec4& color, uint32_t segments = 32, float thickness = 1.0f);
+    void draw_axes(const glm::mat4& transform, float length = 1.0f, float thickness = 1.0f);
 };
 ```
 
-### 暂缓原因
+使用入口：
 
-Debug draw 会影响：
+- Runtime 可通过 `Application::get_debug_draw_service()` 获取服务。
+- 服务内部按 frame-local line list 记录提交，`Application::_on_render()` 在 `renderer->end_frame()` 后清空。
+- `SceneRenderer` 在 `SceneDeferredCompositePass` 之后按需追加 `SceneDebugDrawOverlayPass`，用 `RenderLoadAction::Load` 保留 scene color 后叠加线框。
+- RenderGraph pass 会显式声明对 output 的 load/read 依赖，避免 overlay 成为 external output 最终 producer 时把 composite pass 裁掉。
 
-- SceneRenderer / RenderGraph pass 组织。
-- Vulkan + DX12 overlay pipeline。
-- 深度测试、透明混合、线宽兼容性。
-- 多 view / 多 output 的提交归属。
+第一版边界：
 
-因此它应在 P0/P1 查询接口稳定后单独推进。
+- 当前渲染路径使用 `RenderPrimitiveTopology::LineList`，以 1px 线框直接覆盖到 output。
+- `thickness` 会保留在提交数据中并 clamp 到至少 `1.0f`，但当前 Vulkan/DX12 overlay pipeline 暂不扩展成宽线几何。
+- `color.a` 会保留在提交数据中，但当前 overlay 使用 opaque blend，透明混合后续再补。
+- 当前 overlay 不绑定 scene depth，调试线默认绘制在最终画面上层；需要遮挡关系时再接 depth-aware debug pass。
+
+### 后续升级
+
+- GPU ID buffer picking 仍是剩余 P2 项。
+- Editor 侧 gizmo / bounds 的具体调用与工具交互由 Editor 同学接入。
+- Debug draw 可继续扩展 `draw_sphere()`、depth-aware 模式、alpha blend、screen-space fixed-size line 等能力。
 
 ---
 
 ## 实施顺序
 
-1. 更新 `ScenePresentationSubsystem` / `SceneView`，支持 `SceneCameraSource::Override`。
-2. 新增 `SceneQuery.*`，实现 world bounds、screen ray、CPU ray-AABB picking。
-3. 新增 `SceneInstantiationDesc` 与 `AssetId` 版本的 `instantiate_asset()` free function。
-4. 更新 `docs/EngineDeveloperGuide.md` 和根 `README.md`，记录新增 Engine-facing API。
-5. 后续 Editor 任务再把 `EditorViewportCameraService` 从 preview scene 模式迁移到 matrix override。
-6. 单独任务推进 DebugDrawService / GPU ID buffer picking。
+1. 已完成：更新 `ScenePresentationSubsystem` / `SceneView`，支持 `SceneCameraSource::Override`。
+2. 已完成：新增 `SceneQuery.*`，实现 world bounds、screen ray、CPU ray-AABB picking。
+3. 已完成：新增 `SceneInstantiationDesc` 与 `AssetId` 版本的 `instantiate_asset()` free function。
+4. 已完成：新增 Engine 侧 `DebugDrawService` 与 SceneRenderer overlay pass。
+5. Editor 任务：把 `EditorViewportCameraService` 从 preview scene 模式迁移到 matrix override，并接入 DebugDrawService 绘制 gizmo / bounds。
+6. 后续 Engine 任务：GPU ID buffer picking。
 
 ---
 

@@ -80,7 +80,8 @@ namespace AshEngine
 	enum class RenderPrimitiveTopology : uint8_t
 	{
 		TriangleList = 0,
-		TriangleStrip
+		TriangleStrip,
+		LineList
 	};
 
 	enum class RenderCompareOp : uint8_t

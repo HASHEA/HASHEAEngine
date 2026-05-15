@@ -2,11 +2,17 @@
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
+#include "Function/Render/DebugDrawService.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/VertexLayoutPresets.h"
+#include "Graphics/Shader.h"
+#include "Graphics/VertexInputLayout.h"
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -16,6 +22,24 @@ namespace AshEngine
 {
 	namespace
 	{
+		static constexpr const char* k_debug_draw_shader_path =
+			"project/src/engine/Shaders/Debug/DebugDrawOverlay.hlsl";
+		static constexpr const char* k_vertex_decl_locations_shader_path =
+			"project/src/engine/Graphics/Shaders/AshVertexDeclLocations.hlsli";
+
+		struct DebugDrawVertex
+		{
+			glm::vec3 position_ws{ 0.0f };
+			glm::vec4 color{ 1.0f };
+		};
+
+		struct DebugDrawRootConstants
+		{
+			glm::mat4 view_projection{ 1.0f };
+		};
+
+		static_assert(sizeof(DebugDrawRootConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
+
 		static auto build_material_label(const MaterialInterface& material) -> std::string
 		{
 			if (!material.get_asset_path().empty())
@@ -27,6 +51,130 @@ namespace AshEngine
 				return material.get_name();
 			}
 			return "<unnamed-material>";
+		}
+
+		static auto make_debug_draw_vertex_input_layout() -> RHI::VertexInputCreation
+		{
+			constexpr std::array<RHI::VertexStreamDesc, 1> streams = {
+				RHI::VertexStreamDesc{
+					0,
+					static_cast<uint16_t>(sizeof(DebugDrawVertex)),
+					RHI::AshVertexInputRate::PerVertex
+				}
+			};
+			constexpr std::array<RHI::VertexAttributeDesc, 2> attributes = {
+				RHI::VertexAttributeDesc{
+					0,
+					0,
+					static_cast<uint32_t>(offsetof(DebugDrawVertex, position_ws)),
+					RHI::AshVertexComponentFormat::Float3,
+					RHI::AshVertexSemantic::Position,
+					0,
+					"POSITION"
+				},
+				RHI::VertexAttributeDesc{
+					1,
+					0,
+					static_cast<uint32_t>(offsetof(DebugDrawVertex, color)),
+					RHI::AshVertexComponentFormat::Float4,
+					RHI::AshVertexSemantic::Color0,
+					0,
+					"COLOR"
+				}
+			};
+			return RHI::make_vertex_input_layout(streams, attributes);
+		}
+
+		static auto build_debug_draw_shader_source_hash() -> uint64_t
+		{
+			uint64_t hash_value = 0;
+			RHI::hash_shader_file_signature(hash_value, k_debug_draw_shader_path);
+			RHI::hash_shader_file_signature(hash_value, k_vertex_decl_locations_shader_path);
+			return hash_value;
+		}
+
+		static auto make_debug_draw_program_desc() -> GraphicsProgramDesc
+		{
+			GraphicsProgramState state{};
+			state.cull_mode = RenderCullMode::None;
+			state.primitive_topology = RenderPrimitiveTopology::LineList;
+			state.depth_test = false;
+			state.depth_write = false;
+			state.blend_mode = RenderBlendMode::Opaque;
+
+			GraphicsProgramDesc desc{};
+			desc.shader_path = k_debug_draw_shader_path;
+			desc.base_shader_path = k_debug_draw_shader_path;
+			desc.vertex_entry = "VSMain";
+			desc.fragment_entry = "PSMain";
+			desc.source_hash = build_debug_draw_shader_source_hash();
+			desc.name = "SceneDebugDrawOverlay";
+			desc.state = state;
+			desc.vertex_input = make_debug_draw_vertex_input_layout();
+			return desc;
+		}
+
+		static void attach_debug_draw_root_constants(
+			GraphicsDrawDesc& draw_desc,
+			GraphicsProgram* program,
+			const DebugDrawRootConstants& constants)
+		{
+			RHI::ShaderParameterBlockLayout layout{};
+			if (!program || !program->get_parameter_block_layout("AshRootConstants", layout) || layout.byte_size == 0)
+			{
+				return;
+			}
+
+			draw_desc.const_data_size = std::min<uint32_t>(
+				static_cast<uint32_t>(sizeof(constants)),
+				std::min<uint32_t>(layout.byte_size, GraphicsDrawDesc::InlineConstDataCapacity));
+			draw_desc.inline_const_data_valid = true;
+			std::memcpy(draw_desc.inline_const_data.data(), &constants, draw_desc.const_data_size);
+		}
+
+		static auto make_debug_draw_vertices(const std::vector<DebugDrawLine>& lines) -> std::vector<DebugDrawVertex>
+		{
+			std::vector<DebugDrawVertex> vertices{};
+			vertices.reserve(lines.size() * 2u);
+			for (const DebugDrawLine& line : lines)
+			{
+				vertices.push_back({ line.start, line.color });
+				vertices.push_back({ line.end, line.color });
+			}
+			return vertices;
+		}
+
+		static auto ensure_debug_draw_vertex_buffer(
+			Renderer& renderer,
+			std::shared_ptr<VertexBuffer>& vertex_buffer,
+			uint32_t& vertex_capacity,
+			const std::vector<DebugDrawVertex>& vertices) -> bool
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(!vertices.empty());
+			ASH_PROCESS_ERROR(vertices.size() <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
+			const uint32_t vertex_count = static_cast<uint32_t>(vertices.size());
+			const size_t required_size = vertices.size() * sizeof(DebugDrawVertex);
+			ASH_PROCESS_ERROR(required_size <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
+
+			if (!vertex_buffer || vertex_capacity < vertex_count)
+			{
+				VertexBufferDesc vertex_desc{};
+				vertex_desc.size = static_cast<uint32_t>(required_size);
+				vertex_desc.stride = static_cast<uint32_t>(sizeof(DebugDrawVertex));
+				vertex_desc.cpu_write = true;
+				vertex_desc.initial_data = vertices.data();
+				vertex_desc.name = "SceneDebugDrawLineVB";
+				vertex_buffer = renderer.create_vertex_buffer(vertex_desc);
+				ASH_PROCESS_ERROR(vertex_buffer != nullptr);
+				vertex_capacity = vertex_count;
+			}
+			else
+			{
+				ASH_PROCESS_ERROR(vertex_buffer->update(0, static_cast<uint32_t>(required_size), vertices.data()));
+			}
+
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
 		static auto get_staticmesh_pass_label(PassFamily pass_family) -> const char*
@@ -189,17 +337,27 @@ namespace AshEngine
 
 	}
 
-	bool SceneRenderer::initialize(Renderer* renderer)
+	bool SceneRenderer::initialize(Renderer* renderer, DebugDrawService* debug_draw_service)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		m_renderer = renderer;
+		m_debug_draw_service = debug_draw_service;
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
+		if (m_debug_draw_service)
+		{
+			m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
+			ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void SceneRenderer::shutdown()
 	{
+		m_debug_draw_vertex_capacity = 0;
+		m_debug_draw_vertex_buffer.reset();
+		m_debug_draw_program.reset();
+		m_debug_draw_service = nullptr;
 		m_deferred_lighting_pass.shutdown();
 		m_instance_buffers.clear();
 		m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
@@ -364,7 +522,74 @@ namespace AshEngine
 			graph_resources,
 			output,
 			view_context));
+		ASH_PROCESS_ERROR(add_debug_draw_overlay_pass(graph, output, frame, view_context));
 		ASH_PROCESS_ERROR(graph.execute());
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool SceneRenderer::add_debug_draw_overlay_pass(
+		RenderGraphBuilder& graph,
+		RenderGraphTextureRef output_target,
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context)
+	{
+		ASH_PROFILE_SCOPE_NC("SceneRenderer::add_debug_draw_overlay_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		if (!m_debug_draw_service)
+		{
+			return true;
+		}
+
+		auto debug_lines = std::make_shared<std::vector<DebugDrawLine>>();
+		m_debug_draw_service->snapshot_lines(*debug_lines);
+		if (debug_lines->empty())
+		{
+			return true;
+		}
+
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(debug_lines->size()));
+		ASH_PROFILE_PLOT("Scene/DebugDrawLines", static_cast<int64_t>(debug_lines->size()));
+		ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+		ASH_PROCESS_ERROR(output_target);
+
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneDebugDrawOverlayPass",
+			RenderGraphPassFlags::None,
+			[output_target](RenderGraphRasterPassBuilder& pass)
+			{
+				pass.read_texture(output_target, RenderGraphAccess::GraphicsSRV);
+				pass.write_color(0, output_target, RenderLoadAction::Load, {});
+			},
+			[this, debug_lines, &frame, &view_context](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC("SceneDebugDrawOverlayPass", AshEngine::Profile::Color::Draw);
+				ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(debug_lines->size()));
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				ASH_PROCESS_ERROR(m_renderer != nullptr);
+				ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+				ASH_PROCESS_ERROR(debug_lines && !debug_lines->empty());
+				ASH_PROCESS_ERROR(debug_lines->size() <= static_cast<size_t>(std::numeric_limits<uint32_t>::max() / 2u));
+
+				const std::vector<DebugDrawVertex> vertices = make_debug_draw_vertices(*debug_lines);
+				ASH_PROCESS_ERROR(ensure_debug_draw_vertex_buffer(
+					*m_renderer,
+					m_debug_draw_vertex_buffer,
+					m_debug_draw_vertex_capacity,
+					vertices));
+
+				GraphicsDrawDesc draw_desc{};
+				draw_desc.program = m_debug_draw_program.get();
+				draw_desc.vertex_buffers.push_back({ 0u, m_debug_draw_vertex_buffer, 0u });
+				draw_desc.vertex_count = static_cast<uint32_t>(vertices.size());
+				draw_desc.instance_count = 1u;
+				DebugDrawRootConstants constants{};
+				constants.view_projection = frame.view_projection;
+				attach_debug_draw_root_constants(draw_desc, m_debug_draw_program.get(), constants);
+				apply_view_context_to_draw_desc(draw_desc, view_context);
+				ASH_PROCESS_ERROR(context.draw(draw_desc));
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
+
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 

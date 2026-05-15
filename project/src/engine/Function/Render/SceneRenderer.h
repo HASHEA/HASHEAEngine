@@ -17,6 +17,7 @@
 
 namespace AshEngine
 {
+	class DebugDrawService;
 	class MaterialInterface;
 	struct MaterialResource;
 	struct SceneStaticMeshInstanceData;
@@ -27,7 +28,7 @@ namespace AshEngine
 		SceneRenderer() = default;
 
 	public:
-		bool initialize(Renderer* renderer);
+		bool initialize(Renderer* renderer, DebugDrawService* debug_draw_service = nullptr);
 		void shutdown();
 		bool render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
 		static bool should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count);
@@ -51,6 +52,11 @@ namespace AshEngine
 			const SceneRenderViewContext& view_context,
 			RenderGraphRasterContext& pass_context,
 			PassFamily pass_family);
+		bool add_debug_draw_overlay_pass(
+			RenderGraphBuilder& graph,
+			RenderGraphTextureRef output_target,
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context);
 		void log_warning_once(const std::string& key, const std::string& message);
 		void log_staticmesh_pass_usage_once(
 			const MaterialInterface& material,
@@ -59,7 +65,11 @@ namespace AshEngine
 
 	private:
 		Renderer* m_renderer = nullptr;
+		DebugDrawService* m_debug_draw_service = nullptr;
 		DeferredLightingPass m_deferred_lighting_pass{};
+		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;
+		std::shared_ptr<VertexBuffer> m_debug_draw_vertex_buffer = nullptr;
+		uint32_t m_debug_draw_vertex_capacity = 0;
 		std::vector<SceneInstanceBufferEntry> m_instance_buffers{};
 		uint64_t m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
 		size_t m_next_instance_buffer_slot = 0;

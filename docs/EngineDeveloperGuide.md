@@ -255,6 +255,7 @@ Windows Debug / Release 下，Engine 同时编入：
 - 启用 logic thread 时，`ScenePresentationSubsystem` 的 update phase 会跟在 `_on_logic_startup()` / `_on_logic_update()` 后执行
 - update phase 必须保持 CPU-only：不能在这里创建 RHI texture / buffer / sampler / program；GPU 资产 finalization 与材质 proxy 准备归 render thread 的 submit phase
 - 默认 `Application::_on_render()` 会按 `begin_frame() -> _on_render_debug() -> scene presentation submit -> _on_gui() -> end_frame()` 的固定顺序运行
+- `_on_render_debug()` 是提交 Engine 调试绘制的固定钩子；通过 `Application::get_debug_draw_service()` 写入的 debug lines 会在 scene presentation submit 中被 `SceneRenderer` 消费，并在 `renderer->end_frame()` 后清空，形成 frame-local 语义
 - UI 绘制最终在 `Renderer::end_frame()` 内作为末尾 overlay 提交
 - 窗口最小化时会跳过实际渲染
 - 渲染线程即主线程，负责：
@@ -512,6 +513,8 @@ Scene deferred 主路径现在通过 graph 表达：
 SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass
 ```
 
+当本帧存在 `DebugDrawService` 提交的调试线时，`SceneRenderer` 会在 composite 之后追加 `SceneDebugDrawOverlayPass`，以 `RenderLoadAction::Load` 叠加到同一个 output。该 pass 会显式声明对 output 的 load/read 依赖，保证 RenderGraph culling 保留前一个 output producer。
+
 External output 和 extracted texture 是 culling root；`NeverCull` pass 保留；无 root 依赖的 pass 会被 compiler 剔除。Graph transient texture 执行期通过 `Renderer` 的 transient render target pool 获取和释放，避免 pass lambda 仍引用的 SRV/RTV 提前析构。Vulkan 合法性要求所有 graph barrier 都在 active render pass 外提交；graph 不应强行把 external output 的 final state 改成 `SRVGraphics`，应由目标资源能力决定默认 final state，例如 swapchain/backbuffer 走 `Present`。
 
 具体使用流程、API 语义、pass 编写约束和常见错误记录在 `docs/RenderGraphAPISpec.md`；新增 graph pass 时应先按该文档的 checklist 补齐资源声明、Tracy 打点、错误处理和 Vulkan / DX12 验证。
@@ -529,7 +532,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - RHI graphics program 的 raster/depth/topology 状态在 variant 创建时写入 `GraphicProgramCreateDesc::pipeline`；`RenderDevice::bind_graphics_program()` 不能逐 draw 调用 `apply_render_state()`，因为 DX12 会把它标记为 PSO rebuild，Vulkan 会直接重建 `VkPipeline`
 - `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区并在 slot fence 完成后从该分区起点重新线性分配，避免上一帧命令仍引用的 descriptor slot 被本帧覆写；Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
 - `RenderDevice::begin_pass()` 会复用 RHI `RenderPass` 与 `Framebuffer`：RenderPass key 由 attachment format / load action / final state / multiview 等语义构成，Framebuffer key 由 render pass、attachment texture、extent 与 layer 构成；clear value 不属于 cache key，每次 begin pass 都会重新写入当前 clear 值
-- `GraphicsProgramState` 显式描述 cull/topology/depth test/depth write/depth compare/blend mode；这些状态必须在 program variant / PSO 创建时落入后端 pipeline state。
+- `GraphicsProgramState` 显式描述 cull/topology/depth test/depth write/depth compare/blend mode；这些状态必须在 program variant / PSO 创建时落入后端 pipeline state。当前 Function 层已公开 `TriangleList`、`TriangleStrip` 和 `LineList`，`LineList` 用于 DebugDraw overlay。
 - `PassDepthAttachment::read_only=true` 表示本 pass 只读 depth attachment：RenderDevice 会把 depth final state 设为 `DSVRead`，如果该 depth target 可采样则同时包含 `SRVGraphics`。Vulkan 使用 depth-stencil read-only layout，DX12 使用 read-only DSV。
 - Framebuffer cache 会在连续数帧未使用后清理；`clear_transient_render_targets()` 也会清掉 framebuffer cache，避免 transient / resize 路径长期压住旧 attachment
 - Vulkan dynamic rendering 下，`cmd_end_render_pass()` 结束后 attachment 仍停留在 renderable layout；resource tracker 必须先保持 `RTV` / `DSVWrite` 这类真实附件状态，再由 pass 外部显式 barrier 转到 `SRVGraphics` / `Present` 等 final state
@@ -562,6 +565,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - `SceneDeferredLightingAccumPass` 会先用 fullscreen base/emissive pass 写入自发光；directional light 使用 fullscreen additive pass；point light 使用 sphere volume；spot light 使用 cone volume。
 - point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
 - `SceneDeferredCompositePass` 采样 lighting accumulation 并写回 `SceneRenderViewContext.output_target`。
+- `SceneDebugDrawOverlayPass` 仅在本帧有 debug lines 时追加在 composite 后，使用 line-list graphics program 直接覆盖到 output；第一版不做 depth test、alpha blend 或宽线几何扩展。
 - `SceneRenderer` 不再保留旧 `Surface.StaticMesh.BasePass` 前向 fallback；`BasePass` 仍作为材质 / shader family 能力保留，透明材质仍不进入当前 deferred opaque path。
 
 材质边界保持不变：
@@ -1332,6 +1336,7 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
   - 静态网格 batch 构建、单可见静态网格 direct section submit、frame-local instance buffer slot 分配 / 更新和 draw 提交
   - 消费 section 的 `MaterialRenderProxy`
   - 第一版 deferred lighting accumulation / composite
+  - 第一版 `DebugDrawService` line-list overlay pass
 - 当前 `Surface.StaticMesh` shader family 仍使用 instanced vertex layout，所以单可见 draw fast path 不是非 instanced shader 路径；它只绕过 batch lookup / instance vector 构建，并继续绑定 slot 1 的单实例 buffer
 - instance buffer 资源池仍由 `SceneRenderer` 复用，但 buffer slot 分配在 `VisibleRenderFrame::frame_index` 变化时重置；同一 frame 内顺序提交多个 scene view 时，每个 view/pass 使用不同 slot range，避免 CPU 更新后一个 view 的实例矩阵时影响前一个 view 已记录的 draw
 - `Transparent` blend mode 已进入 V2 材质静态状态和编译键，但当前 `SceneRenderer` 的 deferred static mesh path 仍只正式提交 `Opaque` 与 `Masked`；透明队列需要后续单独接入
@@ -1435,7 +1440,7 @@ Base 层自测方式：
 product/bin64/Debug-windows-x86_64/Sandbox.exe --engine-self-test
 ```
 
-当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、SceneView matrix override、SceneQuery bounds/ray/picking、AssetId scene instantiation，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
+当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、RenderDevice line-list topology 映射、DebugDrawService frame-local 记录/清空与 shape-to-line-list 展开、SceneView matrix override、SceneQuery bounds/ray/picking、AssetId scene instantiation，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
 
 维护约定：
 

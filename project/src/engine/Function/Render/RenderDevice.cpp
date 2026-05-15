@@ -723,6 +723,8 @@ namespace AshEngine
 		{
 			switch (topology)
 			{
+			case RenderPrimitiveTopology::LineList:
+				return RHI::ASH_PRIMITIVE_TOPOLOGY_LINE_LIST;
 			case RenderPrimitiveTopology::TriangleStrip:
 				return RHI::ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
 			default:
@@ -748,6 +750,8 @@ namespace AshEngine
 		{
 			switch (topology)
 			{
+			case RHI::ASH_PRIMITIVE_TOPOLOGY_LINE_LIST:
+				return RenderPrimitiveTopology::LineList;
 			case RHI::ASH_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
 				return RenderPrimitiveTopology::TriangleStrip;
 			default:
