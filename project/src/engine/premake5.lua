@@ -98,7 +98,8 @@ project "Engine"
 		defines
 		{
 			"ASH_DEBUG",
-			"TRACY_ENABLE",
+ 			"TRACY_ENABLE",
+            "TRACY_ON_DEMAND",
 			"VULKAN_SYNCHRONIZATION_VALIDATION",
 			"VULKAN_DEBUG_REPORT",
 		}
@@ -168,6 +169,7 @@ project "Engine"
 		defines
 		{
 			"TRACY_ENABLE",
+			"TRACY_ON_DEMAND",
 		}
 		runtime "Release"
 		optimize "on"

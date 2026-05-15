@@ -23,6 +23,7 @@ project( "tracy" )
 	defines
 	{
 		"TRACY_ENABLE",
+		"TRACY_ON_DEMAND",
 	}
 	filter "system:windows"
 		systemversion "latest"
