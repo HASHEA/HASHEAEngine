@@ -12,16 +12,16 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 - Vulkan 与 DX12 双后端：运行时通过 `product/config/Engine.ini` 选择后端，Windows Debug / Release 构建同时编入 Vulkan、DX12、DXC。
 - Scene-driven 静态网格渲染：逻辑 `Scene` 通过 `ScenePresentationSubsystem` 转换为渲染线程可消费的不可变可见帧数据，opaque / masked 静态网格可走 DeferredHQ GBuffer 路径。
 - Scene 编辑辅助接口：Engine 侧提供 Scene view matrix override、world bounds、screen ray、CPU AABB picking，以及 `AssetId` 驱动的 prefab/model 放置入口。
-- Debug draw overlay：Engine 侧提供 frame-local `DebugDrawService`，可提交 line / box / circle / cone / axes，并由 `SceneRenderer` 在 deferred composite 后叠加 line-list overlay。
+- Debug draw overlay：Engine 侧提供 frame-local `DebugDrawService`，可提交 line / box / circle / cone / axes，并由 `SceneRenderer` 在 deferred tone-map 后叠加 line-list overlay。
 - 材质 V2 基础链路：支持 `Surface.StaticMesh` 的材质 shader 与 engine shader family 拼合，`.AshMat` 作为基材质，`.AshMatIns` 作为可直接赋给物体的材质实例。
 - Asset 与 glTF 示例资源：支持示例模型加载，Sandbox 默认使用 Sponza 作为标准验证场景，并可在运行时通过 overlay 切换 `product/assets/models/gltfs/` 下的 glTF。
 - Editor 基础壳：具备 dockspace、Scene/Game 视口、层级、属性、控制台、资产浏览等基础面板。
-- 调试与性能工具：支持日志、Vulkan validation、DX12 debug layer、GPU debug names、RHI command-buffer 错误状态、Tracy CPU profiling、frame stats overlay、Vulkan VMA 泄露定位。
+- 调试与性能工具：支持日志、Vulkan validation、DX12 debug layer、GPU debug names、RHI command-buffer 错误状态、Tracy CPU profiling、frame stats overlay、Vulkan VMA 泄露定位；Vulkan（`VK_EXT_debug_utils`）与 DX12（Windows SDK `PIXBeginEvent` / command list `BeginEvent`）把当前 `PassDesc::name` 显示到 RenderDoc 事件树（名为空时用 `namelesspass`，不回退 framebuffer 对象名）。
 
 当前仍未完成或仅处于预留阶段：
 
 - Skeletal mesh / animation 尚未完成。
-- Shadow、occlusion culling 尚未完成；当前 deferred lighting 已接入第一版 base/emissive、directional、point、spot 和 composite pass，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
+- Shadow、occlusion culling 尚未完成；当前 deferred lighting 已接入第一版 base/emissive、directional、point、spot，composite（线性 HDR 中转 RT）与独立全屏 tone-map pass，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
 - Transparent blend mode 已进入材质静态状态和编译键，但正式透明队列尚未接入 SceneRenderer。
 - PostProcess 与 UI 当前不纳入材质系统，后续应走各自的 shader/pass 与参数组织路径。
 - Asset cooking pipeline、streaming、完整资源生命周期管理仍在演进中；runtime 已能直接加载部分 cooked texture payload。
@@ -74,6 +74,7 @@ HASHEAEngine/
 - Vulkan / DX12 运行时后端选择。
 - HLSL 主路径，通过 DXC 编译，Vulkan 消费 SPIR-V，DX12 消费 DXIL。
 - shader 反射驱动 descriptor / root signature / descriptor set layout / parameter block layout。
+- `SamplerCreation`：`VulkanContext` / `DX12Context` 的 `create_sampler(const SamplerCreation&)` 在 RHI 内按采样器状态字段指纹（**不含** `name`）去重，池内持有 `weak_ptr`；仍存在外部 `shared_ptr` 时命中复用，`GraphicsContext::get_sampler(AshSamplerState)` 枚举默认采样器仍为独立缓存，与该校验键路径并存。
 - uniform buffer 创建会按 256 字节对齐分配，带初始数据时同步补零 padding，避免 Vulkan / DX12 后端按分配大小上传时越界读取。
 - render pass 与 framebuffer 缓存。
 - graphics program / pipeline variant 缓存。
@@ -82,9 +83,9 @@ HASHEAEngine/
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
 - Render Graph v1 已作为 Function/Render 层 orchestration 接入，支持 graph texture、raster/compute pass 声明、pass culling、transient lifetime 编译、pass-boundary barrier plan、external output / extracted texture root，以及通过现有 `Renderer / RenderDevice` 执行 graph。
-- DeferredHQ GBuffer 静态网格路径：第一版使用 5 张 GBuffer（三张 `RGBA8_UNORM`、两张 `RGBA16_SFLOAT`）加 D32 depth，随后写入 `SceneDeferredLightingAccum` 并 composite 到 view output。
+- DeferredHQ GBuffer 静态网格路径：第一版使用 5 张 GBuffer（三张 `RGBA8_UNORM`、两张 `RGBA16_SFLOAT`）加 D32 depth，随后以 MRT 将延迟光照的 diffuse / specular 分量分别写入两张 `RGBA16_SFLOAT` transient RT（`SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`），composite pass 合并为线性 HDR 写入 `SceneDeferredSceneHDRLinear`（`RGBA16_SFLOAT`），再由 `PostProcessToneMapPass` 提交的独立 `SceneDeferredToneMapPass`（ACES + exposure；对非 SRGB 的 8-bit UNORM output 可选手动 sRGB 编码）写到 view output。
 - Deferred lighting 第一版支持 base/emissive、directional fullscreen、point sphere volume、spot cone volume；点光/聚光 volume 使用只读 depth attachment、硬件 depth test、depth write off、双面和 additive blend。
-- DebugDraw overlay 第一版使用 `RenderPrimitiveTopology::LineList`，在 `SceneDeferredCompositePass` 后以 `RenderLoadAction::Load` 写回同一 output；当前不做 depth test、alpha blend 或宽线几何扩展。
+- DebugDraw overlay 第一版使用 `RenderPrimitiveTopology::LineList`，在 `SceneDeferredToneMapPass` 后以 `RenderLoadAction::Load` 写回同一 output；当前不做 depth test、alpha blend 或宽线几何扩展。
 - draw 排序、静态网格 instance batching、单可见静态网格 direct section submit fast path 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
 - DX12 将 `MAILBOX` / `IMMEDIATE` 映射为 `Present(0, DXGI_PRESENT_ALLOW_TEARING)`（硬件/系统支持 tearing 时），避免 benchmark 场景被隐式 vsync/compositor 同步限制。
 - Runtime frame stats overlay。
@@ -113,7 +114,7 @@ Scene 到渲染的主路径：
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass`，通过 graph transient GBuffer / depth / lighting accumulation 资源完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer；该 instance buffer slot 在同一 frame 内按 view/pass submit 分配，避免 Editor 同时打开 Scene/Game view 时后提交的 view 覆盖前一个 view 的 object-to-clip 数据。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass`，通过 graph transient GBuffer / depth / diffuse+specular lighting 分量 RT、线性 HDR 中转 RT 完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer；该 instance buffer slot 在同一 frame 内按 view/pass submit 分配，避免 Editor 同时打开 Scene/Game view 时后提交的 view 覆盖前一个 view 的 object-to-clip 数据。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 
@@ -318,7 +319,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | --- | --- |
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
 | RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、DX12 mailbox present 映射、shader-visible descriptor heap 分帧分区、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
-| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderGraph` 第一版已接入 Function/Render，支持 texture graph、raster/compute pass 声明、pass culling、lifetime 编译、pass-boundary barrier plan，并完成 scene deferred 主路径迁移；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，DeferredHQ GBuffer、第一版 deferred lighting、静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
+| Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderGraph` 第一版已接入 Function/Render，支持 texture graph、raster/compute pass 声明、pass culling、lifetime 编译、pass-boundary barrier plan，并完成 scene deferred 主路径迁移；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，DeferredHQ GBuffer、第一版 deferred lighting（含 RGBA16F HDR 中转与独立 tone-map pass）、静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
 | Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通，并提供 SceneQuery、matrix camera override、AssetId prefab/model 放置 helper 和 Engine-side DebugDrawService。 |
 | Material | V2 `Surface.StaticMesh` BasePass、DepthOnly 与 GBuffer pass 已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |

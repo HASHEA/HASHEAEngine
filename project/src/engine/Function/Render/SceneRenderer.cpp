@@ -1,4 +1,4 @@
-#include "Function/Render/SceneRenderer.h"
+﻿#include "Function/Render/SceneRenderer.h"
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
@@ -344,6 +344,7 @@ namespace AshEngine
 		m_debug_draw_service = debug_draw_service;
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		if (m_debug_draw_service)
 		{
 			m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
@@ -358,6 +359,7 @@ namespace AshEngine
 		m_debug_draw_vertex_buffer.reset();
 		m_debug_draw_program.reset();
 		m_debug_draw_service = nullptr;
+		m_post_process_tone_map_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
 		m_instance_buffers.clear();
 		m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
@@ -497,7 +499,9 @@ namespace AshEngine
 		lighting_desc.unordered_access = false;
 		lighting_desc.use_optimized_clear_value = true;
 		lighting_desc.optimized_clear_color = {};
-		graph_resources.lighting_accum = graph.create_texture(lighting_desc, "SceneDeferredLightingAccum");
+		graph_resources.lighting_diffuse = graph.create_texture(lighting_desc, "SceneDeferredLightingDiffuse");
+		graph_resources.lighting_specular = graph.create_texture(lighting_desc, "SceneDeferredLightingSpecular");
+		graph_resources.scene_hdr_linear = graph.create_texture(lighting_desc, "SceneDeferredSceneHDRLinear");
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneGBufferPass",
@@ -520,6 +524,12 @@ namespace AshEngine
 			graph,
 			frame,
 			graph_resources,
+			output,
+			view_context));
+		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.add_pass(
+			graph,
+			frame,
+			graph_resources.scene_hdr_linear,
 			output,
 			view_context));
 		ASH_PROCESS_ERROR(add_debug_draw_overlay_pass(graph, output, frame, view_context));

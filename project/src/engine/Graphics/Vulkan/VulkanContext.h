@@ -426,6 +426,8 @@ private:
 		VulkanFence*											vulkanComputeFence						= nullptr;
 		VulkanFence*											vulkanImmediateFence					= nullptr; //stuck here and wait
 		std::array<std::shared_ptr<Sampler>, static_cast<size_t>(ASH_SAMPLER_STATE_MAX_ENUM)> samplerCache{};
+		std::unordered_map<uint64_t, std::weak_ptr<Sampler>>	samplerDedupPool{};
+		mutable std::mutex										samplerDedupMutex{};
 		VkPipelineCache											vulkanPipelineCache						= VK_NULL_HANDLE;
 		VulkanStagingBufferPool*								vulkanStagingBufferPool					 = nullptr;
 		std::unordered_map<uint64_t, std::shared_ptr<Shader>>	vulkanShaderPool;

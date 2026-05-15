@@ -43,7 +43,7 @@ namespace RHI
 		auto cmd_transition_resource_state(const std::initializer_list<AshBarrier>& lsBarrierInfoArrray) -> bool override;
 
 		auto cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool override;
-		auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void override;
+		auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer, const char* debug_scope_name = nullptr) -> void override;
 		auto cmd_end_render_pass() -> void override;
 		auto cmd_bind_pipeline() -> void override;
 		auto cmd_set_viewport(const Viewport& viewport) -> void override;
@@ -62,6 +62,7 @@ namespace RHI
 		VkDescriptorPool						vk_descriptor_pool			= VK_NULL_HANDLE;
 		std::shared_ptr<RenderPass>				currentBoundRenderPass		= nullptr;
 		std::shared_ptr<Framebuffer>			currentBoundFramebuffer		= nullptr;
+		bool active_render_pass_debug_label = false;
 		bool secondary = false;
 		AshCommandBufferState state = AshCommandBufferState::ASH_Idle;
 		

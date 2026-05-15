@@ -31,7 +31,9 @@ namespace RHI
 		virtual auto cmd_transition_resource_state(const std::initializer_list<AshBarrier>& lsBarrierInfoArrray) -> bool = 0;
 		virtual auto cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool = 0;
 
-		virtual auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void = 0;
+		// debug_scope_name: event label for tools (RenderDoc / PIX). Must reflect the current logical pass only; never
+		// fall back to framebuffer object names (cached framebuffers may retain another pass's label). If null/empty, use "namelesspass".
+		virtual auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer, const char* debug_scope_name = nullptr) -> void = 0;
 		virtual auto cmd_end_render_pass() -> void = 0;
 		virtual auto cmd_bind_pipeline() -> void = 0;
 		virtual auto cmd_set_viewport(const Viewport& viewport) -> void = 0;

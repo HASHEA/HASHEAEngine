@@ -1,4 +1,4 @@
-﻿#include "VulkanCommandPool.h"
+#include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
 #include "Base/hprofiler.h"
 #include "VulkanContext.h"
@@ -367,6 +367,7 @@ namespace RHI
 		}
 		currentBoundRenderPass = nullptr;
 		currentBoundFramebuffer = nullptr;
+		active_render_pass_debug_label = false;
 		VkCommandBufferBeginInfo beginCI{};
 		beginCI.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		beginCI.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -413,7 +414,7 @@ namespace RHI
 	{
 		return vkCommandBuffer;
 	}
-	auto VulkanCommandBuffer::cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void
+	auto VulkanCommandBuffer::cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer, const char* debug_scope_name) -> void
 	{
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		auto renderPass = frameBuffer->get_render_pass();
@@ -427,6 +428,19 @@ namespace RHI
 			HLogWarning("Bind a render pass which is bound currently on this commandbuffer, do nothing and return !");
 			return;
 		}
+
+		active_render_pass_debug_label = false;
+		if (vkCmdBeginDebugUtilsLabelEXT != nullptr)
+		{
+			const char* pass_label =
+				(debug_scope_name && debug_scope_name[0] != '\0') ? debug_scope_name : "namelesspass";
+			VkDebugUtilsLabelEXT label_info{};
+			label_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+			label_info.pLabelName = pass_label;
+			vkCmdBeginDebugUtilsLabelEXT(vkCommandBuffer, &label_info);
+			active_render_pass_debug_label = true;
+		}
+
 		//insure all attachment are in correct layout
 		auto& colorAttachements = frameBuffer->get_render_targets();
 		auto depthStencilAttachment = frameBuffer->get_depth_stencil();
@@ -539,6 +553,13 @@ namespace RHI
 		else {
 			vkCmdEndRenderPass(vkCommandBuffer);
 		}
+
+		if (active_render_pass_debug_label && vkCmdEndDebugUtilsLabelEXT != nullptr)
+		{
+			vkCmdEndDebugUtilsLabelEXT(vkCommandBuffer);
+			active_render_pass_debug_label = false;
+		}
+
 		// Legacy render passes perform implicit final-layout transitions on end, so the tracker can move
 		// directly to the declared final state here. Dynamic rendering does not; attachments stay in their
 		// renderable layouts until an explicit post-pass barrier is submitted outside the rendering scope.

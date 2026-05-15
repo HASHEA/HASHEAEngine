@@ -1,4 +1,4 @@
-﻿#include "RenderDevice.h"
+#include "RenderDevice.h"
 #include "Graphics/Buffer.h"
 #include "Graphics/CommandBuffer.h"
 #include "Graphics/Framebuffer.h"
@@ -3686,7 +3686,7 @@ namespace AshEngine
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
-		m_impl->current_command_buffer->cmd_begin_render_pass(m_impl->current_framebuffer);
+		m_impl->current_command_buffer->cmd_begin_render_pass(m_impl->current_framebuffer, desc.name);
 		m_impl->current_pass_name = desc.name ? desc.name : "EngineRenderPass";
 		if (RHI::IGpuProfilerContext* gpu_ctx = RHI::gpu_profiler_get())
 		{

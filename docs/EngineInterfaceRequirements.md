@@ -270,8 +270,8 @@ public:
 
 - Runtime 可通过 `Application::get_debug_draw_service()` 获取服务。
 - 服务内部按 frame-local line list 记录提交，`Application::_on_render()` 在 `renderer->end_frame()` 后清空。
-- `SceneRenderer` 在 `SceneDeferredCompositePass` 之后按需追加 `SceneDebugDrawOverlayPass`，用 `RenderLoadAction::Load` 保留 scene color 后叠加线框。
-- RenderGraph pass 会显式声明对 output 的 load/read 依赖，避免 overlay 成为 external output 最终 producer 时把 composite pass 裁掉。
+- `SceneRenderer` 在 `SceneDeferredToneMapPass` 之后按需追加 `SceneDebugDrawOverlayPass`，用 `RenderLoadAction::Load` 保留 scene color 后叠加线框。
+- RenderGraph pass 会显式声明对 output 的 load/read 依赖，避免 overlay 成为 external output 最终 producer 时把 tone-map pass 裁掉。
 
 第一版边界：
 

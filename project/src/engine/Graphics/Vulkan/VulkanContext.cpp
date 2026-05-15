@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Base/hfile.h"
@@ -25,6 +25,7 @@
 #include "Graphics/DXC/DXCHelper.h"
 #endif
 #include <array>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -654,6 +655,20 @@ namespace RHI
 		std::vector<const char*> deviceExtension;
 		deviceExtension.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 		deviceExtension.push_back(VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
+		{
+			uint32_t device_ext_prop_count = 0;
+			vkEnumerateDeviceExtensionProperties(vulkanPhysicalDevice, nullptr, &device_ext_prop_count, nullptr);
+			std::vector<VkExtensionProperties> device_ext_props(device_ext_prop_count);
+			vkEnumerateDeviceExtensionProperties(vulkanPhysicalDevice, nullptr, &device_ext_prop_count, device_ext_props.data());
+			for (const VkExtensionProperties& prop : device_ext_props)
+			{
+				if (std::strcmp(prop.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0)
+				{
+					deviceExtension.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+					break;
+				}
+			}
+		}
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::DynamicRendering))
 		{
 			deviceExtension.push_back(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
@@ -1015,7 +1030,23 @@ namespace RHI
 
 	auto VulkanContext::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
 	{
-		return Ash_New_Shared<VulkanSampler>(ci);
+		const uint64_t key = hash_sampler_creation_key(ci);
+		std::lock_guard<std::mutex> lock(samplerDedupMutex);
+		const auto found = samplerDedupPool.find(key);
+		if (found != samplerDedupPool.end())
+		{
+			if (std::shared_ptr<Sampler> cached = found->second.lock())
+			{
+				return cached;
+			}
+			samplerDedupPool.erase(found);
+		}
+		std::shared_ptr<Sampler> created = Ash_New_Shared<VulkanSampler>(ci);
+		if (created)
+		{
+			samplerDedupPool.emplace(key, std::weak_ptr<Sampler>(created));
+		}
+		return created;
 	}
 
 	auto VulkanContext::_track_vma_allocation(VmaAllocation allocation, VkObjectType objectType, uint64_t resourceHandle, uint64_t size, const char* debugName, const char* file, uint32_t line, const char* function) -> void
@@ -1276,6 +1307,10 @@ namespace RHI
 
 	auto VulkanContext::_shutdown_frame_pool_and_data() -> bool
 	{
+		{
+			std::lock_guard<std::mutex> lock(samplerDedupMutex);
+			samplerDedupPool.clear();
+		}
 		samplerCache.fill(nullptr);
 		global_dynamic_buffer.reset();
 		commandBufferRing->shutdown();

@@ -420,7 +420,7 @@ enum class RenderGraphPassFlags : uint8_t
 当前默认静态网格 scene path 已通过 graph 表达：
 
 ```text
-SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass
+SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass
 ```
 
 资源：
@@ -428,7 +428,8 @@ SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass
 - `SceneOutput`：external output target。
 - `GBufferA..E`：graph transient MRT，shader_resource=true。
 - `SceneDeferredDepth`：graph transient D32 depth，shader_resource=true。
-- `SceneDeferredLightingAccum`：graph transient RGBA16F lighting accumulation。
+- `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`：graph transient RGBA16F，shader_resource=true；光照 pass 以 MRT 分别累加漫反射项与高光项。
+- `SceneDeferredSceneHDRLinear`：graph transient RGBA16F，shader_resource=true；composite 写入线性 HDR，供 tone-map / 后续 bloom 等扩展消费。
 
 pass 关系：
 
@@ -441,14 +442,20 @@ pass.write_depth(depth, RenderLoadAction::Clear, view_context.depth_clear_value)
 // 2. Lighting
 pass.read_texture(gbuffer_a, RenderGraphAccess::GraphicsSRV);
 pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
-pass.write_color(0, lighting_accum, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+pass.write_color(0, lighting_diffuse, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+pass.write_color(1, lighting_specular, RenderLoadAction::Clear, k_lighting_accum_clear_color);
 
-// 3. Composite
-pass.read_texture(lighting_accum, RenderGraphAccess::GraphicsSRV);
+// 3. Composite (linear HDR)
+pass.read_texture(lighting_diffuse, RenderGraphAccess::GraphicsSRV);
+pass.read_texture(lighting_specular, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, scene_hdr_linear, RenderLoadAction::Clear, k_scene_hdr_clear_color);
+
+// 4. Tone map -> output
+pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
 pass.write_color(0, output, view_context.color_load_action, view_context.color_clear_value);
 ```
 
-真实 draw 逻辑仍复用 `SceneRenderer`、`DeferredLightingPass`、`GraphicsProgram`、material proxy 和 instance buffer 路径。Graph 只接管 pass/resource 声明和执行外壳。
+真实 draw 逻辑仍复用 `SceneRenderer`、`DeferredLightingPass`、`PostProcessToneMapPass`、`GraphicsProgram`、material proxy 和 instance buffer 路径。Graph 只接管 pass/resource 声明和执行外壳。
 
 ## 11. Tracy 与命名要求
 

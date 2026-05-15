@@ -429,6 +429,10 @@ namespace RHI
 		m_copyQueue.shutdown();
 
 		m_shaderPool.clear();
+		{
+			std::lock_guard<std::mutex> lock(m_samplerDedupMutex);
+			m_samplerDedupPool.clear();
+		}
 		m_samplerCache.clear();
 		_drain_d3d12_debug_messages("shutdown");
 		_drain_dxgi_debug_messages("shutdown");
@@ -1273,12 +1277,35 @@ namespace RHI
 		return program;
 	}
 
-	auto DX12Context::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
+	auto DX12Context::create_sampler_uncached(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
 	{
 		auto sampler = std::make_shared<DX12Sampler>();
 		if (!sampler->init(ci, m_device.Get(), &m_descriptorHeaps))
+		{
 			return nullptr;
+		}
 		return sampler;
+	}
+
+	auto DX12Context::create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler>
+	{
+		const uint64_t key = hash_sampler_creation_key(ci);
+		std::lock_guard<std::mutex> lock(m_samplerDedupMutex);
+		const auto found = m_samplerDedupPool.find(key);
+		if (found != m_samplerDedupPool.end())
+		{
+			if (std::shared_ptr<Sampler> cached = found->second.lock())
+			{
+				return cached;
+			}
+			m_samplerDedupPool.erase(found);
+		}
+		std::shared_ptr<Sampler> created = create_sampler_uncached(ci);
+		if (created)
+		{
+			m_samplerDedupPool.emplace(key, std::weak_ptr<Sampler>(created));
+		}
+		return created;
 	}
 
 	auto DX12Context::get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler>

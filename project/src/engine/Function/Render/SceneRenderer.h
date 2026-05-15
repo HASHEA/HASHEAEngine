@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/DeferredLightingPass.h"
+#include "Function/Render/PostProcessToneMapPass.h"
 #include "Function/Render/EngineShaderFamilyRegistry.h"
 #include "Function/Render/RenderGraphFwd.h"
 #include "Function/Render/RenderScene.h"
@@ -67,6 +68,7 @@ namespace AshEngine
 		Renderer* m_renderer = nullptr;
 		DebugDrawService* m_debug_draw_service = nullptr;
 		DeferredLightingPass m_deferred_lighting_pass{};
+		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;
 		std::shared_ptr<VertexBuffer> m_debug_draw_vertex_buffer = nullptr;
 		uint32_t m_debug_draw_vertex_capacity = 0;

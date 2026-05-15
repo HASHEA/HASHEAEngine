@@ -6,7 +6,8 @@ Texture2D<float4> SceneGBufferC : register(t2);
 Texture2D<float4> SceneGBufferD : register(t3);
 Texture2D<float4> SceneGBufferE : register(t4);
 Texture2D<float> SceneDepth : register(t5);
-Texture2D<float4> SceneLightingAccum : register(t6);
+Texture2D<float4> SceneLightingDiffuse : register(t6);
+Texture2D<float4> SceneLightingSpecular : register(t7);
 SamplerState ScenePointClampSampler : register(s0);
 
 static const uint ASH_SHADING_MODEL_EMPTY = 0;
@@ -174,8 +175,18 @@ float3 AshFresnelSchlick(float cos_theta, float3 f0)
     return f0 + (1.0 - f0) * pow(saturate(1.0 - cos_theta), 5.0);
 }
 
-float3 AshEvaluateDefaultLitGGX(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
+struct AshSplitLighting
 {
+    float3 diffuse;
+    float3 specular;
+};
+
+AshSplitLighting AshEvaluateDefaultLitGGX_Split(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
+{
+    AshSplitLighting result;
+    result.diffuse = 0.0.xxx;
+    result.specular = 0.0.xxx;
+
     const float3 n = normalize(surface.normal_ws);
     const float3 v = normalize(AshCameraPositionAndFlags.xyz - surface.position_ws);
     const float3 l = normalize(light_dir_ws);
@@ -186,20 +197,33 @@ float3 AshEvaluateDefaultLitGGX(AshDeferredSurface surface, float3 light_dir_ws,
     const float h_dot_v = saturate(dot(h, v));
     if (n_dot_l <= 0.0 || n_dot_v <= 0.0)
     {
-        return 0.0.xxx;
+        return result;
     }
 
     const float3 f0 = surface.specular_color;
     const float3 f = AshFresnelSchlick(h_dot_v, f0);
     const float d = AshDistributionGGX(n_dot_h, surface.roughness);
     const float g = AshGeometrySchlickGGX(n_dot_v, surface.roughness) * AshGeometrySchlickGGX(n_dot_l, surface.roughness);
-    const float3 specular = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 1e-4);
+    const float3 specular_term = (d * g * f) / max(4.0 * n_dot_v * n_dot_l, 1e-4);
     const float3 kd = (1.0 - f) * (1.0 - surface.metallic);
-    return (kd * AshDiffuseLambert(surface.base_color) + specular) * light_radiance * n_dot_l * surface.ao;
+    const float3 common = light_radiance * n_dot_l * surface.ao;
+    result.diffuse = kd * AshDiffuseLambert(surface.base_color) * common;
+    result.specular = specular_term * common;
+    return result;
 }
 
-float3 AshEvaluateBlinnPhong(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
+float3 AshEvaluateDefaultLitGGX(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
 {
+    const AshSplitLighting split = AshEvaluateDefaultLitGGX_Split(surface, light_dir_ws, light_radiance);
+    return split.diffuse + split.specular;
+}
+
+AshSplitLighting AshEvaluateBlinnPhong_Split(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
+{
+    AshSplitLighting result;
+    result.diffuse = 0.0.xxx;
+    result.specular = 0.0.xxx;
+
     const float3 n = normalize(surface.normal_ws);
     const float3 v = normalize(AshCameraPositionAndFlags.xyz - surface.position_ws);
     const float3 l = normalize(light_dir_ws);
@@ -207,8 +231,17 @@ float3 AshEvaluateBlinnPhong(AshDeferredSurface surface, float3 light_dir_ws, fl
     const float n_dot_l = saturate(dot(n, l));
     const float n_dot_h = saturate(dot(n, h));
     const float shininess = lerp(96.0, 8.0, surface.roughness);
-    const float specular = pow(n_dot_h, shininess) * surface.specular_scalar;
-    return (surface.base_color * n_dot_l + specular.xxx) * light_radiance * surface.ao;
+    const float specular_scalar = pow(n_dot_h, shininess) * surface.specular_scalar;
+    const float3 radiance_ao = light_radiance * surface.ao;
+    result.diffuse = surface.base_color * n_dot_l * radiance_ao;
+    result.specular = specular_scalar.xxx * radiance_ao;
+    return result;
+}
+
+float3 AshEvaluateBlinnPhong(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
+{
+    const AshSplitLighting split = AshEvaluateBlinnPhong_Split(surface, light_dir_ws, light_radiance);
+    return split.diffuse + split.specular;
 }
 
 float3 AshEvaluateDynamicLight(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
@@ -224,17 +257,44 @@ float3 AshEvaluateDynamicLight(AshDeferredSurface surface, float3 light_dir_ws, 
     return AshEvaluateDefaultLitGGX(surface, light_dir_ws, light_radiance);
 }
 
-float3 AshEvaluateBaseEmissive(AshDeferredSurface surface)
+AshSplitLighting AshEvaluateDynamicLight_Split(AshDeferredSurface surface, float3 light_dir_ws, float3 light_radiance)
 {
+    AshSplitLighting result;
+    result.diffuse = 0.0.xxx;
+    result.specular = 0.0.xxx;
+    if (!surface.valid || surface.shading_model == ASH_SHADING_MODEL_EMPTY || surface.shading_model == ASH_SHADING_MODEL_UNLIT)
+    {
+        return result;
+    }
+    if (surface.shading_model == ASH_SHADING_MODEL_BLINN_PHONG)
+    {
+        return AshEvaluateBlinnPhong_Split(surface, light_dir_ws, light_radiance);
+    }
+    return AshEvaluateDefaultLitGGX_Split(surface, light_dir_ws, light_radiance);
+}
+
+AshSplitLighting AshEvaluateBaseEmissive_Split(AshDeferredSurface surface)
+{
+    AshSplitLighting result;
+    result.diffuse = 0.0.xxx;
+    result.specular = 0.0.xxx;
     if (!surface.valid)
     {
-        return 0.0.xxx;
+        return result;
     }
     if (surface.shading_model == ASH_SHADING_MODEL_UNLIT)
     {
-        return surface.base_color * surface.ao + surface.emissive;
+        result.diffuse = surface.base_color * surface.ao + surface.emissive;
+        return result;
     }
-    return surface.emissive;
+    result.diffuse = surface.emissive;
+    return result;
+}
+
+float3 AshEvaluateBaseEmissive(AshDeferredSurface surface)
+{
+    const AshSplitLighting split = AshEvaluateBaseEmissive_Split(surface);
+    return split.diffuse + split.specular;
 }
 
 float AshRangeAttenuation(float distance, float range)

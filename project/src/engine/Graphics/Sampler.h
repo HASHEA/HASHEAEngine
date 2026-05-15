@@ -37,6 +37,10 @@ namespace RHI
 		float					max_anisotropy				= 0;
 		const char*				name						= nullptr;
 	};
+
+	/** State-only fingerprint for sampler interning; ignores `name` (debug label). */
+	uint64_t hash_sampler_creation_key(const SamplerCreation& ci) noexcept;
+
 	class Sampler : public RHIResource
 	{
 	public:

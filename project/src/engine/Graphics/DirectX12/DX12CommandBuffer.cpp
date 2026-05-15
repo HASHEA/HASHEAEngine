@@ -11,6 +11,7 @@
 #include "Base/hprofiler.h"
 #include "Graphics/Framebuffer.h"
 #include "Graphics/TextureUploadUtils.h"
+#include <pix.h>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -82,6 +83,7 @@ namespace RHI
 			HLogError("DX12CommandBuffer: command list Reset failed. HRESULT: 0x{:08X}", static_cast<uint32_t>(hr));
 			return;
 		}
+		m_renderPassPixEventActive = false;
 		m_state = ASH_Recording;
 
 		// Set descriptor heaps
@@ -306,10 +308,18 @@ namespace RHI
 		return !has_error();
 	}
 
-	auto DX12CommandBuffer::cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void
+	auto DX12CommandBuffer::cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer, const char* debug_scope_name) -> void
 	{
 		m_currentFramebuffer = frameBuffer;
 		auto* dx12Fb = static_cast<DX12Framebuffer*>(frameBuffer.get());
+
+		const char* pass_label =
+			(debug_scope_name && debug_scope_name[0] != '\0') ? debug_scope_name : "namelesspass";
+		const std::wstring pass_label_wide = dx12_debug_name_to_wstring(pass_label);
+		PIXBeginEvent(
+			m_cmdList.Get(),
+			PIX_COLOR_DEFAULT,
+			pass_label_wide.empty() ? L"namelesspass" : pass_label_wide.c_str());
 
 		uint32_t numRTs = dx12Fb->get_rtv_count();
 		const D3D12_CPU_DESCRIPTOR_HANDLE* rtvHandles = dx12Fb->get_rtv_handles();
@@ -344,10 +354,17 @@ namespace RHI
 				m_cmdList->ClearDepthStencilView(*dsvHandle, clearFlags, dsv.depth, static_cast<UINT8>(dsv.stencil), 0, nullptr);
 			}
 		}
+
+		m_renderPassPixEventActive = true;
 	}
 
 	auto DX12CommandBuffer::cmd_end_render_pass() -> void
 	{
+		if (m_renderPassPixEventActive)
+		{
+			PIXEndEvent(m_cmdList.Get());
+			m_renderPassPixEventActive = false;
+		}
 		m_currentFramebuffer = nullptr;
 	}
 

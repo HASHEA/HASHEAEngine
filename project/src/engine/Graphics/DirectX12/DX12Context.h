@@ -128,6 +128,7 @@ namespace RHI
 		auto _flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _finalize_upload_command_buffer(DX12FrameResources& frameResources) -> bool;
+		auto create_sampler_uncached(const SamplerCreation& ci) -> std::shared_ptr<Sampler>;
 		static void __stdcall _d3d12_debug_message_callback(
 			D3D12_MESSAGE_CATEGORY category,
 			D3D12_MESSAGE_SEVERITY severity,
@@ -171,8 +172,10 @@ namespace RHI
 		// Command buffers
 		std::vector<DX12CommandBuffer*> m_commandBuffers;
 
-		// Sampler cache
+		// Sampler cache / deduplication
 		Array<std::shared_ptr<Sampler>> m_samplerCache;
+		std::unordered_map<uint64_t, std::weak_ptr<Sampler>> m_samplerDedupPool{};
+		mutable std::mutex m_samplerDedupMutex{};
 		std::unordered_map<uint64_t, std::shared_ptr<Shader>> m_shaderPool;
 
 		// Staging buffer

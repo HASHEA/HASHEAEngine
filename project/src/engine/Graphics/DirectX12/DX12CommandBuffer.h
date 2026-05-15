@@ -33,7 +33,7 @@ namespace RHI
 		auto cmd_transition_resource_state(const std::initializer_list<AshBarrier>& lsBarrierInfoArrray) -> bool override;
 		auto cmd_transition_resource_state(const AshBarrier* pBarrierInfo, uint32_t uBarrierCount) -> bool override;
 
-		auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer) -> void override;
+		auto cmd_begin_render_pass(std::shared_ptr<Framebuffer> frameBuffer, const char* debug_scope_name = nullptr) -> void override;
 		auto cmd_end_render_pass() -> void override;
 		auto cmd_bind_pipeline() -> void override;
 		auto cmd_set_viewport(const Viewport& viewport) -> void override;
@@ -59,5 +59,6 @@ namespace RHI
 		AshCommandBufferState m_state = ASH_Idle;
 		std::shared_ptr<Framebuffer> m_currentFramebuffer;
 		bool m_isFirstRecord = true;
+		bool m_renderPassPixEventActive = false;
 	};
 }

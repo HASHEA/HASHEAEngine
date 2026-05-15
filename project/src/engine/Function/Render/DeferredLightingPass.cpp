@@ -34,6 +34,7 @@ namespace AshEngine
 		static constexpr const char* k_deferred_composite_shader_path =
 			"project/src/engine/Shaders/Deferred/DeferredComposite.hlsl";
 		static constexpr RenderColorValue k_lighting_accum_clear_color{ 0.0f, 0.0f, 0.0f, 1.0f };
+		static constexpr RenderColorValue k_scene_hdr_clear_color{ 0.0f, 0.0f, 0.0f, 1.0f };
 
 		struct DeferredLightingVertex
 		{
@@ -495,7 +496,9 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(output_target);
 		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
 		ASH_PROCESS_ERROR(deferred_resources.depth);
-		ASH_PROCESS_ERROR(deferred_resources.lighting_accum);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
+		ASH_PROCESS_ERROR(deferred_resources.scene_hdr_linear);
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredLightingAccumPass",
@@ -507,7 +510,8 @@ namespace AshEngine
 					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
 				}
 				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
-				pass.write_color(0, deferred_resources.lighting_accum, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+				pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+				pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Clear, k_lighting_accum_clear_color);
 			},
 			[this, &frame, &deferred_resources, &view_context, output_target](RenderGraphRasterContext& context) -> bool
 			{
@@ -592,17 +596,20 @@ namespace AshEngine
 			RenderGraphPassFlags::None,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
-				pass.read_texture(deferred_resources.lighting_accum, RenderGraphAccess::GraphicsSRV);
-				pass.write_color(0, output_target, view_context.color_load_action, view_context.color_clear_value);
+				pass.read_texture(deferred_resources.lighting_diffuse, RenderGraphAccess::GraphicsSRV);
+				pass.read_texture(deferred_resources.lighting_specular, RenderGraphAccess::GraphicsSRV);
+				pass.write_color(0, deferred_resources.scene_hdr_linear, RenderLoadAction::Clear, k_scene_hdr_clear_color);
 			},
 			[this, &frame, &deferred_resources, &view_context, output_target](RenderGraphRasterContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneDeferredCompositePass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-				std::shared_ptr<RenderTarget> lighting = context.get_texture(deferred_resources.lighting_accum);
+				std::shared_ptr<RenderTarget> lighting_diffuse = context.get_texture(deferred_resources.lighting_diffuse);
+				std::shared_ptr<RenderTarget> lighting_specular = context.get_texture(deferred_resources.lighting_specular);
 				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
-				ASH_PROCESS_ERROR(lighting && output);
-				ASH_PROCESS_ERROR(m_composite_program->set_texture("SceneLightingAccum", lighting));
+				ASH_PROCESS_ERROR(lighting_diffuse && lighting_specular && output);
+				ASH_PROCESS_ERROR(m_composite_program->set_texture("SceneLightingDiffuse", lighting_diffuse));
+				ASH_PROCESS_ERROR(m_composite_program->set_texture("SceneLightingSpecular", lighting_specular));
 				ASH_PROCESS_ERROR(m_composite_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 				ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
 					m_composite_program.get(),
@@ -611,6 +618,7 @@ namespace AshEngine
 					false)));
 				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 			}));
+
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 }

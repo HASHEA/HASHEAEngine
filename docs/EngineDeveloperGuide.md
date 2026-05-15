@@ -510,10 +510,10 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 Scene deferred 主路径现在通过 graph 表达：
 
 ```text
-SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass
+SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass
 ```
 
-当本帧存在 `DebugDrawService` 提交的调试线时，`SceneRenderer` 会在 composite 之后追加 `SceneDebugDrawOverlayPass`，以 `RenderLoadAction::Load` 叠加到同一个 output。该 pass 会显式声明对 output 的 load/read 依赖，保证 RenderGraph culling 保留前一个 output producer。
+当本帧存在 `DebugDrawService` 提交的调试线时，`SceneRenderer` 会在 tone-map 之后追加 `SceneDebugDrawOverlayPass`，以 `RenderLoadAction::Load` 叠加到同一个 output。该 pass 会显式声明对 output 的 load/read 依赖，保证 RenderGraph culling 保留前一个 output producer。
 
 External output 和 extracted texture 是 culling root；`NeverCull` pass 保留；无 root 依赖的 pass 会被 compiler 剔除。Graph transient texture 执行期通过 `Renderer` 的 transient render target pool 获取和释放，避免 pass lambda 仍引用的 SRV/RTV 提前析构。Vulkan 合法性要求所有 graph barrier 都在 active render pass 外提交；graph 不应强行把 external output 的 final state 改成 `SRVGraphics`，应由目标资源能力决定默认 final state，例如 swapchain/backbuffer 走 `Present`。
 
@@ -560,12 +560,13 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
   - `GBufferD`：`RGBA16_SFLOAT`，MotionVector3D.xyz + TemporalFlags.a
   - `GBufferE`：`RGBA16_SFLOAT`，NormalOct.xy + EmissiveOrCustom.zw
 - `MotionVector3D` 在当前设计里表示 screen-space velocity.xy + z，不是 world-space velocity；第一版 shader 先写 0，历史帧矩阵与 velocity 生成后续补齐。
-- `SceneRenderer` 默认 deferred path 通过 `RenderGraphBuilder` 创建 graph transient GBuffer targets、可采样 D32 depth 和 `SceneDeferredLightingAccum` RGBA16F lighting accumulation target。
-- `SceneRenderer` 注册 `SceneGBufferPass`，再由 `DeferredLightingPass::add_passes()` 注册 `SceneDeferredLightingAccumPass` 和 `SceneDeferredCompositePass`。
-- `SceneDeferredLightingAccumPass` 会先用 fullscreen base/emissive pass 写入自发光；directional light 使用 fullscreen additive pass；point light 使用 sphere volume；spot light 使用 cone volume。
-- point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
-- `SceneDeferredCompositePass` 采样 lighting accumulation 并写回 `SceneRenderViewContext.output_target`。
-- `SceneDebugDrawOverlayPass` 仅在本帧有 debug lines 时追加在 composite 后，使用 line-list graphics program 直接覆盖到 output；第一版不做 depth test、alpha blend 或宽线几何扩展。
+- `SceneRenderer` 默认 deferred path 通过 `RenderGraphBuilder` 创建 graph transient GBuffer targets、可采样 D32 depth，两张 RGBA16F 的 `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`（光照 pass MRT 输出），以及一张 RGBA16F 的 `SceneDeferredSceneHDRLinear`（composite 输出的线性 HDR 中转）。
+- `SceneRenderer` 注册 `SceneGBufferPass`，再由 `DeferredLightingPass::add_passes()` 注册 `SceneDeferredLightingAccumPass` 与 `SceneDeferredCompositePass`，随后由 `PostProcessToneMapPass::add_pass()` 注册 `SceneDeferredToneMapPass`。
+- `SceneDeferredLightingAccumPass` 会先用 fullscreen base/emissive pass 将自发光等写入 diffuse RT（specular RT 同步累加）；directional light 使用 fullscreen additive pass；point light 使用 sphere volume；spot light 使用 cone volume。
+- point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、对两张颜色附件同时做 additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
+- `SceneDeferredCompositePass` 采样两张 lighting RT，合并为线性 HDR radiance 后写入 `SceneDeferredSceneHDRLinear`。
+- `SceneDeferredToneMapPass` 采样 HDR 中转 RT，将 tone-mapped（ACES + exposure）结果显示写入 `SceneRenderViewContext.output_target`（若 output 为 `RGBA8_UNORM` / `BGRA8_UNORM` 则在 shader 内做手动 sRGB 编码；`RGBA8_SRGB` / `BGRA8_SRGB` 由 RT 格式承担编码）。
+- `SceneDebugDrawOverlayPass` 仅在本帧有 debug lines 时追加在 tone-map 后，使用 line-list graphics program 直接覆盖到 output；第一版不做 depth test、alpha blend 或宽线几何扩展。
 - `SceneRenderer` 不再保留旧 `Surface.StaticMesh.BasePass` 前向 fallback；`BasePass` 仍作为材质 / shader family 能力保留，透明材质仍不进入当前 deferred opaque path。
 
 材质边界保持不变：
@@ -1326,7 +1327,7 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
 - `SceneRenderViewContext` 负责描述 per-view 提交状态：
   - `output_target`
   - 可选 `viewport` / `scissor`
-  - final composite output 的 color load action 与 clear value
+  - tone-map / final output 的 color load action 与 clear value（由 `SceneDeferredToneMapPass` 作为首个写入 `output_target` 的 pass 消费）
   - graph transient scene depth 的 clear value
 - `SceneRenderer` 的主入口为 `SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)`
 - `SceneRenderer` 不再持有一个覆盖全场景的共享 `GraphicsProgram`
@@ -1335,7 +1336,7 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
   - per-view render pass / RenderGraph deferred GBuffer / depth 目标声明
   - 静态网格 batch 构建、单可见静态网格 direct section submit、frame-local instance buffer slot 分配 / 更新和 draw 提交
   - 消费 section 的 `MaterialRenderProxy`
-  - 第一版 deferred lighting accumulation / composite
+  - 第一版 deferred lighting accumulation / composite（线性 HDR 中转）；由 `PostProcessToneMapPass` 负责 tone-map 全屏 pass
   - 第一版 `DebugDrawService` line-list overlay pass
 - 当前 `Surface.StaticMesh` shader family 仍使用 instanced vertex layout，所以单可见 draw fast path 不是非 instanced shader 路径；它只绕过 batch lookup / instance vector 构建，并继续绑定 slot 1 的单实例 buffer
 - instance buffer 资源池仍由 `SceneRenderer` 复用，但 buffer slot 分配在 `VisibleRenderFrame::frame_index` 变化时重置；同一 frame 内顺序提交多个 scene view 时，每个 view/pass 使用不同 slot range，避免 CPU 更新后一个 view 的实例矩阵时影响前一个 view 已记录的 draw
@@ -1562,7 +1563,7 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 
 1. 看 `product/logs`
 2. 按 backend 打开 validation
-3. RenderDoc 抓帧看资源内容、layout、pass 输出
+3. RenderDoc 抓帧看资源内容、layout、pass 输出；Vulkan 在启用 `VK_EXT_debug_utils` 时用 debug utils label；DX12 在每个 render pass 上用 Windows SDK `pix.h` 的 `PIXBeginEvent`/`PIXEndEvent`。**命令列表上的 pass 事件名只来自当前 `PassDesc::name`**（传给 `cmd_begin_render_pass`）；缺失或空字符串时固定为 **`namelesspass`**，**不再回退到 framebuffer 对象名**，以避免缓存复用的 framebuffer 携带其它 pass 的旧调试名导致串标。
 4. Vulkan 问题看 resource tracker / barrier 位置
 5. 泄露问题看 VMA leak dump
 
