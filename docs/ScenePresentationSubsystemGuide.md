@@ -39,6 +39,7 @@ auto* scene_presentation = AshEngine::Application::get_scene_presentation();
 
 - `SceneOutputDesc`
 - `SceneCameraSelector`
+- `SceneViewCameraOverride`
 - `SceneViewOverrides`
 - `SceneViewBindingDesc`
 
@@ -69,6 +70,16 @@ auto* scene_presentation = AshEngine::Application::get_scene_presentation();
 
 binding 是持久声明，不是逐帧命令。上层通过 `create_*` / `update_*` / `destroy_*` 维护声明，实际渲染发生在 `Application` 驱动的固定帧阶段。
 
+### Camera Selector
+
+`SceneCameraSelector` 当前支持：
+
+- `SceneCameraSource::PrimaryCamera`：使用 scene 中 primary camera。
+- `SceneCameraSource::EntityId`：使用指定 camera entity。
+- `SceneCameraSource::Override`：使用 `SceneViewCameraOverride` 的显式 view/projection matrix 与 camera position，`override_view.enabled` 必须为 true。
+
+`Override` 适合 Editor camera、preview camera、外部工具相机等不应该写入 scene entity 的视图。它仍然需要有效 `Scene*`，因为 scene presentation 需要从 scene 构建 `RenderScene` 和 `VisibleRenderFrame`。clear、pixel rect、show flags 等参数继续放在 `SceneViewOverrides` 中，不和 camera source 混在一起。
+
 ## 4. 固定运行阶段
 
 `Application` 统一驱动两个 scene presentation 阶段：
@@ -97,6 +108,7 @@ binding 是持久声明，不是逐帧命令。上层通过 `create_*` / `update
 - 内部按 `Scene*` 维护 `RenderScene`
 - scene change version 变化，或 binding 请求 refresh 时，允许按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 退化同步
 - `build_scene_view_for_camera_entity(...)` 已提供显式 camera entity 入口
+- `build_scene_view_from_matrices(...)` 已提供显式 view/projection matrix 入口，并由 `SceneCameraSource::Override` 使用
 - `PrimaryCamera` 仍保留为便捷 fallback
 
 ## 6. UI 展示路径

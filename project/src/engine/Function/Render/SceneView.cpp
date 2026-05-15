@@ -72,6 +72,28 @@ namespace AshEngine
 			const float fov_y_radians = glm::radians(std::clamp(camera.fov_y_degrees, 1.0f, 179.0f));
 			return glm::perspectiveLH_ZO(fov_y_radians, aspect, std::max(camera.near_plane, 0.001f), std::max(camera.far_plane, camera.near_plane + 0.001f));
 		}
+
+		static auto populate_scene_view_from_matrices(
+			const SceneViewDesc& desc,
+			const glm::mat4& view,
+			const glm::mat4& projection,
+			const glm::vec3& camera_position,
+			SceneView& out_view) -> void
+		{
+			out_view = {};
+			out_view.desc = desc;
+			out_view.camera_position = camera_position;
+			out_view.view = view;
+			out_view.projection = projection;
+			out_view.view_projection = out_view.projection * out_view.view;
+			out_view.frustum_planes[0] = extract_plane(out_view.view_projection, +1, 0);
+			out_view.frustum_planes[1] = extract_plane(out_view.view_projection, -1, 0);
+			out_view.frustum_planes[2] = extract_plane(out_view.view_projection, +1, 1);
+			out_view.frustum_planes[3] = extract_plane(out_view.view_projection, -1, 1);
+			out_view.frustum_planes[4] = extract_plane(out_view.view_projection, +1, 2);
+			out_view.frustum_planes[5] = extract_plane(out_view.view_projection, -1, 2);
+			out_view.is_valid = true;
+		}
 	}
 
 	bool build_primary_scene_view(const Scene& scene, const SceneViewDesc& desc, SceneView& out_view)
@@ -120,19 +142,20 @@ namespace AshEngine
 		const CameraComponent camera = camera_entity.get_camera_component();
 		const TransformComponent transform = camera_entity.get_transform_component();
 
+		populate_scene_view_from_matrices(desc, make_view_matrix(transform), make_projection_matrix(camera, desc), transform.position, out_view);
 		out_view.camera_entity_id = camera_entity.get_id();
-		out_view.desc = desc;
-		out_view.camera_position = transform.position;
-		out_view.view = make_view_matrix(transform);
-		out_view.projection = make_projection_matrix(camera, desc);
-		out_view.view_projection = out_view.projection * out_view.view;
-		out_view.frustum_planes[0] = extract_plane(out_view.view_projection, +1, 0);
-		out_view.frustum_planes[1] = extract_plane(out_view.view_projection, -1, 0);
-		out_view.frustum_planes[2] = extract_plane(out_view.view_projection, +1, 1);
-		out_view.frustum_planes[3] = extract_plane(out_view.view_projection, -1, 1);
-		out_view.frustum_planes[4] = extract_plane(out_view.view_projection, +1, 2);
-		out_view.frustum_planes[5] = extract_plane(out_view.view_projection, -1, 2);
-		out_view.is_valid = true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool build_scene_view_from_matrices(
+		const SceneViewDesc& desc,
+		const glm::mat4& view,
+		const glm::mat4& projection,
+		const glm::vec3& camera_position,
+		SceneView& out_view)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		populate_scene_view_from_matrices(desc, view, projection, camera_position, out_view);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 }

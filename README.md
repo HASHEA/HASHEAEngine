@@ -11,6 +11,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 - Engine 分层架构：`Base`、`Graphics`、`Function` 三层，Editor / Sandbox 通过 Function 层使用引擎能力。
 - Vulkan 与 DX12 双后端：运行时通过 `product/config/Engine.ini` 选择后端，Windows Debug / Release 构建同时编入 Vulkan、DX12、DXC。
 - Scene-driven 静态网格渲染：逻辑 `Scene` 通过 `ScenePresentationSubsystem` 转换为渲染线程可消费的不可变可见帧数据，opaque / masked 静态网格可走 DeferredHQ GBuffer 路径。
+- Scene 编辑辅助接口：Engine 侧提供 Scene view matrix override、world bounds、screen ray、CPU AABB picking，以及 `AssetId` 驱动的 prefab/model 放置入口。
 - 材质 V2 基础链路：支持 `Surface.StaticMesh` 的材质 shader 与 engine shader family 拼合，`.AshMat` 作为基材质，`.AshMatIns` 作为可直接赋给物体的材质实例。
 - Asset 与 glTF 示例资源：支持示例模型加载，Sandbox 默认使用 Sponza 作为标准验证场景，并可在运行时通过 overlay 切换 `product/assets/models/gltfs/` 下的 glTF。
 - Editor 基础壳：具备 dockspace、Scene/Game 视口、层级、属性、控制台、资产浏览等基础面板。
@@ -93,11 +94,13 @@ HASHEAEngine/
 - 内部基于 entt 风格 registry 管理实体、层级和组件。
 - 当前公开组件包括 `Name`、`Transform`、`Camera`、`Light`、`Mesh`。
 - `MeshComponent` 支持资产路径、mesh index、section 材质覆盖、可见性、mobility、layer mask。
+- `SceneQuery.h` 提供 entity/subtree world bounds、screen-to-world ray 和第一阶段 CPU AABB picking。
+- `SceneInstantiationDesc` + `instantiate_asset(Scene&, AssetDatabase&, AssetId, ...)` 提供 Editor 拖拽放置需要的 AssetId facade，可按 root world transform 实例化 prefab/model。
 
 Scene 到渲染的主路径：
 
 - `Application` 持有 `ScenePresentationSubsystem`。
-- 上层声明 `Scene + Camera + Output + View Overrides`。
+- 上层声明 `Scene + Camera + Output + View Overrides`；camera 可来自 primary camera、指定 camera entity，或显式 view/projection matrix override。
 - `ScenePresentationSubsystem` 维护 per-scene `RenderScene` cache、构建 `SceneView` 和 `VisibleRenderFrame`。
 - 逻辑线程负责 scene ownership 和可见帧构建。
 - worker 线程执行 CPU frustum culling。
@@ -312,7 +315,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
 | RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、DX12 mailbox present 映射、shader-visible descriptor heap 分帧分区、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
 | Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderGraph` 第一版已接入 Function/Render，支持 texture graph、raster/compute pass 声明、pass culling、lifetime 编译、pass-boundary barrier plan，并完成 scene deferred 主路径迁移；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，DeferredHQ GBuffer、第一版 deferred lighting、静态网格 draw 排序、instance batching、单可见静态网格 fast path、barrier 去重和 pass/framebuffer cache 已接入。 |
-| Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通。 |
+| Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通，并提供 SceneQuery、matrix camera override 和 AssetId prefab/model 放置 helper。 |
 | Material | V2 `Surface.StaticMesh` BasePass、DepthOnly 与 GBuffer pass 已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |
 | Asset | glTF 示例模型、普通贴图 decode、DDS/KTX2 cooked BCn 与 sRGB 压缩格式载入、async in-flight 去重、失败缓存、static mesh render asset 桥接已具备，`.AshAsset` 序列化已从模型导入器中拆分，完整 asset cooking / streaming 尚未完成。 |
 | Editor | 基础 workspace 和常用面板已具备，当前更偏向引擎验证与工具雏形，完整编辑器能力仍在开发。 |

@@ -40,13 +40,23 @@ namespace AshEngine
 	enum class SceneCameraSource : uint8_t
 	{
 		PrimaryCamera = 0,
-		EntityId
+		EntityId,
+		Override
+	};
+
+	struct ASH_API SceneViewCameraOverride
+	{
+		glm::mat4 view{ 1.0f };
+		glm::mat4 projection{ 1.0f };
+		glm::vec3 camera_position{ 0.0f };
+		bool enabled = false;
 	};
 
 	struct ASH_API SceneCameraSelector
 	{
 		SceneCameraSource source = SceneCameraSource::PrimaryCamera;
 		EntityId entity_id = 0;
+		SceneViewCameraOverride override_view{};
 	};
 
 	enum class SceneClearMode : uint8_t

@@ -1478,6 +1478,61 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(result, Entity{});
 	}
 
+	Entity instantiate_asset(
+		Scene& scene,
+		AssetDatabase& database,
+		AssetId asset_id,
+		const SceneInstantiationDesc& desc)
+	{
+		ASH_PROCESS_GUARD_RETURN(Entity, result, Entity{}, Entity{});
+		ASH_PROCESS_ERROR(scene.is_valid());
+		ASH_PROCESS_ERROR(database.is_valid());
+		ASH_PROCESS_ERROR(asset_id != 0);
+
+		const AssetInfo* asset_info = database.find_asset_by_id(asset_id);
+		ASH_PROCESS_ERROR(asset_info != nullptr);
+
+		const std::string_view root_name_override(desc.root_name_override);
+		if (asset_info->type == AssetType::Prefab)
+		{
+			std::shared_ptr<const AshAsset> asset{};
+			ASH_PROCESS_ERROR(database.load_ashasset_by_id(asset_id, asset));
+			ASH_PROCESS_ERROR(asset != nullptr);
+			result = scene.instantiate_ashasset(*asset, desc.parent, root_name_override);
+		}
+		else if (asset_info->type == AssetType::Model)
+		{
+			std::shared_ptr<const Model> model{};
+			ASH_PROCESS_ERROR(database.load_model_by_id(asset_id, model));
+			ASH_PROCESS_ERROR(model != nullptr);
+			result = scene.instantiate_model(*model, desc.parent, root_name_override);
+		}
+		else
+		{
+			ASH_PROCESS_ERROR(false);
+		}
+
+		ASH_PROCESS_ERROR(result.is_valid());
+		if (desc.use_world_transform)
+		{
+			TransformComponent world_transform{};
+			world_transform.position = desc.world_position;
+			world_transform.rotation_euler_degrees = desc.world_rotation_euler_degrees;
+			world_transform.scale = desc.world_scale;
+
+			if (desc.parent.is_valid())
+			{
+				glm::mat4 local_matrix = transform_component_to_matrix(world_transform);
+				local_matrix = glm::inverse(scene.get_entity_world_transform(desc.parent.get_id())) * local_matrix;
+				world_transform = matrix_to_transform_component(local_matrix);
+			}
+
+			ASH_PROCESS_ERROR(result.set_transform_component(world_transform));
+		}
+
+		ASH_PROCESS_GUARD_RETURN_END(result, Entity{});
+	}
+
 	bool Scene::save_to_file(const std::filesystem::path& path, std::string* out_error)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);

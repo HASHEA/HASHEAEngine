@@ -43,4 +43,10 @@ namespace AshEngine
 		const SceneViewDesc& desc,
 		SceneView& out_view);
 	ASH_API bool build_primary_scene_view(const Scene& scene, const SceneViewDesc& desc, SceneView& out_view);
+	ASH_API bool build_scene_view_from_matrices(
+		const SceneViewDesc& desc,
+		const glm::mat4& view,
+		const glm::mat4& projection,
+		const glm::vec3& camera_position,
+		SceneView& out_view);
 }

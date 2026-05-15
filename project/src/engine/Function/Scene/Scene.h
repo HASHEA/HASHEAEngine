@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Base/hplatform.h"
+#include "Function/Asset/AssetDatabase.h"
 #include "Function/Scene/SceneComponents.h"
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +19,6 @@ namespace AshEngine
 	using EntityId = uint64_t;
 	static constexpr uint32_t k_scene_append_sibling_index = std::numeric_limits<uint32_t>::max();
 
-	class AssetDatabase;
 	struct Model;
 	struct AshAsset;
 
@@ -112,6 +112,16 @@ namespace AshEngine
 		friend class Scene;
 	};
 
+	struct ASH_API SceneInstantiationDesc
+	{
+		Entity parent{};
+		glm::vec3 world_position{ 0.0f };
+		glm::vec3 world_rotation_euler_degrees{ 0.0f };
+		glm::vec3 world_scale{ 1.0f };
+		bool use_world_transform = false;
+		std::string root_name_override{};
+	};
+
 	class ASH_API Scene
 	{
 	public:
@@ -169,6 +179,12 @@ namespace AshEngine
 		explicit Scene(std::shared_ptr<Impl> impl);
 		friend class Entity;
 	};
+
+	ASH_API Entity instantiate_asset(
+		Scene& scene,
+		AssetDatabase& database,
+		AssetId asset_id,
+		const SceneInstantiationDesc& desc = {});
 
 	ASH_API const SceneComponentDesc* get_scene_component_descriptor(SceneComponentType type);
 	ASH_API const SceneComponentDesc* get_scene_component_descriptors(uint32_t* out_count);

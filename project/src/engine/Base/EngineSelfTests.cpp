@@ -14,8 +14,10 @@
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/SceneRenderer.h"
+#include "Function/Render/SceneView.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Scene/Scene.h"
+#include "Function/Scene/SceneQuery.h"
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/Pipeline.h"
 #include "Graphics/RHIResource.h"
@@ -30,6 +32,7 @@
 #include <fstream>
 #include <utility>
 #include <vector>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace AshEngine
 {
@@ -1057,6 +1060,220 @@ namespace AshEngine
 				report_self_test_failure("RenderScene light snapshot", "light data was not extracted with stable transform data");
 		}
 
+		auto write_scene_query_bounds_model(const std::filesystem::path& root_dir) -> std::filesystem::path
+		{
+			const std::filesystem::path bin_path = root_dir / "scene_query_bounds_box.bin";
+			const std::filesystem::path gltf_path = root_dir / "scene_query_bounds_box.gltf";
+
+			std::vector<uint8_t> bytes{};
+			const float positions[] = {
+				-1.0f, -1.0f, -1.0f,
+				 1.0f, -1.0f, -1.0f,
+				 1.0f,  1.0f, -1.0f,
+				-1.0f,  1.0f, -1.0f,
+				-1.0f, -1.0f,  1.0f,
+				 1.0f, -1.0f,  1.0f,
+				 1.0f,  1.0f,  1.0f,
+				-1.0f,  1.0f,  1.0f
+			};
+			for (float value : positions)
+			{
+				append_binary_value(bytes, value);
+			}
+			const uint16_t indices[] = {
+				0, 1, 2, 0, 2, 3,
+				4, 6, 5, 4, 7, 6,
+				0, 4, 5, 0, 5, 1,
+				1, 5, 6, 1, 6, 2,
+				2, 6, 7, 2, 7, 3,
+				3, 7, 4, 3, 4, 0
+			};
+			for (uint16_t value : indices)
+			{
+				append_binary_value(bytes, value);
+			}
+
+			{
+				std::ofstream bin_file(bin_path, std::ios::binary | std::ios::trunc);
+				bin_file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+			}
+			{
+				std::ofstream gltf_file(gltf_path, std::ios::trunc);
+				gltf_file <<
+					"{\n"
+					"  \"asset\": { \"version\": \"2.0\" },\n"
+					"  \"buffers\": [{ \"uri\": \"scene_query_bounds_box.bin\", \"byteLength\": 168 }],\n"
+					"  \"bufferViews\": [\n"
+					"    { \"buffer\": 0, \"byteOffset\": 0, \"byteLength\": 96, \"target\": 34962 },\n"
+					"    { \"buffer\": 0, \"byteOffset\": 96, \"byteLength\": 72, \"target\": 34963 }\n"
+					"  ],\n"
+					"  \"accessors\": [\n"
+					"    { \"bufferView\": 0, \"componentType\": 5126, \"count\": 8, \"type\": \"VEC3\", \"min\": [-1, -1, -1], \"max\": [1, 1, 1] },\n"
+					"    { \"bufferView\": 1, \"componentType\": 5123, \"count\": 36, \"type\": \"SCALAR\" }\n"
+					"  ],\n"
+					"  \"meshes\": [{ \"primitives\": [{ \"attributes\": { \"POSITION\": 0 }, \"indices\": 1, \"mode\": 4 }] }],\n"
+					"  \"nodes\": [{ \"mesh\": 0 }],\n"
+					"  \"scenes\": [{ \"nodes\": [0] }],\n"
+					"  \"scene\": 0\n"
+					"}\n";
+			}
+
+			return gltf_path;
+		}
+
+		auto test_scene_view_builds_from_override_matrices() -> bool
+		{
+			SceneView view{};
+			SceneViewDesc desc{};
+			desc.viewport_width = 128;
+			desc.viewport_height = 64;
+
+			const glm::mat4 view_matrix = glm::lookAtLH(
+				glm::vec3(0.0f, 0.0f, -5.0f),
+				glm::vec3(0.0f, 0.0f, 0.0f),
+				glm::vec3(0.0f, 1.0f, 0.0f));
+			const glm::mat4 projection_matrix = glm::perspectiveLH_ZO(glm::radians(60.0f), 2.0f, 0.1f, 100.0f);
+
+			if (!build_scene_view_from_matrices(desc, view_matrix, projection_matrix, glm::vec3(0.0f, 0.0f, -5.0f), view))
+			{
+				return report_self_test_failure("SceneView matrix override", "failed to build a view from explicit matrices");
+			}
+
+			const bool ok =
+				view.is_valid &&
+				view.camera_entity_id == 0 &&
+				view.desc.viewport_width == 128 &&
+				view.view == view_matrix &&
+				view.projection == projection_matrix &&
+				view.view_projection == projection_matrix * view_matrix &&
+				view.camera_position == glm::vec3(0.0f, 0.0f, -5.0f);
+			return ok ||
+				report_self_test_failure("SceneView matrix override", "explicit matrices were not copied into SceneView");
+		}
+
+		auto test_scene_query_bounds_ray_and_picking() -> bool
+		{
+			const std::filesystem::path test_root = engine_self_test_dir() / "scene_query_assets";
+			std::filesystem::create_directories(test_root);
+			const std::filesystem::path model_path = write_scene_query_bounds_model(test_root);
+			AssetDatabase database = AssetDatabase::create(test_root);
+			if (!database.is_valid() || !database.refresh())
+			{
+				return report_self_test_failure("SceneQuery bounds and picking", "failed to create test asset database");
+			}
+
+			Scene scene = Scene::create("SceneQuerySelfTest");
+			Entity entity = scene.create_entity("Box");
+			TransformComponent transform = entity.get_transform_component();
+			transform.position = { 3.0f, 0.0f, 5.0f };
+			transform.scale = { 2.0f, 1.0f, 1.0f };
+			entity.set_transform_component(transform);
+			MeshComponent mesh{};
+			mesh.asset_path = model_path.filename().generic_string();
+			mesh.mesh_index = 0;
+			entity.add_mesh_component(mesh);
+
+			SceneWorldBounds bounds{};
+			if (!get_entity_world_bounds(scene, database, entity.get_id(), bounds))
+			{
+				return report_self_test_failure("SceneQuery bounds and picking", "failed to query entity world bounds");
+			}
+
+			const bool bounds_ok =
+				bounds.is_valid &&
+				bounds.min == glm::vec3(1.0f, -1.0f, 4.0f) &&
+				bounds.max == glm::vec3(5.0f, 1.0f, 6.0f) &&
+				bounds.center == glm::vec3(3.0f, 0.0f, 5.0f);
+			if (!bounds_ok)
+			{
+				return report_self_test_failure("SceneQuery bounds and picking", "world bounds did not include transform scale and translation");
+			}
+
+			const SceneRay center_ray = screen_to_world_ray(
+				50.0f,
+				50.0f,
+				100.0f,
+				100.0f,
+				glm::mat4(1.0f),
+				glm::orthoLH_ZO(-1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 10.0f));
+			if (glm::length(center_ray.direction - glm::vec3(0.0f, 0.0f, 1.0f)) > 0.0001f)
+			{
+				return report_self_test_failure("SceneQuery bounds and picking", "screen center ray did not point along +Z");
+			}
+
+			SceneRay ray{};
+			ray.origin = { 3.0f, 0.0f, 0.0f };
+			ray.direction = { 0.0f, 0.0f, 1.0f };
+			const std::vector<SceneRayHit> hits = ray_cast_scene(scene, database, ray);
+			const bool hit_ok =
+				hits.size() == 1u &&
+				hits.front().entity_id == entity.get_id() &&
+				hits.front().distance >= 3.99f &&
+				hits.front().distance <= 4.01f;
+			return hit_ok ||
+				report_self_test_failure("SceneQuery bounds and picking", "ray cast did not hit the expected entity bounds");
+		}
+
+		auto test_scene_instantiates_asset_id_with_world_transform() -> bool
+		{
+			const std::filesystem::path test_root = engine_self_test_dir() / "scene_instantiation_assets";
+			std::filesystem::create_directories(test_root);
+			const std::filesystem::path prefab_path = test_root / "placed_prefab.ashasset";
+			{
+				std::ofstream prefab_file(prefab_path, std::ios::trunc);
+				prefab_file <<
+					"{\n"
+					"  \"version\": 2,\n"
+					"  \"name\": \"PlacedPrefab\",\n"
+					"  \"nodes\": [\n"
+					"    {\n"
+					"      \"name\": \"PrefabRoot\",\n"
+					"      \"parent\": -1,\n"
+					"      \"transform\": {\n"
+					"        \"position\": [0, 0, 0],\n"
+					"        \"rotation_euler_degrees\": [0, 0, 0],\n"
+					"        \"scale\": [1, 1, 1]\n"
+					"      }\n"
+					"    }\n"
+					"  ]\n"
+					"}\n";
+			}
+
+			AssetDatabase database = AssetDatabase::create(test_root);
+			if (!database.is_valid() || !database.refresh())
+			{
+				return report_self_test_failure("Scene asset-id instantiation", "failed to create test asset database");
+			}
+			const AssetInfo* asset_info = database.find_asset_by_path(prefab_path.filename());
+			if (!asset_info)
+			{
+				return report_self_test_failure("Scene asset-id instantiation", "failed to find generated prefab asset");
+			}
+
+			Scene scene = Scene::create("AssetIdInstantiationSelfTest");
+			SceneInstantiationDesc desc{};
+			desc.use_world_transform = true;
+			desc.world_position = { 10.0f, 2.0f, 3.0f };
+			desc.world_rotation_euler_degrees = { 0.0f, 90.0f, 0.0f };
+			desc.world_scale = { 2.0f, 2.0f, 2.0f };
+			desc.root_name_override = "PlacedRoot";
+
+			Entity root = instantiate_asset(scene, database, asset_info->id, desc);
+			if (!root.is_valid())
+			{
+				return report_self_test_failure("Scene asset-id instantiation", "failed to instantiate prefab asset id");
+			}
+
+			const TransformComponent root_transform = root.get_transform_component();
+			const bool ok =
+				root.get_name() == "PlacedRoot" &&
+				glm::length(root_transform.position - desc.world_position) < 0.0001f &&
+				glm::length(root_transform.rotation_euler_degrees - desc.world_rotation_euler_degrees) < 0.001f &&
+				glm::length(root_transform.scale - desc.world_scale) < 0.0001f;
+			return ok ||
+				report_self_test_failure("Scene asset-id instantiation", "world placement transform was not applied to the instantiated root");
+		}
+
 #if defined(ASH_HAS_DX12)
 		auto test_dx12_resource_tracker_preserves_partial_state() -> bool
 		{
@@ -1137,6 +1354,9 @@ namespace AshEngine
 		all_passed = test_scene_deferred_graph_resources_describe_live_pass_chain() && all_passed;
 		all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
+		all_passed = test_scene_view_builds_from_override_matrices() && all_passed;
+		all_passed = test_scene_query_bounds_ray_and_picking() && all_passed;
+		all_passed = test_scene_instantiates_asset_id_with_world_transform() && all_passed;
 #if defined(ASH_HAS_DX12)
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;
 #endif

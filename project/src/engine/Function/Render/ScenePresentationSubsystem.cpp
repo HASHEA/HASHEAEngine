@@ -286,6 +286,14 @@ namespace AshEngine
 
 		switch (binding_state.camera.source)
 		{
+		case SceneCameraSource::Override:
+			return binding_state.camera.override_view.enabled &&
+				build_scene_view_from_matrices(
+					view_desc,
+					binding_state.camera.override_view.view,
+					binding_state.camera.override_view.projection,
+					binding_state.camera.override_view.camera_position,
+					out_view);
 		case SceneCameraSource::EntityId:
 			return binding_state.camera.entity_id != 0 &&
 				build_scene_view_for_camera_entity(*binding_state.scene, binding_state.camera.entity_id, view_desc, out_view);

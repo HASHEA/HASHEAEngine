@@ -1186,6 +1186,15 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 
 同时仍保留组件 / 枚举描述接口，供 Editor 侧做反射式展示与编辑。
 
+当前 Scene 相关 Engine-facing helper 包括：
+
+- `SceneInstantiationDesc` + free function `instantiate_asset(Scene&, AssetDatabase&, AssetId, ...)`：按 `AssetId` 实例化 `Prefab` / `Model`，可指定 parent、root name override 和 root world transform；`use_world_transform=false` 时保持资源自身 transform。
+- `Function/Scene/SceneQuery.h`：提供 `SceneWorldBounds`、`SceneRay`、`SceneRayHit` 以及 scene query free functions。
+- `get_entity_world_bounds()`：查询单个 entity 自身 mesh 的 world AABB，需要显式传入 `AssetDatabase&`，无 mesh 或资源 bounds 无效时返回 false。
+- `get_entity_subtree_world_bounds()`：聚合 root entity 及其子树中可查询 mesh 的 world AABB，供 Editor 聚焦、bounds 可视化等场景使用。
+- `screen_to_world_ray()`：把 viewport 内像素坐标转换为 world ray，坐标原点为 viewport 左上角。
+- `ray_cast_scene()`：第一阶段 CPU ray-vs-world-AABB picking，返回按距离升序排序的命中列表；精确 GPU ID buffer picking 仍是后续扩展项。
+
 ### 11.5 当前 prefab / scene 关系
 
 当前推荐关系是：
@@ -1254,9 +1263,19 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - `SceneViewBindingHandle`
 - `UISurfaceHandle`
 - `SceneOutputDesc`
+- `SceneCameraSource`
 - `SceneCameraSelector`
+- `SceneViewCameraOverride`
 - `SceneViewOverrides`
 - `SceneViewBindingDesc`
+
+`SceneCameraSelector` 当前支持三类 camera source：
+
+- `PrimaryCamera`：使用 scene 中 primary camera。
+- `EntityId`：使用指定 camera entity。
+- `Override`：使用 `SceneViewCameraOverride` 中的显式 view/projection matrix 与 camera position；`override_view.enabled` 必须为 true。该模式用于 Editor camera 这类不应写入 scene entity 的视图。
+
+Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view/projection 构建 `SceneView`。矩阵相机属于 camera selector，不放入 `SceneViewOverrides`；`SceneViewOverrides` 继续只承载 clear、pixel rect、show flags 等 per-view 渲染参数。
 
 当前 update / submit 阶段约定为：
 
@@ -1416,7 +1435,7 @@ Base 层自测方式：
 product/bin64/Debug-windows-x86_64/Sandbox.exe --engine-self-test
 ```
 
-当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
+当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、SceneView matrix override、SceneQuery bounds/ray/picking、AssetId scene instantiation，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
 
 维护约定：
 
