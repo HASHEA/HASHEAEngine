@@ -710,6 +710,21 @@ namespace AshEngine
 				report_self_test_failure("Deferred ReverseZ shader", "deferred surface decode does not branch background depth on the ReverseZ flag");
 		}
 
+		auto test_deferred_light_volume_draws_carry_reverse_z_flag() -> bool
+		{
+			std::ifstream source_file("project/src/engine/Function/Render/DeferredLightingPass.cpp");
+			if (!source_file.is_open())
+			{
+				return report_self_test_failure("Deferred ReverseZ light volumes", "failed to open DeferredLightingPass.cpp");
+			}
+			const std::string source{
+				std::istreambuf_iterator<char>(source_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok = source.find("draw_desc.reverse_z = view_context.reverse_z") != std::string::npos;
+			return ok ||
+				report_self_test_failure("Deferred ReverseZ light volumes", "deferred light volume draws do not carry the view ReverseZ flag");
+		}
+
 		template <typename T>
 		auto append_binary_value(std::vector<uint8_t>& bytes, const T& value) -> void
 		{
@@ -1664,6 +1679,7 @@ namespace AshEngine
 		all_passed = test_reverse_z_projection_maps_near_far_depths() && all_passed;
 		all_passed = test_reverse_z_flips_depth_clear_and_compare() && all_passed;
 		all_passed = test_deferred_shader_background_depth_uses_reverse_z_flag() && all_passed;
+		all_passed = test_deferred_light_volume_draws_carry_reverse_z_flag() && all_passed;
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;

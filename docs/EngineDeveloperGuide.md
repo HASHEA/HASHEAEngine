@@ -478,7 +478,7 @@ Reverse-Z 行为约定：
 - 开启时默认 depth clear value 为 `0.0`
 - `RenderDevice` 会按 draw 的 `reverse_z` 创建/绑定 graphics pipeline 变体，并在转换到 RHI pipeline state 时把 `LessEqual` 与 `GreaterEqual` 自动互换
 - `resolve_scene_view_depth_clear_value()` 会把旧路径中表示默认 depth clear 的 `1.0` 映射到当前 view 的默认值，但保留显式非默认 clear depth
-- Deferred lighting 通过 `AshCameraPositionAndFlags.w` 向 shader 传递当前 frame 的 reverse-Z 标志，`DeferredCommon.hlsli` 用该标志判断 scene depth 是否为背景
+- Deferred lighting 通过 `AshCameraPositionAndFlags.w` 向 shader 传递当前 frame 的 reverse-Z 标志，`DeferredCommon.hlsli` 用该标志判断 scene depth 是否为背景；point / spot light volume draw 也必须把 `SceneRenderViewContext.reverse_z` 写入 `GraphicsDrawDesc.reverse_z`，否则 light-volume depth test 不会跟随当前相机翻转
 
 ---
 

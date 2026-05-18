@@ -280,7 +280,7 @@ Debug Vulkan 启用 validation 时，后端会在枚举 layer 前把运行目录
 
 Engine 侧保留 `RenderFeatureConfig` 作为未来全局渲染开关系统，开关描述表扩展后会从同一个 `Engine.ini` 读取并发布到运行时原子开关表；当前没有注册的全局渲染开关。
 
-Reverse-Z 不是 `Engine.ini` 开关，而是 `CameraComponent.reverse_z` 的逐相机属性。开启后该相机的 SceneView 使用 near=1 / far=0 的 reverse-Z 深度映射，默认 depth clear value 为 `0.0`，渲染管线会为该视图使用反向 depth compare 变体。
+Reverse-Z 不是 `Engine.ini` 开关，而是 `CameraComponent.reverse_z` 的逐相机属性。开启后该相机的 SceneView 使用 near=1 / far=0 的 reverse-Z 深度映射，默认 depth clear value 为 `0.0`，渲染管线会为该视图使用反向 depth compare 变体；deferred point / spot light volume draw 也必须携带当前 view 的 reverse-Z 标志。
 
 ## 验证与调试
 
