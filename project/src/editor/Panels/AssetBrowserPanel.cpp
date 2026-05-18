@@ -21,6 +21,7 @@
 #include "Services/EditorShortcutService.h"
 #include "Services/SelectionService.h"
 #include "Shell/PanelManager.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -454,7 +455,7 @@ namespace AshEditor
 			_upImpl->breadcrumbsView.Draw(refUi, _upImpl->state, *this);
 			refUi.same_line();
 			refUi.text_colored(
-				{ 0.67f, 0.70f, 0.76f, 1.0f },
+				GetEditorMutedTextColor(refUi),
 				"| %u / %u",
 				frameData.uFilteredCount,
 				static_cast<uint32_t>(_upImpl->deps.pAssetDatabaseService->GetItems().size()));

@@ -8,6 +8,7 @@
 #include "Function/Gui/UIContext.h"
 #include "Services/AssetDatabaseService.h"
 #include "Services/AssetPreviewService.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <memory>
 #include <string>
@@ -24,8 +25,6 @@ namespace AshEditor
 
 	namespace
 	{
-		constexpr AshEngine::UIColor kAssetPreviewAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
-		constexpr AshEngine::UIColor kAssetPreviewMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 		constexpr AshEngine::UIColor kAssetPreviewWarningColor{ 0.95f, 0.80f, 0.48f, 1.0f };
 		constexpr float kAssetPreviewSummaryLabelWidth = 112.0f;
 		constexpr AshEngine::UITableFlags kAssetPreviewSummaryTableFlags =
@@ -48,7 +47,7 @@ namespace AshEditor
 		{
 			refUi.table_next_row();
 			refUi.table_next_column();
-			refUi.text_colored(kAssetPreviewMutedColor, "%s", pLabel);
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", pLabel);
 			refUi.table_next_column();
 			const std::string strValue(svValue.empty() ? "-" : svValue);
 			refUi.text_wrapped("%s", strValue.c_str());
@@ -56,8 +55,8 @@ namespace AshEditor
 
 		void DrawPanelIntro(AshEngine::UIContext& refUi, const char* pTitle, const char* pDescription)
 		{
-			refUi.text_colored(kAssetPreviewAccentColor, "%s", pTitle);
-			refUi.text_colored(kAssetPreviewMutedColor, "%s", pDescription);
+			refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", pTitle);
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", pDescription);
 			refUi.separator();
 		}
 
@@ -161,8 +160,8 @@ namespace AshEditor
 		}
 
 		refUi.separator();
-		refUi.text_colored(kAssetPreviewAccentColor, "Content Preview");
-		refUi.text_colored(kAssetPreviewMutedColor, "This panel is reserved for richer asset inspection.");
+		refUi.text_colored(GetEditorHeadingTextColor(refUi), "Content Preview");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "This panel is reserved for richer asset inspection.");
 
 		if (pAsset->is_directory)
 		{

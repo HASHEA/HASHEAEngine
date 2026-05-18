@@ -13,8 +13,6 @@ namespace AshEditor
 	class AssetDatabaseService;
 
 	// Shared Inspector visuals and validation helpers used by split component editors.
-	inline constexpr AshEngine::UIColor kInspectorAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
-	inline constexpr AshEngine::UIColor kInspectorMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 	inline constexpr AshEngine::UIColor kInspectorWarningColor{ 0.95f, 0.80f, 0.48f, 1.0f };
 	inline constexpr AshEngine::UIColor kInspectorDropZoneFillColor{ 0.24f, 0.31f, 0.39f, 0.38f };
 	inline constexpr AshEngine::UIColor kInspectorDropZoneHoverColor{ 0.30f, 0.42f, 0.54f, 0.52f };

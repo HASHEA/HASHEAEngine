@@ -53,6 +53,10 @@ namespace AshEditor
 		{
 			return AshEngine::UIThemePreset::ClassicDark;
 		}
+		if (value == "warm_paper")
+		{
+			return AshEngine::UIThemePreset::WarmPaper;
+		}
 
 		return AshEngine::UIThemePreset::SlateStudio;
 	}
@@ -63,6 +67,8 @@ namespace AshEditor
 		{
 		case AshEngine::UIThemePreset::ClassicDark:
 			return "classic_dark";
+		case AshEngine::UIThemePreset::WarmPaper:
+			return "warm_paper";
 		case AshEngine::UIThemePreset::SlateStudio:
 		default:
 			return "slate_studio";
@@ -75,6 +81,8 @@ namespace AshEditor
 		{
 		case AshEngine::UIThemePreset::ClassicDark:
 			return "Classic Dark";
+		case AshEngine::UIThemePreset::WarmPaper:
+			return "Warm Paper";
 		case AshEngine::UIThemePreset::SlateStudio:
 		default:
 			return "Slate Studio";
@@ -159,7 +167,15 @@ namespace AshEditor
 		_settings.strConsoleFilterText = root.value("consoleFilterText", _settings.strConsoleFilterText);
 		_settings.strConsoleSourceFilter = root.value("consoleSourceFilter", _settings.strConsoleSourceFilter);
 		_settings.iConsoleSeverityFilter = root.value("consoleSeverityFilter", _settings.iConsoleSeverityFilter);
-		_settings.strUiThemePreset = root.value("uiThemePreset", _settings.strUiThemePreset);
+		if (const json::const_iterator itThemeId = root.find("uiThemeId");
+			itThemeId != root.end() && itThemeId->is_string())
+		{
+			_settings.strUiThemePreset = itThemeId->get<std::string>();
+		}
+		else
+		{
+			_settings.strUiThemePreset = root.value("uiThemePreset", _settings.strUiThemePreset);
+		}
 		_settings.strUiFontPath = root.value("uiFontPath", _settings.strUiFontPath);
 		_settings.strUiFontMergePath = root.value("uiFontMergePath", _settings.strUiFontMergePath);
 		_settings.strUiStrongFontPath = root.value("uiStrongFontPath", _settings.strUiStrongFontPath);
@@ -192,6 +208,8 @@ namespace AshEditor
 		root["consoleFilterText"] = _settings.strConsoleFilterText;
 		root["consoleSourceFilter"] = _settings.strConsoleSourceFilter;
 		root["consoleSeverityFilter"] = _settings.iConsoleSeverityFilter;
+		// Keep both keys during the transition so older local builds still read the saved theme correctly.
+		root["uiThemeId"] = _settings.strUiThemePreset;
 		root["uiThemePreset"] = _settings.strUiThemePreset;
 		root["uiFontPath"] = _settings.strUiFontPath;
 		root["uiFontMergePath"] = _settings.strUiFontMergePath;

@@ -2,6 +2,7 @@
 
 #include "Function/Gui/UIContext.h"
 #include "Panels/AssetBrowser/IAssetBrowserViewHost.h"
+#include "Widgets/EditorThemeColors.h"
 
 namespace AshEditor
 {
@@ -10,7 +11,7 @@ namespace AshEditor
 		const AssetBrowserPanelState& refState,
 		IAssetBrowserViewHost& refHost) const
 	{
-		refUi.text_colored({ 0.67f, 0.70f, 0.76f, 1.0f }, "Location");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Location");
 		refUi.same_line();
 
 		const bool bAllAssetsSelected = refState.strActiveDirectoryPath.empty();

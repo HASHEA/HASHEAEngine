@@ -8,6 +8,7 @@
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
 #include "Panels/Inspector/InspectorPanelSupport.h"
 #include "Services/DragDropTransferService.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/InspectorPropertyWidgets.h"
 
 #include <algorithm>
@@ -57,7 +58,7 @@ namespace AshEditor
 		const bool bCanAddMesh = CanAddMeshComponent(entity) && !bHasPendingMeshDraft;
 		const bool bHasAnyAddableComponent = bCanAddCamera || bCanAddLight || bCanAddMesh;
 
-		refUi.text_colored(kInspectorMutedColor, "Components");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Components");
 		refUi.same_line();
 		refUi.begin_disabled(!bHasAnyAddableComponent);
 		if (refUi.small_button("Add Component"))

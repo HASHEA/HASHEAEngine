@@ -6,9 +6,15 @@
       "id": "scene",
       "kind": "scene",
       "panelOpen": true,
-      "preserveAspect": true,
-      "showOverlays": true,
-      "showStats": true,
+      "preserveAspect": false,
+      "showCameraHelpers": true,
+      "showLightHelpers": true,
+      "showOverlays": false,
+      "showReferenceGrid": true,
+      "showReferenceOrigin": true,
+      "showSelectionHelpers": true,
+      "showSelectionPivot": true,
+      "showStats": false,
       "showToolbar": true
     },
     {
@@ -17,7 +23,13 @@
       "kind": "game",
       "panelOpen": false,
       "preserveAspect": false,
+      "showCameraHelpers": true,
+      "showLightHelpers": true,
       "showOverlays": true,
+      "showReferenceGrid": true,
+      "showReferenceOrigin": true,
+      "showSelectionHelpers": true,
+      "showSelectionPivot": true,
       "showStats": false,
       "showToolbar": true
     }

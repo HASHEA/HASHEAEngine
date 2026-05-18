@@ -170,6 +170,20 @@ namespace AshEditor
 			return result;
 		}
 
+		const bool bAltDown = refInput.is_key_down(GLFW_KEY_LEFT_ALT) || refInput.is_key_down(GLFW_KEY_RIGHT_ALT);
+		if (bAltDown && !refDragSession.bActive)
+		{
+			if (bRotateMode)
+			{
+				_upRotateTool->ClearHoveredHandle();
+			}
+			else
+			{
+				_upMoveScaleTool->ClearHoveredHandle();
+			}
+			return result;
+		}
+
 		if (!bViewportHovered && !refDragSession.bActive)
 		{
 			if (bRotateMode)

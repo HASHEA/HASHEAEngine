@@ -12,11 +12,6 @@
 #include <memory>
 #include <string>
 
-namespace AshEngine
-{
-	enum class UIThemePreset : uint8_t;
-}
-
 namespace AshEditor
 {
 	class AssetDatabaseService;
@@ -90,7 +85,7 @@ namespace AshEditor
 		bool CommitCommandTransaction() override;
 		void CancelCommandTransaction() override;
 		void HandleGlobalShortcuts();
-		void ApplyThemePreset(AshEngine::UIThemePreset preset) override;
+		void ApplyTheme(std::string_view svThemeId, std::string_view svThemeLabel = {}) override;
 
 	private:
 		std::unique_ptr<EditorEventBus> _upEventBus{};

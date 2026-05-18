@@ -5,6 +5,7 @@
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/EditorTooltipWidgets.h"
 
 #include <algorithm>
@@ -59,7 +60,7 @@ namespace AshEditor
 		{
 			refUi.table_next_row();
 			refUi.table_next_column();
-			refUi.text_colored(kInspectorMutedColor, "%s", pLabel);
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", pLabel);
 			refUi.table_next_column();
 			const std::string_view svDisplayValue = svValue.empty() ? std::string_view("-") : svValue;
 			const std::string strDisplayValue(svDisplayValue);
@@ -210,9 +211,9 @@ namespace AshEditor
 		const char* pDescription)
 	{
 		refUi.push_font(AshEngine::UIFontRole::Strong);
-		refUi.text_colored(kInspectorAccentColor, "%s", pTitle);
+		refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", pTitle);
 		refUi.pop_font();
-		refUi.text_colored(kInspectorMutedColor, "%s", pDescription);
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", pDescription);
 		refUi.separator();
 	}
 
@@ -235,7 +236,7 @@ namespace AshEditor
 		}
 
 		refUi.push_font(AshEngine::UIFontRole::Strong);
-		refUi.text_colored(kInspectorAccentColor, "%s", refSelection.strLabel.c_str());
+		refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", refSelection.strLabel.c_str());
 		refUi.pop_font();
 		if (refUi.is_item_hovered())
 		{

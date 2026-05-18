@@ -194,6 +194,8 @@ namespace AshEngine
 		UIContextConfig uiConfig{};
 		uiConfig.ini_path = config.uiIniPath;
 		uiConfig.theme_preset = config.uiThemePreset;
+		uiConfig.theme_name = config.uiThemeName;
+		uiConfig.theme_config_root = config.uiThemeConfigRoot;
 		// editor begin 修改原因：把编辑器字体配置注入 UIContext，支持中文与强调字重的编辑器排版。
 		uiConfig.font_path = config.uiFontPath;
 		uiConfig.font_merge_path = config.uiFontMergePath;

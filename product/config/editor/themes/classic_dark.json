@@ -1,0 +1,19 @@
+{
+  "label": "Classic Dark",
+  "base": "dark",
+  "style": {
+    "WindowPadding": [10.0, 8.0],
+    "FramePadding": [8.0, 6.0],
+    "ItemSpacing": [8.0, 6.0],
+    "WindowRounding": 6.0,
+    "ChildRounding": 5.0,
+    "PopupRounding": 5.0,
+    "FrameRounding": 4.0,
+    "TabRounding": 4.0,
+    "WindowBorderSize": 1.0,
+    "ChildBorderSize": 1.0,
+    "PopupBorderSize": 1.0,
+    "FrameBorderSize": 1.0
+  },
+  "colors": {}
+}

@@ -1,11 +1,6 @@
 #pragma once
 
-#include <cstdint>
-
-namespace AshEngine
-{
-	enum class UIThemePreset : uint8_t;
-}
+#include <string_view>
 
 namespace AshEditor
 {
@@ -14,6 +9,6 @@ namespace AshEditor
 	public:
 		virtual ~IThemeApplier() = default;
 
-		virtual void ApplyThemePreset(AshEngine::UIThemePreset preset) = 0;
+		virtual void ApplyTheme(std::string_view svThemeId, std::string_view svThemeLabel = {}) = 0;
 	};
 }

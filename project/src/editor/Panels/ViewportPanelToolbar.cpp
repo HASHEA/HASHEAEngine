@@ -107,14 +107,14 @@ namespace AshEditor
 				refGizmo.eMode = GizmoMode::Move;
 			}
 			refUi.same_line();
-			if (DrawGizmoModeButton(refUi, "E:Rotate", refGizmo.eMode == GizmoMode::Rotate))
-			{
-				refGizmo.eMode = GizmoMode::Rotate;
-			}
-			refUi.same_line();
-			if (DrawGizmoModeButton(refUi, "R:Scale", refGizmo.eMode == GizmoMode::Scale))
+			if (DrawGizmoModeButton(refUi, "E:Scale", refGizmo.eMode == GizmoMode::Scale))
 			{
 				refGizmo.eMode = GizmoMode::Scale;
+			}
+			refUi.same_line();
+			if (DrawGizmoModeButton(refUi, "R:Rotate", refGizmo.eMode == GizmoMode::Rotate))
+			{
+				refGizmo.eMode = GizmoMode::Rotate;
 			}
 
 			refUi.same_line();

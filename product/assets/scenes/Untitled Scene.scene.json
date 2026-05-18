@@ -2,7 +2,7 @@
   "entities": [
     {
       "id": 1,
-      "name": "SceneRoot",
+      "name": "Scene",
       "parent": 0,
       "transform": {
         "position": [
@@ -114,9 +114,38 @@
           1.0
         ]
       }
+    },
+    {
+      "id": 6,
+      "mesh": {
+        "asset_path": "models/gltfs/DamagedHelmet/glTF/DamagedHelmet.gltf",
+        "layer_mask": 1,
+        "mesh_index": 0,
+        "mobility": 0,
+        "visible": true
+      },
+      "name": "Mesh Entity 6",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_euler_degrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
     }
   ],
   "name": "Untitled Scene",
-  "next_entity_id": 5,
+  "next_entity_id": 7,
   "version": 3
 }

@@ -20,10 +20,12 @@ namespace AshEditor
 {
 	namespace
 	{
-		constexpr float kMouseSensitivity = 0.25f;
-		constexpr float kShiftMultiplier = 4.0f;
+		constexpr float kOrbitMouseSensitivity = 0.25f;
 		constexpr float kDefaultFocusDistance = 4.5f;
-		constexpr float kScrollDollySpeed = 1.5f;
+		constexpr float kScrollDollySpeed = 0.12f;
+		constexpr float kDragDollySpeed = 0.015f;
+		constexpr float kMinOrbitDistance = 0.1f;
+		constexpr float kMaxOrbitDistance = 20000.0f;
 
 		bool IsPointInRect(const AshEngine::UIRect& refRect, const AshEngine::UIVec2& refPoint)
 		{
@@ -52,12 +54,20 @@ namespace AshEditor
 
 		glm::vec3 ComputeForwardVector(const glm::vec3& refRotationEulerDegrees)
 		{
-			return glm::normalize(glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
+			return glm::normalize(
+				glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
 		}
 
 		glm::vec3 ComputeRightVector(const glm::vec3& refRotationEulerDegrees)
 		{
-			return glm::normalize(glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+			return glm::normalize(
+				glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+		}
+
+		glm::vec3 ComputeUpVector(const glm::vec3& refRotationEulerDegrees)
+		{
+			return glm::normalize(
+				glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(0.0f, 1.0f, 0.0f, 0.0f)));
 		}
 
 		glm::mat4 ComputePerspectiveProjection(
@@ -89,6 +99,11 @@ namespace AshEditor
 			const float fHorizontalLength = std::sqrt(direction.x * direction.x + direction.z * direction.z);
 			const float fPitch = glm::degrees(std::atan2(-direction.y, std::max(fHorizontalLength, 0.0001f)));
 			return { std::clamp(fPitch, -89.0f, 89.0f), fYaw, 0.0f };
+		}
+
+		bool IsAltDown(const AshEngine::InputState& refInput)
+		{
+			return refInput.is_key_down(GLFW_KEY_LEFT_ALT) || refInput.is_key_down(GLFW_KEY_RIGHT_ALT);
 		}
 
 		bool TryComputeSceneFocusBounds(
@@ -180,7 +195,7 @@ namespace AshEditor
 		const SceneService& refSceneService,
 		const AssetDatabaseService& refAssetDatabaseService,
 		const AshEngine::InputState& refInput,
-		const double dTimeSeconds,
+		const double /*dTimeSeconds*/,
 		const EditorViewportCameraInputContext& refContext)
 	{
 		if (!IsSupportedSceneViewport(refContext.strViewportId))
@@ -198,16 +213,11 @@ namespace AshEditor
 		UpdateViewportExtent(refContext.rectContent, refState);
 		if (!refContext.bAcceptsInput)
 		{
+			refState.eDragMode = CameraDragMode::None;
+			refState.bHasLastMousePosition = false;
 			RefreshCameraOverride(refState);
 			return;
 		}
-
-		const double dDeltaSecondsRaw =
-			refState.dLastUpdateTimeSeconds >= 0.0
-			? (dTimeSeconds - refState.dLastUpdateTimeSeconds)
-			: 0.0;
-		refState.dLastUpdateTimeSeconds = dTimeSeconds;
-		const float fDeltaSeconds = static_cast<float>(std::clamp(dDeltaSecondsRaw, 0.0, 0.1));
 
 		const AshEngine::UIVec2 vecMousePos{
 			static_cast<float>(refInput.get_mouse_x()),
@@ -217,11 +227,10 @@ namespace AshEditor
 		const bool bViewportInteractive =
 			refContext.bViewportFocused ||
 			refContext.bViewportHovered ||
-			refState.bMouseLookActive;
-
+			refState.eDragMode != CameraDragMode::None;
 		if (!bViewportInteractive)
 		{
-			refState.bMouseLookActive = false;
+			refState.eDragMode = CameraDragMode::None;
 			refState.bHasLastMousePosition = false;
 			RefreshCameraOverride(refState);
 			return;
@@ -229,20 +238,65 @@ namespace AshEditor
 
 		if (bMouseInContent && std::abs(refInput.get_scroll_y()) > 0.0)
 		{
-			const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
-			refState.vecPosition += vecForward * static_cast<float>(refInput.get_scroll_y()) * kScrollDollySpeed;
+			const float fSpeedScale = std::max(0.2f, refState.fMoveSpeed / 8.0f);
+			const float fDistanceDelta =
+				std::max(refState.fOrbitDistance * kScrollDollySpeed, kMinOrbitDistance) *
+				static_cast<float>(refInput.get_scroll_y()) *
+				fSpeedScale;
+			refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
+			UpdatePositionFromOrbit(refState);
 		}
 
+		const bool bAltDown = IsAltDown(refInput);
+		const bool bMiddleMouseDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_MIDDLE);
 		const bool bRightMouseDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_RIGHT);
-		if (!bRightMouseDown)
+		const bool bLeftMouseDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_LEFT);
+
+		if (refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_MIDDLE) && bMouseInContent)
 		{
-			refState.bMouseLookActive = false;
+			refState.eDragMode = CameraDragMode::Pan;
 			refState.bHasLastMousePosition = false;
 		}
-		else if (!refState.bMouseLookActive && bMouseInContent)
+		else if (bAltDown &&
+			refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_LEFT) &&
+			bMouseInContent)
 		{
-			refState.bMouseLookActive = true;
+			refState.eDragMode = CameraDragMode::Orbit;
 			refState.bHasLastMousePosition = false;
+		}
+		else if (bAltDown &&
+			refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_RIGHT) &&
+			bMouseInContent)
+		{
+			refState.eDragMode = CameraDragMode::Dolly;
+			refState.bHasLastMousePosition = false;
+		}
+
+		switch (refState.eDragMode)
+		{
+		case CameraDragMode::Orbit:
+			if (!bAltDown || !bLeftMouseDown)
+			{
+				refState.eDragMode = CameraDragMode::None;
+				refState.bHasLastMousePosition = false;
+			}
+			break;
+		case CameraDragMode::Pan:
+			if (!bMiddleMouseDown)
+			{
+				refState.eDragMode = CameraDragMode::None;
+				refState.bHasLastMousePosition = false;
+			}
+			break;
+		case CameraDragMode::Dolly:
+			if (!bAltDown || !bRightMouseDown)
+			{
+				refState.eDragMode = CameraDragMode::None;
+				refState.bHasLastMousePosition = false;
+			}
+			break;
+		default:
+			break;
 		}
 
 		if (refInput.was_key_pressed(GLFW_KEY_F) && (bMouseInContent || refContext.bViewportFocused))
@@ -255,73 +309,62 @@ namespace AshEditor
 				refContext.uFocusEntityId);
 		}
 
-		if (refState.bMouseLookActive)
+		if (refState.eDragMode != CameraDragMode::None)
 		{
-			if (!refState.bHasLastMousePosition || refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_RIGHT))
+			if (!refState.bHasLastMousePosition)
 			{
 				refState.dLastMouseX = refInput.get_mouse_x();
 				refState.dLastMouseY = refInput.get_mouse_y();
 				refState.bHasLastMousePosition = true;
 			}
+			else
+			{
+				const double dMouseDeltaX = refInput.get_mouse_x() - refState.dLastMouseX;
+				const double dMouseDeltaY = refInput.get_mouse_y() - refState.dLastMouseY;
+				refState.dLastMouseX = refInput.get_mouse_x();
+				refState.dLastMouseY = refInput.get_mouse_y();
 
-			const double dMouseDeltaX = refInput.get_mouse_x() - refState.dLastMouseX;
-			const double dMouseDeltaY = refInput.get_mouse_y() - refState.dLastMouseY;
-			refState.dLastMouseX = refInput.get_mouse_x();
-			refState.dLastMouseY = refInput.get_mouse_y();
-
-			refState.vecRotationEulerDegrees.y += static_cast<float>(dMouseDeltaX * kMouseSensitivity);
-			refState.vecRotationEulerDegrees.x += static_cast<float>(dMouseDeltaY * kMouseSensitivity);
-			refState.vecRotationEulerDegrees.x = std::clamp(refState.vecRotationEulerDegrees.x, -89.0f, 89.0f);
-		}
-
-		const bool bTranslationActive =
-			refContext.bViewportFocused ||
-			(refContext.bViewportHovered && bMouseInContent) ||
-			refState.bMouseLookActive;
-
-		glm::vec3 vecMoveDirection{ 0.0f, 0.0f, 0.0f };
-		if (bTranslationActive)
-		{
-			const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
-			const glm::vec3 vecRight = ComputeRightVector(refState.vecRotationEulerDegrees);
-			const glm::vec3 vecUp{ 0.0f, 1.0f, 0.0f };
-
-			if (refInput.is_key_down(GLFW_KEY_W))
-			{
-				vecMoveDirection += vecForward;
+				switch (refState.eDragMode)
+				{
+				case CameraDragMode::Orbit:
+					refState.vecRotationEulerDegrees.y += static_cast<float>(dMouseDeltaX * kOrbitMouseSensitivity);
+					refState.vecRotationEulerDegrees.x += static_cast<float>(dMouseDeltaY * kOrbitMouseSensitivity);
+					refState.vecRotationEulerDegrees.x =
+						std::clamp(refState.vecRotationEulerDegrees.x, -89.0f, 89.0f);
+					UpdatePositionFromOrbit(refState);
+					break;
+				case CameraDragMode::Pan:
+				{
+					const float fViewportHeight = std::max(1.0f, static_cast<float>(refState.uViewportHeight));
+					const float fPanUnitsPerPixel =
+						(2.0f * std::tan(glm::radians(refState.fFovYDegrees) * 0.5f) *
+							std::max(refState.fOrbitDistance, kMinOrbitDistance)) /
+						fViewportHeight;
+					const float fPanScale = fPanUnitsPerPixel * std::max(0.25f, refState.fMoveSpeed / 8.0f);
+					const glm::vec3 vecRight = ComputeRightVector(refState.vecRotationEulerDegrees);
+					const glm::vec3 vecUp = ComputeUpVector(refState.vecRotationEulerDegrees);
+					const glm::vec3 vecPanDelta =
+						(-vecRight * static_cast<float>(dMouseDeltaX) + vecUp * static_cast<float>(dMouseDeltaY)) *
+						fPanScale;
+					refState.vecOrbitTarget += vecPanDelta;
+					refState.vecPosition += vecPanDelta;
+					break;
+				}
+				case CameraDragMode::Dolly:
+				{
+					const float fSpeedScale = std::max(0.25f, refState.fMoveSpeed / 8.0f);
+					const float fDistanceDelta =
+						std::max(refState.fOrbitDistance * kDragDollySpeed, kMinOrbitDistance) *
+						static_cast<float>(-dMouseDeltaY) *
+						fSpeedScale;
+					refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
+					UpdatePositionFromOrbit(refState);
+					break;
+				}
+				default:
+					break;
+				}
 			}
-			if (refInput.is_key_down(GLFW_KEY_S))
-			{
-				vecMoveDirection -= vecForward;
-			}
-			if (refInput.is_key_down(GLFW_KEY_D))
-			{
-				vecMoveDirection += vecRight;
-			}
-			if (refInput.is_key_down(GLFW_KEY_A))
-			{
-				vecMoveDirection -= vecRight;
-			}
-			if (refInput.is_key_down(GLFW_KEY_E))
-			{
-				vecMoveDirection += vecUp;
-			}
-			if (refInput.is_key_down(GLFW_KEY_Q))
-			{
-				vecMoveDirection -= vecUp;
-			}
-		}
-
-		const float fMoveLength = glm::length(vecMoveDirection);
-		if (fMoveLength > 0.0f && fDeltaSeconds > 0.0f)
-		{
-			vecMoveDirection /= fMoveLength;
-			float fResolvedSpeed = refState.fMoveSpeed;
-			if (refInput.is_key_down(GLFW_KEY_LEFT_SHIFT) || refInput.is_key_down(GLFW_KEY_RIGHT_SHIFT))
-			{
-				fResolvedSpeed *= kShiftMultiplier;
-			}
-			refState.vecPosition += vecMoveDirection * fResolvedSpeed * fDeltaSeconds;
 		}
 
 		RefreshCameraOverride(refState);
@@ -394,6 +437,11 @@ namespace AshEditor
 		return std::clamp(fMoveSpeed, kMinMoveSpeed, kMaxMoveSpeed);
 	}
 
+	float EditorViewportCameraService::ClampOrbitDistance(const float fOrbitDistance)
+	{
+		return std::clamp(fOrbitDistance, kMinOrbitDistance, kMaxOrbitDistance);
+	}
+
 	void EditorViewportCameraService::SyncCameraState(
 		const SceneService& refSceneService,
 		const AssetDatabaseService& refAssetDatabaseService,
@@ -425,9 +473,8 @@ namespace AshEditor
 		SeedCameraFromSceneContent(refActiveScene, refAssetDatabaseService, refState);
 		refState.strSourceSceneName = refActiveScene.get_name();
 		refState.strSourceScenePath = strScenePath;
-		refState.bMouseLookActive = false;
+		refState.eDragMode = CameraDragMode::None;
 		refState.bHasLastMousePosition = false;
-		refState.dLastUpdateTimeSeconds = -1.0;
 		refState.bInitialized = true;
 		RefreshCameraOverride(refState);
 	}
@@ -448,14 +495,20 @@ namespace AshEditor
 				(fRadius / std::tan(glm::radians(refState.fFovYDegrees) * 0.5f)) * 1.15f);
 			const glm::vec3 vecTarget = sceneBounds.center;
 			const glm::vec3 vecViewDirection = glm::normalize(glm::vec3(-0.55f, 0.38f, -1.0f));
+			refState.vecOrbitTarget = vecTarget;
 			refState.vecPosition = vecTarget + vecViewDirection * fFocusDistance;
 			refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecTarget - refState.vecPosition);
+			refState.fOrbitDistance = ClampOrbitDistance(glm::length(refState.vecOrbitTarget - refState.vecPosition));
+			UpdatePositionFromOrbit(refState);
 			return;
 		}
 
 		const glm::vec3 vecFallbackTarget{ 0.0f, 0.9f, 0.0f };
+		refState.vecOrbitTarget = vecFallbackTarget;
 		refState.vecPosition = { -3.0f, 2.2f, -6.5f };
 		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecFallbackTarget - refState.vecPosition);
+		refState.fOrbitDistance = ClampOrbitDistance(glm::length(refState.vecOrbitTarget - refState.vecPosition));
+		UpdatePositionFromOrbit(refState);
 	}
 
 	void EditorViewportCameraService::RefreshCameraOverride(ViewportCameraState& refState) const
@@ -485,6 +538,13 @@ namespace AshEditor
 		refState.uViewportWidth = uNewWidth;
 		refState.uViewportHeight = uNewHeight;
 		RefreshCameraOverride(refState);
+	}
+
+	void EditorViewportCameraService::UpdatePositionFromOrbit(ViewportCameraState& refState) const
+	{
+		refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance);
+		const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
+		refState.vecPosition = refState.vecOrbitTarget - vecForward * refState.fOrbitDistance;
 	}
 
 	void EditorViewportCameraService::FocusEntity(
@@ -531,8 +591,11 @@ namespace AshEditor
 		}
 
 		const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
-		refState.vecPosition = vecTarget - vecForward * fFocusDistance;
+		refState.vecOrbitTarget = vecTarget;
+		refState.fOrbitDistance = ClampOrbitDistance(fFocusDistance);
+		refState.vecPosition = vecTarget - vecForward * refState.fOrbitDistance;
 		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecTarget - refState.vecPosition);
+		UpdatePositionFromOrbit(refState);
 		RefreshCameraOverride(refState);
 	}
 

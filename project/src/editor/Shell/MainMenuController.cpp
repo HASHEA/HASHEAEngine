@@ -156,19 +156,23 @@ namespace AshEditor
 			return;
 		}
 
-		const AshEngine::UIThemePreset currentPreset = refContext.refUi.get_theme_preset();
-		const std::array<AshEngine::UIThemePreset, 2> arrPresets{
-			AshEngine::UIThemePreset::SlateStudio,
-			AshEngine::UIThemePreset::ClassicDark
-		};
-		for (const AshEngine::UIThemePreset preset : arrPresets)
+		const std::string strCurrentThemeId = refContext.refUi.get_theme_id();
+		const std::vector<AshEngine::UIThemeDescriptor> vecThemes = refContext.refUi.list_themes();
+		if (vecThemes.empty())
 		{
-			const bool bSelected = preset == currentPreset;
-			if (refContext.refUi.menu_item(GetEditorUiThemePresetLabel(preset), nullptr, bSelected, true))
+			refContext.refUi.menu_item("No theme files found", nullptr, false, false);
+			refContext.refUi.end_menu();
+			return;
+		}
+
+		for (const AshEngine::UIThemeDescriptor& refTheme : vecThemes)
+		{
+			const bool bSelected = refTheme.strId == strCurrentThemeId;
+			if (refContext.refUi.menu_item(refTheme.strLabel.c_str(), nullptr, bSelected, true))
 			{
 				if (refContext.pThemeApplier)
 				{
-					refContext.pThemeApplier->ApplyThemePreset(preset);
+					refContext.pThemeApplier->ApplyTheme(refTheme.strId, refTheme.strLabel);
 				}
 			}
 		}

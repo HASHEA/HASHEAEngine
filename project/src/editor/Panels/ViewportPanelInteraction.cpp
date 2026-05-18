@@ -8,6 +8,7 @@
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/AssetDatabaseService.h"
 #include "Services/DragDropTransferService.h"
+#include "Services/EditorGizmoService.h"
 #include "Services/EditorViewportCameraService.h"
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
@@ -23,6 +24,45 @@ namespace AshEditor
 	namespace
 	{
 		constexpr float kSceneBoxSelectionDragThresholdPixels = 5.0f;
+
+		void HandleSceneViewportModeShortcuts(
+			AshEngine::UIContext& refUi,
+			const AshEngine::InputState& refInput,
+			const bool bViewportHovered,
+			EditorGizmoState* pGizmoState)
+		{
+			if (!pGizmoState || !bViewportHovered || refUi.is_any_item_active() || refUi.wants_text_input())
+			{
+				return;
+			}
+
+			const bool bHasModifiers =
+				refInput.is_key_down(GLFW_KEY_LEFT_CONTROL) ||
+				refInput.is_key_down(GLFW_KEY_RIGHT_CONTROL) ||
+				refInput.is_key_down(GLFW_KEY_LEFT_SHIFT) ||
+				refInput.is_key_down(GLFW_KEY_RIGHT_SHIFT) ||
+				refInput.is_key_down(GLFW_KEY_LEFT_ALT) ||
+				refInput.is_key_down(GLFW_KEY_RIGHT_ALT) ||
+				refInput.is_key_down(GLFW_KEY_LEFT_SUPER) ||
+				refInput.is_key_down(GLFW_KEY_RIGHT_SUPER);
+			if (bHasModifiers)
+			{
+				return;
+			}
+
+			if (refInput.was_key_pressed(GLFW_KEY_W))
+			{
+				pGizmoState->eMode = GizmoMode::Move;
+			}
+			else if (refInput.was_key_pressed(GLFW_KEY_E))
+			{
+				pGizmoState->eMode = GizmoMode::Scale;
+			}
+			else if (refInput.was_key_pressed(GLFW_KEY_R))
+			{
+				pGizmoState->eMode = GizmoMode::Rotate;
+			}
+		}
 
 		void UpdateSceneViewportSelectionInput(
 			const ViewportPanelDeps& refDeps,
@@ -44,6 +84,9 @@ namespace AshEditor
 			const bool bCanStartSelection =
 				refViewport.state.bContentHovered &&
 				!bGizmoConsumesMouseLeft &&
+				!refInput.is_key_down(GLFW_KEY_LEFT_ALT) &&
+				!refInput.is_key_down(GLFW_KEY_RIGHT_ALT) &&
+				!refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_MIDDLE) &&
 				!refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_RIGHT) &&
 				!refUi.has_drag_drop_payload();
 			const AshEngine::UIVec2 vecMousePosition = ViewportPanelSupport::GetMouseScreenPosition(refInput);
@@ -173,6 +216,11 @@ namespace AshEditor
 			EditorGizmoService::InteractionResult gizmoInteraction{};
 			if (pPresentation->bAcceptsInput && strViewportId == EditorViewportIds::Scene)
 			{
+				HandleSceneViewportModeShortcuts(
+					*refFrameContext.pUiContext,
+					refInput,
+					bContentHovered || refViewport.state.bFocused,
+					refDeps.pGizmoState);
 				gizmoInteraction = ViewportPanelSupport::UpdateSceneGizmoInteraction(
 					refDeps,
 					*refFrameContext.pUiContext,

@@ -261,7 +261,7 @@ namespace AshEditor
 		_upSceneWorkflowCoordinator->ResetEditorStateAfterSceneChange(sceneWorkflowContext);
 		if (_editorContext.pUiContext)
 		{
-			_editorContext.pUiContext->apply_theme_preset(ParseEditorUiThemePreset(_upSettingsService->GetSettings().strUiThemePreset));
+			_editorContext.pUiContext->apply_theme(_upSettingsService->GetSettings().strUiThemePreset);
 		}
 	}
 
@@ -398,16 +398,23 @@ namespace AshEditor
 		_upShortcutService->DispatchScope(*_upCommandService, EditorActionScope::Global, *_editorContext.pUiContext);
 	}
 
-	void EditorApplicationImpl::ApplyThemePreset(AshEngine::UIThemePreset preset)
+	void EditorApplicationImpl::ApplyTheme(std::string_view svThemeId, std::string_view svThemeLabel)
 	{
-		if (_editorContext.pUiContext)
+		if (!_editorContext.pUiContext || svThemeId.empty())
 		{
-			_editorContext.pUiContext->apply_theme_preset(preset);
+			return;
+		}
+
+		if (!_editorContext.pUiContext->apply_theme(svThemeId))
+		{
+			Notify(std::string("Failed to switch theme to ") + std::string(svThemeId) + ".");
+			return;
 		}
 
 		EditorSettings& settings = _upSettingsService->GetSettings();
-		settings.strUiThemePreset = GetEditorUiThemePresetName(preset);
+		settings.strUiThemePreset = std::string(svThemeId);
 		_upSettingsService->Save();
-		Notify(std::string("Theme switched to ") + GetEditorUiThemePresetLabel(preset) + ".");
+		const std::string strThemeLabel = svThemeLabel.empty() ? std::string(svThemeId) : std::string(svThemeLabel);
+		Notify(std::string("Theme switched to ") + strThemeLabel + ".");
 	}
 }

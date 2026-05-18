@@ -213,7 +213,7 @@ namespace AshEditor
 			float fContentHeight)
 		{
 			static const char* kHintLine =
-				"RMB Rotate  |  Wheel Zoom  |  WASD Move  |  Shift Fast  |  F Focus";
+				"Alt+LMB Orbit  |  MMB Pan  |  Alt+RMB/Wheel Zoom  |  F Focus  |  W Move  E Scale  R Rotate";
 			const float fPaddingX = 8.0f;
 			const float fPaddingY = 5.0f;
 			const float fMargin = 12.0f;

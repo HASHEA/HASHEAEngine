@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "GLFW/glfw3.h"
+#include <json.hpp>
 #include <mutex>
 
 #if defined(ASH_HAS_VULKAN)
@@ -35,6 +36,8 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -44,30 +47,85 @@ namespace AshEngine
 {
 	namespace
 	{
+		using json = nlohmann::json;
+
 		static auto make_color(float r, float g, float b, float a = 1.0f) -> ImVec4
 		{
 			return ImVec4(r, g, b, a);
 		}
 
-		static void apply_classic_dark_theme()
+		static std::string get_theme_preset_name(const UIThemePreset preset)
 		{
-			ImGui::StyleColorsDark();
-			ImGuiStyle& style = ImGui::GetStyle();
-			style.WindowPadding = ImVec2(10.0f, 8.0f);
-			style.FramePadding = ImVec2(8.0f, 6.0f);
-			style.ItemSpacing = ImVec2(8.0f, 6.0f);
-			style.WindowRounding = 6.0f;
-			style.ChildRounding = 5.0f;
-			style.PopupRounding = 5.0f;
-			style.FrameRounding = 4.0f;
-			style.TabRounding = 4.0f;
-			style.WindowBorderSize = 1.0f;
-			style.ChildBorderSize = 1.0f;
-			style.PopupBorderSize = 1.0f;
-			style.FrameBorderSize = 1.0f;
+			switch (preset)
+			{
+			case UIThemePreset::ClassicDark:
+				return "classic_dark";
+			case UIThemePreset::WarmPaper:
+				return "warm_paper";
+			case UIThemePreset::SlateStudio:
+			default:
+				return "slate_studio";
+			}
 		}
 
-		static void apply_slate_studio_theme()
+		static UIThemePreset get_theme_preset_from_id(const std::string_view svThemeId)
+		{
+			if (svThemeId == "classic_dark")
+			{
+				return UIThemePreset::ClassicDark;
+			}
+			if (svThemeId == "warm_paper")
+			{
+				return UIThemePreset::WarmPaper;
+			}
+
+			return UIThemePreset::SlateStudio;
+		}
+
+		static constexpr std::string_view kDefaultFallbackThemeId = "default";
+		static constexpr std::string_view kDefaultFallbackThemeLabel = "Default Theme";
+
+		static UIThemeDescriptor build_default_theme_descriptor()
+		{
+			UIThemeDescriptor descriptor{};
+			descriptor.strId = std::string(kDefaultFallbackThemeId);
+			descriptor.strLabel = std::string(kDefaultFallbackThemeLabel);
+			return descriptor;
+		}
+
+		static std::string build_theme_fallback_label(std::string_view svThemeId)
+		{
+			std::string strLabel{};
+			strLabel.reserve(svThemeId.size());
+			bool bCapitalizeNext = true;
+			for (const char ch : svThemeId)
+			{
+				if (ch == '_' || ch == '-' || ch == '.')
+				{
+					if (!strLabel.empty() && strLabel.back() != ' ')
+					{
+						strLabel.push_back(' ');
+					}
+					bCapitalizeNext = true;
+					continue;
+				}
+
+				const bool bIsLower = ch >= 'a' && ch <= 'z';
+				if (bCapitalizeNext && bIsLower)
+				{
+					strLabel.push_back(static_cast<char>(ch - 'a' + 'A'));
+				}
+				else
+				{
+					strLabel.push_back(ch);
+				}
+				bCapitalizeNext = ch == ' ';
+			}
+
+			return strLabel.empty() ? std::string(svThemeId) : strLabel;
+		}
+
+		static void apply_default_theme()
 		{
 			ImGui::StyleColorsDark();
 
@@ -80,7 +138,6 @@ namespace AshEngine
 			style.IndentSpacing = 20.0f;
 			style.ScrollbarSize = 13.0f;
 			style.GrabMinSize = 10.0f;
-
 			style.WindowRounding = 7.0f;
 			style.ChildRounding = 6.0f;
 			style.PopupRounding = 6.0f;
@@ -90,7 +147,6 @@ namespace AshEngine
 			style.TabRounding = 5.0f;
 			style.TabBorderSize = 1.0f;
 			style.TabBarBorderSize = 1.0f;
-
 			style.WindowBorderSize = 1.0f;
 			style.ChildBorderSize = 1.0f;
 			style.PopupBorderSize = 1.0f;
@@ -105,41 +161,32 @@ namespace AshEngine
 			colors[ImGuiCol_PopupBg] = make_color(0.10f, 0.13f, 0.16f, 0.98f);
 			colors[ImGuiCol_Border] = make_color(0.16f, 0.20f, 0.25f, 0.95f);
 			colors[ImGuiCol_BorderShadow] = make_color(0.00f, 0.00f, 0.00f, 0.00f);
-
 			colors[ImGuiCol_FrameBg] = make_color(0.12f, 0.15f, 0.19f);
 			colors[ImGuiCol_FrameBgHovered] = make_color(0.20f, 0.26f, 0.33f);
 			colors[ImGuiCol_FrameBgActive] = make_color(0.27f, 0.35f, 0.43f);
-
 			colors[ImGuiCol_TitleBg] = make_color(0.08f, 0.10f, 0.13f);
 			colors[ImGuiCol_TitleBgActive] = make_color(0.11f, 0.14f, 0.18f);
 			colors[ImGuiCol_TitleBgCollapsed] = make_color(0.08f, 0.10f, 0.13f, 0.80f);
 			colors[ImGuiCol_MenuBarBg] = make_color(0.09f, 0.11f, 0.14f);
-
 			colors[ImGuiCol_ScrollbarBg] = make_color(0.07f, 0.09f, 0.12f);
 			colors[ImGuiCol_ScrollbarGrab] = make_color(0.21f, 0.26f, 0.32f);
 			colors[ImGuiCol_ScrollbarGrabHovered] = make_color(0.27f, 0.33f, 0.41f);
 			colors[ImGuiCol_ScrollbarGrabActive] = make_color(0.31f, 0.39f, 0.48f);
-
 			colors[ImGuiCol_CheckMark] = make_color(0.47f, 0.67f, 0.88f);
 			colors[ImGuiCol_SliderGrab] = make_color(0.39f, 0.58f, 0.78f);
 			colors[ImGuiCol_SliderGrabActive] = make_color(0.49f, 0.70f, 0.92f);
-
 			colors[ImGuiCol_Button] = make_color(0.18f, 0.25f, 0.32f);
 			colors[ImGuiCol_ButtonHovered] = make_color(0.29f, 0.40f, 0.51f);
 			colors[ImGuiCol_ButtonActive] = make_color(0.37f, 0.52f, 0.65f);
-
 			colors[ImGuiCol_Header] = make_color(0.20f, 0.28f, 0.36f);
 			colors[ImGuiCol_HeaderHovered] = make_color(0.31f, 0.44f, 0.56f);
 			colors[ImGuiCol_HeaderActive] = make_color(0.39f, 0.55f, 0.70f);
-
 			colors[ImGuiCol_Separator] = make_color(0.18f, 0.23f, 0.29f);
 			colors[ImGuiCol_SeparatorHovered] = make_color(0.31f, 0.42f, 0.53f);
 			colors[ImGuiCol_SeparatorActive] = make_color(0.40f, 0.54f, 0.67f);
-
 			colors[ImGuiCol_ResizeGrip] = make_color(0.22f, 0.31f, 0.39f, 0.35f);
 			colors[ImGuiCol_ResizeGripHovered] = make_color(0.35f, 0.49f, 0.61f, 0.80f);
 			colors[ImGuiCol_ResizeGripActive] = make_color(0.44f, 0.61f, 0.76f, 0.95f);
-
 			colors[ImGuiCol_Tab] = make_color(0.12f, 0.16f, 0.20f);
 			colors[ImGuiCol_TabHovered] = make_color(0.26f, 0.38f, 0.49f);
 			colors[ImGuiCol_TabActive] = make_color(0.34f, 0.49f, 0.62f);
@@ -147,31 +194,351 @@ namespace AshEngine
 			colors[ImGuiCol_TabUnfocusedActive] = make_color(0.23f, 0.33f, 0.42f);
 			colors[ImGuiCol_DockingPreview] = make_color(0.34f, 0.55f, 0.79f, 0.70f);
 			colors[ImGuiCol_DockingEmptyBg] = make_color(0.06f, 0.08f, 0.10f);
-
 			colors[ImGuiCol_TableHeaderBg] = make_color(0.11f, 0.14f, 0.18f);
 			colors[ImGuiCol_TableBorderStrong] = make_color(0.19f, 0.24f, 0.30f);
 			colors[ImGuiCol_TableBorderLight] = make_color(0.13f, 0.17f, 0.21f);
 			colors[ImGuiCol_TableRowBg] = make_color(0.00f, 0.00f, 0.00f, 0.00f);
 			colors[ImGuiCol_TableRowBgAlt] = make_color(1.00f, 1.00f, 1.00f, 0.03f);
-
 			colors[ImGuiCol_TextSelectedBg] = make_color(0.29f, 0.45f, 0.64f, 0.35f);
 			colors[ImGuiCol_DragDropTarget] = make_color(0.51f, 0.75f, 0.96f, 0.90f);
 			colors[ImGuiCol_NavHighlight] = make_color(0.41f, 0.61f, 0.83f, 0.85f);
 			colors[ImGuiCol_NavWindowingHighlight] = make_color(1.00f, 1.00f, 1.00f, 0.70f);
 		}
 
-		static void apply_imgui_theme_preset(UIThemePreset preset)
+		static std::optional<ImVec2> try_read_vec2(const json& refValue)
 		{
-			switch (preset)
+			if (!refValue.is_array() || refValue.size() != 2u)
 			{
-			case UIThemePreset::ClassicDark:
-				apply_classic_dark_theme();
-				break;
-			case UIThemePreset::SlateStudio:
-			default:
-				apply_slate_studio_theme();
-				break;
+				return std::nullopt;
 			}
+
+			return ImVec2(refValue[0].get<float>(), refValue[1].get<float>());
+		}
+
+		static std::optional<ImVec4> try_read_color(const json& refValue)
+		{
+			if (!refValue.is_array() || refValue.size() != 4u)
+			{
+				return std::nullopt;
+			}
+
+			return ImVec4(
+				refValue[0].get<float>(),
+				refValue[1].get<float>(),
+				refValue[2].get<float>(),
+				refValue[3].get<float>());
+		}
+
+		static void apply_style_vec2(const json& refStyleJson, const char* pKey, ImVec2& refTarget)
+		{
+			if (!refStyleJson.contains(pKey))
+			{
+				return;
+			}
+
+			const std::optional<ImVec2> optValue = try_read_vec2(refStyleJson[pKey]);
+			if (optValue.has_value())
+			{
+				refTarget = *optValue;
+			}
+		}
+
+		static void apply_style_float(const json& refStyleJson, const char* pKey, float& refTarget)
+		{
+			if (refStyleJson.contains(pKey) && refStyleJson[pKey].is_number())
+			{
+				refTarget = refStyleJson[pKey].get<float>();
+			}
+		}
+
+		static void apply_style_dir(const json& refStyleJson, const char* pKey, ImGuiDir& refTarget)
+		{
+			if (!refStyleJson.contains(pKey) || !refStyleJson[pKey].is_string())
+			{
+				return;
+			}
+
+			const std::string strValue = refStyleJson[pKey].get<std::string>();
+			if (strValue == "left")
+			{
+				refTarget = ImGuiDir_Left;
+			}
+			else if (strValue == "right")
+			{
+				refTarget = ImGuiDir_Right;
+			}
+			else if (strValue == "up")
+			{
+				refTarget = ImGuiDir_Up;
+			}
+			else if (strValue == "down")
+			{
+				refTarget = ImGuiDir_Down;
+			}
+			else if (strValue == "none")
+			{
+				refTarget = ImGuiDir_None;
+			}
+		}
+
+		static std::optional<ImGuiCol> try_parse_imgui_color_key(std::string_view svKey)
+		{
+			static const std::unordered_map<std::string, ImGuiCol> s_colorLookup{
+				{ "Text", ImGuiCol_Text },
+				{ "TextDisabled", ImGuiCol_TextDisabled },
+				{ "WindowBg", ImGuiCol_WindowBg },
+				{ "ChildBg", ImGuiCol_ChildBg },
+				{ "PopupBg", ImGuiCol_PopupBg },
+				{ "Border", ImGuiCol_Border },
+				{ "BorderShadow", ImGuiCol_BorderShadow },
+				{ "FrameBg", ImGuiCol_FrameBg },
+				{ "FrameBgHovered", ImGuiCol_FrameBgHovered },
+				{ "FrameBgActive", ImGuiCol_FrameBgActive },
+				{ "TitleBg", ImGuiCol_TitleBg },
+				{ "TitleBgActive", ImGuiCol_TitleBgActive },
+				{ "TitleBgCollapsed", ImGuiCol_TitleBgCollapsed },
+				{ "MenuBarBg", ImGuiCol_MenuBarBg },
+				{ "ScrollbarBg", ImGuiCol_ScrollbarBg },
+				{ "ScrollbarGrab", ImGuiCol_ScrollbarGrab },
+				{ "ScrollbarGrabHovered", ImGuiCol_ScrollbarGrabHovered },
+				{ "ScrollbarGrabActive", ImGuiCol_ScrollbarGrabActive },
+				{ "CheckMark", ImGuiCol_CheckMark },
+				{ "SliderGrab", ImGuiCol_SliderGrab },
+				{ "SliderGrabActive", ImGuiCol_SliderGrabActive },
+				{ "Button", ImGuiCol_Button },
+				{ "ButtonHovered", ImGuiCol_ButtonHovered },
+				{ "ButtonActive", ImGuiCol_ButtonActive },
+				{ "Header", ImGuiCol_Header },
+				{ "HeaderHovered", ImGuiCol_HeaderHovered },
+				{ "HeaderActive", ImGuiCol_HeaderActive },
+				{ "Separator", ImGuiCol_Separator },
+				{ "SeparatorHovered", ImGuiCol_SeparatorHovered },
+				{ "SeparatorActive", ImGuiCol_SeparatorActive },
+				{ "ResizeGrip", ImGuiCol_ResizeGrip },
+				{ "ResizeGripHovered", ImGuiCol_ResizeGripHovered },
+				{ "ResizeGripActive", ImGuiCol_ResizeGripActive },
+				{ "Tab", ImGuiCol_Tab },
+				{ "TabHovered", ImGuiCol_TabHovered },
+				{ "TabActive", ImGuiCol_TabActive },
+				{ "TabUnfocused", ImGuiCol_TabUnfocused },
+				{ "TabUnfocusedActive", ImGuiCol_TabUnfocusedActive },
+				{ "DockingPreview", ImGuiCol_DockingPreview },
+				{ "DockingEmptyBg", ImGuiCol_DockingEmptyBg },
+				{ "TableHeaderBg", ImGuiCol_TableHeaderBg },
+				{ "TableBorderStrong", ImGuiCol_TableBorderStrong },
+				{ "TableBorderLight", ImGuiCol_TableBorderLight },
+				{ "TableRowBg", ImGuiCol_TableRowBg },
+				{ "TableRowBgAlt", ImGuiCol_TableRowBgAlt },
+				{ "TextSelectedBg", ImGuiCol_TextSelectedBg },
+				{ "DragDropTarget", ImGuiCol_DragDropTarget },
+				{ "NavHighlight", ImGuiCol_NavHighlight },
+				{ "NavWindowingHighlight", ImGuiCol_NavWindowingHighlight }
+			};
+
+			const auto itFound = s_colorLookup.find(std::string(svKey));
+			return itFound == s_colorLookup.end()
+				? std::nullopt
+				: std::optional<ImGuiCol>{ itFound->second };
+		}
+
+		static bool apply_imgui_theme_file(const std::filesystem::path& pathThemeFile)
+		{
+			std::ifstream input(pathThemeFile);
+			if (!input.is_open())
+			{
+				HLogWarning("UI theme file '{}' could not be opened.", pathThemeFile.generic_string());
+				return false;
+			}
+
+			json root = json::parse(input, nullptr, false);
+			if (root.is_discarded() || !root.is_object())
+			{
+				HLogWarning("UI theme file '{}' is not valid JSON.", pathThemeFile.generic_string());
+				return false;
+			}
+
+			const std::string strBase = root.value("base", std::string("dark"));
+			if (strBase == "light")
+			{
+				ImGui::StyleColorsLight();
+			}
+			else if (strBase == "classic")
+			{
+				ImGui::StyleColorsClassic();
+			}
+			else
+			{
+				ImGui::StyleColorsDark();
+			}
+
+			ImGuiStyle& style = ImGui::GetStyle();
+			if (root.contains("style") && root["style"].is_object())
+			{
+				const json& refStyleJson = root["style"];
+				apply_style_vec2(refStyleJson, "WindowPadding", style.WindowPadding);
+				apply_style_vec2(refStyleJson, "FramePadding", style.FramePadding);
+				apply_style_vec2(refStyleJson, "CellPadding", style.CellPadding);
+				apply_style_vec2(refStyleJson, "ItemSpacing", style.ItemSpacing);
+				apply_style_vec2(refStyleJson, "ItemInnerSpacing", style.ItemInnerSpacing);
+				apply_style_vec2(refStyleJson, "WindowTitleAlign", style.WindowTitleAlign);
+				apply_style_float(refStyleJson, "IndentSpacing", style.IndentSpacing);
+				apply_style_float(refStyleJson, "ScrollbarSize", style.ScrollbarSize);
+				apply_style_float(refStyleJson, "GrabMinSize", style.GrabMinSize);
+				apply_style_float(refStyleJson, "WindowRounding", style.WindowRounding);
+				apply_style_float(refStyleJson, "ChildRounding", style.ChildRounding);
+				apply_style_float(refStyleJson, "PopupRounding", style.PopupRounding);
+				apply_style_float(refStyleJson, "FrameRounding", style.FrameRounding);
+				apply_style_float(refStyleJson, "ScrollbarRounding", style.ScrollbarRounding);
+				apply_style_float(refStyleJson, "GrabRounding", style.GrabRounding);
+				apply_style_float(refStyleJson, "TabRounding", style.TabRounding);
+				apply_style_float(refStyleJson, "TabBorderSize", style.TabBorderSize);
+				apply_style_float(refStyleJson, "TabBarBorderSize", style.TabBarBorderSize);
+				apply_style_float(refStyleJson, "WindowBorderSize", style.WindowBorderSize);
+				apply_style_float(refStyleJson, "ChildBorderSize", style.ChildBorderSize);
+				apply_style_float(refStyleJson, "PopupBorderSize", style.PopupBorderSize);
+				apply_style_float(refStyleJson, "FrameBorderSize", style.FrameBorderSize);
+				apply_style_dir(refStyleJson, "WindowMenuButtonPosition", style.WindowMenuButtonPosition);
+			}
+
+			if (root.contains("colors") && root["colors"].is_object())
+			{
+				for (const auto& refItem : root["colors"].items())
+				{
+					const std::optional<ImGuiCol> optColorKey = try_parse_imgui_color_key(refItem.key());
+					const std::optional<ImVec4> optColorValue = try_read_color(refItem.value());
+					if (optColorKey.has_value() && optColorValue.has_value())
+					{
+						style.Colors[*optColorKey] = *optColorValue;
+					}
+				}
+			}
+
+			return true;
+		}
+
+		static UIThemeDescriptor read_theme_descriptor(const std::filesystem::path& pathThemeFile)
+		{
+			UIThemeDescriptor descriptor{};
+			descriptor.strId = pathThemeFile.stem().generic_string();
+			descriptor.strLabel = build_theme_fallback_label(descriptor.strId);
+
+			std::ifstream input(pathThemeFile);
+			if (!input.is_open())
+			{
+				return descriptor;
+			}
+
+			json root = json::parse(input, nullptr, false);
+			if (root.is_object())
+			{
+				descriptor.strLabel = root.value("label", descriptor.strLabel);
+			}
+			return descriptor;
+		}
+
+		static std::vector<UIThemeDescriptor> scan_theme_descriptors(const std::filesystem::path& pathThemeConfigRoot)
+		{
+			std::vector<UIThemeDescriptor> vecThemes{};
+			std::error_code errorCode{};
+			if (pathThemeConfigRoot.empty() || !std::filesystem::exists(pathThemeConfigRoot, errorCode))
+			{
+				vecThemes.push_back(build_default_theme_descriptor());
+				return vecThemes;
+			}
+			if (errorCode)
+			{
+				HLogWarning(
+					"UI theme directory '{}' could not be queried: {}.",
+					pathThemeConfigRoot.generic_string(),
+					errorCode.message());
+				vecThemes.push_back(build_default_theme_descriptor());
+				return vecThemes;
+			}
+
+			std::vector<std::filesystem::path> vecThemeFiles{};
+			for (const std::filesystem::directory_entry& refEntry :
+				std::filesystem::directory_iterator(pathThemeConfigRoot, errorCode))
+			{
+				if (refEntry.is_regular_file() && refEntry.path().extension() == ".json")
+				{
+					vecThemeFiles.push_back(refEntry.path());
+				}
+			}
+			if (errorCode)
+			{
+				HLogWarning(
+					"UI theme directory '{}' could not be scanned completely: {}.",
+					pathThemeConfigRoot.generic_string(),
+					errorCode.message());
+				if (vecThemes.empty())
+				{
+					vecThemes.push_back(build_default_theme_descriptor());
+				}
+				return vecThemes;
+			}
+
+			std::sort(vecThemeFiles.begin(), vecThemeFiles.end());
+			vecThemes.reserve(vecThemeFiles.size() + 1u);
+			for (const std::filesystem::path& pathThemeFile : vecThemeFiles)
+			{
+				vecThemes.push_back(read_theme_descriptor(pathThemeFile));
+			}
+
+			if (vecThemes.empty())
+			{
+				vecThemes.push_back(build_default_theme_descriptor());
+			}
+
+			return vecThemes;
+		}
+
+		static bool apply_imgui_theme_preset(
+			const UIThemePreset preset,
+			const std::filesystem::path& pathThemeConfigRoot)
+		{
+			const std::string strPresetName = get_theme_preset_name(preset);
+			if (!pathThemeConfigRoot.empty())
+			{
+				const std::filesystem::path pathThemeFile = pathThemeConfigRoot / (strPresetName + ".json");
+				if (apply_imgui_theme_file(pathThemeFile))
+				{
+					return true;
+				}
+			}
+
+			HLogWarning(
+				"UI theme '{}' fell back to the built-in default theme because no valid theme config file was loaded.",
+				strPresetName);
+			apply_default_theme();
+			return false;
+		}
+
+		static bool apply_imgui_theme_by_id(
+			const std::string_view svThemeId,
+			const std::filesystem::path& pathThemeConfigRoot)
+		{
+			if (svThemeId.empty())
+			{
+				return false;
+			}
+
+			if (svThemeId == kDefaultFallbackThemeId)
+			{
+				apply_default_theme();
+				return true;
+			}
+
+			if (!pathThemeConfigRoot.empty())
+			{
+				const std::filesystem::path pathThemeFile =
+					pathThemeConfigRoot / (std::string(svThemeId) + ".json");
+				if (apply_imgui_theme_file(pathThemeFile))
+				{
+					return true;
+				}
+			}
+
+			return false;
 		}
 
 		// editor begin 修改原因：为编辑器加载自定义字体、中文回退字体与强调字重字体，统一 UI 排版基础能力。
@@ -501,8 +868,20 @@ namespace AshEngine
 			m_iniPath = config.ini_path;
 			io.IniFilename = m_iniPath.empty() ? nullptr : m_iniPath.c_str();
 			io.ConfigWindowsMoveFromTitleBarOnly = true;
+			m_pathThemeConfigRoot = config.theme_config_root.empty()
+				? std::filesystem::path{}
+				: std::filesystem::path(config.theme_config_root);
 			m_themePreset = config.theme_preset;
-			apply_imgui_theme_preset(m_themePreset);
+			m_strThemeId = config.theme_name.empty()
+				? get_theme_preset_name(m_themePreset)
+				: config.theme_name;
+			if (!apply_imgui_theme_by_id(m_strThemeId, m_pathThemeConfigRoot))
+			{
+				const bool bLoadedPresetTheme = apply_imgui_theme_preset(m_themePreset, m_pathThemeConfigRoot);
+				m_strThemeId = bLoadedPresetTheme
+					? get_theme_preset_name(m_themePreset)
+					: std::string(kDefaultFallbackThemeId);
+			}
 			// editor begin 修改原因：初始化编辑器专用字体集，并缓存默认/强调字体句柄供后续排版调用。
 			const ImGuiLoadedFontSet fontSet = configure_imgui_font(io, config);
 			m_pDefaultFont = fontSet.pDefault;
@@ -930,13 +1309,60 @@ namespace AshEngine
 			m_themePreset = preset;
 			if (ImGui::GetCurrentContext())
 			{
-				apply_imgui_theme_preset(m_themePreset);
+				const bool bLoadedPresetTheme = apply_imgui_theme_preset(m_themePreset, m_pathThemeConfigRoot);
+				m_strThemeId = bLoadedPresetTheme
+					? get_theme_preset_name(m_themePreset)
+					: std::string(kDefaultFallbackThemeId);
+				return;
 			}
+
+			m_strThemeId = get_theme_preset_name(m_themePreset);
 		}
 
 		UIThemePreset get_theme_preset() const override
 		{
 			return m_themePreset;
+		}
+
+		bool apply_theme(std::string_view svThemeId) override
+		{
+			if (svThemeId.empty())
+			{
+				return false;
+			}
+			if (ImGui::GetCurrentContext() && !apply_imgui_theme_by_id(svThemeId, m_pathThemeConfigRoot))
+			{
+				return false;
+			}
+
+			m_strThemeId = std::string(svThemeId);
+			m_themePreset = get_theme_preset_from_id(svThemeId);
+			return true;
+		}
+
+		std::string get_theme_id() const override
+		{
+			return m_strThemeId;
+		}
+
+		std::vector<UIThemeDescriptor> list_themes() const override
+		{
+			std::vector<UIThemeDescriptor> vecThemes = scan_theme_descriptors(m_pathThemeConfigRoot);
+			const auto itFound = std::find_if(
+				vecThemes.begin(),
+				vecThemes.end(),
+				[this](const UIThemeDescriptor& refTheme)
+				{
+					return refTheme.strId == m_strThemeId;
+				});
+			if (itFound == vecThemes.end() && !m_strThemeId.empty())
+			{
+				vecThemes.push_back(UIThemeDescriptor{
+					m_strThemeId,
+					build_theme_fallback_label(m_strThemeId)
+				});
+			}
+			return vecThemes;
 		}
 
 	private:
@@ -1462,6 +1888,8 @@ namespace AshEngine
 		ImFont* m_pStrongFont = nullptr;
 		// editor end
 		UIThemePreset m_themePreset = UIThemePreset::SlateStudio;
+		std::string m_strThemeId{};
+		std::filesystem::path m_pathThemeConfigRoot{};
 		std::string m_iniPath{};
 		std::unordered_map<const RenderTarget*, TextureRegistration> m_texture_registrations{};
 		std::unordered_map<const RHI::TextureView*, TextureRegistration> m_texture_view_registrations{};

@@ -50,7 +50,14 @@ namespace AshEngine
 	enum class UIThemePreset : uint8_t
 	{
 		ClassicDark = 0,
-		SlateStudio
+		SlateStudio,
+		WarmPaper
+	};
+
+	struct UIThemeDescriptor
+	{
+		std::string strId{};
+		std::string strLabel{};
 	};
 
 	// editor begin 修改原因：为编辑器 UI 提供默认字重与强调字重的语义化字体角色。
@@ -126,6 +133,8 @@ namespace AshEngine
 		bool enable_gamepad_navigation = false;
 		std::string ini_path{};
 		UIThemePreset theme_preset = UIThemePreset::SlateStudio;
+		std::string theme_name{};
+		std::string theme_config_root{};
 		// editor begin 修改原因：允许编辑器控制主字体、中文合并字体、强调字体和字号策略。
 		std::string font_path{};
 		std::string font_merge_path{};

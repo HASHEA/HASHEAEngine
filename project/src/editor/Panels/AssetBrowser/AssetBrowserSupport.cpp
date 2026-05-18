@@ -8,6 +8,7 @@
 #include "Services/AssetDatabaseService.h"
 #include "Services/EditorSettingsService.h"
 #include "Services/SelectionService.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/EditorTooltipWidgets.h"
 
 #include <algorithm>
@@ -43,7 +44,6 @@ namespace AshEditor
 		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonColor{ 0.34f, 0.42f, 0.50f, 1.0f };
 		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonHoveredColor{ 0.38f, 0.46f, 0.55f, 1.0f };
 		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonActiveColor{ 0.31f, 0.39f, 0.47f, 1.0f };
-		constexpr AshEngine::UIColor kAssetToolbarMutedTextColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 		constexpr AshEngine::UIColor kAssetToolbarWarningTextColor{ 0.93f, 0.78f, 0.45f, 1.0f };
 		constexpr AshEngine::UITooltipConfig kAssetBrowserInfoTooltipConfig{
 			{ 560.0f, 0.0f },
@@ -405,7 +405,7 @@ namespace AshEditor
 		void DrawToolbarSeparator(AshEngine::UIContext& refUi)
 		{
 			refUi.same_line(0.0f, 10.0f);
-			refUi.text_colored(kAssetToolbarMutedTextColor, "|");
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "|");
 			refUi.same_line(0.0f, 10.0f);
 		}
 

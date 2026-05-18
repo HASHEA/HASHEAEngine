@@ -8,6 +8,7 @@
 #include "Panels/SceneHierarchy/SceneHierarchyPanelSupport.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <vector>
@@ -16,18 +17,16 @@ namespace AshEditor
 {
 	namespace
 	{
-		constexpr AshEngine::UIColor kSceneHierarchyAccentColor{ 0.67f, 0.78f, 0.92f, 1.0f };
-		constexpr AshEngine::UIColor kSceneHierarchyMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 		constexpr const char* kSceneContentContextPopupId = "SceneHierarchyContentContextMenu";
 
 		void DrawSceneSummary(AshEngine::UIContext& refUi, const AshEngine::Scene& refScene)
 		{
 			refUi.push_font(AshEngine::UIFontRole::Strong);
-			refUi.text_colored_scaled(1.05f, kSceneHierarchyAccentColor, "%s", refScene.get_name().c_str());
+			refUi.text_colored_scaled(1.05f, GetEditorHeadingTextColor(refUi), "%s", refScene.get_name().c_str());
 			refUi.pop_font();
 			refUi.text_colored_scaled(
 				0.82f,
-				kSceneHierarchyMutedColor,
+				GetEditorMutedTextColor(refUi),
 				"%u entities | %u roots",
 				refScene.get_entity_count(),
 				static_cast<unsigned int>(refScene.get_root_entities().size()));
@@ -35,7 +34,7 @@ namespace AshEditor
 
 		void DrawEmptySceneState(AshEngine::UIContext& refUi)
 		{
-			refUi.text_colored_scaled(0.92f, kSceneHierarchyMutedColor, "Scene is empty.");
+			refUi.text_colored_scaled(0.92f, GetEditorMutedTextColor(refUi), "Scene is empty.");
 			refUi.text_wrapped_scaled(0.82f, "Create a root entity to start building the scene.");
 		}
 	}

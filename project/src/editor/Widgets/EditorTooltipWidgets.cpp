@@ -2,6 +2,7 @@
 
 #include "Function/Gui/UICommon.h"
 #include "Function/Gui/UIContext.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <string>
 
@@ -9,8 +10,6 @@ namespace AshEditor
 {
 	namespace
 	{
-		constexpr AshEngine::UIColor kTooltipTitleColor{ 0.78f, 0.84f, 0.93f, 1.0f };
-		constexpr AshEngine::UIColor kTooltipMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
 		constexpr AshEngine::UITableFlags kTooltipTableFlags =
 			AshEngine::UITableFlagBits::SizingStretchProp |
 			AshEngine::UITableFlagBits::BordersInner;
@@ -40,13 +39,13 @@ namespace AshEditor
 		{
 			const std::string strTitle(svTitle);
 			refUi.push_font(AshEngine::UIFontRole::Strong);
-			refUi.text_colored(kTooltipTitleColor, "%s", strTitle.c_str());
+			refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", strTitle.c_str());
 			refUi.pop_font();
 		}
 		if (!svSubtitle.empty())
 		{
 			const std::string strSubtitle(svSubtitle);
-			refUi.text_colored_scaled(0.86f, kTooltipMutedColor, "%s", strSubtitle.c_str());
+			refUi.text_colored_scaled(0.86f, GetEditorMutedTextColor(refUi), "%s", strSubtitle.c_str());
 		}
 		if (!svTitle.empty() || !svSubtitle.empty())
 		{
@@ -63,7 +62,7 @@ namespace AshEditor
 		{
 			const std::string strTitle(svTitle);
 			refUi.push_font(AshEngine::UIFontRole::Strong);
-			refUi.text_colored(kTooltipTitleColor, "%s", strTitle.c_str());
+			refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", strTitle.c_str());
 			refUi.pop_font();
 		}
 		if (!svSubtitle.empty())
@@ -73,7 +72,7 @@ namespace AshEditor
 				refUi.same_line(0.0f, 8.0f);
 			}
 			const std::string strSubtitle(svSubtitle);
-			refUi.text_colored_scaled(0.84f, kTooltipMutedColor, "%s", strSubtitle.c_str());
+			refUi.text_colored_scaled(0.84f, GetEditorMutedTextColor(refUi), "%s", strSubtitle.c_str());
 		}
 	}
 
@@ -84,7 +83,7 @@ namespace AshEditor
 	{
 		refUi.table_next_row();
 		refUi.table_next_column();
-		refUi.text_colored(kTooltipMutedColor, "%s", pLabel ? pLabel : "-");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", pLabel ? pLabel : "-");
 		refUi.table_next_column();
 		const std::string strValue(svValue.empty() ? std::string_view("-") : svValue);
 		refUi.text_wrapped("%s", strValue.c_str());
@@ -95,7 +94,7 @@ namespace AshEditor
 		const char* pLabel,
 		std::string_view svValue)
 	{
-		refUi.text_colored(kTooltipMutedColor, "%s", pLabel ? pLabel : "-");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", pLabel ? pLabel : "-");
 		refUi.same_line(0.0f, 6.0f);
 		const std::string strValue(svValue.empty() ? std::string_view("-") : svValue);
 		refUi.text_wrapped("%s", strValue.c_str());
@@ -114,6 +113,6 @@ namespace AshEditor
 		std::string_view svText)
 	{
 		const std::string strText(svText.empty() ? std::string_view("-") : svText);
-		refUi.text_colored_scaled(0.82f, kTooltipMutedColor, "%s", strText.c_str());
+		refUi.text_colored_scaled(0.82f, GetEditorMutedTextColor(refUi), "%s", strText.c_str());
 	}
 }

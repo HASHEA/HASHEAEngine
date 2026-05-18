@@ -26,6 +26,8 @@ AshEngine::Application* create_application()
 		: settingsService.ResolveWorkspacePath(settings.strUiStrongFontMergePath);
 	initConfig.uiIniPath = pathLayoutIni.empty() ? std::string{} : pathLayoutIni.string();
 	initConfig.uiThemePreset = AshEditor::ParseEditorUiThemePreset(settings.strUiThemePreset);
+	initConfig.uiThemeName = settings.strUiThemePreset;
+	initConfig.uiThemeConfigRoot = (pathWorkspaceRoot / "product" / "config" / "editor" / "themes").string();
 	initConfig.uiFontPath = pathUiFont.empty() ? std::string{} : pathUiFont.string();
 	initConfig.uiFontMergePath = pathUiFontMerge.empty() ? std::string{} : pathUiFontMerge.string();
 	initConfig.uiStrongFontPath = pathUiStrongFont.empty() ? std::string{} : pathUiStrongFont.string();

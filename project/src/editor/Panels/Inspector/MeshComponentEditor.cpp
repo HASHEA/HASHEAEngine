@@ -8,6 +8,7 @@
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
 #include "Services/AssetDatabaseService.h"
 #include "Services/DragDropTransferService.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/InspectorPropertyWidgets.h"
 
 #include <algorithm>
@@ -113,7 +114,7 @@ namespace AshEditor
 
 			if (!refState.vecRecentMeshPaths.empty())
 			{
-				refUi.text_colored(kInspectorMutedColor, "Recent");
+				refUi.text_colored(GetEditorMutedTextColor(refUi), "Recent");
 				for (const std::string& strRecent : refState.vecRecentMeshPaths)
 				{
 					if (refUi.selectable(strRecent.c_str()))
@@ -127,7 +128,7 @@ namespace AshEditor
 				refUi.separator();
 			}
 
-			refUi.text_colored(kInspectorMutedColor, "Assets");
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "Assets");
 			if (refDeps.pAssetDatabaseService)
 			{
 				if (refUi.begin_child("AssetPickerList", { 300.0f, 250.0f }))

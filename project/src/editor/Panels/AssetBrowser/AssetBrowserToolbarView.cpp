@@ -6,6 +6,7 @@
 #include "Services/AssetDatabaseService.h"
 #include "Services/CommandService.h"
 #include "Widgets/EditorActionWidgets.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <vector>
@@ -125,7 +126,7 @@ namespace AshEditor
 		AssetBrowserSupport::DrawToolbarLabel(
 			refUi,
 			"Info",
-			{ 0.67f, 0.70f, 0.76f, 1.0f });
+			GetEditorMutedTextColor(refUi));
 		AssetBrowserSupport::DrawAssetBrowserInfoTooltip(
 			refUi,
 			refViewContext.refDeps.pAssetDatabaseService

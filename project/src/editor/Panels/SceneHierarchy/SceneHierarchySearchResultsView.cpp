@@ -5,6 +5,7 @@
 #include "Function/Scene/Scene.h"
 #include "Panels/SceneHierarchy/SceneHierarchyPanelSupport.h"
 #include "Services/SelectionService.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <string>
@@ -12,11 +13,6 @@
 
 namespace AshEditor
 {
-	namespace
-	{
-		constexpr AshEngine::UIColor kSceneHierarchyMutedColor{ 0.67f, 0.70f, 0.76f, 1.0f };
-	}
-
 	void SceneHierarchySearchResultsView::Draw(
 		const EditorFrameContext& refFrameContext,
 		const SceneHierarchyPanelDeps& refDeps,
@@ -59,7 +55,7 @@ namespace AshEditor
 		}
 
 		refUi.text_colored(
-			kSceneHierarchyMutedColor,
+			GetEditorMutedTextColor(refUi),
 			"Matches: %u | Filter: %s",
 			static_cast<uint32_t>(vecMatches.size()),
 			refFilter.pLabel);
