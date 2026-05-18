@@ -1,6 +1,7 @@
 #pragma once
 #include "Base/EngineSelfTests.h"
 #include "Function/Application.h"
+#include "Function/Diagnostics/PerfGate.h"
 extern AshEngine::Application* create_application();//impl in editor
 extern void destroy_application(AshEngine::Application* app);//impl in editor
 #include <filesystem>
@@ -178,6 +179,11 @@ int32_t main(int argc, char* argv[])
 	if (smokeTestFrameCount > 0)
 	{
 		application->set_max_frame_count(smokeTestFrameCount);
+	}
+	const AshEngine::PerfGateConfig perfGateConfig = AshEngine::parse_perf_gate_config(argc, argv);
+	if (perfGateConfig.enabled)
+	{
+		application->configure_perf_gate(perfGateConfig);
 	}
 	application->start();
 	destroy_application(application);

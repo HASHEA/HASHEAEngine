@@ -252,6 +252,10 @@ namespace AshEngine
 		if (graphicsContext)
 		{
 			graphicsContext->shutdown();
+			if (perfGateController.is_enabled())
+			{
+				perfGateController.capture_render_memory_stats(graphicsContext->get_render_memory_stats());
+			}
 			graphicsContext->destroy();
 			graphicsContext = nullptr;
 		}
@@ -268,6 +272,11 @@ namespace AshEngine
 		app = nullptr;
 		if (memoryServiceInitialized)
 		{
+			if (perfGateController.is_enabled())
+			{
+				perfGateController.capture_shutdown_heap_stats(MemoryService::instance()->get_heap_stats());
+				perfGateController.write_report(false);
+			}
 			MemoryService::instance()->shutdown();
 			memoryServiceInitialized = false;
 		}
@@ -288,6 +297,10 @@ namespace AshEngine
 	auto Application::set_max_run_seconds(double inMaxRunSeconds) -> void
 	{
 		maxRunSeconds = inMaxRunSeconds > 0.0 ? inMaxRunSeconds : 0.0;
+	}
+	auto Application::configure_perf_gate(const PerfGateConfig& config) -> void
+	{
+		perfGateController.configure(config, initConfig.title, activeBackend);
 	}
 	auto Application::start() -> void
 	{
@@ -311,6 +324,7 @@ namespace AshEngine
 		logicThreadFailureMessage.clear();
 		runStartTime = std::chrono::steady_clock::now();
 		_on_startup();
+		perfGateController.begin();
 		_start_logic_thread_if_needed();
 
 		while (!_should_exit())
@@ -324,6 +338,15 @@ namespace AshEngine
 			{
 				_render_frame();
 				_present_frame();
+				if (renderer && perfGateController.is_enabled())
+				{
+					perfGateController.sample_after_frame(renderer->get_frame_stats());
+					if (perfGateController.should_request_exit())
+					{
+						HLogInfo("PerfGate sample window complete; requesting application exit.");
+						request_exit();
+					}
+				}
 			}
 			else if (!has_pending_render_commands())
 			{
