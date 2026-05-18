@@ -26,6 +26,9 @@
 #include "Graphics/Pipeline.h"
 #include "Graphics/RHIResource.h"
 #include "Graphics/Shader.h"
+#if defined(ASH_HAS_VULKAN)
+#include "Graphics/Vulkan/VulkanSwapchain.h"
+#endif
 #if defined(ASH_HAS_DX12)
 #include "Graphics/DirectX12/DX12ResourceTracker.h"
 #endif
@@ -311,6 +314,37 @@ namespace AshEngine
 			return (empty_ok && typed_ok) ||
 				report_self_test_failure("AshBarrier value semantics", "copy/move touched invalid barrier resource storage");
 		}
+
+#if defined(ASH_HAS_VULKAN)
+		auto test_vulkan_swapchain_forced_recreate_ignores_matching_extent() -> bool
+		{
+			const VkExtent2D current_surface_extent{ 1280u, 720u };
+			const VkExtent2D active_swapchain_extent{ 1280u, 720u };
+			const VkExtent2D resized_surface_extent{ 1600u, 900u };
+
+			const bool unchanged_without_force =
+				!RHI::VulkanSwapchain::should_recreate_for_surface_extent(
+					true,
+					false,
+					current_surface_extent,
+					active_swapchain_extent);
+			const bool recreated_with_force =
+				RHI::VulkanSwapchain::should_recreate_for_surface_extent(
+					true,
+					true,
+					current_surface_extent,
+					active_swapchain_extent);
+			const bool recreated_on_extent_change =
+				RHI::VulkanSwapchain::should_recreate_for_surface_extent(
+					true,
+					false,
+					resized_surface_extent,
+					active_swapchain_extent);
+
+			return (unchanged_without_force && recreated_with_force && recreated_on_extent_change) ||
+				report_self_test_failure("Vulkan swapchain forced recreate", "resize/out-of-date paths can still skip required recreation");
+		}
+#endif
 
 		auto test_render_memory_stats_default_to_unsupported() -> bool
 		{
@@ -1667,6 +1701,9 @@ namespace AshEngine
 		all_passed = test_shader_hash_uses_explicit_source_hash() && all_passed;
 		all_passed = test_subresource_range_resolve_clamps_defaults() && all_passed;
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
+#if defined(ASH_HAS_VULKAN)
+		all_passed = test_vulkan_swapchain_forced_recreate_ignores_matching_extent() && all_passed;
+#endif
 		all_passed = test_render_memory_stats_default_to_unsupported() && all_passed;
 		all_passed = test_perf_gate_config_parser_defaults_to_disabled() && all_passed;
 		all_passed = test_perf_gate_config_parser_reads_arguments() && all_passed;

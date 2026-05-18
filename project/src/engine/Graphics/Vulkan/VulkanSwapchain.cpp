@@ -24,6 +24,18 @@ namespace RHI
 	{
 	}
 
+	auto VulkanSwapchain::should_recreate_for_surface_extent(
+		bool hasSwapchain,
+		bool forceRecreate,
+		const VkExtent2D& currentSurfaceExtent,
+		const VkExtent2D& activeSwapchainExtent) -> bool
+	{
+		return !hasSwapchain ||
+			forceRecreate ||
+			currentSurfaceExtent.width != activeSwapchainExtent.width ||
+			currentSurfaceExtent.height != activeSwapchainExtent.height;
+	}
+
 	auto VulkanSwapchain::init(void* _config) -> bool 
 	{
 		auto config = *(SwapChainInitConfig*)_config;
@@ -167,13 +179,15 @@ namespace RHI
 		return true;
 	}
 
-	auto VulkanSwapchain::_recreate_swapchain() -> void
+	auto VulkanSwapchain::_recreate_swapchain(bool forceRecreate) -> void
 	{
 		VkSurfaceCapabilitiesKHR surface_properties{};
 		VK_CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(VulkanContext::get_vulkan_physical_device(), surface, &surface_properties));	
-		if (swapChain != VK_NULL_HANDLE &&
-			surface_properties.currentExtent.width == swapchainExtents.width &&
-			surface_properties.currentExtent.height == swapchainExtents.height)
+		if (!should_recreate_for_surface_extent(
+			swapChain != VK_NULL_HANDLE,
+			forceRecreate,
+			surface_properties.currentExtent,
+			swapchainExtents))
 		{
 			return;
 		}
@@ -294,6 +308,7 @@ namespace RHI
 		{
 			return;
 		}
+		acquireImageIndex = UINT32_MAX;
 		VkResult result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
 		{
@@ -301,12 +316,32 @@ namespace RHI
 
 			if (result == VK_ERROR_OUT_OF_DATE_KHR)
 			{
-				_recreate_swapchain();
+				_recreate_swapchain(true);
 				result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
+				if (result == VK_SUBOPTIMAL_KHR)
+				{
+					HLogWarning("Acquire Image result after recreation : SubOptimal");
+				}
 			}
+		}
+		if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+		{
+			VK_CHECK_RESULT(result);
+			acquireImageIndex = UINT32_MAX;
 			return;
 		}
-		VK_CHECK_RESULT(result);
+		if (acquireImageIndex >= swapChainImages.size())
+		{
+			HLogError("VulkanSwapchain: acquired image index {} is outside swapchain image count {}.", acquireImageIndex, swapChainImages.size());
+			acquireImageIndex = UINT32_MAX;
+			return;
+		}
+		if (acquireImageIndex >= swapChainRenderCompleteSemaphores.size())
+		{
+			HLogError("VulkanSwapchain: acquired image index {} is outside render-complete semaphore count {}.", acquireImageIndex, swapChainRenderCompleteSemaphores.size());
+			acquireImageIndex = UINT32_MAX;
+			return;
+		}
 		VulkanContext::get()->vulkanPresentCompleteSemaphore = swapChainRenderCompleteSemaphores[acquireImageIndex];
 	}
 
@@ -337,6 +372,11 @@ namespace RHI
 	auto VulkanSwapchain::get_swapchain_buffer() -> std::shared_ptr<Texture>
 	{
 		uint32_t curFrame = acquireImageIndex;
+		if (curFrame >= swapChainImages.size())
+		{
+			HLogError("VulkanSwapchain: requested swapchain buffer without a valid acquired image index (index={}, image_count={}).", curFrame, swapChainImages.size());
+			return nullptr;
+		}
 		return swapChainImages[curFrame];
 	}
 
@@ -354,7 +394,7 @@ namespace RHI
 			return;
 		}
 		swapchainExtents = { i_width, i_height };
-		_recreate_swapchain();
+		_recreate_swapchain(true);
 	}
 
 	auto VulkanSwapchain::present() -> void
@@ -382,7 +422,7 @@ namespace RHI
 		VulkanContext::get()->vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
 		{
-			_recreate_swapchain();
+			_recreate_swapchain(true);
 			HLogWarning("VulkanSwapchain: present requested swapchain recreation.");
 			return;
 		}

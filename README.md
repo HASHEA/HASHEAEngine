@@ -80,6 +80,7 @@ HASHEAEngine/
 - graphics program / pipeline variant 缓存。
 - descriptor / program binding 缓存；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区，避免上一帧命令仍引用的 descriptor slot 被本帧覆写。
 - pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier。
+- Vulkan resize、`OUT_OF_DATE` 和 `SUBOPTIMAL` present/acquire 路径会强制重建 swapchain，即使 surface extent 已经等于缓存尺寸；成功 acquire 后才允许读取当前 swapchain image。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
 - Render Graph v1 已作为 Function/Render 层 orchestration 接入，支持 graph texture、raster/compute pass 声明、pass culling、transient lifetime 编译、pass-boundary barrier plan、external output / extracted texture root，以及通过现有 `Renderer / RenderDevice` 执行 graph。

@@ -528,6 +528,7 @@ Reverse-Z 行为约定：
 
 - Editor / Game / Client 上层不应依赖 `get_back_buffer()` 具备 shader-resource 能力；需要采样的视口输出仍应显式创建 offscreen `RenderTarget`
 - 引擎内部 final present 路径不依赖额外的“fullscreen shader present pass”；直接写 swapchain 时由 pass end barrier 转到 `Present`，fallback offscreen 路径才走 backend copy + present state transition
+- Vulkan resize、`VK_ERROR_OUT_OF_DATE_KHR` 和 `VK_SUBOPTIMAL_KHR` 路径必须强制重建 swapchain，不能因为新的 surface extent 已经写入缓存就跳过重建；`get_swapchain_buffer()` 只能在本帧 acquire 得到有效 image index 后返回纹理
 - DX12 不存在 Vulkan `MAILBOX` 的一一对应语义；当前将 `MAILBOX` / `IMMEDIATE` 作为低延迟 uncapped present 请求处理，在系统支持 tearing 时使用 `Present(0, DXGI_PRESENT_ALLOW_TEARING)`，否则退化为 `Present(0, 0)`，并在 swapchain 创建日志中输出最终 sync interval / flags / tearing support。
 
 ### 6.3 Renderer

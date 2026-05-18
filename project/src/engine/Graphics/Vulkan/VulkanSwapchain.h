@@ -38,6 +38,11 @@ namespace RHI
 		auto begin_frame() -> void override;
 		auto end_frame() -> void override;
 		auto get_swapchain_buffer_count() -> uint8_t override;
+		static auto should_recreate_for_surface_extent(
+			bool hasSwapchain,
+			bool forceRecreate,
+			const VkExtent2D& currentSurfaceExtent,
+			const VkExtent2D& activeSwapchainExtent) -> bool;
 	public:
 		//vulkan only
 		auto get_vk_suface()
@@ -49,7 +54,7 @@ namespace RHI
 		auto _init_swapchain(SwapChainInitConfig& config)->bool;
 		auto _query_swapchain_support(SwapChainSupportDetails& swapChainSupport)->void;
 		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->bool;
-		auto _recreate_swapchain() -> void;
+		auto _recreate_swapchain(bool forceRecreate = false) -> void;
 		auto _clean_swapchain(VkSwapchainKHR& _swapchain) -> bool;
 		auto _aquire_next_image() -> void;
 	private:
