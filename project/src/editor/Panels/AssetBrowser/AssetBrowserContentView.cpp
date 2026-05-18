@@ -9,6 +9,7 @@
 #include "Services/AssetDatabaseService.h"
 #include "Services/DragDropTransferService.h"
 #include "Services/IEditorIconService.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/EditorTooltipWidgets.h"
 
 #include <algorithm>
@@ -280,7 +281,7 @@ namespace AshEditor
 				refUi.push_window_clip_rect({ fTextX, fTextY, fTextWidth, fTextHeight });
 				refUi.draw_window_text(
 					{ fTextX, fTextY },
-					refUi.get_style_color(AshEngine::UIStyleColorKind::Text),
+					GetEditorTextColor(refUi),
 					refVisibleItem.strDisplayLabel.c_str(),
 					fTextWidth);
 				refUi.pop_window_clip_rect();

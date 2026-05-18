@@ -8,6 +8,7 @@
 #include "Services/EditorSettingsService.h"
 #include "Shell/PanelManager.h"
 #include "Widgets/EditorActionWidgets.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <array>
 
@@ -29,7 +30,7 @@ namespace AshEditor
 			DrawActionMenuItem(refContext, EditorActionIds::FileSaveScene);
 			refContext.refUi.separator();
 			refContext.refUi.text_colored(
-				{ 0.70f, 0.70f, 0.70f, 1.0f },
+				GetEditorMutedTextColor(refContext.refUi),
 				"Current Scene: %s",
 				refContext.refSessionState.GetActiveScene().strSceneName.c_str());
 			refContext.refUi.end_menu();
@@ -47,7 +48,7 @@ namespace AshEditor
 			{
 				refContext.refUi.separator();
 				refContext.refUi.text_colored(
-					{ 0.82f, 0.74f, 0.44f, 1.0f },
+					GetEditorWarningTextColor(refContext.refUi),
 					"Transaction: %s",
 					refUndoHistory.strOpenTransactionLabel.empty() ? "<Unnamed>" : refUndoHistory.strOpenTransactionLabel.c_str());
 			}

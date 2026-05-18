@@ -6,15 +6,15 @@
       "id": "scene",
       "kind": "scene",
       "panelOpen": true,
-      "preserveAspect": false,
+      "preserveAspect": true,
       "showCameraHelpers": true,
       "showLightHelpers": true,
-      "showOverlays": false,
+      "showOverlays": true,
       "showReferenceGrid": true,
       "showReferenceOrigin": true,
       "showSelectionHelpers": true,
       "showSelectionPivot": true,
-      "showStats": false,
+      "showStats": true,
       "showToolbar": true
     },
     {

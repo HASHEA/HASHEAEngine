@@ -106,7 +106,11 @@ namespace AshEngine
 		TabHovered,
 		TabSelected,
 		TableRowBg,
-		TableRowBgAlt
+		TableRowBgAlt,
+		TextDisabled,
+		TextSelectedBg,
+		DragDropTarget,
+		NavHighlight
 	};
 
 	enum class UIStyleVarKind : uint8_t

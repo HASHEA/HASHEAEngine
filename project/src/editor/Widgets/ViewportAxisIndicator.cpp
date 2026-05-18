@@ -1,6 +1,7 @@
 #include "Widgets/ViewportAxisIndicator.h"
 
 #include "Function/Gui/UIContext.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <cmath>
 
@@ -65,7 +66,7 @@ namespace AshEditor
 			fBgRadius * 2.0f,
 			fBgRadius * 2.0f
 		};
-		refUi.draw_window_rect_filled(rectBg, { 0.10f, 0.12f, 0.16f, 0.55f }, fBgRadius);
+		refUi.draw_window_rect_filled(rectBg, GetEditorOverlayBackgroundColor(refUi), fBgRadius);
 
 		// Draw axes — back-to-front by depth (viewForward dot).
 		// Sort by forward component so axes pointing away draw first.

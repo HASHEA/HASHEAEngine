@@ -12,13 +12,7 @@ namespace AshEditor
 {
 	class AssetDatabaseService;
 
-	// Shared Inspector visuals and validation helpers used by split component editors.
-	inline constexpr AshEngine::UIColor kInspectorWarningColor{ 0.95f, 0.80f, 0.48f, 1.0f };
-	inline constexpr AshEngine::UIColor kInspectorDropZoneFillColor{ 0.24f, 0.31f, 0.39f, 0.38f };
-	inline constexpr AshEngine::UIColor kInspectorDropZoneHoverColor{ 0.30f, 0.42f, 0.54f, 0.52f };
-	inline constexpr AshEngine::UIColor kInspectorDropZoneActiveColor{ 0.36f, 0.50f, 0.64f, 0.68f };
-	inline constexpr AshEngine::UIColor kInspectorDropZoneBorderColor{ 0.47f, 0.60f, 0.75f, 0.62f };
-
+	// Shared Inspector command ids and validation helpers used by split component editors.
 	inline constexpr const char* kInspectorCameraComponentMenuId = "InspectorCameraComponentMenu";
 	inline constexpr const char* kInspectorLightComponentMenuId = "InspectorLightComponentMenu";
 	inline constexpr const char* kInspectorMeshComponentMenuId = "InspectorMeshComponentMenu";

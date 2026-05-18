@@ -7,7 +7,7 @@
 #include "Core/EditorStringUtils.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorSettingsService.h"
-#include "Widgets/EditorButtonWidgets.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <array>
@@ -70,20 +70,20 @@ namespace AshEditor
 			}
 		}
 
-		AshEngine::UIColor GetSeverityColor(ConsoleMessageSeverity eSeverity)
+		AshEngine::UIColor GetSeverityColor(AshEngine::UIContext& refUi, ConsoleMessageSeverity eSeverity)
 		{
 			switch (eSeverity)
 			{
 			case ConsoleMessageSeverity::Trace:
-				return { 0.55f, 0.60f, 0.70f, 1.0f };
+				return GetEditorSubtleTextColor(refUi);
 			case ConsoleMessageSeverity::Info:
-				return { 0.80f, 0.82f, 0.86f, 1.0f };
+				return GetEditorTextColor(refUi);
 			case ConsoleMessageSeverity::Warning:
-				return { 0.95f, 0.75f, 0.25f, 1.0f };
+				return GetEditorWarningTextColor(refUi);
 			case ConsoleMessageSeverity::Error:
-				return { 0.95f, 0.38f, 0.30f, 1.0f };
+				return GetEditorErrorTextColor(refUi);
 			default:
-				return { 0.80f, 0.82f, 0.86f, 1.0f };
+				return GetEditorTextColor(refUi);
 			}
 		}
 
@@ -273,19 +273,14 @@ namespace AshEditor
 
 			if (bSelected)
 			{
-				const AshEngine::UIColor colorBase = GetSeverityColor(eSeverity);
-				PushEditorButtonVisuals(refUi, {
-					{ colorBase.r * 0.55f, colorBase.g * 0.55f, colorBase.b * 0.55f, 0.95f },
-					{ colorBase.r * 0.65f, colorBase.g * 0.65f, colorBase.b * 0.65f, 1.0f },
-					{ colorBase.r * 0.50f, colorBase.g * 0.50f, colorBase.b * 0.50f, 1.0f }
-				});
+				PushEditorSelectedButtonStyle(refUi);
 			}
 
 			const bool bClicked = refUi.small_button(strLabel.c_str());
 
 			if (bSelected)
 			{
-				PopEditorButtonVisuals(refUi);
+				PopEditorSelectedButtonStyle(refUi);
 			}
 
 			if (!bClicked)
@@ -309,7 +304,10 @@ namespace AshEditor
 			{
 				refUi.text("Active:");
 				refUi.same_line();
-				refUi.text_colored(GetSeverityColor(refSeverityFilter.eSeverity), "Severity %s", refSeverityFilter.pLabel);
+				refUi.text_colored(
+					GetSeverityColor(refUi, refSeverityFilter.eSeverity),
+					"Severity %s",
+					refSeverityFilter.pLabel);
 				bHasSummary = true;
 			}
 
@@ -621,9 +619,12 @@ namespace AshEditor
 					}
 
 					refUi.table_next_row();
-				refUi.table_next_column();
-				refUi.text_colored(GetSeverityColor(refMessage.eSeverity), "%s", GetSeverityLabel(refMessage.eSeverity));
-				refUi.table_next_column();
+					refUi.table_next_column();
+					refUi.text_colored(
+						GetSeverityColor(refUi, refMessage.eSeverity),
+						"%s",
+						GetSeverityLabel(refMessage.eSeverity));
+					refUi.table_next_column();
 					const char* pSourceLabel = refMessage.strSource.empty() ? "-" : refMessage.strSource.c_str();
 					refUi.push_id(static_cast<int32_t>(&refMessage - _vecMessages.data()));
 					if (refUi.small_button(pSourceLabel))

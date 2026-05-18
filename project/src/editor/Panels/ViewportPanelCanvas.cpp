@@ -4,6 +4,7 @@
 #include "Function/Gui/UIContext.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/EditorViewportService.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/ViewportAxisIndicator.h"
 
 #include <algorithm>
@@ -87,16 +88,15 @@ namespace AshEditor
 			const AshEngine::UIRect rectOverlay{ fOverlayX, fOverlayY, fOverlayWidth, fTotalHeight };
 			refFrameContext.pUiContext->draw_window_rect_filled(
 				rectOverlay,
-				{ 0.12f, 0.14f, 0.18f, 0.72f },
+				GetEditorOverlayBackgroundColor(*refFrameContext.pUiContext),
 				6.0f);
 			refFrameContext.pUiContext->draw_window_rect(
 				rectOverlay,
-				{ 0.64f, 0.72f, 0.84f, 0.32f },
+				GetEditorOverlayBorderColor(*refFrameContext.pUiContext),
 				6.0f);
 
 			float fTextY = rectOverlay.y + fPadding;
-			const AshEngine::UIColor colorText =
-				refFrameContext.pUiContext->get_style_color(AshEngine::UIStyleColorKind::Text);
+			const AshEngine::UIColor colorText = GetEditorTextColor(*refFrameContext.pUiContext);
 			for (const std::string& strLine : vecLines)
 			{
 				refFrameContext.pUiContext->draw_window_text(
@@ -167,10 +167,13 @@ namespace AshEditor
 			{
 				refUi.dummy(vecAvailableSize);
 				const AshEngine::UIRect rectContent = refUi.get_item_rect();
-				refUi.draw_window_rect_filled(rectContent, { 0.05f, 0.06f, 0.08f, 1.0f }, 0.0f);
+				refUi.draw_window_rect_filled(
+					rectContent,
+					GetEditorOverlayBackgroundColor(refUi),
+					0.0f);
 				refUi.draw_window_text(
 					{ rectContent.x + 14.0f, rectContent.y + 12.0f },
-					{ 0.72f, 0.76f, 0.82f, 0.92f },
+					GetEditorMutedTextColor(refUi),
 					"Updating viewport...");
 				return drawResult;
 			}

@@ -34,12 +34,12 @@ namespace AshEditor
 		float fConnectorHorizontalPadding = 4.0f;
 		float fDropZoneRatio = 0.25f;
 		float fAutoExpandHoverDelaySeconds = 0.45f;
-		AshEngine::UIColor colorGuideLine{ 0.55f, 0.58f, 0.63f, 0.60f };
-		AshEngine::UIColor colorDropAccent{ 0.35f, 0.65f, 1.0f, 1.0f };
-		AshEngine::UIColor colorRowHoverFill{ 0.28f, 0.39f, 0.49f, 0.18f };
-		AshEngine::UIColor colorRowHoverOutline{ 0.38f, 0.56f, 0.74f, 0.42f };
-		AshEngine::UIColor colorRowSelectedFill{ 0.31f, 0.46f, 0.58f, 0.28f };
-		AshEngine::UIColor colorRowSelectedOutline{ 0.43f, 0.64f, 0.85f, 0.80f };
+		AshEngine::UIColor colorGuideLine{ 0.0f, 0.0f, 0.0f, 0.0f };
+		AshEngine::UIColor colorDropAccent{ 0.0f, 0.0f, 0.0f, 0.0f };
+		AshEngine::UIColor colorRowHoverFill{ 0.0f, 0.0f, 0.0f, 0.0f };
+		AshEngine::UIColor colorRowHoverOutline{ 0.0f, 0.0f, 0.0f, 0.0f };
+		AshEngine::UIColor colorRowSelectedFill{ 0.0f, 0.0f, 0.0f, 0.0f };
+		AshEngine::UIColor colorRowSelectedOutline{ 0.0f, 0.0f, 0.0f, 0.0f };
 	};
 
 	struct EditorTreeWidgetState

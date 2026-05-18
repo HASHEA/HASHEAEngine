@@ -11,6 +11,7 @@
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
 #include "Widgets/EditorActionWidgets.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <array>
@@ -338,7 +339,7 @@ namespace AshEditor
 		}
 	}
 
-	EditorTreeWidgetStyle MakeSceneTreeStyle()
+	EditorTreeWidgetStyle MakeSceneTreeStyle(AshEngine::UIContext& refUi)
 	{
 		EditorTreeWidgetStyle style{};
 		style.fRowHeight = 24.0f;
@@ -350,12 +351,13 @@ namespace AshEditor
 		style.fConnectorHorizontalPadding = 3.0f;
 		style.fDropZoneRatio = 0.34f;
 		style.fGuideLinePaddingY = 0.0f;
-		style.colorGuideLine = { 0.46f, 0.49f, 0.54f, 0.55f };
 		style.fAutoExpandHoverDelaySeconds = 0.45f;
-		style.colorRowHoverFill = { 0.28f, 0.39f, 0.49f, 0.16f };
-		style.colorRowHoverOutline = { 0.38f, 0.56f, 0.74f, 0.38f };
-		style.colorRowSelectedFill = { 0.32f, 0.47f, 0.60f, 0.28f };
-		style.colorRowSelectedOutline = { 0.43f, 0.64f, 0.85f, 0.84f };
+		style.colorGuideLine = GetEditorGuideLineColor(refUi);
+		style.colorDropAccent = GetEditorDropAccentColor(refUi);
+		style.colorRowHoverFill = GetEditorRowHoverFillColor(refUi);
+		style.colorRowHoverOutline = GetEditorRowHoverOutlineColor(refUi);
+		style.colorRowSelectedFill = GetEditorRowSelectedFillColor(refUi);
+		style.colorRowSelectedOutline = GetEditorRowSelectedOutlineColor(refUi);
 		return style;
 	}
 

@@ -13,6 +13,7 @@
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <GLFW/glfw3.h>
 
@@ -266,11 +267,11 @@ namespace AshEditor
 			refUi.push_window_clip_rect(rectContent);
 			refUi.draw_window_rect_filled(
 				rectSelection,
-				{ 0.28f, 0.56f, 0.94f, 0.16f },
+				GetEditorRowSelectedFillColor(refUi),
 				2.0f);
 			refUi.draw_window_rect(
 				rectSelection,
-				{ 0.56f, 0.78f, 1.0f, 0.78f },
+				GetEditorRowSelectedOutlineColor(refUi),
 				2.0f,
 				1.4f);
 			refUi.pop_window_clip_rect();

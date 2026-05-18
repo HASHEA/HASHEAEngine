@@ -242,7 +242,7 @@ namespace AshEditor
 		}
 		if (HasTransformClampWarning(transform))
 		{
-			refUi.text_colored(kInspectorWarningColor, "Scale is currently pinned by the editor safety range.");
+			refUi.text_colored(GetEditorWarningTextColor(refUi), "Scale is currently pinned by the editor safety range.");
 		}
 		if (!bRestoreRequested && bCommitRequested)
 		{
@@ -254,7 +254,9 @@ namespace AshEditor
 	{
 		if (!entity.is_valid())
 		{
-			refUi.text_colored(kInspectorWarningColor, "The selected entity is no longer available in the active scene.");
+			refUi.text_colored(
+				GetEditorWarningTextColor(refUi),
+				"The selected entity is no longer available in the active scene.");
 			return;
 		}
 

@@ -1,6 +1,7 @@
 #include "Widgets/EditorTreeWidget.h"
 
 #include "Function/Gui/UIContext.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <string>
@@ -19,6 +20,39 @@ namespace AshEditor
 				uTransferId != 0 &&
 				(refDesc.pfnValidateDrop == nullptr || refDesc.pfnValidateDrop(uTransferId, eVisual, refDesc.pValidationUserData));
 		}
+
+		bool IsColorUnset(const AshEngine::UIColor& refColor)
+		{
+			return refColor.a <= 0.0f;
+		}
+
+		void ApplyMissingThemeColors(AshEngine::UIContext& refUi, EditorTreeWidgetStyle& refStyle)
+		{
+			if (IsColorUnset(refStyle.colorGuideLine))
+			{
+				refStyle.colorGuideLine = GetEditorGuideLineColor(refUi);
+			}
+			if (IsColorUnset(refStyle.colorDropAccent))
+			{
+				refStyle.colorDropAccent = GetEditorDropAccentColor(refUi);
+			}
+			if (IsColorUnset(refStyle.colorRowHoverFill))
+			{
+				refStyle.colorRowHoverFill = GetEditorRowHoverFillColor(refUi);
+			}
+			if (IsColorUnset(refStyle.colorRowHoverOutline))
+			{
+				refStyle.colorRowHoverOutline = GetEditorRowHoverOutlineColor(refUi);
+			}
+			if (IsColorUnset(refStyle.colorRowSelectedFill))
+			{
+				refStyle.colorRowSelectedFill = GetEditorRowSelectedFillColor(refUi);
+			}
+			if (IsColorUnset(refStyle.colorRowSelectedOutline))
+			{
+				refStyle.colorRowSelectedOutline = GetEditorRowSelectedOutlineColor(refUi);
+			}
+		}
 	}
 
 	void EditorTreeWidgetState::ResetDragState()
@@ -33,6 +67,7 @@ namespace AshEditor
 		, _refState(refState)
 		, _style(refStyle)
 	{
+		ApplyMissingThemeColors(_refUi, _style);
 	}
 
 	EditorTreeWidget::ScopedTreeStyle::ScopedTreeStyle(AshEngine::UIContext& refUi, const EditorTreeWidgetStyle& refStyle)
@@ -460,7 +495,7 @@ namespace AshEditor
 		const float fTextY = fCenterY - vecTextSize.y * 0.5f;
 		_refUi.draw_window_text(
 			{ fTextX, fTextY },
-			_refUi.get_style_color(AshEngine::UIStyleColorKind::Text),
+			GetEditorTextColor(_refUi),
 			strLabel.c_str());
 	}
 }

@@ -88,7 +88,7 @@ namespace AshEditor
 		EditorTreeWidget treeWidget(
 			refUi,
 			refViewContext.refState.treeStateDirectories,
-			AssetBrowserSupport::MakeTreeStyle());
+			AssetBrowserSupport::MakeTreeStyle(refUi));
 		treeWidget.ResetDragStateIfInactive();
 
 		DrawDirectoryTreeRecursive(

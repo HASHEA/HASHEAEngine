@@ -141,7 +141,7 @@ namespace AshEditor
 			AssetBrowserSupport::DrawToolbarLabel(
 				refUi,
 				"Warning",
-				{ 0.93f, 0.78f, 0.45f, 1.0f });
+				GetEditorWarningTextColor(refUi));
 			AssetBrowserSupport::DrawAssetBrowserWarningTooltip(refUi, refFrameData.strLastError);
 		}
 	}

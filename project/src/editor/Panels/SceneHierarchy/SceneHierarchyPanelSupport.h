@@ -49,7 +49,7 @@ namespace AshEditor
 		SceneEntityId uSceneEntityId,
 		std::vector<SceneEntityId>& vecOutIds,
 		std::vector<std::string>& vecOutLabels);
-	EditorTreeWidgetStyle MakeSceneTreeStyle();
+	EditorTreeWidgetStyle MakeSceneTreeStyle(AshEngine::UIContext& refUi);
 	bool IsSceneEntityDragActive(const AshEngine::UIContext* pUiContext);
 
 	void ExecuteCreateRoot(SceneHierarchyPanelState& refState, const SceneHierarchyPanelDeps& refDeps);

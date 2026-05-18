@@ -658,8 +658,12 @@ namespace AshEngine
 		}
 
 		uiContext->set_next_window_position({ 10.0f, 10.0f }, UIConditionFlagBits::Always);
-		uiContext->push_style_color(UIStyleColorKind::WindowBg, { 0.04f, 0.05f, 0.06f, 0.82f });
-		uiContext->push_style_color(UIStyleColorKind::Border, { 0.20f, 0.22f, 0.24f, 0.90f });
+		UIColor colorOverlayBackground = uiContext->get_style_color(UIStyleColorKind::WindowBg);
+		colorOverlayBackground.a *= 0.82f;
+		UIColor colorOverlayBorder = uiContext->get_style_color(UIStyleColorKind::Border);
+		colorOverlayBorder.a *= 0.90f;
+		uiContext->push_style_color(UIStyleColorKind::WindowBg, colorOverlayBackground);
+		uiContext->push_style_color(UIStyleColorKind::Border, colorOverlayBorder);
 		const UIWindowFlags overlay_flags =
 			UIWindowFlagBits::NoDocking |
 			UIWindowFlagBits::NoTitleBar |

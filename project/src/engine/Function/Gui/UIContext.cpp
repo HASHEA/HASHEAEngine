@@ -253,6 +253,7 @@ namespace AshEngine
 			switch (kind)
 			{
 			case UIStyleColorKind::Text: return ImGuiCol_Text;
+			case UIStyleColorKind::TextDisabled: return ImGuiCol_TextDisabled;
 			case UIStyleColorKind::WindowBg: return ImGuiCol_WindowBg;
 			case UIStyleColorKind::ChildBg: return ImGuiCol_ChildBg;
 			case UIStyleColorKind::PopupBg: return ImGuiCol_PopupBg;
@@ -277,6 +278,9 @@ namespace AshEngine
 			case UIStyleColorKind::TabSelected: return ImGuiCol_TabActive;
 			case UIStyleColorKind::TableRowBg: return ImGuiCol_TableRowBg;
 			case UIStyleColorKind::TableRowBgAlt: return ImGuiCol_TableRowBgAlt;
+			case UIStyleColorKind::TextSelectedBg: return ImGuiCol_TextSelectedBg;
+			case UIStyleColorKind::DragDropTarget: return ImGuiCol_DragDropTarget;
+			case UIStyleColorKind::NavHighlight: return ImGuiCol_NavHighlight;
 			default: return ImGuiCol_Text;
 			}
 		}

@@ -120,7 +120,7 @@ namespace AshEditor
 		EditorIconId GetAssetIconId(const AshEngine::AssetInfo& refAsset);
 		bool ShouldUseCompactAssetTooltip(AshEngine::AssetType eType);
 
-		EditorTreeWidgetStyle MakeTreeStyle();
+		EditorTreeWidgetStyle MakeTreeStyle(AshEngine::UIContext& refUi);
 		bool IsSameOrAncestorPath(
 			const std::filesystem::path& pathAncestor,
 			const std::filesystem::path& pathDescendant);

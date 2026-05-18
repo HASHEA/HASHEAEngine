@@ -37,14 +37,6 @@ namespace AshEditor
 		constexpr float kAssetBrowserListIconTextSpacing = 6.0f;
 		constexpr const char* kAssetItemContextPopupId = "AssetBrowserItemContextMenu";
 		constexpr const char* kAssetContentContextPopupId = "AssetBrowserContentContextMenu";
-		constexpr AshEngine::UIColor kAssetItemSelectedFillColor{ 0.32f, 0.47f, 0.60f, 0.30f };
-		constexpr AshEngine::UIColor kAssetItemHoverFillColor{ 0.28f, 0.39f, 0.49f, 0.18f };
-		constexpr AshEngine::UIColor kAssetItemHoverOutlineColor{ 0.38f, 0.56f, 0.74f, 0.40f };
-		constexpr AshEngine::UIColor kAssetItemSelectedOutlineColor{ 0.43f, 0.64f, 0.85f, 0.92f };
-		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonColor{ 0.34f, 0.42f, 0.50f, 1.0f };
-		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonHoveredColor{ 0.38f, 0.46f, 0.55f, 1.0f };
-		constexpr AshEngine::UIColor kAssetToolbarSelectedButtonActiveColor{ 0.31f, 0.39f, 0.47f, 1.0f };
-		constexpr AshEngine::UIColor kAssetToolbarWarningTextColor{ 0.93f, 0.78f, 0.45f, 1.0f };
 		constexpr AshEngine::UITooltipConfig kAssetBrowserInfoTooltipConfig{
 			{ 560.0f, 0.0f },
 			{ 420.0f, 0.0f },
@@ -392,14 +384,12 @@ namespace AshEditor
 
 		void PushSelectedToolbarButtonStyle(AshEngine::UIContext& refUi)
 		{
-			refUi.push_style_color(AshEngine::UIStyleColorKind::Button, kAssetToolbarSelectedButtonColor);
-			refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, kAssetToolbarSelectedButtonHoveredColor);
-			refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, kAssetToolbarSelectedButtonActiveColor);
+			PushEditorSelectedButtonStyle(refUi);
 		}
 
 		void PopSelectedToolbarButtonStyle(AshEngine::UIContext& refUi)
 		{
-			refUi.pop_style_color(3);
+			PopEditorSelectedButtonStyle(refUi);
 		}
 
 		void DrawToolbarSeparator(AshEngine::UIContext& refUi)
@@ -489,7 +479,7 @@ namespace AshEditor
 			refUi.push_window_clip_rect({ fTextX, rectItem.y, fClipWidth, rectItem.height });
 			refUi.draw_window_text(
 				{ fTextX, fTextY },
-				refUi.get_style_color(AshEngine::UIStyleColorKind::Text),
+				GetEditorTextColor(refUi),
 				strText.c_str());
 			refUi.pop_window_clip_rect();
 		}
@@ -504,11 +494,11 @@ namespace AshEditor
 			const AshEngine::UIRect rectItem = refUi.get_item_rect();
 			refUi.draw_window_rect_filled(
 				rectItem,
-				bSelected ? kAssetItemSelectedFillColor : kAssetItemHoverFillColor,
+				bSelected ? GetEditorRowSelectedFillColor(refUi) : GetEditorRowHoverFillColor(refUi),
 				fRounding);
 			refUi.draw_window_rect(
 				rectItem,
-				bSelected ? kAssetItemSelectedOutlineColor : kAssetItemHoverOutlineColor,
+				bSelected ? GetEditorRowSelectedOutlineColor(refUi) : GetEditorRowHoverOutlineColor(refUi),
 				fRounding,
 				1.0f);
 		}
@@ -532,7 +522,7 @@ namespace AshEditor
 			}
 		}
 
-		EditorTreeWidgetStyle MakeTreeStyle()
+		EditorTreeWidgetStyle MakeTreeStyle(AshEngine::UIContext& refUi)
 		{
 			EditorTreeWidgetStyle style{};
 			style.fRowHeight = 26.0f;
@@ -543,11 +533,12 @@ namespace AshEditor
 			style.fRowSpacingY = 3.0f;
 			style.fConnectorHorizontalPadding = 3.0f;
 			style.fGuideLinePaddingY = 0.0f;
-			style.colorGuideLine = { 0.46f, 0.49f, 0.54f, 0.55f };
-			style.colorRowHoverFill = { 0.28f, 0.39f, 0.49f, 0.16f };
-			style.colorRowHoverOutline = { 0.38f, 0.56f, 0.74f, 0.36f };
-			style.colorRowSelectedFill = { 0.32f, 0.47f, 0.60f, 0.28f };
-			style.colorRowSelectedOutline = { 0.43f, 0.64f, 0.85f, 0.82f };
+			style.colorGuideLine = GetEditorGuideLineColor(refUi);
+			style.colorDropAccent = GetEditorDropAccentColor(refUi);
+			style.colorRowHoverFill = GetEditorRowHoverFillColor(refUi);
+			style.colorRowHoverOutline = GetEditorRowHoverOutlineColor(refUi);
+			style.colorRowSelectedFill = GetEditorRowSelectedFillColor(refUi);
+			style.colorRowSelectedOutline = GetEditorRowSelectedOutlineColor(refUi);
 			return style;
 		}
 

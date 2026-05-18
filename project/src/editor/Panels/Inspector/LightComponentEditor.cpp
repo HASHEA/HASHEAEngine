@@ -4,6 +4,7 @@
 #include "Function/Scene/Scene.h"
 #include "Panels/Inspector/IInspectorComponentHost.h"
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/InspectorPropertyWidgets.h"
 
 #include <vector>
@@ -176,7 +177,9 @@ namespace AshEditor
 		}
 		if (HasLightClampWarning(light))
 		{
-			refUi.text_colored(kInspectorWarningColor, "Light values are touching safety limits or a hard cone boundary.");
+			refUi.text_colored(
+				GetEditorWarningTextColor(refUi),
+				"Light values are touching safety limits or a hard cone boundary.");
 		}
 
 		if (!bRestoreRequested && bCommitRequested)

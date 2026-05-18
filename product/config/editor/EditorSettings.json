@@ -20,7 +20,7 @@
   "uiFontSizePixels": 17.0,
   "uiStrongFontMergePath": "product/assets/editor/fonts/NotoSansSC-Medium.otf",
   "uiStrongFontPath": "product/assets/editor/fonts/IBMPlexSans-SemiBold.ttf",
-  "uiThemeId": "warm_paper",
-  "uiThemePreset": "warm_paper",
+  "uiThemeId": "classic_dark",
+  "uiThemePreset": "classic_dark",
   "uiUseFullChineseGlyphRange": false
 }

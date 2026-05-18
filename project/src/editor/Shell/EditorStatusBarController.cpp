@@ -2,6 +2,7 @@
 
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorSessionStateService.h"
+#include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
 #include <string>
@@ -12,16 +13,11 @@ namespace AshEditor
 	namespace
 	{
 		constexpr const char* kStatusBarWindowName = "Editor Status Bar";
-		constexpr AshEngine::UIColor kStatusMutedTextColor{ 0.63f, 0.67f, 0.73f, 1.0f };
-		constexpr AshEngine::UIColor kStatusAccentTextColor{ 0.77f, 0.82f, 0.90f, 1.0f };
-		constexpr AshEngine::UIColor kStatusSuccessTextColor{ 0.58f, 0.82f, 0.66f, 1.0f };
-		constexpr AshEngine::UIColor kStatusWarningTextColor{ 0.93f, 0.78f, 0.45f, 1.0f };
-		constexpr AshEngine::UIColor kStatusErrorTextColor{ 0.92f, 0.54f, 0.54f, 1.0f };
 
 		void DrawInlineSeparator(AshEngine::UIContext& refUi)
 		{
 			refUi.same_line(0.0f, 8.0f);
-			refUi.text_colored(kStatusMutedTextColor, "|");
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "|");
 		}
 
 		const char* GetActionStatusLabel(const EditorActionInvokedEvent& refEvent)
@@ -45,25 +41,25 @@ namespace AshEditor
 			return "Skipped";
 		}
 
-		AshEngine::UIColor GetActionStatusColor(const EditorActionInvokedEvent& refEvent)
+		AshEngine::UIColor GetActionStatusColor(AshEngine::UIContext& refUi, const EditorActionInvokedEvent& refEvent)
 		{
 			if (refEvent.strActionId.empty())
 			{
-				return kStatusMutedTextColor;
+				return GetEditorMutedTextColor(refUi);
 			}
 			if (refEvent.bExecuted)
 			{
-				return kStatusSuccessTextColor;
+				return GetEditorSuccessTextColor(refUi);
 			}
 			if (!refEvent.bRegistered)
 			{
-				return kStatusErrorTextColor;
+				return GetEditorErrorTextColor(refUi);
 			}
 			if (!refEvent.bEnabled)
 			{
-				return kStatusWarningTextColor;
+				return GetEditorWarningTextColor(refUi);
 			}
-			return kStatusMutedTextColor;
+			return GetEditorMutedTextColor(refUi);
 		}
 
 		std::string MakeActionDisplayName(const EditorActionInvokedEvent& refEvent)
@@ -175,20 +171,20 @@ namespace AshEditor
 			}
 		}
 
-		AshEngine::UIColor GetDocumentOperationResultColor(const EditorDocumentOperationEvent& refEvent)
+		AshEngine::UIColor GetDocumentOperationResultColor(AshEngine::UIContext& refUi, const EditorDocumentOperationEvent& refEvent)
 		{
 			switch (refEvent.eResult)
 			{
 			case EditorDocumentOperationResult::Succeeded:
-				return kStatusSuccessTextColor;
+				return GetEditorSuccessTextColor(refUi);
 			case EditorDocumentOperationResult::Failed:
-				return kStatusErrorTextColor;
+				return GetEditorErrorTextColor(refUi);
 			case EditorDocumentOperationResult::Skipped:
 			case EditorDocumentOperationResult::FallbackActivated:
-				return kStatusWarningTextColor;
+				return GetEditorWarningTextColor(refUi);
 			case EditorDocumentOperationResult::None:
 			default:
-				return kStatusMutedTextColor;
+				return GetEditorMutedTextColor(refUi);
 			}
 		}
 
@@ -266,29 +262,32 @@ namespace AshEditor
 		const std::string strActionName = MakeActionDisplayName(refLastAction);
 		const std::string strActionSource = MakeActionSourceLabel(refLastAction.strSource);
 
-		refUi.text_colored(kStatusMutedTextColor, "Scene");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Scene");
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(kStatusAccentTextColor, "%s", strSceneName.c_str());
+		refUi.text_colored(GetEditorAccentTextColor(refUi), "%s", strSceneName.c_str());
 		refUi.same_line(0.0f, 8.0f);
 		refUi.text_colored(
-			refDirtyState.bDirty ? kStatusWarningTextColor : kStatusSuccessTextColor,
+			refDirtyState.bDirty ? GetEditorWarningTextColor(refUi) : GetEditorSuccessTextColor(refUi),
 			"%s",
 			refDirtyState.bDirty ? "Modified" : "Saved");
 
 		DrawInlineSeparator(refUi);
 		refUi.same_line(0.0f, 8.0f);
-		refUi.text_colored(kStatusMutedTextColor, "Selection");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Selection");
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(refSelection.IsEmpty() ? kStatusMutedTextColor : kStatusAccentTextColor, "%s", strSelectionName.c_str());
+		refUi.text_colored(
+			refSelection.IsEmpty() ? GetEditorMutedTextColor(refUi) : GetEditorAccentTextColor(refUi),
+			"%s",
+			strSelectionName.c_str());
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(kStatusMutedTextColor, "(%s)", GetSelectionKindLabel(refSelection));
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "(%s)", GetSelectionKindLabel(refSelection));
 
 		DrawInlineSeparator(refUi);
 		refUi.same_line(0.0f, 8.0f);
-		refUi.text_colored(kStatusMutedTextColor, "Scope");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Scope");
 		refUi.same_line(0.0f, 6.0f);
 		refUi.text_colored(
-			refShortcutScope.eScope == EditorShortcutScope::Global ? kStatusMutedTextColor : kStatusAccentTextColor,
+			refShortcutScope.eScope == EditorShortcutScope::Global ? GetEditorMutedTextColor(refUi) : GetEditorAccentTextColor(refUi),
 			"%s",
 			GetShortcutScopeLabel(refShortcutScope));
 
@@ -297,22 +296,22 @@ namespace AshEditor
 			const std::string strDocumentTarget = MakeDocumentTargetLabel(refDocumentOperation);
 			DrawInlineSeparator(refUi);
 			refUi.same_line(0.0f, 8.0f);
-			refUi.text_colored(kStatusMutedTextColor, "%s", MakeDocumentOperationName(refDocumentOperation));
+			refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", MakeDocumentOperationName(refDocumentOperation));
 			refUi.same_line(0.0f, 6.0f);
 			refUi.text_colored(
-				GetDocumentOperationResultColor(refDocumentOperation),
+				GetDocumentOperationResultColor(refUi, refDocumentOperation),
 				"%s",
 				GetDocumentOperationResultLabel(refDocumentOperation));
 			refUi.same_line(0.0f, 6.0f);
-			refUi.text_colored(kStatusAccentTextColor, "%s", strDocumentTarget.c_str());
+			refUi.text_colored(GetEditorAccentTextColor(refUi), "%s", strDocumentTarget.c_str());
 		}
 
 		DrawInlineSeparator(refUi);
 		refUi.same_line(0.0f, 8.0f);
-		refUi.text_colored(kStatusMutedTextColor, "Transaction");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Transaction");
 		refUi.same_line(0.0f, 6.0f);
 		refUi.text_colored(
-			refTransactionState.bHasOpenTransaction ? kStatusWarningTextColor : kStatusMutedTextColor,
+			refTransactionState.bHasOpenTransaction ? GetEditorWarningTextColor(refUi) : GetEditorMutedTextColor(refUi),
 			"%s",
 			refTransactionState.bHasOpenTransaction
 				? (refTransactionState.strLabel.empty() ? "<Unnamed>" : refTransactionState.strLabel.c_str())
@@ -320,13 +319,13 @@ namespace AshEditor
 
 		DrawInlineSeparator(refUi);
 		refUi.same_line(0.0f, 8.0f);
-		refUi.text_colored(kStatusMutedTextColor, "Last Action");
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "Last Action");
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(GetActionStatusColor(refLastAction), "%s", GetActionStatusLabel(refLastAction));
+		refUi.text_colored(GetActionStatusColor(refUi, refLastAction), "%s", GetActionStatusLabel(refLastAction));
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(kStatusAccentTextColor, "%s", strActionName.c_str());
+		refUi.text_colored(GetEditorAccentTextColor(refUi), "%s", strActionName.c_str());
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(kStatusMutedTextColor, "(%s)", strActionSource.c_str());
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "(%s)", strActionSource.c_str());
 
 		refUi.end_window();
 	}

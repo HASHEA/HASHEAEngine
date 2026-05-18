@@ -58,9 +58,9 @@ namespace AshEditor
 		bool bRestoreRequested = false;
 		bCommitRequested = refHost.DrawMeshAssetPathEditor(refUi, mesh) || bCommitRequested;
 
-		refUi.push_style_color(AshEngine::UIStyleColorKind::Button, kInspectorDropZoneFillColor);
-		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, kInspectorDropZoneHoverColor);
-		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, kInspectorDropZoneActiveColor);
+		refUi.push_style_color(AshEngine::UIStyleColorKind::Button, GetEditorDropZoneFillColor(refUi));
+		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, GetEditorDropZoneHoverColor(refUi));
+		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, GetEditorDropZoneActiveColor(refUi));
 		if (refUi.button(
 			mesh.asset_path.empty() ? "Drop mesh/model asset here" : "Drop mesh/model asset here to replace",
 			{ refUi.get_content_region_avail().x, 24.0f }))
@@ -78,7 +78,7 @@ namespace AshEditor
 			});
 		refUi.pop_style_color(3);
 		const AshEngine::UIRect rectDropHint = refUi.get_item_rect();
-		refUi.draw_window_rect(rectDropHint, kInspectorDropZoneBorderColor, 4.0f, 1.0f);
+		refUi.draw_window_rect(rectDropHint, GetEditorDropZoneBorderColor(refUi), 4.0f, 1.0f);
 		if (refDeps.pDragDropTransferService && refUi.begin_drag_drop_target())
 		{
 			const AshEngine::UIDragDropPayload payload =
@@ -165,7 +165,7 @@ namespace AshEditor
 			}
 			else
 			{
-				refUi.text_colored(kInspectorWarningColor, "Asset database not available.");
+				refUi.text_colored(GetEditorWarningTextColor(refUi), "Asset database not available.");
 			}
 
 			refUi.end_popup();
@@ -178,7 +178,7 @@ namespace AshEditor
 			strMeshAssetValidationMessage);
 		if (!strMeshAssetValidationMessage.empty())
 		{
-			refUi.text_colored(kInspectorWarningColor, "%s", strMeshAssetValidationMessage.c_str());
+			refUi.text_colored(GetEditorWarningTextColor(refUi), "%s", strMeshAssetValidationMessage.c_str());
 		}
 
 		bCommitRequested = DrawInspectorCheckboxField(

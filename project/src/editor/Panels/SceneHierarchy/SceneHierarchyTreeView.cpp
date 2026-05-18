@@ -599,7 +599,7 @@ namespace AshEditor
 		const std::vector<SceneEntityId> vecVisibleEntityIds = BuildVisibleEntityIds(refScene);
 		const bool bDraggingSceneEntity = IsSceneEntityDragActive(refFrameContext.pUiContext);
 
-		EditorTreeWidget treeWidget(refUi, refState.treeWidgetStateEntities, MakeSceneTreeStyle());
+		EditorTreeWidget treeWidget(refUi, refState.treeWidgetStateEntities, MakeSceneTreeStyle(refUi));
 		treeWidget.ResetDragStateIfInactive();
 
 		const std::vector<AshEngine::Entity> vecRoots = refScene.get_root_entities();

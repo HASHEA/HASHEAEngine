@@ -25,7 +25,6 @@ namespace AshEditor
 
 	namespace
 	{
-		constexpr AshEngine::UIColor kAssetPreviewWarningColor{ 0.95f, 0.80f, 0.48f, 1.0f };
 		constexpr float kAssetPreviewSummaryLabelWidth = 112.0f;
 		constexpr AshEngine::UITableFlags kAssetPreviewSummaryTableFlags =
 			AshEngine::UITableFlagBits::SizingStretchProp |
@@ -165,13 +164,13 @@ namespace AshEditor
 
 		if (pAsset->is_directory)
 		{
-			refUi.text_colored(kAssetPreviewWarningColor, "Folders do not have inline content preview.");
+			refUi.text_colored(GetEditorWarningTextColor(refUi), "Folders do not have inline content preview.");
 		}
 		else if (SupportsTextAssetPreview(*pAsset))
 		{
 			if (!state.strPreviewStatus.empty())
 			{
-				refUi.text_colored(kAssetPreviewWarningColor, "%s", state.strPreviewStatus.c_str());
+				refUi.text_colored(GetEditorWarningTextColor(refUi), "%s", state.strPreviewStatus.c_str());
 			}
 			else
 			{
@@ -188,7 +187,7 @@ namespace AshEditor
 		else
 		{
 			refUi.text_colored(
-				kAssetPreviewWarningColor,
+				GetEditorWarningTextColor(refUi),
 				"Inline preview is not implemented for this asset type yet. Texture/model/material graph preview can be added later.");
 		}
 

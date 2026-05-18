@@ -214,7 +214,7 @@ namespace AshEditor
 		refUi.draw_window_line(
 			{ fDividerX, fDividerTop },
 			{ fDividerX, fDividerBottom },
-			{ 0.42f, 0.46f, 0.52f, 0.75f },
+			GetEditorGuideLineColor(refUi),
 			1.0f);
 
 		refUi.separator();

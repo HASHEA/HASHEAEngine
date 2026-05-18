@@ -28,7 +28,7 @@ namespace AshEditor
 		{
 			if (bActive)
 			{
-				PushEditorButtonVisuals(refUi);
+				PushEditorPrimaryButtonVisuals(refUi);
 			}
 
 			const bool bClicked = refUi.small_button(pLabel);

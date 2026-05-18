@@ -4,6 +4,7 @@
 #include "Function/Scene/Scene.h"
 #include "Panels/Inspector/IInspectorComponentHost.h"
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
+#include "Widgets/EditorThemeColors.h"
 #include "Widgets/InspectorPropertyWidgets.h"
 
 #include <vector>
@@ -176,7 +177,9 @@ namespace AshEditor
 		}
 		if (HasCameraClampWarning(camera))
 		{
-			refUi.text_colored(kInspectorWarningColor, "One or more camera values are sitting on editor safety limits.");
+			refUi.text_colored(
+				GetEditorWarningTextColor(refUi),
+				"One or more camera values are sitting on editor safety limits.");
 		}
 
 		if (!bRestoreRequested && bCommitRequested)
