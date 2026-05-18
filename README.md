@@ -288,6 +288,12 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 
 标准性能门禁入口：
 
+```bat
+RunPerfGate.bat
+```
+
+无参数运行会打开控制台交互菜单；带参数运行时会直接透传到 `scripts/RunPerfGate.ps1`，例如：
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/RunPerfGate.ps1 -Profile Standard
 ```

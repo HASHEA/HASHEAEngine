@@ -181,6 +181,83 @@ function Get-ProfileProperty {
     return $property.Value
 }
 
+function ConvertTo-MarkdownCell {
+    param([object]$Value)
+
+    if ($null -eq $Value) {
+        return ""
+    }
+
+    return ([string]$Value).Replace("|", "\|").Replace("`r", " ").Replace("`n", " ")
+}
+
+function Format-MarkdownCell {
+    param(
+        [string]$Value,
+        [int]$Width,
+        [string]$Alignment
+    )
+
+    if ($Alignment -eq "Right") {
+        return $Value.PadLeft($Width)
+    }
+    return $Value.PadRight($Width)
+}
+
+function New-MarkdownTable {
+    param(
+        [string[]]$Headers,
+        [string[]]$Alignments,
+        [System.Collections.IEnumerable]$Rows
+    )
+
+    $formattedRows = New-Object 'System.Collections.Generic.List[string[]]'
+    $widths = @()
+    for ($i = 0; $i -lt $Headers.Count; ++$i) {
+        $widths += [Math]::Max(3, $Headers[$i].Length)
+    }
+
+    foreach ($row in $Rows) {
+        $formattedRow = @()
+        for ($i = 0; $i -lt $Headers.Count; ++$i) {
+            $cell = ""
+            if ($i -lt $row.Count) {
+                $cell = ConvertTo-MarkdownCell $row[$i]
+            }
+            $formattedRow += $cell
+            $widths[$i] = [Math]::Max($widths[$i], $cell.Length)
+        }
+        $formattedRows.Add([string[]]$formattedRow) | Out-Null
+    }
+
+    $lines = @()
+    $headerCells = @()
+    $separatorCells = @()
+    for ($i = 0; $i -lt $Headers.Count; ++$i) {
+        $alignment = if ($i -lt $Alignments.Count) { $Alignments[$i] } else { "Left" }
+        $headerCells += Format-MarkdownCell $Headers[$i] $widths[$i] $alignment
+        if ($alignment -eq "Right") {
+            $separatorCells += (("-" * ($widths[$i] - 1)) + ":")
+        }
+        else {
+            $separatorCells += ("-" * $widths[$i])
+        }
+    }
+    $lines += "| " + ($headerCells -join " | ") + " |"
+    $lines += "| " + ($separatorCells -join " | ") + " |"
+
+    foreach ($row in $formattedRows) {
+        $cells = @()
+        for ($i = 0; $i -lt $Headers.Count; ++$i) {
+            $alignment = if ($i -lt $Alignments.Count) { $Alignments[$i] } else { "Left" }
+            $cells += Format-MarkdownCell $row[$i] $widths[$i] $alignment
+        }
+        $lines += "| " + ($cells -join " | ") + " |"
+    }
+
+    return $lines
+}
+
 function Get-RunLogFiles {
     param(
         [string]$RepoRoot,
@@ -457,13 +534,27 @@ $markdown += "# AshEngine Perf Gate Summary"
 $markdown += ""
 $markdown += "Status: $overall"
 $markdown += ""
-$markdown += "| Target | Backend | Status | Frames | CPU Avg ms | CPU P95 ms | Private MB | Heap MB | Failures | Warnings |"
-$markdown += "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |"
+$summaryRows = New-Object 'System.Collections.Generic.List[object[]]'
 foreach ($record in $records) {
     $failureText = (@($record.failures) -join "; ")
     $warningText = (@($record.warnings) -join "; ")
-    $markdown += "| $($record.target) | $($record.backend) | $($record.status) | $($record.frames_sampled) | $([Math]::Round([double]$record.cpu_frame_time_avg_ms, 4)) | $([Math]::Round([double]$record.cpu_frame_time_p95_ms, 4)) | $([Math]::Round([double]$record.process_private_bytes_peak_mb, 2)) | $([Math]::Round([double]$record.engine_heap_peak_mb, 2)) | $failureText | $warningText |"
+    $summaryRows.Add([object[]]@(
+        $record.target,
+        $record.backend,
+        $record.status,
+        $record.frames_sampled,
+        [Math]::Round([double]$record.cpu_frame_time_avg_ms, 4),
+        [Math]::Round([double]$record.cpu_frame_time_p95_ms, 4),
+        [Math]::Round([double]$record.process_private_bytes_peak_mb, 2),
+        [Math]::Round([double]$record.engine_heap_peak_mb, 2),
+        $failureText,
+        $warningText
+    )) | Out-Null
 }
+$markdown += New-MarkdownTable `
+    -Headers @("Target", "Backend", "Status", "Frames", "CPU Avg ms", "CPU P95 ms", "Private MB", "Heap MB", "Failures", "Warnings") `
+    -Alignments @("Left", "Left", "Left", "Right", "Right", "Right", "Right", "Right", "Left", "Left") `
+    -Rows $summaryRows
 $markdown | Set-Content -LiteralPath (Join-Path $reportRoot "summary.md") -Encoding UTF8
 
 Write-Host "Perf gate report: $reportRoot"
