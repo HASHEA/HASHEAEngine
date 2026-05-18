@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "Standard": {
+      "configuration": "Debug",
+      "warmup_seconds": 10,
+      "sample_seconds": 30,
+      "timeout_seconds": 90,
+      "targets": [
+        {
+          "target": "Sandbox",
+          "backends": [ "Vulkan", "DX12" ],
+          "trend_source": true
+        },
+        {
+          "target": "Editor",
+          "backends": [ "Vulkan", "DX12" ],
+          "trend_source": false
+        }
+      ],
+      "absolute_caps": {
+        "sandbox_private_bytes_mb": 4096,
+        "editor_private_bytes_mb": 6144
+      },
+      "warn_thresholds": {
+        "cpu_frame_time_avg_percent": 10,
+        "cpu_frame_time_p95_percent": 15,
+        "cpu_frame_time_p99_percent": 25,
+        "private_bytes_peak_percent": 15,
+        "engine_heap_peak_percent": 15,
+        "draw_call_count_percent": 10
+      }
+    }
+  },
+  "baselines": {}
+}
