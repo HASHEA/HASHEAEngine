@@ -1,4 +1,5 @@
 #include "DynamicRHI.h"
+#include "Base/IniConfig.h"
 #include "GraphicsContext.h"
 #include "SwapChain.h"
 #include "Base/hassert.h"
@@ -15,101 +16,13 @@
 #include "Vulkan/VulkanSwapchain.h"
 #endif
 
-#include <algorithm>
-#include <cctype>
-#include <filesystem>
-#include <fstream>
 #include <string>
-#include <unordered_map>
-
-#if defined(ASH_WINDOWS)
-#include <windows.h>
-#endif
 
 namespace
 {
-	static auto get_executable_directory() -> std::filesystem::path
-	{
-#if defined(ASH_WINDOWS)
-		wchar_t modulePath[MAX_PATH]{};
-		const DWORD length = GetModuleFileNameW(nullptr, modulePath, static_cast<DWORD>(std::size(modulePath)));
-		if (length > 0 && length < std::size(modulePath))
-		{
-			return std::filesystem::path(modulePath).parent_path();
-		}
-#endif
-		return std::filesystem::current_path();
-	}
-
-	static auto resolve_config_path(const char* configPath) -> std::filesystem::path
-	{
-		if (configPath == nullptr || *configPath == '\0')
-		{
-			return {};
-		}
-
-		std::filesystem::path requestedPath(configPath);
-		if (requestedPath.is_absolute() && std::filesystem::exists(requestedPath))
-		{
-			return requestedPath;
-		}
-
-		if (std::filesystem::exists(requestedPath))
-		{
-			return std::filesystem::absolute(requestedPath);
-		}
-
-		std::filesystem::path probeBase = get_executable_directory();
-		while (!probeBase.empty())
-		{
-			const std::filesystem::path candidate = probeBase / requestedPath;
-			if (std::filesystem::exists(candidate))
-			{
-				return candidate;
-			}
-
-			const std::filesystem::path parent = probeBase.parent_path();
-			if (parent == probeBase)
-			{
-				break;
-			}
-			probeBase = parent;
-		}
-
-		return requestedPath;
-	}
-
-	static auto trim_string(const std::string& value) -> std::string
-	{
-		size_t begin = 0;
-		size_t end = value.size();
-		if (value.size() >= 3 &&
-			static_cast<unsigned char>(value[0]) == 0xEF &&
-			static_cast<unsigned char>(value[1]) == 0xBB &&
-			static_cast<unsigned char>(value[2]) == 0xBF)
-		{
-			begin = 3;
-		}
-		while (begin < end && std::isspace(static_cast<unsigned char>(value[begin])) != 0)
-		{
-			++begin;
-		}
-		while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1])) != 0)
-		{
-			--end;
-		}
-		return value.substr(begin, end - begin);
-	}
-
-	static auto to_lower_ascii(std::string value) -> std::string
-	{
-		std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-		return value;
-	}
-
 	static auto parse_backend_name(const std::string& value) -> RHI::Backend
 	{
-		const std::string normalized = to_lower_ascii(trim_string(value));
+		const std::string normalized = AshEngine::to_lower_ascii(AshEngine::trim_ini_string(value));
 		if (normalized == "vulkan" || normalized == "vk")
 		{
 			return RHI::Backend::Vulkan;
@@ -123,70 +36,6 @@ namespace
 			return RHI::Backend::Default;
 		}
 		return RHI::Backend::Default;
-	}
-
-	static auto parse_bool_value(const std::string& value, bool defaultValue) -> bool
-	{
-		const std::string normalized = to_lower_ascii(trim_string(value));
-		if (normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on")
-		{
-			return true;
-		}
-		if (normalized == "0" || normalized == "false" || normalized == "no" || normalized == "off")
-		{
-			return false;
-		}
-		return defaultValue;
-	}
-
-	static auto parse_ini_file(const std::filesystem::path& configPath) -> std::unordered_map<std::string, std::string>
-	{
-		std::unordered_map<std::string, std::string> values{};
-		if (configPath.empty())
-		{
-			return values;
-		}
-
-		std::ifstream file(configPath);
-		if (!file.is_open())
-		{
-			return values;
-		}
-
-		std::string currentSection{};
-		std::string line{};
-		while (std::getline(file, line))
-		{
-			const size_t commentPos = line.find_first_of("#;");
-			if (commentPos != std::string::npos)
-			{
-				line.erase(commentPos);
-			}
-
-			const std::string trimmedLine = trim_string(line);
-			if (trimmedLine.empty())
-			{
-				continue;
-			}
-
-			if (trimmedLine.front() == '[' && trimmedLine.back() == ']')
-			{
-				currentSection = to_lower_ascii(trim_string(trimmedLine.substr(1, trimmedLine.size() - 2)));
-				continue;
-			}
-
-			const size_t separatorPos = trimmedLine.find('=');
-			if (separatorPos == std::string::npos)
-			{
-				continue;
-			}
-
-			const std::string key = to_lower_ascii(trim_string(trimmedLine.substr(0, separatorPos)));
-			const std::string value = trim_string(trimmedLine.substr(separatorPos + 1));
-			values[currentSection + "." + key] = value;
-		}
-
-		return values;
 	}
 }
 
@@ -269,50 +118,39 @@ namespace RHI
 			return config;
 		}
 
-		const std::filesystem::path resolvedConfigPath = resolve_config_path(configPath);
-		const auto values = parse_ini_file(resolvedConfigPath);
-		if (values.empty())
+		AshEngine::IniConfig iniConfig{};
+		if (!iniConfig.load(configPath) || iniConfig.empty())
 		{
-			HLogInfo("RHI config file '{}' was not found. Falling back to compiled default backend.", resolvedConfigPath.string());
+			HLogInfo("RHI config file '{}' was not found. Falling back to compiled default backend.",
+				AshEngine::resolve_runtime_config_path(configPath).string());
 			return config;
 		}
 
-		if (const auto it = values.find("rhi.backend"); it != values.end())
+		if (iniConfig.has_value("RHI", "Backend"))
 		{
-			config.backend = parse_backend_name(it->second);
-			if (config.backend == Backend::Default && !trim_string(it->second).empty())
+			const std::string backendName = iniConfig.get_string("RHI", "Backend");
+			config.backend = parse_backend_name(backendName);
+			if (config.backend == Backend::Default && !AshEngine::trim_ini_string(backendName).empty())
 			{
 				HLogWarning("RHI config '{}' contains an invalid backend entry '{}'. Falling back to compiled default backend.",
-					resolvedConfigPath.string(),
-					it->second);
+					iniConfig.resolved_path().string(),
+					backendName);
 			}
 		}
 
-		if (const auto it = values.find("vulkanvalidation.enabled"); it != values.end())
-		{
-			config.vulkanValidation.enableValidation = parse_bool_value(it->second, config.vulkanValidation.enableValidation);
-		}
-		if (const auto it = values.find("vulkanvalidation.gpuassisted"); it != values.end())
-		{
-			config.vulkanValidation.enableGpuAssisted = parse_bool_value(it->second, config.vulkanValidation.enableGpuAssisted);
-		}
-		if (const auto it = values.find("vulkanvalidation.synchronizationvalidation"); it != values.end())
-		{
-			config.vulkanValidation.enableSynchronizationValidation = parse_bool_value(it->second, config.vulkanValidation.enableSynchronizationValidation);
-		}
-		if (const auto it = values.find("vulkanvalidation.breakonvalidationerror"); it != values.end())
-		{
-			config.vulkanValidation.breakOnValidationError = parse_bool_value(it->second, config.vulkanValidation.breakOnValidationError);
-		}
+		config.vulkanValidation.enableValidation =
+			iniConfig.get_bool("VulkanValidation", "Enabled", config.vulkanValidation.enableValidation);
+		config.vulkanValidation.enableGpuAssisted =
+			iniConfig.get_bool("VulkanValidation", "GpuAssisted", config.vulkanValidation.enableGpuAssisted);
+		config.vulkanValidation.enableSynchronizationValidation =
+			iniConfig.get_bool("VulkanValidation", "SynchronizationValidation", config.vulkanValidation.enableSynchronizationValidation);
+		config.vulkanValidation.breakOnValidationError =
+			iniConfig.get_bool("VulkanValidation", "BreakOnValidationError", config.vulkanValidation.breakOnValidationError);
 
-		if (const auto it = values.find("dx12validation.enabled"); it != values.end())
-		{
-			config.dx12Validation.enableDebugLayer = parse_bool_value(it->second, config.dx12Validation.enableDebugLayer);
-		}
-		if (const auto it = values.find("dx12validation.gpuvalidation"); it != values.end())
-		{
-			config.dx12Validation.enableGpuValidation = parse_bool_value(it->second, config.dx12Validation.enableGpuValidation);
-		}
+		config.dx12Validation.enableDebugLayer =
+			iniConfig.get_bool("DX12Validation", "Enabled", config.dx12Validation.enableDebugLayer);
+		config.dx12Validation.enableGpuValidation =
+			iniConfig.get_bool("DX12Validation", "GpuValidation", config.dx12Validation.enableGpuValidation);
 
 #if !defined(ASH_DEBUG)
 		config.dx12Validation.enableDebugLayer = false;

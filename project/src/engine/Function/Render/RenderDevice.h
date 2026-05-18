@@ -529,7 +529,8 @@ namespace AshEngine
 	ASH_API void fill_pipeline_state_from_graphics_program_state(
 		const GraphicsProgramState& state,
 		RHI::PipelineCreation& pipeline,
-		uint32_t color_attachment_count = 1u);
+		uint32_t color_attachment_count = 1u,
+		bool reverse_z = false);
 
 	class ASH_API RenderDevice
 	{
@@ -563,7 +564,7 @@ namespace AshEngine
 			const char* parameter_block_name = nullptr);
 
 		bool begin_pass(const PassDesc& desc);
-		bool bind_graphics_program(GraphicsProgram* program);
+		bool bind_graphics_program(GraphicsProgram* program, bool reverse_z = false);
 		bool bind_compute_program(ComputeProgram* program);
 		bool bind_vertex_buffer(uint32_t slot, const std::shared_ptr<VertexBuffer>& buffer, uint64_t offset = 0);
 		bool bind_index_buffer(const std::shared_ptr<IndexBuffer>& buffer, uint64_t offset = 0);

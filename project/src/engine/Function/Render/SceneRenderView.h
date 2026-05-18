@@ -16,5 +16,6 @@ namespace AshEngine
 		RenderLoadAction color_load_action = RenderLoadAction::Clear;
 		RenderColorValue color_clear_value{ 0.025f, 0.03f, 0.05f, 1.0f };
 		RenderDepthStencilValue depth_clear_value{ 1.0f, 0u };
+		bool reverse_z = false;
 	};
 }

@@ -732,8 +732,24 @@ namespace AshEngine
 			}
 		}
 
-		static RHI::AshCompareOp to_rhi_compare_op(RenderCompareOp compare_op)
+		static RHI::AshCompareOp to_rhi_compare_op(RenderCompareOp compare_op, bool reverse_z)
 		{
+			if (reverse_z)
+			{
+				switch (compare_op)
+				{
+				case RenderCompareOp::LessEqual:
+					compare_op = RenderCompareOp::GreaterEqual;
+					break;
+				case RenderCompareOp::GreaterEqual:
+					compare_op = RenderCompareOp::LessEqual;
+					break;
+				case RenderCompareOp::Always:
+				default:
+					break;
+				}
+			}
+
 			switch (compare_op)
 			{
 			case RenderCompareOp::LessEqual:
@@ -851,6 +867,12 @@ namespace AshEngine
 			}
 			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(signature.depth_format);
 			return hash_value;
+		}
+
+		static uint64_t hash_graphics_program_variant(uint64_t render_pass_signature_hash, bool reverse_z)
+		{
+			const uint64_t reverse_z_bit = reverse_z ? 0x9e3779b97f4a7c15ull : 0ull;
+			return (render_pass_signature_hash * 16777619ull) ^ reverse_z_bit;
 		}
 
 		static uint64_t hash_render_target_desc(const RenderTargetDesc& desc)
@@ -1044,6 +1066,12 @@ namespace AshEngine
 	class GraphicsProgram::Impl
 	{
 	public:
+		struct ProgramVariant
+		{
+			bool reverse_z = false;
+			std::unique_ptr<RHI::IGraphicsRenderProgram> program = nullptr;
+		};
+
 		GraphicsProgramState state{};
 		std::string shader_path;
 		std::string vertex_entry = "VSMain";
@@ -1055,7 +1083,7 @@ namespace AshEngine
 		std::shared_ptr<const VertexDecl> vertex_decl = nullptr;
 		RHI::VertexInputCreation vertex_input{};
 		std::vector<std::string> reflected_sampler_names{};
-		std::unordered_map<uint64_t, std::unique_ptr<RHI::IGraphicsRenderProgram>> programs;
+		std::unordered_map<uint64_t, ProgramVariant> programs;
 		std::unordered_map<RHI::IGraphicsRenderProgram*, uint64_t> committed_binding_versions;
 		ProgramBindingState bindings;
 	};
@@ -1239,7 +1267,8 @@ namespace AshEngine
 	void fill_pipeline_state_from_graphics_program_state(
 		const GraphicsProgramState& state,
 		RHI::PipelineCreation& pipeline,
-		uint32_t color_attachment_count)
+		uint32_t color_attachment_count,
+		bool reverse_z)
 	{
 		pipeline.rasterization.cull_mode = to_rhi_cull_mode(state.cull_mode);
 		pipeline.rasterization.front = to_rhi_front_face(state.front_face);
@@ -1248,7 +1277,7 @@ namespace AshEngine
 		{
 			pipeline.depth_stencil.depth_enable = 1;
 			pipeline.depth_stencil.depth_write_enable = state.depth_write ? 1 : 0;
-			pipeline.depth_stencil.depth_comparison = to_rhi_compare_op(state.depth_compare);
+			pipeline.depth_stencil.depth_comparison = to_rhi_compare_op(state.depth_compare, reverse_z);
 		}
 		else
 		{
@@ -1280,9 +1309,9 @@ namespace AshEngine
 		}
 	}
 
-	static void apply_program_state(GraphicsProgram::Impl& impl, RHI::IGraphicsRenderProgram& program)
+	static void apply_program_state(GraphicsProgram::Impl& impl, RHI::IGraphicsRenderProgram& program, bool reverse_z)
 	{
-		program.apply_render_state([&impl](RHI::RenderState* render_state) {
+		program.apply_render_state([&impl, reverse_z](RHI::RenderState* render_state) {
 			render_state->rasterization.cull_mode = to_rhi_cull_mode(impl.state.cull_mode);
 			render_state->rasterization.front = to_rhi_front_face(impl.state.front_face);
 			render_state->primitive_topology = to_rhi_topology(impl.state.primitive_topology);
@@ -1291,7 +1320,7 @@ namespace AshEngine
 			{
 				render_state->depth_stencil.depth_enable = 1;
 				render_state->depth_stencil.depth_write_enable = impl.state.depth_write ? 1 : 0;
-				render_state->depth_stencil.depth_comparison = to_rhi_compare_op(impl.state.depth_compare);
+				render_state->depth_stencil.depth_comparison = to_rhi_compare_op(impl.state.depth_compare, reverse_z);
 			}
 			else
 			{
@@ -2050,7 +2079,11 @@ namespace AshEngine
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
-	static std::unique_ptr<RHI::IGraphicsRenderProgram> create_rhi_graphics_program(GraphicsProgram::Impl& impl, RHI::GraphicsContext* graphics_context, const std::shared_ptr<RHI::RenderPass>& render_pass)
+	static std::unique_ptr<RHI::IGraphicsRenderProgram> create_rhi_graphics_program(
+		GraphicsProgram::Impl& impl,
+		RHI::GraphicsContext* graphics_context,
+		const std::shared_ptr<RHI::RenderPass>& render_pass,
+		bool reverse_z)
 	{
 		RHI::GraphicProgramCreateDesc rhi_desc{};
 		rhi_desc.pipeline.name = impl.name.empty() ? nullptr : impl.name.c_str();
@@ -2058,7 +2091,7 @@ namespace AshEngine
 		rhi_desc.pipeline.shaders.add_stage(impl.vertex_shader, RHI::ASH_SHADER_STAGE_VERTEX_BIT, impl.vertex_entry.c_str());
 		rhi_desc.pipeline.shaders.add_stage(impl.fragment_shader, RHI::ASH_SHADER_STAGE_FRAGMENT_BIT, impl.fragment_entry.c_str());
 		const uint32_t attachment_count = render_pass ? render_pass->get_color_attachment_count() : 1u;
-		fill_pipeline_state_from_graphics_program_state(impl.state, rhi_desc.pipeline, attachment_count);
+		fill_pipeline_state_from_graphics_program_state(impl.state, rhi_desc.pipeline, attachment_count, reverse_z);
 		rhi_desc.pipeline.vertex_input = impl.vertex_input;
 
 		std::unique_ptr<RHI::IGraphicsRenderProgram> program = graphics_context->create_graphics_render_program(rhi_desc);
@@ -2264,11 +2297,11 @@ namespace AshEngine
 		}
 		m_impl->state = updated_state;
 
-		for (auto& [_, program] : m_impl->programs)
+		for (auto& [_, variant] : m_impl->programs)
 		{
-			if (program)
+			if (variant.program)
 			{
-				apply_program_state(*m_impl, *program);
+				apply_program_state(*m_impl, *variant.program, variant.reverse_z);
 			}
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -2316,9 +2349,9 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_impl);
 		ASH_PROCESS_ERROR(set_program_const_data(m_impl->bindings, size, data));
 
-		for (auto& [_, program] : m_impl->programs)
+		for (auto& [_, variant] : m_impl->programs)
 		{
-			if (program && !program->set_const_data_block(size, data))
+			if (variant.program && !variant.program->set_const_data_block(size, data))
 			{
 				ASH_PROCESS_ERROR(false);
 			}
@@ -3703,31 +3736,39 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool RenderDevice::bind_graphics_program(GraphicsProgram* program)
+	bool RenderDevice::bind_graphics_program(GraphicsProgram* program, bool reverse_z)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && m_impl->current_framebuffer && m_impl->current_render_pass);
 
 		const uint64_t signature_hash = hash_render_pass_signature(m_impl->current_pass_signature);
+		const uint64_t variant_hash = hash_graphics_program_variant(signature_hash, reverse_z);
 		auto program_it = program->m_impl->programs.end();
 		{
 			ASH_PROFILE_SCOPE_NC("RenderDevice::FindGraphicsProgramVariant", AshEngine::Profile::Color::Pipeline);
-			program_it = program->m_impl->programs.find(signature_hash);
+			program_it = program->m_impl->programs.find(variant_hash);
 		}
 		if (program_it == program->m_impl->programs.end())
 		{
 			ASH_PROFILE_SCOPE_NC("RenderDevice::CreateGraphicsProgramVariant", AshEngine::Profile::Color::Pipeline);
 			ASH_PROFILE_SCOPE_TEXT(program->m_impl->name.c_str(), program->m_impl->name.size());
-			std::unique_ptr<RHI::IGraphicsRenderProgram> rhi_program = create_rhi_graphics_program(*program->m_impl, m_impl->graphics_context, m_impl->current_render_pass);
+			std::unique_ptr<RHI::IGraphicsRenderProgram> rhi_program = create_rhi_graphics_program(
+				*program->m_impl,
+				m_impl->graphics_context,
+				m_impl->current_render_pass,
+				reverse_z);
 			if (!rhi_program)
 			{
 				HLogError("RenderDevice: create graphics pipeline failed '{}'.", program->m_impl->name);
 				ASH_PROCESS_ERROR(false);
 			}
-			program_it = program->m_impl->programs.emplace(signature_hash, std::move(rhi_program)).first;
+			GraphicsProgram::Impl::ProgramVariant variant{};
+			variant.reverse_z = reverse_z;
+			variant.program = std::move(rhi_program);
+			program_it = program->m_impl->programs.emplace(variant_hash, std::move(variant)).first;
 		}
 
-		RHI::IGraphicsRenderProgram* rhi_program = program_it->second.get();
+		RHI::IGraphicsRenderProgram* rhi_program = program_it->second.program.get();
 		ASH_PROCESS_ERROR(rhi_program);
 
 		{

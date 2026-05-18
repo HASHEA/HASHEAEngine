@@ -15,6 +15,7 @@
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderScene.h"
+#include "Function/Render/RenderFeatureConfig.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/SceneView.h"
@@ -33,6 +34,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <utility>
 #include <vector>
 #include <glm/gtc/matrix_transform.hpp>
@@ -605,6 +607,107 @@ namespace AshEngine
 			return forced_off ||
 				report_self_test_failure("DX12 validation config", "Release build accepted DX12 validation config");
 #endif
+		}
+
+		auto test_render_feature_config_does_not_register_reverse_z_switch() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir();
+			const std::filesystem::path config_path = test_dir / "render_feature_self_test.ini";
+			{
+				std::ofstream config_file(config_path, std::ios::trunc);
+				config_file <<
+					"[Rendering]\n"
+					"ReverseZ=true\n";
+			}
+
+			const RenderFeatureConfig config = load_runtime_render_feature_config(config_path.string().c_str());
+			uint32_t descriptor_count = 0;
+			const RenderSwitchDescriptor* descriptors = get_render_switch_descriptors(descriptor_count);
+			bool found_reverse_z = false;
+			for (uint32_t index = 0; index < descriptor_count; ++index)
+			{
+				const RenderSwitchDescriptor& descriptor = descriptors[index];
+				if (descriptor.section != nullptr &&
+					descriptor.key != nullptr &&
+					std::string(descriptor.section) == "Rendering" &&
+					std::string(descriptor.key) == "ReverseZ")
+				{
+					found_reverse_z = true;
+					break;
+				}
+			}
+
+			return (!found_reverse_z && config.switches.empty()) ||
+				report_self_test_failure("Render feature config", "ReverseZ should not be registered as an Engine.ini render switch");
+		}
+
+		auto test_reverse_z_projection_maps_near_far_depths() -> bool
+		{
+			Scene scene = Scene::create("ReverseZProjectionSelfTest");
+			Entity camera_entity = scene.create_entity("Camera");
+			CameraComponent camera{};
+			camera.primary = true;
+			camera.reverse_z = true;
+			camera.near_plane = 0.5f;
+			camera.far_plane = 100.0f;
+			camera_entity.add_camera_component(camera);
+
+			SceneView view{};
+			SceneViewDesc desc{};
+			desc.viewport_width = 128;
+			desc.viewport_height = 64;
+			if (!build_primary_scene_view(scene, desc, view))
+			{
+				return report_self_test_failure("ReverseZ projection", "failed to build scene view");
+			}
+
+			const glm::vec4 near_clip = view.projection * glm::vec4(0.0f, 0.0f, camera.near_plane, 1.0f);
+			const glm::vec4 far_clip = view.projection * glm::vec4(0.0f, 0.0f, camera.far_plane, 1.0f);
+			const float near_ndc = near_clip.z / near_clip.w;
+			const float far_ndc = far_clip.z / far_clip.w;
+			const bool ok =
+				view.reverse_z &&
+				std::abs(near_ndc - 1.0f) < 0.0001f &&
+				std::abs(far_ndc - 0.0f) < 0.0001f;
+			return ok ||
+				report_self_test_failure("ReverseZ projection", "camera reverse_z did not reverse near/far depth mapping");
+		}
+
+		auto test_reverse_z_flips_depth_clear_and_compare() -> bool
+		{
+			GraphicsProgramState state{};
+			state.depth_test = true;
+			state.depth_write = true;
+			state.depth_compare = RenderCompareOp::LessEqual;
+
+			RHI::PipelineCreation pipeline{};
+			fill_pipeline_state_from_graphics_program_state(state, pipeline, 1u, true);
+			const bool ok =
+				get_scene_view_default_depth_clear_value(true) == 0.0f &&
+				get_scene_view_near_clip_depth(true) == 1.0f &&
+				get_scene_view_far_clip_depth(true) == 0.0f &&
+				resolve_scene_view_depth_clear_value(1.0f, true) == 0.0f &&
+				resolve_scene_view_depth_clear_value(0.5f, true) == 0.5f &&
+				pipeline.depth_stencil.depth_comparison == RHI::ASH_COMPARE_OP_GREATER_OR_EQUAL;
+			return ok ||
+				report_self_test_failure("ReverseZ depth state", "clear depth or depth compare did not follow ReverseZ");
+		}
+
+		auto test_deferred_shader_background_depth_uses_reverse_z_flag() -> bool
+		{
+			std::ifstream shader_file("project/src/engine/Shaders/Deferred/DeferredCommon.hlsli");
+			if (!shader_file.is_open())
+			{
+				return report_self_test_failure("Deferred ReverseZ shader", "failed to open DeferredCommon.hlsli");
+			}
+			const std::string shader_source{
+				std::istreambuf_iterator<char>(shader_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				shader_source.find("AshSceneDepthIsBackground") != std::string::npos &&
+				shader_source.find("AshCameraPositionAndFlags.w") != std::string::npos;
+			return ok ||
+				report_self_test_failure("Deferred ReverseZ shader", "deferred surface decode does not branch background depth on the ReverseZ flag");
 		}
 
 		template <typename T>
@@ -1557,6 +1660,10 @@ namespace AshEngine
 		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
+		all_passed = test_render_feature_config_does_not_register_reverse_z_switch() && all_passed;
+		all_passed = test_reverse_z_projection_maps_near_far_depths() && all_passed;
+		all_passed = test_reverse_z_flips_depth_clear_and_compare() && all_passed;
+		all_passed = test_deferred_shader_background_depth_uses_reverse_z_flag() && all_passed;
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;

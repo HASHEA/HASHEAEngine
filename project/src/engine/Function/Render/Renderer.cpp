@@ -489,7 +489,7 @@ namespace AshEngine
 					}
 				}
 
-				if (!m_render_device->bind_graphics_program(draw_desc.program))
+				if (!m_render_device->bind_graphics_program(draw_desc.program, draw_desc.reverse_z))
 				{
 					HLogError("Renderer: bind_graphics_program failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;

@@ -49,6 +49,7 @@ namespace AshEngine
 		glm::mat4 view{ 1.0f };
 		glm::mat4 projection{ 1.0f };
 		glm::vec3 camera_position{ 0.0f };
+		bool reverse_z = false;
 		bool enabled = false;
 	};
 

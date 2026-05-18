@@ -280,6 +280,7 @@ namespace AshEngine
 
 		static void apply_view_context_to_draw_desc(GraphicsDrawDesc& draw_desc, const SceneRenderViewContext& view_context)
 		{
+			draw_desc.reverse_z = view_context.reverse_z;
 			draw_desc.has_viewport = view_context.has_viewport;
 			if (view_context.has_viewport)
 			{
@@ -488,7 +489,7 @@ namespace AshEngine
 		depth_desc.shader_resource = true;
 		depth_desc.unordered_access = false;
 		depth_desc.use_optimized_clear_value = true;
-		depth_desc.optimized_clear_depth_stencil = { 1.0f, 0u };
+		depth_desc.optimized_clear_depth_stencil = view_context.depth_clear_value;
 		graph_resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
 
 		RenderGraphTextureDesc lighting_desc{};

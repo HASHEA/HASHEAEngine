@@ -52,6 +52,7 @@ namespace AshEngine
 	struct CameraComponent
 	{
 		bool primary = true;
+		bool reverse_z = true;
 		CameraProjectionType projection = CameraProjectionType::Perspective;
 		float fov_y_degrees = 60.0f;
 		float near_plane = 0.1f;

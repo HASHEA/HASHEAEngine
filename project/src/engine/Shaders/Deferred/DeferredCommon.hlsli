@@ -90,6 +90,16 @@ float3 AshReconstructWorldPosition(float2 uv, float depth)
     return world.xyz / max(world.w, 1e-6);
 }
 
+bool AshIsReverseZ()
+{
+    return AshCameraPositionAndFlags.w > 0.5;
+}
+
+bool AshSceneDepthIsBackground(float depth)
+{
+    return AshIsReverseZ() ? depth <= 0.000001 : depth >= 0.999999;
+}
+
 struct AshDeferredSurface
 {
     bool valid;
@@ -122,7 +132,7 @@ AshDeferredSurface AshDecodeDeferredSurface(float2 uv)
     surface.specular_color = 0.04.xxx;
     surface.emissive = 0.0.xxx;
 
-    if (surface.depth >= 0.999999)
+    if (AshSceneDepthIsBackground(surface.depth))
     {
         return surface;
     }

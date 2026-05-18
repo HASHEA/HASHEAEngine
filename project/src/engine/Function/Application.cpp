@@ -4,6 +4,7 @@
 #include "Graphics/Swapchain.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Render/RenderDevice.h"
+#include "Function/Render/RenderFeatureConfig.h"
 #include "Function/Render/Renderer.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
@@ -87,6 +88,8 @@ namespace AshEngine
 		}
 
 		const RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(config);
+		const RenderFeatureConfig runtimeRenderFeatureConfig = load_runtime_render_feature_config(config.backendConfigPath);
+		set_runtime_render_feature_config(runtimeRenderFeatureConfig);
 		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
 		activeBackend = resolvedBackend;
 		HLogInfo("Initializing engine RHI backend: {}", RHI::backend_to_string(resolvedBackend));

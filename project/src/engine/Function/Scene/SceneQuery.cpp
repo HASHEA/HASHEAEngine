@@ -217,20 +217,28 @@ namespace AshEngine
 		const float ndc_x = (screen_x / viewport_width) * 2.0f - 1.0f;
 		const float ndc_y = 1.0f - (screen_y / viewport_height) * 2.0f;
 		const glm::mat4 inverse_view_projection = glm::inverse(projection * view);
-		glm::vec4 near_world = inverse_view_projection * glm::vec4(ndc_x, ndc_y, 0.0f, 1.0f);
-		glm::vec4 far_world = inverse_view_projection * glm::vec4(ndc_x, ndc_y, 1.0f, 1.0f);
+		glm::vec4 depth0_world = inverse_view_projection * glm::vec4(ndc_x, ndc_y, 0.0f, 1.0f);
+		glm::vec4 depth1_world = inverse_view_projection * glm::vec4(ndc_x, ndc_y, 1.0f, 1.0f);
 
-		if (std::abs(near_world.w) > 0.000001f)
+		if (std::abs(depth0_world.w) > 0.000001f)
 		{
-			near_world /= near_world.w;
+			depth0_world /= depth0_world.w;
 		}
-		if (std::abs(far_world.w) > 0.000001f)
+		if (std::abs(depth1_world.w) > 0.000001f)
 		{
-			far_world /= far_world.w;
+			depth1_world /= depth1_world.w;
 		}
 
-		ray.origin = glm::vec3(near_world);
-		ray.direction = normalize_or_fallback(glm::vec3(far_world - near_world), glm::vec3(0.0f, 0.0f, 1.0f));
+		const glm::vec3 camera_position = glm::vec3(glm::inverse(view)[3]);
+		const glm::vec3 depth0_position = glm::vec3(depth0_world);
+		const glm::vec3 depth1_position = glm::vec3(depth1_world);
+		const glm::vec3 depth0_to_camera = depth0_position - camera_position;
+		const glm::vec3 depth1_to_camera = depth1_position - camera_position;
+		const bool depth0_is_near =
+			glm::dot(depth0_to_camera, depth0_to_camera) <= glm::dot(depth1_to_camera, depth1_to_camera);
+		ray.origin = depth0_is_near ? depth0_position : depth1_position;
+		const glm::vec3 far_position = depth0_is_near ? depth1_position : depth0_position;
+		ray.direction = normalize_or_fallback(far_position - ray.origin, glm::vec3(0.0f, 0.0f, 1.0f));
 		return ray;
 	}
 

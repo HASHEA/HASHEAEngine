@@ -24,7 +24,9 @@ if errorlevel 1 exit /b 1
 echo [Build] Configuration: %CONFIG%
 echo [Build] Platform: %PLATFORM%
 echo [Build] Using MSBuild: %MSBUILD_EXE%
-"%MSBUILD_EXE%" "%~dp0AshEngine.sln" /t:Sandbox /p:Configuration=%CONFIG%;Platform=%PLATFORM% /m /v:minimal
+set "POWERSHELL_EXE=C:\Program Files\PowerShell\7\pwsh.exe"
+if not exist "%POWERSHELL_EXE%" set "POWERSHELL_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\InvokeMSBuild.ps1" -MSBuildPath "%MSBUILD_EXE%" -SolutionPath "%~dp0AshEngine.sln" -Target Sandbox -Configuration "%CONFIG%" -Platform "%PLATFORM%" -MaxCpuCount -Verbosity minimal
 if errorlevel 1 (
     echo [Error] Build failed.
     exit /b 1

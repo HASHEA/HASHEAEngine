@@ -36,6 +36,7 @@ namespace AshEngine
 		int32_t vertex_offset = 0;
 		uint32_t const_data_size = 0;
 		bool inline_const_data_valid = false;
+		bool reverse_z = false;
 		std::array<uint8_t, InlineConstDataCapacity> inline_const_data{};
 		std::vector<uint8_t> const_data{};
 	};
