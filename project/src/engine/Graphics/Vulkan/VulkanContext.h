@@ -73,6 +73,7 @@ namespace RHI
 		auto init(void* config) -> bool override;
 		auto shutdown() -> bool override;
 		auto destroy() -> void override;
+		auto get_render_memory_stats() const -> RenderMemoryStats override;
 		VulkanContext() { instance = this; }
 		~VulkanContext() {}
 	public:
@@ -456,6 +457,7 @@ private:
 		uint32_t								local_gpu_memory_gb = 0;
 		mutable std::mutex						vmaTrackedAllocationsMutex{};
 		std::unordered_map<uint64_t, VmaTrackedAllocationInfo> vmaTrackedAllocations{};
+		mutable RenderMemoryStats				renderMemoryStats{};
 private:
 		static VulkanContext* instance;
 		friend class VulkanSwapchain;

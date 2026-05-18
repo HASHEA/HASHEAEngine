@@ -5,6 +5,7 @@
 #include "RHIBackend.h"
 #include "RHIResource.h"
 #include "Sampler.h"
+#include <cstdint>
 #include <memory>
 namespace RHI {
     struct VulkanValidationConfig
@@ -77,6 +78,15 @@ namespace RHI {
         CommandBuffer* cmds = nullptr;
         uint32_t cmdCount = 0;
     };
+
+    struct RenderMemoryStats
+    {
+        bool supported = false;
+        uint64_t gpu_allocator_current_bytes = 0;
+        uint64_t gpu_allocator_peak_bytes = 0;
+        uint64_t gpu_allocator_shutdown_live_bytes = 0;
+    };
+
     class GraphicsContext
     {
     public:
@@ -86,6 +96,10 @@ namespace RHI {
         virtual auto init(void* config) -> bool = 0;
         virtual auto shutdown() -> bool = 0;
         virtual auto destroy() -> void = 0;
+        virtual auto get_render_memory_stats() const -> RenderMemoryStats
+        {
+            return {};
+        }
         static GraphicsContext* create(Backend backend);
     public:
         //RHI Device Interfaces

@@ -49,6 +49,10 @@ namespace RHI
 		auto init(void* config) -> bool override;
 		auto shutdown() -> bool override;
 		auto destroy() -> void override;
+		auto get_render_memory_stats() const -> RenderMemoryStats override
+		{
+			return {};
+		}
 		DX12Context() { s_instance = this; }
 		~DX12Context() {}
 

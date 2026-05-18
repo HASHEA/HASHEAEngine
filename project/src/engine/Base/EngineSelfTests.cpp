@@ -309,6 +309,18 @@ namespace AshEngine
 				report_self_test_failure("AshBarrier value semantics", "copy/move touched invalid barrier resource storage");
 		}
 
+		auto test_render_memory_stats_default_to_unsupported() -> bool
+		{
+			RHI::RenderMemoryStats stats{};
+			const bool ok =
+				!stats.supported &&
+				stats.gpu_allocator_current_bytes == 0 &&
+				stats.gpu_allocator_peak_bytes == 0 &&
+				stats.gpu_allocator_shutdown_live_bytes == 0;
+			return ok ||
+				report_self_test_failure("RenderMemoryStats defaults", "default stats were not unsupported zeroes");
+		}
+
 		auto test_texture_decode_generates_rgba8_mips() -> bool
 		{
 			const std::filesystem::path test_dir = engine_self_test_dir();
@@ -1480,6 +1492,7 @@ namespace AshEngine
 		all_passed = test_shader_hash_uses_explicit_source_hash() && all_passed;
 		all_passed = test_subresource_range_resolve_clamps_defaults() && all_passed;
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
+		all_passed = test_render_memory_stats_default_to_unsupported() && all_passed;
 		all_passed = test_texture_decode_generates_rgba8_mips() && all_passed;
 		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
