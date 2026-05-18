@@ -8,6 +8,7 @@
 #include "ProcessMemoryDiagnostics.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
+#include "Function/Diagnostics/PerfGate.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/Material.h"
@@ -319,6 +320,62 @@ namespace AshEngine
 				stats.gpu_allocator_shutdown_live_bytes == 0;
 			return ok ||
 				report_self_test_failure("RenderMemoryStats defaults", "default stats were not unsupported zeroes");
+		}
+
+		auto test_perf_gate_config_parser_defaults_to_disabled() -> bool
+		{
+			char arg0[] = "Sandbox.exe";
+			char* argv[] = { arg0 };
+			const PerfGateConfig config = parse_perf_gate_config(1, argv);
+			return (!config.enabled) ||
+				report_self_test_failure("PerfGate config disabled default", "parser enabled PerfGate without --perf-gate");
+		}
+
+		auto test_perf_gate_config_parser_reads_arguments() -> bool
+		{
+			char arg0[] = "Sandbox.exe";
+			char arg1[] = "--perf-gate";
+			char arg2[] = "--perf-gate-profile=Standard";
+			char arg3[] = "--perf-gate-output=Intermediate/test-reports/perf-gate/test/run.json";
+			char arg4[] = "--perf-gate-warmup-seconds=1.5";
+			char arg5[] = "--perf-gate-sample-seconds=2.5";
+			char arg6[] = "--perf-gate-target=Sandbox";
+			char* argv[] = {
+				arg0,
+				arg1,
+				arg2,
+				arg3,
+				arg4,
+				arg5,
+				arg6
+			};
+			const PerfGateConfig config = parse_perf_gate_config(7, argv);
+			const bool ok =
+				config.enabled &&
+				config.profile == "Standard" &&
+				config.target_name == "Sandbox" &&
+				config.output_path == "Intermediate/test-reports/perf-gate/test/run.json" &&
+				config.warmup_seconds == 1.5 &&
+				config.sample_seconds == 2.5;
+			return ok ||
+				report_self_test_failure("PerfGate config parser", "parser did not preserve perf-gate arguments");
+		}
+
+		auto test_perf_gate_frame_summary_percentiles_are_stable() -> bool
+		{
+			std::vector<double> samples = { 0.40, 0.10, 0.20, 0.30 };
+			const PerfGateFrameTimeSummary summary = summarize_perf_gate_frame_times(samples);
+			const bool ok =
+				summary.sample_count == 4 &&
+				summary.min_ms == 0.10 &&
+				summary.max_ms == 0.40 &&
+				summary.avg_ms > 0.249 &&
+				summary.avg_ms < 0.251 &&
+				summary.p50_ms == 0.20 &&
+				summary.p95_ms == 0.40 &&
+				summary.p99_ms == 0.40;
+			return ok ||
+				report_self_test_failure("PerfGate frame summary", "percentiles or averages were not stable");
 		}
 
 		auto test_texture_decode_generates_rgba8_mips() -> bool
@@ -1493,6 +1550,9 @@ namespace AshEngine
 		all_passed = test_subresource_range_resolve_clamps_defaults() && all_passed;
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
 		all_passed = test_render_memory_stats_default_to_unsupported() && all_passed;
+		all_passed = test_perf_gate_config_parser_defaults_to_disabled() && all_passed;
+		all_passed = test_perf_gate_config_parser_reads_arguments() && all_passed;
+		all_passed = test_perf_gate_frame_summary_percentiles_are_stable() && all_passed;
 		all_passed = test_texture_decode_generates_rgba8_mips() && all_passed;
 		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
