@@ -286,6 +286,14 @@ product\bin64\Debug-windows-x86_64\Editor.exe --smoke-test-seconds=5
 product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 ```
 
+标准性能门禁入口：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/RunPerfGate.ps1 -Profile Standard
+```
+
+报告输出到 `Intermediate/test-reports/perf-gate/<timestamp>/`。Phase 1 中，崩溃、超时、backend 错配、validation/debug-layer 错误、Engine heap 或 Vulkan VMA shutdown live bytes 会失败；CPU frame time、FPS、draw/pass/dispatch 和内存峰值作为趋势报告，不作为硬失败。
+
 常用调试输出：
 
 - 运行日志：`product/logs/`

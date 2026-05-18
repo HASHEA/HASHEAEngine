@@ -1607,6 +1607,14 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 - `MaterialShaderMap` 的 resource template 生成改为直接消费 shader reflection artifact，避免为了读取 reflection 创建临时 graphics program
 - `RenderScene` sync 阶段预取 CPU-only material proxy，render submit 只在 proxy 缺失、材质版本变化、节流后的 shader 文件签名变化或贴图资源版本变化时准备 GPU program / binding
 
+### 12.8 Standard Perf Gate
+
+标准性能门禁通过 `scripts/RunPerfGate.ps1 -Profile Standard` 运行。脚本会按 `tools/perf/perf_gate_baselines.json` 中的 Standard profile 切换 backend，运行 Sandbox 与 Editor，并把每次运行的 telemetry JSON、stdout/stderr 日志和汇总报告写入 `Intermediate/test-reports/perf-gate/<timestamp>/`。
+
+Phase 1 telemetry 由 Engine 侧 PerfGate controller 生成，字段包括 CPU frame time、FPS、draw/pass/dispatch 数量、进程 working set/private bytes、Engine heap current/peak/shutdown live bytes，以及 backend memory stats。`cpu_frame_time_ms` 只表示 CPU 侧 frame orchestration/submit 时间，不代表 GPU 执行时间；未来 GPU timestamp query 应写入独立的 `gpu_frame_time_ms` 字段。
+
+Phase 1 的硬失败包括非 0 退出、超时、telemetry 缺失或损坏、backend mismatch、validation/debug-layer error、Engine heap shutdown live bytes 非 0、Vulkan VMA shutdown live bytes 非 0，以及 profile 配置的绝对内存上限。FPS、frame-time percentile、draw/pass/dispatch 和内存峰值只做 WARN 趋势报告。
+
 ---
 
 ## 13. 当前公共开发约束
