@@ -39,4 +39,6 @@ echo   -Profile Standard
 echo   -Configuration Debug
 echo   -SkipBuild
 echo   -DryRun
+echo   -BlessBaseline
+echo   -BaselinePath tools\perf\perf_gate_baselines.json
 exit /b 0

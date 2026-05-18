@@ -298,7 +298,11 @@ RunPerfGate.bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/RunPerfGate.ps1 -Profile Standard
 ```
 
-报告输出到 `Intermediate/test-reports/perf-gate/<timestamp>/`。Phase 1 中，崩溃、超时、backend 错配、validation/debug-layer 错误、Engine heap 或 Vulkan VMA shutdown live bytes 会失败；CPU frame time、FPS、draw/pass/dispatch 和内存峰值作为趋势报告，不作为硬失败。
+报告输出到 `Intermediate/test-reports/perf-gate/<timestamp>/`。崩溃、超时、backend 错配、validation/debug-layer 错误、Engine heap 或 Vulkan VMA shutdown live bytes 会失败；CPU frame time、FPS、draw/pass/dispatch 和内存峰值会和 `tools/perf/perf_gate_baselines.json` 中已 bless 的同 profile/config/target/backend 基线比较，超过 `warn_thresholds` 时标记为 WARN。首次建立或接受新基线时运行：
+
+```bat
+RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
+```
 
 常用调试输出：
 
@@ -353,6 +357,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/RunPerfGate.ps1 -Pro
 - RenderGraph 使用教程与 API Spec：[`docs/RenderGraphAPISpec.md`](docs/RenderGraphAPISpec.md)
 - Engine UIContext：[`docs/EngineUIContext.md`](docs/EngineUIContext.md)
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
+- PerfGate 性能门禁使用说明：[`docs/PerfGateUsageGuide.md`](docs/PerfGateUsageGuide.md)
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - Deferred Lighting 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-lighting-design.md`](docs/superpowers/specs/2026-05-12-deferred-lighting-design.md)
 - Render Graph 设计草案：[`docs/superpowers/specs/2026-05-14-render-graph-design.md`](docs/superpowers/specs/2026-05-14-render-graph-design.md)

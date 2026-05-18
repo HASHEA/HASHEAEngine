@@ -105,7 +105,8 @@ function New-RunnerArguments {
         [string]$Configuration,
         [bool]$UseProfileConfiguration,
         [bool]$SkipBuild,
-        [bool]$DryRun
+        [bool]$DryRun,
+        [bool]$BlessBaseline
     )
 
     $runnerArguments = @("-Profile", $Profile)
@@ -117,6 +118,9 @@ function New-RunnerArguments {
     }
     if ($DryRun) {
         $runnerArguments += "-DryRun"
+    }
+    if ($BlessBaseline) {
+        $runnerArguments += "-BlessBaseline"
     }
     return $runnerArguments
 }
@@ -152,7 +156,8 @@ $defaultArguments = New-RunnerArguments `
     -Configuration $defaultProfileConfig.configuration `
     -UseProfileConfiguration $true `
     -SkipBuild $false `
-    -DryRun $false
+    -DryRun $false `
+    -BlessBaseline $false
 
 if ($Preview) {
     Write-Host ("powershell -NoProfile -ExecutionPolicy Bypass -File {0} {1}" -f (Quote-Argument $runnerScript), (Join-Arguments $defaultArguments))
@@ -189,18 +194,20 @@ while ($true) {
     }
     $skipBuild = ($buildIndex -eq 1)
 
-    $modeIndex = Select-MenuOption -Title "Run mode" -Options @("Full gate", "Dry run only") -DefaultIndex 0
+    $modeIndex = Select-MenuOption -Title "Run mode" -Options @("Full gate", "Dry run only", "Full gate and bless baseline") -DefaultIndex 0
     if ($modeIndex -lt 0) {
         exit 0
     }
     $dryRun = ($modeIndex -eq 1)
+    $blessBaseline = ($modeIndex -eq 2)
 
     $runnerArguments = New-RunnerArguments `
         -Profile $profile `
         -Configuration $configuration `
         -UseProfileConfiguration $useProfileConfiguration `
         -SkipBuild $skipBuild `
-        -DryRun $dryRun
+        -DryRun $dryRun `
+        -BlessBaseline $blessBaseline
 
     $commandLine = "powershell -NoProfile -ExecutionPolicy Bypass -File {0} {1}" -f (Quote-Argument $runnerScript), (Join-Arguments $runnerArguments)
     $summaryOptions = @(
@@ -218,7 +225,7 @@ while ($true) {
     Write-Host ("Profile:       {0}" -f $profile)
     Write-Host ("Configuration: {0}" -f ($(if ($useProfileConfiguration) { "Profile default ($configuration)" } else { $configuration })))
     Write-Host ("Build:         {0}" -f ($(if ($skipBuild) { "Skip build" } else { "Build before run" })))
-    Write-Host ("Run mode:      {0}" -f ($(if ($dryRun) { "Dry run only" } else { "Full gate" })))
+    Write-Host ("Run mode:      {0}" -f ($(if ($dryRun) { "Dry run only" } elseif ($blessBaseline) { "Full gate and bless baseline" } else { "Full gate" })))
     Write-Host ""
     Write-Host "Press any key to choose an action..."
     [Console]::ReadKey($true) | Out-Null
