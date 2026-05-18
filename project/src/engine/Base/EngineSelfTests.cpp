@@ -5,6 +5,7 @@
 #include "hfile.h"
 #include "hlog.h"
 #include "hmemory.h"
+#include "ProcessMemoryDiagnostics.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Render/GBufferLayout.h"
@@ -108,6 +109,27 @@ namespace AshEngine
 			}
 			return (after.current_allocated_bytes == before.current_allocated_bytes) ||
 				report_self_test_failure("MemoryService heap stats", "current bytes did not return to the original value");
+		}
+
+		auto test_process_memory_snapshot_is_available() -> bool
+		{
+			const ProcessMemorySnapshot snapshot = get_current_process_memory_snapshot();
+#if defined(ASH_WINDOWS)
+			if (!snapshot.supported)
+			{
+				return report_self_test_failure("Process memory snapshot", "Windows process memory snapshot reported unsupported");
+			}
+			if (snapshot.working_set_bytes == 0 || snapshot.private_bytes == 0)
+			{
+				return report_self_test_failure("Process memory snapshot", "Windows process memory counters were zero");
+			}
+#else
+			if (snapshot.supported)
+			{
+				return report_self_test_failure("Process memory snapshot", "non-Windows process memory snapshot unexpectedly reported supported");
+			}
+#endif
+			return true;
 		}
 
 		auto test_stack_allocator_marker_rejects_forward_free() -> bool
@@ -1449,6 +1471,7 @@ namespace AshEngine
 		all_passed = test_assert_macro_is_statement_safe() && all_passed;
 		all_passed = test_typed_allocation_respects_alignment() && all_passed;
 		all_passed = test_memory_service_reports_heap_statistics() && all_passed;
+		all_passed = test_process_memory_snapshot_is_available() && all_passed;
 		all_passed = test_stack_allocator_marker_rejects_forward_free() && all_passed;
 		all_passed = test_linear_allocator_deallocate_reports_unsupported() && all_passed;
 		all_passed = test_array_growth_and_initial_size() && all_passed;
