@@ -90,6 +90,7 @@ namespace AshEngine
 			GraphicsDrawDesc& draw_desc,
 			const SceneRenderViewContext& view_context)
 		{
+			draw_desc.reverse_z = view_context.reverse_z;
 			draw_desc.has_viewport = view_context.has_viewport;
 			if (view_context.has_viewport)
 			{
@@ -150,7 +151,7 @@ namespace AshEngine
 				1.0f / std::max(width, 1.0f),
 				1.0f / std::max(height, 1.0f)
 			};
-			constants.camera_position_and_flags = glm::vec4(frame.camera_position, 0.0f);
+			constants.camera_position_and_flags = glm::vec4(frame.camera_position, frame.reverse_z ? 1.0f : 0.0f);
 			return constants;
 		}
 

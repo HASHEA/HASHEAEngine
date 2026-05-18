@@ -189,6 +189,7 @@ namespace AshEngine
 				const json& camera_json = node_json["camera"];
 				CameraComponent camera{};
 				camera.primary = camera_json.value("primary", camera.primary);
+				camera.reverse_z = camera_json.value("reverse_z", camera.reverse_z);
 				camera.projection = static_cast<CameraProjectionType>(camera_json.value("projection", static_cast<int32_t>(camera.projection)));
 				camera.fov_y_degrees = camera_json.value("fov_y_degrees", camera.fov_y_degrees);
 				camera.near_plane = camera_json.value("near_plane", camera.near_plane);
@@ -281,6 +282,7 @@ namespace AshEngine
 				node_json["camera"] =
 				{
 					{ "primary", camera.primary },
+					{ "reverse_z", camera.reverse_z },
 					{ "projection", static_cast<int32_t>(camera.projection) },
 					{ "fov_y_degrees", camera.fov_y_degrees },
 					{ "near_plane", camera.near_plane },

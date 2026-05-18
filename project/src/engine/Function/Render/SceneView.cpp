@@ -47,6 +47,28 @@ namespace AshEngine
 			return result;
 		}
 
+		static auto extract_row(const glm::mat4& matrix, int row) -> glm::vec4
+		{
+			return {
+				matrix[0][row],
+				matrix[1][row],
+				matrix[2][row],
+				matrix[3][row]
+			};
+		}
+
+		static auto normalize_plane(const glm::vec4& plane) -> SceneFrustumPlane
+		{
+			const float length = glm::length(glm::vec3(plane));
+			SceneFrustumPlane result{};
+			if (length > 0.0f)
+			{
+				result.normal = glm::vec3(plane) / length;
+				result.distance = plane.w / length;
+			}
+			return result;
+		}
+
 		static auto make_view_matrix(const TransformComponent& transform) -> glm::mat4
 		{
 			const glm::mat4 translation = glm::translate(glm::mat4(1.0f), transform.position);
@@ -62,15 +84,22 @@ namespace AshEngine
 			const float width = static_cast<float>(std::max(desc.viewport_width, 1u));
 			const float height = static_cast<float>(std::max(desc.viewport_height, 1u));
 			const float aspect = width / height;
+			float near_plane = std::max(camera.near_plane, 0.001f);
+			float far_plane = std::max(camera.far_plane, near_plane + 0.001f);
+			if (camera.reverse_z)
+			{
+				std::swap(near_plane, far_plane);
+			}
+
 			if (camera.projection == CameraProjectionType::Orthographic)
 			{
 				const float half_height = std::max(camera.orthographic_height * 0.5f, 0.001f);
 				const float half_width = half_height * aspect;
-				return glm::orthoLH_ZO(-half_width, half_width, -half_height, half_height, camera.near_plane, camera.far_plane);
+				return glm::orthoLH_ZO(-half_width, half_width, -half_height, half_height, near_plane, far_plane);
 			}
 
 			const float fov_y_radians = glm::radians(std::clamp(camera.fov_y_degrees, 1.0f, 179.0f));
-			return glm::perspectiveLH_ZO(fov_y_radians, aspect, std::max(camera.near_plane, 0.001f), std::max(camera.far_plane, camera.near_plane + 0.001f));
+			return glm::perspectiveLH_ZO(fov_y_radians, aspect, near_plane, far_plane);
 		}
 
 		static auto populate_scene_view_from_matrices(
@@ -78,6 +107,7 @@ namespace AshEngine
 			const glm::mat4& view,
 			const glm::mat4& projection,
 			const glm::vec3& camera_position,
+			bool reverse_z,
 			SceneView& out_view) -> void
 		{
 			out_view = {};
@@ -90,8 +120,11 @@ namespace AshEngine
 			out_view.frustum_planes[1] = extract_plane(out_view.view_projection, -1, 0);
 			out_view.frustum_planes[2] = extract_plane(out_view.view_projection, +1, 1);
 			out_view.frustum_planes[3] = extract_plane(out_view.view_projection, -1, 1);
-			out_view.frustum_planes[4] = extract_plane(out_view.view_projection, +1, 2);
-			out_view.frustum_planes[5] = extract_plane(out_view.view_projection, -1, 2);
+			const glm::vec4 clip_z_min = extract_row(out_view.view_projection, 2);
+			const glm::vec4 clip_z_max = extract_row(out_view.view_projection, 3) - clip_z_min;
+			out_view.frustum_planes[4] = normalize_plane(clip_z_min);
+			out_view.frustum_planes[5] = normalize_plane(clip_z_max);
+			out_view.reverse_z = reverse_z;
 			out_view.is_valid = true;
 		}
 	}
@@ -142,7 +175,7 @@ namespace AshEngine
 		const CameraComponent camera = camera_entity.get_camera_component();
 		const TransformComponent transform = camera_entity.get_transform_component();
 
-		populate_scene_view_from_matrices(desc, make_view_matrix(transform), make_projection_matrix(camera, desc), transform.position, out_view);
+		populate_scene_view_from_matrices(desc, make_view_matrix(transform), make_projection_matrix(camera, desc), transform.position, camera.reverse_z, out_view);
 		out_view.camera_entity_id = camera_entity.get_id();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -155,7 +188,45 @@ namespace AshEngine
 		SceneView& out_view)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		populate_scene_view_from_matrices(desc, view, projection, camera_position, out_view);
+		populate_scene_view_from_matrices(desc, view, projection, camera_position, false, out_view);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool build_scene_view_from_matrices(
+		const SceneViewDesc& desc,
+		const glm::mat4& view,
+		const glm::mat4& projection,
+		const glm::vec3& camera_position,
+		bool reverse_z,
+		SceneView& out_view)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		populate_scene_view_from_matrices(desc, view, projection, camera_position, reverse_z, out_view);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	float get_scene_view_near_clip_depth(bool reverse_z)
+	{
+		return reverse_z ? 1.0f : 0.0f;
+	}
+
+	float get_scene_view_far_clip_depth(bool reverse_z)
+	{
+		return reverse_z ? 0.0f : 1.0f;
+	}
+
+	float get_scene_view_default_depth_clear_value(bool reverse_z)
+	{
+		return reverse_z ? 0.0f : 1.0f;
+	}
+
+	float resolve_scene_view_depth_clear_value(float requested_clear_depth, bool reverse_z)
+	{
+		constexpr float k_legacy_default_clear_depth = 1.0f;
+		if (std::abs(requested_clear_depth - k_legacy_default_clear_depth) < 0.000001f)
+		{
+			return get_scene_view_default_depth_clear_value(reverse_z);
+		}
+		return requested_clear_depth;
 	}
 }

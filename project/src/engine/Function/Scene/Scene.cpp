@@ -82,6 +82,7 @@ namespace AshEngine
 		static ScenePropertyDesc k_camera_properties[] =
 		{
 			{ "primary", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(CameraComponent, primary)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "reverse_z", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(CameraComponent, reverse_z)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 			{ "projection", ScenePropertyType::Enum, static_cast<uint32_t>(offsetof(CameraComponent, projection)), static_cast<uint32_t>(sizeof(CameraProjectionType)), "CameraProjectionType" },
 			{ "fov_y_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, fov_y_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
 			{ "near_plane", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, near_plane)), static_cast<uint32_t>(sizeof(float)), nullptr },
@@ -941,6 +942,7 @@ namespace AshEngine
 				const json& camera_json = entity_json["camera"];
 				CameraComponent camera{};
 				camera.primary = camera_json.value("primary", camera.primary);
+				camera.reverse_z = camera_json.value("reverse_z", camera.reverse_z);
 				camera.projection = static_cast<CameraProjectionType>(camera_json.value("projection", static_cast<int32_t>(camera.projection)));
 				camera.fov_y_degrees = camera_json.value("fov_y_degrees", camera.fov_y_degrees);
 				camera.near_plane = camera_json.value("near_plane", camera.near_plane);
@@ -1589,6 +1591,7 @@ namespace AshEngine
 				entity_json["camera"] =
 				{
 					{ "primary", camera->primary },
+					{ "reverse_z", camera->reverse_z },
 					{ "projection", static_cast<int32_t>(camera->projection) },
 					{ "fov_y_degrees", camera->fov_y_degrees },
 					{ "near_plane", camera->near_plane },

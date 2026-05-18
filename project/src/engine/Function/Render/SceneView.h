@@ -29,6 +29,7 @@ namespace AshEngine
 		glm::mat4 view_projection{ 1.0f };
 		glm::vec3 camera_position{ 0.0f };
 		std::array<SceneFrustumPlane, 6> frustum_planes{};
+		bool reverse_z = false;
 		bool is_valid = false;
 	};
 
@@ -49,4 +50,16 @@ namespace AshEngine
 		const glm::mat4& projection,
 		const glm::vec3& camera_position,
 		SceneView& out_view);
+	ASH_API bool build_scene_view_from_matrices(
+		const SceneViewDesc& desc,
+		const glm::mat4& view,
+		const glm::mat4& projection,
+		const glm::vec3& camera_position,
+		bool reverse_z,
+		SceneView& out_view);
+
+	ASH_API float get_scene_view_near_clip_depth(bool reverse_z);
+	ASH_API float get_scene_view_far_clip_depth(bool reverse_z);
+	ASH_API float get_scene_view_default_depth_clear_value(bool reverse_z);
+	ASH_API float resolve_scene_view_depth_clear_value(float requested_clear_depth, bool reverse_z);
 }

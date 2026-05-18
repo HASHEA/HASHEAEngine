@@ -188,6 +188,7 @@ namespace AshEngine
 		out_frame.projection = view.projection;
 		out_frame.view_projection = view.view_projection;
 		out_frame.camera_position = view.camera_position;
+		out_frame.reverse_z = view.reverse_z;
 		ASH_PROCESS_ERROR(build_visible_light_frame(out_frame));
 
 		std::unordered_map<uint64_t, const StaticMeshPrimitiveProxy*> primitive_index;

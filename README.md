@@ -9,7 +9,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 当前主干已经具备：
 
 - Engine 分层架构：`Base`、`Graphics`、`Function` 三层，Editor / Sandbox 通过 Function 层使用引擎能力。
-- Vulkan 与 DX12 双后端：运行时通过 `product/config/Engine.ini` 选择后端，Windows Debug / Release 构建同时编入 Vulkan、DX12、DXC。
+- Vulkan 与 DX12 双后端：运行时通过 `product/config/Engine.ini` 选择后端与全局验证开关，Windows Debug / Release 构建同时编入 Vulkan、DX12、DXC。
 - Scene-driven 静态网格渲染：逻辑 `Scene` 通过 `ScenePresentationSubsystem` 转换为渲染线程可消费的不可变可见帧数据，opaque / masked 静态网格可走 DeferredHQ GBuffer 路径。
 - Scene 编辑辅助接口：Engine 侧提供 Scene view matrix override、world bounds、screen ray、CPU AABB picking，以及 `AssetId` 驱动的 prefab/model 放置入口。
 - Debug draw overlay：Engine 侧提供 frame-local `DebugDrawService`，可提交 line / box / circle / cone / axes，并由 `SceneRenderer` 在 deferred tone-map 后叠加 line-list overlay。
@@ -226,6 +226,8 @@ build_sandbox.bat Debug x64
 build_sandbox.bat Release x64
 ```
 
+`build_editor.bat` 与 `build_sandbox.bat` 会通过 `scripts/InvokeMSBuild.ps1` 启动 MSBuild。该启动器会在子进程环境中合并大小写冲突的 `PATH` / `Path` 变量，只保留规范的 `Path`，避免 MSBuild/.NET 因重复环境变量报 `MSB6001`。
+
 ### 运行 Editor
 
 ```bat
@@ -255,7 +257,7 @@ Engine 构建后会把 `project/thirdparty/dxc/bin/x64/dxcompiler.dll` 和 `dxil
 
 ```ini
 [RHI]
-Backend=DX12
+Backend=Vulkan
 
 [VulkanValidation]
 Enabled=true
@@ -275,6 +277,10 @@ GpuValidation=true
 
 Validation 开关只在 Debug 配置下生效。Release 构建中即使配置文件打开 Vulkan 或 DX12 validation，引擎也会强制关闭 validation / debug layer。
 Debug Vulkan 启用 validation 时，后端会在枚举 layer 前把运行目录下的 `vulkan_layers` 子目录追加到进程级 `VK_ADD_LAYER_PATH`，优先使用仓库随附的 `VK_LAYER_KHRONOS_validation` manifest 和 DLL。
+
+Engine 侧保留 `RenderFeatureConfig` 作为未来全局渲染开关系统，开关描述表扩展后会从同一个 `Engine.ini` 读取并发布到运行时原子开关表；当前没有注册的全局渲染开关。
+
+Reverse-Z 不是 `Engine.ini` 开关，而是 `CameraComponent.reverse_z` 的逐相机属性。开启后该相机的 SceneView 使用 near=1 / far=0 的 reverse-Z 深度映射，默认 depth clear value 为 `0.0`，渲染管线会为该视图使用反向 depth compare 变体；deferred point / spot light volume draw 也必须携带当前 view 的 reverse-Z 标志。
 
 ## 验证与调试
 

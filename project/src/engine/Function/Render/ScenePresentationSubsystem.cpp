@@ -293,6 +293,7 @@ namespace AshEngine
 					binding_state.camera.override_view.view,
 					binding_state.camera.override_view.projection,
 					binding_state.camera.override_view.camera_position,
+					binding_state.camera.override_view.reverse_z,
 					out_view);
 		case SceneCameraSource::EntityId:
 			return binding_state.camera.entity_id != 0 &&
@@ -776,7 +777,11 @@ namespace AshEngine
 				packet.overrides.clear_color.b,
 				packet.overrides.clear_color.a
 			};
-			view_context.depth_clear_value = { packet.overrides.clear_depth, 0u };
+			view_context.reverse_z = packet.visible_frame->reverse_z;
+			view_context.depth_clear_value = {
+				resolve_scene_view_depth_clear_value(packet.overrides.clear_depth, packet.visible_frame->reverse_z),
+				0u
+			};
 
 			if (packet.overrides.rect_mode == SceneViewRectMode::PixelRect &&
 				rect_is_valid(packet.overrides.rect, packet.output_width, packet.output_height))
