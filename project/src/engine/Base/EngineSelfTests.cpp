@@ -82,6 +82,34 @@ namespace AshEngine
 			return aligned || report_self_test_failure("Ash_New alignment", "over-aligned allocation was not aligned to alignof(T)");
 		}
 
+		auto test_memory_service_reports_heap_statistics() -> bool
+		{
+			HeapMemoryStats before = MemoryService::instance()->get_heap_stats();
+			void* allocation = Ash_Alloc(nullptr, 128, 16);
+			HeapMemoryStats during = MemoryService::instance()->get_heap_stats();
+			Ash_Free(nullptr, allocation);
+			HeapMemoryStats after = MemoryService::instance()->get_heap_stats();
+
+			if (!allocation)
+			{
+				return report_self_test_failure("MemoryService heap stats", "allocation failed");
+			}
+			if (during.current_allocated_bytes <= before.current_allocated_bytes)
+			{
+				return report_self_test_failure("MemoryService heap stats", "current bytes did not increase after allocation");
+			}
+			if (during.peak_allocated_bytes < during.current_allocated_bytes)
+			{
+				return report_self_test_failure("MemoryService heap stats", "peak bytes were lower than current bytes");
+			}
+			if (during.live_allocation_count <= before.live_allocation_count)
+			{
+				return report_self_test_failure("MemoryService heap stats", "live allocation count did not increase");
+			}
+			return (after.current_allocated_bytes == before.current_allocated_bytes) ||
+				report_self_test_failure("MemoryService heap stats", "current bytes did not return to the original value");
+		}
+
 		auto test_stack_allocator_marker_rejects_forward_free() -> bool
 		{
 			StackAllocator allocator{};
@@ -1420,6 +1448,7 @@ namespace AshEngine
 		bool all_passed = true;
 		all_passed = test_assert_macro_is_statement_safe() && all_passed;
 		all_passed = test_typed_allocation_respects_alignment() && all_passed;
+		all_passed = test_memory_service_reports_heap_statistics() && all_passed;
 		all_passed = test_stack_allocator_marker_rejects_forward_free() && all_passed;
 		all_passed = test_linear_allocator_deallocate_reports_unsupported() && all_passed;
 		all_passed = test_array_growth_and_initial_size() && all_passed;
