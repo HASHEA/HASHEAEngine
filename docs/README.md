@@ -49,6 +49,7 @@
 ## 3. Engine 文档入口
 
 - `docs/EngineDeveloperGuide.md`
+- `docs/EngineInterfaceRequirements.md`
 - `docs/EngineRuntimeRequirements.md`
 - `docs/RenderGraphAPISpec.md`
 - `docs/EngineUIContext.md`

@@ -183,41 +183,34 @@
 
 - 当前依赖：
   - 依赖 `UIContext` 保持 viewport 呈现原语稳定
-  - 依赖后续引擎提供正式 scene 渲染 / picking 接口
+  - 依赖 `ScenePresentationSubsystem`、`SceneCameraSource::Override`、`SceneQuery` 继续保持稳定
 - 当前风险 / 阻塞：
-  - 当前视口渲染仍依赖 `CodexLogoDemoRenderer`
-  - 缺少正式的编辑器相机 / scene 渲染语义
-  - 缺少视口统计和拾取支持
-  - `EditorViewportInstance` 仍定义在共享 `EditorContext.h`，这轮新增语义收敛在 `EditorViewportService`
+  - CPU AABB picking 已可用，但复杂模型 / 遮挡下仍需要后续 GPU ID buffer picking
+  - DebugDraw 基础形状已可用，但缺 per-viewport / depth / xray 语义，Gizmo 与 selection overlay 仍有一部分留在 Editor 侧 2D overlay
+  - 缺少稳定 viewport/render stats facade
+  - `EditorViewportInstance` 已定义在 `EditorViewportTypes.h`，后续仍应避免回退依赖整包 `EditorContext`
   - `context.viewport` 仍然是单份 primary viewport 快照；后续如需更多 viewport 消费者，仍应优先按 viewport id 显式走 `EditorViewportService`
-  - viewport RT 的创建 / 重建虽然已按 per-viewport instance 组织，但真正的 RT 构建与渲染循环仍在 `Editor.cpp`
+  - viewport RT 的创建 / 重建已按 per-viewport instance 组织，但真正的 RT 构建与渲染循环仍需要继续收口
   - 若后续要彻底完成 ownership / 责任收口，主线程需要决定是否把“RT 构建驱动”继续下沉到 `EditorViewportService` 或单独的 viewport renderer 层
 
 ## 12. 需要引擎配合的接口缺口
 
-- 按相机/视图参数渲染到指定 RT 的正式接口
-- object picking / ID buffer
-- gizmo / debug overlay 正式渲染接口
+- `AssetType::Mesh` 接入 `instantiate_asset(AssetId)`，方便 viewport 资源投放路径统一
+- 统一 scene drop point / ray-to-plane helper，减少 Editor 侧重复拼落点规则
+- Scene change event / lifecycle 语义，减少 scene replace/reload 后各 panel 猜状态
+- GPU ID buffer picking
+- DebugDraw per-viewport / depth / xray 语义
 - 视口统计接口
-- 更清晰的“多 viewport / 多 camera 渲染到独立 RT”高层接口，避免 editor 侧长期在 `Editor.cpp` 手工驱动 RT 重建与渲染分发
 
 ## 13. 下一步任务
 
-- 完成 `Scale Gizmo`，复用现有 command transaction / selection / viewport ray 链路
+- 保持 `ViewportPanel` 主文件只做协调；新增功能优先放 `ViewportPanelToolbar` / `ViewportPanelCanvas` / `ViewportPanelInteraction`
+- 继续把 RT 构建驱动从 app/editor 壳层向 viewport service 或独立 renderer 层收口
 - 将选中反馈从“强包围盒”继续往更轻量的编辑器表达收敛
 - 将 scene / game 的运行与编辑语义进一步拆开
 - 继续收敛 viewport 顶部调试信息，减少工作区噪音
-  - 已完成首轮工具栏 / overlay 减法整理：
-    - 默认不再打开 viewport stats / overlay
-    - scene toolbar 优先保留 transform tool 高频操作
-    - `Options` popup 收纳 primary / stats / input / aspect / camera speed
-    - 操作提示收敛为仅在 scene 视口聚焦或悬浮时显示的单行提示条
-- 补齐 `Rotate Gizmo`
-  - 方向：
-    - editor 侧复用现有拖拽会话与事务模型
-    - 以轴向旋转环补足 `Move / Rotate / Scale` 三件套
-- 视需要把 viewport 公共结构从 `EditorContext.h` 拆到独立头文件
+- 后续迁移 overlay 时，优先等 Engine 补 per-viewport / depth / xray 语义，不要把临时 2D overlay 继续扩成长期方案
 
 ## 14. 最近更新时间
 
-- 2026-05-15
+- 2026-05-18

@@ -45,7 +45,9 @@
 - `docs/EditorParallelCollaboration.md`
   - 主线程 / 子线程分工、任务卡、冲突升级规则
 - `docs/EditorToEngineGapChecklist.md`
-  - Engine 侧缺口记录
+  - Editor 任务中需要快速确认的 Engine 侧缺口
+- `docs/EngineInterfaceRequirements.md`
+  - Engine 接口缺口和建议接口的详细真源
 
 ## 4. 模块进度文档
 
