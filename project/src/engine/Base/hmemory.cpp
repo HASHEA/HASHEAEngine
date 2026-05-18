@@ -2,6 +2,7 @@
 #include "tlsf.h"
 #include "hlog.h"
 #include "hassert.h"
+#include <algorithm>
 namespace AshEngine
 {
 
@@ -82,6 +83,10 @@ namespace AshEngine
 			return false;
 		}
 		m_szMaxSize = size;
+		m_szAllocatedSize = 0;
+		m_szPeakAllocatedSize = 0;
+		m_liveAllocationCount = 0;
+		m_peakAllocationCount = 0;
 		m_pTlsfHandle = tlsf_create_with_pool(m_pMemory,size);
 		bool ret = (m_pTlsfHandle != nullptr)? true : false;
 		if (!ret)
@@ -89,6 +94,10 @@ namespace AshEngine
 			free(m_pMemory);
 			m_pMemory = nullptr;
 			m_szMaxSize = 0;
+			m_szAllocatedSize = 0;
+			m_szPeakAllocatedSize = 0;
+			m_liveAllocationCount = 0;
+			m_peakAllocationCount = 0;
 			HLogError("tlsf create pool failed with address : {0},  size : {1}", m_pMemory, size);
 		}
 		return ret;
@@ -102,6 +111,9 @@ namespace AshEngine
 			m_pMemory = nullptr;
 			m_szMaxSize = 0;
 			m_szAllocatedSize = 0;
+			m_szPeakAllocatedSize = 0;
+			m_liveAllocationCount = 0;
+			m_peakAllocationCount = 0;
 			return true;
 		}
 		// Check memory at the application exit.
@@ -123,6 +135,9 @@ namespace AshEngine
 		m_pMemory = nullptr;
 		m_szMaxSize = 0;
 		m_szAllocatedSize = 0;
+		m_szPeakAllocatedSize = 0;
+		m_liveAllocationCount = 0;
+		m_peakAllocationCount = 0;
 		return true;
 	}
 #ifdef ASH_DEBUG
@@ -131,6 +146,16 @@ namespace AshEngine
 	}
 #endif // ASH_DEBUG
 
+	auto HeapAllocator::get_stats() const -> HeapMemoryStats
+	{
+		std::lock_guard<std::mutex> lock(m_mutex);
+		HeapMemoryStats stats{};
+		stats.current_allocated_bytes = m_szAllocatedSize;
+		stats.peak_allocated_bytes = m_szPeakAllocatedSize;
+		stats.live_allocation_count = m_liveAllocationCount;
+		stats.peak_allocation_count = m_peakAllocationCount;
+		return stats;
+	}
 	
 	auto HeapAllocator::allocate(size_t size, size_t alignment)->void*
 	{
@@ -153,6 +178,9 @@ namespace AshEngine
 		}
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
 		m_szAllocatedSize += actualSize;
+		++m_liveAllocationCount;
+		m_szPeakAllocatedSize = std::max(m_szPeakAllocatedSize, m_szAllocatedSize);
+		m_peakAllocationCount = std::max(m_peakAllocationCount, m_liveAllocationCount);
 		return pAllocateMemory;
 	}
 	auto HeapAllocator::allocate(size_t size, size_t alignment, char* file, uint32_t line)->void*
@@ -176,6 +204,9 @@ namespace AshEngine
 		}
 		size_t actualSize = tlsf_block_size(pAllocateMemory);
 		m_szAllocatedSize += actualSize;
+		++m_liveAllocationCount;
+		m_szPeakAllocatedSize = std::max(m_szPeakAllocatedSize, m_szAllocatedSize);
+		m_peakAllocationCount = std::max(m_peakAllocationCount, m_liveAllocationCount);
 #ifdef ASH_TRACE_MEM_ALLOCATE
 		HLogTrace("allocate new mem at : {0}, size : {1}, actualSize : {2}, from : {3} - line : {4}", pAllocateMemory, size,actualSize,file,line);
 #endif //ASH_DEBUG
@@ -195,6 +226,10 @@ namespace AshEngine
 		}
 		size_t actual_size = tlsf_block_size(pointer);
 		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
+		if (m_liveAllocationCount > 0)
+		{
+			--m_liveAllocationCount;
+		}
 
 		tlsf_free(m_pTlsfHandle, pointer);
 #ifdef ASH_TRACE_MEM_DEALLOCATE
@@ -217,6 +252,10 @@ namespace AshEngine
 		}
 		size_t actual_size = tlsf_block_size(pointer);
 		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
+		if (m_liveAllocationCount > 0)
+		{
+			--m_liveAllocationCount;
+		}
 		tlsf_free(m_pTlsfHandle, pointer);
 		return true;
 	}
@@ -236,6 +275,10 @@ namespace AshEngine
 		}
 		size_t actual_size = tlsf_block_size(dPoint);
 		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
+		if (m_liveAllocationCount > 0)
+		{
+			--m_liveAllocationCount;
+		}
 		tlsf_free(m_pTlsfHandle, dPoint);
 		return true;
 	}
@@ -254,6 +297,10 @@ namespace AshEngine
 		}
 		size_t actual_size = tlsf_block_size(dPoint);
 		m_szAllocatedSize = actual_size <= m_szAllocatedSize ? m_szAllocatedSize - actual_size : 0;
+		if (m_liveAllocationCount > 0)
+		{
+			--m_liveAllocationCount;
+		}
 		tlsf_free(m_pTlsfHandle, dPoint);
 #ifdef ASH_TRACE_MEM_DEALLOCATE
 		HLogTrace("deallocate mem at : {0}, size : {1}, from : {2} - line : {3}", pointer, actual_size, file, line);

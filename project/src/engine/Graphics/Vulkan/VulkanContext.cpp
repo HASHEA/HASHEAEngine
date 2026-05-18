@@ -969,6 +969,13 @@ namespace RHI
 		fn.vkGetPhysicalDeviceMemoryProperties2KHR = vkGetPhysicalDeviceMemoryProperties2;
 		allocatorCI.pVulkanFunctions = &fn;
 		VK_CHECK_RESULT(vmaCreateAllocator(&allocatorCI, &vmaAllocator));
+		{
+			std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
+			renderMemoryStats.supported = ASH_ENABLE_VMA_LEAK_TRACKING != 0;
+			renderMemoryStats.gpu_allocator_current_bytes = 0;
+			renderMemoryStats.gpu_allocator_peak_bytes = 0;
+			renderMemoryStats.gpu_allocator_shutdown_live_bytes = 0;
+		}
 
 		return true;
 	}
@@ -979,6 +986,12 @@ namespace RHI
 		vmaDestroyAllocator(vmaAllocator);
 		vmaAllocator = VK_NULL_HANDLE;
 		return true;
+	}
+
+	auto VulkanContext::get_render_memory_stats() const -> RenderMemoryStats
+	{
+		std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
+		return renderMemoryStats;
 	}
 
 	auto VulkanContext::_create_descriptor_pool(const GpuDescriptorPoolCreation& dspci) -> bool
@@ -1191,6 +1204,11 @@ namespace RHI
 
 		std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
 		vmaTrackedAllocations[info.allocationHandle] = std::move(info);
+		renderMemoryStats.supported = true;
+		renderMemoryStats.gpu_allocator_current_bytes += size;
+		renderMemoryStats.gpu_allocator_peak_bytes = std::max(
+			renderMemoryStats.gpu_allocator_peak_bytes,
+			renderMemoryStats.gpu_allocator_current_bytes);
 #else
 		(void)allocation;
 		(void)objectType;
@@ -1250,6 +1268,11 @@ namespace RHI
 				function ? function : "<unknown>");
 			return;
 		}
+		const uint64_t size = iter->second.size;
+		renderMemoryStats.gpu_allocator_current_bytes =
+			size <= renderMemoryStats.gpu_allocator_current_bytes ?
+			renderMemoryStats.gpu_allocator_current_bytes - size :
+			0;
 		vmaTrackedAllocations.erase(iter);
 #else
 		(void)allocation;
@@ -1265,6 +1288,13 @@ namespace RHI
 	{
 #if ASH_ENABLE_VMA_LEAK_TRACKING
 		std::lock_guard<std::mutex> lock(vmaTrackedAllocationsMutex);
+		uint64_t liveBytes = 0;
+		for (const auto& [allocationHandle, info] : vmaTrackedAllocations)
+		{
+			(void)allocationHandle;
+			liveBytes += info.size;
+		}
+		renderMemoryStats.gpu_allocator_shutdown_live_bytes = liveBytes;
 		if (vmaTrackedAllocations.empty())
 		{
 			HLogInfo("VMA leak tracking: no live VMA allocations detected before allocator shutdown.");

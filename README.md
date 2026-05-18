@@ -286,6 +286,24 @@ product\bin64\Debug-windows-x86_64\Editor.exe --smoke-test-seconds=5
 product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 ```
 
+标准性能门禁入口：
+
+```bat
+RunPerfGate.bat
+```
+
+无参数运行会打开控制台交互菜单；带参数运行时会直接透传到 `scripts/RunPerfGate.ps1`，例如：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/RunPerfGate.ps1 -Profile Standard
+```
+
+报告输出到 `Intermediate/test-reports/perf-gate/<timestamp>/`。崩溃、超时、backend 错配、validation/debug-layer 错误、Engine heap 或 Vulkan VMA shutdown live bytes 会失败；CPU frame time、FPS、draw/pass/dispatch 和内存峰值会和 `tools/perf/perf_gate_baselines.json` 中已 bless 的同 profile/config/target/backend 基线比较，超过 `warn_thresholds` 时标记为 WARN。首次建立或接受新基线时运行：
+
+```bat
+RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
+```
+
 常用调试输出：
 
 - 运行日志：`product/logs/`
@@ -339,10 +357,13 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - RenderGraph 使用教程与 API Spec：[`docs/RenderGraphAPISpec.md`](docs/RenderGraphAPISpec.md)
 - Engine UIContext：[`docs/EngineUIContext.md`](docs/EngineUIContext.md)
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
+- PerfGate 性能门禁使用说明：[`docs/PerfGateUsageGuide.md`](docs/PerfGateUsageGuide.md)
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - Deferred Lighting 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-lighting-design.md`](docs/superpowers/specs/2026-05-12-deferred-lighting-design.md)
 - Render Graph 设计草案：[`docs/superpowers/specs/2026-05-14-render-graph-design.md`](docs/superpowers/specs/2026-05-14-render-graph-design.md)
 - Render Graph 实现计划：[`docs/superpowers/plans/2026-05-14-render-graph-implementation.md`](docs/superpowers/plans/2026-05-14-render-graph-implementation.md)
+- 性能门禁设计草案：[`docs/superpowers/specs/2026-05-18-perf-gate-design.md`](docs/superpowers/specs/2026-05-18-perf-gate-design.md)
+- 性能门禁实现计划：[`docs/superpowers/plans/2026-05-18-perf-gate-implementation.md`](docs/superpowers/plans/2026-05-18-perf-gate-implementation.md)
 - 静态代码审查与风险记录：[`docs/EngineStaticCodeReview_2026-05-06.md`](docs/EngineStaticCodeReview_2026-05-06.md)
 
 如果 README 与详细文档存在冲突，以 `docs/EngineDeveloperGuide.md` 和 `docs/EditorDeveloperGuide.md` 中的最新约定为准。

@@ -5,6 +5,7 @@
 #include "hservice.h"
 #include <memory>
 #include <mutex>
+#include <cstdint>
 namespace AshEngine
 {
 //#define ASH_TRACE_MEM_ALLOCATE
@@ -51,6 +52,14 @@ namespace AshEngine
 		}
 	}; // struct MemoryStatistics
 
+	struct HeapMemoryStats
+	{
+		size_t current_allocated_bytes = 0;
+		size_t peak_allocated_bytes = 0;
+		uint64_t live_allocation_count = 0;
+		uint64_t peak_allocation_count = 0;
+	};
+
 	class HeapAllocator : public Allocator
 	{
 	public:
@@ -70,13 +79,17 @@ namespace AshEngine
 		auto deallocate(void* pointer) -> bool override;
 		auto deallocate(const void* pointer) -> bool override;
 		auto deallocate(const void* pointer, char* file, uint32_t line) -> bool override;
+		auto get_stats() const -> HeapMemoryStats;
 
 	private:
-		std::mutex m_mutex{};
+		mutable std::mutex m_mutex{};
 		void* m_pTlsfHandle = nullptr;
 		void* m_pMemory = nullptr;
 		size_t                       m_szAllocatedSize = 0;
+		size_t                       m_szPeakAllocatedSize = 0;
 		size_t                       m_szMaxSize = 0;
+		uint64_t                     m_liveAllocationCount = 0;
+		uint64_t                     m_peakAllocationCount = 0;
 	}; // struct HeapAllocator
 
 	class StackAllocator : public Allocator
@@ -151,6 +164,10 @@ namespace AshEngine
 		{
 			return &m_stackAllocator;
 		};
+		auto get_heap_stats() const -> HeapMemoryStats
+		{
+			return m_heapAllocator.get_stats();
+		}
 	private:
 		// Global Frame allocator
 		StackAllocator m_stackAllocator{};

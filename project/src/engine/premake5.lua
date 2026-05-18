@@ -107,6 +107,7 @@ project "Engine"
 		{
 			"tracy",
 			"dbghelp",
+			"psapi",
 			"d3d12",
 			"dxgi",
 			"dxguid",
@@ -184,6 +185,7 @@ project "Engine"
 		links {
 			"tracy",
 			"dbghelp",
+			"psapi",
 			"d3d12",
 			"dxgi",
 			"dxguid",

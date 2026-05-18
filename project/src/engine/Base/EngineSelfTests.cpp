@@ -5,8 +5,10 @@
 #include "hfile.h"
 #include "hlog.h"
 #include "hmemory.h"
+#include "ProcessMemoryDiagnostics.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
+#include "Function/Diagnostics/PerfGate.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/Material.h"
@@ -80,6 +82,55 @@ namespace AshEngine
 			}
 
 			return aligned || report_self_test_failure("Ash_New alignment", "over-aligned allocation was not aligned to alignof(T)");
+		}
+
+		auto test_memory_service_reports_heap_statistics() -> bool
+		{
+			HeapMemoryStats before = MemoryService::instance()->get_heap_stats();
+			void* allocation = Ash_Alloc(nullptr, 128, 16);
+			HeapMemoryStats during = MemoryService::instance()->get_heap_stats();
+			Ash_Free(nullptr, allocation);
+			HeapMemoryStats after = MemoryService::instance()->get_heap_stats();
+
+			if (!allocation)
+			{
+				return report_self_test_failure("MemoryService heap stats", "allocation failed");
+			}
+			if (during.current_allocated_bytes <= before.current_allocated_bytes)
+			{
+				return report_self_test_failure("MemoryService heap stats", "current bytes did not increase after allocation");
+			}
+			if (during.peak_allocated_bytes < during.current_allocated_bytes)
+			{
+				return report_self_test_failure("MemoryService heap stats", "peak bytes were lower than current bytes");
+			}
+			if (during.live_allocation_count <= before.live_allocation_count)
+			{
+				return report_self_test_failure("MemoryService heap stats", "live allocation count did not increase");
+			}
+			return (after.current_allocated_bytes == before.current_allocated_bytes) ||
+				report_self_test_failure("MemoryService heap stats", "current bytes did not return to the original value");
+		}
+
+		auto test_process_memory_snapshot_is_available() -> bool
+		{
+			const ProcessMemorySnapshot snapshot = get_current_process_memory_snapshot();
+#if defined(ASH_WINDOWS)
+			if (!snapshot.supported)
+			{
+				return report_self_test_failure("Process memory snapshot", "Windows process memory snapshot reported unsupported");
+			}
+			if (snapshot.working_set_bytes == 0 || snapshot.private_bytes == 0)
+			{
+				return report_self_test_failure("Process memory snapshot", "Windows process memory counters were zero");
+			}
+#else
+			if (snapshot.supported)
+			{
+				return report_self_test_failure("Process memory snapshot", "non-Windows process memory snapshot unexpectedly reported supported");
+			}
+#endif
+			return true;
 		}
 
 		auto test_stack_allocator_marker_rejects_forward_free() -> bool
@@ -257,6 +308,74 @@ namespace AshEngine
 
 			return (empty_ok && typed_ok) ||
 				report_self_test_failure("AshBarrier value semantics", "copy/move touched invalid barrier resource storage");
+		}
+
+		auto test_render_memory_stats_default_to_unsupported() -> bool
+		{
+			RHI::RenderMemoryStats stats{};
+			const bool ok =
+				!stats.supported &&
+				stats.gpu_allocator_current_bytes == 0 &&
+				stats.gpu_allocator_peak_bytes == 0 &&
+				stats.gpu_allocator_shutdown_live_bytes == 0;
+			return ok ||
+				report_self_test_failure("RenderMemoryStats defaults", "default stats were not unsupported zeroes");
+		}
+
+		auto test_perf_gate_config_parser_defaults_to_disabled() -> bool
+		{
+			char arg0[] = "Sandbox.exe";
+			char* argv[] = { arg0 };
+			const PerfGateConfig config = parse_perf_gate_config(1, argv);
+			return (!config.enabled) ||
+				report_self_test_failure("PerfGate config disabled default", "parser enabled PerfGate without --perf-gate");
+		}
+
+		auto test_perf_gate_config_parser_reads_arguments() -> bool
+		{
+			char arg0[] = "Sandbox.exe";
+			char arg1[] = "--perf-gate";
+			char arg2[] = "--perf-gate-profile=Standard";
+			char arg3[] = "--perf-gate-output=Intermediate/test-reports/perf-gate/test/run.json";
+			char arg4[] = "--perf-gate-warmup-seconds=1.5";
+			char arg5[] = "--perf-gate-sample-seconds=2.5";
+			char arg6[] = "--perf-gate-target=Sandbox";
+			char* argv[] = {
+				arg0,
+				arg1,
+				arg2,
+				arg3,
+				arg4,
+				arg5,
+				arg6
+			};
+			const PerfGateConfig config = parse_perf_gate_config(7, argv);
+			const bool ok =
+				config.enabled &&
+				config.profile == "Standard" &&
+				config.target_name == "Sandbox" &&
+				config.output_path == "Intermediate/test-reports/perf-gate/test/run.json" &&
+				config.warmup_seconds == 1.5 &&
+				config.sample_seconds == 2.5;
+			return ok ||
+				report_self_test_failure("PerfGate config parser", "parser did not preserve perf-gate arguments");
+		}
+
+		auto test_perf_gate_frame_summary_percentiles_are_stable() -> bool
+		{
+			std::vector<double> samples = { 0.40, 0.10, 0.20, 0.30 };
+			const PerfGateFrameTimeSummary summary = summarize_perf_gate_frame_times(samples);
+			const bool ok =
+				summary.sample_count == 4 &&
+				summary.min_ms == 0.10 &&
+				summary.max_ms == 0.40 &&
+				summary.avg_ms > 0.249 &&
+				summary.avg_ms < 0.251 &&
+				summary.p50_ms == 0.20 &&
+				summary.p95_ms == 0.40 &&
+				summary.p99_ms == 0.40;
+			return ok ||
+				report_self_test_failure("PerfGate frame summary", "percentiles or averages were not stable");
 		}
 
 		auto test_texture_decode_generates_rgba8_mips() -> bool
@@ -1420,6 +1539,8 @@ namespace AshEngine
 		bool all_passed = true;
 		all_passed = test_assert_macro_is_statement_safe() && all_passed;
 		all_passed = test_typed_allocation_respects_alignment() && all_passed;
+		all_passed = test_memory_service_reports_heap_statistics() && all_passed;
+		all_passed = test_process_memory_snapshot_is_available() && all_passed;
 		all_passed = test_stack_allocator_marker_rejects_forward_free() && all_passed;
 		all_passed = test_linear_allocator_deallocate_reports_unsupported() && all_passed;
 		all_passed = test_array_growth_and_initial_size() && all_passed;
@@ -1428,6 +1549,10 @@ namespace AshEngine
 		all_passed = test_shader_hash_uses_explicit_source_hash() && all_passed;
 		all_passed = test_subresource_range_resolve_clamps_defaults() && all_passed;
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
+		all_passed = test_render_memory_stats_default_to_unsupported() && all_passed;
+		all_passed = test_perf_gate_config_parser_defaults_to_disabled() && all_passed;
+		all_passed = test_perf_gate_config_parser_reads_arguments() && all_passed;
+		all_passed = test_perf_gate_frame_summary_percentiles_are_stable() && all_passed;
 		all_passed = test_texture_decode_generates_rgba8_mips() && all_passed;
 		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;

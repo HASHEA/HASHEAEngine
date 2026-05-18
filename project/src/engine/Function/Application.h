@@ -4,6 +4,7 @@
 #include "Base/hplatform.h"
 #include "Base/hthreading.h"
 #include "Function/Gui/UICommon.h"
+#include "Function/Diagnostics/PerfGate.h"
 #include "Graphics/RHIBackend.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/RenderAssetManager.h"
@@ -111,6 +112,7 @@ public:
 		auto request_exit() -> void;
 		auto set_max_frame_count(uint64_t inMaxFrameCount) -> void;
 		auto set_max_run_seconds(double inMaxRunSeconds) -> void;
+		auto configure_perf_gate(const PerfGateConfig& config) -> void;
 		auto get_frame_index() const -> uint64_t
 		{
 			return frameIndex.load(std::memory_order_acquire);
@@ -178,6 +180,7 @@ public:
 		SceneRenderer			sceneRenderer{};
 		ScenePresentationSubsystem scenePresentation{};
 		DebugDrawService		debugDrawService{};
+		PerfGateController		perfGateController{};
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
 		InputState				logicInputState{};
