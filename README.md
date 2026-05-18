@@ -344,6 +344,7 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 - Render Graph 设计草案：[`docs/superpowers/specs/2026-05-14-render-graph-design.md`](docs/superpowers/specs/2026-05-14-render-graph-design.md)
 - Render Graph 实现计划：[`docs/superpowers/plans/2026-05-14-render-graph-implementation.md`](docs/superpowers/plans/2026-05-14-render-graph-implementation.md)
 - 性能门禁设计草案：[`docs/superpowers/specs/2026-05-18-perf-gate-design.md`](docs/superpowers/specs/2026-05-18-perf-gate-design.md)
+- 性能门禁实现计划：[`docs/superpowers/plans/2026-05-18-perf-gate-implementation.md`](docs/superpowers/plans/2026-05-18-perf-gate-implementation.md)
 - 静态代码审查与风险记录：[`docs/EngineStaticCodeReview_2026-05-06.md`](docs/EngineStaticCodeReview_2026-05-06.md)
 
 如果 README 与详细文档存在冲突，以 `docs/EngineDeveloperGuide.md` 和 `docs/EditorDeveloperGuide.md` 中的最新约定为准。
