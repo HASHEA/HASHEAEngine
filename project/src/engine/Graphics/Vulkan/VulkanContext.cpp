@@ -24,8 +24,11 @@
 #if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
 #endif
+#include <algorithm>
 #include <array>
+#include <cwctype>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -140,6 +143,121 @@ namespace RHI
 			return stream.str();
 #endif
 		}
+
+#if defined(ASH_WINDOWS)
+		static auto get_executable_directory_path() -> std::filesystem::path
+		{
+			std::array<wchar_t, 32768> modulePath{};
+			const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+			if (length > 0 && length < modulePath.size())
+			{
+				return std::filesystem::path(modulePath.data()).parent_path();
+			}
+
+			return std::filesystem::current_path();
+		}
+
+		static auto path_exists(const std::filesystem::path& path) -> bool
+		{
+			std::error_code error{};
+			return std::filesystem::exists(path, error) && !error;
+		}
+
+		static auto to_lower_copy(std::wstring value) -> std::wstring
+		{
+			std::transform(value.begin(), value.end(), value.begin(),
+				[](wchar_t ch) { return static_cast<wchar_t>(std::towlower(ch)); });
+			return value;
+		}
+
+		static auto environment_contains_path(const std::wstring& environmentValue, const std::wstring& pathValue) -> bool
+		{
+			const auto normalize_path_entry = [](std::wstring value) -> std::wstring
+			{
+				if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"')
+				{
+					value = value.substr(1, value.size() - 2);
+				}
+				std::replace(value.begin(), value.end(), L'/', L'\\');
+				while (!value.empty() && value.back() == L'\\')
+				{
+					value.pop_back();
+				}
+				return to_lower_copy(value);
+			};
+
+			const std::wstring normalizedPath = normalize_path_entry(pathValue);
+			size_t entryBegin = 0;
+			while (entryBegin <= environmentValue.size())
+			{
+				const size_t entryEnd = environmentValue.find(L';', entryBegin);
+				const std::wstring entry = environmentValue.substr(
+					entryBegin,
+					entryEnd == std::wstring::npos ? std::wstring::npos : entryEnd - entryBegin);
+				if (normalize_path_entry(entry) == normalizedPath)
+				{
+					return true;
+				}
+				if (entryEnd == std::wstring::npos)
+				{
+					break;
+				}
+				entryBegin = entryEnd + 1;
+			}
+			return false;
+		}
+
+		static auto prepend_environment_path(const wchar_t* variableName, const std::filesystem::path& path) -> bool
+		{
+			const std::wstring pathValue = path.wstring();
+			if (pathValue.empty())
+			{
+				return false;
+			}
+
+			std::wstring currentValue{};
+			const DWORD requiredLength = GetEnvironmentVariableW(variableName, nullptr, 0);
+			if (requiredLength > 0)
+			{
+				currentValue.resize(requiredLength);
+				const DWORD writtenLength = GetEnvironmentVariableW(variableName, currentValue.data(), requiredLength);
+				currentValue.resize(writtenLength);
+			}
+
+			if (environment_contains_path(currentValue, pathValue))
+			{
+				return true;
+			}
+
+			std::wstring newValue = pathValue;
+			if (!currentValue.empty())
+			{
+				newValue += L";";
+				newValue += currentValue;
+			}
+
+			return SetEnvironmentVariableW(variableName, newValue.c_str()) != FALSE;
+		}
+
+		static auto configure_bundled_vulkan_validation_layers() -> void
+		{
+			const std::filesystem::path layerDirectory = get_executable_directory_path() / L"vulkan_layers";
+			const std::filesystem::path layerManifest = layerDirectory / L"VkLayer_khronos_validation.json";
+			if (!path_exists(layerManifest))
+			{
+				return;
+			}
+
+			if (prepend_environment_path(L"VK_ADD_LAYER_PATH", layerDirectory))
+			{
+				HLogInfo("VulkanContext: Added bundled Vulkan validation layer path: {}", layerDirectory.string());
+			}
+			else
+			{
+				HLogWarning("VulkanContext: Failed to add bundled Vulkan validation layer path: {}", layerDirectory.string());
+			}
+		}
+#endif
 	}
 	inline static auto check_layer_support(const std::vector<const char*>& rqLayers)->bool
 	{
@@ -254,6 +372,9 @@ namespace RHI
 #ifdef VULKAN_DEBUG_REPORT
 		if (validationConfig.enableValidation)
 		{
+#if defined(ASH_WINDOWS)
+			configure_bundled_vulkan_validation_layers();
+#endif
 			rqLayers.push_back("VK_LAYER_KHRONOS_validation");
 		}
 			//"VK_LAYER_AMD_switchable_graphics",

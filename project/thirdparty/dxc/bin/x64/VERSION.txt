@@ -1,0 +1,9 @@
+DXC runtime binaries vendored for AshEngine Windows x64 runtime.
+
+Sources:
+- dxcompiler.dll and dxc.exe: C:\VulkanSDK\1.4.335.0\Bin
+- dxil.dll: C:\Program Files (x86)\Windows Kits\10\Redist\D3D\x64
+
+Expected capability:
+- dxcompiler.dll must support DXC SPIR-V code generation. `dxc.exe -spirv -help`
+  should list SPIR-V CodeGen options.

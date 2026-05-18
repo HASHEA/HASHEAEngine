@@ -1,0 +1,11 @@
+Vulkan validation layer runtime binaries vendored for AshEngine Windows x64 Debug validation.
+
+Source:
+- C:\VulkanSDK\1.4.335.0\Bin
+
+Files:
+- layers/VkLayer_khronos_validation.json
+- layers/VkLayer_khronos_validation.dll
+
+The layer manifest keeps the SDK-relative library path:
+`.\\VkLayer_khronos_validation.dll`.

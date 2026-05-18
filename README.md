@@ -204,6 +204,7 @@ Sandbox 是 Engine 侧测试/验证可执行项目，目标是避免把引擎验
 - Visual Studio 2022 或包含 MSBuild 的 Build Tools。
 - 支持 Vulkan 或 DX12 的显卡与驱动。
 - 仓库根目录自带 `premake5.exe`。
+- 仓库已随附 Windows x64 DXC 运行时与 Debug Vulkan validation layer 运行时；开发者不需要额外安装 Vulkan SDK 或系统 DXC 才能编译和运行项目的默认 Vulkan/DX12 shader 编译路径。显卡驱动提供的 Vulkan loader / ICD 仍然是运行 Vulkan 后端的前提。
 
 ### 生成解决方案
 
@@ -246,6 +247,8 @@ _BUILD/<Config>-windows-x86_64/
 product/bin64/<Config>-windows-x86_64/
 ```
 
+Engine 构建后会把 `project/thirdparty/dxc/bin/x64/dxcompiler.dll` 和 `dxil.dll` 同步到运行目录，避免运行时从开发者机器的 `PATH` 上加载不带 SPIR-V codegen 的系统 DXC。Debug 构建还会把 `project/thirdparty/VulkanSDK/redist/windows-x64/layers/` 下的 Khronos validation layer 同步到 `product/bin64/Debug-windows-x86_64/vulkan_layers/`。
+
 ## 后端配置
 
 运行时后端由 `product/config/Engine.ini` 控制：
@@ -271,6 +274,7 @@ GpuValidation=true
 - `DX12`
 
 Validation 开关只在 Debug 配置下生效。Release 构建中即使配置文件打开 Vulkan 或 DX12 validation，引擎也会强制关闭 validation / debug layer。
+Debug Vulkan 启用 validation 时，后端会在枚举 layer 前把运行目录下的 `vulkan_layers` 子目录追加到进程级 `VK_ADD_LAYER_PATH`，优先使用仓库随附的 `VK_LAYER_KHRONOS_validation` manifest 和 DLL。
 
 ## 验证与调试
 

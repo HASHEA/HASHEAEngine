@@ -138,6 +138,10 @@ project "Engine"
 		{
 			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Debug") .. "\\Engine.dll", false),
 			sync_runtime_artifact_command("$(TargetDir)Engine.pdb", product_runtime_dir("Debug") .. "\\Engine.pdb", true),
+			sync_runtime_artifact_command(dxc_redist_dir .. "\\dxcompiler.dll", product_runtime_dir("Debug") .. "\\dxcompiler.dll", false),
+			sync_runtime_artifact_command(dxc_redist_dir .. "\\dxil.dll", product_runtime_dir("Debug") .. "\\dxil.dll", false),
+			sync_runtime_artifact_command(vulkan_validation_layer_redist_dir .. "\\VkLayer_khronos_validation.json", product_runtime_dir("Debug") .. "\\vulkan_layers\\VkLayer_khronos_validation.json", false),
+			sync_runtime_artifact_command(vulkan_validation_layer_redist_dir .. "\\VkLayer_khronos_validation.dll", product_runtime_dir("Debug") .. "\\vulkan_layers\\VkLayer_khronos_validation.dll", false),
 		}
 	filter {"system:windows","configurations:Release"}
 		system "Windows"
@@ -200,6 +204,8 @@ project "Engine"
 		{
 			sync_runtime_artifact_command("$(TargetPath)", product_runtime_dir("Release") .. "\\Engine.dll", false),
 			sync_runtime_artifact_command("$(TargetDir)Engine.pdb", product_runtime_dir("Release") .. "\\Engine.pdb", true),
+			sync_runtime_artifact_command(dxc_redist_dir .. "\\dxcompiler.dll", product_runtime_dir("Release") .. "\\dxcompiler.dll", false),
+			sync_runtime_artifact_command(dxc_redist_dir .. "\\dxil.dll", product_runtime_dir("Release") .. "\\dxil.dll", false),
 		}
 
 	filter "system:not windows"

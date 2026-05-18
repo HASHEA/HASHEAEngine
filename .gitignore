@@ -12,6 +12,8 @@ AGENTS.md
 .claude
 bin
 bin-int
+!project/thirdparty/dxc/bin/
+!project/thirdparty/dxc/bin/**
 LogFiles
 Caches
 Intermediate

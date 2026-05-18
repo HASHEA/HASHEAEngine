@@ -27,6 +27,8 @@ thirdparty = "%{wks.location}/project/thirdparty"
 assetsdir = "%{wks.location}/assets"
 outputdir = "%{cfg.buildcfg}-%{cfg.system}-%{cfg.architecture}"
 runtime_sync_script = rootdir_win .. "\\scripts\\SyncRuntimeArtifact.ps1"
+dxc_redist_dir = rootdir_win .. "\\project\\thirdparty\\dxc\\bin\\x64"
+vulkan_validation_layer_redist_dir = rootdir_win .. "\\project\\thirdparty\\VulkanSDK\\redist\\windows-x64\\layers"
 
 function product_runtime_dir(config_name)
 	return rootdir_win .. "\\product\\bin64\\" .. config_name .. "-windows-x86_64"

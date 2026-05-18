@@ -165,6 +165,8 @@ AshEngine/HASHEAEngine/
 - 进程启动时，`EntryPoint.h` 会先把当前工作目录切回仓库根目录
 - 中间文件 / target 输出：`_BUILD/<Config>-windows-x86_64/...`
 - 运行目录：`product/bin64/<Config>-windows-x86_64/`
+- Engine postbuild 会把仓库随附的 DXC 运行时同步到运行目录：`dxcompiler.dll`、`dxil.dll`
+- Debug Engine postbuild 会把仓库随附的 Khronos Vulkan validation layer 同步到运行目录：`product/bin64/Debug-windows-x86_64/vulkan_layers/`
 - 运行配置：`product/config/Engine.ini`
 - 日志目录：`product/logs/`
 - Sandbox 生成报告：`Intermediate/test-reports/sandbox/`
@@ -189,6 +191,13 @@ Windows Debug / Release 下，Engine 同时编入：
 - `imgui_impl_dx12.*`
 
 这意味着 **DynamicRHI 是运行时切换**，但前提仍然是目标平台已编入对应后端。
+
+Windows x64 第三方运行时约定：
+
+- `project/thirdparty/dxc/bin/x64/` 保存项目固定使用的 DXC 运行时，必须包含支持 `-spirv` 的 `dxcompiler.dll`，并随附 `dxil.dll`
+- `project/thirdparty/VulkanSDK/redist/windows-x64/layers/` 保存 Debug Vulkan validation 使用的 `VkLayer_khronos_validation.json` 和 `VkLayer_khronos_validation.dll`
+- 构建时只从仓库路径取 DXC import lib / headers / runtime DLL，不依赖开发者机器上的 `VULKAN_SDK` 或 `PATH` 来选择 DXC
+- Vulkan 后端运行仍需要显卡驱动提供 Vulkan loader / ICD；仓库随附的是 validation layer，不替代驱动运行时
 
 ---
 
@@ -1482,6 +1491,7 @@ Vulkan 支持：
 - GPU Assisted
 - Synchronization Validation
 - BreakOnValidationError
+- Debug 构建启用 validation 时，`VulkanContext` 会在枚举 instance layer 前把可执行文件目录下的 `vulkan_layers` 追加到进程级 `VK_ADD_LAYER_PATH`，从而优先发现仓库 postbuild 同步的 `VK_LAYER_KHRONOS_validation`
 
 DX12 支持：
 
@@ -1496,6 +1506,7 @@ DX12 支持：
 运行验证注意事项：
 
 - `Sandbox.exe` / `Editor.exe` 实际加载的是 `product/bin64/<Config>-windows-x86_64/Engine.dll`
+- `Sandbox.exe` / `Editor.exe` 的 shader 编译路径实际加载的是运行目录同级的 `dxcompiler.dll`；如果 Vulkan shader 报 `SPIR-V CodeGen not available`，优先检查该 DLL 是否来自 `project/thirdparty/dxc/bin/x64/` 并已被 postbuild 同步
 - 仅确认 `_BUILD/.../Engine.dll` 已编出还不够；如果 `product/bin64/.../Engine.dll` 没同步，运行时可能仍在执行旧引擎代码
 - 当出现“源码已改、构建已过，但运行现象完全没变化”的情况，优先检查：
   - `product/bin64/.../Engine.dll` 与 `_BUILD/.../Engine.dll` 的时间戳 / 哈希是否一致
