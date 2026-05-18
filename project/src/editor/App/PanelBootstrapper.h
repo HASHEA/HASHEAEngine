@@ -9,6 +9,7 @@ namespace AshEditor
 	class EditorEventBus;
 	class EditorSettingsService;
 	class EditorShortcutService;
+	class EditorGizmoService;
 	class EditorViewportCameraService;
 	class EditorViewportService;
 	class IAssetBrowserActionTarget;
@@ -34,6 +35,7 @@ namespace AshEditor
 		EditorViewportService* pViewportService = nullptr;
 		EditorViewportCameraService* pViewportCameraService = nullptr;
 		DragDropTransferService* pDragDropTransferService = nullptr;
+		EditorGizmoService* pGizmoService = nullptr;
 		EditorGizmoState* pGizmoState = nullptr;
 	};
 

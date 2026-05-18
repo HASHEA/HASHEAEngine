@@ -39,6 +39,9 @@ namespace AshEditor
 		{
 			DrawActionMenuItem(refContext, EditorActionIds::EditUndo);
 			DrawActionMenuItem(refContext, EditorActionIds::EditRedo);
+			refContext.refUi.separator();
+			DrawActionMenuItem(refContext, EditorActionIds::EditCopy);
+			DrawActionMenuItem(refContext, EditorActionIds::EditPaste);
 			const EditorUndoHistoryChangedEvent& refUndoHistory = refContext.refSessionState.GetUndoHistory();
 			if (refUndoHistory.bHasOpenTransaction)
 			{
@@ -58,6 +61,7 @@ namespace AshEditor
 			refContext.refUi.separator();
 			DrawActionMenuItem(refContext, EditorActionIds::SelectionRename);
 			DrawActionMenuItem(refContext, EditorActionIds::SelectionReparent);
+			DrawActionMenuItem(refContext, EditorActionIds::SelectionDuplicate);
 			DrawActionMenuItem(refContext, EditorActionIds::SelectionDelete);
 			refContext.refUi.end_menu();
 		}

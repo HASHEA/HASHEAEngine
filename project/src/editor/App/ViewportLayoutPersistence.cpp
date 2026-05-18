@@ -128,6 +128,12 @@ namespace AshEditor
 					state.bAcceptsInput = entry.value("acceptsInput", false);
 					state.bShowStats = entry.value("showStats", true);
 					state.bShowOverlays = entry.value("showOverlays", false);
+					state.bShowReferenceGrid = entry.value("showReferenceGrid", true);
+					state.bShowReferenceOrigin = entry.value("showReferenceOrigin", true);
+					state.bShowSelectionHelpers = entry.value("showSelectionHelpers", true);
+					state.bShowCameraHelpers = entry.value("showCameraHelpers", true);
+					state.bShowLightHelpers = entry.value("showLightHelpers", true);
+					state.bShowSelectionPivot = entry.value("showSelectionPivot", true);
 					vecStates.push_back(state);
 
 					if (EditorViewportPresentation* pPresentation = refViewportService.GetPresentation(state.strId))
@@ -184,6 +190,12 @@ namespace AshEditor
 			entry["acceptsInput"] = refState.bAcceptsInput;
 			entry["showStats"] = refState.bShowStats;
 			entry["showOverlays"] = refState.bShowOverlays;
+			entry["showReferenceGrid"] = refState.bShowReferenceGrid;
+			entry["showReferenceOrigin"] = refState.bShowReferenceOrigin;
+			entry["showSelectionHelpers"] = refState.bShowSelectionHelpers;
+			entry["showCameraHelpers"] = refState.bShowCameraHelpers;
+			entry["showLightHelpers"] = refState.bShowLightHelpers;
+			entry["showSelectionPivot"] = refState.bShowSelectionPivot;
 			if (const EditorViewportPresentation* pPresentation = refViewportService.GetPresentation(refState.strId))
 			{
 				entry["kind"] = MakeViewportKindName(pPresentation->eKind);

@@ -35,6 +35,12 @@ namespace AshEditor
 		bool bAcceptsInput = false;
 		bool bShowStats = true;
 		bool bShowOverlays = false;
+		bool bShowReferenceGrid = true;
+		bool bShowReferenceOrigin = true;
+		bool bShowSelectionHelpers = true;
+		bool bShowCameraHelpers = true;
+		bool bShowLightHelpers = true;
+		bool bShowSelectionPivot = true;
 		bool bPanelOpen = true;
 	};
 
@@ -55,6 +61,12 @@ namespace AshEditor
 		bool bAcceptsInput = false;
 		bool bShowStats = true;
 		bool bShowOverlays = false;
+		bool bShowReferenceGrid = true;
+		bool bShowReferenceOrigin = true;
+		bool bShowSelectionHelpers = true;
+		bool bShowCameraHelpers = true;
+		bool bShowLightHelpers = true;
+		bool bShowSelectionPivot = true;
 	};
 
 	class EditorViewportService
@@ -65,6 +77,9 @@ namespace AshEditor
 			EditorViewportInstance viewportInstance{};
 			EditorViewportPresentation viewportPresentation{};
 			EditorViewportRenderState viewportRenderState{};
+			uint32_t uPendingRequestedWidth = 0;
+			uint32_t uPendingRequestedHeight = 0;
+			float fPendingRequestedSinceSeconds = 0.0f;
 			AshEngine::SceneOutputHandle sceneOutput{};
 			AshEngine::SceneViewBindingHandle sceneViewBinding{};
 		};
@@ -101,8 +116,9 @@ namespace AshEditor
 		const EditorViewportRenderState* GetRenderState(const std::string& strViewportId) const;
 
 		// Updates the viewport requested output size (in pixels). Use 0 to indicate "no valid size this frame".
-		// Returns true if the requested size changed and a presentation resync is required.
-		bool UpdateRequestedSize(const std::string& strViewportId, uint32_t uWidth, uint32_t uHeight);
+		// The request is debounced so panel splitter drags do not rebuild offscreen outputs every frame.
+		// Returns true only when the debounced size commits and a presentation resync is required.
+		bool UpdateRequestedSize(const std::string& strViewportId, uint32_t uWidth, uint32_t uHeight, float fTimeSeconds);
 		void SetPanelOpen(const std::string& strId, bool bOpen);
 
 		// Syncs editor viewport outputs/bindings to the engine ScenePresentationSubsystem for the given scene.

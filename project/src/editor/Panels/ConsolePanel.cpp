@@ -7,10 +7,14 @@
 #include "Core/EditorStringUtils.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorSettingsService.h"
+#include "Widgets/EditorButtonWidgets.h"
 
 #include <algorithm>
 #include <array>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace AshEditor
 {
@@ -85,7 +89,8 @@ namespace AshEditor
 
 		bool MatchesConsoleFilter(
 			const ConsoleMessage& refMessage,
-			const std::string& strFilterText,
+			const std::string& strLoweredFilterText,
+			std::string_view svSourceFilter,
 			const SeverityFilterOption& refSeverityFilter)
 		{
 			if (!refSeverityFilter.bMatchAll && refMessage.eSeverity != refSeverityFilter.eSeverity)
@@ -93,16 +98,37 @@ namespace AshEditor
 				return false;
 			}
 
-			if (strFilterText.empty())
+			if (!svSourceFilter.empty() && refMessage.strSource != svSourceFilter)
+			{
+				return false;
+			}
+
+			if (strLoweredFilterText.empty())
 			{
 				return true;
 			}
 
-			const std::string strLoweredFilter = ToLowerCopy(strFilterText);
 			return
-				ToLowerCopy(refMessage.strText).find(strLoweredFilter) != std::string::npos ||
-				ToLowerCopy(refMessage.strSource).find(strLoweredFilter) != std::string::npos ||
-				ToLowerCopy(GetSeverityLabel(refMessage.eSeverity)).find(strLoweredFilter) != std::string::npos;
+				ToLowerCopy(refMessage.strText).find(strLoweredFilterText) != std::string::npos ||
+				ToLowerCopy(refMessage.strSource).find(strLoweredFilterText) != std::string::npos ||
+				ToLowerCopy(GetSeverityLabel(refMessage.eSeverity)).find(strLoweredFilterText) != std::string::npos;
+		}
+
+		const char* GetSeverityShortLabel(ConsoleMessageSeverity eSeverity)
+		{
+			switch (eSeverity)
+			{
+			case ConsoleMessageSeverity::Trace:
+				return "Trace";
+			case ConsoleMessageSeverity::Info:
+				return "Info";
+			case ConsoleMessageSeverity::Warning:
+				return "Warn";
+			case ConsoleMessageSeverity::Error:
+				return "Error";
+			default:
+				return "Info";
+			}
 		}
 
 		struct ConsoleSeverityCounts
@@ -111,6 +137,19 @@ namespace AshEditor
 			uint32_t uInfoCount = 0;
 			uint32_t uWarningCount = 0;
 			uint32_t uErrorCount = 0;
+		};
+
+		struct ConsoleMessageContextAction
+		{
+			bool bApplySourceFilter = false;
+			bool bApplySeverityFilter = false;
+			bool bClearSourceFilter = false;
+			bool bClearSeverityFilter = false;
+			bool bClearTextFilter = false;
+			bool bResetAllFilters = false;
+			bool bClearConsole = false;
+			std::string strSourceFilter{};
+			int32_t iSeverityFilterIndex = 0;
 		};
 
 		ConsoleSeverityCounts CountConsoleSeverities(const std::vector<ConsoleMessage>& vecMessages)
@@ -137,6 +176,218 @@ namespace AshEditor
 				}
 			}
 			return countsSeverity;
+		}
+
+		std::vector<std::string> BuildConsoleSourceOptions(
+			const std::vector<ConsoleMessage>& vecMessages,
+			std::string_view svSelectedSource)
+		{
+			std::vector<std::string> vecSources{};
+			vecSources.reserve(vecMessages.size() + 2);
+			vecSources.emplace_back("All");
+
+			std::unordered_set<std::string> setSeenSources{};
+			setSeenSources.reserve(vecMessages.size());
+			for (const ConsoleMessage& refMessage : vecMessages)
+			{
+				if (refMessage.strSource.empty())
+				{
+					continue;
+				}
+				if (setSeenSources.insert(refMessage.strSource).second)
+				{
+					vecSources.push_back(refMessage.strSource);
+				}
+			}
+
+			std::sort(vecSources.begin() + 1, vecSources.end());
+			if (!svSelectedSource.empty() &&
+				setSeenSources.find(std::string(svSelectedSource)) == setSeenSources.end())
+			{
+				vecSources.push_back(std::string(svSelectedSource));
+			}
+
+			return vecSources;
+		}
+
+		int32_t FindConsoleSourceFilterIndex(
+			const std::vector<std::string>& vecSourceOptions,
+			std::string_view svSelectedSource)
+		{
+			if (svSelectedSource.empty())
+			{
+				return 0;
+			}
+
+			for (size_t uIndex = 1; uIndex < vecSourceOptions.size(); ++uIndex)
+			{
+				if (vecSourceOptions[uIndex] == svSelectedSource)
+				{
+					return static_cast<int32_t>(uIndex);
+				}
+			}
+
+			return 0;
+		}
+
+		int32_t GetSeverityFilterIndex(ConsoleMessageSeverity eSeverity)
+		{
+			for (size_t uIndex = 0; uIndex < kSeverityFilters.size(); ++uIndex)
+			{
+				if (!kSeverityFilters[uIndex].bMatchAll && kSeverityFilters[uIndex].eSeverity == eSeverity)
+				{
+					return static_cast<int32_t>(uIndex);
+				}
+			}
+
+			return 0;
+		}
+
+		uint32_t GetSeverityCount(const ConsoleSeverityCounts& refCounts, ConsoleMessageSeverity eSeverity)
+		{
+			switch (eSeverity)
+			{
+			case ConsoleMessageSeverity::Trace:
+				return refCounts.uTraceCount;
+			case ConsoleMessageSeverity::Info:
+				return refCounts.uInfoCount;
+			case ConsoleMessageSeverity::Warning:
+				return refCounts.uWarningCount;
+			case ConsoleMessageSeverity::Error:
+				return refCounts.uErrorCount;
+			default:
+				return 0;
+			}
+		}
+
+		bool DrawSeverityFilterChip(
+			AshEngine::UIContext& refUi,
+			const ConsoleSeverityCounts& refCounts,
+			ConsoleMessageSeverity eSeverity,
+			int32_t& iSeverityFilterIndex)
+		{
+			const int32_t iTargetFilterIndex = GetSeverityFilterIndex(eSeverity);
+			const bool bSelected = iSeverityFilterIndex == iTargetFilterIndex;
+			const std::string strLabel =
+				std::string(GetSeverityShortLabel(eSeverity)) + " " + std::to_string(GetSeverityCount(refCounts, eSeverity));
+
+			if (bSelected)
+			{
+				const AshEngine::UIColor colorBase = GetSeverityColor(eSeverity);
+				PushEditorButtonVisuals(refUi, {
+					{ colorBase.r * 0.55f, colorBase.g * 0.55f, colorBase.b * 0.55f, 0.95f },
+					{ colorBase.r * 0.65f, colorBase.g * 0.65f, colorBase.b * 0.65f, 1.0f },
+					{ colorBase.r * 0.50f, colorBase.g * 0.50f, colorBase.b * 0.50f, 1.0f }
+				});
+			}
+
+			const bool bClicked = refUi.small_button(strLabel.c_str());
+
+			if (bSelected)
+			{
+				PopEditorButtonVisuals(refUi);
+			}
+
+			if (!bClicked)
+			{
+				return false;
+			}
+
+			iSeverityFilterIndex = bSelected ? 0 : iTargetFilterIndex;
+			return true;
+		}
+
+		void DrawConsoleFilterSummary(
+			AshEngine::UIContext& refUi,
+			const SeverityFilterOption& refSeverityFilter,
+			std::string_view svSourceFilter,
+			std::string_view svTextFilter)
+		{
+			bool bHasSummary = false;
+
+			if (!refSeverityFilter.bMatchAll)
+			{
+				refUi.text("Active:");
+				refUi.same_line();
+				refUi.text_colored(GetSeverityColor(refSeverityFilter.eSeverity), "Severity %s", refSeverityFilter.pLabel);
+				bHasSummary = true;
+			}
+
+			if (!svSourceFilter.empty())
+			{
+				if (!bHasSummary)
+				{
+					refUi.text("Active:");
+					bHasSummary = true;
+				}
+				refUi.same_line();
+				refUi.text("Source %s", std::string(svSourceFilter).c_str());
+			}
+
+			if (!svTextFilter.empty())
+			{
+				if (!bHasSummary)
+				{
+					refUi.text("Active:");
+					bHasSummary = true;
+				}
+				refUi.same_line();
+				refUi.text("Search \"%s\"", std::string(svTextFilter).c_str());
+			}
+		}
+
+		void DrawConsoleMessageContextMenu(
+			AshEngine::UIContext& refUi,
+			const ConsoleMessage& refMessage,
+			ConsoleMessageContextAction& refAction)
+		{
+			if (!refUi.begin_popup_context_item("ConsoleMessageContextMenu"))
+			{
+				return;
+			}
+
+			const bool bHasSource = !refMessage.strSource.empty();
+			if (refUi.menu_item("Filter This Source", nullptr, false, bHasSource))
+			{
+				refAction.bApplySourceFilter = true;
+				refAction.strSourceFilter = refMessage.strSource;
+				refUi.close_current_popup();
+			}
+			if (refUi.menu_item("Only This Severity"))
+			{
+				refAction.bApplySeverityFilter = true;
+				refAction.iSeverityFilterIndex = GetSeverityFilterIndex(refMessage.eSeverity);
+				refUi.close_current_popup();
+			}
+			refUi.separator();
+			if (refUi.menu_item("Clear Source Filter"))
+			{
+				refAction.bClearSourceFilter = true;
+				refUi.close_current_popup();
+			}
+			if (refUi.menu_item("Clear Severity Filter"))
+			{
+				refAction.bClearSeverityFilter = true;
+				refUi.close_current_popup();
+			}
+			if (refUi.menu_item("Clear Text Filter"))
+			{
+				refAction.bClearTextFilter = true;
+				refUi.close_current_popup();
+			}
+			refUi.separator();
+			if (refUi.menu_item("Reset All Filters"))
+			{
+				refAction.bResetAllFilters = true;
+				refUi.close_current_popup();
+			}
+			if (refUi.menu_item("Clear Console"))
+			{
+				refAction.bClearConsole = true;
+				refUi.close_current_popup();
+			}
+
+			refUi.end_popup();
 		}
 	}
 
@@ -197,6 +448,7 @@ namespace AshEditor
 		{
 			const EditorSettings& settings = _deps.pSettingsService->GetSettings();
 			_strFilterText = settings.strConsoleFilterText;
+			_strSourceFilter = settings.strConsoleSourceFilter;
 			_iSeverityFilterIndex = settings.iConsoleSeverityFilter;
 		}
 		HLogInfo("ConsolePanel attached.");
@@ -222,17 +474,19 @@ namespace AshEditor
 
 		EditorSettings& settings = _deps.pSettingsService->GetSettings();
 		settings.strConsoleFilterText = _strFilterText;
+		settings.strConsoleSourceFilter = _strSourceFilter;
 		settings.iConsoleSeverityFilter = _iSeverityFilterIndex;
 	}
 
 	bool ConsolePanel::HasAnyFilters() const
 	{
-		return !_strFilterText.empty() || _iSeverityFilterIndex != 0;
+		return !_strFilterText.empty() || !_strSourceFilter.empty() || _iSeverityFilterIndex != 0;
 	}
 
 	void ConsolePanel::ResetFilters()
 	{
 		_strFilterText.clear();
+		_strSourceFilter.clear();
 		_iSeverityFilterIndex = 0;
 	}
 
@@ -254,11 +508,20 @@ namespace AshEditor
 		const SeverityFilterOption& refSeverityFilter =
 			kSeverityFilters[std::clamp(_iSeverityFilterIndex, 0, static_cast<int32_t>(kSeverityFilters.size() - 1))];
 		const std::vector<const char*> vecSeverityLabels{ "All", "Trace", "Info", "Warning", "Error" };
+		const std::vector<std::string> vecSourceOptions = BuildConsoleSourceOptions(_vecMessages, _strSourceFilter);
+		std::vector<const char*> vecSourceLabels{};
+		vecSourceLabels.reserve(vecSourceOptions.size());
+		for (const std::string& strSourceOption : vecSourceOptions)
+		{
+			vecSourceLabels.push_back(strSourceOption.c_str());
+		}
+		int32_t iSourceFilterIndex = FindConsoleSourceFilterIndex(vecSourceOptions, _strSourceFilter);
+		const std::string strLoweredFilterText = ToLowerCopy(_strFilterText);
 		const ConsoleSeverityCounts countsSeverity = CountConsoleSeverities(_vecMessages);
 		uint32_t uVisibleMessageCount = 0;
 		for (const ConsoleMessage& refMessage : _vecMessages)
 		{
-			if (MatchesConsoleFilter(refMessage, _strFilterText, refSeverityFilter))
+			if (MatchesConsoleFilter(refMessage, strLoweredFilterText, _strSourceFilter, refSeverityFilter))
 			{
 				++uVisibleMessageCount;
 			}
@@ -266,15 +529,25 @@ namespace AshEditor
 
 		refUi.text("Messages: %u / %u", uVisibleMessageCount, static_cast<uint32_t>(_vecMessages.size()));
 		refUi.same_line();
-		refUi.text(
-			"T:%u I:%u W:%u E:%u",
-			countsSeverity.uTraceCount,
-			countsSeverity.uInfoCount,
-			countsSeverity.uWarningCount,
-			countsSeverity.uErrorCount);
+		DrawSeverityFilterChip(refUi, countsSeverity, ConsoleMessageSeverity::Trace, _iSeverityFilterIndex);
+		refUi.same_line();
+		DrawSeverityFilterChip(refUi, countsSeverity, ConsoleMessageSeverity::Info, _iSeverityFilterIndex);
+		refUi.same_line();
+		DrawSeverityFilterChip(refUi, countsSeverity, ConsoleMessageSeverity::Warning, _iSeverityFilterIndex);
+		refUi.same_line();
+		DrawSeverityFilterChip(refUi, countsSeverity, ConsoleMessageSeverity::Error, _iSeverityFilterIndex);
 		refUi.same_line();
 		refUi.set_next_item_width(180.0f);
 		refUi.input_text("Filter", _strFilterText);
+		refUi.same_line();
+		refUi.set_next_item_width(150.0f);
+		if (refUi.combo("Source", iSourceFilterIndex, vecSourceLabels))
+		{
+			_strSourceFilter =
+				iSourceFilterIndex <= 0 || iSourceFilterIndex >= static_cast<int32_t>(vecSourceOptions.size())
+				? std::string{}
+				: vecSourceOptions[static_cast<size_t>(iSourceFilterIndex)];
+		}
 		refUi.same_line();
 		refUi.set_next_item_width(120.0f);
 		refUi.combo("Severity", _iSeverityFilterIndex, vecSeverityLabels);
@@ -291,6 +564,11 @@ namespace AshEditor
 		}
 		refUi.end_disabled();
 		refUi.separator();
+		DrawConsoleFilterSummary(refUi, refSeverityFilter, _strSourceFilter, _strFilterText);
+		if (HasAnyFilters())
+		{
+			refUi.separator();
+		}
 		SyncSettings();
 
 		const bool bShowMessages = refUi.begin_child("ConsoleMessages", {}, AshEngine::UIChildFlagBits::Border);
@@ -305,6 +583,10 @@ namespace AshEditor
 			{
 				refUi.text_unformatted("No messages match the current filter.");
 				refUi.text("Severity: %s", refSeverityFilter.pLabel);
+				if (!_strSourceFilter.empty())
+				{
+					refUi.text("Source: %s", _strSourceFilter.c_str());
+				}
 				if (!_strFilterText.empty())
 				{
 					refUi.text("Filter: %s", _strFilterText.c_str());
@@ -329,24 +611,68 @@ namespace AshEditor
 				refUi.table_setup_column("Source", AshEngine::UITableColumnFlagBits::WidthFixed, 110.0f);
 				refUi.table_setup_column("Message", AshEngine::UITableColumnFlagBits::WidthStretch);
 				refUi.table_headers_row();
+				ConsoleMessageContextAction action{};
 
 				for (const ConsoleMessage& refMessage : _vecMessages)
 				{
-					if (!MatchesConsoleFilter(refMessage, _strFilterText, refSeverityFilter))
+					if (!MatchesConsoleFilter(refMessage, strLoweredFilterText, _strSourceFilter, refSeverityFilter))
 					{
 						continue;
 					}
 
 					refUi.table_next_row();
-					refUi.table_next_column();
-					refUi.text_colored(GetSeverityColor(refMessage.eSeverity), "%s", GetSeverityLabel(refMessage.eSeverity));
-					refUi.table_next_column();
-					refUi.text_unformatted(refMessage.strSource.c_str());
+				refUi.table_next_column();
+				refUi.text_colored(GetSeverityColor(refMessage.eSeverity), "%s", GetSeverityLabel(refMessage.eSeverity));
+				refUi.table_next_column();
+					const char* pSourceLabel = refMessage.strSource.empty() ? "-" : refMessage.strSource.c_str();
+					refUi.push_id(static_cast<int32_t>(&refMessage - _vecMessages.data()));
+					if (refUi.small_button(pSourceLabel))
+					{
+						_strSourceFilter = refMessage.strSource;
+					}
+					refUi.pop_id();
 					refUi.table_next_column();
 					refUi.text_wrapped("%s", refMessage.strText.c_str());
+					DrawConsoleMessageContextMenu(
+						refUi,
+						refMessage,
+						action);
 				}
 
 				refUi.end_table();
+
+				if (action.bResetAllFilters)
+				{
+					ResetFilters();
+				}
+				else
+				{
+					if (action.bApplySourceFilter)
+					{
+						_strSourceFilter = action.strSourceFilter;
+					}
+					if (action.bApplySeverityFilter)
+					{
+						_iSeverityFilterIndex = action.iSeverityFilterIndex;
+					}
+					if (action.bClearSourceFilter)
+					{
+						_strSourceFilter.clear();
+					}
+					if (action.bClearSeverityFilter)
+					{
+						_iSeverityFilterIndex = 0;
+					}
+					if (action.bClearTextFilter)
+					{
+						_strFilterText.clear();
+					}
+				}
+
+				if (action.bClearConsole)
+				{
+					ClearMessages();
+				}
 			}
 		}
 		refUi.end_child();

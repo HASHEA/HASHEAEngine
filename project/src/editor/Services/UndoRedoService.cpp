@@ -9,6 +9,7 @@
 #include "Services/SelectionService.h"
 
 #include <utility>
+#include <vector>
 
 namespace AshEditor
 {
@@ -249,6 +250,16 @@ namespace AshEditor
 		}
 
 		ApplySelection(refContext, upCommand->GetSelectionAfterExecute());
+		if (!_upPendingTransaction->vecCommands.empty() &&
+			_upPendingTransaction->vecCommands.back() &&
+			_upPendingTransaction->vecCommands.back()->TryMerge(*upCommand))
+		{
+			NotifyHistoryChanged();
+			NotifyTransactionStateChanged();
+			NotifyDocumentDirtyStateChanged();
+			return true;
+		}
+
 		_upPendingTransaction->vecCommands.push_back(std::move(upCommand));
 		NotifyHistoryChanged();
 		NotifyTransactionStateChanged();
@@ -310,6 +321,40 @@ namespace AshEditor
 			else
 			{
 				refContext.pSelectionService->Clear();
+			}
+			return;
+		}
+		case EditorCommandSelectionMode::Entities:
+		{
+			if (!refContext.pSceneService || refSelection.vecEntityIds.empty())
+			{
+				refContext.pSelectionService->Clear();
+				return;
+			}
+
+			std::vector<EditorSelection> vecSelections{};
+			vecSelections.reserve(refSelection.vecEntityIds.size());
+			for (const SceneEntityId uEntityId : refSelection.vecEntityIds)
+			{
+				const AshEngine::Entity entitySelected = refContext.pSceneService->FindEntity(uEntityId);
+				if (entitySelected.is_valid())
+				{
+					vecSelections.push_back({
+						EditorSelectionKind::Entity,
+						entitySelected.get_id(),
+						entitySelected.get_name(),
+						{}
+					});
+				}
+			}
+
+			if (vecSelections.empty())
+			{
+				refContext.pSelectionService->Clear();
+			}
+			else
+			{
+				refContext.pSelectionService->SelectRange(vecSelections);
 			}
 			return;
 		}

@@ -33,6 +33,7 @@ namespace AshEditor
 	class EditorSessionStateService;
 	struct EditorSettings;
 	class EditorSettingsService;
+	class EditorGizmoService;
 	class EditorShortcutService;
 	class EditorViewportCameraService;
 	class EditorStatusBarController;
@@ -85,6 +86,9 @@ namespace AshEditor
 		void Notify(const std::string& strMessage, const char* pSource = "Editor") override;
 		bool InvokeAction(const char* pActionId, const char* pSource) override;
 		bool ExecuteCommand(std::unique_ptr<EditorCommand> upCommand) override;
+		bool BeginCommandTransaction(const char* pLabel) override;
+		bool CommitCommandTransaction() override;
+		void CancelCommandTransaction() override;
 		void HandleGlobalShortcuts();
 		void ApplyThemePreset(AshEngine::UIThemePreset preset) override;
 
@@ -104,6 +108,7 @@ namespace AshEditor
 		std::unique_ptr<DragDropTransferService> _upDragDropTransferService{};
 		std::unique_ptr<EditorSessionStateService> _upSessionStateService{};
 		std::unique_ptr<IEditorIconService> _upIconService{};
+		std::unique_ptr<EditorGizmoService> _upGizmoService{};
 		std::unique_ptr<PanelManager> _upPanelManager{};
 		std::unique_ptr<DockLayoutController> _upDockLayoutController{};
 		std::unique_ptr<EditorStatusBarController> _upStatusBarController{};

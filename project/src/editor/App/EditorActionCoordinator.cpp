@@ -122,9 +122,18 @@ namespace AshEditor
 		{
 			return _context.refUndoRedoService.CanRedo();
 		}
+		if (svActionId == EditorActionIds::EditCopy)
+		{
+			return HasSelectedEntity();
+		}
+		if (svActionId == EditorActionIds::EditPaste)
+		{
+			return _pSceneHierarchyActionTarget && _pSceneHierarchyActionTarget->CanPasteSelection();
+		}
 		if (svActionId == EditorActionIds::SceneCreateChild ||
 			svActionId == EditorActionIds::SelectionRename ||
 			svActionId == EditorActionIds::SelectionReparent ||
+			svActionId == EditorActionIds::SelectionDuplicate ||
 			svActionId == EditorActionIds::SelectionDelete)
 		{
 			return HasSelectedEntity();
@@ -187,6 +196,20 @@ namespace AshEditor
 		{
 			HandleRedo();
 		}
+		else if (svActionId == EditorActionIds::EditCopy)
+		{
+			if (_pSceneHierarchyActionTarget)
+			{
+				_pSceneHierarchyActionTarget->ExecuteCopySelection();
+			}
+		}
+		else if (svActionId == EditorActionIds::EditPaste)
+		{
+			if (_pSceneHierarchyActionTarget)
+			{
+				_pSceneHierarchyActionTarget->ExecutePasteSelection();
+			}
+		}
 		else if (svActionId == EditorActionIds::SceneCreateRoot)
 		{
 			if (_pSceneHierarchyActionTarget)
@@ -213,6 +236,13 @@ namespace AshEditor
 			if (_pSceneHierarchyActionTarget)
 			{
 				_pSceneHierarchyActionTarget->RequestReparentSelected(_context.refEditorContext.pUiContext);
+			}
+		}
+		else if (svActionId == EditorActionIds::SelectionDuplicate)
+		{
+			if (_pSceneHierarchyActionTarget)
+			{
+				_pSceneHierarchyActionTarget->ExecuteDuplicateSelection();
 			}
 		}
 		else if (svActionId == EditorActionIds::SelectionDelete)

@@ -12,5 +12,17 @@ namespace AshEditor
 		virtual ~IEditorCommandExecutor() = default;
 
 		virtual bool ExecuteCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
+		virtual bool BeginCommandTransaction(const char* pLabel)
+		{
+			(void)pLabel;
+			return false;
+		}
+		virtual bool CommitCommandTransaction()
+		{
+			return false;
+		}
+		virtual void CancelCommandTransaction()
+		{
+		}
 	};
 }

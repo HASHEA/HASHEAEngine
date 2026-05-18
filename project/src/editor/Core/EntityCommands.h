@@ -6,9 +6,12 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace AshEditor
 {
+	class AssetDatabaseService;
+
 	class RenameEntityCommand final : public EditorCommand
 	{
 	public:
@@ -48,6 +51,27 @@ namespace AshEditor
 		SceneEntityId _uEntityId = 0;
 		AshEngine::TransformComponent _beforeValue{};
 		AshEngine::TransformComponent _afterValue{};
+	};
+
+	class TransformEntitiesCommand final : public EditorCommand
+	{
+	public:
+		TransformEntitiesCommand(
+			std::vector<SceneEntityId> vecEntityIds,
+			std::vector<AshEngine::TransformComponent> vecBeforeValues,
+			std::vector<AshEngine::TransformComponent> vecAfterValues);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		bool TryMerge(const EditorCommand& refSubsequentCommand) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		std::vector<SceneEntityId> _vecEntityIds{};
+		std::vector<AshEngine::TransformComponent> _vecBeforeValues{};
+		std::vector<AshEngine::TransformComponent> _vecAfterValues{};
 	};
 
 	class SetCameraComponentCommand final : public EditorCommand
@@ -134,6 +158,61 @@ namespace AshEditor
 		SceneEntityId _uCreatedEntityId = 0;
 	};
 
+	class CreateMeshEntityFromAssetCommand final : public EditorCommand
+	{
+	public:
+		CreateMeshEntityFromAssetCommand(
+			std::string strEntityName,
+			std::string strMeshAssetPath,
+			SceneEntityId uParentId = 0,
+			uint32_t uSiblingIndex = kSceneAppendSiblingIndex,
+			bool bUseWorldTransform = false,
+			AshEngine::TransformComponent worldTransform = {});
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		std::string _strEntityName{};
+		AshEngine::MeshComponent _meshComponent{};
+		SceneEntityId _uParentId = 0;
+		uint32_t _uSiblingIndex = kSceneAppendSiblingIndex;
+		bool _bUseWorldTransform = false;
+		AshEngine::TransformComponent _worldTransform{};
+		SceneEntityId _uCreatedEntityId = 0;
+	};
+
+	class InstantiateSceneAssetCommand final : public EditorCommand
+	{
+	public:
+		InstantiateSceneAssetCommand(
+			AssetDatabaseService* pAssetDatabaseService,
+			uint64_t uAssetId,
+			SceneEntityId uParentId = 0,
+			bool bUseWorldTransform = false,
+			AshEngine::TransformComponent worldTransform = {},
+			std::string strRootNameOverride = {});
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		AssetDatabaseService* _pAssetDatabaseService = nullptr;
+		uint64_t _uAssetId = 0;
+		SceneEntityId _uParentId = 0;
+		bool _bUseWorldTransform = false;
+		AshEngine::TransformComponent _worldTransform{};
+		std::string _strRootNameOverride{};
+		SceneEntityId _uCreatedEntityId = 0;
+		std::optional<SceneEntitySnapshot> _optSnapshot{};
+	};
+
 	class ReparentEntityCommand final : public EditorCommand
 	{
 	public:
@@ -156,6 +235,45 @@ namespace AshEditor
 		SceneEntityId _uPreviousParentId = 0;
 		uint32_t _uPreviousSiblingIndex = 0;
 		bool _bHasCapturedPreviousParent = false;
+	};
+
+	class DuplicateEntitiesCommand final : public EditorCommand
+	{
+	public:
+		explicit DuplicateEntitiesCommand(std::vector<SceneEntityId> vecSourceEntityIds);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		std::vector<SceneEntityId> _vecSourceEntityIds{};
+		std::vector<SceneEntityId> _vecCreatedRootEntityIds{};
+		std::vector<SceneEntityId> _vecCreatedParentEntityIds{};
+		std::vector<SceneEntitySnapshot> _vecCreatedSnapshots{};
+	};
+
+	class PasteEntitySnapshotsCommand final : public EditorCommand
+	{
+	public:
+		PasteEntitySnapshotsCommand(
+			std::vector<SceneEntitySnapshot> vecSnapshots,
+			std::vector<SceneEntityId> vecPreferredParentEntityIds);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		std::vector<SceneEntitySnapshot> _vecSourceSnapshots{};
+		std::vector<SceneEntityId> _vecPreferredParentEntityIds{};
+		std::vector<SceneEntityId> _vecCreatedRootEntityIds{};
+		std::vector<SceneEntityId> _vecCreatedParentEntityIds{};
+		std::vector<SceneEntitySnapshot> _vecCreatedSnapshots{};
 	};
 
 	class DeleteEntityCommand final : public EditorCommand

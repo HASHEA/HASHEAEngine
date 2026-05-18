@@ -42,6 +42,8 @@ namespace AshEditor
 		// Validates whether reparenting would create cycles or otherwise violates hierarchy rules.
 		bool CanReparentEntity(SceneEntityId uEntityId, SceneEntityId uNewParentId) const;
 		bool IsDescendantOf(SceneEntityId uEntityId, SceneEntityId uPotentialAncestorId) const;
+		// Filters candidate ids to existing entities and drops descendants whose ancestor is also included.
+		std::vector<SceneEntityId> BuildTopLevelEntityIds(const std::vector<uint64_t>& vecCandidateEntityIds) const;
 
 		// Captures/restores a self-contained snapshot of an entity subtree for undo/redo.
 		std::optional<SceneEntitySnapshot> CaptureEntitySnapshot(SceneEntityId uEntityId) const;

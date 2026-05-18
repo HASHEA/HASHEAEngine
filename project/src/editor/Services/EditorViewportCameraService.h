@@ -12,7 +12,17 @@
 
 namespace AshEditor
 {
+	class AssetDatabaseService;
 	class SceneService;
+}
+
+namespace AshEngine
+{
+	struct SceneRay;
+}
+
+namespace AshEditor
+{
 
 	struct EditorViewportCameraInputContext
 	{
@@ -27,10 +37,21 @@ namespace AshEditor
 	class EditorViewportCameraService final : public IEditorViewportBindingResolver
 	{
 	public:
-		void SyncFromScene(const SceneService& refSceneService);
+		static constexpr float kMinMoveSpeed = 0.25f;
+		static constexpr float kMaxMoveSpeed = 256.0f;
+
+	public:
+		void SetDefaultMoveSpeed(float fMoveSpeed);
+		float GetMoveSpeed(const std::string& strViewportId) const;
+		void SetMoveSpeed(const std::string& strViewportId, float fMoveSpeed);
+
+		void SyncFromScene(
+			const SceneService& refSceneService,
+			const AssetDatabaseService& refAssetDatabaseService);
 
 		void UpdateViewportInput(
 			const SceneService& refSceneService,
+			const AssetDatabaseService& refAssetDatabaseService,
 			const AshEngine::InputState& refInput,
 			double dTimeSeconds,
 			const EditorViewportCameraInputContext& refContext);
@@ -39,45 +60,62 @@ namespace AshEditor
 			const std::string& strViewportId,
 			EditorViewportBindingOverride& outOverride) const override;
 
+		bool TryBuildViewportRay(
+			const std::string& strViewportId,
+			const AshEngine::UIRect& rectContent,
+			const AshEngine::UIVec2& vecMousePosition,
+			AshEngine::SceneRay& outRay) const;
+
 		void Reset();
 
 	private:
 		struct ViewportCameraState
 		{
-			AshEngine::Scene previewScene{};
-			AshEngine::EntityId uCameraEntityId = 0;
-			uint64_t uSourceSceneChangeVersion = 0;
+			AshEngine::Scene* pScene = nullptr;
 			std::string strSourceSceneName{};
 			std::string strSourceScenePath{};
 			glm::vec3 vecPosition{ 0.0f, 1.5f, -5.0f };
 			glm::vec3 vecRotationEulerDegrees{ 12.0f, 0.0f, 0.0f };
+			AshEngine::SceneViewCameraOverride cameraOverride{};
+			uint32_t uViewportWidth = 1;
+			uint32_t uViewportHeight = 1;
+			float fFovYDegrees = 60.0f;
+			float fNearPlane = 0.03f;
+			float fFarPlane = 2000.0f;
 			float fMoveSpeed = 8.0f;
 			bool bMouseLookActive = false;
 			bool bHasLastMousePosition = false;
+			bool bInitialized = false;
 			double dLastMouseX = 0.0;
 			double dLastMouseY = 0.0;
 			double dLastUpdateTimeSeconds = -1.0;
 		};
 
 	private:
-		static constexpr AshEngine::EntityId kEditorCameraEntityId = 0xffff'ffff'ffff'fff0ull;
-
 		ViewportCameraState& EnsureState(const std::string& strViewportId);
 		const ViewportCameraState* FindState(const std::string& strViewportId) const;
-		void SyncPreviewScene(
+		static float ClampMoveSpeed(float fMoveSpeed);
+		void SyncCameraState(
 			const SceneService& refSceneService,
+			const AssetDatabaseService& refAssetDatabaseService,
 			const std::string& strViewportId,
 			ViewportCameraState& refState);
-		void SeedCameraFromSceneContent(const AshEngine::Scene& refScene, ViewportCameraState& refState) const;
-		void ApplyCameraToPreview(ViewportCameraState& refState) const;
+		void SeedCameraFromSceneContent(
+			const AshEngine::Scene& refScene,
+			const AssetDatabaseService& refAssetDatabaseService,
+			ViewportCameraState& refState) const;
+		void RefreshCameraOverride(ViewportCameraState& refState) const;
+		void UpdateViewportExtent(const AshEngine::UIRect& rectContent, ViewportCameraState& refState) const;
 		void FocusEntity(
 			const SceneService& refSceneService,
+			const AssetDatabaseService& refAssetDatabaseService,
 			const std::string& strViewportId,
 			ViewportCameraState& refState,
 			SceneEntityId uEntityId);
 		static bool IsSupportedSceneViewport(const std::string& strViewportId);
 
 	private:
+		float _fDefaultMoveSpeed = 8.0f;
 		std::unordered_map<std::string, ViewportCameraState> _mapStates{};
 	};
 }

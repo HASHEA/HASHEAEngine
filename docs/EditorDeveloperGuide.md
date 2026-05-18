@@ -18,12 +18,20 @@
   - RHI 后端实现细节
   - `KEnginePub`
 - 运行时 Editor UI 继续走 `UIContext`。
+- 如果 Editor 任务必须触碰 `project/src/engine/**`，每一段引擎侧改动都必须显式包在：
+  - `// editor begin 修改原因：...`
+  - `// editor end`
+- 引擎改动目标只限于补 Editor 所需的稳定接口或通用能力，不把无关引擎整理混进 Editor 任务。
 - 不要在活跃运行路径重新引入：
   - `ImGui::`
   - `imgui.h`
   - `imgui_internal.h`
 
 ## 2. 当前目录分工
+
+更细的逐文件职责见：
+
+- `docs/EditorFileResponsibilities.md`
 
 - `project/src/editor/App`
   - 启动、关闭、主循环编排、workspace 壳层

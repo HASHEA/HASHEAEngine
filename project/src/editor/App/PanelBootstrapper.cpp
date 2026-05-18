@@ -18,12 +18,16 @@ namespace AshEditor
 		ViewportPanelDeps MakeViewportPanelDeps(const PanelBootstrapContext& refContext)
 		{
 			ViewportPanelDeps deps{};
+			deps.pAssetDatabaseService = refContext.pAssetDatabaseService;
 			deps.pViewportService = refContext.pViewportService;
 			deps.pViewportCameraService = refContext.pViewportCameraService;
+			deps.pSettingsService = refContext.pSettingsService;
 			deps.pSceneService = refContext.pSceneService;
 			deps.pGizmoState = refContext.pGizmoState;
+			deps.pGizmoService = refContext.pGizmoService;
 			deps.pSelectionService = refContext.pSelectionService;
 			deps.pDragDropTransferService = refContext.pDragDropTransferService;
+			deps.pCommandExecutor = refContext.pCommandExecutor;
 			return deps;
 		}
 

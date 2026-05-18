@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace AshEditor
 {
@@ -14,6 +15,8 @@ namespace AshEditor
 	{
 		EditorSelection previousSelection{};
 		EditorSelection currentSelection{};
+		std::vector<EditorSelection> vecPreviousSelections{};
+		std::vector<EditorSelection> vecCurrentSelections{};
 		uint64_t uRevision = 0;
 	};
 
@@ -107,6 +110,12 @@ namespace AshEditor
 		bool bAcceptsInput = false;
 		bool bShowStats = true;
 		bool bShowOverlays = false;
+		bool bShowReferenceGrid = true;
+		bool bShowReferenceOrigin = true;
+		bool bShowSelectionHelpers = true;
+		bool bShowCameraHelpers = true;
+		bool bShowLightHelpers = true;
+		bool bShowSelectionPivot = true;
 		bool bPanelOpen = true;
 	};
 

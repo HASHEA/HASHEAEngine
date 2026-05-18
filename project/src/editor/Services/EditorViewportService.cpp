@@ -13,6 +13,8 @@ namespace AshEditor
 {
 	namespace
 	{
+		constexpr float kViewportResizeCommitDelaySeconds = 0.12f;
+
 		uint32_t ClampViewportExtent(uint32_t uValue)
 		{
 			return std::max<uint32_t>(1u, std::min<uint32_t>(uValue, std::numeric_limits<uint16_t>::max()));
@@ -102,8 +104,14 @@ namespace AshEditor
 			presentation.eKind = EditorViewportKind::Scene;
 			presentation.bPreserveAspect = false;
 			presentation.bAcceptsInput = true;
-			presentation.bShowStats = true;
-			presentation.bShowOverlays = true;
+			presentation.bShowStats = false;
+			presentation.bShowOverlays = false;
+			presentation.bShowReferenceGrid = true;
+			presentation.bShowReferenceOrigin = true;
+			presentation.bShowSelectionHelpers = true;
+			presentation.bShowCameraHelpers = true;
+			presentation.bShowLightHelpers = true;
+			presentation.bShowSelectionPivot = true;
 			return presentation;
 		}
 
@@ -113,16 +121,28 @@ namespace AshEditor
 			presentation.bPanelOpen = false;
 			presentation.bPreserveAspect = true;
 			presentation.bAcceptsInput = false;
-			presentation.bShowStats = true;
+			presentation.bShowStats = false;
 			presentation.bShowOverlays = false;
+			presentation.bShowReferenceGrid = false;
+			presentation.bShowReferenceOrigin = false;
+			presentation.bShowSelectionHelpers = false;
+			presentation.bShowCameraHelpers = false;
+			presentation.bShowLightHelpers = false;
+			presentation.bShowSelectionPivot = false;
 			return presentation;
 		}
 
 		presentation.eKind = EditorViewportKind::Auxiliary;
 		presentation.bPreserveAspect = false;
 		presentation.bAcceptsInput = false;
-		presentation.bShowStats = true;
+		presentation.bShowStats = false;
 		presentation.bShowOverlays = false;
+		presentation.bShowReferenceGrid = false;
+		presentation.bShowReferenceOrigin = false;
+		presentation.bShowSelectionHelpers = false;
+		presentation.bShowCameraHelpers = false;
+		presentation.bShowLightHelpers = false;
+		presentation.bShowSelectionPivot = false;
 		return presentation;
 	}
 
@@ -268,7 +288,11 @@ namespace AshEditor
 		return pRecord ? &pRecord->viewportRenderState : nullptr;
 	}
 
-	bool EditorViewportService::UpdateRequestedSize(const std::string& strViewportId, uint32_t uWidth, uint32_t uHeight)
+	bool EditorViewportService::UpdateRequestedSize(
+		const std::string& strViewportId,
+		uint32_t uWidth,
+		uint32_t uHeight,
+		float fTimeSeconds)
 	{
 		ViewportRecord* pRecord = FindRecord(strViewportId);
 		if (!pRecord)
@@ -279,8 +303,40 @@ namespace AshEditor
 		// Clamp sizes to keep presentation outputs within a safe range. A 0 requested extent means "no valid size this frame".
 		const uint32_t uClampedWidth = uWidth > 0u ? ClampViewportExtent(uWidth) : 0u;
 		const uint32_t uClampedHeight = uHeight > 0u ? ClampViewportExtent(uHeight) : 0u;
+		if (uClampedWidth == 0u || uClampedHeight == 0u)
+		{
+			pRecord->uPendingRequestedWidth = 0u;
+			pRecord->uPendingRequestedHeight = 0u;
+			pRecord->fPendingRequestedSinceSeconds = fTimeSeconds;
+
+			if (pRecord->viewportInstance.state.uRequestedWidth == 0u &&
+				pRecord->viewportInstance.state.uRequestedHeight == 0u)
+			{
+				return false;
+			}
+
+			pRecord->viewportInstance.state.uRequestedWidth = 0u;
+			pRecord->viewportInstance.state.uRequestedHeight = 0u;
+			pRecord->viewportRenderState.bPendingSync = true;
+			return true;
+		}
+
+		if (pRecord->uPendingRequestedWidth != uClampedWidth ||
+			pRecord->uPendingRequestedHeight != uClampedHeight)
+		{
+			pRecord->uPendingRequestedWidth = uClampedWidth;
+			pRecord->uPendingRequestedHeight = uClampedHeight;
+			pRecord->fPendingRequestedSinceSeconds = fTimeSeconds;
+			return false;
+		}
+
 		if (pRecord->viewportInstance.state.uRequestedWidth == uClampedWidth &&
 			pRecord->viewportInstance.state.uRequestedHeight == uClampedHeight)
+		{
+			return false;
+		}
+
+		if (fTimeSeconds - pRecord->fPendingRequestedSinceSeconds < kViewportResizeCommitDelaySeconds)
 		{
 			return false;
 		}
@@ -396,16 +452,6 @@ namespace AshEditor
 						bindingDesc.scene = bindingOverride.pScene;
 					}
 					bindingDesc.camera = bindingOverride.camera;
-
-					static uint32_t s_sceneViewportBindingLogCount = 0u;
-					if (pRecord->viewportInstance.strId == EditorViewportIds::Scene && s_sceneViewportBindingLogCount < 3u)
-					{
-						HLogInfo(
-							"Editor viewport '{}' is bound to editor camera entity {}.",
-							pRecord->viewportInstance.strId,
-							static_cast<unsigned long long>(bindingDesc.camera.entity_id));
-						++s_sceneViewportBindingLogCount;
-					}
 				}
 			}
 			bindingDesc.output = pRecord->sceneOutput;
@@ -432,12 +478,19 @@ namespace AshEditor
 				bRequiresResolvedCameraOverride &&
 				bHasResolvedBindingOverride &&
 				!pRecord->viewportRenderState.bCameraOverrideApplied;
+			const bool bRequiresContinuousBindingRefresh =
+				bRequiresResolvedCameraOverride &&
+				bHasResolvedBindingOverride;
 			if (!pRecord->sceneViewBinding.is_valid())
 			{
 				pRecord->sceneViewBinding = refScenePresentation.create_view_binding(bindingDesc);
 				bBindingSynced = pRecord->sceneViewBinding.is_valid();
 			}
-			else if (pRecord->viewportRenderState.bPendingSync || (bRequiresResolvedCameraOverride && !bHasResolvedBindingOverride) || bNeedsCameraOverrideSync)
+			else if (
+				pRecord->viewportRenderState.bPendingSync ||
+				(bRequiresResolvedCameraOverride && !bHasResolvedBindingOverride) ||
+				bNeedsCameraOverrideSync ||
+				bRequiresContinuousBindingRefresh)
 			{
 				bBindingSynced = refScenePresentation.update_view_binding(pRecord->sceneViewBinding, bindingDesc);
 			}
@@ -492,6 +545,9 @@ namespace AshEditor
 			entry.second->viewportInstance.surface = {};
 			entry.second->viewportInstance.state.uWidth = 0u;
 			entry.second->viewportInstance.state.uHeight = 0u;
+			entry.second->uPendingRequestedWidth = 0u;
+			entry.second->uPendingRequestedHeight = 0u;
+			entry.second->fPendingRequestedSinceSeconds = 0.0f;
 			entry.second->viewportRenderState.uOutputWidth = 0u;
 			entry.second->viewportRenderState.uOutputHeight = 0u;
 			entry.second->viewportRenderState.bPendingSync = true;
@@ -515,6 +571,12 @@ namespace AshEditor
 				entry.second->viewportPresentation.bAcceptsInput != defaultPresentation.bAcceptsInput ||
 				entry.second->viewportPresentation.bShowStats != defaultPresentation.bShowStats ||
 				entry.second->viewportPresentation.bShowOverlays != defaultPresentation.bShowOverlays ||
+				entry.second->viewportPresentation.bShowReferenceGrid != defaultPresentation.bShowReferenceGrid ||
+				entry.second->viewportPresentation.bShowReferenceOrigin != defaultPresentation.bShowReferenceOrigin ||
+				entry.second->viewportPresentation.bShowSelectionHelpers != defaultPresentation.bShowSelectionHelpers ||
+				entry.second->viewportPresentation.bShowCameraHelpers != defaultPresentation.bShowCameraHelpers ||
+				entry.second->viewportPresentation.bShowLightHelpers != defaultPresentation.bShowLightHelpers ||
+				entry.second->viewportPresentation.bShowSelectionPivot != defaultPresentation.bShowSelectionPivot ||
 				entry.second->viewportPresentation.bPanelOpen != defaultPresentation.bPanelOpen)
 			{
 				entry.second->viewportPresentation = defaultPresentation;
@@ -559,7 +621,13 @@ namespace AshEditor
 				pRecord->viewportPresentation.bPreserveAspect,
 				pRecord->viewportPresentation.bAcceptsInput,
 				pRecord->viewportPresentation.bShowStats,
-				pRecord->viewportPresentation.bShowOverlays
+				pRecord->viewportPresentation.bShowOverlays,
+				pRecord->viewportPresentation.bShowReferenceGrid,
+				pRecord->viewportPresentation.bShowReferenceOrigin,
+				pRecord->viewportPresentation.bShowSelectionHelpers,
+				pRecord->viewportPresentation.bShowCameraHelpers,
+				pRecord->viewportPresentation.bShowLightHelpers,
+				pRecord->viewportPresentation.bShowSelectionPivot
 			});
 		}
 		return vecStates;
@@ -573,7 +641,13 @@ namespace AshEditor
 			refRecord.viewportPresentation.bPreserveAspect != refState.bPreserveAspect ||
 			refRecord.viewportPresentation.bAcceptsInput != refState.bAcceptsInput ||
 			refRecord.viewportPresentation.bShowStats != refState.bShowStats ||
-			refRecord.viewportPresentation.bShowOverlays != refState.bShowOverlays;
+			refRecord.viewportPresentation.bShowOverlays != refState.bShowOverlays ||
+			refRecord.viewportPresentation.bShowReferenceGrid != refState.bShowReferenceGrid ||
+			refRecord.viewportPresentation.bShowReferenceOrigin != refState.bShowReferenceOrigin ||
+			refRecord.viewportPresentation.bShowSelectionHelpers != refState.bShowSelectionHelpers ||
+			refRecord.viewportPresentation.bShowCameraHelpers != refState.bShowCameraHelpers ||
+			refRecord.viewportPresentation.bShowLightHelpers != refState.bShowLightHelpers ||
+			refRecord.viewportPresentation.bShowSelectionPivot != refState.bShowSelectionPivot;
 
 		refRecord.viewportPresentation.bPanelOpen = refState.bPanelOpen;
 		refRecord.viewportPresentation.bShowToolbar = refState.bShowToolbar;
@@ -581,6 +655,12 @@ namespace AshEditor
 		refRecord.viewportPresentation.bAcceptsInput = refState.bAcceptsInput;
 		refRecord.viewportPresentation.bShowStats = refState.bShowStats;
 		refRecord.viewportPresentation.bShowOverlays = refState.bShowOverlays;
+		refRecord.viewportPresentation.bShowReferenceGrid = refState.bShowReferenceGrid;
+		refRecord.viewportPresentation.bShowReferenceOrigin = refState.bShowReferenceOrigin;
+		refRecord.viewportPresentation.bShowSelectionHelpers = refState.bShowSelectionHelpers;
+		refRecord.viewportPresentation.bShowCameraHelpers = refState.bShowCameraHelpers;
+		refRecord.viewportPresentation.bShowLightHelpers = refState.bShowLightHelpers;
+		refRecord.viewportPresentation.bShowSelectionPivot = refState.bShowSelectionPivot;
 		refRecord.viewportRenderState.bPendingSync = true;
 		return bChanged;
 	}
@@ -628,6 +708,12 @@ namespace AshEditor
 		event.bAcceptsInput = presentation.bAcceptsInput;
 		event.bShowStats = presentation.bShowStats;
 		event.bShowOverlays = presentation.bShowOverlays;
+		event.bShowReferenceGrid = presentation.bShowReferenceGrid;
+		event.bShowReferenceOrigin = presentation.bShowReferenceOrigin;
+		event.bShowSelectionHelpers = presentation.bShowSelectionHelpers;
+		event.bShowCameraHelpers = presentation.bShowCameraHelpers;
+		event.bShowLightHelpers = presentation.bShowLightHelpers;
+		event.bShowSelectionPivot = presentation.bShowSelectionPivot;
 		event.bPanelOpen = presentation.bPanelOpen;
 		_pEventBus->Publish(event);
 	}

@@ -22,6 +22,8 @@
   - 当前 Editor 架构、目录边界、运行时约束
 - `docs/EditorCodeStyleGuide.md`
   - 改代码时直接执行的命名、性能、头文件、日志等规则
+- `docs/EditorFileResponsibilities.md`
+  - Editor 每个源码文件的职责和修改边界
 - `docs/EditorContributorGuide.md`
   - 可改范围、验证流程、交付要求
 

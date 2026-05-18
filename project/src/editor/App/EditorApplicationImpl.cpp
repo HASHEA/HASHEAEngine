@@ -22,6 +22,7 @@
 #include "Services/CommandService.h"
 #include "Services/DragDropTransferService.h"
 #include "Services/EditorIconService.h"
+#include "Services/EditorGizmoService.h"
 #include "Services/EditorSessionStateService.h"
 #include "Services/EditorSettingsService.h"
 #include "Services/EditorShortcutService.h"
@@ -54,6 +55,7 @@ namespace AshEditor
 		, _upDragDropTransferService(std::make_unique<DragDropTransferService>())
 		, _upSessionStateService(std::make_unique<EditorSessionStateService>())
 		, _upIconService(std::make_unique<EditorIconService>())
+		, _upGizmoService(std::make_unique<EditorGizmoService>())
 		, _upPanelManager(std::make_unique<PanelManager>())
 		, _upDockLayoutController(std::make_unique<DockLayoutController>())
 		, _upStatusBarController(std::make_unique<EditorStatusBarController>())
@@ -99,6 +101,7 @@ namespace AshEditor
 		_upSettingsService->Initialize(pathWorkspaceRoot);
 
 		const EditorSettings& refSettings = _upSettingsService->GetSettings();
+		_upViewportCameraService->SetDefaultMoveSpeed(refSettings.fSceneViewportCameraSpeed);
 		const std::filesystem::path pathStartupScene = ResolveStartupScenePath(refSettings);
 		const bool bStartupSceneLoaded = CreateServices(pathWorkspaceRoot, pathStartupScene);
 
@@ -193,7 +196,7 @@ namespace AshEditor
 
 		AshEngine::AssetDatabase& refAssetDatabase = _upAssetDatabaseService->GetDatabase();
 		AshEngine::Application::get()->get_render_asset_manager().initialize(&refAssetDatabase, pRenderer);
-		_upViewportCameraService->SyncFromScene(*_upSceneService);
+		_upViewportCameraService->SyncFromScene(*_upSceneService, *_upAssetDatabaseService);
 		if (!_upViewportService->SyncScenePresentations(
 			*pScenePresentation,
 			_upSceneService->GetActiveScene(),
@@ -297,6 +300,7 @@ namespace AshEditor
 			_upViewportService.get(),
 			_upViewportCameraService.get(),
 			_upDragDropTransferService.get(),
+			_upGizmoService.get(),
 			&_gizmoState
 		};
 		const PanelBootstrapResult bootstrapResult =
@@ -367,6 +371,21 @@ namespace AshEditor
 	bool EditorApplicationImpl::ExecuteCommand(std::unique_ptr<EditorCommand> upCommand)
 	{
 		return _upUndoRedoService->Execute(std::move(upCommand), _editorContext);
+	}
+
+	bool EditorApplicationImpl::BeginCommandTransaction(const char* pLabel)
+	{
+		return _upUndoRedoService->BeginTransaction(pLabel ? pLabel : "Editor Transaction");
+	}
+
+	bool EditorApplicationImpl::CommitCommandTransaction()
+	{
+		return _upUndoRedoService->CommitTransaction();
+	}
+
+	void EditorApplicationImpl::CancelCommandTransaction()
+	{
+		_upUndoRedoService->CancelTransaction(_editorContext);
 	}
 
 	void EditorApplicationImpl::HandleGlobalShortcuts()

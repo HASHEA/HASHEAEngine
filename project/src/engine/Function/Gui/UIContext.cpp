@@ -384,8 +384,23 @@ namespace AshEngine
 			return result;
 		}
 
+		// editor begin 修改原因：编辑器分栏/拖拽过程中避免在 ImGui 内部正在移动窗口时修改 DockNode 标志。
+		static bool is_dock_tree_mutation_unsafe()
+		{
+			ImGuiContext* context = ImGui::GetCurrentContext();
+			return !context || context->MovingWindow;
+		}
+		// editor end
+
 		static void ensure_current_window_dock_tab_bar_visible()
 		{
+			// editor begin 修改原因：编辑器分栏/拖拽过程中避免在 ImGui 内部正在移动窗口时修改 DockNode 标志。
+			if (is_dock_tree_mutation_unsafe())
+			{
+				return;
+			}
+			// editor end
+
 			ImGuiWindow* window = ImGui::GetCurrentWindow();
 			if (!window || !window->DockNode)
 			{
@@ -412,10 +427,12 @@ namespace AshEngine
 
 		static void ensure_runtime_dock_node_tab_bar_visible(ImGuiDockNode* node, bool recursive)
 		{
-			if (!node)
+			// editor begin 修改原因：编辑器分栏/拖拽过程中避免在 ImGui 内部正在移动窗口时修改 DockNode 标志。
+			if (!node || is_dock_tree_mutation_unsafe())
 			{
 				return;
 			}
+			// editor end
 
 			const ImGuiDockNodeFlags clear_flags =
 				ImGuiDockNodeFlags_AutoHideTabBar |
@@ -1712,6 +1729,41 @@ namespace AshEngine
 	{
 		return is_frame_active() ? static_cast<float>(ImGui::GetTime()) : 0.0f;
 	}
+
+	// editor begin 修改原因：编辑器统一快捷键服务需要从 UI 层读取当前组合键修饰状态。
+	UIModifierFlags UIContext::get_key_modifiers() const
+	{
+		if (!is_frame_active())
+		{
+			return UIModifierFlagBits::None;
+		}
+
+		UIModifierFlags modifiers = UIModifierFlagBits::None;
+		const ImGuiIO& io = ImGui::GetIO();
+		if (io.KeyCtrl)
+		{
+			modifiers |= UIModifierFlagBits::Ctrl;
+		}
+		if (io.KeyShift)
+		{
+			modifiers |= UIModifierFlagBits::Shift;
+		}
+		if (io.KeyAlt)
+		{
+			modifiers |= UIModifierFlagBits::Alt;
+		}
+		if (io.KeySuper)
+		{
+			modifiers |= UIModifierFlagBits::Super;
+		}
+		return modifiers;
+	}
+
+	bool UIContext::is_key_modifier_down(UIModifierFlags modifiers) const
+	{
+		return modifiers != UIModifierFlagBits::None && (get_key_modifiers() & modifiers) == modifiers;
+	}
+	// editor end
 
 	bool UIContext::is_key_chord_pressed(uint32_t chord) const
 	{

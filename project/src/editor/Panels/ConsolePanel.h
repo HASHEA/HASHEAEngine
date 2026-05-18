@@ -53,6 +53,7 @@ namespace AshEditor
 		ConsolePanelDeps _deps{};
 		EditorEventBindings _eventBindings{};
 		std::string _strFilterText{};
+		std::string _strSourceFilter{};
 		int32_t _iSeverityFilterIndex = 0;
 		std::vector<ConsoleMessage> _vecMessages{};
 	};

@@ -115,8 +115,11 @@
   - 追加消息
   - 文本过滤
   - 按严重级别过滤
+  - 顶部严重级别计数按钮快速过滤
+  - 按 source 过滤与来源快捷聚焦
   - 清空消息
   - 严重级别计数摘要
+  - 日志项右键菜单快速调整过滤/清空
   - 空日志提示
   - 无匹配过滤提示
   - `Reset Filters`
@@ -191,6 +194,13 @@
 - 收敛 `EditorSettingsService` 配置边界
 - 评估 AssetBrowser 是否需要 breadcrumb / 双击进入目录等更强浏览交互
 - 评估 Console 是否需要自动滚动、复制日志、按 source 过滤
+  - 已补首版 `source` 过滤：
+    - 顶部 `Source` 过滤下拉
+    - 点击消息来源可快速聚焦该 source
+    - 过滤状态持久化到 `EditorSettings`
+  - 已补首版 Console 快捷过滤交互：
+    - 顶部严重级别计数支持直接切换过滤
+    - 日志项右键菜单可快速设置 source / severity 过滤并清空过滤
 
 ## 14. 待主线程验收点
 

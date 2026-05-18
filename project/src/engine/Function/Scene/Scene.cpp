@@ -1258,10 +1258,12 @@ namespace AshEngine
 			}
 
 			const MeshComponent* mesh = m_impl->storage.registry.try_get<MeshComponent>(handle);
-			if (!mesh)
+			// editor begin 修改原因：编辑器预览/临时实体可能有空 MeshComponent，提取渲染 mesh 时直接跳过避免后续资源查询失败。
+			if (!mesh || mesh->asset_path.empty())
 			{
 				continue;
 			}
+			// editor end
 
 			SceneMeshExtractionDesc desc{};
 			desc.entity_id = id;

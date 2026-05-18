@@ -25,6 +25,7 @@ namespace AshEditor
 		int32_t iAssetBrowserTypeFilter = 0;
 		int32_t iAssetBrowserViewMode = 0;
 		std::string strConsoleFilterText{};
+		std::string strConsoleSourceFilter{};
 		int32_t iConsoleSeverityFilter = 0;
 		std::string strUiThemePreset = "slate_studio";
 		std::string strUiFontPath = "product/assets/editor/fonts/IBMPlexSans-Regular.ttf";
@@ -32,6 +33,7 @@ namespace AshEditor
 		std::string strUiStrongFontPath = "product/assets/editor/fonts/IBMPlexSans-SemiBold.ttf";
 		std::string strUiStrongFontMergePath = "product/assets/editor/fonts/NotoSansSC-Medium.otf";
 		float fUiFontSizePixels = 17.0f;
+		float fSceneViewportCameraSpeed = 8.0f;
 		bool bUiUseFullChineseGlyphRange = false;
 	};
 

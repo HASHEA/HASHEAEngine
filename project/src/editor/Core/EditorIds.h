@@ -15,10 +15,13 @@ namespace AshEditor
 		inline constexpr char WindowCommandPalette[] = "window.command_palette";
 		inline constexpr char EditUndo[] = "edit.undo";
 		inline constexpr char EditRedo[] = "edit.redo";
+		inline constexpr char EditCopy[] = "edit.copy";
+		inline constexpr char EditPaste[] = "edit.paste";
 		inline constexpr char SceneCreateRoot[] = "scene.create_root";
 		inline constexpr char SceneCreateChild[] = "scene.create_child";
 		inline constexpr char SelectionRename[] = "selection.rename";
 		inline constexpr char SelectionReparent[] = "selection.reparent";
+		inline constexpr char SelectionDuplicate[] = "selection.duplicate";
 		inline constexpr char SelectionDelete[] = "selection.delete";
 	}
 

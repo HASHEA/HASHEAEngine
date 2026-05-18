@@ -178,6 +178,32 @@ namespace AshEditor
 		});
 
 		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::EditCopy,
+			"Copy",
+			"Copy the currently selected scene entity selection.",
+			{},
+			{ MakeShortcutBinding("Ctrl+C", AshEngine::make_key_chord(AshEngine::UIKey::C, AshEngine::UIModifierFlagBits::Ctrl)) },
+			EditorActionScope::Global,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::EditPaste,
+			"Paste",
+			"Paste copied scene entities into the active scene.",
+			{},
+			{ MakeShortcutBinding("Ctrl+V", AshEngine::make_key_chord(AshEngine::UIKey::V, AshEngine::UIModifierFlagBits::Ctrl)) },
+			EditorActionScope::Global,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
 			EditorActionIds::SceneCreateRoot,
 			"Add Root",
 			"Create a new root entity in the active scene.",
@@ -234,6 +260,19 @@ namespace AshEditor
 					"Ctrl+Shift+P",
 					AshEngine::make_key_chord(AshEngine::UIKey::P, AshEngine::UIModifierFlagBits::Ctrl | AshEngine::UIModifierFlagBits::Shift))
 			},
+			EditorActionScope::Global,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::SelectionDuplicate,
+			"Duplicate",
+			"Duplicate the currently selected scene entity selection.",
+			{},
+			{ MakeShortcutBinding("Ctrl+D", AshEngine::make_key_chord(AshEngine::UIKey::D, AshEngine::UIModifierFlagBits::Ctrl)) },
 			EditorActionScope::Global,
 			{},
 			{},

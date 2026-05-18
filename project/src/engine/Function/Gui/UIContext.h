@@ -202,6 +202,10 @@ namespace AshEngine
 		float get_font_size() const;
 		float get_time_seconds() const;
 
+		// editor begin 修改原因：编辑器统一快捷键服务需要从 UI 层读取当前组合键修饰状态。
+		UIModifierFlags get_key_modifiers() const;
+		bool is_key_modifier_down(UIModifierFlags modifiers) const;
+		// editor end
 		bool is_key_chord_pressed(uint32_t chord) const;
 
 		void set_next_item_open(bool is_open, UIConditionFlags cond = UIConditionFlagBits::None);

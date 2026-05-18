@@ -203,11 +203,21 @@
 
 ## 13. 下一步任务
 
-- 补 scene camera 输入控制
+- 完成 `Scale Gizmo`，复用现有 command transaction / selection / viewport ray 链路
+- 将选中反馈从“强包围盒”继续往更轻量的编辑器表达收敛
 - 将 scene / game 的运行与编辑语义进一步拆开
-- 为 gizmo / picking 留出更明确的接口位置
+- 继续收敛 viewport 顶部调试信息，减少工作区噪音
+  - 已完成首轮工具栏 / overlay 减法整理：
+    - 默认不再打开 viewport stats / overlay
+    - scene toolbar 优先保留 transform tool 高频操作
+    - `Options` popup 收纳 primary / stats / input / aspect / camera speed
+    - 操作提示收敛为仅在 scene 视口聚焦或悬浮时显示的单行提示条
+- 补齐 `Rotate Gizmo`
+  - 方向：
+    - editor 侧复用现有拖拽会话与事务模型
+    - 以轴向旋转环补足 `Move / Rotate / Scale` 三件套
 - 视需要把 viewport 公共结构从 `EditorContext.h` 拆到独立头文件
 
 ## 14. 最近更新时间
 
-- 2026-04-18
+- 2026-05-15

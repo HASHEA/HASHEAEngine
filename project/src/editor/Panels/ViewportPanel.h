@@ -1,10 +1,10 @@
 #pragma once
 #include "Core/EditorEventBindings.h"
 #include "Core/EditorFrameContext.h"
+#include "Core/EditorPanel.h"
 #include "Core/EditorIds.h"
 #include "Core/PanelDeps/ViewportPanelDeps.h"
-#include "Core/EditorPanel.h"
-#include "Function/Gui/UICommon.h"
+#include "Panels/ViewportPanelInteraction.h"
 
 #include <string>
 
@@ -33,13 +33,6 @@ namespace AshEditor
 		void ClearDeps();
 		void UnsubscribeEvents();
 		void ResetRuntimeViewportState();
-		void DrawToolbar(const EditorFrameContext& refFrameContext, EditorViewportInstance& refViewport);
-		void DrawOverlay(const EditorFrameContext& refFrameContext, const EditorViewportInstance& refViewport) const;
-		void HandleViewportInput(
-			const EditorFrameContext& refFrameContext,
-			const EditorViewportInstance& refViewport,
-			const AshEngine::UIRect& rectContent,
-			bool bContentHovered);
 		EditorViewportInstance* ResolveViewport();
 		const EditorViewportInstance* ResolveViewport() const;
 
@@ -47,5 +40,6 @@ namespace AshEditor
 		ViewportPanelDeps _deps{};
 		EditorEventBindings _eventBindings{};
 		std::string _strViewportId{};
+		ViewportPanelSceneBoxSelectionState _sceneBoxSelection{};
 	};
 }

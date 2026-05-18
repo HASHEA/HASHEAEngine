@@ -1,14 +1,14 @@
 #pragma once
 
+#include "Core/EditorEventBus.h"
 #include "Core/EditorEventTypes.h"
+
 #include <functional>
 #include <utility>
 #include <vector>
 
 namespace AshEditor
 {
-	class EditorEventBus;
-
 	class EditorEventBindings final
 	{
 	public:

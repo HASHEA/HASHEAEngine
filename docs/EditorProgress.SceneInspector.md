@@ -43,6 +43,10 @@
   - `Mesh`
   - `Hierarchy` 只读信息
   - Asset 只读信息
+- 当前实现已经补上一层组件编辑器骨架：
+  - `InspectorPanel` 负责面板装配、选择态、Identity/Transform 与公共宿主能力
+  - `Camera / Light / Mesh` 已拆到独立组件编辑器文件
+  - 新增 `InspectorComponentEditor` 基类、`IInspectorComponentHost` 宿主接口、`InspectorPanelState` 共享状态结构
 - 当前文档已按实际代码更新，不再沿用旧的“全部属性都已命令化”表述。
 
 ## 4. 当前已收口的编辑路径
@@ -82,6 +86,13 @@
 ## 5. 当前实现约束
 
 - Inspector 的 `Identity / Transform` 使用草稿缓冲，避免每次输入或拖拽都生成一条 undo 记录。
+- 组件级 UI 不再继续堆到 `InspectorPanel.cpp`：
+  - `project/src/editor/Panels/Inspector/CameraComponentEditor.*`
+  - `project/src/editor/Panels/Inspector/LightComponentEditor.*`
+  - `project/src/editor/Panels/Inspector/MeshComponentEditor.*`
+- 共享组件编辑辅助逻辑已经收口到：
+  - `project/src/editor/Panels/Inspector/InspectorComponentEditorSupport.*`
+  - `project/src/editor/Panels/Inspector/InspectorPanelState.h`
 - `SceneHierarchy` 相关的删除确认、reparent 交互、层级树操作，不在本文件重复维护，统一参考 `docs/EditorProgress.SceneHierarchy.md`。
 - `scene changed` 路径当前要求统一收口到 `EditorApplication` 的 scene-change helper：
   - `startup scene load`
@@ -97,6 +108,7 @@
 
 ## 7. 后续建议
 
+- 继续把 `Identity / Transform` 也迁到独立 section / editor 文件，彻底压缩 `InspectorPanel.cpp`。
 - 优先把 `Camera / Light / Mesh` 编辑统一纳入命令边界。
 - 把 `Create / Reparent / Delete` 从 `SceneHierarchyPanel.cpp` 继续收口到共享命令模块。
 - 给 undo / redo 增加明确的失败语义，避免 UI 和日志误报成功。
@@ -113,4 +125,4 @@
 
 ## 9. 最近更新时间
 
-- 2026-04-20
+- 2026-05-18

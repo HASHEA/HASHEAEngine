@@ -1,45 +1,30 @@
 #pragma once
-#include "Core/EditorEventBindings.h"
-#include "Core/EditorFrameContext.h"
+
 #include "Core/EditorPanel.h"
 #include "Core/IAssetBrowserActionTarget.h"
 #include "Core/PanelDeps/AssetBrowserPanelDeps.h"
-#include "Widgets/EditorTreeWidget.h"
-#include <cstdint>
+#include "Panels/AssetBrowser/IAssetBrowserViewHost.h"
+
 #include <filesystem>
-#include <string>
-#include <vector>
+#include <memory>
 
 namespace AshEngine
 {
 	struct AssetInfo;
-	class UIContext;
 }
 
 namespace AshEditor
 {
 	class EditorEventBus;
 
-	enum class AssetBrowserViewMode : uint8_t
-	{
-		List = 0,
-		Icons
-	};
-
-	struct AssetBrowserVisibleItem
-	{
-		const AshEngine::AssetInfo* pAsset = nullptr;
-		std::string strDisplayLabel{};
-		std::string strLoweredLabel{};
-		std::string strPathKey{};
-	};
-
 	class AssetBrowserPanel final
 		: public EditorPanel
 		, public IAssetBrowserActionTarget
+		, public IAssetBrowserViewHost
 	{
 	public:
 		explicit AssetBrowserPanel(AssetBrowserPanelDeps deps = {});
+		~AssetBrowserPanel();
 
 	public:
 		// EditorPanel lifecycle. Called by PanelManager.
@@ -57,63 +42,29 @@ namespace AshEditor
 		void ExecuteNavigateUp() override;
 
 	private:
+		struct Impl;
+
 		void ClearDeps();
 		void UnsubscribeEvents();
-		void SelectAsset(const AshEngine::AssetInfo& refItem);
-		void ClearAssetSelection();
-		void ActivateAsset(const AshEngine::AssetInfo& refItem);
-		void OpenAssetItem(const AshEngine::AssetInfo& refItem);
-		void OpenAssetPreview(const AshEngine::AssetInfo& refItem);
-		void NavigateToDirectory(const std::filesystem::path& refDirectoryPath);
-		void NavigateToDirectoryInternal(const std::filesystem::path& refDirectoryPath, bool bRecordHistory);
-		bool CanNavigateDirectoryBack() const;
-		bool CanNavigateDirectoryForward() const;
-		void NavigateDirectoryBack();
-		void NavigateDirectoryForward();
-		void ResetDirectoryHistory();
-		void BrowseToAssetLocation(const AshEngine::AssetInfo& refItem);
-		void HandleAssetItemInteraction(
-			const EditorFrameContext& refFrameContext,
-			const AshEngine::AssetInfo& refAsset,
-			bool bPrimaryActivated,
-			bool bDoubleClicked);
-		void DrawViewModeToggle(AshEngine::UIContext& refUi, const char* pLabel, AssetBrowserViewMode eMode);
-		void DrawBreadcrumbs(AshEngine::UIContext& refUi);
-		void DrawAssetListView(
-			const EditorFrameContext& refFrameContext,
-			const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
-			const AshEngine::AssetInfo* pSelectedAsset);
-		void DrawAssetIconView(
-			const EditorFrameContext& refFrameContext,
-			const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
-			const AshEngine::AssetInfo* pSelectedAsset);
-		void DrawAssetItemTooltip(
-			const EditorFrameContext& refFrameContext,
-			const AshEngine::AssetInfo& refAsset,
-			std::string_view svDisplayLabel);
-		void DrawAssetItemContextMenu(const EditorFrameContext& refFrameContext, const AshEngine::AssetInfo& refAsset);
-		void DrawContentContextMenu(const EditorFrameContext& refFrameContext, bool bActiveDirectoryExists, bool bFiltersActive);
 		void DispatchContentShortcuts(const EditorFrameContext& refFrameContext, bool bContentFocused);
 		void PublishContentShortcutScope(bool bContentFocused);
 
-		bool HasActiveFilters() const;
-		void ResetFilters();
-		void SyncSettings() const;
+	private:
+		void SelectAsset(const AshEngine::AssetInfo& refItem) override;
+		void ClearAssetSelection() override;
+		void OpenAssetItem(const AshEngine::AssetInfo& refItem) override;
+		void OpenAssetPreview(const AshEngine::AssetInfo& refItem) override;
+		void NavigateToDirectory(const std::filesystem::path& refDirectoryPath) override;
+		void NavigateToDirectoryInternal(const std::filesystem::path& refDirectoryPath, bool bRecordHistory);
+		bool CanNavigateDirectoryBack() const override;
+		bool CanNavigateDirectoryForward() const override;
+		void NavigateDirectoryBack() override;
+		void NavigateDirectoryForward() override;
+		void ResetDirectoryHistory();
+		void ResetFilters() override;
+		void BrowseToAssetLocation(const AshEngine::AssetInfo& refItem) override;
 
 	private:
-		EditorEventBus* _pEventBus = nullptr;
-		AssetBrowserPanelDeps _deps{};
-		EditorEventBindings _eventBindings{};
-		std::string _strSearchText{};
-		std::string _strActiveDirectoryPath{};
-		std::vector<std::string> _vecDirectoryHistory{};
-		int32_t _iDirectoryHistoryIndex = -1;
-		uint64_t _uSelectedAssetId = 0;
-		bool _bActiveDirectoryExistsThisFrame = false;
-		bool _bSelectedAssetVisibleThisFrame = false;
-		bool _bContentShortcutScopeActive = false;
-		int32_t _iTypeFilterIndex = 0;
-		AssetBrowserViewMode _eViewMode = AssetBrowserViewMode::List;
-		EditorTreeWidgetState _treeStateDirectories{};
+		std::unique_ptr<Impl> _upImpl{};
 	};
 }

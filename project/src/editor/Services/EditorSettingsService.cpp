@@ -157,6 +157,7 @@ namespace AshEditor
 		_settings.iAssetBrowserTypeFilter = root.value("assetBrowserTypeFilter", _settings.iAssetBrowserTypeFilter);
 		_settings.iAssetBrowserViewMode = root.value("assetBrowserViewMode", _settings.iAssetBrowserViewMode);
 		_settings.strConsoleFilterText = root.value("consoleFilterText", _settings.strConsoleFilterText);
+		_settings.strConsoleSourceFilter = root.value("consoleSourceFilter", _settings.strConsoleSourceFilter);
 		_settings.iConsoleSeverityFilter = root.value("consoleSeverityFilter", _settings.iConsoleSeverityFilter);
 		_settings.strUiThemePreset = root.value("uiThemePreset", _settings.strUiThemePreset);
 		_settings.strUiFontPath = root.value("uiFontPath", _settings.strUiFontPath);
@@ -164,6 +165,7 @@ namespace AshEditor
 		_settings.strUiStrongFontPath = root.value("uiStrongFontPath", _settings.strUiStrongFontPath);
 		_settings.strUiStrongFontMergePath = root.value("uiStrongFontMergePath", _settings.strUiStrongFontMergePath);
 		_settings.fUiFontSizePixels = root.value("uiFontSizePixels", _settings.fUiFontSizePixels);
+		_settings.fSceneViewportCameraSpeed = root.value("sceneViewportCameraSpeed", _settings.fSceneViewportCameraSpeed);
 		_settings.bUiUseFullChineseGlyphRange = root.value("uiUseFullChineseGlyphRange", _settings.bUiUseFullChineseGlyphRange);
 		return true;
 	}
@@ -188,6 +190,7 @@ namespace AshEditor
 		root["assetBrowserTypeFilter"] = _settings.iAssetBrowserTypeFilter;
 		root["assetBrowserViewMode"] = _settings.iAssetBrowserViewMode;
 		root["consoleFilterText"] = _settings.strConsoleFilterText;
+		root["consoleSourceFilter"] = _settings.strConsoleSourceFilter;
 		root["consoleSeverityFilter"] = _settings.iConsoleSeverityFilter;
 		root["uiThemePreset"] = _settings.strUiThemePreset;
 		root["uiFontPath"] = _settings.strUiFontPath;
@@ -195,6 +198,7 @@ namespace AshEditor
 		root["uiStrongFontPath"] = _settings.strUiStrongFontPath;
 		root["uiStrongFontMergePath"] = _settings.strUiStrongFontMergePath;
 		root["uiFontSizePixels"] = _settings.fUiFontSizePixels;
+		root["sceneViewportCameraSpeed"] = _settings.fSceneViewportCameraSpeed;
 		root["uiUseFullChineseGlyphRange"] = _settings.bUiUseFullChineseGlyphRange;
 
 		std::ofstream output(_pathSettingsFilePath, std::ios::out | std::ios::trunc);

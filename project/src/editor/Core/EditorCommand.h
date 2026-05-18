@@ -15,13 +15,15 @@ namespace AshEditor
 	{
 		Keep = 0,
 		Clear,
-		Entity
+		Entity,
+		Entities
 	};
 
 	struct EditorCommandSelection
 	{
 		EditorCommandSelectionMode eMode = EditorCommandSelectionMode::Keep;
 		SceneEntityId uEntityId = 0;
+		std::vector<SceneEntityId> vecEntityIds{};
 
 		static EditorCommandSelection Keep()
 		{
@@ -30,14 +32,33 @@ namespace AshEditor
 
 		static EditorCommandSelection Clear()
 		{
-			return { EditorCommandSelectionMode::Clear, 0 };
+			EditorCommandSelection selection{};
+			selection.eMode = EditorCommandSelectionMode::Clear;
+			return selection;
 		}
 
 		static EditorCommandSelection Entity(SceneEntityId uEntityId)
 		{
 			return uEntityId != 0
-				? EditorCommandSelection{ EditorCommandSelectionMode::Entity, uEntityId }
+				? EditorCommandSelection{ EditorCommandSelectionMode::Entity, uEntityId, {} }
 				: Clear();
+		}
+
+		static EditorCommandSelection Entities(const std::vector<SceneEntityId>& vecEntityIds)
+		{
+			EditorCommandSelection selection{};
+			for (const SceneEntityId uEntityId : vecEntityIds)
+			{
+				if (uEntityId != 0)
+				{
+					selection.vecEntityIds.push_back(uEntityId);
+				}
+			}
+			selection.eMode = selection.vecEntityIds.empty()
+				? EditorCommandSelectionMode::Clear
+				: EditorCommandSelectionMode::Entities;
+			selection.uEntityId = selection.vecEntityIds.empty() ? 0 : selection.vecEntityIds.back();
+			return selection;
 		}
 	};
 

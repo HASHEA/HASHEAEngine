@@ -62,6 +62,11 @@
 - AssetBrowser / Console / Settings 工作流升级
 - UIContext 缺口补齐与活跃路径审计
 - 重复 helper / 常量 / 小型基础设施收口
+- viewport 工具语义补齐：
+  - `Move / Scale Gizmo`
+  - scene 视口选中反馈降噪
+  - scene/game 视图语义继续分离
+  - 视口调试信息默认收敛，减少工作流噪音
 
 ### 3.3 P2
 
@@ -122,3 +127,25 @@ Smoke Record
 - 当前主线优先保证可回归，不追求一次性重写
 - Engine 缺口先记录，不默认直接侵入 `project/src/engine`
 - 需要并行开发时，具体任务卡和冲突规则以 `docs/EditorParallelCollaboration.md` 为准
+
+## 8. 当前活跃开发批次（2026-05-15）
+
+- `EDT-P1-VP-Tooling`
+  - 目标：
+    - 完成 scene viewport 的基础变换工具可用性
+    - 优先补 `Scale Gizmo`
+    - 收敛过强的选中包围盒视觉权重
+    - 继续把 scene 视口从“调试视图”推进到“日常编辑视图”
+- 推荐落地顺序：
+  1. `Scale Gizmo`
+  2. 选中反馈降噪
+  3. viewport 顶部工具栏与 overlay 信息收敛
+    - 已完成首轮减法整理：
+      - 默认关闭 stats / overlay
+      - 高频操作留在 toolbar
+      - 低频选项收进 `Options`
+      - 操作提示改为聚焦/悬浮时显示的紧凑单行提示
+  4. 旋转 gizmo 与更完整的 transform tool 体系
+    - 进行中：
+      - editor 侧补齐 `Rotate Gizmo`
+      - 继续复用现有 command transaction / undo / viewport ray 主链

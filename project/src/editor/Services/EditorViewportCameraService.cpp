@@ -1,14 +1,14 @@
 #include "Services/EditorViewportCameraService.h"
 
 #include "Core/EditorIds.h"
-#include "Core/SceneSnapshotUtils.h"
+#include "Services/AssetDatabaseService.h"
 #include "Services/SceneService.h"
 
-#include "Base/hlog.h"
 #include "Base/input/Input.h"
-#include "Function/Scene/SceneComponents.h"
+#include "Function/Scene/SceneQuery.h"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
 
 #include <GLFW/glfw3.h>
@@ -20,8 +20,6 @@ namespace AshEditor
 {
 	namespace
 	{
-		constexpr float kMinMoveSpeed = 0.25f;
-		constexpr float kMaxMoveSpeed = 256.0f;
 		constexpr float kMouseSensitivity = 0.25f;
 		constexpr float kShiftMultiplier = 4.0f;
 		constexpr float kDefaultFocusDistance = 4.5f;
@@ -36,84 +34,138 @@ namespace AshEditor
 				refPoint.y <= (refRect.y + refRect.height);
 		}
 
-		glm::vec3 ComputeForwardVector(const glm::vec3& refRotationEulerDegrees)
+		glm::mat4 ComputeRotationMatrix(const glm::vec3& refRotationEulerDegrees)
 		{
-			const glm::mat4 rotationMatrix = glm::yawPitchRoll(
+			return glm::yawPitchRoll(
 				glm::radians(refRotationEulerDegrees.y),
 				glm::radians(refRotationEulerDegrees.x),
 				glm::radians(refRotationEulerDegrees.z));
-			return glm::normalize(glm::vec3(rotationMatrix * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
+		}
+
+		glm::mat4 ComputeViewMatrix(
+			const glm::vec3& refPosition,
+			const glm::vec3& refRotationEulerDegrees)
+		{
+			const glm::mat4 translation = glm::translate(glm::mat4(1.0f), refPosition);
+			return glm::inverse(translation * ComputeRotationMatrix(refRotationEulerDegrees));
+		}
+
+		glm::vec3 ComputeForwardVector(const glm::vec3& refRotationEulerDegrees)
+		{
+			return glm::normalize(glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
 		}
 
 		glm::vec3 ComputeRightVector(const glm::vec3& refRotationEulerDegrees)
 		{
-			const glm::mat4 rotationMatrix = glm::yawPitchRoll(
-				glm::radians(refRotationEulerDegrees.y),
-				glm::radians(refRotationEulerDegrees.x),
-				glm::radians(refRotationEulerDegrees.z));
-			return glm::normalize(glm::vec3(rotationMatrix * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+			return glm::normalize(glm::vec3(ComputeRotationMatrix(refRotationEulerDegrees) * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+		}
+
+		glm::mat4 ComputePerspectiveProjection(
+			const float fViewportWidth,
+			const float fViewportHeight,
+			const float fFovYDegrees,
+			const float fNearPlane,
+			const float fFarPlane)
+		{
+			const float fResolvedWidth = std::max(fViewportWidth, 1.0f);
+			const float fResolvedHeight = std::max(fViewportHeight, 1.0f);
+			const float fAspect = fResolvedWidth / fResolvedHeight;
+			return glm::perspectiveLH_ZO(
+				glm::radians(std::clamp(fFovYDegrees, 1.0f, 179.0f)),
+				fAspect,
+				std::max(fNearPlane, 0.001f),
+				std::max(fFarPlane, fNearPlane + 0.001f));
 		}
 
 		glm::vec3 ComputeLookRotationDegrees(const glm::vec3& refDirection)
 		{
+			if (glm::length(refDirection) <= 0.0001f)
+			{
+				return { 0.0f, 0.0f, 0.0f };
+			}
+
 			const glm::vec3 direction = glm::normalize(refDirection);
 			const float fYaw = glm::degrees(std::atan2(direction.x, direction.z));
 			const float fHorizontalLength = std::sqrt(direction.x * direction.x + direction.z * direction.z);
-			// Negate direction.y: in yawPitchRoll convention, positive pitch rotates
-			// the forward vector downward (forward.y = -sin(pitch)), so looking down
-			// (direction.y < 0) must produce positive pitch.
 			const float fPitch = glm::degrees(std::atan2(-direction.y, std::max(fHorizontalLength, 0.0001f)));
 			return { std::clamp(fPitch, -89.0f, 89.0f), fYaw, 0.0f };
 		}
 
 		bool TryComputeSceneFocusBounds(
 			const AshEngine::Scene& refScene,
-			glm::vec3& outMinBounds,
-			glm::vec3& outMaxBounds)
+			AshEngine::AssetDatabase& refAssetDatabase,
+			AshEngine::SceneWorldBounds& outBounds)
 		{
-			bool bHasBounds = false;
-			const auto AccumulateEntityPosition =
-				[&refScene, &bHasBounds, &outMinBounds, &outMaxBounds](const AshEngine::Entity& refEntity)
+			outBounds = {};
+			for (const AshEngine::Entity& refRoot : refScene.get_root_entities())
 			{
-				if (!refEntity.is_valid())
+				if (!refRoot.is_valid())
 				{
-					return;
+					continue;
 				}
 
-				const glm::mat4 matWorldTransform = refScene.get_entity_world_transform(refEntity.get_id());
-				const glm::vec3 vecWorldPosition = glm::vec3(matWorldTransform[3]);
-				if (!bHasBounds)
+				AshEngine::SceneWorldBounds subtreeBounds{};
+				if (!AshEngine::get_entity_subtree_world_bounds(refScene, refAssetDatabase, refRoot.get_id(), subtreeBounds))
 				{
-					outMinBounds = vecWorldPosition;
-					outMaxBounds = vecWorldPosition;
-					bHasBounds = true;
-					return;
+					continue;
 				}
 
-				outMinBounds = glm::min(outMinBounds, vecWorldPosition);
-				outMaxBounds = glm::max(outMaxBounds, vecWorldPosition);
-			};
+				if (!outBounds.is_valid)
+				{
+					outBounds = subtreeBounds;
+					continue;
+				}
 
-			for (const AshEngine::Entity& refEntity : refScene.get_entities_with_component(AshEngine::SceneComponentType::Mesh))
-			{
-				AccumulateEntityPosition(refEntity);
+				outBounds.min = glm::min(outBounds.min, subtreeBounds.min);
+				outBounds.max = glm::max(outBounds.max, subtreeBounds.max);
+				outBounds.center = (outBounds.min + outBounds.max) * 0.5f;
+				outBounds.extents = (outBounds.max - outBounds.min) * 0.5f;
+				outBounds.is_valid = true;
 			}
 
-			if (bHasBounds)
-			{
-				return true;
-			}
-
-			for (const AshEngine::Entity& refEntity : refScene.get_entities())
-			{
-				AccumulateEntityPosition(refEntity);
-			}
-
-			return bHasBounds;
+			return outBounds.is_valid;
 		}
 	}
 
-	void EditorViewportCameraService::SyncFromScene(const SceneService& refSceneService)
+	void EditorViewportCameraService::SetDefaultMoveSpeed(const float fMoveSpeed)
+	{
+		_fDefaultMoveSpeed = ClampMoveSpeed(fMoveSpeed);
+		for (auto& [strViewportId, refState] : _mapStates)
+		{
+			if (!IsSupportedSceneViewport(strViewportId))
+			{
+				continue;
+			}
+
+			refState.fMoveSpeed = _fDefaultMoveSpeed;
+		}
+	}
+
+	float EditorViewportCameraService::GetMoveSpeed(const std::string& strViewportId) const
+	{
+		if (const ViewportCameraState* pState = FindState(strViewportId))
+		{
+			return pState->fMoveSpeed;
+		}
+
+		return _fDefaultMoveSpeed;
+	}
+
+	void EditorViewportCameraService::SetMoveSpeed(const std::string& strViewportId, const float fMoveSpeed)
+	{
+		if (!IsSupportedSceneViewport(strViewportId))
+		{
+			return;
+		}
+
+		ViewportCameraState& refState = EnsureState(strViewportId);
+		refState.fMoveSpeed = ClampMoveSpeed(fMoveSpeed);
+		_fDefaultMoveSpeed = refState.fMoveSpeed;
+	}
+
+	void EditorViewportCameraService::SyncFromScene(
+		const SceneService& refSceneService,
+		const AssetDatabaseService& refAssetDatabaseService)
 	{
 		if (!refSceneService.GetActiveScene().is_valid())
 		{
@@ -121,24 +173,32 @@ namespace AshEditor
 		}
 
 		ViewportCameraState& refState = EnsureState(EditorViewportIds::Scene);
-		SyncPreviewScene(refSceneService, EditorViewportIds::Scene, refState);
+		SyncCameraState(refSceneService, refAssetDatabaseService, EditorViewportIds::Scene, refState);
 	}
 
 	void EditorViewportCameraService::UpdateViewportInput(
 		const SceneService& refSceneService,
+		const AssetDatabaseService& refAssetDatabaseService,
 		const AshEngine::InputState& refInput,
 		const double dTimeSeconds,
 		const EditorViewportCameraInputContext& refContext)
 	{
-		if (!IsSupportedSceneViewport(refContext.strViewportId) || !refContext.bAcceptsInput)
+		if (!IsSupportedSceneViewport(refContext.strViewportId))
 		{
 			return;
 		}
 
 		ViewportCameraState& refState = EnsureState(refContext.strViewportId);
-		SyncPreviewScene(refSceneService, refContext.strViewportId, refState);
-		if (!refState.previewScene.is_valid() || refState.uCameraEntityId == 0)
+		SyncCameraState(refSceneService, refAssetDatabaseService, refContext.strViewportId, refState);
+		if (!refState.bInitialized)
 		{
+			return;
+		}
+
+		UpdateViewportExtent(refContext.rectContent, refState);
+		if (!refContext.bAcceptsInput)
+		{
+			RefreshCameraOverride(refState);
 			return;
 		}
 
@@ -163,6 +223,7 @@ namespace AshEditor
 		{
 			refState.bMouseLookActive = false;
 			refState.bHasLastMousePosition = false;
+			RefreshCameraOverride(refState);
 			return;
 		}
 
@@ -186,7 +247,12 @@ namespace AshEditor
 
 		if (refInput.was_key_pressed(GLFW_KEY_F) && (bMouseInContent || refContext.bViewportFocused))
 		{
-			FocusEntity(refSceneService, refContext.strViewportId, refState, refContext.uFocusEntityId);
+			FocusEntity(
+				refSceneService,
+				refAssetDatabaseService,
+				refContext.strViewportId,
+				refState,
+				refContext.uFocusEntityId);
 		}
 
 		if (refState.bMouseLookActive)
@@ -258,7 +324,7 @@ namespace AshEditor
 			refState.vecPosition += vecMoveDirection * fResolvedSpeed * fDeltaSeconds;
 		}
 
-		ApplyCameraToPreview(refState);
+		RefreshCameraOverride(refState);
 	}
 
 	bool EditorViewportCameraService::TryResolveViewportBinding(
@@ -266,14 +332,39 @@ namespace AshEditor
 		EditorViewportBindingOverride& outOverride) const
 	{
 		const ViewportCameraState* pState = FindState(strViewportId);
-		if (!pState || !pState->previewScene.is_valid() || pState->uCameraEntityId == 0)
+		if (!pState || !pState->pScene || !pState->cameraOverride.enabled)
 		{
 			return false;
 		}
 
-		outOverride.pScene = const_cast<AshEngine::Scene*>(&pState->previewScene);
-		outOverride.camera.source = AshEngine::SceneCameraSource::EntityId;
-		outOverride.camera.entity_id = pState->uCameraEntityId;
+		outOverride.pScene = pState->pScene;
+		outOverride.camera.source = AshEngine::SceneCameraSource::Override;
+		outOverride.camera.override_view = pState->cameraOverride;
+		outOverride.camera.entity_id = 0;
+		return true;
+	}
+
+	bool EditorViewportCameraService::TryBuildViewportRay(
+		const std::string& strViewportId,
+		const AshEngine::UIRect& rectContent,
+		const AshEngine::UIVec2& vecMousePosition,
+		AshEngine::SceneRay& outRay) const
+	{
+		const ViewportCameraState* pState = FindState(strViewportId);
+		if (!pState || !pState->cameraOverride.enabled || rectContent.width <= 0.0f || rectContent.height <= 0.0f)
+		{
+			return false;
+		}
+
+		const float fLocalX = vecMousePosition.x - rectContent.x;
+		const float fLocalY = vecMousePosition.y - rectContent.y;
+		outRay = AshEngine::screen_to_world_ray(
+			fLocalX,
+			fLocalY,
+			rectContent.width,
+			rectContent.height,
+			pState->cameraOverride.view,
+			pState->cameraOverride.projection);
 		return true;
 	}
 
@@ -284,17 +375,28 @@ namespace AshEditor
 
 	EditorViewportCameraService::ViewportCameraState& EditorViewportCameraService::EnsureState(const std::string& strViewportId)
 	{
-		return _mapStates.try_emplace(strViewportId).first->second;
+		auto [itState, bInserted] = _mapStates.try_emplace(strViewportId);
+		if (bInserted)
+		{
+			itState->second.fMoveSpeed = _fDefaultMoveSpeed;
+		}
+		return itState->second;
 	}
 
 	const EditorViewportCameraService::ViewportCameraState* EditorViewportCameraService::FindState(const std::string& strViewportId) const
 	{
-		const std::unordered_map<std::string, ViewportCameraState>::const_iterator itState = _mapStates.find(strViewportId);
+		const auto itState = _mapStates.find(strViewportId);
 		return itState != _mapStates.end() ? &itState->second : nullptr;
 	}
 
-	void EditorViewportCameraService::SyncPreviewScene(
+	float EditorViewportCameraService::ClampMoveSpeed(const float fMoveSpeed)
+	{
+		return std::clamp(fMoveSpeed, kMinMoveSpeed, kMaxMoveSpeed);
+	}
+
+	void EditorViewportCameraService::SyncCameraState(
 		const SceneService& refSceneService,
+		const AssetDatabaseService& refAssetDatabaseService,
 		const std::string& strViewportId,
 		ViewportCameraState& refState)
 	{
@@ -309,71 +411,44 @@ namespace AshEditor
 			return;
 		}
 
+		refState.pScene = const_cast<AshEngine::Scene*>(&refActiveScene);
 		const std::string strScenePath = refSceneService.GetActiveScenePath().generic_string();
-		const bool bNeedsFullReseed =
-			!refState.previewScene.is_valid() ||
+		const bool bNeedsReseed =
+			!refState.bInitialized ||
 			refState.strSourceSceneName != refActiveScene.get_name() ||
 			refState.strSourceScenePath != strScenePath;
-		const bool bNeedsResync =
-			bNeedsFullReseed ||
-			refState.uSourceSceneChangeVersion != refActiveScene.get_change_version();
-		if (!bNeedsResync)
+		if (!bNeedsReseed)
 		{
 			return;
 		}
 
-		if (bNeedsFullReseed)
-		{
-			SeedCameraFromSceneContent(refActiveScene, refState);
-		}
-
-		refState.previewScene = SceneSnapshotUtils::CloneScene(refActiveScene);
-		refState.uSourceSceneChangeVersion = refActiveScene.get_change_version();
+		SeedCameraFromSceneContent(refActiveScene, refAssetDatabaseService, refState);
 		refState.strSourceSceneName = refActiveScene.get_name();
 		refState.strSourceScenePath = strScenePath;
-		refState.uCameraEntityId = 0;
-
-		if (!refState.previewScene.is_valid())
-		{
-			HLogError("EditorViewportCameraService failed to clone the active scene preview.");
-			return;
-		}
-
-		AshEngine::Entity previewCameraEntity =
-			refState.previewScene.create_entity_with_id(kEditorCameraEntityId, "EditorCamera");
-		if (!previewCameraEntity.is_valid())
-		{
-			HLogError("EditorViewportCameraService failed to create the preview camera entity.");
-			return;
-		}
-
-		AshEngine::CameraComponent cameraComponent{};
-		cameraComponent.primary = false;
-		cameraComponent.projection = AshEngine::CameraProjectionType::Perspective;
-		cameraComponent.fov_y_degrees = 60.0f;
-		cameraComponent.near_plane = 0.03f;
-		cameraComponent.far_plane = 2000.0f;
-		previewCameraEntity.add_camera_component(cameraComponent);
-
-		refState.uCameraEntityId = previewCameraEntity.get_id();
-		ApplyCameraToPreview(refState);
+		refState.bMouseLookActive = false;
+		refState.bHasLastMousePosition = false;
+		refState.dLastUpdateTimeSeconds = -1.0;
+		refState.bInitialized = true;
+		RefreshCameraOverride(refState);
 	}
 
 	void EditorViewportCameraService::SeedCameraFromSceneContent(
 		const AshEngine::Scene& refScene,
+		const AssetDatabaseService& refAssetDatabaseService,
 		ViewportCameraState& refState) const
 	{
-		glm::vec3 vecMinBounds{ 0.0f, 0.0f, 0.0f };
-		glm::vec3 vecMaxBounds{ 0.0f, 0.0f, 0.0f };
-		if (TryComputeSceneFocusBounds(refScene, vecMinBounds, vecMaxBounds))
+		AshEngine::SceneWorldBounds sceneBounds{};
+		AshEngine::AssetDatabase& refAssetDatabase =
+			const_cast<AshEngine::AssetDatabase&>(refAssetDatabaseService.GetDatabase());
+		if (TryComputeSceneFocusBounds(refScene, refAssetDatabase, sceneBounds))
 		{
-			const glm::vec3 vecCenter = (vecMinBounds + vecMaxBounds) * 0.5f;
-			const glm::vec3 vecExtent = glm::max(vecMaxBounds - vecMinBounds, glm::vec3(0.001f, 0.001f, 0.001f));
-			const float fMaxExtent = std::max(std::max(vecExtent.x, vecExtent.y), vecExtent.z);
-			const float fDistance = std::max(4.5f, fMaxExtent * 2.25f);
-			const glm::vec3 vecTarget = vecCenter + glm::vec3(0.0f, vecExtent.y * 0.2f, 0.0f);
+			const float fRadius = std::max(glm::length(sceneBounds.extents), 0.5f);
+			const float fFocusDistance = std::max(
+				kDefaultFocusDistance,
+				(fRadius / std::tan(glm::radians(refState.fFovYDegrees) * 0.5f)) * 1.15f);
+			const glm::vec3 vecTarget = sceneBounds.center;
 			const glm::vec3 vecViewDirection = glm::normalize(glm::vec3(-0.55f, 0.38f, -1.0f));
-			refState.vecPosition = vecTarget + vecViewDirection * fDistance;
+			refState.vecPosition = vecTarget + vecViewDirection * fFocusDistance;
 			refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecTarget - refState.vecPosition);
 			return;
 		}
@@ -383,27 +458,38 @@ namespace AshEditor
 		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecFallbackTarget - refState.vecPosition);
 	}
 
-	void EditorViewportCameraService::ApplyCameraToPreview(ViewportCameraState& refState) const
+	void EditorViewportCameraService::RefreshCameraOverride(ViewportCameraState& refState) const
 	{
-		if (!refState.previewScene.is_valid() || refState.uCameraEntityId == 0)
+		refState.cameraOverride.view = ComputeViewMatrix(refState.vecPosition, refState.vecRotationEulerDegrees);
+		refState.cameraOverride.projection = ComputePerspectiveProjection(
+			static_cast<float>(refState.uViewportWidth),
+			static_cast<float>(refState.uViewportHeight),
+			refState.fFovYDegrees,
+			refState.fNearPlane,
+			refState.fFarPlane);
+		refState.cameraOverride.camera_position = refState.vecPosition;
+		refState.cameraOverride.enabled = true;
+	}
+
+	void EditorViewportCameraService::UpdateViewportExtent(
+		const AshEngine::UIRect& rectContent,
+		ViewportCameraState& refState) const
+	{
+		const uint32_t uNewWidth = std::max(1u, static_cast<uint32_t>(std::round(std::max(rectContent.width, 1.0f))));
+		const uint32_t uNewHeight = std::max(1u, static_cast<uint32_t>(std::round(std::max(rectContent.height, 1.0f))));
+		if (refState.uViewportWidth == uNewWidth && refState.uViewportHeight == uNewHeight)
 		{
 			return;
 		}
 
-		AshEngine::Entity previewCameraEntity = refState.previewScene.find_entity(refState.uCameraEntityId);
-		if (!previewCameraEntity.is_valid())
-		{
-			return;
-		}
-
-		AshEngine::TransformComponent transformComponent = previewCameraEntity.get_transform_component();
-		transformComponent.position = refState.vecPosition;
-		transformComponent.rotation_euler_degrees = refState.vecRotationEulerDegrees;
-		previewCameraEntity.set_transform_component_silent(transformComponent);
+		refState.uViewportWidth = uNewWidth;
+		refState.uViewportHeight = uNewHeight;
+		RefreshCameraOverride(refState);
 	}
 
 	void EditorViewportCameraService::FocusEntity(
 		const SceneService& refSceneService,
+		const AssetDatabaseService& refAssetDatabaseService,
 		const std::string& strViewportId,
 		ViewportCameraState& refState,
 		const SceneEntityId uEntityId)
@@ -419,12 +505,35 @@ namespace AshEditor
 			return;
 		}
 
-		const glm::mat4 matWorldTransform = refSceneService.GetActiveScene().get_entity_world_transform(uEntityId);
-		const glm::vec3 vecTarget = glm::vec3(matWorldTransform[3]);
+		AshEngine::SceneWorldBounds bounds{};
+		AshEngine::AssetDatabase& refAssetDatabase =
+			const_cast<AshEngine::AssetDatabase&>(refAssetDatabaseService.GetDatabase());
+		const bool bHasBounds = AshEngine::get_entity_subtree_world_bounds(
+			refSceneService.GetActiveScene(),
+			refAssetDatabase,
+			uEntityId,
+			bounds);
+
+		glm::vec3 vecTarget{};
+		float fFocusDistance = kDefaultFocusDistance;
+		if (bHasBounds)
+		{
+			vecTarget = bounds.center;
+			const float fRadius = std::max(glm::length(bounds.extents), 0.5f);
+			fFocusDistance = std::max(
+				kDefaultFocusDistance,
+				(fRadius / std::tan(glm::radians(refState.fFovYDegrees) * 0.5f)) * 1.15f);
+		}
+		else
+		{
+			const glm::mat4 matWorldTransform = refSceneService.GetActiveScene().get_entity_world_transform(uEntityId);
+			vecTarget = glm::vec3(matWorldTransform[3]);
+		}
+
 		const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
-		refState.vecPosition = vecTarget - vecForward * kDefaultFocusDistance + glm::vec3(0.0f, 0.75f, 0.0f);
+		refState.vecPosition = vecTarget - vecForward * fFocusDistance;
 		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecTarget - refState.vecPosition);
-		ApplyCameraToPreview(refState);
+		RefreshCameraOverride(refState);
 	}
 
 	bool EditorViewportCameraService::IsSupportedSceneViewport(const std::string& strViewportId)
