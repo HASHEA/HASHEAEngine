@@ -606,6 +606,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - `PassDepthAttachment::read_only=true` 表示本 pass 只读 depth attachment：RenderDevice 会把 depth final state 设为 `DSVRead`，如果该 depth target 可采样则同时包含 `SRVGraphics`。Vulkan 使用 depth-stencil read-only layout，DX12 使用 read-only DSV。
 - Framebuffer cache 会在连续数帧未使用后清理；`clear_transient_render_targets()` 也会清掉 framebuffer cache，避免 transient / resize 路径长期压住旧 attachment
 - Vulkan dynamic rendering 下，`cmd_end_render_pass()` 结束后 attachment 仍停留在 renderable layout；resource tracker 必须先保持 `RTV` / `DSVWrite` 这类真实附件状态，再由 pass 外部显式 barrier 转到 `SRVGraphics` / `Present` 等 final state
+- Vulkan same-layout 的只读状态切换不能只更新 resource tracker；当目标 stage/access 覆盖范围扩大时仍要提交执行依赖，例如上一 pass 以 `SRVGraphics` 采样 depth，下一 pass 以 `DSVRead|SRVGraphics` 同时做 read-only depth attachment 和 shader resource。
 - DX12 texture transition 由 `DX12ResourceTracker` 维护 per-subresource 状态；当整资源 transition 遇到 mip/slice 混合状态时，必须展开成子资源 barrier，不能用某个旧整资源状态覆盖全部 subresource
 - RHI `CommandBuffer` 会记录首个命令录制错误；`RenderDevice` 在 `begin_record()`、barrier/copy/upload、`end_pass()` 和 `end_record()` 后必须检查 `has_error()`，有错时跳过 submit，不能把已知非法命令提交给 Vulkan/DX12 queue
 

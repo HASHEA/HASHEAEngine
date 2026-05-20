@@ -33,6 +33,21 @@ namespace RHI
 				VK_ACCESS_TRANSFER_READ_BIT;
 			return (access_flags & (~k_read_mask)) == 0;
 		}
+
+		static bool needs_same_layout_dependency(
+			VkPipelineStageFlags src_stage_flags,
+			VkPipelineStageFlags dst_stage_flags,
+			VkAccessFlags src_access_flags,
+			VkAccessFlags dst_access_flags)
+		{
+			if (!is_vk_access_read_only(src_access_flags))
+			{
+				return true;
+			}
+
+			return ((dst_stage_flags & ~src_stage_flags) != 0) ||
+				((dst_access_flags & ~src_access_flags) != 0);
+		}
 	}
 
 	static void get_vk_stage_and_access_flags(AshResourceState RHIAccess, AshBarrier::EType ResourceType, uint32_t UsageFlags,
@@ -1137,8 +1152,14 @@ namespace RHI
 						// If we're not transitioning across pipes and we don't need to perform layout transitions, we can express memory dependencies through a global memory barrier.
 						if (srcLayout == dstLayout)
 						{
-							// We only need a memory barrier if the previous commands wrote to the buffer. In case of a transition from read, an execution barrier is enough.
-							const bool bSrcAccessIsRead = is_vk_access_read_only(srcAccessFlags);
+							// A read-only source still needs a dependency when the destination read scope expands.
+							// Example: depth SRV -> read-only depth attachment keeps the same layout, but dynamic rendering
+							// must be synchronized against the earlier shader-read layout transition.
+							const bool bNeedsDependency = needs_same_layout_dependency(
+								srcStageMask,
+								dstStageMask,
+								srcAccessFlags,
+								dstAccessFlags);
 							if (Mip == (uint32_t)-1 && Slice == (uint32_t)-1)
 							{
 								pTexture->get_resource_tracker().clear_subresource_state();
@@ -1149,7 +1170,7 @@ namespace RHI
 								pTexture->get_resource_tracker().set_texture_subresource_state(InDstAccess, Mip + texDesc.mip_level_count * Slice);
 							}
 
-							if (!bSrcAccessIsRead)
+							if (bNeedsDependency)
 							{
 								srcFinalStageMask |= srcStageMask;
 								dstFinalStageMask |= dstStageMask;
@@ -1279,11 +1300,14 @@ namespace RHI
 				// If we're not transitioning across pipes and we don't need to perform layout transitions, we can express memory dependencies through a global memory barrier.
 				if (srcLayout == dstLayout)
 				{
-					// We only need a memory barrier if the previous commands wrote to the buffer. In case of a transition from read, an execution barrier is enough.
-					const bool bSrcAccessIsRead = is_vk_access_read_only(srcAccessFlags);
+					const bool bNeedsDependency = needs_same_layout_dependency(
+						srcStageMask,
+						dstStageMask,
+						srcAccessFlags,
+						dstAccessFlags);
 					pBuffer->get_resource_tracker().set_all_resource_state(iter.eDSTAccess);
 
-					if (!bSrcAccessIsRead)
+					if (bNeedsDependency)
 					{
 						srcFinalStageMask |= srcStageMask;
 						dstFinalStageMask |= dstStageMask;

@@ -79,7 +79,7 @@ HASHEAEngine/
 - render pass 与 framebuffer 缓存。
 - graphics program / pipeline variant 缓存。
 - descriptor / program binding 缓存；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区，避免上一帧命令仍引用的 descriptor slot 被本帧覆写。
-- pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier。
+- pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier；Vulkan same-layout 的只读状态扩展也会补执行依赖，保证 depth SRV 可安全进入 read-only depth attachment + SRV 组合状态。
 - Vulkan resize、`OUT_OF_DATE` 和 `SUBOPTIMAL` present/acquire 路径会强制重建 swapchain，即使 surface extent 已经等于缓存尺寸；成功 acquire 后才允许读取当前 swapchain image。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
