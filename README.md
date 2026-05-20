@@ -368,6 +368,7 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - Deferred Lighting 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-lighting-design.md`](docs/superpowers/specs/2026-05-12-deferred-lighting-design.md)
 - 环境光遮蔽（AO）设计草案：[`docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md`](docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md)
+- 环境光遮蔽（AO）实现计划：[`docs/superpowers/plans/2026-05-20-ambient-occlusion-implementation.md`](docs/superpowers/plans/2026-05-20-ambient-occlusion-implementation.md)
 - Render Graph 设计草案：[`docs/superpowers/specs/2026-05-14-render-graph-design.md`](docs/superpowers/specs/2026-05-14-render-graph-design.md)
 - Render Graph 实现计划：[`docs/superpowers/plans/2026-05-14-render-graph-implementation.md`](docs/superpowers/plans/2026-05-14-render-graph-implementation.md)
 - 性能门禁设计草案：[`docs/superpowers/specs/2026-05-18-perf-gate-design.md`](docs/superpowers/specs/2026-05-18-perf-gate-design.md)
