@@ -9,6 +9,7 @@ namespace AshEngine
 	{
 		std::vector<RenderGraphTextureRef> gbuffer_targets{};
 		RenderGraphTextureRef depth{};
+		RenderGraphTextureRef ambient_occlusion{};
 		RenderGraphTextureRef lighting_diffuse{};
 		RenderGraphTextureRef lighting_specular{};
 		RenderGraphTextureRef scene_hdr_linear{};

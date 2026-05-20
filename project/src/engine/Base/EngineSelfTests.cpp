@@ -1256,6 +1256,13 @@ namespace AshEngine
 			depth_desc.shader_resource = true;
 			resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
 
+			RenderGraphTextureDesc ambient_occlusion_desc{};
+			ambient_occlusion_desc.width = 64;
+			ambient_occlusion_desc.height = 64;
+			ambient_occlusion_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			ambient_occlusion_desc.shader_resource = true;
+			resources.ambient_occlusion = graph.create_texture(ambient_occlusion_desc, "SceneAmbientOcclusion");
+
 			RenderGraphTextureDesc lighting_desc{};
 			lighting_desc.width = 64;
 			lighting_desc.height = 64;
@@ -1282,6 +1289,20 @@ namespace AshEngine
 				});
 
 			graph.add_raster_pass(
+				"SceneAmbientOcclusionPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.gbuffer_targets[4], RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, resources.ambient_occlusion, RenderLoadAction::Clear, { 1.0f, 1.0f, 1.0f, 1.0f });
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
 				"SceneDeferredLightingAccumPass",
 				RenderGraphPassFlags::None,
 				[&](RenderGraphRasterPassBuilder& pass)
@@ -1291,6 +1312,7 @@ namespace AshEngine
 						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
 					}
 					pass.read_depth(resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					pass.read_texture(resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
 					pass.write_color(0, resources.lighting_diffuse, RenderLoadAction::Clear, {});
 					pass.write_color(1, resources.lighting_specular, RenderLoadAction::Clear, {});
 				},
@@ -1331,23 +1353,28 @@ namespace AshEngine
 			bool ok = compiled;
 			ok = ok && resources.gbuffer_targets.size() == 5u;
 			ok = ok && resources.depth;
+			ok = ok && resources.ambient_occlusion;
 			ok = ok && resources.lighting_diffuse;
 			ok = ok && resources.lighting_specular;
 			ok = ok && resources.scene_hdr_linear;
-			ok = ok && result.live_pass_indices.size() == 4u;
+			ok = ok && result.live_pass_indices.size() == 5u;
 			ok = ok && result.live_pass_indices[0] == 0u;
 			ok = ok && result.live_pass_indices[1] == 1u;
 			ok = ok && result.live_pass_indices[2] == 2u;
 			ok = ok && result.live_pass_indices[3] == 3u;
-			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].first_pass == 1u;
-			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].last_pass == 2u;
-			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].first_pass == 1u;
-			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].last_pass == 2u;
-			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].first_pass == 2u;
-			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].last_pass == 3u;
-			ok = ok && result.pass_barriers[1].transitions.size() >= 8u;
-			ok = ok && result.pass_barriers[2].transitions.size() == 3u;
-			ok = ok && result.pass_barriers[3].transitions.size() == 2u;
+			ok = ok && result.live_pass_indices[4] == 4u;
+			ok = ok && result.texture_lifetimes[resources.ambient_occlusion.index].first_pass == 1u;
+			ok = ok && result.texture_lifetimes[resources.ambient_occlusion.index].last_pass == 2u;
+			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].first_pass == 2u;
+			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].last_pass == 3u;
+			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].first_pass == 2u;
+			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].last_pass == 3u;
+			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].first_pass == 3u;
+			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].last_pass == 4u;
+			ok = ok && result.pass_barriers[1].transitions.size() == 3u;
+			ok = ok && result.pass_barriers[2].transitions.size() >= 9u;
+			ok = ok && result.pass_barriers[3].transitions.size() == 3u;
+			ok = ok && result.pass_barriers[4].transitions.size() == 2u;
 			return ok || report_self_test_failure("Scene deferred render graph resources", "deferred graph chain was not preserved through compilation");
 		}
 
