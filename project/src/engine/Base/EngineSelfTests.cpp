@@ -9,6 +9,7 @@
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Diagnostics/PerfGate.h"
+#include "Function/Render/AmbientOcclusionConfig.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/Material.h"
@@ -673,6 +674,55 @@ namespace AshEngine
 
 			return (!found_reverse_z && config.switches.empty()) ||
 				report_self_test_failure("Render feature config", "ReverseZ should not be registered as an Engine.ini render switch");
+		}
+
+		auto test_ambient_occlusion_config_parses_modes_and_clamps_values() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir();
+			const std::filesystem::path config_path = test_dir / "ambient_occlusion_self_test.ini";
+			{
+				std::ofstream config_file(config_path, std::ios::trunc);
+				config_file <<
+					"[AmbientOcclusion]\n"
+					"Mode=HBAO\n"
+					"Quality=High\n"
+					"Radius=-4.0\n"
+					"Intensity=3.5\n"
+					"Power=0.0\n"
+					"HalfResolution=true\n"
+					"Blur=false\n";
+			}
+
+			const AmbientOcclusionConfig config = load_runtime_ambient_occlusion_config(config_path.string().c_str());
+			const bool parsed =
+				config.mode == AmbientOcclusionMode::HBAO &&
+				config.quality == AmbientOcclusionQuality::High &&
+				config.radius > 0.0f &&
+				config.intensity == 3.5f &&
+				config.power > 0.0f &&
+				config.half_resolution &&
+				!config.blur;
+			if (!parsed)
+			{
+				return report_self_test_failure("AmbientOcclusion config", "valid AO config values were not parsed or clamped correctly");
+			}
+
+			const std::filesystem::path invalid_config_path = test_dir / "ambient_occlusion_invalid_self_test.ini";
+			{
+				std::ofstream config_file(invalid_config_path, std::ios::trunc);
+				config_file <<
+					"[AmbientOcclusion]\n"
+					"Mode=NotAMode\n"
+					"Quality=NotAQuality\n"
+					"Radius=not-a-number\n";
+			}
+
+			const AmbientOcclusionConfig invalid_config = load_runtime_ambient_occlusion_config(invalid_config_path.string().c_str());
+			const AmbientOcclusionConfig defaults = make_default_ambient_occlusion_config();
+			return (invalid_config.mode == defaults.mode &&
+				invalid_config.quality == defaults.quality &&
+				invalid_config.radius == defaults.radius) ||
+				report_self_test_failure("AmbientOcclusion config", "invalid AO config values did not fall back to defaults");
 		}
 
 		auto test_reverse_z_projection_maps_near_far_depths() -> bool
@@ -1713,6 +1763,7 @@ namespace AshEngine
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
 		all_passed = test_render_feature_config_does_not_register_reverse_z_switch() && all_passed;
+		all_passed = test_ambient_occlusion_config_parses_modes_and_clamps_values() && all_passed;
 		all_passed = test_reverse_z_projection_maps_near_far_depths() && all_passed;
 		all_passed = test_reverse_z_flips_depth_clear_and_compare() && all_passed;
 		all_passed = test_deferred_shader_background_depth_uses_reverse_z_flag() && all_passed;
