@@ -436,6 +436,15 @@ BreakOnValidationError=false
 [DX12Validation]
 Enabled=true
 GpuValidation=true
+
+[AmbientOcclusion]
+Mode=Off
+Quality=Medium
+Radius=1.5
+Intensity=1.0
+Power=1.0
+HalfResolution=false
+Blur=true
 ```
 
 当前有效配置项：
@@ -447,6 +456,13 @@ GpuValidation=true
 - `VulkanValidation.BreakOnValidationError`
 - `DX12Validation.Enabled`
 - `DX12Validation.GpuValidation`
+- `AmbientOcclusion.Mode`
+- `AmbientOcclusion.Quality`
+- `AmbientOcclusion.Radius`
+- `AmbientOcclusion.Intensity`
+- `AmbientOcclusion.Power`
+- `AmbientOcclusion.HalfResolution`
+- `AmbientOcclusion.Blur`
 
 Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini` 中设置 `VulkanValidation.Enabled=true` 或 `DX12Validation.Enabled=true`，也必须保持 validation 关闭；其中 Vulkan 通过不编入 `VULKAN_DEBUG_REPORT` 生效路径实现，DX12 在 `DynamicRHI` 配置解析和 `DX12Context` 初始化层都会强制关闭 debug layer / GPU-based validation。
 
@@ -469,6 +485,21 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 - 暂无
 
 `Application::initialize()` 在创建窗口和 RHI 资源前读取 `RenderFeatureConfig`，并通过 `set_runtime_render_feature_config()` 发布到进程级原子开关表。渲染线程侧应通过只读访问器查询，不直接访问配置文件。
+
+屏幕空间 AO 使用独立的 typed runtime config：`project/src/engine/Function/Render/AmbientOcclusionConfig.*`。`Application::initialize()` 会在加载全局 render feature config 后读取 `[AmbientOcclusion]` 并发布给 render path：
+
+```ini
+[AmbientOcclusion]
+Mode=Off
+Quality=Medium
+Radius=1.5
+Intensity=1.0
+Power=1.0
+HalfResolution=false
+Blur=true
+```
+
+`Mode` 支持 `Off`、`SSAO`、`HBAO`、`GTAO`。默认 `Off` 会让 `AmbientOcclusionPass` 注册一张 neutral 1x1 white AO texture，保证 deferred lighting 始终绑定同一个 `SceneAmbientOcclusion` shader resource。`Quality` 影响样本数 / 方向数 / 步进数，`Radius`、`Intensity`、`Power` 控制遮蔽半径和曲线，`HalfResolution` 与 `Blur` 用于性能和噪声折中。
 
 Reverse-Z 行为约定：
 
@@ -549,7 +580,7 @@ Reverse-Z 行为约定：
 Scene deferred 主路径现在通过 graph 表达：
 
 ```text
-SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass
+SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass
 ```
 
 当本帧存在 `DebugDrawService` 提交的调试线时，`SceneRenderer` 会在 tone-map 之后追加 `SceneDebugDrawOverlayPass`，以 `RenderLoadAction::Load` 叠加到同一个 output。该 pass 会显式声明对 output 的 load/read 依赖，保证 RenderGraph culling 保留前一个 output producer。
@@ -599,8 +630,9 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
   - `GBufferD`：`RGBA16_SFLOAT`，MotionVector3D.xyz + TemporalFlags.a
   - `GBufferE`：`RGBA16_SFLOAT`，NormalOct.xy + EmissiveOrCustom.zw
 - `MotionVector3D` 在当前设计里表示 screen-space velocity.xy + z，不是 world-space velocity；第一版 shader 先写 0，历史帧矩阵与 velocity 生成后续补齐。
-- `SceneRenderer` 默认 deferred path 通过 `RenderGraphBuilder` 创建 graph transient GBuffer targets、可采样 D32 depth，两张 RGBA16F 的 `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`（光照 pass MRT 输出），以及一张 RGBA16F 的 `SceneDeferredSceneHDRLinear`（composite 输出的线性 HDR 中转）。
-- `SceneRenderer` 注册 `SceneGBufferPass`，再由 `DeferredLightingPass::add_passes()` 注册 `SceneDeferredLightingAccumPass` 与 `SceneDeferredCompositePass`，随后由 `PostProcessToneMapPass::add_pass()` 注册 `SceneDeferredToneMapPass`。
+- `SceneRenderer` 默认 deferred path 通过 `RenderGraphBuilder` 创建 graph transient GBuffer targets、可采样 D32 depth、统一 `SceneAmbientOcclusion` AO texture、两张 RGBA16F 的 `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`（光照 pass MRT 输出），以及一张 RGBA16F 的 `SceneDeferredSceneHDRLinear`（composite 输出的线性 HDR 中转）。
+- `SceneRenderer` 注册 `SceneGBufferPass`，随后由 `AmbientOcclusionPass::add_passes()` 注册 AO（`Off` 模式导入 neutral white texture；`SSAO` / `HBAO` / `GTAO` 生成 AO RT，可选 blur），再由 `DeferredLightingPass::add_passes()` 注册 `SceneDeferredLightingAccumPass` 与 `SceneDeferredCompositePass`，随后由 `PostProcessToneMapPass::add_pass()` 注册 `SceneDeferredToneMapPass`。
+- `DeferredLightingPass` 只消费统一 `SceneAmbientOcclusion` resource，不分支关心 AO 算法；`DeferredCommon.hlsli` 中最终遮蔽为 `GBufferB.b` 的 material AO 乘以 screen AO，unlit/base emissive 路径只保留 material AO。
 - `SceneDeferredLightingAccumPass` 会先用 fullscreen base/emissive pass 将自发光等写入 diffuse RT（specular RT 同步累加）；directional light 使用 fullscreen additive pass；point light 使用 sphere volume；spot light 使用 cone volume。
 - point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、对两张颜色附件同时做 additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
 - `SceneDeferredCompositePass` 采样两张 lighting RT，合并为线性 HDR radiance 后写入 `SceneDeferredSceneHDRLinear`。

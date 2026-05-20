@@ -21,7 +21,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 当前仍未完成或仅处于预留阶段：
 
 - Skeletal mesh / animation 尚未完成。
-- Shadow、occlusion culling 尚未完成；当前 deferred lighting 已接入第一版 base/emissive、directional、point、spot，composite（线性 HDR 中转 RT）与独立全屏 tone-map pass，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
+- Shadow、occlusion culling 尚未完成；当前 deferred lighting 已接入第一版 base/emissive、directional、point、spot，可配置屏幕空间 AO（`Off` / `SSAO` / `HBAO` / `GTAO`）、composite（线性 HDR 中转 RT）与独立全屏 tone-map pass，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
 - Transparent blend mode 已进入材质静态状态和编译键，但正式透明队列尚未接入 SceneRenderer。
 - PostProcess 与 UI 当前不纳入材质系统，后续应走各自的 shader/pass 与参数组织路径。
 - Asset cooking pipeline、streaming、完整资源生命周期管理仍在演进中；runtime 已能直接加载部分 cooked texture payload。
@@ -84,7 +84,7 @@ HASHEAEngine/
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待。
 - transient render target pool。
 - Render Graph v1 已作为 Function/Render 层 orchestration 接入，支持 graph texture、raster/compute pass 声明、pass culling、transient lifetime 编译、pass-boundary barrier plan、external output / extracted texture root，以及通过现有 `Renderer / RenderDevice` 执行 graph。
-- DeferredHQ GBuffer 静态网格路径：第一版使用 5 张 GBuffer（三张 `RGBA8_UNORM`、两张 `RGBA16_SFLOAT`）加 D32 depth，随后以 MRT 将延迟光照的 diffuse / specular 分量分别写入两张 `RGBA16_SFLOAT` transient RT（`SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`），composite pass 合并为线性 HDR 写入 `SceneDeferredSceneHDRLinear`（`RGBA16_SFLOAT`），再由 `PostProcessToneMapPass` 提交的独立 `SceneDeferredToneMapPass`（ACES + exposure；对非 SRGB 的 8-bit UNORM output 可选手动 sRGB 编码）写到 view output。
+- DeferredHQ GBuffer 静态网格路径：第一版使用 5 张 GBuffer（三张 `RGBA8_UNORM`、两张 `RGBA16_SFLOAT`）加 D32 depth；可选 `SceneAmbientOcclusionPass` 会在 GBuffer 与 deferred lighting 之间生成统一 AO texture（`Off` / `SSAO` / `HBAO` / `GTAO` 由 `Engine.ini` 控制），随后以 MRT 将延迟光照的 diffuse / specular 分量分别写入两张 `RGBA16_SFLOAT` transient RT（`SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`），composite pass 合并为线性 HDR 写入 `SceneDeferredSceneHDRLinear`（`RGBA16_SFLOAT`），再由 `PostProcessToneMapPass` 提交的独立 `SceneDeferredToneMapPass`（ACES + exposure；对非 SRGB 的 8-bit UNORM output 可选手动 sRGB 编码）写到 view output。
 - Deferred lighting 第一版支持 base/emissive、directional fullscreen、point sphere volume、spot cone volume；点光/聚光 volume 使用只读 depth attachment、硬件 depth test、depth write off、双面和 additive blend。
 - DebugDraw overlay 第一版使用 `RenderPrimitiveTopology::LineList`，在 `SceneDeferredToneMapPass` 后以 `RenderLoadAction::Load` 写回同一 output；当前不做 depth test、alpha blend 或宽线几何扩展。
 - draw 排序、静态网格 instance batching、单可见静态网格 direct section submit fast path 与提交前只读资源 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
@@ -115,7 +115,7 @@ Scene 到渲染的主路径：
 - Editor Scene/Game viewport 使用 engine-owned offscreen output，通过 `UISurfaceHandle` 交给 UI 展示。
 - Sandbox 主窗口使用 window output + persistent binding，作为共享渲染路径验证入口。
 
-第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass`，通过 graph transient GBuffer / depth / diffuse+specular lighting 分量 RT、线性 HDR 中转 RT 完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer；该 instance buffer slot 在同一 frame 内按 view/pass submit 分配，避免 Editor 同时打开 Scene/Game view 时后提交的 view 覆盖前一个 view 的 object-to-clip 数据。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
+第一阶段正式支持静态网格主链路，并已为相同 mesh/material section 使用 per-instance vertex stream 合批。默认静态网格 scene path 现在由 `RenderGraphBuilder` 表达为 `SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass`，通过 graph transient GBuffer / depth / AO / diffuse+specular lighting 分量 RT、线性 HDR 中转 RT 完成 deferred submit；`SceneRenderer` 不再保留旧 `BasePass` 前向 fallback，`Surface.StaticMesh.BasePass` 仅作为材质 / shader family 能力保留。单可见静态网格帧会绕过 batch map，直接逐 section 提交并复用一个单实例 buffer；该 instance buffer slot 在同一 frame 内按 view/pass submit 分配，避免 Editor 同时打开 Scene/Game view 时后提交的 view 覆盖前一个 view 的 object-to-clip 数据。skeletal mesh、阴影、occlusion culling 和动态材质实例仍是后续阶段。
 
 ## 材质系统
 
