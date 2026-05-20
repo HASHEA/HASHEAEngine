@@ -16,6 +16,7 @@ cbuffer AshRootConstants : register(b0)
     float4 AshCameraPositionAndFlags;
     float4 AshAOParams0;
     float4 AshAOParams1;
+    float4 AshAOParams2;
 };
 
 VSFullscreenOutput VSFullscreen(uint vertex_id : SV_VertexID)

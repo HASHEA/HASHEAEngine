@@ -97,6 +97,7 @@ What still stays out:
 - `Application` also owns one `ScenePresentationSubsystem`.
 - Window text/key/mouse events are forwarded into `UIContext`.
 - `UIContext` resolves scene surfaces through `Application::get_scene_presentation()`.
+- Engine-owned overlays may host shared debug controls through `UIContext`; the Render Debug View window is one example and only selects an engine render pass that writes the chosen RT visualization back to the main output.
 - `Renderer::end_frame()` composes UI as the final overlay pass on the back buffer.
 
 ## Typical Usage Pattern

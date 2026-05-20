@@ -109,6 +109,27 @@ namespace AshEngine
 			seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
 		}
 
+		static uint32_t float_to_hash_bits(float value)
+		{
+			uint32_t bits = 0;
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
+		}
+
+		static void hash_render_color_value(uint64_t& hash_value, const RenderColorValue& color)
+		{
+			hash_combine_uint64(hash_value, float_to_hash_bits(color.r));
+			hash_combine_uint64(hash_value, float_to_hash_bits(color.g));
+			hash_combine_uint64(hash_value, float_to_hash_bits(color.b));
+			hash_combine_uint64(hash_value, float_to_hash_bits(color.a));
+		}
+
+		static void hash_render_depth_stencil_value(uint64_t& hash_value, const RenderDepthStencilValue& depth_stencil)
+		{
+			hash_combine_uint64(hash_value, float_to_hash_bits(depth_stencil.depth));
+			hash_combine_uint64(hash_value, depth_stencil.stencil);
+		}
+
 		static bool is_read_only_barrier_state(RHI::AshResourceState state)
 		{
 			const RHI::AshResourceState read_mask =
@@ -882,6 +903,12 @@ namespace AshEngine
 			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.format);
 			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.shader_resource ? 1 : 0);
 			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.unordered_access ? 1 : 0);
+			hash_combine_uint64(hash_value, desc.use_optimized_clear_value ? 1ull : 0ull);
+			if (desc.use_optimized_clear_value)
+			{
+				hash_render_color_value(hash_value, desc.optimized_clear_color);
+				hash_render_depth_stencil_value(hash_value, desc.optimized_clear_depth_stencil);
+			}
 			return hash_value;
 		}
 
@@ -932,6 +959,7 @@ namespace AshEngine
 		bool unordered_access = false;
 		bool depth_stencil = false;
 		RenderTextureFormat format = RenderTextureFormat::Unknown;
+		RenderTargetDesc desc{};
 
 		std::shared_ptr<RHI::Texture> get_texture() const
 		{
@@ -1176,6 +1204,8 @@ namespace AshEngine
 		impl->unordered_access = desc.unordered_access;
 		impl->depth_stencil = depth_stencil;
 		impl->format = desc.format;
+		impl->desc = desc;
+		impl->desc.name = nullptr;
 		return impl;
 	}
 
@@ -3146,13 +3176,12 @@ namespace AshEngine
 		{
 			return;
 		}
+		if (!render_target->m_impl || render_target->m_impl->kind != RenderTarget::Impl::Kind::Texture)
+		{
+			return;
+		}
 
-		RenderTargetDesc desc{};
-		desc.width = static_cast<uint16_t>(render_target->get_width());
-		desc.height = static_cast<uint16_t>(render_target->get_height());
-		desc.format = render_target->get_format();
-		desc.shader_resource = render_target->m_impl ? render_target->m_impl->shader_resource : false;
-		desc.unordered_access = render_target->m_impl ? render_target->m_impl->unordered_access : false;
+		RenderTargetDesc desc = render_target->m_impl->desc;
 		m_impl->transient_render_target_pool[hash_render_target_desc(desc)].push_back(render_target);
 	}
 

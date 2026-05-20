@@ -908,7 +908,11 @@ namespace RHI
 		}
 
 		ASH_LOG_PROCESS_ERROR(stagingSize > 0 && stagingSize <= UINT32_MAX);
-		auto pVulkanStagingBuffer = Ash_New_Shared<VulkanStagingBuffer>(static_cast<uint32_t>(stagingSize), nullptr, false);
+		auto pVulkanStagingBuffer = Ash_New_Shared<VulkanStagingBuffer>(
+			static_cast<uint32_t>(stagingSize),
+			nullptr,
+			false,
+			offsetAlignment);
 		ASH_LOG_PROCESS_ERROR(pVulkanStagingBuffer);
 
 		bool bRetCode = pVulkanStagingBuffer->map(0, static_cast<uint32_t>(stagingSize));

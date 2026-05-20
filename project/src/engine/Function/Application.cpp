@@ -4,6 +4,7 @@
 #include "Graphics/Swapchain.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Render/AmbientOcclusionConfig.h"
+#include "Function/Render/RenderDebugView.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderFeatureConfig.h"
 #include "Function/Render/Renderer.h"
@@ -91,14 +92,17 @@ namespace AshEngine
 		const RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(config);
 		const RenderFeatureConfig runtimeRenderFeatureConfig = load_runtime_render_feature_config(config.backendConfigPath);
 		set_runtime_render_feature_config(runtimeRenderFeatureConfig);
+		const bool runtimeVsync = runtimeRenderFeatureConfig.is_enabled(RenderSwitch::VSync);
 		const AmbientOcclusionConfig ambientOcclusionConfig = load_runtime_ambient_occlusion_config(config.backendConfigPath);
 		set_runtime_ambient_occlusion_config(ambientOcclusionConfig);
+		const RenderDebugViewConfig renderDebugViewConfig = load_runtime_render_debug_view_config(config.backendConfigPath);
+		set_runtime_render_debug_view_config(renderDebugViewConfig);
 		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
 		activeBackend = resolvedBackend;
 		HLogInfo("Initializing engine RHI backend: {}", RHI::backend_to_string(resolvedBackend));
 
 		/*window*/
-		WindowConfig windowConfig = { config.initWidth, config.initHeight, config.bVsync, config.title, resolvedBackend };
+		WindowConfig windowConfig = { config.initWidth, config.initHeight, runtimeVsync, config.title, resolvedBackend };
 		window = Window::create();
 		if (!window)
 		{
@@ -151,7 +155,10 @@ namespace AshEngine
 		/*swapchain*/
 		std::vector<RHI::AshColorSpace> colorSpace = { RHI::ASH_COLOR_SPACE_SRGB_NONLINEAR_KHR };
 		std::vector<RHI::AshFormat> format = { RHI::ASH_FORMAT_B8G8R8A8_SRGB };
-		std::vector<RHI::AshPresentMode> presentMode = {RHI::ASH_PRESENT_MODE_MAILBOX_KHR };
+		std::vector<RHI::AshPresentMode> presentMode = runtimeVsync ?
+			std::vector<RHI::AshPresentMode>{ RHI::ASH_PRESENT_MODE_FIFO_KHR } :
+			std::vector<RHI::AshPresentMode>{ RHI::ASH_PRESENT_MODE_MAILBOX_KHR, RHI::ASH_PRESENT_MODE_IMMEDIATE_KHR, RHI::ASH_PRESENT_MODE_FIFO_KHR };
+		HLogInfo("Runtime present sync config loaded. vsync={}.", runtimeVsync ? "true" : "false");
 		RHI::SwapChainInitConfig scConfig{};
 		scConfig.swapchainBufferCount = config.swapchainBufferCount;
 		scConfig.window = window->get_native_interface();
@@ -655,51 +662,53 @@ namespace AshEngine
 		}
 
 		const RendererFrameStats& frame_stats = renderer->get_frame_stats();
-		if (frame_stats.frame_width == 0 &&
+		const bool has_frame_stats = !(frame_stats.frame_width == 0 &&
 			frame_stats.frame_height == 0 &&
 			frame_stats.average_fps <= 0.0 &&
-			frame_stats.cpu_frame_time_ms <= 0.0)
+			frame_stats.cpu_frame_time_ms <= 0.0);
+
+		if (has_frame_stats)
 		{
-			return;
+			uiContext->set_next_window_position({ 10.0f, 10.0f }, UIConditionFlagBits::Always);
+			UIColor colorOverlayBackground = uiContext->get_style_color(UIStyleColorKind::WindowBg);
+			colorOverlayBackground.a *= 0.82f;
+			UIColor colorOverlayBorder = uiContext->get_style_color(UIStyleColorKind::Border);
+			colorOverlayBorder.a *= 0.90f;
+			uiContext->push_style_color(UIStyleColorKind::WindowBg, colorOverlayBackground);
+			uiContext->push_style_color(UIStyleColorKind::Border, colorOverlayBorder);
+			const UIWindowFlags overlay_flags =
+				UIWindowFlagBits::NoDocking |
+				UIWindowFlagBits::NoTitleBar |
+				UIWindowFlagBits::NoResize |
+				UIWindowFlagBits::NoMove |
+				UIWindowFlagBits::NoScrollbar |
+				UIWindowFlagBits::NoScrollWithMouse |
+				UIWindowFlagBits::NoCollapse |
+				UIWindowFlagBits::NoSavedSettings |
+				UIWindowFlagBits::NoInputs |
+				UIWindowFlagBits::AlwaysAutoResize |
+				UIWindowFlagBits::NoBringToFrontOnFocus |
+				UIWindowFlagBits::NoNavFocus;
+
+			const bool window_visible = uiContext->begin_window("EngineFrameStatsOverlay", nullptr, overlay_flags);
+			if (window_visible)
+			{
+				const double display_fps = frame_stats.average_fps > 0.0 ? frame_stats.average_fps : frame_stats.instantaneous_fps;
+				const double display_ms =
+					frame_stats.average_cpu_frame_time_ms > 0.0 ? frame_stats.average_cpu_frame_time_ms : frame_stats.cpu_frame_time_ms;
+				uiContext->text("%s  %ux%u", get_rhi_backend_name(), frame_stats.frame_width, frame_stats.frame_height);
+				uiContext->text("FPS %.1f  Frame %.2f ms", display_fps, display_ms);
+				uiContext->text(
+					"Draws %u  Passes %u  Dispatch %u",
+					frame_stats.draw_call_count,
+					frame_stats.graphics_pass_count,
+					frame_stats.compute_dispatch_count);
+			}
+			uiContext->end_window();
+			uiContext->pop_style_color(2);
 		}
 
-		uiContext->set_next_window_position({ 10.0f, 10.0f }, UIConditionFlagBits::Always);
-		UIColor colorOverlayBackground = uiContext->get_style_color(UIStyleColorKind::WindowBg);
-		colorOverlayBackground.a *= 0.82f;
-		UIColor colorOverlayBorder = uiContext->get_style_color(UIStyleColorKind::Border);
-		colorOverlayBorder.a *= 0.90f;
-		uiContext->push_style_color(UIStyleColorKind::WindowBg, colorOverlayBackground);
-		uiContext->push_style_color(UIStyleColorKind::Border, colorOverlayBorder);
-		const UIWindowFlags overlay_flags =
-			UIWindowFlagBits::NoDocking |
-			UIWindowFlagBits::NoTitleBar |
-			UIWindowFlagBits::NoResize |
-			UIWindowFlagBits::NoMove |
-			UIWindowFlagBits::NoScrollbar |
-			UIWindowFlagBits::NoScrollWithMouse |
-			UIWindowFlagBits::NoCollapse |
-			UIWindowFlagBits::NoSavedSettings |
-			UIWindowFlagBits::NoInputs |
-			UIWindowFlagBits::AlwaysAutoResize |
-			UIWindowFlagBits::NoBringToFrontOnFocus |
-			UIWindowFlagBits::NoNavFocus;
-
-		const bool window_visible = uiContext->begin_window("EngineFrameStatsOverlay", nullptr, overlay_flags);
-		if (window_visible)
-		{
-			const double display_fps = frame_stats.average_fps > 0.0 ? frame_stats.average_fps : frame_stats.instantaneous_fps;
-			const double display_ms =
-				frame_stats.average_cpu_frame_time_ms > 0.0 ? frame_stats.average_cpu_frame_time_ms : frame_stats.cpu_frame_time_ms;
-			uiContext->text("%s  %ux%u", get_rhi_backend_name(), frame_stats.frame_width, frame_stats.frame_height);
-			uiContext->text("FPS %.1f  Frame %.2f ms", display_fps, display_ms);
-			uiContext->text(
-				"Draws %u  Passes %u  Dispatch %u",
-				frame_stats.draw_call_count,
-				frame_stats.graphics_pass_count,
-				frame_stats.compute_dispatch_count);
-		}
-		uiContext->end_window();
-		uiContext->pop_style_color(2);
+		sceneRenderer.draw_render_debug_view_ui(*uiContext);
 	}
 	auto Application::_on_gui() -> void
 	{

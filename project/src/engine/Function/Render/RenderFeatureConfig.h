@@ -9,7 +9,8 @@ namespace AshEngine
 {
 	enum class RenderSwitch : uint8_t
 	{
-		Count = 0
+		VSync = 0,
+		Count
 	};
 
 	struct RenderSwitchDescriptor

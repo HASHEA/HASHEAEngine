@@ -15,13 +15,23 @@ namespace RHI
 		constexpr uint32_t k_staging_dedicated_threshold = 2u * 1024u * 1024u;
 		constexpr uint32_t k_staging_page_idle_frames    = 16u;
 		constexpr uint32_t k_staging_evict_tolerance     = 1u;
+
+		auto align_up(VkDeviceSize value, uint32_t alignment) -> VkDeviceSize
+		{
+			const VkDeviceSize safe_alignment = alignment > 0u ? static_cast<VkDeviceSize>(alignment) : 1u;
+			return (value + safe_alignment - 1u) / safe_alignment * safe_alignment;
+		}
 	}
 
-	VulkanStagingBuffer::VulkanStagingBuffer(uint32_t uByteWidth, const VK_SUBRESOURCE_DATA* pData, bool bReadOperation)
+	VulkanStagingBuffer::VulkanStagingBuffer(
+		uint32_t uByteWidth,
+		const VK_SUBRESOURCE_DATA* pData,
+		bool bReadOperation,
+		uint32_t alignment)
 	{
 		auto* pPool = VulkanContext::get()->get_vulkan_staging_buffer_pool();
 		H_ASSERT(pPool);
-		auto slice = pPool->alloc_slice(uByteWidth, bReadOperation);
+		auto slice = pPool->alloc_slice(uByteWidth, bReadOperation, alignment);
 		H_ASSERT(slice.page);
 
 		m_pageBuffer    = slice.page->buffer;
@@ -223,7 +233,7 @@ namespace RHI
 		return _create_page(pageSize, bReadback, false);
 	}
 
-	auto VulkanStagingBufferPool::alloc_slice(uint32_t size, bool bReadback) -> SliceAlloc
+	auto VulkanStagingBufferPool::alloc_slice(uint32_t size, bool bReadback, uint32_t alignment) -> SliceAlloc
 	{
 		H_ASSERT(size > 0u);
 		std::lock_guard<std::mutex> lock(m_mutex);
@@ -244,7 +254,8 @@ namespace RHI
 		Page* active = pk.active;
 		if (active)
 		{
-			if (active->offset + size > active->size)
+			const VkDeviceSize alignedOffset = align_up(active->offset, alignment);
+			if (alignedOffset + size > active->size)
 			{
 				pk.in_use.push_back(active);
 				active = nullptr;
@@ -257,8 +268,8 @@ namespace RHI
 			H_ASSERT(active);
 			pk.active = active;
 		}
-		const VkDeviceSize sliceOffset = active->offset;
-		active->offset += size;
+		const VkDeviceSize sliceOffset = align_up(active->offset, alignment);
+		active->offset = sliceOffset + size;
 		active->last_use_frame = currentFrame;
 		active->outstanding_slices++;
 		return SliceAlloc{ active, sliceOffset };

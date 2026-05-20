@@ -1,12 +1,14 @@
 #pragma once
 
 #include "Function/Render/RenderDevice.h"
+#include <cstdint>
 #include <memory>
 
 namespace AshEngine
 {
 	struct ASH_API SceneRenderViewContext
 	{
+		uint64_t view_id = 0;
 		const char* debug_name = nullptr;
 		std::shared_ptr<RenderTarget> output_target = nullptr;
 		bool has_viewport = false;

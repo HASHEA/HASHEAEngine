@@ -24,7 +24,11 @@ namespace RHI
 	{
 		friend class VulkanStagingBufferPool;
 	public:
-		VulkanStagingBuffer(uint32_t uByteWidth, const VK_SUBRESOURCE_DATA* pData, bool bReadOperation);
+		VulkanStagingBuffer(
+			uint32_t uByteWidth,
+			const VK_SUBRESOURCE_DATA* pData,
+			bool bReadOperation,
+			uint32_t alignment = 4u);
 		~VulkanStagingBuffer();
 
 		// Underlying VkBuffer for the entire page. Callers MUST add get_buffer_offset()
@@ -105,7 +109,7 @@ namespace RHI
 		};
 
 		// Called by VulkanStagingBuffer ctor.
-		auto alloc_slice(uint32_t size, bool bReadback) -> SliceAlloc;
+		auto alloc_slice(uint32_t size, bool bReadback, uint32_t alignment) -> SliceAlloc;
 		// Called by deferred lambda from VulkanStagingBuffer dtor.
 		auto release_slice(uint32_t pageId) -> void;
 

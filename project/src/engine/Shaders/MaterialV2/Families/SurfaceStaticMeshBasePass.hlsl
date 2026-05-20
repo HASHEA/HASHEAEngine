@@ -76,11 +76,14 @@ inline AshPixelParameters BuildSurfaceStaticMeshPixelParameters(VSOutput input)
 {
     AshPixelParameters params;
     params.position_cs = input.position;
+    params.clip_position_cs = input.position;
+    params.previous_clip_position_cs = input.position;
     params.normal_os = input.normal_os;
     params.tangent_os = input.tangent_os;
     params.uv0 = input.uv0;
     params.uv1 = input.uv1;
     params.vertex_color = input.vertex_color;
+    params.temporal_valid = 0.0;
     return params;
 }
 

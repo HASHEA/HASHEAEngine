@@ -9,7 +9,9 @@ namespace AshEngine
 {
 	namespace
 	{
-		static constexpr std::array<RenderSwitchDescriptor, 0> k_render_switch_descriptors{};
+		static constexpr std::array<RenderSwitchDescriptor, static_cast<size_t>(RenderSwitch::Count)> k_render_switch_descriptors{ {
+			{ RenderSwitch::VSync, "Rendering", "VSync", false, "VSync" }
+		} };
 
 		static auto switch_index(RenderSwitch render_switch) -> size_t
 		{

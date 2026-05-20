@@ -16,6 +16,11 @@ namespace AshEngine
 		glm::vec4 object_to_clip_col1{ 0.0f, 1.0f, 0.0f, 0.0f };
 		glm::vec4 object_to_clip_col2{ 0.0f, 0.0f, 1.0f, 0.0f };
 		glm::vec4 object_to_clip_col3{ 0.0f, 0.0f, 0.0f, 1.0f };
+		glm::vec4 previous_object_to_clip_col0{ 1.0f, 0.0f, 0.0f, 0.0f };
+		glm::vec4 previous_object_to_clip_col1{ 0.0f, 1.0f, 0.0f, 0.0f };
+		glm::vec4 previous_object_to_clip_col2{ 0.0f, 0.0f, 1.0f, 0.0f };
+		glm::vec4 previous_object_to_clip_col3{ 0.0f, 0.0f, 0.0f, 1.0f };
+		glm::vec4 temporal_flags{ 0.0f, 0.0f, 0.0f, 0.0f };
 	};
 
 	inline auto make_mesh_vertex_input_layout() -> RHI::VertexInputCreation
@@ -77,7 +82,7 @@ namespace AshEngine
 			}
 		};
 
-		constexpr std::array<RHI::VertexAttributeDesc, 10> attributes = {
+		constexpr std::array<RHI::VertexAttributeDesc, 15> attributes = {
 			RHI::VertexAttributeDesc{ 0, 0, static_cast<uint32_t>(offsetof(MeshVertex, position)), RHI::AshVertexComponentFormat::Float3, RHI::AshVertexSemantic::Position, 0, "POSITION" },
 			RHI::VertexAttributeDesc{ 1, 0, static_cast<uint32_t>(offsetof(MeshVertex, normal)), RHI::AshVertexComponentFormat::Float3, RHI::AshVertexSemantic::Normal, 0, "NORMAL" },
 			RHI::VertexAttributeDesc{ 2, 0, static_cast<uint32_t>(offsetof(MeshVertex, tangent)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Tangent, 0, "TANGENT" },
@@ -88,6 +93,11 @@ namespace AshEngine
 			RHI::VertexAttributeDesc{ 7, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, object_to_clip_col1)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 3, "TEXCOORD" },
 			RHI::VertexAttributeDesc{ 8, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, object_to_clip_col2)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 4, "TEXCOORD" },
 			RHI::VertexAttributeDesc{ 9, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, object_to_clip_col3)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 5, "TEXCOORD" },
+			RHI::VertexAttributeDesc{ 10, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, previous_object_to_clip_col0)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 6, "TEXCOORD" },
+			RHI::VertexAttributeDesc{ 11, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, previous_object_to_clip_col1)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 7, "TEXCOORD" },
+			RHI::VertexAttributeDesc{ 12, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, previous_object_to_clip_col2)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 8, "TEXCOORD" },
+			RHI::VertexAttributeDesc{ 13, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, previous_object_to_clip_col3)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 9, "TEXCOORD" },
+			RHI::VertexAttributeDesc{ 14, 1, static_cast<uint32_t>(offsetof(SceneStaticMeshInstanceData, temporal_flags)), RHI::AshVertexComponentFormat::Float4, RHI::AshVertexSemantic::Unspecified, 10, "TEXCOORD" },
 		};
 
 		return RHI::make_vertex_input_layout(streams, attributes);

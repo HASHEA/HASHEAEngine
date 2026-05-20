@@ -72,6 +72,52 @@ namespace AshEngine
 			return false;
 		}
 
+		auto parse_ao_debug_view(const std::string& value, AmbientOcclusionDebugView& out_view) -> bool
+		{
+			const std::string token = normalize_token(value);
+			if (token == "off" || token == "none")
+			{
+				out_view = AmbientOcclusionDebugView::Off;
+				return true;
+			}
+			if (token == "rawao" || token == "raw")
+			{
+				out_view = AmbientOcclusionDebugView::RawAO;
+				return true;
+			}
+			if (token == "finalao" || token == "final" || token == "ao")
+			{
+				out_view = AmbientOcclusionDebugView::FinalAO;
+				return true;
+			}
+			if (token == "depth")
+			{
+				out_view = AmbientOcclusionDebugView::Depth;
+				return true;
+			}
+			if (token == "normal" || token == "normals")
+			{
+				out_view = AmbientOcclusionDebugView::Normal;
+				return true;
+			}
+			if (token == "motionvector" || token == "motionvectors" || token == "velocity")
+			{
+				out_view = AmbientOcclusionDebugView::MotionVector;
+				return true;
+			}
+			if (token == "temporalao" || token == "temporal")
+			{
+				out_view = AmbientOcclusionDebugView::TemporalAO;
+				return true;
+			}
+			if (token == "historyweight" || token == "history")
+			{
+				out_view = AmbientOcclusionDebugView::HistoryWeight;
+				return true;
+			}
+			return false;
+		}
+
 		auto try_get_ini_string(const IniConfig& ini_config, const char* section, const char* key, std::string& out_value) -> bool
 		{
 			if (!ini_config.has_value(section, key))
@@ -160,6 +206,30 @@ namespace AshEngine
 		}
 	}
 
+	const char* ambient_occlusion_debug_view_name(AmbientOcclusionDebugView view)
+	{
+		switch (view)
+		{
+		case AmbientOcclusionDebugView::RawAO:
+			return "RawAO";
+		case AmbientOcclusionDebugView::FinalAO:
+			return "FinalAO";
+		case AmbientOcclusionDebugView::Depth:
+			return "Depth";
+		case AmbientOcclusionDebugView::Normal:
+			return "Normal";
+		case AmbientOcclusionDebugView::MotionVector:
+			return "MotionVector";
+		case AmbientOcclusionDebugView::TemporalAO:
+			return "TemporalAO";
+		case AmbientOcclusionDebugView::HistoryWeight:
+			return "HistoryWeight";
+		case AmbientOcclusionDebugView::Off:
+		default:
+			return "Off";
+		}
+	}
+
 	AmbientOcclusionConfig make_default_ambient_occlusion_config()
 	{
 		return AmbientOcclusionConfig{};
@@ -203,6 +273,23 @@ namespace AshEngine
 			}
 		}
 
+		std::string debug_view_text{};
+		if (try_get_ini_string(ini_config, "AmbientOcclusion", "DebugView", debug_view_text))
+		{
+			AmbientOcclusionDebugView parsed_debug_view = config.debug_view;
+			if (parse_ao_debug_view(debug_view_text, parsed_debug_view))
+			{
+				config.debug_view = parsed_debug_view;
+			}
+			else
+			{
+				HLogWarning(
+					"AmbientOcclusion.DebugView '{}' is invalid. Keeping default '{}'.",
+					debug_view_text,
+					ambient_occlusion_debug_view_name(config.debug_view));
+			}
+		}
+
 		float value = 0.0f;
 		if (try_get_ini_float(ini_config, "AmbientOcclusion", "Radius", value))
 		{
@@ -216,6 +303,18 @@ namespace AshEngine
 		{
 			config.power = clamp_range(value, config.power, 0.05f, 8.0f);
 		}
+		if (try_get_ini_float(ini_config, "AmbientOcclusion", "TemporalBlend", value))
+		{
+			config.temporal_blend = clamp_range(value, config.temporal_blend, 0.0f, 0.98f);
+		}
+		if (try_get_ini_float(ini_config, "AmbientOcclusion", "TemporalDepthThreshold", value))
+		{
+			config.temporal_depth_threshold = clamp_range(value, config.temporal_depth_threshold, 0.000001f, 0.25f);
+		}
+		if (try_get_ini_float(ini_config, "AmbientOcclusion", "TemporalNormalThreshold", value))
+		{
+			config.temporal_normal_threshold = clamp_range(value, config.temporal_normal_threshold, 0.0f, 1.0f);
+		}
 
 		bool bool_value = false;
 		if (ini_config.try_get_bool("AmbientOcclusion", "HalfResolution", bool_value))
@@ -226,16 +325,25 @@ namespace AshEngine
 		{
 			config.blur = bool_value;
 		}
+		if (ini_config.try_get_bool("AmbientOcclusion", "Temporal", bool_value))
+		{
+			config.temporal = bool_value;
+		}
 
 		HLogInfo(
-			"Runtime ambient occlusion config loaded. mode={} quality={} radius={} intensity={} power={} half_resolution={} blur={}.",
+			"Runtime ambient occlusion config loaded. mode={} quality={} debug_view={} radius={} intensity={} power={} half_resolution={} blur={} temporal={} temporal_blend={} temporal_depth_threshold={} temporal_normal_threshold={}.",
 			ambient_occlusion_mode_name(config.mode),
 			ambient_occlusion_quality_name(config.quality),
+			ambient_occlusion_debug_view_name(config.debug_view),
 			config.radius,
 			config.intensity,
 			config.power,
 			config.half_resolution,
-			config.blur);
+			config.blur,
+			config.temporal,
+			config.temporal_blend,
+			config.temporal_depth_threshold,
+			config.temporal_normal_threshold);
 		return config;
 	}
 

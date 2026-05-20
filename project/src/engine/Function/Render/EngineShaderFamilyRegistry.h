@@ -82,4 +82,6 @@ namespace AshEngine
 	private:
 		std::vector<EngineShaderFamilyDesc> m_families{};
 	};
+
+	ASH_API void hash_engine_shader_family_file_signatures(uint64_t& hash_value, EngineShaderFamily family);
 }

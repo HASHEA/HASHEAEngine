@@ -2,6 +2,7 @@
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
+#include "Function/Application.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/MaterialRenderProxy.h"
@@ -26,6 +27,7 @@ namespace AshEngine
 			"project/src/engine/Shaders/Debug/DebugDrawOverlay.hlsl";
 		static constexpr const char* k_vertex_decl_locations_shader_path =
 			"project/src/engine/Graphics/Shaders/AshVertexDeclLocations.hlsli";
+		static constexpr size_t k_scene_instance_buffer_frame_lag = 3;
 
 		struct DebugDrawVertex
 		{
@@ -268,13 +270,32 @@ namespace AshEngine
 			}
 		};
 
-		static auto make_instance_data(const glm::mat4& object_to_clip) -> SceneStaticMeshInstanceData
+		static auto resolve_static_mesh_temporal_key(const VisibleStaticMeshDraw& draw) -> uint64_t
+		{
+			return draw.entity_id != 0 ? static_cast<uint64_t>(draw.entity_id) : draw.primitive_id;
+		}
+
+		static auto resolve_render_frame_index(const VisibleRenderFrame& frame) -> uint64_t
+		{
+			Application* application = Application::get();
+			return application ? application->get_frame_index() : frame.frame_index;
+		}
+
+		static auto make_instance_data(
+			const glm::mat4& object_to_clip,
+			const glm::mat4& previous_object_to_clip,
+			bool temporal_valid) -> SceneStaticMeshInstanceData
 		{
 			SceneStaticMeshInstanceData data{};
 			data.object_to_clip_col0 = object_to_clip[0];
 			data.object_to_clip_col1 = object_to_clip[1];
 			data.object_to_clip_col2 = object_to_clip[2];
 			data.object_to_clip_col3 = object_to_clip[3];
+			data.previous_object_to_clip_col0 = previous_object_to_clip[0];
+			data.previous_object_to_clip_col1 = previous_object_to_clip[1];
+			data.previous_object_to_clip_col2 = previous_object_to_clip[2];
+			data.previous_object_to_clip_col3 = previous_object_to_clip[3];
+			data.temporal_flags = glm::vec4(temporal_valid ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 			return data;
 		}
 
@@ -291,6 +312,31 @@ namespace AshEngine
 			{
 				draw_desc.scissor = view_context.scissor;
 			}
+		}
+
+		static void register_render_debug_item(
+			RenderDebugView& debug_view,
+			const char* name,
+			const char* display_name,
+			RenderGraphTextureRef texture,
+			RenderDebugVisualization visualization,
+			RenderTextureFormat format,
+			uint32_t width,
+			uint32_t height)
+		{
+			if (!texture)
+			{
+				return;
+			}
+
+			debug_view.register_item({
+				name ? name : "",
+				display_name ? display_name : "",
+				texture,
+				visualization,
+				format,
+				width,
+				height });
 		}
 
 		static auto validate_static_mesh_draw_asset(const VisibleStaticMeshDraw& draw) -> bool
@@ -344,6 +390,7 @@ namespace AshEngine
 		m_renderer = renderer;
 		m_debug_draw_service = debug_draw_service;
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_render_debug_view.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_ambient_occlusion_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
@@ -364,9 +411,11 @@ namespace AshEngine
 		m_post_process_tone_map_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
 		m_ambient_occlusion_pass.shutdown();
+		m_render_debug_view.shutdown();
 		m_instance_buffers.clear();
 		m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
 		m_next_instance_buffer_slot = 0;
+		m_temporal_view_states.clear();
 		m_logged_warning_keys.clear();
 		m_logged_material_usage_keys.clear();
 		m_renderer = nullptr;
@@ -389,15 +438,70 @@ namespace AshEngine
 		return buffer_slot_base + local_buffer_index;
 	}
 
-	void SceneRenderer::begin_instance_buffer_frame(uint64_t frame_index)
+	size_t SceneRenderer::instance_buffer_frame_lag()
 	{
-		if (m_instance_buffer_frame_index == frame_index)
+		return k_scene_instance_buffer_frame_lag;
+	}
+
+	size_t SceneRenderer::resolve_frame_lagged_instance_buffer_slot(size_t logical_buffer_slot, uint64_t render_frame_index)
+	{
+		const size_t frame_ring_index =
+			static_cast<size_t>(render_frame_index % static_cast<uint64_t>(k_scene_instance_buffer_frame_lag));
+		return logical_buffer_slot * k_scene_instance_buffer_frame_lag + frame_ring_index;
+	}
+
+	void SceneRenderer::begin_instance_buffer_frame(uint64_t render_frame_index)
+	{
+		if (m_instance_buffer_frame_index == render_frame_index)
 		{
 			return;
 		}
 
-		m_instance_buffer_frame_index = frame_index;
+		m_instance_buffer_frame_index = render_frame_index;
 		m_next_instance_buffer_slot = 0;
+	}
+
+	uint64_t SceneRenderer::resolve_temporal_view_key(const SceneRenderViewContext& view_context) const
+	{
+		if (view_context.view_id != 0)
+		{
+			return view_context.view_id;
+		}
+		return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(view_context.output_target.get()));
+	}
+
+	const SceneRenderer::SceneTemporalViewState* SceneRenderer::find_previous_temporal_view_state(
+		uint64_t view_key) const
+	{
+		const auto found = m_temporal_view_states.find(view_key);
+		if (found == m_temporal_view_states.end() ||
+			!found->second.valid)
+		{
+			return nullptr;
+		}
+		return &found->second;
+	}
+
+	void SceneRenderer::commit_temporal_view_state(uint64_t view_key, const VisibleRenderFrame& frame)
+	{
+		if (view_key == 0)
+		{
+			return;
+		}
+
+		SceneTemporalViewState& state = m_temporal_view_states[view_key];
+		state.view_projection = frame.view_projection;
+		state.static_mesh_world_transforms.clear();
+		state.static_mesh_world_transforms.reserve(frame.static_mesh_draws.size());
+		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+		{
+			const uint64_t temporal_key = resolve_static_mesh_temporal_key(draw);
+			if (temporal_key != 0)
+			{
+				state.static_mesh_world_transforms[temporal_key] = draw.world_transform;
+			}
+		}
+		state.valid = true;
 	}
 
 	size_t SceneRenderer::reserve_frame_instance_buffer_slot_range(size_t slot_count)
@@ -456,7 +560,8 @@ namespace AshEngine
 		ASH_PROFILE_PLOT("Scene/Lights", static_cast<int64_t>(frame.lights.size()));
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(validate_view_context(view_context));
-		begin_instance_buffer_frame(frame.frame_index);
+		const uint64_t render_frame_index = resolve_render_frame_index(frame);
+		begin_instance_buffer_frame(render_frame_index);
 
 		const uint32_t output_width = view_context.output_target->get_width();
 		const uint32_t output_height = view_context.output_target->get_height();
@@ -467,6 +572,17 @@ namespace AshEngine
 
 		RenderGraphBuilder graph(*m_renderer, view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
 		RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
+		const uint64_t temporal_view_key = resolve_temporal_view_key(view_context);
+		m_render_debug_view.begin_frame();
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneOutput",
+			"Scene Output",
+			output,
+			RenderDebugVisualization::Color,
+			view_context.output_target->get_format(),
+			output_width,
+			output_height);
 
 		SceneDeferredGraphResources graph_resources{};
 		graph_resources.gbuffer_targets.reserve(layout.attachments.size());
@@ -484,6 +600,40 @@ namespace AshEngine
 			graph_resources.gbuffer_targets.push_back(graph.create_texture(desc, attachment_name.c_str()));
 		}
 
+		constexpr std::array<const char*, 5> k_gbuffer_debug_names = {
+			"SceneGBufferA",
+			"SceneGBufferB",
+			"SceneGBufferC",
+			"SceneGBufferD",
+			"SceneGBufferE"
+		};
+		constexpr std::array<const char*, 5> k_gbuffer_debug_display_names = {
+			"GBuffer A",
+			"GBuffer B",
+			"GBuffer C",
+			"GBuffer D MotionVector",
+			"GBuffer E Normal"
+		};
+		constexpr std::array<RenderDebugVisualization, 5> k_gbuffer_debug_visualizations = {
+			RenderDebugVisualization::Color,
+			RenderDebugVisualization::Color,
+			RenderDebugVisualization::Color,
+			RenderDebugVisualization::MotionVector,
+			RenderDebugVisualization::Normal
+		};
+		for (size_t index = 0; index < graph_resources.gbuffer_targets.size() && index < k_gbuffer_debug_names.size(); ++index)
+		{
+			register_render_debug_item(
+				m_render_debug_view,
+				k_gbuffer_debug_names[index],
+				k_gbuffer_debug_display_names[index],
+				graph_resources.gbuffer_targets[index],
+				k_gbuffer_debug_visualizations[index],
+				layout.attachments[index].format,
+				output_width,
+				output_height);
+		}
+
 		RenderGraphTextureDesc depth_desc{};
 		depth_desc.width = static_cast<uint16_t>(output_width);
 		depth_desc.height = static_cast<uint16_t>(output_height);
@@ -493,6 +643,15 @@ namespace AshEngine
 		depth_desc.use_optimized_clear_value = true;
 		depth_desc.optimized_clear_depth_stencil = view_context.depth_clear_value;
 		graph_resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneDeferredDepth",
+			"Depth",
+			graph_resources.depth,
+			RenderDebugVisualization::Depth,
+			depth_desc.format,
+			output_width,
+			output_height);
 
 		RenderGraphTextureDesc lighting_desc{};
 		lighting_desc.width = static_cast<uint16_t>(output_width);
@@ -501,10 +660,37 @@ namespace AshEngine
 		lighting_desc.shader_resource = true;
 		lighting_desc.unordered_access = false;
 		lighting_desc.use_optimized_clear_value = true;
-		lighting_desc.optimized_clear_color = {};
+		lighting_desc.optimized_clear_color = RenderColorValue{ 0.0f, 0.0f, 0.0f, 1.0f };
 		graph_resources.lighting_diffuse = graph.create_texture(lighting_desc, "SceneDeferredLightingDiffuse");
 		graph_resources.lighting_specular = graph.create_texture(lighting_desc, "SceneDeferredLightingSpecular");
 		graph_resources.scene_hdr_linear = graph.create_texture(lighting_desc, "SceneDeferredSceneHDRLinear");
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneDeferredLightingDiffuse",
+			"Deferred Lighting Diffuse",
+			graph_resources.lighting_diffuse,
+			RenderDebugVisualization::LinearHDR,
+			lighting_desc.format,
+			output_width,
+			output_height);
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneDeferredLightingSpecular",
+			"Deferred Lighting Specular",
+			graph_resources.lighting_specular,
+			RenderDebugVisualization::LinearHDR,
+			lighting_desc.format,
+			output_width,
+			output_height);
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneDeferredSceneHDRLinear",
+			"Scene HDR Linear",
+			graph_resources.scene_hdr_linear,
+			RenderDebugVisualization::LinearHDR,
+			lighting_desc.format,
+			output_width,
+			output_height);
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneGBufferPass",
@@ -517,34 +703,81 @@ namespace AshEngine
 				}
 				pass.write_depth(graph_resources.depth, RenderLoadAction::Clear, view_context.depth_clear_value);
 			},
-			[this, &frame, &view_context](RenderGraphRasterContext& context) -> bool
+			[this, &frame, &view_context, render_frame_index](RenderGraphRasterContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneGBufferPass", AshEngine::Profile::Color::Draw);
-				return render_static_meshes_to_pass(frame, view_context, context, PassFamily::GBuffer);
+				return render_static_meshes_to_pass(
+					frame,
+					view_context,
+					context,
+					render_frame_index,
+					PassFamily::GBuffer);
 			}));
 
-		graph_resources.ambient_occlusion = m_ambient_occlusion_pass.add_passes(
+		const AmbientOcclusionPassOutputs ao_outputs = m_ambient_occlusion_pass.add_passes(
 			graph,
 			frame,
 			graph_resources,
 			view_context);
+		graph_resources.ambient_occlusion = ao_outputs.ambient_occlusion;
 		ASH_PROCESS_ERROR(graph_resources.ambient_occlusion);
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneAmbientOcclusionRaw",
+			"Ambient Occlusion Raw",
+			ao_outputs.raw_ao,
+			RenderDebugVisualization::AO,
+			RenderTextureFormat::RGBA8_UNORM,
+			output_width,
+			output_height);
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneAmbientOcclusion",
+			"Ambient Occlusion",
+			ao_outputs.final_ao,
+			RenderDebugVisualization::AO,
+			RenderTextureFormat::RGBA8_UNORM,
+			output_width,
+			output_height);
+		register_render_debug_item(
+			m_render_debug_view,
+			"SceneAmbientOcclusionTemporal",
+			"Ambient Occlusion Temporal",
+			ao_outputs.temporal_ao,
+			RenderDebugVisualization::AO,
+			RenderTextureFormat::RGBA8_UNORM,
+			output_width,
+			output_height);
 
-		ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
-			graph,
-			frame,
-			graph_resources,
-			output,
-			view_context));
+		if (ao_outputs.debug_view)
+		{
+			graph_resources.scene_hdr_linear = ao_outputs.debug_view;
+		}
+		else
+		{
+			ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
+				graph,
+				frame,
+				graph_resources,
+				output,
+				view_context));
+		}
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.add_pass(
 			graph,
 			frame,
 			graph_resources.scene_hdr_linear,
 			output,
 			view_context));
+		ASH_PROCESS_ERROR(m_render_debug_view.add_pass(graph, output, view_context));
 		ASH_PROCESS_ERROR(add_debug_draw_overlay_pass(graph, output, frame, view_context));
 		ASH_PROCESS_ERROR(graph.execute());
+		commit_temporal_view_state(temporal_view_key, frame);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	void SceneRenderer::draw_render_debug_view_ui(UIContext& ui_context)
+	{
+		m_render_debug_view.draw_ui(ui_context);
 	}
 
 	bool SceneRenderer::add_debug_draw_overlay_pass(
@@ -617,6 +850,7 @@ namespace AshEngine
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
 		RenderGraphRasterContext& pass_context,
+		uint64_t render_frame_index,
 		PassFamily pass_family)
 	{
 		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_static_meshes_to_pass", AshEngine::Profile::Color::Draw);
@@ -626,15 +860,41 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		const bool use_instanced_static_mesh_path =
 			should_use_instanced_static_mesh_path(frame.static_mesh_draws.size());
+		const uint64_t temporal_view_key = resolve_temporal_view_key(view_context);
+		const SceneTemporalViewState* previous_temporal_state =
+			find_previous_temporal_view_state(temporal_view_key);
+		const auto build_instance_data = [&frame, previous_temporal_state](const VisibleStaticMeshDraw& draw) -> SceneStaticMeshInstanceData
+		{
+			glm::mat4 previous_world_transform = draw.world_transform;
+			glm::mat4 previous_view_projection = frame.view_projection;
+			bool temporal_valid = false;
+			if (previous_temporal_state)
+			{
+				const uint64_t temporal_key = resolve_static_mesh_temporal_key(draw);
+				const auto found_previous_transform =
+					previous_temporal_state->static_mesh_world_transforms.find(temporal_key);
+				if (found_previous_transform != previous_temporal_state->static_mesh_world_transforms.end())
+				{
+					previous_world_transform = found_previous_transform->second;
+					previous_view_projection = previous_temporal_state->view_projection;
+					temporal_valid = true;
+				}
+			}
+			return make_instance_data(
+				frame.view_projection * draw.world_transform,
+				previous_view_projection * previous_world_transform,
+				temporal_valid);
+		};
 		if (!use_instanced_static_mesh_path)
 		{
 			if (!frame.static_mesh_draws.empty())
 			{
 				const VisibleStaticMeshDraw& draw = frame.static_mesh_draws.front();
 				ASH_PROCESS_ERROR(validate_static_mesh_draw_asset(draw));
-				const SceneStaticMeshInstanceData instance_data =
-					make_instance_data(frame.view_projection * draw.world_transform);
-				const size_t instance_buffer_slot = reserve_frame_instance_buffer_slot_range(1);
+				const SceneStaticMeshInstanceData instance_data = build_instance_data(draw);
+				const size_t logical_instance_buffer_slot = reserve_frame_instance_buffer_slot_range(1);
+				const size_t instance_buffer_slot =
+					resolve_frame_lagged_instance_buffer_slot(logical_instance_buffer_slot, render_frame_index);
 				std::shared_ptr<VertexBuffer> instance_buffer =
 					ensure_instance_buffer(instance_buffer_slot, &instance_data, 1);
 				ASH_PROCESS_ERROR(instance_buffer != nullptr);
@@ -775,20 +1035,25 @@ namespace AshEngine
 					log_staticmesh_pass_usage_once(*section.material, *material_resource, pass_family);
 
 					StaticMeshDrawBatch& batch = find_or_add_batch(batches, batch_lookup, program, draw.render_asset, section);
-					batch.instances.push_back(make_instance_data(frame.view_projection * draw.world_transform));
+					batch.instances.push_back(build_instance_data(draw));
 				}
 			}
 
 			ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(batches.size()));
-			const size_t instance_buffer_slot_base = reserve_frame_instance_buffer_slot_range(batches.size());
+			const size_t logical_instance_buffer_slot_base =
+				reserve_frame_instance_buffer_slot_range(batches.size());
 			for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
 			{
 				StaticMeshDrawBatch& batch = batches[batch_index];
 				ASH_PROCESS_ERROR(batch.program && batch.vertex_buffer && batch.index_buffer && !batch.instances.empty());
 				const uint32_t instance_count = static_cast<uint32_t>(batch.instances.size());
+				const size_t logical_instance_buffer_slot =
+					resolve_instance_buffer_slot(logical_instance_buffer_slot_base, batch_index);
+				const size_t instance_buffer_slot =
+					resolve_frame_lagged_instance_buffer_slot(logical_instance_buffer_slot, render_frame_index);
 				std::shared_ptr<VertexBuffer> instance_buffer =
 					ensure_instance_buffer(
-						resolve_instance_buffer_slot(instance_buffer_slot_base, batch_index),
+						instance_buffer_slot,
 						batch.instances.data(),
 						instance_count);
 				ASH_PROCESS_ERROR(instance_buffer != nullptr);

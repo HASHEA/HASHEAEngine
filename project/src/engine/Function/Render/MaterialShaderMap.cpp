@@ -102,6 +102,7 @@ namespace AshEngine
 		}
 
 		static auto build_shader_file_signature_hash(
+			EngineShaderFamily family,
 			std::string_view host_shader_path,
 			std::string_view user_shader_path,
 			std::string_view generated_bindings_path = {}) -> uint64_t
@@ -113,6 +114,7 @@ namespace AshEngine
 			RHI::hash_shader_file_signature(hash_value, host_path.c_str());
 			RHI::hash_shader_file_signature(hash_value, user_path.c_str());
 			RHI::hash_shader_file_signature(hash_value, generated_path.c_str());
+			hash_engine_shader_family_file_signatures(hash_value, family);
 			return hash_value;
 		}
 
@@ -257,7 +259,7 @@ namespace AshEngine
 
 		const std::string user_shader_path(material.get_material_shader_path());
 		const uint64_t permutation_file_signature_hash =
-			build_shader_file_signature_hash(host_shader_path, user_shader_path);
+			build_shader_file_signature_hash(usage.family, host_shader_path, user_shader_path);
 		const MaterialPermutationKey key{
 			build_permutation_cache_hash(material, usage, host_shader_path, permutation_file_signature_hash),
 			usage
@@ -278,6 +280,7 @@ namespace AshEngine
 		resource.usage = usage;
 		resource.shader_file_signature_hash =
 			build_shader_file_signature_hash(
+				usage.family,
 				host_shader_path,
 				user_shader_path,
 				generated_source.bindings_include_path.generic_string());

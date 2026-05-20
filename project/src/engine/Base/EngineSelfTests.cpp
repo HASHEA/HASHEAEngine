@@ -14,6 +14,7 @@
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/RenderDevice.h"
+#include "Function/Render/RenderDebugView.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/RenderFeatureConfig.h"
@@ -644,7 +645,7 @@ namespace AshEngine
 #endif
 		}
 
-		auto test_render_feature_config_does_not_register_reverse_z_switch() -> bool
+		auto test_render_feature_config_registers_vsync_without_reverse_z() -> bool
 		{
 			const std::filesystem::path test_dir = engine_self_test_dir();
 			const std::filesystem::path config_path = test_dir / "render_feature_self_test.ini";
@@ -652,13 +653,16 @@ namespace AshEngine
 				std::ofstream config_file(config_path, std::ios::trunc);
 				config_file <<
 					"[Rendering]\n"
-					"ReverseZ=true\n";
+					"ReverseZ=true\n"
+					"VSync=true\n";
 			}
 
 			const RenderFeatureConfig config = load_runtime_render_feature_config(config_path.string().c_str());
 			uint32_t descriptor_count = 0;
 			const RenderSwitchDescriptor* descriptors = get_render_switch_descriptors(descriptor_count);
 			bool found_reverse_z = false;
+			bool found_vsync = false;
+			bool vsync_enabled = false;
 			for (uint32_t index = 0; index < descriptor_count; ++index)
 			{
 				const RenderSwitchDescriptor& descriptor = descriptors[index];
@@ -670,10 +674,18 @@ namespace AshEngine
 					found_reverse_z = true;
 					break;
 				}
+				if (descriptor.section != nullptr &&
+					descriptor.key != nullptr &&
+					std::string(descriptor.section) == "Rendering" &&
+					std::string(descriptor.key) == "VSync")
+				{
+					found_vsync = true;
+					vsync_enabled = config.is_enabled(descriptor.id);
+				}
 			}
 
-			return (!found_reverse_z && config.switches.empty()) ||
-				report_self_test_failure("Render feature config", "ReverseZ should not be registered as an Engine.ini render switch");
+			return (!found_reverse_z && found_vsync && vsync_enabled) ||
+				report_self_test_failure("Render feature config", "VSync should be registered as an Engine.ini render switch while ReverseZ remains camera-local");
 		}
 
 		auto test_ambient_occlusion_config_parses_modes_and_clamps_values() -> bool
@@ -686,22 +698,32 @@ namespace AshEngine
 					"[AmbientOcclusion]\n"
 					"Mode=HBAO\n"
 					"Quality=High\n"
+					"DebugView=MotionVector\n"
 					"Radius=-4.0\n"
 					"Intensity=3.5\n"
 					"Power=0.0\n"
 					"HalfResolution=true\n"
-					"Blur=false\n";
+					"Blur=false\n"
+					"Temporal=true\n"
+					"TemporalBlend=0.9\n"
+					"TemporalDepthThreshold=0.02\n"
+					"TemporalNormalThreshold=0.6\n";
 			}
 
 			const AmbientOcclusionConfig config = load_runtime_ambient_occlusion_config(config_path.string().c_str());
 			const bool parsed =
 				config.mode == AmbientOcclusionMode::HBAO &&
 				config.quality == AmbientOcclusionQuality::High &&
+				config.debug_view == AmbientOcclusionDebugView::MotionVector &&
 				config.radius > 0.0f &&
 				config.intensity == 3.5f &&
 				config.power > 0.0f &&
 				config.half_resolution &&
-				!config.blur;
+				!config.blur &&
+				config.temporal &&
+				config.temporal_blend == 0.9f &&
+				config.temporal_depth_threshold == 0.02f &&
+				config.temporal_normal_threshold == 0.6f;
 			if (!parsed)
 			{
 				return report_self_test_failure("AmbientOcclusion config", "valid AO config values were not parsed or clamped correctly");
@@ -714,6 +736,7 @@ namespace AshEngine
 					"[AmbientOcclusion]\n"
 					"Mode=NotAMode\n"
 					"Quality=NotAQuality\n"
+					"DebugView=NotAView\n"
 					"Radius=not-a-number\n";
 			}
 
@@ -721,8 +744,290 @@ namespace AshEngine
 			const AmbientOcclusionConfig defaults = make_default_ambient_occlusion_config();
 			return (invalid_config.mode == defaults.mode &&
 				invalid_config.quality == defaults.quality &&
+				invalid_config.debug_view == defaults.debug_view &&
 				invalid_config.radius == defaults.radius) ||
 				report_self_test_failure("AmbientOcclusion config", "invalid AO config values did not fall back to defaults");
+		}
+
+		auto test_ambient_occlusion_temporal_pipeline_contract() -> bool
+		{
+			std::ifstream config_header_file("project/src/engine/Function/Render/AmbientOcclusionConfig.h");
+			if (!config_header_file.is_open())
+			{
+				return report_self_test_failure("Temporal AO contract", "failed to open AmbientOcclusionConfig.h");
+			}
+			const std::string config_header_source{
+				std::istreambuf_iterator<char>(config_header_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream config_source_file("project/src/engine/Function/Render/AmbientOcclusionConfig.cpp");
+			if (!config_source_file.is_open())
+			{
+				return report_self_test_failure("Temporal AO contract", "failed to open AmbientOcclusionConfig.cpp");
+			}
+			const std::string config_source{
+				std::istreambuf_iterator<char>(config_source_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream pass_header_file("project/src/engine/Function/Render/AmbientOcclusionPass.h");
+			if (!pass_header_file.is_open())
+			{
+				return report_self_test_failure("Temporal AO contract", "failed to open AmbientOcclusionPass.h");
+			}
+			const std::string pass_header_source{
+				std::istreambuf_iterator<char>(pass_header_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream pass_source_file("project/src/engine/Function/Render/AmbientOcclusionPass.cpp");
+			if (!pass_source_file.is_open())
+			{
+				return report_self_test_failure("Temporal AO contract", "failed to open AmbientOcclusionPass.cpp");
+			}
+			const std::string pass_source{
+				std::istreambuf_iterator<char>(pass_source_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream temporal_shader_file("project/src/engine/Shaders/Deferred/AmbientOcclusionTemporal.hlsl");
+			if (!temporal_shader_file.is_open())
+			{
+				return report_self_test_failure("Temporal AO contract", "failed to open AmbientOcclusionTemporal.hlsl");
+			}
+			const std::string temporal_shader_source{
+				std::istreambuf_iterator<char>(temporal_shader_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream debug_shader_file("project/src/engine/Shaders/Deferred/AmbientOcclusionDebug.hlsl");
+			if (!debug_shader_file.is_open())
+			{
+				return report_self_test_failure("Temporal AO contract", "failed to open AmbientOcclusionDebug.hlsl");
+			}
+			const std::string debug_shader_source{
+				std::istreambuf_iterator<char>(debug_shader_file),
+				std::istreambuf_iterator<char>() };
+
+			const bool ok =
+				config_header_source.find("bool temporal") != std::string::npos &&
+				config_header_source.find("temporal_blend") != std::string::npos &&
+				config_header_source.find("temporal_depth_threshold") != std::string::npos &&
+				config_header_source.find("temporal_normal_threshold") != std::string::npos &&
+				config_header_source.find("TemporalAO") != std::string::npos &&
+				config_header_source.find("HistoryWeight") != std::string::npos &&
+				config_source.find("\"Temporal\"") != std::string::npos &&
+				config_source.find("\"TemporalBlend\"") != std::string::npos &&
+				config_source.find("\"TemporalDepthThreshold\"") != std::string::npos &&
+				config_source.find("\"TemporalNormalThreshold\"") != std::string::npos &&
+				pass_header_source.find("m_temporal_program") != std::string::npos &&
+				pass_header_source.find("m_temporal_history_ao") != std::string::npos &&
+				pass_header_source.find("m_temporal_history_meta") != std::string::npos &&
+				pass_source.find("AmbientOcclusionTemporal.hlsl") != std::string::npos &&
+				pass_source.find("SceneAmbientOcclusionTemporalPass") != std::string::npos &&
+				pass_source.find("SceneAmbientOcclusionHistory") != std::string::npos &&
+				pass_source.find("SceneAmbientOcclusionHistoryMeta") != std::string::npos &&
+				pass_source.find("gbuffer_targets[3]") != std::string::npos &&
+				pass_source.find("write_color(1") != std::string::npos &&
+				pass_source.find("write_color(2") != std::string::npos &&
+				temporal_shader_source.find("SceneAmbientOcclusionHistory") != std::string::npos &&
+				temporal_shader_source.find("SceneAmbientOcclusionHistoryMeta") != std::string::npos &&
+				temporal_shader_source.find("previous_uv = input.uv - motion.xy") != std::string::npos &&
+				temporal_shader_source.find("motion.a") != std::string::npos &&
+				temporal_shader_source.find("abs(previous_depth - history_meta.r)") != std::string::npos &&
+				temporal_shader_source.find("dot(previous_normal_ws, current.normal_ws)") != std::string::npos &&
+				debug_shader_source.find("debug_view == 6u") != std::string::npos &&
+				debug_shader_source.find("debug_view == 7u") != std::string::npos;
+			return ok ||
+				report_self_test_failure("Temporal AO contract", "Temporal AO config, history pass, reprojection shader, or debug views are incomplete");
+		}
+
+		auto test_render_debug_view_config_parses_runtime_selection() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir();
+			const std::filesystem::path config_path = test_dir / "render_debug_view_self_test.ini";
+			{
+				std::ofstream config_file(config_path, std::ios::trunc);
+				config_file <<
+					"[RenderDebugView]\n"
+					"Enabled=true\n"
+					"Selected=SceneGBufferE\n";
+			}
+
+			const RenderDebugViewConfig config = load_runtime_render_debug_view_config(config_path.string().c_str());
+			if (!config.enabled || config.selected != "SceneGBufferE")
+			{
+				return report_self_test_failure("RenderDebugView config", "valid config did not preserve enabled state and selected RT");
+			}
+
+			const std::filesystem::path invalid_config_path = test_dir / "render_debug_view_invalid_self_test.ini";
+			{
+				std::ofstream config_file(invalid_config_path, std::ios::trunc);
+				config_file <<
+					"[RenderDebugView]\n"
+					"Enabled=not-a-bool\n"
+					"Selected=SceneDeferredDepth\n";
+			}
+
+			const RenderDebugViewConfig invalid_config = load_runtime_render_debug_view_config(invalid_config_path.string().c_str());
+			const RenderDebugViewConfig defaults = make_default_render_debug_view_config();
+			return (!invalid_config.enabled &&
+				invalid_config.enabled == defaults.enabled &&
+				invalid_config.selected == "SceneDeferredDepth") ||
+				report_self_test_failure("RenderDebugView config", "invalid bool should fall back while selected string is preserved");
+		}
+
+		auto test_render_debug_view_registry_replaces_duplicate_items() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RenderDebugViewRegistrySelfTest");
+
+			RenderTargetDesc desc_a{};
+			desc_a.width = 64;
+			desc_a.height = 64;
+			desc_a.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef texture_a = graph.register_external_texture_desc_for_tests(desc_a, "SceneGBufferA");
+
+			RenderTargetDesc desc_b{};
+			desc_b.width = 128;
+			desc_b.height = 64;
+			desc_b.format = RenderTextureFormat::RGBA16_SFLOAT;
+			RenderGraphTextureRef texture_b = graph.register_external_texture_desc_for_tests(desc_b, "SceneGBufferAUpdated");
+
+			RenderDebugViewFrameRegistry registry{};
+			registry.begin_frame();
+			registry.register_item({
+				"SceneGBufferA",
+				"GBuffer A",
+				texture_a,
+				RenderDebugVisualization::Color,
+				RenderTextureFormat::RGBA8_UNORM,
+				64u,
+				64u });
+			registry.register_item({
+				"SceneGBufferA",
+				"GBuffer A Updated",
+				texture_b,
+				RenderDebugVisualization::Normal,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				128u,
+				64u });
+
+			const RenderDebugViewItem* item = registry.find_item("SceneGBufferA");
+			const bool ok =
+				registry.get_items().size() == 1u &&
+				item != nullptr &&
+				item->texture == texture_b &&
+				item->display_name == "GBuffer A Updated" &&
+				item->visualization == RenderDebugVisualization::Normal &&
+				item->format == RenderTextureFormat::RGBA16_SFLOAT &&
+				item->width == 128u &&
+				item->height == 64u;
+			return ok ||
+				report_self_test_failure("RenderDebugView registry", "duplicate debug item did not update in-place");
+		}
+
+		auto test_render_debug_view_graph_pass_contract() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RenderDebugViewGraphSelfTest");
+
+			RenderTargetDesc output_desc{};
+			output_desc.width = 64;
+			output_desc.height = 64;
+			output_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(output_desc, "SceneOutput");
+
+			RenderGraphTextureDesc selected_desc{};
+			selected_desc.width = 64;
+			selected_desc.height = 64;
+			selected_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			selected_desc.shader_resource = true;
+			RenderGraphTextureRef selected = graph.create_texture(selected_desc, "SceneDeferredSceneHDRLinear");
+
+			graph.add_raster_pass(
+				"SelectedProducer",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.write_color(0, selected, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			if (!RenderDebugView::add_pass_for_tests(graph, selected, output))
+			{
+				return report_self_test_failure("RenderDebugView graph pass", "failed to add debug view pass in headless graph");
+			}
+
+			RenderGraphCompileResult result{};
+			if (!graph.compile_for_tests(result))
+			{
+				return report_self_test_failure("RenderDebugView graph pass", "debug view graph did not compile");
+			}
+
+			bool saw_selected_srv = false;
+			bool saw_output_rtv = false;
+			if (result.pass_barriers.size() > 1u)
+			{
+				for (const auto& transition : result.pass_barriers[1].transitions)
+				{
+					if (transition.texture == selected && transition.state == RHI::AshResourceState::SRVGraphics)
+					{
+						saw_selected_srv = true;
+					}
+					if (transition.texture == output && transition.state == RHI::AshResourceState::RTV)
+					{
+						saw_output_rtv = true;
+					}
+				}
+			}
+
+			RenderGraphBuilder bypass_graph = RenderGraphBuilder::create_headless_for_tests("RenderDebugViewBypassSelfTest");
+			RenderGraphTextureRef bypass_output = bypass_graph.register_external_texture_desc_for_tests(output_desc, "SceneOutput");
+			const bool bypass_off = RenderDebugView::should_bypass_debug_pass("Off");
+			const bool bypass_scene_output = RenderDebugView::should_bypass_debug_pass("SceneOutput");
+			const bool bypass_added = RenderDebugView::add_pass_for_tests(bypass_graph, bypass_output, bypass_output);
+
+			const bool ok =
+				result.live_pass_indices.size() == 2u &&
+				result.live_pass_indices[0] == 0u &&
+				result.live_pass_indices[1] == 1u &&
+				saw_selected_srv &&
+				saw_output_rtv &&
+				bypass_off &&
+				bypass_scene_output &&
+				bypass_added &&
+				bypass_graph.get_pass_count_for_tests() == 0u;
+			return ok ||
+				report_self_test_failure("RenderDebugView graph pass", "debug pass did not declare selected SRV/output RTV or bypass correctly");
+		}
+
+		auto test_render_debug_view_linear_hdr_uses_raw_preview() -> bool
+		{
+			std::ifstream shader_file("project/src/engine/Shaders/Debug/RenderDebugView.hlsl");
+			if (!shader_file.is_open())
+			{
+				return report_self_test_failure("RenderDebugView LinearHDR", "failed to open RenderDebugView.hlsl");
+			}
+			const std::string shader_source{
+				std::istreambuf_iterator<char>(shader_file),
+				std::istreambuf_iterator<char>() };
+
+			const size_t branch_begin = shader_source.find("if (mode == 1u)");
+			if (branch_begin == std::string::npos)
+			{
+				return report_self_test_failure("RenderDebugView LinearHDR", "LinearHDR shader branch was not found");
+			}
+			const size_t branch_end = shader_source.find("else if", branch_begin);
+			if (branch_end == std::string::npos)
+			{
+				return report_self_test_failure("RenderDebugView LinearHDR", "LinearHDR shader branch end was not found");
+			}
+			const std::string linear_hdr_branch = shader_source.substr(branch_begin, branch_end - branch_begin);
+
+			const bool ok =
+				linear_hdr_branch.find("AshDebugVisualizeLinearHDR") != std::string::npos &&
+				linear_hdr_branch.find("AshDebugACESFilm") == std::string::npos &&
+				linear_hdr_branch.find("ACES") == std::string::npos;
+			return ok ||
+				report_self_test_failure("RenderDebugView LinearHDR", "LinearHDR debug path must show raw pre-tonemap HDR, not an ACES-tonemapped preview");
 		}
 
 		auto test_reverse_z_projection_maps_near_far_depths() -> bool
@@ -807,6 +1112,62 @@ namespace AshEngine
 			const bool ok = source.find("draw_desc.reverse_z = view_context.reverse_z") != std::string::npos;
 			return ok ||
 				report_self_test_failure("Deferred ReverseZ light volumes", "deferred light volume draws do not carry the view ReverseZ flag");
+		}
+
+		auto test_static_mesh_gbuffer_shader_writes_motion_vectors() -> bool
+		{
+			std::ifstream shader_file("project/src/engine/Shaders/MaterialV2/Families/SurfaceStaticMeshGBuffer.hlsl");
+			if (!shader_file.is_open())
+			{
+				return report_self_test_failure("StaticMesh GBuffer motion vectors", "failed to open SurfaceStaticMeshGBuffer.hlsl");
+			}
+			const std::string shader_source{
+				std::istreambuf_iterator<char>(shader_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				shader_source.find("previous_object_to_clip") != std::string::npos &&
+				shader_source.find("current_uv - previous_uv") != std::string::npos &&
+				shader_source.find("output.target3 = float4(motion_vector") != std::string::npos;
+			return ok ||
+				report_self_test_failure("StaticMesh GBuffer motion vectors", "GBufferD is not populated from current and previous clip-space positions");
+		}
+
+		auto test_surface_static_mesh_shader_hash_tracks_shared_includes() -> bool
+		{
+			std::ifstream registry_file("project/src/engine/Function/Render/EngineShaderFamilyRegistry.cpp");
+			if (!registry_file.is_open())
+			{
+				return report_self_test_failure("SurfaceStaticMesh shader include hash", "failed to open EngineShaderFamilyRegistry.cpp");
+			}
+			const std::string registry_source{
+				std::istreambuf_iterator<char>(registry_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream shader_map_file("project/src/engine/Function/Render/MaterialShaderMap.cpp");
+			if (!shader_map_file.is_open())
+			{
+				return report_self_test_failure("SurfaceStaticMesh shader include hash", "failed to open MaterialShaderMap.cpp");
+			}
+			const std::string shader_map_source{
+				std::istreambuf_iterator<char>(shader_map_file),
+				std::istreambuf_iterator<char>() };
+
+			std::ifstream proxy_file("project/src/engine/Function/Render/MaterialRenderProxy.cpp");
+			if (!proxy_file.is_open())
+			{
+				return report_self_test_failure("SurfaceStaticMesh shader include hash", "failed to open MaterialRenderProxy.cpp");
+			}
+			const std::string proxy_source{
+				std::istreambuf_iterator<char>(proxy_file),
+				std::istreambuf_iterator<char>() };
+
+			const bool ok =
+				registry_source.find("AshVertexDeclLocations.hlsli") != std::string::npos &&
+				registry_source.find("AshSurfaceDomain.hlsli") != std::string::npos &&
+				shader_map_source.find("hash_engine_shader_family_file_signatures(hash_value, family)") != std::string::npos &&
+				proxy_source.find("hash_engine_shader_family_file_signatures(hash_value, resource.usage.family)") != std::string::npos;
+			return ok ||
+				report_self_test_failure("SurfaceStaticMesh shader include hash", "shared Surface.StaticMesh includes are not part of material shader signatures");
 		}
 
 		template <typename T>
@@ -965,6 +1326,62 @@ namespace AshEngine
 			}
 
 			return true;
+		}
+
+		auto test_scene_renderer_instance_buffer_slots_are_lagged_between_frames() -> bool
+		{
+			const size_t logical_slot = SceneRenderer::resolve_instance_buffer_slot(0, 0);
+			const size_t frame0_slot =
+				SceneRenderer::resolve_frame_lagged_instance_buffer_slot(logical_slot, 0);
+			const size_t frame1_slot =
+				SceneRenderer::resolve_frame_lagged_instance_buffer_slot(logical_slot, 1);
+			const size_t frame2_slot =
+				SceneRenderer::resolve_frame_lagged_instance_buffer_slot(logical_slot, 2);
+			if (frame0_slot == frame1_slot || frame0_slot == frame2_slot || frame1_slot == frame2_slot)
+			{
+				return report_self_test_failure(
+					"SceneRenderer frame-lagged instance buffer slots",
+					"consecutive frames reused the same physical instance buffer slot");
+			}
+
+			const size_t wrapped_slot =
+				SceneRenderer::resolve_frame_lagged_instance_buffer_slot(
+					logical_slot,
+					SceneRenderer::instance_buffer_frame_lag());
+			if (wrapped_slot != frame0_slot)
+			{
+				return report_self_test_failure(
+					"SceneRenderer frame-lagged instance buffer slots",
+					"instance buffer slot ring did not wrap after the configured frame lag");
+			}
+
+			return true;
+		}
+
+		auto test_scene_renderer_temporal_history_uses_render_frame_epoch() -> bool
+		{
+			std::ifstream renderer_file("project/src/engine/Function/Render/SceneRenderer.cpp");
+			if (!renderer_file.is_open())
+			{
+				return report_self_test_failure(
+					"SceneRenderer temporal history",
+					"failed to open SceneRenderer.cpp");
+			}
+
+			const std::string renderer_source{
+				std::istreambuf_iterator<char>(renderer_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				renderer_source.find("resolve_render_frame_index(frame)") != std::string::npos &&
+				renderer_source.find("begin_instance_buffer_frame(render_frame_index)") != std::string::npos &&
+				renderer_source.find("find_previous_temporal_view_state(temporal_view_key)") != std::string::npos &&
+				renderer_source.find("commit_temporal_view_state(temporal_view_key, frame)") != std::string::npos &&
+				renderer_source.find("found->second.frame_index >= frame_index") == std::string::npos &&
+				renderer_source.find("resolve_frame_lagged_instance_buffer_slot(logical_instance_buffer_slot, frame.frame_index)") == std::string::npos;
+			return ok ||
+				report_self_test_failure(
+					"SceneRenderer temporal history",
+					"motion vector history or instance-buffer ring still depends on the logic-side VisibleRenderFrame frame_index");
 		}
 
 		auto test_deferred_hq_gbuffer_layout_contract() -> bool
@@ -1789,16 +2206,25 @@ namespace AshEngine
 		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
-		all_passed = test_render_feature_config_does_not_register_reverse_z_switch() && all_passed;
+		all_passed = test_render_feature_config_registers_vsync_without_reverse_z() && all_passed;
 		all_passed = test_ambient_occlusion_config_parses_modes_and_clamps_values() && all_passed;
+		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
+		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
+		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
+		all_passed = test_render_debug_view_graph_pass_contract() && all_passed;
+		all_passed = test_render_debug_view_linear_hdr_uses_raw_preview() && all_passed;
 		all_passed = test_reverse_z_projection_maps_near_far_depths() && all_passed;
 		all_passed = test_reverse_z_flips_depth_clear_and_compare() && all_passed;
 		all_passed = test_deferred_shader_background_depth_uses_reverse_z_flag() && all_passed;
 		all_passed = test_deferred_light_volume_draws_carry_reverse_z_flag() && all_passed;
+		all_passed = test_static_mesh_gbuffer_shader_writes_motion_vectors() && all_passed;
+		all_passed = test_surface_static_mesh_shader_hash_tracks_shared_includes() && all_passed;
 		all_passed = test_gltf_import_preserves_index_reuse() && all_passed;
 		all_passed = test_material_asset_database_prefers_disk_material_over_builtin_fallback() && all_passed;
 		all_passed = test_scene_renderer_batches_only_when_multiple_static_mesh_draws_are_visible() && all_passed;
 		all_passed = test_scene_renderer_instance_buffer_slots_are_isolated_between_view_submits() && all_passed;
+		all_passed = test_scene_renderer_instance_buffer_slots_are_lagged_between_frames() && all_passed;
+		all_passed = test_scene_renderer_temporal_history_uses_render_frame_epoch() && all_passed;
 		all_passed = test_deferred_hq_gbuffer_layout_contract() && all_passed;
 		all_passed = test_deferred_shading_model_ids_are_stable() && all_passed;
 		all_passed = test_material_asset_loads_declared_shading_model() && all_passed;

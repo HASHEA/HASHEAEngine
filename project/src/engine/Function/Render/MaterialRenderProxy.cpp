@@ -56,6 +56,7 @@ namespace AshEngine
 			RHI::hash_shader_file_signature(hash_value, resource.base_shader_path.c_str());
 			RHI::hash_shader_file_signature(hash_value, resource.user_shader_path.c_str());
 			RHI::hash_shader_file_signature(hash_value, resource.generated_bindings_path.c_str());
+			hash_engine_shader_family_file_signatures(hash_value, resource.usage.family);
 			return hash_value;
 		}
 

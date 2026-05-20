@@ -1,5 +1,6 @@
 #include "Function/Render/EngineShaderFamilyRegistry.h"
 
+#include "Graphics/Shader.h"
 #include <algorithm>
 #include <cctype>
 
@@ -167,5 +168,21 @@ namespace AshEngine
 			return to_capability_mask(MaterialCapability::UV1);
 		}
 		return 0;
+	}
+
+	void hash_engine_shader_family_file_signatures(uint64_t& hash_value, EngineShaderFamily family)
+	{
+		switch (family)
+		{
+		case EngineShaderFamily::SurfaceStaticMesh:
+		default:
+			RHI::hash_shader_file_signature(
+				hash_value,
+				"project/src/engine/Graphics/Shaders/AshVertexDeclLocations.hlsli");
+			RHI::hash_shader_file_signature(
+				hash_value,
+				"project/src/engine/Shaders/MaterialV2/Domains/AshSurfaceDomain.hlsli");
+			break;
+		}
 	}
 }

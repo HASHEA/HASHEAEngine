@@ -27,6 +27,11 @@ struct VSInput
     ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL1_ATTR float4 object_to_clip_col1 : TEXCOORD3;
     ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL2_ATTR float4 object_to_clip_col2 : TEXCOORD4;
     ASH_MESH_INSTANCE_OBJECT_TO_CLIP_COL3_ATTR float4 object_to_clip_col3 : TEXCOORD5;
+    ASH_MESH_INSTANCE_PREVIOUS_OBJECT_TO_CLIP_COL0_ATTR float4 previous_object_to_clip_col0 : TEXCOORD6;
+    ASH_MESH_INSTANCE_PREVIOUS_OBJECT_TO_CLIP_COL1_ATTR float4 previous_object_to_clip_col1 : TEXCOORD7;
+    ASH_MESH_INSTANCE_PREVIOUS_OBJECT_TO_CLIP_COL2_ATTR float4 previous_object_to_clip_col2 : TEXCOORD8;
+    ASH_MESH_INSTANCE_PREVIOUS_OBJECT_TO_CLIP_COL3_ATTR float4 previous_object_to_clip_col3 : TEXCOORD9;
+    ASH_MESH_INSTANCE_TEMPORAL_FLAGS_ATTR float4 temporal_flags : TEXCOORD10;
 };
 
 struct VSOutput
@@ -37,6 +42,9 @@ struct VSOutput
     float2 uv0 : TEXCOORD2;
     float2 uv1 : TEXCOORD3;
     float4 vertex_color : TEXCOORD4;
+    float4 current_clip : TEXCOORD5;
+    float4 previous_clip : TEXCOORD6;
+    float temporal_valid : TEXCOORD7;
 };
 
 struct AshGBufferOutput
@@ -69,6 +77,15 @@ inline float4 TransformSurfaceStaticMeshPositionToClip(VSInput input, float3 pos
         input.object_to_clip_col3;
 }
 
+inline float4 TransformSurfaceStaticMeshPreviousPositionToClip(VSInput input, float3 position_os)
+{
+    return
+        input.previous_object_to_clip_col0 * position_os.x +
+        input.previous_object_to_clip_col1 * position_os.y +
+        input.previous_object_to_clip_col2 * position_os.z +
+        input.previous_object_to_clip_col3;
+}
+
 inline VSOutput BuildSurfaceStaticMeshVertexOutput(
     VSInput input,
     AshVertexParameters params,
@@ -76,12 +93,15 @@ inline VSOutput BuildSurfaceStaticMeshVertexOutput(
 {
     VSOutput output;
     const float3 displaced_position_os = params.position_os + node.world_position_offset;
-    output.position = TransformSurfaceStaticMeshPositionToClip(input, displaced_position_os);
+    output.current_clip = TransformSurfaceStaticMeshPositionToClip(input, displaced_position_os);
+    output.previous_clip = TransformSurfaceStaticMeshPreviousPositionToClip(input, displaced_position_os);
+    output.position = output.current_clip;
     output.normal_os = params.normal_os;
     output.tangent_os = params.tangent_os;
     output.uv0 = params.uv0;
     output.uv1 = params.uv1;
     output.vertex_color = params.vertex_color;
+    output.temporal_valid = input.temporal_flags.x;
     return output;
 }
 
@@ -89,11 +109,14 @@ inline AshPixelParameters BuildSurfaceStaticMeshPixelParameters(VSOutput input)
 {
     AshPixelParameters params;
     params.position_cs = input.position;
+    params.clip_position_cs = input.current_clip;
+    params.previous_clip_position_cs = input.previous_clip;
     params.normal_os = input.normal_os;
     params.tangent_os = input.tangent_os;
     params.uv0 = input.uv0;
     params.uv1 = input.uv1;
     params.vertex_color = input.vertex_color;
+    params.temporal_valid = input.temporal_valid;
     return params;
 }
 
@@ -125,6 +148,17 @@ inline float2 AshEncodeNormalOct(float3 normal)
     return encoded * 0.5 + 0.5;
 }
 
+inline bool AshClipPositionIsValid(float4 clip)
+{
+    return abs(clip.w) > 1e-5;
+}
+
+inline float2 AshClipToUv(float4 clip)
+{
+    const float2 ndc = clip.xy / clip.w;
+    return ndc * float2(0.5, -0.5) + float2(0.5, 0.5);
+}
+
 inline AshGBufferOutput EncodeSurfaceStaticMeshGBuffer(AshPixelParameters params, AshPixelMainNode node)
 {
 #if ASH_MATERIAL_BLEND_MODE_MASKED
@@ -136,10 +170,17 @@ inline AshGBufferOutput EncodeSurfaceStaticMeshGBuffer(AshPixelParameters params
 
     AshGBufferOutput output;
     const float3 normal = EvaluateSurfaceStaticMeshNormal(params, node);
+    const bool temporal_valid = params.temporal_valid > 0.5 &&
+        AshClipPositionIsValid(params.clip_position_cs) &&
+        AshClipPositionIsValid(params.previous_clip_position_cs);
+    const float2 current_uv = temporal_valid ? AshClipToUv(params.clip_position_cs) : 0.0.xx;
+    const float2 previous_uv = temporal_valid ? AshClipToUv(params.previous_clip_position_cs) : current_uv;
+    const float2 motion_vector = temporal_valid ? current_uv - previous_uv : 0.0.xx;
+    const float previous_depth = temporal_valid ? params.previous_clip_position_cs.z / params.previous_clip_position_cs.w : params.clip_position_cs.z / max(params.clip_position_cs.w, 1e-5);
     output.target0 = float4(saturate(node.base_color), ASH_MATERIAL_SHADING_MODEL_ID / 255.0);
     output.target1 = float4(saturate(node.metallic), saturate(node.roughness), saturate(node.ambient_occlusion), 0.5);
     output.target2 = float4(0.0, 0.0, 0.0, 0.0);
-    output.target3 = float4(0.0, 0.0, 0.0, 0.0);
+    output.target3 = float4(motion_vector, previous_depth, temporal_valid ? 1.0 : 0.0);
     output.target4 = float4(AshEncodeNormalOct(normal), node.emissive.rg);
     return output;
 }

@@ -768,6 +768,7 @@ namespace AshEngine
 
 			const bool first_use_on_output = touched_outputs.insert(output_state.handle.value).second;
 			SceneRenderViewContext view_context{};
+			view_context.view_id = packet.binding.value;
 			view_context.debug_name = packet.debug_name.c_str();
 			view_context.output_target = output_target;
 			view_context.color_load_action = resolve_load_action(packet.overrides.color_clear_mode, first_use_on_output);

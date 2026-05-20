@@ -13,11 +13,14 @@ struct SurfaceVertexParameters
 struct SurfacePixelParameters
 {
     float4 position_cs;
+    float4 clip_position_cs;
+    float4 previous_clip_position_cs;
     float3 normal_os;
     float4 tangent_os;
     float2 uv0;
     float2 uv1;
     float4 vertex_color;
+    float temporal_valid;
 };
 
 struct SurfaceVertexMainNode
