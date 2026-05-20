@@ -344,6 +344,7 @@ namespace AshEngine
 		m_renderer = renderer;
 		m_debug_draw_service = debug_draw_service;
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_ambient_occlusion_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		if (m_debug_draw_service)
@@ -362,6 +363,7 @@ namespace AshEngine
 		m_debug_draw_service = nullptr;
 		m_post_process_tone_map_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
+		m_ambient_occlusion_pass.shutdown();
 		m_instance_buffers.clear();
 		m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
 		m_next_instance_buffer_slot = 0;
@@ -520,6 +522,13 @@ namespace AshEngine
 				ASH_PROFILE_SCOPE_NC("SceneGBufferPass", AshEngine::Profile::Color::Draw);
 				return render_static_meshes_to_pass(frame, view_context, context, PassFamily::GBuffer);
 			}));
+
+		graph_resources.ambient_occlusion = m_ambient_occlusion_pass.add_passes(
+			graph,
+			frame,
+			graph_resources,
+			view_context);
+		ASH_PROCESS_ERROR(graph_resources.ambient_occlusion);
 
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
 			graph,

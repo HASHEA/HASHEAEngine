@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Base/hcore.h"
+#include "Function/Render/AmbientOcclusionPass.h"
 #include "Function/Render/DeferredLightingPass.h"
 #include "Function/Render/PostProcessToneMapPass.h"
 #include "Function/Render/EngineShaderFamilyRegistry.h"
@@ -67,6 +68,7 @@ namespace AshEngine
 	private:
 		Renderer* m_renderer = nullptr;
 		DebugDrawService* m_debug_draw_service = nullptr;
+		AmbientOcclusionPass m_ambient_occlusion_pass{};
 		DeferredLightingPass m_deferred_lighting_pass{};
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;

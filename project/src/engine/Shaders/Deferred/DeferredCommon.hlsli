@@ -8,6 +8,7 @@ Texture2D<float4> SceneGBufferE : register(t4);
 Texture2D<float> SceneDepth : register(t5);
 Texture2D<float4> SceneLightingDiffuse : register(t6);
 Texture2D<float4> SceneLightingSpecular : register(t7);
+Texture2D<float4> SceneAmbientOcclusion : register(t8);
 SamplerState ScenePointClampSampler : register(s0);
 
 static const uint ASH_SHADING_MODEL_EMPTY = 0;
@@ -110,6 +111,8 @@ struct AshDeferredSurface
     float3 base_color;
     float metallic;
     float roughness;
+    float material_ao;
+    float screen_ao;
     float ao;
     float specular_scalar;
     float3 specular_color;
@@ -127,6 +130,8 @@ AshDeferredSurface AshDecodeDeferredSurface(float2 uv)
     surface.base_color = 0.0.xxx;
     surface.metallic = 0.0;
     surface.roughness = 1.0;
+    surface.material_ao = 1.0;
+    surface.screen_ao = 1.0;
     surface.ao = 1.0;
     surface.specular_scalar = 0.5;
     surface.specular_color = 0.04.xxx;
@@ -152,7 +157,9 @@ AshDeferredSurface AshDecodeDeferredSurface(float2 uv)
     surface.base_color = saturate(gbuffer_a.rgb);
     surface.metallic = saturate(gbuffer_b.r);
     surface.roughness = max(saturate(gbuffer_b.g), 0.045);
-    surface.ao = saturate(gbuffer_b.b);
+    surface.material_ao = saturate(gbuffer_b.b);
+    surface.screen_ao = saturate(SceneAmbientOcclusion.Sample(ScenePointClampSampler, uv).r);
+    surface.ao = surface.material_ao * surface.screen_ao;
     surface.specular_scalar = saturate(gbuffer_b.a);
     surface.specular_color = max(gbuffer_c.rgb, lerp(0.04.xxx * surface.specular_scalar, surface.base_color, surface.metallic));
     surface.emissive = float3(gbuffer_e.b, gbuffer_e.a, 0.0);
@@ -294,7 +301,7 @@ AshSplitLighting AshEvaluateBaseEmissive_Split(AshDeferredSurface surface)
     }
     if (surface.shading_model == ASH_SHADING_MODEL_UNLIT)
     {
-        result.diffuse = surface.base_color * surface.ao + surface.emissive;
+        result.diffuse = surface.base_color * surface.material_ao + surface.emissive;
         return result;
     }
     result.diffuse = surface.emissive;

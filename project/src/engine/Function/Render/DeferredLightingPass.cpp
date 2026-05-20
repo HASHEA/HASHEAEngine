@@ -497,6 +497,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(output_target);
 		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
 		ASH_PROCESS_ERROR(deferred_resources.depth);
+		ASH_PROCESS_ERROR(deferred_resources.ambient_occlusion);
 		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
 		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
 		ASH_PROCESS_ERROR(deferred_resources.scene_hdr_linear);
@@ -510,6 +511,7 @@ namespace AshEngine
 				{
 					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
 				}
+				pass.read_texture(deferred_resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
 				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
 				pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Clear, k_lighting_accum_clear_color);
 				pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Clear, k_lighting_accum_clear_color);
@@ -526,8 +528,9 @@ namespace AshEngine
 				std::shared_ptr<RenderTarget> gbuffer_d = context.get_texture(gbuffer_refs[3]);
 				std::shared_ptr<RenderTarget> gbuffer_e = context.get_texture(gbuffer_refs[4]);
 				std::shared_ptr<RenderTarget> depth = context.get_texture(deferred_resources.depth);
+				std::shared_ptr<RenderTarget> ambient_occlusion = context.get_texture(deferred_resources.ambient_occlusion);
 				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
-				ASH_PROCESS_ERROR(gbuffer_a && gbuffer_b && gbuffer_c && gbuffer_d && gbuffer_e && depth && output);
+				ASH_PROCESS_ERROR(gbuffer_a && gbuffer_b && gbuffer_c && gbuffer_d && gbuffer_e && depth && ambient_occlusion && output);
 
 				{
 					ASH_PROFILE_SCOPE_NC("DeferredLighting::BindGBufferResources", AshEngine::Profile::Color::Descriptor);
@@ -545,6 +548,7 @@ namespace AshEngine
 						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferD", gbuffer_d));
 						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferE", gbuffer_e));
 						ASH_PROCESS_ERROR(program->set_texture("SceneDepth", depth));
+						ASH_PROCESS_ERROR(program->set_texture("SceneAmbientOcclusion", ambient_occlusion));
 						ASH_PROCESS_ERROR(program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 					}
 				}
