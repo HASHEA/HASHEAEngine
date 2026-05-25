@@ -21,7 +21,7 @@ HASHEAEngine 是一个以现代实时渲染和引擎架构实验为目标的 C++
 当前仍未完成或仅处于预留阶段：
 
 - Skeletal mesh / animation 尚未完成。
-- Shadow、occlusion culling 尚未完成；方向光阴影第一阶段已确认采用非 VSM 的 CSM atlas + static cache + dynamic overlay + per-light screen shadow mask 设计，当前 deferred lighting 已接入第一版 base/emissive、directional、point、spot，可配置屏幕空间 AO（`Off` / `SSAO` / `HBAO` / `GTAO`）、composite（线性 HDR 中转 RT）与独立全屏 tone-map pass，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
+- Shadow、occlusion culling 尚未完成；方向光阴影第一阶段已确认采用非 VSM 的 CSM atlas + static cache + dynamic overlay + reusable per-light screen shadow mask 设计，实现计划已落到 `docs/superpowers/plans/2026-05-25-directional-csm-shadow-implementation.md`，方向光数量在 scene 数据层不设硬上限，shadow work 由 atlas/cache budget 降级。当前 deferred lighting 已接入第一版 base/emissive、directional、point、spot，可配置屏幕空间 AO（`Off` / `SSAO` / `HBAO` / `GTAO`）、composite（线性 HDR 中转 RT）与独立全屏 tone-map pass，静态网格同 mesh/material section 的 instance batching 已接入，骨骼网格 instancing 仍待后续阶段。
 - Transparent blend mode 已进入材质静态状态和编译键，但正式透明队列尚未接入 SceneRenderer。
 - PostProcess 与 UI 当前不纳入材质系统，后续应走各自的 shader/pass 与参数组织路径。
 - Asset cooking pipeline、streaming、完整资源生命周期管理仍在演进中；runtime 已能直接加载部分 cooked texture payload。
@@ -374,6 +374,7 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - Deferred Lighting 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-lighting-design.md`](docs/superpowers/specs/2026-05-12-deferred-lighting-design.md)
 - Directional CSM Shadow 设计草案：[`docs/superpowers/specs/2026-05-25-directional-csm-shadow-design.md`](docs/superpowers/specs/2026-05-25-directional-csm-shadow-design.md)
+- Directional CSM Shadow 实现计划：[`docs/superpowers/plans/2026-05-25-directional-csm-shadow-implementation.md`](docs/superpowers/plans/2026-05-25-directional-csm-shadow-implementation.md)
 - 环境光遮蔽（AO）设计草案：[`docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md`](docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md)
 - 环境光遮蔽（AO）实现计划：[`docs/superpowers/plans/2026-05-20-ambient-occlusion-implementation.md`](docs/superpowers/plans/2026-05-20-ambient-occlusion-implementation.md)
 - Render Graph 设计草案：[`docs/superpowers/specs/2026-05-14-render-graph-design.md`](docs/superpowers/specs/2026-05-14-render-graph-design.md)
