@@ -18,6 +18,7 @@ namespace AshEditor
 	{
 		return
 			refLeft.primary == refRight.primary &&
+			refLeft.reverse_z == refRight.reverse_z &&
 			refLeft.projection == refRight.projection &&
 			refLeft.fov_y_degrees == refRight.fov_y_degrees &&
 			refLeft.near_plane == refRight.near_plane &&

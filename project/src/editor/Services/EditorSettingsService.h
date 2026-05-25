@@ -1,15 +1,12 @@
 #pragma once
 
+#include "Function/Gui/UICommon.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
-
-namespace AshEngine
-{
-	enum class UIThemePreset : uint8_t;
-}
 
 namespace AshEditor
 {
@@ -61,6 +58,12 @@ namespace AshEditor
 		std::filesystem::path GetAssetsRootPath() const;
 		std::filesystem::path GetLayoutIniPath() const;
 		std::filesystem::path GetStartupScenePath() const;
+		std::filesystem::path GetThemeConfigRootPath() const;
+		std::vector<AshEngine::UIThemeDescriptor> ListUiThemes() const;
+		bool LoadUiThemeDefinition(
+			std::string_view svThemeId,
+			std::string& strOutThemeDefinition,
+			std::string* pOutThemeLabel = nullptr) const;
 
 	private:
 		std::filesystem::path _pathWorkspaceRoot{};
@@ -70,7 +73,9 @@ namespace AshEditor
 
 	// Discovers workspace root (used by editor bootstrap).
 	std::filesystem::path DiscoverEditorWorkspaceRoot();
+	bool IsBuiltInEditorUiThemeId(std::string_view value);
 	AshEngine::UIThemePreset ParseEditorUiThemePreset(std::string_view value);
 	const char* GetEditorUiThemePresetName(AshEngine::UIThemePreset preset);
 	const char* GetEditorUiThemePresetLabel(AshEngine::UIThemePreset preset);
+	std::string BuildEditorUiThemeFallbackLabel(std::string_view value);
 }

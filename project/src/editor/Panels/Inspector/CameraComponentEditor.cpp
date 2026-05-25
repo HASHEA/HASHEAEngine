@@ -57,6 +57,17 @@ namespace AshEditor
 				"On / Off",
 				"Applies immediately."
 			}) || bCommitRequested;
+		bCommitRequested = DrawInspectorCheckboxField(
+			refUi,
+			"Reverse Z",
+			camera.reverse_z,
+			{
+				"Reverse Z",
+				"Uses reversed depth mapping for this camera to improve far-distance depth precision.",
+				"Enabled",
+				"On / Off",
+				"Camera-local setting. Applies immediately and is serialized as reverse_z."
+			}) || bCommitRequested;
 
 		int iProjection = static_cast<int>(camera.projection);
 		const std::vector<const char*> vecProjectionLabels{ "Perspective", "Orthographic" };

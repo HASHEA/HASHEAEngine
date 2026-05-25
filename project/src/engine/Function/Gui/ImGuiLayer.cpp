@@ -82,49 +82,6 @@ namespace AshEngine
 			return UIThemePreset::SlateStudio;
 		}
 
-		static constexpr std::string_view kDefaultFallbackThemeId = "default";
-		static constexpr std::string_view kDefaultFallbackThemeLabel = "Default Theme";
-
-		static UIThemeDescriptor build_default_theme_descriptor()
-		{
-			UIThemeDescriptor descriptor{};
-			descriptor.strId = std::string(kDefaultFallbackThemeId);
-			descriptor.strLabel = std::string(kDefaultFallbackThemeLabel);
-			return descriptor;
-		}
-
-		static std::string build_theme_fallback_label(std::string_view svThemeId)
-		{
-			std::string strLabel{};
-			strLabel.reserve(svThemeId.size());
-			bool bCapitalizeNext = true;
-			for (const char ch : svThemeId)
-			{
-				if (ch == '_' || ch == '-' || ch == '.')
-				{
-					if (!strLabel.empty() && strLabel.back() != ' ')
-					{
-						strLabel.push_back(' ');
-					}
-					bCapitalizeNext = true;
-					continue;
-				}
-
-				const bool bIsLower = ch >= 'a' && ch <= 'z';
-				if (bCapitalizeNext && bIsLower)
-				{
-					strLabel.push_back(static_cast<char>(ch - 'a' + 'A'));
-				}
-				else
-				{
-					strLabel.push_back(ch);
-				}
-				bCapitalizeNext = ch == ' ';
-			}
-
-			return strLabel.empty() ? std::string(svThemeId) : strLabel;
-		}
-
 		static void apply_default_theme()
 		{
 			ImGui::StyleColorsDark();
@@ -341,19 +298,17 @@ namespace AshEngine
 				: std::optional<ImGuiCol>{ itFound->second };
 		}
 
-		static bool apply_imgui_theme_file(const std::filesystem::path& pathThemeFile)
+		static bool apply_imgui_theme_definition(std::string_view svThemeDefinition)
 		{
-			std::ifstream input(pathThemeFile);
-			if (!input.is_open())
+			if (svThemeDefinition.empty())
 			{
-				HLogWarning("UI theme file '{}' could not be opened.", pathThemeFile.generic_string());
 				return false;
 			}
 
-			json root = json::parse(input, nullptr, false);
+			json root = json::parse(svThemeDefinition.begin(), svThemeDefinition.end(), nullptr, false);
 			if (root.is_discarded() || !root.is_object())
 			{
-				HLogWarning("UI theme file '{}' is not valid JSON.", pathThemeFile.generic_string());
+				HLogWarning("UI theme definition is not valid JSON.");
 				return false;
 			}
 
@@ -416,129 +371,15 @@ namespace AshEngine
 			return true;
 		}
 
-		static UIThemeDescriptor read_theme_descriptor(const std::filesystem::path& pathThemeFile)
+		static void apply_builtin_theme_preset(const UIThemePreset preset)
 		{
-			UIThemeDescriptor descriptor{};
-			descriptor.strId = pathThemeFile.stem().generic_string();
-			descriptor.strLabel = build_theme_fallback_label(descriptor.strId);
-
-			std::ifstream input(pathThemeFile);
-			if (!input.is_open())
+			if (preset == UIThemePreset::ClassicDark)
 			{
-				return descriptor;
+				ImGui::StyleColorsDark();
+				return;
 			}
 
-			json root = json::parse(input, nullptr, false);
-			if (root.is_object())
-			{
-				descriptor.strLabel = root.value("label", descriptor.strLabel);
-			}
-			return descriptor;
-		}
-
-		static std::vector<UIThemeDescriptor> scan_theme_descriptors(const std::filesystem::path& pathThemeConfigRoot)
-		{
-			std::vector<UIThemeDescriptor> vecThemes{};
-			std::error_code errorCode{};
-			if (pathThemeConfigRoot.empty() || !std::filesystem::exists(pathThemeConfigRoot, errorCode))
-			{
-				vecThemes.push_back(build_default_theme_descriptor());
-				return vecThemes;
-			}
-			if (errorCode)
-			{
-				HLogWarning(
-					"UI theme directory '{}' could not be queried: {}.",
-					pathThemeConfigRoot.generic_string(),
-					errorCode.message());
-				vecThemes.push_back(build_default_theme_descriptor());
-				return vecThemes;
-			}
-
-			std::vector<std::filesystem::path> vecThemeFiles{};
-			for (const std::filesystem::directory_entry& refEntry :
-				std::filesystem::directory_iterator(pathThemeConfigRoot, errorCode))
-			{
-				if (refEntry.is_regular_file() && refEntry.path().extension() == ".json")
-				{
-					vecThemeFiles.push_back(refEntry.path());
-				}
-			}
-			if (errorCode)
-			{
-				HLogWarning(
-					"UI theme directory '{}' could not be scanned completely: {}.",
-					pathThemeConfigRoot.generic_string(),
-					errorCode.message());
-				if (vecThemes.empty())
-				{
-					vecThemes.push_back(build_default_theme_descriptor());
-				}
-				return vecThemes;
-			}
-
-			std::sort(vecThemeFiles.begin(), vecThemeFiles.end());
-			vecThemes.reserve(vecThemeFiles.size() + 1u);
-			for (const std::filesystem::path& pathThemeFile : vecThemeFiles)
-			{
-				vecThemes.push_back(read_theme_descriptor(pathThemeFile));
-			}
-
-			if (vecThemes.empty())
-			{
-				vecThemes.push_back(build_default_theme_descriptor());
-			}
-
-			return vecThemes;
-		}
-
-		static bool apply_imgui_theme_preset(
-			const UIThemePreset preset,
-			const std::filesystem::path& pathThemeConfigRoot)
-		{
-			const std::string strPresetName = get_theme_preset_name(preset);
-			if (!pathThemeConfigRoot.empty())
-			{
-				const std::filesystem::path pathThemeFile = pathThemeConfigRoot / (strPresetName + ".json");
-				if (apply_imgui_theme_file(pathThemeFile))
-				{
-					return true;
-				}
-			}
-
-			HLogWarning(
-				"UI theme '{}' fell back to the built-in default theme because no valid theme config file was loaded.",
-				strPresetName);
 			apply_default_theme();
-			return false;
-		}
-
-		static bool apply_imgui_theme_by_id(
-			const std::string_view svThemeId,
-			const std::filesystem::path& pathThemeConfigRoot)
-		{
-			if (svThemeId.empty())
-			{
-				return false;
-			}
-
-			if (svThemeId == kDefaultFallbackThemeId)
-			{
-				apply_default_theme();
-				return true;
-			}
-
-			if (!pathThemeConfigRoot.empty())
-			{
-				const std::filesystem::path pathThemeFile =
-					pathThemeConfigRoot / (std::string(svThemeId) + ".json");
-				if (apply_imgui_theme_file(pathThemeFile))
-				{
-					return true;
-				}
-			}
-
-			return false;
 		}
 
 		// editor begin 修改原因：为编辑器加载自定义字体、中文回退字体与强调字重字体，统一 UI 排版基础能力。
@@ -868,19 +709,19 @@ namespace AshEngine
 			m_iniPath = config.ini_path;
 			io.IniFilename = m_iniPath.empty() ? nullptr : m_iniPath.c_str();
 			io.ConfigWindowsMoveFromTitleBarOnly = true;
-			m_pathThemeConfigRoot = config.theme_config_root.empty()
-				? std::filesystem::path{}
-				: std::filesystem::path(config.theme_config_root);
 			m_themePreset = config.theme_preset;
-			m_strThemeId = config.theme_name.empty()
+			m_strThemeId = config.theme_id.empty()
 				? get_theme_preset_name(m_themePreset)
-				: config.theme_name;
-			if (!apply_imgui_theme_by_id(m_strThemeId, m_pathThemeConfigRoot))
+				: config.theme_id;
+			if (!config.theme_definition.empty() &&
+				apply_imgui_theme_definition(config.theme_definition))
 			{
-				const bool bLoadedPresetTheme = apply_imgui_theme_preset(m_themePreset, m_pathThemeConfigRoot);
-				m_strThemeId = bLoadedPresetTheme
-					? get_theme_preset_name(m_themePreset)
-					: std::string(kDefaultFallbackThemeId);
+				m_themePreset = get_theme_preset_from_id(m_strThemeId);
+			}
+			else
+			{
+				apply_builtin_theme_preset(m_themePreset);
+				m_strThemeId = get_theme_preset_name(m_themePreset);
 			}
 			// editor begin 修改原因：初始化编辑器专用字体集，并缓存默认/强调字体句柄供后续排版调用。
 			const ImGuiLoadedFontSet fontSet = configure_imgui_font(io, config);
@@ -1309,10 +1150,8 @@ namespace AshEngine
 			m_themePreset = preset;
 			if (ImGui::GetCurrentContext())
 			{
-				const bool bLoadedPresetTheme = apply_imgui_theme_preset(m_themePreset, m_pathThemeConfigRoot);
-				m_strThemeId = bLoadedPresetTheme
-					? get_theme_preset_name(m_themePreset)
-					: std::string(kDefaultFallbackThemeId);
+				apply_builtin_theme_preset(m_themePreset);
+				m_strThemeId = get_theme_preset_name(m_themePreset);
 				return;
 			}
 
@@ -1324,13 +1163,14 @@ namespace AshEngine
 			return m_themePreset;
 		}
 
-		bool apply_theme(std::string_view svThemeId) override
+		bool apply_theme_definition(std::string_view svThemeId, std::string_view svThemeDefinition) override
 		{
-			if (svThemeId.empty())
+			if (svThemeId.empty() || svThemeDefinition.empty())
 			{
 				return false;
 			}
-			if (ImGui::GetCurrentContext() && !apply_imgui_theme_by_id(svThemeId, m_pathThemeConfigRoot))
+			if (ImGui::GetCurrentContext() &&
+				!apply_imgui_theme_definition(svThemeDefinition))
 			{
 				return false;
 			}
@@ -1343,26 +1183,6 @@ namespace AshEngine
 		std::string get_theme_id() const override
 		{
 			return m_strThemeId;
-		}
-
-		std::vector<UIThemeDescriptor> list_themes() const override
-		{
-			std::vector<UIThemeDescriptor> vecThemes = scan_theme_descriptors(m_pathThemeConfigRoot);
-			const auto itFound = std::find_if(
-				vecThemes.begin(),
-				vecThemes.end(),
-				[this](const UIThemeDescriptor& refTheme)
-				{
-					return refTheme.strId == m_strThemeId;
-				});
-			if (itFound == vecThemes.end() && !m_strThemeId.empty())
-			{
-				vecThemes.push_back(UIThemeDescriptor{
-					m_strThemeId,
-					build_theme_fallback_label(m_strThemeId)
-				});
-			}
-			return vecThemes;
 		}
 
 	private:
@@ -1889,7 +1709,6 @@ namespace AshEngine
 		// editor end
 		UIThemePreset m_themePreset = UIThemePreset::SlateStudio;
 		std::string m_strThemeId{};
-		std::filesystem::path m_pathThemeConfigRoot{};
 		std::string m_iniPath{};
 		std::unordered_map<const RenderTarget*, TextureRegistration> m_texture_registrations{};
 		std::unordered_map<const RHI::TextureView*, TextureRegistration> m_texture_view_registrations{};

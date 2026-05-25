@@ -261,7 +261,16 @@ namespace AshEditor
 		_upSceneWorkflowCoordinator->ResetEditorStateAfterSceneChange(sceneWorkflowContext);
 		if (_editorContext.pUiContext)
 		{
-			_editorContext.pUiContext->apply_theme(_upSettingsService->GetSettings().strUiThemePreset);
+			const std::string strThemeId = _upSettingsService->GetSettings().strUiThemePreset;
+			std::string strThemeDefinition{};
+			if (_upSettingsService->LoadUiThemeDefinition(strThemeId, strThemeDefinition))
+			{
+				_editorContext.pUiContext->apply_theme_definition(strThemeId, strThemeDefinition);
+			}
+			else if (IsBuiltInEditorUiThemeId(strThemeId))
+			{
+				_editorContext.pUiContext->apply_theme_preset(ParseEditorUiThemePreset(strThemeId));
+			}
 		}
 	}
 
@@ -405,7 +414,29 @@ namespace AshEditor
 			return;
 		}
 
-		if (!_editorContext.pUiContext->apply_theme(svThemeId))
+		std::string strThemeDefinition{};
+		std::string strResolvedThemeLabel{};
+		const bool bHasThemeFile = _upSettingsService->LoadUiThemeDefinition(
+			svThemeId,
+			strThemeDefinition,
+			&strResolvedThemeLabel);
+		if (bHasThemeFile)
+		{
+			if (!_editorContext.pUiContext->apply_theme_definition(svThemeId, strThemeDefinition))
+			{
+				Notify(std::string("Failed to switch theme to ") + std::string(svThemeId) + ".");
+				return;
+			}
+		}
+		else if (IsBuiltInEditorUiThemeId(svThemeId))
+		{
+			_editorContext.pUiContext->apply_theme_preset(ParseEditorUiThemePreset(svThemeId));
+			if (strResolvedThemeLabel.empty())
+			{
+				strResolvedThemeLabel = GetEditorUiThemePresetLabel(ParseEditorUiThemePreset(svThemeId));
+			}
+		}
+		else
 		{
 			Notify(std::string("Failed to switch theme to ") + std::string(svThemeId) + ".");
 			return;
@@ -414,7 +445,10 @@ namespace AshEditor
 		EditorSettings& settings = _upSettingsService->GetSettings();
 		settings.strUiThemePreset = std::string(svThemeId);
 		_upSettingsService->Save();
-		const std::string strThemeLabel = svThemeLabel.empty() ? std::string(svThemeId) : std::string(svThemeLabel);
+		const std::string strThemeLabel =
+			!svThemeLabel.empty()
+			? std::string(svThemeLabel)
+			: (!strResolvedThemeLabel.empty() ? strResolvedThemeLabel : std::string(svThemeId));
 		Notify(std::string("Theme switched to ") + strThemeLabel + ".");
 	}
 }

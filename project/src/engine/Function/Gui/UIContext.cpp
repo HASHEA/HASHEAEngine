@@ -631,19 +631,16 @@ namespace AshEngine
 		return (m_impl && m_impl->layer) ? m_impl->layer->get_theme_preset() : UIThemePreset::SlateStudio;
 	}
 
-	bool UIContext::apply_theme(std::string_view svThemeId)
+	bool UIContext::apply_theme_definition(std::string_view svThemeId, std::string_view svThemeDefinition)
 	{
-		return m_impl && m_impl->layer && m_impl->layer->apply_theme(svThemeId);
+		return m_impl &&
+			m_impl->layer &&
+			m_impl->layer->apply_theme_definition(svThemeId, svThemeDefinition);
 	}
 
 	std::string UIContext::get_theme_id() const
 	{
 		return (m_impl && m_impl->layer) ? m_impl->layer->get_theme_id() : std::string{};
-	}
-
-	std::vector<UIThemeDescriptor> UIContext::list_themes() const
-	{
-		return (m_impl && m_impl->layer) ? m_impl->layer->list_themes() : std::vector<UIThemeDescriptor>{};
 	}
 
 	void UIContext::show_demo_window(bool* open)

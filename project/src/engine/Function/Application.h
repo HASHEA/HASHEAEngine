@@ -40,8 +40,8 @@ namespace AshEngine
 		const char* backendConfigPath = "product/config/Engine.ini";
 		std::string uiIniPath{};
 		UIThemePreset uiThemePreset = UIThemePreset::SlateStudio;
-		std::string uiThemeName{};
-		std::string uiThemeConfigRoot{};
+		std::string uiThemeId{};
+		std::string uiThemeDefinition{};
 		// editor begin 修改原因：允许编辑器从配置与资源目录向引擎透传字体、粗体和中文字形策略。
 		std::string uiFontPath{};
 		std::string uiFontMergePath{};

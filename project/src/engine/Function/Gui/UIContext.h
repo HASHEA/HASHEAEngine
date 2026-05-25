@@ -50,9 +50,8 @@ namespace AshEngine
 		bool wants_text_input() const;
 		void apply_theme_preset(UIThemePreset preset);
 		UIThemePreset get_theme_preset() const;
-		bool apply_theme(std::string_view svThemeId);
+		bool apply_theme_definition(std::string_view svThemeId, std::string_view svThemeDefinition);
 		std::string get_theme_id() const;
-		std::vector<UIThemeDescriptor> list_themes() const;
 
 	public:
 		void show_demo_window(bool* open = nullptr);

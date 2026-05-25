@@ -1,11 +1,12 @@
 #include "Services/EditorSettingsService.h"
 
+#include "Base/hlog.h"
 #include "Core/EditorScenePathUtils.h"
-#include "Function/Gui/UICommon.h"
 #include <json.hpp>
 
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 
 namespace AshEditor
 {
@@ -13,6 +14,8 @@ namespace AshEditor
 	{
 		using json = nlohmann::json;
 		constexpr size_t kMaxRecentScenePathCount = 10u;
+		constexpr std::string_view kBuiltInDefaultThemeId = "slate_studio";
+		constexpr std::string_view kBuiltInDefaultThemeLabel = "Default Theme";
 
 		std::string NormalizeStoredPathString(const std::string& strPath)
 		{
@@ -45,6 +48,47 @@ namespace AshEditor
 				vecRecentPaths.resize(kMaxRecentScenePathCount);
 			}
 		}
+
+		bool TryReadThemeJsonFile(
+			const std::filesystem::path& pathThemeFile,
+			json& root,
+			std::string* pOutThemeDefinition = nullptr)
+		{
+			std::ifstream input(pathThemeFile);
+			if (!input.is_open())
+			{
+				return false;
+			}
+
+			const std::string strThemeDefinition{
+				std::istreambuf_iterator<char>(input),
+				std::istreambuf_iterator<char>()};
+			if (strThemeDefinition.empty())
+			{
+				return false;
+			}
+
+			root = json::parse(strThemeDefinition, nullptr, false);
+			if (root.is_discarded() || !root.is_object())
+			{
+				HLogWarning("Editor theme file '{}' is not valid JSON.", pathThemeFile.generic_string());
+				return false;
+			}
+
+			if (pOutThemeDefinition)
+			{
+				*pOutThemeDefinition = strThemeDefinition;
+			}
+			return true;
+		}
+	}
+
+	bool IsBuiltInEditorUiThemeId(std::string_view value)
+	{
+		return
+			value == "classic_dark" ||
+			value == "warm_paper" ||
+			value == "slate_studio";
 	}
 
 	AshEngine::UIThemePreset ParseEditorUiThemePreset(std::string_view value)
@@ -87,6 +131,38 @@ namespace AshEditor
 		default:
 			return "Slate Studio";
 		}
+	}
+
+	std::string BuildEditorUiThemeFallbackLabel(std::string_view value)
+	{
+		std::string strLabel{};
+		strLabel.reserve(value.size());
+		bool bCapitalizeNext = true;
+		for (const char ch : value)
+		{
+			if (ch == '_' || ch == '-' || ch == '.')
+			{
+				if (!strLabel.empty() && strLabel.back() != ' ')
+				{
+					strLabel.push_back(' ');
+				}
+				bCapitalizeNext = true;
+				continue;
+			}
+
+			const bool bIsLower = ch >= 'a' && ch <= 'z';
+			if (bCapitalizeNext && bIsLower)
+			{
+				strLabel.push_back(static_cast<char>(ch - 'a' + 'A'));
+			}
+			else
+			{
+				strLabel.push_back(ch);
+			}
+			bCapitalizeNext = ch == ' ';
+		}
+
+		return strLabel.empty() ? std::string(value) : strLabel;
 	}
 
 	std::filesystem::path DiscoverEditorWorkspaceRoot()
@@ -316,5 +392,98 @@ namespace AshEditor
 	std::filesystem::path EditorSettingsService::GetStartupScenePath() const
 	{
 		return ResolveWorkspacePath(_settings.strStartupScenePath);
+	}
+
+	std::filesystem::path EditorSettingsService::GetThemeConfigRootPath() const
+	{
+		return _pathWorkspaceRoot / "product" / "config" / "editor" / "themes";
+	}
+
+	std::vector<AshEngine::UIThemeDescriptor> EditorSettingsService::ListUiThemes() const
+	{
+		std::vector<AshEngine::UIThemeDescriptor> vecThemes{};
+		const std::filesystem::path pathThemeRoot = GetThemeConfigRootPath();
+		std::error_code errorCode{};
+		if (pathThemeRoot.empty() || !std::filesystem::exists(pathThemeRoot, errorCode))
+		{
+			vecThemes.push_back(AshEngine::UIThemeDescriptor{
+				std::string(kBuiltInDefaultThemeId),
+				std::string(kBuiltInDefaultThemeLabel)
+			});
+			return vecThemes;
+		}
+
+		std::vector<std::filesystem::path> vecThemeFiles{};
+		for (const std::filesystem::directory_entry& refEntry :
+			std::filesystem::directory_iterator(pathThemeRoot, errorCode))
+		{
+			if (refEntry.is_regular_file() && refEntry.path().extension() == ".json")
+			{
+				vecThemeFiles.push_back(refEntry.path());
+			}
+		}
+		if (errorCode)
+		{
+			HLogWarning(
+				"Editor theme directory '{}' could not be scanned completely: {}.",
+				pathThemeRoot.generic_string(),
+				errorCode.message());
+		}
+
+		std::sort(vecThemeFiles.begin(), vecThemeFiles.end());
+		vecThemes.reserve(vecThemeFiles.size() + 1u);
+		for (const std::filesystem::path& pathThemeFile : vecThemeFiles)
+		{
+			AshEngine::UIThemeDescriptor descriptor{};
+			descriptor.strId = pathThemeFile.stem().generic_string();
+			descriptor.strLabel = BuildEditorUiThemeFallbackLabel(descriptor.strId);
+
+			json root{};
+			if (TryReadThemeJsonFile(pathThemeFile, root))
+			{
+				descriptor.strLabel = root.value("label", descriptor.strLabel);
+			}
+			vecThemes.push_back(std::move(descriptor));
+		}
+
+		if (vecThemes.empty())
+		{
+			vecThemes.push_back(AshEngine::UIThemeDescriptor{
+				std::string(kBuiltInDefaultThemeId),
+				std::string(kBuiltInDefaultThemeLabel)
+			});
+		}
+		return vecThemes;
+	}
+
+	bool EditorSettingsService::LoadUiThemeDefinition(
+		std::string_view svThemeId,
+		std::string& strOutThemeDefinition,
+		std::string* pOutThemeLabel) const
+	{
+		strOutThemeDefinition.clear();
+		if (pOutThemeLabel)
+		{
+			pOutThemeLabel->clear();
+		}
+
+		if (svThemeId.empty())
+		{
+			return false;
+		}
+
+		const std::filesystem::path pathThemeFile =
+			GetThemeConfigRootPath() / (std::string(svThemeId) + ".json");
+		json root{};
+		if (!TryReadThemeJsonFile(pathThemeFile, root, &strOutThemeDefinition))
+		{
+			return false;
+		}
+
+		if (pOutThemeLabel)
+		{
+			*pOutThemeLabel = root.value("label", BuildEditorUiThemeFallbackLabel(svThemeId));
+		}
+		return true;
 	}
 }

@@ -10,10 +10,27 @@
 #include "Widgets/EditorActionWidgets.h"
 #include "Widgets/EditorThemeColors.h"
 
+#include <algorithm>
 #include <array>
 
 namespace AshEditor
 {
+	namespace
+	{
+		bool ContainsThemeId(
+			const std::vector<AshEngine::UIThemeDescriptor>& vecThemes,
+			std::string_view svThemeId)
+		{
+			return std::any_of(
+				vecThemes.begin(),
+				vecThemes.end(),
+				[svThemeId](const AshEngine::UIThemeDescriptor& refTheme)
+				{
+					return refTheme.strId == svThemeId;
+				});
+		}
+	}
+
 	void MainMenuController::Draw(MainMenuControllerContext& refContext) const
 	{
 		if (!refContext.refUi.begin_main_menu_bar())
@@ -158,7 +175,14 @@ namespace AshEditor
 		}
 
 		const std::string strCurrentThemeId = refContext.refUi.get_theme_id();
-		const std::vector<AshEngine::UIThemeDescriptor> vecThemes = refContext.refUi.list_themes();
+		std::vector<AshEngine::UIThemeDescriptor> vecThemes = refContext.refSettingsService.ListUiThemes();
+		if (!strCurrentThemeId.empty() && !ContainsThemeId(vecThemes, strCurrentThemeId))
+		{
+			vecThemes.push_back(AshEngine::UIThemeDescriptor{
+				strCurrentThemeId,
+				BuildEditorUiThemeFallbackLabel(strCurrentThemeId)
+			});
+		}
 		if (vecThemes.empty())
 		{
 			refContext.refUi.menu_item("No theme files found", nullptr, false, false);

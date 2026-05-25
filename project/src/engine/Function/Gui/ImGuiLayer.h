@@ -53,9 +53,8 @@ namespace AshEngine
 		// editor end
 		virtual void apply_theme_preset(UIThemePreset preset) = 0;
 		virtual UIThemePreset get_theme_preset() const = 0;
-		virtual bool apply_theme(std::string_view svThemeId) = 0;
+		virtual bool apply_theme_definition(std::string_view svThemeId, std::string_view svThemeDefinition) = 0;
 		virtual std::string get_theme_id() const = 0;
-		virtual std::vector<UIThemeDescriptor> list_themes() const = 0;
 	};
 
 	auto create_imgui_layer(RHI::Backend backend) -> std::unique_ptr<ImGuiLayer>;
