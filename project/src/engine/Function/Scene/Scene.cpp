@@ -8,6 +8,7 @@
 #include <fstream>
 #include <functional>
 #include <json.hpp>
+#include <type_traits>
 #include <unordered_map>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -43,6 +44,9 @@ namespace AshEngine
 			EntityId next_entity_id = 1;
 			bool dirty = false;
 			uint64_t change_version = 0;
+			uint64_t render_primitive_version = 0;
+			uint64_t render_transform_version = 0;
+			uint64_t render_light_version = 0;
 		};
 
 		static constexpr uint32_t k_scene_file_version = 3;
@@ -205,6 +209,25 @@ namespace AshEngine
 			storage.change_version = allocate_scene_change_version();
 		}
 
+		static auto mark_scene_render_primitives_modified(SceneStorage& storage) -> void
+		{
+			mark_scene_storage_modified(storage);
+			storage.render_primitive_version = allocate_scene_change_version();
+			storage.render_transform_version = allocate_scene_change_version();
+		}
+
+		static auto mark_scene_render_transforms_modified(SceneStorage& storage) -> void
+		{
+			mark_scene_storage_modified(storage);
+			storage.render_transform_version = allocate_scene_change_version();
+		}
+
+		static auto mark_scene_render_lights_modified(SceneStorage& storage) -> void
+		{
+			mark_scene_storage_modified(storage);
+			storage.render_light_version = allocate_scene_change_version();
+		}
+
 		static auto matrix_to_transform_component(const glm::mat4& matrix) -> TransformComponent
 		{
 			TransformComponent component{};
@@ -252,7 +275,22 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(handle != entt::null);
 
 			impl->storage.registry.emplace_or_replace<TComponent>(handle, component);
-			mark_scene_storage_modified(impl->storage);
+			if constexpr (std::is_same_v<TComponent, MeshComponent>)
+			{
+				mark_scene_render_primitives_modified(impl->storage);
+			}
+			else if constexpr (std::is_same_v<TComponent, TransformComponent>)
+			{
+				mark_scene_render_transforms_modified(impl->storage);
+			}
+			else if constexpr (std::is_same_v<TComponent, LightComponent>)
+			{
+				mark_scene_render_lights_modified(impl->storage);
+			}
+			else
+			{
+				mark_scene_storage_modified(impl->storage);
+			}
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -264,7 +302,22 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(handle != entt::null && impl->storage.registry.any_of<TComponent>(handle));
 
 			impl->storage.registry.remove<TComponent>(handle);
-			mark_scene_storage_modified(impl->storage);
+			if constexpr (std::is_same_v<TComponent, MeshComponent>)
+			{
+				mark_scene_render_primitives_modified(impl->storage);
+			}
+			else if constexpr (std::is_same_v<TComponent, TransformComponent>)
+			{
+				mark_scene_render_transforms_modified(impl->storage);
+			}
+			else if constexpr (std::is_same_v<TComponent, LightComponent>)
+			{
+				mark_scene_render_lights_modified(impl->storage);
+			}
+			else
+			{
+				mark_scene_storage_modified(impl->storage);
+			}
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -1053,7 +1106,7 @@ namespace AshEngine
 		{
 			reparent_entity(entity.get_id(), 0, sibling_index);
 		}
-		mark_scene_storage_modified(m_impl->storage);
+		mark_scene_render_primitives_modified(m_impl->storage);
 		return entity;
 	}
 
@@ -1083,7 +1136,7 @@ namespace AshEngine
 		{
 			reparent_entity(entity.get_id(), 0, sibling_index);
 		}
-		mark_scene_storage_modified(m_impl->storage);
+		mark_scene_render_primitives_modified(m_impl->storage);
 		return entity;
 	}
 
@@ -1095,7 +1148,7 @@ namespace AshEngine
 		bResult = destroy_entity_recursive(m_impl->storage, id);
 		if (bResult)
 		{
-			mark_scene_storage_modified(m_impl->storage);
+			mark_scene_render_primitives_modified(m_impl->storage);
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -1117,7 +1170,7 @@ namespace AshEngine
 		{
 			ASH_PROCESS_ERROR(false);
 		}
-		mark_scene_storage_modified(m_impl->storage);
+		mark_scene_render_transforms_modified(m_impl->storage);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -1681,6 +1734,21 @@ namespace AshEngine
 	uint64_t Scene::get_change_version() const
 	{
 		return m_impl ? m_impl->storage.change_version : 0;
+	}
+
+	uint64_t Scene::get_render_primitive_version() const
+	{
+		return m_impl ? m_impl->storage.render_primitive_version : 0;
+	}
+
+	uint64_t Scene::get_render_transform_version() const
+	{
+		return m_impl ? m_impl->storage.render_transform_version : 0;
+	}
+
+	uint64_t Scene::get_render_light_version() const
+	{
+		return m_impl ? m_impl->storage.render_light_version : 0;
 	}
 
 	void Scene::mark_clean()

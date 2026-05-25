@@ -17,7 +17,7 @@ namespace AshEngine
 
 	struct ASH_API VisiblePrimitiveSet
 	{
-		std::vector<uint64_t> primitive_ids{};
+		std::vector<const StaticMeshPrimitiveProxy*> primitives{};
 	};
 
 	struct ASH_API VisibilityResult

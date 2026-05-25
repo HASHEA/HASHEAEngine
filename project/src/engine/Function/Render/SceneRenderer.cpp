@@ -270,6 +270,20 @@ namespace AshEngine
 			}
 		};
 
+		static void clear_static_mesh_batch_resource_refs(std::vector<StaticMeshDrawBatch>& batches, size_t active_batch_count)
+		{
+			const size_t count = std::min(active_batch_count, batches.size());
+			for (size_t batch_index = 0; batch_index < count; ++batch_index)
+			{
+				StaticMeshDrawBatch& batch = batches[batch_index];
+				batch.program = nullptr;
+				batch.render_asset.reset();
+				batch.vertex_buffer.reset();
+				batch.index_buffer.reset();
+				batch.instances.clear();
+			}
+		}
+
 		static auto resolve_static_mesh_temporal_key(const VisibleStaticMeshDraw& draw) -> uint64_t
 		{
 			return draw.entity_id != 0 ? static_cast<uint64_t>(draw.entity_id) : draw.primitive_id;
@@ -354,6 +368,7 @@ namespace AshEngine
 
 		static auto find_or_add_batch(
 			std::vector<StaticMeshDrawBatch>& batches,
+			size_t& active_batch_count,
 			std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash>& batch_lookup,
 			GraphicsProgram* program,
 			const std::shared_ptr<StaticMeshRenderAsset>& render_asset,
@@ -370,16 +385,21 @@ namespace AshEngine
 				return batches[found->second];
 			}
 
-			StaticMeshDrawBatch batch{};
+			if (active_batch_count == batches.size())
+			{
+				batches.emplace_back();
+			}
+			StaticMeshDrawBatch& batch = batches[active_batch_count];
 			batch.program = program;
 			batch.render_asset = render_asset;
 			batch.vertex_buffer = render_asset && render_asset->resource ? render_asset->resource->vertex_buffer : nullptr;
 			batch.index_buffer = render_asset && render_asset->resource ? render_asset->resource->index_buffer : nullptr;
 			batch.first_index = section.first_index;
 			batch.index_count = section.index_count;
-			batches.push_back(std::move(batch));
-			batch_lookup.emplace(key, batches.size() - 1);
-			return batches.back();
+			batch.instances.clear();
+			batch_lookup.emplace(key, active_batch_count);
+			++active_batch_count;
+			return batch;
 		}
 
 	}
@@ -977,9 +997,20 @@ namespace AshEngine
 		{
 			ASH_PROFILE_SCOPE_NC("SceneRenderer::BuildStaticMeshBatches", AshEngine::Profile::Color::Submit);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.static_mesh_draws.size()));
-			std::vector<StaticMeshDrawBatch> batches{};
+			static thread_local std::vector<StaticMeshDrawBatch> batches{};
+			static thread_local std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash> batch_lookup{};
+			size_t active_batch_count = 0;
+			struct BatchScratchRelease
+			{
+				std::vector<StaticMeshDrawBatch>& batches;
+				size_t& active_batch_count;
+				~BatchScratchRelease()
+				{
+					clear_static_mesh_batch_resource_refs(batches, active_batch_count);
+				}
+			} release_batch_scratch{ batches, active_batch_count };
 			batches.reserve(frame.static_mesh_draws.size());
-			std::unordered_map<StaticMeshDrawBatchKey, size_t, StaticMeshDrawBatchKeyHash> batch_lookup{};
+			batch_lookup.clear();
 			batch_lookup.reserve(frame.static_mesh_draws.size());
 			for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
 			{
@@ -1034,15 +1065,15 @@ namespace AshEngine
 
 					log_staticmesh_pass_usage_once(*section.material, *material_resource, pass_family);
 
-					StaticMeshDrawBatch& batch = find_or_add_batch(batches, batch_lookup, program, draw.render_asset, section);
+					StaticMeshDrawBatch& batch = find_or_add_batch(batches, active_batch_count, batch_lookup, program, draw.render_asset, section);
 					batch.instances.push_back(build_instance_data(draw));
 				}
 			}
 
-			ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(batches.size()));
+			ASH_PROFILE_PLOT("Scene/StaticMeshBatches", static_cast<int64_t>(active_batch_count));
 			const size_t logical_instance_buffer_slot_base =
-				reserve_frame_instance_buffer_slot_range(batches.size());
-			for (size_t batch_index = 0; batch_index < batches.size(); ++batch_index)
+				reserve_frame_instance_buffer_slot_range(active_batch_count);
+			for (size_t batch_index = 0; batch_index < active_batch_count; ++batch_index)
 			{
 				StaticMeshDrawBatch& batch = batches[batch_index];
 				ASH_PROCESS_ERROR(batch.program && batch.vertex_buffer && batch.index_buffer && !batch.instances.empty());

@@ -103,10 +103,12 @@ binding 是持久声明，不是逐帧命令。上层通过 `create_*` / `update
 
 具体约定：
 
-- render sync 依赖 `Scene::get_change_version()`
-- 不复用 `Scene::mark_clean()` / `is_dirty()` 作为 render sync 状态
+- `Scene::get_change_version()` 仍用于通用 scene 脏状态观察，但 render sync 不复用 `Scene::mark_clean()` / `is_dirty()`。
+- render sync 使用 `Scene::get_render_primitive_version()`、`Scene::get_render_transform_version()`、`Scene::get_render_light_version()` 三类版本。
+- primitive version 变化、binding 请求 refresh 或 cached `RenderScene` 无效时，才按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 重建 static mesh primitives。
+- 仅 transform version 变化时，`ScenePresentationSubsystem` 调用 `RenderScene::update_transforms_from_scene(...)` 更新 primitive world transform / bounds，并重建灯光快照以覆盖 light entity transform。
+- 仅 light version 变化时，只调用 `RenderScene::rebuild_lights_from_scene(...)`。
 - 内部按 `Scene*` 维护 `RenderScene`
-- scene change version 变化，或 binding 请求 refresh 时，允许按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 退化同步
 - `build_scene_view_for_camera_entity(...)` 已提供显式 camera entity 入口
 - `build_scene_view_from_matrices(...)` 已提供显式 view/projection matrix 入口，并由 `SceneCameraSource::Override` 使用
 - `PrimaryCamera` 仍保留为便捷 fallback

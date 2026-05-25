@@ -2,6 +2,7 @@
 #include "RenderDevice.h"
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <cstdint>
 #include <vector>
@@ -15,12 +16,67 @@ namespace AshEngine
 		uint64_t offset = 0;
 	};
 
+	struct VertexBufferBindingList
+	{
+		static constexpr size_t InlineCapacity = 4;
+
+		void push_back(const VertexBufferBinding& binding)
+		{
+			if (m_inline_count < InlineCapacity)
+			{
+				m_inline[m_inline_count++] = binding;
+				return;
+			}
+			m_overflow.push_back(binding);
+		}
+
+		void clear()
+		{
+			for (size_t index = 0; index < m_inline_count; ++index)
+			{
+				m_inline[index] = {};
+			}
+			m_inline_count = 0;
+			m_overflow.clear();
+		}
+
+		size_t size() const
+		{
+			return m_inline_count + m_overflow.size();
+		}
+
+		bool empty() const
+		{
+			return size() == 0;
+		}
+
+		VertexBufferBinding& operator[](size_t index)
+		{
+			return index < m_inline_count ? m_inline[index] : m_overflow[index - m_inline_count];
+		}
+
+		const VertexBufferBinding& operator[](size_t index) const
+		{
+			return index < m_inline_count ? m_inline[index] : m_overflow[index - m_inline_count];
+		}
+
+		bool uses_inline_storage_for_tests() const
+		{
+			return m_overflow.empty();
+		}
+
+	private:
+		std::array<VertexBufferBinding, InlineCapacity> m_inline{};
+		size_t m_inline_count = 0;
+		std::vector<VertexBufferBinding> m_overflow{};
+	};
+
 	struct GraphicsDrawDesc
 	{
 		static constexpr uint32_t InlineConstDataCapacity = 256;
 
 		GraphicsProgram* program = nullptr;
-		std::vector<VertexBufferBinding> vertex_buffers;
+		VertexBufferBindingList vertex_buffers{};
 		std::shared_ptr<IndexBuffer> index_buffer = nullptr;
 		uint64_t index_buffer_offset = 0;
 		bool has_viewport = false;
@@ -134,6 +190,7 @@ namespace AshEngine
 
 	private:
 		void update_frame_timing_history(double frame_time_ms);
+		void complete_frame_timing();
 
 	private:
 		RenderDevice* m_render_device = nullptr;
@@ -146,7 +203,6 @@ namespace AshEngine
 		uint32_t m_frame_time_history_count = 0;
 		uint32_t m_frame_time_history_head = 0;
 		double m_frame_time_history_sum_ms = 0.0;
-
 		friend class RenderGraphBuilder;
 		friend class RenderGraphExecutor;
 	};

@@ -608,9 +608,18 @@ Reverse-Z 行为约定：
 - 统计 frame stats
 - 在 `end_frame()` 时渲染 UI
 
+`RendererFrameStats::cpu_frame_time_ms` 的口径是上一帧完整 CPU wall time：计时从进入 `Renderer::begin_frame()`、调用 backend `begin_frame()` 前开始，到 `Renderer::present()` 调用 swapchain present 返回后结束。因此 overlay / PerfGate 的 FPS 会包含 frame-slot fence/timeline wait、UI submit、`RenderDevice::end_frame()` 和 present 开销；它仍不代表 GPU timestamp 执行时间。
+
+当前 hot path 约定：
+
+- `GraphicsDrawDesc::vertex_buffers` 使用 inline capacity 为 4 的 `VertexBufferBindingList`，常见 static mesh draw 不应为一到两个 vertex stream 反复分配小 vector；`clear()` 必须释放 inline `shared_ptr`，避免资源生命周期被隐藏延长。
+- `Renderer` 复用 pass 提交阶段的 program / vertex buffer / index buffer transition scratch set 和 barrier scratch vector；不要在每个 pass submit 内重新创建这些容器。
+
 ### 6.4 RenderGraph
 
 `RenderGraph` 是 Function/Render 层的帧级声明式编排系统，位于 `Renderer` / `RenderDevice` 之上。第一版负责 texture graph、raster / compute pass 声明、pass culling、transient texture lifetime 编译，以及 pass 边界 resource state 计划。Graph 执行仍通过现有 `Renderer / RenderDevice`，不直接暴露 Vulkan、DX12 或 backend-specific RHI 类型给 Editor / Game / Client。
+
+`RenderGraphExecutor` 默认走 `RenderGraphCompiler::compile_cached(...)`。缓存 key 表示 graph 拓扑：texture name / external / extracted、pass name / kind / flags，以及 texture usage 的 texture index、access、slot、depth、load action 和 depth read mode。texture width / height / format 不参与拓扑 key，因此窗口 resize 或同拓扑不同分辨率不会触发重新 compile。缓存先用 hash 定位 bucket，再做完整拓扑等值比较，不能只凭 hash 命中返回 compiled result。
 
 Scene deferred 主路径现在通过 graph 表达：
 
@@ -635,7 +644,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - `PassDesc::allow_reorder_draws` 是显式 opt-in；只有顺序不敏感的 pass 才能开启。当前 `SceneRenderer` 的 opaque static mesh pass 会按 program / index buffer / vertex buffer 做稳定排序，以减少 pipeline 和 descriptor 重绑
 - pass 提交前会对同一个 `GraphicsProgram`、vertex buffer、index buffer 的 transition 做一次性处理；提交 RHI 前还会按 resource/range/state 合并重复的只读 barrier，UAV/RTV/DSV 等写状态 barrier 保持原顺序
 - RHI graphics program 的 raster/depth/topology 状态在 variant 创建时写入 `GraphicProgramCreateDesc::pipeline`；`RenderDevice::bind_graphics_program()` 不能逐 draw 调用 `apply_render_state()`，因为 DX12 会把它标记为 PSO rebuild，Vulkan 会直接重建 `VkPipeline`
-- `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区并在 slot fence 完成后从该分区起点重新线性分配，避免上一帧命令仍引用的 descriptor slot 被本帧覆写；Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
+- `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区并在 slot fence 完成后从该分区起点重新线性分配，避免上一帧命令仍引用的 descriptor slot 被本帧覆写；DX12 descriptor table cache key 对 8 个以内 CPU handle 使用 inline 存储，单 descriptor bind 不应临时构造 vector；Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
 - `RenderDevice::begin_pass()` 会复用 RHI `RenderPass` 与 `Framebuffer`：RenderPass key 由 attachment format / load action / final state / multiview 等语义构成，Framebuffer key 由 render pass、attachment texture、extent 与 layer 构成；clear value 不属于 cache key，每次 begin pass 都会重新写入当前 clear 值
 - `GraphicsProgramState` 显式描述 cull/topology/depth test/depth write/depth compare/blend mode；这些状态必须在 program variant / PSO 创建时落入后端 pipeline state。当前 Function 层已公开 `TriangleList`、`TriangleStrip` 和 `LineList`，`LineList` 用于 DebugDraw overlay。
 - `PassDepthAttachment::read_only=true` 表示本 pass 只读 depth attachment：RenderDevice 会把 depth final state 设为 `DSVRead`，如果该 depth target 可采样则同时包含 `SRVGraphics`。Vulkan 使用 depth-stencil read-only layout，DX12 使用 read-only DSV。
@@ -1407,7 +1416,7 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
 - CPU 多线程 frustum culling
 - 逻辑线程构建可见帧数据
 - 渲染线程只消费不可变的 render frame 并提交 draw
-- 静态网格主链路支持按 `program + render asset + section` 合批，并通过 per-instance vertex stream 传递 object-to-clip 矩阵
+- 静态网格主链路支持按 `program + render asset + section` 合批，并通过 per-instance vertex stream 传递 object-to-clip 矩阵；batch vector / lookup 为 thread-local scratch，活跃 batch 每帧清空复用，非活跃 batch 会释放持有的 resource 引用
 - 当一个 view 只有 0 或 1 个可见静态网格 draw 时，`SceneRenderer` 会跳过 batch map 构建；单 draw 情况直接逐 section 提交，并复用一个单实例 vertex buffer，以降低 Sandbox/Sponza 这类单可见 mesh 帧的固定 CPU 开销；同一渲染 frame 内的多 view/pass submit 会从 frame-local slot 游标申请独立 instance buffer 逻辑 slot，跨渲染 frame 再映射到 3 帧物理 slot ring，避免后提交 view 或下一帧 CPU update 覆盖前一个 view / 上一帧仍在 GPU 读取的 object-to-clip 数据
 
 当前明确不在第一阶段完成的系统包括：
@@ -1467,9 +1476,12 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
 
 当前 V1 同步策略为：
 
-- `Scene::get_change_version()` 专用于 render sync，不复用 `mark_clean()`
+- `Scene::get_change_version()` 仍用于通用 scene 脏状态观察；render sync 不复用 `mark_clean()` / `is_dirty()`
+- `Scene::get_render_primitive_version()` 覆盖实体创建/销毁、MeshComponent 增删改等需要重建 static mesh primitive 拓扑的变化
+- `Scene::get_render_transform_version()` 覆盖 TransformComponent 修改和 reparent，纯 transform change 只调用 `RenderScene::update_transforms_from_scene(...)` 更新 primitive world transform / bounds，并重建灯光快照以覆盖 light entity transform
+- `Scene::get_render_light_version()` 覆盖 LightComponent 增删改，纯 light component change 只调用 `RenderScene::rebuild_lights_from_scene(...)`
 - 内部按 `Scene*` 维护 `RenderScene`
-- 当 scene change version 变化或 binding 请求 refresh 时，允许按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 退化同步
+- 当 primitive version 变化、binding 请求 refresh 或 render scene 无效时，才按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 退化同步
 - `build_scene_view_for_camera_entity(...)` 已提供显式 camera entity 入口，`PrimaryCamera` 保留为便捷 fallback
 - `Window` output 不暴露 `UISurfaceHandle`
 - `Offscreen` output 通过 `UISurfaceHandle` 交给 `UIContext` 采样展示
@@ -1551,7 +1563,7 @@ Base 层自测方式：
 product/bin64/Debug-windows-x86_64/Sandbox.exe --engine-self-test
 ```
 
-当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、RenderDevice line-list topology 映射、DebugDrawService frame-local 记录/清空与 shape-to-line-list 展开、SceneView matrix override、per-camera Reverse-Z depth state、SceneQuery bounds/ray/picking、AssetId scene instantiation，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
+当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、RenderDevice line-list topology 映射、RendererFrameStats full-frame timing contract、RenderGraph stable topology compile cache、DebugDrawService frame-local 记录/清空与 shape-to-line-list 展开、Scene render primitive/transform/light version 拆分、SceneView matrix override、per-camera Reverse-Z depth state、SceneQuery bounds/ray/picking、AssetId scene instantiation、GraphicsDrawDesc 常见 vertex binding inline storage，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
 
 维护约定：
 
@@ -1647,9 +1659,9 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
   - draw call count
   - graphics pass count
   - compute dispatch count
-  - instantaneous CPU frame time / FPS
-  - moving-average CPU frame time / FPS
-- 统计由 `Renderer` 维护，并通过引擎侧 `UIContext` 在窗口左上角绘制一个常驻 overlay。
+  - instantaneous full-frame CPU wall time / FPS
+  - moving-average full-frame CPU wall time / FPS
+- 统计由 `Renderer` 维护，并通过引擎侧 `UIContext` 在窗口左上角绘制一个常驻 overlay。overlay 显示上一帧已完成统计，避免当前帧尚未 present 时提前截断 frame time。
 - 这层 overlay 属于 Engine runtime debug UI，不需要 Editor 自己实现，也不会暴露 backend-specific UI 细节。
 - 只有当改动可以被严格证明为“单后端私有”或“单可执行项目私有”时，才可以缩小验证矩阵
 
@@ -1712,7 +1724,7 @@ CPU profiling 使用 `Base/hprofiler.h` 的 Tracy facade。新增打点时遵守
 
 标准性能门禁通过 `RunPerfGate.bat` 或 `scripts/RunPerfGate.ps1 -Profile Standard` 运行。脚本会按 `tools/perf/perf_gate_baselines.json` 中的 Standard profile 切换 backend，运行 Sandbox 与 Editor，并把每次运行的 telemetry JSON、stdout/stderr 日志和汇总报告写入 `Intermediate/test-reports/perf-gate/<timestamp>/`。
 
-Phase 1 telemetry 由 Engine 侧 PerfGate controller 生成，字段包括 CPU frame time、FPS、draw/pass/dispatch 数量、进程 working set/private bytes、Engine heap current/peak/shutdown live bytes，以及 backend memory stats。`cpu_frame_time_ms` 只表示 CPU 侧 frame orchestration/submit 时间，不代表 GPU 执行时间；未来 GPU timestamp query 应写入独立的 `gpu_frame_time_ms` 字段。
+Phase 1 telemetry 由 Engine 侧 PerfGate controller 生成，字段包括 CPU frame time、FPS、draw/pass/dispatch 数量、进程 working set/private bytes、Engine heap current/peak/shutdown live bytes，以及 backend memory stats。`cpu_frame_time_ms` 表示完整 CPU wall-frame 时间，包含 backend frame-slot wait、UI/end-frame 和 present；它不代表 GPU timestamp 执行时间，未来 GPU timestamp query 应写入独立的 `gpu_frame_time_ms` 字段。
 
 硬失败包括非 0 退出、超时、telemetry 缺失或损坏、backend mismatch、validation/debug-layer error、Engine heap shutdown live bytes 非 0、Vulkan VMA shutdown live bytes 非 0，以及 profile 配置的绝对内存上限。`-BlessBaseline` 会把当前非失败记录写入 `baselines.<Profile>.<Configuration>.<Target>.<Backend>`；后续运行会用同 profile/config/target/backend 的 baseline 对比 CPU avg/p95/p99、private bytes peak、Engine heap peak 和 draw calls，并按 `warn_thresholds` 生成 WARN。当前性能趋势回归只标记 WARN，不作为硬失败。
 

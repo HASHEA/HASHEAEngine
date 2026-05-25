@@ -1,6 +1,8 @@
 #pragma once
 #include "DX12Wrapper.h"
 #include "DX12Helper.hpp"
+#include <algorithm>
+#include <array>
 #include <vector>
 #include <mutex>
 #include <unordered_map>
@@ -74,12 +76,19 @@ namespace RHI
 	{
 		struct DescriptorTableCacheKey
 		{
+			static constexpr uint32_t InlineHandleCapacity = 8;
+
 			D3D12_DESCRIPTOR_HEAP_TYPE heapType = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-			std::vector<SIZE_T> cpuHandles{};
+			uint32_t descriptorCount = 0;
+			std::array<SIZE_T, InlineHandleCapacity> inlineCpuHandles{};
+			std::vector<SIZE_T> overflowCpuHandles{};
 
 			bool operator==(const DescriptorTableCacheKey& other) const
 			{
-				return heapType == other.heapType && cpuHandles == other.cpuHandles;
+				return heapType == other.heapType &&
+					descriptorCount == other.descriptorCount &&
+					inlineCpuHandles == other.inlineCpuHandles &&
+					overflowCpuHandles == other.overflowCpuHandles;
 			}
 		};
 
@@ -88,7 +97,14 @@ namespace RHI
 			size_t operator()(const DescriptorTableCacheKey& key) const
 			{
 				size_t hash = static_cast<size_t>(key.heapType);
-				for (SIZE_T handle : key.cpuHandles)
+				hash ^= static_cast<size_t>(key.descriptorCount) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+				const uint32_t inlineCount = std::min<uint32_t>(key.descriptorCount, DescriptorTableCacheKey::InlineHandleCapacity);
+				for (uint32_t index = 0; index < inlineCount; ++index)
+				{
+					const SIZE_T handle = key.inlineCpuHandles[index];
+					hash ^= static_cast<size_t>(handle) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+				}
+				for (SIZE_T handle : key.overflowCpuHandles)
 				{
 					hash ^= static_cast<size_t>(handle) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
 				}

@@ -40,6 +40,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <utility>
 #include <vector>
 #include <glm/gtc/matrix_transform.hpp>
@@ -1384,6 +1385,54 @@ namespace AshEngine
 					"motion vector history or instance-buffer ring still depends on the logic-side VisibleRenderFrame frame_index");
 		}
 
+		auto test_renderer_frame_stats_cover_presented_frame() -> bool
+		{
+			std::ifstream renderer_source_file("project/src/engine/Function/Render/Renderer.cpp");
+			if (!renderer_source_file.is_open())
+			{
+				return report_self_test_failure(
+					"Renderer frame stats timing",
+					"failed to open Renderer.cpp");
+			}
+
+			std::ifstream renderer_header_file("project/src/engine/Function/Render/Renderer.h");
+			if (!renderer_header_file.is_open())
+			{
+				return report_self_test_failure(
+					"Renderer frame stats timing",
+					"failed to open Renderer.h");
+			}
+
+			const std::string renderer_source{
+				std::istreambuf_iterator<char>(renderer_source_file),
+				std::istreambuf_iterator<char>() };
+			const std::string renderer_header{
+				std::istreambuf_iterator<char>(renderer_header_file),
+				std::istreambuf_iterator<char>() };
+
+			const size_t start_time_pos = renderer_source.find("m_frame_start_time = std::chrono::steady_clock::now();");
+			const size_t begin_frame_pos = renderer_source.find("m_render_device && m_render_device->begin_frame()");
+			const size_t present_pos = renderer_source.find("m_render_device->present();");
+			const size_t complete_frame_pos = renderer_source.find("complete_frame_timing();");
+			const bool starts_before_backend_begin =
+				start_time_pos != std::string::npos &&
+				begin_frame_pos != std::string::npos &&
+				start_time_pos < begin_frame_pos;
+			const bool completes_after_present =
+				present_pos != std::string::npos &&
+				complete_frame_pos != std::string::npos &&
+				present_pos < complete_frame_pos;
+			const bool end_frame_no_longer_completes =
+				renderer_source.find("m_last_completed_frame_stats = m_frame_stats;") == std::string::npos;
+			const bool declares_completion_helper =
+				renderer_header.find("void complete_frame_timing();") != std::string::npos;
+
+			return (starts_before_backend_begin && completes_after_present && end_frame_no_longer_completes && declares_completion_helper) ||
+				report_self_test_failure(
+					"Renderer frame stats timing",
+					"RendererFrameStats must measure from before backend begin_frame wait through present completion");
+		}
+
 		auto test_deferred_hq_gbuffer_layout_contract() -> bool
 		{
 			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
@@ -1644,6 +1693,77 @@ namespace AshEngine
 			return ok || report_self_test_failure("RenderGraph compiler culling", "compiler did not cull dead passes or preserve roots");
 		}
 
+		auto test_render_graph_compile_cache_reuses_stable_topology() -> bool
+		{
+			RenderGraphCompiler::reset_compile_cache_for_tests();
+
+			RenderTargetDesc output_desc{};
+			output_desc.width = 64;
+			output_desc.height = 64;
+			output_desc.format = RenderTextureFormat::RGBA8_UNORM;
+
+			RenderGraphTextureDesc temp_desc{};
+			temp_desc.width = 64;
+			temp_desc.height = 64;
+			temp_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			temp_desc.shader_resource = true;
+
+			auto build_graph = [&](uint32_t output_width) -> RenderGraphBuilder
+			{
+				RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RenderGraphCacheSelfTest");
+				RenderTargetDesc per_graph_output_desc = output_desc;
+				per_graph_output_desc.width = output_width;
+				RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(per_graph_output_desc, "Output");
+				RenderGraphTextureRef temp = graph.create_texture(temp_desc, "Temp");
+				graph.add_raster_pass(
+					"Producer",
+					RenderGraphPassFlags::None,
+					[&](RenderGraphRasterPassBuilder& pass)
+					{
+						pass.write_color(0, temp, RenderLoadAction::Clear, {});
+					},
+					[](RenderGraphRasterContext&)
+					{
+						return true;
+					});
+				graph.add_raster_pass(
+					"Consumer",
+					RenderGraphPassFlags::None,
+					[&](RenderGraphRasterPassBuilder& pass)
+					{
+						pass.read_texture(temp, RenderGraphAccess::GraphicsSRV);
+						pass.write_color(0, output, RenderLoadAction::Clear, {});
+					},
+					[](RenderGraphRasterContext&)
+					{
+						return true;
+					});
+				return graph;
+			};
+
+			RenderGraphCompileResult first{};
+			RenderGraphCompileResult second{};
+			RenderGraphCompileResult resized{};
+			RenderGraphBuilder graph = build_graph(64);
+			RenderGraphBuilder same_graph = build_graph(64);
+			RenderGraphBuilder resized_graph = build_graph(128);
+
+			const bool first_ok = graph.compile_cached_for_tests(first);
+			const RenderGraphCompileCacheStats after_first = RenderGraphCompiler::get_compile_cache_stats_for_tests();
+			const bool second_ok = same_graph.compile_cached_for_tests(second);
+			const RenderGraphCompileCacheStats after_second = RenderGraphCompiler::get_compile_cache_stats_for_tests();
+			const bool resized_ok = resized_graph.compile_cached_for_tests(resized);
+			const RenderGraphCompileCacheStats after_resized = RenderGraphCompiler::get_compile_cache_stats_for_tests();
+
+			bool ok = first_ok && second_ok && resized_ok;
+			ok = ok && after_first.misses == 1u && after_first.hits == 0u;
+			ok = ok && after_second.misses == 1u && after_second.hits == 1u;
+			ok = ok && after_resized.misses == 1u && after_resized.hits == 2u;
+			ok = ok && first.live_pass_indices == second.live_pass_indices;
+			ok = ok && first.live_pass_indices == resized.live_pass_indices;
+			return ok || report_self_test_failure("RenderGraph compile cache", "stable topology did not reuse the cached compile result");
+		}
+
 		auto test_scene_deferred_graph_resources_describe_live_pass_chain() -> bool
 		{
 			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("SceneDeferredGraphSelfTest");
@@ -1851,6 +1971,60 @@ namespace AshEngine
 				frame.lights[1].range == 7.0f;
 			return (directional_ok && point_ok) ||
 				report_self_test_failure("RenderScene light snapshot", "light data was not extracted with stable transform data");
+		}
+
+		auto test_scene_render_versions_separate_transform_from_primitive_changes() -> bool
+		{
+			Scene scene = Scene::create("SceneRenderVersionSelfTest");
+			const uint64_t initial_primitive_version = scene.get_render_primitive_version();
+			const uint64_t initial_transform_version = scene.get_render_transform_version();
+			const uint64_t initial_light_version = scene.get_render_light_version();
+
+			Entity entity = scene.create_entity("Mesh");
+			MeshComponent mesh{};
+			mesh.asset_path = "test.gltf";
+			entity.add_mesh_component(mesh);
+
+			const uint64_t mesh_primitive_version = scene.get_render_primitive_version();
+			const uint64_t mesh_transform_version = scene.get_render_transform_version();
+			TransformComponent transform = entity.get_transform_component();
+			transform.position = { 10.0f, 0.0f, 0.0f };
+			entity.set_transform_component(transform);
+
+			const uint64_t before_light_primitive_version = scene.get_render_primitive_version();
+			LightComponent light{};
+			entity.add_light_component(light);
+
+			const bool ok =
+				mesh_primitive_version != initial_primitive_version &&
+				mesh_transform_version != initial_transform_version &&
+				scene.get_render_light_version() != initial_light_version &&
+				scene.get_render_primitive_version() == mesh_primitive_version &&
+				scene.get_render_primitive_version() == before_light_primitive_version &&
+				scene.get_render_transform_version() != mesh_transform_version;
+			return ok ||
+				report_self_test_failure("Scene render versions", "transform-only changes invalidated primitive rebuild state");
+		}
+
+		auto test_graphics_draw_desc_keeps_common_vertex_bindings_inline() -> bool
+		{
+			GraphicsDrawDesc desc{};
+			std::weak_ptr<VertexBuffer> released_buffer{};
+			{
+				std::shared_ptr<VertexBuffer> buffer = std::make_shared<VertexBuffer>();
+				released_buffer = buffer;
+				desc.vertex_buffers.push_back({ 0u, buffer, 0u });
+			}
+			desc.vertex_buffers.push_back({ 1u, nullptr, 16u });
+			const bool inline_ok =
+				desc.vertex_buffers.size() == 2u &&
+				desc.vertex_buffers[0].slot == 0u &&
+				desc.vertex_buffers[1].offset == 16u &&
+				desc.vertex_buffers.uses_inline_storage_for_tests();
+			desc.vertex_buffers.clear();
+			const bool ok = inline_ok && released_buffer.expired();
+			return ok ||
+				report_self_test_failure("GraphicsDrawDesc inline vertex bindings", "common vertex bindings spilled to heap storage");
 		}
 
 		auto test_debug_draw_service_records_and_clears_frame_lines() -> bool
@@ -2225,6 +2399,7 @@ namespace AshEngine
 		all_passed = test_scene_renderer_instance_buffer_slots_are_isolated_between_view_submits() && all_passed;
 		all_passed = test_scene_renderer_instance_buffer_slots_are_lagged_between_frames() && all_passed;
 		all_passed = test_scene_renderer_temporal_history_uses_render_frame_epoch() && all_passed;
+		all_passed = test_renderer_frame_stats_cover_presented_frame() && all_passed;
 		all_passed = test_deferred_hq_gbuffer_layout_contract() && all_passed;
 		all_passed = test_deferred_shading_model_ids_are_stable() && all_passed;
 		all_passed = test_material_asset_loads_declared_shading_model() && all_passed;
@@ -2233,9 +2408,12 @@ namespace AshEngine
 		all_passed = test_render_graph_access_maps_to_rhi_states() && all_passed;
 		all_passed = test_render_graph_builder_records_raster_usage() && all_passed;
 		all_passed = test_render_graph_compiler_culls_dead_passes_and_keeps_roots() && all_passed;
+		all_passed = test_render_graph_compile_cache_reuses_stable_topology() && all_passed;
 		all_passed = test_scene_deferred_graph_resources_describe_live_pass_chain() && all_passed;
 		all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
+		all_passed = test_scene_render_versions_separate_transform_from_primitive_changes() && all_passed;
+		all_passed = test_graphics_draw_desc_keeps_common_vertex_bindings_inline() && all_passed;
 		all_passed = test_debug_draw_service_records_and_clears_frame_lines() && all_passed;
 		all_passed = test_debug_draw_service_expands_shapes_to_line_list() && all_passed;
 		all_passed = test_scene_view_builds_from_override_matrices() && all_passed;

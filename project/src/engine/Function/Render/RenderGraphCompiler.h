@@ -33,6 +33,12 @@ namespace AshEngine
 		std::vector<RenderGraphPassBarrierPlan> pass_barriers{};
 	};
 
+	struct RenderGraphCompileCacheStats
+	{
+		uint64_t hits = 0;
+		uint64_t misses = 0;
+	};
+
 	class RenderGraphCompiler
 	{
 	public:
@@ -40,5 +46,11 @@ namespace AshEngine
 			const std::vector<RenderGraphTextureNode>& textures,
 			const std::vector<RenderGraphPassNode>& passes,
 			RenderGraphCompileResult& out_result);
+		static bool compile_cached(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphPassNode>& passes,
+			RenderGraphCompileResult& out_result);
+		static void reset_compile_cache_for_tests();
+		static RenderGraphCompileCacheStats get_compile_cache_stats_for_tests();
 	};
 }

@@ -280,21 +280,23 @@ namespace RHI
 				const bool samplerBinding = bindingInfo.rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
 				const D3D12_DESCRIPTOR_HEAP_TYPE heapType = samplerBinding ? D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER : D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
-				std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> sourceHandles{};
+				std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 1> singleSourceHandle{};
+				const D3D12_CPU_DESCRIPTOR_HANDLE* sourceHandles = nullptr;
 				if (bind.isArray)
 				{
-					sourceHandles = bind.cpuHandles;
+					sourceHandles = bind.cpuHandles.data();
 				}
 				else
 				{
-					sourceHandles.push_back(bind.cpuHandle);
+					singleSourceHandle[0] = bind.cpuHandle;
+					sourceHandles = singleSourceHandle.data();
 				}
 
 				DX12DescriptorHandle gpuHandle{};
 				if (!heapMgr.find_or_create_shader_visible_table(
 					device,
 					heapType,
-					sourceHandles.data(),
+					sourceHandles,
 					descriptorCount,
 					gpuHandle))
 				{
@@ -348,13 +350,14 @@ namespace RHI
 				return;
 			}
 
-			std::vector<uint32_t> dwords(rootConstants.dwordCount, 0u);
+			std::array<uint32_t, k_dx12_max_root_constants_dwords> dwords{};
+			const uint32_t dwordCount = std::min<uint32_t>(rootConstants.dwordCount, static_cast<uint32_t>(dwords.size()));
 			if (!constDataBlock.empty())
 			{
-				std::memcpy(dwords.data(), constDataBlock.data(), std::min<size_t>(constDataBlock.size(), dwords.size() * sizeof(uint32_t)));
+				std::memcpy(dwords.data(), constDataBlock.data(), std::min<size_t>(constDataBlock.size(), static_cast<size_t>(dwordCount) * sizeof(uint32_t)));
 			}
 
-			setRootConstants(rootConstants.rootIndex, rootConstants.dwordCount, dwords.data());
+			setRootConstants(rootConstants.rootIndex, dwordCount, dwords.data());
 		}
 	}
 

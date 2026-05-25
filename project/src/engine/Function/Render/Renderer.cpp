@@ -130,10 +130,11 @@ namespace AshEngine
 	{
 		ASH_PROFILE_SCOPE_NC("Renderer::begin_frame", AshEngine::Profile::Color::Render);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_render_device && m_render_device->begin_frame());
-
+		m_frame_in_progress = false;
 		m_frame_stats = {};
 		m_frame_start_time = std::chrono::steady_clock::now();
+		ASH_PROCESS_ERROR(m_render_device && m_render_device->begin_frame());
+
 		m_frame_in_progress = true;
 		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
 		{
@@ -156,16 +157,6 @@ namespace AshEngine
 			end_active_pass(m_active_pass);
 		}
 
-		if (m_frame_in_progress)
-		{
-			const auto frame_end_time = std::chrono::steady_clock::now();
-			m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
-			m_frame_stats.instantaneous_fps =
-				m_frame_stats.cpu_frame_time_ms > 0.0 ? (1000.0 / m_frame_stats.cpu_frame_time_ms) : 0.0;
-			update_frame_timing_history(m_frame_stats.cpu_frame_time_ms);
-			m_last_completed_frame_stats = m_frame_stats;
-		}
-
 		bool ui_result = true;
 		if (Application::get() && Application::get_ui_context())
 		{
@@ -177,10 +168,6 @@ namespace AshEngine
 			}
 		}
 		const bool result = m_render_device && m_render_device->end_frame();
-		if (m_frame_in_progress)
-		{
-			m_frame_in_progress = false;
-		}
 		ASH_PROFILE_PLOT("Render/DrawCalls", static_cast<int64_t>(m_frame_stats.draw_call_count));
 		ASH_PROFILE_PLOT("Render/Passes", static_cast<int64_t>(m_frame_stats.graphics_pass_count));
 		ASH_PROFILE_PLOT("Render/Dispatches", static_cast<int64_t>(m_frame_stats.compute_dispatch_count));
@@ -192,6 +179,10 @@ namespace AshEngine
 		if (m_render_device)
 		{
 			m_render_device->present();
+		}
+		if (m_frame_in_progress)
+		{
+			complete_frame_timing();
 		}
 	}
 
@@ -354,6 +345,18 @@ namespace AshEngine
 			m_frame_stats.average_cpu_frame_time_ms > 0.0 ? (1000.0 / m_frame_stats.average_cpu_frame_time_ms) : 0.0;
 	}
 
+	void Renderer::complete_frame_timing()
+	{
+		const auto frame_end_time = std::chrono::steady_clock::now();
+		m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
+		m_frame_stats.instantaneous_fps =
+			m_frame_stats.cpu_frame_time_ms > 0.0 ? (1000.0 / m_frame_stats.cpu_frame_time_ms) : 0.0;
+		update_frame_timing_history(m_frame_stats.cpu_frame_time_ms);
+		const RendererFrameStats completed_stats = m_frame_stats;
+		m_last_completed_frame_stats = completed_stats;
+		m_frame_in_progress = false;
+	}
+
 	void Renderer::end_active_pass(GraphicsPassContext* pass_context)
 	{
 		if (!pass_context || pass_context != m_active_pass)
@@ -380,14 +383,26 @@ namespace AshEngine
 		{
 			ASH_PROFILE_SCOPE_NC("Renderer::PassTransitions", AshEngine::Profile::Color::Barrier);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass_context->m_draw_calls.size()));
-			std::unordered_set<const GraphicsProgram*> transitioned_programs;
-			std::unordered_set<const VertexBuffer*> transitioned_vertex_buffers;
-			std::unordered_set<const IndexBuffer*> transitioned_index_buffers;
-			transitioned_programs.reserve(pass_context->m_draw_calls.size());
-			transitioned_vertex_buffers.reserve(pass_context->m_draw_calls.size());
-			transitioned_index_buffers.reserve(pass_context->m_draw_calls.size());
-			std::vector<RHI::AshBarrier> pass_barriers;
-			pass_barriers.reserve(pass_context->m_draw_calls.size() * 3u);
+			static thread_local std::unordered_set<const GraphicsProgram*> transitioned_program_scratch{};
+			static thread_local std::unordered_set<const VertexBuffer*> transitioned_vertex_buffer_scratch{};
+			static thread_local std::unordered_set<const IndexBuffer*> transitioned_index_buffer_scratch{};
+			static thread_local std::vector<RHI::AshBarrier> pass_barrier_scratch{};
+			struct PassBarrierScratchRelease
+			{
+				std::vector<RHI::AshBarrier>& barriers;
+				~PassBarrierScratchRelease()
+				{
+					barriers.clear();
+				}
+			} release_pass_barrier_scratch{ pass_barrier_scratch };
+			transitioned_program_scratch.clear();
+			transitioned_vertex_buffer_scratch.clear();
+			transitioned_index_buffer_scratch.clear();
+			transitioned_program_scratch.reserve(pass_context->m_draw_calls.size());
+			transitioned_vertex_buffer_scratch.reserve(pass_context->m_draw_calls.size());
+			transitioned_index_buffer_scratch.reserve(pass_context->m_draw_calls.size());
+			pass_barrier_scratch.clear();
+			pass_barrier_scratch.reserve(pass_context->m_draw_calls.size() * 3u);
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
 				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
@@ -397,24 +412,25 @@ namespace AshEngine
 					success = false;
 					break;
 				}
-				if (transitioned_programs.insert(draw_desc.program).second &&
-					!m_render_device->collect_graphics_program_resource_barriers(draw_desc.program, pass_barriers))
+				if (transitioned_program_scratch.insert(draw_desc.program).second &&
+					!m_render_device->collect_graphics_program_resource_barriers(draw_desc.program, pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_graphics_program_resource_barriers failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
 
-				for (const VertexBufferBinding& binding : draw_desc.vertex_buffers)
+				for (size_t binding_index = 0; binding_index < draw_desc.vertex_buffers.size(); ++binding_index)
 				{
+					const VertexBufferBinding& binding = draw_desc.vertex_buffers[binding_index];
 					if (!binding.buffer)
 					{
 						HLogError("Renderer: transition_vertex_buffer failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);
 						success = false;
 						break;
 					}
-					if (transitioned_vertex_buffers.insert(binding.buffer.get()).second &&
-						!m_render_device->collect_vertex_buffer_barrier(binding.buffer, pass_barriers))
+					if (transitioned_vertex_buffer_scratch.insert(binding.buffer.get()).second &&
+						!m_render_device->collect_vertex_buffer_barrier(binding.buffer, pass_barrier_scratch))
 					{
 						HLogError("Renderer: collect_vertex_buffer_barrier failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);
 						success = false;
@@ -427,8 +443,8 @@ namespace AshEngine
 				}
 
 				if (draw_desc.index_buffer &&
-					transitioned_index_buffers.insert(draw_desc.index_buffer.get()).second &&
-					!m_render_device->collect_index_buffer_barrier(draw_desc.index_buffer, pass_barriers))
+					transitioned_index_buffer_scratch.insert(draw_desc.index_buffer.get()).second &&
+					!m_render_device->collect_index_buffer_barrier(draw_desc.index_buffer, pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_index_buffer_barrier failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
@@ -438,12 +454,12 @@ namespace AshEngine
 			if (success &&
 				pass_context->m_desc.depth_attachment.render_target &&
 				pass_context->m_desc.depth_attachment.read_only &&
-				!m_render_device->collect_depth_attachment_barrier(pass_context->m_desc.depth_attachment, pass_barriers))
+				!m_render_device->collect_depth_attachment_barrier(pass_context->m_desc.depth_attachment, pass_barrier_scratch))
 			{
 				HLogError("Renderer: collect_depth_attachment_barrier failed for pass '{}'.", pass_name);
 				success = false;
 			}
-			if (success && !m_render_device->submit_resource_barriers(pass_barriers))
+			if (success && !m_render_device->submit_resource_barriers(pass_barrier_scratch))
 			{
 				HLogError("Renderer: submit pass resource barriers failed for pass '{}'.", pass_name);
 				success = false;
@@ -496,8 +512,9 @@ namespace AshEngine
 					break;
 				}
 
-				for (const VertexBufferBinding& binding : draw_desc.vertex_buffers)
+				for (size_t binding_index = 0; binding_index < draw_desc.vertex_buffers.size(); ++binding_index)
 				{
+					const VertexBufferBinding& binding = draw_desc.vertex_buffers[binding_index];
 					if (!binding.buffer || !m_render_device->bind_vertex_buffer(binding.slot, binding.buffer, binding.offset))
 					{
 						HLogError("Renderer: bind_vertex_buffer failed for pass '{}' draw {} slot {}.", pass_name, draw_index, binding.slot);

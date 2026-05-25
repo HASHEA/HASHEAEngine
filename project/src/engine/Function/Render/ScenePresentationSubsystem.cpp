@@ -57,7 +57,9 @@ namespace AshEngine
 		struct SceneState
 		{
 			Scene* scene = nullptr;
-			uint64_t last_change_version = 0;
+			uint64_t last_primitive_version = 0;
+			uint64_t last_transform_version = 0;
+			uint64_t last_light_version = 0;
 			bool render_scene_valid = false;
 			RenderScene render_scene{};
 		};
@@ -580,17 +582,54 @@ namespace AshEngine
 					scene_state = &state_found->second;
 				}
 
-				const uint64_t scene_change_version = binding.scene->get_change_version();
-				if (binding.refresh_requested || !scene_state->render_scene_valid || scene_state->last_change_version != scene_change_version)
+				const uint64_t scene_primitive_version = binding.scene->get_render_primitive_version();
+				const uint64_t scene_transform_version = binding.scene->get_render_transform_version();
+				const uint64_t scene_light_version = binding.scene->get_render_light_version();
+				if (binding.refresh_requested ||
+					!scene_state->render_scene_valid ||
+					scene_state->last_primitive_version != scene_primitive_version)
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderScene", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
 					scene_state->render_scene_valid = scene_state->render_scene.rebuild_from_scene(*binding.scene, *m_impl->render_asset_manager);
-					scene_state->last_change_version = scene_change_version;
+					scene_state->last_primitive_version = scene_primitive_version;
+					scene_state->last_transform_version = scene_transform_version;
+					scene_state->last_light_version = scene_light_version;
 					if (!scene_state->render_scene_valid)
 					{
 						HLogError(
 							"ScenePresentationSubsystem: failed to rebuild RenderScene for binding '{}' and scene '{}'.",
+							binding.debug_name,
+							binding.scene->get_name());
+					}
+				}
+				else if (scene_state->last_transform_version != scene_transform_version)
+				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::UpdateRenderSceneTransforms", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					scene_state->render_scene_valid =
+						scene_state->render_scene.update_transforms_from_scene(*binding.scene) &&
+						scene_state->render_scene.rebuild_lights_from_scene(*binding.scene);
+					scene_state->last_transform_version = scene_transform_version;
+					scene_state->last_light_version = scene_light_version;
+					if (!scene_state->render_scene_valid)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to update RenderScene transforms for binding '{}' and scene '{}'.",
+							binding.debug_name,
+							binding.scene->get_name());
+					}
+				}
+				else if (scene_state->last_light_version != scene_light_version)
+				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneLights", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					scene_state->render_scene_valid = scene_state->render_scene.rebuild_lights_from_scene(*binding.scene);
+					scene_state->last_light_version = scene_light_version;
+					if (!scene_state->render_scene_valid)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to rebuild RenderScene lights for binding '{}' and scene '{}'.",
 							binding.debug_name,
 							binding.scene->get_name());
 					}

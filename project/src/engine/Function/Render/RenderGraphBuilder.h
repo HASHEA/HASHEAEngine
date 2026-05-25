@@ -46,6 +46,7 @@ namespace AshEngine
 
 		bool execute();
 		bool compile_for_tests(RenderGraphCompileResult& out_result) const;
+		bool compile_cached_for_tests(RenderGraphCompileResult& out_result) const;
 
 		size_t get_texture_count_for_tests() const;
 		size_t get_pass_count_for_tests() const;

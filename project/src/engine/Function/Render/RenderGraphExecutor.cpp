@@ -76,7 +76,7 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(passes.size()));
 
 		RenderGraphCompileResult compiled{};
-		if (!RenderGraphCompiler::compile(textures, passes, compiled))
+		if (!RenderGraphCompiler::compile_cached(textures, passes, compiled))
 		{
 			return false;
 		}

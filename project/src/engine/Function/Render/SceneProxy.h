@@ -65,6 +65,7 @@ namespace AshEngine
 
 		const std::shared_ptr<StaticMeshRenderAsset>& get_render_asset() const;
 		const std::vector<ResolvedStaticMeshSection>& get_sections() const;
+		void update_world_transform(const glm::mat4& world_transform);
 
 	private:
 		void update_bounds(const SceneMeshBounds& local_bounds);
@@ -72,5 +73,6 @@ namespace AshEngine
 	private:
 		std::shared_ptr<StaticMeshRenderAsset> m_render_asset = nullptr;
 		std::vector<ResolvedStaticMeshSection> m_sections{};
+		SceneMeshBounds m_local_bounds{};
 	};
 }

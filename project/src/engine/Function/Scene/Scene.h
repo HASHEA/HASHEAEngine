@@ -170,6 +170,9 @@ namespace AshEngine
 
 		bool is_dirty() const;
 		uint64_t get_change_version() const;
+		uint64_t get_render_primitive_version() const;
+		uint64_t get_render_transform_version() const;
+		uint64_t get_render_light_version() const;
 		void mark_clean();
 
 	private:

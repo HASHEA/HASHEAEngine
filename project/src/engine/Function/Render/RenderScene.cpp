@@ -5,7 +5,6 @@
 #include "Function/Render/Visibility.h"
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace AshEngine
@@ -141,6 +140,31 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool RenderScene::update_transforms_from_scene(const Scene& scene)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::update_transforms_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		for (const std::shared_ptr<StaticMeshPrimitiveProxy>& primitive : m_static_mesh_primitives)
+		{
+			if (!primitive)
+			{
+				continue;
+			}
+
+			const Entity entity = scene.find_entity(primitive->get_entity_id());
+			if (!entity.is_valid() || !entity.has_mesh_component())
+			{
+				continue;
+			}
+
+			primitive->update_world_transform(scene.get_entity_world_transform(primitive->get_entity_id()));
+		}
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool RenderScene::rebuild_lights_from_scene(const Scene& scene)
 	{
 		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_lights_from_scene", AshEngine::Profile::Color::Scene);
@@ -191,26 +215,15 @@ namespace AshEngine
 		out_frame.reverse_z = view.reverse_z;
 		ASH_PROCESS_ERROR(build_visible_light_frame(out_frame));
 
-		std::unordered_map<uint64_t, const StaticMeshPrimitiveProxy*> primitive_index;
-		primitive_index.reserve(primitives_snapshot.size());
-		for (const std::shared_ptr<StaticMeshPrimitiveProxy>& primitive : primitives_snapshot)
+		out_frame.static_mesh_draws.reserve(visibility.visible_primitives.primitives.size());
+		for (const StaticMeshPrimitiveProxy* primitive_ptr : visibility.visible_primitives.primitives)
 		{
-			if (primitive)
-			{
-				primitive_index.emplace(primitive->get_primitive_id(), primitive.get());
-			}
-		}
-
-		out_frame.static_mesh_draws.reserve(visibility.visible_primitives.primitive_ids.size());
-		for (uint64_t primitive_id : visibility.visible_primitives.primitive_ids)
-		{
-			const auto found = primitive_index.find(primitive_id);
-			if (found == primitive_index.end() || found->second == nullptr)
+			if (!primitive_ptr)
 			{
 				continue;
 			}
 
-			const StaticMeshPrimitiveProxy& primitive = *found->second;
+			const StaticMeshPrimitiveProxy& primitive = *primitive_ptr;
 			VisibleStaticMeshDraw draw{};
 			draw.primitive_id = primitive.get_primitive_id();
 			draw.entity_id = primitive.get_entity_id();

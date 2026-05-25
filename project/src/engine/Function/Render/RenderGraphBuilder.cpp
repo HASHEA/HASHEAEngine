@@ -138,6 +138,11 @@ namespace AshEngine
 		return RenderGraphCompiler::compile(m_textures, m_passes, out_result);
 	}
 
+	bool RenderGraphBuilder::compile_cached_for_tests(RenderGraphCompileResult& out_result) const
+	{
+		return RenderGraphCompiler::compile_cached(m_textures, m_passes, out_result);
+	}
+
 	size_t RenderGraphBuilder::get_texture_count_for_tests() const
 	{
 		return m_textures.size();

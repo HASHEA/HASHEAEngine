@@ -60,6 +60,7 @@ namespace AshEngine
 
 	public:
 		bool rebuild_from_scene(Scene& scene, RenderAssetManager& render_asset_manager);
+		bool update_transforms_from_scene(const Scene& scene);
 		bool rebuild_lights_from_scene(const Scene& scene);
 		bool build_visible_render_frame(
 			uint64_t frame_index,

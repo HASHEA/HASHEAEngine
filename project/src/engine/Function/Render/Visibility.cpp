@@ -48,7 +48,7 @@ namespace AshEngine
 				continue;
 			}
 
-			out_result.visible_primitives.primitive_ids.push_back(primitive->get_primitive_id());
+			out_result.visible_primitives.primitives.push_back(primitive.get());
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}

@@ -243,7 +243,11 @@ namespace RHI
 
 		DescriptorTableCacheKey key{};
 		key.heapType = heapType;
-		key.cpuHandles.reserve(descriptorCount);
+		key.descriptorCount = descriptorCount;
+		if (descriptorCount > DescriptorTableCacheKey::InlineHandleCapacity)
+		{
+			key.overflowCpuHandles.reserve(descriptorCount - DescriptorTableCacheKey::InlineHandleCapacity);
+		}
 		for (uint32_t index = 0; index < descriptorCount; ++index)
 		{
 			if (cpuHandles[index].ptr == 0)
@@ -251,7 +255,14 @@ namespace RHI
 				HLogError("DX12DescriptorHeapManager: cannot cache a descriptor table with a null CPU handle.");
 				return false;
 			}
-			key.cpuHandles.push_back(cpuHandles[index].ptr);
+			if (index < DescriptorTableCacheKey::InlineHandleCapacity)
+			{
+				key.inlineCpuHandles[index] = cpuHandles[index].ptr;
+			}
+			else
+			{
+				key.overflowCpuHandles.push_back(cpuHandles[index].ptr);
+			}
 		}
 
 		const auto cached = tableCache.find(key);

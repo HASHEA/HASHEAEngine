@@ -62,7 +62,8 @@ namespace AshEngine
 		m_visible = desc.visible;
 		m_render_asset = render_asset;
 		m_sections = std::move(sections);
-		update_bounds(local_bounds);
+		m_local_bounds = local_bounds;
+		update_bounds(m_local_bounds);
 	}
 
 	const std::shared_ptr<StaticMeshRenderAsset>& StaticMeshPrimitiveProxy::get_render_asset() const
@@ -73,6 +74,12 @@ namespace AshEngine
 	const std::vector<ResolvedStaticMeshSection>& StaticMeshPrimitiveProxy::get_sections() const
 	{
 		return m_sections;
+	}
+
+	void StaticMeshPrimitiveProxy::update_world_transform(const glm::mat4& world_transform)
+	{
+		m_world_transform = world_transform;
+		update_bounds(m_local_bounds);
 	}
 
 	void StaticMeshPrimitiveProxy::update_bounds(const SceneMeshBounds& local_bounds)
