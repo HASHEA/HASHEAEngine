@@ -1433,6 +1433,96 @@ namespace AshEngine
 					"RendererFrameStats must measure from before backend begin_frame wait through present completion");
 		}
 
+		auto test_renderer_frame_stats_expose_frame_pacing_breakdown() -> bool
+		{
+			std::ifstream renderer_source_file("project/src/engine/Function/Render/Renderer.cpp");
+			std::ifstream renderer_header_file("project/src/engine/Function/Render/Renderer.h");
+			if (!renderer_source_file.is_open() || !renderer_header_file.is_open())
+			{
+				return report_self_test_failure(
+					"Renderer frame pacing stats",
+					"failed to open Renderer source or header");
+			}
+
+			const std::string renderer_source{
+				std::istreambuf_iterator<char>(renderer_source_file),
+				std::istreambuf_iterator<char>() };
+			const std::string renderer_header{
+				std::istreambuf_iterator<char>(renderer_header_file),
+				std::istreambuf_iterator<char>() };
+
+			const bool declares_breakdown =
+				renderer_header.find("backend_begin_frame_time_ms") != std::string::npos &&
+				renderer_header.find("render_end_frame_time_ms") != std::string::npos &&
+				renderer_header.find("present_time_ms") != std::string::npos;
+			const bool measures_backend_begin =
+				renderer_source.find("m_frame_stats.backend_begin_frame_time_ms") != std::string::npos;
+			const bool measures_end_frame =
+				renderer_source.find("m_frame_stats.render_end_frame_time_ms") != std::string::npos;
+			const bool measures_present =
+				renderer_source.find("m_frame_stats.present_time_ms") != std::string::npos;
+
+			return (declares_breakdown && measures_backend_begin && measures_end_frame && measures_present) ||
+				report_self_test_failure(
+					"Renderer frame pacing stats",
+					"RendererFrameStats must expose backend begin-frame, render end-frame, and present CPU timing breakdowns");
+		}
+
+		auto test_rhi_frame_slots_match_default_triple_buffering() -> bool
+		{
+			std::ifstream vulkan_header_file("project/src/engine/Graphics/Vulkan/VulkanContext.h");
+			std::ifstream dx12_header_file("project/src/engine/Graphics/DirectX12/DX12Context.h");
+			if (!vulkan_header_file.is_open() || !dx12_header_file.is_open())
+			{
+				return report_self_test_failure(
+					"RHI frame slot depth",
+					"failed to open Vulkan or DX12 context headers");
+			}
+
+			const std::string vulkan_header{
+				std::istreambuf_iterator<char>(vulkan_header_file),
+				std::istreambuf_iterator<char>() };
+			const std::string dx12_header{
+				std::istreambuf_iterator<char>(dx12_header_file),
+				std::istreambuf_iterator<char>() };
+
+			const bool ok =
+				vulkan_header.find("k_max_frames = 3") != std::string::npos &&
+				dx12_header.find("k_dx12_max_frames = 3") != std::string::npos;
+			return ok ||
+				report_self_test_failure(
+					"RHI frame slot depth",
+					"Vulkan and DX12 frame-resource rings must match the default 3-buffer swapchain");
+		}
+
+		auto test_scene_presentation_reuses_prepared_material_proxy() -> bool
+		{
+			std::ifstream source_file("project/src/engine/Function/Render/ScenePresentationSubsystem.cpp");
+			if (!source_file.is_open())
+			{
+				return report_self_test_failure(
+					"ScenePresentation material proxy prepare",
+					"failed to open ScenePresentationSubsystem.cpp");
+			}
+
+			const std::string source{
+				std::istreambuf_iterator<char>(source_file),
+				std::istreambuf_iterator<char>() };
+			const size_t request_pos = source.find("material_proxy = asset_manager.request_material_render_proxy(section.material);");
+			const size_t conditional_prepare_pos = source.find("if (material_proxy->needs_surface_staticmesh_preparation())");
+			const size_t prepare_pos = source.find("material_proxy->prepare_surface_staticmesh(asset_manager, renderer)");
+			const bool ok =
+				request_pos != std::string::npos &&
+				conditional_prepare_pos != std::string::npos &&
+				prepare_pos != std::string::npos &&
+				request_pos < conditional_prepare_pos &&
+				conditional_prepare_pos < prepare_pos;
+			return ok ||
+				report_self_test_failure(
+					"ScenePresentation material proxy prepare",
+					"prepared cached MaterialRenderProxy instances must not be prepared again every visible frame");
+		}
+
 		auto test_deferred_hq_gbuffer_layout_contract() -> bool
 		{
 			const GBufferLayoutDesc& layout = get_deferred_hq_gbuffer_layout();
@@ -2400,6 +2490,9 @@ namespace AshEngine
 		all_passed = test_scene_renderer_instance_buffer_slots_are_lagged_between_frames() && all_passed;
 		all_passed = test_scene_renderer_temporal_history_uses_render_frame_epoch() && all_passed;
 		all_passed = test_renderer_frame_stats_cover_presented_frame() && all_passed;
+		all_passed = test_renderer_frame_stats_expose_frame_pacing_breakdown() && all_passed;
+		all_passed = test_rhi_frame_slots_match_default_triple_buffering() && all_passed;
+		all_passed = test_scene_presentation_reuses_prepared_material_proxy() && all_passed;
 		all_passed = test_deferred_hq_gbuffer_layout_contract() && all_passed;
 		all_passed = test_deferred_shading_model_ids_are_stable() && all_passed;
 		all_passed = test_material_asset_loads_declared_shading_model() && all_passed;

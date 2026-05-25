@@ -27,7 +27,7 @@ namespace D3D12MA { class Allocator; }
 using namespace AshEngine;
 namespace RHI
 {
-	constexpr uint32_t k_dx12_max_frames = 2;
+	constexpr uint32_t k_dx12_max_frames = 3;
 
 	class DX12CommandBuffer;
 	class DX12StagingBufferPool;

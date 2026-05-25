@@ -207,12 +207,15 @@ namespace AshEngine
 						ASH_PROCESS_ERROR(false);
 					}
 
-					if (!material_proxy->prepare_surface_staticmesh(asset_manager, renderer))
+					if (material_proxy->needs_surface_staticmesh_preparation())
 					{
-						HLogError(
-							"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
-							section.material->get_asset_path().generic_string());
-						ASH_PROCESS_ERROR(false);
+						if (!material_proxy->prepare_surface_staticmesh(asset_manager, renderer))
+						{
+							HLogError(
+								"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
+								section.material->get_asset_path().generic_string());
+							ASH_PROCESS_ERROR(false);
+						}
 					}
 
 					section.material_proxy = std::move(material_proxy);

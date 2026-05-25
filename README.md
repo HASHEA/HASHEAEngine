@@ -78,7 +78,7 @@ HASHEAEngine/
 - uniform buffer 创建会按 256 字节对齐分配，带初始数据时同步补零 padding，避免 Vulkan / DX12 后端按分配大小上传时越界读取。
 - render pass 与 framebuffer 缓存。
 - graphics program / pipeline variant 缓存。
-- descriptor / program binding 缓存；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区，descriptor table cache 的常见小表 key 走 inline CPU handle 存储，避免上一帧命令仍引用的 descriptor slot 被本帧覆写。
+- descriptor / program binding 缓存；Vulkan / DX12 in-flight frame resource ring 默认 3 slot，与默认 3 buffer swapchain 对齐；DX12 shader-visible descriptor heap 按 frame slot 分区，descriptor table cache 的常见小表 key 走 inline CPU handle 存储，避免上一帧命令仍引用的 descriptor slot 被本帧覆写。
 - pass 外资源状态转换，避免 Vulkan 在 render pass / dynamic rendering 活跃区间内提交非法 barrier；Vulkan same-layout 的只读状态扩展也会补执行依赖，保证 depth SRV 可安全进入 read-only depth attachment + SRV 组合状态。
 - Vulkan resize、`OUT_OF_DATE` 和 `SUBOPTIMAL` present/acquire 路径会强制重建 swapchain，即使 surface extent 已经等于缓存尺寸；成功 acquire 后才允许读取当前 swapchain image。
 - per-frame GPU upload command path，避免资源上传创建时强制同步等待；Vulkan texture upload 的 staging slice base offset 会按 texel block size 对齐，满足 `vkCmdCopyBufferToImage` 对 `bufferOffset` 的格式对齐要求。
@@ -91,7 +91,7 @@ HASHEAEngine/
 - draw 排序、静态网格 instance batching、单可见静态网格 direct section submit fast path、常见 vertex buffer binding inline 存储、提交前资源 transition scratch 复用与只读 barrier 合并，用于降低 Sponza 这类 section 多场景的 CPU 开销。
 - `SceneRenderer` 的静态网格 instance vertex buffer 按渲染侧当前 frame epoch 映射到 3 帧物理 slot ring；同一逻辑 slot 连续渲染帧不会更新同一个 host-visible buffer，避免 Vulkan 下 CPU 写下一帧实例矩阵时覆盖 GPU 仍在读取的上一帧 draw 输入。
 - `[Rendering].VSync=false` 时 swapchain 优先请求 `MAILBOX` / `IMMEDIATE`，DX12 会映射为 `Present(0, DXGI_PRESENT_ALLOW_TEARING)`（硬件/系统支持 tearing 时）；开启 VSync 时两端都请求 FIFO present。
-- Runtime frame stats overlay；FPS / frame time 基于上一帧从 backend `begin_frame()` 前到 `present()` 返回后的完整 CPU wall time，包含 frame-slot wait、UI/end-frame 和 present 开销。
+- Runtime frame stats overlay；FPS / frame time 基于上一帧从 backend `begin_frame()` 前到 `present()` 返回后的完整 CPU wall time，包含 frame-slot wait、UI/end-frame 和 present 开销，并拆分显示 Begin / End / Present 三段 CPU 时间。
 - Runtime DebugDrawService line-list overlay。
 
 ## Scene 与渲染主路径

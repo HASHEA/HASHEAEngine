@@ -113,6 +113,9 @@ namespace AshEngine
 		uint32_t draw_call_count = 0;
 		uint32_t compute_dispatch_count = 0;
 		double cpu_frame_time_ms = 0.0;
+		double backend_begin_frame_time_ms = 0.0;
+		double render_end_frame_time_ms = 0.0;
+		double present_time_ms = 0.0;
 		double instantaneous_fps = 0.0;
 		double average_cpu_frame_time_ms = 0.0;
 		double average_fps = 0.0;

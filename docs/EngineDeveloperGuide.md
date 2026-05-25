@@ -608,7 +608,7 @@ Reverse-Z 行为约定：
 - 统计 frame stats
 - 在 `end_frame()` 时渲染 UI
 
-`RendererFrameStats::cpu_frame_time_ms` 的口径是上一帧完整 CPU wall time：计时从进入 `Renderer::begin_frame()`、调用 backend `begin_frame()` 前开始，到 `Renderer::present()` 调用 swapchain present 返回后结束。因此 overlay / PerfGate 的 FPS 会包含 frame-slot fence/timeline wait、UI submit、`RenderDevice::end_frame()` 和 present 开销；它仍不代表 GPU timestamp 执行时间。
+`RendererFrameStats::cpu_frame_time_ms` 的口径是上一帧完整 CPU wall time：计时从进入 `Renderer::begin_frame()`、调用 backend `begin_frame()` 前开始，到 `Renderer::present()` 调用 swapchain present 返回后结束。因此 overlay / PerfGate 的 FPS 会包含 frame-slot fence/timeline wait、UI submit、`RenderDevice::end_frame()` 和 present 开销；它仍不代表 GPU timestamp 执行时间。`backend_begin_frame_time_ms`、`render_end_frame_time_ms` 和 `present_time_ms` 会分别记录 backend begin-frame、render end-frame 与 present 调用耗时，PerfGate report 会在 `cpu_frame_breakdown_ms` 中输出对应 avg / p95，便于区分 frame-resource wait、提交开销和 present backpressure。
 
 当前 hot path 约定：
 
@@ -644,7 +644,7 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 - `PassDesc::allow_reorder_draws` 是显式 opt-in；只有顺序不敏感的 pass 才能开启。当前 `SceneRenderer` 的 opaque static mesh pass 会按 program / index buffer / vertex buffer 做稳定排序，以减少 pipeline 和 descriptor 重绑
 - pass 提交前会对同一个 `GraphicsProgram`、vertex buffer、index buffer 的 transition 做一次性处理；提交 RHI 前还会按 resource/range/state 合并重复的只读 barrier，UAV/RTV/DSV 等写状态 barrier 保持原顺序
 - RHI graphics program 的 raster/depth/topology 状态在 variant 创建时写入 `GraphicProgramCreateDesc::pipeline`；`RenderDevice::bind_graphics_program()` 不能逐 draw 调用 `apply_render_state()`，因为 DX12 会把它标记为 PSO rebuild，Vulkan 会直接重建 `VkPipeline`
-- `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；DX12 shader-visible descriptor heap 按 in-flight frame slot 分区并在 slot fence 完成后从该分区起点重新线性分配，避免上一帧命令仍引用的 descriptor slot 被本帧覆写；DX12 descriptor table cache key 对 8 个以内 CPU handle 使用 inline 存储，单 descriptor bind 不应临时构造 vector；Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
+- `RenderDevice::bind_graphics_program()` 按绑定版本缓存 `CommitProgramBindings`；Vulkan / DX12 in-flight frame resource ring 默认 3 slot，与默认 3 buffer swapchain 对齐；DX12 shader-visible descriptor heap 按 frame slot 分区并在 slot fence 完成后从该分区起点重新线性分配，避免上一帧命令仍引用的 descriptor slot 被本帧覆写；DX12 descriptor table cache key 对 8 个以内 CPU handle 使用 inline 存储，单 descriptor bind 不应临时构造 vector；Vulkan graphics program 的 descriptor set 可跨 pass/frame 复用，直到高层 binding version 变化
 - `RenderDevice::begin_pass()` 会复用 RHI `RenderPass` 与 `Framebuffer`：RenderPass key 由 attachment format / load action / final state / multiview 等语义构成，Framebuffer key 由 render pass、attachment texture、extent 与 layer 构成；clear value 不属于 cache key，每次 begin pass 都会重新写入当前 clear 值
 - `GraphicsProgramState` 显式描述 cull/topology/depth test/depth write/depth compare/blend mode；这些状态必须在 program variant / PSO 创建时落入后端 pipeline state。当前 Function 层已公开 `TriangleList`、`TriangleStrip` 和 `LineList`，`LineList` 用于 DebugDraw overlay。
 - `PassDepthAttachment::read_only=true` 表示本 pass 只读 depth attachment：RenderDevice 会把 depth final state 设为 `DSVRead`，如果该 depth target 可采样则同时包含 `SRVGraphics`。Vulkan 使用 depth-stencil read-only layout，DX12 使用 read-only DSV。

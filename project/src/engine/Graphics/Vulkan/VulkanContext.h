@@ -22,7 +22,7 @@ namespace RHI
 	constexpr uint32_t        k_bindless_texture_binding = 10;
 	constexpr uint32_t        k_bindless_image_binding = 11;
 	constexpr uint32_t        k_max_bindless_resources = 1024;
-	constexpr uint32_t        k_max_frames = 2;
+	constexpr uint32_t        k_max_frames = 3;
 	constexpr uint32_t		  k_command_buffer_queue_length = 128;
 
 	class VulkanCommandBuffer;

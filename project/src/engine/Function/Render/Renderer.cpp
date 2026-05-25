@@ -133,7 +133,12 @@ namespace AshEngine
 		m_frame_in_progress = false;
 		m_frame_stats = {};
 		m_frame_start_time = std::chrono::steady_clock::now();
-		ASH_PROCESS_ERROR(m_render_device && m_render_device->begin_frame());
+		const auto backend_begin_start_time = std::chrono::steady_clock::now();
+		const bool backend_begin_result = m_render_device && m_render_device->begin_frame();
+		const auto backend_begin_end_time = std::chrono::steady_clock::now();
+		m_frame_stats.backend_begin_frame_time_ms =
+			std::chrono::duration<double, std::milli>(backend_begin_end_time - backend_begin_start_time).count();
+		ASH_PROCESS_ERROR(backend_begin_result);
 
 		m_frame_in_progress = true;
 		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
@@ -152,6 +157,7 @@ namespace AshEngine
 	bool Renderer::end_frame()
 	{
 		ASH_PROFILE_SCOPE_NC("Renderer::end_frame", AshEngine::Profile::Color::Render);
+		const auto render_end_start_time = std::chrono::steady_clock::now();
 		if (m_active_pass)
 		{
 			end_active_pass(m_active_pass);
@@ -168,18 +174,28 @@ namespace AshEngine
 			}
 		}
 		const bool result = m_render_device && m_render_device->end_frame();
+		const auto render_end_end_time = std::chrono::steady_clock::now();
+		m_frame_stats.render_end_frame_time_ms =
+			std::chrono::duration<double, std::milli>(render_end_end_time - render_end_start_time).count();
 		ASH_PROFILE_PLOT("Render/DrawCalls", static_cast<int64_t>(m_frame_stats.draw_call_count));
 		ASH_PROFILE_PLOT("Render/Passes", static_cast<int64_t>(m_frame_stats.graphics_pass_count));
 		ASH_PROFILE_PLOT("Render/Dispatches", static_cast<int64_t>(m_frame_stats.compute_dispatch_count));
+		ASH_PROFILE_PLOT("Render/BeginFrameMs", m_frame_stats.backend_begin_frame_time_ms);
+		ASH_PROFILE_PLOT("Render/EndFrameMs", m_frame_stats.render_end_frame_time_ms);
 		return result && ui_result;
 	}
 
 	void Renderer::present()
 	{
+		const auto present_start_time = std::chrono::steady_clock::now();
 		if (m_render_device)
 		{
 			m_render_device->present();
 		}
+		const auto present_end_time = std::chrono::steady_clock::now();
+		m_frame_stats.present_time_ms =
+			std::chrono::duration<double, std::milli>(present_end_time - present_start_time).count();
+		ASH_PROFILE_PLOT("Render/PresentMs", m_frame_stats.present_time_ms);
 		if (m_frame_in_progress)
 		{
 			complete_frame_timing();

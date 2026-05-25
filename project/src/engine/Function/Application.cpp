@@ -699,6 +699,11 @@ namespace AshEngine
 				uiContext->text("%s  %ux%u", get_rhi_backend_name(), frame_stats.frame_width, frame_stats.frame_height);
 				uiContext->text("FPS %.1f  Frame %.2f ms", display_fps, display_ms);
 				uiContext->text(
+					"Begin %.2f ms  End %.2f ms  Present %.2f ms",
+					frame_stats.backend_begin_frame_time_ms,
+					frame_stats.render_end_frame_time_ms,
+					frame_stats.present_time_ms);
+				uiContext->text(
 					"Draws %u  Passes %u  Dispatch %u",
 					frame_stats.draw_call_count,
 					frame_stats.graphics_pass_count,

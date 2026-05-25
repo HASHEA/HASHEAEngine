@@ -79,6 +79,9 @@ namespace AshEngine
 		uint64_t m_frames_total = 0;
 		uint64_t m_frames_sampled = 0;
 		std::vector<double> m_frame_time_samples_ms{};
+		std::vector<double> m_backend_begin_frame_samples_ms{};
+		std::vector<double> m_render_end_frame_samples_ms{};
+		std::vector<double> m_present_samples_ms{};
 		uint64_t m_draw_call_sum = 0;
 		uint64_t m_graphics_pass_sum = 0;
 		uint64_t m_dispatch_sum = 0;

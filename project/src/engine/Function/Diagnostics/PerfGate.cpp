@@ -199,6 +199,9 @@ namespace AshEngine
 
 		++m_frames_sampled;
 		m_frame_time_samples_ms.push_back(frame_stats.cpu_frame_time_ms);
+		m_backend_begin_frame_samples_ms.push_back(frame_stats.backend_begin_frame_time_ms);
+		m_render_end_frame_samples_ms.push_back(frame_stats.render_end_frame_time_ms);
+		m_present_samples_ms.push_back(frame_stats.present_time_ms);
 		m_draw_call_sum += frame_stats.draw_call_count;
 		m_graphics_pass_sum += frame_stats.graphics_pass_count;
 		m_dispatch_sum += frame_stats.compute_dispatch_count;
@@ -236,6 +239,12 @@ namespace AshEngine
 		}
 
 		const PerfGateFrameTimeSummary frame_summary = summarize_perf_gate_frame_times(m_frame_time_samples_ms);
+		const PerfGateFrameTimeSummary backend_begin_summary =
+			summarize_perf_gate_frame_times(m_backend_begin_frame_samples_ms);
+		const PerfGateFrameTimeSummary render_end_summary =
+			summarize_perf_gate_frame_times(m_render_end_frame_samples_ms);
+		const PerfGateFrameTimeSummary present_summary =
+			summarize_perf_gate_frame_times(m_present_samples_ms);
 		const double sampled_count = frame_summary.sample_count > 0 ? static_cast<double>(frame_summary.sample_count) : 1.0;
 
 		json report{};
@@ -259,6 +268,14 @@ namespace AshEngine
 		report["fps"] = {
 			{ "avg", frame_summary.avg_ms > 0.0 ? 1000.0 / frame_summary.avg_ms : 0.0 },
 			{ "p05", frame_summary.p95_ms > 0.0 ? 1000.0 / frame_summary.p95_ms : 0.0 }
+		};
+		report["cpu_frame_breakdown_ms"] = {
+			{ "backend_begin_frame_avg", backend_begin_summary.avg_ms },
+			{ "backend_begin_frame_p95", backend_begin_summary.p95_ms },
+			{ "render_end_frame_avg", render_end_summary.avg_ms },
+			{ "render_end_frame_p95", render_end_summary.p95_ms },
+			{ "present_avg", present_summary.avg_ms },
+			{ "present_p95", present_summary.p95_ms }
 		};
 		report["render_stats"] = {
 			{ "draw_calls_avg", static_cast<double>(m_draw_call_sum) / sampled_count },
