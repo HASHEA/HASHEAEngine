@@ -7,9 +7,10 @@
   "consoleFilterText": "",
   "consoleSeverityFilter": 2,
   "consoleSourceFilter": "",
-  "lastScenePath": "product/assets/scenes/Untitled Scene.scene.json",
+  "lastScenePath": "product/assets/scenes/Sandbox.scene.json",
   "layoutIniPath": "product/config/editor/imgui.ini",
   "recentScenePaths": [
+    "product/assets/scenes/Sandbox.scene.json",
     "product/assets/scenes/Untitled Scene.scene.json",
     "product/assets/scenes/Untitled Scene 2.scene.json"
   ],

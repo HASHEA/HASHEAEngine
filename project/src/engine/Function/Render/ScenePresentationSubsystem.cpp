@@ -1,4 +1,4 @@
-#include "Function/Render/ScenePresentationSubsystem.h"
+﻿#include "Function/Render/ScenePresentationSubsystem.h"
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
@@ -172,57 +172,65 @@ namespace AshEngine
 			Renderer& renderer)
 		{
 			ASH_PROFILE_SCOPE_NC("ScenePresentation::PrepareMaterialProxies", AshEngine::Profile::Color::Scene);
-			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.static_mesh_draws.size()));
+			ASH_PROFILE_SCOPE_VALUE(
+				static_cast<uint64_t>(frame.static_mesh_draws.size() + frame.shadow_caster_static_mesh_draws.size()));
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
 			uint64_t prepared_section_count = 0;
-			for (VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+			const auto prepare_draw_sections = [&](std::vector<VisibleStaticMeshDraw>& draws) -> bool
 			{
-				for (ResolvedStaticMeshSection& section : draw.sections)
+				for (VisibleStaticMeshDraw& draw : draws)
 				{
-					++prepared_section_count;
-					if (!section.material)
+					for (ResolvedStaticMeshSection& section : draw.sections)
 					{
-						section.material = asset_manager.request_material_asset(k_builtin_default_surface_material_path);
-					}
-					if (!section.material)
-					{
-						HLogError("ScenePresentationSubsystem: static mesh section is missing a resolved material.");
-						ASH_PROCESS_ERROR(false);
-					}
+						++prepared_section_count;
+						if (!section.material)
+						{
+							section.material = asset_manager.request_material_asset(k_builtin_default_surface_material_path);
+						}
+						if (!section.material)
+						{
+							HLogError("ScenePresentationSubsystem: static mesh section is missing a resolved material.");
+							ASH_PROCESS_ERROR(false);
+						}
 
-					if (section.material_proxy && !section.material_proxy->needs_surface_staticmesh_preparation())
-					{
-						continue;
-					}
+						if (section.material_proxy && !section.material_proxy->needs_surface_staticmesh_preparation())
+						{
+							continue;
+						}
 
-					std::shared_ptr<MaterialRenderProxy> material_proxy = section.material_proxy;
-					if (!material_proxy)
-					{
-						material_proxy = asset_manager.request_material_render_proxy(section.material);
-					}
-					if (!material_proxy)
-					{
-						HLogError(
-							"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
-							section.material->get_asset_path().generic_string());
-						ASH_PROCESS_ERROR(false);
-					}
-
-					if (material_proxy->needs_surface_staticmesh_preparation())
-					{
-						if (!material_proxy->prepare_surface_staticmesh(asset_manager, renderer))
+						std::shared_ptr<MaterialRenderProxy> material_proxy = section.material_proxy;
+						if (!material_proxy)
+						{
+							material_proxy = asset_manager.request_material_render_proxy(section.material);
+						}
+						if (!material_proxy)
 						{
 							HLogError(
-								"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
+								"ScenePresentationSubsystem: failed to request MaterialRenderProxy for '{}'.",
 								section.material->get_asset_path().generic_string());
 							ASH_PROCESS_ERROR(false);
 						}
-					}
 
-					section.material_proxy = std::move(material_proxy);
+						if (material_proxy->needs_surface_staticmesh_preparation())
+						{
+							if (!material_proxy->prepare_surface_staticmesh(asset_manager, renderer))
+							{
+								HLogError(
+									"ScenePresentationSubsystem: failed to prepare MaterialRenderProxy for '{}'.",
+									section.material->get_asset_path().generic_string());
+								ASH_PROCESS_ERROR(false);
+							}
+						}
+
+						section.material_proxy = std::move(material_proxy);
+					}
 				}
-			}
+				return true;
+			};
+
+			ASH_PROCESS_ERROR(prepare_draw_sections(frame.static_mesh_draws));
+			ASH_PROCESS_ERROR(prepare_draw_sections(frame.shadow_caster_static_mesh_draws));
 
 			ASH_PROFILE_PLOT("Scene/PreparedMaterialSections", static_cast<int64_t>(prepared_section_count));
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);

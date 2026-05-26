@@ -1454,7 +1454,7 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
 当前 `SceneRenderer` 的内部提交约定仍然是按 view 显式提交：
 
 - `VisibleRenderFrame` 只保存 scene 可见性结果和 draw 所需的不可变数据，不再持有 `output_target`
-- `VisibleRenderFrame` 中的 static mesh section 携带最终 `MaterialInterface`；`ScenePresentationSubsystem` 在 render-thread submit phase 通过 `MaterialRenderProxy::prepare_surface_staticmesh(...)` 解析并缓存 draw-time proxy
+- `VisibleRenderFrame` 中的 static mesh section 携带最终 `MaterialInterface`；`ScenePresentationSubsystem` 在 render-thread submit phase 通过 `MaterialRenderProxy::prepare_surface_staticmesh(...)` 解析并缓存 draw-time proxy，覆盖 camera-visible `static_mesh_draws` 与 shadow depth 使用的 `shadow_caster_static_mesh_draws`
 - `RenderScene` rebuild/sync 阶段会为 static mesh section 预取 CPU-only `MaterialRenderProxy`；render-thread submit 阶段只负责缺失兜底与 GPU program / texture binding preparation
 - `MaterialRenderProxy` 使用 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；贴图仍处于 Loading 但 fallback resource/version 未变化时，不应每帧重新打包参数或重绑 program，shader 文件签名也不应退化成逐 section 的每帧 filesystem 热路径
 - render thread 每次提交一个 view 时，显式提供 `SceneRenderViewContext`

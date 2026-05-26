@@ -132,7 +132,7 @@ Render Debug View 则从 `Engine.ini` 的 `[RenderDebugView]` 读取进程级运
 - 如果运行时解析到直接绑定 `.AshMat` 基材质，会报错并回退到 generated/default instance。
 - `MaterialSystem` 负责 domain / family / pass 的验证、fallback 和 resource template 获取。
 - `MaterialShaderMap` 负责不可变编译资源。
-- `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding。
+- `MaterialRenderProxy` 在 render thread submit phase 准备材质参数、贴图、sampler、graphics program 和 binding；`ScenePresentationSubsystem` 会同时覆盖 camera-visible `static_mesh_draws` 与 off-camera shadow caster `shadow_caster_static_mesh_draws`，避免仅有 shadow depth draw 时 `DepthOnly` pass 缺少 prepared proxy。
 - `MaterialRenderProxy` 基于 material change version、compile hash、节流后的 shader 文件签名检查、binding snapshot version 和 texture asset change version 判断脏状态；shader 文件签名包含 engine family host、用户 shader、generated bindings 和 `Surface.StaticMesh` 共享 HLSL header，只按 proxy 周期性探测，不进入每个 section 的逐帧 filesystem 热路径，异步贴图仍在 Loading 且 fallback resource 未变化时不会每帧重复重绑。
 - 材质实例的贴图 binding 可覆盖 sampler state；运行时会把该 sampler state 绑定到基材质资源声明实际生成的 shader sampler 名，避免 glTF sampler override 与生成 HLSL sampler 名不一致。
 - 当前 `Surface.StaticMesh` 材质资源仍覆盖 `BasePass`、`DepthOnly` 与 `GBuffer`；`SceneRenderer` 的 opaque / masked 主提交路径使用 `GBuffer`，用户材质 shader 仍只实现材质节点接口，GBuffer MRT 编码由 Engine host shader 负责。`.AshMat` 可通过 `shading_model` 声明 `Empty`、`DefaultLitGGX`、`Unlit`、`BlinnPhong`，`DefaultLit` / `ggx` 作为 `DefaultLitGGX` 兼容别名；随仓库提供的基材质资产当前显式声明为 `ggx`。`.AshMatIns` 继承父材质 shading model，不做实例级覆盖。
