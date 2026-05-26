@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Base/hcore.h"
+#include <string_view>
 
 namespace AshEngine
 {
@@ -50,8 +51,10 @@ namespace AshEngine
 	ASH_API const char* ambient_occlusion_mode_name(AmbientOcclusionMode mode);
 	ASH_API const char* ambient_occlusion_quality_name(AmbientOcclusionQuality quality);
 	ASH_API const char* ambient_occlusion_debug_view_name(AmbientOcclusionDebugView view);
+	ASH_API bool try_parse_ambient_occlusion_mode(std::string_view value, AmbientOcclusionMode& out_mode);
+	ASH_API bool try_parse_ambient_occlusion_quality(std::string_view value, AmbientOcclusionQuality& out_quality);
+	ASH_API AmbientOcclusionConfig sanitize_ambient_occlusion_config(
+		const AmbientOcclusionConfig& config,
+		const AmbientOcclusionConfig& fallback);
 	ASH_API AmbientOcclusionConfig make_default_ambient_occlusion_config();
-	ASH_API AmbientOcclusionConfig load_runtime_ambient_occlusion_config(const char* config_path);
-	ASH_API void set_runtime_ambient_occlusion_config(const AmbientOcclusionConfig& config);
-	ASH_API AmbientOcclusionConfig get_runtime_ambient_occlusion_config();
 }

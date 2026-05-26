@@ -24,6 +24,8 @@ namespace AshEngine
 			return RHI::ASH_FORMAT_B8G8R8A8_SRGB;
 		case RenderTextureFormat::RGBA16_SFLOAT:
 			return RHI::ASH_FORMAT_R16G16B16A16_SFLOAT;
+		case RenderTextureFormat::RG16_SFLOAT:
+			return RHI::ASH_FORMAT_R16G16_SFLOAT;
 		case RenderTextureFormat::RGBA32_SFLOAT:
 			return RHI::ASH_FORMAT_R32G32B32A32_SFLOAT;
 		case RenderTextureFormat::BC1_RGB_UNORM:
@@ -81,6 +83,8 @@ namespace AshEngine
 			return RenderTextureFormat::BGRA8_SRGB;
 		case RHI::ASH_FORMAT_R16G16B16A16_SFLOAT:
 			return RenderTextureFormat::RGBA16_SFLOAT;
+		case RHI::ASH_FORMAT_R16G16_SFLOAT:
+			return RenderTextureFormat::RG16_SFLOAT;
 		case RHI::ASH_FORMAT_R32G32B32A32_SFLOAT:
 			return RenderTextureFormat::RGBA32_SFLOAT;
 		case RHI::ASH_FORMAT_BC1_RGB_UNORM:
@@ -161,6 +165,8 @@ namespace AshEngine
 			return { 4u, 1u, 1u };
 		case RenderTextureFormat::RGBA16_SFLOAT:
 			return { 8u, 1u, 1u };
+		case RenderTextureFormat::RG16_SFLOAT:
+			return { 4u, 1u, 1u };
 		case RenderTextureFormat::RGBA32_SFLOAT:
 			return { 16u, 1u, 1u };
 		case RenderTextureFormat::BC1_RGB_UNORM:

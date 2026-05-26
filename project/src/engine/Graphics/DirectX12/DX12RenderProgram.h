@@ -30,6 +30,7 @@ namespace RHI
 		uint32_t rootIndex = UINT32_MAX;
 		D3D12_DESCRIPTOR_RANGE_TYPE rangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
 		uint32_t descriptorCount = 1;
+		uint32_t descriptorOffset = 0;
 		uint32_t baseRegister = 0;
 		uint32_t registerSpace = 0;
 	};

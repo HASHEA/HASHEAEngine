@@ -208,6 +208,11 @@ namespace AshEngine
 				light.range = light_json.value("range", light.range);
 				light.inner_cone_angle_degrees = light_json.value("inner_cone_angle_degrees", light.inner_cone_angle_degrees);
 				light.outer_cone_angle_degrees = light_json.value("outer_cone_angle_degrees", light.outer_cone_angle_degrees);
+				light.casts_shadow = light_json.value("casts_shadow", light.casts_shadow);
+				light.shadow_priority = light_json.value("shadow_priority", light.shadow_priority);
+				light.shadow_distance = light_json.value("shadow_distance", light.shadow_distance);
+				light.shadow_cascade_count = light_json.value("shadow_cascade_count", light.shadow_cascade_count);
+				light.near_shadow_distance = light_json.value("near_shadow_distance", light.near_shadow_distance);
 				node.light = light;
 			}
 
@@ -222,6 +227,22 @@ namespace AshEngine
 				mesh.mobility = static_cast<SceneMobility>(mesh_json.value("mobility", static_cast<uint32_t>(mesh.mobility)));
 				mesh.layer_mask = mesh_json.value("layer_mask", mesh.layer_mask);
 				node.mesh = mesh;
+			}
+
+			if (node_json.contains("environment"))
+			{
+				const json& environment_json = node_json["environment"];
+				EnvironmentComponent environment{};
+				environment.active = environment_json.value("active", environment.active);
+				environment.ibl_asset_path = environment_json.value("ibl_asset_path", std::string{});
+				environment.source_texture_path = environment_json.value("source_texture_path", std::string{});
+				environment.intensity = environment_json.value("intensity", environment.intensity);
+				environment.lighting_intensity = environment_json.value("lighting_intensity", environment.lighting_intensity);
+				environment.background_intensity = environment_json.value("background_intensity", environment.background_intensity);
+				environment.rotation_degrees = environment_json.value("rotation_degrees", environment.rotation_degrees);
+				environment.visible_background = environment_json.value("visible_background", environment.visible_background);
+				environment.affect_lighting = environment_json.value("affect_lighting", environment.affect_lighting);
+				node.environment = environment;
 			}
 
 			asset.nodes.push_back(std::move(node));
@@ -302,6 +323,11 @@ namespace AshEngine
 					{ "range", light.range },
 					{ "inner_cone_angle_degrees", light.inner_cone_angle_degrees },
 					{ "outer_cone_angle_degrees", light.outer_cone_angle_degrees },
+					{ "casts_shadow", light.casts_shadow },
+					{ "shadow_priority", light.shadow_priority },
+					{ "shadow_distance", light.shadow_distance },
+					{ "shadow_cascade_count", light.shadow_cascade_count },
+					{ "near_shadow_distance", light.near_shadow_distance },
 				};
 			}
 
@@ -320,6 +346,23 @@ namespace AshEngine
 				{
 					node_json["mesh"]["material_overrides"] = serialize_material_overrides(mesh.material_overrides);
 				}
+			}
+
+			if (node.environment.has_value())
+			{
+				const EnvironmentComponent& environment = node.environment.value();
+				node_json["environment"] =
+				{
+					{ "active", environment.active },
+					{ "ibl_asset_path", environment.ibl_asset_path },
+					{ "source_texture_path", environment.source_texture_path },
+					{ "intensity", environment.intensity },
+					{ "lighting_intensity", environment.lighting_intensity },
+					{ "background_intensity", environment.background_intensity },
+					{ "rotation_degrees", environment.rotation_degrees },
+					{ "visible_background", environment.visible_background },
+					{ "affect_lighting", environment.affect_lighting },
+				};
 			}
 
 			root["nodes"].push_back(std::move(node_json));

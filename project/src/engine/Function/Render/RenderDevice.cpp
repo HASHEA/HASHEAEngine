@@ -1294,6 +1294,118 @@ namespace AshEngine
 			return impl;
 		}
 
+		static const TextureSubresourceUploadDesc* find_cube_subresource(
+			const TextureCubeUploadDesc& desc,
+			uint32_t mip_level,
+			uint32_t array_layer)
+		{
+			if (!desc.subresources)
+			{
+				return nullptr;
+			}
+			for (uint32_t index = 0; index < desc.subresource_count; ++index)
+			{
+				const TextureSubresourceUploadDesc& subresource = desc.subresources[index];
+				if (subresource.mip_level == mip_level && subresource.array_layer == array_layer)
+				{
+					return &subresource;
+				}
+			}
+			return nullptr;
+		}
+
+		static std::shared_ptr<RenderTarget::Impl> create_texture_cube_impl(
+			RHI::GraphicsContext* graphics_context,
+			const TextureCubeUploadDesc& desc)
+		{
+			std::string validation_error{};
+			if (!validate_texture_cube_upload_desc(desc, &validation_error))
+			{
+				HLogError(
+					"RenderDevice: invalid cubemap upload desc for '{}': {}",
+					desc.name ? desc.name : "UnnamedTextureCube",
+					validation_error);
+				return nullptr;
+			}
+
+			const RenderTextureFormatBlockInfo block_info = get_render_texture_format_block_info(desc.format);
+			if (block_info.bytes_per_block == 0u || block_info.width_per_block == 0u || block_info.height_per_block == 0u)
+			{
+				return nullptr;
+			}
+
+			std::vector<uint8_t> packed_upload_data{};
+			if (desc.subresources && desc.subresource_count > 0)
+			{
+				for (uint32_t array_layer = 0; array_layer < 6u; ++array_layer)
+				{
+					for (uint32_t mip_level = 0; mip_level < desc.mip_level_count; ++mip_level)
+					{
+						const TextureSubresourceUploadDesc* subresource = find_cube_subresource(desc, mip_level, array_layer);
+						if (!subresource || !subresource->data)
+						{
+							return nullptr;
+						}
+
+						const uint32_t mip_width = std::max<uint32_t>(1u, static_cast<uint32_t>(desc.width) >> mip_level);
+						const uint32_t mip_height = std::max<uint32_t>(1u, static_cast<uint32_t>(desc.height) >> mip_level);
+						const uint32_t tight_row_pitch = calculate_render_texture_tight_row_pitch(desc.format, mip_width);
+						const uint32_t source_row_pitch = subresource->row_pitch == 0 ? tight_row_pitch : subresource->row_pitch;
+						if (source_row_pitch < tight_row_pitch)
+						{
+							return nullptr;
+						}
+
+						const uint32_t slice_pitch = subresource->slice_pitch == 0 ?
+							source_row_pitch * mip_height :
+							subresource->slice_pitch;
+						if (slice_pitch < source_row_pitch * mip_height)
+						{
+							return nullptr;
+						}
+
+						const uint8_t* src_rows = static_cast<const uint8_t*>(subresource->data);
+						for (uint32_t row = 0; row < mip_height; ++row)
+						{
+							packed_upload_data.insert(
+								packed_upload_data.end(),
+								src_rows + static_cast<size_t>(row) * source_row_pitch,
+								src_rows + static_cast<size_t>(row) * source_row_pitch + tight_row_pitch);
+						}
+					}
+				}
+			}
+
+			RHI::TextureCreation texture_creation{};
+			texture_creation.initial_data = packed_upload_data.empty() ? nullptr : packed_upload_data.data();
+			texture_creation.width = desc.width;
+			texture_creation.height = desc.height;
+			texture_creation.depth = 1;
+			texture_creation.array_layer_count = 6;
+			texture_creation.mip_level_count = desc.mip_level_count;
+			texture_creation.format = render_texture_format_to_rhi(desc.format);
+			texture_creation.type = RHI::AshImageType::Ash_TextureCube;
+			texture_creation.initial_state = RHI::AshResourceState::SRVGraphics;
+			texture_creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+			texture_creation.uUsageFlags = RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
+			texture_creation.name = desc.name;
+
+			std::shared_ptr<RHI::Texture> texture = graphics_context->create_texture(texture_creation);
+			if (!texture)
+			{
+				return nullptr;
+			}
+
+			auto impl = std::make_shared<RenderTarget::Impl>();
+			impl->kind = RenderTarget::Impl::Kind::Texture;
+			impl->texture = texture;
+			impl->shader_resource = true;
+			impl->unordered_access = false;
+			impl->depth_stencil = false;
+			impl->format = desc.format;
+			return impl;
+		}
+
 	void fill_pipeline_state_from_graphics_program_state(
 		const GraphicsProgramState& state,
 		RHI::PipelineCreation& pipeline,
@@ -3152,6 +3264,88 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderTarget>, result, nullptr, nullptr);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
 		const std::shared_ptr<RenderTarget::Impl> impl = create_texture_2d_impl(m_impl->graphics_context, desc);
+		ASH_PROCESS_ERROR(impl);
+		result = std::shared_ptr<RenderTarget>(new RenderTarget(impl));
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
+	bool validate_texture_cube_upload_desc(const TextureCubeUploadDesc& desc, std::string* out_error)
+	{
+		auto fail = [out_error](const char* message) -> bool
+		{
+			if (out_error)
+			{
+				*out_error = message;
+			}
+			return false;
+		};
+
+		if (desc.width == 0 || desc.height == 0)
+		{
+			return fail("width and height must be greater than zero.");
+		}
+		if (desc.mip_level_count == 0)
+		{
+			return fail("mip_level_count must be greater than zero.");
+		}
+		if (desc.format == RenderTextureFormat::Unknown || is_depth_render_texture_format(desc.format))
+		{
+			return fail("format is invalid for cubemap upload.");
+		}
+		if (desc.subresources != nullptr &&
+			desc.subresource_count != static_cast<uint32_t>(desc.mip_level_count) * 6u)
+		{
+			return fail("subresource_count must equal mip_level_count * 6.");
+		}
+		if (!desc.subresources)
+		{
+			return true;
+		}
+
+		const RenderTextureFormatBlockInfo block_info = get_render_texture_format_block_info(desc.format);
+		if (block_info.bytes_per_block == 0u)
+		{
+			return fail("format block info is invalid.");
+		}
+
+		for (uint32_t index = 0; index < desc.subresource_count; ++index)
+		{
+			const TextureSubresourceUploadDesc& subresource = desc.subresources[index];
+			if (subresource.array_layer >= 6u)
+			{
+				return fail("array_layer must be less than 6.");
+			}
+			if (subresource.mip_level >= desc.mip_level_count)
+			{
+				return fail("mip_level is out of range.");
+			}
+			if (!subresource.data)
+			{
+				return fail("subresource data must not be null.");
+			}
+
+			const uint32_t mip_width = std::max<uint32_t>(1u, static_cast<uint32_t>(desc.width) >> subresource.mip_level);
+			const uint32_t mip_height = std::max<uint32_t>(1u, static_cast<uint32_t>(desc.height) >> subresource.mip_level);
+			const uint32_t tight_row_pitch = calculate_render_texture_tight_row_pitch(desc.format, mip_width);
+			const uint32_t row_pitch = subresource.row_pitch == 0 ? tight_row_pitch : subresource.row_pitch;
+			if (row_pitch < tight_row_pitch)
+			{
+				return fail("row_pitch is smaller than the tight row pitch.");
+			}
+			const uint32_t slice_pitch = subresource.slice_pitch == 0 ? row_pitch * mip_height : subresource.slice_pitch;
+			if (slice_pitch < row_pitch * mip_height)
+			{
+				return fail("slice_pitch is smaller than row_pitch * mip_height.");
+			}
+		}
+		return true;
+	}
+
+	std::shared_ptr<RenderTarget> RenderDevice::create_texture_cube(const TextureCubeUploadDesc& desc)
+	{
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<RenderTarget>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
+		const std::shared_ptr<RenderTarget::Impl> impl = create_texture_cube_impl(m_impl->graphics_context, desc);
 		ASH_PROCESS_ERROR(impl);
 		result = std::shared_ptr<RenderTarget>(new RenderTarget(impl));
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);

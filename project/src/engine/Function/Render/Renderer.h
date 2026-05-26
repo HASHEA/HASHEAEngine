@@ -163,6 +163,7 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
 		std::shared_ptr<RenderTarget> create_texture_2d(const TextureUploadDesc& desc);
+		std::shared_ptr<RenderTarget> create_texture_cube(const TextureCubeUploadDesc& desc);
 		std::shared_ptr<RenderTarget> acquire_transient_render_target(const RenderTargetDesc& desc);
 		void release_transient_render_target(const std::shared_ptr<RenderTarget>& render_target);
 		void clear_transient_render_targets();

@@ -3,7 +3,7 @@
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/Swapchain.h"
 #include "Function/Gui/UIContext.h"
-#include "Function/Render/AmbientOcclusionConfig.h"
+#include "Function/Render/EnvironmentMapAsset.h"
 #include "Function/Render/RenderDebugView.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderFeatureConfig.h"
@@ -93,10 +93,11 @@ namespace AshEngine
 		const RenderFeatureConfig runtimeRenderFeatureConfig = load_runtime_render_feature_config(config.backendConfigPath);
 		set_runtime_render_feature_config(runtimeRenderFeatureConfig);
 		const bool runtimeVsync = runtimeRenderFeatureConfig.is_enabled(RenderSwitch::VSync);
-		const AmbientOcclusionConfig ambientOcclusionConfig = load_runtime_ambient_occlusion_config(config.backendConfigPath);
-		set_runtime_ambient_occlusion_config(ambientOcclusionConfig);
 		const RenderDebugViewConfig renderDebugViewConfig = load_runtime_render_debug_view_config(config.backendConfigPath);
 		set_runtime_render_debug_view_config(renderDebugViewConfig);
+		const EnvironmentLightingConfig environmentLightingConfig =
+			load_runtime_environment_lighting_config(config.backendConfigPath);
+		set_runtime_environment_lighting_config(environmentLightingConfig);
 		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
 		activeBackend = resolvedBackend;
 		HLogInfo("Initializing engine RHI backend: {}", RHI::backend_to_string(resolvedBackend));

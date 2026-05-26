@@ -204,7 +204,7 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(renderer != nullptr);
 		m_renderer = renderer;
-		m_config = get_runtime_ambient_occlusion_config();
+		m_config = make_default_ambient_occlusion_config();
 		ASH_PROCESS_ERROR(create_resources(*renderer));
 		ASH_PROCESS_ERROR(create_programs(*renderer));
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -280,39 +280,18 @@ namespace AshEngine
 		fullscreen_state.depth_write = false;
 		fullscreen_state.blend_mode = RenderBlendMode::Opaque;
 
-		if (m_config.mode == AmbientOcclusionMode::SSAO)
-		{
-			m_ssao_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_ssao_shader_path, "SceneAmbientOcclusionSSAO", fullscreen_state));
-			ASH_PROCESS_ERROR(m_ssao_program != nullptr);
-		}
-		else if (m_config.mode == AmbientOcclusionMode::HBAO)
-		{
-			m_hbao_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_hbao_shader_path, "SceneAmbientOcclusionHBAO", fullscreen_state));
-			ASH_PROCESS_ERROR(m_hbao_program != nullptr);
-		}
-		else if (m_config.mode == AmbientOcclusionMode::GTAO)
-		{
-			m_gtao_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_gtao_shader_path, "SceneAmbientOcclusionGTAO", fullscreen_state));
-			ASH_PROCESS_ERROR(m_gtao_program != nullptr);
-		}
-
-		if (m_config.mode != AmbientOcclusionMode::Off && m_config.blur)
-		{
-			m_blur_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_blur_shader_path, "SceneAmbientOcclusionBlur", fullscreen_state));
-			ASH_PROCESS_ERROR(m_blur_program != nullptr);
-		}
-
-		if (m_config.mode != AmbientOcclusionMode::Off && m_config.temporal)
-		{
-			m_temporal_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_temporal_shader_path, "SceneAmbientOcclusionTemporal", fullscreen_state));
-			ASH_PROCESS_ERROR(m_temporal_program != nullptr);
-		}
-
-		if (m_config.debug_view != AmbientOcclusionDebugView::Off)
-		{
-			m_debug_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_debug_shader_path, "SceneAmbientOcclusionDebug", fullscreen_state));
-			ASH_PROCESS_ERROR(m_debug_program != nullptr);
-		}
+		m_ssao_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_ssao_shader_path, "SceneAmbientOcclusionSSAO", fullscreen_state));
+		ASH_PROCESS_ERROR(m_ssao_program != nullptr);
+		m_hbao_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_hbao_shader_path, "SceneAmbientOcclusionHBAO", fullscreen_state));
+		ASH_PROCESS_ERROR(m_hbao_program != nullptr);
+		m_gtao_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_gtao_shader_path, "SceneAmbientOcclusionGTAO", fullscreen_state));
+		ASH_PROCESS_ERROR(m_gtao_program != nullptr);
+		m_blur_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_blur_shader_path, "SceneAmbientOcclusionBlur", fullscreen_state));
+		ASH_PROCESS_ERROR(m_blur_program != nullptr);
+		m_temporal_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_temporal_shader_path, "SceneAmbientOcclusionTemporal", fullscreen_state));
+		ASH_PROCESS_ERROR(m_temporal_program != nullptr);
+		m_debug_program = renderer.create_graphics_program(make_ao_program_desc(k_ao_debug_shader_path, "SceneAmbientOcclusionDebug", fullscreen_state));
+		ASH_PROCESS_ERROR(m_debug_program != nullptr);
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -415,7 +394,8 @@ namespace AshEngine
 		RenderGraphBuilder& graph,
 		const VisibleRenderFrame& frame,
 		const SceneDeferredGraphResources& deferred_resources,
-		const SceneRenderViewContext& view_context)
+		const SceneRenderViewContext& view_context,
+		const AmbientOcclusionConfig& config)
 	{
 		ASH_PROFILE_SCOPE_NC("AmbientOcclusionPass::add_passes", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(AmbientOcclusionPassOutputs, outputs, AmbientOcclusionPassOutputs{}, AmbientOcclusionPassOutputs{});
@@ -425,6 +405,16 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(view_context.output_target != nullptr);
 		ASH_PROCESS_ERROR(deferred_resources.depth);
 		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
+
+		if (m_config.mode != config.mode ||
+			m_config.temporal != config.temporal ||
+			m_config.half_resolution != config.half_resolution ||
+			m_config.blur != config.blur ||
+			m_config.quality != config.quality)
+		{
+			reset_temporal_history();
+		}
+		m_config = config;
 
 		RenderGraphTextureRef raw_ao =
 			graph.register_external_texture(m_neutral_ao_texture, "SceneAmbientOcclusionNeutral", RenderGraphAccess::GraphicsSRV);

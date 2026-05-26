@@ -60,6 +60,8 @@ namespace AshEngine
 			uint64_t last_primitive_version = 0;
 			uint64_t last_transform_version = 0;
 			uint64_t last_light_version = 0;
+			uint64_t last_environment_version = 0;
+			uint64_t last_render_config_version = 0;
 			bool render_scene_valid = false;
 			RenderScene render_scene{};
 		};
@@ -588,6 +590,8 @@ namespace AshEngine
 				const uint64_t scene_primitive_version = binding.scene->get_render_primitive_version();
 				const uint64_t scene_transform_version = binding.scene->get_render_transform_version();
 				const uint64_t scene_light_version = binding.scene->get_render_light_version();
+				const uint64_t scene_environment_version = binding.scene->get_render_environment_version();
+				const uint64_t scene_render_config_version = binding.scene->get_render_config_version();
 				if (binding.refresh_requested ||
 					!scene_state->render_scene_valid ||
 					scene_state->last_primitive_version != scene_primitive_version)
@@ -598,6 +602,8 @@ namespace AshEngine
 					scene_state->last_primitive_version = scene_primitive_version;
 					scene_state->last_transform_version = scene_transform_version;
 					scene_state->last_light_version = scene_light_version;
+					scene_state->last_environment_version = scene_environment_version;
+					scene_state->last_render_config_version = scene_render_config_version;
 					if (!scene_state->render_scene_valid)
 					{
 						HLogError(
@@ -610,11 +616,18 @@ namespace AshEngine
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::UpdateRenderSceneTransforms", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					const bool environment_changed =
+						scene_state->last_environment_version != scene_environment_version;
 					scene_state->render_scene_valid =
 						scene_state->render_scene.update_transforms_from_scene(*binding.scene) &&
-						scene_state->render_scene.rebuild_lights_from_scene(*binding.scene);
+						scene_state->render_scene.rebuild_lights_from_scene(*binding.scene) &&
+						(!environment_changed || scene_state->render_scene.rebuild_environment_from_scene(*binding.scene));
 					scene_state->last_transform_version = scene_transform_version;
 					scene_state->last_light_version = scene_light_version;
+					if (environment_changed)
+					{
+						scene_state->last_environment_version = scene_environment_version;
+					}
 					if (!scene_state->render_scene_valid)
 					{
 						HLogError(
@@ -637,12 +650,46 @@ namespace AshEngine
 							binding.scene->get_name());
 					}
 				}
+				else if (scene_state->last_environment_version != scene_environment_version)
+				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneEnvironment", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					scene_state->render_scene_valid = scene_state->render_scene.rebuild_environment_from_scene(*binding.scene);
+					scene_state->last_environment_version = scene_environment_version;
+					if (!scene_state->render_scene_valid)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to rebuild RenderScene environment for binding '{}' and scene '{}'.",
+							binding.debug_name,
+							binding.scene->get_name());
+					}
+				}
+				else if (scene_state->last_render_config_version != scene_render_config_version)
+				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneConfig", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					scene_state->render_scene_valid = scene_state->render_scene.rebuild_render_config_from_scene(*binding.scene);
+					scene_state->last_render_config_version = scene_render_config_version;
+					if (!scene_state->render_scene_valid)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to rebuild RenderScene config for binding '{}' and scene '{}'.",
+							binding.debug_name,
+							binding.scene->get_name());
+					}
+				}
 
 				scene_view_valid = Impl::build_binding_scene_view(binding, output_width, output_height, scene_view);
 				if (scene_view_valid && scene_state->render_scene_valid)
 				{
 					VisibleRenderFrame visible_frame{};
-					if (scene_state->render_scene.build_visible_render_frame(packet.visible_frame->frame_index, scene_view, visible_frame))
+					if (scene_state->render_scene.build_visible_render_frame(
+						packet.visible_frame->frame_index,
+						scene_view,
+						visible_frame,
+						scene_primitive_version,
+						scene_transform_version,
+						scene_light_version))
 					{
 						packet.visible_frame = std::make_shared<VisibleRenderFrame>(std::move(visible_frame));
 					}
@@ -845,6 +892,15 @@ namespace AshEngine
 					static_cast<uint16_t>(packet.overrides.rect.width),
 					static_cast<uint16_t>(packet.overrides.rect.height)
 				};
+			}
+
+			if (packet.visible_frame->environment)
+			{
+				const VisibleEnvironmentData& environment = *packet.visible_frame->environment;
+				view_context.environment_resource =
+					m_impl->render_asset_manager->request_environment_map_asset(
+						environment.ibl_asset_path,
+						environment.source_texture_path);
 			}
 
 			if (!m_impl->scene_renderer->render_visible_frame(*packet.visible_frame, view_context))

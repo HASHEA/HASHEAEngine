@@ -30,6 +30,13 @@ namespace AshEngine
 				usage.access == RenderGraphAccess::Present;
 		}
 
+		bool usage_loads_existing_attachment(const RenderGraphTextureUsage& usage)
+		{
+			return usage.load_action == RenderLoadAction::Load &&
+				(usage.access == RenderGraphAccess::ColorAttachmentWrite ||
+					usage.access == RenderGraphAccess::DepthStencilWrite);
+		}
+
 		struct RenderGraphCompileCacheState
 		{
 			std::mutex mutex{};
@@ -259,7 +266,7 @@ namespace AshEngine
 					break;
 				}
 
-				if (usage_is_read(usage))
+				if (usage_is_read(usage) || usage_loads_existing_attachment(usage))
 				{
 					pass_reads = true;
 					const int32_t producer = producer_for_texture[usage.texture.index];

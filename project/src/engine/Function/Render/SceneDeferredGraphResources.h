@@ -13,5 +13,11 @@ namespace AshEngine
 		RenderGraphTextureRef lighting_diffuse{};
 		RenderGraphTextureRef lighting_specular{};
 		RenderGraphTextureRef scene_hdr_linear{};
+		RenderGraphTextureRef sunlight_shadow_dynamic_atlas{};
+		RenderGraphTextureRef sunlight_shadow_static_cache{};
+		RenderGraphTextureRef sunlight_shadow_mask{};
+		RenderGraphTextureRef sunlight_shadow_cascade_debug{};
+		RenderGraphTextureRef directional_light_shadow_transient_atlas{};
+		RenderGraphTextureRef directional_light_shadow_transient_mask{};
 	};
 }

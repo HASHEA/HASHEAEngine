@@ -1,9 +1,10 @@
-﻿#include "Function/Render/SceneRenderer.h"
+#include "Function/Render/SceneRenderer.h"
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Function/Application.h"
 #include "Function/Render/DebugDrawService.h"
+#include "Function/Render/DirectionalShadowConfig.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/RenderGraph.h"
@@ -295,6 +296,11 @@ namespace AshEngine
 			return application ? application->get_frame_index() : frame.frame_index;
 		}
 
+		static auto should_use_temporal_history_for_pass(PassFamily pass_family) -> bool
+		{
+			return pass_family == PassFamily::GBuffer;
+		}
+
 		static auto make_instance_data(
 			const glm::mat4& object_to_clip,
 			const glm::mat4& previous_object_to_clip,
@@ -412,7 +418,11 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(m_render_debug_view.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_ambient_occlusion_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_sunlight_shadow_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_directional_light_shadow_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		if (m_debug_draw_service)
 		{
@@ -429,7 +439,11 @@ namespace AshEngine
 		m_debug_draw_program.reset();
 		m_debug_draw_service = nullptr;
 		m_post_process_tone_map_pass.shutdown();
+		m_sky_background_pass.shutdown();
+		m_environment_lighting_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
+		m_directional_light_shadow_pass.shutdown();
+		m_sunlight_shadow_pass.shutdown();
 		m_ambient_occlusion_pass.shutdown();
 		m_render_debug_view.shutdown();
 		m_instance_buffers.clear();
@@ -738,7 +752,8 @@ namespace AshEngine
 			graph,
 			frame,
 			graph_resources,
-			view_context);
+			view_context,
+			frame.render_config.ambient_occlusion);
 		graph_resources.ambient_occlusion = ao_outputs.ambient_occlusion;
 		ASH_PROCESS_ERROR(graph_resources.ambient_occlusion);
 		register_render_debug_item(
@@ -775,11 +790,225 @@ namespace AshEngine
 		}
 		else
 		{
-			ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_passes(
+			const DirectionalShadowConfig& directional_shadow_config = frame.render_config.directional_shadows;
+			const DirectionalShadowCasterDrawCallback shadow_draw_callback =
+				[this](
+					const VisibleRenderFrame& shadow_frame,
+					const SceneRenderViewContext& shadow_view_context,
+					RenderGraphRasterContext& context,
+					uint64_t shadow_render_frame_index,
+					ShadowCasterMobilityFilter mobility_filter) -> bool
+				{
+					return render_shadow_static_meshes_to_pass(
+						shadow_frame,
+						shadow_view_context,
+						context,
+						shadow_render_frame_index,
+						mobility_filter);
+				};
+
+			SunLightShadowPassOutputs sunlight_shadow_outputs{};
+			if (directional_shadow_config.enabled)
+			{
+				sunlight_shadow_outputs = m_sunlight_shadow_pass.add_depth_passes(
+					graph,
+					frame,
+					view_context,
+					directional_shadow_config,
+					render_frame_index,
+					shadow_draw_callback);
+			}
+
+			graph_resources.sunlight_shadow_dynamic_atlas = sunlight_shadow_outputs.dynamic_atlas;
+			graph_resources.sunlight_shadow_static_cache = sunlight_shadow_outputs.static_cache_atlas;
+			graph_resources.sunlight_shadow_mask = sunlight_shadow_outputs.shadow_mask;
+			graph_resources.sunlight_shadow_cascade_debug = sunlight_shadow_outputs.cascade_debug;
+
+			if (sunlight_shadow_outputs.cascade_debug)
+			{
+				ASH_PROCESS_ERROR(m_sunlight_shadow_pass.add_cascade_debug_pass(
+					graph,
+					sunlight_shadow_outputs,
+					graph_resources.depth,
+					frame,
+					view_context));
+			}
+
+			if (sunlight_shadow_outputs.dynamic_atlas)
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"SunLightShadowDynamicAtlas",
+					"SunLight Shadow Dynamic Atlas",
+					graph_resources.sunlight_shadow_dynamic_atlas,
+					RenderDebugVisualization::Depth,
+					RenderTextureFormat::D32_SFLOAT,
+					directional_shadow_config.dynamic_atlas_size,
+					directional_shadow_config.dynamic_atlas_size);
+			}
+			if (sunlight_shadow_outputs.static_cache_atlas)
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"SunLightShadowStaticCache",
+					"SunLight Shadow Static Cache",
+					graph_resources.sunlight_shadow_static_cache,
+					RenderDebugVisualization::Depth,
+					RenderTextureFormat::D32_SFLOAT,
+					directional_shadow_config.static_cache_atlas_size,
+					directional_shadow_config.static_cache_atlas_size);
+			}
+			if (sunlight_shadow_outputs.shadow_mask)
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"SceneSunLightShadowMask",
+					"SunLight Shadow Mask",
+					graph_resources.sunlight_shadow_mask,
+					RenderDebugVisualization::Scalar,
+					RenderTextureFormat::RGBA8_UNORM,
+					output_width,
+					output_height);
+			}
+			if (sunlight_shadow_outputs.cascade_debug)
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"SceneSunLightShadowCascadeIndex",
+					"SunLight Shadow Cascade Index",
+					graph_resources.sunlight_shadow_cascade_debug,
+					RenderDebugVisualization::Color,
+					RenderTextureFormat::RGBA8_UNORM,
+					output_width,
+					output_height);
+			}
+
+			ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_base_pass(
 				graph,
 				frame,
 				graph_resources,
 				output,
+				view_context));
+
+			for (uint32_t light_index = 0; light_index < static_cast<uint32_t>(frame.lights.size()); ++light_index)
+			{
+				const VisibleLightData& light = frame.lights[light_index];
+				if (light.type == LightType::Directional)
+				{
+					RenderGraphTextureRef directional_shadow_mask{};
+					if (directional_shadow_config.enabled && light.casts_shadow)
+					{
+						if (light.sunlight)
+						{
+							const DirectionalShadowLightPlan* shadow_plan =
+								find_shadow_plan_for_frame_light(sunlight_shadow_outputs, light_index);
+							if (shadow_plan && shadow_plan->shadowed && sunlight_shadow_outputs.has_shadowed_lights())
+							{
+								ASH_PROCESS_ERROR(m_sunlight_shadow_pass.add_shadow_mask_pass(
+									graph,
+									sunlight_shadow_outputs,
+									shadow_plan->light_plan_index,
+									frame,
+									graph_resources,
+									view_context));
+								directional_shadow_mask = sunlight_shadow_outputs.shadow_mask;
+							}
+						}
+						else
+						{
+							DirectionalLightShadowPassOutputs ordinary_outputs =
+								m_directional_light_shadow_pass.add_shadow_passes(
+									graph,
+									frame,
+									light_index,
+									view_context,
+									directional_shadow_config,
+									render_frame_index,
+									shadow_draw_callback);
+							ASH_PROCESS_ERROR(ordinary_outputs.has_shadow());
+							ASH_PROCESS_ERROR(m_directional_light_shadow_pass.add_shadow_mask_pass(
+								graph,
+								ordinary_outputs,
+								frame,
+								graph_resources,
+								view_context));
+							graph_resources.directional_light_shadow_transient_atlas = ordinary_outputs.dynamic_atlas;
+							graph_resources.directional_light_shadow_transient_mask = ordinary_outputs.shadow_mask;
+							directional_shadow_mask = ordinary_outputs.shadow_mask;
+						}
+					}
+					ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_directional_light_pass(
+						graph,
+						frame,
+						graph_resources,
+						output,
+						view_context,
+						light_index,
+						directional_shadow_mask));
+				}
+				else if (light.type == LightType::Point)
+				{
+					ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_point_light_pass(
+						graph,
+						frame,
+						graph_resources,
+						output,
+						view_context,
+						light_index));
+				}
+				else if (light.type == LightType::Spot)
+				{
+					ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_spot_light_pass(
+						graph,
+						frame,
+						graph_resources,
+						output,
+						view_context,
+						light_index));
+				}
+			}
+
+			if (graph_resources.directional_light_shadow_transient_atlas)
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"DirectionalLightShadowTransientAtlas",
+					"Directional Light Shadow Transient Atlas",
+					graph_resources.directional_light_shadow_transient_atlas,
+					RenderDebugVisualization::Depth,
+					RenderTextureFormat::D32_SFLOAT,
+					directional_shadow_config.dynamic_atlas_size,
+					directional_shadow_config.dynamic_atlas_size);
+			}
+			if (graph_resources.directional_light_shadow_transient_mask)
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"DirectionalLightShadowTransientMask",
+					"Directional Light Shadow Transient Mask",
+					graph_resources.directional_light_shadow_transient_mask,
+					RenderDebugVisualization::Scalar,
+					RenderTextureFormat::RGBA8_UNORM,
+					output_width,
+					output_height);
+			}
+
+			ASH_PROCESS_ERROR(m_environment_lighting_pass.add_pass(
+				graph,
+				frame,
+				graph_resources,
+				view_context));
+			ASH_PROCESS_ERROR(m_deferred_lighting_pass.add_composite_pass(
+				graph,
+				frame,
+				graph_resources,
+				output,
+				view_context));
+			ASH_PROCESS_ERROR(m_sky_background_pass.add_pass(
+				graph,
+				frame,
+				graph_resources.depth,
+				graph_resources.scene_hdr_linear,
 				view_context));
 		}
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.add_pass(
@@ -866,6 +1095,34 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool SceneRenderer::render_shadow_static_meshes_to_pass(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphRasterContext& pass_context,
+		uint64_t render_frame_index,
+		ShadowCasterMobilityFilter mobility_filter)
+	{
+		VisibleRenderFrame shadow_frame = frame;
+		shadow_frame.static_mesh_draws.clear();
+		for (const VisibleStaticMeshDraw& draw : frame.shadow_caster_static_mesh_draws)
+		{
+			const bool static_match = draw.mobility == SceneMobility::Static || draw.mobility == SceneMobility::Stationary;
+			const bool dynamic_match = draw.mobility == SceneMobility::Movable;
+			if (mobility_filter == ShadowCasterMobilityFilter::All ||
+				(mobility_filter == ShadowCasterMobilityFilter::StaticOnly && static_match) ||
+				(mobility_filter == ShadowCasterMobilityFilter::DynamicOnly && dynamic_match))
+			{
+				shadow_frame.static_mesh_draws.push_back(draw);
+			}
+		}
+		return render_static_meshes_to_pass(
+			shadow_frame,
+			view_context,
+			pass_context,
+			render_frame_index,
+			PassFamily::DepthOnly);
+	}
+
 	bool SceneRenderer::render_static_meshes_to_pass(
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
@@ -880,9 +1137,12 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		const bool use_instanced_static_mesh_path =
 			should_use_instanced_static_mesh_path(frame.static_mesh_draws.size());
-		const uint64_t temporal_view_key = resolve_temporal_view_key(view_context);
-		const SceneTemporalViewState* previous_temporal_state =
-			find_previous_temporal_view_state(temporal_view_key);
+		const SceneTemporalViewState* previous_temporal_state = nullptr;
+		if (should_use_temporal_history_for_pass(pass_family))
+		{
+			const uint64_t temporal_view_key = resolve_temporal_view_key(view_context);
+			previous_temporal_state = find_previous_temporal_view_state(temporal_view_key);
+		}
 		const auto build_instance_data = [&frame, previous_temporal_state](const VisibleStaticMeshDraw& draw) -> SceneStaticMeshInstanceData
 		{
 			glm::mat4 previous_world_transform = draw.world_transform;

@@ -420,8 +420,10 @@ enum class RenderGraphPassFlags : uint8_t
 当前默认静态网格 scene path 已通过 graph 表达：
 
 ```text
-SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDeferredLightingAccumPass -> SceneDeferredCompositePass -> SceneDeferredToneMapPass
+SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDirectionalShadowDepthPass -> SceneDeferredLightingBasePass -> per shadowed directional light: SceneDirectionalShadowMaskPass -> SceneDeferredDirectionalLightingShadowedPass -> unshadowed per-light deferred passes -> SceneDeferredEnvironmentLightingPass -> SceneDeferredCompositePass -> SceneSkyBackgroundPass -> SceneDeferredToneMapPass
 ```
+
+`SceneDeferredEnvironmentLightingPass` 与 `SceneSkyBackgroundPass` 必须仅通过 RenderGraph 声明 depth / GBuffer / HDR 依赖；不得在 active render pass 内注入 backend barrier。无 active environment 或 `environment_resource` 未就绪时，两 pass 均跳过且不影响整帧渲染。
 
 资源：
 
@@ -431,6 +433,9 @@ SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDeferredLightingAccumPass 
 - `SceneAmbientOcclusion`：graph transient 或 external neutral AO texture，shader_resource=true；`Off` 模式为 white 1x1，其他模式由 AO pass 写入。
 - `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`：graph transient RGBA16F，shader_resource=true；光照 pass 以 MRT 分别累加漫反射项与高光项。
 - `SceneDeferredSceneHDRLinear`：graph transient RGBA16F，shader_resource=true；composite 写入线性 HDR，供 tone-map / 后续 bloom 等扩展消费。
+- `DirectionalShadowDynamicAtlas`：graph transient D32 depth atlas，shader_resource=true；当前帧 CSM tile 深度。
+- `DirectionalShadowStaticCache`：external persistent D32 depth atlas；outer cascade static cache tile。
+- `SceneDirectionalShadowMask`：graph transient RGBA8 screen mask，shader_resource=true；每个 shadowed directional light 投影前 clear 为 lit。
 
 pass 关系：
 
@@ -445,19 +450,25 @@ pass.read_texture(gbuffer_e, RenderGraphAccess::GraphicsSRV);
 pass.read_texture(depth, RenderGraphAccess::GraphicsSRV);
 pass.write_color(0, ambient_occlusion, RenderLoadAction::Clear, { 1.0f, 1.0f, 1.0f, 1.0f });
 
-// 3. Lighting
-pass.read_texture(gbuffer_a, RenderGraphAccess::GraphicsSRV);
-pass.read_texture(ambient_occlusion, RenderGraphAccess::GraphicsSRV);
-pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
-pass.write_color(0, lighting_diffuse, RenderLoadAction::Clear, k_lighting_accum_clear_color);
-pass.write_color(1, lighting_specular, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+// 3. Directional shadow depth
+pass.write_depth(directional_shadow_dynamic_atlas, RenderLoadAction::Load, { 1.0f, 0u });
 
-// 4. Composite (linear HDR)
+// 4. Directional shadow mask before one shadowed light
+pass.read_texture(scene_depth, RenderGraphAccess::GraphicsSRV);
+pass.read_texture(directional_shadow_dynamic_atlas, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, scene_directional_shadow_mask, RenderLoadAction::Clear, { 1.0f, 1.0f, 1.0f, 1.0f });
+
+// 5. Shadowed directional light
+pass.read_texture(scene_directional_shadow_mask, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, lighting_diffuse, RenderLoadAction::Load, {});
+pass.write_color(1, lighting_specular, RenderLoadAction::Load, {});
+
+// 6. Composite (linear HDR)
 pass.read_texture(lighting_diffuse, RenderGraphAccess::GraphicsSRV);
 pass.read_texture(lighting_specular, RenderGraphAccess::GraphicsSRV);
 pass.write_color(0, scene_hdr_linear, RenderLoadAction::Clear, k_scene_hdr_clear_color);
 
-// 5. Tone map -> output
+// 7. Tone map -> output
 pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
 pass.write_color(0, output, view_context.color_load_action, view_context.color_clear_value);
 ```
@@ -478,7 +489,7 @@ pass.write_color(0, output, view_context.color_load_action, view_context.color_c
 示例：
 
 ```cpp
-ASH_PROFILE_SCOPE_NC("SceneDeferredLightingAccumPass", AshEngine::Profile::Color::Draw);
+ASH_PROFILE_SCOPE_NC("SceneDeferredLightingBasePass", AshEngine::Profile::Color::Draw);
 ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.lights.size()));
 ```
 

@@ -28,11 +28,13 @@ struct VSInput
 struct VSOutput
 {
     float4 position : SV_Position;
+#if ASH_MATERIAL_BLEND_MODE_MASKED
     float3 normal_os : TEXCOORD0;
     float4 tangent_os : TEXCOORD1;
     float2 uv0 : TEXCOORD2;
     float2 uv1 : TEXCOORD3;
     float4 vertex_color : TEXCOORD4;
+#endif
 };
 
 inline AshVertexParameters BuildSurfaceStaticMeshVertexParameters(VSInput input)
@@ -64,14 +66,17 @@ inline VSOutput BuildSurfaceStaticMeshVertexOutput(
     VSOutput output;
     const float3 displaced_position_os = params.position_os + node.world_position_offset;
     output.position = TransformSurfaceStaticMeshPositionToClip(input, displaced_position_os);
+#if ASH_MATERIAL_BLEND_MODE_MASKED
     output.normal_os = params.normal_os;
     output.tangent_os = params.tangent_os;
     output.uv0 = params.uv0;
     output.uv1 = params.uv1;
     output.vertex_color = params.vertex_color;
+#endif
     return output;
 }
 
+#if ASH_MATERIAL_BLEND_MODE_MASKED
 inline AshPixelParameters BuildSurfaceStaticMeshPixelParameters(VSOutput input)
 {
     AshPixelParameters params;
@@ -86,6 +91,7 @@ inline AshPixelParameters BuildSurfaceStaticMeshPixelParameters(VSOutput input)
     params.temporal_valid = 0.0;
     return params;
 }
+#endif
 
 VSOutput VSMain(VSInput input)
 {
@@ -95,7 +101,7 @@ VSOutput VSMain(VSInput input)
     return BuildSurfaceStaticMeshVertexOutput(input, params, node);
 }
 
-float4 PSMain(VSOutput input) : SV_Target0
+void PSMain(VSOutput input)
 {
 #if ASH_MATERIAL_BLEND_MODE_MASKED
     AshPixelParameters params = BuildSurfaceStaticMeshPixelParameters(input);
@@ -106,6 +112,4 @@ float4 PSMain(VSOutput input) : SV_Target0
         discard;
     }
 #endif
-
-    return float4(0.0, 0.0, 0.0, 0.0);
 }

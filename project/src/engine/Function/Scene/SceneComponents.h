@@ -15,7 +15,8 @@ namespace AshEngine
 		Transform,
 		Camera,
 		Light,
-		Mesh
+		Mesh,
+		Environment
 	};
 
 	enum class ScenePropertyType : uint8_t
@@ -85,6 +86,12 @@ namespace AshEngine
 		float range = 10.0f;
 		float inner_cone_angle_degrees = 30.0f;
 		float outer_cone_angle_degrees = 45.0f;
+		bool casts_shadow = true;
+		bool sunlight = false;
+		uint32_t shadow_priority = 128;
+		float shadow_distance = 0.0f;
+		uint32_t shadow_cascade_count = 0;
+		float near_shadow_distance = 0.0f;
 	};
 
 	struct MeshMaterialOverride
@@ -101,6 +108,19 @@ namespace AshEngine
 		bool visible = true;
 		SceneMobility mobility = SceneMobility::Static;
 		uint32_t layer_mask = k_default_scene_layer_mask;
+	};
+
+	struct EnvironmentComponent
+	{
+		bool active = true;
+		std::string ibl_asset_path{};
+		std::string source_texture_path{};
+		float intensity = 1.0f;
+		float lighting_intensity = 1.0f;
+		float background_intensity = 1.0f;
+		float rotation_degrees = 0.0f;
+		bool visible_background = true;
+		bool affect_lighting = true;
 	};
 
 	struct SceneEnumValueDesc

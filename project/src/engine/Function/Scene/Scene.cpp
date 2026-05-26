@@ -1,7 +1,9 @@
 #include "Scene.h"
 
+#include "Base/hlog.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
+#include "Function/Render/EnvironmentMapAsset.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -12,6 +14,7 @@
 #include <unordered_map>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/matrix_decompose.hpp>
 #include <glm/gtx/quaternion.hpp>
 #include <atomic>
@@ -44,12 +47,18 @@ namespace AshEngine
 			EntityId next_entity_id = 1;
 			bool dirty = false;
 			uint64_t change_version = 0;
+			SceneRenderConfig render_config = make_default_scene_render_config();
 			uint64_t render_primitive_version = 0;
 			uint64_t render_transform_version = 0;
 			uint64_t render_light_version = 0;
+			uint64_t render_environment_version = 0;
+			uint64_t render_config_version = 0;
 		};
 
-		static constexpr uint32_t k_scene_file_version = 3;
+		static constexpr uint32_t k_scene_file_version = 4;
+		static constexpr const char* k_environment_sun_light_name = "EnvironmentSunLight";
+		static constexpr float k_environment_sun_light_intensity = 2.5f;
+		static constexpr uint32_t k_environment_sun_light_shadow_priority = 255u;
 		static std::atomic<uint64_t> g_scene_change_version_seed{ 1 };
 
 		static SceneEnumValueDesc k_camera_projection_values[] =
@@ -102,6 +111,12 @@ namespace AshEngine
 			{ "range", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, range)), static_cast<uint32_t>(sizeof(float)), nullptr },
 			{ "inner_cone_angle_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, inner_cone_angle_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
 			{ "outer_cone_angle_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, outer_cone_angle_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "casts_shadow", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(LightComponent, casts_shadow)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "sunlight", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(LightComponent, sunlight)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "shadow_priority", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(LightComponent, shadow_priority)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr },
+			{ "shadow_distance", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, shadow_distance)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "shadow_cascade_count", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(LightComponent, shadow_cascade_count)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr },
+			{ "near_shadow_distance", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, near_shadow_distance)), static_cast<uint32_t>(sizeof(float)), nullptr },
 		};
 
 		static ScenePropertyDesc k_mesh_properties[] =
@@ -113,6 +128,19 @@ namespace AshEngine
 			{ "layer_mask", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(MeshComponent, layer_mask)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr },
 		};
 
+		static ScenePropertyDesc k_environment_properties[] =
+		{
+			{ "active", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, active)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "ibl_asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(EnvironmentComponent, ibl_asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr },
+			{ "source_texture_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(EnvironmentComponent, source_texture_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr },
+			{ "intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "lighting_intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, lighting_intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "background_intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, background_intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "rotation_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, rotation_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "visible_background", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, visible_background)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "affect_lighting", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, affect_lighting)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+		};
+
 		static SceneComponentDesc k_scene_component_descs[] =
 		{
 			{ SceneComponentType::Name, "NameComponent", k_name_properties, static_cast<uint32_t>(std::size(k_name_properties)), static_cast<uint32_t>(sizeof(NameComponent)) },
@@ -120,6 +148,7 @@ namespace AshEngine
 			{ SceneComponentType::Camera, "CameraComponent", k_camera_properties, static_cast<uint32_t>(std::size(k_camera_properties)), static_cast<uint32_t>(sizeof(CameraComponent)) },
 			{ SceneComponentType::Light, "LightComponent", k_light_properties, static_cast<uint32_t>(std::size(k_light_properties)), static_cast<uint32_t>(sizeof(LightComponent)) },
 			{ SceneComponentType::Mesh, "MeshComponent", k_mesh_properties, static_cast<uint32_t>(std::size(k_mesh_properties)), static_cast<uint32_t>(sizeof(MeshComponent)) },
+			{ SceneComponentType::Environment, "EnvironmentComponent", k_environment_properties, static_cast<uint32_t>(std::size(k_environment_properties)), static_cast<uint32_t>(sizeof(EnvironmentComponent)) },
 		};
 
 		static auto to_json_vec3(const glm::vec3& value) -> json
@@ -190,6 +219,147 @@ namespace AshEngine
 			return overrides;
 		}
 
+		template <typename TValue>
+		static auto try_get_json_value(const json& object, const char* key, TValue& out_value) -> bool
+		{
+			if (!object.is_object())
+			{
+				return false;
+			}
+
+			const auto it = object.find(key);
+			if (it == object.end() || it->is_null())
+			{
+				return false;
+			}
+
+			try
+			{
+				out_value = it->get<TValue>();
+				return true;
+			}
+			catch (const std::exception& exception)
+			{
+				HLogWarning("SceneConfig field '{}' has invalid type: {}.", key, exception.what());
+				return false;
+			}
+		}
+
+		static auto deserialize_scene_render_config(const json& root) -> SceneRenderConfig
+		{
+			SceneRenderConfig config = make_default_scene_render_config();
+			const auto scene_config_it = root.find("scene_config");
+			if (scene_config_it == root.end() || !scene_config_it->is_object())
+			{
+				return config;
+			}
+
+			const json& scene_config = *scene_config_it;
+			if (const auto ao_it = scene_config.find("ambient_occlusion"); ao_it != scene_config.end() && ao_it->is_object())
+			{
+				std::string mode{};
+				if (try_get_json_value(*ao_it, "mode", mode))
+				{
+					AmbientOcclusionMode parsed = config.ambient_occlusion.mode;
+					if (try_parse_ambient_occlusion_mode(mode, parsed))
+					{
+						config.ambient_occlusion.mode = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig ambient_occlusion.mode '{}' is invalid. Keeping default '{}'.",
+							mode,
+							ambient_occlusion_mode_name(config.ambient_occlusion.mode));
+					}
+				}
+
+				std::string quality{};
+				if (try_get_json_value(*ao_it, "quality", quality))
+				{
+					AmbientOcclusionQuality parsed = config.ambient_occlusion.quality;
+					if (try_parse_ambient_occlusion_quality(quality, parsed))
+					{
+						config.ambient_occlusion.quality = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig ambient_occlusion.quality '{}' is invalid. Keeping default '{}'.",
+							quality,
+							ambient_occlusion_quality_name(config.ambient_occlusion.quality));
+					}
+				}
+
+				try_get_json_value(*ao_it, "radius", config.ambient_occlusion.radius);
+				try_get_json_value(*ao_it, "intensity", config.ambient_occlusion.intensity);
+				try_get_json_value(*ao_it, "power", config.ambient_occlusion.power);
+				try_get_json_value(*ao_it, "half_resolution", config.ambient_occlusion.half_resolution);
+				try_get_json_value(*ao_it, "blur", config.ambient_occlusion.blur);
+				try_get_json_value(*ao_it, "temporal", config.ambient_occlusion.temporal);
+				try_get_json_value(*ao_it, "temporal_blend", config.ambient_occlusion.temporal_blend);
+				try_get_json_value(*ao_it, "temporal_depth_threshold", config.ambient_occlusion.temporal_depth_threshold);
+				try_get_json_value(*ao_it, "temporal_normal_threshold", config.ambient_occlusion.temporal_normal_threshold);
+				config.ambient_occlusion =
+					sanitize_ambient_occlusion_config(config.ambient_occlusion, make_default_ambient_occlusion_config());
+			}
+
+			if (const auto shadows_it = scene_config.find("directional_shadows"); shadows_it != scene_config.end() && shadows_it->is_object())
+			{
+				try_get_json_value(*shadows_it, "enabled", config.directional_shadows.enabled);
+				try_get_json_value(*shadows_it, "default_cascade_count", config.directional_shadows.default_cascade_count);
+				try_get_json_value(*shadows_it, "default_shadow_distance", config.directional_shadows.default_shadow_distance);
+				try_get_json_value(*shadows_it, "near_shadow_distance", config.directional_shadows.near_shadow_distance);
+				try_get_json_value(*shadows_it, "split_lambda", config.directional_shadows.split_lambda);
+				try_get_json_value(*shadows_it, "near_cascade_resolution", config.directional_shadows.near_cascade_resolution);
+				try_get_json_value(*shadows_it, "outer_cascade_resolution", config.directional_shadows.outer_cascade_resolution);
+				try_get_json_value(*shadows_it, "dynamic_atlas_size", config.directional_shadows.dynamic_atlas_size);
+				try_get_json_value(*shadows_it, "static_cache_atlas_size", config.directional_shadows.static_cache_atlas_size);
+				try_get_json_value(*shadows_it, "static_cache_budget_mb", config.directional_shadows.static_cache_budget_mb);
+				try_get_json_value(*shadows_it, "depth_bias", config.directional_shadows.depth_bias);
+				try_get_json_value(*shadows_it, "normal_bias", config.directional_shadows.normal_bias);
+				try_get_json_value(*shadows_it, "pcf_radius", config.directional_shadows.pcf_radius);
+				config.directional_shadows =
+					sanitize_directional_shadow_config(config.directional_shadows, make_default_directional_shadow_config());
+			}
+
+			return config;
+		}
+
+		static auto serialize_scene_render_config(const SceneRenderConfig& config) -> json
+		{
+			return json{
+				{ "ambient_occlusion", json{
+					{ "mode", ambient_occlusion_mode_name(config.ambient_occlusion.mode) },
+					{ "quality", ambient_occlusion_quality_name(config.ambient_occlusion.quality) },
+					{ "radius", config.ambient_occlusion.radius },
+					{ "intensity", config.ambient_occlusion.intensity },
+					{ "power", config.ambient_occlusion.power },
+					{ "half_resolution", config.ambient_occlusion.half_resolution },
+					{ "blur", config.ambient_occlusion.blur },
+					{ "temporal", config.ambient_occlusion.temporal },
+					{ "temporal_blend", config.ambient_occlusion.temporal_blend },
+					{ "temporal_depth_threshold", config.ambient_occlusion.temporal_depth_threshold },
+					{ "temporal_normal_threshold", config.ambient_occlusion.temporal_normal_threshold },
+				} },
+				{ "directional_shadows", json{
+					{ "enabled", config.directional_shadows.enabled },
+					{ "default_cascade_count", config.directional_shadows.default_cascade_count },
+					{ "default_shadow_distance", config.directional_shadows.default_shadow_distance },
+					{ "near_shadow_distance", config.directional_shadows.near_shadow_distance },
+					{ "split_lambda", config.directional_shadows.split_lambda },
+					{ "near_cascade_resolution", config.directional_shadows.near_cascade_resolution },
+					{ "outer_cascade_resolution", config.directional_shadows.outer_cascade_resolution },
+					{ "dynamic_atlas_size", config.directional_shadows.dynamic_atlas_size },
+					{ "static_cache_atlas_size", config.directional_shadows.static_cache_atlas_size },
+					{ "static_cache_budget_mb", config.directional_shadows.static_cache_budget_mb },
+					{ "depth_bias", config.directional_shadows.depth_bias },
+					{ "normal_bias", config.directional_shadows.normal_bias },
+					{ "pcf_radius", config.directional_shadows.pcf_radius },
+				} },
+			};
+		}
+
 		static auto make_scene_error(std::string* out_error, std::string_view message) -> void
 		{
 			if (out_error)
@@ -228,6 +398,12 @@ namespace AshEngine
 			storage.render_light_version = allocate_scene_change_version();
 		}
 
+		static auto mark_scene_render_environment_modified(SceneStorage& storage) -> void
+		{
+			mark_scene_storage_modified(storage);
+			storage.render_environment_version = allocate_scene_change_version();
+		}
+
 		static auto matrix_to_transform_component(const glm::mat4& matrix) -> TransformComponent
 		{
 			TransformComponent component{};
@@ -252,6 +428,191 @@ namespace AshEngine
 			const glm::mat4 rotation_matrix = glm::mat4_cast(rotation);
 			const glm::mat4 scale = glm::scale(glm::mat4(1.0f), component.scale);
 			return translation * rotation_matrix * scale;
+		}
+
+		static auto vector_is_finite(const glm::vec3& value) -> bool
+		{
+			return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+		}
+
+		static auto normalize_direction_or_zero(const glm::vec3& value) -> glm::vec3
+		{
+			if (!vector_is_finite(value))
+			{
+				return glm::vec3(0.0f);
+			}
+
+			const float length = glm::length(value);
+			return length > 0.0001f ? value / length : glm::vec3(0.0f);
+		}
+
+		static auto rotate_environment_direction(const glm::vec3& direction, float rotation_degrees) -> glm::vec3
+		{
+			const float rotation_radians = glm::radians(rotation_degrees);
+			const float c = std::cos(rotation_radians);
+			const float s = std::sin(rotation_radians);
+			return glm::vec3(
+				c * direction.x - s * direction.z,
+				direction.y,
+				s * direction.x + c * direction.z);
+		}
+
+		static auto make_directional_light_transform(const glm::vec3& light_ray_direction_ws) -> TransformComponent
+		{
+			TransformComponent transform{};
+			const glm::vec3 direction = normalize_direction_or_zero(light_ray_direction_ws);
+			if (glm::length(direction) <= 0.0001f)
+			{
+				return transform;
+			}
+
+			const glm::vec3 up_seed =
+				std::abs(glm::dot(direction, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.98f ?
+				glm::vec3(1.0f, 0.0f, 0.0f) :
+				glm::vec3(0.0f, 1.0f, 0.0f);
+			const glm::quat rotation = glm::quatLookAtLH(direction, up_seed);
+			transform.rotation_euler_degrees = glm::degrees(glm::eulerAngles(glm::normalize(rotation)));
+			return transform;
+		}
+
+		static auto sanitize_light_component(LightComponent component) -> LightComponent
+		{
+			if (component.type != LightType::Directional)
+			{
+				component.sunlight = false;
+			}
+			return component;
+		}
+
+		static auto validate_single_directional_sunlight(const Scene& scene, std::string* out_error) -> bool
+		{
+			uint32_t sunlight_count = 0u;
+			for (const Entity& entity : scene.get_entities())
+			{
+				if (!entity.is_valid() || !entity.has_light_component())
+				{
+					continue;
+				}
+
+				const LightComponent light = entity.get_light_component();
+				if (light.type == LightType::Directional && light.sunlight)
+				{
+					++sunlight_count;
+				}
+			}
+
+			if (sunlight_count > 1u)
+			{
+				make_scene_error(out_error, "Scene contains more than one directional sunlight.");
+				return false;
+			}
+			return true;
+		}
+
+		static auto find_environment_sun_light(Scene& scene) -> Entity
+		{
+			for (const Entity& entity : scene.get_entities())
+			{
+				if (!entity.is_valid() || entity.get_name() != k_environment_sun_light_name || !entity.has_light_component())
+				{
+					continue;
+				}
+
+				const LightComponent light = entity.get_light_component();
+				if (light.type == LightType::Directional)
+				{
+					return entity;
+				}
+			}
+			return {};
+		}
+
+		static auto create_or_update_environment_sun_light(Scene& scene, std::string* out_error) -> bool
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+			ASH_PROCESS_ERROR(scene.is_valid());
+
+			SceneEnvironmentExtractionDesc environment{};
+			if (!scene.extract_active_environment(environment))
+			{
+				return true;
+			}
+			if (environment.ibl_asset_path.empty())
+			{
+				return true;
+			}
+
+			const std::filesystem::path ibl_path = std::filesystem::path(environment.ibl_asset_path).lexically_normal();
+			EnvironmentMapMetadata metadata{};
+			std::string metadata_error{};
+			if (!read_ashibl_metadata_file(ibl_path, metadata, &metadata_error))
+			{
+				HLogWarning(
+					"Scene '{}': could not read environment sun metadata from '{}': {}",
+					scene.get_name(),
+					ibl_path.generic_string(),
+					metadata_error.empty() ? "unknown error" : metadata_error);
+				return true;
+			}
+			if (!metadata.dominant_light.valid)
+			{
+				return true;
+			}
+
+			const glm::vec3 sun_direction_ws = normalize_direction_or_zero(
+				rotate_environment_direction(metadata.dominant_light.direction, environment.rotation_degrees));
+			if (glm::length(sun_direction_ws) <= 0.0001f)
+			{
+				HLogWarning(
+					"Scene '{}': ignored invalid environment sun direction from '{}'.",
+					scene.get_name(),
+					ibl_path.generic_string());
+				return true;
+			}
+
+			const glm::vec3 light_ray_direction_ws = -sun_direction_ws;
+			Entity sun_entity = find_environment_sun_light(scene);
+			if (!sun_entity.is_valid())
+			{
+				sun_entity = scene.create_entity(k_environment_sun_light_name);
+			}
+			if (!sun_entity.is_valid())
+			{
+				make_scene_error(out_error, "Failed to create environment sun light entity.");
+				ASH_PROCESS_ERROR(false);
+			}
+
+			const DirectionalShadowConfig& shadow_config = scene.get_render_config().directional_shadows;
+			LightComponent sun_light{};
+			sun_light.type = LightType::Directional;
+			sun_light.sunlight = true;
+			sun_light.color = glm::vec3(1.0f, 0.95f, 0.88f);
+			sun_light.intensity = k_environment_sun_light_intensity;
+			sun_light.casts_shadow = true;
+			sun_light.shadow_priority = k_environment_sun_light_shadow_priority;
+			sun_light.shadow_distance = shadow_config.default_shadow_distance;
+			sun_light.shadow_cascade_count = shadow_config.default_cascade_count;
+			sun_light.near_shadow_distance = shadow_config.near_shadow_distance;
+
+			if (!sun_entity.set_transform_component(make_directional_light_transform(light_ray_direction_ws)) ||
+				!sun_entity.set_light_component(sun_light))
+			{
+				make_scene_error(out_error, "Failed to configure environment sun light.");
+				ASH_PROCESS_ERROR(false);
+			}
+
+			HLogInfo(
+				"Scene '{}': synchronized '{}' from '{}'. sun_direction_ws=({}, {}, {}) light_ray_direction_ws=({}, {}, {}).",
+				scene.get_name(),
+				k_environment_sun_light_name,
+				ibl_path.generic_string(),
+				sun_direction_ws.x,
+				sun_direction_ws.y,
+				sun_direction_ws.z,
+				light_ray_direction_ws.x,
+				light_ray_direction_ws.y,
+				light_ray_direction_ws.z);
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 	}
 
@@ -287,6 +648,10 @@ namespace AshEngine
 			{
 				mark_scene_render_lights_modified(impl->storage);
 			}
+			else if constexpr (std::is_same_v<TComponent, EnvironmentComponent>)
+			{
+				mark_scene_render_environment_modified(impl->storage);
+			}
 			else
 			{
 				mark_scene_storage_modified(impl->storage);
@@ -313,6 +678,10 @@ namespace AshEngine
 			else if constexpr (std::is_same_v<TComponent, LightComponent>)
 			{
 				mark_scene_render_lights_modified(impl->storage);
+			}
+			else if constexpr (std::is_same_v<TComponent, EnvironmentComponent>)
+			{
+				mark_scene_render_environment_modified(impl->storage);
 			}
 			else
 			{
@@ -643,7 +1012,7 @@ namespace AshEngine
 
 	bool Entity::add_light_component(const LightComponent& component)
 	{
-		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, sanitize_light_component(component));
 	}
 
 	bool Entity::set_light_component(const LightComponent& component)
@@ -692,6 +1061,42 @@ namespace AshEngine
 		return remove_entity_component_if_present<MeshComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
+	bool Entity::has_environment_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		return handle != entt::null && impl->storage.registry.any_of<EnvironmentComponent>(handle);
+	}
+
+	EnvironmentComponent Entity::get_environment_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		if (handle != entt::null)
+		{
+			if (const EnvironmentComponent* component = impl->storage.registry.try_get<EnvironmentComponent>(handle))
+			{
+				return *component;
+			}
+		}
+		return {};
+	}
+
+	bool Entity::add_environment_component(const EnvironmentComponent& component)
+	{
+		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
+	}
+
+	bool Entity::set_environment_component(const EnvironmentComponent& component)
+	{
+		return add_environment_component(component);
+	}
+
+	bool Entity::remove_environment_component()
+	{
+		return remove_entity_component_if_present<EnvironmentComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
+	}
+
 	bool Entity::has_component(SceneComponentType type) const
 	{
 		switch (type)
@@ -705,6 +1110,8 @@ namespace AshEngine
 			return has_light_component();
 		case SceneComponentType::Mesh:
 			return has_mesh_component();
+		case SceneComponentType::Environment:
+			return has_environment_component();
 		default:
 			return false;
 		}
@@ -731,6 +1138,10 @@ namespace AshEngine
 		if (has_mesh_component())
 		{
 			result.push_back(SceneComponentType::Mesh);
+		}
+		if (has_environment_component())
+		{
+			result.push_back(SceneComponentType::Environment);
 		}
 		return result;
 	}
@@ -779,6 +1190,14 @@ namespace AshEngine
 			if (handled)
 			{
 				*static_cast<MeshComponent*>(out_component) = get_mesh_component();
+			}
+		}
+		else if (type == SceneComponentType::Environment)
+		{
+			handled = component_size == sizeof(EnvironmentComponent) && has_environment_component();
+			if (handled)
+			{
+				*static_cast<EnvironmentComponent*>(out_component) = get_environment_component();
 			}
 		}
 		else
@@ -835,6 +1254,14 @@ namespace AshEngine
 			if (handled)
 			{
 				bResult = set_mesh_component(*static_cast<const MeshComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Environment)
+		{
+			handled = component_size == sizeof(EnvironmentComponent);
+			if (handled)
+			{
+				bResult = set_environment_component(*static_cast<const EnvironmentComponent*>(component_data));
 			}
 		}
 		else
@@ -923,6 +1350,8 @@ namespace AshEngine
 		auto impl = std::make_shared<Impl>();
 		impl->storage.name = name.empty() ? "Untitled Scene" : std::string(name);
 		impl->storage.change_version = allocate_scene_change_version();
+		impl->storage.render_config = make_default_scene_render_config();
+		impl->storage.render_config_version = impl->storage.change_version;
 		return Scene(std::move(impl));
 	}
 
@@ -956,6 +1385,7 @@ namespace AshEngine
 			make_scene_error(out_error, "Scene file version is newer than this runtime supports.");
 			ASH_PROCESS_ERROR(false);
 		}
+		scene.m_impl->storage.render_config = deserialize_scene_render_config(root);
 
 		const json entities_json = root.value("entities", json::array());
 		if (!entities_json.is_array())
@@ -1014,7 +1444,13 @@ namespace AshEngine
 				light.range = light_json.value("range", light.range);
 				light.inner_cone_angle_degrees = light_json.value("inner_cone_angle_degrees", light.inner_cone_angle_degrees);
 				light.outer_cone_angle_degrees = light_json.value("outer_cone_angle_degrees", light.outer_cone_angle_degrees);
-				entity.add_light_component(light);
+				light.casts_shadow = light_json.value("casts_shadow", light.casts_shadow);
+				light.sunlight = light_json.value("sunlight", light.sunlight);
+				light.shadow_priority = light_json.value("shadow_priority", light.shadow_priority);
+				light.shadow_distance = light_json.value("shadow_distance", light.shadow_distance);
+				light.shadow_cascade_count = light_json.value("shadow_cascade_count", light.shadow_cascade_count);
+				light.near_shadow_distance = light_json.value("near_shadow_distance", light.near_shadow_distance);
+				entity.add_light_component(sanitize_light_component(light));
 			}
 
 			if (entity_json.contains("mesh"))
@@ -1028,6 +1464,22 @@ namespace AshEngine
 				mesh.mobility = static_cast<SceneMobility>(mesh_json.value("mobility", static_cast<uint32_t>(mesh.mobility)));
 				mesh.layer_mask = mesh_json.value("layer_mask", mesh.layer_mask);
 				entity.add_mesh_component(mesh);
+			}
+
+			if (entity_json.contains("environment"))
+			{
+				const json& environment_json = entity_json["environment"];
+				EnvironmentComponent environment{};
+				environment.active = environment_json.value("active", environment.active);
+				environment.ibl_asset_path = environment_json.value("ibl_asset_path", std::string{});
+				environment.source_texture_path = environment_json.value("source_texture_path", std::string{});
+				environment.intensity = environment_json.value("intensity", environment.intensity);
+				environment.lighting_intensity = environment_json.value("lighting_intensity", environment.lighting_intensity);
+				environment.background_intensity = environment_json.value("background_intensity", environment.background_intensity);
+				environment.rotation_degrees = environment_json.value("rotation_degrees", environment.rotation_degrees);
+				environment.visible_background = environment_json.value("visible_background", environment.visible_background);
+				environment.affect_lighting = environment_json.value("affect_lighting", environment.affect_lighting);
+				entity.add_environment_component(environment);
 			}
 		}
 
@@ -1048,9 +1500,12 @@ namespace AshEngine
 			}
 		}
 		ASH_PROCESS_ERROR(hierarchy_valid);
+		ASH_PROCESS_ERROR(create_or_update_environment_sun_light(scene, out_error));
+		ASH_PROCESS_ERROR(validate_single_directional_sunlight(scene, out_error));
 
 		scene.m_impl->storage.dirty = false;
 		scene.m_impl->storage.change_version = allocate_scene_change_version();
+		scene.m_impl->storage.render_config_version = scene.m_impl->storage.change_version;
 		if (out_error)
 		{
 			out_error->clear();
@@ -1380,6 +1835,54 @@ namespace AshEngine
 		return result;
 	}
 
+	bool Scene::extract_active_environment(SceneEnvironmentExtractionDesc& out_environment) const
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		out_environment = {};
+		ASH_PROCESS_ERROR(is_valid());
+
+		bool found_active = false;
+		bool warned_multiple = false;
+		for (EntityId id : m_impl->storage.entity_order)
+		{
+			Entity entity = find_entity(id);
+			if (!entity.is_valid() || !entity.has_environment_component())
+			{
+				continue;
+			}
+
+			const EnvironmentComponent component = entity.get_environment_component();
+			if (!component.active)
+			{
+				continue;
+			}
+
+			if (found_active)
+			{
+				if (!warned_multiple)
+				{
+					HLogWarning("Scene '{}': multiple active EnvironmentComponent entries found; using the first active environment.", get_name());
+					warned_multiple = true;
+				}
+				continue;
+			}
+
+			out_environment.entity_id = id;
+			out_environment.ibl_asset_path = component.ibl_asset_path;
+			out_environment.source_texture_path = component.source_texture_path;
+			out_environment.intensity = component.intensity;
+			out_environment.lighting_intensity = component.lighting_intensity;
+			out_environment.background_intensity = component.background_intensity;
+			out_environment.rotation_degrees = component.rotation_degrees;
+			out_environment.visible_background = component.visible_background;
+			out_environment.affect_lighting = component.affect_lighting;
+			found_active = true;
+		}
+
+		bResult = found_active;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool Scene::try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -1494,6 +1997,10 @@ namespace AshEngine
 			if (node.mesh.has_value())
 			{
 				entity.add_mesh_component(node.mesh.value());
+			}
+			if (node.environment.has_value())
+			{
+				entity.add_environment_component(node.environment.value());
 			}
 			for (uint32_t child_index : node.children)
 			{
@@ -1614,6 +2121,7 @@ namespace AshEngine
 		root["version"] = k_scene_file_version;
 		root["name"] = m_impl->storage.name;
 		root["next_entity_id"] = m_impl->storage.next_entity_id;
+		root["scene_config"] = serialize_scene_render_config(m_impl->storage.render_config);
 		root["entities"] = json::array();
 
 		std::function<void(EntityId)> append_entity_json_recursive = [&](EntityId id)
@@ -1663,6 +2171,12 @@ namespace AshEngine
 					{ "range", light->range },
 					{ "inner_cone_angle_degrees", light->inner_cone_angle_degrees },
 					{ "outer_cone_angle_degrees", light->outer_cone_angle_degrees },
+					{ "casts_shadow", light->casts_shadow },
+					{ "sunlight", light->sunlight },
+					{ "shadow_priority", light->shadow_priority },
+					{ "shadow_distance", light->shadow_distance },
+					{ "shadow_cascade_count", light->shadow_cascade_count },
+					{ "near_shadow_distance", light->near_shadow_distance },
 				};
 			}
 
@@ -1680,6 +2194,22 @@ namespace AshEngine
 				{
 					entity_json["mesh"]["material_overrides"] = serialize_material_overrides(mesh->material_overrides);
 				}
+			}
+
+			if (const EnvironmentComponent* environment = m_impl->storage.registry.try_get<EnvironmentComponent>(handle))
+			{
+				entity_json["environment"] =
+				{
+					{ "active", environment->active },
+					{ "ibl_asset_path", environment->ibl_asset_path },
+					{ "source_texture_path", environment->source_texture_path },
+					{ "intensity", environment->intensity },
+					{ "lighting_intensity", environment->lighting_intensity },
+					{ "background_intensity", environment->background_intensity },
+					{ "rotation_degrees", environment->rotation_degrees },
+					{ "visible_background", environment->visible_background },
+					{ "affect_lighting", environment->affect_lighting },
+				};
 			}
 
 			root["entities"].push_back(std::move(entity_json));
@@ -1736,6 +2266,34 @@ namespace AshEngine
 		return m_impl ? m_impl->storage.change_version : 0;
 	}
 
+	const SceneRenderConfig& Scene::get_render_config() const
+	{
+		static const SceneRenderConfig k_default_config = make_default_scene_render_config();
+		return m_impl ? m_impl->storage.render_config : k_default_config;
+	}
+
+	bool Scene::set_render_config(const SceneRenderConfig& config)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl != nullptr);
+
+		SceneRenderConfig sanitized_config{};
+		sanitized_config.ambient_occlusion =
+			sanitize_ambient_occlusion_config(config.ambient_occlusion, make_default_ambient_occlusion_config());
+		sanitized_config.directional_shadows =
+			sanitize_directional_shadow_config(config.directional_shadows, make_default_directional_shadow_config());
+
+		if (!scene_render_config_equal(m_impl->storage.render_config, sanitized_config))
+		{
+			m_impl->storage.render_config = sanitized_config;
+			m_impl->storage.dirty = true;
+			m_impl->storage.change_version = allocate_scene_change_version();
+			m_impl->storage.render_config_version = m_impl->storage.change_version;
+		}
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	uint64_t Scene::get_render_primitive_version() const
 	{
 		return m_impl ? m_impl->storage.render_primitive_version : 0;
@@ -1749,6 +2307,16 @@ namespace AshEngine
 	uint64_t Scene::get_render_light_version() const
 	{
 		return m_impl ? m_impl->storage.render_light_version : 0;
+	}
+
+	uint64_t Scene::get_render_environment_version() const
+	{
+		return m_impl ? m_impl->storage.render_environment_version : 0;
+	}
+
+	uint64_t Scene::get_render_config_version() const
+	{
+		return m_impl ? m_impl->storage.render_config_version : 0;
 	}
 
 	void Scene::mark_clean()

@@ -10,17 +10,24 @@
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Diagnostics/PerfGate.h"
 #include "Function/Render/AmbientOcclusionConfig.h"
+#include "Function/Render/DeferredLightingPass.h"
+#include "Function/Render/DirectionalShadowConfig.h"
+#include "Function/Render/DirectionalLightShadowPass.h"
+#include "Function/Render/EnvironmentMapAsset.h"
+#include "Function/Render/EnvironmentMapBaker.h"
 #include "Function/Render/GBufferLayout.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderDebugView.h"
+#include "Function/Render/RenderFormatUtils.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/RenderFeatureConfig.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/SceneView.h"
+#include "Function/Render/SunLightShadowPass.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Scene/Scene.h"
 #include "Function/Scene/SceneQuery.h"
@@ -35,14 +42,17 @@
 #include "Graphics/DirectX12/DX12ResourceTracker.h"
 #endif
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <sstream>
 #include <utility>
 #include <vector>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace AshEngine
@@ -619,6 +629,484 @@ namespace AshEngine
 				report_self_test_failure("Texture KTX2 BC7 decode", "decoded KTX2 metadata or payload layout was invalid");
 		}
 
+		static auto write_test_hdr_equirectangular(const std::filesystem::path& path) -> bool
+		{
+			const int width = 8;
+			const int height = 4;
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			if (!output.is_open())
+			{
+				return false;
+			}
+
+			output << "#?RADIANCE\n";
+			output << "FORMAT=32-bit_rle_rgbe\n";
+			output << "\n";
+			output << "-Y " << height << " +X " << width << "\n";
+
+			auto write_rgbe = [&output](float r, float g, float b) -> void
+			{
+				const float max_component = std::max({ r, g, b, 1e-8f });
+				const int exponent = static_cast<int>(std::floor(std::log2(max_component))) + 1;
+				const float scale = std::ldexp(1.0f, 8 - exponent);
+				const uint8_t rgbe[4] = {
+					static_cast<uint8_t>(std::clamp(r * scale, 0.0f, 255.0f)),
+					static_cast<uint8_t>(std::clamp(g * scale, 0.0f, 255.0f)),
+					static_cast<uint8_t>(std::clamp(b * scale, 0.0f, 255.0f)),
+					static_cast<uint8_t>(exponent + 128)
+				};
+				output.write(reinterpret_cast<const char*>(rgbe), sizeof(rgbe));
+			};
+
+			for (int y = 0; y < height; ++y)
+			{
+				for (int x = 0; x < width; ++x)
+				{
+					write_rgbe(
+						static_cast<float>(x) / static_cast<float>(width - 1),
+						static_cast<float>(y) / static_cast<float>(height - 1),
+						0.25f);
+				}
+			}
+			return output.good();
+		}
+
+		static auto write_constant_test_hdr_equirectangular(
+			const std::filesystem::path& path,
+			const glm::vec3& radiance) -> bool
+		{
+			const int width = 8;
+			const int height = 4;
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			if (!output.is_open())
+			{
+				return false;
+			}
+
+			output << "#?RADIANCE\n";
+			output << "FORMAT=32-bit_rle_rgbe\n";
+			output << "\n";
+			output << "-Y " << height << " +X " << width << "\n";
+
+			auto write_rgbe = [&output](float r, float g, float b) -> void
+			{
+				const float max_component = std::max({ r, g, b, 1e-8f });
+				const int exponent = static_cast<int>(std::floor(std::log2(max_component))) + 1;
+				const float scale = std::ldexp(1.0f, 8 - exponent);
+				const uint8_t rgbe[4] = {
+					static_cast<uint8_t>(std::clamp(r * scale, 0.0f, 255.0f)),
+					static_cast<uint8_t>(std::clamp(g * scale, 0.0f, 255.0f)),
+					static_cast<uint8_t>(std::clamp(b * scale, 0.0f, 255.0f)),
+					static_cast<uint8_t>(exponent + 128)
+				};
+				output.write(reinterpret_cast<const char*>(rgbe), sizeof(rgbe));
+			};
+
+			for (int y = 0; y < height; ++y)
+			{
+				for (int x = 0; x < width; ++x)
+				{
+					write_rgbe(radiance.r, radiance.g, radiance.b);
+				}
+			}
+			return output.good();
+		}
+
+		static auto half_bits_to_float(uint16_t bits) -> float
+		{
+			const bool negative = (bits & 0x8000u) != 0u;
+			const uint16_t exponent = static_cast<uint16_t>((bits >> 10u) & 0x1Fu);
+			const uint16_t mantissa = static_cast<uint16_t>(bits & 0x03FFu);
+
+			float value = 0.0f;
+			if (exponent == 0u)
+			{
+				value = mantissa == 0u ? 0.0f : std::ldexp(static_cast<float>(mantissa), -24);
+			}
+			else if (exponent == 31u)
+			{
+				uint32_t float_bits = 0x7F800000u | (static_cast<uint32_t>(mantissa) << 13u);
+				std::memcpy(&value, &float_bits, sizeof(value));
+			}
+			else
+			{
+				value = std::ldexp(
+					1.0f + static_cast<float>(mantissa) / 1024.0f,
+					static_cast<int>(exponent) - 15);
+			}
+
+			return negative ? -value : value;
+		}
+
+		static auto read_rgba16_rgb_pixel(
+			const TextureSubresourcePayload& subresource,
+			uint32_t x,
+			uint32_t y) -> glm::vec3
+		{
+			const size_t offset = static_cast<size_t>(y) * subresource.row_pitch + static_cast<size_t>(x) * 8u;
+			if (offset + 6u > subresource.pixel_data.size())
+			{
+				return glm::vec3(0.0f);
+			}
+
+			uint16_t half_pixels[3] = {};
+			std::memcpy(half_pixels, subresource.pixel_data.data() + offset, sizeof(half_pixels));
+			return glm::vec3(
+				half_bits_to_float(half_pixels[0]),
+				half_bits_to_float(half_pixels[1]),
+				half_bits_to_float(half_pixels[2]));
+		}
+
+		static auto read_rg16_pixel(
+			const Texture2DPayload& payload,
+			uint32_t x,
+			uint32_t y) -> glm::vec2
+		{
+			const size_t offset = static_cast<size_t>(y) * payload.row_pitch + static_cast<size_t>(x) * 4u;
+			if (offset + 4u > payload.pixel_data.size())
+			{
+				return glm::vec2(0.0f);
+			}
+
+			uint16_t half_pixels[2] = {};
+			std::memcpy(half_pixels, payload.pixel_data.data() + offset, sizeof(half_pixels));
+			return glm::vec2(
+				half_bits_to_float(half_pixels[0]),
+				half_bits_to_float(half_pixels[1]));
+		}
+
+		auto test_environment_map_cpu_baker_generates_required_payloads() -> bool
+		{
+			const std::filesystem::path hdr_path = engine_self_test_dir() / "environment_baker_test.hdr";
+			if (!write_test_hdr_equirectangular(hdr_path))
+			{
+				return report_self_test_failure("EnvironmentMap baker", "failed to write source HDR fixture");
+			}
+
+			EnvironmentMapBuildDesc desc{};
+			desc.source_texture_path = hdr_path.string();
+			desc.radiance_size = 4;
+			desc.irradiance_size = 2;
+			desc.prefilter_size = 4;
+			desc.prefilter_mip_count = 3;
+			desc.brdf_lut_size = 4;
+			desc.sample_count = 64;
+
+			EnvironmentMapCookedData data{};
+			EnvironmentBakeReport report{};
+			if (!EnvironmentMapBaker::bake_to_cooked_data(desc, data, &report))
+			{
+				return report_self_test_failure("EnvironmentMap baker", report.message.empty() ? "bake failed" : report.message.c_str());
+			}
+
+			const bool ok =
+				data.radiance.subresources.size() == 6u &&
+				data.irradiance.subresources.size() == 6u &&
+				data.prefiltered_specular.subresources.size() == 18u &&
+				data.brdf_lut.width == 4u &&
+				!data.brdf_lut.pixel_data.empty();
+			return ok || report_self_test_failure("EnvironmentMap baker", "baker did not generate all required payloads");
+		}
+
+		auto test_environment_map_cpu_baker_uses_irradiance_units() -> bool
+		{
+			const std::filesystem::path hdr_path = engine_self_test_dir() / "environment_baker_constant_test.hdr";
+			const glm::vec3 source_radiance(1.0f, 0.5f, 0.25f);
+			if (!write_constant_test_hdr_equirectangular(hdr_path, source_radiance))
+			{
+				return report_self_test_failure("EnvironmentMap baker irradiance", "failed to write constant source HDR fixture");
+			}
+
+			EnvironmentMapBuildDesc desc{};
+			desc.source_texture_path = hdr_path.string();
+			desc.radiance_size = 2;
+			desc.irradiance_size = 1;
+			desc.prefilter_size = 1;
+			desc.prefilter_mip_count = 1;
+			desc.brdf_lut_size = 2;
+			desc.sample_count = 64;
+
+			EnvironmentMapCookedData data{};
+			EnvironmentBakeReport report{};
+			if (!EnvironmentMapBaker::bake_to_cooked_data(desc, data, &report))
+			{
+				return report_self_test_failure(
+					"EnvironmentMap baker irradiance",
+					report.message.empty() ? "bake failed" : report.message.c_str());
+			}
+			if (data.irradiance.subresources.empty())
+			{
+				return report_self_test_failure("EnvironmentMap baker irradiance", "bake did not produce irradiance payload");
+			}
+
+			const glm::vec3 expected_irradiance = source_radiance * glm::pi<float>();
+			const glm::vec3 irradiance = read_rgba16_rgb_pixel(data.irradiance.subresources.front(), 0u, 0u);
+			const bool ok =
+				std::abs(irradiance.r - expected_irradiance.r) < 0.02f &&
+				std::abs(irradiance.g - expected_irradiance.g) < 0.02f &&
+				std::abs(irradiance.b - expected_irradiance.b) < 0.02f;
+			return ok ||
+				report_self_test_failure(
+					"EnvironmentMap baker irradiance",
+					"constant radiance must bake to hemispherical irradiance in pi-scaled units");
+		}
+
+		auto test_environment_map_cpu_baker_brdf_lut_is_energy_bounded() -> bool
+		{
+			const std::filesystem::path hdr_path = engine_self_test_dir() / "environment_baker_brdf_test.hdr";
+			if (!write_constant_test_hdr_equirectangular(hdr_path, glm::vec3(1.0f)))
+			{
+				return report_self_test_failure("EnvironmentMap baker BRDF LUT", "failed to write constant source HDR fixture");
+			}
+
+			EnvironmentMapBuildDesc desc{};
+			desc.source_texture_path = hdr_path.string();
+			desc.radiance_size = 1;
+			desc.irradiance_size = 1;
+			desc.prefilter_size = 1;
+			desc.prefilter_mip_count = 1;
+			desc.brdf_lut_size = 16;
+			desc.sample_count = 128;
+
+			EnvironmentMapCookedData data{};
+			EnvironmentBakeReport report{};
+			if (!EnvironmentMapBaker::bake_to_cooked_data(desc, data, &report))
+			{
+				return report_self_test_failure(
+					"EnvironmentMap baker BRDF LUT",
+					report.message.empty() ? "bake failed" : report.message.c_str());
+			}
+
+			bool ok = data.brdf_lut.width == 16u && data.brdf_lut.height == 16u;
+			for (uint32_t y = 0; ok && y < data.brdf_lut.height; ++y)
+			{
+				for (uint32_t x = 0; ok && x < data.brdf_lut.width; ++x)
+				{
+					const glm::vec2 brdf = read_rg16_pixel(data.brdf_lut, x, y);
+					ok = brdf.x >= 0.0f &&
+						brdf.y >= 0.0f &&
+						brdf.x <= 1.05f &&
+						brdf.y <= 1.05f &&
+						(brdf.x + brdf.y) <= 1.05f;
+				}
+			}
+			return ok ||
+				report_self_test_failure(
+					"EnvironmentMap baker BRDF LUT",
+					"split-sum BRDF LUT scale/bias must not amplify constant specular environment energy");
+		}
+
+		auto test_ashibl_round_trip_uncompressed_payloads() -> bool
+		{
+			const std::filesystem::path path = engine_self_test_dir() / "round_trip.ashibl";
+
+			EnvironmentMapCookedData data{};
+			data.build_desc.source_texture_path = "assets/env/generated.hdr";
+			data.build_desc.radiance_size = 2;
+			data.build_desc.irradiance_size = 1;
+			data.build_desc.prefilter_size = 2;
+			data.build_desc.prefilter_mip_count = 2;
+			data.build_desc.brdf_lut_size = 2;
+			data.source_content_hash = 0x12345678ull;
+			fill_environment_map_test_pattern(data);
+
+			std::string error{};
+			if (!write_ashibl_file(path, data, &error))
+			{
+				return report_self_test_failure("AshIBL round trip", error.empty() ? "write failed" : error.c_str());
+			}
+
+			EnvironmentMapCookedData loaded{};
+			if (!read_ashibl_file(path, loaded, &error))
+			{
+				return report_self_test_failure("AshIBL round trip", error.empty() ? "read failed" : error.c_str());
+			}
+
+			auto cube_payloads_match = [](const TextureCubePayload& lhs, const TextureCubePayload& rhs) -> bool
+			{
+				if (lhs.format != rhs.format ||
+					lhs.width != rhs.width ||
+					lhs.height != rhs.height ||
+					lhs.mip_count != rhs.mip_count ||
+					lhs.subresources.size() != rhs.subresources.size())
+				{
+					return false;
+				}
+				for (size_t index = 0; index < lhs.subresources.size(); ++index)
+				{
+					const TextureSubresourcePayload& lhs_subresource = lhs.subresources[index];
+					const TextureSubresourcePayload& rhs_subresource = rhs.subresources[index];
+					if (lhs_subresource.mip_level != rhs_subresource.mip_level ||
+						lhs_subresource.array_layer != rhs_subresource.array_layer ||
+						lhs_subresource.width != rhs_subresource.width ||
+						lhs_subresource.height != rhs_subresource.height ||
+						lhs_subresource.row_pitch != rhs_subresource.row_pitch ||
+						lhs_subresource.pixel_data != rhs_subresource.pixel_data)
+					{
+						return false;
+					}
+				}
+				return true;
+			};
+
+			const bool ok =
+				loaded.source_content_hash == data.source_content_hash &&
+				cube_payloads_match(loaded.radiance, data.radiance) &&
+				cube_payloads_match(loaded.irradiance, data.irradiance) &&
+				cube_payloads_match(loaded.prefiltered_specular, data.prefiltered_specular) &&
+				loaded.brdf_lut.format == data.brdf_lut.format &&
+				loaded.brdf_lut.width == data.brdf_lut.width &&
+				loaded.brdf_lut.height == data.brdf_lut.height &&
+				loaded.brdf_lut.row_pitch == data.brdf_lut.row_pitch &&
+				loaded.brdf_lut.pixel_data == data.brdf_lut.pixel_data;
+			return ok || report_self_test_failure("AshIBL round trip", "loaded payloads did not match written data");
+		}
+
+		auto test_environment_asset_key_and_fallback_policy() -> bool
+		{
+			const std::string cooked_key = make_environment_map_asset_key("assets/env/studio.ashibl", "");
+			const std::string runtime_key = make_environment_map_asset_key("", "assets/env/studio.hdr");
+			const std::string fallback_key = make_environment_map_asset_key("", "");
+
+			const bool ok =
+				cooked_key == "ashibl:assets/env/studio.ashibl" &&
+				runtime_key == "source:assets/env/studio.hdr" &&
+				fallback_key == "fallback:";
+			return ok || report_self_test_failure("Environment asset key", "environment asset keys are not stable");
+		}
+
+		auto test_environment_source_cache_path_uses_content_hash() -> bool
+		{
+			const std::filesystem::path hdr_path = engine_self_test_dir() / "environment_cache_hash_test.hdr";
+			if (!write_test_hdr_equirectangular(hdr_path))
+			{
+				return report_self_test_failure("Environment source cache path", "failed to write source HDR fixture");
+			}
+
+			const uint64_t source_hash = hash_environment_source_file(hdr_path);
+			const std::filesystem::path cache_path = make_environment_map_source_cache_path(source_hash);
+			const bool ok =
+				source_hash != 0ull &&
+				cache_path.parent_path().generic_string() == "product/caches/EnvironmentCaches" &&
+				cache_path.filename().generic_string() == std::to_string(source_hash) + ".ashibl";
+			return ok || report_self_test_failure("Environment source cache path", "source cache path must be stable and content-hash based");
+		}
+
+		auto test_environment_runtime_source_bake_does_not_block_request_path() -> bool
+		{
+			std::ifstream source_file("project/src/engine/Function/Render/RenderAssetManager.cpp");
+			std::stringstream source_buffer{};
+			source_buffer << source_file.rdbuf();
+			const std::string source = source_buffer.str();
+
+			const bool ok =
+				source.find("hash_environment_source_file") != std::string::npos &&
+				source.find("make_environment_map_source_cache_path") != std::string::npos &&
+				source.find("EnvironmentMapBaker::bake_to_cooked_data") == std::string::npos;
+			return ok || report_self_test_failure("Environment runtime bake", "runtime source bake must not block the render request path");
+		}
+
+		auto test_environment_shaders_use_compact_root_constants() -> bool
+		{
+			std::ifstream lighting_file("project/src/engine/Shaders/Deferred/DeferredEnvironmentLighting.hlsl");
+			std::ifstream sky_file("project/src/engine/Shaders/Deferred/SkyBackground.hlsl");
+			std::ifstream common_file("project/src/engine/Shaders/Deferred/EnvironmentCommon.hlsli");
+			std::stringstream lighting_buffer{};
+			std::stringstream sky_buffer{};
+			std::stringstream common_buffer{};
+			lighting_buffer << lighting_file.rdbuf();
+			sky_buffer << sky_file.rdbuf();
+			common_buffer << common_file.rdbuf();
+			const std::string lighting_source = lighting_buffer.str();
+			const std::string sky_source = sky_buffer.str();
+			const std::string common_source = common_buffer.str();
+
+			const bool ok =
+				lighting_source.find("#include \"DeferredCommon.hlsli\"") == std::string::npos &&
+				sky_source.find("#include \"DeferredCommon.hlsli\"") == std::string::npos &&
+				common_source.find("float4 AshEnvironmentParams") != std::string::npos &&
+				common_source.find("AshLightWorldToClip") == std::string::npos;
+			return ok || report_self_test_failure("Environment compact root constants", "environment shaders must stay within the DX12 root signature budget");
+		}
+
+		auto test_environment_shader_applies_lambert_to_irradiance() -> bool
+		{
+			std::ifstream lighting_file("project/src/engine/Shaders/Deferred/DeferredEnvironmentLighting.hlsl");
+			std::ifstream common_file("project/src/engine/Shaders/Deferred/EnvironmentCommon.hlsli");
+			std::stringstream lighting_buffer{};
+			std::stringstream common_buffer{};
+			lighting_buffer << lighting_file.rdbuf();
+			common_buffer << common_file.rdbuf();
+			const std::string lighting_source = lighting_buffer.str();
+			const std::string common_source = common_buffer.str();
+
+			const bool ok =
+				common_source.find("AshDiffuseLambert") != std::string::npos &&
+				lighting_source.find("AshDiffuseLambert(surface.base_color)") != std::string::npos &&
+				lighting_source.find("irradiance * surface.base_color") == std::string::npos;
+			return ok ||
+				report_self_test_failure(
+					"Environment Lambert diffuse",
+					"diffuse IBL must apply the Lambert BRDF to baked irradiance");
+		}
+
+		auto test_environment_passes_use_split_intensity_controls() -> bool
+		{
+			std::ifstream lighting_file("project/src/engine/Function/Render/EnvironmentLightingPass.cpp");
+			std::ifstream sky_file("project/src/engine/Function/Render/SkyBackgroundPass.cpp");
+			std::stringstream lighting_buffer{};
+			std::stringstream sky_buffer{};
+			lighting_buffer << lighting_file.rdbuf();
+			sky_buffer << sky_file.rdbuf();
+			const std::string lighting_source = lighting_buffer.str();
+			const std::string sky_source = sky_buffer.str();
+
+			const bool ok =
+				lighting_source.find("environment.intensity * environment.lighting_intensity") != std::string::npos &&
+				sky_source.find("environment.intensity * environment.background_intensity") != std::string::npos;
+			return ok ||
+				report_self_test_failure(
+					"Environment split intensity",
+					"sky background and IBL lighting must use separate EnvironmentComponent intensity multipliers");
+		}
+
+		auto test_texture_cube_upload_contract() -> bool
+		{
+			const bool rg16_ok =
+				render_texture_format_to_rhi(RenderTextureFormat::RG16_SFLOAT) == RHI::ASH_FORMAT_R16G16_SFLOAT &&
+				calculate_render_texture_tight_row_pitch(RenderTextureFormat::RG16_SFLOAT, 4u) == 16u;
+			if (!rg16_ok)
+			{
+				return report_self_test_failure("Texture cube upload contract", "RG16_SFLOAT format mapping or row pitch is invalid");
+			}
+
+			std::array<uint8_t, 8u * 4u * 4u * 6u> pixels{};
+			std::array<TextureSubresourceUploadDesc, 6> faces{};
+			for (uint32_t face = 0; face < 6; ++face)
+			{
+				faces[face].mip_level = 0;
+				faces[face].array_layer = face;
+				faces[face].data = pixels.data() + face * 8u * 4u * 4u;
+				faces[face].row_pitch = 8u * 4u;
+				faces[face].slice_pitch = 8u * 4u * 4u;
+			}
+
+			TextureCubeUploadDesc desc{};
+			desc.width = 4;
+			desc.height = 4;
+			desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			desc.mip_level_count = 1;
+			desc.subresources = faces.data();
+			desc.subresource_count = static_cast<uint32_t>(faces.size());
+
+			std::string error{};
+			const bool valid_ok = validate_texture_cube_upload_desc(desc, &error);
+			desc.subresource_count = 5;
+			const bool invalid_rejected = !validate_texture_cube_upload_desc(desc, &error);
+			return (valid_ok && invalid_rejected) ||
+				report_self_test_failure("Texture cube upload contract", "valid cube desc was rejected or invalid desc was accepted");
+		}
+
 		auto test_dx12_validation_config_respects_build_type() -> bool
 		{
 			const std::filesystem::path test_dir = engine_self_test_dir();
@@ -689,65 +1177,877 @@ namespace AshEngine
 				report_self_test_failure("Render feature config", "VSync should be registered as an Engine.ini render switch while ReverseZ remains camera-local");
 		}
 
-		auto test_ambient_occlusion_config_parses_modes_and_clamps_values() -> bool
+		auto test_engine_ini_excludes_scene_render_config_sections() -> bool
 		{
-			const std::filesystem::path test_dir = engine_self_test_dir();
-			const std::filesystem::path config_path = test_dir / "ambient_occlusion_self_test.ini";
+			std::ifstream engine_ini("product/config/Engine.ini");
+			if (!engine_ini.is_open())
 			{
-				std::ofstream config_file(config_path, std::ios::trunc);
-				config_file <<
-					"[AmbientOcclusion]\n"
-					"Mode=HBAO\n"
-					"Quality=High\n"
-					"DebugView=MotionVector\n"
-					"Radius=-4.0\n"
-					"Intensity=3.5\n"
-					"Power=0.0\n"
-					"HalfResolution=true\n"
-					"Blur=false\n"
-					"Temporal=true\n"
-					"TemporalBlend=0.9\n"
-					"TemporalDepthThreshold=0.02\n"
-					"TemporalNormalThreshold=0.6\n";
+				return report_self_test_failure("Engine.ini config authority", "failed to open product/config/Engine.ini");
+			}
+			const std::string engine_ini_source{
+				std::istreambuf_iterator<char>(engine_ini),
+				std::istreambuf_iterator<char>() };
+			if (engine_ini_source.find("[AmbientOcclusion]") != std::string::npos ||
+				engine_ini_source.find("[DirectionalShadows]") != std::string::npos)
+			{
+				return report_self_test_failure("Engine.ini config authority", "scene render config sections must live in scene JSON, not Engine.ini");
 			}
 
-			const AmbientOcclusionConfig config = load_runtime_ambient_occlusion_config(config_path.string().c_str());
-			const bool parsed =
-				config.mode == AmbientOcclusionMode::HBAO &&
-				config.quality == AmbientOcclusionQuality::High &&
-				config.debug_view == AmbientOcclusionDebugView::MotionVector &&
-				config.radius > 0.0f &&
-				config.intensity == 3.5f &&
-				config.power > 0.0f &&
-				config.half_resolution &&
-				!config.blur &&
-				config.temporal &&
-				config.temporal_blend == 0.9f &&
-				config.temporal_depth_threshold == 0.02f &&
-				config.temporal_normal_threshold == 0.6f;
-			if (!parsed)
+			const char* obsolete_tokens[] = {
+				"load_runtime_ambient_occlusion_config",
+				"set_runtime_ambient_occlusion_config",
+				"get_runtime_ambient_occlusion_config",
+				"load_runtime_directional_shadow_config",
+				"set_runtime_directional_shadow_config",
+				"get_runtime_directional_shadow_config"
+			};
+			const char* files_to_check[] = {
+				"project/src/engine/Function/Application.cpp",
+				"project/src/engine/Function/Render/AmbientOcclusionConfig.h",
+				"project/src/engine/Function/Render/AmbientOcclusionConfig.cpp",
+				"project/src/engine/Function/Render/DirectionalShadowConfig.h",
+				"project/src/engine/Function/Render/DirectionalShadowConfig.cpp"
+			};
+
+			for (const char* file_path : files_to_check)
 			{
-				return report_self_test_failure("AmbientOcclusion config", "valid AO config values were not parsed or clamped correctly");
+				std::ifstream source_file(file_path);
+				if (!source_file.is_open())
+				{
+					return report_self_test_failure("Engine.ini config authority", "failed to open source file for config authority check");
+				}
+				const std::string source{
+					std::istreambuf_iterator<char>(source_file),
+					std::istreambuf_iterator<char>() };
+				for (const char* token : obsolete_tokens)
+				{
+					if (source.find(token) != std::string::npos)
+					{
+						return report_self_test_failure("Engine.ini config authority", "scene-owned AO or directional shadow runtime INI APIs must not be present");
+					}
+				}
 			}
 
-			const std::filesystem::path invalid_config_path = test_dir / "ambient_occlusion_invalid_self_test.ini";
+			return true;
+		}
+
+		auto test_sunlight_shadow_planner_rejects_multiple_sunlights() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 2u;
+
+			VisibleRenderFrame frame{};
+			frame.reverse_z = true;
+			frame.camera_position = { 0.0f, 0.0f, 0.0f };
+			frame.view = glm::lookAtLH(glm::vec3(0.0f, 0.0f, -10.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 1.0f, 0.1f, 1000.0f);
+			frame.view_projection = frame.projection * frame.view;
+
+			for (uint32_t index = 0; index < 2u; ++index)
 			{
-				std::ofstream config_file(invalid_config_path, std::ios::trunc);
-				config_file <<
-					"[AmbientOcclusion]\n"
-					"Mode=NotAMode\n"
-					"Quality=NotAQuality\n"
-					"DebugView=NotAView\n"
-					"Radius=not-a-number\n";
+				VisibleLightData light{};
+				light.entity_id = 100u + index;
+				light.type = LightType::Directional;
+				light.direction_ws = glm::normalize(glm::vec3(-0.3f, -1.0f, -0.2f));
+				light.casts_shadow = true;
+				light.sunlight = true;
+				light.shadow_priority = 255u - index;
+				frame.lights.push_back(light);
 			}
 
-			const AmbientOcclusionConfig invalid_config = load_runtime_ambient_occlusion_config(invalid_config_path.string().c_str());
-			const AmbientOcclusionConfig defaults = make_default_ambient_occlusion_config();
-			return (invalid_config.mode == defaults.mode &&
-				invalid_config.quality == defaults.quality &&
-				invalid_config.debug_view == defaults.debug_view &&
-				invalid_config.radius == defaults.radius) ||
-				report_self_test_failure("AmbientOcclusion config", "invalid AO config values did not fall back to defaults");
+			DirectionalShadowFramePlan plan{};
+			const bool ok_plan = build_sunlight_shadow_frame_plan_for_tests(frame, config, 1920u, 1080u, plan);
+			const bool ok =
+				!ok_plan &&
+				plan.input_directional_shadow_light_count == 2u &&
+				plan.shadowed_lights.empty() &&
+				plan.cascades.empty();
+			return ok || report_self_test_failure("SunLightShadow planner", "planner accepted multiple sunlight candidates");
+		}
+
+		auto test_sunlight_shadow_planner_ignores_ordinary_directional_lights() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 2u;
+			config.dynamic_atlas_size = 2048u;
+			config.near_cascade_resolution = 1024u;
+			config.outer_cascade_resolution = 512u;
+
+			VisibleRenderFrame frame{};
+			frame.reverse_z = false;
+			frame.camera_position = { 0.0f, 2.0f, -8.0f };
+			frame.view = glm::lookAtLH(frame.camera_position, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+			frame.view_projection = frame.projection * frame.view;
+
+			VisibleLightData ordinary{};
+			ordinary.entity_id = 1u;
+			ordinary.type = LightType::Directional;
+			ordinary.direction_ws = glm::normalize(glm::vec3(-0.3f, -1.0f, -0.1f));
+			ordinary.casts_shadow = true;
+			ordinary.sunlight = false;
+			frame.lights.push_back(ordinary);
+
+			VisibleLightData sunlight = ordinary;
+			sunlight.entity_id = 2u;
+			sunlight.sunlight = true;
+			frame.lights.push_back(sunlight);
+
+			DirectionalShadowFramePlan plan{};
+			const bool ok_plan = build_sunlight_shadow_frame_plan_for_tests(frame, config, 1920u, 1080u, plan);
+			const bool ok =
+				ok_plan &&
+				plan.input_directional_shadow_light_count == 1u &&
+				plan.shadowed_lights.size() == 1u &&
+				plan.shadowed_lights[0].frame_light_index == 1u;
+			return ok || report_self_test_failure("SunLightShadow planner", "sunlight planner included ordinary directional lights");
+		}
+
+		auto test_sunlight_shadow_planner_releases_partial_cascade_tiles() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.dynamic_atlas_size = 2048;
+			config.near_cascade_resolution = 2048;
+			config.outer_cascade_resolution = 1024;
+			config.default_cascade_count = 2;
+
+			VisibleRenderFrame frame{};
+			frame.reverse_z = false;
+			frame.camera_position = { 0.0f, 2.0f, -8.0f };
+			frame.view = glm::lookAtLH(frame.camera_position, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+			frame.view_projection = frame.projection * frame.view;
+
+			VisibleLightData oversized_light{};
+			oversized_light.entity_id = 1u;
+			oversized_light.type = LightType::Directional;
+			oversized_light.direction_ws = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+			oversized_light.casts_shadow = true;
+			oversized_light.sunlight = true;
+			oversized_light.shadow_priority = 10u;
+			oversized_light.shadow_cascade_count = 2u;
+			frame.lights.push_back(oversized_light);
+
+			DirectionalShadowFramePlan plan{};
+			const bool ok_plan = build_sunlight_shadow_frame_plan_for_tests(frame, config, 1920u, 1080u, plan);
+			const bool ok =
+				ok_plan &&
+				plan.skipped_shadow_light_count == 1u &&
+				plan.shadowed_lights.empty() &&
+				plan.cascades.empty();
+			return ok ||
+				report_self_test_failure("SunLightShadow planner", "partial cascade allocations from a skipped sunlight were not released");
+		}
+
+		auto test_directional_light_shadow_planner_handles_each_ordinary_light_without_global_budget() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 2u;
+			config.dynamic_atlas_size = 2048u;
+			config.near_cascade_resolution = 1024u;
+			config.outer_cascade_resolution = 512u;
+
+			VisibleRenderFrame frame{};
+			frame.reverse_z = false;
+			frame.camera_position = { 0.0f, 2.0f, -8.0f };
+			frame.view = glm::lookAtLH(frame.camera_position, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+			frame.view_projection = frame.projection * frame.view;
+
+			for (uint32_t index = 0; index < 12u; ++index)
+			{
+				VisibleLightData light{};
+				light.entity_id = 100u + index;
+				light.type = LightType::Directional;
+				light.direction_ws = glm::normalize(glm::vec3(-0.3f, -1.0f, -0.1f));
+				light.casts_shadow = true;
+				light.sunlight = false;
+				light.shadow_priority = index;
+				frame.lights.push_back(light);
+			}
+
+			for (uint32_t light_index = 0; light_index < static_cast<uint32_t>(frame.lights.size()); ++light_index)
+			{
+				DirectionalShadowFramePlan plan{};
+				const bool ok_plan = build_directional_light_shadow_frame_plan_for_tests(
+					frame,
+					light_index,
+					config,
+					1920u,
+					1080u,
+					plan);
+				const bool ok =
+					ok_plan &&
+					plan.input_directional_shadow_light_count == 1u &&
+					plan.skipped_shadow_light_count == 0u &&
+					plan.shadowed_lights.size() == 1u &&
+					plan.shadowed_lights[0].frame_light_index == light_index &&
+					plan.cascades.size() == 2u;
+				if (!ok)
+				{
+					return report_self_test_failure("DirectionalLightShadow planner", "ordinary directional light was skipped by a global shadow budget");
+				}
+			}
+
+			return true;
+		}
+
+		auto test_directional_light_shadow_planner_uses_uncached_cascades() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 3u;
+			config.dynamic_atlas_size = 2048u;
+			config.near_cascade_resolution = 1024u;
+			config.outer_cascade_resolution = 512u;
+
+			VisibleRenderFrame frame{};
+			frame.reverse_z = false;
+			frame.camera_position = { 0.0f, 2.0f, -8.0f };
+			frame.view = glm::lookAtLH(frame.camera_position, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+			frame.view_projection = frame.projection * frame.view;
+
+			VisibleLightData light{};
+			light.entity_id = 42u;
+			light.type = LightType::Directional;
+			light.direction_ws = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+			light.casts_shadow = true;
+			light.sunlight = false;
+			frame.lights.push_back(light);
+
+			DirectionalShadowFramePlan plan{};
+			if (!build_directional_light_shadow_frame_plan_for_tests(frame, 0u, config, 1920u, 1080u, plan) ||
+				plan.cascades.size() != 3u)
+			{
+				return report_self_test_failure("DirectionalLightShadow planner", "ordinary directional light did not create expected cascades");
+			}
+
+			for (const DirectionalShadowCascadePlan& cascade : plan.cascades)
+			{
+				if (cascade.cache_mode != DirectionalShadowCacheMode::NearEveryFrame || cascade.has_static_cache_tile)
+				{
+					return report_self_test_failure("DirectionalLightShadow planner", "ordinary directional light used static-cache cascade state");
+				}
+			}
+
+			return true;
+		}
+
+		auto test_directional_shadow_static_cache_reuses_evicted_tiles() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 4;
+			config.near_cascade_resolution = 2048;
+			config.outer_cascade_resolution = 1024;
+			config.dynamic_atlas_size = 4096;
+			config.static_cache_atlas_size = 4096;
+			config.static_cache_budget_mb = 64;
+
+			SunLightShadowPass runtime_pass{};
+			for (uint32_t index = 0; index < 6u; ++index)
+			{
+				VisibleRenderFrame frame{};
+				frame.static_scene_revision = 1u;
+				frame.reverse_z = false;
+				frame.camera_position = { 0.0f, 2.0f, -8.0f };
+				frame.view = glm::lookAtLH(frame.camera_position, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+				frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+				frame.view_projection = frame.projection * frame.view;
+
+				VisibleLightData light{};
+				light.entity_id = 1000u + index;
+				light.type = LightType::Directional;
+				light.direction_ws = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+				light.casts_shadow = true;
+				light.sunlight = true;
+				frame.lights.push_back(light);
+
+				DirectionalShadowFramePlan plan{};
+				if (!SunLightShadowDetail::build_sunlight_shadow_frame_plan_internal(
+					frame,
+					config,
+					1920u,
+					1080u,
+					&runtime_pass,
+					plan))
+				{
+					return report_self_test_failure("DirectionalShadow static cache", "runtime planner failed while filling cache");
+				}
+				if (plan.shadowed_lights.size() != 1u || plan.cascades.size() != 4u)
+				{
+					return report_self_test_failure("DirectionalShadow static cache", "evicted static cache tiles were not reused");
+				}
+				for (uint32_t cascade_index = 1u; cascade_index < 4u; ++cascade_index)
+				{
+					if (!plan.cascades[cascade_index].has_static_cache_tile ||
+						plan.cascades[cascade_index].cache_mode == DirectionalShadowCacheMode::Uncached)
+					{
+						return report_self_test_failure("DirectionalShadow static cache", "outer cascades fell back to uncached after eviction");
+					}
+				}
+			}
+
+			return true;
+		}
+
+		auto test_directional_shadow_static_cache_invalidates_when_cascade_matrix_changes() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 4;
+			config.default_shadow_distance = 160.0f;
+			config.near_shadow_distance = 16.0f;
+			config.near_cascade_resolution = 2048;
+			config.outer_cascade_resolution = 1024;
+			config.dynamic_atlas_size = 4096;
+			config.static_cache_atlas_size = 4096;
+			config.static_cache_budget_mb = 256;
+
+			auto make_frame = [](const glm::vec3& camera_position, const glm::vec3& camera_target) -> VisibleRenderFrame
+			{
+				VisibleRenderFrame frame{};
+				frame.static_scene_revision = 7u;
+				frame.reverse_z = false;
+				frame.camera_position = camera_position;
+				frame.view = glm::lookAtLH(camera_position, camera_target, glm::vec3(0.0f, 1.0f, 0.0f));
+				frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+				frame.view_projection = frame.projection * frame.view;
+
+				VisibleLightData light{};
+				light.entity_id = 42u;
+				light.type = LightType::Directional;
+				light.direction_ws = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+				light.casts_shadow = true;
+				light.sunlight = true;
+				frame.lights.push_back(light);
+				return frame;
+			};
+
+			SunLightShadowPass runtime_pass{};
+			const VisibleRenderFrame first_frame = make_frame(
+				glm::vec3(0.0f, 2.0f, -8.0f),
+				glm::vec3(0.0f, 2.0f, 0.0f));
+			DirectionalShadowFramePlan first_plan{};
+			if (!SunLightShadowDetail::build_sunlight_shadow_frame_plan_internal(
+				first_frame,
+				config,
+				1920u,
+				1080u,
+				&runtime_pass,
+				first_plan) ||
+				first_plan.cascades.size() != 4u)
+			{
+				return report_self_test_failure("DirectionalShadow static cache", "failed to seed static cache for matrix invalidation test");
+			}
+
+			DirectionalShadowFramePlan same_view_plan{};
+			if (!SunLightShadowDetail::build_sunlight_shadow_frame_plan_internal(
+				first_frame,
+				config,
+				1920u,
+				1080u,
+				&runtime_pass,
+				same_view_plan) ||
+				same_view_plan.cascades.size() != 4u)
+			{
+				return report_self_test_failure("DirectionalShadow static cache", "failed to rebuild same-view static cache plan");
+			}
+
+			bool same_view_cached = true;
+			for (uint32_t cascade_index = 1u; cascade_index < 4u; ++cascade_index)
+			{
+				same_view_cached = same_view_cached &&
+					same_view_plan.cascades[cascade_index].cache_mode == DirectionalShadowCacheMode::StaticCached;
+			}
+			if (!same_view_cached)
+			{
+				return report_self_test_failure("DirectionalShadow static cache", "unchanged cascade matrices did not reuse static cache");
+			}
+
+			const VisibleRenderFrame rotated_frame = make_frame(
+				glm::vec3(0.0f, 2.0f, -8.0f),
+				glm::vec3(8.0f, 2.0f, 0.0f));
+			DirectionalShadowFramePlan rotated_plan{};
+			if (!SunLightShadowDetail::build_sunlight_shadow_frame_plan_internal(
+				rotated_frame,
+				config,
+				1920u,
+				1080u,
+				&runtime_pass,
+				rotated_plan) ||
+				rotated_plan.cascades.size() != 4u)
+			{
+				return report_self_test_failure("DirectionalShadow static cache", "failed to rebuild rotated-view static cache plan");
+			}
+
+			bool rotated_view_refreshed = true;
+			for (uint32_t cascade_index = 1u; cascade_index < 4u; ++cascade_index)
+			{
+				rotated_view_refreshed = rotated_view_refreshed &&
+					rotated_plan.cascades[cascade_index].cache_mode == DirectionalShadowCacheMode::StaticRefresh;
+			}
+			return rotated_view_refreshed ||
+				report_self_test_failure("DirectionalShadow static cache", "camera-dependent cascade matrices reused stale static cache");
+		}
+
+		auto test_directional_shadow_planner_builds_monotonic_cascades() -> bool
+		{
+			DirectionalShadowConfig config = make_default_directional_shadow_config();
+			config.default_cascade_count = 4;
+			config.default_shadow_distance = 160.0f;
+			config.near_shadow_distance = 12.0f;
+			config.split_lambda = 0.65f;
+
+			VisibleRenderFrame frame{};
+			frame.reverse_z = false;
+			frame.camera_position = { 0.0f, 2.0f, -8.0f };
+			frame.view = glm::lookAtLH(frame.camera_position, glm::vec3(0.0f, 2.0f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+			frame.view_projection = frame.projection * frame.view;
+			VisibleLightData light{};
+			light.entity_id = 1;
+			light.type = LightType::Directional;
+			light.direction_ws = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+			light.casts_shadow = true;
+			light.sunlight = true;
+			frame.lights.push_back(light);
+
+			DirectionalShadowFramePlan plan{};
+			if (!build_sunlight_shadow_frame_plan_for_tests(frame, config, 1920u, 1080u, plan) || plan.cascades.size() != 4u)
+			{
+				return report_self_test_failure("DirectionalShadow planner", "planner did not create four cascades");
+			}
+
+			bool monotonic = plan.cascades[0].cache_mode == DirectionalShadowCacheMode::NearEveryFrame &&
+				std::abs(plan.cascades[0].split_far - config.near_shadow_distance) <= 0.001f;
+			for (size_t index = 1; index < plan.cascades.size(); ++index)
+			{
+				monotonic = monotonic &&
+					plan.cascades[index - 1].split_near < plan.cascades[index - 1].split_far &&
+					plan.cascades[index - 1].split_far <= plan.cascades[index].split_near + 0.001f &&
+					plan.cascades[index].split_near < plan.cascades[index].split_far;
+			}
+			return monotonic ||
+				report_self_test_failure("DirectionalShadow planner", "cascade splits were not monotonic");
+		}
+
+		auto test_visible_static_mesh_draws_carry_shadow_mobility() -> bool
+		{
+			VisibleStaticMeshDraw static_draw{};
+			static_draw.entity_id = 1;
+			static_draw.mobility = SceneMobility::Static;
+			VisibleStaticMeshDraw movable_draw{};
+			movable_draw.entity_id = 2;
+			movable_draw.mobility = SceneMobility::Movable;
+
+			VisibleRenderFrame frame{};
+			frame.shadow_caster_static_mesh_draws.push_back(static_draw);
+			frame.shadow_caster_static_mesh_draws.push_back(movable_draw);
+
+			const uint32_t static_count = count_shadow_casters_for_tests(frame, ShadowCasterMobilityFilter::StaticOnly);
+			const uint32_t dynamic_count = count_shadow_casters_for_tests(frame, ShadowCasterMobilityFilter::DynamicOnly);
+			const uint32_t all_count = count_shadow_casters_for_tests(frame, ShadowCasterMobilityFilter::All);
+			const bool ok = static_count == 1u && dynamic_count == 1u && all_count == 2u;
+			return ok || report_self_test_failure("DirectionalShadow caster filter", "shadow caster mobility filter did not classify draws");
+		}
+
+		auto test_directional_shadow_mask_normal_bias_offsets_along_normal() -> bool
+		{
+			std::ifstream shader_file("project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
+			if (!shader_file.is_open())
+			{
+				return report_self_test_failure("DirectionalShadow mask shader", "failed to open DirectionalShadowMask.hlsl");
+			}
+			const std::string shader_source{
+				std::istreambuf_iterator<char>(shader_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				shader_source.find("return position_ws + normal_ws * normal_bias;") != std::string::npos &&
+				shader_source.find("normal_bias * light_dir_to_light") == std::string::npos;
+			return ok || report_self_test_failure("DirectionalShadow mask shader", "normal bias was not applied along the surface normal");
+		}
+
+		auto test_directional_shadow_cascade_buffer_uses_two_dimensional_texel_size() -> bool
+		{
+			std::ifstream mask_shader_file("project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
+			std::ifstream sunlight_pass_file("project/src/engine/Function/Render/SunLightShadowPass.cpp");
+			std::ifstream directional_pass_file("project/src/engine/Function/Render/DirectionalLightShadowPass.cpp");
+			if (!mask_shader_file.is_open() || !sunlight_pass_file.is_open() || !directional_pass_file.is_open())
+			{
+				return report_self_test_failure(
+					"DirectionalShadow cascade buffer layout",
+					"failed to open shadow mask or directional shadow pass source");
+			}
+
+			const std::string mask_shader_source{
+				std::istreambuf_iterator<char>(mask_shader_file),
+				std::istreambuf_iterator<char>() };
+			const std::string sunlight_pass_source{
+				std::istreambuf_iterator<char>(sunlight_pass_file),
+				std::istreambuf_iterator<char>() };
+			const std::string directional_pass_source{
+				std::istreambuf_iterator<char>(directional_pass_file),
+				std::istreambuf_iterator<char>() };
+			const bool shader_consumes_xy =
+				mask_shader_source.find("cascade.texel_size_flags.xy") != std::string::npos;
+			const bool sunlight_uploads_xy =
+				sunlight_pass_source.find("shader_data.texel_size_flags = glm::vec4(\n\t\t\t\ttexel_size,\n\t\t\t\ttexel_size,") != std::string::npos;
+			const bool directional_uploads_xy =
+				directional_pass_source.find("shader_data.texel_size_flags = {\n\t\t\t\ttexel_size,\n\t\t\t\ttexel_size,") != std::string::npos;
+			const bool ok = shader_consumes_xy && sunlight_uploads_xy && directional_uploads_xy;
+			return ok || report_self_test_failure(
+				"DirectionalShadow cascade buffer layout",
+				"cascade texel_size_flags.xy must both contain atlas texel size for PCF sampling");
+		}
+
+		auto test_directional_shadow_static_cache_copy_uses_atlas_uv_scale() -> bool
+		{
+			DirectionalShadowAtlasTile target_tile{};
+			target_tile.x = 2048u;
+			target_tile.y = 0u;
+			target_tile.width = 1024u;
+			target_tile.height = 1024u;
+			target_tile.resolution = 1024u;
+
+			DirectionalShadowAtlasTile source_tile{};
+			source_tile.x = 1024u;
+			source_tile.y = 2048u;
+			source_tile.width = 1024u;
+			source_tile.height = 1024u;
+			source_tile.resolution = 1024u;
+
+			const glm::vec4 scale_bias =
+				make_directional_shadow_static_cache_copy_scale_bias_for_tests(target_tile, source_tile, 4096.0f);
+			const bool ok =
+				std::abs(scale_bias.x - 0.25f) <= 0.0001f &&
+				std::abs(scale_bias.y - 0.25f) <= 0.0001f &&
+				std::abs(scale_bias.z - 0.25f) <= 0.0001f &&
+				std::abs(scale_bias.w - 0.5f) <= 0.0001f;
+			return ok || report_self_test_failure(
+				"DirectionalShadow static cache copy",
+				"static cache copy did not map tile-local UVs into atlas-normalized source UVs");
+		}
+
+		auto test_directional_shadow_static_cache_copy_declares_graph_read() -> bool
+		{
+			std::ifstream pass_file("project/src/engine/Function/Render/SunLightShadowPass.cpp");
+			if (!pass_file.is_open())
+			{
+				return report_self_test_failure("DirectionalShadow static cache graph", "failed to open SunLightShadowPass.cpp");
+			}
+
+			const std::string pass_source{
+				std::istreambuf_iterator<char>(pass_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				pass_source.find("needs_static_cache_read") != std::string::npos &&
+				pass_source.find("pass.read_texture(static_cache_atlas, RenderGraphAccess::GraphicsSRV)") != std::string::npos &&
+				pass_source.find("m_depth_copy_program->set_texture(\"DirectionalShadowStaticCache\", static_cache)") != std::string::npos;
+			return ok || report_self_test_failure(
+				"DirectionalShadow static cache graph",
+				"static-cache copy pass binds the cache texture without declaring the RenderGraph SRV read");
+		}
+
+		auto test_directional_shadow_graph_adds_depth_before_lighting() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("DirectionalShadowGraphSelfTest");
+			RenderTargetDesc output_desc{};
+			output_desc.width = 128;
+			output_desc.height = 128;
+			output_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(output_desc, "SceneOutput");
+
+			RenderGraphTextureDesc depth_desc{};
+			depth_desc.width = 128;
+			depth_desc.height = 128;
+			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			depth_desc.shader_resource = true;
+			RenderGraphTextureRef dynamic_atlas = graph.create_texture(depth_desc, "DirectionalShadowDynamicAtlas");
+
+			DirectionalShadowFramePlan plan{};
+			DirectionalShadowCascadePlan cascade{};
+			cascade.cache_mode = DirectionalShadowCacheMode::NearEveryFrame;
+			cascade.dynamic_tile = { 0u, 0u, 1024u, 1024u, 1024u };
+			plan.cascades.push_back(cascade);
+
+			add_directional_shadow_depth_passes_for_tests(graph, dynamic_atlas, plan);
+			graph.add_raster_pass(
+				"ShadowConsumer",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(dynamic_atlas, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, output, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			RenderGraphCompileResult result{};
+			const bool ok =
+				graph.compile_for_tests(result) &&
+				result.live_pass_indices.size() >= 2u &&
+				result.pass_barriers.back().transitions.size() >= 1u;
+			return ok || report_self_test_failure("DirectionalShadow graph", "shadow depth producer was not preserved before consumer");
+		}
+
+		auto test_directional_shadow_deferred_graph_contract() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("DirectionalShadowDeferredGraphSelfTest");
+
+			RenderTargetDesc output_desc{};
+			output_desc.width = 64;
+			output_desc.height = 64;
+			output_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			RenderGraphTextureRef output = graph.register_external_texture_desc_for_tests(output_desc, "SceneOutput");
+
+			SceneDeferredGraphResources resources{};
+			resources.gbuffer_targets.reserve(5u);
+			for (uint32_t index = 0; index < 5u; ++index)
+			{
+				RenderGraphTextureDesc gbuffer_desc{};
+				gbuffer_desc.width = 64;
+				gbuffer_desc.height = 64;
+				gbuffer_desc.format = RenderTextureFormat::RGBA8_UNORM;
+				gbuffer_desc.shader_resource = true;
+				resources.gbuffer_targets.push_back(graph.create_texture(gbuffer_desc, "SceneGBuffer"));
+			}
+
+			RenderGraphTextureDesc depth_desc{};
+			depth_desc.width = 64;
+			depth_desc.height = 64;
+			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			depth_desc.shader_resource = true;
+			resources.depth = graph.create_texture(depth_desc, "SceneDeferredDepth");
+
+			RenderGraphTextureDesc ambient_occlusion_desc{};
+			ambient_occlusion_desc.width = 64;
+			ambient_occlusion_desc.height = 64;
+			ambient_occlusion_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			ambient_occlusion_desc.shader_resource = true;
+			resources.ambient_occlusion = graph.create_texture(ambient_occlusion_desc, "SceneAmbientOcclusion");
+
+			RenderGraphTextureDesc lighting_desc{};
+			lighting_desc.width = 64;
+			lighting_desc.height = 64;
+			lighting_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			lighting_desc.shader_resource = true;
+			resources.lighting_diffuse = graph.create_texture(lighting_desc, "SceneDeferredLightingDiffuse");
+			resources.lighting_specular = graph.create_texture(lighting_desc, "SceneDeferredLightingSpecular");
+			resources.scene_hdr_linear = graph.create_texture(lighting_desc, "SceneDeferredSceneHDRLinear");
+
+			RenderGraphTextureDesc shadow_depth_desc{};
+			shadow_depth_desc.width = 256;
+			shadow_depth_desc.height = 256;
+			shadow_depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			shadow_depth_desc.shader_resource = true;
+			RenderGraphTextureRef transient_atlas =
+				graph.create_texture(shadow_depth_desc, "DirectionalShadowDynamicAtlas");
+
+			RenderGraphTextureDesc shadow_mask_desc{};
+			shadow_mask_desc.width = 64;
+			shadow_mask_desc.height = 64;
+			shadow_mask_desc.format = RenderTextureFormat::RGBA8_UNORM;
+			shadow_mask_desc.shader_resource = true;
+			RenderGraphTextureRef first_shadow_mask =
+				graph.create_texture(shadow_mask_desc, "SceneDirectionalShadowMask");
+			RenderGraphTextureRef second_shadow_mask =
+				graph.create_texture(shadow_mask_desc, "SceneDirectionalShadowMask");
+
+			graph.add_raster_pass(
+				"SceneGBufferPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (uint8_t index = 0; index < static_cast<uint8_t>(resources.gbuffer_targets.size()); ++index)
+					{
+						pass.write_color(index, resources.gbuffer_targets[index], RenderLoadAction::Clear, {});
+					}
+					pass.write_depth(resources.depth, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneAmbientOcclusionPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.gbuffer_targets[4], RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, resources.ambient_occlusion, RenderLoadAction::Clear, { 1.0f, 1.0f, 1.0f, 1.0f });
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDirectionalShadowDepthPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.write_depth(transient_atlas, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredLightingBasePass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
+					{
+						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.read_depth(resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					pass.read_texture(resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, resources.lighting_diffuse, RenderLoadAction::Clear, {});
+					pass.write_color(1, resources.lighting_specular, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDirectionalShadowMaskPass_0",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(transient_atlas, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(resources.gbuffer_targets[4], RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, first_shadow_mask, RenderLoadAction::Clear, { 1.0f, 1.0f, 1.0f, 1.0f });
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredDirectionalLightingShadowedPass_0",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
+					{
+						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.read_depth(resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					pass.read_texture(resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(first_shadow_mask, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, resources.lighting_diffuse, RenderLoadAction::Load, {});
+					pass.write_color(1, resources.lighting_specular, RenderLoadAction::Load, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDirectionalLightShadowMaskPass_1",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(transient_atlas, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(resources.gbuffer_targets[4], RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, second_shadow_mask, RenderLoadAction::Clear, { 1.0f, 1.0f, 1.0f, 1.0f });
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredDirectionalLightingShadowedPass_1",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
+					{
+						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.read_depth(resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					pass.read_texture(resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(second_shadow_mask, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, resources.lighting_diffuse, RenderLoadAction::Load, {});
+					pass.write_color(1, resources.lighting_specular, RenderLoadAction::Load, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredCompositePass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.lighting_diffuse, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(resources.lighting_specular, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, resources.scene_hdr_linear, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
+				"SceneDeferredToneMapPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, output, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			RenderGraphCompileResult result{};
+			const bool compiled = graph.compile_for_tests(result);
+			const bool ok =
+				compiled &&
+				result.live_pass_indices.size() == 10u &&
+				result.texture_lifetimes[first_shadow_mask.index].first_pass == 4u &&
+				result.texture_lifetimes[first_shadow_mask.index].last_pass == 5u &&
+				result.texture_lifetimes[second_shadow_mask.index].first_pass == 6u &&
+				result.texture_lifetimes[second_shadow_mask.index].last_pass == 7u &&
+				result.texture_lifetimes[resources.lighting_diffuse.index].first_pass == 3u &&
+				result.texture_lifetimes[resources.lighting_diffuse.index].last_pass == 8u;
+			return ok ||
+				report_self_test_failure(
+					"DirectionalShadow deferred graph",
+					"shadow mask pass was not preserved between base and shadowed lighting");
+		}
+
+		auto test_deferred_lighting_pass_exposes_explicit_light_submission_api() -> bool
+		{
+			(void)&DeferredLightingPass::add_base_pass;
+			(void)&DeferredLightingPass::add_directional_light_pass;
+			(void)&DeferredLightingPass::add_point_light_pass;
+			(void)&DeferredLightingPass::add_spot_light_pass;
+			return true;
+		}
+
+		auto test_scene_deferred_graph_resources_split_directional_shadow_refs() -> bool
+		{
+			SceneDeferredGraphResources resources{};
+			(void)resources.sunlight_shadow_dynamic_atlas;
+			(void)resources.sunlight_shadow_static_cache;
+			(void)resources.sunlight_shadow_mask;
+			(void)resources.sunlight_shadow_cascade_debug;
+			(void)resources.directional_light_shadow_transient_atlas;
+			(void)resources.directional_light_shadow_transient_mask;
+			return true;
 		}
 
 		auto test_ambient_occlusion_temporal_pipeline_contract() -> bool
@@ -813,10 +2113,9 @@ namespace AshEngine
 				config_header_source.find("temporal_normal_threshold") != std::string::npos &&
 				config_header_source.find("TemporalAO") != std::string::npos &&
 				config_header_source.find("HistoryWeight") != std::string::npos &&
-				config_source.find("\"Temporal\"") != std::string::npos &&
-				config_source.find("\"TemporalBlend\"") != std::string::npos &&
-				config_source.find("\"TemporalDepthThreshold\"") != std::string::npos &&
-				config_source.find("\"TemporalNormalThreshold\"") != std::string::npos &&
+				config_source.find("temporal_blend") != std::string::npos &&
+				config_source.find("temporal_depth_threshold") != std::string::npos &&
+				config_source.find("temporal_normal_threshold") != std::string::npos &&
 				pass_header_source.find("m_temporal_program") != std::string::npos &&
 				pass_header_source.find("m_temporal_history_ao") != std::string::npos &&
 				pass_header_source.find("m_temporal_history_meta") != std::string::npos &&
@@ -1385,6 +2684,29 @@ namespace AshEngine
 					"motion vector history or instance-buffer ring still depends on the logic-side VisibleRenderFrame frame_index");
 		}
 
+		auto test_scene_renderer_temporal_history_is_gbuffer_only() -> bool
+		{
+			std::ifstream renderer_file("project/src/engine/Function/Render/SceneRenderer.cpp");
+			if (!renderer_file.is_open())
+			{
+				return report_self_test_failure(
+					"SceneRenderer temporal history",
+					"failed to open SceneRenderer.cpp");
+			}
+
+			const std::string renderer_source{
+				std::istreambuf_iterator<char>(renderer_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				renderer_source.find("should_use_temporal_history_for_pass(PassFamily pass_family)") != std::string::npos &&
+				renderer_source.find("pass_family == PassFamily::GBuffer") != std::string::npos &&
+				renderer_source.find("if (should_use_temporal_history_for_pass(pass_family))") != std::string::npos;
+			return ok ||
+				report_self_test_failure(
+					"SceneRenderer temporal history",
+					"non-GBuffer passes can still inherit camera temporal history in their instance buffers");
+		}
+
 		auto test_renderer_frame_stats_cover_presented_frame() -> bool
 		{
 			std::ifstream renderer_source_file("project/src/engine/Function/Render/Renderer.cpp");
@@ -1930,7 +3252,7 @@ namespace AshEngine
 				});
 
 			graph.add_raster_pass(
-				"SceneDeferredLightingAccumPass",
+				"SceneDeferredLightingBasePass",
 				RenderGraphPassFlags::None,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
@@ -1949,6 +3271,27 @@ namespace AshEngine
 				});
 
 			graph.add_raster_pass(
+				"SceneDeferredEnvironmentLightingPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
+					{
+						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.read_texture(resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+					pass.read_depth(resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					pass.write_color(0, resources.lighting_diffuse, RenderLoadAction::Load, {});
+					pass.write_color(1, resources.lighting_specular, RenderLoadAction::Load, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			RenderGraphTextureRef scene_hdr_with_sky = graph.create_texture(lighting_desc, "SceneDeferredSceneHDRWithSky");
+
+			graph.add_raster_pass(
 				"SceneDeferredCompositePass",
 				RenderGraphPassFlags::None,
 				[&](RenderGraphRasterPassBuilder& pass)
@@ -1963,11 +3306,25 @@ namespace AshEngine
 				});
 
 			graph.add_raster_pass(
+				"SceneSkyBackgroundPass",
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(resources.scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, scene_hdr_with_sky, RenderLoadAction::Clear, {});
+				},
+				[](RenderGraphRasterContext&)
+				{
+					return true;
+				});
+
+			graph.add_raster_pass(
 				"SceneDeferredToneMapPass",
 				RenderGraphPassFlags::None,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
-					pass.read_texture(resources.scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(scene_hdr_with_sky, RenderGraphAccess::GraphicsSRV);
 					pass.write_color(0, output, RenderLoadAction::Clear, {});
 				},
 				[](RenderGraphRasterContext&)
@@ -1984,24 +3341,23 @@ namespace AshEngine
 			ok = ok && resources.lighting_diffuse;
 			ok = ok && resources.lighting_specular;
 			ok = ok && resources.scene_hdr_linear;
-			ok = ok && result.live_pass_indices.size() == 5u;
+			ok = ok && scene_hdr_with_sky;
+			ok = ok && result.live_pass_indices.size() == 7u;
 			ok = ok && result.live_pass_indices[0] == 0u;
 			ok = ok && result.live_pass_indices[1] == 1u;
 			ok = ok && result.live_pass_indices[2] == 2u;
 			ok = ok && result.live_pass_indices[3] == 3u;
 			ok = ok && result.live_pass_indices[4] == 4u;
-			ok = ok && result.texture_lifetimes[resources.ambient_occlusion.index].first_pass == 1u;
-			ok = ok && result.texture_lifetimes[resources.ambient_occlusion.index].last_pass == 2u;
+			ok = ok && result.live_pass_indices[5] == 5u;
+			ok = ok && result.live_pass_indices[6] == 6u;
 			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].first_pass == 2u;
-			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].last_pass == 3u;
+			ok = ok && result.texture_lifetimes[resources.lighting_diffuse.index].last_pass == 4u;
 			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].first_pass == 2u;
-			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].last_pass == 3u;
-			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].first_pass == 3u;
-			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].last_pass == 4u;
-			ok = ok && result.pass_barriers[1].transitions.size() == 3u;
-			ok = ok && result.pass_barriers[2].transitions.size() >= 9u;
-			ok = ok && result.pass_barriers[3].transitions.size() == 3u;
-			ok = ok && result.pass_barriers[4].transitions.size() == 2u;
+			ok = ok && result.texture_lifetimes[resources.lighting_specular.index].last_pass == 4u;
+			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].first_pass == 4u;
+			ok = ok && result.texture_lifetimes[resources.scene_hdr_linear.index].last_pass == 5u;
+			ok = ok && result.texture_lifetimes[scene_hdr_with_sky.index].first_pass == 5u;
+			ok = ok && result.texture_lifetimes[scene_hdr_with_sky.index].last_pass == 6u;
 			return ok || report_self_test_failure("Scene deferred render graph resources", "deferred graph chain was not preserved through compilation");
 		}
 
@@ -2029,6 +3385,12 @@ namespace AshEngine
 			directional_light.type = LightType::Directional;
 			directional_light.color = { 0.25f, 0.5f, 1.0f };
 			directional_light.intensity = 2.0f;
+			directional_light.casts_shadow = true;
+			directional_light.sunlight = true;
+			directional_light.shadow_priority = 42u;
+			directional_light.shadow_distance = 150.0f;
+			directional_light.shadow_cascade_count = 3u;
+			directional_light.near_shadow_distance = 18.0f;
 			directional.add_light_component(directional_light);
 
 			Entity point = scene.create_entity("PointLight");
@@ -2039,6 +3401,7 @@ namespace AshEngine
 			point_light.type = LightType::Point;
 			point_light.range = 7.0f;
 			point_light.intensity = 3.0f;
+			point_light.sunlight = true;
 			point.add_light_component(point_light);
 
 			RenderScene render_scene{};
@@ -2054,13 +3417,288 @@ namespace AshEngine
 			}
 			const bool directional_ok =
 				frame.lights[0].type == LightType::Directional &&
-				glm::length(frame.lights[0].direction_ws) > 0.9f;
+				glm::length(frame.lights[0].direction_ws) > 0.9f &&
+				frame.lights[0].casts_shadow &&
+				frame.lights[0].sunlight &&
+				frame.lights[0].shadow_priority == 42u &&
+				frame.lights[0].shadow_distance == 150.0f &&
+				frame.lights[0].shadow_cascade_count == 3u &&
+				frame.lights[0].near_shadow_distance == 18.0f;
 			const bool point_ok =
 				frame.lights[1].type == LightType::Point &&
 				frame.lights[1].position_ws == glm::vec3(1.0f, 2.0f, 3.0f) &&
+				!frame.lights[1].sunlight &&
 				frame.lights[1].range == 7.0f;
 			return (directional_ok && point_ok) ||
 				report_self_test_failure("RenderScene light snapshot", "light data was not extracted with stable transform data");
+		}
+
+		auto test_scene_light_sunlight_json_round_trip() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir() / "scene_sunlight";
+			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path scene_path = test_dir / "sunlight.scene.json";
+
+			{
+				std::ofstream file(scene_path, std::ios::trunc);
+				file <<
+					"{\n"
+					"  \"version\": 4,\n"
+					"  \"name\": \"SunlightRoundTrip\",\n"
+					"  \"next_entity_id\": 3,\n"
+					"  \"entities\": [\n"
+					"    {\n"
+					"      \"id\": 1,\n"
+					"      \"name\": \"Sun\",\n"
+					"      \"transform\": {},\n"
+					"      \"light\": {\n"
+					"        \"type\": 0,\n"
+					"        \"sunlight\": true,\n"
+					"        \"casts_shadow\": true\n"
+					"      }\n"
+					"    },\n"
+					"    {\n"
+					"      \"id\": 2,\n"
+					"      \"name\": \"Point\",\n"
+					"      \"transform\": {},\n"
+					"      \"light\": {\n"
+					"        \"type\": 1,\n"
+					"        \"sunlight\": true,\n"
+					"        \"range\": 8.0\n"
+					"      }\n"
+					"    }\n"
+					"  ]\n"
+					"}\n";
+			}
+
+			std::string error{};
+			Scene scene = Scene::load_from_file(scene_path, &error);
+			if (!scene.is_valid())
+			{
+				return report_self_test_failure("Scene sunlight JSON", error.empty() ? "sunlight scene failed to load" : error.c_str());
+			}
+
+			Entity sun = scene.find_entity(1u);
+			Entity point = scene.find_entity(2u);
+			if (!sun.is_valid() || !point.is_valid() || !sun.has_light_component() || !point.has_light_component())
+			{
+				return report_self_test_failure("Scene sunlight JSON", "sunlight test entities were not loaded");
+			}
+
+			const LightComponent sun_light = sun.get_light_component();
+			const LightComponent point_light = point.get_light_component();
+			if (!sun_light.sunlight || point_light.sunlight)
+			{
+				return report_self_test_failure("Scene sunlight JSON", "directional sunlight was not preserved or point sunlight was not sanitized");
+			}
+
+			const std::filesystem::path saved_path = test_dir / "sunlight.saved.scene.json";
+			if (!scene.save_to_file(saved_path, &error))
+			{
+				return report_self_test_failure("Scene sunlight JSON", error.empty() ? "sunlight scene failed to save" : error.c_str());
+			}
+
+			Scene round_trip = Scene::load_from_file(saved_path, &error);
+			if (!round_trip.is_valid())
+			{
+				return report_self_test_failure("Scene sunlight JSON", error.empty() ? "saved sunlight scene failed to load" : error.c_str());
+			}
+
+			const bool ok =
+				round_trip.find_entity(1u).get_light_component().sunlight &&
+				!round_trip.find_entity(2u).get_light_component().sunlight;
+			return ok || report_self_test_failure("Scene sunlight JSON", "sunlight did not survive save/load round trip");
+		}
+
+		auto test_scene_rejects_multiple_directional_sunlights() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir() / "scene_sunlight";
+			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path scene_path = test_dir / "two_suns.scene.json";
+
+			{
+				std::ofstream file(scene_path, std::ios::trunc);
+				file <<
+					"{\n"
+					"  \"version\": 4,\n"
+					"  \"name\": \"TwoSuns\",\n"
+					"  \"next_entity_id\": 3,\n"
+					"  \"entities\": [\n"
+					"    { \"id\": 1, \"name\": \"SunA\", \"transform\": {}, \"light\": { \"type\": 0, \"sunlight\": true } },\n"
+					"    { \"id\": 2, \"name\": \"SunB\", \"transform\": {}, \"light\": { \"type\": 0, \"sunlight\": true } }\n"
+					"  ]\n"
+					"}\n";
+			}
+
+			std::string error{};
+			Scene scene = Scene::load_from_file(scene_path, &error);
+			const bool ok =
+				!scene.is_valid() &&
+				error.find("sunlight") != std::string::npos;
+			return ok || report_self_test_failure("Scene sunlight validation", "scene accepted two directional sunlight components");
+		}
+
+		auto test_scene_environment_metadata_creates_sunlight() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir() / "scene_sunlight";
+			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path ibl_path = test_dir / "metadata_sun.ashibl";
+			const std::filesystem::path scene_path = test_dir / "environment_sun.scene.json";
+
+			EnvironmentMapCookedData cooked{};
+			fill_environment_map_test_pattern(cooked);
+			cooked.dominant_light.valid = true;
+			cooked.dominant_light.direction = glm::normalize(glm::vec3(0.25f, 0.9f, 0.15f));
+			cooked.dominant_light.luminance = 8.0f;
+			cooked.dominant_light.source = "self-test";
+
+			std::string error{};
+			if (!write_ashibl_file(ibl_path, cooked, &error))
+			{
+				return report_self_test_failure("Scene environment sunlight", error.empty() ? "failed to write test ashibl" : error.c_str());
+			}
+
+			{
+				std::ofstream file(scene_path, std::ios::trunc);
+				file <<
+					"{\n"
+					"  \"version\": 4,\n"
+					"  \"name\": \"EnvironmentSun\",\n"
+					"  \"next_entity_id\": 2,\n"
+					"  \"entities\": [\n"
+					"    {\n"
+					"      \"id\": 1,\n"
+					"      \"name\": \"Environment\",\n"
+					"      \"transform\": {},\n"
+					"      \"environment\": {\n"
+					"        \"active\": true,\n"
+					"        \"ibl_asset_path\": \"" << ibl_path.generic_string() << "\"\n"
+					"      }\n"
+					"    }\n"
+					"  ]\n"
+					"}\n";
+			}
+
+			Scene scene = Scene::load_from_file(scene_path, &error);
+			if (!scene.is_valid())
+			{
+				return report_self_test_failure("Scene environment sunlight", error.empty() ? "environment scene failed to load" : error.c_str());
+			}
+
+			Entity environment_sun{};
+			for (const Entity& entity : scene.get_entities())
+			{
+				if (entity.is_valid() && entity.get_name() == "EnvironmentSunLight")
+				{
+					environment_sun = entity;
+					break;
+				}
+			}
+
+			const bool ok =
+				environment_sun.is_valid() &&
+				environment_sun.has_light_component() &&
+				environment_sun.get_light_component().type == LightType::Directional &&
+				environment_sun.get_light_component().sunlight &&
+				environment_sun.get_light_component().casts_shadow;
+			return ok || report_self_test_failure("Scene environment sunlight", "environment metadata did not create a shadow-casting sunlight");
+		}
+
+		auto test_render_scene_copies_scene_render_config_to_visible_frame() -> bool
+		{
+			Scene scene = Scene::create("RenderConfigSnapshotSelfTest");
+			SceneRenderConfig config = make_default_scene_render_config();
+			config.ambient_occlusion.mode = AmbientOcclusionMode::HBAO;
+			config.ambient_occlusion.quality = AmbientOcclusionQuality::High;
+			config.directional_shadows.enabled = false;
+			if (!scene.set_render_config(config))
+			{
+				return report_self_test_failure("RenderScene render config snapshot", "failed to set scene render config");
+			}
+
+			RenderScene render_scene{};
+			if (!render_scene.rebuild_render_config_from_scene(scene))
+			{
+				return report_self_test_failure("RenderScene render config snapshot", "failed to rebuild render config from scene");
+			}
+
+			VisibleRenderFrame light_frame{};
+			if (!render_scene.build_visible_light_frame(light_frame))
+			{
+				return report_self_test_failure("RenderScene render config snapshot", "failed to build light-only visible frame");
+			}
+
+			SceneViewDesc view_desc{};
+			view_desc.viewport_width = 128;
+			view_desc.viewport_height = 64;
+			SceneView view{};
+			if (!build_scene_view_from_matrices(
+				view_desc,
+				glm::mat4(1.0f),
+				glm::mat4(1.0f),
+				glm::vec3(0.0f),
+				view))
+			{
+				return report_self_test_failure("RenderScene render config snapshot", "failed to build test scene view");
+			}
+
+			VisibleRenderFrame full_frame{};
+			if (!render_scene.build_visible_render_frame(7u, view, full_frame))
+			{
+				return report_self_test_failure("RenderScene render config snapshot", "failed to build full visible frame");
+			}
+
+			return (scene_render_config_equal(light_frame.render_config, config) &&
+				scene_render_config_equal(full_frame.render_config, config)) ||
+				report_self_test_failure("RenderScene render config snapshot", "VisibleRenderFrame did not carry the scene render config");
+		}
+
+		auto test_scene_extracts_single_active_environment() -> bool
+		{
+			Scene scene = Scene::create("Environment Test");
+
+			Entity inactive = scene.create_entity("Inactive Environment");
+			EnvironmentComponent inactive_env{};
+			inactive_env.active = false;
+			inactive_env.ibl_asset_path = "assets/env/inactive.ashibl";
+			inactive.add_environment_component(inactive_env);
+
+			Entity first = scene.create_entity("First Environment");
+			EnvironmentComponent first_env{};
+			first_env.active = true;
+			first_env.ibl_asset_path = "assets/env/first.ashibl";
+			first_env.source_texture_path = "assets/env/first.hdr";
+			first_env.intensity = 2.0f;
+			first_env.lighting_intensity = 0.25f;
+			first_env.background_intensity = 1.5f;
+			first_env.rotation_degrees = 45.0f;
+			first_env.visible_background = true;
+			first_env.affect_lighting = true;
+			first.add_environment_component(first_env);
+
+			Entity second = scene.create_entity("Second Environment");
+			EnvironmentComponent second_env{};
+			second_env.active = true;
+			second_env.ibl_asset_path = "assets/env/second.ashibl";
+			second.add_environment_component(second_env);
+
+			SceneEnvironmentExtractionDesc extracted{};
+			if (!scene.extract_active_environment(extracted))
+			{
+				return report_self_test_failure("Scene environment extraction", "active environment was not extracted");
+			}
+
+			const bool ok =
+				extracted.entity_id == first.get_id() &&
+				extracted.ibl_asset_path == "assets/env/first.ashibl" &&
+				extracted.source_texture_path == "assets/env/first.hdr" &&
+				extracted.intensity == 2.0f &&
+				extracted.lighting_intensity == 0.25f &&
+				extracted.background_intensity == 1.5f &&
+				extracted.rotation_degrees == 45.0f &&
+				extracted.visible_background &&
+				extracted.affect_lighting;
+			return ok || report_self_test_failure("Scene environment extraction", "first active environment was not selected deterministically");
 		}
 
 		auto test_scene_render_versions_separate_transform_from_primitive_changes() -> bool
@@ -2094,6 +3732,175 @@ namespace AshEngine
 				scene.get_render_transform_version() != mesh_transform_version;
 			return ok ||
 				report_self_test_failure("Scene render versions", "transform-only changes invalidated primitive rebuild state");
+		}
+
+		auto test_scene_environment_version_isolated_from_primitives() -> bool
+		{
+			Scene scene = Scene::create("Environment Version Test");
+			Entity environment = scene.create_entity("Environment");
+
+			const uint64_t primitive_before = scene.get_render_primitive_version();
+			const uint64_t transform_before = scene.get_render_transform_version();
+			const uint64_t light_before = scene.get_render_light_version();
+			const uint64_t environment_before = scene.get_render_environment_version();
+
+			EnvironmentComponent component{};
+			component.active = true;
+			component.ibl_asset_path = "assets/env/test.ashibl";
+			environment.add_environment_component(component);
+
+			const bool ok =
+				scene.get_render_primitive_version() == primitive_before &&
+				scene.get_render_transform_version() == transform_before &&
+				scene.get_render_light_version() == light_before &&
+				scene.get_render_environment_version() != environment_before;
+			return ok || report_self_test_failure("Scene environment versions", "environment changes invalidated unrelated render versions");
+		}
+
+		auto test_scene_render_config_version_isolated_from_other_render_versions() -> bool
+		{
+			Scene scene = Scene::create("SceneRenderConfigVersionSelfTest");
+			const uint64_t primitive_before = scene.get_render_primitive_version();
+			const uint64_t transform_before = scene.get_render_transform_version();
+			const uint64_t light_before = scene.get_render_light_version();
+			const uint64_t environment_before = scene.get_render_environment_version();
+			const uint64_t render_config_before = scene.get_render_config_version();
+
+			SceneRenderConfig config = scene.get_render_config();
+			config.ambient_occlusion.mode = AmbientOcclusionMode::HBAO;
+			config.ambient_occlusion.quality = AmbientOcclusionQuality::High;
+
+			if (!scene.set_render_config(config))
+			{
+				return report_self_test_failure("Scene render config versions", "set_render_config returned false for a valid scene");
+			}
+
+			const bool ok =
+				scene.get_render_primitive_version() == primitive_before &&
+				scene.get_render_transform_version() == transform_before &&
+				scene.get_render_light_version() == light_before &&
+				scene.get_render_environment_version() == environment_before &&
+				scene.get_render_config_version() != render_config_before;
+			return ok ||
+				report_self_test_failure("Scene render config versions", "render config changes invalidated unrelated render versions");
+		}
+
+		auto test_scene_render_config_json_defaults_and_round_trip() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir() / "scene_render_config";
+			std::filesystem::create_directories(test_dir);
+
+			const std::filesystem::path old_scene_path = test_dir / "old_scene.scene.json";
+			{
+				std::ofstream file(old_scene_path, std::ios::trunc);
+				file <<
+					"{\n"
+					"  \"version\": 3,\n"
+					"  \"name\": \"OldScene\",\n"
+					"  \"next_entity_id\": 1,\n"
+					"  \"entities\": []\n"
+					"}\n";
+			}
+
+			std::string error{};
+			Scene old_scene = Scene::load_from_file(old_scene_path, &error);
+			const SceneRenderConfig defaults = make_default_scene_render_config();
+			if (!old_scene.is_valid() || !scene_render_config_equal(old_scene.get_render_config(), defaults))
+			{
+				return report_self_test_failure("Scene render config JSON", "version 3 scene without scene_config did not load defaults");
+			}
+
+			const std::filesystem::path scene_path = test_dir / "configured_scene.scene.json";
+			{
+				std::ofstream file(scene_path, std::ios::trunc);
+				file <<
+					"{\n"
+					"  \"version\": 4,\n"
+					"  \"name\": \"ConfiguredScene\",\n"
+					"  \"next_entity_id\": 1,\n"
+					"  \"scene_config\": {\n"
+					"    \"ambient_occlusion\": {\n"
+					"      \"mode\": \"HBAO\",\n"
+					"      \"quality\": \"High\",\n"
+					"      \"radius\": 99.0,\n"
+					"      \"intensity\": 2.5,\n"
+					"      \"power\": 2.0,\n"
+					"      \"half_resolution\": true,\n"
+					"      \"blur\": false,\n"
+					"      \"temporal\": true,\n"
+					"      \"temporal_blend\": 0.9,\n"
+					"      \"temporal_depth_threshold\": 0.02,\n"
+					"      \"temporal_normal_threshold\": 0.5\n"
+					"    },\n"
+					"    \"directional_shadows\": {\n"
+					"      \"enabled\": true,\n"
+					"      \"default_cascade_count\": 7,\n"
+					"      \"default_shadow_distance\": 240.0,\n"
+					"      \"near_shadow_distance\": 24.0,\n"
+					"      \"split_lambda\": 0.8,\n"
+					"      \"near_cascade_resolution\": 3000,\n"
+					"      \"outer_cascade_resolution\": 300,\n"
+					"      \"dynamic_atlas_size\": 3000,\n"
+					"      \"static_cache_atlas_size\": 3000,\n"
+					"      \"static_cache_budget_mb\": 96,\n"
+					"      \"depth_bias\": 0.002,\n"
+					"      \"normal_bias\": 0.06,\n"
+					"      \"pcf_radius\": 2\n"
+					"    }\n"
+					"  },\n"
+					"  \"entities\": []\n"
+					"}\n";
+			}
+
+			Scene configured_scene = Scene::load_from_file(scene_path, &error);
+			if (!configured_scene.is_valid())
+			{
+				return report_self_test_failure("Scene render config JSON", error.empty() ? "configured scene did not load" : error.c_str());
+			}
+
+			const SceneRenderConfig loaded = configured_scene.get_render_config();
+			const bool parsed_ok =
+				loaded.ambient_occlusion.mode == AmbientOcclusionMode::HBAO &&
+				loaded.ambient_occlusion.quality == AmbientOcclusionQuality::High &&
+				loaded.ambient_occlusion.radius == 20.0f &&
+				loaded.ambient_occlusion.half_resolution &&
+				!loaded.ambient_occlusion.blur &&
+				loaded.ambient_occlusion.temporal &&
+				loaded.ambient_occlusion.temporal_blend == 0.9f &&
+				loaded.ambient_occlusion.temporal_depth_threshold == 0.02f &&
+				loaded.ambient_occlusion.temporal_normal_threshold == 0.5f &&
+				loaded.directional_shadows.default_cascade_count == 4u &&
+				loaded.directional_shadows.near_cascade_resolution == 4096u &&
+				loaded.directional_shadows.outer_cascade_resolution == 512u &&
+				loaded.directional_shadows.dynamic_atlas_size == 4096u &&
+				loaded.directional_shadows.static_cache_atlas_size == 4096u;
+			if (!parsed_ok)
+			{
+				return report_self_test_failure("Scene render config JSON", "scene_config fields were not parsed and sanitized as expected");
+			}
+
+			const std::filesystem::path saved_path = test_dir / "saved_scene.scene.json";
+			if (!configured_scene.save_to_file(saved_path, &error))
+			{
+				return report_self_test_failure("Scene render config JSON", error.empty() ? "failed to save configured scene" : error.c_str());
+			}
+
+			std::ifstream saved_file(saved_path);
+			const std::string saved_source{
+				std::istreambuf_iterator<char>(saved_file),
+				std::istreambuf_iterator<char>() };
+			if (saved_source.find("render_debug_view") != std::string::npos)
+			{
+				return report_self_test_failure("Scene render config JSON", "scene_config must not serialize process-level RenderDebugView settings");
+			}
+
+			Scene round_trip_scene = Scene::load_from_file(saved_path, &error);
+			if (!round_trip_scene.is_valid() || !scene_render_config_equal(round_trip_scene.get_render_config(), loaded))
+			{
+				return report_self_test_failure("Scene render config JSON", "scene_config did not survive save/load round trip");
+			}
+
+			return true;
 		}
 
 		auto test_graphics_draw_desc_keeps_common_vertex_bindings_inline() -> bool
@@ -2469,9 +4276,20 @@ namespace AshEngine
 		all_passed = test_texture_decode_generates_rgba8_mips() && all_passed;
 		all_passed = test_texture_decode_supports_dds_bc1() && all_passed;
 		all_passed = test_texture_decode_supports_ktx2_bc7() && all_passed;
+		all_passed = test_environment_map_cpu_baker_generates_required_payloads() && all_passed;
+		all_passed = test_environment_map_cpu_baker_uses_irradiance_units() && all_passed;
+		all_passed = test_environment_map_cpu_baker_brdf_lut_is_energy_bounded() && all_passed;
+		all_passed = test_ashibl_round_trip_uncompressed_payloads() && all_passed;
+		all_passed = test_environment_asset_key_and_fallback_policy() && all_passed;
+		all_passed = test_environment_source_cache_path_uses_content_hash() && all_passed;
+		all_passed = test_environment_runtime_source_bake_does_not_block_request_path() && all_passed;
+		all_passed = test_environment_shaders_use_compact_root_constants() && all_passed;
+		all_passed = test_environment_shader_applies_lambert_to_irradiance() && all_passed;
+		all_passed = test_environment_passes_use_split_intensity_controls() && all_passed;
+		all_passed = test_texture_cube_upload_contract() && all_passed;
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
 		all_passed = test_render_feature_config_registers_vsync_without_reverse_z() && all_passed;
-		all_passed = test_ambient_occlusion_config_parses_modes_and_clamps_values() && all_passed;
+		all_passed = test_engine_ini_excludes_scene_render_config_sections() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
@@ -2489,6 +4307,7 @@ namespace AshEngine
 		all_passed = test_scene_renderer_instance_buffer_slots_are_isolated_between_view_submits() && all_passed;
 		all_passed = test_scene_renderer_instance_buffer_slots_are_lagged_between_frames() && all_passed;
 		all_passed = test_scene_renderer_temporal_history_uses_render_frame_epoch() && all_passed;
+		all_passed = test_scene_renderer_temporal_history_is_gbuffer_only() && all_passed;
 		all_passed = test_renderer_frame_stats_cover_presented_frame() && all_passed;
 		all_passed = test_renderer_frame_stats_expose_frame_pacing_breakdown() && all_passed;
 		all_passed = test_rhi_frame_slots_match_default_triple_buffering() && all_passed;
@@ -2505,7 +4324,32 @@ namespace AshEngine
 		all_passed = test_scene_deferred_graph_resources_describe_live_pass_chain() && all_passed;
 		all_passed = test_render_pass_attachment_final_state_defaults_to_unknown() && all_passed;
 		all_passed = test_render_scene_extracts_light_snapshot() && all_passed;
+		all_passed = test_scene_light_sunlight_json_round_trip() && all_passed;
+		all_passed = test_scene_rejects_multiple_directional_sunlights() && all_passed;
+		all_passed = test_scene_environment_metadata_creates_sunlight() && all_passed;
+		all_passed = test_render_scene_copies_scene_render_config_to_visible_frame() && all_passed;
+		all_passed = test_scene_extracts_single_active_environment() && all_passed;
+		all_passed = test_sunlight_shadow_planner_rejects_multiple_sunlights() && all_passed;
+		all_passed = test_sunlight_shadow_planner_ignores_ordinary_directional_lights() && all_passed;
+		all_passed = test_sunlight_shadow_planner_releases_partial_cascade_tiles() && all_passed;
+		all_passed = test_directional_light_shadow_planner_handles_each_ordinary_light_without_global_budget() && all_passed;
+		all_passed = test_directional_light_shadow_planner_uses_uncached_cascades() && all_passed;
+		all_passed = test_directional_shadow_static_cache_reuses_evicted_tiles() && all_passed;
+		all_passed = test_directional_shadow_static_cache_invalidates_when_cascade_matrix_changes() && all_passed;
+		all_passed = test_directional_shadow_planner_builds_monotonic_cascades() && all_passed;
+		all_passed = test_visible_static_mesh_draws_carry_shadow_mobility() && all_passed;
+		all_passed = test_directional_shadow_mask_normal_bias_offsets_along_normal() && all_passed;
+		all_passed = test_directional_shadow_cascade_buffer_uses_two_dimensional_texel_size() && all_passed;
+		all_passed = test_directional_shadow_static_cache_copy_uses_atlas_uv_scale() && all_passed;
+		all_passed = test_directional_shadow_static_cache_copy_declares_graph_read() && all_passed;
+		all_passed = test_directional_shadow_graph_adds_depth_before_lighting() && all_passed;
+		all_passed = test_directional_shadow_deferred_graph_contract() && all_passed;
+		all_passed = test_deferred_lighting_pass_exposes_explicit_light_submission_api() && all_passed;
+		all_passed = test_scene_deferred_graph_resources_split_directional_shadow_refs() && all_passed;
 		all_passed = test_scene_render_versions_separate_transform_from_primitive_changes() && all_passed;
+		all_passed = test_scene_environment_version_isolated_from_primitives() && all_passed;
+		all_passed = test_scene_render_config_version_isolated_from_other_render_versions() && all_passed;
+		all_passed = test_scene_render_config_json_defaults_and_round_trip() && all_passed;
 		all_passed = test_graphics_draw_desc_keeps_common_vertex_bindings_inline() && all_passed;
 		all_passed = test_debug_draw_service_records_and_clears_frame_lines() && all_passed;
 		all_passed = test_debug_draw_service_expands_shapes_to_line_list() && all_passed;

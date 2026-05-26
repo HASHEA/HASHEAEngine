@@ -71,6 +71,18 @@ namespace RHI
 			}
 		}
 
+		static bool descriptor_range_uses_sampler_heap(D3D12_DESCRIPTOR_RANGE_TYPE rangeType)
+		{
+			return rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+		}
+
+		static D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type_for_range(D3D12_DESCRIPTOR_RANGE_TYPE rangeType)
+		{
+			return descriptor_range_uses_sampler_heap(rangeType) ?
+				D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER :
+				D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		}
+
 		static bool is_root_constants_cbuffer_name(const std::string& name)
 		{
 			return name == k_dx12_root_constants_name || name == "RootConstants";
@@ -267,7 +279,15 @@ namespace RHI
 		{
 			ASH_PROFILE_SCOPE_NC("DX12RenderProgram::CommitDescriptorBinds", AshEngine::Profile::Color::Descriptor);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pendingBinds.size()));
-			bool committed = true;
+
+			struct PendingDescriptorTable
+			{
+				D3D12_DESCRIPTOR_HEAP_TYPE heapType = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+				uint32_t descriptorCount = 0;
+				std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> sourceHandles{};
+			};
+
+			std::unordered_map<uint32_t, PendingDescriptorTable> pendingTables{};
 			for (const DX12PendingBind& bind : pendingBinds)
 			{
 				auto bindingIt = bindingInfos.find(bind.name);
@@ -277,39 +297,79 @@ namespace RHI
 				}
 
 				const DX12ProgramBindingInfo& bindingInfo = bindingIt->second;
-				const bool samplerBinding = bindingInfo.rangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
-				const D3D12_DESCRIPTOR_HEAP_TYPE heapType = samplerBinding ? D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER : D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
-				std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 1> singleSourceHandle{};
-				const D3D12_CPU_DESCRIPTOR_HANDLE* sourceHandles = nullptr;
+				PendingDescriptorTable& table = pendingTables[bindingInfo.rootIndex];
+				table.heapType = descriptor_heap_type_for_range(bindingInfo.rangeType);
+				table.descriptorCount = std::max(
+					table.descriptorCount,
+					bindingInfo.descriptorOffset + descriptorCount);
+			}
+
+			for (auto& [rootIndex, table] : pendingTables)
+			{
+				(void)rootIndex;
+				table.sourceHandles.resize(table.descriptorCount);
+			}
+
+			for (const DX12PendingBind& bind : pendingBinds)
+			{
+				auto bindingIt = bindingInfos.find(bind.name);
+				if (bindingIt == bindingInfos.end())
+				{
+					continue;
+				}
+
+				const DX12ProgramBindingInfo& bindingInfo = bindingIt->second;
+				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
+				PendingDescriptorTable& table = pendingTables[bindingInfo.rootIndex];
 				if (bind.isArray)
 				{
-					sourceHandles = bind.cpuHandles.data();
+					std::copy(
+						bind.cpuHandles.begin(),
+						bind.cpuHandles.end(),
+						table.sourceHandles.begin() + bindingInfo.descriptorOffset);
 				}
 				else
 				{
-					singleSourceHandle[0] = bind.cpuHandle;
-					sourceHandles = singleSourceHandle.data();
+					table.sourceHandles[bindingInfo.descriptorOffset] = bind.cpuHandle;
 				}
+			}
 
+			std::vector<uint32_t> rootIndices{};
+			rootIndices.reserve(pendingTables.size());
+			for (const auto& [rootIndex, table] : pendingTables)
+			{
+				(void)table;
+				rootIndices.push_back(rootIndex);
+			}
+			std::sort(rootIndices.begin(), rootIndices.end());
+
+			bool committed = true;
+			for (uint32_t rootIndex : rootIndices)
+			{
+				PendingDescriptorTable& table = pendingTables[rootIndex];
+				if (table.sourceHandles.empty())
+				{
+					continue;
+				}
 				DX12DescriptorHandle gpuHandle{};
 				if (!heapMgr.find_or_create_shader_visible_table(
 					device,
-					heapType,
-					sourceHandles,
-					descriptorCount,
+					table.heapType,
+					table.sourceHandles.data(),
+					static_cast<uint32_t>(table.sourceHandles.size()),
 					gpuHandle))
 				{
 					HLogError(
 						"DX12 render program failed to allocate/cache {} shader-visible {} descriptors for binding '{}'.",
-						descriptorCount,
-						descriptor_range_type_to_string(bindingInfo.rangeType),
-						bind.name.c_str());
+						static_cast<uint32_t>(table.sourceHandles.size()),
+						table.heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER ? "Sampler" : "CBV/SRV/UAV",
+						"descriptor table");
 					committed = false;
 					break;
 				}
 
-				outCommittedTables.push_back({ bindingInfo.rootIndex, gpuHandle.gpuHandle });
+				outCommittedTables.push_back({ rootIndex, gpuHandle.gpuHandle });
 			}
 			return committed;
 		}
@@ -640,8 +700,8 @@ namespace RHI
 		auto* device = DX12Context::get()->get_device();
 		std::vector<D3D12_ROOT_PARAMETER> rootParams;
 		std::vector<D3D12_DESCRIPTOR_RANGE> ranges;
-		rootParams.reserve(m_rootParamMappings.size() + (m_rootConstants.enabled ? 1u : 0u));
-		ranges.reserve(m_rootParamMappings.size());
+		rootParams.reserve(3u);
+		ranges.reserve(m_bindingInfos.size());
 
 		if (m_rootConstants.enabled)
 		{
@@ -654,30 +714,93 @@ namespace RHI
 			rootParams.push_back(rootConstantsParam);
 		}
 
-		for (const DX12RootParamMapping& mapping : m_rootParamMappings)
+		struct DescriptorRangeBuildItem
 		{
-			const auto bindingIt = m_bindingInfos.find(mapping.name);
-			if (bindingIt == m_bindingInfos.end())
-			{
-				continue;
-			}
-			const DX12ProgramBindingInfo& bindingInfo = bindingIt->second;
+			std::string name{};
+			D3D12_DESCRIPTOR_RANGE_TYPE rangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+			uint32_t descriptorCount = 1;
+			uint32_t baseRegister = 0;
+			uint32_t registerSpace = 0;
+		};
 
-			D3D12_DESCRIPTOR_RANGE range{};
-			range.RangeType = mapping.rangeType;
-			range.NumDescriptors = mapping.numDescriptors > 0 ? mapping.numDescriptors : 1u;
-			range.BaseShaderRegister = bindingInfo.baseRegister;
-			range.RegisterSpace = bindingInfo.registerSpace;
-			range.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
-			ranges.push_back(range);
+		std::vector<DescriptorRangeBuildItem> rangeItems{};
+		rangeItems.reserve(m_bindingInfos.size());
+		for (const auto& [name, bindingInfo] : m_bindingInfos)
+		{
+			DescriptorRangeBuildItem item{};
+			item.name = name;
+			item.rangeType = bindingInfo.rangeType;
+			item.descriptorCount = bindingInfo.descriptorCount;
+			item.baseRegister = bindingInfo.baseRegister;
+			item.registerSpace = bindingInfo.registerSpace;
+			rangeItems.push_back(std::move(item));
+		}
+		std::sort(
+			rangeItems.begin(),
+			rangeItems.end(),
+			[](const DescriptorRangeBuildItem& lhs, const DescriptorRangeBuildItem& rhs)
+			{
+				if (descriptor_range_uses_sampler_heap(lhs.rangeType) != descriptor_range_uses_sampler_heap(rhs.rangeType))
+				{
+					return !descriptor_range_uses_sampler_heap(lhs.rangeType);
+				}
+				if (lhs.registerSpace != rhs.registerSpace)
+				{
+					return lhs.registerSpace < rhs.registerSpace;
+				}
+				if (lhs.rangeType != rhs.rangeType)
+				{
+					return lhs.rangeType < rhs.rangeType;
+				}
+				if (lhs.baseRegister != rhs.baseRegister)
+				{
+					return lhs.baseRegister < rhs.baseRegister;
+				}
+				return lhs.name < rhs.name;
+			});
+
+		const auto add_descriptor_table = [&](bool samplerTable)
+		{
+			const size_t rangeStart = ranges.size();
+			uint32_t descriptorOffset = 0;
+			const uint32_t rootIndex = static_cast<uint32_t>(rootParams.size());
+			for (const DescriptorRangeBuildItem& item : rangeItems)
+			{
+				if (descriptor_range_uses_sampler_heap(item.rangeType) != samplerTable)
+				{
+					continue;
+				}
+
+				D3D12_DESCRIPTOR_RANGE range{};
+				range.RangeType = item.rangeType;
+				range.NumDescriptors = item.descriptorCount > 0 ? item.descriptorCount : 1u;
+				range.BaseShaderRegister = item.baseRegister;
+				range.RegisterSpace = item.registerSpace;
+				range.OffsetInDescriptorsFromTableStart = descriptorOffset;
+				ranges.push_back(range);
+
+				DX12ProgramBindingInfo& bindingInfo = m_bindingInfos[item.name];
+				bindingInfo.rootIndex = rootIndex;
+				bindingInfo.descriptorOffset = descriptorOffset;
+				descriptorOffset += range.NumDescriptors;
+			}
+
+			const size_t rangeCount = ranges.size() - rangeStart;
+			if (rangeCount == 0u)
+			{
+				return;
+			}
 
 			D3D12_ROOT_PARAMETER param{};
 			param.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-			param.DescriptorTable.NumDescriptorRanges = 1;
-			param.DescriptorTable.pDescriptorRanges = &ranges.back();
+			param.DescriptorTable.NumDescriptorRanges = static_cast<UINT>(rangeCount);
+			param.DescriptorTable.pDescriptorRanges = ranges.data() + rangeStart;
 			param.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 			rootParams.push_back(param);
-		}
+		};
+
+		add_descriptor_table(false);
+		add_descriptor_table(true);
 
 		D3D12_ROOT_SIGNATURE_DESC rootSigDesc{};
 		rootSigDesc.NumParameters = static_cast<UINT>(rootParams.size());

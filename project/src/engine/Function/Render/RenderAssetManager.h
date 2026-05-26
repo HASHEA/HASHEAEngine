@@ -6,6 +6,7 @@
 #include "Function/Render/MaterialSystem.h"
 #include "Function/Render/StaticMeshRenderAsset.h"
 #include "Function/Render/TextureAsset.h"
+#include "Function/Render/EnvironmentMapAsset.h"
 #include "Function/Scene/SceneComponents.h"
 #include <future>
 #include <memory>
@@ -43,6 +44,10 @@ namespace AshEngine
 			TextureColorSpace color_space,
 			TextureFallbackKind fallback_kind = TextureFallbackKind::White);
 		std::shared_ptr<TextureAsset> request_fallback_texture(TextureFallbackKind fallback_kind);
+		std::shared_ptr<EnvironmentMapRuntimeResource> request_environment_map_asset(
+			const std::string& ibl_asset_path,
+			const std::string& source_texture_path);
+		std::shared_ptr<EnvironmentMapRuntimeResource> request_fallback_environment_map();
 		std::shared_ptr<RenderSampler> request_sampler(const RenderSamplerDesc& desc);
 		std::shared_ptr<RenderSampler> request_default_sampler();
 		bool resolve_static_mesh_primitive_sections(
@@ -81,6 +86,12 @@ namespace AshEngine
 			uint32_t row_pitch);
 		void log_material_warning_once(const std::string& warning_key, const std::string& message);
 		void log_texture_warning_once(const std::string& warning_key, const std::string& message);
+		void log_environment_warning_once(const std::string& warning_key, const std::string& message);
+		bool create_environment_runtime_resource_from_cooked_data(
+			const EnvironmentMapCookedData& data,
+			EnvironmentMapRuntimeResource& out_resource,
+			std::string* out_error = nullptr);
+		std::shared_ptr<EnvironmentMapRuntimeResource> create_fallback_environment_map_resource();
 
 	private:
 		struct TextureDecodeResult
@@ -108,9 +119,12 @@ namespace AshEngine
 		std::unordered_set<std::string> m_failed_texture_requests{};
 		std::unordered_set<std::string> m_logged_material_warnings{};
 		std::unordered_set<std::string> m_logged_texture_warnings{};
+		std::unordered_set<std::string> m_logged_environment_warnings{};
 		std::shared_ptr<TextureAsset> m_default_white_texture{};
 		std::shared_ptr<TextureAsset> m_default_normal_texture{};
 		std::shared_ptr<TextureAsset> m_default_black_texture{};
+		std::unordered_map<std::string, std::shared_ptr<EnvironmentMapRuntimeResource>> m_environment_maps{};
+		std::shared_ptr<EnvironmentMapRuntimeResource> m_fallback_environment_map{};
 		MaterialSystem m_material_system{};
 	};
 }

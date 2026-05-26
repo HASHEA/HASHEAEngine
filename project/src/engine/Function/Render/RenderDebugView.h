@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/RenderDevice.h"
+#include "Function/Render/RenderDebugViewConfig.h"
 #include "Function/Render/RenderGraphFwd.h"
 #include <cstdint>
 #include <memory>
@@ -25,12 +26,6 @@ namespace AshEngine
 		MotionVector,
 		AO,
 		Scalar
-	};
-
-	struct RenderDebugViewConfig
-	{
-		bool enabled = false;
-		std::string selected = "Off";
 	};
 
 	struct RenderDebugViewItem
@@ -58,10 +53,6 @@ namespace AshEngine
 
 	ASH_API const char* render_debug_visualization_name(RenderDebugVisualization visualization);
 	ASH_API const char* render_debug_texture_format_name(RenderTextureFormat format);
-	ASH_API RenderDebugViewConfig make_default_render_debug_view_config();
-	ASH_API RenderDebugViewConfig load_runtime_render_debug_view_config(const char* config_path);
-	ASH_API void set_runtime_render_debug_view_config(const RenderDebugViewConfig& config);
-	ASH_API RenderDebugViewConfig get_runtime_render_debug_view_config();
 
 	class RenderDebugView
 	{
@@ -70,7 +61,10 @@ namespace AshEngine
 		void shutdown();
 		void begin_frame();
 		void register_item(const RenderDebugViewItem& item);
-		bool add_pass(RenderGraphBuilder& graph, RenderGraphTextureRef output_target, const SceneRenderViewContext& view_context);
+		bool add_pass(
+			RenderGraphBuilder& graph,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context);
 		void draw_ui(UIContext& ui_context);
 
 		static bool should_bypass_debug_pass(const std::string& selected);

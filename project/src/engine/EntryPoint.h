@@ -2,8 +2,11 @@
 #include "Base/EngineSelfTests.h"
 #include "Function/Application.h"
 #include "Function/Diagnostics/PerfGate.h"
+#include "Function/Render/EnvironmentMapBaker.h"
 extern AshEngine::Application* create_application();//impl in editor
 extern void destroy_application(AshEngine::Application* app);//impl in editor
+#include <cerrno>
+#include <limits>
 #include <filesystem>
 #include <iostream>
 #include <cstdlib>
@@ -134,6 +137,166 @@ static bool should_run_engine_self_tests(int argc, char* argv[])
 	return false;
 }
 
+static void print_ashibl_bake_usage()
+{
+	std::cerr
+		<< "Usage: --bake-ashibl <source.hdr> <output.ashibl> "
+		<< "[--radiance-size=N] [--irradiance-size=N] [--prefilter-size=N] "
+		<< "[--prefilter-mips=N] [--brdf-lut-size=N] [--sample-count=N]"
+		<< std::endl;
+}
+
+static bool parse_ashibl_bake_uint_option(
+	const std::string& argument,
+	const char* option_name,
+	uint32_t& out_value,
+	bool& out_matched,
+	std::string& out_error)
+{
+	out_matched = false;
+	const std::string prefix = std::string(option_name) + "=";
+	if (argument.rfind(prefix, 0) != 0)
+	{
+		return true;
+	}
+
+	out_matched = true;
+	const std::string value_text = argument.substr(prefix.size());
+	if (value_text.empty())
+	{
+		out_error = "Missing value for " + std::string(option_name) + ".";
+		return false;
+	}
+
+	errno = 0;
+	char* parse_end = nullptr;
+	const unsigned long parsed = std::strtoul(value_text.c_str(), &parse_end, 10);
+	if (errno != 0 || parse_end == value_text.c_str() || *parse_end != '\0' ||
+		parsed == 0ul || parsed > static_cast<unsigned long>(std::numeric_limits<uint32_t>::max()))
+	{
+		out_error = "Invalid positive integer for " + std::string(option_name) + ": " + value_text;
+		return false;
+	}
+
+	out_value = static_cast<uint32_t>(parsed);
+	return true;
+}
+
+static bool consume_ashibl_bake_option(
+	const std::string& argument,
+	AshEngine::EnvironmentBakeOverrides& overrides,
+	bool& out_consumed,
+	std::string& out_error)
+{
+	out_consumed = false;
+
+	struct OptionBinding
+	{
+		const char* name;
+		uint32_t* value;
+	};
+
+	OptionBinding bindings[] = {
+		{ "--radiance-size", &overrides.radiance_size },
+		{ "--irradiance-size", &overrides.irradiance_size },
+		{ "--prefilter-size", &overrides.prefilter_size },
+		{ "--prefilter-mips", &overrides.prefilter_mip_count },
+		{ "--brdf-lut-size", &overrides.brdf_lut_size },
+		{ "--sample-count", &overrides.sample_count },
+		{ "--samples", &overrides.sample_count },
+	};
+
+	for (const OptionBinding& binding : bindings)
+	{
+		bool matched = false;
+		if (!parse_ashibl_bake_uint_option(argument, binding.name, *binding.value, matched, out_error))
+		{
+			return false;
+		}
+		if (matched)
+		{
+			out_consumed = true;
+			return true;
+		}
+	}
+
+	return true;
+}
+
+static int32_t run_ashibl_bake_command(int argc, char* argv[])
+{
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument != "--bake-ashibl")
+		{
+			continue;
+		}
+
+		if (argumentIndex + 2 >= argc)
+		{
+			print_ashibl_bake_usage();
+			return 1;
+		}
+
+		const std::filesystem::path source_path = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
+		const std::filesystem::path output_path = argv[argumentIndex + 2] ? argv[argumentIndex + 2] : "";
+		if (source_path.empty() || output_path.empty())
+		{
+			print_ashibl_bake_usage();
+			return 1;
+		}
+
+		AshEngine::EnvironmentBakeOverrides overrides{};
+		bool has_overrides = false;
+		for (int32_t option_index = argumentIndex + 3; option_index < argc; ++option_index)
+		{
+			const std::string option = argv[option_index] ? argv[option_index] : "";
+			bool consumed = false;
+			std::string parse_error{};
+			if (!consume_ashibl_bake_option(option, overrides, consumed, parse_error))
+			{
+				std::cerr << parse_error << std::endl;
+				print_ashibl_bake_usage();
+				return 1;
+			}
+			if (!consumed)
+			{
+				std::cerr << "Unknown --bake-ashibl option: " << option << std::endl;
+				print_ashibl_bake_usage();
+				return 1;
+			}
+			has_overrides = true;
+		}
+
+		AshEngine::EnvironmentBakeReport report{};
+		const int32_t result = AshEngine::bake_ashibl_file_from_runtime_config(
+			source_path.string().c_str(),
+			output_path.string().c_str(),
+			"product/config/Engine.ini",
+			has_overrides ? &overrides : nullptr,
+			&report);
+		const bool succeeded = result == 0;
+
+		if (succeeded)
+		{
+			std::cout << "Baked AshIBL: " << output_path.string() << std::endl;
+			std::cout << "Radiance faces: " << report.generated_radiance_faces
+				<< ", irradiance faces: " << report.generated_irradiance_faces
+				<< ", prefilter mips: " << report.generated_prefilter_mips << std::endl;
+		}
+		else
+		{
+			std::cerr << "AshIBL bake failed: "
+				<< (report.message.empty() ? "unknown error" : report.message) << std::endl;
+		}
+
+		return result;
+	}
+
+	return -1;
+}
+
 int32_t main(int argc, char* argv[])
 {
 	//initialize the working dir of the app
@@ -145,6 +308,11 @@ int32_t main(int argc, char* argv[])
 	if (should_run_engine_self_tests(argc, argv))
 	{
 		return AshEngine::run_engine_base_self_tests();
+	}
+	const int32_t bakeAshIBLResult = run_ashibl_bake_command(argc, argv);
+	if (bakeAshIBLResult >= 0)
+	{
+		return bakeAshIBLResult;
 	}
 	AshEngine::Application* application = create_application();
 	if (!application)

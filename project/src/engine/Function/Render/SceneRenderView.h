@@ -6,11 +6,14 @@
 
 namespace AshEngine
 {
+	struct EnvironmentMapRuntimeResource;
+
 	struct ASH_API SceneRenderViewContext
 	{
 		uint64_t view_id = 0;
 		const char* debug_name = nullptr;
 		std::shared_ptr<RenderTarget> output_target = nullptr;
+		std::shared_ptr<EnvironmentMapRuntimeResource> environment_resource = nullptr;
 		bool has_viewport = false;
 		RenderViewport viewport{};
 		bool has_scissor = false;

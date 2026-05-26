@@ -35,7 +35,8 @@ namespace AshEngine
 			RenderGraphBuilder& graph,
 			const VisibleRenderFrame& frame,
 			const SceneDeferredGraphResources& deferred_resources,
-			const SceneRenderViewContext& view_context);
+			const SceneRenderViewContext& view_context,
+			const AmbientOcclusionConfig& config);
 
 	private:
 		bool create_resources(Renderer& renderer);

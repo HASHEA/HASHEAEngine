@@ -1,10 +1,12 @@
 #include "Function/Render/RenderAssetManager.h"
+#include "Function/Render/EnvironmentMapAsset.h"
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Base/hthreading.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/MaterialRenderProxy.h"
+#include "Function/Render/RenderFormatUtils.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include <algorithm>
@@ -176,6 +178,9 @@ namespace AshEngine
 		m_failed_texture_requests.clear();
 		m_logged_material_warnings.clear();
 		m_logged_texture_warnings.clear();
+		m_logged_environment_warnings.clear();
+		m_environment_maps.clear();
+		m_fallback_environment_map.reset();
 		m_default_white_texture.reset();
 		m_default_normal_texture.reset();
 		m_default_black_texture.reset();
@@ -1030,5 +1035,275 @@ namespace AshEngine
 				asset->mesh_index);
 		}
 		return bResult;
+	}
+
+	void RenderAssetManager::log_environment_warning_once(const std::string& warning_key, const std::string& message)
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		if (!m_logged_environment_warnings.insert(warning_key).second)
+		{
+			return;
+		}
+		HLogWarning("{}", message);
+	}
+
+	bool RenderAssetManager::create_environment_runtime_resource_from_cooked_data(
+		const EnvironmentMapCookedData& data,
+		EnvironmentMapRuntimeResource& out_resource,
+		std::string* out_error)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(require_render_thread_for_gpu_asset_work("create_environment_runtime_resource_from_cooked_data"));
+
+		auto build_cube_upload = [out_error](
+			const TextureCubePayload& payload,
+			const char* name,
+			TextureCubeUploadDesc& out_desc,
+			std::vector<TextureSubresourceUploadDesc>& out_faces) -> bool
+		{
+			out_faces.clear();
+			out_faces.reserve(payload.subresources.size());
+			for (const TextureSubresourcePayload& subresource : payload.subresources)
+			{
+				if (subresource.pixel_data.empty())
+				{
+					return false;
+				}
+				TextureSubresourceUploadDesc face{};
+				face.mip_level = subresource.mip_level;
+				face.array_layer = subresource.array_layer;
+				face.data = subresource.pixel_data.data();
+				face.row_pitch = subresource.row_pitch;
+				face.slice_pitch = subresource.row_pitch * subresource.height;
+				out_faces.push_back(face);
+			}
+
+			out_desc = {};
+			out_desc.width = static_cast<uint16_t>(payload.width);
+			out_desc.height = static_cast<uint16_t>(payload.height);
+			out_desc.format = payload.format;
+			out_desc.mip_level_count = static_cast<uint8_t>(payload.mip_count);
+			out_desc.subresources = out_faces.data();
+			out_desc.subresource_count = static_cast<uint32_t>(out_faces.size());
+			out_desc.name = name;
+			return validate_texture_cube_upload_desc(out_desc, out_error);
+		};
+
+		std::vector<TextureSubresourceUploadDesc> radiance_faces{};
+		std::vector<TextureSubresourceUploadDesc> irradiance_faces{};
+		std::vector<TextureSubresourceUploadDesc> prefilter_faces{};
+		TextureCubeUploadDesc radiance_desc{};
+		TextureCubeUploadDesc irradiance_desc{};
+		TextureCubeUploadDesc prefilter_desc{};
+		if (!build_cube_upload(data.radiance, "SceneEnvironmentRadianceCube", radiance_desc, radiance_faces) ||
+			!build_cube_upload(data.irradiance, "SceneEnvironmentIrradianceCube", irradiance_desc, irradiance_faces) ||
+			!build_cube_upload(data.prefiltered_specular, "SceneEnvironmentPrefilteredSpecularCube", prefilter_desc, prefilter_faces))
+		{
+			ASH_PROCESS_ERROR(false);
+		}
+
+		out_resource.radiance_cubemap = m_renderer->create_texture_cube(radiance_desc);
+		out_resource.irradiance_cubemap = m_renderer->create_texture_cube(irradiance_desc);
+		out_resource.prefiltered_specular_cubemap = m_renderer->create_texture_cube(prefilter_desc);
+		ASH_PROCESS_ERROR(out_resource.radiance_cubemap);
+		ASH_PROCESS_ERROR(out_resource.irradiance_cubemap);
+		ASH_PROCESS_ERROR(out_resource.prefiltered_specular_cubemap);
+
+		TextureUploadDesc brdf_desc{};
+		brdf_desc.width = static_cast<uint16_t>(data.brdf_lut.width);
+		brdf_desc.height = static_cast<uint16_t>(data.brdf_lut.height);
+		brdf_desc.format = data.brdf_lut.format;
+		brdf_desc.initial_data = data.brdf_lut.pixel_data.data();
+		brdf_desc.row_pitch = data.brdf_lut.row_pitch;
+		brdf_desc.name = "SceneEnvironmentBRDFLUT";
+		out_resource.brdf_lut = m_renderer->create_texture_2d(brdf_desc);
+		ASH_PROCESS_ERROR(out_resource.brdf_lut);
+
+		out_resource.state = EnvironmentMapAssetState::Ready;
+		out_resource.last_error.clear();
+		++out_resource.change_version;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	std::shared_ptr<EnvironmentMapRuntimeResource> RenderAssetManager::create_fallback_environment_map_resource()
+	{
+		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<EnvironmentMapRuntimeResource>, result, nullptr, nullptr);
+		ASH_PROCESS_ERROR(m_renderer);
+		ASH_PROCESS_ERROR(require_render_thread_for_gpu_asset_work("create_fallback_environment_map_resource"));
+
+		auto resource = std::make_shared<EnvironmentMapRuntimeResource>();
+		const uint16_t size = 1;
+		const uint32_t rgba16_row_pitch = calculate_render_texture_tight_row_pitch(RenderTextureFormat::RGBA16_SFLOAT, size);
+		const uint32_t rg16_row_pitch = calculate_render_texture_tight_row_pitch(RenderTextureFormat::RG16_SFLOAT, size);
+		std::array<uint8_t, 8> black_rgba16{};
+		std::array<uint8_t, 4> black_rg16{};
+
+		TextureSubresourceUploadDesc face{};
+		face.mip_level = 0;
+		face.array_layer = 0;
+		face.data = black_rgba16.data();
+		face.row_pitch = rgba16_row_pitch;
+		face.slice_pitch = rgba16_row_pitch;
+
+		auto make_black_cube = [&](const char* name) -> std::shared_ptr<RenderTarget>
+		{
+			std::array<TextureSubresourceUploadDesc, 6> faces{};
+			for (uint32_t index = 0; index < 6u; ++index)
+			{
+				faces[index] = face;
+				faces[index].array_layer = index;
+			}
+			TextureCubeUploadDesc desc{};
+			desc.width = size;
+			desc.height = size;
+			desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			desc.mip_level_count = 1;
+			desc.subresources = faces.data();
+			desc.subresource_count = 6;
+			desc.name = name;
+			return m_renderer->create_texture_cube(desc);
+		};
+
+		resource->radiance_cubemap = make_black_cube("SceneEnvironmentFallbackRadiance");
+		resource->irradiance_cubemap = make_black_cube("SceneEnvironmentFallbackIrradiance");
+		resource->prefiltered_specular_cubemap = make_black_cube("SceneEnvironmentFallbackPrefilteredSpecular");
+		resource->brdf_lut = m_renderer->create_texture_2d({
+			size,
+			size,
+			RenderTextureFormat::RG16_SFLOAT,
+			black_rg16.data(),
+			rg16_row_pitch,
+			1,
+			false,
+			"SceneEnvironmentFallbackBRDFLUT"
+		});
+
+		if (!resource->radiance_cubemap ||
+			!resource->irradiance_cubemap ||
+			!resource->prefiltered_specular_cubemap ||
+			!resource->brdf_lut)
+		{
+			resource->state = EnvironmentMapAssetState::Failed;
+			resource->last_error = "Failed to create fallback environment GPU resources.";
+			log_environment_warning_once("fallback_environment_create_failed", resource->last_error);
+			return nullptr;
+		}
+
+		resource->state = EnvironmentMapAssetState::Ready;
+		result = resource;
+		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
+	std::shared_ptr<EnvironmentMapRuntimeResource> RenderAssetManager::request_fallback_environment_map()
+	{
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			if (m_fallback_environment_map)
+			{
+				return m_fallback_environment_map;
+			}
+		}
+
+		std::shared_ptr<EnvironmentMapRuntimeResource> created = create_fallback_environment_map_resource();
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		if (!m_fallback_environment_map)
+		{
+			m_fallback_environment_map = std::move(created);
+		}
+		return m_fallback_environment_map;
+	}
+
+	std::shared_ptr<EnvironmentMapRuntimeResource> RenderAssetManager::request_environment_map_asset(
+		const std::string& ibl_asset_path,
+		const std::string& source_texture_path)
+	{
+		const std::string key = make_environment_map_asset_key(ibl_asset_path, source_texture_path);
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			const auto found = m_environment_maps.find(key);
+			if (found != m_environment_maps.end())
+			{
+				return found->second;
+			}
+		}
+
+		auto resource = std::make_shared<EnvironmentMapRuntimeResource>();
+		std::string error{};
+		std::string ashibl_error{};
+		EnvironmentMapCookedData cooked{};
+		bool loaded = false;
+		bool attempted_ashibl = false;
+
+		if (!ibl_asset_path.empty())
+		{
+			attempted_ashibl = true;
+			const std::filesystem::path path = std::filesystem::path(ibl_asset_path).lexically_normal();
+			if (read_ashibl_file(path, cooked, &error))
+			{
+				loaded = create_environment_runtime_resource_from_cooked_data(cooked, *resource, &error);
+			}
+			if (!loaded)
+			{
+				ashibl_error = error;
+			}
+		}
+
+		if (!loaded && !source_texture_path.empty())
+		{
+			const EnvironmentLightingConfig config = get_runtime_environment_lighting_config();
+			if (config.runtime_bake_cache)
+			{
+				const std::filesystem::path source_path = std::filesystem::path(source_texture_path).lexically_normal();
+				const uint64_t source_hash = hash_environment_source_file(source_path);
+				const std::filesystem::path cache_path = make_environment_map_source_cache_path(source_hash);
+				if (source_hash != 0ull && !cache_path.empty())
+				{
+					std::string cache_error{};
+					if (read_ashibl_file(cache_path, cooked, &cache_error))
+					{
+						loaded = create_environment_runtime_resource_from_cooked_data(cooked, *resource, &cache_error);
+					}
+					if (!loaded)
+					{
+						log_environment_warning_once(
+							"missing_runtime_cache:" + source_texture_path,
+							"RenderAssetManager: environment source '" + source_texture_path +
+								"' has no ready AshIBL cache at '" + cache_path.generic_string() +
+								"'; using fallback. Generate it with --bake-ashibl. " + cache_error);
+					}
+				}
+				else
+				{
+					log_environment_warning_once(
+						"failed_source_hash:" + source_texture_path,
+						"RenderAssetManager: failed to hash environment source '" + source_texture_path + "'; using fallback.");
+				}
+			}
+			else
+			{
+				log_environment_warning_once(
+					"runtime_cache_disabled:" + source_texture_path,
+					"RenderAssetManager: runtime environment source cache is disabled for '" + source_texture_path + "'; using fallback.");
+			}
+		}
+
+		if (!loaded)
+		{
+			if (attempted_ashibl)
+			{
+				log_environment_warning_once(
+					"failed_ashibl:" + ibl_asset_path,
+					"RenderAssetManager: failed to load environment asset '" + ibl_asset_path + "'; using fallback. " + ashibl_error);
+			}
+			resource = request_fallback_environment_map();
+		}
+
+		if (resource)
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_environment_maps[key] = resource;
+		}
+		return resource;
 	}
 }

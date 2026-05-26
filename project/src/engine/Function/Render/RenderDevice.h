@@ -35,6 +35,7 @@ namespace AshEngine
 		BGRA8_UNORM,
 		BGRA8_SRGB,
 		RGBA16_SFLOAT,
+		RG16_SFLOAT,
 		RGBA32_SFLOAT,
 		BC1_RGB_UNORM,
 		BC1_RGB_SRGB_UNORM,
@@ -236,6 +237,28 @@ namespace AshEngine
 		bool srgb = false;
 		const char* name = nullptr;
 	};
+
+	struct TextureSubresourceUploadDesc
+	{
+		uint32_t mip_level = 0;
+		uint32_t array_layer = 0;
+		const void* data = nullptr;
+		uint32_t row_pitch = 0;
+		uint32_t slice_pitch = 0;
+	};
+
+	struct TextureCubeUploadDesc
+	{
+		uint16_t width = 1;
+		uint16_t height = 1;
+		RenderTextureFormat format = RenderTextureFormat::RGBA16_SFLOAT;
+		uint8_t mip_level_count = 1;
+		const TextureSubresourceUploadDesc* subresources = nullptr;
+		uint32_t subresource_count = 0;
+		const char* name = nullptr;
+	};
+
+	ASH_API bool validate_texture_cube_upload_desc(const TextureCubeUploadDesc& desc, std::string* out_error = nullptr);
 
 	struct UniformBufferDesc
 	{
@@ -545,6 +568,7 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
 		std::shared_ptr<RenderTarget> create_texture_2d(const TextureUploadDesc& desc);
+		std::shared_ptr<RenderTarget> create_texture_cube(const TextureCubeUploadDesc& desc);
 		std::shared_ptr<RenderTarget> acquire_transient_render_target(const RenderTargetDesc& desc);
 		void release_transient_render_target(const std::shared_ptr<RenderTarget>& render_target);
 		void clear_transient_render_targets();

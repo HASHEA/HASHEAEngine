@@ -2,6 +2,7 @@
 
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
+#include "Function/Render/SunLightShadowPass.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
@@ -27,6 +28,8 @@ namespace AshEngine
 			"project/src/engine/Shaders/Deferred/DeferredBaseEmissive.hlsl";
 		static constexpr const char* k_deferred_directional_shader_path =
 			"project/src/engine/Shaders/Deferred/DeferredDirectionalLighting.hlsl";
+		static constexpr const char* k_deferred_directional_shadowed_shader_path =
+			"project/src/engine/Shaders/Deferred/DeferredDirectionalLightingShadowed.hlsl";
 		static constexpr const char* k_deferred_point_shader_path =
 			"project/src/engine/Shaders/Deferred/DeferredPointLighting.hlsl";
 		static constexpr const char* k_deferred_spot_shader_path =
@@ -393,6 +396,12 @@ namespace AshEngine
 			additive_fullscreen_state));
 		ASH_PROCESS_ERROR(m_directional_program != nullptr);
 
+		m_shadowed_directional_program = renderer.create_graphics_program(make_program_desc(
+			k_deferred_directional_shadowed_shader_path,
+			"SceneDeferredDirectionalLightingShadowed",
+			additive_fullscreen_state));
+		ASH_PROCESS_ERROR(m_shadowed_directional_program != nullptr);
+
 		const RHI::VertexInputCreation volume_vertex_input = make_deferred_volume_vertex_input_layout();
 		m_point_program = renderer.create_graphics_program(make_program_desc(
 			k_deferred_point_shader_path,
@@ -473,37 +482,33 @@ namespace AshEngine
 		m_spot_program.reset();
 		m_point_program.reset();
 		m_directional_program.reset();
+		m_shadowed_directional_program.reset();
 		m_base_emissive_program.reset();
 		m_point_clamp_sampler.reset();
 		m_renderer = nullptr;
 	}
 
-	bool DeferredLightingPass::add_passes(
+	bool DeferredLightingPass::add_base_pass(
 		RenderGraphBuilder& graph,
 		const VisibleRenderFrame& frame,
 		const SceneDeferredGraphResources& deferred_resources,
 		RenderGraphTextureRef output_target,
 		const SceneRenderViewContext& view_context)
 	{
-		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_passes", AshEngine::Profile::Color::Scene);
-		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.lights.size()));
-		ASH_PROFILE_PLOT("Scene/VisibleLights", static_cast<int64_t>(frame.lights.size()));
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_base_pass", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
-		ASH_PROCESS_ERROR(m_base_emissive_program && m_directional_program && m_point_program && m_spot_program && m_composite_program);
+		ASH_PROCESS_ERROR(m_base_emissive_program && m_directional_program && m_shadowed_directional_program && m_point_program && m_spot_program && m_composite_program);
 		ASH_PROCESS_ERROR(m_point_clamp_sampler != nullptr);
-		ASH_PROCESS_ERROR(m_sphere_vertex_buffer && m_sphere_index_buffer && m_sphere_index_count > 0);
-		ASH_PROCESS_ERROR(m_cone_vertex_buffer && m_cone_index_buffer && m_cone_index_count > 0);
 		ASH_PROCESS_ERROR(output_target);
 		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
 		ASH_PROCESS_ERROR(deferred_resources.depth);
 		ASH_PROCESS_ERROR(deferred_resources.ambient_occlusion);
 		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
 		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
-		ASH_PROCESS_ERROR(deferred_resources.scene_hdr_linear);
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
-			"SceneDeferredLightingAccumPass",
+			"SceneDeferredLightingBasePass",
 			RenderGraphPassFlags::None,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
@@ -518,8 +523,7 @@ namespace AshEngine
 			},
 			[this, &frame, &deferred_resources, &view_context, output_target](RenderGraphRasterContext& context) -> bool
 			{
-				ASH_PROFILE_SCOPE_NC("SceneDeferredLightingAccumPass", AshEngine::Profile::Color::Draw);
-				ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.lights.size()));
+				ASH_PROFILE_SCOPE_NC("SceneDeferredLightingBasePass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 				const std::vector<RenderGraphTextureRef>& gbuffer_refs = deferred_resources.gbuffer_targets;
 				std::shared_ptr<RenderTarget> gbuffer_a = context.get_texture(gbuffer_refs[0]);
@@ -532,25 +536,23 @@ namespace AshEngine
 				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
 				ASH_PROCESS_ERROR(gbuffer_a && gbuffer_b && gbuffer_c && gbuffer_d && gbuffer_e && depth && ambient_occlusion && output);
 
+				for (GraphicsProgram* program : {
+					m_base_emissive_program.get(),
+					m_directional_program.get(),
+					m_shadowed_directional_program.get(),
+					m_point_program.get(),
+					m_spot_program.get()
+				})
 				{
-					ASH_PROFILE_SCOPE_NC("DeferredLighting::BindGBufferResources", AshEngine::Profile::Color::Descriptor);
-					for (GraphicsProgram* program : {
-						m_base_emissive_program.get(),
-						m_directional_program.get(),
-						m_point_program.get(),
-						m_spot_program.get()
-					})
-					{
-						ASH_PROCESS_ERROR(program != nullptr);
-						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferA", gbuffer_a));
-						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferB", gbuffer_b));
-						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferC", gbuffer_c));
-						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferD", gbuffer_d));
-						ASH_PROCESS_ERROR(program->set_texture("SceneGBufferE", gbuffer_e));
-						ASH_PROCESS_ERROR(program->set_texture("SceneDepth", depth));
-						ASH_PROCESS_ERROR(program->set_texture("SceneAmbientOcclusion", ambient_occlusion));
-						ASH_PROCESS_ERROR(program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
-					}
+					ASH_PROCESS_ERROR(program != nullptr);
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferA", gbuffer_a));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferB", gbuffer_b));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferC", gbuffer_c));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferD", gbuffer_d));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferE", gbuffer_e));
+					ASH_PROCESS_ERROR(program->set_texture("SceneDepth", depth));
+					ASH_PROCESS_ERROR(program->set_texture("SceneAmbientOcclusion", ambient_occlusion));
+					ASH_PROCESS_ERROR(program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 				}
 
 				const DeferredLightingRootConstants base_constants = make_common_root_constants(frame, output);
@@ -558,43 +560,406 @@ namespace AshEngine
 					m_base_emissive_program.get(),
 					base_constants,
 					view_context)));
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
 
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool DeferredLightingPass::add_directional_light_pass(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
+		const SceneRenderViewContext& view_context,
+		uint32_t frame_light_index,
+		RenderGraphTextureRef shadow_mask)
+	{
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_directional_light_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(frame_light_index < frame.lights.size());
+		const VisibleLightData light = frame.lights[frame_light_index];
+		ASH_PROCESS_ERROR(light.type == LightType::Directional);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_directional_program && m_shadowed_directional_program);
+		ASH_PROCESS_ERROR(output_target);
+		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
+		ASH_PROCESS_ERROR(deferred_resources.depth);
+		ASH_PROCESS_ERROR(deferred_resources.ambient_occlusion);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
+
+		const bool use_directional_shadow = shadow_mask.is_valid();
+		const std::string light_pass_name =
+			use_directional_shadow ?
+			"SceneDeferredDirectionalLightingShadowedPass_" + std::to_string(frame_light_index) :
+			"SceneDeferredDirectionalLightingPass_" + std::to_string(frame_light_index);
+
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			light_pass_name.c_str(),
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
 				{
-					ASH_PROFILE_SCOPE_NC("DeferredLighting::SubmitLights", AshEngine::Profile::Color::Draw);
-					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.lights.size()));
-					for (const VisibleLightData& light : frame.lights)
+					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+				}
+				pass.read_texture(deferred_resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+				if (use_directional_shadow)
+				{
+					pass.read_texture(shadow_mask, RenderGraphAccess::GraphicsSRV);
+				}
+				pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Load, k_lighting_accum_clear_color);
+				pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Load, k_lighting_accum_clear_color);
+			},
+			[this, &frame, &view_context, output_target, light, use_directional_shadow, shadow_mask](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC("SceneDeferredDirectionalLightingPass", AshEngine::Profile::Color::Draw);
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+				ASH_PROCESS_ERROR(output != nullptr);
+				if (use_directional_shadow)
+				{
+					std::shared_ptr<RenderTarget> resolved_shadow_mask = context.get_texture(shadow_mask);
+					ASH_PROCESS_ERROR(resolved_shadow_mask != nullptr);
+					ASH_PROCESS_ERROR(m_shadowed_directional_program->set_texture("SceneDirectionalShadowMask", resolved_shadow_mask));
+					ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+						m_shadowed_directional_program.get(),
+						make_directional_constants(frame, output, light),
+						view_context)));
+				}
+				else
+				{
+					ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+						m_directional_program.get(),
+						make_directional_constants(frame, output, light),
+						view_context)));
+				}
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool DeferredLightingPass::add_point_light_pass(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
+		const SceneRenderViewContext& view_context,
+		uint32_t frame_light_index)
+	{
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_point_light_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(frame_light_index < frame.lights.size());
+		const VisibleLightData light = frame.lights[frame_light_index];
+		ASH_PROCESS_ERROR(light.type == LightType::Point);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_point_program != nullptr);
+		ASH_PROCESS_ERROR(m_sphere_vertex_buffer && m_sphere_index_buffer && m_sphere_index_count > 0);
+		ASH_PROCESS_ERROR(output_target);
+		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
+		ASH_PROCESS_ERROR(deferred_resources.depth);
+		ASH_PROCESS_ERROR(deferred_resources.ambient_occlusion);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
+
+		const std::string light_pass_name = "SceneDeferredPointLightingPass_" + std::to_string(frame_light_index);
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			light_pass_name.c_str(),
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
+				{
+					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+				}
+				pass.read_texture(deferred_resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+				pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Load, k_lighting_accum_clear_color);
+				pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Load, k_lighting_accum_clear_color);
+			},
+			[this, &frame, &view_context, output_target, light](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC("SceneDeferredPointLightingPass", AshEngine::Profile::Color::Draw);
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+				ASH_PROCESS_ERROR(output != nullptr);
+				ASH_PROCESS_ERROR(context.draw(create_volume_draw(
+					m_point_program.get(),
+					m_sphere_vertex_buffer,
+					m_sphere_index_buffer,
+					m_sphere_index_count,
+					make_point_constants(frame, output, light),
+					view_context)));
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool DeferredLightingPass::add_spot_light_pass(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
+		const SceneRenderViewContext& view_context,
+		uint32_t frame_light_index)
+	{
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_spot_light_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(frame_light_index < frame.lights.size());
+		const VisibleLightData light = frame.lights[frame_light_index];
+		ASH_PROCESS_ERROR(light.type == LightType::Spot);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_spot_program != nullptr);
+		ASH_PROCESS_ERROR(m_cone_vertex_buffer && m_cone_index_buffer && m_cone_index_count > 0);
+		ASH_PROCESS_ERROR(output_target);
+		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
+		ASH_PROCESS_ERROR(deferred_resources.depth);
+		ASH_PROCESS_ERROR(deferred_resources.ambient_occlusion);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
+
+		const std::string light_pass_name = "SceneDeferredSpotLightingPass_" + std::to_string(frame_light_index);
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			light_pass_name.c_str(),
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
+				{
+					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+				}
+				pass.read_texture(deferred_resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+				pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Load, k_lighting_accum_clear_color);
+				pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Load, k_lighting_accum_clear_color);
+			},
+			[this, &frame, &view_context, output_target, light](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC("SceneDeferredSpotLightingPass", AshEngine::Profile::Color::Draw);
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+				ASH_PROCESS_ERROR(output != nullptr);
+				ASH_PROCESS_ERROR(context.draw(create_volume_draw(
+					m_spot_program.get(),
+					m_cone_vertex_buffer,
+					m_cone_index_buffer,
+					m_cone_index_count,
+					make_spot_constants(frame, output, light),
+					view_context)));
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool DeferredLightingPass::add_lighting_accumulation_pass(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
+		const SceneRenderViewContext& view_context,
+		SunLightShadowPass* directional_shadow_pass,
+		const SunLightShadowPassOutputs* sunlight_shadow_outputs)
+	{
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_lighting_accumulation_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.lights.size()));
+		ASH_PROFILE_PLOT("Scene/VisibleLights", static_cast<int64_t>(frame.lights.size()));
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_base_emissive_program && m_directional_program && m_shadowed_directional_program && m_point_program && m_spot_program && m_composite_program);
+		ASH_PROCESS_ERROR(m_point_clamp_sampler != nullptr);
+		ASH_PROCESS_ERROR(m_sphere_vertex_buffer && m_sphere_index_buffer && m_sphere_index_count > 0);
+		ASH_PROCESS_ERROR(m_cone_vertex_buffer && m_cone_index_buffer && m_cone_index_count > 0);
+		ASH_PROCESS_ERROR(output_target);
+		ASH_PROCESS_ERROR(deferred_resources.gbuffer_targets.size() >= 5u);
+		ASH_PROCESS_ERROR(deferred_resources.depth);
+		ASH_PROCESS_ERROR(deferred_resources.ambient_occlusion);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
+
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneDeferredLightingBasePass",
+			RenderGraphPassFlags::None,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
+				{
+					pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+				}
+				pass.read_texture(deferred_resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+				pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+				pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+				pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Clear, k_lighting_accum_clear_color);
+			},
+			[this, &frame, &deferred_resources, &view_context, output_target](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC("SceneDeferredLightingBasePass", AshEngine::Profile::Color::Draw);
+				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+				const std::vector<RenderGraphTextureRef>& gbuffer_refs = deferred_resources.gbuffer_targets;
+				std::shared_ptr<RenderTarget> gbuffer_a = context.get_texture(gbuffer_refs[0]);
+				std::shared_ptr<RenderTarget> gbuffer_b = context.get_texture(gbuffer_refs[1]);
+				std::shared_ptr<RenderTarget> gbuffer_c = context.get_texture(gbuffer_refs[2]);
+				std::shared_ptr<RenderTarget> gbuffer_d = context.get_texture(gbuffer_refs[3]);
+				std::shared_ptr<RenderTarget> gbuffer_e = context.get_texture(gbuffer_refs[4]);
+				std::shared_ptr<RenderTarget> depth = context.get_texture(deferred_resources.depth);
+				std::shared_ptr<RenderTarget> ambient_occlusion = context.get_texture(deferred_resources.ambient_occlusion);
+				std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+				ASH_PROCESS_ERROR(gbuffer_a && gbuffer_b && gbuffer_c && gbuffer_d && gbuffer_e && depth && ambient_occlusion && output);
+
+				for (GraphicsProgram* program : {
+					m_base_emissive_program.get(),
+					m_directional_program.get(),
+					m_shadowed_directional_program.get(),
+					m_point_program.get(),
+					m_spot_program.get()
+				})
+				{
+					ASH_PROCESS_ERROR(program != nullptr);
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferA", gbuffer_a));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferB", gbuffer_b));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferC", gbuffer_c));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferD", gbuffer_d));
+					ASH_PROCESS_ERROR(program->set_texture("SceneGBufferE", gbuffer_e));
+					ASH_PROCESS_ERROR(program->set_texture("SceneDepth", depth));
+					ASH_PROCESS_ERROR(program->set_texture("SceneAmbientOcclusion", ambient_occlusion));
+					ASH_PROCESS_ERROR(program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
+				}
+
+				const DeferredLightingRootConstants base_constants = make_common_root_constants(frame, output);
+				ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+					m_base_emissive_program.get(),
+					base_constants,
+					view_context)));
+				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+			}));
+
+		for (uint32_t light_index = 0; light_index < static_cast<uint32_t>(frame.lights.size()); ++light_index)
+		{
+			const VisibleLightData& light = frame.lights[light_index];
+			const DirectionalShadowLightPlan* shadow_plan =
+				sunlight_shadow_outputs ?
+				find_shadow_plan_for_frame_light(*sunlight_shadow_outputs, light_index) :
+				nullptr;
+			const bool use_directional_shadow =
+				light.type == LightType::Directional &&
+				shadow_plan &&
+				shadow_plan->shadowed &&
+				directional_shadow_pass &&
+				sunlight_shadow_outputs &&
+				sunlight_shadow_outputs->has_shadowed_lights();
+
+			if (use_directional_shadow)
+			{
+				ASH_PROCESS_ERROR(directional_shadow_pass->add_shadow_mask_pass(
+					graph,
+					*sunlight_shadow_outputs,
+					shadow_plan->light_plan_index,
+					frame,
+					deferred_resources,
+					view_context));
+			}
+
+			const std::string light_pass_name =
+				use_directional_shadow ?
+				"SceneDeferredDirectionalLightingShadowedPass_" + std::to_string(light_index) :
+				(light.type == LightType::Directional ?
+					"SceneDeferredDirectionalLightingPass_" + std::to_string(light_index) :
+					(light.type == LightType::Point ?
+						"SceneDeferredPointLightingPass_" + std::to_string(light_index) :
+						"SceneDeferredSpotLightingPass_" + std::to_string(light_index)));
+
+			ASH_PROCESS_ERROR(graph.add_raster_pass(
+				light_pass_name.c_str(),
+				RenderGraphPassFlags::None,
+				[&](RenderGraphRasterPassBuilder& pass)
+				{
+					for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
 					{
-						if (light.type == LightType::Directional)
+						pass.read_texture(gbuffer, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.read_texture(deferred_resources.ambient_occlusion, RenderGraphAccess::GraphicsSRV);
+					pass.read_depth(deferred_resources.depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
+					if (use_directional_shadow)
+					{
+						pass.read_texture(sunlight_shadow_outputs->shadow_mask, RenderGraphAccess::GraphicsSRV);
+					}
+					pass.write_color(0, deferred_resources.lighting_diffuse, RenderLoadAction::Load, k_lighting_accum_clear_color);
+					pass.write_color(1, deferred_resources.lighting_specular, RenderLoadAction::Load, k_lighting_accum_clear_color);
+				},
+				[this, &frame, &deferred_resources, &view_context, output_target, light, use_directional_shadow, sunlight_shadow_outputs](RenderGraphRasterContext& context) -> bool
+				{
+					ASH_PROFILE_SCOPE_NC("SceneDeferredLightingLightPass", AshEngine::Profile::Color::Draw);
+					ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+					std::shared_ptr<RenderTarget> output = context.get_texture(output_target);
+					ASH_PROCESS_ERROR(output != nullptr);
+
+					if (light.type == LightType::Directional)
+					{
+						if (use_directional_shadow)
+						{
+							std::shared_ptr<RenderTarget> shadow_mask = context.get_texture(sunlight_shadow_outputs->shadow_mask);
+							ASH_PROCESS_ERROR(shadow_mask != nullptr);
+							ASH_PROCESS_ERROR(m_shadowed_directional_program->set_texture("SceneDirectionalShadowMask", shadow_mask));
+							ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
+								m_shadowed_directional_program.get(),
+								make_directional_constants(frame, output, light),
+								view_context)));
+						}
+						else
 						{
 							ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
 								m_directional_program.get(),
 								make_directional_constants(frame, output, light),
 								view_context)));
 						}
-						else if (light.type == LightType::Point)
-						{
-							ASH_PROCESS_ERROR(context.draw(create_volume_draw(
-								m_point_program.get(),
-								m_sphere_vertex_buffer,
-								m_sphere_index_buffer,
-								m_sphere_index_count,
-								make_point_constants(frame, output, light),
-								view_context)));
-						}
-						else if (light.type == LightType::Spot)
-						{
-							ASH_PROCESS_ERROR(context.draw(create_volume_draw(
-								m_spot_program.get(),
-								m_cone_vertex_buffer,
-								m_cone_index_buffer,
-								m_cone_index_count,
-								make_spot_constants(frame, output, light),
-								view_context)));
-						}
 					}
-				}
-				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-			}));
+					else if (light.type == LightType::Point)
+					{
+						ASH_PROCESS_ERROR(context.draw(create_volume_draw(
+							m_point_program.get(),
+							m_sphere_vertex_buffer,
+							m_sphere_index_buffer,
+							m_sphere_index_count,
+							make_point_constants(frame, output, light),
+							view_context)));
+					}
+					else if (light.type == LightType::Spot)
+					{
+						ASH_PROCESS_ERROR(context.draw(create_volume_draw(
+							m_spot_program.get(),
+							m_cone_vertex_buffer,
+							m_cone_index_buffer,
+							m_cone_index_count,
+							make_spot_constants(frame, output, light),
+							view_context)));
+					}
+					ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+				}));
+		}
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool DeferredLightingPass::add_composite_pass(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
+		const SceneRenderViewContext& view_context)
+	{
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_composite_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(m_composite_program != nullptr);
+		ASH_PROCESS_ERROR(m_point_clamp_sampler != nullptr);
+		ASH_PROCESS_ERROR(output_target);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_diffuse);
+		ASH_PROCESS_ERROR(deferred_resources.lighting_specular);
+		ASH_PROCESS_ERROR(deferred_resources.scene_hdr_linear);
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredCompositePass",
@@ -624,6 +989,34 @@ namespace AshEngine
 				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 			}));
 
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool DeferredLightingPass::add_passes(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneDeferredGraphResources& deferred_resources,
+		RenderGraphTextureRef output_target,
+		const SceneRenderViewContext& view_context,
+		SunLightShadowPass* directional_shadow_pass,
+		const SunLightShadowPassOutputs* sunlight_shadow_outputs)
+	{
+		ASH_PROFILE_SCOPE_NC("DeferredLightingPass::add_passes", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(add_lighting_accumulation_pass(
+			graph,
+			frame,
+			deferred_resources,
+			output_target,
+			view_context,
+			directional_shadow_pass,
+			sunlight_shadow_outputs));
+		ASH_PROCESS_ERROR(add_composite_pass(
+			graph,
+			frame,
+			deferred_resources,
+			output_target,
+			view_context));
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 }

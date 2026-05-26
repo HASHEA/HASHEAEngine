@@ -3,6 +3,7 @@
 #include "Base/hcore.h"
 #include "Base/hplatform.h"
 #include "Function/Asset/AssetDatabase.h"
+#include "Function/Scene/SceneConfig.h"
 #include "Function/Scene/SceneComponents.h"
 #include <cstddef>
 #include <cstdint>
@@ -50,6 +51,19 @@ namespace AshEngine
 		glm::mat4 world_transform{ 1.0f };
 	};
 
+	struct ASH_API SceneEnvironmentExtractionDesc
+	{
+		EntityId entity_id = 0;
+		std::string ibl_asset_path{};
+		std::string source_texture_path{};
+		float intensity = 1.0f;
+		float lighting_intensity = 1.0f;
+		float background_intensity = 1.0f;
+		float rotation_degrees = 0.0f;
+		bool visible_background = true;
+		bool affect_lighting = true;
+	};
+
 	class Scene;
 
 	class ASH_API Entity
@@ -93,6 +107,12 @@ namespace AshEngine
 		bool add_mesh_component(const MeshComponent& component = {});
 		bool set_mesh_component(const MeshComponent& component);
 		bool remove_mesh_component();
+
+		bool has_environment_component() const;
+		EnvironmentComponent get_environment_component() const;
+		bool add_environment_component(const EnvironmentComponent& component = {});
+		bool set_environment_component(const EnvironmentComponent& component);
+		bool remove_environment_component();
 
 		bool has_component(SceneComponentType type) const;
 		std::vector<SceneComponentType> get_component_types() const;
@@ -159,6 +179,7 @@ namespace AshEngine
 		std::vector<SceneMeshExtractionDesc> extract_mesh_entities() const;
 		std::vector<SceneMeshExtractionDesc> extract_visible_mesh_entities() const;
 		std::vector<SceneLightExtractionDesc> extract_light_entities() const;
+		bool extract_active_environment(SceneEnvironmentExtractionDesc& out_environment) const;
 		bool try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const;
 
 		Entity instantiate_model(const Model& model, const Entity& parent = {}, std::string_view root_name_override = {});
@@ -170,9 +191,13 @@ namespace AshEngine
 
 		bool is_dirty() const;
 		uint64_t get_change_version() const;
+		const SceneRenderConfig& get_render_config() const;
+		bool set_render_config(const SceneRenderConfig& config);
 		uint64_t get_render_primitive_version() const;
 		uint64_t get_render_transform_version() const;
 		uint64_t get_render_light_version() const;
+		uint64_t get_render_environment_version() const;
+		uint64_t get_render_config_version() const;
 		void mark_clean();
 
 	private:

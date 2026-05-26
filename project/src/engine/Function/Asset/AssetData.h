@@ -110,6 +110,7 @@ namespace AshEngine
 		std::optional<CameraComponent> camera{};
 		std::optional<LightComponent> light{};
 		std::optional<MeshComponent> mesh{};
+		std::optional<EnvironmentComponent> environment{};
 	};
 
 	struct AshAsset

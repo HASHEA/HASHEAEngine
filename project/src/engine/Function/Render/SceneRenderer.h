@@ -3,7 +3,11 @@
 #include "Base/hcore.h"
 #include "Function/Render/AmbientOcclusionPass.h"
 #include "Function/Render/DeferredLightingPass.h"
+#include "Function/Render/DirectionalLightShadowPass.h"
+#include "Function/Render/SunLightShadowPass.h"
+#include "Function/Render/EnvironmentLightingPass.h"
 #include "Function/Render/PostProcessToneMapPass.h"
+#include "Function/Render/SkyBackgroundPass.h"
 #include "Function/Render/EngineShaderFamilyRegistry.h"
 #include "Function/Render/RenderDebugView.h"
 #include "Function/Render/RenderGraphFwd.h"
@@ -65,6 +69,12 @@ namespace AshEngine
 		void commit_temporal_view_state(uint64_t view_key, const VisibleRenderFrame& frame);
 		size_t reserve_frame_instance_buffer_slot_range(size_t slot_count);
 		std::shared_ptr<VertexBuffer> ensure_instance_buffer(size_t buffer_index, const SceneStaticMeshInstanceData* instances, uint32_t instance_count);
+		bool render_shadow_static_meshes_to_pass(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			RenderGraphRasterContext& pass_context,
+			uint64_t render_frame_index,
+			ShadowCasterMobilityFilter mobility_filter);
 		bool render_static_meshes_to_pass(
 			const VisibleRenderFrame& frame,
 			const SceneRenderViewContext& view_context,
@@ -86,7 +96,11 @@ namespace AshEngine
 		Renderer* m_renderer = nullptr;
 		DebugDrawService* m_debug_draw_service = nullptr;
 		AmbientOcclusionPass m_ambient_occlusion_pass{};
+		SunLightShadowPass m_sunlight_shadow_pass{};
+		DirectionalLightShadowPass m_directional_light_shadow_pass{};
 		DeferredLightingPass m_deferred_lighting_pass{};
+		EnvironmentLightingPass m_environment_lighting_pass{};
+		SkyBackgroundPass m_sky_background_pass{};
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		RenderDebugView m_render_debug_view{};
 		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;

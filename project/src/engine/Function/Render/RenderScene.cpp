@@ -44,6 +44,12 @@ namespace AshEngine
 			const float inner_degrees = std::clamp(light.inner_cone_angle_degrees, 0.0f, outer_degrees);
 			out_light.inner_cone_cos = std::cos(glm::radians(inner_degrees));
 			out_light.outer_cone_cos = std::cos(glm::radians(outer_degrees));
+			out_light.casts_shadow = light.casts_shadow;
+			out_light.sunlight = light.type == LightType::Directional && light.sunlight;
+			out_light.shadow_priority = light.shadow_priority;
+			out_light.shadow_distance = light.shadow_distance;
+			out_light.shadow_cascade_count = light.shadow_cascade_count;
+			out_light.near_shadow_distance = light.near_shadow_distance;
 			return true;
 		}
 	}
@@ -54,6 +60,8 @@ namespace AshEngine
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
 		m_lights = other.m_lights;
+		m_environment = other.m_environment;
+		m_render_config = other.m_render_config;
 	}
 
 	RenderScene::RenderScene(RenderScene&& other) noexcept
@@ -62,7 +70,10 @@ namespace AshEngine
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
 		m_lights = std::move(other.m_lights);
+		m_environment = std::move(other.m_environment);
+		m_render_config = std::move(other.m_render_config);
 		other.m_next_primitive_id = 1;
+		other.m_render_config = make_default_scene_render_config();
 	}
 
 	RenderScene& RenderScene::operator=(const RenderScene& other)
@@ -75,6 +86,8 @@ namespace AshEngine
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
 		m_lights = other.m_lights;
+		m_environment = other.m_environment;
+		m_render_config = other.m_render_config;
 		return *this;
 	}
 
@@ -88,7 +101,10 @@ namespace AshEngine
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
 		m_lights = std::move(other.m_lights);
+		m_environment = std::move(other.m_environment);
+		m_render_config = std::move(other.m_render_config);
 		other.m_next_primitive_id = 1;
+		other.m_render_config = make_default_scene_render_config();
 		return *this;
 	}
 
@@ -137,6 +153,8 @@ namespace AshEngine
 			m_next_primitive_id = next_primitive_id;
 		}
 		ASH_PROCESS_ERROR(rebuild_lights_from_scene(scene));
+		ASH_PROCESS_ERROR(rebuild_environment_from_scene(scene));
+		ASH_PROCESS_ERROR(rebuild_render_config_from_scene(scene));
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -188,10 +206,56 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool RenderScene::rebuild_environment_from_scene(const Scene& scene)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_environment_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		SceneEnvironmentExtractionDesc extracted{};
+		if (!scene.extract_active_environment(extracted))
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_environment.reset();
+			return true;
+		}
+
+		VisibleEnvironmentData environment{};
+		environment.entity_id = extracted.entity_id;
+		environment.ibl_asset_path = extracted.ibl_asset_path;
+		environment.source_texture_path = extracted.source_texture_path;
+		environment.intensity = extracted.intensity;
+		environment.lighting_intensity = extracted.lighting_intensity;
+		environment.background_intensity = extracted.background_intensity;
+		environment.rotation_degrees = extracted.rotation_degrees;
+		environment.visible_background = extracted.visible_background;
+		environment.affect_lighting = extracted.affect_lighting;
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_environment = std::move(environment);
+		}
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderScene::rebuild_render_config_from_scene(const Scene& scene)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_render_config_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		m_render_config = scene.get_render_config();
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool RenderScene::build_visible_render_frame(
 		uint64_t frame_index,
 		const SceneView& view,
-		VisibleRenderFrame& out_frame) const
+		VisibleRenderFrame& out_frame,
+		uint64_t static_scene_revision,
+		uint64_t transform_scene_revision,
+		uint64_t light_scene_revision) const
 	{
 		ASH_PROFILE_SCOPE_NC("RenderScene::build_visible_render_frame", AshEngine::Profile::Color::Visibility);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -213,7 +277,15 @@ namespace AshEngine
 		out_frame.view_projection = view.view_projection;
 		out_frame.camera_position = view.camera_position;
 		out_frame.reverse_z = view.reverse_z;
+		out_frame.static_scene_revision = static_scene_revision;
+		out_frame.transform_scene_revision = transform_scene_revision;
+		out_frame.light_scene_revision = light_scene_revision;
 		ASH_PROCESS_ERROR(build_visible_light_frame(out_frame));
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			out_frame.environment = m_environment;
+		}
 
 		out_frame.static_mesh_draws.reserve(visibility.visible_primitives.primitives.size());
 		for (const StaticMeshPrimitiveProxy* primitive_ptr : visibility.visible_primitives.primitives)
@@ -230,7 +302,29 @@ namespace AshEngine
 			draw.world_transform = primitive.get_world_transform();
 			draw.render_asset = primitive.get_render_asset();
 			draw.sections = primitive.get_sections();
+			draw.bounds = primitive.get_bounds();
+			draw.mobility = primitive.get_mobility();
 			out_frame.static_mesh_draws.push_back(std::move(draw));
+		}
+
+		out_frame.shadow_caster_static_mesh_draws.reserve(primitives_snapshot.size());
+		for (const std::shared_ptr<StaticMeshPrimitiveProxy>& primitive_ptr : primitives_snapshot)
+		{
+			if (!primitive_ptr || !primitive_ptr->is_visible())
+			{
+				continue;
+			}
+
+			const StaticMeshPrimitiveProxy& primitive = *primitive_ptr;
+			VisibleStaticMeshDraw draw{};
+			draw.primitive_id = primitive.get_primitive_id();
+			draw.entity_id = primitive.get_entity_id();
+			draw.world_transform = primitive.get_world_transform();
+			draw.render_asset = primitive.get_render_asset();
+			draw.sections = primitive.get_sections();
+			draw.bounds = primitive.get_bounds();
+			draw.mobility = primitive.get_mobility();
+			out_frame.shadow_caster_static_mesh_draws.push_back(std::move(draw));
 		}
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -240,6 +334,7 @@ namespace AshEngine
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
 		out_frame.lights = m_lights;
+		out_frame.render_config = m_render_config;
 		return true;
 	}
 

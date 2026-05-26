@@ -8,11 +8,13 @@
 
 namespace AshEngine
 {
+	class SunLightShadowPass;
 	class GraphicsProgram;
 	class IndexBuffer;
 	class RenderSampler;
 	class Renderer;
 	class VertexBuffer;
+	struct SunLightShadowPassOutputs;
 	struct SceneRenderViewContext;
 	struct VisibleRenderFrame;
 
@@ -22,12 +24,62 @@ namespace AshEngine
 		bool initialize(Renderer* renderer);
 		void shutdown();
 
-		bool add_passes(
+		bool add_lighting_accumulation_pass(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context,
+			SunLightShadowPass* directional_shadow_pass = nullptr,
+			const SunLightShadowPassOutputs* sunlight_shadow_outputs = nullptr);
+
+		bool add_base_pass(
 			RenderGraphBuilder& graph,
 			const VisibleRenderFrame& frame,
 			const SceneDeferredGraphResources& deferred_resources,
 			RenderGraphTextureRef output_target,
 			const SceneRenderViewContext& view_context);
+
+		bool add_directional_light_pass(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context,
+			uint32_t frame_light_index,
+			RenderGraphTextureRef shadow_mask = {});
+
+		bool add_point_light_pass(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context,
+			uint32_t frame_light_index);
+
+		bool add_spot_light_pass(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context,
+			uint32_t frame_light_index);
+
+		bool add_composite_pass(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context);
+
+		bool add_passes(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const SceneDeferredGraphResources& deferred_resources,
+			RenderGraphTextureRef output_target,
+			const SceneRenderViewContext& view_context,
+			SunLightShadowPass* directional_shadow_pass = nullptr,
+			const SunLightShadowPassOutputs* sunlight_shadow_outputs = nullptr);
 
 	private:
 		bool create_programs(Renderer& renderer);
@@ -36,6 +88,7 @@ namespace AshEngine
 		Renderer* m_renderer = nullptr;
 		std::unique_ptr<GraphicsProgram> m_base_emissive_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_directional_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_shadowed_directional_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_point_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_spot_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_composite_program = nullptr;

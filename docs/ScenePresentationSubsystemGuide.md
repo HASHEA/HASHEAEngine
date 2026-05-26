@@ -104,10 +104,12 @@ binding 是持久声明，不是逐帧命令。上层通过 `create_*` / `update
 具体约定：
 
 - `Scene::get_change_version()` 仍用于通用 scene 脏状态观察，但 render sync 不复用 `Scene::mark_clean()` / `is_dirty()`。
-- render sync 使用 `Scene::get_render_primitive_version()`、`Scene::get_render_transform_version()`、`Scene::get_render_light_version()` 三类版本。
+- render sync 使用 `Scene::get_render_primitive_version()`、`Scene::get_render_transform_version()`、`Scene::get_render_light_version()`、`Scene::get_render_environment_version()` 和 `Scene::get_render_config_version()`。
 - primitive version 变化、binding 请求 refresh 或 cached `RenderScene` 无效时，才按 scene 粗粒度 `RenderScene::rebuild_from_scene(...)` 重建 static mesh primitives。
 - 仅 transform version 变化时，`ScenePresentationSubsystem` 调用 `RenderScene::update_transforms_from_scene(...)` 更新 primitive world transform / bounds，并重建灯光快照以覆盖 light entity transform。
 - 仅 light version 变化时，只调用 `RenderScene::rebuild_lights_from_scene(...)`。
+- 仅 environment version 变化时，只刷新 `RenderScene` 的环境快照。
+- 仅 render config version 变化时，只刷新 `RenderScene` 的 `SceneRenderConfig` 快照；`VisibleRenderFrame` 会携带该快照，供 `SceneRenderer` 选择 AO 和方向光阴影。Render Debug View 属于进程级诊断配置，由 `Engine.ini` 的 `[RenderDebugView]` 控制，不随 scene render config 传递。
 - 内部按 `Scene*` 维护 `RenderScene`
 - `build_scene_view_for_camera_entity(...)` 已提供显式 camera entity 入口
 - `build_scene_view_from_matrices(...)` 已提供显式 view/projection matrix 入口，并由 `SceneCameraSource::Override` 使用
@@ -148,12 +150,12 @@ Editor scene-driven viewport 的推荐接入模式是：
 
 Sandbox 标准场景主路径的推荐模式是：
 
-1. 运行时只维护 scene 内容、相机逻辑、资源加载和场景变更
+1. 从 `product/assets/scenes/Sandbox.scene.json` 加载标准 scene asset
 2. 注册一个 `Window` output
 3. 注册一个 persistent binding
 4. 保持 `Application::_on_render()` / `_present()` 默认流程
 
-当前 `Sandbox` 已经迁移到这条路径，不再手动驱动 `Renderer::begin_frame()` / `SceneRenderer`
+当前 `Sandbox` 已经迁移到这条路径，不再手动驱动 `Renderer::begin_frame()` / `SceneRenderer`，也不再通过 overlay 或 `ASH_SANDBOX_MODEL` 切换标准模型。标准 scene 文件拥有 Sponza、primary camera、directional / point / spot lights、active environment 和 `scene_config`。
 
 ## 9. 非 scene renderer 的边界
 
