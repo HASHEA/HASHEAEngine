@@ -6,9 +6,11 @@
 *.sln
 *.bak
 *.hlog
+*.lnk
 AGENTS.md
 
 # ignore directories
+.vscode
 .claude
 bin
 bin-int
@@ -24,4 +26,5 @@ product/logs
 product/caches
 product/test-reports
 product/test-temp
+project/src/editor/product
 cacheshader
