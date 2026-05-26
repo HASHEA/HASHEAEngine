@@ -1527,7 +1527,7 @@ Render 侧还提供 `build_scene_view_from_matrices(...)`，用于从显式 view
 
 - `product/assets/scenes/Sandbox.scene.json`
 - 该 scene 文件包含 Sponza mesh 引用、primary camera、directional / point / spot 三类基础灯光、active sky environment，以及标准 `scene_config`
-- `Scene::load_from_file()` 会读取 active `.ashibl` metadata；若存在 `dominant_light`，则创建或更新名为 `EnvironmentSunLight` 的 sunlight DirectionalLight，使用应用 `EnvironmentComponent.rotation_degrees` 后的太阳方向取反作为光线传播方向，并使用 scene 的 directional shadow 默认距离/级联设置。
+- `Scene::load_from_file()` 会读取 active `.ashibl` metadata；若 scene 中还没有 `sunlight=true` 的 directional light，且 metadata 存在 `dominant_light`，则创建名为 `EnvironmentSunLight` 的 sunlight DirectionalLight，使用应用 `EnvironmentComponent.rotation_degrees` 后的太阳方向取反作为光线传播方向，并使用 scene 的 directional shadow 默认距离/级联设置；scene 中已有的 sunlight 会在加载时保留，并由 `Scene::save_to_file()` 写回 scene 文件。
 
 Sandbox 标准路径只加载这一个 scene asset，不再从 `product/assets/models/gltfs/` 枚举模型，不再提供 `Sandbox Model` overlay，也不再读取 `ASH_SANDBOX_MODEL` 作为启动模型覆盖。标准场景会保留 glTF 导入得到的材质槽和贴图绑定，不再为验证目的向 mesh 注入固定 debug material override；V2 材质链路由 glTF 默认材质生成的 `.AshMatIns` 覆盖。
 

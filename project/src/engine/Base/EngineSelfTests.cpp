@@ -3604,6 +3604,88 @@ namespace AshEngine
 			return ok || report_self_test_failure("Scene environment sunlight", "environment metadata did not create a shadow-casting sunlight");
 		}
 
+		auto test_scene_environment_metadata_preserves_existing_sunlight() -> bool
+		{
+			const std::filesystem::path test_dir = engine_self_test_dir() / "scene_sunlight";
+			std::filesystem::create_directories(test_dir);
+			const std::filesystem::path ibl_path = test_dir / "preserve_sun.ashibl";
+			const std::filesystem::path scene_path = test_dir / "preserve_sun.scene.json";
+
+			EnvironmentMapCookedData cooked{};
+			fill_environment_map_test_pattern(cooked);
+			cooked.dominant_light.valid = true;
+			cooked.dominant_light.direction = glm::normalize(glm::vec3(0.25f, 0.9f, 0.15f));
+			cooked.dominant_light.luminance = 8.0f;
+			cooked.dominant_light.source = "self-test";
+
+			std::string error{};
+			if (!write_ashibl_file(ibl_path, cooked, &error))
+			{
+				return report_self_test_failure(
+					"Scene environment sunlight preserve",
+					error.empty() ? "failed to write test ashibl" : error.c_str());
+			}
+
+			const glm::vec3 saved_rotation{ 12.0f, -34.0f, 56.0f };
+			{
+				std::ofstream file(scene_path, std::ios::trunc);
+				file <<
+					"{\n"
+					"  \"version\": 4,\n"
+					"  \"name\": \"PreserveSun\",\n"
+					"  \"next_entity_id\": 3,\n"
+					"  \"entities\": [\n"
+					"    {\n"
+					"      \"id\": 1,\n"
+					"      \"name\": \"Environment\",\n"
+					"      \"transform\": {},\n"
+					"      \"environment\": {\n"
+					"        \"active\": true,\n"
+					"        \"ibl_asset_path\": \"" << ibl_path.generic_string() << "\"\n"
+					"      }\n"
+					"    },\n"
+					"    {\n"
+					"      \"id\": 2,\n"
+					"      \"name\": \"SavedSunLight\",\n"
+					"      \"transform\": {\n"
+					"        \"rotation_euler_degrees\": [" << saved_rotation.x << ", " << saved_rotation.y << ", " << saved_rotation.z << "]\n"
+					"      },\n"
+					"      \"light\": {\n"
+					"        \"type\": 0,\n"
+					"        \"sunlight\": true,\n"
+					"        \"casts_shadow\": true\n"
+					"      }\n"
+					"    }\n"
+					"  ]\n"
+					"}\n";
+			}
+
+			Scene scene = Scene::load_from_file(scene_path, &error);
+			if (!scene.is_valid())
+			{
+				return report_self_test_failure(
+					"Scene environment sunlight preserve",
+					error.empty() ? "preserve sunlight scene failed to load" : error.c_str());
+			}
+
+			Entity saved_sun = scene.find_entity(2u);
+			if (!saved_sun.is_valid() || !saved_sun.has_light_component())
+			{
+				return report_self_test_failure("Scene environment sunlight preserve", "saved sunlight entity was missing after load");
+			}
+
+			const TransformComponent transform = saved_sun.get_transform_component();
+			const bool ok =
+				saved_sun.get_light_component().sunlight &&
+				std::abs(transform.rotation_euler_degrees.x - saved_rotation.x) <= 0.001f &&
+				std::abs(transform.rotation_euler_degrees.y - saved_rotation.y) <= 0.001f &&
+				std::abs(transform.rotation_euler_degrees.z - saved_rotation.z) <= 0.001f;
+			return ok ||
+				report_self_test_failure(
+					"Scene environment sunlight preserve",
+					"existing sunlight transform was overwritten from environment metadata");
+		}
+
 		auto test_render_scene_copies_scene_render_config_to_visible_frame() -> bool
 		{
 			Scene scene = Scene::create("RenderConfigSnapshotSelfTest");
@@ -4327,6 +4409,7 @@ namespace AshEngine
 		all_passed = test_scene_light_sunlight_json_round_trip() && all_passed;
 		all_passed = test_scene_rejects_multiple_directional_sunlights() && all_passed;
 		all_passed = test_scene_environment_metadata_creates_sunlight() && all_passed;
+		all_passed = test_scene_environment_metadata_preserves_existing_sunlight() && all_passed;
 		all_passed = test_render_scene_copies_scene_render_config_to_visible_frame() && all_passed;
 		all_passed = test_scene_extracts_single_active_environment() && all_passed;
 		all_passed = test_sunlight_shadow_planner_rejects_multiple_sunlights() && all_passed;

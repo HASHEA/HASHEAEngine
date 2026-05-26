@@ -509,6 +509,24 @@ namespace AshEngine
 			return true;
 		}
 
+		static auto find_directional_sunlight_entity(const Scene& scene) -> Entity
+		{
+			for (const Entity& entity : scene.get_entities())
+			{
+				if (!entity.is_valid() || !entity.has_light_component())
+				{
+					continue;
+				}
+
+				const LightComponent light = entity.get_light_component();
+				if (light.type == LightType::Directional && light.sunlight)
+				{
+					return entity;
+				}
+			}
+			return {};
+		}
+
 		static auto find_environment_sun_light(Scene& scene) -> Entity
 		{
 			for (const Entity& entity : scene.get_entities())
@@ -527,10 +545,15 @@ namespace AshEngine
 			return {};
 		}
 
-		static auto create_or_update_environment_sun_light(Scene& scene, std::string* out_error) -> bool
+		static auto ensure_environment_sun_light_from_metadata(Scene& scene, std::string* out_error) -> bool
 		{
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 			ASH_PROCESS_ERROR(scene.is_valid());
+
+			if (find_directional_sunlight_entity(scene).is_valid())
+			{
+				return true;
+			}
 
 			SceneEnvironmentExtractionDesc environment{};
 			if (!scene.extract_active_environment(environment))
@@ -602,7 +625,7 @@ namespace AshEngine
 			}
 
 			HLogInfo(
-				"Scene '{}': synchronized '{}' from '{}'. sun_direction_ws=({}, {}, {}) light_ray_direction_ws=({}, {}, {}).",
+				"Scene '{}': created '{}' from '{}'. sun_direction_ws=({}, {}, {}) light_ray_direction_ws=({}, {}, {}).",
 				scene.get_name(),
 				k_environment_sun_light_name,
 				ibl_path.generic_string(),
@@ -1500,7 +1523,7 @@ namespace AshEngine
 			}
 		}
 		ASH_PROCESS_ERROR(hierarchy_valid);
-		ASH_PROCESS_ERROR(create_or_update_environment_sun_light(scene, out_error));
+		ASH_PROCESS_ERROR(ensure_environment_sun_light_from_metadata(scene, out_error));
 		ASH_PROCESS_ERROR(validate_single_directional_sunlight(scene, out_error));
 
 		scene.m_impl->storage.dirty = false;

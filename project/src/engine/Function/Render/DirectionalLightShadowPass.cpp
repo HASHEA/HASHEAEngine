@@ -1,6 +1,7 @@
 #include "Function/Render/DirectionalLightShadowPass.h"
 
 #include "Base/hprofiler.h"
+#include "Function/Render/DirectionalShadowCascadeMath.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
@@ -221,83 +222,6 @@ namespace AshEngine
 			return try_allocate_tile(config.dynamic_atlas_size, resolution, cursor_x, cursor_y, row_height, out_tile);
 		}
 
-		auto get_cascade_frustum_corners(
-			const VisibleRenderFrame& frame,
-			float split_near,
-			float split_far) -> std::array<glm::vec3, 8>
-		{
-			const glm::mat4 inverse_view_projection = glm::inverse(frame.view_projection);
-			std::array<glm::vec3, 8> corners{};
-			uint32_t index = 0;
-			for (uint32_t z_index = 0; z_index < 2u; ++z_index)
-			{
-				const float clip_z = frame.reverse_z ?
-					(z_index == 0u ? 1.0f : 0.0f) :
-					(z_index == 0u ? 0.0f : 1.0f);
-				for (uint32_t y_index = 0; y_index < 2u; ++y_index)
-				{
-					for (uint32_t x_index = 0; x_index < 2u; ++x_index)
-					{
-						const glm::vec4 clip{
-							x_index == 0u ? -1.0f : 1.0f,
-							y_index == 0u ? -1.0f : 1.0f,
-							clip_z,
-							1.0f
-						};
-						glm::vec4 world = inverse_view_projection * clip;
-						world /= std::max(std::abs(world.w), 0.00001f);
-						const glm::vec3 ray = glm::vec3(world) - frame.camera_position;
-						const float target_distance = z_index == 0u ? split_near : split_far;
-						corners[index++] = frame.camera_position + glm::normalize(ray) * target_distance;
-					}
-				}
-			}
-			return corners;
-		}
-
-		auto build_cascade_light_view_projection(
-			const VisibleRenderFrame& frame,
-			const glm::vec3& light_direction_ws,
-			float split_near,
-			float split_far) -> glm::mat4
-		{
-			const std::array<glm::vec3, 8> corners = get_cascade_frustum_corners(frame, split_near, split_far);
-			glm::vec3 center{ 0.0f };
-			for (const glm::vec3& corner : corners)
-			{
-				center += corner;
-			}
-			center /= static_cast<float>(corners.size());
-
-			const glm::vec3 light_dir = glm::normalize(light_direction_ws);
-			const glm::vec3 light_position = center - light_dir * split_far;
-			const glm::vec3 up = std::abs(glm::dot(light_dir, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.95f ?
-				glm::vec3(0.0f, 0.0f, 1.0f) :
-				glm::vec3(0.0f, 1.0f, 0.0f);
-			const glm::mat4 light_view = glm::lookAtLH(light_position, center, up);
-
-			glm::vec3 min_bounds{ std::numeric_limits<float>::max() };
-			glm::vec3 max_bounds{ -std::numeric_limits<float>::max() };
-			for (const glm::vec3& corner : corners)
-			{
-				const glm::vec3 light_space = glm::vec3(light_view * glm::vec4(corner, 1.0f));
-				min_bounds = glm::min(min_bounds, light_space);
-				max_bounds = glm::max(max_bounds, light_space);
-			}
-
-			const float z_padding = std::max(split_far - split_near, 1.0f);
-			min_bounds.z -= z_padding;
-			max_bounds.z += z_padding;
-			const glm::mat4 light_projection = glm::orthoLH_ZO(
-				min_bounds.x,
-				max_bounds.x,
-				min_bounds.y,
-				max_bounds.y,
-				min_bounds.z,
-				max_bounds.z);
-			return light_projection * light_view;
-		}
-
 		auto create_fullscreen_draw(
 			GraphicsProgram* program,
 			const SceneRenderViewContext& view_context,
@@ -454,7 +378,11 @@ namespace AshEngine
 				cascade_plan.split_far = split_far;
 				cascade_plan.depth_bias = config.depth_bias;
 				cascade_plan.normal_bias = config.normal_bias;
-				cascade_plan.light_view_projection = build_cascade_light_view_projection(frame, light.direction_ws, split_near, split_far);
+				cascade_plan.light_view_projection = build_directional_shadow_cascade_light_view_projection(
+					frame,
+					light.direction_ws,
+					split_near,
+					split_far);
 				cascade_plan.dynamic_tile = dynamic_tile;
 				cascade_plan.cache_mode = DirectionalShadowCacheMode::NearEveryFrame;
 				cascade_plan.has_static_cache_tile = false;
