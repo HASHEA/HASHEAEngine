@@ -20,26 +20,27 @@
 | --- | --- | --- |
 | Scene 视口输出 | `ScenePresentationSubsystem::create_output()` / `create_view_binding()` | 已支持 Editor offscreen viewport。 |
 | 显式矩阵相机 | `SceneCameraSource::Override` / `SceneViewCameraOverride` | Editor Scene 视口已使用，不再需要 preview camera entity。 |
-| Scene 查询 | `Function/Scene/SceneQuery.*` | 已支持 world bounds、screen ray、CPU AABB ray cast。 |
-| AssetId 实例化 facade | `instantiate_asset(Scene&, AssetDatabase&, AssetId, SceneInstantiationDesc)` | 已覆盖 `Model` / `Prefab`，未覆盖 `Mesh`。 |
+| Scene 查询 | `Function/Scene/SceneQuery.*` | 已支持 world bounds、screen ray、CPU AABB ray cast、`project_ray_to_plane()` / `find_scene_drop_point()`。 |
+| AssetId 实例化 facade | `instantiate_asset(Scene&, AssetDatabase&, AssetId, SceneInstantiationDesc)` | 已覆盖 `Model` / `Prefab` / `Mesh`。 |
 | Scene 层级 facade | `Scene::create_entity()` / `destroy_entity()` / `reparent_entity()` / sibling index | Hierarchy 命令已有可用底座。 |
 | 组件读写 | `Entity::read_component()` / `write_component()` / typed add/set/remove | Inspector 与命令系统已有底层边界。 |
-| 组件元数据 | `get_scene_component_descriptor()` / `get_scene_enum_descriptor()` | 已有最小属性描述，可继续扩展。 |
-| Scene dirty/version | `Scene::is_dirty()` / `get_change_version()` / `mark_clean()` | 已有轮询式状态，缺事件语义。 |
-| Debug draw 基础能力 | `DebugDrawService::draw_line/box/circle/cone/axes()` | 已有全局 frame-local 线框队列和 SceneRenderer overlay pass；但当前 pass 仍是全局提交、`depth_test = false` 的 always-on-top 语义。 |
+| 通用 Add/Remove Component | `can_add_scene_component()` / `add_scene_component()` / `can_remove_scene_component()` / `remove_scene_component()` | 按 `SceneComponentType` 的统一 facade。 |
+| 组件元数据 | `get_scene_component_descriptor()` / `get_scene_enum_descriptor()` | `ScenePropertyDesc` 已含 editor hint、range、asset ref、read-only。 |
+| Scene change event | `Scene::subscribe_change_events()` / `SceneChangeEvent` | 已覆盖 entity/hierarchy/component/replace/reload/dirty 事件。 |
+| Scene reload / replace | `Scene::reload_from_file()` / `replace_contents()` | 保留 change event 订阅者。 |
+| Scene dirty/version | `Scene::is_dirty()` / `get_change_version()` / `mark_clean()` | 轮询 + `DirtyStateChanged` 事件。 |
+| GPU picking | `request_scene_entity_pick()` / `poll_scene_entity_pick_result()` | GBuffer 后 entity id pass + async readback。 |
+| Scene overlay depth | `submit_scene_overlay()` / `clear_scene_overlay()` / `SceneOverlayDepthMode` | viewport-scoped、depth-aware overlay pass。 |
+| Viewport stats | `get_scene_view_stats()` | output 尺寸、backend、draw calls、frame time / FPS。 |
+| Debug draw 基础能力 | `DebugDrawService::draw_line/box/circle/cone/axes()` | 全局 frame-local 线框队列和 SceneRenderer overlay pass；与 per-viewport scene overlay 分工。 |
 
 ## 仍需补齐
 
 | 优先级 | 缺口 | 当前症状 | 推荐处理 |
 | --- | --- | --- | --- |
-| P1 | `AssetType::Mesh` 接入 `instantiate_asset(AssetId)` | Mesh 拖入场景仍要 Editor fallback 创建实体再挂 `MeshComponent`。 | 在现有 facade 内扩展 Mesh 分支。 |
-| P1 | 统一 scene drop point helper | Viewport 拖拽落点规则散在 Editor：先 ray cast，再地面，再相机前方。 | Engine 提供 `find_scene_drop_point()` 或 `project_ray_to_plane()`。 |
-| P1 | Scene change event 语义 | Editor 只能轮询 dirty/version，scene replace/reload/component/hierarchy 变更仍靠局部重置。 | 增加 `SceneChangeKind` 或事件快照。 |
-| P2 | GPU ID buffer picking | CPU AABB picking 精度有限，复杂模型/遮挡下误差大。 | Scene viewport 提供 ID buffer 或 render picking facade。 |
-| P1 | Scene overlay per-viewport / depth 语义 | 当前 DebugDraw 是全局队列；Editor 的 grid/gizmo/helper 仍主要走 `UIContext` 叠加，天然不参与 scene depth。即使切到 Engine 现有 debug overlay pass，也还是 `depth_test = false`，现象仍然是 overlay 总浮在最上层。 | 增加 viewport-scoped submit 或 overlay context，并补 depth-aware scene overlay 能力；这是修 Scene 视口遮挡正确性的必要接口。 |
-| P2 | 组件元数据增强 | 现有元数据能描述基础字段，但缺 editor hint、range、asset ref 类型、只读等信息。 | 扩展 `ScenePropertyDesc` 的编辑器提示字段。 |
-| P2 | 通用 Add/Remove Component facade | 目前有 typed add/remove 和 `write_component()`，但 UI 动态添加仍不够统一。 | 提供按 `SceneComponentType` 的 `add/remove/can_add/can_remove`。 |
-| P3 | Viewport stats facade | Editor 状态栏/调试信息仍难稳定读取 backend、RT 尺寸、帧时间、draw calls。 | Function 层提供只读 viewport/render stats。 |
+| P1 | Scene overlay phase 2 | 当前 overlay 仅 line primitive；gizmo/billboard/quad 仍缺 Engine 侧表达。 | 扩展 `SceneOverlayBatchDesc` 或专用 gizmo submit API。 |
+| P2 | GPU picking 增强 | 当前 MVP 无 alpha mask、normal 来自 bounds 近似、async 而非 sync pick。 | 可选 alpha cutout pass、GBuffer normal readback、同步 facade。 |
+| P3 | 组件元数据继续扩展 | 已有 hint/range/asset ref，但缺 enum 分组、条件显示、multi-edit 语义。 | 按需扩展 `ScenePropertyDesc` 或 component-level flags。 |
 
 ## 接口建议
 

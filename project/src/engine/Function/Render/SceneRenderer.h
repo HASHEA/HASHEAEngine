@@ -12,6 +12,7 @@
 #include "Function/Render/RenderDebugView.h"
 #include "Function/Render/RenderGraphFwd.h"
 #include "Function/Render/RenderScene.h"
+#include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/SceneRenderView.h"
 #include <cstddef>
@@ -41,6 +42,9 @@ namespace AshEngine
 		void shutdown();
 		bool render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
 		void draw_render_debug_view_ui(UIContext& ui_context);
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		void complete_pending_pick_readbacks(Renderer& renderer, RenderAssetManager& render_asset_manager);
+		// editor end
 		static bool should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count);
 		static size_t reserve_instance_buffer_slot_range(size_t& next_buffer_slot, size_t slot_count);
 		static size_t resolve_instance_buffer_slot(size_t buffer_slot_base, size_t local_buffer_index);
@@ -86,6 +90,27 @@ namespace AshEngine
 			RenderGraphTextureRef output_target,
 			const VisibleRenderFrame& frame,
 			const SceneRenderViewContext& view_context);
+		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
+		bool add_scene_view_overlay_pass(
+			RenderGraphBuilder& graph,
+			RenderGraphTextureRef output_target,
+			RenderGraphTextureRef depth_target,
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context);
+		// editor end
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		bool add_entity_pick_pass(
+			RenderGraphBuilder& graph,
+			RenderGraphTextureRef depth_target,
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context);
+		bool render_entity_pick_meshes(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			RenderGraphRasterContext& pass_context,
+			uint64_t render_frame_index);
+		bool ensure_entity_pick_target(uint32_t width, uint32_t height);
+		// editor end
 		void log_warning_once(const std::string& key, const std::string& message);
 		void log_staticmesh_pass_usage_once(
 			const MaterialInterface& material,
@@ -104,8 +129,30 @@ namespace AshEngine
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		RenderDebugView m_render_debug_view{};
 		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_scene_overlay_depth_test_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_scene_overlay_depth_test_no_write_program = nullptr;
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		std::unique_ptr<GraphicsProgram> m_entity_pick_program = nullptr;
+		std::shared_ptr<RenderTarget> m_entity_pick_target = nullptr;
+		uint32_t m_entity_pick_width = 0;
+		uint32_t m_entity_pick_height = 0;
+		struct PendingPickReadback
+		{
+			ScenePickFrameState* pick_state = nullptr;
+			Scene* scene = nullptr;
+			int32_t x = 0;
+			int32_t y = 0;
+			uint32_t width = 0;
+			uint32_t height = 0;
+			VisibleRenderFrame frame{};
+			bool active = false;
+		};
+		PendingPickReadback m_pending_pick_readback{};
+		// editor end
 		std::shared_ptr<VertexBuffer> m_debug_draw_vertex_buffer = nullptr;
+		std::shared_ptr<VertexBuffer> m_scene_overlay_vertex_buffer = nullptr;
 		uint32_t m_debug_draw_vertex_capacity = 0;
+		uint32_t m_scene_overlay_vertex_capacity = 0;
 		std::vector<SceneInstanceBufferEntry> m_instance_buffers{};
 		uint64_t m_instance_buffer_frame_index = std::numeric_limits<uint64_t>::max();
 		size_t m_next_instance_buffer_slot = 0;

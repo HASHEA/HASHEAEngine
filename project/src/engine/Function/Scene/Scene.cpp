@@ -53,6 +53,10 @@ namespace AshEngine
 			uint64_t render_light_version = 0;
 			uint64_t render_environment_version = 0;
 			uint64_t render_config_version = 0;
+			// editor begin 修改原因：Scene Change Event 订阅管理
+			std::unordered_map<uint32_t, SceneChangeCallback> change_callbacks{};
+			uint32_t next_subscription_id = 1;
+			// editor end
 		};
 
 		static constexpr uint32_t k_scene_file_version = 4;
@@ -97,17 +101,17 @@ namespace AshEngine
 			{ "primary", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(CameraComponent, primary)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 			{ "reverse_z", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(CameraComponent, reverse_z)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 			{ "projection", ScenePropertyType::Enum, static_cast<uint32_t>(offsetof(CameraComponent, projection)), static_cast<uint32_t>(sizeof(CameraProjectionType)), "CameraProjectionType" },
-			{ "fov_y_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, fov_y_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
-			{ "near_plane", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, near_plane)), static_cast<uint32_t>(sizeof(float)), nullptr },
-			{ "far_plane", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, far_plane)), static_cast<uint32_t>(sizeof(float)), nullptr },
-			{ "orthographic_height", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, orthographic_height)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "fov_y_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, fov_y_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr, "Field Of View", "Vertical field of view in degrees.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 1.0f, 179.0f, true },
+			{ "near_plane", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, near_plane)), static_cast<uint32_t>(sizeof(float)), nullptr, "Near Plane", "Camera near clip plane.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.001f, 1000.0f, true },
+			{ "far_plane", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, far_plane)), static_cast<uint32_t>(sizeof(float)), nullptr, "Far Plane", "Camera far clip plane.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 1.0f, 100000.0f, true },
+			{ "orthographic_height", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(CameraComponent, orthographic_height)), static_cast<uint32_t>(sizeof(float)), nullptr, "Orthographic Height", "Visible world height for orthographic projection.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.01f, 10000.0f, true },
 		};
 
 		static ScenePropertyDesc k_light_properties[] =
 		{
 			{ "type", ScenePropertyType::Enum, static_cast<uint32_t>(offsetof(LightComponent, type)), static_cast<uint32_t>(sizeof(LightType)), "LightType" },
-			{ "color", ScenePropertyType::Vec3, static_cast<uint32_t>(offsetof(LightComponent, color)), static_cast<uint32_t>(sizeof(glm::vec3)), nullptr },
-			{ "intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "color", ScenePropertyType::Vec3, static_cast<uint32_t>(offsetof(LightComponent, color)), static_cast<uint32_t>(sizeof(glm::vec3)), nullptr, "Color", "Light color multiplier.", ScenePropertyEditorHint::Color },
+			{ "intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, intensity)), static_cast<uint32_t>(sizeof(float)), nullptr, "Intensity", "Light intensity.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 100.0f, true },
 			{ "range", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, range)), static_cast<uint32_t>(sizeof(float)), nullptr },
 			{ "inner_cone_angle_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, inner_cone_angle_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
 			{ "outer_cone_angle_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(LightComponent, outer_cone_angle_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
@@ -121,7 +125,7 @@ namespace AshEngine
 
 		static ScenePropertyDesc k_mesh_properties[] =
 		{
-			{ "asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(MeshComponent, asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr },
+			{ "asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(MeshComponent, asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr, "Asset Path", "Mesh asset file path.", ScenePropertyEditorHint::AssetPath, ScenePropertyAssetRefKind::Mesh },
 			{ "mesh_index", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(MeshComponent, mesh_index)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr },
 			{ "visible", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(MeshComponent, visible)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 			{ "mobility", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(MeshComponent, mobility)), static_cast<uint32_t>(sizeof(SceneMobility)), nullptr },
@@ -131,11 +135,11 @@ namespace AshEngine
 		static ScenePropertyDesc k_environment_properties[] =
 		{
 			{ "active", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, active)), static_cast<uint32_t>(sizeof(bool)), nullptr },
-			{ "ibl_asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(EnvironmentComponent, ibl_asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr },
-			{ "source_texture_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(EnvironmentComponent, source_texture_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr },
-			{ "intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
-			{ "lighting_intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, lighting_intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
-			{ "background_intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, background_intensity)), static_cast<uint32_t>(sizeof(float)), nullptr },
+			{ "ibl_asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(EnvironmentComponent, ibl_asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr, "IBL Asset", "Image-based lighting asset path.", ScenePropertyEditorHint::AssetPath, ScenePropertyAssetRefKind::IBL },
+			{ "source_texture_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(EnvironmentComponent, source_texture_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr, "Source Texture", "Environment source texture path.", ScenePropertyEditorHint::AssetPath, ScenePropertyAssetRefKind::Texture },
+			{ "intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, intensity)), static_cast<uint32_t>(sizeof(float)), nullptr, "Intensity", "Overall environment intensity.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 10.0f, true },
+			{ "lighting_intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, lighting_intensity)), static_cast<uint32_t>(sizeof(float)), nullptr, "Lighting Intensity", "Diffuse/specular lighting contribution.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 10.0f, true },
+			{ "background_intensity", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, background_intensity)), static_cast<uint32_t>(sizeof(float)), nullptr, "Background Intensity", "Skybox background contribution.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 10.0f, true },
 			{ "rotation_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(EnvironmentComponent, rotation_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr },
 			{ "visible_background", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, visible_background)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 			{ "affect_lighting", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, affect_lighting)), static_cast<uint32_t>(sizeof(bool)), nullptr },
@@ -373,10 +377,131 @@ namespace AshEngine
 			return g_scene_change_version_seed.fetch_add(1, std::memory_order_relaxed);
 		}
 
-		static auto mark_scene_storage_modified(SceneStorage& storage) -> void
+		// editor begin 修改原因：Scene Change Event 辅助函数
+		static auto notify_scene_change_event(SceneStorage& storage, const SceneChangeEvent& event) -> void
+		{
+			for (const auto& [id, callback] : storage.change_callbacks)
+			{
+				if (callback)
+				{
+					callback(event);
+				}
+			}
+		}
+		// editor end
+
+		static auto mark_scene_storage_modified(SceneStorage& storage, SceneChangeKind kind = SceneChangeKind::DirtyStateChanged, EntityId entity_id = 0, SceneComponentType component_type = SceneComponentType::Name) -> void
 		{
 			storage.dirty = true;
 			storage.change_version = allocate_scene_change_version();
+
+			// editor begin 修改原因：触发 Scene Change Event
+			SceneChangeEvent event{};
+			event.kind = kind;
+			event.entity_id = entity_id;
+			event.component_type = component_type;
+			event.change_version = storage.change_version;
+			event.dirty = storage.dirty;
+			notify_scene_change_event(storage, event);
+			// editor end
+		}
+
+		static auto mark_scene_storage_clean(SceneStorage& storage) -> void
+		{
+			if (!storage.dirty)
+			{
+				return;
+			}
+
+			storage.dirty = false;
+			storage.change_version = allocate_scene_change_version();
+
+			SceneChangeEvent event{};
+			event.kind = SceneChangeKind::DirtyStateChanged;
+			event.change_version = storage.change_version;
+			event.dirty = storage.dirty;
+			notify_scene_change_event(storage, event);
+		}
+
+		template <typename TComponent>
+		static constexpr auto scene_component_type_for() -> SceneComponentType
+		{
+			if constexpr (std::is_same_v<TComponent, NameComponent>)
+			{
+				return SceneComponentType::Name;
+			}
+			else if constexpr (std::is_same_v<TComponent, TransformComponent>)
+			{
+				return SceneComponentType::Transform;
+			}
+			else if constexpr (std::is_same_v<TComponent, CameraComponent>)
+			{
+				return SceneComponentType::Camera;
+			}
+			else if constexpr (std::is_same_v<TComponent, LightComponent>)
+			{
+				return SceneComponentType::Light;
+			}
+			else if constexpr (std::is_same_v<TComponent, MeshComponent>)
+			{
+				return SceneComponentType::Mesh;
+			}
+			else if constexpr (std::is_same_v<TComponent, EnvironmentComponent>)
+			{
+				return SceneComponentType::Environment;
+			}
+			else
+			{
+				return SceneComponentType::Name;
+			}
+		}
+
+		static auto mark_entity_component_changed(SceneStorage& storage, EntityId entity_id, SceneComponentType component_type) -> void
+		{
+			storage.dirty = true;
+			storage.change_version = allocate_scene_change_version();
+
+			if (component_type == SceneComponentType::Mesh)
+			{
+				storage.render_primitive_version = allocate_scene_change_version();
+				storage.render_transform_version = allocate_scene_change_version();
+			}
+			else if (component_type == SceneComponentType::Transform)
+			{
+				storage.render_transform_version = storage.change_version;
+			}
+			else if (component_type == SceneComponentType::Light)
+			{
+				storage.render_light_version = storage.change_version;
+			}
+			else if (component_type == SceneComponentType::Environment)
+			{
+				storage.render_environment_version = storage.change_version;
+			}
+
+			SceneChangeEvent event{};
+			event.kind = SceneChangeKind::ComponentChanged;
+			event.entity_id = entity_id;
+			event.component_type = component_type;
+			event.change_version = storage.change_version;
+			event.dirty = storage.dirty;
+			notify_scene_change_event(storage, event);
+		}
+
+		static auto transfer_scene_storage_preserve_subscribers(SceneStorage& dst, SceneStorage&& src, SceneChangeKind kind) -> void
+		{
+			auto callbacks = std::move(dst.change_callbacks);
+			const uint32_t next_subscription_id = dst.next_subscription_id;
+			dst = std::move(src);
+			dst.change_callbacks = std::move(callbacks);
+			dst.next_subscription_id = std::max(next_subscription_id, dst.next_subscription_id);
+			dst.change_version = allocate_scene_change_version();
+
+			SceneChangeEvent event{};
+			event.kind = kind;
+			event.change_version = dst.change_version;
+			event.dirty = dst.dirty;
+			notify_scene_change_event(dst, event);
 		}
 
 		static auto mark_scene_render_primitives_modified(SceneStorage& storage) -> void
@@ -659,26 +784,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(handle != entt::null);
 
 			impl->storage.registry.emplace_or_replace<TComponent>(handle, component);
-			if constexpr (std::is_same_v<TComponent, MeshComponent>)
-			{
-				mark_scene_render_primitives_modified(impl->storage);
-			}
-			else if constexpr (std::is_same_v<TComponent, TransformComponent>)
-			{
-				mark_scene_render_transforms_modified(impl->storage);
-			}
-			else if constexpr (std::is_same_v<TComponent, LightComponent>)
-			{
-				mark_scene_render_lights_modified(impl->storage);
-			}
-			else if constexpr (std::is_same_v<TComponent, EnvironmentComponent>)
-			{
-				mark_scene_render_environment_modified(impl->storage);
-			}
-			else
-			{
-				mark_scene_storage_modified(impl->storage);
-			}
+			mark_entity_component_changed(impl->storage, id, scene_component_type_for<TComponent>());
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -690,26 +796,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(handle != entt::null && impl->storage.registry.any_of<TComponent>(handle));
 
 			impl->storage.registry.remove<TComponent>(handle);
-			if constexpr (std::is_same_v<TComponent, MeshComponent>)
-			{
-				mark_scene_render_primitives_modified(impl->storage);
-			}
-			else if constexpr (std::is_same_v<TComponent, TransformComponent>)
-			{
-				mark_scene_render_transforms_modified(impl->storage);
-			}
-			else if constexpr (std::is_same_v<TComponent, LightComponent>)
-			{
-				mark_scene_render_lights_modified(impl->storage);
-			}
-			else if constexpr (std::is_same_v<TComponent, EnvironmentComponent>)
-			{
-				mark_scene_render_environment_modified(impl->storage);
-			}
-			else
-			{
-				mark_scene_storage_modified(impl->storage);
-			}
+			mark_entity_component_changed(impl->storage, id, scene_component_type_for<TComponent>());
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -1584,6 +1671,9 @@ namespace AshEngine
 		{
 			reparent_entity(entity.get_id(), 0, sibling_index);
 		}
+		// editor begin 修改原因：触发 EntityAdded 事件
+		mark_scene_storage_modified(m_impl->storage, SceneChangeKind::EntityAdded, entity.get_id());
+		// editor end
 		mark_scene_render_primitives_modified(m_impl->storage);
 		return entity;
 	}
@@ -1614,9 +1704,69 @@ namespace AshEngine
 		{
 			reparent_entity(entity.get_id(), 0, sibling_index);
 		}
+		// editor begin 修改原因：触发 EntityAdded 事件
+		mark_scene_storage_modified(m_impl->storage, SceneChangeKind::EntityAdded, entity.get_id());
+		// editor end
 		mark_scene_render_primitives_modified(m_impl->storage);
 		return entity;
 	}
+
+	// editor begin 修改原因：Scene Reload / Replace 语义
+	bool Scene::reload_from_file(const std::filesystem::path& path, std::string* out_error)
+	{
+		Scene loaded = load_from_file(path, out_error);
+		if (!loaded.is_valid())
+		{
+			return false;
+		}
+
+		if (!m_impl)
+		{
+			m_impl = std::move(loaded.m_impl);
+			if (is_valid())
+			{
+				notify_change_event(
+				{
+					SceneChangeKind::SceneReloaded,
+					0,
+					SceneComponentType::Name,
+					m_impl->storage.change_version,
+					m_impl->storage.dirty
+				});
+			}
+			return is_valid();
+		}
+
+		transfer_scene_storage_preserve_subscribers(m_impl->storage, std::move(loaded.m_impl->storage), SceneChangeKind::SceneReloaded);
+		loaded.m_impl.reset();
+		return true;
+	}
+
+	void Scene::replace_contents(Scene&& other)
+	{
+		if (!other.m_impl)
+		{
+			return;
+		}
+
+		if (!m_impl)
+		{
+			m_impl = std::move(other.m_impl);
+			notify_change_event(
+			{
+				SceneChangeKind::SceneReplaced,
+				0,
+				SceneComponentType::Name,
+				m_impl->storage.change_version,
+				m_impl->storage.dirty
+			});
+			return;
+		}
+
+		transfer_scene_storage_preserve_subscribers(m_impl->storage, std::move(other.m_impl->storage), SceneChangeKind::SceneReplaced);
+		other.m_impl.reset();
+	}
+	// editor end
 
 	bool Scene::destroy_entity(EntityId id)
 	{
@@ -1626,6 +1776,9 @@ namespace AshEngine
 		bResult = destroy_entity_recursive(m_impl->storage, id);
 		if (bResult)
 		{
+			// editor begin 修改原因：触发 EntityRemoved 事件
+			mark_scene_storage_modified(m_impl->storage, SceneChangeKind::EntityRemoved, id);
+			// editor end
 			mark_scene_render_primitives_modified(m_impl->storage);
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -1648,6 +1801,9 @@ namespace AshEngine
 		{
 			ASH_PROCESS_ERROR(false);
 		}
+		// editor begin 修改原因：触发 HierarchyChanged 事件
+		mark_scene_storage_modified(m_impl->storage, SceneChangeKind::HierarchyChanged, id);
+		// editor end
 		mark_scene_render_transforms_modified(m_impl->storage);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -2045,23 +2201,94 @@ namespace AshEngine
 		return synthetic_root;
 	}
 
+	Entity Scene::instantiate_mesh(const std::shared_ptr<const Mesh>& mesh, const std::filesystem::path& asset_path, const Entity& parent, std::string_view root_name_override)
+	{
+		ASH_PROCESS_GUARD_RETURN(Entity, result, Entity{}, Entity{});
+		ASH_PROCESS_ERROR(mesh != nullptr);
+		ASH_PROCESS_ERROR(m_impl != nullptr);
+
+		const Entity resolved_parent =
+			parent.is_valid() && std::static_pointer_cast<Scene::Impl>(parent.m_impl) == m_impl ? parent : Entity{};
+
+		Entity entity = create_entity(
+			root_name_override.empty() ? (mesh->name.empty() ? "Mesh" : mesh->name) : std::string(root_name_override),
+			resolved_parent);
+		ASH_PROCESS_ERROR(entity.is_valid());
+
+		MeshComponent mesh_component{};
+		mesh_component.asset_path = asset_path.string();
+		mesh_component.mesh_index = 0;
+		mesh_component.visible = true;
+		ASH_PROCESS_ERROR(entity.add_mesh_component(mesh_component));
+
+		result = entity;
+		ASH_PROCESS_GUARD_RETURN_END(result, Entity{});
+	}
+
 	Entity Scene::instantiate_asset(AssetDatabase& database, const std::filesystem::path& path, const Entity& parent)
 	{
 		ASH_PROCESS_GUARD_RETURN(Entity, result, Entity{}, Entity{});
-		std::string extension = path.extension().string();
-		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
 
-		if (extension == ".ashasset")
+		// editor begin 修改原因：使用 AssetDatabase 确定资源类型，支持 Mesh 实例化
+		if (const AssetInfo* asset_info = database.find_asset_by_path(path); asset_info != nullptr)
 		{
-			std::shared_ptr<const AshAsset> asset{};
-			ASH_PROCESS_ERROR(database.load_ashasset_by_path(path, asset));
-			result = instantiate_ashasset(*asset, parent);
-			break;
+			if (asset_info->type == AssetType::Mesh)
+			{
+				std::shared_ptr<const Mesh> mesh{};
+				ASH_PROCESS_ERROR(database.load_mesh_by_path(path, mesh));
+				ASH_PROCESS_ERROR(mesh != nullptr);
+				result = instantiate_mesh(mesh, path, parent);
+			}
+			else if (asset_info->type == AssetType::Prefab)
+			{
+				std::shared_ptr<const AshAsset> asset{};
+				ASH_PROCESS_ERROR(database.load_ashasset_by_path(path, asset));
+				result = instantiate_ashasset(*asset, parent);
+			}
+			else if (asset_info->type == AssetType::Model)
+			{
+				std::shared_ptr<const Model> model{};
+				ASH_PROCESS_ERROR(database.load_model_by_path(path, model));
+				result = instantiate_model(*model, parent);
+			}
+			else
+			{
+				ASH_PROCESS_ERROR(false);
+			}
+		}
+		else
+		// editor end
+		{
+			std::string extension = path.extension().string();
+			std::transform(
+				extension.begin(),
+				extension.end(),
+				extension.begin(),
+				[](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+			// editor begin 修改原因：支持 .mesh/.ashmesh 扩展名的 Mesh 资源
+			if (extension == ".mesh" || extension == ".ashmesh")
+			{
+				std::shared_ptr<const Mesh> mesh{};
+				ASH_PROCESS_ERROR(database.load_mesh_by_path(path, mesh));
+				ASH_PROCESS_ERROR(mesh != nullptr);
+				result = instantiate_mesh(mesh, path, parent);
+			}
+			else if (extension == ".ashasset")
+			{
+				std::shared_ptr<const AshAsset> asset{};
+				ASH_PROCESS_ERROR(database.load_ashasset_by_path(path, asset));
+				result = instantiate_ashasset(*asset, parent);
+			}
+			else
+			{
+				std::shared_ptr<const Model> model{};
+				ASH_PROCESS_ERROR(database.load_model_by_path(path, model));
+				result = instantiate_model(*model, parent);
+			}
+			// editor end
 		}
 
-		std::shared_ptr<const Model> model{};
-		ASH_PROCESS_ERROR(database.load_model_by_path(path, model));
-		result = instantiate_model(*model, parent);
 		ASH_PROCESS_GUARD_RETURN_END(result, Entity{});
 	}
 
@@ -2080,7 +2307,16 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(asset_info != nullptr);
 
 		const std::string_view root_name_override(desc.root_name_override);
-		if (asset_info->type == AssetType::Prefab)
+
+		// editor begin 修改原因：扩展 instantiate_asset 支持 AssetType::Mesh
+		if (asset_info->type == AssetType::Mesh)
+		{
+			std::shared_ptr<const Mesh> mesh{};
+			ASH_PROCESS_ERROR(database.load_mesh_by_id(asset_id, mesh));
+			ASH_PROCESS_ERROR(mesh != nullptr);
+			result = scene.instantiate_mesh(mesh, asset_info->relative_path, desc.parent, root_name_override);
+		}
+		else if (asset_info->type == AssetType::Prefab)
 		{
 			std::shared_ptr<const AshAsset> asset{};
 			ASH_PROCESS_ERROR(database.load_ashasset_by_id(asset_id, asset));
@@ -2098,6 +2334,7 @@ namespace AshEngine
 		{
 			ASH_PROCESS_ERROR(false);
 		}
+		// editor end
 
 		ASH_PROCESS_ERROR(result.is_valid());
 		if (desc.use_world_transform)
@@ -2309,8 +2546,7 @@ namespace AshEngine
 		if (!scene_render_config_equal(m_impl->storage.render_config, sanitized_config))
 		{
 			m_impl->storage.render_config = sanitized_config;
-			m_impl->storage.dirty = true;
-			m_impl->storage.change_version = allocate_scene_change_version();
+			mark_scene_storage_modified(m_impl->storage, SceneChangeKind::DirtyStateChanged);
 			m_impl->storage.render_config_version = m_impl->storage.change_version;
 		}
 
@@ -2346,9 +2582,142 @@ namespace AshEngine
 	{
 		if (m_impl)
 		{
-			m_impl->storage.dirty = false;
+			mark_scene_storage_clean(m_impl->storage);
 		}
 	}
+
+	// editor begin 修改原因：Scene Change Event 订阅接口实现
+	uint32_t Scene::subscribe_change_events(SceneChangeCallback callback)
+	{
+		if (!m_impl || !callback)
+		{
+			return 0;
+		}
+		uint32_t id = m_impl->storage.next_subscription_id++;
+		m_impl->storage.change_callbacks.emplace(id, std::move(callback));
+		return id;
+	}
+
+	bool Scene::unsubscribe_change_events(uint32_t subscription_id)
+	{
+		if (!m_impl || subscription_id == 0)
+		{
+			return false;
+		}
+		return m_impl->storage.change_callbacks.erase(subscription_id) > 0;
+	}
+
+	void Scene::notify_change_event(const SceneChangeEvent& event)
+	{
+		if (!m_impl)
+		{
+			return;
+		}
+		for (const auto& [id, callback] : m_impl->storage.change_callbacks)
+		{
+			if (callback)
+			{
+				callback(event);
+			}
+		}
+	}
+	// editor end
+
+	// editor begin 修改原因：通用 Add/Remove Component facade
+	bool can_add_scene_component(const Entity& entity, SceneComponentType type)
+	{
+		if (!entity.is_valid())
+		{
+			return false;
+		}
+
+		switch (type)
+		{
+		case SceneComponentType::Name:
+		case SceneComponentType::Transform:
+			return false;
+		case SceneComponentType::Camera:
+			return !entity.has_camera_component();
+		case SceneComponentType::Light:
+			return !entity.has_light_component();
+		case SceneComponentType::Mesh:
+			return !entity.has_mesh_component();
+		case SceneComponentType::Environment:
+			return !entity.has_environment_component();
+		default:
+			return false;
+		}
+	}
+
+	bool can_remove_scene_component(const Entity& entity, SceneComponentType type)
+	{
+		if (!entity.is_valid())
+		{
+			return false;
+		}
+
+		switch (type)
+		{
+		case SceneComponentType::Name:
+		case SceneComponentType::Transform:
+			return false;
+		case SceneComponentType::Camera:
+			return entity.has_camera_component();
+		case SceneComponentType::Light:
+			return entity.has_light_component();
+		case SceneComponentType::Mesh:
+			return entity.has_mesh_component();
+		case SceneComponentType::Environment:
+			return entity.has_environment_component();
+		default:
+			return false;
+		}
+	}
+
+	bool add_scene_component(Entity& entity, SceneComponentType type)
+	{
+		if (!can_add_scene_component(entity, type))
+		{
+			return false;
+		}
+
+		switch (type)
+		{
+		case SceneComponentType::Camera:
+			return entity.add_camera_component({});
+		case SceneComponentType::Light:
+			return entity.add_light_component({});
+		case SceneComponentType::Mesh:
+			return entity.add_mesh_component({});
+		case SceneComponentType::Environment:
+			return entity.add_environment_component({});
+		default:
+			return false;
+		}
+	}
+
+	bool remove_scene_component(Entity& entity, SceneComponentType type)
+	{
+		if (!can_remove_scene_component(entity, type))
+		{
+			return false;
+		}
+
+		switch (type)
+		{
+		case SceneComponentType::Camera:
+			return entity.remove_camera_component();
+		case SceneComponentType::Light:
+			return entity.remove_light_component();
+		case SceneComponentType::Mesh:
+			return entity.remove_mesh_component();
+		case SceneComponentType::Environment:
+			return entity.remove_environment_component();
+		default:
+			return false;
+		}
+	}
+	// editor end
 
 	const SceneComponentDesc* get_scene_component_descriptor(SceneComponentType type)
 	{

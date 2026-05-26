@@ -751,6 +751,68 @@ namespace RHI
 		}
 		return bResult;
 	}
+
+	auto VulkanCommandBuffer::cmd_copy_texture_region_to_buffer(
+		std::shared_ptr<Texture> source,
+		uint32_t x,
+		uint32_t y,
+		std::shared_ptr<Buffer> destination,
+		uint64_t buffer_offset) -> bool
+	{
+		if (has_error())
+		{
+			return false;
+		}
+		if (state != ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: cmd_copy_texture_region_to_buffer called while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
+
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_LOG_PROCESS_ERROR(source && destination);
+		auto source_texture = std::static_pointer_cast<VulkanTexture>(source);
+		auto destination_buffer = std::static_pointer_cast<VulkanBuffer>(destination);
+		ASH_LOG_PROCESS_ERROR(source_texture && destination_buffer);
+		ASH_LOG_PROCESS_ERROR(!source_texture->is_sparse());
+
+		const TextureCreation& source_creation = source_texture->get_desciption();
+		ASH_LOG_PROCESS_ERROR(source_creation.width > 0 && source_creation.height > 0);
+		ASH_LOG_PROCESS_ERROR(x < static_cast<uint32_t>(source_creation.width));
+		ASH_LOG_PROCESS_ERROR(y < static_cast<uint32_t>(source_creation.height));
+
+		bool bRetCode = cmd_transition_resource_state({ source, AshResourceState::CopySrc });
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+
+		VkBufferImageCopy copy_region{};
+		copy_region.bufferOffset = buffer_offset + destination_buffer->get_global_offset();
+		copy_region.bufferRowLength = 0;
+		copy_region.bufferImageHeight = 0;
+		copy_region.imageSubresource.aspectMask = source_texture->get_vk_aspect_flags();
+		copy_region.imageSubresource.mipLevel = 0;
+		copy_region.imageSubresource.baseArrayLayer = 0;
+		copy_region.imageSubresource.layerCount = 1;
+		copy_region.imageOffset = { static_cast<int32_t>(x), static_cast<int32_t>(y), 0 };
+		copy_region.imageExtent = { 1u, 1u, 1u };
+
+		vkCmdCopyImageToBuffer(
+			vkCommandBuffer,
+			source_texture->get_vk_image(),
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			reinterpret_cast<VkBuffer>(destination_buffer->get_native_handle()),
+			1,
+			&copy_region);
+
+		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: cmd_copy_texture_region_to_buffer failed.");
+			HLogError("{}", get_last_error());
+		}
+		return bResult;
+	}
+
 	auto VulkanCommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> pBuffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		if (has_error())

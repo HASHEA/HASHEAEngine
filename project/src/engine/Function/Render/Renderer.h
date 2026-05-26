@@ -159,6 +159,10 @@ namespace AshEngine
 		bool begin_frame();
 		bool end_frame();
 		void present();
+		RenderDevice* get_render_device() const
+		{
+			return m_render_device;
+		}
 
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);

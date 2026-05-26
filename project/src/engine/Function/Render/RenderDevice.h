@@ -36,6 +36,7 @@ namespace AshEngine
 		BGRA8_SRGB,
 		RGBA16_SFLOAT,
 		RG16_SFLOAT,
+		R32G32_UINT,
 		RGBA32_SFLOAT,
 		BC1_RGB_UNORM,
 		BC1_RGB_SRGB_UNORM,
@@ -603,6 +604,20 @@ namespace AshEngine
 		std::shared_ptr<RHI::TextureView> get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const;
 		bool transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target);
 		bool has_back_buffer_content() const;
+
+		// editor begin 修改原因：GPU scene picking 需要 Function 层 texture texel readback
+		struct RenderTextureTexelReadDesc
+		{
+			int32_t x = 0;
+			int32_t y = 0;
+		};
+
+		bool queue_render_target_texel_read(
+			const std::shared_ptr<RenderTarget>& render_target,
+			const RenderTextureTexelReadDesc& desc);
+
+		bool flush_queued_render_target_texel_reads(void* out_data, size_t out_size);
+		// editor end
 
 	private:
 		bool ensure_back_buffer_target();

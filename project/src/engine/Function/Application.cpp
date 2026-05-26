@@ -730,6 +730,7 @@ namespace AshEngine
 			_run_scene_presentation_submit_phase();
 			_on_gui();
 			renderer->end_frame();
+			scenePresentation.complete_gpu_pick_readbacks();
 			debugDrawService.clear_frame();
 		}
 	}

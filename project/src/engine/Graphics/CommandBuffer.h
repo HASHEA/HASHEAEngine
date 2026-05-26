@@ -44,6 +44,12 @@ namespace RHI
 		virtual auto cmd_draw_indexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0, int32_t vertexOffset = 0, uint32_t firstInstance = 0) -> void = 0;
 		virtual auto cmd_dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) -> void = 0;
 		virtual auto cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool = 0;
+		virtual auto cmd_copy_texture_region_to_buffer(
+			std::shared_ptr<Texture> source,
+			uint32_t x,
+			uint32_t y,
+			std::shared_ptr<Buffer> destination,
+			uint64_t buffer_offset) -> bool = 0;
 		virtual auto cmd_update_sub_resource(std::shared_ptr<Buffer>, uint32_t uOffset, uint32_t uSize, void* pData) -> bool = 0;
 
 		bool has_error() const { return m_has_error; }

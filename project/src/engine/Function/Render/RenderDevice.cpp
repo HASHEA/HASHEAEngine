@@ -1154,6 +1154,21 @@ namespace AshEngine
 		RHI::GpuProfileZoneHandle current_pass_gpu_zone{};
 		bool current_pass_gpu_zone_active = false;
 		std::string current_pass_name;
+
+		// editor begin 修改原因：GPU scene picking texel readback
+		struct QueuedTexelRead
+		{
+			std::shared_ptr<RenderTarget::Impl> target{};
+			int32_t x = 0;
+			int32_t y = 0;
+			uint64_t buffer_offset = 0;
+			size_t byte_size = 0;
+			bool active = false;
+		};
+
+		QueuedTexelRead queued_texel_read{};
+		std::shared_ptr<RHI::Buffer> texel_readback_buffer{};
+		// editor end
 	};
 
 		static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
@@ -4299,4 +4314,72 @@ namespace AshEngine
 	{
 		return m_impl && (m_impl->back_buffer_written_this_frame || m_impl->swapchain_written_this_frame);
 	}
+
+	// editor begin 修改原因：GPU scene picking texel readback
+	bool RenderDevice::queue_render_target_texel_read(
+		const std::shared_ptr<RenderTarget>& render_target,
+		const RenderTextureTexelReadDesc& desc)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && render_target && render_target->m_impl);
+		ASH_PROCESS_ERROR(desc.x >= 0 && desc.y >= 0);
+		ASH_PROCESS_ERROR(
+			static_cast<uint32_t>(desc.x) < render_target->get_width() &&
+			static_cast<uint32_t>(desc.y) < render_target->get_height());
+
+		const RenderTextureFormatBlockInfo block_info = get_render_texture_format_block_info(render_target->get_format());
+		ASH_PROCESS_ERROR(block_info.bytes_per_block > 0);
+
+		if (!m_impl->texel_readback_buffer)
+		{
+			RHI::BufferCreation buffer_creation = RHI::BufferCreation::get_cpur_staging_buffer_creation(4096u);
+			buffer_creation.name = "RenderDeviceTexelReadback";
+			m_impl->texel_readback_buffer = m_impl->graphics_context->create_buffer(buffer_creation);
+			ASH_PROCESS_ERROR(m_impl->texel_readback_buffer != nullptr);
+		}
+
+		m_impl->queued_texel_read = {};
+		m_impl->queued_texel_read.target = render_target->m_impl;
+		m_impl->queued_texel_read.x = desc.x;
+		m_impl->queued_texel_read.y = desc.y;
+		m_impl->queued_texel_read.buffer_offset = 0;
+		m_impl->queued_texel_read.byte_size = block_info.bytes_per_block;
+		m_impl->queued_texel_read.active = true;
+
+		std::shared_ptr<RHI::Texture> texture = render_target->m_impl->get_texture();
+		ASH_PROCESS_ERROR(texture);
+		bResult = m_impl->current_command_buffer->cmd_copy_texture_region_to_buffer(
+			texture,
+			static_cast<uint32_t>(desc.x),
+			static_cast<uint32_t>(desc.y),
+			m_impl->texel_readback_buffer,
+			0);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::flush_queued_render_target_texel_reads(void* out_data, size_t out_size)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
+		if (!m_impl->queued_texel_read.active)
+		{
+			return false;
+		}
+		ASH_PROCESS_ERROR(out_data != nullptr);
+		ASH_PROCESS_ERROR(out_size >= m_impl->queued_texel_read.byte_size);
+
+		m_impl->graphics_context->wait_idle();
+
+		uint8_t* mapped_data =
+			m_impl->texel_readback_buffer ? m_impl->texel_readback_buffer->get_mapped_data() : nullptr;
+		ASH_PROCESS_ERROR(mapped_data != nullptr);
+
+		std::memcpy(
+			out_data,
+			mapped_data + m_impl->queued_texel_read.buffer_offset,
+			m_impl->queued_texel_read.byte_size);
+		m_impl->queued_texel_read.active = false;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+	// editor end
 }

@@ -9,7 +9,10 @@
 #include "Function/Render/MaterialRenderProxy.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
+#include "Function/Render/ScenePresentationHandles.h"
 #include "Function/Render/VertexLayoutPresets.h"
+#include "Function/Scene/SceneQuery.h"
+#include "Function/Asset/AssetDatabase.h"
 #include "Graphics/Shader.h"
 #include "Graphics/VertexInputLayout.h"
 #include <algorithm>
@@ -26,6 +29,8 @@ namespace AshEngine
 	{
 		static constexpr const char* k_debug_draw_shader_path =
 			"project/src/engine/Shaders/Debug/DebugDrawOverlay.hlsl";
+		static constexpr const char* k_entity_pick_shader_path =
+			"project/src/engine/Shaders/Scene/SceneEntityPick.hlsl";
 		static constexpr const char* k_vertex_decl_locations_shader_path =
 			"project/src/engine/Graphics/Shaders/AshVertexDeclLocations.hlsli";
 		static constexpr size_t k_scene_instance_buffer_frame_lag = 3;
@@ -39,9 +44,85 @@ namespace AshEngine
 		struct DebugDrawRootConstants
 		{
 			glm::mat4 view_projection{ 1.0f };
+			float depth_bias = 0.0f;
+			glm::vec3 padding{ 0.0f };
 		};
 
 		static_assert(sizeof(DebugDrawRootConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
+
+		struct SceneEntityPickRootConstants
+		{
+			glm::uvec2 entity_id{ 0u, 0u };
+			glm::uvec2 padding{ 0u, 0u };
+		};
+
+		static_assert(sizeof(SceneEntityPickRootConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
+
+		static auto pack_entity_id(EntityId entity_id) -> glm::uvec2
+		{
+			return {
+				static_cast<uint32_t>(entity_id & 0xFFFFFFFFull),
+				static_cast<uint32_t>(entity_id >> 32)
+			};
+		}
+
+		static auto build_entity_pick_shader_source_hash() -> uint64_t
+		{
+			uint64_t hash_value = 0;
+			RHI::hash_shader_file_signature(hash_value, k_entity_pick_shader_path);
+			RHI::hash_shader_file_signature(hash_value, k_vertex_decl_locations_shader_path);
+			return hash_value;
+		}
+
+		static auto make_entity_pick_program_desc() -> GraphicsProgramDesc
+		{
+			GraphicsProgramState state{};
+			state.cull_mode = RenderCullMode::Back;
+			state.primitive_topology = RenderPrimitiveTopology::TriangleList;
+			state.depth_test = true;
+			state.depth_write = false;
+			state.depth_compare = RenderCompareOp::LessEqual;
+			state.blend_mode = RenderBlendMode::Opaque;
+
+			GraphicsProgramDesc desc{};
+			desc.shader_path = k_entity_pick_shader_path;
+			desc.base_shader_path = k_entity_pick_shader_path;
+			desc.vertex_entry = "VSMain";
+			desc.fragment_entry = "PSMain";
+			desc.source_hash = build_entity_pick_shader_source_hash();
+			desc.name = "SceneEntityPick";
+			desc.state = state;
+			desc.vertex_decl = get_instanced_mesh_vertex_decl();
+			desc.vertex_input = make_instanced_mesh_vertex_input_layout();
+			return desc;
+		}
+
+		static void attach_entity_pick_root_constants(
+			GraphicsDrawDesc& draw_desc,
+			GraphicsProgram* program,
+			const SceneEntityPickRootConstants& constants)
+		{
+			RHI::ShaderParameterBlockLayout layout{};
+			if (!program || !program->get_parameter_block_layout("AshRootConstants", layout) || layout.byte_size == 0)
+			{
+				return;
+			}
+
+			draw_desc.const_data_size = std::min<uint32_t>(
+				static_cast<uint32_t>(sizeof(constants)),
+				std::min<uint32_t>(layout.byte_size, GraphicsDrawDesc::InlineConstDataCapacity));
+			draw_desc.inline_const_data_valid = true;
+			std::memcpy(draw_desc.inline_const_data.data(), &constants, draw_desc.const_data_size);
+		}
+
+		struct SceneOverlayDrawBatch
+		{
+			SceneOverlayDepthMode depth_mode = SceneOverlayDepthMode::DepthTestNoWrite;
+			float depth_bias = 0.0f;
+			float color_alpha_scale = 1.0f;
+			bool xray_ghost = false;
+			std::vector<DebugDrawVertex> vertices{};
+		};
 
 		static auto build_material_label(const MaterialInterface& material) -> std::string
 		{
@@ -96,14 +177,18 @@ namespace AshEngine
 			return hash_value;
 		}
 
-		static auto make_debug_draw_program_desc() -> GraphicsProgramDesc
+		static auto make_debug_draw_program_desc(
+			bool depth_test,
+			bool depth_write,
+			RenderBlendMode blend_mode = RenderBlendMode::Opaque) -> GraphicsProgramDesc
 		{
 			GraphicsProgramState state{};
 			state.cull_mode = RenderCullMode::None;
 			state.primitive_topology = RenderPrimitiveTopology::LineList;
-			state.depth_test = false;
-			state.depth_write = false;
-			state.blend_mode = RenderBlendMode::Opaque;
+			state.depth_test = depth_test;
+			state.depth_write = depth_write;
+			state.depth_compare = RenderCompareOp::LessEqual;
+			state.blend_mode = blend_mode;
 
 			GraphicsProgramDesc desc{};
 			desc.shader_path = k_debug_draw_shader_path;
@@ -111,10 +196,17 @@ namespace AshEngine
 			desc.vertex_entry = "VSMain";
 			desc.fragment_entry = "PSMain";
 			desc.source_hash = build_debug_draw_shader_source_hash();
-			desc.name = "SceneDebugDrawOverlay";
+			desc.name = depth_test ?
+				(depth_write ? "SceneOverlayDepthTest" : "SceneOverlayDepthTestNoWrite") :
+				"SceneDebugDrawOverlay";
 			desc.state = state;
 			desc.vertex_input = make_debug_draw_vertex_input_layout();
 			return desc;
+		}
+
+		static auto make_debug_draw_program_desc() -> GraphicsProgramDesc
+		{
+			return make_debug_draw_program_desc(false, false, RenderBlendMode::Opaque);
 		}
 
 		static void attach_debug_draw_root_constants(
@@ -133,6 +225,107 @@ namespace AshEngine
 				std::min<uint32_t>(layout.byte_size, GraphicsDrawDesc::InlineConstDataCapacity));
 			draw_desc.inline_const_data_valid = true;
 			std::memcpy(draw_desc.inline_const_data.data(), &constants, draw_desc.const_data_size);
+		}
+
+		static void append_scene_overlay_line_vertices(
+			std::vector<DebugDrawVertex>& vertices,
+			const SceneOverlayLine& line,
+			float color_alpha_scale,
+			bool xray_ghost)
+		{
+			glm::vec4 color = line.color;
+			color.a *= color_alpha_scale;
+			if (xray_ghost)
+			{
+				color.r *= 0.35f;
+				color.g *= 0.35f;
+				color.b *= 0.35f;
+			}
+
+			vertices.push_back({ line.start, color });
+			vertices.push_back({ line.end, color });
+		}
+
+		static auto build_scene_overlay_draw_batches(
+			const std::vector<SceneOverlayLine>& lines) -> std::vector<SceneOverlayDrawBatch>
+		{
+			std::vector<SceneOverlayDrawBatch> batches{};
+			auto find_or_add_batch =
+				[&batches](
+					SceneOverlayDepthMode depth_mode,
+					float depth_bias,
+					float color_alpha_scale,
+					bool xray_ghost) -> SceneOverlayDrawBatch&
+			{
+				for (SceneOverlayDrawBatch& batch : batches)
+				{
+					if (batch.depth_mode == depth_mode &&
+						batch.depth_bias == depth_bias &&
+						batch.color_alpha_scale == color_alpha_scale &&
+						batch.xray_ghost == xray_ghost)
+					{
+						return batch;
+					}
+				}
+
+				SceneOverlayDrawBatch batch{};
+				batch.depth_mode = depth_mode;
+				batch.depth_bias = depth_bias;
+				batch.color_alpha_scale = color_alpha_scale;
+				batch.xray_ghost = xray_ghost;
+				batches.push_back(std::move(batch));
+				return batches.back();
+			};
+
+			for (const SceneOverlayLine& line : lines)
+			{
+				switch (line.depth_mode)
+				{
+				case SceneOverlayDepthMode::AlwaysOnTop:
+					append_scene_overlay_line_vertices(
+						find_or_add_batch(SceneOverlayDepthMode::AlwaysOnTop, 0.0f, 1.0f, false).vertices,
+						line,
+						1.0f,
+						false);
+					break;
+				case SceneOverlayDepthMode::DepthTest:
+					append_scene_overlay_line_vertices(
+						find_or_add_batch(SceneOverlayDepthMode::DepthTest, line.depth_bias, 1.0f, false).vertices,
+						line,
+						1.0f,
+						false);
+					break;
+				case SceneOverlayDepthMode::DepthTestNoWrite:
+					append_scene_overlay_line_vertices(
+						find_or_add_batch(SceneOverlayDepthMode::DepthTestNoWrite, line.depth_bias, 1.0f, false).vertices,
+						line,
+						1.0f,
+						false);
+					break;
+				case SceneOverlayDepthMode::XRay:
+					append_scene_overlay_line_vertices(
+						find_or_add_batch(SceneOverlayDepthMode::DepthTestNoWrite, line.depth_bias, 1.0f, false).vertices,
+						line,
+						1.0f,
+						false);
+					append_scene_overlay_line_vertices(
+						find_or_add_batch(SceneOverlayDepthMode::AlwaysOnTop, 0.0f, 1.0f, true).vertices,
+						line,
+						1.0f,
+						true);
+					break;
+				default:
+					break;
+				}
+			}
+
+			batches.erase(
+				std::remove_if(
+					batches.begin(),
+					batches.end(),
+					[](const SceneOverlayDrawBatch& batch) { return batch.vertices.empty(); }),
+				batches.end());
+			return batches;
 		}
 
 		static auto make_debug_draw_vertices(const std::vector<DebugDrawLine>& lines) -> std::vector<DebugDrawVertex>
@@ -424,19 +617,33 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
-		if (m_debug_draw_service)
-		{
-			m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
-			ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
-		}
+		m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
+		ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+		m_scene_overlay_depth_test_program =
+			m_renderer->create_graphics_program(make_debug_draw_program_desc(true, true, RenderBlendMode::Opaque));
+		ASH_PROCESS_ERROR(m_scene_overlay_depth_test_program != nullptr);
+		m_scene_overlay_depth_test_no_write_program =
+			m_renderer->create_graphics_program(make_debug_draw_program_desc(true, false, RenderBlendMode::Opaque));
+		ASH_PROCESS_ERROR(m_scene_overlay_depth_test_no_write_program != nullptr);
+		m_entity_pick_program = m_renderer->create_graphics_program(make_entity_pick_program_desc());
+		ASH_PROCESS_ERROR(m_entity_pick_program != nullptr);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	void SceneRenderer::shutdown()
 	{
 		m_debug_draw_vertex_capacity = 0;
+		m_scene_overlay_vertex_capacity = 0;
 		m_debug_draw_vertex_buffer.reset();
+		m_scene_overlay_vertex_buffer.reset();
 		m_debug_draw_program.reset();
+		m_scene_overlay_depth_test_program.reset();
+		m_scene_overlay_depth_test_no_write_program.reset();
+		m_entity_pick_program.reset();
+		m_entity_pick_target.reset();
+		m_entity_pick_width = 0;
+		m_entity_pick_height = 0;
+		m_pending_pick_readback = {};
 		m_debug_draw_service = nullptr;
 		m_post_process_tone_map_pass.shutdown();
 		m_sky_background_pass.shutdown();
@@ -748,6 +955,17 @@ namespace AshEngine
 					PassFamily::GBuffer);
 			}));
 
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		if (view_context.pick_state != nullptr && view_context.pick_state->request_active)
+		{
+			ASH_PROCESS_ERROR(add_entity_pick_pass(
+				graph,
+				graph_resources.depth,
+				frame,
+				view_context));
+		}
+		// editor end
+
 		const AmbientOcclusionPassOutputs ao_outputs = m_ambient_occlusion_pass.add_passes(
 			graph,
 			frame,
@@ -1018,8 +1236,42 @@ namespace AshEngine
 			output,
 			view_context));
 		ASH_PROCESS_ERROR(m_render_debug_view.add_pass(graph, output, view_context));
+		ASH_PROCESS_ERROR(add_scene_view_overlay_pass(
+			graph,
+			output,
+			graph_resources.depth,
+			frame,
+			view_context));
 		ASH_PROCESS_ERROR(add_debug_draw_overlay_pass(graph, output, frame, view_context));
 		ASH_PROCESS_ERROR(graph.execute());
+
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		if (view_context.pick_state != nullptr &&
+			view_context.pick_state->request_active &&
+			m_entity_pick_target != nullptr &&
+			m_renderer != nullptr)
+		{
+			RenderDevice* render_device = m_renderer->get_render_device();
+			if (render_device != nullptr)
+			{
+				RenderDevice::RenderTextureTexelReadDesc read_desc{};
+				read_desc.x = view_context.pick_state->request_x;
+				read_desc.y = view_context.pick_state->request_y;
+				if (render_device->queue_render_target_texel_read(m_entity_pick_target, read_desc))
+				{
+					m_pending_pick_readback.active = true;
+					m_pending_pick_readback.pick_state = view_context.pick_state;
+					m_pending_pick_readback.scene = view_context.scene;
+					m_pending_pick_readback.x = read_desc.x;
+					m_pending_pick_readback.y = read_desc.y;
+					m_pending_pick_readback.width = output_width;
+					m_pending_pick_readback.height = output_height;
+					m_pending_pick_readback.frame = frame;
+				}
+			}
+		}
+		// editor end
+
 		commit_temporal_view_state(temporal_view_key, frame);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -1027,6 +1279,138 @@ namespace AshEngine
 	void SceneRenderer::draw_render_debug_view_ui(UIContext& ui_context)
 	{
 		m_render_debug_view.draw_ui(ui_context);
+	}
+
+	bool SceneRenderer::add_scene_view_overlay_pass(
+		RenderGraphBuilder& graph,
+		RenderGraphTextureRef output_target,
+		RenderGraphTextureRef depth_target,
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context)
+	{
+		ASH_PROFILE_SCOPE_NC("SceneRenderer::add_scene_view_overlay_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		if (!view_context.scene_overlay_lines || view_context.scene_overlay_lines->empty())
+		{
+			return true;
+		}
+
+		auto overlay_batches = std::make_shared<std::vector<SceneOverlayDrawBatch>>(
+			build_scene_overlay_draw_batches(*view_context.scene_overlay_lines));
+		if (overlay_batches->empty())
+		{
+			return true;
+		}
+
+		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(view_context.scene_overlay_lines->size()));
+		ASH_PROFILE_PLOT("Scene/OverlayLines", static_cast<int64_t>(view_context.scene_overlay_lines->size()));
+		ASH_PROCESS_ERROR(output_target.is_valid());
+		ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+		ASH_PROCESS_ERROR(m_scene_overlay_depth_test_program != nullptr);
+		ASH_PROCESS_ERROR(m_scene_overlay_depth_test_no_write_program != nullptr);
+
+		auto draw_overlay_batches =
+			[this, overlay_batches, &frame, &view_context](
+				RenderGraphRasterContext& context,
+				bool depth_tested) -> bool
+		{
+			ASH_PROCESS_GUARD_RETURN(bool, pass_result, true, false);
+			for (const SceneOverlayDrawBatch& batch : *overlay_batches)
+			{
+				const bool batch_depth_tested =
+					batch.depth_mode == SceneOverlayDepthMode::DepthTest ||
+					batch.depth_mode == SceneOverlayDepthMode::DepthTestNoWrite;
+				if (batch_depth_tested != depth_tested)
+				{
+					continue;
+				}
+
+				GraphicsProgram* program = m_debug_draw_program.get();
+				if (batch_depth_tested)
+				{
+					program = m_scene_overlay_depth_test_no_write_program.get();
+				}
+				ASH_PROCESS_ERROR(program != nullptr);
+
+				ASH_PROCESS_ERROR(ensure_debug_draw_vertex_buffer(
+					*m_renderer,
+					m_scene_overlay_vertex_buffer,
+					m_scene_overlay_vertex_capacity,
+					batch.vertices));
+
+				GraphicsDrawDesc draw_desc{};
+				draw_desc.program = program;
+				draw_desc.vertex_buffers.push_back({ 0u, m_scene_overlay_vertex_buffer, 0u });
+				draw_desc.vertex_count = static_cast<uint32_t>(batch.vertices.size());
+				draw_desc.instance_count = 1u;
+
+				DebugDrawRootConstants constants{};
+				constants.view_projection = frame.view_projection;
+				constants.depth_bias = batch.depth_bias;
+				if (view_context.reverse_z)
+				{
+					constants.depth_bias = -constants.depth_bias;
+				}
+				attach_debug_draw_root_constants(draw_desc, program, constants);
+				apply_view_context_to_draw_desc(draw_desc, view_context);
+				ASH_PROCESS_ERROR(context.draw(draw_desc));
+			}
+
+			ASH_PROCESS_GUARD_RETURN_END(pass_result, false);
+		};
+
+		bool has_depth_tested_batches = false;
+		bool has_always_on_top_batches = false;
+		for (const SceneOverlayDrawBatch& batch : *overlay_batches)
+		{
+			if (batch.depth_mode == SceneOverlayDepthMode::DepthTest ||
+				batch.depth_mode == SceneOverlayDepthMode::DepthTestNoWrite)
+			{
+				has_depth_tested_batches = true;
+			}
+			if (batch.depth_mode == SceneOverlayDepthMode::AlwaysOnTop)
+			{
+				has_always_on_top_batches = true;
+			}
+		}
+
+		if (has_depth_tested_batches)
+		{
+			ASH_PROCESS_ERROR(depth_target.is_valid());
+			ASH_PROCESS_ERROR(graph.add_raster_pass(
+				"SceneViewOverlayDepthPass",
+				RenderGraphPassFlags::None,
+				[output_target, depth_target](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_depth(depth_target, RenderGraphDepthReadMode::DepthTestOnly);
+					pass.write_color(0, output_target, RenderLoadAction::Load, {});
+				},
+				[this, overlay_batches, draw_overlay_batches, &frame, &view_context](RenderGraphRasterContext& context) -> bool
+				{
+					ASH_PROFILE_SCOPE_NC("SceneViewOverlayDepthPass", AshEngine::Profile::Color::Draw);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(overlay_batches->size()));
+					return draw_overlay_batches(context, true);
+				}));
+		}
+
+		if (has_always_on_top_batches)
+		{
+			ASH_PROCESS_ERROR(graph.add_raster_pass(
+				"SceneViewOverlayTopPass",
+				RenderGraphPassFlags::None,
+				[output_target](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.write_color(0, output_target, RenderLoadAction::Load, {});
+				},
+				[this, overlay_batches, draw_overlay_batches, &frame, &view_context](RenderGraphRasterContext& context) -> bool
+				{
+					ASH_PROFILE_SCOPE_NC("SceneViewOverlayTopPass", AshEngine::Profile::Color::Draw);
+					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(overlay_batches->size()));
+					return draw_overlay_batches(context, false);
+				}));
+		}
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
 	bool SceneRenderer::add_debug_draw_overlay_pass(
@@ -1373,6 +1757,212 @@ namespace AshEngine
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
+
+	// editor begin 修改原因：P2 GPU ID buffer picking
+	bool SceneRenderer::ensure_entity_pick_target(uint32_t width, uint32_t height)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+		ASH_PROCESS_ERROR(width > 0 && height > 0);
+		if (m_entity_pick_target &&
+			m_entity_pick_width == width &&
+			m_entity_pick_height == height)
+		{
+			return true;
+		}
+
+		RenderTargetDesc desc{};
+		desc.width = static_cast<uint16_t>(width);
+		desc.height = static_cast<uint16_t>(height);
+		desc.format = RenderTextureFormat::R32G32_UINT;
+		desc.shader_resource = true;
+		desc.unordered_access = false;
+		desc.name = "SceneEntityPick";
+		desc.use_optimized_clear_value = true;
+		desc.optimized_clear_color = {};
+		m_entity_pick_target = m_renderer->create_render_target(desc);
+		ASH_PROCESS_ERROR(m_entity_pick_target != nullptr);
+		m_entity_pick_width = width;
+		m_entity_pick_height = height;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool SceneRenderer::render_entity_pick_meshes(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphRasterContext& pass_context,
+		uint64_t render_frame_index)
+	{
+		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_entity_pick_meshes", AshEngine::Profile::Color::Draw);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_entity_pick_program != nullptr);
+
+		const auto build_instance_data = [&frame](const VisibleStaticMeshDraw& draw) -> SceneStaticMeshInstanceData
+		{
+			return make_instance_data(
+				frame.view_projection * draw.world_transform,
+				frame.view_projection * draw.world_transform,
+				false);
+		};
+
+		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
+		{
+			if (draw.entity_id == 0)
+			{
+				continue;
+			}
+
+			ASH_PROCESS_ERROR(validate_static_mesh_draw_asset(draw));
+			const SceneStaticMeshInstanceData instance_data = build_instance_data(draw);
+			const size_t logical_instance_buffer_slot = reserve_frame_instance_buffer_slot_range(1);
+			const size_t instance_buffer_slot =
+				resolve_frame_lagged_instance_buffer_slot(logical_instance_buffer_slot, render_frame_index);
+			std::shared_ptr<VertexBuffer> instance_buffer =
+				ensure_instance_buffer(instance_buffer_slot, &instance_data, 1);
+			ASH_PROCESS_ERROR(instance_buffer != nullptr);
+
+			SceneEntityPickRootConstants constants{};
+			const glm::uvec2 packed_entity_id = pack_entity_id(draw.entity_id);
+			constants.entity_id = packed_entity_id;
+
+			for (const ResolvedStaticMeshSection& section : draw.sections)
+			{
+				ASH_PROCESS_ERROR(section.topology == MeshPrimitiveTopology::Triangles);
+				if (!section.material || !section.material_proxy)
+				{
+					continue;
+				}
+
+				const MaterialResource* material_resource =
+					select_staticmesh_material_resource(*section.material_proxy, PassFamily::DepthOnly);
+				if (!material_resource || material_resource->pass_relevance.is_transparent)
+				{
+					continue;
+				}
+
+				GraphicsDrawDesc draw_desc{};
+				draw_desc.program = m_entity_pick_program.get();
+				draw_desc.vertex_buffers.push_back({ 0, draw.render_asset->resource->vertex_buffer, 0 });
+				draw_desc.vertex_buffers.push_back({ 1, instance_buffer, 0 });
+				draw_desc.index_buffer = draw.render_asset->resource->index_buffer;
+				draw_desc.first_index = section.first_index;
+				draw_desc.index_count = section.index_count;
+				draw_desc.instance_count = 1;
+				draw_desc.vertex_offset = 0;
+				attach_entity_pick_root_constants(draw_desc, m_entity_pick_program.get(), constants);
+				apply_view_context_to_draw_desc(draw_desc, view_context);
+				ASH_PROCESS_ERROR(pass_context.draw(draw_desc));
+			}
+		}
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool SceneRenderer::add_entity_pick_pass(
+		RenderGraphBuilder& graph,
+		RenderGraphTextureRef depth_target,
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context)
+	{
+		ASH_PROFILE_SCOPE_NC("SceneRenderer::add_entity_pick_pass", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(depth_target.is_valid());
+		ASH_PROCESS_ERROR(view_context.output_target != nullptr);
+		ASH_PROCESS_ERROR(ensure_entity_pick_target(
+			view_context.output_target->get_width(),
+			view_context.output_target->get_height()));
+
+		RenderGraphTextureRef entity_pick =
+			graph.register_external_texture(m_entity_pick_target, "SceneEntityPick");
+		const uint64_t render_frame_index = resolve_render_frame_index(frame);
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneEntityPickPass",
+			RenderGraphPassFlags::None,
+			[entity_pick, depth_target](RenderGraphRasterPassBuilder& pass)
+			{
+				pass.read_depth(depth_target, RenderGraphDepthReadMode::DepthTestOnly);
+				pass.write_color(0, entity_pick, RenderLoadAction::Clear, {});
+			},
+			[this, &frame, &view_context, render_frame_index](RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC("SceneEntityPickPass", AshEngine::Profile::Color::Draw);
+				return render_entity_pick_meshes(frame, view_context, context, render_frame_index);
+			}));
+
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	void SceneRenderer::complete_pending_pick_readbacks(
+		Renderer& renderer,
+		RenderAssetManager& render_asset_manager)
+	{
+		if (!m_pending_pick_readback.active || m_pending_pick_readback.pick_state == nullptr)
+		{
+			return;
+		}
+
+		RenderDevice* render_device = renderer.get_render_device();
+		if (render_device == nullptr)
+		{
+			m_pending_pick_readback.active = false;
+			return;
+		}
+
+		uint32_t packed_entity_id[2] = { 0u, 0u };
+		if (!render_device->flush_queued_render_target_texel_reads(packed_entity_id, sizeof(packed_entity_id)))
+		{
+			m_pending_pick_readback.active = false;
+			return;
+		}
+
+		ScenePickFrameState& pick_state = *m_pending_pick_readback.pick_state;
+		pick_state.result = {};
+		pick_state.result.entity_id =
+			static_cast<EntityId>(packed_entity_id[0]) |
+			(static_cast<EntityId>(packed_entity_id[1]) << 32);
+
+		AssetDatabase* asset_database = render_asset_manager.get_asset_database();
+		if (pick_state.result.entity_id != 0)
+		{
+			pick_state.result.hit = true;
+			if (m_pending_pick_readback.scene != nullptr && asset_database != nullptr)
+			{
+				const SceneRay ray = screen_to_world_ray(
+					static_cast<float>(m_pending_pick_readback.x) + 0.5f,
+					static_cast<float>(m_pending_pick_readback.y) + 0.5f,
+					static_cast<float>(m_pending_pick_readback.width),
+					static_cast<float>(m_pending_pick_readback.height),
+					m_pending_pick_readback.frame.view,
+					m_pending_pick_readback.frame.projection);
+				const std::vector<SceneRayHit> hits =
+					ray_cast_scene(*m_pending_pick_readback.scene, *asset_database, ray);
+				for (const SceneRayHit& hit : hits)
+				{
+					if (hit.entity_id != pick_state.result.entity_id)
+					{
+						continue;
+					}
+
+					pick_state.result.world_position = hit.position;
+					pick_state.result.depth = hit.distance;
+					if (hit.bounds.is_valid)
+					{
+						const glm::vec3 local = hit.position - hit.bounds.center;
+						const float length = glm::length(local);
+						if (length > 1e-5f)
+						{
+							pick_state.result.world_normal = local / length;
+						}
+					}
+					break;
+				}
+			}
+		}
+
+		pick_state.result_ready = true;
+		m_pending_pick_readback.active = false;
+	}
+	// editor end
 
 	bool SceneRenderer::validate_view_context(const SceneRenderViewContext& view_context) const
 	{

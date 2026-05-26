@@ -537,6 +537,85 @@ namespace RHI
 		return true;
 	}
 
+	auto DX12CommandBuffer::cmd_copy_texture_region_to_buffer(
+		std::shared_ptr<Texture> source,
+		uint32_t x,
+		uint32_t y,
+		std::shared_ptr<Buffer> destination,
+		uint64_t buffer_offset) -> bool
+	{
+		auto fail = [this](std::string message) -> bool
+			{
+				mark_error(std::move(message));
+				HLogError("{}", get_last_error());
+				return false;
+			};
+
+		if (has_error())
+		{
+			return false;
+		}
+		if (!m_cmdList)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_region_to_buffer called with a null command list.");
+		}
+		if (m_state != ASH_Recording)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_region_to_buffer called while command buffer is not recording.");
+		}
+		if (!source || !destination)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_region_to_buffer requires non-null source and destination.");
+		}
+
+		auto* source_texture = static_cast<DX12Texture*>(source.get());
+		auto* destination_buffer = static_cast<DX12Buffer*>(destination.get());
+		if (!source_texture || !destination_buffer || !source_texture->get_resource() || !destination_buffer->get_resource())
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_region_to_buffer requires valid source and destination resources.");
+		}
+
+		if (!cmd_transition_resource_state({ source, AshResourceState::CopySrc }))
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_region_to_buffer failed to transition source texture.");
+		}
+
+		const D3D12_RESOURCE_DESC source_desc = source_texture->get_resource()->GetDesc();
+		if (x >= source_desc.Width || y >= source_desc.Height)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_region_to_buffer coordinates are out of bounds.");
+		}
+
+		D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+		footprint.Footprint.Format = source_desc.Format;
+		footprint.Footprint.Width = 1;
+		footprint.Footprint.Height = 1;
+		footprint.Footprint.Depth = 1;
+		footprint.Footprint.RowPitch = 256;
+		footprint.Offset = buffer_offset;
+
+		D3D12_TEXTURE_COPY_LOCATION destination_location{};
+		destination_location.pResource = destination_buffer->get_resource();
+		destination_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+		destination_location.PlacedFootprint = footprint;
+
+		D3D12_TEXTURE_COPY_LOCATION source_location{};
+		source_location.pResource = source_texture->get_resource();
+		source_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		source_location.SubresourceIndex = 0;
+
+		const D3D12_BOX source_box = {
+			x,
+			y,
+			0u,
+			x + 1u,
+			y + 1u,
+			1u
+		};
+		m_cmdList->CopyTextureRegion(&destination_location, 0, 0, 0, &source_location, &source_box);
+		return true;
+	}
+
 	auto DX12CommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> buffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		auto fail = [this](std::string message) -> bool

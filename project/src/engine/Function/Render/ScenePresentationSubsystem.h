@@ -145,6 +145,21 @@ namespace AshEngine
 		bool update_presentations();
 		bool submit_presentations();
 
+		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
+		bool submit_scene_overlay(SceneViewBindingHandle binding, const SceneOverlayBatchDesc& desc);
+		void clear_scene_overlay(SceneViewBindingHandle binding);
+		// editor end
+
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		bool request_scene_entity_pick(SceneViewBindingHandle binding, int32_t x, int32_t y);
+		bool poll_scene_entity_pick_result(SceneViewBindingHandle binding, ScenePickResult& out_result);
+		void complete_gpu_pick_readbacks();
+		// editor end
+
+		// editor begin 修改原因：P3 viewport stats facade
+		bool get_scene_view_stats(SceneViewBindingHandle binding, SceneViewStats& out_stats) const;
+		// editor end
+
 	private:
 		std::shared_ptr<RenderTarget> resolve_surface_render_target(UISurfaceHandle surface) const;
 

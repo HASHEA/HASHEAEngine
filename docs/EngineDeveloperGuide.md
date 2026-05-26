@@ -1327,7 +1327,8 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
 
 当前 Scene 相关 Engine-facing helper 包括：
 
-- `SceneInstantiationDesc` + free function `instantiate_asset(Scene&, AssetDatabase&, AssetId, ...)`：按 `AssetId` 实例化 `Prefab` / `Model`，可指定 parent、root name override 和 root world transform；`use_world_transform=false` 时保持资源自身 transform。`AssetType::Mesh` 仍未接入该 facade，属于 Editor 后续需要 Engine 补齐的缺口。
+- `SceneInstantiationDesc` + free function `instantiate_asset(Scene&, AssetDatabase&, AssetId, ...)`：按 `AssetId` 实例化 `Prefab` / `Model` / `Mesh`，可指定 parent、root name override 和 root world transform；`use_world_transform=false` 时保持资源自身 transform。
+- `request_scene_entity_pick(SceneViewBindingHandle, x, y)` / `poll_scene_entity_pick_result(...)`：Editor Scene viewport GPU picking facade。Engine 在 GBuffer 后写入 per-pixel entity id，并在帧提交完成后 readback 点击像素；`ScenePickResult` 返回 `EntityId`、depth、world position、normal。
 - `Function/Scene/SceneQuery.h`：提供 `SceneWorldBounds`、`SceneRay`、`SceneRayHit` 以及 scene query free functions。
 - `get_entity_world_bounds()`：查询单个 entity 自身 mesh 的 world AABB，需要显式传入 `AssetDatabase&`，无 mesh 或资源 bounds 无效时返回 false。
 - `get_entity_subtree_world_bounds()`：聚合 root entity 及其子树中可查询 mesh 的 world AABB，供 Editor 聚焦、bounds 可视化等场景使用。

@@ -15,12 +15,15 @@ struct DebugDrawOutput
 cbuffer AshRootConstants : register(b0)
 {
     float4x4 AshViewProjection;
+    float AshDepthBias;
+    float3 _Padding;
 };
 
 DebugDrawOutput VSMain(DebugDrawInput input)
 {
     DebugDrawOutput output;
     output.position = mul(AshViewProjection, float4(input.position_ws, 1.0));
+    output.position.z += AshDepthBias * output.position.w;
     output.color = input.color;
     return output;
 }

@@ -292,4 +292,67 @@ namespace AshEngine
 		});
 		return hits;
 	}
+
+	// editor begin 修改原因：为 Editor 资源投放提供统一落点计算接口
+	bool project_ray_to_plane(
+		const SceneRay& ray,
+		const glm::vec3& plane_point,
+		const glm::vec3& plane_normal,
+		glm::vec3& out_hit_point,
+		float& out_distance)
+	{
+		const glm::vec3 normalized_normal = normalize_or_fallback(plane_normal, glm::vec3(0.0f, 1.0f, 0.0f));
+		const glm::vec3 direction = normalize_or_fallback(ray.direction, glm::vec3(0.0f, 0.0f, 1.0f));
+
+		const float denom = glm::dot(direction, normalized_normal);
+		if (std::abs(denom) < 0.000001f)
+		{
+			// 射线与平面平行
+			return false;
+		}
+
+		const glm::vec3 to_plane = plane_point - ray.origin;
+		out_distance = glm::dot(to_plane, normalized_normal) / denom;
+
+		if (out_distance < 0.0f)
+		{
+			// 交点在射线后方
+			return false;
+		}
+
+		out_hit_point = ray.origin + direction * out_distance;
+		return true;
+	}
+
+	bool find_scene_drop_point(
+		const Scene& scene,
+		AssetDatabase& database,
+		const SceneRay& ray,
+		const glm::vec3& camera_position,
+		const glm::vec3& camera_forward,
+		glm::vec3& out_world_position,
+		const SceneDropPointDesc& desc)
+	{
+		// 步骤 1: 优先尝试命中场景中的物体
+		std::vector<SceneRayHit> hits = ray_cast_scene(scene, database, ray, desc.max_ray_cast_distance);
+		if (!hits.empty())
+		{
+			out_world_position = hits.front().position;
+			return true;
+		}
+
+		// 步骤 2: 未命中场景物体，尝试默认地面平面
+		const glm::vec3 ground_point(0.0f, desc.default_ground_plane_y, 0.0f);
+		float ground_distance = 0.0f;
+		if (project_ray_to_plane(ray, ground_point, desc.default_ground_plane_normal, out_world_position, ground_distance))
+		{
+			return true;
+		}
+
+		// 步骤 3: 回退到相机前方固定距离
+		const glm::vec3 forward = normalize_or_fallback(camera_forward, glm::vec3(0.0f, 0.0f, -1.0f));
+		out_world_position = camera_position + forward * desc.camera_fallback_distance;
+		return true;
+	}
+	// editor end
 }

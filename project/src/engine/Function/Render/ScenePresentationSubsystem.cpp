@@ -78,6 +78,13 @@ namespace AshEngine
 			std::shared_ptr<VisibleRenderFrame> visible_frame = nullptr;
 		};
 
+		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
+		struct OverlayState
+		{
+			std::vector<SceneOverlayLine> lines{};
+		};
+		// editor end
+
 	public:
 		Renderer* renderer = nullptr;
 		RenderAssetManager* render_asset_manager = nullptr;
@@ -91,6 +98,12 @@ namespace AshEngine
 		uint32_t next_output_id = 1;
 		uint32_t next_binding_id = 1;
 		uint32_t next_surface_id = 1;
+		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
+		std::unordered_map<uint32_t, OverlayState> overlay_states{};
+		// editor end
+		// editor begin 修改原因：P2 GPU ID buffer picking
+		std::unordered_map<uint32_t, ScenePickFrameState> pick_states{};
+		// editor end
 
 	public:
 		static void apply_output_desc(OutputState& state, const SceneOutputDesc& desc);
@@ -450,6 +463,8 @@ namespace AshEngine
 	{
 		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
 		m_impl->bindings.erase(handle.value);
+		m_impl->overlay_states.erase(handle.value);
+		m_impl->pick_states.erase(handle.value);
 	}
 
 	bool ScenePresentationSubsystem::set_binding_enabled(SceneViewBindingHandle handle, bool enabled)
@@ -735,6 +750,93 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
+	bool ScenePresentationSubsystem::submit_scene_overlay(SceneViewBindingHandle binding, const SceneOverlayBatchDesc& desc)
+	{
+		if (!m_impl || !binding.is_valid())
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+		auto& overlay_state = m_impl->overlay_states[binding.value];
+		if (desc.lines != nullptr && desc.line_count > 0)
+		{
+			overlay_state.lines.reserve(overlay_state.lines.size() + desc.line_count);
+			for (uint32_t line_index = 0; line_index < desc.line_count; ++line_index)
+			{
+				overlay_state.lines.push_back(desc.lines[line_index]);
+			}
+		}
+
+		return true;
+	}
+
+	void ScenePresentationSubsystem::clear_scene_overlay(SceneViewBindingHandle binding)
+	{
+		if (!m_impl || !binding.is_valid())
+		{
+			return;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+		m_impl->overlay_states.erase(binding.value);
+	}
+	// editor end
+
+	// editor begin 修改原因：P2 GPU ID buffer picking
+	bool ScenePresentationSubsystem::request_scene_entity_pick(SceneViewBindingHandle binding, int32_t x, int32_t y)
+	{
+		if (!m_impl || !binding.is_valid() || x < 0 || y < 0)
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+		ScenePickFrameState& pick_state = m_impl->pick_states[binding.value];
+		pick_state.request_active = true;
+		pick_state.request_x = x;
+		pick_state.request_y = y;
+		pick_state.result_ready = false;
+		pick_state.result = {};
+		return true;
+	}
+
+	bool ScenePresentationSubsystem::poll_scene_entity_pick_result(
+		SceneViewBindingHandle binding,
+		ScenePickResult& out_result)
+	{
+		if (!m_impl || !binding.is_valid())
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+		const auto found = m_impl->pick_states.find(binding.value);
+		if (found == m_impl->pick_states.end() || !found->second.result_ready)
+		{
+			return false;
+		}
+
+		out_result = found->second.result;
+		found->second.result_ready = false;
+		found->second.request_active = false;
+		return true;
+	}
+
+	void ScenePresentationSubsystem::complete_gpu_pick_readbacks()
+	{
+		if (!m_impl || !m_impl->scene_renderer || !m_impl->renderer)
+		{
+			return;
+		}
+
+		m_impl->scene_renderer->complete_pending_pick_readbacks(
+			*m_impl->renderer,
+			*m_impl->render_asset_manager);
+	}
+	// editor end
+
 	bool ScenePresentationSubsystem::submit_presentations()
 	{
 		ASH_PROFILE_SCOPE_NC("ScenePresentationSubsystem::submit_presentations", AshEngine::Profile::Color::Submit);
@@ -864,6 +966,16 @@ namespace AshEngine
 			}
 
 			const bool first_use_on_output = touched_outputs.insert(output_state.handle.value).second;
+			Scene* binding_scene = nullptr;
+			{
+				std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+				const auto binding_found = m_impl->bindings.find(packet.binding.value);
+				if (binding_found != m_impl->bindings.end())
+				{
+					binding_scene = binding_found->second.scene;
+				}
+			}
+
 			SceneRenderViewContext view_context{};
 			view_context.view_id = packet.binding.value;
 			view_context.debug_name = packet.debug_name.c_str();
@@ -876,6 +988,7 @@ namespace AshEngine
 				packet.overrides.clear_color.a
 			};
 			view_context.reverse_z = packet.visible_frame->reverse_z;
+			view_context.scene = binding_scene;
 			view_context.depth_clear_value = {
 				resolve_scene_view_depth_clear_value(packet.overrides.clear_depth, packet.visible_frame->reverse_z),
 				0u
@@ -910,6 +1023,27 @@ namespace AshEngine
 						environment.ibl_asset_path,
 						environment.source_texture_path);
 			}
+
+			// editor begin 修改原因：绑定 viewport-scoped overlay 并在消费后清空
+			ScenePickFrameState* pick_state = nullptr;
+			{
+				std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+				const auto overlay_found = m_impl->overlay_states.find(packet.binding.value);
+				if (overlay_found != m_impl->overlay_states.end() && !overlay_found->second.lines.empty())
+				{
+					view_context.scene_overlay_lines =
+						std::make_shared<std::vector<SceneOverlayLine>>(overlay_found->second.lines);
+					overlay_found->second.lines.clear();
+				}
+
+				const auto pick_found = m_impl->pick_states.find(packet.binding.value);
+				if (pick_found != m_impl->pick_states.end())
+				{
+					pick_state = &pick_found->second;
+					view_context.pick_state = pick_state;
+				}
+			}
+			// editor end
 
 			if (!m_impl->scene_renderer->render_visible_frame(*packet.visible_frame, view_context))
 			{
@@ -953,4 +1087,98 @@ namespace AshEngine
 		}
 		return nullptr;
 	}
+
+	// editor begin 修改原因：Function 层 Scene Overlay facade，Editor 不直接依赖 subsystem 实例
+	bool submit_scene_overlay(SceneViewBindingHandle binding, const SceneOverlayBatchDesc& desc)
+	{
+		ScenePresentationSubsystem* subsystem =
+			Application::get() ? Application::get_scene_presentation() : nullptr;
+		return subsystem != nullptr && subsystem->submit_scene_overlay(binding, desc);
+	}
+
+	bool clear_scene_overlay(SceneViewBindingHandle binding)
+	{
+		ScenePresentationSubsystem* subsystem =
+			Application::get() ? Application::get_scene_presentation() : nullptr;
+		if (subsystem == nullptr)
+		{
+			return false;
+		}
+
+		subsystem->clear_scene_overlay(binding);
+		return true;
+	}
+	// editor end
+
+	// editor begin 修改原因：P2 GPU ID buffer picking facade
+	bool request_scene_entity_pick(SceneViewBindingHandle binding, int32_t x, int32_t y)
+	{
+		ScenePresentationSubsystem* subsystem =
+			Application::get() ? Application::get_scene_presentation() : nullptr;
+		return subsystem != nullptr && subsystem->request_scene_entity_pick(binding, x, y);
+	}
+
+	bool poll_scene_entity_pick_result(SceneViewBindingHandle binding, ScenePickResult& out_result)
+	{
+		ScenePresentationSubsystem* subsystem =
+			Application::get() ? Application::get_scene_presentation() : nullptr;
+		return subsystem != nullptr && subsystem->poll_scene_entity_pick_result(binding, out_result);
+	}
+	// editor end
+
+	// editor begin 修改原因：P3 viewport stats facade
+	bool ScenePresentationSubsystem::get_scene_view_stats(SceneViewBindingHandle binding, SceneViewStats& out_stats) const
+	{
+		out_stats = {};
+		if (!m_impl || !binding.is_valid())
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+		const auto binding_found = m_impl->bindings.find(binding.value);
+		if (binding_found == m_impl->bindings.end())
+		{
+			return false;
+		}
+
+		const auto output_found = m_impl->outputs.find(binding_found->second.output.value);
+		if (output_found == m_impl->outputs.end())
+		{
+			return false;
+		}
+
+		uint32_t output_width = 0;
+		uint32_t output_height = 0;
+		if (!Impl::resolve_output_extent(output_found->second, output_width, output_height))
+		{
+			return false;
+		}
+
+		out_stats.output_width = output_width;
+		out_stats.output_height = output_height;
+		out_stats.rhi_backend_name = Application::get_rhi_backend_name();
+		out_stats.valid = true;
+
+		if (m_impl->renderer != nullptr)
+		{
+			const RendererFrameStats& frame_stats = m_impl->renderer->get_frame_stats();
+			out_stats.draw_call_count = frame_stats.draw_call_count;
+			out_stats.graphics_pass_count = frame_stats.graphics_pass_count;
+			out_stats.compute_dispatch_count = frame_stats.compute_dispatch_count;
+			out_stats.cpu_frame_time_ms = frame_stats.cpu_frame_time_ms;
+			out_stats.instantaneous_fps = frame_stats.instantaneous_fps;
+			out_stats.average_fps = frame_stats.average_fps;
+		}
+
+		return true;
+	}
+
+	bool get_scene_view_stats(SceneViewBindingHandle binding, SceneViewStats& out_stats)
+	{
+		const ScenePresentationSubsystem* subsystem =
+			Application::get() ? Application::get_scene_presentation() : nullptr;
+		return subsystem != nullptr && subsystem->get_scene_view_stats(binding, out_stats);
+	}
+	// editor end
 }

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <string>
@@ -24,6 +25,30 @@ namespace AshEngine
 	struct AshAsset;
 
 	struct Mesh;
+
+	// editor begin 修改原因：Scene Change Event 语义，支持 Editor 根据明确事件刷新
+	enum class SceneChangeKind : uint8_t
+	{
+		EntityAdded = 0,
+		EntityRemoved,
+		HierarchyChanged,
+		ComponentChanged,
+		SceneReplaced,
+		SceneReloaded,
+		DirtyStateChanged
+	};
+
+	struct ASH_API SceneChangeEvent
+	{
+		SceneChangeKind kind = SceneChangeKind::ComponentChanged;
+		EntityId entity_id = 0;
+		SceneComponentType component_type = SceneComponentType::Name;
+		uint64_t change_version = 0;
+		bool dirty = false;
+	};
+
+	using SceneChangeCallback = std::function<void(const SceneChangeEvent&)>;
+	// editor end
 
 	struct ASH_API SceneMeshExtractionDesc
 	{
@@ -153,6 +178,10 @@ namespace AshEngine
 	public:
 		static Scene create(std::string_view name = "Untitled Scene");
 		static Scene load_from_file(const std::filesystem::path& path, std::string* out_error = nullptr);
+		// editor begin 修改原因：Scene Reload / Replace 语义，保留 change event 订阅者
+		bool reload_from_file(const std::filesystem::path& path, std::string* out_error = nullptr);
+		void replace_contents(Scene&& other);
+		// editor end
 
 		bool is_valid() const;
 		const std::string& get_name() const;
@@ -185,6 +214,9 @@ namespace AshEngine
 		Entity instantiate_model(const Model& model, const Entity& parent = {}, std::string_view root_name_override = {});
 		Entity instantiate_ashasset(const AshAsset& asset, const Entity& parent = {}, std::string_view root_name_override = {});
 		Entity instantiate_asset(AssetDatabase& database, const std::filesystem::path& path, const Entity& parent = {});
+		// editor begin 修改原因：支持 Mesh 资源通过 AssetId 实例化到场景
+		Entity instantiate_mesh(const std::shared_ptr<const Mesh>& mesh, const std::filesystem::path& asset_path, const Entity& parent = {}, std::string_view root_name_override = {});
+		// editor end
 
 		bool save_to_file(const std::filesystem::path& path, std::string* out_error = nullptr);
 		const std::filesystem::path& get_source_path() const;
@@ -199,6 +231,12 @@ namespace AshEngine
 		uint64_t get_render_environment_version() const;
 		uint64_t get_render_config_version() const;
 		void mark_clean();
+
+		// editor begin 修改原因：Scene Change Event 订阅接口
+		uint32_t subscribe_change_events(SceneChangeCallback callback);
+		bool unsubscribe_change_events(uint32_t subscription_id);
+		void notify_change_event(const SceneChangeEvent& event);
+		// editor end
 
 	private:
 		std::shared_ptr<Impl> m_impl{};
@@ -217,4 +255,11 @@ namespace AshEngine
 	ASH_API const SceneComponentDesc* get_scene_component_descriptor(SceneComponentType type);
 	ASH_API const SceneComponentDesc* get_scene_component_descriptors(uint32_t* out_count);
 	ASH_API const SceneEnumDesc* get_scene_enum_descriptor(const char* name);
+
+	// editor begin 修改原因：通用 Add/Remove Component facade
+	ASH_API bool can_add_scene_component(const Entity& entity, SceneComponentType type);
+	ASH_API bool can_remove_scene_component(const Entity& entity, SceneComponentType type);
+	ASH_API bool add_scene_component(Entity& entity, SceneComponentType type);
+	ASH_API bool remove_scene_component(Entity& entity, SceneComponentType type);
+	// editor end
 }

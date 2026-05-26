@@ -103,8 +103,13 @@ HASHEAEngine/
 - 内部基于 entt 风格 registry 管理实体、层级和组件。
 - 当前公开组件包括 `Name`、`Transform`、`Camera`、`Light`、`Mesh`。
 - `MeshComponent` 支持资产路径、mesh index、section 材质覆盖、可见性、mobility、layer mask。
-- `SceneQuery.h` 提供 entity/subtree world bounds、screen-to-world ray 和第一阶段 CPU AABB picking。
-- `SceneInstantiationDesc` + `instantiate_asset(Scene&, AssetDatabase&, AssetId, ...)` 提供 Editor 拖拽放置需要的 AssetId facade，可按 root world transform 实例化 prefab/model。
+- `SceneQuery.h` 提供 entity/subtree world bounds、screen-to-world ray、第一阶段 CPU AABB picking，以及 `project_ray_to_plane()` / `find_scene_drop_point()` 统一投放落点规则。
+- `SceneInstantiationDesc` + `instantiate_asset(Scene&, AssetDatabase&, AssetId, ...)` 提供 Editor 拖拽放置需要的 AssetId facade，可按 root world transform 实例化 prefab/model/mesh。
+- `Scene::subscribe_change_events()` + `SceneChangeEvent` 提供 scene replace/reload/hierarchy/component/dirty 变更事件语义；`Scene::reload_from_file()` / `replace_contents()` 保留订阅者并发出 `SceneReloaded` / `SceneReplaced`。
+- `get_scene_component_descriptor()` 的 `ScenePropertyDesc` 已扩展 editor hint、range、asset ref、read-only 元数据；`can_add_scene_component()` / `add_scene_component()` / `can_remove_scene_component()` / `remove_scene_component()` 提供按 `SceneComponentType` 的通用组件 facade。
+- `submit_scene_overlay()` / `clear_scene_overlay()` + `SceneOverlayDepthMode` 提供 viewport-scoped、depth-aware 的 scene overlay 提交；overlay pass 发生在 tone-map 后、全局 DebugDraw 前，并复用当前 view 的 deferred depth 结果。
+- `request_scene_entity_pick()` / `poll_scene_entity_pick_result()` 提供 viewport GPU entity ID picking facade；`SceneRenderer` 在 GBuffer 后以 depth-tested `R32G32_UINT` pass 写入 entity id，`RenderDevice` 在帧末 readback 单 texel，并结合 scene query 补齐 world position / depth / normal。
+- `get_scene_view_stats()` 提供 viewport 只读 stats facade（output 尺寸、RHI backend、draw calls、CPU frame time / FPS）。
 
 Scene 到渲染的主路径：
 

@@ -32,6 +32,15 @@ namespace AshEngine
 		SceneWorldBounds bounds{};
 	};
 
+	// editor begin 修改原因：为 Editor 资源投放提供统一落点计算接口
+	struct ASH_API SceneDropPointDesc
+	{
+		glm::vec3 default_ground_plane_normal{ 0.0f, 1.0f, 0.0f };  // 默认地面平面 (Y-up)
+		float default_ground_plane_y = 0.0f;                        // 默认地面高度
+		float camera_fallback_distance = 10.0f;                   // 相机前方回退距离
+		float max_ray_cast_distance = 1000.0f;                      // 最大射线检测距离
+	};
+
 	ASH_API bool get_entity_world_bounds(
 		const Scene& scene,
 		AssetDatabase& database,
@@ -57,4 +66,24 @@ namespace AshEngine
 		AssetDatabase& database,
 		const SceneRay& ray,
 		float max_distance = FLT_MAX);
+
+	// editor begin 修改原因：为 Editor 资源投放提供统一落点计算接口
+	// 射线与平面相交测试
+	ASH_API bool project_ray_to_plane(
+		const SceneRay& ray,
+		const glm::vec3& plane_point,
+		const glm::vec3& plane_normal,
+		glm::vec3& out_hit_point,
+		float& out_distance);
+
+	// 查找场景投放点：优先命中场景物体，其次地面平面，最后相机前方
+	ASH_API bool find_scene_drop_point(
+		const Scene& scene,
+		AssetDatabase& database,
+		const SceneRay& ray,
+		const glm::vec3& camera_position,
+		const glm::vec3& camera_forward,
+		glm::vec3& out_world_position,
+		const SceneDropPointDesc& desc = {});
+	// editor end
 }

@@ -32,6 +32,26 @@ namespace AshEngine
 		Enum
 	};
 
+	// editor begin 修改原因：组件元数据增强，供 Editor Inspector 读取 hint / range / asset ref
+	enum class ScenePropertyEditorHint : uint8_t
+	{
+		Default = 0,
+		Slider,
+		Color,
+		AssetPath,
+		Hidden
+	};
+
+	enum class ScenePropertyAssetRefKind : uint8_t
+	{
+		None = 0,
+		Mesh,
+		Material,
+		Texture,
+		IBL
+	};
+	// editor end
+
 	struct NameComponent
 	{
 		std::string value = "Entity";
@@ -143,6 +163,16 @@ namespace AshEngine
 		uint32_t offset = 0;
 		uint32_t size = 0;
 		const char* enum_name = nullptr;
+		// editor begin 修改原因：组件元数据增强
+		const char* display_name = nullptr;
+		const char* tooltip = nullptr;
+		ScenePropertyEditorHint editor_hint = ScenePropertyEditorHint::Default;
+		ScenePropertyAssetRefKind asset_ref_kind = ScenePropertyAssetRefKind::None;
+		float range_min = 0.0f;
+		float range_max = 0.0f;
+		bool use_range = false;
+		bool read_only = false;
+		// editor end
 	};
 
 	struct SceneComponentDesc
