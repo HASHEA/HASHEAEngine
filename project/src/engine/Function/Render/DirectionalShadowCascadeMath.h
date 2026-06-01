@@ -3,6 +3,7 @@
 #include "Function/Render/RenderScene.h"
 
 #include <array>
+#include <cstdint>
 
 #include <glm/glm.hpp>
 
@@ -17,5 +18,6 @@ namespace AshEngine
 		const VisibleRenderFrame& frame,
 		const glm::vec3& light_direction_ws,
 		float split_near,
-		float split_far);
+		float split_far,
+		uint32_t shadow_resolution = 0u);
 }

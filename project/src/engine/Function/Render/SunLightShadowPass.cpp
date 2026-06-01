@@ -532,7 +532,8 @@ namespace AshEngine
 						frame,
 						light.direction_ws,
 						split_near,
-						split_far);
+						split_far,
+						dynamic_tile.resolution);
 					cascade_plan.dynamic_tile = dynamic_tile;
 
 					if (!runtime_pass)
@@ -1031,6 +1032,7 @@ namespace AshEngine
 		std::vector<DirectionalShadowCascadeShaderData> cascade_data{};
 		cascade_data.reserve(plan.cascades.size());
 		const float atlas_size_f = static_cast<float>(atlas_size);
+		const float atlas_texel_size = 1.0f / std::max(atlas_size_f, 1.0f);
 		for (const DirectionalShadowCascadePlan& cascade : plan.cascades)
 		{
 			DirectionalShadowCascadeShaderData shader_data{};
@@ -1041,10 +1043,9 @@ namespace AshEngine
 				cascade.split_far,
 				cascade.depth_bias,
 				cascade.normal_bias);
-			const float texel_size = 1.0f / std::max(static_cast<float>(cascade.dynamic_tile.resolution), 1.0f);
 			shader_data.texel_size_flags = glm::vec4(
-				texel_size,
-				texel_size,
+				atlas_texel_size,
+				atlas_texel_size,
 				static_cast<float>(cascade.cascade_index),
 				encode_cascade_cache_mode_flag(cascade.cache_mode));
 			cascade_data.push_back(shader_data);

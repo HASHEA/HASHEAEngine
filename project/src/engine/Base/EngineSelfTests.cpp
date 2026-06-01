@@ -12,6 +12,7 @@
 #include "Function/Render/AmbientOcclusionConfig.h"
 #include "Function/Render/DeferredLightingPass.h"
 #include "Function/Render/DirectionalShadowConfig.h"
+#include "Function/Render/DirectionalShadowCascadeMath.h"
 #include "Function/Render/DirectionalLightShadowPass.h"
 #include "Function/Render/EnvironmentMapAsset.h"
 #include "Function/Render/EnvironmentMapBaker.h"
@@ -1666,6 +1667,31 @@ namespace AshEngine
 			return ok || report_self_test_failure("DirectionalShadow mask shader", "normal bias was not applied along the surface normal");
 		}
 
+		auto test_directional_shadow_mask_blends_cascade_transition() -> bool
+		{
+			std::ifstream shader_file("project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
+			if (!shader_file.is_open())
+			{
+				return report_self_test_failure(
+					"DirectionalShadow mask shader",
+					"failed to open DirectionalShadowMask.hlsl");
+			}
+
+			const std::string shader_source{
+				std::istreambuf_iterator<char>(shader_file),
+				std::istreambuf_iterator<char>() };
+			const bool computes_transition =
+				shader_source.find("ComputeCascadeTransitionWeight") != std::string::npos;
+			const bool samples_next_cascade =
+				shader_source.find("SampleCascadeShadow(next_buffer_index, position_ws, normal_ws)") != std::string::npos;
+			const bool blends_cascades =
+				shader_source.find("lerp(shadow, next_shadow, transition_weight)") != std::string::npos;
+			const bool ok = computes_transition && samples_next_cascade && blends_cascades;
+			return ok || report_self_test_failure(
+				"DirectionalShadow mask shader",
+				"cascade splits must blend to the next cascade instead of hard switching");
+		}
+
 		auto test_directional_shadow_cascade_buffer_uses_two_dimensional_texel_size() -> bool
 		{
 			std::ifstream mask_shader_file("project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
@@ -1690,13 +1716,124 @@ namespace AshEngine
 			const bool shader_consumes_xy =
 				mask_shader_source.find("cascade.texel_size_flags.xy") != std::string::npos;
 			const bool sunlight_uploads_xy =
-				sunlight_pass_source.find("shader_data.texel_size_flags = glm::vec4(\n\t\t\t\ttexel_size,\n\t\t\t\ttexel_size,") != std::string::npos;
+				sunlight_pass_source.find("const float atlas_texel_size = 1.0f / std::max(atlas_size_f, 1.0f);") != std::string::npos &&
+				sunlight_pass_source.find("shader_data.texel_size_flags = glm::vec4(\n\t\t\t\tatlas_texel_size,\n\t\t\t\tatlas_texel_size,") != std::string::npos;
 			const bool directional_uploads_xy =
-				directional_pass_source.find("shader_data.texel_size_flags = {\n\t\t\t\ttexel_size,\n\t\t\t\ttexel_size,") != std::string::npos;
+				directional_pass_source.find("const float atlas_texel_size = 1.0f / std::max(atlas_size_f, 1.0f);") != std::string::npos &&
+				directional_pass_source.find("shader_data.texel_size_flags = {\n\t\t\t\tatlas_texel_size,\n\t\t\t\tatlas_texel_size,") != std::string::npos;
 			const bool ok = shader_consumes_xy && sunlight_uploads_xy && directional_uploads_xy;
 			return ok || report_self_test_failure(
 				"DirectionalShadow cascade buffer layout",
-				"cascade texel_size_flags.xy must both contain atlas texel size for PCF sampling");
+				"cascade texel_size_flags.xy must both contain atlas-normalized texel size for PCF sampling");
+		}
+
+		auto test_directional_shadow_cascade_projection_snaps_to_texel_grid() -> bool
+		{
+			const glm::vec3 light_direction = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+			auto make_frame = [](const glm::vec3& camera_position) -> VisibleRenderFrame
+			{
+				VisibleRenderFrame frame{};
+				frame.reverse_z = false;
+				frame.camera_position = camera_position;
+				frame.view = glm::lookAtLH(camera_position, camera_position + glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+				frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+				frame.view_projection = frame.projection * frame.view;
+				return frame;
+			};
+
+			const VisibleRenderFrame frame_a = make_frame(glm::vec3(0.0f, 2.0f, -8.0f));
+			const VisibleRenderFrame frame_b = make_frame(glm::vec3(0.01f, 2.0f, -8.0f));
+			const uint32_t shadow_resolution = 1024u;
+			const glm::mat4 shadow_a = build_directional_shadow_cascade_light_view_projection(
+				frame_a,
+				light_direction,
+				16.0f,
+				160.0f,
+				shadow_resolution);
+			const glm::mat4 shadow_b = build_directional_shadow_cascade_light_view_projection(
+				frame_b,
+				light_direction,
+				16.0f,
+				160.0f,
+				shadow_resolution);
+
+			const glm::vec4 world_anchor(0.0f, 0.0f, 0.0f, 1.0f);
+			const glm::vec4 clip_a = shadow_a * world_anchor;
+			const glm::vec4 clip_b = shadow_b * world_anchor;
+			const glm::vec2 ndc_a = glm::vec2(clip_a) / std::max(clip_a.w, 1e-6f);
+			const glm::vec2 ndc_b = glm::vec2(clip_b) / std::max(clip_b.w, 1e-6f);
+			const glm::vec2 texel_a = (ndc_a * glm::vec2(0.5f, -0.5f) + glm::vec2(0.5f, 0.5f)) * static_cast<float>(shadow_resolution);
+			const glm::vec2 texel_b = (ndc_b * glm::vec2(0.5f, -0.5f) + glm::vec2(0.5f, 0.5f)) * static_cast<float>(shadow_resolution);
+
+			const bool ok = glm::length(texel_a - texel_b) <= 0.0001f;
+			return ok || report_self_test_failure(
+				"DirectionalShadow stable cascade",
+				"small camera movement shifted the cascade projection across shadow texels");
+		}
+
+		auto test_directional_shadow_cascade_projection_size_is_rotation_stable() -> bool
+		{
+			const glm::vec3 light_direction = glm::normalize(glm::vec3(-0.25f, -1.0f, -0.1f));
+			auto make_frame = [](const glm::vec3& camera_position, float yaw_degrees) -> VisibleRenderFrame
+			{
+				const float yaw = glm::radians(yaw_degrees);
+				const glm::vec3 forward = glm::normalize(glm::vec3(std::sin(yaw), 0.0f, std::cos(yaw)));
+				VisibleRenderFrame frame{};
+				frame.reverse_z = false;
+				frame.camera_position = camera_position;
+				frame.view = glm::lookAtLH(camera_position, camera_position + forward, glm::vec3(0.0f, 1.0f, 0.0f));
+				frame.projection = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.1f, 1000.0f);
+				frame.view_projection = frame.projection * frame.view;
+				return frame;
+			};
+			auto shadow_texel_world_size = [](const glm::mat4& shadow_matrix, uint32_t shadow_resolution) -> glm::vec2
+			{
+				const glm::vec3 clip_x_row(shadow_matrix[0][0], shadow_matrix[1][0], shadow_matrix[2][0]);
+				const glm::vec3 clip_y_row(shadow_matrix[0][1], shadow_matrix[1][1], shadow_matrix[2][1]);
+				const float resolution = static_cast<float>(std::max(shadow_resolution, 1u));
+				return glm::vec2(
+					2.0f / std::max(glm::length(clip_x_row), 1e-6f),
+					2.0f / std::max(glm::length(clip_y_row), 1e-6f)) / resolution;
+			};
+
+			const VisibleRenderFrame frame_a = make_frame(glm::vec3(0.0f, 2.0f, -8.0f), 0.0f);
+			const VisibleRenderFrame frame_b = make_frame(glm::vec3(0.0f, 2.0f, -8.0f), 11.0f);
+			const uint32_t shadow_resolution = 1024u;
+			const glm::mat4 near_shadow_a = build_directional_shadow_cascade_light_view_projection(
+				frame_a,
+				light_direction,
+				0.01f,
+				16.0f,
+				shadow_resolution);
+			const glm::mat4 near_shadow_b = build_directional_shadow_cascade_light_view_projection(
+				frame_b,
+				light_direction,
+				0.01f,
+				16.0f,
+				shadow_resolution);
+			const glm::mat4 far_shadow_a = build_directional_shadow_cascade_light_view_projection(
+				frame_a,
+				light_direction,
+				16.0f,
+				160.0f,
+				shadow_resolution);
+			const glm::mat4 far_shadow_b = build_directional_shadow_cascade_light_view_projection(
+				frame_b,
+				light_direction,
+				16.0f,
+				160.0f,
+				shadow_resolution);
+
+			const glm::vec2 near_texel_a = shadow_texel_world_size(near_shadow_a, shadow_resolution);
+			const glm::vec2 near_texel_b = shadow_texel_world_size(near_shadow_b, shadow_resolution);
+			const glm::vec2 far_texel_a = shadow_texel_world_size(far_shadow_a, shadow_resolution);
+			const glm::vec2 far_texel_b = shadow_texel_world_size(far_shadow_b, shadow_resolution);
+			const bool ok =
+				glm::length(near_texel_a - near_texel_b) <= 0.00001f &&
+				glm::length(far_texel_a - far_texel_b) <= 0.00001f;
+			return ok || report_self_test_failure(
+				"DirectionalShadow stable cascade rotation",
+				"camera rotation changed the cascade projection texel world size");
 		}
 
 		auto test_directional_shadow_static_cache_copy_uses_atlas_uv_scale() -> bool
@@ -4422,7 +4559,10 @@ namespace AshEngine
 		all_passed = test_directional_shadow_planner_builds_monotonic_cascades() && all_passed;
 		all_passed = test_visible_static_mesh_draws_carry_shadow_mobility() && all_passed;
 		all_passed = test_directional_shadow_mask_normal_bias_offsets_along_normal() && all_passed;
+		all_passed = test_directional_shadow_mask_blends_cascade_transition() && all_passed;
 		all_passed = test_directional_shadow_cascade_buffer_uses_two_dimensional_texel_size() && all_passed;
+		all_passed = test_directional_shadow_cascade_projection_snaps_to_texel_grid() && all_passed;
+		all_passed = test_directional_shadow_cascade_projection_size_is_rotation_stable() && all_passed;
 		all_passed = test_directional_shadow_static_cache_copy_uses_atlas_uv_scale() && all_passed;
 		all_passed = test_directional_shadow_static_cache_copy_declares_graph_read() && all_passed;
 		all_passed = test_directional_shadow_graph_adds_depth_before_lighting() && all_passed;

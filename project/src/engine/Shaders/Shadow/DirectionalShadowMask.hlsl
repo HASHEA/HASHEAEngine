@@ -6,6 +6,8 @@ Texture2D<float4> SceneGBufferE : register(t3);
 StructuredBuffer<DirectionalShadowCascadeShaderData> SceneDirectionalShadowCascades : register(t2);
 SamplerState ScenePointClampSampler : register(s0);
 
+static const float kCascadeTransitionRatio = 0.08;
+
 cbuffer AshRootConstants : register(b0)
 {
     float4x4 AshInvViewProjection;
@@ -67,6 +69,15 @@ float SampleCascadeShadow(uint cascade_buffer_index, float3 position_ws, float3 
     return lit / max(count, 1.0);
 }
 
+float ComputeCascadeTransitionWeight(float view_depth, DirectionalShadowCascadeShaderData cascade)
+{
+    const float cascade_range = max(cascade.split_depth_bias.y - cascade.split_depth_bias.x, 0.0001);
+    const float transition_width = max(cascade_range * kCascadeTransitionRatio, 0.0001);
+    const float transition_start = cascade.split_depth_bias.y - transition_width;
+    const float transition_t = saturate((view_depth - transition_start) / transition_width);
+    return smoothstep(0.0, 1.0, transition_t);
+}
+
 float4 PSMain(VSFullscreenOutput input) : SV_Target0
 {
     const float scene_depth = SceneDepth.SampleLevel(ScenePointClampSampler, input.uv, 0);
@@ -86,7 +97,17 @@ float4 PSMain(VSFullscreenOutput input) : SV_Target0
         DirectionalShadowCascadeShaderData cascade = SceneDirectionalShadowCascades[buffer_index];
         if (view_depth >= cascade.split_depth_bias.x && view_depth <= cascade.split_depth_bias.y)
         {
-            const float shadow = SampleCascadeShadow(buffer_index, position_ws, normal_ws);
+            float shadow = SampleCascadeShadow(buffer_index, position_ws, normal_ws);
+            if (cascade_index + 1u < cascade_count)
+            {
+                const float transition_weight = ComputeCascadeTransitionWeight(view_depth, cascade);
+                if (transition_weight > 0.0)
+                {
+                    const uint next_buffer_index = buffer_index + 1u;
+                    const float next_shadow = SampleCascadeShadow(next_buffer_index, position_ws, normal_ws);
+                    shadow = lerp(shadow, next_shadow, transition_weight);
+                }
+            }
             return float4(shadow, shadow, shadow, 1.0);
         }
     }
