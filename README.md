@@ -404,6 +404,7 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 - Directional CSM Shadow 实现计划：[`docs/superpowers/plans/2026-05-25-directional-csm-shadow-implementation.md`](docs/superpowers/plans/2026-05-25-directional-csm-shadow-implementation.md)
 - SunLight / DirectionalLight Shadow Pass 拆分设计：[`docs/superpowers/specs/2026-05-26-sunlight-directional-shadow-pass-split-design.md`](docs/superpowers/specs/2026-05-26-sunlight-directional-shadow-pass-split-design.md)
 - SunLight / DirectionalLight Shadow Pass 拆分实现计划：[`docs/superpowers/plans/2026-05-26-sunlight-directional-shadow-pass-split-implementation.md`](docs/superpowers/plans/2026-05-26-sunlight-directional-shadow-pass-split-implementation.md)
+- Agent Core v0 设计草案：[`docs/superpowers/specs/2026-06-03-agent-core-v0-design.md`](docs/superpowers/specs/2026-06-03-agent-core-v0-design.md)
 - 环境光遮蔽（AO）设计草案：[`docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md`](docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md)
 - 环境光遮蔽（AO）实现计划：[`docs/superpowers/plans/2026-05-20-ambient-occlusion-implementation.md`](docs/superpowers/plans/2026-05-20-ambient-occlusion-implementation.md)
 - Render Graph 设计草案：[`docs/superpowers/specs/2026-05-14-render-graph-design.md`](docs/superpowers/specs/2026-05-14-render-graph-design.md)
