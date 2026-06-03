@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "name": "graphics-rhi",
+      "path_regex": "^project/src/engine/Graphics/",
+      "subsystem": "RHI / backend",
+      "risk": "critical",
+      "reason": "Graphics changes may affect Vulkan, DX12, shader binding, resource lifetime, barriers, or backend parity.",
+      "validation": [ "Sandbox + Vulkan", "Sandbox + DX12", "Editor + Vulkan", "Editor + DX12" ],
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+    },
+    {
+      "name": "function-render",
+      "path_regex": "^project/src/engine/Function/Render/",
+      "subsystem": "Function/Render shared path",
+      "risk": "high",
+      "reason": "Function/Render changes may affect SceneRenderer, RenderGraph, RenderDevice facade, material submission, debug views, or frame stats.",
+      "validation": [ "Sandbox + Vulkan", "Sandbox + DX12", "Editor + Vulkan", "Editor + DX12" ],
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+    },
+    {
+      "name": "function-scene-asset",
+      "path_regex": "^project/src/engine/Function/(Scene|Asset)/",
+      "subsystem": "Scene / Asset facade",
+      "risk": "high",
+      "reason": "Scene or Asset changes can affect Editor-facing facade behavior and Sandbox standard scene loading.",
+      "validation": [ "Sandbox + Vulkan", "Sandbox + DX12", "Editor + Vulkan", "Editor + DX12" ],
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+    },
+    {
+      "name": "shader-source",
+      "path_regex": "(^project/src/engine/Shaders/|\\.hlsl$|\\.hlsli$)",
+      "subsystem": "Shader pipeline",
+      "risk": "high",
+      "reason": "Shader changes may affect DXC compilation, reflection, generated bindings, Vulkan SPIR-V, and DX12 DXIL.",
+      "validation": [ "Sandbox + Vulkan", "Sandbox + DX12" ],
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+    },
+    {
+      "name": "engine-config",
+      "path_regex": "^product/config/Engine\\.ini$",
+      "subsystem": "Runtime config",
+      "risk": "high",
+      "reason": "Engine.ini controls backend, validation, VSync, and process-level render debug settings.",
+      "validation": [ "Confirm requested backend matches runtime log", "Sandbox smoke test for affected backend" ],
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+    },
+    {
+      "name": "sandbox-scene",
+      "path_regex": "^product/assets/scenes/Sandbox\\.scene\\.json$",
+      "subsystem": "Sandbox standard scene",
+      "risk": "medium",
+      "reason": "The standard Sandbox scene is the main shared rendering validation asset.",
+      "validation": [ "Sandbox + Vulkan", "Sandbox + DX12" ],
+      "docs": [ "README.md" ]
+    },
+    {
+      "name": "editor-code",
+      "path_regex": "^project/src/editor/",
+      "subsystem": "Editor",
+      "risk": "high",
+      "reason": "Editor code must stay behind Engine Function facades and must not include Graphics internals.",
+      "validation": [ "Editor + Vulkan", "Editor + DX12" ],
+      "docs": [ "README.md", "docs/EditorDeveloperGuide.md" ]
+    },
+    {
+      "name": "build-scripts",
+      "path_regex": "^(scripts/|tools/|.*\\.bat$|.*premake5\\.lua$)",
+      "subsystem": "Build / tooling",
+      "risk": "medium",
+      "reason": "Build and tooling changes can affect validation orchestration and generated reports.",
+      "validation": [ "Run the touched tool self-test when available" ],
+      "docs": [ "README.md" ]
+    },
+    {
+      "name": "docs-only",
+      "path_regex": "^(README\\.md|docs/)",
+      "subsystem": "Documentation",
+      "risk": "low",
+      "reason": "Documentation changes usually need review for accuracy but not runtime validation.",
+      "validation": [ "Review documentation diff" ],
+      "docs": []
+    }
+  ]
+}

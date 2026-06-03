@@ -1,0 +1,96 @@
+# AIDevDoctor Report
+
+Generated: {{GENERATED_AT}}
+
+Repository: `{{REPO_ROOT}}`
+
+Output directory: `{{OUTPUT_DIR}}`
+
+## Workspace Status
+
+{{STATUS_ENTRIES}}
+
+## AI Review Contract
+
+{{AI_REVIEW_CONTRACT}}
+
+## Risk Classification
+
+Highest risk: **{{HIGHEST_RISK}}**
+
+Touched subsystems:
+
+{{TOUCHED_SUBSYSTEMS}}
+
+Matched rules:
+
+{{MATCHED_RULES}}
+
+## Dirty Change Groups
+
+{{CHANGE_GROUPS}}
+
+## Change Signals
+
+{{CHANGE_SIGNAL_SUMMARY}}
+
+{{CHANGE_SIGNALS}}
+
+## Validation Evidence Index
+
+{{VALIDATION_EVIDENCE_INDEX}}
+
+## Validation Coverage Matrix
+
+{{VALIDATION_COVERAGE_MATRIX}}
+
+## Evidence Freshness
+
+{{EVIDENCE_FRESHNESS}}
+
+## Validation Gaps
+
+{{VALIDATION_GAPS}}
+
+## Diagnostic Findings
+
+{{DIAGNOSTIC_FINDINGS}}
+
+## Suggested Next Steps
+
+{{SUGGESTED_NEXT_STEPS}}
+
+## Validation Guidance
+
+{{VALIDATION_GUIDANCE}}
+
+## Validation Plan
+
+{{VALIDATION_PLAN}}
+
+## Documentation Guidance
+
+{{DOC_GUIDANCE}}
+
+## Recent Commits
+
+{{RECENT_COMMITS}}
+
+## Engine Config Snapshot
+
+{{ENGINE_CONFIG}}
+
+## Latest PerfGate Summary
+
+{{PERF_GATE_SUMMARY}}
+
+## Latest Log Signals
+
+{{LOG_SUMMARY}}
+
+## Generated Files
+
+- `context.json`
+- `report.md`
+- `prompt.md`
+- `validation-plan.md`

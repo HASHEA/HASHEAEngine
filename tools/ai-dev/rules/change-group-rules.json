@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "name": "ai-dev-tooling",
+      "label": "AIDev tooling",
+      "intent": "current-tooling",
+      "path_regex": "^(scripts/AIDevDoctor\\.ps1|scripts/TestAIDevDoctor\\.ps1|tools/ai-dev/)",
+      "reason": "AIDevDoctor scripts, rules, templates, and local documentation for AI-assisted development."
+    },
+    {
+      "name": "runtime-config",
+      "label": "Runtime config",
+      "intent": "runtime-validation",
+      "path_regex": "^product/config/Engine\\.ini$",
+      "reason": "Runtime configuration can change backend, validation, VSync, or debug-view behavior."
+    },
+    {
+      "name": "scene-asset",
+      "label": "Scene asset",
+      "intent": "runtime-validation",
+      "path_regex": "^product/assets/scenes/",
+      "reason": "Scene assets affect Sandbox validation content and visual/performance baselines."
+    },
+    {
+      "name": "render-code",
+      "label": "Render code",
+      "intent": "runtime-validation",
+      "path_regex": "^project/src/engine/Function/Render/",
+      "reason": "Function/Render changes can affect shared render behavior across Vulkan and DX12."
+    },
+    {
+      "name": "rhi-code",
+      "label": "RHI code",
+      "intent": "runtime-validation",
+      "path_regex": "^project/src/engine/Graphics/",
+      "reason": "Graphics/RHI changes can affect backend parity, resource lifetime, and validation behavior."
+    },
+    {
+      "name": "shader-code",
+      "label": "Shader code",
+      "intent": "runtime-validation",
+      "path_regex": "(^project/src/engine/Shaders/|\\.(hlsl|hlsli)$)",
+      "reason": "Shader changes can affect DXC compilation, reflection, SPIR-V, DXIL, and bindings."
+    },
+    {
+      "name": "docs",
+      "label": "Documentation",
+      "intent": "documentation",
+      "path_regex": "^(README\\.md|docs/)",
+      "reason": "Repository documentation changes should be reviewed for command, path, and workflow accuracy."
+    },
+    {
+      "name": "developer-tooling",
+      "label": "Developer tooling",
+      "intent": "tooling",
+      "path_regex": "^(scripts/|tools/|.*\\.bat$|.*premake5\\.lua$)",
+      "reason": "General developer tooling can affect build, validation, or generated-report workflows."
+    }
+  ]
+}

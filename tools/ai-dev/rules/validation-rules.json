@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "risk_order": [ "none", "low", "medium", "high", "critical" ],
+  "default_guidance": {
+    "none": [ "No path-based validation guidance was inferred." ],
+    "low": [ "Review documentation diff." ],
+    "medium": [ "Run the touched tool self-test when available." ],
+    "high": [ "Consider Sandbox and Editor smoke tests on both Vulkan and DX12 unless the change is strictly tool-only." ],
+    "critical": [ "Run the full shared-path validation matrix: Sandbox + Vulkan, Sandbox + DX12, Editor + Vulkan, Editor + DX12." ]
+  }
+}

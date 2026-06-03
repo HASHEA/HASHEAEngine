@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "name": "render-pass-change",
+      "category": "render",
+      "severity": "high",
+      "path_regex": "^project/src/engine/(Function/Render|Graphics|Shaders)/",
+      "regex": "RenderGraph|PassDesc|add_.*pass|cmd_begin_render_pass|begin_render_pass|RenderDebugView|SceneRenderer",
+      "finding": "Changed text references render pass or RenderGraph flow.",
+      "next_step": "Check resource declarations, pass ordering, debug names, and Tracy instrumentation for affected render paths."
+    },
+    {
+      "name": "shader-binding-change",
+      "category": "shader",
+      "severity": "high",
+      "path_regex": "^(project/src/engine/(Function/Render|Graphics|Shaders)/|product/assets/materials/|.*\\.(hlsl|hlsli)$)",
+      "regex": "Shader|DXC|SPIR-V|DXIL|descriptor|root signature|binding|hlsl|hlsli",
+      "finding": "Changed text references shader compilation, reflection, or binding behavior.",
+      "next_step": "Verify shader compilation on Vulkan and DX12, and inspect shader debug dumps when failures appear."
+    },
+    {
+      "name": "runtime-config-change",
+      "category": "config",
+      "severity": "high",
+      "path_regex": "^product/config/Engine\\.ini$",
+      "regex": "Backend=|Validation|VSync|RenderDebugView|\\[RHI\\]|\\[Rendering\\]|Enabled=|Selected=",
+      "finding": "Changed text references runtime configuration.",
+      "next_step": "Confirm the next run uses the intended backend, validation, VSync, and debug-view state."
+    },
+    {
+      "name": "profiling-instrumentation",
+      "category": "profiling",
+      "severity": "medium",
+      "path_regex": "^project/src/engine/",
+      "regex": "hprofiler|H_PROFILE|ZoneScoped|Tracy",
+      "finding": "Changed text references profiling instrumentation.",
+      "next_step": "Confirm profiling scopes are in .cpp files and use pass-level names with useful counts."
+    },
+    {
+      "name": "error-flow-change",
+      "category": "error-handling",
+      "severity": "medium",
+      "path_regex": "^(project/src/engine/|scripts/|tools/)",
+      "regex": "ASH_PROCESS_ERROR|ASH_LOG_PROCESS_ERROR|return false|return nullptr|throw ",
+      "finding": "Changed text references error-flow behavior.",
+      "next_step": "Check that failure paths use the project process-error style where practical and keep cleanup centralized."
+    },
+    {
+      "name": "documentation-change",
+      "category": "docs",
+      "severity": "low",
+      "path_regex": "^(README\\.md|docs/|tools/ai-dev/README\\.md)",
+      "regex": "README\\.md|docs/|EngineDeveloperGuide|EditorDeveloperGuide|AIDevDoctor",
+      "finding": "Changed text references repository documentation.",
+      "next_step": "Review docs for consistency with the actual runtime and validation behavior."
+    },
+    {
+      "name": "automation-tool-change",
+      "category": "tooling",
+      "severity": "medium",
+      "path_regex": "^(scripts/|tools/)",
+      "regex": "PowerShell|ps1|RunPerfGate|AIDevDoctor|test-reports|summary\\.json|context\\.json",
+      "finding": "Changed text references developer automation or generated reports.",
+      "next_step": "Run the affected tool self-test and inspect generated reports before relying on the automation."
+    }
+  ]
+}

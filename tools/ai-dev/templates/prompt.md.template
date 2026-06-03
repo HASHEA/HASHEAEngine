@@ -1,0 +1,93 @@
+# AshEngine AI Development Context
+
+Use this context to review the current AshEngine workspace. Focus on bugs, validation risk, Engine/Editor boundaries, backend parity, and missing documentation.
+
+## Requested AI Review
+
+1. Classify the likely risk of the current changes.
+2. Point out missing validation based on the touched paths.
+3. Point out likely documentation updates.
+4. Suggest the next debugging or verification steps.
+5. Do not assume unrelated dirty files were authored by the current developer.
+
+## AI Review Contract
+
+{{AI_REVIEW_CONTRACT}}
+
+## Current Risk Summary
+
+Highest risk: **{{HIGHEST_RISK}}**
+
+Touched subsystems:
+
+{{TOUCHED_SUBSYSTEMS}}
+
+Matched rules:
+
+{{MATCHED_RULES}}
+
+## Dirty Change Groups
+
+{{CHANGE_GROUPS}}
+
+## Change Signals
+
+{{CHANGE_SIGNAL_SUMMARY}}
+
+{{CHANGE_SIGNALS}}
+
+## Validation Evidence Index
+
+{{VALIDATION_EVIDENCE_INDEX}}
+
+## Validation Coverage Matrix
+
+{{VALIDATION_COVERAGE_MATRIX}}
+
+## Evidence Freshness
+
+{{EVIDENCE_FRESHNESS}}
+
+## Validation Gaps
+
+{{VALIDATION_GAPS}}
+
+## Diagnostic Findings
+
+{{DIAGNOSTIC_FINDINGS}}
+
+## Suggested Next Steps
+
+{{SUGGESTED_NEXT_STEPS}}
+
+## Workspace Status
+
+{{STATUS_ENTRIES}}
+
+## Validation Guidance
+
+{{VALIDATION_GUIDANCE}}
+
+## Validation Plan
+
+{{VALIDATION_PLAN}}
+
+## Documentation Guidance
+
+{{DOC_GUIDANCE}}
+
+## Recent Commits
+
+{{RECENT_COMMITS}}
+
+## Engine Config Snapshot
+
+{{ENGINE_CONFIG}}
+
+## Latest PerfGate Summary
+
+{{PERF_GATE_SUMMARY}}
+
+## Latest Log Signals
+
+{{LOG_SUMMARY}}

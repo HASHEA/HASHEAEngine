@@ -1,0 +1,61 @@
+# AIDevDoctor Validation Plan
+
+Generated: {{GENERATED_AT}}
+
+Repository: `{{REPO_ROOT}}`
+
+Output directory: `{{OUTPUT_DIR}}`
+
+## Generated Commands
+
+{{VALIDATION_COMMANDS}}
+
+## Manual Checks
+
+{{VALIDATION_MANUAL_CHECKS}}
+
+## AI Review Contract
+
+{{AI_REVIEW_CONTRACT}}
+
+## Dirty Change Groups
+
+{{CHANGE_GROUPS}}
+
+## Validation Evidence Index
+
+{{VALIDATION_EVIDENCE_INDEX}}
+
+## Validation Coverage Matrix
+
+{{VALIDATION_COVERAGE_MATRIX}}
+
+## Evidence Freshness
+
+{{EVIDENCE_FRESHNESS}}
+
+## Validation Gaps
+
+{{VALIDATION_GAPS}}
+
+## Risk Inputs
+
+Highest risk: **{{HIGHEST_RISK}}**
+
+Touched subsystems:
+
+{{TOUCHED_SUBSYSTEMS}}
+
+Matched rules:
+
+{{MATCHED_RULES}}
+
+## Change Signals
+
+{{CHANGE_SIGNAL_SUMMARY}}
+
+{{CHANGE_SIGNALS}}
+
+## Workspace Status
+
+{{STATUS_ENTRIES}}

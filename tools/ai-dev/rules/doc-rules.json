@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "rules": [
+    {
+      "path_regex": "^project/src/engine/",
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ],
+      "reason": "Engine behavior, public facade, validation, or runtime workflow changes must be reflected in the root README and Engine developer guide."
+    },
+    {
+      "path_regex": "^project/src/editor/",
+      "docs": [ "README.md", "docs/EditorDeveloperGuide.md" ],
+      "reason": "Editor behavior or workflow changes must be reflected in Editor documentation."
+    },
+    {
+      "path_regex": "^product/config/Engine\\.ini$",
+      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ],
+      "reason": "Runtime configuration changes must be visible from the repository entry points."
+    },
+    {
+      "path_regex": "^(scripts/|tools/)",
+      "docs": [ "README.md" ],
+      "reason": "Developer workflow tool changes need a README entry or an existing docs link."
+    }
+  ]
+}

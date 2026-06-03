@@ -323,6 +323,14 @@ product\bin64\Debug-windows-x86_64\Sandbox.exe --engine-self-test
 product\bin64\Debug-windows-x86_64\Sandbox.exe --bake-ashibl product\assets\textures\skybox\citrus_orchard_puresky_4k.hdr product\assets\textures\skybox\citrus_orchard_puresky_4k.ashibl --radiance-size=1024 --irradiance-size=32 --prefilter-size=128 --prefilter-mips=8 --brdf-lut-size=128 --sample-count=256
 ```
 
+开发侧 AI 上下文报告可通过 AIDevDoctor 生成。该工具只读仓库状态、日志和最近测试报告，把 AI review contract、规则化风险、dirty change groups、change signals、validation evidence index、Sandbox / Editor × Vulkan / DX12 覆盖矩阵、证据新鲜度、验证缺口、诊断提示、验证计划和 AI prompt 写入 `Intermediate/test-reports/ai-dev/<timestamp>/`；验证计划只列出建议命令和人工检查项，并会引用覆盖矩阵中缺失或过期的目标 / 后端证据，不会自动执行构建、运行程序或改写 `Engine.ini`：
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\AIDevDoctor.ps1 -Mode Report -IncludeLogs -IncludePerfGate
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\AIDevDoctor.ps1 -Mode ValidatePlan
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\TestAIDevDoctor.ps1
+```
+
 标准性能门禁入口：
 
 ```bat
@@ -395,6 +403,7 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 - Engine UIContext：[`docs/EngineUIContext.md`](docs/EngineUIContext.md)
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
 - PerfGate 性能门禁使用说明：[`docs/PerfGateUsageGuide.md`](docs/PerfGateUsageGuide.md)
+- AIDevDoctor 开发侧 AI 上下文工具：[`docs/AIDevDoctor.md`](docs/AIDevDoctor.md)
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - Deferred Lighting 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-lighting-design.md`](docs/superpowers/specs/2026-05-12-deferred-lighting-design.md)
 - Sandbox 场景化与 SceneConfig 设计：[`docs/superpowers/specs/2026-05-25-sandbox-scene-config-design.md`](docs/superpowers/specs/2026-05-25-sandbox-scene-config-design.md)
