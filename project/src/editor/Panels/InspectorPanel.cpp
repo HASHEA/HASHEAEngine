@@ -6,15 +6,14 @@
 #include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
-#include "Panels/Inspector/CameraComponentEditor.h"
+#include "Panels/Inspector/InspectorComponentEditorRegistry.h"
 #include "Panels/Inspector/InspectorPanelState.h"
 #include "Panels/Inspector/InspectorPanelSupport.h"
-#include "Panels/Inspector/LightComponentEditor.h"
-#include "Panels/Inspector/MeshComponentEditor.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
 
 #include <memory>
+#include <vector>
 
 namespace AshEditor
 {
@@ -22,10 +21,9 @@ namespace AshEditor
 		: EditorPanel(EditorPanelIds::Inspector, EditorWindowTitles::Inspector)
 		, _deps(deps)
 		, _upState(std::make_unique<InspectorPanelState>())
+		, _upComponentEditorRegistry(std::make_unique<InspectorComponentEditorRegistry>())
 	{
-		_vecComponentEditors.emplace_back(std::make_unique<CameraComponentEditor>());
-		_vecComponentEditors.emplace_back(std::make_unique<LightComponentEditor>());
-		_vecComponentEditors.emplace_back(std::make_unique<MeshComponentEditor>());
+		RegisterDefaultInspectorComponentEditors(*_upComponentEditorRegistry);
 	}
 
 	InspectorPanel::~InspectorPanel() = default;
@@ -46,8 +44,14 @@ namespace AshEditor
 		_eventBindings.Subscribe<EditorSelectionChangedEvent>(
 			[this](const EditorSelectionChangedEvent& refEvent)
 			{
-				if (
-					refEvent.currentSelection.eKind != EditorSelectionKind::Entity ||
+				const bool bCurrentSingleEntity =
+					refEvent.vecCurrentSelections.size() == 1 &&
+					refEvent.currentSelection.eKind == EditorSelectionKind::Entity;
+				const bool bPreviousSingleEntity =
+					refEvent.vecPreviousSelections.size() == 1 &&
+					refEvent.previousSelection.eKind == EditorSelectionKind::Entity;
+				if (!bCurrentSingleEntity ||
+					!bPreviousSingleEntity ||
 					refEvent.currentSelection.uId != refEvent.previousSelection.uId)
 				{
 					ResetEntityDrafts();
@@ -57,6 +61,12 @@ namespace AshEditor
 			[this](const EditorActiveSceneChangedEvent&)
 			{
 				ResetEntityDrafts();
+				_bRefreshEntityDraftsOnNextGui = false;
+			});
+		_eventBindings.Subscribe<EditorSceneChangedEvent>(
+			[this](const EditorSceneChangedEvent& refEvent)
+			{
+				RequestEntityDraftRefreshFromSceneChange(refEvent);
 			});
 	}
 
@@ -68,6 +78,40 @@ namespace AshEditor
 	void InspectorPanel::UnsubscribeEvents()
 	{
 		_eventBindings.Clear();
+	}
+
+	void InspectorPanel::RequestEntityDraftRefreshFromSceneChange(const EditorSceneChangedEvent& refEvent)
+	{
+		if (refEvent.eKind == AshEngine::SceneChangeKind::SceneReloaded ||
+			refEvent.eKind == AshEngine::SceneChangeKind::SceneReplaced)
+		{
+			_bRefreshEntityDraftsOnNextGui = true;
+			return;
+		}
+
+		if (!_deps.pSelectionService)
+		{
+			return;
+		}
+
+		const EditorSelection& refSelection = _deps.pSelectionService->GetSelection();
+		if (refSelection.eKind != EditorSelectionKind::Entity ||
+			refSelection.uId == 0 ||
+			refSelection.uId != refEvent.uEntityId)
+		{
+			return;
+		}
+
+		switch (refEvent.eKind)
+		{
+		case AshEngine::SceneChangeKind::EntityRemoved:
+		case AshEngine::SceneChangeKind::HierarchyChanged:
+		case AshEngine::SceneChangeKind::ComponentChanged:
+			_bRefreshEntityDraftsOnNextGui = true;
+			break;
+		default:
+			break;
+		}
 	}
 
 	InspectorPanelState& InspectorPanel::AccessInspectorState()
@@ -108,12 +152,25 @@ namespace AshEditor
 		if (!_deps.pSelectionService || !_deps.pSelectionService->HasSelection())
 		{
 			ResetEntityDrafts();
+			_bRefreshEntityDraftsOnNextGui = false;
 			DrawInspectorEmptyState(refUi);
 			EndPanelWindow(frameContext);
 			return;
 		}
 
+		const std::vector<EditorSelection>& vecSelections = _deps.pSelectionService->GetSelections();
 		const EditorSelection& refSelection = _deps.pSelectionService->GetSelection();
+		if (vecSelections.size() > 1)
+		{
+			ResetEntityDrafts();
+			_bRefreshEntityDraftsOnNextGui = false;
+			DrawInspectorMultiSelectionSummary(
+				refUi,
+				vecSelections,
+				"Multi-selection is read-only for now. Batch actions can run from hierarchy commands; component editing will need explicit mixed-value rules before it is safe.");
+			EndPanelWindow(frameContext);
+			return;
+		}
 
 		if (refSelection.eKind == EditorSelectionKind::Entity && _deps.pSceneService)
 		{
@@ -122,6 +179,11 @@ namespace AshEditor
 				refSelection,
 				"Edit the selected entity. Property changes are applied immediately and can be undone with Ctrl+Z.");
 			AshEngine::Entity entity = _deps.pSceneService->FindEntity(refSelection.uId);
+			if (_bRefreshEntityDraftsOnNextGui)
+			{
+				ResetEntityDrafts();
+				_bRefreshEntityDraftsOnNextGui = false;
+			}
 			if (!entity.is_valid())
 			{
 				ResetEntityDrafts();
@@ -135,12 +197,14 @@ namespace AshEditor
 				refSelection,
 				"Basic asset metadata is folded into this tooltip. Use Asset Browser Preview when you need a richer inspection view.");
 			ResetEntityDrafts();
+			_bRefreshEntityDraftsOnNextGui = false;
 			DrawInspectorAssetInspector(refUi, refSelection);
 		}
 		else
 		{
 			DrawInspectorSelectionSummary(refUi, refSelection);
 			ResetEntityDrafts();
+			_bRefreshEntityDraftsOnNextGui = false;
 			DrawInspectorPanelIntro(refUi, "Inspector", "The current selection type does not have an inspector adapter yet.");
 		}
 

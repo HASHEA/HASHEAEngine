@@ -1,7 +1,9 @@
 #pragma once
 
 #include "Core/PanelDeps/ViewportPanelDeps.h"
+#include "Core/EditorViewportInputState.h"
 #include "Function/Gui/UICommon.h"
+#include "Function/Render/ScenePresentationHandles.h"
 #include "Services/EditorGizmoService.h"
 #include "Services/EditorViewportService.h"
 
@@ -10,7 +12,6 @@
 
 namespace AshEngine
 {
-	class InputState;
 	class UIContext;
 }
 
@@ -28,7 +29,6 @@ namespace AshEditor::ViewportPanelSupport
 		const AshEngine::UIVec2& refSecondPoint);
 	bool RectsIntersect(const AshEngine::UIRect& refLeftRect, const AshEngine::UIRect& refRightRect);
 	float DistanceSquared(const AshEngine::UIVec2& refFirstPoint, const AshEngine::UIVec2& refSecondPoint);
-	AshEngine::UIVec2 GetMouseScreenPosition(const AshEngine::InputState& refInput);
 
 	void DrawViewportDisplayOptionsMenu(
 		AshEngine::UIContext& refUi,
@@ -46,6 +46,7 @@ namespace AshEditor::ViewportPanelSupport
 		const EditorViewportInstance& refViewport,
 		const EditorViewportPresentation& refPresentation,
 		const EditorViewportRenderState* pRenderState,
+		const AshEngine::SceneViewStats* pSceneStats,
 		bool bIsPrimary);
 	void DrawOperationHints(
 		AshEngine::UIContext& refUi,
@@ -55,9 +56,8 @@ namespace AshEditor::ViewportPanelSupport
 		float fContentHeight);
 
 	bool HasSceneViewportOverlayHelpersEnabled(const EditorViewportPresentation& refPresentation);
-	void DrawSceneViewportOverlayHelpers(
+	void UpdateSceneViewportOverlayHelpers(
 		const ViewportPanelDeps& refDeps,
-		AshEngine::UIContext& refUi,
 		const EditorViewportPresentation& refPresentation,
 		const std::string& strViewportId,
 		const AshEngine::UIRect& rectContent);
@@ -65,11 +65,12 @@ namespace AshEditor::ViewportPanelSupport
 		const ViewportPanelDeps& refDeps,
 		AshEngine::UIContext& refUi,
 		const EditorViewportPresentation* pPresentation,
+		const std::string& strViewportId,
 		const AshEngine::UIRect& rectContent);
 	EditorGizmoService::InteractionResult UpdateSceneGizmoInteraction(
 		const ViewportPanelDeps& refDeps,
 		AshEngine::UIContext& refUi,
-		const AshEngine::InputState& refInput,
+		const EditorViewportInputState& refInput,
 		bool bViewportHovered,
 		const AshEngine::UIRect& rectContent);
 
@@ -78,6 +79,19 @@ namespace AshEditor::ViewportPanelSupport
 		const std::string& strViewportId,
 		const AshEngine::UIRect& rectContent,
 		const AshEngine::UIVec2& vecMousePosition,
+		AshEngine::UIModifierFlags uModifiers);
+	bool RequestSceneViewportClickPick(
+		const ViewportPanelDeps& refDeps,
+		const std::string& strViewportId,
+		const AshEngine::UIRect& rectContent,
+		const AshEngine::UIVec2& vecMousePosition,
+		AshEngine::SceneViewBindingHandle& outBinding);
+	bool PollSceneViewportClickPick(
+		AshEngine::SceneViewBindingHandle binding,
+		AshEngine::ScenePickResult& outResult);
+	void ApplySceneViewportPickResultSelection(
+		const ViewportPanelDeps& refDeps,
+		const AshEngine::ScenePickResult& refPickResult,
 		AshEngine::UIModifierFlags uModifiers);
 	void ApplySceneViewportBoxSelection(
 		const ViewportPanelDeps& refDeps,

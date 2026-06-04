@@ -11,6 +11,11 @@ namespace AshEditor
 		inline constexpr char AssetsRefresh[] = "assets.refresh";
 		inline constexpr char AssetsOpenSelected[] = "assets.open_selected";
 		inline constexpr char AssetsNavigateUp[] = "assets.navigate_up";
+		inline constexpr char AssetsCreateFolder[] = "assets.create_folder";
+		inline constexpr char AssetsInstantiateSelected[] = "assets.instantiate_selected";
+		inline constexpr char AssetsRenameSelected[] = "assets.rename_selected";
+		inline constexpr char AssetsDeleteSelected[] = "assets.delete_selected";
+		inline constexpr char AssetsReimportSelected[] = "assets.reimport_selected";
 		inline constexpr char WindowResetLayout[] = "window.reset_layout";
 		inline constexpr char WindowCommandPalette[] = "window.command_palette";
 		inline constexpr char EditUndo[] = "edit.undo";

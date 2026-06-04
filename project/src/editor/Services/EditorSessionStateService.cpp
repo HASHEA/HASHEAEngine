@@ -25,10 +25,16 @@ namespace AshEditor
 			{
 				_eventActiveScene = refEvent;
 			});
+		_eventBindings.Subscribe<EditorSceneChangedEvent>(
+			[this](const EditorSceneChangedEvent& refEvent)
+			{
+				_eventActiveDocumentDirtyState.bDirty = refEvent.bDirty;
+			});
 		_eventBindings.Subscribe<EditorSelectionChangedEvent>(
 			[this](const EditorSelectionChangedEvent& refEvent)
 			{
 				_selection = refEvent.currentSelection;
+				_vecSelections = refEvent.vecCurrentSelections;
 			});
 		_eventBindings.Subscribe<EditorUndoHistoryChangedEvent>(
 			[this](const EditorUndoHistoryChangedEvent& refEvent)
@@ -118,6 +124,7 @@ namespace AshEditor
 		UnsubscribeEvents();
 		_eventActiveScene = {};
 		_selection = {};
+		_vecSelections.clear();
 		_eventUndoHistory = {};
 		_eventTransactionState = {};
 		_eventActiveDocumentDirtyState = {};
@@ -136,6 +143,11 @@ namespace AshEditor
 	const EditorSelection& EditorSessionStateService::GetSelection() const
 	{
 		return _selection;
+	}
+
+	const std::vector<EditorSelection>& EditorSessionStateService::GetSelections() const
+	{
+		return _vecSelections;
 	}
 
 	const EditorUndoHistoryChangedEvent& EditorSessionStateService::GetUndoHistory() const

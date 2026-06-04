@@ -21,6 +21,7 @@ namespace AshEditor
 	class EditorActionCoordinator;
 	class EditorEventBindings;
 	class EditorEventBus;
+	class EditorLogBridge;
 	class DockLayoutController;
 	class EditorCommandPaletteController;
 	class EditorCommand;
@@ -90,6 +91,7 @@ namespace AshEditor
 	private:
 		std::unique_ptr<EditorEventBus> _upEventBus{};
 		std::unique_ptr<EditorEventBindings> _upEventBindings{};
+		std::unique_ptr<EditorLogBridge> _upLogBridge{};
 		std::unique_ptr<EditorSettingsService> _upSettingsService{};
 		std::unique_ptr<SelectionService> _upSelectionService{};
 		std::unique_ptr<SceneService> _upSceneService{};

@@ -22,6 +22,10 @@ namespace AshEditor
 		const AshEngine::MeshComponent& refLeft,
 		const AshEngine::MeshComponent& refRight);
 
+	bool EnvironmentComponentsEqual(
+		const AshEngine::EnvironmentComponent& refLeft,
+		const AshEngine::EnvironmentComponent& refRight);
+
 	template<typename ComponentType>
 	bool OptionalComponentsEqual(
 		const std::optional<ComponentType>& optLeft,

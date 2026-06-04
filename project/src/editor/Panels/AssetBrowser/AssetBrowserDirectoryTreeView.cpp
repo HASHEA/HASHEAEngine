@@ -1,5 +1,6 @@
 #include "Panels/AssetBrowser/AssetBrowserDirectoryTreeView.h"
 
+#include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Panels/AssetBrowser/IAssetBrowserViewHost.h"
 #include "Services/IEditorIconService.h"
@@ -46,6 +47,18 @@ namespace AshEditor
 			{
 				refHost.NavigateToDirectory(refEntry.pathRelative);
 			}
+			if (refUi.begin_drag_drop_target())
+			{
+				const AshEngine::UIDragDropPayload payload =
+					refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
+				if (payload.is_valid() &&
+					payload.data_size == static_cast<int>(sizeof(uint64_t)))
+				{
+					const uint64_t uTransferId = *static_cast<const uint64_t*>(payload.data);
+					refHost.HandleAssetDropToDirectory(refEntry.pathRelative, uTransferId);
+				}
+				refUi.end_drag_drop_target();
+			}
 
 			if (!itemResult.bOpened)
 			{
@@ -71,7 +84,9 @@ namespace AshEditor
 				refTreeWidget.PopLevel();
 			}
 
-			refUi.tree_pop();
+			// Keep TreePop paired with EditorTreeWidget::DrawItem so the custom indent
+			// spacing used by the guide lines stays consistent across recursion levels.
+			refTreeWidget.TreePop();
 		}
 	}
 

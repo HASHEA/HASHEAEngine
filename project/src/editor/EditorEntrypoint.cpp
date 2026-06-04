@@ -30,6 +30,7 @@ AshEngine::Application* create_application()
 	initConfig.uiThemePreset = AshEditor::ParseEditorUiThemePreset(settings.strUiThemePreset);
 	initConfig.uiThemeId = settings.strUiThemePreset;
 	initConfig.uiThemeDefinition = std::move(strThemeDefinition);
+	initConfig.bUiEnableViewports = true;
 	initConfig.uiFontPath = pathUiFont.empty() ? std::string{} : pathUiFont.string();
 	initConfig.uiFontMergePath = pathUiFontMerge.empty() ? std::string{} : pathUiFontMerge.string();
 	initConfig.uiStrongFontPath = pathUiStrongFont.empty() ? std::string{} : pathUiStrongFont.string();

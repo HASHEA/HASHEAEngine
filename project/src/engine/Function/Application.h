@@ -42,6 +42,9 @@ namespace AshEngine
 		UIThemePreset uiThemePreset = UIThemePreset::SlateStudio;
 		std::string uiThemeId{};
 		std::string uiThemeDefinition{};
+		// editor begin 修改原因：让编辑器显式控制 ImGui 多视口能力，支持面板拖出为原生系统窗口。
+		bool bUiEnableViewports = false;
+		// editor end
 		// editor begin 修改原因：允许编辑器从配置与资源目录向引擎透传字体、粗体和中文字形策略。
 		std::string uiFontPath{};
 		std::string uiFontMergePath{};

@@ -210,6 +210,9 @@ namespace AshEngine
 		uiConfig.theme_preset = config.uiThemePreset;
 		uiConfig.theme_id = config.uiThemeId;
 		uiConfig.theme_definition = config.uiThemeDefinition;
+		// editor begin 修改原因：把编辑器多视口开关注入 UIContext，允许 Dock 面板拖出为系统窗口。
+		uiConfig.enable_viewports = config.bUiEnableViewports;
+		// editor end
 		// editor begin 修改原因：把编辑器字体配置注入 UIContext，支持中文与强调字重的编辑器排版。
 		uiConfig.font_path = config.uiFontPath;
 		uiConfig.font_merge_path = config.uiFontMergePath;

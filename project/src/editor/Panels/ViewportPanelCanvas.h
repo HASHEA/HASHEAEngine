@@ -3,7 +3,7 @@
 #include "Core/EditorFrameContext.h"
 #include "Core/PanelDeps/ViewportPanelDeps.h"
 #include "Function/Gui/UICommon.h"
-#include "Panels/ViewportPanelInteraction.h"
+#include "Panels/ViewportPanelState.h"
 
 #include <string>
 
@@ -31,6 +31,6 @@ namespace AshEditor
 			const std::string& strViewportId,
 			const EditorViewportInstance& refViewport,
 			const ViewportPanelCanvasDrawResult& refDrawResult,
-			const ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState);
+			const ViewportPanelSceneSelectionState& refSceneSelectionState);
 	}
 }

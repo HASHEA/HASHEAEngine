@@ -4,7 +4,7 @@
 #include "Core/EditorPanel.h"
 #include "Core/EditorIds.h"
 #include "Core/PanelDeps/ViewportPanelDeps.h"
-#include "Panels/ViewportPanelInteraction.h"
+#include "Panels/ViewportPanelState.h"
 
 #include <string>
 
@@ -34,12 +34,11 @@ namespace AshEditor
 		void UnsubscribeEvents();
 		void ResetRuntimeViewportState();
 		EditorViewportInstance* ResolveViewport();
-		const EditorViewportInstance* ResolveViewport() const;
 
 	private:
 		ViewportPanelDeps _deps{};
 		EditorEventBindings _eventBindings{};
 		std::string _strViewportId{};
-		ViewportPanelSceneBoxSelectionState _sceneBoxSelection{};
+		ViewportPanelSceneSelectionState _sceneSelection{};
 	};
 }

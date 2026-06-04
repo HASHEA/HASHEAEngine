@@ -24,6 +24,7 @@ namespace AshEditor
 		std::string strConsoleFilterText{};
 		std::string strConsoleSourceFilter{};
 		int32_t iConsoleSeverityFilter = 0;
+		bool bConsoleAutoScroll = true;
 		// Stores the theme file stem, for example "slate_studio".
 		std::string strUiThemePreset = "slate_studio";
 		std::string strUiFontPath = "product/assets/editor/fonts/IBMPlexSans-Regular.ttf";

@@ -21,6 +21,7 @@ namespace AshEditor
 		state.draftCamera = {};
 		state.draftLight = {};
 		state.draftMesh = {};
+		state.draftEnvironment = {};
 	}
 
 	void InspectorPanel::ResetIdentityDraftToLive(const AshEngine::Entity& entity)
@@ -147,6 +148,32 @@ namespace AshEditor
 		SanitizeOptionalMeshComponent(state.draftMesh.optCurrentValue);
 	}
 
+	void InspectorPanel::ResetEnvironmentDraftToLive(const AshEngine::Entity& entity)
+	{
+		if (!entity.is_valid())
+		{
+			return;
+		}
+
+		InspectorPanelState& state = GetState();
+		state.draftEnvironment.uEntityId = entity.get_id();
+		state.draftEnvironment.optOriginalValue = GetEnvironmentComponentValue(entity);
+		state.draftEnvironment.optCurrentValue = state.draftEnvironment.optOriginalValue;
+	}
+
+	void InspectorPanel::ResetEnvironmentDraftToDefaults(const AshEngine::Entity& entity)
+	{
+		if (!entity.is_valid())
+		{
+			return;
+		}
+
+		InspectorPanelState& state = GetState();
+		state.draftEnvironment.uEntityId = entity.get_id();
+		state.draftEnvironment.optCurrentValue = AshEngine::EnvironmentComponent{};
+		SanitizeOptionalEnvironmentComponent(state.draftEnvironment.optCurrentValue);
+	}
+
 	void InspectorPanel::SyncEntityDrafts(const AshEngine::Entity& refEntity)
 	{
 		InspectorPanelState& state = GetState();
@@ -239,6 +266,26 @@ namespace AshEditor
 		}
 	}
 
+	void InspectorPanel::SyncEnvironmentDraft(const AshEngine::Entity& refEntity)
+	{
+		InspectorPanelState& state = GetState();
+		const std::optional<AshEngine::EnvironmentComponent> optLiveValue = GetEnvironmentComponentValue(refEntity);
+		if (state.draftEnvironment.uEntityId != refEntity.get_id())
+		{
+			state.draftEnvironment.uEntityId = refEntity.get_id();
+			state.draftEnvironment.optOriginalValue = optLiveValue;
+			state.draftEnvironment.optCurrentValue = optLiveValue;
+		}
+		else if (OptionalComponentsEqual(
+			state.draftEnvironment.optCurrentValue,
+			state.draftEnvironment.optOriginalValue,
+			&EnvironmentComponentsEqual))
+		{
+			state.draftEnvironment.optOriginalValue = optLiveValue;
+			state.draftEnvironment.optCurrentValue = optLiveValue;
+		}
+	}
+
 	bool InspectorPanel::HasPendingIdentityChanges() const
 	{
 		const InspectorPanelState& state = GetState();
@@ -276,6 +323,15 @@ namespace AshEditor
 			state.draftMesh.optCurrentValue,
 			state.draftMesh.optOriginalValue,
 			&MeshComponentsEqual);
+	}
+
+	bool InspectorPanel::HasPendingEnvironmentChanges() const
+	{
+		const InspectorPanelState& state = GetState();
+		return !OptionalComponentsEqual(
+			state.draftEnvironment.optCurrentValue,
+			state.draftEnvironment.optOriginalValue,
+			&EnvironmentComponentsEqual);
 	}
 
 	bool InspectorPanel::CommitIdentityDraft(AshEngine::Entity entity)
@@ -474,6 +530,43 @@ namespace AshEditor
 
 		HLogWarning("InspectorPanel failed to commit Mesh changes. Entity={}.", uEntityId);
 		state.draftMesh.optCurrentValue = state.draftMesh.optOriginalValue;
+		return false;
+	}
+
+	bool InspectorPanel::CommitEnvironmentDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingEnvironmentChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<SetEnvironmentComponentCommand>(
+					entity.get_id(),
+					state.draftEnvironment.optOriginalValue,
+					state.draftEnvironment.optCurrentValue));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate environment edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = ApplyEnvironmentComponentValue(entity, state.draftEnvironment.optCurrentValue);
+		}
+
+		if (bApplied)
+		{
+			state.draftEnvironment.optOriginalValue = state.draftEnvironment.optCurrentValue;
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Environment changes. Entity={}.", uEntityId);
+		state.draftEnvironment.optCurrentValue = state.draftEnvironment.optOriginalValue;
 		return false;
 	}
 }

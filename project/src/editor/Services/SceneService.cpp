@@ -1,6 +1,8 @@
 #include "Services/SceneService.h"
 #include "Base/hlog.h"
-#include "Core/SceneComponentSerialization.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
+#include "Core/SceneSnapshotComponentUtils.h"
 
 #include <algorithm>
 
@@ -13,51 +15,6 @@ namespace AshEditor
 			return std::find(vecEntityIds.begin(), vecEntityIds.end(), uEntityId) != vecEntityIds.end();
 		}
 
-		template<typename Component>
-		std::optional<SceneComponentSnapshot> MakeComponentSnapshot(
-			const AshEngine::SceneComponentType eType,
-			const Component& refComponent)
-		{
-			const AshEngine::SceneComponentDesc* pComponentDesc = AshEngine::get_scene_component_descriptor(eType);
-			if (!pComponentDesc)
-			{
-				return std::nullopt;
-			}
-
-			SceneComponentSnapshot snapshot{};
-			snapshot.eType = eType;
-			snapshot.strSerializedValue =
-				SceneComponentSerialization::SerializeComponentPayload(&refComponent, *pComponentDesc);
-			return snapshot;
-		}
-
-		std::optional<SceneComponentSnapshot> CaptureComponentSnapshot(
-			const AshEngine::Entity& refEntity,
-			const AshEngine::SceneComponentType eType)
-		{
-			switch (eType)
-			{
-			case AshEngine::SceneComponentType::Name:
-				return MakeComponentSnapshot(eType, refEntity.get_name_component());
-			case AshEngine::SceneComponentType::Transform:
-				return MakeComponentSnapshot(eType, refEntity.get_transform_component());
-			case AshEngine::SceneComponentType::Camera:
-				return refEntity.has_camera_component()
-					? MakeComponentSnapshot(eType, refEntity.get_camera_component())
-					: std::nullopt;
-			case AshEngine::SceneComponentType::Light:
-				return refEntity.has_light_component()
-					? MakeComponentSnapshot(eType, refEntity.get_light_component())
-					: std::nullopt;
-			case AshEngine::SceneComponentType::Mesh:
-				return refEntity.has_mesh_component()
-					? MakeComponentSnapshot(eType, refEntity.get_mesh_component())
-					: std::nullopt;
-			default:
-				return std::nullopt;
-			}
-		}
-
 		SceneEntitySnapshot CaptureSnapshotRecursive(
 			const SceneService& refSceneService,
 			const AshEngine::Entity& refEntity)
@@ -66,176 +23,13 @@ namespace AshEditor
 			snapshot.uEntityId = refEntity.get_id();
 			snapshot.uSiblingIndex = refSceneService.GetEntitySiblingIndex(refEntity.get_id());
 
-			for (const AshEngine::SceneComponentType eType : refEntity.get_component_types())
-			{
-				std::optional<SceneComponentSnapshot> optComponentSnapshot = CaptureComponentSnapshot(refEntity, eType);
-				if (optComponentSnapshot.has_value())
-				{
-					snapshot.vecComponents.push_back(std::move(*optComponentSnapshot));
-				}
-			}
+			snapshot.vecComponents = SceneSnapshotComponentUtils::CaptureComponentSnapshots(refEntity);
 
 			for (const AshEngine::Entity& refChild : refEntity.get_children())
 			{
 				snapshot.vecChildren.push_back(CaptureSnapshotRecursive(refSceneService, refChild));
 			}
 			return snapshot;
-		}
-
-		template<typename Component>
-		bool ApplyRequiredComponent(AshEngine::Entity entity, const SceneComponentSnapshot& refSnapshot)
-		{
-			const AshEngine::SceneComponentDesc* pComponentDesc =
-				AshEngine::get_scene_component_descriptor(refSnapshot.eType);
-			if (!pComponentDesc)
-			{
-				return false;
-			}
-
-			Component component{};
-			if (!SceneComponentSerialization::DeserializeComponentPayload(
-				refSnapshot.strSerializedValue,
-				*pComponentDesc,
-				&component))
-			{
-				return false;
-			}
-
-			return entity.write_component(refSnapshot.eType, &component, sizeof(Component));
-		}
-
-		template<typename Component>
-		bool ApplyOptionalComponent(
-			AshEngine::Entity entity,
-			const SceneComponentSnapshot& refSnapshot,
-			bool (AshEngine::Entity::*pfnHas)() const,
-			bool (AshEngine::Entity::*pfnSet)(const Component&),
-			bool (AshEngine::Entity::*pfnAdd)(const Component&))
-		{
-			const AshEngine::SceneComponentDesc* pComponentDesc =
-				AshEngine::get_scene_component_descriptor(refSnapshot.eType);
-			if (!pComponentDesc)
-			{
-				return false;
-			}
-
-			Component component{};
-			if (!SceneComponentSerialization::DeserializeComponentPayload(
-				refSnapshot.strSerializedValue,
-				*pComponentDesc,
-				&component))
-			{
-				return false;
-			}
-
-			return (entity.*pfnHas)()
-				? (entity.*pfnSet)(component)
-				: (entity.*pfnAdd)(component);
-		}
-
-		bool RemoveOptionalComponent(AshEngine::Entity entity, const AshEngine::SceneComponentType eType)
-		{
-			switch (eType)
-			{
-			case AshEngine::SceneComponentType::Camera:
-				return !entity.has_camera_component() || entity.remove_camera_component();
-			case AshEngine::SceneComponentType::Light:
-				return !entity.has_light_component() || entity.remove_light_component();
-			case AshEngine::SceneComponentType::Mesh:
-				return !entity.has_mesh_component() || entity.remove_mesh_component();
-			default:
-				return true;
-			}
-		}
-
-		bool SnapshotHasComponent(const SceneEntitySnapshot& refSnapshot, const AshEngine::SceneComponentType eType)
-		{
-			for (const SceneComponentSnapshot& refComponentSnapshot : refSnapshot.vecComponents)
-			{
-				if (refComponentSnapshot.eType == eType)
-				{
-					return true;
-				}
-			}
-			return false;
-		}
-
-		bool ApplyEntitySnapshot(AshEngine::Entity entity, const SceneEntitySnapshot& refSnapshot)
-		{
-			if (!entity.is_valid())
-			{
-				return false;
-			}
-
-			const AshEngine::SceneComponentType arrOptionalTypes[] =
-			{
-				AshEngine::SceneComponentType::Camera,
-				AshEngine::SceneComponentType::Light,
-				AshEngine::SceneComponentType::Mesh,
-			};
-			for (const AshEngine::SceneComponentType eType : arrOptionalTypes)
-			{
-				if (!SnapshotHasComponent(refSnapshot, eType) && !RemoveOptionalComponent(entity, eType))
-				{
-					return false;
-				}
-			}
-
-			for (const SceneComponentSnapshot& refComponentSnapshot : refSnapshot.vecComponents)
-			{
-				switch (refComponentSnapshot.eType)
-				{
-				case AshEngine::SceneComponentType::Name:
-					if (!ApplyRequiredComponent<AshEngine::NameComponent>(entity, refComponentSnapshot))
-					{
-						return false;
-					}
-					break;
-				case AshEngine::SceneComponentType::Transform:
-					if (!ApplyRequiredComponent<AshEngine::TransformComponent>(entity, refComponentSnapshot))
-					{
-						return false;
-					}
-					break;
-				case AshEngine::SceneComponentType::Camera:
-					if (!ApplyOptionalComponent<AshEngine::CameraComponent>(
-						entity,
-						refComponentSnapshot,
-						&AshEngine::Entity::has_camera_component,
-						&AshEngine::Entity::set_camera_component,
-						&AshEngine::Entity::add_camera_component))
-					{
-						return false;
-					}
-					break;
-				case AshEngine::SceneComponentType::Light:
-					if (!ApplyOptionalComponent<AshEngine::LightComponent>(
-						entity,
-						refComponentSnapshot,
-						&AshEngine::Entity::has_light_component,
-						&AshEngine::Entity::set_light_component,
-						&AshEngine::Entity::add_light_component))
-					{
-						return false;
-					}
-					break;
-				case AshEngine::SceneComponentType::Mesh:
-					if (!ApplyOptionalComponent<AshEngine::MeshComponent>(
-						entity,
-						refComponentSnapshot,
-						&AshEngine::Entity::has_mesh_component,
-						&AshEngine::Entity::set_mesh_component,
-						&AshEngine::Entity::add_mesh_component))
-					{
-						return false;
-					}
-					break;
-				default:
-					return false;
-				}
-			}
-
-			return true;
 		}
 
 		AshEngine::Entity RestoreSnapshotRecursive(
@@ -245,7 +39,7 @@ namespace AshEditor
 		{
 			AshEngine::Entity entity =
 				refSceneService.CreateEntityWithId(refSnapshot.uEntityId, "Entity", uParentId, refSnapshot.uSiblingIndex);
-			if (!entity.is_valid() || !ApplyEntitySnapshot(entity, refSnapshot))
+			if (!entity.is_valid() || !SceneSnapshotComponentUtils::ApplyEntitySnapshot(entity, refSnapshot))
 			{
 				if (entity.is_valid())
 				{
@@ -285,6 +79,18 @@ namespace AshEditor
 			_pathActiveScene = pathStartupScene;
 		}
 		return true;
+	}
+
+	void SceneService::SetEventBus(EditorEventBus* pEventBus)
+	{
+		if (_pEventBus == pEventBus)
+		{
+			return;
+		}
+
+		UnsubscribeActiveSceneChanges();
+		_pEventBus = pEventBus;
+		SubscribeActiveSceneChanges();
 	}
 
 	AshEngine::Scene& SceneService::GetActiveScene()
@@ -514,10 +320,12 @@ namespace AshEditor
 
 	void SceneService::NewScene(const std::string& strName)
 	{
+		UnsubscribeActiveSceneChanges();
 		_activeScene = AshEngine::Scene::create(strName);
 		_pathActiveScene.clear();
 		CreateDefaultEntities();
 		_activeScene.mark_clean();
+		SubscribeActiveSceneChanges();
 	}
 
 	bool SceneService::LoadScene(const std::filesystem::path& pathScene)
@@ -529,8 +337,10 @@ namespace AshEditor
 			return false;
 		}
 
+		UnsubscribeActiveSceneChanges();
 		_activeScene = std::move(loadedScene);
 		_pathActiveScene = pathScene;
+		SubscribeActiveSceneChanges();
 		return true;
 	}
 
@@ -548,6 +358,7 @@ namespace AshEditor
 		}
 
 		_pathActiveScene = pathScene;
+		PublishDirtyStateChanged(_activeScene.is_dirty());
 		return true;
 	}
 
@@ -571,5 +382,57 @@ namespace AshEditor
 		light_transform.rotation_euler_degrees = { -45.0f, 0.0f, 0.0f };
 		light.set_transform_component(light_transform);
 		light.add_light_component({});
+	}
+
+	void SceneService::SubscribeActiveSceneChanges()
+	{
+		if (!_pEventBus || !_activeScene.is_valid() || _uSceneChangeSubscriptionId != 0)
+		{
+			return;
+		}
+
+		_uSceneChangeSubscriptionId = _activeScene.subscribe_change_events(
+			[this](const AshEngine::SceneChangeEvent& refEvent)
+			{
+				PublishSceneChanged(refEvent);
+			});
+	}
+
+	void SceneService::UnsubscribeActiveSceneChanges()
+	{
+		if (_uSceneChangeSubscriptionId == 0)
+		{
+			return;
+		}
+
+		_activeScene.unsubscribe_change_events(_uSceneChangeSubscriptionId);
+		_uSceneChangeSubscriptionId = 0;
+	}
+
+	void SceneService::PublishSceneChanged(const AshEngine::SceneChangeEvent& refEvent) const
+	{
+		if (!_pEventBus)
+		{
+			return;
+		}
+
+		EditorSceneChangedEvent event{};
+		event.eKind = refEvent.kind;
+		event.eComponentType = refEvent.component_type;
+		event.uEntityId = refEvent.entity_id;
+		event.uChangeVersion = refEvent.change_version;
+		event.bDirty = refEvent.dirty;
+		event.strSceneName = _activeScene.is_valid() ? _activeScene.get_name() : std::string{};
+		event.strScenePath = _pathActiveScene.generic_string();
+		_pEventBus->Publish(event);
+	}
+
+	void SceneService::PublishDirtyStateChanged(const bool bDirty) const
+	{
+		AshEngine::SceneChangeEvent event{};
+		event.kind = AshEngine::SceneChangeKind::DirtyStateChanged;
+		event.change_version = _activeScene.get_change_version();
+		event.dirty = bDirty;
+		PublishSceneChanged(event);
 	}
 }

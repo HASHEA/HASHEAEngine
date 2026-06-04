@@ -1,9 +1,8 @@
 #include "Panels/ViewportPanelInteraction.h"
 
-#include "Base/input/Input.h"
+#include "Core/EditorViewportInputState.h"
 #include "Core/EditorIds.h"
 #include "Core/EditorSelection.h"
-#include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/AssetDatabaseService.h"
@@ -15,8 +14,6 @@
 #include "Services/SelectionService.h"
 #include "Widgets/EditorThemeColors.h"
 
-#include <GLFW/glfw3.h>
-
 #include <cstring>
 #include <utility>
 
@@ -25,10 +22,88 @@ namespace AshEditor
 	namespace
 	{
 		constexpr float kSceneBoxSelectionDragThresholdPixels = 5.0f;
+		constexpr double kSceneClickPickFallbackDelaySeconds = 0.2;
+
+		void ClearSceneBoxSelectionTracking(ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
+		{
+			refSceneBoxSelectionState.bTracking = false;
+			refSceneBoxSelectionState.bDragging = false;
+			refSceneBoxSelectionState.vecStartScreen = {};
+			refSceneBoxSelectionState.vecCurrentScreen = {};
+			refSceneBoxSelectionState.uStartModifiers = AshEngine::UIModifierFlagBits::None;
+		}
+
+		void ClearScenePendingPick(ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
+		{
+			refSceneBoxSelectionState.bPendingPick = false;
+			refSceneBoxSelectionState.strPendingPickViewportId.clear();
+			refSceneBoxSelectionState.pendingPickBinding = {};
+			refSceneBoxSelectionState.rectPendingPickContent = {};
+			refSceneBoxSelectionState.vecPendingPickScreen = {};
+			refSceneBoxSelectionState.uPendingPickModifiers = AshEngine::UIModifierFlagBits::None;
+			refSceneBoxSelectionState.dPendingPickRequestTimeSeconds = 0.0;
+		}
+
+		void UpdateSceneViewportPendingClickSelection(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			double dTimeSeconds,
+			ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
+		{
+			if (!refSceneBoxSelectionState.bPendingPick ||
+				refSceneBoxSelectionState.strPendingPickViewportId != strViewportId)
+			{
+				return;
+			}
+
+			AshEngine::ScenePickResult pickResult{};
+			if (ViewportPanelSupport::PollSceneViewportClickPick(
+				refSceneBoxSelectionState.pendingPickBinding,
+				pickResult))
+			{
+				ViewportPanelSupport::ApplySceneViewportPickResultSelection(
+					refDeps,
+					pickResult,
+					refSceneBoxSelectionState.uPendingPickModifiers);
+				ClearScenePendingPick(refSceneBoxSelectionState);
+				return;
+			}
+
+			if (dTimeSeconds - refSceneBoxSelectionState.dPendingPickRequestTimeSeconds < kSceneClickPickFallbackDelaySeconds)
+			{
+				return;
+			}
+
+			ViewportPanelSupport::ApplySceneViewportClickSelection(
+				refDeps,
+				refSceneBoxSelectionState.strPendingPickViewportId,
+				refSceneBoxSelectionState.rectPendingPickContent,
+				refSceneBoxSelectionState.vecPendingPickScreen,
+				refSceneBoxSelectionState.uPendingPickModifiers);
+			ClearScenePendingPick(refSceneBoxSelectionState);
+		}
+
+		void BeginSceneViewportPendingClickSelection(
+			ViewportPanelSceneSelectionState& refSceneBoxSelectionState,
+			const std::string& strViewportId,
+			AshEngine::SceneViewBindingHandle pickBinding,
+			const AshEngine::UIRect& rectContent,
+			const AshEngine::UIVec2& vecMousePosition,
+			AshEngine::UIModifierFlags uModifiers,
+			double dTimeSeconds)
+		{
+			refSceneBoxSelectionState.bPendingPick = true;
+			refSceneBoxSelectionState.strPendingPickViewportId = strViewportId;
+			refSceneBoxSelectionState.pendingPickBinding = pickBinding;
+			refSceneBoxSelectionState.rectPendingPickContent = rectContent;
+			refSceneBoxSelectionState.vecPendingPickScreen = vecMousePosition;
+			refSceneBoxSelectionState.uPendingPickModifiers = uModifiers;
+			refSceneBoxSelectionState.dPendingPickRequestTimeSeconds = dTimeSeconds;
+		}
 
 		void HandleSceneViewportModeShortcuts(
 			AshEngine::UIContext& refUi,
-			const AshEngine::InputState& refInput,
+			const EditorViewportInputState& refInput,
 			const bool bViewportHovered,
 			EditorGizmoState* pGizmoState)
 		{
@@ -38,41 +113,68 @@ namespace AshEditor
 			}
 
 			const bool bHasModifiers =
-				refInput.is_key_down(GLFW_KEY_LEFT_CONTROL) ||
-				refInput.is_key_down(GLFW_KEY_RIGHT_CONTROL) ||
-				refInput.is_key_down(GLFW_KEY_LEFT_SHIFT) ||
-				refInput.is_key_down(GLFW_KEY_RIGHT_SHIFT) ||
-				refInput.is_key_down(GLFW_KEY_LEFT_ALT) ||
-				refInput.is_key_down(GLFW_KEY_RIGHT_ALT) ||
-				refInput.is_key_down(GLFW_KEY_LEFT_SUPER) ||
-				refInput.is_key_down(GLFW_KEY_RIGHT_SUPER);
+				refInput.uModifiers != AshEngine::UIModifierFlagBits::None;
 			if (bHasModifiers)
 			{
 				return;
 			}
 
-			if (refInput.was_key_pressed(GLFW_KEY_W))
+			if (refInput.WasKeyPressed(AshEngine::UIKey::W))
 			{
 				pGizmoState->eMode = GizmoMode::Move;
 			}
-			else if (refInput.was_key_pressed(GLFW_KEY_E))
+			else if (refInput.WasKeyPressed(AshEngine::UIKey::E))
 			{
 				pGizmoState->eMode = GizmoMode::Scale;
 			}
-			else if (refInput.was_key_pressed(GLFW_KEY_R))
+			else if (refInput.WasKeyPressed(AshEngine::UIKey::R))
 			{
 				pGizmoState->eMode = GizmoMode::Rotate;
 			}
+		}
+
+		EditorViewportInputState BuildViewportInputState(AshEngine::UIContext& refUi)
+		{
+			EditorViewportInputState input{};
+			input.vecMouseScreenPosition = refUi.get_mouse_pos();
+			input.vecMouseWheelDelta = refUi.get_mouse_wheel_delta();
+			input.uModifiers = refUi.get_key_modifiers();
+
+			static constexpr AshEngine::UIMouseButton kMouseButtons[] = {
+				AshEngine::UIMouseButton::Left,
+				AshEngine::UIMouseButton::Right,
+				AshEngine::UIMouseButton::Middle
+			};
+			for (const AshEngine::UIMouseButton button : kMouseButtons)
+			{
+				input.arrMouseDown[static_cast<size_t>(button)] = refUi.is_mouse_down(button);
+				input.arrMousePressed[static_cast<size_t>(button)] = refUi.is_mouse_clicked(button, false);
+				input.arrMouseReleased[static_cast<size_t>(button)] = refUi.is_mouse_released(button);
+			}
+
+			static constexpr AshEngine::UIKey kKeys[] = {
+				AshEngine::UIKey::F,
+				AshEngine::UIKey::W,
+				AshEngine::UIKey::E,
+				AshEngine::UIKey::R
+			};
+			for (const AshEngine::UIKey key : kKeys)
+			{
+				input.arrKeyDown[static_cast<size_t>(key)] = refUi.is_key_down(key);
+				input.arrKeyPressed[static_cast<size_t>(key)] = refUi.is_key_pressed(key, false);
+			}
+
+			return input;
 		}
 
 		void UpdateSceneViewportSelectionInput(
 			const ViewportPanelDeps& refDeps,
 			const std::string& strViewportId,
 			AshEngine::UIContext& refUi,
-			const AshEngine::InputState& refInput,
+			const EditorViewportInputState& refInput,
 			const EditorViewportInstance& refViewport,
 			bool bGizmoConsumesMouseLeft,
-			ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState)
+			ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
 		{
 			if (!refDeps.pSelectionService ||
 				!refDeps.pSceneService ||
@@ -82,18 +184,24 @@ namespace AshEditor
 				return;
 			}
 
+			UpdateSceneViewportPendingClickSelection(
+				refDeps,
+				strViewportId,
+				refUi.get_time_seconds(),
+				refSceneBoxSelectionState);
+
 			const bool bCanStartSelection =
 				refViewport.state.bContentHovered &&
 				!bGizmoConsumesMouseLeft &&
-				!refInput.is_key_down(GLFW_KEY_LEFT_ALT) &&
-				!refInput.is_key_down(GLFW_KEY_RIGHT_ALT) &&
-				!refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_MIDDLE) &&
-				!refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_RIGHT) &&
+				!refInput.IsModifierDown(AshEngine::UIModifierFlagBits::Alt) &&
+				!refInput.IsMouseDown(AshEngine::UIMouseButton::Middle) &&
+				!refInput.IsMouseDown(AshEngine::UIMouseButton::Right) &&
 				!refUi.has_drag_drop_payload();
-			const AshEngine::UIVec2 vecMousePosition = ViewportPanelSupport::GetMouseScreenPosition(refInput);
+			const AshEngine::UIVec2 vecMousePosition = refInput.vecMouseScreenPosition;
 
-			if (refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_LEFT))
+			if (refInput.WasMousePressed(AshEngine::UIMouseButton::Left))
 			{
+				ClearScenePendingPick(refSceneBoxSelectionState);
 				if (bCanStartSelection &&
 					ViewportPanelSupport::IsPointInRect(refViewport.state.rectContent, vecMousePosition))
 				{
@@ -101,15 +209,15 @@ namespace AshEditor
 					refSceneBoxSelectionState.bDragging = false;
 					refSceneBoxSelectionState.vecStartScreen = vecMousePosition;
 					refSceneBoxSelectionState.vecCurrentScreen = vecMousePosition;
-					refSceneBoxSelectionState.uStartModifiers = refUi.get_key_modifiers();
+					refSceneBoxSelectionState.uStartModifiers = refInput.uModifiers;
 				}
 				else
 				{
-					refSceneBoxSelectionState = {};
+					ClearSceneBoxSelectionTracking(refSceneBoxSelectionState);
 				}
 			}
 
-			if (refSceneBoxSelectionState.bTracking && refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_LEFT))
+			if (refSceneBoxSelectionState.bTracking && refInput.IsMouseDown(AshEngine::UIMouseButton::Left))
 			{
 				refSceneBoxSelectionState.vecCurrentScreen = vecMousePosition;
 				const float fDragDistanceSquared = ViewportPanelSupport::DistanceSquared(
@@ -123,7 +231,7 @@ namespace AshEditor
 			}
 
 			if (!refSceneBoxSelectionState.bTracking ||
-				!refInput.was_mouse_button_released(GLFW_MOUSE_BUTTON_LEFT))
+				!refInput.WasMouseReleased(AshEngine::UIMouseButton::Left))
 			{
 				return;
 			}
@@ -142,15 +250,35 @@ namespace AshEditor
 			}
 			else
 			{
-				ViewportPanelSupport::ApplySceneViewportClickSelection(
+				AshEngine::SceneViewBindingHandle pickBinding{};
+				if (ViewportPanelSupport::RequestSceneViewportClickPick(
 					refDeps,
 					strViewportId,
 					refViewport.state.rectContent,
 					refSceneBoxSelectionState.vecStartScreen,
-					refSceneBoxSelectionState.uStartModifiers);
+					pickBinding))
+				{
+					BeginSceneViewportPendingClickSelection(
+						refSceneBoxSelectionState,
+						strViewportId,
+						pickBinding,
+						refViewport.state.rectContent,
+						refSceneBoxSelectionState.vecStartScreen,
+						refSceneBoxSelectionState.uStartModifiers,
+						refUi.get_time_seconds());
+				}
+				else
+				{
+					ViewportPanelSupport::ApplySceneViewportClickSelection(
+						refDeps,
+						strViewportId,
+						refViewport.state.rectContent,
+						refSceneBoxSelectionState.vecStartScreen,
+						refSceneBoxSelectionState.uStartModifiers);
+				}
 			}
 
-			refSceneBoxSelectionState = {};
+			ClearSceneBoxSelectionTracking(refSceneBoxSelectionState);
 		}
 	}
 
@@ -163,7 +291,7 @@ namespace AshEditor
 			const EditorViewportInstance& refViewport,
 			const AshEngine::UIRect& rectContent,
 			bool bContentHovered,
-			ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState)
+			ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
 		{
 			if (!refFrameContext.pUiContext ||
 				!refDeps.pViewportService ||
@@ -186,10 +314,7 @@ namespace AshEditor
 				return;
 			}
 
-			if (!AshEngine::Application::get())
-			{
-				return;
-			}
+			EditorViewportInputState inputState = BuildViewportInputState(*refFrameContext.pUiContext);
 
 			EditorViewportCameraInputContext inputContext{};
 			inputContext.strViewportId = strViewportId;
@@ -209,23 +334,22 @@ namespace AshEditor
 			refDeps.pViewportCameraService->UpdateViewportInput(
 				*refDeps.pSceneService,
 				*refDeps.pAssetDatabaseService,
-				AshEngine::Application::get_input(),
+				inputState,
 				refFrameContext.pUiContext->get_time_seconds(),
 				inputContext);
 
-			const AshEngine::InputState& refInput = AshEngine::Application::get_input();
 			EditorGizmoService::InteractionResult gizmoInteraction{};
 			if (pPresentation->bAcceptsInput && strViewportId == EditorViewportIds::Scene)
 			{
 				HandleSceneViewportModeShortcuts(
 					*refFrameContext.pUiContext,
-					refInput,
+					inputState,
 					bContentHovered || refViewport.state.bFocused,
 					refDeps.pGizmoState);
 				gizmoInteraction = ViewportPanelSupport::UpdateSceneGizmoInteraction(
 					refDeps,
 					*refFrameContext.pUiContext,
-					refInput,
+					inputState,
 					bContentHovered,
 					rectContent);
 			}
@@ -236,7 +360,7 @@ namespace AshEditor
 					refDeps,
 					strViewportId,
 					*refFrameContext.pUiContext,
-					refInput,
+					inputState,
 					refViewport,
 					gizmoInteraction.bConsumesMouseLeft,
 					refSceneBoxSelectionState);
@@ -249,7 +373,7 @@ namespace AshEditor
 		void DrawSceneBoxSelectionOverlay(
 			AshEngine::UIContext& refUi,
 			const AshEngine::UIRect& rectContent,
-			const ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState)
+			const ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
 		{
 			if (!refSceneBoxSelectionState.bTracking || !refSceneBoxSelectionState.bDragging)
 			{

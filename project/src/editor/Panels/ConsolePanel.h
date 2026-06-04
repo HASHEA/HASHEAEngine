@@ -1,10 +1,11 @@
 #pragma once
+#include "Core/EditorEvents.h"
 #include "Core/EditorEventBindings.h"
 #include "Core/EditorFrameContext.h"
 #include "Core/PanelDeps/ConsolePanelDeps.h"
 #include "Core/EditorPanel.h"
 
-#include <cstdint>
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -12,13 +13,7 @@ namespace AshEditor
 {
 	class EditorEventBus;
 
-	enum class ConsoleMessageSeverity : uint8_t
-	{
-		Trace = 0,
-		Info,
-		Warning,
-		Error
-	};
+	using ConsoleMessageSeverity = EditorLogSeverity;
 
 	struct ConsoleMessage
 	{
@@ -48,6 +43,7 @@ namespace AshEditor
 		void ResetFilters();
 		void SyncSettings() const;
 		bool HasAnyFilters() const;
+		bool ExportVisibleMessages(const std::vector<ConsoleMessage>& vecVisibleMessages) const;
 
 	private:
 		ConsolePanelDeps _deps{};
@@ -55,6 +51,8 @@ namespace AshEditor
 		std::string _strFilterText{};
 		std::string _strSourceFilter{};
 		int32_t _iSeverityFilterIndex = 0;
+		bool _bAutoScroll = true;
+		size_t _uLastObservedMessageCount = 0;
 		std::vector<ConsoleMessage> _vecMessages{};
 	};
 }

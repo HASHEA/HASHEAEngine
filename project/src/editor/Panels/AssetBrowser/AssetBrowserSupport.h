@@ -66,6 +66,7 @@ namespace AshEditor
 		std::string strLastError{};
 		const AssetTypeFilterOption* pTypeFilter = nullptr;
 		uint32_t uFilteredCount = 0;
+		uint32_t uSelectedCount = 0;
 		bool bActiveDirectoryExists = false;
 		bool bFiltersActive = false;
 		bool bSelectedAssetVisible = false;
@@ -85,7 +86,11 @@ namespace AshEditor
 		AssetBrowserFrameData BuildFrameData(
 			const AssetBrowserPanelDeps& refDeps,
 			AssetBrowserPanelState& refState);
+		void NormalizeSelection(
+			const AssetDatabaseService& refService,
+			AssetBrowserPanelState& refState);
 		const AshEngine::AssetInfo* GetSelectedAsset(const AssetDatabaseService& refService, uint64_t uSelectedId);
+		bool IsAssetSelected(const AssetBrowserPanelState& refState, uint64_t uSelectedId);
 		bool IsSelectedAssetVisible(
 			const AshEngine::AssetInfo* pSelectedAsset,
 			bool bActiveDirectoryExists,

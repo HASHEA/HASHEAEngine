@@ -1560,6 +1560,18 @@ namespace AshEngine
 		return is_frame_active() && ImGui::IsWindowHovered();
 	}
 
+	// editor begin 修改原因：让分离出的编辑器平台窗口通过 UI 层统一查询鼠标状态，避免视口交互仍依赖主窗口 InputState。
+	bool UIContext::is_mouse_down(UIMouseButton button) const
+	{
+		return is_frame_active() && ImGui::IsMouseDown(static_cast<ImGuiMouseButton>(button));
+	}
+
+	bool UIContext::is_mouse_clicked(UIMouseButton button, bool repeat) const
+	{
+		return is_frame_active() && ImGui::IsMouseClicked(static_cast<ImGuiMouseButton>(button), repeat);
+	}
+	// editor end
+
 	bool UIContext::is_mouse_double_clicked(UIMouseButton button) const
 	{
 		return is_frame_active() && ImGui::IsMouseDoubleClicked(static_cast<ImGuiMouseButton>(button));
@@ -1726,6 +1738,19 @@ namespace AshEngine
 		return { value.x, value.y };
 	}
 
+	// editor begin 修改原因：让分离出的编辑器平台窗口通过 UI 层统一查询滚轮变化，支撑多窗口视口相机控制。
+	UIVec2 UIContext::get_mouse_wheel_delta() const
+	{
+		if (!is_frame_active())
+		{
+			return {};
+		}
+
+		const ImGuiIO& io = ImGui::GetIO();
+		return { io.MouseWheelH, io.MouseWheel };
+	}
+	// editor end
+
 	UIVec2 UIContext::get_style_item_spacing() const
 	{
 		if (!is_frame_active())
@@ -1747,6 +1772,16 @@ namespace AshEngine
 	}
 
 	// editor begin 修改原因：编辑器统一快捷键服务需要从 UI 层读取当前组合键修饰状态。
+	bool UIContext::is_key_down(UIKey key) const
+	{
+		return is_frame_active() && ImGui::IsKeyDown(to_imgui_key(key));
+	}
+
+	bool UIContext::is_key_pressed(UIKey key, bool repeat) const
+	{
+		return is_frame_active() && ImGui::IsKeyPressed(to_imgui_key(key), repeat);
+	}
+
 	UIModifierFlags UIContext::get_key_modifiers() const
 	{
 		if (!is_frame_active())
@@ -1793,6 +1828,16 @@ namespace AshEngine
 		// editor end
 	}
 
+	// editor begin 修改原因：允许编辑器面板通过 UIContext 统一写入系统剪贴板，减少对原生 ImGui 的直接依赖。
+	void UIContext::set_clipboard_text(const char* text)
+	{
+		if (is_frame_active())
+		{
+			ImGui::SetClipboardText(text ? text : "");
+		}
+	}
+	// editor end
+
 	void UIContext::set_next_item_open(bool is_open, UIConditionFlags cond)
 	{
 		if (is_frame_active())
@@ -1800,6 +1845,16 @@ namespace AshEngine
 			ImGui::SetNextItemOpen(is_open, to_imgui_cond(cond));
 		}
 	}
+
+	// editor begin 修改原因：允许编辑器面板在日志自动滚动等场景下通过 UIContext 统一访问滚动 API。
+	void UIContext::set_scroll_here_y(float center_y_ratio)
+	{
+		if (is_frame_active())
+		{
+			ImGui::SetScrollHereY(center_y_ratio);
+		}
+	}
+	// editor end
 
 	// editor begin 修改原因：支持编辑器按不同信息密度配置 tooltip 尺寸、换行和窗口标志。
 	void UIContext::begin_tooltip()

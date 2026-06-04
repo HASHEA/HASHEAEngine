@@ -57,17 +57,17 @@ namespace AshEditor
 			(refFieldSpec.pTitle ? refFieldSpec.pTitle : "Field");
 		if (BeginEditorTooltipTable(refUi, strTableId.c_str(), 92.0f))
 		{
-			if (!refFieldSpec.svDefaultValue.empty())
+			if (!refFieldSpec.strDefaultValue.empty())
 			{
-				DrawEditorTooltipRow(refUi, "Default", refFieldSpec.svDefaultValue);
+				DrawEditorTooltipRow(refUi, "Default", refFieldSpec.strDefaultValue);
 			}
-			if (!refFieldSpec.svValidRange.empty())
+			if (!refFieldSpec.strValidRange.empty())
 			{
-				DrawEditorTooltipRow(refUi, "Range", refFieldSpec.svValidRange);
+				DrawEditorTooltipRow(refUi, "Range", refFieldSpec.strValidRange);
 			}
-			if (!refFieldSpec.svBehavior.empty())
+			if (!refFieldSpec.strBehavior.empty())
 			{
-				DrawEditorTooltipRow(refUi, "Behavior", refFieldSpec.svBehavior);
+				DrawEditorTooltipRow(refUi, "Behavior", refFieldSpec.strBehavior);
 			}
 			refUi.end_table();
 		}

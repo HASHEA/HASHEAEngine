@@ -1,7 +1,33 @@
 #include "Core/EditorComponentComparison.h"
 
+#include <cstddef>
+#include <vector>
+
 namespace AshEditor
 {
+	namespace
+	{
+		bool MeshMaterialOverridesEqual(
+			const std::vector<AshEngine::MeshMaterialOverride>& refLeft,
+			const std::vector<AshEngine::MeshMaterialOverride>& refRight)
+		{
+			if (refLeft.size() != refRight.size())
+			{
+				return false;
+			}
+
+			for (size_t uIndex = 0; uIndex < refLeft.size(); ++uIndex)
+			{
+				if (refLeft[uIndex].material_slot != refRight[uIndex].material_slot ||
+					refLeft[uIndex].material_path != refRight[uIndex].material_path)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+	}
+
 	bool TransformComponentsEqual(
 		const AshEngine::TransformComponent& refLeft,
 		const AshEngine::TransformComponent& refRight)
@@ -36,7 +62,13 @@ namespace AshEditor
 			refLeft.intensity == refRight.intensity &&
 			refLeft.range == refRight.range &&
 			refLeft.inner_cone_angle_degrees == refRight.inner_cone_angle_degrees &&
-			refLeft.outer_cone_angle_degrees == refRight.outer_cone_angle_degrees;
+			refLeft.outer_cone_angle_degrees == refRight.outer_cone_angle_degrees &&
+			refLeft.casts_shadow == refRight.casts_shadow &&
+			refLeft.sunlight == refRight.sunlight &&
+			refLeft.shadow_priority == refRight.shadow_priority &&
+			refLeft.shadow_distance == refRight.shadow_distance &&
+			refLeft.shadow_cascade_count == refRight.shadow_cascade_count &&
+			refLeft.near_shadow_distance == refRight.near_shadow_distance;
 	}
 
 	bool MeshComponentsEqual(
@@ -46,8 +78,25 @@ namespace AshEditor
 		return
 			refLeft.asset_path == refRight.asset_path &&
 			refLeft.mesh_index == refRight.mesh_index &&
+			MeshMaterialOverridesEqual(refLeft.material_overrides, refRight.material_overrides) &&
 			refLeft.visible == refRight.visible &&
 			refLeft.mobility == refRight.mobility &&
 			refLeft.layer_mask == refRight.layer_mask;
+	}
+
+	bool EnvironmentComponentsEqual(
+		const AshEngine::EnvironmentComponent& refLeft,
+		const AshEngine::EnvironmentComponent& refRight)
+	{
+		return
+			refLeft.active == refRight.active &&
+			refLeft.ibl_asset_path == refRight.ibl_asset_path &&
+			refLeft.source_texture_path == refRight.source_texture_path &&
+			refLeft.intensity == refRight.intensity &&
+			refLeft.lighting_intensity == refRight.lighting_intensity &&
+			refLeft.background_intensity == refRight.background_intensity &&
+			refLeft.rotation_degrees == refRight.rotation_degrees &&
+			refLeft.visible_background == refRight.visible_background &&
+			refLeft.affect_lighting == refRight.affect_lighting;
 	}
 }

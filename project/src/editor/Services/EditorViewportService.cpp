@@ -76,6 +76,24 @@ namespace AshEditor
 			return uCurrentExtent > 0u ? ClampViewportExtent(uCurrentExtent) : 1u;
 		}
 
+		void NormalizePresentationForViewport(
+			const std::string& strViewportId,
+			EditorViewportPresentation& refPresentation)
+		{
+			if (strViewportId == EditorViewportIds::Scene)
+			{
+				refPresentation.bAcceptsInput = true;
+			}
+		}
+
+		void NormalizePersistenceStateForViewport(EditorViewportPersistenceState& refState)
+		{
+			if (refState.strId == EditorViewportIds::Scene)
+			{
+				refState.bAcceptsInput = true;
+			}
+		}
+
 		std::string MakeOutputDebugName(const EditorViewportInstance& refViewport)
 		{
 			return refViewport.strDisplayName.empty()
@@ -286,6 +304,27 @@ namespace AshEditor
 	{
 		const ViewportRecord* pRecord = FindRecord(strViewportId);
 		return pRecord ? &pRecord->viewportRenderState : nullptr;
+	}
+
+	AshEngine::SceneViewBindingHandle EditorViewportService::GetSceneViewBindingHandle(const std::string& strViewportId) const
+	{
+		const ViewportRecord* pRecord = FindRecord(strViewportId);
+		return pRecord ? pRecord->sceneViewBinding : AshEngine::SceneViewBindingHandle{};
+	}
+
+	bool EditorViewportService::TryGetSceneViewStats(
+		const std::string& strViewportId,
+		AshEngine::SceneViewStats& outStats) const
+	{
+		outStats = {};
+
+		const ViewportRecord* pRecord = FindRecord(strViewportId);
+		if (!pRecord || !pRecord->sceneViewBinding.is_valid())
+		{
+			return false;
+		}
+
+		return AshEngine::get_scene_view_stats(pRecord->sceneViewBinding, outStats) && outStats.valid;
 	}
 
 	bool EditorViewportService::UpdateRequestedSize(
@@ -635,32 +674,36 @@ namespace AshEditor
 
 	bool EditorViewportService::ApplyPresentationState(ViewportRecord& refRecord, const EditorViewportPersistenceState& refState)
 	{
-		const bool bChanged =
-			refRecord.viewportPresentation.bPanelOpen != refState.bPanelOpen ||
-			refRecord.viewportPresentation.bShowToolbar != refState.bShowToolbar ||
-			refRecord.viewportPresentation.bPreserveAspect != refState.bPreserveAspect ||
-			refRecord.viewportPresentation.bAcceptsInput != refState.bAcceptsInput ||
-			refRecord.viewportPresentation.bShowStats != refState.bShowStats ||
-			refRecord.viewportPresentation.bShowOverlays != refState.bShowOverlays ||
-			refRecord.viewportPresentation.bShowReferenceGrid != refState.bShowReferenceGrid ||
-			refRecord.viewportPresentation.bShowReferenceOrigin != refState.bShowReferenceOrigin ||
-			refRecord.viewportPresentation.bShowSelectionHelpers != refState.bShowSelectionHelpers ||
-			refRecord.viewportPresentation.bShowCameraHelpers != refState.bShowCameraHelpers ||
-			refRecord.viewportPresentation.bShowLightHelpers != refState.bShowLightHelpers ||
-			refRecord.viewportPresentation.bShowSelectionPivot != refState.bShowSelectionPivot;
+		EditorViewportPersistenceState normalizedState = refState;
+		NormalizePersistenceStateForViewport(normalizedState);
 
-		refRecord.viewportPresentation.bPanelOpen = refState.bPanelOpen;
-		refRecord.viewportPresentation.bShowToolbar = refState.bShowToolbar;
-		refRecord.viewportPresentation.bPreserveAspect = refState.bPreserveAspect;
-		refRecord.viewportPresentation.bAcceptsInput = refState.bAcceptsInput;
-		refRecord.viewportPresentation.bShowStats = refState.bShowStats;
-		refRecord.viewportPresentation.bShowOverlays = refState.bShowOverlays;
-		refRecord.viewportPresentation.bShowReferenceGrid = refState.bShowReferenceGrid;
-		refRecord.viewportPresentation.bShowReferenceOrigin = refState.bShowReferenceOrigin;
-		refRecord.viewportPresentation.bShowSelectionHelpers = refState.bShowSelectionHelpers;
-		refRecord.viewportPresentation.bShowCameraHelpers = refState.bShowCameraHelpers;
-		refRecord.viewportPresentation.bShowLightHelpers = refState.bShowLightHelpers;
-		refRecord.viewportPresentation.bShowSelectionPivot = refState.bShowSelectionPivot;
+		const bool bChanged =
+			refRecord.viewportPresentation.bPanelOpen != normalizedState.bPanelOpen ||
+			refRecord.viewportPresentation.bShowToolbar != normalizedState.bShowToolbar ||
+			refRecord.viewportPresentation.bPreserveAspect != normalizedState.bPreserveAspect ||
+			refRecord.viewportPresentation.bAcceptsInput != normalizedState.bAcceptsInput ||
+			refRecord.viewportPresentation.bShowStats != normalizedState.bShowStats ||
+			refRecord.viewportPresentation.bShowOverlays != normalizedState.bShowOverlays ||
+			refRecord.viewportPresentation.bShowReferenceGrid != normalizedState.bShowReferenceGrid ||
+			refRecord.viewportPresentation.bShowReferenceOrigin != normalizedState.bShowReferenceOrigin ||
+			refRecord.viewportPresentation.bShowSelectionHelpers != normalizedState.bShowSelectionHelpers ||
+			refRecord.viewportPresentation.bShowCameraHelpers != normalizedState.bShowCameraHelpers ||
+			refRecord.viewportPresentation.bShowLightHelpers != normalizedState.bShowLightHelpers ||
+			refRecord.viewportPresentation.bShowSelectionPivot != normalizedState.bShowSelectionPivot;
+
+		refRecord.viewportPresentation.bPanelOpen = normalizedState.bPanelOpen;
+		refRecord.viewportPresentation.bShowToolbar = normalizedState.bShowToolbar;
+		refRecord.viewportPresentation.bPreserveAspect = normalizedState.bPreserveAspect;
+		refRecord.viewportPresentation.bAcceptsInput = normalizedState.bAcceptsInput;
+		refRecord.viewportPresentation.bShowStats = normalizedState.bShowStats;
+		refRecord.viewportPresentation.bShowOverlays = normalizedState.bShowOverlays;
+		refRecord.viewportPresentation.bShowReferenceGrid = normalizedState.bShowReferenceGrid;
+		refRecord.viewportPresentation.bShowReferenceOrigin = normalizedState.bShowReferenceOrigin;
+		refRecord.viewportPresentation.bShowSelectionHelpers = normalizedState.bShowSelectionHelpers;
+		refRecord.viewportPresentation.bShowCameraHelpers = normalizedState.bShowCameraHelpers;
+		refRecord.viewportPresentation.bShowLightHelpers = normalizedState.bShowLightHelpers;
+		refRecord.viewportPresentation.bShowSelectionPivot = normalizedState.bShowSelectionPivot;
+		NormalizePresentationForViewport(refRecord.viewportInstance.strId, refRecord.viewportPresentation);
 		refRecord.viewportRenderState.bPendingSync = true;
 		return bChanged;
 	}

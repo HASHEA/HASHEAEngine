@@ -1,9 +1,11 @@
 #include "Panels/ViewportPanelSupport.h"
 
+#include "Core/AssetPresentationUtils.h"
 #include "Core/EditorSelection.h"
 #include "Core/EntityCommands.h"
 #include "Core/IEditorCommandExecutor.h"
 #include "Function/Gui/UIContext.h"
+#include "Function/Render/ScenePresentationHandles.h"
 #include "Function/Scene/SceneQuery.h"
 #include "Panels/ViewportPanelSceneSupportInternal.h"
 #include "Services/AssetDatabaseService.h"
@@ -13,57 +15,16 @@
 #include "Services/SelectionService.h"
 
 #include <algorithm>
-#include <any>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace AshEditor
 {
 	namespace
 	{
-		bool IsMeshAssetType(const AshEngine::AssetType type)
-		{
-			return type == AshEngine::AssetType::Mesh || type == AshEngine::AssetType::Model;
-		}
-
-		bool IsSceneInstantiableAssetType(const AshEngine::AssetType type)
-		{
-			return type == AshEngine::AssetType::Model || type == AshEngine::AssetType::Prefab;
-		}
-
-		std::string BuildAssetEntityName(const AshEngine::AssetInfo& refAsset)
-		{
-			std::string strName = refAsset.relative_path.stem().string();
-			if (strName.empty())
-			{
-				strName = refAsset.name;
-			}
-			return strName.empty() ? "Mesh Entity" : strName;
-		}
-
-		bool TryProjectRayToHorizontalPlane(
-			const AshEngine::SceneRay& refRay,
-			float fPlaneY,
-			glm::vec3& outHitPoint)
-		{
-			if (std::abs(refRay.direction.y) <= 0.0001f)
-			{
-				return false;
-			}
-
-			const float fDistance = (fPlaneY - refRay.origin.y) / refRay.direction.y;
-			if (fDistance < 0.0f)
-			{
-				return false;
-			}
-
-			outHitPoint = refRay.origin + refRay.direction * fDistance;
-			return true;
-		}
-
 		bool TryBuildSceneInteractionRay(
 			const ViewportPanelDeps& refDeps,
 			const std::string& strViewportId,
@@ -110,6 +71,40 @@ namespace AshEditor
 			return true;
 		}
 
+		bool TryResolveScenePickPixel(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			const AshEngine::UIRect& rectContent,
+			const AshEngine::UIVec2& vecMousePosition,
+			int32_t& outPixelX,
+			int32_t& outPixelY)
+		{
+			if (!refDeps.pViewportService ||
+				rectContent.width <= 1.0f ||
+				rectContent.height <= 1.0f ||
+				!ViewportPanelSupport::IsPointInRect(rectContent, vecMousePosition))
+			{
+				return false;
+			}
+
+			float fOutputWidth = rectContent.width;
+			float fOutputHeight = rectContent.height;
+			if (const EditorViewportRenderState* pRenderState = refDeps.pViewportService->GetRenderState(strViewportId))
+			{
+				if (pRenderState->uOutputWidth > 0u && pRenderState->uOutputHeight > 0u)
+				{
+					fOutputWidth = static_cast<float>(pRenderState->uOutputWidth);
+					fOutputHeight = static_cast<float>(pRenderState->uOutputHeight);
+				}
+			}
+
+			const float fLocalX = (vecMousePosition.x - rectContent.x) / rectContent.width * fOutputWidth;
+			const float fLocalY = (vecMousePosition.y - rectContent.y) / rectContent.height * fOutputHeight;
+			outPixelX = static_cast<int32_t>(std::clamp(std::floor(fLocalX), 0.0f, std::max(0.0f, fOutputWidth - 1.0f)));
+			outPixelY = static_cast<int32_t>(std::clamp(std::floor(fLocalY), 0.0f, std::max(0.0f, fOutputHeight - 1.0f)));
+			return true;
+		}
+
 		bool TryResolveSceneDropTransform(
 			const ViewportPanelDeps& refDeps,
 			const std::string& strViewportId,
@@ -126,28 +121,30 @@ namespace AshEditor
 			}
 
 			AshEngine::SceneRay ray{};
-			std::vector<AshEngine::SceneRayHit> vecHits{};
 			if (!TryQuerySceneInteraction(
 				refDeps,
 				strViewportId,
 				rectContent,
 				vecMousePosition,
 				ray,
-				&vecHits))
+				nullptr))
 			{
 				return false;
 			}
 
-			if (!vecHits.empty())
+			glm::vec3 vecDropPosition{};
+			AshEngine::SceneDropPointDesc dropPointDesc{};
+			dropPointDesc.camera_fallback_distance = 4.0f;
+			if (AshEngine::find_scene_drop_point(
+				refDeps.pSceneService->GetActiveScene(),
+				refDeps.pAssetDatabaseService->GetDatabase(),
+				ray,
+				ray.origin,
+				ray.direction,
+				vecDropPosition,
+				dropPointDesc))
 			{
-				outTransform.position = vecHits.front().position;
-				return true;
-			}
-
-			glm::vec3 vecGroundHitPoint{};
-			if (TryProjectRayToHorizontalPlane(ray, 0.0f, vecGroundHitPoint))
-			{
-				outTransform.position = vecGroundHitPoint;
+				outTransform.position = vecDropPosition;
 				return true;
 			}
 
@@ -339,7 +336,7 @@ namespace AshEditor
 		EditorGizmoService::InteractionResult UpdateSceneGizmoInteraction(
 			const ViewportPanelDeps& refDeps,
 			AshEngine::UIContext& refUi,
-			const AshEngine::InputState& refInput,
+			const EditorViewportInputState& refInput,
 			bool bViewportHovered,
 			const AshEngine::UIRect& rectContent)
 		{
@@ -421,6 +418,80 @@ namespace AshEditor
 			}
 		}
 
+		bool RequestSceneViewportClickPick(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			const AshEngine::UIRect& rectContent,
+			const AshEngine::UIVec2& vecMousePosition,
+			AshEngine::SceneViewBindingHandle& outBinding)
+		{
+			outBinding = {};
+			if (!refDeps.pViewportService)
+			{
+				return false;
+			}
+
+			int32_t iPixelX = 0;
+			int32_t iPixelY = 0;
+			if (!TryResolveScenePickPixel(refDeps, strViewportId, rectContent, vecMousePosition, iPixelX, iPixelY))
+			{
+				return false;
+			}
+
+			const AshEngine::SceneViewBindingHandle binding =
+				refDeps.pViewportService->GetSceneViewBindingHandle(strViewportId);
+			if (!binding.is_valid())
+			{
+				return false;
+			}
+
+			if (!AshEngine::request_scene_entity_pick(binding, iPixelX, iPixelY))
+			{
+				return false;
+			}
+
+			outBinding = binding;
+			return true;
+		}
+
+		bool PollSceneViewportClickPick(
+			const AshEngine::SceneViewBindingHandle binding,
+			AshEngine::ScenePickResult& outResult)
+		{
+			outResult = {};
+			return binding.is_valid() && AshEngine::poll_scene_entity_pick_result(binding, outResult);
+		}
+
+		void ApplySceneViewportPickResultSelection(
+			const ViewportPanelDeps& refDeps,
+			const AshEngine::ScenePickResult& refPickResult,
+			AshEngine::UIModifierFlags uModifiers)
+		{
+			if (!refDeps.pSelectionService || !refDeps.pSceneService)
+			{
+				return;
+			}
+
+			if (refPickResult.hit && refPickResult.entity_id != 0)
+			{
+				const AshEngine::Entity entitySelected = refDeps.pSceneService->FindEntity(refPickResult.entity_id);
+				if ((uModifiers & AshEngine::UIModifierFlagBits::Ctrl) != 0)
+				{
+					refDeps.pSelectionService->Toggle(BuildEntitySelection(entitySelected, refPickResult.entity_id));
+				}
+				else
+				{
+					refDeps.pSelectionService->SelectSingle(BuildEntitySelection(entitySelected, refPickResult.entity_id));
+				}
+				return;
+			}
+
+			if ((uModifiers & AshEngine::UIModifierFlagBits::Ctrl) == 0)
+			{
+				refDeps.pSelectionService->Clear();
+			}
+		}
+
 		void ApplySceneViewportBoxSelection(
 			const ViewportPanelDeps& refDeps,
 			const std::string& strViewportId,
@@ -471,43 +542,19 @@ namespace AshEditor
 				vecMousePosition,
 				dropTransform);
 
-			if (IsSceneInstantiableAssetType(pAsset->type))
-			{
-				return refDeps.pCommandExecutor->ExecuteCommand(
-					std::make_unique<InstantiateSceneAssetCommand>(
-						refDeps.pAssetDatabaseService,
-						pAsset->id,
-						0,
-						bUseWorldTransform,
-						dropTransform,
-						BuildAssetEntityName(*pAsset)));
-			}
-
-			if (!IsMeshAssetType(pAsset->type))
+			if (!IsSceneInstantiableAssetType(pAsset->type))
 			{
 				return false;
 			}
 
-			std::string strAssetPath = pAsset->relative_path.generic_string();
-			if (strAssetPath.empty() && refData.extraData.has_value())
-			{
-				try
-				{
-					strAssetPath = std::any_cast<std::string>(refData.extraData);
-				}
-				catch (const std::bad_any_cast&)
-				{
-				}
-			}
-
 			return refDeps.pCommandExecutor->ExecuteCommand(
-				std::make_unique<CreateMeshEntityFromAssetCommand>(
-					BuildAssetEntityName(*pAsset),
-					std::move(strAssetPath),
+				std::make_unique<InstantiateSceneAssetCommand>(
+					refDeps.pAssetDatabaseService,
+					pAsset->id,
 					0,
-					kSceneAppendSiblingIndex,
 					bUseWorldTransform,
-					dropTransform));
+					dropTransform,
+					BuildSceneAssetEntityName(*pAsset)));
 		}
 	}
 }

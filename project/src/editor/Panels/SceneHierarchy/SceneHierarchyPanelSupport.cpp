@@ -1,7 +1,6 @@
 #include "Panels/SceneHierarchy/SceneHierarchyPanelSupport.h"
 
 #include "Base/hlog.h"
-#include "Core/EditorCommand.h"
 #include "Core/EditorIds.h"
 #include "Core/EntityCommands.h"
 #include "Core/IEditorCommandExecutor.h"
@@ -254,7 +253,7 @@ namespace AshEditor
 
 	SceneEntityId GetSelectedSceneEntityId(const SceneHierarchyPanelDeps& refDeps)
 	{
-		if (!refDeps.pSelectionService)
+		if (!refDeps.pSelectionService || refDeps.pSelectionService->HasMultipleSelections())
 		{
 			return 0;
 		}
@@ -713,13 +712,7 @@ namespace AshEditor
 			return;
 		}
 
-		std::unique_ptr<CompositeCommand> upCommand = std::make_unique<CompositeCommand>("Delete Entities");
-		for (const SceneEntityId uEntityId : vecDeleteEntityIds)
-		{
-			upCommand->Append(std::make_unique<DeleteEntityCommand>(uEntityId));
-		}
-
-		if (!refDeps.pCommandExecutor->ExecuteCommand(std::move(upCommand)))
+		if (!refDeps.pCommandExecutor->ExecuteCommand(std::make_unique<DeleteEntitiesCommand>(vecDeleteEntityIds)))
 		{
 			HLogWarning(
 				"SceneHierarchy failed to batch delete {} entities.",

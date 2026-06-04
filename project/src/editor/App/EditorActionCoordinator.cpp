@@ -23,6 +23,7 @@
 #include "Shell/PanelManager.h"
 
 #include <cstring>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 
@@ -71,10 +72,9 @@ namespace AshEditor
 			context.refNotificationSink.Notify(strMessage, "Editor");
 		}
 
-		uint64_t GetSelectedEntityId(const EditorActionCoordinatorContext& context)
+		size_t GetSelectedEntityCount(const EditorActionCoordinatorContext& context)
 		{
-			const EditorSelection& refSelection = context.refSelectionService.GetSelection();
-			return refSelection.eKind == EditorSelectionKind::Entity ? refSelection.uId : 0;
+			return context.refSelectionService.GetSelectedIds(EditorSelectionKind::Entity).size();
 		}
 	}
 
@@ -114,6 +114,26 @@ namespace AshEditor
 		{
 			return _pAssetBrowserActionTarget && _pAssetBrowserActionTarget->CanExecuteNavigateUp();
 		}
+		if (svActionId == EditorActionIds::AssetsCreateFolder)
+		{
+			return _pAssetBrowserActionTarget && _pAssetBrowserActionTarget->CanExecuteCreateFolder();
+		}
+		if (svActionId == EditorActionIds::AssetsInstantiateSelected)
+		{
+			return _pAssetBrowserActionTarget && _pAssetBrowserActionTarget->CanExecuteInstantiateSelected();
+		}
+		if (svActionId == EditorActionIds::AssetsRenameSelected)
+		{
+			return _pAssetBrowserActionTarget && _pAssetBrowserActionTarget->CanExecuteRenameSelected();
+		}
+		if (svActionId == EditorActionIds::AssetsDeleteSelected)
+		{
+			return _pAssetBrowserActionTarget && _pAssetBrowserActionTarget->CanExecuteDeleteSelected();
+		}
+		if (svActionId == EditorActionIds::AssetsReimportSelected)
+		{
+			return _pAssetBrowserActionTarget && _pAssetBrowserActionTarget->CanExecuteReimportSelected();
+		}
 		if (svActionId == EditorActionIds::EditUndo)
 		{
 			return _context.refUndoRedoService.CanUndo();
@@ -132,8 +152,11 @@ namespace AshEditor
 		}
 		if (svActionId == EditorActionIds::SceneCreateChild ||
 			svActionId == EditorActionIds::SelectionRename ||
-			svActionId == EditorActionIds::SelectionReparent ||
-			svActionId == EditorActionIds::SelectionDuplicate ||
+			svActionId == EditorActionIds::SelectionReparent)
+		{
+			return HasSingleSelectedEntity();
+		}
+		if (svActionId == EditorActionIds::SelectionDuplicate ||
 			svActionId == EditorActionIds::SelectionDelete)
 		{
 			return HasSelectedEntity();
@@ -178,6 +201,41 @@ namespace AshEditor
 			if (_pAssetBrowserActionTarget)
 			{
 				_pAssetBrowserActionTarget->ExecuteNavigateUp();
+			}
+		}
+		else if (svActionId == EditorActionIds::AssetsCreateFolder)
+		{
+			if (_pAssetBrowserActionTarget)
+			{
+				_pAssetBrowserActionTarget->ExecuteCreateFolder();
+			}
+		}
+		else if (svActionId == EditorActionIds::AssetsInstantiateSelected)
+		{
+			if (_pAssetBrowserActionTarget)
+			{
+				_pAssetBrowserActionTarget->ExecuteInstantiateSelected();
+			}
+		}
+		else if (svActionId == EditorActionIds::AssetsRenameSelected)
+		{
+			if (_pAssetBrowserActionTarget)
+			{
+				_pAssetBrowserActionTarget->ExecuteRenameSelected();
+			}
+		}
+		else if (svActionId == EditorActionIds::AssetsDeleteSelected)
+		{
+			if (_pAssetBrowserActionTarget)
+			{
+				_pAssetBrowserActionTarget->ExecuteDeleteSelected();
+			}
+		}
+		else if (svActionId == EditorActionIds::AssetsReimportSelected)
+		{
+			if (_pAssetBrowserActionTarget)
+			{
+				_pAssetBrowserActionTarget->ExecuteReimportSelected();
 			}
 		}
 		else if (svActionId == EditorActionIds::WindowResetLayout)
@@ -419,6 +477,11 @@ namespace AshEditor
 
 	bool EditorActionCoordinator::HasSelectedEntity() const
 	{
-		return GetSelectedEntityId(_context) != 0;
+		return GetSelectedEntityCount(_context) > 0u;
+	}
+
+	bool EditorActionCoordinator::HasSingleSelectedEntity() const
+	{
+		return GetSelectedEntityCount(_context) == 1u;
 	}
 }

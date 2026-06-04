@@ -6,6 +6,7 @@
 #include "Core/ISceneHierarchyActionTarget.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <string_view>
 
 namespace AshEditor
@@ -71,6 +72,7 @@ namespace AshEditor
 		void HandleRedo();
 
 		bool HasSelectedEntity() const;
+		bool HasSingleSelectedEntity() const;
 
 	private:
 		EditorActionCoordinatorContext _context;

@@ -101,13 +101,30 @@
 
 - AssetBrowser 已支持：
   - 目录侧栏 + 资产内容区两栏工作区
+  - breadcrumb 目录导航
+  - breadcrumb 拖拽落点
+    - 可直接拖到 `All Assets` 或任意父级目录完成 move
   - `Name / Type / State` 列表
   - 文本搜索
   - 按资源类型过滤
   - `Reset Filters`
   - 资产选择同步
+  - 资产内容区多选
+    - `Ctrl+Click` 切换单项
+    - `Shift+Click` 范围选择
+    - 右键保持多选并切换主选中项
   - 基础详情区与文本资产预览
   - 资产激活动作入口
+  - 资产实例化动作入口
+    - toolbar `Instantiate`
+    - item context menu `Instantiate`
+    - 通过 `InstantiateSceneAssetCommand` 进入统一命令链路
+  - 多资源拖拽移动
+    - 若当前拖拽命中了已选集合，会携带整组选择一起 move
+    - 自动去重父目录 / 子项重叠选择，避免重复移动
+  - 批量删除
+    - `Delete` 快捷键和删除确认弹窗支持当前多选集合
+    - 自动折叠父目录 / 子项重叠选择，避免重复删除
   - 空态 / 错误态 / 无匹配搜索提示
   - 失效目录提示与恢复入口
 - Console 已支持：
@@ -123,6 +140,10 @@
   - 空日志提示
   - 无匹配过滤提示
   - `Reset Filters`
+  - `Auto-scroll` 开关
+  - `Copy Visible` 复制当前过滤结果到剪贴板
+  - 单条日志右键 `Copy Message`
+  - `Export Visible` 导出当前过滤结果到 `product/logs/editor`
 - AssetDatabaseService 已支持：
   - 设置根目录
   - 刷新
@@ -163,20 +184,23 @@
   - AssetBrowser 空态 / 错误态 / 无匹配提示是否符合预期
   - Console 计数、过滤、无匹配提示是否和消息列表一致
 - 主线程统一回归结果：
-  - 待主线程在实际代码任务中回写
+  - `2026-05-29` 已执行 `generate_vs2022.bat`
+  - `2026-05-29` 已执行 `build_editor.bat Debug x64`
+  - Editor `Debug x64` 编译通过
+  - 运行时四路 smoke 本轮未覆盖，留待后续 UI 交互验收
 
 ## 11. 依赖 / 风险 / 阻塞
 
 - 当前依赖：
   - 依赖 `AssetDatabaseService`、`CommandService`、`EditorSettingsService` 的边界继续稳定
-  - 依赖后续引擎提供资产预览和 logger 桥接能力
+  - 依赖后续引擎提供 richer 资产预览能力
 - 当前风险 / 阻塞：
-  - 缺少正式的资源打开 / 实例化高层接口
+  - 资产 create / rename / move / delete / reimport 目前仍是 editor-side filesystem fallback，后续最好替换成 engine facade
   - 文本预览之外的缩略图 / mesh / model 预览还没有正式能力
   - 设置项没有版本迁移和更强容错
-  - 若要接日志桥接层或跨模块选择联动，需要主线程先拆清边界
-  - Console 当前只有面板内消息模型，尚未接入 engine/app 统一日志桥接
   - AssetBrowser 的空态 / 错误态仍依赖 `AssetDatabaseService` 当前提供的 `items` 和 `last_error` 粒度
+  - 多资源 move / delete 当前已做基础预校验，但仍不是事务性文件系统操作；中途失败时可能留下部分已变更状态
+  - Console 已接入 `spdlog -> EditorLogBridge -> EditorEventBus -> ConsolePanel`，但当前仍缺日志复制、按条目复制、导出格式配置等工作流细节
 
 ## 12. 需要引擎配合的接口缺口
 
@@ -184,12 +208,15 @@
 - GUID / 依赖 / 导入状态查询
 - 统一资产 create/move/rename/delete/reimport API
 - 资产打开 / 预览 / 实例化入口
-- engine/app logger 到 Editor 的桥接能力
 
 ## 13. 下一步任务
 
-- 增加基础资产操作
-- 将控制台接到统一日志汇聚层
+- 为 `AssetBrowser` 增加批量选择、批量删除、breadcrumb drop、实例化后放置策略
+  - 已补首版多选 / 批量删除 / 多资源拖拽移动
+- 为 `Console` 增加复制日志、按 source 快捷聚焦持久化和导出格式能力
+  - 已补首版复制工作流：
+    - toolbar `Copy Visible`
+    - item context menu `Copy Message`
 - 扩展 `CommandService`
 - 收敛 `EditorSettingsService` 配置边界
 - 评估 AssetBrowser 是否需要 breadcrumb / 双击进入目录等更强浏览交互
@@ -215,4 +242,4 @@
 
 ## 15. 最近更新时间
 
-- 2026-04-18
+- 2026-05-29

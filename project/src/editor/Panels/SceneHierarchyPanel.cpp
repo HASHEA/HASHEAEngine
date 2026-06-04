@@ -97,6 +97,51 @@ namespace AshEditor
 			{
 				_state.ResetTransientState();
 			});
+		_eventBindings.Subscribe<EditorSceneChangedEvent>(
+			[this](const EditorSceneChangedEvent& refEvent)
+			{
+				if (refEvent.eKind == AshEngine::SceneChangeKind::SceneReloaded ||
+					refEvent.eKind == AshEngine::SceneChangeKind::SceneReplaced)
+				{
+					_state.ResetTransientState();
+					return;
+				}
+
+				if (refEvent.eKind == AshEngine::SceneChangeKind::HierarchyChanged)
+				{
+					_state.treeWidgetStateEntities.ResetDragState();
+					return;
+				}
+
+				if (refEvent.eKind != AshEngine::SceneChangeKind::EntityRemoved)
+				{
+					return;
+				}
+
+				const SceneEntityId uRemovedEntityId = static_cast<SceneEntityId>(refEvent.uEntityId);
+				if (_state.uCreateChildAnchorParentId == uRemovedEntityId)
+				{
+					_state.uCreateChildAnchorParentId = 0;
+					_state.bAwaitingCreateChildSelection = false;
+				}
+				if (_state.uRangeSelectionAnchorEntityId == uRemovedEntityId)
+				{
+					_state.uRangeSelectionAnchorEntityId = 0;
+				}
+				if (_state.renameModal.uEntityId == uRemovedEntityId)
+				{
+					_state.renameModal.Reset();
+				}
+				if (_state.reparentModal.uEntityId == uRemovedEntityId)
+				{
+					_state.reparentModal.Reset();
+				}
+				if (_state.deleteModal.uEntityId == uRemovedEntityId)
+				{
+					_state.deleteModal.Reset();
+				}
+				_state.treeWidgetStateEntities.ResetDragState();
+			});
 	}
 
 	void SceneHierarchyPanel::OnAttach()
@@ -194,28 +239,42 @@ namespace AshEditor
 		const SceneEntityId uSelectedSceneEntityId = GetSelectedSceneEntityId(_deps);
 
 		const AshEngine::UIVec2 vecHeaderCursorPos = refUi.get_cursor_pos();
+		const AshEngine::UIVec2 vecHeaderAvailableSize = refUi.get_content_region_avail();
 		refUi.begin_group();
 		DrawSceneSummary(refUi, refScene);
 		refUi.end_group();
 		const AshEngine::UIRect rectSummary = refUi.get_item_rect();
 
 		const float fDividerPadding = 14.0f;
-		const float fToolbarStartX = vecHeaderCursorPos.x + rectSummary.width + fDividerPadding * 2.0f;
-		refUi.same_line(fToolbarStartX, 0.0f);
+		constexpr float kSceneHierarchyToolbarEstimatedWidth = 390.0f;
+		const bool bDrawToolbarInline =
+			vecHeaderAvailableSize.x >= rectSummary.width + fDividerPadding * 2.0f + kSceneHierarchyToolbarEstimatedWidth;
+		if (bDrawToolbarInline)
+		{
+			const float fToolbarStartX = vecHeaderCursorPos.x + rectSummary.width + fDividerPadding * 2.0f;
+			refUi.same_line(fToolbarStartX, 0.0f);
+		}
+		else
+		{
+			refUi.spacing();
+		}
 		refUi.begin_group();
 		_toolbarView.Draw(refFrameContext, _deps, _state);
 		refUi.end_group();
 		const AshEngine::UIRect rectToolbar = refUi.get_item_rect();
 
-		const float fDividerX = rectSummary.x + rectSummary.width + fDividerPadding;
-		const float fDividerTop = std::min(rectSummary.y, rectToolbar.y) + 2.0f;
-		const float fDividerBottom =
-			std::max(rectSummary.y + rectSummary.height, rectToolbar.y + rectToolbar.height) - 2.0f;
-		refUi.draw_window_line(
-			{ fDividerX, fDividerTop },
-			{ fDividerX, fDividerBottom },
-			GetEditorGuideLineColor(refUi),
-			1.0f);
+		if (bDrawToolbarInline)
+		{
+			const float fDividerX = rectSummary.x + rectSummary.width + fDividerPadding;
+			const float fDividerTop = std::min(rectSummary.y, rectToolbar.y) + 2.0f;
+			const float fDividerBottom =
+				std::max(rectSummary.y + rectSummary.height, rectToolbar.y + rectToolbar.height) - 2.0f;
+			refUi.draw_window_line(
+				{ fDividerX, fDividerTop },
+				{ fDividerX, fDividerBottom },
+				GetEditorGuideLineColor(refUi),
+				1.0f);
+		}
 
 		refUi.separator();
 

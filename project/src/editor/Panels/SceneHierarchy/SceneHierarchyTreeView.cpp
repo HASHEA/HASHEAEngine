@@ -1,7 +1,6 @@
 #include "Panels/SceneHierarchy/SceneHierarchyTreeView.h"
 
 #include "Base/hlog.h"
-#include "Core/EditorCommand.h"
 #include "Core/EntityCommands.h"
 #include "Core/EditorIds.h"
 #include "Core/IEditorCommandExecutor.h"
@@ -311,16 +310,23 @@ namespace AshEditor
 						refRequest.uSiblingIndex));
 			}
 
-			std::unique_ptr<CompositeCommand> upCommand = std::make_unique<CompositeCommand>("Reparent Entities");
+			std::vector<SceneEntityId> vecEntityIds{};
+			std::vector<SceneEntityId> vecNewParentIds{};
+			std::vector<uint32_t> vecNewSiblingIndices{};
+			vecEntityIds.reserve(vecChangingRequests.size());
+			vecNewParentIds.reserve(vecChangingRequests.size());
+			vecNewSiblingIndices.reserve(vecChangingRequests.size());
 			for (const SceneHierarchyDropRequest& refRequest : vecChangingRequests)
 			{
-				upCommand->Append(
-					std::make_unique<ReparentEntityCommand>(
-						refRequest.uSceneEntityId,
-						refRequest.uNewParentId,
-						refRequest.uSiblingIndex));
+				vecEntityIds.push_back(refRequest.uSceneEntityId);
+				vecNewParentIds.push_back(refRequest.uNewParentId);
+				vecNewSiblingIndices.push_back(refRequest.uSiblingIndex);
 			}
-			return refCommandExecutor.ExecuteCommand(std::move(upCommand));
+			return refCommandExecutor.ExecuteCommand(
+				std::make_unique<ReparentEntitiesCommand>(
+					std::move(vecEntityIds),
+					std::move(vecNewParentIds),
+					std::move(vecNewSiblingIndices)));
 		}
 
 		void RestoreSelectionForDropRequests(

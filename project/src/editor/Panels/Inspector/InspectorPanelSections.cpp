@@ -1,20 +1,17 @@
 #include "Panels/InspectorPanel.h"
 
-#include "Base/hlog.h"
-#include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
 #include "Panels/Inspector/InspectorComponentEditor.h"
+#include "Panels/Inspector/InspectorComponentEditorRegistry.h"
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
+#include "Panels/Inspector/InspectorComponentMetadata.h"
 #include "Panels/Inspector/InspectorPanelSupport.h"
-#include "Services/DragDropTransferService.h"
 #include "Widgets/EditorThemeColors.h"
+#include "Widgets/InspectorAssetPathWidgets.h"
 #include "Widgets/InspectorPropertyWidgets.h"
 
 #include <algorithm>
-#include <any>
-#include <cstring>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,15 +21,10 @@ namespace AshEditor
 	{
 		// Resolve the visible component editors up front so the panel keeps ownership
 		// while each component file owns only its local UI flow.
-		std::vector<InspectorComponentEditor*> vecVisibleComponentEditors{};
-		vecVisibleComponentEditors.reserve(_vecComponentEditors.size());
-		for (const std::unique_ptr<InspectorComponentEditor>& upComponentEditor : _vecComponentEditors)
-		{
-			if (upComponentEditor && upComponentEditor->ShouldDraw(*this, entity))
-			{
-				vecVisibleComponentEditors.push_back(upComponentEditor.get());
-			}
-		}
+		const std::vector<InspectorComponentEditor*> vecVisibleComponentEditors =
+			_upComponentEditorRegistry
+				? _upComponentEditorRegistry->CollectVisibleEditors(*this, entity)
+				: std::vector<InspectorComponentEditor*>{};
 
 		DrawAddComponentMenu(refUi, entity);
 		refUi.separator();
@@ -49,14 +41,11 @@ namespace AshEditor
 
 	void InspectorPanel::DrawAddComponentMenu(AshEngine::UIContext& refUi, AshEngine::Entity entity)
 	{
-		InspectorPanelState& state = GetState();
-		const bool bCanAddCamera = CanAddCameraComponent(entity);
-		const bool bCanAddLight = CanAddLightComponent(entity);
-		const bool bHasPendingMeshDraft =
-			state.draftMesh.uEntityId == entity.get_id() &&
-			state.draftMesh.optCurrentValue.has_value();
-		const bool bCanAddMesh = CanAddMeshComponent(entity) && !bHasPendingMeshDraft;
-		const bool bHasAnyAddableComponent = bCanAddCamera || bCanAddLight || bCanAddMesh;
+		const std::vector<InspectorComponentEditor*> vecAddableComponentEditors =
+			_upComponentEditorRegistry
+				? _upComponentEditorRegistry->CollectAddableEditors(*this, entity)
+				: std::vector<InspectorComponentEditor*>{};
+		const bool bHasAnyAddableComponent = !vecAddableComponentEditors.empty();
 
 		refUi.text_colored(GetEditorMutedTextColor(refUi), "Components");
 		refUi.same_line();
@@ -72,26 +61,13 @@ namespace AshEditor
 			return;
 		}
 
-		if (bCanAddCamera && refUi.menu_item("Camera"))
+		for (InspectorComponentEditor* pComponentEditor : vecAddableComponentEditors)
 		{
-			GetState().draftCamera.optCurrentValue = AshEngine::CameraComponent{};
-			CommitCameraDraft(entity);
-			refUi.close_current_popup();
-		}
-		if (bCanAddLight && refUi.menu_item("Light"))
-		{
-			GetState().draftLight.optCurrentValue = AshEngine::LightComponent{};
-			CommitLightDraft(entity);
-			refUi.close_current_popup();
-		}
-		if (bCanAddMesh && refUi.menu_item("Mesh"))
-		{
-			state.draftMesh.uEntityId = entity.get_id();
-			state.draftMesh.optOriginalValue = GetMeshComponentValue(entity);
-			state.draftMesh.optCurrentValue = AshEngine::MeshComponent{};
-			state.strAssetPickerSearch.clear();
-			refUi.open_popup("AssetPickerPopup");
-			refUi.close_current_popup();
+			if (pComponentEditor && refUi.menu_item(pComponentEditor->GetDisplayName()))
+			{
+				pComponentEditor->AddDefault(*this, refUi, entity);
+				refUi.close_current_popup();
+			}
 		}
 		if (!bHasAnyAddableComponent)
 		{
@@ -161,7 +137,6 @@ namespace AshEditor
 
 		AshEngine::TransformComponent& transform = state.draftTransform.currentValue;
 		bool bCommitRequested = false;
-		bool bRestoreRequested = false;
 		bCommitRequested = DrawInspectorDragVec3Field(
 			refUi,
 			"Position",
@@ -209,42 +184,36 @@ namespace AshEditor
 			LogInspectorDraftSanitized("Transform", entity.get_id());
 			bCommitRequested = true;
 		}
-		if (DrawInspectorSmallActionButton(
+		const InspectorComponentActionRowResult actionRowResult = DrawInspectorComponentActionRow(
 			refUi,
-			"Reset Transform",
+			*this,
 			{
 				"Reset Transform",
+				"Reset Transform",
 				"Write the default transform values back to the entity and keep the change undoable.",
-				{},
-				{},
-				"Immediate action"
-			}))
+				"Restore##Transform",
+				"Restore Transform",
+				"Discard the local transform draft and reload the current scene values without committing.",
+				nullptr
+			});
+		if (actionRowResult.bResetRequested)
 		{
 			ResetTransformDraftToDefaults(entity);
 			LogInspectorDraftReset("Transform", "defaults", entity.get_id());
-			bCommitRequested = true;
+			CommitTransformDraft(entity);
+			return;
 		}
-		refUi.same_line();
-		if (DrawInspectorSmallActionButton(
-			refUi,
-			"Restore##Transform",
-			{
-				"Restore Transform",
-				"Discard the local transform draft and reload the current scene values without committing.",
-				{},
-				{},
-				"Immediate action"
-			}))
+		if (actionRowResult.bRestoreRequested)
 		{
 			ResetTransformDraftToLive(entity);
 			LogInspectorDraftReset("Transform", "live scene state", entity.get_id());
-			bRestoreRequested = true;
+			return;
 		}
 		if (HasTransformClampWarning(transform))
 		{
 			refUi.text_colored(GetEditorWarningTextColor(refUi), "Scale is currently pinned by the editor safety range.");
 		}
-		if (!bRestoreRequested && bCommitRequested)
+		if (bCommitRequested)
 		{
 			CommitTransformDraft(entity);
 		}
@@ -267,64 +236,43 @@ namespace AshEditor
 
 	bool InspectorPanel::DrawMeshAssetPathEditor(AshEngine::UIContext& refUi, AshEngine::MeshComponent& meshComponent)
 	{
-		bool bChanged = false;
-		const float fAvail = refUi.get_content_region_avail().x;
-		const float fButtonWidth = 60.0f;
-		const float fSpacing = 4.0f;
-		const float fInputWidth = std::max(60.0f, fAvail - fButtonWidth - fSpacing);
-		refUi.set_next_item_width(fInputWidth);
-		bChanged = DrawInspectorTextField(
-			refUi,
-			"##AssetPath",
-			meshComponent.asset_path,
+		InspectorPanelState& state = GetState();
+		InspectorAssetPathWidgetState widgetState{};
+		widgetState.pVecRecentPaths = &state.vecRecentMeshPaths;
+		widgetState.pStrSearch = &state.strAssetPickerSearch;
+
+		InspectorAssetPathFieldDesc desc{};
+		desc = MakeInspectorSceneAssetPathFieldDesc(
 			{
+				AshEngine::SceneComponentType::Mesh,
+				"asset_path",
 				"Mesh Asset",
 				"Relative asset path used to resolve the mesh or model resource for this renderer.",
 				"Empty",
 				"Valid mesh/model asset path",
 				"Type a path, browse, or drag-drop from the Asset Browser."
-			}) || bChanged;
-		if (_deps.pDragDropTransferService && refUi.begin_drag_drop_target())
-		{
-			const AshEngine::UIDragDropPayload payload =
-				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
-			if (payload.is_delivery && payload.data && payload.data_size == sizeof(DragDropTransferId))
-			{
-				DragDropTransferId uTransferId = 0;
-				std::memcpy(&uTransferId, payload.data, sizeof(DragDropTransferId));
-				const DragDropTransferData* pData = _deps.pDragDropTransferService->Resolve(uTransferId);
-				if (pData && pData->extraData.has_value())
-				{
-					try
-					{
-						meshComponent.asset_path = std::any_cast<std::string>(pData->extraData);
-						GetState().strAssetPickerSearch.clear();
-						bChanged = true;
-					}
-					catch (const std::bad_any_cast&)
-					{
-						HLogWarning("InspectorPanel rejected mesh asset field drop because the payload did not contain a string path.");
-					}
-				}
-			}
-			refUi.end_drag_drop_target();
-		}
-		refUi.same_line(0.0f, fSpacing);
-		if (DrawInspectorActionButton(
-			refUi,
-			"Browse",
-			{
-				"Browse Mesh Assets",
-				"Open the mesh/model picker and choose a resource from the indexed asset database.",
-				{},
-				{},
-				"Immediate action"
 			},
-			{ fButtonWidth, 0.0f }))
-		{
-			refUi.open_popup("AssetPickerPopup");
-		}
-		return bChanged;
+			"##AssetPath",
+			"AssetPickerPopup",
+			"Select Mesh Asset");
+		desc.pDropLabelEmpty = "Drop mesh/model asset here";
+		desc.pDropLabelReplace = "Drop mesh/model asset here to replace";
+		desc.browseSpec.pTitle = "Browse Mesh Assets";
+		desc.dropZoneSpec = {
+			"Mesh Drop Zone",
+			"Drop a mesh or model asset here to replace the current renderer source.",
+			"None",
+			"Mesh / Model assets",
+			"Accepts Asset Browser drag-drop payloads."
+		};
+		desc.bDrawDropZone = true;
+		return DrawInspectorAssetPathField(
+			refUi,
+			meshComponent.asset_path,
+			desc,
+			widgetState,
+			_deps.pAssetDatabaseService,
+			_deps.pDragDropTransferService);
 	}
 
 	bool InspectorPanel::DrawComponentHeaderContextMenu(

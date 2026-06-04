@@ -5,8 +5,10 @@
 #include "Widgets/EditorThemeColors.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace AshEditor
 {
@@ -96,9 +98,9 @@ namespace AshEditor
 			return std::string(svSource);
 		}
 
-		const char* GetSelectionKindLabel(const EditorSelection& refSelection)
+		const char* GetSelectionKindLabel(EditorSelectionKind eKind)
 		{
-			switch (refSelection.eKind)
+			switch (eKind)
 			{
 			case EditorSelectionKind::Entity:
 				return "Entity";
@@ -108,6 +110,40 @@ namespace AshEditor
 			default:
 				return "None";
 			}
+		}
+
+		std::string MakeSelectionKindSummary(
+			const EditorSelection& refSelection,
+			const std::vector<EditorSelection>& vecSelections)
+		{
+			if (vecSelections.size() <= 1)
+			{
+				return GetSelectionKindLabel(refSelection.eKind);
+			}
+
+			size_t uEntityCount = 0;
+			size_t uAssetCount = 0;
+			for (const EditorSelection& refCurrentSelection : vecSelections)
+			{
+				if (refCurrentSelection.eKind == EditorSelectionKind::Entity)
+				{
+					++uEntityCount;
+				}
+				else if (refCurrentSelection.eKind == EditorSelectionKind::Asset)
+				{
+					++uAssetCount;
+				}
+			}
+
+			if (uEntityCount == vecSelections.size())
+			{
+				return "Entities";
+			}
+			if (uAssetCount == vecSelections.size())
+			{
+				return "Assets";
+			}
+			return "Mixed";
 		}
 
 		std::string MakeSelectionDisplayName(const EditorSelection& refSelection)
@@ -121,6 +157,17 @@ namespace AshEditor
 				return refSelection.strPath;
 			}
 			return refSelection.IsEmpty() ? "None" : "<Unnamed>";
+		}
+
+		std::string MakeSelectionDisplayName(
+			const EditorSelection& refSelection,
+			const std::vector<EditorSelection>& vecSelections)
+		{
+			if (vecSelections.size() <= 1)
+			{
+				return MakeSelectionDisplayName(refSelection);
+			}
+			return std::to_string(vecSelections.size()) + " selected";
 		}
 
 		const char* GetShortcutScopeLabel(const EditorShortcutScopeChangedEvent& refEvent)
@@ -251,6 +298,7 @@ namespace AshEditor
 
 		const EditorActiveSceneChangedEvent& refActiveScene = refContext.refSessionState.GetActiveScene();
 		const EditorSelection& refSelection = refContext.refSessionState.GetSelection();
+		const std::vector<EditorSelection>& vecSelections = refContext.refSessionState.GetSelections();
 		const EditorActiveDocumentDirtyStateChangedEvent& refDirtyState = refContext.refSessionState.GetActiveDocumentDirtyState();
 		const EditorDocumentOperationEvent& refDocumentOperation = refContext.refSessionState.GetLastDocumentOperation();
 		const EditorShortcutScopeChangedEvent& refShortcutScope = refContext.refSessionState.GetShortcutScope();
@@ -258,7 +306,8 @@ namespace AshEditor
 		const EditorActionInvokedEvent& refLastAction = refContext.refSessionState.GetLastActionInvocation();
 
 		const std::string strSceneName = refActiveScene.strSceneName.empty() ? "<Untitled Scene>" : refActiveScene.strSceneName;
-		const std::string strSelectionName = MakeSelectionDisplayName(refSelection);
+		const std::string strSelectionName = MakeSelectionDisplayName(refSelection, vecSelections);
+		const std::string strSelectionKind = MakeSelectionKindSummary(refSelection, vecSelections);
 		const std::string strActionName = MakeActionDisplayName(refLastAction);
 		const std::string strActionSource = MakeActionSourceLabel(refLastAction.strSource);
 
@@ -280,7 +329,7 @@ namespace AshEditor
 			"%s",
 			strSelectionName.c_str());
 		refUi.same_line(0.0f, 6.0f);
-		refUi.text_colored(GetEditorMutedTextColor(refUi), "(%s)", GetSelectionKindLabel(refSelection));
+		refUi.text_colored(GetEditorMutedTextColor(refUi), "(%s)", strSelectionKind.c_str());
 
 		DrawInlineSeparator(refUi);
 		refUi.same_line(0.0f, 8.0f);

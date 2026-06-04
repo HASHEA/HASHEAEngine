@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Base/input/Input.h"
+#include "Core/EditorViewportInputState.h"
 #include "Core/EditorSceneTypes.h"
 #include "Core/IEditorViewportBindingResolver.h"
 #include "Function/Gui/UICommon.h"
@@ -53,7 +53,7 @@ namespace AshEditor
 		void UpdateViewportInput(
 			const SceneService& refSceneService,
 			const AssetDatabaseService& refAssetDatabaseService,
-			const AshEngine::InputState& refInput,
+			const EditorViewportInputState& refInput,
 			double dTimeSeconds,
 			const EditorViewportCameraInputContext& refContext);
 

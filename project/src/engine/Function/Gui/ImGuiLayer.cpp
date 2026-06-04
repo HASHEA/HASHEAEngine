@@ -687,6 +687,7 @@ namespace AshEngine
 			ImGui::CreateContext();
 			ImGuiIO& io = ImGui::GetIO();
 			io.ConfigFlags = ImGuiConfigFlags_None;
+			m_viewports_enabled = false;
 			if (config.enable_keyboard_navigation)
 			{
 				io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -704,7 +705,19 @@ namespace AshEngine
 			}
 			if (config.enable_viewports)
 			{
-				HLogWarning("UIContext requested multi-viewport support, but the engine UI facade currently keeps it disabled.");
+				// editor begin 修改原因：先在已验证稳定的后端上启用多视口，允许编辑器面板拖出为独立系统窗口。
+				if (m_backend == RHI::Backend::Vulkan)
+				{
+					io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+					m_viewports_enabled = true;
+				}
+				else
+				{
+					HLogWarning(
+						"UIContext requested multi-viewport support, but backend '{}' keeps it disabled because detached platform windows are not stable in the current integration.",
+						RHI::backend_to_string(m_backend));
+				}
+				// editor end
 			}
 			m_iniPath = config.ini_path;
 			io.IniFilename = m_iniPath.empty() ? nullptr : m_iniPath.c_str();
@@ -896,11 +909,22 @@ namespace AshEngine
 			m_frame_active = false;
 
 			ImDrawData* draw_data = ImGui::GetDrawData();
-			if (!draw_data || draw_data->TotalVtxCount == 0 || draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
+			const bool has_main_draw_data =
+				draw_data &&
+				draw_data->DisplaySize.x > 0.0f &&
+				draw_data->DisplaySize.y > 0.0f &&
+				draw_data->TotalVtxCount > 0;
+			const bool has_sampled_render_targets = std::any_of(
+				sampled_render_targets.begin(),
+				sampled_render_targets.end(),
+				[](const std::shared_ptr<RenderTarget>& render_target)
+				{
+					return render_target != nullptr;
+				});
+			if (has_main_draw_data || has_sampled_render_targets)
 			{
-				break;
+				ASH_PROCESS_ERROR(m_render_device && m_render_device->get_current_command_buffer());
 			}
-			ASH_PROCESS_ERROR(m_render_device && m_render_device->get_current_command_buffer());
 
 			for (const auto& render_target : sampled_render_targets)
 			{
@@ -914,35 +938,46 @@ namespace AshEngine
 				}
 			}
 
-			PassDesc pass_desc{};
-			pass_desc.name = "EngineImGuiOverlayPass";
-			pass_desc.color_attachments.resize(1);
-			pass_desc.color_attachments[0].render_target = m_render_device->get_back_buffer();
-			pass_desc.color_attachments[0].load_action =
-				m_render_device->has_back_buffer_content() ?
-				RenderLoadAction::Load :
-				RenderLoadAction::Clear;
-			pass_desc.color_attachments[0].clear_color = get_engine_back_buffer_clear_color();
-			ASH_PROCESS_ERROR(m_render_device->begin_pass(pass_desc));
-
-			switch (m_backend)
+			if (has_main_draw_data)
 			{
+				PassDesc pass_desc{};
+				pass_desc.name = "EngineImGuiOverlayPass";
+				pass_desc.color_attachments.resize(1);
+				pass_desc.color_attachments[0].render_target = m_render_device->get_back_buffer();
+				pass_desc.color_attachments[0].load_action =
+					m_render_device->has_back_buffer_content() ?
+					RenderLoadAction::Load :
+					RenderLoadAction::Clear;
+				pass_desc.color_attachments[0].clear_color = get_engine_back_buffer_clear_color();
+				ASH_PROCESS_ERROR(m_render_device->begin_pass(pass_desc));
+
+				switch (m_backend)
+				{
 #if defined(ASH_HAS_VULKAN)
-			case RHI::Backend::Vulkan:
-				bResult = render_vulkan(draw_data);
-				break;
+				case RHI::Backend::Vulkan:
+					bResult = render_vulkan(draw_data);
+					break;
 #endif
 #if defined(ASH_HAS_DX12)
-			case RHI::Backend::DirectX12:
-				bResult = render_dx12(draw_data);
-				break;
+				case RHI::Backend::DirectX12:
+					bResult = render_dx12(draw_data);
+					break;
 #endif
-			default:
-				bResult = false;
-				break;
+				default:
+					bResult = false;
+					break;
+				}
+
+				bResult = m_render_device->end_pass() && bResult;
 			}
 
-			bResult = m_render_device->end_pass() && bResult;
+			// editor begin 修改原因：驱动 ImGui 平台窗口更新与绘制，使拖出的 Dock 面板成为可交互的原生窗口。
+			if (bResult && m_viewports_enabled)
+			{
+				ImGui::UpdatePlatformWindows();
+				ImGui::RenderPlatformWindowsDefault();
+			}
+			// editor end
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
@@ -1227,6 +1262,7 @@ namespace AshEngine
 			m_render_device = nullptr;
 			m_initialized = false;
 			m_frame_active = false;
+			m_viewports_enabled = false;
 			m_backend = RHI::Backend::Default;
 			// editor begin 修改原因：关闭 ImGuiLayer 时同步清空编辑器字体缓存，避免悬垂字体指针。
 			m_pDefaultFont = nullptr;
@@ -1703,6 +1739,9 @@ namespace AshEngine
 		RHI::Backend m_backend = RHI::Backend::Default;
 		bool m_initialized = false;
 		bool m_frame_active = false;
+		// editor begin 修改原因：缓存多视口开关，供渲染阶段决定是否驱动平台窗口绘制。
+		bool m_viewports_enabled = false;
+		// editor end
 		// editor begin 修改原因：缓存编辑器默认字体和强调字体，避免每次排版时重复查找。
 		ImFont* m_pDefaultFont = nullptr;
 		ImFont* m_pStrongFont = nullptr;

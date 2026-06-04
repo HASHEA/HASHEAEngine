@@ -1,12 +1,13 @@
 {
-  "assetBrowserActiveDirectory": "models/gltfs/Avocado",
+  "assetBrowserActiveDirectory": "editor/fonts",
   "assetBrowserSearchText": "",
   "assetBrowserTypeFilter": 0,
   "assetBrowserViewMode": 1,
   "assetsRoot": "product/assets",
+  "consoleAutoScroll": true,
   "consoleFilterText": "",
   "consoleSeverityFilter": 2,
-  "consoleSourceFilter": "",
+  "consoleSourceFilter": "Engine",
   "lastScenePath": "product/assets/scenes/Sandbox.scene.json",
   "layoutIniPath": "product/config/editor/imgui.ini",
   "recentScenePaths": [

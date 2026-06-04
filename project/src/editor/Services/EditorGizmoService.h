@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Core/EditorViewportInputState.h"
 #include "Core/EditorGizmoTypes.h"
+#include "Function/Render/ScenePresentationHandles.h"
 #include "Services/EditorGizmoServiceTypes.h"
 
 #include <memory>
@@ -22,7 +24,6 @@ namespace AshEditor
 
 namespace AshEngine
 {
-	class InputState;
 	class UIContext;
 }
 
@@ -43,7 +44,7 @@ namespace AshEditor
 
 		InteractionResult UpdateSceneViewportInteraction(
 			AshEngine::UIContext& refUi,
-			const AshEngine::InputState& refInput,
+			const EditorViewportInputState& refInput,
 			bool bViewportHovered,
 			const SceneService& refSceneService,
 			const AssetDatabaseService& refAssetDatabaseService,
@@ -59,6 +60,7 @@ namespace AshEditor
 			const SelectionService& refSelectionService,
 			const EditorGizmoState& refGizmoState,
 			bool bDrawSelectionHelpers,
+			AshEngine::SceneViewBindingHandle sceneViewBinding,
 			const ViewportContext& refViewportContext);
 
 	private:

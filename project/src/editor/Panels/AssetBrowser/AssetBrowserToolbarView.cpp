@@ -114,11 +114,29 @@ namespace AshEditor
 				EditorActionIds::AssetsRefresh,
 				"Refresh",
 				"asset_browser.toolbar");
+			refUi.same_line();
+			DrawEditorActionButton(
+				refUi,
+				*refViewContext.refDeps.pCommandService,
+				EditorActionIds::AssetsCreateFolder,
+				"New Folder",
+				"asset_browser.toolbar");
+			refUi.same_line();
+			DrawEditorActionButton(
+				refUi,
+				*refViewContext.refDeps.pCommandService,
+				EditorActionIds::AssetsInstantiateSelected,
+				"Instantiate",
+				"asset_browser.toolbar");
 		}
 		else
 		{
 			refUi.begin_disabled(true);
 			refUi.button("Refresh");
+			refUi.same_line();
+			refUi.button("New Folder");
+			refUi.same_line();
+			refUi.button("Instantiate");
 			refUi.end_disabled();
 		}
 

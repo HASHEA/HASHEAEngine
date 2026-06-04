@@ -12,11 +12,14 @@
 
 namespace AshEditor
 {
+	class EditorEventBus;
+
 	class SceneService
 	{
 	public:
 		// Initializes the active scene. If pathStartupScene is empty or load fails, the service still provides a valid default scene.
 		bool Initialize(const std::filesystem::path& pathStartupScene);
+		void SetEventBus(EditorEventBus* pEventBus);
 
 		AshEngine::Scene& GetActiveScene();
 		const AshEngine::Scene& GetActiveScene() const;
@@ -61,9 +64,15 @@ namespace AshEditor
 
 	private:
 		void CreateDefaultEntities();
+		void SubscribeActiveSceneChanges();
+		void UnsubscribeActiveSceneChanges();
+		void PublishSceneChanged(const AshEngine::SceneChangeEvent& refEvent) const;
+		void PublishDirtyStateChanged(bool bDirty) const;
 
 	private:
+		EditorEventBus* _pEventBus = nullptr;
 		AshEngine::Scene _activeScene{};
 		std::filesystem::path _pathActiveScene{};
+		uint32_t _uSceneChangeSubscriptionId = 0;
 	};
 }

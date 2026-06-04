@@ -11,6 +11,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -20,6 +26,8 @@ namespace AshEditor
 {
 	namespace
 	{
+		constexpr size_t kMaxConsoleMessages = 2000;
+
 		struct SeverityFilterOption
 		{
 			const char* pLabel = "";
@@ -148,8 +156,10 @@ namespace AshEditor
 			bool bClearTextFilter = false;
 			bool bResetAllFilters = false;
 			bool bClearConsole = false;
+			bool bCopyMessage = false;
 			std::string strSourceFilter{};
 			int32_t iSeverityFilterIndex = 0;
+			std::string strClipboardText{};
 		};
 
 		ConsoleSeverityCounts CountConsoleSeverities(const std::vector<ConsoleMessage>& vecMessages)
@@ -260,6 +270,52 @@ namespace AshEditor
 			}
 		}
 
+		std::string BuildConsoleExportFileName()
+		{
+			const auto now = std::chrono::system_clock::now();
+			const std::time_t rawTime = std::chrono::system_clock::to_time_t(now);
+			std::tm localTime{};
+#if defined(_WIN32)
+			localtime_s(&localTime, &rawTime);
+#else
+			localtime_r(&rawTime, &localTime);
+#endif
+
+			std::ostringstream output{};
+			output << "Console-" << std::put_time(&localTime, "%Y%m%d-%H%M%S") << ".log";
+			return output.str();
+		}
+
+		std::string BuildConsoleExportLine(const ConsoleMessage& refMessage)
+		{
+			std::string strLine = "[";
+			strLine += GetSeverityLabel(refMessage.eSeverity);
+			strLine += "]";
+			if (!refMessage.strSource.empty())
+			{
+				strLine += " [";
+				strLine += refMessage.strSource;
+				strLine += "]";
+			}
+			strLine += " ";
+			strLine += refMessage.strText;
+			return strLine;
+		}
+
+		std::string BuildConsoleClipboardText(const std::vector<ConsoleMessage>& vecMessages)
+		{
+			std::ostringstream output{};
+			for (size_t uIndex = 0; uIndex < vecMessages.size(); ++uIndex)
+			{
+				output << BuildConsoleExportLine(vecMessages[uIndex]);
+				if (uIndex + 1 < vecMessages.size())
+				{
+					output << '\n';
+				}
+			}
+			return output.str();
+		}
+
 		bool DrawSeverityFilterChip(
 			AshEngine::UIContext& refUi,
 			const ConsoleSeverityCounts& refCounts,
@@ -358,6 +414,13 @@ namespace AshEditor
 				refUi.close_current_popup();
 			}
 			refUi.separator();
+			if (refUi.menu_item("Copy Message"))
+			{
+				refAction.bCopyMessage = true;
+				refAction.strClipboardText = BuildConsoleExportLine(refMessage);
+				refUi.close_current_popup();
+			}
+			refUi.separator();
 			if (refUi.menu_item("Clear Source Filter"))
 			{
 				refAction.bClearSourceFilter = true;
@@ -411,7 +474,12 @@ namespace AshEditor
 		_eventBindings.Subscribe<EditorNotificationEvent>(
 			[this](const EditorNotificationEvent& refEvent)
 			{
-				AddMessage(refEvent.strMessage, ConsoleMessageSeverity::Info, refEvent.strSource);
+				AddMessage(refEvent.strMessage, InferSeverityFromText(refEvent.strMessage), refEvent.strSource);
+			});
+		_eventBindings.Subscribe<EditorLogEvent>(
+			[this](const EditorLogEvent& refEvent)
+			{
+				AddMessage(refEvent.strMessage, refEvent.eSeverity, refEvent.strSource);
 			});
 	}
 
@@ -422,12 +490,14 @@ namespace AshEditor
 
 	void ConsolePanel::AddMessage(std::string strMessage, ConsoleMessageSeverity eSeverity, std::string strSource)
 	{
-		if (eSeverity == ConsoleMessageSeverity::Info)
-		{
-			eSeverity = InferSeverityFromText(strMessage);
-		}
-
 		_vecMessages.push_back({ eSeverity, std::move(strSource), std::move(strMessage) });
+		if (_vecMessages.size() > kMaxConsoleMessages)
+		{
+			const size_t uOverflowCount = _vecMessages.size() - kMaxConsoleMessages;
+			const auto itTrimEnd =
+				_vecMessages.begin() + static_cast<std::vector<ConsoleMessage>::difference_type>(uOverflowCount);
+			_vecMessages.erase(_vecMessages.begin(), itTrimEnd);
+		}
 	}
 
 	void ConsolePanel::ClearMessages()
@@ -448,7 +518,9 @@ namespace AshEditor
 			_strFilterText = settings.strConsoleFilterText;
 			_strSourceFilter = settings.strConsoleSourceFilter;
 			_iSeverityFilterIndex = settings.iConsoleSeverityFilter;
+			_bAutoScroll = settings.bConsoleAutoScroll;
 		}
+		_uLastObservedMessageCount = _vecMessages.size();
 		HLogInfo("ConsolePanel attached.");
 	}
 
@@ -474,6 +546,7 @@ namespace AshEditor
 		settings.strConsoleFilterText = _strFilterText;
 		settings.strConsoleSourceFilter = _strSourceFilter;
 		settings.iConsoleSeverityFilter = _iSeverityFilterIndex;
+		settings.bConsoleAutoScroll = _bAutoScroll;
 	}
 
 	bool ConsolePanel::HasAnyFilters() const
@@ -486,6 +559,53 @@ namespace AshEditor
 		_strFilterText.clear();
 		_strSourceFilter.clear();
 		_iSeverityFilterIndex = 0;
+	}
+
+	bool ConsolePanel::ExportVisibleMessages(const std::vector<ConsoleMessage>& vecVisibleMessages) const
+	{
+		if (!_deps.pSettingsService)
+		{
+			HLogWarning("Console export skipped because EditorSettingsService is unavailable.");
+			return false;
+		}
+
+		const std::filesystem::path pathExportDirectory =
+			_deps.pSettingsService->ResolveWorkspacePath("product/logs/editor");
+		std::error_code errorCode{};
+		std::filesystem::create_directories(pathExportDirectory, errorCode);
+		if (errorCode)
+		{
+			HLogError(
+				"Failed to prepare console export directory {}. {}",
+				pathExportDirectory.generic_string(),
+				errorCode.message());
+			return false;
+		}
+
+		const std::filesystem::path pathExportFile = pathExportDirectory / BuildConsoleExportFileName();
+		std::ofstream output(pathExportFile, std::ios::out | std::ios::trunc);
+		if (!output.is_open())
+		{
+			HLogError("Failed to open console export file {}.", pathExportFile.generic_string());
+			return false;
+		}
+
+		for (const ConsoleMessage& refMessage : vecVisibleMessages)
+		{
+			output << BuildConsoleExportLine(refMessage) << '\n';
+		}
+
+		if (!output.good())
+		{
+			HLogError("Failed while writing console export file {}.", pathExportFile.generic_string());
+			return false;
+		}
+
+		HLogInfo(
+			"Exported {} console messages to {}.",
+			static_cast<uint32_t>(vecVisibleMessages.size()),
+			pathExportFile.generic_string());
+		return true;
 	}
 
 	void ConsolePanel::OnGui(const EditorFrameContext& frameContext)
@@ -517,13 +637,17 @@ namespace AshEditor
 		const std::string strLoweredFilterText = ToLowerCopy(_strFilterText);
 		const ConsoleSeverityCounts countsSeverity = CountConsoleSeverities(_vecMessages);
 		uint32_t uVisibleMessageCount = 0;
+		std::vector<ConsoleMessage> vecVisibleMessages{};
+		vecVisibleMessages.reserve(_vecMessages.size());
 		for (const ConsoleMessage& refMessage : _vecMessages)
 		{
 			if (MatchesConsoleFilter(refMessage, strLoweredFilterText, _strSourceFilter, refSeverityFilter))
 			{
 				++uVisibleMessageCount;
+				vecVisibleMessages.push_back(refMessage);
 			}
 		}
+		const bool bHasNewMessages = _vecMessages.size() != _uLastObservedMessageCount;
 
 		refUi.text("Messages: %u / %u", uVisibleMessageCount, static_cast<uint32_t>(_vecMessages.size()));
 		refUi.same_line();
@@ -549,6 +673,22 @@ namespace AshEditor
 		refUi.same_line();
 		refUi.set_next_item_width(120.0f);
 		refUi.combo("Severity", _iSeverityFilterIndex, vecSeverityLabels);
+		refUi.same_line();
+		const bool bAutoScrollChanged = refUi.checkbox("Auto-scroll", _bAutoScroll);
+		refUi.same_line();
+		refUi.begin_disabled(vecVisibleMessages.empty());
+		if (refUi.button("Copy Visible"))
+		{
+			refUi.set_clipboard_text(BuildConsoleClipboardText(vecVisibleMessages).c_str());
+		}
+		refUi.end_disabled();
+		refUi.same_line();
+		refUi.begin_disabled(vecVisibleMessages.empty());
+		if (refUi.button("Export Visible"))
+		{
+			ExportVisibleMessages(vecVisibleMessages);
+		}
+		refUi.end_disabled();
 		refUi.same_line();
 		if (refUi.button("Clear"))
 		{
@@ -611,13 +751,9 @@ namespace AshEditor
 				refUi.table_headers_row();
 				ConsoleMessageContextAction action{};
 
-				for (const ConsoleMessage& refMessage : _vecMessages)
+				for (size_t uMessageIndex = 0; uMessageIndex < vecVisibleMessages.size(); ++uMessageIndex)
 				{
-					if (!MatchesConsoleFilter(refMessage, strLoweredFilterText, _strSourceFilter, refSeverityFilter))
-					{
-						continue;
-					}
-
+					const ConsoleMessage& refMessage = vecVisibleMessages[uMessageIndex];
 					refUi.table_next_row();
 					refUi.table_next_column();
 					refUi.text_colored(
@@ -626,7 +762,7 @@ namespace AshEditor
 						GetSeverityLabel(refMessage.eSeverity));
 					refUi.table_next_column();
 					const char* pSourceLabel = refMessage.strSource.empty() ? "-" : refMessage.strSource.c_str();
-					refUi.push_id(static_cast<int32_t>(&refMessage - _vecMessages.data()));
+					refUi.push_id(static_cast<int32_t>(uMessageIndex));
 					if (refUi.small_button(pSourceLabel))
 					{
 						_strSourceFilter = refMessage.strSource;
@@ -641,6 +777,10 @@ namespace AshEditor
 				}
 
 				refUi.end_table();
+				if (_bAutoScroll && (bHasNewMessages || (bAutoScrollChanged && _bAutoScroll)))
+				{
+					refUi.set_scroll_here_y(1.0f);
+				}
 
 				if (action.bResetAllFilters)
 				{
@@ -668,6 +808,10 @@ namespace AshEditor
 					{
 						_strFilterText.clear();
 					}
+					if (action.bCopyMessage)
+					{
+						refUi.set_clipboard_text(action.strClipboardText.c_str());
+					}
 				}
 
 				if (action.bClearConsole)
@@ -677,6 +821,7 @@ namespace AshEditor
 			}
 		}
 		refUi.end_child();
+		_uLastObservedMessageCount = _vecMessages.size();
 
 		EndPanelWindow(frameContext);
 	}

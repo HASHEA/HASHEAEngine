@@ -4,11 +4,13 @@
 
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace AshEngine
 {
 	class Entity;
 	struct CameraComponent;
+	struct EnvironmentComponent;
 	struct LightComponent;
 	struct MeshComponent;
 	struct TransformComponent;
@@ -23,10 +25,7 @@ namespace AshEditor
 	std::optional<AshEngine::CameraComponent> GetCameraComponentValue(const AshEngine::Entity& refEntity);
 	std::optional<AshEngine::LightComponent> GetLightComponentValue(const AshEngine::Entity& refEntity);
 	std::optional<AshEngine::MeshComponent> GetMeshComponentValue(const AshEngine::Entity& refEntity);
-
-	bool CanAddCameraComponent(const AshEngine::Entity& refEntity);
-	bool CanAddLightComponent(const AshEngine::Entity& refEntity);
-	bool CanAddMeshComponent(const AshEngine::Entity& refEntity);
+	std::optional<AshEngine::EnvironmentComponent> GetEnvironmentComponentValue(const AshEngine::Entity& refEntity);
 
 	bool ApplyCameraComponentValue(
 		AshEngine::Entity entity,
@@ -37,6 +36,9 @@ namespace AshEditor
 	bool ApplyMeshComponentValue(
 		AshEngine::Entity entity,
 		const std::optional<AshEngine::MeshComponent>& optValue);
+	bool ApplyEnvironmentComponentValue(
+		AshEngine::Entity entity,
+		const std::optional<AshEngine::EnvironmentComponent>& optValue);
 
 	void DrawInspectorPanelIntro(
 		AshEngine::UIContext& refUi,
@@ -46,6 +48,10 @@ namespace AshEditor
 		AshEngine::UIContext& refUi,
 		const EditorSelection& refSelection,
 		std::string_view svTooltipDescription = {});
+	void DrawInspectorMultiSelectionSummary(
+		AshEngine::UIContext& refUi,
+		const std::vector<EditorSelection>& vecSelections,
+		std::string_view svDescription = {});
 	void DrawInspectorAssetInspector(
 		AshEngine::UIContext& refUi,
 		const EditorSelection& refSelection);

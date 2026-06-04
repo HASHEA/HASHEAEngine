@@ -7,7 +7,6 @@
 #include "Panels/Inspector/IInspectorComponentHost.h"
 
 #include <memory>
-#include <vector>
 
 namespace AshEngine
 {
@@ -19,7 +18,8 @@ namespace AshEngine
 namespace AshEditor
 {
 	class EditorEventBus;
-	class InspectorComponentEditor;
+	class InspectorComponentEditorRegistry;
+	struct EditorSceneChangedEvent;
 	struct InspectorPanelState;
 
 	class InspectorPanel final : public EditorPanel, private IInspectorComponentHost
@@ -37,6 +37,7 @@ namespace AshEditor
 	private:
 		void ClearDeps();
 		void UnsubscribeEvents();
+		void RequestEntityDraftRefreshFromSceneChange(const EditorSceneChangedEvent& refEvent);
 		void DrawEntityInspector(AshEngine::UIContext& refUi, AshEngine::Entity entity);
 		void DrawAddComponentMenu(AshEngine::UIContext& refUi, AshEngine::Entity entity);
 		void DrawComponentSections(AshEngine::UIContext& refUi, AshEngine::Entity entity);
@@ -47,6 +48,7 @@ namespace AshEditor
 		bool HasPendingCameraChanges() const;
 		bool HasPendingLightChanges() const;
 		bool HasPendingMeshChanges() const;
+		bool HasPendingEnvironmentChanges() const;
 		void ResetEntityDrafts();
 		void ResetIdentityDraftToLive(const AshEngine::Entity& entity);
 		void ResetTransformDraftToLive(const AshEngine::Entity& entity);
@@ -57,6 +59,8 @@ namespace AshEditor
 		void ResetLightDraftToDefaults(const AshEngine::Entity& entity);
 		void ResetMeshDraftToLive(const AshEngine::Entity& entity);
 		void ResetMeshDraftToDefaults(const AshEngine::Entity& entity);
+		void ResetEnvironmentDraftToLive(const AshEngine::Entity& entity);
+		void ResetEnvironmentDraftToDefaults(const AshEngine::Entity& entity);
 		void SyncEntityDrafts(const AshEngine::Entity& entity);
 		bool CommitIdentityDraft(AshEngine::Entity entity);
 		bool CommitTransformDraft(AshEngine::Entity entity);
@@ -72,14 +76,17 @@ namespace AshEditor
 		void SyncCameraDraft(const AshEngine::Entity& entity) override;
 		void SyncLightDraft(const AshEngine::Entity& entity) override;
 		void SyncMeshDraft(const AshEngine::Entity& entity) override;
+		void SyncEnvironmentDraft(const AshEngine::Entity& entity) override;
 		bool CommitCameraDraft(AshEngine::Entity entity) override;
 		bool CommitLightDraft(AshEngine::Entity entity) override;
 		bool CommitMeshDraft(AshEngine::Entity entity) override;
+		bool CommitEnvironmentDraft(AshEngine::Entity entity) override;
 
 	private:
 		InspectorPanelDeps _deps{};
 		EditorEventBindings _eventBindings{};
 		std::unique_ptr<InspectorPanelState> _upState{};
-		std::vector<std::unique_ptr<InspectorComponentEditor>> _vecComponentEditors{};
+		std::unique_ptr<InspectorComponentEditorRegistry> _upComponentEditorRegistry{};
+		bool _bRefreshEntityDraftsOnNextGui = false;
 	};
 }

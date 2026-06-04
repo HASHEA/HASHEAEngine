@@ -8,6 +8,7 @@ namespace AshEditor
 	class AssetPreviewService;
 	class EditorSettingsService;
 	class EditorShortcutService;
+	class IEditorCommandExecutor;
 	class IEditorIconService;
 	class PanelManager;
 	class SelectionService;
@@ -22,6 +23,7 @@ namespace AshEditor
 		EditorShortcutService* pShortcutService = nullptr;
 		DragDropTransferService* pDragDropTransferService = nullptr;
 		AssetPreviewService* pAssetPreviewService = nullptr;
+		IEditorCommandExecutor* pCommandExecutor = nullptr;
 		PanelManager* pPanelManager = nullptr;
 	};
 }

@@ -1,6 +1,5 @@
 #include "Services/EditorGizmoService.h"
 
-#include "Base/input/Input.h"
 #include "Core/EditorComponentComparison.h"
 #include "Core/EntityCommands.h"
 #include "Core/IEditorCommandExecutor.h"
@@ -19,8 +18,6 @@
 #include "Services/SelectionService.h"
 
 #include <glm/glm.hpp>
-
-#include <GLFW/glfw3.h>
 
 #include <memory>
 #include <vector>
@@ -108,7 +105,7 @@ namespace AshEditor
 
 	EditorGizmoService::InteractionResult EditorGizmoService::UpdateSceneViewportInteraction(
 		AshEngine::UIContext& refUi,
-		const AshEngine::InputState& refInput,
+		const EditorViewportInputState& refInput,
 		const bool bViewportHovered,
 		const SceneService& refSceneService,
 		const AssetDatabaseService& refAssetDatabaseService,
@@ -170,7 +167,7 @@ namespace AshEditor
 			return result;
 		}
 
-		const bool bAltDown = refInput.is_key_down(GLFW_KEY_LEFT_ALT) || refInput.is_key_down(GLFW_KEY_RIGHT_ALT);
+		const bool bAltDown = refInput.IsModifierDown(AshEngine::UIModifierFlagBits::Alt);
 		if (bAltDown && !refDragSession.bActive)
 		{
 			if (bRotateMode)
@@ -198,13 +195,13 @@ namespace AshEditor
 		}
 
 		const glm::vec2 vecMousePosition{
-			static_cast<float>(refInput.get_mouse_x()),
-			static_cast<float>(refInput.get_mouse_y())
+			refInput.vecMouseScreenPosition.x,
+			refInput.vecMouseScreenPosition.y
 		};
-		const bool bLeftPressed = refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_LEFT);
-		const bool bLeftReleased = refInput.was_mouse_button_released(GLFW_MOUSE_BUTTON_LEFT);
-		const bool bLeftDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_LEFT);
-		const bool bRightDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_RIGHT);
+		const bool bLeftPressed = refInput.WasMousePressed(AshEngine::UIMouseButton::Left);
+		const bool bLeftReleased = refInput.WasMouseReleased(AshEngine::UIMouseButton::Left);
+		const bool bLeftDown = refInput.IsMouseDown(AshEngine::UIMouseButton::Left);
+		const bool bRightDown = refInput.IsMouseDown(AshEngine::UIMouseButton::Right);
 
 		if (refDragSession.bActive)
 		{
@@ -349,6 +346,7 @@ namespace AshEditor
 		const SelectionService& refSelectionService,
 		const EditorGizmoState& refGizmoState,
 		const bool bDrawSelectionHelpers,
+		AshEngine::SceneViewBindingHandle sceneViewBinding,
 		const ViewportContext& refViewportContext)
 	{
 		GizmoBasis basis{};
@@ -369,6 +367,7 @@ namespace AshEditor
 				refSceneService,
 				refAssetDatabaseService,
 				refSelectionService,
+				sceneViewBinding,
 				refViewportContext);
 		}
 

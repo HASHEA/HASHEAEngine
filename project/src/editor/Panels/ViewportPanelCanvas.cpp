@@ -2,6 +2,7 @@
 
 #include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
+#include "Panels/ViewportPanelInteraction.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/EditorViewportService.h"
 #include "Widgets/EditorThemeColors.h"
@@ -23,6 +24,19 @@ namespace AshEditor
 			refUi.text_wrapped(pMessage);
 		}
 
+		bool IsViewportContentHovered(AshEngine::UIContext& refUi, const AshEngine::UIRect& rectContent)
+		{
+			const AshEngine::UIVec2 vecMousePosition = refUi.get_mouse_pos();
+			return
+				ViewportPanelSupport::IsPointInRect(rectContent, vecMousePosition) &&
+				(refUi.is_window_hovered_with_children() || refUi.is_window_focused_with_children());
+		}
+
+		bool ShouldDrawAxisIndicator(const EditorViewportPresentation* pPresentation)
+		{
+			return !pPresentation || pPresentation->eKind != EditorViewportKind::Game;
+		}
+
 		void DrawViewportOverlay(
 			const EditorFrameContext& refFrameContext,
 			const ViewportPanelDeps& refDeps,
@@ -41,10 +55,18 @@ namespace AshEditor
 				return;
 			}
 
+			AshEngine::SceneViewStats sceneStats{};
+			const AshEngine::SceneViewStats* pSceneStats = nullptr;
+			if (refDeps.pViewportService->TryGetSceneViewStats(strViewportId, sceneStats))
+			{
+				pSceneStats = &sceneStats;
+			}
+
 			const std::vector<std::string> vecLines = ViewportPanelSupport::MakeOverlayLines(
 				refViewport,
 				*pPresentation,
 				pRenderState,
+				pSceneStats,
 				refDeps.pViewportService->IsPrimaryViewport(refViewport.strId));
 			if (vecLines.empty())
 			{
@@ -52,8 +74,8 @@ namespace AshEditor
 			}
 
 			const AshEngine::UIRect rectItem = refFrameContext.pUiContext->get_item_rect();
-			const float fPadding = 10.0f;
-			const float fLineSpacing = 4.0f;
+			const float fPadding = 8.0f;
+			const float fLineSpacing = 2.0f;
 			float fMaxWidth = 0.0f;
 			float fTotalHeight = fPadding * 2.0f;
 			for (const std::string& strLine : vecLines)
@@ -64,7 +86,7 @@ namespace AshEditor
 			}
 			fTotalHeight += std::max(0.0f, static_cast<float>(vecLines.size() - 1)) * fLineSpacing;
 
-			const float fMargin = 12.0f;
+			const float fMargin = 10.0f;
 			const float fOverlayWidth = fMaxWidth + fPadding * 2.0f;
 			float fOverlayX = rectItem.x + fMargin;
 			float fOverlayY = rectItem.y + fMargin;
@@ -89,21 +111,24 @@ namespace AshEditor
 			refFrameContext.pUiContext->draw_window_rect_filled(
 				rectOverlay,
 				GetEditorOverlayBackgroundColor(*refFrameContext.pUiContext),
-				6.0f);
+				8.0f);
 			refFrameContext.pUiContext->draw_window_rect(
 				rectOverlay,
 				GetEditorOverlayBorderColor(*refFrameContext.pUiContext),
-				6.0f);
+				8.0f);
 
 			float fTextY = rectOverlay.y + fPadding;
-			const AshEngine::UIColor colorText = GetEditorTextColor(*refFrameContext.pUiContext);
-			for (const std::string& strLine : vecLines)
+			for (size_t uIndex = 0; uIndex < vecLines.size(); ++uIndex)
 			{
+				const AshEngine::UIColor colorText =
+					uIndex == 0
+					? GetEditorHeadingTextColor(*refFrameContext.pUiContext)
+					: GetEditorMutedTextColor(*refFrameContext.pUiContext);
 				refFrameContext.pUiContext->draw_window_text(
 					{ rectOverlay.x + fPadding, fTextY },
 					colorText,
-					strLine.c_str());
-				fTextY += refFrameContext.pUiContext->calc_text_size(strLine.c_str()).y + fLineSpacing;
+					vecLines[uIndex].c_str());
+				fTextY += refFrameContext.pUiContext->calc_text_size(vecLines[uIndex].c_str()).y + fLineSpacing;
 			}
 		}
 	}
@@ -180,7 +205,7 @@ namespace AshEditor
 
 			refFrameContext.pUiContext->draw_surface_fill_available(refViewport.surface, bPreserveAspect);
 			drawResult.rectContent = refFrameContext.pUiContext->get_item_rect();
-			drawResult.bContentHovered = refUi.is_item_hovered();
+			drawResult.bContentHovered = IsViewportContentHovered(refUi, drawResult.rectContent);
 			drawResult.bHasViewportContent = true;
 
 			refViewport.state.bContentHovered = drawResult.bContentHovered;
@@ -194,7 +219,7 @@ namespace AshEditor
 			const std::string& strViewportId,
 			const EditorViewportInstance& refViewport,
 			const ViewportPanelCanvasDrawResult& refDrawResult,
-			const ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState)
+			const ViewportPanelSceneSelectionState& refSceneSelectionState)
 		{
 			if (!refFrameContext.pUiContext || !refDrawResult.bHasViewportContent)
 			{
@@ -203,41 +228,38 @@ namespace AshEditor
 
 			AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
 			const AshEngine::UIRect& rectContent = refDrawResult.rectContent;
+			const EditorViewportPresentation* pPresentation =
+				refDeps.pViewportService ? refDeps.pViewportService->GetPresentation(strViewportId) : nullptr;
 
 			DrawViewportOverlay(refFrameContext, refDeps, strViewportId, refViewport);
 
-			if (const EditorViewportPresentation* pPresentation =
-				refDeps.pViewportService ? refDeps.pViewportService->GetPresentation(strViewportId) : nullptr)
+			if (pPresentation && pPresentation->eKind == EditorViewportKind::Scene)
 			{
-				if (pPresentation->eKind == EditorViewportKind::Scene)
-				{
-					if (pPresentation->bShowOverlays &&
-						ViewportPanelSupport::HasSceneViewportOverlayHelpersEnabled(*pPresentation))
-					{
-						ViewportPanelSupport::DrawSceneViewportOverlayHelpers(
-							refDeps,
-							refUi,
-							*pPresentation,
-							strViewportId,
-							rectContent);
-					}
+				ViewportPanelSupport::UpdateSceneViewportOverlayHelpers(
+					refDeps,
+					*pPresentation,
+					strViewportId,
+					rectContent);
 
-					ViewportPanelSupport::DrawSceneGizmoOverlay(
-						refDeps,
-						refUi,
-						pPresentation,
-						rectContent);
-					ViewportPanelInteraction::DrawSceneBoxSelectionOverlay(
-						refUi,
-						rectContent,
-						refSceneBoxSelectionState);
-				}
+				ViewportPanelSupport::DrawSceneGizmoOverlay(
+					refDeps,
+					refUi,
+					pPresentation,
+					strViewportId,
+					rectContent);
+				ViewportPanelInteraction::DrawSceneBoxSelectionOverlay(
+					refUi,
+					rectContent,
+					refSceneSelectionState);
 			}
 
-			DrawViewportAxisIndicator(
-				refUi,
-				rectContent.x, rectContent.y,
-				rectContent.width, rectContent.height);
+			if (ShouldDrawAxisIndicator(pPresentation))
+			{
+				DrawViewportAxisIndicator(
+					refUi,
+					rectContent.x, rectContent.y,
+					rectContent.width, rectContent.height);
+			}
 			if (strViewportId == EditorViewportIds::Scene &&
 				(refViewport.state.bFocused || refDrawResult.bContentHovered))
 			{

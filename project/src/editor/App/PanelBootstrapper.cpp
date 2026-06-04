@@ -50,6 +50,7 @@ namespace AshEditor
 			deps.pShortcutService = refContext.pShortcutService;
 			deps.pDragDropTransferService = refContext.pDragDropTransferService;
 			deps.pPanelManager = &refPanelManager;
+			deps.pCommandExecutor = refContext.pCommandExecutor;
 			return deps;
 		}
 

@@ -3,6 +3,7 @@
 #include "Core/EditorIds.h"
 #include "Core/EditorSelection.h"
 #include "Function/Gui/UIContext.h"
+#include "Function/Render/ScenePresentationHandles.h"
 #include "Function/Render/SceneView.h"
 #include "Panels/ViewportPanelSceneSupportInternal.h"
 #include "Services/AssetDatabaseService.h"
@@ -12,6 +13,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 namespace AshEditor
 {
@@ -36,6 +39,13 @@ namespace AshEditor
 			bool bHasSelectedEntity = false;
 		};
 
+		struct SceneOverlayCameraBasis
+		{
+			glm::vec3 vecRight{ 1.0f, 0.0f, 0.0f };
+			glm::vec3 vecUp{ 0.0f, 1.0f, 0.0f };
+			glm::vec3 vecForward{ 0.0f, 0.0f, 1.0f };
+		};
+
 		glm::vec3 NormalizeOrFallback(const glm::vec3& refValue, const glm::vec3& refFallback)
 		{
 			const float fLength = glm::length(refValue);
@@ -56,30 +66,121 @@ namespace AshEditor
 			return glm::vec3(vecWorld);
 		}
 
-		bool DrawProjectedWorldLine(
-			AshEngine::UIContext& refUi,
-			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+		glm::vec4 MakeSceneOverlayColor(const AshEngine::UIColor& refColor)
+		{
+			return { refColor.r, refColor.g, refColor.b, refColor.a };
+		}
+
+		void AppendSceneOverlayLine(
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
 			const glm::vec3& vecStartWorld,
 			const glm::vec3& vecEndWorld,
 			const AshEngine::UIColor& refColor,
 			float fThickness)
 		{
-			glm::vec2 vecStartScreen{ 0.0f };
-			glm::vec2 vecEndScreen{ 0.0f };
-			float fStartDepth = 0.0f;
-			float fEndDepth = 0.0f;
-			if (!ViewportPanelSupport::Detail::TryProjectWorldToViewport(refContext, vecStartWorld, vecStartScreen, fStartDepth) ||
-				!ViewportPanelSupport::Detail::TryProjectWorldToViewport(refContext, vecEndWorld, vecEndScreen, fEndDepth))
+			AshEngine::SceneOverlayLine line{};
+			line.start = vecStartWorld;
+			line.end = vecEndWorld;
+			line.color = MakeSceneOverlayColor(refColor);
+			line.thickness = fThickness;
+			line.depth_mode = AshEngine::SceneOverlayDepthMode::DepthTestNoWrite;
+			refLines.push_back(line);
+		}
+
+		SceneOverlayCameraBasis BuildSceneOverlayCameraBasis(
+			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext)
+		{
+			const glm::mat4 matCameraWorld = glm::inverse(refContext.matView);
+			SceneOverlayCameraBasis basis{};
+			basis.vecRight = NormalizeOrFallback(glm::vec3(matCameraWorld[0]), glm::vec3(1.0f, 0.0f, 0.0f));
+			basis.vecUp = NormalizeOrFallback(glm::vec3(matCameraWorld[1]), glm::vec3(0.0f, 1.0f, 0.0f));
+			basis.vecForward = NormalizeOrFallback(glm::vec3(matCameraWorld[2]), glm::vec3(0.0f, 0.0f, 1.0f));
+			return basis;
+		}
+
+		float ComputeSceneOverlayWorldUnitsPerPixel(
+			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+			const SceneOverlayCameraBasis& refCameraBasis,
+			const glm::vec3& vecWorldPosition)
+		{
+			const float fViewportHeight = std::max(refContext.rectContent.height, 1.0f);
+			const float fProjectionYScale = std::abs(refContext.matProjection[1][1]);
+			if (fProjectionYScale <= 0.0001f)
 			{
-				return false;
+				return 0.01f;
 			}
 
-			refUi.draw_window_line(
-				{ vecStartScreen.x, vecStartScreen.y },
-				{ vecEndScreen.x, vecEndScreen.y },
+			const float fDepthAlongView = glm::dot(vecWorldPosition - refContext.vecCameraPosition, refCameraBasis.vecForward);
+			const float fDistanceToPoint = glm::length(vecWorldPosition - refContext.vecCameraPosition);
+			const float fReferenceDepth = std::max(std::max(fDepthAlongView, 0.0f), fDistanceToPoint * 0.25f);
+			const float fTanHalfFovY = 1.0f / fProjectionYScale;
+			return (2.0f * std::max(fReferenceDepth, 0.25f) * fTanHalfFovY) / fViewportHeight;
+		}
+
+		void AppendSceneOverlayBillboardBox(
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
+			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+			const SceneOverlayCameraBasis& refCameraBasis,
+			const glm::vec3& vecCenterWorld,
+			float fHalfExtentPixels,
+			const AshEngine::UIColor& refColor,
+			float fThickness)
+		{
+			const float fHalfExtentWorld =
+				fHalfExtentPixels * ComputeSceneOverlayWorldUnitsPerPixel(refContext, refCameraBasis, vecCenterWorld);
+			const glm::vec3 vecRight = refCameraBasis.vecRight * fHalfExtentWorld;
+			const glm::vec3 vecUp = refCameraBasis.vecUp * fHalfExtentWorld;
+			AppendSceneOverlayLine(
+				refLines,
+				vecCenterWorld - vecRight - vecUp,
+				vecCenterWorld + vecRight - vecUp,
 				refColor,
 				fThickness);
-			return true;
+			AppendSceneOverlayLine(
+				refLines,
+				vecCenterWorld + vecRight - vecUp,
+				vecCenterWorld + vecRight + vecUp,
+				refColor,
+				fThickness);
+			AppendSceneOverlayLine(
+				refLines,
+				vecCenterWorld + vecRight + vecUp,
+				vecCenterWorld - vecRight + vecUp,
+				refColor,
+				fThickness);
+			AppendSceneOverlayLine(
+				refLines,
+				vecCenterWorld - vecRight + vecUp,
+				vecCenterWorld - vecRight - vecUp,
+				refColor,
+				fThickness);
+		}
+
+		void AppendSceneOverlayBillboardCross(
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
+			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+			const SceneOverlayCameraBasis& refCameraBasis,
+			const glm::vec3& vecCenterWorld,
+			float fHalfExtentPixels,
+			const AshEngine::UIColor& refColor,
+			float fThickness)
+		{
+			const float fHalfExtentWorld =
+				fHalfExtentPixels * ComputeSceneOverlayWorldUnitsPerPixel(refContext, refCameraBasis, vecCenterWorld);
+			const glm::vec3 vecRight = refCameraBasis.vecRight * fHalfExtentWorld;
+			const glm::vec3 vecUp = refCameraBasis.vecUp * fHalfExtentWorld;
+			AppendSceneOverlayLine(
+				refLines,
+				vecCenterWorld - vecRight,
+				vecCenterWorld + vecRight,
+				refColor,
+				fThickness);
+			AppendSceneOverlayLine(
+				refLines,
+				vecCenterWorld - vecUp,
+				vecCenterWorld + vecUp,
+				refColor,
+				fThickness);
 		}
 
 		float ComputeSceneViewportGridStep(const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext)
@@ -119,8 +220,8 @@ namespace AshEditor
 			return selectionState;
 		}
 
-		void DrawSceneReferenceGrid(
-			AshEngine::UIContext& refUi,
+		void AppendSceneReferenceGrid(
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
 			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
 			const SceneViewportOverlayStyle& refStyle,
 			float fGridStep)
@@ -138,16 +239,14 @@ namespace AshEditor
 				const float fOffset = static_cast<float>(iLineIndex) * fGridStep;
 				const int32_t iWorldIndex = static_cast<int32_t>(std::llround(fOffset / fGridStep));
 				const bool bMajorLine = (std::abs(iWorldIndex) % static_cast<int32_t>(fMajorGridFactor)) == 0;
-				DrawProjectedWorldLine(
-					refUi,
-					refContext,
+				AppendSceneOverlayLine(
+					refLines,
 					{ fOffset, 0.0f, -fGridExtent },
 					{ fOffset, 0.0f, fGridExtent },
 					refStyle.colorGridMajor,
 					bMajorLine ? 0.95f : 0.8f);
-				DrawProjectedWorldLine(
-					refUi,
-					refContext,
+				AppendSceneOverlayLine(
+					refLines,
 					{ -fGridExtent, 0.0f, fOffset },
 					{ fGridExtent, 0.0f, fOffset },
 					refStyle.colorGridMajor,
@@ -155,40 +254,35 @@ namespace AshEditor
 			}
 		}
 
-		void DrawSceneReferenceOrigin(
-			AshEngine::UIContext& refUi,
-			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+		void AppendSceneReferenceOrigin(
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
 			const SceneViewportOverlayStyle& refStyle,
 			float fGridStep)
 		{
 			const float fOriginAxisLength = std::max(fGridStep * 0.45f, 0.28f);
-			DrawProjectedWorldLine(
-				refUi,
-				refContext,
+			AppendSceneOverlayLine(
+				refLines,
 				{ 0.0f, 0.0f, 0.0f },
 				{ fOriginAxisLength, 0.0f, 0.0f },
 				refStyle.colorOriginXAxis,
 				0.9f);
-			DrawProjectedWorldLine(
-				refUi,
-				refContext,
+			AppendSceneOverlayLine(
+				refLines,
 				{ 0.0f, 0.0f, 0.0f },
 				{ 0.0f, fOriginAxisLength, 0.0f },
 				refStyle.colorOriginYAxis,
 				0.9f);
-			DrawProjectedWorldLine(
-				refUi,
-				refContext,
+			AppendSceneOverlayLine(
+				refLines,
 				{ 0.0f, 0.0f, 0.0f },
 				{ 0.0f, 0.0f, fOriginAxisLength },
 				refStyle.colorOriginZAxis,
 				0.9f);
 		}
 
-		void DrawSelectedCameraViewportHelpers(
+		void AppendSelectedCameraViewportHelpers(
 			const AshEngine::Scene& refScene,
-			AshEngine::UIContext& refUi,
-			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
 			const SceneViewportSelectionState& refSelectionState,
 			const AshEngine::UIRect& rectContent,
 			const SceneViewportOverlayStyle& refStyle)
@@ -234,9 +328,8 @@ namespace AshEditor
 				};
 				for (const int32_t(&refEdge)[2] : kFrustumEdges)
 				{
-					DrawProjectedWorldLine(
-						refUi,
-						refContext,
+					AppendSceneOverlayLine(
+						refLines,
 						arrFrustumCorners[refEdge[0]],
 						arrFrustumCorners[refEdge[1]],
 						refStyle.colorCameraFrustumSelected,
@@ -245,10 +338,11 @@ namespace AshEditor
 			}
 		}
 
-		void DrawSelectedLightViewportHelpers(
+		void AppendSelectedLightViewportHelpers(
 			const AshEngine::Scene& refScene,
-			AshEngine::UIContext& refUi,
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
 			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+			const SceneOverlayCameraBasis& refCameraBasis,
 			const SceneViewportSelectionState& refSelectionState,
 			const SceneViewportOverlayStyle& refStyle,
 			float fGridStep)
@@ -294,21 +388,23 @@ namespace AshEditor
 					break;
 				}
 
-				refUi.draw_window_rect(
-					{ vecScreenPosition.x - fHalfExtent, vecScreenPosition.y - fHalfExtent, fHalfExtent * 2.0f, fHalfExtent * 2.0f },
+				AppendSceneOverlayBillboardBox(
+					refLines,
+					refContext,
+					refCameraBasis,
+					vecPosition,
+					fHalfExtent,
 					lightColor,
-					2.0f,
 					1.8f);
 				if (light.type == AshEngine::LightType::Directional)
 				{
 					const glm::vec3 vecArrowEnd = vecPosition + vecForward * std::max(fGridStep * 0.85f, 0.6f);
-					DrawProjectedWorldLine(refUi, refContext, vecPosition, vecArrowEnd, lightColor, 1.9f);
+					AppendSceneOverlayLine(refLines, vecPosition, vecArrowEnd, lightColor, 1.9f);
 				}
 				else if (light.type == AshEngine::LightType::Spot)
 				{
-					DrawProjectedWorldLine(
-						refUi,
-						refContext,
+					AppendSceneOverlayLine(
+						refLines,
 						vecPosition,
 						vecPosition + vecForward * std::max(fGridStep * 0.75f, 0.5f),
 						lightColor,
@@ -316,14 +412,12 @@ namespace AshEditor
 				}
 				else
 				{
-					refUi.draw_window_line(
-						{ vecScreenPosition.x - fHalfExtent, vecScreenPosition.y },
-						{ vecScreenPosition.x + fHalfExtent, vecScreenPosition.y },
-						lightColor,
-						1.8f);
-					refUi.draw_window_line(
-						{ vecScreenPosition.x, vecScreenPosition.y - fHalfExtent },
-						{ vecScreenPosition.x, vecScreenPosition.y + fHalfExtent },
+					AppendSceneOverlayBillboardCross(
+						refLines,
+						refContext,
+						refCameraBasis,
+						vecPosition,
+						fHalfExtent,
 						lightColor,
 						1.8f);
 				}
@@ -363,11 +457,12 @@ namespace AshEditor
 			return true;
 		}
 
-		void DrawSelectedPivotViewportHelper(
+		void AppendSelectedPivotViewportHelper(
 			const ViewportPanelDeps& refDeps,
 			const AshEngine::Scene& refScene,
-			AshEngine::UIContext& refUi,
+			std::vector<AshEngine::SceneOverlayLine>& refLines,
 			const ViewportPanelSupport::Detail::SceneViewportProjectionContext& refContext,
+			const SceneOverlayCameraBasis& refCameraBasis,
 			const SceneViewportSelectionState& refSelectionState,
 			const SceneViewportOverlayStyle& refStyle)
 		{
@@ -376,7 +471,6 @@ namespace AshEditor
 			{
 				return;
 			}
-
 			glm::vec2 vecPivotScreen{ 0.0f };
 			float fPivotDepth = 0.0f;
 			if (!ViewportPanelSupport::Detail::TryProjectWorldToViewport(refContext, vecPivotPosition, vecPivotScreen, fPivotDepth))
@@ -385,19 +479,20 @@ namespace AshEditor
 			}
 
 			const float fMarkerHalfExtent = 7.0f;
-			refUi.draw_window_rect(
-				{ vecPivotScreen.x - fMarkerHalfExtent, vecPivotScreen.y - fMarkerHalfExtent, fMarkerHalfExtent * 2.0f, fMarkerHalfExtent * 2.0f },
+			AppendSceneOverlayBillboardBox(
+				refLines,
+				refContext,
+				refCameraBasis,
+				vecPivotPosition,
+				fMarkerHalfExtent,
 				refStyle.colorPivot,
-				2.0f,
 				1.3f);
-			refUi.draw_window_line(
-				{ vecPivotScreen.x - fMarkerHalfExtent - 3.0f, vecPivotScreen.y },
-				{ vecPivotScreen.x + fMarkerHalfExtent + 3.0f, vecPivotScreen.y },
-				refStyle.colorPivot,
-				1.6f);
-			refUi.draw_window_line(
-				{ vecPivotScreen.x, vecPivotScreen.y - fMarkerHalfExtent - 3.0f },
-				{ vecPivotScreen.x, vecPivotScreen.y + fMarkerHalfExtent + 3.0f },
+			AppendSceneOverlayBillboardCross(
+				refLines,
+				refContext,
+				refCameraBasis,
+				vecPivotPosition,
+				fMarkerHalfExtent + 3.0f,
 				refStyle.colorPivot,
 				1.6f);
 		}
@@ -415,15 +510,29 @@ namespace AshEditor
 				refPresentation.bShowSelectionPivot;
 		}
 
-		void DrawSceneViewportOverlayHelpers(
+		void UpdateSceneViewportOverlayHelpers(
 			const ViewportPanelDeps& refDeps,
-			AshEngine::UIContext& refUi,
 			const EditorViewportPresentation& refPresentation,
 			const std::string& strViewportId,
 			const AshEngine::UIRect& rectContent)
 		{
 			if (strViewportId != EditorViewportIds::Scene ||
-				!refDeps.pSceneService)
+				!refDeps.pSceneService ||
+				!refDeps.pViewportService)
+			{
+				return;
+			}
+
+			const AshEngine::SceneViewBindingHandle binding =
+				refDeps.pViewportService->GetSceneViewBindingHandle(strViewportId);
+			if (!binding.is_valid())
+			{
+				return;
+			}
+
+			AshEngine::clear_scene_overlay(binding);
+			if (!refPresentation.bShowOverlays ||
+				!HasSceneViewportOverlayHelpersEnabled(refPresentation))
 			{
 				return;
 			}
@@ -434,38 +543,63 @@ namespace AshEditor
 				return;
 			}
 
-			refUi.push_window_clip_rect(rectContent);
 			const SceneViewportOverlayStyle overlayStyle{};
 			const float fGridStep = ComputeSceneViewportGridStep(projectionContext);
 			const AshEngine::Scene& refScene = refDeps.pSceneService->GetActiveScene();
 			const SceneViewportSelectionState selectionState = BuildSceneViewportSelectionState(refDeps);
+			const SceneOverlayCameraBasis cameraBasis = BuildSceneOverlayCameraBasis(projectionContext);
+			std::vector<AshEngine::SceneOverlayLine> vecLines{};
+			vecLines.reserve(64u);
 			if (refPresentation.bShowReferenceGrid)
 			{
-				DrawSceneReferenceGrid(refUi, projectionContext, overlayStyle, fGridStep);
+				AppendSceneReferenceGrid(vecLines, projectionContext, overlayStyle, fGridStep);
 			}
 			if (refPresentation.bShowReferenceOrigin)
 			{
-				DrawSceneReferenceOrigin(refUi, projectionContext, overlayStyle, fGridStep);
+				AppendSceneReferenceOrigin(vecLines, overlayStyle, fGridStep);
 			}
 			if (refPresentation.bShowCameraHelpers)
 			{
-				DrawSelectedCameraViewportHelpers(refScene, refUi, projectionContext, selectionState, rectContent, overlayStyle);
+				AppendSelectedCameraViewportHelpers(refScene, vecLines, selectionState, rectContent, overlayStyle);
 			}
 			if (refPresentation.bShowLightHelpers)
 			{
-				DrawSelectedLightViewportHelpers(refScene, refUi, projectionContext, selectionState, overlayStyle, fGridStep);
+				AppendSelectedLightViewportHelpers(
+					refScene,
+					vecLines,
+					projectionContext,
+					cameraBasis,
+					selectionState,
+					overlayStyle,
+					fGridStep);
 			}
 			if (refPresentation.bShowSelectionPivot)
 			{
-				DrawSelectedPivotViewportHelper(refDeps, refScene, refUi, projectionContext, selectionState, overlayStyle);
+				AppendSelectedPivotViewportHelper(
+					refDeps,
+					refScene,
+					vecLines,
+					projectionContext,
+					cameraBasis,
+					selectionState,
+					overlayStyle);
 			}
-			refUi.pop_window_clip_rect();
+
+			if (!vecLines.empty())
+			{
+				const AshEngine::SceneOverlayBatchDesc overlayDesc{
+					vecLines.data(),
+					static_cast<uint32_t>(vecLines.size())
+				};
+				AshEngine::submit_scene_overlay(binding, overlayDesc);
+			}
 		}
 
 		void DrawSceneGizmoOverlay(
 			const ViewportPanelDeps& refDeps,
 			AshEngine::UIContext& refUi,
 			const EditorViewportPresentation* pPresentation,
+			const std::string& strViewportId,
 			const AshEngine::UIRect& rectContent)
 		{
 			if (!refDeps.pGizmoService ||
@@ -484,6 +618,10 @@ namespace AshEditor
 				return;
 			}
 
+			const AshEngine::SceneViewBindingHandle binding =
+				refDeps.pViewportService
+				? refDeps.pViewportService->GetSceneViewBindingHandle(strViewportId)
+				: AshEngine::SceneViewBindingHandle{};
 			refDeps.pGizmoService->DrawSceneViewportGizmo(
 				refUi,
 				*refDeps.pSceneService,
@@ -491,6 +629,7 @@ namespace AshEditor
 				*refDeps.pSelectionService,
 				*refDeps.pGizmoState,
 				!pPresentation || pPresentation->bShowSelectionHelpers,
+				binding,
 				viewportContext);
 		}
 	}

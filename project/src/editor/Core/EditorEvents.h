@@ -7,6 +7,12 @@
 #include <string>
 #include <vector>
 
+namespace AshEngine
+{
+	enum class SceneChangeKind : uint8_t;
+	enum class SceneComponentType : uint8_t;
+}
+
 namespace AshEditor
 {
 	// Fired after the editor selection changes.
@@ -91,8 +97,36 @@ namespace AshEditor
 		std::string strSource{ "Editor" };
 	};
 
+	enum class EditorLogSeverity : uint8_t
+	{
+		Trace = 0,
+		Info,
+		Warning,
+		Error
+	};
+
+	struct EditorLogEvent
+	{
+		// Structured log event forwarded to editor surfaces such as Console.
+		// Emitted on the editor thread after background/runtime log sinks are drained.
+		EditorLogSeverity eSeverity = EditorLogSeverity::Info;
+		std::string strSource{ "Editor" };
+		std::string strMessage{};
+	};
+
 	struct EditorActiveSceneChangedEvent
 	{
+		std::string strSceneName{};
+		std::string strScenePath{};
+	};
+
+	struct EditorSceneChangedEvent
+	{
+		AshEngine::SceneChangeKind eKind;
+		AshEngine::SceneComponentType eComponentType;
+		uint64_t uEntityId = 0;
+		uint64_t uChangeVersion = 0;
+		bool bDirty = false;
 		std::string strSceneName{};
 		std::string strScenePath{};
 	};

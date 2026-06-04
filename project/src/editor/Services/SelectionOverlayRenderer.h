@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Function/Render/ScenePresentationHandles.h"
 #include "Services/EditorGizmoTypesInternal.h"
 
 namespace AshEditor
@@ -24,6 +25,7 @@ namespace AshEditor
 			const SceneService& refSceneService,
 			const AssetDatabaseService& refAssetDatabaseService,
 			const SelectionService& refSelectionService,
+			AshEngine::SceneViewBindingHandle sceneViewBinding,
 			const EditorGizmoInternal::ViewportContext& refViewportContext);
 	};
 }

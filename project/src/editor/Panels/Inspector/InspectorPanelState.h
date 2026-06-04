@@ -48,14 +48,28 @@ namespace AshEditor
 			std::optional<AshEngine::MeshComponent> optCurrentValue{};
 		};
 
+		struct EnvironmentDraft
+		{
+			SceneEntityId uEntityId = 0;
+			std::optional<AshEngine::EnvironmentComponent> optOriginalValue{};
+			std::optional<AshEngine::EnvironmentComponent> optCurrentValue{};
+		};
+
 		IdentityDraft draftIdentity{};
 		TransformDraft draftTransform{};
 		CameraDraft draftCamera{};
 		LightDraft draftLight{};
 		MeshDraft draftMesh{};
+		EnvironmentDraft draftEnvironment{};
 
 		std::vector<std::string> vecRecentMeshPaths{};
+		std::vector<std::string> vecRecentMaterialPaths{};
+		std::vector<std::string> vecRecentEnvironmentIblPaths{};
+		std::vector<std::string> vecRecentEnvironmentTexturePaths{};
 		std::string strAssetPickerSearch{};
+		std::string strMaterialAssetPickerSearch{};
+		std::string strEnvironmentIblAssetPickerSearch{};
+		std::string strEnvironmentTextureAssetPickerSearch{};
 
 		void PushRecentMeshPath(const std::string& strPath)
 		{

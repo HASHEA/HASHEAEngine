@@ -114,6 +114,8 @@ namespace AshEditor
 		const EditorViewportPresentation* GetPresentation(const std::string& strViewportId) const;
 		EditorViewportRenderState* GetRenderState(const std::string& strViewportId);
 		const EditorViewportRenderState* GetRenderState(const std::string& strViewportId) const;
+		AshEngine::SceneViewBindingHandle GetSceneViewBindingHandle(const std::string& strViewportId) const;
+		bool TryGetSceneViewStats(const std::string& strViewportId, AshEngine::SceneViewStats& outStats) const;
 
 		// Updates the viewport requested output size (in pixels). Use 0 to indicate "no valid size this frame".
 		// The request is debounced so panel splitter drags do not rebuild offscreen outputs every frame.

@@ -207,10 +207,16 @@
 - 保持 `ViewportPanel` 主文件只做协调；新增功能优先放 `ViewportPanelToolbar` / `ViewportPanelCanvas` / `ViewportPanelInteraction`
 - 继续把 RT 构建驱动从 app/editor 壳层向 viewport service 或独立 renderer 层收口
 - 将选中反馈从“强包围盒”继续往更轻量的编辑器表达收敛
-- 将 scene / game 的运行与编辑语义进一步拆开
-- 继续收敛 viewport 顶部调试信息，减少工作区噪音
+- 已补一轮 scene / game 语义减法：
+  - `Game` 视口不再因为窗口聚焦自动抢占 primary viewport
+  - `Game` 视口不再默认绘制 axis indicator，减少 editor 噪音
+  - 顶部 overlay 已压缩成更少的状态行，优先展示结果信息而不是调试噪音
+- 后续继续补：
+  - scene / game 的运行与编辑语义进一步拆开
+  - 更轻量的选中反馈和 hover 反馈
+  - overlay 分组开关与状态持久化的进一步收敛
 - 后续迁移 overlay 时，优先等 Engine 补 per-viewport / depth / xray 语义，不要把临时 2D overlay 继续扩成长期方案
 
 ## 14. 最近更新时间
 
-- 2026-05-18
+- 2026-05-29

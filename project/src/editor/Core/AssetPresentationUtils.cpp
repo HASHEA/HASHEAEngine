@@ -86,6 +86,24 @@ namespace AshEditor
 		return FormatLocalTime(fileTime);
 	}
 
+	bool IsSceneInstantiableAssetType(const AshEngine::AssetType type)
+	{
+		return
+			type == AshEngine::AssetType::Mesh ||
+			type == AshEngine::AssetType::Model ||
+			type == AshEngine::AssetType::Prefab;
+	}
+
+	std::string BuildSceneAssetEntityName(const AshEngine::AssetInfo& refAsset)
+	{
+		std::string strName = refAsset.relative_path.stem().string();
+		if (strName.empty())
+		{
+			strName = refAsset.name;
+		}
+		return strName.empty() ? "Scene Asset" : strName;
+	}
+
 	bool SupportsTextAssetPreview(const AshEngine::AssetInfo& refAsset)
 	{
 		switch (refAsset.type)

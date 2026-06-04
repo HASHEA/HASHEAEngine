@@ -55,7 +55,11 @@ namespace AshEditor
 
 			DragDropTransferData dragData{};
 			dragData.strPayloadType = EditorDragPayloadTypes::Asset;
-			dragData.vecEntityIds = { refAsset.id };
+			dragData.vecEntityIds =
+				refViewContext.refHost.IsAssetSelected(refAsset.id) &&
+				refViewContext.refState.vecSelectedAssetIds.size() > 1u
+				? refViewContext.refState.vecSelectedAssetIds
+				: std::vector<uint64_t>{ refAsset.id };
 			dragData.extraData = refAsset.relative_path.generic_string();
 			const DragDropTransferId uTransferId =
 				refViewContext.refDeps.pDragDropTransferService->Register(std::move(dragData));
@@ -67,13 +71,25 @@ namespace AshEditor
 		void HandleAssetItemInteraction(
 			const AssetBrowserViewContext& refViewContext,
 			AshEngine::UIContext& refUi,
+			const AssetBrowserFrameData& refFrameData,
 			const AshEngine::AssetInfo& refAsset,
 			bool bPrimaryActivated,
 			bool bDoubleClicked)
 		{
 			if (bPrimaryActivated)
 			{
-				refViewContext.refHost.SelectAsset(refAsset);
+				if (refUi.is_key_modifier_down(AshEngine::UIModifierFlagBits::Shift))
+				{
+					refViewContext.refHost.SelectAssetRange(refAsset, refFrameData);
+				}
+				else if (refUi.is_key_modifier_down(AshEngine::UIModifierFlagBits::Ctrl))
+				{
+					refViewContext.refHost.ToggleAssetSelection(refAsset);
+				}
+				else
+				{
+					refViewContext.refHost.SelectAsset(refAsset);
+				}
 			}
 			if (bDoubleClicked)
 			{
@@ -81,8 +97,37 @@ namespace AshEditor
 			}
 			if (refUi.is_item_clicked(AshEngine::UIMouseButton::Right))
 			{
-				refViewContext.refHost.SelectAsset(refAsset);
+				if (refViewContext.refHost.IsAssetSelected(refAsset.id))
+				{
+					refViewContext.refHost.FocusAssetSelection(refAsset);
+				}
+				else
+				{
+					refViewContext.refHost.SelectAsset(refAsset);
+				}
 			}
+		}
+
+		void HandleAssetDirectoryDropTarget(
+			const AssetBrowserViewContext& refViewContext,
+			AshEngine::UIContext& refUi,
+			const std::filesystem::path& refTargetDirectoryPath)
+		{
+			if (!refUi.begin_drag_drop_target())
+			{
+				return;
+			}
+
+			const AshEngine::UIDragDropPayload payload =
+				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
+			if (payload.is_valid() &&
+				payload.data_size == static_cast<int>(sizeof(DragDropTransferId)))
+			{
+				const DragDropTransferId uTransferId = *static_cast<const DragDropTransferId*>(payload.data);
+				refViewContext.refHost.HandleAssetDropToDirectory(refTargetDirectoryPath, uTransferId);
+			}
+
+			refUi.end_drag_drop_target();
 		}
 
 		void DrawAssetItemTooltip(
@@ -153,8 +198,7 @@ namespace AshEditor
 
 		void DrawAssetListView(
 			const AssetBrowserViewContext& refViewContext,
-			const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
-			const AshEngine::AssetInfo* pSelectedAsset,
+			const AssetBrowserFrameData& refFrameData,
 			const AssetBrowserContextMenus& refContextMenus)
 		{
 			AshEngine::UIContext& refUi = *refViewContext.refFrameContext.pUiContext;
@@ -175,10 +219,10 @@ namespace AshEditor
 			refUi.table_setup_column("Type", AshEngine::UITableColumnFlagBits::WidthFixed, 110.0f);
 			refUi.table_setup_column("State", AshEngine::UITableColumnFlagBits::WidthFixed, 90.0f);
 			refUi.table_headers_row();
-			for (const AssetBrowserVisibleItem& refVisibleItem : vecVisibleItems)
+			for (const AssetBrowserVisibleItem& refVisibleItem : refFrameData.vecVisibleItems)
 			{
 				const AshEngine::AssetInfo& refAsset = *refVisibleItem.pAsset;
-				const bool bSelected = pSelectedAsset && pSelectedAsset->id == refAsset.id;
+				const bool bSelected = refViewContext.refHost.IsAssetSelected(refAsset.id);
 				AshEngine::UITextureHandle iconHandle = nullptr;
 				if (refViewContext.refDeps.pIconService)
 				{
@@ -204,7 +248,11 @@ namespace AshEditor
 				AssetBrowserSupport::DrawListItemIcon(refUi, iconHandle);
 				AssetBrowserSupport::DrawListItemLabel(refUi, iconHandle, refVisibleItem.strDisplayLabel);
 				DrawAssetItemTooltip(refViewContext, refAsset, refVisibleItem.strDisplayLabel);
-				HandleAssetItemInteraction(refViewContext, refUi, refAsset, bPrimaryActivated, bDoubleClicked);
+				HandleAssetItemInteraction(refViewContext, refUi, refFrameData, refAsset, bPrimaryActivated, bDoubleClicked);
+				if (refAsset.is_directory)
+				{
+					HandleAssetDirectoryDropTarget(refViewContext, refUi, refAsset.relative_path);
+				}
 				refContextMenus.DrawAssetItemMenu(refViewContext, refAsset);
 				refUi.pop_id();
 
@@ -221,8 +269,7 @@ namespace AshEditor
 
 		void DrawAssetIconView(
 			const AssetBrowserViewContext& refViewContext,
-			const std::vector<AssetBrowserVisibleItem>& vecVisibleItems,
-			const AshEngine::AssetInfo* pSelectedAsset,
+			const AssetBrowserFrameData& refFrameData,
 			const AssetBrowserContextMenus& refContextMenus)
 		{
 			AshEngine::UIContext& refUi = *refViewContext.refFrameContext.pUiContext;
@@ -237,11 +284,11 @@ namespace AshEditor
 			const int32_t iColumnCount =
 				std::max(1, static_cast<int32_t>((fAvailableWidth + kAssetBrowserGridSpacing) / fCellSpan));
 			int32_t iColumnIndex = 0;
-			for (size_t uAssetIndex = 0; uAssetIndex < vecVisibleItems.size(); ++uAssetIndex)
+			for (size_t uAssetIndex = 0; uAssetIndex < refFrameData.vecVisibleItems.size(); ++uAssetIndex)
 			{
-				const AssetBrowserVisibleItem& refVisibleItem = vecVisibleItems[uAssetIndex];
+				const AssetBrowserVisibleItem& refVisibleItem = refFrameData.vecVisibleItems[uAssetIndex];
 				const AshEngine::AssetInfo& refAsset = *refVisibleItem.pAsset;
-				const bool bSelected = pSelectedAsset && pSelectedAsset->id == refAsset.id;
+				const bool bSelected = refViewContext.refHost.IsAssetSelected(refAsset.id);
 				AshEngine::UITextureHandle iconHandle = nullptr;
 				if (refViewContext.refDeps.pIconService)
 				{
@@ -287,13 +334,17 @@ namespace AshEditor
 				refUi.pop_window_clip_rect();
 
 				DrawAssetItemTooltip(refViewContext, refAsset, refVisibleItem.strDisplayLabel);
-				HandleAssetItemInteraction(refViewContext, refUi, refAsset, bPrimaryActivated, bDoubleClicked);
+				HandleAssetItemInteraction(refViewContext, refUi, refFrameData, refAsset, bPrimaryActivated, bDoubleClicked);
+				if (refAsset.is_directory)
+				{
+					HandleAssetDirectoryDropTarget(refViewContext, refUi, refAsset.relative_path);
+				}
 				refContextMenus.DrawAssetItemMenu(refViewContext, refAsset);
 				refUi.pop_id();
 
 				++iColumnIndex;
 				const bool bEndOfRow = iColumnIndex >= iColumnCount;
-				const bool bHasMoreItems = uAssetIndex + 1 < vecVisibleItems.size();
+				const bool bHasMoreItems = uAssetIndex + 1 < refFrameData.vecVisibleItems.size();
 				if (!bEndOfRow && bHasMoreItems)
 				{
 					refUi.same_line(0.0f, kAssetBrowserGridSpacing);
@@ -381,16 +432,14 @@ namespace AshEditor
 			{
 				DrawAssetIconView(
 					refViewContext,
-					refFrameData.vecVisibleItems,
-					pSelectedAsset,
+					refFrameData,
 					refContextMenus);
 			}
 			else
 			{
 				DrawAssetListView(
 					refViewContext,
-					refFrameData.vecVisibleItems,
-					pSelectedAsset,
+					refFrameData,
 					refContextMenus);
 			}
 		}

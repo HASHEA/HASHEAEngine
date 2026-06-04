@@ -3,6 +3,7 @@
 #include "Core/EditorFrameContext.h"
 #include "Core/PanelDeps/ViewportPanelDeps.h"
 #include "Function/Gui/UICommon.h"
+#include "Panels/ViewportPanelState.h"
 
 #include <string>
 
@@ -15,15 +16,6 @@ namespace AshEditor
 {
 	struct EditorViewportInstance;
 
-	struct ViewportPanelSceneBoxSelectionState
-	{
-		bool bTracking = false;
-		bool bDragging = false;
-		AshEngine::UIVec2 vecStartScreen{};
-		AshEngine::UIVec2 vecCurrentScreen{};
-		AshEngine::UIModifierFlags uStartModifiers = AshEngine::UIModifierFlagBits::None;
-	};
-
 	namespace ViewportPanelInteraction
 	{
 		void HandleViewportInput(
@@ -33,11 +25,11 @@ namespace AshEditor
 			const EditorViewportInstance& refViewport,
 			const AshEngine::UIRect& rectContent,
 			bool bContentHovered,
-			ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState);
+			ViewportPanelSceneSelectionState& refSceneSelectionState);
 		void DrawSceneBoxSelectionOverlay(
 			AshEngine::UIContext& refUi,
 			const AshEngine::UIRect& rectContent,
-			const ViewportPanelSceneBoxSelectionState& refSceneBoxSelectionState);
+			const ViewportPanelSceneSelectionState& refSceneSelectionState);
 		void HandleDragDropTarget(
 			AshEngine::UIContext& refUi,
 			const ViewportPanelDeps& refDeps,

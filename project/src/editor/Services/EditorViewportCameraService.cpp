@@ -4,14 +4,11 @@
 #include "Services/AssetDatabaseService.h"
 #include "Services/SceneService.h"
 
-#include "Base/input/Input.h"
 #include "Function/Scene/SceneQuery.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
-
-#include <GLFW/glfw3.h>
 
 #include <algorithm>
 #include <cmath>
@@ -101,9 +98,9 @@ namespace AshEditor
 			return { std::clamp(fPitch, -89.0f, 89.0f), fYaw, 0.0f };
 		}
 
-		bool IsAltDown(const AshEngine::InputState& refInput)
+		bool IsAltDown(const EditorViewportInputState& refInput)
 		{
-			return refInput.is_key_down(GLFW_KEY_LEFT_ALT) || refInput.is_key_down(GLFW_KEY_RIGHT_ALT);
+			return refInput.IsModifierDown(AshEngine::UIModifierFlagBits::Alt);
 		}
 
 		bool TryComputeSceneFocusBounds(
@@ -194,7 +191,7 @@ namespace AshEditor
 	void EditorViewportCameraService::UpdateViewportInput(
 		const SceneService& refSceneService,
 		const AssetDatabaseService& refAssetDatabaseService,
-		const AshEngine::InputState& refInput,
+		const EditorViewportInputState& refInput,
 		const double /*dTimeSeconds*/,
 		const EditorViewportCameraInputContext& refContext)
 	{
@@ -219,10 +216,7 @@ namespace AshEditor
 			return;
 		}
 
-		const AshEngine::UIVec2 vecMousePos{
-			static_cast<float>(refInput.get_mouse_x()),
-			static_cast<float>(refInput.get_mouse_y())
-		};
+		const AshEngine::UIVec2 vecMousePos = refInput.vecMouseScreenPosition;
 		const bool bMouseInContent = IsPointInRect(refContext.rectContent, vecMousePos);
 		const bool bViewportInteractive =
 			refContext.bViewportFocused ||
@@ -236,36 +230,36 @@ namespace AshEditor
 			return;
 		}
 
-		if (bMouseInContent && std::abs(refInput.get_scroll_y()) > 0.0)
+		if (bMouseInContent && std::abs(refInput.vecMouseWheelDelta.y) > 0.0f)
 		{
 			const float fSpeedScale = std::max(0.2f, refState.fMoveSpeed / 8.0f);
 			const float fDistanceDelta =
 				std::max(refState.fOrbitDistance * kScrollDollySpeed, kMinOrbitDistance) *
-				static_cast<float>(refInput.get_scroll_y()) *
+				refInput.vecMouseWheelDelta.y *
 				fSpeedScale;
 			refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
 			UpdatePositionFromOrbit(refState);
 		}
 
 		const bool bAltDown = IsAltDown(refInput);
-		const bool bMiddleMouseDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_MIDDLE);
-		const bool bRightMouseDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_RIGHT);
-		const bool bLeftMouseDown = refInput.is_mouse_button_down(GLFW_MOUSE_BUTTON_LEFT);
+		const bool bMiddleMouseDown = refInput.IsMouseDown(AshEngine::UIMouseButton::Middle);
+		const bool bRightMouseDown = refInput.IsMouseDown(AshEngine::UIMouseButton::Right);
+		const bool bLeftMouseDown = refInput.IsMouseDown(AshEngine::UIMouseButton::Left);
 
-		if (refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_MIDDLE) && bMouseInContent)
+		if (refInput.WasMousePressed(AshEngine::UIMouseButton::Middle) && bMouseInContent)
 		{
 			refState.eDragMode = CameraDragMode::Pan;
 			refState.bHasLastMousePosition = false;
 		}
 		else if (bAltDown &&
-			refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_LEFT) &&
+			refInput.WasMousePressed(AshEngine::UIMouseButton::Left) &&
 			bMouseInContent)
 		{
 			refState.eDragMode = CameraDragMode::Orbit;
 			refState.bHasLastMousePosition = false;
 		}
 		else if (bAltDown &&
-			refInput.was_mouse_button_pressed(GLFW_MOUSE_BUTTON_RIGHT) &&
+			refInput.WasMousePressed(AshEngine::UIMouseButton::Right) &&
 			bMouseInContent)
 		{
 			refState.eDragMode = CameraDragMode::Dolly;
@@ -299,7 +293,7 @@ namespace AshEditor
 			break;
 		}
 
-		if (refInput.was_key_pressed(GLFW_KEY_F) && (bMouseInContent || refContext.bViewportFocused))
+		if (refInput.WasKeyPressed(AshEngine::UIKey::F) && (bMouseInContent || refContext.bViewportFocused))
 		{
 			FocusEntity(
 				refSceneService,
@@ -313,16 +307,16 @@ namespace AshEditor
 		{
 			if (!refState.bHasLastMousePosition)
 			{
-				refState.dLastMouseX = refInput.get_mouse_x();
-				refState.dLastMouseY = refInput.get_mouse_y();
+				refState.dLastMouseX = refInput.vecMouseScreenPosition.x;
+				refState.dLastMouseY = refInput.vecMouseScreenPosition.y;
 				refState.bHasLastMousePosition = true;
 			}
 			else
 			{
-				const double dMouseDeltaX = refInput.get_mouse_x() - refState.dLastMouseX;
-				const double dMouseDeltaY = refInput.get_mouse_y() - refState.dLastMouseY;
-				refState.dLastMouseX = refInput.get_mouse_x();
-				refState.dLastMouseY = refInput.get_mouse_y();
+				const double dMouseDeltaX = refInput.vecMouseScreenPosition.x - refState.dLastMouseX;
+				const double dMouseDeltaY = refInput.vecMouseScreenPosition.y - refState.dLastMouseY;
+				refState.dLastMouseX = refInput.vecMouseScreenPosition.x;
+				refState.dLastMouseY = refInput.vecMouseScreenPosition.y;
 
 				switch (refState.eDragMode)
 				{

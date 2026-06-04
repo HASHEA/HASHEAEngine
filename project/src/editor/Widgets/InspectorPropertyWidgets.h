@@ -4,7 +4,6 @@
 
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <glm/vec3.hpp>
@@ -20,9 +19,9 @@ namespace AshEditor
 	{
 		const char* pTitle = nullptr;
 		const char* pDescription = nullptr;
-		std::string_view svDefaultValue{};
-		std::string_view svValidRange{};
-		std::string_view svBehavior{};
+		std::string strDefaultValue{};
+		std::string strValidRange{};
+		std::string strBehavior{};
 	};
 
 	// Shared Inspector field helpers. They only draw controls/tooltips; business validation and commit stay above.

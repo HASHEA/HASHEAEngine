@@ -137,6 +137,27 @@ namespace AshEditor
 		std::optional<AshEngine::MeshComponent> _optAfterValue{};
 	};
 
+	class SetEnvironmentComponentCommand final : public EditorCommand
+	{
+	public:
+		SetEnvironmentComponentCommand(
+			SceneEntityId uEntityId,
+			std::optional<AshEngine::EnvironmentComponent> optBeforeValue,
+			std::optional<AshEngine::EnvironmentComponent> optAfterValue);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		bool TryMerge(const EditorCommand& refSubsequentCommand) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		SceneEntityId _uEntityId = 0;
+		std::optional<AshEngine::EnvironmentComponent> _optBeforeValue{};
+		std::optional<AshEngine::EnvironmentComponent> _optAfterValue{};
+	};
+
 	class CreateEntityCommand final : public EditorCommand
 	{
 	public:
@@ -237,6 +258,29 @@ namespace AshEditor
 		bool _bHasCapturedPreviousParent = false;
 	};
 
+	class ReparentEntitiesCommand final : public EditorCommand
+	{
+	public:
+		ReparentEntitiesCommand(
+			std::vector<SceneEntityId> vecEntityIds,
+			std::vector<SceneEntityId> vecNewParentIds,
+			std::vector<uint32_t> vecNewSiblingIndices);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		std::vector<SceneEntityId> _vecEntityIds{};
+		std::vector<SceneEntityId> _vecNewParentIds{};
+		std::vector<uint32_t> _vecNewSiblingIndices{};
+		std::vector<SceneEntityId> _vecPreviousParentIds{};
+		std::vector<uint32_t> _vecPreviousSiblingIndices{};
+		bool _bHasCapturedPreviousParents = false;
+	};
+
 	class DuplicateEntitiesCommand final : public EditorCommand
 	{
 	public:
@@ -291,5 +335,22 @@ namespace AshEditor
 		SceneEntityId _uEntityId = 0;
 		SceneEntityId _uParentId = 0;
 		std::optional<SceneEntitySnapshot> _optSnapshot{};
+	};
+
+	class DeleteEntitiesCommand final : public EditorCommand
+	{
+	public:
+		explicit DeleteEntitiesCommand(std::vector<SceneEntityId> vecEntityIds);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		std::vector<SceneEntityId> _vecEntityIds{};
+		std::vector<SceneEntityId> _vecParentIds{};
+		std::vector<SceneEntitySnapshot> _vecSnapshots{};
 	};
 }

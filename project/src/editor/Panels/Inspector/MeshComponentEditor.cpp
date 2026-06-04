@@ -1,25 +1,53 @@
 #include "Panels/Inspector/MeshComponentEditor.h"
 
-#include "Base/hlog.h"
-#include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
 #include "Panels/Inspector/IInspectorComponentHost.h"
 #include "Panels/Inspector/InspectorComponentEditorSupport.h"
+#include "Panels/Inspector/InspectorComponentMetadata.h"
+#include "Panels/Inspector/MeshMaterialOverrideEditor.h"
 #include "Services/AssetDatabaseService.h"
-#include "Services/DragDropTransferService.h"
 #include "Widgets/EditorThemeColors.h"
 #include "Widgets/InspectorPropertyWidgets.h"
 
-#include <algorithm>
-#include <any>
-#include <cstring>
-#include <limits>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 namespace AshEditor
 {
+	AshEngine::SceneComponentType MeshComponentEditor::GetComponentType() const
+	{
+		return AshEngine::SceneComponentType::Mesh;
+	}
+
+	const char* MeshComponentEditor::GetDisplayName() const
+	{
+		return "Mesh";
+	}
+
+	bool MeshComponentEditor::CanAdd(IInspectorComponentHost& refHost, const AshEngine::Entity& entity) const
+	{
+		const InspectorPanelState& refState = refHost.AccessInspectorState();
+		const bool bHasPendingMeshDraft =
+			refState.draftMesh.uEntityId == entity.get_id() &&
+			refState.draftMesh.optCurrentValue.has_value();
+		return !bHasPendingMeshDraft && AshEngine::can_add_scene_component(entity, GetComponentType());
+	}
+
+	bool MeshComponentEditor::AddDefault(
+		IInspectorComponentHost& refHost,
+		AshEngine::UIContext& refUi,
+		AshEngine::Entity entity)
+	{
+		refHost.ResetMeshDraftToLive(entity);
+		InspectorPanelState& refState = refHost.AccessInspectorState();
+		refState.draftMesh.optCurrentValue = AshEngine::MeshComponent{};
+		refState.strAssetPickerSearch.clear();
+		refUi.open_popup("AssetPickerPopup");
+		return true;
+	}
+
 	bool MeshComponentEditor::ShouldDraw(IInspectorComponentHost& refHost, const AshEngine::Entity& entity)
 	{
 		refHost.SyncMeshDraft(entity);
@@ -55,121 +83,7 @@ namespace AshEditor
 
 		AshEngine::MeshComponent& mesh = *refState.draftMesh.optCurrentValue;
 		bool bCommitRequested = false;
-		bool bRestoreRequested = false;
 		bCommitRequested = refHost.DrawMeshAssetPathEditor(refUi, mesh) || bCommitRequested;
-
-		refUi.push_style_color(AshEngine::UIStyleColorKind::Button, GetEditorDropZoneFillColor(refUi));
-		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonHovered, GetEditorDropZoneHoverColor(refUi));
-		refUi.push_style_color(AshEngine::UIStyleColorKind::ButtonActive, GetEditorDropZoneActiveColor(refUi));
-		if (refUi.button(
-			mesh.asset_path.empty() ? "Drop mesh/model asset here" : "Drop mesh/model asset here to replace",
-			{ refUi.get_content_region_avail().x, 24.0f }))
-		{
-			refUi.open_popup("AssetPickerPopup");
-		}
-		DrawInspectorFieldTooltip(
-			refUi,
-			{
-				"Mesh Drop Zone",
-				"Drop a mesh or model asset here to replace the current renderer source.",
-				"None",
-				"Mesh / Model assets",
-				"Accepts Asset Browser drag-drop payloads."
-			});
-		refUi.pop_style_color(3);
-		const AshEngine::UIRect rectDropHint = refUi.get_item_rect();
-		refUi.draw_window_rect(rectDropHint, GetEditorDropZoneBorderColor(refUi), 4.0f, 1.0f);
-		if (refDeps.pDragDropTransferService && refUi.begin_drag_drop_target())
-		{
-			const AshEngine::UIDragDropPayload payload =
-				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
-			if (payload.is_delivery && payload.data && payload.data_size == sizeof(DragDropTransferId))
-			{
-				DragDropTransferId uTransferId = 0;
-				std::memcpy(&uTransferId, payload.data, sizeof(DragDropTransferId));
-				const DragDropTransferData* pData = refDeps.pDragDropTransferService->Resolve(uTransferId);
-				if (pData && pData->extraData.has_value())
-				{
-					try
-					{
-						mesh.asset_path = std::any_cast<std::string>(pData->extraData);
-						refState.strAssetPickerSearch.clear();
-						bCommitRequested = true;
-					}
-					catch (const std::bad_any_cast&)
-					{
-						HLogWarning("InspectorPanel rejected mesh drag-drop payload because the asset path type was invalid.");
-					}
-				}
-			}
-			refUi.end_drag_drop_target();
-		}
-
-		if (refUi.begin_popup("AssetPickerPopup"))
-		{
-			refUi.text_unformatted("Select Mesh Asset");
-			refUi.separator();
-			refUi.set_next_item_width(280.0f);
-			refUi.input_text("##PickerSearch", refState.strAssetPickerSearch);
-
-			if (!refState.vecRecentMeshPaths.empty())
-			{
-				refUi.text_colored(GetEditorMutedTextColor(refUi), "Recent");
-				for (const std::string& strRecent : refState.vecRecentMeshPaths)
-				{
-					if (refUi.selectable(strRecent.c_str()))
-					{
-						mesh.asset_path = strRecent;
-						refState.PushRecentMeshPath(strRecent);
-						bCommitRequested = true;
-						refUi.close_current_popup();
-					}
-				}
-				refUi.separator();
-			}
-
-			refUi.text_colored(GetEditorMutedTextColor(refUi), "Assets");
-			if (refDeps.pAssetDatabaseService)
-			{
-				if (refUi.begin_child("AssetPickerList", { 300.0f, 250.0f }))
-				{
-					const std::vector<AshEngine::AssetInfo>& vecAssets = refDeps.pAssetDatabaseService->GetItems();
-					for (const AshEngine::AssetInfo& refAsset : vecAssets)
-					{
-						if (refAsset.type != AshEngine::AssetType::Mesh &&
-							refAsset.type != AshEngine::AssetType::Model)
-						{
-							continue;
-						}
-
-						const std::string strRelPath = refAsset.relative_path.generic_string();
-						if (!refState.strAssetPickerSearch.empty())
-						{
-							if (strRelPath.find(refState.strAssetPickerSearch) == std::string::npos &&
-								refAsset.name.find(refState.strAssetPickerSearch) == std::string::npos)
-							{
-								continue;
-							}
-						}
-						if (refUi.selectable(strRelPath.c_str()))
-						{
-							mesh.asset_path = strRelPath;
-							refState.PushRecentMeshPath(strRelPath);
-							refState.strAssetPickerSearch.clear();
-							bCommitRequested = true;
-							refUi.close_current_popup();
-						}
-					}
-				}
-				refUi.end_child();
-			}
-			else
-			{
-				refUi.text_colored(GetEditorWarningTextColor(refUi), "Asset database not available.");
-			}
-
-			refUi.end_popup();
-		}
 
 		std::string strMeshAssetValidationMessage{};
 		const bool bMeshAssetBlocksCommit = TryGetMeshAssetValidationMessage(
@@ -181,116 +95,117 @@ namespace AshEditor
 			refUi.text_colored(GetEditorWarningTextColor(refUi), "%s", strMeshAssetValidationMessage.c_str());
 		}
 
-		bCommitRequested = DrawInspectorCheckboxField(
+		bCommitRequested = DrawInspectorSceneBoolField(
 			refUi,
-			"Visible",
-			mesh.visible,
-			{
+			MakeInspectorSceneFieldDesc(
+				AshEngine::SceneComponentType::Mesh,
+				"visible",
 				"Visible",
 				"Toggles whether this mesh renderer should be submitted for scene rendering.",
 				"Enabled",
 				"On / Off",
-				"Applies immediately."
-			}) || bCommitRequested;
-		int iMeshIndex = static_cast<int>(mesh.mesh_index);
-		if (DrawInspectorInputIntField(
+				"Applies immediately."),
+			"Visible",
+			mesh.visible) || bCommitRequested;
+		if (DrawInspectorSceneUIntField(
 			refUi,
-			"Mesh Index",
-			iMeshIndex,
-			{
+			MakeInspectorSceneFieldDesc(
+				AshEngine::SceneComponentType::Mesh,
+				"mesh_index",
 				"Mesh Index",
 				"Zero-based sub-mesh index used when the asset contains multiple mesh entries.",
 				"0",
 				"[0, +inf)",
-				"Negative values are clamped back to 0 before commit."
-			}))
+				"Negative values are clamped back to 0 before commit."),
+			"Mesh Index",
+			mesh.mesh_index))
 		{
-			mesh.mesh_index = static_cast<uint32_t>(std::max(0, iMeshIndex));
 			bCommitRequested = true;
 		}
-		int iMobility = static_cast<int>(mesh.mobility);
+		int32_t iMobility = static_cast<int32_t>(mesh.mobility);
 		const std::vector<const char*> vecMobilityLabels{ "Static", "Stationary", "Movable" };
 		if (DrawInspectorComboField(
 			refUi,
 			"Mobility",
 			iMobility,
 			vecMobilityLabels,
-			{
+			MakeInspectorSceneFieldSpec(MakeInspectorSceneFieldDesc(
+				AshEngine::SceneComponentType::Mesh,
+				"mobility",
 				"Mobility",
 				"Declares whether the renderer is expected to stay fixed, update occasionally, or move freely.",
 				"Static",
 				"Static / Stationary / Movable",
-				"Used by scene systems to reason about update frequency and lighting behavior."
-			}))
+				"Used by scene systems to reason about update frequency and lighting behavior."))))
 		{
 			mesh.mobility = static_cast<AshEngine::SceneMobility>(iMobility);
 			bCommitRequested = true;
 		}
-		int iLayerMask = static_cast<int>(std::min<uint32_t>(
-			mesh.layer_mask,
-			static_cast<uint32_t>(std::numeric_limits<int32_t>::max())));
-		if (DrawInspectorInputIntField(
+		if (DrawInspectorSceneUIntField(
 			refUi,
-			"Layer Mask",
-			iLayerMask,
-			{
+			MakeInspectorSceneFieldDesc(
+				AshEngine::SceneComponentType::Mesh,
+				"layer_mask",
 				"Layer Mask",
 				"Bitmask that decides which scene layers can see or filter this renderer.",
 				"1",
 				"[1, 2147483647] in this editor view",
-				"Zero is restored to the default scene layer automatically."
-			}))
+				"Zero is restored to the default scene layer automatically."),
+			"Layer Mask",
+			mesh.layer_mask))
 		{
-			mesh.layer_mask = static_cast<uint32_t>(std::max(0, iLayerMask));
 			bCommitRequested = true;
 		}
+		const MeshMaterialOverridesEditResult materialOverridesEditResult =
+			DrawMeshMaterialOverridesEditor(refHost, refUi, mesh);
+		bCommitRequested = materialOverridesEditResult.bCommitRequested || bCommitRequested;
 		if (SanitizeMeshComponent(mesh))
 		{
 			LogInspectorDraftSanitized("Mesh", entity.get_id());
 			bCommitRequested = true;
 		}
-		if (DrawInspectorSmallActionButton(
+		const InspectorComponentActionRowResult actionRowResult = DrawInspectorComponentActionRow(
 			refUi,
-			"Reset Mesh",
+			refHost,
 			{
 				"Reset Mesh",
+				"Reset Mesh",
 				"Reset the editable mesh settings to defaults while preserving the selected asset reference.",
-				{},
-				{},
-				"Immediate action"
-			}))
+				"Restore##Mesh",
+				"Restore Mesh",
+				"Discard the local mesh draft and reload the current scene values without committing.",
+				"Mesh"
+			});
+		if (actionRowResult.bResetRequested)
 		{
 			refHost.ResetMeshDraftToDefaults(entity);
 			LogInspectorDraftReset("Mesh", "defaults", entity.get_id());
-			bCommitRequested = true;
-		}
-		refUi.same_line();
-		if (DrawInspectorSmallActionButton(
-			refUi,
-			"Restore##Mesh",
+			if (MeshComponentHasValidAssetPath(refState.draftMesh.optCurrentValue) &&
+				!bMeshAssetBlocksCommit &&
+				!materialOverridesEditResult.bBlocksCommit)
 			{
-				"Restore Mesh",
-				"Discard the local mesh draft and reload the current scene values without committing.",
-				{},
-				{},
-				"Immediate action"
-			}))
+				refHost.CommitMeshDraft(entity);
+			}
+			return;
+		}
+		if (actionRowResult.bRestoreRequested)
 		{
 			refHost.ResetMeshDraftToLive(entity);
 			LogInspectorDraftReset("Mesh", "live scene state", entity.get_id());
-			bRestoreRequested = true;
+			return;
 		}
-		refUi.same_line();
-		if (refHost.DrawComponentRemoveAction(refUi, "Mesh"))
+		if (actionRowResult.bRemoveRequested)
 		{
 			refState.draftMesh.optCurrentValue.reset();
 			refHost.CommitMeshDraft(entity);
 			return;
 		}
 
-		if (!bRestoreRequested && bCommitRequested)
+		if (bCommitRequested)
 		{
-			if (MeshComponentHasValidAssetPath(refState.draftMesh.optCurrentValue) && !bMeshAssetBlocksCommit)
+			if (MeshComponentHasValidAssetPath(refState.draftMesh.optCurrentValue) &&
+				!bMeshAssetBlocksCommit &&
+				!materialOverridesEditResult.bBlocksCommit)
 			{
 				refHost.CommitMeshDraft(entity);
 			}

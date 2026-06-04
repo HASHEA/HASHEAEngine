@@ -16,10 +16,10 @@ namespace AshEditor
 	{
 		void ResetViewportRuntimeState(
 			EditorViewportInstance* pViewport,
-			ViewportPanelSceneBoxSelectionState& refSceneBoxSelection,
+			ViewportPanelSceneSelectionState& refSceneSelection,
 			bool bResetRequestedSize)
 		{
-			refSceneBoxSelection = {};
+			refSceneSelection = {};
 			if (!pViewport)
 			{
 				return;
@@ -34,6 +34,109 @@ namespace AshEditor
 				pViewport->state.uRequestedWidth = 0;
 				pViewport->state.uRequestedHeight = 0;
 			}
+		}
+
+		void SyncViewportPanelOpenState(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			bool bPanelOpen)
+		{
+			if (refDeps.pViewportService)
+			{
+				refDeps.pViewportService->SetPanelOpen(strViewportId, bPanelOpen);
+			}
+		}
+
+		void UpdateViewportWindowState(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			AshEngine::UIContext& refUi,
+			EditorViewportInstance& refViewport)
+		{
+			refViewport.state.bFocused = refUi.is_window_focused_with_children();
+			refViewport.state.bHovered = refUi.is_window_hovered_with_children();
+			refViewport.state.bContentHovered = false;
+			refViewport.state.rectContent = {};
+
+			if (!refDeps.pViewportService)
+			{
+				return;
+			}
+
+			const EditorViewportPresentation* pPresentation =
+				refDeps.pViewportService->GetPresentation(strViewportId);
+			const bool bAutoPromoteToPrimary =
+				!pPresentation || pPresentation->eKind != EditorViewportKind::Game;
+			if (refViewport.state.bFocused && bAutoPromoteToPrimary)
+			{
+				refDeps.pViewportService->SetPrimaryViewport(strViewportId);
+			}
+		}
+
+		void DrawViewportMenuBar(
+			const EditorFrameContext& refFrameContext,
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			const EditorViewportInstance* pViewport)
+		{
+			if (!refFrameContext.pUiContext)
+			{
+				return;
+			}
+
+			AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+			if (!refUi.begin_menu_bar())
+			{
+				return;
+			}
+
+			if (pViewport)
+			{
+				ViewportPanelToolbar::Draw(refFrameContext, refDeps, strViewportId, *pViewport);
+			}
+			refUi.end_menu_bar();
+		}
+
+		void DrawViewportContent(
+			const EditorFrameContext& refFrameContext,
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			EditorViewportInstance* pViewport,
+			const ViewportPanelCanvasDrawResult& refDrawResult,
+			ViewportPanelSceneSelectionState& refSceneSelection)
+		{
+			if (!refFrameContext.pUiContext)
+			{
+				return;
+			}
+
+			AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
+			if (!pViewport)
+			{
+				refSceneSelection = {};
+				refUi.text_wrapped("Scene surface is not available yet.");
+				return;
+			}
+			if (!refDrawResult.bHasViewportContent)
+			{
+				return;
+			}
+
+			ViewportPanelInteraction::HandleViewportInput(
+				refFrameContext,
+				refDeps,
+				strViewportId,
+				*pViewport,
+				refDrawResult.rectContent,
+				refDrawResult.bContentHovered,
+				refSceneSelection);
+			ViewportPanelCanvas::DrawDecorations(
+				refFrameContext,
+				refDeps,
+				strViewportId,
+				*pViewport,
+				refDrawResult,
+				refSceneSelection);
 		}
 	}
 
@@ -73,11 +176,6 @@ namespace AshEditor
 		return _deps.pViewportService ? _deps.pViewportService->FindViewport(_strViewportId) : nullptr;
 	}
 
-	const EditorViewportInstance* ViewportPanel::ResolveViewport() const
-	{
-		return _deps.pViewportService ? _deps.pViewportService->FindViewport(_strViewportId) : nullptr;
-	}
-
 	void ViewportPanel::ClearDeps()
 	{
 		_deps = {};
@@ -104,7 +202,7 @@ namespace AshEditor
 
 	void ViewportPanel::ResetRuntimeViewportState()
 	{
-		ResetViewportRuntimeState(ResolveViewport(), _sceneBoxSelection, true);
+		ResetViewportRuntimeState(ResolveViewport(), _sceneSelection, true);
 	}
 
 	void ViewportPanel::OnUpdate()
@@ -132,21 +230,18 @@ namespace AshEditor
 	{
 		EditorViewportInstance* pViewport = ResolveViewport();
 		const bool bWindowVisible = BeginPanelWindow(frameContext, AshEngine::UIWindowFlagBits::MenuBar);
-		if (_deps.pViewportService)
-		{
-			_deps.pViewportService->SetPanelOpen(_strViewportId, IsOpen());
-		}
+		SyncViewportPanelOpenState(_deps, _strViewportId, IsOpen());
 
 		if (!bWindowVisible)
 		{
-			ResetViewportRuntimeState(pViewport, _sceneBoxSelection, false);
+			ResetViewportRuntimeState(pViewport, _sceneSelection, false);
 			EndPanelWindow(frameContext);
 			return;
 		}
 
 		if (!frameContext.pUiContext)
 		{
-			ResetViewportRuntimeState(pViewport, _sceneBoxSelection, false);
+			ResetViewportRuntimeState(pViewport, _sceneSelection, false);
 			EndPanelWindow(frameContext);
 			return;
 		}
@@ -154,27 +249,9 @@ namespace AshEditor
 		AshEngine::UIContext& refUi = *frameContext.pUiContext;
 		if (pViewport)
 		{
-			pViewport->state.bFocused = refUi.is_window_focused();
-			pViewport->state.bHovered = refUi.is_window_hovered();
-			pViewport->state.bContentHovered = false;
-			pViewport->state.rectContent = {};
-			if (_deps.pViewportService)
-			{
-				if (pViewport->state.bFocused)
-				{
-					_deps.pViewportService->SetPrimaryViewport(_strViewportId);
-				}
-			}
+			UpdateViewportWindowState(_deps, _strViewportId, refUi, *pViewport);
 		}
-
-		if (refUi.begin_menu_bar())
-		{
-			if (pViewport)
-			{
-				ViewportPanelToolbar::Draw(frameContext, _deps, _strViewportId, *pViewport);
-			}
-			refUi.end_menu_bar();
-		}
+		DrawViewportMenuBar(frameContext, _deps, _strViewportId, pViewport);
 
 		ViewportPanelCanvasDrawResult drawResult{};
 		if (pViewport)
@@ -182,29 +259,13 @@ namespace AshEditor
 			drawResult = ViewportPanelCanvas::Draw(frameContext, _deps, _strViewportId, *pViewport);
 		}
 
-		if (!pViewport)
-		{
-			_sceneBoxSelection = {};
-			refUi.text_wrapped("Scene surface is not available yet.");
-		}
-		else if (drawResult.bHasViewportContent)
-		{
-			ViewportPanelInteraction::HandleViewportInput(
-				frameContext,
-				_deps,
-				_strViewportId,
-				*pViewport,
-				drawResult.rectContent,
-				drawResult.bContentHovered,
-				_sceneBoxSelection);
-			ViewportPanelCanvas::DrawDecorations(
-				frameContext,
-				_deps,
-				_strViewportId,
-				*pViewport,
-				drawResult,
-				_sceneBoxSelection);
-		}
+		DrawViewportContent(
+			frameContext,
+			_deps,
+			_strViewportId,
+			pViewport,
+			drawResult,
+			_sceneSelection);
 
 		ViewportPanelInteraction::HandleDragDropTarget(
 			refUi,

@@ -179,6 +179,10 @@ namespace AshEngine
 		bool is_item_deactivated_after_edit() const;
 		bool is_window_focused() const;
 		bool is_window_hovered() const;
+		// editor begin 修改原因：让分离出的编辑器平台窗口通过 UI 层统一查询鼠标状态，避免视口交互仍依赖主窗口 InputState。
+		bool is_mouse_down(UIMouseButton button = UIMouseButton::Left) const;
+		bool is_mouse_clicked(UIMouseButton button = UIMouseButton::Left, bool repeat = false) const;
+		// editor end
 		bool is_mouse_double_clicked(UIMouseButton button = UIMouseButton::Left) const;
 		bool is_mouse_released(UIMouseButton button = UIMouseButton::Left) const;
 		bool is_window_hovered_with_children() const;
@@ -201,17 +205,28 @@ namespace AshEngine
 		UIVec2 calc_text_size(const char* text) const;
 		UIVec2 get_cursor_screen_pos() const;
 		UIVec2 get_mouse_pos() const;
+		// editor begin 修改原因：让分离出的编辑器平台窗口通过 UI 层统一查询滚轮变化，支撑多窗口视口相机控制。
+		UIVec2 get_mouse_wheel_delta() const;
+		// editor end
 		UIVec2 get_style_item_spacing() const;
 		float get_font_size() const;
 		float get_time_seconds() const;
 
 		// editor begin 修改原因：编辑器统一快捷键服务需要从 UI 层读取当前组合键修饰状态。
+		bool is_key_down(UIKey key) const;
+		bool is_key_pressed(UIKey key, bool repeat = false) const;
 		UIModifierFlags get_key_modifiers() const;
 		bool is_key_modifier_down(UIModifierFlags modifiers) const;
 		// editor end
 		bool is_key_chord_pressed(uint32_t chord) const;
+		// editor begin 修改原因：让编辑器工具面板通过 UIContext 统一访问系统剪贴板，避免重新旁路原生 ImGui。
+		void set_clipboard_text(const char* text);
+		// editor end
 
 		void set_next_item_open(bool is_open, UIConditionFlags cond = UIConditionFlagBits::None);
+		// editor begin 修改原因：Console 等工具面板需要在保留 UIContext 封装的前提下控制滚动位置。
+		void set_scroll_here_y(float center_y_ratio = 0.5f);
+		// editor end
 
 		void begin_tooltip();
 		// editor begin 修改原因：让编辑器能按场景选择紧凑或详细 tooltip 的窗口参数。

@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace AshEditor
 {
@@ -65,6 +66,53 @@ namespace AshEditor
 			const std::string_view svDisplayValue = svValue.empty() ? std::string_view("-") : svValue;
 			const std::string strDisplayValue(svDisplayValue);
 			refUi.text_wrapped("%s", strDisplayValue.c_str());
+		}
+
+		const char* GetInspectorSelectionKindLabel(EditorSelectionKind eKind)
+		{
+			switch (eKind)
+			{
+			case EditorSelectionKind::Entity:
+				return "Entity";
+			case EditorSelectionKind::Asset:
+				return "Asset";
+			case EditorSelectionKind::None:
+			default:
+				return "None";
+			}
+		}
+
+		std::string MakeInspectorSelectionDisplayName(const EditorSelection& refSelection)
+		{
+			if (!refSelection.strLabel.empty())
+			{
+				return refSelection.strLabel;
+			}
+			if (!refSelection.strPath.empty())
+			{
+				return refSelection.strPath;
+			}
+			return refSelection.IsEmpty() ? "None" : "<Unnamed>";
+		}
+
+		std::string MakeMultiSelectionKindSummary(
+			size_t uEntityCount,
+			size_t uAssetCount,
+			size_t uSelectionCount)
+		{
+			if (uSelectionCount == 0)
+			{
+				return "None";
+			}
+			if (uEntityCount == uSelectionCount)
+			{
+				return "Entities";
+			}
+			if (uAssetCount == uSelectionCount)
+			{
+				return "Assets";
+			}
+			return "Mixed";
 		}
 	}
 
@@ -133,19 +181,11 @@ namespace AshEditor
 			: std::nullopt;
 	}
 
-	bool CanAddCameraComponent(const AshEngine::Entity& refEntity)
+	std::optional<AshEngine::EnvironmentComponent> GetEnvironmentComponentValue(const AshEngine::Entity& refEntity)
 	{
-		return !refEntity.has_camera_component();
-	}
-
-	bool CanAddLightComponent(const AshEngine::Entity& refEntity)
-	{
-		return !refEntity.has_light_component();
-	}
-
-	bool CanAddMeshComponent(const AshEngine::Entity& refEntity)
-	{
-		return !refEntity.has_mesh_component();
+		return refEntity.has_environment_component()
+			? std::optional<AshEngine::EnvironmentComponent>{ refEntity.get_environment_component() }
+			: std::nullopt;
 	}
 
 	bool ApplyCameraComponentValue(
@@ -159,12 +199,16 @@ namespace AshEditor
 
 		if (!optValue.has_value())
 		{
-			return entity.has_camera_component() && entity.remove_camera_component();
+			return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Camera);
 		}
 
-		return entity.has_camera_component()
-			? entity.set_camera_component(*optValue)
-			: entity.add_camera_component(*optValue);
+		if (!entity.has_camera_component() &&
+			!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Camera))
+		{
+			return false;
+		}
+
+		return entity.set_camera_component(*optValue);
 	}
 
 	bool ApplyLightComponentValue(
@@ -178,12 +222,16 @@ namespace AshEditor
 
 		if (!optValue.has_value())
 		{
-			return entity.has_light_component() && entity.remove_light_component();
+			return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Light);
 		}
 
-		return entity.has_light_component()
-			? entity.set_light_component(*optValue)
-			: entity.add_light_component(*optValue);
+		if (!entity.has_light_component() &&
+			!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Light))
+		{
+			return false;
+		}
+
+		return entity.set_light_component(*optValue);
 	}
 
 	bool ApplyMeshComponentValue(
@@ -197,12 +245,39 @@ namespace AshEditor
 
 		if (!optValue.has_value())
 		{
-			return entity.has_mesh_component() && entity.remove_mesh_component();
+			return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Mesh);
 		}
 
-		return entity.has_mesh_component()
-			? entity.set_mesh_component(*optValue)
-			: entity.add_mesh_component(*optValue);
+		if (!entity.has_mesh_component() &&
+			!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Mesh))
+		{
+			return false;
+		}
+
+		return entity.set_mesh_component(*optValue);
+	}
+
+	bool ApplyEnvironmentComponentValue(
+		AshEngine::Entity entity,
+		const std::optional<AshEngine::EnvironmentComponent>& optValue)
+	{
+		if (!entity.is_valid())
+		{
+			return false;
+		}
+
+		if (!optValue.has_value())
+		{
+			return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Environment);
+		}
+
+		if (!entity.has_environment_component() &&
+			!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Environment))
+		{
+			return false;
+		}
+
+		return entity.set_environment_component(*optValue);
 	}
 
 	void DrawInspectorPanelIntro(
@@ -222,21 +297,11 @@ namespace AshEditor
 		const EditorSelection& refSelection,
 		const std::string_view svTooltipDescription)
 	{
-		const char* pKindLabel = "Selection";
-		switch (refSelection.eKind)
-		{
-		case EditorSelectionKind::Entity:
-			pKindLabel = "Entity";
-			break;
-		case EditorSelectionKind::Asset:
-			pKindLabel = "Asset";
-			break;
-		default:
-			break;
-		}
+		const char* pKindLabel = GetInspectorSelectionKindLabel(refSelection.eKind);
+		const std::string strSelectionName = MakeInspectorSelectionDisplayName(refSelection);
 
 		refUi.push_font(AshEngine::UIFontRole::Strong);
-		refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", refSelection.strLabel.c_str());
+		refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", strSelectionName.c_str());
 		refUi.pop_font();
 		if (refUi.is_item_hovered())
 		{
@@ -244,7 +309,7 @@ namespace AshEditor
 			refUi.begin_tooltip(bUseDetailTooltip ? kInspectorDetailTooltipConfig : kInspectorCompactTooltipConfig);
 			if (bUseDetailTooltip)
 			{
-				DrawEditorTooltipTitle(refUi, refSelection.strLabel, "Selection Details");
+				DrawEditorTooltipTitle(refUi, strSelectionName, "Selection Details");
 				if (BeginEditorTooltipTable(refUi, "InspectorSelectionTooltip", 72.0f))
 				{
 					DrawEditorTooltipRow(refUi, "Kind", pKindLabel);
@@ -255,7 +320,7 @@ namespace AshEditor
 			}
 			else
 			{
-				DrawEditorTooltipCompactTitle(refUi, refSelection.strLabel, pKindLabel);
+				DrawEditorTooltipCompactTitle(refUi, strSelectionName, pKindLabel);
 				DrawEditorTooltipCompactRow(
 					refUi,
 					"Id",
@@ -273,6 +338,82 @@ namespace AshEditor
 			}
 			refUi.end_tooltip();
 		}
+		refUi.separator();
+	}
+
+	void DrawInspectorMultiSelectionSummary(
+		AshEngine::UIContext& refUi,
+		const std::vector<EditorSelection>& vecSelections,
+		const std::string_view svDescription)
+	{
+		size_t uEntityCount = 0;
+		size_t uAssetCount = 0;
+		for (const EditorSelection& refSelection : vecSelections)
+		{
+			if (refSelection.eKind == EditorSelectionKind::Entity)
+			{
+				++uEntityCount;
+			}
+			else if (refSelection.eKind == EditorSelectionKind::Asset)
+			{
+				++uAssetCount;
+			}
+		}
+
+		const std::string strTitle = std::to_string(vecSelections.size()) + " selected";
+		const std::string strKindSummary = MakeMultiSelectionKindSummary(
+			uEntityCount,
+			uAssetCount,
+			vecSelections.size());
+		const EditorSelection* pPrimarySelection = vecSelections.empty() ? nullptr : &vecSelections.back();
+
+		refUi.push_font(AshEngine::UIFontRole::Strong);
+		refUi.text_colored(GetEditorHeadingTextColor(refUi), "%s", strTitle.c_str());
+		refUi.pop_font();
+		if (!svDescription.empty())
+		{
+			const std::string strDescription(svDescription);
+			refUi.text_wrapped("%s", strDescription.c_str());
+		}
+
+		if (BeginSummaryTable(refUi, "InspectorMultiSelectionSummary"))
+		{
+			DrawSummaryRow(refUi, "Kind", strKindSummary);
+			DrawSummaryRow(refUi, "Total", std::to_string(vecSelections.size()));
+			DrawSummaryRow(refUi, "Entities", std::to_string(uEntityCount));
+			DrawSummaryRow(refUi, "Assets", std::to_string(uAssetCount));
+			if (pPrimarySelection)
+			{
+				DrawSummaryRow(refUi, "Primary", MakeInspectorSelectionDisplayName(*pPrimarySelection));
+			}
+			refUi.end_table();
+		}
+
+		constexpr size_t kInspectorMultiSelectionPreviewCount = 12;
+		if (!vecSelections.empty() &&
+			refUi.collapsing_header("Selected Items", AshEngine::UITreeNodeFlagBits::DefaultOpen))
+		{
+			const size_t uPreviewCount = std::min(kInspectorMultiSelectionPreviewCount, vecSelections.size());
+			for (size_t uIndex = 0; uIndex < uPreviewCount; ++uIndex)
+			{
+				const EditorSelection& refSelection = vecSelections[uIndex];
+				const std::string strItemLabel =
+					MakeInspectorSelectionDisplayName(refSelection) +
+					" (" +
+					GetInspectorSelectionKindLabel(refSelection.eKind) +
+					")";
+				refUi.bullet_text("%s", strItemLabel.c_str());
+			}
+			if (vecSelections.size() > uPreviewCount)
+			{
+				const std::string strRemaining =
+					"... " +
+					std::to_string(vecSelections.size() - uPreviewCount) +
+					" more";
+				refUi.text_colored(GetEditorMutedTextColor(refUi), "%s", strRemaining.c_str());
+			}
+		}
+
 		refUi.separator();
 	}
 

@@ -1,11 +1,37 @@
 #include "Panels/AssetBrowser/AssetBrowserBreadcrumbsView.h"
 
+#include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Panels/AssetBrowser/IAssetBrowserViewHost.h"
 #include "Widgets/EditorThemeColors.h"
 
 namespace AshEditor
 {
+	namespace
+	{
+		void HandleBreadcrumbDropTarget(
+			AshEngine::UIContext& refUi,
+			IAssetBrowserViewHost& refHost,
+			const std::filesystem::path& pathTargetDirectory)
+		{
+			if (!refUi.begin_drag_drop_target())
+			{
+				return;
+			}
+
+			const AshEngine::UIDragDropPayload payload =
+				refUi.accept_drag_drop_payload(EditorDragPayloadTypes::Asset);
+			if (payload.is_valid() &&
+				payload.data_size == static_cast<int>(sizeof(uint64_t)))
+			{
+				const uint64_t uTransferId = *static_cast<const uint64_t*>(payload.data);
+				refHost.HandleAssetDropToDirectory(pathTargetDirectory, uTransferId);
+			}
+
+			refUi.end_drag_drop_target();
+		}
+	}
+
 	void AssetBrowserBreadcrumbsView::Draw(
 		AshEngine::UIContext& refUi,
 		const AssetBrowserPanelState& refState,
@@ -23,6 +49,7 @@ namespace AshEditor
 		{
 			refHost.NavigateToDirectory({});
 		}
+		HandleBreadcrumbDropTarget(refUi, refHost, {});
 		if (bAllAssetsSelected)
 		{
 			AssetBrowserSupport::PopSelectedToolbarButtonStyle(refUi);
@@ -54,6 +81,7 @@ namespace AshEditor
 			{
 				refHost.NavigateToDirectory(pathBreadcrumb);
 			}
+			HandleBreadcrumbDropTarget(refUi, refHost, pathBreadcrumb);
 			if (bIsCurrent)
 			{
 				AssetBrowserSupport::PopSelectedToolbarButtonStyle(refUi);

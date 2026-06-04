@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 namespace AshEditor
 {
@@ -30,6 +31,7 @@ namespace AshEditor
 		// Accessors return last-known values (updated from events + initial sync).
 		const EditorActiveSceneChangedEvent& GetActiveScene() const;
 		const EditorSelection& GetSelection() const;
+		const std::vector<EditorSelection>& GetSelections() const;
 		const EditorUndoHistoryChangedEvent& GetUndoHistory() const;
 		const EditorTransactionStateChangedEvent& GetTransactionState() const;
 		const EditorActiveDocumentDirtyStateChangedEvent& GetActiveDocumentDirtyState() const;
@@ -50,6 +52,7 @@ namespace AshEditor
 		EditorEventBindings _eventBindings{};
 		EditorActiveSceneChangedEvent _eventActiveScene{};
 		EditorSelection _selection{};
+		std::vector<EditorSelection> _vecSelections{};
 		EditorUndoHistoryChangedEvent _eventUndoHistory{};
 		EditorTransactionStateChangedEvent _eventTransactionState{};
 		EditorActiveDocumentDirtyStateChangedEvent _eventActiveDocumentDirtyState{};

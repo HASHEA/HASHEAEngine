@@ -1,6 +1,7 @@
 #include "App/EditorApplicationImpl.h"
 
 #include "App/EditorActionCoordinator.h"
+#include "App/EditorLogBridge.h"
 #include "App/PanelBootstrapper.h"
 #include "App/SceneWorkflowCoordinator.h"
 #include "App/ViewportLayoutPersistence.h"
@@ -42,6 +43,7 @@ namespace AshEditor
 	EditorApplicationImpl::EditorApplicationImpl()
 		: _upEventBus(std::make_unique<EditorEventBus>())
 		, _upEventBindings(std::make_unique<EditorEventBindings>())
+		, _upLogBridge(std::make_unique<EditorLogBridge>())
 		, _upSettingsService(std::make_unique<EditorSettingsService>())
 		, _upSelectionService(std::make_unique<SelectionService>())
 		, _upSceneService(std::make_unique<SceneService>())
@@ -125,8 +127,13 @@ namespace AshEditor
 		}
 
 		_upViewportService->DestroyScenePresentations(AshEngine::Application::get_scene_presentation());
+		if (_upLogBridge)
+		{
+			_upLogBridge->Detach();
+		}
 		ShutdownPanels();
 		SavePersistentState();
+		_upSceneService->SetEventBus(nullptr);
 		_upViewportCameraService->Reset();
 		_upViewportService->Clear();
 		_upUndoRedoService->Clear();
@@ -141,6 +148,10 @@ namespace AshEditor
 	void EditorApplicationImpl::Update()
 	{
 		RefreshUiContext();
+		if (_upLogBridge)
+		{
+			_upLogBridge->FlushPending();
+		}
 		_upPanelManager->Update();
 
 		const bool bDragging = _editorContext.pUiContext && _editorContext.pUiContext->has_drag_drop_payload();
@@ -239,10 +250,15 @@ namespace AshEditor
 
 	void EditorApplicationImpl::WireServices()
 	{
+		_upSceneService->SetEventBus(_upEventBus.get());
 		_upSelectionService->SetEventBus(_upEventBus.get());
 		_upCommandService->SetEventBus(_upEventBus.get());
 		_upUndoRedoService->SetEventBus(_upEventBus.get());
 		_upViewportService->SetEventBus(_upEventBus.get());
+		if (_upLogBridge)
+		{
+			_upLogBridge->Attach(*_upEventBus);
+		}
 		_upSessionStateService->BindEventBus(_upEventBus.get());
 		_upPanelManager->BindEventBus(_upEventBus.get());
 

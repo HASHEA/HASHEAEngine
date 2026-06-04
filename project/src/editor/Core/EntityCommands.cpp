@@ -7,6 +7,7 @@
 #include "Services/AssetDatabaseService.h"
 #include "Services/SceneService.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -24,12 +25,16 @@ namespace AshEditor
 
 			if (!optValue.has_value())
 			{
-				return entity.has_camera_component() && entity.remove_camera_component();
+				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Camera);
 			}
 
-			return entity.has_camera_component()
-				? entity.set_camera_component(*optValue)
-				: entity.add_camera_component(*optValue);
+			if (!entity.has_camera_component() &&
+				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Camera))
+			{
+				return false;
+			}
+
+			return entity.set_camera_component(*optValue);
 		}
 
 		bool ApplyLightComponentState(AshEngine::Entity entity, const std::optional<AshEngine::LightComponent>& optValue)
@@ -41,12 +46,16 @@ namespace AshEditor
 
 			if (!optValue.has_value())
 			{
-				return entity.has_light_component() && entity.remove_light_component();
+				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Light);
 			}
 
-			return entity.has_light_component()
-				? entity.set_light_component(*optValue)
-				: entity.add_light_component(*optValue);
+			if (!entity.has_light_component() &&
+				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Light))
+			{
+				return false;
+			}
+
+			return entity.set_light_component(*optValue);
 		}
 
 		bool ApplyMeshComponentState(AshEngine::Entity entity, const std::optional<AshEngine::MeshComponent>& optValue)
@@ -58,12 +67,39 @@ namespace AshEditor
 
 			if (!optValue.has_value())
 			{
-				return entity.has_mesh_component() && entity.remove_mesh_component();
+				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Mesh);
 			}
 
-			return entity.has_mesh_component()
-				? entity.set_mesh_component(*optValue)
-				: entity.add_mesh_component(*optValue);
+			if (!entity.has_mesh_component() &&
+				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Mesh))
+			{
+				return false;
+			}
+
+			return entity.set_mesh_component(*optValue);
+		}
+
+		bool ApplyEnvironmentComponentState(
+			AshEngine::Entity entity,
+			const std::optional<AshEngine::EnvironmentComponent>& optValue)
+		{
+			if (!entity.is_valid())
+			{
+				return false;
+			}
+
+			if (!optValue.has_value())
+			{
+				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Environment);
+			}
+
+			if (!entity.has_environment_component() &&
+				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Environment))
+			{
+				return false;
+			}
+
+			return entity.set_environment_component(*optValue);
 		}
 
 		SceneEntityId GetEntityParentId(const AshEngine::Entity& refEntity)
@@ -532,6 +568,69 @@ namespace AshEditor
 		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
+	SetEnvironmentComponentCommand::SetEnvironmentComponentCommand(
+		SceneEntityId uEntityId,
+		std::optional<AshEngine::EnvironmentComponent> optBeforeValue,
+		std::optional<AshEngine::EnvironmentComponent> optAfterValue)
+		: _uEntityId(uEntityId)
+		, _optBeforeValue(std::move(optBeforeValue))
+		, _optAfterValue(std::move(optAfterValue))
+	{
+	}
+
+	const char* SetEnvironmentComponentCommand::GetLabel() const
+	{
+		if (!_optBeforeValue.has_value() && _optAfterValue.has_value())
+		{
+			return "Add Environment Component";
+		}
+		if (_optBeforeValue.has_value() && !_optAfterValue.has_value())
+		{
+			return "Remove Environment Component";
+		}
+		return "Edit Environment Component";
+	}
+
+	bool SetEnvironmentComponentCommand::Execute(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService || _uEntityId == 0 ||
+			OptionalComponentsEqual(_optBeforeValue, _optAfterValue, &EnvironmentComponentsEqual))
+		{
+			return false;
+		}
+
+		return ApplyEnvironmentComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optAfterValue);
+	}
+
+	bool SetEnvironmentComponentCommand::Undo(EditorContext& refContext)
+	{
+		return refContext.pSceneService && _uEntityId != 0 &&
+			ApplyEnvironmentComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optBeforeValue);
+	}
+
+	bool SetEnvironmentComponentCommand::TryMerge(const EditorCommand& refSubsequentCommand)
+	{
+		const SetEnvironmentComponentCommand* pSubsequent =
+			dynamic_cast<const SetEnvironmentComponentCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId)
+		{
+			return false;
+		}
+
+		_optAfterValue = pSubsequent->_optAfterValue;
+		return true;
+	}
+
+	EditorCommandSelection SetEnvironmentComponentCommand::GetSelectionAfterExecute() const
+	{
+		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
+	EditorCommandSelection SetEnvironmentComponentCommand::GetSelectionAfterUndo() const
+	{
+		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
 	CreateEntityCommand::CreateEntityCommand(
 		std::string strEntityName,
 		SceneEntityId uParentId,
@@ -847,6 +946,122 @@ namespace AshEditor
 		return EditorCommandSelection::Entity(_uEntityId);
 	}
 
+	ReparentEntitiesCommand::ReparentEntitiesCommand(
+		std::vector<SceneEntityId> vecEntityIds,
+		std::vector<SceneEntityId> vecNewParentIds,
+		std::vector<uint32_t> vecNewSiblingIndices)
+		: _vecEntityIds(std::move(vecEntityIds))
+		, _vecNewParentIds(std::move(vecNewParentIds))
+		, _vecNewSiblingIndices(std::move(vecNewSiblingIndices))
+	{
+	}
+
+	const char* ReparentEntitiesCommand::GetLabel() const
+	{
+		return "Reparent Entities";
+	}
+
+	bool ReparentEntitiesCommand::Execute(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService ||
+			_vecEntityIds.empty() ||
+			_vecEntityIds.size() != _vecNewParentIds.size() ||
+			_vecEntityIds.size() != _vecNewSiblingIndices.size())
+		{
+			return false;
+		}
+
+		if (!_bHasCapturedPreviousParents)
+		{
+			_vecPreviousParentIds.clear();
+			_vecPreviousSiblingIndices.clear();
+			_vecPreviousParentIds.reserve(_vecEntityIds.size());
+			_vecPreviousSiblingIndices.reserve(_vecEntityIds.size());
+			for (const SceneEntityId uEntityId : _vecEntityIds)
+			{
+				const AshEngine::Entity entity = refContext.pSceneService->FindEntity(uEntityId);
+				if (!entity.is_valid())
+				{
+					_vecPreviousParentIds.clear();
+					_vecPreviousSiblingIndices.clear();
+					return false;
+				}
+
+				_vecPreviousParentIds.push_back(GetEntityParentId(entity));
+				_vecPreviousSiblingIndices.push_back(refContext.pSceneService->GetEntitySiblingIndex(uEntityId));
+			}
+			_bHasCapturedPreviousParents = true;
+		}
+
+		size_t uAppliedCount = 0;
+		for (size_t uIndex = 0; uIndex < _vecEntityIds.size(); ++uIndex)
+		{
+			if (!refContext.pSceneService->ReparentEntity(
+				_vecEntityIds[uIndex],
+				_vecNewParentIds[uIndex],
+				_vecNewSiblingIndices[uIndex]))
+			{
+				for (size_t uRollbackIndex = uAppliedCount; uRollbackIndex > 0; --uRollbackIndex)
+				{
+					const size_t uPreviousIndex = uRollbackIndex - 1u;
+					refContext.pSceneService->ReparentEntity(
+						_vecEntityIds[uPreviousIndex],
+						_vecPreviousParentIds[uPreviousIndex],
+						_vecPreviousSiblingIndices[uPreviousIndex]);
+				}
+				return false;
+			}
+			++uAppliedCount;
+		}
+
+		return uAppliedCount > 0u;
+	}
+
+	bool ReparentEntitiesCommand::Undo(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService ||
+			!_bHasCapturedPreviousParents ||
+			_vecEntityIds.empty() ||
+			_vecEntityIds.size() != _vecPreviousParentIds.size() ||
+			_vecEntityIds.size() != _vecPreviousSiblingIndices.size())
+		{
+			return false;
+		}
+
+		size_t uAppliedCount = 0;
+		for (size_t uReverseIndex = _vecEntityIds.size(); uReverseIndex > 0; --uReverseIndex)
+		{
+			const size_t uIndex = uReverseIndex - 1u;
+			if (!refContext.pSceneService->ReparentEntity(
+				_vecEntityIds[uIndex],
+				_vecPreviousParentIds[uIndex],
+				_vecPreviousSiblingIndices[uIndex]))
+			{
+				for (size_t uRedoIndex = _vecEntityIds.size() - uAppliedCount; uRedoIndex < _vecEntityIds.size(); ++uRedoIndex)
+				{
+					refContext.pSceneService->ReparentEntity(
+						_vecEntityIds[uRedoIndex],
+						_vecNewParentIds[uRedoIndex],
+						_vecNewSiblingIndices[uRedoIndex]);
+				}
+				return false;
+			}
+			++uAppliedCount;
+		}
+
+		return uAppliedCount > 0u;
+	}
+
+	EditorCommandSelection ReparentEntitiesCommand::GetSelectionAfterExecute() const
+	{
+		return EditorCommandSelection::Entities(_vecEntityIds);
+	}
+
+	EditorCommandSelection ReparentEntitiesCommand::GetSelectionAfterUndo() const
+	{
+		return EditorCommandSelection::Entities(_vecEntityIds);
+	}
+
 	DuplicateEntitiesCommand::DuplicateEntitiesCommand(std::vector<SceneEntityId> vecSourceEntityIds)
 		: _vecSourceEntityIds(std::move(vecSourceEntityIds))
 	{
@@ -1145,5 +1360,142 @@ namespace AshEditor
 	EditorCommandSelection DeleteEntityCommand::GetSelectionAfterUndo() const
 	{
 		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
+	DeleteEntitiesCommand::DeleteEntitiesCommand(std::vector<SceneEntityId> vecEntityIds)
+		: _vecEntityIds(std::move(vecEntityIds))
+	{
+	}
+
+	const char* DeleteEntitiesCommand::GetLabel() const
+	{
+		return "Delete Entities";
+	}
+
+	bool DeleteEntitiesCommand::Execute(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService || _vecEntityIds.empty())
+		{
+			HLogWarning(
+				"DeleteEntitiesCommand skipped (scene_service={}, entity_count={}).",
+				refContext.pSceneService != nullptr,
+				static_cast<unsigned long long>(_vecEntityIds.size()));
+			return false;
+		}
+
+		if (_vecSnapshots.empty())
+		{
+			_vecParentIds.clear();
+			_vecSnapshots.clear();
+			_vecParentIds.reserve(_vecEntityIds.size());
+			_vecSnapshots.reserve(_vecEntityIds.size());
+			for (const SceneEntityId uEntityId : _vecEntityIds)
+			{
+				const AshEngine::Entity entity = refContext.pSceneService->FindEntity(uEntityId);
+				const std::optional<SceneEntitySnapshot> optSnapshot =
+					refContext.pSceneService->CaptureEntitySnapshot(uEntityId);
+				if (!entity.is_valid() || !optSnapshot.has_value())
+				{
+					HLogWarning(
+						"DeleteEntitiesCommand failed to capture snapshot for entity id={}.",
+						static_cast<unsigned long long>(uEntityId));
+					_vecParentIds.clear();
+					_vecSnapshots.clear();
+					return false;
+				}
+
+				_vecParentIds.push_back(GetEntityParentId(entity));
+				_vecSnapshots.push_back(*optSnapshot);
+			}
+		}
+
+		std::vector<SceneEntityId> vecDestroyedEntityIds{};
+		vecDestroyedEntityIds.reserve(_vecEntityIds.size());
+		for (
+			std::vector<SceneEntityId>::const_reverse_iterator itEntityId = _vecEntityIds.rbegin();
+			itEntityId != _vecEntityIds.rend();
+			++itEntityId)
+		{
+			if (*itEntityId == 0)
+			{
+				continue;
+			}
+
+			if (!refContext.pSceneService->DestroyEntity(*itEntityId))
+			{
+				HLogWarning(
+					"DeleteEntitiesCommand failed to destroy entity id={}. Restoring already deleted entities.",
+					static_cast<unsigned long long>(*itEntityId));
+				for (size_t uRestoreIndex = 0; uRestoreIndex < _vecEntityIds.size(); ++uRestoreIndex)
+				{
+					if (std::find(vecDestroyedEntityIds.begin(), vecDestroyedEntityIds.end(), _vecEntityIds[uRestoreIndex]) ==
+						vecDestroyedEntityIds.end())
+					{
+						continue;
+					}
+
+					const SceneEntityId uParentId =
+						uRestoreIndex < _vecParentIds.size()
+						? _vecParentIds[uRestoreIndex]
+						: 0;
+					if (uRestoreIndex < _vecSnapshots.size())
+					{
+						refContext.pSceneService->RestoreEntitySnapshot(_vecSnapshots[uRestoreIndex], uParentId);
+					}
+				}
+				return false;
+			}
+
+			vecDestroyedEntityIds.push_back(*itEntityId);
+		}
+
+		return !vecDestroyedEntityIds.empty();
+	}
+
+	bool DeleteEntitiesCommand::Undo(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService ||
+			_vecSnapshots.empty() ||
+			_vecSnapshots.size() != _vecParentIds.size())
+		{
+			HLogWarning(
+				"DeleteEntitiesCommand undo skipped (scene_service={}, snapshot_count={}, parent_count={}).",
+				refContext.pSceneService != nullptr,
+				static_cast<unsigned long long>(_vecSnapshots.size()),
+				static_cast<unsigned long long>(_vecParentIds.size()));
+			return false;
+		}
+
+		std::vector<SceneEntityId> vecRestoredEntityIds{};
+		vecRestoredEntityIds.reserve(_vecSnapshots.size());
+		for (size_t uIndex = 0; uIndex < _vecSnapshots.size(); ++uIndex)
+		{
+			AshEngine::Entity restored = refContext.pSceneService->RestoreEntitySnapshot(
+				_vecSnapshots[uIndex],
+				_vecParentIds[uIndex]);
+			if (!restored.is_valid())
+			{
+				HLogWarning(
+					"DeleteEntitiesCommand undo failed while restoring snapshot index={}.",
+					static_cast<unsigned long long>(uIndex));
+				DestroyEntityRoots(*refContext.pSceneService, vecRestoredEntityIds);
+				return false;
+			}
+
+			vecRestoredEntityIds.push_back(restored.get_id());
+		}
+
+		_vecEntityIds = std::move(vecRestoredEntityIds);
+		return !_vecEntityIds.empty();
+	}
+
+	EditorCommandSelection DeleteEntitiesCommand::GetSelectionAfterExecute() const
+	{
+		return EditorCommandSelection::Clear();
+	}
+
+	EditorCommandSelection DeleteEntitiesCommand::GetSelectionAfterUndo() const
+	{
+		return EditorCommandSelection::Entities(_vecEntityIds);
 	}
 }

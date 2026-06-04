@@ -117,6 +117,77 @@ namespace AshEditor
 		});
 
 		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::AssetsCreateFolder,
+			"New Folder",
+			"Create a new folder inside the current asset browser directory.",
+			{},
+			{
+				MakeShortcutBinding(
+					"Ctrl+Shift+N",
+					AshEngine::make_key_chord(
+						AshEngine::UIKey::N,
+						AshEngine::UIModifierFlagBits::Ctrl | AshEngine::UIModifierFlagBits::Shift))
+			},
+			EditorActionScope::AssetBrowserContent,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::AssetsInstantiateSelected,
+			"Instantiate Asset",
+			"Create scene entities from the currently selected asset browser item.",
+			{},
+			{},
+			EditorActionScope::AssetBrowserContent,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::AssetsRenameSelected,
+			"Rename Asset",
+			"Rename the currently selected asset browser item.",
+			{},
+			{ MakeShortcutBinding("F2", AshEngine::make_key_chord(AshEngine::UIKey::F2)) },
+			EditorActionScope::AssetBrowserContent,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::AssetsDeleteSelected,
+			"Delete Asset",
+			"Delete the currently selected asset browser item from disk.",
+			{},
+			{ MakeShortcutBinding("Delete", AshEngine::make_key_chord(AshEngine::UIKey::Delete)) },
+			EditorActionScope::AssetBrowserContent,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
+			EditorActionIds::AssetsReimportSelected,
+			"Reimport Asset",
+			"Refresh the currently selected asset and rescan the asset database.",
+			{},
+			{},
+			EditorActionScope::AssetBrowserContent,
+			{},
+			{},
+			pHandler,
+			true
+		});
+
+		refContext.refCommandService.RegisterAction(EditorAction{
 			EditorActionIds::WindowResetLayout,
 			"Reset Layout",
 			"Restore the default dock layout and viewport panel arrangement.",

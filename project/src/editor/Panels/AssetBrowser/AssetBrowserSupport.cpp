@@ -1,6 +1,7 @@
 #include "Panels/AssetBrowser/AssetBrowserSupport.h"
 
 #include "Core/AssetPresentationUtils.h"
+#include "Core/EditorPathUtils.h"
 #include "Core/EditorSelection.h"
 #include "Core/EditorStringUtils.h"
 #include "Function/Asset/AssetDatabase.h"
@@ -12,6 +13,7 @@
 #include "Widgets/EditorTooltipWidgets.h"
 
 #include <algorithm>
+#include <iterator>
 #include <string_view>
 #include <utility>
 
@@ -251,6 +253,42 @@ namespace AshEditor
 			return kAssetTypeFilters;
 		}
 
+		void NormalizeSelection(
+			const AssetDatabaseService& refService,
+			AssetBrowserPanelState& refState)
+		{
+			std::vector<uint64_t> vecValidAssetIds{};
+			vecValidAssetIds.reserve(refState.vecSelectedAssetIds.size());
+			for (const uint64_t uAssetId : refState.vecSelectedAssetIds)
+			{
+				if (uAssetId == 0 || refService.FindById(uAssetId) == nullptr)
+				{
+					continue;
+				}
+
+				if (std::find(vecValidAssetIds.begin(), vecValidAssetIds.end(), uAssetId) == vecValidAssetIds.end())
+				{
+					vecValidAssetIds.push_back(uAssetId);
+				}
+			}
+			refState.vecSelectedAssetIds = std::move(vecValidAssetIds);
+
+			if (refState.uSelectedAssetId != 0 && !IsAssetSelected(refState, refState.uSelectedAssetId))
+			{
+				refState.uSelectedAssetId =
+					refState.vecSelectedAssetIds.empty()
+					? 0
+					: refState.vecSelectedAssetIds.back();
+			}
+			if (refState.uSelectionAnchorAssetId != 0 && !IsAssetSelected(refState, refState.uSelectionAnchorAssetId))
+			{
+				refState.uSelectionAnchorAssetId =
+					refState.uSelectedAssetId != 0
+					? refState.uSelectedAssetId
+					: (refState.vecSelectedAssetIds.empty() ? 0 : refState.vecSelectedAssetIds.front());
+			}
+		}
+
 		AssetBrowserFrameData BuildFrameData(
 			const AssetBrowserPanelDeps& refDeps,
 			AssetBrowserPanelState& refState)
@@ -262,6 +300,7 @@ namespace AshEditor
 			}
 
 			const std::vector<AshEngine::AssetInfo>& vecAssets = refDeps.pAssetDatabaseService->GetItems();
+			NormalizeSelection(*refDeps.pAssetDatabaseService, refState);
 			refState.iTypeFilterIndex = std::clamp(
 				refState.iTypeFilterIndex,
 				0,
@@ -281,6 +320,12 @@ namespace AshEditor
 				frameData.pSelectedAsset =
 					refDeps.pAssetDatabaseService->FindById(refDeps.pSelectionService->GetSelection().uId);
 				refState.uSelectedAssetId = frameData.pSelectedAsset ? frameData.pSelectedAsset->id : 0u;
+				refState.uSelectionAnchorAssetId = refState.uSelectedAssetId;
+				refState.vecSelectedAssetIds.clear();
+				if (refState.uSelectedAssetId != 0)
+				{
+					refState.vecSelectedAssetIds.push_back(refState.uSelectedAssetId);
+				}
 			}
 
 			const std::string strLoweredSearchText = ToLowerCopy(refState.strSearchText);
@@ -296,6 +341,7 @@ namespace AshEditor
 				*frameData.pTypeFilter);
 			SortVisibleAssets(frameData.vecVisibleItems);
 			frameData.uFilteredCount = static_cast<uint32_t>(frameData.vecVisibleItems.size());
+			frameData.uSelectedCount = static_cast<uint32_t>(refState.vecSelectedAssetIds.size());
 			frameData.bFiltersActive = HasActiveFilters(refState);
 			frameData.bSelectedAssetVisible = IsSelectedAssetVisible(
 				frameData.pSelectedAsset,
@@ -310,6 +356,16 @@ namespace AshEditor
 		const AshEngine::AssetInfo* GetSelectedAsset(const AssetDatabaseService& refService, uint64_t uSelectedId)
 		{
 			return uSelectedId == 0 ? nullptr : refService.FindById(uSelectedId);
+		}
+
+		bool IsAssetSelected(const AssetBrowserPanelState& refState, uint64_t uSelectedId)
+		{
+			return
+				uSelectedId != 0 &&
+				std::find(
+					refState.vecSelectedAssetIds.begin(),
+					refState.vecSelectedAssetIds.end(),
+					uSelectedId) != refState.vecSelectedAssetIds.end();
 		}
 
 		bool IsSelectedAssetVisible(
@@ -546,22 +602,7 @@ namespace AshEditor
 			const std::filesystem::path& pathAncestor,
 			const std::filesystem::path& pathDescendant)
 		{
-			if (pathAncestor.empty())
-			{
-				return true;
-			}
-
-			std::filesystem::path::const_iterator itAncestor = pathAncestor.begin();
-			std::filesystem::path::const_iterator itDescendant = pathDescendant.begin();
-			for (; itAncestor != pathAncestor.end(); ++itAncestor, ++itDescendant)
-			{
-				if (itDescendant == pathDescendant.end() || *itAncestor != *itDescendant)
-				{
-					return false;
-				}
-			}
-
-			return true;
+			return EditorPathUtils::IsSameOrAncestorPath(pathAncestor, pathDescendant);
 		}
 	}
 }

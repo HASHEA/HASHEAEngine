@@ -1,11 +1,11 @@
 #include "Panels/ViewportPanelSupport.h"
 
-#include "Base/input/Input.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorSettingsService.h"
 #include "Services/EditorViewportCameraService.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -32,9 +32,31 @@ namespace AshEditor
 			return std::to_string(uWidth) + " x " + std::to_string(uHeight);
 		}
 
+		std::string FormatFixedDouble(double dValue, int iPrecision)
+		{
+			char arrBuffer[32] = {};
+			const int iClampedPrecision = std::clamp(iPrecision, 0, 4);
+			std::snprintf(arrBuffer, sizeof(arrBuffer), "%.*f", iClampedPrecision, dValue);
+			return arrBuffer;
+		}
+
 		bool IsSceneViewportPresentation(const EditorViewportPresentation& refPresentation)
 		{
 			return refPresentation.eKind == EditorViewportKind::Scene;
+		}
+
+		const char* GetViewportOverlayTitle(const EditorViewportPresentation& refPresentation)
+		{
+			switch (refPresentation.eKind)
+			{
+			case EditorViewportKind::Scene:
+				return "Scene";
+			case EditorViewportKind::Game:
+				return "Game";
+			case EditorViewportKind::Auxiliary:
+			default:
+				return "Viewport";
+			}
 		}
 	}
 
@@ -74,14 +96,6 @@ namespace AshEditor
 			const float fDeltaX = refFirstPoint.x - refSecondPoint.x;
 			const float fDeltaY = refFirstPoint.y - refSecondPoint.y;
 			return fDeltaX * fDeltaX + fDeltaY * fDeltaY;
-		}
-
-		AshEngine::UIVec2 GetMouseScreenPosition(const AshEngine::InputState& refInput)
-		{
-			return {
-				static_cast<float>(refInput.get_mouse_x()),
-				static_cast<float>(refInput.get_mouse_y())
-			};
 		}
 
 		void DrawViewportDisplayOptionsMenu(
@@ -130,10 +144,13 @@ namespace AshEditor
 				return;
 			}
 
-			refUi.menu_item("Accept Input", nullptr, &refPresentation.bAcceptsInput, true);
-			if (IsSceneViewportPresentation(refPresentation) && refDeps.pViewportCameraService)
+			const bool bSceneViewport = IsSceneViewportPresentation(refPresentation);
+			if (!bSceneViewport)
 			{
-				refUi.separator();
+				refUi.menu_item("Accept Input", nullptr, &refPresentation.bAcceptsInput, true);
+			}
+			if (bSceneViewport && refDeps.pViewportCameraService)
+			{
 				float fMoveSpeed = refDeps.pViewportCameraService->GetMoveSpeed(strViewportId);
 				refUi.set_next_item_width(140.0f);
 				if (refUi.drag_float(
@@ -158,48 +175,78 @@ namespace AshEditor
 			const EditorViewportInstance& refViewport,
 			const EditorViewportPresentation& refPresentation,
 			const EditorViewportRenderState* pRenderState,
+			const AshEngine::SceneViewStats* pSceneStats,
 			bool bIsPrimary)
 		{
 			std::vector<std::string> vecLines{};
+			if (!refPresentation.bShowOverlays && !refPresentation.bShowStats)
+			{
+				return vecLines;
+			}
 
 			if (refPresentation.bShowOverlays)
 			{
-				std::string strSummary = BuildViewportSizeLabel(
-					refViewport.state.uWidth,
-					refViewport.state.uHeight);
-				if (bIsPrimary)
+				std::string strHeader =
+					std::string(GetViewportOverlayTitle(refPresentation)) + "  " +
+					BuildViewportSizeLabel(refViewport.state.uWidth, refViewport.state.uHeight);
+				if (bIsPrimary && refPresentation.eKind != EditorViewportKind::Game)
 				{
-					AppendInlineStatus(strSummary, "Primary");
-				}
-				if (refPresentation.bAcceptsInput)
-				{
-					AppendInlineStatus(strSummary, "Input");
+					AppendInlineStatus(strHeader, "Primary");
 				}
 				if (refPresentation.bPreserveAspect)
 				{
-					AppendInlineStatus(strSummary, "Aspect");
+					AppendInlineStatus(strHeader, "Aspect");
 				}
-				vecLines.push_back(std::move(strSummary));
+				if (pRenderState && pRenderState->bPendingSync)
+				{
+					AppendInlineStatus(strHeader, "Sync");
+				}
+				vecLines.push_back(std::move(strHeader));
 			}
 
 			if (refPresentation.bShowStats)
 			{
-				vecLines.push_back(
-					"Requested " +
-					BuildViewportSizeLabel(
-						refViewport.state.uRequestedWidth,
-						refViewport.state.uRequestedHeight));
-
-				std::string strInteraction =
-					"Focus " +
-					std::string(refViewport.state.bFocused ? "yes" : "no") +
-					"  Hover " +
-					std::string(refViewport.state.bContentHovered ? "yes" : "no");
-				if (pRenderState && pRenderState->bPendingSync)
+				if (pSceneStats && pSceneStats->valid)
 				{
-					AppendInlineStatus(strInteraction, "Sync pending");
+					const bool bShowDetailedStats =
+						refPresentation.bShowOverlays && refViewport.state.bContentHovered;
+					std::string strPerformance =
+						"FPS " +
+						FormatFixedDouble(pSceneStats->instantaneous_fps, 1) +
+						"  Frame " +
+						FormatFixedDouble(pSceneStats->cpu_frame_time_ms, 2) +
+						" ms";
+					vecLines.push_back(std::move(strPerformance));
+
+					if (bShowDetailedStats)
+					{
+						const char* pBackendName =
+							(pSceneStats->rhi_backend_name && pSceneStats->rhi_backend_name[0] != '\0')
+							? pSceneStats->rhi_backend_name
+							: "RHI";
+						std::string strDrawSummary =
+							std::string(pBackendName) +
+							"  Draws " +
+							std::to_string(pSceneStats->draw_call_count) +
+							"  Passes " +
+							std::to_string(pSceneStats->graphics_pass_count) +
+							" / " +
+							std::to_string(pSceneStats->compute_dispatch_count);
+						vecLines.push_back(std::move(strDrawSummary));
+					}
 				}
-				vecLines.push_back(std::move(strInteraction));
+				else
+				{
+					if (refPresentation.bShowOverlays)
+					{
+						std::string strRequested =
+							"Requested " +
+							BuildViewportSizeLabel(
+								refViewport.state.uRequestedWidth,
+								refViewport.state.uRequestedHeight);
+						vecLines.push_back(std::move(strRequested));
+					}
+				}
 			}
 
 			return vecLines;
@@ -213,9 +260,9 @@ namespace AshEditor
 			float fContentHeight)
 		{
 			static const char* kHintLine =
-				"Alt+LMB Orbit  |  MMB Pan  |  Alt+RMB/Wheel Zoom  |  F Focus  |  W Move  E Scale  R Rotate";
-			const float fPaddingX = 8.0f;
-			const float fPaddingY = 5.0f;
+				"Alt+LMB Orbit  MMB Pan  Wheel Zoom  F Focus  W/E/R Gizmo";
+			const float fPaddingX = 7.0f;
+			const float fPaddingY = 4.0f;
 			const float fMargin = 12.0f;
 			const AshEngine::UIVec2 vecHintSize = refUi.calc_text_size(kHintLine);
 			const float fBoxWidth = vecHintSize.x + fPaddingX * 2.0f;
@@ -229,10 +276,10 @@ namespace AshEditor
 			}
 
 			const AshEngine::UIRect rectBg{ fBoxX, fBoxY, fBoxWidth, fBoxHeight };
-			refUi.draw_window_rect_filled(rectBg, { 0.10f, 0.12f, 0.16f, 0.48f }, 5.0f);
-			refUi.draw_window_rect(rectBg, { 0.48f, 0.56f, 0.66f, 0.24f }, 5.0f);
+			refUi.draw_window_rect_filled(rectBg, { 0.08f, 0.10f, 0.13f, 0.38f }, 6.0f);
+			refUi.draw_window_rect(rectBg, { 0.48f, 0.56f, 0.66f, 0.18f }, 6.0f);
 
-			const AshEngine::UIColor colorHint{ 0.72f, 0.77f, 0.82f, 0.86f };
+			const AshEngine::UIColor colorHint{ 0.78f, 0.82f, 0.86f, 0.78f };
 			refUi.draw_window_text({ fBoxX + fPaddingX, fBoxY + fPaddingY }, colorHint, kHintLine);
 		}
 	}

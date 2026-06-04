@@ -2,10 +2,14 @@
 
 #include "Base/hlog.h"
 #include "Core/EditorComponentComparison.h"
+#include "Function/Gui/UIContext.h"
+#include "Panels/Inspector/IInspectorComponentHost.h"
 #include "Services/AssetDatabaseService.h"
+#include "Widgets/InspectorPropertyWidgets.h"
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <string_view>
 
 namespace AshEditor
@@ -20,15 +24,26 @@ namespace AshEditor
 		constexpr float kInspectorMaximumLightRange = 100000.0f;
 		constexpr float kInspectorMinimumConeAngle = 0.0f;
 		constexpr float kInspectorMaximumConeAngle = 180.0f;
+		constexpr float kInspectorMaximumEnvironmentIntensity = 10.0f;
+		constexpr float kInspectorMinimumEnvironmentRotation = -360.0f;
+		constexpr float kInspectorMaximumEnvironmentRotation = 360.0f;
 
 		bool IsNearlyEqual(const float fLeft, const float fRight, const float fTolerance = 0.0001f)
 		{
 			return std::fabs(fLeft - fRight) <= fTolerance;
 		}
 
-		bool IsSupportedMeshAssetType(const AshEngine::AssetType eAssetType)
+		bool IsSupportedInspectorAssetType(
+			const AshEngine::AssetType eAssetType,
+			const std::vector<AshEngine::AssetType>& refAllowedAssetTypes)
 		{
-			return eAssetType == AshEngine::AssetType::Mesh || eAssetType == AshEngine::AssetType::Model;
+			if (refAllowedAssetTypes.empty())
+			{
+				return true;
+			}
+
+			return std::find(refAllowedAssetTypes.begin(), refAllowedAssetTypes.end(), eAssetType) !=
+				refAllowedAssetTypes.end();
 		}
 
 		bool IsValidMeshMobility(const AshEngine::SceneMobility eMobility)
@@ -44,18 +59,14 @@ namespace AshEditor
 			}
 		}
 
-		bool HasMeshAssetPathChanged(const InspectorPanelState::MeshDraft& refDraft)
+		std::string GetOriginalEnvironmentIblAssetPath(const InspectorPanelState::EnvironmentDraft& refDraft)
 		{
-			if (!refDraft.optCurrentValue.has_value())
-			{
-				return false;
-			}
+			return refDraft.optOriginalValue.has_value() ? refDraft.optOriginalValue->ibl_asset_path : std::string{};
+		}
 
-			const std::string_view svCurrentPath = refDraft.optCurrentValue->asset_path;
-			const std::string_view svOriginalPath = refDraft.optOriginalValue.has_value()
-				? std::string_view(refDraft.optOriginalValue->asset_path)
-				: std::string_view{};
-			return svCurrentPath != svOriginalPath;
+		std::string GetOriginalEnvironmentSourceTexturePath(const InspectorPanelState::EnvironmentDraft& refDraft)
+		{
+			return refDraft.optOriginalValue.has_value() ? refDraft.optOriginalValue->source_texture_path : std::string{};
 		}
 
 		float SanitizeFiniteScalar(const float fValue, const float fFallbackValue)
@@ -80,6 +91,44 @@ namespace AshEditor
 				SanitizeFiniteScalar(refValue.z, refFallbackValue.z)
 			};
 		}
+
+		std::string MakeVisibleInspectorLabel(const char* pLabel)
+		{
+			if (!pLabel)
+			{
+				return {};
+			}
+
+			const std::string_view svLabel{ pLabel };
+			const size_t uHiddenIdOffset = svLabel.find("##");
+			return uHiddenIdOffset == std::string_view::npos
+				? std::string(svLabel)
+				: std::string(svLabel.substr(0, uHiddenIdOffset));
+		}
+
+		float CalcInspectorSmallButtonWidth(AshEngine::UIContext& refUi, const char* pLabel)
+		{
+			const std::string strVisibleLabel = MakeVisibleInspectorLabel(pLabel);
+			const char* pVisibleLabel = strVisibleLabel.empty() ? pLabel : strVisibleLabel.c_str();
+			const float fTextWidth = pVisibleLabel ? refUi.calc_text_size(pVisibleLabel).x : 0.0f;
+			return fTextWidth + refUi.get_style_frame_padding().x * 2.0f;
+		}
+
+		bool CanDrawInspectorActionRowInline(
+			AshEngine::UIContext& refUi,
+			const InspectorComponentActionRowDesc& refDesc)
+		{
+			const float fSpacing = refUi.get_style_item_spacing().x;
+			float fRequiredWidth =
+				CalcInspectorSmallButtonWidth(refUi, refDesc.pResetLabel) +
+				fSpacing +
+				CalcInspectorSmallButtonWidth(refUi, refDesc.pRestoreLabel);
+			if (refDesc.pRemoveIdSuffix)
+			{
+				fRequiredWidth += fSpacing + CalcInspectorSmallButtonWidth(refUi, "Remove Component");
+			}
+			return refUi.get_content_region_avail().x >= fRequiredWidth;
+		}
 	}
 
 	void LogInspectorDraftSanitized(const char* pComponentName, const SceneEntityId uEntityId)
@@ -100,6 +149,54 @@ namespace AshEditor
 			pComponentName,
 			pTargetState,
 			static_cast<unsigned long long>(uEntityId));
+	}
+
+	InspectorComponentActionRowResult DrawInspectorComponentActionRow(
+		AshEngine::UIContext& refUi,
+		IInspectorComponentHost& refHost,
+		const InspectorComponentActionRowDesc& refDesc)
+	{
+		InspectorComponentActionRowResult result{};
+		const bool bDrawInline = CanDrawInspectorActionRowInline(refUi, refDesc);
+		if (DrawInspectorSmallActionButton(
+			refUi,
+			refDesc.pResetLabel,
+			{
+				refDesc.pResetTooltipTitle,
+				refDesc.pResetDescription,
+				{},
+				{},
+				"Immediate action"
+			}))
+		{
+			result.bResetRequested = true;
+		}
+		if (bDrawInline)
+		{
+			refUi.same_line();
+		}
+		if (DrawInspectorSmallActionButton(
+			refUi,
+			refDesc.pRestoreLabel,
+			{
+				refDesc.pRestoreTooltipTitle,
+				refDesc.pRestoreDescription,
+				{},
+				{},
+				"Immediate action"
+			}))
+		{
+			result.bRestoreRequested = true;
+		}
+		if (refDesc.pRemoveIdSuffix)
+		{
+			if (bDrawInline)
+			{
+				refUi.same_line();
+			}
+			result.bRemoveRequested = refHost.DrawComponentRemoveAction(refUi, refDesc.pRemoveIdSuffix);
+		}
+		return result;
 	}
 
 	bool IsPerspectiveCamera(const AshEngine::CameraComponent& refCamera)
@@ -195,6 +292,16 @@ namespace AshEditor
 			45.0f,
 			refComponent.inner_cone_angle_degrees,
 			kInspectorMaximumConeAngle);
+		refComponent.shadow_distance = SanitizeClampedScalar(
+			refComponent.shadow_distance,
+			0.0f,
+			0.0f,
+			kInspectorMaximumLightRange);
+		refComponent.near_shadow_distance = SanitizeClampedScalar(
+			refComponent.near_shadow_distance,
+			0.0f,
+			0.0f,
+			kInspectorMaximumLightRange);
 		if (refComponent.outer_cone_angle_degrees < refComponent.inner_cone_angle_degrees)
 		{
 			refComponent.outer_cone_angle_degrees = refComponent.inner_cone_angle_degrees;
@@ -218,36 +325,114 @@ namespace AshEditor
 			return false;
 		}
 
-		const std::string& strAssetPath = refDraft.optCurrentValue->asset_path;
-		if (strAssetPath.empty())
-		{
-			strOutMessage = "Choose a mesh or model asset before this component is committed to the scene.";
-			return true;
-		}
-		if (!HasMeshAssetPathChanged(refDraft) || !pAssetDatabaseService)
+		InspectorAssetPathValidationDesc desc{};
+		desc.strAssetPath = refDraft.optCurrentValue->asset_path;
+		desc.strOriginalAssetPath = refDraft.optOriginalValue.has_value()
+			? refDraft.optOriginalValue->asset_path
+			: std::string{};
+		desc.vecAllowedAssetTypes = { AshEngine::AssetType::Mesh, AshEngine::AssetType::Model };
+		desc.pEmptyAssetPathMessage = "Choose a mesh or model asset before this component is committed to the scene.";
+		desc.pMissingAssetMessage = "The typed asset path is not present in the current asset database.";
+		desc.pUnsupportedAssetTypeMessage = "The selected asset is not a mesh or model resource.";
+		desc.pLoadStateProblemPrefix = "The selected asset is currently ";
+		desc.bValidateOnlyWhenChanged = true;
+		desc.bBlockWhenEmpty = true;
+		return TryGetInspectorAssetPathValidationMessage(desc, pAssetDatabaseService, strOutMessage);
+	}
+
+	bool TryGetEnvironmentIblAssetValidationMessage(
+		const InspectorPanelState::EnvironmentDraft& refDraft,
+		const AssetDatabaseService* pAssetDatabaseService,
+		std::string& strOutMessage)
+	{
+		strOutMessage.clear();
+		if (!refDraft.optCurrentValue.has_value())
 		{
 			return false;
 		}
 
-		const AshEngine::AssetInfo* pAssetInfo = pAssetDatabaseService->FindByPath(strAssetPath);
+		InspectorAssetPathValidationDesc desc{};
+		desc.strAssetPath = refDraft.optCurrentValue->ibl_asset_path;
+		desc.strOriginalAssetPath = GetOriginalEnvironmentIblAssetPath(refDraft);
+		desc.vecAllowedAssetTypes = { AshEngine::AssetType::Texture, AshEngine::AssetType::Prefab };
+		desc.pMissingAssetMessage = "The typed IBL asset path is not present in the current asset database.";
+		desc.pUnsupportedAssetTypeMessage = "The selected IBL asset must be a texture or environment prefab.";
+		desc.pLoadStateProblemPrefix = "The selected IBL asset is currently ";
+		desc.bValidateOnlyWhenChanged = true;
+		return TryGetInspectorAssetPathValidationMessage(desc, pAssetDatabaseService, strOutMessage);
+	}
+
+	bool TryGetEnvironmentSourceTextureValidationMessage(
+		const InspectorPanelState::EnvironmentDraft& refDraft,
+		const AssetDatabaseService* pAssetDatabaseService,
+		std::string& strOutMessage)
+	{
+		strOutMessage.clear();
+		if (!refDraft.optCurrentValue.has_value())
+		{
+			return false;
+		}
+
+		InspectorAssetPathValidationDesc desc{};
+		desc.strAssetPath = refDraft.optCurrentValue->source_texture_path;
+		desc.strOriginalAssetPath = GetOriginalEnvironmentSourceTexturePath(refDraft);
+		desc.vecAllowedAssetTypes = { AshEngine::AssetType::Texture };
+		desc.pMissingAssetMessage = "The typed source texture path is not present in the current asset database.";
+		desc.pUnsupportedAssetTypeMessage = "The selected source texture must be a texture resource.";
+		desc.pLoadStateProblemPrefix = "The selected source texture is currently ";
+		desc.bValidateOnlyWhenChanged = true;
+		return TryGetInspectorAssetPathValidationMessage(desc, pAssetDatabaseService, strOutMessage);
+	}
+
+	bool TryGetInspectorAssetPathValidationMessage(
+		const InspectorAssetPathValidationDesc& refDesc,
+		const AssetDatabaseService* pAssetDatabaseService,
+		std::string& strOutMessage)
+	{
+		strOutMessage.clear();
+		if (refDesc.strAssetPath.empty())
+		{
+			if (refDesc.bBlockWhenEmpty && refDesc.pEmptyAssetPathMessage)
+			{
+				strOutMessage = refDesc.pEmptyAssetPathMessage;
+				return true;
+			}
+			return false;
+		}
+		if (refDesc.bValidateOnlyWhenChanged && refDesc.strAssetPath == refDesc.strOriginalAssetPath)
+		{
+			return false;
+		}
+		if (!pAssetDatabaseService)
+		{
+			return false;
+		}
+
+		const AshEngine::AssetInfo* pAssetInfo = pAssetDatabaseService->FindByPath(refDesc.strAssetPath);
 		if (!pAssetInfo)
 		{
-			strOutMessage = "The typed asset path is not present in the current asset database.";
-			return true;
+			strOutMessage = refDesc.pMissingAssetMessage
+				? refDesc.pMissingAssetMessage
+				: "The typed asset path is not present in the current asset database.";
+			return refDesc.bBlockWhenMissingAsset;
 		}
-		if (!IsSupportedMeshAssetType(pAssetInfo->type))
+		if (!IsSupportedInspectorAssetType(pAssetInfo->type, refDesc.vecAllowedAssetTypes))
 		{
-			strOutMessage = "The selected asset is not a mesh or model resource.";
-			return true;
+			strOutMessage = refDesc.pUnsupportedAssetTypeMessage
+				? refDesc.pUnsupportedAssetTypeMessage
+				: "The selected asset type is not supported by this field.";
+			return refDesc.bBlockWhenUnsupportedAssetType;
 		}
 
 		const AshEngine::AssetLoadState eLoadState = pAssetDatabaseService->GetLoadState(pAssetInfo->id);
 		if (eLoadState == AshEngine::AssetLoadState::Missing || eLoadState == AshEngine::AssetLoadState::Failed)
 		{
-			strOutMessage = std::string("The selected asset is currently ") +
+			strOutMessage = std::string(refDesc.pLoadStateProblemPrefix
+				? refDesc.pLoadStateProblemPrefix
+				: "The selected asset is currently ") +
 				AssetDatabaseService::GetLoadStateLabel(eLoadState) +
 				" in the asset database.";
-			return true;
+			return refDesc.bBlockWhenLoadStateProblem;
 		}
 
 		return false;
@@ -272,5 +457,46 @@ namespace AshEditor
 	bool SanitizeOptionalMeshComponent(std::optional<AshEngine::MeshComponent>& refValue)
 	{
 		return refValue.has_value() && SanitizeMeshComponent(*refValue);
+	}
+
+	bool HasEnvironmentClampWarning(const AshEngine::EnvironmentComponent& refEnvironment)
+	{
+		return
+			refEnvironment.intensity >= kInspectorMaximumEnvironmentIntensity ||
+			refEnvironment.lighting_intensity >= kInspectorMaximumEnvironmentIntensity ||
+			refEnvironment.background_intensity >= kInspectorMaximumEnvironmentIntensity ||
+			refEnvironment.rotation_degrees <= kInspectorMinimumEnvironmentRotation ||
+			refEnvironment.rotation_degrees >= kInspectorMaximumEnvironmentRotation;
+	}
+
+	bool SanitizeEnvironmentComponent(AshEngine::EnvironmentComponent& refComponent)
+	{
+		const AshEngine::EnvironmentComponent originalValue = refComponent;
+		refComponent.intensity = SanitizeClampedScalar(
+			refComponent.intensity,
+			1.0f,
+			0.0f,
+			kInspectorMaximumEnvironmentIntensity);
+		refComponent.lighting_intensity = SanitizeClampedScalar(
+			refComponent.lighting_intensity,
+			1.0f,
+			0.0f,
+			kInspectorMaximumEnvironmentIntensity);
+		refComponent.background_intensity = SanitizeClampedScalar(
+			refComponent.background_intensity,
+			1.0f,
+			0.0f,
+			kInspectorMaximumEnvironmentIntensity);
+		refComponent.rotation_degrees = SanitizeClampedScalar(
+			refComponent.rotation_degrees,
+			0.0f,
+			kInspectorMinimumEnvironmentRotation,
+			kInspectorMaximumEnvironmentRotation);
+		return !EnvironmentComponentsEqual(refComponent, originalValue);
+	}
+
+	bool SanitizeOptionalEnvironmentComponent(std::optional<AshEngine::EnvironmentComponent>& refValue)
+	{
+		return refValue.has_value() && SanitizeEnvironmentComponent(*refValue);
 	}
 }

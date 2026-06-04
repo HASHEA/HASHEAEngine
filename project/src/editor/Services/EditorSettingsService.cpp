@@ -243,6 +243,7 @@ namespace AshEditor
 		_settings.strConsoleFilterText = root.value("consoleFilterText", _settings.strConsoleFilterText);
 		_settings.strConsoleSourceFilter = root.value("consoleSourceFilter", _settings.strConsoleSourceFilter);
 		_settings.iConsoleSeverityFilter = root.value("consoleSeverityFilter", _settings.iConsoleSeverityFilter);
+		_settings.bConsoleAutoScroll = root.value("consoleAutoScroll", _settings.bConsoleAutoScroll);
 		if (const json::const_iterator itThemeId = root.find("uiThemeId");
 			itThemeId != root.end() && itThemeId->is_string())
 		{
@@ -284,6 +285,7 @@ namespace AshEditor
 		root["consoleFilterText"] = _settings.strConsoleFilterText;
 		root["consoleSourceFilter"] = _settings.strConsoleSourceFilter;
 		root["consoleSeverityFilter"] = _settings.iConsoleSeverityFilter;
+		root["consoleAutoScroll"] = _settings.bConsoleAutoScroll;
 		// Keep both keys during the transition so older local builds still read the saved theme correctly.
 		root["uiThemeId"] = _settings.strUiThemePreset;
 		root["uiThemePreset"] = _settings.strUiThemePreset;
