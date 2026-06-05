@@ -249,6 +249,28 @@ namespace AshEngine
 			}
 		}
 
+		static auto try_get_json_vec3(const json& object, const char* key, glm::vec3& out_value) -> bool
+		{
+			const auto value_it = object.find(key);
+			if (value_it == object.end() || !value_it->is_array() || value_it->size() != 3u)
+			{
+				return false;
+			}
+
+			try
+			{
+				out_value.x = (*value_it)[0].get<float>();
+				out_value.y = (*value_it)[1].get<float>();
+				out_value.z = (*value_it)[2].get<float>();
+				return true;
+			}
+			catch (const std::exception& exception)
+			{
+				HLogWarning("SceneConfig field '{}' has invalid vec3 value: {}.", key, exception.what());
+				return false;
+			}
+		}
+
 		static auto deserialize_scene_render_config(const json& root) -> SceneRenderConfig
 		{
 			SceneRenderConfig config = make_default_scene_render_config();
@@ -327,6 +349,67 @@ namespace AshEngine
 					sanitize_directional_shadow_config(config.directional_shadows, make_default_directional_shadow_config());
 			}
 
+			if (const auto bloom_it = scene_config.find("bloom"); bloom_it != scene_config.end() && bloom_it->is_object())
+			{
+				try_get_json_value(*bloom_it, "enabled", config.bloom.enabled);
+
+				std::string quality{};
+				if (try_get_json_value(*bloom_it, "quality", quality))
+				{
+					BloomQuality parsed = config.bloom.quality;
+					if (try_parse_bloom_quality(quality, parsed))
+					{
+						config.bloom.quality = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig bloom.quality '{}' is invalid. Keeping default '{}'.",
+							quality,
+							bloom_quality_name(config.bloom.quality));
+					}
+				}
+
+				try_get_json_value(*bloom_it, "intensity", config.bloom.intensity);
+				try_get_json_value(*bloom_it, "threshold", config.bloom.threshold);
+				try_get_json_value(*bloom_it, "soft_knee", config.bloom.soft_knee);
+				try_get_json_value(*bloom_it, "size_scale", config.bloom.size_scale);
+
+				std::string debug_view{};
+				if (try_get_json_value(*bloom_it, "debug_view", debug_view))
+				{
+					BloomDebugView parsed = config.bloom.debug_view;
+					if (try_parse_bloom_debug_view(debug_view, parsed))
+					{
+						config.bloom.debug_view = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig bloom.debug_view '{}' is invalid. Keeping default '{}'.",
+							debug_view,
+							bloom_debug_view_name(config.bloom.debug_view));
+					}
+				}
+
+				if (const auto stages_it = bloom_it->find("stages"); stages_it != bloom_it->end() && stages_it->is_array())
+				{
+					const size_t stage_count = std::min(config.bloom.stages.size(), stages_it->size());
+					for (size_t index = 0; index < stage_count; ++index)
+					{
+						const json& stage_json = (*stages_it)[index];
+						if (!stage_json.is_object())
+						{
+							continue;
+						}
+						try_get_json_value(stage_json, "size", config.bloom.stages[index].size);
+						try_get_json_vec3(stage_json, "tint", config.bloom.stages[index].tint);
+					}
+				}
+
+				config.bloom = sanitize_bloom_config(config.bloom, make_default_bloom_config());
+			}
+
 			return config;
 		}
 
@@ -360,6 +443,23 @@ namespace AshEngine
 					{ "depth_bias", config.directional_shadows.depth_bias },
 					{ "normal_bias", config.directional_shadows.normal_bias },
 					{ "pcf_radius", config.directional_shadows.pcf_radius },
+				} },
+				{ "bloom", json{
+					{ "enabled", config.bloom.enabled },
+					{ "quality", bloom_quality_name(config.bloom.quality) },
+					{ "intensity", config.bloom.intensity },
+					{ "threshold", config.bloom.threshold },
+					{ "soft_knee", config.bloom.soft_knee },
+					{ "size_scale", config.bloom.size_scale },
+					{ "debug_view", bloom_debug_view_name(config.bloom.debug_view) },
+					{ "stages", json::array({
+						json{ { "size", config.bloom.stages[0].size }, { "tint", to_json_vec3(config.bloom.stages[0].tint) } },
+						json{ { "size", config.bloom.stages[1].size }, { "tint", to_json_vec3(config.bloom.stages[1].tint) } },
+						json{ { "size", config.bloom.stages[2].size }, { "tint", to_json_vec3(config.bloom.stages[2].tint) } },
+						json{ { "size", config.bloom.stages[3].size }, { "tint", to_json_vec3(config.bloom.stages[3].tint) } },
+						json{ { "size", config.bloom.stages[4].size }, { "tint", to_json_vec3(config.bloom.stages[4].tint) } },
+						json{ { "size", config.bloom.stages[5].size }, { "tint", to_json_vec3(config.bloom.stages[5].tint) } }
+					}) },
 				} },
 			};
 		}

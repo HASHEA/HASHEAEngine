@@ -1190,7 +1190,8 @@ namespace AshEngine
 				std::istreambuf_iterator<char>(engine_ini),
 				std::istreambuf_iterator<char>() };
 			if (engine_ini_source.find("[AmbientOcclusion]") != std::string::npos ||
-				engine_ini_source.find("[DirectionalShadows]") != std::string::npos)
+				engine_ini_source.find("[DirectionalShadows]") != std::string::npos ||
+				engine_ini_source.find("[Bloom]") != std::string::npos)
 			{
 				return report_self_test_failure("Engine.ini config authority", "scene render config sections must live in scene JSON, not Engine.ini");
 			}
@@ -3885,6 +3886,11 @@ namespace AshEngine
 			config.ambient_occlusion.mode = AmbientOcclusionMode::HBAO;
 			config.ambient_occlusion.quality = AmbientOcclusionQuality::High;
 			config.directional_shadows.enabled = false;
+			config.bloom.enabled = true;
+			config.bloom.quality = BloomQuality::Epic;
+			config.bloom.intensity = 1.25f;
+			config.bloom.threshold = 0.75f;
+			config.bloom.debug_view = BloomDebugView::Final;
 			if (!scene.set_render_config(config))
 			{
 				return report_self_test_failure("RenderScene render config snapshot", "failed to set scene render config");
@@ -3922,8 +3928,15 @@ namespace AshEngine
 				return report_self_test_failure("RenderScene render config snapshot", "failed to build full visible frame");
 			}
 
-			return (scene_render_config_equal(light_frame.render_config, config) &&
-				scene_render_config_equal(full_frame.render_config, config)) ||
+			const bool ok =
+				scene_render_config_equal(light_frame.render_config, config) &&
+				scene_render_config_equal(full_frame.render_config, config) &&
+				light_frame.render_config.bloom.enabled &&
+				light_frame.render_config.bloom.quality == BloomQuality::Epic &&
+				light_frame.render_config.bloom.intensity == 1.25f &&
+				full_frame.render_config.bloom.enabled &&
+				full_frame.render_config.bloom.debug_view == BloomDebugView::Final;
+			return ok ||
 				report_self_test_failure("RenderScene render config snapshot", "VisibleRenderFrame did not carry the scene render config");
 		}
 
@@ -4120,6 +4133,23 @@ namespace AshEngine
 					"      \"depth_bias\": 0.002,\n"
 					"      \"normal_bias\": 0.06,\n"
 					"      \"pcf_radius\": 2\n"
+					"    },\n"
+					"    \"bloom\": {\n"
+					"      \"enabled\": true,\n"
+					"      \"quality\": \"Epic\",\n"
+					"      \"intensity\": 1.5,\n"
+					"      \"threshold\": -4.0,\n"
+					"      \"soft_knee\": 2.0,\n"
+					"      \"size_scale\": 10.0,\n"
+					"      \"debug_view\": \"CompositeHDR\",\n"
+					"      \"stages\": [\n"
+					"        { \"size\": 0.5, \"tint\": [1.0, 1.0, 1.0] },\n"
+					"        { \"size\": 1.5, \"tint\": [1.0, 0.8, 0.7] },\n"
+					"        { \"size\": 2.5, \"tint\": [0.8, 0.9, 1.0] },\n"
+					"        { \"size\": 4.5, \"tint\": [0.7, 0.8, 1.0] },\n"
+					"        { \"size\": 8.5, \"tint\": [0.6, 0.7, 1.0] },\n"
+					"        { \"size\": 20.0, \"tint\": [-1.0, 9.0, 0.25] }\n"
+					"      ]\n"
 					"    }\n"
 					"  },\n"
 					"  \"entities\": []\n"
@@ -4147,7 +4177,18 @@ namespace AshEngine
 				loaded.directional_shadows.near_cascade_resolution == 4096u &&
 				loaded.directional_shadows.outer_cascade_resolution == 512u &&
 				loaded.directional_shadows.dynamic_atlas_size == 4096u &&
-				loaded.directional_shadows.static_cache_atlas_size == 4096u;
+				loaded.directional_shadows.static_cache_atlas_size == 4096u &&
+				loaded.bloom.enabled &&
+				loaded.bloom.quality == BloomQuality::Epic &&
+				loaded.bloom.intensity == 1.5f &&
+				loaded.bloom.threshold == -1.0f &&
+				loaded.bloom.soft_knee == 1.0f &&
+				loaded.bloom.size_scale == 8.0f &&
+				loaded.bloom.debug_view == BloomDebugView::CompositeHDR &&
+				loaded.bloom.stages[5].size == 16.0f &&
+				loaded.bloom.stages[5].tint.x == 0.0f &&
+				loaded.bloom.stages[5].tint.y == 8.0f &&
+				loaded.bloom.stages[5].tint.z == 0.25f;
 			if (!parsed_ok)
 			{
 				return report_self_test_failure("Scene render config JSON", "scene_config fields were not parsed and sanitized as expected");
