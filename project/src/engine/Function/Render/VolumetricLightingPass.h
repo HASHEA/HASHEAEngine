@@ -57,6 +57,7 @@ namespace AshEngine
 	private:
 		bool create_resources(Renderer& renderer);
 		bool create_programs(Renderer& renderer);
+		bool upload_light_buffer(const VisibleRenderFrame& frame, const VolumetricLightingConfig& config, uint32_t& out_light_count);
 
 	private:
 		Renderer* m_renderer = nullptr;

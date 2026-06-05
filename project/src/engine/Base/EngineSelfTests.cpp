@@ -1528,7 +1528,14 @@ namespace AshEngine
 					"SceneLightShaftScreenSpacePass",
 					"RenderGraphAccess::ComputeUAV",
 					"RenderGraphAccess::ComputeSRV",
-					"ASH_PROFILE_SCOPE_NC"
+					"ASH_PROFILE_SCOPE_NC",
+					"m_density_program->set_rw_texture(\"SceneVolumetricDensity\"",
+					"m_light_injection_program->set_texture(\"SceneVolumetricDensity\"",
+					"m_light_injection_program->set_storage_buffer(\"SceneVolumetricLights\"",
+					"m_integrate_program->set_rw_texture(\"SceneVolumetricIntegratedLighting\"",
+					"m_composite_program->set_texture(\"SceneHDRLinear\"",
+					"context.dispatch",
+					"context.draw"
 				});
 
 			return (header_ok && source_ok) ||

@@ -26,8 +26,15 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 
 	float2 uv = (float2(dispatch_id.xy) + 0.5) / max(float2(width, height), float2(1.0, 1.0));
 	float density = SceneVolumetricDensity.SampleLevel(ScenePointClampSampler, uv, 0).r;
-	float light_count = AshVolumetricConfig1.x;
-	float3 scattering = density * AshVolumetricConfig0.z;
-	scattering *= saturate(light_count / max(AshVolumetricConfig0.w, 1.0));
+	uint light_count = (uint)AshVolumetricConfig1.x;
+	float3 scattering = 0.0.xxx;
+	for (uint light_index = 0u; light_index < min(light_count, 256u); ++light_index)
+	{
+		VolumetricLightData light = SceneVolumetricLights[light_index];
+		float type = light.direction_type.w;
+		float attenuation = type == 0.0 ? 1.0 : saturate(light.position_range.w / max(light.position_range.w + 1.0, 1.0));
+		scattering += light.color_intensity.rgb * light.color_intensity.w * attenuation;
+	}
+	scattering *= density * AshVolumetricConfig0.z / max((float)max(light_count, 1u), 1.0);
 	SceneVolumetricScattering[dispatch_id.xy] = float4(scattering, density);
 }
