@@ -31,6 +31,7 @@
 #include "Function/Render/SceneView.h"
 #include "Function/Render/SunLightShadowPass.h"
 #include "Function/Render/TextureAsset.h"
+#include "Function/Render/VolumetricLightingConfig.h"
 #include "Function/Scene/Scene.h"
 #include "Function/Scene/SceneQuery.h"
 #include "Graphics/DynamicRHI.h"
@@ -1369,6 +1370,69 @@ namespace AshEngine
 			if (!sanitized_ok)
 			{
 				return report_self_test_failure("Bloom config", "sanitize_bloom_config did not clamp fields as expected");
+			}
+
+			return true;
+		}
+
+		auto test_volumetric_lighting_config_defaults_and_sanitization() -> bool
+		{
+			VolumetricLightingConfig defaults = make_default_volumetric_lighting_config();
+			if (defaults.enabled ||
+				defaults.quality != VolumetricLightingQuality::Medium ||
+				defaults.froxel_resolution_scale != 0.5f ||
+				defaults.froxel_depth_slices != 64u ||
+				defaults.max_lights != 64u ||
+				defaults.density != 0.02f ||
+				defaults.scattering_intensity != 1.0f ||
+				defaults.extinction_scale != 1.0f ||
+				defaults.anisotropy != 0.35f ||
+				!defaults.history ||
+				defaults.history_blend != 0.9f ||
+				defaults.screen_space_fallback ||
+				defaults.debug_view != VolumetricLightingDebugView::Off)
+			{
+				return report_self_test_failure("VolumetricLighting config", "default config does not match design contract");
+			}
+
+			VolumetricLightingQuality quality = VolumetricLightingQuality::Low;
+			VolumetricLightingDebugView debug_view = VolumetricLightingDebugView::Off;
+			if (!try_parse_volumetric_lighting_quality("Epic", quality) || quality != VolumetricLightingQuality::Epic)
+			{
+				return report_self_test_failure("VolumetricLighting config", "failed to parse Epic quality");
+			}
+			if (!try_parse_volumetric_lighting_debug_view("IntegratedLighting", debug_view) ||
+				debug_view != VolumetricLightingDebugView::IntegratedLighting)
+			{
+				return report_self_test_failure("VolumetricLighting config", "failed to parse IntegratedLighting debug view");
+			}
+
+			VolumetricLightingConfig invalid = defaults;
+			invalid.enabled = true;
+			invalid.froxel_resolution_scale = 2.0f;
+			invalid.froxel_depth_slices = 4096u;
+			invalid.max_lights = 10000u;
+			invalid.density = -4.0f;
+			invalid.scattering_intensity = -8.0f;
+			invalid.extinction_scale = -2.0f;
+			invalid.anisotropy = 4.0f;
+			invalid.history_blend = 1.0f;
+
+			const VolumetricLightingConfig sanitized =
+				sanitize_volumetric_lighting_config(invalid, defaults);
+			const bool sanitized_ok =
+				sanitized.enabled &&
+				sanitized.froxel_resolution_scale == 1.0f &&
+				sanitized.froxel_depth_slices == 128u &&
+				sanitized.max_lights == 256u &&
+				sanitized.density == 0.0f &&
+				sanitized.scattering_intensity == 0.0f &&
+				sanitized.extinction_scale == 0.0f &&
+				sanitized.anisotropy == 0.95f &&
+				sanitized.history_blend == 0.98f;
+			if (!sanitized_ok)
+			{
+				return report_self_test_failure("VolumetricLighting config", "sanitize did not clamp fields as expected");
 			}
 
 			return true;
@@ -4775,6 +4839,7 @@ namespace AshEngine
 		all_passed = test_render_feature_config_registers_vsync_without_reverse_z() && all_passed;
 		all_passed = test_engine_ini_excludes_scene_render_config_sections() && all_passed;
 		all_passed = test_bloom_config_defaults_and_sanitization() && all_passed;
+		all_passed = test_volumetric_lighting_config_defaults_and_sanitization() && all_passed;
 		all_passed = test_bloom_shader_source_contract() && all_passed;
 		all_passed = test_bloom_pass_source_contract() && all_passed;
 		all_passed = test_scene_renderer_bloom_integration_contract() && all_passed;
