@@ -34,7 +34,33 @@ cbuffer AshRootConstants : register(b0)
 	float4 AshVolumetricConfig1;
 	float4 AshCameraPositionAndFlags;
 	float4 AshScreenLightPositionAndParams;
+	float4 AshVolumetricVolumeParams;
 };
+
+bool AshVolumetricIsReverseZ()
+{
+	return AshCameraPositionAndFlags.w > 0.5;
+}
+
+bool AshVolumetricSceneDepthIsBackground(float depth)
+{
+	return AshVolumetricIsReverseZ() ? depth <= 0.000001 : depth >= 0.999999;
+}
+
+uint AshVolumetricDepthSliceCount()
+{
+	return max((uint)AshVolumetricVolumeParams.x, 1u);
+}
+
+uint AshVolumetricSlicesPerRow()
+{
+	return max((uint)AshVolumetricVolumeParams.y, 1u);
+}
+
+float AshVolumetricAnisotropy()
+{
+	return clamp(AshVolumetricVolumeParams.w, -0.95, 0.95);
+}
 
 float2 AshVolumetricAtlasUV(uint2 pixel, uint slice, uint slices_per_row, float2 atlas_inv_size)
 {
@@ -42,6 +68,65 @@ float2 AshVolumetricAtlasUV(uint2 pixel, uint slice, uint slices_per_row, float2
 	uint tile_y = slice / max(slices_per_row, 1u);
 	uint2 atlas_pixel = uint2(tile_x * (uint)AshVolumetricAtlasSize.x + pixel.x, tile_y * (uint)AshVolumetricAtlasSize.y + pixel.y);
 	return (float2(atlas_pixel) + 0.5) * atlas_inv_size;
+}
+
+bool AshVolumetricDecodeAtlasPixel(uint2 atlas_pixel, out uint2 tile_pixel, out uint slice)
+{
+	const uint2 tile_size = max((uint2)AshVolumetricAtlasSize.xy, uint2(1u, 1u));
+	const uint slices_per_row = AshVolumetricSlicesPerRow();
+	const uint2 tile_index = atlas_pixel / tile_size;
+	tile_pixel = atlas_pixel - tile_index * tile_size;
+	slice = tile_index.y * slices_per_row + tile_index.x;
+	return slice < AshVolumetricDepthSliceCount();
+}
+
+float2 AshVolumetricTileUV(uint2 tile_pixel)
+{
+	const float2 tile_size = max(AshVolumetricAtlasSize.xy, float2(1.0, 1.0));
+	return (float2(tile_pixel) + 0.5) / tile_size;
+}
+
+uint2 AshVolumetricTilePixelFromUV(float2 uv)
+{
+	const uint2 tile_size = max((uint2)AshVolumetricAtlasSize.xy, uint2(1u, 1u));
+	return min((uint2)floor(saturate(uv) * float2(tile_size)), tile_size - 1u);
+}
+
+float AshVolumetricSliceDepth01(uint slice)
+{
+	return (float(slice) + 0.5) / max((float)AshVolumetricDepthSliceCount(), 1.0);
+}
+
+float AshVolumetricDeviceDepthFromDepth01(float depth01)
+{
+	const float clamped_depth = saturate(depth01);
+	return AshVolumetricIsReverseZ() ? 1.0 - clamped_depth : clamped_depth;
+}
+
+float AshVolumetricVisibleDepth01(float scene_depth)
+{
+	if (AshVolumetricSceneDepthIsBackground(scene_depth))
+	{
+		return 1.0;
+	}
+	return AshVolumetricIsReverseZ() ? saturate(1.0 - scene_depth) : saturate(scene_depth);
+}
+
+float3 AshVolumetricReconstructWorldPosition(float2 uv, float device_depth)
+{
+	const float4 clip = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), device_depth, 1.0);
+	const float4 world = mul(AshInvViewProjection, clip);
+	return world.xyz / max(world.w, 1e-6);
+}
+
+float3 AshVolumetricSafeNormalize(float3 value, float3 fallback)
+{
+	const float length_sq = dot(value, value);
+	if (length_sq <= 1e-8)
+	{
+		return fallback;
+	}
+	return value * rsqrt(length_sq);
 }
 
 float AshVolumetricPhaseHG(float cos_theta, float g)

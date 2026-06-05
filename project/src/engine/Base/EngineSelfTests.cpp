@@ -1488,19 +1488,19 @@ namespace AshEngine
 		{
 			const bool common_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricLightingCommon.hlsli",
-				{ "AshVolumetricFullscreen", "AshVolumetricPhaseHG", "AshVolumetricAtlasUV", "AshRootConstants" });
+				{ "AshVolumetricFullscreen", "AshVolumetricPhaseHG", "AshVolumetricAtlasUV", "AshVolumetricSceneDepthIsBackground", "AshVolumetricReconstructWorldPosition", "AshRootConstants" });
 			const bool density_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricDensity.hlsl",
 				{ "CSMain", "SceneVolumetricDensity", "AshVolumetricConfig0" });
 			const bool injection_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricLightInjection.hlsl",
-				{ "CSMain", "SceneVolumetricDensity", "SceneVolumetricScattering", "SceneVolumetricLights" });
+				{ "CSMain", "SceneVolumetricDensity", "SceneVolumetricScattering", "SceneVolumetricLights", "AshVolumetricReconstructWorldPosition", "AshVolumetricPhaseHG" });
 			const bool temporal_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricTemporal.hlsl",
 				{ "CSMain", "SceneVolumetricScattering", "SceneVolumetricScatteringHistory", "SceneVolumetricHistoryValidity" });
 			const bool integrate_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricIntegrate.hlsl",
-				{ "CSMain", "SceneVolumetricScatteringTemporal", "SceneVolumetricIntegratedLighting" });
+				{ "CSMain", "SceneDepth", "SceneVolumetricScatteringTemporal", "SceneVolumetricIntegratedLighting", "AshVolumetricConfig1" });
 			const bool composite_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricComposite.hlsl",
 				{ "VSMain", "PSMain", "SceneHDRLinear", "SceneVolumetricIntegratedLighting" });
@@ -1519,6 +1519,8 @@ namespace AshEngine
 				{
 					"VolumetricLightingPassOutputs",
 					"SceneVolumetricCompositeHDR",
+					"atlas_width",
+					"atlas_height",
 					"add_passes",
 					"VolumetricHistoryEntry",
 					"m_history_entries"
@@ -1538,6 +1540,7 @@ namespace AshEngine
 					"m_density_program->set_rw_texture(\"SceneVolumetricDensity\"",
 					"m_light_injection_program->set_texture(\"SceneVolumetricDensity\"",
 					"m_light_injection_program->set_storage_buffer(\"SceneVolumetricLights\"",
+					"m_integrate_program->set_texture(\"SceneDepth\"",
 					"m_integrate_program->set_rw_texture(\"SceneVolumetricIntegratedLighting\"",
 					"m_composite_program->set_texture(\"SceneHDRLinear\"",
 					"SceneVolumetricScatteringHistory",
@@ -1590,6 +1593,20 @@ namespace AshEngine
 					return texture.name == name;
 				});
 			};
+			const auto pass_reads_texture = [&passes](const char* pass_name, RenderGraphTextureRef texture, RenderGraphAccess access) -> bool
+			{
+				return std::any_of(passes.begin(), passes.end(), [pass_name, texture, access](const RenderGraphPassNode& pass)
+				{
+					if (pass.name != pass_name)
+					{
+						return false;
+					}
+					return std::any_of(pass.texture_usages.begin(), pass.texture_usages.end(), [texture, access](const RenderGraphTextureUsage& usage)
+					{
+						return usage.texture == texture && usage.access == access;
+					});
+				});
+			};
 
 			const bool graph_ok =
 				has_pass("SceneVolumetricDensityPass") &&
@@ -1601,7 +1618,8 @@ namespace AshEngine
 				has_texture("SceneVolumetricScattering") &&
 				has_texture("SceneVolumetricScatteringTemporal") &&
 				has_texture("SceneVolumetricIntegratedLighting") &&
-				has_texture("SceneVolumetricCompositeHDR");
+				has_texture("SceneVolumetricCompositeHDR") &&
+				pass_reads_texture("SceneVolumetricIntegratePass", depth, RenderGraphAccess::ComputeSRV);
 			if (!graph_ok)
 			{
 				return report_self_test_failure("VolumetricLighting graph", "graph chain is missing expected passes or textures");
@@ -1722,7 +1740,9 @@ namespace AshEngine
 				source.find("\"SceneVolumetricDensity\"") != std::string::npos &&
 				source.find("\"SceneVolumetricScattering\"") != std::string::npos &&
 				source.find("\"SceneVolumetricIntegratedLighting\"") != std::string::npos &&
-				source.find("\"SceneVolumetricCompositeHDR\"") != std::string::npos;
+				source.find("\"SceneVolumetricCompositeHDR\"") != std::string::npos &&
+				source.find("volumetric_outputs.atlas_width") != std::string::npos &&
+				source.find("volumetric_outputs.atlas_height") != std::string::npos;
 
 			return (header_ok && order_ok && debug_ok) ||
 				report_self_test_failure(

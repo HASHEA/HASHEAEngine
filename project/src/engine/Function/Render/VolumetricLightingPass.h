@@ -33,6 +33,8 @@ namespace AshEngine
 		RenderGraphTextureRef composite_hdr{};
 		RenderGraphTextureRef screen_space_mask{};
 		RenderGraphTextureRef screen_space_final{};
+		uint32_t atlas_width = 0;
+		uint32_t atlas_height = 0;
 	};
 
 	class VolumetricLightingPass

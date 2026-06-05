@@ -1249,6 +1249,8 @@ namespace AshEngine
 			graph_resources.volumetric_composite_hdr = volumetric_outputs.composite_hdr;
 			graph_resources.lightshaft_screen_space_mask = volumetric_outputs.screen_space_mask;
 			graph_resources.lightshaft_screen_space_final = volumetric_outputs.screen_space_final;
+			const uint32_t volumetric_atlas_width = volumetric_outputs.atlas_width != 0u ? volumetric_outputs.atlas_width : output_width;
+			const uint32_t volumetric_atlas_height = volumetric_outputs.atlas_height != 0u ? volumetric_outputs.atlas_height : output_height;
 			register_render_debug_item(
 				m_render_debug_view,
 				"SceneVolumetricDensity",
@@ -1256,8 +1258,8 @@ namespace AshEngine
 				volumetric_outputs.density,
 				RenderDebugVisualization::Scalar,
 				RenderTextureFormat::RGBA32_SFLOAT,
-				output_width,
-				output_height);
+				volumetric_atlas_width,
+				volumetric_atlas_height);
 			register_render_debug_item(
 				m_render_debug_view,
 				"SceneVolumetricScattering",
@@ -1265,8 +1267,8 @@ namespace AshEngine
 				volumetric_outputs.scattering,
 				RenderDebugVisualization::LinearHDR,
 				RenderTextureFormat::RGBA32_SFLOAT,
-				output_width,
-				output_height);
+				volumetric_atlas_width,
+				volumetric_atlas_height);
 			register_render_debug_item(
 				m_render_debug_view,
 				"SceneVolumetricIntegratedLighting",
@@ -1292,8 +1294,8 @@ namespace AshEngine
 				volumetric_outputs.history_validity,
 				RenderDebugVisualization::Scalar,
 				RenderTextureFormat::RGBA32_SFLOAT,
-				output_width,
-				output_height);
+				volumetric_atlas_width,
+				volumetric_atlas_height);
 			register_render_debug_item(
 				m_render_debug_view,
 				"SceneLightShaftOcclusionMask",

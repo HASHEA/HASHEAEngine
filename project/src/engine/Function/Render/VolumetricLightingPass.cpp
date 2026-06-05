@@ -40,6 +40,7 @@ namespace AshEngine
 			glm::vec4 config1{ 0.0f, 0.9f, 0.0f, 0.0f };
 			glm::vec4 camera_position_and_flags{ 0.0f };
 			glm::vec4 screen_light_position_and_params{ 0.5f, 0.5f, 1.0f, 0.0f };
+			glm::vec4 volume_params{ 1.0f, 1.0f, 1.0f, 0.35f };
 		};
 
 		static_assert(sizeof(VolumetricRootConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
@@ -214,6 +215,11 @@ namespace AshEngine
 				static_cast<float>(output_width),
 				static_cast<float>(output_height));
 			constants.camera_position_and_flags = glm::vec4(frame.camera_position, frame.reverse_z ? 1.0f : 0.0f);
+			constants.volume_params = glm::vec4(
+				static_cast<float>(atlas.depth_slices),
+				static_cast<float>(atlas.slices_per_row),
+				static_cast<float>((atlas.depth_slices + atlas.slices_per_row - 1u) / atlas.slices_per_row),
+				config.anisotropy);
 			return constants;
 		}
 	}
@@ -468,9 +474,10 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricIntegratePass",
 			RenderGraphPassFlags::None,
-			[temporal, integrated](RenderGraphComputePassBuilder& pass)
+			[temporal, scene_depth, integrated](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(temporal, RenderGraphAccess::ComputeSRV);
+				pass.read_texture(scene_depth, RenderGraphAccess::ComputeSRV);
 				pass.write_texture(integrated, RenderGraphAccess::ComputeUAV);
 			},
 			[](RenderGraphComputeContext&) { return true; }));
@@ -560,6 +567,8 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(upload_light_buffer(frame, sanitized, light_count));
 		const VolumetricRootConstants constants =
 			make_root_constants(frame, atlas, output_width, output_height, sanitized, light_count);
+		outputs.atlas_width = atlas.atlas_width;
+		outputs.atlas_height = atlas.atlas_height;
 
 		outputs.density = graph.create_texture(make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true), "SceneVolumetricDensity");
 		outputs.scattering = graph.create_texture(make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true), "SceneVolumetricScattering");
@@ -707,22 +716,26 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricIntegratePass",
 			RenderGraphPassFlags::None,
-			[temporal = outputs.temporal_scattering, integrated = outputs.integrated_lighting](RenderGraphComputePassBuilder& pass)
+			[temporal = outputs.temporal_scattering, depth = deferred_resources.depth, integrated = outputs.integrated_lighting](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(temporal, RenderGraphAccess::ComputeSRV);
+				pass.read_texture(depth, RenderGraphAccess::ComputeSRV);
 				pass.write_texture(integrated, RenderGraphAccess::ComputeUAV);
 			},
-			[this, temporal = outputs.temporal_scattering, integrated = outputs.integrated_lighting, constants, output_width, output_height](RenderGraphComputeContext& context) -> bool
+			[this, temporal = outputs.temporal_scattering, depth = deferred_resources.depth, integrated = outputs.integrated_lighting, constants, output_width, output_height](RenderGraphComputeContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneVolumetricIntegratePass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 				std::shared_ptr<RenderTarget> temporal_target = context.get_texture(temporal);
+				std::shared_ptr<RenderTarget> depth_target = context.get_texture(depth);
 				std::shared_ptr<RenderTarget> integrated_target = context.get_texture(integrated);
-				ASH_PROCESS_ERROR(temporal_target && integrated_target);
+				ASH_PROCESS_ERROR(temporal_target && depth_target && integrated_target);
 				ASH_PROCESS_ERROR(m_integrate_program->set_const_data_block(sizeof(constants), &constants));
 				ASH_PROCESS_ERROR(m_integrate_program->set_texture("SceneVolumetricScatteringTemporal", temporal_target));
+				ASH_PROCESS_ERROR(m_integrate_program->set_texture("SceneDepth", depth_target));
 				ASH_PROCESS_ERROR(m_integrate_program->set_rw_texture("SceneVolumetricIntegratedLighting", integrated_target));
 				ASH_PROCESS_ERROR(m_integrate_program->set_sampler("SceneLinearClampSampler", m_linear_clamp_sampler));
+				ASH_PROCESS_ERROR(m_integrate_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 				ComputeDispatchDesc dispatch{};
 				dispatch.program = m_integrate_program.get();
 				dispatch.group_count_x = (output_width + 7u) / 8u;
