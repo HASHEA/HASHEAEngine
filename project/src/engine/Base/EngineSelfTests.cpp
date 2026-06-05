@@ -79,6 +79,27 @@ namespace AshEngine
 			return test_dir;
 		}
 
+		auto file_contains_all(const char* path, const std::vector<const char*>& needles) -> bool
+		{
+			std::ifstream file(path);
+			if (!file.is_open())
+			{
+				return false;
+			}
+			const std::string source{
+				std::istreambuf_iterator<char>(file),
+				std::istreambuf_iterator<char>()
+			};
+			for (const char* needle : needles)
+			{
+				if (source.find(needle) == std::string::npos)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
 		auto test_assert_macro_is_statement_safe() -> bool
 		{
 			bool branch_executed = false;
@@ -1286,6 +1307,25 @@ namespace AshEngine
 			}
 
 			return true;
+		}
+
+		auto test_bloom_shader_source_contract() -> bool
+		{
+			const bool setup_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/BloomSetup.hlsl",
+				{ "VSMain", "PSMain", "SceneHDRLinear", "AshBloomThresholdSoftKnee", "SceneLinearClampSampler" });
+			const bool downsample_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/BloomDownsample.hlsl",
+				{ "VSMain", "PSMain", "BloomInput", "AshBloomSourceSize", "SceneLinearClampSampler" });
+			const bool upsample_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/BloomUpsample.hlsl",
+				{ "VSMain", "PSMain", "BloomLowInput", "BloomHighInput", "AshBloomStageTintRadius", "SceneLinearClampSampler" });
+			const bool composite_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/BloomComposite.hlsl",
+				{ "VSMain", "PSMain", "SceneHDRLinear", "SceneBloomFinal", "AshBloomCompositeParams", "SceneLinearClampSampler" });
+
+			return (setup_ok && downsample_ok && upsample_ok && composite_ok) ||
+				report_self_test_failure("Bloom shader source contract", "bloom shaders are missing required entry points or binding names");
 		}
 
 		auto test_sunlight_shadow_planner_rejects_multiple_sunlights() -> bool
@@ -4606,6 +4646,7 @@ namespace AshEngine
 		all_passed = test_render_feature_config_registers_vsync_without_reverse_z() && all_passed;
 		all_passed = test_engine_ini_excludes_scene_render_config_sections() && all_passed;
 		all_passed = test_bloom_config_defaults_and_sanitization() && all_passed;
+		all_passed = test_bloom_shader_source_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
