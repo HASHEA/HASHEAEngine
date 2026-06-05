@@ -410,6 +410,61 @@ namespace AshEngine
 				config.bloom = sanitize_bloom_config(config.bloom, make_default_bloom_config());
 			}
 
+			if (const auto volumetric_it = scene_config.find("volumetric_lighting");
+				volumetric_it != scene_config.end() && volumetric_it->is_object())
+			{
+				try_get_json_value(*volumetric_it, "enabled", config.volumetric_lighting.enabled);
+
+				std::string quality{};
+				if (try_get_json_value(*volumetric_it, "quality", quality))
+				{
+					VolumetricLightingQuality parsed = config.volumetric_lighting.quality;
+					if (try_parse_volumetric_lighting_quality(quality, parsed))
+					{
+						config.volumetric_lighting.quality = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig volumetric_lighting.quality '{}' is invalid. Keeping default '{}'.",
+							quality,
+							volumetric_lighting_quality_name(config.volumetric_lighting.quality));
+					}
+				}
+
+				try_get_json_value(*volumetric_it, "froxel_resolution_scale", config.volumetric_lighting.froxel_resolution_scale);
+				try_get_json_value(*volumetric_it, "froxel_depth_slices", config.volumetric_lighting.froxel_depth_slices);
+				try_get_json_value(*volumetric_it, "max_lights", config.volumetric_lighting.max_lights);
+				try_get_json_value(*volumetric_it, "density", config.volumetric_lighting.density);
+				try_get_json_value(*volumetric_it, "scattering_intensity", config.volumetric_lighting.scattering_intensity);
+				try_get_json_value(*volumetric_it, "extinction_scale", config.volumetric_lighting.extinction_scale);
+				try_get_json_value(*volumetric_it, "anisotropy", config.volumetric_lighting.anisotropy);
+				try_get_json_value(*volumetric_it, "history", config.volumetric_lighting.history);
+				try_get_json_value(*volumetric_it, "history_blend", config.volumetric_lighting.history_blend);
+				try_get_json_value(*volumetric_it, "screen_space_fallback", config.volumetric_lighting.screen_space_fallback);
+
+				std::string debug_view{};
+				if (try_get_json_value(*volumetric_it, "debug_view", debug_view))
+				{
+					VolumetricLightingDebugView parsed = config.volumetric_lighting.debug_view;
+					if (try_parse_volumetric_lighting_debug_view(debug_view, parsed))
+					{
+						config.volumetric_lighting.debug_view = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig volumetric_lighting.debug_view '{}' is invalid. Keeping default '{}'.",
+							debug_view,
+							volumetric_lighting_debug_view_name(config.volumetric_lighting.debug_view));
+					}
+				}
+
+				config.volumetric_lighting = sanitize_volumetric_lighting_config(
+					config.volumetric_lighting,
+					make_default_volumetric_lighting_config());
+			}
+
 			return config;
 		}
 
@@ -460,6 +515,21 @@ namespace AshEngine
 						json{ { "size", config.bloom.stages[4].size }, { "tint", to_json_vec3(config.bloom.stages[4].tint) } },
 						json{ { "size", config.bloom.stages[5].size }, { "tint", to_json_vec3(config.bloom.stages[5].tint) } }
 					}) },
+				} },
+				{ "volumetric_lighting", json{
+					{ "enabled", config.volumetric_lighting.enabled },
+					{ "quality", volumetric_lighting_quality_name(config.volumetric_lighting.quality) },
+					{ "froxel_resolution_scale", config.volumetric_lighting.froxel_resolution_scale },
+					{ "froxel_depth_slices", config.volumetric_lighting.froxel_depth_slices },
+					{ "max_lights", config.volumetric_lighting.max_lights },
+					{ "density", config.volumetric_lighting.density },
+					{ "scattering_intensity", config.volumetric_lighting.scattering_intensity },
+					{ "extinction_scale", config.volumetric_lighting.extinction_scale },
+					{ "anisotropy", config.volumetric_lighting.anisotropy },
+					{ "history", config.volumetric_lighting.history },
+					{ "history_blend", config.volumetric_lighting.history_blend },
+					{ "screen_space_fallback", config.volumetric_lighting.screen_space_fallback },
+					{ "debug_view", volumetric_lighting_debug_view_name(config.volumetric_lighting.debug_view) },
 				} },
 			};
 		}
@@ -2644,6 +2714,8 @@ namespace AshEngine
 			sanitize_directional_shadow_config(config.directional_shadows, make_default_directional_shadow_config());
 		sanitized_config.bloom =
 			sanitize_bloom_config(config.bloom, make_default_bloom_config());
+		sanitized_config.volumetric_lighting =
+			sanitize_volumetric_lighting_config(config.volumetric_lighting, make_default_volumetric_lighting_config());
 
 		if (!scene_render_config_equal(m_impl->storage.render_config, sanitized_config))
 		{

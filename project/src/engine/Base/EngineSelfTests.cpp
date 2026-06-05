@@ -1278,7 +1278,8 @@ namespace AshEngine
 				std::istreambuf_iterator<char>() };
 			if (engine_ini_source.find("[AmbientOcclusion]") != std::string::npos ||
 				engine_ini_source.find("[DirectionalShadows]") != std::string::npos ||
-				engine_ini_source.find("[Bloom]") != std::string::npos)
+				engine_ini_source.find("[Bloom]") != std::string::npos ||
+				engine_ini_source.find("[VolumetricLighting]") != std::string::npos)
 			{
 				return report_self_test_failure("Engine.ini config authority", "scene render config sections must live in scene JSON, not Engine.ini");
 			}
@@ -4123,6 +4124,12 @@ namespace AshEngine
 			config.bloom.intensity = 1.25f;
 			config.bloom.threshold = 0.75f;
 			config.bloom.debug_view = BloomDebugView::Final;
+			config.volumetric_lighting.enabled = true;
+			config.volumetric_lighting.quality = VolumetricLightingQuality::High;
+			config.volumetric_lighting.froxel_resolution_scale = 0.75f;
+			config.volumetric_lighting.froxel_depth_slices = 96u;
+			config.volumetric_lighting.max_lights = 48u;
+			config.volumetric_lighting.debug_view = VolumetricLightingDebugView::CompositeHDR;
 			if (!scene.set_render_config(config))
 			{
 				return report_self_test_failure("RenderScene render config snapshot", "failed to set scene render config");
@@ -4167,7 +4174,11 @@ namespace AshEngine
 				light_frame.render_config.bloom.quality == BloomQuality::Epic &&
 				light_frame.render_config.bloom.intensity == 1.25f &&
 				full_frame.render_config.bloom.enabled &&
-				full_frame.render_config.bloom.debug_view == BloomDebugView::Final;
+				full_frame.render_config.bloom.debug_view == BloomDebugView::Final &&
+				full_frame.render_config.volumetric_lighting.enabled &&
+				full_frame.render_config.volumetric_lighting.quality == VolumetricLightingQuality::High &&
+				full_frame.render_config.volumetric_lighting.froxel_resolution_scale == 0.75f &&
+				full_frame.render_config.volumetric_lighting.debug_view == VolumetricLightingDebugView::CompositeHDR;
 			return ok ||
 				report_self_test_failure("RenderScene render config snapshot", "VisibleRenderFrame did not carry the scene render config");
 		}
@@ -4382,6 +4393,21 @@ namespace AshEngine
 					"        { \"size\": 8.5, \"tint\": [0.6, 0.7, 1.0] },\n"
 					"        { \"size\": 20.0, \"tint\": [-1.0, 9.0, 0.25] }\n"
 					"      ]\n"
+					"    },\n"
+					"    \"volumetric_lighting\": {\n"
+					"      \"enabled\": true,\n"
+					"      \"quality\": \"Epic\",\n"
+					"      \"froxel_resolution_scale\": 2.0,\n"
+					"      \"froxel_depth_slices\": 4096,\n"
+					"      \"max_lights\": 2048,\n"
+					"      \"density\": -4.0,\n"
+					"      \"scattering_intensity\": 32.0,\n"
+					"      \"extinction_scale\": 20.0,\n"
+					"      \"anisotropy\": 4.0,\n"
+					"      \"history\": false,\n"
+					"      \"history_blend\": 1.0,\n"
+					"      \"screen_space_fallback\": true,\n"
+					"      \"debug_view\": \"ScreenSpaceFinal\"\n"
 					"    }\n"
 					"  },\n"
 					"  \"entities\": []\n"
@@ -4420,7 +4446,20 @@ namespace AshEngine
 				loaded.bloom.stages[5].size == 16.0f &&
 				loaded.bloom.stages[5].tint.x == 0.0f &&
 				loaded.bloom.stages[5].tint.y == 8.0f &&
-				loaded.bloom.stages[5].tint.z == 0.25f;
+				loaded.bloom.stages[5].tint.z == 0.25f &&
+				loaded.volumetric_lighting.enabled &&
+				loaded.volumetric_lighting.quality == VolumetricLightingQuality::Epic &&
+				loaded.volumetric_lighting.froxel_resolution_scale == 1.0f &&
+				loaded.volumetric_lighting.froxel_depth_slices == 128u &&
+				loaded.volumetric_lighting.max_lights == 256u &&
+				loaded.volumetric_lighting.density == 0.0f &&
+				loaded.volumetric_lighting.scattering_intensity == 16.0f &&
+				loaded.volumetric_lighting.extinction_scale == 16.0f &&
+				loaded.volumetric_lighting.anisotropy == 0.95f &&
+				!loaded.volumetric_lighting.history &&
+				loaded.volumetric_lighting.history_blend == 0.98f &&
+				loaded.volumetric_lighting.screen_space_fallback &&
+				loaded.volumetric_lighting.debug_view == VolumetricLightingDebugView::ScreenSpaceFinal;
 			if (!parsed_ok)
 			{
 				return report_self_test_failure("Scene render config JSON", "scene_config fields were not parsed and sanitized as expected");

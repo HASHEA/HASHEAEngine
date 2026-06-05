@@ -67,6 +67,25 @@ namespace AshEngine
 			}
 			return true;
 		}
+
+		auto volumetric_lighting_config_equal(
+			const VolumetricLightingConfig& lhs,
+			const VolumetricLightingConfig& rhs) -> bool
+		{
+			return lhs.enabled == rhs.enabled &&
+				lhs.quality == rhs.quality &&
+				lhs.froxel_resolution_scale == rhs.froxel_resolution_scale &&
+				lhs.froxel_depth_slices == rhs.froxel_depth_slices &&
+				lhs.max_lights == rhs.max_lights &&
+				lhs.density == rhs.density &&
+				lhs.scattering_intensity == rhs.scattering_intensity &&
+				lhs.extinction_scale == rhs.extinction_scale &&
+				lhs.anisotropy == rhs.anisotropy &&
+				lhs.history == rhs.history &&
+				lhs.history_blend == rhs.history_blend &&
+				lhs.screen_space_fallback == rhs.screen_space_fallback &&
+				lhs.debug_view == rhs.debug_view;
+		}
 	}
 
 	SceneRenderConfig make_default_scene_render_config()
@@ -75,6 +94,7 @@ namespace AshEngine
 		config.ambient_occlusion = make_default_ambient_occlusion_config();
 		config.directional_shadows = make_default_directional_shadow_config();
 		config.bloom = make_default_bloom_config();
+		config.volumetric_lighting = make_default_volumetric_lighting_config();
 		return config;
 	}
 
@@ -82,6 +102,7 @@ namespace AshEngine
 	{
 		return ambient_occlusion_config_equal(lhs.ambient_occlusion, rhs.ambient_occlusion) &&
 			directional_shadow_config_equal(lhs.directional_shadows, rhs.directional_shadows) &&
-			bloom_config_equal(lhs.bloom, rhs.bloom);
+			bloom_config_equal(lhs.bloom, rhs.bloom) &&
+			volumetric_lighting_config_equal(lhs.volumetric_lighting, rhs.volumetric_lighting);
 	}
 }
