@@ -1753,7 +1753,10 @@ static void ImGui_ImplVulkan_RenderWindow(ImGuiViewport* viewport, void*)
             barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             barrier.subresourceRange.levelCount = 1;
             barrier.subresourceRange.layerCount = 1;
-            vkCmdPipelineBarrier(fd->CommandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+            // The acquire semaphore is waited at COLOR_ATTACHMENT_OUTPUT. The first
+            // layout transition after vkAcquireNextImageKHR must join that source
+            // scope, otherwise synchronization validation reports WRITE_AFTER_READ.
+            vkCmdPipelineBarrier(fd->CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
             VkRenderingAttachmentInfo attachmentInfo = {};
             attachmentInfo.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;

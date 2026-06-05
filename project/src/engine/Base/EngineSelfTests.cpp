@@ -380,6 +380,71 @@ namespace AshEngine
 			return (unchanged_without_force && recreated_with_force && recreated_on_extent_change) ||
 				report_self_test_failure("Vulkan swapchain forced recreate", "resize/out-of-date paths can still skip required recreation");
 		}
+
+		auto test_vulkan_acquire_wait_covers_initial_swapchain_barrier() -> bool
+		{
+			std::ifstream context_file("project/src/engine/Graphics/Vulkan/VulkanContext.cpp");
+			if (!context_file.is_open())
+			{
+				return report_self_test_failure("Vulkan acquire wait stage", "failed to open VulkanContext.cpp");
+			}
+			std::ifstream command_buffer_file("project/src/engine/Graphics/Vulkan/VulkanCommandBuffer.cpp");
+			if (!command_buffer_file.is_open())
+			{
+				return report_self_test_failure("Vulkan acquire wait stage", "failed to open VulkanCommandBuffer.cpp");
+			}
+			std::ifstream imgui_vulkan_file("project/thirdparty/ImGui/imgui_impl_vulkan.cpp");
+			if (!imgui_vulkan_file.is_open())
+			{
+				return report_self_test_failure("Vulkan acquire wait stage", "failed to open imgui_impl_vulkan.cpp");
+			}
+
+			const std::string context_source{
+				std::istreambuf_iterator<char>(context_file),
+				std::istreambuf_iterator<char>()
+			};
+			const std::string command_buffer_source{
+				std::istreambuf_iterator<char>(command_buffer_file),
+				std::istreambuf_iterator<char>()
+			};
+			const std::string imgui_vulkan_source{
+				std::istreambuf_iterator<char>(imgui_vulkan_file),
+				std::istreambuf_iterator<char>()
+			};
+			auto count_occurrences = [](const std::string& haystack, const char* needle) -> uint32_t
+			{
+				uint32_t count = 0u;
+				size_t position = 0u;
+				const std::string_view needle_view{ needle };
+				while ((position = haystack.find(needle_view, position)) != std::string::npos)
+				{
+					++count;
+					position += needle_view.size();
+				}
+				return count;
+			};
+
+			const bool sync2_waits_cover_initial_barriers =
+				count_occurrences(context_source, "vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR") >= 2u;
+			const bool legacy_timeline_wait_covers_initial_barriers =
+				context_source.find("wait_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);") != std::string::npos;
+			const bool legacy_binary_wait_covers_initial_barriers =
+				context_source.find("VkPipelineStageFlags flag = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;") != std::string::npos;
+			const bool swapchain_barriers_join_acquire_wait_scope =
+				command_buffer_source.find("pTexture->is_swapchain_image()") != std::string::npos &&
+				command_buffer_source.find("srcStageMask |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;") != std::string::npos;
+			const bool imgui_viewport_barrier_joins_acquire_wait_scope =
+				imgui_vulkan_source.find("vkCmdPipelineBarrier(fd->CommandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT") != std::string::npos;
+
+			return (sync2_waits_cover_initial_barriers &&
+				legacy_timeline_wait_covers_initial_barriers &&
+				legacy_binary_wait_covers_initial_barriers &&
+				swapchain_barriers_join_acquire_wait_scope &&
+				imgui_viewport_barrier_joins_acquire_wait_scope) ||
+				report_self_test_failure(
+					"Vulkan acquire wait stage",
+					"swapchain acquire semaphore waits must cover initial layout/copy/clear barriers on acquired images, including ImGui secondary viewports");
+		}
 #endif
 
 		auto test_render_memory_stats_default_to_unsupported() -> bool
@@ -4686,6 +4751,7 @@ namespace AshEngine
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
 #if defined(ASH_HAS_VULKAN)
 		all_passed = test_vulkan_swapchain_forced_recreate_ignores_matching_extent() && all_passed;
+		all_passed = test_vulkan_acquire_wait_covers_initial_swapchain_barrier() && all_passed;
 #endif
 		all_passed = test_render_memory_stats_default_to_unsupported() && all_passed;
 		all_passed = test_perf_gate_config_parser_defaults_to_disabled() && all_passed;

@@ -385,7 +385,7 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 | 模块 | 当前进度 |
 | --- | --- |
 | Engine 基础设施 | 日志、断言、窗口输入、文件、时间、服务、线程等基础能力已具备，仍在规范化错误处理和生命周期细节。 |
-| RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、DX12 mailbox present 映射、shader-visible descriptor heap 分帧分区、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
+| RHI | Vulkan / DX12 双后端可运行，shader 编译反射、资源状态、pipeline、descriptor、debug name、validation、Vulkan acquire 到首个 swapchain layout/copy/clear barrier 的 semaphore wait 与 barrier source scope（含 ImGui secondary viewport swapchain）、DX12 mailbox present 映射、shader-visible descriptor heap 分帧分区、command-buffer 错误状态、BCn/sRGB 格式映射正在持续完善。 |
 | Renderer | 已有 frame、pass、draw、dispatch、transient RT、frame stats、UI submit 等高层封装；`RenderGraph` 第一版已接入 Function/Render，支持 texture graph、raster/compute pass 声明、pass culling、lifetime 编译、稳定拓扑 compile cache、pass-boundary barrier plan，并完成 scene deferred 主路径迁移；`RenderFormatUtils` 统一维护高层格式到 RHI 的映射，Vulkan upload queue 实现已从 context 主文件拆分，DeferredHQ GBuffer、第一版 deferred lighting（含 RGBA16F HDR 中转、Bloom 后处理链与独立 tone-map pass）、静态网格 draw 排序、instance batching、单可见静态网格 fast path、vertex binding inline storage、barrier 去重和 pass/framebuffer cache 已接入。 |
 | Scene | ECS-style 内部存储和 Scene facade 已具备，静态网格 scene-driven 渲染链路已打通，渲染同步已拆分 primitive / transform / light / environment / render config 版本以避免局部变更触发整场景重建，scene JSON 顶层 `scene_config` 可随场景保存 AO、方向光阴影和 Bloom 设置，并提供 SceneQuery、matrix camera override、AssetId prefab/model 放置 helper 和 Engine-side DebugDrawService。 |
 | Material | V2 `Surface.StaticMesh` BasePass、DepthOnly 与 GBuffer pass 已接入，`.AshMat` / `.AshMatIns` 资产格式已建立，shader map 通过 shader reflection artifact 生成资源布局，不再为模板资源创建临时 program；builtin fallback 材质创建已从 JSON 解析实现中拆分，透明、骨骼、decal 等仍待后续阶段。 |

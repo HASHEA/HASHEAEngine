@@ -87,9 +87,8 @@ namespace RHI
 			return;
 
 		case AshResourceState::Present:
-			// Swapchain acquire waits are submitted with COLOR_ATTACHMENT_OUTPUT. Using TOP_OF_PIPE
-			// here leaves the present->render transition outside the waited stage scope and triggers
-			// WRITE_AFTER_READ hazards on the acquired image.
+			// The first present->render barrier after vkAcquireNextImageKHR must participate
+			// in the color-attachment scope that validation associates with the acquire read.
 			StageFlags = bIsSourceState ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 			AccessFlags = 0;
 			Layout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -1213,6 +1212,12 @@ namespace RHI
 							// keep the source dependency conservative so prior depth writes are covered.
 							srcStageMask |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 							srcAccessFlags |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+						}
+						if (pTexture->is_swapchain_image() && InDstAccess != AshResourceState::Present)
+						{
+							// The first write/layout barrier after vkAcquireNextImageKHR must be ordered
+							// against the acquire semaphore wait scope.
+							srcStageMask |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 						}
 
 						// If we're not transitioning across pipes and we don't need to perform layout transitions, we can express memory dependencies through a global memory barrier.

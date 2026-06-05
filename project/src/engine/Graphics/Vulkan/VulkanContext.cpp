@@ -2080,7 +2080,7 @@ auto VulkanContext::destroy() -> void
 				}
 				Array<VkSemaphoreSubmitInfoKHR> wait_semaphores;
 				wait_semaphores.init(nullptr, 4, 0);
-				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 });
+				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
 				if (wait_for_timeline_semaphore) {
 					wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame - (k_max_frames - 1), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR , 0 });
 				}
@@ -2112,7 +2112,7 @@ auto VulkanContext::destroy() -> void
 				wait_stages.init(nullptr, 4, 0);
 				wait_semaphores.push_back(get_frame_data_internal().vulkanRenderBeginSemaphore);
 				wait_values.push_back(0);
-				wait_stages.push_back(VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+				wait_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 				if (wait_for_timeline_semaphore) {
 					wait_semaphores.push_back(vulkanGraphicsSemaphore);
 					wait_values.push_back(absoluteFrame - (k_max_frames - 1));
@@ -2155,7 +2155,7 @@ auto VulkanContext::destroy() -> void
 				}
 				Array<VkSemaphoreSubmitInfoKHR> wait_semaphores;
 				wait_semaphores.init(nullptr, 4, 0);
-				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR, 0 });
+				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
 				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
 					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 },
 				};
@@ -2175,7 +2175,7 @@ auto VulkanContext::destroy() -> void
 			}
 			else
 			{
-				VkPipelineStageFlags flag = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+				VkPipelineStageFlags flag = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 				get_frame_data_internal().vulkanCommandBufferExecutedFence->reset();
 				VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 				submit_info.waitSemaphoreCount = 1;
