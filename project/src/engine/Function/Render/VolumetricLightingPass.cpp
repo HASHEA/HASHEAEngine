@@ -115,7 +115,7 @@ namespace AshEngine
 			RenderGraphTextureDesc desc{};
 			desc.width = to_graph_dimension(width);
 			desc.height = to_graph_dimension(height);
-			desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			desc.format = unordered_access ? RenderTextureFormat::RGBA32_SFLOAT : RenderTextureFormat::RGBA16_SFLOAT;
 			desc.shader_resource = true;
 			desc.unordered_access = unordered_access;
 			desc.use_optimized_clear_value = true;
@@ -322,7 +322,6 @@ namespace AshEngine
 			StorageBufferDesc desc{};
 			desc.size = required_size;
 			desc.stride = static_cast<uint32_t>(sizeof(VolumetricLightShaderData));
-			desc.cpu_write = true;
 			desc.initial_data = light_data.data();
 			desc.name = "SceneVolumetricLightBuffer";
 			m_light_buffer = m_renderer->create_storage_buffer(desc);
@@ -364,7 +363,7 @@ namespace AshEngine
 				RenderTargetDesc desc{};
 				desc.width = to_graph_dimension(clamped_width);
 				desc.height = to_graph_dimension(clamped_height);
-				desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+				desc.format = RenderTextureFormat::RGBA32_SFLOAT;
 				desc.shader_resource = true;
 				desc.unordered_access = true;
 				desc.name = index == 0 ? "SceneVolumetricHistoryA" : "SceneVolumetricHistoryB";

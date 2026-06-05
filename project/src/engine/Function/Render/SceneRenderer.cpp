@@ -1255,7 +1255,7 @@ namespace AshEngine
 				"Volumetric Density",
 				volumetric_outputs.density,
 				RenderDebugVisualization::Scalar,
-				RenderTextureFormat::RGBA16_SFLOAT,
+				RenderTextureFormat::RGBA32_SFLOAT,
 				output_width,
 				output_height);
 			register_render_debug_item(
@@ -1264,7 +1264,7 @@ namespace AshEngine
 				"Volumetric Scattering",
 				volumetric_outputs.scattering,
 				RenderDebugVisualization::LinearHDR,
-				RenderTextureFormat::RGBA16_SFLOAT,
+				RenderTextureFormat::RGBA32_SFLOAT,
 				output_width,
 				output_height);
 			register_render_debug_item(
@@ -1273,7 +1273,7 @@ namespace AshEngine
 				"Volumetric Integrated Lighting",
 				volumetric_outputs.integrated_lighting,
 				RenderDebugVisualization::LinearHDR,
-				RenderTextureFormat::RGBA16_SFLOAT,
+				RenderTextureFormat::RGBA32_SFLOAT,
 				output_width,
 				output_height);
 			register_render_debug_item(
@@ -1291,7 +1291,7 @@ namespace AshEngine
 				"Volumetric History Validity",
 				volumetric_outputs.history_validity,
 				RenderDebugVisualization::Scalar,
-				RenderTextureFormat::RGBA16_SFLOAT,
+				RenderTextureFormat::RGBA32_SFLOAT,
 				output_width,
 				output_height);
 			register_render_debug_item(
