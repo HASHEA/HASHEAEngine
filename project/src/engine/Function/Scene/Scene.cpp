@@ -2542,6 +2542,8 @@ namespace AshEngine
 			sanitize_ambient_occlusion_config(config.ambient_occlusion, make_default_ambient_occlusion_config());
 		sanitized_config.directional_shadows =
 			sanitize_directional_shadow_config(config.directional_shadows, make_default_directional_shadow_config());
+		sanitized_config.bloom =
+			sanitize_bloom_config(config.bloom, make_default_bloom_config());
 
 		if (!scene_render_config_equal(m_impl->storage.render_config, sanitized_config))
 		{

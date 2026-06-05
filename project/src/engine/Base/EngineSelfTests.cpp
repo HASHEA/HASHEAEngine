@@ -10,6 +10,7 @@
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Diagnostics/PerfGate.h"
 #include "Function/Render/AmbientOcclusionConfig.h"
+#include "Function/Render/BloomConfig.h"
 #include "Function/Render/DeferredLightingPass.h"
 #include "Function/Render/DirectionalShadowConfig.h"
 #include "Function/Render/DirectionalShadowCascadeMath.h"
@@ -1227,6 +1228,60 @@ namespace AshEngine
 						return report_self_test_failure("Engine.ini config authority", "scene-owned AO or directional shadow runtime INI APIs must not be present");
 					}
 				}
+			}
+
+			return true;
+		}
+
+		auto test_bloom_config_defaults_and_sanitization() -> bool
+		{
+			BloomConfig defaults = make_default_bloom_config();
+			if (defaults.enabled ||
+				defaults.quality != BloomQuality::High ||
+				defaults.intensity != 0.6f ||
+				defaults.threshold != 1.0f ||
+				defaults.soft_knee != 0.5f ||
+				defaults.size_scale != 1.0f ||
+				defaults.debug_view != BloomDebugView::Off ||
+				defaults.stages.size() != 6u)
+			{
+				return report_self_test_failure("Bloom config", "default bloom config does not match the design contract");
+			}
+
+			BloomQuality quality = BloomQuality::Low;
+			BloomDebugView debug_view = BloomDebugView::Off;
+			if (!try_parse_bloom_quality("Epic", quality) || quality != BloomQuality::Epic)
+			{
+				return report_self_test_failure("Bloom config", "failed to parse Epic quality");
+			}
+			if (!try_parse_bloom_debug_view("CompositeHDR", debug_view) || debug_view != BloomDebugView::CompositeHDR)
+			{
+				return report_self_test_failure("Bloom config", "failed to parse CompositeHDR debug view");
+			}
+
+			BloomConfig invalid = defaults;
+			invalid.enabled = true;
+			invalid.intensity = -4.0f;
+			invalid.threshold = 1000.0f;
+			invalid.soft_knee = -1.0f;
+			invalid.size_scale = 50.0f;
+			invalid.stages[0].size = -8.0f;
+			invalid.stages[0].tint = glm::vec3(-1.0f, 16.0f, 0.5f);
+
+			const BloomConfig sanitized = sanitize_bloom_config(invalid, defaults);
+			const bool sanitized_ok =
+				sanitized.enabled &&
+				sanitized.intensity == 0.0f &&
+				sanitized.threshold == 64.0f &&
+				sanitized.soft_knee == 0.0f &&
+				sanitized.size_scale == 8.0f &&
+				sanitized.stages[0].size == 0.0f &&
+				sanitized.stages[0].tint.x == 0.0f &&
+				sanitized.stages[0].tint.y == 8.0f &&
+				sanitized.stages[0].tint.z == 0.5f;
+			if (!sanitized_ok)
+			{
+				return report_self_test_failure("Bloom config", "sanitize_bloom_config did not clamp fields as expected");
 			}
 
 			return true;
@@ -4509,6 +4564,7 @@ namespace AshEngine
 		all_passed = test_dx12_validation_config_respects_build_type() && all_passed;
 		all_passed = test_render_feature_config_registers_vsync_without_reverse_z() && all_passed;
 		all_passed = test_engine_ini_excludes_scene_render_config_sections() && all_passed;
+		all_passed = test_bloom_config_defaults_and_sanitization() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;

@@ -36,6 +36,37 @@ namespace AshEngine
 				lhs.normal_bias == rhs.normal_bias &&
 				lhs.pcf_radius == rhs.pcf_radius;
 		}
+
+		auto bloom_stage_config_equal(const BloomStageConfig& lhs, const BloomStageConfig& rhs) -> bool
+		{
+			return lhs.size == rhs.size &&
+				lhs.tint.x == rhs.tint.x &&
+				lhs.tint.y == rhs.tint.y &&
+				lhs.tint.z == rhs.tint.z;
+		}
+
+		auto bloom_config_equal(const BloomConfig& lhs, const BloomConfig& rhs) -> bool
+		{
+			if (lhs.enabled != rhs.enabled ||
+				lhs.quality != rhs.quality ||
+				lhs.intensity != rhs.intensity ||
+				lhs.threshold != rhs.threshold ||
+				lhs.soft_knee != rhs.soft_knee ||
+				lhs.size_scale != rhs.size_scale ||
+				lhs.debug_view != rhs.debug_view)
+			{
+				return false;
+			}
+
+			for (size_t index = 0; index < lhs.stages.size(); ++index)
+			{
+				if (!bloom_stage_config_equal(lhs.stages[index], rhs.stages[index]))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
 	}
 
 	SceneRenderConfig make_default_scene_render_config()
@@ -43,12 +74,14 @@ namespace AshEngine
 		SceneRenderConfig config{};
 		config.ambient_occlusion = make_default_ambient_occlusion_config();
 		config.directional_shadows = make_default_directional_shadow_config();
+		config.bloom = make_default_bloom_config();
 		return config;
 	}
 
 	bool scene_render_config_equal(const SceneRenderConfig& lhs, const SceneRenderConfig& rhs)
 	{
 		return ambient_occlusion_config_equal(lhs.ambient_occlusion, rhs.ambient_occlusion) &&
-			directional_shadow_config_equal(lhs.directional_shadows, rhs.directional_shadows);
+			directional_shadow_config_equal(lhs.directional_shadows, rhs.directional_shadows) &&
+			bloom_config_equal(lhs.bloom, rhs.bloom);
 	}
 }

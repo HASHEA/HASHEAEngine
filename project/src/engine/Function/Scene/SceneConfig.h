@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/AmbientOcclusionConfig.h"
+#include "Function/Render/BloomConfig.h"
 #include "Function/Render/DirectionalShadowConfig.h"
 
 namespace AshEngine
@@ -10,6 +11,7 @@ namespace AshEngine
 	{
 		AmbientOcclusionConfig ambient_occlusion{};
 		DirectionalShadowConfig directional_shadows{};
+		BloomConfig bloom{};
 	};
 
 	ASH_API SceneRenderConfig make_default_scene_render_config();
