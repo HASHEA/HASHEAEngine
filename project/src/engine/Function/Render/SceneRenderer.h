@@ -16,6 +16,7 @@
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/SceneRenderView.h"
+#include "Function/Render/VolumetricLightingPass.h"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -127,6 +128,7 @@ namespace AshEngine
 		DeferredLightingPass m_deferred_lighting_pass{};
 		EnvironmentLightingPass m_environment_lighting_pass{};
 		SkyBackgroundPass m_sky_background_pass{};
+		VolumetricLightingPass m_volumetric_lighting_pass{};
 		BloomPass m_bloom_pass{};
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		RenderDebugView m_render_debug_view{};

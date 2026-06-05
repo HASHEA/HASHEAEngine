@@ -617,6 +617,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_volumetric_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_bloom_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
@@ -649,6 +650,7 @@ namespace AshEngine
 		m_debug_draw_service = nullptr;
 		m_post_process_tone_map_pass.shutdown();
 		m_bloom_pass.shutdown();
+		m_volumetric_lighting_pass.shutdown();
 		m_sky_background_pass.shutdown();
 		m_environment_lighting_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
@@ -1231,6 +1233,85 @@ namespace AshEngine
 				graph_resources.depth,
 				graph_resources.scene_hdr_linear,
 				view_context));
+			const VolumetricLightingPassOutputs volumetric_outputs = m_volumetric_lighting_pass.add_passes(
+				graph,
+				frame,
+				graph_resources,
+				graph_resources.scene_hdr_linear,
+				view_context,
+				frame.render_config.volumetric_lighting);
+			ASH_PROCESS_ERROR(volumetric_outputs.scene_hdr_linear);
+			graph_resources.scene_hdr_linear = volumetric_outputs.scene_hdr_linear;
+			graph_resources.volumetric_density = volumetric_outputs.density;
+			graph_resources.volumetric_scattering = volumetric_outputs.scattering;
+			graph_resources.volumetric_integrated_lighting = volumetric_outputs.integrated_lighting;
+			graph_resources.volumetric_history_validity = volumetric_outputs.history_validity;
+			graph_resources.volumetric_composite_hdr = volumetric_outputs.composite_hdr;
+			graph_resources.lightshaft_screen_space_mask = volumetric_outputs.screen_space_mask;
+			graph_resources.lightshaft_screen_space_final = volumetric_outputs.screen_space_final;
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneVolumetricDensity",
+				"Volumetric Density",
+				volumetric_outputs.density,
+				RenderDebugVisualization::Scalar,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneVolumetricScattering",
+				"Volumetric Scattering",
+				volumetric_outputs.scattering,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneVolumetricIntegratedLighting",
+				"Volumetric Integrated Lighting",
+				volumetric_outputs.integrated_lighting,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneVolumetricCompositeHDR",
+				"Volumetric Composite HDR",
+				volumetric_outputs.composite_hdr,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneVolumetricHistoryValidity",
+				"Volumetric History Validity",
+				volumetric_outputs.history_validity,
+				RenderDebugVisualization::Scalar,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneLightShaftOcclusionMask",
+				"LightShaft Screen Space Mask",
+				volumetric_outputs.screen_space_mask,
+				RenderDebugVisualization::Scalar,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneLightShaftScreenSpaceFinal",
+				"LightShaft Screen Space Final",
+				volumetric_outputs.screen_space_final,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
 			const BloomPassOutputs bloom_outputs = m_bloom_pass.add_passes(
 				graph,
 				frame,
