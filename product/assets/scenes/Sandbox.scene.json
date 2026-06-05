@@ -83,46 +83,6 @@
       }
     },
     {
-      "id": 4,
-      "light": {
-        "casts_shadow": true,
-        "color": [
-          1.0,
-          0.949999988079071,
-          0.8799999952316284
-        ],
-        "inner_cone_angle_degrees": 30.0,
-        "intensity": 2.5,
-        "near_shadow_distance": 16.0,
-        "outer_cone_angle_degrees": 45.0,
-        "range": 10.0,
-        "shadow_cascade_count": 4,
-        "shadow_distance": 160.0,
-        "shadow_priority": 128,
-        "sunlight": false,
-        "type": 0
-      },
-      "name": "DirectionalLight",
-      "parent": 1,
-      "transform": {
-        "position": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "rotation_euler_degrees": [
-          110.56475830078125,
-          -14.468080520629883,
-          -18.074687957763672
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      }
-    },
-    {
       "id": 5,
       "light": {
         "casts_shadow": false,
@@ -186,12 +146,12 @@
       "parent": 1,
       "transform": {
         "position": [
-          1.0,
-          1.0,
-          0.0
+          0.7563143372535706,
+          0.8461325168609619,
+          -0.8026140332221985
         ],
         "rotation_euler_degrees": [
-          0.0,
+          -40.89385986328125,
           0.0,
           0.0
         ],
@@ -259,14 +219,14 @@
       "parent": 0,
       "transform": {
         "position": [
-          0.0,
+          1.745091438293457,
           0.0,
           0.0
         ],
         "rotation_euler_degrees": [
-          -86.48471069335938,
-          36.054931640625,
-          179.43637084960938
+          -93.19474792480469,
+          35.814212799072266,
+          175.49554443359375
         ],
         "scale": [
           1.0,
@@ -283,10 +243,10 @@
       "blur": true,
       "half_resolution": true,
       "intensity": 1.0,
-      "mode": "HBAO",
+      "mode": "GTAO",
       "power": 1.0,
       "quality": "Medium",
-      "radius": 1.5,
+      "radius": 3.0,
       "temporal": true,
       "temporal_blend": 0.8500000238418579,
       "temporal_depth_threshold": 0.009999999776482582,
