@@ -1482,6 +1482,57 @@ namespace AshEngine
 				report_self_test_failure("Bloom pass source contract", "BloomPass is missing the RenderGraph pass chain or debug selection contract");
 		}
 
+		auto test_volumetric_lighting_shader_source_contract() -> bool
+		{
+			const bool common_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/VolumetricLightingCommon.hlsli",
+				{ "AshVolumetricFullscreen", "AshVolumetricPhaseHG", "AshVolumetricAtlasUV", "AshRootConstants" });
+			const bool density_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/VolumetricDensity.hlsl",
+				{ "CSMain", "SceneVolumetricDensity", "AshVolumetricConfig0" });
+			const bool injection_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/VolumetricLightInjection.hlsl",
+				{ "CSMain", "SceneVolumetricDensity", "SceneVolumetricScattering", "SceneVolumetricLights" });
+			const bool temporal_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/VolumetricTemporal.hlsl",
+				{ "CSMain", "SceneVolumetricScattering", "SceneVolumetricScatteringHistory", "SceneVolumetricHistoryValidity" });
+			const bool integrate_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/VolumetricIntegrate.hlsl",
+				{ "CSMain", "SceneVolumetricScatteringTemporal", "SceneVolumetricIntegratedLighting" });
+			const bool composite_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/VolumetricComposite.hlsl",
+				{ "VSMain", "PSMain", "SceneHDRLinear", "SceneVolumetricIntegratedLighting" });
+			const bool fallback_ok = file_contains_all(
+				"project/src/engine/Shaders/Deferred/LightShaftScreenSpace.hlsl",
+				{ "VSMain", "PSMain", "SceneDepth", "PSScreenSpaceLightShaftOutput" });
+
+			return (common_ok && density_ok && injection_ok && temporal_ok && integrate_ok && composite_ok && fallback_ok) ||
+				report_self_test_failure("VolumetricLighting shader source contract", "shader sources are missing required entry points or binding names");
+		}
+
+		auto test_volumetric_lighting_pass_source_contract() -> bool
+		{
+			const bool header_ok = file_contains_all(
+				"project/src/engine/Function/Render/VolumetricLightingPass.h",
+				{ "VolumetricLightingPassOutputs", "SceneVolumetricCompositeHDR", "add_passes" });
+			const bool source_ok = file_contains_all(
+				"project/src/engine/Function/Render/VolumetricLightingPass.cpp",
+				{
+					"SceneVolumetricDensityPass",
+					"SceneVolumetricLightInjectionPass",
+					"SceneVolumetricTemporalPass",
+					"SceneVolumetricIntegratePass",
+					"SceneVolumetricCompositePass",
+					"SceneLightShaftScreenSpacePass",
+					"RenderGraphAccess::ComputeUAV",
+					"RenderGraphAccess::ComputeSRV",
+					"ASH_PROFILE_SCOPE_NC"
+				});
+
+			return (header_ok && source_ok) ||
+				report_self_test_failure("VolumetricLighting pass source contract", "pass source is missing graph or profiling contract");
+		}
+
 		auto test_scene_renderer_bloom_integration_contract() -> bool
 		{
 			std::ifstream header_file("project/src/engine/Function/Render/SceneRenderer.h");
@@ -4881,6 +4932,8 @@ namespace AshEngine
 		all_passed = test_volumetric_lighting_config_defaults_and_sanitization() && all_passed;
 		all_passed = test_bloom_shader_source_contract() && all_passed;
 		all_passed = test_bloom_pass_source_contract() && all_passed;
+		all_passed = test_volumetric_lighting_shader_source_contract() && all_passed;
+		all_passed = test_volumetric_lighting_pass_source_contract() && all_passed;
 		all_passed = test_scene_renderer_bloom_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
