@@ -474,7 +474,7 @@ Selected=SceneDeferredSceneHDRLinear
 - `RenderDebugView.Enabled`
 - `RenderDebugView.Selected`
 
-`product/config/Engine.ini` 不再作为每场景 `AmbientOcclusion`、`DirectionalShadows` 或 `Bloom` 默认值的权威来源；这些设置存储在 scene JSON 顶层 `scene_config` 中，并沿 `Scene -> ScenePresentationSubsystem -> RenderScene -> VisibleRenderFrame -> SceneRenderer` 传递。Render Debug View 是进程级诊断功能，权威配置仍是 `Engine.ini` 的 `[RenderDebugView]`，不会随 scene JSON 保存。`[AmbientOcclusion]`、`[DirectionalShadows]` 和 `[Bloom]` 不应出现在 `Engine.ini` 中。
+`product/config/Engine.ini` 不再作为每场景 `AmbientOcclusion`、`DirectionalShadows`、`Bloom` 或 `VolumetricLighting` 默认值的权威来源；这些设置存储在 scene JSON 顶层 `scene_config` 中，并沿 `Scene -> ScenePresentationSubsystem -> RenderScene -> VisibleRenderFrame -> SceneRenderer` 传递。Render Debug View 是进程级诊断功能，权威配置仍是 `Engine.ini` 的 `[RenderDebugView]`，不会随 scene JSON 保存。`[AmbientOcclusion]`、`[DirectionalShadows]`、`[Bloom]` 和 `[VolumetricLighting]` 不应出现在 `Engine.ini` 中。
 
 Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini` 中设置 `VulkanValidation.Enabled=true` 或 `DX12Validation.Enabled=true`，也必须保持 validation 关闭；其中 Vulkan 通过不编入 `VULKAN_DEBUG_REPORT` 生效路径实现，DX12 在 `DynamicRHI` 配置解析和 `DX12Context` 初始化层都会强制关闭 debug layer / GPU-based validation。
 
@@ -498,7 +498,7 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 `Application::initialize()` 在创建窗口和 RHI 资源前读取 `RenderFeatureConfig`，并通过 `set_runtime_render_feature_config()` 发布到进程级原子开关表。swapchain 初始化会立即使用 `Rendering.VSync` 选择 present mode；渲染线程侧应通过只读访问器查询，不直接访问配置文件。
 
-场景级渲染配置由 `project/src/engine/Function/Scene/SceneConfig.*` 聚合，底层 typed config 分别来自 `AmbientOcclusionConfig.*`、`DirectionalShadowConfig.*` 和 `BloomConfig.*`。Scene JSON 顶层 `scene_config` 是场景渲染默认值的权威来源：
+场景级渲染配置由 `project/src/engine/Function/Scene/SceneConfig.*` 聚合，底层 typed config 分别来自 `AmbientOcclusionConfig.*`、`DirectionalShadowConfig.*`、`BloomConfig.*` 和 `VolumetricLightingConfig.*`。Scene JSON 顶层 `scene_config` 是场景渲染默认值的权威来源：
 
 ```json
 "scene_config": {
@@ -538,11 +538,26 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
     "soft_knee": 0.5,
     "size_scale": 1.0,
     "debug_view": "Off"
+  },
+  "volumetric_lighting": {
+    "enabled": true,
+    "quality": "Low",
+    "froxel_resolution_scale": 0.25,
+    "froxel_depth_slices": 32,
+    "max_lights": 64,
+    "density": 0.015,
+    "scattering_intensity": 0.25,
+    "extinction_scale": 1.0,
+    "anisotropy": 0.35,
+    "history": true,
+    "history_blend": 0.85,
+    "screen_space_fallback": false,
+    "debug_view": "Off"
   }
 }
 ```
 
-`Scene::load_from_file()` 会把缺失的 `scene_config` 解析为默认 `SceneRenderConfig`，`Scene::save_to_file()` 会写出完整配置。`Scene::set_render_config()` 会清洗数值范围并只递增 render config 版本，不触发 primitive / transform / light / environment 版本。`ScenePresentationSubsystem` 监视 `Scene::get_render_config_version()`，仅刷新 `RenderScene` 内部配置快照，再把它复制到 `VisibleRenderFrame::render_config`。`SceneRenderer` 从该 frame config 调用 `AmbientOcclusionPass::add_passes()`、`SunLightShadowPass`、`DirectionalLightShadowPass` 和 `BloomPass::add_passes()`。`RenderDebugView::add_pass()` 会读取 `[RenderDebugView]` 的运行时配置，不依赖 `VisibleRenderFrame::render_config`。
+`Scene::load_from_file()` 会把缺失的 `scene_config` 解析为默认 `SceneRenderConfig`，`Scene::save_to_file()` 会写出完整配置。`Scene::set_render_config()` 会清洗数值范围并只递增 render config 版本，不触发 primitive / transform / light / environment 版本。`ScenePresentationSubsystem` 监视 `Scene::get_render_config_version()`，仅刷新 `RenderScene` 内部配置快照，再把它复制到 `VisibleRenderFrame::render_config`。`SceneRenderer` 从该 frame config 调用 `AmbientOcclusionPass::add_passes()`、`SunLightShadowPass`、`DirectionalLightShadowPass`、`VolumetricLightingPass::add_passes()` 和 `BloomPass::add_passes()`。`RenderDebugView::add_pass()` 会读取 `[RenderDebugView]` 的运行时配置，不依赖 `VisibleRenderFrame::render_config`。
 
 `AmbientOcclusion.mode` 支持 `Off`、`SSAO`、`HBAO`、`GTAO`。`Off` 会让 `AmbientOcclusionPass` 注册一张 neutral 1x1 white AO texture，保证 deferred lighting 始终绑定同一个 `SceneAmbientOcclusion` shader resource。`quality` 影响样本数 / 方向数 / 步进数，`radius`、`intensity`、`power` 控制遮蔽半径和曲线，`half_resolution` 与 `blur` 用于性能和噪声折中。`temporal=true` 时 AO pass 会在 raw/blur AO 后追加 `SceneAmbientOcclusionTemporalPass`，使用 `GBufferD` 的 screen-space motion vector 回投影上一帧 AO，并通过上一帧 depth + normal history 做 rejection。
 
@@ -550,7 +565,9 @@ Validation 开关只在 Debug 配置下生效。Release 构建即使 `Engine.ini
 
 `bloom.enabled=false` 或 `bloom.intensity <= 0` 时跳过 Bloom pass 并把 sky/background 后的 HDR 直接交给 tone-map；缺失 `scene_config.bloom` 的旧场景走默认关闭。Bloom 开启时在 `SceneSkyBackgroundPass` 后、`SceneDeferredToneMapPass` 前运行，使用 `BloomPass` 提交 threshold setup、multi-resolution downsample/upsample 和 HDR composite；所有 bloom 中间 RT 均为 graph transient `RGBA16_SFLOAT`，并可通过 `BloomConfig.debug_view` 把 setup、mip、final bloom 或 composite HDR 临时送入后续 tone-map 调试。标准 `Sandbox.scene.json` 显式开启 Bloom，用于覆盖 HDR bloom + tone-map 主链路。
 
-`[RenderDebugView].Enabled=false`、`[RenderDebugView].Selected=Off` 或 `SceneOutput` 时不追加 pass，保持正常主画面。选择其他当前帧可用 RT 时，`SceneRenderer` 会在 `SceneDeferredToneMapPass` 后、`SceneDebugDrawOverlayPass` 前追加 `SceneRenderDebugViewPass`，读取被选 RT 为 SRV，并把可视化结果直接写回 `SceneRenderViewContext.output_target`。当前注册项包括 `SceneOutput`、`SceneGBufferA/B/C/D/E`、`SceneDeferredDepth`、`SceneDeferredLightingDiffuse`、`SceneDeferredLightingSpecular`、`SceneDeferredSceneHDRLinear`、`SceneAmbientOcclusionRaw`、`SceneAmbientOcclusion`、`SceneAmbientOcclusionTemporal`、`SceneBloomSetup`、`SceneBloomMip1..6`、`SceneBloomFinal`、`SceneBloomCompositeHDR`、`SunLightShadowDynamicAtlas`、`SunLightShadowStaticCache`、`SceneSunLightShadowMask`、`SceneSunLightShadowCascadeIndex`、`DirectionalLightShadowTransientAtlas` 与 `DirectionalLightShadowTransientMask`；depth、normal、motion vector、AO 与 linear HDR 会使用对应 visualization shader 路径，其中 `LinearHDR` 是 raw pre-tonemap 线性值的 clamped preview，不应用 exposure 或 ACES。
+`volumetric_lighting.enabled=false`、`scattering_intensity <= 0` 或 `density <= 0` 时跳过 Volumetric Lighting 并把 sky/background 后的 HDR 直接交给 Bloom；缺失 `scene_config.volumetric_lighting` 的旧场景走默认关闭。Volumetric Lighting 在 `SceneSkyBackgroundPass` 后、`BloomPass` 前运行；主路径使用 frustum-aligned froxel atlas，通过 compute pass 写入 `SceneVolumetricDensity`、`SceneVolumetricScattering`、temporal scattering history 和 `SceneVolumetricIntegratedLighting`，再由 fullscreen composite 写回线性 HDR。`screen_space_fallback=true` 时改走 depth mask + radial blur 的 `SceneLightShaftScreenSpacePass`，输出 screen-space lightshaft composite。标准 `Sandbox.scene.json` 显式开启 Low 配置，用于覆盖 directional / point / spot 光源的 froxel 体积光、temporal history 和 HDR composite 主链路。
+
+`[RenderDebugView].Enabled=false`、`[RenderDebugView].Selected=Off` 或 `SceneOutput` 时不追加 pass，保持正常主画面。选择其他当前帧可用 RT 时，`SceneRenderer` 会在 `SceneDeferredToneMapPass` 后、`SceneDebugDrawOverlayPass` 前追加 `SceneRenderDebugViewPass`，读取被选 RT 为 SRV，并把可视化结果直接写回 `SceneRenderViewContext.output_target`。当前注册项包括 `SceneOutput`、`SceneGBufferA/B/C/D/E`、`SceneDeferredDepth`、`SceneDeferredLightingDiffuse`、`SceneDeferredLightingSpecular`、`SceneDeferredSceneHDRLinear`、`SceneAmbientOcclusionRaw`、`SceneAmbientOcclusion`、`SceneAmbientOcclusionTemporal`、`SceneBloomSetup`、`SceneBloomMip1..6`、`SceneBloomFinal`、`SceneBloomCompositeHDR`、`SceneVolumetricDensity`、`SceneVolumetricScattering`、`SceneVolumetricIntegratedLighting`、`SceneVolumetricCompositeHDR`、`SceneVolumetricHistoryValidity`、`SceneLightShaftOcclusionMask`、`SceneLightShaftScreenSpaceFinal`、`SunLightShadowDynamicAtlas`、`SunLightShadowStaticCache`、`SceneSunLightShadowMask`、`SceneSunLightShadowCascadeIndex`、`DirectionalLightShadowTransientAtlas` 与 `DirectionalLightShadowTransientMask`；depth、normal、motion vector、AO 与 linear HDR 会使用对应 visualization shader 路径，其中 `LinearHDR` 是 raw pre-tonemap 线性值的 clamped preview，不应用 exposure 或 ACES。
 
 Reverse-Z 行为约定：
 
@@ -700,12 +717,13 @@ External output 和 extracted texture 是 culling root；`NeverCull` pass 保留
   - `GBufferD`：`RGBA16_SFLOAT`，MotionVector3D.xyz + TemporalFlags.a
   - `GBufferE`：`RGBA16_SFLOAT`，NormalOct.xy + EmissiveOrCustom.zw
 - `MotionVector3D` 表示 screen-space velocity.xy + 上一帧 depth.z，不是 world-space velocity；`TemporalFlags.a` 表示当前像素是否有可用上一帧静态网格历史。只有 `Surface.StaticMesh.GBuffer` 使用 per-view previous view-projection 和 per-entity previous world transform 生成该 velocity；DepthOnly / shadow caster pass 的 previous object-to-clip 会回退为当前 pass 的 object-to-clip，不能继承主相机 temporal history。
-- `SceneRenderer` 默认 deferred path 通过 `RenderGraphBuilder` 创建 graph transient GBuffer targets、可采样 D32 depth、统一 `SceneAmbientOcclusion` AO texture、两张 RGBA16F 的 `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`（光照 pass MRT 输出）、一张 RGBA16F 的 `SceneDeferredSceneHDRLinear`（composite 输出的线性 HDR 中转），以及 Bloom 使用的 `SceneBloomSetup` / `SceneBloomMip1..6` / `SceneBloomFinal` / `SceneBloomCompositeHDR` transient `RGBA16_SFLOAT` RT。
-- `SceneRenderer` 注册 `SceneGBufferPass`，随后按 `VisibleRenderFrame::render_config.ambient_occlusion` 由 `AmbientOcclusionPass::add_passes()` 注册 AO（`Off` 模式导入 neutral white texture；`SSAO` / `HBAO` / `GTAO` 生成 AO RT，可选 depth-aware blur；`Temporal=true` 时再追加 `SceneAmbientOcclusionTemporalPass`，读取当前 AO、`GBufferD` motion vector、当前 depth/normal、上一帧 AO history 和上一帧 depth/normal meta history，输出 temporal AO 并 ping-pong 写回两组持久 history RT）。随后按 `VisibleRenderFrame::render_config.directional_shadows` 先由 `SunLightShadowPass` 为唯一 sunlight 注册高质量 depth/cache/debug 资源，再由 `DeferredLightingPass::add_base_pass()` 清空并写入 lighting accum RT。之后 `SceneRenderer` 按 `VisibleRenderFrame::lights` 顺序逐光提交：sunlight 在自己的 directional lighting pass 前生成 sunlight shadow mask；普通 directional light 在自己的 lighting pass 前调用 `DirectionalLightShadowPass` clear transient atlas、绘制所有 shadow caster、生成 transient mask；point / spot 直接提交各自 volume lighting pass。最后由 `EnvironmentLightingPass`、`DeferredLightingPass::add_composite_pass()`、`SceneSkyBackgroundPass`、`BloomPass::add_passes()` 和 `PostProcessToneMapPass::add_pass()` 完成 IBL、composite、sky/background、Bloom 与 tone-map。当进程级 `[RenderDebugView]` 启用且 `Selected` 指向当前帧可用 RT 时，`SceneRenderDebugViewPass` 会追加在 tone-map 后并替换主画面输出。
+- `SceneRenderer` 默认 deferred path 通过 `RenderGraphBuilder` 创建 graph transient GBuffer targets、可采样 D32 depth、统一 `SceneAmbientOcclusion` AO texture、两张 RGBA16F 的 `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`（光照 pass MRT 输出）、一张 RGBA16F 的 `SceneDeferredSceneHDRLinear`（composite 输出的线性 HDR 中转），体积光使用的 `SceneVolumetricDensity` / `SceneVolumetricScattering` / `SceneVolumetricScatteringTemporal` / `SceneVolumetricHistoryValidity` / `SceneVolumetricIntegratedLighting` / `SceneVolumetricCompositeHDR` 或 `SceneLightShaftOcclusionMask` / `SceneLightShaftScreenSpaceCompositeHDR` transient `RGBA16_SFLOAT` RT，以及 Bloom 使用的 `SceneBloomSetup` / `SceneBloomMip1..6` / `SceneBloomFinal` / `SceneBloomCompositeHDR` transient `RGBA16_SFLOAT` RT。
+- `SceneRenderer` 注册 `SceneGBufferPass`，随后按 `VisibleRenderFrame::render_config.ambient_occlusion` 由 `AmbientOcclusionPass::add_passes()` 注册 AO（`Off` 模式导入 neutral white texture；`SSAO` / `HBAO` / `GTAO` 生成 AO RT，可选 depth-aware blur；`Temporal=true` 时再追加 `SceneAmbientOcclusionTemporalPass`，读取当前 AO、`GBufferD` motion vector、当前 depth/normal、上一帧 AO history 和上一帧 depth/normal meta history，输出 temporal AO 并 ping-pong 写回两组持久 history RT）。随后按 `VisibleRenderFrame::render_config.directional_shadows` 先由 `SunLightShadowPass` 为唯一 sunlight 注册高质量 depth/cache/debug 资源，再由 `DeferredLightingPass::add_base_pass()` 清空并写入 lighting accum RT。之后 `SceneRenderer` 按 `VisibleRenderFrame::lights` 顺序逐光提交：sunlight 在自己的 directional lighting pass 前生成 sunlight shadow mask；普通 directional light 在自己的 lighting pass 前调用 `DirectionalLightShadowPass` clear transient atlas、绘制所有 shadow caster、生成 transient mask；point / spot 直接提交各自 volume lighting pass。最后由 `EnvironmentLightingPass`、`DeferredLightingPass::add_composite_pass()`、`SceneSkyBackgroundPass`、`VolumetricLightingPass::add_passes()`、`BloomPass::add_passes()` 和 `PostProcessToneMapPass::add_pass()` 完成 IBL、composite、sky/background、体积光、Bloom 与 tone-map。当进程级 `[RenderDebugView]` 启用且 `Selected` 指向当前帧可用 RT 时，`SceneRenderDebugViewPass` 会追加在 tone-map 后并替换主画面输出。
 - `DeferredLightingPass` 只消费统一 `SceneAmbientOcclusion` resource，不分支关心 AO 算法；`DeferredCommon.hlsli` 中最终遮蔽为 `GBufferB.b` 的 material AO 乘以 screen AO，unlit/base emissive 路径只保留 material AO。
 - `DeferredLightingPass` 暴露 base 与逐光提交 API；base pass 先用 fullscreen base/emissive pass 将自发光等写入 diffuse RT（specular RT 同步累加），directional light 使用 fullscreen additive pass，point light 使用 sphere volume，spot light 使用 cone volume。
 - point / spot light volume 第一版使用硬件 depth test、depth compare `GreaterEqual`、depth write off、cull none / 双面、对两张颜色附件同时做 additive blend，并把 GBuffer depth 作为只读 depth attachment 绑定。
 - `SceneDeferredCompositePass` 采样两张 lighting RT，合并为线性 HDR radiance 后写入 `SceneDeferredSceneHDRLinear`。
+- `VolumetricLightingPass` 采样 sky/background 后的 HDR、GBuffer depth 和当前 view/light frame data；默认 froxel 主路径按 density -> light injection -> temporal resolve -> integrate -> HDR composite 的 compute/graphics pass 顺序执行，并通过 per-view persistent history ping-pong 维护 `SceneVolumetricScatteringHistory`。配置 `screen_space_fallback=true` 时改用 `SceneLightShaftScreenSpacePass` 生成 depth occlusion mask 和 radial lightshaft composite，便于低成本兼容路径验证。
 - `BloomPass` 采样 sky/background 后的 HDR 中转 RT，按 threshold setup、多级 downsample/upsample 和 HDR composite 生成 bloom-composited HDR；关闭 Bloom 时原始 HDR ref 直接透传给 tone-map。
 - `SceneDeferredToneMapPass` 采样 Bloom composite 后的 HDR 中转 RT，将 tone-mapped（ACES + exposure）结果显示写入 `SceneRenderViewContext.output_target`（若 output 为 `RGBA8_UNORM` / `BGRA8_UNORM` 则在 shader 内做手动 sRGB 编码；`RGBA8_SRGB` / `BGRA8_SRGB` 由 RT 格式承担编码）。
 - `SceneRenderDebugViewPass` 是可选诊断 pass，只在通用 Render Debug View 选中非 `Off` / `SceneOutput` 的可用 RT 时追加；它使用 point-clamp 采样和 fullscreen triangle，把 color / linear HDR / depth / oct normal / motion vector / AO / scalar 以诊断色直接写回 output。`LinearHDR` 不走 ACES/tone-map，只做 raw linear clamped preview，以便对比 `SceneDeferredSceneHDRLinear` 和最终 `SceneOutput`。
@@ -1592,7 +1610,7 @@ Base 层自测方式：
 product/bin64/Debug-windows-x86_64/Sandbox.exe --engine-self-test
 ```
 
-当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、RenderDevice line-list topology 映射、RendererFrameStats full-frame timing contract、RenderGraph stable topology compile cache、DebugDrawService frame-local 记录/清空与 shape-to-line-list 展开、Scene render primitive/transform/light/environment/render config version 拆分、scene `scene_config` 默认值与 round-trip、SceneView matrix override、directional shadow atlas texel / stable cascade / cascade transition contract、per-camera Reverse-Z depth state、SceneQuery bounds/ray/picking、AssetId scene instantiation、GraphicsDrawDesc 常见 vertex binding inline storage，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载运行时标准场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
+当前 self-test 覆盖 `H_ASSERT` 语句安全性、typed allocator 对齐、`StackAllocator::free_marker()`、`LinearAllocator::deallocate()`、`Array` 扩容与初始尺寸、`file_delete()` / file text helper 返回值、`AshSubresourceRange::resolve()`、`AshBarrier` value 语义、shader pool source hash、RGBA8 texture mip 生成、DDS/KTX2 cooked texture decode、DX12 validation build-type gating、glTF indexed primitive 顶点复用、RenderDevice line-list topology 映射、RendererFrameStats full-frame timing contract、RenderGraph stable topology compile cache、DebugDrawService frame-local 记录/清空与 shape-to-line-list 展开、Scene render primitive/transform/light/environment/render config version 拆分、scene `scene_config` 默认值与 round-trip、Volumetric Lighting config defaults/sanitize、scene JSON round-trip、RenderScene snapshot、RenderGraph pass contract、SceneRenderer integration order、Sandbox scene config 自测、SceneView matrix override、directional shadow atlas texel / stable cascade / cascade transition contract、per-camera Reverse-Z depth state、SceneQuery bounds/ray/picking、AssetId scene instantiation、GraphicsDrawDesc 常见 vertex binding inline storage，以及 DX12 per-subresource tracker 的混合状态回归。它应保持 headless，不应创建窗口、RHI device 或加载运行时标准场景资产，生成物应写入 `Intermediate/test-temp/engine/`。
 
 维护约定：
 
