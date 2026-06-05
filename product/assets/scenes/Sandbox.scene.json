@@ -325,6 +325,21 @@
         }
       ],
       "threshold": 1.0
+    },
+    "volumetric_lighting": {
+      "anisotropy": 0.35,
+      "debug_view": "Off",
+      "density": 0.015,
+      "enabled": true,
+      "extinction_scale": 1.0,
+      "froxel_depth_slices": 32,
+      "froxel_resolution_scale": 0.25,
+      "history": true,
+      "history_blend": 0.85,
+      "max_lights": 64,
+      "quality": "Low",
+      "scattering_intensity": 0.25,
+      "screen_space_fallback": false
     }
   },
   "version": 4

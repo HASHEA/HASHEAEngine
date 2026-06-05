@@ -4698,6 +4698,24 @@ namespace AshEngine
 			return true;
 		}
 
+		auto test_sandbox_scene_enables_volumetric_lighting() -> bool
+		{
+			std::ifstream scene_file("product/assets/scenes/Sandbox.scene.json");
+			if (!scene_file.is_open())
+			{
+				return report_self_test_failure("Sandbox volumetric scene config", "failed to open Sandbox.scene.json");
+			}
+			const std::string source{
+				std::istreambuf_iterator<char>(scene_file),
+				std::istreambuf_iterator<char>() };
+			const bool ok =
+				source.find("\"volumetric_lighting\"") != std::string::npos &&
+				source.find("\"enabled\": true") != std::string::npos &&
+				source.find("\"quality\": \"Low\"") != std::string::npos;
+			return ok ||
+				report_self_test_failure("Sandbox volumetric scene config", "standard Sandbox scene does not enable Low volumetric lighting");
+		}
+
 		auto test_graphics_draw_desc_keeps_common_vertex_bindings_inline() -> bool
 		{
 			GraphicsDrawDesc desc{};
@@ -5159,6 +5177,7 @@ namespace AshEngine
 		all_passed = test_scene_environment_version_isolated_from_primitives() && all_passed;
 		all_passed = test_scene_render_config_version_isolated_from_other_render_versions() && all_passed;
 		all_passed = test_scene_render_config_json_defaults_and_round_trip() && all_passed;
+		all_passed = test_sandbox_scene_enables_volumetric_lighting() && all_passed;
 		all_passed = test_graphics_draw_desc_keeps_common_vertex_bindings_inline() && all_passed;
 		all_passed = test_debug_draw_service_records_and_clears_frame_lines() && all_passed;
 		all_passed = test_debug_draw_service_expands_shapes_to_line_list() && all_passed;
