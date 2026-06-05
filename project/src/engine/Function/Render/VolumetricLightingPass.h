@@ -4,7 +4,10 @@
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderGraphFwd.h"
 #include "Function/Render/VolumetricLightingConfig.h"
+#include <array>
+#include <cstdint>
 #include <memory>
+#include <unordered_map>
 
 namespace AshEngine
 {
@@ -55,9 +58,19 @@ namespace AshEngine
 			const VolumetricLightingConfig& config);
 
 	private:
+		struct VolumetricHistoryEntry
+		{
+			uint32_t width = 0;
+			uint32_t height = 0;
+			uint32_t write_index = 0;
+			bool valid = false;
+			std::array<std::shared_ptr<RenderTarget>, 2> scattering{};
+		};
+
 		bool create_resources(Renderer& renderer);
 		bool create_programs(Renderer& renderer);
 		bool upload_light_buffer(const VisibleRenderFrame& frame, const VolumetricLightingConfig& config, uint32_t& out_light_count);
+		bool ensure_history_entry(uint64_t view_key, uint32_t width, uint32_t height, VolumetricHistoryEntry*& out_entry);
 
 	private:
 		Renderer* m_renderer = nullptr;
@@ -70,5 +83,6 @@ namespace AshEngine
 		std::shared_ptr<RenderSampler> m_point_clamp_sampler = nullptr;
 		std::shared_ptr<RenderSampler> m_linear_clamp_sampler = nullptr;
 		std::shared_ptr<StorageBuffer> m_light_buffer = nullptr;
+		std::unordered_map<uint64_t, VolumetricHistoryEntry> m_history_entries{};
 	};
 }

@@ -1516,7 +1516,13 @@ namespace AshEngine
 		{
 			const bool header_ok = file_contains_all(
 				"project/src/engine/Function/Render/VolumetricLightingPass.h",
-				{ "VolumetricLightingPassOutputs", "SceneVolumetricCompositeHDR", "add_passes" });
+				{
+					"VolumetricLightingPassOutputs",
+					"SceneVolumetricCompositeHDR",
+					"add_passes",
+					"VolumetricHistoryEntry",
+					"m_history_entries"
+				});
 			const bool source_ok = file_contains_all(
 				"project/src/engine/Function/Render/VolumetricLightingPass.cpp",
 				{
@@ -1534,6 +1540,8 @@ namespace AshEngine
 					"m_light_injection_program->set_storage_buffer(\"SceneVolumetricLights\"",
 					"m_integrate_program->set_rw_texture(\"SceneVolumetricIntegratedLighting\"",
 					"m_composite_program->set_texture(\"SceneHDRLinear\"",
+					"SceneVolumetricScatteringHistory",
+					"SceneVolumetricHistoryWrite",
 					"context.dispatch",
 					"context.draw"
 				});

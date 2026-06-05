@@ -4,6 +4,7 @@ Texture2D<float4> SceneVolumetricScattering : register(t0);
 Texture2D<float4> SceneVolumetricScatteringHistory : register(t1);
 RWTexture2D<float4> SceneVolumetricScatteringTemporal : register(u0);
 RWTexture2D<float4> SceneVolumetricHistoryValidity : register(u1);
+RWTexture2D<float4> SceneVolumetricHistoryWrite : register(u2);
 SamplerState SceneLinearClampSampler : register(s0);
 
 [numthreads(8, 8, 1)]
@@ -23,4 +24,5 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 	float4 filtered = lerp(current_value, history_value, blend);
 	SceneVolumetricScatteringTemporal[dispatch_id.xy] = filtered;
 	SceneVolumetricHistoryValidity[dispatch_id.xy] = float4(blend.xxx, 1.0);
+	SceneVolumetricHistoryWrite[dispatch_id.xy] = filtered;
 }

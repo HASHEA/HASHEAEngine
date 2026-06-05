@@ -238,6 +238,7 @@ namespace AshEngine
 		m_light_injection_program.reset();
 		m_density_program.reset();
 		m_light_buffer.reset();
+		m_history_entries.clear();
 		m_linear_clamp_sampler.reset();
 		m_point_clamp_sampler.reset();
 		m_renderer = nullptr;
@@ -332,6 +333,49 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(m_light_buffer->update(0, required_size, light_data.data()));
 		}
 
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool VolumetricLightingPass::ensure_history_entry(
+		uint64_t view_key,
+		uint32_t width,
+		uint32_t height,
+		VolumetricHistoryEntry*& out_entry)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		out_entry = nullptr;
+		ASH_PROCESS_ERROR(m_renderer != nullptr);
+
+		const uint32_t clamped_width = std::max<uint32_t>(width, 1u);
+		const uint32_t clamped_height = std::max<uint32_t>(height, 1u);
+		VolumetricHistoryEntry& entry = m_history_entries[view_key];
+		const bool size_changed = entry.width != clamped_width || entry.height != clamped_height;
+		if (size_changed)
+		{
+			entry = {};
+			entry.width = clamped_width;
+			entry.height = clamped_height;
+		}
+
+		for (uint32_t index = 0; index < static_cast<uint32_t>(entry.scattering.size()); ++index)
+		{
+			if (!entry.scattering[index])
+			{
+				RenderTargetDesc desc{};
+				desc.width = to_graph_dimension(clamped_width);
+				desc.height = to_graph_dimension(clamped_height);
+				desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+				desc.shader_resource = true;
+				desc.unordered_access = true;
+				desc.name = index == 0 ? "SceneVolumetricHistoryA" : "SceneVolumetricHistoryB";
+				desc.use_optimized_clear_value = true;
+				desc.optimized_clear_color = k_clear_color;
+				entry.scattering[index] = m_renderer->create_render_target(desc);
+				ASH_PROCESS_ERROR(entry.scattering[index] != nullptr);
+			}
+		}
+
+		out_entry = &entry;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -527,6 +571,39 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(outputs.density && outputs.scattering && outputs.temporal_scattering &&
 			outputs.history_validity && outputs.integrated_lighting && outputs.composite_hdr);
 
+		VolumetricHistoryEntry* history_entry = nullptr;
+		RenderGraphTextureRef history_read{};
+		RenderGraphTextureRef history_write{};
+		bool history_has_valid_read = false;
+		const bool history_enabled = sanitized.history;
+		if (history_enabled)
+		{
+			ASH_PROCESS_ERROR(ensure_history_entry(view_context.view_id, atlas.atlas_width, atlas.atlas_height, history_entry));
+			const uint32_t write_index = history_entry->write_index % static_cast<uint32_t>(history_entry->scattering.size());
+			const uint32_t read_index = write_index ^ 1u;
+			history_has_valid_read = history_entry->valid;
+			if (history_has_valid_read)
+			{
+				history_read = graph.register_external_texture(
+					history_entry->scattering[read_index],
+					"SceneVolumetricScatteringHistory",
+					RenderGraphAccess::ComputeSRV);
+				ASH_PROCESS_ERROR(history_read);
+			}
+			history_write = graph.register_external_texture(
+				history_entry->scattering[write_index],
+				"SceneVolumetricHistoryWrite",
+				RenderGraphAccess::ComputeUAV);
+			ASH_PROCESS_ERROR(history_write);
+		}
+		else
+		{
+			history_write = graph.create_texture(
+				make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true),
+				"SceneVolumetricHistoryWrite");
+			ASH_PROCESS_ERROR(history_write);
+		}
+
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricDensityPass",
 			RenderGraphPassFlags::None,
@@ -583,25 +660,36 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricTemporalPass",
 			RenderGraphPassFlags::None,
-			[scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity](RenderGraphComputePassBuilder& pass)
+			[scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity,
+				history_has_valid_read, history_read, history_write](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(scattering, RenderGraphAccess::ComputeSRV);
+				if (history_has_valid_read)
+				{
+					pass.read_texture(history_read, RenderGraphAccess::ComputeSRV);
+				}
 				pass.write_texture(temporal, RenderGraphAccess::ComputeUAV);
 				pass.write_texture(validity, RenderGraphAccess::ComputeUAV);
+				pass.write_texture(history_write, RenderGraphAccess::ComputeUAV);
 			},
-			[this, scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity, constants, atlas](RenderGraphComputeContext& context) -> bool
+			[this, scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity,
+				history_has_valid_read, history_read, history_write, history_enabled, history_entry, constants, atlas](RenderGraphComputeContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneVolumetricTemporalPass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 				std::shared_ptr<RenderTarget> scattering_target = context.get_texture(scattering);
 				std::shared_ptr<RenderTarget> temporal_target = context.get_texture(temporal);
 				std::shared_ptr<RenderTarget> validity_target = context.get_texture(validity);
-				ASH_PROCESS_ERROR(scattering_target && temporal_target && validity_target);
+				std::shared_ptr<RenderTarget> history_read_target =
+					history_has_valid_read ? context.get_texture(history_read) : scattering_target;
+				std::shared_ptr<RenderTarget> history_write_target = context.get_texture(history_write);
+				ASH_PROCESS_ERROR(scattering_target && temporal_target && validity_target && history_read_target && history_write_target);
 				ASH_PROCESS_ERROR(m_temporal_program->set_const_data_block(sizeof(constants), &constants));
 				ASH_PROCESS_ERROR(m_temporal_program->set_texture("SceneVolumetricScattering", scattering_target));
-				ASH_PROCESS_ERROR(m_temporal_program->set_texture("SceneVolumetricScatteringHistory", scattering_target));
+				ASH_PROCESS_ERROR(m_temporal_program->set_texture("SceneVolumetricScatteringHistory", history_read_target));
 				ASH_PROCESS_ERROR(m_temporal_program->set_rw_texture("SceneVolumetricScatteringTemporal", temporal_target));
 				ASH_PROCESS_ERROR(m_temporal_program->set_rw_texture("SceneVolumetricHistoryValidity", validity_target));
+				ASH_PROCESS_ERROR(m_temporal_program->set_rw_texture("SceneVolumetricHistoryWrite", history_write_target));
 				ASH_PROCESS_ERROR(m_temporal_program->set_sampler("SceneLinearClampSampler", m_linear_clamp_sampler));
 				ComputeDispatchDesc dispatch{};
 				dispatch.program = m_temporal_program.get();
@@ -609,6 +697,11 @@ namespace AshEngine
 				dispatch.group_count_y = (atlas.atlas_height + 7u) / 8u;
 				dispatch.group_count_z = 1u;
 				ASH_PROCESS_ERROR(context.dispatch(dispatch));
+				if (history_enabled && history_entry)
+				{
+					history_entry->valid = true;
+					history_entry->write_index ^= 1u;
+				}
 				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 			}));
 
