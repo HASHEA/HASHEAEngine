@@ -1352,6 +1352,45 @@ namespace AshEngine
 				report_self_test_failure("Bloom pass source contract", "BloomPass is missing the RenderGraph pass chain or debug selection contract");
 		}
 
+		auto test_scene_renderer_bloom_integration_contract() -> bool
+		{
+			std::ifstream header_file("project/src/engine/Function/Render/SceneRenderer.h");
+			std::ifstream source_file("project/src/engine/Function/Render/SceneRenderer.cpp");
+			if (!header_file.is_open() || !source_file.is_open())
+			{
+				return report_self_test_failure("SceneRenderer bloom integration", "failed to open SceneRenderer source files");
+			}
+			const std::string header{
+				std::istreambuf_iterator<char>(header_file),
+				std::istreambuf_iterator<char>()
+			};
+			const std::string source{
+				std::istreambuf_iterator<char>(source_file),
+				std::istreambuf_iterator<char>()
+			};
+
+			const bool header_ok =
+				header.find("#include \"Function/Render/BloomPass.h\"") != std::string::npos &&
+				header.find("BloomPass m_bloom_pass") != std::string::npos;
+			const size_t sky_pos = source.find("m_sky_background_pass.add_pass");
+			const size_t bloom_pos = source.find("m_bloom_pass.add_passes");
+			const size_t tone_pos = source.find("m_post_process_tone_map_pass.add_pass");
+			const bool order_ok =
+				sky_pos != std::string::npos &&
+				bloom_pos != std::string::npos &&
+				tone_pos != std::string::npos &&
+				sky_pos < bloom_pos &&
+				bloom_pos < tone_pos;
+			const bool debug_ok =
+				source.find("\"SceneBloomSetup\"") != std::string::npos &&
+				source.find("\"SceneBloomMip\"") != std::string::npos &&
+				source.find("\"SceneBloomFinal\"") != std::string::npos &&
+				source.find("\"SceneBloomCompositeHDR\"") != std::string::npos;
+
+			return (header_ok && order_ok && debug_ok) ||
+				report_self_test_failure("SceneRenderer bloom integration", "bloom pass is not owned, ordered, or debug-registered correctly");
+		}
+
 		auto test_sunlight_shadow_planner_rejects_multiple_sunlights() -> bool
 		{
 			DirectionalShadowConfig config = make_default_directional_shadow_config();
@@ -4672,6 +4711,7 @@ namespace AshEngine
 		all_passed = test_bloom_config_defaults_and_sanitization() && all_passed;
 		all_passed = test_bloom_shader_source_contract() && all_passed;
 		all_passed = test_bloom_pass_source_contract() && all_passed;
+		all_passed = test_scene_renderer_bloom_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;

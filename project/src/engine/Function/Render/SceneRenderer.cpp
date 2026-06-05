@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <unordered_map>
 
 namespace AshEngine
@@ -616,6 +617,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_bloom_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
 		ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
@@ -646,6 +648,7 @@ namespace AshEngine
 		m_pending_pick_readback = {};
 		m_debug_draw_service = nullptr;
 		m_post_process_tone_map_pass.shutdown();
+		m_bloom_pass.shutdown();
 		m_sky_background_pass.shutdown();
 		m_environment_lighting_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
@@ -1228,6 +1231,57 @@ namespace AshEngine
 				graph_resources.depth,
 				graph_resources.scene_hdr_linear,
 				view_context));
+			const BloomPassOutputs bloom_outputs = m_bloom_pass.add_passes(
+				graph,
+				frame,
+				graph_resources.scene_hdr_linear,
+				view_context,
+				frame.render_config.bloom);
+			ASH_PROCESS_ERROR(bloom_outputs.scene_hdr_linear);
+			graph_resources.scene_hdr_linear = bloom_outputs.scene_hdr_linear;
+
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneBloomSetup",
+				"Bloom Setup",
+				bloom_outputs.setup,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			for (uint32_t bloom_mip_index = 0; bloom_mip_index < static_cast<uint32_t>(bloom_outputs.mips.size()); ++bloom_mip_index)
+			{
+				const RenderGraphTextureRef bloom_mip = bloom_outputs.mips[bloom_mip_index];
+				const std::string debug_name = "SceneBloomMip" + std::to_string(bloom_mip_index + 1u);
+				const std::string display_name = "Bloom Mip " + std::to_string(bloom_mip_index + 1u);
+				register_render_debug_item(
+					m_render_debug_view,
+					debug_name.c_str(),
+					display_name.c_str(),
+					bloom_mip,
+					RenderDebugVisualization::LinearHDR,
+					RenderTextureFormat::RGBA16_SFLOAT,
+					std::max<uint32_t>(output_width >> (bloom_mip_index + 1u), 1u),
+					std::max<uint32_t>(output_height >> (bloom_mip_index + 1u), 1u));
+			}
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneBloomFinal",
+				"Bloom Final",
+				bloom_outputs.final_bloom,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
+			register_render_debug_item(
+				m_render_debug_view,
+				"SceneBloomCompositeHDR",
+				"Bloom Composite HDR",
+				bloom_outputs.composite_hdr,
+				RenderDebugVisualization::LinearHDR,
+				RenderTextureFormat::RGBA16_SFLOAT,
+				output_width,
+				output_height);
 		}
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.add_pass(
 			graph,

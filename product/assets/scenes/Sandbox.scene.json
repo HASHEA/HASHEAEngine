@@ -266,6 +266,65 @@
       "split_lambda": 0.6499999761581421,
       "static_cache_atlas_size": 4096,
       "static_cache_budget_mb": 64
+    },
+    "bloom": {
+      "debug_view": "Off",
+      "enabled": true,
+      "intensity": 0.6,
+      "quality": "High",
+      "size_scale": 1.0,
+      "soft_knee": 0.5,
+      "stages": [
+        {
+          "size": 0.3,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "size": 1.0,
+          "tint": [
+            1.0,
+            0.95,
+            0.9
+          ]
+        },
+        {
+          "size": 2.0,
+          "tint": [
+            0.9,
+            0.95,
+            1.0
+          ]
+        },
+        {
+          "size": 4.0,
+          "tint": [
+            0.8,
+            0.9,
+            1.0
+          ]
+        },
+        {
+          "size": 8.0,
+          "tint": [
+            0.7,
+            0.8,
+            1.0
+          ]
+        },
+        {
+          "size": 16.0,
+          "tint": [
+            0.6,
+            0.7,
+            1.0
+          ]
+        }
+      ],
+      "threshold": 1.0
     }
   },
   "version": 4

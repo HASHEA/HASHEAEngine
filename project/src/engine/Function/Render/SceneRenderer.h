@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/AmbientOcclusionPass.h"
+#include "Function/Render/BloomPass.h"
 #include "Function/Render/DeferredLightingPass.h"
 #include "Function/Render/DirectionalLightShadowPass.h"
 #include "Function/Render/SunLightShadowPass.h"
@@ -126,6 +127,7 @@ namespace AshEngine
 		DeferredLightingPass m_deferred_lighting_pass{};
 		EnvironmentLightingPass m_environment_lighting_pass{};
 		SkyBackgroundPass m_sky_background_pass{};
+		BloomPass m_bloom_pass{};
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		RenderDebugView m_render_debug_view{};
 		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;
