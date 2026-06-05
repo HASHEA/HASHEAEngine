@@ -1328,6 +1328,30 @@ namespace AshEngine
 				report_self_test_failure("Bloom shader source contract", "bloom shaders are missing required entry points or binding names");
 		}
 
+		auto test_bloom_pass_source_contract() -> bool
+		{
+			const bool header_ok = file_contains_all(
+				"project/src/engine/Function/Render/BloomPass.h",
+				{ "BloomPassOutputs", "final_bloom", "composite_hdr", "std::array<RenderGraphTextureRef, 6>" });
+			const bool source_ok = file_contains_all(
+				"project/src/engine/Function/Render/BloomPass.cpp",
+				{
+					"quality_mip_count",
+					"select_debug_texture",
+					"sanitize_bloom_config",
+					"sanitized_config.enabled",
+					"SceneBloomSetupPass",
+					"SceneBloomDownsamplePass",
+					"SceneBloomUpsamplePass",
+					"SceneBloomCompositePass",
+					"RenderTextureFormat::RGBA16_SFLOAT",
+					"RenderGraphAccess::GraphicsSRV",
+					"ASH_PROFILE_SCOPE_NC"
+				});
+			return (header_ok && source_ok) ||
+				report_self_test_failure("Bloom pass source contract", "BloomPass is missing the RenderGraph pass chain or debug selection contract");
+		}
+
 		auto test_sunlight_shadow_planner_rejects_multiple_sunlights() -> bool
 		{
 			DirectionalShadowConfig config = make_default_directional_shadow_config();
@@ -4647,6 +4671,7 @@ namespace AshEngine
 		all_passed = test_engine_ini_excludes_scene_render_config_sections() && all_passed;
 		all_passed = test_bloom_config_defaults_and_sanitization() && all_passed;
 		all_passed = test_bloom_shader_source_contract() && all_passed;
+		all_passed = test_bloom_pass_source_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
