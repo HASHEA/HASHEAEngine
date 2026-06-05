@@ -420,10 +420,10 @@ enum class RenderGraphPassFlags : uint8_t
 当前默认静态网格 scene path 已通过 graph 表达：
 
 ```text
-SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDirectionalShadowDepthPass -> SceneDeferredLightingBasePass -> per shadowed directional light: SceneDirectionalShadowMaskPass -> SceneDeferredDirectionalLightingShadowedPass -> unshadowed per-light deferred passes -> SceneDeferredEnvironmentLightingPass -> SceneDeferredCompositePass -> SceneSkyBackgroundPass -> SceneDeferredToneMapPass
+SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDirectionalShadowDepthPass -> SceneDeferredLightingBasePass -> per shadowed directional light: SceneDirectionalShadowMaskPass -> SceneDeferredDirectionalLightingShadowedPass -> unshadowed per-light deferred passes -> SceneDeferredEnvironmentLightingPass -> SceneDeferredCompositePass -> SceneSkyBackgroundPass -> SceneBloomSetupPass -> SceneBloomDownsamplePasses -> SceneBloomUpsamplePasses -> SceneBloomCompositePass -> SceneDeferredToneMapPass
 ```
 
-`SceneDeferredEnvironmentLightingPass` 与 `SceneSkyBackgroundPass` 必须仅通过 RenderGraph 声明 depth / GBuffer / HDR 依赖；不得在 active render pass 内注入 backend barrier。无 active environment 或 `environment_resource` 未就绪时，两 pass 均跳过且不影响整帧渲染。
+`SceneDeferredEnvironmentLightingPass`、`SceneSkyBackgroundPass` 与 Bloom pass 链必须仅通过 RenderGraph 声明 depth / GBuffer / HDR / bloom 依赖；不得在 active render pass 内注入 backend barrier。无 active environment 或 `environment_resource` 未就绪时，environment / sky pass 会跳过且不影响整帧渲染；Bloom 关闭或 intensity 为 0 时直接透传输入 HDR 给 tone-map。
 
 资源：
 
@@ -432,7 +432,8 @@ SceneGBufferPass -> SceneAmbientOcclusionPass -> SceneDirectionalShadowDepthPass
 - `SceneDeferredDepth`：graph transient D32 depth，shader_resource=true。
 - `SceneAmbientOcclusion`：graph transient 或 external neutral AO texture，shader_resource=true；`Off` 模式为 white 1x1，其他模式由 AO pass 写入。
 - `SceneDeferredLightingDiffuse` / `SceneDeferredLightingSpecular`：graph transient RGBA16F，shader_resource=true；光照 pass 以 MRT 分别累加漫反射项与高光项。
-- `SceneDeferredSceneHDRLinear`：graph transient RGBA16F，shader_resource=true；composite 写入线性 HDR，供 tone-map / 后续 bloom 等扩展消费。
+- `SceneDeferredSceneHDRLinear`：graph transient RGBA16F，shader_resource=true；composite 写入线性 HDR，供 sky/background、Bloom 和 tone-map 消费。
+- `SceneBloomSetup` / `SceneBloomMip1..6` / `SceneBloomFinal` / `SceneBloomCompositeHDR`：graph transient `RGBA16_SFLOAT` bloom resources；Bloom 在 sky/background 后读取 `SceneDeferredSceneHDRLinear`，最终写出 composited HDR，tone-map 消费被 `BloomPass` 选中的 HDR 输出。
 - `DirectionalShadowDynamicAtlas`：graph transient D32 depth atlas，shader_resource=true；当前帧 CSM tile 深度。
 - `DirectionalShadowStaticCache`：external persistent D32 depth atlas；outer cascade static cache tile。
 - `SceneDirectionalShadowMask`：graph transient RGBA8 screen mask，shader_resource=true；每个 shadowed directional light 投影前 clear 为 lit。
@@ -468,8 +469,22 @@ pass.read_texture(lighting_diffuse, RenderGraphAccess::GraphicsSRV);
 pass.read_texture(lighting_specular, RenderGraphAccess::GraphicsSRV);
 pass.write_color(0, scene_hdr_linear, RenderLoadAction::Clear, k_scene_hdr_clear_color);
 
-// 7. Tone map -> output
+// 7. Bloom setup/downsample/upsample/composite
 pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, scene_bloom_setup, RenderLoadAction::Clear, k_scene_hdr_clear_color);
+
+pass.read_texture(scene_bloom_setup, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, scene_bloom_mip1, RenderLoadAction::Clear, k_scene_hdr_clear_color);
+
+pass.read_texture(scene_bloom_mip1, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, scene_bloom_final, RenderLoadAction::Clear, k_scene_hdr_clear_color);
+
+pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+pass.read_texture(scene_bloom_final, RenderGraphAccess::GraphicsSRV);
+pass.write_color(0, scene_bloom_composite_hdr, RenderLoadAction::Clear, k_scene_hdr_clear_color);
+
+// 8. Tone map -> output
+pass.read_texture(scene_bloom_composite_hdr, RenderGraphAccess::GraphicsSRV);
 pass.write_color(0, output, view_context.color_load_action, view_context.color_clear_value);
 ```
 
