@@ -32,6 +32,7 @@
 #include "Function/Render/SunLightShadowPass.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Render/VolumetricLightingConfig.h"
+#include "Function/Render/VolumetricLightingPass.h"
 #include "Function/Scene/Scene.h"
 #include "Function/Scene/SceneQuery.h"
 #include "Graphics/DynamicRHI.h"
@@ -45,6 +46,7 @@
 #include "Graphics/DirectX12/DX12ResourceTracker.h"
 #endif
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1531,6 +1533,62 @@ namespace AshEngine
 
 			return (header_ok && source_ok) ||
 				report_self_test_failure("VolumetricLighting pass source contract", "pass source is missing graph or profiling contract");
+		}
+
+		auto test_volumetric_lighting_pass_adds_expected_graph_chain_for_tests() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("VolumetricLightingGraphSelfTest");
+			RenderTargetDesc hdr_desc{};
+			hdr_desc.width = 128;
+			hdr_desc.height = 64;
+			hdr_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			hdr_desc.shader_resource = true;
+			RenderTargetDesc depth_desc = hdr_desc;
+			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			RenderGraphTextureRef hdr = graph.register_external_texture_desc_for_tests(hdr_desc, "SceneHDRLinear");
+			RenderGraphTextureRef depth = graph.register_external_texture_desc_for_tests(depth_desc, "SceneDeferredDepth");
+
+			VolumetricLightingConfig config = make_default_volumetric_lighting_config();
+			config.enabled = true;
+			config.history = true;
+			config.screen_space_fallback = false;
+
+			const bool ok = VolumetricLightingPass::add_passes_for_tests(graph, hdr, depth, 128, 64, config);
+			if (!ok)
+			{
+				return report_self_test_failure("VolumetricLighting graph", "test graph helper failed");
+			}
+
+			const std::vector<RenderGraphPassNode>& passes = graph.get_passes_for_tests();
+			const std::vector<RenderGraphTextureNode>& textures = graph.get_textures_for_tests();
+			const auto has_pass = [&passes](const char* name) -> bool
+			{
+				return std::any_of(passes.begin(), passes.end(), [name](const RenderGraphPassNode& pass)
+				{
+					return pass.name == name;
+				});
+			};
+			const auto has_texture = [&textures](const char* name) -> bool
+			{
+				return std::any_of(textures.begin(), textures.end(), [name](const RenderGraphTextureNode& texture)
+				{
+					return texture.name == name;
+				});
+			};
+
+			const bool graph_ok =
+				has_pass("SceneVolumetricDensityPass") &&
+				has_pass("SceneVolumetricLightInjectionPass") &&
+				has_pass("SceneVolumetricTemporalPass") &&
+				has_pass("SceneVolumetricIntegratePass") &&
+				has_pass("SceneVolumetricCompositePass") &&
+				has_texture("SceneVolumetricDensity") &&
+				has_texture("SceneVolumetricScattering") &&
+				has_texture("SceneVolumetricScatteringTemporal") &&
+				has_texture("SceneVolumetricIntegratedLighting") &&
+				has_texture("SceneVolumetricCompositeHDR");
+			return graph_ok ||
+				report_self_test_failure("VolumetricLighting graph", "graph chain is missing expected passes or textures");
 		}
 
 		auto test_scene_renderer_bloom_integration_contract() -> bool
@@ -4934,6 +4992,7 @@ namespace AshEngine
 		all_passed = test_bloom_pass_source_contract() && all_passed;
 		all_passed = test_volumetric_lighting_shader_source_contract() && all_passed;
 		all_passed = test_volumetric_lighting_pass_source_contract() && all_passed;
+		all_passed = test_volumetric_lighting_pass_adds_expected_graph_chain_for_tests() && all_passed;
 		all_passed = test_scene_renderer_bloom_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;

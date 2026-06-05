@@ -38,6 +38,14 @@ namespace AshEngine
 		bool initialize(Renderer* renderer);
 		void shutdown();
 
+		static bool add_passes_for_tests(
+			RenderGraphBuilder& graph,
+			RenderGraphTextureRef scene_hdr_linear,
+			RenderGraphTextureRef scene_depth,
+			uint32_t output_width,
+			uint32_t output_height,
+			const VolumetricLightingConfig& config);
+
 		VolumetricLightingPassOutputs add_passes(
 			RenderGraphBuilder& graph,
 			const VisibleRenderFrame& frame,

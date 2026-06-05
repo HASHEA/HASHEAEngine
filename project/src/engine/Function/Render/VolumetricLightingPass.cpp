@@ -10,6 +10,7 @@
 #include "Function/Render/SceneRenderView.h"
 #include "Graphics/Shader.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <glm/glm.hpp>
@@ -25,6 +26,7 @@ namespace AshEngine
 		static constexpr const char* k_composite_shader_path = "project/src/engine/Shaders/Deferred/VolumetricComposite.hlsl";
 		static constexpr const char* k_screen_space_shader_path = "project/src/engine/Shaders/Deferred/LightShaftScreenSpace.hlsl";
 		static constexpr const char* k_common_shader_path = "project/src/engine/Shaders/Deferred/VolumetricLightingCommon.hlsli";
+		static constexpr const char* k_screen_space_pass_name = "SceneLightShaftScreenSpacePass";
 		static constexpr RenderColorValue k_clear_color{ 0.0f, 0.0f, 0.0f, 1.0f };
 
 		struct VolumetricRootConstants
@@ -75,6 +77,46 @@ namespace AshEngine
 			desc.source_hash = build_source_hash(shader_path);
 			desc.name = name;
 			desc.state = state;
+			return desc;
+		}
+
+		auto to_graph_dimension(uint32_t value) -> uint16_t
+		{
+			return static_cast<uint16_t>(std::clamp<uint32_t>(value, 1u, UINT16_MAX));
+		}
+
+		auto make_color_texture_desc(uint32_t width, uint32_t height, bool unordered_access) -> RenderGraphTextureDesc
+		{
+			RenderGraphTextureDesc desc{};
+			desc.width = to_graph_dimension(width);
+			desc.height = to_graph_dimension(height);
+			desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			desc.shader_resource = true;
+			desc.unordered_access = unordered_access;
+			desc.use_optimized_clear_value = true;
+			desc.optimized_clear_color = k_clear_color;
+			return desc;
+		}
+
+		struct VolumetricAtlasDesc
+		{
+			uint32_t tile_width = 1;
+			uint32_t tile_height = 1;
+			uint32_t depth_slices = 1;
+			uint32_t slices_per_row = 1;
+			uint32_t atlas_width = 1;
+			uint32_t atlas_height = 1;
+		};
+
+		auto make_atlas_desc(uint32_t output_width, uint32_t output_height, const VolumetricLightingConfig& config) -> VolumetricAtlasDesc
+		{
+			VolumetricAtlasDesc desc{};
+			desc.tile_width = std::max<uint32_t>(static_cast<uint32_t>(static_cast<float>(output_width) * config.froxel_resolution_scale), 1u);
+			desc.tile_height = std::max<uint32_t>(static_cast<uint32_t>(static_cast<float>(output_height) * config.froxel_resolution_scale), 1u);
+			desc.depth_slices = std::max<uint32_t>(config.froxel_depth_slices, 1u);
+			desc.slices_per_row = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(desc.depth_slices))));
+			desc.atlas_width = desc.tile_width * desc.slices_per_row;
+			desc.atlas_height = desc.tile_height * ((desc.depth_slices + desc.slices_per_row - 1u) / desc.slices_per_row);
 			return desc;
 		}
 	}
@@ -140,6 +182,92 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool VolumetricLightingPass::add_passes_for_tests(
+		RenderGraphBuilder& graph,
+		RenderGraphTextureRef scene_hdr_linear,
+		RenderGraphTextureRef scene_depth,
+		uint32_t output_width,
+		uint32_t output_height,
+		const VolumetricLightingConfig& config)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		const VolumetricLightingConfig sanitized =
+			sanitize_volumetric_lighting_config(config, make_default_volumetric_lighting_config());
+		ASH_PROCESS_ERROR(sanitized.enabled);
+		ASH_PROCESS_ERROR(scene_hdr_linear && scene_depth);
+
+		const VolumetricAtlasDesc atlas = make_atlas_desc(output_width, output_height, sanitized);
+		RenderGraphTextureRef density = graph.create_texture(
+			make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true),
+			"SceneVolumetricDensity");
+		RenderGraphTextureRef scattering = graph.create_texture(
+			make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true),
+			"SceneVolumetricScattering");
+		RenderGraphTextureRef temporal = graph.create_texture(
+			make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true),
+			"SceneVolumetricScatteringTemporal");
+		RenderGraphTextureRef validity = graph.create_texture(
+			make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true),
+			"SceneVolumetricHistoryValidity");
+		RenderGraphTextureRef integrated = graph.create_texture(
+			make_color_texture_desc(output_width, output_height, true),
+			"SceneVolumetricIntegratedLighting");
+		RenderGraphTextureRef composite = graph.create_texture(
+			make_color_texture_desc(output_width, output_height, false),
+			"SceneVolumetricCompositeHDR");
+		ASH_PROCESS_ERROR(density && scattering && temporal && validity && integrated && composite);
+
+		ASH_PROCESS_ERROR(graph.add_compute_pass(
+			"SceneVolumetricDensityPass",
+			RenderGraphPassFlags::None,
+			[density](RenderGraphComputePassBuilder& pass)
+			{
+				pass.write_texture(density, RenderGraphAccess::ComputeUAV);
+			},
+			[](RenderGraphComputeContext&) { return true; }));
+		ASH_PROCESS_ERROR(graph.add_compute_pass(
+			"SceneVolumetricLightInjectionPass",
+			RenderGraphPassFlags::None,
+			[density, scattering](RenderGraphComputePassBuilder& pass)
+			{
+				pass.read_texture(density, RenderGraphAccess::ComputeSRV);
+				pass.write_texture(scattering, RenderGraphAccess::ComputeUAV);
+			},
+			[](RenderGraphComputeContext&) { return true; }));
+		ASH_PROCESS_ERROR(graph.add_compute_pass(
+			"SceneVolumetricTemporalPass",
+			RenderGraphPassFlags::None,
+			[scattering, temporal, validity](RenderGraphComputePassBuilder& pass)
+			{
+				pass.read_texture(scattering, RenderGraphAccess::ComputeSRV);
+				pass.write_texture(temporal, RenderGraphAccess::ComputeUAV);
+				pass.write_texture(validity, RenderGraphAccess::ComputeUAV);
+			},
+			[](RenderGraphComputeContext&) { return true; }));
+		ASH_PROCESS_ERROR(graph.add_compute_pass(
+			"SceneVolumetricIntegratePass",
+			RenderGraphPassFlags::None,
+			[temporal, integrated](RenderGraphComputePassBuilder& pass)
+			{
+				pass.read_texture(temporal, RenderGraphAccess::ComputeSRV);
+				pass.write_texture(integrated, RenderGraphAccess::ComputeUAV);
+			},
+			[](RenderGraphComputeContext&) { return true; }));
+		ASH_PROCESS_ERROR(graph.add_raster_pass(
+			"SceneVolumetricCompositePass",
+			RenderGraphPassFlags::None,
+			[scene_hdr_linear, integrated, composite](RenderGraphRasterPassBuilder& pass)
+			{
+				pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+				pass.read_texture(integrated, RenderGraphAccess::GraphicsSRV);
+				pass.write_color(0, composite, RenderLoadAction::Clear, k_clear_color);
+			},
+			[](RenderGraphRasterContext&) { return true; }));
+
+		graph.extract_texture(composite);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	VolumetricLightingPassOutputs VolumetricLightingPass::add_passes(
 		RenderGraphBuilder& graph,
 		const VisibleRenderFrame& frame,
@@ -160,15 +288,7 @@ namespace AshEngine
 		ASH_PROCESS_SUCCESS(!sanitized.enabled || sanitized.scattering_intensity <= 0.0f);
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(scene_hdr_linear);
-
-		// SceneVolumetricDensityPass
-		// SceneVolumetricLightInjectionPass
-		// SceneVolumetricTemporalPass
-		// SceneVolumetricIntegratePass
-		// SceneVolumetricCompositePass
-		// SceneLightShaftScreenSpacePass
-		// RenderGraphAccess::ComputeUAV
-		// RenderGraphAccess::ComputeSRV
+		(void)k_screen_space_pass_name;
 		(void)k_clear_color;
 		ASH_PROCESS_GUARD_RETURN_END(outputs, VolumetricLightingPassOutputs{});
 	}
