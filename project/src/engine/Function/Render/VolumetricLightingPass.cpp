@@ -349,6 +349,31 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(sanitized.enabled);
 		ASH_PROCESS_ERROR(scene_hdr_linear && scene_depth);
 
+		if (sanitized.screen_space_fallback)
+		{
+			RenderGraphTextureRef mask = graph.create_texture(
+				make_color_texture_desc(output_width, output_height, false),
+				"SceneLightShaftOcclusionMask");
+			RenderGraphTextureRef composite = graph.create_texture(
+				make_color_texture_desc(output_width, output_height, false),
+				"SceneLightShaftScreenSpaceCompositeHDR");
+			ASH_PROCESS_ERROR(mask && composite);
+			ASH_PROCESS_ERROR(graph.add_raster_pass(
+				k_screen_space_pass_name,
+				RenderGraphPassFlags::None,
+				[scene_hdr_linear, scene_depth, mask, composite](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(scene_depth, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, mask, RenderLoadAction::Clear, k_clear_color);
+					pass.write_color(1, composite, RenderLoadAction::Clear, k_clear_color);
+				},
+				[](RenderGraphRasterContext&) { return true; }));
+			graph.extract_texture(mask);
+			graph.extract_texture(composite);
+			ASH_PROCESS_SUCCESS(true);
+		}
+
 		const VolumetricAtlasDesc atlas = make_atlas_desc(output_width, output_height, sanitized);
 		RenderGraphTextureRef density = graph.create_texture(
 			make_color_texture_desc(atlas.atlas_width, atlas.atlas_height, true),
@@ -438,7 +463,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(scene_hdr_linear);
 		ASH_PROCESS_ERROR(m_density_program && m_light_injection_program && m_temporal_program &&
-			m_integrate_program && m_composite_program);
+			m_integrate_program && m_composite_program && m_screen_space_program);
 		ASH_PROCESS_ERROR(m_point_clamp_sampler && m_linear_clamp_sampler);
 		ASH_PROCESS_ERROR(deferred_resources.depth);
 		ASH_PROCESS_ERROR(view_context.output_target != nullptr);
@@ -446,6 +471,47 @@ namespace AshEngine
 		const uint32_t output_width = std::max<uint32_t>(view_context.output_target->get_width(), 1u);
 		const uint32_t output_height = std::max<uint32_t>(view_context.output_target->get_height(), 1u);
 		const VolumetricAtlasDesc atlas = make_atlas_desc(output_width, output_height, sanitized);
+
+		if (sanitized.screen_space_fallback)
+		{
+			outputs.screen_space_mask = graph.create_texture(
+				make_color_texture_desc(output_width, output_height, false),
+				"SceneLightShaftOcclusionMask");
+			outputs.screen_space_final = graph.create_texture(
+				make_color_texture_desc(output_width, output_height, false),
+				"SceneLightShaftScreenSpaceCompositeHDR");
+			ASH_PROCESS_ERROR(outputs.screen_space_mask && outputs.screen_space_final);
+
+			const VolumetricRootConstants constants =
+				make_root_constants(frame, atlas, output_width, output_height, sanitized, 1u);
+			ASH_PROCESS_ERROR(graph.add_raster_pass(
+				k_screen_space_pass_name,
+				RenderGraphPassFlags::None,
+				[scene_hdr_linear, depth = deferred_resources.depth, mask = outputs.screen_space_mask, output = outputs.screen_space_final](RenderGraphRasterPassBuilder& pass)
+				{
+					pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(depth, RenderGraphAccess::GraphicsSRV);
+					pass.write_color(0, mask, RenderLoadAction::Clear, k_clear_color);
+					pass.write_color(1, output, RenderLoadAction::Clear, k_clear_color);
+				},
+				[this, scene_hdr_linear, depth = deferred_resources.depth, output = outputs.screen_space_final, constants, &view_context](RenderGraphRasterContext& context) -> bool
+				{
+					ASH_PROFILE_SCOPE_NC("SceneLightShaftScreenSpacePass", AshEngine::Profile::Color::Draw);
+					ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+					std::shared_ptr<RenderTarget> hdr = context.get_texture(scene_hdr_linear);
+					std::shared_ptr<RenderTarget> depth_target = context.get_texture(depth);
+					std::shared_ptr<RenderTarget> output_target = context.get_texture(output);
+					ASH_PROCESS_ERROR(hdr && depth_target && output_target);
+					ASH_PROCESS_ERROR(m_screen_space_program->set_texture("SceneHDRLinear", hdr));
+					ASH_PROCESS_ERROR(m_screen_space_program->set_texture("SceneDepth", depth_target));
+					ASH_PROCESS_ERROR(m_screen_space_program->set_sampler("SceneLinearClampSampler", m_linear_clamp_sampler));
+					ASH_PROCESS_ERROR(m_screen_space_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
+					ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(m_screen_space_program.get(), constants, view_context)));
+					ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+				}));
+			outputs.scene_hdr_linear = outputs.screen_space_final;
+			ASH_PROCESS_SUCCESS(true);
+		}
 
 		uint32_t light_count = 0;
 		ASH_PROCESS_ERROR(upload_light_buffer(frame, sanitized, light_count));
@@ -599,7 +665,6 @@ namespace AshEngine
 			}));
 
 		outputs.scene_hdr_linear = outputs.composite_hdr;
-		(void)k_screen_space_pass_name;
 		ASH_PROCESS_GUARD_RETURN_END(outputs, VolumetricLightingPassOutputs{});
 	}
 }

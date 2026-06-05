@@ -1594,8 +1594,49 @@ namespace AshEngine
 				has_texture("SceneVolumetricScatteringTemporal") &&
 				has_texture("SceneVolumetricIntegratedLighting") &&
 				has_texture("SceneVolumetricCompositeHDR");
-			return graph_ok ||
-				report_self_test_failure("VolumetricLighting graph", "graph chain is missing expected passes or textures");
+			if (!graph_ok)
+			{
+				return report_self_test_failure("VolumetricLighting graph", "graph chain is missing expected passes or textures");
+			}
+
+			RenderGraphBuilder fallback_graph = RenderGraphBuilder::create_headless_for_tests("VolumetricLightingFallbackGraphSelfTest");
+			RenderGraphTextureRef fallback_hdr = fallback_graph.register_external_texture_desc_for_tests(hdr_desc, "SceneHDRLinear");
+			RenderGraphTextureRef fallback_depth = fallback_graph.register_external_texture_desc_for_tests(depth_desc, "SceneDeferredDepth");
+			config.screen_space_fallback = true;
+			const bool fallback_added = VolumetricLightingPass::add_passes_for_tests(
+				fallback_graph,
+				fallback_hdr,
+				fallback_depth,
+				128,
+				64,
+				config);
+			if (!fallback_added)
+			{
+				return report_self_test_failure("VolumetricLighting graph", "fallback graph helper failed");
+			}
+
+			const std::vector<RenderGraphPassNode>& fallback_passes = fallback_graph.get_passes_for_tests();
+			const std::vector<RenderGraphTextureNode>& fallback_textures = fallback_graph.get_textures_for_tests();
+			const auto has_fallback_pass = [&fallback_passes](const char* name) -> bool
+			{
+				return std::any_of(fallback_passes.begin(), fallback_passes.end(), [name](const RenderGraphPassNode& pass)
+				{
+					return pass.name == name;
+				});
+			};
+			const auto has_fallback_texture = [&fallback_textures](const char* name) -> bool
+			{
+				return std::any_of(fallback_textures.begin(), fallback_textures.end(), [name](const RenderGraphTextureNode& texture)
+				{
+					return texture.name == name;
+				});
+			};
+			const bool fallback_ok =
+				has_fallback_pass("SceneLightShaftScreenSpacePass") &&
+				has_fallback_texture("SceneLightShaftOcclusionMask") &&
+				has_fallback_texture("SceneLightShaftScreenSpaceCompositeHDR");
+			return fallback_ok ||
+				report_self_test_failure("VolumetricLighting graph", "screen-space fallback pass or outputs were not added");
 		}
 
 		auto test_scene_renderer_bloom_integration_contract() -> bool
