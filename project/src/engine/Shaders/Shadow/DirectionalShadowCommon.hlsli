@@ -1,3 +1,7 @@
+#ifndef ASH_DIRECTIONAL_SHADOW_COMMON_HLSLI
+#define ASH_DIRECTIONAL_SHADOW_COMMON_HLSLI
+
+#ifndef ASH_DIRECTIONAL_SHADOW_COMMON_NO_FULLSCREEN
 struct VSFullscreenOutput
 {
     float4 position : SV_Position;
@@ -22,6 +26,7 @@ VSFullscreenOutput VSFullscreen(uint vertex_id : SV_VertexID)
     output.uv = uvs[vertex_id];
     return output;
 }
+#endif
 
 struct DirectionalShadowCascadeShaderData
 {
@@ -40,3 +45,5 @@ float3 AshDecodeNormalOct(float2 encoded)
     n.xy += float2(n.x >= 0.0 ? -t : t, n.y >= 0.0 ? -t : t);
     return normalize(n);
 }
+
+#endif

@@ -18,6 +18,7 @@ namespace AshEngine
 	class StorageBuffer;
 	struct SceneDeferredGraphResources;
 	struct SceneRenderViewContext;
+	struct SunLightShadowPassOutputs;
 	struct VisibleRenderFrame;
 
 	struct VolumetricLightingPassOutputs
@@ -42,6 +43,7 @@ namespace AshEngine
 	public:
 		bool initialize(Renderer* renderer);
 		void shutdown();
+		void clear_history();
 
 		static bool add_passes_for_tests(
 			RenderGraphBuilder& graph,
@@ -57,7 +59,8 @@ namespace AshEngine
 			const SceneDeferredGraphResources& deferred_resources,
 			RenderGraphTextureRef scene_hdr_linear,
 			const SceneRenderViewContext& view_context,
-			const VolumetricLightingConfig& config);
+			const VolumetricLightingConfig& config,
+			const SunLightShadowPassOutputs* sunlight_shadow_outputs = nullptr);
 
 	private:
 		struct VolumetricHistoryEntry
@@ -85,6 +88,8 @@ namespace AshEngine
 		std::shared_ptr<RenderSampler> m_point_clamp_sampler = nullptr;
 		std::shared_ptr<RenderSampler> m_linear_clamp_sampler = nullptr;
 		std::shared_ptr<StorageBuffer> m_light_buffer = nullptr;
+		std::shared_ptr<StorageBuffer> m_dummy_cascade_buffer = nullptr;
 		std::unordered_map<uint64_t, VolumetricHistoryEntry> m_history_entries{};
+		bool m_logged_runtime_state = false;
 	};
 }

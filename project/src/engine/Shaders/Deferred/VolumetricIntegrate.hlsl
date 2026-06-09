@@ -6,6 +6,9 @@ RWTexture2D<float4> SceneVolumetricIntegratedLighting : register(u0);
 SamplerState SceneLinearClampSampler : register(s0);
 SamplerState ScenePointClampSampler : register(s1);
 
+static const float kVolumetricScatteringWorldScale = 0.0125;
+static const float kVolumetricExtinctionWorldScale = 0.0125;
+
 [numthreads(8, 8, 1)]
 void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 {
@@ -18,7 +21,7 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 
 	float2 uv = (float2(dispatch_id.xy) + 0.5) / max(float2(width, height), float2(1.0, 1.0));
 	float scene_depth = SceneDepth.SampleLevel(ScenePointClampSampler, uv, 0);
-	float visible_depth = AshVolumetricVisibleDepth01(scene_depth);
+	float visible_depth = AshVolumetricVisibleDepth01(uv, scene_depth);
 	uint2 tile_pixel = AshVolumetricTilePixelFromUV(uv);
 	uint depth_slices = AshVolumetricDepthSliceCount();
 	uint slices_per_row = AshVolumetricSlicesPerRow();
@@ -28,18 +31,20 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 	float transmittance = 1.0;
 	for (uint slice = 0u; slice < 128u && slice < depth_slices; ++slice)
 	{
-		float slice_depth = AshVolumetricSliceDepth01(slice);
-		if (slice_depth > visible_depth + 0.0001)
+		float slice_start = (float)slice / max((float)depth_slices, 1.0);
+		float slice_end = (float)(slice + 1u) / max((float)depth_slices, 1.0);
+		float segment_length = max(min(slice_end, visible_depth) - slice_start, 0.0);
+		if (segment_length <= 0.0)
 		{
 			break;
 		}
 
 		float2 atlas_uv = AshVolumetricAtlasUV(tile_pixel, slice, slices_per_row, atlas_inv_size);
 		float4 scattering = SceneVolumetricScatteringTemporal.SampleLevel(SceneLinearClampSampler, atlas_uv, 0);
-		lighting += scattering.rgb * transmittance;
-		float segment = 1.0 / max((float)depth_slices, 1.0);
-		transmittance *= exp(-max(scattering.a, 0.0) * segment * 4.0);
+		float segment_view_length = segment_length * AshVolumetricMaxViewDepth();
+		lighting += scattering.rgb * transmittance * segment_view_length * kVolumetricScatteringWorldScale;
+		transmittance *= exp(-max(scattering.a, 0.0) * segment_view_length * kVolumetricExtinctionWorldScale);
 	}
 
-	SceneVolumetricIntegratedLighting[dispatch_id.xy] = float4(lighting, 1.0);
+	SceneVolumetricIntegratedLighting[dispatch_id.xy] = float4(lighting, transmittance);
 }

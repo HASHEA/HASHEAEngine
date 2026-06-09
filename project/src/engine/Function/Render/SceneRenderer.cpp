@@ -667,6 +667,11 @@ namespace AshEngine
 		m_renderer = nullptr;
 	}
 
+	void SceneRenderer::handle_output_resized()
+	{
+		m_volumetric_lighting_pass.clear_history();
+	}
+
 	bool SceneRenderer::should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count)
 	{
 		return visible_static_mesh_draw_count > 1;
@@ -1239,7 +1244,8 @@ namespace AshEngine
 				graph_resources,
 				graph_resources.scene_hdr_linear,
 				view_context,
-				frame.render_config.volumetric_lighting);
+				frame.render_config.volumetric_lighting,
+				&sunlight_shadow_outputs);
 			ASH_PROCESS_ERROR(volumetric_outputs.scene_hdr_linear);
 			graph_resources.scene_hdr_linear = volumetric_outputs.scene_hdr_linear;
 			graph_resources.volumetric_density = volumetric_outputs.density;

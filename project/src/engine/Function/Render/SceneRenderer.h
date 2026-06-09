@@ -42,6 +42,7 @@ namespace AshEngine
 	public:
 		bool initialize(Renderer* renderer, DebugDrawService* debug_draw_service = nullptr);
 		void shutdown();
+		void handle_output_resized();
 		bool render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
 		void draw_render_debug_view_ui(UIContext& ui_context);
 		// editor begin 修改原因：P2 GPU ID buffer picking

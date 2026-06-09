@@ -21,8 +21,9 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 	float4 current_value = SceneVolumetricScattering.SampleLevel(SceneLinearClampSampler, uv, 0);
 	float4 history_value = SceneVolumetricScatteringHistory.SampleLevel(SceneLinearClampSampler, uv, 0);
 	float blend = saturate(AshVolumetricConfig1.y);
+	float history_valid = blend > 0.0 ? 1.0 : 0.0;
 	float4 filtered = lerp(current_value, history_value, blend);
 	SceneVolumetricScatteringTemporal[dispatch_id.xy] = filtered;
-	SceneVolumetricHistoryValidity[dispatch_id.xy] = float4(blend.xxx, 1.0);
+	SceneVolumetricHistoryValidity[dispatch_id.xy] = float4(history_valid, blend, 0.0, 1.0);
 	SceneVolumetricHistoryWrite[dispatch_id.xy] = filtered;
 }

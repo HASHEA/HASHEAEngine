@@ -83,86 +83,6 @@
       }
     },
     {
-      "id": 5,
-      "light": {
-        "casts_shadow": false,
-        "color": [
-          0.44999998807907104,
-          0.6800000071525574,
-          1.0
-        ],
-        "inner_cone_angle_degrees": 30.0,
-        "intensity": 24.0,
-        "near_shadow_distance": 0.0,
-        "outer_cone_angle_degrees": 45.0,
-        "range": 12.0,
-        "shadow_cascade_count": 0,
-        "shadow_distance": 0.0,
-        "shadow_priority": 64,
-        "sunlight": false,
-        "type": 1
-      },
-      "name": "PointLight",
-      "parent": 1,
-      "transform": {
-        "position": [
-          0.0,
-          1.0,
-          0.0
-        ],
-        "rotation_euler_degrees": [
-          0.0,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      }
-    },
-    {
-      "id": 6,
-      "light": {
-        "casts_shadow": false,
-        "color": [
-          1.0,
-          0.0,
-          0.0
-        ],
-        "inner_cone_angle_degrees": 18.0,
-        "intensity": 36.0,
-        "near_shadow_distance": 0.0,
-        "outer_cone_angle_degrees": 36.0,
-        "range": 16.0,
-        "shadow_cascade_count": 0,
-        "shadow_distance": 0.0,
-        "shadow_priority": 64,
-        "sunlight": false,
-        "type": 2
-      },
-      "name": "SpotLight",
-      "parent": 1,
-      "transform": {
-        "position": [
-          0.7563143372535706,
-          0.8461325168609619,
-          -0.8026140332221985
-        ],
-        "rotation_euler_degrees": [
-          -40.89385986328125,
-          0.0,
-          0.0
-        ],
-        "scale": [
-          1.0,
-          1.0,
-          1.0
-        ]
-      }
-    },
-    {
       "environment": {
         "active": true,
         "affect_lighting": true,
@@ -224,9 +144,9 @@
           0.0
         ],
         "rotation_euler_degrees": [
-          -93.19474792480469,
-          35.814212799072266,
-          175.49554443359375
+          -59.74254608154297,
+          1.7766180038452148,
+          -162.74746704101563
         ],
         "scale": [
           1.0,
@@ -252,6 +172,65 @@
       "temporal_depth_threshold": 0.009999999776482582,
       "temporal_normal_threshold": 0.75
     },
+    "bloom": {
+      "debug_view": "Off",
+      "enabled": true,
+      "intensity": 0.6000000238418579,
+      "quality": "High",
+      "size_scale": 1.0,
+      "soft_knee": 0.5,
+      "stages": [
+        {
+          "size": 0.30000001192092896,
+          "tint": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "size": 1.0,
+          "tint": [
+            1.0,
+            0.949999988079071,
+            0.8999999761581421
+          ]
+        },
+        {
+          "size": 2.0,
+          "tint": [
+            0.8999999761581421,
+            0.949999988079071,
+            1.0
+          ]
+        },
+        {
+          "size": 4.0,
+          "tint": [
+            0.800000011920929,
+            0.8999999761581421,
+            1.0
+          ]
+        },
+        {
+          "size": 8.0,
+          "tint": [
+            0.699999988079071,
+            0.800000011920929,
+            1.0
+          ]
+        },
+        {
+          "size": 16.0,
+          "tint": [
+            0.6000000238418579,
+            0.699999988079071,
+            1.0
+          ]
+        }
+      ],
+      "threshold": 1.0
+    },
     "directional_shadows": {
       "default_cascade_count": 4,
       "default_shadow_distance": 160.0,
@@ -267,78 +246,19 @@
       "static_cache_atlas_size": 4096,
       "static_cache_budget_mb": 64
     },
-    "bloom": {
-      "debug_view": "Off",
-      "enabled": true,
-      "intensity": 0.6,
-      "quality": "High",
-      "size_scale": 1.0,
-      "soft_knee": 0.5,
-      "stages": [
-        {
-          "size": 0.3,
-          "tint": [
-            1.0,
-            1.0,
-            1.0
-          ]
-        },
-        {
-          "size": 1.0,
-          "tint": [
-            1.0,
-            0.95,
-            0.9
-          ]
-        },
-        {
-          "size": 2.0,
-          "tint": [
-            0.9,
-            0.95,
-            1.0
-          ]
-        },
-        {
-          "size": 4.0,
-          "tint": [
-            0.8,
-            0.9,
-            1.0
-          ]
-        },
-        {
-          "size": 8.0,
-          "tint": [
-            0.7,
-            0.8,
-            1.0
-          ]
-        },
-        {
-          "size": 16.0,
-          "tint": [
-            0.6,
-            0.7,
-            1.0
-          ]
-        }
-      ],
-      "threshold": 1.0
-    },
     "volumetric_lighting": {
-      "anisotropy": 0.35,
+      "anisotropy": 0.3499999940395355,
       "debug_view": "Off",
-      "density": 0.015,
+      "density": 0.030000003054738045,
       "enabled": true,
       "extinction_scale": 1.0,
       "froxel_depth_slices": 32,
       "froxel_resolution_scale": 0.25,
       "history": true,
-      "history_blend": 0.85,
+      "history_blend": 0.8500000238418579,
       "max_lights": 64,
-      "quality": "Low",
-      "scattering_intensity": 0.25,
+      "quality": "High",
+      "scattering_intensity": 1.0,
       "screen_space_fallback": false
     }
   },

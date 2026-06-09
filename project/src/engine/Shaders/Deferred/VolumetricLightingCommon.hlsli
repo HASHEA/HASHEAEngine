@@ -28,7 +28,7 @@ VSFullscreenOutput AshVolumetricFullscreen(uint vertex_id)
 cbuffer AshRootConstants : register(b0)
 {
 	float4x4 AshInvViewProjection;
-	float4x4 AshPrevViewProjection;
+	float4x4 AshView;
 	float4 AshVolumetricAtlasSize;
 	float4 AshVolumetricConfig0;
 	float4 AshVolumetricConfig1;
@@ -97,19 +97,20 @@ float AshVolumetricSliceDepth01(uint slice)
 	return (float(slice) + 0.5) / max((float)AshVolumetricDepthSliceCount(), 1.0);
 }
 
+float AshVolumetricMaxViewDepth()
+{
+	return max(AshVolumetricVolumeParams.z, 0.01);
+}
+
+float AshVolumetricSliceViewDepth(uint slice)
+{
+	return max(AshVolumetricSliceDepth01(slice) * AshVolumetricMaxViewDepth(), 0.01);
+}
+
 float AshVolumetricDeviceDepthFromDepth01(float depth01)
 {
 	const float clamped_depth = saturate(depth01);
 	return AshVolumetricIsReverseZ() ? 1.0 - clamped_depth : clamped_depth;
-}
-
-float AshVolumetricVisibleDepth01(float scene_depth)
-{
-	if (AshVolumetricSceneDepthIsBackground(scene_depth))
-	{
-		return 1.0;
-	}
-	return AshVolumetricIsReverseZ() ? saturate(1.0 - scene_depth) : saturate(scene_depth);
 }
 
 float3 AshVolumetricReconstructWorldPosition(float2 uv, float device_depth)
@@ -117,6 +118,29 @@ float3 AshVolumetricReconstructWorldPosition(float2 uv, float device_depth)
 	const float4 clip = float4(uv * float2(2.0, -2.0) + float2(-1.0, 1.0), device_depth, 1.0);
 	const float4 world = mul(AshInvViewProjection, clip);
 	return world.xyz / max(world.w, 1e-6);
+}
+
+float AshVolumetricViewDepthFromWorldPosition(float3 position_ws)
+{
+	return abs(mul(AshView, float4(position_ws, 1.0)).z);
+}
+
+float3 AshVolumetricReconstructWorldPositionAtViewDepth(float2 uv, float view_depth)
+{
+	const float far_device_depth = AshVolumetricIsReverseZ() ? 0.0 : 1.0;
+	const float3 far_position_ws = AshVolumetricReconstructWorldPosition(uv, far_device_depth);
+	const float far_view_depth = max(AshVolumetricViewDepthFromWorldPosition(far_position_ws), 1e-4);
+	return lerp(AshCameraPositionAndFlags.xyz, far_position_ws, saturate(view_depth / far_view_depth));
+}
+
+float AshVolumetricVisibleDepth01(float2 uv, float scene_depth)
+{
+	if (AshVolumetricSceneDepthIsBackground(scene_depth))
+	{
+		return 1.0;
+	}
+	const float3 position_ws = AshVolumetricReconstructWorldPosition(uv, scene_depth);
+	return saturate(AshVolumetricViewDepthFromWorldPosition(position_ws) / AshVolumetricMaxViewDepth());
 }
 
 float3 AshVolumetricSafeNormalize(float3 value, float3 fallback)

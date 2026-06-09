@@ -12,6 +12,8 @@ VSFullscreenOutput VSMain(uint vertex_id : SV_VertexID)
 float4 PSMain(VSFullscreenOutput input) : SV_Target0
 {
 	float3 hdr = SceneHDRLinear.Sample(SceneLinearClampSampler, input.uv).rgb;
-	float3 volumetric = SceneVolumetricIntegratedLighting.Sample(SceneLinearClampSampler, input.uv).rgb;
-	return float4(hdr + volumetric, 1.0);
+	float4 integrated = SceneVolumetricIntegratedLighting.Sample(SceneLinearClampSampler, input.uv);
+	float3 volumetric = integrated.rgb;
+	float transmittance = saturate(integrated.a);
+	return float4(hdr * transmittance + volumetric, 1.0);
 }

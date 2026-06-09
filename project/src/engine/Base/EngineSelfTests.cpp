@@ -1488,22 +1488,74 @@ namespace AshEngine
 		{
 			const bool common_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricLightingCommon.hlsli",
-				{ "AshVolumetricFullscreen", "AshVolumetricPhaseHG", "AshVolumetricAtlasUV", "AshVolumetricSceneDepthIsBackground", "AshVolumetricReconstructWorldPosition", "AshRootConstants" });
+				{
+					"AshVolumetricFullscreen",
+					"AshVolumetricPhaseHG",
+					"AshVolumetricAtlasUV",
+					"AshVolumetricSceneDepthIsBackground",
+					"AshVolumetricReconstructWorldPosition",
+					"AshVolumetricReconstructWorldPositionAtViewDepth",
+					"AshVolumetricSliceViewDepth",
+					"AshVolumetricVisibleDepth01(float2 uv, float scene_depth)",
+					"AshView",
+					"AshRootConstants"
+				});
 			const bool density_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricDensity.hlsl",
 				{ "CSMain", "SceneVolumetricDensity", "AshVolumetricConfig0" });
 			const bool injection_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricLightInjection.hlsl",
-				{ "CSMain", "SceneVolumetricDensity", "SceneVolumetricScattering", "SceneVolumetricLights", "AshVolumetricReconstructWorldPosition", "AshVolumetricPhaseHG" });
+				{
+					"CSMain",
+					"SceneVolumetricDensity",
+					"SceneVolumetricScattering",
+					"SceneVolumetricLights",
+					"AshVolumetricReconstructWorldPositionAtViewDepth",
+					"AshVolumetricPhaseHG",
+					"DirectionalShadowDynamicAtlas",
+					"SceneDirectionalShadowCascades",
+					"AshVolumetricSampleSunlightShadow",
+					"ComputeCascadeTransitionWeight",
+					"view_depth >= cascade.split_depth_bias.x && view_depth <= cascade.split_depth_bias.y",
+					"kVolumetricScatteringDensityNormalization",
+					"kVolumetricDirectionalVisibilityScale",
+					"kVolumetricLocalVisibilityScale",
+					"light.cone_shadow.w",
+					"sunlight_shadow"
+				});
 			const bool temporal_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricTemporal.hlsl",
-				{ "CSMain", "SceneVolumetricScattering", "SceneVolumetricScatteringHistory", "SceneVolumetricHistoryValidity" });
+				{
+					"CSMain",
+					"SceneVolumetricScattering",
+					"SceneVolumetricScatteringHistory",
+					"SceneVolumetricHistoryValidity",
+					"float blend = saturate(AshVolumetricConfig1.y)"
+				});
 			const bool integrate_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricIntegrate.hlsl",
-				{ "CSMain", "SceneDepth", "SceneVolumetricScatteringTemporal", "SceneVolumetricIntegratedLighting", "AshVolumetricConfig1" });
+				{
+					"CSMain",
+					"SceneDepth",
+					"SceneVolumetricScatteringTemporal",
+					"SceneVolumetricIntegratedLighting",
+					"AshVolumetricConfig1",
+					"segment_length",
+					"segment_view_length = segment_length * AshVolumetricMaxViewDepth()",
+					"kVolumetricScatteringWorldScale",
+					"lighting += scattering.rgb * transmittance * segment_view_length * kVolumetricScatteringWorldScale",
+					"kVolumetricExtinctionWorldScale",
+					"SceneVolumetricIntegratedLighting[dispatch_id.xy] = float4(lighting, transmittance)"
+				});
 			const bool composite_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/VolumetricComposite.hlsl",
-				{ "VSMain", "PSMain", "SceneHDRLinear", "SceneVolumetricIntegratedLighting" });
+				{
+					"VSMain",
+					"PSMain",
+					"SceneHDRLinear",
+					"SceneVolumetricIntegratedLighting",
+					"hdr * transmittance + volumetric"
+				});
 			const bool fallback_ok = file_contains_all(
 				"project/src/engine/Shaders/Deferred/LightShaftScreenSpace.hlsl",
 				{ "VSMain", "PSMain", "SceneDepth", "PSScreenSpaceLightShaftOutput" });
@@ -1533,18 +1585,26 @@ namespace AshEngine
 					"SceneVolumetricTemporalPass",
 					"SceneVolumetricIntegratePass",
 					"SceneVolumetricCompositePass",
+					"select_debug_texture",
 					"SceneLightShaftScreenSpacePass",
 					"RenderGraphAccess::ComputeUAV",
 					"RenderGraphAccess::ComputeSRV",
 					"ASH_PROFILE_SCOPE_NC",
 					"m_density_program->set_rw_texture(\"SceneVolumetricDensity\"",
 					"m_light_injection_program->set_texture(\"SceneVolumetricDensity\"",
+					"deferred_resources.sunlight_shadow_dynamic_atlas",
+					"m_light_injection_program->set_texture(\"DirectionalShadowDynamicAtlas\"",
 					"m_light_injection_program->set_storage_buffer(\"SceneVolumetricLights\"",
+					"m_light_injection_program->set_storage_buffer(\"SceneDirectionalShadowCascades\"",
 					"m_integrate_program->set_texture(\"SceneDepth\"",
 					"m_integrate_program->set_rw_texture(\"SceneVolumetricIntegratedLighting\"",
 					"m_composite_program->set_texture(\"SceneHDRLinear\"",
 					"SceneVolumetricScatteringHistory",
 					"SceneVolumetricHistoryWrite",
+					"temporal_constants.config1.y = history_has_valid_read ? sanitized.history_blend : 0.0f",
+					"m_logged_runtime_state",
+					"sanitized.debug_view",
+					"outputs.scene_hdr_linear = debug_texture",
 					"context.dispatch",
 					"context.draw"
 				});
@@ -1663,6 +1723,103 @@ namespace AshEngine
 				has_fallback_texture("SceneLightShaftScreenSpaceCompositeHDR");
 			return fallback_ok ||
 				report_self_test_failure("VolumetricLighting graph", "screen-space fallback pass or outputs were not added");
+		}
+
+		auto test_volumetric_lighting_atlas_budget_contract() -> bool
+		{
+			RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("VolumetricLightingAtlasBudgetSelfTest");
+			RenderTargetDesc hdr_desc{};
+			hdr_desc.width = 1920;
+			hdr_desc.height = 1080;
+			hdr_desc.format = RenderTextureFormat::RGBA16_SFLOAT;
+			hdr_desc.shader_resource = true;
+			RenderTargetDesc depth_desc = hdr_desc;
+			depth_desc.format = RenderTextureFormat::D32_SFLOAT;
+			RenderGraphTextureRef hdr = graph.register_external_texture_desc_for_tests(hdr_desc, "SceneHDRLinear");
+			RenderGraphTextureRef depth = graph.register_external_texture_desc_for_tests(depth_desc, "SceneDeferredDepth");
+
+			VolumetricLightingConfig config = make_default_volumetric_lighting_config();
+			config.enabled = true;
+			config.quality = VolumetricLightingQuality::High;
+			config.froxel_resolution_scale = 0.5f;
+			config.froxel_depth_slices = 64u;
+			config.history = true;
+			config.screen_space_fallback = false;
+
+			if (!VolumetricLightingPass::add_passes_for_tests(graph, hdr, depth, 1920, 1080, config))
+			{
+				return report_self_test_failure("VolumetricLighting atlas budget", "test graph helper failed");
+			}
+
+			const std::vector<RenderGraphTextureNode>& textures = graph.get_textures_for_tests();
+			const auto density_it = std::find_if(textures.begin(), textures.end(), [](const RenderGraphTextureNode& texture)
+			{
+				return texture.name == "SceneVolumetricDensity";
+			});
+			if (density_it == textures.end())
+			{
+				return report_self_test_failure("VolumetricLighting atlas budget", "density texture is missing");
+			}
+
+			const uint64_t atlas_pixels =
+				static_cast<uint64_t>(density_it->desc.width) * static_cast<uint64_t>(density_it->desc.height);
+			const bool budget_ok =
+				density_it->desc.width < 7680u &&
+				density_it->desc.height < 4320u &&
+				atlas_pixels <= 2ull * 1024ull * 1024ull;
+			return budget_ok ||
+				report_self_test_failure("VolumetricLighting atlas budget", "high-quality 1080p froxel atlas exceeds the runtime memory budget");
+		}
+
+		auto test_resize_clears_render_size_caches_contract() -> bool
+		{
+			std::ifstream application_file("project/src/engine/Function/Application.cpp");
+			std::ifstream render_device_file("project/src/engine/Function/Render/RenderDevice.cpp");
+			std::ifstream scene_renderer_header_file("project/src/engine/Function/Render/SceneRenderer.h");
+			std::ifstream scene_renderer_source_file("project/src/engine/Function/Render/SceneRenderer.cpp");
+			std::ifstream volumetric_header_file("project/src/engine/Function/Render/VolumetricLightingPass.h");
+			if (!application_file.is_open() ||
+				!render_device_file.is_open() ||
+				!scene_renderer_header_file.is_open() ||
+				!scene_renderer_source_file.is_open() ||
+				!volumetric_header_file.is_open())
+			{
+				return report_self_test_failure("Resize render cache contract", "failed to open render resize source files");
+			}
+
+			const std::string application_source{
+				std::istreambuf_iterator<char>(application_file),
+				std::istreambuf_iterator<char>() };
+			const std::string render_device_source{
+				std::istreambuf_iterator<char>(render_device_file),
+				std::istreambuf_iterator<char>() };
+			const std::string scene_renderer_header{
+				std::istreambuf_iterator<char>(scene_renderer_header_file),
+				std::istreambuf_iterator<char>() };
+			const std::string scene_renderer_source{
+				std::istreambuf_iterator<char>(scene_renderer_source_file),
+				std::istreambuf_iterator<char>() };
+			const std::string volumetric_header{
+				std::istreambuf_iterator<char>(volumetric_header_file),
+				std::istreambuf_iterator<char>() };
+
+			const bool application_ok =
+				application_source.find("WindowEventType::Resize") != std::string::npos &&
+				application_source.find("renderer->clear_transient_render_targets()") != std::string::npos &&
+				application_source.find("sceneRenderer.handle_output_resized()") != std::string::npos;
+			const bool render_device_ok =
+				render_device_source.find("last_swapchain_width") != std::string::npos &&
+				render_device_source.find("last_swapchain_height") != std::string::npos &&
+				render_device_source.find("RenderDevice: swapchain extent changed") != std::string::npos &&
+				render_device_source.find("clear_transient_render_targets()") != std::string::npos;
+			const bool scene_renderer_ok =
+				scene_renderer_header.find("handle_output_resized") != std::string::npos &&
+				scene_renderer_source.find("m_volumetric_lighting_pass.clear_history()") != std::string::npos;
+			const bool volumetric_ok =
+				volumetric_header.find("clear_history") != std::string::npos;
+
+			return (application_ok && render_device_ok && scene_renderer_ok && volumetric_ok) ||
+				report_self_test_failure("Resize render cache contract", "window resize must clear transient RT caches and persistent volumetric history");
 		}
 
 		auto test_scene_renderer_bloom_integration_contract() -> bool
@@ -4731,9 +4888,13 @@ namespace AshEngine
 			const bool ok =
 				source.find("\"volumetric_lighting\"") != std::string::npos &&
 				source.find("\"enabled\": true") != std::string::npos &&
-				source.find("\"quality\": \"Low\"") != std::string::npos;
+				source.find("\"debug_view\": \"Off\"") != std::string::npos &&
+				source.find("\"debug_view\": \"true\"") == std::string::npos &&
+				source.find("\"density\": 0.0300000037252903") != std::string::npos &&
+				source.find("\"scattering_intensity\": 2.0") != std::string::npos &&
+				source.find("\"froxel_resolution_scale\": 0.25") != std::string::npos;
 			return ok ||
-				report_self_test_failure("Sandbox volumetric scene config", "standard Sandbox scene does not enable Low volumetric lighting");
+				report_self_test_failure("Sandbox volumetric scene config", "standard Sandbox scene does not expose artist-visible volumetric lighting settings");
 		}
 
 		auto test_graphics_draw_desc_keeps_common_vertex_bindings_inline() -> bool
@@ -5131,6 +5292,8 @@ namespace AshEngine
 		all_passed = test_volumetric_lighting_shader_source_contract() && all_passed;
 		all_passed = test_volumetric_lighting_pass_source_contract() && all_passed;
 		all_passed = test_volumetric_lighting_pass_adds_expected_graph_chain_for_tests() && all_passed;
+		all_passed = test_volumetric_lighting_atlas_budget_contract() && all_passed;
+		all_passed = test_resize_clears_render_size_caches_contract() && all_passed;
 		all_passed = test_scene_renderer_bloom_integration_contract() && all_passed;
 		all_passed = test_scene_renderer_volumetric_lighting_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;

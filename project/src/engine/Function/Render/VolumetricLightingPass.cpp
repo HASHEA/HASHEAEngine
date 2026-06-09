@@ -8,6 +8,7 @@
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/SceneRenderView.h"
+#include "Function/Render/SunLightShadowPass.h"
 #include "Graphics/Shader.h"
 #include <algorithm>
 #include <cmath>
@@ -28,13 +29,14 @@ namespace AshEngine
 		static constexpr const char* k_composite_shader_path = "project/src/engine/Shaders/Deferred/VolumetricComposite.hlsl";
 		static constexpr const char* k_screen_space_shader_path = "project/src/engine/Shaders/Deferred/LightShaftScreenSpace.hlsl";
 		static constexpr const char* k_common_shader_path = "project/src/engine/Shaders/Deferred/VolumetricLightingCommon.hlsli";
+		static constexpr const char* k_shadow_common_shader_path = "project/src/engine/Shaders/Shadow/DirectionalShadowCommon.hlsli";
 		static constexpr const char* k_screen_space_pass_name = "SceneLightShaftScreenSpacePass";
 		static constexpr RenderColorValue k_clear_color{ 0.0f, 0.0f, 0.0f, 1.0f };
 
 		struct VolumetricRootConstants
 		{
 			glm::mat4 inv_view_projection{ 1.0f };
-			glm::mat4 prev_view_projection{ 1.0f };
+			glm::mat4 view{ 1.0f };
 			glm::vec4 atlas_size{ 1.0f, 1.0f, 1.0f, 1.0f };
 			glm::vec4 config0{ 0.02f, 1.0f, 1.0f, 64.0f };
 			glm::vec4 config1{ 0.0f, 0.9f, 0.0f, 0.0f };
@@ -52,6 +54,16 @@ namespace AshEngine
 			glm::vec4 color_intensity{ 0.0f };
 			glm::vec4 cone_shadow{ 1.0f, 1.0f, 0.0f, 0.0f };
 		};
+
+		struct DirectionalShadowCascadeShaderData
+		{
+			glm::mat4 world_to_shadow_clip{ 1.0f };
+			glm::vec4 atlas_uv_scale_bias{ 1.0f, 1.0f, 0.0f, 0.0f };
+			glm::vec4 split_depth_bias{ 0.0f };
+			glm::vec4 texel_size_flags{ 0.0f };
+		};
+
+		static_assert(sizeof(DirectionalShadowCascadeShaderData) == 112u);
 
 		auto visible_light_type_to_shader_type(LightType type) -> float
 		{
@@ -73,6 +85,10 @@ namespace AshEngine
 			uint64_t hash_value = 0;
 			RHI::hash_shader_file_signature(hash_value, shader_path);
 			RHI::hash_shader_file_signature(hash_value, k_common_shader_path);
+			if (std::strcmp(shader_path, k_light_injection_shader_path) == 0)
+			{
+				RHI::hash_shader_file_signature(hash_value, k_shadow_common_shader_path);
+			}
 			return hash_value;
 		}
 
@@ -132,7 +148,24 @@ namespace AshEngine
 			uint32_t slices_per_row = 1;
 			uint32_t atlas_width = 1;
 			uint32_t atlas_height = 1;
+			float effective_resolution_scale = 1.0f;
 		};
+
+		auto max_froxel_count_for_quality(VolumetricLightingQuality quality) -> uint64_t
+		{
+			switch (quality)
+			{
+			case VolumetricLightingQuality::Low:
+				return 512ull * 1024ull;
+			case VolumetricLightingQuality::High:
+				return 2ull * 1024ull * 1024ull;
+			case VolumetricLightingQuality::Epic:
+				return 4ull * 1024ull * 1024ull;
+			case VolumetricLightingQuality::Medium:
+			default:
+				return 1ull * 1024ull * 1024ull;
+			}
+		}
 
 		auto make_atlas_desc(uint32_t output_width, uint32_t output_height, const VolumetricLightingConfig& config) -> VolumetricAtlasDesc
 		{
@@ -140,10 +173,117 @@ namespace AshEngine
 			desc.tile_width = std::max<uint32_t>(static_cast<uint32_t>(static_cast<float>(output_width) * config.froxel_resolution_scale), 1u);
 			desc.tile_height = std::max<uint32_t>(static_cast<uint32_t>(static_cast<float>(output_height) * config.froxel_resolution_scale), 1u);
 			desc.depth_slices = std::max<uint32_t>(config.froxel_depth_slices, 1u);
+			const uint64_t tile_pixel_count =
+				static_cast<uint64_t>(desc.tile_width) * static_cast<uint64_t>(desc.tile_height);
+			const uint64_t max_tile_pixels =
+				std::max<uint64_t>(max_froxel_count_for_quality(config.quality) / desc.depth_slices, 1ull);
+			if (tile_pixel_count > max_tile_pixels)
+			{
+				const double atlas_scale = std::sqrt(
+					static_cast<double>(max_tile_pixels) /
+					static_cast<double>(std::max<uint64_t>(tile_pixel_count, 1ull)));
+				desc.tile_width = std::max<uint32_t>(
+					static_cast<uint32_t>(std::floor(static_cast<double>(desc.tile_width) * atlas_scale)),
+					1u);
+				desc.tile_height = std::max<uint32_t>(
+					static_cast<uint32_t>(std::floor(static_cast<double>(desc.tile_height) * atlas_scale)),
+					1u);
+			}
 			desc.slices_per_row = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(desc.depth_slices))));
 			desc.atlas_width = desc.tile_width * desc.slices_per_row;
 			desc.atlas_height = desc.tile_height * ((desc.depth_slices + desc.slices_per_row - 1u) / desc.slices_per_row);
+			const float effective_width_scale =
+				static_cast<float>(desc.tile_width) / static_cast<float>(std::max<uint32_t>(output_width, 1u));
+			const float effective_height_scale =
+				static_cast<float>(desc.tile_height) / static_cast<float>(std::max<uint32_t>(output_height, 1u));
+			desc.effective_resolution_scale = std::min(effective_width_scale, effective_height_scale);
 			return desc;
+		}
+
+		auto find_volumetric_sunlight_shadow_plan(
+			const VisibleRenderFrame& frame,
+			const SunLightShadowPassOutputs* sunlight_shadow_outputs) -> const DirectionalShadowLightPlan*
+		{
+			if (!sunlight_shadow_outputs || !sunlight_shadow_outputs->has_shadowed_lights() || !sunlight_shadow_outputs->cascade_buffer)
+			{
+				return nullptr;
+			}
+
+			for (uint32_t light_index = 0; light_index < static_cast<uint32_t>(frame.lights.size()); ++light_index)
+			{
+				const VisibleLightData& light = frame.lights[light_index];
+				if (light.type != LightType::Directional || !light.sunlight || !light.casts_shadow)
+				{
+					continue;
+				}
+
+				const DirectionalShadowLightPlan* shadow_plan =
+					find_shadow_plan_for_frame_light(*sunlight_shadow_outputs, light_index);
+				if (shadow_plan && shadow_plan->shadowed && shadow_plan->cascade_count > 0u)
+				{
+					return shadow_plan;
+				}
+			}
+			return nullptr;
+		}
+
+		auto make_sunlight_shadow_params(
+			const VisibleRenderFrame& frame,
+			const SunLightShadowPassOutputs* sunlight_shadow_outputs) -> glm::vec4
+		{
+			const DirectionalShadowLightPlan* shadow_plan =
+				find_volumetric_sunlight_shadow_plan(frame, sunlight_shadow_outputs);
+			if (!shadow_plan)
+			{
+				return glm::vec4(0.0f);
+			}
+
+			return glm::vec4(
+				static_cast<float>(shadow_plan->first_cascade),
+				static_cast<float>(shadow_plan->cascade_count),
+				1.0f,
+				static_cast<float>(frame.render_config.directional_shadows.pcf_radius));
+		}
+
+		auto resolve_volumetric_view_distance(
+			const VisibleRenderFrame& frame,
+			const DirectionalShadowLightPlan* sunlight_shadow_plan,
+			const SunLightShadowPassOutputs* sunlight_shadow_outputs) -> float
+		{
+			constexpr float k_default_volumetric_view_distance = 128.0f;
+			float view_distance = 0.0f;
+			for (const VisibleLightData& light : frame.lights)
+			{
+				if (light.type == LightType::Point || light.type == LightType::Spot)
+				{
+					view_distance = std::max(view_distance, light.range);
+				}
+				else if (light.type == LightType::Directional && light.sunlight && light.casts_shadow)
+				{
+					const float shadow_distance = light.shadow_distance > 0.0f ?
+						light.shadow_distance :
+						frame.render_config.directional_shadows.default_shadow_distance;
+					view_distance = std::max(view_distance, shadow_distance);
+				}
+			}
+
+			if (sunlight_shadow_plan && sunlight_shadow_outputs)
+			{
+				for (uint32_t cascade_index = 0; cascade_index < sunlight_shadow_plan->cascade_count; ++cascade_index)
+				{
+					const uint32_t buffer_index = sunlight_shadow_plan->first_cascade + cascade_index;
+					if (buffer_index < sunlight_shadow_outputs->plan.cascades.size())
+					{
+						view_distance = std::max(view_distance, sunlight_shadow_outputs->plan.cascades[buffer_index].split_far);
+					}
+				}
+			}
+
+			if (!std::isfinite(view_distance) || view_distance <= 0.0f)
+			{
+				view_distance = k_default_volumetric_view_distance;
+			}
+			return std::clamp(view_distance, 1.0f, 100000.0f);
 		}
 
 		void apply_view_context_to_draw_desc(GraphicsDrawDesc& draw_desc, const SceneRenderViewContext& view_context)
@@ -194,11 +334,13 @@ namespace AshEngine
 			uint32_t output_width,
 			uint32_t output_height,
 			const VolumetricLightingConfig& config,
-			uint32_t light_count) -> VolumetricRootConstants
+			uint32_t light_count,
+			float volumetric_view_distance = 128.0f,
+			const glm::vec4& screen_light_position_and_params = glm::vec4(0.5f, 0.5f, 1.0f, 0.0f)) -> VolumetricRootConstants
 		{
 			VolumetricRootConstants constants{};
 			constants.inv_view_projection = glm::inverse(frame.view_projection);
-			constants.prev_view_projection = frame.view_projection;
+			constants.view = frame.view;
 			constants.atlas_size = glm::vec4(
 				static_cast<float>(atlas.tile_width),
 				static_cast<float>(atlas.tile_height),
@@ -215,12 +357,39 @@ namespace AshEngine
 				static_cast<float>(output_width),
 				static_cast<float>(output_height));
 			constants.camera_position_and_flags = glm::vec4(frame.camera_position, frame.reverse_z ? 1.0f : 0.0f);
+			constants.screen_light_position_and_params = screen_light_position_and_params;
 			constants.volume_params = glm::vec4(
 				static_cast<float>(atlas.depth_slices),
 				static_cast<float>(atlas.slices_per_row),
-				static_cast<float>((atlas.depth_slices + atlas.slices_per_row - 1u) / atlas.slices_per_row),
+				volumetric_view_distance,
 				config.anisotropy);
 			return constants;
+		}
+
+		auto select_debug_texture(
+			const VolumetricLightingPassOutputs& outputs,
+			VolumetricLightingDebugView debug_view) -> RenderGraphTextureRef
+		{
+			switch (debug_view)
+			{
+			case VolumetricLightingDebugView::Density:
+				return outputs.density;
+			case VolumetricLightingDebugView::Scattering:
+				return outputs.scattering;
+			case VolumetricLightingDebugView::IntegratedLighting:
+				return outputs.integrated_lighting;
+			case VolumetricLightingDebugView::HistoryValidity:
+				return outputs.history_validity;
+			case VolumetricLightingDebugView::CompositeHDR:
+				return outputs.composite_hdr;
+			case VolumetricLightingDebugView::ScreenSpaceMask:
+				return outputs.screen_space_mask;
+			case VolumetricLightingDebugView::ScreenSpaceFinal:
+				return outputs.screen_space_final;
+			case VolumetricLightingDebugView::Off:
+			default:
+				return {};
+			}
 		}
 	}
 
@@ -243,11 +412,18 @@ namespace AshEngine
 		m_temporal_program.reset();
 		m_light_injection_program.reset();
 		m_density_program.reset();
+		m_dummy_cascade_buffer.reset();
 		m_light_buffer.reset();
-		m_history_entries.clear();
+		clear_history();
 		m_linear_clamp_sampler.reset();
 		m_point_clamp_sampler.reset();
+		m_logged_runtime_state = false;
 		m_renderer = nullptr;
+	}
+
+	void VolumetricLightingPass::clear_history()
+	{
+		m_history_entries.clear();
 	}
 
 	bool VolumetricLightingPass::create_resources(Renderer& renderer)
@@ -269,6 +445,15 @@ namespace AshEngine
 		linear_desc.mip_filter = RenderSamplerFilter::Linear;
 		m_linear_clamp_sampler = renderer.create_sampler(linear_desc, "SceneVolumetricLinearClampSampler");
 		ASH_PROCESS_ERROR(m_linear_clamp_sampler != nullptr);
+
+		DirectionalShadowCascadeShaderData dummy_cascade{};
+		StorageBufferDesc cascade_desc{};
+		cascade_desc.size = static_cast<uint32_t>(sizeof(dummy_cascade));
+		cascade_desc.stride = static_cast<uint32_t>(sizeof(dummy_cascade));
+		cascade_desc.initial_data = &dummy_cascade;
+		cascade_desc.name = "SceneVolumetricDummyDirectionalShadowCascade";
+		m_dummy_cascade_buffer = renderer.create_storage_buffer(cascade_desc);
+		ASH_PROCESS_ERROR(m_dummy_cascade_buffer != nullptr);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -502,7 +687,8 @@ namespace AshEngine
 		const SceneDeferredGraphResources& deferred_resources,
 		RenderGraphTextureRef scene_hdr_linear,
 		const SceneRenderViewContext& view_context,
-		const VolumetricLightingConfig& config)
+		const VolumetricLightingConfig& config,
+		const SunLightShadowPassOutputs* sunlight_shadow_outputs)
 	{
 		ASH_PROFILE_SCOPE_NC("VolumetricLightingPass::add_passes", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(VolumetricLightingPassOutputs, outputs, VolumetricLightingPassOutputs{}, VolumetricLightingPassOutputs{});
@@ -514,13 +700,14 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(scene_hdr_linear);
 		ASH_PROCESS_ERROR(m_density_program && m_light_injection_program && m_temporal_program &&
 			m_integrate_program && m_composite_program && m_screen_space_program);
-		ASH_PROCESS_ERROR(m_point_clamp_sampler && m_linear_clamp_sampler);
+		ASH_PROCESS_ERROR(m_point_clamp_sampler && m_linear_clamp_sampler && m_dummy_cascade_buffer);
 		ASH_PROCESS_ERROR(deferred_resources.depth);
 		ASH_PROCESS_ERROR(view_context.output_target != nullptr);
 
 		const uint32_t output_width = std::max<uint32_t>(view_context.output_target->get_width(), 1u);
 		const uint32_t output_height = std::max<uint32_t>(view_context.output_target->get_height(), 1u);
 		const VolumetricAtlasDesc atlas = make_atlas_desc(output_width, output_height, sanitized);
+		const float fallback_view_distance = resolve_volumetric_view_distance(frame, nullptr, nullptr);
 
 		if (sanitized.screen_space_fallback)
 		{
@@ -533,7 +720,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(outputs.screen_space_mask && outputs.screen_space_final);
 
 			const VolumetricRootConstants constants =
-				make_root_constants(frame, atlas, output_width, output_height, sanitized, 1u);
+				make_root_constants(frame, atlas, output_width, output_height, sanitized, 1u, fallback_view_distance);
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				k_screen_space_pass_name,
 				RenderGraphPassFlags::None,
@@ -560,13 +747,32 @@ namespace AshEngine
 					ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 				}));
 			outputs.scene_hdr_linear = outputs.screen_space_final;
+			if (const RenderGraphTextureRef debug_texture = select_debug_texture(outputs, sanitized.debug_view))
+			{
+				outputs.scene_hdr_linear = debug_texture;
+			}
 			ASH_PROCESS_SUCCESS(true);
 		}
 
 		uint32_t light_count = 0;
 		ASH_PROCESS_ERROR(upload_light_buffer(frame, sanitized, light_count));
-		const VolumetricRootConstants constants =
-			make_root_constants(frame, atlas, output_width, output_height, sanitized, light_count);
+		const DirectionalShadowLightPlan* sunlight_shadow_plan =
+			find_volumetric_sunlight_shadow_plan(frame, sunlight_shadow_outputs);
+		const bool use_sunlight_shadow =
+			sunlight_shadow_plan &&
+			sunlight_shadow_outputs &&
+			deferred_resources.sunlight_shadow_dynamic_atlas &&
+			sunlight_shadow_outputs->cascade_buffer;
+		const RenderGraphTextureRef sunlight_shadow_atlas =
+			use_sunlight_shadow ? deferred_resources.sunlight_shadow_dynamic_atlas : deferred_resources.depth;
+		const std::shared_ptr<StorageBuffer> sunlight_shadow_cascade_buffer =
+			use_sunlight_shadow ? sunlight_shadow_outputs->cascade_buffer : m_dummy_cascade_buffer;
+		const glm::vec4 sunlight_shadow_params =
+			use_sunlight_shadow ? make_sunlight_shadow_params(frame, sunlight_shadow_outputs) : glm::vec4(0.0f);
+		const float volumetric_view_distance =
+			resolve_volumetric_view_distance(frame, sunlight_shadow_plan, sunlight_shadow_outputs);
+		VolumetricRootConstants constants =
+			make_root_constants(frame, atlas, output_width, output_height, sanitized, light_count, volumetric_view_distance, sunlight_shadow_params);
 		outputs.atlas_width = atlas.atlas_width;
 		outputs.atlas_height = atlas.atlas_height;
 
@@ -612,6 +818,32 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(history_write);
 		}
 
+		VolumetricRootConstants temporal_constants = constants;
+		temporal_constants.config1.y = history_has_valid_read ? sanitized.history_blend : 0.0f;
+		if (!m_logged_runtime_state)
+		{
+			m_logged_runtime_state = true;
+			HLogInfo(
+				"VolumetricLighting active. quality={} density={} scattering_intensity={} extinction_scale={} history={} history_blend={} "
+				"lights={} view_distance={} atlas={}x{} tile={}x{} configured_scale={} effective_scale={} sunlight_shadow={} debug_view={}.",
+				volumetric_lighting_quality_name(sanitized.quality),
+				sanitized.density,
+				sanitized.scattering_intensity,
+				sanitized.extinction_scale,
+				sanitized.history ? "true" : "false",
+				sanitized.history_blend,
+				light_count,
+				volumetric_view_distance,
+				atlas.atlas_width,
+				atlas.atlas_height,
+				atlas.tile_width,
+				atlas.tile_height,
+				sanitized.froxel_resolution_scale,
+				atlas.effective_resolution_scale,
+				use_sunlight_shadow ? "true" : "false",
+				volumetric_lighting_debug_view_name(sanitized.debug_view));
+		}
+
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricDensityPass",
 			RenderGraphPassFlags::None,
@@ -639,21 +871,25 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricLightInjectionPass",
 			RenderGraphPassFlags::None,
-			[density = outputs.density, scattering = outputs.scattering](RenderGraphComputePassBuilder& pass)
+			[density = outputs.density, scattering = outputs.scattering, sunlight_shadow_atlas](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(density, RenderGraphAccess::ComputeSRV);
+				pass.read_texture(sunlight_shadow_atlas, RenderGraphAccess::ComputeSRV);
 				pass.write_texture(scattering, RenderGraphAccess::ComputeUAV);
 			},
-			[this, density = outputs.density, scattering = outputs.scattering, constants, atlas](RenderGraphComputeContext& context) -> bool
+			[this, density = outputs.density, scattering = outputs.scattering, sunlight_shadow_atlas, sunlight_shadow_cascade_buffer, constants, atlas](RenderGraphComputeContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneVolumetricLightInjectionPass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 				std::shared_ptr<RenderTarget> density_target = context.get_texture(density);
 				std::shared_ptr<RenderTarget> scattering_target = context.get_texture(scattering);
-				ASH_PROCESS_ERROR(density_target && scattering_target && m_light_buffer);
+				std::shared_ptr<RenderTarget> sunlight_shadow_target = context.get_texture(sunlight_shadow_atlas);
+				ASH_PROCESS_ERROR(density_target && scattering_target && sunlight_shadow_target && m_light_buffer && sunlight_shadow_cascade_buffer);
 				ASH_PROCESS_ERROR(m_light_injection_program->set_const_data_block(sizeof(constants), &constants));
 				ASH_PROCESS_ERROR(m_light_injection_program->set_texture("SceneVolumetricDensity", density_target));
+				ASH_PROCESS_ERROR(m_light_injection_program->set_texture("DirectionalShadowDynamicAtlas", sunlight_shadow_target));
 				ASH_PROCESS_ERROR(m_light_injection_program->set_storage_buffer("SceneVolumetricLights", m_light_buffer));
+				ASH_PROCESS_ERROR(m_light_injection_program->set_storage_buffer("SceneDirectionalShadowCascades", sunlight_shadow_cascade_buffer));
 				ASH_PROCESS_ERROR(m_light_injection_program->set_rw_texture("SceneVolumetricScattering", scattering_target));
 				ASH_PROCESS_ERROR(m_light_injection_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 				ComputeDispatchDesc dispatch{};
@@ -681,7 +917,7 @@ namespace AshEngine
 				pass.write_texture(history_write, RenderGraphAccess::ComputeUAV);
 			},
 			[this, scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity,
-				history_has_valid_read, history_read, history_write, history_enabled, history_entry, constants, atlas](RenderGraphComputeContext& context) -> bool
+				history_has_valid_read, history_read, history_write, history_enabled, history_entry, temporal_constants, atlas](RenderGraphComputeContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneVolumetricTemporalPass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -692,7 +928,7 @@ namespace AshEngine
 					history_has_valid_read ? context.get_texture(history_read) : scattering_target;
 				std::shared_ptr<RenderTarget> history_write_target = context.get_texture(history_write);
 				ASH_PROCESS_ERROR(scattering_target && temporal_target && validity_target && history_read_target && history_write_target);
-				ASH_PROCESS_ERROR(m_temporal_program->set_const_data_block(sizeof(constants), &constants));
+				ASH_PROCESS_ERROR(m_temporal_program->set_const_data_block(sizeof(temporal_constants), &temporal_constants));
 				ASH_PROCESS_ERROR(m_temporal_program->set_texture("SceneVolumetricScattering", scattering_target));
 				ASH_PROCESS_ERROR(m_temporal_program->set_texture("SceneVolumetricScatteringHistory", history_read_target));
 				ASH_PROCESS_ERROR(m_temporal_program->set_rw_texture("SceneVolumetricScatteringTemporal", temporal_target));
@@ -770,6 +1006,10 @@ namespace AshEngine
 			}));
 
 		outputs.scene_hdr_linear = outputs.composite_hdr;
+		if (const RenderGraphTextureRef debug_texture = select_debug_texture(outputs, sanitized.debug_view))
+		{
+			outputs.scene_hdr_linear = debug_texture;
+		}
 		ASH_PROCESS_GUARD_RETURN_END(outputs, VolumetricLightingPassOutputs{});
 	}
 }

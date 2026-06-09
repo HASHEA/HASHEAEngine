@@ -488,6 +488,15 @@ namespace AshEngine
 			if (swapChain && event.width > 0 && event.height > 0)
 			{
 				swapChain->resize_swapchain(event.width, event.height);
+				if (renderer)
+				{
+					renderer->clear_transient_render_targets();
+				}
+				sceneRenderer.handle_output_resized();
+				HLogInfo(
+					"Window resized to {}x{}; cleared resize-sensitive render caches.",
+					event.width,
+					event.height);
 			}
 			break;
 		case WindowEventType::Minimized:

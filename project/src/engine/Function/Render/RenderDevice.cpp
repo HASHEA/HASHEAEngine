@@ -1145,6 +1145,8 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget::Impl> swapchain_target = nullptr;
 		std::unordered_map<uint64_t, std::vector<std::shared_ptr<RenderTarget>>> transient_render_target_pool;
 		uint64_t frame_index = 0;
+		uint32_t last_swapchain_width = 0;
+		uint32_t last_swapchain_height = 0;
 		bool viewport_override_active = false;
 		RenderViewport viewport_override{};
 		bool scissor_override_active = false;
@@ -3147,6 +3149,11 @@ namespace AshEngine
 		m_impl->swapchain_target = std::make_shared<RenderTarget::Impl>();
 		sync_swapchain_target();
 		ensure_back_buffer_target();
+		if (m_impl->swapchain)
+		{
+			m_impl->last_swapchain_width = m_impl->swapchain->get_width();
+			m_impl->last_swapchain_height = m_impl->swapchain->get_height();
+		}
 	}
 
 	RenderDevice::~RenderDevice()
@@ -3177,6 +3184,22 @@ namespace AshEngine
 		m_impl->graphics_context->begin_frame();
 		m_impl->swapchain->begin_frame();
 		++m_impl->frame_index;
+		const uint32_t swapchain_width = m_impl->swapchain->get_width();
+		const uint32_t swapchain_height = m_impl->swapchain->get_height();
+		if (m_impl->last_swapchain_width > 0u &&
+			m_impl->last_swapchain_height > 0u &&
+			(m_impl->last_swapchain_width != swapchain_width || m_impl->last_swapchain_height != swapchain_height))
+		{
+			clear_transient_render_targets();
+			HLogInfo(
+				"RenderDevice: swapchain extent changed {}x{} -> {}x{}; cleared transient render target and framebuffer caches.",
+				m_impl->last_swapchain_width,
+				m_impl->last_swapchain_height,
+				swapchain_width,
+				swapchain_height);
+		}
+		m_impl->last_swapchain_width = swapchain_width;
+		m_impl->last_swapchain_height = swapchain_height;
 		prune_framebuffer_cache(m_impl->framebuffer_cache, m_impl->frame_index);
 		sync_swapchain_target();
 		ASH_PROCESS_ERROR(ensure_back_buffer_target());
