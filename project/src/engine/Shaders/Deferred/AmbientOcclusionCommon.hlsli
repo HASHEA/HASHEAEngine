@@ -69,6 +69,17 @@ float3 AshAOReconstructWorldPosition(float2 uv, float depth)
     return world.xyz / max(world.w, 1e-6);
 }
 
+float AshAOInterleavedGradientNoise(float2 viewport_pixel)
+{
+    return frac(52.9829189 * frac(dot(viewport_pixel, float2(0.06711056, 0.00583715))));
+}
+
+float AshAOStableNoise(float2 uv)
+{
+    const float2 viewport_pixel = floor(uv * AshViewportSize.xy);
+    return AshAOInterleavedGradientNoise(viewport_pixel);
+}
+
 struct AshAOSurface
 {
     bool valid;

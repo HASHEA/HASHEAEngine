@@ -21,10 +21,10 @@ float4 PSMain(VSFullscreenOutput input) : SV_Target0
 
     const uint sample_count = (uint)clamp(round(AshAOParams1.x), 1.0, 16.0);
     const float radius_uv = AshAOViewScaledRadiusUv(center);
+    const float angle = AshAOStableNoise(input.uv) * 6.2831853;
     float occlusion = 0.0;
     for (uint i = 0; i < sample_count; ++i)
     {
-        const float angle = frac(dot(input.uv * AshViewportSize.xy, float2(0.06711056, 0.00583715))) * 6.2831853;
         const float2 sample_uv = saturate(input.uv + AshAORotate(k_offsets[i], angle) * radius_uv);
         AshAOSurface sample_surface = AshAOLoadSurface(sample_uv);
         occlusion += AshAOContribution(center, sample_surface);
