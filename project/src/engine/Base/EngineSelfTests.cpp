@@ -1497,7 +1497,9 @@ namespace AshEngine
 					"AshVolumetricReconstructWorldPositionAtViewDepth",
 					"AshVolumetricSliceViewDepth",
 					"AshVolumetricVisibleDepth01(float2 uv, float scene_depth)",
-					"AshView",
+					"AshHistoryViewProjection",
+					"AshVolumetricAtlasUVFromTileUV",
+					"AshVolumetricCurrentViewForwardWS",
 					"AshRootConstants"
 				});
 			const bool density_ok = file_contains_all(
@@ -1530,6 +1532,10 @@ namespace AshEngine
 					"SceneVolumetricScattering",
 					"SceneVolumetricScatteringHistory",
 					"SceneVolumetricHistoryValidity",
+					"AshVolumetricReprojectHistoryUV",
+					"AshVolumetricPreviousViewDepth01",
+					"AshVolumetricClampHistory",
+					"previous_max_view_depth = max(AshVolumetricConfig0.w, 0.01)",
 					"float blend = saturate(AshVolumetricConfig1.y)"
 				});
 			const bool integrate_ok = file_contains_all(
@@ -1575,6 +1581,9 @@ namespace AshEngine
 					"atlas_height",
 					"add_passes",
 					"VolumetricHistoryEntry",
+					"view_projection",
+					"view_forward",
+					"light_scene_revision",
 					"m_history_entries"
 				});
 			const bool source_ok = file_contains_all(
@@ -1601,7 +1610,12 @@ namespace AshEngine
 					"m_composite_program->set_texture(\"SceneHDRLinear\"",
 					"SceneVolumetricScatteringHistory",
 					"SceneVolumetricHistoryWrite",
-					"temporal_constants.config1.y = history_has_valid_read ? sanitized.history_blend : 0.0f",
+					"history_state_compatible",
+					"history_view_projection",
+					"static_assert(sizeof(VolumetricRootConstants) <= 224u)",
+					"screen_light_position_and_params = glm::vec4(history_entry->camera_position",
+					"config0 = glm::vec4(history_entry->view_forward",
+					"temporal_constants.config1.y = history_state_compatible ? sanitized.history_blend : 0.0f",
 					"m_logged_runtime_state",
 					"sanitized.debug_view",
 					"outputs.scene_hdr_linear = debug_texture",

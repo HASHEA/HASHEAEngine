@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <glm/glm.hpp>
 
 namespace AshEngine
 {
@@ -67,8 +68,17 @@ namespace AshEngine
 		{
 			uint32_t width = 0;
 			uint32_t height = 0;
+			uint32_t depth_slices = 0;
+			uint32_t slices_per_row = 0;
 			uint32_t write_index = 0;
+			float view_distance = 0.0f;
 			bool valid = false;
+			bool reverse_z = false;
+			uint64_t static_scene_revision = 0;
+			uint64_t light_scene_revision = 0;
+			glm::mat4 view_projection{ 1.0f };
+			glm::vec3 camera_position{ 0.0f };
+			glm::vec3 view_forward{ 0.0f, 0.0f, 1.0f };
 			std::array<std::shared_ptr<RenderTarget>, 2> scattering{};
 		};
 

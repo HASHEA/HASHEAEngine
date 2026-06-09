@@ -36,7 +36,7 @@ namespace AshEngine
 		struct VolumetricRootConstants
 		{
 			glm::mat4 inv_view_projection{ 1.0f };
-			glm::mat4 view{ 1.0f };
+			glm::mat4 history_view_projection{ 1.0f };
 			glm::vec4 atlas_size{ 1.0f, 1.0f, 1.0f, 1.0f };
 			glm::vec4 config0{ 0.02f, 1.0f, 1.0f, 64.0f };
 			glm::vec4 config1{ 0.0f, 0.9f, 0.0f, 0.0f };
@@ -45,6 +45,7 @@ namespace AshEngine
 			glm::vec4 volume_params{ 1.0f, 1.0f, 1.0f, 0.35f };
 		};
 
+		static_assert(sizeof(VolumetricRootConstants) <= 224u);
 		static_assert(sizeof(VolumetricRootConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
 
 		struct VolumetricLightShaderData
@@ -150,6 +151,82 @@ namespace AshEngine
 			uint32_t atlas_height = 1;
 			float effective_resolution_scale = 1.0f;
 		};
+
+		struct VolumetricHistoryStateSnapshot
+		{
+			glm::mat4 view_projection{ 1.0f };
+			glm::vec3 camera_position{ 0.0f };
+			glm::vec3 view_forward{ 0.0f, 0.0f, 1.0f };
+			uint64_t static_scene_revision = 0;
+			uint64_t light_scene_revision = 0;
+			bool reverse_z = false;
+		};
+
+		auto extract_view_forward_ws(const glm::mat4& view) -> glm::vec3
+		{
+			const glm::mat4 inv_view = glm::inverse(view);
+			const glm::vec3 view_forward(inv_view[2]);
+			const float length_sq = glm::dot(view_forward, view_forward);
+			if (!std::isfinite(length_sq) || length_sq <= 1e-8f)
+			{
+				return glm::vec3(0.0f, 0.0f, 1.0f);
+			}
+			return view_forward / std::sqrt(length_sq);
+		}
+
+		auto make_volumetric_history_state_snapshot(const VisibleRenderFrame& frame) -> VolumetricHistoryStateSnapshot
+		{
+			VolumetricHistoryStateSnapshot snapshot{};
+			snapshot.view_projection = frame.view_projection;
+			snapshot.camera_position = frame.camera_position;
+			snapshot.view_forward = extract_view_forward_ws(frame.view);
+			snapshot.static_scene_revision = frame.static_scene_revision;
+			snapshot.light_scene_revision = frame.light_scene_revision;
+			snapshot.reverse_z = frame.reverse_z;
+			return snapshot;
+		}
+
+		auto view_distance_nearly_equal(float lhs, float rhs) -> bool
+		{
+			const float epsilon = std::max(0.01f, std::max(std::abs(lhs), std::abs(rhs)) * 0.001f);
+			return std::isfinite(lhs) && std::isfinite(rhs) && std::abs(lhs - rhs) <= epsilon;
+		}
+
+		template <typename HistoryEntry>
+		auto is_volumetric_history_state_compatible(
+			const HistoryEntry& entry,
+			const VisibleRenderFrame& frame,
+			const VolumetricAtlasDesc& atlas,
+			float view_distance) -> bool
+		{
+			return
+				entry.valid &&
+				entry.depth_slices == atlas.depth_slices &&
+				entry.slices_per_row == atlas.slices_per_row &&
+				entry.reverse_z == frame.reverse_z &&
+				entry.static_scene_revision == frame.static_scene_revision &&
+				entry.light_scene_revision == frame.light_scene_revision &&
+				view_distance_nearly_equal(entry.view_distance, view_distance);
+		}
+
+		template <typename HistoryEntry>
+		void store_volumetric_history_state(
+			HistoryEntry& entry,
+			const VolumetricHistoryStateSnapshot& snapshot,
+			const VolumetricAtlasDesc& atlas,
+			float view_distance)
+		{
+			entry.depth_slices = atlas.depth_slices;
+			entry.slices_per_row = atlas.slices_per_row;
+			entry.view_distance = view_distance;
+			entry.reverse_z = snapshot.reverse_z;
+			entry.static_scene_revision = snapshot.static_scene_revision;
+			entry.light_scene_revision = snapshot.light_scene_revision;
+			entry.view_projection = snapshot.view_projection;
+			entry.camera_position = snapshot.camera_position;
+			entry.view_forward = snapshot.view_forward;
+			entry.valid = true;
+		}
 
 		auto max_froxel_count_for_quality(VolumetricLightingQuality quality) -> uint64_t
 		{
@@ -340,7 +417,7 @@ namespace AshEngine
 		{
 			VolumetricRootConstants constants{};
 			constants.inv_view_projection = glm::inverse(frame.view_projection);
-			constants.view = frame.view;
+			constants.history_view_projection = frame.view_projection;
 			constants.atlas_size = glm::vec4(
 				static_cast<float>(atlas.tile_width),
 				static_cast<float>(atlas.tile_height),
@@ -789,13 +866,16 @@ namespace AshEngine
 		RenderGraphTextureRef history_read{};
 		RenderGraphTextureRef history_write{};
 		bool history_has_valid_read = false;
+		bool history_state_compatible = false;
 		const bool history_enabled = sanitized.history;
 		if (history_enabled)
 		{
 			ASH_PROCESS_ERROR(ensure_history_entry(view_context.view_id, atlas.atlas_width, atlas.atlas_height, history_entry));
 			const uint32_t write_index = history_entry->write_index % static_cast<uint32_t>(history_entry->scattering.size());
 			const uint32_t read_index = write_index ^ 1u;
-			history_has_valid_read = history_entry->valid;
+			history_state_compatible =
+				is_volumetric_history_state_compatible(*history_entry, frame, atlas, volumetric_view_distance);
+			history_has_valid_read = history_state_compatible;
 			if (history_has_valid_read)
 			{
 				history_read = graph.register_external_texture(
@@ -819,19 +899,33 @@ namespace AshEngine
 		}
 
 		VolumetricRootConstants temporal_constants = constants;
-		temporal_constants.config1.y = history_has_valid_read ? sanitized.history_blend : 0.0f;
+		if (history_state_compatible && history_entry)
+		{
+			temporal_constants.history_view_projection = history_entry->view_projection;
+			temporal_constants.screen_light_position_and_params = glm::vec4(history_entry->camera_position, 1.0f);
+			temporal_constants.config0 = glm::vec4(history_entry->view_forward, history_entry->view_distance);
+		}
+		else
+		{
+			temporal_constants.screen_light_position_and_params = glm::vec4(frame.camera_position, 0.0f);
+			temporal_constants.config0 = glm::vec4(extract_view_forward_ws(frame.view), volumetric_view_distance);
+		}
+		temporal_constants.config1.y = history_state_compatible ? sanitized.history_blend : 0.0f;
+		const VolumetricHistoryStateSnapshot history_state_snapshot =
+			make_volumetric_history_state_snapshot(frame);
 		if (!m_logged_runtime_state)
 		{
 			m_logged_runtime_state = true;
 			HLogInfo(
 				"VolumetricLighting active. quality={} density={} scattering_intensity={} extinction_scale={} history={} history_blend={} "
-				"lights={} view_distance={} atlas={}x{} tile={}x{} configured_scale={} effective_scale={} sunlight_shadow={} debug_view={}.",
+				"history_reprojection={} lights={} view_distance={} atlas={}x{} tile={}x{} configured_scale={} effective_scale={} sunlight_shadow={} debug_view={}.",
 				volumetric_lighting_quality_name(sanitized.quality),
 				sanitized.density,
 				sanitized.scattering_intensity,
 				sanitized.extinction_scale,
 				sanitized.history ? "true" : "false",
 				sanitized.history_blend,
+				history_state_compatible ? "true" : "false",
 				light_count,
 				volumetric_view_distance,
 				atlas.atlas_width,
@@ -917,7 +1011,8 @@ namespace AshEngine
 				pass.write_texture(history_write, RenderGraphAccess::ComputeUAV);
 			},
 			[this, scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity,
-				history_has_valid_read, history_read, history_write, history_enabled, history_entry, temporal_constants, atlas](RenderGraphComputeContext& context) -> bool
+				history_has_valid_read, history_read, history_write, history_enabled, history_entry, temporal_constants, atlas,
+				history_state_snapshot](RenderGraphComputeContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneVolumetricTemporalPass", AshEngine::Profile::Color::Draw);
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -943,7 +1038,7 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(context.dispatch(dispatch));
 				if (history_enabled && history_entry)
 				{
-					history_entry->valid = true;
+					store_volumetric_history_state(*history_entry, history_state_snapshot, atlas, temporal_constants.volume_params.z);
 					history_entry->write_index ^= 1u;
 				}
 				ASH_PROCESS_GUARD_RETURN_END(bResult, false);

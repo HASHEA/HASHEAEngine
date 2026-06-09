@@ -28,7 +28,7 @@ VSFullscreenOutput AshVolumetricFullscreen(uint vertex_id)
 cbuffer AshRootConstants : register(b0)
 {
 	float4x4 AshInvViewProjection;
-	float4x4 AshView;
+	float4x4 AshHistoryViewProjection;
 	float4 AshVolumetricAtlasSize;
 	float4 AshVolumetricConfig0;
 	float4 AshVolumetricConfig1;
@@ -68,6 +68,18 @@ float2 AshVolumetricAtlasUV(uint2 pixel, uint slice, uint slices_per_row, float2
 	uint tile_y = slice / max(slices_per_row, 1u);
 	uint2 atlas_pixel = uint2(tile_x * (uint)AshVolumetricAtlasSize.x + pixel.x, tile_y * (uint)AshVolumetricAtlasSize.y + pixel.y);
 	return (float2(atlas_pixel) + 0.5) * atlas_inv_size;
+}
+
+float2 AshVolumetricAtlasUVFromTileUV(float2 tile_uv, uint slice, uint slices_per_row, float2 atlas_inv_size)
+{
+	const float2 tile_size = max(AshVolumetricAtlasSize.xy, float2(1.0, 1.0));
+	const uint tile_x = slice % max(slices_per_row, 1u);
+	const uint tile_y = slice / max(slices_per_row, 1u);
+	const float2 tile_min = 0.5 / tile_size;
+	const float2 tile_max = (tile_size - 0.5) / tile_size;
+	const float2 clamped_tile_uv = clamp(tile_uv, tile_min, tile_max);
+	const float2 atlas_pixel = float2(tile_x, tile_y) * tile_size + clamped_tile_uv * tile_size;
+	return atlas_pixel * atlas_inv_size;
 }
 
 bool AshVolumetricDecodeAtlasPixel(uint2 atlas_pixel, out uint2 tile_pixel, out uint slice)
@@ -120,9 +132,26 @@ float3 AshVolumetricReconstructWorldPosition(float2 uv, float device_depth)
 	return world.xyz / max(world.w, 1e-6);
 }
 
+float3 AshVolumetricSafeNormalize(float3 value, float3 fallback)
+{
+	const float length_sq = dot(value, value);
+	if (length_sq <= 1e-8)
+	{
+		return fallback;
+	}
+	return value * rsqrt(length_sq);
+}
+
+float3 AshVolumetricCurrentViewForwardWS()
+{
+	const float far_device_depth = AshVolumetricIsReverseZ() ? 0.0 : 1.0;
+	const float3 far_center_ws = AshVolumetricReconstructWorldPosition(float2(0.5, 0.5), far_device_depth);
+	return AshVolumetricSafeNormalize(far_center_ws - AshCameraPositionAndFlags.xyz, float3(0.0, 0.0, 1.0));
+}
+
 float AshVolumetricViewDepthFromWorldPosition(float3 position_ws)
 {
-	return abs(mul(AshView, float4(position_ws, 1.0)).z);
+	return max(dot(position_ws - AshCameraPositionAndFlags.xyz, AshVolumetricCurrentViewForwardWS()), 0.0);
 }
 
 float3 AshVolumetricReconstructWorldPositionAtViewDepth(float2 uv, float view_depth)
@@ -141,16 +170,6 @@ float AshVolumetricVisibleDepth01(float2 uv, float scene_depth)
 	}
 	const float3 position_ws = AshVolumetricReconstructWorldPosition(uv, scene_depth);
 	return saturate(AshVolumetricViewDepthFromWorldPosition(position_ws) / AshVolumetricMaxViewDepth());
-}
-
-float3 AshVolumetricSafeNormalize(float3 value, float3 fallback)
-{
-	const float length_sq = dot(value, value);
-	if (length_sq <= 1e-8)
-	{
-		return fallback;
-	}
-	return value * rsqrt(length_sq);
 }
 
 float AshVolumetricPhaseHG(float cos_theta, float g)
