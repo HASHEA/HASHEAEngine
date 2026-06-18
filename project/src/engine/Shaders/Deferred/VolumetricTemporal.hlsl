@@ -52,7 +52,7 @@ bool AshVolumetricReprojectHistoryUV(uint2 tile_pixel, uint slice, out float2 hi
 
 	const uint depth_slices = AshVolumetricDepthSliceCount();
 	const uint slices_per_row = AshVolumetricSlicesPerRow();
-	const uint history_slice = min((uint)floor(saturate(previous_depth01) * (float)depth_slices), depth_slices - 1u);
+	const uint history_slice = min((uint)floor(AshVolumetricSliceFromDepth01(previous_depth01)), depth_slices - 1u);
 	const float2 history_tile_uv = history_ndc.xy * float2(0.5, -0.5) + float2(0.5, 0.5);
 	const float2 atlas_inv_size = 1.0 / max(AshVolumetricAtlasSize.zw, float2(1.0, 1.0));
 	history_uv = AshVolumetricAtlasUVFromTileUV(history_tile_uv, history_slice, slices_per_row, atlas_inv_size);

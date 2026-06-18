@@ -104,9 +104,30 @@ uint2 AshVolumetricTilePixelFromUV(float2 uv)
 	return min((uint2)floor(saturate(uv) * float2(tile_size)), tile_size - 1u);
 }
 
+static const float kVolumetricSliceDistributionPower = 2.0;
+
+// Froxel depth slices follow a power-law distribution along the view axis: dense near
+// the camera (where equi-depth shells project onto surfaces at grazing angles and the
+// depth-slice banding is most visible) and sparse toward the far plane (where the volume
+// is blurry anyway). depth01 is the normalized view depth in [0,1] of the max view depth.
+// The slice<->depth01 conversions below MUST stay consistent across the injection,
+// integration and temporal passes, or scattering will sample mismatched froxels.
 float AshVolumetricSliceDepth01(uint slice)
 {
-	return (float(slice) + 0.5) / max((float)AshVolumetricDepthSliceCount(), 1.0);
+	const float t = (float(slice) + 0.5) / max((float)AshVolumetricDepthSliceCount(), 1.0);
+	return pow(t, kVolumetricSliceDistributionPower);
+}
+
+float AshVolumetricSliceEdgeDepth01(uint slice)
+{
+	const float t = (float)slice / max((float)AshVolumetricDepthSliceCount(), 1.0);
+	return pow(t, kVolumetricSliceDistributionPower);
+}
+
+float AshVolumetricSliceFromDepth01(float depth01)
+{
+	const float t = pow(saturate(depth01), 1.0 / kVolumetricSliceDistributionPower);
+	return t * max((float)AshVolumetricDepthSliceCount(), 1.0);
 }
 
 float AshVolumetricMaxViewDepth()

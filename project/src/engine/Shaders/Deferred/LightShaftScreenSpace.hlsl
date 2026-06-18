@@ -28,7 +28,7 @@ PSScreenSpaceLightShaftOutput PSMain(VSFullscreenOutput input)
 		float t = (float(index) + 0.5) / 16.0;
 		float2 uv = saturate(input.uv + delta * t);
 		float depth = SceneDepth.Sample(ScenePointClampSampler, uv);
-		float visible = depth > 0.000001 ? 1.0 : 0.0;
+		float visible = AshVolumetricSceneDepthIsBackground(depth) ? 1.0 : 0.0;
 		shaft += visible * weight;
 		weight *= 0.92;
 	}

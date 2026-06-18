@@ -322,6 +322,39 @@ namespace AshEngine
 				static_cast<float>(frame.render_config.directional_shadows.pcf_radius));
 		}
 
+		auto make_screen_space_light_params(const VisibleRenderFrame& frame) -> glm::vec4
+		{
+			const glm::vec4 fallback(0.5f, 0.5f, 0.0f, 0.0f);
+			const VisibleLightData* sun = nullptr;
+			for (const VisibleLightData& light : frame.lights)
+			{
+				if (light.type == LightType::Directional && light.sunlight)
+				{
+					sun = &light;
+					break;
+				}
+			}
+			if (!sun)
+			{
+				return fallback;
+			}
+
+			const glm::vec3 sun_forward =
+				glm::dot(sun->direction_ws, sun->direction_ws) > 1e-8f ?
+				glm::normalize(sun->direction_ws) :
+				glm::vec3(0.0f, -1.0f, 0.0f);
+			const glm::vec3 sun_position_ws = frame.camera_position - sun_forward * 1.0e6f;
+			const glm::vec4 clip = frame.view_projection * glm::vec4(sun_position_ws, 1.0f);
+			if (clip.w <= 1e-6f)
+			{
+				return fallback;
+			}
+
+			const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+			const glm::vec2 light_uv(ndc.x * 0.5f + 0.5f, ndc.y * -0.5f + 0.5f);
+			return glm::vec4(light_uv.x, light_uv.y, 1.0f, 0.0f);
+		}
+
 		auto resolve_volumetric_view_distance(
 			const VisibleRenderFrame& frame,
 			const DirectionalShadowLightPlan* sunlight_shadow_plan,
@@ -796,8 +829,9 @@ namespace AshEngine
 				"SceneLightShaftScreenSpaceCompositeHDR");
 			ASH_PROCESS_ERROR(outputs.screen_space_mask && outputs.screen_space_final);
 
+			const glm::vec4 screen_space_light_params = make_screen_space_light_params(frame);
 			const VolumetricRootConstants constants =
-				make_root_constants(frame, atlas, output_width, output_height, sanitized, 1u, fallback_view_distance);
+				make_root_constants(frame, atlas, output_width, output_height, sanitized, 1u, fallback_view_distance, screen_space_light_params);
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				k_screen_space_pass_name,
 				RenderGraphPassFlags::None,
@@ -868,9 +902,10 @@ namespace AshEngine
 		bool history_has_valid_read = false;
 		bool history_state_compatible = false;
 		const bool history_enabled = sanitized.history;
+		const uint64_t history_view_key = view_context.view_id;
 		if (history_enabled)
 		{
-			ASH_PROCESS_ERROR(ensure_history_entry(view_context.view_id, atlas.atlas_width, atlas.atlas_height, history_entry));
+			ASH_PROCESS_ERROR(ensure_history_entry(history_view_key, atlas.atlas_width, atlas.atlas_height, history_entry));
 			const uint32_t write_index = history_entry->write_index % static_cast<uint32_t>(history_entry->scattering.size());
 			const uint32_t read_index = write_index ^ 1u;
 			history_state_compatible =
@@ -899,6 +934,11 @@ namespace AshEngine
 		}
 
 		VolumetricRootConstants temporal_constants = constants;
+		// Temporal pass repurposes config0 to carry the PREVIOUS frame's view basis for
+		// reprojection: config0 = (view_forward.xyz, view_distance) and
+		// screen_light_position_and_params = (camera_position.xyz, has_history). This aliases
+		// the density/extinction/intensity/max_lights meaning config0 has in every other pass,
+		// so the override lives only on this local copy — never mutate the shared `constants`.
 		if (history_state_compatible && history_entry)
 		{
 			temporal_constants.history_view_projection = history_entry->view_projection;
@@ -1011,7 +1051,7 @@ namespace AshEngine
 				pass.write_texture(history_write, RenderGraphAccess::ComputeUAV);
 			},
 			[this, scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity,
-				history_has_valid_read, history_read, history_write, history_enabled, history_entry, temporal_constants, atlas,
+				history_has_valid_read, history_read, history_write, history_enabled, history_view_key, temporal_constants, atlas,
 				history_state_snapshot](RenderGraphComputeContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneVolumetricTemporalPass", AshEngine::Profile::Color::Draw);
@@ -1036,10 +1076,14 @@ namespace AshEngine
 				dispatch.group_count_y = (atlas.atlas_height + 7u) / 8u;
 				dispatch.group_count_z = 1u;
 				ASH_PROCESS_ERROR(context.dispatch(dispatch));
-				if (history_enabled && history_entry)
+				if (history_enabled)
 				{
-					store_volumetric_history_state(*history_entry, history_state_snapshot, atlas, temporal_constants.volume_params.z);
-					history_entry->write_index ^= 1u;
+					const auto history_iter = m_history_entries.find(history_view_key);
+					if (history_iter != m_history_entries.end())
+					{
+						store_volumetric_history_state(history_iter->second, history_state_snapshot, atlas, temporal_constants.volume_params.z);
+						history_iter->second.write_index ^= 1u;
+					}
 				}
 				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 			}));
