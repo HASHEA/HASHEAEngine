@@ -7,11 +7,16 @@
 *.bak
 *.hlog
 *.lnk
-AGENTS.md
+
+# Machine-specific agent rules stay local; shared AGENTS.md is committed.
+AGENTS.local.md
+
+# Python bytecode (ashagent/ core is committed as source, not caches)
+__pycache__/
+*.pyc
 
 # ignore directories
 .vscode
-.claude
 bin
 bin-int
 !project/thirdparty/dxc/bin/
@@ -28,3 +33,11 @@ product/test-reports
 product/test-temp
 project/src/editor/product
 cacheshader
+
+# .claude: ignore everything by default, but share the AshAgent slash commands
+# and the hooks config. Keep machine-specific settings.local.json local.
+.claude/*
+!.claude/commands/
+.claude/commands/*
+!.claude/commands/ash-*.md
+!.claude/settings.json
