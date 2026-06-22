@@ -39,7 +39,16 @@ function sync_runtime_artifact_command(src, dst, optional)
 	if optional then
 		command = command .. " -Optional"
 	end
-	return 'cmd /c "' .. command .. '"'
+	-- MSBuild's PostBuildEvent runs every line in a single cmd batch and only
+	-- checks the LAST line's ERRORLEVEL. Without explicit propagation, a failed
+	-- required copy (e.g. a locked Engine.dll/exe) is masked by a later command
+	-- succeeding, so the build is reported green while the runtime dir stays
+	-- stale. Abort the batch immediately on any required copy failure. Optional
+	-- copies already swallow a missing source via -Optional, so leave them be.
+	if optional then
+		return 'cmd /c "' .. command .. '"'
+	end
+	return 'cmd /c "' .. command .. '" || exit /b 1'
 end
 
 --os.mkdir(distdir)
