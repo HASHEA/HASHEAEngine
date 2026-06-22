@@ -86,6 +86,18 @@ namespace AshEngine
 				lhs.screen_space_fallback == rhs.screen_space_fallback &&
 				lhs.debug_view == rhs.debug_view;
 		}
+
+		auto temporal_aa_config_equal(
+			const TemporalAAConfig& lhs,
+			const TemporalAAConfig& rhs) -> bool
+		{
+			return lhs.enabled == rhs.enabled &&
+				lhs.jitter_sequence_length == rhs.jitter_sequence_length &&
+				lhs.history_blend == rhs.history_blend &&
+				lhs.variance_gamma == rhs.variance_gamma &&
+				lhs.luminance_weighting == rhs.luminance_weighting &&
+				lhs.debug_view == rhs.debug_view;
+		}
 	}
 
 	SceneRenderConfig make_default_scene_render_config()
@@ -95,6 +107,7 @@ namespace AshEngine
 		config.directional_shadows = make_default_directional_shadow_config();
 		config.bloom = make_default_bloom_config();
 		config.volumetric_lighting = make_default_volumetric_lighting_config();
+		config.temporal_aa = make_default_temporal_aa_config();
 		return config;
 	}
 
@@ -103,6 +116,7 @@ namespace AshEngine
 		return ambient_occlusion_config_equal(lhs.ambient_occlusion, rhs.ambient_occlusion) &&
 			directional_shadow_config_equal(lhs.directional_shadows, rhs.directional_shadows) &&
 			bloom_config_equal(lhs.bloom, rhs.bloom) &&
-			volumetric_lighting_config_equal(lhs.volumetric_lighting, rhs.volumetric_lighting);
+			volumetric_lighting_config_equal(lhs.volumetric_lighting, rhs.volumetric_lighting) &&
+			temporal_aa_config_equal(lhs.temporal_aa, rhs.temporal_aa);
 	}
 }

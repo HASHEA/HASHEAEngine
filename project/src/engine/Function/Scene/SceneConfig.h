@@ -4,6 +4,7 @@
 #include "Function/Render/AmbientOcclusionConfig.h"
 #include "Function/Render/BloomConfig.h"
 #include "Function/Render/DirectionalShadowConfig.h"
+#include "Function/Render/TemporalAAConfig.h"
 #include "Function/Render/VolumetricLightingConfig.h"
 
 namespace AshEngine
@@ -14,6 +15,7 @@ namespace AshEngine
 		DirectionalShadowConfig directional_shadows{};
 		BloomConfig bloom{};
 		VolumetricLightingConfig volumetric_lighting{};
+		TemporalAAConfig temporal_aa{};
 	};
 
 	ASH_API SceneRenderConfig make_default_scene_render_config();

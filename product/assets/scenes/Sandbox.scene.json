@@ -260,6 +260,14 @@
       "quality": "High",
       "scattering_intensity": 2.0,
       "screen_space_fallback": false
+    },
+    "temporal_aa": {
+      "debug_view": "Off",
+      "enabled": true,
+      "history_blend": 0.8999999761581421,
+      "jitter_sequence_length": 8,
+      "luminance_weighting": true,
+      "variance_gamma": 1.0
     }
   },
   "version": 4

@@ -66,6 +66,9 @@ namespace AshEngine
 		glm::mat4 view_projection{ 1.0f };
 		glm::vec3 camera_position{ 0.0f };
 		bool reverse_z = false;
+		glm::vec2 taa_jitter_ndc{ 0.0f, 0.0f };
+		glm::vec2 taa_previous_jitter_ndc{ 0.0f, 0.0f };
+		bool taa_enabled = false;
 		uint64_t static_scene_revision = 0;
 		uint64_t transform_scene_revision = 0;
 		uint64_t light_scene_revision = 0;

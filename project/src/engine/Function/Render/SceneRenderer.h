@@ -16,6 +16,7 @@
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/SceneRenderView.h"
+#include "Function/Render/TemporalAAPass.h"
 #include "Function/Render/VolumetricLightingPass.h"
 #include <cstddef>
 #include <cstdint>
@@ -43,7 +44,7 @@ namespace AshEngine
 		bool initialize(Renderer* renderer, DebugDrawService* debug_draw_service = nullptr);
 		void shutdown();
 		void handle_output_resized();
-		bool render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
+		bool render_visible_frame(VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
 		void draw_render_debug_view_ui(UIContext& ui_context);
 		// editor begin 修改原因：P2 GPU ID buffer picking
 		void complete_pending_pick_readbacks(Renderer& renderer, RenderAssetManager& render_asset_manager);
@@ -64,6 +65,7 @@ namespace AshEngine
 		struct SceneTemporalViewState
 		{
 			glm::mat4 view_projection{ 1.0f };
+			glm::vec2 jitter_ndc{ 0.0f, 0.0f };
 			std::unordered_map<uint64_t, glm::mat4> static_mesh_world_transforms{};
 			bool valid = false;
 		};
@@ -130,6 +132,7 @@ namespace AshEngine
 		EnvironmentLightingPass m_environment_lighting_pass{};
 		SkyBackgroundPass m_sky_background_pass{};
 		VolumetricLightingPass m_volumetric_lighting_pass{};
+		TemporalAAPass m_taa_pass{};
 		BloomPass m_bloom_pass{};
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		RenderDebugView m_render_debug_view{};

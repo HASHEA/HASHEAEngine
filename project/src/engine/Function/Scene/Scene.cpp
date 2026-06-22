@@ -465,6 +465,37 @@ namespace AshEngine
 					make_default_volumetric_lighting_config());
 			}
 
+			if (const auto taa_it = scene_config.find("temporal_aa");
+				taa_it != scene_config.end() && taa_it->is_object())
+			{
+				try_get_json_value(*taa_it, "enabled", config.temporal_aa.enabled);
+				try_get_json_value(*taa_it, "jitter_sequence_length", config.temporal_aa.jitter_sequence_length);
+				try_get_json_value(*taa_it, "history_blend", config.temporal_aa.history_blend);
+				try_get_json_value(*taa_it, "variance_gamma", config.temporal_aa.variance_gamma);
+				try_get_json_value(*taa_it, "luminance_weighting", config.temporal_aa.luminance_weighting);
+
+				std::string debug_view{};
+				if (try_get_json_value(*taa_it, "debug_view", debug_view))
+				{
+					TemporalAADebugView parsed = config.temporal_aa.debug_view;
+					if (try_parse_temporal_aa_debug_view(debug_view, parsed))
+					{
+						config.temporal_aa.debug_view = parsed;
+					}
+					else
+					{
+						HLogWarning(
+							"SceneConfig temporal_aa.debug_view '{}' is invalid. Keeping default '{}'.",
+							debug_view,
+							temporal_aa_debug_view_name(config.temporal_aa.debug_view));
+					}
+				}
+
+				config.temporal_aa = sanitize_temporal_aa_config(
+					config.temporal_aa,
+					make_default_temporal_aa_config());
+			}
+
 			return config;
 		}
 
@@ -530,6 +561,14 @@ namespace AshEngine
 					{ "history_blend", config.volumetric_lighting.history_blend },
 					{ "screen_space_fallback", config.volumetric_lighting.screen_space_fallback },
 					{ "debug_view", volumetric_lighting_debug_view_name(config.volumetric_lighting.debug_view) },
+				} },
+				{ "temporal_aa", json{
+					{ "enabled", config.temporal_aa.enabled },
+					{ "jitter_sequence_length", config.temporal_aa.jitter_sequence_length },
+					{ "history_blend", config.temporal_aa.history_blend },
+					{ "variance_gamma", config.temporal_aa.variance_gamma },
+					{ "luminance_weighting", config.temporal_aa.luminance_weighting },
+					{ "debug_view", temporal_aa_debug_view_name(config.temporal_aa.debug_view) },
 				} },
 			};
 		}
@@ -2716,6 +2755,8 @@ namespace AshEngine
 			sanitize_bloom_config(config.bloom, make_default_bloom_config());
 		sanitized_config.volumetric_lighting =
 			sanitize_volumetric_lighting_config(config.volumetric_lighting, make_default_volumetric_lighting_config());
+		sanitized_config.temporal_aa =
+			sanitize_temporal_aa_config(config.temporal_aa, make_default_temporal_aa_config());
 
 		if (!scene_render_config_equal(m_impl->storage.render_config, sanitized_config))
 		{

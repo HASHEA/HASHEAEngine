@@ -10,6 +10,8 @@
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/SceneDeferredGraphResources.h"
 #include "Function/Render/ScenePresentationHandles.h"
+#include "Function/Render/TemporalAAConfig.h"
+#include "Function/Render/TemporalAAPass.h"
 #include "Function/Render/VertexLayoutPresets.h"
 #include "Function/Scene/SceneQuery.h"
 #include "Function/Asset/AssetDatabase.h"
@@ -618,6 +620,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_volumetric_lighting_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_taa_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_bloom_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
@@ -650,6 +653,7 @@ namespace AshEngine
 		m_debug_draw_service = nullptr;
 		m_post_process_tone_map_pass.shutdown();
 		m_bloom_pass.shutdown();
+		m_taa_pass.shutdown();
 		m_volumetric_lighting_pass.shutdown();
 		m_sky_background_pass.shutdown();
 		m_environment_lighting_pass.shutdown();
@@ -670,6 +674,7 @@ namespace AshEngine
 	void SceneRenderer::handle_output_resized()
 	{
 		m_volumetric_lighting_pass.clear_history();
+		m_taa_pass.clear_history();
 	}
 
 	bool SceneRenderer::should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count)
@@ -742,6 +747,7 @@ namespace AshEngine
 
 		SceneTemporalViewState& state = m_temporal_view_states[view_key];
 		state.view_projection = frame.view_projection;
+		state.jitter_ndc = frame.taa_jitter_ndc;
 		state.static_mesh_world_transforms.clear();
 		state.static_mesh_world_transforms.reserve(frame.static_mesh_draws.size());
 		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
@@ -799,7 +805,7 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
 
-	bool SceneRenderer::render_visible_frame(const VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)
+	bool SceneRenderer::render_visible_frame(VisibleRenderFrame& frame, const SceneRenderViewContext& view_context)
 	{
 		ASH_PROFILE_SCOPE_NC("SceneRenderer::render_visible_frame", AshEngine::Profile::Color::Scene);
 		if (view_context.debug_name)
@@ -824,6 +830,32 @@ namespace AshEngine
 		RenderGraphBuilder graph(*m_renderer, view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
 		RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
 		const uint64_t temporal_view_key = resolve_temporal_view_key(view_context);
+
+		// TAA sub-pixel jitter: perturb the projection so each frame samples a different
+		// in-pixel location, then the TAA resolve accumulates them. The previous frame's
+		// jitter is needed by the resolve to decouple jitter from the GBuffer motion vectors.
+		const TemporalAAConfig& taa_config = frame.render_config.temporal_aa;
+		frame.taa_enabled = false;
+		frame.taa_jitter_ndc = glm::vec2(0.0f, 0.0f);
+		frame.taa_previous_jitter_ndc = glm::vec2(0.0f, 0.0f);
+		if (taa_config.enabled)
+		{
+			const glm::vec2 jitter_ndc = temporal_aa_compute_jitter_ndc(
+				frame.frame_index,
+				taa_config.jitter_sequence_length,
+				output_width,
+				output_height);
+			if (const SceneTemporalViewState* previous_state = find_previous_temporal_view_state(temporal_view_key))
+			{
+				frame.taa_previous_jitter_ndc = previous_state->jitter_ndc;
+			}
+			frame.taa_jitter_ndc = jitter_ndc;
+			frame.taa_enabled = true;
+			frame.projection[2][0] += jitter_ndc.x;
+			frame.projection[2][1] += jitter_ndc.y;
+			frame.view_projection = frame.projection * frame.view;
+		}
+
 		m_render_debug_view.begin_frame();
 		register_render_debug_item(
 			m_render_debug_view,
@@ -1328,6 +1360,28 @@ namespace AshEngine
 				frame.render_config.bloom);
 			ASH_PROCESS_ERROR(bloom_outputs.scene_hdr_linear);
 			graph_resources.scene_hdr_linear = bloom_outputs.scene_hdr_linear;
+
+			const TemporalAAPassOutputs taa_outputs = m_taa_pass.add_passes(
+				graph,
+				frame,
+				graph_resources,
+				graph_resources.scene_hdr_linear,
+				view_context,
+				frame.render_config.temporal_aa);
+			ASH_PROCESS_ERROR(taa_outputs.scene_hdr_linear);
+			graph_resources.scene_hdr_linear = taa_outputs.scene_hdr_linear;
+			if (taa_outputs.resolved.is_valid())
+			{
+				register_render_debug_item(
+					m_render_debug_view,
+					"SceneTemporalAAResolved",
+					"Temporal AA Resolved",
+					taa_outputs.resolved,
+					RenderDebugVisualization::LinearHDR,
+					RenderTextureFormat::RGBA16_SFLOAT,
+					output_width,
+					output_height);
+			}
 
 			register_render_debug_item(
 				m_render_debug_view,
