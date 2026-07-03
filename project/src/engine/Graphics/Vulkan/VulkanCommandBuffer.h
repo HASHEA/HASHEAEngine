@@ -60,6 +60,11 @@ namespace RHI
 			uint32_t y,
 			std::shared_ptr<Buffer> destination,
 			uint64_t buffer_offset) -> bool override;
+		auto cmd_copy_texture_to_buffer(
+			std::shared_ptr<Texture> source,
+			std::shared_ptr<Buffer> destination,
+			uint64_t buffer_offset,
+			uint32_t row_pitch_bytes) -> bool override;
 		auto cmd_update_sub_resource(std::shared_ptr<Buffer>, uint32_t uOffset, uint32_t uSize, void* pData) -> bool override;
 		auto cmd_update_texture_sub_resource(std::shared_ptr<Texture> texture, const void* pData) -> bool;
 	private:

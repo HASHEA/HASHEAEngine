@@ -50,6 +50,14 @@ namespace RHI
 			uint32_t y,
 			std::shared_ptr<Buffer> destination,
 			uint64_t buffer_offset) -> bool = 0;
+		// Validation/debug readback only (RenderGate frame dump), not a hot path.
+		// Copies full mip0/layer0 into a CPU-readable buffer. Only 4-byte color formats (RGBA8/BGRA8).
+		// row_pitch_bytes: destination row stride, >= width * 4 and a multiple of 256 (D3D12 requirement).
+		virtual auto cmd_copy_texture_to_buffer(
+			std::shared_ptr<Texture> source,
+			std::shared_ptr<Buffer> destination,
+			uint64_t buffer_offset,
+			uint32_t row_pitch_bytes) -> bool = 0;
 		virtual auto cmd_update_sub_resource(std::shared_ptr<Buffer>, uint32_t uOffset, uint32_t uSize, void* pData) -> bool = 0;
 
 		bool has_error() const { return m_has_error; }

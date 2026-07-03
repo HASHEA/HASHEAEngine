@@ -616,6 +616,90 @@ namespace RHI
 		return true;
 	}
 
+	auto DX12CommandBuffer::cmd_copy_texture_to_buffer(
+		std::shared_ptr<Texture> source,
+		std::shared_ptr<Buffer> destination,
+		uint64_t buffer_offset,
+		uint32_t row_pitch_bytes) -> bool
+	{
+		auto fail = [this](std::string message) -> bool
+			{
+				mark_error(std::move(message));
+				HLogError("{}", get_last_error());
+				return false;
+			};
+
+		if (has_error())
+		{
+			return false;
+		}
+		if (!m_cmdList)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer called with a null command list.");
+		}
+		if (m_state != ASH_Recording)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer called while command buffer is not recording.");
+		}
+		if (!source || !destination)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer requires non-null source and destination.");
+		}
+
+		auto* source_texture = static_cast<DX12Texture*>(source.get());
+		auto* destination_buffer = static_cast<DX12Buffer*>(destination.get());
+		if (!source_texture || !destination_buffer || !source_texture->get_resource() || !destination_buffer->get_resource())
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer requires valid source and destination resources.");
+		}
+
+		const D3D12_RESOURCE_DESC source_desc = source_texture->get_resource()->GetDesc();
+		const bool supported_format =
+			source_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM ||
+			source_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
+			source_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+			source_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+		if (!supported_format)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer only supports 4-byte RGBA/BGRA color formats.");
+		}
+
+		constexpr uint32_t k_texel_size = 4u;
+		const uint32_t source_width = static_cast<uint32_t>(source_desc.Width);
+		const uint32_t source_height = static_cast<uint32_t>(source_desc.Height);
+		if (row_pitch_bytes < source_width * k_texel_size ||
+			(row_pitch_bytes % D3D12_TEXTURE_DATA_PITCH_ALIGNMENT) != 0u)
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer row pitch must be >= width * 4 and 256-byte aligned.");
+		}
+
+		if (!cmd_transition_resource_state({ source, AshResourceState::CopySrc }))
+		{
+			return fail("DX12CommandBuffer: cmd_copy_texture_to_buffer failed to transition source texture.");
+		}
+
+		D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+		footprint.Footprint.Format = source_desc.Format;
+		footprint.Footprint.Width = source_width;
+		footprint.Footprint.Height = source_height;
+		footprint.Footprint.Depth = 1;
+		footprint.Footprint.RowPitch = row_pitch_bytes;
+		footprint.Offset = buffer_offset;
+
+		D3D12_TEXTURE_COPY_LOCATION destination_location{};
+		destination_location.pResource = destination_buffer->get_resource();
+		destination_location.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+		destination_location.PlacedFootprint = footprint;
+
+		D3D12_TEXTURE_COPY_LOCATION source_location{};
+		source_location.pResource = source_texture->get_resource();
+		source_location.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+		source_location.SubresourceIndex = 0;
+
+		m_cmdList->CopyTextureRegion(&destination_location, 0, 0, 0, &source_location, nullptr);
+		return true;
+	}
+
 	auto DX12CommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> buffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		auto fail = [this](std::string message) -> bool

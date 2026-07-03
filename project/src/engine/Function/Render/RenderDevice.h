@@ -619,10 +619,22 @@ namespace AshEngine
 		bool flush_queued_render_target_texel_reads(void* out_data, size_t out_size);
 		// editor end
 
+		// RenderGate（SDD-0001）：帧 dump 用同步回读，仅显式请求时产生开销，非热路径
+		struct BackBufferCaptureResult
+		{
+			uint32_t width = 0;
+			uint32_t height = 0;
+			std::vector<uint8_t> pixels_rgba8;
+		};
+
+		bool request_back_buffer_capture();
+		bool fetch_back_buffer_capture(BackBufferCaptureResult& out_result);
+
 	private:
 		bool ensure_back_buffer_target();
 		void sync_swapchain_target();
 		bool render_present_to_swapchain();
+		bool record_back_buffer_capture();
 		bool collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_vertex_buffer_barrier(const std::shared_ptr<VertexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);

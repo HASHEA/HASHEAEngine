@@ -1171,6 +1171,20 @@ namespace AshEngine
 		QueuedTexelRead queued_texel_read{};
 		std::shared_ptr<RHI::Buffer> texel_readback_buffer{};
 		// editor end
+
+		struct QueuedBackBufferCapture
+		{
+			uint32_t width = 0;
+			uint32_t height = 0;
+			uint32_t row_pitch = 0;
+			RenderTextureFormat format = RenderTextureFormat::Unknown;
+			bool active = false;
+		};
+
+		bool back_buffer_capture_requested = false;
+		QueuedBackBufferCapture queued_back_buffer_capture{};
+		std::shared_ptr<RHI::Buffer> capture_readback_buffer{};
+		uint64_t capture_readback_buffer_size = 0;
 	};
 
 		static std::shared_ptr<RenderTarget::Impl> create_render_target_impl(
@@ -3236,6 +3250,17 @@ namespace AshEngine
 		{
 			frame_recording_success = false;
 		}
+
+		if (frame_recording_success && m_impl->back_buffer_capture_requested)
+		{
+			m_impl->back_buffer_capture_requested = false;
+			if (!record_back_buffer_capture())
+			{
+				HLogError("RenderDevice: failed to record back buffer capture.");
+				frame_recording_success = false;
+			}
+		}
+
 		if (!validate_command_buffer_status(command_buffer, "end_frame::record"))
 		{
 			frame_recording_success = false;
@@ -4405,4 +4430,101 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 	// editor end
+
+	bool RenderDevice::request_back_buffer_capture()
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl);
+		m_impl->back_buffer_capture_requested = true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::record_back_buffer_capture()
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && m_impl->swapchain && m_impl->swapchain_target);
+
+		std::shared_ptr<RHI::Texture> texture = m_impl->swapchain_target->get_texture();
+		ASH_PROCESS_ERROR(texture);
+
+		const RenderTextureFormat format = m_impl->swapchain_target->format;
+		ASH_PROCESS_ERROR(
+			format == RenderTextureFormat::RGBA8_UNORM || format == RenderTextureFormat::RGBA8_SRGB ||
+			format == RenderTextureFormat::BGRA8_UNORM || format == RenderTextureFormat::BGRA8_SRGB);
+
+		const uint32_t width = m_impl->swapchain->get_width();
+		const uint32_t height = m_impl->swapchain->get_height();
+		ASH_PROCESS_ERROR(width > 0u && height > 0u);
+
+		const uint32_t row_pitch = (width * 4u + 255u) & ~255u;
+		const uint64_t required_size = static_cast<uint64_t>(row_pitch) * height;
+		if (!m_impl->capture_readback_buffer || m_impl->capture_readback_buffer_size < required_size)
+		{
+			RHI::BufferCreation buffer_creation =
+				RHI::BufferCreation::get_cpur_staging_buffer_creation(static_cast<uint32_t>(required_size));
+			buffer_creation.name = "RenderDeviceBackBufferCapture";
+			m_impl->capture_readback_buffer = m_impl->graphics_context->create_buffer(buffer_creation);
+			ASH_PROCESS_ERROR(m_impl->capture_readback_buffer != nullptr);
+			m_impl->capture_readback_buffer_size = required_size;
+		}
+
+		ASH_PROCESS_ERROR(m_impl->current_command_buffer->cmd_copy_texture_to_buffer(
+			texture, m_impl->capture_readback_buffer, 0, row_pitch));
+		ASH_PROCESS_ERROR(m_impl->current_command_buffer->cmd_transition_resource_state(
+			{ texture, RHI::AshResourceState::CopySrc, RHI::AshResourceState::Present }));
+
+		m_impl->queued_back_buffer_capture.width = width;
+		m_impl->queued_back_buffer_capture.height = height;
+		m_impl->queued_back_buffer_capture.row_pitch = row_pitch;
+		m_impl->queued_back_buffer_capture.format = format;
+		m_impl->queued_back_buffer_capture.active = true;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::fetch_back_buffer_capture(BackBufferCaptureResult& out_result)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
+		if (!m_impl->queued_back_buffer_capture.active)
+		{
+			return false;
+		}
+
+		m_impl->graphics_context->wait_idle();
+
+		uint8_t* mapped_data =
+			m_impl->capture_readback_buffer ? m_impl->capture_readback_buffer->get_mapped_data() : nullptr;
+		ASH_PROCESS_ERROR(mapped_data != nullptr);
+
+		const Impl::QueuedBackBufferCapture& capture = m_impl->queued_back_buffer_capture;
+		const bool swap_red_blue =
+			capture.format == RenderTextureFormat::BGRA8_UNORM || capture.format == RenderTextureFormat::BGRA8_SRGB;
+
+		out_result.width = capture.width;
+		out_result.height = capture.height;
+		out_result.pixels_rgba8.resize(static_cast<size_t>(capture.width) * capture.height * 4u);
+
+		for (uint32_t row = 0; row < capture.height; ++row)
+		{
+			const uint8_t* source_row = mapped_data + static_cast<size_t>(row) * capture.row_pitch;
+			uint8_t* destination_row = out_result.pixels_rgba8.data() + static_cast<size_t>(row) * capture.width * 4u;
+			if (!swap_red_blue)
+			{
+				std::memcpy(destination_row, source_row, static_cast<size_t>(capture.width) * 4u);
+			}
+			else
+			{
+				for (uint32_t x = 0; x < capture.width; ++x)
+				{
+					destination_row[x * 4u + 0u] = source_row[x * 4u + 2u];
+					destination_row[x * 4u + 1u] = source_row[x * 4u + 1u];
+					destination_row[x * 4u + 2u] = source_row[x * 4u + 0u];
+					destination_row[x * 4u + 3u] = source_row[x * 4u + 3u];
+				}
+			}
+		}
+
+		m_impl->queued_back_buffer_capture.active = false;
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
 }

@@ -812,6 +812,79 @@ namespace RHI
 		return bResult;
 	}
 
+	auto VulkanCommandBuffer::cmd_copy_texture_to_buffer(
+		std::shared_ptr<Texture> source,
+		std::shared_ptr<Buffer> destination,
+		uint64_t buffer_offset,
+		uint32_t row_pitch_bytes) -> bool
+	{
+		if (has_error())
+		{
+			return false;
+		}
+		if (state != ASH_Recording)
+		{
+			mark_error("VulkanCommandBuffer: cmd_copy_texture_to_buffer called while command buffer is not recording.");
+			HLogError("{}", get_last_error());
+			return false;
+		}
+
+		ASH_SAFE_EXECUTE_BEGIN(bResult);
+		ASH_LOG_PROCESS_ERROR(source && destination);
+		auto source_texture = std::static_pointer_cast<VulkanTexture>(source);
+		auto destination_buffer = std::static_pointer_cast<VulkanBuffer>(destination);
+		ASH_LOG_PROCESS_ERROR(source_texture && destination_buffer);
+		ASH_LOG_PROCESS_ERROR(!source_texture->is_sparse());
+
+		const TextureCreation& source_creation = source_texture->get_desciption();
+		ASH_LOG_PROCESS_ERROR(source_creation.width > 0 && source_creation.height > 0);
+
+		const bool supported_format =
+			source_creation.format == ASH_FORMAT_R8G8B8A8_UNORM ||
+			source_creation.format == ASH_FORMAT_R8G8B8A8_SRGB ||
+			source_creation.format == ASH_FORMAT_B8G8R8A8_UNORM ||
+			source_creation.format == ASH_FORMAT_B8G8R8A8_SRGB;
+		ASH_LOG_PROCESS_ERROR(supported_format);
+
+		constexpr uint32_t k_texel_size = 4u;
+		ASH_LOG_PROCESS_ERROR(row_pitch_bytes >= static_cast<uint32_t>(source_creation.width) * k_texel_size);
+		ASH_LOG_PROCESS_ERROR(row_pitch_bytes % 256u == 0u);
+
+		bool bRetCode = cmd_transition_resource_state({ source, AshResourceState::CopySrc });
+		ASH_LOG_PROCESS_ERROR(bRetCode);
+
+		VkBufferImageCopy copy_region{};
+		copy_region.bufferOffset = buffer_offset + destination_buffer->get_global_offset();
+		copy_region.bufferRowLength = row_pitch_bytes / k_texel_size;
+		copy_region.bufferImageHeight = 0;
+		copy_region.imageSubresource.aspectMask = source_texture->get_vk_aspect_flags();
+		copy_region.imageSubresource.mipLevel = 0;
+		copy_region.imageSubresource.baseArrayLayer = 0;
+		copy_region.imageSubresource.layerCount = 1;
+		copy_region.imageOffset = { 0, 0, 0 };
+		copy_region.imageExtent = {
+			static_cast<uint32_t>(source_creation.width),
+			static_cast<uint32_t>(source_creation.height),
+			1u
+		};
+
+		vkCmdCopyImageToBuffer(
+			vkCommandBuffer,
+			source_texture->get_vk_image(),
+			VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			reinterpret_cast<VkBuffer>(destination_buffer->get_native_handle()),
+			1,
+			&copy_region);
+
+		ASH_SAFE_EXECUTE_END(bResult);
+		if (!bResult)
+		{
+			mark_error("VulkanCommandBuffer: cmd_copy_texture_to_buffer failed.");
+			HLogError("{}", get_last_error());
+		}
+		return bResult;
+	}
+
 	auto VulkanCommandBuffer::cmd_update_sub_resource(std::shared_ptr<Buffer> pBuffer, uint32_t uOffset, uint32_t uSize, void* pData) -> bool
 	{
 		if (has_error())
