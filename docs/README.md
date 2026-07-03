@@ -2,6 +2,19 @@
 
 > 用途：先决定这次任务该读哪组文档，再进入具体专题。
 
+## 0. 所有任务的公共基线
+
+- `AGENTS.md`（仓库根）
+  - AI/协作者规则：命令、架构边界、SDD 分级、变更与验证要求
+- `docs/CODEBASE_MAP.md`
+  - 仓库导航：入口、目录职责、核心流程、依赖方向、常见任务
+- `docs/VERIFY.md`
+  - 按变更类型的验证矩阵，改完必须执行
+- `docs/sdd/`
+  - 变更设计文档（SDD），S1 起需要；模板见 `docs/sdd/TEMPLATE.md`
+- `docs/AI_CODEBASE_INVENTORY.md`
+  - 一次性盘点快照，仅大盘点时更新
+
 ## 1. 先选入口
 
 - Engine 任务：

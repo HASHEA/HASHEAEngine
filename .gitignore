@@ -7,7 +7,6 @@
 *.bak
 *.hlog
 *.lnk
-AGENTS.md
 
 # ignore directories
 .vscode
