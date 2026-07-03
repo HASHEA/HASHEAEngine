@@ -405,7 +405,6 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
 - PerfGate 性能门禁使用说明：[`docs/PerfGateUsageGuide.md`](docs/PerfGateUsageGuide.md)
 - AIDevDoctor 开发侧 AI 上下文工具：[`docs/AIDevDoctor.md`](docs/AIDevDoctor.md)
-- AshAgent 开发流程系统设计（角色 / 权限 / 需求 / 验证）：[`docs/AshAgentSystemDesign.md`](docs/AshAgentSystemDesign.md)
 - Deferred GBuffer 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md`](docs/superpowers/specs/2026-05-12-deferred-gbuffer-design.md)
 - Deferred Lighting 设计草案：[`docs/superpowers/specs/2026-05-12-deferred-lighting-design.md`](docs/superpowers/specs/2026-05-12-deferred-lighting-design.md)
 - Sandbox 场景化与 SceneConfig 设计：[`docs/superpowers/specs/2026-05-25-sandbox-scene-config-design.md`](docs/superpowers/specs/2026-05-25-sandbox-scene-config-design.md)
