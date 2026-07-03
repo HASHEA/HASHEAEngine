@@ -15,6 +15,8 @@
 #include "Base/hcache.h"
 #include "Base/hprofiler.h"
 #include "Graphics/RHICommon.h"
+#include <filesystem>
+#include <stb_image_write.h>
 namespace AshEngine
 {
 	namespace
@@ -321,6 +323,14 @@ namespace AshEngine
 	{
 		perfGateController.configure(config, initConfig.title, activeBackend);
 	}
+	auto Application::set_frame_dump_path(std::string path) -> void
+	{
+		frameDumpPath = std::move(path);
+	}
+	auto Application::set_scene_path_override(std::string path) -> void
+	{
+		scenePathOverride = std::move(path);
+	}
 	auto Application::start() -> void
 	{
 		if (!initialized)
@@ -342,6 +352,10 @@ namespace AshEngine
 		logicThreadException = nullptr;
 		logicThreadFailureMessage.clear();
 		runStartTime = std::chrono::steady_clock::now();
+		if (!frameDumpPath.empty() && maxFrameCount == 0)
+		{
+			HLogWarning("Application: --dump-frame requires a smoke frame limit (--smoke-test=N); frame dump will be skipped.");
+		}
 		_on_startup();
 		perfGateController.begin();
 		_start_logic_thread_if_needed();
@@ -355,8 +369,19 @@ namespace AshEngine
 
 			if (_should_render_frame())
 			{
+				const bool isFinalSmokeFrame = maxFrameCount > 0
+					&& frameIndex.load(std::memory_order_acquire) + 1 >= maxFrameCount;
+				if (isFinalSmokeFrame && !frameDumpPath.empty() && !frameDumpWritten && renderDevice)
+				{
+					renderDevice->request_back_buffer_capture();
+					frameDumpCapturePending = true;
+				}
 				_render_frame();
 				_present_frame();
+				if (frameDumpCapturePending)
+				{
+					_write_pending_frame_dump();
+				}
 				if (renderer && perfGateController.is_enabled())
 				{
 					perfGateController.sample_after_frame(renderer->get_frame_stats());
@@ -398,6 +423,44 @@ namespace AshEngine
 		}
 		_on_shutdown();
 		started = false;
+	}
+	auto Application::_write_pending_frame_dump() -> void
+	{
+		frameDumpCapturePending = false;
+		if (!renderDevice)
+		{
+			return;
+		}
+
+		RenderDevice::BackBufferCaptureResult capture{};
+		if (!renderDevice->fetch_back_buffer_capture(capture))
+		{
+			HLogError("Application: failed to fetch back buffer capture for frame dump '{}'.", frameDumpPath);
+			return;
+		}
+
+		std::error_code ec{};
+		const std::filesystem::path dumpPath{ frameDumpPath };
+		if (dumpPath.has_parent_path())
+		{
+			std::filesystem::create_directories(dumpPath.parent_path(), ec);
+		}
+
+		const int writeResult = stbi_write_png(
+			frameDumpPath.c_str(),
+			static_cast<int>(capture.width),
+			static_cast<int>(capture.height),
+			4,
+			capture.pixels_rgba8.data(),
+			static_cast<int>(capture.width * 4));
+		if (writeResult == 0)
+		{
+			HLogError("Application: failed to write frame dump PNG '{}'.", frameDumpPath);
+			return;
+		}
+
+		frameDumpWritten = true;
+		HLogInfo("Application: frame dump written to '{}' ({}x{}).", frameDumpPath, capture.width, capture.height);
 	}
 	auto Application::_pump_platform_events() -> void
 	{

@@ -36,7 +36,7 @@ namespace AshSandbox
 		SandboxStandardScene() = default;
 
 	public:
-		static auto get_standard_scene_path() -> const std::filesystem::path&;
+		static auto get_standard_scene_path() -> std::filesystem::path;
 
 		auto start(AshEngine::AssetDatabase& asset_database) -> bool;
 		auto reset() -> void;

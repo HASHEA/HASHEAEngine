@@ -137,6 +137,29 @@ static bool should_run_engine_self_tests(int argc, char* argv[])
 	return false;
 }
 
+// RenderGate（SDD-0001）：--dump-frame=<png> / --scene=<path> 字符串选项解析
+static std::string parse_string_option(int argc, char* argv[], const char* option_name)
+{
+	const std::string prefix = std::string(option_name) + "=";
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument.rfind(prefix, 0) == 0)
+		{
+			return argument.substr(prefix.size());
+		}
+		if (argument == option_name && argumentIndex + 1 < argc)
+		{
+			const std::string nextArgument = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
+			if (!nextArgument.empty() && nextArgument[0] != '-')
+			{
+				return nextArgument;
+			}
+		}
+	}
+	return {};
+}
+
 static void print_ashibl_bake_usage()
 {
 	std::cerr
@@ -352,6 +375,16 @@ int32_t main(int argc, char* argv[])
 	if (perfGateConfig.enabled)
 	{
 		application->configure_perf_gate(perfGateConfig);
+	}
+	const std::string frameDumpPath = parse_string_option(argc, argv, "--dump-frame");
+	if (!frameDumpPath.empty())
+	{
+		application->set_frame_dump_path(frameDumpPath);
+	}
+	const std::string scenePathOverride = parse_string_option(argc, argv, "--scene");
+	if (!scenePathOverride.empty())
+	{
+		application->set_scene_path_override(scenePathOverride);
 	}
 	application->start();
 	destroy_application(application);

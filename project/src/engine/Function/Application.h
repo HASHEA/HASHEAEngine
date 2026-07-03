@@ -116,6 +116,17 @@ public:
 		auto set_max_frame_count(uint64_t inMaxFrameCount) -> void;
 		auto set_max_run_seconds(double inMaxRunSeconds) -> void;
 		auto configure_perf_gate(const PerfGateConfig& config) -> void;
+		// RenderGate（SDD-0001）：--dump-frame 最后一帧截图落 PNG；--scene 供应用层覆盖默认场景
+		auto set_frame_dump_path(std::string path) -> void;
+		auto set_scene_path_override(std::string path) -> void;
+		auto get_frame_dump_path() const -> const std::string&
+		{
+			return frameDumpPath;
+		}
+		auto get_scene_path_override() const -> const std::string&
+		{
+			return scenePathOverride;
+		}
 		auto get_frame_index() const -> uint64_t
 		{
 			return frameIndex.load(std::memory_order_acquire);
@@ -157,6 +168,7 @@ public:
 		auto _get_thread_input_state() -> InputState&;
 		auto _run_scene_presentation_update_phase() -> void;
 		auto _run_scene_presentation_submit_phase() -> void;
+		auto _write_pending_frame_dump() -> void;
 		auto _shutdown_runtime() -> void;
 		virtual auto _on_startup() -> void;
 		virtual auto _on_shutdown() -> void;
@@ -197,6 +209,10 @@ public:
 		std::atomic<uint64_t>	frameIndex				{ 0 };
 		uint64_t				maxFrameCount			= 0;
 		double					maxRunSeconds			= 0.0;
+		std::string				frameDumpPath{};
+		std::string				scenePathOverride{};
+		bool					frameDumpCapturePending	= false;
+		bool					frameDumpWritten		= false;
 		std::atomic<bool>		exitRequested			{ false };
 		std::atomic<bool>		logicThreadStopRequested{ false };
 		std::atomic<bool>		logicThreadRunning		{ false };

@@ -1,6 +1,7 @@
 #include "App/SandboxStandardScene.h"
 
 #include "Base/hlog.h"
+#include "Function/Application.h"
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -13,10 +14,18 @@ namespace AshSandbox
 		static constexpr float k_default_camera_move_speed = 8.0f;
 	}
 
-	auto SandboxStandardScene::get_standard_scene_path() -> const std::filesystem::path&
+	auto SandboxStandardScene::get_standard_scene_path() -> std::filesystem::path
 	{
-		static const std::filesystem::path k_scene_path = "product/assets/scenes/Sandbox.scene.json";
-		return k_scene_path;
+		// RenderGate（SDD-0001）：--scene 覆盖默认场景路径
+		if (AshEngine::Application* application = AshEngine::Application::get())
+		{
+			const std::string& override_path = application->get_scene_path_override();
+			if (!override_path.empty())
+			{
+				return std::filesystem::path{ override_path };
+			}
+		}
+		return std::filesystem::path{ "product/assets/scenes/Sandbox.scene.json" };
 	}
 
 	auto SandboxStandardScene::start(AshEngine::AssetDatabase& asset_database) -> bool
@@ -184,6 +193,24 @@ namespace AshSandbox
 			out_snapshot.primary_camera_entity_id,
 			out_snapshot.recommended_camera_move_speed,
 			out_error));
+
+		// RenderGate（SDD-0001）：抓帧测试时固定初始相机位置，保证画面确定性
+		if (AshEngine::Application* application = AshEngine::Application::get();
+			application && !application->get_frame_dump_path().empty())
+		{
+			AshEngine::Entity camera_entity = out_snapshot.scene.find_entity(out_snapshot.primary_camera_entity_id);
+			if (camera_entity.is_valid())
+			{
+				AshEngine::TransformComponent transform = camera_entity.get_transform_component();
+				transform.position = { 0.0f, 5.0f, 0.0f };
+				if (!camera_entity.set_transform_component(transform))
+				{
+					out_error = "Sandbox standard scene failed to pin the frame-dump camera position.";
+					ASH_PROCESS_ERROR(false);
+				}
+				HLogInfo("Sandbox standard scene pinned frame-dump camera position to (0, 5, 0).");
+			}
+		}
 
 		out_snapshot.load_state = SandboxStandardSceneLoadState::Ready;
 		out_snapshot.failure_detail.clear();
