@@ -840,11 +840,17 @@ namespace AshEngine
 		frame.taa_previous_jitter_ndc = glm::vec2(0.0f, 0.0f);
 		if (taa_config.enabled)
 		{
-			const glm::vec2 jitter_ndc = temporal_aa_compute_jitter_ndc(
-				frame.frame_index,
-				taa_config.jitter_sequence_length,
-				output_width,
-				output_height);
+			// RenderGate（SDD-0001）：抓帧模式禁用亚像素抖动。TAA 时序抖动导致同参数两次
+			// dump 存在全画面边缘噪声（SSIM 底约 0.989），关掉后静态场景可收敛为确定画面。
+			const Application* application = Application::get();
+			const bool frame_dump_mode = application && !application->get_frame_dump_path().empty();
+			const glm::vec2 jitter_ndc = frame_dump_mode
+				? glm::vec2(0.0f, 0.0f)
+				: temporal_aa_compute_jitter_ndc(
+					frame.frame_index,
+					taa_config.jitter_sequence_length,
+					output_width,
+					output_height);
 			if (const SceneTemporalViewState* previous_state = find_previous_temporal_view_state(temporal_view_key))
 			{
 				frame.taa_previous_jitter_ndc = previous_state->jitter_ndc;

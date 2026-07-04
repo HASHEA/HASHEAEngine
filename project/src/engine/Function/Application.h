@@ -119,6 +119,11 @@ public:
 		// RenderGate（SDD-0001）：--dump-frame 最后一帧截图落 PNG；--scene 供应用层覆盖默认场景
 		auto set_frame_dump_path(std::string path) -> void;
 		auto set_scene_path_override(std::string path) -> void;
+		// RenderGate（SDD-0001）：--rhi 命令行覆盖后端，必须在 initialize() 之前调用才生效
+		auto set_backend_override(RHI::Backend backend) -> void
+		{
+			initConfig.backend = backend;
+		}
 		auto get_frame_dump_path() const -> const std::string&
 		{
 			return frameDumpPath;

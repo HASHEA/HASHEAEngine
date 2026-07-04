@@ -6,6 +6,7 @@
 extern AshEngine::Application* create_application();//impl in editor
 extern void destroy_application(AshEngine::Application* app);//impl in editor
 #include <cerrno>
+#include <cctype>
 #include <limits>
 #include <filesystem>
 #include <iostream>
@@ -346,6 +347,33 @@ int32_t main(int argc, char* argv[])
 	if (AshEngine::Application::app != application)
 	{
 		AshEngine::Application::app = application;
+	}
+	// RenderGate（SDD-0001）：--rhi 覆盖后端选择，必须在 initialize() 之前注入
+	const std::string rhiOverride = parse_string_option(argc, argv, "--rhi");
+	if (!rhiOverride.empty())
+	{
+		std::string normalizedRhi = rhiOverride;
+		for (char& character : normalizedRhi)
+		{
+			character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+		}
+		RHI::Backend backendOverride = RHI::Backend::Default;
+		if (normalizedRhi == "vulkan" || normalizedRhi == "vk")
+		{
+			backendOverride = RHI::Backend::Vulkan;
+		}
+		else if (normalizedRhi == "directx12" || normalizedRhi == "dx12" || normalizedRhi == "d3d12")
+		{
+			backendOverride = RHI::Backend::DirectX12;
+		}
+		else
+		{
+			std::cerr << "Fatal Error: Unknown --rhi value '" << rhiOverride << "' (expected vulkan or dx12)." << std::endl;
+			destroy_application(application);
+			AshEngine::Application::app = nullptr;
+			return 1;
+		}
+		application->set_backend_override(backendOverride);
 	}
 	if (!application->initialize())
 	{
