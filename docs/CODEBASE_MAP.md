@@ -65,7 +65,7 @@ status: active
 | `DynamicRHI` / `RHIResource` | `engine/Graphics/` | 后端无关的 GPU 接口 | 改动必须双后端等价实现 |
 | `RenderGraph` | `engine/Function/Render/` | 帧级声明式 pass/资源编排 | 契约见 `docs/specs/modules/render-graph.md`；不管理 buffer/shader/material 生命周期 |
 | `SceneRenderConfig` / `scene_config` | Function/Render + scene json | 场景级渲染开关（AO 模式、阴影、Bloom、体积光） | 随帧快照传递，不可跨帧持有 |
-| `ScenePresentationSubsystem` | `engine/Function/` | Scene → 渲染数据的唯一桥 | 见 `docs/ScenePresentationSubsystemGuide.md` |
+| `ScenePresentationSubsystem` | `engine/Function/` | Scene → 渲染数据的唯一桥 | 见 `docs/specs/modules/scene.md` |
 | `DebugDrawService` | `engine/Function/` | frame-local 调试绘制（line/box/circle/cone/axes） | tone-map 后叠加，不参与光照 |
 | `UIContext` | `engine/Function/` | Editor 与 Engine 的 UI 交互边界 | Editor 不得绕过它直用 ImGui/Graphics |
 
@@ -86,7 +86,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 | 修渲染 bug（banding/闪烁等） | 对应 Pass + shader | 同上，diff 尽量小 | 同上；用 RenderDebugView 定位 |
 | RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate 全矩阵 + validation 开启 |
 | Editor 面板功能 | `EditorDeveloperGuide.md`、`EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
-| 场景/资产能力 | `ScenePresentationSubsystemGuide.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
+| 场景/资产能力 | `docs/specs/modules/scene.md`、`docs/specs/modules/asset.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |
 
 ## 更新触发

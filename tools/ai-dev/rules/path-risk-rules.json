@@ -8,7 +8,7 @@
       "risk": "critical",
       "reason": "Graphics changes may affect Vulkan, DX12, shader binding, resource lifetime, barriers, or backend parity.",
       "validation": [ "Sandbox + Vulkan", "Sandbox + DX12", "Editor + Vulkan", "Editor + DX12" ],
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+      "docs": [ "README.md", "docs/specs/modules/graphics.md" ]
     },
     {
       "name": "function-render",
@@ -17,7 +17,7 @@
       "risk": "high",
       "reason": "Function/Render changes may affect SceneRenderer, RenderGraph, RenderDevice facade, material submission, debug views, or frame stats.",
       "validation": [ "Sandbox + Vulkan", "Sandbox + DX12", "Editor + Vulkan", "Editor + DX12" ],
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+      "docs": [ "README.md", "docs/specs/modules/render.md" ]
     },
     {
       "name": "function-scene-asset",
@@ -26,7 +26,7 @@
       "risk": "high",
       "reason": "Scene or Asset changes can affect Editor-facing facade behavior and Sandbox standard scene loading.",
       "validation": [ "Sandbox + Vulkan", "Sandbox + DX12", "Editor + Vulkan", "Editor + DX12" ],
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+      "docs": [ "README.md", "docs/specs/modules/scene.md" ]
     },
     {
       "name": "shader-source",
@@ -35,7 +35,7 @@
       "risk": "high",
       "reason": "Shader changes may affect DXC compilation, reflection, generated bindings, Vulkan SPIR-V, and DX12 DXIL.",
       "validation": [ "Sandbox + Vulkan", "Sandbox + DX12" ],
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+      "docs": [ "README.md", "docs/specs/modules/graphics.md" ]
     },
     {
       "name": "engine-config",
@@ -44,7 +44,7 @@
       "risk": "high",
       "reason": "Engine.ini controls backend, validation, VSync, and process-level render debug settings.",
       "validation": [ "Confirm requested backend matches runtime log", "Sandbox smoke test for affected backend" ],
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ]
+      "docs": [ "README.md", "docs/specs/modules/application.md" ]
     },
     {
       "name": "sandbox-scene",

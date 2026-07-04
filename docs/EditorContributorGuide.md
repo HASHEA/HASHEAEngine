@@ -40,18 +40,13 @@
 默认顺序：
 
 1. `code review`
-2. `premake`
-3. `MSBuild`
-4. `smoke`
+2. 构建
+3. `smoke`
 
 常用命令：
 
 ```powershell
-.\premake5.exe vs2022
-```
-
-```powershell
-& "C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" AshEngine.sln /t:Editor /p:Configuration=Debug /p:Platform=x64
+.\build_editor.bat Debug      # 缺 sln 会自动 premake 生成
 ```
 
 运行时冒烟可用：
@@ -85,11 +80,11 @@
 6. AssetBrowser 搜索 / 过滤仍可用
 7. Console 过滤 / 清空仍可用
 
-## 6. `MSBuild` 失败分类
+## 6. 构建失败分类
 
 - 如果是代码、配置或工程脚本问题：
   - 记为“代码 / 配置失败”
-- 如果因访问 `C:\Users\jiangyuting\AppData\Local\Microsoft SDKs` 被拒而失败：
+- 如果是本机 SDK / 权限环境导致的失败（如访问用户目录下 SDK 被拒）：
   - 记为“环境 / 权限阻塞”
   - 不要直接记成编译失败
   - 结论里注明“建议提权后重跑”
@@ -115,15 +110,8 @@ Acceptance Record
 
 ## 8. 文档更新规则
 
-- 改了架构边界或长期规则，更新 `docs/EditorDeveloperGuide.md`
+- 改了架构边界或长期规则，更新 `docs/EditorDeveloperGuide.md` 与 `docs/specs/modules/editor.md`
 - 改了代码规范，更新 `docs/EditorCodeStyleGuide.md`
 - 改了协作、提交流程或验证要求，更新本文档
-- 改了模块状态、风险、下一步，更新对应 `docs/EditorProgress.*.md`
+- 改了文件职责划分，更新 `docs/EditorFileResponsibilities.md`
 - 改了主入口或阅读顺序，更新 `docs/README.md` 和 `docs/editor/README.md`
-
-## 9. 并行协作时额外遵守
-
-- 先读 `docs/EditorParallelCollaboration.md`
-- 先确认本轮允许修改范围
-- 完成后更新对应模块进度文档
-- 共享入口文件、跨模块改动、Engine 缺口都要显式上报，不要自己默默扩范围

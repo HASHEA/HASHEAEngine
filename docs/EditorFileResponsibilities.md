@@ -50,6 +50,8 @@
 | `App/ViewportLayoutPersistence.cpp` | 加载、保存和重置 viewport layout。 | 不处理 viewport 绘制或相机输入。 |
 | `App/ViewportPanelStateBridge.h` | 声明 viewport panel open state 与 viewport service 的同步桥。 | 只做状态桥接，不做 UI。 |
 | `App/ViewportPanelStateBridge.cpp` | 监听 panel open state，更新 viewport 服务和布局。 | 不直接访问具体 viewport panel 实现细节。 |
+| `App/EditorLogBridge.h` | 声明 spdlog → `EditorEventBus` 的日志桥，跨线程暂存 `EditorLogEvent`。 | 只做日志转发，不做过滤与展示（那是 ConsolePanel）。 |
+| `App/EditorLogBridge.cpp` | 实现 spdlog sink 挂接、待发队列与 `FlushPending` 派发。 | 事件只在主线程 flush 时 Publish，不在 sink 线程直接派发。 |
 
 ## Core
 
@@ -81,6 +83,9 @@
 | `Core/EditorComponentComparison.cpp` | 实现 transform/camera/light/mesh 等组件比较。 | 不执行命令、不写 scene。 |
 | `Core/EditorScenePathUtils.h` | 声明 scene 路径解析、默认路径、显示路径工具。 | 只处理路径策略，不做 scene 加载。 |
 | `Core/EditorScenePathUtils.cpp` | 实现 scene 路径工具。 | 文件系统失败要返回可处理结果，不直接吞错误。 |
+| `Core/EditorPathUtils.h` | 声明通用文件系统路径工具：祖先判断、排序去重、剔除嵌套子路径。 | 只放纯路径计算，不做 IO。 |
+| `Core/EditorPathUtils.cpp` | 实现通用路径工具。 | 不引入 UI 或 scene 依赖。 |
+| `Core/EditorViewportInputState.h` | 定义 viewport 每帧输入快照（鼠标/按键/修饰键状态与查询）。 | 只放输入数据快照，不做输入解释。 |
 | `Core/EditorStringUtils.h` | 声明 Editor 字符串小工具。 | 只放通用字符串处理。 |
 | `Core/EditorStringUtils.cpp` | 实现字符串 trim、case、匹配等工具。 | 不引入 UI 或 scene 依赖。 |
 | `Core/PlatformFileDialog.h` | 声明平台文件选择对话框接口和选项。 | 只暴露 Editor 需要的最小合同。 |
@@ -88,6 +93,8 @@
 | `Core/SceneSnapshotTypes.h` | 定义实体和组件快照类型。 | 只放命令/复制粘贴需要的数据结构。 |
 | `Core/SceneSnapshotUtils.h` | 声明 scene/entity 快照采集和恢复工具。 | 只处理快照转换，不画 UI。 |
 | `Core/SceneSnapshotUtils.cpp` | 实现快照采集、恢复、复制粘贴辅助。 | 修改 scene 时注意父子层级和 ID 映射。 |
+| `Core/SceneSnapshotComponentUtils.h` | 声明组件级快照采集与回放工具。 | 只处理组件快照转换，不画 UI。 |
+| `Core/SceneSnapshotComponentUtils.cpp` | 实现组件快照 capture/apply（含移除快照中缺失的可选组件）。 | 对 scene 的写入只应由命令流程发起。 |
 | `Core/SceneComponentSerialization.h` | 声明 scene 组件序列化辅助。 | 只服务 scene 文件与快照序列化。 |
 | `Core/SceneComponentSerialization.cpp` | 实现组件到 JSON/数据结构的序列化细节。 | 不处理文件路径和 UI。 |
 | `Core/IActionInvoker.h` | 定义 action 调用窄接口。 | 只用于解耦 UI 与 command service。 |
@@ -113,12 +120,14 @@
 
 ## ImGui
 
+> 本目录已被 `project/src/editor/premake5.lua` 的 `removefiles` 剔出构建（运行时 Editor UI 全部走引擎侧 `UIContext`），仅作历史参考，恢复启用前需先补齐 `UIContext` 等价扩展点。
+
 | 文件 | 职责 | 修改约束 |
 | --- | --- | --- |
-| `ImGui/EditorImGuiLayer.h` | 声明 Editor ImGui layer。 | 仅保留与 engine UI 层桥接的接口。 |
-| `ImGui/EditorImGuiLayer.cpp` | 实现 Editor ImGui layer 生命周期。 | 活跃 Editor UI 不应绕过 `UIContext` 重新写原生 ImGui。 |
-| `ImGui/EditorStyle.h` | 声明 Editor 主题应用。 | 只处理主题配置入口。 |
-| `ImGui/EditorStyle.cpp` | 实现 Editor UI 主题颜色和样式。 | 新主题必须通过统一 preset/setting 进入。 |
+| `ImGui/EditorImGuiLayer.h` | 声明遗留的编辑器侧 ImGui layer。 | 不参与构建；不要在活跃路径重新引用。 |
+| `ImGui/EditorImGuiLayer.cpp` | 实现遗留 ImGui layer 生命周期。 | 同上。 |
+| `ImGui/EditorStyle.h` | 声明遗留的 Editor 主题应用。 | 同上；活跃主题走 `Widgets/EditorThemeColors` + settings。 |
+| `ImGui/EditorStyle.cpp` | 实现遗留 UI 主题颜色和样式。 | 同上。 |
 
 ## Panels
 
@@ -146,6 +155,7 @@
 | `Panels/ViewportPanelOverlaySupport.cpp` | 放 viewport overlay 绘制辅助。 | 只处理 overlay 小绘制，不碰 scene 状态写入。 |
 | `Panels/ViewportPanelSceneSupportInternal.h` | 声明 viewport scene 投影等内部辅助结构。 | 仅供 viewport support 内部使用，能移进 cpp 就移。 |
 | `Panels/ViewportPanelSceneSupportInternal.cpp` | 实现 viewport scene/project/unproject 辅助。 | 不成为跨模块公共 API。 |
+| `Panels/ViewportPanelState.h` | 定义 viewport 框选与待决 GPU pick 等交互状态。 | 只放状态数据，交互逻辑在 `ViewportPanelInteraction`。 |
 | `Panels/ViewportPanelSupport.h` | 声明 viewport 支撑工具。 | 防止变成 God Helper；只放无状态公共函数。 |
 | `Panels/ViewportPanelSupport.cpp` | 实现 viewport 支撑工具。 | 新增流程逻辑优先放 canvas/interaction/service。 |
 
@@ -287,10 +297,14 @@
 | `Widgets/EditorButtonWidgets.cpp` | 实现按钮绘制。 | 不写业务事件。 |
 | `Widgets/EditorTooltipWidgets.h` | 声明 tooltip 辅助。 | 只放 tooltip UI。 |
 | `Widgets/EditorTooltipWidgets.cpp` | 实现 tooltip 绘制。 | 不依赖具体服务。 |
+| `Widgets/EditorThemeColors.h` | 声明主题语义色查询（文本/强调/行 hover/drop zone 等）与选中按钮样式 push/pop。 | 面板取色统一走这里，不各自硬编码颜色。 |
+| `Widgets/EditorThemeColors.cpp` | 实现主题色计算。 | 无状态；不做主题切换逻辑。 |
 | `Widgets/EditorTreeWidget.h` | 声明复用树控件、拖拽视觉和状态。 | 可服务 hierarchy/asset tree，不绑定具体数据源。 |
 | `Widgets/EditorTreeWidget.cpp` | 实现树节点绘制、拖拽槽、展开状态。 | 数据变更由调用者处理。 |
 | `Widgets/InspectorPropertyWidgets.h` | 声明 Inspector 字段编辑 widget。 | 只处理字段 UI 和输入结果。 |
 | `Widgets/InspectorPropertyWidgets.cpp` | 实现 property 行、数值、文本、checkbox 等控件。 | 不提交命令。 |
+| `Widgets/InspectorAssetPathWidgets.h` | 声明资产路径字段控件（路径展示、选择、清除）。 | 只处理资产路径 UI，读 AssetDatabase 不写。 |
+| `Widgets/InspectorAssetPathWidgets.cpp` | 实现资产路径控件绘制与候选查询。 | 不提交命令，不做资产 IO。 |
 | `Widgets/ViewportAxisIndicator.h` | 声明 viewport 坐标轴指示器。 | 只放绘制参数和入口。 |
 | `Widgets/ViewportAxisIndicator.cpp` | 绘制 viewport 右上角轴向指示。 | 不处理相机输入。 |
 

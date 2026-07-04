@@ -10,7 +10,7 @@ Engine（DLL）分 Base / Graphics / Function 三层，Editor 与 Sandbox 是其
 - 仓库导航：`docs/CODEBASE_MAP.md`（入口、目录、流程、依赖方向、常见任务）
 - 验证要求：`docs/VERIFY.md`（按变更类型的验证矩阵，改完必须执行）
 - 现状规格：`docs/specs/`（模块 spec + feature spec，动某模块/feature 前读对应 spec）
-- 文档路由：`docs/README.md`；Engine 细节 `docs/EngineDeveloperGuide.md`；Editor 细节 `docs/EditorDeveloperGuide.md`
+- 文档路由：`docs/README.md`；Engine 细节看 `docs/specs/modules/`；Editor 细节 `docs/EditorDeveloperGuide.md`
 
 ## Workflow
 

@@ -3,8 +3,8 @@
   "rules": [
     {
       "path_regex": "^project/src/engine/",
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ],
-      "reason": "Engine behavior, public facade, validation, or runtime workflow changes must be reflected in the root README and Engine developer guide."
+      "docs": [ "README.md", "docs/specs/README.md" ],
+      "reason": "Engine behavior, public facade, validation, or runtime workflow changes must be reflected in the root README and the matching module spec under docs/specs/."
     },
     {
       "path_regex": "^project/src/editor/",
@@ -13,7 +13,7 @@
     },
     {
       "path_regex": "^product/config/Engine\\.ini$",
-      "docs": [ "README.md", "docs/EngineDeveloperGuide.md" ],
+      "docs": [ "README.md", "docs/specs/modules/application.md" ],
       "reason": "Runtime configuration changes must be visible from the repository entry points."
     },
     {

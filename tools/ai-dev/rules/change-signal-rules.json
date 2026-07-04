@@ -51,7 +51,7 @@
       "category": "docs",
       "severity": "low",
       "path_regex": "^(README\\.md|docs/|tools/ai-dev/README\\.md)",
-      "regex": "README\\.md|docs/|EngineDeveloperGuide|EditorDeveloperGuide|AIDevDoctor",
+      "regex": "README\\.md|docs/|EditorDeveloperGuide|AIDevDoctor",
       "finding": "Changed text references repository documentation.",
       "next_step": "Review docs for consistency with the actual runtime and validation behavior."
     },

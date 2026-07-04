@@ -71,6 +71,8 @@
 - `SceneService`、`SelectionService`、`CommandService`、`UndoRedoService`、`EditorViewportService` 是主链路服务
 - `EditorTreeWidget` 可作为共用 widget 样板
 
+## 4. 验证要求
+
 - 改了 Editor 代码后，至少保证 `Editor` 目标仍可构建。
 - 影响以下行为时，必须做运行时验证：
   - startup / shutdown
@@ -81,10 +83,9 @@
   - viewport 展示与尺寸同步
   - settings / persistence
 
-## 8. 文档回写要求
+## 5. 文档回写要求
 
-- 改了架构边界、目录职责、运行时约束，更新本文档。
+- 改了架构边界、目录职责、运行时约束，更新本文档与 `docs/specs/modules/editor.md`。
 - 改了代码规范，更新 `docs/EditorCodeStyleGuide.md`。
 - 改了协作、验证、提交流程，更新 `docs/EditorContributorGuide.md`。
-- 改了主线重构目标或阶段顺序，更新 `docs/EditorArchitectureRefactorPlan.md`。
-- 改了模块现状、风险、下一步，更新对应 `EditorProgress.*.md`。
+- 改了文件职责划分，更新 `docs/EditorFileResponsibilities.md`。
