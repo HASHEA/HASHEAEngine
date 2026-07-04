@@ -25,7 +25,7 @@ status: active
 
 - `Application(EngineInitConfig)` → `initialize()` → `start()`（阻塞跑主循环）→ 析构/`_shutdown_runtime()`。
 - `initialize` 顺序：LogService → MemoryService → threading（当前线程注册为 Render 角色）→ 解析 RHI 配置（Engine.ini + `initConfig.backend` 覆盖，路径默认 `product/config/Engine.ini`）→ 渲染 feature/debug view/环境光配置 → `Window::create` → `GraphicsContext::create` → `Swapchain::create` → RenderDevice/Renderer → `UIContext`。
-- 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → 帧计数；`--smoke-test`/`--smoke-test-seconds` 达上限即 `request_exit()`；PerfGate 采样窗口结束也会请求退出。
+- 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → 帧计数；`--smoke-test`/`--smoke-test-seconds` 达上限即 `request_exit()`；PerfGate 采样窗口结束也会请求退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。
 - 可选 logic 线程：`EngineThreadingConfig.enable_logic_thread` 开启，输入经快照（`_publish/_consume_logic_input_snapshot`）跨线程传递；logic 线程异常会被捕获并终止主循环。
 - 应用侧扩展点：`_on_startup/_on_update/_on_gui/_on_render/_on_logic_*/_on_shutdown` 等虚函数。
 - 静态访问器：`Application::get()`、`get_window/get_graphics_context/get_swapchain/get_render_device/get_renderer/get_ui_context/get_input/get_rhi_backend` 等。

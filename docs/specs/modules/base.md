@@ -48,6 +48,7 @@ status: active
 - 引擎对象生命周期由 `Ash_New/Ash_Delete` 管理以纳入内存统计；不要混用裸 `new/delete` 分配引擎长生命周期对象。
 - `hprofiler.h` 只应在 `.cpp` 中 include，避免 Tracy 头污染公共头。
 - 渲染命令队列只能由 render 线程 pump；`InputState` 每线程一份（logic 线程经快照同步，见 application spec）。
+- 错误处理宏（`ASH_PROCESS_ERROR` / `ASH_LOG_PROCESS_ERROR` / `ASH_PROCESS_ERROR_EXIT` / `ASH_PROCESS_GUARD_*`）用于资源创建、init/shutdown、绑定/提交/加载等多失败出口的流程函数；纯 getter、轻量转换、一行包装、UI 透传不用。循环体内慎用：失败需终止整个函数时改用显式状态变量或把检查提升到循环外。
 
 ## 验证
 

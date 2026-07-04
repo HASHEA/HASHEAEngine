@@ -36,7 +36,7 @@ status: active
   - 帧驱动：`update_presentations`（逻辑侧同步）+ `submit_presentations`（提交渲染）。
   - 编辑器扩展：overlay（`submit_scene_overlay` / `clear_scene_overlay`）、GPU 拾取（`request_scene_entity_pick` / `poll_scene_entity_pick_result` / `complete_gpu_pick_readbacks`）、`get_scene_view_stats`。
 
-数据流：每帧按 Scene 的 render 版本号增量同步到 `RenderScene`（`rebuild_from_scene` / `update_transforms_from_scene` / `rebuild_lights_from_scene` / `rebuild_environment_from_scene` / `rebuild_render_config_from_scene`），再 `build_visible_render_frame` 产出该帧不可变的 `VisibleRenderFrame`（相机矩阵、可见 draw 列表、灯光、环境、TAA jitter，以及 `SceneRenderConfig` 快照），交给 `SceneRenderer` 消费。使用手册见 `docs/ScenePresentationSubsystemGuide.md`（细节以代码为准）。
+数据流：每帧按 Scene 的 render 版本号增量同步到 `RenderScene`（`rebuild_from_scene` / `update_transforms_from_scene` / `rebuild_lights_from_scene` / `rebuild_environment_from_scene` / `rebuild_render_config_from_scene`），再 `build_visible_render_frame` 产出该帧不可变的 `VisibleRenderFrame`（相机矩阵、可见 draw 列表、灯光、环境、TAA jitter，以及 `SceneRenderConfig` 快照），交给 `SceneRenderer` 消费。
 
 ## 约束与不变式
 
@@ -45,6 +45,8 @@ status: active
 - `Scene`/`Entity` 是 shared_ptr pimpl 句柄，拷贝共享同一底层数据；`replace_contents` / `reload_from_file` 保留变更事件订阅者。
 - 变更事件回调同步执行于调用线程；`RenderScene::get_static_mesh_primitives_snapshot` 是唯一声明线程安全的快照接口。
 - 组件集合固定为 `SceneComponentType` 六项（Name/Transform/Camera/Light/Mesh/Environment），新增组件需同步扩展描述符表与序列化。
+- 边界：custom pass、compute、后处理实验、调试渲染继续走 Renderer 直驱，不强行塞进 scene presentation；上层需求统一表达为 Scene + Camera + Output + Overrides，不把 `RenderScene`/`SceneView`/`VisibleRenderFrame`/`SceneRenderer` 暴露回上层；UI 显示离屏输出用 `UISurfaceHandle` + `draw_surface_fill_available`。
+- 当前限制：view 的 viewport/scissor 只约束光栅化区域；clear 作用于整个 attachment 而非 rect（多 binding 共享 output 的保留语义后续用 preserve/load 解决）；Window output 不返回有效 `UISurfaceHandle`；`show_flags` 为预留字段。
 
 ## 验证
 

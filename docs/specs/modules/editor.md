@@ -21,7 +21,7 @@ status: active
 | `Panels/` | 面板实现与各自子目录（AssetBrowser/、Inspector/、SceneHierarchy/、ViewportPanel* 拆分文件） |
 | `Services/` | 编辑器服务（下表） |
 | `Widgets/` | 复用控件：`EditorActionWidgets`、`EditorButtonWidgets`、`EditorThemeColors`、`EditorTooltipWidgets`、`EditorTreeWidget`、`InspectorAssetPathWidgets`、`InspectorPropertyWidgets`、`ViewportAxisIndicator` |
-| `ImGui/` | `EditorImGuiLayer`、`EditorStyle`——编辑器内唯一允许直接触碰 ImGui 的桥接层 |
+| `ImGui/` | `EditorImGuiLayer`、`EditorStyle`——遗留的编辑器侧 ImGui 宿主，已被 premake `removefiles` 剔出构建（编辑器现全部经引擎侧 `UIContext` 渲染），仅作历史参考 |
 
 ## 公共接口
 
@@ -33,9 +33,14 @@ status: active
 
 ## 约束与不变式
 
-- **Editor 只经 `UIContext` 与 Engine UI 交互，禁止直接使用 ImGui / Graphics API**：面板、控件、服务一律通过 `EditorFrameContext::pUiContext`；ImGui 直用仅限 `ImGui/EditorImGuiLayer` 与 `ImGui/EditorStyle` 桥接层。
-- 场景画面获取只走 `ScenePresentationSubsystem`（离屏 output + view binding + `get_ui_surface`）；overlay/拾取/统计用其 editor 扩展接口，不得直连渲染器。
+- **Editor 只经 `UIContext` 与 Engine UI 交互，禁止直接使用 ImGui / Graphics API**：面板、控件、服务一律通过 `EditorFrameContext::pUiContext`（`ImGui/` 下的遗留桥接文件已被剔出构建）。
+- 单一真源：活动场景状态唯一真源在 `SceneService`；Selection 只由 `SelectionService` 维护、undo/redo 栈只由 `UndoRedoService` 维护、viewport presentation 绑定只由 `EditorViewportService` 维护；快捷键文案与触发规则同一真源（`EditorShortcutService`）。
 - 场景修改必须封装为 `EditorCommand` 经 CommandService 执行，保证 undo/redo 与选择一致性；面板间通信走 `EditorEventBus` 或 Services，不得互相直接引用。
+- 场景 new/load/reload 的重置语义由 `SceneWorkflowCoordinator` 统一执行：清 Selection → 清 UndoRedo → 选中默认实体。primary viewport 唯一，viewport 共享状态只由 primary 发布。
+- 稳定标识：action/panel/viewport 的 id 与 drag payload type 是持久化/交互契约，不得随意改名。
+- 冻结快捷键（改动需用户确认）：Ctrl+N / Ctrl+R / Ctrl+S / Ctrl+Shift+R / Ctrl+Shift+A / Ctrl+Alt+A / F2 / Ctrl+Shift+P / Delete / Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / F5，AssetBrowser 内容区 Enter/Backspace。
+- 重构三原则：按面板/服务纵向深拆、不做横切层；`*Support` 文件只放无状态自由函数；主文件只做协调不塞业务。
+- 场景画面获取只走 `ScenePresentationSubsystem`（离屏 output + view binding + `get_ui_surface`）；overlay/拾取/统计用其 editor 扩展接口，不得直连渲染器。
 - 依赖方向：Panels → Core/Services/Widgets；Shell 组织 Panels；App 组装一切；Core 不反向依赖上层。
 - `EditorEventBus` 与各 Service 均假定主线程访问。
 

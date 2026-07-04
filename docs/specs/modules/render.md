@@ -73,6 +73,7 @@ frame-dump 模式（`Application::get_frame_dump_path()` 非空）下 TAA 亚像
 - 每 view 每帧新建 `RenderGraphBuilder`，graph 资源/ref 不跨帧缓存；跨帧资源（TAA history、shadow static cache）由 pass 类自持 `RenderTarget` 并以 external 注册。
 - 输出尺寸上限 `uint16_t`（graph texture desc 限制）。
 - temporal 状态按 view key（`view_id`，否则 output target 指针）隔离，多 viewport 互不污染。
+- 实例 buffer 为「逻辑 slot + 3 帧物理 ring」，epoch 取渲染侧 `Application::get_frame_index()`（不是 `VisibleRenderFrame::frame_index`）；temporal history 只允许 GBuffer pass 使用。禁止改回单物理 slot：Vulkan Release 下 CPU 写 host-visible buffer 会覆盖 GPU 正在读的上一帧实例矩阵，导致 GBuffer depth/normal/motion vector 裂缝闪烁。
 - 双后端等价：所有 pass 必须 Vulkan / DX12 行为一致，跨后端 diff FAIL 视同 bug。
 
 ## 验证

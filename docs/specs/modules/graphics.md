@@ -44,6 +44,10 @@ status: active
 - 跨后端 API 差异（Y 翻转/winding、资源状态模型）必须收口在单点（如 `RasterizerConvention.h`、各后端 ResourceTracker），不得散落到上层。
 - 后端对象经 `Ash_New` 分配；validation/debug-layer 报错视同 bug，禁止靠关闭 validation 绕过。
 - readback API 仅限验证/调试路径调用，不得进入常规帧热路径。
+- 工具链自包含：DXC 运行时固定取 `project/thirdparty/dxc/bin/x64/`（须支持 `-spirv` 的 dxcompiler.dll + dxil.dll），Vulkan validation layer 取 `project/thirdparty/VulkanSDK/redist/windows-x64/layers/`；构建与运行不依赖 `VULKAN_SDK` 环境变量或 PATH；仓库内 layer 不替代驱动侧 loader/ICD。
+- UniformBuffer 分配 256 字节对齐；`create_uniform_buffer()` 带 initial_data 时必须先拷入同分配大小的 zero-padded 临时块再交后端，避免 `vkCmdUpdateBuffer` / DX12 upload 按分配大小读取越界。
+- Root constants 约定：DX12 把 `AshRootConstants`/`RootConstants` cbuffer 作 root constants；Vulkan 编译前把该 block 重写为 `[[vk::push_constant]]` struct 并宏映射成员名（rewrite 需去掉预处理后成员的 const）。Vulkan reflection 同时为普通 uniform block（如 `AshMaterialParameters`）补齐 `ShaderParameterBlockLayout`。同一逻辑 block 双后端 byte_size 允许不同（DX12 保留尾部 padding），高层打包必须以反射 member offset/size 为准。DX12 root signature 把 CBV/SRV/UAV 合并一个 descriptor table、sampler 单独一个 table，`DX12ProgramBindingInfo::descriptorOffset` 记录 table 内偏移以规避 64 DWORD 限制。
+- Debug 构建下 RHI 资源调试名必须下沉到 native GPU 对象：DX12 经 `dx12_set_debug_name()`→`ID3D12Object::SetName()`，Vulkan 经 `VulkanContext::set_resource_name()`；名字来自临时字符串时后端对象必须自持 `std::string` 并使用 owned `c_str()`，不缓存外部裸指针；两函数须容忍空 handle、空串与 validation 未启用。
 
 ## 验证
 

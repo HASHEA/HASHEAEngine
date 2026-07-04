@@ -20,7 +20,7 @@ status: active
 | `tools/render/goldens/<scene>/<backend>.png` | RenderGate golden 基线（当前仅 `sandbox/vulkan.png`、`sandbox/dx12.png`） |
 | `tools/imagediff/AshImageDiff.cpp` | SSIM 图像对比 CLI（独立 vcxproj，产物 `AshImageDiff.exe`） |
 | `scripts/AIDevDoctor.ps1` + `tools/ai-dev/`（rules/templates） | 诊断与验证计划生成（`-Mode Report` / `-Mode ValidatePlan`），规则驱动 |
-| `scripts/InvokeMSBuild.ps1` | MSBuild 调用封装（build_*.bat 使用） |
+| `scripts/InvokeMSBuild.ps1` | MSBuild 调用封装（build_*.bat 使用）；为 MSBuild 子进程重建大小写不敏感的环境变量表、只保留规范 `Path`，修复 `PATH`/`Path` 大小写冲突导致的 MSB6001 |
 | `scripts/SyncRuntimeArtifact.ps1` | PostBuild 运行时产物（DXC/validation dll 等）同步，源缺失即失败 |
 | `scripts/TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` | 两个工具的自测脚本 |
 | `scripts/GetTolaria.ps1` | 按 pin 的版本+SHA256 下载 Tolaria（AGPL 独立知识库应用，vault 指向 `docs/`）安装器到 `tools/tolaria/`（gitignored）；不 vendor 源码，升级只改脚本内版本与 hash |
