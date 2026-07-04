@@ -737,6 +737,12 @@ namespace AshEngine
 			return;
 		}
 
+		// RenderGate（SDD-0001）：抓帧模式隐藏 overlay，FPS 等实时文字会破坏 dump 确定性
+		if (!frameDumpPath.empty())
+		{
+			return;
+		}
+
 		const RendererFrameStats& frame_stats = renderer->get_frame_stats();
 		const bool has_frame_stats = !(frame_stats.frame_width == 0 &&
 			frame_stats.frame_height == 0 &&
