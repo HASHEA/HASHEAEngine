@@ -77,7 +77,7 @@ status: active
 | Document | Area | Status | Accurate |
 | --- | --- | --- | --- |
 | `docs/EngineDeveloperGuide.md` | Engine 分层/构建/RHI | active | 是（本次盘点核对） |
-| `docs/RenderGraphAPISpec.md` | RenderGraph API 契约 | active | 需在 Spec 基线迁移时复核 |
+| `docs/specs/`（22 份模块/feature spec） | 长期现状规格基线 | active | 2026-07-04 建立；`RenderGraphAPISpec.md` 已迁入 `specs/modules/render-graph.md` 并删除 |
 | `docs/EditorDeveloperGuide.md` 等 Editor 系列 | Editor 架构与规则 | active | 未逐一复核 |
 | `docs/superpowers/specs/`（13 份，2026-04~06） | 材质/Deferred/RenderGraph/Shadow/Bloom/体积光等设计文档 | 历史设计文档 | **描述的是设计时点，不保证与当前实现一致**；Spec 基线阶段逐份甄别 |
 | `docs/superpowers/plans/`（17 份） | 历史实现计划 | 已完成/过期 | 仅作历史参考，不应作为现状依据 |

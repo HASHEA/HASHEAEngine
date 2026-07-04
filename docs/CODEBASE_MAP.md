@@ -32,7 +32,7 @@ status: active
 | `project/src/sandbox/` | 验证程序与内置测试（`Tests/SandboxTestRegistry`） | 新 feature 的验证场景 |
 | `product/` | 运行配置、资产、日志、可执行输出 | 配置与资产；`bin64/` 为构建产物 |
 | `scripts/`、`tools/` | 构建/验证脚本与其规则、基线数据 | 工具链改进 |
-| `docs/` | 长期文档；`docs/sdd/` 变更设计文档 | 随代码同步更新 |
+| `docs/` | 长期文档；`docs/specs/` 模块与 feature 现状规格；`docs/sdd/` 变更设计文档 | 随代码同步更新 |
 
 不属于当前实现、默认不动：`KEnginePub/`、`RenderControl/`（外部参考库）、`_BUILD/`、`Intermediate/`（生成物）。
 
@@ -63,7 +63,7 @@ status: active
 | Name | Location | Purpose | Constraints |
 | --- | --- | --- | --- |
 | `DynamicRHI` / `RHIResource` | `engine/Graphics/` | 后端无关的 GPU 接口 | 改动必须双后端等价实现 |
-| `RenderGraph` | `engine/Function/Render/` | 帧级声明式 pass/资源编排 | 契约见 `docs/RenderGraphAPISpec.md`；不管理 buffer/shader/material 生命周期 |
+| `RenderGraph` | `engine/Function/Render/` | 帧级声明式 pass/资源编排 | 契约见 `docs/specs/modules/render-graph.md`；不管理 buffer/shader/material 生命周期 |
 | `SceneRenderConfig` / `scene_config` | Function/Render + scene json | 场景级渲染开关（AO 模式、阴影、Bloom、体积光） | 随帧快照传递，不可跨帧持有 |
 | `ScenePresentationSubsystem` | `engine/Function/` | Scene → 渲染数据的唯一桥 | 见 `docs/ScenePresentationSubsystemGuide.md` |
 | `DebugDrawService` | `engine/Function/` | frame-local 调试绘制（line/box/circle/cone/axes） | tone-map 后叠加，不参与光照 |
@@ -82,7 +82,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 
 | Task | Read first | Usually changes | Required tests |
 | --- | --- | --- | --- |
-| 新增/修改渲染 Pass | `RenderGraphAPISpec.md`、相邻 Pass 实现 | `Function/Render/*Pass*`、`engine/Shaders/`、`SceneRenderer` | `RunRenderGate.bat` + PerfGate Standard |
+| 新增/修改渲染 Pass | 对应 feature spec（`docs/specs/features/`）、`docs/specs/modules/render-graph.md`、相邻 Pass 实现 | `Function/Render/*Pass*`、`engine/Shaders/`、`SceneRenderer` | `RunRenderGate.bat` + PerfGate Standard |
 | 修渲染 bug（banding/闪烁等） | 对应 Pass + shader | 同上，diff 尽量小 | 同上；用 RenderDebugView 定位 |
 | RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate 全矩阵 + validation 开启 |
 | Editor 面板功能 | `EditorDeveloperGuide.md`、`EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |

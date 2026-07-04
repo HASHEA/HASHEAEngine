@@ -1,0 +1,60 @@
+---
+owner: huyizhou
+last_reviewed: 2026-07-04
+status: active
+---
+
+# Module Spec: Base
+
+## 职责与边界
+
+`project/src/engine/Base/` 提供与渲染无关的基础设施：日志、内存分配、窗口与输入、基础数据结构、时间与 CPU profiler、二进制序列化、线程模型、文件访问、ini 配置与服务注册。它不依赖 Graphics/Function/Editor 任何上层模块（`window/Window.h` 仅引用 `Graphics/RHIBackend.h` 的 `Backend` 枚举用于窗口配置）；所有上层模块都可以依赖 Base。
+
+## 目录与关键文件
+
+| 路径 | 内容 |
+| --- | --- |
+| `hlog.h/.cpp` | `LogService`（spdlog 封装）+ `HLogTrace/Info/Warning/Error` 宏 |
+| `hmemory.h/.cpp` | `MemoryService`、`Allocator` 接口、`Ash_New/Ash_New_Shared/Ash_Delete`、`MemoryStatistics` |
+| `window/Window.h`、`window/WindowWin.*` | 窗口抽象 + Windows 实现（内部经 GLFW），`WindowEvent` 事件 |
+| `input/Input.h` | `InputState`：键盘（512 键）/鼠标（8 键）/滚轮的帧内状态机 |
+| `ds/harray.hpp`、`ds/hhash_map.hpp` | `Array/ArrayView`、`FlatHashMap`（自带 allocator 的容器） |
+| `htime.h/.cpp` | tick 计时服务：`time_now` 及 micro/milli/seconds 换算 |
+| `hprofiler.h` | Tracy CPU profile 门面宏 `ASH_PROFILE_*`（无 `TRACY_ENABLE` 时全为 no-op） |
+| `hserialization.h/.cpp` | 可内存映射 blob 序列化：`Blob/BlobHeader`、`RelativePointer/RelativeArray` |
+| `hthreading.h/.cpp` | 线程角色与命令队列：`EngineThreadingConfig`、render/logic/worker 线程 |
+| `hfile.h/.cpp` | `file_read_binary/text`、`file_write_binary`、目录操作 |
+| `IniConfig.h/.cpp` | `IniConfig` ini 读取器 + `resolve_runtime_config_path/trim_ini_string/to_lower_ascii` |
+| `hservice.h`、`hserviceManager.h/.cpp` | `Service` 基类（`ASH_DECLARE_SERVICE`）+ `ServiceManager` 单例注册表 |
+| `hstring.*`、`hcache.*`、`hbit.*`、`hcommandQueue.hpp`、`hassert.h` | `StringView/StringBuffer`、`LRUCache`、位操作、命令队列、断言宏 |
+| `EngineSelfTests.*` | `run_engine_base_self_tests()`，由 `--engine-self-test` 触发 |
+| `ProcessMemoryDiagnostics.*` | 进程内存诊断采样 |
+
+## 公共接口
+
+- 日志：`LogService::instance()` 初始化后使用 `HLogInfo/Warning/Error/Trace` 宏；引擎/应用双 logger 由 `ASH_ENGINE` 宏区分。
+- 内存：所有引擎堆对象经 `Ash_New<T>(allocator, args...)` / `Ash_Delete` 分配释放；`Allocator` 为抽象接口（`eHeap/eStack/eLinear`）；默认走 `MemoryService::instance()->get_system_allocator()`。
+- 窗口：`Window::create()` 工厂 + `init(WindowConfig)`；事件用 `poll_event(WindowEvent&)` 逐个取出，类型见 `WindowEventType`（Resize/Key/Mouse/CloseRequested 等）。
+- 输入：`InputState::begin_frame()` 每帧清空瞬时状态，`set_key_state/set_mouse_button_state` 由窗口事件驱动；消费方查询 down/pressed/released。
+- 时间：`time_service_init/shutdown` 启停一次，`time_now()` 返回 tick，配套换算函数。
+- 线程：`initialize_threading(EngineThreadingConfig)`；`register_current_thread_role` + `is_in_render/logic/worker_thread` 判定；跨线程投递用 `enqueue_render_command` / `pump_render_commands` / `flush_render_commands`；后台任务用 `dispatch_background_task`。
+- 配置：`IniConfig::load` + `has_value/get_string/get_bool/try_get_bool`；路径经 `resolve_runtime_config_path` 解析。
+- 服务：`Service` 子类声明 `static constexpr const char* k_name` 与 `ASH_DECLARE_SERVICE`；`ServiceManager::get<T>()` 按 `k_name` 哈希惰性注册并返回单例。
+
+## 约束与不变式
+
+- Base 不得反向依赖 Graphics/Function/Editor（唯一例外是 `RHIBackend.h` 的纯枚举头）。
+- `LogService` 与 `MemoryService` 必须最先初始化（`Application::initialize` 的第一步），其余模块假定二者可用。
+- 引擎对象生命周期由 `Ash_New/Ash_Delete` 管理以纳入内存统计；不要混用裸 `new/delete` 分配引擎长生命周期对象。
+- `hprofiler.h` 只应在 `.cpp` 中 include，避免 Tracy 头污染公共头。
+- 渲染命令队列只能由 render 线程 pump；`InputState` 每线程一份（logic 线程经快照同步，见 application spec）。
+
+## 验证
+
+- 构建 + `run.bat all Debug --smoke-test-seconds=5`（全矩阵 smoke，Base 被所有目标依赖）。
+- `run.bat sandbox vulkan Debug --engine-self-test` 跑 Base 自测（容器/序列化等）。
+- 改动波及渲染路径（内存/线程）时按 `docs/VERIFY.md` 追加 `RunRenderGate.bat` 与 PerfGate Standard。
+
+## 历史
+
+无。

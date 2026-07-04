@@ -9,6 +9,7 @@ Engine（DLL）分 Base / Graphics / Function 三层，Editor 与 Sandbox 是其
 
 - 仓库导航：`docs/CODEBASE_MAP.md`（入口、目录、流程、依赖方向、常见任务）
 - 验证要求：`docs/VERIFY.md`（按变更类型的验证矩阵，改完必须执行）
+- 现状规格：`docs/specs/`（模块 spec + feature spec，动某模块/feature 前读对应 spec）
 - 文档路由：`docs/README.md`；Engine 细节 `docs/EngineDeveloperGuide.md`；Editor 细节 `docs/EditorDeveloperGuide.md`
 
 ## Commands
@@ -41,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mod
 | S2 | 跨模块、RenderGraph API、RHI 接口、材质/shader 绑定约定、场景数据模型 | 标准 SDD，**经用户批准后才能动代码** |
 | S3 | 架构调整（新后端、线程模型、资产管线重构） | 标准 SDD + ADR + 分阶段计划 |
 
-模板：`docs/sdd/TEMPLATE.md`。SDD 完成后其结论回写对应长期 spec，SDD 本身归档。
+模板：`docs/sdd/TEMPLATE.md`。SDD 完成后其结论回写对应长期 spec（`docs/specs/`），SDD 本身归档。
 **禁止从一句聊天需求直接跳到大范围实现。**
 
 ## Change rules

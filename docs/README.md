@@ -10,8 +10,10 @@
   - 仓库导航：入口、目录职责、核心流程、依赖方向、常见任务
 - `docs/VERIFY.md`
   - 按变更类型的验证矩阵，改完必须执行
+- `docs/specs/`
+  - 长期现状规格：模块 spec + feature spec；动某模块/feature 前先读对应 spec，索引见 `docs/specs/README.md`
 - `docs/sdd/`
-  - 变更设计文档（SDD），S1 起需要；模板见 `docs/sdd/TEMPLATE.md`
+  - 变更设计文档（SDD），S1 起需要；模板见 `docs/sdd/TEMPLATE.md`；Done 后结论回写 `docs/specs/`
 - `docs/AI_CODEBASE_INVENTORY.md`
   - 一次性盘点快照，仅大盘点时更新
 
@@ -64,7 +66,7 @@
 - `docs/EngineDeveloperGuide.md`
 - `docs/EngineInterfaceRequirements.md`
 - `docs/EngineRuntimeRequirements.md`
-- `docs/RenderGraphAPISpec.md`
+- `docs/specs/modules/render-graph.md`（RenderGraph API 契约，原 `docs/RenderGraphAPISpec.md` 已迁入）
 - `docs/EngineUIContext.md`
 
 ## 4. 维护规则

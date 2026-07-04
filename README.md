@@ -400,7 +400,7 @@ RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 - Engine 开发指南：[`docs/EngineDeveloperGuide.md`](docs/EngineDeveloperGuide.md)
 - Editor 开发指南：[`docs/EditorDeveloperGuide.md`](docs/EditorDeveloperGuide.md)
 - Scene Presentation 指南：[`docs/ScenePresentationSubsystemGuide.md`](docs/ScenePresentationSubsystemGuide.md)
-- RenderGraph 使用教程与 API Spec：[`docs/RenderGraphAPISpec.md`](docs/RenderGraphAPISpec.md)
+- RenderGraph API 契约：[`docs/specs/modules/render-graph.md`](docs/specs/modules/render-graph.md)
 - Engine UIContext：[`docs/EngineUIContext.md`](docs/EngineUIContext.md)
 - Editor UI 分层提案：[`docs/EditorUIFacadeProposal.md`](docs/EditorUIFacadeProposal.md)
 - PerfGate 性能门禁使用说明：[`docs/PerfGateUsageGuide.md`](docs/PerfGateUsageGuide.md)
