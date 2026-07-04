@@ -15,7 +15,7 @@ status: active
 | feature spec | `docs/specs/features/` | 长期，随代码演进 | 单个功能的行为、配置、实现要点、验证 |
 | 变更 SDD | `docs/sdd/` | 一次性 | 驱动一次 S1+ 变更；Done 后把结论回写到对应 spec |
 
-历史设计/实施文档在 `docs/superpowers/`，**只作归档，不可当现状依据**；现状以本目录 spec 与代码为准，冲突时以代码为准并修 spec。
+历史设计/实施文档（原 `docs/superpowers/`）已于 2026-07-04 删除，考古走 git 历史；spec「历史」节中的原路径仅作 citation。现状以本目录 spec 与代码为准，冲突时以代码为准并修 spec。
 
 ## 维护规则
 
@@ -82,7 +82,7 @@ status: active
 <改本模块需要跑的命令（对齐 docs/VERIFY.md 变更矩阵）>
 
 ## 历史
-<相关 SDD / superpowers 归档链接；可为空>
+<相关 SDD / 历史提交链接；可为空>
 ```
 
 ### Feature spec 模板
@@ -105,5 +105,5 @@ status: active
 <RenderGate / RenderDebugView / 专项验证方法>
 
 ## 历史
-<来源 SDD / superpowers 归档链接>
+<来源 SDD / 历史提交链接>
 ```
