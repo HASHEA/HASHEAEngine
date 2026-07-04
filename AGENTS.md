@@ -70,3 +70,6 @@ PerfGate `FAIL` 禁止提交；`WARN` 需写明判断理由。渲染改动必须
 | `tools/perf/perf_gate_baselines.json` | 仅在用户确认新水位后经 `-BlessBaseline` 更新 |
 | `tools/render/goldens/` | 仅在用户确认画面正确后经 `RunRenderGate.bat -BlessGolden` 更新 |
 | `docs/` 长期文档 | 代码行为变化必须同步更新对应文档，过期文档标记 superseded |
+
+其中两条由 hook 机械执行（`.claude/settings.json` → `scripts/hooks/PreToolUseGuard.py`）：
+直接编辑基线文件（goldens / perf baselines）被**拒绝**，必须走 bless 流程；编辑 `Graphics/` 或 `RenderGraph*` 会弹**用户确认**（对应 S2 需批准 SDD）。其余规则不设 hook，靠本文档约束。

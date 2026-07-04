@@ -10,7 +10,8 @@
 
 # ignore directories
 .vscode
-.claude
+.claude/*
+!.claude/settings.json
 bin
 bin-int
 !project/thirdparty/dxc/bin/
