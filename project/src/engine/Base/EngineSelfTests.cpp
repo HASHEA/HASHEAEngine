@@ -4943,6 +4943,13 @@ namespace AshEngine
 
 			std::vector<DebugDrawLine> lines{};
 			debug_draw.snapshot_lines(lines);
+			if (!lines.empty())
+			{
+				return report_self_test_failure("DebugDrawService frame lines", "lines were visible to snapshot before commit_frame");
+			}
+
+			debug_draw.commit_frame();
+			debug_draw.snapshot_lines(lines);
 			if (lines.size() != 1u ||
 				lines.front().start != glm::vec3(0.0f, 0.0f, 0.0f) ||
 				lines.front().end != glm::vec3(1.0f, 0.0f, 0.0f) ||
@@ -4979,6 +4986,7 @@ namespace AshEngine
 				30.0f,
 				glm::vec4(1.0f, 1.0f, 0.0f, 1.0f),
 				8);
+			debug_draw.commit_frame();
 
 			std::vector<DebugDrawLine> lines{};
 			debug_draw.snapshot_lines(lines);

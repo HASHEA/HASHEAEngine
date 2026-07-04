@@ -485,6 +485,7 @@ namespace AshEngine
 		{
 			_on_update();
 			_run_scene_presentation_update_phase();
+			debugDrawService.commit_frame();
 		}
 	}
 	auto Application::_render_frame() -> void
@@ -638,11 +639,13 @@ namespace AshEngine
 			_consume_logic_input_snapshot();
 			_on_logic_startup();
 			_run_scene_presentation_update_phase();
+			debugDrawService.commit_frame();
 			while (!_should_logic_exit())
 			{
 				_consume_logic_input_snapshot();
 				_on_logic_update();
 				_run_scene_presentation_update_phase();
+				debugDrawService.commit_frame();
 				if (threadingConfig.logic_thread_idle_sleep_ms > 0)
 				{
 					std::this_thread::sleep_for(std::chrono::milliseconds(threadingConfig.logic_thread_idle_sleep_ms));
@@ -812,7 +815,6 @@ namespace AshEngine
 			_on_gui();
 			renderer->end_frame();
 			scenePresentation.complete_gpu_pick_readbacks();
-			debugDrawService.clear_frame();
 		}
 	}
 	auto Application::_run_scene_presentation_update_phase() -> void

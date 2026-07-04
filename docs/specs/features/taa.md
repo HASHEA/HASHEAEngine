@@ -33,6 +33,7 @@ frame-dump 模式（`Application::get_frame_dump_path()` 非空）**强制 jitte
 
 - 依赖 GBuffer D 运动向量（alpha 通道为 temporal 有效位）；无运动向量的绘制不受历史累积保护。
 - 历史越界 / temporal 无效时回退当前帧色。
+- **DX12 后端交互态整画面抖动**（2026-07-05 SDD-0002 验证期发现，未定位根因）：TAA 开启时 DX12 相机静止画面可见抖动，Vulkan 同场景无此现象；纯基线构建可复现，与 DebugDraw 改动无关。待单独立案排查（怀疑方向：jitter 补偿 / 运动向量在 DX12 路径的差异）。
 
 ## 验证
 

@@ -137,6 +137,7 @@ namespace AshEngine
 		PostProcessToneMapPass m_post_process_tone_map_pass{};
 		RenderDebugView m_render_debug_view{};
 		std::unique_ptr<GraphicsProgram> m_debug_draw_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_debug_draw_thick_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_scene_overlay_depth_test_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_scene_overlay_depth_test_no_write_program = nullptr;
 		// editor begin 修改原因：P2 GPU ID buffer picking

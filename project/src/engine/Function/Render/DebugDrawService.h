@@ -51,6 +51,7 @@ namespace AshEngine
 			float thickness = 1.0f);
 
 		void snapshot_lines(std::vector<DebugDrawLine>& out_lines) const;
+		void commit_frame();
 		void clear_frame();
 		size_t get_line_count() const;
 		bool empty() const;
@@ -60,6 +61,9 @@ namespace AshEngine
 
 	private:
 		mutable std::mutex m_mutex{};
+		// 双缓冲：draw_* 写入 pending，logic tick 末尾 commit 原子发布；
+		// render 线程只 snapshot 已发布帧，避免"清空后、重提交前"被采样成空帧导致闪烁。
+		std::vector<DebugDrawLine> m_pending_lines{};
 		std::vector<DebugDrawLine> m_lines{};
 	};
 }

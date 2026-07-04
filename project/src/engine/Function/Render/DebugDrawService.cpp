@@ -177,9 +177,17 @@ namespace AshEngine
 		out_lines = m_lines;
 	}
 
+	void DebugDrawService::commit_frame()
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		m_lines.swap(m_pending_lines);
+		m_pending_lines.clear();
+	}
+
 	void DebugDrawService::clear_frame()
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
+		m_pending_lines.clear();
 		m_lines.clear();
 	}
 
@@ -196,6 +204,6 @@ namespace AshEngine
 
 	void DebugDrawService::append_line_locked(const DebugDrawLine& line)
 	{
-		m_lines.push_back(line);
+		m_pending_lines.push_back(line);
 	}
 }

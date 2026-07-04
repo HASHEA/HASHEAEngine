@@ -44,11 +44,20 @@ namespace AshEngine
 			glm::vec4 color{ 1.0f };
 		};
 
+		struct DebugDrawThickVertex
+		{
+			glm::vec3 position_ws{ 0.0f };
+			glm::vec3 other_position_ws{ 0.0f };
+			glm::vec2 expand{ 0.0f };
+			glm::vec4 color{ 1.0f };
+		};
+
 		struct DebugDrawRootConstants
 		{
 			glm::mat4 view_projection{ 1.0f };
 			float depth_bias = 0.0f;
-			glm::vec3 padding{ 0.0f };
+			glm::vec2 viewport_size{ 0.0f };
+			float padding = 0.0f;
 		};
 
 		static_assert(sizeof(DebugDrawRootConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
@@ -172,6 +181,56 @@ namespace AshEngine
 			return RHI::make_vertex_input_layout(streams, attributes);
 		}
 
+		static auto make_debug_draw_thick_vertex_input_layout() -> RHI::VertexInputCreation
+		{
+			constexpr std::array<RHI::VertexStreamDesc, 1> streams = {
+				RHI::VertexStreamDesc{
+					0,
+					static_cast<uint16_t>(sizeof(DebugDrawThickVertex)),
+					RHI::AshVertexInputRate::PerVertex
+				}
+			};
+			constexpr std::array<RHI::VertexAttributeDesc, 4> attributes = {
+				RHI::VertexAttributeDesc{
+					0,
+					0,
+					static_cast<uint32_t>(offsetof(DebugDrawThickVertex, position_ws)),
+					RHI::AshVertexComponentFormat::Float3,
+					RHI::AshVertexSemantic::Position,
+					0,
+					"POSITION"
+				},
+				RHI::VertexAttributeDesc{
+					1,
+					0,
+					static_cast<uint32_t>(offsetof(DebugDrawThickVertex, other_position_ws)),
+					RHI::AshVertexComponentFormat::Float3,
+					RHI::AshVertexSemantic::TexCoord0,
+					0,
+					"TEXCOORD"
+				},
+				RHI::VertexAttributeDesc{
+					2,
+					0,
+					static_cast<uint32_t>(offsetof(DebugDrawThickVertex, expand)),
+					RHI::AshVertexComponentFormat::Float2,
+					RHI::AshVertexSemantic::TexCoord1,
+					1,
+					"TEXCOORD"
+				},
+				RHI::VertexAttributeDesc{
+					3,
+					0,
+					static_cast<uint32_t>(offsetof(DebugDrawThickVertex, color)),
+					RHI::AshVertexComponentFormat::Float4,
+					RHI::AshVertexSemantic::Color0,
+					0,
+					"COLOR"
+				}
+			};
+			return RHI::make_vertex_input_layout(streams, attributes);
+		}
+
 		static auto build_debug_draw_shader_source_hash() -> uint64_t
 		{
 			uint64_t hash_value = 0;
@@ -210,6 +269,28 @@ namespace AshEngine
 		static auto make_debug_draw_program_desc() -> GraphicsProgramDesc
 		{
 			return make_debug_draw_program_desc(false, false, RenderBlendMode::Opaque);
+		}
+
+		static auto make_debug_draw_thick_program_desc() -> GraphicsProgramDesc
+		{
+			GraphicsProgramState state{};
+			state.cull_mode = RenderCullMode::None;
+			state.primitive_topology = RenderPrimitiveTopology::TriangleList;
+			state.depth_test = false;
+			state.depth_write = false;
+			state.depth_compare = RenderCompareOp::LessEqual;
+			state.blend_mode = RenderBlendMode::Opaque;
+
+			GraphicsProgramDesc desc{};
+			desc.shader_path = k_debug_draw_shader_path;
+			desc.base_shader_path = k_debug_draw_shader_path;
+			desc.vertex_entry = "VSThickMain";
+			desc.fragment_entry = "PSMain";
+			desc.source_hash = build_debug_draw_shader_source_hash();
+			desc.name = "SceneDebugDrawOverlayThick";
+			desc.state = state;
+			desc.vertex_input = make_debug_draw_thick_vertex_input_layout();
+			return desc;
 		}
 
 		static void attach_debug_draw_root_constants(
@@ -331,36 +412,47 @@ namespace AshEngine
 			return batches;
 		}
 
-		static auto make_debug_draw_vertices(const std::vector<DebugDrawLine>& lines) -> std::vector<DebugDrawVertex>
+		static auto make_debug_draw_vertices(const std::vector<DebugDrawLine>& lines) -> std::vector<DebugDrawThickVertex>
 		{
-			std::vector<DebugDrawVertex> vertices{};
-			vertices.reserve(lines.size() * 2u);
+			std::vector<DebugDrawThickVertex> vertices{};
+			vertices.reserve(lines.size() * 6u);
 			for (const DebugDrawLine& line : lines)
 			{
-				vertices.push_back({ line.start, line.color });
-				vertices.push_back({ line.end, line.color });
+				const float thickness = std::max(line.thickness, 1.0f);
+				const DebugDrawThickVertex start_minus{ line.start, line.end, { -1.0f, thickness }, line.color };
+				const DebugDrawThickVertex start_plus{ line.start, line.end, { 1.0f, thickness }, line.color };
+				// 对端顶点在 VS 里算出的屏幕方向相反，side 取反才落在四边形同一侧
+				const DebugDrawThickVertex end_plus{ line.end, line.start, { -1.0f, thickness }, line.color };
+				const DebugDrawThickVertex end_minus{ line.end, line.start, { 1.0f, thickness }, line.color };
+				vertices.push_back(start_minus);
+				vertices.push_back(start_plus);
+				vertices.push_back(end_plus);
+				vertices.push_back(start_minus);
+				vertices.push_back(end_plus);
+				vertices.push_back(end_minus);
 			}
 			return vertices;
 		}
 
+		template <typename VertexType>
 		static auto ensure_debug_draw_vertex_buffer(
 			Renderer& renderer,
 			std::shared_ptr<VertexBuffer>& vertex_buffer,
 			uint32_t& vertex_capacity,
-			const std::vector<DebugDrawVertex>& vertices) -> bool
+			const std::vector<VertexType>& vertices) -> bool
 		{
 			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 			ASH_PROCESS_ERROR(!vertices.empty());
 			ASH_PROCESS_ERROR(vertices.size() <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
 			const uint32_t vertex_count = static_cast<uint32_t>(vertices.size());
-			const size_t required_size = vertices.size() * sizeof(DebugDrawVertex);
+			const size_t required_size = vertices.size() * sizeof(VertexType);
 			ASH_PROCESS_ERROR(required_size <= static_cast<size_t>(std::numeric_limits<uint32_t>::max()));
 
 			if (!vertex_buffer || vertex_capacity < vertex_count)
 			{
 				VertexBufferDesc vertex_desc{};
 				vertex_desc.size = static_cast<uint32_t>(required_size);
-				vertex_desc.stride = static_cast<uint32_t>(sizeof(DebugDrawVertex));
+				vertex_desc.stride = static_cast<uint32_t>(sizeof(VertexType));
 				vertex_desc.cpu_write = true;
 				vertex_desc.initial_data = vertices.data();
 				vertex_desc.name = "SceneDebugDrawLineVB";
@@ -625,6 +717,8 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_post_process_tone_map_pass.initialize(m_renderer));
 		m_debug_draw_program = m_renderer->create_graphics_program(make_debug_draw_program_desc());
 		ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+		m_debug_draw_thick_program = m_renderer->create_graphics_program(make_debug_draw_thick_program_desc());
+		ASH_PROCESS_ERROR(m_debug_draw_thick_program != nullptr);
 		m_scene_overlay_depth_test_program =
 			m_renderer->create_graphics_program(make_debug_draw_program_desc(true, true, RenderBlendMode::Opaque));
 		ASH_PROCESS_ERROR(m_scene_overlay_depth_test_program != nullptr);
@@ -643,6 +737,7 @@ namespace AshEngine
 		m_debug_draw_vertex_buffer.reset();
 		m_scene_overlay_vertex_buffer.reset();
 		m_debug_draw_program.reset();
+		m_debug_draw_thick_program.reset();
 		m_scene_overlay_depth_test_program.reset();
 		m_scene_overlay_depth_test_no_write_program.reset();
 		m_entity_pick_program.reset();
@@ -1638,7 +1733,7 @@ namespace AshEngine
 
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(debug_lines->size()));
 		ASH_PROFILE_PLOT("Scene/DebugDrawLines", static_cast<int64_t>(debug_lines->size()));
-		ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+		ASH_PROCESS_ERROR(m_debug_draw_thick_program != nullptr);
 		ASH_PROCESS_ERROR(output_target);
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
@@ -1655,11 +1750,11 @@ namespace AshEngine
 				ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(debug_lines->size()));
 				ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 				ASH_PROCESS_ERROR(m_renderer != nullptr);
-				ASH_PROCESS_ERROR(m_debug_draw_program != nullptr);
+				ASH_PROCESS_ERROR(m_debug_draw_thick_program != nullptr);
 				ASH_PROCESS_ERROR(debug_lines && !debug_lines->empty());
-				ASH_PROCESS_ERROR(debug_lines->size() <= static_cast<size_t>(std::numeric_limits<uint32_t>::max() / 2u));
+				ASH_PROCESS_ERROR(debug_lines->size() <= static_cast<size_t>(std::numeric_limits<uint32_t>::max() / 6u));
 
-				const std::vector<DebugDrawVertex> vertices = make_debug_draw_vertices(*debug_lines);
+				const std::vector<DebugDrawThickVertex> vertices = make_debug_draw_vertices(*debug_lines);
 				ASH_PROCESS_ERROR(ensure_debug_draw_vertex_buffer(
 					*m_renderer,
 					m_debug_draw_vertex_buffer,
@@ -1667,13 +1762,28 @@ namespace AshEngine
 					vertices));
 
 				GraphicsDrawDesc draw_desc{};
-				draw_desc.program = m_debug_draw_program.get();
+				draw_desc.program = m_debug_draw_thick_program.get();
 				draw_desc.vertex_buffers.push_back({ 0u, m_debug_draw_vertex_buffer, 0u });
 				draw_desc.vertex_count = static_cast<uint32_t>(vertices.size());
 				draw_desc.instance_count = 1u;
 				DebugDrawRootConstants constants{};
-				constants.view_projection = frame.view_projection;
-				attach_debug_draw_root_constants(draw_desc, m_debug_draw_program.get(), constants);
+				// 本 pass 在 TAA resolve 之后渲染：若沿用带亚像素 jitter 的 view_projection，
+				// 抖动无人补偿会导致线条逐帧闪烁，需还原为无 jitter 投影。
+				glm::mat4 unjittered_projection = frame.projection;
+				unjittered_projection[2][0] -= frame.taa_jitter_ndc.x;
+				unjittered_projection[2][1] -= frame.taa_jitter_ndc.y;
+				constants.view_projection = unjittered_projection * frame.view;
+				ASH_PROCESS_ERROR(view_context.output_target != nullptr);
+				constants.viewport_size = {
+					static_cast<float>(view_context.output_target->get_width()),
+					static_cast<float>(view_context.output_target->get_height()) };
+				if (view_context.has_viewport && view_context.viewport.width > 0 && view_context.viewport.height > 0)
+				{
+					constants.viewport_size = {
+						static_cast<float>(view_context.viewport.width),
+						static_cast<float>(view_context.viewport.height) };
+				}
+				attach_debug_draw_root_constants(draw_desc, m_debug_draw_thick_program.get(), constants);
 				apply_view_context_to_draw_desc(draw_desc, view_context);
 				ASH_PROCESS_ERROR(context.draw(draw_desc));
 				ASH_PROCESS_GUARD_RETURN_END(bResult, false);
