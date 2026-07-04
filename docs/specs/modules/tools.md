@@ -23,6 +23,7 @@ status: active
 | `scripts/InvokeMSBuild.ps1` | MSBuild 调用封装（build_*.bat 使用） |
 | `scripts/SyncRuntimeArtifact.ps1` | PostBuild 运行时产物（DXC/validation dll 等）同步，源缺失即失败 |
 | `scripts/TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` | 两个工具的自测脚本 |
+| `scripts/GetTolaria.ps1` | 按 pin 的版本+SHA256 下载 Tolaria（AGPL 独立知识库应用，vault 指向 `docs/`）安装器到 `tools/tolaria/`（gitignored）；不 vendor 源码，升级只改脚本内版本与 hash |
 | `scripts/hooks/PreToolUseGuard.py` + `.claude/settings.json` | AI 护栏 hook：直改基线文件 deny、S2 路径（Graphics/RenderGraph）ask（规则见 AGENTS.md High-risk paths） |
 | `run.bat` / `run_editor.bat` / `build_editor.bat` / `build_sandbox.bat` / `generate_vs2022.bat` | 运行与构建入口 |
 
