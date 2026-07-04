@@ -2,7 +2,37 @@
 
 ## Status
 
-Implementing（2026-07-03 批准；open questions 决议：golden 分后端各存一份；v1 只用默认 Sandbox 场景）
+Done（2026-07-04 完成；2026-07-03 批准。open questions 决议：golden 分后端各存一份；v1 只用默认 Sandbox 场景）
+
+## Outcome（实施结果）
+
+提交序列：T1 `6ba86cf` → T2 `721f45b` → T3 `f2a2c07` → overlay 修复 `66967cd` → T4 `e8b7e8e` → T5（文档回写）。
+
+### 与原方案的偏差
+
+- 新增 `--rhi=<vulkan|dx12>` 命令行后端覆盖（`EntryPoint.h` + `Application::set_backend_override`）。原计划参照 PerfGate 由脚本改写 Engine.ini，改为 CLI 注入后 gate 不再触碰 ini，无脏状态风险
+- 确定性需要三项抓帧模式专属处理（实施中逐一发现）：
+  1. 固定初始相机位置 (0, 5, 0)（`SandboxStandardScene`）
+  2. 隐藏引擎 overlay——FPS 实时文字曾是最大差异源（max_abs_diff 176）
+  3. 禁用 TAA 亚像素抖动（`SceneRenderer`）——时序抖动曾把同后端噪声底压到 SSIM 0.9887、跨后端 0.968
+- 抓帧需 `--smoke-test=20000`（约 2 分钟/后端）等资产流送完成；原计划的 120 帧会抓到空场景
+
+### 实测数据与阈值
+
+| 对比 | 实测 SSIM | 阈值 |
+| --- | --- | --- |
+| 同后端 vs golden（噪声底） | 0.999996 | 0.995 |
+| Vulkan vs DX12 | 0.999843 | 0.99 |
+
+### 验证计划执行结果
+
+| 验证 | 结果 |
+| --- | --- |
+| dump 确定性 | ✅ 同后端连续两次 SSIM=0.999997（max_abs_diff=3） |
+| 交叉后端 | ✅ SSIM=0.999843 |
+| gate FAIL 表达力 | ✅ TAA jitter 修复前 DX12 回归 0.9887<0.995 真实触发 FAIL（含 heatmap 与非零退出码） |
+| validation 干净 | ✅ 双后端 validation 全开跑 `--dump-frame`，回读路径无报错 |
+| PerfGate 回归 | ✅ Standard 全矩阵 PASS（Sandbox/Editor × Vulkan/DX12，2026-07-04） |
 
 ## Context
 

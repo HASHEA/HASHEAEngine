@@ -17,6 +17,7 @@ status: active
 - Configuration: `product/config/Engine.ini` —— `[RHI] Backend`（Vulkan/DX12）、`[VulkanValidation]`、`[DX12Validation]`、`[RenderDebugView]`
 - Build: `premake5.lua`（workspace 定义 + PostBuild artifact 同步）→ `generate_vs2022.bat` → `build_editor.bat` / `build_sandbox.bat`
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
+- RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；Sandbox 命令行 `--rhi=<vulkan|dx12>`、`--smoke-test=N`、`--dump-frame=<png>`、`--scene=<json>`；golden 在 `tools/render/goldens/<scene>/<backend>.png`，对比工具 `tools/imagediff/`（AshImageDiff）
 
 ## Directories
 
@@ -53,7 +54,7 @@ status: active
 
 ### Backend selection flow
 
-1. 启动读取 `product/config/Engine.ini` `[RHI] Backend`
+1. 启动读取 `product/config/Engine.ini` `[RHI] Backend`；命令行 `--rhi=<vulkan|dx12>` 优先级更高（RenderGate 用它切后端，不动 ini）
 2. `DynamicRHI` 实例化对应后端；Debug/Release 同时编入 Vulkan、DX12、DXC
 3. `run.bat <target> <backend>` 通过临时改写 Engine.ini 完成切换并在退出后恢复
 
@@ -81,9 +82,9 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 
 | Task | Read first | Usually changes | Required tests |
 | --- | --- | --- | --- |
-| 新增/修改渲染 Pass | `RenderGraphAPISpec.md`、相邻 Pass 实现 | `Function/Render/*Pass*`、`engine/Shaders/`、`SceneRenderer` | PerfGate Standard + 双后端视觉确认 |
+| 新增/修改渲染 Pass | `RenderGraphAPISpec.md`、相邻 Pass 实现 | `Function/Render/*Pass*`、`engine/Shaders/`、`SceneRenderer` | `RunRenderGate.bat` + PerfGate Standard |
 | 修渲染 bug（banding/闪烁等） | 对应 Pass + shader | 同上，diff 尽量小 | 同上；用 RenderDebugView 定位 |
-| RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + PerfGate 全矩阵 + validation 开启 |
+| RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate 全矩阵 + validation 开启 |
 | Editor 面板功能 | `EditorDeveloperGuide.md`、`EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
 | 场景/资产能力 | `ScenePresentationSubsystemGuide.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |

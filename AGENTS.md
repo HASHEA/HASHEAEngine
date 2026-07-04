@@ -18,6 +18,7 @@ generate_vs2022.bat                                   :: premake 生成 sln
 build_editor.bat Debug / build_sandbox.bat Debug      :: 构建
 run.bat editor|sandbox|all [vulkan|dx12] [Debug] [--smoke-test-seconds=N]
 RunPerfGate.bat -Profile Standard                     :: 性能门禁（全矩阵）
+RunRenderGate.bat                                     :: 渲染门禁：双后端 golden SSIM 回归 + 跨后端 diff（渲染改动必跑）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mode ValidatePlan
 ```
 
@@ -55,7 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mod
 ## Validation
 
 按 `docs/VERIFY.md` 的变更矩阵执行；交付时说明跑过哪些验证、结果如何。
-PerfGate `FAIL` 禁止提交；`WARN` 需写明判断理由。视觉改动当前需要用户人眼确认（自动化缺口见 VERIFY.md）。
+PerfGate `FAIL` 禁止提交；`WARN` 需写明判断理由。渲染改动必须跑 `RunRenderGate.bat`；FAIL 时先看 heatmap 定位，确属预期画面变化且经用户确认后才允许 `-BlessGolden` 刷新基线。
 
 ## High-risk paths
 
@@ -66,4 +67,5 @@ PerfGate `FAIL` 禁止提交；`WARN` 需写明判断理由。视觉改动当前
 | `product/config/Engine.ini` | 改动需双后端 smoke + 日志确认 |
 | `premake5.lua` 及 PostBuild 链 | 全新构建验证 artifact 同步 |
 | `tools/perf/perf_gate_baselines.json` | 仅在用户确认新水位后经 `-BlessBaseline` 更新 |
+| `tools/render/goldens/` | 仅在用户确认画面正确后经 `RunRenderGate.bat -BlessGolden` 更新 |
 | `docs/` 长期文档 | 代码行为变化必须同步更新对应文档，过期文档标记 superseded |

@@ -8,13 +8,14 @@ status: active
 # Verification
 
 按变更类型给出必须执行的验证。原则：**没有对应验证证据的改动不算完成**。
-当前视觉正确性仍依赖人眼确认——这是已知最大缺口，自动化方案见文末"待自动化"。
+视觉正确性与双后端一致性由 RenderGate 自动回归（`RunRenderGate.bat`，SDD-0001）；RenderDoc 自动取证仍是缺口，见文末"待自动化"。
 
 ## Fast path
 
 ```bat
 build_editor.bat Debug        :: 或 build_sandbox.bat Debug；缺 sln 自动生成
 run.bat sandbox vulkan Debug --smoke-test-seconds=5
+RunRenderGate.bat             :: 渲染改动必跑：双后端 golden SSIM 回归 + 跨后端 diff
 ```
 
 ## Change matrix
@@ -22,8 +23,8 @@ run.bat sandbox vulkan Debug --smoke-test-seconds=5
 | Change | Commands | 补充人工检查 |
 | --- | --- | --- |
 | 纯文档 / 注释 | `git diff --check` | — |
-| 渲染 Pass / shader / 材质 | 构建 + `RunPerfGate.bat -Profile Standard`（覆盖 Sandbox/Editor × Vulkan/DX12） | **双后端视觉确认**（当前人眼；对照 RenderDebugView）；检查 `product/logs` 无 validation 报错 |
-| RHI 接口 / 双后端实现 | 构建 + PerfGate Standard；Engine.ini 开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 smoke | 双后端行为一致性 |
+| 渲染 Pass / shader / 材质 | 构建 + `RunRenderGate.bat`（双后端 golden SSIM 回归 + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard` | 检查 `product/logs` 无 validation 报错；预期内的画面变化经用户确认后 `-BlessGolden` 更新基线 |
+| RHI 接口 / 双后端实现 | 构建 + `RunRenderGate.bat` + PerfGate Standard；Engine.ini 开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 smoke | 跨后端 diff FAIL 视同 bug |
 | RenderGraph 核心（compile/barrier/lifetime） | 同 RHI 级别 | 关注 barrier/lifetime 相关 validation 输出 |
 | Scene / Asset / Application 生命周期 | 构建 + `run.bat all Debug --smoke-test-seconds=5`（全矩阵 smoke） | Editor 打开默认场景操作一遍 |
 | Editor 面板 / UI | 构建 + `run.bat editor` 手动过一遍改动路径 | 面板打开、交互、无报错日志 |
@@ -38,8 +39,15 @@ run.bat sandbox vulkan Debug --smoke-test-seconds=5
 
 - Runtime: Windows x64，VS2022 工具链，仓库根有 `premake5.exe`
 - 工作目录: 可执行程序自动重置到仓库根；脚本假定从仓库根调用
-- 报告输出: `Intermediate/test-reports/`（perf-gate、ai-dev），本地生成物不提交
-- 基线: `tools/perf/perf_gate_baselines.json`；确认新性能水位后 `-BlessBaseline` 更新
+- 报告输出: `Intermediate/test-reports/`（perf-gate、render-gate、ai-dev），本地生成物不提交
+- 基线: 性能 `tools/perf/perf_gate_baselines.json`（`-BlessBaseline` 更新）；渲染 golden `tools/render/goldens/<scene>/<backend>.png`（`RunRenderGate.bat -BlessGolden` 更新，仅限用户确认画面正确后）
+
+## RenderGate（渲染回归门禁）
+
+- 机制：Sandbox `--rhi=<backend> --smoke-test=20000 --dump-frame=<png>` 抓最后一帧 → `AshImageDiff` 与 golden 做 SSIM 对比；另做 Vulkan vs DX12 跨后端 diff
+- 阈值：golden 回归 0.995（实测同后端噪声底 0.999996）；跨后端 0.99（实测 0.999843）
+- 确定性保证：抓帧模式固定初始相机 (0, 5, 0)、隐藏引擎 overlay、禁用 TAA 亚像素抖动；抓帧需 20000 帧（约 2 分钟/后端）等资产流送完成
+- FAIL 处理：看报告目录里的 heatmap 定位差异区域；确属预期改动才允许 `-BlessGolden`
 
 ## Failure handling
 
@@ -53,8 +61,7 @@ run.bat sandbox vulkan Debug --smoke-test-seconds=5
 
 | 缺口 | 现状 | 目标 |
 | --- | --- | --- |
-| 视觉正确性 | 人眼确认 | headless 渲染 N 帧 → dump 截图 → golden image（SSIM）回归 |
-| 双后端一致性 | 人工分别跑、肉眼对比 | 同 scene 双后端自动渲帧 + 感知 diff，不一致即 bug |
+| ~~视觉正确性~~ | ✅ RenderGate golden SSIM 回归（SDD-0001） | — |
+| ~~双后端一致性~~ | ✅ RenderGate 跨后端 diff（SDD-0001） | — |
 | 渲染 bug 取证 | 手动开 RenderDoc | headless 自动出 capture，供 AI 经 RenderDoc MCP 分析 |
-
-这三项落地后，上表中所有"人工检查"列应逐步替换为对应自动命令。
+| RenderGate 场景覆盖 | 仅默认 Sandbox 场景 | 多场景 golden 矩阵（不同光照/后处理组合） |
