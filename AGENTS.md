@@ -12,6 +12,17 @@ Engine（DLL）分 Base / Graphics / Function 三层，Editor 与 Sandbox 是其
 - 现状规格：`docs/specs/`（模块 spec + feature spec，动某模块/feature 前读对应 spec）
 - 文档路由：`docs/README.md`；Engine 细节 `docs/EngineDeveloperGuide.md`；Editor 细节 `docs/EditorDeveloperGuide.md`
 
+## Workflow
+
+任务 → 定级 → 读 spec → (S1+) SDD → 实现 → 验证 → 回写：
+
+1. 按下方 SDD rules 表给变更定风险级（S0-S3），级别决定仪式量
+2. 读 `docs/specs/` 对应模块/feature spec，用 `docs/CODEBASE_MAP.md` 定位代码
+3. S1 写 Mini SDD；S2/S3 写标准 SDD 并**等用户批准**后才动代码
+4. 实现：diff 小而聚焦（hook 会拦基线直改、对 Graphics/RenderGraph 编辑弹确认）
+5. 按 `docs/VERIFY.md` 变更矩阵验证；渲染改动必跑 `RunRenderGate.bat`
+6. 行为/接口/配置变化在同一提交更新对应 spec；SDD Done 后结论回写 spec、SDD 归档
+
 ## Commands
 
 ```bat
