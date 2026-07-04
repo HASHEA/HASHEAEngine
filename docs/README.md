@@ -21,7 +21,7 @@
   - `docs/specs/modules/`（base / graphics / render / render-graph / scene / asset / application）
 - Editor 任务：
   - `docs/specs/modules/editor.md`（架构边界与不变式）
-  - `docs/EditorCodeStyleGuide.md`（代码规范）
+  - `docs/editor/EditorCodeStyleGuide.md`（代码规范）
 - 工具与门禁任务：
   - `docs/specs/modules/tools.md`
   - `docs/PerfGateUsageGuide.md`、`docs/AIDevDoctor.md`

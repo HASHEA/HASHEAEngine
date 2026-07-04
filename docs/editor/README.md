@@ -5,7 +5,7 @@
 ## 1. 阅读顺序
 
 1. `docs/specs/modules/editor.md` —— 架构边界、单一真源不变式、改动定位与生命周期约束、冻结快捷键
-2. `docs/EditorCodeStyleGuide.md` —— 改代码时直接执行的规范
+2. `docs/editor/EditorCodeStyleGuide.md` —— 改代码时直接执行的规范
 
 ## 2. 相关规格
 
