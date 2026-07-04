@@ -8,7 +8,7 @@
     },
     {
       "path_regex": "^project/src/editor/",
-      "docs": [ "README.md", "docs/EditorDeveloperGuide.md" ],
+      "docs": [ "README.md", "docs/specs/modules/editor.md" ],
       "reason": "Editor behavior or workflow changes must be reflected in Editor documentation."
     },
     {

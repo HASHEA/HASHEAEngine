@@ -19,13 +19,9 @@
 
 - Engine 任务：
   - `docs/specs/modules/`（base / graphics / render / render-graph / scene / asset / application）
-  - `docs/EngineUIContext.md`（UIContext 能力细节）
 - Editor 任务：
   - `docs/specs/modules/editor.md`（架构边界与不变式）
-  - `docs/EditorDeveloperGuide.md`（开发指引）
-  - `docs/EditorFileResponsibilities.md`（逐文件职责）
   - `docs/EditorCodeStyleGuide.md`（代码规范）
-  - `docs/EditorContributorGuide.md`（范围、验证、交付）
 - 工具与门禁任务：
   - `docs/specs/modules/tools.md`
   - `docs/PerfGateUsageGuide.md`、`docs/AIDevDoctor.md`

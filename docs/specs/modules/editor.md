@@ -8,7 +8,7 @@ status: active
 
 ## 职责与边界
 
-编辑器壳（`project/src/editor/`）：面板化 UI、选择/命令/undo-redo、场景编辑工作流、Gizmo、资产浏览。管编辑交互与编辑器状态；不管引擎运行时逻辑（Application/Scene/Render 属 engine），也不直接持有渲染资源——场景画面经 `ScenePresentationSubsystem` 离屏输出 + `UIContext` surface 显示。开发指引见 `docs/EditorDeveloperGuide.md`，逐文件职责见 `docs/EditorFileResponsibilities.md`（均以代码为准）。
+编辑器壳（`project/src/editor/`）：面板化 UI、选择/命令/undo-redo、场景编辑工作流、Gizmo、资产浏览。管编辑交互与编辑器状态；不管引擎运行时逻辑（Application/Scene/Render 属 engine），也不直接持有渲染资源——场景画面经 `ScenePresentationSubsystem` 离屏输出 + `UIContext` surface 显示。代码风格见 `docs/EditorCodeStyleGuide.md`。
 
 ## 目录与关键文件
 
@@ -40,6 +40,9 @@ status: active
 - 稳定标识：action/panel/viewport 的 id 与 drag payload type 是持久化/交互契约，不得随意改名。
 - 冻结快捷键（改动需用户确认）：Ctrl+N / Ctrl+R / Ctrl+S / Ctrl+Shift+R / Ctrl+Shift+A / Ctrl+Alt+A / F2 / Ctrl+Shift+P / Delete / Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / F5，AssetBrowser 内容区 Enter/Backspace。
 - 重构三原则：按面板/服务纵向深拆、不做横切层；`*Support` 文件只放无状态自由函数；主文件只做协调不塞业务。
+- 改动定位：新功能先找最贴近的 panel/service/app/shell 文件落点，不默认塞 `EditorApplicationImpl.cpp`；panel 管 UI 与用户意图、service 管领域状态、app 管装配与生命周期、shell 管菜单/dock/状态栏，只在本层改。
+- Editor 任务需要改 engine 侧代码时，仅限稳定接口/通用能力，且每处包裹 `// editor begin 修改原因：...` / `// editor end` 标记。
+- 生命周期时序：`Editor` 构造函数只保存轻量配置，禁止 `HLog*` 与任何依赖 Engine 运行时的对象；`EditorApplication` 启动必须在 `Application::_on_startup()` 之后；关闭经 `_on_shutdown()` 对称执行，析构只做幂等兜底。
 - 场景画面获取只走 `ScenePresentationSubsystem`（离屏 output + view binding + `get_ui_surface`）；overlay/拾取/统计用其 editor 扩展接口，不得直连渲染器。
 - 依赖方向：Panels → Core/Services/Widgets；Shell 组织 Panels；App 组装一切；Core 不反向依赖上层。
 - `EditorEventBus` 与各 Service 均假定主线程访问。
@@ -53,4 +56,4 @@ status: active
 
 ## 历史
 
-无（早期架构/进度文档在 `docs/Editor*.md`，仅作背景参考）。
+无（早期 Editor 架构/进度/指引文档已删除，考古走 git 历史）。

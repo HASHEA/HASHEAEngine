@@ -85,7 +85,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 | 新增/修改渲染 Pass | 对应 feature spec（`docs/specs/features/`）、`docs/specs/modules/render-graph.md`、相邻 Pass 实现 | `Function/Render/*Pass*`、`engine/Shaders/`、`SceneRenderer` | `RunRenderGate.bat` + PerfGate Standard |
 | 修渲染 bug（banding/闪烁等） | 对应 Pass + shader | 同上，diff 尽量小 | 同上；用 RenderDebugView 定位 |
 | RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate 全矩阵 + validation 开启 |
-| Editor 面板功能 | `EditorDeveloperGuide.md`、`EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
+| Editor 面板功能 | `docs/specs/modules/editor.md`、`EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
 | 场景/资产能力 | `docs/specs/modules/scene.md`、`docs/specs/modules/asset.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |
 

@@ -4,16 +4,13 @@
 
 ## 1. 阅读顺序
 
-1. `docs/specs/modules/editor.md` —— 架构边界、单一真源不变式、冻结快捷键
-2. `docs/EditorDeveloperGuide.md` —— 目录分工、主线结构、验证要求
-3. `docs/EditorCodeStyleGuide.md` —— 改代码时直接执行的规范
-4. 改具体文件前查 `docs/EditorFileResponsibilities.md` 对应条目
-5. 涉及提交、验证、交付时读 `docs/EditorContributorGuide.md`
+1. `docs/specs/modules/editor.md` —— 架构边界、单一真源不变式、改动定位与生命周期约束、冻结快捷键
+2. `docs/EditorCodeStyleGuide.md` —— 改代码时直接执行的规范
 
 ## 2. 相关规格
 
 - 场景画面与视口链路：`docs/specs/modules/scene.md`（ScenePresentationSubsystem）
-- UI 能力边界：`docs/EngineUIContext.md`
+- UI 能力边界：`docs/specs/modules/application.md`（UIContext 节）
 - 变更设计（S1+）：`docs/sdd/`
 
 ## 3. 维护规则

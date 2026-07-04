@@ -62,7 +62,7 @@
       "risk": "high",
       "reason": "Editor code must stay behind Engine Function facades and must not include Graphics internals.",
       "validation": [ "Editor + Vulkan", "Editor + DX12" ],
-      "docs": [ "README.md", "docs/EditorDeveloperGuide.md" ]
+      "docs": [ "README.md", "docs/specs/modules/editor.md" ]
     },
     {
       "name": "build-scripts",
