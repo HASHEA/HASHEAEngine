@@ -84,3 +84,5 @@ PerfGate `FAIL` 禁止提交；`WARN` 需写明判断理由。渲染改动必须
 
 其中两条由 hook 机械执行（`.claude/settings.json` → `scripts/hooks/PreToolUseGuard.py`）：
 直接编辑基线文件（goldens / perf baselines）被**拒绝**，必须走 bless 流程；编辑 `Graphics/` 或 `RenderGraph*` 会弹**用户确认**（对应 S2 需批准 SDD）。其余规则不设 hook，靠本文档约束。
+
+本表的机器可读副本在 `tools/ai-dev/rules/`（path-risk-rules.json / doc-rules.json / change-signal-rules.json，供 AIDevDoctor 使用）；改动本表必须同步这三份规则并跑 `scripts/TestAIDevDoctor.ps1`。
