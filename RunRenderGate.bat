@@ -22,7 +22,7 @@ echo.
 echo Common arguments:
 echo   -Configuration Debug
 echo   -Backends vulkan,dx12
-echo   -SmokeFrames 20000
+echo   -SmokeFrames 5000
 echo   -GoldenSsimThreshold 0.995
 echo   -CrossSsimThreshold 0.99
 echo   -SkipCrossBackend

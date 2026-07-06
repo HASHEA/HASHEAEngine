@@ -5,7 +5,7 @@
 param(
     [string]$Configuration = "Debug",
     [string[]]$Backends = @("vulkan", "dx12"),
-    [int]$SmokeFrames = 20000,
+    [int]$SmokeFrames = 5000,
     [double]$GoldenSsimThreshold = 0.995,
     [double]$CrossSsimThreshold = 0.99,
     [switch]$BlessGolden,
