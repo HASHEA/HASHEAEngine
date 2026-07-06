@@ -154,6 +154,7 @@ namespace AshEngine
 			const VisibleRenderFrame& frame,
 			const std::shared_ptr<RenderTarget>& output_target,
 			const AmbientOcclusionConfig& config,
+			bool scene_textures_sampled_from_downsampled_target,
 			float temporal_blend_override = -1.0f) -> AmbientOcclusionRootConstants
 		{
 			AmbientOcclusionRootConstants constants{};
@@ -167,7 +168,11 @@ namespace AshEngine
 				1.0f / std::max(height, 1.0f)
 			};
 			constants.camera_position_and_flags = glm::vec4(frame.camera_position, frame.reverse_z ? 1.0f : 0.0f);
-			constants.ao_params0 = glm::vec4(config.radius, config.intensity, config.power, static_cast<float>(config.mode));
+			constants.ao_params0 = glm::vec4(
+				config.radius,
+				config.intensity,
+				config.power,
+				scene_textures_sampled_from_downsampled_target ? 1.0f : 0.0f);
 			constants.ao_params1 = glm::vec4(
 				sample_count_for_quality(config.quality),
 				direction_count_for_quality(config.quality),
@@ -468,7 +473,7 @@ namespace AshEngine
 					ASH_PROCESS_ERROR(ao_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 					ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
 						ao_program,
-						make_root_constants(frame, output, m_config),
+						make_root_constants(frame, output, m_config, m_config.half_resolution),
 						view_context)));
 					ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 				}));
@@ -498,7 +503,7 @@ namespace AshEngine
 						ASH_PROCESS_ERROR(m_blur_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 						ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
 							m_blur_program.get(),
-							make_root_constants(frame, output, m_config),
+							make_root_constants(frame, output, m_config, m_config.half_resolution),
 							view_context)));
 						ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 					}));
@@ -583,7 +588,7 @@ namespace AshEngine
 						const float temporal_blend = history_valid ? m_config.temporal_blend : 0.0f;
 						ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
 							m_temporal_program.get(),
-							make_root_constants(frame, output, m_config, temporal_blend),
+							make_root_constants(frame, output, m_config, m_config.half_resolution, temporal_blend),
 							view_context)));
 						m_temporal_history_read_index = write_index;
 						m_temporal_history_valid = true;
@@ -639,7 +644,7 @@ namespace AshEngine
 					ASH_PROCESS_ERROR(m_debug_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 					ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
 						m_debug_program.get(),
-						make_root_constants(frame, output, m_config),
+						make_root_constants(frame, output, m_config, false),
 						view_context)));
 					ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 				}));
