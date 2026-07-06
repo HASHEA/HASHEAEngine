@@ -140,6 +140,12 @@ namespace RHI
 			presentMode = VK_PRESENT_MODE_FIFO_KHR;
 			HLogWarning("none of the required presentModes is supported! use the default presentmode : {} ! ", TYPE_TO_STRING(VK_PRESENT_MODE_FIFO_KHR));
 		}
+		const char* presentModeName =
+			presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" :
+			presentMode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE" :
+			presentMode == VK_PRESENT_MODE_FIFO_KHR ? "FIFO" :
+			presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ? "FIFO_RELAXED" : "OTHER";
+		HLogInfo("VulkanSwapchain: selected present_mode={}.", presentModeName);
 		H_ASSERTLOG((swapChainSupport.capabilities.maxImageCount == 0 || swapChainSupport.capabilities.maxImageCount >= swapchainBufferCount) &&
 			swapChainSupport.capabilities.minImageCount <= swapchainBufferCount, "Unsupported Image Count:{}!", swapchainBufferCount);
 		_recreate_swapchain();

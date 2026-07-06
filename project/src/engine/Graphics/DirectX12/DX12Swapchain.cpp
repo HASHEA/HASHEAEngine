@@ -107,11 +107,9 @@ namespace RHI
 				}
 				if (cfg->pPresentMode[i] == ASH_PRESENT_MODE_MAILBOX_KHR)
 				{
+					// Mailbox must never tear: flip-model sync=0 WITHOUT ALLOW_TEARING,
+					// DXGI replaces the queued frame with the newest complete one (SDD-0003).
 					m_syncInterval = 0;
-					if (tearingSupported)
-					{
-						m_presentFlags = DXGI_PRESENT_ALLOW_TEARING;
-					}
 					selectedPresentMode = cfg->pPresentMode[i];
 					break;
 				}
