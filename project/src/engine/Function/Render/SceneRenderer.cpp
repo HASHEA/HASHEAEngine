@@ -622,6 +622,21 @@ namespace AshEngine
 			}
 		}
 
+		struct TemporalAADebugViewOverlayItem
+		{
+			const char* name;
+			const char* display_name;
+			TemporalAADebugView view;
+		};
+
+		// TAA debug modes are computed encodings: the resolve shader only writes them
+		// when the config asks, so selecting the overlay item must drive the config.
+		static constexpr TemporalAADebugViewOverlayItem k_taa_debug_overlay_items[] = {
+			{ "SceneTemporalAADebugMotionVectors", "Temporal AA Debug: Motion Vectors", TemporalAADebugView::MotionVectors },
+			{ "SceneTemporalAADebugHistoryWeight", "Temporal AA Debug: History Weight", TemporalAADebugView::HistoryWeight },
+			{ "SceneTemporalAADebugVariance", "Temporal AA Debug: Variance", TemporalAADebugView::Variance },
+		};
+
 		static void register_render_debug_item(
 			RenderDebugView& debug_view,
 			const char* name,
@@ -1470,13 +1485,28 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(bloom_outputs.scene_hdr_linear);
 			graph_resources.scene_hdr_linear = bloom_outputs.scene_hdr_linear;
 
+			TemporalAAConfig effective_taa_config = frame.render_config.temporal_aa;
+			{
+				const RenderDebugViewConfig runtime_debug_view_config = get_runtime_render_debug_view_config();
+				if (runtime_debug_view_config.enabled)
+				{
+					for (const TemporalAADebugViewOverlayItem& overlay_item : k_taa_debug_overlay_items)
+					{
+						if (runtime_debug_view_config.selected == overlay_item.name)
+						{
+							effective_taa_config.debug_view = overlay_item.view;
+							break;
+						}
+					}
+				}
+			}
 			const TemporalAAPassOutputs taa_outputs = m_taa_pass.add_passes(
 				graph,
 				frame,
 				graph_resources,
 				graph_resources.scene_hdr_linear,
 				view_context,
-				frame.render_config.temporal_aa);
+				effective_taa_config);
 			ASH_PROCESS_ERROR(taa_outputs.scene_hdr_linear);
 			graph_resources.scene_hdr_linear = taa_outputs.scene_hdr_linear;
 			if (taa_outputs.resolved.is_valid())
@@ -1490,6 +1520,19 @@ namespace AshEngine
 					RenderTextureFormat::RGBA16_SFLOAT,
 					output_width,
 					output_height);
+				for (const TemporalAADebugViewOverlayItem& overlay_item : k_taa_debug_overlay_items)
+				{
+					// Debug values are already display-encoded by the resolve shader.
+					register_render_debug_item(
+						m_render_debug_view,
+						overlay_item.name,
+						overlay_item.display_name,
+						taa_outputs.resolved,
+						RenderDebugVisualization::Color,
+						RenderTextureFormat::RGBA16_SFLOAT,
+						output_width,
+						output_height);
+				}
 			}
 
 			register_render_debug_item(

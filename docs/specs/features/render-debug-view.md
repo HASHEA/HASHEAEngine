@@ -12,6 +12,7 @@ status: active
 - 逐帧动态注册：`SceneRenderer::render_visible_frame` 每帧 `begin_frame()` 清空注册表，随后随各 pass 添加逐个 `register_item()`。注册项示例（name → 可视化）：`SceneOutput`(Color)、`SceneGBufferA..E`（D=MotionVector、E=Normal）、`SceneDepth`(Depth)、`SceneAmbientOcclusionRaw/SceneAmbientOcclusion/SceneAmbientOcclusionTemporal`(AO)、`SceneSunLightShadowMask`/`SceneSunLightShadowCascadeIndex`、`SceneVolumetric*`、`SceneBloom*`、`SceneTemporalAAResolved`（LinearHDR）。
 - 显示 pass：tone map 之后 `RenderDebugView::add_pass` 读运行时配置，`enabled=true` 且 `selected` 命中注册项时，以对应可视化方式全屏覆盖写入输出 target；`selected` 为 `Off`/`None`/`SceneOutput`/空（大小写不敏感）时旁路（`should_bypass_debug_pass`）。
 - 可视化方式 `RenderDebugVisualization` 枚举（每个注册项自带，非用户选择）：`Color` / `LinearHDR` / `Depth` / `Normal` / `MotionVector` / `AO` / `Scalar`。
+- 计算型 feature debug 条目（SDD-0006，TAA 为首个消费者）：`SceneTemporalAADebugMotionVectors` / `SceneTemporalAADebugHistoryWeight` / `SceneTemporalAADebugVariance`。与普通条目不同，这些可视化不是现成中间纹理，而是 resolve shader 按配置写出的编码值——SceneRenderer 检测到 selected 命中时**覆盖当帧 TAA 有效配置的 `debug_view`**（scene JSON 值仍是未选中时的默认），条目纹理指向 `SceneTemporalAAResolved`（Color 直通，值已编码）。debug 输出会经 tone map 进主画面但被 overlay 全屏遮盖；TAA 历史缓冲始终写干净 resolved 色，切换无残留。
 - `draw_ui(UIContext&)`：引擎 overlay 里显示当前 selected 与命中状态；`set_runtime_render_debug_view_config` 可运行时切换。
 
 ## 配置

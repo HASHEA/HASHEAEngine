@@ -40,7 +40,7 @@ frame-dump 模式（`Application::get_frame_dump_path()` 非空）**强制 jitte
 ## 验证
 
 - `RunRenderGate.bat`（同时覆盖抓帧禁 jitter 路径）+ `RunPerfGate.bat -Profile Standard`。
-- RenderDebugView 定位：`SceneGBufferD`（MotionVector 可视化）看运动向量，`SceneTemporalAAResolved`（LinearHDR）看 resolve 结果；scene_config `debug_view` 可切 MotionVectors/HistoryWeight/Variance。
+- RenderDebugView 定位：`SceneGBufferD`（MotionVector 可视化）看运动向量，`SceneTemporalAAResolved`（LinearHDR）看 resolve 结果；TAA 三个 debug 模式经 overlay 条目 `SceneTemporalAADebugMotionVectors/HistoryWeight/Variance` 运行时切换（选中即覆盖当帧配置的 `debug_view`，SDD-0006），scene_config `debug_view` 仍可作静态默认。
 
 ## 历史
 
