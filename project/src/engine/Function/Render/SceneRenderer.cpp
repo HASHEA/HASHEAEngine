@@ -930,6 +930,14 @@ namespace AshEngine
 		// in-pixel location, then the TAA resolve accumulates them. The previous frame's
 		// jitter is needed by the resolve to decouple jitter from the GBuffer motion vectors.
 		const TemporalAAConfig& taa_config = frame.render_config.temporal_aa;
+		if (frame.taa_enabled)
+		{
+			// 同一 VisibleRenderFrame 可能被重复渲染（prepare/submit 节奏不同步，SDD-0004）：
+			// 先撤销上次施加的 jitter，防止投影矩阵跨调用累加。
+			frame.projection[2][0] -= frame.taa_jitter_ndc.x;
+			frame.projection[2][1] -= frame.taa_jitter_ndc.y;
+			frame.view_projection = frame.projection * frame.view;
+		}
 		frame.taa_enabled = false;
 		frame.taa_jitter_ndc = glm::vec2(0.0f, 0.0f);
 		frame.taa_previous_jitter_ndc = glm::vec2(0.0f, 0.0f);

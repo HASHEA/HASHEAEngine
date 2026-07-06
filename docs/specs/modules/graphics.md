@@ -44,6 +44,7 @@ status: active
 - 跨后端 API 差异（Y 翻转/winding、资源状态模型）必须收口在单点（如 `RasterizerConvention.h`、各后端 ResourceTracker），不得散落到上层。
 - 后端对象经 `Ash_New` 分配；validation/debug-layer 报错视同 bug，禁止靠关闭 validation 绕过。
 - readback API 仅限验证/调试路径调用，不得进入常规帧热路径。
+- Present mode 语义双后端必须一致（`AshPresentMode` 为准）：FIFO=垂直同步（DX12 sync_interval=1）；MAILBOX=不等垂直同步且**绝不撕裂**（DX12 flip model sync=0 **不带** `DXGI_PRESENT_ALLOW_TEARING`，DXGI 以最新完整帧替换排队帧；Vulkan `VK_PRESENT_MODE_MAILBOX_KHR`）；IMMEDIATE=允许撕裂（DX12 sync=0 + `ALLOW_TEARING`）。MAILBOX 曾误带 tearing 标志（SDD-0003 修正；该撕裂是 DX12+TAA 抖动的放大器，抖动真根因是 Function 层 jitter 重复施加，见 SDD-0004）。两后端创建 swapchain 时都必须打日志记录实际选中的 present mode。
 - 工具链自包含：DXC 运行时固定取 `project/thirdparty/dxc/bin/x64/`（须支持 `-spirv` 的 dxcompiler.dll + dxil.dll），Vulkan validation layer 取 `project/thirdparty/VulkanSDK/redist/windows-x64/layers/`；构建与运行不依赖 `VULKAN_SDK` 环境变量或 PATH；仓库内 layer 不替代驱动侧 loader/ICD。
 - UniformBuffer 分配 256 字节对齐；`create_uniform_buffer()` 带 initial_data 时必须先拷入同分配大小的 zero-padded 临时块再交后端，避免 `vkCmdUpdateBuffer` / DX12 upload 按分配大小读取越界。
 - Root constants 约定：DX12 把 `AshRootConstants`/`RootConstants` cbuffer 作 root constants；Vulkan 编译前把该 block 重写为 `[[vk::push_constant]]` struct 并宏映射成员名（rewrite 需去掉预处理后成员的 const）。Vulkan reflection 同时为普通 uniform block（如 `AshMaterialParameters`）补齐 `ShaderParameterBlockLayout`。同一逻辑 block 双后端 byte_size 允许不同（DX12 保留尾部 padding），高层打包必须以反射 member offset/size 为准。DX12 root signature 把 CBV/SRV/UAV 合并一个 descriptor table、sampler 单独一个 table，`DX12ProgramBindingInfo::descriptorOffset` 记录 table 内偏移以规避 64 DWORD 限制。
@@ -60,3 +61,4 @@ status: active
 ## 历史
 
 - [SDD-0001 渲染验证安全网（RenderGate）](../../sdd/SDD-0001-render-gate.md)：新增 backbuffer 回读 RHI 接口与双后端实现。
+- [SDD-0003 DX12 MAILBOX present 语义修正](../../sdd/SDD-0003-dx12-mailbox-present-tearing.md)：MAILBOX 去除误加的 `ALLOW_TEARING`。注：其"抖动根因是撕裂"的判断后被推翻，真根因见 [SDD-0004](../../sdd/SDD-0004-taa-jitter-double-apply.md)（Function 层 TAA jitter 重复施加）；present 语义修正本身仍然成立。
