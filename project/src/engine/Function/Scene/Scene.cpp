@@ -496,6 +496,16 @@ namespace AshEngine
 					make_default_temporal_aa_config());
 			}
 
+			if (const auto tonemap_it = scene_config.find("tonemap");
+				tonemap_it != scene_config.end() && tonemap_it->is_object())
+			{
+				try_get_json_value(*tonemap_it, "exposure", config.tonemap.exposure);
+
+				config.tonemap = sanitize_tone_map_config(
+					config.tonemap,
+					make_default_tone_map_config());
+			}
+
 			return config;
 		}
 
@@ -569,6 +579,9 @@ namespace AshEngine
 					{ "variance_gamma", config.temporal_aa.variance_gamma },
 					{ "luminance_weighting", config.temporal_aa.luminance_weighting },
 					{ "debug_view", temporal_aa_debug_view_name(config.temporal_aa.debug_view) },
+				} },
+				{ "tonemap", json{
+					{ "exposure", config.tonemap.exposure },
 				} },
 			};
 		}
@@ -2757,6 +2770,8 @@ namespace AshEngine
 			sanitize_volumetric_lighting_config(config.volumetric_lighting, make_default_volumetric_lighting_config());
 		sanitized_config.temporal_aa =
 			sanitize_temporal_aa_config(config.temporal_aa, make_default_temporal_aa_config());
+		sanitized_config.tonemap =
+			sanitize_tone_map_config(config.tonemap, make_default_tone_map_config());
 
 		if (!scene_render_config_equal(m_impl->storage.render_config, sanitized_config))
 		{

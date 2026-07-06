@@ -1281,7 +1281,8 @@ namespace AshEngine
 			if (engine_ini_source.find("[AmbientOcclusion]") != std::string::npos ||
 				engine_ini_source.find("[DirectionalShadows]") != std::string::npos ||
 				engine_ini_source.find("[Bloom]") != std::string::npos ||
-				engine_ini_source.find("[VolumetricLighting]") != std::string::npos)
+				engine_ini_source.find("[VolumetricLighting]") != std::string::npos ||
+				engine_ini_source.find("[ToneMap]") != std::string::npos)
 			{
 				return report_self_test_failure("Engine.ini config authority", "scene render config sections must live in scene JSON, not Engine.ini");
 			}
@@ -4530,6 +4531,7 @@ namespace AshEngine
 			config.volumetric_lighting.froxel_depth_slices = 96u;
 			config.volumetric_lighting.max_lights = 48u;
 			config.volumetric_lighting.debug_view = VolumetricLightingDebugView::CompositeHDR;
+			config.tonemap.exposure = 1.25f;
 			if (!scene.set_render_config(config))
 			{
 				return report_self_test_failure("RenderScene render config snapshot", "failed to set scene render config");
@@ -4578,7 +4580,8 @@ namespace AshEngine
 				full_frame.render_config.volumetric_lighting.enabled &&
 				full_frame.render_config.volumetric_lighting.quality == VolumetricLightingQuality::High &&
 				full_frame.render_config.volumetric_lighting.froxel_resolution_scale == 0.75f &&
-				full_frame.render_config.volumetric_lighting.debug_view == VolumetricLightingDebugView::CompositeHDR;
+				full_frame.render_config.volumetric_lighting.debug_view == VolumetricLightingDebugView::CompositeHDR &&
+				full_frame.render_config.tonemap.exposure == 1.25f;
 			return ok ||
 				report_self_test_failure("RenderScene render config snapshot", "VisibleRenderFrame did not carry the scene render config");
 		}
@@ -4808,6 +4811,9 @@ namespace AshEngine
 					"      \"history_blend\": 1.0,\n"
 					"      \"screen_space_fallback\": true,\n"
 					"      \"debug_view\": \"ScreenSpaceFinal\"\n"
+					"    },\n"
+					"    \"tonemap\": {\n"
+					"      \"exposure\": 100.0\n"
 					"    }\n"
 					"  },\n"
 					"  \"entities\": []\n"
@@ -4859,7 +4865,8 @@ namespace AshEngine
 				!loaded.volumetric_lighting.history &&
 				loaded.volumetric_lighting.history_blend == 0.98f &&
 				loaded.volumetric_lighting.screen_space_fallback &&
-				loaded.volumetric_lighting.debug_view == VolumetricLightingDebugView::ScreenSpaceFinal;
+				loaded.volumetric_lighting.debug_view == VolumetricLightingDebugView::ScreenSpaceFinal &&
+				loaded.tonemap.exposure == 64.0f;
 			if (!parsed_ok)
 			{
 				return report_self_test_failure("Scene render config JSON", "scene_config fields were not parsed and sanitized as expected");

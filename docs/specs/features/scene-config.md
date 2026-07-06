@@ -17,7 +17,7 @@ status: active
 
 ## 支持的配置块
 
-`SceneRenderConfig`（`project/src/engine/Function/Scene/SceneConfig.h`）共 5 块，块名即 json key：
+`SceneRenderConfig`（`project/src/engine/Function/Scene/SceneConfig.h`）共 6 块，块名即 json key：
 
 | 块 | 归属 feature spec | 字段 |
 | --- | --- | --- |
@@ -26,6 +26,7 @@ status: active
 | `bloom` | bloom.md | enabled、quality、intensity、threshold、soft_knee、size_scale、stages[]{size,tint}、debug_view |
 | `volumetric_lighting` | volumetric-lighting.md | enabled、quality、froxel_resolution_scale、froxel_depth_slices、max_lights、density、scattering_intensity、extinction_scale、anisotropy、history、history_blend、screen_space_fallback、debug_view |
 | `temporal_aa` | taa.md | enabled、jitter_sequence_length、history_blend、variance_gamma、luminance_weighting、debug_view |
+| `tonemap` | tonemap.md | exposure |
 
 - debug 可视化没有独立块：各块自带 `debug_view` 字段（字符串枚举）；全局中间纹理查看器 RenderDebugView 走 Engine.ini（见 render-debug-view.md），不在 scene_config 内。
 

@@ -5,6 +5,7 @@
 #include "Function/Render/BloomConfig.h"
 #include "Function/Render/DirectionalShadowConfig.h"
 #include "Function/Render/TemporalAAConfig.h"
+#include "Function/Render/ToneMapConfig.h"
 #include "Function/Render/VolumetricLightingConfig.h"
 
 namespace AshEngine
@@ -16,6 +17,7 @@ namespace AshEngine
 		BloomConfig bloom{};
 		VolumetricLightingConfig volumetric_lighting{};
 		TemporalAAConfig temporal_aa{};
+		ToneMapConfig tonemap{};
 	};
 
 	ASH_API SceneRenderConfig make_default_scene_render_config();

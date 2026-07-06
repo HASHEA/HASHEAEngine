@@ -98,6 +98,11 @@ namespace AshEngine
 				lhs.luminance_weighting == rhs.luminance_weighting &&
 				lhs.debug_view == rhs.debug_view;
 		}
+
+		auto tone_map_config_equal(const ToneMapConfig& lhs, const ToneMapConfig& rhs) -> bool
+		{
+			return lhs.exposure == rhs.exposure;
+		}
 	}
 
 	SceneRenderConfig make_default_scene_render_config()
@@ -108,6 +113,7 @@ namespace AshEngine
 		config.bloom = make_default_bloom_config();
 		config.volumetric_lighting = make_default_volumetric_lighting_config();
 		config.temporal_aa = make_default_temporal_aa_config();
+		config.tonemap = make_default_tone_map_config();
 		return config;
 	}
 
@@ -117,6 +123,7 @@ namespace AshEngine
 			directional_shadow_config_equal(lhs.directional_shadows, rhs.directional_shadows) &&
 			bloom_config_equal(lhs.bloom, rhs.bloom) &&
 			volumetric_lighting_config_equal(lhs.volumetric_lighting, rhs.volumetric_lighting) &&
-			temporal_aa_config_equal(lhs.temporal_aa, rhs.temporal_aa);
+			temporal_aa_config_equal(lhs.temporal_aa, rhs.temporal_aa) &&
+			tone_map_config_equal(lhs.tonemap, rhs.tonemap);
 	}
 }

@@ -228,7 +228,7 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(scene_hdr && output);
 				const bool manual_srgb = output_needs_manual_srgb_encode(output->get_format());
 				const ToneMapRootConstants tone_constants =
-					make_tone_map_root_constants(frame, output, 1.0f, manual_srgb);
+					make_tone_map_root_constants(frame, output, frame.render_config.tonemap.exposure, manual_srgb);
 				ASH_PROCESS_ERROR(m_program->set_texture("SceneHDRLinear", scene_hdr));
 				ASH_PROCESS_ERROR(m_program->set_sampler("ScenePointClampSampler", m_point_clamp_sampler));
 				ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
