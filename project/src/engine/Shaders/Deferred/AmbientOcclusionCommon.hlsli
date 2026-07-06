@@ -69,46 +69,6 @@ float3 AshAOReconstructWorldPosition(float2 uv, float depth)
     return world.xyz / max(world.w, 1e-6);
 }
 
-uint2 AshAOSceneTextureSize()
-{
-    uint width = 1u;
-    uint height = 1u;
-    SceneDepth.GetDimensions(width, height);
-    return max(uint2(width, height), uint2(1u, 1u));
-}
-
-float2 AshAOSceneTexelSize()
-{
-    const uint2 scene_size = AshAOSceneTextureSize();
-    return 1.0.xx / float2((float)scene_size.x, (float)scene_size.y);
-}
-
-bool AshAOSamplesSceneTexturesFromDownsampledTarget()
-{
-    return AshAOParams0.w > 0.5;
-}
-
-float2 AshAOSceneUvAdjustment()
-{
-    // Half-res AO pixel centers sit between full-res scene texels; sample the next scene texel center.
-    return AshAOSceneTexelSize() * (AshAOSamplesSceneTexturesFromDownsampledTarget() ? 0.5 : 0.0);
-}
-
-float2 AshAOAdjustedSceneUv(float2 uv)
-{
-    return saturate(uv + AshAOSceneUvAdjustment());
-}
-
-float AshAOSampleSceneDepth(float2 uv)
-{
-    return SceneDepth.SampleLevel(ScenePointClampSampler, AshAOAdjustedSceneUv(uv), 0);
-}
-
-float4 AshAOSampleSceneGBufferE(float2 uv)
-{
-    return SceneGBufferE.SampleLevel(ScenePointClampSampler, AshAOAdjustedSceneUv(uv), 0);
-}
-
 float AshAOInterleavedGradientNoise(float2 viewport_pixel)
 {
     return frac(52.9829189 * frac(dot(viewport_pixel, float2(0.06711056, 0.00583715))));
@@ -131,9 +91,8 @@ struct AshAOSurface
 AshAOSurface AshAOLoadSurface(float2 uv)
 {
     AshAOSurface surface;
-    const float2 scene_uv = AshAOAdjustedSceneUv(uv);
     surface.valid = false;
-    surface.depth = SceneDepth.SampleLevel(ScenePointClampSampler, scene_uv, 0);
+    surface.depth = SceneDepth.SampleLevel(ScenePointClampSampler, uv, 0);
     surface.position_ws = 0.0.xxx;
     surface.normal_ws = float3(0.0, 0.0, 1.0);
     if (AshAOSceneDepthIsBackground(surface.depth))
@@ -141,8 +100,8 @@ AshAOSurface AshAOLoadSurface(float2 uv)
         return surface;
     }
 
-    const float4 gbuffer_e = SceneGBufferE.SampleLevel(ScenePointClampSampler, scene_uv, 0);
-    surface.position_ws = AshAOReconstructWorldPosition(scene_uv, surface.depth);
+    const float4 gbuffer_e = SceneGBufferE.SampleLevel(ScenePointClampSampler, uv, 0);
+    surface.position_ws = AshAOReconstructWorldPosition(uv, surface.depth);
     surface.normal_ws = AshAODecodeNormalOct(gbuffer_e.rg);
     surface.valid = true;
     return surface;

@@ -2964,42 +2964,6 @@ namespace AshEngine
 				report_self_test_failure("Temporal AO contract", "Temporal AO config, history pass, reprojection shader, or debug views are incomplete");
 		}
 
-		auto test_ambient_occlusion_downsampled_scene_uv_contract() -> bool
-		{
-			const bool common_ok = file_contains_all(
-				"project/src/engine/Shaders/Deferred/AmbientOcclusionCommon.hlsli",
-				{
-					"AshAOSamplesSceneTexturesFromDownsampledTarget",
-					"return AshAOParams0.w > 0.5",
-					"AshAOSceneTexelSize() * (AshAOSamplesSceneTexturesFromDownsampledTarget() ? 0.5 : 0.0)",
-					"SceneDepth.SampleLevel(ScenePointClampSampler, AshAOAdjustedSceneUv(uv), 0)",
-					"SceneGBufferE.SampleLevel(ScenePointClampSampler, AshAOAdjustedSceneUv(uv), 0)"
-				});
-			const bool ssao_ok = file_contains_all(
-				"project/src/engine/Shaders/Deferred/AmbientOcclusionSSAO.hlsl",
-				{
-					"AshAOLoadSurface(input.uv)",
-					"AshAOLoadSurface(sample_uv)"
-				});
-			const bool blur_ok = file_contains_all(
-				"project/src/engine/Shaders/Deferred/AmbientOcclusionBlur.hlsl",
-				{
-					"AshAOSampleSceneDepth(input.uv)",
-					"AshAOSampleSceneDepth(sample_uv)"
-				});
-			const bool pass_ok = file_contains_all(
-				"project/src/engine/Function/Render/AmbientOcclusionPass.cpp",
-				{
-					"scene_textures_sampled_from_downsampled_target",
-					"scene_textures_sampled_from_downsampled_target ? 1.0f : 0.0f",
-					"make_root_constants(frame, output, m_config, m_config.half_resolution)",
-					"make_root_constants(frame, output, m_config, m_config.half_resolution, temporal_blend)",
-					"make_root_constants(frame, output, m_config, false)"
-				});
-			return (common_ok && ssao_ok && blur_ok && pass_ok) ||
-				report_self_test_failure("Ambient AO downsampled scene UV", "downsampled AO scene texture reads must land on full-resolution depth texel centers");
-		}
-
 		auto test_render_debug_view_config_parses_runtime_selection() -> bool
 		{
 			const std::filesystem::path test_dir = engine_self_test_dir();
@@ -5347,7 +5311,6 @@ namespace AshEngine
 		all_passed = test_scene_renderer_bloom_integration_contract() && all_passed;
 		all_passed = test_scene_renderer_volumetric_lighting_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
-		all_passed = test_ambient_occlusion_downsampled_scene_uv_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
 		all_passed = test_render_debug_view_graph_pass_contract() && all_passed;
