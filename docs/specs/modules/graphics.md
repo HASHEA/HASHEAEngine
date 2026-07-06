@@ -36,6 +36,7 @@ status: active
 - Readback（SDD-0001 新增，验证/调试用途，非热路径）：`CommandBuffer::cmd_copy_texture_to_buffer(source, destination, buffer_offset, row_pitch_bytes)` 把 mip0/layer0 整层拷入 CPU 可读 buffer，仅支持 4 字节颜色格式（RGBA8/BGRA8），row pitch 须 ≥ width*4 且为 256 的倍数（D3D12 约束）；另有区域版 `cmd_copy_texture_region_to_buffer`。上层 backbuffer 回读封装在 `Function/Render` 的 RenderDevice（`request_back_buffer_capture/fetch_back_buffer_capture`）。
 - Swapchain：`present/resize_swapchain/get_swapchain_buffer/get_format/begin_frame/end_frame`。
 - Shader 编译：`ShaderCompiler::check_and_compile_shader` 由 `VulkanShaderCompiler`/`DX12ShaderCompiler` 实现，均走 DXC（`AshDXCContext`），产物按 SHA1（编译器输入 hash + 内容 hash）落盘到各自缓存目录，命中则跳过编译。注意 `ShaderCache.h` 中 `class ShaderCache` 为空壳，缓存读写逻辑在两个后端 compiler 内。
+- Shader 预处理（rewrite）阶段的坑（SDD-0005 实证）：`AshDXCContext::preprocess_shader_file_to_full_text` 用 `IDxcRewriter2::RewriteWithOptions`（AST 重发射，非 `-P`），**`[[...]]` 属性会被丢弃**——这是 `[[vk::push_constant]]` 需在 rewrite 后由 `rewrite_root_constant_blocks_for_vulkan` 注入的原因。且 rewrite 阶段完整执行预处理，彼时仅 item.macroDefine 生效、`ASH_VULKAN` **未定义**（compile 阶段才 `-D` 注入），shader 源码里 `#if ASH_VULKAN` 的分支在 Vulkan 运行时路径永远不会存活。需要影响 SPIR-V 元数据时只能靠能活过 rewrite 的语言构造（如元素类型，storage image 格式经 `min16float4` 推导 `Rgba16f`）或 rewrite 后文本注入。
 
 ## 约束与不变式
 

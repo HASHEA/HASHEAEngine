@@ -32,6 +32,7 @@ frame-dump 模式（`Application::get_frame_dump_path()` 非空）**强制 jitte
 ## 约束与已知限制
 
 - 依赖 GBuffer D 运动向量（alpha 通道为 temporal 有效位）；无运动向量的绘制不受历史累积保护。
+- Resolve shader 两个 UAV（`SceneTaaResolveOutput`/`SceneTaaHistoryWrite`）必须声明为 `RWTexture2D<min16float4>`：view 是 RGBA16F，`<float4>` 会让 DXC 推导 SPIR-V `Format=Rgba32f` 触发 Vulkan validation `StorageImage FormatMismatch`（undefined value）。`[[vk::image_format]]` 属性在运行时编译管线的 rewrite 阶段会被丢弃，不可用（SDD-0005）。
 - 历史越界 / temporal 无效时回退当前帧色。
 - ~~DX12 后端交互态整画面抖动~~（**已解决**，2026-07-06 SDD-0004）：根因是 `render_visible_frame` 对共享 `VisibleRenderFrame` **原地累加** jitter（`frame.projection[2][0] += ...`），而 prepare（逻辑线程）/submit（渲染线程）节奏不同步时同一 frame 会被重复渲染——渲染 fps 超过逻辑 tick 率的复用帧被施加 2× jitter（实测 DX12 约 30+ 次/秒复用，Vulkan 为 0，故仅 DX12 可见）。RenderDoc 取证：GBufferD 运动向量恒为 `jitter_uv(N) − 2×jitter_uv(N−1)`（committed prev VP 带 2× jitter），而补偿常量存原始 1× jitter 故欠补偿。修复：jitter 施加幂等化（重入时先撤销上次 jitter）。早前 SDD-0003 的 MAILBOX tearing 修正本身成立，但只是放大器而非根因；TAA resolve 数学经取证排除嫌疑。
 - Resolve 不对当前帧做 unjitter（行业标准做法，避免重采样模糊）：收敛区域帧间残差 ≈ `(1-history_blend) × jitter delta`；`use_history=false` 的像素（无运动向量的绘制如天空、历史越界、首帧）以全振幅 jitter 输出，属设计内。

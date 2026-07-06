@@ -4,8 +4,12 @@ Texture2D<float4> SceneCurrentHDR : register(t0);
 Texture2D<float4> SceneHistoryHDR : register(t1);
 Texture2D<float4> SceneGBufferMotion : register(t2);
 Texture2D<float4> SceneDepth : register(t3);
-RWTexture2D<float4> SceneTaaResolveOutput : register(u0);
-RWTexture2D<float4> SceneTaaHistoryWrite : register(u1);
+// UAV views are RGBA16F. With <float4> DXC infers SPIR-V Format=Rgba32f, which
+// Vulkan flags as undefined-value FormatMismatch; <min16float4> infers Rgba16f.
+// [[vk::image_format]] cannot be used here: the runtime IDxcRewriter2 preprocess
+// drops [[...]] attributes, while the element type survives the rewrite.
+RWTexture2D<min16float4> SceneTaaResolveOutput : register(u0);
+RWTexture2D<min16float4> SceneTaaHistoryWrite : register(u1);
 SamplerState ScenePointClampSampler : register(s0);
 SamplerState SceneLinearClampSampler : register(s1);
 
@@ -126,7 +130,7 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 
 	// History always stores the clean resolved color (never the debug overlay)
 	// so debug visualization can't poison next frame's accumulation.
-	SceneTaaHistoryWrite[dispatch_id.xy] = float4(resolved_color, 1.0);
+	SceneTaaHistoryWrite[dispatch_id.xy] = min16float4(float4(resolved_color, 1.0));
 
 	float3 output_color = resolved_color;
 	const uint debug_view = AshTaaDebugView();
@@ -143,5 +147,5 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
 		output_color = ycocg_sigma * 8.0;
 	}
 
-	SceneTaaResolveOutput[dispatch_id.xy] = float4(output_color, 1.0);
+	SceneTaaResolveOutput[dispatch_id.xy] = min16float4(float4(output_color, 1.0));
 }
