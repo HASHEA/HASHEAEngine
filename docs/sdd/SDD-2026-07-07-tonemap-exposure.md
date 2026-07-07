@@ -1,4 +1,4 @@
-# SDD-0007: Tonemap 曝光参数（scene_config.tonemap.exposure）
+# SDD-2026-07-07-tonemap-exposure: Tonemap 曝光参数（scene_config.tonemap.exposure）
 
 ## Status
 

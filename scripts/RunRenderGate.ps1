@@ -1,4 +1,4 @@
-# RunRenderGate.ps1（SDD-0001 T4）：RenderGate 编排脚本。
+# RunRenderGate.ps1（SDD-2026-07-07-render-gate T4）：RenderGate 编排脚本。
 # 每个后端抓一帧 PNG 与 golden 做 SSIM 回归，另做 Vulkan/DX12 跨后端对比。
 # -BlessGolden 用本次抓帧刷新 golden 基线。报告落 Intermediate/test-reports/render-gate/<时间戳>/。
 [CmdletBinding()]

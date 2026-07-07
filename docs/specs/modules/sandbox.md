@@ -34,7 +34,7 @@ status: active
 
 ## 约束与不变式
 
-- **RenderGate 抓帧约定**（SDD-0001）：当 `Application::get_frame_dump_path()` 非空（即命令行带 `--dump-frame=`）时，场景装载后把 primary camera 位置固定为 **(0, 5, 0)**，保证抓帧画面确定性；改动此约定必须同步重新 bless golden。
+- **RenderGate 抓帧约定**（SDD-2026-07-07-render-gate）：当 `Application::get_frame_dump_path()` 非空（即命令行带 `--dump-frame=`）时，场景装载后把 primary camera 位置固定为 **(0, 5, 0)**，保证抓帧画面确定性；改动此约定必须同步重新 bless golden。
 - 标准场景是唯一默认运行模式；场景文件或引用资产缺失时进入 Failed 并给出 failure_detail，不静默降级。
 - 场景渲染只走 `ScenePresentationSubsystem`（output + view binding），Sandbox 不直接调用 SceneRenderer。
 - 逻辑线程开启（`enable_logic_thread = true`）：场景装载/相机更新在逻辑侧，`SandboxStandardScene` 内部用互斥锁保护快照。
@@ -49,5 +49,5 @@ status: active
 
 ## 历史
 
-- `docs/sdd/SDD-0001-render-gate.md`（抓帧相机固定约定来源）
+- `docs/sdd/SDD-2026-07-07-render-gate.md`（抓帧相机固定约定来源）
 - `docs/superpowers/specs/2026-05-25-sandbox-scene-config-design.md`（标准场景配置，归档）

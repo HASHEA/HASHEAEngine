@@ -16,7 +16,7 @@ namespace AshSandbox
 
 	auto SandboxStandardScene::get_standard_scene_path() -> std::filesystem::path
 	{
-		// RenderGate（SDD-0001）：--scene 覆盖默认场景路径
+		// RenderGate（SDD-2026-07-07-render-gate）：--scene 覆盖默认场景路径
 		if (AshEngine::Application* application = AshEngine::Application::get())
 		{
 			const std::string& override_path = application->get_scene_path_override();
@@ -194,7 +194,7 @@ namespace AshSandbox
 			out_snapshot.recommended_camera_move_speed,
 			out_error));
 
-		// RenderGate（SDD-0001）：抓帧测试时固定初始相机位置，保证画面确定性
+		// RenderGate（SDD-2026-07-07-render-gate）：抓帧测试时固定初始相机位置，保证画面确定性
 		if (AshEngine::Application* application = AshEngine::Application::get();
 			application && !application->get_frame_dump_path().empty())
 		{

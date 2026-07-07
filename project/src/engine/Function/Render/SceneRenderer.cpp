@@ -947,7 +947,7 @@ namespace AshEngine
 		const TemporalAAConfig& taa_config = frame.render_config.temporal_aa;
 		if (frame.taa_enabled)
 		{
-			// 同一 VisibleRenderFrame 可能被重复渲染（prepare/submit 节奏不同步，SDD-0004）：
+			// 同一 VisibleRenderFrame 可能被重复渲染（prepare/submit 节奏不同步，SDD-2026-07-07-taa-jitter-double-apply）：
 			// 先撤销上次施加的 jitter，防止投影矩阵跨调用累加。
 			frame.projection[2][0] -= frame.taa_jitter_ndc.x;
 			frame.projection[2][1] -= frame.taa_jitter_ndc.y;
@@ -958,7 +958,7 @@ namespace AshEngine
 		frame.taa_previous_jitter_ndc = glm::vec2(0.0f, 0.0f);
 		if (taa_config.enabled)
 		{
-			// RenderGate（SDD-0001）：抓帧模式禁用亚像素抖动。TAA 时序抖动导致同参数两次
+			// RenderGate（SDD-2026-07-07-render-gate）：抓帧模式禁用亚像素抖动。TAA 时序抖动导致同参数两次
 			// dump 存在全画面边缘噪声（SSIM 底约 0.989），关掉后静态场景可收敛为确定画面。
 			const Application* application = Application::get();
 			const bool frame_dump_mode = application && !application->get_frame_dump_path().empty();

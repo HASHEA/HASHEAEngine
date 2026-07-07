@@ -22,7 +22,7 @@
    `state.jitter_ndc` 存原始 1× 值，故 resolve 的补偿常量（Config1）数值
    正确却欠补偿。
 4. DX12-only 是帧率比值表象（DX12 渲染 fps > 逻辑 tick 率，Vulkan 未超），
-   非后端语义差异。此前 SDD-0003 的 MAILBOX tearing 修正本身成立（present
+   非后端语义差异。此前 SDD-2026-07-07-dx12-mailbox-present-tearing 的 MAILBOX tearing 修正本身成立（present
    语义确实错了），但只是让抖动更可见的放大器，不是根因；ring 3→6 与
    k_dx12_max_frames=1 实验已排除资源竞争类假说。
 
@@ -39,11 +39,11 @@
   jitter 施加段（929-958 行附近）改为幂等——进入时若上次调用已施加 jitter
   （`frame.taa_enabled` 为 true）先撤销（减去 `frame.taa_jitter_ndc` 并重建
   view_projection），再走原有重置/施加逻辑。
-- `docs/specs/features/taa.md`：已知限制第 36 行（错误宣称 SDD-0003 已解决
+- `docs/specs/features/taa.md`：已知限制第 36 行（错误宣称 SDD-2026-07-07-dx12-mailbox-present-tearing 已解决
   抖动）改写为真根因结论；同步验证章节。
 - `docs/specs/modules/graphics.md`：present mode 约束段中"tearing 导致抖动"
   措辞修正为"放大器而非根因"。
-- `docs/sdd/SDD-0003-dx12-mailbox-present-tearing.md`：结论段补记后续取证
+- `docs/sdd/SDD-2026-07-07-dx12-mailbox-present-tearing.md`：结论段补记后续取证
   推翻其根因判断，指向本 SDD。
 
 不动：ScenePresentationSubsystem、TemporalAAPass、shader、Graphics 层。
@@ -103,4 +103,4 @@ Done（2026-07-06）
   Standard` PASS；日志无 validation 报错。
 - 目视验证（用户确认）：DX12 + TAA + VSync=false 交互态抖动消失，Vulkan 无回归。
 - 结论已回写 `docs/specs/features/taa.md`、`docs/specs/modules/graphics.md`，
-  并修正 `SDD-0003` 结论段。
+  并修正 `SDD-2026-07-07-dx12-mailbox-present-tearing` 结论段。

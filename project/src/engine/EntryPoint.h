@@ -138,7 +138,7 @@ static bool should_run_engine_self_tests(int argc, char* argv[])
 	return false;
 }
 
-// RenderGate（SDD-0001）：--dump-frame=<png> / --scene=<path> 字符串选项解析
+// RenderGate（SDD-2026-07-07-render-gate）：--dump-frame=<png> / --scene=<path> 字符串选项解析
 static std::string parse_string_option(int argc, char* argv[], const char* option_name)
 {
 	const std::string prefix = std::string(option_name) + "=";
@@ -348,7 +348,7 @@ int32_t main(int argc, char* argv[])
 	{
 		AshEngine::Application::app = application;
 	}
-	// RenderGate（SDD-0001）：--rhi 覆盖后端选择，必须在 initialize() 之前注入
+	// RenderGate（SDD-2026-07-07-render-gate）：--rhi 覆盖后端选择，必须在 initialize() 之前注入
 	const std::string rhiOverride = parse_string_option(argc, argv, "--rhi");
 	if (!rhiOverride.empty())
 	{

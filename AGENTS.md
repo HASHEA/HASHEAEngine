@@ -53,7 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mod
 | S2 | 跨模块、RenderGraph API、RHI 接口、材质/shader 绑定约定、场景数据模型 | 标准 SDD，**经用户批准后才能动代码** |
 | S3 | 架构调整（新后端、线程模型、资产管线重构） | 标准 SDD + ADR + 分阶段计划 |
 
-模板：`docs/sdd/TEMPLATE.md`。命名 `SDD-<YYYY-MM-DD>-<slug>.md`（日期+主题，禁用递增编号——并行分支占号会静默撞号；旧 `SDD-0001~0008` 保留）。SDD 完成后其结论回写对应长期 spec（`docs/specs/`），SDD 本身归档。
+模板：`docs/sdd/TEMPLATE.md`。命名 `SDD-<YYYY-MM-DD>-<slug>.md`（日期+主题，禁用递增编号——并行分支占号会静默撞号）。SDD 完成后其结论回写对应长期 spec（`docs/specs/`），SDD 本身归档。
 **禁止从一句聊天需求直接跳到大范围实现。**
 
 ## Change rules

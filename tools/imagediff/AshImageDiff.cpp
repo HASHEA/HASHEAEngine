@@ -1,4 +1,4 @@
-// AshImageDiff（SDD-0001 T3）：RenderGate 图像对比工具。
+// AshImageDiff（SDD-2026-07-07-render-gate T3）：RenderGate 图像对比工具。
 // 加载两张 PNG，输出灰度 SSIM（11x11 高斯窗口，标准参数）、逐像素统计与可选 diff 热力图。
 // 退出码：0 = PASS，1 = FAIL（低于阈值或尺寸不匹配），2 = 用法/IO 错误。
 #define _CRT_SECURE_NO_WARNINGS

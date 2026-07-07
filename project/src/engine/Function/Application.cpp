@@ -740,7 +740,7 @@ namespace AshEngine
 			return;
 		}
 
-		// RenderGate（SDD-0001）：抓帧模式隐藏 overlay，FPS 等实时文字会破坏 dump 确定性
+		// RenderGate（SDD-2026-07-07-render-gate）：抓帧模式隐藏 overlay，FPS 等实时文字会破坏 dump 确定性
 		if (!frameDumpPath.empty())
 		{
 			return;

@@ -9,8 +9,8 @@ status: active
 ## 行为
 
 - 帧管线终点：TAA 之后，读 `scene_hdr_linear`，全屏三角形写入 `view_context.output_target`。窗口输出时该 target 即 swapchain backbuffer（`Renderer::get_back_buffer()`，由 `ScenePresentationSubsystem::submit_presentations` 绑定）；离屏输出（编辑器视口等）为独立 RT。
-- **这是 RenderGate（SDD-0001）frame dump 的采样点**：`--dump-frame` 抓取的就是 tone map 之后的 backbuffer 内容（其上还会叠 RenderDebugView / overlay / debug draw pass）。
-- Tone map 算子：ACES filmic 近似（Narkowicz 拟合，shader 内 `AshACESFilm`）。曝光为 pre-tonemap 线性乘数（shader `hdr *= exposure`，root constant `AshCameraPositionAndFlags.w` 下发），值来自 `scene_config.tonemap.exposure`（SDD-0007），默认 1.0。
+- **这是 RenderGate（SDD-2026-07-07-render-gate）frame dump 的采样点**：`--dump-frame` 抓取的就是 tone map 之后的 backbuffer 内容（其上还会叠 RenderDebugView / overlay / debug draw pass）。
+- Tone map 算子：ACES filmic 近似（Narkowicz 拟合，shader 内 `AshACESFilm`）。曝光为 pre-tonemap 线性乘数（shader `hdr *= exposure`，root constant `AshCameraPositionAndFlags.w` 下发），值来自 `scene_config.tonemap.exposure`（SDD-2026-07-07-tonemap-exposure），默认 1.0。
 - 输出格式为 `RGBA8_UNORM` / `BGRA8_UNORM`（非 sRGB 视图）时 shader 内手动做 linear→sRGB 编码，其余格式依赖硬件 sRGB 写出。
 
 ## 配置
@@ -34,4 +34,4 @@ status: active
 
 ## 历史
 
-- docs/sdd/SDD-0007-tonemap-exposure.md
+- docs/sdd/SDD-2026-07-07-tonemap-exposure.md

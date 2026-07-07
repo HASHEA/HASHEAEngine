@@ -75,4 +75,4 @@ status: active
 
 ## 历史
 
-- [SDD-0001 渲染验证安全网（RenderGate）](../../sdd/SDD-0001-render-gate.md)：新增 `--rhi/--dump-frame/--scene` 命令行与抓帧模式 overlay 隐藏。
+- [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 `--rhi/--dump-frame/--scene` 命令行与抓帧模式 overlay 隐藏。

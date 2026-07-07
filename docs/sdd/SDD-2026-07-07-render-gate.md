@@ -1,4 +1,4 @@
-# SDD-0001: 渲染验证安全网（RenderGate：帧 dump + golden 回归 + 双后端 diff）
+# SDD-2026-07-07-render-gate: 渲染验证安全网（RenderGate：帧 dump + golden 回归 + 双后端 diff）
 
 ## Status
 

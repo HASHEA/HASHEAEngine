@@ -54,5 +54,5 @@ status: active
 
 ## 历史
 
-- `docs/sdd/SDD-0001-render-gate.md`（RenderGate + AshImageDiff）
+- `docs/sdd/SDD-2026-07-07-render-gate.md`（RenderGate + AshImageDiff）
 - `docs/superpowers/specs/2026-05-18-perf-gate-design.md`（PerfGate，归档）

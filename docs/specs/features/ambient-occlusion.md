@@ -72,5 +72,5 @@ Low=6/4/3，Medium=10/6/4，High=16/8/6。采样旋转使用逐像素 interleave
 ## 历史
 
 - `docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md`
-- `docs/sdd/SDD-0008-ambient-occlusion-half-res-scene-uv.md`
+- `docs/sdd/SDD-2026-07-07-ambient-occlusion-half-res-scene-uv.md`
 - SSAO banding 修复：commit `ddeae97`（改用 stable interleaved gradient noise）。

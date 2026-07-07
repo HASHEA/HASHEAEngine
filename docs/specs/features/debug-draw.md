@@ -36,5 +36,5 @@ status: active
 
 ## 历史
 
-- docs/sdd/SDD-0002-debug-draw-thickness.md（thickness 落地 + 双缓冲防闪烁 + 去 jitter）。
+- docs/sdd/SDD-2026-07-07-debug-draw-thickness.md（thickness 落地 + 双缓冲防闪烁 + 去 jitter）。
 

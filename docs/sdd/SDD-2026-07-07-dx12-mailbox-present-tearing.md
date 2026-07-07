@@ -1,4 +1,4 @@
-# SDD-0003: DX12 MAILBOX present 语义修正（去除误加的 ALLOW_TEARING）
+# SDD-2026-07-07-dx12-mailbox-present-tearing: DX12 MAILBOX present 语义修正（去除误加的 ALLOW_TEARING）
 
 级别：S2（`Graphics/` 高危路径，DX12 后端 swapchain）
 
@@ -10,13 +10,13 @@ Done（2026-07-06，结论部分被后续取证修正）
 - 但"抖动根因是撕裂"的判断**被推翻**：修正后抖动仍在。RenderDoc 取证定位真根因为
   Function 层 TAA jitter 对共享 `VisibleRenderFrame` 重复施加（prepare/submit 节奏
   不同步时同帧重渲、jitter 累加 2×），见
-  [SDD-0004](SDD-0004-taa-jitter-double-apply.md)。撕裂只是把 2× jitter 帧的差异
+  [SDD-2026-07-07-taa-jitter-double-apply](SDD-2026-07-07-taa-jitter-double-apply.md)。撕裂只是把 2× jitter 帧的差异
   拼上屏的放大器。本 SDD 的 Context 证据矩阵解释：VSync=true 时 DXGI 阻塞渲染线程、
   渲染 fps 被压到逻辑 fps 之下故无同帧重渲，而非撕裂消失所致。
 
 ## Context
 
-任务 #23：TAA 开启时 DX12 交互态整画面抖动，Vulkan 无此现象（SDD-0002 验证期发现，
+任务 #23：TAA 开启时 DX12 交互态整画面抖动，Vulkan 无此现象（SDD-2026-07-07-debug-draw-thickness 验证期发现，
 已 A/B 确认为既有问题）。排查证据矩阵（2026-07-05，全部实测）：
 
 | 配置 | 结果 |

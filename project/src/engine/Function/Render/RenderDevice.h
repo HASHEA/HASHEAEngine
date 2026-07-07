@@ -619,7 +619,7 @@ namespace AshEngine
 		bool flush_queued_render_target_texel_reads(void* out_data, size_t out_size);
 		// editor end
 
-		// RenderGate（SDD-0001）：帧 dump 用同步回读，仅显式请求时产生开销，非热路径
+		// RenderGate（SDD-2026-07-07-render-gate）：帧 dump 用同步回读，仅显式请求时产生开销，非热路径
 		struct BackBufferCaptureResult
 		{
 			uint32_t width = 0;
