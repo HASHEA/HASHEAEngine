@@ -28,7 +28,7 @@ PSTemporalAOOutput PSMain(VSFullscreenOutput input)
     const float max_history_weight = saturate(AshAOParams2.y);
     if (current.valid && max_history_weight > 0.0)
     {
-        const float4 motion = SceneGBufferD.SampleLevel(ScenePointClampSampler, input.uv, 0);
+        const float4 motion = SceneGBufferD.SampleLevel(ScenePointClampSampler, AshAOAdjustedSceneUv(input.uv), 0);
         const float2 previous_uv = input.uv - motion.xy;
         const float previous_depth = motion.z;
 
@@ -50,7 +50,7 @@ PSTemporalAOOutput PSMain(VSFullscreenOutput input)
     }
 
     const float2 current_normal_oct = current.valid
-        ? SceneGBufferE.SampleLevel(ScenePointClampSampler, input.uv, 0).rg
+        ? AshAOSampleSceneGBufferE(input.uv).rg
         : float2(0.5, 0.5);
     const float current_depth = current.valid ? current.depth : (AshAOIsReverseZ() ? 0.0 : 1.0);
     const float current_valid = current.valid ? 1.0 : 0.0;

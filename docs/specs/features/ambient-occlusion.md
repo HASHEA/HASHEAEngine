@@ -9,7 +9,9 @@
 pass 链（按 config 逐级可选）：
 
 1. `SceneAmbientOcclusionPass`：按 mode 选 SSAO/HBAO/GTAO 全屏 pass 生成 raw AO；
-   `half_resolution=true` 时按输出 1/2 分辨率。
+   `half_resolution=true` 时按输出 1/2 分辨率。半分辨率输出读取全分辨率
+   SceneDepth / GBuffer 时，shader 会把场景纹理 UV 调整到全分辨率 texel center，
+   避免 AO 像素中心落在场景纹理 texel 边界造成条纹。
 2. `SceneAmbientOcclusionBlurPass`（`blur=true`）：深度感知模糊。
 3. `SceneAmbientOcclusionTemporalPass`（`temporal=true`）：逐 view 双缓冲外部 history
    （AO + meta 两组 ping-pong RT），运动向量重投影，深度/法线阈值拒绝历史；
@@ -46,12 +48,19 @@ Low=6/4/3，Medium=10/6/4，High=16/8/6。采样旋转使用逐像素 interleave
   `AmbientOcclusionSSAO.hlsl`、`AmbientOcclusionHBAO.hlsl`、`AmbientOcclusionGTAO.hlsl`、
   `AmbientOcclusionBlur.hlsl`、`AmbientOcclusionTemporal.hlsl`、`AmbientOcclusionDebug.hlsl`。
 - 参数经 inline root constants 下发（viewport、radius、quality 档位、temporal 阈值等）。
+- `AshAOParams0.w` 是“当前 pass 是否从半分辨率目标采样全分辨率场景纹理”的标志。
+  `AmbientOcclusionCommon.hlsli` 通过 `AshAOAdjustedSceneUv` /
+  `AshAOSampleSceneDepth` / `AshAOSampleSceneGBufferE` 集中处理 SceneDepth、
+  GBufferE 和依赖它们的 surface 加载；AO 主 pass、blur、temporal 与 debug shader
+  不应直接绕过这些 helper 读取对应场景纹理。
 
 ## 约束与已知限制
 
 - temporal history 为 pass 内部持有的外部 RT，仅支持单 view 追踪（view_id 变化即重置）。
 - debug_view 开启时直接替换场景输出，属破坏性调试路径，不能与正常画面同屏。
 - 噪声函数为屏幕像素坐标驱动的稳定噪声，无逐帧 jitter；改动它会同时影响 RenderGate golden。
+- half-resolution AO 的修正只保证 AO 生成/blur/temporal/debug 中的全分辨率场景纹理读取对齐；
+  最终 lighting 仍以当前 `SceneAmbientOcclusion` 纹理分辨率采样，尚未实现 depth-aware upsample。
 
 ## 验证
 
@@ -63,4 +72,5 @@ Low=6/4/3，Medium=10/6/4，High=16/8/6。采样旋转使用逐像素 interleave
 ## 历史
 
 - `docs/superpowers/specs/2026-05-20-ambient-occlusion-design.md`
+- `docs/sdd/SDD-0002-ambient-occlusion-half-res-scene-uv.md`
 - SSAO banding 修复：commit `ddeae97`（改用 stable interleaved gradient noise）。
