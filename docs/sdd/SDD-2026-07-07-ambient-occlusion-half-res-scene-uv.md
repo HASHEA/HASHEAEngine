@@ -1,5 +1,7 @@
 # Mini SDD: AO 半分辨率场景纹理 UV 对齐
 
+Status: Done（2026-07-07 复核验证通过，golden 已重新 bless）
+
 ## Goal
 
 修复 Ambient Occlusion 以半分辨率运行、同时采样全分辨率场景纹理时出现的可见条纹。
@@ -57,6 +59,16 @@ RunPerfGate.bat -Profile Standard
 - 在默认 Sandbox 场景中对比 `half_resolution=true` 与 `half_resolution=false` 的 AO。
 - 检查 AO debug view：RawAO、FinalAO、Depth、Normal、MotionVector、TemporalAO、HistoryWeight。
 - 检查 `product/logs`，确认 Vulkan / DX12 validation 或 debug layer 没有报错。
+
+### 执行结果（2026-07-07 复核）
+
+- `RunRenderGate.bat`（HEAD 613bee2，含本修复）：PASS——Vulkan vs golden ssim 0.999402、
+  DX12 vs golden 0.999416、跨后端 0.999439。同后端 ssim 低于历史噪声底（0.999996），
+  确认本修复改变了 golden 场景画面（GTAO half_resolution=true 条纹消除）但在 0.995
+  阈值内静默通过；经用户确认画面正确后已 `RunRenderGate.bat -BlessGolden` 重新 bless
+  golden，恢复回归余量。
+- 代码复核：`AshAOParams0.w` 改动前无 shader 读取，复用安全；血缘提交 482d321（无 SDD
+  落地）→ 1b7ec30 revert → ba6c17d 补 SDD 重新落地，两版代码 diff 逐字节一致。
 
 ## Risk / rollback
 
