@@ -349,6 +349,7 @@ namespace AshEngine
 		logicThreadStopRequested.store(false, std::memory_order_release);
 		logicThreadFailed.store(false, std::memory_order_release);
 		frameIndex.store(0, std::memory_order_release);
+		frameDumpQuiesceFrameCount = 0;
 		logicThreadException = nullptr;
 		logicThreadFailureMessage.clear();
 		runStartTime = std::chrono::steady_clock::now();
@@ -371,16 +372,38 @@ namespace AshEngine
 			{
 				const bool isFinalSmokeFrame = maxFrameCount > 0
 					&& frameIndex.load(std::memory_order_acquire) + 1 >= maxFrameCount;
-				if (isFinalSmokeFrame && !frameDumpPath.empty() && !frameDumpWritten && renderDevice)
+				if (maxFrameCount > 0 && !frameDumpPath.empty() && !frameDumpWritten && renderDevice)
 				{
-					renderDevice->request_back_buffer_capture();
-					frameDumpCapturePending = true;
+					// RenderGate（SDD-2026-07-07-render-gate-streaming-signal）：抓帧由流送完成信号
+					// 驱动；纯帧数等待在高帧率下会在资产加载完成前触发，抓到空场景。帧数上限仅作超时保底。
+					static constexpr uint32_t k_frame_dump_quiesce_frames = 32;
+					const bool streamingQuiesced = renderAssetManager.has_requested_render_assets()
+						&& !renderAssetManager.has_pending_render_assets();
+					frameDumpQuiesceFrameCount = streamingQuiesced ? frameDumpQuiesceFrameCount + 1 : 0;
+					if (frameDumpQuiesceFrameCount >= k_frame_dump_quiesce_frames)
+					{
+						HLogInfo("Application: render asset streaming quiesced for {} frames at frame {}; capturing frame dump.",
+							frameDumpQuiesceFrameCount, frameIndex.load(std::memory_order_acquire));
+						renderDevice->request_back_buffer_capture();
+						frameDumpCapturePending = true;
+					}
+					else if (isFinalSmokeFrame)
+					{
+						HLogWarning("Application: smoke frame limit reached before render asset streaming quiesced; frame dump may capture an incomplete scene.");
+						renderDevice->request_back_buffer_capture();
+						frameDumpCapturePending = true;
+					}
 				}
 				_render_frame();
 				_present_frame();
 				if (frameDumpCapturePending)
 				{
 					_write_pending_frame_dump();
+					if (frameDumpWritten)
+					{
+						HLogInfo("Application: frame dump complete; requesting exit.");
+						request_exit();
+					}
 				}
 				if (renderer && perfGateController.is_enabled())
 				{

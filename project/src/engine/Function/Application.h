@@ -218,6 +218,7 @@ public:
 		std::string				scenePathOverride{};
 		bool					frameDumpCapturePending	= false;
 		bool					frameDumpWritten		= false;
+		uint32_t				frameDumpQuiesceFrameCount = 0;
 		std::atomic<bool>		exitRequested			{ false };
 		std::atomic<bool>		logicThreadStopRequested{ false };
 		std::atomic<bool>		logicThreadRunning		{ false };

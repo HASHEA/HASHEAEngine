@@ -620,6 +620,45 @@ namespace AshEngine
 		}
 	}
 
+	bool RenderAssetManager::has_requested_render_assets() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return !m_static_mesh_assets.empty() || !m_texture_assets.empty();
+	}
+
+	bool RenderAssetManager::has_pending_render_assets() const
+	{
+		std::vector<std::shared_ptr<StaticMeshRenderAsset>> assets{};
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			if (!m_pending_texture_decodes.empty())
+			{
+				return true;
+			}
+			assets.reserve(m_static_mesh_assets.size());
+			for (const auto& [key, asset] : m_static_mesh_assets)
+			{
+				(void)key;
+				assets.push_back(asset);
+			}
+		}
+
+		for (const std::shared_ptr<StaticMeshRenderAsset>& asset : assets)
+		{
+			if (!asset)
+			{
+				continue;
+			}
+			std::scoped_lock<std::mutex> asset_lock(asset->mutex);
+			if (asset->state != StaticMeshRenderAssetState::GpuReady
+				&& asset->state != StaticMeshRenderAssetState::Failed)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	AssetDatabase* RenderAssetManager::get_asset_database() const
 	{
 		return m_asset_database;

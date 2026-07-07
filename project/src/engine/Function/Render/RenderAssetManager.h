@@ -56,6 +56,8 @@ namespace AshEngine
 			std::vector<ResolvedStaticMeshSection>& out_sections);
 		bool finalize_pending_static_mesh_asset(const std::shared_ptr<StaticMeshRenderAsset>& asset);
 		void finalize_pending_assets();
+		bool has_requested_render_assets() const;
+		bool has_pending_render_assets() const;
 
 		AssetDatabase* get_asset_database() const;
 		Renderer* get_renderer() const;
@@ -109,7 +111,7 @@ namespace AshEngine
 	private:
 		AssetDatabase* m_asset_database = nullptr;
 		Renderer* m_renderer = nullptr;
-		std::mutex m_mutex{};
+		mutable std::mutex m_mutex{};
 		std::unordered_map<std::string, std::shared_ptr<StaticMeshRenderAsset>> m_static_mesh_assets{};
 		std::unordered_map<std::string, std::shared_ptr<const MaterialInterface>> m_material_assets{};
 		std::unordered_map<std::string, std::shared_ptr<MaterialRenderProxy>> m_material_proxies{};

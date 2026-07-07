@@ -1,6 +1,8 @@
 # RunRenderGate.ps1（SDD-2026-07-07-render-gate T4）：RenderGate 编排脚本。
 # 每个后端抓一帧 PNG 与 golden 做 SSIM 回归，另做 Vulkan/DX12 跨后端对比。
 # -BlessGolden 用本次抓帧刷新 golden 基线。报告落 Intermediate/test-reports/render-gate/<时间戳>/。
+# 抓帧时机由引擎侧流送完成信号驱动（SDD-2026-07-07-render-gate-streaming-signal）；
+# -SmokeFrames 仅是超时保底，到达上限仍未流送完成时按原样抓帧并在引擎日志告警。
 [CmdletBinding()]
 param(
     [string]$Configuration = "Debug",

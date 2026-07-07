@@ -37,7 +37,7 @@ status: active
 | `--smoke-test[=N]` | 跑 N 帧后退出，缺省 N=3；环境变量 `ASH_ENGINE_SMOKE_TEST_FRAMES` 等效 |
 | `--smoke-test-seconds[=S]` | 跑 S 秒后退出，缺省 25；环境变量 `ASH_ENGINE_SMOKE_TEST_SECONDS` 等效 |
 | `--rhi=<vulkan\|vk\|directx12\|dx12\|d3d12>` | 后端覆盖，经 `set_backend_override` 在 `initialize()` 之前注入（顺序是硬约束）；非法值直接退出码 1 |
-| `--dump-frame=<png>` | 最后一帧 backbuffer 落 PNG（RenderGate 用）；必须与 `--smoke-test=N` 同用，否则告警并跳过 |
+| `--dump-frame=<png>` | backbuffer 抓帧落 PNG（RenderGate 用）；必须与 `--smoke-test=N` 同用，否则告警并跳过。抓帧时机由渲染资产流送 quiesce 信号驱动（连续 32 帧无 pending 即抓帧并退出）；N 仅为超时保底，超时抓帧会告警 |
 | `--scene=<json>` | 场景路径覆盖，应用层经 `get_scene_path_override()` 消费 |
 | `--engine-self-test` | 只跑 Base 自测后退出 |
 | `--bake-ashibl <src.hdr> <out.ashibl> [...]` | IBL 离线烘焙子命令，跑完即退出 |
@@ -47,7 +47,12 @@ status: active
 
 ### Frame dump 与 engine overlay
 
-- 最后一帧经 `RenderDevice::request_back_buffer_capture / fetch_back_buffer_capture` 回读，stb 写 PNG（`_write_pending_frame_dump`）。
+- 抓帧时机（SDD-2026-07-07-render-gate-streaming-signal）：dump 模式下每个渲染帧查询
+  `RenderAssetManager::has_requested_render_assets() && !has_pending_render_assets()`
+  （已有请求且 static mesh 全部到 GpuReady/Failed 终态、无 pending 纹理解码），连续满足
+  32 帧（quiesce 余量，覆盖级联请求与 proxy 重建）即抓帧，写盘成功后 `request_exit()`；
+  smoke 帧数上限退化为超时保底，超时抓帧告警"may capture an incomplete scene"。
+- 抓帧经 `RenderDevice::request_back_buffer_capture / fetch_back_buffer_capture` 回读，stb 写 PNG（`_write_pending_frame_dump`）。
 - `draw_engine_overlay()` 绘制帧统计浮层（`EngineFrameStatsOverlay` 窗口）；frame dump 模式（`frameDumpPath` 非空）下整体隐藏，保证 dump 确定性。
 
 ### UIContext（Editor 与 Engine 的 UI 边界）

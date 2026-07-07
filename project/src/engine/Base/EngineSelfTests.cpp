@@ -3001,6 +3001,27 @@ namespace AshEngine
 				report_self_test_failure("Ambient AO downsampled scene UV", "downsampled AO scene texture reads must land on full-resolution depth texel centers");
 		}
 
+		auto test_frame_dump_streaming_quiesce_contract() -> bool
+		{
+			const bool manager_ok = file_contains_all(
+				"project/src/engine/Function/Render/RenderAssetManager.h",
+				{
+					"bool has_requested_render_assets() const",
+					"bool has_pending_render_assets() const"
+				});
+			const bool application_ok = file_contains_all(
+				"project/src/engine/Function/Application.cpp",
+				{
+					"k_frame_dump_quiesce_frames",
+					"renderAssetManager.has_requested_render_assets()",
+					"!renderAssetManager.has_pending_render_assets()",
+					"frameDumpQuiesceFrameCount = streamingQuiesced ? frameDumpQuiesceFrameCount + 1 : 0",
+					"smoke frame limit reached before render asset streaming quiesced"
+				});
+			return (manager_ok && application_ok) ||
+				report_self_test_failure("Frame dump streaming quiesce", "frame dump must be driven by the render asset streaming quiesce signal with the frame limit as timeout fallback");
+		}
+
 		auto test_render_debug_view_config_parses_runtime_selection() -> bool
 		{
 			const std::filesystem::path test_dir = engine_self_test_dir();
@@ -5363,6 +5384,7 @@ namespace AshEngine
 		all_passed = test_scene_renderer_volumetric_lighting_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_ambient_occlusion_downsampled_scene_uv_contract() && all_passed;
+		all_passed = test_frame_dump_streaming_quiesce_contract() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
 		all_passed = test_render_debug_view_graph_pass_contract() && all_passed;
