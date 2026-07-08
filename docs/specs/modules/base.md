@@ -27,7 +27,7 @@ status: active
 | `IniConfig.h/.cpp` | `IniConfig` ini 读取器 + `resolve_runtime_config_path/trim_ini_string/to_lower_ascii` |
 | `hservice.h`、`hserviceManager.h/.cpp` | `Service` 基类（`ASH_DECLARE_SERVICE`）+ `ServiceManager` 单例注册表 |
 | `hstring.*`、`hcache.*`、`hbit.*`、`hcommandQueue.hpp`、`hassert.h` | `StringView/StringBuffer`、`LRUCache`、位操作、命令队列、断言宏 |
-| `EngineSelfTests.*` | `run_engine_base_self_tests()`，由 `--engine-self-test` 触发 |
+| `EngineSelfTests.*` | `run_engine_base_self_tests()`（legacy 自测集，100+ 用例），由 `--engine-self-test` 触发，也被 Tests.exe 桥接用例调用；新单测写 doctest（`project/src/tests/`），本文件只减不增 |
 | `ProcessMemoryDiagnostics.*` | 进程内存诊断采样 |
 
 ## 公共接口
@@ -47,15 +47,17 @@ status: active
 - `LogService` 与 `MemoryService` 必须最先初始化（`Application::initialize` 的第一步），其余模块假定二者可用。
 - 引擎对象生命周期由 `Ash_New/Ash_Delete` 管理以纳入内存统计；不要混用裸 `new/delete` 分配引擎长生命周期对象。
 - `hprofiler.h` 只应在 `.cpp` 中 include，避免 Tracy 头污染公共头。
+- Base 符号的 `ASH_API` 导出（如 `memory_copy`、`MemoryService`）仅为跨 DLL 链接需要（Tests.exe / 内联模板在 exe 侧实例化）；**导出不等于开放**，Editor/Game 层禁止直接使用 Base 符号。若测试迁移导致导出面明显膨胀，届时立 SDD 做 Base 静态库拆分。
 - 渲染命令队列只能由 render 线程 pump；`InputState` 每线程一份（logic 线程经快照同步，见 application spec）。
 - 错误处理宏（`ASH_PROCESS_ERROR` / `ASH_LOG_PROCESS_ERROR` / `ASH_PROCESS_ERROR_EXIT` / `ASH_PROCESS_GUARD_*`）用于资源创建、init/shutdown、绑定/提交/加载等多失败出口的流程函数；纯 getter、轻量转换、一行包装、UI 透传不用。循环体内慎用：失败需终止整个函数时改用显式状态变量或把检查提升到循环外。
 
 ## 验证
 
+- `RunTests.bat` 跑 doctest 单测（`project/src/tests/Base/` + legacy 自测桥接），Base 纯逻辑改动必跑。
 - 构建 + `run.bat all Debug --smoke-test-seconds=5`（全矩阵 smoke，Base 被所有目标依赖）。
-- `run.bat sandbox vulkan Debug --engine-self-test` 跑 Base 自测（容器/序列化等）。
+- `run.bat sandbox vulkan Debug --engine-self-test` 为 legacy 自测入口（Tests.exe 桥接已覆盖同一套用例）。
 - 改动波及渲染路径（内存/线程）时按 `docs/VERIFY.md` 追加 `RunRenderGate.bat` 与 PerfGate Standard。
 
 ## 历史
 
-无。
+- `docs/sdd/SDD-2026-07-08-doctest-unit-test-layer.md`：引入 doctest 单测工程；`hmemory.h` 的 `memory_copy` 与 `MemoryService` 补 `ASH_API` 导出（供 Tests.exe 跨 DLL 链接）。

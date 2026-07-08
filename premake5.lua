@@ -56,6 +56,7 @@ startproject "Editor"
 include "project/src/engine"
 include "project/src/editor"
 include "project/src/sandbox"
+include "project/src/tests"
 -- include "project/src/shader"
 
 group "Tools"

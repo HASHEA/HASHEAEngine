@@ -11,7 +11,7 @@ namespace AshEngine
 //#define ASH_TRACE_MEM_ALLOCATE
 //#define ASH_TRACE_MEM_DEALLOCATE
 	// Memory Methods /////////////////////////////////////////////////////
-	void memory_copy(void* destination, void* source, size_t size);
+	ASH_API void memory_copy(void* destination, void* source, size_t size);
 
 	//
 	//  Calculate aligned memory size.
@@ -145,7 +145,7 @@ namespace AshEngine
 		size_t                       m_szMaxDynamicSize = 512 * 1024 * 1024;    // Defaults to max 32MB of dynamic memory.
 
 	};
-	class MemoryService : public Service
+	class ASH_API MemoryService : public Service
 	{
 	public:
 		static constexpr char* k_name = "memory_service";
