@@ -18,6 +18,8 @@ status: active
 - Build: `premake5.lua`（workspace 定义 + PostBuild artifact 同步）→ `generate_vs2022.bat` → `build_editor.bat` / `build_sandbox.bat`
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
 - RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；Sandbox 命令行 `--rhi=<vulkan|dx12>`、`--smoke-test=N`、`--dump-frame=<png>`、`--scene=<json>`；golden 在 `tools/render/goldens/<scene>/<backend>.png`，对比工具 `tools/imagediff/`（AshImageDiff）
+- Unit tests: `RunTests.bat [Config] [doctest args...]` → 构建并运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`（doctest，工程在 `project/src/tests/`，含 legacy `run_engine_base_self_tests()` 桥接）
+- ArchGate: `RunArchGate.bat` → `scripts/CheckArchBoundary.ps1`；按 `tools/ai-dev/rules/arch-boundary-rules.json` 扫描 include 判定依赖方向红线，新增越界退出码 1
 
 ## Directories
 
@@ -30,6 +32,7 @@ status: active
 | `project/src/engine/Shaders/` | Engine HLSL 源码 | 与 Pass 改动配套 |
 | `project/src/editor/` | Editor 壳与面板（App/Core/Shell/Panels/Services/Widgets） | Editor 功能开发 |
 | `project/src/sandbox/` | 验证程序与内置测试（`Tests/SandboxTestRegistry`） | 新 feature 的验证场景 |
+| `project/src/tests/` | doctest 单元测试工程（Tests.exe，链接 Engine.dll） | 新增 Base/纯逻辑单测；`Base/` 子目录按模块分文件 |
 | `product/` | 运行配置、资产、日志、可执行输出 | 配置与资产；`bin64/` 为构建产物 |
 | `scripts/`、`tools/` | 构建/验证脚本与其规则、基线数据 | 工具链改进 |
 | `docs/` | 长期文档；`docs/specs/` 模块与 feature 现状规格；`docs/sdd/` 变更设计文档 | 随代码同步更新 |
@@ -78,6 +81,8 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
            跨模块 import 他人 internal（只依赖公共接口）
 ```
 
+红线由 `RunArchGate.bat` 机械检查（include 扫描；既有越界在 `tools/ai-dev/rules/arch-boundary-rules.json` 的 legacy 名单里只 WARN 禁增）。
+
 ## Common tasks
 
 | Task | Read first | Usually changes | Required tests |
@@ -88,6 +93,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 | Editor 面板功能 | `docs/specs/modules/editor.md`、`docs/editor/EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
 | 场景/资产能力 | `docs/specs/modules/scene.md`、`docs/specs/modules/asset.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |
+| Base 层纯逻辑改动 | `docs/specs/modules/base.md`、相邻实现 | `engine/Base/`、`project/src/tests/Base/` | `RunTests.bat` |
 
 ## 更新触发
 

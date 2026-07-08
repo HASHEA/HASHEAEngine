@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "layers": [
+    { "name": "Base", "path_prefix": "project/src/engine/Base/" },
+    { "name": "Graphics", "path_prefix": "project/src/engine/Graphics/" },
+    { "name": "Function", "path_prefix": "project/src/engine/Function/" },
+    { "name": "Editor", "path_prefix": "project/src/editor/" },
+    { "name": "Sandbox", "path_prefix": "project/src/sandbox/" },
+    { "name": "Tests", "path_prefix": "project/src/tests/" }
+  ],
+  "include_prefixes": {
+    "Base/": "Base",
+    "Graphics/": "Graphics",
+    "Function/": "Function"
+  },
+  "forbidden": [
+    { "from": "Base", "to": [ "Graphics", "Function" ], "reason": "Base 不得反向依赖上层" },
+    { "from": "Graphics", "to": [ "Function" ], "reason": "Graphics 不得依赖 Function" },
+    { "from": "Editor", "to": [ "Graphics" ], "reason": "Editor 禁止依赖 Graphics/后端细节，UI 交互走 UIContext" },
+    { "from": "Sandbox", "to": [ "Graphics" ], "reason": "Sandbox 禁止依赖 Graphics/后端细节" }
+  ],
+  "exceptions": [
+    {
+      "file": "project/src/engine/Base/window/Window.h",
+      "include": "Graphics/RHIBackend.h",
+      "reason": "纯枚举头，base spec 记录的唯一长期例外"
+    }
+  ],
+  "legacy_violations": [
+    {
+      "file": "project/src/engine/Base/EngineSelfTests.cpp",
+      "include": "*",
+      "reason": "legacy 自测集含上层测试；doctest 迁移完成后随文件删除（SDD-2026-07-08-doctest-unit-test-layer）"
+    },
+    {
+      "file": "project/src/editor/Services/EditorIconService.cpp",
+      "include": "Graphics/*",
+      "reason": "既有越界，待修复：图标纹理创建应走 Function 层门面"
+    },
+    {
+      "file": "project/src/engine/Graphics/Vulkan/VulkanSwapchain.cpp",
+      "include": "Function/Application.h",
+      "reason": "既有越界，待修复：Graphics 反向依赖 Function"
+    }
+  ]
+}

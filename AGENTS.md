@@ -31,12 +31,14 @@ build_editor.bat Debug / build_sandbox.bat Debug      :: 构建
 run.bat editor|sandbox|all [vulkan|dx12] [Debug] [--smoke-test-seconds=N]
 RunPerfGate.bat -Profile Standard                     :: 性能门禁（全矩阵）
 RunRenderGate.bat                                     :: 渲染门禁：双后端 golden SSIM 回归 + 跨后端 diff（渲染改动必跑）
+RunTests.bat                                          :: 单元测试：doctest（project/src/tests/，含 legacy 自测桥接）
+RunArchGate.bat                                       :: 架构边界检查：include 扫描依赖方向红线（秒级，改引擎/编辑器代码必跑）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mode ValidatePlan
 ```
 
 ## Architecture rules
 
-- 依赖方向：`Base ← Graphics ← Function ← Editor/Sandbox`，禁止反向
+- 依赖方向：`Base ← Graphics ← Function ← Editor/Sandbox`，禁止反向（`RunArchGate.bat` 机械检查；既有越界在 `tools/ai-dev/rules/arch-boundary-rules.json` legacy 名单，只减不增）
 - Editor / Sandbox 禁止依赖 Graphics 层或任何 Vulkan/DX12 细节；UI 交互走 `UIContext`
 - RHI（`DynamicRHI` / `RHIResource`）改动必须双后端等价实现，禁止单后端特化泄漏到 Function 层
 - 跨模块只依赖公共接口，禁止 import 其他模块 internal

@@ -25,6 +25,8 @@ status: active
 | `scripts/TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` | 两个工具的自测脚本 |
 | `scripts/GetTolaria.ps1` | 按 pin 的版本+SHA256 下载 Tolaria（AGPL 独立知识库应用，vault 指向 `docs/`）安装器到 `tools/tolaria/`（gitignored）；不 vendor 源码，升级只改脚本内版本与 hash |
 | `scripts/hooks/PreToolUseGuard.py` + `.claude/settings.json` | AI 护栏 hook：直改基线文件 deny、S2 路径（Graphics/RenderGraph）ask（规则见 AGENTS.md High-risk paths） |
+| `RunTests.bat` + `build_tests.bat` | 单元测试入口：构建 Tests 工程（doctest，`project/src/tests/`）并运行 `Tests.exe`，透传 doctest 参数 |
+| `RunArchGate.bat` + `scripts/CheckArchBoundary.ps1` | 架构边界检查：扫描各层源文件 `#include "<Layer>/..."`，按 `tools/ai-dev/rules/arch-boundary-rules.json` 判定禁止边 |
 | `run.bat` / `run_editor.bat` / `build_editor.bat` / `build_sandbox.bat` / `generate_vs2022.bat` | 运行与构建入口 |
 
 ## 公共接口
@@ -33,6 +35,8 @@ status: active
 - **RenderGate**：`RunRenderGate.bat [-Configuration Debug] [-Backends vulkan,dx12] [-SmokeFrames 5000] [-GoldenSsimThreshold 0.995] [-CrossSsimThreshold 0.99] [-BlessGolden] [-SkipCrossBackend]`；每后端跑 `Sandbox.exe --rhi=<backend> --smoke-test=<N> --dump-frame=<png>` 抓帧——抓帧时机由引擎侧资产流送 quiesce 信号驱动（流送完成 + 32 帧余量即抓帧退出，SDD-2026-07-07-render-gate-streaming-signal），`-SmokeFrames` 仅为超时保底——与 `tools/render/goldens/<scene>/<backend>.png` 做 SSIM 回归（阈值 0.995），再做 Vulkan vs DX12 跨后端 diff（阈值 0.99）；报告 `Intermediate/test-reports/render-gate/<时间戳>/`（抓帧 png、日志、heatmap）。**`-BlessGolden` 仅在用户确认画面正确后使用**。
 - **AshImageDiff**：`AshImageDiff.exe <a.png> <b.png> [--ssim-threshold=x] [--heatmap=path]`；灰度 SSIM（11x11 高斯窗口，sigma 1.5）+ 逐像素统计；stdout 输出 `key=value`：`image_a/image_b/width/height/ssim/ssim_threshold/max_abs_diff/mean_abs_diff/diff_pixel_count/diff_pixel_ratio/[heatmap]/result`；退出码 0=PASS、1=FAIL（低于阈值或尺寸不匹配）、2=用法/IO 错误。
 - **AIDevDoctor**：`scripts/AIDevDoctor.ps1 -Mode Report|ValidatePlan`；基于 git dirty paths 与 `tools/ai-dev/rules/*.json` 生成诊断报告/验证计划，报告落 `Intermediate/test-reports/ai-dev/`。详见 `docs/AIDevDoctor.md`。
+- **Tests**：`RunTests.bat [Config] [doctest args...]`；先经 `build_tests.bat` 构建 Tests 工程，再运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`；退出码 0 = 全部通过。doctest 参数直接透传（如 `--test-case="*StringView*"`、`--list-test-cases`；经 cmd 转发时引号可能被吃掉，过滤不生效时直接调 Tests.exe）。
+- **ArchGate**：`RunArchGate.bat`（可选 `-RulesPath <json>`）；纯文本扫描，秒级完成，不需要构建。三档判定：`exceptions`（长期合法例外，如 `Window.h` → `RHIBackend.h` 纯枚举头）；`legacy_violations`（既有越界，WARN 不挡、**禁止新增**）；其余禁止边命中 → FAIL 退出码 1。名单条目失配（对应文件已修复/删除）也 FAIL，强制名单只减不增。改规则或脚本跑 `scripts/TestCheckArchBoundary.ps1`。
 - **构建/运行**：`generate_vs2022.bat`（premake5 生成 sln）；`build_editor.bat` / `build_sandbox.bat [Config] [Platform]`（缺 sln 自动生成，经 InvokeMSBuild.ps1）；`run.bat [editor|sandbox|all] [current|dx12|vulkan] [Config] [AppArgs...]`（临时改写 Engine.ini backend，退出后还原；`all` 为 Editor+Sandbox x DX12+Vulkan 矩阵）。
 
 ## 约束与不变式
@@ -48,6 +52,7 @@ status: active
 对齐 `docs/VERIFY.md` "`scripts/` / `tools/`"行：
 
 - 改 AIDevDoctor：`scripts/TestAIDevDoctor.ps1`
+- 改 ArchGate（脚本或 arch-boundary-rules.json）：`scripts/TestCheckArchBoundary.ps1`
 - 改 PerfGate：`scripts/TestRunPerfGate.ps1`（含 `-SelfTest` 路径）
 - 改 RenderGate/AshImageDiff：完整跑一次 `RunRenderGate.bat` 确认 PASS
 - 改构建链（premake/bat/InvokeMSBuild/SyncRuntimeArtifact）：删 sln 全新 `generate_vs2022.bat` + 构建，确认 PostBuild artifact 同步成功
@@ -55,4 +60,6 @@ status: active
 ## 历史
 
 - `docs/sdd/SDD-2026-07-07-render-gate.md`（RenderGate + AshImageDiff）
+- `docs/sdd/SDD-2026-07-08-doctest-unit-test-layer.md`（doctest 单测工程 + RunTests.bat）
+- `docs/sdd/SDD-2026-07-08-arch-boundary-check.md`（ArchGate 架构边界检查）
 - `docs/superpowers/specs/2026-05-18-perf-gate-design.md`（PerfGate，归档）
