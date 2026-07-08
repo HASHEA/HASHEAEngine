@@ -37,22 +37,22 @@ namespace AshEngine
     struct StringArray;
 
     auto file_read_binary(const char* fileName , size_t& size, Allocator* allocator = nullptr) -> char*;
-    auto file_read_text(const char* fileName ,  size_t& size, Allocator* allocator = nullptr) -> char*;
+    ASH_API auto file_read_text(const char* fileName ,  size_t& size, Allocator* allocator = nullptr) -> char*;
     auto file_read_binary(const char* fileName , Allocator* allocator = nullptr) -> FileReadResult;
     auto file_read_text(const char* fileName , Allocator* allocator = nullptr) -> FileReadResult;
-    auto file_write_binary(const char* fileName, void* memory, size_t size) -> void;
+    ASH_API auto file_write_binary(const char* fileName, void* memory, size_t size) -> void;
     auto file_exists(const char* fileName) -> bool;
     auto file_open(const char* fileName, const char* mode, FileHandle* file) -> void;
     auto file_close(FileHandle file)-> void;
     auto file_write(uint8_t* memory,uint32_t elementSize,uint32_t count,FileHandle file) -> size_t;
-    auto file_delete(const char* filePath) -> bool;
+    ASH_API auto file_delete(const char* filePath) -> bool;
 #if defined(_WIN64)
     auto file_last_write_time(const char* filename) -> FileTime;
 #endif
     auto file_resolve_to_full_path(const char* path, char* outFullPath, uint32_t maxSize) -> uint32_t;
     auto file_directory_from_path(char* path) -> void;
     auto file_name_from_path(char* path) -> void;
-    auto file_extension_from_path(char* path) -> char*;
+    ASH_API auto file_extension_from_path(char* path) -> char*;
 
     auto directory_exists(const char* path) -> bool;
     auto directory_create(const char* path) -> bool;

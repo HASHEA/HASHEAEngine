@@ -1,6 +1,9 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include "doctest.h"
 
+#include "Base/hlog.h"
+#include "Base/hmemory.h"
+
 #include <filesystem>
 #include <iostream>
 
@@ -43,6 +46,13 @@ int main(int argc, char** argv)
 		std::cerr << "Tests: failed to locate engine repository root from current directory." << std::endl;
 		return 1;
 	}
+	// 进程唯一一次服务初始化：doctest 不保证用例顺序，被测代码依赖的服务必须在这里就绪；
+	// EngineSelfTestsBridge 侧经 MemoryService::is_initialized() 防二次 init
+	AshEngine::LogService::instance()->init(nullptr);
+	AshEngine::MemoryService::instance()->init(nullptr);
 	doctest::Context context(argc, argv);
-	return context.run();
+	const int result = context.run();
+	AshEngine::MemoryService::instance()->shutdown();
+	AshEngine::LogService::instance()->shutdown();
+	return result;
 }

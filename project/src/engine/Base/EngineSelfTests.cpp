@@ -1,11 +1,8 @@
 #include "EngineSelfTests.h"
 
-#include "hassert.h"
-#include "ds/harray.hpp"
 #include "hfile.h"
 #include "hlog.h"
 #include "hmemory.h"
-#include "ProcessMemoryDiagnostics.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Diagnostics/PerfGate.h"
@@ -64,11 +61,6 @@ namespace AshEngine
 {
 	namespace
 	{
-		struct alignas(64) OverAlignedSelfTestType
-		{
-			uint32_t value = 0;
-		};
-
 		auto report_self_test_failure(const char* test_name, const char* reason) -> bool
 		{
 			HLogError("Engine base self-test '{}' failed: {}", test_name, reason);
@@ -101,194 +93,6 @@ namespace AshEngine
 				}
 			}
 			return true;
-		}
-
-		auto test_assert_macro_is_statement_safe() -> bool
-		{
-			bool branch_executed = false;
-			if (true)
-				H_ASSERT(true);
-			else
-				branch_executed = true;
-
-			return !branch_executed || report_self_test_failure("H_ASSERT statement safety", "else branch was executed unexpectedly");
-		}
-
-		auto test_typed_allocation_respects_alignment() -> bool
-		{
-			OverAlignedSelfTestType* object = Ash_New<OverAlignedSelfTestType>();
-			const uintptr_t address = reinterpret_cast<uintptr_t>(object);
-			const bool aligned = object && (address % alignof(OverAlignedSelfTestType)) == 0;
-			if (object)
-			{
-				_original_destroy(object);
-				MemoryService::instance()->get_system_allocator()->deallocate(object);
-			}
-
-			return aligned || report_self_test_failure("Ash_New alignment", "over-aligned allocation was not aligned to alignof(T)");
-		}
-
-		auto test_memory_service_reports_heap_statistics() -> bool
-		{
-			HeapMemoryStats before = MemoryService::instance()->get_heap_stats();
-			void* allocation = Ash_Alloc(nullptr, 128, 16);
-			HeapMemoryStats during = MemoryService::instance()->get_heap_stats();
-			Ash_Free(nullptr, allocation);
-			HeapMemoryStats after = MemoryService::instance()->get_heap_stats();
-
-			if (!allocation)
-			{
-				return report_self_test_failure("MemoryService heap stats", "allocation failed");
-			}
-			if (during.current_allocated_bytes <= before.current_allocated_bytes)
-			{
-				return report_self_test_failure("MemoryService heap stats", "current bytes did not increase after allocation");
-			}
-			if (during.peak_allocated_bytes < during.current_allocated_bytes)
-			{
-				return report_self_test_failure("MemoryService heap stats", "peak bytes were lower than current bytes");
-			}
-			if (during.live_allocation_count <= before.live_allocation_count)
-			{
-				return report_self_test_failure("MemoryService heap stats", "live allocation count did not increase");
-			}
-			return (after.current_allocated_bytes == before.current_allocated_bytes) ||
-				report_self_test_failure("MemoryService heap stats", "current bytes did not return to the original value");
-		}
-
-		auto test_process_memory_snapshot_is_available() -> bool
-		{
-			const ProcessMemorySnapshot snapshot = get_current_process_memory_snapshot();
-#if defined(ASH_WINDOWS)
-			if (!snapshot.supported)
-			{
-				return report_self_test_failure("Process memory snapshot", "Windows process memory snapshot reported unsupported");
-			}
-			if (snapshot.working_set_bytes == 0 || snapshot.private_bytes == 0)
-			{
-				return report_self_test_failure("Process memory snapshot", "Windows process memory counters were zero");
-			}
-#else
-			if (snapshot.supported)
-			{
-				return report_self_test_failure("Process memory snapshot", "non-Windows process memory snapshot unexpectedly reported supported");
-			}
-#endif
-			return true;
-		}
-
-		auto test_stack_allocator_marker_rejects_forward_free() -> bool
-		{
-			StackAllocator allocator{};
-			if (!allocator.init(256))
-			{
-				return report_self_test_failure("StackAllocator marker", "allocator init failed");
-			}
-
-			void* first = allocator.allocate(32, 8);
-			const size_t marker = allocator.get_marker();
-			void* second = allocator.allocate(32, 8);
-			const bool rollback_ok = allocator.free_marker(marker);
-			const size_t rollback_marker = allocator.get_marker();
-			const bool forward_free_rejected = !allocator.free_marker(marker + 64);
-			const size_t final_marker = allocator.get_marker();
-			allocator.shutdown();
-
-			if (!first || !second)
-			{
-				return report_self_test_failure("StackAllocator marker", "allocation failed");
-			}
-			if (!rollback_ok || rollback_marker != marker)
-			{
-				return report_self_test_failure("StackAllocator marker", "valid rollback did not restore the marker");
-			}
-			return (forward_free_rejected && final_marker == marker) ||
-				report_self_test_failure("StackAllocator marker", "forward marker free was accepted");
-		}
-
-		auto test_linear_allocator_deallocate_reports_unsupported() -> bool
-		{
-			LinearAllocator allocator{};
-			if (!allocator.init(128))
-			{
-				return report_self_test_failure("LinearAllocator deallocate", "allocator init failed");
-			}
-
-			void* allocation = allocator.allocate(16, 8);
-			const bool deallocate_result = allocator.deallocate(allocation);
-			allocator.shutdown();
-
-			if (!allocation)
-			{
-				return report_self_test_failure("LinearAllocator deallocate", "allocation failed");
-			}
-			return (!deallocate_result) ||
-				report_self_test_failure("LinearAllocator deallocate", "single-allocation deallocate reported success");
-		}
-
-		auto test_array_growth_and_initial_size() -> bool
-		{
-			Array<uint32_t> values{};
-			if (!values.init(nullptr, 0, 3))
-			{
-				return report_self_test_failure("Array growth", "init with initial_size greater than capacity failed");
-			}
-			if (values.size() != 3 || values.capacity() < 3 || values[0] != 0 || values[1] != 0 || values[2] != 0)
-			{
-				values.shutdown();
-				return report_self_test_failure("Array growth", "initial_size did not allocate and zero-initialize storage");
-			}
-			for (uint32_t value = 3; value < 8; ++value)
-			{
-				if (!values.push_back(value))
-				{
-					values.shutdown();
-					return report_self_test_failure("Array growth", "push_back reported grow failure");
-				}
-			}
-			const bool ok = values.size() == 8 &&
-				values.capacity() >= 8 &&
-				values[3] == 3 &&
-				values[7] == 7;
-			values.shutdown();
-			return ok || report_self_test_failure("Array growth", "push_back did not preserve values across grow");
-		}
-
-		auto test_file_delete_reports_success() -> bool
-		{
-			const std::filesystem::path test_dir = engine_self_test_dir();
-			const std::filesystem::path test_file = test_dir / "file_delete_self_test.tmp";
-			file_write_binary(test_file.string().c_str(), const_cast<char*>("x"), 1);
-			const bool delete_result = file_delete(test_file.string().c_str());
-			const bool deleted = !std::filesystem::exists(test_file);
-
-			return (delete_result && deleted) ||
-				report_self_test_failure("file_delete", "successful delete did not return true");
-		}
-
-		auto test_file_read_text_and_extension_are_safe() -> bool
-		{
-			const std::filesystem::path test_dir = engine_self_test_dir();
-			const std::filesystem::path test_file = test_dir / "file_read_text_self_test.txt";
-			const char text[] = "AshEngineText";
-			file_write_binary(test_file.string().c_str(), const_cast<char*>(text), sizeof(text) - 1);
-
-			size_t text_size = 0;
-			char* text_data = file_read_text(test_file.string().c_str(), text_size, nullptr);
-			const bool text_ok =
-				text_data != nullptr &&
-				text_size == sizeof(text) - 1 &&
-				std::memcmp(text_data, text, sizeof(text) - 1) == 0;
-			if (text_data)
-			{
-				MemoryService::instance()->get_system_allocator()->deallocate(text_data);
-			}
-
-			char no_extension_path[] = "Intermediate/test-temp/engine/no_extension";
-			const bool extension_ok = file_extension_from_path(no_extension_path) == nullptr;
-
-			return (text_ok && extension_ok) ||
-				report_self_test_failure("file text helpers", "text read or extension parsing returned invalid data");
 		}
 
 		auto test_shader_hash_uses_explicit_source_hash() -> bool
@@ -5330,19 +5134,16 @@ namespace AshEngine
 
 	auto run_engine_base_self_tests() -> int
 	{
-		LogService::instance()->init(nullptr);
-		MemoryService::instance()->init(nullptr);
+		// doctest TestMain 已初始化服务时禁止二次 init/shutdown（HeapAllocator::init 会重复申请
+		// 整个内存池；shutdown 会拆掉后续 doctest 用例仍在用的服务）——谁 init 谁负责回收
+		const bool owns_services = !MemoryService::instance()->is_initialized();
+		if (owns_services)
+		{
+			LogService::instance()->init(nullptr);
+			MemoryService::instance()->init(nullptr);
+		}
 
 		bool all_passed = true;
-		all_passed = test_assert_macro_is_statement_safe() && all_passed;
-		all_passed = test_typed_allocation_respects_alignment() && all_passed;
-		all_passed = test_memory_service_reports_heap_statistics() && all_passed;
-		all_passed = test_process_memory_snapshot_is_available() && all_passed;
-		all_passed = test_stack_allocator_marker_rejects_forward_free() && all_passed;
-		all_passed = test_linear_allocator_deallocate_reports_unsupported() && all_passed;
-		all_passed = test_array_growth_and_initial_size() && all_passed;
-		all_passed = test_file_delete_reports_success() && all_passed;
-		all_passed = test_file_read_text_and_extension_are_safe() && all_passed;
 		all_passed = test_shader_hash_uses_explicit_source_hash() && all_passed;
 		all_passed = test_subresource_range_resolve_clamps_defaults() && all_passed;
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
@@ -5459,8 +5260,11 @@ namespace AshEngine
 		all_passed = test_dx12_resource_tracker_preserves_partial_state() && all_passed;
 #endif
 
-		MemoryService::instance()->shutdown();
-		LogService::instance()->shutdown();
+		if (owns_services)
+		{
+			MemoryService::instance()->shutdown();
+			LogService::instance()->shutdown();
+		}
 		return all_passed ? 0 : 1;
 	}
 }

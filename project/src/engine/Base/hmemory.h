@@ -60,13 +60,17 @@ namespace AshEngine
 		uint64_t peak_allocation_count = 0;
 	};
 
-	class HeapAllocator : public Allocator
+	class ASH_API HeapAllocator : public Allocator
 	{
 	public:
 		~HeapAllocator() override;
 
 		auto init(size_t size) -> bool;
 		auto shutdown()-> bool;
+		auto is_initialized() const -> bool
+		{
+			return m_pTlsfHandle != nullptr;
+		}
 
 #ifdef ASH_DEBUG
 		auto on_gui() -> void;
@@ -92,7 +96,7 @@ namespace AshEngine
 		uint64_t                     m_peakAllocationCount = 0;
 	}; // struct HeapAllocator
 
-	class StackAllocator : public Allocator
+	class ASH_API StackAllocator : public Allocator
 	{
 	public:
 		auto                        init(size_t size) -> bool;
@@ -119,7 +123,7 @@ namespace AshEngine
 	//
 // Allocator that can only be reset.
 //
-	class LinearAllocator : public Allocator 
+	class ASH_API LinearAllocator : public Allocator
 	{
 	public:
 		~LinearAllocator();
@@ -167,6 +171,11 @@ namespace AshEngine
 		auto get_heap_stats() const -> HeapMemoryStats
 		{
 			return m_heapAllocator.get_stats();
+		}
+		// init 非幂等（HeapAllocator::init 无条件申请新内存池），调用方须先查再 init
+		auto is_initialized() const -> bool
+		{
+			return m_heapAllocator.is_initialized();
 		}
 	private:
 		// Global Frame allocator

@@ -27,7 +27,7 @@ status: active
 | `IniConfig.h/.cpp` | `IniConfig` ini 读取器 + `resolve_runtime_config_path/trim_ini_string/to_lower_ascii` |
 | `hservice.h`、`hserviceManager.h/.cpp` | `Service` 基类（`ASH_DECLARE_SERVICE`）+ `ServiceManager` 单例注册表 |
 | `hstring.*`、`hcache.*`、`hbit.*`、`hcommandQueue.hpp`、`hassert.h` | `StringView/StringBuffer`、`LRUCache`、位操作、命令队列、断言宏 |
-| `EngineSelfTests.*` | `run_engine_base_self_tests()`（legacy 自测集，100+ 用例），由 `--engine-self-test` 触发，也被 Tests.exe 桥接用例调用；新单测写 doctest（`project/src/tests/`），本文件只减不增 |
+| `EngineSelfTests.*` | `run_engine_base_self_tests()`（legacy 自测集，Graphics/Function 域用例），由 `--engine-self-test` 触发，也被 Tests.exe 桥接用例调用；runner 只在服务未初始化时 init/shutdown（谁 init 谁负责，防与 TestMain 双 init）。Base 域用例已迁 doctest（SDD-2026-07-08-selftest-base-migration）；新单测写 doctest（`project/src/tests/`），本文件只减不增 |
 | `ProcessMemoryDiagnostics.*` | 进程内存诊断采样 |
 
 ## 公共接口
@@ -61,3 +61,4 @@ status: active
 ## 历史
 
 - `docs/sdd/SDD-2026-07-08-doctest-unit-test-layer.md`：引入 doctest 单测工程；`hmemory.h` 的 `memory_copy` 与 `MemoryService` 补 `ASH_API` 导出（供 Tests.exe 跨 DLL 链接）。
+- `docs/sdd/SDD-2026-07-08-selftest-base-migration.md`：EngineSelfTests Base 域 9 用例迁出 doctest（`tests/Base/hassert|hmemory|hfile_tests.cpp`）；`HeapAllocator/StackAllocator/LinearAllocator` 与 hfile 四函数补 `ASH_API`；`MemoryService` 新增 `is_initialized()`，TestMain 进程级 init/shutdown 服务。
