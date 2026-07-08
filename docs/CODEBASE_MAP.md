@@ -14,7 +14,7 @@ status: active
 
 - Application: `project/src/engine/Function/Application.*`（生命周期）；Editor/Sandbox 经 EntryPoint 启动，工作目录被重置到仓库根
 - Executable: `product/bin64/<Config>-windows-x86_64/{Editor,Sandbox}.exe`；推荐经 `run.bat` 启动
-- Configuration: `product/config/Engine.ini` —— `[RHI] Backend`（Vulkan/DX12）、`[VulkanValidation]`、`[DX12Validation]`、`[RenderDebugView]`
+- Configuration: `product/config/Engine.ini` —— `[RHI] Backend`（Vulkan/DX12）、`[VulkanValidation]`、`[DX12Validation]`、`[RenderDebugView]`；全部配置项见 `docs/CONFIG.md`
 - Build: `premake5.lua`（workspace 定义 + PostBuild artifact 同步）→ `generate_vs2022.bat` → `build_editor.bat` / `build_sandbox.bat`
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
 - RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；Sandbox 命令行 `--rhi=<vulkan|dx12>`、`--smoke-test=N`、`--dump-frame=<png>`、`--scene=<json>`；golden 在 `tools/render/goldens/<scene>/<backend>.png`，对比工具 `tools/imagediff/`（AshImageDiff）

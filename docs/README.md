@@ -10,6 +10,8 @@
   - 仓库导航：入口、目录职责、核心流程、依赖方向、常见任务
 - `docs/VERIFY.md`
   - 按变更类型的验证矩阵，改完必须执行
+- `docs/CONFIG.md`
+  - `product/config/Engine.ini` 配置项权威文档；动配置项前先读、改完同步
 - `docs/specs/`
   - 长期现状规格：模块 spec + feature spec；动某模块/feature 前先读对应 spec，索引见 `docs/specs/README.md`
 - `docs/sdd/`
