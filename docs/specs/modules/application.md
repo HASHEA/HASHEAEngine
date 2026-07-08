@@ -61,6 +61,7 @@ status: active
 - 主题/字体/多视口能力由 `EngineInitConfig` 的 `ui*` 字段透传。
 - 准入标准：只收后端无关、立即模式、编辑器之外也可复用的能力；编辑器工作区编排、默认 dock 布局、面板注册/持久化、Inspector 语义一律放上层编辑器门面。底层 dock/viewport 原语（`dock_builder_*` 等）可进，编辑器具体布局策略不可进。
 - 纹理/surface 约定：通用预览传 `RenderTarget`；场景视口传 `ScenePresentationSubsystem` 的 `UISurfaceHandle`；Window 输出无有效 surface（交换链不可被 UI 采样）。`UITextureHandle` 是瞬态后端数据，禁止跨帧缓存；描述符注册由引擎持有。
+- CPU 像素上传：`create_ui_texture_rgba8(pixels, w, h, debug_name)` → `shared_ptr<UITexture>`（RGBA8 sRGB、单 mip、SRV-only 的不透明所有权载体，同时持有 texture+view——`TextureView` 对父纹理仅 weak 引用），配套 `register_ui_texture/unregister_ui_texture`。Editor 图标等像素数据一律走此门面创建 GPU 纹理（SDD-2026-07-08-editor-icon-ui-texture-facade），禁止直连 `GraphicsContext`。
 - Vulkan 动态渲染路径下 ImGui 初始化必须显式填 `UseDynamicRendering` 与颜色附件格式，保持与引擎渲染路径一致。
 
 ## 约束与不变式

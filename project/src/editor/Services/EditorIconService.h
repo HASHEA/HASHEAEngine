@@ -7,15 +7,10 @@
 #include <memory>
 #include <string>
 
-namespace RHI
-{
-	class Texture;
-	class TextureView;
-}
-
 namespace AshEngine
 {
 	class UIContext;
+	class UITexture;
 }
 
 namespace AshEditor
@@ -37,15 +32,14 @@ namespace AshEditor
 		{
 			std::filesystem::path pathFile{};
 			std::string strDebugName{};
-			std::shared_ptr<RHI::Texture> spTexture = nullptr;
-			std::shared_ptr<RHI::TextureView> spTextureView = nullptr;
+			std::shared_ptr<AshEngine::UITexture> spUiTexture = nullptr;
 			AshEngine::UITextureHandle pUiTextureHandle = nullptr;
 			bool bLoadFailed = false;
 		};
 
 		void RegisterDefaultIcons();
 		void ClearHandles();
-		bool EnsureIconLoaded(IconEntry& refEntry);
+		bool EnsureIconLoaded(IconEntry& refEntry, AshEngine::UIContext& refUiContext);
 		IconEntry& GetEntry(EditorIconId eIconId);
 
 	private:

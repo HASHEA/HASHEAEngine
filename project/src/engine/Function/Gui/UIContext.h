@@ -19,6 +19,7 @@ namespace AshEngine
 	class ImGuiLayer;
 	class RenderDevice;
 	class RenderTarget;
+	class UITexture;
 	class Window;
 	struct WindowEvent;
 
@@ -251,6 +252,11 @@ namespace AshEngine
 		UITextureHandle register_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view);
 		void unregister_texture_view(const std::shared_ptr<RHI::TextureView>& texture_view);
 		UITextureHandle get_texture_view_texture_id(const std::shared_ptr<RHI::TextureView>& texture_view);
+		// editor begin 修改原因：编辑器图标等 CPU 像素数据需经 Function 门面创建 UI 纹理，Editor 禁止直连 Graphics。
+		std::shared_ptr<UITexture> create_ui_texture_rgba8(const void* pixels, uint32_t width, uint32_t height, const char* debug_name = nullptr);
+		UITextureHandle register_ui_texture(const std::shared_ptr<UITexture>& texture);
+		void unregister_ui_texture(const std::shared_ptr<UITexture>& texture);
+		// editor end
 		void image(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void image(UITextureHandle texture, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });
 		void image_surface(UISurfaceHandle surface, const UIVec2& size, const UIVec2& uv0 = { 0.0f, 0.0f }, const UIVec2& uv1 = { 1.0f, 1.0f }, const UIColor& tint = { 1.0f, 1.0f, 1.0f, 1.0f }, const UIColor& border = { 0.0f, 0.0f, 0.0f, 0.0f });

@@ -1,7 +1,9 @@
 #include "UIContext.h"
 #include "ImGuiLayer.h"
 #include "Function/Application.h"
+#include "Function/Gui/UITexture.h"
 #include "Function/Render/RenderDevice.h"
+#include "Graphics/GraphicsContext.h"
 #include "Graphics/Texture.h"
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -2029,6 +2031,60 @@ namespace AshEngine
 	{
 		return m_impl && m_impl->layer ? m_impl->layer->get_texture_view_texture_id(texture_view) : nullptr;
 	}
+
+	// editor begin 修改原因：编辑器图标等 CPU 像素数据需经 Function 门面创建 UI 纹理，Editor 禁止直连 Graphics。
+	std::shared_ptr<UITexture> UIContext::create_ui_texture_rgba8(const void* pixels, uint32_t width, uint32_t height, const char* debug_name)
+	{
+		if (!m_impl || !m_impl->graphics_context || !pixels || width == 0 || height == 0 || width > 65535 || height > 65535)
+		{
+			return nullptr;
+		}
+
+		RHI::TextureCreation creation{};
+		creation.width = static_cast<uint16_t>(width);
+		creation.height = static_cast<uint16_t>(height);
+		creation.depth = 1;
+		creation.array_layer_count = 1;
+		creation.mip_level_count = 1;
+		creation.format = RHI::ASH_FORMAT_R8G8B8A8_SRGB;
+		creation.type = RHI::Ash_Texture2D;
+		creation.initial_state = RHI::AshResourceState::SRVGraphics;
+		creation.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
+		creation.uUsageFlags = RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
+		creation.initial_data = const_cast<void*>(pixels);
+		creation.name = debug_name;
+
+		std::shared_ptr<RHI::Texture> texture = m_impl->graphics_context->create_texture(creation);
+		if (!texture)
+		{
+			return nullptr;
+		}
+
+		std::shared_ptr<RHI::TextureView> texture_view = texture->get_default_srv();
+		if (!texture_view)
+		{
+			return nullptr;
+		}
+
+		std::shared_ptr<UITexture> ui_texture = std::make_shared<UITexture>();
+		ui_texture->texture = std::move(texture);
+		ui_texture->texture_view = std::move(texture_view);
+		return ui_texture;
+	}
+
+	UITextureHandle UIContext::register_ui_texture(const std::shared_ptr<UITexture>& texture)
+	{
+		return texture ? register_texture_view(texture->texture_view) : nullptr;
+	}
+
+	void UIContext::unregister_ui_texture(const std::shared_ptr<UITexture>& texture)
+	{
+		if (texture)
+		{
+			unregister_texture_view(texture->texture_view);
+		}
+	}
+	// editor end
 
 	void UIContext::image(const std::shared_ptr<RenderTarget>& render_target, const UIVec2& size, const UIVec2& uv0, const UIVec2& uv1, const UIColor& tint, const UIColor& border)
 	{

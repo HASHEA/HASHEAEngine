@@ -1,11 +1,8 @@
 #include "Services/EditorIconService.h"
 
 #include "Base/hlog.h"
-#include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
-#include "Graphics/GraphicsContext.h"
-#include "Graphics/RHICommon.h"
-#include "Graphics/Texture.h"
+#include "Function/Gui/UITexture.h"
 
 #include <stb_image.h>
 
@@ -57,9 +54,9 @@ namespace AshEditor
 		{
 			for (IconEntry& refIcon : _arrIcons)
 			{
-				if (refIcon.pUiTextureHandle && refIcon.spTextureView)
+				if (refIcon.pUiTextureHandle && refIcon.spUiTexture)
 				{
-					pActiveUiContext->unregister_texture_view(refIcon.spTextureView);
+					pActiveUiContext->unregister_ui_texture(refIcon.spUiTexture);
 				}
 			}
 		}
@@ -83,14 +80,14 @@ namespace AshEditor
 		}
 
 		IconEntry& refIcon = GetEntry(eIconId);
-		if (!EnsureIconLoaded(refIcon))
+		if (!EnsureIconLoaded(refIcon, refUiContext))
 		{
 			return nullptr;
 		}
 
 		if (!refIcon.pUiTextureHandle)
 		{
-			refIcon.pUiTextureHandle = refUiContext.register_texture_view(refIcon.spTextureView);
+			refIcon.pUiTextureHandle = refUiContext.register_ui_texture(refIcon.spUiTexture);
 			if (!refIcon.pUiTextureHandle)
 			{
 				HLogWarning("EditorIconService failed to register icon '{}'.", refIcon.pathFile.generic_string());
@@ -118,9 +115,9 @@ namespace AshEditor
 		}
 	}
 
-	bool EditorIconService::EnsureIconLoaded(IconEntry& refEntry)
+	bool EditorIconService::EnsureIconLoaded(IconEntry& refEntry, AshEngine::UIContext& refUiContext)
 	{
-		if (refEntry.spTextureView)
+		if (refEntry.spUiTexture)
 		{
 			return true;
 		}
@@ -137,13 +134,6 @@ namespace AshEditor
 		{
 			HLogWarning("EditorIconService could not find icon '{}'.", refEntry.pathFile.generic_string());
 			refEntry.bLoadFailed = true;
-			return false;
-		}
-
-		RHI::GraphicsContext* pGraphicsContext = AshEngine::Application::get_graphics_context();
-		if (!pGraphicsContext)
-		{
-			HLogWarning("EditorIconService skipped loading '{}' because GraphicsContext is unavailable.", refEntry.pathFile.generic_string());
 			return false;
 		}
 
@@ -170,32 +160,14 @@ namespace AshEditor
 				break;
 			}
 
-			RHI::TextureCreation descTexture{};
-			descTexture.width = static_cast<uint16_t>(iWidth);
-			descTexture.height = static_cast<uint16_t>(iHeight);
-			descTexture.depth = 1;
-			descTexture.array_layer_count = 1;
-			descTexture.mip_level_count = 1;
-			descTexture.format = RHI::ASH_FORMAT_R8G8B8A8_SRGB;
-			descTexture.type = RHI::Ash_Texture2D;
-			descTexture.initial_state = RHI::AshResourceState::SRVGraphics;
-			descTexture.memoryType = RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
-			descTexture.uUsageFlags = RHI::ASH_TEXTURE_USAGE_SAMPLED_BIT;
-			descTexture.initial_data = pPixels;
-			descTexture.name = refEntry.strDebugName.c_str();
-
-			refEntry.spTexture = pGraphicsContext->create_texture(descTexture);
-			if (!refEntry.spTexture)
+			refEntry.spUiTexture = refUiContext.create_ui_texture_rgba8(
+				pPixels,
+				static_cast<uint32_t>(iWidth),
+				static_cast<uint32_t>(iHeight),
+				refEntry.strDebugName.c_str());
+			if (!refEntry.spUiTexture)
 			{
-				HLogWarning("EditorIconService failed to create GPU texture for '{}'.", refEntry.pathFile.generic_string());
-				break;
-			}
-
-			refEntry.spTextureView = refEntry.spTexture->get_default_srv();
-			if (!refEntry.spTextureView)
-			{
-				HLogWarning("EditorIconService failed to create SRV for '{}'.", refEntry.pathFile.generic_string());
-				refEntry.spTexture.reset();
+				HLogWarning("EditorIconService failed to create UI texture for '{}'.", refEntry.pathFile.generic_string());
 				break;
 			}
 
