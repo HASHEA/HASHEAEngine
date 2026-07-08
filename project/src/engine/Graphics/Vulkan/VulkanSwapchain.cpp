@@ -3,7 +3,6 @@
 #include "Base/hprofiler.h"
 #include "VulkanContext.h"
 #include "Base/window/Window.h"
-#include "Function/Application.h"
 #include "Base/hassert.h"
 #include <GLFW/glfw3.h> // must include after include vulkan because some key macro should be pre defined
 #include <GLFW/glfw3native.h>

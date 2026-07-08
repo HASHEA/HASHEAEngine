@@ -31,11 +31,6 @@
       "file": "project/src/engine/Base/EngineSelfTests.cpp",
       "include": "*",
       "reason": "legacy 自测集含上层测试；doctest 迁移完成后随文件删除（SDD-2026-07-08-doctest-unit-test-layer）"
-    },
-    {
-      "file": "project/src/engine/Graphics/Vulkan/VulkanSwapchain.cpp",
-      "include": "Function/Application.h",
-      "reason": "既有越界，待修复：Graphics 反向依赖 Function"
     }
   ]
 }
