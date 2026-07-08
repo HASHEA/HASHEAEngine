@@ -27,6 +27,7 @@ status: active
 | `scripts/hooks/PreToolUseGuard.py` + `.claude/settings.json` | AI 护栏 hook：直改基线文件 deny、S2 路径（Graphics/RenderGraph）ask（规则见 AGENTS.md High-risk paths） |
 | `RunTests.bat` + `build_tests.bat` | 单元测试入口：构建 Tests 工程（doctest，`project/src/tests/`）并运行 `Tests.exe`，透传 doctest 参数 |
 | `RunArchGate.bat` + `scripts/CheckArchBoundary.ps1` | 架构边界检查：扫描各层源文件 `#include "<Layer>/..."`，按 `tools/ai-dev/rules/arch-boundary-rules.json` 判定禁止边 |
+| `.github/workflows/ci.yml` | 最小 CI（GitHub Actions，windows runner）：ArchGate + 全新 sln 生成 + Editor/Sandbox Debug 构建 + RunTests；全部复用本地入口脚本，CI 不复制构建逻辑 |
 | `run.bat` / `run_editor.bat` / `build_editor.bat` / `build_sandbox.bat` / `generate_vs2022.bat` | 运行与构建入口 |
 
 ## 公共接口

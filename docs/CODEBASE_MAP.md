@@ -20,6 +20,7 @@ status: active
 - RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；Sandbox 命令行 `--rhi=<vulkan|dx12>`、`--smoke-test=N`、`--dump-frame=<png>`、`--scene=<json>`；golden 在 `tools/render/goldens/<scene>/<backend>.png`，对比工具 `tools/imagediff/`（AshImageDiff）
 - Unit tests: `RunTests.bat [Config] [doctest args...]` → 构建并运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`（doctest，工程在 `project/src/tests/`，含 legacy `run_engine_base_self_tests()` 桥接）
 - ArchGate: `RunArchGate.bat` → `scripts/CheckArchBoundary.ps1`；按 `tools/ai-dev/rules/arch-boundary-rules.json` 扫描 include 判定依赖方向红线，新增越界退出码 1
+- CI: `.github/workflows/ci.yml`（GitHub Actions，windows runner）——push/PR 跑 ArchGate + sln 生成 + Editor/Sandbox Debug 构建 + RunTests；RenderGate/PerfGate 需 GPU 不进 CI
 
 ## Directories
 

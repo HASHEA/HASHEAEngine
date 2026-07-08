@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arch-gate:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: ArchGate (dependency direction boundaries)
+        shell: cmd
+        run: call RunArchGate.bat
+
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate VS2022 solution
+        shell: cmd
+        run: call generate_vs2022.bat
+      - name: Build Editor (Debug)
+        shell: cmd
+        run: call build_editor.bat Debug
+      - name: Build Sandbox (Debug)
+        shell: cmd
+        run: call build_sandbox.bat Debug
+      - name: Unit tests (doctest, Debug)
+        shell: cmd
+        run: call RunTests.bat Debug
