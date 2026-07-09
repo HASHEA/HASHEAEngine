@@ -1,7 +1,7 @@
 # SDD-2026-07-08-minimal-ci: 最小 CI（GitHub Actions）（Mini SDD, S1）
 
 ## Status
-Implementing（2026-07-08）
+Done（2026-07-09 首次 Actions 绿灯）
 
 ## Context
 
@@ -37,4 +37,16 @@ push 后无机械兜底。三方依赖全部 vendored（含 VulkanSDK/dxc），`
 
 ## 执行结果
 
-（首次 CI 绿灯后回填）
+- 2026-07-09 首次全绿（arch-gate + build-and-test 双 job）。落地过程暴露两个
+  「本地永远发现不了」的环境差异，各修一笔：
+  1. **runner 无 ATL 组件**：`atlbase.h` C1083。根治：DXC 路径 `CComPtr` 全量换
+     `Microsoft::WRL::ComPtr`（Windows SDK 标配），引擎不再依赖 ATL
+     （SDD-2026-07-08-dxc-drop-atl-dependency，commit bc4fba1）
+  2. **checkout 默认不拉 LFS**：`.lib` 全是指针桩子，链接期 LNK1107。修复：
+     build-and-test job 增加 `git lfs pull --include="project/thirdparty/**"`
+     （约 1.1GB，排除与构建无关的 RenderControl/）+ `actions/cache` 缓存
+     `.git/lfs`，命中时零 LFS 带宽（commit c00f9f1）
+- CI 正是靠这两次失败证明了自身价值：两个问题都被本地环境（装了 ATL、LFS 实体齐全）
+  长期掩盖
+- 后续候选（未立项）：premake 删除 glslang 死链接（源码零引用，Debug 库占 LFS
+  约 1GB，删后 CI LFS 拉取降至 ~100MB）；Release 配置构建进 CI
