@@ -117,21 +117,9 @@ project "Engine"
 		symbols "on"
 		editandcontinue "Off"
 		optimize "off"
-		includedirs
-		{
-			thirdparty .. "/glslang/debug/windows-x64/include",
-		}
 		links {
-			thirdparty.."/glslang/debug/windows-x64/lib/glslangd.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/SPIRVd.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/OGLCompilerd.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/MachineIndependentd.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/GenericCodeGend.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Toolsd.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/SPIRV-Tools-optd.lib",
-			thirdparty.."/glslang/debug/windows-x64/lib/OSDependentd.lib",
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
-		}	
+		}
 		dest_dir = rootdir .. "/product/bin64"	
 		debugcommand (rootdir .. "/product/bin64/Debug-windows-x86_64/Editor.exe")
 		debugdir (rootdir .. "/product/bin64/Debug-windows-x86_64")			  
@@ -178,10 +166,6 @@ project "Engine"
 		}
 		runtime "Release"
 		optimize "on"
-		includedirs
-		{
-			thirdparty .. "/glslang/release/windows-x64/include",
-		}
 		links {
 			"tracy",
 			"dbghelp",
@@ -190,16 +174,8 @@ project "Engine"
 			"dxgi",
 			"dxguid",
 			"D3D12MA",
-			thirdparty.."/glslang/release/windows-x64/lib/glslang.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/SPIRV.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/OGLCompiler.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/MachineIndependent.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/GenericCodeGen.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/SPIRV-Tools-opt.lib",
-			thirdparty.."/glslang/release/windows-x64/lib/OSDependent.lib",
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
-		}	
+		}
 		debugcommand (rootdir .. "/product/bin64/Release-windows-x86_64/Editor.exe")
 		debugdir (rootdir .. "/product/bin64/Release-windows-x86_64")
 		postbuildcommands 
