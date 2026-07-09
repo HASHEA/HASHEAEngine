@@ -4,6 +4,8 @@
 
 ## 0. 所有任务的公共基线
 
+- `CONTRIBUTING.md`（仓库根）
+  - 协作者工作流：分支保护、PR 合并条件（CODEOWNERS 两档）、CI 触发规则、基线 bless 流程
 - `AGENTS.md`（仓库根）
   - AI/协作者规则：命令、架构边界、SDD 分级、变更与验证要求
 - `docs/CODEBASE_MAP.md`
