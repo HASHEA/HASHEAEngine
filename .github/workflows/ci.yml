@@ -24,6 +24,19 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      # LFS 全量约 1.4GB（含与构建无关的 RenderControl/），只拉 thirdparty 并缓存，
+      # 缓存命中时零 LFS 带宽消耗
+      - name: Compute LFS manifest (thirdparty only)
+        shell: bash
+        run: git lfs ls-files -l | grep "project/thirdparty/" | cut -d' ' -f1 | sort > .lfs-manifest
+      - name: Cache LFS objects
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs
+          key: lfs-thirdparty-${{ hashFiles('.lfs-manifest') }}
+      - name: Pull LFS objects (thirdparty only)
+        shell: bash
+        run: git lfs pull --include="project/thirdparty/**"
       - name: Generate VS2022 solution
         shell: cmd
         run: call generate_vs2022.bat
