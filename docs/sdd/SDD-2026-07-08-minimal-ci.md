@@ -48,5 +48,7 @@ push 后无机械兜底。三方依赖全部 vendored（含 VulkanSDK/dxc），`
      `.git/lfs`，命中时零 LFS 带宽（commit c00f9f1）
 - CI 正是靠这两次失败证明了自身价值：两个问题都被本地环境（装了 ATL、LFS 实体齐全）
   长期掩盖
-- 后续候选（未立项）：premake 删除 glslang 死链接（源码零引用，Debug 库占 LFS
-  约 1GB，删后 CI LFS 拉取降至 ~100MB）；Release 配置构建进 CI
+- 后续候选均已落地（2026-07-09）：glslang 死链接清理见
+  SDD-2026-07-09-remove-glslang-dead-links；CI 追加 Release 构建 + DX12/WARP
+  冒烟（experimental，continue-on-error 观察期）+ `paths-ignore`（docs/**、**.md
+  纯文档 push 不触发 CI）

@@ -3,7 +3,13 @@ name: CI
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,7 +27,7 @@ jobs:
 
   build-and-test:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       # LFS 全量约 1.4GB（含与构建无关的 RenderControl/），只拉 thirdparty 并缓存，
@@ -49,3 +55,15 @@ jobs:
       - name: Unit tests (doctest, Debug)
         shell: cmd
         run: call RunTests.bat Debug
+      - name: Build Editor (Release)
+        shell: cmd
+        run: call build_editor.bat Release
+      - name: Build Sandbox (Release)
+        shell: cmd
+        run: call build_sandbox.bat Release
+      # hosted runner 无 GPU:Vulkan 无 ICD 必挂,DX12 依赖 WARP 软渲染,属实验性;
+      # 先 continue-on-error 观察,稳定后再转为阻断步骤
+      - name: Smoke test Sandbox (DX12/WARP, Release, experimental)
+        shell: cmd
+        continue-on-error: true
+        run: call run.bat sandbox dx12 Release --smoke-test-seconds=10
