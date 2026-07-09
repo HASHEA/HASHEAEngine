@@ -1,7 +1,6 @@
 #pragma once
 #include <Windows.h>
-#include  <atlbase.h> 
-#include <atlcomcli.h>
+#include <unknwn.h>
 #include "dxcapi.h"
 #include "dxctools.h"
 #include <filesystem>

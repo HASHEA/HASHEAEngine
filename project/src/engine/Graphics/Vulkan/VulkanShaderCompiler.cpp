@@ -692,11 +692,11 @@ namespace RHI
 	{
 		if (m_pCompiler)
 		{
-			m_pCompiler.Release();
+			m_pCompiler.Reset();
 		}
 		if (m_pUtils)
 		{
-			m_pUtils.Release();
+			m_pUtils.Reset();
 		}
 		if (m_pDxcContext)
 		{
@@ -719,7 +719,7 @@ namespace RHI
 		ASH_PROCESS_ERROR(item.entryPoint);
 
 		// Create source blob
-		CComPtr<IDxcBlobEncoding> pSourceBlob = nullptr;
+		Microsoft::WRL::ComPtr<IDxcBlobEncoding> pSourceBlob = nullptr;
 		HRESULT hrRes = m_pUtils->CreateBlobFromPinned(pFullText.data(), static_cast<uint32_t>(pFullText.size()), CP_UTF8, &pSourceBlob);
 		ASH_PROCESS_ERROR(hrRes == S_OK);
 
@@ -829,7 +829,7 @@ namespace RHI
 		}
 
 		// Get include handler
-		CComPtr<DXCIncludeHandler> pIncludeHandler = m_pDxcContext->get_default_includer();
+		Microsoft::WRL::ComPtr<DXCIncludeHandler> pIncludeHandler = m_pDxcContext->get_default_includer();
 		ASH_PROCESS_ERROR(pIncludeHandler);
 
 		// Compile
@@ -838,14 +838,14 @@ namespace RHI
 		sourceBuffer.Size = pSourceBlob->GetBufferSize();
 		sourceBuffer.Encoding = CP_UTF8; 
 
-		CComPtr<IDxcResult> pResults = nullptr;
+		Microsoft::WRL::ComPtr<IDxcResult> pResults = nullptr;
 		hrRes = m_pCompiler->Compile(&sourceBuffer, arguments.data(), static_cast<uint32_t>(arguments.size()),
-			pIncludeHandler.p, IID_PPV_ARGS(&pResults));
+			pIncludeHandler.Get(), IID_PPV_ARGS(&pResults));
 		ASH_PROCESS_ERROR(hrRes == S_OK);
 		ASH_PROCESS_ERROR(pResults);
 
 		// Get error buffer
-		CComPtr<IDxcBlobUtf8> pErrors = nullptr;
+		Microsoft::WRL::ComPtr<IDxcBlobUtf8> pErrors = nullptr;
 		hrRes = pResults->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
 		if (pErrors && pErrors->GetStringLength() > 0)
 		{
@@ -863,7 +863,7 @@ namespace RHI
 		ASH_PROCESS_ERROR(compileStatus == S_OK);
 
 		// Get compiled SPIR-V
-		CComPtr<IDxcBlob> pSpirvBlob = nullptr;
+		Microsoft::WRL::ComPtr<IDxcBlob> pSpirvBlob = nullptr;
 		hrRes = pResults->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pSpirvBlob), nullptr);
 		ASH_PROCESS_ERROR(hrRes == S_OK);
 		ASH_PROCESS_ERROR(pSpirvBlob);

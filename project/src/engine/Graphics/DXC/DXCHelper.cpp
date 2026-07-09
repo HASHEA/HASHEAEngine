@@ -10,6 +10,8 @@
 
 namespace RHI
 {
+	using Microsoft::WRL::ComPtr;
+
 	static inline void free_file_read_result(AshEngine::FileReadResult& result)
 	{
 		if (result.data)
@@ -47,10 +49,10 @@ namespace RHI
 		std::string retString{};
 		if (!pBlob)
 			return retString;
-		CComPtr<IDxcBlobUtf8>     pBlobUtf8 = nullptr;
-		CComPtr<IDxcBlobEncoding> pBlobEncoding = nullptr;
+		ComPtr<IDxcBlobUtf8>     pBlobUtf8 = nullptr;
+		ComPtr<IDxcBlobEncoding> pBlobEncoding = nullptr;
 
-		hrRes = pBlob->QueryInterface(&pBlobUtf8);
+		hrRes = pBlob->QueryInterface(IID_PPV_ARGS(&pBlobUtf8));
 
 		if (hrRes == S_OK)
 		{
@@ -58,7 +60,7 @@ namespace RHI
 		}
 		else
 		{
-			hrRes = pBlob->QueryInterface(&pBlobEncoding);
+			hrRes = pBlob->QueryInterface(IID_PPV_ARGS(&pBlobEncoding));
 			H_ASSERTLOG(hrRes == S_OK,"failed to query blob encoding !");
 
 			BOOL   known;
@@ -250,7 +252,7 @@ namespace RHI
 		if (!m_pDefaultIncluder)
 		{
 			m_pDefaultIncluder.Attach(AshEngine::Ash_New<DXCIncludeHandler>());
-			ASH_PROCESS_ERROR(m_pDefaultIncluder.p);
+			ASH_PROCESS_ERROR(m_pDefaultIncluder.Get());
 		}
 		if (!m_pRewriter)
 		{
@@ -268,23 +270,23 @@ namespace RHI
 	{
 		if (m_pLibrary)
 		{
-			m_pLibrary.Release();
+			m_pLibrary.Reset();
 		}
 		if (m_pUtils)
 		{
-			m_pUtils.Release();
+			m_pUtils.Reset();
 		}
 		if (m_pDefaultIncluder)
 		{
-			m_pDefaultIncluder.Release();
+			m_pDefaultIncluder.Reset();
 		}
 		if (m_pRewriter)
 		{
-			m_pRewriter.Release();
+			m_pRewriter.Reset();
 		}
 		if (m_pRewriter2)
 		{
-			m_pRewriter2.Release();
+			m_pRewriter2.Reset();
 		}
 	}
 	bool AshDXCContext::preprocess_shader_file_to_full_text(ShaderItem const& item, ShaderFullTextResult** result)
@@ -295,7 +297,7 @@ namespace RHI
 		const char* szShaderSource = shader_source_text.data;
 		const char* entryName = item.entryPoint;
 		const char* fileName = item.sourceShaderPath;
-		CComPtr<IDxcBlobEncoding> pSourceBlob = nullptr;
+		ComPtr<IDxcBlobEncoding> pSourceBlob = nullptr;
 		std::filesystem::path shaderPath = fileName;
 		ASH_PROCESS_ERROR(szShaderSource);
 		bRetCode = create_blob_from_text(szShaderSource, &pSourceBlob);
@@ -312,39 +314,39 @@ namespace RHI
 		//set user shader for includer
 		if (item.userShaderPath && *item.userShaderPath != '\0')
 		{
-			m_pDefaultIncluder.p->set_current_user_shader_path(item.userShaderPath);
+			m_pDefaultIncluder->set_current_user_shader_path(item.userShaderPath);
 		}
 		else
 		{
-			m_pDefaultIncluder.p->set_current_user_shader_path(std::filesystem::path{});
+			m_pDefaultIncluder->set_current_user_shader_path(std::filesystem::path{});
 		}
 		if (item.generatedBindingsPath && *item.generatedBindingsPath != '\0')
 		{
-			m_pDefaultIncluder.p->set_current_generated_bindings_path(item.generatedBindingsPath);
+			m_pDefaultIncluder->set_current_generated_bindings_path(item.generatedBindingsPath);
 		}
 		else
 		{
-			m_pDefaultIncluder.p->set_current_generated_bindings_path(std::filesystem::path{});
+			m_pDefaultIncluder->set_current_generated_bindings_path(std::filesystem::path{});
 		}
-		m_pDefaultIncluder.p->set_include_root_path(shaderPath.parent_path());
-		CComPtr<IDxcOperationResult> pComplResult = nullptr;
-		HRESULT hRetCode = m_pRewriter2->RewriteWithOptions(pSourceBlob, shaderPath.filename().c_str(), rewriteArgs.data(), static_cast<uint32_t>(rewriteArgs.size()), 
-			vecDefines.data(), static_cast<uint32_t>(vecDefines.size()), m_pDefaultIncluder.p, &pComplResult);
+		m_pDefaultIncluder->set_include_root_path(shaderPath.parent_path());
+		ComPtr<IDxcOperationResult> pComplResult = nullptr;
+		HRESULT hRetCode = m_pRewriter2->RewriteWithOptions(pSourceBlob.Get(), shaderPath.filename().c_str(), rewriteArgs.data(), static_cast<uint32_t>(rewriteArgs.size()),
+			vecDefines.data(), static_cast<uint32_t>(vecDefines.size()), m_pDefaultIncluder.Get(), &pComplResult);
 		ASH_PROCESS_ERROR(hRetCode == S_OK);
-		CComPtr<IDxcBlobEncoding>    pErrors = nullptr;
+		ComPtr<IDxcBlobEncoding>    pErrors = nullptr;
 		hRetCode = pComplResult->GetErrorBuffer(&pErrors);
 		ASH_PROCESS_ERROR(hRetCode == S_OK);
 		ASH_PROCESS_ERROR(*result);
 		if (pErrors)
 		{
-			(*result)->errorMsg = blob_to_utf8(pErrors);
+			(*result)->errorMsg = blob_to_utf8(pErrors.Get());
 		}
-		CComPtr<IDxcBlob>            pBlob = nullptr;
+		ComPtr<IDxcBlob>            pBlob = nullptr;
 		hRetCode = pComplResult->GetResult(&pBlob);
 		ASH_PROCESS_ERROR(SUCCEEDED(hRetCode));
 		if (pBlob)
 		{
-			(*result)->resultShaderText = blob_to_utf8(pBlob);
+			(*result)->resultShaderText = blob_to_utf8(pBlob.Get());
 			merge_missing_type_definitions(szShaderSource, (*result)->resultShaderText);
 		}
 		free_file_read_result(shader_source_text);
@@ -357,7 +359,7 @@ namespace RHI
 	bool AshDXCContext::create_blob_from_text(const char* pText, IDxcBlobEncoding** ppBlob)
 	{
 		ASH_SAFE_EXECUTE_BEGIN(bResult);
-		ASH_PROCESS_ERROR(m_pUtils.p);
+		ASH_PROCESS_ERROR(m_pUtils.Get());
 		ASH_PROCESS_ERROR(pText);
 		ASH_PROCESS_ERROR(ppBlob);
 		HRESULT hrRes = E_FAIL;
@@ -398,7 +400,7 @@ namespace RHI
 		ASH_SAFE_EXECUTE_END(bResult);
 		return bResult;
 	}
-	CComPtr<DXCIncludeHandler> AshDXCContext::get_default_includer()
+	ComPtr<DXCIncludeHandler> AshDXCContext::get_default_includer()
 	{
 		return m_pDefaultIncluder;
 	}

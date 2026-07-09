@@ -1,7 +1,6 @@
 #pragma once
 #include <Windows.h>
-#include  <atlbase.h> 
-#include <atlcomcli.h>
+#include <wrl/client.h>
 #include "dxc/dxcapi.h"
 #include "dxc/dxctools.h"
 #include "Base/hfile.h"
@@ -41,13 +40,13 @@ namespace RHI
 		bool create_blob_from_text(const char* pText, IDxcBlobEncoding** ppBlob);
 		bool create_dxc_define_from_user_define(char const* userDefine, std::vector<std::pair<std::wstring, std::wstring>>& dxcDefineStorage, std::vector<DxcDefine>& dxcDefines);
 	public:
-		CComPtr<DXCIncludeHandler> get_default_includer();
+		Microsoft::WRL::ComPtr<DXCIncludeHandler> get_default_includer();
 	private:
-		CComPtr<IDxcLibrary> m_pLibrary = nullptr;
-		CComPtr<IDxcUtils> m_pUtils = nullptr;
-		CComPtr<DXCIncludeHandler> m_pDefaultIncluder = nullptr;
-		CComPtr<IDxcRewriter> m_pRewriter = nullptr;
-		CComPtr<IDxcRewriter2> m_pRewriter2 = nullptr;
+		Microsoft::WRL::ComPtr<IDxcLibrary> m_pLibrary = nullptr;
+		Microsoft::WRL::ComPtr<IDxcUtils> m_pUtils = nullptr;
+		Microsoft::WRL::ComPtr<DXCIncludeHandler> m_pDefaultIncluder = nullptr;
+		Microsoft::WRL::ComPtr<IDxcRewriter> m_pRewriter = nullptr;
+		Microsoft::WRL::ComPtr<IDxcRewriter2> m_pRewriter2 = nullptr;
 	};
 	
 };

@@ -19,8 +19,8 @@ namespace RHI
 		void uninit();
 #if defined(ASH_HAS_DXC)
 		bool compile_shader_from_text(std::string const& pFullText, const ShaderItem& item, std::vector<uint32_t>& outSpirv, std::string& outErrorMsg);
-		CComPtr<IDxcCompiler3> m_pCompiler = nullptr;
-		CComPtr<IDxcUtils> m_pUtils = nullptr;
+		Microsoft::WRL::ComPtr<IDxcCompiler3> m_pCompiler = nullptr;
+		Microsoft::WRL::ComPtr<IDxcUtils> m_pUtils = nullptr;
 		std::unique_ptr<AshDXCContext> m_pDxcContext = nullptr;
 #else
 		bool compile_shader_from_text(std::string const& pFullText, const ShaderItem& item, std::vector<uint32_t>& outSpirv, std::string& outErrorMsg);
