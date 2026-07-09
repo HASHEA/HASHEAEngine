@@ -8,6 +8,7 @@
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderFeatureConfig.h"
 #include "Function/Render/Renderer.h"
+#include "Function/Render/RHIIndirectSelfTest.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
 #include "Base/hfile.h"
@@ -356,6 +357,10 @@ namespace AshEngine
 		if (!frameDumpPath.empty() && maxFrameCount == 0)
 		{
 			HLogWarning("Application: --dump-frame requires a smoke frame limit (--smoke-test=N); frame dump will be skipped.");
+		}
+		if (rhiIndirectSelfTestRequested)
+		{
+			run_rhi_indirect_self_test(graphicsContext);
 		}
 		_on_startup();
 		perfGateController.begin();

@@ -53,6 +53,9 @@ namespace RHI
 		auto cmd_draw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0, uint32_t firstInstance = 0) -> void override;
 		auto cmd_draw_indexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0, int32_t vertexOffset = 0, uint32_t firstInstance = 0) -> void override;
 		auto cmd_dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) -> void override;
+		auto cmd_draw_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride) -> void override;
+		auto cmd_draw_indexed_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride) -> void override;
+		auto cmd_dispatch_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset) -> void override;
 		auto cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool override;
 		auto cmd_copy_texture_region_to_buffer(
 			std::shared_ptr<Texture> source,

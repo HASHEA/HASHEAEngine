@@ -666,6 +666,27 @@ namespace RHI
 		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
 		vkCmdDispatch(vkCommandBuffer, groupCountX, groupCountY, groupCountZ);
 	}
+	auto VulkanCommandBuffer::cmd_draw_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		H_ASSERTLOG(argsBuffer, "indirect args buffer is null");
+		const uint64_t base_offset = static_cast<uint64_t>(argsBuffer->get_global_offset());
+		vkCmdDrawIndirect(vkCommandBuffer, reinterpret_cast<VkBuffer>(argsBuffer->get_native_handle()), offset + (base_offset == UINT32_MAX ? 0ull : base_offset), drawCount, stride);
+	}
+	auto VulkanCommandBuffer::cmd_draw_indexed_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		H_ASSERTLOG(argsBuffer, "indirect args buffer is null");
+		const uint64_t base_offset = static_cast<uint64_t>(argsBuffer->get_global_offset());
+		vkCmdDrawIndexedIndirect(vkCommandBuffer, reinterpret_cast<VkBuffer>(argsBuffer->get_native_handle()), offset + (base_offset == UINT32_MAX ? 0ull : base_offset), drawCount, stride);
+	}
+	auto VulkanCommandBuffer::cmd_dispatch_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset) -> void
+	{
+		H_ASSERTLOG(state == ASH_Recording, " you need call begin() before recording any command ! ");
+		H_ASSERTLOG(argsBuffer, "indirect args buffer is null");
+		const uint64_t base_offset = static_cast<uint64_t>(argsBuffer->get_global_offset());
+		vkCmdDispatchIndirect(vkCommandBuffer, reinterpret_cast<VkBuffer>(argsBuffer->get_native_handle()), offset + (base_offset == UINT32_MAX ? 0ull : base_offset));
+	}
 	auto VulkanCommandBuffer::cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool
 	{
 		if (has_error())

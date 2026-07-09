@@ -1118,6 +1118,48 @@ namespace RHI
 		return get_command_buffer(threadIndx);
 	}
 
+	auto DX12Context::get_indirect_command_signature(IndirectSignatureKind kind) -> ID3D12CommandSignature*
+	{
+		const uint32_t index = static_cast<uint32_t>(kind);
+		H_ASSERT(index < static_cast<uint32_t>(IndirectSignatureKind::Count));
+		std::lock_guard<std::mutex> lock(m_indirectSignatureMutex);
+		if (m_indirectSignatures[index])
+		{
+			return m_indirectSignatures[index].Get();
+		}
+
+		D3D12_INDIRECT_ARGUMENT_DESC argumentDesc = {};
+		D3D12_COMMAND_SIGNATURE_DESC signatureDesc = {};
+		switch (kind)
+		{
+		case IndirectSignatureKind::Draw:
+			argumentDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+			signatureDesc.ByteStride = sizeof(AshDrawIndirectArgs);
+			break;
+		case IndirectSignatureKind::DrawIndexed:
+			argumentDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED;
+			signatureDesc.ByteStride = sizeof(AshDrawIndexedIndirectArgs);
+			break;
+		case IndirectSignatureKind::Dispatch:
+			argumentDesc.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH;
+			signatureDesc.ByteStride = sizeof(AshDispatchIndirectArgs);
+			break;
+		default:
+			return nullptr;
+		}
+		signatureDesc.NumArgumentDescs = 1;
+		signatureDesc.pArgumentDescs = &argumentDesc;
+
+		// Argument-only signature: pRootSignature must be null per D3D12 spec.
+		HRESULT hr = m_device->CreateCommandSignature(&signatureDesc, nullptr, IID_PPV_ARGS(&m_indirectSignatures[index]));
+		if (FAILED(hr))
+		{
+			HLogError("DX12Context: CreateCommandSignature failed for kind {} (hr = {:#x}).", index, static_cast<uint32_t>(hr));
+			return nullptr;
+		}
+		return m_indirectSignatures[index].Get();
+	}
+
 	auto DX12Context::submit(const SubmitInfo& info) -> void
 	{
 		std::vector<ID3D12CommandList*> cmdLists;

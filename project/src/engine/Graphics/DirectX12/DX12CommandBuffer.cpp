@@ -433,6 +433,51 @@ namespace RHI
 		m_cmdList->Dispatch(groupCountX, groupCountY, groupCountZ);
 	}
 
+	auto DX12CommandBuffer::cmd_draw_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride) -> void
+	{
+		H_ASSERTLOG(argsBuffer, "indirect args buffer is null");
+		// Cached command signature has a fixed ByteStride; multi-draw with a custom stride is not expressible on DX12.
+		H_ASSERTLOG(drawCount <= 1 || stride == sizeof(AshDrawIndirectArgs), "DX12 indirect multi-draw requires stride == sizeof(AshDrawIndirectArgs)");
+		auto* signature = DX12Context::get()->get_indirect_command_signature(DX12Context::IndirectSignatureKind::Draw);
+		if (!signature)
+		{
+			mark_error("cmd_draw_indirect: failed to get indirect command signature");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		auto* resource = static_cast<DX12Buffer*>(argsBuffer.get())->get_resource();
+		m_cmdList->ExecuteIndirect(signature, drawCount, resource, offset, nullptr, 0);
+	}
+
+	auto DX12CommandBuffer::cmd_draw_indexed_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride) -> void
+	{
+		H_ASSERTLOG(argsBuffer, "indirect args buffer is null");
+		H_ASSERTLOG(drawCount <= 1 || stride == sizeof(AshDrawIndexedIndirectArgs), "DX12 indirect multi-draw requires stride == sizeof(AshDrawIndexedIndirectArgs)");
+		auto* signature = DX12Context::get()->get_indirect_command_signature(DX12Context::IndirectSignatureKind::DrawIndexed);
+		if (!signature)
+		{
+			mark_error("cmd_draw_indexed_indirect: failed to get indirect command signature");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		auto* resource = static_cast<DX12Buffer*>(argsBuffer.get())->get_resource();
+		m_cmdList->ExecuteIndirect(signature, drawCount, resource, offset, nullptr, 0);
+	}
+
+	auto DX12CommandBuffer::cmd_dispatch_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset) -> void
+	{
+		H_ASSERTLOG(argsBuffer, "indirect args buffer is null");
+		auto* signature = DX12Context::get()->get_indirect_command_signature(DX12Context::IndirectSignatureKind::Dispatch);
+		if (!signature)
+		{
+			mark_error("cmd_dispatch_indirect: failed to get indirect command signature");
+			HLogError("{}", get_last_error());
+			return;
+		}
+		auto* resource = static_cast<DX12Buffer*>(argsBuffer.get())->get_resource();
+		m_cmdList->ExecuteIndirect(signature, 1, resource, offset, nullptr, 0);
+	}
+
 	auto DX12CommandBuffer::cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool
 	{
 		auto fail = [this](std::string message) -> bool

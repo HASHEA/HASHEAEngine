@@ -43,6 +43,12 @@ namespace RHI
 		virtual auto cmd_draw(uint32_t vertexCount, uint32_t instanceCount = 1, uint32_t firstVertex = 0, uint32_t firstInstance = 0) -> void = 0;
 		virtual auto cmd_draw_indexed(uint32_t indexCount, uint32_t instanceCount = 1, uint32_t firstIndex = 0, int32_t vertexOffset = 0, uint32_t firstInstance = 0) -> void = 0;
 		virtual auto cmd_dispatch(uint32_t groupCountX, uint32_t groupCountY = 1, uint32_t groupCountZ = 1) -> void = 0;
+		// Indirect commands: argsBuffer must be created with ASH_BUFFER_USAGE_INDIRECT_BUFFER_BIT
+		// and transitioned to AshResourceState::IndirectArgs before consumption. Args layout is the
+		// Ash*IndirectArgs structs in RHICommon.h; firstInstance in GPU-written args must be 0.
+		virtual auto cmd_draw_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride = sizeof(AshDrawIndirectArgs)) -> void = 0;
+		virtual auto cmd_draw_indexed_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset, uint32_t drawCount, uint32_t stride = sizeof(AshDrawIndexedIndirectArgs)) -> void = 0;
+		virtual auto cmd_dispatch_indirect(std::shared_ptr<Buffer> argsBuffer, uint64_t offset) -> void = 0;
 		virtual auto cmd_copy_texture(std::shared_ptr<Texture> source, std::shared_ptr<Texture> destination) -> bool = 0;
 		virtual auto cmd_copy_texture_region_to_buffer(
 			std::shared_ptr<Texture> source,

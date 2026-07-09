@@ -91,9 +91,11 @@ jobs:
         shell: cmd
         run: call build_sandbox.bat Release
       # hosted runner 无 GPU:DX12 冒烟跑在 WARP(Windows 自带软件光栅化)上,已验证可行
+      # --rhi-selftest-indirect: indirect draw 基建自测(SDD-2026-07-09-indirect-draw-substrate),
+      # 顺带覆盖软渲染后端的 indirect 能力;FAIL 只打日志不改 exit code,阻断靠 smoke 崩溃/超时
       - name: Smoke test Sandbox (DX12/WARP, Release)
         shell: cmd
-        run: call run.bat sandbox dx12 Release --smoke-test-seconds=10
+        run: call run.bat sandbox dx12 Release --smoke-test-seconds=10 --rhi-selftest-indirect
       # Vulkan 无微软自带软件实现:ICD 用 mesa lavapipe(CPU 驱动),loader(vulkan-1.dll,
       # 平时由显卡驱动安装)从 LunarG runtime 组件取,放进运行目录。
       # runner 进程提权运行,loader 会无视 VK_DRIVER_FILES/VK_ICD_FILENAMES 环境变量,
@@ -114,4 +116,4 @@ jobs:
           "VK_LOADER_DEBUG=error,warn,driver" >> $env:GITHUB_ENV
       - name: Smoke test Sandbox (Vulkan/lavapipe, Release)
         shell: cmd
-        run: call run.bat sandbox vulkan Release --smoke-test-seconds=10
+        run: call run.bat sandbox vulkan Release --smoke-test-seconds=10 --rhi-selftest-indirect

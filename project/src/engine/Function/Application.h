@@ -119,6 +119,11 @@ public:
 		// RenderGate（SDD-2026-07-07-render-gate）：--dump-frame 最后一帧截图落 PNG；--scene 供应用层覆盖默认场景
 		auto set_frame_dump_path(std::string path) -> void;
 		auto set_scene_path_override(std::string path) -> void;
+		// SDD-2026-07-09-indirect-draw-substrate：--rhi-selftest-indirect 启动后跑一次 indirect RHI 自测
+		auto set_rhi_indirect_self_test_requested(bool requested) -> void
+		{
+			rhiIndirectSelfTestRequested = requested;
+		}
 		// RenderGate（SDD-2026-07-07-render-gate）：--rhi 命令行覆盖后端，必须在 initialize() 之前调用才生效
 		auto set_backend_override(RHI::Backend backend) -> void
 		{
@@ -218,6 +223,7 @@ public:
 		std::string				scenePathOverride{};
 		bool					frameDumpCapturePending	= false;
 		bool					frameDumpWritten		= false;
+		bool					rhiIndirectSelfTestRequested = false;
 		uint32_t				frameDumpQuiesceFrameCount = 0;
 		std::atomic<bool>		exitRequested			{ false };
 		std::atomic<bool>		logicThreadStopRequested{ false };

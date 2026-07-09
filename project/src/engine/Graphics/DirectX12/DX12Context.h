@@ -71,6 +71,16 @@ namespace RHI
 		inline auto get_staging_buffer() -> DX12StagingBufferPool* { return m_stagingBuffer; }
 		inline auto get_highest_shader_model() const { return m_highestShaderModel; }
 
+		enum class IndirectSignatureKind : uint32_t
+		{
+			Draw = 0,
+			DrawIndexed,
+			Dispatch,
+			Count
+		};
+		// Fixed argument-only signatures (no root constant changes), lazily created, cached per device.
+		auto get_indirect_command_signature(IndirectSignatureKind kind) -> ID3D12CommandSignature*;
+
 		inline auto get_current_frame_deletion_queue() -> DelayCommandQueue&
 		{
 			return m_delayedDeletionQueues[m_currentFrame];
@@ -187,6 +197,10 @@ namespace RHI
 		std::vector<PendingBufferUpload> m_pendingBufferUploads{};
 		std::vector<PendingTextureUpload> m_pendingTextureUploads{};
 		mutable std::mutex m_pendingUploadMutex{};
+
+		// Indirect command signatures (lazy, fixed set)
+		ComPtr<ID3D12CommandSignature> m_indirectSignatures[static_cast<uint32_t>(IndirectSignatureKind::Count)];
+		std::mutex m_indirectSignatureMutex{};
 
 		// Frame tracking
 		uint32_t m_currentFrame = 0;

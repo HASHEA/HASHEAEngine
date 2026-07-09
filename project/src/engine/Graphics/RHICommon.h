@@ -317,6 +317,36 @@ namespace RHI
 	};
 	RHI_ENUM_CLASS_OPERATORS(AshBufferUsageFlagBits);
 	using AshBufferUsageFlags = uint32_t;
+
+	// Indirect command argument layouts. Authoritative definition for both backends:
+	// byte layout matches VkDraw*IndirectCommand / D3D12_*_ARGUMENTS exactly, and compute
+	// shaders that fill args buffers must write this layout.
+	// firstInstance must stay 0: SV_InstanceID base semantics differ between DX12 and
+	// Vulkan, so instance offsets go through constants instead (see specs/modules/graphics.md).
+	struct AshDrawIndirectArgs
+	{
+		uint32_t vertexCount;
+		uint32_t instanceCount;
+		uint32_t firstVertex;
+		uint32_t firstInstance;
+	};
+	struct AshDrawIndexedIndirectArgs
+	{
+		uint32_t indexCount;
+		uint32_t instanceCount;
+		uint32_t firstIndex;
+		int32_t vertexOffset;
+		uint32_t firstInstance;
+	};
+	struct AshDispatchIndirectArgs
+	{
+		uint32_t groupCountX;
+		uint32_t groupCountY;
+		uint32_t groupCountZ;
+	};
+	static_assert(sizeof(AshDrawIndirectArgs) == 16, "must match VkDrawIndirectCommand / D3D12_DRAW_ARGUMENTS");
+	static_assert(sizeof(AshDrawIndexedIndirectArgs) == 20, "must match VkDrawIndexedIndirectCommand / D3D12_DRAW_INDEXED_ARGUMENTS");
+	static_assert(sizeof(AshDispatchIndirectArgs) == 12, "must match VkDispatchIndirectCommand / D3D12_DISPATCH_ARGUMENTS");
 	enum class AshResourceAccessType
 	{
 		ASH_RESOURCE_ACCESS_GPU_ONLY,
