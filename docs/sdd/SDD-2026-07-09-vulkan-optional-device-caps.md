@@ -1,7 +1,7 @@
 # SDD-2026-07-09-vulkan-optional-device-caps: Vulkan 设备能力分级（必需 / 可选）
 
 ## Status
-Implementing（本地全绿:ArchGate / doctest 16/16 / 双后端 Debug 冒烟 / RenderGate 三项 PASS;待 CI lavapipe 冒烟实证后转 Done）
+Done(2026-07-09 CI lavapipe 冒烟通过,Vulkan 软渲染冒烟已转阻断;本地全绿:ArchGate / doctest 16/16 / 双后端 Debug 冒烟 / RenderGate 三项 PASS;原则已回写 docs/specs/modules/graphics.md)
 （用户 2026-07-09 批准方向："非必需的 ext 查不到就把标记记 false，不允许后面代码死依赖非必需的 ext……不支持了不应该让引擎起不来，而是相关功能不能使用"）
 
 ## Context

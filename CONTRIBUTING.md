@@ -30,7 +30,7 @@ CODEOWNERS(`.github/CODEOWNERS`)圈定的是 CI 与门禁基建:
 - 触发:push 到 `main`(纯文档改动 `docs/**`、`**.md` 不触发)和所有 PR;
   纯文档 PR 会触发但构建/门禁 job 自动跳过(跳过按通过计,不会卡 required check)
 - 内容:ArchGate(架构边界)→ 生成/构建(Debug + Release)→ doctest 单测 →
-  双后端软渲染冒烟(DX12/WARP 阻断;Vulkan/lavapipe 实验性)
+  双后端软渲染冒烟(DX12/WARP + Vulkan/lavapipe,均阻断)
 - 新 push 不打断正在跑的 run(排队,过期的待跑 run 自动作废)
 - runner 无 GPU:RenderGate / PerfGate 不在 CI 里,渲染与性能改动**必须本地跑门禁**
   (见 `docs/VERIFY.md` 验证矩阵)

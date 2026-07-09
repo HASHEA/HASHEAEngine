@@ -50,6 +50,7 @@ push 后无机械兜底。三方依赖全部 vendored（含 VulkanSDK/dxc），`
   长期掩盖
 - 后续候选均已落地（2026-07-09）：glslang 死链接清理见
   SDD-2026-07-09-remove-glslang-dead-links；CI 追加 Release 构建 + 双后端软渲染
-  冒烟（DX12/WARP 已验证转阻断；Vulkan/lavapipe——mesa 26.1.3 ICD + LunarG
-  loader——experimental 观察期）+ `paths-ignore`（docs/**、**.md 纯文档 push
-  不触发 CI）
+  冒烟（DX12/WARP 与 Vulkan/lavapipe——mesa 26.1.3 ICD + LunarG loader——均已
+  验证转阻断；lavapipe 上车撞出的引擎侧问题见
+  SDD-2026-07-09-vulkan-optional-device-caps）+ `paths-ignore`（docs/**、**.md
+  纯文档 push 不触发 CI）

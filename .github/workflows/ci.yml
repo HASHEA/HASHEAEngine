@@ -112,8 +112,6 @@ jobs:
           Copy-Item $loader.FullName product/bin64/Release-windows-x86_64/
           reg add "HKLM\SOFTWARE\Khronos\Vulkan\Drivers" /v $icd.FullName /t REG_DWORD /d 0 /f
           "VK_LOADER_DEBUG=error,warn,driver" >> $env:GITHUB_ENV
-      # lavapipe 首次上车,属实验性;先 continue-on-error 观察,稳定后转阻断
-      - name: Smoke test Sandbox (Vulkan/lavapipe, Release, experimental)
+      - name: Smoke test Sandbox (Vulkan/lavapipe, Release)
         shell: cmd
-        continue-on-error: true
         run: call run.bat sandbox vulkan Release --smoke-test-seconds=10
