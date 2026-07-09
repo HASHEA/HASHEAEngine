@@ -40,6 +40,7 @@ status: active
 
 ## 约束与不变式
 
+- 设备能力分级（SDD-2026-07-09-vulkan-optional-device-caps）：**必需集**（缺失则报错优雅退出）= 物理设备存在、graphics+compute 队列族、`VK_KHR_swapchain`、`VK_KHR_shader_draw_parameters`；**可选集** = `DeviceExtensionAndFeaturesFlags` 全部条目（DynamicRendering/TimelineSemaphore/Sync2/MeshShaders/Multiview/FSR/RayTracing/RayQuery/Bindless/HostCoherentCached/SparseBinding），查不到只记 false + 警告日志,引擎照常启动。**新可选能力必须 flag 门控,禁止 boot 断言**；依赖可选能力的代码在使用点检查 flag（软件驱动如 lavapipe/WARP 是 CI 冒烟基线,不满足可选集是常态）。
 - 双后端等价：任何 RHI 接口改动必须同时提供 Vulkan 与 DX12 等价实现，行为差异视同 bug（RenderGate 跨后端 diff FAIL 即 bug）。
 - 依赖方向：Graphics 只依赖 Base；Editor/Sandbox 等上层禁止直接 include/依赖 Graphics，必须经 `Function/` 层。
 - 跨后端 API 差异（Y 翻转/winding、资源状态模型）必须收口在单点（如 `RasterizerConvention.h`、各后端 ResourceTracker），不得散落到上层。
@@ -61,5 +62,6 @@ status: active
 
 ## 历史
 
+- [SDD-2026-07-09-vulkan-optional-device-caps Vulkan 设备能力分级](../../sdd/SDD-2026-07-09-vulkan-optional-device-caps.md)：sparse binding 从 boot 硬断言降级为可选能力位（CI lavapipe 冒烟撞出）,确立必需/可选能力分级原则。
 - [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 backbuffer 回读 RHI 接口与双后端实现。
 - [SDD-2026-07-07-dx12-mailbox-present-tearing DX12 MAILBOX present 语义修正](../../sdd/SDD-2026-07-07-dx12-mailbox-present-tearing.md)：MAILBOX 去除误加的 `ALLOW_TEARING`。注：其"抖动根因是撕裂"的判断后被推翻，真根因见 [SDD-2026-07-07-taa-jitter-double-apply](../../sdd/SDD-2026-07-07-taa-jitter-double-apply.md)（Function 层 TAA jitter 重复施加）；present 语义修正本身仍然成立。

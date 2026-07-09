@@ -66,6 +66,7 @@ namespace RHI
 		RayQuery,
 		Bindless,
 		HostCoherentCached,
+		SparseBinding,
 	};
 #define VK_CHECK_RESULT(f)                                                                                                        \
 	{                                                                                                                             \

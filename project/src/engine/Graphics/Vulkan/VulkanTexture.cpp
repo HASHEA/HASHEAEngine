@@ -44,6 +44,12 @@ namespace RHI
 			cube = true;
 		}
 		sparse = (ci.flags & AshTextureCreateFlagBits::ASH_TEXTURE_CREATE_FLAG_SPARSE) != 0;
+		if (sparse && !VulkanContext::get()->get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::SparseBinding))
+		{
+			// sparse 是可选设备能力,调用方必须先查能力位;此处兜底降级为普通纹理
+			H_ASSERTLOG(false, "Sparse texture '{0}' requested but device lacks sparse binding; creating as non-sparse.", m_nameStorage.c_str());
+			sparse = false;
+		}
 		VkImageUsageFlags texUsageFlags = ash_texture_usage_to_vk(ci.uUsageFlags);
 		texUsageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 		//// Create the image

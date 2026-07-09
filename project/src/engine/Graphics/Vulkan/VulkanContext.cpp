@@ -734,7 +734,6 @@ namespace RHI
 			if ((qf.queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT )) == (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT )/* && mainQueueFamilyIndex == UINT32_MAX*/)
 			{
 				mainQueueFamilyIndex = i;
-				H_ASSERT(((qf.queueFlags & VK_QUEUE_SPARSE_BINDING_BIT) == VK_QUEUE_SPARSE_BINDING_BIT));
 				if (qf.queueCount > 1)
 				{
 					computeQueueFamilyIndex = i;
@@ -772,6 +771,15 @@ namespace RHI
 		vulkanMainQueueFamily = mainQueueFamilyIndex;
 		vulkanComputeQueueFamily = computeQueueFamilyIndex;
 		vulkanTransferQueueFamily = transferQueueFamilyIndex;
+		// sparse binding 是可选能力:软件驱动(如 lavapipe)的主队列族可能不带该 bit,缺失只关功能不阻断启动
+		if (queueFamilies[mainQueueFamilyIndex].queueFlags & VK_QUEUE_SPARSE_BINDING_BIT)
+		{
+			featureSwitchFlags.set_bit(DeviceExtensionAndFeaturesFlags::SparseBinding);
+		}
+		else
+		{
+			HLogWarning("Main queue family {0} lacks VK_QUEUE_SPARSE_BINDING_BIT; sparse textures disabled.", mainQueueFamilyIndex);
+		}
 
 		std::vector<const char*> deviceExtension;
 		deviceExtension.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
