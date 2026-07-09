@@ -38,8 +38,10 @@ namespace AshEngine
 	if((bool)(cond) != true)\
 		HLogError("failed check hsresult at {0},{1}",__FILE__, __LINE__);
 
+// 附加消息(可选)必须是字符串字面量:靠相邻字面量拼进格式串,
+// 无附加消息时格式串恰好 3 个占位符,避免 fmt "argument not found"
 #define ASH_LOG_PROCESS_ERROR(condition, ...) if(!(condition)) {__bInnerError = true;\
-	HLogError("ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
+	HLogError("ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; " __VA_ARGS__, #condition,__FILE__, __LINE__);\
 	break;}
-#define ASH_PROCESS_ERROR_EXIT(condition,...) if(!(condition)){__bInnerError = true; H_ASSERTLOG(false, "ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; {}", #condition,__FILE__, __LINE__, ##__VA_ARGS__);\
+#define ASH_PROCESS_ERROR_EXIT(condition,...) if(!(condition)){__bInnerError = true; H_ASSERTLOG(false, "ASH_LOG_PROCESS_ERROR : {} at : file : {}, line : {} ; " __VA_ARGS__, #condition,__FILE__, __LINE__);\
 	break;}
