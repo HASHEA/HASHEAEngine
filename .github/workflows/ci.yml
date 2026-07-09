@@ -6,17 +6,44 @@ on:
     paths-ignore:
       - 'docs/**'
       - '**.md'
+  # PR 不做 workflow 级路径过滤:required status check 若因 paths-ignore 整个不触发,
+  # 会永远停在 Expected 卡死合并。改为 changes job 判定后在 job 级跳过——
+  # skipped 的 job 在分支保护里按通过算
   pull_request:
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            files=$(git diff --name-only HEAD^1 HEAD)
+          else
+            files="code-change"
+          fi
+          echo "changed files:"
+          echo "$files"
+          if echo "$files" | grep -vE '^docs/|\.md$' | grep -q .; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   arch-gate:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -26,6 +53,8 @@ jobs:
         run: call RunArchGate.bat
 
   build-and-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
