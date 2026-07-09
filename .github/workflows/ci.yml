@@ -66,19 +66,23 @@ jobs:
         shell: cmd
         run: call run.bat sandbox dx12 Release --smoke-test-seconds=10
       # Vulkan 无微软自带软件实现:ICD 用 mesa lavapipe(CPU 驱动),loader(vulkan-1.dll,
-      # 平时由显卡驱动安装)从 LunarG runtime 组件取,放进运行目录
+      # 平时由显卡驱动安装)从 LunarG runtime 组件取,放进运行目录。
+      # runner 进程提权运行,loader 会无视 VK_DRIVER_FILES/VK_ICD_FILENAMES 环境变量,
+      # ICD 必须注册进 HKLM 注册表
       - name: Install lavapipe + Vulkan loader (software Vulkan)
         shell: pwsh
         run: |
           curl.exe -fsSL -o mesa.7z https://github.com/pal1000/mesa-dist-win/releases/download/26.1.3/mesa3d-26.1.3-release-msvc.7z
           7z x mesa.7z -omesa -y | Out-Null
+          $icd = Get-ChildItem mesa -Recurse -Filter lvp_icd.x86_64.json | Select-Object -First 1
+          if (-not $icd) { Get-ChildItem mesa -Recurse -Name; throw "lvp_icd.x86_64.json not found in mesa package" }
           curl.exe -fsSL -o vulkan-rt.zip https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-runtime-components.zip
           Expand-Archive vulkan-rt.zip -DestinationPath vulkan-rt
           $loader = Get-ChildItem vulkan-rt -Recurse -Filter vulkan-1.dll | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
           if (-not $loader) { throw "vulkan-1.dll (x64) not found in runtime components" }
           Copy-Item $loader.FullName product/bin64/Release-windows-x86_64/
-          "VK_DRIVER_FILES=$PWD\mesa\x64\lvp_icd.x86_64.json" >> $env:GITHUB_ENV
-          "VK_ICD_FILENAMES=$PWD\mesa\x64\lvp_icd.x86_64.json" >> $env:GITHUB_ENV
+          reg add "HKLM\SOFTWARE\Khronos\Vulkan\Drivers" /v $icd.FullName /t REG_DWORD /d 0 /f
+          "VK_LOADER_DEBUG=error,warn,driver" >> $env:GITHUB_ENV
       # lavapipe 首次上车,属实验性;先 continue-on-error 观察,稳定后转阻断
       - name: Smoke test Sandbox (Vulkan/lavapipe, Release, experimental)
         shell: cmd
