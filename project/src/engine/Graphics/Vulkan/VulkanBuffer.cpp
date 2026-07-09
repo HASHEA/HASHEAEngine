@@ -172,9 +172,10 @@ namespace RHI
 			m_vkDeviceSize = sAllocInfo.size;
 			ASH_LOG_PROCESS_ERROR(m_vkDeviceSize > 0);
 		}
-		if (m_bCoherent)
+		// UMA/软件驱动(如 lavapipe)上 GPU_ONLY 也会落在 host-coherent 内存,属正常;
+		// 持久映射只对预期 host 访问的 buffer 做
+		if (m_bCoherent && bHostCoherent)
 		{
-			ASH_LOG_PROCESS_ERROR(bHostCoherent == m_bCoherent);
 			if (!m_pMappedData)
 			{
 				bool bRetCode = VulkanContext::get()->vma_map_memory(m_pVMAAllocation, (void**)&m_pMappedData);
