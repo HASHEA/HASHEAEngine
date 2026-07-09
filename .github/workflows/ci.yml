@@ -61,9 +61,26 @@ jobs:
       - name: Build Sandbox (Release)
         shell: cmd
         run: call build_sandbox.bat Release
-      # hosted runner 无 GPU:Vulkan 无 ICD 必挂,DX12 依赖 WARP 软渲染,属实验性;
-      # 先 continue-on-error 观察,稳定后再转为阻断步骤
-      - name: Smoke test Sandbox (DX12/WARP, Release, experimental)
+      # hosted runner 无 GPU:DX12 冒烟跑在 WARP(Windows 自带软件光栅化)上,已验证可行
+      - name: Smoke test Sandbox (DX12/WARP, Release)
+        shell: cmd
+        run: call run.bat sandbox dx12 Release --smoke-test-seconds=10
+      # Vulkan 无微软自带软件实现:ICD 用 mesa lavapipe(CPU 驱动),loader(vulkan-1.dll,
+      # 平时由显卡驱动安装)从 LunarG runtime 组件取,放进运行目录
+      - name: Install lavapipe + Vulkan loader (software Vulkan)
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o mesa.7z https://github.com/pal1000/mesa-dist-win/releases/download/26.1.3/mesa3d-26.1.3-release-msvc.7z
+          7z x mesa.7z -omesa -y | Out-Null
+          curl.exe -fsSL -o vulkan-rt.zip https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-runtime-components.zip
+          Expand-Archive vulkan-rt.zip -DestinationPath vulkan-rt
+          $loader = Get-ChildItem vulkan-rt -Recurse -Filter vulkan-1.dll | Where-Object { $_.FullName -match '\\x64\\' } | Select-Object -First 1
+          if (-not $loader) { throw "vulkan-1.dll (x64) not found in runtime components" }
+          Copy-Item $loader.FullName product/bin64/Release-windows-x86_64/
+          "VK_DRIVER_FILES=$PWD\mesa\x64\lvp_icd.x86_64.json" >> $env:GITHUB_ENV
+          "VK_ICD_FILENAMES=$PWD\mesa\x64\lvp_icd.x86_64.json" >> $env:GITHUB_ENV
+      # lavapipe 首次上车,属实验性;先 continue-on-error 观察,稳定后转阻断
+      - name: Smoke test Sandbox (Vulkan/lavapipe, Release, experimental)
         shell: cmd
         continue-on-error: true
-        run: call run.bat sandbox dx12 Release --smoke-test-seconds=10
+        run: call run.bat sandbox vulkan Release --smoke-test-seconds=10

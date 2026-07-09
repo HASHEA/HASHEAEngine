@@ -49,6 +49,7 @@ push 后无机械兜底。三方依赖全部 vendored（含 VulkanSDK/dxc），`
 - CI 正是靠这两次失败证明了自身价值：两个问题都被本地环境（装了 ATL、LFS 实体齐全）
   长期掩盖
 - 后续候选均已落地（2026-07-09）：glslang 死链接清理见
-  SDD-2026-07-09-remove-glslang-dead-links；CI 追加 Release 构建 + DX12/WARP
-  冒烟（experimental，continue-on-error 观察期）+ `paths-ignore`（docs/**、**.md
-  纯文档 push 不触发 CI）
+  SDD-2026-07-09-remove-glslang-dead-links；CI 追加 Release 构建 + 双后端软渲染
+  冒烟（DX12/WARP 已验证转阻断；Vulkan/lavapipe——mesa 26.1.3 ICD + LunarG
+  loader——experimental 观察期）+ `paths-ignore`（docs/**、**.md 纯文档 push
+  不触发 CI）
