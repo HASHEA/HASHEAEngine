@@ -1,0 +1,23 @@
+# CI 与工程门禁相关路径由仓库作者独占审批。
+# 生效前提:GitHub 分支保护(main)开启 Require a pull request + Require review from Code Owners。
+
+# CI workflow 与本文件自身
+/.github/                    @HASHEA
+
+# 门禁与构建入口脚本(CI 直接调用,单一真源)
+/RunArchGate.bat             @HASHEA
+/RunTests.bat                @HASHEA
+/RunRenderGate.bat           @HASHEA
+/RunPerfGate.bat             @HASHEA
+/generate_vs2022.bat         @HASHEA
+/build_editor.bat            @HASHEA
+/build_sandbox.bat           @HASHEA
+/run.bat                     @HASHEA
+
+# 门禁实现与 AI 工程规则
+/scripts/                    @HASHEA
+/tools/ai-dev/               @HASHEA
+
+# 基线:渲染 golden 与性能水位(只允许作者确认后 bless)
+/tools/render/goldens/       @HASHEA
+/tools/perf/perf_gate_baselines.json  @HASHEA
