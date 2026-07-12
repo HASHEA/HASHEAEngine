@@ -420,6 +420,13 @@ namespace AshEditor
 			return;
 		}
 
+		const EditorShortcutScopeChangedEvent& refShortcutScope = _upSessionStateService->GetShortcutScope();
+		if (refShortcutScope.eScope == EditorShortcutScope::NodeCanvasContent &&
+			_editorContext.pUiContext->is_key_pressed(AshEngine::UIKey::Delete))
+		{
+			return;
+		}
+
 		_upShortcutService->DispatchScope(*_upCommandService, EditorActionScope::Global, *_editorContext.pUiContext);
 	}
 

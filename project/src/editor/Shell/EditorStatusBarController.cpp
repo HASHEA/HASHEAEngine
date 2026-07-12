@@ -176,6 +176,8 @@ namespace AshEditor
 			{
 			case EditorShortcutScope::AssetBrowserContent:
 				return "Asset Browser";
+			case EditorShortcutScope::NodeCanvasContent:
+				return "Node Canvas";
 			case EditorShortcutScope::Global:
 			default:
 				return "Global";

@@ -17,6 +17,7 @@ status: active
 | `project/src/engine/Function/Application.h/.cpp` | `Application` 类、`EngineInitConfig`、帧循环、frame dump、engine overlay |
 | `project/src/engine/EntryPoint.h` | `main`：工作目录重置、命令行契约、`create_application()/destroy_application()`（由应用侧实现） |
 | `project/src/engine/Function/Gui/UIContext.h/.cpp` | `UIContext` UI 门面（Pimpl，内部 `ImGuiLayer`） |
+| `project/src/engine/Function/Gui/UINodeEditor.h/.cpp` | 节点画布门面（封装 `imgui-node-editor`，由 Engine 持有第三方上下文） |
 | `project/src/engine/Function/Gui/UICommon.h`、`ImGuiLayer.*` | UI 类型（`UIVec2/UIWindowFlags/...`）与 ImGui 后端桥接 |
 
 ## 公共接口
@@ -58,6 +59,7 @@ status: active
 ### UIContext（Editor 与 Engine 的 UI 边界）
 
 - 生命周期钩子（`init/shutdown/begin_frame/render/handle_window_event`）由引擎持有；Editor 只使用绘制/查询 API（窗口、dock、控件、draw list、剪贴板、按键修饰、`register_render_target/register_texture_view` + `image/draw_surface_fill_available` 等）。
+- 节点画布通过 `UINodeEditor` 独立门面暴露；其实现与第三方 `imgui-node-editor` 均编译在 `Engine.dll` 内，Editor 只提交节点、pin、link 与交互查询，不 include `imgui_node_editor.h` 或调用 `ax::NodeEditor`。
 - 主题/字体/多视口能力由 `EngineInitConfig` 的 `ui*` 字段透传。
 - 准入标准：只收后端无关、立即模式、编辑器之外也可复用的能力；编辑器工作区编排、默认 dock 布局、面板注册/持久化、Inspector 语义一律放上层编辑器门面。底层 dock/viewport 原语（`dock_builder_*` 等）可进，编辑器具体布局策略不可进。
 - 纹理/surface 约定：通用预览传 `RenderTarget`；场景视口传 `ScenePresentationSubsystem` 的 `UISurfaceHandle`；Window 输出无有效 surface（交换链不可被 UI 采样）。`UITextureHandle` 是瞬态后端数据，禁止跨帧缓存；描述符注册由引擎持有。

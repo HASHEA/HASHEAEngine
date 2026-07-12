@@ -1,0 +1,126 @@
+{
+  "nodeTypes": [
+    {
+      "id": "material.parameter.color",
+      "title": "BaseColor",
+      "typeLabel": "Parameter",
+      "subtitle": "Blender-like rows use generic node metadata.",
+      "accentColor": [0.23, 0.40, 0.18, 1.0],
+      "collapsible": true,
+      "defaultCollapsed": false,
+      "outputs": [
+        {
+          "id": "value",
+          "label": "BaseColor",
+          "typeLabel": "Color",
+          "valueKind": "color",
+          "shape": "circle",
+          "color": [0.92, 0.86, 0.18, 1.0]
+        }
+      ],
+      "rows": [
+        {
+          "label": "BaseColor",
+          "output": "value",
+          "showDefault": false
+        },
+        {
+          "label": "SkinColor",
+          "valueKey": "color",
+          "valueKind": "color",
+          "editor": "color",
+          "defaultColor": [1.0, 0.78, 0.72, 1.0],
+          "editable": true
+        },
+        {
+          "label": "ShadowSide",
+          "valueKey": "intensity",
+          "valueKind": "scalar",
+          "editor": "float",
+          "defaultText": "0.144",
+          "editable": true
+        }
+      ]
+    },
+    {
+      "id": "material.output.surface",
+      "title": "Material Output",
+      "typeLabel": "Surface",
+      "subtitle": "Use Details for the full property table.",
+      "accentColor": [0.38, 0.10, 0.16, 1.0],
+      "collapsible": false,
+      "inputs": [
+        {
+          "id": "surface",
+          "label": "Surface",
+          "typeLabel": "Shader",
+          "valueKind": "shader",
+          "shape": "circle",
+          "color": [0.36, 0.82, 0.42, 1.0]
+        }
+      ],
+      "rows": [
+        {
+          "label": "Surface",
+          "input": "surface",
+          "showDefault": false
+        },
+        {
+          "label": "Volume",
+          "showDefault": false
+        },
+        {
+          "label": "Displacement",
+          "showDefault": false
+        }
+      ]
+    },
+    {
+      "id": "math.multiply",
+      "title": "Math",
+      "typeLabel": "Multiply",
+      "subtitle": "Right-click the canvas for more actions.",
+      "accentColor": [0.45, 0.43, 0.08, 1.0],
+      "inputs": [
+        {
+          "id": "value",
+          "label": "Value",
+          "typeLabel": "Float",
+          "valueKind": "scalar",
+          "shape": "square",
+          "color": [0.76, 0.76, 0.76, 1.0]
+        }
+      ],
+      "outputs": [
+        {
+          "id": "result",
+          "label": "Result",
+          "typeLabel": "Float",
+          "valueKind": "scalar",
+          "shape": "circle",
+          "color": [0.76, 0.76, 0.76, 1.0]
+        }
+      ],
+      "rows": [
+        {
+          "label": "Value",
+          "input": "value",
+          "output": "result",
+          "valueKey": "intensity",
+          "valueKind": "scalar",
+          "editor": "float",
+          "defaultText": "1.000",
+          "editable": true
+        },
+        {
+          "label": "Clamp",
+          "valueKey": "enabled",
+          "valueKind": "bool",
+          "editor": "toggle",
+          "defaultText": "On",
+          "editable": true
+        }
+      ]
+    }
+  ]
+}
