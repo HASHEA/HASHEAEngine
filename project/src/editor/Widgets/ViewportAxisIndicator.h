@@ -24,5 +24,5 @@ namespace AshEditor
 		float fContentOriginY,
 		float fContentWidth,
 		float fContentHeight,
-		const ViewportAxisIndicatorParams& params = {});
+		const ViewportAxisIndicatorParams& params);
 }

@@ -76,12 +76,12 @@ namespace AshEditor
 			params.viewForwardY,  // depth of Y axis
 			params.viewForwardZ   // depth of Z axis
 		};
-		// Simple bubble sort for 3 elements, ascending depth (farthest first).
+		// Positive camera-forward depth is farther from the viewer, so draw in descending order.
 		for (int i = 0; i < 2; ++i)
 		{
 			for (int j = i + 1; j < 3; ++j)
 			{
-				if (depths[order[j]] < depths[order[i]])
+				if (depths[order[j]] > depths[order[i]])
 				{
 					int tmp = order[i];
 					order[i] = order[j];

@@ -3,10 +3,14 @@
 #include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Panels/ViewportPanelInteraction.h"
+#include "Panels/ViewportPanelSceneSupportInternal.h"
 #include "Panels/ViewportPanelSupport.h"
+#include "Services/EditorGizmoMath.h"
 #include "Services/EditorViewportService.h"
 #include "Widgets/EditorThemeColors.h"
 #include "Widgets/ViewportAxisIndicator.h"
+
+#include <glm/vec3.hpp>
 
 #include <algorithm>
 #include <string>
@@ -35,6 +39,43 @@ namespace AshEditor
 		bool ShouldDrawAxisIndicator(const EditorViewportPresentation* pPresentation)
 		{
 			return !pPresentation || pPresentation->eKind != EditorViewportKind::Game;
+		}
+
+		bool TryBuildAxisIndicatorParams(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			const AshEngine::UIRect& refRectContent,
+			ViewportAxisIndicatorParams& outParams)
+		{
+			outParams = {};
+			ViewportPanelSupport::Detail::SceneViewportProjectionContext projectionContext{};
+			if (!ViewportPanelSupport::Detail::TryBuildSceneViewportProjectionContext(
+				refDeps,
+				strViewportId,
+				refRectContent,
+				projectionContext))
+			{
+				return false;
+			}
+
+			glm::vec3 vecRight{};
+			glm::vec3 vecUp{};
+			glm::vec3 vecForward{};
+			EditorGizmoMath::ExtractViewBasis(
+				projectionContext.matView,
+				vecRight,
+				vecUp,
+				vecForward);
+			outParams.viewRightX = vecRight.x;
+			outParams.viewRightY = vecRight.y;
+			outParams.viewRightZ = vecRight.z;
+			outParams.viewUpX = vecUp.x;
+			outParams.viewUpY = vecUp.y;
+			outParams.viewUpZ = vecUp.z;
+			outParams.viewForwardX = vecForward.x;
+			outParams.viewForwardY = vecForward.y;
+			outParams.viewForwardZ = vecForward.z;
+			return true;
 		}
 
 		void DrawViewportOverlay(
@@ -255,10 +296,19 @@ namespace AshEditor
 
 			if (ShouldDrawAxisIndicator(pPresentation))
 			{
-				DrawViewportAxisIndicator(
-					refUi,
-					rectContent.x, rectContent.y,
-					rectContent.width, rectContent.height);
+				ViewportAxisIndicatorParams axisIndicatorParams{};
+				if (TryBuildAxisIndicatorParams(
+					refDeps,
+					strViewportId,
+					rectContent,
+					axisIndicatorParams))
+				{
+					DrawViewportAxisIndicator(
+						refUi,
+						rectContent.x, rectContent.y,
+						rectContent.width, rectContent.height,
+						axisIndicatorParams);
+				}
 			}
 			if (strViewportId == EditorViewportIds::Scene &&
 				(refViewport.state.bFocused || refDrawResult.bContentHovered))

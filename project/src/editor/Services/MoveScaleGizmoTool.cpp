@@ -30,7 +30,9 @@ namespace AshEditor
 		constexpr float kMoveGizmoHoverThresholdPixels = 10.0f;
 		constexpr float kMoveGizmoArrowHeadLength = 13.0f;
 		constexpr float kMoveGizmoArrowHeadWidth = 8.0f;
-		constexpr float kMoveGizmoPlaneHandleSizePixels = 16.0f;
+		constexpr float kMoveGizmoPlaneHandleInnerScale = 0.26f;
+		constexpr float kMoveGizmoPlaneHandleOuterScale = 0.42f;
+		constexpr uint32_t kMoveGizmoPlaneHandleMaxFillSteps = 64u;
 		constexpr float kMoveGizmoScreenHandleSizePixels = 18.0f;
 		constexpr float kScaleGizmoHandleHalfExtent = 5.5f;
 
@@ -41,6 +43,7 @@ namespace AshEditor
 		using EditorGizmoInternal::PlaneHandleVisual;
 		using EditorGizmoInternal::ScreenHandleVisual;
 		using EditorGizmoMath::DistancePointToSegment;
+		using EditorGizmoMath::IsPointInsideConvexQuad;
 		using EditorGizmoMath::NormalizeOrFallback;
 		using EditorGizmoStyle::IsPointInsideRect;
 		using EditorGizmoStyle::MakePlaneHandleColor;
@@ -53,6 +56,8 @@ namespace AshEditor
 		using EditorGizmoTransform::ComputeScaledTransform;
 		using EditorGizmoViewport::BuildViewportRay;
 		using EditorGizmoViewport::ComputeAxisWorldLength;
+		using EditorGizmoViewport::PlaneHandleProjectionDesc;
+		using EditorGizmoViewport::TryBuildProjectedPlaneHandle;
 		using EditorGizmoViewport::TryProjectWorldToViewport;
 
 		static constexpr std::array<std::pair<int32_t, int32_t>, 3> kPlaneAxes{ {
@@ -89,6 +94,53 @@ namespace AshEditor
 			return
 				vecPlaneAxisU * SnapMoveDistance(glm::dot(vecWorldDelta, vecPlaneAxisU), refGizmoState) +
 				vecPlaneAxisV * SnapMoveDistance(glm::dot(vecWorldDelta, vecPlaneAxisV), refGizmoState);
+		}
+
+		void DrawPlaneHandle(
+			AshEngine::UIContext& refUi,
+			const PlaneHandleVisual& refVisual,
+			const AshEngine::UIColor& refFillColor,
+			const AshEngine::UIColor& refOutlineColor,
+			const float fOutlineThickness)
+		{
+			const float fMaxFillSpan = std::max(
+				glm::length(refVisual.arrScreenCorners[3] - refVisual.arrScreenCorners[0]),
+				glm::length(refVisual.arrScreenCorners[2] - refVisual.arrScreenCorners[1]));
+			const float fClampedFillSteps = std::isfinite(fMaxFillSpan)
+				? std::clamp(
+					std::ceil(fMaxFillSpan),
+					1.0f,
+					static_cast<float>(kMoveGizmoPlaneHandleMaxFillSteps))
+				: static_cast<float>(kMoveGizmoPlaneHandleMaxFillSteps);
+			const uint32_t uFillSteps = static_cast<uint32_t>(fClampedFillSteps);
+			for (uint32_t uStep = 0; uStep <= uFillSteps; ++uStep)
+			{
+				const float fT = static_cast<float>(uStep) /
+					static_cast<float>(uFillSteps);
+				const glm::vec2 vecStart =
+					refVisual.arrScreenCorners[0] +
+					(refVisual.arrScreenCorners[3] - refVisual.arrScreenCorners[0]) * fT;
+				const glm::vec2 vecEnd =
+					refVisual.arrScreenCorners[1] +
+					(refVisual.arrScreenCorners[2] - refVisual.arrScreenCorners[1]) * fT;
+				refUi.draw_window_line(
+					{ vecStart.x, vecStart.y },
+					{ vecEnd.x, vecEnd.y },
+					refFillColor,
+					1.5f);
+			}
+
+			for (size_t uCornerIndex = 0; uCornerIndex < refVisual.arrScreenCorners.size(); ++uCornerIndex)
+			{
+				const glm::vec2& refStart = refVisual.arrScreenCorners[uCornerIndex];
+				const glm::vec2& refEnd =
+					refVisual.arrScreenCorners[(uCornerIndex + 1u) % refVisual.arrScreenCorners.size()];
+				refUi.draw_window_line(
+					{ refStart.x, refStart.y },
+					{ refEnd.x, refEnd.y },
+					refOutlineColor,
+					fOutlineThickness);
+			}
 		}
 	}
 
@@ -134,23 +186,21 @@ namespace AshEditor
 			}
 
 			PlaneHandleVisual& refPlaneVisual = outVisual.planes[uPlaneIndex];
-			refPlaneVisual.vecAxisU = refBasis.vecAxes[static_cast<size_t>(iAxisA)];
-			refPlaneVisual.vecAxisV = refBasis.vecAxes[static_cast<size_t>(iAxisB)];
-			refPlaneVisual.vecCenterScreen = {
-				outVisual.vecOriginScreen.x +
-					(outVisual.axes[static_cast<size_t>(iAxisA)].vecEndScreen.x - outVisual.vecOriginScreen.x) * 0.34f +
-					(outVisual.axes[static_cast<size_t>(iAxisB)].vecEndScreen.x - outVisual.vecOriginScreen.x) * 0.34f,
-				outVisual.vecOriginScreen.y +
-					(outVisual.axes[static_cast<size_t>(iAxisA)].vecEndScreen.y - outVisual.vecOriginScreen.y) * 0.34f +
-					(outVisual.axes[static_cast<size_t>(iAxisB)].vecEndScreen.y - outVisual.vecOriginScreen.y) * 0.34f
-			};
-			refPlaneVisual.rectScreen = {
-				refPlaneVisual.vecCenterScreen.x - kMoveGizmoPlaneHandleSizePixels * 0.5f,
-				refPlaneVisual.vecCenterScreen.y - kMoveGizmoPlaneHandleSizePixels * 0.5f,
-				kMoveGizmoPlaneHandleSizePixels,
-				kMoveGizmoPlaneHandleSizePixels
-			};
-			refPlaneVisual.bVisible = true;
+			const AxisVisual& refAxisA = outVisual.axes[static_cast<size_t>(iAxisA)];
+			const AxisVisual& refAxisB = outVisual.axes[static_cast<size_t>(iAxisB)];
+			refPlaneVisual.vecAxisU = refAxisA.vecDirection;
+			refPlaneVisual.vecAxisV = refAxisB.vecDirection;
+			PlaneHandleProjectionDesc projectionDesc{};
+			projectionDesc.vecOrigin = refBasis.vecOrigin;
+			projectionDesc.vecAxisU = refPlaneVisual.vecAxisU;
+			projectionDesc.vecAxisV = refPlaneVisual.vecAxisV;
+			projectionDesc.fWorldLength = std::min(refAxisA.fWorldLength, refAxisB.fWorldLength);
+			projectionDesc.fInnerScale = kMoveGizmoPlaneHandleInnerScale;
+			projectionDesc.fOuterScale = kMoveGizmoPlaneHandleOuterScale;
+			refPlaneVisual.bVisible = TryBuildProjectedPlaneHandle(
+				refViewportContext,
+				projectionDesc,
+				refPlaneVisual.arrScreenCorners);
 		}
 
 		ScreenHandleVisual& refScreenHandle = outVisual.screenHandle;
@@ -184,7 +234,7 @@ namespace AshEditor
 				{
 					continue;
 				}
-				if (IsPointInsideRect(refPlaneVisual.rectScreen, vecMousePosition))
+				if (IsPointInsideConvexQuad(vecMousePosition, refPlaneVisual.arrScreenCorners))
 				{
 					result.eKind = HandleKind::Plane;
 					result.iPrimaryAxis = kPlaneAxes[uPlaneIndex].first;
@@ -348,8 +398,12 @@ namespace AshEditor
 				(colorFill.b + kAxisColors[static_cast<size_t>(iAxisA)].b + kAxisColors[static_cast<size_t>(iAxisB)].b) / 3.0f,
 				bIsActive ? 0.92f : 0.72f
 			};
-			refUi.draw_window_rect_filled(refPlaneVisual.rectScreen, colorFill, 2.0f);
-			refUi.draw_window_rect(refPlaneVisual.rectScreen, colorOutline, 2.0f, bIsActive ? 2.0f : 1.0f);
+			DrawPlaneHandle(
+				refUi,
+				refPlaneVisual,
+				colorFill,
+				colorOutline,
+				bIsActive ? 2.0f : 1.0f);
 		}
 
 		if (refVisual.bOriginVisible)
@@ -454,14 +508,6 @@ namespace AshEditor
 				!bIsActive &&
 				refHoveredHandle.eKind == HandleKind::Plane &&
 				MakePlaneKey(refHoveredHandle.iPrimaryAxis, refHoveredHandle.iSecondaryAxis) == MakePlaneKey(iAxisA, iAxisB);
-			AshEngine::UIRect rectPlane = refPlaneVisual.rectScreen;
-			if (bIsActive)
-			{
-				rectPlane.x -= 1.0f;
-				rectPlane.y -= 1.0f;
-				rectPlane.width += 2.0f;
-				rectPlane.height += 2.0f;
-			}
 			const AshEngine::UIColor colorFill =
 				bIsActive
 				? AshEngine::UIColor{ 0.96f, 0.98f, 1.0f, 0.32f }
@@ -474,8 +520,12 @@ namespace AshEditor
 				(kAxisColors[static_cast<size_t>(iAxisA)].b + kAxisColors[static_cast<size_t>(iAxisB)].b) * 0.5f,
 				bIsActive ? 0.92f : 0.76f
 			};
-			refUi.draw_window_rect_filled(rectPlane, colorFill, 2.0f);
-			refUi.draw_window_rect(rectPlane, colorOutline, 2.0f, bIsActive ? 2.0f : 1.0f);
+			DrawPlaneHandle(
+				refUi,
+				refPlaneVisual,
+				colorFill,
+				colorOutline,
+				bIsActive ? 2.0f : 1.0f);
 		}
 
 		if (refVisual.screenHandle.bVisible)

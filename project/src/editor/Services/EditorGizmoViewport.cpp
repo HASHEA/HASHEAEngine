@@ -15,6 +15,7 @@ namespace AshEditor::EditorGizmoViewport
 		constexpr float kGizmoTargetScreenLength = 104.0f;
 		constexpr float kGizmoMinWorldLength = 0.25f;
 		constexpr float kGizmoMaxWorldLength = 1000.0f;
+		constexpr float kMinProjectedPlaneHandleAreaPixelsSquared = 1.0f;
 	}
 
 	AshEngine::SceneRay BuildViewportRay(
@@ -32,8 +33,11 @@ namespace AshEditor::EditorGizmoViewport
 
 	glm::vec3 ComputeCameraForward(const EditorGizmoInternal::ViewportContext& refViewportContext)
 	{
-		const glm::mat4 matCameraWorld = glm::inverse(refViewportContext.matView);
-		return EditorGizmoMath::NormalizeOrFallback(glm::vec3(matCameraWorld[2]), glm::vec3(0.0f, 0.0f, 1.0f));
+		glm::vec3 vecRight{};
+		glm::vec3 vecUp{};
+		glm::vec3 vecForward{};
+		EditorGizmoMath::ExtractViewBasis(refViewportContext.matView, vecRight, vecUp, vecForward);
+		return vecForward;
 	}
 
 	bool TryProjectWorldToViewport(
@@ -60,6 +64,67 @@ namespace AshEditor::EditorGizmoViewport
 		outViewportPosition.x = refViewportContext.rectContent.x + ((vecNdc.x + 1.0f) * 0.5f) * refViewportContext.rectContent.width;
 		outViewportPosition.y = refViewportContext.rectContent.y + ((1.0f - vecNdc.y) * 0.5f) * refViewportContext.rectContent.height;
 		outDepth = vecNdc.z;
+		return true;
+	}
+
+	bool TryBuildProjectedPlaneHandle(
+		const EditorGizmoInternal::ViewportContext& refViewportContext,
+		const PlaneHandleProjectionDesc& refDesc,
+		std::array<glm::vec2, 4>& outScreenCorners)
+	{
+		outScreenCorners = {};
+		if (refDesc.fWorldLength <= 0.0001f ||
+			refDesc.fInnerScale < 0.0f ||
+			refDesc.fOuterScale <= refDesc.fInnerScale ||
+			glm::length(refDesc.vecAxisU) <= 0.0001f ||
+			glm::length(refDesc.vecAxisV) <= 0.0001f)
+		{
+			return false;
+		}
+
+		const glm::vec3 vecAxisU = EditorGizmoMath::NormalizeOrFallback(
+			refDesc.vecAxisU,
+			glm::vec3(1.0f, 0.0f, 0.0f));
+		const glm::vec3 vecAxisV = EditorGizmoMath::NormalizeOrFallback(
+			refDesc.vecAxisV,
+			glm::vec3(0.0f, 1.0f, 0.0f));
+		const std::array<glm::vec2, 4> arrScales{
+			glm::vec2(refDesc.fInnerScale, refDesc.fInnerScale),
+			glm::vec2(refDesc.fOuterScale, refDesc.fInnerScale),
+			glm::vec2(refDesc.fOuterScale, refDesc.fOuterScale),
+			glm::vec2(refDesc.fInnerScale, refDesc.fOuterScale)
+		};
+		for (size_t uCornerIndex = 0; uCornerIndex < arrScales.size(); ++uCornerIndex)
+		{
+			const glm::vec2& refScale = arrScales[uCornerIndex];
+			const glm::vec3 vecWorldCorner =
+				refDesc.vecOrigin +
+				vecAxisU * (refDesc.fWorldLength * refScale.x) +
+				vecAxisV * (refDesc.fWorldLength * refScale.y);
+			float fDepth = 0.0f;
+			if (!TryProjectWorldToViewport(
+				refViewportContext,
+				vecWorldCorner,
+				outScreenCorners[uCornerIndex],
+				fDepth))
+			{
+				outScreenCorners = {};
+				return false;
+			}
+		}
+
+		const glm::vec2 vecEdge01 = outScreenCorners[1] - outScreenCorners[0];
+		const glm::vec2 vecEdge02 = outScreenCorners[2] - outScreenCorners[0];
+		const glm::vec2 vecEdge03 = outScreenCorners[3] - outScreenCorners[0];
+		const float fTwiceProjectedArea =
+			(vecEdge01.x * vecEdge02.y - vecEdge01.y * vecEdge02.x) +
+			(vecEdge02.x * vecEdge03.y - vecEdge02.y * vecEdge03.x);
+		if (std::abs(fTwiceProjectedArea) * 0.5f < kMinProjectedPlaneHandleAreaPixelsSquared)
+		{
+			outScreenCorners = {};
+			return false;
+		}
+
 		return true;
 	}
 
