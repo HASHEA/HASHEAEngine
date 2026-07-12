@@ -55,12 +55,20 @@ namespace AshEditor
 			std::optional<AshEngine::EnvironmentComponent> optCurrentValue{};
 		};
 
+		struct ParticleDraft
+		{
+			SceneEntityId uEntityId = 0;
+			std::optional<AshEngine::ParticleComponent> optOriginalValue{};
+			std::optional<AshEngine::ParticleComponent> optCurrentValue{};
+		};
+
 		IdentityDraft draftIdentity{};
 		TransformDraft draftTransform{};
 		CameraDraft draftCamera{};
 		LightDraft draftLight{};
 		MeshDraft draftMesh{};
 		EnvironmentDraft draftEnvironment{};
+		ParticleDraft draftParticle{};
 
 		std::vector<std::string> vecRecentMeshPaths{};
 		std::vector<std::string> vecRecentMaterialPaths{};

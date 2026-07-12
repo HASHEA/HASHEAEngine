@@ -29,15 +29,17 @@ namespace RHI
 		virtual auto destroy() -> void override;
 	public:
 		auto resize_swapchain(uint32_t width, uint32_t height) -> void override;
-		auto present() -> void override;
+		auto present() -> SwapchainPresentResult override;
 		auto get_swapchain_buffer() -> std::shared_ptr<Texture> override;
 		auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> override;
 		auto get_format() -> AshFormat override { return vk_format_to_ash(surfaceFormat.format); }
 		auto get_width() -> uint32_t override;
 		auto get_height() -> uint32_t override;
-		auto begin_frame() -> void override;
+		auto begin_frame() -> SwapchainPresentResult override;
 		auto end_frame() -> void override;
 		auto get_swapchain_buffer_count() -> uint8_t override;
+		static auto classify_acquire_result(VkResult result) -> SwapchainPresentResult;
+		static auto acquire_result_requires_recreate(VkResult result) -> bool;
 		static auto should_recreate_for_surface_extent(
 			bool hasSwapchain,
 			bool forceRecreate,
@@ -56,7 +58,7 @@ namespace RHI
 		auto _choose_swap_extent(const VkSurfaceCapabilitiesKHR& capabilities)->bool;
 		auto _recreate_swapchain(bool forceRecreate = false) -> void;
 		auto _clean_swapchain(VkSwapchainKHR& _swapchain) -> bool;
-		auto _aquire_next_image() -> void;
+		auto _aquire_next_image() -> SwapchainPresentResult;
 	private:
 		uint8_t swapchainBufferCount = 0;
 		VkSurfaceKHR    surface = VK_NULL_HANDLE;

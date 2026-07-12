@@ -188,6 +188,29 @@ namespace AshEngine
 				report_self_test_failure("Vulkan swapchain forced recreate", "resize/out-of-date paths can still skip required recreation");
 		}
 
+		auto test_vulkan_swapchain_classifies_acquire_results() -> bool
+		{
+			const bool completed =
+				RHI::VulkanSwapchain::classify_acquire_result(VK_SUCCESS) == RHI::SwapchainPresentResult::Completed &&
+				RHI::VulkanSwapchain::classify_acquire_result(VK_SUBOPTIMAL_KHR) == RHI::SwapchainPresentResult::Completed;
+			const bool retryable =
+				RHI::VulkanSwapchain::classify_acquire_result(VK_ERROR_OUT_OF_DATE_KHR) == RHI::SwapchainPresentResult::Retryable &&
+				RHI::VulkanSwapchain::classify_acquire_result(VK_NOT_READY) == RHI::SwapchainPresentResult::Retryable &&
+				RHI::VulkanSwapchain::classify_acquire_result(VK_TIMEOUT) == RHI::SwapchainPresentResult::Retryable;
+			const bool recreate_policy =
+				RHI::VulkanSwapchain::acquire_result_requires_recreate(VK_ERROR_OUT_OF_DATE_KHR) &&
+				!RHI::VulkanSwapchain::acquire_result_requires_recreate(VK_NOT_READY) &&
+				!RHI::VulkanSwapchain::acquire_result_requires_recreate(VK_TIMEOUT) &&
+				!RHI::VulkanSwapchain::acquire_result_requires_recreate(VK_SUBOPTIMAL_KHR);
+			const bool failed =
+				RHI::VulkanSwapchain::classify_acquire_result(VK_ERROR_DEVICE_LOST) == RHI::SwapchainPresentResult::Failed;
+
+			return (completed && retryable && recreate_policy && failed) ||
+				report_self_test_failure(
+					"Vulkan swapchain acquire classification",
+					"success/suboptimal, out-of-date, temporary unavailability, and fatal acquire results must map to the correct retry/recreate policy");
+		}
+
 		auto test_vulkan_acquire_wait_covers_initial_swapchain_barrier() -> bool
 		{
 			std::ifstream context_file("project/src/engine/Graphics/Vulkan/VulkanContext.cpp");
@@ -2805,25 +2828,72 @@ namespace AshEngine
 				report_self_test_failure("Ambient AO downsampled scene UV", "downsampled AO scene texture reads must land on full-resolution depth texel centers");
 		}
 
-		auto test_frame_dump_streaming_quiesce_contract() -> bool
+		auto test_readiness_driven_automation_contract() -> bool
 		{
 			const bool manager_ok = file_contains_all(
 				"project/src/engine/Function/Render/RenderAssetManager.h",
 				{
-					"bool has_requested_render_assets() const",
-					"bool has_pending_render_assets() const"
+					"struct ASH_API RenderAssetReadinessSnapshot",
+					"uint64_t activity_epoch = 0",
+					"RenderAssetReadinessSnapshot query_readiness() const"
+				});
+			const bool presentation_ok = file_contains_all(
+				"project/src/engine/Function/Render/ScenePresentationSubsystem.h",
+				{
+					"struct ASH_API SceneSubmissionSnapshot",
+					"SceneSubmissionSnapshot get_last_scene_submission_snapshot() const"
+				});
+			const bool controller_ok = file_contains_all(
+				"project/src/engine/Function/Application.h",
+				{
+					"ApplicationAutomationController automationController"
 				});
 			const bool application_ok = file_contains_all(
 				"project/src/engine/Function/Application.cpp",
 				{
-					"k_frame_dump_quiesce_frames",
-					"renderAssetManager.has_requested_render_assets()",
-					"!renderAssetManager.has_pending_render_assets()",
-					"frameDumpQuiesceFrameCount = streamingQuiesced ? frameDumpQuiesceFrameCount + 1 : 0",
-					"smoke frame limit reached before render asset streaming quiesced"
+					"renderAssetManager.query_readiness()",
+					"scenePresentation.get_last_scene_submission_snapshot()",
+					"automationController.should_request_capture",
+					"automationController.observe_presented_frame"
 				});
-			return (manager_ok && application_ok) ||
-				report_self_test_failure("Frame dump streaming quiesce", "frame dump must be driven by the render asset streaming quiesce signal with the frame limit as timeout fallback");
+			const bool entry_point_ok = file_contains_all(
+				"project/src/engine/EntryPoint.h",
+				{
+					"--run-for-frames",
+					"--run-for-seconds",
+					"set_readiness_smoke_timeout_seconds",
+					"return runSucceeded ? 0 : 1"
+				});
+			const bool deterministic_step_ok = file_contains_all(
+				"project/src/engine/Function/Render/ScenePresentationSubsystem.cpp",
+				{
+					"packet.visible_frame = std::make_shared<VisibleRenderFrame>(*packet.visible_frame)",
+					"packet.visible_frame->frame_index = render_frame_index",
+					"packet.visible_frame->delta_seconds = 1.0f / 60.0f"
+				});
+			return (manager_ok && presentation_ok && controller_ok && application_ok && entry_point_ok && deterministic_step_ok) ||
+				report_self_test_failure("Readiness-driven automation", "smoke and frame dump must share the asset-epoch and all-scene-submit readiness contract; frame dump keeps deterministic simulation steps without using a frame count as success criteria");
+		}
+
+		auto test_scene_presentation_uses_attempted_render_submit_delta() -> bool
+		{
+			const bool render_submit_delta_ok = file_contains_all(
+				"project/src/engine/Function/Render/ScenePresentationSubsystem.cpp",
+				{
+					"last_delta_submit_time",
+					"last_delta_frame_index",
+					"const uint64_t render_frame_index = application",
+					"packet.visible_frame->frame_index = render_frame_index",
+					"std::chrono::duration<float>(delta_submit_time - m_impl->last_delta_submit_time).count()",
+					"attempted_scene_for_new_frame",
+					"if (attempted_scene_for_new_frame)",
+					"m_impl->last_delta_submit_time = delta_submit_time",
+					"m_impl->last_delta_frame_index = render_frame_index"
+				});
+			return render_submit_delta_ok ||
+				report_self_test_failure(
+					"ScenePresentation particle render delta",
+					"only an attempted new scene render frame may advance the particle simulation clock");
 		}
 
 		auto test_render_debug_view_config_parses_runtime_selection() -> bool
@@ -3421,7 +3491,7 @@ namespace AshEngine
 				std::istreambuf_iterator<char>() };
 
 			const size_t start_time_pos = renderer_source.find("m_frame_start_time = std::chrono::steady_clock::now();");
-			const size_t begin_frame_pos = renderer_source.find("m_render_device && m_render_device->begin_frame()");
+			const size_t begin_frame_pos = renderer_source.find("m_render_device->begin_frame()");
 			const size_t present_pos = renderer_source.find("m_render_device->present();");
 			const size_t complete_frame_pos = renderer_source.find("complete_frame_timing();");
 			const bool starts_before_backend_begin =
@@ -3441,6 +3511,154 @@ namespace AshEngine
 				report_self_test_failure(
 					"Renderer frame stats timing",
 					"RendererFrameStats must measure from before backend begin_frame wait through present completion");
+		}
+
+		auto test_readiness_present_success_propagates_from_rhi() -> bool
+		{
+			const auto read_source = [](const char* path, std::string& out_source) -> bool
+			{
+				std::ifstream file(path);
+				if (!file.is_open())
+				{
+					return false;
+				}
+				out_source.assign(
+					std::istreambuf_iterator<char>(file),
+					std::istreambuf_iterator<char>());
+				return true;
+			};
+
+			std::string swapchain_header{};
+			std::string dx12_source{};
+			std::string vulkan_source{};
+			std::string render_device_header{};
+			std::string renderer_header{};
+			std::string application_header{};
+			std::string application_source{};
+			if (!read_source("project/src/engine/Graphics/SwapChain.h", swapchain_header) ||
+				!read_source("project/src/engine/Graphics/DirectX12/DX12Swapchain.cpp", dx12_source) ||
+				!read_source("project/src/engine/Graphics/Vulkan/VulkanSwapchain.cpp", vulkan_source) ||
+				!read_source("project/src/engine/Function/Render/RenderDevice.h", render_device_header) ||
+				!read_source("project/src/engine/Function/Render/Renderer.h", renderer_header) ||
+				!read_source("project/src/engine/Function/Application.h", application_header) ||
+				!read_source("project/src/engine/Function/Application.cpp", application_source))
+			{
+				return report_self_test_failure(
+					"Readiness present success",
+					"failed to open a present-path source file");
+			}
+
+			const bool ok =
+				swapchain_header.find("enum class SwapchainPresentResult") != std::string::npos &&
+				swapchain_header.find("Completed") != std::string::npos &&
+				swapchain_header.find("virtual auto present() -> SwapchainPresentResult = 0;") != std::string::npos &&
+				dx12_source.find("auto DX12Swapchain::present() -> SwapchainPresentResult") != std::string::npos &&
+				dx12_source.find("SwapchainPresentResult::Completed") != std::string::npos &&
+				dx12_source.find("if (FAILED(hr))") != std::string::npos &&
+				vulkan_source.find("auto VulkanSwapchain::present() -> SwapchainPresentResult") != std::string::npos &&
+				vulkan_source.find("SwapchainPresentResult::Retryable") != std::string::npos &&
+				render_device_header.find("RHI::SwapchainPresentResult present();") != std::string::npos &&
+				renderer_header.find("RHI::SwapchainPresentResult present();") != std::string::npos &&
+				application_header.find("SwapchainPresentResult") != std::string::npos &&
+				application_source.find("? renderer->present()") != std::string::npos &&
+				application_source.find("presentResult == RHI::SwapchainPresentResult::Failed") != std::string::npos;
+			return ok || report_self_test_failure(
+				"Readiness present success",
+				"present success must propagate from both RHI backends through Application readiness");
+		}
+
+		auto test_vulkan_retryable_acquire_reaches_present_without_swapchain_binary_sync() -> bool
+		{
+			const auto read_source = [](const char* path, std::string& out_source) -> bool
+			{
+				std::ifstream file(path);
+				if (!file.is_open())
+				{
+					return false;
+				}
+				out_source.assign(
+					std::istreambuf_iterator<char>(file),
+					std::istreambuf_iterator<char>());
+				return true;
+			};
+
+			std::string swapchain_header{};
+			std::string graphics_context_header{};
+			std::string dx12_header{};
+			std::string dx12_source{};
+			std::string vulkan_header{};
+			std::string vulkan_source{};
+			std::string vulkan_context_source{};
+			std::string render_device_header{};
+			std::string render_device_source{};
+			std::string renderer_header{};
+			std::string renderer_source{};
+			std::string application_header{};
+			std::string application_source{};
+			std::string sandbox_source{};
+			if (!read_source("project/src/engine/Graphics/SwapChain.h", swapchain_header) ||
+				!read_source("project/src/engine/Graphics/GraphicsContext.h", graphics_context_header) ||
+				!read_source("project/src/engine/Graphics/DirectX12/DX12Swapchain.h", dx12_header) ||
+				!read_source("project/src/engine/Graphics/DirectX12/DX12Swapchain.cpp", dx12_source) ||
+				!read_source("project/src/engine/Graphics/Vulkan/VulkanSwapchain.h", vulkan_header) ||
+				!read_source("project/src/engine/Graphics/Vulkan/VulkanSwapchain.cpp", vulkan_source) ||
+				!read_source("project/src/engine/Graphics/Vulkan/VulkanContext.cpp", vulkan_context_source) ||
+				!read_source("project/src/engine/Function/Render/RenderDevice.h", render_device_header) ||
+				!read_source("project/src/engine/Function/Render/RenderDevice.cpp", render_device_source) ||
+				!read_source("project/src/engine/Function/Render/Renderer.h", renderer_header) ||
+				!read_source("project/src/engine/Function/Render/Renderer.cpp", renderer_source) ||
+				!read_source("project/src/engine/Function/Application.h", application_header) ||
+				!read_source("project/src/engine/Function/Application.cpp", application_source) ||
+				!read_source("project/src/sandbox/App/SandboxApplication.cpp", sandbox_source))
+			{
+				return report_self_test_failure(
+					"Vulkan retryable acquire",
+					"failed to open a swapchain acquire/present source file");
+			}
+
+			const bool interface_ok =
+				swapchain_header.find("virtual auto begin_frame() -> SwapchainPresentResult = 0;") != std::string::npos &&
+				graphics_context_header.find("virtual auto end_frame(bool has_acquired_swapchain_image = true) -> void = 0;") != std::string::npos &&
+				dx12_header.find("auto begin_frame() -> SwapchainPresentResult override;") != std::string::npos &&
+				dx12_source.find("auto DX12Swapchain::begin_frame() -> SwapchainPresentResult") != std::string::npos &&
+				dx12_source.find("return SwapchainPresentResult::Completed;") != std::string::npos;
+			const bool vulkan_result_ok =
+				vulkan_header.find("auto begin_frame() -> SwapchainPresentResult override;") != std::string::npos &&
+				vulkan_header.find("auto _aquire_next_image() -> SwapchainPresentResult;") != std::string::npos &&
+				vulkan_source.find("auto VulkanSwapchain::begin_frame() -> SwapchainPresentResult") != std::string::npos &&
+				vulkan_source.find("constexpr uint64_t acquire_timeout_ns = 1'000'000'000ull;") != std::string::npos &&
+				vulkan_source.find("vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, acquire_timeout_ns,") != std::string::npos &&
+				vulkan_source.find("vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX,") == std::string::npos &&
+				vulkan_source.find("acquire_result_requires_recreate(result)") != std::string::npos &&
+				vulkan_source.find("return SwapchainPresentResult::Retryable;") != std::string::npos &&
+				vulkan_source.find("return SwapchainPresentResult::Failed;") != std::string::npos &&
+				vulkan_source.find("vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;") != std::string::npos;
+			const bool render_device_ok =
+				render_device_header.find("RHI::SwapchainPresentResult begin_frame();") != std::string::npos &&
+				render_device_source.find("const RHI::SwapchainPresentResult acquire_result = m_impl->swapchain->begin_frame();") != std::string::npos &&
+				render_device_source.find("m_impl->graphics_context->end_frame(false);") != std::string::npos &&
+				renderer_header.find("RHI::SwapchainPresentResult begin_frame();") != std::string::npos &&
+				renderer_source.find("RHI::SwapchainPresentResult Renderer::begin_frame()") != std::string::npos;
+			const bool application_ok =
+				application_header.find("auto _render_frame() -> RHI::SwapchainPresentResult;") != std::string::npos &&
+				application_header.find("RHI::SwapchainPresentResult currentFrameRenderResult") != std::string::npos &&
+				application_header.find("currentFramePresentRequired") != std::string::npos &&
+				application_source.find("const RHI::SwapchainPresentResult frameRenderResult = _render_frame();") != std::string::npos &&
+				application_source.find("if (!frameRendered)") != std::string::npos &&
+				application_source.find("framePresentCompleted = currentFramePresentRequired && _present_frame();") != std::string::npos &&
+				application_source.find("Application: render frame {} failed; requesting exit.") != std::string::npos &&
+				application_source.find("captureRequested = false;") != std::string::npos &&
+				sandbox_source.find("currentFrameRenderResult == RHI::SwapchainPresentResult::Failed") != std::string::npos;
+			const bool vulkan_submit_ok =
+				vulkan_context_source.find("const bool has_swapchain_image =") != std::string::npos &&
+				vulkan_context_source.find("if (has_swapchain_image)") != std::string::npos &&
+				vulkan_context_source.find("vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;") != std::string::npos &&
+				vulkan_context_source.find("vulkanPresentCompleteSemaphore != VK_NULL_HANDLE ?") == std::string::npos;
+
+			return (interface_ok && vulkan_result_ok && render_device_ok && application_ok && vulkan_submit_ok) ||
+				report_self_test_failure(
+					"Vulkan retryable acquire",
+					"a missing acquired image must skip swapchain copy and binary acquire/present semaphore use, then reach tri-state present without becoming a render failure");
 		}
 
 		auto test_renderer_frame_stats_expose_frame_pacing_breakdown() -> bool
@@ -5149,6 +5367,7 @@ namespace AshEngine
 		all_passed = test_ash_barrier_copy_move_is_safe() && all_passed;
 #if defined(ASH_HAS_VULKAN)
 		all_passed = test_vulkan_swapchain_forced_recreate_ignores_matching_extent() && all_passed;
+		all_passed = test_vulkan_swapchain_classifies_acquire_results() && all_passed;
 		all_passed = test_vulkan_acquire_wait_covers_initial_swapchain_barrier() && all_passed;
 #endif
 		all_passed = test_render_memory_stats_default_to_unsupported() && all_passed;
@@ -5185,7 +5404,8 @@ namespace AshEngine
 		all_passed = test_scene_renderer_volumetric_lighting_integration_contract() && all_passed;
 		all_passed = test_ambient_occlusion_temporal_pipeline_contract() && all_passed;
 		all_passed = test_ambient_occlusion_downsampled_scene_uv_contract() && all_passed;
-		all_passed = test_frame_dump_streaming_quiesce_contract() && all_passed;
+		all_passed = test_readiness_driven_automation_contract() && all_passed;
+		all_passed = test_scene_presentation_uses_attempted_render_submit_delta() && all_passed;
 		all_passed = test_render_debug_view_config_parses_runtime_selection() && all_passed;
 		all_passed = test_render_debug_view_registry_replaces_duplicate_items() && all_passed;
 		all_passed = test_render_debug_view_graph_pass_contract() && all_passed;
@@ -5204,6 +5424,8 @@ namespace AshEngine
 		all_passed = test_scene_renderer_temporal_history_uses_render_frame_epoch() && all_passed;
 		all_passed = test_scene_renderer_temporal_history_is_gbuffer_only() && all_passed;
 		all_passed = test_renderer_frame_stats_cover_presented_frame() && all_passed;
+		all_passed = test_readiness_present_success_propagates_from_rhi() && all_passed;
+		all_passed = test_vulkan_retryable_acquire_reaches_present_without_swapchain_binary_sync() && all_passed;
 		all_passed = test_renderer_frame_stats_expose_frame_pacing_breakdown() && all_passed;
 		all_passed = test_rhi_frame_slots_match_default_triple_buffering() && all_passed;
 		all_passed = test_scene_presentation_reuses_prepared_material_proxy() && all_passed;

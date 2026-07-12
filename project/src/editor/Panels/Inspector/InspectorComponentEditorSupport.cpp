@@ -27,6 +27,15 @@ namespace AshEditor
 		constexpr float kInspectorMaximumEnvironmentIntensity = 10.0f;
 		constexpr float kInspectorMinimumEnvironmentRotation = -360.0f;
 		constexpr float kInspectorMaximumEnvironmentRotation = 360.0f;
+		constexpr uint32_t kInspectorMinimumParticleCapacity = 1u;
+		constexpr uint32_t kInspectorMaximumParticleCapacity = 65536u;
+		constexpr float kInspectorMaximumParticleSpawnRate = 20000.0f;
+		constexpr float kInspectorMinimumParticleLifetime = 0.01f;
+		constexpr float kInspectorMaximumParticleLifetime = 60.0f;
+		constexpr float kInspectorMaximumParticleLifetimeVariance = 30.0f;
+		constexpr float kInspectorMaximumParticleInitialSpeed = 100.0f;
+		constexpr float kInspectorMaximumParticleSpreadAngle = 90.0f;
+		constexpr float kInspectorMaximumParticleSize = 10.0f;
 
 		bool IsNearlyEqual(const float fLeft, const float fRight, const float fTolerance = 0.0001f)
 		{
@@ -498,5 +507,74 @@ namespace AshEditor
 	bool SanitizeOptionalEnvironmentComponent(std::optional<AshEngine::EnvironmentComponent>& refValue)
 	{
 		return refValue.has_value() && SanitizeEnvironmentComponent(*refValue);
+	}
+
+	bool SanitizeParticleComponent(AshEngine::ParticleComponent& refComponent)
+	{
+		const AshEngine::ParticleComponent originalValue = refComponent;
+		const AshEngine::ParticleComponent defaultValue{};
+		auto sanitizeClampedColor = [](glm::vec4& refColor, const glm::vec4& refFallbackColor)
+		{
+			refColor.x = SanitizeClampedScalar(refColor.x, refFallbackColor.x, 0.0f, 1.0f);
+			refColor.y = SanitizeClampedScalar(refColor.y, refFallbackColor.y, 0.0f, 1.0f);
+			refColor.z = SanitizeClampedScalar(refColor.z, refFallbackColor.z, 0.0f, 1.0f);
+			refColor.w = SanitizeClampedScalar(refColor.w, refFallbackColor.w, 0.0f, 1.0f);
+		};
+
+		refComponent.max_particles = std::clamp(
+			refComponent.max_particles,
+			kInspectorMinimumParticleCapacity,
+			kInspectorMaximumParticleCapacity);
+		refComponent.spawn_rate = SanitizeClampedScalar(
+			refComponent.spawn_rate,
+			defaultValue.spawn_rate,
+			0.0f,
+			kInspectorMaximumParticleSpawnRate);
+		refComponent.lifetime = SanitizeClampedScalar(
+			refComponent.lifetime,
+			defaultValue.lifetime,
+			kInspectorMinimumParticleLifetime,
+			kInspectorMaximumParticleLifetime);
+		refComponent.lifetime_variance = SanitizeClampedScalar(
+			refComponent.lifetime_variance,
+			defaultValue.lifetime_variance,
+			0.0f,
+			kInspectorMaximumParticleLifetimeVariance);
+		refComponent.initial_speed = SanitizeClampedScalar(
+			refComponent.initial_speed,
+			defaultValue.initial_speed,
+			0.0f,
+			kInspectorMaximumParticleInitialSpeed);
+		refComponent.spread_angle_degrees = SanitizeClampedScalar(
+			refComponent.spread_angle_degrees,
+			defaultValue.spread_angle_degrees,
+			0.0f,
+			kInspectorMaximumParticleSpreadAngle);
+		refComponent.constant_acceleration = SanitizeFiniteVec3(
+			refComponent.constant_acceleration,
+			defaultValue.constant_acceleration);
+		refComponent.start_size = SanitizeClampedScalar(
+			refComponent.start_size,
+			defaultValue.start_size,
+			0.0f,
+			kInspectorMaximumParticleSize);
+		refComponent.end_size = SanitizeClampedScalar(
+			refComponent.end_size,
+			defaultValue.end_size,
+			0.0f,
+			kInspectorMaximumParticleSize);
+		sanitizeClampedColor(refComponent.start_color, defaultValue.start_color);
+		sanitizeClampedColor(refComponent.end_color, defaultValue.end_color);
+		if (refComponent.blend_mode != AshEngine::ParticleBlendMode::Additive &&
+			refComponent.blend_mode != AshEngine::ParticleBlendMode::AlphaBlend)
+		{
+			refComponent.blend_mode = defaultValue.blend_mode;
+		}
+		return !ParticleComponentsEqual(refComponent, originalValue);
+	}
+
+	bool SanitizeOptionalParticleComponent(std::optional<AshEngine::ParticleComponent>& refValue)
+	{
+		return refValue.has_value() && SanitizeParticleComponent(*refValue);
 	}
 }

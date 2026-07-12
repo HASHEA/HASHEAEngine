@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -54,7 +54,7 @@ status: active
 ## 验证
 
 - `RunTests.bat` 跑 doctest 单测（`project/src/tests/Base/` + legacy 自测桥接），Base 纯逻辑改动必跑。
-- 构建 + `run.bat all Debug --smoke-test-seconds=5`（全矩阵 smoke，Base 被所有目标依赖）。
+- 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke，Base 被所有目标依赖）。
 - `run.bat sandbox vulkan Debug --engine-self-test` 为 legacy 自测入口（Tests.exe 桥接已覆盖同一套用例）。
 - 改动波及渲染路径（内存/线程）时按 `docs/VERIFY.md` 追加 `RunRenderGate.bat` 与 PerfGate Standard。
 
@@ -62,3 +62,4 @@ status: active
 
 - `docs/sdd/SDD-2026-07-08-doctest-unit-test-layer.md`：引入 doctest 单测工程；`hmemory.h` 的 `memory_copy` 与 `MemoryService` 补 `ASH_API` 导出（供 Tests.exe 跨 DLL 链接）。
 - `docs/sdd/SDD-2026-07-08-selftest-base-migration.md`：EngineSelfTests Base 域 9 用例迁出 doctest（`tests/Base/hassert|hmemory|hfile_tests.cpp`）；`HeapAllocator/StackAllocator/LinearAllocator` 与 hfile 四函数补 `ASH_API`；`MemoryService` 新增 `is_initialized()`，TestMain 进程级 init/shutdown 服务。
+- [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：自动化契约测试继续由 Tests.exe 的 legacy bridge 覆盖。

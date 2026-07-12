@@ -23,6 +23,8 @@ namespace AshEditor
 		void Update();
 		void DrawGui();
 		void SyncRuntimeScenePresentations();
+		bool IsAutomationReady() const;
+		bool HasAutomationFailure() const;
 		EditorViewportInstance* GetPrimaryViewport();
 		const EditorViewportInstance* GetPrimaryViewport() const;
 		EditorViewportService& GetViewportService();

@@ -143,6 +143,8 @@ namespace AshEditor
 		_upIconService->Shutdown(_editorContext.pUiContext);
 		_upSettingsService->Save();
 		_bInitialized = false;
+		_bAssetDatabaseReady = false;
+		_bPresentationReady = false;
 	}
 
 	void EditorApplicationImpl::Update()
@@ -202,19 +204,35 @@ namespace AshEditor
 		AshEngine::ScenePresentationSubsystem* pScenePresentation = AshEngine::Application::get_scene_presentation();
 		if (!pRenderer || !pScenePresentation)
 		{
+			_bPresentationReady = false;
 			return;
 		}
 
 		AshEngine::AssetDatabase& refAssetDatabase = _upAssetDatabaseService->GetDatabase();
 		AshEngine::Application::get()->get_render_asset_manager().initialize(&refAssetDatabase, pRenderer);
 		_upViewportCameraService->SyncFromScene(*_upSceneService, *_upAssetDatabaseService);
-		if (!_upViewportService->SyncScenePresentations(
+		_bPresentationReady = _upViewportService->SyncScenePresentations(
 			*pScenePresentation,
 			_upSceneService->GetActiveScene(),
-			_upViewportCameraService.get()))
+			_upViewportCameraService.get());
+		if (!_bPresentationReady)
 		{
 			HLogError("Editor failed to synchronize scene viewport presentation bindings.");
 		}
+	}
+
+	bool EditorApplicationImpl::IsAutomationReady() const
+	{
+		return _bInitialized &&
+			_bAssetDatabaseReady &&
+			_bPresentationReady &&
+			_editorContext.bGuiRendererReady;
+	}
+
+	bool EditorApplicationImpl::HasAutomationFailure() const
+	{
+		return _bInitialized &&
+			(!_bAssetDatabaseReady || !_editorContext.bGuiRendererReady);
 	}
 
 	EditorViewportInstance* EditorApplicationImpl::GetPrimaryViewport()
@@ -243,7 +261,7 @@ namespace AshEditor
 	{
 		const bool bStartupSceneLoaded = _upSceneService->Initialize(pathStartupScene);
 		_upAssetDatabaseService->SetAssetRoot(_upSettingsService->GetAssetsRootPath());
-		_upAssetDatabaseService->Refresh();
+		_bAssetDatabaseReady = _upAssetDatabaseService->Refresh();
 		_upIconService->Initialize(pathWorkspaceRoot);
 		return bStartupSceneLoaded;
 	}

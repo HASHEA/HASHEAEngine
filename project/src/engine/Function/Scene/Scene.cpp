@@ -47,11 +47,13 @@ namespace AshEngine
 			EntityId next_entity_id = 1;
 			bool dirty = false;
 			uint64_t change_version = 0;
+			uint64_t content_epoch = 0;
 			SceneRenderConfig render_config = make_default_scene_render_config();
 			uint64_t render_primitive_version = 0;
 			uint64_t render_transform_version = 0;
 			uint64_t render_light_version = 0;
 			uint64_t render_environment_version = 0;
+			uint64_t render_particle_version = 0;
 			uint64_t render_config_version = 0;
 			// editor begin 修改原因：Scene Change Event 订阅管理
 			std::unordered_map<uint32_t, SceneChangeCallback> change_callbacks{};
@@ -59,7 +61,7 @@ namespace AshEngine
 			// editor end
 		};
 
-		static constexpr uint32_t k_scene_file_version = 4;
+		static constexpr uint32_t k_scene_file_version = 5;
 		static constexpr const char* k_environment_sun_light_name = "EnvironmentSunLight";
 		static constexpr float k_environment_sun_light_intensity = 2.5f;
 		static constexpr uint32_t k_environment_sun_light_shadow_priority = 255u;
@@ -78,10 +80,17 @@ namespace AshEngine
 			{ static_cast<int32_t>(LightType::Spot), "Spot" },
 		};
 
+		static SceneEnumValueDesc k_particle_blend_mode_values[] =
+		{
+			{ static_cast<int32_t>(ParticleBlendMode::Additive), "Additive" },
+			{ static_cast<int32_t>(ParticleBlendMode::AlphaBlend), "AlphaBlend" },
+		};
+
 		static SceneEnumDesc k_scene_enum_descs[] =
 		{
 			{ "CameraProjectionType", k_camera_projection_values, static_cast<uint32_t>(std::size(k_camera_projection_values)) },
 			{ "LightType", k_light_type_values, static_cast<uint32_t>(std::size(k_light_type_values)) },
+			{ "ParticleBlendMode", k_particle_blend_mode_values, static_cast<uint32_t>(std::size(k_particle_blend_mode_values)) },
 		};
 
 		static ScenePropertyDesc k_name_properties[] =
@@ -145,6 +154,24 @@ namespace AshEngine
 			{ "affect_lighting", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(EnvironmentComponent, affect_lighting)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 		};
 
+		static ScenePropertyDesc k_particle_properties[] =
+		{
+			{ "emitting", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(ParticleComponent, emitting)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "max_particles", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(ParticleComponent, max_particles)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr, "Max Particles", "Particle pool capacity per emitter (pool memory scales linearly).", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 1.0f, 65536.0f, true },
+			{ "spawn_rate", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, spawn_rate)), static_cast<uint32_t>(sizeof(float)), nullptr, "Spawn Rate", "Particles spawned per second.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 20000.0f, true },
+			{ "lifetime", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, lifetime)), static_cast<uint32_t>(sizeof(float)), nullptr, "Lifetime", "Particle lifetime in seconds.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.01f, 60.0f, true },
+			{ "lifetime_variance", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, lifetime_variance)), static_cast<uint32_t>(sizeof(float)), nullptr, "Lifetime Variance", "Random lifetime spread (+/- seconds).", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 30.0f, true },
+			{ "initial_speed", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, initial_speed)), static_cast<uint32_t>(sizeof(float)), nullptr, "Initial Speed", "Emission speed along entity +Y.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 100.0f, true },
+			{ "spread_angle_degrees", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, spread_angle_degrees)), static_cast<uint32_t>(sizeof(float)), nullptr, "Spread Angle", "Emission cone half-angle in degrees.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 90.0f, true },
+			{ "constant_acceleration", ScenePropertyType::Vec3, static_cast<uint32_t>(offsetof(ParticleComponent, constant_acceleration)), static_cast<uint32_t>(sizeof(glm::vec3)), nullptr, "Acceleration", "Constant acceleration applied to particles (world space).", ScenePropertyEditorHint::Default },
+			{ "start_size", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, start_size)), static_cast<uint32_t>(sizeof(float)), nullptr, "Start Size", "Billboard size at birth.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 10.0f, true },
+			{ "end_size", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, end_size)), static_cast<uint32_t>(sizeof(float)), nullptr, "End Size", "Billboard size at death.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 10.0f, true },
+			{ "start_color", ScenePropertyType::Vec4, static_cast<uint32_t>(offsetof(ParticleComponent, start_color)), static_cast<uint32_t>(sizeof(glm::vec4)), nullptr, "Start Color", "Particle color at birth (linear RGBA).", ScenePropertyEditorHint::Color },
+			{ "end_color", ScenePropertyType::Vec4, static_cast<uint32_t>(offsetof(ParticleComponent, end_color)), static_cast<uint32_t>(sizeof(glm::vec4)), nullptr, "End Color", "Particle color at death (linear RGBA).", ScenePropertyEditorHint::Color },
+			{ "blend_mode", ScenePropertyType::Enum, static_cast<uint32_t>(offsetof(ParticleComponent, blend_mode)), static_cast<uint32_t>(sizeof(ParticleBlendMode)), "ParticleBlendMode" },
+			{ "random_seed", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(ParticleComponent, random_seed)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr, "Random Seed", "Deterministic simulation seed.", ScenePropertyEditorHint::Default },
+		};
+
 		static SceneComponentDesc k_scene_component_descs[] =
 		{
 			{ SceneComponentType::Name, "NameComponent", k_name_properties, static_cast<uint32_t>(std::size(k_name_properties)), static_cast<uint32_t>(sizeof(NameComponent)) },
@@ -153,6 +180,7 @@ namespace AshEngine
 			{ SceneComponentType::Light, "LightComponent", k_light_properties, static_cast<uint32_t>(std::size(k_light_properties)), static_cast<uint32_t>(sizeof(LightComponent)) },
 			{ SceneComponentType::Mesh, "MeshComponent", k_mesh_properties, static_cast<uint32_t>(std::size(k_mesh_properties)), static_cast<uint32_t>(sizeof(MeshComponent)) },
 			{ SceneComponentType::Environment, "EnvironmentComponent", k_environment_properties, static_cast<uint32_t>(std::size(k_environment_properties)), static_cast<uint32_t>(sizeof(EnvironmentComponent)) },
+			{ SceneComponentType::Particle, "ParticleComponent", k_particle_properties, static_cast<uint32_t>(std::size(k_particle_properties)), static_cast<uint32_t>(sizeof(ParticleComponent)) },
 		};
 
 		static auto to_json_vec3(const glm::vec3& value) -> json
@@ -172,6 +200,11 @@ namespace AshEngine
 			result.y = value[1].get<float>();
 			result.z = value[2].get<float>();
 			return result;
+		}
+
+		static auto to_json_vec4(const glm::vec4& value) -> json
+		{
+			return json::array({ value.x, value.y, value.z, value.w });
 		}
 
 		static auto serialize_material_overrides(const std::vector<MeshMaterialOverride>& overrides) -> json
@@ -269,6 +302,192 @@ namespace AshEngine
 				HLogWarning("SceneConfig field '{}' has invalid vec3 value: {}.", key, exception.what());
 				return false;
 			}
+		}
+
+		template <typename TValue>
+		static auto try_get_particle_json_value(
+			const json& object,
+			const char* key,
+			TValue& out_value) -> bool
+		{
+			const auto value_it = object.find(key);
+			if (value_it == object.end())
+			{
+				return false;
+			}
+			if (value_it->is_null())
+			{
+				HLogWarning("ParticleComponent field '{}' has invalid null value; using fallback.", key);
+				return false;
+			}
+
+			try
+			{
+				out_value = value_it->get<TValue>();
+				return true;
+			}
+			catch (const std::exception& exception)
+			{
+				HLogWarning("ParticleComponent field '{}' has invalid type: {}; using fallback.", key, exception.what());
+				return false;
+			}
+		}
+
+		static auto try_get_particle_json_uint32(
+			const json& object,
+			const char* key,
+			uint32_t& out_value) -> bool
+		{
+			const auto value_it = object.find(key);
+			if (value_it == object.end())
+			{
+				return false;
+			}
+			if (!value_it->is_number_unsigned())
+			{
+				HLogWarning("ParticleComponent field '{}' must be an unsigned integer; using fallback.", key);
+				return false;
+			}
+
+			const uint64_t value = value_it->get<uint64_t>();
+			if (value > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()))
+			{
+				HLogWarning("ParticleComponent field '{}' exceeds uint32 range; using fallback.", key);
+				return false;
+			}
+			out_value = static_cast<uint32_t>(value);
+			return true;
+		}
+
+		template <glm::length_t Length>
+		static auto try_get_particle_json_vector(
+			const json& object,
+			const char* key,
+			glm::vec<Length, float, glm::defaultp>& out_value) -> bool
+		{
+			const auto value_it = object.find(key);
+			if (value_it == object.end())
+			{
+				return false;
+			}
+			if (!value_it->is_array() || value_it->size() != static_cast<size_t>(Length))
+			{
+				HLogWarning("ParticleComponent field '{}' has invalid vector shape; using fallback.", key);
+				return false;
+			}
+
+			try
+			{
+				glm::vec<Length, float, glm::defaultp> parsed_value{};
+				for (glm::length_t index = 0; index < Length; ++index)
+				{
+					parsed_value[index] = (*value_it)[static_cast<size_t>(index)].get<float>();
+				}
+				out_value = parsed_value;
+				return true;
+			}
+			catch (const std::exception& exception)
+			{
+				HLogWarning("ParticleComponent field '{}' has invalid vector value: {}; using fallback.", key, exception.what());
+				return false;
+			}
+		}
+
+		static auto particle_blend_mode_to_string(ParticleBlendMode blend_mode) -> const char*
+		{
+			switch (blend_mode)
+			{
+			case ParticleBlendMode::AlphaBlend:
+				return "AlphaBlend";
+			case ParticleBlendMode::Additive:
+			default:
+				return "Additive";
+			}
+		}
+
+		static auto try_get_particle_blend_mode(const json& object, ParticleBlendMode& out_value) -> bool
+		{
+			const auto value_it = object.find("blend_mode");
+			if (value_it == object.end())
+			{
+				return false;
+			}
+
+			if (value_it->is_string())
+			{
+				const std::string& value = value_it->get_ref<const std::string&>();
+				if (value == "Additive")
+				{
+					out_value = ParticleBlendMode::Additive;
+					return true;
+				}
+				if (value == "AlphaBlend")
+				{
+					out_value = ParticleBlendMode::AlphaBlend;
+					return true;
+				}
+			}
+			else if (value_it->is_number_integer() || value_it->is_number_unsigned())
+			{
+				try
+				{
+					const int64_t legacy_value = value_it->get<int64_t>();
+					if (legacy_value == static_cast<int64_t>(ParticleBlendMode::Additive) ||
+						legacy_value == static_cast<int64_t>(ParticleBlendMode::AlphaBlend))
+					{
+						out_value = static_cast<ParticleBlendMode>(legacy_value);
+						return true;
+					}
+				}
+				catch (const std::exception&)
+				{
+				}
+			}
+
+			HLogWarning("ParticleComponent field 'blend_mode' has invalid value; using fallback.");
+			return false;
+		}
+
+		static auto sanitize_particle_float(float value, float fallback, float minimum, float maximum) -> float
+		{
+			return std::isfinite(value) ? std::clamp(value, minimum, maximum) : fallback;
+		}
+
+		static auto sanitize_particle_finite(float value, float fallback) -> float
+		{
+			return std::isfinite(value) ? value : fallback;
+		}
+
+		static auto sanitize_particle_component(ParticleComponent component) -> ParticleComponent
+		{
+			const ParticleComponent defaults{};
+			component.max_particles = std::clamp(component.max_particles, 1u, k_max_particles_per_emitter);
+			component.spawn_rate = sanitize_particle_float(component.spawn_rate, defaults.spawn_rate, 0.0f, 20000.0f);
+			component.lifetime = sanitize_particle_float(component.lifetime, defaults.lifetime, 0.01f, 60.0f);
+			component.lifetime_variance = sanitize_particle_float(component.lifetime_variance, defaults.lifetime_variance, 0.0f, 30.0f);
+			component.initial_speed = sanitize_particle_float(component.initial_speed, defaults.initial_speed, 0.0f, 100.0f);
+			component.spread_angle_degrees = sanitize_particle_float(component.spread_angle_degrees, defaults.spread_angle_degrees, 0.0f, 90.0f);
+			component.constant_acceleration.x = sanitize_particle_finite(component.constant_acceleration.x, defaults.constant_acceleration.x);
+			component.constant_acceleration.y = sanitize_particle_finite(component.constant_acceleration.y, defaults.constant_acceleration.y);
+			component.constant_acceleration.z = sanitize_particle_finite(component.constant_acceleration.z, defaults.constant_acceleration.z);
+			component.start_size = sanitize_particle_float(component.start_size, defaults.start_size, 0.0f, 10.0f);
+			component.end_size = sanitize_particle_float(component.end_size, defaults.end_size, 0.0f, 10.0f);
+
+			component.start_color.x = sanitize_particle_float(component.start_color.x, defaults.start_color.x, 0.0f, 1.0f);
+			component.start_color.y = sanitize_particle_float(component.start_color.y, defaults.start_color.y, 0.0f, 1.0f);
+			component.start_color.z = sanitize_particle_float(component.start_color.z, defaults.start_color.z, 0.0f, 1.0f);
+			component.start_color.w = sanitize_particle_float(component.start_color.w, defaults.start_color.w, 0.0f, 1.0f);
+			component.end_color.x = sanitize_particle_float(component.end_color.x, defaults.end_color.x, 0.0f, 1.0f);
+			component.end_color.y = sanitize_particle_float(component.end_color.y, defaults.end_color.y, 0.0f, 1.0f);
+			component.end_color.z = sanitize_particle_float(component.end_color.z, defaults.end_color.z, 0.0f, 1.0f);
+			component.end_color.w = sanitize_particle_float(component.end_color.w, defaults.end_color.w, 0.0f, 1.0f);
+
+			if (component.blend_mode != ParticleBlendMode::Additive &&
+				component.blend_mode != ParticleBlendMode::AlphaBlend)
+			{
+				component.blend_mode = defaults.blend_mode;
+			}
+			return component;
 		}
 
 		static auto deserialize_scene_render_config(const json& root) -> SceneRenderConfig
@@ -672,6 +891,10 @@ namespace AshEngine
 			{
 				return SceneComponentType::Environment;
 			}
+			else if constexpr (std::is_same_v<TComponent, ParticleComponent>)
+			{
+				return SceneComponentType::Particle;
+			}
 			else
 			{
 				return SceneComponentType::Name;
@@ -700,6 +923,10 @@ namespace AshEngine
 			{
 				storage.render_environment_version = storage.change_version;
 			}
+			else if (component_type == SceneComponentType::Particle)
+			{
+				storage.render_particle_version = storage.change_version;
+			}
 
 			SceneChangeEvent event{};
 			event.kind = SceneChangeKind::ComponentChanged;
@@ -718,6 +945,7 @@ namespace AshEngine
 			dst.change_callbacks = std::move(callbacks);
 			dst.next_subscription_id = std::max(next_subscription_id, dst.next_subscription_id);
 			dst.change_version = allocate_scene_change_version();
+			dst.content_epoch = allocate_scene_change_version();
 
 			SceneChangeEvent event{};
 			event.kind = kind;
@@ -1429,6 +1657,45 @@ namespace AshEngine
 		return remove_entity_component_if_present<EnvironmentComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
+	bool Entity::has_particle_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		return handle != entt::null && impl->storage.registry.any_of<ParticleComponent>(handle);
+	}
+
+	ParticleComponent Entity::get_particle_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		if (handle != entt::null)
+		{
+			if (const ParticleComponent* component = impl->storage.registry.try_get<ParticleComponent>(handle))
+			{
+				return *component;
+			}
+		}
+		return {};
+	}
+
+	bool Entity::add_particle_component(const ParticleComponent& component)
+	{
+		return emplace_or_replace_entity_component(
+			std::static_pointer_cast<Scene::Impl>(m_impl),
+			m_id,
+			sanitize_particle_component(component));
+	}
+
+	bool Entity::set_particle_component(const ParticleComponent& component)
+	{
+		return add_particle_component(component);
+	}
+
+	bool Entity::remove_particle_component()
+	{
+		return remove_entity_component_if_present<ParticleComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
+	}
+
 	bool Entity::has_component(SceneComponentType type) const
 	{
 		switch (type)
@@ -1444,6 +1711,8 @@ namespace AshEngine
 			return has_mesh_component();
 		case SceneComponentType::Environment:
 			return has_environment_component();
+		case SceneComponentType::Particle:
+			return has_particle_component();
 		default:
 			return false;
 		}
@@ -1474,6 +1743,10 @@ namespace AshEngine
 		if (has_environment_component())
 		{
 			result.push_back(SceneComponentType::Environment);
+		}
+		if (has_particle_component())
+		{
+			result.push_back(SceneComponentType::Particle);
 		}
 		return result;
 	}
@@ -1530,6 +1803,14 @@ namespace AshEngine
 			if (handled)
 			{
 				*static_cast<EnvironmentComponent*>(out_component) = get_environment_component();
+			}
+		}
+		else if (type == SceneComponentType::Particle)
+		{
+			handled = component_size == sizeof(ParticleComponent) && has_particle_component();
+			if (handled)
+			{
+				*static_cast<ParticleComponent*>(out_component) = get_particle_component();
 			}
 		}
 		else
@@ -1594,6 +1875,14 @@ namespace AshEngine
 			if (handled)
 			{
 				bResult = set_environment_component(*static_cast<const EnvironmentComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Particle)
+		{
+			handled = component_size == sizeof(ParticleComponent);
+			if (handled)
+			{
+				bResult = set_particle_component(*static_cast<const ParticleComponent*>(component_data));
 			}
 		}
 		else
@@ -1682,6 +1971,7 @@ namespace AshEngine
 		auto impl = std::make_shared<Impl>();
 		impl->storage.name = name.empty() ? "Untitled Scene" : std::string(name);
 		impl->storage.change_version = allocate_scene_change_version();
+		impl->storage.content_epoch = allocate_scene_change_version();
 		impl->storage.render_config = make_default_scene_render_config();
 		impl->storage.render_config_version = impl->storage.change_version;
 		return Scene(std::move(impl));
@@ -1812,6 +2102,34 @@ namespace AshEngine
 				environment.visible_background = environment_json.value("visible_background", environment.visible_background);
 				environment.affect_lighting = environment_json.value("affect_lighting", environment.affect_lighting);
 				entity.add_environment_component(environment);
+			}
+
+			if (entity_json.contains("particle"))
+			{
+				const json& particle_json = entity_json["particle"];
+				ParticleComponent particle{};
+				if (!particle_json.is_object())
+				{
+					HLogWarning("ParticleComponent JSON value is not an object; using defaults.");
+				}
+				else
+				{
+					try_get_particle_json_uint32(particle_json, "max_particles", particle.max_particles);
+					try_get_particle_json_value(particle_json, "spawn_rate", particle.spawn_rate);
+					try_get_particle_json_value(particle_json, "lifetime", particle.lifetime);
+					try_get_particle_json_value(particle_json, "lifetime_variance", particle.lifetime_variance);
+					try_get_particle_json_value(particle_json, "initial_speed", particle.initial_speed);
+					try_get_particle_json_value(particle_json, "spread_angle_degrees", particle.spread_angle_degrees);
+					try_get_particle_json_vector(particle_json, "constant_acceleration", particle.constant_acceleration);
+					try_get_particle_json_value(particle_json, "start_size", particle.start_size);
+					try_get_particle_json_value(particle_json, "end_size", particle.end_size);
+					try_get_particle_json_vector(particle_json, "start_color", particle.start_color);
+					try_get_particle_json_vector(particle_json, "end_color", particle.end_color);
+					try_get_particle_blend_mode(particle_json, particle.blend_mode);
+					try_get_particle_json_uint32(particle_json, "random_seed", particle.random_seed);
+					try_get_particle_json_value(particle_json, "emitting", particle.emitting);
+				}
+				entity.add_particle_component(particle);
 			}
 		}
 
@@ -2229,6 +2547,38 @@ namespace AshEngine
 			SceneLightExtractionDesc desc{};
 			desc.entity_id = id;
 			desc.light = *light;
+			desc.world_transform = get_entity_world_matrix(m_impl, id);
+			result.push_back(std::move(desc));
+		}
+
+		return result;
+	}
+
+	std::vector<SceneParticleExtractionDesc> Scene::extract_particle_entities() const
+	{
+		std::vector<SceneParticleExtractionDesc> result{};
+		if (!m_impl)
+		{
+			return result;
+		}
+
+		for (EntityId id : m_impl->storage.entity_order)
+		{
+			const entt::entity handle = find_handle(m_impl, id);
+			if (handle == entt::null)
+			{
+				continue;
+			}
+
+			const ParticleComponent* particle = m_impl->storage.registry.try_get<ParticleComponent>(handle);
+			if (!particle)
+			{
+				continue;
+			}
+
+			SceneParticleExtractionDesc desc{};
+			desc.entity_id = id;
+			desc.particle = *particle;
 			desc.world_transform = get_entity_world_matrix(m_impl, id);
 			result.push_back(std::move(desc));
 		}
@@ -2694,6 +3044,27 @@ namespace AshEngine
 				};
 			}
 
+			if (const ParticleComponent* particle = m_impl->storage.registry.try_get<ParticleComponent>(handle))
+			{
+				entity_json["particle"] =
+				{
+					{ "max_particles", particle->max_particles },
+					{ "spawn_rate", particle->spawn_rate },
+					{ "lifetime", particle->lifetime },
+					{ "lifetime_variance", particle->lifetime_variance },
+					{ "initial_speed", particle->initial_speed },
+					{ "spread_angle_degrees", particle->spread_angle_degrees },
+					{ "constant_acceleration", to_json_vec3(particle->constant_acceleration) },
+					{ "start_size", particle->start_size },
+					{ "end_size", particle->end_size },
+					{ "start_color", to_json_vec4(particle->start_color) },
+					{ "end_color", to_json_vec4(particle->end_color) },
+					{ "blend_mode", particle_blend_mode_to_string(particle->blend_mode) },
+					{ "random_seed", particle->random_seed },
+					{ "emitting", particle->emitting },
+				};
+			}
+
 			root["entities"].push_back(std::move(entity_json));
 			for (EntityId child_id : hierarchy.children)
 			{
@@ -2746,6 +3117,11 @@ namespace AshEngine
 	uint64_t Scene::get_change_version() const
 	{
 		return m_impl ? m_impl->storage.change_version : 0;
+	}
+
+	uint64_t Scene::get_content_epoch() const
+	{
+		return m_impl ? m_impl->storage.content_epoch : 0;
 	}
 
 	const SceneRenderConfig& Scene::get_render_config() const
@@ -2801,6 +3177,11 @@ namespace AshEngine
 	uint64_t Scene::get_render_environment_version() const
 	{
 		return m_impl ? m_impl->storage.render_environment_version : 0;
+	}
+
+	uint64_t Scene::get_render_particle_version() const
+	{
+		return m_impl ? m_impl->storage.render_particle_version : 0;
 	}
 
 	uint64_t Scene::get_render_config_version() const
@@ -2874,6 +3255,8 @@ namespace AshEngine
 			return !entity.has_mesh_component();
 		case SceneComponentType::Environment:
 			return !entity.has_environment_component();
+		case SceneComponentType::Particle:
+			return !entity.has_particle_component();
 		default:
 			return false;
 		}
@@ -2899,6 +3282,8 @@ namespace AshEngine
 			return entity.has_mesh_component();
 		case SceneComponentType::Environment:
 			return entity.has_environment_component();
+		case SceneComponentType::Particle:
+			return entity.has_particle_component();
 		default:
 			return false;
 		}
@@ -2921,6 +3306,8 @@ namespace AshEngine
 			return entity.add_mesh_component({});
 		case SceneComponentType::Environment:
 			return entity.add_environment_component({});
+		case SceneComponentType::Particle:
+			return entity.add_particle_component({});
 		default:
 			return false;
 		}
@@ -2943,6 +3330,8 @@ namespace AshEngine
 			return entity.remove_mesh_component();
 		case SceneComponentType::Environment:
 			return entity.remove_environment_component();
+		case SceneComponentType::Particle:
+			return entity.remove_particle_component();
 		default:
 			return false;
 		}

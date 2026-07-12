@@ -275,7 +275,7 @@ echo   Configuration = Debug
 echo.
 echo Examples:
 echo   run.bat
-echo   run.bat editor dx12 Debug --smoke-test-seconds=5
-echo   run.bat sandbox vulkan Debug --smoke-test=10
-echo   run.bat all Debug --smoke-test-seconds=5
+echo   run.bat editor dx12 Debug --smoke-test-seconds=120
+echo   run.bat sandbox vulkan Debug --run-for-frames=10
+echo   run.bat all Debug --smoke-test-seconds=120
 exit /b 0

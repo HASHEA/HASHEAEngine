@@ -2,6 +2,7 @@
 #include "Base/hplatform.h"
 #include "Base/hcore.h"
 #include "RHIBackend.h"
+#include <cstdint>
 #include <memory>
 namespace RHI
 {
@@ -9,6 +10,12 @@ namespace RHI
 	enum AshColorSpace;
 	enum AshPresentMode;
 	class Texture;
+	enum class SwapchainPresentResult : uint8_t
+	{
+		Completed = 0,
+		Retryable,
+		Failed
+	};
 	struct SwapChainInitConfig
 	{
 		void* window = nullptr;
@@ -35,13 +42,13 @@ namespace RHI
 	public:
 		/****** rhi interfaces ********/
 		virtual auto resize_swapchain(uint32_t width, uint32_t height) -> void = 0;
-		virtual auto present() -> void = 0;
+		virtual auto present() -> SwapchainPresentResult = 0;
 		virtual auto get_swapchain_buffer() -> std::shared_ptr<Texture> = 0;
 		virtual auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> = 0;
 		virtual auto get_format() -> AshFormat = 0;
 		virtual auto get_width() -> uint32_t = 0;
 		virtual auto get_height() -> uint32_t = 0;
-		virtual auto begin_frame() -> void = 0;
+		virtual auto begin_frame() -> SwapchainPresentResult = 0;
 		virtual auto end_frame() -> void = 0;
 		virtual auto get_swapchain_buffer_count() -> uint8_t = 0;
 	private:

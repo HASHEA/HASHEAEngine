@@ -188,6 +188,13 @@ namespace AshEditor
 			: std::nullopt;
 	}
 
+	std::optional<AshEngine::ParticleComponent> GetParticleComponentValue(const AshEngine::Entity& refEntity)
+	{
+		return refEntity.has_particle_component()
+			? std::optional<AshEngine::ParticleComponent>{ refEntity.get_particle_component() }
+			: std::nullopt;
+	}
+
 	bool ApplyCameraComponentValue(
 		AshEngine::Entity entity,
 		const std::optional<AshEngine::CameraComponent>& optValue)
@@ -278,6 +285,29 @@ namespace AshEditor
 		}
 
 		return entity.set_environment_component(*optValue);
+	}
+
+	bool ApplyParticleComponentValue(
+		AshEngine::Entity entity,
+		const std::optional<AshEngine::ParticleComponent>& optValue)
+	{
+		if (!entity.is_valid())
+		{
+			return false;
+		}
+
+		if (!optValue.has_value())
+		{
+			return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Particle);
+		}
+
+		if (!entity.has_particle_component() &&
+			!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Particle))
+		{
+			return false;
+		}
+
+		return entity.set_particle_component(*optValue);
 	}
 
 	void DrawInspectorPanelIntro(

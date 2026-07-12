@@ -30,6 +30,7 @@ namespace AshEngine
 	public:
 		bool initialize(Renderer* renderer);
 		void shutdown();
+		void clear_history();
 
 		AmbientOcclusionPassOutputs add_passes(
 			RenderGraphBuilder& graph,

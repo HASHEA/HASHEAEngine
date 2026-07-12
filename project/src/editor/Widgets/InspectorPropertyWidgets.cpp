@@ -129,6 +129,25 @@ namespace AshEditor
 			});
 	}
 
+	bool DrawInspectorInputUIntField(
+		AshEngine::UIContext& refUi,
+		const char* pLabel,
+		uint32_t& uValue,
+		const InspectorFieldSpec& refFieldSpec,
+		const uint32_t uStep,
+		const uint32_t uStepFast,
+		const bool bEnabled)
+	{
+		return DrawInspectorFieldControl(
+			refUi,
+			refFieldSpec,
+			bEnabled,
+			[&refUi, pLabel, &uValue, uStep, uStepFast]()
+			{
+				return refUi.input_uint(pLabel, uValue, uStep, uStepFast);
+			});
+	}
+
 	bool DrawInspectorInputFloatField(
 		AshEngine::UIContext& refUi,
 		const char* pLabel,
@@ -205,6 +224,23 @@ namespace AshEditor
 			[&refUi, pLabel, &refValue]()
 			{
 				return refUi.color_edit3(pLabel, &refValue.x);
+			});
+	}
+
+	bool DrawInspectorColor4Field(
+		AshEngine::UIContext& refUi,
+		const char* pLabel,
+		glm::vec4& refValue,
+		const InspectorFieldSpec& refFieldSpec,
+		const bool bEnabled)
+	{
+		return DrawInspectorFieldControl(
+			refUi,
+			refFieldSpec,
+			bEnabled,
+			[&refUi, pLabel, &refValue]()
+			{
+				return refUi.color_edit4(pLabel, &refValue.x);
 			});
 	}
 

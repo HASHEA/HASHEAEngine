@@ -5,7 +5,9 @@
 #include "Base/hthreading.h"
 #include "Function/Gui/UICommon.h"
 #include "Function/Diagnostics/PerfGate.h"
+#include "Function/ApplicationAutomation.h"
 #include "Graphics/RHIBackend.h"
+#include "Graphics/SwapChain.h"
 #include "Function/Render/DebugDrawService.h"
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/ScenePresentationSubsystem.h"
@@ -115,8 +117,9 @@ public:
 		auto request_exit() -> void;
 		auto set_max_frame_count(uint64_t inMaxFrameCount) -> void;
 		auto set_max_run_seconds(double inMaxRunSeconds) -> void;
+		auto set_readiness_smoke_timeout_seconds(double timeoutSeconds) -> void;
 		auto configure_perf_gate(const PerfGateConfig& config) -> void;
-		// RenderGate（SDD-2026-07-07-render-gate）：--dump-frame 最后一帧截图落 PNG；--scene 供应用层覆盖默认场景
+		// RenderGate：readiness capture 通过 post-present/asset-epoch 复核后原子发布 PNG；--scene 供应用层覆盖默认场景
 		auto set_frame_dump_path(std::string path) -> void;
 		auto set_scene_path_override(std::string path) -> void;
 		// SDD-2026-07-09-indirect-draw-substrate：--rhi-selftest-indirect 启动后跑一次 indirect RHI 自测
@@ -157,12 +160,12 @@ public:
 		{
 			return sceneRenderer;
 		}
-		auto start() -> void;
+		auto start() -> bool;
 	protected:
 		auto _pump_platform_events() -> void;
 		auto _tick_frame() -> void;
-		auto _render_frame() -> void;
-		auto _present_frame() -> void;
+		auto _render_frame() -> RHI::SwapchainPresentResult;
+		auto _present_frame() -> bool;
 		auto _should_render_frame() const -> bool;
 		auto _should_exit() const -> bool;
 		auto _should_logic_exit() const -> bool;
@@ -178,7 +181,8 @@ public:
 		auto _get_thread_input_state() -> InputState&;
 		auto _run_scene_presentation_update_phase() -> void;
 		auto _run_scene_presentation_submit_phase() -> void;
-		auto _write_pending_frame_dump() -> void;
+		auto _write_pending_frame_dump(double deadline_seconds) -> bool;
+		auto _discard_pending_frame_dump(double deadline_seconds) -> bool;
 		auto _shutdown_runtime() -> void;
 		virtual auto _on_startup() -> void;
 		virtual auto _on_shutdown() -> void;
@@ -189,7 +193,7 @@ public:
 		virtual auto _on_gui() -> void;
 		virtual auto _on_render_debug() -> void;
 		virtual auto _on_render() -> void;
-		virtual auto _present() -> void;
+		virtual auto _get_automation_readiness() const -> ApplicationReadiness;
 	public:
 		static Application* app;
 	protected:
@@ -206,6 +210,7 @@ public:
 		ScenePresentationSubsystem scenePresentation{};
 		DebugDrawService		debugDrawService{};
 		PerfGateController		perfGateController{};
+		ApplicationAutomationController automationController{};
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
 		InputState				logicInputState{};
@@ -219,13 +224,17 @@ public:
 		std::atomic<uint64_t>	frameIndex				{ 0 };
 		uint64_t				maxFrameCount			= 0;
 		double					maxRunSeconds			= 0.0;
+		double					readinessSmokeTimeoutSeconds = 0.0;
 		std::string				frameDumpPath{};
 		std::string				scenePathOverride{};
 		bool					frameDumpCapturePending	= false;
 		bool					frameDumpWritten		= false;
+		bool					currentFrameRenderSucceeded = false;
+		bool					currentFramePresentRequired = false;
+		RHI::SwapchainPresentResult currentFrameRenderResult = RHI::SwapchainPresentResult::Failed;
 		bool					rhiIndirectSelfTestRequested = false;
-		uint32_t				frameDumpQuiesceFrameCount = 0;
 		std::atomic<bool>		exitRequested			{ false };
+		std::atomic<bool>		runtimeFailureDetected	{ false };
 		std::atomic<bool>		logicThreadStopRequested{ false };
 		std::atomic<bool>		logicThreadRunning		{ false };
 		std::atomic<bool>		logicThreadFailed		{ false };

@@ -19,13 +19,13 @@ namespace RHI
 		auto shutdown() -> bool override;
 		auto destroy() -> void override;
 		auto resize_swapchain(uint32_t width, uint32_t height) -> void override;
-		auto present() -> void override;
+		auto present() -> SwapchainPresentResult override;
 		auto get_swapchain_buffer() -> std::shared_ptr<Texture> override;
 		auto get_swapchain_buffer(uint32_t index) -> std::shared_ptr<Texture> override;
 		auto get_format() -> AshFormat override { return m_format; }
 		auto get_width() -> uint32_t override { return m_width; }
 		auto get_height() -> uint32_t override { return m_height; }
-		auto begin_frame() -> void override;
+		auto begin_frame() -> SwapchainPresentResult override;
 		auto end_frame() -> void override;
 		auto get_swapchain_buffer_count() -> uint8_t override { return static_cast<uint8_t>(m_backBuffers.size()); }
 
@@ -45,5 +45,6 @@ namespace RHI
 		DXGI_FORMAT m_surfaceFormat = DXGI_FORMAT_UNKNOWN;
 		uint32_t m_syncInterval = 1; // VSync by default
 		UINT m_presentFlags = 0;
+		HRESULT m_lastPresentStatus = S_OK;
 	};
 }

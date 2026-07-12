@@ -49,6 +49,7 @@ namespace AshEditor
 		bool HasPendingLightChanges() const;
 		bool HasPendingMeshChanges() const;
 		bool HasPendingEnvironmentChanges() const;
+		bool HasPendingParticleChanges() const;
 		void ResetEntityDrafts();
 		void ResetIdentityDraftToLive(const AshEngine::Entity& entity);
 		void ResetTransformDraftToLive(const AshEngine::Entity& entity);
@@ -61,6 +62,8 @@ namespace AshEditor
 		void ResetMeshDraftToDefaults(const AshEngine::Entity& entity);
 		void ResetEnvironmentDraftToLive(const AshEngine::Entity& entity);
 		void ResetEnvironmentDraftToDefaults(const AshEngine::Entity& entity);
+		void ResetParticleDraftToLive(const AshEngine::Entity& entity);
+		void ResetParticleDraftToDefaults(const AshEngine::Entity& entity);
 		void SyncEntityDrafts(const AshEngine::Entity& entity);
 		bool CommitIdentityDraft(AshEngine::Entity entity);
 		bool CommitTransformDraft(AshEngine::Entity entity);
@@ -77,10 +80,12 @@ namespace AshEditor
 		void SyncLightDraft(const AshEngine::Entity& entity) override;
 		void SyncMeshDraft(const AshEngine::Entity& entity) override;
 		void SyncEnvironmentDraft(const AshEngine::Entity& entity) override;
+		void SyncParticleDraft(const AshEngine::Entity& entity) override;
 		bool CommitCameraDraft(AshEngine::Entity entity) override;
 		bool CommitLightDraft(AshEngine::Entity entity) override;
 		bool CommitMeshDraft(AshEngine::Entity entity) override;
 		bool CommitEnvironmentDraft(AshEngine::Entity entity) override;
+		bool CommitParticleDraft(AshEngine::Entity entity) override;
 
 	private:
 		InspectorPanelDeps _deps{};

@@ -7,13 +7,70 @@ extern AshEngine::Application* create_application();//impl in editor
 extern void destroy_application(AshEngine::Application* app);//impl in editor
 #include <cerrno>
 #include <cctype>
+#include <cmath>
+#include <condition_variable>
+#include <cstdio>
 #include <limits>
 #include <filesystem>
 #include <iostream>
 #include <cstdlib>
+#include <mutex>
 #include <string>
+#include <thread>
 
 namespace fs = std::filesystem;
+
+class ReadinessProcessWatchdog
+{
+public:
+	~ReadinessProcessWatchdog()
+	{
+		complete();
+	}
+
+	void start(double timeout_seconds)
+	{
+		if (timeout_seconds <= 0.0 || worker.joinable())
+		{
+			return;
+		}
+		worker = std::thread([this, timeout_seconds]()
+		{
+			std::unique_lock<std::mutex> lock(mutex);
+			const bool completed_in_time = completed_condition.wait_for(
+				lock,
+				std::chrono::duration<double>(timeout_seconds),
+				[this]() { return completed; });
+			if (completed_in_time)
+			{
+				return;
+			}
+			lock.unlock();
+			std::fputs("Fatal Error: readiness process deadline expired; terminating without unbounded GPU teardown.\n", stderr);
+			std::fflush(stderr);
+			std::_Exit(EXIT_FAILURE);
+		});
+	}
+
+	void complete()
+	{
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			completed = true;
+		}
+		completed_condition.notify_all();
+		if (worker.joinable())
+		{
+			worker.join();
+		}
+	}
+
+private:
+	std::mutex mutex{};
+	std::condition_variable completed_condition{};
+	std::thread worker{};
+	bool completed = false;
+};
 
 static bool is_engine_root(const fs::path& path) {
 	return fs::exists(path / "AshEngine.sln") &&
@@ -56,43 +113,99 @@ int init_dir()
 	return 0;
 }
 
-static uint64_t parse_smoke_test_frame_count(int argc, char* argv[])
+static bool try_parse_positive_uint64(const std::string& text, uint64_t& outValue)
 {
-	constexpr uint64_t defaultSmokeFrameCount = 3;
+	if (text.empty())
+	{
+		return false;
+	}
+	for (const unsigned char character : text)
+	{
+		if (!std::isdigit(character))
+		{
+			return false;
+		}
+	}
+	errno = 0;
+	char* end = nullptr;
+	const unsigned long long parsed = std::strtoull(text.c_str(), &end, 10);
+	if (errno == ERANGE || end == text.c_str() || !end || *end != '\0' || parsed == 0)
+	{
+		return false;
+	}
+	outValue = static_cast<uint64_t>(parsed);
+	return true;
+}
+
+static bool try_parse_positive_seconds(const std::string& text, double& outValue)
+{
+	if (text.empty())
+	{
+		return false;
+	}
+	errno = 0;
+	char* end = nullptr;
+	const double parsed = std::strtod(text.c_str(), &end);
+	if (errno == ERANGE || end == text.c_str() || !end || *end != '\0' || !std::isfinite(parsed) || parsed <= 0.0)
+	{
+		return false;
+	}
+	outValue = parsed;
+	return true;
+}
+
+static uint64_t parse_run_for_frame_count(int argc, char* argv[], bool& outInvalid, bool& outDeprecated)
+{
+	constexpr uint64_t defaultLegacyFrameCount = 3;
+	outInvalid = false;
+	outDeprecated = false;
 	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
 	{
 		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
-		if (argument == "--smoke-test")
+		const bool legacyOption = argument == "--smoke-test" || argument.rfind("--smoke-test=", 0) == 0;
+		const bool runOption = argument == "--run-for-frames" || argument.rfind("--run-for-frames=", 0) == 0;
+		if (!legacyOption && !runOption)
 		{
-			if (argumentIndex + 1 < argc)
+			continue;
+		}
+		outDeprecated = legacyOption;
+		std::string value{};
+		const size_t equals = argument.find('=');
+		if (equals != std::string::npos)
+		{
+			value = argument.substr(equals + 1);
+		}
+		else if (argumentIndex + 1 < argc)
+		{
+			const std::string nextArgument = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
+			if (!nextArgument.empty() && nextArgument.rfind("--", 0) != 0)
 			{
-				const std::string nextArgument = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
-				if (!nextArgument.empty() && nextArgument[0] != '-')
-				{
-					return static_cast<uint64_t>(std::strtoull(nextArgument.c_str(), nullptr, 10));
-				}
+				value = nextArgument;
 			}
-			return defaultSmokeFrameCount;
 		}
-
-		constexpr const char* smokePrefix = "--smoke-test=";
-		if (argument.rfind(smokePrefix, 0) == 0)
+		if (value.empty() && legacyOption)
 		{
-			return static_cast<uint64_t>(std::strtoull(argument.substr(std::char_traits<char>::length(smokePrefix)).c_str(), nullptr, 10));
+			return defaultLegacyFrameCount;
 		}
+		uint64_t parsed = 0;
+		outInvalid = !try_parse_positive_uint64(value, parsed);
+		return outInvalid ? 0 : parsed;
 	}
 
 	if (const char* envValue = std::getenv("ASH_ENGINE_SMOKE_TEST_FRAMES"))
 	{
-		const uint64_t parsedValue = static_cast<uint64_t>(std::strtoull(envValue, nullptr, 10));
-		return parsedValue > 0 ? parsedValue : defaultSmokeFrameCount;
+		outDeprecated = true;
+		uint64_t parsed = 0;
+		outInvalid = !try_parse_positive_uint64(envValue, parsed);
+		return outInvalid ? 0 : parsed;
 	}
 
 	return 0;
 }
 
-static double parse_smoke_test_seconds(int argc, char* argv[])
+static double parse_smoke_test_seconds(int argc, char* argv[], bool& outInvalid)
 {
+	outInvalid = false;
 	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
 	{
 		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
@@ -101,9 +214,11 @@ static double parse_smoke_test_seconds(int argc, char* argv[])
 			if (argumentIndex + 1 < argc)
 			{
 				const std::string nextArgument = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
-				if (!nextArgument.empty() && nextArgument[0] != '-')
+				if (!nextArgument.empty() && nextArgument.rfind("--", 0) != 0)
 				{
-					return std::strtod(nextArgument.c_str(), nullptr);
+					double parsed = 0.0;
+					outInvalid = !try_parse_positive_seconds(nextArgument, parsed);
+					return outInvalid ? 0.0 : parsed;
 				}
 			}
 			return 25.0;
@@ -112,16 +227,50 @@ static double parse_smoke_test_seconds(int argc, char* argv[])
 		constexpr const char* smokeSecondsPrefix = "--smoke-test-seconds=";
 		if (argument.rfind(smokeSecondsPrefix, 0) == 0)
 		{
-			return std::strtod(argument.substr(std::char_traits<char>::length(smokeSecondsPrefix)).c_str(), nullptr);
+			double parsed = 0.0;
+			outInvalid = !try_parse_positive_seconds(
+				argument.substr(std::char_traits<char>::length(smokeSecondsPrefix)), parsed);
+			return outInvalid ? 0.0 : parsed;
 		}
 	}
 
 	if (const char* envValue = std::getenv("ASH_ENGINE_SMOKE_TEST_SECONDS"))
 	{
-		const double parsedValue = std::strtod(envValue, nullptr);
-		return parsedValue > 0.0 ? parsedValue : 25.0;
+		double parsed = 0.0;
+		outInvalid = !try_parse_positive_seconds(envValue, parsed);
+		return outInvalid ? 0.0 : parsed;
 	}
 
+	return 0.0;
+}
+
+static double parse_run_for_seconds(int argc, char* argv[], bool& outInvalid)
+{
+	outInvalid = false;
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		std::string value{};
+		if (argument == "--run-for-seconds")
+		{
+			if (argumentIndex + 1 < argc)
+			{
+				value = argv[argumentIndex + 1] ? argv[argumentIndex + 1] : "";
+			}
+		}
+		else
+		{
+			constexpr const char* prefix = "--run-for-seconds=";
+			if (argument.rfind(prefix, 0) != 0)
+			{
+				continue;
+			}
+			value = argument.substr(std::char_traits<char>::length(prefix));
+		}
+		double parsed = 0.0;
+		outInvalid = !try_parse_positive_seconds(value, parsed);
+		return outInvalid ? 0.0 : parsed;
+	}
 	return 0.0;
 }
 
@@ -352,6 +501,29 @@ int32_t main(int argc, char* argv[])
 	{
 		return bakeAshIBLResult;
 	}
+	bool invalidSmokeSeconds = false;
+	const double smokeTestSeconds = parse_smoke_test_seconds(argc, argv, invalidSmokeSeconds);
+	bool invalidRunSeconds = false;
+	const double runForSeconds = parse_run_for_seconds(argc, argv, invalidRunSeconds);
+	bool invalidRunFrames = false;
+	bool deprecatedSmokeFrames = false;
+	const uint64_t runForFrameCount = parse_run_for_frame_count(
+		argc,
+		argv,
+		invalidRunFrames,
+		deprecatedSmokeFrames);
+	if (invalidSmokeSeconds || invalidRunSeconds || invalidRunFrames)
+	{
+		std::cerr << "Fatal Error: automation time/frame options require finite values greater than zero." << std::endl;
+		return 1;
+	}
+	const std::string frameDumpPath = parse_string_option(argc, argv, "--dump-frame");
+	constexpr double default_frame_dump_timeout_seconds = 120.0;
+	const double process_readiness_timeout_seconds = smokeTestSeconds > 0.0
+		? smokeTestSeconds
+		: (!frameDumpPath.empty() ? default_frame_dump_timeout_seconds : 0.0);
+	ReadinessProcessWatchdog readiness_watchdog{};
+	readiness_watchdog.start(process_readiness_timeout_seconds);
 	AshEngine::Application* application = create_application();
 	if (!application)
 	{
@@ -403,22 +575,27 @@ int32_t main(int argc, char* argv[])
 		AshEngine::Application::app = nullptr;
 		return 1;
 	}
-	const double smokeTestSeconds = parse_smoke_test_seconds(argc, argv);
 	if (smokeTestSeconds > 0.0)
 	{
-		application->set_max_run_seconds(smokeTestSeconds);
+		application->set_readiness_smoke_timeout_seconds(smokeTestSeconds);
 	}
-	const uint64_t smokeTestFrameCount = parse_smoke_test_frame_count(argc, argv);
-	if (smokeTestFrameCount > 0)
+	if (runForSeconds > 0.0)
 	{
-		application->set_max_frame_count(smokeTestFrameCount);
+		application->set_max_run_seconds(runForSeconds);
+	}
+	if (runForFrameCount > 0)
+	{
+		application->set_max_frame_count(runForFrameCount);
+	}
+	if (deprecatedSmokeFrames)
+	{
+		std::cerr << "Warning: --smoke-test=N and ASH_ENGINE_SMOKE_TEST_FRAMES are deprecated fixed-run aliases; use --run-for-frames=N. Readiness smoke uses --smoke-test-seconds=S." << std::endl;
 	}
 	const AshEngine::PerfGateConfig perfGateConfig = AshEngine::parse_perf_gate_config(argc, argv);
 	if (perfGateConfig.enabled)
 	{
 		application->configure_perf_gate(perfGateConfig);
 	}
-	const std::string frameDumpPath = parse_string_option(argc, argv, "--dump-frame");
 	if (!frameDumpPath.empty())
 	{
 		application->set_frame_dump_path(frameDumpPath);
@@ -432,9 +609,10 @@ int32_t main(int argc, char* argv[])
 	{
 		application->set_rhi_indirect_self_test_requested(true);
 	}
-	application->start();
+	const bool runSucceeded = application->start();
 	destroy_application(application);
 	AshEngine::Application::app = nullptr;
-	return 0;
+	readiness_watchdog.complete();
+	return runSucceeded ? 0 : 1;
 
 }

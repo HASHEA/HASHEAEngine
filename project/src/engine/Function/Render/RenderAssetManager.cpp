@@ -158,6 +158,10 @@ namespace AshEngine
 	void RenderAssetManager::initialize(AssetDatabase* asset_database, Renderer* renderer)
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
+		if (m_asset_database == asset_database && m_renderer == renderer)
+		{
+			return;
+		}
 		m_asset_database = asset_database;
 		m_renderer = renderer;
 		if (!m_material_system.initialize(renderer))
@@ -174,8 +178,10 @@ namespace AshEngine
 		m_material_proxies.clear();
 		m_texture_assets.clear();
 		m_pending_texture_decodes.clear();
+		m_failed_static_mesh_requests.clear();
 		m_sampler_pool.clear();
 		m_failed_texture_requests.clear();
+		m_failed_runtime_resource_requests.clear();
 		m_logged_material_warnings.clear();
 		m_logged_texture_warnings.clear();
 		m_logged_environment_warnings.clear();
@@ -187,36 +193,95 @@ namespace AshEngine
 		m_material_system.shutdown();
 		m_asset_database = nullptr;
 		m_renderer = nullptr;
+		m_activity_epoch = 0;
+		m_pending_render_asset_count = 0;
 	}
 
 	std::shared_ptr<StaticMeshRenderAsset> RenderAssetManager::request_static_mesh_asset(const std::string& asset_path, uint32_t mesh_index)
 	{
-		ASH_PROCESS_GUARD_RETURN(std::shared_ptr<StaticMeshRenderAsset>, result, nullptr, nullptr);
-		ASH_PROCESS_ERROR(m_asset_database);
-		ASH_PROCESS_ERROR(!asset_path.empty());
+		if (!m_asset_database || asset_path.empty())
+		{
+			return nullptr;
+		}
 
 		const std::string key = make_static_mesh_key(asset_path, mesh_index);
+		std::shared_ptr<StaticMeshRenderAsset> result{};
+		bool owns_request = false;
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			const auto found = m_static_mesh_assets.find(key);
 			if (found != m_static_mesh_assets.end())
 			{
 				result = found->second;
-				break;
 			}
+		}
+		if (result)
+		{
+			std::scoped_lock<std::mutex> asset_lock(result->mutex);
+			return result->state == StaticMeshRenderAssetState::Failed ? nullptr : result;
 		}
 
 		result = std::make_shared<StaticMeshRenderAsset>();
 		result->asset_path = asset_path;
 		result->mesh_index = mesh_index;
 		result->state = StaticMeshRenderAssetState::Loading;
-		ASH_PROCESS_ERROR(populate_cpu_mesh_asset(result));
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			const auto found = m_static_mesh_assets.find(key);
+			if (found != m_static_mesh_assets.end())
+			{
+				result = found->second;
+			}
+			else
+			{
+				m_static_mesh_assets[key] = result;
+				++m_pending_render_asset_count;
+				++m_activity_epoch;
+				owns_request = true;
+			}
+		}
+		if (!owns_request)
+		{
+			std::scoped_lock<std::mutex> asset_lock(result->mutex);
+			return result->state == StaticMeshRenderAssetState::Failed ? nullptr : result;
+		}
+
+		bool cpu_ready = false;
+		{
+			std::scoped_lock<std::mutex> asset_lock(result->mutex);
+			if (result->state == StaticMeshRenderAssetState::Loading)
+			{
+				cpu_ready = populate_cpu_mesh_asset(result);
+			}
+			else
+			{
+				cpu_ready = result->state == StaticMeshRenderAssetState::CpuReady ||
+					result->state == StaticMeshRenderAssetState::GpuReady;
+			}
+		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
-			m_static_mesh_assets[key] = result;
+			if (cpu_ready)
+			{
+				m_failed_static_mesh_requests.erase(key);
+			}
+			else
+			{
+				const auto found = m_static_mesh_assets.find(key);
+				if (found != m_static_mesh_assets.end() && found->second == result)
+				{
+					m_static_mesh_assets.erase(found);
+					if (m_pending_render_asset_count > 0)
+					{
+						--m_pending_render_asset_count;
+					}
+				}
+				m_failed_static_mesh_requests.insert(key);
+				++m_activity_epoch;
+			}
 		}
-		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+		return cpu_ready ? result : nullptr;
 	}
 
 	std::shared_ptr<const MaterialInterface> RenderAssetManager::request_material_asset(const std::string& asset_path)
@@ -252,6 +317,7 @@ namespace AshEngine
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_material_proxies[key] = result;
+			++m_activity_epoch;
 		}
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
@@ -311,6 +377,11 @@ namespace AshEngine
 				++texture_asset->change_version;
 				m_failed_texture_requests.insert(key);
 				m_pending_texture_decodes.erase(key);
+				if (m_pending_render_asset_count > 0)
+				{
+					--m_pending_render_asset_count;
+				}
+				++m_activity_epoch;
 			}
 			break;
 		}
@@ -338,6 +409,11 @@ namespace AshEngine
 				++texture_asset->change_version;
 				m_failed_texture_requests.insert(key);
 				m_pending_texture_decodes.erase(key);
+				if (m_pending_render_asset_count > 0)
+				{
+					--m_pending_render_asset_count;
+				}
+				++m_activity_epoch;
 			}
 			break;
 		}
@@ -356,6 +432,11 @@ namespace AshEngine
 			++texture_asset->change_version;
 			m_failed_texture_requests.erase(key);
 			m_pending_texture_decodes.erase(key);
+			if (m_pending_render_asset_count > 0)
+			{
+				--m_pending_render_asset_count;
+			}
+			++m_activity_epoch;
 		}
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -469,6 +550,8 @@ namespace AshEngine
 			}
 			m_texture_assets[key] = texture_asset;
 			m_pending_texture_decodes[key] = std::move(decode_future);
+			++m_pending_render_asset_count;
+			++m_activity_epoch;
 		}
 
 		result = texture_asset;
@@ -506,6 +589,10 @@ namespace AshEngine
 			if (!inserted)
 			{
 				result = it->second;
+			}
+			else
+			{
+				++m_activity_epoch;
 			}
 		}
 
@@ -580,17 +667,50 @@ namespace AshEngine
 
 	bool RenderAssetManager::finalize_pending_static_mesh_asset(const std::shared_ptr<StaticMeshRenderAsset>& asset)
 	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(asset);
-
-		std::scoped_lock<std::mutex> asset_lock(asset->mutex);
-		if (asset->state == StaticMeshRenderAssetState::GpuReady)
+		if (!asset)
 		{
-			break;
+			return false;
 		}
-		ASH_PROCESS_ERROR(asset->state == StaticMeshRenderAssetState::CpuReady);
-		ASH_PROCESS_ERROR(create_gpu_mesh_resource(asset));
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+
+		bool succeeded = false;
+		StaticMeshRenderAssetState terminal_state = StaticMeshRenderAssetState::Loading;
+		{
+			std::unique_lock<std::mutex> asset_lock(asset->mutex, std::try_to_lock);
+			if (!asset_lock.owns_lock())
+			{
+				return false;
+			}
+			if (asset->state == StaticMeshRenderAssetState::GpuReady)
+			{
+				return true;
+			}
+			if (asset->state != StaticMeshRenderAssetState::CpuReady)
+			{
+				return false;
+			}
+
+			succeeded = create_gpu_mesh_resource(asset);
+			terminal_state = asset->state;
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			if (m_pending_render_asset_count > 0)
+			{
+				--m_pending_render_asset_count;
+			}
+			const std::string key = make_static_mesh_key(asset->asset_path, asset->mesh_index);
+			if (terminal_state == StaticMeshRenderAssetState::Failed)
+			{
+				m_failed_static_mesh_requests.insert(key);
+			}
+			else
+			{
+				m_failed_static_mesh_requests.erase(key);
+			}
+			++m_activity_epoch;
+		}
+		return succeeded;
 	}
 
 	void RenderAssetManager::finalize_pending_assets()
@@ -628,35 +748,20 @@ namespace AshEngine
 
 	bool RenderAssetManager::has_pending_render_assets() const
 	{
-		std::vector<std::shared_ptr<StaticMeshRenderAsset>> assets{};
-		{
-			std::scoped_lock<std::mutex> lock(m_mutex);
-			if (!m_pending_texture_decodes.empty())
-			{
-				return true;
-			}
-			assets.reserve(m_static_mesh_assets.size());
-			for (const auto& [key, asset] : m_static_mesh_assets)
-			{
-				(void)key;
-				assets.push_back(asset);
-			}
-		}
+		return query_readiness().pending;
+	}
 
-		for (const std::shared_ptr<StaticMeshRenderAsset>& asset : assets)
-		{
-			if (!asset)
-			{
-				continue;
-			}
-			std::scoped_lock<std::mutex> asset_lock(asset->mutex);
-			if (asset->state != StaticMeshRenderAssetState::GpuReady
-				&& asset->state != StaticMeshRenderAssetState::Failed)
-			{
-				return true;
-			}
-		}
-		return false;
+	RenderAssetReadinessSnapshot RenderAssetManager::query_readiness() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		RenderAssetReadinessSnapshot snapshot{};
+		snapshot.activity_epoch = m_activity_epoch;
+		snapshot.pending = m_pending_render_asset_count != 0;
+		snapshot.failed =
+			!m_failed_static_mesh_requests.empty() ||
+			!m_failed_texture_requests.empty() ||
+			!m_failed_runtime_resource_requests.empty();
+		return snapshot;
 	}
 
 	AssetDatabase* RenderAssetManager::get_asset_database() const
@@ -742,6 +847,7 @@ namespace AshEngine
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_material_assets[cache_key] = material;
+			++m_activity_epoch;
 			result = material;
 			break;
 		}
@@ -760,6 +866,7 @@ namespace AshEngine
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_material_assets[cache_key] = material;
+			++m_activity_epoch;
 		}
 		result = material;
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
@@ -822,6 +929,7 @@ namespace AshEngine
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_material_assets[generated_key] = result;
+			++m_activity_epoch;
 		}
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
@@ -880,6 +988,11 @@ namespace AshEngine
 					k_normal_pixel.data(),
 					RenderTextureFormat::RGBA8_UNORM,
 					4u);
+				if (m_default_normal_texture)
+					m_failed_runtime_resource_requests.erase("fallback_texture_normal");
+				else
+					m_failed_runtime_resource_requests.insert("fallback_texture_normal");
+				++m_activity_epoch;
 			}
 			result = m_default_normal_texture;
 			break;
@@ -892,6 +1005,11 @@ namespace AshEngine
 					k_black_pixel.data(),
 					RenderTextureFormat::RGBA8_SRGB,
 					4u);
+				if (m_default_black_texture)
+					m_failed_runtime_resource_requests.erase("fallback_texture_black");
+				else
+					m_failed_runtime_resource_requests.insert("fallback_texture_black");
+				++m_activity_epoch;
 			}
 			result = m_default_black_texture;
 			break;
@@ -905,6 +1023,11 @@ namespace AshEngine
 					k_white_pixel.data(),
 					RenderTextureFormat::RGBA8_SRGB,
 					4u);
+				if (m_default_white_texture)
+					m_failed_runtime_resource_requests.erase("fallback_texture_white");
+				else
+					m_failed_runtime_resource_requests.insert("fallback_texture_white");
+				++m_activity_epoch;
 			}
 			result = m_default_white_texture;
 			break;
@@ -1249,6 +1372,11 @@ namespace AshEngine
 		if (!m_fallback_environment_map)
 		{
 			m_fallback_environment_map = std::move(created);
+			if (m_fallback_environment_map)
+				m_failed_runtime_resource_requests.erase("fallback_environment");
+			else
+				m_failed_runtime_resource_requests.insert("fallback_environment");
+			++m_activity_epoch;
 		}
 		return m_fallback_environment_map;
 	}
@@ -1342,6 +1470,7 @@ namespace AshEngine
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_environment_maps[key] = resource;
+			++m_activity_epoch;
 		}
 		return resource;
 	}

@@ -16,13 +16,15 @@ echo Usage:
 echo   RunRenderGate.bat
 echo       Run golden regression for vulkan + dx12 and the cross-backend diff.
 echo.
-echo   RunRenderGate.bat -BlessGolden
-echo       Refresh golden baselines from this run's captures.
+echo   RunRenderGate.bat -Scenes particles -BlessGolden
+echo       After visual approval, refresh only the selected scene's golden baselines.
 echo.
 echo Common arguments:
 echo   -Configuration Debug
 echo   -Backends vulkan,dx12
-echo   -SmokeFrames 5000
+echo   -Scenes sandbox,particles
+echo   -TimeoutSeconds 120
+echo   -ProcessTimeoutGraceSeconds 15
 echo   -GoldenSsimThreshold 0.995
 echo   -CrossSsimThreshold 0.99
 echo   -SkipCrossBackend

@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -49,6 +49,7 @@ status: active
 | [shadows.md](features/shadows.md) | Sunlight CSM + 普通方向光 shadow（两条路径） |
 | [ambient-occlusion.md](features/ambient-occlusion.md) | SSAO / HBAO / GTAO |
 | [skybox-ibl.md](features/skybox-ibl.md) | 环境光照（IBL 烘焙链）+ 天空背景 |
+| [particles.md](features/particles.md) | GPU 粒子（稳定 compute 压实 + indirect billboard draw） |
 | [volumetric-lighting.md](features/volumetric-lighting.md) | Froxel 体积光 + 屏幕空间 fallback |
 | [bloom.md](features/bloom.md) | 多级 Bloom |
 | [taa.md](features/taa.md) | Temporal AA（含抓帧模式禁 jitter 约定） |

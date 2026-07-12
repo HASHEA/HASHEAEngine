@@ -780,7 +780,7 @@ try {
                 "--perf-gate-target=$targetName",
                 "--perf-gate-warmup-seconds=$($profileConfig.warmup_seconds)",
                 "--perf-gate-sample-seconds=$($profileConfig.sample_seconds)",
-                "--smoke-test-seconds=$([double]$profileConfig.warmup_seconds + [double]$profileConfig.sample_seconds + 10.0)"
+                "--run-for-seconds=$([double]$profileConfig.warmup_seconds + [double]$profileConfig.sample_seconds + 10.0)"
             )
             Invoke-GateProcess -Record $record -RunDirectory $runDir -Arguments $arguments -TimeoutSeconds ([double]$profileConfig.timeout_seconds)
 

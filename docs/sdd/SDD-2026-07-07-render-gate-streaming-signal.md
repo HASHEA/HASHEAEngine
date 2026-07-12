@@ -1,6 +1,6 @@
 # Mini SDD: RenderGate 抓帧改为流送完成信号驱动
 
-Status: Done（2026-07-07 实现并验证通过）
+Status: Done（2026-07-07 实现并验证通过）；其“32 帧余量 + 帧上限 fallback”运行时契约已被 [SDD-2026-07-11-readiness-driven-automation](SDD-2026-07-11-readiness-driven-automation.md) superseded。
 
 ## Goal
 

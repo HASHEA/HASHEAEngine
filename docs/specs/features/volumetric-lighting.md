@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -29,7 +29,7 @@ status: active
 - Shader（`project/src/engine/Shaders/Deferred/`）：`VolumetricDensity.hlsl`、`VolumetricLightInjection.hlsl`、`VolumetricTemporal.hlsl`、`VolumetricIntegrate.hlsl`、`VolumetricComposite.hlsl`、`LightShaftScreenSpace.hlsl`，公共 `VolumetricLightingCommon.hlsli`（注入阶段另含 `Shaders/Shadow/DirectionalShadowCommon.hlsli`）。
 - Froxel 存储：2D atlas（RGBA32_SFLOAT UAV），tile 分辨率 = 输出 × `froxel_resolution_scale`，`slices_per_row = ceil(sqrt(depth_slices))` 平铺；总 froxel 数按 quality 预算钳制（Low 512K / Medium 1M / High 2M / Epic 4M），超预算时等比缩 tile。
 - 深度 slice 分布为**幂律**（`kVolumetricSliceDistributionPower = 2.0`，`pow(t, 2)`）：近处密、远处疏，消除等距分布的 depth-slice banding。slice↔depth01 换算在注入/时域/积分三阶段必须一致（`AshVolumetricSliceDepth01` 等函数为唯一来源）。
-- 历史：按 view key 双缓冲 scattering RT（`VolumetricHistoryEntry`），记录相机/revision 用于失效判断；`clear_history()` 由 SceneRenderer 场景切换时调用。
+- 历史：按 view key 双缓冲 scattering RT（`VolumetricHistoryEntry`），记录相机/revision 用于失效判断；`clear_history()` 由 SceneRenderer 在输出 resize 与 readiness capture arm 时调用。
 
 ## 约束与已知限制
 

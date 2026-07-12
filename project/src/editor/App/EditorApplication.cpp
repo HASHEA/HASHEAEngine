@@ -48,6 +48,16 @@ namespace AshEditor
 		}
 	}
 
+	bool EditorApplication::IsAutomationReady() const
+	{
+		return _upImpl && _upImpl->IsAutomationReady();
+	}
+
+	bool EditorApplication::HasAutomationFailure() const
+	{
+		return !_upImpl || _upImpl->HasAutomationFailure();
+	}
+
 	EditorViewportInstance* EditorApplication::GetPrimaryViewport()
 	{
 		return _upImpl ? _upImpl->GetPrimaryViewport() : nullptr;

@@ -15,6 +15,7 @@ namespace RHI
 	enum class AshResourceState : uint32_t;
 	class GraphicsContext;
 	class Swapchain;
+	enum class SwapchainPresentResult : uint8_t;
 	class CommandBuffer;
 	class TextureView;
 	struct ShaderParameterBlockLayout;
@@ -96,7 +97,8 @@ namespace AshEngine
 	enum class RenderBlendMode : uint8_t
 	{
 		Opaque = 0,
-		Additive
+		Additive,
+		AlphaBlend
 	};
 
 	enum class RenderIndexFormat : uint8_t
@@ -292,6 +294,7 @@ namespace AshEngine
 		uint32_t size = 0;
 		uint32_t stride = 0;
 		bool cpu_write = false;
+		bool indirect_args = false;
 		const void* initial_data = nullptr;
 		const char* name = nullptr;
 	};
@@ -562,9 +565,9 @@ namespace AshEngine
 		~RenderDevice();
 
 	public:
-		bool begin_frame();
+		RHI::SwapchainPresentResult begin_frame();
 		bool end_frame();
-		void present();
+		RHI::SwapchainPresentResult present();
 
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
@@ -597,6 +600,7 @@ namespace AshEngine
 		void set_scissor(const RenderScissor& scissor);
 		void draw(uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex = 0, uint32_t first_instance = 0);
 		void draw_indexed(uint32_t index_count, uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0);
+		bool draw_indirect(const std::shared_ptr<StorageBuffer>& args_buffer, uint64_t args_offset);
 		void dispatch(uint32_t group_count_x, uint32_t group_count_y = 1, uint32_t group_count_z = 1);
 		bool end_pass();
 
@@ -628,7 +632,7 @@ namespace AshEngine
 		};
 
 		bool request_back_buffer_capture();
-		bool fetch_back_buffer_capture(BackBufferCaptureResult& out_result);
+		bool fetch_back_buffer_capture(BackBufferCaptureResult& out_result, uint64_t timeout_nanoseconds);
 
 	private:
 		bool ensure_back_buffer_target();
@@ -638,6 +642,7 @@ namespace AshEngine
 		bool collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_vertex_buffer_barrier(const std::shared_ptr<VertexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_indirect_args_buffer_barrier(const std::shared_ptr<StorageBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers);
 		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);

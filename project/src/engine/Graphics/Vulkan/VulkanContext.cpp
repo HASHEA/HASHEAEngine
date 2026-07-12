@@ -1870,6 +1870,50 @@ auto VulkanContext::destroy() -> void
 		VK_CHECK_RESULT(vkDeviceWaitIdle(vulkanDevice));
 	}
 
+	auto VulkanContext::wait_for_frame_completion(uint64_t timeout_nanoseconds) -> bool
+	{
+		if (currentFrame == UINT32_MAX)
+		{
+			return true;
+		}
+		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
+		{
+			const uint64_t graphics_timeline_value = absoluteFrame + 1u;
+			VkSemaphoreWaitInfo semaphore_wait_info{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+			semaphore_wait_info.semaphoreCount = 1;
+			semaphore_wait_info.pSemaphores = &vulkanGraphicsSemaphore;
+			semaphore_wait_info.pValues = &graphics_timeline_value;
+			const VkResult result = vkWaitSemaphores(vulkanDevice, &semaphore_wait_info, timeout_nanoseconds);
+			if (result == VK_SUCCESS)
+			{
+				return true;
+			}
+			if (result != VK_TIMEOUT)
+			{
+				HLogError("VulkanContext: frame completion wait failed with VkResult {}.", static_cast<int32_t>(result));
+			}
+			return false;
+		}
+
+		VulkanFence* frame_fence = get_frame_data_internal().vulkanCommandBufferExecutedFence;
+		if (!frame_fence)
+		{
+			return false;
+		}
+		const VkFence frame_fence_handle = frame_fence->get_handle();
+		const VkResult result = vkWaitForFences(vulkanDevice, 1, &frame_fence_handle, true, timeout_nanoseconds);
+		if (result == VK_SUCCESS)
+		{
+			frame_fence->set_signaled(true);
+			return true;
+		}
+		if (result != VK_TIMEOUT)
+		{
+			HLogError("VulkanContext: frame fence wait failed with VkResult {}.", static_cast<int32_t>(result));
+		}
+		return false;
+	}
+
 	auto VulkanContext::get_command_buffer(uint32_t threadIndx) -> CommandBuffer*
 	{
 		auto current_frame = currentFrame != UINT32_MAX ? currentFrame : 0;
@@ -1998,7 +2042,7 @@ auto VulkanContext::destroy() -> void
 			ASH_PROFILE_SCOPE_NC("VulkanContext::WaitFrameFence", AshEngine::Profile::Color::RHI);
 			get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
 		}
-		vulkanPresentCompleteSemaphore = get_frame_data_internal().vulkanRenderCompleteSemaphore;
+		vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		//flush deletion queue
 		delayed_deletion_queues[currentFrame].flush();
 		if (vulkanStagingBufferPool)
@@ -2027,7 +2071,7 @@ auto VulkanContext::destroy() -> void
 		}
 	}
 
-	auto VulkanContext::end_frame() -> void
+	auto VulkanContext::end_frame(bool has_acquired_swapchain_image) -> void
 	{
 		ASH_PROFILE_SCOPE_NC("VulkanContext::end_frame", AshEngine::Profile::Color::RHI);
 		// Tracy GPU collect 需要一个正在录制的 cmdbuf。复用 upload cmdbuf；
@@ -2072,10 +2116,12 @@ auto VulkanContext::destroy() -> void
 				commandBufferQueue[i]->set_state(AshCommandBufferState::ASH_Submitted);
 			}
 		}		
-		const VkSemaphore presentCompleteSemaphore =
-			vulkanPresentCompleteSemaphore != VK_NULL_HANDLE ?
-			vulkanPresentCompleteSemaphore :
-			get_frame_data_internal().vulkanRenderCompleteSemaphore;
+		const bool has_swapchain_image =
+			has_acquired_swapchain_image && vulkanPresentCompleteSemaphore != VK_NULL_HANDLE;
+		if (has_acquired_swapchain_image && !has_swapchain_image)
+		{
+			HLogError("VulkanContext: acquired swapchain frame is missing its render-complete semaphore.");
+		}
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
 		{
 			bool wait_for_timeline_semaphore = absoluteFrame >= k_max_frames;
@@ -2088,27 +2134,34 @@ auto VulkanContext::destroy() -> void
 				}
 				Array<VkSemaphoreSubmitInfoKHR> wait_semaphores;
 				wait_semaphores.init(nullptr, 4, 0);
-				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
+				if (has_swapchain_image)
+				{
+					wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
+				}
 				if (wait_for_timeline_semaphore) {
 					wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame - (k_max_frames - 1), VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT_KHR , 0 });
 				}
-				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 },
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame + 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR , 0 }
-				};
+				Array<VkSemaphoreSubmitInfoKHR> signal_semaphores;
+				signal_semaphores.init(nullptr, 2, 0);
+				if (has_swapchain_image)
+				{
+					signal_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanPresentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
+				}
+				signal_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanGraphicsSemaphore, absoluteFrame + 1, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR , 0 });
 				VkSubmitInfo2KHR submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR };
 				submit_info.waitSemaphoreInfoCount = wait_semaphores.size();
-				submit_info.pWaitSemaphoreInfos = wait_semaphores.m_pData;
+				submit_info.pWaitSemaphoreInfos = wait_semaphores.size() > 0 ? wait_semaphores.m_pData : nullptr;
 				submit_info.commandBufferInfoCount = count;
 				submit_info.pCommandBufferInfos = command_buffer_info;
-				submit_info.signalSemaphoreInfoCount = 2;
-				submit_info.pSignalSemaphoreInfos = signal_semaphores;
+				submit_info.signalSemaphoreInfoCount = signal_semaphores.size();
+				submit_info.pSignalSemaphoreInfos = signal_semaphores.m_pData;
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
 					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
 				}
 				wait_semaphores.shutdown();
+				signal_semaphores.shutdown();
 			}
 			else
 			{
@@ -2118,29 +2171,41 @@ auto VulkanContext::destroy() -> void
 				wait_values.init(nullptr, 4, 0);
 				Array<VkPipelineStageFlags> wait_stages;
 				wait_stages.init(nullptr, 4, 0);
-				wait_semaphores.push_back(get_frame_data_internal().vulkanRenderBeginSemaphore);
-				wait_values.push_back(0);
-				wait_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+				if (has_swapchain_image)
+				{
+					wait_semaphores.push_back(get_frame_data_internal().vulkanRenderBeginSemaphore);
+					wait_values.push_back(0);
+					wait_stages.push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+				}
 				if (wait_for_timeline_semaphore) {
 					wait_semaphores.push_back(vulkanGraphicsSemaphore);
 					wait_values.push_back(absoluteFrame - (k_max_frames - 1));
 					wait_stages.push_back(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT);
 				}
-				VkSemaphore signal_semaphores[] = { presentCompleteSemaphore, vulkanGraphicsSemaphore };
-				uint64_t signal_values[] = { 0, absoluteFrame + 1 };
+				Array<VkSemaphore> signal_semaphores;
+				signal_semaphores.init(nullptr, 2, 0);
+				Array<uint64_t> signal_values;
+				signal_values.init(nullptr, 2, 0);
+				if (has_swapchain_image)
+				{
+					signal_semaphores.push_back(vulkanPresentCompleteSemaphore);
+					signal_values.push_back(0);
+				}
+				signal_semaphores.push_back(vulkanGraphicsSemaphore);
+				signal_values.push_back(absoluteFrame + 1);
 				VkTimelineSemaphoreSubmitInfo semaphore_info{ VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO };
-				semaphore_info.signalSemaphoreValueCount = 2;
-				semaphore_info.pSignalSemaphoreValues = signal_values;
+				semaphore_info.signalSemaphoreValueCount = signal_values.size();
+				semaphore_info.pSignalSemaphoreValues = signal_values.m_pData;
 				semaphore_info.waitSemaphoreValueCount = wait_values.size();
-				semaphore_info.pWaitSemaphoreValues = wait_values.m_pData;
+				semaphore_info.pWaitSemaphoreValues = wait_values.size() > 0 ? wait_values.m_pData : nullptr;
 				VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
 				submit_info.waitSemaphoreCount = wait_semaphores.size();
-				submit_info.pWaitSemaphores = wait_semaphores.m_pData;
-				submit_info.pWaitDstStageMask = wait_stages.m_pData;
+				submit_info.pWaitSemaphores = wait_semaphores.size() > 0 ? wait_semaphores.m_pData : nullptr;
+				submit_info.pWaitDstStageMask = wait_stages.size() > 0 ? wait_stages.m_pData : nullptr;
 				submit_info.commandBufferCount = count;
 				submit_info.pCommandBuffers = cmds;
-				submit_info.signalSemaphoreCount = 2;
-				submit_info.pSignalSemaphores = signal_semaphores;
+				submit_info.signalSemaphoreCount = signal_semaphores.size();
+				submit_info.pSignalSemaphores = signal_semaphores.m_pData;
 				submit_info.pNext = &semaphore_info;
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
@@ -2150,6 +2215,8 @@ auto VulkanContext::destroy() -> void
 				wait_semaphores.shutdown();
 				wait_values.shutdown();
 				wait_stages.shutdown();
+				signal_semaphores.shutdown();
+				signal_values.shutdown();
 			}	
 		}
 		else
@@ -2163,36 +2230,40 @@ auto VulkanContext::destroy() -> void
 				}
 				Array<VkSemaphoreSubmitInfoKHR> wait_semaphores;
 				wait_semaphores.init(nullptr, 4, 0);
-				wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
-				VkSemaphoreSubmitInfoKHR signal_semaphores[]{
-					{ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, presentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 },
-				};
+				Array<VkSemaphoreSubmitInfoKHR> signal_semaphores;
+				signal_semaphores.init(nullptr, 1, 0);
+				if (has_swapchain_image)
+				{
+					wait_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, get_frame_data_internal().vulkanRenderBeginSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
+					signal_semaphores.push_back({ VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO_KHR, nullptr, vulkanPresentCompleteSemaphore, 0, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT_KHR, 0 });
+				}
 				VkSubmitInfo2KHR submit_info{ VK_STRUCTURE_TYPE_SUBMIT_INFO_2_KHR };
 				submit_info.waitSemaphoreInfoCount = wait_semaphores.size();
-				submit_info.pWaitSemaphoreInfos = wait_semaphores.m_pData;
+				submit_info.pWaitSemaphoreInfos = wait_semaphores.size() > 0 ? wait_semaphores.m_pData : nullptr;
 				submit_info.commandBufferInfoCount = count;
 				submit_info.pCommandBufferInfos = command_buffer_info;
-				submit_info.signalSemaphoreInfoCount = 1;
-				submit_info.pSignalSemaphoreInfos = signal_semaphores;
+				submit_info.signalSemaphoreInfoCount = signal_semaphores.size();
+				submit_info.pSignalSemaphoreInfos = signal_semaphores.size() > 0 ? signal_semaphores.m_pData : nullptr;
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
 					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
 				}
 				wait_semaphores.shutdown();
+				signal_semaphores.shutdown();
 			}
 			else
 			{
 				VkPipelineStageFlags flag = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 				get_frame_data_internal().vulkanCommandBufferExecutedFence->reset();
 				VkSubmitInfo submit_info = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-				submit_info.waitSemaphoreCount = 1;
-				submit_info.pWaitSemaphores = &get_frame_data_internal().vulkanRenderBeginSemaphore;
-				submit_info.pWaitDstStageMask = &flag;
+				submit_info.waitSemaphoreCount = has_swapchain_image ? 1u : 0u;
+				submit_info.pWaitSemaphores = has_swapchain_image ? &get_frame_data_internal().vulkanRenderBeginSemaphore : nullptr;
+				submit_info.pWaitDstStageMask = has_swapchain_image ? &flag : nullptr;
 				submit_info.commandBufferCount = count;
 				submit_info.pCommandBuffers = cmds;
-				submit_info.signalSemaphoreCount = 1;
-				submit_info.pSignalSemaphores = &presentCompleteSemaphore;
+				submit_info.signalSemaphoreCount = has_swapchain_image ? 1u : 0u;
+				submit_info.pSignalSemaphores = has_swapchain_image ? &vulkanPresentCompleteSemaphore : nullptr;
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));

@@ -3,6 +3,7 @@
 #include "App/SandboxStandardScene.h"
 #include "Function/Application.h"
 #include "Function/Asset/AssetDatabase.h"
+#include <atomic>
 #include <filesystem>
 
 namespace AshSandbox
@@ -21,7 +22,7 @@ namespace AshSandbox
 		auto _on_logic_update() -> void override;
 		auto _on_gui() -> void override;
 		auto _on_render() -> void override;
-		auto _present() -> void override;
+		auto _get_automation_readiness() const -> AshEngine::ApplicationReadiness override;
 
 	private:
 		auto _initialize_paths_and_assets() -> bool;
@@ -38,10 +39,11 @@ namespace AshSandbox
 		SandboxStandardScene m_standardScene{};
 		AshEngine::SceneOutputHandle m_mainSceneOutput{};
 		AshEngine::SceneViewBindingHandle m_mainSceneBinding{};
-		bool m_logicBootstrapExecuted = false;
-		bool m_startupSucceeded = false;
-		bool m_logicSucceeded = true;
-		bool m_renderSucceeded = true;
+		std::atomic<bool> m_logicBootstrapExecuted{ false };
+		std::atomic<bool> m_startupSucceeded{ false };
+		std::atomic<bool> m_logicSucceeded{ true };
+		std::atomic<bool> m_renderSucceeded{ true };
+		std::atomic<bool> m_presentationRegistered{ false };
 		bool m_summaryLogged = false;
 	};
 }

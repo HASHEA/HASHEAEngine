@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -27,7 +27,7 @@ frame-dump 模式（`Application::get_frame_dump_path()` 非空）**强制 jitte
 - 类：`TemporalAAPass` / `TemporalAAConfig`（`project/src/engine/Function/Render/TemporalAAPass.{h,cpp}`、`TemporalAAConfig.{h,cpp}`）。
 - Shader：`project/src/engine/Shaders/Deferred/TemporalAAResolve.hlsl` + `TemporalAACommon.hlsli`（entry `CSMain`，8×8 线程组）。
 - Jitter：`temporal_aa_compute_jitter_ndc(frame_index, jitter_sequence_length, width, height)`——Halton(2)/Halton(3) 低差异序列（1-based 索引避开零样本），映射 [-0.5, +0.5] 像素再转 NDC；`jitter_sequence_length<2` 或尺寸为 0 时返回零。
-- 历史：按 view key 双缓冲 RT（`TemporalAAHistoryEntry`）；`clear_history()` 场景切换时调用。
+- 历史：按 view key 双缓冲 RT（`TemporalAAHistoryEntry`）；`clear_history()` 在输出 resize 与 readiness capture arm 时调用，保证最终资源的下一帧不混入加载中画面。
 
 ## 约束与已知限制
 

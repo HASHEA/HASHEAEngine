@@ -27,6 +27,13 @@ namespace AshEngine
 		Black
 	};
 
+	struct ASH_API RenderAssetReadinessSnapshot
+	{
+		uint64_t activity_epoch = 0;
+		bool pending = false;
+		bool failed = false;
+	};
+
 	class ASH_API RenderAssetManager
 	{
 	public:
@@ -58,6 +65,7 @@ namespace AshEngine
 		void finalize_pending_assets();
 		bool has_requested_render_assets() const;
 		bool has_pending_render_assets() const;
+		RenderAssetReadinessSnapshot query_readiness() const;
 
 		AssetDatabase* get_asset_database() const;
 		Renderer* get_renderer() const;
@@ -117,8 +125,10 @@ namespace AshEngine
 		std::unordered_map<std::string, std::shared_ptr<MaterialRenderProxy>> m_material_proxies{};
 		std::unordered_map<std::string, std::shared_ptr<TextureAsset>> m_texture_assets{};
 		std::unordered_map<std::string, std::shared_future<TextureDecodeResult>> m_pending_texture_decodes{};
+		std::unordered_set<std::string> m_failed_static_mesh_requests{};
 		std::unordered_map<RenderSamplerDesc, std::shared_ptr<RenderSampler>, RenderSamplerDescHash> m_sampler_pool{};
 		std::unordered_set<std::string> m_failed_texture_requests{};
+		std::unordered_set<std::string> m_failed_runtime_resource_requests{};
 		std::unordered_set<std::string> m_logged_material_warnings{};
 		std::unordered_set<std::string> m_logged_texture_warnings{};
 		std::unordered_set<std::string> m_logged_environment_warnings{};
@@ -127,6 +137,8 @@ namespace AshEngine
 		std::shared_ptr<TextureAsset> m_default_black_texture{};
 		std::unordered_map<std::string, std::shared_ptr<EnvironmentMapRuntimeResource>> m_environment_maps{};
 		std::shared_ptr<EnvironmentMapRuntimeResource> m_fallback_environment_map{};
+		uint64_t m_activity_epoch = 0;
+		uint32_t m_pending_render_asset_count = 0;
 		MaterialSystem m_material_system{};
 	};
 }

@@ -726,6 +726,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_particle_system_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_volumetric_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_taa_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_bloom_pass.initialize(m_renderer));
@@ -765,6 +766,7 @@ namespace AshEngine
 		m_bloom_pass.shutdown();
 		m_taa_pass.shutdown();
 		m_volumetric_lighting_pass.shutdown();
+		m_particle_system_pass.shutdown();
 		m_sky_background_pass.shutdown();
 		m_environment_lighting_pass.shutdown();
 		m_deferred_lighting_pass.shutdown();
@@ -783,8 +785,19 @@ namespace AshEngine
 
 	void SceneRenderer::handle_output_resized()
 	{
+		invalidate_temporal_history();
+	}
+
+	void SceneRenderer::invalidate_temporal_history()
+	{
+		m_ambient_occlusion_pass.clear_history();
 		m_volumetric_lighting_pass.clear_history();
 		m_taa_pass.clear_history();
+	}
+
+	void SceneRenderer::release_scene_runtime_state(uint64_t scene_runtime_id)
+	{
+		m_particle_system_pass.release_scene(scene_runtime_id);
 	}
 
 	bool SceneRenderer::should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count)
@@ -1394,6 +1407,12 @@ namespace AshEngine
 				graph_resources.depth,
 				graph_resources.scene_hdr_linear,
 				view_context));
+			ASH_PROCESS_ERROR(m_particle_system_pass.add_passes(
+				graph,
+				frame,
+				graph_resources.depth,
+				graph_resources.scene_hdr_linear,
+				view_context));
 			const VolumetricLightingPassOutputs volumetric_outputs = m_volumetric_lighting_pass.add_passes(
 				graph,
 				frame,
@@ -1623,6 +1642,11 @@ namespace AshEngine
 
 		commit_temporal_view_state(temporal_view_key, frame);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool SceneRenderer::is_visible_frame_capture_ready(const VisibleRenderFrame& frame) const
+	{
+		return m_particle_system_pass.is_capture_ready(frame);
 	}
 
 	void SceneRenderer::draw_render_debug_view_ui(UIContext& ui_context)

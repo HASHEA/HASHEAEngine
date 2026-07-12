@@ -103,8 +103,9 @@ namespace RHI
 		auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> override;
 		auto get_sampler(const AshSamplerState& ss) -> std::shared_ptr<Sampler> override;
 		auto wait_idle() -> void override;
+		auto wait_for_frame_completion(uint64_t timeout_nanoseconds) -> bool override;
 		auto begin_frame() -> void override;
-		auto end_frame() -> void override;
+		auto end_frame(bool has_acquired_swapchain_image = true) -> void override;
 		auto get_command_buffer(uint32_t threadIndx) -> CommandBuffer* override;
 		auto get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer* override;
 		auto submit(const SubmitInfo& info) -> void override;

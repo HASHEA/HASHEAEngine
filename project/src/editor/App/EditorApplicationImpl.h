@@ -61,6 +61,8 @@ namespace AshEditor
 		void Update();
 		void DrawGui();
 		void SyncRuntimeScenePresentations();
+		bool IsAutomationReady() const;
+		bool HasAutomationFailure() const;
 		EditorViewportInstance* GetPrimaryViewport();
 		const EditorViewportInstance* GetPrimaryViewport() const;
 		EditorViewportService& GetViewportService();
@@ -116,5 +118,7 @@ namespace AshEditor
 		EditorContext _editorContext{};
 		EditorGizmoState _gizmoState{};
 		bool _bInitialized = false;
+		bool _bAssetDatabaseReady = false;
+		bool _bPresentationReady = false;
 	};
 }

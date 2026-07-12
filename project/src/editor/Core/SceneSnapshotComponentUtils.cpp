@@ -89,6 +89,8 @@ namespace AshEditor
 					return !entity.has_mesh_component() || entity.remove_mesh_component();
 				case AshEngine::SceneComponentType::Environment:
 					return !entity.has_environment_component() || entity.remove_environment_component();
+				case AshEngine::SceneComponentType::Particle:
+					return !entity.has_particle_component() || entity.remove_particle_component();
 				default:
 					return true;
 				}
@@ -133,6 +135,10 @@ namespace AshEditor
 				return refEntity.has_environment_component()
 					? MakeComponentSnapshot(eType, refEntity.get_environment_component())
 					: std::nullopt;
+			case AshEngine::SceneComponentType::Particle:
+				return refEntity.has_particle_component()
+					? MakeComponentSnapshot(eType, refEntity.get_particle_component())
+					: std::nullopt;
 			default:
 				return std::nullopt;
 			}
@@ -166,6 +172,7 @@ namespace AshEditor
 				AshEngine::SceneComponentType::Light,
 				AshEngine::SceneComponentType::Mesh,
 				AshEngine::SceneComponentType::Environment,
+				AshEngine::SceneComponentType::Particle,
 			};
 			for (const AshEngine::SceneComponentType eType : arrOptionalTypes)
 			{
@@ -231,6 +238,17 @@ namespace AshEditor
 						&AshEngine::Entity::has_environment_component,
 						&AshEngine::Entity::set_environment_component,
 						&AshEngine::Entity::add_environment_component))
+					{
+						return false;
+					}
+					break;
+				case AshEngine::SceneComponentType::Particle:
+					if (!ApplyOptionalComponent<AshEngine::ParticleComponent>(
+						entity,
+						refComponentSnapshot,
+						&AshEngine::Entity::has_particle_component,
+						&AshEngine::Entity::set_particle_component,
+						&AshEngine::Entity::add_particle_component))
 					{
 						return false;
 					}

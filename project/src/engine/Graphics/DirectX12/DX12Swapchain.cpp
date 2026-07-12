@@ -281,19 +281,38 @@ namespace RHI
 		}
 	}
 
-	auto DX12Swapchain::present() -> void
+	auto DX12Swapchain::present() -> SwapchainPresentResult
 	{
 		ASH_PROFILE_SCOPE_NC("DX12Swapchain::Present", AshEngine::Profile::Color::Present);
+		if (!m_swapchain)
+		{
+			HLogError("DX12Swapchain: Present requested without an initialized swapchain.");
+			return SwapchainPresentResult::Failed;
+		}
 		HRESULT hr = m_swapchain->Present(m_syncInterval, m_presentFlags);
 		if (FAILED(hr))
 		{
 			HLogError("DX12Swapchain: Present failed. HRESULT: 0x{:08X}", (uint32_t)hr);
+		}
+		else if (hr != S_OK && hr != m_lastPresentStatus)
+		{
+			HLogInfo("DX12Swapchain: Present completed with status HRESULT 0x{:08X}.", (uint32_t)hr);
+		}
+		else if (hr == S_OK && m_lastPresentStatus != S_OK)
+		{
+			HLogInfo("DX12Swapchain: Present returned to S_OK.");
 		}
 		if (auto* ctx = DX12Context::get())
 		{
 			ctx->_drain_dxgi_debug_messages("present");
 			ctx->_drain_d3d12_debug_messages("present");
 		}
+		m_lastPresentStatus = hr;
+		if (FAILED(hr))
+		{
+			return SwapchainPresentResult::Failed;
+		}
+		return SwapchainPresentResult::Completed;
 	}
 
 	auto DX12Swapchain::get_swapchain_buffer() -> std::shared_ptr<Texture>
@@ -307,9 +326,15 @@ namespace RHI
 		return m_backBuffers[index];
 	}
 
-	auto DX12Swapchain::begin_frame() -> void
+	auto DX12Swapchain::begin_frame() -> SwapchainPresentResult
 	{
+		if (!m_swapchain)
+		{
+			HLogError("DX12Swapchain: begin_frame requested without an initialized swapchain.");
+			return SwapchainPresentResult::Failed;
+		}
 		m_currentBackBufferIndex = m_swapchain->GetCurrentBackBufferIndex();
+		return SwapchainPresentResult::Completed;
 	}
 
 	auto DX12Swapchain::end_frame() -> void

@@ -4,6 +4,8 @@
 
 Done（2026-07-04 完成；2026-07-03 批准。open questions 决议：golden 分后端各存一份；v1 只用默认 Sandbox 场景）
 
+抓帧/退出时序的现行契约已由 [SDD-2026-07-11-readiness-driven-automation](SDD-2026-07-11-readiness-driven-automation.md) supersede；本 SDD 保留 RenderGate、AshImageDiff 与基线格式的历史决策。
+
 ## Outcome（实施结果）
 
 提交序列：T1 `6ba86cf` → T2 `721f45b` → T3 `f2a2c07` → overlay 修复 `66967cd` → T4 `e8b7e8e` → T5（文档回写）。

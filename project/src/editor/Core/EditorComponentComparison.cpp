@@ -99,4 +99,25 @@ namespace AshEditor
 			refLeft.visible_background == refRight.visible_background &&
 			refLeft.affect_lighting == refRight.affect_lighting;
 	}
+
+	bool ParticleComponentsEqual(
+		const AshEngine::ParticleComponent& refLeft,
+		const AshEngine::ParticleComponent& refRight)
+	{
+		return
+			refLeft.max_particles == refRight.max_particles &&
+			refLeft.spawn_rate == refRight.spawn_rate &&
+			refLeft.lifetime == refRight.lifetime &&
+			refLeft.lifetime_variance == refRight.lifetime_variance &&
+			refLeft.initial_speed == refRight.initial_speed &&
+			refLeft.spread_angle_degrees == refRight.spread_angle_degrees &&
+			refLeft.constant_acceleration == refRight.constant_acceleration &&
+			refLeft.start_size == refRight.start_size &&
+			refLeft.end_size == refRight.end_size &&
+			refLeft.start_color == refRight.start_color &&
+			refLeft.end_color == refRight.end_color &&
+			refLeft.blend_mode == refRight.blend_mode &&
+			refLeft.random_seed == refRight.random_seed &&
+			refLeft.emitting == refRight.emitting;
+	}
 }

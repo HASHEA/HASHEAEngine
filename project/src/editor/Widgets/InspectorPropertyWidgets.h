@@ -7,6 +7,7 @@
 #include <vector>
 
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 namespace AshEngine
 {
@@ -53,6 +54,15 @@ namespace AshEditor
 		int32_t iStepFast = 100,
 		bool bEnabled = true);
 
+	bool DrawInspectorInputUIntField(
+		AshEngine::UIContext& refUi,
+		const char* pLabel,
+		uint32_t& uValue,
+		const InspectorFieldSpec& refFieldSpec,
+		uint32_t uStep = 1,
+		uint32_t uStepFast = 100,
+		bool bEnabled = true);
+
 	bool DrawInspectorInputFloatField(
 		AshEngine::UIContext& refUi,
 		const char* pLabel,
@@ -89,6 +99,13 @@ namespace AshEditor
 		AshEngine::UIContext& refUi,
 		const char* pLabel,
 		glm::vec3& refValue,
+		const InspectorFieldSpec& refFieldSpec,
+		bool bEnabled = true);
+
+	bool DrawInspectorColor4Field(
+		AshEngine::UIContext& refUi,
+		const char* pLabel,
+		glm::vec4& refValue,
 		const InspectorFieldSpec& refFieldSpec,
 		bool bEnabled = true);
 
