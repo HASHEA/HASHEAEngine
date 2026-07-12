@@ -129,6 +129,7 @@ namespace AshEditor::EditorGizmoInternal
 		glm::vec2 vecStartMousePosition{ 0.0f };
 		float fStartAxisDistance = 0.0f;
 		float fAxisVisualLength = 1.0f;
+		float fCurrentRotateDeltaDegrees = 0.0f;
 		bool bTransactionOpened = false;
 		bool bActive = false;
 	};

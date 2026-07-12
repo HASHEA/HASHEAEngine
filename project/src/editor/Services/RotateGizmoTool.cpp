@@ -19,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 namespace AshEditor
 {
@@ -35,8 +36,16 @@ namespace AshEditor
 		constexpr float kRotateRingMarkerHalfExtent = 4.5f;
 		constexpr float kRotateRingMarkerOutlineThickness = 1.25f;
 		constexpr float kRotateRingShadowExtraThickness = 2.0f;
+		constexpr float kRotateActiveWedgeStepDegrees = 6.0f;
+		constexpr float kRotateActiveWedgeMaxDisplayDegrees = 360.0f;
+		constexpr float kRotateActiveWedgeFillThickness = 1.15f;
+		constexpr float kRotateActiveWedgeBoundaryThickness = 2.6f;
+		constexpr float kRotateActiveWedgeArrowLengthPixels = 13.0f;
+		constexpr float kRotateActiveWedgeArrowWidthPixels = 7.0f;
 		constexpr AshEngine::UIColor kRotateViewRingColor{ 0.93f, 0.95f, 0.99f, 0.36f };
 		constexpr AshEngine::UIColor kRotateRingShadowColor{ 0.04f, 0.05f, 0.07f, 0.78f };
+		constexpr AshEngine::UIColor kRotateActiveLabelFillColor{ 0.04f, 0.05f, 0.07f, 0.88f };
+		constexpr AshEngine::UIColor kRotateActiveLabelTextColor{ 0.98f, 0.98f, 0.94f, 0.98f };
 
 		using EditorGizmoInternal::HandleHit;
 		using EditorGizmoInternal::HandleKind;
@@ -201,6 +210,240 @@ namespace AshEditor
 					fResolvedThickness);
 			}
 		}
+
+		glm::vec3 RotateVectorAroundAxis(
+			const glm::vec3& vecDirection,
+			const glm::vec3& vecAxisDirection,
+			const float fDeltaDegrees)
+		{
+			const glm::vec3 vecAxis = NormalizeOrFallback(vecAxisDirection, glm::vec3(0.0f, 1.0f, 0.0f));
+			const float fRadians = glm::radians(fDeltaDegrees);
+			const float fCos = std::cos(fRadians);
+			const float fSin = std::sin(fRadians);
+			return
+				vecDirection * fCos +
+				glm::cross(vecAxis, vecDirection) * fSin +
+				vecAxis * glm::dot(vecAxis, vecDirection) * (1.0f - fCos);
+		}
+
+		AshEngine::UIColor MakeWedgeFillColor(const AshEngine::UIColor& refColor)
+		{
+			return { refColor.r, refColor.g, refColor.b, 0.14f };
+		}
+
+		AshEngine::UIColor MakeWedgeBoundaryColor(const AshEngine::UIColor& refColor)
+		{
+			return { refColor.r, refColor.g, refColor.b, 0.88f };
+		}
+
+		bool TryProjectRotateDirection(
+			const EditorGizmoInternal::ViewportContext& refViewportContext,
+			const EditorGizmoInternal::DragSession& refDragSession,
+			const float fDeltaDegrees,
+			glm::vec2& outScreenPosition)
+		{
+			const glm::vec3 vecDirection = NormalizeOrFallback(
+				RotateVectorAroundAxis(
+					refDragSession.vecStartPlaneDirection,
+					refDragSession.vecAxisDirection,
+					fDeltaDegrees),
+				refDragSession.vecStartPlaneDirection);
+			const glm::vec3 vecWorldPosition =
+				refDragSession.vecGizmoOrigin +
+				vecDirection * std::max(refDragSession.fAxisVisualLength, 0.001f);
+			float fDepth = 0.0f;
+			return TryProjectWorldToViewport(refViewportContext, vecWorldPosition, outScreenPosition, fDepth);
+		}
+
+		float ClampRotateWedgeDisplayDegrees(const float fRotateDeltaDegrees)
+		{
+			return std::clamp(
+				fRotateDeltaDegrees,
+				-kRotateActiveWedgeMaxDisplayDegrees,
+				kRotateActiveWedgeMaxDisplayDegrees);
+		}
+
+		void DrawRotateWedgeArrow(
+			AshEngine::UIContext& refUi,
+			const glm::vec2& vecCenterScreen,
+			const glm::vec2& vecCurrentScreen,
+			const float fRotateDeltaDegrees,
+			const AshEngine::UIColor& refColor)
+		{
+			const glm::vec2 vecRadial = vecCurrentScreen - vecCenterScreen;
+			const float fRadialLength = glm::length(vecRadial);
+			if (fRadialLength <= 0.001f)
+			{
+				return;
+			}
+
+			const glm::vec2 vecForward = vecRadial / fRadialLength;
+			const float fDirectionSign = fRotateDeltaDegrees >= 0.0f ? 1.0f : -1.0f;
+			const glm::vec2 vecTangent{ -vecForward.y * fDirectionSign, vecForward.x * fDirectionSign };
+			const glm::vec2 vecTip = vecCurrentScreen + vecTangent * kRotateActiveWedgeArrowLengthPixels;
+			const glm::vec2 vecLeft =
+				vecCurrentScreen -
+				vecTangent * kRotateActiveWedgeArrowWidthPixels +
+				vecForward * kRotateActiveWedgeArrowWidthPixels;
+			const glm::vec2 vecRight =
+				vecCurrentScreen -
+				vecTangent * kRotateActiveWedgeArrowWidthPixels -
+				vecForward * kRotateActiveWedgeArrowWidthPixels;
+
+			refUi.draw_window_line(
+				{ vecTip.x, vecTip.y },
+				{ vecLeft.x, vecLeft.y },
+				refColor,
+				kRotateActiveWedgeBoundaryThickness);
+			refUi.draw_window_line(
+				{ vecTip.x, vecTip.y },
+				{ vecRight.x, vecRight.y },
+				refColor,
+				kRotateActiveWedgeBoundaryThickness);
+		}
+
+		void DrawRotateWedgeLabel(
+			AshEngine::UIContext& refUi,
+			const glm::vec2& vecCenterScreen,
+			const glm::vec2& vecLabelAnchorScreen,
+			const float fRotateDeltaDegrees,
+			const AshEngine::UIColor& refColor)
+		{
+			char pLabel[64]{};
+			std::snprintf(
+				pLabel,
+				sizeof(pLabel),
+				"%+.1f deg",
+				static_cast<double>(fRotateDeltaDegrees));
+
+			const glm::vec2 vecLabelOffset = vecLabelAnchorScreen - vecCenterScreen;
+			const float fLabelOffsetLength = glm::length(vecLabelOffset);
+			const glm::vec2 vecAnchorDirection =
+				fLabelOffsetLength > 0.001f
+				? vecLabelOffset / fLabelOffsetLength
+				: glm::vec2(1.0f, 0.0f);
+			const AshEngine::UIVec2 vecTextSize = refUi.calc_text_size(pLabel);
+			const glm::vec2 vecLabelPosition{
+				vecLabelAnchorScreen.x + vecAnchorDirection.x * 14.0f,
+				vecLabelAnchorScreen.y + vecAnchorDirection.y * 14.0f
+			};
+			const AshEngine::UIRect rectLabel{
+				vecLabelPosition.x - 7.0f,
+				vecLabelPosition.y - (vecTextSize.y * 0.5f) - 4.0f,
+				vecTextSize.x + 14.0f,
+				vecTextSize.y + 8.0f
+			};
+
+			refUi.draw_window_rect_filled(rectLabel, kRotateActiveLabelFillColor, 4.0f);
+			refUi.draw_window_rect(rectLabel, refColor, 4.0f, 1.35f);
+			refUi.draw_window_text(
+				{ rectLabel.x + 7.0f, rectLabel.y + 4.0f },
+				kRotateActiveLabelTextColor,
+				pLabel);
+		}
+
+		void DrawActiveRotateAngleOverlay(
+			AshEngine::UIContext& refUi,
+			const EditorGizmoInternal::ViewportContext& refViewportContext,
+			const EditorGizmoInternal::DragSession& refDragSession,
+			const AshEngine::UIColor& refAxisColor)
+		{
+			if (!refDragSession.bActive || refDragSession.eMode != GizmoMode::Rotate)
+			{
+				return;
+			}
+
+			glm::vec2 vecCenterScreen{ 0.0f };
+			float fCenterDepth = 0.0f;
+			if (!TryProjectWorldToViewport(
+				refViewportContext,
+				refDragSession.vecGizmoOrigin,
+				vecCenterScreen,
+				fCenterDepth))
+			{
+				return;
+			}
+
+			const float fDisplayDeltaDegrees =
+				ClampRotateWedgeDisplayDegrees(refDragSession.fCurrentRotateDeltaDegrees);
+			if (std::abs(fDisplayDeltaDegrees) <= 0.001f)
+			{
+				return;
+			}
+
+			glm::vec2 vecPreviousScreen{ 0.0f };
+			if (!TryProjectRotateDirection(refViewportContext, refDragSession, 0.0f, vecPreviousScreen))
+			{
+				return;
+			}
+
+			const AshEngine::UIColor colorFill = MakeWedgeFillColor(refAxisColor);
+			const AshEngine::UIColor colorBoundary = MakeWedgeBoundaryColor(refAxisColor);
+			const int32_t iStepCount = std::max(
+				2,
+				static_cast<int32_t>(
+					std::ceil(std::abs(fDisplayDeltaDegrees) / kRotateActiveWedgeStepDegrees)));
+			for (int32_t iStepIndex = 1; iStepIndex <= iStepCount; ++iStepIndex)
+			{
+				const float fStepDeltaDegrees =
+					fDisplayDeltaDegrees *
+					(static_cast<float>(iStepIndex) / static_cast<float>(iStepCount));
+				glm::vec2 vecCurrentScreen{ 0.0f };
+				if (!TryProjectRotateDirection(
+					refViewportContext,
+					refDragSession,
+					fStepDeltaDegrees,
+					vecCurrentScreen))
+				{
+					continue;
+				}
+
+				refUi.draw_window_line(
+					{ vecCenterScreen.x, vecCenterScreen.y },
+					{ vecCurrentScreen.x, vecCurrentScreen.y },
+					colorFill,
+					kRotateActiveWedgeFillThickness);
+				refUi.draw_window_line(
+					{ vecPreviousScreen.x, vecPreviousScreen.y },
+					{ vecCurrentScreen.x, vecCurrentScreen.y },
+					{ refAxisColor.r, refAxisColor.g, refAxisColor.b, 0.42f },
+					2.2f);
+				vecPreviousScreen = vecCurrentScreen;
+			}
+
+			glm::vec2 vecStartScreen{ 0.0f };
+			glm::vec2 vecCurrentScreen{ 0.0f };
+			glm::vec2 vecLabelAnchorScreen{ 0.0f };
+			if (!TryProjectRotateDirection(refViewportContext, refDragSession, 0.0f, vecStartScreen) ||
+				!TryProjectRotateDirection(refViewportContext, refDragSession, fDisplayDeltaDegrees, vecCurrentScreen) ||
+				!TryProjectRotateDirection(refViewportContext, refDragSession, fDisplayDeltaDegrees * 0.5f, vecLabelAnchorScreen))
+			{
+				return;
+			}
+
+			refUi.draw_window_line(
+				{ vecCenterScreen.x, vecCenterScreen.y },
+				{ vecStartScreen.x, vecStartScreen.y },
+				{ 0.98f, 0.98f, 0.92f, 0.88f },
+				kRotateActiveWedgeBoundaryThickness);
+			refUi.draw_window_line(
+				{ vecCenterScreen.x, vecCenterScreen.y },
+				{ vecCurrentScreen.x, vecCurrentScreen.y },
+				colorBoundary,
+				kRotateActiveWedgeBoundaryThickness + 0.65f);
+			DrawRotateWedgeArrow(
+				refUi,
+				vecCenterScreen,
+				vecCurrentScreen,
+				refDragSession.fCurrentRotateDeltaDegrees,
+				colorBoundary);
+			DrawRotateWedgeLabel(
+				refUi,
+				vecCenterScreen,
+				vecLabelAnchorScreen,
+				refDragSession.fCurrentRotateDeltaDegrees,
+				colorBoundary);
+		}
 	}
 
 	bool RotateGizmoTool::TryBuildVisual(
@@ -349,6 +592,10 @@ namespace AshEditor
 				bViewActive
 				? (kRotateViewRingLineThickness + 1.4f)
 				: (bViewHovered ? (kRotateViewRingLineThickness + 0.8f) : kRotateViewRingLineThickness);
+			if (bViewActive)
+			{
+				DrawActiveRotateAngleOverlay(refUi, refViewportContext, refDragSession, viewRingColor);
+			}
 			DrawRotateRingSegments(refUi, refVisual.viewRing, viewRingColor, fViewRingThickness, false);
 
 			static constexpr std::array<size_t, 4> kViewMarkerSamples{
@@ -425,6 +672,10 @@ namespace AshEditor
 				bIsActive
 				? kRotateGizmoActiveLineThickness
 				: (bIsHovered ? kRotateGizmoHoverLineThickness : kRotateGizmoLineThickness);
+			if (bIsActive)
+			{
+				DrawActiveRotateAngleOverlay(refUi, refViewportContext, refDragSession, color);
+			}
 			axisStates[uAxisIndex] = { &refRing, color, fThickness, bIsActive, bIsHovered, uAxisIndex };
 		}
 
@@ -625,7 +876,7 @@ namespace AshEditor
 		const SceneService& refSceneService,
 		const EditorGizmoState& refGizmoState,
 		const glm::vec2& vecMousePosition,
-		EditorGizmoInternal::GizmoDragUpdate& outUpdate) const
+		EditorGizmoInternal::GizmoDragUpdate& outUpdate)
 	{
 		outUpdate = {};
 		if (!_dragSession.bActive || _dragSession.eMode != GizmoMode::Rotate)
@@ -653,6 +904,7 @@ namespace AshEditor
 			vecCurrentPlaneDirection,
 			_dragSession.vecAxisDirection));
 		fRotateDeltaDegrees = SnapRotateDeltaDegrees(fRotateDeltaDegrees, refGizmoState);
+		_dragSession.fCurrentRotateDeltaDegrees = fRotateDeltaDegrees;
 
 		outUpdate.fRotateDeltaDegrees = fRotateDeltaDegrees;
 		outUpdate.bHasRotateDelta = true;
