@@ -44,6 +44,20 @@ namespace
 		CHECK(property->range_max == doctest::Approx(maximum));
 	}
 
+	void CheckPropertyText(
+		const AshEngine::SceneComponentDesc& descriptor,
+		const std::string& name,
+		const std::string& display_name,
+		const std::string& tooltip)
+	{
+		const AshEngine::ScenePropertyDesc* property = FindProperty(descriptor, name);
+		REQUIRE(property != nullptr);
+		REQUIRE(property->display_name != nullptr);
+		REQUIRE(property->tooltip != nullptr);
+		CHECK(std::string(property->display_name) == display_name);
+		CHECK(std::string(property->tooltip) == tooltip);
+	}
+
 	void WriteJson(const fs::path& path, const json& value)
 	{
 		std::ofstream output(path);
@@ -84,6 +98,11 @@ namespace
 		CHECK(actual.end_color.y == doctest::Approx(expected.end_color.y));
 		CHECK(actual.end_color.z == doctest::Approx(expected.end_color.z));
 		CHECK(actual.end_color.w == doctest::Approx(expected.end_color.w));
+		CHECK(actual.sprite_texture_path == expected.sprite_texture_path);
+		CHECK(actual.radial_falloff == doctest::Approx(expected.radial_falloff));
+		CHECK(actual.radial_sharpness == doctest::Approx(expected.radial_sharpness));
+		CHECK(actual.soft_particles == expected.soft_particles);
+		CHECK(actual.soft_fade_distance == doctest::Approx(expected.soft_fade_distance));
 		CHECK(actual.blend_mode == expected.blend_mode);
 		CHECK(actual.random_seed == expected.random_seed);
 		CHECK(actual.emitting == expected.emitting);
@@ -97,7 +116,7 @@ TEST_CASE("ParticleComponent descriptor exposes stable enum and editor ranges")
 	REQUIRE(descriptor != nullptr);
 	CHECK(std::string(descriptor->name) == "ParticleComponent");
 	CHECK(descriptor->byte_size == sizeof(AshEngine::ParticleComponent));
-	CHECK(descriptor->property_count == 14u);
+	CHECK(descriptor->property_count == 19u);
 
 	const AshEngine::ScenePropertyDesc* capacity = FindProperty(*descriptor, "max_particles");
 	REQUIRE(capacity != nullptr);
@@ -110,6 +129,45 @@ TEST_CASE("ParticleComponent descriptor exposes stable enum and editor ranges")
 	CheckPropertyRange(*descriptor, "spread_angle_degrees", 0.0f, 90.0f);
 	CheckPropertyRange(*descriptor, "start_size", 0.0f, 10.0f);
 	CheckPropertyRange(*descriptor, "end_size", 0.0f, 10.0f);
+	CheckPropertyRange(*descriptor, "radial_falloff", 0.0f, 1.0f);
+	CheckPropertyRange(*descriptor, "radial_sharpness", 0.25f, 8.0f);
+	CheckPropertyRange(*descriptor, "soft_fade_distance", 0.001f, 10.0f);
+
+	const AshEngine::ScenePropertyDesc* sprite_texture = FindProperty(*descriptor, "sprite_texture_path");
+	REQUIRE(sprite_texture != nullptr);
+	CHECK(sprite_texture->type == AshEngine::ScenePropertyType::String);
+	CHECK(sprite_texture->editor_hint == AshEngine::ScenePropertyEditorHint::AssetPath);
+	CHECK(sprite_texture->asset_ref_kind == AshEngine::ScenePropertyAssetRefKind::Texture);
+
+	const AshEngine::ScenePropertyDesc* soft_particles = FindProperty(*descriptor, "soft_particles");
+	REQUIRE(soft_particles != nullptr);
+	CHECK(soft_particles->type == AshEngine::ScenePropertyType::Bool);
+
+	CheckPropertyText(
+		*descriptor,
+		"sprite_texture_path",
+		"Sprite Texture",
+		"RGBA sprite texture; empty uses the default white sprite.");
+	CheckPropertyText(
+		*descriptor,
+		"radial_falloff",
+		"Radial Falloff",
+		"Blend between sprite-only and the analytic radial mask.");
+	CheckPropertyText(
+		*descriptor,
+		"radial_sharpness",
+		"Radial Sharpness",
+		"Power exponent for the analytic radial mask.");
+	CheckPropertyText(
+		*descriptor,
+		"soft_particles",
+		"Soft Particles",
+		"Fade near opaque scene depth intersections.");
+	CheckPropertyText(
+		*descriptor,
+		"soft_fade_distance",
+		"Soft Fade Distance",
+		"World-space depth interval used by soft particles.");
 
 	const AshEngine::ScenePropertyDesc* blend_mode = FindProperty(*descriptor, "blend_mode");
 	REQUIRE(blend_mode != nullptr);
@@ -161,6 +219,11 @@ TEST_CASE("ParticleComponent facade, extraction, and scene serialization preserv
 	expected.end_size = 0.08f;
 	expected.start_color = { 0.9f, 0.6f, 0.2f, 0.8f };
 	expected.end_color = { 0.1f, 0.2f, 0.7f, 0.0f };
+	expected.sprite_texture_path = "textures/particles/T_ParticleSmoke.png";
+	expected.radial_falloff = 0.35f;
+	expected.radial_sharpness = 3.5f;
+	expected.soft_particles = false;
+	expected.soft_fade_distance = 0.75f;
 	expected.blend_mode = AshEngine::ParticleBlendMode::AlphaBlend;
 	expected.random_seed = 0x1234abcdU;
 	expected.emitting = false;
@@ -189,9 +252,15 @@ TEST_CASE("ParticleComponent facade, extraction, and scene serialization preserv
 	REQUIRE(scene.save_to_file(scene_path, &error_message));
 	CHECK(error_message.empty());
 	json saved_json = ReadJson(scene_path);
-	CHECK(saved_json.at("version") == 5u);
+	CHECK(saved_json.at("version") == 6u);
 	REQUIRE(saved_json.at("entities").size() == 1u);
-	CHECK(saved_json.at("entities")[0].at("particle").at("blend_mode") == "AlphaBlend");
+	const json& saved_particle = saved_json.at("entities")[0].at("particle");
+	CHECK(saved_particle.at("sprite_texture_path") == expected.sprite_texture_path);
+	CHECK(saved_particle.at("radial_falloff") == doctest::Approx(expected.radial_falloff));
+	CHECK(saved_particle.at("radial_sharpness") == doctest::Approx(expected.radial_sharpness));
+	CHECK(saved_particle.at("soft_particles") == expected.soft_particles);
+	CHECK(saved_particle.at("soft_fade_distance") == doctest::Approx(expected.soft_fade_distance));
+	CHECK(saved_particle.at("blend_mode") == "AlphaBlend");
 
 	AshEngine::Scene loaded = AshEngine::Scene::load_from_file(scene_path, &error_message);
 	REQUIRE_MESSAGE(loaded.is_valid(), error_message);
@@ -200,14 +269,36 @@ TEST_CASE("ParticleComponent facade, extraction, and scene serialization preserv
 	REQUIRE(loaded_emitter.has_particle_component());
 	CheckParticleComponentMatches(loaded_emitter.get_particle_component(), expected);
 
+	json legacy_v5_json = saved_json;
+	legacy_v5_json["version"] = 5u;
+	json& legacy_v5_particle = legacy_v5_json["entities"][0]["particle"];
+	legacy_v5_particle.erase("sprite_texture_path");
+	legacy_v5_particle.erase("radial_falloff");
+	legacy_v5_particle.erase("radial_sharpness");
+	legacy_v5_particle.erase("soft_particles");
+	legacy_v5_particle.erase("soft_fade_distance");
+	WriteJson(scene_path, legacy_v5_json);
+	AshEngine::Scene legacy_v5_loaded = AshEngine::Scene::load_from_file(scene_path, &error_message);
+	REQUIRE_MESSAGE(legacy_v5_loaded.is_valid(), error_message);
+	const AshEngine::Entity legacy_v5_emitter = legacy_v5_loaded.find_entity(emitter.get_id());
+	REQUIRE(legacy_v5_emitter.has_particle_component());
+	const AshEngine::ParticleComponent defaults{};
+	const AshEngine::ParticleComponent legacy_v5_component = legacy_v5_emitter.get_particle_component();
+	CHECK(legacy_v5_component.sprite_texture_path == defaults.sprite_texture_path);
+	CHECK(legacy_v5_component.radial_falloff == doctest::Approx(defaults.radial_falloff));
+	CHECK(legacy_v5_component.radial_sharpness == doctest::Approx(defaults.radial_sharpness));
+	CHECK(legacy_v5_component.soft_particles == defaults.soft_particles);
+	CHECK(legacy_v5_component.soft_fade_distance == doctest::Approx(defaults.soft_fade_distance));
+	CHECK(legacy_v5_component.blend_mode == AshEngine::ParticleBlendMode::AlphaBlend);
+
 	CHECK(AshEngine::can_remove_scene_component(loaded_emitter, AshEngine::SceneComponentType::Particle));
 	CHECK(AshEngine::remove_scene_component(loaded_emitter, AshEngine::SceneComponentType::Particle));
 	CHECK_FALSE(loaded_emitter.has_particle_component());
 
-	saved_json["version"] = 4u;
-	saved_json["entities"][0]["particle"]["blend_mode"] =
+	legacy_v5_json["version"] = 4u;
+	legacy_v5_json["entities"][0]["particle"]["blend_mode"] =
 		static_cast<int32_t>(AshEngine::ParticleBlendMode::AlphaBlend);
-	WriteJson(scene_path, saved_json);
+	WriteJson(scene_path, legacy_v5_json);
 	AshEngine::Scene legacy_loaded = AshEngine::Scene::load_from_file(scene_path, &error_message);
 	REQUIRE_MESSAGE(legacy_loaded.is_valid(), error_message);
 	const AshEngine::Entity legacy_emitter = legacy_loaded.find_entity(emitter.get_id());
@@ -261,6 +352,9 @@ TEST_CASE("ParticleComponent add and set sanitize values before storing engine s
 	invalid.end_size = -1.0f;
 	invalid.start_color = { -1.0f, 0.25f, 2.0f, std::numeric_limits<float>::quiet_NaN() };
 	invalid.end_color = { std::numeric_limits<float>::infinity(), 0.3f, -1.0f, 2.0f };
+	invalid.radial_falloff = -1.0f;
+	invalid.radial_sharpness = std::numeric_limits<float>::infinity();
+	invalid.soft_fade_distance = 11.0f;
 	invalid.blend_mode = static_cast<AshEngine::ParticleBlendMode>(255u);
 	REQUIRE(emitter.add_particle_component(invalid));
 
@@ -285,6 +379,9 @@ TEST_CASE("ParticleComponent add and set sanitize values before storing engine s
 	CHECK(sanitized.end_color.y == doctest::Approx(0.3f));
 	CHECK(sanitized.end_color.z == doctest::Approx(0.0f));
 	CHECK(sanitized.end_color.w == doctest::Approx(1.0f));
+	CHECK(sanitized.radial_falloff == doctest::Approx(0.0f));
+	CHECK(sanitized.radial_sharpness == doctest::Approx(defaults.radial_sharpness));
+	CHECK(sanitized.soft_fade_distance == doctest::Approx(10.0f));
 	CHECK(sanitized.blend_mode == AshEngine::ParticleBlendMode::Additive);
 
 	invalid.max_particles = std::numeric_limits<uint32_t>::max();
@@ -311,7 +408,7 @@ TEST_CASE("ParticleComponent JSON load falls back safely for malformed fields")
 
 	json malformed =
 	{
-		{ "version", 5u },
+		{ "version", 6u },
 		{ "name", "Malformed Particle" },
 		{ "entities", json::array({
 			{
@@ -324,6 +421,11 @@ TEST_CASE("ParticleComponent JSON load falls back safely for malformed fields")
 					{ "constant_acceleration", json::array({ 1.0f, "bad", 3.0f }) },
 					{ "start_color", "red" },
 					{ "end_color", json::array({ 2.0f, -1.0f, 0.5f, 3.0f }) },
+					{ "sprite_texture_path", json::array() },
+					{ "radial_falloff", -5.0f },
+					{ "radial_sharpness", "sharp" },
+					{ "soft_particles", 42 },
+					{ "soft_fade_distance", 100.0f },
 					{ "blend_mode", "Unknown" },
 					{ "random_seed", 1.5 },
 					{ "emitting", 42 },
@@ -361,6 +463,11 @@ TEST_CASE("ParticleComponent JSON load falls back safely for malformed fields")
 	CHECK(sanitized.end_color.y == doctest::Approx(0.0f));
 	CHECK(sanitized.end_color.z == doctest::Approx(0.5f));
 	CHECK(sanitized.end_color.w == doctest::Approx(1.0f));
+	CHECK(sanitized.sprite_texture_path.empty());
+	CHECK(sanitized.radial_falloff == doctest::Approx(0.0f));
+	CHECK(sanitized.radial_sharpness == doctest::Approx(defaults.radial_sharpness));
+	CHECK(sanitized.soft_particles == defaults.soft_particles);
+	CHECK(sanitized.soft_fade_distance == doctest::Approx(10.0f));
 	CHECK(sanitized.blend_mode == AshEngine::ParticleBlendMode::Additive);
 	CHECK(sanitized.random_seed == defaults.random_seed);
 	CHECK(sanitized.emitting == defaults.emitting);

@@ -166,6 +166,11 @@ namespace AshEngine
 		float end_size = 0.02f;
 		glm::vec4 start_color{ 1.0f, 1.0f, 1.0f, 1.0f };
 		glm::vec4 end_color{ 1.0f, 1.0f, 1.0f, 0.0f };
+		std::string sprite_texture_path{};
+		float radial_falloff = 1.0f;
+		float radial_sharpness = 2.0f;
+		bool soft_particles = true;
+		float soft_fade_distance = 0.25f;
 		ParticleBlendMode blend_mode = ParticleBlendMode::Additive;
 		uint32_t random_seed = 0;
 		bool emitting = true;
