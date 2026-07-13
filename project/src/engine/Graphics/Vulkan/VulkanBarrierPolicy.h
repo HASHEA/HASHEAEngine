@@ -10,6 +10,9 @@ namespace RHI::VulkanBarrierPolicy
 	[[nodiscard]] inline constexpr auto const_buffer_stage_mask() noexcept
 		-> VkPipelineStageFlags
 	{
-		return VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+		return static_cast<VkPipelineStageFlags>(
+			VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
 	}
 } // namespace RHI::VulkanBarrierPolicy

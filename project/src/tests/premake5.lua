@@ -14,6 +14,8 @@ project "Tests"
 		"%{wks.location}/project/src/sandbox",
 		"%{wks.location}/project/src/tests",
 		thirdparty .. "/doctest",
+		thirdparty .. "/VulkanSDK/include",
+		thirdparty .. "/volk/include",
 		thirdparty .. "/spdlog/include",
 		thirdparty .. "/GLFW/include",
 		thirdparty .. "/ImGui",
