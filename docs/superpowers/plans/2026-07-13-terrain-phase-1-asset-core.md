@@ -18,7 +18,7 @@ Included:
 
 - 8193 x 8193 production layout and small synthetic layouts for unit tests.
 - `TerrainAssetId`, `TerrainLayerId`, `TerrainAssetSnapshot`, `TerrainComponentSnapshot`, and `TerrainDirtyComponentPayload`.
-- R16 base height mapping, sparse height/weight edit blocks, deterministic composition, six brush kernels, patch encoding, min/max pyramids, LOD error, and terrain-local queries.
+- R16 base height mapping, sparse height/weight edit blocks, deterministic composition, 7 tools across 6 brush-kernel families, patch encoding/replay, min/max pyramids, LOD error, and terrain-local queries.
 - `.AshTerrain` version 1, two index descriptors, CRC32, raw/RLE blocks, append-only incremental save, recovery, and optimize.
 - RAW R16/R32F, WIC 8/16-bit grayscale PNG, TinyEXR half/float single-channel import/export, crop and deterministic Catmull-Rom resampling.
 - `AssetType::Terrain`, sync/async Terrain load, exact immutable snapshot publication, exact invalidation, and load-state/error propagation.
@@ -78,7 +78,8 @@ namespace AshEngine
 
 - `project/src/engine/Function/Asset/TerrainData.h/.cpp` — public IDs, layout, block keys, immutable snapshot types, height mapping, flat terrain factory, ownership and halo helpers.
 - `project/src/engine/Function/Asset/TerrainComposition.h/.cpp` — sparse edit-layer composition, exact RGBA8 weight quantization, dirty-neighbor expansion, immutable component snapshot publication.
-- `project/src/engine/Function/Asset/TerrainBrush.h/.cpp` — world-distance stroke sampling, six pure brush kernels, changed-rectangle tracking, raw/RLE stroke patches.
+- `project/src/engine/Function/Asset/TerrainBrush.h/.cpp` — world-metric stroke sampling, six pure brush-kernel families, canonical changed-rectangle tracking, and public patch contracts.
+- `project/src/engine/Function/Asset/TerrainEditPatch.cpp` — exact logical-byte validation and atomic batch Undo/Redo replay.
 - `project/src/engine/Function/Asset/TerrainBlockCodec.h/.cpp` — deterministic byte RLE shared by stroke patches and container blocks.
 - `project/src/engine/Function/Asset/TerrainSpatialData.h/.cpp` — min/max hierarchy and per-LOD geometric error generation.
 - `project/src/engine/Function/Asset/TerrainContainer.h/.cpp` — public load/save/optimize reports and `.AshTerrain` orchestration.
@@ -106,7 +107,9 @@ namespace AshEngine
 
 - `project/src/tests/Terrain/terrain_data_tests.cpp`
 - `project/src/tests/Terrain/terrain_composition_tests.cpp`
+- `project/src/tests/Terrain/terrain_block_codec_tests.cpp`
 - `project/src/tests/Terrain/terrain_brush_tests.cpp`
+- `project/src/tests/Terrain/terrain_patch_tests.cpp`
 - `project/src/tests/Terrain/terrain_spatial_tests.cpp`
 - `project/src/tests/Terrain/terrain_query_tests.cpp`
 - `project/src/tests/Terrain/terrain_container_tests.cpp`
@@ -593,7 +596,7 @@ namespace AshEngine
 		std::string* out_error = nullptr) -> bool;
 
 	ASH_API auto publish_terrain_working_set(
-		const TerrainWorkingSet& working_set,
+		TerrainWorkingSet& working_set,
 		const std::vector<TerrainDirtyComponentPayload>& dirty_components,
 		std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot,
 		std::string* out_error = nullptr) -> bool;
@@ -606,7 +609,7 @@ Sort block lookup by `owner.z`, then `owner.x`; preserve layer vector order. App
 
 Each composed `TerrainComponentSnapshot` and its `TerrainDirtyComponentPayload` carry exactly `working_set.content_generation`.
 
-`make_terrain_working_set` copies immutable source arrays into mutable vectors. `publish_terrain_working_set` verifies every dirty payload matches the working-set generation, shares unchanged const component pointers, replaces dirty components by row-major index `z * component_count_x + x`, and publishes const copies of base heights/edit layers. It never mutates the input snapshot or an existing component.
+`make_terrain_working_set` copies immutable source arrays into mutable vectors. The initial Task 3 publication path verifies generations and shares unchanged const components; Task 4A tightens it to exact full-dirty-set matching, atomic working-set component replacement, and dirty clearing. Neither path mutates the input snapshot or an existing component.
 
 - [ ] **Step 7: Implement dirty neighbor expansion**
 
@@ -628,7 +631,68 @@ git diff --cached --check
 git commit -m "feat(terrain): compose sparse edit layers"
 ```
 
-## Task 4: Add frame-rate-independent stroke sampling and six brush kernels
+## Task 4A: Enforce canonical blocks and close generation/dirty publication
+
+**Files:**
+
+- Modify: `project/src/engine/Function/Asset/TerrainData.h`
+- Modify: `project/src/engine/Function/Asset/TerrainComposition.h`
+- Modify: `project/src/engine/Function/Asset/TerrainComposition.cpp`
+- Modify: `project/src/tests/Terrain/terrain_composition_tests.cpp`
+
+- [ ] **Step 1: Add RED canonical-block tests**
+
+Add fixtures with duplicate Height owners, duplicate Weight owners, an all-zero block, and a block whose non-zero coverage does not touch its declared outer rectangle. Assert deep working-set creation rejects each non-canonical domain independently, while one Height plus one Weight block for the same `(layer, owner)` remains valid. Lock the invariant that coverage is finite in `[0,1]`, every stored block is the minimal non-zero coverage rectangle, and block order is irrelevant because owner identity is unique.
+
+- [ ] **Step 2: Add RED generation/dirty publication tests**
+
+Extend `TerrainWorkingSet` expectations to cover a sorted, unique `dirty_components` vector. Assert:
+
+- a changed boundary sample contributes the full halo and merges without duplicates;
+- publication rejects missing, extra, duplicate, wrong-generation, or wrong-coordinate payloads;
+- every failed publication preserves working-set component pointers, dirty set, output snapshot, and generation;
+- exact payload success updates the working-set component pointers, clears dirty state, publishes the same pointers, and shares all unchanged component pointers.
+
+- [ ] **Step 3: Run the RED closure suite**
+
+```bat
+RunTests.bat Debug --test-case="Terrain composition*"
+```
+
+Expected: canonical duplicate and exact-dirty publication assertions fail.
+
+- [ ] **Step 4: Make dirty state explicit and publication atomic**
+
+Add `std::vector<TerrainComponentCoord> dirty_components{}` to `TerrainWorkingSet`. Change publication to take a mutable working set:
+
+```cpp
+ASH_API auto publish_terrain_working_set(
+    TerrainWorkingSet& working_set,
+    const std::vector<TerrainDirtyComponentPayload>& dirty_components,
+    std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot,
+    std::string* out_error = nullptr) -> bool;
+```
+
+Validate that payload coordinates are exactly equal to the full sorted working-set dirty vector and that payload/component generations equal `working_set.content_generation`. Build every throwing temporary first. On success, use only no-throw moves/swaps to replace the working-set component vector, clear dirty coordinates, and publish the immutable snapshot as one commit point. On failure, leave both inputs and the caller's previous `out_snapshot` untouched.
+
+- [ ] **Step 5: Enforce one canonical block per domain/owner**
+
+During shallow/deep layer validation, reject duplicate owner coordinates within `height_blocks` and within `weight_blocks`; do not reject the same owner across the two domains. Reject coverage outside `[0,1]`, all-zero stored blocks, and non-minimal zero-only outer rows/columns. Preserve deterministic traversal by sorting non-owning block pointers `owner.z`, then `owner.x`; do not reorder caller storage as a side effect.
+
+- [ ] **Step 6: Run GREEN and commit the closure**
+
+```bat
+RunTests.bat Debug --test-case="Terrain composition*"
+RunTests.bat Debug --test-case="Terrain data*"
+RunArchGate.bat
+git add project/src/engine/Function/Asset/TerrainData.h project/src/engine/Function/Asset/TerrainComposition.h project/src/engine/Function/Asset/TerrainComposition.cpp project/src/tests/Terrain/terrain_composition_tests.cpp
+git diff --cached --check
+git commit -m "feat(terrain): close dirty component publication"
+```
+
+Expected: focused suites and ArchGate pass; cached diff contains only the four named files.
+
+## Task 4B: Add deterministic RLE and world-metric stroke resampling
 
 **Files:**
 
@@ -636,165 +700,258 @@ git commit -m "feat(terrain): compose sparse edit layers"
 - Create: `project/src/engine/Function/Asset/TerrainBlockCodec.cpp`
 - Create: `project/src/engine/Function/Asset/TerrainBrush.h`
 - Create: `project/src/engine/Function/Asset/TerrainBrush.cpp`
+- Create: `project/src/tests/Terrain/terrain_block_codec_tests.cpp`
 - Create: `project/src/tests/Terrain/terrain_brush_tests.cpp`
 
-- [ ] **Step 1: Add a RED stroke resampling test**
+- [ ] **Step 1: Add RED RLE malformed-input tests**
 
-Build two input paths over the same straight world-space segment: one with endpoints only and one with ten intermediate points. With spacing `0.5`, assert `resample_terrain_stroke` emits identical sample positions and includes both endpoints.
+Round-trip empty, repeated, and mixed vectors. Assert encoding uses maximal runs and little-endian `(uint32 count, uint8 value)` records. For decode, lock zero count, truncated record, expected-size overflow, decoded-size mismatch, and trailing partial record failures; every encode/decode failure preserves the caller's previous output vector. Code review additionally verifies the encoder's `uint64_t remaining` loop splits a theoretical run longer than `UINT32_MAX` without allocating such a multi-gigabyte unit fixture.
 
-- [ ] **Step 2: Add RED kernel contract tests**
+- [ ] **Step 2: Add RED world-metric resampling tests**
 
-Use a 9 x 9 fixture and assert:
+Compare endpoint-only and densely subdivided representations of the same terrain-local polyline under non-uniform metric `{2, 0.5}`. Assert identical positions/pressures, exact first and final endpoints, linear pressure interpolation, no duplicate exact-spacing endpoint, later-sample replacement for adjacent metric-distance squared `<= 1e-12`, and the specified empty/single-point behavior. Add invalid finite/range cases for spacing, metric, position, and pressure.
 
-- Raise increases the center Additive delta; Lower decreases it.
-- Smooth reads the 1-sample neighbor halo and moves the center toward the four-neighbor average.
-- Flatten captures the first sample height once and writes Alpha target/coverage.
-- Noise produces byte-identical patches for the same world coordinates and seed, and a different patch for a different seed.
-- Paint increases the selected layer and returns weights summing to 255 after composition.
-- Erase redistributes to existing non-zero layers; if none remain, Layer 0 becomes 255.
-- Radius above 2048 meters is rejected rather than silently clamped.
-- RLE round-trips empty, repeated, and mixed byte vectors; zero-count, truncated, overflow, and wrong decoded-size inputs fail without partial output.
-
-- [ ] **Step 3: Run the RED brush suite**
+- [ ] **Step 3: Run the RED codec/sampling suites**
 
 ```bat
-RunTests.bat Debug --test-case="Terrain brush*"
+RunTests.bat Debug --test-case="Terrain block codec*"
+RunTests.bat Debug --test-case="Terrain stroke sampling*"
 ```
 
-Expected: compile fails because `TerrainBrush.h` does not exist.
+Expected: compile fails because the new headers do not exist.
 
-- [ ] **Step 4: Add the exact brush API**
+- [ ] **Step 4: Add the locked public brush and patch types**
 
-Create `TerrainBrush.h` with:
+Create `TerrainBrush.h` with these public shapes and no Editor dependency:
 
 ```cpp
-#pragma once
-
-#include "Function/Asset/TerrainBlockCodec.h"
-#include "Function/Asset/TerrainData.h"
-
-namespace AshEngine
+enum class TerrainBrushTool : uint8_t
 {
-	enum class TerrainBrushTool : uint8_t
-	{
-		Raise = 0,
-		Lower,
-		Smooth,
-		Flatten,
-		Noise,
-		Paint,
-		Erase
-	};
+    Raise = 0,
+    Lower,
+    Smooth,
+    Flatten,
+    Noise,
+    Paint,
+    Erase
+};
 
-	struct TerrainBrushParameters
-	{
-		TerrainBrushTool tool = TerrainBrushTool::Raise;
-		float radius_meters = 16.0f;
-		float strength = 1.0f;
-		float falloff = 0.5f;
-		float stroke_spacing_meters = 1.0f;
-		TerrainLayerId layer_id{};
-		uint32_t material_layer_index = 0;
-		uint64_t random_seed = 0;
-	};
+struct TerrainBrushMetric
+{
+    glm::vec2 world_meters_per_terrain_meter{ 1.0f, 1.0f };
+};
 
-	struct TerrainStrokeSample
-	{
-		glm::vec2 terrain_local_xz{};
-		float pressure = 1.0f;
-	};
+struct TerrainBrushParameters
+{
+    TerrainBrushTool tool = TerrainBrushTool::Raise;
+    float radius_meters = 16.0f;
+    float strength = 1.0f;
+    float falloff = 0.5f;
+    float stroke_spacing_meters = 1.0f;
+    TerrainLayerId layer_id{};
+    uint32_t material_layer_index = 0;
+    uint64_t random_seed = 0;
+};
 
-	enum class TerrainEditPatchDomain : uint8_t
-	{
-		Height = 0,
-		Weight
-	};
+struct TerrainStrokeSample
+{
+    glm::vec2 terrain_local_xz{};
+    float pressure = 1.0f;
+};
 
-	struct TerrainEditPatch
-	{
-		TerrainAssetId asset_id = 0;
-		TerrainLayerId layer_id{};
-		TerrainComponentCoord owner{};
-		TerrainEditPatchDomain domain = TerrainEditPatchDomain::Height;
-		TerrainSampleRect changed_rect{};
-		std::vector<uint8_t> before_bytes{};
-		std::vector<uint8_t> after_bytes{};
-		bool rle_encoded = false;
-	};
+enum class TerrainEditPatchDomain : uint8_t { Height = 0, Weight };
+enum class TerrainEditPatchDirection : uint8_t { Undo = 0, Redo };
 
-	ASH_API auto resample_terrain_stroke(
-		const std::vector<TerrainStrokeSample>& input,
-		float spacing_meters,
-		std::vector<TerrainStrokeSample>& out_samples,
-		std::string* out_error = nullptr) -> bool;
+struct TerrainEditPatch
+{
+    TerrainAssetId asset_id = 0;
+    TerrainLayerId layer_id{};
+    TerrainComponentCoord owner{};
+    TerrainEditPatchDomain domain = TerrainEditPatchDomain::Height;
+    TerrainSampleRect changed_rect{};
+    uint64_t stroke_generation = 0;
+    TerrainBlockCodec before_codec = TerrainBlockCodec::None;
+    TerrainBlockCodec after_codec = TerrainBlockCodec::None;
+    std::vector<uint8_t> before_bytes{};
+    std::vector<uint8_t> after_bytes{};
+};
 
-	ASH_API auto apply_terrain_brush_stroke(
-		TerrainWorkingSet& working_set,
-		const TerrainBrushParameters& params,
-		const std::vector<TerrainStrokeSample>& samples,
-		std::vector<TerrainEditPatch>& out_patches,
-		std::string* out_error = nullptr) -> bool;
-}
+ASH_API auto resample_terrain_stroke(
+    const std::vector<TerrainStrokeSample>& input,
+    const TerrainBrushMetric& metric,
+    float spacing_meters,
+    std::vector<TerrainStrokeSample>& out_samples,
+    std::string* out_error = nullptr) -> bool;
+
+ASH_API auto apply_terrain_brush_stroke(
+    TerrainWorkingSet& working_set,
+    const TerrainBrushParameters& params,
+    const TerrainBrushMetric& metric,
+    const std::vector<TerrainStrokeSample>& raw_input,
+    std::vector<TerrainEditPatch>& out_patches,
+    std::vector<TerrainComponentCoord>& out_dirty_components,
+    std::string* out_error = nullptr) -> bool;
+
+ASH_API auto apply_terrain_edit_patches(
+    TerrainWorkingSet& working_set,
+    const std::vector<TerrainEditPatch>& patches,
+    TerrainEditPatchDirection direction,
+    std::vector<TerrainComponentCoord>& out_dirty_components,
+    std::string* out_error = nullptr) -> bool;
 ```
 
-Create `TerrainBlockCodec.h` with one shared RLE contract used by both stroke patches and the later container:
+Both apply functions return the full sorted post-success `working_set.dirty_components` through `out_dirty_components`; replay failure preserves that output, while invalid brush input clears brush outputs as specified by the SDD.
+
+Create `TerrainBlockCodec.h` with:
 
 ```cpp
-#pragma once
+enum class TerrainBlockCodec : uint8_t { None = 0, Rle };
 
-#include "Base/hcore.h"
-#include <cstddef>
-#include <cstdint>
-#include <vector>
-
-namespace AshEngine
-{
-	enum class TerrainBlockCodec : uint8_t
-	{
-		None = 0,
-		Rle
-	};
-
-	ASH_API auto encode_terrain_rle(
-		const std::vector<uint8_t>& decoded,
-		std::vector<uint8_t>& out_encoded) -> bool;
-	ASH_API auto decode_terrain_rle(
-		const std::vector<uint8_t>& encoded,
-		size_t expected_decoded_size,
-		std::vector<uint8_t>& out_decoded) -> bool;
-}
+ASH_API auto encode_terrain_rle(
+    const std::vector<uint8_t>& decoded,
+    std::vector<uint8_t>& out_encoded) -> bool;
+ASH_API auto decode_terrain_rle(
+    const std::vector<uint8_t>& encoded,
+    size_t expected_decoded_size,
+    std::vector<uint8_t>& out_decoded) -> bool;
 ```
 
-Encode records as `(uint32 little-endian count, uint8 value)`. Reject zero counts, integer overflow, decoded-size mismatch, and trailing partial records.
+- [ ] **Step 5: Implement strict RLE**
 
-- [ ] **Step 5: Implement distance-based sampling**
+Encode maximal runs and split only a run longer than `UINT32_MAX`. Decode with checked addition before allocation/write. Build into a temporary vector and swap only after exact size validation. RLE is a byte codec only; raw Height/Weight logical schemas are added in Task 4C.
 
-Walk accumulated segment distance in double precision, emit at exact multiples of spacing, and carry remainder across input segments. Suppress adjacent duplicates using squared-distance epsilon `1e-12`. Never use frame index, delta time, or input point count in the result.
+- [ ] **Step 6: Implement metric resampling once**
 
-- [ ] **Step 6: Implement brush falloff and deterministic noise**
+Scale terrain-local deltas by both positive metric axes before measuring distance. Accumulate segment and next-emission distance in `double`, interpolate position and pressure at exact spacing multiples, carry remainder across segments, and append the exact final sample once. The public resampler exists for unit tests and diagnostics; `apply_terrain_brush_stroke` is the only production entry and will invoke it exactly once internally.
 
-Use normalized radial distance `r = distance / radius`, reject `r > 1`, and compute weight as `pow(1 - smoothstep(falloff, 1, r), 2) * pressure * strength`. Hash integer global sample X/Z and the full 64-bit seed with the same explicit integer operations on all platforms; convert the upper 24 hash bits to `[0,1]`.
-
-- [ ] **Step 7: Implement changed-rectangle patches**
-
-Capture before bytes on the first mutation of an owner block, shrink both before/after to the exact changed rectangle, encode raw and deterministic RLE, and keep whichever representation is smaller. Height-domain bytes contain the selected layer's height value plus coverage for every sample; Weight-domain bytes contain all eight layer weights plus coverage, so replay never needs the original brush tool or selected material index. Assert Raise/Lower/Smooth/Flatten/Noise emit `Height`, Paint/Erase emit `Weight`, and a patch with a domain/payload-size mismatch is rejected without mutation. An unchanged stroke returns an empty patch vector and leaves the generation unchanged. A changed stroke increments `TerrainWorkingSet::content_generation` exactly once, regardless of sample count; every resulting dirty payload/patch is associated with that new generation. Patches contain no Editor command or selection state.
-
-- [ ] **Step 8: Run the GREEN brush suite twice**
+- [ ] **Step 7: Run GREEN twice and commit primitives**
 
 ```bat
-RunTests.bat Debug --test-case="Terrain brush*"
-RunTests.bat Debug --test-case="Terrain brush*"
-```
-
-Expected: both runs pass with identical deterministic hashes printed by the noise test's `INFO` context.
-
-- [ ] **Step 9: Commit brush logic**
-
-```bat
-git add project/src/engine/Function/Asset/TerrainBlockCodec.h project/src/engine/Function/Asset/TerrainBlockCodec.cpp project/src/engine/Function/Asset/TerrainBrush.h project/src/engine/Function/Asset/TerrainBrush.cpp project/src/tests/Terrain/terrain_brush_tests.cpp
+RunTests.bat Debug --test-case="Terrain block codec*"
+RunTests.bat Debug --test-case="Terrain stroke sampling*"
+RunTests.bat Debug --test-case="Terrain stroke sampling*"
+git add project/src/engine/Function/Asset/TerrainBlockCodec.h project/src/engine/Function/Asset/TerrainBlockCodec.cpp project/src/engine/Function/Asset/TerrainBrush.h project/src/engine/Function/Asset/TerrainBrush.cpp project/src/tests/Terrain/terrain_block_codec_tests.cpp project/src/tests/Terrain/terrain_brush_tests.cpp
 git diff --cached --check
-git commit -m "feat(terrain): add deterministic brush kernels"
+git commit -m "feat(terrain): add world metric stroke sampling"
 ```
+
+Expected: both sampling runs are element-for-element identical; RLE tests pass.
+
+## Task 4C: Apply the six deterministic brush-kernel families
+
+**Files:**
+
+- Modify: `project/src/engine/Function/Asset/TerrainBrush.cpp`
+- Modify: `project/src/tests/Terrain/terrain_brush_tests.cpp`
+
+- [ ] **Step 1: Add RED validation and compatibility tests**
+
+Lock all finite/range constraints: `0 < radius <= 2048`, positive spacing and metric axes, strength/falloff/pressure in `[0,1]`, valid tool/layer, and Paint/Erase material index `< 8`. Assert Additive accepts only Raise/Lower/Noise, Alpha accepts only Smooth/Flatten, and Paint/Erase ignore height blend mode. Any incompatible or invalid stroke leaves working set/generation/dirty unchanged and clears patch/dirty outputs.
+
+- [ ] **Step 2: Add RED frozen-source and kernel tests**
+
+Use small multi-layer fixtures and assert:
+
+- the entire stroke reads frozen `Base + visible layers through selected`, never higher layers or pending component snapshots;
+- Raise/Lower share signed Additive math and Noise locks the approved SplitMix64 hash for fixed global coordinates/seed;
+- Smooth uses the frozen four-neighbor average with Terrain-edge coordinate clamp;
+- Flatten captures the first resampled dab's bilinear frozen height exactly once;
+- Paint uses a selected-lane one-hot target;
+- Erase zeroes the selected lane, renormalizes other non-zero frozen weights, and falls back to Layer 0;
+- `falloff == 1` has influence for `r < 1` and zero at/on/outside the boundary without a degenerate smoothstep.
+
+- [ ] **Step 3: Add RED canonical patch tests**
+
+Assert one changed stroke:
+
+- increments generation exactly once and stores that post-increment value in every `stroke_generation`;
+- emits at most one patch per `(layer, domain, owner)`, sorted `owner.z`, `owner.x`, Height before Weight;
+- stores minimal non-zero changed rectangles and merges the full halo into sorted unique dirty state;
+- serializes Height as little-endian `value, coverage` floats (8 bytes/sample) and Weight as eight target floats plus coverage (36 bytes/sample);
+- chooses raw/RLE independently for before and after, selecting RLE only when strictly smaller;
+- removes a canonical block when all resulting coverage is zero;
+- returns empty patches, no new dirty coordinates, and no generation change for an empty/no-op stroke.
+
+Include a reduced synthetic layout with large sample spacing to exercise the exact 2048 m boundary without allocating a production-size stroke. Use it to prove checked owner/area/byte arithmetic and touched-block-only candidates; do not copy `base_heights`, the whole working set, or untouched layer blocks, and do not add an arbitrary memory cap.
+
+- [ ] **Step 4: Run the RED kernel suite**
+
+```bat
+RunTests.bat Debug --test-case="Terrain brush*"
+```
+
+Expected: kernel/patch assertions fail because brush application is not implemented.
+
+- [ ] **Step 5: Freeze authoritative through-selected sources**
+
+Locate the selected layer by UUID, validate tool compatibility before allocation, and compose the frozen height/weight source directly from Base plus visible layers up to and including it. Do not read `TerrainComponentSnapshot` caches. Capture the Flatten target by bilinear sampling the first resampled dab. Allocate only owner-local frozen/candidate data needed by the stroke footprint.
+
+- [ ] **Step 6: Apply dabs in deterministic order**
+
+Use the exact SDD radial function. For Additive blocks, accumulate premultiplied signed contribution with `c' = a + c*(1-a)` and store `d' = p'/c'`. For Alpha height and Weight blocks, use source-over target/coverage. Hash Noise with the exact approved constants and unsigned wraparound. After all dabs, shrink or remove canonical blocks and generate deterministic patches from first-touch before logical bytes and final after logical bytes.
+
+- [ ] **Step 7: Commit the stroke atomically**
+
+Finish all candidate blocks, patches, dirty-union vectors, and checked generation before mutation. Commit by no-throw swaps, increment generation once, set each patch's `stroke_generation` to that new generation, and return the full post-stroke dirty set. Allocation, checked-arithmetic, validation, or generation-overflow failure leaves the working set unchanged.
+
+- [ ] **Step 8: Run GREEN twice and commit kernels**
+
+```bat
+RunTests.bat Debug --test-case="Terrain brush*"
+RunTests.bat Debug --test-case="Terrain brush*"
+git add project/src/engine/Function/Asset/TerrainBrush.cpp project/src/tests/Terrain/terrain_brush_tests.cpp
+git diff --cached --check
+git commit -m "feat(terrain): apply deterministic brush kernels"
+```
+
+Expected: both runs produce the same fixed Noise patch hash and all seven tools/six kernel families pass.
+
+## Task 4D: Replay Terrain edit patches atomically for Undo/Redo
+
+**Files:**
+
+- Create: `project/src/engine/Function/Asset/TerrainEditPatch.cpp`
+- Create: `project/src/tests/Terrain/terrain_patch_tests.cpp`
+
+- [ ] **Step 1: Add the full brush-to-history RED test**
+
+Apply a multi-owner brush, snapshot logical block bytes, call `apply_terrain_edit_patches(..., Undo, ...)`, then Redo. Assert Undo restores exact before bytes, Redo restores exact after bytes, each replay increments current generation exactly once rather than restoring `stroke_generation`, and both operations return the full halo dirty set.
+
+- [ ] **Step 2: Add RED batch atomicity and malformed tests**
+
+Cover invalid asset/layer/owner/domain/rect/codec/stride, duplicate `(layer, domain, owner)`, mixed stroke generations, zero-count/truncated/overflow/wrong-size RLE, non-finite logical floats, out-of-range coverage, current logical bytes not equal to the direction's source bytes, allocation failure injection, and `UINT64_MAX` generation. Put one bad patch after one valid patch and assert working set bytes, generation, dirty set, and caller output are all unchanged. Assert a target with all-zero coverage removes its canonical block. An empty batch succeeds without changing bytes/generation and returns the current full dirty vector.
+
+- [ ] **Step 3: Run the RED replay suite**
+
+```bat
+RunTests.bat Debug --test-case="Terrain patch*"
+```
+
+Expected: link fails because `apply_terrain_edit_patches` is not implemented.
+
+- [ ] **Step 4: Decode and validate the whole batch first**
+
+For Undo, require current logical bytes equal each patch's decoded `after` and target decoded `before`; reverse these for Redo. Validate every identity, rectangle, independent codec, exact logical stride, finite value, and coverage before building owner-local candidate blocks. `stroke_generation` is diagnostic/original ordering metadata: require one non-zero value shared by the batch, but never require current generation to equal it.
+
+- [ ] **Step 5: Build canonical candidates without partial mutation**
+
+Apply decoded target rectangles into copies of only the touched canonical blocks. Shrink zero-only borders, remove all-zero blocks, compute the full halo dirty union, and check the single next generation. Do not change caller outputs during validation/candidate construction.
+
+- [ ] **Step 6: Commit once and run GREEN**
+
+After every candidate succeeds, swap all touched layer block vectors and dirty/generation state in one no-throw commit. Set `out_dirty_components` to the full post-replay working-set dirty vector only on success.
+
+```bat
+RunTests.bat Debug --test-case="Terrain patch*"
+RunTests.bat Debug --test-case="Terrain brush*"
+RunTests.bat Debug --test-case="Terrain composition*"
+RunArchGate.bat
+git add project/src/engine/Function/Asset/TerrainEditPatch.cpp project/src/tests/Terrain/terrain_patch_tests.cpp
+git diff --cached --check
+git commit -m "feat(terrain): replay edit patches atomically"
+```
+
+Expected: complete brush -> patch -> Undo -> Redo and every failure-atomicity case pass.
 
 ## Task 5: Build min/max data, LOD error, and snapshot-local queries
 

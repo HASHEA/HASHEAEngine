@@ -26,7 +26,8 @@ Editor code may include Function headers but must not include `Graphics/`, Vulka
 
 - `project/src/editor/Services/TerrainEditorService.h/.cpp`: sole session owner, intent queue, stroke sequencing, async compose/save/load coordination, dirty content generation, conflict state, and immutable preview state.
 - `project/src/editor/Core/TerrainEditorSessionCore.h/.cpp`: UI-free deterministic session state, intent reduction, content-generation/sequence arbitration, and preview values used by the service and tests.
-- `project/src/editor/Core/TerrainCommands.h/.cpp`: stroke patch and layer-stack commands; no UI drawing.
+- `project/src/editor/Core/TerrainCommands.h/.cpp`: stroke patch and layer-stack commands; no UI drawing or duplicate patch replay.
+- `project/src/editor/Core/IEditorCommandExecutor.h`, `Services/UndoRedoService.h/.cpp`: explicit already-executed command recording used after an Engine brush transaction; normal commands keep execute-before-record behavior.
 - `project/src/editor/Panels/Inspector/TerrainComponentEditor.h/.cpp`: TerrainComponent asset/visibility/shadow fields and enter-mode action.
 - `project/src/editor/Panels/Inspector/InspectorPanelState.h`, `IInspectorComponentHost.h`, `InspectorPanelDrafts.cpp`, `InspectorComponentEditorRegistry.cpp`: Terrain draft plumbing only.
 - `project/src/editor/Core/EntityCommands.h/.cpp`: add/edit/remove TerrainComponent command.
@@ -310,6 +311,8 @@ struct TerrainEditorIntent
     TerrainLayerId layer_id{};
     uint64_t sequence = 0;
     glm::vec3 world_position{ 0.0f };
+    AshEngine::TerrainStrokeSample stroke_sample{};
+    AshEngine::TerrainBrushMetric brush_metric{};
     TerrainBrushParameters brush{};
     TerrainLayerActionIntent layer_action{};
     std::filesystem::path asset_path{};
@@ -370,55 +373,64 @@ Expected: one lifecycle/ownership commit.
 - Create: `project/src/editor/Core/TerrainCommands.h`
 - Create: `project/src/editor/Core/TerrainCommands.cpp`
 - Create: `project/src/tests/Editor/terrain_commands_tests.cpp`
+- Modify: `project/src/editor/Core/IEditorCommandExecutor.h`
 - Modify: `project/src/editor/Core/EditorContext.h`
+- Modify: `project/src/editor/Services/UndoRedoService.h`
+- Modify: `project/src/editor/Services/UndoRedoService.cpp`
+- Modify: `project/src/editor/App/EditorApplicationImpl.h`
+- Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
 - Modify: `project/src/editor/Services/TerrainEditorService.h`
 - Modify: `project/src/editor/Services/TerrainEditorService.cpp`
 - Modify by Terrain-only hunk: `project/src/tests/premake5.lua`
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
 
-- [ ] **Step 1: Add Engine-linked stroke patch RED tests**
+- [ ] **Step 1: Add Engine-linked command replay RED tests**
 
 ```cpp
-TEST_CASE("Terrain stroke patch restores exact bytes and ignores empty changes")
+TEST_CASE("Terrain stroke command replays the Engine patch API by stable identity")
 {
-    AshEditor::TerrainEditorSessionCore core{};
     AshEngine::TerrainWorkingSet pristine = TerrainTests::MakeSmallTerrainWorkingSet();
     AshEngine::TerrainWorkingSet edited = pristine;
     const auto before = TerrainTests::SnapshotBlockBytes(pristine, { 0, 0 });
-    const std::vector<AshEngine::TerrainEditPatch> patches = TerrainTests::MakeRaisePatches(edited, { 8.0f, 0.5f });
+    const std::vector<AshEngine::TerrainEditPatch> patches = TerrainTests::ApplyRaiseStroke(edited);
     CHECK_FALSE(patches.empty());
-    REQUIRE(core.Open(std::move(pristine)));
-    CHECK(core.ApplyPatches(patches, AshEditor::TerrainPatchDirection::Forward));
-    CHECK(core.ApplyPatches(patches, AshEditor::TerrainPatchDirection::Backward));
-    CHECK(TerrainTests::SnapshotBlockBytes(*core.GetWorkingSet(), { 0, 0 }) == before);
-    CHECK(TerrainTests::MakeNoChangePatches(edited).empty());
+    TerrainEditorServiceHarness harness = MakeTerrainEditorServiceHarness(std::move(pristine));
+    AshEditor::EditorContext context{};
+    context.pTerrainEditorService = &harness.service;
+    AshEditor::TerrainStrokeCommand command(
+        harness.asset_id, harness.layer_id, 3, patches);
+    CHECK(command.Execute(context));
+    CHECK(harness.SnapshotBlock(0, 0) != before);
+    CHECK(command.Undo(context));
+    CHECK(harness.SnapshotBlock(0, 0) == before);
 }
 ```
 
-- [ ] **Step 2: Run the patch test and observe RED**
+- [ ] **Step 2: Add an already-executed history RED test**
+
+Start the harness in the brush-produced `edited` state, create a `TerrainStrokeCommand` from its patches, and call `IEditorCommandExecutor::RecordExecutedCommand`. Assert recording does not call `Execute` and therefore does not double-apply the stroke. Then assert Undo restores exact before bytes and Redo restores exact after bytes. Add an empty-patch case that records no history entry.
+
+- [ ] **Step 3: Run the command tests and observe RED**
 
 ```powershell
-.\RunTests.bat Debug --test-case="Terrain stroke patch*"
+.\RunTests.bat Debug --test-case="Terrain stroke command*"
+.\RunTests.bat Debug --test-case="Terrain already-executed command*"
 ```
 
-Expected: patch direction, exact restore, or empty-patch assertion fails.
+Expected: command/history contracts fail because the already-executed path does not exist.
 
-- [ ] **Step 3: Complete the Phase 1 patch behavior**
+- [ ] **Step 4: Add a precise already-executed command path**
 
-Use Phase 1 `TerrainEditPatch` exactly: asset id, 16-byte layer id, component `owner.x/owner.z`, `Height`/`Weight` domain, changed rectangle, deterministic raw/RLE before bytes, and after bytes. Validate the domain-specific byte stride before mutation. One stroke returns `std::vector<TerrainEditPatch>` because it can cross component boundaries; the Editor command owns the stroke sequence. Add this UI-free Editor replay contract to `TerrainEditorSessionCore.h`:
+Extend `IEditorCommandExecutor` with:
 
 ```cpp
-enum class TerrainPatchDirection : uint8_t { Forward, Backward };
-bool ApplyPatches(
-    const std::vector<AshEngine::TerrainEditPatch>& patches,
-    TerrainPatchDirection direction,
-    std::string* out_error = nullptr);
+virtual bool RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
 ```
 
-Decode each raw/RLE rectangle into temporary bytes first, validate every asset/layer/owner/size against the core-owned working set, then apply the full vector in stable `owner.z/owner.x` order. A validation failure changes no working-set bytes. Backward then forward replay must be byte-exact and content-generation-monotonic.
+Add `UndoRedoService::RecordExecuted(std::unique_ptr<EditorCommand>, EditorContext&)`. It never calls `EditorCommand::Execute`; it pre-reserves the destination history storage, then clears redo, records one normal history state (or appends to the current transaction), applies post-execute selection, and publishes the same history/dirty notifications as a successful `Execute`. If preallocation/history ownership cannot be completed, call the command's atomic `Undo` before returning failure so an applied Terrain mutation is never orphaned outside history. `EditorApplicationImpl::RecordExecutedCommand` forwards through this method with its owned context. Normal `ExecuteCommand` semantics remain unchanged, and every test double implementing the executor must opt into the new path explicitly.
 
-- [ ] **Step 4: Define TerrainStrokeCommand**
+- [ ] **Step 5: Define TerrainStrokeCommand over Engine replay**
 
 ```cpp
 class TerrainStrokeCommand final : public EditorCommand
@@ -431,127 +443,123 @@ public:
 };
 ```
 
-`Execute`/`Undo` locate the authoring session by asset/layer identity; selection remains unchanged. The command never stores an entire 8193 x 8193 image.
+`Execute` calls `TerrainEditorService::ApplyStrokePatches(patches, AshEngine::TerrainEditPatchDirection::Redo)` and `Undo` calls the same service with `Undo`. The service delegates byte validation and atomic mutation to Phase 1 `apply_terrain_edit_patches`; Editor defines no second patch direction, codec, or replay implementation. Commands locate the authoring session by asset/layer identity, selection remains unchanged, and the command never stores an entire 8193 x 8193 image.
 
 Add `TerrainEditorService* pTerrainEditorService` to `EditorContext`; `EditorApplicationImpl::WireServices` fills it. `TerrainStrokeCommand` fails without this pointer instead of falling back to direct asset mutation.
 
-- [ ] **Step 5: Add the real Editor command test and production sources**
+- [ ] **Step 6: Add production sources to the real Editor tests**
 
-```cpp
-TEST_CASE("TerrainStrokeCommand executes and undoes one patch by stable ids")
-{
-    TerrainEditorServiceHarness harness = MakeTerrainEditorServiceHarness();
-    AshEditor::EditorContext context{};
-    context.pTerrainEditorService = &harness.service;
-    const auto before = harness.SnapshotBlock(0, 0);
-    AshEditor::TerrainStrokeCommand command(harness.asset_id, harness.layer_id, 3, harness.raise_patches);
-    CHECK(command.Execute(context));
-    CHECK(harness.SnapshotBlock(0, 0) != before);
-    CHECK(command.Undo(context));
-    CHECK(harness.SnapshotBlock(0, 0) == before);
-}
-```
-
-Append only these Terrain lines to the existing Tests `files` block:
+Append only the exact Terrain production lines required by the real command/service test to the existing Tests `files` block:
 
 ```lua
 "%{wks.location}/project/src/editor/Core/TerrainCommands.cpp",
 "%{wks.location}/project/src/editor/Services/TerrainEditorService.cpp",
 ```
 
-- [ ] **Step 6: Make stroke lifecycle emit exactly one command**
+- [ ] **Step 7: Make stroke completion emit exactly one recorded command**
 
-On BeginStroke allocate one sequence and lazy-capture first-touch before blocks. AddStrokeSample mutates only the service-owned working session. EndStroke finalizes one patch and submits one `TerrainStrokeCommand`; an empty patch submits none. CancelStroke applies captured before bytes and submits none.
+On BeginStroke, allocate one sequence and freeze parameters/metric. AddStrokeSample only appends the raw terrain-local sample; it never pre-resamples or invokes a kernel. EndStroke calls Phase 1 `apply_terrain_brush_stroke` exactly once against the service-owned working set, constructs and records exactly one already-executed `TerrainStrokeCommand`, then enqueues composition for the resulting full dirty set. An empty patch submits none. CancelStroke clears the raw path and submits none because no mutation occurred. Command-construction failure replays the retained patches with Engine Undo; history-recording failure uses `RecordExecuted`'s required Undo. Both rollback paths invalidate stale compose work, preserve monotonic generation, and never leave untracked logical edits.
 
-- [ ] **Step 7: Add source-contract assertions and run GREEN**
+- [ ] **Step 8: Add source-contract assertions and run GREEN**
 
 ```cpp
-CHECK(CountText(serviceSource, "ExecuteCommand(std::make_unique<TerrainStrokeCommand>") == 1);
-CHECK(commandSource.find("TerrainPatchDirection::Backward") != std::string::npos);
-CHECK(commandSource.find("TerrainPatchDirection::Forward") != std::string::npos);
+CHECK(CountText(serviceSource, "RecordExecutedCommand(") == 1);
+CHECK(commandSource.find("TerrainEditPatchDirection::Undo") != std::string::npos);
+CHECK(commandSource.find("TerrainEditPatchDirection::Redo") != std::string::npos);
+CHECK(commandSource.find("decode_terrain_rle") == std::string::npos);
 ```
 
 Run:
 
 ```powershell
-.\RunTests.bat Debug --test-case="Terrain stroke patch*"
 .\RunTests.bat Debug --test-case="Terrain stroke command*"
+.\RunTests.bat Debug --test-case="Terrain already-executed command*"
 .\build_editor.bat Debug
 ```
 
-Expected: patch and source-contract tests pass; Editor links command implementations.
+Expected: recording leaves applied bytes unchanged, Undo/Redo are byte-exact and generation-monotonic, and Editor links the command/executor changes.
 
-- [ ] **Step 8: Stage the mixed premake hunk and commit stroke history**
+- [ ] **Step 9: Stage the mixed premake hunk and commit stroke history**
 
 ```powershell
-git add project/src/editor/Core/TerrainCommands.h project/src/editor/Core/TerrainCommands.cpp project/src/tests/Editor/terrain_commands_tests.cpp project/src/editor/Core/EditorContext.h project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
+git add project/src/editor/Core/TerrainCommands.h project/src/editor/Core/TerrainCommands.cpp project/src/tests/Editor/terrain_commands_tests.cpp project/src/editor/Core/IEditorCommandExecutor.h project/src/editor/Core/EditorContext.h project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
 git add -p project/src/tests/premake5.lua
 git diff --cached -- project/src/tests/premake5.lua
 git diff --cached --check
 git commit -m "feat(editor): add undoable terrain strokes"
 ```
 
-Expected: no scene-wide image copy; cached premake diff adds exactly the two Terrain production sources and retains the pre-existing gizmo lines.
+Expected: no scene-wide image copy and no Editor-side patch decoder; cached premake diff adds exactly the required Terrain production sources and retains the pre-existing gizmo lines.
 
-### Task 4: Implement deterministic viewport stroke sampling and six tools
+### Task 4: Route raw viewport strokes and publish generations in order
 
 **Files:**
 - Modify: `project/src/editor/Services/TerrainEditorService.h`
 - Modify: `project/src/editor/Services/TerrainEditorService.cpp`
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
 
-- [ ] **Step 1: Write frame-rate-independent sampling RED tests**
+- [ ] **Step 1: Write raw-path routing RED tests**
 
 ```cpp
-TEST_CASE("Terrain stroke sampling is invariant to input frame subdivision")
+TEST_CASE("Terrain editor forwards one raw path to one Engine brush transaction")
 {
-    const std::vector<glm::vec3> coarse{ {0,0,0}, {10,0,0} };
-    const std::vector<glm::vec3> fine{ {0,0,0}, {2,0,0}, {4,0,0}, {6,0,0}, {8,0,0}, {10,0,0} };
-    CHECK(AshEngine::resample_terrain_stroke(coarse, 1.0f) == AshEngine::resample_terrain_stroke(fine, 1.0f));
+    TerrainEditorServiceHarness harness = MakeTerrainEditorServiceHarness();
+    REQUIRE(harness.BeginStroke(MakeReadyHit(), MakeBrushMetric(2.0f, 0.5f)));
+    REQUIRE(harness.AddRawSample({ { 1.0f, 2.0f }, 0.5f }));
+    REQUIRE(harness.AddRawSample({ { 3.0f, 4.0f }, 1.0f }));
+    REQUIRE(harness.EndStroke());
+    CHECK(harness.engine_brush_call_count == 1);
+    CHECK(harness.recorded_command_count == 1);
 }
 ```
 
-Add tests for Raise, Lower, Smooth with halo, Flatten first-hit target, deterministic Noise seed, Paint normalization, and Erase fallback to layer 0.
+Add Cancel/empty-stroke cases, invalid non-uniform scale/metric cases, incompatible tool/layer failure, and Pending/Outside/Failed query-state rejection. Phase 1 already owns frame-density and all kernel-value tests; do not duplicate their implementation in Editor.
 
-- [ ] **Step 2: Run the focused tests and observe RED**
+- [ ] **Step 2: Add ordered compose/publication RED tests**
+
+Start two successful mutations and complete their compose jobs out of order. Assert the service discards stale generations, publishes only the exact current full dirty set, clears dirty only after successful `publish_terrain_working_set`, and leaves dirty/generation/session bytes intact on compose or publication failure. Undo during a pending compose invalidates that job and schedules the Undo generation.
+
+- [ ] **Step 3: Run the focused tests and observe RED**
 
 ```powershell
-.\RunTests.bat Debug --test-case="Terrain stroke sampling*"
-.\RunTests.bat Debug --test-case="Terrain brush tool*"
+.\RunTests.bat Debug --test-case="Terrain editor forwards one raw path*"
+.\RunTests.bat Debug --test-case="Terrain editor publishes generations*"
 ```
 
-Expected: missing sampling or tool semantics fail.
+Expected: routing or ordered-publication assertions fail.
 
-- [ ] **Step 3: Complete pure brush kernels in Function**
+- [ ] **Step 4: Capture a valid world metric at BeginStroke**
 
-Implement fixed world-distance resampling and the approved six authoring tools: Raise/Lower share one additive kernel; Smooth reads halo; Flatten captures first Ready hit; Noise hashes world sample plus stroke seed; Paint/Erase normalize to an exact integer sum of 255.
+Convert the Ready world hit to terrain-local XZ through the Phase 2 axis-aligned positive transform adapter. Preserve both positive non-uniform scale axes as `TerrainBrushMetric::world_meters_per_terrain_meter`; never collapse them to one scalar. Freeze brush parameters and metric for the stroke. Reject BeginStroke unless the selected asset/layer/query state and metric are valid.
 
-- [ ] **Step 4: Route service samples to the pure kernels**
+- [ ] **Step 5: Forward raw samples without pre-resampling**
 
-Clamp radius to `[1, 2048]` meters, validate current layer kind, prefetch the brush region, reject BeginStroke unless query state is Ready, and enqueue samples with the current stroke sequence. Do not apply one sample per UI frame.
+Store raw `TerrainStrokeSample` points and pressure in arrival order. Do not clamp invalid brush values, call `resample_terrain_stroke`, apply one dab per UI frame, or mutate on AddStrokeSample. On EndStroke call `apply_terrain_brush_stroke(working_set, frozen_params, frozen_metric, raw_path, ...)` exactly once; Engine remains the second-line validator for stale/scripted intents.
 
-- [ ] **Step 5: Enforce ordered async publication**
+- [ ] **Step 6: Enforce ordered async publication**
 
-Each compose job carries asset `content_generation` and stroke sequence. Publish only the next completed sequence; keep later completions queued. Discard results older than the current in-memory `content_generation` without clearing dirty state.
+Each compose job captures asset id, stroke sequence, content generation, and the exact full dirty coordinate set for that generation. Publish only when all four still equal the current session. Later completion does not leapfrog an earlier current sequence; any job older than the working-set generation is discarded without clearing dirty state. Publication success uses the Phase 1 atomic API, updates the immutable preview snapshot, and only then advertises completion/readiness.
 
-- [ ] **Step 6: Run sampling/tools GREEN**
+- [ ] **Step 7: Run routing/publication GREEN**
 
 ```powershell
-.\RunTests.bat Debug --test-case="Terrain stroke sampling*"
-.\RunTests.bat Debug --test-case="Terrain brush tool*"
+.\RunTests.bat Debug --test-case="Terrain editor forwards one raw path*"
+.\RunTests.bat Debug --test-case="Terrain editor publishes generations*"
+.\RunTests.bat Debug --test-case="Terrain brush*"
 ```
 
-Expected: coarse/fine inputs are byte-identical and all tool semantics pass.
+Expected: Editor invokes one Engine brush transaction per completed stroke, stale jobs never publish, and the authoritative Phase 1 brush suite remains green.
 
-- [ ] **Step 7: Commit tools and sequencing**
+- [ ] **Step 8: Commit routing and sequencing**
 
 ```powershell
-git add project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp
+git add project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp
 git diff --cached --check
-git commit -m "feat(editor): add deterministic terrain brushes"
+git commit -m "feat(editor): route terrain stroke transactions"
 ```
 
-Expected: one tools/sequencing commit.
+Expected: one routing/sequencing commit with no brush kernel or patch codec duplicated in Editor.
 
 ### Task 5: Add undoable non-destructive layer management
 
