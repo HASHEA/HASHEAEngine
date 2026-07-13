@@ -4,7 +4,7 @@
 
 **Goal:** Correct Vulkan `ConstBuffer` barriers so uniform reads are visible to the currently supported vertex, fragment, and compute program stages, with deterministic policy coverage and a dual-backend GPU self-test.
 
-**Architecture:** Keep `AshResourceState::ConstBuffer` and all public RHI interfaces unchanged. Move the Vulkan-native stage mask into one internal `inline constexpr` policy consumed by production and doctest, then add an opt-in pre-frame GPU chain that uploads two GPU-only constant buffers, consumes one in compute and one in fragment, and performs exact tile readback on Vulkan and DX12. The GPU chain uses an explicit `UAVCompute -> SRVGraphics` transition for its intermediate buffer and never introduces UAV-to-UAV synchronization. Its CB and UAV transitions are separate so Vulkan stage-mask union cannot hide a regression, both self-test render targets explicitly enter `RTV`, and both backends release never-submitted pending uploads before their first shutdown deletion-queue drain.
+**Architecture:** Keep `AshResourceState::ConstBuffer` and all public RHI interfaces unchanged. Move the Vulkan-native stage mask into one internal `inline constexpr` policy consumed by production and doctest, then add an opt-in pre-frame GPU chain that uploads two GPU-only constant buffers, consumes one in compute and one in fragment, and performs exact tile readback on Vulkan and DX12. The GPU chain uses an explicit `UAVCompute -> SRVGraphics` transition for its intermediate buffer and never introduces UAV-to-UAV synchronization. Its CB and UAV transitions are separate so Vulkan stage-mask union cannot hide a regression, both self-test render targets explicitly enter `RTV`, both backends release never-submitted pending uploads before their first shutdown deletion-queue drain, and DX12 READBACK buffers establish a full-range CPU-visible Map after the caller's fence wait rather than declaring an empty read range at creation.
 
 **Tech Stack:** C++17, doctest, Vulkan 1.x/Volk, DirectX 12, HLSL/DXC, Premake5, MSBuild, PowerShell validation scripts.
 
@@ -20,6 +20,7 @@
 - Create `project/src/engine/Shaders/SelfTest/RHIConstantBufferSelfTest.hlsl`: compute and graphics stages for the GPU chain.
 - Modify `project/src/engine/EntryPoint.h` and `project/src/engine/Function/Application.h/.cpp`: parse, store, and execute `--rhi-selftest-constant-buffer`.
 - Modify `project/src/engine/Graphics/Vulkan/VulkanContext.h/.cpp` and `project/src/engine/Graphics/DirectX12/DX12Context.cpp`: make pre-frame teardown release pending upload ownership before backend allocators/heaps.
+- Modify `project/src/engine/Graphics/DirectX12/DX12Buffer.h/.cpp`: map READBACK buffers on CPU access with the real read range; keep UPLOAD persistent mapping unchanged.
 - Modify `project/src/engine/Function/Render/RHIIndirectSelfTest.cpp`: make its direct render-pass path explicitly enter `RTV` like the new diagnostic.
 - Modify `project/src/tests/Function/application_automation_tests.cpp`: deterministic CLI parsing coverage.
 - Modify `.github/workflows/ci.yml`: run the new self-test beside indirect self-test on WARP and lavapipe.
@@ -267,6 +268,7 @@ git commit -m "fix(vulkan): expose constant buffers to program shader stages"
 - Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.h:165-168`
 - Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:1655-1685`
 - Modify: `project/src/engine/Graphics/DirectX12/DX12Context.cpp:390-410`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12Buffer.h/.cpp`
 - Modify: `project/src/engine/Function/Render/RHIIndirectSelfTest.cpp:220-230`
 - Create: `project/src/engine/Function/Render/RHIConstantBufferSelfTest.h/.cpp`
 - Create: `project/src/engine/Shaders/SelfTest/RHIConstantBufferSelfTest.hlsl`
@@ -866,7 +868,7 @@ In `DX12Context::shutdown()`, after `wait_idle()` / profiler uninstall and befor
 
 The outer scope must end before `for (auto& q : m_delayedDeletionQueues) q.flush();`. DX12 starts pre-frame at `m_currentFrame == 0`, so dropping the last resource/view ownership while the context is live enqueues native allocation and descriptor cleanup into queue 0; the existing first drain then runs it before staging buffers, descriptor heaps, and D3D12MA. Do not flush/record the pending uploads during shutdown, move heap/allocator destruction, or patch individual destructors.
 
-Build Sandbox Debug after the shutdown change. Do not run or claim the final failure injection yet: Step 8c still modifies the same self-test source, so both backend failure paths are deliberately deferred until Step 8d can exercise the final code.
+Build Sandbox Debug after the shutdown change. Do not run or claim the final failure injection yet: Steps 8c and 8d still modify the diagnostic/readback path, so both backend failure paths are deliberately deferred until Step 8e can exercise the final code.
 
 Stage only `project/src/engine/Graphics/DirectX12/DX12Context.cpp`, inspect the cached diff, and commit separately:
 
@@ -887,20 +889,47 @@ In `RHIConstantBufferSelfTest.cpp`:
 
 In `RHIIndirectSelfTest.cpp`, add and check the same explicit `render_target -> RTV` transition before its direct begin-pass call. Do not change RenderGraph or make `cmd_begin_render_pass()` hide attachment transitions.
 
-Build Sandbox Debug, run the policy doctest, and run both diagnostics together on Vulkan and DX12. Then enable each backend's Debug validation configuration in turn and repeat; no layout/state validation message is allowed. Restore `Engine.ini` exactly.
+Build Sandbox Debug, run the policy doctest, and run both diagnostics together on Vulkan and DX12. The pre-fix diagnostic RED is already recorded: validation-enabled Vulkan and DX12 both returned 0/PASS while fresh logs reported the missing RTV state; temporarily removing the production ConstBuffer compute-stage bit still returned Vulkan PASS because the unrelated UAV stage masked it. All temporary source/config changes were restored.
 
-Stage only the two self-test implementation files and commit the review correction separately:
+Post-correction Vulkan combined diagnostics passed. DX12 combined diagnostics exposed the independent readback issue described in Step 8d, so do not stage/commit these two files or enter final validation until Step 8d is GREEN.
+
+- [ ] **Step 8d: Make DX12 READBACK mapping visible to CPU readers**
+
+The controller reproduced the same DX12 combined failure both with the Step 8c diff and after restoring both self-test files exactly to `b0ab7f6`: indirect PASS, then constant-buffer compute tile `(8,16)` was `(0,0,0,0)`. Constant-only DX12 passed twice; combined failed repeatedly. Frame-fence tracing proved the constant submit signal/wait reached frame-0 target 3, and temporarily restoring the redundant constant `wait_idle()` still failed. This excludes the Step 8c changes and a missing completion wait.
+
+Microsoft's `ID3D12Resource::Map` contract defines `{0,0}` as “CPU will not read”, while the official readback-heap flow waits the fence and then maps the actual read range. Current `DX12Buffer::init()` persistently maps both UPLOAD and READBACK at creation with an empty range, before GPU writes occur.
+
+After this amended SDD is independently reviewed and reapproved, implement only:
+
+- `DX12Buffer::init()` persistently maps `ASH_RESOURCE_ACCESS_WRITE` as today with `{0,0}`, but leaves `ASH_RESOURCE_ACCESS_READ` unmapped;
+- move `DX12Buffer::get_mapped_data()` from an inline return in the header to the `.cpp` file;
+- for non-READ buffers, return the existing pointer unchanged;
+- for READBACK, if a prior mapping exists, Unmap it with empty written range `{0,0}` and immediately set `m_mappedData = nullptr`; then Map into a local pointer with `D3D12_RANGE{0, m_creation.size}` and assign `m_mappedData` only when both HRESULT and pointer are valid; log HRESULT and return null on failure, leaving an unmapped state that shutdown can skip and a later call can safely retry;
+- in shutdown, Unmap READBACK with empty written range and UPLOAD with the existing whole-written behavior.
+
+`get_mapped_data()` must not wait a fence; callers retain the existing completion responsibility. Do not edit fence, command allocator, descriptor heap, copy queue, public `Buffer` interface, or Vulkan buffer code.
+
+Rebuild Sandbox Debug and run the exact DX12 combined command at least twice. GREEN requires both indirect and constant-buffer PASS on every run. Then run the Vulkan combined control. If full-range remap does not turn the stable RED GREEN, restore the DX12Buffer experiment and return to root-cause analysis without stacking another fix.
+
+With the A/B GREEN, enable each backend's Debug validation configuration in turn, snapshot byte offsets for every `product/logs/*.logfile`, rerun both diagnostics together, and scan only fresh appended/new bytes. Require process exit 0, both self-test PASS markers, backend validation-enabled markers, and no Vulkan ERROR / DX12 ERROR or CORRUPTION / assertion / `0xC0000005` / readiness deadline. Restore `Engine.ini` exactly in `finally`.
+
+Stage and commit the two atomic corrections separately:
 
 ```powershell
+git add -- project/src/engine/Graphics/DirectX12/DX12Buffer.h project/src/engine/Graphics/DirectX12/DX12Buffer.cpp
+git diff --cached --check
+git diff --cached --name-status
+git commit -m "fix(dx12): map readback buffers for CPU reads"
+
 git add -- project/src/engine/Function/Render/RHIConstantBufferSelfTest.cpp project/src/engine/Function/Render/RHIIndirectSelfTest.cpp
 git diff --cached --check
 git diff --cached --name-status
 git commit -m "fix(rhi): make GPU self-test transitions explicit"
 ```
 
-- [ ] **Step 8d: Re-run both failure paths against the final self-test code**
+- [ ] **Step 8e: Re-run both failure paths against the final self-test code**
 
-With Steps 8b and 8c committed, use `apply_patch` to change only `k_compute_expected_rgba[0]` from 17 to 20, rebuild Sandbox Debug once, and run the Vulkan and DX12 constant-buffer commands serially under the existing 120-second watchdog.
+With Steps 8b through 8d committed, use `apply_patch` to change only `k_compute_expected_rgba[0]` from 17 to 20, rebuild Sandbox Debug once, and run the Vulkan and DX12 constant-buffer commands serially under the existing 120-second watchdog.
 
 Both backends must produce the exact mismatch/FAIL and wrapper exit 1 through normal Application teardown well before 120 seconds. Vulkan must contain the VMA zero-live marker; DX12 must contain `DX12Context: Shutdown complete.`. Neither run may contain the readiness deadline marker, allocator live-allocation/leak text, D3D12MA `Some allocations were not freed`, `Assertion failed`, `0xC0000005`, crash, hang, or forced exit.
 
@@ -911,11 +940,11 @@ Use a `try/finally` workflow: in `finally`, restore 20 to 17 with `apply_patch`,
 Run serially, with no other engine or gate process active:
 
 ```bat
-run.bat sandbox vulkan Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
-run.bat sandbox dx12 Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
+run.bat sandbox vulkan Debug --smoke-test-seconds=120 --rhi-selftest-indirect --rhi-selftest-constant-buffer
+run.bat sandbox dx12 Debug --smoke-test-seconds=120 --rhi-selftest-indirect --rhi-selftest-constant-buffer
 ```
 
-Expected: both exit 0 and log `[RHISelfTest] constant buffer visibility PASS`.
+Expected: both exit 0 and log both indirect and constant-buffer PASS markers.
 
 - [ ] **Step 10: Commit the self-test and wiring**
 
@@ -928,7 +957,7 @@ git diff --cached --name-status
 git commit -m "test(rhi): validate constant buffer visibility across backends"
 ```
 
-Rollback checkpoint: keep `fix(dx12): release pending uploads before teardown` and `fix(rhi): make GPU self-test transitions explicit` as separate commits. A repeated allocator/assert/watchdog failure reverts the DX12 commit and blocks the new CI flag; a validation/self-test/render regression caused by the diagnostic correction reverts that correction and disables the new CLI/CI exposure. In either case, remove the corresponding README/spec guarantees in the same rollback and do not bless baselines.
+Rollback checkpoint: keep `fix(dx12): release pending uploads before teardown`, `fix(dx12): map readback buffers for CPU reads`, and `fix(rhi): make GPU self-test transitions explicit` as separate commits. A repeated allocator/assert/watchdog failure reverts the teardown commit and blocks the new CI flag. A combined-diagnostic/capture regression caused by readback remap reverts that commit and blocks integration; do not replace it with sleep/device idle. A validation/self-test/render regression caused by the diagnostic correction reverts that correction and disables the new CLI/CI exposure. In every case, remove the corresponding README/spec guarantees in the same rollback and do not bless baselines.
 
 ### Task 5: Wire software-backend CI and update the long-term contract
 
@@ -959,6 +988,7 @@ Add to `docs/specs/modules/graphics.md` under command/resource-state constraints
 ```markdown
 - `AshResourceState::ConstBuffer` 表示当前 `GraphicsProgram` / `ComputeProgram` 可读取的 uniform buffer。Vulkan 映射精确使用 vertex + fragment + compute shader stage 与 `VK_ACCESS_UNIFORM_READ_BIT`；不使用 `ALL_GRAPHICS` / `ALL_COMMANDS`，DX12 保持 `D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER`。当前 Vulkan command buffer 均来自 graphics-capable queue family；未来引入 dedicated compute-only command buffer 时，stage policy 必须按 queue capability 收窄。验证入口 `--rhi-selftest-constant-buffer` 在首帧前覆盖 compute/fragment CB 上传、消费与精确读回。
 - backend 原生资源在首帧前失败时必须在 native allocator/descriptor dependencies 有效期间回收。Vulkan current-frame deletion queue accessor 对 `UINT32_MAX` sentinel 返回 queue 0；Vulkan 与 DX12 shutdown 都在首次 drain 前释放未提交的 pending buffer/texture upload ownership，再由既有 queue flush 回收。有效 frame 的 upload/deletion 行为不变。constant-buffer self-test 的双后端故障注入必须证明失败由正常 teardown 返回非零，不发生 access violation、allocator live-allocation assertion 或 watchdog hang。
+- DX12 READBACK buffer 不得在创建时以 `{0,0}` 空 read range 声明“CPU 不读”后长期直接解引用。调用者完成 GPU fence wait 后，`get_mapped_data()` 以完整 buffer range 重新 Map，必要时结束上一次 readback mapping；Unmap 使用空 written range。接口本身不增加隐式 wait，UPLOAD persistent mapping 不变。
 ```
 
 - [ ] **Step 3: Document the Application command-line contract**
@@ -1045,13 +1075,13 @@ function Read-NewLogBytes([hashtable]$offsets) {
 For each temporarily enabled backend, take `$before = Get-LogOffsets`, run the matching command below, save `$LASTEXITCODE`, then set `$fresh = Read-NewLogBytes $before`:
 
 ```bat
-run.bat sandbox vulkan Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
-run.bat sandbox dx12 Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
+run.bat sandbox vulkan Debug --smoke-test-seconds=120 --rhi-selftest-indirect --rhi-selftest-constant-buffer
+run.bat sandbox dx12 Debug --smoke-test-seconds=120 --rhi-selftest-indirect --rhi-selftest-constant-buffer
 ```
 
 Fail the validation step unless all of these hold:
 
-- process exit is 0 and `$fresh` contains `[RHISelfTest] constant buffer visibility PASS`;
+- process exit is 0 and `$fresh` contains both the indirect and constant-buffer PASS markers;
 - Vulkan `$fresh` contains `VulkanContext: Added bundled Vulkan validation layer path:`; before launch the temporary config is asserted to contain `Enabled=true` and `SynchronizationValidation=true`;
 - DX12 `$fresh` contains both `DX12Context: Debug layer enabled.` and `DX12Context: GPU-based validation enabled.`;
 - `$fresh` does not match `\[Vulkan Validation\]\s*-\s*ERROR|\[DX12 Validation\].*(ERROR|CORRUPTION)|Assertion failed|0xC0000005|Fatal Error: readiness process deadline expired`.
@@ -1060,8 +1090,9 @@ Make those conditions executable rather than manual inspection, for example afte
 
 ```powershell
 if ($runExit -ne 0) { throw "Validation self-test exited $runExit" }
-if (-not $fresh.Contains('[RHISelfTest] constant buffer visibility PASS')) {
-    throw 'Fresh log delta is missing the self-test PASS marker.'
+if (-not $fresh.Contains('[RHISelfTest] indirect draw substrate PASS') -or
+    -not $fresh.Contains('[RHISelfTest] constant buffer visibility PASS')) {
+    throw 'Fresh log delta is missing one or both self-test PASS markers.'
 }
 if ($backend -eq 'vulkan' -and
     -not $fresh.Contains('VulkanContext: Added bundled Vulkan validation layer path:')) {
@@ -1132,6 +1163,7 @@ Before the command, create ignored `Intermediate/pr-body-const-buffer.md` with `
 - add an opt-in dual-backend constant-buffer GPU self-test and enable it beside indirect self-test in software-backend CI
 - release never-submitted pending uploads before the first Vulkan/DX12 shutdown drain so pre-frame failures complete normal teardown
 - make direct GPU diagnostics explicitly enter RTV state and isolate CB barriers from unrelated UAV stage masks
+- remap DX12 READBACK buffers with the real CPU read range after caller-owned fence waits
 
 ## Synchronization boundary
 - no UAV-to-UAV barrier or implicit dependency was added
@@ -1140,6 +1172,7 @@ Before the command, create ignored `Intermediate/pr-body-const-buffer.md` with `
 ## Validation
 - deterministic policy doctest: observed RED on fragment/compute/exact scope, then GREEN
 - Vulkan and DX12 injected-mismatch paths: exact FAIL + normal teardown + exit 1, with no allocator leak/assert or watchdog forced exit
+- combined indirect + constant-buffer diagnostics on Vulkan and DX12, including repeated DX12 readback reuse
 - full `RunTests.bat Debug`
 - fresh Editor Debug, Sandbox Debug, and Sandbox Release builds
 - `RunArchGate.bat`
