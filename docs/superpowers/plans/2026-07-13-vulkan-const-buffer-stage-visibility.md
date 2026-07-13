@@ -4,7 +4,7 @@
 
 **Goal:** Correct Vulkan `ConstBuffer` barriers so uniform reads are visible to the currently supported vertex, fragment, and compute program stages, with deterministic policy coverage and a dual-backend GPU self-test.
 
-**Architecture:** Keep `AshResourceState::ConstBuffer` and all public RHI interfaces unchanged. Move the Vulkan-native stage mask into one internal `inline constexpr` policy consumed by production and doctest, then add an opt-in pre-frame GPU chain that uploads two GPU-only constant buffers, consumes one in compute and one in fragment, and performs exact tile readback on Vulkan and DX12. The GPU chain uses an explicit `UAVCompute -> SRVGraphics` transition for its intermediate buffer and never introduces UAV-to-UAV synchronization. Its CB and UAV transitions are separate so Vulkan stage-mask union cannot hide a regression, both self-test render targets explicitly enter `RTV`, both backends release never-submitted pending uploads before their first shutdown deletion-queue drain, and DX12 READBACK buffers establish a full-range CPU-visible Map after the caller's fence wait rather than declaring an empty read range at creation.
+**Architecture:** Keep `AshResourceState::ConstBuffer` and all public RHI interfaces unchanged. Move the Vulkan-native stage mask into one internal `inline constexpr` policy consumed by production and doctest, then add an opt-in pre-frame GPU chain that uploads two GPU-only constant buffers, consumes one in compute and one in fragment, and performs exact tile readback on Vulkan and DX12. The GPU chain uses an explicit `UAVCompute -> SRVGraphics` transition for its intermediate buffer and never introduces UAV-to-UAV synchronization. Its CB and UAV transitions are separate so Vulkan stage-mask union cannot hide a regression, both self-test render targets explicitly enter `RTV`, both backends release never-submitted pending uploads before their first shutdown deletion-queue drain, and DX12 descriptor-table keys combine CPU slot address with a per-allocation serial so same-frame slot reuse cannot alias an old shader-visible table.
 
 **Tech Stack:** C++17, doctest, Vulkan 1.x/Volk, DirectX 12, HLSL/DXC, Premake5, MSBuild, PowerShell validation scripts.
 
@@ -20,7 +20,8 @@
 - Create `project/src/engine/Shaders/SelfTest/RHIConstantBufferSelfTest.hlsl`: compute and graphics stages for the GPU chain.
 - Modify `project/src/engine/EntryPoint.h` and `project/src/engine/Function/Application.h/.cpp`: parse, store, and execute `--rhi-selftest-constant-buffer`.
 - Modify `project/src/engine/Graphics/Vulkan/VulkanContext.h/.cpp` and `project/src/engine/Graphics/DirectX12/DX12Context.cpp`: make pre-frame teardown release pending upload ownership before backend allocators/heaps.
-- Modify `project/src/engine/Graphics/DirectX12/DX12Buffer.h/.cpp`: map READBACK buffers on CPU access with the real read range; keep UPLOAD persistent mapping unchanged.
+- Modify `project/src/engine/Graphics/DirectX12/DX12Helper.hpp`, `DX12DescriptorHeap.h/.cpp`, `DX12RenderProgramBinder.h/.cpp`, and `DX12RenderProgram.cpp`: propagate CPU descriptor allocation serials into shader-visible table cache identity.
+- Create `project/src/tests/Graphics/dx12_descriptor_table_cache_tests.cpp`: deterministic cache-identity coverage for handle reuse and arrays.
 - Modify `project/src/engine/Function/Render/RHIIndirectSelfTest.cpp`: make its direct render-pass path explicitly enter `RTV` like the new diagnostic.
 - Modify `project/src/tests/Function/application_automation_tests.cpp`: deterministic CLI parsing coverage.
 - Modify `.github/workflows/ci.yml`: run the new self-test beside indirect self-test on WARP and lavapipe.
@@ -29,7 +30,7 @@
 - Modify `README.md`: expose the repository-level unit/architecture and constant-buffer diagnostic commands required by the documentation contract.
 - Modify `docs/sdd/SDD-2026-07-13-vulkan-const-buffer-stage-visibility.md`: mark Done only after all gates and review pass.
 
-The worktree is `D:\workspace\AshEngine\HASHEAEngine\.worktrees\remediation-const-buffer` on `codex/remediation-const-buffer`. Never stage another worktree or use directory-wide `git add`. `project/src/tests/Graphics/` is also being used by a separate worktree for `gpu_timing_contract_tests.cpp`; ownership here is limited to `vulkan_barrier_policy_tests.cpp`.
+The worktree is `D:\workspace\AshEngine\HASHEAEngine\.worktrees\remediation-const-buffer` on `codex/remediation-const-buffer`. Never stage another worktree or use directory-wide `git add`. `project/src/tests/Graphics/` is also being used by a separate worktree for `gpu_timing_contract_tests.cpp`; ownership here is limited to `vulkan_barrier_policy_tests.cpp` and `dx12_descriptor_table_cache_tests.cpp`.
 
 ### Task 1: Preflight concurrency and record the paired performance baseline
 
@@ -268,10 +269,14 @@ git commit -m "fix(vulkan): expose constant buffers to program shader stages"
 - Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.h:165-168`
 - Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:1655-1685`
 - Modify: `project/src/engine/Graphics/DirectX12/DX12Context.cpp:390-410`
-- Modify: `project/src/engine/Graphics/DirectX12/DX12Buffer.h/.cpp`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12Helper.hpp`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12DescriptorHeap.h/.cpp`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12RenderProgramBinder.h/.cpp`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12RenderProgram.cpp`
 - Modify: `project/src/engine/Function/Render/RHIIndirectSelfTest.cpp:220-230`
 - Create: `project/src/engine/Function/Render/RHIConstantBufferSelfTest.h/.cpp`
 - Create: `project/src/engine/Shaders/SelfTest/RHIConstantBufferSelfTest.hlsl`
+- Create: `project/src/tests/Graphics/dx12_descriptor_table_cache_tests.cpp`
 
 - [ ] **Step 1: Write the failing CLI test**
 
@@ -868,7 +873,7 @@ In `DX12Context::shutdown()`, after `wait_idle()` / profiler uninstall and befor
 
 The outer scope must end before `for (auto& q : m_delayedDeletionQueues) q.flush();`. DX12 starts pre-frame at `m_currentFrame == 0`, so dropping the last resource/view ownership while the context is live enqueues native allocation and descriptor cleanup into queue 0; the existing first drain then runs it before staging buffers, descriptor heaps, and D3D12MA. Do not flush/record the pending uploads during shutdown, move heap/allocator destruction, or patch individual destructors.
 
-Build Sandbox Debug after the shutdown change. Do not run or claim the final failure injection yet: Steps 8c and 8d still modify the diagnostic/readback path, so both backend failure paths are deliberately deferred until Step 8e can exercise the final code.
+Build Sandbox Debug after the shutdown change. Do not run or claim the final failure injection yet: Steps 8c and 8d still modify the diagnostic/descriptor-cache path, so both backend failure paths are deliberately deferred until Step 8e can exercise the final code.
 
 Stage only `project/src/engine/Graphics/DirectX12/DX12Context.cpp`, inspect the cached diff, and commit separately:
 
@@ -891,35 +896,105 @@ In `RHIIndirectSelfTest.cpp`, add and check the same explicit `render_target -> 
 
 Build Sandbox Debug, run the policy doctest, and run both diagnostics together on Vulkan and DX12. The pre-fix diagnostic RED is already recorded: validation-enabled Vulkan and DX12 both returned 0/PASS while fresh logs reported the missing RTV state; temporarily removing the production ConstBuffer compute-stage bit still returned Vulkan PASS because the unrelated UAV stage masked it. All temporary source/config changes were restored.
 
-Post-correction Vulkan combined diagnostics passed. DX12 combined diagnostics exposed the independent readback issue described in Step 8d, so do not stage/commit these two files or enter final validation until Step 8d is GREEN.
+Post-correction Vulkan combined diagnostics passed. DX12 combined diagnostics exposed the independent descriptor-cache issue described in Step 8d, so do not stage/commit these two files or enter final validation until Step 8d is GREEN.
 
-- [ ] **Step 8d: Make DX12 READBACK mapping visible to CPU readers**
+- [ ] **Step 8d: Make DX12 descriptor-table cache identity allocation-aware**
 
-The controller reproduced the same DX12 combined failure both with the Step 8c diff and after restoring both self-test files exactly to `b0ab7f6`: indirect PASS, then constant-buffer compute tile `(8,16)` was `(0,0,0,0)`. Constant-only DX12 passed twice; combined failed repeatedly. Frame-fence tracing proved the constant submit signal/wait reached frame-0 target 3, and temporarily restoring the redundant constant `wait_idle()` still failed. This excludes the Step 8c changes and a missing completion wait.
+The controller reproduced the same DX12 combined failure both with the Step 8c diff and after restoring both self-test files exactly to `b0ab7f6`: indirect PASS, then constant-buffer compute tile `(8,16)` was `(0,0,0,0)`. Constant-only DX12 passed twice; combined failed repeatedly. Frame-fence tracing proved the constant submit signal/wait reached frame-0 target 3, and restoring the redundant constant `wait_idle()` did not help. A separately approved READBACK create-unmapped/full-range-Map A/B built successfully and still produced the same failure on its first run; it was immediately restored with target diff empty. These results exclude Step 8c, missing completion wait, and readback Map as the root cause.
 
-Microsoft's `ID3D12Resource::Map` contract defines `{0,0}` as “CPU will not read”, while the official readback-heap flow waits the fence and then maps the actual read range. Current `DX12Buffer::init()` persistently maps both UPLOAD and READBACK at creation with an empty range, before GPU writes occur.
+The static collision is exact. Indirect caches one-descriptor compute UAV tables for CPU slots 1 and 3. Its local resources then return slots to the LIFO free-list in order 2,3,0,1. Constant allocates its compute CBV from slot 1. `DescriptorTableCacheKey` currently contains only heap type, count, and CPU pointer, so the new CBV key hits the old slot-1 UAV GPU table and skips `CopyDescriptorsSimple`; the compute shader reads zero. The bug is production-wide whenever a CPU descriptor slot is reused before the per-frame cache is cleared.
 
-After this amended SDD is independently reviewed and reapproved, implement only:
+After this amended SDD is independently reviewed and reapproved, perform one disposable root-cause A/B before final implementation. In `DX12DescriptorHeap.cpp`, use `apply_patch` to make only the cache lookup miss (for example, temporarily set `const auto cached = tableCache.end();`), rebuild Sandbox Debug, and run the DX12 combined command once. Both diagnostics must PASS. Restore that exact line with `apply_patch`, assert the descriptor-heap diff is empty, and do not commit the bypass. If it does not turn GREEN, stop and return to root-cause analysis.
 
-- `DX12Buffer::init()` persistently maps `ASH_RESOURCE_ACCESS_WRITE` as today with `{0,0}`, but leaves `ASH_RESOURCE_ACCESS_READ` unmapped;
-- move `DX12Buffer::get_mapped_data()` from an inline return in the header to the `.cpp` file;
-- for non-READ buffers, return the existing pointer unchanged;
-- for READBACK, if a prior mapping exists, Unmap it with empty written range `{0,0}` and immediately set `m_mappedData = nullptr`; then Map into a local pointer with `D3D12_RANGE{0, m_creation.size}` and assign `m_mappedData` only when both HRESULT and pointer are valid; log HRESULT and return null on failure, leaving an unmapped state that shutdown can skip and a later call can safely retry;
-- in shutdown, Unmap READBACK with empty written range and UPLOAD with the existing whole-written behavior.
+Write `project/src/tests/Graphics/dx12_descriptor_table_cache_tests.cpp` before production code. Include `Graphics/DirectX12/DX12DescriptorHeap.h`, `doctest.h`, `<initializer_list>`, and `<vector>`. Tests has no PCH, so `doctest.h` must be explicit in this translation unit. Define the helpers exactly as follows so the test constructs keys through the same internal factory used by production rather than duplicating key logic:
 
-`get_mapped_data()` must not wait a fence; callers retain the existing completion responsibility. Do not edit fence, command allocator, descriptor heap, copy queue, public `Buffer` interface, or Vulkan buffer code.
+```cpp
+namespace
+{
+    RHI::DX12DescriptorHandle make_handle(SIZE_T cpuAddress, uint64_t allocationSerial)
+    {
+        RHI::DX12DescriptorHandle handle{};
+        handle.cpuHandle.ptr = cpuAddress;
+        handle.allocationSerial = allocationSerial;
+        return handle;
+    }
 
-Rebuild Sandbox Debug and run the exact DX12 combined command at least twice. GREEN requires both indirect and constant-buffer PASS on every run. Then run the Vulkan combined control. If full-range remap does not turn the stable RED GREEN, restore the DX12Buffer experiment and return to root-cause analysis without stacking another fix.
+    RHI::DX12DescriptorHeapManager::DescriptorTableCacheKey make_key(
+        std::initializer_list<RHI::DX12DescriptorHandle> handles,
+        D3D12_DESCRIPTOR_HEAP_TYPE heapType = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)
+    {
+        const std::vector<RHI::DX12DescriptorHandle> ownedHandles(handles);
+        return RHI::DX12DescriptorHeapManager::DescriptorTableCacheKey::from_handles(
+            heapType,
+            ownedHandles.data(),
+            static_cast<uint32_t>(ownedHandles.size()));
+    }
+}
 
-With the A/B GREEN, enable each backend's Debug validation configuration in turn, snapshot byte offsets for every `product/logs/*.logfile`, rerun both diagnostics together, and scan only fresh appended/new bytes. Require process exit 0, both self-test PASS markers, backend validation-enabled markers, and no Vulkan ERROR / DX12 ERROR or CORRUPTION / assertion / `0xC0000005` / readiness deadline. Restore `Engine.ini` exactly in `finally`.
+TEST_CASE("DX12 descriptor table cache identity includes allocation serial")
+{
+    auto first = make_handle(0x1000u, 7u);
+    auto same = make_handle(0x1000u, 7u);
+    auto reused = make_handle(0x1000u, 8u);
+    CHECK(make_key({ first }) == make_key({ same }));
+    CHECK_FALSE(make_key({ first }) == make_key({ reused }));
+}
+
+TEST_CASE("DX12 descriptor table cache identity covers arrays and table shape")
+{
+    auto a = make_handle(0x1000u, 1u);
+    auto b = make_handle(0x2000u, 2u);
+    auto b_reused = make_handle(0x2000u, 3u);
+    CHECK_FALSE(make_key({ a, b }) == make_key({ a, b_reused }));
+    CHECK_FALSE(make_key({ a, b }) == make_key({ b, a }));
+    CHECK_FALSE(make_key({ a, b }) == make_key({ a }));
+    CHECK_FALSE(make_key({ a }, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) ==
+                make_key({ a }, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER));
+}
+
+TEST_CASE("DX12 descriptor table cache identity covers overflow elements")
+{
+    auto a = make_handle(0x1000u, 1u);
+    auto b = make_handle(0x2000u, 2u);
+    auto c = make_handle(0x3000u, 3u);
+    auto d = make_handle(0x4000u, 4u);
+    auto e = make_handle(0x5000u, 5u);
+    auto f = make_handle(0x6000u, 6u);
+    auto g = make_handle(0x7000u, 7u);
+    auto h = make_handle(0x8000u, 8u);
+    auto i = make_handle(0x9000u, 9u);
+    auto i_reused = make_handle(0x9000u, 10u);
+    const auto original = make_key({ a, b, c, d, e, f, g, h, i });
+    const auto changed = make_key({ a, b, c, d, e, f, g, h, i_reused });
+    CHECK_FALSE(original == changed);
+    CHECK_FALSE(RHI::DX12DescriptorHeapManager::DescriptorTableCacheKeyHasher{}(original) ==
+                RHI::DX12DescriptorHeapManager::DescriptorTableCacheKeyHasher{}(changed));
+}
+```
+
+Run the focused test and observe the expected compile RED because `allocationSerial` and `from_handles` do not exist yet. Then implement only:
+
+- add `uint64_t allocationSerial = 0` to internal `DX12DescriptorHandle`;
+- add `uint64_t m_nextAllocationSerial = 0` to `DX12CPUDescriptorHeap`; reset it in `init()` and, under the existing allocation mutex, fail closed with an invalid handle plus error/assert if it is already `UINT64_MAX`, otherwise pre-increment it and assign the resulting nonzero value on every `allocate()`. Perform this exhaustion check before popping the free-list or advancing `m_currentIndex`, so the failure cannot consume a slot;
+- replace `DX12PendingBind::cpuHandle` / `cpuHandles` with `descriptorHandle` / `descriptorHandles` of type `DX12DescriptorHandle` / `std::vector<DX12DescriptorHandle>`, and copy the full handle from every buffer-view, texture-view, and sampler bind path;
+- replace `PendingDescriptorTable::sourceHandles` with `std::vector<DX12DescriptorHandle>` and change `find_or_create_shader_visible_table()` to accept `const DX12DescriptorHandle* descriptorHandles`; descriptor validation and `CopyDescriptorsSimple` still use each element's `.cpuHandle`;
+- add `DescriptorTableCacheKey::DescriptorIdentity { SIZE_T cpuHandle; uint64_t allocationSerial; }`, replacing the inline/overflow raw-handle containers with `DescriptorIdentity` containers;
+- define the public pure factory `static DescriptorTableCacheKey from_handles(D3D12_DESCRIPTOR_HEAP_TYPE heapType, const DX12DescriptorHandle* descriptorHandles, uint32_t descriptorCount)` inline inside `DescriptorTableCacheKey` in `DX12DescriptorHeap.h`, and make both `find_or_create_shader_visible_table()` and the doctest call it. `DX12DescriptorHeapManager` is not DLL-exported, so the factory must not be out-of-line in `DX12DescriptorHeap.cpp`; the header-inline definition keeps this an internal, zero-ABI test seam;
+- make the factory map every source handle to `DescriptorIdentity { descriptorHandles[index].cpuHandle.ptr, descriptorHandles[index].allocationSerial }`; make `DescriptorIdentity` equality, `DescriptorTableCacheKey` equality, and `DescriptorTableCacheKeyHasher` include both stored fields for every inline/overflow element while preserving heap type, count, and order. The hasher must combine the address and serial as separate values; it must not narrow either to `uint32_t`.
+
+Preserve the current content-immutability invariant: CBV/SRV/UAV and Sampler descriptors are written once after allocation and are not overwritten in place before their handle is freed. This change does not add an in-place rewrite API. If such an API is introduced later, it must allocate or advance the identity and add a cache regression test in the same change.
+
+Do not clear or scan the cache on free, change descriptor heap capacity/partitioning, add a reverse index, alter view lifetime, or touch `DX12Buffer`, fences, command allocators, Vulkan descriptors, or any UAV barrier policy. Live allocations must retain the existing cache-hit behavior; a reused slot must miss exactly once for its new identity.
+
+Run the focused doctest to GREEN, then `RunTests.bat Debug`, `build_sandbox.bat Debug`, DX12 combined twice, DX12 constant-only once, and Vulkan combined once. Enable DX12 Debug/GPU validation for one further combined run using fresh logfile byte offsets; require exit 0, both PASS markers, debug+GPU-validation markers, and no ERROR/CORRUPTION/assertion/access-violation/readiness-deadline/descriptor-overflow text. Restore `Engine.ini` exactly in `finally`.
 
 Stage and commit the two atomic corrections separately:
 
 ```powershell
-git add -- project/src/engine/Graphics/DirectX12/DX12Buffer.h project/src/engine/Graphics/DirectX12/DX12Buffer.cpp
+git add -- project/src/engine/Graphics/DirectX12/DX12Helper.hpp project/src/engine/Graphics/DirectX12/DX12DescriptorHeap.h project/src/engine/Graphics/DirectX12/DX12DescriptorHeap.cpp project/src/engine/Graphics/DirectX12/DX12RenderProgramBinder.h project/src/engine/Graphics/DirectX12/DX12RenderProgramBinder.cpp project/src/engine/Graphics/DirectX12/DX12RenderProgram.cpp project/src/tests/Graphics/dx12_descriptor_table_cache_tests.cpp
 git diff --cached --check
 git diff --cached --name-status
-git commit -m "fix(dx12): map readback buffers for CPU reads"
+git commit -m "fix(dx12): version descriptor table cache identity"
 
 git add -- project/src/engine/Function/Render/RHIConstantBufferSelfTest.cpp project/src/engine/Function/Render/RHIIndirectSelfTest.cpp
 git diff --cached --check
@@ -957,7 +1032,7 @@ git diff --cached --name-status
 git commit -m "test(rhi): validate constant buffer visibility across backends"
 ```
 
-Rollback checkpoint: keep `fix(dx12): release pending uploads before teardown`, `fix(dx12): map readback buffers for CPU reads`, and `fix(rhi): make GPU self-test transitions explicit` as separate commits. A repeated allocator/assert/watchdog failure reverts the teardown commit and blocks the new CI flag. A combined-diagnostic/capture regression caused by readback remap reverts that commit and blocks integration; do not replace it with sleep/device idle. A validation/self-test/render regression caused by the diagnostic correction reverts that correction and disables the new CLI/CI exposure. In every case, remove the corresponding README/spec guarantees in the same rollback and do not bless baselines.
+Rollback checkpoint: keep `fix(dx12): release pending uploads before teardown`, `fix(dx12): version descriptor table cache identity`, and `fix(rhi): make GPU self-test transitions explicit` as separate commits. A repeated allocator/assert/watchdog failure reverts the teardown commit and blocks the new CI flag. A combined-diagnostic/PerfGate regression caused by allocation-serial identity reverts that commit and blocks integration; do not replace it with cache clearing, sleep, or device idle. A validation/self-test/render regression caused by the diagnostic correction reverts that correction and disables the new CLI/CI exposure. In every case, remove the corresponding README/spec guarantees in the same rollback and do not bless baselines.
 
 ### Task 5: Wire software-backend CI and update the long-term contract
 
@@ -988,7 +1063,7 @@ Add to `docs/specs/modules/graphics.md` under command/resource-state constraints
 ```markdown
 - `AshResourceState::ConstBuffer` 表示当前 `GraphicsProgram` / `ComputeProgram` 可读取的 uniform buffer。Vulkan 映射精确使用 vertex + fragment + compute shader stage 与 `VK_ACCESS_UNIFORM_READ_BIT`；不使用 `ALL_GRAPHICS` / `ALL_COMMANDS`，DX12 保持 `D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER`。当前 Vulkan command buffer 均来自 graphics-capable queue family；未来引入 dedicated compute-only command buffer 时，stage policy 必须按 queue capability 收窄。验证入口 `--rhi-selftest-constant-buffer` 在首帧前覆盖 compute/fragment CB 上传、消费与精确读回。
 - backend 原生资源在首帧前失败时必须在 native allocator/descriptor dependencies 有效期间回收。Vulkan current-frame deletion queue accessor 对 `UINT32_MAX` sentinel 返回 queue 0；Vulkan 与 DX12 shutdown 都在首次 drain 前释放未提交的 pending buffer/texture upload ownership，再由既有 queue flush 回收。有效 frame 的 upload/deletion 行为不变。constant-buffer self-test 的双后端故障注入必须证明失败由正常 teardown 返回非零，不发生 access violation、allocator live-allocation assertion 或 watchdog hang。
-- DX12 READBACK buffer 不得在创建时以 `{0,0}` 空 read range 声明“CPU 不读”后长期直接解引用。调用者完成 GPU fence wait 后，`get_mapped_data()` 以完整 buffer range 重新 Map，必要时结束上一次 readback mapping；Unmap 使用空 written range。接口本身不增加隐式 wait，UPLOAD persistent mapping 不变。
+- DX12 shader-visible descriptor table cache 的内容 identity 必须包含 CPU descriptor slot 地址与本次 allocation serial。相同活跃 allocation 可复用既有 GPU table；slot free 后再次 allocation 即使地址相同也必须 miss 并重新复制。serial 在 CPU heap 既有 allocation mutex 内生成并由 internal handle/binder传递；不得靠 free-time 全 cache clear/scan 修复。
 ```
 
 - [ ] **Step 3: Document the Application command-line contract**
@@ -1163,7 +1238,7 @@ Before the command, create ignored `Intermediate/pr-body-const-buffer.md` with `
 - add an opt-in dual-backend constant-buffer GPU self-test and enable it beside indirect self-test in software-backend CI
 - release never-submitted pending uploads before the first Vulkan/DX12 shutdown drain so pre-frame failures complete normal teardown
 - make direct GPU diagnostics explicitly enter RTV state and isolate CB barriers from unrelated UAV stage masks
-- remap DX12 READBACK buffers with the real CPU read range after caller-owned fence waits
+- version DX12 descriptor-table cache keys so recycled CPU slots cannot alias stale GPU tables
 
 ## Synchronization boundary
 - no UAV-to-UAV barrier or implicit dependency was added
@@ -1172,7 +1247,7 @@ Before the command, create ignored `Intermediate/pr-body-const-buffer.md` with `
 ## Validation
 - deterministic policy doctest: observed RED on fragment/compute/exact scope, then GREEN
 - Vulkan and DX12 injected-mismatch paths: exact FAIL + normal teardown + exit 1, with no allocator leak/assert or watchdog forced exit
-- combined indirect + constant-buffer diagnostics on Vulkan and DX12, including repeated DX12 readback reuse
+- combined indirect + constant-buffer diagnostics on Vulkan and DX12, including deterministic same-frame descriptor-slot reuse
 - full `RunTests.bat Debug`
 - fresh Editor Debug, Sandbox Debug, and Sandbox Release builds
 - `RunArchGate.bat`
