@@ -228,6 +228,24 @@ function Get-Utf8Sha256 {
     }
 }
 
+function Get-FileSha256 {
+    param([string]$Path)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::OpenRead([System.IO.Path]::GetFullPath($Path))
+        $hash = $sha256.ComputeHash($stream)
+        return ([System.BitConverter]::ToString($hash) -replace "-", "")
+    }
+    finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+        $sha256.Dispose()
+    }
+}
+
 function Test-IsJsonNativeInt64 {
     param([object]$Value)
 
@@ -385,7 +403,7 @@ function New-StateFileSnapshots {
         $hash = $null
         if ($exists) {
             [System.IO.File]::WriteAllBytes($backupPath, [System.IO.File]::ReadAllBytes($path))
-            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+            $hash = Get-FileSha256 -Path $path
         }
         $snapshots.Add([PSCustomObject]@{
             path = $path
@@ -407,7 +425,7 @@ function Restore-StateFileSnapshots {
                 $parent = Split-Path -Parent $snapshot.path
                 New-Item -ItemType Directory -Force -Path $parent | Out-Null
                 [System.IO.File]::WriteAllBytes($snapshot.path, [System.IO.File]::ReadAllBytes($snapshot.backup_path))
-                $restoredHash = (Get-FileHash -LiteralPath $snapshot.path -Algorithm SHA256).Hash
+                $restoredHash = Get-FileSha256 -Path $snapshot.path
                 if ($restoredHash -ne $snapshot.sha256) {
                     throw "SHA-256 mismatch after restore"
                 }
@@ -549,7 +567,7 @@ function Set-PerfGateEngineConfig {
     if ($TimingValidation) {
         if ($Backend -eq "Vulkan") {
             Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "Enabled" -Value "true"
-            Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "GpuAssisted" -Value "true"
+            Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "GpuAssisted" -Value "false"
             Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "SynchronizationValidation" -Value "true"
         }
         elseif ($Backend -eq "DX12") {
@@ -1640,6 +1658,17 @@ function Invoke-PerfGateRuns {
 }
 
 function Invoke-RunPerfGateSelfTest {
+    $fileHashProbe = [System.IO.Path]::GetTempFileName()
+    try {
+        [System.IO.File]::WriteAllBytes($fileHashProbe, [System.Text.Encoding]::ASCII.GetBytes("abc"))
+        if ((Get-FileSha256 -Path $fileHashProbe) -cne "BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD") {
+            throw "Binary file SHA-256 helper did not produce the canonical digest."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $fileHashProbe -Force -ErrorAction SilentlyContinue
+    }
+
     $profileConfig = ConvertFrom-Json @'
 {
   "warmup_seconds": 5,
@@ -2094,7 +2123,7 @@ GpuValidation=false
         }
         Restore-StateFileSnapshots -Snapshots $snapshots
         foreach ($snapshot in $snapshots) {
-            if ((Get-FileHash -LiteralPath $snapshot.path -Algorithm SHA256).Hash -ne $snapshot.sha256) {
+            if ((Get-FileSha256 -Path $snapshot.path) -ne $snapshot.sha256) {
                 throw "Task 7 state restore did not reproduce '$($snapshot.path)' byte-for-byte."
             }
         }
@@ -2126,10 +2155,10 @@ GpuValidation=false
         Set-PerfGateEngineConfig -ConfigPath $statePaths[0] -Backend "Vulkan" -EmptyScenario -TimingValidation
         if ((& $readIniValue $statePaths[0] "Rendering" "VSync") -ne "false" -or
             (& $readIniValue $statePaths[0] "VulkanValidation" "Enabled") -ne "true" -or
-            (& $readIniValue $statePaths[0] "VulkanValidation" "GpuAssisted") -ne "true" -or
+            (& $readIniValue $statePaths[0] "VulkanValidation" "GpuAssisted") -ne "false" -or
             (& $readIniValue $statePaths[0] "VulkanValidation" "SynchronizationValidation") -ne "true" -or
             (& $readIniValue $statePaths[0] "DX12Validation" "Enabled") -ne "false") {
-            throw "TimingValidation Vulkan config did not enforce VSync=false and the required validation settings."
+            throw "TimingValidation Vulkan config did not enforce VSync=false, core/synchronization validation, and GPU-assisted validation disabled."
         }
         Restore-StateFileSnapshots -Snapshots $snapshots
         Set-PerfGateEngineConfig -ConfigPath $statePaths[0] -Backend "DX12" -EmptyScenario -TimingValidation
@@ -2141,7 +2170,7 @@ GpuValidation=false
         }
         Restore-StateFileSnapshots -Snapshots $snapshots
         foreach ($snapshot in $snapshots) {
-            if ((Get-FileHash -LiteralPath $snapshot.path -Algorithm SHA256).Hash -ne $snapshot.sha256) {
+            if ((Get-FileSha256 -Path $snapshot.path) -ne $snapshot.sha256) {
                 throw "Task 7 final state restore did not reproduce '$($snapshot.path)' byte-for-byte."
             }
         }
