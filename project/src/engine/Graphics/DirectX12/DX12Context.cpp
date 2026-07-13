@@ -11,7 +11,9 @@
 #include "DX12RenderProgram.h"
 #include "DX12StagingBufferPool.h"
 #include "DX12GpuProfiler.h"
+#include "DX12GpuTiming.h"
 #include "Graphics/GpuProfilerRHI.h"
+#include "Graphics/GpuTimingRHI.h"
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Base/hassert.h"
@@ -373,6 +375,17 @@ namespace RHI
 		if (!_create_descriptor_heaps()) return false;
 		if (!_create_frame_resources(cfg.num_threads)) return false;
 
+		m_gpuTimingContext = Ash_New<DX12GpuTiming>();
+		const GpuTimingResult gpu_timing_init_result =
+			m_gpuTimingContext->init(m_device.Get(), m_graphicsQueue.get_queue());
+		gpu_timing_install(m_gpuTimingContext);
+		if (gpu_timing_init_result != GpuTimingResult::Success)
+		{
+			HLogWarning(
+				"DX12Context: machine-readable GPU timing unavailable (result={}).",
+				static_cast<uint32_t>(gpu_timing_init_result));
+		}
+
 		// Create staging buffer
 		m_stagingBuffer = Ash_New<DX12StagingBufferPool>();
 		m_stagingBuffer->init(m_device.Get(), m_d3d12maAllocator);
@@ -396,6 +409,13 @@ namespace RHI
 		{
 			gpu_profiler_install(nullptr);
 			delete profiler;
+		}
+		if (m_gpuTimingContext)
+		{
+			gpu_timing_install(nullptr);
+			m_gpuTimingContext->shutdown();
+			Ash_Delete(nullptr, m_gpuTimingContext);
+			m_gpuTimingContext = nullptr;
 		}
 
 		// Process all deletion queues
@@ -1087,6 +1107,17 @@ namespace RHI
 		{
 			profiler->collect(nullptr);
 		}
+		if (m_gpuTimingContext && m_gpuTimingContext->has_active_frame())
+		{
+			const GpuTimingResult cancel_result =
+				m_gpuTimingContext->cancel_unsubmitted_frame();
+			if (cancel_result != GpuTimingResult::Success)
+			{
+				HLogError(
+					"DX12Context: failed to cancel an unsubmitted GPU timing frame (result={}).",
+					static_cast<uint32_t>(cancel_result));
+			}
+		}
 
 		m_frameActive = false;
 		m_previousFrame = m_currentFrame;
@@ -1196,6 +1227,9 @@ namespace RHI
 	auto DX12Context::submit(const SubmitInfo& info) -> void
 	{
 		std::vector<ID3D12CommandList*> cmdLists;
+		bool timing_command_list_submitted = false;
+		void* const active_timing_command_buffer =
+			m_gpuTimingContext ? m_gpuTimingContext->active_command_buffer() : nullptr;
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
 		{
@@ -1231,6 +1265,10 @@ namespace RHI
 				continue;
 			}
 			cmdLists.push_back(dx12Cb->get_command_list());
+			if (dx12Cb->get_native_handle() == active_timing_command_buffer)
+			{
+				timing_command_list_submitted = true;
+			}
 			dx12Cb->set_state(ASH_Submitted);
 		}
 
@@ -1239,8 +1277,45 @@ namespace RHI
 			m_graphicsQueue.execute_command_lists(static_cast<UINT>(cmdLists.size()), cmdLists.data());
 		}
 
-		// Signal fence for this frame
-		fr.fence->signal(m_graphicsQueue.get_queue());
+		// ExecuteCommandLists has no result. A checked queue signal is the completion contract
+		// for the exact timing command list contained in this submission.
+		uint64_t frame_completion_value = fr.fence->get_current_value();
+		const HRESULT signal_result =
+			fr.fence->signal_checked(m_graphicsQueue.get_queue(), frame_completion_value);
+		if (SUCCEEDED(signal_result))
+		{
+			const GpuTimingResult timing_submit_result = m_gpuTimingContext
+				? m_gpuTimingContext->mark_frame_submitted(
+					frame_completion_value,
+					fr.fence->get_fence(),
+					timing_command_list_submitted)
+				: GpuTimingResult::Success;
+			if (timing_submit_result != GpuTimingResult::Success)
+			{
+				HLogError(
+					"DX12Context: failed to bind GPU timing frame to checked signal {} (result={}).",
+					frame_completion_value,
+					static_cast<uint32_t>(timing_submit_result));
+			}
+		}
+		if (FAILED(signal_result))
+		{
+			if (m_gpuTimingContext && timing_command_list_submitted)
+			{
+				const HRESULT removed_reason = m_device->GetDeviceRemovedReason();
+				const GpuTimingResult timing_failure =
+					signal_result == DXGI_ERROR_DEVICE_REMOVED ||
+					signal_result == DXGI_ERROR_DEVICE_RESET ||
+					signal_result == DXGI_ERROR_DEVICE_HUNG ||
+					FAILED(removed_reason)
+					? GpuTimingResult::DeviceLost
+					: GpuTimingResult::RecordFailed;
+				m_gpuTimingContext->fail_frame_recording(timing_failure);
+			}
+			HLogError(
+				"DX12Context: checked frame fence signal failed. HRESULT: 0x{:08X}",
+				static_cast<uint32_t>(signal_result));
+		}
 		_drain_d3d12_debug_messages("submit");
 	}
 

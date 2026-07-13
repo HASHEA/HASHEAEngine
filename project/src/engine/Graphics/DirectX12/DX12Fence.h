@@ -14,6 +14,7 @@ namespace RHI
 		void shutdown();
 
 		void signal(ID3D12CommandQueue* queue);
+		auto signal_checked(ID3D12CommandQueue* queue, uint64_t& out_value) -> HRESULT;
 		void wait(uint64_t timeout = INFINITE);
 		void cpu_signal(uint64_t value);
 		uint64_t get_completed_value() const;

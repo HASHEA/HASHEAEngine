@@ -42,8 +42,36 @@ namespace RHI
 
 	void DX12Fence::signal(ID3D12CommandQueue* queue)
 	{
-		m_fenceValue++;
-		queue->Signal(m_fence.Get(), m_fenceValue);
+		uint64_t signaled_value = m_fenceValue;
+		const HRESULT signal_result = signal_checked(queue, signaled_value);
+		if (FAILED(signal_result))
+		{
+			HLogError(
+				"DX12Fence: Failed to signal command queue. HRESULT: 0x{:08X}",
+				static_cast<uint32_t>(signal_result));
+		}
+	}
+
+	auto DX12Fence::signal_checked(ID3D12CommandQueue* queue, uint64_t& out_value) -> HRESULT
+	{
+		out_value = m_fenceValue;
+		if (!queue || !m_fence)
+		{
+			return E_POINTER;
+		}
+		if (m_fenceValue == UINT64_MAX)
+		{
+			return E_FAIL;
+		}
+
+		const uint64_t candidate_value = m_fenceValue + 1u;
+		const HRESULT signal_result = queue->Signal(m_fence.Get(), candidate_value);
+		if (SUCCEEDED(signal_result))
+		{
+			m_fenceValue = candidate_value;
+			out_value = candidate_value;
+		}
+		return signal_result;
 	}
 
 	void DX12Fence::wait(uint64_t timeout)

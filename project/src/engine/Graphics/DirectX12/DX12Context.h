@@ -32,6 +32,7 @@ namespace RHI
 	class DX12CommandBuffer;
 	class DX12StagingBufferPool;
 	class DX12Swapchain;
+	class DX12GpuTiming;
 
 	struct DX12FrameResources
 	{
@@ -195,6 +196,7 @@ namespace RHI
 
 		// Staging buffer
 		DX12StagingBufferPool* m_stagingBuffer = nullptr;
+		DX12GpuTiming* m_gpuTimingContext = nullptr;
 		std::vector<PendingBufferUpload> m_pendingBufferUploads{};
 		std::vector<PendingTextureUpload> m_pendingTextureUploads{};
 		mutable std::mutex m_pendingUploadMutex{};
