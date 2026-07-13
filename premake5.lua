@@ -1,3 +1,8 @@
+newoption {
+	trigger = "no-tracy",
+	description = "Build Engine without TRACY_ENABLE/TRACY_ON_DEMAND for GPU timing validation"
+}
+
 workspace "AshEngine"
 	language "C++"
 	cppdialect "C++17"
@@ -72,6 +77,8 @@ group "ThirdParty"
 	include "project/thirdparty/VulkanSDK"
 	include "project/thirdparty/openFBX"
 	include "project/thirdparty/SPIRV-Cross"
-	include "project/thirdparty/tracy"
+	if not _OPTIONS["no-tracy"] then
+		include "project/thirdparty/tracy"
+	end
 	include "project/thirdparty/meshoptimizer"
 	include "project/thirdparty/D3D12MA"

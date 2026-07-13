@@ -55,7 +55,6 @@ project "Engine"
 		thirdparty .. "/stb",
 		thirdparty .. "/Json",
 		thirdparty .. "/SPIRV-Cross",
-		thirdparty .. "/tracy",
 		thirdparty .. "/Eigen",
 		thirdparty .. "/meshoptimizer/include",
 		thirdparty .. "/tlsf",
@@ -63,6 +62,9 @@ project "Engine"
 		thirdparty .. "/thsvs",
 		assetsdir,
 	}
+	if not _OPTIONS["no-tracy"] then
+		includedirs { thirdparty .. "/tracy" }
+	end
 	links
 	{
 		"GLFW",
@@ -108,14 +110,18 @@ project "Engine"
 		defines
 		{
 			"ASH_DEBUG",
- 			"TRACY_ENABLE",
-            "TRACY_ON_DEMAND",
 			"VULKAN_SYNCHRONIZATION_VALIDATION",
 			"VULKAN_DEBUG_REPORT",
 		}
+		if not _OPTIONS["no-tracy"] then
+			defines
+			{
+				"TRACY_ENABLE",
+				"TRACY_ON_DEMAND",
+			}
+		end
 		links
 		{
-			"tracy",
 			"dbghelp",
 			"psapi",
 			"d3d12",
@@ -123,6 +129,9 @@ project "Engine"
 			"dxguid",
 			"D3D12MA",
 		}
+		if not _OPTIONS["no-tracy"] then
+			links { "tracy" }
+		end
 		runtime "Debug"
 		symbols "on"
 		editandcontinue "Off"
@@ -169,15 +178,16 @@ project "Engine"
 			thirdparty .. "/dxc/inc",
 		}
 		defines "ASH_RELEASE"
-		defines
-		{
-			"TRACY_ENABLE",
-			"TRACY_ON_DEMAND",
-		}
+		if not _OPTIONS["no-tracy"] then
+			defines
+			{
+				"TRACY_ENABLE",
+				"TRACY_ON_DEMAND",
+			}
+		end
 		runtime "Release"
 		optimize "on"
 		links {
-			"tracy",
 			"dbghelp",
 			"psapi",
 			"d3d12",
@@ -186,6 +196,9 @@ project "Engine"
 			"D3D12MA",
 			thirdparty.."/dxc/lib/x64/dxcompiler.lib",
 		}
+		if not _OPTIONS["no-tracy"] then
+			links { "tracy" }
+		end
 		debugcommand (rootdir .. "/product/bin64/Release-windows-x86_64/Editor.exe")
 		debugdir (rootdir .. "/product/bin64/Release-windows-x86_64")
 		postbuildcommands 
