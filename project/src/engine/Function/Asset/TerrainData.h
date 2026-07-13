@@ -137,4 +137,17 @@ namespace AshEngine
 		const TerrainGridLayout& layout,
 		uint32_t sample_x,
 		uint32_t sample_z) -> std::vector<TerrainComponentCoord>;
+	ASH_API auto encode_terrain_height_r16(
+		float world_height,
+		const TerrainHeightMapping& mapping) -> uint16_t;
+	ASH_API auto decode_terrain_height_r16(
+		uint16_t encoded_height,
+		const TerrainHeightMapping& mapping) -> float;
+	ASH_API auto create_flat_terrain_snapshot(
+		TerrainAssetId asset_id,
+		const TerrainGridLayout& layout,
+		const TerrainHeightMapping& mapping,
+		float world_height,
+		std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot,
+		std::string* out_error = nullptr) -> bool;
 }

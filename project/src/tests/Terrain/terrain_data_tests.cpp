@@ -260,3 +260,122 @@ TEST_CASE("Terrain data locks layer IDs and immutable snapshot pointer types")
 	CHECK(TerrainTests::FindComponent(snapshot, { 0u, 0u }) == nullptr);
 	CHECK(TerrainTests::FindComponent(snapshot, { 2u, 0u }) == nullptr);
 }
+
+TEST_CASE("Terrain data maps R16 endpoints and midpoint linearly")
+{
+	const AshEngine::TerrainHeightMapping mapping{ -128.0f, 512.0f };
+	CHECK(AshEngine::decode_terrain_height_r16(0u, mapping) == doctest::Approx(-128.0f));
+	CHECK(AshEngine::decode_terrain_height_r16(65535u, mapping) == doctest::Approx(384.0f));
+	const uint16_t encoded = AshEngine::encode_terrain_height_r16(64.0f, mapping);
+	CHECK(AshEngine::decode_terrain_height_r16(encoded, mapping) == doctest::Approx(64.0f).epsilon(0.0001));
+}
+
+TEST_CASE("Terrain data clamps and rounds R16 height encoding deterministically")
+{
+	const AshEngine::TerrainHeightMapping mapping{ 0.0f, 1.0f };
+	CHECK(AshEngine::encode_terrain_height_r16(-1.0f, mapping) == 0u);
+	CHECK(AshEngine::encode_terrain_height_r16(2.0f, mapping) == 65535u);
+	CHECK(AshEngine::encode_terrain_height_r16(0.5f, mapping) == 32768u);
+	CHECK(AshEngine::encode_terrain_height_r16(0.49f / 65535.0f, mapping) == 0u);
+	CHECK(AshEngine::encode_terrain_height_r16(0.5f / 65535.0f, mapping) == 1u);
+	CHECK(AshEngine::encode_terrain_height_r16(
+		std::numeric_limits<float>::quiet_NaN(), mapping) == 0u);
+	CHECK(AshEngine::encode_terrain_height_r16(0.5f, { 0.0f, 0.0f }) == 0u);
+	CHECK(AshEngine::encode_terrain_height_r16(
+		0.5f,
+		{ std::numeric_limits<float>::max(), std::numeric_limits<float>::max() }) == 0u);
+	CHECK(AshEngine::decode_terrain_height_r16(32768u, { 0.0f, 0.0f }) == 0.0f);
+}
+
+TEST_CASE("Terrain data creates a complete flat immutable snapshot")
+{
+	const AshEngine::TerrainGridLayout layout = TerrainTests::MakeSmallLayout();
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	using PublishedSnapshot = decltype(snapshot)::element_type;
+	static_assert(std::is_const_v<PublishedSnapshot>);
+	std::string error{ "stale error" };
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(7u, layout, { -10.0f, 20.0f }, 2.5f, snapshot, &error));
+	REQUIRE(snapshot != nullptr);
+	CHECK(error.empty());
+	CHECK(snapshot->asset_id == 7u);
+	CHECK(snapshot->content_generation == 1u);
+	CHECK(snapshot->residency_revision == 0u);
+	REQUIRE(snapshot->base_heights != nullptr);
+	REQUIRE(snapshot->base_heights->size() == 81u);
+	const uint16_t expected_encoded =
+		AshEngine::encode_terrain_height_r16(2.5f, snapshot->height_mapping);
+	for (const uint16_t encoded : *snapshot->base_heights)
+	{
+		CHECK(encoded == expected_encoded);
+	}
+	CHECK(snapshot->components.size() == 4u);
+	for (size_t index = 0; index < snapshot->components.size(); ++index)
+	{
+		const auto& component = snapshot->components[index];
+		REQUIRE(component != nullptr);
+		CheckCoord(
+			component->coord,
+			static_cast<uint16_t>(index % 2u),
+			static_cast<uint16_t>(index / 2u));
+		CHECK(component->content_generation == 1u);
+		CHECK(component->sample_width == 5u);
+		CHECK(component->sample_height == 5u);
+		CHECK(component->heights.size() == 25u);
+		for (const float height : component->heights)
+		{
+			CHECK(height == doctest::Approx(
+				AshEngine::decode_terrain_height_r16(expected_encoded, snapshot->height_mapping)));
+		}
+		CHECK(component->weights.empty());
+	}
+}
+
+TEST_CASE("Terrain data does not publish a flat snapshot after validation failure")
+{
+	const auto existing_mutable = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	existing_mutable->asset_id = 99u;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot = existing_mutable;
+	std::string error{};
+
+	auto CheckFailure = [&](const AshEngine::TerrainGridLayout& layout,
+		const AshEngine::TerrainHeightMapping& mapping,
+		float height)
+	{
+		error.clear();
+		CHECK_FALSE(AshEngine::create_flat_terrain_snapshot(
+			7u,
+			layout,
+			mapping,
+			height,
+			snapshot,
+			&error));
+		CHECK(snapshot == nullptr);
+		CHECK_FALSE(error.empty());
+		snapshot = existing_mutable;
+	};
+
+	AshEngine::TerrainGridLayout invalid_layout = TerrainTests::MakeSmallLayout();
+	invalid_layout.component_quad_count = 0u;
+	CheckFailure(invalid_layout, { -10.0f, 20.0f }, 2.5f);
+
+	const AshEngine::TerrainGridLayout layout = TerrainTests::MakeSmallLayout();
+	CheckFailure(layout, { std::numeric_limits<float>::quiet_NaN(), 20.0f }, 2.5f);
+	CheckFailure(layout, { -10.0f, 0.0f }, 2.5f);
+	CheckFailure(layout, { -10.0f, -20.0f }, 2.5f);
+	CheckFailure(layout, { -10.0f, std::numeric_limits<float>::infinity() }, 2.5f);
+	CheckFailure(
+		layout,
+		{ std::numeric_limits<float>::max(), std::numeric_limits<float>::max() },
+		2.5f);
+	CheckFailure(layout, { -10.0f, 20.0f }, std::numeric_limits<float>::quiet_NaN());
+	CheckFailure(layout, { -10.0f, 20.0f }, std::numeric_limits<float>::infinity());
+
+	CHECK_FALSE(AshEngine::create_flat_terrain_snapshot(
+		7u,
+		invalid_layout,
+		{ -10.0f, 20.0f },
+		2.5f,
+		snapshot,
+		nullptr));
+	CHECK(snapshot == nullptr);
+}
