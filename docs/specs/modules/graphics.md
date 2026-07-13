@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-13
 status: active
 ---
 
@@ -22,7 +22,9 @@ status: active
 | `RasterizerConvention.h` | mesh winding → 各 API front-face 的唯一映射点（SPIR-V `-fvk-invert-y` 差异收口处） |
 | `ShaderCompiler.h`、`DXC/DXCHelper.*`、`DXC/DXCIncludeHandler.*` | `ShaderCompiler` 接口、`AshDXCContext` DXC 封装与 include 解析 |
 | `ShaderCache.h/.cpp` | shader/pipeline 缓存格式：SHA1 摘要、`ShaderCacheIndexHeader`、`PipelineCacheFileHeaderV2`，缓存目录 `product/caches/ShaderCaches/{vulkan,dx12}` |
-| `GpuProfilerRHI.h/.cpp` | GPU 计时抽象 |
+| `GpuProfilerRHI.h/.cpp` | Tracy 交互式 GPU zone；不承担机器可读门禁数据 |
+| `GpuTimingRHI.h/.cpp` | 与 Tracy 无关的机器可读 GPU frame/pass 计时契约、稳定名称 hash 与全局 context 安装点 |
+| `GpuTimingFrameTracker.h`、`Vulkan/VulkanGpuTiming.*`、`DirectX12/DX12GpuTiming.*` | 后端私有的 query slot/FIFO 生命周期与 Vulkan/DX12 timestamp 实现 |
 | `Vulkan/` | `VulkanContext/VulkanSwapchain/Vulkan*` 全套实现 + `VulkanShaderCompiler`（HLSL→SPIR-V） |
 | `DirectX12/` | `DX12Context/DX12Swapchain/DX12*` 全套实现 + `DX12ShaderCompiler`（HLSL→DXIL） |
 | `Shaders/AshVertexDeclLocations.hlsli` | 顶点声明 location 约定 |
@@ -35,6 +37,8 @@ status: active
 - 命令接口（`CommandBuffer`）：barrier（`cmd_transition_resource_state`）、render pass（`cmd_begin/end_render_pass`，debug_scope_name 用于 RenderDoc/PIX 标签）、绑定/draw/dispatch/copy/update 全家族；错误经 `has_error()/get_last_error()` 暴露。
 - Readback（SDD-2026-07-07-render-gate 新增，验证/调试用途，非热路径）：`CommandBuffer::cmd_copy_texture_to_buffer(source, destination, buffer_offset, row_pitch_bytes)` 把 mip0/layer0 整层拷入 CPU 可读 buffer，仅支持 4 字节颜色格式（RGBA8/BGRA8），row pitch 须 ≥ width*4 且为 256 的倍数（D3D12 约束）；另有区域版 `cmd_copy_texture_region_to_buffer`。上层 backbuffer 回读封装在 `Function/Render` 的 RenderDevice（`request_back_buffer_capture/fetch_back_buffer_capture`）；fetch 必须传有限 timeout，并通过 `wait_for_frame_completion` 只等待产生该 readback 的当前 graphics frame，禁止用无上限的 device `wait_idle`。
 - Indirect draw/dispatch（SDD-2026-07-09-indirect-draw-substrate 新增）：`CommandBuffer::cmd_draw_indirect(buffer, offset, drawCount, stride)`、`cmd_draw_indexed_indirect(buffer, offset, drawCount, stride)`、`cmd_dispatch_indirect(buffer, offset)`；args 结构体 `AshDrawIndirectArgs`/`AshDrawIndexedIndirectArgs`/`AshDispatchIndirectArgs` 定义在 `RHICommon.h`。Vulkan 直通 `vkCmd*Indirect`；DX12 经三种固定 argument-only command signature（设备级懒创建缓存于 `DX12Context`）+ `ExecuteIndirect`。自测链路 `--rhi-selftest-indirect`（`Function/Render/RHIIndirectSelfTest.cpp`）覆盖 compute 写 args → barrier → 三个 indirect API → readback 校验，日志标记 `[RHISelfTest] ... PASS/FAIL`。
+- 机器可读 GPU timing：`IGpuTimingContext::begin_frame/begin_scope/end_scope/end_frame/try_collect` 在主 graphics command buffer 上记录整帧与最多 128 个 scope；`GpuTimingFrameSnapshot` 包含 `submitted_frame_index`、整帧毫秒数、`scope_count/overflowed` 与固定数组 scope sample。名称身份是 `gpu_timing_name_hash()` 的稳定 64-bit FNV-1a；`gpu_timing_install/get` 只安装一个活动 context。
+- `GpuTimingResult` 的稳定结果集为 `Success/Pending/Unsupported/CapacityExceeded/InvalidState/StaleHandle/RecordFailed/ResolveFailed/DeviceLost/QueueFrequencyInvalid`。`Pending` 仅是 `try_collect` 的“尚无已完成结果”，不是失败；所有 recording 方法必须同步返回 `Success`，否则当前 timing frame 无效。该链路没有 CPU 或 Tracy fallback，后端错误必须进入机器可读失败结果。
 - Swapchain：`present/resize_swapchain/get_swapchain_buffer/get_format/begin_frame/end_frame`。`begin_frame()` 与 `present()` 均返回 `SwapchainPresentResult`：`Completed` 表示 acquire/present 无致命错误地完成，`Retryable` 表示当前无法处理但可继续（Vulkan no-image/out-of-date），`Failed` 表示致命后端错误。Vulkan acquire Retryable 帧不录制命令、不 present；`GraphicsContext::end_frame(false)` 仍推进 timeline/fence，但不等待未 signal 的 acquire binary semaphore，也不 signal 无人消费的 present binary semaphore。Vulkan `SUBOPTIMAL` 视为 Completed；DX12 acquire 为 Completed，所有 `SUCCEEDED(hr)` present（含 `DXGI_STATUS_OCCLUDED`）也为 Completed。DX12 fence 的 `GetCompletedValue()==UINT64_MAX` 表示 device removed，必须作为 Failed，禁止误判 capture 完成。只有完成 acquire 后才录制，只有完成 present 才可满足 readiness。
 - Shader 编译：`ShaderCompiler::check_and_compile_shader` 由 `VulkanShaderCompiler`/`DX12ShaderCompiler` 实现，均走 DXC（`AshDXCContext`），产物按 SHA1（编译器输入 hash + 内容 hash）落盘到各自缓存目录，命中则跳过编译。注意 `ShaderCache.h` 中 `class ShaderCache` 为空壳，缓存读写逻辑在两个后端 compiler 内。
 - Shader 预处理（rewrite）阶段的坑（SDD-2026-07-07-taa-uav-image-format 实证）：`AshDXCContext::preprocess_shader_file_to_full_text` 用 `IDxcRewriter2::RewriteWithOptions`（AST 重发射，非 `-P`），**`[[...]]` 属性会被丢弃**——这是 `[[vk::push_constant]]` 需在 rewrite 后由 `rewrite_root_constant_blocks_for_vulkan` 注入的原因。且 rewrite 阶段完整执行预处理，彼时仅 item.macroDefine 生效、`ASH_VULKAN` **未定义**（compile 阶段才 `-D` 注入），shader 源码里 `#if ASH_VULKAN` 的分支在 Vulkan 运行时路径永远不会存活。需要影响 SPIR-V 元数据时只能靠能活过 rewrite 的语言构造（如元素类型，storage image 格式经 `min16float4` 推导 `Rgba16f`）或 rewrite 后文本注入。
@@ -47,6 +51,8 @@ status: active
 - 跨后端 API 差异（Y 翻转/winding、资源状态模型）必须收口在单点（如 `RasterizerConvention.h`、各后端 ResourceTracker），不得散落到上层。
 - 后端对象经 `Ash_New` 分配；validation/debug-layer 报错视同 bug，禁止靠关闭 validation 绕过。
 - readback API 仅限验证/调试路径调用，不得进入常规帧热路径。
+- GPU timing tracker 固定为 4 个 query/readback frame slot 与 8 项 CPU snapshot FIFO，不在录制/收集热路径分配。slot 生命周期为 `Idle → Recording → Submitted → Completed → Materialized|Failed → Idle`，FIFO 为 `Queued → Published`；generation 拒绝 stale handle，旧 frame 必须按 submitted index 有序物化。只有真实 queue submit 成功后才能绑定该帧确切的 fence/timeline completion value；未提交/中止的 recording 必须 cancel，禁止制造 snapshot。结果收集必须 non-blocking，禁止 `wait_idle`、completion 前读回、覆盖未发布 FIFO 或静默丢弃 sticky failure。
+- Vulkan timing 按 graphics queue 的 `timestampValidBits` 做模数差值，再乘 `timestampPeriod`；valid bits 为 0、周期非法、query availability 未完成或读取失败都显式失败。DX12 使用 timestamp query heap + 分 slot readback range，以 `GetTimestampFrequency` 换算；频率为 0、checked fence signal/device removed 或 readback 失败都显式失败。
 - Indirect 跨后端契约（SDD-2026-07-09-indirect-draw-substrate）：① args 结构体布局以 engine 侧 `Ash*IndirectArgs` 为唯一权威（VK/D3D12 原生布局本就相同），compute shader 按此布局写入；② **indirect draw 的 `firstInstance` 恒为 0**——DX12 下 `SV_InstanceID` 拿不到 StartInstanceLocation（SM6.8 以下），实例基址/偏移一律走 constant buffer 或独立 storage buffer，禁止依赖 firstInstance 进 shader；③ args buffer 在 indirect 消费前必须转到 `AshResourceState::IndirectArgs`；④ DX12 command signature 的 ByteStride 固定为结构体大小，multi-draw（drawCount>1）时 stride 必须等于 `sizeof(Ash*IndirectArgs)`（DX12 侧有断言）。
 - 首帧前销毁 RHI 资源必须置 `immediate_deletion = true`：Vulkan 的 per-frame 延迟删除队列在首个 `begin_frame` 前无效（`currentFrame` 初始为 `UINT32_MAX`，`delayed_deletion_queues[currentFrame]` 越界），预循环路径（如 RHI 自测）默认延迟删除会崩溃（RHIIndirectSelfTest 实证）。
 - Present mode 语义双后端必须一致（`AshPresentMode` 为准）：FIFO=垂直同步（DX12 sync_interval=1）；MAILBOX=不等垂直同步且**绝不撕裂**（DX12 flip model sync=0 **不带** `DXGI_PRESENT_ALLOW_TEARING`，DXGI 以最新完整帧替换排队帧；Vulkan `VK_PRESENT_MODE_MAILBOX_KHR`）；IMMEDIATE=允许撕裂（DX12 sync=0 + `ALLOW_TEARING`）。MAILBOX 曾误带 tearing 标志（SDD-2026-07-07-dx12-mailbox-present-tearing 修正；该撕裂是 DX12+TAA 抖动的放大器，抖动真根因是 Function 层 jitter 重复施加，见 SDD-2026-07-07-taa-jitter-double-apply）。两后端创建 swapchain 时都必须打日志记录实际选中的 present mode。
@@ -61,6 +67,7 @@ status: active
 
 - 双后端构建 + `RunRenderGate.bat`（双后端 golden SSIM 回归 + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard`（全矩阵）。
 - Engine.ini 分别开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 readiness smoke（`run.bat sandbox <backend> Debug --smoke-test-seconds=120`），检查 `product/logs` 无 validation 报错。
+- 改 GPU timing 时还须跑对应 `RunTests.bat` focused cases、`RunPerfGate.bat -Profile Standard -Scenario Empty -Configuration Debug -TimingValidation` 与 `RunPerfGate.bat -Profile Standard -Scenario Empty -Configuration Release -NoTracy`；两端都要产生 complete、expected=received 的 snapshot。
 - 改 shader 编译/缓存时清空 `product/caches/ShaderCaches/` 后重跑冷启动验证。
 
 ## 历史
@@ -69,4 +76,5 @@ status: active
 - [SDD-2026-07-09-vulkan-optional-device-caps Vulkan 设备能力分级](../../sdd/SDD-2026-07-09-vulkan-optional-device-caps.md)：sparse binding 从 boot 硬断言降级为可选能力位（CI lavapipe 冒烟撞出）,确立必需/可选能力分级原则。
 - [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 backbuffer 回读 RHI 接口与双后端实现。
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：新增双后端 acquire/present 三态结果、Vulkan no-image 同步闭环并传播到 readiness。
+- [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)：Phase 0 新增双后端 non-blocking GPU frame/pass timing，作为 Terrain 300 FPS 可行性门槛的机器证据。
 - [SDD-2026-07-07-dx12-mailbox-present-tearing DX12 MAILBOX present 语义修正](../../sdd/SDD-2026-07-07-dx12-mailbox-present-tearing.md)：MAILBOX 去除误加的 `ALLOW_TEARING`。注：其"抖动根因是撕裂"的判断后被推翻，真根因见 [SDD-2026-07-07-taa-jitter-double-apply](../../sdd/SDD-2026-07-07-taa-jitter-double-apply.md)（Function 层 TAA jitter 重复施加）；present 语义修正本身仍然成立。
