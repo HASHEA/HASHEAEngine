@@ -261,6 +261,8 @@ git commit -m "fix(vulkan): expose constant buffers to program shader stages"
 - Modify: `project/src/engine/EntryPoint.h:291-304,608-611`
 - Modify: `project/src/engine/Function/Application.h:124-130,235-237`
 - Modify: `project/src/engine/Function/Application.cpp:1-15,391-398`
+- Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.h:165-168`
+- Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.cpp:1655-1685`
 - Create: `project/src/engine/Function/Render/RHIConstantBufferSelfTest.h/.cpp`
 - Create: `project/src/engine/Shaders/SelfTest/RHIConstantBufferSelfTest.hlsl`
 
@@ -783,7 +785,56 @@ Temporarily change only `k_compute_expected[0]` in `RHIConstantBufferSelfTest.cp
 run.bat sandbox vulkan Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
 ```
 
-Expected: non-zero exit and a `[RHISelfTest] constant buffer visibility FAIL` log with the exact tile/channel mismatch. Restore `17u` with `apply_patch`, rebuild, and confirm `git diff` contains no injected expectation change.
+Pre-fix execution evidence: the mismatch was detected and the wrapper returned 1, but the inner Vulkan process then reproduced `0xC0000005` three times. The stack was `VulkanSampler::~VulkanSampler -> DelayCommandQueue::emplace -> EnvironmentLightingPass::shutdown -> SceneRenderer::shutdown -> Application::_shutdown_runtime`. A separate run with valid pixels/self-test PASS followed only by a forced pre-`_on_startup` failure produced the same stack; therefore the self-test resource chain is excluded. Normal one-frame startup sets `currentFrame` from `UINT32_MAX` to 0 and shuts down cleanly. A sampler-only guard advanced the failure to `VulkanTexture::~VulkanTexture -> DelayCommandQueue::emplace -> SunLightShadowPass::shutdown` with the same invalid deque access. Buffer/View, Framebuffer, RenderPass, Texture/View, Sampler, and StagingBuffer all call the same unsafe accessor, so per-destructor patches cannot satisfy the acceptance criterion. The accessor fallback eliminated both access violations, but VMA then reported seven live allocations and blocked in `vmaDestroyAllocator`; leak records identify two AO textures, four deferred-light mesh buffers, and one volumetric buffer retained by the pending-upload vectors that only normal `begin_frame()` consumes.
+
+- [ ] **Step 8a: Fix the proven pre-first-frame deletion queue root cause**
+
+First restore the uncommitted sampler experiment so `VulkanSampler::~VulkanSampler()` again uses its original `if (immediate_deletion)` condition. Then change only `VulkanContext::get_current_frame_deletion_queue_internal()` to:
+
+```cpp
+		inline auto get_current_frame_deletion_queue_internal() -> DelayCommandQueue&
+		{
+			const uint32_t deletion_queue_index = currentFrame == UINT32_MAX ? 0u : currentFrame;
+			return delayed_deletion_queues[deletion_queue_index];
+		}
+```
+
+Queue 0 is safe for the sentinel path because pre-frame immediate GPU submissions are synchronous (`submit_immediately` waits its fence); the first real `begin_frame()` selects frame 0 before flushing queue 0, while failed startup calls `wait_idle()` and flushes all deletion queues before frame/staging/device teardown. Do not set `currentFrame` early, fabricate a frame, change flush ordering, or patch individual resource destructors.
+
+In `VulkanContext::shutdown()`, after `wait_idle()` / cache unload and before the first `flush_delayed_deletion_queues()`, release pending uploads outside their mutex with the same swap pattern used by the normal flush path:
+
+```cpp
+		{
+			std::vector<PendingBufferUpload> discarded_buffer_uploads{};
+			std::vector<PendingTextureUpload> discarded_texture_uploads{};
+			{
+				std::scoped_lock<std::mutex> lock(pendingUploadMutex);
+				discarded_buffer_uploads.swap(pendingBufferUploads);
+				discarded_texture_uploads.swap(pendingTextureUploads);
+			}
+		}
+```
+
+The outer scope must end before the existing first deletion-queue drain, so dropping the resource shared_ptrs enqueues native destruction into queue 0 while VMA/staging/device dependencies are still alive. Do not call `_flush_pending_*_uploads()` during shutdown: that would create GPU work after teardown has begun.
+
+Rebuild Sandbox Debug with compute expected red still set to 20 and rerun the injected Vulkan command under the existing 120-second watchdog. GREEN requires all of the following, so a watchdog-forced exit 1 cannot hide a teardown hang:
+
+- the exact constant-buffer mismatch/`FAIL` markers are present and the wrapper returns exit 1;
+- Application completes normal teardown well before the watchdog deadline;
+- `VMA leak tracking: no live VMA allocations detected before allocator shutdown.` is present;
+- `Fatal Error: readiness process deadline expired`, `Detected ... live VMA allocations`, `VMA leak:`, `Assertion failed`, and `0xC0000005` are absent;
+- no hang, crash, watchdog timeout, or forced exit occurs.
+
+Restore expected red to 17 with `apply_patch`, rebuild, and confirm the injected expectation diff is gone.
+
+Stage only `project/src/engine/Graphics/Vulkan/VulkanContext.h` and `.cpp`, inspect the cached diff, and commit the atomic P0 separately:
+
+```powershell
+git add -- project/src/engine/Graphics/Vulkan/VulkanContext.h project/src/engine/Graphics/Vulkan/VulkanContext.cpp
+git diff --cached --check
+git diff --cached --name-status
+git commit -m "fix(vulkan): make pre-frame teardown safe"
+```
 
 - [ ] **Step 9: Verify real GPU GREEN on both backends**
 
@@ -834,6 +885,7 @@ Add to `docs/specs/modules/graphics.md` under command/resource-state constraints
 
 ```markdown
 - `AshResourceState::ConstBuffer` 表示当前 `GraphicsProgram` / `ComputeProgram` 可读取的 uniform buffer。Vulkan 映射精确使用 vertex + fragment + compute shader stage 与 `VK_ACCESS_UNIFORM_READ_BIT`；不使用 `ALL_GRAPHICS` / `ALL_COMMANDS`，DX12 保持 `D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER`。当前 Vulkan command buffer 均来自 graphics-capable queue family；未来引入 dedicated compute-only command buffer 时，stage policy 必须按 queue capability 收窄。验证入口 `--rhi-selftest-constant-buffer` 在首帧前覆盖 compute/fragment CB 上传、消费与精确读回。
+- Vulkan 原生资源在首帧前销毁时不得索引 `currentFrame == UINT32_MAX`。current-frame deletion queue accessor 对 sentinel 返回 queue 0：首个 `begin_frame()` 选择 frame 0 后 flush；启动失败时 shutdown 在首次 drain 前释放未提交的 pending buffer/texture upload ownership，再在依赖池与 device 销毁前 flush 全部 queue。有效 frame 的 upload/deletion 行为不变。constant-buffer self-test 的故障注入必须证明首帧前失败只返回非零，不发生 teardown access violation、VMA live-allocation assertion 或 watchdog hang。
 ```
 
 - [ ] **Step 3: Document the Application command-line contract**
