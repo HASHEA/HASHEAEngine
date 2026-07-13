@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-13
 status: active
 ---
 
@@ -30,7 +30,7 @@ status: active
 - 事件：`EditorEventBus`（类型索引的同步事件总线，`Subscribe<T>/Unsubscribe/Publish<T>`，非线程安全），事件类型在 `Core/EditorEventTypes.h`/`EditorEvents.h`。
 - 上下文：`EditorContext`（SelectionService/SceneService/UIContext 指针）供命令执行；`EditorFrameContext` 携带 `AshEngine::UIContext*` 供每帧 GUI。
 - Services（全部，位于 `Services/`）：`AssetDatabaseService`、`AssetPreviewService`、`CommandService`、`DragDropTransferService`、`EditorGizmoService`（含 `EditorGizmoMath/Transform/Viewport/Style/SelectionUtils`、`MoveScaleGizmoTool`、`RotateGizmoTool`）、`EditorIconService`（接口 `IEditorIconService`）、`EditorSessionStateService`、`EditorSettingsService`、`EditorShortcutService`、`EditorViewportCameraService`、`EditorViewportService`、`SceneService`、`SelectionService`、`SelectionOverlayRenderer`、`UndoRedoService`。
-- Inspector：Camera/Light/Mesh/Environment/Particle 五类 component editor 经 `InspectorComponentEditorRegistry` 注册，Name/Transform 由固定 section 绘制；Particle 草稿可编辑容量、模拟、颜色/尺寸、混合和完整 uint32 seed，提交为 `SetParticleComponentCommand`。
+- Inspector：Camera/Light/Mesh/Environment/Particle 五类 component editor 经 `InspectorComponentEditorRegistry` 注册，Name/Transform 由固定 section 绘制；Particle 草稿按 Main、Emission、Shape & Motion、Size Over Lifetime、Color Over Lifetime、Renderer 固定顺序分组，Main/Emission/Renderer 默认展开，尺寸与颜色各有只读的起止预览。Renderer 的 sprite Texture 字段支持搜索、Asset Browser 拖放和 recent paths；空路径显示 Default White fallback，已知缺失路径警告但可提交，已知非 Texture 类型阻塞提交。Soft Particles 关闭时 fade distance 控件禁用但保值。字段继续通过现有 draft/sanitize/`SetParticleComponentCommand` 提交，reset/restore/remove、保存重载、undo/redo 与连续字段 merge 语义不变。
 - readiness smoke：`Editor::_get_automation_readiness` 要求 bootstrap、UI renderer、AssetDatabase refresh 与 viewport presentation 同步成功；最终 ready 仍由 Application 的当前帧全 scene packet + asset epoch + present 公共契约证明。Editor 不生成 golden。
 
 ## 约束与不变式
@@ -40,6 +40,7 @@ status: active
 - Gizmo 视觉与命中投影必须同源：Scene viewport 的中央 gizmo 与右上角 XYZ 指示器使用当前相机的同一 view basis；Move/Scale 平面手柄的世界四角必须逐点做透视投影，绘制和命中共用所得凸四边形。相机上下文不可用或投影退化时隐藏对应视觉，禁止回退到 identity 朝向或屏幕轴对齐矩形。
 - 场景修改必须封装为 `EditorCommand` 经 CommandService 执行，保证 undo/redo 与选择一致性；面板间通信走 `EditorEventBus` 或 Services，不得互相直接引用。
 - Particle 必须进入 entity snapshot 的复制/删除/撤销恢复路径。连续属性编辑只在 command 前后状态结构连续时合并；跨 saved checkpoint 不合并，最终状态等于初始状态时不得生成空历史项。
+- Particle sprite 的空路径与已知缺失路径沿用运行时 Default White fallback，因此不得阻止 Inspector 提交；资产库能确认路径是非 Texture 类型时必须阻止提交。Soft Particles 开关只控制 fade distance 的可编辑状态，不得清空该值。
 - 场景 new/load/reload 的重置语义由 `SceneWorkflowCoordinator` 统一执行：清 Selection → 清 UndoRedo → 选中默认实体。primary viewport 唯一，viewport 共享状态只由 primary 发布。
 - 稳定标识：action/panel/viewport 的 id 与 drag payload type 是持久化/交互契约，不得随意改名。
 - 冻结快捷键（改动需用户确认）：Ctrl+N / Ctrl+R / Ctrl+S / Ctrl+Shift+R / Ctrl+Shift+A / Ctrl+Alt+A / F2 / Ctrl+Shift+P / Delete / Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / F5，AssetBrowser 内容区 Enter/Backspace。
@@ -56,6 +57,7 @@ status: active
 对齐 `docs/VERIFY.md` "Editor 面板 / UI"行：
 
 - 构建 + `run.bat editor`，手动过一遍改动路径（面板打开、交互、无报错日志）
+- Particle Inspector 手工覆盖六个 header、Texture 搜索/拖放/recent、missing fallback、wrong-type 阻塞、soft disable retain、两种预览，以及保存/重载、reset/restore/remove/undo
 - 涉及场景生命周期（打开/保存/reload）时升级为 `run.bat all Debug --smoke-test-seconds=120`
 
 ## 历史

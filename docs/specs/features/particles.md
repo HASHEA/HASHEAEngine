@@ -27,7 +27,7 @@ scene JSON schema 当前为 version 6。`blend_mode` 写为 `Additive` / `AlphaB
 - Scene/提取：`Function/Scene/SceneComponents.h`、`Scene.h/.cpp`，以及 `RenderScene.h/.cpp` 的 `VisibleParticleEmitter`。
 - 编排：`Function/Render/ParticleSystemPass.h/.cpp`；shader 为 `Shaders/Particles/ParticleSystem.hlsl`。
 - 帧资产准备：logic thread 只复制组件/path；`ScenePresentationSubsystem::submit_presentations()` 在 render/submit thread 为可见 emitter 准备 sprite `TextureAsset`，并把 shared handle 固定到该帧快照。
-- Editor：`Panels/Inspector/ParticleComponentEditor.*` + `SetParticleComponentCommand`；组件参与 entity snapshot、复制、删除与 undo/redo。
+- Editor：`Panels/Inspector/ParticleComponentEditor.*` 将草稿按固定顺序分为 Main、Emission、Shape & Motion、Size Over Lifetime、Color Over Lifetime、Renderer 六个折叠模块，其中 Main、Emission、Renderer 默认展开。Size/Color 模块各绘制一个只读的起点到终点预览，不引入额外可编辑曲线或关键帧。Renderer 的 sprite texture 字段复用通用 asset-path 控件，支持搜索、Asset Browser 拖放和 recent paths；空路径显示 `Using Default Particle Sprite (White)`，已知缺失路径警告但允许提交，已知非 Texture 类型阻止提交。Soft Particles 关闭时 Soft Fade Distance 置灰但保留原值。所有字段仍写入现有 Particle draft，经同一 sanitize 后提交 `SetParticleComponentCommand`；reset/restore/remove、保存重载、undo/redo 与连续字段 command merge 语义不变，组件继续参与 entity snapshot、复制和删除。
 - 验证场景：`product/assets/scenes/Particles.scene.json`，纯程序化 additive fountain，无外部资产依赖。
 
 每 emitter 持有两个 32-byte 粒子池、block counts/offsets、counter 和 indirect args。状态 key 为 `{scene_runtime_id, entity_id}`；场景解绑显式释放。capacity、scene content epoch 或模拟参数 fingerprint 改变时只重置对应 emitter；fingerprint 只含 spawn/lifetime/lifetime variance/speed/spread/acceleration/seed，sprite、径向、soft、size、color、blend 等外观字段及 `emitting` 切换不重置模拟。
@@ -53,7 +53,7 @@ draw program 固定为 Additive/AlphaBlend × SoftOff/SoftOn 四个 variant。So
 - `RunRenderGate.bat -Scenes particles`：粒子双后端 golden 与跨后端 diff；基线已于 2026-07-12 经用户确认后由事务式 `-BlessGolden` 发布，后续仍禁止直接编辑 golden。
 - 同参数抓两次 Vulkan、一次 DX12，用 AshImageDiff 验证确定性。
 - 双后端 validation/debug layer 粒子场景 smoke，日志不得有 barrier、lifetime 或泄漏错误。
-- Editor 手工覆盖添加组件、改参、保存/重载、`AlphaBlend` 与深度遮挡；默认 golden 只覆盖 Additive fountain，AlphaBlend 的无排序限制不由该图覆盖。
+- Editor 手工覆盖六个模块的顺序与默认展开状态、sprite 搜索/拖放/recent、空路径 White fallback、缺失路径可提交警告、非 Texture 阻塞、Soft Fade Distance 禁用保值、尺寸/颜色只读预览，以及保存/重载、reset/restore/remove、undo；默认 golden 只覆盖 Additive fountain，AlphaBlend 的无排序限制不由该图覆盖。
 - `RunPerfGate.bat -Profile Standard` 验证无粒子默认矩阵可运行并满足绝对上限；只有报告中存在 baseline 时才能进一步声称相对基线无回归。
 
 ## 历史

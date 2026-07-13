@@ -11,6 +11,7 @@
 #include <any>
 #include <cstddef>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -215,13 +216,24 @@ namespace AshEditor
 			if (refState.pVecRecentPaths && !refState.pVecRecentPaths->empty())
 			{
 				refUi.text_colored(GetEditorMutedTextColor(refUi), "Recent");
+				std::optional<std::string> optSelectedRecentPath{};
 				for (const std::string& strRecent : *refState.pVecRecentPaths)
 				{
 					if (refUi.selectable(strRecent.c_str()))
 					{
-						bChanged = ApplyInspectorAssetPath(strPath, strRecent, refDesc, refState, pAssetDatabaseService);
-						refUi.close_current_popup();
+						optSelectedRecentPath = strRecent;
+						break;
 					}
+				}
+				if (optSelectedRecentPath.has_value())
+				{
+					bChanged = ApplyInspectorAssetPath(
+						strPath,
+						*optSelectedRecentPath,
+						refDesc,
+						refState,
+						pAssetDatabaseService);
+					refUi.close_current_popup();
 				}
 				refUi.separator();
 			}

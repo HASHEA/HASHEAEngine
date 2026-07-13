@@ -93,6 +93,10 @@ namespace AshEditor
 		const InspectorPanelState::EnvironmentDraft& refDraft,
 		const AssetDatabaseService* pAssetDatabaseService,
 		std::string& strOutMessage);
+	bool TryGetParticleSpriteTextureValidationMessage(
+		const InspectorPanelState::ParticleDraft& refDraft,
+		const AssetDatabaseService* pAssetDatabaseService,
+		std::string& strOutMessage);
 	bool TryGetInspectorAssetPathValidationMessage(
 		const InspectorAssetPathValidationDesc& refDesc,
 		const AssetDatabaseService* pAssetDatabaseService,
