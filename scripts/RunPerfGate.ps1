@@ -834,6 +834,25 @@ function Get-GpuMetricSummaryValue {
     return $value
 }
 
+function Get-FirstNonBlankProperty {
+    param(
+        [object]$Object,
+        [string[]]$Names
+    )
+
+    foreach ($name in $Names) {
+        $value = Get-ProfileProperty $Object $name
+        if ($null -eq $value) {
+            continue
+        }
+        $text = ([string]$value).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            return $text
+        }
+    }
+    return $null
+}
+
 function Test-TelemetryData {
     param(
         [object]$Record,
@@ -953,6 +972,9 @@ function Test-TelemetryData {
         }
 
         $gpu = Get-ProfileProperty $Telemetry "gpu"
+        $backendInfo = $null
+        $adapter = $null
+        $driver = $null
         if ($null -ne $gpu) {
             $coverage = Get-ProfileProperty $gpu "coverage"
             if ($null -ne $coverage) { $Record.gpu_coverage = [double]$coverage }
@@ -969,13 +991,27 @@ function Test-TelemetryData {
 
             $backendInfo = Get-ProfileProperty $gpu "backend_info"
             if ($null -ne $backendInfo) {
-                $adapter = Get-ProfileProperty $backendInfo "adapter"
-                if ($null -eq $adapter) { $adapter = Get-ProfileProperty $backendInfo "adapter_name" }
+                $adapter = Get-FirstNonBlankProperty $backendInfo @("adapter", "adapter_name")
                 if ($null -ne $adapter) { $Record.gpu_adapter = [string]$adapter }
-                $driver = Get-ProfileProperty $backendInfo "driver"
-                if ($null -eq $driver) { $driver = Get-ProfileProperty $backendInfo "driver_name" }
-                if ($null -eq $driver) { $driver = Get-ProfileProperty $backendInfo "driver_version" }
+                $driver = Get-FirstNonBlankProperty $backendInfo @("driver", "driver_name", "driver_version")
                 if ($null -ne $driver) { $Record.gpu_driver = [string]$driver }
+            }
+        }
+
+        if ($gpuRequired -or $runtimeV2Required) {
+            if ($null -eq $gpu) {
+                Add-Failure $Record "GPU hardware metadata was missing because telemetry.gpu was absent"
+            }
+            elseif ($null -eq $backendInfo) {
+                Add-Failure $Record "GPU hardware metadata backend_info was missing"
+            }
+            else {
+                if ([string]::IsNullOrWhiteSpace([string]$adapter)) {
+                    Add-Failure $Record "GPU adapter hardware metadata was missing or blank"
+                }
+                if ([string]::IsNullOrWhiteSpace([string]$driver)) {
+                    Add-Failure $Record "GPU driver hardware metadata was missing or blank"
+                }
             }
         }
 
@@ -1258,6 +1294,66 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($candidateRecord.status -eq "PASS" -and $candidateRecord.baseline_status -eq "MISSING") "Missing Vegetation baseline must remain a passing candidate marked MISSING."
     Assert-SelfTest ([double]$candidateRecord.gpu_frame_avg_ms -eq 1.25 -and [double]$candidateRecord.gpu_frame_p95_ms -eq 1.5) "GPU.Frame summary was not captured."
     Assert-SelfTest ($candidateRecord.gpu_adapter -eq "SelfTest GPU" -and $candidateRecord.gpu_driver -eq "SelfTest Driver") "GPU adapter/driver metadata was not captured."
+
+    foreach ($aliasCase in @(
+        [PSCustomObject]@{ adapter_property = "adapter"; driver_property = "driver"; suffix = "direct" },
+        [PSCustomObject]@{ adapter_property = "adapter_name"; driver_property = "driver_name"; suffix = "named" },
+        [PSCustomObject]@{ adapter_property = "adapter_name"; driver_property = "driver_version"; suffix = "versioned" }
+    )) {
+        $aliasTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+        $aliasTelemetry.gpu.backend_info = [PSCustomObject]@{}
+        $expectedAdapter = "Alias GPU $($aliasCase.suffix)"
+        $expectedDriver = "Alias Driver $($aliasCase.suffix)"
+        $aliasTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name $aliasCase.adapter_property -Value $expectedAdapter
+        $aliasTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name $aliasCase.driver_property -Value $expectedDriver
+        $aliasRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-TelemetryData -Record $aliasRecord -Telemetry $aliasTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+        Assert-SelfTest ($aliasRecord.status -eq "PASS" -and $aliasRecord.gpu_adapter -eq $expectedAdapter -and $aliasRecord.gpu_driver -eq $expectedDriver) "GPU hardware metadata alias contract failed for $($aliasCase.suffix)."
+    }
+
+    $fallbackAliasTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $fallbackAliasTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "adapter" -Value " `t "
+    $fallbackAliasTelemetry.gpu.backend_info.adapter_name = "  Fallback GPU  "
+    $fallbackAliasTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "driver" -Value "   "
+    $fallbackAliasTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "driver_name" -Value "  Fallback Driver  "
+    $fallbackAliasRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $fallbackAliasRecord -Telemetry $fallbackAliasTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest ($fallbackAliasRecord.status -eq "PASS" -and $fallbackAliasRecord.gpu_adapter -eq "Fallback GPU" -and $fallbackAliasRecord.gpu_driver -eq "Fallback Driver") "GPU hardware metadata must trim values and skip blank aliases before fallback."
+
+    $missingGpuTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $missingGpuTelemetry.PSObject.Properties.Remove("gpu")
+    $missingBackendInfoTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $missingBackendInfoTelemetry.gpu.PSObject.Properties.Remove("backend_info")
+    $missingAdapterTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $missingAdapterTelemetry.gpu.backend_info.PSObject.Properties.Remove("adapter_name")
+    $blankAdapterTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $blankAdapterTelemetry.gpu.backend_info.adapter_name = " `t "
+    $blankAdapterTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "adapter" -Value "   "
+    $missingDriverTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $missingDriverTelemetry.gpu.backend_info.PSObject.Properties.Remove("driver_version")
+    $blankDriverTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $blankDriverTelemetry.gpu.backend_info.driver_version = " `t "
+    $blankDriverTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "driver" -Value "   "
+    $blankDriverTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "driver_name" -Value "`t"
+
+    $hardwareMetadataCases = @(
+        [PSCustomObject]@{ label = "missing gpu"; telemetry = $missingGpuTelemetry; telemetry_mode = "Off"; failure_pattern = "GPU hardware metadata" },
+        [PSCustomObject]@{ label = "missing backend_info"; telemetry = $missingBackendInfoTelemetry; telemetry_mode = "Off"; failure_pattern = "backend_info" },
+        [PSCustomObject]@{ label = "missing adapter"; telemetry = $missingAdapterTelemetry; telemetry_mode = "Profile"; failure_pattern = "adapter" },
+        [PSCustomObject]@{ label = "blank adapter aliases"; telemetry = $blankAdapterTelemetry; telemetry_mode = "Profile"; failure_pattern = "adapter" },
+        [PSCustomObject]@{ label = "missing driver"; telemetry = $missingDriverTelemetry; telemetry_mode = "Profile"; failure_pattern = "driver" },
+        [PSCustomObject]@{ label = "blank driver aliases"; telemetry = $blankDriverTelemetry; telemetry_mode = "Profile"; failure_pattern = "driver" }
+    )
+    $unexpectedHardwareMetadataPasses = @()
+    foreach ($metadataCase in $hardwareMetadataCases) {
+        $metadataRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-TelemetryData -Record $metadataRecord -Telemetry $metadataCase.telemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode $metadataCase.telemetry_mode
+        $failureText = @($metadataRecord.failures) -join " "
+        if ($metadataRecord.status -ne "FAIL" -or $failureText -notmatch $metadataCase.failure_pattern) {
+            $unexpectedHardwareMetadataPasses += $metadataCase.label
+        }
+    }
+    Assert-SelfTest ($unexpectedHardwareMetadataPasses.Count -eq 0) ("Fixed profile accepted invalid GPU hardware metadata: {0}" -f ($unexpectedHardwareMetadataPasses -join ", "))
 
     $lowCoverage = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile -GpuCoverage 0.94
     $lowCoverageRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
