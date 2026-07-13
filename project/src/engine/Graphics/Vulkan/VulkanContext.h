@@ -36,6 +36,7 @@ namespace RHI
 	struct GpuPipelineStatistics;
 	struct GPUTimeQueriesManager;
 	class VulkanStagingBufferPool;
+	class VulkanGpuTiming;
 	//count = numThread * numFrame
 	struct FramePool
 	{
@@ -377,6 +378,12 @@ public:
 		auto _dump_vma_leaks() const -> void;
 		auto _capture_vma_allocation_stack(VmaTrackedAllocationInfo& info) const -> void;
 		auto _shutdown_shader_pool() -> bool;
+		auto _mark_gpu_timing_submitted(
+			uint64_t frame_completion_value,
+			VkFence completion_fence,
+			const VkCommandBuffer* submitted_command_buffers,
+			uint32_t submitted_command_buffer_count) -> void;
+		auto _fail_gpu_timing_submission() -> void;
 private:
 		struct PendingBufferUpload
 		{
@@ -438,6 +445,7 @@ private:
 		mutable std::mutex										pendingUploadMutex{};
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
+		VulkanGpuTiming* gpuTimingContext = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
 		VulkanCommandBuffer*		 currentUploadCommandBuffer = nullptr;
 		bool						 uploadCommandsPending = false;

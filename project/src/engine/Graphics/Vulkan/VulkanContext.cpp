@@ -20,7 +20,9 @@
 #include "VulkanShaderCompiler.h"
 #include "VulkanStagingBuffer.h"
 #include "VulkanGpuProfiler.h"
+#include "VulkanGpuTiming.h"
 #include "Graphics/GpuProfilerRHI.h"
+#include "Graphics/GpuTimingRHI.h"
 #if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
 #endif
@@ -1638,6 +1640,21 @@ namespace RHI
 		bRetCode = _create_staging_buffer_pool();
 		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create staging buffer pool !");
 
+		gpuTimingContext = Ash_New<VulkanGpuTiming>();
+		const GpuTimingResult gpu_timing_init_result = gpuTimingContext->init(
+			vulkanPhysicalDevice,
+			vulkanDevice,
+			vulkanMainQueueFamily,
+			vulkanGraphicsSemaphore,
+			get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::Synchronization2));
+		gpu_timing_install(gpuTimingContext);
+		if (gpu_timing_init_result != GpuTimingResult::Success)
+		{
+			HLogWarning(
+				"VulkanContext: machine-readable GPU timing unavailable (result={}).",
+				static_cast<uint32_t>(gpu_timing_init_result));
+		}
+
 		// 安装 Tracy GPU profiler。需要在 device/queue 创建之后。
 		// 失败不致命：内部会保留空 ctx，所有 zone 退化为 no-op。
 		{
@@ -1672,6 +1689,13 @@ namespace RHI
 		{
 			gpu_profiler_install(nullptr);
 			delete profiler;
+		}
+		if (gpuTimingContext)
+		{
+			gpu_timing_install(nullptr);
+			gpuTimingContext->shutdown();
+			Ash_Delete(nullptr, gpuTimingContext);
+			gpuTimingContext = nullptr;
 		}
 
 		//unload cache
@@ -2007,6 +2031,42 @@ auto VulkanContext::destroy() -> void
 		vulkanImmediateFence->wait();
 	}
 
+	auto VulkanContext::_mark_gpu_timing_submitted(
+		uint64_t frame_completion_value,
+		VkFence completion_fence,
+		const VkCommandBuffer* submitted_command_buffers,
+		uint32_t submitted_command_buffer_count) -> void
+	{
+		if (!gpuTimingContext || !gpuTimingContext->has_active_frame())
+		{
+			return;
+		}
+		std::array<void*, k_command_buffer_queue_length> timing_command_buffers{};
+		for (uint32_t command_index = 0; command_index < submitted_command_buffer_count; ++command_index)
+		{
+			timing_command_buffers[command_index] = submitted_command_buffers[command_index];
+		}
+		const GpuTimingResult result = gpuTimingContext->mark_frame_submitted(
+			frame_completion_value,
+			completion_fence,
+			timing_command_buffers.data(),
+			submitted_command_buffer_count);
+		if (result != GpuTimingResult::Success)
+		{
+			HLogError(
+				"VulkanContext: failed to bind GPU timing frame to submission (result={}).",
+				static_cast<uint32_t>(result));
+		}
+	}
+
+	auto VulkanContext::_fail_gpu_timing_submission() -> void
+	{
+		if (gpuTimingContext)
+		{
+			gpuTimingContext->fail_frame_recording(GpuTimingResult::RecordFailed);
+		}
+	}
+
 	auto VulkanContext::begin_frame() -> void
 	{
 		ASH_PROFILE_SCOPE_NC("VulkanContext::begin_frame", AshEngine::Profile::Color::RHI);
@@ -2034,13 +2094,37 @@ auto VulkanContext::destroy() -> void
 				semaphore_wait_info.semaphoreCount = 1;
 				semaphore_wait_info.pSemaphores = semaphores;
 				semaphore_wait_info.pValues = wait_values;
-				vkWaitSemaphores(vulkanDevice, &semaphore_wait_info, ~0ull);
+				const VkResult wait_result = vkWaitSemaphores(vulkanDevice, &semaphore_wait_info, ~0ull);
+				if (wait_result == VK_SUCCESS && gpuTimingContext)
+				{
+					const GpuTimingResult timing_result =
+						gpuTimingContext->resolve_timeline_completion(graphics_timeline_value);
+					if (timing_result != GpuTimingResult::Success)
+					{
+						HLogError(
+							"VulkanContext: failed to materialize completed timeline GPU timing (result={}).",
+							static_cast<uint32_t>(timing_result));
+					}
+				}
+				VK_CHECK_RESULT(wait_result);
 			}
 		}
 		else
 		{
 			ASH_PROFILE_SCOPE_NC("VulkanContext::WaitFrameFence", AshEngine::Profile::Color::RHI);
-			get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
+			VulkanFence* frame_fence = get_frame_data_internal().vulkanCommandBufferExecutedFence;
+			if (frame_fence->wait() && gpuTimingContext)
+			{
+				const GpuTimingResult timing_result =
+					gpuTimingContext->resolve_fence_completion(frame_fence->get_handle());
+				if (timing_result != GpuTimingResult::Success)
+				{
+					HLogError(
+						"VulkanContext: failed to materialize completed fence GPU timing (result={}).",
+						static_cast<uint32_t>(timing_result));
+				}
+			}
+			frame_fence->reset();
 		}
 		vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		//flush deletion queue
@@ -2118,6 +2202,7 @@ auto VulkanContext::destroy() -> void
 		}		
 		const bool has_swapchain_image =
 			has_acquired_swapchain_image && vulkanPresentCompleteSemaphore != VK_NULL_HANDLE;
+		const uint64_t frame_completion_value = absoluteFrame + 1u;
 		if (has_acquired_swapchain_image && !has_swapchain_image)
 		{
 			HLogError("VulkanContext: acquired swapchain frame is missing its render-complete semaphore.");
@@ -2158,7 +2243,17 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+					const VkResult submit_result =
+						vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE);
+					if (submit_result == VK_SUCCESS)
+					{
+						_mark_gpu_timing_submitted(frame_completion_value, VK_NULL_HANDLE, cmds, static_cast<uint32_t>(count));
+					}
+					else
+					{
+						_fail_gpu_timing_submission();
+					}
+					VK_CHECK_RESULT(submit_result);
 				}
 				wait_semaphores.shutdown();
 				signal_semaphores.shutdown();
@@ -2210,7 +2305,17 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+					const VkResult submit_result =
+						vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE);
+					if (submit_result == VK_SUCCESS)
+					{
+						_mark_gpu_timing_submitted(frame_completion_value, VK_NULL_HANDLE, cmds, static_cast<uint32_t>(count));
+					}
+					else
+					{
+						_fail_gpu_timing_submission();
+					}
+					VK_CHECK_RESULT(submit_result);
 				}
 				wait_semaphores.shutdown();
 				wait_values.shutdown();
@@ -2247,7 +2352,19 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+					const VkFence completion_fence =
+						get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle();
+					const VkResult submit_result =
+						vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, completion_fence);
+					if (submit_result == VK_SUCCESS)
+					{
+						_mark_gpu_timing_submitted(frame_completion_value, completion_fence, cmds, static_cast<uint32_t>(count));
+					}
+					else
+					{
+						_fail_gpu_timing_submission();
+					}
+					VK_CHECK_RESULT(submit_result);
 				}
 				wait_semaphores.shutdown();
 				signal_semaphores.shutdown();
@@ -2267,7 +2384,19 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+					const VkFence completion_fence =
+						get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle();
+					const VkResult submit_result =
+						vkQueueSubmit(vulkanMainQueue, 1, &submit_info, completion_fence);
+					if (submit_result == VK_SUCCESS)
+					{
+						_mark_gpu_timing_submitted(frame_completion_value, completion_fence, cmds, static_cast<uint32_t>(count));
+					}
+					else
+					{
+						_fail_gpu_timing_submission();
+					}
+					VK_CHECK_RESULT(submit_result);
 				}
 			}		
 		}
