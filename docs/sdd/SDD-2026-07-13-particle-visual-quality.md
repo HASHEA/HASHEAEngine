@@ -2,7 +2,7 @@
 
 ## Status
 
-Done（2026-07-13；实现、自动化验证与 golden 发布完成；交互式 UI 清单按项目规则移交人类，未声称通过）
+Done（2026-07-13；实现、自动化验证、golden 发布与人类交互式 UI 验收全部完成）
 
 ## Context
 
@@ -219,7 +219,7 @@ Sprite picker 复用 `InspectorAssetPathWidgets` 的搜索、拖放和 recent pa
 - 性能：`RunPerfGate.bat -Profile Standard` 报告 `Intermediate/test-reports/perf-gate/20260713-134235`，四组合全部 PASS，无 WARN/FAIL。报告没有 relative baseline，因此这里只声明满足绝对上限，不声明相对性能无回归。
 - 视觉与 golden：非 bless 候选报告为 `Intermediate/test-reports/render-gate/20260713-134631-031-26392-5582171e`，唯一失败是预期的旧 particles golden，粒子跨后端 SSIM 1。用户在 2026-07-13 明确回复“接受”后，才运行 `RunRenderGate.bat -Scenes particles -BlessGolden`；事务报告 `Intermediate/test-reports/render-gate/20260713-140619-324-26460-e15eaf44` exit 0，并发布两后端 golden。
 - 最终 RenderGate：`Intermediate/test-reports/render-gate/20260713-140641-976-46032-c4f1b2fe` exit 0。Sandbox Vulkan 为 SSIM 0.996278/max 38，DX12 为 0.996177/max 38，跨后端为 0.999747/max 13；Particles Vulkan、DX12 与跨后端均为 SSIM 1/max 0。
-- Editor：Inspector source-contract tests 已包含在上述 50/50 cases、763/763 assertions 中，四组合 readiness smoke 也已 PASS。按 `AGENTS.md` 与 `docs/VERIFY.md` 的 UI 验证职责边界，实际交互未由 Agent 操作或声称通过，以下项目保持“待人工验收”：六个模块及默认展开、Texture 搜索/拖放/recent、missing/wrong-type 行为、soft disable retain、两种只读预览、保存/重载、reset/restore/remove、undo/redo，以及修改外观字段不重置存活轨迹。
+- Editor：Inspector source-contract tests 已包含在上述 50/50 cases、763/763 assertions 中，四组合 readiness smoke 也已 PASS。Agent 按 `AGENTS.md` 与 `docs/VERIFY.md` 只移交清单、未直接驱动 UI；用户于 2026-07-13 在真实 Editor 中回报以下 10 项全部 PASS：模块布局、视觉效果、Texture 搜索/拖放/Recent、Missing/Wrong-type、Soft disable retain、Size/Color 预览、Save/Reload、Reset/Restore/Remove、Undo/Redo、Console 日志。
 
 ## Risks
 
