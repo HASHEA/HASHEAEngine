@@ -1,5 +1,6 @@
 #pragma once
 #include "RenderDevice.h"
+#include "Graphics/GpuTimingRHI.h"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -111,6 +112,8 @@ namespace AshEngine
 
 	struct RendererFrameStats
 	{
+		uint64_t submitted_frame_index = 0;
+		RHI::GpuTimingResult gpu_timing_record_result = RHI::GpuTimingResult::Success;
 		uint32_t frame_width = 0;
 		uint32_t frame_height = 0;
 		uint32_t graphics_pass_count = 0;
@@ -195,6 +198,7 @@ namespace AshEngine
 		bool dispatch(const ComputeDispatchDesc& desc);
 		bool is_in_pass() const;
 		const RendererFrameStats& get_frame_stats() const;
+		RHI::GpuTimingResult get_current_gpu_timing_record_result() const;
 
 	private:
 		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
@@ -211,6 +215,7 @@ namespace AshEngine
 		RendererFrameStats m_last_completed_frame_stats{};
 		std::chrono::steady_clock::time_point m_frame_start_time{};
 		bool m_frame_in_progress = false;
+		bool m_frame_submitted = false;
 		std::array<double, 120> m_frame_time_history_ms{};
 		uint32_t m_frame_time_history_count = 0;
 		uint32_t m_frame_time_history_head = 0;

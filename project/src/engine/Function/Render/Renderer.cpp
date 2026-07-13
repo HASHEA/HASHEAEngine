@@ -136,6 +136,7 @@ namespace AshEngine
 			RHI::SwapchainPresentResult::Completed,
 			RHI::SwapchainPresentResult::Failed);
 		m_frame_in_progress = false;
+		m_frame_submitted = false;
 		m_frame_stats = {};
 		m_frame_start_time = std::chrono::steady_clock::now();
 		const auto backend_begin_start_time = std::chrono::steady_clock::now();
@@ -152,6 +153,7 @@ namespace AshEngine
 		}
 
 		m_frame_in_progress = true;
+		m_frame_stats.gpu_timing_record_result = m_render_device->get_gpu_timing_record_result();
 		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
 		{
 			m_frame_stats.frame_width = back_buffer->get_width();
@@ -185,6 +187,19 @@ namespace AshEngine
 			}
 		}
 		const bool result = m_render_device && m_render_device->end_frame();
+		if (m_render_device)
+		{
+			m_frame_stats.gpu_timing_record_result = m_render_device->get_gpu_timing_record_result();
+			m_frame_stats.submitted_frame_index = m_render_device->get_submitted_frame_index();
+		}
+		m_frame_submitted = result &&
+			ui_result &&
+			m_frame_stats.submitted_frame_index != 0 &&
+			m_frame_stats.gpu_timing_record_result == RHI::GpuTimingResult::Success;
+		if (!m_frame_submitted)
+		{
+			m_frame_stats.submitted_frame_index = 0;
+		}
 		const auto render_end_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.render_end_frame_time_ms =
 			std::chrono::duration<double, std::milli>(render_end_end_time - render_end_start_time).count();
@@ -208,9 +223,14 @@ namespace AshEngine
 		m_frame_stats.present_time_ms =
 			std::chrono::duration<double, std::milli>(present_end_time - present_start_time).count();
 		ASH_PROFILE_PLOT("Render/PresentMs", m_frame_stats.present_time_ms);
-		if (m_frame_in_progress)
+		if (m_frame_in_progress && m_frame_submitted)
 		{
 			complete_frame_timing();
+		}
+		else
+		{
+			m_frame_in_progress = false;
+			m_frame_submitted = false;
 		}
 		return present_result;
 	}
@@ -352,6 +372,11 @@ namespace AshEngine
 		return m_last_completed_frame_stats;
 	}
 
+	RHI::GpuTimingResult Renderer::get_current_gpu_timing_record_result() const
+	{
+		return m_frame_stats.gpu_timing_record_result;
+	}
+
 	bool Renderer::submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers)
 	{
 		return m_render_device && m_render_device->submit_graph_resource_barriers(barriers);
@@ -389,6 +414,7 @@ namespace AshEngine
 		const RendererFrameStats completed_stats = m_frame_stats;
 		m_last_completed_frame_stats = completed_stats;
 		m_frame_in_progress = false;
+		m_frame_submitted = false;
 	}
 
 	void Renderer::end_active_pass(GraphicsPassContext* pass_context)

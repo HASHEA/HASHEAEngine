@@ -1,6 +1,7 @@
 ﻿#include "Application.h"
 #include "Graphics/DynamicRHI.h"
 #include "Graphics/GraphicsContext.h"
+#include "Graphics/GpuTimingRHI.h"
 #include "Graphics/Swapchain.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Render/EnvironmentMapAsset.h"
@@ -448,16 +449,39 @@ namespace AshEngine
 				if (frameRendered && renderer && perfGateController.is_enabled())
 				{
 					perfGateController.sample_after_frame(renderer->get_frame_stats());
-					if (perfGateController.should_request_exit())
-					{
-						HLogInfo("PerfGate sample window complete; requesting application exit.");
-						request_exit();
-					}
 				}
 			}
 			else if (!has_pending_render_commands())
 			{
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+
+			if (renderer && perfGateController.is_enabled())
+			{
+				const RHI::GpuTimingResult record_result = renderer->get_current_gpu_timing_record_result();
+				if (record_result != RHI::GpuTimingResult::Success)
+				{
+					perfGateController.fail_gpu_timing(record_result);
+				}
+			}
+			if (RHI::IGpuTimingContext* timing_context = RHI::gpu_timing_get())
+			{
+				perfGateController.drain_gpu_timing(*timing_context);
+			}
+			else if (perfGateController.is_enabled())
+			{
+				perfGateController.fail_gpu_timing(RHI::GpuTimingResult::Unsupported);
+			}
+			if (perfGateController.is_enabled() && perfGateController.has_failed())
+			{
+				runtimeFailureDetected.store(true, std::memory_order_release);
+				HLogError("PerfGate GPU timing failed: {}; requesting application exit.", perfGateController.gpu_timing_error());
+				request_exit();
+			}
+			else if (perfGateController.should_request_exit())
+			{
+				HLogInfo("PerfGate sample window complete and GPU timing drained; requesting application exit.");
+				request_exit();
 			}
 
 			pump_render_commands();

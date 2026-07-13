@@ -7,7 +7,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <json.hpp>
+#include <sstream>
 
 namespace AshEngine
 {
@@ -51,6 +53,42 @@ namespace AshEngine
 			const size_t index = static_cast<size_t>(std::ceil(clamped * static_cast<double>(sorted.size())) - 1.0);
 			return sorted[std::min(index, sorted.size() - 1u)];
 		}
+
+		auto gpu_timing_result_name(RHI::GpuTimingResult result) -> const char*
+		{
+			switch (result)
+			{
+			case RHI::GpuTimingResult::Success:
+				return "Success";
+			case RHI::GpuTimingResult::Pending:
+				return "Pending";
+			case RHI::GpuTimingResult::Unsupported:
+				return "Unsupported";
+			case RHI::GpuTimingResult::CapacityExceeded:
+				return "CapacityExceeded";
+			case RHI::GpuTimingResult::InvalidState:
+				return "InvalidState";
+			case RHI::GpuTimingResult::StaleHandle:
+				return "StaleHandle";
+			case RHI::GpuTimingResult::RecordFailed:
+				return "RecordFailed";
+			case RHI::GpuTimingResult::ResolveFailed:
+				return "ResolveFailed";
+			case RHI::GpuTimingResult::DeviceLost:
+				return "DeviceLost";
+			case RHI::GpuTimingResult::QueueFrequencyInvalid:
+				return "QueueFrequencyInvalid";
+			default:
+				return "InvalidState";
+			}
+		}
+
+		auto stable_hash_string(uint64_t hash) -> std::string
+		{
+			std::ostringstream output;
+			output << std::hex << std::nouppercase << std::setfill('0') << std::setw(16) << hash;
+			return output.str();
+		}
 	}
 
 	auto parse_perf_gate_config(int argc, char* argv[]) -> PerfGateConfig
@@ -93,6 +131,13 @@ namespace AshEngine
 					config.sample_seconds);
 				continue;
 			}
+			if (starts_with(argument, "--perf-gate-gpu-drain-timeout-seconds="))
+			{
+				config.gpu_timing_drain_timeout_seconds = parse_double_arg(
+					argument.substr(std::char_traits<char>::length("--perf-gate-gpu-drain-timeout-seconds=")),
+					config.gpu_timing_drain_timeout_seconds);
+				continue;
+			}
 		}
 		return config;
 	}
@@ -125,6 +170,40 @@ namespace AshEngine
 		m_config = config;
 		m_target_name = !m_config.target_name.empty() ? m_config.target_name : (target_name ? target_name : "");
 		m_backend = backend;
+		m_required_scope_hashes.clear();
+		m_required_scope_hashes.insert(m_config.required_scope_hashes.begin(), m_config.required_scope_hashes.end());
+		m_gpu_scope_names.clear();
+		m_expected_gpu_frames.clear();
+		m_seen_gpu_frames.clear();
+		m_gpu_frame_samples_ms.clear();
+		m_gpu_scope_samples_ms.clear();
+		m_gpu_timing_error = "Success";
+		m_expected_gpu_frame_count = 0;
+		m_received_gpu_frame_count = 0;
+		m_last_pre_window_submitted_frame_index = 0;
+		m_first_post_window_submitted_frame_index = 0;
+		m_has_last_pre_window_submitted_frame = false;
+		m_has_first_post_window_submitted_frame = false;
+		m_gpu_timing_failed = false;
+		m_gpu_timing_window = GpuTimingWindow::PreWindow;
+		for (const PerfGateGpuScopeName& scope_name : m_config.gpu_scope_names)
+		{
+			if (!register_gpu_scope_name(scope_name.stable_name_hash, scope_name.canonical_name.c_str()))
+			{
+				break;
+			}
+		}
+		if (!m_gpu_timing_failed)
+		{
+			for (uint64_t required_hash : m_required_scope_hashes)
+			{
+				if (m_gpu_scope_names.find(required_hash) == m_gpu_scope_names.end())
+				{
+					set_gpu_timing_failure("MissingCanonicalName");
+					break;
+				}
+			}
+		}
 	}
 
 	auto PerfGateController::is_enabled() const -> bool
@@ -186,16 +265,64 @@ namespace AshEngine
 
 		++m_frames_total;
 		sample_memory();
+		if (frame_stats.gpu_timing_record_result != RHI::GpuTimingResult::Success)
+		{
+			fail_gpu_timing(frame_stats.gpu_timing_record_result);
+			return;
+		}
 
-		const double elapsed = elapsed_seconds();
-		if (elapsed < m_config.warmup_seconds)
+		refresh_gpu_timing_window();
+		if (m_gpu_timing_failed || frame_stats.submitted_frame_index == 0)
 		{
 			return;
 		}
-		if (elapsed > m_config.warmup_seconds + m_config.sample_seconds)
+		if (m_gpu_timing_window == GpuTimingWindow::PreWindow)
+		{
+			m_last_pre_window_submitted_frame_index = frame_stats.submitted_frame_index;
+			m_has_last_pre_window_submitted_frame = true;
+			return;
+		}
+		if (m_gpu_timing_window == GpuTimingWindow::Drain)
+		{
+			if (!m_has_first_post_window_submitted_frame)
+			{
+				m_first_post_window_submitted_frame_index = frame_stats.submitted_frame_index;
+				m_has_first_post_window_submitted_frame = true;
+			}
+			return;
+		}
+		expect_submitted_frame(frame_stats.submitted_frame_index, frame_stats);
+	}
+
+	auto PerfGateController::expect_submitted_frame(
+		uint64_t submitted_frame_index,
+		const RendererFrameStats& frame_stats) -> void
+	{
+		if (!m_config.enabled || m_report_written || m_gpu_timing_failed || submitted_frame_index == 0)
 		{
 			return;
 		}
+		if (frame_stats.gpu_timing_record_result != RHI::GpuTimingResult::Success)
+		{
+			fail_gpu_timing(frame_stats.gpu_timing_record_result);
+			return;
+		}
+		for (uint64_t required_hash : m_required_scope_hashes)
+		{
+			if (m_gpu_scope_names.find(required_hash) == m_gpu_scope_names.end())
+			{
+				set_gpu_timing_failure("MissingCanonicalName");
+				return;
+			}
+		}
+		if (m_seen_gpu_frames.find(submitted_frame_index) != m_seen_gpu_frames.end() ||
+			!m_expected_gpu_frames.insert(submitted_frame_index).second)
+		{
+			set_gpu_timing_failure("DuplicateFrame");
+			return;
+		}
+
+		++m_expected_gpu_frame_count;
 
 		++m_frames_sampled;
 		m_frame_time_samples_ms.push_back(frame_stats.cpu_frame_time_ms);
@@ -207,11 +334,240 @@ namespace AshEngine
 		m_dispatch_sum += frame_stats.compute_dispatch_count;
 	}
 
-	auto PerfGateController::should_request_exit() const -> bool
+	auto PerfGateController::register_gpu_scope_name(uint64_t stable_name_hash, const char* canonical_name) -> bool
 	{
-		return m_config.enabled &&
-			m_started &&
-			elapsed_seconds() >= (m_config.warmup_seconds + m_config.sample_seconds);
+		if (!canonical_name || canonical_name[0] == '\0')
+		{
+			set_gpu_timing_failure("MissingCanonicalName");
+			return false;
+		}
+		const auto existing = m_gpu_scope_names.find(stable_name_hash);
+		if (existing != m_gpu_scope_names.end())
+		{
+			if (existing->second == canonical_name)
+			{
+				return true;
+			}
+			set_gpu_timing_failure("HashCollision");
+			return false;
+		}
+		if (RHI::gpu_timing_name_hash(canonical_name) != stable_name_hash)
+		{
+			set_gpu_timing_failure("HashMismatch");
+			return false;
+		}
+		m_gpu_scope_names.emplace(stable_name_hash, canonical_name);
+		return true;
+	}
+
+	auto PerfGateController::set_gpu_timing_failure(const char* error) -> void
+	{
+		if (m_gpu_timing_failed)
+		{
+			return;
+		}
+		m_gpu_timing_failed = true;
+		m_gpu_timing_error = error ? error : "InvalidState";
+		HLogError("PerfGate GPU timing failed: {}.", m_gpu_timing_error);
+	}
+
+	auto PerfGateController::fail_gpu_timing(RHI::GpuTimingResult result) -> void
+	{
+		if (result == RHI::GpuTimingResult::Success)
+		{
+			return;
+		}
+		if (result == RHI::GpuTimingResult::Pending)
+		{
+			set_gpu_timing_failure("InvalidState");
+			return;
+		}
+		set_gpu_timing_failure(gpu_timing_result_name(result));
+	}
+
+	auto PerfGateController::refresh_gpu_timing_window() -> void
+	{
+		if (!m_started || m_gpu_timing_failed)
+		{
+			return;
+		}
+		const double elapsed = elapsed_seconds();
+		const double sample_start = m_config.warmup_seconds;
+		const double sample_end = sample_start + m_config.sample_seconds;
+		if (elapsed < sample_start)
+		{
+			m_gpu_timing_window = GpuTimingWindow::PreWindow;
+			return;
+		}
+		if (elapsed < sample_end)
+		{
+			m_gpu_timing_window = GpuTimingWindow::Active;
+			return;
+		}
+
+		m_gpu_timing_window = GpuTimingWindow::Drain;
+	}
+
+	auto PerfGateController::should_ignore_unexpected_snapshot(uint64_t submitted_frame_index) const -> bool
+	{
+		if (!m_started)
+		{
+			return false;
+		}
+		if (m_gpu_timing_window == GpuTimingWindow::PreWindow)
+		{
+			return true;
+		}
+		if (m_has_last_pre_window_submitted_frame &&
+			submitted_frame_index <= m_last_pre_window_submitted_frame_index)
+		{
+			return true;
+		}
+		return m_gpu_timing_window == GpuTimingWindow::Drain &&
+			m_has_first_post_window_submitted_frame &&
+			submitted_frame_index >= m_first_post_window_submitted_frame_index;
+	}
+
+	auto PerfGateController::accept_gpu_timing_snapshot(const RHI::GpuTimingFrameSnapshot& snapshot) -> void
+	{
+		if (m_seen_gpu_frames.find(snapshot.submitted_frame_index) != m_seen_gpu_frames.end())
+		{
+			set_gpu_timing_failure("DuplicateFrame");
+			return;
+		}
+		const auto expected = m_expected_gpu_frames.find(snapshot.submitted_frame_index);
+		if (expected == m_expected_gpu_frames.end())
+		{
+			if (!should_ignore_unexpected_snapshot(snapshot.submitted_frame_index))
+			{
+				set_gpu_timing_failure("UnexpectedFrame");
+			}
+			return;
+		}
+		if (snapshot.overflowed || snapshot.scope_count > RHI::kMaxGpuTimingScopes)
+		{
+			set_gpu_timing_failure("CapacityExceeded");
+			return;
+		}
+
+		std::unordered_map<uint64_t, double> frame_scope_sums;
+		frame_scope_sums.reserve(snapshot.scope_count);
+		for (uint32_t scope_index = 0; scope_index < snapshot.scope_count; ++scope_index)
+		{
+			const RHI::GpuTimingScopeSample& scope = snapshot.scopes[scope_index];
+			frame_scope_sums[scope.stable_name_hash] += scope.elapsed_ms;
+		}
+		for (uint64_t required_hash : m_required_scope_hashes)
+		{
+			if (frame_scope_sums.find(required_hash) == frame_scope_sums.end())
+			{
+				set_gpu_timing_failure("MissingRequiredScope");
+				return;
+			}
+		}
+
+		m_seen_gpu_frames.insert(snapshot.submitted_frame_index);
+		m_expected_gpu_frames.erase(expected);
+		m_gpu_frame_samples_ms.push_back(snapshot.frame_elapsed_ms);
+		for (const auto& [stable_name_hash, elapsed_ms] : frame_scope_sums)
+		{
+			m_gpu_scope_samples_ms[stable_name_hash].push_back(elapsed_ms);
+		}
+		++m_received_gpu_frame_count;
+	}
+
+	auto PerfGateController::drain_gpu_timing(RHI::IGpuTimingContext& context) -> void
+	{
+		refresh_gpu_timing_window();
+		for (;;)
+		{
+			RHI::GpuTimingFrameSnapshot snapshot{};
+			const RHI::GpuTimingResult result = context.try_collect(snapshot);
+			if (result == RHI::GpuTimingResult::Pending)
+			{
+				refresh_gpu_timing_window();
+				const double drain_deadline =
+					m_config.warmup_seconds +
+					m_config.sample_seconds +
+					std::max(0.0, m_config.gpu_timing_drain_timeout_seconds);
+				if (m_config.enabled &&
+					m_gpu_timing_window == GpuTimingWindow::Drain &&
+					!m_expected_gpu_frames.empty() &&
+					elapsed_seconds() >= drain_deadline)
+				{
+					set_gpu_timing_failure("DrainTimeout");
+				}
+				return;
+			}
+			if (result != RHI::GpuTimingResult::Success)
+			{
+				if (m_config.enabled)
+				{
+					fail_gpu_timing(result);
+				}
+				return;
+			}
+			if (m_config.enabled && !m_gpu_timing_failed)
+			{
+				accept_gpu_timing_snapshot(snapshot);
+			}
+			if (m_gpu_timing_failed)
+			{
+				return;
+			}
+		}
+	}
+
+	auto PerfGateController::should_request_exit() -> bool
+	{
+		if (!m_config.enabled || !m_started)
+		{
+			return false;
+		}
+		refresh_gpu_timing_window();
+		return m_gpu_timing_failed ||
+			(m_gpu_timing_window == GpuTimingWindow::Drain && m_expected_gpu_frames.empty());
+	}
+
+	auto PerfGateController::has_failed() const -> bool
+	{
+		return m_gpu_timing_failed;
+	}
+
+	auto PerfGateController::gpu_timing_error() const -> const std::string&
+	{
+		return m_gpu_timing_error;
+	}
+
+	auto PerfGateController::gpu_frame_samples() const -> const std::vector<double>&
+	{
+		return m_gpu_frame_samples_ms;
+	}
+
+	auto PerfGateController::scope_samples(uint64_t stable_name_hash) const -> const std::vector<double>&
+	{
+		const auto samples = m_gpu_scope_samples_ms.find(stable_name_hash);
+		if (samples != m_gpu_scope_samples_ms.end())
+		{
+			return samples->second;
+		}
+		static const std::vector<double> empty;
+		return empty;
+	}
+
+	auto PerfGateController::expected_gpu_frame_count() const -> uint64_t
+	{
+		return m_expected_gpu_frame_count;
+	}
+
+	auto PerfGateController::received_gpu_frame_count() const -> uint64_t
+	{
+		return m_received_gpu_frame_count;
+	}
+
+	auto PerfGateController::outstanding_expected_frame_count() const -> size_t
+	{
+		return m_expected_gpu_frames.size();
 	}
 
 	auto PerfGateController::capture_render_memory_stats(const RHI::RenderMemoryStats& stats) -> void
@@ -230,6 +586,7 @@ namespace AshEngine
 		{
 			return true;
 		}
+		refresh_gpu_timing_window();
 		m_report_written = true;
 
 		if (m_config.output_path.empty())
@@ -245,10 +602,12 @@ namespace AshEngine
 			summarize_perf_gate_frame_times(m_render_end_frame_samples_ms);
 		const PerfGateFrameTimeSummary present_summary =
 			summarize_perf_gate_frame_times(m_present_samples_ms);
+		const PerfGateFrameTimeSummary gpu_frame_summary =
+			summarize_perf_gate_frame_times(m_gpu_frame_samples_ms);
 		const double sampled_count = frame_summary.sample_count > 0 ? static_cast<double>(frame_summary.sample_count) : 1.0;
 
 		json report{};
-		report["schema_version"] = 1;
+		report["schema_version"] = 2;
 		report["target"] = m_target_name;
 		report["backend_actual"] = perf_gate_backend_name(m_backend);
 		report["profile"] = m_config.profile;
@@ -256,6 +615,35 @@ namespace AshEngine
 		report["sample_seconds"] = m_config.sample_seconds;
 		report["frames_total"] = m_frames_total;
 		report["frames_sampled"] = m_frames_sampled;
+
+		json gpu_passes = json::object();
+		for (const auto& [stable_name_hash, canonical_name] : m_gpu_scope_names)
+		{
+			const auto samples = m_gpu_scope_samples_ms.find(stable_name_hash);
+			const PerfGateFrameTimeSummary pass_summary = samples != m_gpu_scope_samples_ms.end()
+				? summarize_perf_gate_frame_times(samples->second)
+				: PerfGateFrameTimeSummary{};
+			gpu_passes[canonical_name] = {
+				{ "stable_name_hash", stable_hash_string(stable_name_hash) },
+				{ "p95", pass_summary.p95_ms }
+			};
+		}
+		const bool gpu_timing_complete = !m_gpu_timing_failed &&
+			m_started &&
+			m_gpu_timing_window == GpuTimingWindow::Drain &&
+			m_expected_gpu_frames.empty();
+		report["gpu_timing"] = {
+			{ "status", m_gpu_timing_failed ? "failed" : (gpu_timing_complete ? "complete" : "pending") },
+			{ "error", m_gpu_timing_error },
+			{ "expected_frames", m_expected_gpu_frame_count },
+			{ "received_frames", m_received_gpu_frame_count },
+			{ "frame_time_ms", {
+				{ "p50", gpu_frame_summary.p50_ms },
+				{ "p95", gpu_frame_summary.p95_ms },
+				{ "p99", gpu_frame_summary.p99_ms }
+			} },
+			{ "passes", std::move(gpu_passes) }
+		};
 
 		report["cpu_frame_time_ms"] = {
 			{ "avg", frame_summary.avg_ms },
@@ -296,7 +684,8 @@ namespace AshEngine
 			{ "abnormal_exit", abnormal_exit },
 			{ "backend_mismatch", false },
 			{ "crashed", false },
-			{ "timed_out", false }
+			{ "timed_out", m_gpu_timing_error == "DrainTimeout" },
+			{ "gpu_timing", m_gpu_timing_failed }
 		};
 
 		std::filesystem::path output_path = m_config.output_path;

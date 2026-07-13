@@ -2,6 +2,7 @@
 #include "Base/hcore.h"
 #include "Function/Render/Material.h"
 #include "Function/Render/VertexDecl.h"
+#include "Graphics/GpuTimingRHI.h"
 #include "Graphics/Pipeline.h"
 #include <cstdint>
 #include <functional>
@@ -650,6 +651,8 @@ namespace AshEngine
 		bool transition_compute_program_resources(ComputeProgram* program);
 		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);
 		bool transition_index_buffer(const std::shared_ptr<IndexBuffer>& buffer);
+		uint64_t get_submitted_frame_index() const;
+		RHI::GpuTimingResult get_gpu_timing_record_result() const;
 
 	private:
 		RenderDevice(RHI::GraphicsContext* graphics_context, RHI::Swapchain* swapchain);

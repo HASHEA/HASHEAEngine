@@ -1157,6 +1157,11 @@ namespace AshEngine
 		RHI::GpuProfileZoneHandle current_pass_gpu_zone{};
 		bool current_pass_gpu_zone_active = false;
 		std::string current_pass_name;
+		RHI::GpuTimingScopeHandle current_pass_gpu_timing_scope{};
+		RHI::GpuTimingResult gpu_timing_record_result = RHI::GpuTimingResult::Success;
+		uint64_t submitted_frame_index = 0;
+		bool gpu_timing_frame_active = false;
+		bool current_pass_gpu_timing_scope_active = false;
 
 		// editor begin 修改原因：GPU scene picking texel readback
 		struct QueuedTexelRead
@@ -3221,6 +3226,11 @@ namespace AshEngine
 			RHI::SwapchainPresentResult::Completed,
 			RHI::SwapchainPresentResult::Failed);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain);
+		m_impl->gpu_timing_record_result = RHI::GpuTimingResult::Success;
+		m_impl->submitted_frame_index = 0;
+		m_impl->gpu_timing_frame_active = false;
+		m_impl->current_pass_gpu_timing_scope_active = false;
+		m_impl->current_pass_gpu_timing_scope = {};
 
 		m_impl->graphics_context->begin_frame();
 		const RHI::SwapchainPresentResult acquire_result = m_impl->swapchain->begin_frame();
@@ -3259,6 +3269,17 @@ namespace AshEngine
 
 		m_impl->current_command_buffer->begin_record();
 		ASH_PROCESS_ERROR(validate_command_buffer_status(m_impl->current_command_buffer, "begin_frame::begin_record"));
+		if (RHI::IGpuTimingContext* timing_context = RHI::gpu_timing_get())
+		{
+			m_impl->gpu_timing_record_result =
+				timing_context->begin_frame(m_impl->current_command_buffer, m_impl->frame_index);
+			m_impl->gpu_timing_frame_active =
+				m_impl->gpu_timing_record_result == RHI::GpuTimingResult::Success;
+		}
+		else
+		{
+			m_impl->gpu_timing_record_result = RHI::GpuTimingResult::Unsupported;
+		}
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
@@ -3298,6 +3319,25 @@ namespace AshEngine
 			}
 		}
 
+		if (m_impl->gpu_timing_frame_active)
+		{
+			RHI::GpuTimingResult timing_end_result = RHI::GpuTimingResult::Unsupported;
+			if (RHI::IGpuTimingContext* timing_context = RHI::gpu_timing_get())
+			{
+				timing_end_result = timing_context->end_frame(command_buffer);
+			}
+			m_impl->gpu_timing_frame_active = false;
+			if (timing_end_result != RHI::GpuTimingResult::Success)
+			{
+				m_impl->gpu_timing_record_result = timing_end_result;
+				frame_recording_success = false;
+			}
+		}
+		if (m_impl->gpu_timing_record_result != RHI::GpuTimingResult::Success)
+		{
+			frame_recording_success = false;
+		}
+
 		if (!validate_command_buffer_status(command_buffer, "end_frame::record"))
 		{
 			frame_recording_success = false;
@@ -3317,9 +3357,11 @@ namespace AshEngine
 			frame_recording_success = false;
 		}
 
+		bool main_command_buffer_queued = false;
 		if (frame_recording_success)
 		{
 			m_impl->graphics_context->submit({ command_buffer, 1 });
+			main_command_buffer_queued = true;
 		}
 		else
 		{
@@ -3328,6 +3370,20 @@ namespace AshEngine
 
 		m_impl->swapchain->end_frame();
 		m_impl->graphics_context->end_frame();
+		if (main_command_buffer_queued)
+		{
+			if (command_buffer->get_state() == RHI::AshCommandBufferState::ASH_Submitted)
+			{
+				m_impl->submitted_frame_index = m_impl->frame_index;
+			}
+			else
+			{
+				HLogError(
+					"RenderDevice: main command buffer was not submitted at frame end (state={}).",
+					static_cast<uint32_t>(command_buffer->get_state()));
+				frame_recording_success = false;
+			}
+		}
 		m_impl->current_command_buffer = nullptr;
 		bResult = frame_recording_success;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -4048,8 +4104,31 @@ namespace AshEngine
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
-		m_impl->current_command_buffer->cmd_begin_render_pass(m_impl->current_framebuffer, desc.name);
 		m_impl->current_pass_name = desc.name ? desc.name : "EngineRenderPass";
+		m_impl->current_command_buffer->cmd_begin_render_pass(m_impl->current_framebuffer, desc.name);
+		m_impl->current_pass_gpu_timing_scope_active = false;
+		m_impl->current_pass_gpu_timing_scope = {};
+		if (m_impl->gpu_timing_frame_active &&
+			m_impl->gpu_timing_record_result == RHI::GpuTimingResult::Success)
+		{
+			RHI::GpuTimingResult scope_result = RHI::GpuTimingResult::Unsupported;
+			if (RHI::IGpuTimingContext* timing_context = RHI::gpu_timing_get())
+			{
+				scope_result = timing_context->begin_scope(
+					m_impl->current_command_buffer,
+					RHI::gpu_timing_name_hash(m_impl->current_pass_name.c_str()),
+					m_impl->current_pass_gpu_timing_scope);
+			}
+			if (scope_result == RHI::GpuTimingResult::Success)
+			{
+				m_impl->current_pass_gpu_timing_scope_active = true;
+			}
+			else
+			{
+				m_impl->gpu_timing_record_result = scope_result;
+				m_impl->gpu_timing_frame_active = false;
+			}
+		}
 		if (RHI::IGpuProfilerContext* gpu_ctx = RHI::gpu_profiler_get())
 		{
 			gpu_ctx->begin_zone(
@@ -4405,6 +4484,24 @@ namespace AshEngine
 		bool result = true;
 		if (m_impl->current_command_buffer && m_impl->current_framebuffer)
 		{
+			if (m_impl->current_pass_gpu_timing_scope_active)
+			{
+				RHI::GpuTimingResult scope_result = RHI::GpuTimingResult::Unsupported;
+				if (RHI::IGpuTimingContext* timing_context = RHI::gpu_timing_get())
+				{
+					scope_result = timing_context->end_scope(
+						m_impl->current_command_buffer,
+						m_impl->current_pass_gpu_timing_scope);
+				}
+				m_impl->current_pass_gpu_timing_scope_active = false;
+				m_impl->current_pass_gpu_timing_scope = {};
+				if (scope_result != RHI::GpuTimingResult::Success)
+				{
+					m_impl->gpu_timing_record_result = scope_result;
+					m_impl->gpu_timing_frame_active = false;
+					result = false;
+				}
+			}
 			if (m_impl->current_pass_gpu_zone_active)
 			{
 				if (RHI::IGpuProfilerContext* gpu_ctx = RHI::gpu_profiler_get())
@@ -4430,12 +4527,26 @@ namespace AshEngine
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
 		m_impl->viewport_override_active = false;
 		m_impl->scissor_override_active = false;
+		if (m_impl->gpu_timing_record_result != RHI::GpuTimingResult::Success)
+		{
+			result = false;
+		}
 		return result;
 	}
 
 	RHI::CommandBuffer* RenderDevice::get_current_command_buffer() const
 	{
 		return m_impl ? m_impl->current_command_buffer : nullptr;
+	}
+
+	uint64_t RenderDevice::get_submitted_frame_index() const
+	{
+		return m_impl ? m_impl->submitted_frame_index : 0;
+	}
+
+	RHI::GpuTimingResult RenderDevice::get_gpu_timing_record_result() const
+	{
+		return m_impl ? m_impl->gpu_timing_record_result : RHI::GpuTimingResult::InvalidState;
 	}
 
 	std::shared_ptr<RHI::TextureView> RenderDevice::get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const
