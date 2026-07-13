@@ -301,6 +301,19 @@ static bool should_run_rhi_indirect_self_test(int argc, char* argv[])
 	return false;
 }
 
+static bool should_run_rhi_constant_buffer_self_test(int argc, char* argv[])
+{
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument == "--rhi-selftest-constant-buffer")
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 // RenderGate（SDD-2026-07-07-render-gate）：--dump-frame=<png> / --scene=<path> 字符串选项解析
 static std::string parse_string_option(int argc, char* argv[], const char* option_name)
 {
@@ -608,6 +621,10 @@ int32_t main(int argc, char* argv[])
 	if (should_run_rhi_indirect_self_test(argc, argv))
 	{
 		application->set_rhi_indirect_self_test_requested(true);
+	}
+	if (should_run_rhi_constant_buffer_self_test(argc, argv))
+	{
+		application->set_rhi_constant_buffer_self_test_requested(true);
 	}
 	const bool runSucceeded = application->start();
 	destroy_application(application);
