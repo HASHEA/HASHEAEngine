@@ -270,6 +270,7 @@ namespace RHI
 - 整帧范围是 present 对应的主 graphics command buffer；Terrain pass 使用稳定哈希 `Terrain.GBuffer` 与 `Terrain.Shadow`。Graphics 不包含 Terrain 枚举或字符串。
 - 每个 in-flight frame 拥有独立 query/readback 槽。Vulkan 使用 timestamp query pool 与 `timestampPeriod`；DX12 使用 timestamp query heap、resolve/readback 和 graphics queue frequency。
 - 后端私有提交 hook 在真实 queue submit 成功后把 recording slot 绑定到该次 fence/timeline completion value；不增加公共 queue/submit API。query/readback slot 状态机固定为 `Idle -> Recording -> Submitted -> Completed -> Materialized/Failed -> Idle`，完整 materialize 或失败前不得 reset/reuse。
+- 若主 command buffer 录制失败或跳过真实 submit，后端在 frame close 时取消对应 recording slot 并回到 `Idle`，不得生成 snapshot；Application 也不得把该 frame index 加入 PerfGate expected set。timing 自身的录制失败仍按其错误码立即使 PerfGate FAIL。
 - GPU 完成后，后端先把结果 materialize 到有界 CPU FIFO，再释放 query/readback slot；FIFO item 独立经历 `Queued -> Published`。FIFO 满是 `CapacityExceeded`，不能覆盖旧结果。每个 `submitted_frame_index` 恰好入队并发布一次。
 - `try_collect` 按提交顺序只发布关联 fence/timeline 已完成的 frame，按 `submitted_frame_index` 关联样本；未完成返回 `Pending`，不得调用 `wait_idle`、阻塞主线程、跳过较旧样本或读取未完成 query。
 - contract 在非 Tracy 构建中同样工作；Tracy zone 继续由现有 `GpuProfilerRHI` 独立处理。
