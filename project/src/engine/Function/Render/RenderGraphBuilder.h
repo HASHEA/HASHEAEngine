@@ -18,7 +18,17 @@ namespace AshEngine
 		bool extracted = false;
 	};
 
-	class RenderGraphBuilder
+	// Production executor core with explicit non-owning timing dependencies.
+	// Normal callers should use RenderGraphBuilder::execute(), which supplies
+	// the context-owned telemetry and current command buffer through RenderDevice.
+	ASH_API bool execute_render_graph(
+		Renderer& renderer,
+		std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes,
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer);
+
+	class ASH_API RenderGraphBuilder
 	{
 	public:
 		RenderGraphBuilder(Renderer& renderer, const char* name);
@@ -35,12 +45,14 @@ namespace AshEngine
 		bool add_raster_pass(
 			const char* name,
 			RenderGraphPassFlags flags,
+			RHI::GpuTimingMetric timing_metric,
 			const std::function<void(RenderGraphRasterPassBuilder&)>& setup,
 			const std::function<bool(RenderGraphRasterContext&)>& execute);
 
 		bool add_compute_pass(
 			const char* name,
 			RenderGraphPassFlags flags,
+			RHI::GpuTimingMetric timing_metric,
 			const std::function<void(RenderGraphComputePassBuilder&)>& setup,
 			const std::function<bool(RenderGraphComputeContext&)>& execute);
 

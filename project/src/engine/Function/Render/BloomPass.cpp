@@ -276,6 +276,7 @@ namespace AshEngine
 		const bool setup_pass_added = graph.add_raster_pass(
 			"SceneBloomSetupPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Bloom,
 			[scene_hdr_linear, setup = outputs.setup](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
@@ -318,6 +319,7 @@ namespace AshEngine
 			const bool downsample_pass_added = graph.add_raster_pass(
 				"SceneBloomDownsamplePass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Bloom,
 				[input_ref, output_ref](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(input_ref, RenderGraphAccess::GraphicsSRV);
@@ -367,6 +369,7 @@ namespace AshEngine
 			const bool upsample_pass_added = graph.add_raster_pass(
 				"SceneBloomUpsamplePass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Bloom,
 				[low_input, high_input, combined_output](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(low_input, RenderGraphAccess::GraphicsSRV);
@@ -407,6 +410,7 @@ namespace AshEngine
 		const bool composite_pass_added = graph.add_raster_pass(
 			"SceneBloomCompositePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Bloom,
 			[scene_hdr_linear, final_bloom = outputs.final_bloom, composite_hdr = outputs.composite_hdr](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);

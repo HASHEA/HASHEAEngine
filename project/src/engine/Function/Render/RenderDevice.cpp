@@ -4438,6 +4438,13 @@ namespace AshEngine
 		return m_impl ? m_impl->current_command_buffer : nullptr;
 	}
 
+	RHI::IGpuTimingTelemetry* RenderDevice::get_gpu_timing_telemetry() const
+	{
+		return m_impl && m_impl->graphics_context ?
+			m_impl->graphics_context->get_gpu_timing_telemetry() :
+			nullptr;
+	}
+
 	std::shared_ptr<RHI::TextureView> RenderDevice::get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const
 	{
 		if (!render_target || !render_target->m_impl)

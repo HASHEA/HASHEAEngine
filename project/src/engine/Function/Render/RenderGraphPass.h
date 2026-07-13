@@ -2,6 +2,7 @@
 
 #include "Function/Render/Renderer.h"
 #include "Function/Render/RenderGraphResource.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -54,9 +55,36 @@ namespace AshEngine
 		std::string name{};
 		RenderGraphPassKind kind = RenderGraphPassKind::Raster;
 		RenderGraphPassFlags flags = RenderGraphPassFlags::None;
+		RHI::GpuTimingMetric timing_metric = RHI::GpuTimingMetric::Invalid;
 		std::vector<RenderGraphTextureUsage> texture_usages{};
 		std::function<bool(RenderGraphRasterContext&)> raster_execute{};
 		std::function<bool(RenderGraphComputeContext&)> compute_execute{};
+	};
+
+	inline bool is_render_graph_gpu_timing_group_metric(RHI::GpuTimingMetric metric)
+	{
+		return metric > RHI::GpuTimingMetric::Frame && metric < RHI::GpuTimingMetric::Count;
+	}
+
+	// Non-owning execution guard. RenderGraph owns only pass-group transitions;
+	// GPU.Frame remains owned by RenderDevice.
+	class ASH_API RenderGraphGpuTimingScopeGuard
+	{
+	public:
+		RenderGraphGpuTimingScopeGuard(RHI::IGpuTimingTelemetry* telemetry, RHI::CommandBuffer* command_buffer);
+		~RenderGraphGpuTimingScopeGuard();
+
+		RenderGraphGpuTimingScopeGuard(const RenderGraphGpuTimingScopeGuard&) = delete;
+		RenderGraphGpuTimingScopeGuard& operator=(const RenderGraphGpuTimingScopeGuard&) = delete;
+
+		void transition_to(RHI::GpuTimingMetric metric);
+		void close();
+
+	private:
+		RHI::IGpuTimingTelemetry* m_telemetry = nullptr;
+		RHI::CommandBuffer* m_command_buffer = nullptr;
+		RHI::GpuTimingMetric m_current_group = RHI::GpuTimingMetric::Invalid;
+		bool m_scope_open = false;
 	};
 
 	class RenderGraphRasterPassBuilder

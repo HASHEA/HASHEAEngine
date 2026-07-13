@@ -5,6 +5,53 @@
 
 namespace AshEngine
 {
+	RenderGraphGpuTimingScopeGuard::RenderGraphGpuTimingScopeGuard(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer)
+		: m_telemetry(telemetry)
+		, m_command_buffer(command_buffer)
+	{
+	}
+
+	RenderGraphGpuTimingScopeGuard::~RenderGraphGpuTimingScopeGuard()
+	{
+		close();
+	}
+
+	void RenderGraphGpuTimingScopeGuard::transition_to(RHI::GpuTimingMetric metric)
+	{
+		// Only adjacent passes coalesce. Returning to a metric after another group
+		// intentionally begins it again so the telemetry contract can flag duplicates.
+		const RHI::GpuTimingMetric next_group =
+			is_render_graph_gpu_timing_group_metric(metric) ? metric : RHI::GpuTimingMetric::Invalid;
+		if (next_group == m_current_group)
+		{
+			return;
+		}
+
+		if (m_scope_open && m_telemetry && m_command_buffer)
+		{
+			m_telemetry->end_scope(m_command_buffer, m_current_group);
+		}
+		m_scope_open = false;
+		m_current_group = next_group;
+
+		if (m_current_group != RHI::GpuTimingMetric::Invalid && m_telemetry && m_command_buffer)
+		{
+			m_scope_open = m_telemetry->begin_scope(m_command_buffer, m_current_group);
+		}
+	}
+
+	void RenderGraphGpuTimingScopeGuard::close()
+	{
+		if (m_scope_open && m_telemetry && m_command_buffer)
+		{
+			m_telemetry->end_scope(m_command_buffer, m_current_group);
+		}
+		m_scope_open = false;
+		m_current_group = RHI::GpuTimingMetric::Invalid;
+	}
+
 	namespace
 	{
 		class RasterContext final : public RenderGraphRasterContext
@@ -72,6 +119,22 @@ namespace AshEngine
 
 	bool execute_render_graph(Renderer& renderer, std::vector<RenderGraphTextureNode>& textures, const std::vector<RenderGraphPassNode>& passes)
 	{
+		RenderDevice* render_device = renderer.get_render_device();
+		return execute_render_graph(
+			renderer,
+			textures,
+			passes,
+			render_device ? render_device->get_gpu_timing_telemetry() : nullptr,
+			render_device ? render_device->get_current_command_buffer() : nullptr);
+	}
+
+	bool execute_render_graph(
+		Renderer& renderer,
+		std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes,
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer)
+	{
 		ASH_PROFILE_SCOPE_NC("RenderGraph::execute", AshEngine::Profile::Color::Render);
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(passes.size()));
 
@@ -124,9 +187,18 @@ namespace AshEngine
 		}
 		ASH_PROFILE_PLOT("RenderGraph/TransientTextures", static_cast<int64_t>(allocated_transient_count));
 
+		RenderGraphGpuTimingScopeGuard gpu_timing_scope(telemetry, command_buffer);
+		const auto fail_execution = [&gpu_timing_scope, &release_allocated_transients]()
+		{
+			gpu_timing_scope.close();
+			release_allocated_transients();
+			return false;
+		};
+
 		for (uint32_t pass_index : compiled.live_pass_indices)
 		{
 			const RenderGraphPassNode& pass = passes[pass_index];
+			gpu_timing_scope.transition_to(pass.timing_metric);
 			if (pass.kind == RenderGraphPassKind::Compute)
 			{
 				ASH_PROFILE_SCOPE_NC("RenderGraph::ExecuteComputePass", AshEngine::Profile::Color::Submit);
@@ -136,8 +208,7 @@ namespace AshEngine
 				if (!pass.compute_execute || !pass.compute_execute(context))
 				{
 					HLogError("RenderGraph: compute pass '{}' failed.", pass.name);
-					release_allocated_transients();
-					return false;
+					return fail_execution();
 				}
 				continue;
 			}
@@ -153,8 +224,7 @@ namespace AshEngine
 				if (!usage.texture || usage.texture.index >= textures.size())
 				{
 					HLogError("RenderGraph: raster pass '{}' has invalid texture usage.", pass.name);
-					release_allocated_transients();
-					return false;
+					return fail_execution();
 				}
 
 				std::shared_ptr<RenderTarget> target = textures[usage.texture.index].external_texture;
@@ -164,8 +234,7 @@ namespace AshEngine
 						"RenderGraph: raster pass '{}' references unallocated texture '{}'.",
 						pass.name,
 						textures[usage.texture.index].name);
-					release_allocated_transients();
-					return false;
+					return fail_execution();
 				}
 
 				if (usage.access == RenderGraphAccess::ColorAttachmentWrite)
@@ -173,8 +242,7 @@ namespace AshEngine
 					if (texture_is_depth_format(target->get_format()))
 					{
 						HLogError("RenderGraph: pass '{}' uses depth format as color attachment.", pass.name);
-						release_allocated_transients();
-						return false;
+						return fail_execution();
 					}
 					if (pass_desc.color_attachments.size() <= usage.color_slot)
 					{
@@ -190,8 +258,7 @@ namespace AshEngine
 					if (!texture_is_depth_format(target->get_format()))
 					{
 						HLogError("RenderGraph: pass '{}' uses color format as depth attachment.", pass.name);
-						release_allocated_transients();
-						return false;
+						return fail_execution();
 					}
 					pass_desc.depth_attachment.render_target = target;
 					pass_desc.depth_attachment.load_action = usage.load_action;
@@ -208,8 +275,7 @@ namespace AshEngine
 			if (!renderer.begin_pass(pass_desc, pass_context))
 			{
 				HLogError("RenderGraph: begin raster pass '{}' failed.", pass.name);
-				release_allocated_transients();
-				return false;
+				return fail_execution();
 			}
 
 			RasterContext context(pass_context, textures);
@@ -218,11 +284,11 @@ namespace AshEngine
 			if (!pass_result)
 			{
 				HLogError("RenderGraph: raster pass '{}' failed.", pass.name);
-				release_allocated_transients();
-				return false;
+				return fail_execution();
 			}
 		}
 
+		gpu_timing_scope.close();
 		release_allocated_transients();
 		return true;
 	}

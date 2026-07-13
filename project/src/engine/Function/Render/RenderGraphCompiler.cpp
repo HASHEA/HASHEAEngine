@@ -62,6 +62,7 @@ namespace AshEngine
 				std::string name{};
 				RenderGraphPassKind kind = RenderGraphPassKind::Raster;
 				RenderGraphPassFlags flags = RenderGraphPassFlags::None;
+				RHI::GpuTimingMetric timing_metric = RHI::GpuTimingMetric::Invalid;
 				std::vector<TextureUsageTopologyKey> texture_usages{};
 			};
 
@@ -100,6 +101,7 @@ namespace AshEngine
 			ASH_HASH::hash_combine(hash_value, pass.name);
 			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(pass.kind));
 			ASH_HASH::hash_combine(hash_value, static_cast<uint32_t>(pass.flags));
+			ASH_HASH::hash_combine(hash_value, static_cast<uint8_t>(pass.timing_metric));
 			ASH_HASH::hash_combine(hash_value, pass.texture_usages.size());
 			for (const RenderGraphTextureUsage& usage : pass.texture_usages)
 			{
@@ -148,6 +150,7 @@ namespace AshEngine
 				pass_key.name = pass.name;
 				pass_key.kind = pass.kind;
 				pass_key.flags = pass.flags;
+				pass_key.timing_metric = pass.timing_metric;
 				pass_key.texture_usages.reserve(pass.texture_usages.size());
 				for (const RenderGraphTextureUsage& usage : pass.texture_usages)
 				{
@@ -193,6 +196,7 @@ namespace AshEngine
 				if (cached.name != pass.name ||
 					cached.kind != pass.kind ||
 					cached.flags != pass.flags ||
+					cached.timing_metric != pass.timing_metric ||
 					cached.texture_usages.size() != pass.texture_usages.size())
 				{
 					return false;
@@ -231,6 +235,13 @@ namespace AshEngine
 			}
 			return nullptr;
 		}
+	}
+
+	size_t RenderGraphCompiler::hash_topology(
+		const std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes)
+	{
+		return hash_render_graph_topology(textures, passes);
 	}
 
 	bool RenderGraphCompiler::compile(
@@ -399,7 +410,15 @@ namespace AshEngine
 		RenderGraphCompileResult& out_result)
 	{
 		ASH_PROFILE_SCOPE_NC("RenderGraphCompiler::compile_cached", AshEngine::Profile::Color::Submit);
-		const size_t topology_hash = hash_render_graph_topology(textures, passes);
+		return compile_cached_in_bucket(textures, passes, hash_topology(textures, passes), out_result);
+	}
+
+	bool RenderGraphCompiler::compile_cached_in_bucket(
+		const std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes,
+		size_t topology_hash,
+		RenderGraphCompileResult& out_result)
+	{
 		RenderGraphCompileCacheState& cache = compile_cache_state();
 		{
 			std::scoped_lock<std::mutex> lock(cache.mutex);

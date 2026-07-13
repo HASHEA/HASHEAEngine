@@ -14,6 +14,7 @@ namespace RHI
 	struct AshBarrier;
 	enum class AshResourceState : uint32_t;
 	class GraphicsContext;
+	class IGpuTimingTelemetry;
 	class Swapchain;
 	enum class SwapchainPresentResult : uint8_t;
 	class CommandBuffer;
@@ -605,6 +606,9 @@ namespace AshEngine
 		bool end_pass();
 
 		RHI::CommandBuffer* get_current_command_buffer() const;
+		// Context-owned, non-owning view. Invalid after RenderDevice/context shutdown;
+		// disabled telemetry returns nullptr.
+		RHI::IGpuTimingTelemetry* get_gpu_timing_telemetry() const;
 		std::shared_ptr<RHI::TextureView> get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const;
 		bool transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target);
 		bool has_back_buffer_content() const;

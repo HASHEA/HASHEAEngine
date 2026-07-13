@@ -1115,6 +1115,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneGBufferPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::GBuffer,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (uint8_t index = 0; index < static_cast<uint8_t>(graph_resources.gbuffer_targets.size()); ++index)
@@ -1753,6 +1754,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				"SceneViewOverlayDepthPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::ToneMapAndOverlays,
 				[output_target, depth_target](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_depth(depth_target, RenderGraphDepthReadMode::DepthTestOnly);
@@ -1771,6 +1773,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				"SceneViewOverlayTopPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::ToneMapAndOverlays,
 				[output_target](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.write_color(0, output_target, RenderLoadAction::Load, {});
@@ -1814,6 +1817,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDebugDrawOverlayPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::ToneMapAndOverlays,
 			[output_target](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(output_target, RenderGraphAccess::GraphicsSRV);
@@ -2266,6 +2270,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneEntityPickPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Invalid,
 			[entity_pick, depth_target](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_depth(depth_target, RenderGraphDepthReadMode::DepthTestOnly);

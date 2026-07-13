@@ -275,6 +275,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneTemporalAAResolvePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::TemporalAA,
 			[scene_hdr_linear, gbuffer_motion, scene_depth, resolved, history_write,
 				history_has_valid_read, history_read](RenderGraphComputePassBuilder& pass)
 			{

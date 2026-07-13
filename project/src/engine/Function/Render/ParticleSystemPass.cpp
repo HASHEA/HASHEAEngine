@@ -583,6 +583,7 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(graph.add_compute_pass(
 					"SceneParticleSimulatePass",
 					RenderGraphPassFlags::NeverCull,
+					RHI::GpuTimingMetric::Particles,
 					[](RenderGraphComputePassBuilder&) {},
 					[this,
 						key,
@@ -672,6 +673,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				"SceneParticleDrawPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Particles,
 				[depth, scene_hdr_linear, soft_particles](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_depth(

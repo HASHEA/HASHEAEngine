@@ -459,6 +459,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				"SceneAmbientOcclusionPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::AmbientOcclusion,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(deferred_resources.depth, RenderGraphAccess::GraphicsSRV);
@@ -489,6 +490,7 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(graph.add_raster_pass(
 					"SceneAmbientOcclusionBlurPass",
 					RenderGraphPassFlags::None,
+					RHI::GpuTimingMetric::AmbientOcclusion,
 					[&](RenderGraphRasterPassBuilder& pass)
 					{
 						pass.read_texture(raw_ao, RenderGraphAccess::GraphicsSRV);
@@ -546,6 +548,7 @@ namespace AshEngine
 				ASH_PROCESS_ERROR(graph.add_raster_pass(
 					"SceneAmbientOcclusionTemporalPass",
 					RenderGraphPassFlags::None,
+					RHI::GpuTimingMetric::AmbientOcclusion,
 					[&](RenderGraphRasterPassBuilder& pass)
 					{
 						pass.read_texture(final_ao, RenderGraphAccess::GraphicsSRV);
@@ -624,6 +627,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				"SceneAmbientOcclusionDebugPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::AmbientOcclusion,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(deferred_resources.depth, RenderGraphAccess::GraphicsSRV);

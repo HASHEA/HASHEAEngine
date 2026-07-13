@@ -79,15 +79,26 @@ namespace AshEngine
 	bool RenderGraphBuilder::add_raster_pass(
 		const char* name,
 		RenderGraphPassFlags flags,
+		RHI::GpuTimingMetric timing_metric,
 		const std::function<void(RenderGraphRasterPassBuilder&)>& setup,
 		const std::function<bool(RenderGraphRasterContext&)>& execute)
 	{
 		ASH_PROFILE_SCOPE_NC("RenderGraphBuilder::add_raster_pass", AshEngine::Profile::Color::Submit);
+		if (timing_metric != RHI::GpuTimingMetric::Invalid &&
+			!is_render_graph_gpu_timing_group_metric(timing_metric))
+		{
+			HLogError(
+				"RenderGraph '{}': raster pass '{}' uses a timing metric reserved outside RenderGraph.",
+				m_name,
+				name ? name : "RasterPass");
+			return false;
+		}
 		RenderGraphPassNode pass{};
 		pass.name = name ? name : "RasterPass";
 		ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
 		pass.kind = RenderGraphPassKind::Raster;
 		pass.flags = flags | RenderGraphPassFlags::Raster;
+		pass.timing_metric = timing_metric;
 		pass.raster_execute = execute;
 		RenderGraphRasterPassBuilder builder(pass);
 		if (setup)
@@ -101,15 +112,26 @@ namespace AshEngine
 	bool RenderGraphBuilder::add_compute_pass(
 		const char* name,
 		RenderGraphPassFlags flags,
+		RHI::GpuTimingMetric timing_metric,
 		const std::function<void(RenderGraphComputePassBuilder&)>& setup,
 		const std::function<bool(RenderGraphComputeContext&)>& execute)
 	{
 		ASH_PROFILE_SCOPE_NC("RenderGraphBuilder::add_compute_pass", AshEngine::Profile::Color::Submit);
+		if (timing_metric != RHI::GpuTimingMetric::Invalid &&
+			!is_render_graph_gpu_timing_group_metric(timing_metric))
+		{
+			HLogError(
+				"RenderGraph '{}': compute pass '{}' uses a timing metric reserved outside RenderGraph.",
+				m_name,
+				name ? name : "ComputePass");
+			return false;
+		}
 		RenderGraphPassNode pass{};
 		pass.name = name ? name : "ComputePass";
 		ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
 		pass.kind = RenderGraphPassKind::Compute;
 		pass.flags = flags | RenderGraphPassFlags::Compute;
+		pass.timing_metric = timing_metric;
 		pass.compute_execute = execute;
 		RenderGraphComputePassBuilder builder(pass);
 		if (setup)

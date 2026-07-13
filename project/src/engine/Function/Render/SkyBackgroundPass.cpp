@@ -225,6 +225,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneSkyBackgroundPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::EnvironmentAndSky,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestAndShaderResource);
