@@ -131,7 +131,8 @@ namespace
 	{
 		AshEngine::RenderGraphBuilder graph =
 			AshEngine::RenderGraphBuilder::create_headless_for_tests("GpuMetricCacheGraph");
-		const bool added = graph.add_compute_pass(
+		const bool added = AshEngine::add_render_graph_compute_pass_for_tests(
+			graph,
 			"MetricPass",
 			AshEngine::RenderGraphPassFlags::NeverCull,
 			metric,
@@ -197,7 +198,7 @@ namespace
 
 		CountingTelemetry telemetry{};
 		AshEngine::Renderer renderer(nullptr);
-		result.execute_result = AshEngine::execute_render_graph(
+		result.execute_result = AshEngine::execute_render_graph_for_tests(
 			renderer,
 			textures,
 			passes,
@@ -219,7 +220,8 @@ TEST_CASE("RenderGraph GPU metric metadata is explicit on every pass node")
 	AshEngine::RenderGraphBuilder graph =
 		AshEngine::RenderGraphBuilder::create_headless_for_tests("GpuMetricMetadataGraph");
 
-	REQUIRE(graph.add_raster_pass(
+	REQUIRE(AshEngine::add_render_graph_raster_pass_for_tests(
+		graph,
 		"Raster",
 		AshEngine::RenderGraphPassFlags::NeverCull,
 		RHI::GpuTimingMetric::GBuffer,
@@ -230,7 +232,8 @@ TEST_CASE("RenderGraph GPU metric metadata is explicit on every pass node")
 		{
 			return true;
 		}));
-	REQUIRE(graph.add_compute_pass(
+	REQUIRE(AshEngine::add_render_graph_compute_pass_for_tests(
+		graph,
 		"Compute",
 		AshEngine::RenderGraphPassFlags::NeverCull,
 		RHI::GpuTimingMetric::Bloom,
@@ -260,13 +263,15 @@ TEST_CASE("RenderGraph GPU metric rejects Frame and treats Invalid as explicit u
 		return true;
 	};
 
-	CHECK_FALSE(graph.add_raster_pass(
+	CHECK_FALSE(AshEngine::add_render_graph_raster_pass_for_tests(
+		graph,
 		"FrameIsOwnedByRenderDevice",
 		AshEngine::RenderGraphPassFlags::NeverCull,
 		RHI::GpuTimingMetric::Frame,
 		setup,
 		execute));
-	CHECK_FALSE(graph.add_raster_pass(
+	CHECK_FALSE(AshEngine::add_render_graph_raster_pass_for_tests(
+		graph,
 		"CountIsNotAMetric",
 		AshEngine::RenderGraphPassFlags::NeverCull,
 		RHI::GpuTimingMetric::Count,
@@ -274,7 +279,8 @@ TEST_CASE("RenderGraph GPU metric rejects Frame and treats Invalid as explicit u
 		execute));
 	CHECK(graph.get_pass_count_for_tests() == 0u);
 
-	REQUIRE(graph.add_raster_pass(
+	REQUIRE(AshEngine::add_render_graph_raster_pass_for_tests(
+		graph,
 		"ExplicitlyUntracked",
 		AshEngine::RenderGraphPassFlags::NeverCull,
 		RHI::GpuTimingMetric::Invalid,
@@ -290,23 +296,23 @@ TEST_CASE("RenderGraph GPU metric participates in compile cache identity")
 	AshEngine::RenderGraphBuilder gbuffer_graph = make_cache_graph(RHI::GpuTimingMetric::GBuffer);
 	AshEngine::RenderGraphBuilder bloom_graph = make_cache_graph(RHI::GpuTimingMetric::Bloom);
 	AshEngine::RenderGraphBuilder same_bloom_graph = make_cache_graph(RHI::GpuTimingMetric::Bloom);
-	const size_t gbuffer_hash = AshEngine::RenderGraphCompiler::hash_topology(
+	const size_t gbuffer_hash = AshEngine::RenderGraphCompiler::hash_topology_for_tests(
 		gbuffer_graph.get_textures_for_tests(),
 		gbuffer_graph.get_passes_for_tests());
-	const size_t bloom_hash = AshEngine::RenderGraphCompiler::hash_topology(
+	const size_t bloom_hash = AshEngine::RenderGraphCompiler::hash_topology_for_tests(
 		bloom_graph.get_textures_for_tests(),
 		bloom_graph.get_passes_for_tests());
 	CHECK(gbuffer_hash != bloom_hash);
 
 	constexpr size_t forced_collision_bucket = 0x6A17u;
 	AshEngine::RenderGraphCompileResult result{};
-	REQUIRE(AshEngine::RenderGraphCompiler::compile_cached_in_bucket(
+	REQUIRE(AshEngine::RenderGraphCompiler::compile_cached_in_bucket_for_tests(
 		gbuffer_graph.get_textures_for_tests(),
 		gbuffer_graph.get_passes_for_tests(),
 		forced_collision_bucket,
 		result));
 	CHECK(AshEngine::RenderGraphCompiler::get_compile_cache_stats_for_tests().misses == 1u);
-	REQUIRE(AshEngine::RenderGraphCompiler::compile_cached_in_bucket(
+	REQUIRE(AshEngine::RenderGraphCompiler::compile_cached_in_bucket_for_tests(
 		bloom_graph.get_textures_for_tests(),
 		bloom_graph.get_passes_for_tests(),
 		forced_collision_bucket,
@@ -316,7 +322,7 @@ TEST_CASE("RenderGraph GPU metric participates in compile cache identity")
 	CHECK(after_distinct_metric.misses == 2u);
 	CHECK(after_distinct_metric.hits == 0u);
 
-	REQUIRE(AshEngine::RenderGraphCompiler::compile_cached_in_bucket(
+	REQUIRE(AshEngine::RenderGraphCompiler::compile_cached_in_bucket_for_tests(
 		same_bloom_graph.get_textures_for_tests(),
 		same_bloom_graph.get_passes_for_tests(),
 		forced_collision_bucket,
@@ -358,16 +364,19 @@ TEST_CASE("RenderGraph GPU metric executor scopes follow only compiled live pass
 	}
 }
 
-TEST_CASE("RenderGraph GPU metric scope guard closes transitions graph end and failures")
+TEST_CASE("RenderGraph GPU metric internal scope handles transitions and teardown")
 {
-	SUBCASE("metric changes close the old group before opening the new group")
+	SUBCASE("adjacent metrics coalesce and changes close the old group before opening the new group")
 	{
 		CountingTelemetry telemetry{};
-		{
-			AshEngine::RenderGraphGpuTimingScopeGuard scope(&telemetry, fake_command_buffer());
-			scope.transition_to(RHI::GpuTimingMetric::GBuffer);
-			scope.transition_to(RHI::GpuTimingMetric::Bloom);
-		}
+		AshEngine::run_render_graph_gpu_timing_scope_sequence_for_tests(
+			&telemetry,
+			fake_command_buffer(),
+			{
+				RHI::GpuTimingMetric::GBuffer,
+				RHI::GpuTimingMetric::GBuffer,
+				RHI::GpuTimingMetric::Bloom,
+			});
 		const std::vector<ScopeEvent> expected =
 		{
 			{ ScopeEventKind::Begin, RHI::GpuTimingMetric::GBuffer },
@@ -378,16 +387,13 @@ TEST_CASE("RenderGraph GPU metric scope guard closes transitions graph end and f
 		CHECK(telemetry.events == expected);
 	}
 
-	SUBCASE("an early return closes the active group through RAII")
+	SUBCASE("returning from the internal sequence closes the active group")
 	{
 		CountingTelemetry telemetry{};
-		const auto fail_during_execute = [&telemetry]()
-		{
-			AshEngine::RenderGraphGpuTimingScopeGuard scope(&telemetry, fake_command_buffer());
-			scope.transition_to(RHI::GpuTimingMetric::TemporalAA);
-			return false;
-		};
-		CHECK_FALSE(fail_during_execute());
+		AshEngine::run_render_graph_gpu_timing_scope_sequence_for_tests(
+			&telemetry,
+			fake_command_buffer(),
+			{ RHI::GpuTimingMetric::TemporalAA });
 		const std::vector<ScopeEvent> expected =
 		{
 			{ ScopeEventKind::Begin, RHI::GpuTimingMetric::TemporalAA },
@@ -400,11 +406,13 @@ TEST_CASE("RenderGraph GPU metric scope guard closes transitions graph end and f
 	{
 		CountingTelemetry telemetry{};
 		telemetry.accept_begin = false;
-		{
-			AshEngine::RenderGraphGpuTimingScopeGuard scope(&telemetry, fake_command_buffer());
-			scope.transition_to(RHI::GpuTimingMetric::Shadows);
-			scope.transition_to(RHI::GpuTimingMetric::Shadows);
-		}
+		AshEngine::run_render_graph_gpu_timing_scope_sequence_for_tests(
+			&telemetry,
+			fake_command_buffer(),
+			{
+				RHI::GpuTimingMetric::Shadows,
+				RHI::GpuTimingMetric::Shadows,
+			});
 		const std::vector<ScopeEvent> expected =
 		{
 			{ ScopeEventKind::Begin, RHI::GpuTimingMetric::Shadows },
@@ -415,32 +423,36 @@ TEST_CASE("RenderGraph GPU metric scope guard closes transitions graph end and f
 	SUBCASE("Frame and Invalid never open a RenderGraph group")
 	{
 		CountingTelemetry telemetry{};
-		{
-			AshEngine::RenderGraphGpuTimingScopeGuard scope(&telemetry, fake_command_buffer());
-			scope.transition_to(RHI::GpuTimingMetric::Frame);
-			scope.transition_to(RHI::GpuTimingMetric::Invalid);
-		}
+		AshEngine::run_render_graph_gpu_timing_scope_sequence_for_tests(
+			&telemetry,
+			fake_command_buffer(),
+			{
+				RHI::GpuTimingMetric::Frame,
+				RHI::GpuTimingMetric::Invalid,
+			});
 		CHECK(telemetry.events.empty());
 	}
 
 	SUBCASE("disabled telemetry or a missing command buffer performs no begin or end calls")
 	{
 		CountingTelemetry telemetry{};
-		{
-			RHI::IGpuTimingTelemetry* disabled_telemetry = nullptr;
-			AshEngine::RenderGraphGpuTimingScopeGuard scope(disabled_telemetry, fake_command_buffer());
-			scope.transition_to(RHI::GpuTimingMetric::GBuffer);
-			scope.transition_to(RHI::GpuTimingMetric::Bloom);
-			scope.close();
-		}
+		RHI::IGpuTimingTelemetry* disabled_telemetry = nullptr;
+		AshEngine::run_render_graph_gpu_timing_scope_sequence_for_tests(
+			disabled_telemetry,
+			fake_command_buffer(),
+			{
+				RHI::GpuTimingMetric::GBuffer,
+				RHI::GpuTimingMetric::Bloom,
+			});
 		CHECK(telemetry.events.empty());
 
-		{
-			AshEngine::RenderGraphGpuTimingScopeGuard scope(&telemetry, nullptr);
-			scope.transition_to(RHI::GpuTimingMetric::GBuffer);
-			scope.transition_to(RHI::GpuTimingMetric::Bloom);
-			scope.close();
-		}
+		AshEngine::run_render_graph_gpu_timing_scope_sequence_for_tests(
+			&telemetry,
+			nullptr,
+			{
+				RHI::GpuTimingMetric::GBuffer,
+				RHI::GpuTimingMetric::Bloom,
+			});
 		CHECK(telemetry.events.empty());
 	}
 }

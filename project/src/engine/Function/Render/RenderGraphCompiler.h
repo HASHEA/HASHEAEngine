@@ -40,7 +40,7 @@ namespace AshEngine
 		uint64_t misses = 0;
 	};
 
-	class ASH_API RenderGraphCompiler
+	class RenderGraphCompiler
 	{
 	public:
 		static bool compile(
@@ -52,8 +52,21 @@ namespace AshEngine
 			const std::vector<RenderGraphPassNode>& passes,
 			RenderGraphCompileResult& out_result);
 
-		// Cache primitives shared by the production lookup path. The explicit
-		// bucket entry point keeps collision resolution independently verifiable.
+		// Narrow wrappers let doctest verify both hash contribution and exact
+		// collision equality without exporting production cache controls.
+		static ASH_API size_t hash_topology_for_tests(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphPassNode>& passes);
+		static ASH_API bool compile_cached_in_bucket_for_tests(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphPassNode>& passes,
+			size_t topology_hash,
+			RenderGraphCompileResult& out_result);
+
+		static ASH_API void reset_compile_cache_for_tests();
+		static ASH_API RenderGraphCompileCacheStats get_compile_cache_stats_for_tests();
+
+	private:
 		static size_t hash_topology(
 			const std::vector<RenderGraphTextureNode>& textures,
 			const std::vector<RenderGraphPassNode>& passes);
@@ -62,8 +75,5 @@ namespace AshEngine
 			const std::vector<RenderGraphPassNode>& passes,
 			size_t topology_hash,
 			RenderGraphCompileResult& out_result);
-
-		static void reset_compile_cache_for_tests();
-		static RenderGraphCompileCacheStats get_compile_cache_stats_for_tests();
 	};
 }

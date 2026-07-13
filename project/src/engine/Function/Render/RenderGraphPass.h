@@ -66,27 +66,6 @@ namespace AshEngine
 		return metric > RHI::GpuTimingMetric::Frame && metric < RHI::GpuTimingMetric::Count;
 	}
 
-	// Non-owning execution guard. RenderGraph owns only pass-group transitions;
-	// GPU.Frame remains owned by RenderDevice.
-	class ASH_API RenderGraphGpuTimingScopeGuard
-	{
-	public:
-		RenderGraphGpuTimingScopeGuard(RHI::IGpuTimingTelemetry* telemetry, RHI::CommandBuffer* command_buffer);
-		~RenderGraphGpuTimingScopeGuard();
-
-		RenderGraphGpuTimingScopeGuard(const RenderGraphGpuTimingScopeGuard&) = delete;
-		RenderGraphGpuTimingScopeGuard& operator=(const RenderGraphGpuTimingScopeGuard&) = delete;
-
-		void transition_to(RHI::GpuTimingMetric metric);
-		void close();
-
-	private:
-		RHI::IGpuTimingTelemetry* m_telemetry = nullptr;
-		RHI::CommandBuffer* m_command_buffer = nullptr;
-		RHI::GpuTimingMetric m_current_group = RHI::GpuTimingMetric::Invalid;
-		bool m_scope_open = false;
-	};
-
 	class RenderGraphRasterPassBuilder
 	{
 	public:

@@ -18,21 +18,11 @@ namespace AshEngine
 		bool extracted = false;
 	};
 
-	// Production executor core with explicit non-owning timing dependencies.
-	// Normal callers should use RenderGraphBuilder::execute(), which supplies
-	// the context-owned telemetry and current command buffer through RenderDevice.
-	ASH_API bool execute_render_graph(
-		Renderer& renderer,
-		std::vector<RenderGraphTextureNode>& textures,
-		const std::vector<RenderGraphPassNode>& passes,
-		RHI::IGpuTimingTelemetry* telemetry,
-		RHI::CommandBuffer* command_buffer);
-
-	class ASH_API RenderGraphBuilder
+	class RenderGraphBuilder
 	{
 	public:
 		RenderGraphBuilder(Renderer& renderer, const char* name);
-		static RenderGraphBuilder create_headless_for_tests(const char* name);
+		static ASH_API RenderGraphBuilder create_headless_for_tests(const char* name);
 
 		RenderGraphTextureRef register_external_texture(
 			const std::shared_ptr<RenderTarget>& texture,
@@ -61,9 +51,9 @@ namespace AshEngine
 		bool compile_cached_for_tests(RenderGraphCompileResult& out_result) const;
 
 		size_t get_texture_count_for_tests() const;
-		size_t get_pass_count_for_tests() const;
-		const std::vector<RenderGraphTextureNode>& get_textures_for_tests() const;
-		const std::vector<RenderGraphPassNode>& get_passes_for_tests() const;
+		ASH_API size_t get_pass_count_for_tests() const;
+		ASH_API const std::vector<RenderGraphTextureNode>& get_textures_for_tests() const;
+		ASH_API const std::vector<RenderGraphPassNode>& get_passes_for_tests() const;
 
 	private:
 		RenderGraphBuilder(Renderer* renderer, const char* name);
@@ -73,4 +63,31 @@ namespace AshEngine
 		std::vector<RenderGraphTextureNode> m_textures{};
 		std::vector<RenderGraphPassNode> m_passes{};
 	};
+
+	// Narrow DLL bridges for doctest. Each delegates to the same production API
+	// or executor core; none changes telemetry ownership or normal call paths.
+	ASH_API bool add_render_graph_raster_pass_for_tests(
+		RenderGraphBuilder& graph,
+		const char* name,
+		RenderGraphPassFlags flags,
+		RHI::GpuTimingMetric timing_metric,
+		const std::function<void(RenderGraphRasterPassBuilder&)>& setup,
+		const std::function<bool(RenderGraphRasterContext&)>& execute);
+	ASH_API bool add_render_graph_compute_pass_for_tests(
+		RenderGraphBuilder& graph,
+		const char* name,
+		RenderGraphPassFlags flags,
+		RHI::GpuTimingMetric timing_metric,
+		const std::function<void(RenderGraphComputePassBuilder&)>& setup,
+		const std::function<bool(RenderGraphComputeContext&)>& execute);
+	ASH_API bool execute_render_graph_for_tests(
+		Renderer& renderer,
+		std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes,
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer);
+	ASH_API void run_render_graph_gpu_timing_scope_sequence_for_tests(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer,
+		const std::vector<RHI::GpuTimingMetric>& metrics);
 }

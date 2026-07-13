@@ -244,6 +244,22 @@ namespace AshEngine
 		return hash_render_graph_topology(textures, passes);
 	}
 
+	size_t RenderGraphCompiler::hash_topology_for_tests(
+		const std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes)
+	{
+		return hash_topology(textures, passes);
+	}
+
+	bool RenderGraphCompiler::compile_cached_in_bucket_for_tests(
+		const std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes,
+		size_t topology_hash,
+		RenderGraphCompileResult& out_result)
+	{
+		return compile_cached_in_bucket(textures, passes, topology_hash, out_result);
+	}
+
 	bool RenderGraphCompiler::compile(
 		const std::vector<RenderGraphTextureNode>& textures,
 		const std::vector<RenderGraphPassNode>& passes,

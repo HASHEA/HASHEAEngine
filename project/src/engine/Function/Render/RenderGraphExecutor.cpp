@@ -5,55 +5,70 @@
 
 namespace AshEngine
 {
-	RenderGraphGpuTimingScopeGuard::RenderGraphGpuTimingScopeGuard(
-		RHI::IGpuTimingTelemetry* telemetry,
-		RHI::CommandBuffer* command_buffer)
-		: m_telemetry(telemetry)
-		, m_command_buffer(command_buffer)
-	{
-	}
-
-	RenderGraphGpuTimingScopeGuard::~RenderGraphGpuTimingScopeGuard()
-	{
-		close();
-	}
-
-	void RenderGraphGpuTimingScopeGuard::transition_to(RHI::GpuTimingMetric metric)
-	{
-		// Only adjacent passes coalesce. Returning to a metric after another group
-		// intentionally begins it again so the telemetry contract can flag duplicates.
-		const RHI::GpuTimingMetric next_group =
-			is_render_graph_gpu_timing_group_metric(metric) ? metric : RHI::GpuTimingMetric::Invalid;
-		if (next_group == m_current_group)
-		{
-			return;
-		}
-
-		if (m_scope_open && m_telemetry && m_command_buffer)
-		{
-			m_telemetry->end_scope(m_command_buffer, m_current_group);
-		}
-		m_scope_open = false;
-		m_current_group = next_group;
-
-		if (m_current_group != RHI::GpuTimingMetric::Invalid && m_telemetry && m_command_buffer)
-		{
-			m_scope_open = m_telemetry->begin_scope(m_command_buffer, m_current_group);
-		}
-	}
-
-	void RenderGraphGpuTimingScopeGuard::close()
-	{
-		if (m_scope_open && m_telemetry && m_command_buffer)
-		{
-			m_telemetry->end_scope(m_command_buffer, m_current_group);
-		}
-		m_scope_open = false;
-		m_current_group = RHI::GpuTimingMetric::Invalid;
-	}
-
 	namespace
 	{
+		// Internal non-owning guard. RenderGraph owns only pass-group transitions;
+		// GPU.Frame remains owned by RenderDevice.
+		class RenderGraphGpuTimingScopeGuard
+		{
+		public:
+			RenderGraphGpuTimingScopeGuard(
+				RHI::IGpuTimingTelemetry* telemetry,
+				RHI::CommandBuffer* command_buffer)
+				: m_telemetry(telemetry)
+				, m_command_buffer(command_buffer)
+			{
+			}
+
+			~RenderGraphGpuTimingScopeGuard()
+			{
+				close();
+			}
+
+			RenderGraphGpuTimingScopeGuard(const RenderGraphGpuTimingScopeGuard&) = delete;
+			RenderGraphGpuTimingScopeGuard& operator=(const RenderGraphGpuTimingScopeGuard&) = delete;
+
+			void transition_to(RHI::GpuTimingMetric metric)
+			{
+				// Only adjacent passes coalesce. Returning to a metric after another group
+				// intentionally begins it again so the telemetry contract can flag duplicates.
+				const RHI::GpuTimingMetric next_group =
+					is_render_graph_gpu_timing_group_metric(metric) ? metric : RHI::GpuTimingMetric::Invalid;
+				if (next_group == m_current_group)
+				{
+					return;
+				}
+
+				if (m_scope_open && m_telemetry && m_command_buffer)
+				{
+					m_telemetry->end_scope(m_command_buffer, m_current_group);
+				}
+				m_scope_open = false;
+				m_current_group = next_group;
+
+				if (m_current_group != RHI::GpuTimingMetric::Invalid && m_telemetry && m_command_buffer)
+				{
+					m_scope_open = m_telemetry->begin_scope(m_command_buffer, m_current_group);
+				}
+			}
+
+			void close()
+			{
+				if (m_scope_open && m_telemetry && m_command_buffer)
+				{
+					m_telemetry->end_scope(m_command_buffer, m_current_group);
+				}
+				m_scope_open = false;
+				m_current_group = RHI::GpuTimingMetric::Invalid;
+			}
+
+		private:
+			RHI::IGpuTimingTelemetry* m_telemetry = nullptr;
+			RHI::CommandBuffer* m_command_buffer = nullptr;
+			RHI::GpuTimingMetric m_current_group = RHI::GpuTimingMetric::Invalid;
+			bool m_scope_open = false;
+		};
+
 		class RasterContext final : public RenderGraphRasterContext
 		{
 		public:
@@ -117,18 +132,7 @@ namespace AshEngine
 		}
 	}
 
-	bool execute_render_graph(Renderer& renderer, std::vector<RenderGraphTextureNode>& textures, const std::vector<RenderGraphPassNode>& passes)
-	{
-		RenderDevice* render_device = renderer.get_render_device();
-		return execute_render_graph(
-			renderer,
-			textures,
-			passes,
-			render_device ? render_device->get_gpu_timing_telemetry() : nullptr,
-			render_device ? render_device->get_current_command_buffer() : nullptr);
-	}
-
-	bool execute_render_graph(
+	static bool execute_render_graph_core(
 		Renderer& renderer,
 		std::vector<RenderGraphTextureNode>& textures,
 		const std::vector<RenderGraphPassNode>& passes,
@@ -291,5 +295,41 @@ namespace AshEngine
 		gpu_timing_scope.close();
 		release_allocated_transients();
 		return true;
+	}
+
+	bool execute_render_graph(
+		Renderer& renderer,
+		std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes)
+	{
+		RenderDevice* render_device = renderer.get_render_device();
+		return execute_render_graph_core(
+			renderer,
+			textures,
+			passes,
+			render_device ? render_device->get_gpu_timing_telemetry() : nullptr,
+			render_device ? render_device->get_current_command_buffer() : nullptr);
+	}
+
+	bool execute_render_graph_for_tests(
+		Renderer& renderer,
+		std::vector<RenderGraphTextureNode>& textures,
+		const std::vector<RenderGraphPassNode>& passes,
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer)
+	{
+		return execute_render_graph_core(renderer, textures, passes, telemetry, command_buffer);
+	}
+
+	void run_render_graph_gpu_timing_scope_sequence_for_tests(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer,
+		const std::vector<RHI::GpuTimingMetric>& metrics)
+	{
+		RenderGraphGpuTimingScopeGuard scope(telemetry, command_buffer);
+		for (RHI::GpuTimingMetric metric : metrics)
+		{
+			scope.transition_to(metric);
+		}
 	}
 }

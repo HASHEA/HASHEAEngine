@@ -142,6 +142,28 @@ namespace AshEngine
 		return true;
 	}
 
+	bool add_render_graph_raster_pass_for_tests(
+		RenderGraphBuilder& graph,
+		const char* name,
+		RenderGraphPassFlags flags,
+		RHI::GpuTimingMetric timing_metric,
+		const std::function<void(RenderGraphRasterPassBuilder&)>& setup,
+		const std::function<bool(RenderGraphRasterContext&)>& execute)
+	{
+		return graph.add_raster_pass(name, flags, timing_metric, setup, execute);
+	}
+
+	bool add_render_graph_compute_pass_for_tests(
+		RenderGraphBuilder& graph,
+		const char* name,
+		RenderGraphPassFlags flags,
+		RHI::GpuTimingMetric timing_metric,
+		const std::function<void(RenderGraphComputePassBuilder&)>& setup,
+		const std::function<bool(RenderGraphComputeContext&)>& execute)
+	{
+		return graph.add_compute_pass(name, flags, timing_metric, setup, execute);
+	}
+
 	bool RenderGraphBuilder::execute()
 	{
 		ASH_PROFILE_SCOPE_NC("RenderGraphBuilder::execute", AshEngine::Profile::Color::Render);
