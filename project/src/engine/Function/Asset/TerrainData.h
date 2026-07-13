@@ -164,6 +164,7 @@ namespace AshEngine
 		std::array<TerrainMaterialLayerDesc, k_terrain_material_layer_count> material_layers{};
 		std::vector<TerrainEditLayer> edit_layers{};
 		std::vector<std::shared_ptr<const TerrainComponentSnapshot>> components{};
+		std::vector<TerrainComponentCoord> dirty_components{};
 	};
 
 	ASH_API auto make_default_terrain_grid_layout() -> TerrainGridLayout;

@@ -141,6 +141,49 @@ namespace AshEngine
 			return !rect.empty() && checked_multiply(rect.width(), rect.height(), out_area);
 		}
 
+		auto validate_canonical_coverage(
+			const TerrainSampleRect& rect,
+			const std::vector<float>& coverage,
+			const char* domain_name,
+			std::string* out_error) -> bool
+		{
+			bool has_non_zero = false;
+			bool touches_min_x = false;
+			bool touches_max_x = false;
+			bool touches_min_z = false;
+			bool touches_max_z = false;
+			for (uint32_t local_z = 0u; local_z < rect.height(); ++local_z)
+			{
+				for (uint32_t local_x = 0u; local_x < rect.width(); ++local_x)
+				{
+					const float value = coverage[
+						static_cast<size_t>(local_z) * rect.width() + local_x];
+					if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+					{
+						return fail(out_error, domain_name);
+					}
+					if (value == 0.0f)
+					{
+						continue;
+					}
+
+					has_non_zero = true;
+					touches_min_x = touches_min_x || local_x == 0u;
+					touches_max_x = touches_max_x || local_x + 1u == rect.width();
+					touches_min_z = touches_min_z || local_z == 0u;
+					touches_max_z = touches_max_z || local_z + 1u == rect.height();
+				}
+			}
+
+			if (!has_non_zero ||
+				!touches_min_x || !touches_max_x ||
+				!touches_min_z || !touches_max_z)
+			{
+				return fail(out_error, domain_name);
+			}
+			return true;
+		}
+
 		auto validate_height_block_shape(
 			const TerrainGridLayout& layout,
 			const TerrainSparseHeightBlock& block,
@@ -169,12 +212,16 @@ namespace AshEngine
 		{
 			for (size_t index = 0u; index < block.values.size(); ++index)
 			{
-				if (!std::isfinite(block.values[index]) || !std::isfinite(block.coverage[index]))
+				if (!std::isfinite(block.values[index]))
 				{
-					return fail(out_error, "Terrain height block contains a non-finite value.");
+					return fail(out_error, "Terrain height block contains a non-finite height value.");
 				}
 			}
-			return true;
+			return validate_canonical_coverage(
+				block.changed_rect,
+				block.coverage,
+				"Terrain height block coverage is outside [0,1] or is not a minimal non-zero rectangle.",
+				out_error);
 		}
 
 		auto validate_weight_block_shape(
@@ -205,10 +252,6 @@ namespace AshEngine
 		{
 			for (size_t index = 0u; index < block.values.size(); ++index)
 			{
-				if (!std::isfinite(block.coverage[index]))
-				{
-					return fail(out_error, "Terrain weight block contains non-finite coverage.");
-				}
 				for (float value : block.values[index])
 				{
 					if (!std::isfinite(value))
@@ -217,7 +260,11 @@ namespace AshEngine
 					}
 				}
 			}
-			return true;
+			return validate_canonical_coverage(
+				block.changed_rect,
+				block.coverage,
+				"Terrain weight block coverage is outside [0,1] or is not a minimal non-zero rectangle.",
+				out_error);
 		}
 
 		auto validate_edit_layers_shallow(
@@ -230,6 +277,10 @@ namespace AshEngine
 			for (size_t layer_index = 0u; layer_index < layers.size(); ++layer_index)
 			{
 				const TerrainEditLayer& layer = layers[layer_index];
+				const size_t component_count =
+					static_cast<size_t>(layout.component_count_x) * layout.component_count_z;
+				std::vector<bool> height_owners(component_count, false);
+				std::vector<bool> weight_owners(component_count, false);
 				if (!layer.id.is_valid())
 				{
 					return fail(out_error, "Terrain edit layer ID is invalid.");
@@ -253,6 +304,13 @@ namespace AshEngine
 					{
 						return false;
 					}
+					const size_t owner_index =
+						static_cast<size_t>(block.owner.z) * layout.component_count_x + block.owner.x;
+					if (height_owners[owner_index])
+					{
+						return fail(out_error, "Terrain height blocks contain a duplicate owner.");
+					}
+					height_owners[owner_index] = true;
 				}
 				for (const TerrainSparseWeightBlock& block : layer.weight_blocks)
 				{
@@ -260,6 +318,13 @@ namespace AshEngine
 					{
 						return false;
 					}
+					const size_t owner_index =
+						static_cast<size_t>(block.owner.z) * layout.component_count_x + block.owner.x;
+					if (weight_owners[owner_index])
+					{
+						return fail(out_error, "Terrain weight blocks contain a duplicate owner.");
+					}
+					weight_owners[owner_index] = true;
 				}
 			}
 			return true;
@@ -452,6 +517,18 @@ namespace AshEngine
 				}
 				return false;
 			}
+			for (size_t index = 0u; index < working_set.dirty_components.size(); ++index)
+			{
+				const TerrainComponentCoord coord = working_set.dirty_components[index];
+				if (!is_valid_component_coord(working_set.layout, coord) ||
+					(index > 0u && !component_coord_less(
+						working_set.dirty_components[index - 1u],
+						coord)))
+				{
+					return fail(out_error, "Terrain working-set dirty components must be sorted, unique, and in range.");
+				}
+			}
+
 			return validate_component_snapshots(
 				working_set.layout,
 				working_set.components,
@@ -875,12 +952,11 @@ namespace AshEngine
 	}
 
 	bool publish_terrain_working_set(
-		const TerrainWorkingSet& working_set,
+		TerrainWorkingSet& working_set,
 		const std::vector<TerrainDirtyComponentPayload>& dirty_components,
 		std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot,
 		std::string* out_error)
 	{
-		out_snapshot.reset();
 		clear_error(out_error);
 		try
 		{
@@ -889,22 +965,23 @@ namespace AshEngine
 				return false;
 			}
 
+			if (dirty_components.size() != working_set.dirty_components.size())
+			{
+				return fail(out_error, "Terrain publication payloads do not match the complete dirty set.");
+			}
+
 			std::vector<std::shared_ptr<const TerrainComponentSnapshot>> components =
 				working_set.components;
-			std::vector<bool> replaced(components.size(), false);
-			for (const TerrainDirtyComponentPayload& payload : dirty_components)
+			for (size_t payload_index = 0u; payload_index < dirty_components.size(); ++payload_index)
 			{
-				if (!is_valid_component_coord(working_set.layout, payload.coord))
+				const TerrainDirtyComponentPayload& payload = dirty_components[payload_index];
+				if (!(payload.coord == working_set.dirty_components[payload_index]))
 				{
-					return fail(out_error, "Dirty Terrain component coordinate is out of range.");
+					return fail(out_error, "Terrain publication payload coordinates do not match the dirty set.");
 				}
 				const size_t index =
 					static_cast<size_t>(payload.coord.z) * working_set.layout.component_count_x +
 					payload.coord.x;
-				if (replaced[index])
-				{
-					return fail(out_error, "Dirty Terrain components contain a duplicate.");
-				}
 				if (!payload.component ||
 					payload.content_generation != working_set.content_generation ||
 					payload.component->content_generation != working_set.content_generation ||
@@ -922,7 +999,6 @@ namespace AshEngine
 					}
 					return false;
 				}
-				replaced[index] = true;
 				components[index] = payload.component;
 			}
 
@@ -940,8 +1016,11 @@ namespace AshEngine
 			mutable_snapshot->residency_revision = working_set.residency_revision;
 			mutable_snapshot->base_heights = std::move(mutable_base_heights);
 			mutable_snapshot->edit_layers = std::move(mutable_edit_layers);
-			mutable_snapshot->components = std::move(components);
+			mutable_snapshot->components = components;
 			std::shared_ptr<const TerrainAssetSnapshot> published = std::move(mutable_snapshot);
+
+			working_set.components.swap(components);
+			working_set.dirty_components.clear();
 			out_snapshot = std::move(published);
 			return true;
 		}

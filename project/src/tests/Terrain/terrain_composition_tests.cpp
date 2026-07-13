@@ -479,6 +479,172 @@ TEST_CASE("Terrain composition rejects invalid layers and blocks without partial
 	CheckFailure(invalid);
 }
 
+TEST_CASE("Terrain composition working-set creation rejects duplicate canonical block owners per domain")
+{
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		7u,
+		TerrainTests::MakeSmallLayout(),
+		{ 0.0f, 65535.0f },
+		10.0f,
+		source));
+
+	auto CheckRejected = [&](AshEngine::TerrainEditLayer layer)
+	{
+		AshEngine::TerrainAssetSnapshot snapshot = *source;
+		snapshot.edit_layers = std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+			std::vector<AshEngine::TerrainEditLayer>{ std::move(layer) });
+		AshEngine::TerrainWorkingSet output = MakeFlatWorkingSet();
+		std::string error{ "stale" };
+		CHECK_FALSE(AshEngine::make_terrain_working_set(snapshot, output, &error));
+		CHECK(output.asset_id == 0u);
+		CHECK_FALSE(error.empty());
+		CHECK(error != "stale");
+	};
+
+	auto duplicate_height = MakeHeightLayer(
+		1u,
+		AshEngine::TerrainHeightBlendMode::Additive,
+		4.0f,
+		1.0f,
+		1.0f);
+	duplicate_height.height_blocks.push_back(duplicate_height.height_blocks.front());
+	CheckRejected(std::move(duplicate_height));
+
+	const std::array<float, AshEngine::k_terrain_material_layer_count> painted{
+		0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f
+	};
+	auto duplicate_weight = MakeWeightLayer(
+		2u,
+		{ 1u, 1u, 2u, 2u },
+		painted);
+	duplicate_weight.weight_blocks.push_back(duplicate_weight.weight_blocks.front());
+	CheckRejected(std::move(duplicate_weight));
+}
+
+TEST_CASE("Terrain composition working-set creation rejects non-canonical coverage rectangles")
+{
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		7u,
+		TerrainTests::MakeSmallLayout(),
+		{ 0.0f, 65535.0f },
+		10.0f,
+		source));
+
+	auto CheckRejected = [&](AshEngine::TerrainEditLayer layer)
+	{
+		AshEngine::TerrainAssetSnapshot snapshot = *source;
+		snapshot.edit_layers = std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+			std::vector<AshEngine::TerrainEditLayer>{ std::move(layer) });
+		AshEngine::TerrainWorkingSet output{};
+		std::string error{};
+		CHECK_FALSE(AshEngine::make_terrain_working_set(snapshot, output, &error));
+		CHECK(output.asset_id == 0u);
+		CHECK_FALSE(error.empty());
+	};
+
+	auto all_zero = MakeHeightLayer(
+		1u,
+		AshEngine::TerrainHeightBlendMode::Additive,
+		4.0f,
+		1.0f,
+		1.0f);
+	all_zero.height_blocks[0].changed_rect = { 1u, 1u, 3u, 3u };
+	all_zero.height_blocks[0].values.assign(4u, 4.0f);
+	all_zero.height_blocks[0].coverage.assign(4u, 0.0f);
+	CheckRejected(std::move(all_zero));
+
+	auto zero_border = MakeHeightLayer(
+		2u,
+		AshEngine::TerrainHeightBlendMode::Additive,
+		4.0f,
+		1.0f,
+		1.0f);
+	zero_border.height_blocks[0].changed_rect = { 1u, 1u, 3u, 3u };
+	zero_border.height_blocks[0].values.assign(4u, 4.0f);
+	zero_border.height_blocks[0].coverage = { 0.0f, 0.0f, 0.0f, 1.0f };
+	CheckRejected(std::move(zero_border));
+
+	auto negative_coverage = MakeHeightLayer(
+		3u,
+		AshEngine::TerrainHeightBlendMode::Additive,
+		4.0f,
+		-0.01f,
+		1.0f);
+	CheckRejected(std::move(negative_coverage));
+
+	auto excessive_coverage = MakeHeightLayer(
+		4u,
+		AshEngine::TerrainHeightBlendMode::Additive,
+		4.0f,
+		1.01f,
+		1.0f);
+	CheckRejected(std::move(excessive_coverage));
+
+	std::array<float, AshEngine::k_terrain_material_layer_count> weight_target{};
+	weight_target[2] = 1.0f;
+	auto zero_weight_coverage = MakeWeightLayer(
+		5u,
+		{ 1u, 1u, 2u, 2u },
+		weight_target,
+		0.0f);
+	CheckRejected(std::move(zero_weight_coverage));
+
+	auto excessive_weight_coverage = MakeWeightLayer(
+		6u,
+		{ 1u, 1u, 2u, 2u },
+		weight_target,
+		1.01f);
+	CheckRejected(std::move(excessive_weight_coverage));
+}
+
+TEST_CASE("Terrain composition working-set creation accepts cross-domain owners and arbitrary block storage order")
+{
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		7u,
+		TerrainTests::MakeSmallLayout(),
+		{ 0.0f, 65535.0f },
+		10.0f,
+		source));
+
+	auto layer = MakeHeightLayer(
+		1u,
+		AshEngine::TerrainHeightBlendMode::Additive,
+		4.0f,
+		1.0f,
+		1.0f);
+	AshEngine::TerrainSparseHeightBlock later_owner{};
+	later_owner.owner = { 1u, 1u };
+	later_owner.changed_rect = { 5u, 5u, 6u, 6u };
+	later_owner.values = { 2.0f };
+	later_owner.coverage = { 1.0f };
+	layer.height_blocks.insert(layer.height_blocks.begin(), std::move(later_owner));
+
+	AshEngine::TerrainSparseWeightBlock same_owner_other_domain{};
+	same_owner_other_domain.owner = { 0u, 0u };
+	same_owner_other_domain.changed_rect = { 2u, 2u, 3u, 3u };
+	std::array<float, AshEngine::k_terrain_material_layer_count> weight_target{};
+	weight_target[3] = 1.0f;
+	same_owner_other_domain.values = { weight_target };
+	same_owner_other_domain.coverage = { 1.0f };
+	layer.weight_blocks.push_back(std::move(same_owner_other_domain));
+
+	AshEngine::TerrainAssetSnapshot snapshot = *source;
+	snapshot.edit_layers = std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+		std::vector<AshEngine::TerrainEditLayer>{ std::move(layer) });
+	AshEngine::TerrainWorkingSet output{};
+	std::string error{ "stale" };
+	REQUIRE(AshEngine::make_terrain_working_set(snapshot, output, &error));
+	REQUIRE(output.edit_layers.size() == 1u);
+	CHECK(output.edit_layers[0].height_blocks.size() == 2u);
+	CHECK((output.edit_layers[0].height_blocks[0].owner == AshEngine::TerrainComponentCoord{ 1u, 1u }));
+	CHECK((output.edit_layers[0].height_blocks[1].owner == AshEngine::TerrainComponentCoord{ 0u, 0u }));
+	CHECK(output.edit_layers[0].weight_blocks.size() == 1u);
+	CHECK(error.empty());
+}
+
 TEST_CASE("Terrain composition deep-validates only blocks relevant to requested components")
 {
 	AshEngine::TerrainWorkingSet working_set = MakeFlatWorkingSet();
@@ -628,40 +794,28 @@ TEST_CASE("Terrain composition publishes dirty row-major replacements and shares
 		{ { 1u, 0u } },
 		dirty));
 	REQUIRE(dirty.size() == 1u);
-	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> published{};
-	std::string error{};
-	REQUIRE(AshEngine::publish_terrain_working_set(
-		working_set,
-		dirty,
-		published,
-		&error));
-	REQUIRE(published != nullptr);
-	CHECK(published->content_generation == 2u);
-	REQUIRE(published->edit_layers != nullptr);
-	CHECK(published->edit_layers->size() == 1u);
-	REQUIRE(published->components.size() == 4u);
-	CHECK(published->components[0] == source->components[0]);
-	CHECK(published->components[1] == dirty[0].component);
-	CHECK(published->components[1] != source->components[1]);
-	CHECK(published->components[2] == source->components[2]);
-	CHECK(published->components[3] == source->components[3]);
-	CHECK(source->content_generation == 1u);
-	CHECK(source->edit_layers->empty());
+	working_set.dirty_components = { { 1u, 0u } };
+	const AshEngine::TerrainWorkingSet before_publish = working_set;
 
 	auto CheckPublishFailure = [&](std::vector<AshEngine::TerrainDirtyComponentPayload> invalid_dirty)
 	{
-		published = source;
-		error = "stale";
+		AshEngine::TerrainWorkingSet rejected = before_publish;
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> published = source;
+		std::string error{ "stale" };
 		CHECK_FALSE(AshEngine::publish_terrain_working_set(
-			working_set,
+			rejected,
 			invalid_dirty,
 			published,
 			&error));
-		CHECK(published == nullptr);
+		CHECK(published == source);
+		CHECK(rejected.content_generation == before_publish.content_generation);
+		CHECK(rejected.components == before_publish.components);
+		CHECK(rejected.dirty_components == before_publish.dirty_components);
 		CHECK_FALSE(error.empty());
 		CHECK(error != "stale");
 	};
 
+	CheckPublishFailure({});
 	auto generation_mismatch = dirty;
 	generation_mismatch[0].content_generation = 1u;
 	CheckPublishFailure(generation_mismatch);
@@ -674,6 +828,12 @@ TEST_CASE("Terrain composition publishes dirty row-major replacements and shares
 	auto coord_mismatch = dirty;
 	coord_mismatch[0].coord = { 0u, 0u };
 	CheckPublishFailure(coord_mismatch);
+	auto extra = dirty;
+	auto extra_component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
+		*dirty[0].component);
+	extra_component->coord = { 0u, 0u };
+	extra.push_back({ { 0u, 0u }, 2u, std::move(extra_component) });
+	CheckPublishFailure(extra);
 	auto out_of_range = dirty;
 	out_of_range[0].coord = { 2u, 0u };
 	CheckPublishFailure(out_of_range);
@@ -697,4 +857,27 @@ TEST_CASE("Terrain composition publishes dirty row-major replacements and shares
 	non_normalized_component->weights[0][0] = 254u;
 	non_normalized_weights[0].component = non_normalized_component;
 	CheckPublishFailure(non_normalized_weights);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> published{};
+	std::string error{};
+	REQUIRE(AshEngine::publish_terrain_working_set(
+		working_set,
+		dirty,
+		published,
+		&error));
+	REQUIRE(published != nullptr);
+	CHECK(error.empty());
+	CHECK(published->content_generation == 2u);
+	REQUIRE(published->edit_layers != nullptr);
+	CHECK(published->edit_layers->size() == 1u);
+	REQUIRE(published->components.size() == 4u);
+	CHECK(published->components[0] == source->components[0]);
+	CHECK(published->components[1] == dirty[0].component);
+	CHECK(published->components[1] != source->components[1]);
+	CHECK(published->components[2] == source->components[2]);
+	CHECK(published->components[3] == source->components[3]);
+	CHECK(working_set.components == published->components);
+	CHECK(working_set.dirty_components.empty());
+	CHECK(source->content_generation == 1u);
+	CHECK(source->edit_layers->empty());
 }
