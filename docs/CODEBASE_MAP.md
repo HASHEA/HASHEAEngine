@@ -72,6 +72,7 @@ status: active
 | `ScenePresentationSubsystem` | `engine/Function/` | Scene → 渲染数据的唯一桥 | 见 `docs/specs/modules/scene.md` |
 | `DebugDrawService` | `engine/Function/` | frame-local 调试绘制（line/box/circle/cone/axes） | tone-map 后叠加，不参与光照 |
 | `UIContext` | `engine/Function/` | Editor 与 Engine 的 UI 交互边界 | Editor 不得绕过它直用 ImGui/Graphics |
+| `UINodeEditor` / `UINodeGraphModel` | `engine/Function/Gui/` | 通用节点画布门面与纯数据图模型，封装 `imgui-node-editor` 交互边界 | 第三方库只在 Engine.dll 内使用；Editor 只提交节点/pin/link 数据 |
 
 ## Dependency direction
 

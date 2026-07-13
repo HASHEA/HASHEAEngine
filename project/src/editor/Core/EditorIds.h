@@ -47,6 +47,8 @@ namespace AshEditor
 		inline constexpr char AssetPreview[] = "asset_preview";
 		inline constexpr char Console[] = "console";
 		inline constexpr char AssetBrowser[] = "asset_browser";
+		inline constexpr char PropertyEditorDemo[] = "property_editor_demo";
+		inline constexpr char NodeCanvasDemo[] = "node_canvas_demo";
 	}
 
 	namespace EditorWindowTitles
@@ -58,6 +60,8 @@ namespace AshEditor
 		inline constexpr char AssetPreview[] = "Asset Preview";
 		inline constexpr char Console[] = "Console";
 		inline constexpr char AssetBrowser[] = "Asset Browser";
+		inline constexpr char PropertyEditorDemo[] = "Property Editor Demo";
+		inline constexpr char NodeCanvasDemo[] = "Node Canvas Demo";
 	}
 
 	namespace EditorDragPayloadTypes

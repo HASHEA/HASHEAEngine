@@ -26,14 +26,21 @@
 - Editor 任务：
   - `docs/specs/modules/editor.md`（架构边界与不变式）
   - `docs/editor/EditorCodeStyleGuide.md`（代码规范）
+  - `docs/editor/README.md`（Editor 专题分流）
 - 工具与门禁任务：
   - `docs/specs/modules/tools.md`
   - `docs/PerfGateUsageGuide.md`、`docs/AIDevDoctor.md`
+- 材质编辑器 / 节点 UI 任务：
+  - `docs/MaterialEditorDesign.md`
+  - `docs/MaterialEditorArchitecture.md`
+  - `docs/MaterialNodeDataModel.md`
+  - `docs/EditorNodeCanvasWidget.md`
 
 ## 2. 维护规则
 
 - 开始任务前先读入口文档，不要直接在 `docs/` 下盲搜。
 - 现状描述以 `docs/specs/` 为准，spec 与代码冲突时以代码为准并修 spec。
 - 修改公共行为、边界或验证方式时，优先更新最接近真源的那一份文档，不要在多份文档里重复写同一规则。
+- 新增 Editor 专题文档后，同步更新 `docs/editor/README.md`；跨模块入口同步更新本文件。
 - 失效文档直接删除，考古走 git 历史；不保留“历史入口”。
 - 保持入口文档短、直接、可执行。

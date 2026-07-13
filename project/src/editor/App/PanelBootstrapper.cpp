@@ -6,6 +6,8 @@
 #include "Panels/AssetPreviewPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/InspectorPanel.h"
+#include "Panels/NodeCanvasDemoPanel.h"
+#include "Panels/PropertyEditorDemoPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Services/EditorViewportCameraService.h"
@@ -113,6 +115,8 @@ namespace AshEditor
 			MakeConsolePanelDeps(refContext));
 		AssetBrowserPanel* pAssetBrowserPanel = refPanelManager.CreatePanel<AssetBrowserPanel>(
 			MakeAssetBrowserPanelDeps(refContext, refPanelManager));
+		refPanelManager.CreatePanel<PropertyEditorDemoPanel>();
+		refPanelManager.CreatePanel<NodeCanvasDemoPanel>(&refEventBus);
 		result.pSceneHierarchyActionTarget = pSceneHierarchyPanel;
 		result.pAssetBrowserActionTarget = pAssetBrowserPanel;
 		if (pViewportPanel)

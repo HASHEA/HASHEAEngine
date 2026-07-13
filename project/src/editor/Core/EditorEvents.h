@@ -29,7 +29,8 @@ namespace AshEditor
 	enum class EditorShortcutScope : uint8_t
 	{
 		Global = 0,
-		AssetBrowserContent
+		AssetBrowserContent,
+		NodeCanvasContent
 	};
 
 	struct EditorShortcutScopeChangedEvent

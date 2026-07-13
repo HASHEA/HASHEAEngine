@@ -53,7 +53,7 @@ namespace AshEditor
 			const SceneService& refSceneService,
 			const EditorGizmoState& refGizmoState,
 			const glm::vec2& vecMousePosition,
-			EditorGizmoInternal::GizmoDragUpdate& outUpdate) const;
+			EditorGizmoInternal::GizmoDragUpdate& outUpdate);
 		void SetHoveredHandle(const EditorGizmoInternal::HandleHit& refHoveredHandle);
 		void ClearHoveredHandle();
 		const EditorGizmoInternal::HandleHit& GetHoveredHandle() const;
