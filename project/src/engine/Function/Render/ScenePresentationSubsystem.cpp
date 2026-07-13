@@ -260,6 +260,34 @@ namespace AshEngine
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
 
+		static bool prepare_visible_frame_particle_sprites(
+			VisibleRenderFrame& frame,
+			RenderAssetManager& asset_manager)
+		{
+			ASH_PROFILE_SCOPE_NC("ScenePresentation::PrepareParticleSprites", AshEngine::Profile::Color::Scene);
+			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(frame.particle_emitters.size()));
+			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+
+			for (VisibleParticleEmitter& emitter : frame.particle_emitters)
+			{
+				if (emitter.particle.sprite_texture_path.empty())
+				{
+					emitter.sprite_texture =
+						asset_manager.request_fallback_texture(TextureFallbackKind::White);
+				}
+				else
+				{
+					emitter.sprite_texture = asset_manager.request_texture_asset(
+						emitter.particle.sprite_texture_path,
+						TextureColorSpace::SRGB,
+						TextureFallbackKind::White);
+				}
+				ASH_PROCESS_ERROR(emitter.sprite_texture && emitter.sprite_texture->resource);
+			}
+
+			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
 	}
 
 	void ScenePresentationSubsystem::Impl::apply_output_desc(OutputState& state, const SceneOutputDesc& desc)
@@ -1096,6 +1124,19 @@ namespace AshEngine
 			{
 				HLogError(
 					"ScenePresentationSubsystem: material preparation failed for binding '{}'.",
+					packet.debug_name);
+				if (is_scene_packet)
+				{
+					++submission.scene_packets_failed;
+				}
+				continue;
+			}
+			if (!prepare_visible_frame_particle_sprites(
+				*packet.visible_frame,
+				*m_impl->render_asset_manager))
+			{
+				HLogError(
+					"ScenePresentationSubsystem: particle sprite preparation failed for binding '{}'.",
 					packet.debug_name);
 				if (is_scene_packet)
 				{

@@ -24,40 +24,148 @@
       "name": "MainCamera",
       "parent": 1,
       "transform": {
-        "position": [0.0, 2.0, -8.0],
+        "position": [0.0, 2.4, -8.5],
         "rotation_euler_degrees": [0.0, 0.0, 0.0],
         "scale": [1.0, 1.0, 1.0]
       }
     },
     {
       "id": 3,
-      "name": "AdditiveFountain",
+      "name": "Spark",
       "parent": 1,
       "particle": {
         "max_particles": 2048,
-        "spawn_rate": 240.0,
-        "lifetime": 2.5,
-        "lifetime_variance": 0.35,
-        "initial_speed": 3.2,
-        "spread_angle_degrees": 24.0,
-        "constant_acceleration": [0.0, -1.8, 0.0],
-        "start_size": 0.22,
-        "end_size": 0.04,
-        "start_color": [1.0, 0.75, 0.2, 1.0],
-        "end_color": [0.2, 0.45, 1.0, 0.0],
+        "spawn_rate": 260.0,
+        "lifetime": 1.6,
+        "lifetime_variance": 0.25,
+        "initial_speed": 4.8,
+        "spread_angle_degrees": 18.0,
+        "constant_acceleration": [0.0, -5.5, 0.0],
+        "start_size": 0.07,
+        "end_size": 0.015,
+        "start_color": [1.0, 0.82, 0.25, 1.0],
+        "end_color": [1.0, 0.12, 0.02, 0.0],
+        "sprite_texture_path": "",
+        "radial_falloff": 1.0,
+        "radial_sharpness": 4.0,
+        "soft_particles": true,
+        "soft_fade_distance": 0.12,
         "blend_mode": "Additive",
-        "random_seed": 1337,
+        "random_seed": 1101,
         "emitting": true
       },
       "transform": {
-        "position": [0.0, 1.5, 6.0],
+        "position": [-2.5, 0.8, 6.0],
         "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": 4,
+      "name": "Smoke",
+      "parent": 1,
+      "particle": {
+        "max_particles": 1024,
+        "spawn_rate": 70.0,
+        "lifetime": 3.5,
+        "lifetime_variance": 0.5,
+        "initial_speed": 1.25,
+        "spread_angle_degrees": 28.0,
+        "constant_acceleration": [0.0, 0.18, 0.0],
+        "start_size": 0.32,
+        "end_size": 1.15,
+        "start_color": [0.62, 0.66, 0.72, 0.42],
+        "end_color": [0.22, 0.25, 0.3, 0.0],
+        "sprite_texture_path": "textures/particles/T_ParticleSmoke.png",
+        "radial_falloff": 0.0,
+        "radial_sharpness": 1.0,
+        "soft_particles": true,
+        "soft_fade_distance": 0.45,
+        "blend_mode": "AlphaBlend",
+        "random_seed": 2202,
+        "emitting": true
+      },
+      "transform": {
+        "position": [0.0, 0.65, 6.2],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": 5,
+      "name": "Magic",
+      "parent": 1,
+      "particle": {
+        "max_particles": 1536,
+        "spawn_rate": 140.0,
+        "lifetime": 2.4,
+        "lifetime_variance": 0.3,
+        "initial_speed": 2.0,
+        "spread_angle_degrees": 34.0,
+        "constant_acceleration": [0.0, -0.35, 0.0],
+        "start_size": 0.24,
+        "end_size": 0.08,
+        "start_color": [0.7, 0.28, 1.0, 0.9],
+        "end_color": [0.08, 0.75, 1.0, 0.0],
+        "sprite_texture_path": "textures/particles/T_ParticleMagic.png",
+        "radial_falloff": 0.0,
+        "radial_sharpness": 1.0,
+        "soft_particles": true,
+        "soft_fade_distance": 0.25,
+        "blend_mode": "Additive",
+        "random_seed": 3303,
+        "emitting": true
+      },
+      "transform": {
+        "position": [2.5, 1.0, 6.0],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": 6,
+      "name": "SoftParticleOccluder",
+      "parent": 1,
+      "mesh": {
+        "asset_path": "models/gltfs/Avocado/glTF/Avocado.gltf",
+        "mesh_index": 0,
+        "visible": true,
+        "mobility": 0,
+        "layer_mask": 1
+      },
+      "transform": {
+        "position": [0.0, 2.0, 6.5],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [16.0, 16.0, 16.0]
+      }
+    },
+    {
+      "id": 7,
+      "name": "ShowcaseLight",
+      "parent": 1,
+      "light": {
+        "type": 0,
+        "color": [1.0, 0.95, 0.88],
+        "intensity": 3.0,
+        "range": 10.0,
+        "inner_cone_angle_degrees": 30.0,
+        "outer_cone_angle_degrees": 45.0,
+        "casts_shadow": false,
+        "sunlight": false,
+        "shadow_priority": 0,
+        "shadow_distance": 0.0,
+        "shadow_cascade_count": 0,
+        "near_shadow_distance": 0.0
+      },
+      "transform": {
+        "position": [0.0, 4.0, 2.0],
+        "rotation_euler_degrees": [-35.0, 25.0, 0.0],
         "scale": [1.0, 1.0, 1.0]
       }
     }
   ],
   "name": "Particles",
-  "next_entity_id": 4,
+  "next_entity_id": 8,
   "scene_config": {
     "ambient_occlusion": {
       "mode": "Off"
@@ -78,5 +186,5 @@
       "enabled": false
     }
   },
-  "version": 5
+  "version": 6
 }

@@ -116,6 +116,11 @@ namespace AshEditor
 			refLeft.end_size == refRight.end_size &&
 			refLeft.start_color == refRight.start_color &&
 			refLeft.end_color == refRight.end_color &&
+			refLeft.sprite_texture_path == refRight.sprite_texture_path &&
+			refLeft.radial_falloff == refRight.radial_falloff &&
+			refLeft.radial_sharpness == refRight.radial_sharpness &&
+			refLeft.soft_particles == refRight.soft_particles &&
+			refLeft.soft_fade_distance == refRight.soft_fade_distance &&
 			refLeft.blend_mode == refRight.blend_mode &&
 			refLeft.random_seed == refRight.random_seed &&
 			refLeft.emitting == refRight.emitting;

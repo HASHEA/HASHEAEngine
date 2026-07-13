@@ -61,7 +61,7 @@ namespace AshEngine
 			// editor end
 		};
 
-		static constexpr uint32_t k_scene_file_version = 5;
+		static constexpr uint32_t k_scene_file_version = 6;
 		static constexpr const char* k_environment_sun_light_name = "EnvironmentSunLight";
 		static constexpr float k_environment_sun_light_intensity = 2.5f;
 		static constexpr uint32_t k_environment_sun_light_shadow_priority = 255u;
@@ -168,6 +168,11 @@ namespace AshEngine
 			{ "end_size", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, end_size)), static_cast<uint32_t>(sizeof(float)), nullptr, "End Size", "Billboard size at death.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 10.0f, true },
 			{ "start_color", ScenePropertyType::Vec4, static_cast<uint32_t>(offsetof(ParticleComponent, start_color)), static_cast<uint32_t>(sizeof(glm::vec4)), nullptr, "Start Color", "Particle color at birth (linear RGBA).", ScenePropertyEditorHint::Color },
 			{ "end_color", ScenePropertyType::Vec4, static_cast<uint32_t>(offsetof(ParticleComponent, end_color)), static_cast<uint32_t>(sizeof(glm::vec4)), nullptr, "End Color", "Particle color at death (linear RGBA).", ScenePropertyEditorHint::Color },
+			{ "sprite_texture_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(ParticleComponent, sprite_texture_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr, "Sprite Texture", "RGBA sprite texture; empty uses the default white sprite.", ScenePropertyEditorHint::AssetPath, ScenePropertyAssetRefKind::Texture },
+			{ "radial_falloff", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, radial_falloff)), static_cast<uint32_t>(sizeof(float)), nullptr, "Radial Falloff", "Blend between sprite-only and the analytic radial mask.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.0f, 1.0f, true },
+			{ "radial_sharpness", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, radial_sharpness)), static_cast<uint32_t>(sizeof(float)), nullptr, "Radial Sharpness", "Power exponent for the analytic radial mask.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.25f, 8.0f, true },
+			{ "soft_particles", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(ParticleComponent, soft_particles)), static_cast<uint32_t>(sizeof(bool)), nullptr, "Soft Particles", "Fade near opaque scene depth intersections.", ScenePropertyEditorHint::Default },
+			{ "soft_fade_distance", ScenePropertyType::Float, static_cast<uint32_t>(offsetof(ParticleComponent, soft_fade_distance)), static_cast<uint32_t>(sizeof(float)), nullptr, "Soft Fade Distance", "World-space depth interval used by soft particles.", ScenePropertyEditorHint::Slider, ScenePropertyAssetRefKind::None, 0.001f, 10.0f, true },
 			{ "blend_mode", ScenePropertyType::Enum, static_cast<uint32_t>(offsetof(ParticleComponent, blend_mode)), static_cast<uint32_t>(sizeof(ParticleBlendMode)), "ParticleBlendMode" },
 			{ "random_seed", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(ParticleComponent, random_seed)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr, "Random Seed", "Deterministic simulation seed.", ScenePropertyEditorHint::Default },
 		};
@@ -481,6 +486,9 @@ namespace AshEngine
 			component.end_color.y = sanitize_particle_float(component.end_color.y, defaults.end_color.y, 0.0f, 1.0f);
 			component.end_color.z = sanitize_particle_float(component.end_color.z, defaults.end_color.z, 0.0f, 1.0f);
 			component.end_color.w = sanitize_particle_float(component.end_color.w, defaults.end_color.w, 0.0f, 1.0f);
+			component.radial_falloff = sanitize_particle_float(component.radial_falloff, defaults.radial_falloff, 0.0f, 1.0f);
+			component.radial_sharpness = sanitize_particle_float(component.radial_sharpness, defaults.radial_sharpness, 0.25f, 8.0f);
+			component.soft_fade_distance = sanitize_particle_float(component.soft_fade_distance, defaults.soft_fade_distance, 0.001f, 10.0f);
 
 			if (component.blend_mode != ParticleBlendMode::Additive &&
 				component.blend_mode != ParticleBlendMode::AlphaBlend)
@@ -2125,6 +2133,11 @@ namespace AshEngine
 					try_get_particle_json_value(particle_json, "end_size", particle.end_size);
 					try_get_particle_json_vector(particle_json, "start_color", particle.start_color);
 					try_get_particle_json_vector(particle_json, "end_color", particle.end_color);
+					try_get_particle_json_value(particle_json, "sprite_texture_path", particle.sprite_texture_path);
+					try_get_particle_json_value(particle_json, "radial_falloff", particle.radial_falloff);
+					try_get_particle_json_value(particle_json, "radial_sharpness", particle.radial_sharpness);
+					try_get_particle_json_value(particle_json, "soft_particles", particle.soft_particles);
+					try_get_particle_json_value(particle_json, "soft_fade_distance", particle.soft_fade_distance);
 					try_get_particle_blend_mode(particle_json, particle.blend_mode);
 					try_get_particle_json_uint32(particle_json, "random_seed", particle.random_seed);
 					try_get_particle_json_value(particle_json, "emitting", particle.emitting);
@@ -3059,6 +3072,11 @@ namespace AshEngine
 					{ "end_size", particle->end_size },
 					{ "start_color", to_json_vec4(particle->start_color) },
 					{ "end_color", to_json_vec4(particle->end_color) },
+					{ "sprite_texture_path", particle->sprite_texture_path },
+					{ "radial_falloff", particle->radial_falloff },
+					{ "radial_sharpness", particle->radial_sharpness },
+					{ "soft_particles", particle->soft_particles },
+					{ "soft_fade_distance", particle->soft_fade_distance },
 					{ "blend_mode", particle_blend_mode_to_string(particle->blend_mode) },
 					{ "random_seed", particle->random_seed },
 					{ "emitting", particle->emitting },
