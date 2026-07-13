@@ -13,12 +13,41 @@ namespace AshEngine
 	public:
 		auto begin_frame() -> void
 		{
+			clear_transient_state();
+		}
+
+		auto clear_transient_state() -> void
+		{
 			keyPressed.fill(false);
 			keyReleased.fill(false);
 			mouseButtonPressed.fill(false);
 			mouseButtonReleased.fill(false);
 			scrollX = 0.0;
 			scrollY = 0.0;
+		}
+
+		auto merge_frame_snapshot(const InputState& newer) -> void
+		{
+			for (uint32_t keyIndex = 0; keyIndex < ASH_MAX_KEY_CODE; ++keyIndex)
+			{
+				keyDown[keyIndex] = newer.keyDown[keyIndex];
+				keyPressed[keyIndex] = keyPressed[keyIndex] || newer.keyPressed[keyIndex];
+				keyReleased[keyIndex] = keyReleased[keyIndex] || newer.keyReleased[keyIndex];
+			}
+
+			for (uint32_t buttonIndex = 0; buttonIndex < ASH_MAX_MOUSE_BUTTON_COUNT; ++buttonIndex)
+			{
+				mouseButtonDown[buttonIndex] = newer.mouseButtonDown[buttonIndex];
+				mouseButtonPressed[buttonIndex] =
+					mouseButtonPressed[buttonIndex] || newer.mouseButtonPressed[buttonIndex];
+				mouseButtonReleased[buttonIndex] =
+					mouseButtonReleased[buttonIndex] || newer.mouseButtonReleased[buttonIndex];
+			}
+
+			mouseX = newer.mouseX;
+			mouseY = newer.mouseY;
+			scrollX += newer.scrollX;
+			scrollY += newer.scrollY;
 		}
 
 		auto set_key_state(int32_t key, bool isDown, bool repeated) -> void

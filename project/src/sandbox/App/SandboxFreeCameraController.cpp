@@ -65,7 +65,8 @@ namespace AshSandbox
 			ASH_PROCESS_ERROR(false);
 		}
 
-		AshEngine::TransformComponent transform = camera_entity.get_transform_component();
+		const AshEngine::TransformComponent original_transform = camera_entity.get_transform_component();
+		AshEngine::TransformComponent transform = original_transform;
 		if (std::abs(input.get_scroll_y()) > 0.0)
 		{
 			set_move_speed(static_cast<float>(m_move_speed * std::pow(k_scroll_speed_scale, input.get_scroll_y())));
@@ -144,7 +145,10 @@ namespace AshSandbox
 			transform.position += move_direction * speed * clamped_delta_seconds;
 		}
 
-		if (!camera_entity.set_transform_component(transform))
+		const bool transform_changed =
+			glm::any(glm::notEqual(transform.position, original_transform.position)) ||
+			glm::any(glm::notEqual(transform.rotation_euler_degrees, original_transform.rotation_euler_degrees));
+		if (transform_changed && !camera_entity.set_transform_component(transform))
 		{
 			out_error = "Sandbox free camera failed to update the scene camera transform.";
 			ASH_PROCESS_ERROR(false);

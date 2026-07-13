@@ -80,9 +80,8 @@ namespace AshSandbox
 		m_has_logic_tick_time = false;
 	}
 
-	auto SandboxStandardScene::update_logic(const AshEngine::InputState& input, uint64_t frame_index) -> bool
+	auto SandboxStandardScene::update_logic(const AshEngine::InputState& input) -> bool
 	{
-		(void)frame_index;
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
 		SandboxStandardSceneLoadState load_state = SandboxStandardSceneLoadState::Idle;
