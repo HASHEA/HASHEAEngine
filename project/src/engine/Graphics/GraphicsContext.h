@@ -102,6 +102,8 @@ namespace RHI {
         {
             return {};
         }
+        // Context-owned, non-owning view. The pointer becomes invalid after shutdown()
+        // or when this GraphicsContext is destroyed; disabled telemetry returns nullptr.
         virtual auto get_gpu_timing_telemetry() -> IGpuTimingTelemetry*
         {
             return nullptr;

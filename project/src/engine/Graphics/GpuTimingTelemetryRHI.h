@@ -47,6 +47,7 @@ namespace RHI
 		None,
 		Aborted,
 		SubmissionFailed,
+		DeviceRemoved,
 		BackendUnsupported,
 		DuplicateScope,
 		OverlappingScope,
@@ -123,12 +124,15 @@ namespace RHI
 	class ASH_API GpuTimingFrameState
 	{
 	public:
-		bool begin_frame(uint64_t frame_id, uint32_t& out_query_index);
+		// physical_slot is the backend's recycled query/completion slot and is
+		// intentionally independent from the logical renderer frame_id.
+		bool begin_frame(uint64_t frame_id, uint32_t physical_slot, uint32_t& out_query_index);
 		bool begin_scope(GpuTimingMetric metric, uint32_t& out_query_index);
 		bool end_scope(GpuTimingMetric metric, uint32_t& out_query_index);
 		bool end_frame(uint64_t frame_id, uint32_t& out_query_index);
 		bool commit_frame(uint64_t frame_id);
 		bool abort_frame(uint64_t frame_id, GpuTimingInvalidReason reason);
+		bool fail_committed_frame(uint64_t frame_id, GpuTimingInvalidReason reason);
 
 		// Backends mark a committed frame ready only after observing their completion
 		// primitive. Pending and Empty never block and never consume a ring slot.

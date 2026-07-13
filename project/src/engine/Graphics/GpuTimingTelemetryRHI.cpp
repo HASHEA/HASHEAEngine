@@ -167,23 +167,27 @@ namespace RHI
 
 	GpuTimingFrameState::Slot* GpuTimingFrameState::find_slot(uint64_t frame_id)
 	{
-		Slot& slot = m_slots[frame_id % kGpuTimingFrameRingDepth];
-		if (slot.status == SlotStatus::Empty || slot.record.frame_id != frame_id)
+		for (Slot& slot : m_slots)
 		{
-			return nullptr;
+			if (slot.status != SlotStatus::Empty && slot.record.frame_id == frame_id)
+			{
+				return &slot;
+			}
 		}
-		return &slot;
+		return nullptr;
 	}
 
-	bool GpuTimingFrameState::begin_frame(uint64_t frame_id, uint32_t& out_query_index)
+	bool GpuTimingFrameState::begin_frame(
+		uint64_t frame_id,
+		uint32_t physical_slot,
+		uint32_t& out_query_index)
 	{
-		if (recording_slot())
+		if (physical_slot >= kGpuTimingFrameRingDepth || recording_slot() || find_slot(frame_id))
 		{
 			return false;
 		}
 
-		const uint32_t slot_index = static_cast<uint32_t>(frame_id % kGpuTimingFrameRingDepth);
-		Slot& slot = m_slots[slot_index];
+		Slot& slot = m_slots[physical_slot];
 		if (slot.status != SlotStatus::Empty)
 		{
 			return false;
@@ -192,9 +196,9 @@ namespace RHI
 		slot = {};
 		slot.status = SlotStatus::Recording;
 		slot.record.frame_id = frame_id;
-		slot.record.slot_index = slot_index;
+		slot.record.slot_index = physical_slot;
 		slot.record.valid = true;
-		m_recording_slot = slot_index;
+		m_recording_slot = physical_slot;
 		m_active_scope = GpuTimingMetric::Invalid;
 
 		GpuTimingQueryPair& frame_pair = slot.record.query_pairs[static_cast<uint32_t>(GpuTimingMetric::Frame)];
@@ -324,7 +328,7 @@ namespace RHI
 		return true;
 	}
 
-	bool GpuTimingFrameState::abort_frame(uint64_t frame_id, GpuTimingInvalidReason reason)
+	bool GpuTimingFrameState::abort_frame(uint64_t frame_id, GpuTimingInvalidReason)
 	{
 		Slot* slot = find_slot(frame_id);
 		if (!slot || (slot->status != SlotStatus::Recording && slot->status != SlotStatus::Recorded))
@@ -332,17 +336,33 @@ namespace RHI
 			return false;
 		}
 
-		if (reason == GpuTimingInvalidReason::None)
-		{
-			reason = GpuTimingInvalidReason::Aborted;
-		}
-		set_invalid(*slot, reason);
 		if (slot->status == SlotStatus::Recording)
 		{
 			m_recording_slot = kGpuTimingFrameRingDepth;
 			m_active_scope = GpuTimingMetric::Invalid;
 		}
 		*slot = {};
+		return true;
+	}
+
+	bool GpuTimingFrameState::fail_committed_frame(
+		uint64_t frame_id,
+		GpuTimingInvalidReason reason)
+	{
+		if (reason == GpuTimingInvalidReason::None)
+		{
+			return false;
+		}
+
+		Slot* slot = find_slot(frame_id);
+		if (!slot || slot->status != SlotStatus::Pending)
+		{
+			return false;
+		}
+
+		slot->record.valid = false;
+		slot->record.invalid_reason = reason;
+		slot->status = SlotStatus::Ready;
 		return true;
 	}
 
@@ -374,7 +394,7 @@ namespace RHI
 	bool GpuTimingFrameState::release_frame(uint64_t frame_id)
 	{
 		Slot* slot = find_slot(frame_id);
-		if (!slot || slot->status != SlotStatus::Ready)
+		if (!slot || slot->status != SlotStatus::Ready || oldest_committed_slot() != slot)
 		{
 			return false;
 		}

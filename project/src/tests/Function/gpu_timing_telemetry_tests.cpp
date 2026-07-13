@@ -1,5 +1,6 @@
 #include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Graphics/GraphicsContext.h"
+#include "Graphics/RenderProgram.h"
 
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -10,14 +11,49 @@
 #include <limits>
 #include <string>
 
+namespace
+{
+	class MinimalGraphicsContext final : public RHI::GraphicsContext
+	{
+	public:
+		bool init(void*) override { return true; }
+		bool shutdown() override { return true; }
+		void destroy() override {}
+		std::shared_ptr<RHI::Shader> create_shader(const RHI::ShaderCreation&) override { return {}; }
+		std::shared_ptr<RHI::Buffer> create_buffer(const RHI::BufferCreation&) override { return {}; }
+		std::shared_ptr<RHI::BufferView> create_buffer_view(
+			const RHI::BufferViewCreation&,
+			std::shared_ptr<RHI::Buffer>) override { return {}; }
+		std::shared_ptr<RHI::Texture> create_texture(const RHI::TextureCreation&) override { return {}; }
+		std::shared_ptr<RHI::TextureView> create_texture_view(
+			const RHI::TextureViewCreation&,
+			std::shared_ptr<RHI::Texture>) override { return {}; }
+		std::shared_ptr<RHI::RenderPass> create_render_pass(const RHI::RenderPassCreation&) override { return {}; }
+		std::shared_ptr<RHI::Framebuffer> create_framebuffer(const RHI::FramebufferCreation&) override { return {}; }
+		std::unique_ptr<RHI::IGraphicsRenderProgram> create_graphics_render_program(
+			const RHI::GraphicProgramCreateDesc&) override { return {}; }
+		std::unique_ptr<RHI::IComputeRenderProgram> create_compute_render_program(
+			const RHI::ComputeProgramCreateDesc&) override { return {}; }
+		std::shared_ptr<RHI::Sampler> create_sampler(const RHI::SamplerCreation&) override { return {}; }
+		std::shared_ptr<RHI::Sampler> get_sampler(const RHI::AshSamplerState&) override { return {}; }
+		void wait_idle() override {}
+		bool wait_for_frame_completion(uint64_t) override { return true; }
+		void begin_frame() override {}
+		void end_frame(bool) override {}
+		RHI::CommandBuffer* get_command_buffer(uint32_t) override { return nullptr; }
+		RHI::CommandBuffer* get_secondary_command_buffer(uint32_t) override { return nullptr; }
+		void submit(const RHI::SubmitInfo&) override {}
+		void submit_immediately(const RHI::SubmitInfo&) override {}
+	};
+}
+
 TEST_CASE("GPU timing graphics context is opt-in and exposes a telemetry getter")
 {
 	const RHI::GraphicsContextInitConfig config{};
 	CHECK_FALSE(config.enableGpuTimingTelemetry);
 
-	using Getter = RHI::IGpuTimingTelemetry* (RHI::GraphicsContext::*)();
-	const Getter getter = &RHI::GraphicsContext::get_gpu_timing_telemetry;
-	CHECK(getter != nullptr);
+	MinimalGraphicsContext context{};
+	CHECK(context.get_gpu_timing_telemetry() == nullptr);
 }
 
 TEST_CASE("GPU timing metric names and capacity are stable")
@@ -58,7 +94,7 @@ TEST_CASE("GPU timing frame state rejects duplicate and incomplete scopes")
 	{
 		RHI::GpuTimingFrameState state{};
 		uint32_t query_index = 0u;
-		REQUIRE(state.begin_frame(10u, query_index));
+		REQUIRE(state.begin_frame(10u, 0u, query_index));
 		REQUIRE(state.begin_scope(RHI::GpuTimingMetric::GBuffer, query_index));
 		REQUIRE(state.end_scope(RHI::GpuTimingMetric::GBuffer, query_index));
 		CHECK_FALSE(state.begin_scope(RHI::GpuTimingMetric::GBuffer, query_index));
@@ -77,7 +113,7 @@ TEST_CASE("GPU timing frame state rejects duplicate and incomplete scopes")
 	{
 		RHI::GpuTimingFrameState state{};
 		uint32_t query_index = 0u;
-		REQUIRE(state.begin_frame(11u, query_index));
+		REQUIRE(state.begin_frame(11u, 1u, query_index));
 		REQUIRE(state.begin_scope(RHI::GpuTimingMetric::Bloom, query_index));
 		CHECK_FALSE(state.end_frame(11u, query_index));
 		REQUIRE(state.commit_frame(11u));
@@ -97,7 +133,7 @@ TEST_CASE("GPU timing poll distinguishes empty pending and ready frames")
 	uint32_t query_index = 0u;
 
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
-	REQUIRE(state.begin_frame(20u, query_index));
+	REQUIRE(state.begin_frame(20u, 0u, query_index));
 	REQUIRE(state.end_frame(20u, query_index));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
 	REQUIRE(state.commit_frame(20u));
@@ -109,6 +145,42 @@ TEST_CASE("GPU timing poll distinguishes empty pending and ready frames")
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
 }
 
+TEST_CASE("GPU timing committed failure produces a ready invalid frame")
+{
+	RHI::GpuTimingFrameState state{};
+	RHI::GpuTimingFrameRecord record{};
+	uint32_t query_index = 0u;
+
+	REQUIRE(state.begin_frame(30u, 1u, query_index));
+	REQUIRE(state.end_frame(30u, query_index));
+	CHECK_FALSE(state.fail_committed_frame(30u, RHI::GpuTimingInvalidReason::DeviceRemoved));
+	REQUIRE(state.commit_frame(30u));
+	CHECK_FALSE(state.fail_committed_frame(30u, RHI::GpuTimingInvalidReason::None));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
+
+	REQUIRE(state.fail_committed_frame(30u, RHI::GpuTimingInvalidReason::DeviceRemoved));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Ready);
+	CHECK(record.frame_id == 30u);
+	CHECK_FALSE(record.valid);
+	CHECK(record.invalid_reason == RHI::GpuTimingInvalidReason::DeviceRemoved);
+	CHECK_FALSE(state.fail_committed_frame(30u, RHI::GpuTimingInvalidReason::SubmissionFailed));
+	REQUIRE(state.release_frame(30u));
+
+	REQUIRE(state.begin_frame(31u, 1u, query_index));
+	REQUIRE(state.abort_frame(31u, RHI::GpuTimingInvalidReason::Aborted));
+
+	RHI::GpuTimingFrameState invalid_state{};
+	REQUIRE(invalid_state.begin_frame(32u, 2u, query_index));
+	REQUIRE(invalid_state.begin_scope(RHI::GpuTimingMetric::GBuffer, query_index));
+	REQUIRE(invalid_state.end_scope(RHI::GpuTimingMetric::GBuffer, query_index));
+	CHECK_FALSE(invalid_state.begin_scope(RHI::GpuTimingMetric::GBuffer, query_index));
+	REQUIRE(invalid_state.end_frame(32u, query_index));
+	REQUIRE(invalid_state.commit_frame(32u));
+	REQUIRE(invalid_state.fail_committed_frame(32u, RHI::GpuTimingInvalidReason::DeviceRemoved));
+	CHECK(invalid_state.poll_frame(record) == RHI::GpuTimingPollResult::Ready);
+	CHECK(record.invalid_reason == RHI::GpuTimingInvalidReason::DeviceRemoved);
+}
+
 TEST_CASE("GPU timing query layout isolates all fixed ring slots and preserves commit order")
 {
 	RHI::GpuTimingFrameState state{};
@@ -118,7 +190,7 @@ TEST_CASE("GPU timing query layout isolates all fixed ring slots and preserves c
 	{
 		const uint32_t slot_begin = static_cast<uint32_t>(frame_id) * RHI::kGpuTimingQueriesPerFrame;
 		uint32_t expected_query = slot_begin;
-		REQUIRE(state.begin_frame(frame_id, query_index));
+		REQUIRE(state.begin_frame(frame_id, static_cast<uint32_t>(frame_id), query_index));
 		CHECK(query_index == expected_query++);
 		for (uint32_t metric_index = 1u; metric_index < RHI::kGpuTimingMetricCount; ++metric_index)
 		{
@@ -134,7 +206,7 @@ TEST_CASE("GPU timing query layout isolates all fixed ring slots and preserves c
 		REQUIRE(state.commit_frame(frame_id));
 	}
 
-	CHECK_FALSE(state.begin_frame(RHI::kGpuTimingFrameRingDepth, query_index));
+	CHECK_FALSE(state.begin_frame(RHI::kGpuTimingFrameRingDepth, 0u, query_index));
 	RHI::GpuTimingFrameRecord record{};
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
 	CHECK(record.frame_id == 0u);
@@ -143,12 +215,13 @@ TEST_CASE("GPU timing query layout isolates all fixed ring slots and preserves c
 	REQUIRE(state.mark_frame_ready(2u));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
 	CHECK(record.frame_id == 0u);
+	CHECK_FALSE(state.release_frame(2u));
 	REQUIRE(state.mark_frame_ready(0u));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Ready);
 	CHECK(record.frame_id == 0u);
 	REQUIRE(state.release_frame(0u));
 
-	REQUIRE(state.begin_frame(3u, query_index));
+	REQUIRE(state.begin_frame(3u, 0u, query_index));
 	CHECK(query_index == 0u);
 	REQUIRE(state.abort_frame(3u, RHI::GpuTimingInvalidReason::Aborted));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
@@ -161,6 +234,35 @@ TEST_CASE("GPU timing query layout isolates all fixed ring slots and preserves c
 	CHECK(record.frame_id == 2u);
 	REQUIRE(state.release_frame(2u));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+}
+
+TEST_CASE("GPU timing physical slot is independent from logical frame id")
+{
+	RHI::GpuTimingFrameState state{};
+	RHI::GpuTimingFrameRecord record{};
+	uint32_t query_index = 0u;
+
+	REQUIRE(state.begin_frame(42u, 1u, query_index));
+	CHECK(query_index == RHI::kGpuTimingQueriesPerFrame);
+	REQUIRE(state.end_frame(42u, query_index));
+	CHECK(query_index == RHI::kGpuTimingQueriesPerFrame + 1u);
+	REQUIRE(state.commit_frame(42u));
+
+	REQUIRE(state.begin_frame(100u, 0u, query_index));
+	CHECK(query_index == 0u);
+	REQUIRE(state.end_frame(100u, query_index));
+	REQUIRE(state.abort_frame(100u, RHI::GpuTimingInvalidReason::Aborted));
+
+	REQUIRE(state.begin_frame(105u, 2u, query_index));
+	CHECK(query_index == 2u * RHI::kGpuTimingQueriesPerFrame);
+	REQUIRE(state.abort_frame(105u, RHI::GpuTimingInvalidReason::Aborted));
+	CHECK_FALSE(state.begin_frame(200u, RHI::kGpuTimingFrameRingDepth, query_index));
+
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
+	CHECK(record.frame_id == 42u);
+	CHECK(record.slot_index == 1u);
+	REQUIRE(state.mark_frame_ready(42u));
+	REQUIRE(state.release_frame(42u));
 }
 
 TEST_CASE("GPU timing timestamp delta handles 36-bit and 64-bit wrap")
@@ -243,17 +345,17 @@ TEST_CASE("GPU timing fixed ring never overwrites pending and aborts unsubmitted
 	RHI::GpuTimingFrameRecord record{};
 	uint32_t query_index = 0u;
 
-	REQUIRE(state.begin_frame(0u, query_index));
+	REQUIRE(state.begin_frame(0u, 0u, query_index));
 	REQUIRE(state.end_frame(0u, query_index));
 	REQUIRE(state.commit_frame(0u));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
 	CHECK(record.frame_id == 0u);
 
-	CHECK_FALSE(state.begin_frame(RHI::kGpuTimingFrameRingDepth, query_index));
+	CHECK_FALSE(state.begin_frame(RHI::kGpuTimingFrameRingDepth, 0u, query_index));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
 	CHECK(record.frame_id == 0u);
 
-	REQUIRE(state.begin_frame(1u, query_index));
+	REQUIRE(state.begin_frame(1u, 1u, query_index));
 	REQUIRE(state.end_frame(1u, query_index));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
 	CHECK(record.frame_id == 0u);
@@ -264,18 +366,18 @@ TEST_CASE("GPU timing fixed ring never overwrites pending and aborts unsubmitted
 	CHECK(record.valid);
 	REQUIRE(state.release_frame(0u));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
-	REQUIRE(state.begin_frame(3u, query_index));
+	REQUIRE(state.begin_frame(3u, 0u, query_index));
 	REQUIRE(state.abort_frame(3u, RHI::GpuTimingInvalidReason::Aborted));
 
-	REQUIRE(state.begin_frame(2u, query_index));
+	REQUIRE(state.begin_frame(2u, 2u, query_index));
 	REQUIRE(state.abort_frame(2u, RHI::GpuTimingInvalidReason::Aborted));
-	REQUIRE(state.begin_frame(5u, query_index));
+	REQUIRE(state.begin_frame(5u, 2u, query_index));
 	REQUIRE(state.end_frame(5u, query_index));
 	REQUIRE(state.abort_frame(5u, RHI::GpuTimingInvalidReason::SubmissionFailed));
-	REQUIRE(state.begin_frame(8u, query_index));
+	REQUIRE(state.begin_frame(8u, 2u, query_index));
 	REQUIRE(state.abort_frame(8u, RHI::GpuTimingInvalidReason::Aborted));
 
-	REQUIRE(state.begin_frame(4u, query_index));
+	REQUIRE(state.begin_frame(4u, 1u, query_index));
 	REQUIRE(state.abort_frame(4u, RHI::GpuTimingInvalidReason::Aborted));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
 }
