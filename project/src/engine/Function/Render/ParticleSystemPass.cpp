@@ -1,6 +1,7 @@
 #include "Function/Render/ParticleSystemPass.h"
 
 #include "Base/hprofiler.h"
+#include "Function/Render/ParticleSystemMath.h"
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/RenderScene.h"
@@ -11,6 +12,7 @@
 #include <cstring>
 #include <unordered_set>
 #include <glm/glm.hpp>
+#include <glm/gtc/packing.hpp>
 
 namespace AshEngine
 {
@@ -43,12 +45,11 @@ namespace AshEngine
 		struct ParticleDrawConstants
 		{
 			glm::mat4 view_projection{ 1.0f };
-			// xyz = camera axis, w = particle size. Keeping this block at 128 bytes
-			// preserves Vulkan portability (the API only guarantees 128B push constants).
-			glm::vec4 camera_right_start_size{ 1.0f, 0.0f, 0.0f, 0.0f };
-			glm::vec4 camera_up_end_size{ 0.0f, 1.0f, 0.0f, 0.0f };
-			glm::vec4 start_color{ 1.0f };
-			glm::vec4 end_color{ 1.0f };
+			glm::vec4 projection_scale_start_end_size{ 0.0f };
+			glm::uvec4 packed_start_end_color{ 0u };
+			glm::vec4 depth_reconstruct{ 0.0f };
+			glm::vec3 radial_soft_parameters{ 0.0f };
+			uint32_t flags = 0;
 		};
 		static_assert(sizeof(ParticleDrawConstants) == 128u);
 		static_assert(sizeof(ParticleDrawConstants) <= GraphicsDrawDesc::InlineConstDataCapacity);
@@ -57,35 +58,6 @@ namespace AshEngine
 		{
 			uint64_t hash_value = 0;
 			RHI::hash_shader_file_signature(hash_value, k_particle_shader_path);
-			return hash_value;
-		}
-
-		static auto particle_float_bits(float value) -> uint32_t
-		{
-			static_assert(sizeof(float) == sizeof(uint32_t));
-			uint32_t bits = 0;
-			std::memcpy(&bits, &value, sizeof(bits));
-			return bits;
-		}
-
-		static void hash_particle_simulation_value(uint64_t& hash_value, uint32_t value)
-		{
-			hash_value ^= static_cast<uint64_t>(value);
-			hash_value *= 1099511628211ull;
-		}
-
-		static auto build_particle_simulation_config_hash(const ParticleComponent& particle) -> uint64_t
-		{
-			uint64_t hash_value = 1469598103934665603ull;
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.spawn_rate));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.lifetime));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.lifetime_variance));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.initial_speed));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.spread_angle_degrees));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.constant_acceleration.x));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.constant_acceleration.y));
-			hash_particle_simulation_value(hash_value, particle_float_bits(particle.constant_acceleration.z));
-			hash_particle_simulation_value(hash_value, particle.random_seed);
 			return hash_value;
 		}
 
@@ -160,18 +132,23 @@ namespace AshEngine
 		{
 			ParticleDrawConstants constants{};
 			constants.view_projection = frame.view_projection;
-			constants.camera_right_start_size = glm::vec4(
-				frame.view[0][0],
-				frame.view[1][0],
-				frame.view[2][0],
-				std::max(emitter.particle.start_size, 0.0f));
-			constants.camera_up_end_size = glm::vec4(
-				frame.view[0][1],
-				frame.view[1][1],
-				frame.view[2][1],
+			constants.projection_scale_start_end_size = glm::vec4(
+				frame.projection[0][0],
+				frame.projection[1][1],
+				std::max(emitter.particle.start_size, 0.0f),
 				std::max(emitter.particle.end_size, 0.0f));
-			constants.start_color = emitter.particle.start_color;
-			constants.end_color = emitter.particle.end_color;
+			constants.packed_start_end_color = glm::uvec4(
+				glm::packHalf2x16(glm::vec2(emitter.particle.start_color.x, emitter.particle.start_color.y)),
+				glm::packHalf2x16(glm::vec2(emitter.particle.start_color.z, emitter.particle.start_color.w)),
+				glm::packHalf2x16(glm::vec2(emitter.particle.end_color.x, emitter.particle.end_color.y)),
+				glm::packHalf2x16(glm::vec2(emitter.particle.end_color.z, emitter.particle.end_color.w)));
+			constants.depth_reconstruct =
+				ParticleSystemInternal::make_depth_reconstruct_coefficients(frame.projection);
+			constants.radial_soft_parameters = glm::vec3(
+				emitter.particle.radial_falloff,
+				emitter.particle.radial_sharpness,
+				emitter.particle.soft_fade_distance);
+			constants.flags = (frame.reverse_z ? 1u : 0u) | (emitter.particle.soft_particles ? 2u : 0u);
 			return constants;
 		}
 	}
@@ -231,6 +208,15 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(renderer != nullptr);
 		m_renderer = renderer;
 		ASH_PROCESS_ERROR(create_programs(*renderer));
+		RenderSamplerDesc sampler_desc{};
+		sampler_desc.address_u = RenderSamplerAddressMode::ClampToEdge;
+		sampler_desc.address_v = RenderSamplerAddressMode::ClampToEdge;
+		sampler_desc.address_w = RenderSamplerAddressMode::ClampToEdge;
+		sampler_desc.min_filter = RenderSamplerFilter::Linear;
+		sampler_desc.mag_filter = RenderSamplerFilter::Linear;
+		sampler_desc.mip_filter = RenderSamplerFilter::Linear;
+		m_sprite_sampler = renderer->create_sampler(sampler_desc, "SceneParticleSpriteSampler");
+		ASH_PROCESS_ERROR(m_sprite_sampler != nullptr);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -238,8 +224,11 @@ namespace AshEngine
 	{
 		clear_program_buffer_bindings();
 		m_emitter_states.clear();
+		m_draw_alpha_soft_program.reset();
+		m_draw_additive_soft_program.reset();
 		m_draw_alpha_program.reset();
 		m_draw_additive_program.reset();
+		m_sprite_sampler.reset();
 		m_write_args_program.reset();
 		m_scatter_program.reset();
 		m_scan_blocks_program.reset();
@@ -333,6 +322,18 @@ namespace AshEngine
 		draw_desc.name = "SceneParticleDrawAlpha";
 		m_draw_alpha_program = renderer.create_graphics_program(draw_desc);
 		ASH_PROCESS_ERROR(m_draw_alpha_program != nullptr);
+
+		draw_desc.state.blend_mode = RenderBlendMode::Additive;
+		draw_desc.shader_macro = "PARTICLE_ADDITIVE=1;PARTICLE_SOFT_DEPTH=1";
+		draw_desc.name = "SceneParticleDrawAdditiveSoft";
+		m_draw_additive_soft_program = renderer.create_graphics_program(draw_desc);
+		ASH_PROCESS_ERROR(m_draw_additive_soft_program != nullptr);
+
+		draw_desc.state.blend_mode = RenderBlendMode::AlphaBlend;
+		draw_desc.shader_macro = "PARTICLE_ALPHA_BLEND=1;PARTICLE_SOFT_DEPTH=1";
+		draw_desc.name = "SceneParticleDrawAlphaSoft";
+		m_draw_alpha_soft_program = renderer.create_graphics_program(draw_desc);
+		ASH_PROCESS_ERROR(m_draw_alpha_soft_program != nullptr);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -348,7 +349,8 @@ namespace AshEngine
 
 		const uint32_t capacity =
 			std::clamp<uint32_t>(emitter.particle.max_particles, 1u, k_max_particles_per_emitter);
-		const uint64_t simulation_config_hash = build_particle_simulation_config_hash(emitter.particle);
+		const uint64_t simulation_config_hash =
+			ParticleSystemInternal::build_simulation_config_hash(emitter.particle);
 		EmitterGPUState& state = m_emitter_states[key];
 		if (state.capacity != capacity ||
 			state.scene_content_epoch != scene_content_epoch ||
@@ -458,6 +460,18 @@ namespace AshEngine
 		}
 	}
 
+	void ParticleSystemPass::clear_soft_depth_bindings()
+	{
+		if (m_draw_additive_soft_program)
+		{
+			m_draw_additive_soft_program->set_texture("SceneDepth", nullptr);
+		}
+		if (m_draw_alpha_soft_program)
+		{
+			m_draw_alpha_soft_program->set_texture("SceneDepth", nullptr);
+		}
+	}
+
 	void ParticleSystemPass::clear_program_buffer_bindings()
 	{
 		if (m_classify_program)
@@ -485,14 +499,22 @@ namespace AshEngine
 			m_write_args_program->set_storage_buffer("ParticleCounterIn", nullptr);
 			m_write_args_program->set_rw_storage_buffer("ParticleDrawArgs", nullptr);
 		}
-		if (m_draw_additive_program)
+
+		const auto clear_draw_bindings = [](std::unique_ptr<GraphicsProgram>& program)
 		{
-			m_draw_additive_program->set_storage_buffer("ParticlePool", nullptr);
-		}
-		if (m_draw_alpha_program)
-		{
-			m_draw_alpha_program->set_storage_buffer("ParticlePool", nullptr);
-		}
+			if (!program)
+			{
+				return;
+			}
+			program->set_storage_buffer("ParticlePool", nullptr);
+			program->set_texture("ParticleSprite", nullptr);
+			program->set_sampler("ParticleSpriteSampler", std::shared_ptr<RenderSampler>{});
+		};
+		clear_draw_bindings(m_draw_additive_program);
+		clear_draw_bindings(m_draw_alpha_program);
+		clear_draw_bindings(m_draw_additive_soft_program);
+		clear_draw_bindings(m_draw_alpha_soft_program);
+		clear_soft_depth_bindings();
 	}
 
 	bool ParticleSystemPass::add_passes(
@@ -505,6 +527,7 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_NC("ParticleSystemPass::add_passes", AshEngine::Profile::Color::Scene);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		prune_stale_states(frame);
+		clear_soft_depth_bindings();
 		if (frame.particle_emitters.empty())
 		{
 			return true;
@@ -512,7 +535,12 @@ namespace AshEngine
 
 		ASH_PROCESS_ERROR(m_renderer != nullptr);
 		ASH_PROCESS_ERROR(m_classify_program && m_scan_blocks_program && m_scatter_program && m_write_args_program);
-		ASH_PROCESS_ERROR(m_draw_additive_program && m_draw_alpha_program);
+		ASH_PROCESS_ERROR(
+			m_draw_additive_program &&
+			m_draw_alpha_program &&
+			m_draw_additive_soft_program &&
+			m_draw_alpha_soft_program);
+		ASH_PROCESS_ERROR(m_sprite_sampler != nullptr);
 		ASH_PROCESS_ERROR(depth);
 		ASH_PROCESS_ERROR(scene_hdr_linear);
 		ASH_PROCESS_ERROR(frame.scene_runtime_id != 0);
@@ -622,27 +650,60 @@ namespace AshEngine
 
 			// One raster pass per emitter: queued draws resolve program bindings at
 			// pass end, so sharing one pass across emitters would alias the pool bind.
-			GraphicsProgram* draw_program = emitter.particle.blend_mode == ParticleBlendMode::AlphaBlend
-				? m_draw_alpha_program.get()
-				: m_draw_additive_program.get();
+			const bool soft_particles = emitter.particle.soft_particles;
+			GraphicsProgram* draw_program = nullptr;
+			if (emitter.particle.blend_mode == ParticleBlendMode::AlphaBlend)
+			{
+				draw_program = soft_particles
+					? m_draw_alpha_soft_program.get()
+					: m_draw_alpha_program.get();
+			}
+			else
+			{
+				draw_program = soft_particles
+					? m_draw_additive_soft_program.get()
+					: m_draw_additive_program.get();
+			}
 			const ParticleDrawConstants draw_constants = make_draw_constants(frame, emitter);
 			const std::shared_ptr<StorageBuffer> particle_pool = state->pools[draw_parity];
 			const std::shared_ptr<StorageBuffer> draw_args = state->draw_args;
+			const std::shared_ptr<TextureAsset> sprite_texture = emitter.sprite_texture;
 
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				"SceneParticleDrawPass",
 				RenderGraphPassFlags::None,
-				[&](RenderGraphRasterPassBuilder& pass)
+				[depth, scene_hdr_linear, soft_particles](RenderGraphRasterPassBuilder& pass)
 				{
-					pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestOnly);
+					pass.read_depth(
+						depth,
+						soft_particles
+							? RenderGraphDepthReadMode::DepthTestAndShaderResource
+							: RenderGraphDepthReadMode::DepthTestOnly);
 					pass.write_color(0, scene_hdr_linear, RenderLoadAction::Load, {});
 				},
-				[this, draw_program, draw_constants, particle_pool, draw_args, &view_context](
+				[this,
+					draw_program,
+					draw_constants,
+					particle_pool,
+					draw_args,
+					sprite_texture,
+					depth,
+					soft_particles,
+					&view_context](
 					RenderGraphRasterContext& context) -> bool
 				{
 					ASH_PROFILE_SCOPE_NC("SceneParticleDrawPass", AshEngine::Profile::Color::Draw);
 					ASH_PROCESS_GUARD_RETURN(bool, pass_result, true, false);
+					ASH_PROCESS_ERROR(sprite_texture && sprite_texture->resource);
 					ASH_PROCESS_ERROR(draw_program->set_storage_buffer("ParticlePool", particle_pool));
+					ASH_PROCESS_ERROR(draw_program->set_texture("ParticleSprite", sprite_texture->resource));
+					ASH_PROCESS_ERROR(draw_program->set_sampler("ParticleSpriteSampler", m_sprite_sampler));
+					if (soft_particles)
+					{
+						std::shared_ptr<RenderTarget> depth_target = context.get_texture(depth);
+						ASH_PROCESS_ERROR(depth_target != nullptr);
+						ASH_PROCESS_ERROR(draw_program->set_texture("SceneDepth", depth_target));
+					}
 					GraphicsDrawDesc draw_desc{};
 					draw_desc.program = draw_program;
 					draw_desc.indirect_args_buffer = draw_args;

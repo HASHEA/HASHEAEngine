@@ -10,13 +10,15 @@ status: active
 
 `ParticleComponent` 是第七个场景组件。每个组件描述一个世界空间发射器；渲染侧在 Sky 之后、Volumetric 之前执行 GPU 模拟和 billboard 绘制，因此粒子写入 HDR、参与后续体积光/Bloom/TAA/tone-map。粒子读取场景深度并做深度测试，不写深度。
 
-粒子状态、随机生成候选、积分、压实和 indirect args 全部留在 GPU 且无 CPU 回读；CPU 只维护每 emitter 的发射余量并由 `spawn_rate × delta` 算出本帧 spawn count。GPU 链为 stable classify/count → block prefix scan → stable scatter → write indirect args。存活粒子保持原顺序，新生粒子稳定追加；一条 non-indexed indirect draw 生成软圆点 billboard，`firstInstance` 恒为 0。
+粒子状态、随机生成候选、积分、压实和 indirect args 全部留在 GPU 且无 CPU 回读；CPU 只维护每 emitter 的发射余量并由 `spawn_rate × delta` 算出本帧 spawn count。GPU 链为 stable classify/count → block prefix scan → stable scatter → write indirect args。存活粒子保持原顺序，新生粒子稳定追加；一条 non-indexed indirect draw 生成 clip-space billboard，`firstInstance` 恒为 0。
+
+billboard 采样 RGBA sprite，并将 lifecycle color 与 sprite color 相乘。径向项为 `radial = pow(saturate(1-dot(corner,corner)), max(radial_sharpness, 0.25))`，`shaped = lerp(1, radial, saturate(radial_falloff))`，基础 coverage 为 `lifecycle.a × sprite.a × shaped`。AlphaBlend 输出未预乘 RGB 与 coverage；Additive 输出 `RGB × coverage`。软粒子 variant 将 scene/particle device depth 用投影矩阵系数重建为线性 view depth，再以 `saturate((sceneLinear-particleLinear)/max(soft_fade_distance,0.001))` 衰减 coverage；normal/reverse-Z 都使用同一重建公式并分别识别 1/0 背景深度。
 
 ## 配置与序列化
 
 - 容量/发射：`max_particles`（1..65536）、`spawn_rate`、`emitting`、`random_seed`。
 - 生命周期/运动：`lifetime`、`lifetime_variance`、`initial_speed`、`spread_angle_degrees`、`constant_acceleration`；发射轴为实体局部 +Y。
-- 外观：`start_size/end_size`、`start_color/end_color`、`blend_mode`。`sprite_texture_path` 是 RGBA sprite 资产引用，默认空路径表示使用默认 White sprite；`radial_falloff`（默认 1.0，范围 0..1）是 sprite-only 与 analytic radial mask 的混合权重，`radial_sharpness`（默认 2.0，范围 0.25..8）是该径向 mask 的 power exponent；`soft_particles`（默认 true）控制粒子在 opaque scene depth 相交处淡出，`soft_fade_distance`（默认 0.25，范围 0.001..10）的单位是 world-space，表示软粒子的深度淡出区间。这些新增字段目前只建立数据契约，渲染侧消费及空路径 White fallback 将在后续任务实现。
+- 外观：`start_size/end_size`、`start_color/end_color`、`blend_mode`。`sprite_texture_path` 是 RGBA sprite 资产引用；render/submit thread 按 sRGB 请求显式路径，空路径和加载失败降级为 White sprite。`radial_falloff`（默认 1.0，范围 0..1）是 sprite-only 与 analytic radial mask 的混合权重，`radial_sharpness`（默认 2.0，范围 0.25..8）是该径向 mask 的 power exponent；`soft_particles`（默认 true）控制粒子在 opaque scene depth 相交处淡出，`soft_fade_distance`（默认 0.25，范围 0.001..10）的单位是 world-space，表示软粒子的线性深度淡出区间。
 
 scene JSON schema 当前为 version 6。`blend_mode` 写为 `Additive` / `AlphaBlend` 字符串，读取兼容旧整数；version 5 文件缺少上述五个外观键时使用各字段默认值。字符串或布尔字段类型错误时保留默认值；三个新增浮点字段先对非有限值回退默认值，再分别 clamp 到声明范围。`max_particles` 与 `random_seed` 只接受 JSON uint32 整数，负数、浮点和越界值无效。Scene add/set/load 使用相同 sanitize；随机流混入稳定序列化 `entity_id` 的高、低完整 64 位，因此只在高 32 位不同的实体也不会复用同一随机流。
 
@@ -24,12 +26,15 @@ scene JSON schema 当前为 version 6。`blend_mode` 写为 `Additive` / `AlphaB
 
 - Scene/提取：`Function/Scene/SceneComponents.h`、`Scene.h/.cpp`，以及 `RenderScene.h/.cpp` 的 `VisibleParticleEmitter`。
 - 编排：`Function/Render/ParticleSystemPass.h/.cpp`；shader 为 `Shaders/Particles/ParticleSystem.hlsl`。
+- 帧资产准备：logic thread 只复制组件/path；`ScenePresentationSubsystem::submit_presentations()` 在 render/submit thread 为可见 emitter 准备 sprite `TextureAsset`，并把 shared handle 固定到该帧快照。
 - Editor：`Panels/Inspector/ParticleComponentEditor.*` + `SetParticleComponentCommand`；组件参与 entity snapshot、复制、删除与 undo/redo。
 - 验证场景：`product/assets/scenes/Particles.scene.json`，纯程序化 additive fountain，无外部资产依赖。
 
-每 emitter 持有两个 32-byte 粒子池、block counts/offsets、counter 和 indirect args。状态 key 为 `{scene_runtime_id, entity_id}`；场景解绑显式释放。capacity、scene content epoch 或模拟参数 fingerprint 改变时只重置对应 emitter；外观字段和 `emitting` 切换不会错误清空其他 emitter。
+每 emitter 持有两个 32-byte 粒子池、block counts/offsets、counter 和 indirect args。状态 key 为 `{scene_runtime_id, entity_id}`；场景解绑显式释放。capacity、scene content epoch 或模拟参数 fingerprint 改变时只重置对应 emitter；fingerprint 只含 spawn/lifetime/lifetime variance/speed/spread/acceleration/seed，sprite、径向、soft、size、color、blend 等外观字段及 `emitting` 切换不重置模拟。
 
-Function 层 indirect 契约：`StorageBufferDesc::indirect_args` 申请 indirect usage；`GraphicsDrawDesc::indirect_args_buffer/offset` 选择 indirect draw；消费前转到 `AshResourceState::IndirectArgs`。粒子 compute/draw 常量当前均为 128 bytes；draw 路径显式要求反射尺寸严格相等，compute 后端拒绝超过反射 cbuffer 的上传。
+Function 层 indirect 契约：`StorageBufferDesc::indirect_args` 申请 indirect usage；`GraphicsDrawDesc::indirect_args_buffer/offset` 选择 indirect draw；消费前转到 `AshResourceState::IndirectArgs`。粒子 compute/draw 常量均严格为 128 bytes；draw block 包含 VP、projection scale/size、四个 half2 packed color、深度重建系数、径向/soft 参数和 flags，draw 路径要求反射尺寸严格相等，compute 后端拒绝超过反射 cbuffer 的上传。
+
+draw program 固定为 Additive/AlphaBlend × SoftOff/SoftOn 四个 variant。SoftOn 将 scene depth 同时声明为 depth-test 与 shader resource 并绑定 `SceneDepth`；SoftOff 只声明 `DepthTestOnly`，shader 不反射、不解析也不采样 `SceneDepth`。
 
 ## 确定性
 
@@ -37,7 +42,7 @@ Function 层 indirect 契约：`StorageBufferDesc::indirect_args` 申请 indirec
 
 ## 约束与已知限制
 
-- 当前渲染实现尚未消费 scene 中的粒子贴图、径向衰减和软粒子字段，也没有粒子材质资产、深度排序、碰撞、力场、sub-emitter、事件、ribbon/trail/mesh 粒子、光照、阴影或运动向量。
+- 当前没有粒子材质资产、深度排序、碰撞、力场、sub-emitter、事件、ribbon/trail/mesh 粒子、光照、阴影或运动向量。
 - AlphaBlend 不排序；TAA 对粒子没有 motion vector，可能出现顺序伪影或拖影。
 - 逐 emitter 四次 dispatch + 一次 draw，不做跨 emitter 合批；GPU 内存按 emitter 容量线性增长。
 - RenderGraph 仍不把 buffer 当一等资源；buffer 状态由 program binding 与 explicit indirect barrier 管理。

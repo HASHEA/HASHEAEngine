@@ -100,6 +100,7 @@ namespace AshEngine
 			uint64_t scene_content_epoch,
 			EmitterGPUState*& out_state);
 		void prune_stale_states(const VisibleRenderFrame& frame);
+		void clear_soft_depth_bindings();
 		void clear_program_buffer_bindings();
 
 	private:
@@ -110,6 +111,9 @@ namespace AshEngine
 		std::unique_ptr<ComputeProgram> m_write_args_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_draw_additive_program = nullptr;
 		std::unique_ptr<GraphicsProgram> m_draw_alpha_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_draw_additive_soft_program = nullptr;
+		std::unique_ptr<GraphicsProgram> m_draw_alpha_soft_program = nullptr;
+		std::shared_ptr<RenderSampler> m_sprite_sampler = nullptr;
 		std::unordered_map<EmitterKey, EmitterGPUState, EmitterKeyHash> m_emitter_states{};
 	};
 }

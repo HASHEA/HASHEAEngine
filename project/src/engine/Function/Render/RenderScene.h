@@ -63,6 +63,7 @@ namespace AshEngine
 		EntityId entity_id = 0;
 		ParticleComponent particle{};
 		glm::mat4 world_transform{ 1.0f };
+		std::shared_ptr<TextureAsset> sprite_texture = nullptr;
 	};
 
 	struct ASH_API VisibleRenderFrame
