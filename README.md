@@ -48,11 +48,14 @@ run.bat editor|sandbox|all [vulkan|dx12] [Debug]   :: 运行（all = 双程序 x
 ## 验证
 
 ```bat
+RunTests.bat                         :: doctest 单元测试
+RunArchGate.bat                      :: 分层依赖边界检查
 RunRenderGate.bat                    :: 渲染门禁：双后端 golden SSIM 回归 + 跨后端 diff
 RunPerfGate.bat -Profile Standard    :: 性能门禁
+run.bat sandbox <vulkan|dx12> Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
 ```
 
-按变更类型的完整验证矩阵见 `docs/VERIFY.md`。渲染改动必须双后端验证。
+最后一条是 opt-in 的双后端 constant-buffer 可见性诊断；CI 会在 WARP/lavapipe 上把它与 indirect 自测独立执行。按变更类型的完整验证矩阵见 `docs/VERIFY.md`。渲染改动必须双后端验证。
 
 ## 文档
 
