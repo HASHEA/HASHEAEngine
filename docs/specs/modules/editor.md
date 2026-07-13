@@ -54,10 +54,11 @@ status: active
 
 ## 验证
 
-对齐 `docs/VERIFY.md` "Editor 面板 / UI"行：
+对齐 `docs/VERIFY.md` "Editor 面板 / UI"行。需要鼠标、键盘、拖放或窗口交互的项目只由人类执行；Agent 仅运行自动化命令、检查只读截图/日志并移交清单，不得直接驱动 UI 或自行声称人工项目通过：
 
-- 构建 + `run.bat editor`，手动过一遍改动路径（面板打开、交互、无报错日志）
-- Particle Inspector 手工覆盖六个 header、Texture 搜索/拖放/recent、missing fallback、wrong-type 阻塞、soft disable retain、两种预览，以及保存/重载、reset/restore/remove/undo
+- Agent：构建 + `run.bat editor Debug --smoke-test-seconds=120` readiness smoke + 相关自动化测试；只读检查截图与日志
+- 人类：运行 `run.bat editor`，手工覆盖面板打开、交互与无报错日志
+- Particle Inspector 人工清单：六个 header、Texture 搜索/拖放/recent、missing fallback、wrong-type 阻塞、soft disable retain、两种预览，以及保存/重载、reset/restore/remove/undo/redo
 - 涉及场景生命周期（打开/保存/reload）时升级为 `run.bat all Debug --smoke-test-seconds=120`
 
 ## 历史
