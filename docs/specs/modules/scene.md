@@ -46,7 +46,7 @@ status: active
 - `Scene`/`Entity` 是 shared_ptr pimpl 句柄，拷贝共享同一底层数据；`replace_contents` / `reload_from_file` 保留变更事件订阅者。
 - 变更事件回调同步执行于调用线程；`RenderScene::get_static_mesh_primitives_snapshot` 是唯一声明线程安全的快照接口。
 - 组件集合固定为 `SceneComponentType` 七项（Name/Transform/Camera/Light/Mesh/Environment/Particle）。当前 scene JSON schema 为 version 6；Particle 的 `blend_mode` 写为 `Additive` / `AlphaBlend` 字符串，读取兼容旧整数。
-- Particle v6 的 `sprite_texture_path` 是 RGBA sprite 资产引用，默认空路径表示默认 White sprite；`radial_falloff`（默认 1.0，范围 0..1）是 sprite-only 与 analytic radial mask 的混合权重，`radial_sharpness`（默认 2.0，范围 0.25..8）是径向 mask 的 power exponent；`soft_particles`（默认 true）控制 opaque scene depth 相交处淡出，`soft_fade_distance`（默认 0.25，范围 0.001..10）是 world-space 深度淡出区间。version 5 缺少这些键时保持默认值；运行时消费与空路径 White fallback 实现属于后续任务，不在当前 schema 变更内。
+- Particle v6 的 `sprite_texture_path` 是 RGBA sprite 资产引用，默认空路径表示默认 White sprite；`radial_falloff`（默认 1.0，范围 0..1）是 sprite-only 与 analytic radial mask 的混合权重，`radial_sharpness`（默认 2.0，范围 0.25..8）是径向 mask 的 power exponent；`soft_particles`（默认 true）控制 opaque scene depth 相交处淡出，`soft_fade_distance`（默认 0.25，范围 0.001..10）是 world-space 深度淡出区间。version 5 缺少这些键时保持默认值。render/submit thread 通过 `RenderAssetManager` 消费 sprite 路径；空路径使用 White fallback，显式失败路径保持 Failed readiness 与错误日志，同时用 fallback resource 保持可见。
 - Particle JSON malformed sanitation：字符串/布尔类型错误保留默认值；新增浮点字段的非有限值先回退默认，再 clamp 到各自范围。Scene add/set/load 继续共享同一数值 sanitize 契约。
 - `get_content_epoch()` 只在 load/reload/replace 内容时变化，普通组件编辑不得推进；它用于重置跨帧渲染状态，不替代细粒度 render version。
 - 粒子 GPU 状态以进程内 `scene_runtime_id + entity_id` 隔离；场景解绑会显式释放该 runtime 的状态。

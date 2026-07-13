@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved（2026-07-13，用户确认三节设计并明确批准 SDD）
+Done（2026-07-13；实现、自动化验证与 golden 发布完成；交互式 UI 清单按项目规则移交人类，未声称通过）
 
 ## Context
 
@@ -190,7 +190,8 @@ Sprite picker 复用 `InspectorAssetPathWidgets` 的搜索、拖放和 recent pa
 | DX12 validation | depth SRV/DSV、descriptor、resource state | 开启 DX12 validation/GPU validation 后：`run.bat sandbox dx12 Debug --scene=product/assets/scenes/Particles.scene.json --smoke-test-seconds=120`；检查日志 |
 | 性能门禁 | 默认四组合绝对上限 | `RunPerfGate.bat -Profile Standard` |
 | 候选视觉 | 双后端预期 golden fail、cross-backend diff、heatmap | `RunRenderGate.bat`；保存候选图供用户目视确认，不 bless |
-| Editor 人工 | 六模块、picker/drop、warning/fallback、save/reload、Reset/Restore、undo/redo | `run.bat editor` 手工操作粒子组件 |
+| Editor 自动化 | Inspector source contract 与进程 readiness | `RunTests.bat Debug` + `run.bat editor Debug --smoke-test-seconds=120` |
+| Editor 人工 | 六模块、picker/drop、warning/fallback、save/reload、Reset/Restore、undo/redo | Agent 输出“待人工验收”清单；仅由人类运行 `run.bat editor` 并操作，Agent 不直接驱动 UI |
 | Golden 发布 | 仅在用户确认 Spark/Smoke/Magic 与 soft fade 正确后 | `RunRenderGate.bat -Scenes particles -BlessGolden` |
 | 最终渲染门禁 | 新 golden、sandbox 无回归、跨后端 diff | `RunRenderGate.bat` |
 | 文本质量 | whitespace / patch | `git diff --check` |
@@ -202,10 +203,23 @@ Sprite picker 复用 `InspectorAssetPathWidgets` 的搜索、拖放和 recent pa
 1. 先扩展 `particle_component_tests.cpp`，锁定五个新字段、19 个 descriptor 属性、v6/v5/malformed/sanitize 契约；验收为新增测试先失败且失败原因与缺失字段一致。
 2. 实现 Scene 字段、sanitize、serialization 与 render-thread frame asset prepare；验收为 `RunTests.bat Debug` 通过、空路径 ready fallback、有效纹理 Loading→Ready 与显式失败 fallback/readiness 行为符合契约。
 3. 实现四个 draw variant、128B constants 重排、sprite/radial/soft-depth shader；验收为双后端构建通过，SoftOff 不声明 depth SRV，SoftOn validation 无错误。
-4. 重组 Particle Inspector 六模块并补 picker、preview、warning、compare/sanitize；验收为保存重载与 undo/redo 手工链路正确。
+4. 重组 Particle Inspector 六模块并补 picker、preview、warning、compare/sanitize；自动化验收锁定 Inspector source contract 与 readiness，真实保存重载和 undo/redo 链路移交人类验收。
 5. 加入 smoke/magic sprite 与三 emitter showcase/遮挡物；验收为两后端候选图均清楚呈现三种外观和 soft intersection。
 6. 跑完整验证矩阵，向用户提交候选图；只有确认后 bless particles golden，再重跑默认完整 RenderGate。
 7. 每个行为 slice 同提交回写对应 `docs/specs/`；全部验证与 golden 发布完成后把本 SDD Status 改为 Done，并记录根因、影响范围、验证证据和任何 PerfGate WARN 判断。
+
+## Completion evidence
+
+- 根因与影响范围：粒子像素外观原先固定为 `(1-r²)²` 的柔和径向衰减，配合 `start_size=0.22` 形成偏大的柔光圆点；该现象不是 TAA、Bloom、DOF/Bokeh 或截图失焦。变更覆盖 Scene v6 schema、render-thread sprite 资产准备、粒子 shader/pass、Editor Inspector、固定展示场景与长期规格。
+- 实现切片：`0bb3f6d`（scene schema）、`994ba5f`（sprite/radial/soft depth）、`7f370c4`（模块化 Inspector）、`857ed6b`（Spark/Smoke/Magic showcase）。
+- 构建与测试：`build_editor.bat Debug`、`build_sandbox.bat Debug` 均 exit 0；`RunTests.bat Debug` 为 50/50 cases、763/763 assertions；`RunArchGate.bat` exit 0，只有 35 条既有 grandfathered warning；`run.bat all Debug --smoke-test-seconds=120` 的 Editor/Sandbox × Vulkan/DX12 四组合均 PASS。
+- 双后端 validation：Vulkan validation + GPU assisted + sync validation 与 DX12 validation + GPU validation 的粒子 smoke 均无 barrier、descriptor、lifetime、泄漏或 debug-layer 错误。日志位于 `Intermediate/particle-validation/`；Vulkan 仅有 GPU-assisted 与 core checks 同开会变慢的预期配置 warning，不是渲染正确性或资源错误。
+- 深度与确定性：`Intermediate/particle-depth-projections/comparison-summary.json` 的 normal/reverse-Z × perspective/orthographic 四组合跨后端均为 SSIM 1、max diff 0；同后端 normal/reverse-Z 为 SSIM 1、max diff 1，仅 21–24 个差异像素。
+- 失败路径：缺失 sprite 的 Vulkan/DX12 negative smoke 都以预期的 decode/readiness failure 非零退出，没有 crash、thread-guard、validation 或资源生命周期错误；证据在 `Intermediate/particle-negative/`。
+- 性能：`RunPerfGate.bat -Profile Standard` 报告 `Intermediate/test-reports/perf-gate/20260713-134235`，四组合全部 PASS，无 WARN/FAIL。报告没有 relative baseline，因此这里只声明满足绝对上限，不声明相对性能无回归。
+- 视觉与 golden：非 bless 候选报告为 `Intermediate/test-reports/render-gate/20260713-134631-031-26392-5582171e`，唯一失败是预期的旧 particles golden，粒子跨后端 SSIM 1。用户在 2026-07-13 明确回复“接受”后，才运行 `RunRenderGate.bat -Scenes particles -BlessGolden`；事务报告 `Intermediate/test-reports/render-gate/20260713-140619-324-26460-e15eaf44` exit 0，并发布两后端 golden。
+- 最终 RenderGate：`Intermediate/test-reports/render-gate/20260713-140641-976-46032-c4f1b2fe` exit 0。Sandbox Vulkan 为 SSIM 0.996278/max 38，DX12 为 0.996177/max 38，跨后端为 0.999747/max 13；Particles Vulkan、DX12 与跨后端均为 SSIM 1/max 0。
+- Editor：Inspector source-contract tests 已包含在上述 50/50 cases、763/763 assertions 中，四组合 readiness smoke 也已 PASS。按 `AGENTS.md` 与 `docs/VERIFY.md` 的 UI 验证职责边界，实际交互未由 Agent 操作或声称通过，以下项目保持“待人工验收”：六个模块及默认展开、Texture 搜索/拖放/recent、missing/wrong-type 行为、soft disable retain、两种只读预览、保存/重载、reset/restore/remove、undo/redo，以及修改外观字段不重置存活轨迹。
 
 ## Risks
 
@@ -1386,14 +1400,14 @@ bCommitRequested = DrawInspectorSceneDragFloatField(
     0.01f, 0.001f, 10.0f, "%.3f", particle.soft_particles) || bCommitRequested;
 ```
 
-- [ ] **Step 7: Build and perform the Editor interaction checklist**
+- [ ] **Step 7: Build and hand off the Editor interaction checklist**
 
 ```bat
 build_editor.bat Debug
-run.bat editor
+run.bat editor Debug --smoke-test-seconds=120
 ```
 
-Manually verify: six headers; empty path displays Default; valid Texture search/drop; missing path warning commits, remains visible after reselecting the entity, and the interactive viewport continues rendering the White fallback; non-Texture blocks; Soft toggle greys but preserves distance; both full-width previews update; save/reload; Reset; Restore; remove; undo/redo. While particles are alive, change sprite/radial/soft/size/color/blend fields and confirm existing trajectories continue without a pool reset; then change `spawn_rate` once and confirm the documented simulation-field reset still occurs. Inspect `product/logs` for errors other than the deliberately induced missing-texture warning, then restore a valid/empty path and confirm subsequent logs are clean.
+Agent runs the build, readiness smoke, and repository-native automated tests only. Hand the following `run.bat editor` checklist to a human and mark it “待人工验收”; Agent must not use coordinate clicks, input injection, desktop automation, or accessibility scripting to perform it, and must not claim PASS without a human report: six headers; empty path displays Default; valid Texture search/drop; missing path warning commits, remains visible after reselecting the entity, and the interactive viewport continues rendering the White fallback; non-Texture blocks; Soft toggle greys but preserves distance; both full-width previews update; save/reload; Reset; Restore; remove; undo/redo. While particles are alive, change sprite/radial/soft/size/color/blend fields and confirm existing trajectories continue without a pool reset; then change `spawn_rate` once and confirm the documented simulation-field reset still occurs. Inspect `product/logs` for errors other than the deliberately induced missing-texture warning, then restore a valid/empty path and confirm subsequent logs are clean.
 
 - [ ] **Step 8: Update Inspector specs and commit the Editor slice**
 
@@ -1718,10 +1732,10 @@ Confirm the behavior contracts were already committed with Tasks 1, 4, 5, and 6.
 - actual verification commands/results and report paths;
 - RenderGate per-backend SSIM and cross-backend metrics;
 - PerfGate PASS/WARN decision and any warning rationale;
-- validation-log and Editor checklist results;
+- validation-log results、Editor 自动化证据，以及明确的人工 UI 清单移交状态；
 - the explicit user approval that authorized golden publication.
 
-Change SDD Status to `Done（2026-07-13；...）` only when every required verification and golden publication succeeds.
+Change SDD Status to `Done（2026-07-13；...）` only when all Agent-owned automated verification and golden publication succeed, and the human-owned UI checklist is explicitly recorded as handed off without a fabricated PASS claim.
 
 - [ ] **Step 4: Run final documentation and repository checks**
 
@@ -1746,4 +1760,4 @@ git log --oneline --decorate -8
 git status --short
 ```
 
-Report every command/result, RenderGate SSIM/cross-backend metrics, PerfGate PASS/WARN status, validation log result, Editor manual checklist, and the fact that baseline publication followed explicit user approval.
+Report every command/result, RenderGate SSIM/cross-backend metrics, PerfGate PASS/WARN status, validation log result, Editor 自动化证据与人工 UI 清单移交状态，以及 baseline publication followed explicit user approval.

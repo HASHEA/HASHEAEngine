@@ -53,9 +53,10 @@ draw program 固定为 Additive/AlphaBlend × SoftOff/SoftOn 四个 variant。So
 - `RunRenderGate.bat -Scenes particles`：固定 showcase 的粒子双后端 golden 与跨后端 diff；候选图只有在用户目视确认 Spark、Smoke、Magic 与 soft-depth 相交均正确后，才能通过事务式 `-BlessGolden` 发布，始终禁止直接编辑 golden。
 - 同参数抓两次 Vulkan、一次 DX12，用 AshImageDiff 验证确定性。
 - 双后端 validation/debug layer 粒子场景 smoke，日志不得有 barrier、lifetime 或泄漏错误。
-- Editor 手工覆盖六个模块的顺序与默认展开状态、sprite 搜索/拖放/recent、空路径 White fallback、缺失路径可提交警告、非 Texture 阻塞、Soft Fade Distance 禁用保值、尺寸/颜色只读预览，以及保存/重载、reset/restore/remove、undo；固定 RenderGate 场景覆盖 White/Additive Spark、RGBA/AlphaBlend Smoke 穿过 opaque depth，以及带不对称 UV 证据的 RGBA/Additive Magic。
+- Editor 自动化证据由 `RunTests.bat Debug` 中的 Inspector source-contract 用例和 Editor readiness smoke 提供；真实 UI 操作只由人类执行，Agent 交付时将以下项目标记“待人工验收”且未经回报不得声称 PASS：六个模块的顺序与默认展开状态、sprite 搜索/拖放/recent、空路径 White fallback、缺失路径可提交警告、非 Texture 阻塞、Soft Fade Distance 禁用保值、尺寸/颜色只读预览，以及保存/重载、reset/restore/remove、undo/redo。固定 RenderGate 场景覆盖 White/Additive Spark、RGBA/AlphaBlend Smoke 穿过 opaque depth，以及带不对称 UV 证据的 RGBA/Additive Magic。
 - `RunPerfGate.bat -Profile Standard` 验证无粒子默认矩阵可运行并满足绝对上限；只有报告中存在 baseline 时才能进一步声称相对基线无回归。
 
 ## 历史
 
 - [SDD-2026-07-10-gpu-particles](../../sdd/SDD-2026-07-10-gpu-particles.md)
+- [SDD-2026-07-13-particle-visual-quality](../../sdd/SDD-2026-07-13-particle-visual-quality.md)
