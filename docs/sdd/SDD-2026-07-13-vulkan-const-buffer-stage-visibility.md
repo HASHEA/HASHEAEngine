@@ -2,7 +2,7 @@
 
 ## Status
 
-Review
+Done
 
 ## Context
 
@@ -236,6 +236,26 @@ GPU/RenderGate/PerfGate 与其他活动会话串行执行，避免共享 GPU 采
 | 与并行粒子/terrain 工作冲突 | 独立 worktree/branch；实施前复核热点文件所有权；重叠时等待对方提交并从新 main 重放；GPU 门禁串行 |
 | 把潜在 UAV 能力再次误报成当前故障 | UAV 明确列为 Non-goal；实际调用点审计结论写入 Context；无真实消费者前不实现 |
 
+## Implementation outcome
+
+- Vulkan `AshResourceState::ConstBuffer` 已精确映射为 vertex + fragment + compute shader stage，access 保持 `VK_ACCESS_UNIFORM_READ_BIT`；DX12 native state 不变。实现未新增 UAV→UAV barrier、隐式 UAV dependency、RenderGraph barrier 或公共 RHI barrier API。
+- 新增 opt-in `--rhi-selftest-constant-buffer`，分别覆盖 compute 与 fragment uniform read；与 indirect self-test 独立执行，任一失败都在 `_on_startup()` 与首帧前传播为非零退出。两个 self-test 均显式进入 RTV，ConstBuffer transition 与 UAV transition 分批，录制错误保留高层阶段与底层 command-buffer 原因。
+- Vulkan deletion queue accessor 对首帧前 sentinel 返回 queue 0；Vulkan/DX12 shutdown 均在首次 deletion-queue drain 前锁内 swap、锁外释放从未提交的 pending uploads，使资源在 allocator、descriptor heap 与 device 有效时进入既有回收路径。
+- DX12 CPU descriptor allocation 增加非零、单调且禁止回绕的 serial；shader-visible table cache key 使用 heap/count/order 与每项 `{address, serial}`，scalar/array、buffer/texture/sampler 均传播完整 handle。同一活跃 allocation 仍命中；slot ABA 复用正确 miss；free 路径没有扫描、反向索引或清空 cache。
+- 故障注入把 compute expected red 从 17 临时改为 20：Vulkan 与 DX12 都精确报告 actual `(17,101,203,255)` / expected `(20,101,203,255)`，分别在 3.076s / 1.838s 内由正常 teardown 返回 1；Vulkan 报告零 live VMA allocation，DX12 报告 shutdown complete，均无 watchdog、assert、allocator outstanding allocation 或 access violation。坏值随后精确恢复并重建。
+- 最终独立审查覆盖 `origin/main...HEAD` 全部 28 个文件：Critical 0、Important 0、Minor 0，SDD compliance 通过，Ready=Yes。
+
+### Verification evidence
+
+- Fresh generate；Editor Debug、Sandbox Debug/Release 构建通过。
+- doctest：66/66 cases、858/858 assertions；ArchGate PASS（35 条既有 legacy warning，未增长）。
+- `run.bat all Debug --smoke-test-seconds=120` 四组合 readiness PASS。
+- Vulkan bundled validation 与 DX12 debug layer + GPU validation 下 combined indirect/constant-buffer self-test 均 PASS，fresh process output 的 error/corruption reject pattern 为 0；DX12 仅有已知 MessageID 820 optimized-clear 性能 warning，与本 SDD 无关。
+- RenderGate PASS（report `20260713-173511-643-51952-33b92d67`）：sandbox Vulkan/DX12 SSIM 0.996278/0.996177、cross 0.999747；particles Vulkan/DX12/cross 均为 1.0；未 bless。
+- 实施基线与变基前 HEAD 的同刻 B-A-B Standard PerfGate 均 PASS、无 WARN/FAIL，heap/draw 稳定。UE 编译结束并取得 CPU/GPU 全独占后，最终 post-rebase Standard PerfGate PASS（report `20260713-183246`），四组合 Failures/Warnings 均空；Sandbox Vulkan/DX12 avg/P95 为 7.3364/9.3697ms、7.9459/10.6882ms，Editor Vulkan/DX12 为 9.5280/11.0667ms、10.0091/11.8899ms。高负载期间的 `20260713-173801` report 已作废且未纳入证据。
+- 每次临时 validation 配置均恢复 `product/config/Engine.ini` 至 SHA-256 `FF5E59BD907F3A5C0CCCFB8C1743AC472B7F68ADFD1AC8FE78AD9FE9C35AE645`、447 bytes；运行时 ImGui layout diff 已恢复，工作树 clean。
+- 真实 Editor 鼠标/键盘/面板交互按仓库职责边界留作人工验收；Agent 未自动驱动 UI，也未把 readiness smoke 冒充交互验收。
+
 ## Rollback
 
 - DX12 teardown 修复与 diagnostic transition 修复必须保持独立提交。若最终 expected-20 DX12 注入仍出现 allocator outstanding-allocation、assert、watchdog forced exit、hang 或 crash，阻断合并并 revert DX12 teardown 提交；同时撤下 constant-buffer CI flag 与“DX12 正常失败退场”spec/README 声明，不能把 forced exit 接受为基线。
@@ -245,4 +265,4 @@ GPU/RenderGate/PerfGate 与其他活动会话串行执行，避免共享 GPU 采
 
 ## Open questions
 
-- READBACK A/B 已证伪并完整恢复。新的 descriptor-cache 文件面、allocation-serial identity 与临时 bypass-cache 根因 A/B 须完成独立设计审查并再次取得用户批准后才能实施；当前 self-test 修正保持未提交，GPU/构建窗口已释放。
+- None for this SDD.
