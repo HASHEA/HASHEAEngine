@@ -933,7 +933,6 @@ namespace AshEngine
 
 		try
 		{
-			_consume_logic_input_snapshot();
 			_on_logic_startup();
 			_run_scene_presentation_update_phase();
 			debugDrawService.commit_frame();
@@ -941,6 +940,7 @@ namespace AshEngine
 			{
 				_consume_logic_input_snapshot();
 				_on_logic_update();
+				logicInputState.clear_transient_state();
 				_run_scene_presentation_update_phase();
 				debugDrawService.commit_frame();
 				if (threadingConfig.logic_thread_idle_sleep_ms > 0)
@@ -1004,7 +1004,7 @@ namespace AshEngine
 		}
 
 		std::scoped_lock<std::mutex> lock(pendingLogicInputMutex);
-		pendingLogicInputState = inputState;
+		pendingLogicInputState.merge_frame_snapshot(inputState);
 		pendingLogicInputDirty = true;
 	}
 	auto Application::_consume_logic_input_snapshot() -> void
@@ -1021,6 +1021,7 @@ namespace AshEngine
 		}
 
 		logicInputState = pendingLogicInputState;
+		pendingLogicInputState.clear_transient_state();
 		pendingLogicInputDirty = false;
 	}
 	auto Application::_get_thread_input_state() -> InputState&

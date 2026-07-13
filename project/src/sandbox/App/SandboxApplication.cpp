@@ -197,7 +197,7 @@ namespace AshSandbox
 
 	auto SandboxApplication::_tick_standard_scene_logic() -> bool
 	{
-		if (!m_standardScene.update_logic(AshEngine::Application::get_input(), get_frame_index()))
+		if (!m_standardScene.update_logic(AshEngine::Application::get_input()))
 		{
 			const std::string failure_detail = m_standardScene.get_failure_detail();
 			HLogError(

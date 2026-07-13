@@ -9,7 +9,7 @@ auto create_application() -> AshEngine::Application*
 	config.bVsync = false;
 	config.swapchainBufferCount = 3;
 	config.threading.enable_logic_thread = true;
-	config.threading.logic_thread_idle_sleep_ms = 1;
+	config.threading.logic_thread_idle_sleep_ms = 8;
 	return new AshSandbox::SandboxApplication(config);
 }
 

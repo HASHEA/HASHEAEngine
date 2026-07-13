@@ -40,7 +40,7 @@ namespace AshSandbox
 
 		auto start(AshEngine::AssetDatabase& asset_database) -> bool;
 		auto reset() -> void;
-		auto update_logic(const AshEngine::InputState& input, uint64_t frame_index) -> bool;
+		auto update_logic(const AshEngine::InputState& input) -> bool;
 
 		auto snapshot() const -> SandboxStandardSceneSnapshot;
 		auto get_load_state() const -> SandboxStandardSceneLoadState;

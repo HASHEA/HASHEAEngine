@@ -35,7 +35,7 @@ status: active
 - 日志：`LogService::instance()` 初始化后使用 `HLogInfo/Warning/Error/Trace` 宏；引擎/应用双 logger 由 `ASH_ENGINE` 宏区分。
 - 内存：所有引擎堆对象经 `Ash_New<T>(allocator, args...)` / `Ash_Delete` 分配释放；`Allocator` 为抽象接口（`eHeap/eStack/eLinear`）；默认走 `MemoryService::instance()->get_system_allocator()`。
 - 窗口：`Window::create()` 工厂 + `init(WindowConfig)`；事件用 `poll_event(WindowEvent&)` 逐个取出，类型见 `WindowEventType`（Resize/Key/Mouse/CloseRequested 等）。
-- 输入：`InputState::begin_frame()` 每帧清空瞬时状态，`set_key_state/set_mouse_button_state` 由窗口事件驱动；消费方查询 down/pressed/released。
+- 输入：`InputState::begin_frame()` / `clear_transient_state()` 清空 pressed/released/scroll，保留 down 与鼠标位置；`merge_frame_snapshot()` 以最新持续状态、逐项 OR 边沿、累加 scroll 的规则合并尚未消费帧。`set_key_state/set_mouse_button_state` 由窗口事件驱动；消费方查询 down/pressed/released。
 - 时间：`time_service_init/shutdown` 启停一次，`time_now()` 返回 tick，配套换算函数。
 - 线程：`initialize_threading(EngineThreadingConfig)`；`register_current_thread_role` + `is_in_render/logic/worker_thread` 判定；跨线程投递用 `enqueue_render_command` / `pump_render_commands` / `flush_render_commands`；后台任务用 `dispatch_background_task`。
 - 配置：`IniConfig::load` + `has_value/get_string/get_bool/try_get_bool`；路径经 `resolve_runtime_config_path` 解析。
@@ -63,3 +63,4 @@ status: active
 - `docs/sdd/SDD-2026-07-08-doctest-unit-test-layer.md`：引入 doctest 单测工程；`hmemory.h` 的 `memory_copy` 与 `MemoryService` 补 `ASH_API` 导出（供 Tests.exe 跨 DLL 链接）。
 - `docs/sdd/SDD-2026-07-08-selftest-base-migration.md`：EngineSelfTests Base 域 9 用例迁出 doctest（`tests/Base/hassert|hmemory|hfile_tests.cpp`）；`HeapAllocator/StackAllocator/LinearAllocator` 与 hfile 四函数补 `ASH_API`；`MemoryService` 新增 `is_initialized()`，TestMain 进程级 init/shutdown 服务。
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：自动化契约测试继续由 Tests.exe 的 legacy bridge 覆盖。
+- [SDD-2026-07-12-logic-input-consumption](../../sdd/SDD-2026-07-12-logic-input-consumption.md)：定义跨线程输入快照的批次合并与一次性瞬态消费语义。
