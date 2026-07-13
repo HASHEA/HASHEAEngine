@@ -1676,6 +1676,15 @@ namespace RHI
 
 		//unload cache
 		_unload_cache();
+		{
+			std::vector<PendingBufferUpload> discarded_buffer_uploads{};
+			std::vector<PendingTextureUpload> discarded_texture_uploads{};
+			{
+				std::scoped_lock<std::mutex> lock(pendingUploadMutex);
+				discarded_buffer_uploads.swap(pendingBufferUploads);
+				discarded_texture_uploads.swap(pendingTextureUploads);
+			}
+		}
 		// App-level resource destructors enqueue per-frame deletion work while the
 		// device is idle during shutdown. Drain that work before backend-owned
 		// pools, such as the staging allocator, are torn down.

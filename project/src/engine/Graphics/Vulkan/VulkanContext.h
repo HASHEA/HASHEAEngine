@@ -164,7 +164,8 @@ namespace RHI
 
 		inline auto get_current_frame_deletion_queue_internal() -> DelayCommandQueue&
 		{
-			return delayed_deletion_queues[currentFrame];
+			const uint32_t deletion_queue_index = currentFrame == UINT32_MAX ? 0u : currentFrame;
+			return delayed_deletion_queues[deletion_queue_index];
 		}
 
 		inline auto get_current_frame_internal()
