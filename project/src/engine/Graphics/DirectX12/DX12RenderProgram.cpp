@@ -254,7 +254,7 @@ namespace RHI
 				return false;
 			}
 
-			const uint32_t providedCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
+			const uint32_t providedCount = bind.isArray ? static_cast<uint32_t>(bind.descriptorHandles.size()) : 1u;
 			if (providedCount == 0 || providedCount > bindingInfo.descriptorCount)
 			{
 				HLogError(
@@ -284,7 +284,7 @@ namespace RHI
 			{
 				D3D12_DESCRIPTOR_HEAP_TYPE heapType = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 				uint32_t descriptorCount = 0;
-				std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> sourceHandles{};
+				std::vector<DX12DescriptorHandle> sourceHandles{};
 			};
 
 			std::unordered_map<uint32_t, PendingDescriptorTable> pendingTables{};
@@ -297,7 +297,7 @@ namespace RHI
 				}
 
 				const DX12ProgramBindingInfo& bindingInfo = bindingIt->second;
-				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
+				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.descriptorHandles.size()) : 1u;
 				PendingDescriptorTable& table = pendingTables[bindingInfo.rootIndex];
 				table.heapType = descriptor_heap_type_for_range(bindingInfo.rangeType);
 				table.descriptorCount = std::max(
@@ -320,18 +320,18 @@ namespace RHI
 				}
 
 				const DX12ProgramBindingInfo& bindingInfo = bindingIt->second;
-				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.cpuHandles.size()) : 1u;
+				const uint32_t descriptorCount = bind.isArray ? static_cast<uint32_t>(bind.descriptorHandles.size()) : 1u;
 				PendingDescriptorTable& table = pendingTables[bindingInfo.rootIndex];
 				if (bind.isArray)
 				{
 					std::copy(
-						bind.cpuHandles.begin(),
-						bind.cpuHandles.end(),
+						bind.descriptorHandles.begin(),
+						bind.descriptorHandles.end(),
 						table.sourceHandles.begin() + bindingInfo.descriptorOffset);
 				}
 				else
 				{
-					table.sourceHandles[bindingInfo.descriptorOffset] = bind.cpuHandle;
+					table.sourceHandles[bindingInfo.descriptorOffset] = bind.descriptorHandle;
 				}
 			}
 

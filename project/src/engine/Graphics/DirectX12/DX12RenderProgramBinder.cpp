@@ -3,6 +3,7 @@
 #include "DX12TextureView.h"
 #include "DX12Sampler.h"
 #include "DX12DescriptorHeap.h"
+#include <utility>
 
 namespace RHI
 {
@@ -27,8 +28,8 @@ namespace RHI
 		DX12PendingBind bind;
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV;
-		bind.cpuHandle = dx12View->get_descriptor_handle().cpuHandle;
-		m_pendingBinds.push_back(bind);
+		bind.descriptorHandle = dx12View->get_descriptor_handle();
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -38,8 +39,8 @@ namespace RHI
 		DX12PendingBind bind;
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV;
-		bind.cpuHandle = dx12View->get_descriptor_handle().cpuHandle;
-		m_pendingBinds.push_back(bind);
+		bind.descriptorHandle = dx12View->get_descriptor_handle();
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -49,12 +50,13 @@ namespace RHI
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV;
 		bind.isArray = true;
+		bind.descriptorHandles.reserve(uavs.size());
 		for (auto& uav : uavs)
 		{
 			auto* dx12View = static_cast<DX12BufferView*>(uav.get());
-			bind.cpuHandles.push_back(dx12View->get_descriptor_handle().cpuHandle);
+			bind.descriptorHandles.push_back(dx12View->get_descriptor_handle());
 		}
-		m_pendingBinds.push_back(bind);
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -64,12 +66,13 @@ namespace RHI
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_UAV;
 		bind.isArray = true;
+		bind.descriptorHandles.reserve(uavs.size());
 		for (auto& uav : uavs)
 		{
 			auto* dx12View = static_cast<DX12TextureView*>(uav.get());
-			bind.cpuHandles.push_back(dx12View->get_descriptor_handle().cpuHandle);
+			bind.descriptorHandles.push_back(dx12View->get_descriptor_handle());
 		}
-		m_pendingBinds.push_back(bind);
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -79,8 +82,8 @@ namespace RHI
 		DX12PendingBind bind;
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV;
-		bind.cpuHandle = dx12View->get_descriptor_handle().cpuHandle;
-		m_pendingBinds.push_back(bind);
+		bind.descriptorHandle = dx12View->get_descriptor_handle();
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -90,8 +93,8 @@ namespace RHI
 		DX12PendingBind bind;
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV;
-		bind.cpuHandle = dx12View->get_descriptor_handle().cpuHandle;
-		m_pendingBinds.push_back(bind);
+		bind.descriptorHandle = dx12View->get_descriptor_handle();
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -101,12 +104,13 @@ namespace RHI
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV;
 		bind.isArray = true;
+		bind.descriptorHandles.reserve(srvs.size());
 		for (auto& srv : srvs)
 		{
 			auto* dx12View = static_cast<DX12BufferView*>(srv.get());
-			bind.cpuHandles.push_back(dx12View->get_descriptor_handle().cpuHandle);
+			bind.descriptorHandles.push_back(dx12View->get_descriptor_handle());
 		}
-		m_pendingBinds.push_back(bind);
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -116,12 +120,13 @@ namespace RHI
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SRV;
 		bind.isArray = true;
+		bind.descriptorHandles.reserve(srvs.size());
 		for (auto& srv : srvs)
 		{
 			auto* dx12View = static_cast<DX12TextureView*>(srv.get());
-			bind.cpuHandles.push_back(dx12View->get_descriptor_handle().cpuHandle);
+			bind.descriptorHandles.push_back(dx12View->get_descriptor_handle());
 		}
-		m_pendingBinds.push_back(bind);
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -131,8 +136,8 @@ namespace RHI
 		DX12PendingBind bind;
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_CBV;
-		bind.cpuHandle = dx12View->get_descriptor_handle().cpuHandle;
-		m_pendingBinds.push_back(bind);
+		bind.descriptorHandle = dx12View->get_descriptor_handle();
+		m_pendingBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -142,8 +147,8 @@ namespace RHI
 		DX12PendingBind bind;
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SAMPLER;
-		bind.cpuHandle = dx12Sampler->get_descriptor_handle().cpuHandle;
-		m_pendingSamplerBinds.push_back(bind);
+		bind.descriptorHandle = dx12Sampler->get_descriptor_handle();
+		m_pendingSamplerBinds.push_back(std::move(bind));
 		return *this;
 	}
 
@@ -153,12 +158,13 @@ namespace RHI
 		bind.name = name;
 		bind.viewType = AshResourceViewType::ASH_RESOURCE_VIEW_TYPE_SAMPLER;
 		bind.isArray = true;
+		bind.descriptorHandles.reserve(samplers.size());
 		for (auto& sampler : samplers)
 		{
 			auto* dx12Sampler = static_cast<DX12Sampler*>(sampler.get());
-			bind.cpuHandles.push_back(dx12Sampler->get_descriptor_handle().cpuHandle);
+			bind.descriptorHandles.push_back(dx12Sampler->get_descriptor_handle());
 		}
-		m_pendingSamplerBinds.push_back(bind);
+		m_pendingSamplerBinds.push_back(std::move(bind));
 		return *this;
 	}
 
