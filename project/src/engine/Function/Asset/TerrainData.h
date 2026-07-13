@@ -99,6 +99,33 @@ namespace AshEngine
 		std::array<float, 9> lod_errors{};
 	};
 
+	struct TerrainSparseHeightBlock
+	{
+		TerrainComponentCoord owner{};
+		TerrainSampleRect changed_rect{};
+		std::vector<float> values{};
+		std::vector<float> coverage{};
+	};
+
+	struct TerrainSparseWeightBlock
+	{
+		TerrainComponentCoord owner{};
+		TerrainSampleRect changed_rect{};
+		std::vector<std::array<float, k_terrain_material_layer_count>> values{};
+		std::vector<float> coverage{};
+	};
+
+	struct TerrainEditLayer
+	{
+		TerrainLayerId id{};
+		std::string name{};
+		bool visible = true;
+		float strength = 1.0f;
+		TerrainHeightBlendMode height_blend_mode = TerrainHeightBlendMode::Additive;
+		std::vector<TerrainSparseHeightBlock> height_blocks{};
+		std::vector<TerrainSparseWeightBlock> weight_blocks{};
+	};
+
 	struct TerrainAssetSnapshot
 	{
 		TerrainAssetId asset_id = 0;
@@ -111,6 +138,7 @@ namespace AshEngine
 		bool failed = false;
 		std::string failure_detail{};
 		std::shared_ptr<const std::vector<uint16_t>> base_heights{};
+		std::shared_ptr<const std::vector<TerrainEditLayer>> edit_layers{};
 		std::vector<std::shared_ptr<const TerrainComponentSnapshot>> components{};
 	};
 
@@ -119,6 +147,23 @@ namespace AshEngine
 		TerrainComponentCoord coord{};
 		uint64_t content_generation = 0;
 		std::shared_ptr<const TerrainComponentSnapshot> component{};
+	};
+
+	// Trusted mutable editing state. Construct it with make_terrain_working_set(),
+	// then mutate scalar/block data only through brush/patch operations that preserve
+	// finite values, block shapes, ownership, and unique layer IDs.
+	struct TerrainWorkingSet
+	{
+		TerrainAssetId asset_id = 0;
+		std::filesystem::path source_path{};
+		TerrainGridLayout layout{};
+		TerrainHeightMapping height_mapping{};
+		uint64_t content_generation = 0;
+		uint64_t residency_revision = 0;
+		std::vector<uint16_t> base_heights{};
+		std::array<TerrainMaterialLayerDesc, k_terrain_material_layer_count> material_layers{};
+		std::vector<TerrainEditLayer> edit_layers{};
+		std::vector<std::shared_ptr<const TerrainComponentSnapshot>> components{};
 	};
 
 	ASH_API auto make_default_terrain_grid_layout() -> TerrainGridLayout;

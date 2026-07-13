@@ -314,12 +314,14 @@ namespace AshEngine
 			auto mutable_base_heights = std::make_shared<std::vector<uint16_t>>(
 				static_cast<size_t>(global_sample_count),
 				encoded_height);
+			auto mutable_edit_layers = std::make_shared<std::vector<TerrainEditLayer>>();
 			auto mutable_snapshot = std::make_shared<TerrainAssetSnapshot>();
 			mutable_snapshot->asset_id = asset_id;
 			mutable_snapshot->layout = layout;
 			mutable_snapshot->height_mapping = mapping;
 			mutable_snapshot->content_generation = 1u;
 			mutable_snapshot->base_heights = mutable_base_heights;
+			mutable_snapshot->edit_layers = mutable_edit_layers;
 
 			const size_t component_count =
 				static_cast<size_t>(layout.component_count_x) * layout.component_count_z;
