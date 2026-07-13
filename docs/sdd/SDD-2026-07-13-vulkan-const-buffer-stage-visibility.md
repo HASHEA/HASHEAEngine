@@ -2,7 +2,7 @@
 
 ## Status
 
-Review
+Approved
 
 ## Context
 
@@ -214,4 +214,4 @@ GPU/RenderGate/PerfGate 与其他活动会话串行执行，避免共享 GPU 采
 
 ## Open questions
 
-- Task 4 质量审查把文件面从已批准的 Vulkan teardown 扩到 `DirectX12/DX12Context.cpp` 与既有 `RHIIndirectSelfTest.cpp`。修订设计须完成独立审查并取得用户重新批准后，才能修改这些新增生产路径。
+- 无阻塞项。2026-07-13 用户已重新批准包含 `DirectX12/DX12Context.cpp` 与 `RHIIndirectSelfTest.cpp` 的修订设计；实施仍须按本 SDD 的 TDD、双后端故障注入、validation 与独立审查门禁执行。
