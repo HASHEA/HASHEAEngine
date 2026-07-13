@@ -340,10 +340,14 @@ namespace AshEngine
 		}
 		if (!recording_failure && !command_buffer->cmd_transition_resource_state({
 			{ compute_constants, RHI::AshResourceState::ConstBuffer },
-			{ fragment_constants, RHI::AshResourceState::ConstBuffer },
-			{ computed_result, RHI::AshResourceState::UAVCompute } }))
+			{ fragment_constants, RHI::AshResourceState::ConstBuffer } }))
 		{
-			note_recording_failure("constant-buffer/UAV transition failed");
+			note_recording_failure("constant-buffer transition batch failed");
+		}
+		if (!recording_failure && !command_buffer->cmd_transition_resource_state(
+			{ computed_result, RHI::AshResourceState::UAVCompute }))
+		{
+			note_recording_failure("computed-result to UAVCompute transition failed");
 		}
 		if (!recording_failure &&
 			!compute_program->apply(make_command_buffer_ref(command_buffer)))
@@ -365,6 +369,11 @@ namespace AshEngine
 		}
 
 		bool render_pass_begun = false;
+		if (!recording_failure && !command_buffer->cmd_transition_resource_state(
+			{ render_target, RHI::AshResourceState::RTV }))
+		{
+			note_recording_failure("render-target to RTV transition failed");
+		}
 		if (!recording_failure)
 		{
 			command_buffer->cmd_begin_render_pass(framebuffer, "RHIConstantBufferSelfTest");
@@ -422,6 +431,14 @@ namespace AshEngine
 		}
 		if (command_buffer->has_error())
 		{
+			if (recording_failure)
+			{
+				HLogError(
+					"[RHISelfTest] constant buffer visibility FAIL: {}; command recording error: {}",
+					recording_failure,
+					command_buffer->get_last_error());
+				return false;
+			}
 			HLogError(
 				"[RHISelfTest] constant buffer visibility FAIL: command recording error: {}",
 				command_buffer->get_last_error());
@@ -436,7 +453,6 @@ namespace AshEngine
 		submit_info.cmds = command_buffer;
 		submit_info.cmdCount = 1u;
 		context->submit_immediately(submit_info);
-		context->wait_idle();
 
 		const uint8_t* mapped = readback->get_mapped_data();
 		if (!mapped)

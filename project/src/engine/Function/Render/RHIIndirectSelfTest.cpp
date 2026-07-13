@@ -224,6 +224,33 @@ namespace AshEngine
 		// Stage 3: both indirect draw variants consume GPU-written draw args (additive blend).
 		cb->cmd_transition_resource_state(
 			{ draw_args, RHI::AshResourceState::UAVCompute, RHI::AshResourceState::IndirectArgs });
+		if (cb->has_error() || cb->get_state() != RHI::ASH_Recording)
+		{
+			if (cb->get_state() == RHI::ASH_Recording)
+			{
+				cb->end_record();
+			}
+			if (cb->has_error())
+			{
+				HLogError(
+					"[RHISelfTest] command recording error before render-target transition: {}",
+					cb->get_last_error());
+				return fail("command recording reported an error before render-target transition");
+			}
+			return fail("command buffer left recording state before render-target transition");
+		}
+		if (!cb->cmd_transition_resource_state({ render_target, RHI::AshResourceState::RTV }))
+		{
+			if (cb->get_state() == RHI::ASH_Recording)
+			{
+				cb->end_record();
+			}
+			if (cb->has_error())
+			{
+				HLogError("[RHISelfTest] command recording error: {}", cb->get_last_error());
+			}
+			return fail("render-target to RTV transition failed");
+		}
 		cb->cmd_begin_render_pass(framebuffer, "RHISelfTestIndirect");
 		draw_program->apply(make_command_buffer_ref(cb));
 		RHI::Viewport viewport{};
