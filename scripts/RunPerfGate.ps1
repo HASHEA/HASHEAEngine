@@ -24,29 +24,64 @@ function Get-RepoRoot {
     return $path.Path
 }
 
-function Quote-Argument {
-    param([string]$Value)
+function ConvertTo-WindowsCrtArgument {
+    param([AllowNull()][string]$Value)
 
-    if ($null -eq $Value) {
+    if ([string]::IsNullOrEmpty($Value)) {
         return '""'
     }
-    if ($Value.Length -eq 0) {
-        return '""'
+    if ($Value -notmatch '[\s"]') {
+        return $Value
     }
-    if ($Value -match '[\s"]') {
-        return '"' + ($Value -replace '"', '\"') + '"'
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashCount = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            ++$backslashCount
+            continue
+        }
+
+        if ($character -eq '"') {
+            for ($index = 0; $index -lt (2 * $backslashCount + 1); ++$index) {
+                [void]$builder.Append('\')
+            }
+            [void]$builder.Append('"')
+            $backslashCount = 0
+            continue
+        }
+
+        for ($index = 0; $index -lt $backslashCount; ++$index) {
+            [void]$builder.Append('\')
+        }
+        $backslashCount = 0
+        [void]$builder.Append($character)
     }
-    return $Value
+
+    for ($index = 0; $index -lt (2 * $backslashCount); ++$index) {
+        [void]$builder.Append('\')
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Join-WindowsCrtArguments {
+    param([AllowEmptyCollection()][string[]]$Arguments)
+
+    return (@($Arguments | ForEach-Object { ConvertTo-WindowsCrtArgument $_ }) -join " ")
+}
+
+function Quote-Argument {
+    param([AllowNull()][string]$Value)
+
+    return ConvertTo-WindowsCrtArgument $Value
 }
 
 function Join-Arguments {
-    param([string[]]$Arguments)
+    param([AllowEmptyCollection()][string[]]$Arguments)
 
-    $quoted = @()
-    foreach ($argument in $Arguments) {
-        $quoted += Quote-Argument $argument
-    }
-    return ($quoted -join " ")
+    return Join-WindowsCrtArguments $Arguments
 }
 
 function Set-SanitizedPathEnvironment {
@@ -61,6 +96,53 @@ function Set-SanitizedPathEnvironment {
         $ProcessStartInfo.EnvironmentVariables[[string]$entry.Key] = [string]$entry.Value
     }
     $ProcessStartInfo.EnvironmentVariables["Path"] = $pathValue
+}
+
+function New-GateProcessStartInfo {
+    param(
+        [string]$Executable,
+        [AllowEmptyCollection()][string[]]$Arguments,
+        [string]$WorkingDirectory
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $Executable
+    $startInfo.Arguments = Join-WindowsCrtArguments $Arguments
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    Set-SanitizedPathEnvironment $startInfo
+    return $startInfo
+}
+
+function Complete-GateProcessOutput {
+    param(
+        [System.Threading.Tasks.Task]$StandardOutputTask,
+        [System.Threading.Tasks.Task]$StandardErrorTask,
+        [int]$TimeoutMilliseconds
+    )
+
+    $tasks = [System.Threading.Tasks.Task[]]@($StandardOutputTask, $StandardErrorTask)
+    $completed = $false
+    $failure = $null
+    try {
+        $completed = [System.Threading.Tasks.Task]::WaitAll($tasks, [Math]::Max(0, $TimeoutMilliseconds))
+    }
+    catch {
+        $failure = $_.Exception.Message
+    }
+
+    $ranToCompletion = $completed -and
+        $StandardOutputTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion -and
+        $StandardErrorTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion
+    return [PSCustomObject]@{
+        completed = $ranToCompletion
+        standard_output = if ($ranToCompletion) { [string]$StandardOutputTask.Result } else { "" }
+        standard_error = if ($ranToCompletion) { [string]$StandardErrorTask.Result } else { "" }
+        failure = $failure
+    }
 }
 
 function Invoke-BatchCommand {
@@ -109,6 +191,12 @@ function New-RunRecord {
         process_error_log = $ProcessErrorLogPath
         engine_logs = @()
         exit_code = $null
+        root_exited = $false
+        tree_termination_confirmed = $false
+        job_kill_on_close = $false
+        job_assigned = $false
+        job_active_processes_after_cleanup = $null
+        job_cleanup_confirmed = $false
         status = "NOT_RUN"
         failures = @()
         warnings = @()
@@ -194,6 +282,57 @@ function Assert-PerfGateOptions {
     }
 }
 
+function Assert-PerfGateProfileMatrix {
+    param([object]$ProfileConfig)
+
+    $targets = @(Get-PerfGateObjectProperty $ProfileConfig "targets")
+    if ($targets.Count -eq 0) {
+        throw "Perf gate profile must declare at least one target."
+    }
+
+    $seenTargets = @{}
+    foreach ($targetConfig in $targets) {
+        $targetName = Get-PerfGateTargetName $targetConfig
+        $targetKey = $targetName.ToLowerInvariant()
+        if ($targetKey -notin @("sandbox", "editor")) {
+            throw "Unsupported perf gate target '$targetName'."
+        }
+        if ($seenTargets.ContainsKey($targetKey)) {
+            throw "Duplicate perf gate target '$targetName'."
+        }
+        $seenTargets[$targetKey] = $true
+
+        $backends = @(Get-PerfGateObjectProperty $targetConfig "backends")
+        if ($backends.Count -eq 0) {
+            throw "Perf gate target '$targetName' must declare at least one backend."
+        }
+
+        $seenBackends = @{}
+        foreach ($backendValue in $backends) {
+            $backend = [string]$backendValue
+            if ([string]::IsNullOrWhiteSpace($backend)) {
+                throw "Perf gate target '$targetName' contains a blank backend."
+            }
+            $backendKey = $backend.ToLowerInvariant()
+            if ($backendKey -notin @("vulkan", "dx12")) {
+                throw "Unsupported perf gate backend '$backend'."
+            }
+            if ($seenBackends.ContainsKey($backendKey)) {
+                throw "Duplicate perf gate backend '$backend' for target '$targetName'."
+            }
+            $seenBackends[$backendKey] = $true
+        }
+    }
+}
+
+function Assert-PerfGateRunRecords {
+    param([AllowEmptyCollection()][object[]]$Records)
+
+    if (@($Records).Count -eq 0) {
+        throw "Perf gate profile must generate at least one run."
+    }
+}
+
 function Get-PerfGateBuildCommands {
     param(
         [object]$ProfileConfig,
@@ -232,6 +371,8 @@ function New-PerfGateRunPlan {
         [ValidateSet("Profile", "Off")]
         [string]$TelemetryMode
     )
+
+    Assert-PerfGateProfileMatrix -ProfileConfig $ProfileConfig
 
     $warmupSeconds = [double]$ProfileConfig.warmup_seconds
     $sampleSeconds = [double]$ProfileConfig.sample_seconds
@@ -353,6 +494,42 @@ function Get-ProfileProperty {
         return $null
     }
     return $property.Value
+}
+
+function ConvertTo-PerfGateFiniteDouble {
+    param([AllowNull()][object]$Value)
+
+    $isJsonNumber = $Value -is [System.Int32] -or
+        $Value -is [System.Int64] -or
+        $Value -is [System.Double] -or
+        $Value -is [System.Decimal]
+    if (-not $isJsonNumber) {
+        return $null
+    }
+
+    try {
+        $converted = [double]$Value
+    }
+    catch {
+        return $null
+    }
+    if ([double]::IsNaN($converted) -or [double]::IsInfinity($converted)) {
+        return $null
+    }
+    return $converted
+}
+
+function ConvertTo-PerfGateNonNegativeInt64 {
+    param([AllowNull()][object]$Value)
+
+    if ($Value -isnot [System.Int32] -and $Value -isnot [System.Int64]) {
+        return $null
+    }
+    $converted = [int64]$Value
+    if ($converted -lt 0) {
+        return $null
+    }
+    return $converted
 }
 
 function Ensure-ObjectProperty {
@@ -535,8 +712,9 @@ function New-BaselineEntry {
         foreach ($metricName in @($Record.required_gpu_metrics)) {
             $metric = Get-ProfileProperty $Record.gpu_metric_summaries ([string]$metricName)
             if ($null -eq $metric) {
-                continue
+                throw "Cannot bless an invalid required GPU metric '$metricName': metric was missing."
             }
+            $coverage = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $metric "coverage")
             $avg = Get-ProfileProperty $metric "avg"
             if ($null -eq $avg) {
                 $avg = Get-ProfileProperty $metric "avg_ms"
@@ -545,12 +723,16 @@ function New-BaselineEntry {
             if ($null -eq $p95) {
                 $p95 = Get-ProfileProperty $metric "p95_ms"
             }
-            if ($null -eq $avg -or $null -eq $p95) {
-                continue
+            $validatedAverage = ConvertTo-PerfGateFiniteDouble $avg
+            $validatedP95 = ConvertTo-PerfGateFiniteDouble $p95
+            if ($null -eq $coverage -or $coverage -lt 0.0 -or $coverage -gt 1.0 -or
+                $null -eq $validatedAverage -or $validatedAverage -lt 0.0 -or
+                $null -eq $validatedP95 -or $validatedP95 -lt 0.0) {
+                throw "Cannot bless an invalid required GPU metric '$metricName': coverage, avg, and p95 must be finite non-negative numbers and coverage must be within [0, 1]."
             }
             $gpuMetrics | Add-Member -MemberType NoteProperty -Name ([string]$metricName) -Value ([PSCustomObject][ordered]@{
-                avg = [Math]::Round([double]$avg, 6)
-                p95 = [Math]::Round([double]$p95, 6)
+                avg = [Math]::Round($validatedAverage, 6)
+                p95 = [Math]::Round($validatedP95, 6)
             })
         }
         if (@($gpuMetrics.PSObject.Properties).Count -gt 0) {
@@ -569,6 +751,18 @@ function Update-BaselinesFromRecords {
         [object[]]$Records,
         [string]$ReportRoot
     )
+
+    Assert-PerfGateRunRecords -Records $Records
+    foreach ($record in $Records) {
+        $terminationProperty = $record.PSObject.Properties["tree_termination_confirmed"]
+        if ($null -ne $terminationProperty -and -not [bool]$terminationProperty.Value) {
+            throw "Cannot bless a baseline after unconfirmed process-tree termination."
+        }
+        $jobCleanupProperty = $record.PSObject.Properties["job_cleanup_confirmed"]
+        if ($null -ne $jobCleanupProperty -and -not [bool]$jobCleanupProperty.Value) {
+            throw "Cannot bless a baseline after unconfirmed Job Object cleanup."
+        }
+    }
 
     $baselinesNode = Ensure-ObjectProperty $Baseline "baselines"
     $profileNode = Ensure-ObjectProperty $baselinesNode $Profile
@@ -728,63 +922,477 @@ function Test-LogForDiagnostics {
     }
 }
 
+function Initialize-GateJobInterop {
+    if ($null -ne ("AshPerfGate.JobObject" -as [type])) {
+        return
+    }
+
+    # This immediate assignment contract is limited to trusted Editor/Sandbox processes on Windows 10/11.
+    # If launch-time spawning or breakaway is introduced, replace Process.Start with native suspended
+    # CreateProcess plus PROC_THREAD_ATTRIBUTE_JOB_LIST before resuming the primary thread.
+    $source = @'
+using System;
+using System.ComponentModel;
+using System.Runtime.ConstrainedExecution;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace AshPerfGate
+{
+    internal sealed class SafeJobHandle : SafeHandleZeroOrMinusOneIsInvalid
+    {
+        internal bool ReleaseSucceeded { get; private set; }
+        internal int ReleaseError { get; private set; }
+
+        private SafeJobHandle() : base(true) { }
+
+        internal SafeJobHandle(IntPtr handle) : base(true)
+        {
+            SetHandle(handle);
+            ReleaseSucceeded = true;
+        }
+
+        [ReliabilityContract(Consistency.WillNotCorruptState, Cer.Success)]
+        protected override bool ReleaseHandle()
+        {
+            ReleaseSucceeded = NativeMethods.CloseHandle(handle);
+            if (!ReleaseSucceeded)
+            {
+                ReleaseError = Marshal.GetLastWin32Error();
+            }
+            return ReleaseSucceeded;
+        }
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct IO_COUNTERS
+    {
+        internal UInt64 ReadOperationCount;
+        internal UInt64 WriteOperationCount;
+        internal UInt64 OtherOperationCount;
+        internal UInt64 ReadTransferCount;
+        internal UInt64 WriteTransferCount;
+        internal UInt64 OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        internal Int64 PerProcessUserTimeLimit;
+        internal Int64 PerJobUserTimeLimit;
+        internal UInt32 LimitFlags;
+        internal UIntPtr MinimumWorkingSetSize;
+        internal UIntPtr MaximumWorkingSetSize;
+        internal UInt32 ActiveProcessLimit;
+        internal UIntPtr Affinity;
+        internal UInt32 PriorityClass;
+        internal UInt32 SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        internal JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        internal IO_COUNTERS IoInfo;
+        internal UIntPtr ProcessMemoryLimit;
+        internal UIntPtr JobMemoryLimit;
+        internal UIntPtr PeakProcessMemoryUsed;
+        internal UIntPtr PeakJobMemoryUsed;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+    {
+        internal Int64 TotalUserTime;
+        internal Int64 TotalKernelTime;
+        internal Int64 ThisPeriodTotalUserTime;
+        internal Int64 ThisPeriodTotalKernelTime;
+        internal UInt32 TotalPageFaultCount;
+        internal UInt32 TotalProcesses;
+        internal UInt32 ActiveProcesses;
+        internal UInt32 TotalTerminatedProcesses;
+    }
+
+    internal static class NativeMethods
+    {
+        internal const UInt32 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+        internal const Int32 JobObjectBasicAccountingInformation = 1;
+        internal const Int32 JobObjectExtendedLimitInformation = 9;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern IntPtr CreateJobObjectW(IntPtr securityAttributes, string name);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetInformationJobObject(
+            SafeJobHandle job,
+            Int32 informationClass,
+            ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION information,
+            UInt32 informationLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool AssignProcessToJobObject(SafeJobHandle job, IntPtr processHandle);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool TerminateJobObject(SafeJobHandle job, UInt32 exitCode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool QueryInformationJobObject(
+            SafeJobHandle job,
+            Int32 informationClass,
+            out JOBOBJECT_BASIC_ACCOUNTING_INFORMATION information,
+            UInt32 informationLength,
+            IntPtr returnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool CloseHandle(IntPtr handle);
+    }
+
+    public sealed class JobObject : IDisposable
+    {
+        private SafeJobHandle handle;
+        private bool closed;
+
+        public bool KillOnJobCloseEnabled { get; private set; }
+
+        public JobObject()
+        {
+            IntPtr rawHandle = NativeMethods.CreateJobObjectW(IntPtr.Zero, null);
+            if (rawHandle == IntPtr.Zero || rawHandle == new IntPtr(-1))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateJobObjectW failed.");
+            }
+
+            handle = new SafeJobHandle(rawHandle);
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+            limits.BasicLimitInformation.LimitFlags = NativeMethods.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if (!NativeMethods.SetInformationJobObject(
+                handle,
+                NativeMethods.JobObjectExtendedLimitInformation,
+                ref limits,
+                (UInt32)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))))
+            {
+                int error = Marshal.GetLastWin32Error();
+                handle.Dispose();
+                throw new Win32Exception(error, "SetInformationJobObject(KILL_ON_JOB_CLOSE) failed.");
+            }
+            KillOnJobCloseEnabled = true;
+        }
+
+        public void Assign(IntPtr processHandle)
+        {
+            EnsureOpen();
+            if (!NativeMethods.AssignProcessToJobObject(handle, processHandle))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "AssignProcessToJobObject failed.");
+            }
+        }
+
+        public void Terminate(UInt32 exitCode)
+        {
+            EnsureOpen();
+            if (!NativeMethods.TerminateJobObject(handle, exitCode))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "TerminateJobObject failed.");
+            }
+        }
+
+        public UInt32 QueryActiveProcesses()
+        {
+            EnsureOpen();
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+            if (!NativeMethods.QueryInformationJobObject(
+                handle,
+                NativeMethods.JobObjectBasicAccountingInformation,
+                out accounting,
+                (UInt32)Marshal.SizeOf(typeof(JOBOBJECT_BASIC_ACCOUNTING_INFORMATION)),
+                IntPtr.Zero))
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "QueryInformationJobObject failed.");
+            }
+            return accounting.ActiveProcesses;
+        }
+
+        public void Close()
+        {
+            if (closed)
+            {
+                return;
+            }
+            closed = true;
+            SafeJobHandle closingHandle = handle;
+            handle = null;
+            closingHandle.Dispose();
+            if (!closingHandle.ReleaseSucceeded)
+            {
+                throw new Win32Exception(closingHandle.ReleaseError, "CloseHandle(job) failed.");
+            }
+        }
+
+        public void Dispose()
+        {
+            Close();
+        }
+
+        private void EnsureOpen()
+        {
+            if (closed || handle == null || handle.IsInvalid || handle.IsClosed)
+            {
+                throw new ObjectDisposedException("JobObject");
+            }
+        }
+    }
+}
+'@
+    Add-Type -TypeDefinition $source -Language CSharp -ErrorAction Stop
+}
+
+function New-GateJobObject {
+    Initialize-GateJobInterop
+    return New-Object AshPerfGate.JobObject
+}
+
+function Complete-GateJob {
+    param(
+        [object]$Job,
+        [System.Diagnostics.Process]$Process,
+        [int]$TimeoutMilliseconds
+    )
+
+    $errors = @()
+    $terminateSucceeded = $false
+    $querySucceeded = $false
+    $rootExited = $false
+    $closeSucceeded = $false
+    $activeProcesses = $null
+    $deadline = [datetime]::UtcNow.AddMilliseconds([Math]::Max(1, $TimeoutMilliseconds))
+
+    try {
+        try {
+            $Job.Terminate([uint32]1)
+            $terminateSucceeded = $true
+        }
+        catch {
+            $errors += "TerminateJobObject failed: $($_.Exception.Message)"
+        }
+
+        if ($terminateSucceeded) {
+            do {
+                try {
+                    $activeProcesses = [uint32]$Job.QueryActiveProcesses()
+                    $querySucceeded = $true
+                }
+                catch {
+                    $errors += "QueryInformationJobObject failed: $($_.Exception.Message)"
+                    $querySucceeded = $false
+                    break
+                }
+                if ($activeProcesses -eq 0) {
+                    break
+                }
+                $remaining = [int][Math]::Max(0, ($deadline - [datetime]::UtcNow).TotalMilliseconds)
+                if ($remaining -le 0) {
+                    break
+                }
+                Start-Sleep -Milliseconds ([Math]::Min(10, $remaining))
+            } while ([datetime]::UtcNow -lt $deadline)
+        }
+
+        $remainingForRoot = [int][Math]::Max(0, ($deadline - [datetime]::UtcNow).TotalMilliseconds)
+        try {
+            $rootExited = $Process.HasExited -or ($remainingForRoot -gt 0 -and $Process.WaitForExit($remainingForRoot))
+        }
+        catch {
+            $errors += "Root process exit confirmation failed: $($_.Exception.Message)"
+        }
+    }
+    finally {
+        try {
+            $Job.Close()
+            $closeSucceeded = $true
+        }
+        catch {
+            $errors += "CloseHandle(job) failed: $($_.Exception.Message)"
+        }
+    }
+
+    if (-not $terminateSucceeded -or -not $querySucceeded -or $activeProcesses -ne 0 -or -not $rootExited -or -not $closeSucceeded) {
+        if ($querySucceeded -and $activeProcesses -ne 0) {
+            $errors += "Job Object still reported $activeProcesses active process(es) at the cleanup deadline"
+        }
+    }
+    return [PSCustomObject]@{
+        confirmed = $terminateSucceeded -and $querySucceeded -and $activeProcesses -eq 0 -and $rootExited -and $closeSucceeded
+        root_exited = $rootExited
+        active_processes = $activeProcesses
+        close_attempted = $true
+        errors = $errors
+    }
+}
+
+function Set-RemainingRunRecordsAborted {
+    param(
+        [object[]]$Records,
+        [int]$StartIndex,
+        [string]$Reason
+    )
+
+    for ($recordIndex = [Math]::Max(0, $StartIndex); $recordIndex -lt @($Records).Count; ++$recordIndex) {
+        if ($Records[$recordIndex].status -eq "NOT_RUN") {
+            Add-Failure $Records[$recordIndex] "Run aborted: $Reason"
+        }
+    }
+}
+
 function Invoke-GateProcess {
     param(
         [object]$Record,
         [string]$RunDirectory,
         [string[]]$Arguments,
-        [double]$TimeoutSeconds
+        [double]$TimeoutSeconds,
+        [scriptblock]$JobFactory = $null,
+        [scriptblock]$AfterJobAssignment = $null
     )
 
     $processLogDirectory = Split-Path -Parent $Record.process_log
     New-Item -ItemType Directory -Force -Path $processLogDirectory | Out-Null
-
     New-Item -ItemType File -Force -Path $Record.process_log | Out-Null
     New-Item -ItemType File -Force -Path $Record.process_error_log | Out-Null
 
-    $commandLine = "{0} {1} > {2} 2> {3}" -f `
-        (Quote-Argument $Record.executable), `
-        (Join-Arguments $Arguments), `
-        (Quote-Argument $Record.process_log), `
-        (Quote-Argument $Record.process_error_log)
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "cmd.exe"
-    $psi.Arguments = "/d /s /c `"$commandLine`""
-    $psi.WorkingDirectory = $RunDirectory
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    Set-SanitizedPathEnvironment $psi
-
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $psi
-
     $timeoutMilliseconds = [Math]::Max(1, [int]([double]$TimeoutSeconds * 1000.0))
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = New-GateProcessStartInfo `
+        -Executable $Record.executable `
+        -Arguments $Arguments `
+        -WorkingDirectory $RunDirectory
+    $job = $null
+    $jobCloseAttempted = $false
+    $processStarted = $false
+    $standardOutputTask = $null
+    $standardErrorTask = $null
     try {
-        if (-not $process.Start()) {
+        try {
+            $job = if ($null -ne $JobFactory) { & $JobFactory } else { New-GateJobObject }
+        }
+        catch {
+            Add-Failure $Record "Failed to create Job Object: $($_.Exception.Message)"
+            return $false
+        }
+        if ($null -eq $job -or -not [bool]$job.KillOnJobCloseEnabled) {
+            Add-Failure $Record "Job Object was not created with KILL_ON_JOB_CLOSE"
+            return $false
+        }
+        $Record.job_kill_on_close = $true
+
+        try {
+            $processStarted = $process.Start()
+        }
+        catch {
+            Add-Failure $Record "Failed to start process: $($_.Exception.Message)"
+            return $false
+        }
+        if (-not $processStarted) {
             Add-Failure $Record "Failed to start process"
-            return
+            return $false
         }
 
-        if (-not $process.WaitForExit($timeoutMilliseconds)) {
+        try {
+            $job.Assign($process.Handle)
+            $Record.job_assigned = $true
+        }
+        catch {
+            Add-Failure $Record "AssignProcessToJobObject failed: $($_.Exception.Message)"
             try {
-                & taskkill.exe /PID $process.Id /T /F | Out-Null
+                if (-not $process.HasExited) {
+                    $process.Kill()
+                }
+                $Record.root_exited = $process.HasExited -or $process.WaitForExit(2000)
             }
             catch {
-                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                Add-Failure $Record "Assigned-root failure cleanup could not confirm process exit: $($_.Exception.Message)"
             }
-            Add-Failure $Record "Process timed out after $TimeoutSeconds seconds"
-            return
+            return $false
         }
 
-        $process.WaitForExit()
-        $process.Refresh()
-        $exitCode = $process.ExitCode
-        $Record.exit_code = $exitCode
-        if ($exitCode -ne 0) {
-            Add-Failure $Record "Process exited with code $exitCode"
+        $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $standardErrorTask = $process.StandardError.ReadToEndAsync()
+        $afterAssignmentFailed = $false
+        if ($null -ne $AfterJobAssignment) {
+            try {
+                & $AfterJobAssignment
+            }
+            catch {
+                Add-Failure $Record "After-assignment action failed: $($_.Exception.Message)"
+                $afterAssignmentFailed = $true
+            }
         }
+
+        $rootExitedBeforeDeadline = $false
+        if (-not $afterAssignmentFailed) {
+            try {
+                $rootExitedBeforeDeadline = $process.WaitForExit($timeoutMilliseconds)
+            }
+            catch {
+                Add-Failure $Record "Root process wait failed: $($_.Exception.Message)"
+            }
+            if (-not $rootExitedBeforeDeadline) {
+                Add-Failure $Record "Process timed out after $TimeoutSeconds seconds"
+            }
+            else {
+                try {
+                    $process.Refresh()
+                    $Record.exit_code = $process.ExitCode
+                    if ($Record.exit_code -ne 0) {
+                        Add-Failure $Record "Process exited with code $($Record.exit_code)"
+                    }
+                }
+                catch {
+                    Add-Failure $Record "Could not read process exit status: $($_.Exception.Message)"
+                }
+            }
+        }
+
+        $jobCleanup = Complete-GateJob -Job $job -Process $process -TimeoutMilliseconds 2000
+        $jobCloseAttempted = [bool]$jobCleanup.close_attempted
+        $Record.root_exited = [bool]$jobCleanup.root_exited
+        $Record.job_active_processes_after_cleanup = $jobCleanup.active_processes
+        foreach ($cleanupError in @($jobCleanup.errors)) {
+            Add-Failure $Record $cleanupError
+        }
+
+        $outputDrain = Complete-GateProcessOutput `
+            -StandardOutputTask $standardOutputTask `
+            -StandardErrorTask $standardErrorTask `
+            -TimeoutMilliseconds 2000
+        Set-Content -LiteralPath $Record.process_log -Value $outputDrain.standard_output -Encoding UTF8
+        Set-Content -LiteralPath $Record.process_error_log -Value $outputDrain.standard_error -Encoding UTF8
+        if (-not $outputDrain.completed) {
+            Add-Failure $Record "Redirected stdout/stderr did not drain within the bounded deadline"
+        }
+
+        $cleanupConfirmed = [bool]$jobCleanup.confirmed -and $outputDrain.completed -and -not $afterAssignmentFailed
+        $Record.job_cleanup_confirmed = $cleanupConfirmed
+        $Record.tree_termination_confirmed = $cleanupConfirmed
+        if (-not $cleanupConfirmed) {
+            if (@($jobCleanup.errors).Count -eq 0 -and $outputDrain.completed -and -not $afterAssignmentFailed) {
+                Add-Failure $Record "Job Object cleanup could not be confirmed"
+            }
+        }
+        return $cleanupConfirmed
     }
     finally {
+        if ($null -ne $job -and -not $jobCloseAttempted) {
+            try {
+                $job.Close()
+            }
+            catch {
+                Add-Failure $Record "CloseHandle(job) failed: $($_.Exception.Message)"
+            }
+        }
         $process.Dispose()
     }
 }
@@ -865,9 +1473,11 @@ function Test-TelemetryData {
         [string]$TelemetryMode
     )
 
-    $schemaVersion = [int](Get-ProfileProperty $Telemetry "schema_version")
-    if ($schemaVersion -notin @(1, 2)) {
-        Add-Failure $Record "Unsupported telemetry schema_version: $schemaVersion"
+    $schemaVersionValue = Get-ProfileProperty $Telemetry "schema_version"
+    $schemaVersionIsJsonInteger = $schemaVersionValue -is [System.Int32] -or $schemaVersionValue -is [System.Int64]
+    $schemaVersion = if ($schemaVersionIsJsonInteger) { [int64]$schemaVersionValue } else { $null }
+    if (-not $schemaVersionIsJsonInteger -or $schemaVersion -notin @(1, 2)) {
+        Add-Failure $Record "Unsupported telemetry schema_version: $schemaVersionValue"
     }
     if ([string]$Telemetry.backend_actual -ne $Record.backend) {
         Add-Failure $Record "Backend mismatch: requested $($Record.backend), actual $($Telemetry.backend_actual)"
@@ -975,17 +1585,66 @@ function Test-TelemetryData {
         $backendInfo = $null
         $adapter = $null
         $driver = $null
+        $validatedGpuCoverage = $null
+        $validatedGpuCounts = @{}
         if ($null -ne $gpu) {
             $coverage = Get-ProfileProperty $gpu "coverage"
-            if ($null -ne $coverage) { $Record.gpu_coverage = [double]$coverage }
-            $submitted = Get-ProfileProperty $gpu "submitted"
-            if ($null -ne $submitted) { $Record.gpu_submitted = [int64]$submitted }
-            $resolved = Get-ProfileProperty $gpu "resolved"
-            if ($null -ne $resolved) { $Record.gpu_resolved = [int64]$resolved }
-            $valid = Get-ProfileProperty $gpu "valid"
-            if ($null -ne $valid) { $Record.gpu_valid = [int64]$valid }
-            $invalid = Get-ProfileProperty $gpu "invalid"
-            if ($null -ne $invalid) { $Record.gpu_invalid = [int64]$invalid }
+            $validatedGpuCoverage = ConvertTo-PerfGateFiniteDouble $coverage
+            if ($null -eq $coverage) {
+                if ($gpuRequired) {
+                    Add-Failure $Record "GPU coverage must be a finite number within [0, 1]"
+                }
+            }
+            elseif ($null -eq $validatedGpuCoverage -or $validatedGpuCoverage -lt 0.0 -or $validatedGpuCoverage -gt 1.0) {
+                Add-Failure $Record "GPU coverage '$coverage' must be a finite number within [0, 1]"
+                $validatedGpuCoverage = $null
+            }
+            else {
+                $Record.gpu_coverage = $validatedGpuCoverage
+            }
+
+            foreach ($countContract in @(
+                [PSCustomObject]@{ name = "submitted"; record_property = "gpu_submitted" },
+                [PSCustomObject]@{ name = "resolved"; record_property = "gpu_resolved" },
+                [PSCustomObject]@{ name = "valid"; record_property = "gpu_valid" },
+                [PSCustomObject]@{ name = "invalid"; record_property = "gpu_invalid" }
+            )) {
+                $rawCount = Get-ProfileProperty $gpu $countContract.name
+                $validatedCount = ConvertTo-PerfGateNonNegativeInt64 $rawCount
+                if ($null -eq $rawCount) {
+                    if ($gpuRequired) {
+                        Add-Failure $Record "GPU $($countContract.name) must be a non-negative integer"
+                    }
+                    continue
+                }
+                if ($null -eq $validatedCount) {
+                    Add-Failure $Record "GPU $($countContract.name) '$rawCount' must be a non-negative integer"
+                    continue
+                }
+                $validatedGpuCounts[$countContract.name] = $validatedCount
+                $Record.($countContract.record_property) = $validatedCount
+            }
+
+            if ($validatedGpuCounts.Count -eq 4) {
+                $submittedCount = [int64]$validatedGpuCounts["submitted"]
+                $resolvedCount = [int64]$validatedGpuCounts["resolved"]
+                $validCount = [int64]$validatedGpuCounts["valid"]
+                $invalidCount = [int64]$validatedGpuCounts["invalid"]
+                $countsAreConsistent = $resolvedCount -le $submittedCount -and
+                    $validCount -le $resolvedCount -and
+                    $invalidCount -le $resolvedCount -and
+                    $validCount -eq ($resolvedCount - $invalidCount)
+                if (-not $countsAreConsistent) {
+                    Add-Failure $Record "GPU sample counts were inconsistent: require resolved <= submitted and resolved = valid + invalid"
+                }
+                if ($null -ne $validatedGpuCoverage) {
+                    $expectedCoverage = if ($submittedCount -eq 0) { 0.0 } else { [double]$validCount / [double]$submittedCount }
+                    if ([Math]::Abs($validatedGpuCoverage - $expectedCoverage) -gt 0.000001) {
+                        Add-Failure $Record ("GPU coverage {0} did not match valid / submitted ({1})" -f $validatedGpuCoverage, $expectedCoverage)
+                    }
+                }
+            }
+
             $metrics = Get-ProfileProperty $gpu "metrics"
             if ($null -ne $metrics) { $Record.gpu_metric_summaries = $metrics }
 
@@ -1031,25 +1690,32 @@ function Test-TelemetryData {
                         Add-Failure $Record "Required GPU metric '$requiredMetric' was missing"
                         continue
                     }
-                    $metricCoverage = Get-ProfileProperty $metric "coverage"
-                    if ($null -eq $metricCoverage -or [double]$metricCoverage -lt $minimumCoverage) {
+                    $metricCoverageRaw = Get-ProfileProperty $metric "coverage"
+                    $metricCoverage = ConvertTo-PerfGateFiniteDouble $metricCoverageRaw
+                    if ($null -eq $metricCoverage -or $metricCoverage -lt 0.0 -or $metricCoverage -gt 1.0) {
+                        Add-Failure $Record ("Required GPU metric '{0}' coverage '{1}' must be a finite number within [0, 1]" -f $requiredMetric, $metricCoverageRaw)
+                    }
+                    elseif ($metricCoverage -lt $minimumCoverage) {
                         Add-Failure $Record ("Required GPU metric '{0}' coverage {1} was below required {2}" -f $requiredMetric, $metricCoverage, $minimumCoverage)
                     }
-                    $metricAverage = Get-GpuMetricSummaryValue $metric "avg"
-                    $metricP95 = Get-GpuMetricSummaryValue $metric "p95"
-                    if ($null -eq $metricAverage -or $null -eq $metricP95) {
-                        Add-Failure $Record "Required GPU metric '$requiredMetric' did not report avg and p95"
+                    $metricAverageRaw = Get-GpuMetricSummaryValue $metric "avg"
+                    $metricP95Raw = Get-GpuMetricSummaryValue $metric "p95"
+                    $metricAverage = ConvertTo-PerfGateFiniteDouble $metricAverageRaw
+                    $metricP95 = ConvertTo-PerfGateFiniteDouble $metricP95Raw
+                    if ($null -eq $metricAverage -or $metricAverage -lt 0.0) {
+                        Add-Failure $Record "Required GPU metric '$requiredMetric' avg must be a finite non-negative number"
+                    }
+                    if ($null -eq $metricP95 -or $metricP95 -lt 0.0) {
+                        Add-Failure $Record "Required GPU metric '$requiredMetric' p95 must be a finite non-negative number"
                     }
                 }
 
                 $frameMetric = Get-ProfileProperty $Record.gpu_metric_summaries "GPU.Frame"
                 if ($null -ne $frameMetric) {
-                    $frameAverage = Get-GpuMetricSummaryValue $frameMetric "avg"
-                    $frameP95 = Get-GpuMetricSummaryValue $frameMetric "p95"
-                    if ($null -eq $frameAverage -or $null -eq $frameP95) {
-                        Add-Failure $Record "GPU.Frame did not report avg and p95"
-                    }
-                    else {
+                    $frameAverage = ConvertTo-PerfGateFiniteDouble (Get-GpuMetricSummaryValue $frameMetric "avg")
+                    $frameP95 = ConvertTo-PerfGateFiniteDouble (Get-GpuMetricSummaryValue $frameMetric "p95")
+                    if ($null -ne $frameAverage -and $frameAverage -ge 0.0 -and
+                        $null -ne $frameP95 -and $frameP95 -ge 0.0) {
                         $Record.gpu_frame_avg_ms = [double]$frameAverage
                         $Record.gpu_frame_p95_ms = [double]$frameP95
                     }
@@ -1099,6 +1765,91 @@ function Invoke-RunPerfGateSelfTest {
         if ($caught.Exception.Message -notmatch $Pattern) {
             throw "$Message Actual error: $($caught.Exception.Message)"
         }
+    }
+
+    function Test-SelfTestThrows {
+        param(
+            [scriptblock]$Action,
+            [string]$Pattern
+        )
+
+        try {
+            & $Action
+        }
+        catch {
+            return $_.Exception.Message -match $Pattern
+        }
+        return $false
+    }
+
+    function Test-SelfTestProcessAlive {
+        param([int]$ProcessId)
+
+        $process = $null
+        try {
+            $process = [System.Diagnostics.Process]::GetProcessById($ProcessId)
+            return -not $process.HasExited
+        }
+        catch [System.ArgumentException] {
+            return $false
+        }
+        finally {
+            if ($null -ne $process) {
+                $process.Dispose()
+            }
+        }
+    }
+
+    function Stop-SelfTestProcess {
+        param([int]$ProcessId)
+
+        $process = $null
+        try {
+            $process = [System.Diagnostics.Process]::GetProcessById($ProcessId)
+            if (-not $process.HasExited) {
+                $process.Kill()
+                $process.WaitForExit(1000) | Out-Null
+            }
+        }
+        catch [System.ArgumentException] {
+        }
+        finally {
+            if ($null -ne $process) {
+                $process.Dispose()
+            }
+        }
+    }
+
+    function New-SelfTestJobDouble {
+        param([string]$FailOperation)
+
+        $job = [PSCustomObject]@{
+            fail_operation = $FailOperation
+            KillOnJobCloseEnabled = $true
+            assigned = $false
+            active_processes = 0
+            closed = $false
+        }
+        $job | Add-Member -MemberType ScriptMethod -Name "Assign" -Value {
+            param([IntPtr]$ProcessHandle)
+            if ($this.fail_operation -eq "assign") { throw "injected assign failure" }
+            $this.assigned = $true
+            $this.active_processes = 1
+        }
+        $job | Add-Member -MemberType ScriptMethod -Name "Terminate" -Value {
+            param([uint32]$ExitCode)
+            if ($this.fail_operation -eq "terminate") { throw "injected terminate failure" }
+            $this.active_processes = 0
+        }
+        $job | Add-Member -MemberType ScriptMethod -Name "QueryActiveProcesses" -Value {
+            if ($this.fail_operation -eq "query") { throw "injected query failure" }
+            return [uint32]$this.active_processes
+        }
+        $job | Add-Member -MemberType ScriptMethod -Name "Close" -Value {
+            if ($this.fail_operation -eq "close") { throw "injected close failure" }
+            $this.closed = $true
+        }
+        return $job
     }
 
     function New-SelfTestTelemetryV2 {
@@ -1168,6 +1919,8 @@ function Invoke-RunPerfGateSelfTest {
     }
     . $loaderPath
 
+    $qualityContractFailures = @()
+
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-gate-selftest-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
     try {
@@ -1214,6 +1967,63 @@ function Invoke-RunPerfGateSelfTest {
         Assert-SelfTestThrows { Get-PerfGateProfileConfig -Catalog $catalog -Profile "Unknown" | Out-Null } "Unknown perf gate profile" "Unknown profiles must fail."
         Assert-SelfTestThrows { Resolve-PerfGateConfiguration -ProfileConfig $collision -RequestedConfiguration "Debug" | Out-Null } "locked.*Release" "Locked Release profile must reject Debug."
         Assert-SelfTest ((Resolve-PerfGateConfiguration -ProfileConfig $collision -RequestedConfiguration "") -eq "Release") "Locked profile default configuration was not resolved."
+
+        $unsupportedBaselinePath = Join-Path $tempRoot "unsupported-baseline.json"
+        '{ "schema_version": 2, "profiles": {}, "baselines": {} }' | Set-Content -LiteralPath $unsupportedBaselinePath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $unsupportedBaselinePath | Out-Null } "Unsupported perf gate baseline schema_version")) {
+            $qualityContractFailures += "baseline schema_version 2 was accepted"
+        }
+
+        $fractionalProfileSchemaPath = Join-Path $tempRoot "fractional-profile-schema.json"
+        '{ "schema_version": 1.1, "profiles": {} }' | Set-Content -LiteralPath $fractionalProfileSchemaPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $fractionalProfileSchemaPath -BaselinePath $testBaselinePath | Out-Null } "Unsupported perf gate profile schema_version")) {
+            $qualityContractFailures += "fractional profile schema_version 1.1 was accepted"
+        }
+
+        $fractionalBaselineSchemaPath = Join-Path $tempRoot "fractional-baseline-schema.json"
+        '{ "schema_version": 1.1, "profiles": {}, "baselines": {} }' | Set-Content -LiteralPath $fractionalBaselineSchemaPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $fractionalBaselineSchemaPath | Out-Null } "Unsupported perf gate baseline schema_version")) {
+            $qualityContractFailures += "fractional baseline schema_version 1.1 was accepted"
+        }
+
+        $stringBaselineSchemaPath = Join-Path $tempRoot "string-baseline-schema.json"
+        '{ "schema_version": "1", "profiles": {}, "baselines": {} }' | Set-Content -LiteralPath $stringBaselineSchemaPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $stringBaselineSchemaPath | Out-Null } "Unsupported perf gate baseline schema_version")) {
+            $qualityContractFailures += "string baseline schema_version 1 was accepted"
+        }
+
+        $missingBaselineSchemaPath = Join-Path $tempRoot "missing-baseline-schema.json"
+        '{ "profiles": {}, "baselines": {} }' | Set-Content -LiteralPath $missingBaselineSchemaPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $missingBaselineSchemaPath | Out-Null } "Unsupported perf gate baseline schema_version")) {
+            $qualityContractFailures += "baseline without schema_version was accepted"
+        }
+
+        $invalidBaselinesRootPath = Join-Path $tempRoot "invalid-baselines-root.json"
+        '{ "schema_version": 1, "baselines": [] }' | Set-Content -LiteralPath $invalidBaselinesRootPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $invalidBaselinesRootPath | Out-Null } "baselines.*object")) {
+            $qualityContractFailures += "baseline baselines array was accepted"
+        }
+
+        $invalidProfileDefinitionsPath = Join-Path $tempRoot "invalid-profile-definitions.json"
+        '{ "schema_version": 1, "profiles": [] }' | Set-Content -LiteralPath $invalidProfileDefinitionsPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $invalidProfileDefinitionsPath -BaselinePath $testBaselinePath | Out-Null } "profiles.*object")) {
+            $qualityContractFailures += "profile definitions array was accepted"
+        }
+
+        $invalidLegacyProfilesPath = Join-Path $tempRoot "invalid-legacy-profiles.json"
+        '{ "schema_version": 1, "profiles": [], "baselines": {} }' | Set-Content -LiteralPath $invalidLegacyProfilesPath -Encoding UTF8
+        if (-not (Test-SelfTestThrows { Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $invalidLegacyProfilesPath | Out-Null } "profiles.*object")) {
+            $qualityContractFailures += "baseline legacy profiles array was accepted"
+        }
+
+        $baselineWithoutLegacyProfilesPath = Join-Path $tempRoot "baseline-without-legacy-profiles.json"
+        '{ "schema_version": 1, "baselines": {} }' | Set-Content -LiteralPath $baselineWithoutLegacyProfilesPath -Encoding UTF8
+        try {
+            Import-PerfGateProfileCatalog -ProfilesPath $profilePath -BaselinePath $baselineWithoutLegacyProfilesPath | Out-Null
+        }
+        catch {
+            $qualityContractFailures += "baseline without optional legacy profiles was rejected"
+        }
     }
     finally {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -1261,6 +2071,33 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($buildCommands.Count -eq 1) "Vegetation profile must build only one declared target."
     Assert-SelfTest ($buildCommands[0].target -eq "Sandbox" -and $buildCommands[0].command_line -eq "build_sandbox.bat Release x64") "Vegetation build plan must contain only Sandbox Release."
 
+    $emptyTargetsProfile = ConvertFrom-Json '{ "warmup_seconds": 1, "sample_seconds": 1, "targets": [] }'
+    if (-not (Test-SelfTestThrows { New-PerfGateRunPlan -RepoRoot $repoRoot -ReportRoot "self-test" -Profile "EmptyTargets" -ProfileConfig $emptyTargetsProfile -Configuration "Debug" -TelemetryMode "Profile" | Out-Null } "at least one target")) {
+        $qualityContractFailures += "empty target matrix was accepted"
+    }
+
+    $emptyBackendsProfile = ConvertFrom-Json '{ "warmup_seconds": 1, "sample_seconds": 1, "targets": [{ "name": "Sandbox", "backends": [] }] }'
+    if (-not (Test-SelfTestThrows { New-PerfGateRunPlan -RepoRoot $repoRoot -ReportRoot "self-test" -Profile "EmptyBackends" -ProfileConfig $emptyBackendsProfile -Configuration "Debug" -TelemetryMode "Profile" | Out-Null } "at least one backend")) {
+        $qualityContractFailures += "empty backend matrix was accepted"
+    }
+
+    $duplicateTargetsProfile = ConvertFrom-Json '{ "warmup_seconds": 1, "sample_seconds": 1, "targets": [{ "name": "Sandbox", "backends": ["Vulkan"] }, { "name": "sandbox", "backends": ["DX12"] }] }'
+    if (-not (Test-SelfTestThrows { New-PerfGateRunPlan -RepoRoot $repoRoot -ReportRoot "self-test" -Profile "DuplicateTargets" -ProfileConfig $duplicateTargetsProfile -Configuration "Debug" -TelemetryMode "Profile" | Out-Null } "Duplicate perf gate target")) {
+        $qualityContractFailures += "duplicate target matrix was accepted"
+    }
+
+    $duplicateBackendsProfile = ConvertFrom-Json '{ "warmup_seconds": 1, "sample_seconds": 1, "targets": [{ "name": "Sandbox", "backends": ["Vulkan", "vulkan"] }] }'
+    if (-not (Test-SelfTestThrows { New-PerfGateRunPlan -RepoRoot $repoRoot -ReportRoot "self-test" -Profile "DuplicateBackends" -ProfileConfig $duplicateBackendsProfile -Configuration "Debug" -TelemetryMode "Profile" | Out-Null } "Duplicate perf gate backend")) {
+        $qualityContractFailures += "duplicate backend matrix was accepted"
+    }
+
+    if ($null -eq (Get-Command Assert-PerfGateRunRecords -ErrorAction SilentlyContinue)) {
+        $qualityContractFailures += "zero-run assertion is missing"
+    }
+    elseif (-not (Test-SelfTestThrows { Assert-PerfGateRunRecords -Records @() } "at least one run")) {
+        $qualityContractFailures += "zero generated records were accepted"
+    }
+
     $standardProfile = Get-PerfGateProfileConfig -Catalog $repoCatalog -Profile "Standard"
     $schemaV1 = ConvertFrom-Json @'
 {
@@ -1284,12 +2121,25 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($schemaV1Record.status -eq "PASS") "Schema v1 must remain accepted for Standard."
     Assert-SelfTest ($schemaV1Record.baseline_status -eq "MISSING") "Missing Standard baseline must be reported as MISSING."
 
+    foreach ($invalidTelemetrySchemaVersion in @(1.1, "1")) {
+        $invalidSchemaTelemetry = $schemaV1 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $invalidSchemaTelemetry.schema_version = $invalidTelemetrySchemaVersion
+        $invalidSchemaRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-TelemetryData -Record $invalidSchemaRecord -Telemetry $invalidSchemaTelemetry -ProfileConfig $standardProfile -Baseline $emptyBaselineForTelemetry -Profile "Standard" -Configuration "Debug" -TelemetryMode "Profile"
+        if ($invalidSchemaRecord.status -ne "FAIL" -or (@($invalidSchemaRecord.failures) -join " ") -notmatch "Unsupported telemetry schema_version") {
+            $qualityContractFailures += "non-integer telemetry schema_version $invalidTelemetrySchemaVersion was accepted"
+        }
+    }
+
     $telemetryOffSchemaV1Record = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     Test-TelemetryData -Record $telemetryOffSchemaV1Record -Telemetry $schemaV1 -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Off"
     Assert-SelfTest ($telemetryOffSchemaV1Record.status -eq "FAIL" -and (@($telemetryOffSchemaV1Record.failures) -join " ") -match "schema_version 2") "Telemetry-off Vegetation A/B still requires schema v2 runtime metadata."
 
     $validV2 = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
     $candidateRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $candidateRecord.root_exited = $true
+    $candidateRecord.tree_termination_confirmed = $true
+    $candidateRecord.job_cleanup_confirmed = $true
     Test-TelemetryData -Record $candidateRecord -Telemetry $validV2 -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
     Assert-SelfTest ($candidateRecord.status -eq "PASS" -and $candidateRecord.baseline_status -eq "MISSING") "Missing Vegetation baseline must remain a passing candidate marked MISSING."
     Assert-SelfTest ([double]$candidateRecord.gpu_frame_avg_ms -eq 1.25 -and [double]$candidateRecord.gpu_frame_p95_ms -eq 1.5) "GPU.Frame summary was not captured."
@@ -1356,6 +2206,10 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($unexpectedHardwareMetadataPasses.Count -eq 0) ("Fixed profile accepted invalid GPU hardware metadata: {0}" -f ($unexpectedHardwareMetadataPasses -join ", "))
 
     $lowCoverage = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile -GpuCoverage 0.94
+    $lowCoverage.gpu.submitted = 100
+    $lowCoverage.gpu.resolved = 100
+    $lowCoverage.gpu.valid = 94
+    $lowCoverage.gpu.invalid = 6
     $lowCoverageRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     Test-TelemetryData -Record $lowCoverageRecord -Telemetry $lowCoverage -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
     Assert-SelfTest ($lowCoverageRecord.status -eq "FAIL" -and (@($lowCoverageRecord.failures) -join " ") -match "GPU coverage") "Schema v2 total GPU coverage below threshold must fail."
@@ -1370,7 +2224,97 @@ function Invoke-RunPerfGateSelfTest {
     $missingMetricSummary.gpu.metrics.'GPU.Bloom'.PSObject.Properties.Remove("p95")
     $missingMetricSummaryRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     Test-TelemetryData -Record $missingMetricSummaryRecord -Telemetry $missingMetricSummary -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
-    Assert-SelfTest ($missingMetricSummaryRecord.status -eq "FAIL" -and (@($missingMetricSummaryRecord.failures) -join " ") -match "GPU.Bloom.*avg.*p95") "Every required GPU metric must report avg and p95."
+    Assert-SelfTest ($missingMetricSummaryRecord.status -eq "FAIL" -and (@($missingMetricSummaryRecord.failures) -join " ") -match "GPU.Bloom.*p95") "Every required GPU metric must report avg and p95."
+
+    $invalidGpuValueCases = @(
+        [PSCustomObject]@{
+            label = "nonnumeric aggregate coverage"
+            failure_pattern = "GPU coverage.*finite.*0.*1"
+            mutate = { param($Telemetry) $Telemetry.gpu.coverage = "bad" }
+        },
+        [PSCustomObject]@{
+            label = "out-of-range aggregate coverage"
+            failure_pattern = "GPU coverage.*finite.*0.*1"
+            mutate = { param($Telemetry) $Telemetry.gpu.coverage = 1.5 }
+        },
+        [PSCustomObject]@{
+            label = "negative aggregate count"
+            failure_pattern = "resolved.*non-negative integer"
+            mutate = { param($Telemetry) $Telemetry.gpu.resolved = -1 }
+        },
+        [PSCustomObject]@{
+            label = "string aggregate count"
+            failure_pattern = "submitted.*non-negative integer"
+            mutate = { param($Telemetry) $Telemetry.gpu.submitted = "125" }
+        },
+        [PSCustomObject]@{
+            label = "inconsistent aggregate counts"
+            failure_pattern = "GPU sample counts were inconsistent"
+            mutate = {
+                param($Telemetry)
+                $Telemetry.gpu.valid = 119
+                $Telemetry.gpu.coverage = 0.952
+            }
+        },
+        [PSCustomObject]@{
+            label = "aggregate coverage/count mismatch"
+            failure_pattern = "GPU coverage.*valid / submitted"
+            mutate = { param($Telemetry) $Telemetry.gpu.coverage = 0.99 }
+        },
+        [PSCustomObject]@{
+            label = "invalid required metric values"
+            failure_pattern = "GPU.Bloom.*(coverage|avg|p95)"
+            mutate = {
+                param($Telemetry)
+                $Telemetry.gpu.metrics.'GPU.Bloom'.coverage = 1.5
+                $Telemetry.gpu.metrics.'GPU.Bloom'.avg = ""
+                $Telemetry.gpu.metrics.'GPU.Bloom'.p95 = -1
+            }
+        },
+        [PSCustomObject]@{
+            label = "nonfinite required metric values"
+            failure_pattern = "GPU.Bloom.*(coverage|avg|p95)"
+            mutate = {
+                param($Telemetry)
+                $Telemetry.gpu.metrics.'GPU.Bloom'.coverage = [double]::PositiveInfinity
+                $Telemetry.gpu.metrics.'GPU.Bloom'.avg = [double]::NaN
+                $Telemetry.gpu.metrics.'GPU.Bloom'.p95 = [double]::PositiveInfinity
+            }
+        }
+    )
+    foreach ($invalidGpuValueCase in $invalidGpuValueCases) {
+        $invalidGpuTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+        $mutateInvalidGpuTelemetry = [scriptblock]$invalidGpuValueCase.mutate
+        & $mutateInvalidGpuTelemetry $invalidGpuTelemetry
+        $invalidGpuRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+        try {
+            Test-TelemetryData -Record $invalidGpuRecord -Telemetry $invalidGpuTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+        }
+        catch {
+            $qualityContractFailures += "$($invalidGpuValueCase.label) escaped validation and threw: $($_.Exception.Message)"
+            continue
+        }
+        if ($invalidGpuRecord.status -ne "FAIL" -or (@($invalidGpuRecord.failures) -join " ") -notmatch $invalidGpuValueCase.failure_pattern) {
+            $qualityContractFailures += "$($invalidGpuValueCase.label) was accepted"
+        }
+    }
+
+    $unsafeGpuBlessTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $unsafeGpuBlessTelemetry.gpu.metrics.'GPU.Bloom'.avg = ""
+    $unsafeGpuBlessTelemetry.gpu.metrics.'GPU.Bloom'.p95 = -1
+    $unsafeGpuBlessRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "unsafe-gpu.json" "unsafe-gpu.out" "unsafe-gpu.err"
+    $unsafeGpuBlessRecord.status = "PASS"
+    $unsafeGpuBlessRecord.tree_termination_confirmed = $true
+    $unsafeGpuBlessRecord.job_cleanup_confirmed = $true
+    $unsafeGpuBlessRecord.gpu_baseline_comparable = $true
+    $unsafeGpuBlessRecord.required_gpu_metrics = @($vegetationProfile.required_gpu_metrics)
+    $unsafeGpuBlessRecord.gpu_metric_summaries = $unsafeGpuBlessTelemetry.gpu.metrics
+    $unsafeGpuBlessBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    if (-not (Test-SelfTestThrows {
+        Update-BaselinesFromRecords -Baseline $unsafeGpuBlessBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Records @($unsafeGpuBlessRecord) -ReportRoot "self-test"
+    } "invalid required GPU metric")) {
+        $qualityContractFailures += "invalid required GPU timing values could bless a partial baseline"
+    }
 
     $wrongExtent = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile -Width 1920 -Height 1080
     $wrongExtentRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
@@ -1392,6 +2336,9 @@ function Invoke-RunPerfGateSelfTest {
 
     $nonRequiredGpuRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     $nonRequiredGpuRecord.status = "PASS"
+    $nonRequiredGpuRecord.root_exited = $true
+    $nonRequiredGpuRecord.tree_termination_confirmed = $true
+    $nonRequiredGpuRecord.job_cleanup_confirmed = $true
     $nonRequiredGpuRecord.gpu_metric_summaries | Add-Member -MemberType NoteProperty -Name "GPU.Frame" -Value ([PSCustomObject]@{ avg = 1.0; p95 = 1.2 })
     $baselineWithoutRequiredMetrics = ConvertFrom-Json '{ "baselines": {} }'
     Update-BaselinesFromRecords -Baseline $baselineWithoutRequiredMetrics -Profile "Standard" -Configuration "Debug" -Records @($nonRequiredGpuRecord) -ReportRoot "Intermediate/test-reports/perf-gate/self-test"
@@ -1406,6 +2353,378 @@ function Invoke-RunPerfGateSelfTest {
     $candidateBaseline = Get-BaselineEntry -Baseline $baselineForBless -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
     Assert-SelfTest ($null -ne $candidateBaseline) "Bless did not write baselines.* candidate data."
     Assert-SelfTest (@($candidateBaseline.gpu_metrics.PSObject.Properties).Count -eq 11) "Bless must write avg/p95 for all required GPU metrics."
+
+    $runnerSource = Get-Content -Raw -LiteralPath $PSCommandPath
+    $cmdLaunchAssignments = [regex]::Matches($runnerSource, '(?m)\.FileName\s*=\s*"cmd\.exe"')
+    if ($cmdLaunchAssignments.Count -ne 1) {
+        $qualityContractFailures += "cmd.exe is still used outside .bat builds"
+    }
+    $invokeGateSource = [regex]::Match($runnerSource, '(?s)function Invoke-GateProcess\s*\{.*?(?=\r?\nfunction Test-Telemetry\s*\{)').Value
+    if ($invokeGateSource -notmatch 'New-GateProcessStartInfo' -or $invokeGateSource -match 'cmd\.exe') {
+        $qualityContractFailures += "gate process does not use direct ProcessStartInfo"
+    }
+    if ([regex]::Matches($invokeGateSource, 'ReadToEndAsync\s*\(').Count -lt 2 -or $invokeGateSource -notmatch 'Complete-GateProcessOutput') {
+        $qualityContractFailures += "gate process does not asynchronously drain both redirected streams"
+    }
+
+    $crtEncoder = Get-Command ConvertTo-WindowsCrtArgument -ErrorAction SilentlyContinue
+    if ($null -eq $crtEncoder) {
+        $qualityContractFailures += "Windows CRT argument encoder is missing"
+    }
+    else {
+        foreach ($crtCase in @(
+            [PSCustomObject]@{ value = ""; expected = '""'; label = "empty" },
+            [PSCustomObject]@{ value = "plain"; expected = 'plain'; label = "plain" },
+            [PSCustomObject]@{ value = "two words"; expected = '"two words"'; label = "spaces" },
+            [PSCustomObject]@{ value = 'C:\path with spaces\'; expected = '"C:\path with spaces\\"'; label = "trailing slash" },
+            [PSCustomObject]@{ value = 'say"hi'; expected = '"say\"hi"'; label = "embedded quote" },
+            [PSCustomObject]@{ value = '&|<>^%!()'; expected = '&|<>^%!()'; label = "shell metacharacters" }
+        )) {
+            $encoded = ConvertTo-WindowsCrtArgument $crtCase.value
+            if ($encoded -cne $crtCase.expected) {
+                $qualityContractFailures += "Windows CRT encoding failed for $($crtCase.label): '$encoded'"
+            }
+        }
+
+        $threeSlashesBeforeQuote = 'a\\\"b'
+        $expectedThreeSlashEncoding = '"a' + ((@('\') * 7) -join '') + '"b"'
+        $encodedThreeSlashes = ConvertTo-WindowsCrtArgument $threeSlashesBeforeQuote
+        if ($encodedThreeSlashes -cne $expectedThreeSlashEncoding) {
+            $qualityContractFailures += "Windows CRT encoding failed for three backslashes before quote: '$encodedThreeSlashes'"
+        }
+    }
+
+    $startInfoFactory = Get-Command New-GateProcessStartInfo -ErrorAction SilentlyContinue
+    if ($null -eq $startInfoFactory) {
+        $qualityContractFailures += "direct gate ProcessStartInfo factory is missing"
+    }
+    else {
+        $directStartInfo = New-GateProcessStartInfo `
+            -Executable 'C:\Program Files\Ash Tool.exe' `
+            -Arguments @('plain', 'two words', 'C:\path with spaces\') `
+            -WorkingDirectory 'C:\work'
+        if ($directStartInfo.FileName -cne 'C:\Program Files\Ash Tool.exe' -or
+            $directStartInfo.Arguments -cne 'plain "two words" "C:\path with spaces\\"' -or
+            $directStartInfo.WorkingDirectory -cne 'C:\work' -or
+            $directStartInfo.UseShellExecute -or
+            -not $directStartInfo.RedirectStandardOutput -or
+            -not $directStartInfo.RedirectStandardError -or
+            -not $directStartInfo.CreateNoWindow) {
+            $qualityContractFailures += "direct gate ProcessStartInfo contract mismatch"
+        }
+    }
+
+    $outputDrainer = Get-Command Complete-GateProcessOutput -ErrorAction SilentlyContinue
+    if ($null -eq $outputDrainer) {
+        $qualityContractFailures += "bounded asynchronous stdout/stderr drain helper is missing"
+    }
+    else {
+        $stdoutSource = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+        $stderrSource = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+        $stdoutSource.SetResult("stdout")
+        $stderrSource.SetResult("stderr")
+        $completedDrain = Complete-GateProcessOutput `
+            -StandardOutputTask $stdoutSource.Task `
+            -StandardErrorTask $stderrSource.Task `
+            -TimeoutMilliseconds 100
+        if (-not $completedDrain.completed -or $completedDrain.standard_output -cne "stdout" -or $completedDrain.standard_error -cne "stderr") {
+            $qualityContractFailures += "completed stdout/stderr were not drained together"
+        }
+
+        $hungOutputSource = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+        $completedErrorSource = New-Object 'System.Threading.Tasks.TaskCompletionSource[string]'
+        $completedErrorSource.SetResult("stderr")
+        $drainStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $timedOutDrain = Complete-GateProcessOutput `
+            -StandardOutputTask $hungOutputSource.Task `
+            -StandardErrorTask $completedErrorSource.Task `
+            -TimeoutMilliseconds 50
+        $drainStopwatch.Stop()
+        if ($timedOutDrain.completed -or $drainStopwatch.ElapsedMilliseconds -gt 1000) {
+            $qualityContractFailures += "stdout/stderr drain did not honor one bounded shared deadline"
+        }
+    }
+
+    if ($null -ne $startInfoFactory -and $null -ne $outputDrainer) {
+        $argvProbeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-argv-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force -Path $argvProbeRoot | Out-Null
+        try {
+            $argvProbeScript = Join-Path $argvProbeRoot "argv-probe.ps1"
+            @'
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ProbeArguments)
+[Console]::Out.Write(($ProbeArguments | ConvertTo-Json -Compress))
+'@ | Set-Content -LiteralPath $argvProbeScript -Encoding UTF8
+
+            $expectedProbeArguments = @(
+                "plain",
+                "two words",
+                'C:\path with spaces\',
+                'a\\\"b',
+                '&|<>^%!()',
+                ""
+            )
+            $probeStartInfo = New-GateProcessStartInfo `
+                -Executable "powershell.exe" `
+                -Arguments (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $argvProbeScript) + $expectedProbeArguments) `
+                -WorkingDirectory $argvProbeRoot
+            $probeProcess = New-Object System.Diagnostics.Process
+            $probeProcess.StartInfo = $probeStartInfo
+            try {
+                if (-not $probeProcess.Start()) {
+                    $qualityContractFailures += "end-to-end argv probe did not start"
+                }
+                else {
+                    $probeStdoutTask = $probeProcess.StandardOutput.ReadToEndAsync()
+                    $probeStderrTask = $probeProcess.StandardError.ReadToEndAsync()
+                    if (-not $probeProcess.WaitForExit(5000)) {
+                        Stop-Process -Id $probeProcess.Id -Force -ErrorAction SilentlyContinue
+                        $probeProcess.WaitForExit(1000) | Out-Null
+                        $qualityContractFailures += "end-to-end argv probe timed out"
+                    }
+                    else {
+                        $probeDrain = Complete-GateProcessOutput `
+                            -StandardOutputTask $probeStdoutTask `
+                            -StandardErrorTask $probeStderrTask `
+                            -TimeoutMilliseconds 1000
+                        if (-not $probeDrain.completed -or -not [string]::IsNullOrWhiteSpace($probeDrain.standard_error)) {
+                            $qualityContractFailures += "end-to-end argv probe output did not drain"
+                        }
+                        else {
+                            $parsedProbeArguments = ConvertFrom-Json $probeDrain.standard_output
+                            $actualProbeArguments = @()
+                            foreach ($parsedProbeArgument in $parsedProbeArguments) {
+                                $actualProbeArguments += [string]$parsedProbeArgument
+                            }
+                            if ($actualProbeArguments.Count -ne $expectedProbeArguments.Count) {
+                                $qualityContractFailures += "end-to-end argv probe argument count mismatch: expected $($expectedProbeArguments.Count), actual $($actualProbeArguments.Count), stdout '$($probeDrain.standard_output)'"
+                            }
+                            else {
+                                for ($argumentIndex = 0; $argumentIndex -lt $expectedProbeArguments.Count; ++$argumentIndex) {
+                                    if ([string]$actualProbeArguments[$argumentIndex] -cne [string]$expectedProbeArguments[$argumentIndex]) {
+                                        $qualityContractFailures += "end-to-end argv probe mismatch at index $argumentIndex"
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finally {
+                if (-not $probeProcess.HasExited) {
+                    $probeProcess.Kill()
+                    $probeProcess.WaitForExit(1000) | Out-Null
+                }
+                $probeProcess.Dispose()
+            }
+        }
+        finally {
+            Remove-Item -LiteralPath $argvProbeRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $productionSource = $runnerSource.Substring(0, $runnerSource.IndexOf('function Invoke-RunPerfGateSelfTest'))
+    if ($productionSource -match 'Get-CimInstance|taskkill(?:\.exe)?|Stop-Process\s+-Id') {
+        $qualityContractFailures += "production still uses CIM, taskkill, or PID-based Stop-Process"
+    }
+    if ($productionSource -notmatch 'JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE' -or
+        $productionSource -notmatch 'AssignProcessToJobObject' -or
+        $productionSource -notmatch 'TerminateJobObject' -or
+        $productionSource -notmatch 'QueryInformationJobObject') {
+        $qualityContractFailures += "Windows Job Object kill-on-close interop is missing"
+    }
+
+    $jobFactoryCommand = Get-Command New-GateJobObject -ErrorAction SilentlyContinue
+    $jobContractReady = $null -ne $jobFactoryCommand -and
+        $invokeGateSource -match '\$JobFactory' -and
+        $invokeGateSource -match '\$AfterJobAssignment'
+    if (-not $jobContractReady) {
+        $qualityContractFailures += "gate launcher Job Object assignment contract is missing"
+    }
+    else {
+        $jobTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-job-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force -Path $jobTestRoot | Out-Null
+        $childProcessIds = @()
+        try {
+            $jobParentScript = Join-Path $jobTestRoot "job-parent.ps1"
+            @'
+param([string]$AssignedSignal, [string]$ChildPidPath, [string]$Mode)
+$deadline = [datetime]::UtcNow.AddSeconds(5)
+while (-not (Test-Path -LiteralPath $AssignedSignal)) {
+    if ([datetime]::UtcNow -ge $deadline) { exit 41 }
+    Start-Sleep -Milliseconds 10
+}
+$childInfo = New-Object System.Diagnostics.ProcessStartInfo
+$childInfo.FileName = "powershell.exe"
+$childInfo.Arguments = '-NoProfile -Command "Start-Sleep -Seconds 30"'
+$childInfo.UseShellExecute = $false
+$childInfo.CreateNoWindow = $true
+$child = [System.Diagnostics.Process]::Start($childInfo)
+[System.IO.File]::WriteAllText($ChildPidPath, [string]$child.Id)
+$child.Dispose()
+if ($Mode -eq "timeout") { Start-Sleep -Seconds 30 }
+exit 0
+'@ | Set-Content -LiteralPath $jobParentScript -Encoding UTF8
+
+            foreach ($mode in @("normal", "timeout")) {
+                $signalPath = Join-Path $jobTestRoot "$mode-assigned.signal"
+                $childPidPath = Join-Path $jobTestRoot "$mode-child.pid"
+                $record = New-RunRecord "Sandbox" "Vulkan" "powershell.exe" (Join-Path $jobTestRoot "$mode.json") (Join-Path $jobTestRoot "$mode.out") (Join-Path $jobTestRoot "$mode.err")
+                $runMayContinue = Invoke-GateProcess `
+                    -Record $record `
+                    -RunDirectory $jobTestRoot `
+                    -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $jobParentScript, $signalPath, $childPidPath, $mode) `
+                    -TimeoutSeconds $(if ($mode -eq "timeout") { 0.5 } else { 5.0 }) `
+                    -AfterJobAssignment { [System.IO.File]::WriteAllText($signalPath, "assigned") }
+
+                if (Test-Path -LiteralPath $childPidPath) {
+                    $childProcessId = [int](Get-Content -Raw -LiteralPath $childPidPath)
+                    $childProcessIds += $childProcessId
+                }
+                else {
+                    $childProcessId = 0
+                }
+                if (-not $runMayContinue -or
+                    -not $record.job_kill_on_close -or
+                    -not $record.job_assigned -or
+                    -not $record.job_cleanup_confirmed -or
+                    [int]$record.job_active_processes_after_cleanup -ne 0 -or
+                    $childProcessId -le 0 -or
+                    (Test-SelfTestProcessAlive $childProcessId)) {
+                    $qualityContractFailures += "Job Object $mode cleanup did not reach ActiveProcesses=0 after assigned child"
+                }
+            }
+
+            $largeOutputScript = Join-Path $jobTestRoot "large-output.ps1"
+            '[Console]::Out.Write(("O" * 131072)); [Console]::Error.Write(("E" * 131072))' | Set-Content -LiteralPath $largeOutputScript -Encoding UTF8
+            $largeOutputRecord = New-RunRecord "Sandbox" "Vulkan" "powershell.exe" (Join-Path $jobTestRoot "large.json") (Join-Path $jobTestRoot "large.out") (Join-Path $jobTestRoot "large.err")
+            $largeOutputSafe = Invoke-GateProcess `
+                -Record $largeOutputRecord `
+                -RunDirectory $jobTestRoot `
+                -Arguments @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $largeOutputScript) `
+                -TimeoutSeconds 5
+            $stdoutLength = if (Test-Path -LiteralPath $largeOutputRecord.process_log) { (Get-Content -Raw -LiteralPath $largeOutputRecord.process_log).Length } else { 0 }
+            $stderrLength = if (Test-Path -LiteralPath $largeOutputRecord.process_error_log) { (Get-Content -Raw -LiteralPath $largeOutputRecord.process_error_log).Length } else { 0 }
+            if (-not $largeOutputSafe -or -not $largeOutputRecord.job_cleanup_confirmed -or $stdoutLength -lt 131072 -or $stderrLength -lt 131072) {
+                $qualityContractFailures += "Job Object launcher did not drain large stdout and stderr without deadlock"
+            }
+
+            foreach ($failedOperation in @("create", "assign", "query", "terminate", "close")) {
+                $failureJob = if ($failedOperation -eq "create") { $null } else { New-SelfTestJobDouble $failedOperation }
+                $failureArguments = if ($failedOperation -eq "create" -or $failedOperation -eq "assign") {
+                    @("-NoProfile", "-Command", "Start-Sleep -Seconds 30")
+                }
+                else {
+                    @("-NoProfile", "-Command", "exit 0")
+                }
+                $failureRecord = New-RunRecord "Sandbox" "Vulkan" "powershell.exe" (Join-Path $jobTestRoot "$failedOperation.json") (Join-Path $jobTestRoot "$failedOperation.out") (Join-Path $jobTestRoot "$failedOperation.err")
+                $failureSafe = Invoke-GateProcess `
+                    -Record $failureRecord `
+                    -RunDirectory $jobTestRoot `
+                    -Arguments $failureArguments `
+                    -TimeoutSeconds 2 `
+                    -JobFactory {
+                        if ($failedOperation -eq "create") { throw "injected create failure" }
+                        return $failureJob
+                    }
+                $failureRecords = @($failureRecord, (New-RunRecord "Sandbox" "DX12" "Sandbox.exe" "next.json" "next.out" "next.err"))
+                Set-RemainingRunRecordsAborted -Records $failureRecords -StartIndex 1 -Reason "$failedOperation job failure"
+                $failureBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+                $blessRejected = Test-SelfTestThrows {
+                    Update-BaselinesFromRecords -Baseline $failureBaseline -Profile "Standard" -Configuration "Debug" -Records $failureRecords -ReportRoot "self-test"
+                } "unconfirmed process-tree termination"
+                if ($failureSafe -or
+                    $failureRecord.status -ne "FAIL" -or
+                    $failureRecord.tree_termination_confirmed -or
+                    $failureRecords[1].status -ne "FAIL" -or
+                    -not $blessRejected) {
+                    $qualityContractFailures += "Job Object $failedOperation failure did not fail closed, abort remaining runs, and reject bless"
+                }
+            }
+        }
+        finally {
+            foreach ($childProcessId in $childProcessIds) {
+                if (Test-SelfTestProcessAlive $childProcessId) {
+                    Stop-SelfTestProcess $childProcessId
+                }
+            }
+            Remove-Item -LiteralPath $jobTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $matrixAborter = Get-Command Set-RemainingRunRecordsAborted -ErrorAction SilentlyContinue
+    if ($null -eq $matrixAborter) {
+        $qualityContractFailures += "remaining matrix abort helper is missing"
+    }
+    else {
+        $abortRecords = @(
+            (New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "one.json" "one.out" "one.err"),
+            (New-RunRecord "Sandbox" "DX12" "Sandbox.exe" "two.json" "two.out" "two.err")
+        )
+        Set-RemainingRunRecordsAborted -Records $abortRecords -StartIndex 1 -Reason "unconfirmed process tree"
+        if ($abortRecords[0].status -ne "NOT_RUN" -or $abortRecords[1].status -ne "FAIL" -or (@($abortRecords[1].failures) -join " ") -notmatch "unconfirmed process tree") {
+            $qualityContractFailures += "remaining matrix records were not aborted after unsafe termination"
+        }
+    }
+
+    if ($runnerSource -notmatch 'Assert-PerfGateRunRecords\s+-Records\s+\$records' -or
+        $runnerSource -notmatch 'Set-RemainingRunRecordsAborted') {
+        $qualityContractFailures += "runner does not enforce non-empty records and matrix abort"
+    }
+
+    $runnerMainStart = $runnerSource.LastIndexOf('$repoRoot = Get-RepoRoot')
+    if ($runnerMainStart -lt 0) {
+        $qualityContractFailures += "runner main entry point was not found"
+    }
+    else {
+        $runnerMainSource = $runnerSource.Substring($runnerMainStart)
+        $runPlanIndex = $runnerMainSource.IndexOf('$records = @(New-PerfGateRunPlan')
+        $runRecordAssertIndex = $runnerMainSource.IndexOf('Assert-PerfGateRunRecords -Records $records')
+        $reportSideEffectIndex = $runnerMainSource.IndexOf('New-Item -ItemType Directory -Force -Path $reportRoot')
+        $buildSideEffectIndex = $runnerMainSource.IndexOf('Invoke-BatchCommand')
+        if ($runPlanIndex -lt 0 -or $runRecordAssertIndex -lt $runPlanIndex -or
+            ($reportSideEffectIndex -ge 0 -and $runRecordAssertIndex -gt $reportSideEffectIndex) -or
+            ($buildSideEffectIndex -ge 0 -and $runRecordAssertIndex -gt $buildSideEffectIndex)) {
+            $qualityContractFailures += "run plan validation does not precede report and build side effects"
+        }
+    }
+
+    $emptyBlessBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    if (-not (Test-SelfTestThrows {
+        Update-BaselinesFromRecords -Baseline $emptyBlessBaseline -Profile "Standard" -Configuration "Debug" -Records @() -ReportRoot "self-test"
+    } "at least one run")) {
+        $qualityContractFailures += "zero-run baseline bless was accepted"
+    }
+
+    $unsafeBlessRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "unsafe.json" "unsafe.out" "unsafe.err"
+    $unsafeBlessRecord.status = "PASS"
+    if ($null -eq $unsafeBlessRecord.PSObject.Properties["tree_termination_confirmed"]) {
+        $unsafeBlessRecord | Add-Member -MemberType NoteProperty -Name "tree_termination_confirmed" -Value $false
+        $qualityContractFailures += "run record does not track tree termination confirmation"
+    }
+    else {
+        $unsafeBlessRecord.tree_termination_confirmed = $false
+    }
+    $unsafeBlessBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    if (-not (Test-SelfTestThrows {
+        Update-BaselinesFromRecords -Baseline $unsafeBlessBaseline -Profile "Standard" -Configuration "Debug" -Records @($unsafeBlessRecord) -ReportRoot "self-test"
+    } "unconfirmed process-tree termination")) {
+        $qualityContractFailures += "unconfirmed process-tree termination could still bless a baseline"
+    }
+
+    $unsafeJobBlessRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "unsafe-job.json" "unsafe-job.out" "unsafe-job.err"
+    $unsafeJobBlessRecord.status = "PASS"
+    $unsafeJobBlessRecord.tree_termination_confirmed = $true
+    $unsafeJobBlessBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    if (-not (Test-SelfTestThrows {
+        Update-BaselinesFromRecords -Baseline $unsafeJobBlessBaseline -Profile "Standard" -Configuration "Debug" -Records @($unsafeJobBlessRecord) -ReportRoot "self-test"
+    } "unconfirmed Job Object cleanup")) {
+        $qualityContractFailures += "unconfirmed Job Object cleanup could still bless a baseline"
+    }
+
+    if ($qualityContractFailures.Count -gt 0) {
+        throw ("Task9 quality contract RED: {0}" -f ($qualityContractFailures -join "; "))
+    }
 
     $profileConfig = ConvertFrom-Json @'
 {
@@ -1441,6 +2760,9 @@ function Invoke-RunPerfGateSelfTest {
 '@
     $record = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     $record.status = "PASS"
+    $record.root_exited = $true
+    $record.tree_termination_confirmed = $true
+    $record.job_cleanup_confirmed = $true
     $record.cpu_frame_time_avg_ms = 1.12
     $record.cpu_frame_time_p95_ms = 2.10
     $record.cpu_frame_time_p99_ms = 3.10
@@ -1492,9 +2814,18 @@ Assert-PerfGateOptions -BlessBaseline ([bool]$BlessBaseline) -DryRun ([bool]$Dry
 $timestamp = "{0}-{1}-{2}" -f (Get-Date -Format "yyyyMMdd-HHmmss-fff"), $PID, [Guid]::NewGuid().ToString("N").Substring(0, 8)
 $reportRoot = Join-Path $repoRoot "Intermediate/test-reports/perf-gate/$timestamp"
 $buildLogRoot = Join-Path $reportRoot "build"
-New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
+
+$records = @(New-PerfGateRunPlan `
+    -RepoRoot $repoRoot `
+    -ReportRoot $reportRoot `
+    -Profile $Profile `
+    -ProfileConfig $profileConfig `
+    -Configuration $Configuration `
+    -TelemetryMode $TelemetryMode)
+Assert-PerfGateRunRecords -Records $records
 
 $buildCommands = @(Get-PerfGateBuildCommands -ProfileConfig $profileConfig -Configuration $Configuration)
+New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 if ($DryRun -and -not $SkipBuild) {
     foreach ($buildCommand in $buildCommands) {
         Write-Host "BUILD_PLAN: $($buildCommand.command_line)"
@@ -1509,14 +2840,8 @@ if (-not $SkipBuild -and -not $DryRun) {
     }
 }
 
-$records = @(New-PerfGateRunPlan `
-    -RepoRoot $repoRoot `
-    -ReportRoot $reportRoot `
-    -Profile $Profile `
-    -ProfileConfig $profileConfig `
-    -Configuration $Configuration `
-    -TelemetryMode $TelemetryMode)
-foreach ($record in $records) {
+for ($recordIndex = 0; $recordIndex -lt $records.Count; ++$recordIndex) {
+    $record = $records[$recordIndex]
     if ($DryRun) {
         $record.status = "DRY_RUN"
         Write-Host "DRY_RUN: $($record.command_line)"
@@ -1529,7 +2854,7 @@ foreach ($record in $records) {
     }
 
     $runStart = Get-Date
-    Invoke-GateProcess `
+    $matrixMayContinue = Invoke-GateProcess `
         -Record $record `
         -RunDirectory (Split-Path -Parent $record.executable) `
         -Arguments $record.arguments `
@@ -1537,6 +2862,13 @@ foreach ($record in $records) {
 
     $runLogs = Get-RunLogFiles -RepoRoot $repoRoot -Since $runStart
     Test-LogForDiagnostics -Record $record -LogFiles $runLogs
+    if (-not $matrixMayContinue) {
+        Set-RemainingRunRecordsAborted `
+            -Records $records `
+            -StartIndex ($recordIndex + 1) `
+            -Reason "the prior Job Object lifecycle could not be confirmed safe"
+        break
+    }
     if ($record.status -ne "FAIL") {
         Test-Telemetry -Record $record -ProfileConfig $profileConfig -Baseline $baseline -Profile $Profile -Configuration $Configuration
     }

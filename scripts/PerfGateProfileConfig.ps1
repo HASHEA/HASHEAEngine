@@ -14,6 +14,13 @@ function Get-PerfGateObjectProperty {
     return $property.Value
 }
 
+function Test-PerfGateSchemaVersionOne {
+    param([object]$Value)
+
+    $isJsonInteger = $Value -is [System.Int32] -or $Value -is [System.Int64]
+    return $isJsonInteger -and [int64]$Value -eq 1
+}
+
 function Import-PerfGateProfileCatalog {
     param(
         [Parameter(Mandatory = $true)]
@@ -31,13 +38,33 @@ function Import-PerfGateProfileCatalog {
 
     $profileDocument = Get-Content -Raw -LiteralPath $ProfilesPath | ConvertFrom-Json
     $baselineDocument = Get-Content -Raw -LiteralPath $BaselinePath | ConvertFrom-Json
-    if ([int](Get-PerfGateObjectProperty $profileDocument "schema_version") -ne 1) {
+    if (-not (Test-PerfGateSchemaVersionOne (Get-PerfGateObjectProperty $profileDocument "schema_version"))) {
         throw "Unsupported perf gate profile schema_version in '$ProfilesPath'."
     }
+    if (-not (Test-PerfGateSchemaVersionOne (Get-PerfGateObjectProperty $baselineDocument "schema_version"))) {
+        throw "Unsupported perf gate baseline schema_version in '$BaselinePath'."
+    }
+
+    $baselineEntries = Get-PerfGateObjectProperty $baselineDocument "baselines"
+    if ($baselineEntries -isnot [System.Management.Automation.PSCustomObject]) {
+        throw "Perf gate baseline 'baselines' must be a JSON object in '$BaselinePath'."
+    }
+
+    $legacyProfilesProperty = $baselineDocument.PSObject.Properties["profiles"]
+    if ($null -ne $legacyProfilesProperty -and
+        $legacyProfilesProperty.Value -isnot [System.Management.Automation.PSCustomObject]) {
+        throw "Perf gate baseline 'profiles' must be a JSON object in '$BaselinePath'."
+    }
+
+    $newProfilesProperty = $profileDocument.PSObject.Properties["profiles"]
+    if ($null -ne $newProfilesProperty -and
+        $newProfilesProperty.Value -isnot [System.Management.Automation.PSCustomObject]) {
+        throw "Perf gate profile 'profiles' must be a JSON object in '$ProfilesPath'."
+    }
+    $newProfiles = if ($null -eq $newProfilesProperty) { $null } else { $newProfilesProperty.Value }
 
     $profiles = [ordered]@{}
     $sources = [ordered]@{}
-    $newProfiles = Get-PerfGateObjectProperty $profileDocument "profiles"
     if ($null -ne $newProfiles) {
         foreach ($property in @($newProfiles.PSObject.Properties)) {
             $profiles[$property.Name] = $property.Value
