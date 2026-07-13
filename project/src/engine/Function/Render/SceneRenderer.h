@@ -7,6 +7,7 @@
 #include "Function/Render/DirectionalLightShadowPass.h"
 #include "Function/Render/SunLightShadowPass.h"
 #include "Function/Render/EnvironmentLightingPass.h"
+#include "Function/Render/ParticleSystemPass.h"
 #include "Function/Render/PostProcessToneMapPass.h"
 #include "Function/Render/SkyBackgroundPass.h"
 #include "Function/Render/EngineShaderFamilyRegistry.h"
@@ -44,7 +45,10 @@ namespace AshEngine
 		bool initialize(Renderer* renderer, DebugDrawService* debug_draw_service = nullptr);
 		void shutdown();
 		void handle_output_resized();
+		void invalidate_temporal_history();
+		void release_scene_runtime_state(uint64_t scene_runtime_id);
 		bool render_visible_frame(VisibleRenderFrame& frame, const SceneRenderViewContext& view_context);
+		bool is_visible_frame_capture_ready(const VisibleRenderFrame& frame) const;
 		void draw_render_debug_view_ui(UIContext& ui_context);
 		// editor begin 修改原因：P2 GPU ID buffer picking
 		void complete_pending_pick_readbacks(Renderer& renderer, RenderAssetManager& render_asset_manager);
@@ -131,6 +135,7 @@ namespace AshEngine
 		DeferredLightingPass m_deferred_lighting_pass{};
 		EnvironmentLightingPass m_environment_lighting_pass{};
 		SkyBackgroundPass m_sky_background_pass{};
+		ParticleSystemPass m_particle_system_pass{};
 		VolumetricLightingPass m_volumetric_lighting_pass{};
 		TemporalAAPass m_taa_pass{};
 		BloomPass m_bloom_pass{};

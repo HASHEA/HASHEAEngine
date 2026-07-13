@@ -30,6 +30,7 @@ namespace AshEditor
 		virtual void SyncLightDraft(const AshEngine::Entity& entity) = 0;
 		virtual void SyncMeshDraft(const AshEngine::Entity& entity) = 0;
 		virtual void SyncEnvironmentDraft(const AshEngine::Entity& entity) = 0;
+		virtual void SyncParticleDraft(const AshEngine::Entity& entity) = 0;
 
 		virtual void ResetCameraDraftToLive(const AshEngine::Entity& entity) = 0;
 		virtual void ResetCameraDraftToDefaults(const AshEngine::Entity& entity) = 0;
@@ -39,10 +40,13 @@ namespace AshEditor
 		virtual void ResetMeshDraftToDefaults(const AshEngine::Entity& entity) = 0;
 		virtual void ResetEnvironmentDraftToLive(const AshEngine::Entity& entity) = 0;
 		virtual void ResetEnvironmentDraftToDefaults(const AshEngine::Entity& entity) = 0;
+		virtual void ResetParticleDraftToLive(const AshEngine::Entity& entity) = 0;
+		virtual void ResetParticleDraftToDefaults(const AshEngine::Entity& entity) = 0;
 
 		virtual bool CommitCameraDraft(AshEngine::Entity entity) = 0;
 		virtual bool CommitLightDraft(AshEngine::Entity entity) = 0;
 		virtual bool CommitMeshDraft(AshEngine::Entity entity) = 0;
 		virtual bool CommitEnvironmentDraft(AshEngine::Entity entity) = 0;
+		virtual bool CommitParticleDraft(AshEngine::Entity entity) = 0;
 	};
 }

@@ -89,6 +89,13 @@ namespace AshEngine
 		bool affect_lighting = true;
 	};
 
+	struct ASH_API SceneParticleExtractionDesc
+	{
+		EntityId entity_id = 0;
+		ParticleComponent particle{};
+		glm::mat4 world_transform{ 1.0f };
+	};
+
 	class Scene;
 
 	class ASH_API Entity
@@ -138,6 +145,12 @@ namespace AshEngine
 		bool add_environment_component(const EnvironmentComponent& component = {});
 		bool set_environment_component(const EnvironmentComponent& component);
 		bool remove_environment_component();
+
+		bool has_particle_component() const;
+		ParticleComponent get_particle_component() const;
+		bool add_particle_component(const ParticleComponent& component = {});
+		bool set_particle_component(const ParticleComponent& component);
+		bool remove_particle_component();
 
 		bool has_component(SceneComponentType type) const;
 		std::vector<SceneComponentType> get_component_types() const;
@@ -208,6 +221,7 @@ namespace AshEngine
 		std::vector<SceneMeshExtractionDesc> extract_mesh_entities() const;
 		std::vector<SceneMeshExtractionDesc> extract_visible_mesh_entities() const;
 		std::vector<SceneLightExtractionDesc> extract_light_entities() const;
+		std::vector<SceneParticleExtractionDesc> extract_particle_entities() const;
 		bool extract_active_environment(SceneEnvironmentExtractionDesc& out_environment) const;
 		bool try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const;
 
@@ -223,12 +237,16 @@ namespace AshEngine
 
 		bool is_dirty() const;
 		uint64_t get_change_version() const;
+		// Process-local content identity. Component edits keep the epoch; full reload
+		// or replace advances it so stateful render systems can discard old history.
+		uint64_t get_content_epoch() const;
 		const SceneRenderConfig& get_render_config() const;
 		bool set_render_config(const SceneRenderConfig& config);
 		uint64_t get_render_primitive_version() const;
 		uint64_t get_render_transform_version() const;
 		uint64_t get_render_light_version() const;
 		uint64_t get_render_environment_version() const;
+		uint64_t get_render_particle_version() const;
 		uint64_t get_render_config_version() const;
 		void mark_clean();
 

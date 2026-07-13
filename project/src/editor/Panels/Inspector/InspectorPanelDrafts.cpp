@@ -22,6 +22,7 @@ namespace AshEditor
 		state.draftLight = {};
 		state.draftMesh = {};
 		state.draftEnvironment = {};
+		state.draftParticle = {};
 	}
 
 	void InspectorPanel::ResetIdentityDraftToLive(const AshEngine::Entity& entity)
@@ -174,6 +175,32 @@ namespace AshEditor
 		SanitizeOptionalEnvironmentComponent(state.draftEnvironment.optCurrentValue);
 	}
 
+	void InspectorPanel::ResetParticleDraftToLive(const AshEngine::Entity& entity)
+	{
+		if (!entity.is_valid())
+		{
+			return;
+		}
+
+		InspectorPanelState& state = GetState();
+		state.draftParticle.uEntityId = entity.get_id();
+		state.draftParticle.optOriginalValue = GetParticleComponentValue(entity);
+		state.draftParticle.optCurrentValue = state.draftParticle.optOriginalValue;
+	}
+
+	void InspectorPanel::ResetParticleDraftToDefaults(const AshEngine::Entity& entity)
+	{
+		if (!entity.is_valid())
+		{
+			return;
+		}
+
+		InspectorPanelState& state = GetState();
+		state.draftParticle.uEntityId = entity.get_id();
+		state.draftParticle.optCurrentValue = AshEngine::ParticleComponent{};
+		SanitizeOptionalParticleComponent(state.draftParticle.optCurrentValue);
+	}
+
 	void InspectorPanel::SyncEntityDrafts(const AshEngine::Entity& refEntity)
 	{
 		InspectorPanelState& state = GetState();
@@ -286,6 +313,26 @@ namespace AshEditor
 		}
 	}
 
+	void InspectorPanel::SyncParticleDraft(const AshEngine::Entity& refEntity)
+	{
+		InspectorPanelState& state = GetState();
+		const std::optional<AshEngine::ParticleComponent> optLiveValue = GetParticleComponentValue(refEntity);
+		if (state.draftParticle.uEntityId != refEntity.get_id())
+		{
+			state.draftParticle.uEntityId = refEntity.get_id();
+			state.draftParticle.optOriginalValue = optLiveValue;
+			state.draftParticle.optCurrentValue = optLiveValue;
+		}
+		else if (OptionalComponentsEqual(
+			state.draftParticle.optCurrentValue,
+			state.draftParticle.optOriginalValue,
+			&ParticleComponentsEqual))
+		{
+			state.draftParticle.optOriginalValue = optLiveValue;
+			state.draftParticle.optCurrentValue = optLiveValue;
+		}
+	}
+
 	bool InspectorPanel::HasPendingIdentityChanges() const
 	{
 		const InspectorPanelState& state = GetState();
@@ -332,6 +379,15 @@ namespace AshEditor
 			state.draftEnvironment.optCurrentValue,
 			state.draftEnvironment.optOriginalValue,
 			&EnvironmentComponentsEqual);
+	}
+
+	bool InspectorPanel::HasPendingParticleChanges() const
+	{
+		const InspectorPanelState& state = GetState();
+		return !OptionalComponentsEqual(
+			state.draftParticle.optCurrentValue,
+			state.draftParticle.optOriginalValue,
+			&ParticleComponentsEqual);
 	}
 
 	bool InspectorPanel::CommitIdentityDraft(AshEngine::Entity entity)
@@ -567,6 +623,43 @@ namespace AshEditor
 
 		HLogWarning("InspectorPanel failed to commit Environment changes. Entity={}.", uEntityId);
 		state.draftEnvironment.optCurrentValue = state.draftEnvironment.optOriginalValue;
+		return false;
+	}
+
+	bool InspectorPanel::CommitParticleDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingParticleChanges())
+		{
+			return false;
+		}
+
+		const unsigned long long uEntityId = static_cast<unsigned long long>(entity.get_id());
+		bool bApplied = false;
+		if (_deps.pCommandExecutor)
+		{
+			bApplied = _deps.pCommandExecutor->ExecuteCommand(
+				std::make_unique<SetParticleComponentCommand>(
+					entity.get_id(),
+					state.draftParticle.optOriginalValue,
+					state.draftParticle.optCurrentValue));
+		}
+		else
+		{
+			HLogWarning(
+				"InspectorPanel immediate particle edit has no command executor. Falling back to direct write (non-undoable). Entity={}.",
+				uEntityId);
+			bApplied = ApplyParticleComponentValue(entity, state.draftParticle.optCurrentValue);
+		}
+
+		if (bApplied)
+		{
+			state.draftParticle.optOriginalValue = state.draftParticle.optCurrentValue;
+			return true;
+		}
+
+		HLogWarning("InspectorPanel failed to commit Particle changes. Entity={}.", uEntityId);
+		state.draftParticle.optCurrentValue = state.draftParticle.optOriginalValue;
 		return false;
 	}
 }

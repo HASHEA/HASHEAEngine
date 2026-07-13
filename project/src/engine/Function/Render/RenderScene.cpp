@@ -61,6 +61,7 @@ namespace AshEngine
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
 		m_lights = other.m_lights;
 		m_environment = other.m_environment;
+		m_particle_emitters = other.m_particle_emitters;
 		m_render_config = other.m_render_config;
 	}
 
@@ -71,6 +72,7 @@ namespace AshEngine
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
 		m_lights = std::move(other.m_lights);
 		m_environment = std::move(other.m_environment);
+		m_particle_emitters = std::move(other.m_particle_emitters);
 		m_render_config = std::move(other.m_render_config);
 		other.m_next_primitive_id = 1;
 		other.m_render_config = make_default_scene_render_config();
@@ -87,6 +89,7 @@ namespace AshEngine
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
 		m_lights = other.m_lights;
 		m_environment = other.m_environment;
+		m_particle_emitters = other.m_particle_emitters;
 		m_render_config = other.m_render_config;
 		return *this;
 	}
@@ -102,6 +105,7 @@ namespace AshEngine
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
 		m_lights = std::move(other.m_lights);
 		m_environment = std::move(other.m_environment);
+		m_particle_emitters = std::move(other.m_particle_emitters);
 		m_render_config = std::move(other.m_render_config);
 		other.m_next_primitive_id = 1;
 		other.m_render_config = make_default_scene_render_config();
@@ -154,6 +158,7 @@ namespace AshEngine
 		}
 		ASH_PROCESS_ERROR(rebuild_lights_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_environment_from_scene(scene));
+		ASH_PROCESS_ERROR(rebuild_particles_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_render_config_from_scene(scene));
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -238,6 +243,30 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool RenderScene::rebuild_particles_from_scene(const Scene& scene)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_particles_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		std::vector<VisibleParticleEmitter> rebuilt_emitters{};
+		for (const SceneParticleExtractionDesc& particle_desc : scene.extract_particle_entities())
+		{
+			VisibleParticleEmitter emitter{};
+			emitter.entity_id = particle_desc.entity_id;
+			emitter.particle = particle_desc.particle;
+			emitter.particle.max_particles = std::min(emitter.particle.max_particles, k_max_particles_per_emitter);
+			emitter.world_transform = particle_desc.world_transform;
+			rebuilt_emitters.push_back(std::move(emitter));
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_particle_emitters = std::move(rebuilt_emitters);
+		}
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool RenderScene::rebuild_render_config_from_scene(const Scene& scene)
 	{
 		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_render_config_from_scene", AshEngine::Profile::Color::Scene);
@@ -285,6 +314,7 @@ namespace AshEngine
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			out_frame.environment = m_environment;
+			out_frame.particle_emitters = m_particle_emitters;
 		}
 
 		out_frame.static_mesh_draws.reserve(visibility.visible_primitives.primitives.size());

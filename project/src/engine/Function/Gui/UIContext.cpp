@@ -1274,6 +1274,15 @@ namespace AshEngine
 		return is_frame_active() && label ? ImGui::InputInt(label, &value, step, step_fast) : false;
 	}
 
+	// editor begin 修改原因：粒子 Inspector 的 random_seed 需要完整 uint32 输入范围。
+	bool UIContext::input_uint(const char* label, uint32_t& value, uint32_t step, uint32_t step_fast)
+	{
+		return is_frame_active() && label ?
+			ImGui::InputScalar(label, ImGuiDataType_U32, &value, &step, &step_fast) :
+			false;
+	}
+	// editor end
+
 	bool UIContext::input_float(const char* label, float& value, float step, float step_fast, const char* format)
 	{
 		return is_frame_active() && label ? ImGui::InputFloat(label, &value, step, step_fast, format ? format : "%.3f") : false;

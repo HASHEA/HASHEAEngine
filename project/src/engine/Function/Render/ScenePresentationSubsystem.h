@@ -116,6 +116,17 @@ namespace AshEngine
 		int32_t sort_order = 0;
 	};
 
+	struct ASH_API SceneSubmissionSnapshot
+	{
+		uint64_t frame_index = 0;
+		uint64_t render_asset_epoch = 0;
+		uint32_t scene_packets_attempted = 0;
+		uint32_t scene_packets_succeeded = 0;
+		uint32_t scene_packets_failed = 0;
+		uint32_t scene_packets_capture_ready = 0;
+		bool valid = false;
+	};
+
 	class ASH_API ScenePresentationSubsystem
 	{
 	public:
@@ -141,6 +152,8 @@ namespace AshEngine
 		bool request_refresh(SceneViewBindingHandle handle);
 
 		UISurfaceHandle get_ui_surface(SceneOutputHandle handle) const;
+		SceneSubmissionSnapshot get_last_scene_submission_snapshot() const;
+		void invalidate_temporal_history();
 
 		bool update_presentations();
 		bool submit_presentations();

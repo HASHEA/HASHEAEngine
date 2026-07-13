@@ -130,6 +130,9 @@ namespace AshEngine
 		bool input_text(const char* label, std::string& value, UIInputTextFlags flags = UIInputTextFlagBits::None);
 		bool input_text_multiline(const char* label, std::string& value, const UIVec2& size = {}, UIInputTextFlags flags = UIInputTextFlagBits::None);
 		bool input_int(const char* label, int32_t& value, int32_t step = 1, int32_t step_fast = 100);
+		// editor begin 修改原因：粒子 Inspector 的 random_seed 需要完整 uint32 输入范围。
+		bool input_uint(const char* label, uint32_t& value, uint32_t step = 1, uint32_t step_fast = 100);
+		// editor end
 		bool input_float(const char* label, float& value, float step = 0.0f, float step_fast = 0.0f, const char* format = "%.3f");
 		bool input_float2(const char* label, float value[2], const char* format = "%.3f", UIInputTextFlags flags = UIInputTextFlagBits::None);
 		bool input_float3(const char* label, float value[3], const char* format = "%.3f", UIInputTextFlags flags = UIInputTextFlagBits::None);

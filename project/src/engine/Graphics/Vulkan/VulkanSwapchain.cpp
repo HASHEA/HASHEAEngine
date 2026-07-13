@@ -306,48 +306,81 @@ namespace RHI
 		return true;
 	}
 
-	auto VulkanSwapchain::_aquire_next_image() -> void
+	auto VulkanSwapchain::classify_acquire_result(VkResult result) -> SwapchainPresentResult
+	{
+		if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR)
+		{
+			return SwapchainPresentResult::Completed;
+		}
+		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_NOT_READY || result == VK_TIMEOUT)
+		{
+			return SwapchainPresentResult::Retryable;
+		}
+		return SwapchainPresentResult::Failed;
+	}
+
+	auto VulkanSwapchain::acquire_result_requires_recreate(VkResult result) -> bool
+	{
+		return result == VK_ERROR_OUT_OF_DATE_KHR;
+	}
+
+	auto VulkanSwapchain::_aquire_next_image() -> SwapchainPresentResult
 	{
 		ASH_PROFILE_SCOPE_NC("VulkanSwapchain::AcquireNextImage", AshEngine::Profile::Color::Present);
+		VulkanContext::get()->vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		if (swapchainBufferCount == 1 && acquireImageIndex != UINT32_MAX)
 		{
-			return;
+			if (acquireImageIndex >= swapChainRenderCompleteSemaphores.size())
+			{
+				HLogError("VulkanSwapchain: retained image index {} is outside render-complete semaphore count {}.", acquireImageIndex, swapChainRenderCompleteSemaphores.size());
+				acquireImageIndex = UINT32_MAX;
+				return SwapchainPresentResult::Failed;
+			}
+			VulkanContext::get()->vulkanPresentCompleteSemaphore = swapChainRenderCompleteSemaphores[acquireImageIndex];
+			return SwapchainPresentResult::Completed;
 		}
 		acquireImageIndex = UINT32_MAX;
-		VkResult result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
-		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+		constexpr uint64_t acquire_timeout_ns = 1'000'000'000ull;
+		VkResult result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, acquire_timeout_ns, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
+		const SwapchainPresentResult acquireResult = classify_acquire_result(result);
+		if (acquireResult == SwapchainPresentResult::Retryable)
 		{
-			HLogWarning("Acquire Image result : {0}", result == VK_ERROR_OUT_OF_DATE_KHR ? "Out of Date" : "SubOptimal");
-
-			if (result == VK_ERROR_OUT_OF_DATE_KHR)
+			if (acquire_result_requires_recreate(result))
 			{
+				HLogWarning("VulkanSwapchain: acquire returned out-of-date; recreated the swapchain and will retry next frame.");
 				_recreate_swapchain(true);
-				result = vkAcquireNextImageKHR(VulkanContext::get_vulkan_device(), swapChain, UINT64_MAX, VulkanContext::get_frame_data().vulkanRenderBeginSemaphore, VK_NULL_HANDLE, &acquireImageIndex);
-				if (result == VK_SUBOPTIMAL_KHR)
-				{
-					HLogWarning("Acquire Image result after recreation : SubOptimal");
-				}
 			}
-		}
-		if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
-		{
-			VK_CHECK_RESULT(result);
+			else
+			{
+				HLogWarning("VulkanSwapchain: acquire did not produce an image within the finite wait (VkResult {}); retrying next frame.", static_cast<int32_t>(result));
+			}
 			acquireImageIndex = UINT32_MAX;
-			return;
+			return SwapchainPresentResult::Retryable;
+		}
+		if (acquireResult == SwapchainPresentResult::Failed)
+		{
+			HLogError("VulkanSwapchain: vkAcquireNextImageKHR failed with VkResult {}.", static_cast<int32_t>(result));
+			acquireImageIndex = UINT32_MAX;
+			return SwapchainPresentResult::Failed;
+		}
+		if (result == VK_SUBOPTIMAL_KHR)
+		{
+			HLogWarning("VulkanSwapchain: acquire completed with a suboptimal swapchain.");
 		}
 		if (acquireImageIndex >= swapChainImages.size())
 		{
 			HLogError("VulkanSwapchain: acquired image index {} is outside swapchain image count {}.", acquireImageIndex, swapChainImages.size());
 			acquireImageIndex = UINT32_MAX;
-			return;
+			return SwapchainPresentResult::Failed;
 		}
 		if (acquireImageIndex >= swapChainRenderCompleteSemaphores.size())
 		{
 			HLogError("VulkanSwapchain: acquired image index {} is outside render-complete semaphore count {}.", acquireImageIndex, swapChainRenderCompleteSemaphores.size());
 			acquireImageIndex = UINT32_MAX;
-			return;
+			return SwapchainPresentResult::Failed;
 		}
 		VulkanContext::get()->vulkanPresentCompleteSemaphore = swapChainRenderCompleteSemaphores[acquireImageIndex];
+		return SwapchainPresentResult::Completed;
 	}
 
 	auto VulkanSwapchain::get_swapchain_buffer_count() -> uint8_t
@@ -355,9 +388,9 @@ namespace RHI
 		return swapchainBufferCount;
 	}
 
-	auto VulkanSwapchain::begin_frame() -> void
+	auto VulkanSwapchain::begin_frame() -> SwapchainPresentResult
 	{
-		_aquire_next_image();
+		return _aquire_next_image();
 	}
 
 	auto VulkanSwapchain::end_frame() -> void
@@ -402,13 +435,13 @@ namespace RHI
 		_recreate_swapchain(true);
 	}
 
-	auto VulkanSwapchain::present() -> void
+	auto VulkanSwapchain::present() -> SwapchainPresentResult
 	{
 		ASH_PROFILE_SCOPE_NC("VulkanSwapchain::Present", AshEngine::Profile::Color::Present);
 		if (acquireImageIndex == UINT32_MAX)
 		{
 			HLogWarning("VulkanSwapchain: present skipped because no acquired image is available.");
-			return;
+			return SwapchainPresentResult::Retryable;
 		}
 
 		VkPresentInfoKHR presentInfo{ VK_STRUCTURE_TYPE_PRESENT_INFO_KHR };
@@ -416,22 +449,36 @@ namespace RHI
 		presentInfo.pSwapchains = &swapChain;
 		presentInfo.pImageIndices = &acquireImageIndex;
 		presentInfo.waitSemaphoreCount = 1;
-		const VkSemaphore presentWaitSemaphore =
-			VulkanContext::get()->vulkanPresentCompleteSemaphore != VK_NULL_HANDLE ?
-			VulkanContext::get()->vulkanPresentCompleteSemaphore :
-			VulkanContext::get_frame_data().vulkanRenderCompleteSemaphore;
+		if (VulkanContext::get()->vulkanPresentCompleteSemaphore == VK_NULL_HANDLE)
+		{
+			HLogError("VulkanSwapchain: present requested without a render-complete semaphore.");
+			acquireImageIndex = UINT32_MAX;
+			return SwapchainPresentResult::Failed;
+		}
+		const VkSemaphore presentWaitSemaphore = VulkanContext::get()->vulkanPresentCompleteSemaphore;
 		presentInfo.pWaitSemaphores = &presentWaitSemaphore;
 		presentInfo.pResults = nullptr;
 		VkResult result = vkQueuePresentKHR(VulkanContext::get_present_queue(), &presentInfo);
 		acquireImageIndex = UINT32_MAX;
 		VulkanContext::get()->vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
-		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+		if (result == VK_ERROR_OUT_OF_DATE_KHR)
 		{
 			_recreate_swapchain(true);
-			HLogWarning("VulkanSwapchain: present requested swapchain recreation.");
-			return;
+			HLogWarning("VulkanSwapchain: present was out of date; recreated the swapchain.");
+			return SwapchainPresentResult::Retryable;
 		}
-		VK_CHECK_RESULT(result);
+		if (result == VK_SUBOPTIMAL_KHR)
+		{
+			_recreate_swapchain(true);
+			HLogWarning("VulkanSwapchain: present succeeded with a suboptimal swapchain; recreated it.");
+			return SwapchainPresentResult::Completed;
+		}
+		if (result != VK_SUCCESS)
+		{
+			VK_CHECK_RESULT(result);
+			return SwapchainPresentResult::Failed;
+		}
+		return SwapchainPresentResult::Completed;
 	}
 
 }

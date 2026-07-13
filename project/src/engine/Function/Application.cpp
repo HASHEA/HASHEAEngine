@@ -320,6 +320,10 @@ namespace AshEngine
 	{
 		maxRunSeconds = inMaxRunSeconds > 0.0 ? inMaxRunSeconds : 0.0;
 	}
+	auto Application::set_readiness_smoke_timeout_seconds(double timeoutSeconds) -> void
+	{
+		readinessSmokeTimeoutSeconds = timeoutSeconds > 0.0 ? timeoutSeconds : 0.0;
+	}
 	auto Application::configure_perf_gate(const PerfGateConfig& config) -> void
 	{
 		perfGateController.configure(config, initConfig.title, activeBackend);
@@ -332,35 +336,64 @@ namespace AshEngine
 	{
 		scenePathOverride = std::move(path);
 	}
-	auto Application::start() -> void
+	auto Application::start() -> bool
 	{
 		if (!initialized)
 		{
 			HLogError("Application::start() called before successful initialization.");
-			return;
+			return false;
 		}
 		if (started)
 		{
-			return;
+			HLogError("Application::start() cannot be called while the application is already running.");
+			return false;
+		}
+
+		static constexpr double k_default_frame_dump_timeout_seconds = 120.0;
+		const ApplicationAutomationMode automationMode = !frameDumpPath.empty()
+			? ApplicationAutomationMode::FrameDump
+			: (readinessSmokeTimeoutSeconds > 0.0
+				? ApplicationAutomationMode::Smoke
+				: ApplicationAutomationMode::Disabled);
+		const bool automationEnabled = automationMode != ApplicationAutomationMode::Disabled;
+		const double automationTimeoutSeconds = automationMode == ApplicationAutomationMode::FrameDump && readinessSmokeTimeoutSeconds <= 0.0
+			? k_default_frame_dump_timeout_seconds
+			: readinessSmokeTimeoutSeconds;
+		automationController.configure(automationMode, automationTimeoutSeconds);
+
+		if (!frameDumpPath.empty())
+		{
+			std::error_code removeError{};
+			std::filesystem::remove(std::filesystem::path(frameDumpPath), removeError);
+			if (removeError)
+			{
+				HLogError("Application: failed to remove stale frame dump '{}': {}.", frameDumpPath, removeError.message());
+				return false;
+			}
+			if (readinessSmokeTimeoutSeconds <= 0.0)
+			{
+				HLogInfo("Application: --dump-frame is using the default {:.0f}s readiness timeout.", automationTimeoutSeconds);
+			}
 		}
 
 		ASH_PROFILE_THREAD("Render");
 		started = true;
 		exitRequested.store(false, std::memory_order_release);
+		runtimeFailureDetected.store(false, std::memory_order_release);
 		logicThreadStopRequested.store(false, std::memory_order_release);
 		logicThreadFailed.store(false, std::memory_order_release);
 		frameIndex.store(0, std::memory_order_release);
-		frameDumpQuiesceFrameCount = 0;
+		frameDumpCapturePending = false;
+		frameDumpWritten = false;
 		logicThreadException = nullptr;
 		logicThreadFailureMessage.clear();
 		runStartTime = std::chrono::steady_clock::now();
-		if (!frameDumpPath.empty() && maxFrameCount == 0)
-		{
-			HLogWarning("Application: --dump-frame requires a smoke frame limit (--smoke-test=N); frame dump will be skipped.");
-		}
 		if (rhiIndirectSelfTestRequested)
 		{
-			run_rhi_indirect_self_test(graphicsContext);
+			if (!run_rhi_indirect_self_test(graphicsContext))
+			{
+				runtimeFailureDetected.store(true, std::memory_order_release);
+			}
 		}
 		_on_startup();
 		perfGateController.begin();
@@ -368,6 +401,9 @@ namespace AshEngine
 
 		while (!_should_exit())
 		{
+			const uint64_t currentFrameIndex = frameIndex.load(std::memory_order_acquire);
+			bool captureRequested = false;
+			bool framePresentCompleted = false;
 			_pump_platform_events();
 			_tick_frame();
 			_check_logic_thread_failure();
@@ -375,42 +411,41 @@ namespace AshEngine
 
 			if (_should_render_frame())
 			{
-				const bool isFinalSmokeFrame = maxFrameCount > 0
-					&& frameIndex.load(std::memory_order_acquire) + 1 >= maxFrameCount;
-				if (maxFrameCount > 0 && !frameDumpPath.empty() && !frameDumpWritten && renderDevice)
+				if (automationMode == ApplicationAutomationMode::FrameDump && !frameDumpWritten && renderDevice)
 				{
-					// RenderGate（SDD-2026-07-07-render-gate-streaming-signal）：抓帧由流送完成信号
-					// 驱动；纯帧数等待在高帧率下会在资产加载完成前触发，抓到空场景。帧数上限仅作超时保底。
-					static constexpr uint32_t k_frame_dump_quiesce_frames = 32;
-					const bool streamingQuiesced = renderAssetManager.has_requested_render_assets()
-						&& !renderAssetManager.has_pending_render_assets();
-					frameDumpQuiesceFrameCount = streamingQuiesced ? frameDumpQuiesceFrameCount + 1 : 0;
-					if (frameDumpQuiesceFrameCount >= k_frame_dump_quiesce_frames)
+					const RenderAssetReadinessSnapshot assetReadiness = renderAssetManager.query_readiness();
+					ApplicationAutomationPreFrame preFrame{};
+					preFrame.application_readiness = runtimeFailureDetected.load(std::memory_order_acquire)
+						? ApplicationReadiness::Failed
+						: _get_automation_readiness();
+					preFrame.render_asset_epoch = assetReadiness.activity_epoch;
+					preFrame.render_assets_pending = assetReadiness.pending;
+					preFrame.render_assets_failed = assetReadiness.failed;
+					preFrame.render_commands_pending = has_pending_render_commands();
+					if (automationController.should_request_capture(preFrame))
 					{
-						HLogInfo("Application: render asset streaming quiesced for {} frames at frame {}; capturing frame dump.",
-							frameDumpQuiesceFrameCount, frameIndex.load(std::memory_order_acquire));
+						HLogInfo("Application: readiness capture armed at frame {}, asset epoch {}.", currentFrameIndex, assetReadiness.activity_epoch);
 						renderDevice->request_back_buffer_capture();
 						frameDumpCapturePending = true;
-					}
-					else if (isFinalSmokeFrame)
-					{
-						HLogWarning("Application: smoke frame limit reached before render asset streaming quiesced; frame dump may capture an incomplete scene.");
-						renderDevice->request_back_buffer_capture();
-						frameDumpCapturePending = true;
+						captureRequested = true;
 					}
 				}
-				_render_frame();
-				_present_frame();
-				if (frameDumpCapturePending)
+
+				const RHI::SwapchainPresentResult frameRenderResult = _render_frame();
+				const bool frameRendered = frameRenderResult == RHI::SwapchainPresentResult::Completed;
+				if (!frameRendered)
 				{
-					_write_pending_frame_dump();
-					if (frameDumpWritten)
-					{
-						HLogInfo("Application: frame dump complete; requesting exit.");
-						request_exit();
-					}
+					captureRequested = false;
+					frameDumpCapturePending = false;
 				}
-				if (renderer && perfGateController.is_enabled())
+				framePresentCompleted = currentFramePresentRequired && _present_frame();
+				if (frameRenderResult == RHI::SwapchainPresentResult::Failed)
+				{
+					runtimeFailureDetected.store(true, std::memory_order_release);
+					HLogError("Application: render frame {} failed; requesting exit.", currentFrameIndex);
+					request_exit();
+				}
+				if (frameRendered && renderer && perfGateController.is_enabled())
 				{
 					perfGateController.sample_after_frame(renderer->get_frame_stats());
 					if (perfGateController.should_request_exit())
@@ -427,10 +462,118 @@ namespace AshEngine
 
 			pump_render_commands();
 
-			const uint64_t currentFrameIndex = frameIndex.fetch_add(1, std::memory_order_acq_rel) + 1;
-			if (maxFrameCount > 0 && currentFrameIndex >= maxFrameCount)
+			if (automationEnabled)
 			{
-				HLogInfo("Application smoke frame limit reached: {}", maxFrameCount);
+				const RenderAssetReadinessSnapshot assetReadiness = renderAssetManager.query_readiness();
+				const SceneSubmissionSnapshot submission = scenePresentation.get_last_scene_submission_snapshot();
+				ApplicationAutomationFrame automationFrame{};
+				automationFrame.application_readiness =
+					runtimeFailureDetected.load(std::memory_order_acquire) ||
+					logicThreadFailed.load(std::memory_order_acquire)
+						? ApplicationReadiness::Failed
+						: _get_automation_readiness();
+				automationFrame.render_asset_epoch = assetReadiness.activity_epoch;
+				automationFrame.render_assets_pending = assetReadiness.pending;
+				automationFrame.render_assets_failed = assetReadiness.failed;
+				automationFrame.render_commands_pending = has_pending_render_commands();
+				if (submission.valid && submission.frame_index == currentFrameIndex)
+				{
+					automationFrame.scene_submission_asset_epoch = submission.render_asset_epoch;
+					automationFrame.scene_packets_attempted = submission.scene_packets_attempted;
+					automationFrame.scene_packets_succeeded = submission.scene_packets_succeeded;
+					automationFrame.scene_packets_failed = submission.scene_packets_failed;
+					automationFrame.scene_packets_capture_ready = submission.scene_packets_capture_ready;
+				}
+				automationFrame.present_completed = framePresentCompleted;
+
+				const double elapsedSeconds = std::chrono::duration<double>(
+					std::chrono::steady_clock::now() - runStartTime).count();
+				ApplicationAutomationDecision decision = automationController.observe_presented_frame(
+					automationFrame,
+					captureRequested,
+					captureRequested,
+					elapsedSeconds);
+				if (decision.invalidate_temporal_history)
+				{
+					scenePresentation.invalidate_temporal_history();
+					HLogInfo(
+						"Application: invalidated temporal history for readiness capture at asset epoch {}.",
+						automationFrame.render_asset_epoch);
+				}
+
+				if (captureRequested)
+				{
+					if (decision.accept_capture)
+					{
+						const bool writeSucceeded = _write_pending_frame_dump(automationTimeoutSeconds);
+						const double completionElapsedSeconds = std::chrono::duration<double>(
+							std::chrono::steady_clock::now() - runStartTime).count();
+						decision = automationController.complete_capture(writeSucceeded, completionElapsedSeconds);
+						if (writeSucceeded && !decision.succeeded)
+						{
+							std::error_code removeError{};
+							std::filesystem::remove(std::filesystem::path(frameDumpPath), removeError);
+							frameDumpWritten = false;
+							if (removeError)
+							{
+								runtimeFailureDetected.store(true, std::memory_order_release);
+								HLogError(
+									"Application: capture crossed its hard deadline and output '{}' could not be removed: {}.",
+									frameDumpPath,
+									removeError.message());
+							}
+						}
+						if (!writeSucceeded)
+						{
+							runtimeFailureDetected.store(true, std::memory_order_release);
+							HLogError("Application: readiness capture could not be written.");
+						}
+					}
+					else
+					{
+						if (!_discard_pending_frame_dump(automationTimeoutSeconds))
+						{
+							runtimeFailureDetected.store(true, std::memory_order_release);
+						}
+						HLogInfo("Application: discarded capture from frame {} because readiness changed.", currentFrameIndex);
+					}
+				}
+
+				if (decision.request_exit)
+				{
+					if (decision.succeeded && !runtimeFailureDetected.load(std::memory_order_acquire))
+					{
+						HLogInfo("Application: readiness automation succeeded at frame {}.", currentFrameIndex);
+					}
+					else
+					{
+						runtimeFailureDetected.store(true, std::memory_order_release);
+						HLogError(
+							"Application: readiness automation failed at frame {} (outcome={}, app={}, asset_epoch={}, asset_pending={}, asset_failed={}, commands_pending={}, submission_valid={}, submission_frame={}, submission_epoch={}, attempted={}, succeeded={}, failed={}, capture_ready={}, present_completed={}).",
+							currentFrameIndex,
+							static_cast<uint32_t>(automationController.outcome()),
+							static_cast<uint32_t>(automationFrame.application_readiness),
+							automationFrame.render_asset_epoch,
+							automationFrame.render_assets_pending ? "yes" : "no",
+							automationFrame.render_assets_failed ? "yes" : "no",
+							automationFrame.render_commands_pending ? "yes" : "no",
+							submission.valid ? "yes" : "no",
+							submission.frame_index,
+							automationFrame.scene_submission_asset_epoch,
+							automationFrame.scene_packets_attempted,
+							automationFrame.scene_packets_succeeded,
+							automationFrame.scene_packets_failed,
+							automationFrame.scene_packets_capture_ready,
+							automationFrame.present_completed ? "yes" : "no");
+					}
+					request_exit();
+				}
+			}
+
+			const uint64_t completedFrameCount = frameIndex.fetch_add(1, std::memory_order_acq_rel) + 1;
+			if (maxFrameCount > 0 && completedFrameCount >= maxFrameCount)
+			{
+				HLogInfo("Application --run-for-frames limit reached: {}", maxFrameCount);
 				request_exit();
 			}
 			if (maxRunSeconds > 0.0)
@@ -438,7 +581,7 @@ namespace AshEngine
 				const auto elapsedSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - runStartTime).count();
 				if (elapsedSeconds >= maxRunSeconds)
 				{
-					HLogInfo("Application smoke time limit reached: {:.2f}", maxRunSeconds);
+					HLogInfo("Application --run-for-seconds limit reached: {:.2f}", maxRunSeconds);
 					request_exit();
 				}
 			}
@@ -449,22 +592,68 @@ namespace AshEngine
 		{
 			flush_render_commands();
 		}
+		if (automationEnabled && automationController.outcome() != ApplicationAutomationOutcome::Succeeded)
+		{
+			if (automationController.outcome() == ApplicationAutomationOutcome::Running)
+			{
+				HLogError("Application: readiness automation terminated before reaching a final outcome.");
+			}
+			runtimeFailureDetected.store(true, std::memory_order_release);
+		}
+		const ApplicationReadiness finalApplicationReadiness = _get_automation_readiness();
 		_on_shutdown();
 		started = false;
+
+		const bool runtimeSucceeded =
+			!runtimeFailureDetected.load(std::memory_order_acquire) &&
+			!logicThreadFailed.load(std::memory_order_acquire) &&
+			finalApplicationReadiness != ApplicationReadiness::Failed;
+		if (!automationEnabled)
+		{
+			return runtimeSucceeded;
+		}
+		const bool automationSucceeded =
+			automationController.outcome() == ApplicationAutomationOutcome::Succeeded;
+		const bool captureSucceeded =
+			automationMode != ApplicationAutomationMode::FrameDump || frameDumpWritten;
+		return runtimeSucceeded && automationSucceeded && captureSucceeded;
 	}
-	auto Application::_write_pending_frame_dump() -> void
+	auto Application::_write_pending_frame_dump(double deadline_seconds) -> bool
 	{
 		frameDumpCapturePending = false;
 		if (!renderDevice)
 		{
-			return;
+			return false;
 		}
+		const auto deadlineExceeded = [this, deadline_seconds]()
+		{
+			return deadline_seconds > 0.0 &&
+				std::chrono::duration<double>(std::chrono::steady_clock::now() - runStartTime).count() >= deadline_seconds;
+		};
+		const double elapsed_before_capture_wait = std::chrono::duration<double>(
+			std::chrono::steady_clock::now() - runStartTime).count();
+		const double remaining_capture_wait_seconds = deadline_seconds - elapsed_before_capture_wait;
+		if (remaining_capture_wait_seconds <= 0.0)
+		{
+			HLogError("Application: frame dump deadline expired before GPU readback '{}'.", frameDumpPath);
+			return false;
+		}
+		const int64_t remaining_capture_wait_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::duration<double>(remaining_capture_wait_seconds)).count();
+		const uint64_t remaining_capture_wait_nanoseconds = remaining_capture_wait_count > 0
+			? static_cast<uint64_t>(remaining_capture_wait_count)
+			: 1u;
 
 		RenderDevice::BackBufferCaptureResult capture{};
-		if (!renderDevice->fetch_back_buffer_capture(capture))
+		if (!renderDevice->fetch_back_buffer_capture(capture, remaining_capture_wait_nanoseconds))
 		{
 			HLogError("Application: failed to fetch back buffer capture for frame dump '{}'.", frameDumpPath);
-			return;
+			return false;
+		}
+		if (deadlineExceeded())
+		{
+			HLogError("Application: frame dump deadline expired while waiting for back buffer capture '{}'.", frameDumpPath);
+			return false;
 		}
 
 		std::error_code ec{};
@@ -472,10 +661,19 @@ namespace AshEngine
 		if (dumpPath.has_parent_path())
 		{
 			std::filesystem::create_directories(dumpPath.parent_path(), ec);
+			if (ec)
+			{
+				HLogError("Application: failed to create frame dump directory '{}': {}.", dumpPath.parent_path().string(), ec.message());
+				return false;
+			}
 		}
+		std::filesystem::path temporaryPath = dumpPath;
+		temporaryPath += ".tmp.png";
+		std::filesystem::remove(temporaryPath, ec);
+		ec.clear();
 
 		const int writeResult = stbi_write_png(
-			frameDumpPath.c_str(),
+			temporaryPath.string().c_str(),
 			static_cast<int>(capture.width),
 			static_cast<int>(capture.height),
 			4,
@@ -483,12 +681,65 @@ namespace AshEngine
 			static_cast<int>(capture.width * 4));
 		if (writeResult == 0)
 		{
-			HLogError("Application: failed to write frame dump PNG '{}'.", frameDumpPath);
-			return;
+			HLogError("Application: failed to write temporary frame dump PNG '{}'.", temporaryPath.string());
+			std::filesystem::remove(temporaryPath, ec);
+			return false;
+		}
+		if (deadlineExceeded())
+		{
+			HLogError("Application: frame dump deadline expired while encoding '{}'.", frameDumpPath);
+			std::filesystem::remove(temporaryPath, ec);
+			return false;
+		}
+		std::filesystem::rename(temporaryPath, dumpPath, ec);
+		if (ec)
+		{
+			HLogError("Application: failed to publish frame dump PNG '{}': {}.", frameDumpPath, ec.message());
+			std::filesystem::remove(temporaryPath, ec);
+			return false;
+		}
+		if (deadlineExceeded())
+		{
+			HLogError("Application: frame dump deadline expired while publishing '{}'.", frameDumpPath);
+			std::filesystem::remove(dumpPath, ec);
+			if (ec)
+			{
+				HLogError("Application: timed-out frame dump '{}' could not be removed: {}.", frameDumpPath, ec.message());
+			}
+			return false;
 		}
 
 		frameDumpWritten = true;
 		HLogInfo("Application: frame dump written to '{}' ({}x{}).", frameDumpPath, capture.width, capture.height);
+		return true;
+	}
+	auto Application::_discard_pending_frame_dump(double deadline_seconds) -> bool
+	{
+		frameDumpCapturePending = false;
+		if (!renderDevice)
+		{
+			return false;
+		}
+		const double elapsed_before_capture_wait = std::chrono::duration<double>(
+			std::chrono::steady_clock::now() - runStartTime).count();
+		const double remaining_capture_wait_seconds = deadline_seconds - elapsed_before_capture_wait;
+		if (remaining_capture_wait_seconds <= 0.0)
+		{
+			HLogError("Application: frame dump deadline expired before discarded GPU readback.");
+			return false;
+		}
+		const int64_t remaining_capture_wait_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::duration<double>(remaining_capture_wait_seconds)).count();
+		const uint64_t remaining_capture_wait_nanoseconds = remaining_capture_wait_count > 0
+			? static_cast<uint64_t>(remaining_capture_wait_count)
+			: 1u;
+		RenderDevice::BackBufferCaptureResult discardedCapture{};
+		if (!renderDevice->fetch_back_buffer_capture(discardedCapture, remaining_capture_wait_nanoseconds))
+		{
+			HLogError("Application: failed to fetch a discarded back buffer capture.");
+			return false;
+		}
+		return true;
 	}
 	auto Application::_pump_platform_events() -> void
 	{
@@ -516,17 +767,35 @@ namespace AshEngine
 			debugDrawService.commit_frame();
 		}
 	}
-	auto Application::_render_frame() -> void
+	auto Application::_render_frame() -> RHI::SwapchainPresentResult
 	{
 		ASH_PROFILE_SCOPE_NC("App::Render", AshEngine::Profile::Color::Render);
+		currentFrameRenderSucceeded = false;
+		currentFramePresentRequired = false;
+		currentFrameRenderResult = RHI::SwapchainPresentResult::Failed;
 		_on_render();
+		return currentFrameRenderResult;
 	}
-	auto Application::_present_frame() -> void
+	auto Application::_present_frame() -> bool
 	{
+		if (!currentFramePresentRequired)
+		{
+			return false;
+		}
 		ASH_PROFILE_SCOPE_NC("App::Present", AshEngine::Profile::Color::Present);
-		_present();
+		const RHI::SwapchainPresentResult presentResult = renderer
+			? renderer->present()
+			: RHI::SwapchainPresentResult::Failed;
+		currentFramePresentRequired = false;
 		// FrameMark 必须放在每帧 present 之后，标记一帧的边界。
 		ASH_PROFILE_FRAME();
+		if (presentResult == RHI::SwapchainPresentResult::Failed)
+		{
+			runtimeFailureDetected.store(true, std::memory_order_release);
+			HLogError("Application: swapchain present failed fatally; requesting exit.");
+			request_exit();
+		}
+		return presentResult == RHI::SwapchainPresentResult::Completed;
 	}
 	auto Application::_should_render_frame() const -> bool
 	{
@@ -716,6 +985,7 @@ namespace AshEngine
 		}
 
 		logicThreadFailed.store(true, std::memory_order_release);
+		runtimeFailureDetected.store(true, std::memory_order_release);
 		exitRequested.store(true, std::memory_order_release);
 		HLogError("Logic thread aborted: {}", failureMessage);
 	}
@@ -836,12 +1106,20 @@ namespace AshEngine
 	}
 	auto Application::_on_render() -> void
 	{
-		if (renderer && renderer->begin_frame())
+		currentFrameRenderResult = renderer
+			? renderer->begin_frame()
+			: RHI::SwapchainPresentResult::Failed;
+		if (currentFrameRenderResult == RHI::SwapchainPresentResult::Completed)
 		{
 			_on_render_debug();
 			_run_scene_presentation_submit_phase();
 			_on_gui();
-			renderer->end_frame();
+			currentFrameRenderSucceeded = renderer->end_frame();
+			currentFramePresentRequired = true;
+			if (!currentFrameRenderSucceeded)
+			{
+				currentFrameRenderResult = RHI::SwapchainPresentResult::Failed;
+			}
 			scenePresentation.complete_gpu_pick_readbacks();
 		}
 	}
@@ -850,6 +1128,7 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_NC("App::ScenePresentationUpdate", AshEngine::Profile::Color::Scene);
 		if (!scenePresentation.update_presentations())
 		{
+			runtimeFailureDetected.store(true, std::memory_order_release);
 			HLogError("Application scene presentation update phase failed.");
 		}
 	}
@@ -858,15 +1137,13 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_NC("App::ScenePresentationSubmit", AshEngine::Profile::Color::Submit);
 		if (!scenePresentation.submit_presentations())
 		{
+			runtimeFailureDetected.store(true, std::memory_order_release);
 			HLogError("Application scene presentation submit phase failed.");
 		}
 	}
-	auto Application::_present() -> void
+	auto Application::_get_automation_readiness() const -> ApplicationReadiness
 	{
-		if (renderer)
-		{
-			renderer->present();
-		}
+		return ApplicationReadiness::Ready;
 	}
 
 };

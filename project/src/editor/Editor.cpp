@@ -30,17 +30,24 @@ namespace AshEditor
 
 	void Editor::BootstrapEditor()
 	{
+		_bootstrapAttempted = true;
 		if (_upEditorApplication)
 		{
+			_bootstrapFailed = false;
 			return;
 		}
 
 		_upEditorApplication = std::make_unique<EditorApplication>();
 		if (!_upEditorApplication->Initialize())
 		{
+			_bootstrapFailed = true;
 			HLogError("Editor application bootstrap failed.");
 			ShutdownEditor();
 			request_exit();
+		}
+		else
+		{
+			_bootstrapFailed = false;
 		}
 	}
 
@@ -81,8 +88,16 @@ namespace AshEditor
 		AshEngine::Application::_on_render();
 	}
 
-	void Editor::_present()
+	auto Editor::_get_automation_readiness() const -> AshEngine::ApplicationReadiness
 	{
-		AshEngine::Application::_present();
+		if (_bootstrapFailed || (_upEditorApplication && _upEditorApplication->HasAutomationFailure()))
+		{
+			return AshEngine::ApplicationReadiness::Failed;
+		}
+		if (_bootstrapAttempted && _upEditorApplication && _upEditorApplication->IsAutomationReady())
+		{
+			return AshEngine::ApplicationReadiness::Ready;
+		}
+		return AshEngine::ApplicationReadiness::Pending;
 	}
 }

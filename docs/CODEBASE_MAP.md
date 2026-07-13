@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-03
+last_reviewed: 2026-07-11
 review_cycle: monthly
 status: active
 ---
@@ -17,10 +17,10 @@ status: active
 - Configuration: `product/config/Engine.ini` —— `[RHI] Backend`（Vulkan/DX12）、`[VulkanValidation]`、`[DX12Validation]`、`[RenderDebugView]`；全部配置项见 `docs/CONFIG.md`
 - Build: `premake5.lua`（workspace 定义 + PostBuild artifact 同步）→ `generate_vs2022.bat` → `build_editor.bat` / `build_sandbox.bat`
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
-- RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；Sandbox 命令行 `--rhi=<vulkan|dx12>`、`--smoke-test=N`、`--dump-frame=<png>`、`--scene=<json>`；golden 在 `tools/render/goldens/<scene>/<backend>.png`，对比工具 `tools/imagediff/`（AshImageDiff）
+- RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；默认覆盖 sandbox + particles，同一 Sandbox 进程用 `--rhi=<vulkan|dx12>`、`--smoke-test-seconds=<timeout>`、`--dump-frame=<png>`、`--scene=<json>` 完成 readiness smoke + capture；成功条件由 asset epoch/当前帧全 scene packet/非致命 present completion（及动态 capture-ready）驱动，ready arm 会清空 AO/TAA/体积光 history 后在下一同 epoch 帧抓取，golden 在 `tools/render/goldens/<scene>/<backend>.png`
 - Unit tests: `RunTests.bat [Config] [doctest args...]` → 构建并运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`（doctest，工程在 `project/src/tests/`，含 legacy `run_engine_base_self_tests()` 桥接）
 - ArchGate: `RunArchGate.bat` → `scripts/CheckArchBoundary.ps1`；按 `tools/ai-dev/rules/arch-boundary-rules.json` 扫描 include 判定依赖方向红线，新增越界退出码 1
-- CI: `.github/workflows/ci.yml`（GitHub Actions，windows runner）——push/PR 跑 ArchGate + sln 生成 + Editor/Sandbox Debug 构建 + RunTests；RenderGate/PerfGate 需 GPU 不进 CI
+- CI: `.github/workflows/ci.yml`（GitHub Actions，windows runner）——push/PR 跑 ArchGate、sln 生成、Editor/Sandbox Debug+Release 构建、RunTests，以及 Release 下 DX12/WARP 与 Vulkan/lavapipe readiness smoke（含 indirect 自测）；RenderGate/PerfGate 仍不进 CI
 
 ## Directories
 
@@ -46,7 +46,7 @@ status: active
 
 1. 逻辑 `Scene`（Function/Scene）持有场景状态
 2. `ScenePresentationSubsystem` 每帧把 Scene 转换为渲染线程可消费的**不可变可见帧数据**，并附带场景级 `SceneRenderConfig` 快照
-3. `SceneRenderer`（Function/Render）消费帧数据，按配置组织 pass：GBuffer（DeferredHQ）→ shadow（sunlight CSM + 普通方向光 transient cascade）→ deferred lighting（含 AO/点光/聚光）→ sky/背景 → 体积光合成 → Bloom → tone-map → debug draw overlay
+3. `SceneRenderer`（Function/Render）消费帧数据，按配置组织 pass：GBuffer → AO → shadow → deferred lighting → Environment/Composite → sky/背景 → GPU particles → 体积光 → Bloom → TAA → tone-map → debug overlay
 4. Pass 经 `RenderGraph` 声明资源读写关系，编译出 live pass、transient 生命周期与 barrier plan
 5. 执行经 `Renderer`/`RenderDevice` 落到 RHI（`DynamicRHI`），由 Vulkan 或 DX12 后端提交
 

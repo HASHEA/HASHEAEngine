@@ -11,10 +11,30 @@
 
 namespace AshEditor::EditorGizmoMath
 {
+	namespace
+	{
+		float Cross2D(const glm::vec2& vecA, const glm::vec2& vecB)
+		{
+			return vecA.x * vecB.y - vecA.y * vecB.x;
+		}
+	}
+
 	glm::vec3 NormalizeOrFallback(const glm::vec3& refValue, const glm::vec3& refFallback)
 	{
 		const float fLength = glm::length(refValue);
 		return fLength > 0.0001f ? (refValue / fLength) : refFallback;
+	}
+
+	void ExtractViewBasis(
+		const glm::mat4& refView,
+		glm::vec3& outRight,
+		glm::vec3& outUp,
+		glm::vec3& outForward)
+	{
+		const glm::mat4 matCameraWorld = glm::inverse(refView);
+		outRight = NormalizeOrFallback(glm::vec3(matCameraWorld[0]), glm::vec3(1.0f, 0.0f, 0.0f));
+		outUp = NormalizeOrFallback(glm::vec3(matCameraWorld[1]), glm::vec3(0.0f, 1.0f, 0.0f));
+		outForward = NormalizeOrFallback(glm::vec3(matCameraWorld[2]), glm::vec3(0.0f, 0.0f, 1.0f));
 	}
 
 	glm::vec3 TransformPoint(const glm::mat4& refMatrix, const glm::vec3& refPoint)
@@ -40,6 +60,32 @@ namespace AshEditor::EditorGizmoMath
 			1.0f);
 		const glm::vec2 vecClosestPoint = vecSegmentStart + vecSegment * fT;
 		return glm::length(vecPoint - vecClosestPoint);
+	}
+
+	bool IsPointInsideConvexQuad(
+		const glm::vec2& vecPoint,
+		const std::array<glm::vec2, 4>& arrCorners)
+	{
+		constexpr float kCrossEpsilon = 0.0001f;
+		bool bHasPositiveCross = false;
+		bool bHasNegativeCross = false;
+		float fTwiceSignedArea = 0.0f;
+		for (size_t uCornerIndex = 0; uCornerIndex < arrCorners.size(); ++uCornerIndex)
+		{
+			const glm::vec2& refStart = arrCorners[uCornerIndex];
+			const glm::vec2& refEnd = arrCorners[(uCornerIndex + 1u) % arrCorners.size()];
+			const float fCross = Cross2D(refEnd - refStart, vecPoint - refStart);
+			bHasPositiveCross = bHasPositiveCross || fCross > kCrossEpsilon;
+			bHasNegativeCross = bHasNegativeCross || fCross < -kCrossEpsilon;
+			if (bHasPositiveCross && bHasNegativeCross)
+			{
+				return false;
+			}
+
+			fTwiceSignedArea += Cross2D(refStart, refEnd);
+		}
+
+		return std::abs(fTwiceSignedArea) > kCrossEpsilon;
 	}
 
 	bool TryBuildPerpendicularBasis(

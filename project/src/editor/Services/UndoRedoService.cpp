@@ -274,7 +274,9 @@ namespace AshEditor
 			return;
 		}
 
-		if (!_vecUndoStack.empty() && _vecUndoStack.back().upCommand && _vecUndoStack.back().upCommand->TryMerge(*upCommand))
+		if (_uCurrentHistoryStateId != _uSavedHistoryStateId &&
+			!_vecUndoStack.empty() && _vecUndoStack.back().upCommand &&
+			_vecUndoStack.back().upCommand->TryMerge(*upCommand))
 		{
 			_vecUndoStack.back().uStateId = uStateId;
 			return;

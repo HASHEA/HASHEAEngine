@@ -1054,8 +1054,9 @@ namespace RHI
 		}
 	}
 
-	auto DX12Context::end_frame() -> void
+	auto DX12Context::end_frame(bool has_acquired_swapchain_image) -> void
 	{
+		(void)has_acquired_swapchain_image;
 		ASH_PROFILE_SCOPE_NC("DX12Context::end_frame", AshEngine::Profile::Color::RHI);
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
@@ -1100,6 +1101,38 @@ namespace RHI
 			fr.fence->signal(m_graphicsQueue.get_queue());
 			fr.fence->wait();
 		}
+	}
+
+	auto DX12Context::wait_for_frame_completion(uint64_t timeout_nanoseconds) -> bool
+	{
+		if (m_frameResources.empty() || m_currentFrame >= m_frameResources.size())
+		{
+			return true;
+		}
+		DX12Fence* frame_fence = m_frameResources[m_currentFrame].fence;
+		if (!frame_fence)
+		{
+			return false;
+		}
+		constexpr uint64_t nanoseconds_per_millisecond = 1'000'000ull;
+		uint64_t timeout_milliseconds = timeout_nanoseconds / nanoseconds_per_millisecond;
+		if ((timeout_nanoseconds % nanoseconds_per_millisecond) != 0u)
+		{
+			++timeout_milliseconds;
+		}
+		constexpr uint64_t maximum_finite_wait_milliseconds = static_cast<uint64_t>(INFINITE) - 1u;
+		if (timeout_milliseconds > maximum_finite_wait_milliseconds)
+		{
+			timeout_milliseconds = maximum_finite_wait_milliseconds;
+		}
+		frame_fence->wait(timeout_milliseconds);
+		const uint64_t completed_value = frame_fence->get_completed_value();
+		if (completed_value == UINT64_MAX)
+		{
+			HLogError("DX12Context: frame completion wait failed because the device was removed.");
+			return false;
+		}
+		return completed_value >= frame_fence->get_current_value();
 	}
 
 	auto DX12Context::get_command_buffer(uint32_t threadIndx) -> CommandBuffer*

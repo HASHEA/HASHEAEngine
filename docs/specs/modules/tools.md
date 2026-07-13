@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -17,7 +17,8 @@ status: active
 | `RunPerfGate.bat` + `scripts/RunPerfGate.ps1` / `RunPerfGateMenu.ps1` | PerfGate 入口（无参进交互菜单）与实现 |
 | `tools/perf/perf_gate_baselines.json` | PerfGate 基线：profiles（Standard：warmup 10s / sample 30s，target Sandbox+Editor x Vulkan+DX12）、absolute_caps、warn_thresholds、baselines |
 | `RunRenderGate.bat` + `scripts/RunRenderGate.ps1` | RenderGate 入口与编排 |
-| `tools/render/goldens/<scene>/<backend>.png` | RenderGate golden 基线（当前仅 `sandbox/vulkan.png`、`sandbox/dx12.png`） |
+| `scripts/RenderGateGoldenPublisher.ps1` / `TestRenderGateGoldenPublisher.ps1` | golden 矩阵事务：普通门禁持共享锁读取稳定快照，publisher 持同一锁的独占句柄做 stage/backup/publish；完整回滚为 NOT_BLESSED，恢复失败保留 backup 并标 ROLLBACK_FAILED，提交后清理失败标 BLESSED_CLEANUP_FAILED；拒绝覆盖崩溃遗留事务产物，并有故障注入自测 |
+| `tools/render/goldens/<scene>/<backend>.png` | RenderGate 多场景 golden 基线；新增/更新只能经用户确认后的 bless 流程 |
 | `tools/imagediff/AshImageDiff.cpp` | SSIM 图像对比 CLI（独立 vcxproj，产物 `AshImageDiff.exe`） |
 | `scripts/AIDevDoctor.ps1` + `tools/ai-dev/`（rules/templates） | 诊断与验证计划生成（`-Mode Report` / `-Mode ValidatePlan`），规则驱动 |
 | `scripts/InvokeMSBuild.ps1` | MSBuild 调用封装（build_*.bat 使用）；为 MSBuild 子进程重建大小写不敏感的环境变量表、只保留规范 `Path`，修复 `PATH`/`Path` 大小写冲突导致的 MSB6001 |
@@ -27,13 +28,13 @@ status: active
 | `scripts/hooks/PreToolUseGuard.py` + `.claude/settings.json` | AI 护栏 hook：直改基线文件 deny、S2 路径（Graphics/RenderGraph）ask（规则见 AGENTS.md High-risk paths） |
 | `RunTests.bat` + `build_tests.bat` | 单元测试入口：构建 Tests 工程（doctest，`project/src/tests/`）并运行 `Tests.exe`，透传 doctest 参数 |
 | `RunArchGate.bat` + `scripts/CheckArchBoundary.ps1` | 架构边界检查：扫描各层源文件 `#include "<Layer>/..."`，按 `tools/ai-dev/rules/arch-boundary-rules.json` 判定禁止边 |
-| `.github/workflows/ci.yml` | 最小 CI（GitHub Actions，windows runner）：ArchGate + 全新 sln 生成 + Editor/Sandbox Debug 构建 + RunTests；全部复用本地入口脚本，CI 不复制构建逻辑 |
+| `.github/workflows/ci.yml` | CI（GitHub Actions，windows runner）：ArchGate + 全新 sln 生成 + Editor/Sandbox Debug/Release 构建 + RunTests + Release DX12/WARP、Vulkan/lavapipe readiness smoke（含 indirect 自测）；构建/运行复用本地入口脚本 |
 | `run.bat` / `run_editor.bat` / `build_editor.bat` / `build_sandbox.bat` / `generate_vs2022.bat` | 运行与构建入口 |
 
 ## 公共接口
 
 - **PerfGate**：`RunPerfGate.bat [-Profile Standard] [-Configuration <cfg>] [-SkipBuild] [-DryRun] [-BlessBaseline] [-SelfTest]`；按 profile 跑 target x backend 采样，与 `perf_gate_baselines.json` 比对（CPU avg/p95/p99、private bytes、engine heap、draw calls），产出 PASS/WARN/FAIL；报告 `Intermediate/test-reports/perf-gate/<时间戳>/`（summary.json + summary.md）；`-BlessBaseline` 回写基线。用法详见 `docs/PerfGateUsageGuide.md`。
-- **RenderGate**：`RunRenderGate.bat [-Configuration Debug] [-Backends vulkan,dx12] [-SmokeFrames 5000] [-GoldenSsimThreshold 0.995] [-CrossSsimThreshold 0.99] [-BlessGolden] [-SkipCrossBackend]`；每后端跑 `Sandbox.exe --rhi=<backend> --smoke-test=<N> --dump-frame=<png>` 抓帧——抓帧时机由引擎侧资产流送 quiesce 信号驱动（流送完成 + 32 帧余量即抓帧退出，SDD-2026-07-07-render-gate-streaming-signal），`-SmokeFrames` 仅为超时保底——与 `tools/render/goldens/<scene>/<backend>.png` 做 SSIM 回归（阈值 0.995），再做 Vulkan vs DX12 跨后端 diff（阈值 0.99）；报告 `Intermediate/test-reports/render-gate/<时间戳>/`（抓帧 png、日志、heatmap）。**`-BlessGolden` 仅在用户确认画面正确后使用**。
+- **RenderGate**：`RunRenderGate.bat [-Configuration Debug] [-Scenes sandbox,particles] [-Backends vulkan,dx12] [-TimeoutSeconds 120] [-ProcessTimeoutGraceSeconds 15] [-GoldenSsimThreshold 0.995] [-CrossSsimThreshold 0.99] [-BlessGolden] [-SkipCrossBackend]`；默认逐场景、逐后端用同一个 Sandbox 进程完成 readiness smoke + epoch 复核后的 capture，再与 golden 做 SSIM，并按场景做 Vulkan vs DX12 diff。子进程直接启动并异步排空 stdout/stderr；`-TimeoutSeconds` 是引擎 wall-clock 硬失败上限，脚本另加 grace 后先以有界 `taskkill /T` 请求终止树，失败时有界终止真实根进程；报告持久化 `script_timed_out/termination_failed/output_drain_failed`，超时/失败没有可 bless PNG。报告目录以毫秒时间、PID 与随机后缀唯一命名。普通回归持仓库级共享锁读取完整 golden 矩阵并拒绝未解决事务产物。**`-BlessGolden` 仅在用户确认画面正确后使用，并应显式传 `-Scenes`；所有选中 capture 与跨后端检查通过后才在同一锁的独占句柄内进入 stage/backup/publish**。完整回滚标 `NOT_BLESSED`；回滚不完整保留 backup 并标 `ROLLBACK_FAILED`；提交已完成但事务文件清理失败标 `BLESSED_CLEANUP_FAILED` 且门禁仍失败。
 - **AshImageDiff**：`AshImageDiff.exe <a.png> <b.png> [--ssim-threshold=x] [--heatmap=path]`；灰度 SSIM（11x11 高斯窗口，sigma 1.5）+ 逐像素统计；stdout 输出 `key=value`：`image_a/image_b/width/height/ssim/ssim_threshold/max_abs_diff/mean_abs_diff/diff_pixel_count/diff_pixel_ratio/[heatmap]/result`；退出码 0=PASS、1=FAIL（低于阈值或尺寸不匹配）、2=用法/IO 错误。
 - **AIDevDoctor**：`scripts/AIDevDoctor.ps1 -Mode Report|ValidatePlan`；基于 git dirty paths 与 `tools/ai-dev/rules/*.json` 生成诊断报告/验证计划，报告落 `Intermediate/test-reports/ai-dev/`。详见 `docs/AIDevDoctor.md`。
 - **Tests**：`RunTests.bat [Config] [doctest args...]`；先经 `build_tests.bat` 构建 Tests 工程，再运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`；退出码 0 = 全部通过。doctest 参数直接透传（如 `--test-case="*StringView*"`、`--list-test-cases`；经 cmd 转发时引号可能被吃掉，过滤不生效时直接调 Tests.exe）。
@@ -46,7 +47,7 @@ status: active
 - 基线文件（perf json、render golden png）提交入库；只能经 `-BlessBaseline` / `-BlessGolden` 更新，golden 更新前必须由用户确认画面正确。
 - PerfGate FAIL 禁止提交；WARN 需在提交说明写明理由。RenderGate 跨后端 diff FAIL 视同 bug。
 - AshImageDiff 输出格式（key=value + 退出码语义）是 RenderGate 解析契约，改动需同步 `RunRenderGate.ps1`。
-- RenderGate 确定性依赖 Sandbox 抓帧约定（固定相机 (0,5,0)、隐藏 overlay、禁 TAA jitter），见 sandbox spec。
+- RenderGate 确定性依赖 Sandbox 抓帧约定（asset epoch + 当前帧全部 scene packet + 动态 capture-ready 信号、ready 时清空 AO/TAA/体积光 history、固定相机、隐藏 overlay、禁 TAA jitter、连续渲染 frame index 与 1/60 delta），见 sandbox/application spec。
 
 ## 验证
 
@@ -56,11 +57,13 @@ status: active
 - 改 ArchGate（脚本或 arch-boundary-rules.json）：`scripts/TestCheckArchBoundary.ps1`
 - 改 PerfGate：`scripts/TestRunPerfGate.ps1`（含 `-SelfTest` 路径）
 - 改 RenderGate/AshImageDiff：完整跑一次 `RunRenderGate.bat` 确认 PASS
+- 改 golden 发布事务：`scripts/TestRenderGateGoldenPublisher.ps1` 故障注入必须 PASS
 - 改构建链（premake/bat/InvokeMSBuild/SyncRuntimeArtifact）：删 sln 全新 `generate_vs2022.bat` + 构建，确认 PostBuild artifact 同步成功
 
 ## 历史
 
 - `docs/sdd/SDD-2026-07-07-render-gate.md`（RenderGate + AshImageDiff）
+- `docs/sdd/SDD-2026-07-11-readiness-driven-automation.md`（readiness smoke/capture、wall-clock timeout、批量 bless）
 - `docs/sdd/SDD-2026-07-08-doctest-unit-test-layer.md`（doctest 单测工程 + RunTests.bat）
 - `docs/sdd/SDD-2026-07-08-arch-boundary-check.md`（ArchGate 架构边界检查）
 - `docs/superpowers/specs/2026-05-18-perf-gate-design.md`（PerfGate，归档）

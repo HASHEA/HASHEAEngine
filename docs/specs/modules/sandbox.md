@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -24,7 +24,7 @@ status: active
 
 ## 公共接口
 
-- `SandboxApplication`：覆写 `_on_startup/_on_shutdown/_on_update/_on_logic_startup/_on_logic_update/_on_gui/_on_render/_present`；启动时初始化 `AssetDatabase`（根 `product/assets`）与 RenderAssetManager，创建主场景 output/binding 注册到 `ScenePresentationSubsystem`；报告目录 `Intermediate/test-reports/sandbox`。
+- `SandboxApplication`：覆写 `_on_startup/_on_shutdown/_on_update/_on_logic_startup/_on_logic_update/_on_gui/_on_render/_get_automation_readiness`；启动时初始化 `AssetDatabase`（根 `product/assets`）与 RenderAssetManager，创建主场景 output/binding 注册到 `ScenePresentationSubsystem`；报告目录 `Intermediate/test-reports/sandbox`。自动化 Ready 要求 logic bootstrap 已完成且成功、StandardScene Ready、output/binding 已注册；任一显式失败返回 Failed。
 - `SandboxStandardScene`：
   - `get_standard_scene_path()` → `product/assets/scenes/Sandbox.scene.json`。
   - `start(AssetDatabase&)` / `reset()` / `update_logic(InputState, frame_index)`；状态机 `SandboxStandardSceneLoadState`（Idle/LoadingScene/Ready/Failed）；`snapshot()` 返回 `SandboxStandardSceneSnapshot`（scene、主相机实体 id、推荐移速）。
@@ -38,16 +38,18 @@ status: active
 - 标准场景是唯一默认运行模式；场景文件或引用资产缺失时进入 Failed 并给出 failure_detail，不静默降级。
 - 场景渲染只走 `ScenePresentationSubsystem`（output + view binding），Sandbox 不直接调用 SceneRenderer。
 - 逻辑线程开启（`enable_logic_thread = true`）：场景装载/相机更新在逻辑侧，`SandboxStandardScene` 内部用互斥锁保护快照。
+- readiness 在 render 线程读取 logic 启动结果；bootstrap/startup/logic/render/presentation 标记使用 atomic 或互斥快照，禁止跨线程读取普通 bool/handle。
 
 ## 验证
 
 对齐 `docs/VERIFY.md`：
 
-- 构建 + `run.bat sandbox vulkan Debug --smoke-test-seconds=5`（fast path）
+- 构建 + `run.bat sandbox vulkan Debug --smoke-test-seconds=120`（fast path；ready 后提前退出）
 - 影响画面或抓帧约定：`RunRenderGate.bat`（Sandbox 即被测目标）
 - 性能敏感改动：`RunPerfGate.bat -Profile Standard`（Sandbox 是趋势基线 target）
 
 ## 历史
 
 - `docs/sdd/SDD-2026-07-07-render-gate.md`（抓帧相机固定约定来源）
+- `docs/sdd/SDD-2026-07-11-readiness-driven-automation.md`（Sandbox readiness smoke 来源）
 - `docs/superpowers/specs/2026-05-25-sandbox-scene-config-design.md`（标准场景配置，归档）

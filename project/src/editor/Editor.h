@@ -20,7 +20,7 @@ namespace AshEditor
 		void _on_gui() override;
 		void _on_render_debug() override;
 		void _on_render() override;
-		void _present() override;
+		auto _get_automation_readiness() const -> AshEngine::ApplicationReadiness override;
 
 	private:
 		void BootstrapEditor();
@@ -28,5 +28,7 @@ namespace AshEditor
 
 	private:
 		std::unique_ptr<EditorApplication> _upEditorApplication = nullptr;
+		bool _bootstrapAttempted = false;
+		bool _bootstrapFailed = false;
 	};
 }

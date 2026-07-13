@@ -1,0 +1,82 @@
+{
+  "entities": [
+    {
+      "id": 1,
+      "name": "Particles",
+      "parent": 0,
+      "transform": {
+        "position": [0.0, 0.0, 0.0],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "camera": {
+        "far_plane": 1000.0,
+        "fov_y_degrees": 60.0,
+        "near_plane": 0.1,
+        "orthographic_height": 10.0,
+        "primary": true,
+        "projection": 0,
+        "reverse_z": true
+      },
+      "id": 2,
+      "name": "MainCamera",
+      "parent": 1,
+      "transform": {
+        "position": [0.0, 2.0, -8.0],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": 3,
+      "name": "AdditiveFountain",
+      "parent": 1,
+      "particle": {
+        "max_particles": 2048,
+        "spawn_rate": 240.0,
+        "lifetime": 2.5,
+        "lifetime_variance": 0.35,
+        "initial_speed": 3.2,
+        "spread_angle_degrees": 24.0,
+        "constant_acceleration": [0.0, -1.8, 0.0],
+        "start_size": 0.22,
+        "end_size": 0.04,
+        "start_color": [1.0, 0.75, 0.2, 1.0],
+        "end_color": [0.2, 0.45, 1.0, 0.0],
+        "blend_mode": "Additive",
+        "random_seed": 1337,
+        "emitting": true
+      },
+      "transform": {
+        "position": [0.0, 1.5, 6.0],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    }
+  ],
+  "name": "Particles",
+  "next_entity_id": 4,
+  "scene_config": {
+    "ambient_occlusion": {
+      "mode": "Off"
+    },
+    "bloom": {
+      "enabled": false
+    },
+    "directional_shadows": {
+      "enabled": false
+    },
+    "temporal_aa": {
+      "enabled": false
+    },
+    "tonemap": {
+      "exposure": 1.0
+    },
+    "volumetric_lighting": {
+      "enabled": false
+    }
+  },
+  "version": 5
+}

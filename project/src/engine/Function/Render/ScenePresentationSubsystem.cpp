@@ -13,6 +13,7 @@
 #include "Function/Render/SceneRenderer.h"
 #include "Function/Render/SceneView.h"
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -57,10 +58,12 @@ namespace AshEngine
 		struct SceneState
 		{
 			Scene* scene = nullptr;
+			uint64_t runtime_id = 0;
 			uint64_t last_primitive_version = 0;
 			uint64_t last_transform_version = 0;
 			uint64_t last_light_version = 0;
 			uint64_t last_environment_version = 0;
+			uint64_t last_particle_version = 0;
 			uint64_t last_render_config_version = 0;
 			bool render_scene_valid = false;
 			RenderScene render_scene{};
@@ -76,6 +79,7 @@ namespace AshEngine
 			uint32_t output_height = 1;
 			int32_t sort_order = 0;
 			std::shared_ptr<VisibleRenderFrame> visible_frame = nullptr;
+			bool scene_packet_expected = false;
 		};
 
 		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
@@ -94,10 +98,17 @@ namespace AshEngine
 		std::unordered_map<uint32_t, BindingState> bindings{};
 		std::unordered_map<Scene*, SceneState> scene_states{};
 		std::vector<PreparedPacket> prepared_packets{};
+		std::vector<uint64_t> pending_scene_runtime_releases{};
 		std::unordered_set<uint32_t> logged_binding_submits{};
 		uint32_t next_output_id = 1;
 		uint32_t next_binding_id = 1;
 		uint32_t next_surface_id = 1;
+		uint64_t next_scene_runtime_id = 1;
+		// SDD-2026-07-10-gpu-particles：普通模式以实际进入的新 scene render 调用为模拟时钟。
+		std::chrono::steady_clock::time_point last_delta_submit_time{};
+		bool has_last_delta_submit_time = false;
+		uint64_t last_delta_frame_index = std::numeric_limits<uint64_t>::max();
+		SceneSubmissionSnapshot last_scene_submission{};
 		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
 		std::unordered_map<uint32_t, OverlayState> overlay_states{};
 		// editor end
@@ -350,6 +361,10 @@ namespace AshEngine
 		m_impl->renderer = renderer;
 		m_impl->render_asset_manager = render_asset_manager;
 		m_impl->scene_renderer = scene_renderer;
+		m_impl->last_delta_submit_time = {};
+		m_impl->has_last_delta_submit_time = false;
+		m_impl->last_delta_frame_index = std::numeric_limits<uint64_t>::max();
+		m_impl->last_scene_submission = {};
 		bResult =
 			m_impl->renderer != nullptr &&
 			m_impl->render_asset_manager != nullptr &&
@@ -366,6 +381,7 @@ namespace AshEngine
 
 		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
 		m_impl->prepared_packets.clear();
+		m_impl->pending_scene_runtime_releases.clear();
 		m_impl->scene_states.clear();
 		m_impl->bindings.clear();
 		m_impl->outputs.clear();
@@ -373,9 +389,22 @@ namespace AshEngine
 		m_impl->next_output_id = 1;
 		m_impl->next_binding_id = 1;
 		m_impl->next_surface_id = 1;
+		m_impl->next_scene_runtime_id = 1;
+		m_impl->last_delta_submit_time = {};
+		m_impl->has_last_delta_submit_time = false;
+		m_impl->last_delta_frame_index = std::numeric_limits<uint64_t>::max();
+		m_impl->last_scene_submission = {};
 		m_impl->scene_renderer = nullptr;
 		m_impl->render_asset_manager = nullptr;
 		m_impl->renderer = nullptr;
+	}
+
+	void ScenePresentationSubsystem::invalidate_temporal_history()
+	{
+		if (m_impl && m_impl->scene_renderer)
+		{
+			m_impl->scene_renderer->invalidate_temporal_history();
+		}
 	}
 
 	SceneOutputHandle ScenePresentationSubsystem::create_output(const SceneOutputDesc& desc)
@@ -500,6 +529,16 @@ namespace AshEngine
 		return found != m_impl->outputs.end() ? found->second.surface : UISurfaceHandle{};
 	}
 
+	SceneSubmissionSnapshot ScenePresentationSubsystem::get_last_scene_submission_snapshot() const
+	{
+		if (!m_impl)
+		{
+			return {};
+		}
+		std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+		return m_impl->last_scene_submission;
+	}
+
 	bool ScenePresentationSubsystem::update_presentations()
 	{
 		ASH_PROFILE_SCOPE_NC("ScenePresentationSubsystem::update_presentations", AshEngine::Profile::Color::Scene);
@@ -537,6 +576,7 @@ namespace AshEngine
 		}
 
 		std::unordered_set<Scene*> referenced_scenes{};
+		std::vector<uint64_t> released_scene_runtime_ids{};
 		referenced_scenes.reserve(bindings.size());
 		for (const Impl::BindingState& binding : bindings)
 		{
@@ -550,6 +590,7 @@ namespace AshEngine
 		{
 			if (referenced_scenes.find(it->first) == referenced_scenes.end())
 			{
+				released_scene_runtime_ids.push_back(it->second.runtime_id);
 				it = m_impl->scene_states.erase(it);
 				continue;
 			}
@@ -565,9 +606,20 @@ namespace AshEngine
 				continue;
 			}
 
+			Impl::PreparedPacket packet{};
+			packet.binding = binding.handle;
+			packet.output = binding.output;
+			packet.debug_name = binding.debug_name;
+			packet.overrides = binding.overrides;
+			packet.sort_order = binding.sort_order;
+			packet.visible_frame = std::make_shared<VisibleRenderFrame>();
+			packet.visible_frame->frame_index = Application::get() ? Application::get()->get_frame_index() : 0;
+			packet.scene_packet_expected = binding.scene != nullptr;
+
 			const auto output_found = outputs.find(binding.output.value);
 			if (output_found == outputs.end())
 			{
+				prepared_packets.push_back(std::move(packet));
 				continue;
 			}
 
@@ -577,19 +629,12 @@ namespace AshEngine
 				output_width == 0 ||
 				output_height == 0)
 			{
+				prepared_packets.push_back(std::move(packet));
 				continue;
 			}
 
-			Impl::PreparedPacket packet{};
-			packet.binding = binding.handle;
-			packet.output = binding.output;
-			packet.debug_name = binding.debug_name;
-			packet.overrides = binding.overrides;
 			packet.output_width = output_width;
 			packet.output_height = output_height;
-			packet.sort_order = binding.sort_order;
-			packet.visible_frame = std::make_shared<VisibleRenderFrame>();
-			packet.visible_frame->frame_index = Application::get() ? Application::get()->get_frame_index() : 0;
 
 			SceneView scene_view{};
 			bool scene_view_valid = false;
@@ -603,6 +648,7 @@ namespace AshEngine
 				{
 					Impl::SceneState new_state{};
 					new_state.scene = binding.scene;
+					new_state.runtime_id = m_impl->next_scene_runtime_id++;
 					scene_state = &m_impl->scene_states.emplace(binding.scene, std::move(new_state)).first->second;
 				}
 				else
@@ -614,6 +660,7 @@ namespace AshEngine
 				const uint64_t scene_transform_version = binding.scene->get_render_transform_version();
 				const uint64_t scene_light_version = binding.scene->get_render_light_version();
 				const uint64_t scene_environment_version = binding.scene->get_render_environment_version();
+				const uint64_t scene_particle_version = binding.scene->get_render_particle_version();
 				const uint64_t scene_render_config_version = binding.scene->get_render_config_version();
 				if (binding.refresh_requested ||
 					!scene_state->render_scene_valid ||
@@ -626,6 +673,7 @@ namespace AshEngine
 					scene_state->last_transform_version = scene_transform_version;
 					scene_state->last_light_version = scene_light_version;
 					scene_state->last_environment_version = scene_environment_version;
+					scene_state->last_particle_version = scene_particle_version;
 					scene_state->last_render_config_version = scene_render_config_version;
 					if (!scene_state->render_scene_valid)
 					{
@@ -635,23 +683,26 @@ namespace AshEngine
 							binding.scene->get_name());
 					}
 				}
-				else if (scene_state->last_transform_version != scene_transform_version)
+				if (scene_state->last_transform_version != scene_transform_version)
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::UpdateRenderSceneTransforms", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
 					const bool environment_changed =
 						scene_state->last_environment_version != scene_environment_version;
-					scene_state->render_scene_valid =
+					const bool transform_update_succeeded =
 						scene_state->render_scene.update_transforms_from_scene(*binding.scene) &&
 						scene_state->render_scene.rebuild_lights_from_scene(*binding.scene) &&
-						(!environment_changed || scene_state->render_scene.rebuild_environment_from_scene(*binding.scene));
+						(!environment_changed || scene_state->render_scene.rebuild_environment_from_scene(*binding.scene)) &&
+						scene_state->render_scene.rebuild_particles_from_scene(*binding.scene);
+					scene_state->render_scene_valid = scene_state->render_scene_valid && transform_update_succeeded;
 					scene_state->last_transform_version = scene_transform_version;
 					scene_state->last_light_version = scene_light_version;
+					scene_state->last_particle_version = scene_particle_version;
 					if (environment_changed)
 					{
 						scene_state->last_environment_version = scene_environment_version;
 					}
-					if (!scene_state->render_scene_valid)
+					if (!transform_update_succeeded)
 					{
 						HLogError(
 							"ScenePresentationSubsystem: failed to update RenderScene transforms for binding '{}' and scene '{}'.",
@@ -659,13 +710,14 @@ namespace AshEngine
 							binding.scene->get_name());
 					}
 				}
-				else if (scene_state->last_light_version != scene_light_version)
+				if (scene_state->last_light_version != scene_light_version)
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneLights", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
-					scene_state->render_scene_valid = scene_state->render_scene.rebuild_lights_from_scene(*binding.scene);
+					const bool lights_rebuilt = scene_state->render_scene.rebuild_lights_from_scene(*binding.scene);
+					scene_state->render_scene_valid = scene_state->render_scene_valid && lights_rebuilt;
 					scene_state->last_light_version = scene_light_version;
-					if (!scene_state->render_scene_valid)
+					if (!lights_rebuilt)
 					{
 						HLogError(
 							"ScenePresentationSubsystem: failed to rebuild RenderScene lights for binding '{}' and scene '{}'.",
@@ -673,13 +725,14 @@ namespace AshEngine
 							binding.scene->get_name());
 					}
 				}
-				else if (scene_state->last_environment_version != scene_environment_version)
+				if (scene_state->last_environment_version != scene_environment_version)
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneEnvironment", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
-					scene_state->render_scene_valid = scene_state->render_scene.rebuild_environment_from_scene(*binding.scene);
+					const bool environment_rebuilt = scene_state->render_scene.rebuild_environment_from_scene(*binding.scene);
+					scene_state->render_scene_valid = scene_state->render_scene_valid && environment_rebuilt;
 					scene_state->last_environment_version = scene_environment_version;
-					if (!scene_state->render_scene_valid)
+					if (!environment_rebuilt)
 					{
 						HLogError(
 							"ScenePresentationSubsystem: failed to rebuild RenderScene environment for binding '{}' and scene '{}'.",
@@ -687,13 +740,29 @@ namespace AshEngine
 							binding.scene->get_name());
 					}
 				}
-				else if (scene_state->last_render_config_version != scene_render_config_version)
+				if (scene_state->last_particle_version != scene_particle_version)
+				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneParticles", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					const bool particles_rebuilt = scene_state->render_scene.rebuild_particles_from_scene(*binding.scene);
+					scene_state->render_scene_valid = scene_state->render_scene_valid && particles_rebuilt;
+					scene_state->last_particle_version = scene_particle_version;
+					if (!particles_rebuilt)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to rebuild RenderScene particles for binding '{}' and scene '{}'.",
+							binding.debug_name,
+							binding.scene->get_name());
+					}
+				}
+				if (scene_state->last_render_config_version != scene_render_config_version)
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneConfig", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
-					scene_state->render_scene_valid = scene_state->render_scene.rebuild_render_config_from_scene(*binding.scene);
+					const bool render_config_rebuilt = scene_state->render_scene.rebuild_render_config_from_scene(*binding.scene);
+					scene_state->render_scene_valid = scene_state->render_scene_valid && render_config_rebuilt;
 					scene_state->last_render_config_version = scene_render_config_version;
-					if (!scene_state->render_scene_valid)
+					if (!render_config_rebuilt)
 					{
 						HLogError(
 							"ScenePresentationSubsystem: failed to rebuild RenderScene config for binding '{}' and scene '{}'.",
@@ -714,6 +783,8 @@ namespace AshEngine
 						scene_transform_version,
 						scene_light_version))
 					{
+						visible_frame.scene_runtime_id = scene_state->runtime_id;
+						visible_frame.scene_content_epoch = binding.scene->get_content_epoch();
 						packet.visible_frame = std::make_shared<VisibleRenderFrame>(std::move(visible_frame));
 					}
 					else
@@ -730,12 +801,15 @@ namespace AshEngine
 			{
 				packet.visible_frame->frame_index = Application::get() ? Application::get()->get_frame_index() : 0;
 			}
-
 			prepared_packets.push_back(std::move(packet));
 		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+			m_impl->pending_scene_runtime_releases.insert(
+				m_impl->pending_scene_runtime_releases.end(),
+				released_scene_runtime_ids.begin(),
+				released_scene_runtime_ids.end());
 			for (const Impl::BindingState& binding : bindings)
 			{
 				const auto found = m_impl->bindings.find(binding.handle.value);
@@ -848,28 +922,74 @@ namespace AshEngine
 
 		std::vector<Impl::PreparedPacket> prepared_packets{};
 		std::unordered_map<uint32_t, Impl::OutputState> outputs{};
+		std::vector<uint64_t> scene_runtime_releases{};
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
 			prepared_packets = m_impl->prepared_packets;
 			outputs = m_impl->outputs;
+			scene_runtime_releases.swap(m_impl->pending_scene_runtime_releases);
+		}
+		for (uint64_t scene_runtime_id : scene_runtime_releases)
+		{
+			m_impl->scene_renderer->release_scene_runtime_state(scene_runtime_id);
 		}
 		ASH_PROFILE_PLOT("ScenePresentation/PreparedPackets", static_cast<int64_t>(prepared_packets.size()));
+		Application* application = Application::get();
+		const bool frame_dump_mode = application && !application->get_frame_dump_path().empty();
+		const uint64_t render_frame_index = application
+			? application->get_frame_index()
+			: (!prepared_packets.empty() && prepared_packets.front().visible_frame
+				? prepared_packets.front().visible_frame->frame_index
+				: 0u);
+		SceneSubmissionSnapshot submission{};
+		submission.frame_index = render_frame_index;
+		submission.valid = true;
+
+		m_impl->render_asset_manager->finalize_pending_assets();
 
 		if (prepared_packets.empty())
 		{
+			submission.render_asset_epoch = m_impl->render_asset_manager->query_readiness().activity_epoch;
+			std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+			m_impl->last_scene_submission = submission;
 			break;
 		}
 
-		m_impl->render_asset_manager->finalize_pending_assets();
+		const std::chrono::steady_clock::time_point delta_submit_time = std::chrono::steady_clock::now();
+		const bool is_new_delta_frame = m_impl->last_delta_frame_index != render_frame_index;
+		float render_delta_seconds = 0.0f;
+		if (!frame_dump_mode && is_new_delta_frame && m_impl->has_last_delta_submit_time)
+		{
+			render_delta_seconds =
+				std::chrono::duration<float>(delta_submit_time - m_impl->last_delta_submit_time).count();
+		}
+		bool attempted_scene_for_new_frame = false;
+
 		const std::shared_ptr<RenderTarget> back_buffer = m_impl->renderer->get_back_buffer();
 		std::unordered_set<uint32_t> touched_outputs{};
 		touched_outputs.reserve(prepared_packets.size());
 
 		for (Impl::PreparedPacket& packet : prepared_packets)
 		{
+			const bool is_scene_packet = packet.scene_packet_expected;
+			if (is_scene_packet)
+			{
+				++submission.scene_packets_attempted;
+			}
+			if (is_scene_packet &&
+				(!packet.visible_frame || packet.visible_frame->scene_runtime_id == 0))
+			{
+				++submission.scene_packets_failed;
+				continue;
+			}
+
 			auto output_found = outputs.find(packet.output.value);
 			if (output_found == outputs.end())
 			{
+				if (is_scene_packet)
+				{
+					++submission.scene_packets_failed;
+				}
 				continue;
 			}
 
@@ -924,7 +1044,22 @@ namespace AshEngine
 
 			if (!output_target || !packet.visible_frame)
 			{
+				if (is_scene_packet)
+				{
+					++submission.scene_packets_failed;
+				}
 				continue;
+			}
+			if (frame_dump_mode)
+			{
+				packet.visible_frame = std::make_shared<VisibleRenderFrame>(*packet.visible_frame);
+				packet.visible_frame->frame_index = render_frame_index;
+				packet.visible_frame->delta_seconds = 1.0f / 60.0f;
+			}
+			else
+			{
+				packet.visible_frame->frame_index = render_frame_index;
+				packet.visible_frame->delta_seconds = render_delta_seconds;
 			}
 
 			bool should_log_binding_submit = false;
@@ -962,6 +1097,10 @@ namespace AshEngine
 				HLogError(
 					"ScenePresentationSubsystem: material preparation failed for binding '{}'.",
 					packet.debug_name);
+				if (is_scene_packet)
+				{
+					++submission.scene_packets_failed;
+				}
 				continue;
 			}
 
@@ -1045,14 +1184,38 @@ namespace AshEngine
 			}
 			// editor end
 
+			attempted_scene_for_new_frame =
+				attempted_scene_for_new_frame ||
+				(!frame_dump_mode && is_new_delta_frame && packet.visible_frame->scene_runtime_id != 0);
 			if (!m_impl->scene_renderer->render_visible_frame(*packet.visible_frame, view_context))
 			{
 				HLogError("ScenePresentationSubsystem: scene submit failed for binding '{}'.", packet.debug_name);
+				if (is_scene_packet)
+				{
+					++submission.scene_packets_failed;
+				}
+			}
+			else if (packet.visible_frame->scene_runtime_id != 0)
+			{
+				++submission.scene_packets_succeeded;
+				if (m_impl->scene_renderer->is_visible_frame_capture_ready(*packet.visible_frame))
+				{
+					++submission.scene_packets_capture_ready;
+				}
 			}
 		}
 
+		if (attempted_scene_for_new_frame)
+		{
+			m_impl->last_delta_submit_time = delta_submit_time;
+			m_impl->has_last_delta_submit_time = true;
+			m_impl->last_delta_frame_index = render_frame_index;
+		}
+		submission.render_asset_epoch = m_impl->render_asset_manager->query_readiness().activity_epoch;
+
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
+			m_impl->last_scene_submission = submission;
 			for (const auto& [output_id, local_state] : outputs)
 			{
 				const auto found = m_impl->outputs.find(output_id);

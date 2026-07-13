@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <sstream>
 #include <string_view>
 #include <utility>
@@ -320,16 +319,14 @@ namespace AshEditor
 		const int32_t iStepFast,
 		const bool bEnabled)
 	{
-		int32_t iValue = static_cast<int32_t>(std::min<uint32_t>(
+		return DrawInspectorInputUIntField(
+			refUi,
+			pLabel,
 			uValue,
-			static_cast<uint32_t>(std::numeric_limits<int32_t>::max())));
-		if (!DrawInspectorSceneIntField(refUi, refDesc, pLabel, iValue, iStep, iStepFast, bEnabled))
-		{
-			return false;
-		}
-
-		uValue = static_cast<uint32_t>(std::max(0, iValue));
-		return true;
+			MakeInspectorSceneFieldSpec(refDesc),
+			static_cast<uint32_t>(std::max(0, iStep)),
+			static_cast<uint32_t>(std::max(0, iStepFast)),
+			bEnabled);
 	}
 
 	bool DrawInspectorSceneEnumField(
@@ -386,6 +383,21 @@ namespace AshEditor
 		const bool bEnabled)
 	{
 		return DrawInspectorColor3Field(
+			refUi,
+			pLabel,
+			refValue,
+			MakeInspectorSceneFieldSpec(refDesc),
+			bEnabled);
+	}
+
+	bool DrawInspectorSceneColor4Field(
+		AshEngine::UIContext& refUi,
+		const InspectorSceneFieldDesc& refDesc,
+		const char* pLabel,
+		glm::vec4& refValue,
+		const bool bEnabled)
+	{
+		return DrawInspectorColor4Field(
 			refUi,
 			pLabel,
 			refValue,

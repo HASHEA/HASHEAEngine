@@ -4,6 +4,7 @@
 #include "Function/Application.h"
 #include "Function/Gui/UIContext.h"
 #include "Graphics/RHIResource.h"
+#include "Graphics/Swapchain.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
@@ -126,19 +127,29 @@ namespace AshEngine
 
 	Renderer::~Renderer() = default;
 
-	bool Renderer::begin_frame()
+	RHI::SwapchainPresentResult Renderer::begin_frame()
 	{
 		ASH_PROFILE_SCOPE_NC("Renderer::begin_frame", AshEngine::Profile::Color::Render);
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_GUARD_RETURN(
+			RHI::SwapchainPresentResult,
+			bResult,
+			RHI::SwapchainPresentResult::Completed,
+			RHI::SwapchainPresentResult::Failed);
 		m_frame_in_progress = false;
 		m_frame_stats = {};
 		m_frame_start_time = std::chrono::steady_clock::now();
 		const auto backend_begin_start_time = std::chrono::steady_clock::now();
-		const bool backend_begin_result = m_render_device && m_render_device->begin_frame();
+		const RHI::SwapchainPresentResult backend_begin_result = m_render_device
+			? m_render_device->begin_frame()
+			: RHI::SwapchainPresentResult::Failed;
 		const auto backend_begin_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.backend_begin_frame_time_ms =
 			std::chrono::duration<double, std::milli>(backend_begin_end_time - backend_begin_start_time).count();
-		ASH_PROCESS_ERROR(backend_begin_result);
+		if (backend_begin_result != RHI::SwapchainPresentResult::Completed)
+		{
+			bResult = backend_begin_result;
+			break;
+		}
 
 		m_frame_in_progress = true;
 		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
@@ -146,8 +157,8 @@ namespace AshEngine
 			m_frame_stats.frame_width = back_buffer->get_width();
 			m_frame_stats.frame_height = back_buffer->get_height();
 		}
-		ASH_PROCESS_GUARD_END(bResult, false);
-		if (!bResult)
+		ASH_PROCESS_GUARD_END(bResult, RHI::SwapchainPresentResult::Failed);
+		if (bResult != RHI::SwapchainPresentResult::Completed)
 		{
 			m_frame_in_progress = false;
 		}
@@ -185,12 +196,13 @@ namespace AshEngine
 		return result && ui_result;
 	}
 
-	void Renderer::present()
+	RHI::SwapchainPresentResult Renderer::present()
 	{
 		const auto present_start_time = std::chrono::steady_clock::now();
+		RHI::SwapchainPresentResult present_result = RHI::SwapchainPresentResult::Failed;
 		if (m_render_device)
 		{
-			m_render_device->present();
+			present_result = m_render_device->present();
 		}
 		const auto present_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.present_time_ms =
@@ -200,6 +212,7 @@ namespace AshEngine
 		{
 			complete_frame_timing();
 		}
+		return present_result;
 	}
 
 	std::shared_ptr<RenderTarget> Renderer::get_back_buffer()
@@ -407,6 +420,7 @@ namespace AshEngine
 			static thread_local std::unordered_set<const GraphicsProgram*> transitioned_program_scratch{};
 			static thread_local std::unordered_set<const VertexBuffer*> transitioned_vertex_buffer_scratch{};
 			static thread_local std::unordered_set<const IndexBuffer*> transitioned_index_buffer_scratch{};
+			static thread_local std::unordered_set<const StorageBuffer*> transitioned_indirect_args_scratch{};
 			static thread_local std::vector<RHI::AshBarrier> pass_barrier_scratch{};
 			struct PassBarrierScratchRelease
 			{
@@ -419,6 +433,7 @@ namespace AshEngine
 			transitioned_program_scratch.clear();
 			transitioned_vertex_buffer_scratch.clear();
 			transitioned_index_buffer_scratch.clear();
+			transitioned_indirect_args_scratch.clear();
 			transitioned_program_scratch.reserve(pass_context->m_draw_calls.size());
 			transitioned_vertex_buffer_scratch.reserve(pass_context->m_draw_calls.size());
 			transitioned_index_buffer_scratch.reserve(pass_context->m_draw_calls.size());
@@ -468,6 +483,15 @@ namespace AshEngine
 					!m_render_device->collect_index_buffer_barrier(draw_desc.index_buffer, pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_index_buffer_barrier failed for pass '{}' draw {}.", pass_name, draw_index);
+					success = false;
+					break;
+				}
+
+				if (draw_desc.indirect_args_buffer &&
+					transitioned_indirect_args_scratch.insert(draw_desc.indirect_args_buffer.get()).second &&
+					!m_render_device->collect_indirect_args_buffer_barrier(draw_desc.indirect_args_buffer, pass_barrier_scratch))
+				{
+					HLogError("Renderer: collect_indirect_args_buffer_barrier failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
 					break;
 				}
@@ -555,6 +579,18 @@ namespace AshEngine
 				if (draw_desc.has_scissor)
 				{
 					m_render_device->set_scissor(draw_desc.scissor);
+				}
+
+				if (draw_desc.indirect_args_buffer)
+				{
+					if (!m_render_device->draw_indirect(draw_desc.indirect_args_buffer, draw_desc.indirect_args_offset))
+					{
+						HLogError("Renderer: draw_indirect failed for pass '{}' draw {}.", pass_name, draw_index);
+						success = false;
+						break;
+					}
+					++m_frame_stats.draw_call_count;
+					continue;
 				}
 
 				if (draw_desc.index_buffer)

@@ -42,8 +42,7 @@ namespace AshEditor::EditorGizmoInternal
 
 	struct PlaneHandleVisual
 	{
-		glm::vec2 vecCenterScreen{ 0.0f };
-		AshEngine::UIRect rectScreen{};
+		std::array<glm::vec2, 4> arrScreenCorners{};
 		glm::vec3 vecAxisU{ 0.0f };
 		glm::vec3 vecAxisV{ 0.0f };
 		bool bVisible = false;

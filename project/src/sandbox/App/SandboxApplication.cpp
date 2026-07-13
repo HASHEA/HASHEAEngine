@@ -57,7 +57,6 @@ namespace AshSandbox
 
 		if (!m_logicBootstrapExecuted)
 		{
-			m_logicBootstrapExecuted = true;
 			_on_logic_startup();
 			return;
 		}
@@ -72,6 +71,7 @@ namespace AshSandbox
 		{
 			HLogError("Sandbox failed to initialize asset roots.");
 			m_startupSucceeded = false;
+			m_logicBootstrapExecuted.store(true, std::memory_order_release);
 			request_exit();
 			return;
 		}
@@ -79,6 +79,7 @@ namespace AshSandbox
 		m_startupSucceeded = _start_standard_scene();
 		if (!m_startupSucceeded)
 		{
+			m_logicBootstrapExecuted.store(true, std::memory_order_release);
 			request_exit();
 			return;
 		}
@@ -89,6 +90,7 @@ namespace AshSandbox
 		});
 
 		HLogInfo("Sandbox logic-thread startup suite completed successfully.");
+		m_logicBootstrapExecuted.store(true, std::memory_order_release);
 	}
 
 	auto SandboxApplication::_on_logic_update() -> void
@@ -119,11 +121,32 @@ namespace AshSandbox
 	auto SandboxApplication::_on_render() -> void
 	{
 		AshEngine::Application::_on_render();
+		if (currentFrameRenderResult == RHI::SwapchainPresentResult::Failed)
+		{
+			m_renderSucceeded.store(false, std::memory_order_release);
+		}
 	}
 
-	auto SandboxApplication::_present() -> void
+	auto SandboxApplication::_get_automation_readiness() const -> AshEngine::ApplicationReadiness
 	{
-		AshEngine::Application::_present();
+		if (!m_logicBootstrapExecuted.load(std::memory_order_acquire))
+		{
+			return AshEngine::ApplicationReadiness::Pending;
+		}
+		const SandboxStandardSceneSnapshot snapshot = m_standardScene.snapshot();
+		if (!m_startupSucceeded.load(std::memory_order_acquire) ||
+			!m_logicSucceeded.load(std::memory_order_acquire) ||
+			!m_renderSucceeded.load(std::memory_order_acquire) ||
+			snapshot.load_state == SandboxStandardSceneLoadState::Failed)
+		{
+			return AshEngine::ApplicationReadiness::Failed;
+		}
+		if (snapshot.load_state == SandboxStandardSceneLoadState::Ready &&
+			m_presentationRegistered.load(std::memory_order_acquire))
+		{
+			return AshEngine::ApplicationReadiness::Ready;
+		}
+		return AshEngine::ApplicationReadiness::Pending;
 	}
 
 	auto SandboxApplication::_initialize_paths_and_assets() -> bool
@@ -217,6 +240,7 @@ namespace AshSandbox
 		binding_desc.enabled = true;
 		m_mainSceneBinding = scene_presentation->create_view_binding(binding_desc);
 		ASH_PROCESS_ERROR(m_mainSceneBinding.is_valid());
+		m_presentationRegistered.store(true, std::memory_order_release);
 		ASH_PROCESS_GUARD_END(bResult, false);
 		if (!bResult)
 		{
@@ -227,6 +251,7 @@ namespace AshSandbox
 
 	auto SandboxApplication::_destroy_standard_scene_presentation() -> void
 	{
+		m_presentationRegistered.store(false, std::memory_order_release);
 		AshEngine::ScenePresentationSubsystem* scene_presentation = AshEngine::Application::get_scene_presentation();
 		if (!scene_presentation)
 		{
@@ -258,18 +283,26 @@ namespace AshSandbox
 		const SandboxStandardSceneSnapshot snapshot = m_standardScene.snapshot();
 		const bool scene_loaded = snapshot.scene.is_valid();
 		const bool scene_ready = snapshot.load_state == SandboxStandardSceneLoadState::Ready;
-		const bool presentation_registered = m_mainSceneOutput.is_valid() && m_mainSceneBinding.is_valid();
+		const bool startup_succeeded = m_startupSucceeded.load(std::memory_order_acquire);
+		const bool logic_succeeded =
+			m_logicSucceeded.load(std::memory_order_acquire) &&
+			!logicThreadFailed.load(std::memory_order_acquire);
+		const bool render_succeeded =
+			m_renderSucceeded.load(std::memory_order_acquire) &&
+			!runtimeFailureDetected.load(std::memory_order_acquire);
+		const bool presentation_registered = m_presentationRegistered.load(std::memory_order_acquire);
 		const bool clean_exit =
-			m_startupSucceeded &&
-			m_logicSucceeded &&
-			m_renderSucceeded &&
-			snapshot.load_state != SandboxStandardSceneLoadState::Failed;
+			startup_succeeded &&
+			logic_succeeded &&
+			render_succeeded &&
+			scene_ready &&
+			presentation_registered;
 
 		HLogInfo(
 			"Sandbox summary: startup={}, logic={}, render={}, scene_loaded={}, scene_ready={}, presentation_registered={}, clean_exit={}, load_state={}, scene='{}', reports='{}', failure='{}'.",
-			m_startupSucceeded ? "passed" : "failed",
-			m_logicSucceeded ? "passed" : "failed",
-			m_renderSucceeded ? "passed" : "failed",
+			startup_succeeded ? "passed" : "failed",
+			logic_succeeded ? "passed" : "failed",
+			render_succeeded ? "passed" : "failed",
 			scene_loaded ? "yes" : "no",
 			scene_ready ? "yes" : "no",
 			presentation_registered ? "yes" : "no",

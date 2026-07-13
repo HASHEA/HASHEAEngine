@@ -230,6 +230,11 @@ namespace AshEngine
 		m_renderer = nullptr;
 	}
 
+	void AmbientOcclusionPass::clear_history()
+	{
+		reset_temporal_history();
+	}
+
 	bool AmbientOcclusionPass::create_resources(Renderer& renderer)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);

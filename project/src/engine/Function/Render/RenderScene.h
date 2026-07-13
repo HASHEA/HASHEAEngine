@@ -57,9 +57,23 @@ namespace AshEngine
 		bool affect_lighting = true;
 	};
 
+	// SDD-2026-07-10-gpu-particles：emitter 快照，entity_id 是 pass 侧 GPU 状态的隔离 key
+	struct ASH_API VisibleParticleEmitter
+	{
+		EntityId entity_id = 0;
+		ParticleComponent particle{};
+		glm::mat4 world_transform{ 1.0f };
+	};
+
 	struct ASH_API VisibleRenderFrame
 	{
 		uint64_t frame_index = 0;
+		// Process-local identity assigned by ScenePresentationSubsystem. Particle GPU
+		// state combines this with entity_id so independent scenes cannot alias.
+		uint64_t scene_runtime_id = 0;
+		// Process-local scene content identity. Full reload/replace resets stateful
+		// render history, while ordinary per-emitter edits stay isolated.
+		uint64_t scene_content_epoch = 0;
 		SceneView* debug_view = nullptr;
 		glm::mat4 view{ 1.0f };
 		glm::mat4 projection{ 1.0f };
@@ -76,6 +90,10 @@ namespace AshEngine
 		std::vector<VisibleStaticMeshDraw> shadow_caster_static_mesh_draws{};
 		std::vector<VisibleLightData> lights{};
 		std::optional<VisibleEnvironmentData> environment{};
+		std::vector<VisibleParticleEmitter> particle_emitters{};
+		// SDD-2026-07-10-gpu-particles：由 ScenePresentationSubsystem 构建快照时一次写入；
+		// frame-dump 模式强制 1/60（确定性契约，对齐 TAA jitter 归零先例）
+		float delta_seconds = 0.0f;
 		SceneRenderConfig render_config{};
 	};
 
@@ -94,6 +112,7 @@ namespace AshEngine
 		bool update_transforms_from_scene(const Scene& scene);
 		bool rebuild_lights_from_scene(const Scene& scene);
 		bool rebuild_environment_from_scene(const Scene& scene);
+		bool rebuild_particles_from_scene(const Scene& scene);
 		bool rebuild_render_config_from_scene(const Scene& scene);
 		bool build_visible_render_frame(
 			uint64_t frame_index,
@@ -114,6 +133,7 @@ namespace AshEngine
 		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> m_static_mesh_primitives{};
 		std::vector<VisibleLightData> m_lights{};
 		std::optional<VisibleEnvironmentData> m_environment{};
+		std::vector<VisibleParticleEmitter> m_particle_emitters{};
 		SceneRenderConfig m_render_config = make_default_scene_render_config();
 		mutable std::mutex m_mutex{};
 	};

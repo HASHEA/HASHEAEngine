@@ -6,6 +6,7 @@
 #include "Panels/Inspector/IInspectorComponentHost.h"
 #include "Panels/Inspector/LightComponentEditor.h"
 #include "Panels/Inspector/MeshComponentEditor.h"
+#include "Panels/Inspector/ParticleComponentEditor.h"
 
 #include <memory>
 
@@ -63,5 +64,6 @@ namespace AshEditor
 		refRegistry.Register(std::make_unique<LightComponentEditor>());
 		refRegistry.Register(std::make_unique<MeshComponentEditor>());
 		refRegistry.Register(std::make_unique<EnvironmentComponentEditor>());
+		refRegistry.Register(std::make_unique<ParticleComponentEditor>());
 	}
 }

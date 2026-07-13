@@ -16,7 +16,8 @@ namespace AshEngine
 		Camera,
 		Light,
 		Mesh,
-		Environment
+		Environment,
+		Particle
 	};
 
 	enum class ScenePropertyType : uint8_t
@@ -141,6 +142,33 @@ namespace AshEngine
 		float rotation_degrees = 0.0f;
 		bool visible_background = true;
 		bool affect_lighting = true;
+	};
+
+	enum class ParticleBlendMode : uint8_t
+	{
+		Additive = 0,
+		AlphaBlend
+	};
+
+	static constexpr uint32_t k_max_particles_per_emitter = 65536u;
+
+	// SDD-2026-07-10-gpu-particles：GPU 粒子发射器（compute 模拟 + indirect 绘制）
+	struct ParticleComponent
+	{
+		uint32_t max_particles = 4096;
+		float spawn_rate = 200.0f;
+		float lifetime = 2.0f;
+		float lifetime_variance = 0.0f;
+		float initial_speed = 3.0f;
+		float spread_angle_degrees = 15.0f;
+		glm::vec3 constant_acceleration{ 0.0f, -9.8f, 0.0f };
+		float start_size = 0.1f;
+		float end_size = 0.02f;
+		glm::vec4 start_color{ 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 end_color{ 1.0f, 1.0f, 1.0f, 0.0f };
+		ParticleBlendMode blend_mode = ParticleBlendMode::Additive;
+		uint32_t random_seed = 0;
+		bool emitting = true;
 	};
 
 	struct SceneEnumValueDesc

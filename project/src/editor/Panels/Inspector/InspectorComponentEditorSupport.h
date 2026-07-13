@@ -26,6 +26,7 @@ namespace AshEditor
 	inline constexpr const char* kInspectorLightComponentMenuId = "InspectorLightComponentMenu";
 	inline constexpr const char* kInspectorMeshComponentMenuId = "InspectorMeshComponentMenu";
 	inline constexpr const char* kInspectorEnvironmentComponentMenuId = "InspectorEnvironmentComponentMenu";
+	inline constexpr const char* kInspectorParticleComponentMenuId = "InspectorParticleComponentMenu";
 
 	struct InspectorAssetPathValidationDesc
 	{
@@ -103,4 +104,7 @@ namespace AshEditor
 	bool HasEnvironmentClampWarning(const AshEngine::EnvironmentComponent& refEnvironment);
 	bool SanitizeEnvironmentComponent(AshEngine::EnvironmentComponent& refComponent);
 	bool SanitizeOptionalEnvironmentComponent(std::optional<AshEngine::EnvironmentComponent>& refValue);
+
+	bool SanitizeParticleComponent(AshEngine::ParticleComponent& refComponent);
+	bool SanitizeOptionalParticleComponent(std::optional<AshEngine::ParticleComponent>& refValue);
 }

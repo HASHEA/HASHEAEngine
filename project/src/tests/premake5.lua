@@ -10,6 +10,7 @@ project "Tests"
 	includedirs
 	{
 		"%{wks.location}/project/src/engine",
+		"%{wks.location}/project/src/editor",
 		"%{wks.location}/project/src/tests",
 		thirdparty .. "/doctest",
 		thirdparty .. "/spdlog/include",
@@ -26,6 +27,8 @@ project "Tests"
 		"**.hpp",
 		"**.cpp",
 		"**.lua",
+		"%{wks.location}/project/src/editor/Services/EditorGizmoMath.cpp",
+		"%{wks.location}/project/src/editor/Services/EditorGizmoViewport.cpp",
 	}
 
 	links

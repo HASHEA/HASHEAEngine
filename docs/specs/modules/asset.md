@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -43,9 +43,9 @@ status: active
 
 对齐 `docs/VERIFY.md` "Scene / Asset / Application 生命周期"行：
 
-- 构建 + `run.bat all Debug --smoke-test-seconds=5`（全矩阵 smoke；Sandbox 启动即校验标准场景引用资产可加载）
+- 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；Sandbox ready 要求标准场景引用资产已加载）
 - Editor 打开默认场景操作一遍（AssetBrowser 浏览、拖放实例化）
 
 ## 历史
 
-无。
+- [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：资产加载结果通过 render asset readiness 间接参与 smoke/capture。

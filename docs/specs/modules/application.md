@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-11
 status: active
 ---
 
@@ -24,9 +24,9 @@ status: active
 
 ### 生命周期
 
-- `Application(EngineInitConfig)` → `initialize()` → `start()`（阻塞跑主循环）→ 析构/`_shutdown_runtime()`。
+- `Application(EngineInitConfig)` → `initialize()` → `start()`（阻塞跑主循环并返回运行成功/失败）→ 析构/`_shutdown_runtime()`；EntryPoint 将失败映射为非零进程退出码。
 - `initialize` 顺序：LogService → MemoryService → threading（当前线程注册为 Render 角色）→ 解析 RHI 配置（Engine.ini + `initConfig.backend` 覆盖，路径默认 `product/config/Engine.ini`）→ 渲染 feature/debug view/环境光配置 → `Window::create` → `GraphicsContext::create` → `Swapchain::create` → RenderDevice/Renderer → `UIContext`。
-- 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → 帧计数；`--smoke-test`/`--smoke-test-seconds` 达上限即 `request_exit()`；PerfGate 采样窗口结束也会请求退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。
+- 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → readiness 观察 → 帧计数。`--smoke-test-seconds` 在第一个完整 ready+present-completed 帧提前成功，秒数只作硬失败上限；PerfGate 采样窗口与显式 `--run-for-*` watchdog 仍可请求正常退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。acquire 与 present 结果从 RHI 以同一三态传播：Completed 才继续录制或满足 readiness，Retryable 跳过本帧并等下一帧，Failed 立即终止并返回非零；acquire Retryable 不消费已 arm 的 capture，DXGI OCCLUDED 是成功 present 状态。
 - 可选 logic 线程：`EngineThreadingConfig.enable_logic_thread` 开启，输入经快照（`_publish/_consume_logic_input_snapshot`）跨线程传递；logic 线程异常会被捕获并终止主循环。
 - 应用侧扩展点：`_on_startup/_on_update/_on_gui/_on_render/_on_logic_*/_on_shutdown` 等虚函数。
 - 静态访问器：`Application::get()`、`get_window/get_graphics_context/get_swapchain/get_render_device/get_renderer/get_ui_context/get_input/get_rhi_backend` 等。
@@ -35,10 +35,11 @@ status: active
 
 | 选项 | 行为 |
 | --- | --- |
-| `--smoke-test[=N]` | 跑 N 帧后退出，缺省 N=3；环境变量 `ASH_ENGINE_SMOKE_TEST_FRAMES` 等效 |
-| `--smoke-test-seconds[=S]` | 跑 S 秒后退出，缺省 25；环境变量 `ASH_ENGINE_SMOKE_TEST_SECONDS` 等效 |
+| `--smoke-test-seconds[=S]` | readiness smoke；等待应用、资源、当前帧全部 scene packet 与非致命 present completion 后成功退出，S 是覆盖初始化、运行与 teardown 的进程级 wall-clock 硬失败上限（裸选项 25 秒）；环境变量 `ASH_ENGINE_SMOKE_TEST_SECONDS` 等效 |
+| `--run-for-seconds=S` / `--run-for-frames=N` | 显式固定时长/帧数运行，供 PerfGate watchdog、soak 或调试使用；到达上限是正常退出，不代表 readiness 成功 |
+| `--smoke-test[=N]` | deprecated 的 `--run-for-frames=N` 别名（裸选项 N=3）；`ASH_ENGINE_SMOKE_TEST_FRAMES` 同样仅是旧 fixed-run 别名并打印告警 |
 | `--rhi=<vulkan\|vk\|directx12\|dx12\|d3d12>` | 后端覆盖，经 `set_backend_override` 在 `initialize()` 之前注入（顺序是硬约束）；非法值直接退出码 1 |
-| `--dump-frame=<png>` | backbuffer 抓帧落 PNG（RenderGate 用）；必须与 `--smoke-test=N` 同用，否则告警并跳过。抓帧时机由渲染资产流送 quiesce 信号驱动（连续 32 帧无 pending 即抓帧并退出）；N 仅为超时保底，超时抓帧会告警 |
+| `--dump-frame=<png>` | 隐式启用 readiness capture；通常配 `--smoke-test-seconds=S`，未给 S 时默认 120 秒。只有通过 epoch 双重复核的 capture 才原子发布 PNG，超时/失败会删除旧目标并非零退出 |
 | `--scene=<json>` | 场景路径覆盖，应用层经 `get_scene_path_override()` 消费 |
 | `--engine-self-test` | 只跑 Base 自测后退出 |
 | `--bake-ashibl <src.hdr> <out.ashibl> [...]` | IBL 离线烘焙子命令，跑完即退出 |
@@ -48,17 +49,16 @@ status: active
 
 ### Frame dump 与 engine overlay
 
-- 抓帧时机（SDD-2026-07-07-render-gate-streaming-signal）：dump 模式下每个渲染帧查询
-  `RenderAssetManager::has_requested_render_assets() && !has_pending_render_assets()`
-  （已有请求且 static mesh 全部到 GpuReady/Failed 终态、无 pending 纹理解码），连续满足
-  32 帧（quiesce 余量，覆盖级联请求与 proxy 重建）即抓帧，写盘成功后 `request_exit()`；
-  smoke 帧数上限退化为超时保底，超时抓帧告警"may capture an incomplete scene"。
-- 抓帧经 `RenderDevice::request_back_buffer_capture / fetch_back_buffer_capture` 回读，stb 写 PNG（`_write_pending_frame_dump`）。
+- readiness 由 `ApplicationAutomationController` 统一判定：派生应用 Ready、资源无 pending/failed、命令队列为空、当前 Application frame 的全部预期 scene packet 成功、scene 提交 epoch 等于最新资源 epoch，且 acquire/begin/end 成功、present Completed。Retryable acquire/present 保持 Pending；Sandbox 与 Editor 分别提供启动/场景及 bootstrap/UI/资产库 readiness hook。
+- dump 使用两阶段握手：第一个 ready frame 清空可能混有 fallback 资源画面的 AO/TAA/体积光 temporal history，并 arm 资源 epoch；下一帧开始前 epoch 未变才请求 capture，present 后再验证同一 epoch 和全部 scene packet。变化时读回并丢弃、重新等待；超时绝不写不完整图片。粒子等动态内容还能提供 capture-ready 语义信号，当前按 `spawn_rate × (lifetime + variance)` 推导稳定窗口，不使用固定预热帧。
+- dump 模式的可见帧在提交前深拷贝，并使用渲染侧连续 frame index 与固定 `delta_seconds=1/60`；它与固定相机、隐藏 overlay、禁 TAA jitter 一起构成确定性契约。
+- 普通模式使用当前 Application render frame index，并以每个新 frame 实际进入的 scene render 调用作为模拟时钟。空 packet、输出/材质准备失败而未进入 render、以及重复同帧 submit 不推进时钟；一旦进入 render，即使该调用随后失败也推进一次，避免非事务式渲染失败后下一帧重复积分。
+- 抓帧经 `RenderDevice::request_back_buffer_capture / fetch_back_buffer_capture` 回读；fetch 只把 wall-clock deadline 的剩余时间传给双后端 current-frame completion wait，不调用无上限的 device idle。通过 post-present readiness 后先用 stb 写临时 PNG，再 rename 到最终路径。deadline 覆盖 GPU readback、编码和发布，越界输出会删除并失败退出。EntryPoint 同时持有只针对 readiness/dump 的进程 watchdog；若 GPU/driver hang 使 graceful teardown 也无法返回，watchdog 到 deadline 后以失败码直接终止进程，禁止继续做无界 GPU 析构。
 - `draw_engine_overlay()` 绘制帧统计浮层（`EngineFrameStatsOverlay` 窗口）；frame dump 模式（`frameDumpPath` 非空）下整体隐藏，保证 dump 确定性。
 
 ### UIContext（Editor 与 Engine 的 UI 边界）
 
-- 生命周期钩子（`init/shutdown/begin_frame/render/handle_window_event`）由引擎持有；Editor 只使用绘制/查询 API（窗口、dock、控件、draw list、剪贴板、按键修饰、`register_render_target/register_texture_view` + `image/draw_surface_fill_available` 等）。
+- 生命周期钩子（`init/shutdown/begin_frame/render/handle_window_event`）由引擎持有；Editor 只使用 `UIContext` 绘制/查询 API，包括支持完整 uint32 范围的 `input_uint`、窗口、dock、控件、draw list、剪贴板、按键修饰、`register_render_target/register_texture_view` + `image/draw_surface_fill_available` 等。
 - 节点画布通过 `UINodeEditor` 独立门面暴露；其实现与第三方 `imgui-node-editor` 均编译在 `Engine.dll` 内，Editor 只提交节点、pin、link 与交互查询，不 include `imgui_node_editor.h` 或调用 `ax::NodeEditor`。
 - 主题/字体/多视口能力由 `EngineInitConfig` 的 `ui*` 字段透传。
 - 准入标准：只收后端无关、立即模式、编辑器之外也可复用的能力；编辑器工作区编排、默认 dock 布局、面板注册/持久化、Inspector 语义一律放上层编辑器门面。底层 dock/viewport 原语（`dock_builder_*` 等）可进，编辑器具体布局策略不可进。
@@ -71,16 +71,18 @@ status: active
 - `set_backend_override` 必须在 `initialize()` 之前调用，之后无效。
 - Editor 及其他上层 UI 代码禁止绕过 `UIContext` 直接调用 ImGui 或 Graphics；需要新能力时给 `UIContext` 加封装接口。
 - `Application` 是全局单例（`Application::app`）；主循环线程即 render 线程，渲染命令只能在该线程 pump。
-- `--dump-frame` 路径仅在 smoke 帧数限定下生效；抓帧确定性约定（固定相机、隐藏 overlay、禁 TAA jitter）见 `docs/VERIFY.md` RenderGate 节。
+- readiness automation 未成功前的窗口关闭、logic/render/scene/资产/capture 失败或超时均返回非零；固定 `--run-for-*` 不得冒充 smoke 成功。
+- 抓帧确定性约定（资源 epoch、当前帧全 packet、动态 capture-ready、固定渲染步长、固定相机、隐藏 overlay、禁 TAA jitter）见 `docs/VERIFY.md`。
 
 ## 验证
 
 对齐 `docs/VERIFY.md`「Scene / Asset / Application 生命周期」行：
 
-- 构建 + `run.bat all Debug --smoke-test-seconds=5`（全矩阵 smoke），Editor 打开默认场景操作一遍。
-- 改动命令行契约或 frame dump 路径时追加 `RunRenderGate.bat`（其依赖 `--rhi/--smoke-test/--dump-frame`）；改 PerfGate 注入时跑 `RunPerfGate.bat -Profile Standard`。
+- 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke，ready 后提前退出），Editor 打开默认场景操作一遍。
+- 改动命令行契约或 frame dump 路径时追加 `RunRenderGate.bat`（其依赖 `--rhi/--smoke-test-seconds/--dump-frame`）；改 PerfGate 注入时跑 `scripts/TestRunPerfGate.ps1` 与 `RunPerfGate.bat -Profile Standard`。
 - UIContext/UI 改动：`run.bat editor` 手动过一遍改动路径。
 
 ## 历史
 
 - [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 `--rhi/--dump-frame/--scene` 命令行与抓帧模式 overlay 隐藏。
+- [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：以 readiness + asset epoch + 当前帧提交快照替代固定帧成功条件。

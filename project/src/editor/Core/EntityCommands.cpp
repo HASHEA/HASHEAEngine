@@ -102,6 +102,29 @@ namespace AshEditor
 			return entity.set_environment_component(*optValue);
 		}
 
+		bool ApplyParticleComponentState(
+			AshEngine::Entity entity,
+			const std::optional<AshEngine::ParticleComponent>& optValue)
+		{
+			if (!entity.is_valid())
+			{
+				return false;
+			}
+
+			if (!optValue.has_value())
+			{
+				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Particle);
+			}
+
+			if (!entity.has_particle_component() &&
+				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Particle))
+			{
+				return false;
+			}
+
+			return entity.set_particle_component(*optValue);
+		}
+
 		SceneEntityId GetEntityParentId(const AshEngine::Entity& refEntity)
 		{
 			const AshEngine::Entity parentEntity = refEntity.get_parent();
@@ -627,6 +650,73 @@ namespace AshEditor
 	}
 
 	EditorCommandSelection SetEnvironmentComponentCommand::GetSelectionAfterUndo() const
+	{
+		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
+	SetParticleComponentCommand::SetParticleComponentCommand(
+		SceneEntityId uEntityId,
+		std::optional<AshEngine::ParticleComponent> optBeforeValue,
+		std::optional<AshEngine::ParticleComponent> optAfterValue)
+		: _uEntityId(uEntityId)
+		, _optBeforeValue(std::move(optBeforeValue))
+		, _optAfterValue(std::move(optAfterValue))
+	{
+	}
+
+	const char* SetParticleComponentCommand::GetLabel() const
+	{
+		if (!_optBeforeValue.has_value() && _optAfterValue.has_value())
+		{
+			return "Add Particle Component";
+		}
+		if (_optBeforeValue.has_value() && !_optAfterValue.has_value())
+		{
+			return "Remove Particle Component";
+		}
+		return "Edit Particle Component";
+	}
+
+	bool SetParticleComponentCommand::Execute(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService || _uEntityId == 0 ||
+			OptionalComponentsEqual(_optBeforeValue, _optAfterValue, &ParticleComponentsEqual))
+		{
+			return false;
+		}
+
+		return ApplyParticleComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optAfterValue);
+	}
+
+	bool SetParticleComponentCommand::Undo(EditorContext& refContext)
+	{
+		return refContext.pSceneService && _uEntityId != 0 &&
+			ApplyParticleComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optBeforeValue);
+	}
+
+	bool SetParticleComponentCommand::TryMerge(const EditorCommand& refSubsequentCommand)
+	{
+		const SetParticleComponentCommand* pSubsequent =
+			dynamic_cast<const SetParticleComponentCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId ||
+			!_optBeforeValue.has_value() || !_optAfterValue.has_value() ||
+			!pSubsequent->_optBeforeValue.has_value() || !pSubsequent->_optAfterValue.has_value() ||
+			!ParticleComponentsEqual(*_optAfterValue, *pSubsequent->_optBeforeValue) ||
+			ParticleComponentsEqual(*_optBeforeValue, *pSubsequent->_optAfterValue))
+		{
+			return false;
+		}
+
+		_optAfterValue = pSubsequent->_optAfterValue;
+		return true;
+	}
+
+	EditorCommandSelection SetParticleComponentCommand::GetSelectionAfterExecute() const
+	{
+		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
+	EditorCommandSelection SetParticleComponentCommand::GetSelectionAfterUndo() const
 	{
 		return EditorCommandSelection::Entity(_uEntityId);
 	}

@@ -1006,6 +1006,7 @@ namespace AshEngine
 	{
 	public:
 		std::shared_ptr<BufferResource> resource = nullptr;
+		bool indirect_args = false;
 	};
 
 	class RenderSampler::Impl
@@ -1479,6 +1480,17 @@ namespace AshEngine
 					RHI::ASH_BLEND_FACTOR_ONE,
 					RHI::ASH_BLEND_OP_ADD);
 			}
+			else if (state.blend_mode == RenderBlendMode::AlphaBlend)
+			{
+				blend_state.set_color(
+					RHI::ASH_BLEND_FACTOR_SRC_ALPHA,
+					RHI::ASH_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+					RHI::ASH_BLEND_OP_ADD);
+				blend_state.set_alpha(
+					RHI::ASH_BLEND_FACTOR_ONE,
+					RHI::ASH_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+					RHI::ASH_BLEND_OP_ADD);
+			}
 		}
 	}
 
@@ -1518,6 +1530,17 @@ namespace AshEngine
 					blend_state.set_alpha(
 						RHI::ASH_BLEND_FACTOR_ONE,
 						RHI::ASH_BLEND_FACTOR_ONE,
+						RHI::ASH_BLEND_OP_ADD);
+				}
+				else if (impl.state.blend_mode == RenderBlendMode::AlphaBlend)
+				{
+					blend_state.set_color(
+						RHI::ASH_BLEND_FACTOR_SRC_ALPHA,
+						RHI::ASH_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+						RHI::ASH_BLEND_OP_ADD);
+					blend_state.set_alpha(
+						RHI::ASH_BLEND_FACTOR_ONE,
+						RHI::ASH_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
 						RHI::ASH_BLEND_OP_ADD);
 				}
 			}
@@ -3189,14 +3212,28 @@ namespace AshEngine
 		m_impl->swapchain = nullptr;
 	}
 
-	bool RenderDevice::begin_frame()
+	RHI::SwapchainPresentResult RenderDevice::begin_frame()
 	{
 		ASH_PROFILE_SCOPE_NC("RenderDevice::begin_frame", AshEngine::Profile::Color::RHI);
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_GUARD_RETURN(
+			RHI::SwapchainPresentResult,
+			bResult,
+			RHI::SwapchainPresentResult::Completed,
+			RHI::SwapchainPresentResult::Failed);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain);
 
 		m_impl->graphics_context->begin_frame();
-		m_impl->swapchain->begin_frame();
+		const RHI::SwapchainPresentResult acquire_result = m_impl->swapchain->begin_frame();
+		if (acquire_result != RHI::SwapchainPresentResult::Completed)
+		{
+			m_impl->swapchain->end_frame();
+			if (acquire_result == RHI::SwapchainPresentResult::Retryable)
+			{
+				m_impl->graphics_context->end_frame(false);
+			}
+			m_impl->current_command_buffer = nullptr;
+			return acquire_result;
+		}
 		++m_impl->frame_index;
 		const uint32_t swapchain_width = m_impl->swapchain->get_width();
 		const uint32_t swapchain_height = m_impl->swapchain->get_height();
@@ -3229,7 +3266,7 @@ namespace AshEngine
 		m_impl->scissor_override_active = false;
 		m_impl->back_buffer_written_this_frame = false;
 		m_impl->swapchain_written_this_frame = false;
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, RHI::SwapchainPresentResult::Failed);
 	}
 
 	bool RenderDevice::end_frame()
@@ -3296,12 +3333,13 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	void RenderDevice::present()
+	RHI::SwapchainPresentResult RenderDevice::present()
 	{
 		if (m_impl->swapchain)
 		{
-			m_impl->swapchain->present();
+			return m_impl->swapchain->present();
 		}
+		return RHI::SwapchainPresentResult::Failed;
 	}
 
 	std::shared_ptr<RenderTarget> RenderDevice::get_back_buffer()
@@ -3554,6 +3592,10 @@ namespace AshEngine
 		buffer_creation.size = desc.size;
 		buffer_creation.struct_byte_stride = desc.stride;
 		buffer_creation.usage_flags = RHI::ASH_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+		if (desc.indirect_args)
+		{
+			buffer_creation.usage_flags |= RHI::ASH_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+		}
 		buffer_creation.access_type = desc.cpu_write ? RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_WRITE : RHI::AshResourceAccessType::ASH_RESOURCE_ACCESS_GPU_ONLY;
 		buffer_creation.force_static = true;
 		buffer_creation.initial_data = const_cast<void*>(desc.initial_data);
@@ -3569,6 +3611,7 @@ namespace AshEngine
 
 		auto impl = std::make_shared<StorageBuffer::Impl>();
 		impl->resource = resource;
+		impl->indirect_args = desc.indirect_args;
 		result = std::shared_ptr<StorageBuffer>(new StorageBuffer(impl));
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
 	}
@@ -4161,6 +4204,15 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool RenderDevice::collect_indirect_args_buffer_barrier(const std::shared_ptr<StorageBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer &&
+			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
+		out_barriers.emplace_back(buffer->m_impl->resource->buffer, RHI::AshResourceState::IndirectArgs);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
 	bool RenderDevice::collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -4284,6 +4336,57 @@ namespace AshEngine
 		{
 			m_impl->current_command_buffer->cmd_draw_indexed(index_count, instance_count, first_index, vertex_offset, first_instance);
 		}
+	}
+
+	bool RenderDevice::draw_indirect(const std::shared_ptr<StorageBuffer>& args_buffer, uint64_t args_offset)
+	{
+		if (!m_impl)
+		{
+			HLogError("RenderDevice: draw_indirect requires an initialized render device.");
+			return false;
+		}
+
+		RHI::CommandBuffer* command_buffer = m_impl->current_command_buffer;
+		if (!validate_command_buffer_status(command_buffer, "draw_indirect::before_record"))
+		{
+			return false;
+		}
+		if (!args_buffer || !args_buffer->m_impl || !args_buffer->m_impl->resource || !args_buffer->m_impl->resource->buffer)
+		{
+			HLogError("RenderDevice: draw_indirect received an invalid args buffer resource.");
+			return false;
+		}
+		if (!args_buffer->m_impl->indirect_args)
+		{
+			HLogError("RenderDevice: draw_indirect args buffer was not created with indirect_args usage.");
+			return false;
+		}
+
+		constexpr uint64_t indirect_args_alignment = 4u;
+		if ((args_offset % indirect_args_alignment) != 0u)
+		{
+			HLogError(
+				"RenderDevice: draw_indirect args offset {} is not {}-byte aligned.",
+				args_offset,
+				indirect_args_alignment);
+			return false;
+		}
+
+		constexpr uint64_t indirect_args_size = sizeof(RHI::AshDrawIndirectArgs);
+		const uint64_t buffer_size = args_buffer->m_impl->resource->size;
+		if (args_offset > buffer_size || indirect_args_size > buffer_size - args_offset)
+		{
+			HLogError(
+				"RenderDevice: draw_indirect args offset {} plus args size {} exceeds buffer size {}.",
+				args_offset,
+				indirect_args_size,
+				buffer_size);
+			return false;
+		}
+
+		command_buffer->cmd_draw_indirect(
+			args_buffer->m_impl->resource->buffer, args_offset, 1u, sizeof(RHI::AshDrawIndirectArgs));
+		return validate_command_buffer_status(command_buffer, "draw_indirect::record");
 	}
 
 	void RenderDevice::dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
@@ -4481,7 +4584,7 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool RenderDevice::fetch_back_buffer_capture(BackBufferCaptureResult& out_result)
+	bool RenderDevice::fetch_back_buffer_capture(BackBufferCaptureResult& out_result, uint64_t timeout_nanoseconds)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context);
@@ -4490,7 +4593,11 @@ namespace AshEngine
 			return false;
 		}
 
-		m_impl->graphics_context->wait_idle();
+		if (!m_impl->graphics_context->wait_for_frame_completion(timeout_nanoseconds))
+		{
+			HLogError("RenderDevice: timed out waiting for back buffer capture GPU completion.");
+			return false;
+		}
 
 		uint8_t* mapped_data =
 			m_impl->capture_readback_buffer ? m_impl->capture_readback_buffer->get_mapped_data() : nullptr;

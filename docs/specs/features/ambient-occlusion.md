@@ -56,7 +56,7 @@ Low=6/4/3，Medium=10/6/4，High=16/8/6。采样旋转使用逐像素 interleave
 
 ## 约束与已知限制
 
-- temporal history 为 pass 内部持有的外部 RT，仅支持单 view 追踪（view_id 变化即重置）。
+- temporal history 为 pass 内部持有的外部 RT，仅支持单 view 追踪（view_id 变化即重置）；输出 resize 与 readiness capture arm 会调用公开 `clear_history()`，避免加载中画面污染 golden，不靠固定收敛帧。
 - debug_view 开启时直接替换场景输出，属破坏性调试路径，不能与正常画面同屏。
 - 噪声函数为屏幕像素坐标驱动的稳定噪声，无逐帧 jitter；改动它会同时影响 RenderGate golden。
 - half-resolution AO 的修正只保证 AO 生成/blur/temporal/debug 中的全分辨率场景纹理读取对齐；

@@ -95,6 +95,10 @@ namespace AshEngine
 		bool reverse_z = false;
 		std::array<uint8_t, InlineConstDataCapacity> inline_const_data{};
 		std::vector<uint8_t> const_data{};
+		// SDD-2026-07-10-gpu-particles：非空即走 cmd_draw_indirect（drawCount=1，非索引），
+		// 忽略 vertex_count/instance_count/index_buffer
+		std::shared_ptr<StorageBuffer> indirect_args_buffer = nullptr;
+		uint64_t indirect_args_offset = 0;
 	};
 
 	struct ComputeDispatchDesc
@@ -156,9 +160,9 @@ namespace AshEngine
 		~Renderer();
 
 	public:
-		bool begin_frame();
+		RHI::SwapchainPresentResult begin_frame();
 		bool end_frame();
-		void present();
+		RHI::SwapchainPresentResult present();
 		RenderDevice* get_render_device() const
 		{
 			return m_render_device;

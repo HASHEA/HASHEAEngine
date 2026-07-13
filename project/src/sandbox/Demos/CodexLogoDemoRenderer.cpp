@@ -70,13 +70,12 @@ namespace AshSandbox
 			return false;
 		}
 
-		m_palette_buffer = renderer->create_storage_buffer({
-			static_cast<uint32_t>(sizeof(k_palette)),
-			static_cast<uint32_t>(sizeof(PaletteColor)),
-			false,
-			k_palette,
-			"SandboxCodexLogoPaletteBuffer"
-		});
+		AshEngine::StorageBufferDesc palette_desc{};
+		palette_desc.size = static_cast<uint32_t>(sizeof(k_palette));
+		palette_desc.stride = static_cast<uint32_t>(sizeof(PaletteColor));
+		palette_desc.initial_data = k_palette;
+		palette_desc.name = "SandboxCodexLogoPaletteBuffer";
+		m_palette_buffer = renderer->create_storage_buffer(palette_desc);
 		if (!m_palette_buffer)
 		{
 			HLogError("Sandbox Codex logo failed to create palette buffer.");

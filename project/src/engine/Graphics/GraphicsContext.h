@@ -115,8 +115,9 @@ namespace RHI {
         virtual auto create_sampler(const SamplerCreation& ci) -> std::shared_ptr<Sampler> = 0;
         virtual auto get_sampler(const AshSamplerState& ss)->std::shared_ptr<Sampler> = 0;
         virtual auto wait_idle() -> void = 0;
+		virtual auto wait_for_frame_completion(uint64_t timeout_nanoseconds) -> bool = 0;
 		virtual auto begin_frame() -> void = 0;
-		virtual auto end_frame() -> void = 0;
+		virtual auto end_frame(bool has_acquired_swapchain_image = true) -> void = 0;
         virtual auto get_command_buffer(uint32_t threadIndx) -> CommandBuffer* = 0;
         virtual auto get_secondary_command_buffer(uint32_t threadIndx) -> CommandBuffer* = 0;
         virtual auto submit(const SubmitInfo& info) -> void = 0;

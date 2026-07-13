@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <glm/vec3.hpp>
+#include <glm/vec4.hpp>
 
 namespace AshEngine
 {
@@ -127,5 +128,11 @@ namespace AshEditor
 		const InspectorSceneFieldDesc& refDesc,
 		const char* pLabel,
 		glm::vec3& refValue,
+		bool bEnabled = true);
+	bool DrawInspectorSceneColor4Field(
+		AshEngine::UIContext& refUi,
+		const InspectorSceneFieldDesc& refDesc,
+		const char* pLabel,
+		glm::vec4& refValue,
 		bool bEnabled = true);
 }
