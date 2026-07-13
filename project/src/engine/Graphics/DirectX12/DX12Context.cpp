@@ -398,6 +398,16 @@ namespace RHI
 			delete profiler;
 		}
 
+		{
+			std::vector<PendingBufferUpload> discardedBufferUploads{};
+			std::vector<PendingTextureUpload> discardedTextureUploads{};
+			{
+				std::scoped_lock<std::mutex> lock(m_pendingUploadMutex);
+				discardedBufferUploads.swap(m_pendingBufferUploads);
+				discardedTextureUploads.swap(m_pendingTextureUploads);
+			}
+		}
+
 		// Process all deletion queues
 		for (auto& q : m_delayedDeletionQueues)
 			q.flush();

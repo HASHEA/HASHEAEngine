@@ -127,6 +127,10 @@ public:
 		{
 			rhiIndirectSelfTestRequested = requested;
 		}
+		auto set_rhi_constant_buffer_self_test_requested(bool requested) -> void
+		{
+			rhiConstantBufferSelfTestRequested = requested;
+		}
 		// RenderGate（SDD-2026-07-07-render-gate）：--rhi 命令行覆盖后端，必须在 initialize() 之前调用才生效
 		auto set_backend_override(RHI::Backend backend) -> void
 		{
@@ -233,6 +237,7 @@ public:
 		bool					currentFramePresentRequired = false;
 		RHI::SwapchainPresentResult currentFrameRenderResult = RHI::SwapchainPresentResult::Failed;
 		bool					rhiIndirectSelfTestRequested = false;
+		bool					rhiConstantBufferSelfTestRequested = false;
 		std::atomic<bool>		exitRequested			{ false };
 		std::atomic<bool>		runtimeFailureDetected	{ false };
 		std::atomic<bool>		logicThreadStopRequested{ false };

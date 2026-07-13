@@ -644,6 +644,7 @@ struct DX12DescriptorHandle
 	D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {};
 	D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = {};
 	uint32_t heapIndex = UINT32_MAX;
+	uint64_t allocationSerial = 0;
 
 	bool is_valid() const { return cpuHandle.ptr != 0; }
 	bool is_shader_visible() const { return gpuHandle.ptr != 0; }

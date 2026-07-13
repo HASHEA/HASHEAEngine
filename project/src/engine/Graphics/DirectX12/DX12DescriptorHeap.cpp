@@ -33,6 +33,7 @@ namespace RHI
 		m_type = type;
 		m_maxDescriptors = maxDescriptors;
 		m_currentIndex = 0;
+		m_nextAllocationSerial = 0;
 		m_descriptorSize = device->GetDescriptorHandleIncrementSize(type);
 
 		D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
@@ -63,8 +64,15 @@ namespace RHI
 	DX12DescriptorHandle DX12CPUDescriptorHeap::allocate()
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
+		if (m_nextAllocationSerial == UINT64_MAX)
+		{
+			HLogError("DX12CPUDescriptorHeap: descriptor allocation serial exhausted. Type: {}", descriptor_heap_type_name(m_type));
+			H_ASSERT(false);
+			return {};
+		}
 
 		DX12DescriptorHandle handle = {};
+		handle.allocationSerial = ++m_nextAllocationSerial;
 		uint32_t index = 0;
 
 		if (!m_freeList.empty())
@@ -227,12 +235,12 @@ namespace RHI
 	bool DX12DescriptorHeapManager::find_or_create_shader_visible_table(
 		ID3D12Device* device,
 		D3D12_DESCRIPTOR_HEAP_TYPE heapType,
-		const D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandles,
+		const DX12DescriptorHandle* descriptorHandles,
 		uint32_t descriptorCount,
 		DX12DescriptorHandle& outHandle)
 	{
 		outHandle = {};
-		if (!device || !cpuHandles || descriptorCount == 0)
+		if (!device || !descriptorHandles || descriptorCount == 0)
 		{
 			return false;
 		}
@@ -241,29 +249,20 @@ namespace RHI
 		DX12GPUDescriptorHeap& targetHeap = samplerHeap ? gpuSampler : gpuCbvSrvUav;
 		auto& tableCache = samplerHeap ? m_frameSamplerTableCache : m_frameCbvSrvUavTableCache;
 
-		DescriptorTableCacheKey key{};
-		key.heapType = heapType;
-		key.descriptorCount = descriptorCount;
-		if (descriptorCount > DescriptorTableCacheKey::InlineHandleCapacity)
-		{
-			key.overflowCpuHandles.reserve(descriptorCount - DescriptorTableCacheKey::InlineHandleCapacity);
-		}
 		for (uint32_t index = 0; index < descriptorCount; ++index)
 		{
-			if (cpuHandles[index].ptr == 0)
+			if (descriptorHandles[index].cpuHandle.ptr == 0)
 			{
 				HLogError("DX12DescriptorHeapManager: cannot cache a descriptor table with a null CPU handle.");
 				return false;
 			}
-			if (index < DescriptorTableCacheKey::InlineHandleCapacity)
+			if (descriptorHandles[index].allocationSerial == 0)
 			{
-				key.inlineCpuHandles[index] = cpuHandles[index].ptr;
-			}
-			else
-			{
-				key.overflowCpuHandles.push_back(cpuHandles[index].ptr);
+				HLogError("DX12DescriptorHeapManager: cannot cache a descriptor table with a zero allocation serial.");
+				return false;
 			}
 		}
+		DescriptorTableCacheKey key = DescriptorTableCacheKey::from_handles(heapType, descriptorHandles, descriptorCount);
 
 		const auto cached = tableCache.find(key);
 		if (cached != tableCache.end())
@@ -280,7 +279,7 @@ namespace RHI
 
 		if (descriptorCount == 1)
 		{
-			device->CopyDescriptorsSimple(1, gpuHandle.cpuHandle, cpuHandles[0], heapType);
+			device->CopyDescriptorsSimple(1, gpuHandle.cpuHandle, descriptorHandles[0].cpuHandle, heapType);
 		}
 		else
 		{
@@ -288,7 +287,7 @@ namespace RHI
 			{
 				D3D12_CPU_DESCRIPTOR_HANDLE destination{};
 				destination.ptr = gpuHandle.cpuHandle.ptr + static_cast<SIZE_T>(index) * targetHeap.get_descriptor_size();
-				device->CopyDescriptorsSimple(1, destination, cpuHandles[index], heapType);
+				device->CopyDescriptorsSimple(1, destination, descriptorHandles[index].cpuHandle, heapType);
 			}
 		}
 
