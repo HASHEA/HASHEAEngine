@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "VegetationFullPipeline": {
+      "configuration": "Release",
+      "configuration_locked": true,
+      "targets": [
+        {
+          "name": "Sandbox",
+          "backends": [ "Vulkan", "DX12" ]
+        }
+      ],
+      "scene": "product/assets/scenes/VegetationBaseline.scene.json",
+      "window_width": 2560,
+      "window_height": 1440,
+      "warmup_seconds": 10,
+      "sample_seconds": 30,
+      "drain_seconds": 5,
+      "timeout_seconds": 90,
+      "gpu_timing": "required",
+      "min_gpu_coverage": 0.95,
+      "required_gpu_metrics": [
+        "GPU.Frame",
+        "GPU.GBuffer",
+        "GPU.AmbientOcclusion",
+        "GPU.Shadows",
+        "GPU.DeferredLighting",
+        "GPU.EnvironmentAndSky",
+        "GPU.Particles",
+        "GPU.VolumetricLighting",
+        "GPU.Bloom",
+        "GPU.TemporalAA",
+        "GPU.ToneMapAndOverlays"
+      ],
+      "vsync": false,
+      "validation": false,
+      "frame_cap": "off",
+      "fixed_camera": true
+    }
+  }
+}
