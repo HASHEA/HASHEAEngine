@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenario": "Empty",
+  "render_output": {
+    "width": 2560,
+    "height": 1440
+  },
+  "limits": {
+    "cpu_frame_time_p95_ms": 3.33,
+    "gpu_frame_time_p95_ms": 3.33
+  },
+  "immutable": true,
+  "blessable": false,
+  "description": "Non-blessable Phase 0 feasibility limits for the fixed 2560x1440 Empty Editor scenario."
+}

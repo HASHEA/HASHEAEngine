@@ -118,7 +118,9 @@ public:
 		auto set_max_frame_count(uint64_t inMaxFrameCount) -> void;
 		auto set_max_run_seconds(double inMaxRunSeconds) -> void;
 		auto set_readiness_smoke_timeout_seconds(double timeoutSeconds) -> void;
-		auto configure_perf_gate(const PerfGateConfig& config) -> void;
+		// editor begin 修改原因：在 RHI 初始化前保存固定视口性能场景配置，Editor 启动时据此创建真实离屏输出。
+		auto set_perf_gate_config(const PerfGateConfig& config) -> void;
+		// editor end
 		// RenderGate：readiness capture 通过 post-present/asset-epoch 复核后原子发布 PNG；--scene 供应用层覆盖默认场景
 		auto set_frame_dump_path(std::string path) -> void;
 		auto set_scene_path_override(std::string path) -> void;
@@ -197,6 +199,13 @@ public:
 	public:
 		static Application* app;
 	protected:
+		// editor begin 修改原因：Editor 只在真实离屏输出分配完成后回报性能门禁使用的实际尺寸。
+		auto report_perf_gate_render_output_extent(uint32_t width, uint32_t height) -> void;
+		auto get_perf_gate_config() const -> const PerfGateConfig&
+		{
+			return perfGateConfig;
+		}
+		// editor end
 		Window*					window					= nullptr;
 		RHI::GraphicsContext*	graphicsContext			= nullptr;
 		RHI::Swapchain*			swapChain				= nullptr;
@@ -211,6 +220,9 @@ public:
 		DebugDrawService		debugDrawService{};
 		PerfGateController		perfGateController{};
 		ApplicationAutomationController automationController{};
+		ApplicationAutomationController perfGateReadinessController{};
+		PerfGateConfig			perfGateConfig{};
+		bool					perfGateAbnormalExit	= false;
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
 		InputState				logicInputState{};

@@ -14,6 +14,8 @@ namespace AshEditor
 {
 	namespace
 	{
+		ViewportOutputExtent g_perfGateViewportOutputExtent{};
+
 		void ResetViewportRuntimeState(
 			EditorViewportInstance* pViewport,
 			ViewportPanelSceneSelectionState& refSceneSelection,
@@ -138,6 +140,16 @@ namespace AshEditor
 				refDrawResult,
 				refSceneSelection);
 		}
+	}
+
+	void ConfigurePerfGateViewportOutputExtent(uint32_t uWidth, uint32_t uHeight)
+	{
+		g_perfGateViewportOutputExtent = { uWidth, uHeight };
+	}
+
+	auto GetPerfGateViewportOutputExtent() -> ViewportOutputExtent
+	{
+		return g_perfGateViewportOutputExtent;
 	}
 
 	ViewportPanel::ViewportPanel(

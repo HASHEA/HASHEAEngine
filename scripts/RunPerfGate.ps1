@@ -8,6 +8,7 @@ param(
     [switch]$DryRun,
     [switch]$BlessBaseline,
     [switch]$NoTracy,
+    [switch]$TimingValidation,
     [switch]$SelfTest
 )
 
@@ -213,6 +214,220 @@ function Invoke-WithRequiredRestore {
     return $bodyOutput
 }
 
+function Get-Utf8Sha256 {
+    param([string]$Value)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Value)
+        $hash = $sha256.ComputeHash($bytes)
+        return ([System.BitConverter]::ToString($hash) -replace "-", "").ToLowerInvariant()
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Test-IsJsonNativeInt64 {
+    param([object]$Value)
+
+    if (-not (Test-IsJsonNativeNumber $Value)) {
+        return $false
+    }
+    try {
+        $decimalValue = [decimal]$Value
+    }
+    catch {
+        return $false
+    }
+    return $decimalValue -eq [decimal]::Truncate($decimalValue) -and
+        $decimalValue -ge [decimal][int64]::MinValue -and
+        $decimalValue -le [decimal][int64]::MaxValue
+}
+
+function Assert-EmptyManifestHash {
+    param([string]$ManifestPath)
+
+    if (-not (Test-Path -LiteralPath $ManifestPath)) {
+        throw "Missing Empty scenario manifest: $ManifestPath"
+    }
+    try {
+        $manifest = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse Empty scenario manifest '$ManifestPath': $($_.Exception.Message)"
+    }
+
+    $manifestSchemaVersion = Get-ProfileProperty $manifest "schema_version"
+    $manifestSceneName = Get-ProfileProperty $manifest "scene"
+    $hashAlgorithm = Get-ProfileProperty $manifest "hash_algorithm"
+    if (-not (Test-IsJsonNativeInt64 $manifestSchemaVersion) -or [int64]$manifestSchemaVersion -ne 1 -or
+        $manifestSceneName -isnot [string] -or $manifestSceneName -ne "TerrainPerfEmpty.scene.json" -or
+        $hashAlgorithm -isnot [string] -or $hashAlgorithm -ne "SHA-256") {
+        throw "Empty scenario manifest metadata is invalid."
+    }
+    $canonicalContract = Get-ProfileProperty $manifest "canonical_contract"
+    $canonicalJson = Get-ProfileProperty $manifest "canonical_contract_json"
+    $expectedHash = Get-ProfileProperty $manifest "canonical_contract_sha256"
+    if ($null -eq $canonicalContract -or $canonicalJson -isnot [string] -or
+        $expectedHash -isnot [string] -or $expectedHash -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "Empty scenario manifest must contain canonical_contract, canonical_contract_json, and a SHA-256 hash."
+    }
+    try {
+        $parsedCanonicalContract = $canonicalJson | ConvertFrom-Json
+    }
+    catch {
+        throw "Empty scenario manifest canonical_contract_json is not valid JSON: $($_.Exception.Message)"
+    }
+    $actualHash = Get-Utf8Sha256 -Value $canonicalJson
+    if ($actualHash -ne $expectedHash.ToLowerInvariant()) {
+        throw "Empty scenario manifest canonical_contract_json SHA-256 mismatch: expected $expectedHash, actual $actualHash."
+    }
+
+    $parsedCanonicalJson = $parsedCanonicalContract | ConvertTo-Json -Depth 100 -Compress
+    if ($parsedCanonicalJson -cne $canonicalJson) {
+        throw "Empty scenario manifest canonical_contract_json is not in the canonical JSON form."
+    }
+    $manifestContractJson = $canonicalContract | ConvertTo-Json -Depth 100 -Compress
+    if ($manifestContractJson -cne $canonicalJson) {
+        throw "Empty scenario manifest canonical_contract does not match canonical_contract_json."
+    }
+
+    $scenePath = Join-Path (Split-Path -Parent $ManifestPath) $manifestSceneName
+    if (-not (Test-Path -LiteralPath $scenePath)) {
+        throw "Missing fixed Empty scenario scene referenced by manifest: $scenePath"
+    }
+    try {
+        $scene = Get-Content -Raw -LiteralPath $scenePath | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse fixed Empty scenario scene '$scenePath': $($_.Exception.Message)"
+    }
+    $sceneVersion = Get-ProfileProperty $scene "version"
+    $nextEntityId = Get-ProfileProperty $scene "next_entity_id"
+    $sceneName = Get-ProfileProperty $scene "name"
+    $entities = @((Get-ProfileProperty $scene "entities"))
+    $topLevelNames = @($scene.PSObject.Properties | ForEach-Object { $_.Name } | Sort-Object)
+    if (-not (Test-IsJsonNativeInt64 $sceneVersion) -or [int64]$sceneVersion -ne 5 -or
+        -not (Test-IsJsonNativeInt64 $nextEntityId) -or [int64]$nextEntityId -ne 5 -or
+        $sceneName -isnot [string] -or $sceneName -ne "TerrainPerfEmpty" -or
+        $entities.Count -ne 4 -or
+        ($topLevelNames -join ",") -cne "entities,name,next_entity_id,scene_config,version") {
+        throw "Fixed Empty scenario scene metadata or entity count is invalid."
+    }
+
+    $expectedRootJson = '{"id":1,"name":"TerrainPerfRoot","parent":0,"transform":{"position":[0.0,0.0,0.0],"rotation_euler_degrees":[0.0,0.0,0.0],"scale":[1.0,1.0,1.0]}}'
+    $actualRootJson = $entities[0] | ConvertTo-Json -Depth 100 -Compress
+    if ($actualRootJson -cne $expectedRootJson) {
+        throw "Fixed Empty scenario root entity drifted from its canonical value."
+    }
+    $sceneContract = [PSCustomObject][ordered]@{
+        camera_entity = $entities[1]
+        environment_entity = $entities[2]
+        light_entity = $entities[3]
+        render_config = Get-ProfileProperty $scene "scene_config"
+    }
+    $sceneContractJson = $sceneContract | ConvertTo-Json -Depth 100 -Compress
+    if ($sceneContractJson -cne $canonicalJson) {
+        throw "Fixed Empty scenario scene does not match the manifest canonical contract."
+    }
+    return $actualHash
+}
+
+function Get-EmptyFeasibilityContract {
+    param([string]$ContractPath)
+
+    if (-not (Test-Path -LiteralPath $ContractPath)) {
+        throw "Missing immutable Empty feasibility contract: $ContractPath"
+    }
+    try {
+        $contract = Get-Content -Raw -LiteralPath $ContractPath | ConvertFrom-Json
+    }
+    catch {
+        throw "Failed to parse Empty feasibility contract '$ContractPath': $($_.Exception.Message)"
+    }
+
+    $renderOutput = Get-ProfileProperty $contract "render_output"
+    $limits = Get-ProfileProperty $contract "limits"
+    $cpuLimit = Get-ProfileProperty $limits "cpu_frame_time_p95_ms"
+    $gpuLimit = Get-ProfileProperty $limits "gpu_frame_time_p95_ms"
+    $contractSchemaVersion = Get-ProfileProperty $contract "schema_version"
+    $contractScenario = Get-ProfileProperty $contract "scenario"
+    $renderWidth = Get-ProfileProperty $renderOutput "width"
+    $renderHeight = Get-ProfileProperty $renderOutput "height"
+    if (-not (Test-IsJsonNativeInt64 $contractSchemaVersion) -or [int64]$contractSchemaVersion -ne 1 -or
+        $contractScenario -isnot [string] -or $contractScenario -ne "Empty" -or
+        -not (Test-IsJsonNativeInt64 $renderWidth) -or [int64]$renderWidth -ne 2560 -or
+        -not (Test-IsJsonNativeInt64 $renderHeight) -or [int64]$renderHeight -ne 1440 -or
+        -not (Test-IsJsonNativeNumber $cpuLimit) -or [double]$cpuLimit -ne 3.33 -or
+        -not (Test-IsJsonNativeNumber $gpuLimit) -or [double]$gpuLimit -ne 3.33 -or
+        (Get-ProfileProperty $contract "immutable") -isnot [bool] -or
+        -not [bool](Get-ProfileProperty $contract "immutable") -or
+        (Get-ProfileProperty $contract "blessable") -isnot [bool] -or
+        [bool](Get-ProfileProperty $contract "blessable")) {
+        throw "Empty feasibility contract must be immutable, non-blessable, 2560x1440, and use exact CPU/GPU P95 limits of 3.33 ms."
+    }
+    return $contract
+}
+
+function New-StateFileSnapshots {
+    param(
+        [string[]]$Paths,
+        [string]$BackupRoot
+    )
+
+    New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+    $snapshots = New-Object System.Collections.ArrayList
+    for ($index = 0; $index -lt $Paths.Count; ++$index) {
+        $path = [System.IO.Path]::GetFullPath($Paths[$index])
+        $exists = Test-Path -LiteralPath $path
+        $backupPath = Join-Path $BackupRoot ("{0:D2}.bin" -f $index)
+        $hash = $null
+        if ($exists) {
+            [System.IO.File]::WriteAllBytes($backupPath, [System.IO.File]::ReadAllBytes($path))
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        }
+        $snapshots.Add([PSCustomObject]@{
+            path = $path
+            existed = $exists
+            backup_path = $backupPath
+            sha256 = $hash
+        }) | Out-Null
+    }
+    return @($snapshots)
+}
+
+function Restore-StateFileSnapshots {
+    param([object[]]$Snapshots)
+
+    $failures = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($snapshot in $Snapshots) {
+        try {
+            if ($snapshot.existed) {
+                $parent = Split-Path -Parent $snapshot.path
+                New-Item -ItemType Directory -Force -Path $parent | Out-Null
+                [System.IO.File]::WriteAllBytes($snapshot.path, [System.IO.File]::ReadAllBytes($snapshot.backup_path))
+                $restoredHash = (Get-FileHash -LiteralPath $snapshot.path -Algorithm SHA256).Hash
+                if ($restoredHash -ne $snapshot.sha256) {
+                    throw "SHA-256 mismatch after restore"
+                }
+            }
+            else {
+                Remove-Item -LiteralPath $snapshot.path -Force -ErrorAction SilentlyContinue
+                if (Test-Path -LiteralPath $snapshot.path) {
+                    throw "file did not return to its original missing state"
+                }
+            }
+        }
+        catch {
+            $failures.Add("$($snapshot.path): $($_.Exception.Message)") | Out-Null
+        }
+    }
+    if ($failures.Count -gt 0) {
+        throw "PerfGate state restoration failed: $($failures -join ' | ')"
+    }
+}
+
 function Assert-NoTracyRunRecords {
     param([object[]]$Records)
 
@@ -261,25 +476,36 @@ function Get-PerfGateOverallStatus {
     return "PASS"
 }
 
-function Set-EngineBackend {
+function Set-IniValue {
     param(
         [string]$ConfigPath,
-        [string]$Backend
+        [string]$Section,
+        [string]$Name,
+        [string]$Value
     )
 
     $lines = Get-Content -LiteralPath $ConfigPath
     $output = New-Object System.Collections.Generic.List[string]
-    $inRhi = $false
+    $inSection = $false
+    $sectionFound = $false
     $updated = $false
+    $escapedName = [regex]::Escape($Name)
 
     foreach ($line in $lines) {
         if ($line -match '^\s*\[(.+)\]\s*$') {
-            $inRhi = ($matches[1].Trim().ToLowerInvariant() -eq "rhi")
+            if ($inSection -and -not $updated) {
+                $output.Add("$Name=$Value")
+                $updated = $true
+            }
+            $inSection = [string]::Equals($matches[1].Trim(), $Section, [System.StringComparison]::OrdinalIgnoreCase)
+            if ($inSection) {
+                $sectionFound = $true
+            }
             $output.Add($line)
             continue
         }
-        if ($inRhi -and $line -match '^\s*Backend\s*=') {
-            $output.Add("Backend=$Backend")
+        if ($inSection -and $line -match "^\s*$escapedName\s*=") {
+            $output.Add("$Name=$Value")
             $updated = $true
             continue
         }
@@ -287,12 +513,53 @@ function Set-EngineBackend {
     }
 
     if (-not $updated) {
-        $output.Add("")
-        $output.Add("[RHI]")
-        $output.Add("Backend=$Backend")
+        if (-not $sectionFound) {
+            $output.Add("")
+            $output.Add("[$Section]")
+        }
+        $output.Add("$Name=$Value")
     }
 
     Set-Content -LiteralPath $ConfigPath -Value $output -Encoding UTF8
+}
+
+function Set-EngineBackend {
+    param(
+        [string]$ConfigPath,
+        [string]$Backend
+    )
+
+    Set-IniValue -ConfigPath $ConfigPath -Section "RHI" -Name "Backend" -Value $Backend
+}
+
+function Set-PerfGateEngineConfig {
+    param(
+        [string]$ConfigPath,
+        [string]$Backend,
+        [switch]$EmptyScenario,
+        [switch]$TimingValidation
+    )
+
+    Set-EngineBackend -ConfigPath $ConfigPath -Backend $Backend
+    if ($EmptyScenario) {
+        Set-IniValue -ConfigPath $ConfigPath -Section "Rendering" -Name "VSync" -Value "false"
+        Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "Enabled" -Value "false"
+        Set-IniValue -ConfigPath $ConfigPath -Section "DX12Validation" -Name "Enabled" -Value "false"
+    }
+    if ($TimingValidation) {
+        if ($Backend -eq "Vulkan") {
+            Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "Enabled" -Value "true"
+            Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "GpuAssisted" -Value "true"
+            Set-IniValue -ConfigPath $ConfigPath -Section "VulkanValidation" -Name "SynchronizationValidation" -Value "true"
+        }
+        elseif ($Backend -eq "DX12") {
+            Set-IniValue -ConfigPath $ConfigPath -Section "DX12Validation" -Name "Enabled" -Value "true"
+            Set-IniValue -ConfigPath $ConfigPath -Section "DX12Validation" -Name "GpuValidation" -Value "true"
+        }
+        else {
+            throw "Timing validation does not support backend '$Backend'."
+        }
+    }
 }
 
 function New-RunRecord {
@@ -332,7 +599,87 @@ function New-RunRecord {
         engine_heap_delta = "n/a"
         draw_calls_delta = "n/a"
         baseline_deltas = @()
+        scenario = ""
+        configuration = ""
+        timing_validation = $false
+        arguments = @()
+        command_line = ""
+        gpu_frame_time_p95_ms = 0.0
+        feasibility_contract_status = "NOT_APPLICABLE"
     }
+}
+
+function New-PerfGateRunPlan {
+    param(
+        [object[]]$Targets,
+        [object]$ProfileConfig,
+        [string]$Profile,
+        [string]$Configuration,
+        [string]$RepoRoot,
+        [string]$ReportRoot,
+        [string]$Scenario,
+        [switch]$TimingValidation
+    )
+
+    $plan = New-Object System.Collections.ArrayList
+    $scenePath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "product/assets/scenes/TerrainPerfEmpty.scene.json"))
+    foreach ($target in $Targets) {
+        foreach ($backendValue in @($target.backends)) {
+            $targetName = [string]$target.target
+            $backend = [string]$backendValue
+            $exeName = if ($targetName -eq "Editor") { "Editor.exe" } else { "Sandbox.exe" }
+            $runDirectory = Join-Path $RepoRoot "product/bin64/$Configuration-windows-x86_64"
+            $executable = Join-Path $runDirectory $exeName
+            $runName = "{0}-{1}" -f $targetName, $backend
+            $telemetryPath = Join-Path $ReportRoot "$runName.json"
+            $arguments = New-Object System.Collections.ArrayList
+            foreach ($argument in @(
+                "--perf-gate",
+                "--perf-gate-profile=$Profile",
+                "--perf-gate-output=$telemetryPath",
+                "--perf-gate-target=$targetName",
+                "--perf-gate-warmup-seconds=$($ProfileConfig.warmup_seconds)",
+                "--perf-gate-sample-seconds=$($ProfileConfig.sample_seconds)"
+            )) {
+                $arguments.Add($argument) | Out-Null
+            }
+            if ($Scenario -eq "Empty") {
+                $rhiArgument = if ($backend -eq "Vulkan") { "vulkan" } else { "dx12" }
+                foreach ($argument in @(
+                    "--rhi=$rhiArgument",
+                    "--scene=$scenePath",
+                    "--perf-gate-scenario=Empty",
+                    "--perf-gate-width=2560",
+                    "--perf-gate-height=1440"
+                )) {
+                    $arguments.Add($argument) | Out-Null
+                }
+                if ($TimingValidation) {
+                    $arguments.Add("--perf-gate-timing-validation") | Out-Null
+                }
+            }
+
+            $argumentArray = @($arguments)
+            if (@($argumentArray | Where-Object { $_ -match '^--(run-for-frames|run-for-seconds|smoke-test)' }).Count -ne 0) {
+                throw "PerfGate run plans must not use fixed frame/time/smoke success arguments."
+            }
+            $plan.Add([PSCustomObject]@{
+                target = $targetName
+                backend = $backend
+                scenario = $Scenario
+                configuration = $Configuration
+                timing_validation = [bool]$TimingValidation
+                run_directory = $runDirectory
+                executable = $executable
+                telemetry = $telemetryPath
+                process_log = Join-Path $ReportRoot "$runName.stdout.log"
+                process_error_log = Join-Path $ReportRoot "$runName.stderr.log"
+                arguments = $argumentArray
+                command_line = "$(Quote-Argument $executable) $(Join-Arguments $argumentArray)"
+            }) | Out-Null
+        }
+    }
+    return @($plan)
 }
 
 function Add-Failure {
@@ -750,11 +1097,13 @@ function Get-RunLogFiles {
 function Test-LogForDiagnostics {
     param(
         [object]$Record,
-        [System.IO.FileInfo[]]$LogFiles
+        [System.IO.FileInfo[]]$LogFiles,
+        [switch]$WarningsAreFailures
     )
 
     $failurePatterns = @(
         "VUID-",
+        "[Vulkan Validation] - ERROR",
         "Validation Error",
         "VK_VALIDATION_ERROR",
         "D3D12 ERROR",
@@ -763,9 +1112,16 @@ function Test-LogForDiagnostics {
         "CORRUPTION"
     )
     $warningPatterns = @(
+        "[Vulkan Validation] - WARNING",
         "D3D12 WARNING",
         "DXGI WARNING",
         "Validation Warning"
+    )
+    $failureRegexPatterns = @(
+        '\[DX12 Validation\].*\bERROR\s*:'
+    )
+    $warningRegexPatterns = @(
+        '\[DX12 Validation\].*\bWARNING\s*:'
     )
 
     $Record.engine_logs = @($LogFiles | ForEach-Object { $_.FullName })
@@ -780,7 +1136,33 @@ function Test-LogForDiagnostics {
         foreach ($pattern in $warningPatterns) {
             $matches = Select-String -LiteralPath $logFile.FullName -Pattern $pattern -SimpleMatch -ErrorAction SilentlyContinue
             if ($matches) {
-                Add-Warning $Record "Diagnostic warning pattern '$pattern' found in $($logFile.Name)"
+                $message = "Diagnostic warning pattern '$pattern' found in $($logFile.Name)"
+                if ($WarningsAreFailures) {
+                    Add-Failure $Record $message
+                }
+                else {
+                    Add-Warning $Record $message
+                }
+                break
+            }
+        }
+        foreach ($pattern in $failureRegexPatterns) {
+            $matches = Select-String -LiteralPath $logFile.FullName -Pattern $pattern -ErrorAction SilentlyContinue
+            if ($matches) {
+                Add-Failure $Record "Diagnostic failure pattern '$pattern' found in $($logFile.Name)"
+                break
+            }
+        }
+        foreach ($pattern in $warningRegexPatterns) {
+            $matches = Select-String -LiteralPath $logFile.FullName -Pattern $pattern -ErrorAction SilentlyContinue
+            if ($matches) {
+                $message = "Diagnostic warning pattern '$pattern' found in $($logFile.Name)"
+                if ($WarningsAreFailures) {
+                    Add-Failure $Record $message
+                }
+                else {
+                    Add-Warning $Record $message
+                }
                 break
             }
         }
@@ -855,7 +1237,10 @@ function Test-Telemetry {
         [object]$Baseline,
         [string]$Profile,
         [string]$Configuration,
-        [switch]$RequireSchemaV2
+        [switch]$RequireSchemaV2,
+        [switch]$EmptyScenario,
+        [switch]$TimingValidation,
+        [object]$FeasibilityContract
     )
 
     if (-not (Test-Path -LiteralPath $Record.telemetry)) {
@@ -900,7 +1285,7 @@ function Test-Telemetry {
     if ($framesSampledResult.valid) {
         $framesSampled = $framesSampledResult.int64_value
     }
-    if ($RequireSchemaV2 -and $schemaVersion -ne 2) {
+    if (($RequireSchemaV2 -or $EmptyScenario) -and $schemaVersion -ne 2) {
         Add-Failure $Record "This proof requires telemetry schema_version 2, got $schemaVersion"
     }
     if ($schemaVersion -ne 1 -and $schemaVersion -ne 2) {
@@ -914,6 +1299,66 @@ function Test-Telemetry {
         }
         if ($telemetryTarget -ne $Record.target) {
             Add-Failure $Record "Target mismatch: requested $($Record.target), actual $telemetryTarget"
+        }
+        if ($EmptyScenario) {
+            $scenarioValue = Get-ProfileProperty $telemetry "scenario"
+            if ($scenarioValue -isnot [string] -or $scenarioValue -ne "Empty") {
+                Add-Failure $Record "Empty telemetry scenario must be the JSON string 'Empty'"
+            }
+
+            $timingValidationValue = Get-ProfileProperty $telemetry "timing_validation"
+            if ($timingValidationValue -isnot [bool] -or [bool]$timingValidationValue -ne [bool]$TimingValidation) {
+                Add-Failure $Record "Empty telemetry timing_validation must be the JSON boolean $([bool]$TimingValidation)"
+            }
+
+            $readiness = Get-ProfileProperty $telemetry "readiness"
+            $readinessStatus = Get-ProfileProperty $readiness "status"
+            if ($readinessStatus -isnot [string] -or $readinessStatus -ne "complete") {
+                Add-Failure $Record "Empty telemetry readiness.status must be the JSON string 'complete'"
+            }
+            $submittedFrameIndex = Read-JsonNumberField `
+                -Object $readiness `
+                -Name "submitted_frame_index" `
+                -Record $Record `
+                -Path "readiness.submitted_frame_index" `
+                -Int64 `
+                -NonNegative
+            if (-not $submittedFrameIndex.valid -or $submittedFrameIndex.int64_value -le 0) {
+                Add-Failure $Record "Empty telemetry readiness.submitted_frame_index must be a positive JSON integer"
+            }
+
+            $renderOutput = Get-ProfileProperty $telemetry "render_output"
+            $renderOutputStatus = Get-ProfileProperty $renderOutput "status"
+            if ($renderOutputStatus -isnot [string] -or $renderOutputStatus -ne "complete") {
+                Add-Failure $Record "Empty telemetry render_output.status must be the JSON string 'complete'"
+            }
+            foreach ($dimension in @("width", "height")) {
+                $expectedDimension = if ($dimension -eq "width") { 2560L } else { 1440L }
+                $dimensionResult = Read-JsonNumberField `
+                    -Object $renderOutput `
+                    -Name $dimension `
+                    -Record $Record `
+                    -Path "render_output.$dimension" `
+                    -Int64 `
+                    -NonNegative
+                if ($dimensionResult.valid -and $dimensionResult.int64_value -ne $expectedDimension) {
+                    Add-Failure $Record "Empty telemetry render_output.$dimension must be exactly $expectedDimension"
+                }
+            }
+
+            $swapchain = Get-ProfileProperty $telemetry "swapchain"
+            foreach ($dimension in @("width", "height")) {
+                $dimensionResult = Read-JsonNumberField `
+                    -Object $swapchain `
+                    -Name $dimension `
+                    -Record $Record `
+                    -Path "swapchain.$dimension" `
+                    -Int64 `
+                    -NonNegative
+                if ($dimensionResult.valid -and $dimensionResult.int64_value -le 0) {
+                    Add-Failure $Record "Empty telemetry swapchain.$dimension must be a positive JSON integer"
+                }
+            }
         }
         $gpuTiming = Get-ProfileProperty $telemetry "gpu_timing"
         if ($null -eq $gpuTiming) {
@@ -974,13 +1419,11 @@ function Test-Telemetry {
                 Add-Failure $Record "Telemetry schema v2 is missing gpu_timing.frame_time_ms"
             }
             else {
-                foreach ($percentile in @("p50", "p95", "p99")) {
-                    Read-JsonNumberField `
-                        -Object $gpuFrameTimes `
-                        -Name $percentile `
-                        -Record $Record `
-                        -Path "gpu_timing.frame_time_ms.$percentile" `
-                        -NonNegative | Out-Null
+                Read-JsonNumberField -Object $gpuFrameTimes -Name "p50" -Record $Record -Path "gpu_timing.frame_time_ms.p50" -NonNegative | Out-Null
+                $gpuP95Result = Read-JsonNumberField -Object $gpuFrameTimes -Name "p95" -Record $Record -Path "gpu_timing.frame_time_ms.p95" -NonNegative
+                Read-JsonNumberField -Object $gpuFrameTimes -Name "p99" -Record $Record -Path "gpu_timing.frame_time_ms.p99" -NonNegative | Out-Null
+                if ($gpuP95Result.valid) {
+                    $Record.gpu_frame_time_p95_ms = $gpuP95Result.value
                 }
             }
         }
@@ -990,7 +1433,11 @@ function Test-Telemetry {
             Add-Failure $Record "Telemetry schema v2 is missing errors"
         }
         else {
-            foreach ($errorFlag in @("abnormal_exit", "backend_mismatch", "crashed", "timed_out", "gpu_timing")) {
+            $requiredErrorFlags = @("abnormal_exit", "backend_mismatch", "crashed", "timed_out", "gpu_timing")
+            if ($EmptyScenario) {
+                $requiredErrorFlags += @("render_output_mismatch", "incomplete")
+            }
+            foreach ($errorFlag in $requiredErrorFlags) {
                 $errorValue = Get-ProfileProperty $telemetryErrors $errorFlag
                 if ($null -eq $errorValue) {
                     Add-Failure $Record "Telemetry schema v2 is missing errors.$errorFlag"
@@ -1067,80 +1514,126 @@ function Test-Telemetry {
         }
     }
 
-    $targetKey = $Record.target.ToLowerInvariant()
-    $capName = "{0}_private_bytes_mb" -f $targetKey
-    $privateBytesCap = Get-ProfileProperty $ProfileConfig.absolute_caps $capName
-    if ($null -ne $privateBytesCap -and $Record.process_private_bytes_peak_mb -gt [double]$privateBytesCap) {
-        Add-Failure $Record "Private bytes peak $($Record.process_private_bytes_peak_mb) MB exceeded cap $privateBytesCap MB"
+    if ($EmptyScenario) {
+        if ($TimingValidation) {
+            $Record.feasibility_contract_status = "SKIPPED_TIMING_VALIDATION"
+        }
+        else {
+            if ($null -eq $FeasibilityContract) {
+                Add-Failure $Record "Empty telemetry requires the immutable feasibility contract"
+                $Record.feasibility_contract_status = "FAIL"
+            }
+            else {
+                $limits = Get-ProfileProperty $FeasibilityContract "limits"
+                $cpuLimit = [double](Get-ProfileProperty $limits "cpu_frame_time_p95_ms")
+                $gpuLimit = [double](Get-ProfileProperty $limits "gpu_frame_time_p95_ms")
+                if ($Record.cpu_frame_time_p95_ms -gt $cpuLimit) {
+                    Add-Failure $Record "Empty feasibility CPU frame time P95 $($Record.cpu_frame_time_p95_ms) ms exceeded immutable limit $cpuLimit ms"
+                }
+                if ($Record.gpu_frame_time_p95_ms -gt $gpuLimit) {
+                    Add-Failure $Record "Empty feasibility GPU frame time P95 $($Record.gpu_frame_time_p95_ms) ms exceeded immutable limit $gpuLimit ms"
+                }
+                $Record.feasibility_contract_status = if ($Record.status -eq "FAIL") { "FAIL" } else { "PASS" }
+            }
+        }
+    }
+
+    if (-not $TimingValidation) {
+        $targetKey = $Record.target.ToLowerInvariant()
+        $capName = "{0}_private_bytes_mb" -f $targetKey
+        $privateBytesCap = Get-ProfileProperty $ProfileConfig.absolute_caps $capName
+        if ($null -ne $privateBytesCap -and $Record.process_private_bytes_peak_mb -gt [double]$privateBytesCap) {
+            Add-Failure $Record "Private bytes peak $($Record.process_private_bytes_peak_mb) MB exceeded cap $privateBytesCap MB"
+        }
     }
 
     if ($Record.status -eq "NOT_RUN") {
         $Record.status = if (@($Record.warnings).Count -gt 0) { "WARN" } else { "PASS" }
     }
 
-    if ($Record.status -ne "FAIL") {
+    if (-not $TimingValidation -and $Record.status -ne "FAIL") {
         Compare-RecordToBaseline -Record $Record -Baseline $Baseline -ProfileConfig $ProfileConfig -Profile $Profile -Configuration $Configuration
     }
 }
 
 function Invoke-PerfGateRuns {
     param(
-        [object[]]$Targets,
+        [object[]]$RunPlan,
         [object]$ProfileConfig,
         [object]$Baseline,
         [string]$Profile,
         [string]$Configuration,
         [string]$RepoRoot,
-        [string]$ReportRoot,
         [string]$EngineConfig,
+        [object[]]$StateSnapshots,
+        [object]$FeasibilityContract,
         [switch]$DryRun,
-        [switch]$RequireSchemaV2
+        [switch]$RequireSchemaV2,
+        [switch]$EmptyScenario,
+        [switch]$TimingValidation
     )
 
     $records = New-Object System.Collections.ArrayList
-    foreach ($target in $Targets) {
-        foreach ($backend in @($target.backends)) {
-            $targetName = [string]$target.target
-            $exeName = if ($targetName -eq "Editor") { "Editor.exe" } else { "Sandbox.exe" }
-            $runDir = Join-Path $RepoRoot "product/bin64/$Configuration-windows-x86_64"
-            $exePath = Join-Path $runDir $exeName
-            $runName = "{0}-{1}" -f $targetName, $backend
-            $telemetryPath = Join-Path $ReportRoot "$runName.json"
-            $processLogPath = Join-Path $ReportRoot "$runName.stdout.log"
-            $processErrorLogPath = Join-Path $ReportRoot "$runName.stderr.log"
-            $record = New-RunRecord $targetName $backend $exePath $telemetryPath $processLogPath $processErrorLogPath
-            $records.Add($record) | Out-Null
-            Remove-Item -LiteralPath $telemetryPath -Force -ErrorAction SilentlyContinue
+    foreach ($step in $RunPlan) {
+        $record = New-RunRecord $step.target $step.backend $step.executable $step.telemetry $step.process_log $step.process_error_log
+        $record.scenario = $step.scenario
+        $record.configuration = $step.configuration
+        $record.timing_validation = [bool]$step.timing_validation
+        $record.arguments = @($step.arguments)
+        $record.command_line = $step.command_line
+        $records.Add($record) | Out-Null
 
-            if (-not (Test-Path -LiteralPath $exePath)) {
-                Add-Failure $record "Missing executable: $exePath"
-                continue
+        Write-Host "Perf gate run: $($step.command_line)"
+        if ($DryRun) {
+            $record.status = "DRY_RUN"
+            continue
+        }
+
+        Restore-StateFileSnapshots -Snapshots $StateSnapshots
+        Set-PerfGateEngineConfig `
+            -ConfigPath $EngineConfig `
+            -Backend $step.backend `
+            -EmptyScenario:$EmptyScenario `
+            -TimingValidation:$TimingValidation
+        Remove-Item -LiteralPath $step.telemetry -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-Path -LiteralPath $step.executable)) {
+            Add-Failure $record "Missing executable: $($step.executable)"
+            continue
+        }
+
+        $runStart = Get-Date
+        Invoke-GateProcess `
+            -Record $record `
+            -RunDirectory $step.run_directory `
+            -Arguments @($step.arguments) `
+            -TimeoutSeconds ([double]$ProfileConfig.timeout_seconds)
+
+        $runLogs = New-Object System.Collections.ArrayList
+        foreach ($logFile in @(Get-RunLogFiles -RepoRoot $RepoRoot -Since $runStart)) {
+            $runLogs.Add($logFile) | Out-Null
+        }
+        foreach ($processLog in @($step.process_log, $step.process_error_log)) {
+            if (Test-Path -LiteralPath $processLog) {
+                $runLogs.Add((Get-Item -LiteralPath $processLog)) | Out-Null
             }
+        }
+        Test-LogForDiagnostics `
+            -Record $record `
+            -LogFiles @($runLogs) `
+            -WarningsAreFailures:$TimingValidation
 
-            if ($DryRun) {
-                $record.status = "DRY_RUN"
-                continue
-            }
-
-            Set-EngineBackend -ConfigPath $EngineConfig -Backend $backend
-            $runStart = Get-Date
-            $arguments = @(
-                "--perf-gate",
-                "--perf-gate-profile=$Profile",
-                "--perf-gate-output=$telemetryPath",
-                "--perf-gate-target=$targetName",
-                "--perf-gate-warmup-seconds=$($ProfileConfig.warmup_seconds)",
-                "--perf-gate-sample-seconds=$($ProfileConfig.sample_seconds)",
-                "--run-for-seconds=$([double]$ProfileConfig.warmup_seconds + [double]$ProfileConfig.sample_seconds + 10.0)"
-            )
-            Invoke-GateProcess -Record $record -RunDirectory $runDir -Arguments $arguments -TimeoutSeconds ([double]$ProfileConfig.timeout_seconds)
-
-            $runLogs = Get-RunLogFiles -RepoRoot $RepoRoot -Since $runStart
-            Test-LogForDiagnostics -Record $record -LogFiles $runLogs
-
-            if ($record.status -ne "FAIL") {
-                Test-Telemetry -Record $record -ProfileConfig $ProfileConfig -Baseline $Baseline -Profile $Profile -Configuration $Configuration -RequireSchemaV2:$RequireSchemaV2
-            }
+        if ($record.status -ne "FAIL") {
+            Test-Telemetry `
+                -Record $record `
+                -ProfileConfig $ProfileConfig `
+                -Baseline $Baseline `
+                -Profile $Profile `
+                -Configuration $Configuration `
+                -RequireSchemaV2:$RequireSchemaV2 `
+                -EmptyScenario:$EmptyScenario `
+                -TimingValidation:$TimingValidation `
+                -FeasibilityContract $FeasibilityContract
         }
     }
     return @($records)
@@ -1149,6 +1642,9 @@ function Invoke-PerfGateRuns {
 function Invoke-RunPerfGateSelfTest {
     $profileConfig = ConvertFrom-Json @'
 {
+  "warmup_seconds": 5,
+  "sample_seconds": 10,
+  "timeout_seconds": 30,
   "warn_thresholds": {
     "cpu_frame_time_avg_percent": 10,
     "cpu_frame_time_p95_percent": 15,
@@ -1207,6 +1703,16 @@ function Invoke-RunPerfGateSelfTest {
     }
 
     $emptyBaseline = ConvertFrom-Json '{ "baselines": {} }'
+    $feasibilityContract = ConvertFrom-Json @'
+{
+  "schema_version": 1,
+  "scenario": "Empty",
+  "render_output": { "width": 2560, "height": 1440 },
+  "limits": { "cpu_frame_time_p95_ms": 3.33, "gpu_frame_time_p95_ms": 3.33 },
+  "immutable": true,
+  "blessable": false
+}
+'@
     Update-BaselinesFromRecords -Baseline $emptyBaseline -Profile "Standard" -Configuration "Debug" -Records @($record) -ReportRoot "Intermediate/test-reports/perf-gate/self-test"
     $blessed = Get-BaselineEntry -Baseline $emptyBaseline -Profile "Standard" -Configuration "Debug" -Target "Sandbox" -Backend "Vulkan"
     if ($null -eq $blessed) {
@@ -1223,6 +1729,11 @@ function Invoke-RunPerfGateSelfTest {
             schema_version = 2
             target = "Editor"
             backend_actual = "Vulkan"
+            scenario = "Empty"
+            timing_validation = $false
+            readiness = [PSCustomObject]@{ status = "complete"; submitted_frame_index = 16 }
+            render_output = [PSCustomObject]@{ status = "complete"; width = 2560; height = 1440 }
+            swapchain = [PSCustomObject]@{ width = 1920; height = 1080 }
             frames_sampled = 3
             gpu_timing = [PSCustomObject]@{
                 status = "complete"
@@ -1246,6 +1757,8 @@ function Invoke-RunPerfGateSelfTest {
                 crashed = $false
                 timed_out = $false
                 gpu_timing = $false
+                render_output_mismatch = $false
+                incomplete = $false
             }
         }
         $validV2Path = Join-Path $telemetryRoot "valid-v2.json"
@@ -1379,9 +1892,421 @@ function Invoke-RunPerfGateSelfTest {
                 throw "Invalid schema v2 metrics missed structured failure '$requiredFailure': $strictFailures"
             }
         }
+
+        $emptyRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" $validV2Path "stdout.log" "stderr.log"
+        Test-Telemetry `
+            -Record $emptyRecord `
+            -ProfileConfig $profileConfig `
+            -Baseline $emptyBaseline `
+            -Profile "Standard" `
+            -Configuration "Release" `
+            -EmptyScenario `
+            -FeasibilityContract $feasibilityContract
+        if ($emptyRecord.status -ne "PASS" -or
+            $emptyRecord.feasibility_contract_status -ne "PASS" -or
+            $emptyRecord.gpu_frame_time_p95_ms -ne 1.0) {
+            throw "Expected valid fixed Empty telemetry (including a distinct swapchain extent) to pass strictly: $(@($emptyRecord.failures) -join '; ')"
+        }
+
+        $invalidEmpty = $validV2 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $invalidEmpty.scenario = "Other"
+        $invalidEmpty.readiness.status = "waiting"
+        $invalidEmpty.readiness.submitted_frame_index = 0
+        $invalidEmpty.render_output.status = "incomplete"
+        $invalidEmpty.render_output.width = 2559
+        $invalidEmpty.errors.render_output_mismatch = $true
+        $invalidEmpty.errors.PSObject.Properties.Remove("incomplete")
+        $invalidEmptyPath = Join-Path $telemetryRoot "invalid-empty.json"
+        $invalidEmpty | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $invalidEmptyPath -Encoding UTF8
+        $invalidEmptyRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" $invalidEmptyPath "stdout.log" "stderr.log"
+        Test-Telemetry -Record $invalidEmptyRecord -ProfileConfig $profileConfig -Baseline $emptyBaseline -Profile "Standard" -Configuration "Release" -EmptyScenario -FeasibilityContract $feasibilityContract
+        $invalidEmptyFailures = @($invalidEmptyRecord.failures) -join "; "
+        foreach ($expectedFailure in @("scenario", "readiness.status", "submitted_frame_index", "render_output.status", "render_output.width", "render_output_mismatch", "errors.incomplete")) {
+            if ($invalidEmptyRecord.status -ne "FAIL" -or $invalidEmptyFailures -notmatch [regex]::Escape($expectedFailure)) {
+                throw "Empty telemetry contract did not reject invalid '$expectedFailure': $invalidEmptyFailures"
+            }
+        }
+
+        $feasibilityFailures = New-Object System.Collections.ArrayList
+        foreach ($case in @(
+            [PSCustomObject]@{ name = "cpu"; cpu_p95 = 3.34; gpu_p95 = 1.0; diagnostic = "Empty feasibility CPU frame time P95" },
+            [PSCustomObject]@{ name = "gpu"; cpu_p95 = 1.2; gpu_p95 = 3.34; diagnostic = "Empty feasibility GPU frame time P95" }
+        )) {
+            $invalidFeasibility = $validV2 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            $invalidFeasibility.cpu_frame_time_ms.p95 = $case.cpu_p95
+            $invalidFeasibility.gpu_timing.frame_time_ms.p95 = $case.gpu_p95
+            $invalidFeasibilityPath = Join-Path $telemetryRoot ("invalid-feasibility-{0}.json" -f $case.name)
+            $invalidFeasibility | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $invalidFeasibilityPath -Encoding UTF8
+            $invalidFeasibilityRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" $invalidFeasibilityPath "stdout.log" "stderr.log"
+            Test-Telemetry -Record $invalidFeasibilityRecord -ProfileConfig $profileConfig -Baseline $emptyBaseline -Profile "Standard" -Configuration "Release" -EmptyScenario -FeasibilityContract $feasibilityContract
+            if ($invalidFeasibilityRecord.status -ne "FAIL" -or
+                $invalidFeasibilityRecord.feasibility_contract_status -ne "FAIL" -or
+                (@($invalidFeasibilityRecord.failures) -join "; ") -notmatch [regex]::Escape($case.diagnostic)) {
+                throw "Empty feasibility $($case.name) P95=3.34 ms was not rejected before baseline comparison."
+            }
+            $feasibilityFailures.Add($invalidFeasibilityRecord) | Out-Null
+        }
+
+        $blessProbe = ConvertFrom-Json '{ "baselines": {} }'
+        $blessProbeBefore = $blessProbe | ConvertTo-Json -Depth 16 -Compress
+        $contractBeforeBless = $feasibilityContract | ConvertTo-Json -Depth 16 -Compress
+        $feasibilityOverall = Get-PerfGateOverallStatus -Records @($feasibilityFailures)
+        if ($feasibilityOverall -ne "FAIL" -and $feasibilityOverall -ne "DRY_RUN") {
+            Update-BaselinesFromRecords -Baseline $blessProbe -Profile "Standard" -Configuration "Release" -Records @($feasibilityFailures) -ReportRoot "self-test-bless"
+        }
+        if ($feasibilityOverall -ne "FAIL" -or
+            ($blessProbe | ConvertTo-Json -Depth 16 -Compress) -cne $blessProbeBefore -or
+            ($feasibilityContract | ConvertTo-Json -Depth 16 -Compress) -cne $contractBeforeBless) {
+            throw "Baseline blessing bypassed or mutated the immutable Empty feasibility failure."
+        }
+
+        $timingTelemetry = $validV2 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $timingTelemetry.timing_validation = $true
+        $timingTelemetry.cpu_frame_time_ms.p95 = 99.0
+        $timingTelemetry.gpu_timing.frame_time_ms.p95 = 99.0
+        $timingTelemetryPath = Join-Path $telemetryRoot "timing-validation.json"
+        $timingTelemetry | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $timingTelemetryPath -Encoding UTF8
+        $timingProfile = $profileConfig | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $timingProfile.absolute_caps.editor_private_bytes_mb = 1
+        $timingRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" $timingTelemetryPath "stdout.log" "stderr.log"
+        Test-Telemetry -Record $timingRecord -ProfileConfig $timingProfile -Baseline $baseline -Profile "Standard" -Configuration "Debug" -EmptyScenario -TimingValidation -FeasibilityContract $feasibilityContract
+        if ($timingRecord.status -ne "PASS" -or
+            $timingRecord.feasibility_contract_status -ne "SKIPPED_TIMING_VALIDATION" -or
+            $timingRecord.baseline_status -ne "NOT_COMPARED") {
+            throw "TimingValidation did not require clean timing while skipping performance, feasibility, and baseline caps (status=$($timingRecord.status), feasibility=$($timingRecord.feasibility_contract_status), baseline=$($timingRecord.baseline_status), warnings=$(@($timingRecord.warnings).Count)): $(@($timingRecord.failures) -join '; ')"
+        }
+
+        Write-Host "Task 7 telemetry contract PASS"
     }
     finally {
         Remove-Item -LiteralPath $telemetryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $task7Root = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-gate-task7-self-test-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $task7Root | Out-Null
+    try {
+        $task7Targets = @([PSCustomObject]@{ target = "Editor"; backends = @("Vulkan", "DX12") })
+        $task7ReportRoot = Join-Path $task7Root "reports"
+        $emptyRunPlan = @(New-PerfGateRunPlan `
+            -Targets $task7Targets `
+            -ProfileConfig $profileConfig `
+            -Profile "Standard" `
+            -Configuration "Release" `
+            -RepoRoot $task7Root `
+            -ReportRoot $task7ReportRoot `
+            -Scenario "Empty")
+        $expectedScenePath = [System.IO.Path]::GetFullPath((Join-Path $task7Root "product/assets/scenes/TerrainPerfEmpty.scene.json"))
+        if ($emptyRunPlan.Count -ne 2 -or
+            $emptyRunPlan[0].target -ne "Editor" -or $emptyRunPlan[0].backend -ne "Vulkan" -or
+            $emptyRunPlan[1].target -ne "Editor" -or $emptyRunPlan[1].backend -ne "DX12" -or
+            @($emptyRunPlan | Where-Object { $_.configuration -ne "Release" -or $_.scenario -ne "Empty" -or $_.timing_validation }).Count -ne 0) {
+            throw "Empty run plan must contain exactly Editor/Vulkan then Editor/DX12 Release runs."
+        }
+        foreach ($index in 0..1) {
+            $step = $emptyRunPlan[$index]
+            $expectedRhi = if ($index -eq 0) { "vulkan" } else { "dx12" }
+            $requiredArguments = @(
+                "--perf-gate",
+                "--perf-gate-profile=Standard",
+                "--perf-gate-output=$($step.telemetry)",
+                "--perf-gate-target=Editor",
+                "--perf-gate-warmup-seconds=5",
+                "--perf-gate-sample-seconds=10",
+                "--rhi=$expectedRhi",
+                "--scene=$expectedScenePath",
+                "--perf-gate-scenario=Empty",
+                "--perf-gate-width=2560",
+                "--perf-gate-height=1440"
+            )
+            foreach ($requiredArgument in $requiredArguments) {
+                if (@($step.arguments | Where-Object { $_ -eq $requiredArgument }).Count -ne 1) {
+                    throw "Empty run plan is missing exact argument '$requiredArgument'."
+                }
+            }
+            if (@($step.arguments | Where-Object { $_ -match '^--(run-for-frames|run-for-seconds|smoke-test)' }).Count -ne 0 -or
+                $step.command_line -ne "$(Quote-Argument $step.executable) $(Join-Arguments @($step.arguments))") {
+                throw "Empty run plan used a fixed success limit or did not record the full command line."
+            }
+            Write-Host "Task 7 run plan: $($step.command_line)"
+        }
+
+        $ordinaryRunPlan = @(New-PerfGateRunPlan `
+            -Targets @([PSCustomObject]@{ target = "Sandbox"; backends = @("Vulkan") }) `
+            -ProfileConfig $profileConfig `
+            -Profile "Standard" `
+            -Configuration "Debug" `
+            -RepoRoot $task7Root `
+            -ReportRoot $task7ReportRoot `
+            -Scenario "")
+        if ($ordinaryRunPlan.Count -ne 1 -or
+            @($ordinaryRunPlan[0].arguments | Where-Object { $_ -match '^--(run-for-frames|run-for-seconds|smoke-test)' }).Count -ne 0) {
+            throw "Ordinary perf gate run plans must rely only on the process wall-clock timeout for failure."
+        }
+
+        $timingRunPlan = @(New-PerfGateRunPlan `
+            -Targets $task7Targets `
+            -ProfileConfig $profileConfig `
+            -Profile "Standard" `
+            -Configuration "Debug" `
+            -RepoRoot $task7Root `
+            -ReportRoot $task7ReportRoot `
+            -Scenario "Empty" `
+            -TimingValidation)
+        if ($timingRunPlan.Count -ne 2 -or
+            @($timingRunPlan | Where-Object { $_.configuration -ne "Debug" -or -not $_.timing_validation }).Count -ne 0 -or
+            @($timingRunPlan | Where-Object { @($_.arguments | Where-Object { $_ -eq "--perf-gate-timing-validation" }).Count -ne 1 }).Count -ne 0) {
+            throw "TimingValidation run plan must contain exactly two Debug runs with the timing flag."
+        }
+        Write-Host "Task 7 Empty run plan PASS"
+
+        $configRoot = Join-Path $task7Root "config"
+        $editorConfigRoot = Join-Path $configRoot "editor"
+        New-Item -ItemType Directory -Force -Path $editorConfigRoot | Out-Null
+        $statePaths = @(
+            (Join-Path $configRoot "Engine.ini"),
+            (Join-Path $editorConfigRoot "EditorSettings.json"),
+            (Join-Path $editorConfigRoot "ViewportLayout.json"),
+            (Join-Path $editorConfigRoot "imgui.ini")
+        )
+        $engineIniText = @'
+[RHI]
+Backend=DX12
+[Rendering]
+VSync=true
+[VulkanValidation]
+Enabled=false
+GpuAssisted=false
+SynchronizationValidation=false
+[DX12Validation]
+Enabled=false
+GpuValidation=false
+'@
+        [System.IO.File]::WriteAllText($statePaths[0], $engineIniText, (New-Object System.Text.UTF8Encoding($false)))
+        [System.IO.File]::WriteAllBytes($statePaths[1], [byte[]](1, 2, 3, 254))
+        [System.IO.File]::WriteAllBytes($statePaths[2], [byte[]](4, 5, 6, 253))
+        [System.IO.File]::WriteAllBytes($statePaths[3], [byte[]](7, 8, 9, 252))
+        $snapshots = @(New-StateFileSnapshots -Paths $statePaths -BackupRoot (Join-Path $task7Root "state-backups"))
+        if ($snapshots.Count -ne 4) {
+            throw "Task 7 state snapshot did not materialize exactly four entries under Windows PowerShell 5.1."
+        }
+        foreach ($statePath in $statePaths) {
+            [System.IO.File]::WriteAllBytes($statePath, [byte[]](99, 98, 97))
+        }
+        Restore-StateFileSnapshots -Snapshots $snapshots
+        foreach ($snapshot in $snapshots) {
+            if ((Get-FileHash -LiteralPath $snapshot.path -Algorithm SHA256).Hash -ne $snapshot.sha256) {
+                throw "Task 7 state restore did not reproduce '$($snapshot.path)' byte-for-byte."
+            }
+        }
+
+        $readIniValue = {
+            param([string]$Path, [string]$Section, [string]$Name)
+            $activeSection = ""
+            $escapedName = [regex]::Escape($Name)
+            foreach ($line in Get-Content -LiteralPath $Path) {
+                if ($line -match '^\s*\[(.+)\]\s*$') {
+                    $activeSection = $matches[1].Trim()
+                    continue
+                }
+                if ([string]::Equals($activeSection, $Section, [System.StringComparison]::OrdinalIgnoreCase) -and
+                    $line -match "^\s*$escapedName\s*=\s*(.*?)\s*$") {
+                    return $matches[1]
+                }
+            }
+            return $null
+        }
+
+        Set-PerfGateEngineConfig -ConfigPath $statePaths[0] -Backend "Vulkan" -EmptyScenario
+        if ((& $readIniValue $statePaths[0] "Rendering" "VSync") -ne "false" -or
+            (& $readIniValue $statePaths[0] "VulkanValidation" "Enabled") -ne "false" -or
+            (& $readIniValue $statePaths[0] "DX12Validation" "Enabled") -ne "false") {
+            throw "Ordinary Empty config must disable VSync and both validation layers."
+        }
+        Restore-StateFileSnapshots -Snapshots $snapshots
+        Set-PerfGateEngineConfig -ConfigPath $statePaths[0] -Backend "Vulkan" -EmptyScenario -TimingValidation
+        if ((& $readIniValue $statePaths[0] "Rendering" "VSync") -ne "false" -or
+            (& $readIniValue $statePaths[0] "VulkanValidation" "Enabled") -ne "true" -or
+            (& $readIniValue $statePaths[0] "VulkanValidation" "GpuAssisted") -ne "true" -or
+            (& $readIniValue $statePaths[0] "VulkanValidation" "SynchronizationValidation") -ne "true" -or
+            (& $readIniValue $statePaths[0] "DX12Validation" "Enabled") -ne "false") {
+            throw "TimingValidation Vulkan config did not enforce VSync=false and the required validation settings."
+        }
+        Restore-StateFileSnapshots -Snapshots $snapshots
+        Set-PerfGateEngineConfig -ConfigPath $statePaths[0] -Backend "DX12" -EmptyScenario -TimingValidation
+        if ((& $readIniValue $statePaths[0] "Rendering" "VSync") -ne "false" -or
+            (& $readIniValue $statePaths[0] "VulkanValidation" "Enabled") -ne "false" -or
+            (& $readIniValue $statePaths[0] "DX12Validation" "Enabled") -ne "true" -or
+            (& $readIniValue $statePaths[0] "DX12Validation" "GpuValidation") -ne "true") {
+            throw "TimingValidation DX12 config did not enforce VSync=false and the required validation settings."
+        }
+        Restore-StateFileSnapshots -Snapshots $snapshots
+        foreach ($snapshot in $snapshots) {
+            if ((Get-FileHash -LiteralPath $snapshot.path -Algorithm SHA256).Hash -ne $snapshot.sha256) {
+                throw "Task 7 final state restore did not reproduce '$($snapshot.path)' byte-for-byte."
+            }
+        }
+        Write-Host "Task 7 state restoration PASS"
+
+        $diagnosticLog = Join-Path $task7Root "diagnostic-warning.log"
+        Set-Content -LiteralPath $diagnosticLog -Value "[Vulkan Validation] - WARNING" -Encoding UTF8
+        $ordinaryDiagnosticRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-LogForDiagnostics -Record $ordinaryDiagnosticRecord -LogFiles @((Get-Item -LiteralPath $diagnosticLog))
+        if (@($ordinaryDiagnosticRecord.failures).Count -ne 0 -or @($ordinaryDiagnosticRecord.warnings).Count -ne 1) {
+            throw "Ordinary validation warnings must remain warnings."
+        }
+        $timingDiagnosticRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-LogForDiagnostics -Record $timingDiagnosticRecord -LogFiles @((Get-Item -LiteralPath $diagnosticLog)) -WarningsAreFailures
+        if ($timingDiagnosticRecord.status -ne "FAIL") {
+            throw "TimingValidation must fail on validation warnings."
+        }
+        Set-Content -LiteralPath $diagnosticLog -Value "[Vulkan Validation] - ERROR" -Encoding UTF8
+        $errorDiagnosticRecord = New-RunRecord "Editor" "Vulkan" "Editor.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-LogForDiagnostics -Record $errorDiagnosticRecord -LogFiles @((Get-Item -LiteralPath $diagnosticLog)) -WarningsAreFailures
+        if ($errorDiagnosticRecord.status -ne "FAIL") {
+            throw "TimingValidation must fail on validation errors."
+        }
+        Set-Content -LiteralPath $diagnosticLog -Value "[DX12 Validation][DXGI][Present] WARNING : Category=1 MessageID=2 Message=test" -Encoding UTF8
+        $ordinaryDx12WarningRecord = New-RunRecord "Editor" "DX12" "Editor.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-LogForDiagnostics -Record $ordinaryDx12WarningRecord -LogFiles @((Get-Item -LiteralPath $diagnosticLog))
+        if (@($ordinaryDx12WarningRecord.failures).Count -ne 0 -or @($ordinaryDx12WarningRecord.warnings).Count -ne 1) {
+            throw "Ordinary DX12 validation warnings must remain warnings."
+        }
+        $timingDx12WarningRecord = New-RunRecord "Editor" "DX12" "Editor.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-LogForDiagnostics -Record $timingDx12WarningRecord -LogFiles @((Get-Item -LiteralPath $diagnosticLog)) -WarningsAreFailures
+        if ($timingDx12WarningRecord.status -ne "FAIL") {
+            throw "TimingValidation must fail on the actual DX12 validation warning format."
+        }
+        Set-Content -LiteralPath $diagnosticLog -Value "[DX12 Validation][D3D12][BeginFrame] ERROR : Category=1 MessageID=2 Message=test" -Encoding UTF8
+        $timingDx12ErrorRecord = New-RunRecord "Editor" "DX12" "Editor.exe" "telemetry.json" "stdout.log" "stderr.log"
+        Test-LogForDiagnostics -Record $timingDx12ErrorRecord -LogFiles @((Get-Item -LiteralPath $diagnosticLog)) -WarningsAreFailures
+        if ($timingDx12ErrorRecord.status -ne "FAIL") {
+            throw "TimingValidation must fail on the actual DX12 validation error format."
+        }
+        Write-Host "Task 7 timing validation plan PASS"
+
+        $cameraEntity = ConvertFrom-Json '{"camera":{"primary":true},"id":2,"name":"Camera","parent":1,"transform":{"position":[0.0,0.0,0.0],"rotation_euler_degrees":[0.0,0.0,0.0],"scale":[1.0,1.0,1.0]}}'
+        $environmentEntity = ConvertFrom-Json '{"environment":{"active":true},"id":3,"name":"Environment","parent":1,"transform":{"position":[0.0,0.0,0.0],"rotation_euler_degrees":[0.0,0.0,0.0],"scale":[1.0,1.0,1.0]}}'
+        $lightEntity = ConvertFrom-Json '{"id":4,"light":{"sunlight":true},"name":"Light","parent":1,"transform":{"position":[0.0,0.0,0.0],"rotation_euler_degrees":[0.0,0.0,0.0],"scale":[1.0,1.0,1.0]}}'
+        $renderConfig = ConvertFrom-Json '{"tonemap":{"exposure":1.0}}'
+        $canonicalContract = [PSCustomObject][ordered]@{
+            camera_entity = $cameraEntity
+            environment_entity = $environmentEntity
+            light_entity = $lightEntity
+            render_config = $renderConfig
+        }
+        $canonicalJson = $canonicalContract | ConvertTo-Json -Depth 100 -Compress
+        $manifestPath = Join-Path $task7Root "manifest.json"
+        $scenePath = Join-Path $task7Root "TerrainPerfEmpty.scene.json"
+        $scene = [PSCustomObject][ordered]@{
+            entities = @(
+                (ConvertFrom-Json '{"id":1,"name":"TerrainPerfRoot","parent":0,"transform":{"position":[0.0,0.0,0.0],"rotation_euler_degrees":[0.0,0.0,0.0],"scale":[1.0,1.0,1.0]}}'),
+                $cameraEntity,
+                $environmentEntity,
+                $lightEntity
+            )
+            name = "TerrainPerfEmpty"
+            next_entity_id = 5
+            scene_config = $renderConfig
+            version = 5
+        }
+        $manifest = [PSCustomObject][ordered]@{
+            schema_version = 1
+            scene = "TerrainPerfEmpty.scene.json"
+            hash_algorithm = "SHA-256"
+            canonical_contract = $canonicalContract
+            canonical_contract_json = $canonicalJson
+            canonical_contract_sha256 = Get-Utf8Sha256 -Value $canonicalJson
+        }
+        $scene | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scenePath -Encoding UTF8
+        $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        if ((Assert-EmptyManifestHash -ManifestPath $manifestPath) -ne $manifest.canonical_contract_sha256) {
+            throw "Task 7 manifest validation did not return its recomputed UTF-8 SHA-256."
+        }
+        $manifest.canonical_contract_sha256 = "0" * 64
+        $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        $hashMismatchRejected = $false
+        try {
+            Assert-EmptyManifestHash -ManifestPath $manifestPath | Out-Null
+        }
+        catch {
+            $hashMismatchRejected = $_.Exception.Message -match "SHA-256 mismatch"
+        }
+        if (-not $hashMismatchRejected) {
+            throw "Task 7 manifest validation accepted a canonical contract hash mismatch."
+        }
+        $manifest.canonical_contract_json = "not-json"
+        $manifest.canonical_contract_sha256 = Get-Utf8Sha256 -Value $manifest.canonical_contract_json
+        $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        $invalidCanonicalJsonRejected = $false
+        try {
+            Assert-EmptyManifestHash -ManifestPath $manifestPath | Out-Null
+        }
+        catch {
+            $invalidCanonicalJsonRejected = $_.Exception.Message -match "not valid JSON"
+        }
+        if (-not $invalidCanonicalJsonRejected) {
+            throw "Task 7 manifest validation accepted invalid canonical_contract_json text."
+        }
+
+        $manifest.canonical_contract_json = $canonicalJson
+        $manifest.canonical_contract_sha256 = Get-Utf8Sha256 -Value $canonicalJson
+        $manifest.canonical_contract = $canonicalJson | ConvertFrom-Json
+        $manifest.canonical_contract.camera_entity.id = 99
+        $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        $objectDriftRejected = $false
+        try {
+            Assert-EmptyManifestHash -ManifestPath $manifestPath | Out-Null
+        }
+        catch {
+            $objectDriftRejected = $_.Exception.Message -match "canonical_contract does not match"
+        }
+        if (-not $objectDriftRejected) {
+            throw "Task 7 manifest validation accepted canonical_contract object drift."
+        }
+
+        $manifest.canonical_contract = $canonicalJson | ConvertFrom-Json
+        $manifest | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        $scene.entities[1].id = 99
+        $scene | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $scenePath -Encoding UTF8
+        $sceneDriftRejected = $false
+        try {
+            Assert-EmptyManifestHash -ManifestPath $manifestPath | Out-Null
+        }
+        catch {
+            $sceneDriftRejected = $_.Exception.Message -match "scene does not match"
+        }
+        if (-not $sceneDriftRejected) {
+            throw "Task 7 manifest validation accepted fixed scene contract drift."
+        }
+
+        $contractProbePath = Join-Path $task7Root "feasibility-contract.json"
+        $feasibilityContract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $contractProbePath -Encoding UTF8
+        Get-EmptyFeasibilityContract -ContractPath $contractProbePath | Out-Null
+        foreach ($invalidContractCase in @("schema", "width", "height", "immutable", "blessable")) {
+            $invalidContract = $feasibilityContract | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            switch ($invalidContractCase) {
+                "schema" { $invalidContract.schema_version = "1"; break }
+                "width" { $invalidContract.render_output.width = "2560"; break }
+                "height" { $invalidContract.render_output.height = "1440"; break }
+                "immutable" { $invalidContract.immutable = "true"; break }
+                "blessable" { $invalidContract.blessable = "false"; break }
+            }
+            $invalidContract | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $contractProbePath -Encoding UTF8
+            $invalidContractRejected = $false
+            try {
+                Get-EmptyFeasibilityContract -ContractPath $contractProbePath | Out-Null
+            }
+            catch {
+                $invalidContractRejected = $true
+            }
+            if (-not $invalidContractRejected) {
+                throw "Task 7 feasibility contract accepted non-native '$invalidContractCase' JSON field type."
+            }
+        }
+        Write-Host "Task 7 manifest hash PASS"
+    }
+    finally {
+        Remove-Item -LiteralPath $task7Root -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     $materializationProbe = New-Object System.Collections.ArrayList
@@ -1586,10 +2511,22 @@ function Invoke-RunPerfGateSelfTest {
 if (-not [string]::IsNullOrWhiteSpace($Scenario) -and $Scenario -ne "Empty") {
     throw "Unsupported perf gate scenario '$Scenario'."
 }
-if (-not $NoTracy -and -not [string]::IsNullOrWhiteSpace($Scenario)) {
-    throw "-Scenario is reserved for the no-Tracy proof until the fixed Empty harness is implemented."
+if ($NoTracy -and $TimingValidation) {
+    throw "-NoTracy cannot be combined with -TimingValidation."
 }
-if ($NoTracy) {
+if ($TimingValidation) {
+    if ($Scenario -ne "Empty") {
+        throw "-TimingValidation requires -Scenario Empty."
+    }
+    if ($BlessBaseline) {
+        throw "-TimingValidation cannot be used with -BlessBaseline."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Configuration) -and $Configuration -ne "Debug") {
+        throw "-TimingValidation requires -Configuration Debug."
+    }
+    $Configuration = "Debug"
+}
+elseif ($NoTracy) {
     if ($SkipBuild) {
         throw "-NoTracy cannot be used with -SkipBuild because Tracy-enabled objects could be reused."
     }
@@ -1604,6 +2541,12 @@ if ($NoTracy) {
     }
     if (-not [string]::IsNullOrWhiteSpace($Configuration) -and $Configuration -ne "Release") {
         throw "-NoTracy requires -Configuration Release."
+    }
+    $Configuration = "Release"
+}
+elseif ($Scenario -eq "Empty") {
+    if (-not [string]::IsNullOrWhiteSpace($Configuration) -and $Configuration -ne "Release") {
+        throw "ordinary -Scenario Empty requires -Configuration Release."
     }
     $Configuration = "Release"
 }
@@ -1632,68 +2575,99 @@ $buildLogRoot = Join-Path $reportRoot "build"
 New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 
 $engineConfig = Join-Path $repoRoot "product/config/Engine.ini"
-$engineConfigBackup = Join-Path $reportRoot "Engine.ini.backup"
-$engineConfigHash = (Get-FileHash -LiteralPath $engineConfig -Algorithm SHA256).Hash
+$statePaths = @(
+    $engineConfig,
+    (Join-Path $repoRoot "product/config/editor/EditorSettings.json"),
+    (Join-Path $repoRoot "product/config/editor/ViewportLayout.json"),
+    (Join-Path $repoRoot "product/config/editor/imgui.ini")
+)
+$stateSnapshots = @(New-StateFileSnapshots -Paths $statePaths -BackupRoot (Join-Path $reportRoot "state-backups"))
+
+$emptyManifestPath = $null
+$emptyManifestSha256 = $null
+$feasibilityContractPath = $null
+$feasibilityContract = $null
+if ($Scenario -eq "Empty") {
+    $emptyScenePath = Join-Path $repoRoot "product/assets/scenes/TerrainPerfEmpty.scene.json"
+    if (-not (Test-Path -LiteralPath $emptyScenePath)) {
+        throw "Missing fixed Empty scenario scene: $emptyScenePath"
+    }
+    $emptyManifestPath = Join-Path $repoRoot "product/assets/scenes/TerrainPerfEmpty.manifest.json"
+    $emptyManifestSha256 = Assert-EmptyManifestHash -ManifestPath $emptyManifestPath
+    $feasibilityContractPath = Join-Path $repoRoot "tools/perf/terrain_feasibility_contract.json"
+    $feasibilityContract = Get-EmptyFeasibilityContract -ContractPath $feasibilityContractPath
+}
+
 $noTracyPlan = $null
 if ($NoTracy) {
     $noTracyPlan = @(New-NoTracyCommandPlan -MSBuildPath (Get-MSBuildPath))
 }
-$gateTargets = if ($NoTracy) {
+$gateTargets = if ($Scenario -eq "Empty" -and $NoTracy) {
     @(Get-NoTracyGateTargetsFromPlan -Plan $noTracyPlan)
+}
+elseif ($Scenario -eq "Empty") {
+    @([PSCustomObject]@{ target = "Editor"; backends = @("Vulkan", "DX12") })
 }
 else {
     @($profileConfig.targets)
 }
+$runPlan = @(New-PerfGateRunPlan `
+    -Targets $gateTargets `
+    -ProfileConfig $profileConfig `
+    -Profile $Profile `
+    -Configuration $Configuration `
+    -RepoRoot $repoRoot `
+    -ReportRoot $reportRoot `
+    -Scenario $Scenario `
+    -TimingValidation:$TimingValidation)
 
 $runBody = {
-    Copy-Item -LiteralPath $engineConfig -Destination $engineConfigBackup -Force
-    try {
-        if ($NoTracy) {
-            Invoke-NoTracyCommandPhase -Plan $noTracyPlan -Phase "NoTracyBuild" -RepoRoot $repoRoot -BuildLogRoot $buildLogRoot
+    if ($NoTracy) {
+        Invoke-NoTracyCommandPhase -Plan $noTracyPlan -Phase "NoTracyBuild" -RepoRoot $repoRoot -BuildLogRoot $buildLogRoot
+    }
+    elseif (-not $SkipBuild -and -not $DryRun) {
+        if ($Scenario -ne "Empty") {
+            Invoke-BatchCommand -RepoRoot $repoRoot -CommandLine "build_sandbox.bat $Configuration x64" -LogPath (Join-Path $buildLogRoot "build_sandbox.log")
         }
-        elseif (-not $SkipBuild -and -not $DryRun) {
-            if ($Scenario -ne "Empty") {
-                Invoke-BatchCommand -RepoRoot $repoRoot -CommandLine "build_sandbox.bat $Configuration x64" -LogPath (Join-Path $buildLogRoot "build_sandbox.log")
-            }
-            Invoke-BatchCommand -RepoRoot $repoRoot -CommandLine "build_editor.bat $Configuration x64" -LogPath (Join-Path $buildLogRoot "build_editor.log")
-        }
+        Invoke-BatchCommand -RepoRoot $repoRoot -CommandLine "build_editor.bat $Configuration x64" -LogPath (Join-Path $buildLogRoot "build_editor.log")
+    }
 
-        Invoke-PerfGateRuns `
-            -Targets $gateTargets `
-            -ProfileConfig $profileConfig `
-            -Baseline $baseline `
-            -Profile $Profile `
-            -Configuration $Configuration `
-            -RepoRoot $repoRoot `
-            -ReportRoot $reportRoot `
-            -EngineConfig $engineConfig `
-            -DryRun:$DryRun `
-            -RequireSchemaV2:$NoTracy
-    }
-    finally {
-        Copy-Item -LiteralPath $engineConfigBackup -Destination $engineConfig -Force
-        $restoredEngineConfigHash = (Get-FileHash -LiteralPath $engineConfig -Algorithm SHA256).Hash
-        if ($restoredEngineConfigHash -ne $engineConfigHash) {
-            throw "Engine.ini was not restored byte-for-byte after perf gate execution."
-        }
-    }
+    Invoke-PerfGateRuns `
+        -RunPlan $runPlan `
+        -ProfileConfig $profileConfig `
+        -Baseline $baseline `
+        -Profile $Profile `
+        -Configuration $Configuration `
+        -RepoRoot $repoRoot `
+        -EngineConfig $engineConfig `
+        -StateSnapshots $stateSnapshots `
+        -FeasibilityContract $feasibilityContract `
+        -DryRun:$DryRun `
+        -RequireSchemaV2:$NoTracy `
+        -EmptyScenario:($Scenario -eq "Empty") `
+        -TimingValidation:$TimingValidation
 }
 
-if ($NoTracy) {
-    $records = @(Invoke-WithRequiredRestore `
-        -Body $runBody `
-        -Restore {
+$stateProtectedBody = {
+    if ($NoTracy) {
+        Invoke-WithRequiredRestore `
+            -Body $runBody `
+            -Restore {
             Invoke-NoTracyCommandPhase `
                 -Plan $noTracyPlan `
                 -Phase "RestoreStandard" `
                 -RepoRoot $repoRoot `
                 -BuildLogRoot $buildLogRoot `
                 -ContinueAfterFailure
-        })
+            }
+    }
+    else {
+        & $runBody
+    }
 }
-else {
-    $records = @(& $runBody)
-}
+$records = @(Invoke-WithRequiredRestore `
+    -Body $stateProtectedBody `
+    -Restore { Restore-StateFileSnapshots -Snapshots $stateSnapshots })
 
 if ($NoTracy) {
     Assert-NoTracyRunRecords -Records $records
@@ -1705,10 +2679,16 @@ $summary = [PSCustomObject]@{
     schema_version = 1
     profile = $Profile
     configuration = $Configuration
+    scenario = $Scenario
+    timing_validation = [bool]$TimingValidation
     status = $overall
     baseline_path = $baselinePath
     baseline_blessed = $false
+    empty_manifest_path = $emptyManifestPath
+    empty_manifest_sha256 = $emptyManifestSha256
+    feasibility_contract_path = $feasibilityContractPath
     report_root = $reportRoot
+    run_plan = $runPlan
     runs = $records
 }
 
@@ -1724,9 +2704,18 @@ $markdown += "# AshEngine Perf Gate Summary"
 $markdown += ""
 $markdown += "Status: $overall"
 $markdown += ""
+$markdown += "Scenario: $(if ([string]::IsNullOrWhiteSpace($Scenario)) { 'Standard matrix' } else { $Scenario })"
+$markdown += "Timing validation: $([bool]$TimingValidation)"
+$markdown += ""
 $markdown += "Baseline: $baselinePath"
 if ($BlessBaseline) {
     $markdown += "Baseline blessed: $($summary.baseline_blessed)"
+}
+$markdown += ""
+$markdown += "## Run plan"
+$markdown += ""
+foreach ($step in $runPlan) {
+    $markdown += "- $($step.command_line)"
 }
 $markdown += ""
 $summaryRows = New-Object 'System.Collections.Generic.List[object[]]'
@@ -1741,6 +2730,8 @@ foreach ($record in $records) {
         [Math]::Round([double]$record.cpu_frame_time_avg_ms, 4),
         $record.cpu_frame_time_avg_delta,
         [Math]::Round([double]$record.cpu_frame_time_p95_ms, 4),
+        [Math]::Round([double]$record.gpu_frame_time_p95_ms, 4),
+        $record.feasibility_contract_status,
         $record.cpu_frame_time_p95_delta,
         $record.cpu_frame_time_p99_delta,
         [Math]::Round([double]$record.process_private_bytes_peak_mb, 2),
@@ -1753,8 +2744,8 @@ foreach ($record in $records) {
     )) | Out-Null
 }
 $markdown += New-MarkdownTable `
-    -Headers @("Target", "Backend", "Status", "Frames", "CPU Avg ms", "CPU Avg delta", "CPU P95 ms", "CPU P95 delta", "CPU P99 delta", "Private MB", "Private delta", "Heap MB", "Heap delta", "Draw delta", "Failures", "Warnings") `
-    -Alignments @("Left", "Left", "Left", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Left", "Left") `
+    -Headers @("Target", "Backend", "Status", "Frames", "CPU Avg ms", "CPU Avg delta", "CPU P95 ms", "GPU P95 ms", "Feasibility", "CPU P95 delta", "CPU P99 delta", "Private MB", "Private delta", "Heap MB", "Heap delta", "Draw delta", "Failures", "Warnings") `
+    -Alignments @("Left", "Left", "Left", "Right", "Right", "Right", "Right", "Right", "Left", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Left", "Left") `
     -Rows $summaryRows
 $markdown | Set-Content -LiteralPath (Join-Path $reportRoot "summary.md") -Encoding UTF8
 

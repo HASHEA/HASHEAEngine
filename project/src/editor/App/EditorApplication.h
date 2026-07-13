@@ -1,5 +1,6 @@
 #pragma once
 
+#include <filesystem>
 #include <memory>
 
 namespace AshEditor
@@ -7,6 +8,12 @@ namespace AshEditor
 	class EditorApplicationImpl;
 	struct EditorViewportInstance;
 	class EditorViewportService;
+
+	struct EditorApplicationStartupOptions
+	{
+		std::filesystem::path pathSceneOverride{};
+		bool bDeterministicBenchmarkLayout = false;
+	};
 
 	class EditorApplication
 	{
@@ -17,7 +24,7 @@ namespace AshEditor
 		EditorApplication(const EditorApplication&) = delete;
 		EditorApplication& operator=(const EditorApplication&) = delete;
 
-		bool Initialize();
+		bool Initialize(const EditorApplicationStartupOptions& refOptions = {});
 		void Shutdown();
 
 		void Update();

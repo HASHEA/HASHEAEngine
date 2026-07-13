@@ -19,6 +19,7 @@ namespace AshEditor
 	class CommandService;
 	class DragDropTransferService;
 	class EditorActionCoordinator;
+	struct EditorApplicationStartupOptions;
 	class EditorEventBindings;
 	class EditorEventBus;
 	class EditorLogBridge;
@@ -55,7 +56,7 @@ namespace AshEditor
 		EditorApplicationImpl(const EditorApplicationImpl&) = delete;
 		EditorApplicationImpl& operator=(const EditorApplicationImpl&) = delete;
 
-		bool Initialize();
+		bool Initialize(const EditorApplicationStartupOptions& refOptions);
 		void Shutdown();
 
 		void Update();
@@ -69,7 +70,9 @@ namespace AshEditor
 		const EditorViewportService& GetViewportService() const;
 
 	private:
-		std::filesystem::path ResolveStartupScenePath(const EditorSettings& refSettings) const;
+		std::filesystem::path ResolveStartupScenePath(
+			const EditorSettings& refSettings,
+			const std::filesystem::path& pathSceneOverride) const;
 		bool CreateServices(const std::filesystem::path& pathWorkspaceRoot, const std::filesystem::path& pathStartupScene);
 		void WireServices();
 		void CreateViewports();
@@ -120,5 +123,7 @@ namespace AshEditor
 		bool _bInitialized = false;
 		bool _bAssetDatabaseReady = false;
 		bool _bPresentationReady = false;
+		bool _bDeterministicBenchmarkLayout = false;
+		bool _bBenchmarkSceneLoaded = true;
 	};
 }

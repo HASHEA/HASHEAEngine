@@ -26,9 +26,15 @@ namespace AshEngine
 	struct PerfGateConfig
 	{
 		bool enabled = false;
+		bool valid = true;
+		bool timing_validation = false;
 		std::string profile = "Standard";
+		std::string scenario{};
+		std::string validation_error{};
 		std::string output_path{};
 		std::string target_name{};
+		uint32_t render_output_width = 0;
+		uint32_t render_output_height = 0;
 		double warmup_seconds = 10.0;
 		double sample_seconds = 30.0;
 		double gpu_timing_drain_timeout_seconds = 5.0;
@@ -70,14 +76,19 @@ namespace AshEngine
 	public:
 		auto configure(const PerfGateConfig& config, const char* target_name, RHI::Backend backend) -> void;
 		auto is_enabled() const -> bool;
-		auto begin() -> void;
+		auto is_started() const -> bool;
+		auto begin(uint64_t readiness_submitted_frame_index = 0) -> void;
 		auto sample_after_frame(const RendererFrameStats& frame_stats) -> void;
+		auto report_render_output_extent(uint32_t width, uint32_t height) -> void;
+		auto is_render_output_ready() const -> bool;
+		auto has_render_output_mismatch() const -> bool;
 		auto expect_submitted_frame(uint64_t submitted_frame_index, const RendererFrameStats& frame_stats) -> void;
 		auto register_gpu_scope_name(uint64_t stable_name_hash, const char* canonical_name) -> bool;
 		auto drain_gpu_timing(RHI::IGpuTimingContext& context) -> void;
 		auto fail_gpu_timing(RHI::GpuTimingResult result) -> void;
 		auto should_request_exit() -> bool;
 		auto has_failed() const -> bool;
+		auto is_complete_success() -> bool;
 		auto gpu_timing_error() const -> const std::string&;
 		auto gpu_frame_samples() const -> const std::vector<double>&;
 		auto scope_samples(uint64_t stable_name_hash) const -> const std::vector<double>&;
@@ -103,6 +114,11 @@ namespace AshEngine
 		std::chrono::steady_clock::time_point m_start_time{};
 		bool m_started = false;
 		bool m_report_written = false;
+		uint32_t m_render_output_width = 0;
+		uint32_t m_render_output_height = 0;
+		uint32_t m_swapchain_width = 0;
+		uint32_t m_swapchain_height = 0;
+		uint64_t m_readiness_submitted_frame_index = 0;
 		uint64_t m_frames_total = 0;
 		uint64_t m_frames_sampled = 0;
 		std::vector<double> m_frame_time_samples_ms{};
@@ -136,5 +152,6 @@ namespace AshEngine
 		bool m_has_last_pre_window_submitted_frame = false;
 		bool m_has_first_post_window_submitted_frame = false;
 		bool m_gpu_timing_failed = false;
+		bool m_render_output_mismatch = false;
 	};
 }

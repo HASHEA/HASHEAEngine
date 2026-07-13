@@ -2,6 +2,10 @@
 
 #include "App/EditorApplication.h"
 #include "Base/hlog.h"
+#include "Core/EditorIds.h"
+#include "Core/EditorViewportTypes.h"
+#include "Panels/ViewportPanel.h"
+#include "Services/EditorViewportService.h"
 
 namespace AshEditor
 {
@@ -37,8 +41,18 @@ namespace AshEditor
 			return;
 		}
 
+		const AshEngine::PerfGateConfig& refPerfGateConfig = get_perf_gate_config();
+		_bPerfGateBenchmark = refPerfGateConfig.enabled && refPerfGateConfig.scenario == "Empty";
+		_bPerfGateRenderOutputReady = false;
+		ConfigurePerfGateViewportOutputExtent(
+			_bPerfGateBenchmark ? refPerfGateConfig.render_output_width : 0u,
+			_bPerfGateBenchmark ? refPerfGateConfig.render_output_height : 0u);
+
+		EditorApplicationStartupOptions startupOptions{};
+		startupOptions.pathSceneOverride = get_scene_path_override();
+		startupOptions.bDeterministicBenchmarkLayout = _bPerfGateBenchmark;
 		_upEditorApplication = std::make_unique<EditorApplication>();
-		if (!_upEditorApplication->Initialize())
+		if (!_upEditorApplication->Initialize(startupOptions))
 		{
 			_bootstrapFailed = true;
 			HLogError("Editor application bootstrap failed.");
@@ -58,6 +72,9 @@ namespace AshEditor
 			_upEditorApplication->Shutdown();
 			_upEditorApplication.reset();
 		}
+		ConfigurePerfGateViewportOutputExtent(0u, 0u);
+		_bPerfGateBenchmark = false;
+		_bPerfGateRenderOutputReady = false;
 	}
 
 	void Editor::_on_update()
@@ -86,6 +103,29 @@ namespace AshEditor
 	void Editor::_on_render()
 	{
 		AshEngine::Application::_on_render();
+		if (!_bPerfGateBenchmark || !_upEditorApplication)
+		{
+			return;
+		}
+
+		const EditorViewportInstance* pPrimaryViewport = _upEditorApplication->GetPrimaryViewport();
+		if (!pPrimaryViewport || pPrimaryViewport->strId != EditorViewportIds::Game)
+		{
+			return;
+		}
+
+		AshEngine::SceneViewStats stats{};
+		if (_upEditorApplication->GetViewportService().TryGetSceneViewStats(pPrimaryViewport->strId, stats) &&
+			stats.output_allocated)
+		{
+			report_perf_gate_render_output_extent(
+				stats.allocated_output_width,
+				stats.allocated_output_height);
+			const AshEngine::PerfGateConfig& refPerfGateConfig = get_perf_gate_config();
+			_bPerfGateRenderOutputReady =
+				stats.allocated_output_width == refPerfGateConfig.render_output_width &&
+				stats.allocated_output_height == refPerfGateConfig.render_output_height;
+		}
 	}
 
 	auto Editor::_get_automation_readiness() const -> AshEngine::ApplicationReadiness
@@ -93,6 +133,10 @@ namespace AshEditor
 		if (_bootstrapFailed || (_upEditorApplication && _upEditorApplication->HasAutomationFailure()))
 		{
 			return AshEngine::ApplicationReadiness::Failed;
+		}
+		if (_bPerfGateBenchmark && !_bPerfGateRenderOutputReady)
+		{
+			return AshEngine::ApplicationReadiness::Pending;
 		}
 		if (_bootstrapAttempted && _upEditorApplication && _upEditorApplication->IsAutomationReady())
 		{

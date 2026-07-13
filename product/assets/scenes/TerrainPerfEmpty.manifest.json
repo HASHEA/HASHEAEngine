@@ -1,0 +1,228 @@
+{
+  "schema_version": 1,
+  "scene": "TerrainPerfEmpty.scene.json",
+  "hash_algorithm": "SHA-256",
+  "canonical_contract": {
+    "camera_entity": {
+      "camera": {
+        "far_plane": 20000.0,
+        "fov_y_degrees": 60.0,
+        "near_plane": 0.1,
+        "orthographic_height": 10.0,
+        "primary": true,
+        "projection": 0,
+        "reverse_z": true
+      },
+      "id": 2,
+      "name": "TerrainPerfCamera",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          1600.0,
+          -3200.0
+        ],
+        "rotation_euler_degrees": [
+          26.565051,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "environment_entity": {
+      "environment": {
+        "active": true,
+        "affect_lighting": true,
+        "background_intensity": 1.0,
+        "ibl_asset_path": "product/assets/textures/skybox/citrus_orchard_puresky_4k.ashibl",
+        "intensity": 1.0,
+        "lighting_intensity": 1.0,
+        "rotation_degrees": 0.0,
+        "source_texture_path": "product/assets/textures/skybox/citrus_orchard_puresky_4k.hdr",
+        "visible_background": true
+      },
+      "id": 3,
+      "name": "TerrainPerfEnvironment",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_euler_degrees": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "light_entity": {
+      "id": 4,
+      "light": {
+        "casts_shadow": true,
+        "color": [
+          1.0,
+          0.95,
+          0.88
+        ],
+        "inner_cone_angle_degrees": 30.0,
+        "intensity": 2.5,
+        "near_shadow_distance": 16.0,
+        "outer_cone_angle_degrees": 45.0,
+        "range": 10.0,
+        "shadow_cascade_count": 4,
+        "shadow_distance": 160.0,
+        "shadow_priority": 255,
+        "sunlight": true,
+        "type": 0
+      },
+      "name": "TerrainPerfSunlight",
+      "parent": 1,
+      "transform": {
+        "position": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_euler_degrees": [
+          45.0,
+          -30.0,
+          0.0
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    },
+    "render_config": {
+      "ambient_occlusion": {
+        "blur": true,
+        "half_resolution": false,
+        "intensity": 1.0,
+        "mode": "Off",
+        "power": 1.0,
+        "quality": "Medium",
+        "radius": 1.5,
+        "temporal": false,
+        "temporal_blend": 0.85,
+        "temporal_depth_threshold": 0.01,
+        "temporal_normal_threshold": 0.75
+      },
+      "bloom": {
+        "debug_view": "Off",
+        "enabled": false,
+        "intensity": 0.6,
+        "quality": "High",
+        "size_scale": 1.0,
+        "soft_knee": 0.5,
+        "stages": [
+          {
+            "size": 0.3,
+            "tint": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          },
+          {
+            "size": 1.0,
+            "tint": [
+              1.0,
+              0.95,
+              0.9
+            ]
+          },
+          {
+            "size": 2.0,
+            "tint": [
+              0.9,
+              0.95,
+              1.0
+            ]
+          },
+          {
+            "size": 4.0,
+            "tint": [
+              0.8,
+              0.9,
+              1.0
+            ]
+          },
+          {
+            "size": 8.0,
+            "tint": [
+              0.7,
+              0.8,
+              1.0
+            ]
+          },
+          {
+            "size": 16.0,
+            "tint": [
+              0.6,
+              0.7,
+              1.0
+            ]
+          }
+        ],
+        "threshold": 1.0
+      },
+      "directional_shadows": {
+        "default_cascade_count": 4,
+        "default_shadow_distance": 160.0,
+        "depth_bias": 0.0015,
+        "dynamic_atlas_size": 4096,
+        "enabled": true,
+        "near_cascade_resolution": 2048,
+        "near_shadow_distance": 16.0,
+        "normal_bias": 0.05,
+        "outer_cascade_resolution": 1024,
+        "pcf_radius": 1,
+        "split_lambda": 0.65,
+        "static_cache_atlas_size": 4096,
+        "static_cache_budget_mb": 64
+      },
+      "temporal_aa": {
+        "debug_view": "Off",
+        "enabled": false,
+        "history_blend": 0.9,
+        "jitter_sequence_length": 8,
+        "luminance_weighting": true,
+        "variance_gamma": 1.0
+      },
+      "tonemap": {
+        "exposure": 1.0
+      },
+      "volumetric_lighting": {
+        "anisotropy": 0.35,
+        "debug_view": "Off",
+        "density": 0.02,
+        "enabled": false,
+        "extinction_scale": 1.0,
+        "froxel_depth_slices": 64,
+        "froxel_resolution_scale": 0.5,
+        "history": true,
+        "history_blend": 0.9,
+        "max_lights": 64,
+        "quality": "Medium",
+        "scattering_intensity": 1.0,
+        "screen_space_fallback": false
+      }
+    }
+  },
+  "canonical_contract_json": "{\"camera_entity\":{\"camera\":{\"far_plane\":20000.0,\"fov_y_degrees\":60.0,\"near_plane\":0.1,\"orthographic_height\":10.0,\"primary\":true,\"projection\":0,\"reverse_z\":true},\"id\":2,\"name\":\"TerrainPerfCamera\",\"parent\":1,\"transform\":{\"position\":[0.0,1600.0,-3200.0],\"rotation_euler_degrees\":[26.565051,0.0,0.0],\"scale\":[1.0,1.0,1.0]}},\"environment_entity\":{\"environment\":{\"active\":true,\"affect_lighting\":true,\"background_intensity\":1.0,\"ibl_asset_path\":\"product/assets/textures/skybox/citrus_orchard_puresky_4k.ashibl\",\"intensity\":1.0,\"lighting_intensity\":1.0,\"rotation_degrees\":0.0,\"source_texture_path\":\"product/assets/textures/skybox/citrus_orchard_puresky_4k.hdr\",\"visible_background\":true},\"id\":3,\"name\":\"TerrainPerfEnvironment\",\"parent\":1,\"transform\":{\"position\":[0.0,0.0,0.0],\"rotation_euler_degrees\":[0.0,0.0,0.0],\"scale\":[1.0,1.0,1.0]}},\"light_entity\":{\"id\":4,\"light\":{\"casts_shadow\":true,\"color\":[1.0,0.95,0.88],\"inner_cone_angle_degrees\":30.0,\"intensity\":2.5,\"near_shadow_distance\":16.0,\"outer_cone_angle_degrees\":45.0,\"range\":10.0,\"shadow_cascade_count\":4,\"shadow_distance\":160.0,\"shadow_priority\":255,\"sunlight\":true,\"type\":0},\"name\":\"TerrainPerfSunlight\",\"parent\":1,\"transform\":{\"position\":[0.0,0.0,0.0],\"rotation_euler_degrees\":[45.0,-30.0,0.0],\"scale\":[1.0,1.0,1.0]}},\"render_config\":{\"ambient_occlusion\":{\"blur\":true,\"half_resolution\":false,\"intensity\":1.0,\"mode\":\"Off\",\"power\":1.0,\"quality\":\"Medium\",\"radius\":1.5,\"temporal\":false,\"temporal_blend\":0.85,\"temporal_depth_threshold\":0.01,\"temporal_normal_threshold\":0.75},\"bloom\":{\"debug_view\":\"Off\",\"enabled\":false,\"intensity\":0.6,\"quality\":\"High\",\"size_scale\":1.0,\"soft_knee\":0.5,\"stages\":[{\"size\":0.3,\"tint\":[1.0,1.0,1.0]},{\"size\":1.0,\"tint\":[1.0,0.95,0.9]},{\"size\":2.0,\"tint\":[0.9,0.95,1.0]},{\"size\":4.0,\"tint\":[0.8,0.9,1.0]},{\"size\":8.0,\"tint\":[0.7,0.8,1.0]},{\"size\":16.0,\"tint\":[0.6,0.7,1.0]}],\"threshold\":1.0},\"directional_shadows\":{\"default_cascade_count\":4,\"default_shadow_distance\":160.0,\"depth_bias\":0.0015,\"dynamic_atlas_size\":4096,\"enabled\":true,\"near_cascade_resolution\":2048,\"near_shadow_distance\":16.0,\"normal_bias\":0.05,\"outer_cascade_resolution\":1024,\"pcf_radius\":1,\"split_lambda\":0.65,\"static_cache_atlas_size\":4096,\"static_cache_budget_mb\":64},\"temporal_aa\":{\"debug_view\":\"Off\",\"enabled\":false,\"history_blend\":0.9,\"jitter_sequence_length\":8,\"luminance_weighting\":true,\"variance_gamma\":1.0},\"tonemap\":{\"exposure\":1.0},\"volumetric_lighting\":{\"anisotropy\":0.35,\"debug_view\":\"Off\",\"density\":0.02,\"enabled\":false,\"extinction_scale\":1.0,\"froxel_depth_slices\":64,\"froxel_resolution_scale\":0.5,\"history\":true,\"history_blend\":0.9,\"max_lights\":64,\"quality\":\"Medium\",\"scattering_intensity\":1.0,\"screen_space_fallback\":false}}}",
+  "canonical_contract_sha256": "4f1eda286ecb94263ba251ab9a551722b511ec95fd7ae37c569366a03b0d8e37"
+}

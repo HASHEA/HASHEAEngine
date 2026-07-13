@@ -23,6 +23,34 @@ if ($standardExitCode -ne 0 -or $standardOutputText -notmatch "RunPerfGate self-
     throw "RunPerfGate ordinary compatibility self-test failed.`n$standardOutputText"
 }
 
+$emptyOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $runnerScript -SelfTest -Scenario Empty -Configuration Release -DryRun 2>&1
+$emptyExitCode = $LASTEXITCODE
+$emptyOutputText = ($emptyOutput | Out-String)
+if ($emptyExitCode -ne 0 -or $emptyOutputText -notmatch "RunPerfGate self-test PASS") {
+    throw "RunPerfGate Empty scenario self-test failed.`n$emptyOutputText"
+}
+
+$timingOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $runnerScript -SelfTest -Scenario Empty -Configuration Debug -TimingValidation -DryRun 2>&1
+$timingExitCode = $LASTEXITCODE
+$timingOutputText = ($timingOutput | Out-String)
+if ($timingExitCode -ne 0 -or $timingOutputText -notmatch "RunPerfGate self-test PASS") {
+    throw "RunPerfGate TimingValidation self-test failed.`n$timingOutputText"
+}
+
+foreach ($requiredMarker in @(
+    "Task 7 Empty run plan PASS",
+    "Task 7 telemetry contract PASS",
+    "Task 7 state restoration PASS",
+    "Task 7 manifest hash PASS"
+)) {
+    if ($emptyOutputText -notmatch [regex]::Escape($requiredMarker)) {
+        throw "RunPerfGate Empty self-test did not report '$requiredMarker'.`n$emptyOutputText"
+    }
+}
+if ($timingOutputText -notmatch [regex]::Escape("Task 7 timing validation plan PASS")) {
+    throw "RunPerfGate TimingValidation self-test did not verify its run plan.`n$timingOutputText"
+}
+
 $requiredNoTracyPlan = @(
     "premake5.exe --no-tracy vs2022",
     "InvokeMSBuild.ps1 -MSBuildPath <msbuild> -SolutionPath AshEngine.sln -Target Clean -Configuration Release -Platform x64",
@@ -82,7 +110,10 @@ Assert-RejectedInvocation -Arguments @("-SelfTest", "-NoTracy", "-Scenario", "Em
 Assert-RejectedInvocation -Arguments @("-SelfTest", "-NoTracy", "-Scenario", "Empty", "-BlessBaseline") -ExpectedDiagnostic "-NoTracy cannot be used with -BlessBaseline"
 Assert-RejectedInvocation -Arguments @("-SelfTest", "-NoTracy", "-Scenario", "Sandbox") -ExpectedDiagnostic "Unsupported perf gate scenario 'Sandbox'"
 Assert-RejectedInvocation -Arguments @("-SelfTest", "-NoTracy", "-Scenario", "Empty", "-Configuration", "Debug") -ExpectedDiagnostic "-NoTracy requires -Configuration Release"
-
-Assert-RejectedInvocation -Arguments @("-SelfTest", "-Scenario", "Empty") -ExpectedDiagnostic "-Scenario is reserved for the no-Tracy proof until the fixed Empty harness is implemented"
+Assert-RejectedInvocation -Arguments @("-SelfTest", "-Scenario", "Empty", "-Configuration", "Debug") -ExpectedDiagnostic "ordinary -Scenario Empty requires -Configuration Release"
+Assert-RejectedInvocation -Arguments @("-SelfTest", "-Scenario", "Empty", "-Configuration", "Release", "-TimingValidation") -ExpectedDiagnostic "-TimingValidation requires -Configuration Debug"
+Assert-RejectedInvocation -Arguments @("-SelfTest", "-TimingValidation", "-Configuration", "Debug") -ExpectedDiagnostic "-TimingValidation requires -Scenario Empty"
+Assert-RejectedInvocation -Arguments @("-SelfTest", "-NoTracy", "-Scenario", "Empty", "-TimingValidation") -ExpectedDiagnostic "-NoTracy cannot be combined with -TimingValidation"
+Assert-RejectedInvocation -Arguments @("-SelfTest", "-Scenario", "Empty", "-TimingValidation", "-BlessBaseline") -ExpectedDiagnostic "-TimingValidation cannot be used with -BlessBaseline"
 
 Write-Host "TestRunPerfGate PASS"

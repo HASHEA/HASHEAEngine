@@ -1,5 +1,6 @@
 #include "App/EditorApplicationImpl.h"
 
+#include "App/EditorApplication.h"
 #include "App/EditorActionCoordinator.h"
 #include "App/EditorLogBridge.h"
 #include "App/PanelBootstrapper.h"
@@ -85,31 +86,48 @@ namespace AshEditor
 
 	EditorApplicationImpl::~EditorApplicationImpl() = default;
 
-	std::filesystem::path EditorApplicationImpl::ResolveStartupScenePath(const EditorSettings& refSettings) const
+	std::filesystem::path EditorApplicationImpl::ResolveStartupScenePath(
+		const EditorSettings& refSettings,
+		const std::filesystem::path& pathSceneOverride) const
 	{
+		if (!pathSceneOverride.empty())
+		{
+			return _upSettingsService->ResolveWorkspacePath(pathSceneOverride);
+		}
 		return refSettings.strLastScenePath.empty()
 			? _upSettingsService->GetStartupScenePath()
 			: _upSettingsService->ResolveWorkspacePath(refSettings.strLastScenePath);
 	}
 
-	bool EditorApplicationImpl::Initialize()
+	bool EditorApplicationImpl::Initialize(const EditorApplicationStartupOptions& refOptions)
 	{
 		if (_bInitialized)
 		{
 			return true;
 		}
 
+		_bDeterministicBenchmarkLayout = refOptions.bDeterministicBenchmarkLayout;
 		const std::filesystem::path pathWorkspaceRoot = DiscoverEditorWorkspaceRoot();
 		_upSettingsService->Initialize(pathWorkspaceRoot);
 
 		const EditorSettings& refSettings = _upSettingsService->GetSettings();
 		_upViewportCameraService->SetDefaultMoveSpeed(refSettings.fSceneViewportCameraSpeed);
-		const std::filesystem::path pathStartupScene = ResolveStartupScenePath(refSettings);
+		const std::filesystem::path pathStartupScene = ResolveStartupScenePath(refSettings, refOptions.pathSceneOverride);
 		const bool bStartupSceneLoaded = CreateServices(pathWorkspaceRoot, pathStartupScene);
+		_bBenchmarkSceneLoaded = !_bDeterministicBenchmarkLayout || bStartupSceneLoaded;
 
 		WireServices();
 		CreateViewports();
-		LoadPersistentState();
+		if (!_bDeterministicBenchmarkLayout)
+		{
+			LoadPersistentState();
+		}
+		else
+		{
+			_upViewportService->SetPanelOpen(EditorViewportIds::Scene, false);
+			_upViewportService->SetPanelOpen(EditorViewportIds::Game, true);
+			_upViewportService->SetPrimaryViewport(EditorViewportIds::Game);
+		}
 		CreatePanels();
 		PublishInitialSessionState();
 		RegisterActions();
@@ -132,7 +150,10 @@ namespace AshEditor
 			_upLogBridge->Detach();
 		}
 		ShutdownPanels();
-		SavePersistentState();
+		if (!_bDeterministicBenchmarkLayout)
+		{
+			SavePersistentState();
+		}
 		_upSceneService->SetEventBus(nullptr);
 		_upViewportCameraService->Reset();
 		_upViewportService->Clear();
@@ -141,10 +162,15 @@ namespace AshEditor
 		_upEventBindings->Clear();
 		_upEventBus->Clear();
 		_upIconService->Shutdown(_editorContext.pUiContext);
-		_upSettingsService->Save();
+		if (!_bDeterministicBenchmarkLayout)
+		{
+			_upSettingsService->Save();
+		}
 		_bInitialized = false;
 		_bAssetDatabaseReady = false;
 		_bPresentationReady = false;
+		_bDeterministicBenchmarkLayout = false;
+		_bBenchmarkSceneLoaded = true;
 	}
 
 	void EditorApplicationImpl::Update()
@@ -232,7 +258,7 @@ namespace AshEditor
 	bool EditorApplicationImpl::HasAutomationFailure() const
 	{
 		return _bInitialized &&
-			(!_bAssetDatabaseReady || !_editorContext.bGuiRendererReady);
+			(!_bAssetDatabaseReady || !_editorContext.bGuiRendererReady || !_bBenchmarkSceneLoaded);
 	}
 
 	EditorViewportInstance* EditorApplicationImpl::GetPrimaryViewport()

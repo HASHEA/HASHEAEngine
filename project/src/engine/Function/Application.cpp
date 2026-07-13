@@ -154,6 +154,7 @@ namespace AshEngine
 			HLogError("Failed to initialize graphics context for backend '{}'.", RHI::backend_to_string(resolvedBackend));
 			ASH_PROCESS_ERROR(false);
 		}
+		perfGateController.configure(perfGateConfig, initConfig.title, activeBackend);
 
 		/*shader manager*/
 		
@@ -298,7 +299,11 @@ namespace AshEngine
 			if (perfGateController.is_enabled())
 			{
 				perfGateController.capture_shutdown_heap_stats(MemoryService::instance()->get_heap_stats());
-				perfGateController.write_report(false);
+				const bool reportAbnormalExit = perfGateAbnormalExit ||
+					runtimeFailureDetected.load(std::memory_order_acquire) ||
+					logicThreadFailed.load(std::memory_order_acquire) ||
+					!perfGateController.is_complete_success();
+				perfGateController.write_report(reportAbnormalExit);
 			}
 			MemoryService::instance()->shutdown();
 			memoryServiceInitialized = false;
@@ -325,9 +330,13 @@ namespace AshEngine
 	{
 		readinessSmokeTimeoutSeconds = timeoutSeconds > 0.0 ? timeoutSeconds : 0.0;
 	}
-	auto Application::configure_perf_gate(const PerfGateConfig& config) -> void
+	auto Application::set_perf_gate_config(const PerfGateConfig& config) -> void
 	{
-		perfGateController.configure(config, initConfig.title, activeBackend);
+		perfGateConfig = config;
+	}
+	auto Application::report_perf_gate_render_output_extent(uint32_t width, uint32_t height) -> void
+	{
+		perfGateController.report_render_output_extent(width, height);
 	}
 	auto Application::set_frame_dump_path(std::string path) -> void
 	{
@@ -361,6 +370,7 @@ namespace AshEngine
 			? k_default_frame_dump_timeout_seconds
 			: readinessSmokeTimeoutSeconds;
 		automationController.configure(automationMode, automationTimeoutSeconds);
+		perfGateReadinessController.configure(ApplicationAutomationMode::Smoke, 0.0);
 
 		if (!frameDumpPath.empty())
 		{
@@ -381,6 +391,7 @@ namespace AshEngine
 		started = true;
 		exitRequested.store(false, std::memory_order_release);
 		runtimeFailureDetected.store(false, std::memory_order_release);
+		perfGateAbnormalExit = false;
 		logicThreadStopRequested.store(false, std::memory_order_release);
 		logicThreadFailed.store(false, std::memory_order_release);
 		frameIndex.store(0, std::memory_order_release);
@@ -397,7 +408,6 @@ namespace AshEngine
 			}
 		}
 		_on_startup();
-		perfGateController.begin();
 		_start_logic_thread_if_needed();
 
 		while (!_should_exit())
@@ -475,7 +485,14 @@ namespace AshEngine
 			if (perfGateController.is_enabled() && perfGateController.has_failed())
 			{
 				runtimeFailureDetected.store(true, std::memory_order_release);
-				HLogError("PerfGate GPU timing failed: {}; requesting application exit.", perfGateController.gpu_timing_error());
+				if (perfGateController.has_render_output_mismatch())
+				{
+					HLogError("PerfGate render output extent mismatch; requesting application exit.");
+				}
+				else
+				{
+					HLogError("PerfGate GPU timing failed: {}; requesting application exit.", perfGateController.gpu_timing_error());
+				}
 				request_exit();
 			}
 			else if (perfGateController.should_request_exit())
@@ -485,6 +502,63 @@ namespace AshEngine
 			}
 
 			pump_render_commands();
+
+			if (perfGateController.is_enabled() && !perfGateController.is_started())
+			{
+				const RenderAssetReadinessSnapshot perfAssetReadiness = renderAssetManager.query_readiness();
+				const SceneSubmissionSnapshot perfSubmission = scenePresentation.get_last_scene_submission_snapshot();
+				ApplicationAutomationFrame perfReadinessFrame{};
+				perfReadinessFrame.application_readiness =
+					runtimeFailureDetected.load(std::memory_order_acquire) ||
+					logicThreadFailed.load(std::memory_order_acquire)
+						? ApplicationReadiness::Failed
+						: _get_automation_readiness();
+				perfReadinessFrame.render_asset_epoch = perfAssetReadiness.activity_epoch;
+				perfReadinessFrame.render_assets_pending = perfAssetReadiness.pending;
+				perfReadinessFrame.render_assets_failed = perfAssetReadiness.failed;
+				perfReadinessFrame.render_commands_pending = has_pending_render_commands();
+				if (perfSubmission.valid && perfSubmission.frame_index == currentFrameIndex)
+				{
+					perfReadinessFrame.scene_submission_asset_epoch = perfSubmission.render_asset_epoch;
+					perfReadinessFrame.scene_packets_attempted = perfSubmission.scene_packets_attempted;
+					perfReadinessFrame.scene_packets_succeeded = perfSubmission.scene_packets_succeeded;
+					perfReadinessFrame.scene_packets_failed = perfSubmission.scene_packets_failed;
+					perfReadinessFrame.scene_packets_capture_ready = perfSubmission.scene_packets_capture_ready;
+				}
+				perfReadinessFrame.present_completed = framePresentCompleted;
+
+				const double perfReadinessElapsedSeconds = std::chrono::duration<double>(
+					std::chrono::steady_clock::now() - runStartTime).count();
+				const ApplicationAutomationDecision perfReadinessDecision =
+					perfGateReadinessController.observe_presented_frame(
+						perfReadinessFrame,
+						false,
+						false,
+						perfReadinessElapsedSeconds);
+				if (perfReadinessDecision.succeeded && perfGateController.is_render_output_ready())
+				{
+					const uint64_t readinessSubmittedFrameIndex = renderer
+						? renderer->get_frame_stats().submitted_frame_index
+						: 0;
+					if (readinessSubmittedFrameIndex == 0)
+					{
+						runtimeFailureDetected.store(true, std::memory_order_release);
+						HLogError("PerfGate readiness completed without a submitted GPU frame index.");
+						request_exit();
+					}
+					else
+					{
+						perfGateController.begin(readinessSubmittedFrameIndex);
+						HLogInfo("PerfGate readiness complete; starting warmup and sampling window.");
+					}
+				}
+				else if (perfReadinessDecision.request_exit && !perfReadinessDecision.succeeded)
+				{
+					runtimeFailureDetected.store(true, std::memory_order_release);
+					HLogError("PerfGate readiness failed before sampling could begin.");
+					request_exit();
+				}
+			}
 
 			if (automationEnabled)
 			{
@@ -609,6 +683,21 @@ namespace AshEngine
 					request_exit();
 				}
 			}
+		}
+
+		if (perfGateController.is_enabled() && !perfGateController.is_complete_success())
+		{
+			perfGateAbnormalExit = true;
+			if (!runtimeFailureDetected.load(std::memory_order_acquire))
+			{
+				HLogError("PerfGate terminated before readiness, fixed output, sampling, and GPU timing drain completed.");
+			}
+			runtimeFailureDetected.store(true, std::memory_order_release);
+		}
+		else if (perfGateController.is_enabled())
+		{
+			perfGateAbnormalExit = runtimeFailureDetected.load(std::memory_order_acquire) ||
+				logicThreadFailed.load(std::memory_order_acquire);
 		}
 
 		_stop_logic_thread();

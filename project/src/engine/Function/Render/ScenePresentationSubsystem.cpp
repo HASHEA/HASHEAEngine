@@ -1320,6 +1320,13 @@ namespace AshEngine
 
 		out_stats.output_width = output_width;
 		out_stats.output_height = output_height;
+		if (output_found->second.render_target)
+		{
+			out_stats.allocated_output_width = output_found->second.render_target->get_width();
+			out_stats.allocated_output_height = output_found->second.render_target->get_height();
+			out_stats.output_allocated =
+				out_stats.allocated_output_width > 0 && out_stats.allocated_output_height > 0;
+		}
 		out_stats.rhi_backend_name = Application::get_rhi_backend_name();
 		out_stats.valid = true;
 

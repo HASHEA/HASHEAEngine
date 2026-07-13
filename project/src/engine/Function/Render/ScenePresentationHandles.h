@@ -78,6 +78,8 @@ namespace AshEngine
 	{
 		uint32_t output_width = 0;
 		uint32_t output_height = 0;
+		uint32_t allocated_output_width = 0;
+		uint32_t allocated_output_height = 0;
 		const char* rhi_backend_name = nullptr;
 		uint32_t draw_call_count = 0;
 		uint32_t graphics_pass_count = 0;
@@ -85,6 +87,7 @@ namespace AshEngine
 		double cpu_frame_time_ms = 0.0;
 		double instantaneous_fps = 0.0;
 		double average_fps = 0.0;
+		bool output_allocated = false;
 		bool valid = false;
 	};
 

@@ -11,9 +11,9 @@ namespace AshEditor
 
 	EditorApplication::~EditorApplication() = default;
 
-	bool EditorApplication::Initialize()
+	bool EditorApplication::Initialize(const EditorApplicationStartupOptions& refOptions)
 	{
-		return _upImpl && _upImpl->Initialize();
+		return _upImpl && _upImpl->Initialize(refOptions);
 	}
 
 	void EditorApplication::Shutdown()

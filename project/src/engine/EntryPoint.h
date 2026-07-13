@@ -534,6 +534,20 @@ int32_t main(int argc, char* argv[])
 	{
 		AshEngine::Application::app = application;
 	}
+	const AshEngine::PerfGateConfig perfGateConfig = AshEngine::parse_perf_gate_config(argc, argv);
+	if (!perfGateConfig.valid)
+	{
+		std::cerr << "Fatal Error: Invalid PerfGate configuration: " << perfGateConfig.validation_error << std::endl;
+		destroy_application(application);
+		AshEngine::Application::app = nullptr;
+		return 1;
+	}
+	application->set_perf_gate_config(perfGateConfig);
+	const std::string scenePathOverride = parse_string_option(argc, argv, "--scene");
+	if (!scenePathOverride.empty())
+	{
+		application->set_scene_path_override(scenePathOverride);
+	}
 	// RenderGate（SDD-2026-07-07-render-gate）：--rhi 覆盖后端选择，必须在 initialize() 之前注入
 	const std::string rhiOverride = parse_string_option(argc, argv, "--rhi");
 	if (!rhiOverride.empty())
@@ -591,19 +605,9 @@ int32_t main(int argc, char* argv[])
 	{
 		std::cerr << "Warning: --smoke-test=N and ASH_ENGINE_SMOKE_TEST_FRAMES are deprecated fixed-run aliases; use --run-for-frames=N. Readiness smoke uses --smoke-test-seconds=S." << std::endl;
 	}
-	const AshEngine::PerfGateConfig perfGateConfig = AshEngine::parse_perf_gate_config(argc, argv);
-	if (perfGateConfig.enabled)
-	{
-		application->configure_perf_gate(perfGateConfig);
-	}
 	if (!frameDumpPath.empty())
 	{
 		application->set_frame_dump_path(frameDumpPath);
-	}
-	const std::string scenePathOverride = parse_string_option(argc, argv, "--scene");
-	if (!scenePathOverride.empty())
-	{
-		application->set_scene_path_override(scenePathOverride);
 	}
 	if (should_run_rhi_indirect_self_test(argc, argv))
 	{

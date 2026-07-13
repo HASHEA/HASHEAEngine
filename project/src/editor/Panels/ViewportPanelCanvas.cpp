@@ -3,6 +3,7 @@
 #include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Panels/ViewportPanelInteraction.h"
+#include "Panels/ViewportPanel.h"
 #include "Panels/ViewportPanelSceneSupportInternal.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/EditorGizmoMath.h"
@@ -190,12 +191,19 @@ namespace AshEditor
 
 			AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
 			const AshEngine::UIVec2 vecAvailableSize = refUi.get_content_region_avail();
+			const ViewportOutputExtent fixedExtent = GetPerfGateViewportOutputExtent();
+			const ViewportOutputExtent requestedExtent = ResolveViewportOutputExtent(
+				strViewportId,
+				vecAvailableSize.x > 1.0f ? static_cast<uint32_t>(vecAvailableSize.x) : 0u,
+				vecAvailableSize.y > 1.0f ? static_cast<uint32_t>(vecAvailableSize.y) : 0u,
+				fixedExtent.uWidth,
+				fixedExtent.uHeight);
 			if (refDeps.pViewportService)
 			{
 				refDeps.pViewportService->UpdateRequestedSize(
 					strViewportId,
-					vecAvailableSize.x > 1.0f ? static_cast<uint32_t>(vecAvailableSize.x) : 0u,
-					vecAvailableSize.y > 1.0f ? static_cast<uint32_t>(vecAvailableSize.y) : 0u,
+					requestedExtent.uWidth,
+					requestedExtent.uHeight,
 					refUi.get_time_seconds());
 			}
 
