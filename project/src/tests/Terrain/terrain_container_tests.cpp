@@ -40,6 +40,18 @@ namespace
 		return layout;
 	}
 
+	auto IncrementalContainerLayout() -> AshEngine::TerrainGridLayout
+	{
+		AshEngine::TerrainGridLayout layout{};
+		layout.sample_count_x = 13u;
+		layout.sample_count_z = 9u;
+		layout.component_count_x = 3u;
+		layout.component_count_z = 2u;
+		layout.component_quad_count = 4u;
+		layout.sample_spacing_meters = 1.0f;
+		return layout;
+	}
+
 	auto MakeContainerSnapshot(bool mixed_component_payloads = false)
 		-> std::shared_ptr<const AshEngine::TerrainAssetSnapshot>
 	{
@@ -175,6 +187,111 @@ namespace
 		CHECK(lhs.base_color_asset_path == rhs.base_color_asset_path);
 		CHECK(lhs.normal_asset_path == rhs.normal_asset_path);
 		CHECK(lhs.orm_asset_path == rhs.orm_asset_path);
+	}
+
+	auto MakeIncrementalSnapshot()
+		-> std::shared_ptr<const AshEngine::TerrainAssetSnapshot>
+	{
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+		std::string error{};
+		REQUIRE(AshEngine::create_flat_terrain_snapshot(
+			73u,
+			IncrementalContainerLayout(),
+			{ -128.0f, 512.0f },
+			0.0f,
+			snapshot,
+			&error));
+		return snapshot;
+	}
+
+	struct AdvancedGeneration
+	{
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+		AshEngine::TerrainDirtyComponentPayload dirty{};
+	};
+
+	auto AdvanceGeneration(
+		const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& previous,
+		uint64_t generation,
+		float delta) -> AdvancedGeneration
+	{
+		auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>(*previous);
+		snapshot->content_generation = generation;
+		auto component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
+			*snapshot->components[0u]);
+		component->content_generation = generation;
+		component->heights[0] += delta;
+		std::string error{};
+		REQUIRE(AshEngine::build_terrain_component_spatial_data(
+			*component, component->sample_width, component->sample_height, &error));
+		snapshot->components[0u] = component;
+		return {
+			snapshot,
+			{ component->coord, generation, component }
+		};
+	}
+
+	auto ReadAllBytes(const std::filesystem::path& path) -> std::vector<uint8_t>
+	{
+		std::ifstream input(path, std::ios::binary | std::ios::ate);
+		REQUIRE(input.is_open());
+		const std::streamsize size = input.tellg();
+		REQUIRE(size >= 0);
+		std::vector<uint8_t> bytes(static_cast<size_t>(size));
+		input.seekg(0);
+		REQUIRE(input.read(reinterpret_cast<char*>(bytes.data()), size));
+		return bytes;
+	}
+
+	auto ReadTextFile(const std::filesystem::path& path) -> std::string
+	{
+		std::ifstream input(path, std::ios::binary);
+		REQUIRE(input.is_open());
+		return std::string(
+			std::istreambuf_iterator<char>(input),
+			std::istreambuf_iterator<char>());
+	}
+
+	auto CountOccurrences(const std::string& text, const std::string& needle) -> size_t
+	{
+		size_t count = 0u;
+		size_t offset = 0u;
+		while ((offset = text.find(needle, offset)) != std::string::npos)
+		{
+			++count;
+			offset += needle.size();
+		}
+		return count;
+	}
+
+	auto CheckSnapshotLogicalEqual(
+		const AshEngine::TerrainAssetSnapshot& lhs,
+		const AshEngine::TerrainAssetSnapshot& rhs) -> void
+	{
+		CHECK(lhs.content_generation == rhs.content_generation);
+		CHECK(lhs.layout.sample_count_x == rhs.layout.sample_count_x);
+		CHECK(lhs.layout.sample_count_z == rhs.layout.sample_count_z);
+		REQUIRE(lhs.base_heights);
+		REQUIRE(rhs.base_heights);
+		CHECK(*lhs.base_heights == *rhs.base_heights);
+		REQUIRE(lhs.edit_layers);
+		REQUIRE(rhs.edit_layers);
+		CHECK(lhs.edit_layers->size() == rhs.edit_layers->size());
+		REQUIRE(lhs.components.size() == rhs.components.size());
+		for (size_t index = 0u; index < lhs.components.size(); ++index)
+		{
+			REQUIRE(lhs.components[index]);
+			REQUIRE(rhs.components[index]);
+			CHECK(lhs.components[index]->content_generation ==
+				rhs.components[index]->content_generation);
+			CHECK(lhs.components[index]->heights == rhs.components[index]->heights);
+			CHECK(lhs.components[index]->weights == rhs.components[index]->weights);
+			CHECK(lhs.components[index]->min_max_level_offsets ==
+				rhs.components[index]->min_max_level_offsets);
+			CHECK(lhs.components[index]->min_max_levels ==
+				rhs.components[index]->min_max_levels);
+			CHECK(lhs.components[index]->lod_errors == rhs.components[index]->lod_errors);
+		}
 	}
 }
 
@@ -558,5 +675,261 @@ TEST_CASE("Terrain container indexes many distinct edit layer IDs without ambigu
 	CHECK((*loaded->edit_layers)[0].height_blocks[0].values[0] == 0.0f);
 	CHECK((*loaded->edit_layers)[layer_count - 1u].height_blocks[0].values[0] ==
 		static_cast<float>(layer_count - 1u));
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container incremental save appends only one dirty component generation")
+{
+	const std::filesystem::path path = TestDirectory() / "incremental-size.AshTerrain";
+	std::filesystem::remove(path);
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+	const uint64_t size_one = std::filesystem::file_size(path);
+
+	const AdvancedGeneration generation_two =
+		AdvanceGeneration(generation_one, 2u, 7.0f);
+	AshEngine::TerrainContainerSaveReport report{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_two.snapshot, { generation_two.dirty }, &report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	const uint64_t size_two = std::filesystem::file_size(path);
+	CHECK(report.previous_generation == 1u);
+	CHECK(report.committed_generation == 2u);
+	CHECK(report.blocks_written < generation_two.snapshot->components.size());
+	CHECK(size_two > size_one);
+	CHECK(size_two - size_one < size_one);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	const auto load_result =
+		AshEngine::load_terrain_container(path, loaded, nullptr, &error);
+	REQUIRE(load_result == AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	CHECK(loaded->content_generation == 2u);
+	CHECK(loaded->components[0]->content_generation == 2u);
+	CHECK(loaded->components[0]->heights == generation_two.snapshot->components[0]->heights);
+	CHECK(loaded->components[1]->content_generation == 1u);
+	CHECK(loaded->components[1]->heights == generation_one->components[1]->heights);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container incremental source change cannot be hidden by a CRC32 collision")
+{
+	const std::filesystem::path path = TestDirectory() / "incremental-crc-collision.AshTerrain";
+	std::filesystem::remove(path);
+	const std::array<uint16_t, 16> first_values = {
+		513u, 1027u, 1541u, 2055u, 2569u, 3083u, 3597u, 4111u,
+		4625u, 5139u, 5653u, 6167u, 6681u, 7195u, 7709u, 8223u
+	};
+	const std::array<uint16_t, 16> colliding_values = {
+		641u, 1027u, 1541u, 2055u, 2569u, 3083u, 3597u, 4111u,
+		4625u, 5139u, 5653u, 6167u, 6681u, 7195u, 37021u, 64225u
+	};
+
+	auto generation_one = std::make_shared<AshEngine::TerrainAssetSnapshot>(
+		*MakeIncrementalSnapshot());
+	auto first_base = std::make_shared<std::vector<uint16_t>>(*generation_one->base_heights);
+	std::copy(first_values.begin(), first_values.end(), first_base->begin());
+	generation_one->base_heights = first_base;
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+
+	const AdvancedGeneration advanced = AdvanceGeneration(generation_one, 2u, 5.0f);
+	auto generation_two = std::make_shared<AshEngine::TerrainAssetSnapshot>(*advanced.snapshot);
+	auto second_base = std::make_shared<std::vector<uint16_t>>(*first_base);
+	std::copy(colliding_values.begin(), colliding_values.end(), second_base->begin());
+	CHECK(TestCrc32(
+		reinterpret_cast<const uint8_t*>(first_base->data()),
+		first_base->size() * sizeof(uint16_t)) ==
+		TestCrc32(
+			reinterpret_cast<const uint8_t*>(second_base->data()),
+			second_base->size() * sizeof(uint16_t)));
+	generation_two->base_heights = second_base;
+	AshEngine::TerrainContainerSaveReport report{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_two, { advanced.dirty }, &report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(report.blocks_written == 5u);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->base_heights);
+	CHECK(*loaded->base_heights == *second_base);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container incremental source contract builds only changed blocks")
+{
+	const std::string source = ReadTextFile(
+		"project/src/engine/Function/Asset/TerrainContainer.cpp");
+	CHECK(source.find("build_incremental_generation_blocks(") != std::string::npos);
+	CHECK(CountOccurrences(
+		source, "build_generation_one_blocks(snapshot, blocks)") == 1u);
+	CHECK(source.find("load_previous_terrain_metadata(") != std::string::npos);
+	CHECK(source.find("previous_snapshot") == std::string::npos);
+}
+
+TEST_CASE("Terrain container recovery selects the previous valid descriptor")
+{
+	const std::filesystem::path source_path = TestDirectory() / "recovery-source.AshTerrain";
+	const std::filesystem::path descriptor_path = TestDirectory() / "recovery-descriptor.AshTerrain";
+	const std::filesystem::path truncate_path = TestDirectory() / "recovery-truncate.AshTerrain";
+	const std::filesystem::path both_path = TestDirectory() / "recovery-both.AshTerrain";
+	for (const auto& path : { source_path, descriptor_path, truncate_path, both_path })
+	{
+		std::filesystem::remove(path);
+	}
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		source_path, *generation_one, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	const AdvancedGeneration generation_two = AdvanceGeneration(generation_one, 2u, 3.0f);
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		source_path, *generation_two.snapshot, { generation_two.dirty }, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	FileHeaderDisk header{};
+	{
+		std::ifstream input(source_path, std::ios::binary);
+		REQUIRE(input.read(reinterpret_cast<char*>(&header), sizeof(header)));
+	}
+	const size_t newer_slot = header.index_descriptors[1].generation_le >
+		header.index_descriptors[0].generation_le ? 1u : 0u;
+	REQUIRE(header.index_descriptors[newer_slot].generation_le == 2u);
+
+	std::filesystem::copy_file(source_path, descriptor_path);
+	{
+		std::fstream file(descriptor_path, std::ios::binary | std::ios::in | std::ios::out);
+		const uint64_t offset = offsetof(FileHeaderDisk, index_descriptors) +
+			newer_slot * sizeof(AshEngine::TerrainContainerFormat::IndexDescriptorDisk) +
+			offsetof(AshEngine::TerrainContainerFormat::IndexDescriptorDisk, index_crc32_le);
+		file.seekg(static_cast<std::streamoff>(offset));
+		char value = 0;
+		REQUIRE(file.read(&value, 1));
+		value ^= 0x5a;
+		file.seekp(static_cast<std::streamoff>(offset));
+		REQUIRE(file.write(&value, 1));
+	}
+
+	std::filesystem::copy_file(source_path, truncate_path);
+	const auto& newer = header.index_descriptors[newer_slot];
+	std::filesystem::resize_file(
+		truncate_path, newer.index_offset_le + newer.index_size_le / 2u);
+
+	std::filesystem::copy_file(source_path, both_path);
+	{
+		std::fstream file(both_path, std::ios::binary | std::ios::in | std::ios::out);
+		for (size_t slot = 0u; slot < 2u; ++slot)
+		{
+			const uint64_t offset = offsetof(FileHeaderDisk, index_descriptors) +
+				slot * sizeof(AshEngine::TerrainContainerFormat::IndexDescriptorDisk) +
+				offsetof(AshEngine::TerrainContainerFormat::IndexDescriptorDisk, index_crc32_le);
+			file.seekg(static_cast<std::streamoff>(offset));
+			char value = 0;
+			REQUIRE(file.read(&value, 1));
+			value ^= static_cast<char>(0x33 + slot);
+			file.seekp(static_cast<std::streamoff>(offset));
+			REQUIRE(file.write(&value, 1));
+		}
+	}
+
+	for (const auto& path : { descriptor_path, truncate_path })
+	{
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+		AshEngine::TerrainContainerLoadReport report{};
+		error.clear();
+		CHECK(AshEngine::load_terrain_container(path, loaded, &report, &error) ==
+			AshEngine::TerrainContainerResult::RecoveredPreviousGeneration);
+		REQUIRE(loaded);
+		CHECK(loaded->content_generation == 1u);
+		CHECK(report.loaded_generation == 1u);
+		CHECK(report.recovered_previous_generation);
+	}
+	{
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+		error.clear();
+		CHECK(AshEngine::load_terrain_container(both_path, loaded, nullptr, &error) ==
+			AshEngine::TerrainContainerResult::Corrupt);
+		CHECK_FALSE(loaded);
+		CHECK_FALSE(error.empty());
+	}
+
+	for (const auto& path : { source_path, descriptor_path, truncate_path, both_path })
+	{
+		std::filesystem::remove(path);
+	}
+}
+
+TEST_CASE("Terrain container incremental validation failure preserves committed bytes")
+{
+	const std::filesystem::path path = TestDirectory() / "incremental-preserve.AshTerrain";
+	std::filesystem::remove(path);
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+	const std::vector<uint8_t> before = ReadAllBytes(path);
+	const AdvancedGeneration generation_two = AdvanceGeneration(generation_one, 2u, 1.0f);
+	auto invalid_dirty = generation_two.dirty;
+	invalid_dirty.content_generation = 1u;
+	CHECK(AshEngine::save_terrain_container_incremental(
+		path, *generation_two.snapshot, { invalid_dirty }, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::InvalidData);
+	CHECK(ReadAllBytes(path) == before);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	CHECK(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	CHECK(loaded->content_generation == 1u);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container optimize compacts generations atomically and idempotently")
+{
+	const std::filesystem::path path = TestDirectory() / "optimize.AshTerrain";
+	std::filesystem::remove(path);
+	std::filesystem::remove(path.string() + ".optimize.tmp");
+	std::string error{};
+	auto current = MakeIncrementalSnapshot();
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *current, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+	for (uint64_t generation = 2u; generation <= 4u; ++generation)
+	{
+		const AdvancedGeneration next =
+			AdvanceGeneration(current, generation, static_cast<float>(generation));
+		REQUIRE(AshEngine::save_terrain_container_incremental(
+			path, *next.snapshot, { next.dirty }, nullptr, &error) ==
+			AshEngine::TerrainContainerResult::Success);
+		current = next.snapshot;
+	}
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> before{};
+	REQUIRE(AshEngine::load_terrain_container(path, before, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	const uint64_t size_before = std::filesystem::file_size(path);
+	AshEngine::TerrainContainerSaveReport report{};
+	REQUIRE(AshEngine::optimize_terrain_container(path, &report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	const uint64_t size_after = std::filesystem::file_size(path);
+	CHECK(size_after < size_before);
+	CHECK(report.previous_generation == 4u);
+	CHECK(report.committed_generation == 4u);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> after{};
+	REQUIRE(AshEngine::load_terrain_container(path, after, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(after);
+	CheckSnapshotLogicalEqual(*after, *before);
+	REQUIRE(AshEngine::optimize_terrain_container(path, &report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(std::filesystem::file_size(path) <= size_after);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> second{};
+	REQUIRE(AshEngine::load_terrain_container(path, second, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(second);
+	CheckSnapshotLogicalEqual(*second, *before);
 	std::filesystem::remove(path);
 }

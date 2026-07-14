@@ -301,6 +301,10 @@ namespace AshEngine
 			BlockRecordDisk record,
 			std::vector<uint8_t> decoded) -> bool
 		{
+			if (decoded.empty() || decoded.size() > k_max_decoded_block_size)
+			{
+				return false;
+			}
 			std::vector<uint8_t> rle{};
 			if (!encode_terrain_rle(decoded, rle))
 			{
@@ -354,7 +358,8 @@ namespace AshEngine
 				get_terrain_component_snapshot_rect(snapshot.layout, expected);
 			size_t sample_count = 0u;
 			if (rect.empty() || !(component.coord == expected) ||
-				component.content_generation != snapshot.content_generation ||
+				component.content_generation == 0u ||
+				component.content_generation > snapshot.content_generation ||
 				component.sample_width != rect.width() ||
 				component.sample_height != rect.height() ||
 				!checked_multiply(rect.width(), rect.height(), sample_count) ||
@@ -430,6 +435,7 @@ namespace AshEngine
 		auto validate_snapshot(
 			const TerrainAssetSnapshot& snapshot,
 			const std::vector<TerrainDirtyComponentPayload>& dirty_components,
+			bool require_all_components_current,
 			std::string* out_error) -> bool
 		{
 			if (snapshot.failed || snapshot.content_generation == 0u ||
@@ -558,14 +564,35 @@ namespace AshEngine
 			std::set<std::pair<uint16_t, uint16_t>> dirty_coords{};
 			for (const TerrainDirtyComponentPayload& dirty : dirty_components)
 			{
+				const size_t dirty_index =
+					static_cast<size_t>(dirty.coord.z) * snapshot.layout.component_count_x +
+					dirty.coord.x;
 				if (!dirty.component || dirty.content_generation != snapshot.content_generation ||
 					dirty.component->content_generation != snapshot.content_generation ||
 					!(dirty.coord == dirty.component->coord) ||
+					dirty.coord.x >= snapshot.layout.component_count_x ||
+					dirty.coord.z >= snapshot.layout.component_count_z ||
+					dirty_index >= snapshot.components.size() ||
+					snapshot.components[dirty_index] != dirty.component ||
 					!dirty_coords.insert({ dirty.coord.z, dirty.coord.x }).second ||
 					!valid_component(snapshot, dirty.coord, *dirty.component))
 				{
 					set_error(TerrainContainerResult::InvalidData, out_error,
 						"Terrain dirty component payload is invalid.");
+					return false;
+				}
+			}
+			for (const auto& component : snapshot.components)
+			{
+				const bool current =
+					component->content_generation == snapshot.content_generation;
+				const bool dirty = dirty_coords.find(
+					{ component->coord.z, component->coord.x }) != dirty_coords.end();
+				if ((require_all_components_current && !current) ||
+					(!require_all_components_current && current != dirty))
+				{
+					set_error(TerrainContainerResult::InvalidData, out_error,
+						"Terrain component generations do not match the dirty payload set.");
 					return false;
 				}
 			}
@@ -1191,7 +1218,8 @@ namespace AshEngine
 			const TerrainSampleRect rect =
 				get_terrain_component_snapshot_rect(state.snapshot->layout, component->coord);
 			size_t sample_count = 0u;
-			if (component->content_generation != state.snapshot->content_generation ||
+			if (component->content_generation == 0u ||
+				component->content_generation > state.snapshot->content_generation ||
 				component->sample_width != rect.width() || component->sample_height != rect.height() ||
 				!checked_multiply(rect.width(), rect.height(), sample_count))
 			{
@@ -1396,6 +1424,615 @@ namespace AshEngine
 			}
 			return TerrainContainerResult::Success;
 		}
+
+		struct IndexSelection
+		{
+			size_t slot = 0u;
+			IndexDescriptorDisk descriptor{};
+			std::vector<BlockRecordDisk> records{};
+			bool recovered_previous_generation = false;
+		};
+
+		auto select_live_index(
+			std::ifstream& input,
+			uint64_t file_size,
+			const FileHeaderDisk& header,
+			IndexSelection& out_selection,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			std::array<std::vector<BlockRecordDisk>, 2> records{};
+			std::array<bool, 2> valid{};
+			for (size_t slot = 0u; slot < valid.size(); ++slot)
+			{
+				std::string ignored{};
+				valid[slot] = load_records(
+					input, file_size, header.index_descriptors[slot], records[slot], &ignored) ==
+					TerrainContainerResult::Success;
+			}
+			if (!valid[0] && !valid[1])
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain container has no valid index descriptor.");
+			}
+			size_t selected = 0u;
+			if (!valid[0])
+			{
+				selected = 1u;
+			}
+			else if (valid[1] && header.index_descriptors[1].generation_le >
+				header.index_descriptors[0].generation_le)
+			{
+				selected = 1u;
+			}
+			const size_t other = 1u - selected;
+			out_selection.slot = selected;
+			out_selection.descriptor = header.index_descriptors[selected];
+			out_selection.records = std::move(records[selected]);
+			out_selection.recovered_previous_generation =
+				!valid[other] && header.index_descriptors[other].generation_le >
+					out_selection.descriptor.generation_le;
+			return TerrainContainerResult::Success;
+		}
+
+		auto find_record(
+			const std::vector<BlockRecordDisk>& records,
+			const BlockRecordDisk& key) -> const BlockRecordDisk*
+		{
+			const auto found = std::lower_bound(records.begin(), records.end(), key, record_less);
+			return found != records.end() && record_same_key(*found, key) ? &*found : nullptr;
+		}
+
+		auto exact_rect_equal(
+			const TerrainSampleRect& lhs,
+			const TerrainSampleRect& rhs) -> bool
+		{
+			return lhs.min_x == rhs.min_x && lhs.min_z == rhs.min_z &&
+				lhs.max_x_exclusive == rhs.max_x_exclusive &&
+				lhs.max_z_exclusive == rhs.max_z_exclusive;
+		}
+
+		auto exact_float_equal(float lhs, float rhs) -> bool
+		{
+			return std::memcmp(&lhs, &rhs, sizeof(float)) == 0;
+		}
+
+		auto decoded_base_equal(
+			const std::vector<uint8_t>& decoded,
+			const std::vector<uint16_t>& heights) -> bool
+		{
+			size_t expected_size = 0u;
+			if (!checked_multiply(heights.size(), sizeof(uint16_t), expected_size) ||
+				decoded.size() != expected_size)
+			{
+				return false;
+			}
+			for (size_t index = 0u; index < heights.size(); ++index)
+			{
+				const size_t offset = index * 2u;
+				const uint16_t value = static_cast<uint16_t>(decoded[offset]) |
+					(static_cast<uint16_t>(decoded[offset + 1u]) << 8u);
+				if (value != heights[index])
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		auto decoded_height_block_equal(
+			const std::vector<uint8_t>& decoded,
+			const TerrainSparseHeightBlock& block) -> bool
+		{
+			ByteReader reader(decoded);
+			TerrainSampleRect rect{};
+			uint32_t count = 0u;
+			if (!reader.get_u32(rect.min_x) || !reader.get_u32(rect.min_z) ||
+				!reader.get_u32(rect.max_x_exclusive) ||
+				!reader.get_u32(rect.max_z_exclusive) || !reader.get_u32(count) ||
+				!exact_rect_equal(rect, block.changed_rect) ||
+				count != block.values.size() || block.coverage.size() != block.values.size())
+			{
+				return false;
+			}
+			for (float expected : block.values)
+			{
+				float value = 0.0f;
+				if (!reader.get_float(value) || !exact_float_equal(value, expected))
+				{
+					return false;
+				}
+			}
+			for (float expected : block.coverage)
+			{
+				float value = 0.0f;
+				if (!reader.get_float(value) || !exact_float_equal(value, expected))
+				{
+					return false;
+				}
+			}
+			return reader.finished();
+		}
+
+		auto decoded_weight_block_equal(
+			const std::vector<uint8_t>& decoded,
+			const TerrainSparseWeightBlock& block) -> bool
+		{
+			ByteReader reader(decoded);
+			TerrainSampleRect rect{};
+			uint32_t count = 0u;
+			if (!reader.get_u32(rect.min_x) || !reader.get_u32(rect.min_z) ||
+				!reader.get_u32(rect.max_x_exclusive) ||
+				!reader.get_u32(rect.max_z_exclusive) || !reader.get_u32(count) ||
+				!exact_rect_equal(rect, block.changed_rect) ||
+				count != block.values.size() || block.coverage.size() != block.values.size())
+			{
+				return false;
+			}
+			for (const auto& expected_lanes : block.values)
+			{
+				for (float expected : expected_lanes)
+				{
+					float value = 0.0f;
+					if (!reader.get_float(value) || !exact_float_equal(value, expected))
+					{
+						return false;
+					}
+				}
+			}
+			for (float expected : block.coverage)
+			{
+				float value = 0.0f;
+				if (!reader.get_float(value) || !exact_float_equal(value, expected))
+				{
+					return false;
+				}
+			}
+			return reader.finished();
+		}
+
+		auto load_previous_terrain_metadata(
+			std::ifstream& input,
+			const std::vector<BlockRecordDisk>& records,
+			uint64_t expected_generation,
+			std::shared_ptr<TerrainAssetSnapshot>& out_metadata,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			LoadState state{};
+			for (const BlockRecordDisk& record : records)
+			{
+				const bool height = record.kind == static_cast<uint8_t>(BlockKind::EditHeight);
+				const bool weight = record.kind == static_cast<uint8_t>(BlockKind::EditWeight);
+				if (height || weight)
+				{
+					ExpectedEditRecordCount& expected =
+						state.expected_edit_records[record.layer_id];
+					if (height)
+					{
+						++expected.height_count;
+					}
+					else
+					{
+						++expected.weight_count;
+					}
+				}
+			}
+			const BlockRecordDisk metadata_key =
+				make_record(BlockKind::Metadata, nullptr, {}, 0u);
+			const BlockRecordDisk* metadata_record = find_record(records, metadata_key);
+			if (metadata_record == nullptr)
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"The previous terrain generation is missing metadata.");
+			}
+			std::vector<uint8_t> decoded{};
+			const TerrainContainerResult block_result =
+				decode_block(input, *metadata_record, decoded, out_error);
+			if (block_result != TerrainContainerResult::Success)
+			{
+				return block_result;
+			}
+			if (!decode_metadata(decoded, state) || !state.snapshot ||
+				state.snapshot->content_generation != expected_generation)
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"The previous terrain metadata is invalid.");
+			}
+			out_metadata = std::move(state.snapshot);
+			return TerrainContainerResult::Success;
+		}
+
+		auto build_incremental_generation_blocks(
+			std::ifstream& input,
+			const TerrainAssetSnapshot& snapshot,
+			const std::vector<TerrainDirtyComponentPayload>& dirty_components,
+			const std::vector<BlockRecordDisk>& previous_records,
+			std::vector<PendingBlock>& out_appended,
+			std::vector<BlockRecordDisk>& out_retained,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			std::vector<PendingBlock> appended{};
+			std::vector<BlockRecordDisk> retained{};
+			retained.reserve(previous_records.size());
+			const auto retain = [&](const BlockRecordDisk& key) -> TerrainContainerResult
+			{
+				const BlockRecordDisk* existing = find_record(previous_records, key);
+				if (existing == nullptr)
+				{
+					return set_error(TerrainContainerResult::Corrupt, out_error,
+						"The previous terrain generation is missing a live block.");
+				}
+				retained.push_back(*existing);
+				return TerrainContainerResult::Success;
+			};
+
+			std::vector<uint8_t> metadata{};
+			if (!serialize_metadata(snapshot, metadata) ||
+				!add_block(appended,
+					make_record(BlockKind::Metadata, nullptr, {}, 0u),
+					std::move(metadata)))
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Incremental terrain metadata cannot be encoded.");
+			}
+
+			const BlockRecordDisk base_key =
+				make_record(BlockKind::BaseHeight, nullptr, {}, 0u);
+			const BlockRecordDisk* previous_base = find_record(previous_records, base_key);
+			if (previous_base == nullptr)
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"The previous terrain generation is missing base heights.");
+			}
+			{
+				std::vector<uint8_t> decoded{};
+				const TerrainContainerResult block_result =
+					decode_block(input, *previous_base, decoded, out_error);
+				if (block_result != TerrainContainerResult::Success)
+				{
+					return block_result;
+				}
+				if (decoded_base_equal(decoded, *snapshot.base_heights))
+				{
+					retained.push_back(*previous_base);
+				}
+				else if (!add_block(
+					appended, base_key, serialize_base_heights(*snapshot.base_heights)))
+				{
+					return set_error(TerrainContainerResult::InvalidData, out_error,
+						"Incremental terrain base heights cannot be encoded.");
+				}
+			}
+
+			for (const TerrainEditLayer& layer : *snapshot.edit_layers)
+			{
+				for (size_t index = 0u; index < layer.height_blocks.size(); ++index)
+				{
+					const BlockRecordDisk key = make_record(
+						BlockKind::EditHeight, &layer.id,
+						layer.height_blocks[index].owner, static_cast<uint16_t>(index));
+					const BlockRecordDisk* existing = find_record(previous_records, key);
+					bool unchanged = false;
+					if (existing != nullptr)
+					{
+						std::vector<uint8_t> decoded{};
+						const TerrainContainerResult block_result =
+							decode_block(input, *existing, decoded, out_error);
+						if (block_result != TerrainContainerResult::Success)
+						{
+							return block_result;
+						}
+						unchanged = decoded_height_block_equal(
+							decoded, layer.height_blocks[index]);
+					}
+					if (unchanged)
+					{
+						retained.push_back(*existing);
+					}
+					else if (!add_block(
+						appended, key, serialize_height_block(layer.height_blocks[index])))
+					{
+						return set_error(TerrainContainerResult::InvalidData, out_error,
+							"Incremental terrain height edit cannot be encoded.");
+					}
+				}
+				for (size_t index = 0u; index < layer.weight_blocks.size(); ++index)
+				{
+					const BlockRecordDisk key = make_record(
+						BlockKind::EditWeight, &layer.id,
+						layer.weight_blocks[index].owner, static_cast<uint16_t>(index));
+					const BlockRecordDisk* existing = find_record(previous_records, key);
+					bool unchanged = false;
+					if (existing != nullptr)
+					{
+						std::vector<uint8_t> decoded{};
+						const TerrainContainerResult block_result =
+							decode_block(input, *existing, decoded, out_error);
+						if (block_result != TerrainContainerResult::Success)
+						{
+							return block_result;
+						}
+						unchanged = decoded_weight_block_equal(
+							decoded, layer.weight_blocks[index]);
+					}
+					if (unchanged)
+					{
+						retained.push_back(*existing);
+					}
+					else if (!add_block(
+						appended, key, serialize_weight_block(layer.weight_blocks[index])))
+					{
+						return set_error(TerrainContainerResult::InvalidData, out_error,
+							"Incremental terrain weight edit cannot be encoded.");
+					}
+				}
+			}
+
+			std::set<std::pair<uint16_t, uint16_t>> dirty_coords{};
+			for (const TerrainDirtyComponentPayload& dirty : dirty_components)
+			{
+				dirty_coords.insert({ dirty.coord.z, dirty.coord.x });
+			}
+			for (size_t index = 0u; index < snapshot.components.size(); ++index)
+			{
+				const TerrainComponentSnapshot& component = *snapshot.components[index];
+				const bool dirty = dirty_coords.find(
+					{ component.coord.z, component.coord.x }) != dirty_coords.end();
+				const std::array<BlockRecordDisk, 3> keys = {
+					make_record(BlockKind::ComposedComponent, nullptr, component.coord, 0u),
+					make_record(BlockKind::MinMax, nullptr, component.coord, 0u),
+					make_record(BlockKind::LodError, nullptr, component.coord, 0u)
+				};
+				if (!dirty)
+				{
+					for (const BlockRecordDisk& key : keys)
+					{
+						const TerrainContainerResult retain_result = retain(key);
+						if (retain_result != TerrainContainerResult::Success)
+						{
+							return retain_result;
+						}
+					}
+					continue;
+				}
+				if (!add_block(appended, keys[0], serialize_component(component)) ||
+					!add_block(appended, keys[1], serialize_min_max(component)) ||
+					!add_block(appended, keys[2], serialize_lod_error(component)))
+				{
+					return set_error(TerrainContainerResult::InvalidData, out_error,
+						"Incremental terrain component cannot be encoded.");
+				}
+			}
+
+			std::vector<BlockRecordDisk> logical_records = retained;
+			logical_records.reserve(retained.size() + appended.size());
+			for (const PendingBlock& block : appended)
+			{
+				logical_records.push_back(block.record);
+			}
+			std::sort(logical_records.begin(), logical_records.end(), record_less);
+			if (logical_records.empty() || logical_records.size() > k_max_index_records ||
+				std::adjacent_find(logical_records.begin(), logical_records.end(),
+					[](const BlockRecordDisk& lhs, const BlockRecordDisk& rhs)
+					{
+						return record_same_key(lhs, rhs);
+					}) != logical_records.end())
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Incremental terrain block set contains duplicate logical keys.");
+			}
+			out_appended.swap(appended);
+			out_retained.swap(retained);
+			return TerrainContainerResult::Success;
+		}
+
+		auto write_descriptor(
+			const std::filesystem::path& path,
+			size_t slot,
+			const IndexDescriptorDisk& descriptor) -> bool
+		{
+			std::fstream commit(path, std::ios::binary | std::ios::in | std::ios::out);
+			const uint64_t descriptor_offset = offsetof(FileHeaderDisk, index_descriptors) +
+				slot * sizeof(IndexDescriptorDisk);
+			commit.seekp(static_cast<std::streamoff>(descriptor_offset));
+			if (!commit.write(reinterpret_cast<const char*>(&descriptor), sizeof(descriptor)))
+			{
+				return false;
+			}
+			commit.flush();
+			const bool committed = commit.good();
+			commit.close();
+			return committed && flush_path(path);
+		}
+
+		auto write_full_container(
+			const std::filesystem::path& path,
+			const TerrainAssetSnapshot& snapshot,
+			std::vector<PendingBlock> blocks,
+			TerrainContainerSaveReport* out_report,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			std::error_code error_code{};
+			const std::filesystem::path parent = path.parent_path();
+			if (!parent.empty())
+			{
+				std::filesystem::create_directories(parent, error_code);
+				if (error_code)
+				{
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to create the terrain container directory.");
+				}
+			}
+
+			FileHeaderDisk header{};
+			header.magic = TerrainContainerFormat::k_magic;
+			header.version_le = TerrainContainerFormat::k_version;
+			header.endian_marker_le = TerrainContainerFormat::k_little_endian_marker;
+			header.header_size_le = sizeof(FileHeaderDisk);
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			if (!output.write(reinterpret_cast<const char*>(&header), sizeof(header)))
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to write the terrain container header.");
+			}
+			uint64_t offset = sizeof(FileHeaderDisk);
+			std::vector<BlockRecordDisk> records{};
+			records.reserve(blocks.size());
+			for (PendingBlock& block : blocks)
+			{
+				block.record.offset_le = offset;
+				if (block.stored.size() >
+						static_cast<size_t>(std::numeric_limits<std::streamsize>::max()) ||
+					!output.write(reinterpret_cast<const char*>(block.stored.data()),
+						static_cast<std::streamsize>(block.stored.size())) ||
+					!checked_add(offset, block.stored.size(), offset))
+				{
+					output.close();
+					std::filesystem::remove(path, error_code);
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to append a terrain block.");
+				}
+				records.push_back(block.record);
+			}
+			const uint64_t index_offset = offset;
+			const uint64_t index_size =
+				static_cast<uint64_t>(records.size()) * sizeof(BlockRecordDisk);
+			if (index_size >
+					static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()) ||
+				!output.write(reinterpret_cast<const char*>(records.data()),
+					static_cast<std::streamsize>(index_size)) ||
+				!checked_add(offset, index_size, offset))
+			{
+				output.close();
+				std::filesystem::remove(path, error_code);
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to append the terrain index.");
+			}
+			output.flush();
+			const bool flushed = output.good();
+			output.close();
+			if (!flushed || !flush_path(path))
+			{
+				std::filesystem::remove(path, error_code);
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to durably flush the terrain payload and index.");
+			}
+			IndexDescriptorDisk descriptor{};
+			descriptor.generation_le = snapshot.content_generation;
+			descriptor.index_offset_le = index_offset;
+			descriptor.index_size_le = index_size;
+			descriptor.index_crc32_le = TerrainContainerFormat::crc32(
+				reinterpret_cast<const uint8_t*>(records.data()),
+				static_cast<size_t>(index_size));
+			if (!write_descriptor(path, 0u, descriptor))
+			{
+				std::filesystem::remove(path, error_code);
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to durably commit the terrain index descriptor.");
+			}
+			if (out_report != nullptr)
+			{
+				out_report->previous_generation = 0u;
+				out_report->committed_generation = snapshot.content_generation;
+				out_report->bytes_appended = offset;
+				out_report->blocks_written = static_cast<uint32_t>(records.size());
+			}
+			return TerrainContainerResult::Success;
+		}
+
+		auto append_incremental_generation(
+			const std::filesystem::path& path,
+			const TerrainAssetSnapshot& snapshot,
+			const IndexSelection& previous,
+			uint64_t file_size,
+			std::vector<PendingBlock> appended,
+			std::vector<BlockRecordDisk> live_records,
+			TerrainContainerSaveReport* out_report,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			if (file_size >
+				static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max()))
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain container is too large to append safely.");
+			}
+			uint64_t offset = file_size;
+			std::fstream output(path, std::ios::binary | std::ios::in | std::ios::out);
+			if (!output.is_open())
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to open the terrain container for incremental append.");
+			}
+			output.seekp(static_cast<std::streamoff>(file_size));
+			if (!output.good())
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to seek to the incremental terrain append point.");
+			}
+			for (PendingBlock& block : appended)
+			{
+				block.record.offset_le = offset;
+				if (!output.write(reinterpret_cast<const char*>(block.stored.data()),
+						static_cast<std::streamsize>(block.stored.size())) ||
+					!checked_add(offset, block.stored.size(), offset))
+				{
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to append an incremental terrain block.");
+				}
+				live_records.push_back(block.record);
+			}
+			std::sort(live_records.begin(), live_records.end(), record_less);
+			if (live_records.empty() || live_records.size() > k_max_index_records ||
+				std::adjacent_find(live_records.begin(), live_records.end(),
+					[](const BlockRecordDisk& lhs, const BlockRecordDisk& rhs)
+					{
+						return record_same_key(lhs, rhs);
+					}) != live_records.end())
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Incremental terrain index contains duplicate logical keys.");
+			}
+			const uint64_t index_offset = offset;
+			const uint64_t index_size =
+				static_cast<uint64_t>(live_records.size()) * sizeof(BlockRecordDisk);
+			if (index_size >
+					static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()) ||
+				!output.write(reinterpret_cast<const char*>(live_records.data()),
+					static_cast<std::streamsize>(index_size)) ||
+				!checked_add(offset, index_size, offset))
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to append the merged terrain index.");
+			}
+			output.flush();
+			const bool flushed = output.good();
+			output.close();
+			if (!flushed || !flush_path(path))
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to durably flush the incremental terrain generation.");
+			}
+			IndexDescriptorDisk descriptor{};
+			descriptor.generation_le = snapshot.content_generation;
+			descriptor.index_offset_le = index_offset;
+			descriptor.index_size_le = index_size;
+			descriptor.index_crc32_le = TerrainContainerFormat::crc32(
+				reinterpret_cast<const uint8_t*>(live_records.data()),
+				static_cast<size_t>(index_size));
+			const size_t commit_slot = 1u - previous.slot;
+			if (!write_descriptor(path, commit_slot, descriptor))
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to durably commit the incremental terrain descriptor.");
+			}
+			if (out_report != nullptr)
+			{
+				out_report->previous_generation = previous.descriptor.generation_le;
+				out_report->committed_generation = snapshot.content_generation;
+				out_report->bytes_appended = offset - file_size;
+				out_report->blocks_written = static_cast<uint32_t>(appended.size());
+			}
+			return TerrainContainerResult::Success;
+		}
 	}
 
 	TerrainContainerResult save_terrain_container_incremental(
@@ -1413,28 +2050,139 @@ namespace AshEngine
 		{
 			out_error->clear();
 		}
-		if (path.empty() || !validate_snapshot(snapshot, dirty_components, out_error))
+		if (path.empty())
 		{
 			return set_error(TerrainContainerResult::InvalidData, out_error,
-				out_error != nullptr && !out_error->empty()
-					? *out_error : "Terrain container path or snapshot is invalid.");
+				"Terrain container path is invalid.");
 		}
 
 		std::error_code error_code{};
-		if (std::filesystem::exists(path, error_code))
-		{
-			return set_error(TerrainContainerResult::InvalidData, out_error,
-				"Generation-one save requires a new terrain container.");
-		}
+		const bool exists = std::filesystem::exists(path, error_code);
 		if (error_code)
 		{
 			return set_error(TerrainContainerResult::IoFailure, out_error,
 				"Failed to inspect the terrain container path.");
 		}
+		if (!validate_snapshot(snapshot, dirty_components, !exists, out_error))
+		{
+			return TerrainContainerResult::InvalidData;
+		}
+
+		if (exists)
+		{
+			try
+			{
+				const uint64_t file_size = std::filesystem::file_size(path, error_code);
+				if (error_code || file_size < sizeof(FileHeaderDisk))
+				{
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to inspect the existing terrain container.");
+				}
+				std::ifstream input(path, std::ios::binary);
+				FileHeaderDisk header{};
+				if (!input.read(reinterpret_cast<char*>(&header), sizeof(header)))
+				{
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to read the existing terrain header.");
+				}
+				if (header.magic != TerrainContainerFormat::k_magic)
+				{
+					return set_error(TerrainContainerResult::Corrupt, out_error,
+						"Terrain container magic is invalid.");
+				}
+				if (header.version_le != TerrainContainerFormat::k_version ||
+					header.endian_marker_le != TerrainContainerFormat::k_little_endian_marker)
+				{
+					return set_error(TerrainContainerResult::UnsupportedVersion, out_error,
+						"Terrain container version or byte order is unsupported.");
+				}
+				if (header.header_size_le != sizeof(FileHeaderDisk) || header.reserved_le != 0u ||
+					std::any_of(header.reserved_bytes.begin(), header.reserved_bytes.end(),
+						[](uint8_t byte) { return byte != 0u; }))
+				{
+					return set_error(TerrainContainerResult::Corrupt, out_error,
+						"Terrain container header fields are invalid.");
+				}
+				IndexSelection previous{};
+				const TerrainContainerResult selection_result =
+					select_live_index(input, file_size, header, previous, out_error);
+				if (selection_result != TerrainContainerResult::Success)
+				{
+					return selection_result;
+				}
+				std::shared_ptr<TerrainAssetSnapshot> previous_metadata{};
+				const TerrainContainerResult metadata_result = load_previous_terrain_metadata(
+					input, previous.records, previous.descriptor.generation_le,
+					previous_metadata, out_error);
+				if (metadata_result != TerrainContainerResult::Success)
+				{
+					return metadata_result;
+				}
+				if (!previous_metadata ||
+					snapshot.content_generation <= previous_metadata->content_generation)
+				{
+					return set_error(TerrainContainerResult::InvalidData, out_error,
+						"Incremental terrain generation must increase monotonically.");
+				}
+				const auto same_layout = [](const TerrainGridLayout& lhs,
+					const TerrainGridLayout& rhs)
+				{
+					return lhs.sample_count_x == rhs.sample_count_x &&
+						lhs.sample_count_z == rhs.sample_count_z &&
+						lhs.component_count_x == rhs.component_count_x &&
+						lhs.component_count_z == rhs.component_count_z &&
+						lhs.component_quad_count == rhs.component_quad_count &&
+						lhs.sample_spacing_meters == rhs.sample_spacing_meters;
+				};
+				if (!same_layout(snapshot.layout, previous_metadata->layout) ||
+					snapshot.height_mapping.height_offset !=
+						previous_metadata->height_mapping.height_offset ||
+					snapshot.height_mapping.height_range !=
+						previous_metadata->height_mapping.height_range)
+				{
+					return set_error(TerrainContainerResult::InvalidData, out_error,
+						"Incremental terrain save cannot change the grid or height mapping.");
+				}
+				std::vector<PendingBlock> appended{};
+				std::vector<BlockRecordDisk> retained{};
+				const TerrainContainerResult build_result =
+					build_incremental_generation_blocks(
+						input, snapshot, dirty_components, previous.records,
+						appended, retained, out_error);
+				if (build_result != TerrainContainerResult::Success)
+				{
+					return build_result;
+				}
+				return append_incremental_generation(
+					path, snapshot, previous, file_size,
+					std::move(appended), std::move(retained), out_report, out_error);
+			}
+			catch (const std::bad_alloc&)
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain container allocation failed.");
+			}
+			catch (const std::length_error&)
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain container data exceeds supported limits.");
+			}
+			catch (const std::filesystem::filesystem_error&)
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Terrain container filesystem operation failed.");
+			}
+		}
 
 		try
 		{
 			std::vector<PendingBlock> blocks{};
+			if (snapshot.components.size() >
+					(std::numeric_limits<size_t>::max() - 2u) / 3u)
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain block count exceeds supported limits.");
+			}
 			blocks.reserve(2u + snapshot.components.size() * 3u);
 			if (!build_generation_one_blocks(snapshot, blocks) ||
 				blocks.empty() || blocks.size() > k_max_index_records)
@@ -1625,13 +2373,14 @@ namespace AshEngine
 					"Terrain container header fields are invalid.");
 			}
 
-			std::vector<BlockRecordDisk> records{};
-			const TerrainContainerResult index_result = load_records(
-				input, file_size, header.index_descriptors[0], records, out_error);
+			IndexSelection selection{};
+			const TerrainContainerResult index_result = select_live_index(
+				input, file_size, header, selection, out_error);
 			if (index_result != TerrainContainerResult::Success)
 			{
 				return index_result;
 			}
+			std::vector<BlockRecordDisk>& records = selection.records;
 
 			LoadState state{};
 			for (const BlockRecordDisk& record : records)
@@ -1675,7 +2424,7 @@ namespace AshEngine
 			if (!state.metadata_seen || !state.base_seen || !state.snapshot ||
 				!state.base_heights || !state.edit_layers ||
 				state.snapshot->content_generation !=
-					header.index_descriptors[0].generation_le)
+					selection.descriptor.generation_le)
 			{
 				return set_error(TerrainContainerResult::Corrupt, out_error,
 					"Terrain container is missing an immutable source block.");
@@ -1722,10 +2471,14 @@ namespace AshEngine
 			out_snapshot = std::move(published);
 			if (out_report != nullptr)
 			{
-				out_report->loaded_generation = header.index_descriptors[0].generation_le;
+				out_report->loaded_generation = selection.descriptor.generation_le;
+				out_report->recovered_previous_generation =
+					selection.recovered_previous_generation;
 				out_report->decoded_block_count = decoded_count;
 			}
-			return TerrainContainerResult::Success;
+			return selection.recovered_previous_generation
+				? TerrainContainerResult::RecoveredPreviousGeneration
+				: TerrainContainerResult::Success;
 		}
 		catch (const std::bad_alloc&)
 		{
@@ -1745,7 +2498,7 @@ namespace AshEngine
 	}
 
 	TerrainContainerResult optimize_terrain_container(
-		const std::filesystem::path&,
+		const std::filesystem::path& path,
 		TerrainContainerSaveReport* out_report,
 		std::string* out_error)
 	{
@@ -1757,7 +2510,110 @@ namespace AshEngine
 		{
 			out_error->clear();
 		}
-		return set_error(TerrainContainerResult::InvalidData, out_error,
-			"Terrain container optimize requires append-only generation support.");
+		if (path.empty())
+		{
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"Terrain container path is empty.");
+		}
+		std::filesystem::path temporary = path;
+		temporary += ".optimize.tmp";
+		std::error_code error_code{};
+		std::filesystem::remove(temporary, error_code);
+		try
+		{
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+			TerrainContainerLoadReport load_report{};
+			const TerrainContainerResult load_result =
+				load_terrain_container(path, snapshot, &load_report, out_error);
+			if (load_result != TerrainContainerResult::Success &&
+				load_result != TerrainContainerResult::RecoveredPreviousGeneration)
+			{
+				return load_result;
+			}
+			if (!snapshot)
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain optimize could not resolve a live snapshot.");
+			}
+			std::vector<PendingBlock> blocks{};
+			if (snapshot->components.size() >
+					(std::numeric_limits<size_t>::max() - 2u) / 3u)
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain block count exceeds supported limits.");
+			}
+			blocks.reserve(2u + snapshot->components.size() * 3u);
+			if (!build_generation_one_blocks(*snapshot, blocks) || blocks.empty() ||
+				blocks.size() > k_max_index_records)
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain optimize could not rebuild the live block set.");
+			}
+			TerrainContainerSaveReport compact_report{};
+			const TerrainContainerResult write_result = write_full_container(
+				temporary, *snapshot, std::move(blocks), &compact_report, out_error);
+			if (write_result != TerrainContainerResult::Success)
+			{
+				std::filesystem::remove(temporary, error_code);
+				return write_result;
+			}
+			std::shared_ptr<const TerrainAssetSnapshot> validated{};
+			TerrainContainerLoadReport validated_report{};
+			if (load_terrain_container(
+					temporary, validated, &validated_report, out_error) !=
+					TerrainContainerResult::Success || !validated ||
+				validated_report.loaded_generation != load_report.loaded_generation ||
+				validated->components.size() != snapshot->components.size())
+			{
+				std::filesystem::remove(temporary, error_code);
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Optimized terrain container failed validation.");
+			}
+
+#if defined(_WIN32)
+			const BOOL replaced = std::filesystem::exists(path)
+				? ReplaceFileW(
+					path.c_str(), temporary.c_str(), nullptr,
+					REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)
+				: MoveFileExW(
+					temporary.c_str(), path.c_str(),
+					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+			if (replaced == FALSE)
+#else
+			std::filesystem::rename(temporary, path, error_code);
+			if (error_code)
+#endif
+			{
+				std::filesystem::remove(temporary, error_code);
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to atomically replace the terrain container.");
+			}
+			if (out_report != nullptr)
+			{
+				out_report->previous_generation = load_report.loaded_generation;
+				out_report->committed_generation = load_report.loaded_generation;
+				out_report->bytes_appended = compact_report.bytes_appended;
+				out_report->blocks_written = compact_report.blocks_written;
+			}
+			return TerrainContainerResult::Success;
+		}
+		catch (const std::bad_alloc&)
+		{
+			std::filesystem::remove(temporary, error_code);
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"Terrain optimize allocation failed.");
+		}
+		catch (const std::length_error&)
+		{
+			std::filesystem::remove(temporary, error_code);
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"Terrain optimize data exceeds supported limits.");
+		}
+		catch (const std::filesystem::filesystem_error&)
+		{
+			std::filesystem::remove(temporary, error_code);
+			return set_error(TerrainContainerResult::IoFailure, out_error,
+				"Terrain optimize filesystem operation failed.");
+		}
 	}
 }
