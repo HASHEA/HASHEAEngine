@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-14
 status: active
 ---
 
@@ -40,6 +40,7 @@ status: active
 - 线程：`initialize_threading(EngineThreadingConfig)`；`register_current_thread_role` + `is_in_render/logic/worker_thread` 判定；跨线程投递用 `enqueue_render_command` / `pump_render_commands` / `flush_render_commands`；后台任务用 `dispatch_background_task`。
 - 配置：`IniConfig::load` + `has_value/get_string/get_bool/try_get_bool`；路径经 `resolve_runtime_config_path` 解析。
 - 服务：`Service` 子类声明 `static constexpr const char* k_name` 与 `ASH_DECLARE_SERVICE`；`ServiceManager::get<T>()` 按 `k_name` 哈希惰性注册并返回单例。
+- 字符串存储：`StringBuffer` / `StringArray` 必须先 `init` 后使用，`shutdown` 可重复调用；`m_uCurrentSize` 永不超过 `m_uBufferSize`，无法容纳完整写入（含 packed string 的终止符）时保持原状态并失败。`StringArray` 的 map/iterator 与字符区共享一个对齐分配块，shutdown 先析构内部对象再释放；intern 命中 hash 后仍比较字符串内容，碰撞不得把不同字符串别名为同一项。
 
 ## 约束与不变式
 
@@ -64,3 +65,4 @@ status: active
 - `docs/sdd/SDD-2026-07-08-selftest-base-migration.md`：EngineSelfTests Base 域 9 用例迁出 doctest（`tests/Base/hassert|hmemory|hfile_tests.cpp`）；`HeapAllocator/StackAllocator/LinearAllocator` 与 hfile 四函数补 `ASH_API`；`MemoryService` 新增 `is_initialized()`，TestMain 进程级 init/shutdown 服务。
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：自动化契约测试继续由 Tests.exe 的 legacy bridge 覆盖。
 - [SDD-2026-07-12-logic-input-consumption](../../sdd/SDD-2026-07-12-logic-input-consumption.md)：定义跨线程输入快照的批次合并与一次性瞬态消费语义。
+- [SDD-2026-07-13-base-string-storage-safety](../../sdd/SDD-2026-07-13-base-string-storage-safety.md)：收紧 `StringBuffer` / `StringArray` 容量边界、allocator/lifetime 配对与 hash collision 正确性。
