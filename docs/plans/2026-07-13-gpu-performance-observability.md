@@ -1,6 +1,8 @@
 # GPU Performance Observability Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+**Status:** Done（2026-07-14；Phase 0 candidate 与全部验证完成，未 bless baseline/golden）。
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 在不实现植被的前提下，为 Vulkan/DX12 建立按需启用、无同帧 CPU wait 的结构化 GPU timing，并让 PerfGate 以固定 2560×1440 Release 全管线场景产出可归因的候选基线报告。
 
@@ -57,7 +59,7 @@ public:
 - Create: `project/src/tests/Function/gpu_timing_telemetry_tests.cpp`
 - Modify: `project/src/engine/Graphics/GraphicsContext.h`
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 Add doctest cases for:
 
@@ -77,7 +79,7 @@ TEST_CASE("GPU timing ticks convert to milliseconds with double precision");
 
 Expected failure: headers/types/helpers do not exist.
 
-- [ ] **Step 2: Run the focused test and confirm RED**
+- [x] **Step 2: Run the focused test and confirm RED**
 
 Run:
 
@@ -88,7 +90,7 @@ RunTests.bat Debug --test-case="GPU timing*"
 
 Expected: build/test failure caused only by the missing timing contract.
 
-- [ ] **Step 3: Implement the smallest backend-neutral contract**
+- [x] **Step 3: Implement the smallest backend-neutral contract**
 
 Use fixed-capacity types only:
 
@@ -116,7 +118,7 @@ bool enableGpuTimingTelemetry = false;
 
 Add a default-null virtual getter to `GraphicsContext`; disabled mode must not create a telemetry object.
 
-- [ ] **Step 4: Run tests and architecture gate**
+- [x] **Step 4: Run tests and architecture gate**
 
 ```bat
 RunTests.bat Debug --test-case="GPU timing*"
@@ -125,7 +127,7 @@ RunArchGate.bat
 
 Expected: PASS; no Function/Graphics dependency reversal.
 
-- [ ] **Step 5: Commit the common contract**
+- [x] **Step 5: Commit the common contract**
 
 ```bat
 git add project/src/engine/Graphics/GpuTimingTelemetryRHI.h project/src/engine/Graphics/GpuTimingTelemetryRHI.cpp project/src/engine/Graphics/GraphicsContext.h project/src/tests/Function/gpu_timing_telemetry_tests.cpp
@@ -143,7 +145,7 @@ git commit -m "feat(graphics): add gpu timing telemetry contract"
 - Modify: `project/src/engine/Function/Diagnostics/PerfGate.cpp`
 - Modify: `project/src/tests/Function/application_automation_tests.cpp`
 
-- [ ] **Step 1: Write failing CLI and ordering tests**
+- [x] **Step 1: Write failing CLI and ordering tests**
 
 Append tests to the existing EntryPoint test translation unit; do not include `EntryPoint.h` from a second test file.
 
@@ -160,7 +162,7 @@ only one dimension / zero / negative / > uint16 max      -> fatal parse result
 
 Add a source-order regression assertion that PerfGate/extent/scene/runtime overrides are injected before `application->initialize()`.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="*PerfGate launch*"
@@ -168,7 +170,7 @@ RunTests.bat Debug --test-case="*PerfGate launch*"
 
 Expected: new arguments/order are unsupported.
 
-- [ ] **Step 3: Implement strict parsing and pre-init injection**
+- [x] **Step 3: Implement strict parsing and pre-init injection**
 
 Extend `PerfGateConfig` with GPU timing, drain, validation and vsync override fields. Add one paired extent parser with range checking; reject half-specified dimensions rather than falling back.
 
@@ -194,7 +196,7 @@ parse rhi/perf/extent/scene/runtime options
 
 Keep CLI overrides process-local; never rewrite `product/config/Engine.ini`.
 
-- [ ] **Step 4: Verify parser and startup behavior**
+- [x] **Step 4: Verify parser and startup behavior**
 
 ```bat
 RunTests.bat Debug --test-case="*PerfGate launch*"
@@ -204,7 +206,7 @@ run.bat sandbox vulkan Debug --smoke-test-seconds=30 --window-width=2560 --windo
 
 Expected: tests/build/smoke PASS; log reports 2560×1440 and the requested vsync/validation values.
 
-- [ ] **Step 5: Commit launch contract**
+- [x] **Step 5: Commit launch contract**
 
 ```bat
 git add project/src/engine/EntryPoint.h project/src/engine/Function/Application.h project/src/engine/Function/Application.cpp project/src/engine/Function/Diagnostics/PerfGate.h project/src/engine/Function/Diagnostics/PerfGate.cpp project/src/tests/Function/application_automation_tests.cpp
@@ -221,7 +223,7 @@ git commit -m "feat(perf): configure gpu timing before rhi init"
 - Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.cpp`
 - Modify: `project/src/tests/Function/gpu_timing_telemetry_tests.cpp`
 
-- [ ] **Step 1: Add failing Vulkan-independent edge tests**
+- [x] **Step 1: Add failing Vulkan-independent edge tests**
 
 Use the common frame-state/conversion seam to cover:
 
@@ -234,13 +236,13 @@ ring slot still Pending                         -> no overwrite
 aborted/unsubmitted frame                       -> no valid sample
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="GPU timing Vulkan*"
 ```
 
-- [ ] **Step 3: Implement the Vulkan backend**
+- [x] **Step 3: Implement the Vulkan backend**
 
 Create one context-owned `VkQueryPool` with 66 timestamp slots, segmented by the existing three backend frame slots. Persist:
 
@@ -265,7 +267,7 @@ Hook `resolve_recycled_slot(currentFrame)` after the existing timeline wait or f
 
 Do not reuse Tracy query storage and do not change Tracy enablement. Disabled mode creates no *new structured-telemetry* query pool.
 
-- [ ] **Step 4: Add static no-wait checks and build**
+- [x] **Step 4: Add static no-wait checks and build**
 
 ```powershell
 rg -n "VK_QUERY_RESULT_WAIT_BIT|vkDeviceWaitIdle|wait_for_frame_completion" project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.*
@@ -281,7 +283,7 @@ build_sandbox.bat Debug
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Vulkan implementation**
+- [x] **Step 5: Commit Vulkan implementation**
 
 ```bat
 git add project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.h project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.cpp project/src/engine/Graphics/Vulkan/VulkanContext.h project/src/engine/Graphics/Vulkan/VulkanContext.cpp project/src/tests/Function/gpu_timing_telemetry_tests.cpp
@@ -300,21 +302,21 @@ git commit -m "feat(vulkan): add nonblocking gpu timing telemetry"
 - Modify: `project/src/engine/Graphics/DirectX12/DX12Fence.cpp`
 - Modify: `project/src/tests/Function/gpu_timing_telemetry_tests.cpp`
 
-- [ ] **Step 1: Add failing DX12-independent edge tests**
+- [x] **Step 1: Add failing DX12-independent edge tests**
 
 Cover frequency failure/zero, 64-bit tick conversion, fence Pending, `UINT64_MAX` device removed, exact command-list submit, readback offset/capacity and skipped submit.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="GPU timing DX12*"
 ```
 
-- [ ] **Step 3: Make frame-fence signal observable**
+- [x] **Step 3: Make frame-fence signal observable**
 
 Change `DX12Fence::signal` to report HRESULT success and the signaled target value. Update all callers explicitly; do not silently convert a failed signal into Pending forever.
 
-- [ ] **Step 4: Implement the DX12 backend**
+- [x] **Step 4: Implement the DX12 backend**
 
 Create one 66-entry `D3D12_QUERY_HEAP_TYPE_TIMESTAMP` heap and one persistently mapped, segmented readback resource. Query heap has no reset command: issue only `EndQuery`. At `end_frame`, resolve only the contiguous range actually issued, after the last timestamp and before command-list close.
 
@@ -322,7 +324,7 @@ Use the direct graphics queue `GetTimestampFrequency()` once during enabled init
 
 Do not reuse the staging pool, descriptor heaps or Tracy private heap/fence.
 
-- [ ] **Step 5: Prove poll is nonblocking and build both configurations**
+- [x] **Step 5: Prove poll is nonblocking and build both configurations**
 
 ```powershell
 rg -n "wait_idle|WaitForSingleObject|\.wait\(" project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.*
@@ -336,7 +338,7 @@ build_sandbox.bat Debug
 build_sandbox.bat Release
 ```
 
-- [ ] **Step 6: Commit DX12 implementation**
+- [x] **Step 6: Commit DX12 implementation**
 
 ```bat
 git add project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.h project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.cpp project/src/engine/Graphics/DirectX12/DX12Context.h project/src/engine/Graphics/DirectX12/DX12Context.cpp project/src/engine/Graphics/DirectX12/DX12Fence.h project/src/engine/Graphics/DirectX12/DX12Fence.cpp project/src/tests/Function/gpu_timing_telemetry_tests.cpp
@@ -361,7 +363,7 @@ git commit -m "feat(dx12): add nonblocking gpu timing telemetry"
 - Modify: `project/src/tests/Function/gpu_timing_telemetry_tests.cpp`
 - Modify: `project/src/tests/Function/render_graph_gpu_metric_tests.cpp`
 
-- [ ] **Step 1: Add failing lifecycle tests with a fake telemetry object**
+- [x] **Step 1: Add failing lifecycle tests with a fake telemetry object**
 
 Test the shared recording coordinator for:
 
@@ -378,13 +380,13 @@ completed queue may return up to ring depth  -> fixed-capacity transport, no vec
 
 The RED suite must distinguish safe abort from uncertain execution. It must mechanically prove that an unprovable submission cannot make the physical query/readback slot reusable, even though it is excluded from the pollable Pending queue and from PerfGate `submitted`.
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="GPU timing lifecycle*"
 ```
 
-- [ ] **Step 3: Record `GPU.Frame` in the main command buffer**
+- [x] **Step 3: Record `GPU.Frame` in the main command buffer**
 
 In `RenderDevice::begin_frame()`, start timing only after swapchain acquire succeeds and `begin_record()` returns true. Use `RenderDevice::Impl::frame_index` as the canonical successful render frame ID; never use Vulkan/DX12 backend slot counters.
 
@@ -392,7 +394,7 @@ In `RenderDevice::end_frame()`, close `GPU.Frame` and record backend resolve bef
 
 Backend submission records a binding only after the exact command buffer enters the executed batch and its completion primitive is established. `RenderDevice` calls `commit_frame` after backend `end_frame`; the returned boolean is the sole submitted acknowledgement surfaced to `RendererFrameStats`. A failed acknowledgement must not create Pending work: safely unsubmitted recordings are aborted, while an unprovable execution/completion state quarantines the slot/resource.
 
-- [ ] **Step 4: Drain completed samples into fixed Renderer stats**
+- [x] **Step 4: Drain completed samples into fixed Renderer stats**
 
 Extend `RendererFrameStats` with:
 
@@ -405,7 +407,7 @@ uint32_t completed_gpu_sample_count = 0;
 
 At renderer begin/end timing completion, poll until `Ready` is exhausted; stop immediately on `Pending` or `Empty`. Copy samples and the exact commit acknowledgement into `m_last_completed_frame_stats` before `Application` calls `PerfGateController::sample_after_frame()`. Task 7 records a submitted frame ID only when `gpu_timing_frame_submitted` is true.
 
-- [ ] **Step 5: Run focused tests and dual-backend smoke**
+- [x] **Step 5: Run focused tests and dual-backend smoke**
 
 ```bat
 RunTests.bat Debug --test-case="GPU timing*"
@@ -415,7 +417,7 @@ run.bat sandbox dx12 Debug --run-for-seconds=20 --perf-gate --perf-gate-gpu-timi
 
 Expected: no hang; samples show delayed frame IDs; no validation/debug-layer errors.
 
-- [ ] **Step 6: Commit frame lifecycle integration**
+- [x] **Step 6: Commit frame lifecycle integration**
 
 ```bat
 git add project/src/engine/Graphics/GpuTimingTelemetryRHI.h project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.h project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.cpp project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.h project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.cpp project/src/engine/Function/Render/RenderDevice.h project/src/engine/Function/Render/RenderDevice.cpp project/src/engine/Function/Render/Renderer.h project/src/engine/Function/Render/Renderer.cpp project/src/engine/Graphics/Vulkan/VulkanContext.cpp project/src/engine/Graphics/DirectX12/DX12Context.cpp project/src/tests/Function/gpu_timing_telemetry_tests.cpp project/src/tests/Function/render_graph_gpu_metric_tests.cpp
@@ -446,7 +448,7 @@ git commit -m "feat(render): collect delayed gpu frame timings"
 - Modify: `project/src/engine/Function/Render/TemporalAAPass.cpp`
 - Modify: `project/src/engine/Function/Render/VolumetricLightingPass.cpp`
 
-- [ ] **Step 1: Write failing RenderGraph metadata/cache tests**
+- [x] **Step 1: Write failing RenderGraph metadata/cache tests**
 
 Add tests proving:
 
@@ -459,19 +461,19 @@ metric change or end-of-graph closes the active scope
 disabled telemetry makes zero begin/end calls
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="RenderGraph GPU metric*"
 ```
 
-- [ ] **Step 3: Add explicit pass metric to the API**
+- [x] **Step 3: Add explicit pass metric to the API**
 
 Add `RHI::GpuTimingMetric timing_metric` to `RenderGraphPassNode`. Make it a required argument to both `add_raster_pass` and `add_compute_pass`; do not provide a default that lets new passes silently omit classification. Use `Untracked` only after an explicit call-site decision.
 
 Include the metric in compiler topology hash/cache equality.
 
-- [ ] **Step 4: Emit scopes around compiled live pass groups**
+- [x] **Step 4: Emit scopes around compiled live pass groups**
 
 In `RenderGraphExecutor`, transition scopes from the compiled live-pass sequence, not around graph-building calls. End an active raster pass before changing metric. Always close a group on execute failure.
 
@@ -490,7 +492,7 @@ Assign all current call sites:
 | TemporalAA | TemporalAAPass |
 | ToneMapAndOverlays | PostProcessToneMapPass, RenderDebugView, overlay/composite passes |
 
-- [ ] **Step 5: Run tests, arch gate and RenderGate**
+- [x] **Step 5: Run tests, arch gate and RenderGate**
 
 ```bat
 RunTests.bat Debug --test-case="RenderGraph GPU metric*"
@@ -500,7 +502,7 @@ RunRenderGate.bat
 
 Expected: all PASS; telemetry is off in RenderGate and images remain unchanged. Do not bless.
 
-- [ ] **Step 6: Commit RenderGraph metric integration**
+- [x] **Step 6: Commit RenderGraph metric integration**
 
 ```bat
 git add project/src/engine/Function/Render/RenderGraphPass.h project/src/engine/Function/Render/RenderGraphBuilder.h project/src/engine/Function/Render/RenderGraphBuilder.cpp project/src/engine/Function/Render/RenderGraphCompiler.cpp project/src/engine/Function/Render/RenderGraphExecutor.cpp project/src/engine/Function/Render/SceneRenderer.cpp project/src/engine/Function/Render/AmbientOcclusionPass.cpp project/src/engine/Function/Render/BloomPass.cpp project/src/engine/Function/Render/DeferredLightingPass.cpp project/src/engine/Function/Render/DirectionalLightShadowPass.cpp project/src/engine/Function/Render/EnvironmentLightingPass.cpp project/src/engine/Function/Render/ParticleSystemPass.cpp project/src/engine/Function/Render/PostProcessToneMapPass.cpp project/src/engine/Function/Render/RenderDebugView.cpp project/src/engine/Function/Render/SkyBackgroundPass.cpp project/src/engine/Function/Render/SunLightShadowPass.cpp project/src/engine/Function/Render/TemporalAAPass.cpp project/src/engine/Function/Render/VolumetricLightingPass.cpp project/src/tests/Function/render_graph_gpu_metric_tests.cpp
@@ -519,7 +521,7 @@ Before committing, inspect `git diff --cached --name-only` and ensure every stag
 - Modify: `project/src/engine/Function/Application.cpp`
 - Modify: `project/src/engine/Function/Render/Renderer.h`
 
-- [ ] **Step 1: Write failing pure-data and state-machine tests**
+- [x] **Step 1: Write failing pure-data and state-machine tests**
 
 Cover:
 
@@ -536,19 +538,19 @@ schema v2 retains every schema v1 CPU field
 11 metric summaries expose avg/p50/p95/p99/min/max
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="PerfGate GPU*"
 ```
 
-- [ ] **Step 3: Implement the controller state machine**
+- [x] **Step 3: Implement the controller state machine**
 
 Use explicit `Warmup`, `Sampling`, `Draining`, `Complete`. Record submitted renderer frame IDs, accept resolved samples by their own IDs, and request exit only in Complete. Do not infer submitted/resolved counts from poll order.
 
 At drain timeout, classify remaining IDs as unresolved without waiting for the device. A GPU timing profile fails if total or any required metric coverage is below the profile threshold.
 
-- [ ] **Step 4: Write schema v2 while preserving v1 CPU fields**
+- [x] **Step 4: Write schema v2 while preserving v1 CPU fields**
 
 Add:
 
@@ -578,7 +580,7 @@ Add:
 
 Record adapter/driver/OS/backend/timestamp metadata and required-metric coverage. Do not serialize a missing/invalid duration as `0.0`.
 
-- [ ] **Step 5: Run tests and short schema runs**
+- [x] **Step 5: Run tests and short schema runs**
 
 ```bat
 RunTests.bat Debug --test-case="PerfGate*"
@@ -588,7 +590,7 @@ run.bat sandbox dx12 Debug --run-for-seconds=20 --perf-gate --perf-gate-gpu-timi
 
 Expected: schema 2, nonzero submitted/resolved counts, frame IDs delayed but correctly associated.
 
-- [ ] **Step 6: Commit PerfGate schema/state**
+- [x] **Step 6: Commit PerfGate schema/state**
 
 ```bat
 git add project/src/engine/Function/Diagnostics/PerfGate.h project/src/engine/Function/Diagnostics/PerfGate.cpp project/src/engine/Function/Application.cpp project/src/engine/Function/Render/Renderer.h project/src/tests/Function/perf_gate_tests.cpp
@@ -607,7 +609,7 @@ git commit -m "feat(perf): report gpu timing schema v2"
 - Modify: `project/src/sandbox/App/SandboxStandardScene.cpp`
 - Modify: `project/src/sandbox/App/SandboxFreeCameraController.cpp` only if the existing application-level skip cannot keep the camera fixed
 
-- [ ] **Step 1: Write a failing scene contract test**
+- [x] **Step 1: Write a failing scene contract test**
 
 Load the new scene through existing scene serialization and assert:
 
@@ -622,21 +624,21 @@ AO, directional shadows, Bloom, volumetric lighting, TAA and tone map enabled
 no VegetationComponent / no vegetation instance data
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```bat
 RunTests.bat Debug --test-case="Vegetation baseline scene*"
 ```
 
-- [ ] **Step 3: Author an independent scene asset**
+- [x] **Step 3: Author an independent scene asset**
 
 Create the file from committed assets and schema examples. Do not copy or normalize the dirty working-tree `Sandbox.scene.json`. Use existing Sponza/environment/particle references and make every full-pipeline switch explicit in JSON.
 
-- [ ] **Step 4: Freeze camera only in benchmark/PerfGate mode**
+- [x] **Step 4: Freeze camera only in benchmark/PerfGate mode**
 
 Pass a fixed-camera flag from `SandboxApplication` to the standard scene/controller. In that mode, load the primary camera transform from scene JSON and skip free-camera updates; normal Sandbox interaction remains unchanged. Report the fixed-camera mode in PerfGate runtime metadata.
 
-- [ ] **Step 5: Verify scene load and both backends**
+- [x] **Step 5: Verify scene load and both backends**
 
 ```bat
 RunTests.bat Debug --test-case="Vegetation baseline scene*"
@@ -646,7 +648,7 @@ run.bat sandbox dx12 Debug --scene=product/assets/scenes/VegetationBaseline.scen
 
 Expected: readiness PASS; logs contain no missing asset/validation errors.
 
-- [ ] **Step 6: Commit scene contract**
+- [x] **Step 6: Commit scene contract**
 
 ```bat
 git add product/assets/scenes/VegetationBaseline.scene.json project/src/tests/Scene/vegetation_baseline_scene_tests.cpp project/src/sandbox/App/SandboxApplication.h project/src/sandbox/App/SandboxApplication.cpp project/src/sandbox/App/SandboxStandardScene.h project/src/sandbox/App/SandboxStandardScene.cpp
@@ -666,7 +668,7 @@ Add `SandboxFreeCameraController.cpp` only if it was actually changed.
 - Modify: `scripts/TestRunPerfGate.ps1`
 - Modify: `RunPerfGate.bat`
 
-- [ ] **Step 1: Add failing script self-tests**
+- [x] **Step 1: Add failing script self-tests**
 
 Extend `-SelfTest` to cover:
 
@@ -684,13 +686,13 @@ telemetry-off A/B cannot be used with -BlessBaseline
 bless writer changes only baselines.*, never profile definitions
 ```
 
-- [ ] **Step 2: Confirm RED**
+- [x] **Step 2: Confirm RED**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/TestRunPerfGate.ps1
 ```
 
-- [ ] **Step 3: Add shared profile loading**
+- [x] **Step 3: Add shared profile loading**
 
 `PerfGateProfileConfig.ps1` is the single loader used by both runner and menu. It first reads `tools/perf/perf_gate_profiles.json`, then falls back per profile to `perf_gate_baselines.json.profiles`.
 
@@ -728,19 +730,19 @@ Define:
 }
 ```
 
-- [ ] **Step 4: Stop mutating Engine.ini for backend selection**
+- [x] **Step 4: Stop mutating Engine.ini for backend selection**
 
 Pass `--rhi=vulkan|dx12` and process-local runtime overrides directly. Preserve/restore logic only where still needed for legacy Standard; prefer converting Standard to `--rhi` in the same focused script change if self-tests prove identical behavior.
 
 Build only the profile-declared target. Vegetation profile must run exactly two records: Release Sandbox Vulkan and Release Sandbox DX12.
 
-- [ ] **Step 5: Upgrade report and candidate/baseline handling**
+- [x] **Step 5: Upgrade report and candidate/baseline handling**
 
 Summary JSON/Markdown add GPU Avg/P95, coverage, adapter/driver, actual extent, validation and vsync columns. When no baseline exists, mark `baseline_status=MISSING`, `baseline_blessed=false` and retain the candidate report. Future bless writes CPU and required GPU metric avg/p95 only after explicit user authorization.
 
 Add a diagnostic `-TelemetryMode Off` A/B override; forbid it with `-BlessBaseline` and label its report non-comparable for GPU baseline.
 
-- [ ] **Step 6: Make all script tests pass**
+- [x] **Step 6: Make all script tests pass**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/TestRunPerfGate.ps1
@@ -750,7 +752,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/RunPerfGateMenu.ps1 
 
 Expected: PASS; dry-run shows two Release Sandbox commands with fixed args; preview uses the shared loader.
 
-- [ ] **Step 7: Commit tooling/profile config**
+- [x] **Step 7: Commit tooling/profile config**
 
 ```bat
 git add tools/perf/perf_gate_profiles.json scripts/PerfGateProfileConfig.ps1 scripts/RunPerfGate.ps1 scripts/RunPerfGateMenu.ps1 scripts/TestRunPerfGate.ps1 RunPerfGate.bat
@@ -776,7 +778,7 @@ Verify `tools/perf/perf_gate_baselines.json` is not staged and has no diff.
 - Modify: `docs/sdd/SDD-2026-07-13-world-scale-gpu-vegetation.md`
 - Modify: `docs/plans/README.md`
 
-- [ ] **Step 1: Run the full automated verification matrix**
+- [x] **Step 1: Run the full automated verification matrix**
 
 ```bat
 generate_vs2022.bat
@@ -791,7 +793,7 @@ RunPerfGate.bat -Profile Standard
 
 Expected: all PASS. PerfGate WARN requires a written judgment; FAIL blocks completion. RenderGate must not bless.
 
-- [ ] **Step 2: Run backend validation correctness checks**
+- [x] **Step 2: Run backend validation correctness checks**
 
 Run short Debug checks; `--perf-gate-validation=on` means Vulkan validation + synchronization validation or DX12 debug layer + GPU validation for this process:
 
@@ -804,7 +806,7 @@ Inspect `product/logs` for query reset, availability, resolve, fence, device-rem
 
 Expected: zero validation/debug-layer errors. Performance numbers from these runs are correctness-only and never baseline candidates.
 
-- [ ] **Step 3: Run the fixed Release candidate profile**
+- [x] **Step 3: Run the fixed Release candidate profile**
 
 ```bat
 RunPerfGate.bat -Profile VegetationFullPipeline
@@ -819,7 +821,7 @@ Expected:
 - missing baseline is reported as candidate, not silently blessed;
 - output lands only under `Intermediate/test-reports/perf-gate/`.
 
-- [ ] **Step 4: Measure telemetry overhead A/B**
+- [x] **Step 4: Measure telemetry overhead A/B**
 
 ```bat
 RunPerfGate.bat -Profile VegetationFullPipeline -TelemetryMode Off
@@ -827,7 +829,7 @@ RunPerfGate.bat -Profile VegetationFullPipeline -TelemetryMode Off
 
 Compare CPU avg/p95 against the instrumented run with the same backend/scene/extent/Tracy state. Record the delta in the candidate summary; do not subtract it from reported GPU values and do not bless either run.
 
-- [ ] **Step 5: Prove protected baselines did not change**
+- [x] **Step 5: Prove protected baselines did not change**
 
 ```bat
 git diff --exit-code -- tools/perf/perf_gate_baselines.json tools/render/goldens
@@ -835,7 +837,7 @@ git diff --exit-code -- tools/perf/perf_gate_baselines.json tools/render/goldens
 
 Expected: exit code 0.
 
-- [ ] **Step 6: Update long-term documentation from measured behavior**
+- [x] **Step 6: Update long-term documentation from measured behavior**
 
 Document:
 
@@ -848,7 +850,7 @@ Document:
 
 Set Phase 0 SDD to Done only after every required command passes and the candidate report exists. Update the master SDD Phase 0 row to Done; do not advance Phase 1 automatically. Move this plan entry from Active to Archived.
 
-- [ ] **Step 7: Validate the plan-derived change set**
+- [x] **Step 7: Validate the plan-derived change set**
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mode ValidatePlan
@@ -857,7 +859,7 @@ git diff --check -- docs project/src scripts tools/perf product/assets/scenes Ru
 
 When global `git diff --check` reports pre-existing trailing whitespace in user-owned dirty files, scope the evidence to the files touched by this plan and report the unrelated findings without editing them.
 
-- [ ] **Step 8: Commit docs and hand off the candidate report**
+- [x] **Step 8: Commit docs and hand off the candidate report**
 
 ```bat
 git add docs/specs/modules/application.md docs/specs/modules/graphics.md docs/specs/modules/render.md docs/specs/modules/render-graph.md docs/specs/modules/sandbox.md docs/specs/modules/tools.md docs/PerfGateUsageGuide.md docs/CODEBASE_MAP.md docs/VERIFY.md docs/sdd/SDD-2026-07-13-gpu-performance-observability.md docs/sdd/SDD-2026-07-13-world-scale-gpu-vegetation.md docs/plans/README.md
@@ -874,12 +876,12 @@ That bless is outside this implementation plan.
 
 ## Final acceptance checklist
 
-- [ ] Telemetry disabled adds no structured timing resource, timestamp command or readback poll.
-- [ ] Vulkan and DX12 use identical metric names, units, validity and coverage semantics.
-- [ ] No telemetry poll path waits for GPU/device idle.
-- [ ] Retryable acquire, failed recording, skipped submit and device removal cannot generate a false valid sample.
-- [ ] RenderGraph metric tags participate in cache identity and only live passes produce scopes.
-- [ ] `VegetationFullPipeline` is fixed Release, 2560×1440, full pipeline, fixed camera, vsync/frame cap off.
-- [ ] `Standard` stays compatible and does not require GPU telemetry.
-- [ ] Candidate report exists for both hardware backends; no performance/render baseline changed.
-- [ ] All verification commands and validation-log audits are recorded in docs.
+- [x] Telemetry disabled adds no structured timing resource, timestamp command or readback poll.
+- [x] Vulkan and DX12 use identical metric names, units, validity and coverage semantics.
+- [x] No telemetry poll path waits for GPU/device idle.
+- [x] Retryable acquire, failed recording, skipped submit and device removal cannot generate a false valid sample.
+- [x] RenderGraph metric tags participate in cache identity and only live passes produce scopes.
+- [x] `VegetationFullPipeline` is fixed Release, 2560×1440, full pipeline, fixed camera, vsync/frame cap off.
+- [x] `Standard` stays compatible and does not require GPU telemetry.
+- [x] Candidate report exists for both hardware backends; no performance/render baseline changed.
+- [x] All verification commands and validation-log audits are recorded in docs.

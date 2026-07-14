@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-14
 status: active
 ---
 
@@ -15,7 +15,8 @@ status: active
 | 路径 | 内容 |
 | --- | --- |
 | `RunPerfGate.bat` + `scripts/RunPerfGate.ps1` / `RunPerfGateMenu.ps1` | PerfGate 入口（无参进交互菜单）与实现 |
-| `tools/perf/perf_gate_baselines.json` | PerfGate 基线：profiles（Standard：warmup 10s / sample 30s，target Sandbox+Editor x Vulkan+DX12）、absolute_caps、warn_thresholds、baselines |
+| `tools/perf/perf_gate_profiles.json` | 新 profile 真源；`VegetationFullPipeline` 固定 Release、Sandbox × Vulkan/DX12、2560×1440、完整场景、11 个 required GPU metric 与 95% coverage 门槛 |
+| `tools/perf/perf_gate_baselines.json` | PerfGate bless 水位与 Standard legacy profile（warmup 10s / sample 30s，Sandbox+Editor × Vulkan+DX12）；受保护，只能经 bless 流程更新 |
 | `RunRenderGate.bat` + `scripts/RunRenderGate.ps1` | RenderGate 入口与编排 |
 | `scripts/RenderGateGoldenPublisher.ps1` / `TestRenderGateGoldenPublisher.ps1` | golden 矩阵事务：普通门禁持共享锁读取稳定快照，publisher 持同一锁的独占句柄做 stage/backup/publish；完整回滚为 NOT_BLESSED，恢复失败保留 backup 并标 ROLLBACK_FAILED，提交后清理失败标 BLESSED_CLEANUP_FAILED；拒绝覆盖崩溃遗留事务产物，并有故障注入自测 |
 | `tools/render/goldens/<scene>/<backend>.png` | RenderGate 多场景 golden 基线；新增/更新只能经用户确认后的 bless 流程 |
@@ -44,6 +45,7 @@ status: active
 ## 约束与不变式
 
 - 所有脚本假定从仓库根调用；本地报告统一落 `Intermediate/test-reports/`，不提交。
+- PerfGate 每个 matrix run 的 `engine_logs` 必须是该子进程启动前/退出后日志路径集合的精确差集；不得用 LastWriteTime 窗口吸收上一进程的延迟 flush。`run.bat` 的 single 与 `all` 路径必须逐个保留任意数量的 application arguments，矩阵四格使用同一参数序列。
 - 基线文件（perf json、render golden png）提交入库；只能经 `-BlessBaseline` / `-BlessGolden` 更新，golden 更新前必须由用户确认画面正确。
 - PerfGate FAIL 禁止提交；WARN 需在提交说明写明理由。RenderGate 跨后端 diff FAIL 视同 bug。
 - AshImageDiff 输出格式（key=value + 退出码语义）是 RenderGate 解析契约，改动需同步 `RunRenderGate.ps1`。

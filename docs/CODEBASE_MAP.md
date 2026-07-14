@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-14
 review_cycle: monthly
 status: active
 ---
@@ -18,6 +18,7 @@ status: active
 - Build: `premake5.lua`（workspace 定义 + PostBuild artifact 同步）→ `generate_vs2022.bat` → `build_editor.bat` / `build_sandbox.bat`
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
 - RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；默认覆盖 sandbox + particles，同一 Sandbox 进程用 `--rhi=<vulkan|dx12>`、`--smoke-test-seconds=<timeout>`、`--dump-frame=<png>`、`--scene=<json>` 完成 readiness smoke + capture；成功条件由 asset epoch/当前帧全 scene packet/非致命 present completion（及动态 capture-ready）驱动，ready arm 会清空 AO/TAA/体积光 history 后在下一同 epoch 帧抓取，golden 在 `tools/render/goldens/<scene>/<backend>.png`
+- PerfGate: `RunPerfGate.bat` → `scripts/RunPerfGate.ps1`；`Standard` 跑 Debug Editor/Sandbox × Vulkan/DX12 趋势矩阵，`VegetationFullPipeline` 跑固定 Release Sandbox × Vulkan/DX12、2560×1440、完整无植被场景，并要求双后端 GPU frame/pass-group timing schema v2 与 coverage。
 - Unit tests: `RunTests.bat [Config] [doctest args...]` → 构建并运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`（doctest，工程在 `project/src/tests/`，含 legacy `run_engine_base_self_tests()` 桥接）
 - ArchGate: `RunArchGate.bat` → `scripts/CheckArchBoundary.ps1`；按 `tools/ai-dev/rules/arch-boundary-rules.json` 扫描 include 判定依赖方向红线，新增越界退出码 1
 - CI: `.github/workflows/ci.yml`（GitHub Actions，windows runner）——push/PR 跑 ArchGate、sln 生成、Editor/Sandbox Debug+Release 构建、RunTests，以及 Release 下 DX12/WARP 与 Vulkan/lavapipe readiness smoke（含 indirect 自测）；RenderGate/PerfGate 仍不进 CI
@@ -67,6 +68,7 @@ status: active
 | Name | Location | Purpose | Constraints |
 | --- | --- | --- | --- |
 | `DynamicRHI` / `RHIResource` | `engine/Graphics/` | 后端无关的 GPU 接口 | 改动必须双后端等价实现 |
+| `IGpuTimingTelemetry` | `engine/Graphics/GpuTimingTelemetryRHI.*` | PerfGate opt-in 的固定容量、延迟 non-blocking GPU timestamp sample | 普通运行默认关闭；exact submit acknowledgement 是 coverage 分母唯一真源；实现必须双后端等价 |
 | `RenderGraph` | `engine/Function/Render/` | 帧级声明式 pass/资源编排 | 契约见 `docs/specs/modules/render-graph.md`；不管理 buffer/shader/material 生命周期 |
 | `SceneRenderConfig` / `scene_config` | Function/Render + scene json | 场景级渲染开关（AO 模式、阴影、Bloom、体积光） | 随帧快照传递，不可跨帧持有 |
 | `ScenePresentationSubsystem` | `engine/Function/` | Scene → 渲染数据的唯一桥 | 见 `docs/specs/modules/scene.md` |
@@ -91,7 +93,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 | --- | --- | --- | --- |
 | 新增/修改渲染 Pass | 对应 feature spec（`docs/specs/features/`）、`docs/specs/modules/render-graph.md`、相邻 Pass 实现 | `Function/Render/*Pass*`、`engine/Shaders/`、`SceneRenderer` | `RunRenderGate.bat` + PerfGate Standard |
 | 修渲染 bug（banding/闪烁等） | 对应 Pass + shader | 同上，diff 尽量小 | 同上；用 RenderDebugView 定位 |
-| RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate 全矩阵 + validation 开启 |
+| RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate Standard + validation 开启；GPU timing/性能归因再跑固定 profile |
 | Editor 面板功能 | `docs/specs/modules/editor.md`、`docs/editor/EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
 | 场景/资产能力 | `docs/specs/modules/scene.md`、`docs/specs/modules/asset.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |

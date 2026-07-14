@@ -4,7 +4,11 @@
 
 ## Active
 
-- `2026-07-13-gpu-performance-observability.md`：大世界 GPU 植被 Phase 0，建立双后端 GPU timing telemetry 与固定 2K Release PerfGate 基线流程。
+当前无 active plan。
+
+## Archived
+
+- `2026-07-13-gpu-performance-observability.md`：大世界 GPU 植被 Phase 0；2026-07-14 完成双后端 GPU timing telemetry、固定 2K Release candidate 与全部门禁，未 bless baseline。
 
 ## Maintenance
 

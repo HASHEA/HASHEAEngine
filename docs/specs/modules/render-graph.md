@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-14
 status: active
 ---
 
@@ -35,6 +35,7 @@ RenderGraphBuilder graph(*m_renderer, "SceneRenderGraph");
 RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
 RenderGraphTextureRef lighting = graph.create_texture(color_desc, "Lighting");
 graph.add_raster_pass("LightingPass", RenderGraphPassFlags::None,
+    RHI::GpuTimingMetric::DeferredLighting,
     [&](RenderGraphRasterPassBuilder& pass) { pass.write_color(0, lighting, RenderLoadAction::Clear, {}); },
     [&](RenderGraphRasterContext& context) -> bool { return context.draw(draw_desc); });
 graph.execute();
@@ -83,9 +84,11 @@ void extract_texture(RenderGraphTextureRef texture);
 
 ```cpp
 bool add_raster_pass(const char* name, RenderGraphPassFlags flags,
+    RHI::GpuTimingMetric timing_metric,
     const std::function<void(RenderGraphRasterPassBuilder&)>& setup,
     const std::function<bool(RenderGraphRasterContext&)>& execute);
 bool add_compute_pass(const char* name, RenderGraphPassFlags flags,
+    RHI::GpuTimingMetric timing_metric,
     const std::function<void(RenderGraphComputePassBuilder&)>& setup,
     const std::function<bool(RenderGraphComputeContext&)>& execute);
 ```
@@ -99,6 +102,7 @@ Context：`get_texture(ref)` + raster `draw(GraphicsDrawDesc)` / compute `dispat
 - `read_texture()` 只声明依赖；真实 shader binding 仍在 execute lambda 中 `get_texture()` 后调 `GraphicsProgram::set_texture()` 等。
 - raster execute 内只提交 draw，不要调 compute dispatch。
 - attachment 格式校验在 executor：depth 格式当 color attachment（或反之）报错并使 graph 执行失败。
+- `timing_metric` 必须是 `GPU.Frame` 之外的稳定 pass-group metric；`Invalid` 表示显式不计入结构化 GPU timing，`Frame`/`Count` 被拒绝。executor 只遍历 live pass，并把相邻且 metric 相同的 pass 合并为一个 scope；metric 切换、untracked pass、execute 失败和 graph 结束都必须先闭合当前 scope。metric 是 compile-cache topology identity 的一部分，禁止同一 cache key 复用不同 timing 分组。
 
 ### RenderGraphPassFlags
 
