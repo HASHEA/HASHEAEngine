@@ -4,6 +4,7 @@
 #include "hassert.h"
 #include "hstring.h"
 #include "hfile.h"
+#include <array>
 #include <filesystem>
 #if defined(_WIN64)
 #include <windows.h>
@@ -26,19 +27,6 @@ namespace AshEngine
 		return fileSizeSigned;
 	}
 	
-	static bool string_ends_with_char(const char* s, char c) {
-		if (!s || s[0] == 0)
-		{
-			return false;
-		}
-		cstring last_entry = strrchr(s, c);
-		if (!last_entry)
-		{
-			return false;
-		}
-		return last_entry == (s + strlen(s) - 1);
-	}
-
 	static auto file_release_read_buffer(char* data, Allocator* allocator) -> void
 	{
 		if (!data)
@@ -376,15 +364,118 @@ namespace AshEngine
 		return (result == 0);
 #endif // _WIN64
 	}
+
+	static auto bounded_cstring_length(const char* value, size_t capacity, size_t& length) -> bool
+	{
+		length = 0;
+		if (!value)
+		{
+			return false;
+		}
+
+		while (length < capacity && value[length] != 0)
+		{
+			++length;
+		}
+		return length < capacity;
+	}
+
+#if defined(_WIN64)
+	static auto build_directory_search_pattern(
+		const char* path,
+		std::array<char, k_max_path>& search_pattern) -> bool
+	{
+		if (!path || path[0] == 0)
+		{
+			return false;
+		}
+
+		search_pattern.fill(0);
+		const DWORD written_chars = GetFullPathNameA(
+			path,
+			static_cast<DWORD>(search_pattern.size()),
+			search_pattern.data(),
+			nullptr);
+		if (written_chars >= search_pattern.size())
+		{
+			return false;
+		}
+		if (written_chars == 0)
+		{
+			size_t raw_length = 0;
+			if (!bounded_cstring_length(path, search_pattern.size(), raw_length) || raw_length == 0)
+			{
+				return false;
+			}
+			memcpy(search_pattern.data(), path, raw_length + 1);
+		}
+
+		size_t pattern_length = 0;
+		if (!bounded_cstring_length(search_pattern.data(), search_pattern.size(), pattern_length) || pattern_length == 0)
+		{
+			return false;
+		}
+
+		const char last_char = search_pattern[pattern_length - 1];
+		if (last_char == '*')
+		{
+			return true;
+		}
+
+		const bool has_trailing_separator = last_char == '\\' || last_char == '/';
+		const size_t suffix_length = has_trailing_separator ? 1 : 2;
+		if (pattern_length + suffix_length >= search_pattern.size())
+		{
+			return false;
+		}
+
+		if (!has_trailing_separator)
+		{
+			search_pattern[pattern_length++] = '\\';
+		}
+		search_pattern[pattern_length++] = '*';
+		search_pattern[pattern_length] = 0;
+		return true;
+	}
+
+	static auto close_directory_handle(void* handle) -> bool
+	{
+		return !handle || FindClose(static_cast<HANDLE>(handle)) != 0;
+	}
+#endif
+
 	auto directory_current(Directory* directory) -> void
 	{
+		if (!directory)
+		{
+			return;
+		}
+
+		std::array<char, k_max_path> current_path{};
 #if defined(_WIN64)
-		DWORD written_chars = GetCurrentDirectoryA(k_max_path, directory->path);
-		H_ASSERT(written_chars < k_max_path);
-		directory->path[written_chars] = 0;
+		const DWORD written_chars = GetCurrentDirectoryA(
+			static_cast<DWORD>(current_path.size()),
+			current_path.data());
+		if (written_chars == 0 || written_chars >= current_path.size())
+		{
+			return;
+		}
 #else
-		getcwd(directory->path, k_max_path);
+		if (!getcwd(current_path.data(), current_path.size()))
+		{
+			return;
+		}
 #endif // _WIN64
+
+#if defined(_WIN64)
+		if (!close_directory_handle(directory->os_handle))
+		{
+			HLogWarning("Failed to replace open directory with current path\n");
+			return;
+		}
+		directory->os_handle = nullptr;
+#endif
+		memcpy(directory->path, current_path.data(), current_path.size());
 	}
 	auto directory_change(const char* path) -> bool
 	{
@@ -405,32 +496,36 @@ namespace AshEngine
 	}
 	auto file_open_directory(const char* path, Directory* outDirectory) -> bool
 	{
-		// Open file trying to conver to full path instead of relative.
-		// If an error occurs, just copy the name.
-		if (file_resolve_to_full_path(path, outDirectory->path, MAX_PATH) == 0) {
-			strcpy(outDirectory->path, path);
-		}
-
-		// Add '\\' if missing
-		if (!string_ends_with_char(path, '\\')) {
-			strcat(outDirectory->path, "\\");
-		}
-
-		if (!string_ends_with_char(outDirectory->path, '*')) {
-			strcat(outDirectory->path, "*");
+		if (!path || !outDirectory)
+		{
+			return false;
 		}
 
 #if defined(_WIN64)
-		outDirectory->os_handle = nullptr;
-		WIN32_FIND_DATAA find_data;
-		HANDLE found_handle;
-		if ((found_handle = FindFirstFileA(outDirectory->path, &find_data)) != INVALID_HANDLE_VALUE) {
-			outDirectory->os_handle = found_handle;
-		}
-		else {
-			HLogWarning("Could not open directory {}\n", outDirectory->path);
+		std::array<char, k_max_path> search_pattern{};
+		if (!build_directory_search_pattern(path, search_pattern))
+		{
+			HLogWarning("Could not build directory search pattern\n");
 			return false;
 		}
+
+		WIN32_FIND_DATAA find_data{};
+		HANDLE candidate_handle = FindFirstFileA(search_pattern.data(), &find_data);
+		if (candidate_handle == INVALID_HANDLE_VALUE)
+		{
+			HLogWarning("Could not open directory {}\n", search_pattern.data());
+			return false;
+		}
+
+		if (!close_directory_handle(outDirectory->os_handle))
+		{
+			close_directory_handle(candidate_handle);
+			HLogWarning("Failed to replace open directory\n");
+			return false;
+		}
+
+		memcpy(outDirectory->path, search_pattern.data(), search_pattern.size());
+		outDirectory->os_handle = candidate_handle;
 #else
 		H_ASSERTLOG(false, "Platform Not implemented");
 		return HS_FAIL;
@@ -439,14 +534,18 @@ namespace AshEngine
 	}
 	auto file_close_directory(Directory* directory) -> bool
 	{
-#if defined(_WIN64)
-		if (directory->os_handle) {
-			if (!FindClose(directory->os_handle))
-			{
-				HLogWarning("Failed to Close Directory!");
-				return false;
-			}
+		if (!directory)
+		{
+			return false;
 		}
+
+#if defined(_WIN64)
+		if (!close_directory_handle(directory->os_handle))
+		{
+			HLogWarning("Failed to Close Directory!");
+			return false;
+		}
+		directory->os_handle = nullptr;
 #else
 		H_ASSERTLOG(false, "Not implemented");
 #endif
@@ -454,12 +553,15 @@ namespace AshEngine
 	}
 	auto file_parent_directory(Directory* directory) -> void
 	{
-		if (!directory || directory->path[0] == 0)
+		size_t current_path_length = 0;
+		if (!directory ||
+			!bounded_cstring_length(directory->path, k_max_path, current_path_length) ||
+			current_path_length == 0)
 		{
 			return;
 		}
 
-		std::filesystem::path current_path(directory->path);
+		std::filesystem::path current_path(std::string(directory->path, current_path_length));
 		if (current_path.filename() == "*")
 		{
 			current_path = current_path.parent_path();
@@ -473,33 +575,55 @@ namespace AshEngine
 
 		Directory new_directory{};
 		const std::string parent_string = parent_path.string();
-		bool ret = file_open_directory(parent_string.c_str(), &new_directory);
-		if (!ret)
+		if (!file_open_directory(parent_string.c_str(), &new_directory))
 		{
 			HLogError("Failed to open directory : {}", parent_string);
 			return;
 		}
 #if defined(_WIN64)
-		if (new_directory.os_handle) {
-			file_close_directory(directory);
-			*directory = new_directory;
+		if (!file_close_directory(directory))
+		{
+			file_close_directory(&new_directory);
+			HLogError("Failed to replace directory with parent : {}", parent_string);
+			return;
 		}
+		*directory = new_directory;
 #else
 		RASSERTM(false, "Not implemented");
 #endif
 	}
 	auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> bool
 	{
-		// Remove the last '*' from the path. It will be re-added by the file_open.
-		if (string_ends_with_char(directory->path, '*')) {
-			directory->path[strlen(directory->path) - 1] = 0;
+		if (!directory || !subDirectoryName)
+		{
+			return false;
 		}
 
-		strcat(directory->path, subDirectoryName);
-		bool ret = file_open_directory(directory->path, directory);
-		if (!ret)
+		size_t base_length = 0;
+		if (!bounded_cstring_length(directory->path, k_max_path, base_length) || base_length == 0)
 		{
-			HLogError("Failed to open directory : {}", directory->path);
+			return false;
+		}
+		if (directory->path[base_length - 1] == '*')
+		{
+			--base_length;
+		}
+
+		size_t child_length = 0;
+		if (!bounded_cstring_length(subDirectoryName, k_max_path, child_length) ||
+			base_length + child_length >= k_max_path)
+		{
+			return false;
+		}
+
+		std::array<char, k_max_path> child_path{};
+		memcpy(child_path.data(), directory->path, base_length);
+		memcpy(child_path.data() + base_length, subDirectoryName, child_length);
+		child_path[base_length + child_length] = 0;
+
+		if (!file_open_directory(child_path.data(), directory))
+		{
+			HLogError("Failed to open directory : {}", child_path.data());
 			return false;
 		}
 		return true;

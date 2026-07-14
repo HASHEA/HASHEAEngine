@@ -39,6 +39,7 @@ status: active
 - 时间：`time_service_init/shutdown` 启停一次，`time_now()` 返回 tick，配套换算函数。
 - 线程：`initialize_threading(EngineThreadingConfig)`；`register_current_thread_role` + `is_in_render/logic/worker_thread` 判定；跨线程投递用 `enqueue_render_command` / `pump_render_commands` / `flush_render_commands`；后台任务用 `dispatch_background_task`。
 - 配置：`IniConfig::load` + `has_value/get_string/get_bool/try_get_bool`；路径经 `resolve_runtime_config_path` 解析。
+- 目录导航：`Directory::path` 的 `k_max_path` 是包含终止符的硬上限，超限输入必须整体失败而不得截断。`file_open_directory` / `file_sub_directory` / `directory_current` 先在局部缓冲区完成解析或打开，再提交路径与句柄；失败保持原状态。替换已打开目录会先释放旧搜索句柄，`file_close_directory` 清空句柄且可重复调用。`..`、嵌套分隔符、正反斜杠等既有路径片段继续交由 Win32 路径规则解析。
 - 服务：`Service` 子类声明 `static constexpr const char* k_name` 与 `ASH_DECLARE_SERVICE`；`ServiceManager::get<T>()` 按 `k_name` 哈希惰性注册并返回单例。
 - 字符串存储：`StringBuffer` / `StringArray` 必须先 `init` 后使用，`shutdown` 可重复调用；`m_uCurrentSize` 永不超过 `m_uBufferSize`，无法容纳完整写入（含 packed string 的终止符）时保持原状态并失败。`StringArray` 的 map/iterator 与字符区共享一个对齐分配块，shutdown 先析构内部对象再释放；intern 命中 hash 后仍比较字符串内容，碰撞不得把不同字符串别名为同一项。
 
@@ -66,3 +67,4 @@ status: active
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：自动化契约测试继续由 Tests.exe 的 legacy bridge 覆盖。
 - [SDD-2026-07-12-logic-input-consumption](../../sdd/SDD-2026-07-12-logic-input-consumption.md)：定义跨线程输入快照的批次合并与一次性瞬态消费语义。
 - [SDD-2026-07-13-base-string-storage-safety](../../sdd/SDD-2026-07-13-base-string-storage-safety.md)：收紧 `StringBuffer` / `StringArray` 容量边界、allocator/lifetime 配对与 hash collision 正确性。
+- [SDD-2026-07-14-directory-path-safety](../../sdd/SDD-2026-07-14-directory-path-safety.md)：目录路径改为有界局部构造和事务式句柄替换，失败不破坏原状态，关闭操作幂等。
