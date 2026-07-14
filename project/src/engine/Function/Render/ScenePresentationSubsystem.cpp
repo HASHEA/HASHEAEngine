@@ -191,6 +191,76 @@ namespace AshEngine
 			return right <= output_width && bottom <= output_height;
 		}
 
+		static auto evaluate_visible_terrain_readiness(
+			const VisibleRenderFrame& frame,
+			bool capture_ready,
+			bool scene_packet_succeeded) -> TerrainReadinessStage
+		{
+			TerrainReadinessStage result = TerrainReadinessStage::Ready;
+			for (const VisibleTerrainFrame& terrain : frame.terrains)
+			{
+				TerrainReadinessInputs inputs{};
+				inputs.content_generation = terrain.asset_snapshot ?
+					terrain.asset_snapshot->content_generation : 0u;
+
+				if (!terrain.asset_snapshot)
+				{
+					inputs.asset_load = TerrainReadinessStage::Pending;
+				}
+				else if (terrain.asset_snapshot->failed)
+				{
+					inputs.asset_load = TerrainReadinessStage::Failed;
+				}
+				else
+				{
+					inputs.asset_load = TerrainReadinessStage::Ready;
+				}
+				inputs.asset_load_generation = inputs.content_generation;
+
+				inputs.compose = inputs.asset_load;
+				inputs.compose_generation = inputs.asset_load_generation;
+
+				if (!terrain.render_asset)
+				{
+					inputs.height_upload = TerrainReadinessStage::Pending;
+					inputs.height_upload_generation = inputs.content_generation;
+				}
+				else
+				{
+					const TerrainRenderReadiness asset_readiness =
+						terrain.render_asset->readiness();
+					inputs.height_upload =
+						asset_readiness == TerrainRenderReadiness::Failed ?
+							TerrainReadinessStage::Failed :
+						asset_readiness == TerrainRenderReadiness::Ready &&
+							terrain.render_asset->pending_component_upload_count() == 0u ?
+							TerrainReadinessStage::Ready :
+							TerrainReadinessStage::Pending;
+					inputs.height_upload_generation =
+						asset_readiness == TerrainRenderReadiness::Ready ?
+						terrain.render_asset->published_content_generation() :
+						terrain.render_asset->accepted_content_generation();
+				}
+
+				inputs.atlas_update = capture_ready ?
+					TerrainReadinessStage::Ready : TerrainReadinessStage::Pending;
+				inputs.atlas_update_generation = inputs.content_generation;
+				inputs.scene_packet_succeeded = scene_packet_succeeded;
+
+				const TerrainReadinessStage terrain_result =
+					evaluate_terrain_readiness(inputs);
+				if (terrain_result == TerrainReadinessStage::Failed)
+				{
+					return TerrainReadinessStage::Failed;
+				}
+				if (terrain_result == TerrainReadinessStage::Pending)
+				{
+					result = TerrainReadinessStage::Pending;
+				}
+			}
+			return result;
+		}
+
 		static bool prepare_visible_frame_material_proxies(
 			VisibleRenderFrame& frame,
 			RenderAssetManager& asset_manager,
@@ -1219,7 +1289,14 @@ namespace AshEngine
 			else if (packet.visible_frame->scene_runtime_id != 0)
 			{
 				++submission.scene_packets_succeeded;
-				if (m_impl->scene_renderer->is_visible_frame_capture_ready(*packet.visible_frame))
+				const bool capture_ready =
+					m_impl->scene_renderer->is_visible_frame_capture_ready(
+						*packet.visible_frame);
+				if (capture_ready &&
+					evaluate_visible_terrain_readiness(
+						*packet.visible_frame,
+						capture_ready,
+						true) == TerrainReadinessStage::Ready)
 				{
 					++submission.scene_packets_capture_ready;
 				}

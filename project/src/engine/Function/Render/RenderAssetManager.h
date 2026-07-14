@@ -28,6 +28,30 @@ namespace AshEngine
 		Black
 	};
 
+	enum class TerrainReadinessStage : uint8_t
+	{
+		Pending = 0,
+		Ready,
+		Failed
+	};
+
+	struct ASH_API TerrainReadinessInputs
+	{
+		uint64_t content_generation = 0;
+		TerrainReadinessStage asset_load = TerrainReadinessStage::Pending;
+		uint64_t asset_load_generation = 0;
+		TerrainReadinessStage compose = TerrainReadinessStage::Pending;
+		uint64_t compose_generation = 0;
+		TerrainReadinessStage height_upload = TerrainReadinessStage::Pending;
+		uint64_t height_upload_generation = 0;
+		TerrainReadinessStage atlas_update = TerrainReadinessStage::Pending;
+		uint64_t atlas_update_generation = 0;
+		bool scene_packet_succeeded = false;
+	};
+
+	ASH_API TerrainReadinessStage evaluate_terrain_readiness(
+		const TerrainReadinessInputs& inputs);
+
 	struct ASH_API RenderAssetReadinessSnapshot
 	{
 		uint64_t activity_epoch = 0;

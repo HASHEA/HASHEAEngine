@@ -41,7 +41,7 @@ status: active
 - `TerrainRenderPass::prepare_graph`：对第一个 snapshot 与 render asset generation 一致的 visible 主 Terrain 注册两张 4144² atlas 和一张 1025² coarse target；有 dirty payload 时最多排入一个 raw staging upload，并添加写三张 texture 的 `TerrainWeightAtlasUpdatePass`。dispatch 成功才更新 slot metadata并从 pending 队列消费该项。`SceneGBufferPass` 声明同三张 texture 的 `GraphicsSRV` 读取，形成 compute→graphics barrier；首期一个 scene/view 只渲染第一个有效主 Terrain，多 Terrain 独立 program binding 留待后续。
 - `TerrainRenderPass::initialize/render_gbuffer/render_shadow`：一次创建 LOD0..8 的 32-bit shared index buffers、weight/material samplers，以及 `TerrainSurface.hlsl` 的 GBuffer/depth-only/LOD-debug permutation。网格 draw 不绑定 vertex buffer，顶点坐标来自 index 值对应的 `SV_VertexID`；surface instance 使用 packed `uint4`，root constant layout 固定 224 bytes。GBuffer 在既有 clear pass 内执行，shadow 通过 sunlight/普通方向光共用 caster callback 执行并尊重 `casts_shadow` / mobility filter。
 - `TerrainRenderPass::is_capture_ready`：要求 visible Terrain 的 snapshot、accepted/published generation、Ready 状态和 pending upload 全部一致，并等待 atlas compute 所在 frame 之后的后续 prepare；`SceneRenderer` 与粒子 readiness 取逻辑与，不使用固定帧数。
-- `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。
+- `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。Terrain capture-ready 复用 `evaluate_terrain_readiness`：load、compose、height upload 与 atlas 必须属于同一 content generation，且当前 Scene packet 已成功；当前代 Failed 优先，stale 结果保持 Pending。
 
 ### Pass 序列（`SceneRenderer::render_visible_frame`，代码实际顺序）
 

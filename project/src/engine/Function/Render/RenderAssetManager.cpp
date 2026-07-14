@@ -155,6 +155,35 @@ namespace AshEngine
 		}
 	}
 
+	TerrainReadinessStage evaluate_terrain_readiness(
+		const TerrainReadinessInputs& inputs)
+	{
+		const std::array<std::pair<TerrainReadinessStage, uint64_t>, 4> stages = {
+			std::pair{ inputs.asset_load, inputs.asset_load_generation },
+			std::pair{ inputs.compose, inputs.compose_generation },
+			std::pair{ inputs.height_upload, inputs.height_upload_generation },
+			std::pair{ inputs.atlas_update, inputs.atlas_update_generation }
+		};
+		for (const auto& [stage, generation] : stages)
+		{
+			if (generation == inputs.content_generation &&
+				stage == TerrainReadinessStage::Failed)
+			{
+				return TerrainReadinessStage::Failed;
+			}
+		}
+		for (const auto& [stage, generation] : stages)
+		{
+			if (generation != inputs.content_generation ||
+				stage != TerrainReadinessStage::Ready)
+			{
+				return TerrainReadinessStage::Pending;
+			}
+		}
+		return inputs.scene_packet_succeeded ?
+			TerrainReadinessStage::Ready : TerrainReadinessStage::Pending;
+	}
+
 	void RenderAssetManager::initialize(AssetDatabase* asset_database, Renderer* renderer)
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
@@ -912,12 +941,31 @@ namespace AshEngine
 	RenderAssetReadinessSnapshot RenderAssetManager::query_readiness() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
+		const TerrainReadinessStage terrain_asset_stage =
+			!m_failed_terrain_requests.empty() ? TerrainReadinessStage::Failed :
+			!m_pending_terrain_requests.empty() ? TerrainReadinessStage::Pending :
+			TerrainReadinessStage::Ready;
+		TerrainReadinessInputs terrain_inputs{};
+		terrain_inputs.content_generation = 1u;
+		terrain_inputs.asset_load = terrain_asset_stage;
+		terrain_inputs.asset_load_generation = 1u;
+		terrain_inputs.compose = terrain_asset_stage;
+		terrain_inputs.compose_generation = 1u;
+		terrain_inputs.height_upload = terrain_asset_stage;
+		terrain_inputs.height_upload_generation = 1u;
+		terrain_inputs.atlas_update = TerrainReadinessStage::Ready;
+		terrain_inputs.atlas_update_generation = 1u;
+		terrain_inputs.scene_packet_succeeded = true;
+		const TerrainReadinessStage terrain_readiness =
+			evaluate_terrain_readiness(terrain_inputs);
+
 		RenderAssetReadinessSnapshot snapshot{};
 		snapshot.activity_epoch = m_activity_epoch;
-		snapshot.pending = m_pending_render_asset_count != 0;
+		snapshot.pending = m_pending_render_asset_count != 0 ||
+			terrain_readiness == TerrainReadinessStage::Pending;
 		snapshot.failed =
 			!m_failed_static_mesh_requests.empty() ||
-			!m_failed_terrain_requests.empty() ||
+			terrain_readiness == TerrainReadinessStage::Failed ||
 			!m_failed_texture_requests.empty() ||
 			!m_failed_runtime_resource_requests.empty();
 		return snapshot;

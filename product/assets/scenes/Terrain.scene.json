@@ -1,0 +1,100 @@
+{
+  "entities": [
+    {
+      "id": 1,
+      "name": "TerrainGateRoot",
+      "parent": 0,
+      "transform": {
+        "position": [0.0, 0.0, 0.0],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "camera": {
+        "far_plane": 12000.0,
+        "fov_y_degrees": 60.0,
+        "near_plane": 0.1,
+        "orthographic_height": 10.0,
+        "primary": true,
+        "projection": 0,
+        "reverse_z": true
+      },
+      "id": 2,
+      "name": "TerrainGateCamera",
+      "parent": 1,
+      "transform": {
+        "position": [4096.0, 300.0, -500.0],
+        "rotation_euler_degrees": [16.5, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": 3,
+      "light": {
+        "casts_shadow": true,
+        "color": [1.0, 0.95, 0.88],
+        "inner_cone_angle_degrees": 30.0,
+        "intensity": 2.5,
+        "near_shadow_distance": 64.0,
+        "outer_cone_angle_degrees": 45.0,
+        "range": 10.0,
+        "shadow_cascade_count": 4,
+        "shadow_distance": 5000.0,
+        "shadow_priority": 255,
+        "sunlight": true,
+        "type": 0
+      },
+      "name": "TerrainGateSunlight",
+      "parent": 1,
+      "transform": {
+        "position": [0.0, 0.0, 0.0],
+        "rotation_euler_degrees": [45.0, -30.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    },
+    {
+      "id": 4,
+      "name": "TerrainGate",
+      "parent": 1,
+      "terrain": {
+        "asset_path": "terrain/TerrainGate.AshTerrain",
+        "casts_shadow": true,
+        "material_layer_overrides": ["", "", "", "", "", "", "", ""],
+        "receives_shadow": true,
+        "visible": true
+      },
+      "transform": {
+        "position": [0.0, 0.0, 0.0],
+        "rotation_euler_degrees": [0.0, 0.0, 0.0],
+        "scale": [1.0, 1.0, 1.0]
+      }
+    }
+  ],
+  "name": "TerrainGate",
+  "next_entity_id": 5,
+  "scene_config": {
+    "ambient_occlusion": {
+      "mode": "Off"
+    },
+    "bloom": {
+      "enabled": false
+    },
+    "directional_shadows": {
+      "default_cascade_count": 4,
+      "default_shadow_distance": 5000.0,
+      "enabled": true,
+      "near_shadow_distance": 64.0
+    },
+    "temporal_aa": {
+      "enabled": false
+    },
+    "tonemap": {
+      "exposure": 1.0
+    },
+    "volumetric_lighting": {
+      "enabled": false
+    }
+  },
+  "version": 6
+}
