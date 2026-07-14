@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-14
 review_cycle: monthly
 status: active
 ---
@@ -19,6 +19,7 @@ status: active
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
 - RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；默认覆盖 sandbox + particles，同一 Sandbox 进程用 `--rhi=<vulkan|dx12>`、`--smoke-test-seconds=<timeout>`、`--dump-frame=<png>`、`--scene=<json>` 完成 readiness smoke + capture；成功条件由 asset epoch/当前帧全 scene packet/非致命 present completion（及动态 capture-ready）驱动，ready arm 会清空 AO/TAA/体积光 history 后在下一同 epoch 帧抓取，golden 在 `tools/render/goldens/<scene>/<backend>.png`
 - Unit tests: `RunTests.bat [Config] [doctest args...]` → 构建并运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`（doctest，工程在 `project/src/tests/`，含 legacy `run_engine_base_self_tests()` 桥接）
+- Terrain Asset Core: `Function/Asset/TerrainData.*`（数据/快照）→ `TerrainComposition.*` / `TerrainBrush.*`（编辑）→ `TerrainContainer.*` / `TerrainImport.*`（持久化与高度图 IO）→ `AssetDatabase::load/publish/invalidate_terrain_*`；snapshot-local 查询入口为 `Function/Scene/TerrainQuery.*`，现状见 `docs/specs/features/terrain.md`
 - ArchGate: `RunArchGate.bat` → `scripts/CheckArchBoundary.ps1`；按 `tools/ai-dev/rules/arch-boundary-rules.json` 扫描 include 判定依赖方向红线，新增越界退出码 1
 - CI: `.github/workflows/ci.yml`（GitHub Actions，windows runner）——push/PR 跑 ArchGate、sln 生成、Editor/Sandbox Debug+Release 构建、RunTests，以及 Release 下 DX12/WARP 与 Vulkan/lavapipe readiness smoke（含 indirect 自测）；RenderGate/PerfGate 仍不进 CI
 
@@ -30,6 +31,7 @@ status: active
 | `project/src/engine/Graphics/` | RHI 抽象 + Vulkan/DX12 后端 + DXC shader 编译 | RHI 能力扩展、后端 bug 修复 |
 | `project/src/engine/Function/Render/` | RenderGraph、SceneRenderer、渲染 Pass、材质、渲染配置 | 渲染 feature 开发主战场 |
 | `project/src/engine/Function/Scene/`、`Asset/` | 逻辑场景、资产加载 | 场景/资产能力 |
+| `project/src/engine/Function/Asset/Terrain*`、`Function/Scene/TerrainQuery.*` | Terrain Phase 1 纯 CPU 资产、编辑、容器、导入导出与 local query | Terrain Asset Core；尚无 Scene/Render/Editor 接入 |
 | `project/src/engine/Shaders/` | Engine HLSL 源码 | 与 Pass 改动配套 |
 | `project/src/editor/` | Editor 壳与面板（App/Core/Shell/Panels/Services/Widgets） | Editor 功能开发 |
 | `project/src/sandbox/` | 验证程序与内置测试（`Tests/SandboxTestRegistry`） | 新 feature 的验证场景 |
@@ -62,6 +64,14 @@ status: active
 2. `DynamicRHI` 实例化对应后端；Debug/Release 同时编入 Vulkan、DX12、DXC
 3. `run.bat <target> <backend>` 通过临时改写 Engine.ini 完成切换并在退出后恢复
 
+### Terrain Asset flow
+
+1. `TerrainData` 定义生产默认 8193² 布局、全局 sample ownership、稀疏编辑层、受信 working set 与不可变 snapshot
+2. brush/patch 修改 working set 并产生完整 dirty Component 集合；composition 重建 Component，publication 原子发布新 generation
+3. `.AshTerrain` v1 通过双 index descriptor 做增量保存与上一 generation recovery；RAW/PNG/EXR IO 由 `TerrainImport` 统一调度
+4. `AssetDatabase` 共享同步/异步缓存，并按 generation/revision 发布或精确失效单一 Terrain ID
+5. `TerrainQuery` 直接查询 terrain-local snapshot；Scene 组件、世界空间适配、渲染和 Editor 尚未实现
+
 ## Public abstractions
 
 | Name | Location | Purpose | Constraints |
@@ -73,6 +83,7 @@ status: active
 | `DebugDrawService` | `engine/Function/` | frame-local 调试绘制（line/box/circle/cone/axes） | tone-map 后叠加，不参与光照 |
 | `UIContext` | `engine/Function/` | Editor 与 Engine 的 UI 交互边界 | Editor 不得绕过它直用 ImGui/Graphics |
 | `UINodeEditor` / `UINodeGraphModel` | `engine/Function/Gui/` | 通用节点画布门面与纯数据图模型，封装 `imgui-node-editor` 交互边界 | 第三方库只在 Engine.dll 内使用；Editor 只提交节点/pin/link 数据 |
+| `TerrainAssetSnapshot` / `TerrainWorkingSet` | `engine/Function/Asset/TerrainData.*` | Terrain 不可变读取快照与受信可变编辑状态 | 发布后 snapshot 不可修改；Phase 1 不暴露 Scene/Render/Editor Terrain API |
 
 ## Dependency direction
 
@@ -94,6 +105,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 | RHI 能力扩展 | `DynamicRHI.h`、两个后端对应实现 | `Graphics/` 三处（抽象+双后端） | 双后端构建 + `RunRenderGate.bat` + PerfGate 全矩阵 + validation 开启 |
 | Editor 面板功能 | `docs/specs/modules/editor.md`、`docs/editor/EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
 | 场景/资产能力 | `docs/specs/modules/scene.md`、`docs/specs/modules/asset.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
+| Terrain Asset / CPU logic | `docs/specs/features/terrain.md`、`docs/specs/modules/asset.md`、`docs/specs/modules/scene.md` | `Function/Asset/Terrain*`、`AssetDatabase.*`、`Function/Scene/TerrainQuery.*`、`tests/Terrain/` | Debug/Release tests + ArchGate + fresh builds（依赖变化时）+ 双后端/双目标 readiness smoke |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |
 | Base 层纯逻辑改动 | `docs/specs/modules/base.md`、相邻实现 | `engine/Base/`、`project/src/tests/Base/` | `RunTests.bat` |
 
