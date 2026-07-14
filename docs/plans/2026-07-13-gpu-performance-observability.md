@@ -12,7 +12,7 @@
 
 ## Preconditions and scope guard
 
-- 设计真源：`docs/sdd/SDD-2026-07-13-gpu-performance-observability.md`，状态 Approved。
+- 设计真源：`docs/sdd/SDD-2026-07-13-gpu-performance-observability.md`；core 与 Task 5 commit acknowledgement amendment 均为 Approved。
 - 架构真源：`docs/adr/ADR-2026-07-13-gpu-driven-instance-runtime.md`。
 - 本计划只做 Phase 0；不实现 Vegetation、RenderGraph buffer、GPU culling、HLOD 或 SpeedTree importer。
 - 不直接编辑 `tools/perf/perf_gate_baselines.json`、`tools/render/goldens/`；本阶段不运行任何 bless。
@@ -32,7 +32,7 @@ public:
     virtual bool begin_scope(CommandBuffer* cmd, GpuTimingMetric metric) = 0;
     virtual void end_scope(CommandBuffer* cmd, GpuTimingMetric metric) = 0;
     virtual void end_frame(CommandBuffer* cmd, uint64_t frame_id) = 0;
-    virtual void commit_frame(uint64_t frame_id) = 0;
+    virtual bool commit_frame(uint64_t frame_id) = 0;
     virtual void abort_frame(uint64_t frame_id, GpuTimingInvalidReason reason) = 0;
     virtual GpuTimingPollResult poll_completed_frame(GpuFrameTimingSample& out) = 0;
     virtual GpuTimingTelemetryInfo get_info() const = 0;
@@ -40,6 +40,7 @@ public:
 ```
 
 - `GPU.Frame` 是主 graphics command buffer 的 GPU workload，不包含 upload submission、CPU submit/present 或显示延迟。
+- `commit_frame` 只在 backend 已确认 exact command buffer 进入实际提交且 completion primitive 建立后返回 `true`；`false` 不得留下可轮询 Pending slot，也不得计入 PerfGate `submitted`。若执行/完成状态无法证明，backend 必须 quarantine slot/resource 而非立即复用。
 - ring depth = 3；metric count = 11；每帧 22 timestamps；backend query capacity = 66。
 - metric duplicate、overflow、pair incomplete、未提交、device removed 均显式 invalid，不写 0 ms。
 - `VegetationFullPipeline` 只接受单 timed scene view；多 view 造成 duplicate metric 时 sample invalid。
@@ -346,6 +347,11 @@ git commit -m "feat(dx12): add nonblocking gpu timing telemetry"
 
 **Files:**
 
+- Modify: `project/src/engine/Graphics/GpuTimingTelemetryRHI.h`
+- Modify: `project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.h`
+- Modify: `project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.cpp`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.h`
+- Modify: `project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.cpp`
 - Modify: `project/src/engine/Function/Render/RenderDevice.h`
 - Modify: `project/src/engine/Function/Render/RenderDevice.cpp`
 - Modify: `project/src/engine/Function/Render/Renderer.h`
@@ -353,6 +359,7 @@ git commit -m "feat(dx12): add nonblocking gpu timing telemetry"
 - Modify: `project/src/engine/Graphics/Vulkan/VulkanContext.cpp`
 - Modify: `project/src/engine/Graphics/DirectX12/DX12Context.cpp`
 - Modify: `project/src/tests/Function/gpu_timing_telemetry_tests.cpp`
+- Modify: `project/src/tests/Function/render_graph_gpu_metric_tests.cpp`
 
 - [ ] **Step 1: Add failing lifecycle tests with a fake telemetry object**
 
@@ -363,9 +370,13 @@ Retryable acquire                           -> no timing frame begun
 begin_record success                        -> begin_frame once with canonical renderer frame ID
 end_record path                             -> end_frame before command close
 successful exact submit                     -> commit once
-recording/submit skipped                     -> abort once, never commit
+recording or exact submit definitely skipped -> false, no Pending, slot safely reusable
+execution/completion state unprovable        -> false, no pollable Pending, slot quarantined
+quarantined slot                             -> later begin rejected until proof or shutdown
 completed queue may return up to ring depth  -> fixed-capacity transport, no vector allocation
 ```
+
+The RED suite must distinguish safe abort from uncertain execution. It must mechanically prove that an unprovable submission cannot make the physical query/readback slot reusable, even though it is excluded from the pollable Pending queue and from PerfGate `submitted`.
 
 - [ ] **Step 2: Confirm RED**
 
@@ -379,7 +390,7 @@ In `RenderDevice::begin_frame()`, start timing only after swapchain acquire succ
 
 In `RenderDevice::end_frame()`, close `GPU.Frame` and record backend resolve before `end_record()`. All early exits between begin/end must call `abort_frame`.
 
-Backend `submit()` commits only after the exact command buffer is executed and its completion primitive is established.
+Backend submission records a binding only after the exact command buffer enters the executed batch and its completion primitive is established. `RenderDevice` calls `commit_frame` after backend `end_frame`; the returned boolean is the sole submitted acknowledgement surfaced to `RendererFrameStats`. A failed acknowledgement must not create Pending work: safely unsubmitted recordings are aborted, while an unprovable execution/completion state quarantines the slot/resource.
 
 - [ ] **Step 4: Drain completed samples into fixed Renderer stats**
 
@@ -387,11 +398,12 @@ Extend `RendererFrameStats` with:
 
 ```cpp
 uint64_t render_frame_id = 0;
+bool gpu_timing_frame_submitted = false;
 std::array<RHI::GpuFrameTimingSample, RHI::k_gpu_timing_ring_depth> completed_gpu_samples{};
 uint32_t completed_gpu_sample_count = 0;
 ```
 
-At renderer begin/end timing completion, poll until `Ready` is exhausted; stop immediately on `Pending` or `Empty`. Copy samples into `m_last_completed_frame_stats` before `Application` calls `PerfGateController::sample_after_frame()`.
+At renderer begin/end timing completion, poll until `Ready` is exhausted; stop immediately on `Pending` or `Empty`. Copy samples and the exact commit acknowledgement into `m_last_completed_frame_stats` before `Application` calls `PerfGateController::sample_after_frame()`. Task 7 records a submitted frame ID only when `gpu_timing_frame_submitted` is true.
 
 - [ ] **Step 5: Run focused tests and dual-backend smoke**
 
@@ -406,7 +418,7 @@ Expected: no hang; samples show delayed frame IDs; no validation/debug-layer err
 - [ ] **Step 6: Commit frame lifecycle integration**
 
 ```bat
-git add project/src/engine/Function/Render/RenderDevice.h project/src/engine/Function/Render/RenderDevice.cpp project/src/engine/Function/Render/Renderer.h project/src/engine/Function/Render/Renderer.cpp project/src/engine/Graphics/Vulkan/VulkanContext.cpp project/src/engine/Graphics/DirectX12/DX12Context.cpp project/src/tests/Function/gpu_timing_telemetry_tests.cpp
+git add project/src/engine/Graphics/GpuTimingTelemetryRHI.h project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.h project/src/engine/Graphics/Vulkan/VulkanGpuTimingTelemetry.cpp project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.h project/src/engine/Graphics/DirectX12/DX12GpuTimingTelemetry.cpp project/src/engine/Function/Render/RenderDevice.h project/src/engine/Function/Render/RenderDevice.cpp project/src/engine/Function/Render/Renderer.h project/src/engine/Function/Render/Renderer.cpp project/src/engine/Graphics/Vulkan/VulkanContext.cpp project/src/engine/Graphics/DirectX12/DX12Context.cpp project/src/tests/Function/gpu_timing_telemetry_tests.cpp project/src/tests/Function/render_graph_gpu_metric_tests.cpp
 git commit -m "feat(render): collect delayed gpu frame timings"
 ```
 
