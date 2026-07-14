@@ -22,13 +22,13 @@ namespace AshEngine
 	{
 	public:
 		RenderGraphBuilder(Renderer& renderer, const char* name);
-		static RenderGraphBuilder create_headless_for_tests(const char* name);
+		ASH_API static RenderGraphBuilder create_headless_for_tests(const char* name);
 
 		RenderGraphTextureRef register_external_texture(
 			const std::shared_ptr<RenderTarget>& texture,
 			const char* name,
 			RenderGraphAccess initial_access = RenderGraphAccess::Unknown);
-		RenderGraphTextureRef register_external_texture_desc_for_tests(const RenderTargetDesc& desc, const char* name);
+		ASH_API RenderGraphTextureRef register_external_texture_desc_for_tests(const RenderTargetDesc& desc, const char* name);
 		RenderGraphTextureRef create_texture(const RenderGraphTextureDesc& desc, const char* name);
 		void extract_texture(RenderGraphTextureRef texture);
 
@@ -45,13 +45,13 @@ namespace AshEngine
 			const std::function<bool(RenderGraphComputeContext&)>& execute);
 
 		bool execute();
-		bool compile_for_tests(RenderGraphCompileResult& out_result) const;
+		ASH_API bool compile_for_tests(RenderGraphCompileResult& out_result) const;
 		bool compile_cached_for_tests(RenderGraphCompileResult& out_result) const;
 
 		size_t get_texture_count_for_tests() const;
 		size_t get_pass_count_for_tests() const;
 		const std::vector<RenderGraphTextureNode>& get_textures_for_tests() const;
-		const std::vector<RenderGraphPassNode>& get_passes_for_tests() const;
+		ASH_API const std::vector<RenderGraphPassNode>& get_passes_for_tests() const;
 
 	private:
 		RenderGraphBuilder(Renderer* renderer, const char* name);

@@ -27,6 +27,10 @@ namespace AshEngine
 	static constexpr uint32_t k_terrain_weight_atlas_extent =
 		16u * k_terrain_weight_atlas_slot_extent;
 	static constexpr uint32_t k_terrain_coarse_weight_extent = 1025u;
+	static constexpr uint32_t k_terrain_weight_upload_bytes =
+		k_terrain_component_sample_count * k_terrain_component_sample_count * 8u;
+	// ByteAddressBuffer requires a raw SRV rather than a structured stride.
+	static constexpr uint32_t k_terrain_weight_upload_stride = 0u;
 
 	enum class TerrainRenderReadiness : uint8_t
 	{

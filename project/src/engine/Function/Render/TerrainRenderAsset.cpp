@@ -545,12 +545,9 @@ namespace AshEngine
 		}
 		if (!m_dirty_weight_staging_buffer)
 		{
-			constexpr uint32_t weight_staging_size =
-				k_terrain_component_sample_count *
-				k_terrain_component_sample_count * 8u;
 			m_dirty_weight_staging_buffer = renderer.create_storage_buffer({
-				weight_staging_size,
-				sizeof(uint32_t),
+				k_terrain_weight_upload_bytes,
+				k_terrain_weight_upload_stride,
 				false,
 				false,
 				nullptr,

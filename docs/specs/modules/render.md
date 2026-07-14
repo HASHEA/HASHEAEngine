@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-13
+last_reviewed: 2026-07-14
 status: active
 ---
 
@@ -21,6 +21,7 @@ status: active
 | `RenderScene.h/.cpp` | `VisibleRenderFrame` 定义与 `build_visible_render_frame()` |
 | `TerrainRenderProxy.h/.cpp` | Terrain snapshot/render-asset proxy、world AABB 与 `VisibleTerrainFrame` 生成 |
 | `TerrainLod.h/.cpp` | 纯 CPU Component quadtree culling、投影误差选级、邻接修复与稳定 per-LOD instance batches |
+| `TerrainRenderPass.h/.cpp` | Terrain persistent atlas graph 注册、dirty raw staging 与 compute 更新；surface/draw 接入仍在后续 slice |
 | `SceneRenderView.h` | `SceneRenderViewContext`（输出目标、clear、viewport、pick state 等 per-view 上下文） |
 | `SceneDeferredGraphResources.h` | 一帧 graph 内共享的 texture ref 集合（GBuffer、depth、HDR、shadow、volumetric 等） |
 | `GBufferLayout.h/.cpp` | DeferredHQ GBuffer 布局（5 个 attachment，D=motion vector，E=normal） |
@@ -37,6 +38,7 @@ status: active
 - `TerrainRenderAsset`：消费不可变 `TerrainAssetSnapshot`，按 Component pointer diff 生成当前 content generation 的 packed R16 高度和两路 RGBA8 权重 payload；拥有 height/staging buffers、两张 weight atlas、coarse weight target、三张 8-slice material arrays 与帧边界 slot metadata。`RenderAssetManager` 以规范化 Terrain key 把 request/finalize、pending/failed 和 activity epoch 合入通用 readiness；GPU finalize 仅允许 render thread。
 - `RenderTerrainProxy` / `RenderScene`：按 Scene Terrain extraction 构建不可变 snapshot generation 的 proxy，维护 world bounds，transform-only 更新以新 proxy 集合原子替换；`build_visible_render_frame` 对 bounds 做 frustum 裁剪并写入 `VisibleRenderFrame::terrains`。当前没有 pass 消费该数组，实际 Terrain draw 由后续 slice 接入。
 - `TerrainLod`：消费一个 immutable Terrain snapshot、world transform 与 `SceneView`，以 Component 根 min/max 构建隐式 quadtree，按投影误差选择 9 级共享网格并只向更细方向修复邻接。输出每个非空 LOD 一个 `first_instance == 0` 的稳定 batch，instance 携带坐标、较粗邻边掩码和 morph factor；当前结果尚未上传或 draw。
+- `TerrainRenderPass::prepare_graph`：对第一个 snapshot 与 render asset generation 一致的 visible Terrain 注册两张 4144² atlas 和一张 1025² coarse target；有 dirty payload 时最多排入一个 raw staging upload，并添加写三张 texture 的 `TerrainWeightAtlasUpdatePass`。dispatch 成功才更新 slot metadata 并从 pending 队列消费该项。`TerrainGraphResources` 交给后续 surface pass 声明三张 texture 的 `GraphicsSRV` 读取；当前尚未接入 `SceneRenderer`。
 - `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。
 
 ### Pass 序列（`SceneRenderer::render_visible_frame`，代码实际顺序）
@@ -97,6 +99,7 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 - 输出尺寸上限 `uint16_t`（graph texture desc 限制）。
 - temporal 状态按 view key（`view_id`，否则 output target 指针）隔离，多 viewport 互不污染。
 - 粒子状态按 `scene_runtime_id + entity_id` 隔离；capacity、scene content epoch 或模拟参数 fingerprint 改变时仅重置对应 emitter。删除/解绑场景必须释放相关状态并清空 program 的 buffer 引用。
+- Terrain weight staging 是单个 raw buffer；一个 graph 最多上传并 dispatch 一个 Component。禁止为了批处理而在同一 graph 里反复覆盖该 staging 后再提交多个 dispatch，除非先引入可证明独立生命周期的 ring/offset 方案。
 - 实例 buffer 为「逻辑 slot + 3 帧物理 ring」，epoch 取渲染侧 `Application::get_frame_index()`（不是 `VisibleRenderFrame::frame_index`）；temporal history 只允许 GBuffer pass 使用。禁止改回单物理 slot：Vulkan Release 下 CPU 写 host-visible buffer 会覆盖 GPU 正在读的上一帧实例矩阵，导致 GBuffer depth/normal/motion vector 裂缝闪烁。
 - GPU timing 的 pass 名称及其稳定 hash 是遥测身份。每帧同名 scope 先求和再进入 percentile；duplicate/unexpected/missing frame、scope overflow、required scope 缺失、hash collision/mismatch 或后端 timing failure 都是 PerfGate fatal，禁止静默补 CPU 值或复用别帧结果。
 - 双后端等价：所有 pass 必须 Vulkan / DX12 行为一致，跨后端 diff FAIL 视同 bug。
