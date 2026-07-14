@@ -42,6 +42,8 @@ status: active
 | `--dump-frame=<png>` | 隐式启用 readiness capture；通常配 `--smoke-test-seconds=S`，未给 S 时默认 120 秒。只有通过 epoch 双重复核的 capture 才原子发布 PNG，超时/失败会删除旧目标并非零退出 |
 | `--scene=<json>` | 场景路径覆盖，应用层经 `get_scene_path_override()` 消费 |
 | `--engine-self-test` | 只跑 Base 自测后退出 |
+| `--rhi-selftest-indirect` | opt-in 的首帧前双后端 indirect draw/dispatch GPU 诊断；失败设置既有 runtime-failure 状态并使 readiness smoke 非零退出 |
+| `--rhi-selftest-constant-buffer` | opt-in 的首帧前双后端 constant-buffer 可见性 GPU 诊断；setup、命令录制、校验或读回任一失败均设置既有 runtime-failure 状态并使 readiness smoke 非零退出。与 `--rhi-selftest-indirect` 相互独立；两项同时请求时都会执行，任一失败均在 `_on_startup()` 与首帧前 fail-fast |
 | `--bake-ashibl <src.hdr> <out.ashibl> [...]` | IBL 离线烘焙子命令，跑完即退出 |
 | PerfGate 系列 | `parse_perf_gate_config` 解析后 `configure_perf_gate` |
 

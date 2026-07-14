@@ -1,5 +1,6 @@
 #include "VulkanCommandPool.h"
 #include "VulkanCommandBuffer.h"
+#include "VulkanBarrierPolicy.h"
 #include "Base/hprofiler.h"
 #include "VulkanContext.h"
 #include "VulkanFramebuffer.h"
@@ -143,7 +144,7 @@ namespace RHI
 		if (has_any_flags((uint32_t)RHIAccess, (uint32_t)AshResourceState::ConstBuffer))
 		{
 			H_ASSERT(ResourceType != AshBarrier::EType::Texture);
-			StageFlags |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+			StageFlags |= VulkanBarrierPolicy::const_buffer_stage_mask();
 			AccessFlags |= VK_ACCESS_UNIFORM_READ_BIT;
 		}
 

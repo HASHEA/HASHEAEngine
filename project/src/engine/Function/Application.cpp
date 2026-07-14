@@ -8,6 +8,7 @@
 #include "Function/Render/RenderDevice.h"
 #include "Function/Render/RenderFeatureConfig.h"
 #include "Function/Render/Renderer.h"
+#include "Function/Render/RHIConstantBufferSelfTest.h"
 #include "Function/Render/RHIIndirectSelfTest.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
@@ -388,12 +389,26 @@ namespace AshEngine
 		logicThreadException = nullptr;
 		logicThreadFailureMessage.clear();
 		runStartTime = std::chrono::steady_clock::now();
+		bool rhiSelfTestFailed = false;
 		if (rhiIndirectSelfTestRequested)
 		{
 			if (!run_rhi_indirect_self_test(graphicsContext))
 			{
-				runtimeFailureDetected.store(true, std::memory_order_release);
+				rhiSelfTestFailed = true;
 			}
+		}
+		if (rhiConstantBufferSelfTestRequested)
+		{
+			if (!run_rhi_constant_buffer_self_test(graphicsContext))
+			{
+				rhiSelfTestFailed = true;
+			}
+		}
+		if (rhiSelfTestFailed)
+		{
+			runtimeFailureDetected.store(true, std::memory_order_release);
+			started = false;
+			return false;
 		}
 		_on_startup();
 		perfGateController.begin();
