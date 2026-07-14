@@ -31,7 +31,7 @@ status: active
 
 ## 公共接口
 
-- 日志：`LogService::instance()` 初始化后使用 `HLogInfo/Warning/Error/Trace` 宏；引擎/应用双 logger 由 `ASH_ENGINE` 宏区分。
+- 日志：`LogService::instance()` 初始化后使用 `HLogInfo/Warning/Error/Trace` 宏；引擎/应用双 logger 由 `ASH_ENGINE` 宏区分。每次 `init` 为本次进程会话创建一对 `product/logs/{AshEngineLogFile,AshAppLogFile}_<session>.logfile`，两者共享 session 后缀；后缀由本地时间（微秒）、PID 与进程内单调序号构成。
 - 内存：所有引擎堆对象经 `Ash_New<T>(allocator, args...)` / `Ash_Delete` 分配释放；`Allocator` 为抽象接口（`eHeap/eStack/eLinear`）；默认走 `MemoryService::instance()->get_system_allocator()`。
 - 窗口：`Window::create()` 工厂 + `init(WindowConfig)`；事件用 `poll_event(WindowEvent&)` 逐个取出，类型见 `WindowEventType`（Resize/Key/Mouse/CloseRequested 等）。
 - 输入：`InputState::begin_frame()` / `clear_transient_state()` 清空 pressed/released/scroll，保留 down 与鼠标位置；`merge_frame_snapshot()` 以最新持续状态、逐项 OR 边沿、累加 scroll 的规则合并尚未消费帧。`set_key_state/set_mouse_button_state` 由窗口事件驱动；消费方查询 down/pressed/released。
@@ -46,6 +46,7 @@ status: active
 
 - Base 不得反向依赖 Graphics/Function/Editor（唯一例外是 `RHIBackend.h` 的纯枚举头）。
 - `LogService` 与 `MemoryService` 必须最先初始化（`Application::initialize` 的第一步），其余模块假定二者可用。
+- 不同 `LogService` 初始化会话不得复用或 append 到同一日志文件；快速重启、同进程重新初始化和多进程并行均必须保留各自完整日志，Engine/Application 文件必须可由相同 session 后缀配对。
 - 引擎对象生命周期由 `Ash_New/Ash_Delete` 管理以纳入内存统计；不要混用裸 `new/delete` 分配引擎长生命周期对象。
 - `hprofiler.h` 只应在 `.cpp` 中 include，避免 Tracy 头污染公共头。
 - Base 符号的 `ASH_API` 导出（如 `memory_copy`、`MemoryService`）仅为跨 DLL 链接需要（Tests.exe / 内联模板在 exe 侧实例化）；**导出不等于开放**，Editor/Game 层禁止直接使用 Base 符号。若测试迁移导致导出面明显膨胀，届时立 SDD 做 Base 静态库拆分。
@@ -68,3 +69,4 @@ status: active
 - [SDD-2026-07-13-base-string-storage-safety](../../sdd/SDD-2026-07-13-base-string-storage-safety.md)：收紧 `StringBuffer` / `StringArray` 容量边界、allocator/lifetime 配对与 hash collision 正确性。
 - [SDD-2026-07-14-directory-path-safety](../../sdd/SDD-2026-07-14-directory-path-safety.md)：目录路径改为有界局部构造和事务式句柄替换，失败不破坏原状态，关闭操作幂等。
 - [SDD-2026-07-14-remove-hserialization](../../sdd/SDD-2026-07-14-remove-hserialization.md)：删除零调用、无兼容需求且存在边界与所有权缺陷的旧 `hserialization` 模块；Base 不再提供通用二进制序列化能力。
+- [SDD-2026-07-14-log-file-session-identity](../../sdd/SDD-2026-07-14-log-file-session-identity.md)：日志文件以微秒、PID 和进程内序号组成唯一会话身份，Engine/Application 成对且快速重启不覆盖前序证据。
