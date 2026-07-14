@@ -869,10 +869,9 @@ function New-MarkdownTable {
     return $lines
 }
 
-function Get-RunLogFiles {
+function Get-EngineLogFiles {
     param(
-        [string]$RepoRoot,
-        [datetime]$Since
+        [string]$RepoRoot
     )
 
     $logRoot = Join-Path $RepoRoot "product/logs"
@@ -881,8 +880,24 @@ function Get-RunLogFiles {
     }
 
     return @(Get-ChildItem -LiteralPath $logRoot -File -Filter "*.logfile" |
-        Where-Object { $_.LastWriteTime -ge $Since.AddSeconds(-1) } |
-        Sort-Object LastWriteTime)
+        Sort-Object LastWriteTime, FullName)
+}
+
+function Get-RunLogFiles {
+    param(
+        [string]$RepoRoot,
+        [string[]]$ExistingPaths = @()
+    )
+
+    $existingPathLookup = @{}
+    foreach ($path in @($ExistingPaths)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$path)) {
+            $existingPathLookup[[System.IO.Path]::GetFullPath([string]$path)] = $true
+        }
+    }
+
+    return @(Get-EngineLogFiles -RepoRoot $RepoRoot |
+        Where-Object { -not $existingPathLookup.ContainsKey($_.FullName) })
 }
 
 function Test-LogForDiagnostics {
@@ -1927,6 +1942,29 @@ function Invoke-RunPerfGateSelfTest {
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-gate-selftest-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
     try {
+        $logRoot = Join-Path $tempRoot "product/logs"
+        New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
+        $priorAppLog = Join-Path $logRoot "AshAppLogFile_prior.logfile"
+        $priorEngineLog = Join-Path $logRoot "AshEngineLogFile_prior.logfile"
+        "prior app" | Set-Content -LiteralPath $priorAppLog -Encoding UTF8
+        "prior engine" | Set-Content -LiteralPath $priorEngineLog -Encoding UTF8
+        $existingLogPaths = @($priorAppLog, $priorEngineLog)
+
+        $currentAppLog = Join-Path $logRoot "AshAppLogFile_current.logfile"
+        $currentEngineLog = Join-Path $logRoot "AshEngineLogFile_current.logfile"
+        "current app" | Set-Content -LiteralPath $currentAppLog -Encoding UTF8
+        "current engine" | Set-Content -LiteralPath $currentEngineLog -Encoding UTF8
+        (Get-Item -LiteralPath $priorAppLog).LastWriteTime = (Get-Date).AddMinutes(1)
+        (Get-Item -LiteralPath $priorEngineLog).LastWriteTime = (Get-Date).AddMinutes(1)
+        (Get-Item -LiteralPath $currentAppLog).LastWriteTime = (Get-Date).AddMinutes(-1)
+        (Get-Item -LiteralPath $currentEngineLog).LastWriteTime = (Get-Date).AddMinutes(-1)
+
+        $freshLogs = @(Get-RunLogFiles -RepoRoot $tempRoot -ExistingPaths $existingLogPaths)
+        Assert-SelfTest ($freshLogs.Count -eq 2) "Fresh log discovery must return exactly the current session pair."
+        Assert-SelfTest (@($freshLogs.Name) -contains "AshAppLogFile_current.logfile") "Fresh log discovery omitted the current application log."
+        Assert-SelfTest (@($freshLogs.Name) -contains "AshEngineLogFile_current.logfile") "Fresh log discovery omitted the current engine log."
+        Assert-SelfTest (@($freshLogs.Name) -notcontains "AshAppLogFile_prior.logfile" -and @($freshLogs.Name) -notcontains "AshEngineLogFile_prior.logfile") "Fresh log discovery included a prior session after its late flush timestamp changed."
+
         $profilePath = Join-Path $tempRoot "profiles.json"
         $testBaselinePath = Join-Path $tempRoot "baselines.json"
         @'
@@ -2894,14 +2932,14 @@ for ($recordIndex = 0; $recordIndex -lt $records.Count; ++$recordIndex) {
         continue
     }
 
-    $runStart = Get-Date
+    $existingRunLogPaths = @(Get-EngineLogFiles -RepoRoot $repoRoot | ForEach-Object { $_.FullName })
     $matrixMayContinue = Invoke-GateProcess `
         -Record $record `
         -RunDirectory (Split-Path -Parent $record.executable) `
         -Arguments $record.arguments `
         -TimeoutSeconds ([double]$profileConfig.timeout_seconds)
 
-    $runLogs = Get-RunLogFiles -RepoRoot $repoRoot -Since $runStart
+    $runLogs = Get-RunLogFiles -RepoRoot $repoRoot -ExistingPaths $existingRunLogPaths
     Test-LogForDiagnostics -Record $record -LogFiles $runLogs
     if (-not $matrixMayContinue) {
         Set-RemainingRunRecordsAborted `
