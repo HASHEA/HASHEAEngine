@@ -49,6 +49,7 @@ status: active
 - 所有脚本假定从仓库根调用；本地报告统一落 `Intermediate/test-reports/`，不提交。
 - PerfGate 每个 matrix run 的 `engine_logs` 必须是该子进程启动前/退出后日志路径集合的精确差集；不得用 LastWriteTime 窗口吸收上一进程的延迟 flush。`run.bat` 的 single 与 `all` 路径必须逐个保留任意数量的 application arguments，矩阵四格使用同一参数序列。
 - PerfGate baseline bless 只能使用终态 PASS/WARN、已确认 Job Object 清理且 comparison identity 完整的 run；`TelemetryMode Off`、FAIL、DRY_RUN、不可比数据均不得 bless。baseline source SHA 只记录采样来源，不参与相等性判定。
+- PerfGate 的 JSON writer 固定输出 UTF-8 without BOM、LF 行尾和单个末尾 LF；baseline bless 与 summary 使用同一 writer，重复写入同一对象必须字节一致且不得产生尾随空白。
 - 基线文件（perf json、render golden png）提交入库；只能经 `-BlessBaseline` / `-BlessGolden` 更新，golden 更新前必须由用户确认画面正确。
 - PerfGate FAIL 禁止提交；WARN 需在提交说明写明理由。RenderGate 跨后端 diff FAIL 视同 bug。
 - AshImageDiff 输出格式（key=value + 退出码语义）是 RenderGate 解析契约，改动需同步 `RunRenderGate.ps1`。

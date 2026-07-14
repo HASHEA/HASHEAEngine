@@ -749,6 +749,26 @@ function Get-PerfGateFileSha256 {
     }
 }
 
+function Write-PerfGateJsonFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [object]$InputObject,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath,
+
+        [ValidateRange(1, 100)]
+        [int]$Depth = 16
+    )
+
+    $json = ConvertTo-Json -InputObject $InputObject -Depth $Depth
+    $json = $json.Replace("`r`n", "`n").Replace("`r", "`n")
+    $json = $json.TrimEnd([char[]]@("`n")) + "`n"
+    $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($LiteralPath, $json, $utf8WithoutBom)
+}
+
 function New-PerfGateWorkloadIdentity {
     param(
         [object]$ProfileConfig,
@@ -2666,6 +2686,38 @@ function Invoke-RunPerfGateSelfTest {
         catch {
             $qualityContractFailures += "baseline without optional legacy profiles was rejected"
         }
+
+        $jsonWriterPath = Join-Path $tempRoot "deterministic-json-writer.json"
+        $jsonWriterDocument = [PSCustomObject][ordered]@{
+            schema_version = 1
+            nested = [PSCustomObject][ordered]@{
+                value = "stable"
+            }
+        }
+        Write-PerfGateJsonFile -InputObject $jsonWriterDocument -LiteralPath $jsonWriterPath -Depth 8
+        $firstJsonWriterBytes = [System.IO.File]::ReadAllBytes($jsonWriterPath)
+        $firstJsonWriterText = [System.Text.Encoding]::UTF8.GetString($firstJsonWriterBytes)
+        Assert-SelfTest (
+            $firstJsonWriterBytes.Length -ge 1 -and
+            -not (
+                $firstJsonWriterBytes.Length -ge 3 -and
+                $firstJsonWriterBytes[0] -eq 0xEF -and
+                $firstJsonWriterBytes[1] -eq 0xBB -and
+                $firstJsonWriterBytes[2] -eq 0xBF
+            )
+        ) "PerfGate JSON files must use UTF-8 without a BOM."
+        Assert-SelfTest (-not $firstJsonWriterText.Contains("`r")) "PerfGate JSON files must use LF line endings."
+        Assert-SelfTest ($firstJsonWriterText.EndsWith("`n") -and -not $firstJsonWriterText.EndsWith("`n`n")) "PerfGate JSON files must end with exactly one LF."
+        Assert-SelfTest (-not [regex]::IsMatch($firstJsonWriterText, "(?m)[ `t]+$")) "PerfGate JSON files must not contain trailing whitespace."
+        $jsonWriterRoundTrip = $firstJsonWriterText | ConvertFrom-Json
+        Assert-SelfTest ($jsonWriterRoundTrip.schema_version -eq 1 -and $jsonWriterRoundTrip.nested.value -eq "stable") "PerfGate JSON writer must preserve the document structure."
+
+        Write-PerfGateJsonFile -InputObject $jsonWriterDocument -LiteralPath $jsonWriterPath -Depth 8
+        $secondJsonWriterBytes = [System.IO.File]::ReadAllBytes($jsonWriterPath)
+        Assert-SelfTest (
+            [System.Convert]::ToBase64String($firstJsonWriterBytes) -ceq
+            [System.Convert]::ToBase64String($secondJsonWriterBytes)
+        ) "PerfGate JSON writes must be byte-deterministic."
     }
     finally {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -4081,10 +4133,10 @@ $summary = [PSCustomObject]@{
 
 if ($BlessBaseline -and $overall -ne "FAIL" -and $overall -ne "DRY_RUN") {
     Update-BaselinesFromRecords -Baseline $baseline -Profile $Profile -Configuration $Configuration -Records $records -ReportRoot $reportRoot
-    $baseline | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $baselinePath -Encoding UTF8
+    Write-PerfGateJsonFile -InputObject $baseline -LiteralPath $baselinePath -Depth 16
     $summary.baseline_blessed = $true
 }
-$summary | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath (Join-Path $reportRoot "summary.json") -Encoding UTF8
+Write-PerfGateJsonFile -InputObject $summary -LiteralPath (Join-Path $reportRoot "summary.json") -Depth 16
 
 $markdown = @()
 $markdown += "# AshEngine Perf Gate Summary"
