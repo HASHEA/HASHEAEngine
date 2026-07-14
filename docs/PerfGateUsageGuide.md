@@ -130,9 +130,9 @@ tools/perf/perf_gate_baselines.json
 | `GPU.Frame` avg / p95 | `max(5%, 0.25 ms)` / `max(8%, 0.50 ms)` |
 | pass baseline avg `>= 0.5 ms` | avg `max(8%, 0.10 ms)`；p95 `max(12%, 0.20 ms)` |
 | pass baseline avg `[0.1, 0.5) ms` | avg `max(15%, 0.05 ms)`；p95 `max(20%, 0.10 ms)` |
-| pass baseline avg `< 0.1 ms` | avg `+0.03 ms`；p95 `+0.05 ms`（absolute-only） |
+| pass baseline avg `< 0.1 ms` | avg `+0.03 ms`；p95 `+0.05 ms`（absolute-only；p95 WARN 还要求 avg 同时超阈） |
 
-`GPU.Frame` 只使用专用阈值，不进入 pass tier。其余十个 required metric 由 baseline avg 选择 tier，avg/p95 各自独立产生 WARN。三轮候选的稳定性按 target+backend 独立汇总，不混合 Vulkan/DX12：CPU avg 与 `GPU.Frame` avg 的 max-min spread 不得超过 `max(3%, 0.15 ms)`，对应 p95 不得超过 `max(5%, 0.30 ms)`。
+`GPU.Frame` 只使用专用阈值，不进入 pass tier。其余十个 required metric 由 baseline avg 选择 tier。baseline avg `>= 0.1 ms` 的 pass 仍由 avg/p95 各自独立产生 WARN；tiny pass 的 p95 只在 avg 也超过 `+0.03 ms` 时追加 WARN，用双信号避免双峰短 pass 在 95% 分位点附近发生量化翻转。未获 avg 佐证的 p95 delta 仍写入 `baseline_deltas`，保留 current/baseline/allowed 数值，并以 `threshold_exceeded=true`、`corroborated=false` 标明未升级门禁。三轮候选的稳定性按 target+backend 独立汇总，不混合 Vulkan/DX12：CPU avg 与 `GPU.Frame` avg 的 max-min spread 不得超过 `max(3%, 0.15 ms)`，对应 p95 不得超过 `max(5%, 0.30 ms)`。
 
 正式候选命令：
 

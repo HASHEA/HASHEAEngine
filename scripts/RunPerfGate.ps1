@@ -1293,8 +1293,34 @@ function Compare-RecordToBaseline {
             if ($null -eq $baselineAverage -or $null -eq $currentAverage -or $null -eq $baselineP95 -or $null -eq $currentP95) { continue }
             $tier = @($passTiers | Where-Object { $baselineAverage -ge [double](Get-ProfileProperty $_ "minimum_baseline_avg_ms") } | Select-Object -First 1)
             if ($tier.Count -eq 0) { continue }
-            Add-ConfiguredBaselineDelta $Record "gpu.$metricName.avg" "$metricName avg" $currentAverage $baselineAverage (Get-ProfileProperty $tier[0] "avg")
-            Add-ConfiguredBaselineDelta $Record "gpu.$metricName.p95" "$metricName p95" $currentP95 $baselineP95 (Get-ProfileProperty $tier[0] "p95")
+            $averageThreshold = Get-ProfileProperty $tier[0] "avg"
+            $averageDelta = New-BaselineDelta `
+                -Metric "gpu.$metricName.avg" `
+                -Label "$metricName avg" `
+                -Current $currentAverage `
+                -BaselineValue $baselineAverage `
+                -ThresholdPercent (Get-ProfileProperty $averageThreshold "relative_percent") `
+                -AbsoluteFloor ([double](Get-ProfileProperty $averageThreshold "absolute_floor"))
+            Add-BaselineDelta $Record $averageDelta
+
+            $p95Threshold = Get-ProfileProperty $tier[0] "p95"
+            $p95Delta = New-BaselineDelta `
+                -Metric "gpu.$metricName.p95" `
+                -Label "$metricName p95" `
+                -Current $currentP95 `
+                -BaselineValue $baselineP95 `
+                -ThresholdPercent (Get-ProfileProperty $p95Threshold "relative_percent") `
+                -AbsoluteFloor ([double](Get-ProfileProperty $p95Threshold "absolute_floor"))
+            if ([double](Get-ProfileProperty $tier[0] "minimum_baseline_avg_ms") -eq 0.0) {
+                $p95ThresholdExceeded = $p95Delta.status -eq "WARN"
+                $averageCorroborated = $averageDelta.status -eq "WARN"
+                Set-ObjectProperty $p95Delta "threshold_exceeded" $p95ThresholdExceeded
+                Set-ObjectProperty $p95Delta "corroborated" ($p95ThresholdExceeded -and $averageCorroborated)
+                if ($p95ThresholdExceeded -and -not $averageCorroborated) {
+                    $p95Delta.status = "PASS"
+                }
+            }
+            Add-BaselineDelta $Record $p95Delta
         }
         return
     }
@@ -4253,6 +4279,43 @@ exit 0
             ) "Every required GPU metric avg/p95 regression must emit exactly one per-metric warning; failed for $requiredMetricName $statName."
         }
     }
+
+    $tinyMetricName = "GPU.ToneMapAndOverlays"
+    $tinyBaseline = $allMetricsBaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $tinyBaselineEntry = Get-BaselineEntry -Baseline $tinyBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
+    $tinyBaselineMetric = Get-ProfileProperty $tinyBaselineEntry.gpu_metrics $tinyMetricName
+    Set-ObjectProperty $tinyBaselineMetric "avg" 0.09
+    Set-ObjectProperty $tinyBaselineMetric "p95" 0.10
+
+    $tinyTailOnlyRecord = $allMetricsBaselineRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $tinyTailOnlyMetric = Get-ProfileProperty $tinyTailOnlyRecord.gpu_metric_summaries $tinyMetricName
+    Set-ObjectProperty $tinyTailOnlyMetric "avg" 0.11
+    Set-ObjectProperty $tinyTailOnlyMetric "p95" 0.16
+    Compare-RecordToBaseline -Record $tinyTailOnlyRecord -Baseline $tinyBaseline -ProfileConfig $vegetationProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    $tinyTailOnlyDelta = @($tinyTailOnlyRecord.baseline_deltas | Where-Object { $_.metric -eq "gpu.$tinyMetricName.p95" })
+    Assert-SelfTest (
+        $tinyTailOnlyRecord.status -eq "PASS" -and
+        @($tinyTailOnlyRecord.warnings).Count -eq 0 -and
+        $tinyTailOnlyDelta.Count -eq 1 -and
+        $tinyTailOnlyDelta[0].status -eq "PASS" -and
+        [bool]$tinyTailOnlyDelta[0].threshold_exceeded -and
+        -not [bool]$tinyTailOnlyDelta[0].corroborated
+    ) "Tiny-pass p95-only threshold excursions must remain visible without warning unless avg also exceeds its threshold."
+
+    $tinyCorroboratedRecord = $allMetricsBaselineRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $tinyCorroboratedMetric = Get-ProfileProperty $tinyCorroboratedRecord.gpu_metric_summaries $tinyMetricName
+    Set-ObjectProperty $tinyCorroboratedMetric "avg" 0.13
+    Set-ObjectProperty $tinyCorroboratedMetric "p95" 0.16
+    Compare-RecordToBaseline -Record $tinyCorroboratedRecord -Baseline $tinyBaseline -ProfileConfig $vegetationProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    $tinyCorroboratedDelta = @($tinyCorroboratedRecord.baseline_deltas | Where-Object { $_.metric -eq "gpu.$tinyMetricName.p95" })
+    Assert-SelfTest (
+        $tinyCorroboratedRecord.status -eq "WARN" -and
+        @($tinyCorroboratedRecord.warnings).Count -eq 2 -and
+        $tinyCorroboratedDelta.Count -eq 1 -and
+        $tinyCorroboratedDelta[0].status -eq "WARN" -and
+        [bool]$tinyCorroboratedDelta[0].threshold_exceeded -and
+        [bool]$tinyCorroboratedDelta[0].corroborated
+    ) "Tiny-pass p95 threshold excursions must warn when avg independently corroborates the regression."
 
     $missingBaselineMetricDocument = $allMetricsBaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
     (Get-BaselineEntry -Baseline $missingBaselineMetricDocument -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan").gpu_metrics.PSObject.Properties.Remove("GPU.GBuffer")
