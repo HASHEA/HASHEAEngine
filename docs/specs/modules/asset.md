@@ -8,7 +8,7 @@ status: active
 
 ## 职责与边界
 
-`AssetDatabase` 提供以资产根目录为范围的资产索引（扫描/查找）与按类型的同步/异步加载，及加载状态与错误查询。管磁盘资产到内存数据结构（Mesh/Model/Material/AshAsset/Terrain/文本/二进制）的读取；Terrain 的纯 CPU 数据、编辑、容器与高度图 IO 也属于本模块。不管 GPU 资源上传（属 render 模块 `RenderAssetManager`）、场景实例化（属 scene 模块）或 Editor 交互。
+`AssetDatabase` 提供以资产根目录为范围的资产索引（扫描/查找）与按类型的同步/异步加载，及加载状态与错误查询。管磁盘资产到内存数据结构（Mesh/Model/Material/AshAsset/Terrain/文本/二进制）的读取；Terrain 的纯 CPU 数据、编辑、容器与高度图 IO 也属于本模块。不管 GPU 资源上传（由 render 模块 `TerrainRenderAsset` / `RenderAssetManager` 消费不可变 snapshot）、场景实例化（Scene v6 `TerrainComponent`）或 Editor 交互。
 
 ## 目录与关键文件
 
@@ -47,7 +47,7 @@ status: active
 - 加载产物为 const 数据，调用方不得修改；GPU 化由 render 侧另行处理。
 - `.ashterrain` 扩展名大小写不敏感。实际容器损坏会缓存为 `Failed`，需精确 invalidate 后重试；worker 不可用、关停拒绝或派发异常回到可重试 `Unloaded`，不得永久停在 `Loading`。
 - refresh、publish 与 invalidate 都会使旧 Terrain worker 失效；catalog generation 和每资产 load serial 禁止过期磁盘结果覆盖新索引或新发布快照。
-- Terrain 生产默认布局、编辑/容器/导入查询契约见 [Terrain Phase 1 Asset Core](../features/terrain.md)。Phase 1 尚未接入 RenderAssetManager、Scene TerrainComponent 或 Editor。
+- Terrain 生产默认布局、编辑/容器/导入查询及后续 Scene/Render 消费契约见 [Terrain feature spec](../features/terrain.md)。Asset 模块只发布不可变 snapshot；Scene v6 与 RenderAssetManager 已接入，Editor Terrain Mode 尚未接入。
 - 依赖方向：Asset 依赖 Base 与材质接口类型，不依赖 Scene/Editor。
 
 ## 验证

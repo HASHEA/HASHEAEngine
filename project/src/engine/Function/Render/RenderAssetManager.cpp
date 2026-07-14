@@ -174,11 +174,14 @@ namespace AshEngine
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
 		m_static_mesh_assets.clear();
+		m_terrain_assets.clear();
 		m_material_assets.clear();
 		m_material_proxies.clear();
 		m_texture_assets.clear();
 		m_pending_texture_decodes.clear();
 		m_failed_static_mesh_requests.clear();
+		m_failed_terrain_requests.clear();
+		m_pending_terrain_requests.clear();
 		m_sampler_pool.clear();
 		m_failed_texture_requests.clear();
 		m_failed_runtime_resource_requests.clear();
@@ -287,6 +290,90 @@ namespace AshEngine
 	std::shared_ptr<const MaterialInterface> RenderAssetManager::request_material_asset(const std::string& asset_path)
 	{
 		return request_material_asset_internal(asset_path, true);
+	}
+
+	std::shared_ptr<TerrainRenderAsset> RenderAssetManager::request_terrain_asset(
+		const std::string& asset_path,
+		const std::shared_ptr<const TerrainAssetSnapshot>& snapshot)
+	{
+		if (asset_path.empty() || !snapshot)
+		{
+			return nullptr;
+		}
+
+		const std::string key = make_terrain_key(asset_path);
+		std::shared_ptr<TerrainRenderAsset> asset{};
+		bool owns_request = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			const auto found = m_terrain_assets.find(key);
+			if (found != m_terrain_assets.end())
+			{
+				asset = found->second;
+			}
+			else
+			{
+				asset = std::make_shared<TerrainRenderAsset>();
+				asset->m_asset_path = asset_path;
+				m_terrain_assets.emplace(key, asset);
+				if (m_pending_terrain_requests.insert(key).second)
+				{
+					++m_pending_render_asset_count;
+				}
+				++m_activity_epoch;
+				owns_request = true;
+			}
+		}
+
+		if (!asset)
+		{
+			return nullptr;
+		}
+		const uint64_t previous_generation = asset->accepted_content_generation();
+		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
+			asset->accepted_snapshot();
+		if (!owns_request && previous_snapshot == snapshot)
+		{
+			return asset->readiness() == TerrainRenderReadiness::Failed ?
+				nullptr : asset;
+		}
+
+		std::string accept_error{};
+		if (!asset->accept_snapshot(snapshot, &accept_error))
+		{
+			const bool stale_existing_request = !owns_request && previous_snapshot &&
+				snapshot->content_generation <= previous_generation;
+			if (stale_existing_request)
+			{
+				return nullptr;
+			}
+
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			if (m_pending_terrain_requests.erase(key) != 0u)
+			{
+				if (m_pending_render_asset_count > 0u)
+				{
+					--m_pending_render_asset_count;
+				}
+			}
+			m_failed_terrain_requests.insert(key);
+			++m_activity_epoch;
+			return nullptr;
+		}
+
+		const uint64_t accepted_generation = asset->accepted_content_generation();
+		if (!owns_request && previous_snapshot &&
+			accepted_generation != previous_generation)
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			if (m_pending_terrain_requests.insert(key).second)
+			{
+				++m_pending_render_asset_count;
+			}
+			m_failed_terrain_requests.erase(key);
+			++m_activity_epoch;
+		}
+		return asset;
 	}
 
 	std::shared_ptr<MaterialRenderProxy> RenderAssetManager::request_material_render_proxy(const std::shared_ptr<const MaterialInterface>& material)
@@ -713,12 +800,66 @@ namespace AshEngine
 		return succeeded;
 	}
 
+	bool RenderAssetManager::finalize_pending_terrain_asset(
+		const std::shared_ptr<TerrainRenderAsset>& asset)
+	{
+		if (!asset)
+		{
+			return false;
+		}
+
+		TerrainRenderReadiness terminal_state = asset->readiness();
+		bool succeeded = terminal_state == TerrainRenderReadiness::Ready;
+		if (terminal_state == TerrainRenderReadiness::Pending &&
+			(!m_renderer ||
+				!require_render_thread_for_gpu_asset_work("finalize_pending_terrain_asset")))
+		{
+			std::scoped_lock<std::mutex> asset_lock(asset->m_mutex);
+			asset->fail_active_generation(
+				"Terrain GPU resources must be finalized on the render thread.");
+		}
+		else if (terminal_state == TerrainRenderReadiness::Pending)
+		{
+			std::string error{};
+			succeeded = asset->finalize_gpu_resources(*m_renderer, &error);
+		}
+
+		terminal_state = asset->readiness();
+		if (terminal_state != TerrainRenderReadiness::Ready &&
+			terminal_state != TerrainRenderReadiness::Failed)
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		const std::string key = make_terrain_key(asset->m_asset_path);
+		if (m_pending_terrain_requests.erase(key) == 0u)
+		{
+			return succeeded;
+		}
+		if (m_pending_render_asset_count > 0u)
+		{
+			--m_pending_render_asset_count;
+		}
+		if (terminal_state == TerrainRenderReadiness::Failed)
+		{
+			m_failed_terrain_requests.insert(key);
+		}
+		else
+		{
+			m_failed_terrain_requests.erase(key);
+		}
+		++m_activity_epoch;
+		return succeeded;
+	}
+
 	void RenderAssetManager::finalize_pending_assets()
 	{
 		ASH_PROFILE_SCOPE_NC("RenderAssetManager::finalize_pending_assets", AshEngine::Profile::Color::Upload);
 		finalize_pending_texture_decodes();
 
 		std::vector<std::shared_ptr<StaticMeshRenderAsset>> assets{};
+		std::vector<std::shared_ptr<TerrainRenderAsset>> terrain_assets{};
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			assets.reserve(m_static_mesh_assets.size());
@@ -727,8 +868,15 @@ namespace AshEngine
 				(void)key;
 				assets.push_back(asset);
 			}
+			terrain_assets.reserve(m_terrain_assets.size());
+			for (const auto& [key, asset] : m_terrain_assets)
+			{
+				(void)key;
+				terrain_assets.push_back(asset);
+			}
 		}
-		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(assets.size()));
+		ASH_PROFILE_SCOPE_VALUE(
+			static_cast<uint64_t>(assets.size() + terrain_assets.size()));
 
 		for (const std::shared_ptr<StaticMeshRenderAsset>& asset : assets)
 		{
@@ -738,12 +886,22 @@ namespace AshEngine
 			}
 			finalize_pending_static_mesh_asset(asset);
 		}
+		for (const std::shared_ptr<TerrainRenderAsset>& asset : terrain_assets)
+		{
+			if (!asset)
+			{
+				continue;
+			}
+			finalize_pending_terrain_asset(asset);
+		}
 	}
 
 	bool RenderAssetManager::has_requested_render_assets() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return !m_static_mesh_assets.empty() || !m_texture_assets.empty();
+		return !m_static_mesh_assets.empty() ||
+			!m_terrain_assets.empty() ||
+			!m_texture_assets.empty();
 	}
 
 	bool RenderAssetManager::has_pending_render_assets() const
@@ -759,6 +917,7 @@ namespace AshEngine
 		snapshot.pending = m_pending_render_asset_count != 0;
 		snapshot.failed =
 			!m_failed_static_mesh_requests.empty() ||
+			!m_failed_terrain_requests.empty() ||
 			!m_failed_texture_requests.empty() ||
 			!m_failed_runtime_resource_requests.empty();
 		return snapshot;
@@ -787,6 +946,11 @@ namespace AshEngine
 	std::string RenderAssetManager::make_static_mesh_key(const std::string& asset_path, uint32_t mesh_index)
 	{
 		return normalize_asset_key(asset_path) + "#" + std::to_string(mesh_index);
+	}
+
+	std::string RenderAssetManager::make_terrain_key(const std::string& asset_path)
+	{
+		return normalize_asset_key(asset_path);
 	}
 
 	std::string RenderAssetManager::make_material_key(const std::string& asset_path)

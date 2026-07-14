@@ -5,6 +5,7 @@
 #include "Function/Render/Material.h"
 #include "Function/Render/MaterialSystem.h"
 #include "Function/Render/StaticMeshRenderAsset.h"
+#include "Function/Render/TerrainRenderAsset.h"
 #include "Function/Render/TextureAsset.h"
 #include "Function/Render/EnvironmentMapAsset.h"
 #include "Function/Scene/SceneComponents.h"
@@ -55,6 +56,9 @@ namespace AshEngine
 			const std::string& ibl_asset_path,
 			const std::string& source_texture_path);
 		std::shared_ptr<EnvironmentMapRuntimeResource> request_fallback_environment_map();
+		std::shared_ptr<TerrainRenderAsset> request_terrain_asset(
+			const std::string& asset_path,
+			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot);
 		std::shared_ptr<RenderSampler> request_sampler(const RenderSamplerDesc& desc);
 		std::shared_ptr<RenderSampler> request_default_sampler();
 		bool resolve_static_mesh_primitive_sections(
@@ -62,6 +66,7 @@ namespace AshEngine
 			const std::vector<MeshMaterialOverride>& material_overrides,
 			std::vector<ResolvedStaticMeshSection>& out_sections);
 		bool finalize_pending_static_mesh_asset(const std::shared_ptr<StaticMeshRenderAsset>& asset);
+		bool finalize_pending_terrain_asset(const std::shared_ptr<TerrainRenderAsset>& asset);
 		void finalize_pending_assets();
 		bool has_requested_render_assets() const;
 		bool has_pending_render_assets() const;
@@ -74,6 +79,7 @@ namespace AshEngine
 
 	private:
 		static std::string make_static_mesh_key(const std::string& asset_path, uint32_t mesh_index);
+		static std::string make_terrain_key(const std::string& asset_path);
 		static std::string make_material_key(const std::string& asset_path);
 		static std::string make_material_proxy_key(const MaterialInterface& material);
 		static std::string make_generated_material_key(const std::string& asset_path, uint32_t material_slot);
@@ -121,11 +127,14 @@ namespace AshEngine
 		Renderer* m_renderer = nullptr;
 		mutable std::mutex m_mutex{};
 		std::unordered_map<std::string, std::shared_ptr<StaticMeshRenderAsset>> m_static_mesh_assets{};
+		std::unordered_map<std::string, std::shared_ptr<TerrainRenderAsset>> m_terrain_assets{};
 		std::unordered_map<std::string, std::shared_ptr<const MaterialInterface>> m_material_assets{};
 		std::unordered_map<std::string, std::shared_ptr<MaterialRenderProxy>> m_material_proxies{};
 		std::unordered_map<std::string, std::shared_ptr<TextureAsset>> m_texture_assets{};
 		std::unordered_map<std::string, std::shared_future<TextureDecodeResult>> m_pending_texture_decodes{};
 		std::unordered_set<std::string> m_failed_static_mesh_requests{};
+		std::unordered_set<std::string> m_failed_terrain_requests{};
+		std::unordered_set<std::string> m_pending_terrain_requests{};
 		std::unordered_map<RenderSamplerDesc, std::shared_ptr<RenderSampler>, RenderSamplerDescHash> m_sampler_pool{};
 		std::unordered_set<std::string> m_failed_texture_requests{};
 		std::unordered_set<std::string> m_failed_runtime_resource_requests{};
