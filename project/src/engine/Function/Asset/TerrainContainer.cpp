@@ -262,6 +262,14 @@ namespace AshEngine
 			std::vector<uint8_t> stored{};
 		};
 
+		struct FullBlockSource
+		{
+			BlockRecordDisk record{};
+			const TerrainSparseHeightBlock* height_block = nullptr;
+			const TerrainSparseWeightBlock* weight_block = nullptr;
+			const TerrainComponentSnapshot* component = nullptr;
+		};
+
 		auto record_less(const BlockRecordDisk& lhs, const BlockRecordDisk& rhs) -> bool
 		{
 			return std::tie(
@@ -296,24 +304,24 @@ namespace AshEngine
 			return record;
 		}
 
-		auto add_block(
-			std::vector<PendingBlock>& blocks,
+		auto make_pending_block(
 			BlockRecordDisk record,
-			std::vector<uint8_t> decoded) -> bool
+			std::vector<uint8_t> decoded,
+			PendingBlock& out_block) -> bool
 		{
 			if (decoded.empty() || decoded.size() > k_max_decoded_block_size)
 			{
 				return false;
 			}
 			std::vector<uint8_t> rle{};
-			if (!encode_terrain_rle(decoded, rle))
+			if (!encode_terrain_rle_if_smaller(decoded, rle))
 			{
 				return false;
 			}
 			PendingBlock block{};
 			block.record = record;
 			block.record.decoded_size_le = decoded.size();
-			if (rle.size() < decoded.size())
+			if (!rle.empty() && rle.size() < decoded.size())
 			{
 				block.record.codec = static_cast<uint8_t>(TerrainBlockCodec::Rle);
 				block.stored = std::move(rle);
@@ -326,6 +334,20 @@ namespace AshEngine
 			block.record.stored_size_le = block.stored.size();
 			block.record.payload_crc32_le = TerrainContainerFormat::crc32(
 				block.stored.data(), block.stored.size());
+			out_block = std::move(block);
+			return true;
+		}
+
+		auto add_block(
+			std::vector<PendingBlock>& blocks,
+			BlockRecordDisk record,
+			std::vector<uint8_t> decoded) -> bool
+		{
+			PendingBlock block{};
+			if (!make_pending_block(record, std::move(decoded), block))
+			{
+				return false;
+			}
 			blocks.push_back(std::move(block));
 			return true;
 		}
@@ -747,69 +769,134 @@ namespace AshEngine
 			return writer.take();
 		}
 
-		auto build_generation_one_blocks(
+		auto build_full_block_sources(
 			const TerrainAssetSnapshot& snapshot,
-			std::vector<PendingBlock>& out_blocks) -> bool
+			std::vector<FullBlockSource>& out_sources) -> bool
 		{
-			std::vector<uint8_t> metadata{};
-			if (!serialize_metadata(snapshot, metadata) ||
-				!add_block(out_blocks, make_record(BlockKind::Metadata, nullptr, {}, 0u),
-					std::move(metadata)) ||
-				!add_block(out_blocks, make_record(BlockKind::BaseHeight, nullptr, {}, 0u),
-					serialize_base_heights(*snapshot.base_heights)))
+			uint64_t source_count = 2u;
+			uint64_t component_source_count = 0u;
+			if (!checked_multiply(snapshot.components.size(), 3u, component_source_count) ||
+				!checked_add(source_count, component_source_count, source_count))
 			{
 				return false;
 			}
 			for (const TerrainEditLayer& layer : *snapshot.edit_layers)
 			{
-				for (size_t index = 0u; index < layer.height_blocks.size(); ++index)
-				{
-					if (!add_block(
-							out_blocks,
-							make_record(BlockKind::EditHeight, &layer.id,
-								layer.height_blocks[index].owner, static_cast<uint16_t>(index)),
-							serialize_height_block(layer.height_blocks[index])))
-					{
-						return false;
-					}
-				}
-				for (size_t index = 0u; index < layer.weight_blocks.size(); ++index)
-				{
-					if (!add_block(
-							out_blocks,
-							make_record(BlockKind::EditWeight, &layer.id,
-								layer.weight_blocks[index].owner, static_cast<uint16_t>(index)),
-							serialize_weight_block(layer.weight_blocks[index])))
-					{
-						return false;
-					}
-				}
-			}
-			for (const auto& component : snapshot.components)
-			{
-				if (!add_block(out_blocks,
-						make_record(BlockKind::ComposedComponent, nullptr, component->coord, 0u),
-						serialize_component(*component)) ||
-					!add_block(out_blocks,
-						make_record(BlockKind::MinMax, nullptr, component->coord, 0u),
-						serialize_min_max(*component)) ||
-					!add_block(out_blocks,
-						make_record(BlockKind::LodError, nullptr, component->coord, 0u),
-						serialize_lod_error(*component)))
+				if (!checked_add(source_count, layer.height_blocks.size(), source_count) ||
+					!checked_add(source_count, layer.weight_blocks.size(), source_count))
 				{
 					return false;
 				}
 			}
-			std::sort(out_blocks.begin(), out_blocks.end(),
-				[](const PendingBlock& lhs, const PendingBlock& rhs)
+			if (source_count == 0u || source_count > k_max_index_records ||
+				source_count > std::vector<FullBlockSource>{}.max_size())
+			{
+				return false;
+			}
+			std::vector<FullBlockSource> sources{};
+			sources.reserve(static_cast<size_t>(source_count));
+			sources.push_back({ make_record(BlockKind::Metadata, nullptr, {}, 0u) });
+			sources.push_back({ make_record(BlockKind::BaseHeight, nullptr, {}, 0u) });
+			for (const TerrainEditLayer& layer : *snapshot.edit_layers)
+			{
+				for (size_t index = 0u; index < layer.height_blocks.size(); ++index)
+				{
+					sources.push_back({
+						make_record(BlockKind::EditHeight, &layer.id,
+							layer.height_blocks[index].owner, static_cast<uint16_t>(index)),
+						&layer.height_blocks[index]
+					});
+				}
+				for (size_t index = 0u; index < layer.weight_blocks.size(); ++index)
+				{
+					sources.push_back({
+						make_record(BlockKind::EditWeight, &layer.id,
+							layer.weight_blocks[index].owner, static_cast<uint16_t>(index)),
+						nullptr,
+						&layer.weight_blocks[index]
+					});
+				}
+			}
+			for (const auto& component : snapshot.components)
+			{
+				sources.push_back({
+					make_record(BlockKind::ComposedComponent, nullptr, component->coord, 0u),
+					nullptr, nullptr, component.get()
+				});
+				sources.push_back({
+					make_record(BlockKind::MinMax, nullptr, component->coord, 0u),
+					nullptr, nullptr, component.get()
+				});
+				sources.push_back({
+					make_record(BlockKind::LodError, nullptr, component->coord, 0u),
+					nullptr, nullptr, component.get()
+				});
+			}
+			std::sort(sources.begin(), sources.end(),
+				[](const FullBlockSource& lhs, const FullBlockSource& rhs)
 				{
 					return record_less(lhs.record, rhs.record);
 				});
-			return std::adjacent_find(out_blocks.begin(), out_blocks.end(),
-				[](const PendingBlock& lhs, const PendingBlock& rhs)
+			if (std::adjacent_find(sources.begin(), sources.end(),
+				[](const FullBlockSource& lhs, const FullBlockSource& rhs)
 				{
 					return record_same_key(lhs.record, rhs.record);
-				}) == out_blocks.end();
+				}) != sources.end())
+			{
+				return false;
+			}
+			out_sources.swap(sources);
+			return true;
+		}
+
+		auto serialize_full_block_source(
+			const TerrainAssetSnapshot& snapshot,
+			const FullBlockSource& source,
+			std::vector<uint8_t>& out_decoded) -> bool
+		{
+			switch (static_cast<BlockKind>(source.record.kind))
+			{
+			case BlockKind::Metadata:
+				return serialize_metadata(snapshot, out_decoded);
+			case BlockKind::EditHeight:
+				if (source.height_block)
+				{
+					out_decoded = serialize_height_block(*source.height_block);
+					return !out_decoded.empty();
+				}
+				return false;
+			case BlockKind::EditWeight:
+				if (source.weight_block)
+				{
+					out_decoded = serialize_weight_block(*source.weight_block);
+					return !out_decoded.empty();
+				}
+				return false;
+			case BlockKind::ComposedComponent:
+				if (source.component)
+				{
+					out_decoded = serialize_component(*source.component);
+					return !out_decoded.empty();
+				}
+				return false;
+			case BlockKind::MinMax:
+				if (source.component)
+				{
+					out_decoded = serialize_min_max(*source.component);
+					return !out_decoded.empty();
+				}
+				return false;
+			case BlockKind::LodError:
+				if (source.component)
+				{
+					out_decoded = serialize_lod_error(*source.component);
+					return !out_decoded.empty();
+				}
+				return false;
+			case BlockKind::BaseHeight:
+				return false;
+			}
+			return false;
 		}
 
 		auto flush_path(const std::filesystem::path& path) -> bool
@@ -1847,11 +1934,16 @@ namespace AshEngine
 		auto write_full_container(
 			const std::filesystem::path& path,
 			const TerrainAssetSnapshot& snapshot,
-			std::vector<PendingBlock> blocks,
 			TerrainContainerSaveReport* out_report,
 			std::string* out_error) -> TerrainContainerResult
 		{
 			std::error_code error_code{};
+			std::vector<FullBlockSource> sources{};
+			if (!build_full_block_sources(snapshot, sources))
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain full-save block sources are invalid.");
+			}
 			const std::filesystem::path parent = path.parent_path();
 			if (!parent.empty())
 			{
@@ -1876,9 +1968,108 @@ namespace AshEngine
 			}
 			uint64_t offset = sizeof(FileHeaderDisk);
 			std::vector<BlockRecordDisk> records{};
-			records.reserve(blocks.size());
-			for (PendingBlock& block : blocks)
+			records.reserve(sources.size());
+			for (const FullBlockSource& source : sources)
 			{
+				if (source.record.kind == static_cast<uint8_t>(BlockKind::BaseHeight))
+				{
+					// Base is the only production-size logical block. Analyze it without
+					// a candidate allocation, then stream the selected shared codec.
+					BlockRecordDisk record = source.record;
+					record.offset_le = offset;
+					uint64_t decoded_size = 0u;
+					if (!checked_multiply(
+							snapshot.base_heights->size(), sizeof(uint16_t), decoded_size) ||
+						decoded_size == 0u ||
+						decoded_size > std::numeric_limits<size_t>::max() ||
+						decoded_size > static_cast<uint64_t>(
+							std::numeric_limits<std::streamsize>::max()))
+					{
+						output.close();
+						std::filesystem::remove(path, error_code);
+						return set_error(TerrainContainerResult::InvalidData, out_error,
+							"Terrain Base block size is unsupported.");
+					}
+					const auto* decoded = reinterpret_cast<const uint8_t*>(
+						snapshot.base_heights->data());
+					uint64_t rle_size = 0u;
+					if (!terrain_rle_encoded_size(
+							decoded, static_cast<size_t>(decoded_size), rle_size))
+					{
+						output.close();
+						std::filesystem::remove(path, error_code);
+						return set_error(TerrainContainerResult::InvalidData, out_error,
+							"Terrain Base RLE analysis failed.");
+					}
+					record.decoded_size_le = decoded_size;
+					const bool use_rle = rle_size < decoded_size;
+					record.codec = static_cast<uint8_t>(
+						use_rle ? TerrainBlockCodec::Rle : TerrainBlockCodec::None);
+					record.stored_size_le = use_rle ? rle_size : decoded_size;
+					if (use_rle)
+					{
+						uint32_t crc_state = TerrainContainerFormat::crc32_initial_state();
+						uint64_t written = 0u;
+						const bool streamed = stream_terrain_rle(
+							decoded, static_cast<size_t>(decoded_size),
+							[&](const uint8_t* bytes, size_t size)
+							{
+								if (!output.write(
+										reinterpret_cast<const char*>(bytes),
+										static_cast<std::streamsize>(size)) ||
+									!checked_add(written, size, written))
+								{
+									return false;
+								}
+								crc_state = TerrainContainerFormat::crc32_update(
+									crc_state, bytes, size);
+								return true;
+							});
+						if (!streamed || written != rle_size)
+						{
+							output.close();
+							std::filesystem::remove(path, error_code);
+							return set_error(TerrainContainerResult::IoFailure, out_error,
+								"Failed to stream the Terrain Base RLE block.");
+						}
+						record.payload_crc32_le =
+							TerrainContainerFormat::crc32_finalize(crc_state);
+					}
+					else
+					{
+						if (!output.write(
+								reinterpret_cast<const char*>(decoded),
+								static_cast<std::streamsize>(decoded_size)))
+						{
+							output.close();
+							std::filesystem::remove(path, error_code);
+							return set_error(TerrainContainerResult::IoFailure, out_error,
+								"Failed to stream the Terrain Base raw block.");
+						}
+						record.payload_crc32_le = TerrainContainerFormat::crc32(
+							decoded, static_cast<size_t>(decoded_size));
+					}
+					if (!checked_add(offset, record.stored_size_le, offset))
+					{
+						output.close();
+						std::filesystem::remove(path, error_code);
+						return set_error(TerrainContainerResult::InvalidData, out_error,
+							"Terrain Base block offset overflowed.");
+					}
+					records.push_back(record);
+					continue;
+				}
+
+				std::vector<uint8_t> decoded{};
+				PendingBlock block{};
+				if (!serialize_full_block_source(snapshot, source, decoded) ||
+					!make_pending_block(source.record, std::move(decoded), block))
+				{
+					output.close();
+					std::filesystem::remove(path, error_code);
+					return set_error(TerrainContainerResult::InvalidData, out_error,
+						"Terrain full-save block serialization failed.");
+				}
 				block.record.offset_le = offset;
 				if (block.stored.size() >
 						static_cast<size_t>(std::numeric_limits<std::streamsize>::max()) ||
@@ -2176,121 +2367,7 @@ namespace AshEngine
 
 		try
 		{
-			std::vector<PendingBlock> blocks{};
-			if (snapshot.components.size() >
-					(std::numeric_limits<size_t>::max() - 2u) / 3u)
-			{
-				return set_error(TerrainContainerResult::InvalidData, out_error,
-					"Terrain block count exceeds supported limits.");
-			}
-			blocks.reserve(2u + snapshot.components.size() * 3u);
-			if (!build_generation_one_blocks(snapshot, blocks) ||
-				blocks.empty() || blocks.size() > k_max_index_records)
-			{
-				return set_error(TerrainContainerResult::InvalidData, out_error,
-					"Terrain generation-one block set is invalid.");
-			}
-
-			const std::filesystem::path parent = path.parent_path();
-			if (!parent.empty())
-			{
-				std::filesystem::create_directories(parent, error_code);
-				if (error_code)
-				{
-					return set_error(TerrainContainerResult::IoFailure, out_error,
-						"Failed to create the terrain container directory.");
-				}
-			}
-
-			FileHeaderDisk header{};
-			header.magic = TerrainContainerFormat::k_magic;
-			header.version_le = TerrainContainerFormat::k_version;
-			header.endian_marker_le = TerrainContainerFormat::k_little_endian_marker;
-			header.header_size_le = sizeof(FileHeaderDisk);
-
-			std::ofstream output(path, std::ios::binary | std::ios::trunc);
-			if (!output.write(reinterpret_cast<const char*>(&header), sizeof(header)))
-			{
-				return set_error(TerrainContainerResult::IoFailure, out_error,
-					"Failed to write the terrain container header.");
-			}
-			uint64_t offset = sizeof(FileHeaderDisk);
-			std::vector<BlockRecordDisk> records{};
-			records.reserve(blocks.size());
-			for (PendingBlock& block : blocks)
-			{
-				block.record.offset_le = offset;
-				if (block.stored.size() >
-						static_cast<size_t>(std::numeric_limits<std::streamsize>::max()) ||
-					!output.write(reinterpret_cast<const char*>(block.stored.data()),
-						static_cast<std::streamsize>(block.stored.size())) ||
-					!checked_add(offset, block.stored.size(), offset))
-				{
-					output.close();
-					std::filesystem::remove(path, error_code);
-					return set_error(TerrainContainerResult::IoFailure, out_error,
-						"Failed to append a terrain block.");
-				}
-				records.push_back(block.record);
-			}
-
-			const uint64_t index_offset = offset;
-			const uint64_t index_size =
-				static_cast<uint64_t>(records.size()) * sizeof(BlockRecordDisk);
-			if (index_size >
-					static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max()) ||
-				!output.write(reinterpret_cast<const char*>(records.data()),
-					static_cast<std::streamsize>(index_size)) ||
-				!checked_add(offset, index_size, offset))
-			{
-				output.close();
-				std::filesystem::remove(path, error_code);
-				return set_error(TerrainContainerResult::IoFailure, out_error,
-					"Failed to append the terrain index.");
-			}
-			output.flush();
-			const bool flushed = output.good();
-			output.close();
-			if (!flushed || !flush_path(path))
-			{
-				std::filesystem::remove(path, error_code);
-				return set_error(TerrainContainerResult::IoFailure, out_error,
-					"Failed to durably flush the terrain payload and index.");
-			}
-
-			IndexDescriptorDisk descriptor{};
-			descriptor.generation_le = snapshot.content_generation;
-			descriptor.index_offset_le = index_offset;
-			descriptor.index_size_le = index_size;
-			descriptor.index_crc32_le = TerrainContainerFormat::crc32(
-				reinterpret_cast<const uint8_t*>(records.data()),
-				static_cast<size_t>(index_size));
-			std::fstream commit(path, std::ios::binary | std::ios::in | std::ios::out);
-			commit.seekp(static_cast<std::streamoff>(offsetof(FileHeaderDisk, index_descriptors)));
-			if (!commit.write(reinterpret_cast<const char*>(&descriptor), sizeof(descriptor)))
-			{
-				commit.close();
-				std::filesystem::remove(path, error_code);
-				return set_error(TerrainContainerResult::IoFailure, out_error,
-					"Failed to commit the terrain index descriptor.");
-			}
-			commit.flush();
-			const bool committed = commit.good();
-			commit.close();
-			if (!committed || !flush_path(path))
-			{
-				std::filesystem::remove(path, error_code);
-				return set_error(TerrainContainerResult::IoFailure, out_error,
-					"Failed to durably commit the terrain index descriptor.");
-			}
-			if (out_report != nullptr)
-			{
-				out_report->previous_generation = 0u;
-				out_report->committed_generation = snapshot.content_generation;
-				out_report->bytes_appended = offset;
-				out_report->blocks_written = static_cast<uint32_t>(records.size());
-			}
-			return TerrainContainerResult::Success;
+			return write_full_container(path, snapshot, out_report, out_error);
 		}
 		catch (const std::bad_alloc&)
 		{
@@ -2535,23 +2612,9 @@ namespace AshEngine
 				return set_error(TerrainContainerResult::Corrupt, out_error,
 					"Terrain optimize could not resolve a live snapshot.");
 			}
-			std::vector<PendingBlock> blocks{};
-			if (snapshot->components.size() >
-					(std::numeric_limits<size_t>::max() - 2u) / 3u)
-			{
-				return set_error(TerrainContainerResult::InvalidData, out_error,
-					"Terrain block count exceeds supported limits.");
-			}
-			blocks.reserve(2u + snapshot->components.size() * 3u);
-			if (!build_generation_one_blocks(*snapshot, blocks) || blocks.empty() ||
-				blocks.size() > k_max_index_records)
-			{
-				return set_error(TerrainContainerResult::Corrupt, out_error,
-					"Terrain optimize could not rebuild the live block set.");
-			}
 			TerrainContainerSaveReport compact_report{};
 			const TerrainContainerResult write_result = write_full_container(
-				temporary, *snapshot, std::move(blocks), &compact_report, out_error);
+				temporary, *snapshot, &compact_report, out_error);
 			if (write_result != TerrainContainerResult::Success)
 			{
 				std::filesystem::remove(temporary, error_code);

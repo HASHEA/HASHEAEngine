@@ -762,13 +762,14 @@ TEST_CASE("Terrain container incremental source change cannot be hidden by a CRC
 	std::filesystem::remove(path);
 }
 
-TEST_CASE("Terrain container incremental source contract builds only changed blocks")
+TEST_CASE("Terrain container source contract streams full saves and builds only changed blocks")
 {
 	const std::string source = ReadTextFile(
 		"project/src/engine/Function/Asset/TerrainContainer.cpp");
 	CHECK(source.find("build_incremental_generation_blocks(") != std::string::npos);
 	CHECK(CountOccurrences(
-		source, "build_generation_one_blocks(snapshot, blocks)") == 1u);
+		source, "build_full_block_sources(snapshot, sources)") == 1u);
+	CHECK(source.find("stream_terrain_rle(") != std::string::npos);
 	CHECK(source.find("load_previous_terrain_metadata(") != std::string::npos);
 	CHECK(source.find("previous_snapshot") == std::string::npos);
 }

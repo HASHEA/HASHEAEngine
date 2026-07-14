@@ -1,0 +1,658 @@
+#include "doctest.h"
+
+#include "Function/Asset/TerrainContainer.h"
+#include "Function/Asset/TerrainImport.h"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <string>
+#include <thread>
+#include <vector>
+
+namespace
+{
+	auto TestDirectory() -> std::filesystem::path
+	{
+		const std::filesystem::path directory =
+			"Intermediate/test-temp/tests/terrain-import";
+		std::filesystem::create_directories(directory);
+		return directory;
+	}
+
+	auto MakeLayout(
+		uint32_t width,
+		uint32_t height,
+		uint32_t component_quad_count = 2u) -> AshEngine::TerrainGridLayout
+	{
+		AshEngine::TerrainGridLayout layout{};
+		layout.sample_count_x = width;
+		layout.sample_count_z = height;
+		layout.component_count_x = (width - 1u) / component_quad_count;
+		layout.component_count_z = (height - 1u) / component_quad_count;
+		layout.component_quad_count = component_quad_count;
+		layout.sample_spacing_meters = 1.0f;
+		REQUIRE(AshEngine::is_valid_terrain_grid_layout(layout));
+		return layout;
+	}
+
+	auto WriteR16(
+		const std::filesystem::path& path,
+		const std::vector<uint16_t>& values,
+		AshEngine::TerrainByteOrder byte_order) -> void
+	{
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		for (uint16_t value : values)
+		{
+			std::array<uint8_t, 2> bytes = {
+				static_cast<uint8_t>(value),
+				static_cast<uint8_t>(value >> 8u)
+			};
+			if (byte_order == AshEngine::TerrainByteOrder::BigEndian)
+			{
+				std::swap(bytes[0], bytes[1]);
+			}
+			REQUIRE(output.write(
+				reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+		}
+	}
+
+	auto WriteR32F(
+		const std::filesystem::path& path,
+		const std::vector<float>& values,
+		AshEngine::TerrainByteOrder byte_order) -> void
+	{
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		for (float value : values)
+		{
+			std::array<uint8_t, 4> bytes{};
+			std::memcpy(bytes.data(), &value, sizeof(value));
+			if (byte_order == AshEngine::TerrainByteOrder::BigEndian)
+			{
+				std::reverse(bytes.begin(), bytes.end());
+			}
+			REQUIRE(output.write(
+				reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+		}
+	}
+
+	auto ReadAllBytes(const std::filesystem::path& path) -> std::vector<uint8_t>
+	{
+		std::ifstream input(path, std::ios::binary | std::ios::ate);
+		REQUIRE(input.is_open());
+		const std::streamsize size = input.tellg();
+		REQUIRE(size >= 0);
+		std::vector<uint8_t> bytes(static_cast<size_t>(size));
+		input.seekg(0);
+		REQUIRE(input.read(reinterpret_cast<char*>(bytes.data()), size));
+		return bytes;
+	}
+
+	auto ReadTextFile(const std::filesystem::path& path) -> std::string
+	{
+		std::ifstream input(path, std::ios::binary);
+		REQUIRE(input.is_open());
+		return std::string(
+			std::istreambuf_iterator<char>(input),
+			std::istreambuf_iterator<char>());
+	}
+
+	auto ReadR32F(
+		const std::filesystem::path& path,
+		AshEngine::TerrainByteOrder byte_order) -> std::vector<float>
+	{
+		const std::vector<uint8_t> bytes = ReadAllBytes(path);
+		REQUIRE(bytes.size() % sizeof(float) == 0u);
+		std::vector<float> values(bytes.size() / sizeof(float));
+		for (size_t index = 0u; index < values.size(); ++index)
+		{
+			std::array<uint8_t, 4> value_bytes{};
+			std::copy_n(bytes.data() + index * 4u, 4u, value_bytes.data());
+			if (byte_order == AshEngine::TerrainByteOrder::BigEndian)
+			{
+				std::reverse(value_bytes.begin(), value_bytes.end());
+			}
+			std::memcpy(&values[index], value_bytes.data(), sizeof(float));
+		}
+		return values;
+	}
+
+	auto MakeImportDesc(
+		const std::filesystem::path& path,
+		uint32_t source_width,
+		uint32_t source_height,
+		const AshEngine::TerrainGridLayout& target_layout)
+		-> AshEngine::TerrainHeightImportDesc
+	{
+		AshEngine::TerrainHeightImportDesc desc{};
+		desc.source_path = path;
+		desc.format = AshEngine::TerrainHeightFileFormat::RawR16;
+		desc.target_layout = target_layout;
+		desc.height_mapping = { -100.0f, 1000.0f };
+		desc.source_width = source_width;
+		desc.source_height = source_height;
+		return desc;
+	}
+
+	auto Import(
+		const AshEngine::TerrainHeightImportDesc& desc,
+		AshEngine::TerrainImportReport* report = nullptr)
+		-> std::shared_ptr<const AshEngine::TerrainAssetSnapshot>
+	{
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+		std::string error{};
+		REQUIRE(AshEngine::import_terrain_height(
+			17u, desc, snapshot, report, &error) == AshEngine::TerrainImportResult::Success);
+		REQUIRE_MESSAGE(error.empty(), error);
+		REQUIRE(snapshot);
+		return snapshot;
+	}
+
+	auto FinalHeights(const AshEngine::TerrainAssetSnapshot& snapshot) -> std::vector<float>
+	{
+		std::vector<float> heights{};
+		heights.reserve(static_cast<size_t>(snapshot.layout.sample_count_x) *
+			snapshot.layout.sample_count_z);
+		for (uint32_t z = 0u; z < snapshot.layout.sample_count_z; ++z)
+		{
+			for (uint32_t x = 0u; x < snapshot.layout.sample_count_x; ++x)
+			{
+				const AshEngine::TerrainComponentCoord owner =
+					AshEngine::get_terrain_sample_owner(snapshot.layout, x, z);
+				const size_t component_index = static_cast<size_t>(owner.z) *
+					snapshot.layout.component_count_x + owner.x;
+				REQUIRE(component_index < snapshot.components.size());
+				REQUIRE(snapshot.components[component_index]);
+				const auto& component = *snapshot.components[component_index];
+				const AshEngine::TerrainSampleRect rect =
+					AshEngine::get_terrain_component_snapshot_rect(snapshot.layout, owner);
+				const size_t local = static_cast<size_t>(z - rect.min_z) *
+					component.sample_width + (x - rect.min_x);
+				REQUIRE(local < component.heights.size());
+				heights.push_back(component.heights[local]);
+			}
+		}
+		return heights;
+	}
+
+	auto MakeLayeredSnapshot(
+		const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& source,
+		AshEngine::TerrainLayerId& out_layer_id)
+		-> std::shared_ptr<const AshEngine::TerrainAssetSnapshot>
+	{
+		auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>(*source);
+		out_layer_id.bytes[0] = 0x42u;
+		AshEngine::TerrainEditLayer layer{};
+		layer.id = out_layer_id;
+		layer.name = "Export Layer";
+		layer.height_blocks.push_back({
+			{ 0u, 0u }, { 0u, 0u, 1u, 1u }, { 23.5f }, { 1.0f }
+		});
+		std::array<float, AshEngine::k_terrain_material_layer_count> weights{};
+		weights[3] = 1.0f;
+		weights[4] = 3.0f;
+		layer.weight_blocks.push_back({
+			{ 0u, 0u }, { 0u, 0u, 1u, 1u }, { weights }, { 1.0f }
+		});
+		snapshot->edit_layers =
+			std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+				std::vector<AshEngine::TerrainEditLayer>{ layer });
+		return snapshot;
+	}
+}
+
+TEST_CASE("Terrain import RAW R16 honors byte order and independent axis flips")
+{
+	const auto directory = TestDirectory();
+	const auto little_path = directory / "r16-little.raw";
+	const auto big_path = directory / "r16-big.raw";
+	const std::array<uint16_t, 5> row = { 0u, 1u, 32768u, 65534u, 65535u };
+	std::vector<uint16_t> values{};
+	for (uint32_t z = 0u; z < 3u; ++z)
+	{
+		for (uint32_t x = 0u; x < row.size(); ++x)
+		{
+			values.push_back(row[(x + z) % row.size()]);
+		}
+	}
+	WriteR16(little_path, values, AshEngine::TerrainByteOrder::LittleEndian);
+	WriteR16(big_path, values, AshEngine::TerrainByteOrder::BigEndian);
+	const auto layout = MakeLayout(5u, 3u);
+
+	auto desc = MakeImportDesc(little_path, 5u, 3u, layout);
+	AshEngine::TerrainImportReport report{};
+	const auto little = Import(desc, &report);
+	CHECK(report.source_width == 5u);
+	CHECK(report.source_height == 3u);
+	CHECK(report.source_bits_per_sample == 16u);
+	REQUIRE(little->base_heights);
+	CHECK(*little->base_heights == values);
+
+	desc.source_path = big_path;
+	desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	const auto big = Import(desc);
+	CHECK(*big->base_heights == values);
+
+	desc.source_path = little_path;
+	desc.byte_order = AshEngine::TerrainByteOrder::LittleEndian;
+	desc.flip_x = true;
+	const auto flipped_x = Import(desc);
+	for (uint32_t z = 0u; z < 3u; ++z)
+	{
+		for (uint32_t x = 0u; x < 5u; ++x)
+		{
+			CHECK((*flipped_x->base_heights)[z * 5u + x] == values[z * 5u + (4u - x)]);
+		}
+	}
+
+	desc.flip_x = false;
+	desc.flip_z = true;
+	const auto flipped_z = Import(desc);
+	for (uint32_t z = 0u; z < 3u; ++z)
+	{
+		for (uint32_t x = 0u; x < 5u; ++x)
+		{
+			CHECK((*flipped_z->base_heights)[z * 5u + x] == values[(2u - z) * 5u + x]);
+		}
+	}
+
+	std::filesystem::remove(little_path);
+	std::filesystem::remove(big_path);
+}
+
+TEST_CASE("Terrain import RAW export round-trips R16 and byte-stable R32F")
+{
+	const auto directory = TestDirectory();
+	const auto source_path = directory / "roundtrip-source.raw";
+	const auto r16_path = directory / "roundtrip-r16.raw";
+	const auto r32_path = directory / "roundtrip-r32.raw";
+	const auto r32_second_path = directory / "roundtrip-r32-second.raw";
+	const std::array<uint16_t, 5> row = { 0u, 1u, 32768u, 65534u, 65535u };
+	std::vector<uint16_t> values{};
+	for (uint32_t z = 0u; z < 3u; ++z)
+	{
+		values.insert(values.end(), row.begin(), row.end());
+	}
+	WriteR16(source_path, values, AshEngine::TerrainByteOrder::LittleEndian);
+	const auto desc = MakeImportDesc(source_path, 5u, 3u, MakeLayout(5u, 3u));
+	const auto source = Import(desc);
+
+	AshEngine::TerrainHeightExportDesc export_desc{};
+	export_desc.destination_path = r16_path;
+	export_desc.format = AshEngine::TerrainHeightFileFormat::RawR16;
+	std::string error{};
+	REQUIRE(AshEngine::export_terrain_height(*source, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	auto reimport_desc = desc;
+	reimport_desc.source_path = r16_path;
+	const auto r16_reimported = Import(reimport_desc);
+	const auto before = FinalHeights(*source);
+	const auto after = FinalHeights(*r16_reimported);
+	REQUIRE(before.size() == after.size());
+	const float tolerance = desc.height_mapping.height_range / 65535.0f;
+	for (size_t index = 0u; index < before.size(); ++index)
+	{
+		CHECK(std::abs(before[index] - after[index]) <= tolerance);
+	}
+
+	export_desc.destination_path = r32_path;
+	export_desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	export_desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	REQUIRE(AshEngine::export_terrain_height(*source, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	reimport_desc.source_path = r32_path;
+	reimport_desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	reimport_desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	const auto r32_reimported = Import(reimport_desc);
+	export_desc.destination_path = r32_second_path;
+	REQUIRE(AshEngine::export_terrain_height(*r32_reimported, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadAllBytes(r32_path) == ReadAllBytes(r32_second_path));
+
+	for (const auto& path : { source_path, r16_path, r32_path, r32_second_path })
+	{
+		std::filesystem::remove(path);
+	}
+}
+
+TEST_CASE("Terrain import RAW R32F preserves arbitrary finite values byte-for-byte")
+{
+	const auto directory = TestDirectory();
+	const auto source_path = directory / "r32-arbitrary-source.raw";
+	const auto exported_path = directory / "r32-arbitrary-export.raw";
+	const std::vector<float> values = {
+		0.1234567f, -3.25f, 17.03125f, 499.99997f, 899.75f,
+		1.0f / 3.0f, 2.0f / 7.0f, -99.875f, 42.424242f, 700.00006f,
+		-0.0f, 0.0f, 128.125f, 256.0625f, 512.03125f
+	};
+	WriteR32F(source_path, values, AshEngine::TerrainByteOrder::BigEndian);
+	auto desc = MakeImportDesc(source_path, 5u, 3u, MakeLayout(5u, 3u));
+	desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	const auto snapshot = Import(desc);
+	CHECK(FinalHeights(*snapshot) == values);
+
+	AshEngine::TerrainHeightExportDesc export_desc{};
+	export_desc.destination_path = exported_path;
+	export_desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	export_desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	std::string error{};
+	REQUIRE(AshEngine::export_terrain_height(*snapshot, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadAllBytes(exported_path) == ReadAllBytes(source_path));
+
+	std::filesystem::remove(source_path);
+	std::filesystem::remove(exported_path);
+}
+
+TEST_CASE("Terrain import RAW exports every logical source and rejects invalid selectors early")
+{
+	const auto directory = TestDirectory();
+	const auto source_path = directory / "source-selection.raw";
+	std::vector<uint16_t> values(15u, 32768u);
+	WriteR16(source_path, values, AshEngine::TerrainByteOrder::LittleEndian);
+	const auto base = Import(MakeImportDesc(
+		source_path, 5u, 3u, MakeLayout(5u, 3u)));
+	AshEngine::TerrainLayerId layer_id{};
+	const auto layered = MakeLayeredSnapshot(base, layer_id);
+	std::string error{};
+
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	desc.destination_path = directory / "final-source.raw";
+	desc.source = AshEngine::TerrainExportSource::FinalComposedHeight;
+	REQUIRE(AshEngine::export_terrain_height(*layered, desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadR32F(desc.destination_path, desc.byte_order)[0] ==
+		FinalHeights(*layered)[0]);
+
+	desc.destination_path = directory / "base-source.raw";
+	desc.source = AshEngine::TerrainExportSource::BaseHeight;
+	REQUIRE(AshEngine::export_terrain_height(*layered, desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadR32F(desc.destination_path, desc.byte_order)[0] ==
+		AshEngine::decode_terrain_height_r16(32768u, layered->height_mapping));
+
+	desc.destination_path = directory / "height-layer-source.raw";
+	desc.source = AshEngine::TerrainExportSource::HeightEditLayer;
+	desc.source_layer_id = layer_id;
+	REQUIRE(AshEngine::export_terrain_height(*layered, desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadR32F(desc.destination_path, desc.byte_order)[0] == 23.5f);
+
+	desc.destination_path = directory / "weight-layer-source.raw";
+	desc.source = AshEngine::TerrainExportSource::MaterialWeightLayer;
+	desc.material_layer_index = 3u;
+	REQUIRE(AshEngine::export_terrain_height(*layered, desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadR32F(desc.destination_path, desc.byte_order)[0] == 0.25f);
+
+	const auto invalid_path = directory / "invalid-source.raw";
+	desc.destination_path = invalid_path;
+	desc.source = AshEngine::TerrainExportSource::HeightEditLayer;
+	desc.source_layer_id = {};
+	CHECK(AshEngine::export_terrain_height(*layered, desc, &error) ==
+		AshEngine::TerrainImportResult::InvalidArguments);
+	CHECK_FALSE(std::filesystem::exists(invalid_path));
+	CHECK_FALSE(std::filesystem::exists(invalid_path.string() + ".tmp"));
+	desc.source = AshEngine::TerrainExportSource::MaterialWeightLayer;
+	desc.source_layer_id = layer_id;
+	desc.material_layer_index = AshEngine::k_terrain_material_layer_count;
+	CHECK(AshEngine::export_terrain_height(*layered, desc, &error) ==
+		AshEngine::TerrainImportResult::InvalidArguments);
+	CHECK_FALSE(std::filesystem::exists(invalid_path));
+
+	for (const auto& name : {
+		"final-source.raw", "base-source.raw", "height-layer-source.raw",
+		"weight-layer-source.raw" })
+	{
+		std::filesystem::remove(directory / name);
+	}
+	std::filesystem::remove(source_path);
+}
+
+TEST_CASE("Terrain import RAW applies explicit crop and deterministic Catmull-Rom")
+{
+	const auto directory = TestDirectory();
+	const auto source_path = directory / "resize-source.raw";
+	const std::vector<uint16_t> values = {
+		0u, 1000u, 2000u, 3000u, 4000u, 5000u,
+		6000u, 7000u, 8000u, 9000u, 10000u, 11000u,
+		12000u, 13000u, 14000u, 15000u, 16000u, 17000u
+	};
+	WriteR16(source_path, values, AshEngine::TerrainByteOrder::LittleEndian);
+	auto desc = MakeImportDesc(source_path, 6u, 3u, MakeLayout(3u, 3u));
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> sentinel{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		1u, desc, sentinel, nullptr, &error) ==
+		AshEngine::TerrainImportResult::InvalidDimensions);
+	CHECK_FALSE(sentinel);
+
+	desc.resize_policy = AshEngine::TerrainResizePolicy::Crop;
+	const auto cropped = Import(desc);
+	REQUIRE(cropped->base_heights);
+	CHECK(*cropped->base_heights == std::vector<uint16_t>{
+		1000u, 2000u, 3000u,
+		7000u, 8000u, 9000u,
+		13000u, 14000u, 15000u });
+
+	desc.target_layout = MakeLayout(5u, 5u);
+	desc.resize_policy = AshEngine::TerrainResizePolicy::CatmullRom;
+	const auto first = Import(desc);
+	const auto second = Import(desc);
+	REQUIRE(first->base_heights);
+	REQUIRE(second->base_heights);
+	CHECK(*first->base_heights == *second->base_heights);
+	std::filesystem::remove(source_path);
+}
+
+TEST_CASE("Terrain import RAW enforces memory budget and cancellation without publication")
+{
+	const auto directory = TestDirectory();
+	const auto source_path = directory / "policy-source.raw";
+	WriteR16(source_path, { 0u }, AshEngine::TerrainByteOrder::LittleEndian);
+	auto desc = MakeImportDesc(source_path, 0xffffffffu, 0xffffffffu, MakeLayout(3u, 3u));
+	desc.resize_policy = AshEngine::TerrainResizePolicy::CatmullRom;
+	desc.peak_memory_limit_bytes = 1024ull * 1024ull * 1024ull;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		1u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::MemoryLimitExceeded);
+	CHECK_FALSE(snapshot);
+
+	desc = MakeImportDesc(source_path, 1u, 1u, MakeLayout(3u, 3u));
+	desc.resize_policy = AshEngine::TerrainResizePolicy::CatmullRom;
+	desc.cancellation.cancel();
+	CHECK(AshEngine::import_terrain_height(
+		1u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::Cancelled);
+	CHECK_FALSE(snapshot);
+	std::filesystem::remove(source_path);
+}
+
+TEST_CASE("Terrain import RAW production R32F fits the approved one GiB phase budget")
+{
+	const auto directory = TestDirectory();
+	const auto missing_source = directory / "missing-production-r32.raw";
+	const auto destination = directory / "missing-production-r32.AshTerrain";
+	std::filesystem::remove(missing_source);
+	std::filesystem::remove(destination);
+	std::filesystem::remove(destination.string() + ".import.tmp");
+
+	auto desc = MakeImportDesc(
+		missing_source,
+		AshEngine::k_terrain_sample_count,
+		AshEngine::k_terrain_sample_count,
+		AshEngine::make_default_terrain_grid_layout());
+	desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	desc.peak_memory_limit_bytes = 1024ull * 1024ull * 1024ull;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		101u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::IoFailure);
+	CHECK_FALSE(snapshot);
+	CHECK(AshEngine::import_terrain_height_to_container(
+		101u, desc, destination, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::IoFailure);
+	CHECK_FALSE(snapshot);
+	CHECK_FALSE(std::filesystem::exists(destination));
+	CHECK_FALSE(std::filesystem::exists(destination.string() + ".import.tmp"));
+
+	desc.peak_memory_limit_bytes = 980000000ull;
+	CHECK(AshEngine::import_terrain_height(
+		101u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::MemoryLimitExceeded);
+	CHECK_FALSE(snapshot);
+}
+
+TEST_CASE("Terrain import RAW cancellation removes temporary export after rows begin")
+{
+	const auto directory = TestDirectory();
+	const auto destination = directory / "cancelled-export.raw";
+	const auto temporary = std::filesystem::path(destination.string() + ".tmp");
+	std::filesystem::remove(destination);
+	std::filesystem::remove(temporary);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		5u, MakeLayout(1025u, 1025u, 256u), { -100.0f, 1000.0f },
+		10.0f, snapshot, &error));
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.destination_path = destination;
+	desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	AshEngine::TerrainCancellationToken cancellation = desc.cancellation;
+	std::thread cancel_thread([&]()
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+		std::error_code error_code{};
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			const uint64_t size = std::filesystem::exists(temporary, error_code)
+				? std::filesystem::file_size(temporary, error_code) : 0u;
+			if (!error_code && size > 0u)
+			{
+				cancellation.cancel();
+				return;
+			}
+			error_code.clear();
+			std::this_thread::yield();
+		}
+		cancellation.cancel();
+	});
+	const auto result = AshEngine::export_terrain_height(*snapshot, desc, &error);
+	cancel_thread.join();
+	CHECK(result == AshEngine::TerrainImportResult::Cancelled);
+	CHECK_FALSE(std::filesystem::exists(destination));
+	CHECK_FALSE(std::filesystem::exists(temporary));
+}
+
+TEST_CASE("Terrain import RAW container publication validates then atomically replaces")
+{
+	const auto directory = TestDirectory();
+	const auto source_path = directory / "container-source.raw";
+	const auto destination = directory / "imported.AshTerrain";
+	std::filesystem::remove(destination);
+	std::filesystem::remove(destination.string() + ".import.tmp");
+	std::vector<uint16_t> values(15u, 12345u);
+	WriteR16(source_path, values, AshEngine::TerrainByteOrder::LittleEndian);
+	const auto desc = MakeImportDesc(source_path, 5u, 3u, MakeLayout(5u, 3u));
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> published{};
+	AshEngine::TerrainImportReport report{};
+	std::string error{};
+	REQUIRE(AshEngine::import_terrain_height_to_container(
+		91u, desc, destination, published, &report, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	REQUIRE(published);
+	CHECK(published->asset_id == 91u);
+	CHECK(published->source_path == destination);
+	CHECK(report.source_bits_per_sample == 16u);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(
+		destination, loaded, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	CHECK(*loaded->base_heights == values);
+
+	const std::vector<uint8_t> before = ReadAllBytes(destination);
+	auto limited = desc;
+	limited.peak_memory_limit_bytes = 1024u * 1024u;
+	const auto previous = published;
+	CHECK(AshEngine::import_terrain_height_to_container(
+		91u, limited, destination, published, nullptr, &error) ==
+		AshEngine::TerrainImportResult::MemoryLimitExceeded);
+	CHECK(published == previous);
+	CHECK(ReadAllBytes(destination) == before);
+	CHECK_FALSE(std::filesystem::exists(destination.string() + ".import.tmp"));
+
+	auto cancelled = desc;
+	cancelled.cancellation.cancel();
+	CHECK(AshEngine::import_terrain_height_to_container(
+		91u, cancelled, destination, published, nullptr, &error) ==
+		AshEngine::TerrainImportResult::Cancelled);
+	CHECK(published == previous);
+	CHECK(ReadAllBytes(destination) == before);
+	CHECK_FALSE(std::filesystem::exists(destination.string() + ".import.tmp"));
+
+	const auto r32_source = directory / "container-r32-source.raw";
+	const auto r32_destination = directory / "container-r32.AshTerrain";
+	const auto r32_export = directory / "container-r32-export.raw";
+	const std::vector<float> r32_values = {
+		0.1234567f, -3.25f, 17.03125f, 499.99997f, 899.75f,
+		1.0f / 3.0f, 2.0f / 7.0f, -99.875f, 42.424242f, 700.00006f,
+		-0.0f, 0.0f, 128.125f, 256.0625f, 512.03125f
+	};
+	WriteR32F(r32_source, r32_values, AshEngine::TerrainByteOrder::BigEndian);
+	auto r32_desc = MakeImportDesc(r32_source, 5u, 3u, MakeLayout(5u, 3u));
+	r32_desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	r32_desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> r32_published{};
+	REQUIRE(AshEngine::import_terrain_height_to_container(
+		92u, r32_desc, r32_destination, r32_published, nullptr, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	REQUIRE(r32_published);
+	CHECK(FinalHeights(*r32_published) == r32_values);
+	AshEngine::TerrainHeightExportDesc r32_export_desc{};
+	r32_export_desc.destination_path = r32_export;
+	r32_export_desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	r32_export_desc.byte_order = AshEngine::TerrainByteOrder::BigEndian;
+	REQUIRE(AshEngine::export_terrain_height(
+		*r32_published, r32_export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	CHECK(ReadAllBytes(r32_export) == ReadAllBytes(r32_source));
+
+	std::filesystem::remove(source_path);
+	std::filesystem::remove(destination);
+	std::filesystem::remove(r32_source);
+	std::filesystem::remove(r32_destination);
+	std::filesystem::remove(r32_export);
+}
+
+TEST_CASE("Terrain import RAW source contract prepares publication before replace and bounds RLE")
+{
+	const std::string import_source = ReadTextFile(
+		"project/src/engine/Function/Asset/TerrainImport.cpp");
+	const size_t prepared = import_source.find("prepared_publication");
+	const size_t replaced = import_source.find(
+		"replace_file_atomically(temporary, destination_path)");
+	REQUIRE(prepared != std::string::npos);
+	REQUIRE(replaced != std::string::npos);
+	CHECK(prepared < replaced);
+
+	const std::string container_source = ReadTextFile(
+		"project/src/engine/Function/Asset/TerrainContainer.cpp");
+	CHECK(container_source.find("encode_terrain_rle_if_smaller(") !=
+		std::string::npos);
+	CHECK(container_source.find("stream_terrain_rle(") != std::string::npos);
+	CHECK(container_source.find("encode_rle_candidate_if_smaller(") ==
+		std::string::npos);
+}

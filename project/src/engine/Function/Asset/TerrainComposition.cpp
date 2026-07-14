@@ -691,7 +691,7 @@ namespace AshEngine
 							const double value = block->values[block_index];
 							const double composed = layer.height_blend_mode == TerrainHeightBlendMode::Additive
 								? current + value * factor
-								: current + (value - current) * factor;
+								: factor >= 1.0 ? value : current + (value - current) * factor;
 							if (!is_float_result_representable(composed))
 							{
 								return fail(out_error, "Terrain height composition produced a non-finite result.");

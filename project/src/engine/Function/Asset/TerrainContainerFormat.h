@@ -66,5 +66,8 @@ namespace AshEngine::TerrainContainerFormat
 	static_assert(sizeof(FileHeaderDisk) == 96u);
 	static_assert(sizeof(BlockRecordDisk) == 56u);
 
+	auto crc32_initial_state() -> uint32_t;
+	auto crc32_update(uint32_t state, const uint8_t* bytes, size_t size) -> uint32_t;
+	auto crc32_finalize(uint32_t state) -> uint32_t;
 	auto crc32(const uint8_t* bytes, size_t size) -> uint32_t;
 }
