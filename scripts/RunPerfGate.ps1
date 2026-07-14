@@ -759,8 +759,14 @@ function Update-BaselinesFromRecords {
             throw "Cannot bless a baseline after unconfirmed process-tree termination."
         }
         $jobCleanupProperty = $record.PSObject.Properties["job_cleanup_confirmed"]
-        if ($null -ne $jobCleanupProperty -and -not [bool]$jobCleanupProperty.Value) {
+        if ($null -eq $jobCleanupProperty) {
+            throw "Cannot bless a baseline with missing Job Object cleanup proof."
+        }
+        if (-not [bool]$jobCleanupProperty.Value) {
             throw "Cannot bless a baseline after unconfirmed Job Object cleanup."
+        }
+        if ([string]$record.status -notin @("PASS", "WARN")) {
+            throw "Cannot bless a baseline unless every run reached terminal PASS or WARN status."
         }
     }
 
@@ -769,9 +775,6 @@ function Update-BaselinesFromRecords {
     $configurationNode = Ensure-ObjectProperty $profileNode $Configuration
 
     foreach ($record in $Records) {
-        if ($record.status -eq "FAIL" -or $record.status -eq "DRY_RUN") {
-            continue
-        }
         $targetNode = Ensure-ObjectProperty $configurationNode $record.target
         Set-ObjectProperty $targetNode $record.backend (New-BaselineEntry -Record $record -ReportRoot $ReportRoot)
     }
@@ -2534,6 +2537,13 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$ProbeArguments)
         $qualityContractFailures += "Windows Job Object kill-on-close interop is missing"
     }
 
+    $toolsSpecPath = Join-Path (Get-RepoRoot) "docs/specs/modules/tools.md"
+    $toolsSpec = Get-Content -Raw -LiteralPath $toolsSpecPath
+    if ($toolsSpec -notmatch 'Start.*AssignProcessToJobObject.*(?:must not|不得).*spawn' -and
+        $toolsSpec -notmatch 'Start.*AssignProcessToJobObject.*(?:must not|不得).*子进程') {
+        $qualityContractFailures += "tools spec does not state the trusted launcher Start-to-Assign no-child contract"
+    }
+
     $jobFactoryCommand = Get-Command New-GateJobObject -ErrorAction SilentlyContinue
     $jobContractReady = $null -ne $jobFactoryCommand -and
         $invokeGateSource -match '\$JobFactory' -and
@@ -2720,6 +2730,37 @@ exit 0
         Update-BaselinesFromRecords -Baseline $unsafeJobBlessBaseline -Profile "Standard" -Configuration "Debug" -Records @($unsafeJobBlessRecord) -ReportRoot "self-test"
     } "unconfirmed Job Object cleanup")) {
         $qualityContractFailures += "unconfirmed Job Object cleanup could still bless a baseline"
+    }
+
+    $missingCleanupProofRecord = [PSCustomObject]@{
+        target = "Sandbox"
+        backend = "Vulkan"
+        status = "PASS"
+        tree_termination_confirmed = $true
+        gpu_baseline_comparable = $false
+        required_gpu_metrics = @()
+        cpu_frame_time_avg_ms = 1.0
+        cpu_frame_time_p95_ms = 1.0
+        cpu_frame_time_p99_ms = 1.0
+        process_private_bytes_peak_mb = 1.0
+        engine_heap_peak_mb = 1.0
+        draw_calls_avg = 1.0
+    }
+    $missingCleanupProofBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    if (-not (Test-SelfTestThrows {
+        Update-BaselinesFromRecords -Baseline $missingCleanupProofBaseline -Profile "Standard" -Configuration "Debug" -Records @($missingCleanupProofRecord) -ReportRoot "self-test"
+    } "missing Job Object cleanup proof")) {
+        $qualityContractFailures += "baseline bless accepted a record with no Job Object cleanup proof"
+    }
+
+    $notRunBlessRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "not-run.json" "not-run.out" "not-run.err"
+    $notRunBlessRecord.tree_termination_confirmed = $true
+    $notRunBlessRecord.job_cleanup_confirmed = $true
+    $notRunBlessBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    if (-not (Test-SelfTestThrows {
+        Update-BaselinesFromRecords -Baseline $notRunBlessBaseline -Profile "Standard" -Configuration "Debug" -Records @($notRunBlessRecord) -ReportRoot "self-test"
+    } "terminal PASS or WARN")) {
+        $qualityContractFailures += "baseline bless accepted a record that never reached a successful terminal status"
     }
 
     if ($qualityContractFailures.Count -gt 0) {
