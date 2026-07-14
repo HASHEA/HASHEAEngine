@@ -12,6 +12,7 @@ namespace AshEngine
 
 namespace AshEditor
 {
+	struct TerrainExternalChangeState;
 	struct TerrainFileOperationState;
 	struct TerrainModeState;
 
@@ -25,6 +26,7 @@ namespace AshEditor
 		bool pending_composition = false;
 		bool blocking_operation = false;
 		const TerrainFileOperationState* p_file_operation_state = nullptr;
+		const TerrainExternalChangeState* p_external_change_state = nullptr;
 		std::string last_error{};
 	};
 

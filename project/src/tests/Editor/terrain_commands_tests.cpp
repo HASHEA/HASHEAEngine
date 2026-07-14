@@ -1,9 +1,12 @@
 #include "Core/EditorContext.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
 #include "Core/TerrainCommands.h"
 #include "Function/Asset/TerrainBrush.h"
 #include "Function/Asset/TerrainComposition.h"
 #include "Function/Asset/TerrainLayerStack.h"
 #include "Services/TerrainEditorService.h"
+#include "Services/UndoRedoService.h"
 #include "Terrain/TerrainTestUtils.h"
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -92,6 +95,237 @@ namespace
 		std::ifstream stream(path, std::ios::binary);
 		return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 	}
+
+	class HistoryProbeCommand : public AshEditor::EditorCommand
+	{
+	public:
+		HistoryProbeCommand(std::string label, std::vector<std::string>& events)
+			: _label(std::move(label))
+			, _events(events)
+		{
+		}
+
+		const char* GetLabel() const override
+		{
+			return _label.c_str();
+		}
+
+		bool Execute(AshEditor::EditorContext&) override
+		{
+			_events.push_back("execute:" + _label);
+			return true;
+		}
+
+		bool Undo(AshEditor::EditorContext&) override
+		{
+			_events.push_back("undo:" + _label);
+			return true;
+		}
+
+	private:
+		std::string _label{};
+		std::vector<std::string>& _events;
+	};
+
+	class TerrainHistoryProbeCommand final : public HistoryProbeCommand
+	{
+	public:
+		TerrainHistoryProbeCommand(
+			std::string label,
+			std::vector<std::string>& events,
+			const AshEngine::TerrainAssetId assetId)
+			: HistoryProbeCommand(std::move(label), events)
+			, _assetId(assetId)
+		{
+		}
+
+		AshEngine::TerrainAssetId GetAffectedTerrainAssetId() const noexcept override
+		{
+			return _assetId;
+		}
+
+	private:
+		AshEngine::TerrainAssetId _assetId = 0u;
+	};
+}
+
+TEST_CASE("Terrain commands expose only their affected Terrain asset identity")
+{
+	std::vector<std::string> events{};
+	HistoryProbeCommand entityCommand("entity", events);
+	CHECK(entityCommand.GetAffectedTerrainAssetId() == 0u);
+
+	AshEditor::TerrainStrokeCommand strokeCommand(
+		73u,
+		MakeTerrainCommandLayerId(),
+		3u,
+		{});
+	CHECK(strokeCommand.GetAffectedTerrainAssetId() == 73u);
+
+	AshEditor::TerrainLayerCommand layerCommand(
+		74u,
+		4u,
+		{},
+		{},
+		{});
+	CHECK(layerCommand.GetAffectedTerrainAssetId() == 74u);
+}
+
+TEST_CASE("Terrain reload history removes only the selected asset from undo history")
+{
+	std::vector<std::string> events{};
+	AshEditor::EditorContext context{};
+	AshEditor::UndoRedoService history{};
+	REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-a", events), context));
+	REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-x", events, 101u), context));
+	REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-y", events, 202u), context));
+	REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-b", events), context));
+	events.clear();
+
+	history.RemoveCommandsForTerrainAsset(101u);
+
+	REQUIRE(history.Undo(context));
+	REQUIRE(history.Undo(context));
+	REQUIRE(history.Undo(context));
+	CHECK_FALSE(history.Undo(context));
+	CHECK(events == std::vector<std::string>{ "undo:entity-b", "undo:terrain-y", "undo:entity-a" });
+}
+
+TEST_CASE("Terrain reload history removes the selected asset from redo history")
+{
+	std::vector<std::string> events{};
+	AshEditor::EditorContext context{};
+	AshEditor::UndoRedoService history{};
+	REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-a", events), context));
+	REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-x", events, 101u), context));
+	REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-y", events, 202u), context));
+	REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-b", events), context));
+	REQUIRE(history.Undo(context));
+	REQUIRE(history.Undo(context));
+	REQUIRE(history.Undo(context));
+	events.clear();
+
+	history.RemoveCommandsForTerrainAsset(101u);
+
+	REQUIRE(history.Redo(context));
+	REQUIRE(history.Redo(context));
+	CHECK_FALSE(history.Redo(context));
+	CHECK(events == std::vector<std::string>{ "execute:terrain-y", "execute:entity-b" });
+}
+
+TEST_CASE("Terrain history removal contains throwing observers and preserves unrelated history")
+{
+	std::vector<std::string> events{};
+	AshEditor::EditorContext context{};
+	AshEditor::EditorEventBus eventBus{};
+	AshEditor::UndoRedoService history{};
+	history.SetEventBus(&eventBus);
+	REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-a", events), context));
+	REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-x", events, 101u), context));
+	REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-y", events, 202u), context));
+	REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-b", events), context));
+	events.clear();
+
+	const AshEditor::EditorEventSubscriptionId historySubscription =
+		eventBus.Subscribe<AshEditor::EditorUndoHistoryChangedEvent>(
+			[](const AshEditor::EditorUndoHistoryChangedEvent&)
+			{
+				throw std::runtime_error("history observer failure");
+			});
+	uint32_t dirtyNotificationCount = 0u;
+	const AshEditor::EditorEventSubscriptionId dirtySubscription =
+		eventBus.Subscribe<AshEditor::EditorActiveDocumentDirtyStateChangedEvent>(
+			[&dirtyNotificationCount](const AshEditor::EditorActiveDocumentDirtyStateChangedEvent&)
+			{
+				++dirtyNotificationCount;
+			});
+	REQUIRE(historySubscription != 0u);
+	REQUIRE(dirtySubscription != 0u);
+
+	bool removed = false;
+	CHECK_NOTHROW(removed = history.RemoveCommandsForTerrainAsset(101u));
+	CHECK(removed);
+	CHECK(dirtyNotificationCount == 1u);
+
+	history.SetEventBus(nullptr);
+	REQUIRE(history.Undo(context));
+	REQUIRE(history.Undo(context));
+	REQUIRE(history.Undo(context));
+	CHECK_FALSE(history.Undo(context));
+	CHECK(events == std::vector<std::string>{ "undo:entity-b", "undo:terrain-y", "undo:entity-a" });
+}
+
+TEST_CASE("Terrain reload history remaps saved and current history states")
+{
+	SUBCASE("removed saved state maps to the closest retained predecessor")
+	{
+		std::vector<std::string> events{};
+		AshEditor::EditorContext context{};
+		AshEditor::UndoRedoService history{};
+		REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-a", events), context));
+		REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-x", events, 101u), context));
+		history.MarkSaved();
+		REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-b", events), context));
+		const uint64_t stateBeforeRemoval = history.GetCurrentHistoryStateId();
+
+		history.RemoveCommandsForTerrainAsset(101u);
+
+		CHECK(history.GetCurrentHistoryStateId() != stateBeforeRemoval);
+		CHECK(history.IsDirty());
+		REQUIRE(history.Undo(context));
+		CHECK_FALSE(history.IsDirty());
+	}
+
+	SUBCASE("removing the only saved Terrain command restores the initial clean state")
+	{
+		std::vector<std::string> events{};
+		AshEditor::EditorContext context{};
+		AshEditor::UndoRedoService history{};
+		REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-x", events, 101u), context));
+		history.MarkSaved();
+
+		history.RemoveCommandsForTerrainAsset(101u);
+
+		CHECK(history.GetCurrentHistoryStateId() == 0u);
+		CHECK_FALSE(history.IsDirty());
+		CHECK_FALSE(history.CanUndo());
+		CHECK_FALSE(history.CanRedo());
+	}
+
+	SUBCASE("a retained saved state and no-op removals keep their exact identity")
+	{
+		std::vector<std::string> events{};
+		AshEditor::EditorContext context{};
+		AshEditor::UndoRedoService history{};
+		REQUIRE(history.Execute(std::make_unique<HistoryProbeCommand>("entity-a", events), context));
+		history.MarkSaved();
+		const uint64_t savedEntityState = history.GetCurrentHistoryStateId();
+		REQUIRE(history.Execute(std::make_unique<TerrainHistoryProbeCommand>("terrain-x", events, 101u), context));
+
+		history.RemoveCommandsForTerrainAsset(101u);
+		CHECK(history.GetCurrentHistoryStateId() == savedEntityState);
+		CHECK_FALSE(history.IsDirty());
+
+		history.RemoveCommandsForTerrainAsset(999u);
+		history.RemoveCommandsForTerrainAsset(0u);
+		CHECK(history.GetCurrentHistoryStateId() == savedEntityState);
+		CHECK_FALSE(history.IsDirty());
+		CHECK(history.CanUndo());
+	}
+}
+
+TEST_CASE("Terrain history removal is exposed through the Editor command executor")
+{
+	const std::string executor = ReadTerrainCommandText(
+		"project/src/editor/Core/IEditorCommandExecutor.h");
+	const std::string applicationHeader = ReadTerrainCommandText(
+		"project/src/editor/App/EditorApplicationImpl.h");
+	const std::string application = ReadTerrainCommandText(
+		"project/src/editor/App/EditorApplicationImpl.cpp");
+
+	CHECK(executor.find("RemoveCommandsForTerrainAsset") != std::string::npos);
+	CHECK(applicationHeader.find("RemoveCommandsForTerrainAsset") != std::string::npos);
+	CHECK(application.find("_upUndoRedoService->RemoveCommandsForTerrainAsset") != std::string::npos);
 }
 
 TEST_CASE("Terrain stroke command replays the Engine patch API by stable identity")

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <utility>
@@ -43,6 +44,9 @@ namespace AshEditor
 		{
 			_optWorkingSet.reset();
 			_persistedContentGeneration = 0u;
+			_observedDiskContentGeneration = 0u;
+			_externalContentGeneration = 0u;
+			_externalConflict = false;
 			_activeSequence = 0u;
 			_selectedLayerId = {};
 			_preview = {};
@@ -60,6 +64,9 @@ namespace AshEditor
 
 		_assetId = workingSet.asset_id;
 		_persistedContentGeneration = workingSet.content_generation;
+		_observedDiskContentGeneration = workingSet.content_generation;
+		_externalContentGeneration = 0u;
+		_externalConflict = false;
 		_optWorkingSet = std::move(workingSet);
 		_activeSequence = 0u;
 		_selectedLayerId = _optWorkingSet->edit_layers.empty()
@@ -75,6 +82,9 @@ namespace AshEditor
 		_assetId = 0u;
 		_activeSequence = 0u;
 		_persistedContentGeneration = 0u;
+		_observedDiskContentGeneration = 0u;
+		_externalContentGeneration = 0u;
+		_externalConflict = false;
 		_selectedLayerId = {};
 		_optWorkingSet.reset();
 		_preview = {};
@@ -447,6 +457,7 @@ namespace AshEditor
 		if (succeeded)
 		{
 			_persistedContentGeneration = savedContentGeneration;
+			_observedDiskContentGeneration = savedContentGeneration;
 		}
 		return true;
 	}
@@ -459,6 +470,105 @@ namespace AshEditor
 	uint64_t TerrainEditorSessionCore::GetPersistedContentGeneration() const
 	{
 		return _optWorkingSet ? _persistedContentGeneration : 0u;
+	}
+
+	TerrainExternalChangeResult TerrainEditorSessionCore::NotifyExternalContentGeneration(
+		const uint64_t diskContentGeneration,
+		const bool physicalSourceRevisionChanged)
+	{
+		if (!_optWorkingSet || diskContentGeneration == 0u)
+		{
+			return TerrainExternalChangeResult::Failed;
+		}
+		if (diskContentGeneration < _observedDiskContentGeneration &&
+			!physicalSourceRevisionChanged)
+		{
+			return TerrainExternalChangeResult::IgnoredStale;
+		}
+
+		_externalContentGeneration = diskContentGeneration;
+		if (IsDirty() || diskContentGeneration < _observedDiskContentGeneration)
+		{
+			_externalConflict = true;
+			return TerrainExternalChangeResult::Conflict;
+		}
+
+		_externalConflict = false;
+		return TerrainExternalChangeResult::ReloadQueued;
+	}
+
+	bool TerrainEditorSessionCore::ResolveConflict(const TerrainConflictChoice choice)
+	{
+		if (!_optWorkingSet || !_externalConflict || _externalContentGeneration == 0u)
+		{
+			return false;
+		}
+
+		switch (choice)
+		{
+		case TerrainConflictChoice::ReloadDiscard:
+			_externalConflict = false;
+			return true;
+		case TerrainConflictChoice::SaveAs:
+			// The service keeps the conflict latched until the asynchronous copy
+			// succeeds, then completes the already-loaded disk replacement.
+			return true;
+		case TerrainConflictChoice::KeepLocal:
+		{
+			const uint64_t newestGeneration = std::max(
+				_optWorkingSet->content_generation,
+				_externalContentGeneration);
+			if (newestGeneration == std::numeric_limits<uint64_t>::max())
+			{
+				return false;
+			}
+
+			std::vector<AshEngine::TerrainComponentCoord> allComponents{};
+			try
+			{
+				const size_t componentCount =
+					static_cast<size_t>(_optWorkingSet->layout.component_count_x) *
+					_optWorkingSet->layout.component_count_z;
+				allComponents.reserve(componentCount);
+				for (uint32_t z = 0u; z < _optWorkingSet->layout.component_count_z; ++z)
+				{
+					for (uint32_t x = 0u; x < _optWorkingSet->layout.component_count_x; ++x)
+					{
+						allComponents.push_back({
+							static_cast<uint16_t>(x),
+							static_cast<uint16_t>(z) });
+					}
+				}
+			}
+			catch (const std::bad_alloc&)
+			{
+				return false;
+			}
+			catch (const std::length_error&)
+			{
+				return false;
+			}
+
+			_persistedContentGeneration = _externalContentGeneration;
+			_observedDiskContentGeneration = _externalContentGeneration;
+			_optWorkingSet->content_generation = newestGeneration + 1u;
+			_optWorkingSet->dirty_components.swap(allComponents);
+			_externalConflict = false;
+			return true;
+		}
+		default:
+			return false;
+		}
+	}
+
+	bool TerrainEditorSessionCore::HasExternalConflict() const
+	{
+		return _externalConflict;
+	}
+
+	uint64_t TerrainEditorSessionCore::GetExternalContentGeneration() const
+	{
+		return _externalContentGeneration;
 	}
 
 	bool TerrainEditorSessionCore::SetViewportPreview(

@@ -19,7 +19,7 @@ status: active
 - Default scene: `product/assets/scenes/Sandbox.scene.json`（引用 Sponza，携带相机/灯光/环境/`scene_config`）
 - RenderGate: `RunRenderGate.bat` → `scripts/RunRenderGate.ps1`；默认覆盖 sandbox + particles，同一 Sandbox 进程用 `--rhi=<vulkan|dx12>`、`--smoke-test-seconds=<timeout>`、`--dump-frame=<png>`、`--scene=<json>` 完成 readiness smoke + capture；成功条件由 asset epoch/当前帧全 scene packet/非致命 present completion（及动态 capture-ready）驱动，ready arm 会清空 AO/TAA/体积光 history 后在下一同 epoch 帧抓取，golden 在 `tools/render/goldens/<scene>/<backend>.png`
 - Unit tests: `RunTests.bat [Config] [doctest args...]` → 构建并运行 `product/bin64/<Config>-windows-x86_64/Tests.exe`（doctest，工程在 `project/src/tests/`，含 legacy `run_engine_base_self_tests()` 桥接）
-- Terrain Asset Core: `Function/Asset/TerrainData.*`（数据/快照）→ `TerrainComposition.*` / `TerrainBrush.*`（编辑）→ `TerrainContainer.*` / `TerrainImport.*`（持久化与高度图 IO）→ `AssetDatabase::load/publish/invalidate_terrain_*`；snapshot-local 查询入口为 `Function/Scene/TerrainQuery.*`，现状见 `docs/specs/features/terrain.md`
+- Terrain flow: `Function/Asset/TerrainData.*`（数据/快照）→ `TerrainComposition.*` / `TerrainBrush.*`（编辑）→ `TerrainContainer.*` / `TerrainImport.*`（持久化与高度图 IO）→ `AssetDatabase::load/publish/candidate/CAS/invalidate_terrain_*` → Scene/Render/Editor；snapshot-local 查询入口为 `Function/Scene/TerrainQuery.*`，现状见 `docs/specs/features/terrain.md`
 - ArchGate: `RunArchGate.bat` → `scripts/CheckArchBoundary.ps1`；按 `tools/ai-dev/rules/arch-boundary-rules.json` 扫描 include 判定依赖方向红线，新增越界退出码 1
 - CI: `.github/workflows/ci.yml`（GitHub Actions，windows runner）——push/PR 跑 ArchGate、sln 生成、Editor/Sandbox Debug+Release 构建、RunTests，以及 Release 下 DX12/WARP 与 Vulkan/lavapipe readiness smoke（含 indirect 自测）；RenderGate/PerfGate 仍不进 CI
 
@@ -31,7 +31,7 @@ status: active
 | `project/src/engine/Graphics/` | RHI 抽象 + Vulkan/DX12 后端 + DXC shader 编译 | RHI 能力扩展、后端 bug 修复 |
 | `project/src/engine/Function/Render/` | RenderGraph、SceneRenderer、渲染 Pass、材质、渲染配置 | 渲染 feature 开发主战场 |
 | `project/src/engine/Function/Scene/`、`Asset/` | 逻辑场景、资产加载 | 场景/资产能力 |
-| `project/src/engine/Function/Asset/Terrain*`、`Function/Scene/TerrainQuery.*` | Terrain Phase 1 纯 CPU 资产、编辑、容器、导入导出与 local query | Terrain Asset Core；尚无 Scene/Render/Editor 接入 |
+| `project/src/engine/Function/Asset/Terrain*`、`Function/Scene/TerrainQuery.*`、`Function/Render/*Terrain*`、`project/src/editor/*Terrain*` | Terrain Phase 1–3：资产/编辑/容器/导入导出、Scene query、渲染与 Editor authoring/recovery/Create/Import/Export UI | 现状与分阶段边界见 Terrain feature spec；Phase 4 性能、Terrain golden 与交付验收尚待完成 |
 | `project/src/engine/Shaders/` | Engine HLSL 源码 | 与 Pass 改动配套 |
 | `project/src/editor/` | Editor 壳与面板（App/Core/Shell/Panels/Services/Widgets） | Editor 功能开发 |
 | `project/src/sandbox/` | 验证程序与内置测试（`Tests/SandboxTestRegistry`） | 新 feature 的验证场景 |
@@ -69,8 +69,8 @@ status: active
 1. `TerrainData` 定义生产默认 8193² 布局、全局 sample ownership、稀疏编辑层、受信 working set 与不可变 snapshot
 2. brush/patch 修改 working set 并产生完整 dirty Component 集合；composition 重建 Component，publication 原子发布新 generation
 3. `.AshTerrain` v1 通过双 index descriptor 做增量保存与上一 generation recovery；RAW/PNG/EXR IO 由 `TerrainImport` 统一调度
-4. `AssetDatabase` 共享同步/异步缓存，并按 generation/revision 发布或精确失效单一 Terrain ID
-5. `TerrainQuery` 直接查询 terrain-local snapshot；Scene 组件、世界空间适配、渲染和 Editor 尚未实现
+4. `AssetDatabase` 共享同步/异步缓存，并按 generation/revision 发布或精确失效单一 Terrain ID；Editor 外部重载使用隔离 candidate 与绑定资产/目录代/发布 serial 的 compare-exchange token
+5. `TerrainQuery` 查询 terrain-local snapshot，Scene v6/world-space adapter、Terrain render asset/proxy/pass/readiness 与 Editor Terrain Mode 消费同一 immutable snapshot；Terrain Mode 已通过 service-owned immutable jobs 提供 Create、Import、Export、保存、冲突与恢复流程
 
 ## Public abstractions
 
@@ -83,7 +83,7 @@ status: active
 | `DebugDrawService` | `engine/Function/` | frame-local 调试绘制（line/box/circle/cone/axes） | tone-map 后叠加，不参与光照 |
 | `UIContext` | `engine/Function/` | Editor 与 Engine 的 UI 交互边界 | Editor 不得绕过它直用 ImGui/Graphics |
 | `UINodeEditor` / `UINodeGraphModel` | `engine/Function/Gui/` | 通用节点画布门面与纯数据图模型，封装 `imgui-node-editor` 交互边界 | 第三方库只在 Engine.dll 内使用；Editor 只提交节点/pin/link 数据 |
-| `TerrainAssetSnapshot` / `TerrainWorkingSet` | `engine/Function/Asset/TerrainData.*` | Terrain 不可变读取快照与受信可变编辑状态 | 发布后 snapshot 不可修改；Phase 1 不暴露 Scene/Render/Editor Terrain API |
+| `TerrainAssetSnapshot` / `TerrainWorkingSet` | `engine/Function/Asset/TerrainData.*` | Terrain 不可变读取快照与受信可变编辑状态 | 发布后 snapshot 不可修改；Scene/Render/Editor 只消费公共 Function 接口，Editor 独占 mutable working set |
 
 ## Dependency direction
 

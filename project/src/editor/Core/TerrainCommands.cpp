@@ -35,6 +35,11 @@ namespace AshEditor
 		return Replay(refContext, AshEngine::TerrainEditPatchDirection::Undo);
 	}
 
+	AshEngine::TerrainAssetId TerrainStrokeCommand::GetAffectedTerrainAssetId() const noexcept
+	{
+		return _assetId;
+	}
+
 	bool TerrainStrokeCommand::Replay(
 		EditorContext& refContext,
 		const AshEngine::TerrainEditPatchDirection eDirection)
@@ -76,6 +81,11 @@ namespace AshEditor
 	bool TerrainLayerCommand::Undo(EditorContext& refContext)
 	{
 		return Replay(refContext, AshEngine::TerrainEditPatchDirection::Undo);
+	}
+
+	AshEngine::TerrainAssetId TerrainLayerCommand::GetAffectedTerrainAssetId() const noexcept
+	{
+		return _assetId;
 	}
 
 	bool TerrainLayerCommand::Replay(

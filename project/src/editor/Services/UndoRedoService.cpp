@@ -8,6 +8,7 @@
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
@@ -258,6 +259,100 @@ namespace AshEditor
 		NotifyHistoryChanged();
 		NotifyTransactionStateChanged();
 		NotifyDocumentDirtyStateChanged();
+	}
+
+	bool UndoRedoService::RemoveCommandsForTerrainAsset(
+		const AshEngine::TerrainAssetId assetId) noexcept
+	{
+		if (assetId == 0u)
+		{
+			return true;
+		}
+
+		const uint64_t uPreviousSavedStateId = _uSavedHistoryStateId;
+		uint64_t uMappedSavedStateId = uPreviousSavedStateId;
+		uint64_t uLastRetainedStateId = 0u;
+		bool bSavedStateReachable = uPreviousSavedStateId == 0u;
+		bool bHistoryChanged = false;
+		bool bRemovedCommand = false;
+
+		const auto visitEntry = [&](HistoryEntry& refEntry)
+		{
+			const uint64_t uPreviousEntryStateId = refEntry.uStateId;
+			const bool bRemove = refEntry.upCommand &&
+				refEntry.upCommand->GetAffectedTerrainAssetId() == assetId;
+			if (bRemove)
+			{
+				bRemovedCommand = true;
+				bHistoryChanged = true;
+				if (uPreviousEntryStateId == uPreviousSavedStateId)
+				{
+					uMappedSavedStateId = uLastRetainedStateId;
+					bSavedStateReachable = true;
+				}
+				return;
+			}
+
+			if (bHistoryChanged)
+			{
+				refEntry.uStateId = AllocateHistoryStateId();
+			}
+			uLastRetainedStateId = refEntry.uStateId;
+			if (uPreviousEntryStateId == uPreviousSavedStateId)
+			{
+				uMappedSavedStateId = refEntry.uStateId;
+				bSavedStateReachable = true;
+			}
+		};
+
+		for (HistoryEntry& refEntry : _vecUndoStack)
+		{
+			visitEntry(refEntry);
+		}
+		for (auto itEntry = _vecRedoStack.rbegin(); itEntry != _vecRedoStack.rend(); ++itEntry)
+		{
+			visitEntry(*itEntry);
+		}
+
+		if (!bRemovedCommand)
+		{
+			return true;
+		}
+
+		const auto removeAffectedAsset = [assetId](const HistoryEntry& refEntry)
+		{
+			return refEntry.upCommand &&
+				refEntry.upCommand->GetAffectedTerrainAssetId() == assetId;
+		};
+		_vecUndoStack.erase(
+			std::remove_if(_vecUndoStack.begin(), _vecUndoStack.end(), removeAffectedAsset),
+			_vecUndoStack.end());
+		_vecRedoStack.erase(
+			std::remove_if(_vecRedoStack.begin(), _vecRedoStack.end(), removeAffectedAsset),
+			_vecRedoStack.end());
+
+		_uCurrentHistoryStateId = _vecUndoStack.empty() ? 0u : _vecUndoStack.back().uStateId;
+		if (bSavedStateReachable)
+		{
+			_uSavedHistoryStateId = uMappedSavedStateId;
+		}
+		// History removal is the commit. Observers are best-effort and must not
+		// turn an already-committed removal into an exception visible to reload.
+		try
+		{
+			NotifyHistoryChanged();
+		}
+		catch (...)
+		{
+		}
+		try
+		{
+			NotifyDocumentDirtyStateChanged();
+		}
+		catch (...)
+		{
+		}
+		return true;
 	}
 
 	void UndoRedoService::MarkSaved()

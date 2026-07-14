@@ -167,10 +167,307 @@ TEST_CASE("Terrain Mode exposes approved manage sculpt paint and stable layer ac
 	}
 	CHECK(terrainUi.find("k_terrain_material_layer_count") != std::string::npos);
 	CHECK(terrainUi.find("TerrainLayerId") != std::string::npos);
-	CHECK(terrainUi.find("DrawUnavailableFileOperation") != std::string::npos);
+	CHECK(terrainUi.find("DrawUnavailableFileOperation") == std::string::npos);
 }
 
-TEST_CASE("Terrain Mode wires generation-aware file operations and keeps reload unavailable")
+TEST_CASE("Terrain Mode submits approved create import and export file jobs")
+{
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	const std::string state = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeState.h");
+
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Create") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Import") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Export") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::CancelFileOperation") != std::string::npos);
+	CHECK(widgets.find("intent.create_desc") != std::string::npos);
+	CHECK(widgets.find("intent.import_desc") != std::string::npos);
+	CHECK(widgets.find("intent.export_desc") != std::string::npos);
+	CHECK(widgets.find("BuildCreateDesc()") != std::string::npos);
+	CHECK(widgets.find("BuildImportDesc()") != std::string::npos);
+	CHECK(widgets.find("BuildExportDesc(") != std::string::npos);
+	CHECK(state.find("TerrainHeightFileFormat::Png") != std::string::npos);
+	CHECK(state.find("TerrainHeightFileFormat::RawR16") != std::string::npos);
+	CHECK(state.find("TerrainHeightFileFormat::RawR32F") != std::string::npos);
+	CHECK(state.find("TerrainHeightFileFormat::Exr") != std::string::npos);
+	CHECK(state.find("TerrainExportSource::MaterialWeightLayer") != std::string::npos);
+	CHECK(state.find("TerrainExrPixelType::Half") != std::string::npos);
+	CHECK(state.find("TerrainExrPixelType::Float") != std::string::npos);
+	CHECK(state.find("import_source_width") != std::string::npos);
+	CHECK(state.find("import_source_height") != std::string::npos);
+	CHECK(state.find("flat_height") != std::string::npos);
+	CHECK(state.find("create_height_min") != std::string::npos);
+	CHECK(state.find("create_height_max") != std::string::npos);
+	CHECK(state.find("import_raw_format_index") != std::string::npos);
+	CHECK(state.find("export_raw_format_index") != std::string::npos);
+	CHECK(state.find("import_raw_endian_index") != std::string::npos);
+	CHECK(state.find("export_raw_endian_index") != std::string::npos);
+	CHECK(state.find("std::string import_exr_channel") != std::string::npos);
+	CHECK(state.find("std::string export_exr_channel") != std::string::npos);
+	CHECK(state.find("int32_t raw_format_index") == std::string::npos);
+	CHECK(state.find("int32_t raw_endian_index") == std::string::npos);
+	CHECK(state.find("exr_channel_index") == std::string::npos);
+	CHECK(state.find("export_format_index") != std::string::npos);
+	CHECK(state.find("export_material_layer_index") != std::string::npos);
+	CHECK(state.find("terrain/NewTerrain.AshTerrain") != std::string::npos);
+}
+
+TEST_CASE("Terrain create descriptor defaults to the production grid layout")
+{
+	const AshEditor::TerrainCreateAssetDesc desc{};
+	const AshEngine::TerrainGridLayout expected =
+		AshEngine::make_default_terrain_grid_layout();
+
+	CHECK(AshEngine::is_valid_terrain_grid_layout(desc.layout));
+	CHECK(desc.layout.sample_count_x == expected.sample_count_x);
+	CHECK(desc.layout.sample_count_z == expected.sample_count_z);
+	CHECK(desc.layout.component_count_x == expected.component_count_x);
+	CHECK(desc.layout.component_count_z == expected.component_count_z);
+	CHECK(desc.layout.component_quad_count == expected.component_quad_count);
+	CHECK(desc.layout.sample_spacing_meters ==
+		doctest::Approx(expected.sample_spacing_meters));
+
+	const std::string sessionContract = ReadTerrainContractText(
+		"project/src/editor/Core/TerrainEditorSessionCore.h");
+	CHECK(sessionContract.find(
+		"layout = AshEngine::make_default_terrain_grid_layout()") != std::string::npos);
+}
+
+TEST_CASE("Terrain Mode state builds an explicit valid create height mapping")
+{
+	AshEditor::TerrainModeState state{};
+	state.create_height_min = -125.0f;
+	state.create_height_max = 1875.0f;
+
+	REQUIRE(state.HasValidCreateHeightMapping());
+	const AshEngine::TerrainHeightMapping mapping = state.BuildCreateHeightMapping();
+	CHECK(mapping.height_offset == doctest::Approx(-125.0f));
+	CHECK(mapping.height_range == doctest::Approx(2000.0f));
+	state.flat_height = -125.0f;
+	CHECK(state.HasValidCreateParameters());
+	const AshEditor::TerrainCreateAssetDesc createDesc = state.BuildCreateDesc();
+	const AshEngine::TerrainGridLayout defaultLayout =
+		AshEngine::make_default_terrain_grid_layout();
+	CHECK(createDesc.layout.sample_count_x == defaultLayout.sample_count_x);
+	CHECK(createDesc.layout.sample_count_z == defaultLayout.sample_count_z);
+	CHECK(createDesc.layout.component_count_x == defaultLayout.component_count_x);
+	CHECK(createDesc.layout.component_count_z == defaultLayout.component_count_z);
+	CHECK(createDesc.layout.component_quad_count == defaultLayout.component_quad_count);
+	CHECK(createDesc.layout.sample_spacing_meters ==
+		doctest::Approx(defaultLayout.sample_spacing_meters));
+	CHECK(createDesc.height_mapping.height_offset == doctest::Approx(-125.0f));
+	CHECK(createDesc.height_mapping.height_range == doctest::Approx(2000.0f));
+	CHECK(createDesc.flat_height == doctest::Approx(-125.0f));
+	state.flat_height = 1875.0f;
+	CHECK(state.HasValidCreateParameters());
+	state.flat_height = 1875.1f;
+	CHECK_FALSE(state.HasValidCreateParameters());
+
+	state.create_height_max = state.create_height_min;
+	CHECK_FALSE(state.HasValidCreateHeightMapping());
+	CHECK_FALSE(state.HasValidCreateParameters());
+	state.create_height_max = std::numeric_limits<float>::infinity();
+	CHECK_FALSE(state.HasValidCreateHeightMapping());
+}
+
+TEST_CASE("Terrain Mode state keeps import and export encoding controls independent")
+{
+	AshEditor::TerrainModeState state{};
+	state.import_heightmap_path = "height/input.raw";
+	state.import_format_index = 1;
+	state.import_raw_format_index = 0;
+	state.import_raw_endian_index = 1;
+	state.import_raw_axis_index = 1;
+	state.import_resize_policy_index = 2;
+	state.import_exr_channel = "IMPORT_HEIGHT";
+	state.export_heightmap_path = "height/output.raw";
+	state.export_format_index = 1;
+	state.export_raw_format_index = 1;
+	state.export_raw_endian_index = 0;
+	state.export_source_index = 2;
+	state.export_exr_channel = "EXPORT_HEIGHT";
+	state.export_exr_pixel_type_index = 0;
+
+	const AshEngine::TerrainLayerId layerId = MakeTerrainModeLayerId();
+	const AshEngine::TerrainHeightImportDesc importDesc = state.BuildImportDesc();
+	const AshEngine::TerrainHeightExportDesc exportDesc = state.BuildExportDesc(layerId);
+	CHECK(importDesc.source_path == std::filesystem::path("height/input.raw"));
+	CHECK(importDesc.format == AshEngine::TerrainHeightFileFormat::RawR16);
+	CHECK(importDesc.byte_order == AshEngine::TerrainByteOrder::BigEndian);
+	CHECK(importDesc.flip_z);
+	CHECK(importDesc.resize_policy == AshEngine::TerrainResizePolicy::CatmullRom);
+	CHECK(importDesc.exr_channel == "IMPORT_HEIGHT");
+	CHECK(AshEngine::is_valid_terrain_grid_layout(importDesc.target_layout));
+	CHECK(exportDesc.destination_path == std::filesystem::path("height/output.raw"));
+	CHECK(exportDesc.format == AshEngine::TerrainHeightFileFormat::RawR32F);
+	CHECK(exportDesc.byte_order == AshEngine::TerrainByteOrder::LittleEndian);
+	CHECK(exportDesc.source == AshEngine::TerrainExportSource::HeightEditLayer);
+	CHECK(exportDesc.source_layer_id == layerId);
+	CHECK(exportDesc.exr_channel == "EXPORT_HEIGHT");
+	CHECK(exportDesc.exr_pixel_type == AshEngine::TerrainExrPixelType::Half);
+
+	state.import_format_index = 2;
+	state.export_format_index = 2;
+	CHECK(state.BuildImportDesc().format == AshEngine::TerrainHeightFileFormat::Exr);
+	CHECK(state.BuildImportDesc().exr_channel == "IMPORT_HEIGHT");
+	CHECK(state.BuildExportDesc(layerId).format == AshEngine::TerrainHeightFileFormat::Exr);
+	CHECK(state.BuildExportDesc(layerId).exr_channel == "EXPORT_HEIGHT");
+}
+
+TEST_CASE("Terrain Mode keeps create and import target asset drafts independent")
+{
+	AshEditor::TerrainModeState state{};
+	state.create_asset_path = "terrain/CreateOnly.AshTerrain";
+	state.import_asset_path = "terrain/ImportOnly.AshTerrain";
+
+	CHECK(state.create_asset_path == "terrain/CreateOnly.AshTerrain");
+	CHECK(state.import_asset_path == "terrain/ImportOnly.AshTerrain");
+
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	CHECK(widgets.find(
+		"refUi.input_text(\"Create asset path\", refState.create_asset_path)") !=
+		std::string::npos);
+	CHECK(widgets.find(
+		"refUi.input_text(\"Import asset path\", refState.import_asset_path)") !=
+		std::string::npos);
+
+	const size_t importIntent = widgets.find("TerrainEditorIntent::Kind::Import");
+	REQUIRE(importIntent != std::string::npos);
+	const std::string importBlock = widgets.substr(importIntent, 320u);
+	CHECK(importBlock.find("intent.asset_path = refState.import_asset_path") !=
+		std::string::npos);
+	CHECK(importBlock.find("intent.asset_path = refState.create_asset_path") ==
+		std::string::npos);
+}
+
+TEST_CASE("Terrain Mode material export supports normalized PNG and RAW R16 encodings")
+{
+	AshEditor::TerrainModeState state{};
+	state.export_source_index = 3;
+	state.export_material_layer_index = AshEngine::k_terrain_material_layer_count - 1u;
+	state.export_format_index = 0;
+	const AshEngine::TerrainLayerId layerId = MakeTerrainModeLayerId();
+	CHECK(state.BuildExportDesc(layerId).source == AshEngine::TerrainExportSource::MaterialWeightLayer);
+	CHECK(state.BuildExportDesc(layerId).source_layer_id == layerId);
+	CHECK(state.BuildExportDesc(layerId).format == AshEngine::TerrainHeightFileFormat::Png);
+
+	state.export_format_index = 1;
+	state.export_raw_format_index = 0;
+	CHECK(state.BuildExportDesc(layerId).format == AshEngine::TerrainHeightFileFormat::RawR16);
+}
+
+TEST_CASE("Terrain Mode only offers cancellation for running import or export jobs")
+{
+	for (const AshEditor::TerrainFileOperationStatus status : {
+			AshEditor::TerrainFileOperationStatus::Idle,
+			AshEditor::TerrainFileOperationStatus::AwaitingPublication,
+			AshEditor::TerrainFileOperationStatus::Running,
+			AshEditor::TerrainFileOperationStatus::PublishedAwaitingCatalog,
+			AshEditor::TerrainFileOperationStatus::Succeeded,
+			AshEditor::TerrainFileOperationStatus::Failed,
+			AshEditor::TerrainFileOperationStatus::Cancelled })
+	{
+		for (const AshEditor::TerrainFileOperationKind kind : {
+				AshEditor::TerrainFileOperationKind::None,
+				AshEditor::TerrainFileOperationKind::Save,
+				AshEditor::TerrainFileOperationKind::SaveAs,
+				AshEditor::TerrainFileOperationKind::Optimize,
+				AshEditor::TerrainFileOperationKind::Create,
+				AshEditor::TerrainFileOperationKind::Import,
+				AshEditor::TerrainFileOperationKind::Export })
+		{
+			const bool expected = status == AshEditor::TerrainFileOperationStatus::Running &&
+				(kind == AshEditor::TerrainFileOperationKind::Import ||
+				 kind == AshEditor::TerrainFileOperationKind::Export);
+			CHECK(AshEditor::TerrainModeState::ShouldShowCancelFileOperation(status, kind) == expected);
+		}
+	}
+
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+
+	const size_t cancelPredicate = widgets.find("const bool canCancelFileOperation");
+	const size_t cancelGuard = widgets.find("if (canCancelFileOperation)", cancelPredicate);
+	const size_t cancelButton = widgets.find("refUi.button(\"Cancel File Operation\")", cancelGuard);
+	const size_t replacePredicate = widgets.find("const bool canReplaceSession", cancelButton);
+	REQUIRE(cancelPredicate != std::string::npos);
+	REQUIRE(cancelGuard != std::string::npos);
+	REQUIRE(cancelButton != std::string::npos);
+	REQUIRE(replacePredicate != std::string::npos);
+	const std::string cancelBlock = widgets.substr(cancelGuard, replacePredicate - cancelGuard);
+	CHECK(cancelBlock.find("begin_disabled") == std::string::npos);
+	const std::string cancelPredicateBlock = widgets.substr(
+		cancelPredicate, cancelGuard - cancelPredicate);
+	CHECK(cancelPredicateBlock.find("ShouldShowCancelFileOperation(") != std::string::npos);
+
+	const size_t replaceEnd = widgets.find("refUi.begin_disabled(fileOperationInProgress)", replacePredicate);
+	REQUIRE(replaceEnd != std::string::npos);
+	CHECK(widgets.substr(replacePredicate, replaceEnd - replacePredicate)
+		.find("!refView.blocking_operation") != std::string::npos);
+}
+
+TEST_CASE("Terrain Mode explains durable publication while catalog binding retries")
+{
+	AshEditor::TerrainFileOperationState operation{};
+	operation.kind = AshEditor::TerrainFileOperationKind::Import;
+	operation.status = AshEditor::TerrainFileOperationStatus::PublishedAwaitingCatalog;
+	operation.path = "terrain/ImportedTerrain.AshTerrain";
+	operation.error = "Catalog refresh did not expose the published Terrain.";
+
+	const std::string message =
+		AshEditor::TerrainModeState::BuildPublishedAwaitingCatalogMessage(operation);
+	CHECK(message.find("terrain/ImportedTerrain.AshTerrain") != std::string::npos);
+	CHECK(message.find("durably published") != std::string::npos);
+	CHECK(message.find("retrying") != std::string::npos);
+	CHECK(message.find(operation.error) != std::string::npos);
+
+	operation.error.clear();
+	const std::string retryMessage =
+		AshEditor::TerrainModeState::BuildPublishedAwaitingCatalogMessage(operation);
+	CHECK(retryMessage.find("terrain/ImportedTerrain.AshTerrain") != std::string::npos);
+	CHECK(retryMessage.find("retrying") != std::string::npos);
+
+	operation.status = AshEditor::TerrainFileOperationStatus::Succeeded;
+	CHECK(AshEditor::TerrainModeState::BuildPublishedAwaitingCatalogMessage(operation).empty());
+
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	CHECK(widgets.find("BuildPublishedAwaitingCatalogMessage(refState)") !=
+		std::string::npos);
+}
+
+TEST_CASE("Terrain Mode export is explicit about non-overwrite behavior and accepts normalized material formats")
+{
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	CHECK(widgets.find("never overwrites an existing destination") != std::string::npos);
+	CHECK(widgets.find("Import EXR channel") != std::string::npos);
+	CHECK(widgets.find("Export EXR channel") != std::string::npos);
+
+	const size_t validation = widgets.find("const bool validMaterialExport");
+	const size_t channelValidation = widgets.find("const bool validExportChannel", validation);
+	const size_t canExport = widgets.find("const bool canExport", channelValidation);
+	REQUIRE(validation != std::string::npos);
+	REQUIRE(channelValidation != std::string::npos);
+	REQUIRE(canExport != std::string::npos);
+	const std::string validationBlock = widgets.substr(
+		validation, channelValidation - validation);
+	CHECK(validationBlock.find("k_terrain_material_layer_count") != std::string::npos);
+	CHECK(validationBlock.find("TerrainHeightFileFormat::RawR32F") == std::string::npos);
+	CHECK(validationBlock.find("TerrainHeightFileFormat::Exr") == std::string::npos);
+	CHECK(widgets.find("Material weights require RAW R32F or EXR") == std::string::npos);
+	const size_t layerSelection = widgets.find("const bool hasSelectedExportLayer");
+	REQUIRE(layerSelection != std::string::npos);
+	const std::string layerSelectionBlock = widgets.substr(
+		layerSelection, validation - layerSelection);
+	CHECK(layerSelectionBlock.find("TerrainExportSource::HeightEditLayer") != std::string::npos);
+	CHECK(layerSelectionBlock.find("TerrainExportSource::MaterialWeightLayer") != std::string::npos);
+	CHECK(layerSelectionBlock.find("brush.layer_id.is_valid()") != std::string::npos);
+}
+
+TEST_CASE("Terrain Mode wires generation-aware save optimize and reload operations")
 {
 	const std::string panel = ReadTerrainContractText(
 		"project/src/editor/Panels/Terrain/TerrainModePanel.cpp");
@@ -183,17 +480,192 @@ TEST_CASE("Terrain Mode wires generation-aware file operations and keeps reload 
 	CHECK(panel.find("GetFileOperationState()") != std::string::npos);
 	CHECK(widgets.find("TerrainEditorIntent::Kind::Save") != std::string::npos);
 	CHECK(widgets.find("TerrainEditorIntent::Kind::SaveAs") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Reload") != std::string::npos);
 	CHECK(widgets.find("TerrainEditorIntent::Kind::Optimize") != std::string::npos);
 	CHECK(widgets.find("intent.asset_path = refState.save_as_asset_path") != std::string::npos);
 	CHECK(widgets.find("const bool canOptimize") != std::string::npos);
 	CHECK(widgets.find("!refView.dirty") != std::string::npos);
 	CHECK(widgets.find("TerrainFileOperationStatus::AwaitingPublication") != std::string::npos);
 	CHECK(widgets.find("TerrainFileOperationStatus::Running") != std::string::npos);
+	CHECK(widgets.find("TerrainFileOperationStatus::PublishedAwaitingCatalog") != std::string::npos);
+	CHECK(widgets.find("TerrainFileOperationStatus::Cancelled") != std::string::npos);
 	CHECK(widgets.find("TerrainFileOperationStatus::Succeeded") != std::string::npos);
 	CHECK(widgets.find("TerrainFileOperationStatus::Failed") != std::string::npos);
-	CHECK(widgets.find(
-		"DrawUnavailableFileOperation(refUi, \"Reload\", \"Available with conflict resolution.\")") !=
+	CHECK(widgets.find("refState.warnings") != std::string::npos);
+	CHECK(widgets.find("refUi.button(\"Reload\")") != std::string::npos);
+}
+
+TEST_CASE("Terrain Mode presents external conflicts through a latched UIContext modal")
+{
+	const std::string panel = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModePanel.cpp");
+	const std::string state = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeState.h");
+
+	CHECK(state.find("last_external_change_serial") != std::string::npos);
+	CHECK(state.find("conflict_save_as_pending") != std::string::npos);
+	CHECK(panel.find("GetExternalChangeState()") != std::string::npos);
+	CHECK(panel.find("kTerrainExternalChangePopupId") != std::string::npos);
+	CHECK(panel.find("refUi.open_popup(kTerrainExternalChangePopupId)") != std::string::npos);
+	CHECK(panel.find("refUi.begin_popup_modal(") != std::string::npos);
+	CHECK(panel.find("Local content generation") != std::string::npos);
+	CHECK(panel.find("Disk content generation") != std::string::npos);
+	CHECK(panel.find("TerrainEditorIntent::Kind::Reload") != std::string::npos);
+	CHECK(panel.find("TerrainEditorIntent::Kind::KeepLocal") != std::string::npos);
+	CHECK(panel.find("TerrainEditorIntent::Kind::SaveAs") != std::string::npos);
+
+	const size_t modal = panel.find("DrawTerrainExternalChangeModal");
+	const size_t reloadAction = panel.find("Reload / Discard Local", modal);
+	const size_t keepLocalAction = panel.find("Keep Local", reloadAction);
+	const size_t saveAsAction = panel.find("Save Local Copy As", keepLocalAction);
+	const size_t modalEnd = panel.find("refUi.end_popup()", saveAsAction);
+	REQUIRE(modal != std::string::npos);
+	REQUIRE(reloadAction != std::string::npos);
+	REQUIRE(keepLocalAction != std::string::npos);
+	REQUIRE(saveAsAction != std::string::npos);
+	REQUIRE(modalEnd != std::string::npos);
+
+	const std::string reloadBlock = panel.substr(reloadAction, keepLocalAction - reloadAction);
+	const std::string keepLocalBlock = panel.substr(keepLocalAction, saveAsAction - keepLocalAction);
+	const std::string saveAsBlock = panel.substr(saveAsAction, modalEnd - saveAsAction);
+	const size_t reloadSubmit = reloadBlock.find("SubmitIntent(intent)");
+	const size_t reloadClose = reloadBlock.find("close_current_popup()");
+	const size_t keepLocalSubmit = keepLocalBlock.find("SubmitIntent(intent)");
+	const size_t keepLocalClose = keepLocalBlock.find("close_current_popup()");
+	REQUIRE(reloadSubmit != std::string::npos);
+	REQUIRE(reloadClose != std::string::npos);
+	REQUIRE(keepLocalSubmit != std::string::npos);
+	REQUIRE(keepLocalClose != std::string::npos);
+	CHECK(reloadSubmit < reloadClose);
+	CHECK(keepLocalSubmit < keepLocalClose);
+	CHECK(saveAsBlock.find("SubmitIntent(intent)") != std::string::npos);
+	CHECK(saveAsBlock.find("close_current_popup()") == std::string::npos);
+	CHECK(saveAsBlock.find("refState.conflict_save_as_pending = true") != std::string::npos);
+
+	const size_t completionGuard = panel.find(
+		"refState.conflict_save_as_pending && external.status != TerrainExternalChangeStatus::Conflict",
+		modal);
+	REQUIRE(completionGuard != std::string::npos);
+	const size_t completionReturn = panel.find("return;", completionGuard);
+	REQUIRE(completionReturn != std::string::npos);
+	const std::string completionBlock = panel.substr(
+		completionGuard, completionReturn - completionGuard);
+	CHECK(completionBlock.find("begin_popup_modal") != std::string::npos);
+	CHECK(completionBlock.find("close_current_popup()") != std::string::npos);
+	CHECK(completionBlock.find("end_popup()") != std::string::npos);
+	CHECK(completionBlock.find("refState.conflict_save_as_pending = false") != std::string::npos);
+	CHECK(panel.find("TerrainFileOperationStatus::Failed") != std::string::npos);
+	CHECK(panel.find("const bool fileOperationInProgress") != std::string::npos);
+	CHECK(panel.find("ImGui::") == std::string::npos);
+}
+
+TEST_CASE("Terrain Mode keeps recovered and failed assets read only with recovery actions")
+{
+	const std::string panel = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModePanel.cpp");
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	const std::string widgetHeader = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.h");
+
+	CHECK(panel.find("GetExternalChangeState()") != std::string::npos);
+	CHECK(widgetHeader.find("p_external_change_state") != std::string::npos);
+	CHECK(widgets.find("IsTerrainReadOnly") != std::string::npos);
+	CHECK(widgets.find("const bool readOnly = IsTerrainReadOnly(refView);") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Repair") != std::string::npos);
+	CHECK(widgets.find("Recovered Terrain source is read only") != std::string::npos);
+	CHECK(widgets.find("Failed Terrain source is read only") != std::string::npos);
+	CHECK(widgets.find("canSave") != std::string::npos);
+	CHECK(widgets.find("canOptimize") != std::string::npos);
+	CHECK(widgets.find("canEditLayers") != std::string::npos);
+	CHECK(widgets.find("!readOnly") != std::string::npos);
+	CHECK(widgets.find("refUi.begin_disabled(refView.preview.stroke_active || readOnly);") !=
 		std::string::npos);
+}
+
+TEST_CASE("Terrain Scene workflow preflights and commits authoring state in lifecycle order")
+{
+	const std::string header = ReadTerrainContractText(
+		"project/src/editor/App/SceneWorkflowCoordinator.h");
+	const std::string workflow = ReadTerrainContractText(
+		"project/src/editor/App/SceneWorkflowCoordinator.cpp");
+	const std::string actions = ReadTerrainContractText(
+		"project/src/editor/App/EditorActionCoordinator.cpp");
+
+	CHECK(header.find("TerrainEditorService* pTerrainEditorService") != std::string::npos);
+	CHECK(workflow.find("PrepareTerrainForSceneChange") != std::string::npos);
+	CHECK(workflow.find("CommitTerrainSceneChange") != std::string::npos);
+
+	const size_t reset = workflow.find("SceneWorkflowCoordinator::ResetEditorStateAfterSceneChange");
+	const size_t commit = workflow.find("CommitTerrainSceneChange(context)", reset);
+	const size_t clearSelection = workflow.find("context.refSelectionService.Clear()", reset);
+	const size_t clearHistory = workflow.find("context.refUndoRedoService.Clear()", clearSelection);
+	REQUIRE(reset != std::string::npos);
+	REQUIRE(commit != std::string::npos);
+	REQUIRE(clearSelection != std::string::npos);
+	REQUIRE(clearHistory != std::string::npos);
+	CHECK(commit < clearSelection);
+	CHECK(clearSelection < clearHistory);
+
+	const size_t activate = workflow.find("SceneWorkflowCoordinator::ActivateNewScene(");
+	const size_t prepareNew = workflow.find("PrepareTerrainForSceneChange(context)", activate);
+	const size_t activatePrepared = workflow.find("ActivateNewScenePrepared(context", prepareNew);
+	REQUIRE(activate != std::string::npos);
+	REQUIRE(prepareNew != std::string::npos);
+	REQUIRE(activatePrepared != std::string::npos);
+	CHECK(prepareNew < activatePrepared);
+
+	const size_t preparedNew = workflow.find("SceneWorkflowCoordinator::ActivateNewScenePrepared");
+	const size_t mutateNew = workflow.find("context.refSceneService.NewScene", preparedNew);
+	const size_t resetAfterNew = workflow.find("ResetEditorStateAfterSceneChange(context)", mutateNew);
+	REQUIRE(preparedNew != std::string::npos);
+	REQUIRE(mutateNew != std::string::npos);
+	REQUIRE(resetAfterNew != std::string::npos);
+	CHECK(mutateNew < resetAfterNew);
+
+	const size_t publicLoad = workflow.find("SceneWorkflowCoordinator::LoadSceneIntoEditor(");
+	const size_t prepareLoad = workflow.find("PrepareTerrainForSceneChange(context)", publicLoad);
+	const size_t callPreparedLoad = workflow.find("LoadSceneIntoEditorPrepared(", prepareLoad);
+	const size_t preparedLoad = workflow.find("SceneWorkflowCoordinator::LoadSceneIntoEditorPrepared");
+	const size_t mutateLoad = workflow.find("context.refSceneService.LoadScene(pathScene)", preparedLoad);
+	const size_t resetAfterLoad = workflow.find("ResetEditorStateAfterSceneChange(context)", mutateLoad);
+	REQUIRE(publicLoad != std::string::npos);
+	REQUIRE(prepareLoad != std::string::npos);
+	REQUIRE(callPreparedLoad != std::string::npos);
+	CHECK(prepareLoad < callPreparedLoad);
+	REQUIRE(preparedLoad != std::string::npos);
+	REQUIRE(mutateLoad != std::string::npos);
+	REQUIRE(resetAfterLoad != std::string::npos);
+	CHECK(mutateLoad < resetAfterLoad);
+
+	const size_t reload = workflow.find("SceneWorkflowCoordinator::ReloadActiveScene");
+	const size_t prepareReload = workflow.find("PrepareTerrainForSceneChange(context)", reload);
+	const size_t reloadLoad = workflow.find("LoadSceneIntoEditorPrepared", prepareReload);
+	const size_t reloadFailed = workflow.find("return SceneReloadResult::Failed", reloadLoad);
+	const size_t reloadEnd = workflow.find("SceneWorkflowCoordinator::UpdateLastScenePathSetting", reloadLoad);
+	REQUIRE(reload != std::string::npos);
+	REQUIRE(prepareReload != std::string::npos);
+	REQUIRE(reloadLoad != std::string::npos);
+	REQUIRE(reloadFailed != std::string::npos);
+	REQUIRE(reloadEnd != std::string::npos);
+	CHECK(prepareReload < reloadLoad);
+	CHECK(reloadLoad < reloadFailed);
+	CHECK(workflow.substr(reloadLoad, reloadEnd - reloadLoad).find(
+		"ActivateNewScenePrepared") == std::string::npos);
+
+	for (const char* functionName : {
+		"EditorActionCoordinator::HandleNewScene()",
+		"EditorActionCoordinator::OpenSceneFromPath",
+		"EditorActionCoordinator::HandleReloadScene()" })
+	{
+		const size_t function = actions.find(functionName);
+		const size_t pendingGuard = actions.find("_optPendingSceneSave", function);
+		const size_t cancelPending = actions.find("CancelPendingSceneSave", function);
+		REQUIRE(function != std::string::npos);
+		REQUIRE(pendingGuard != std::string::npos);
+		REQUIRE(cancelPending != std::string::npos);
+		CHECK_MESSAGE(pendingGuard < cancelPending, functionName);
+	}
 }
 
 TEST_CASE("Terrain Mode locks tab changes while a stroke owns the authoring configuration")
@@ -524,25 +996,43 @@ TEST_CASE("Terrain Save Copy As stages and atomically publishes without replacem
 {
 	const std::string service = ReadTerrainContractText(
 		"project/src/editor/Services/TerrainEditorService.cpp");
+	const std::string container = ReadTerrainContractText(
+		"project/src/engine/Function/Asset/TerrainContainer.cpp");
 	const size_t helper = service.find("SaveTerrainCopyNew(");
 	const size_t helperEnd = service.find("bool IsTerrainFileOperationInProgress", helper);
 	const size_t temporaryGuard = service.find("TerrainCopyTemporaryGuard", helper);
 	const size_t stagedWrite = service.find(
 		"save_terrain_container_incremental(temporary", helper);
-	const size_t atomicPublish = service.find("MoveFileExW(", stagedWrite);
-	const size_t writeThrough = service.find("MOVEFILE_WRITE_THROUGH", atomicPublish);
+	const size_t publishCall = service.find(
+		"publish_staged_terrain_container_new(", stagedWrite);
+	const size_t publishHelper = container.find(
+		"TerrainContainerResult publish_staged_terrain_container_new(");
+	const size_t destinationLease = container.find(
+		"destination_lease.acquire", publishHelper);
+	const size_t destinationCheck = container.find(
+		"std::filesystem::exists(canonical_destination", destinationLease);
+	const size_t atomicPublish = container.find("MoveFileExW(", destinationCheck);
+	const size_t writeThrough = container.find("MOVEFILE_WRITE_THROUGH", atomicPublish);
 
 	REQUIRE(helper != std::string::npos);
 	REQUIRE(helperEnd != std::string::npos);
 	REQUIRE(temporaryGuard != std::string::npos);
 	REQUIRE(stagedWrite != std::string::npos);
+	REQUIRE(publishCall != std::string::npos);
+	REQUIRE(publishHelper != std::string::npos);
+	REQUIRE(destinationLease != std::string::npos);
+	REQUIRE(destinationCheck != std::string::npos);
 	REQUIRE(atomicPublish != std::string::npos);
 	REQUIRE(writeThrough != std::string::npos);
 	CHECK(helper < temporaryGuard);
 	CHECK(temporaryGuard < stagedWrite);
-	CHECK(stagedWrite < atomicPublish);
+	CHECK(stagedWrite < publishCall);
+	CHECK(publishHelper < destinationLease);
+	CHECK(destinationLease < destinationCheck);
+	CHECK(destinationCheck < atomicPublish);
 	CHECK(atomicPublish < writeThrough);
-	CHECK(service.substr(helper, helperEnd - helper).find("MOVEFILE_REPLACE_EXISTING") ==
+	CHECK(container.substr(publishHelper, writeThrough - publishHelper).find(
+		"MOVEFILE_REPLACE_EXISTING") ==
 		std::string::npos);
 }
 

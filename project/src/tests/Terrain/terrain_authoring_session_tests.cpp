@@ -756,3 +756,138 @@ TEST_CASE("Terrain failed save preserves dirty generation and retry state")
 	CHECK(core.CompleteSaveContentGeneration(saving_generation, true));
 	CHECK_FALSE(core.IsDirty());
 }
+
+TEST_CASE("Terrain external modification never discards dirty local state silently")
+{
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(MakeLayerWorkingSet()));
+
+	AshEngine::TerrainLayerStackEdit edit{};
+	edit.kind = AshEngine::TerrainLayerStackEditKind::Rename;
+	edit.layer_id = core.GetWorkingSet()->edit_layers.front().id;
+	edit.name = "Unsaved Local Rename";
+	AshEngine::TerrainLayerStackPatch patch{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	std::string error{};
+	REQUIRE(core.ApplyLayerStackEdit(edit, patch, dirty, &error));
+	const uint64_t local_generation = core.GetContentGeneration();
+	const AshEngine::TerrainLayerId selected_layer = core.GetSelectedLayerId();
+	const std::vector<AshEngine::TerrainEditLayer> local_layers =
+		core.GetWorkingSet()->edit_layers;
+
+	CHECK(core.NotifyExternalContentGeneration(local_generation + 4u) ==
+		AshEditor::TerrainExternalChangeResult::Conflict);
+	CHECK(core.HasExternalConflict());
+	CHECK(core.GetExternalContentGeneration() == local_generation + 4u);
+	CHECK(core.IsDirty());
+	CHECK(core.GetContentGeneration() == local_generation);
+	CHECK(core.GetSelectedLayerId() == selected_layer);
+	CheckLayers(core.GetWorkingSet()->edit_layers, local_layers);
+
+	CHECK(core.ResolveConflict(AshEditor::TerrainConflictChoice::SaveAs));
+	CHECK(core.HasExternalConflict());
+	CHECK(core.GetContentGeneration() == local_generation);
+	CheckLayers(core.GetWorkingSet()->edit_layers, local_layers);
+}
+
+TEST_CASE("Terrain Keep Local rebases above disk and recomposes the complete local surface")
+{
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(MakeLayerWorkingSet()));
+
+	AshEngine::TerrainLayerStackEdit edit{};
+	edit.kind = AshEngine::TerrainLayerStackEditKind::Rename;
+	edit.layer_id = core.GetWorkingSet()->edit_layers.front().id;
+	edit.name = "Local Wins";
+	AshEngine::TerrainLayerStackPatch patch{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	std::string error{};
+	REQUIRE(core.ApplyLayerStackEdit(edit, patch, dirty, &error));
+	const std::vector<AshEngine::TerrainEditLayer> local_layers =
+		core.GetWorkingSet()->edit_layers;
+	const uint64_t disk_generation = core.GetContentGeneration() + 8u;
+	REQUIRE(core.NotifyExternalContentGeneration(disk_generation) ==
+		AshEditor::TerrainExternalChangeResult::Conflict);
+
+	REQUIRE(core.ResolveConflict(AshEditor::TerrainConflictChoice::KeepLocal));
+	CHECK_FALSE(core.HasExternalConflict());
+	CHECK(core.GetPersistedContentGeneration() == disk_generation);
+	CHECK(core.GetContentGeneration() == disk_generation + 1u);
+	CHECK(core.IsDirty());
+	CheckLayers(core.GetWorkingSet()->edit_layers, local_layers);
+	const AshEngine::TerrainGridLayout& layout = core.GetWorkingSet()->layout;
+	CHECK(core.GetWorkingSet()->dirty_components.size() ==
+		static_cast<size_t>(layout.component_count_x) * layout.component_count_z);
+
+	REQUIRE(core.NotifyExternalContentGeneration(disk_generation - 1u) ==
+		AshEditor::TerrainExternalChangeResult::IgnoredStale);
+	CHECK_FALSE(core.HasExternalConflict());
+}
+
+TEST_CASE("Terrain conflict choices fail atomically when generation cannot advance")
+{
+	AshEngine::TerrainWorkingSet working_set = MakeLayerWorkingSet();
+	working_set.content_generation = std::numeric_limits<uint64_t>::max() - 1u;
+	for (const auto& component : working_set.components)
+	{
+		REQUIRE(component != nullptr);
+	}
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(std::move(working_set)));
+
+	AshEngine::TerrainLayerStackEdit edit{};
+	edit.kind = AshEngine::TerrainLayerStackEditKind::Rename;
+	edit.layer_id = core.GetWorkingSet()->edit_layers.front().id;
+	edit.name = "Overflow Guard";
+	AshEngine::TerrainLayerStackPatch patch{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	std::string error{};
+	REQUIRE(core.ApplyLayerStackEdit(edit, patch, dirty, &error));
+	REQUIRE(core.GetContentGeneration() == std::numeric_limits<uint64_t>::max());
+	REQUIRE(core.NotifyExternalContentGeneration(std::numeric_limits<uint64_t>::max()) ==
+		AshEditor::TerrainExternalChangeResult::Conflict);
+	const auto layers_before = core.GetWorkingSet()->edit_layers;
+
+	CHECK_FALSE(core.ResolveConflict(AshEditor::TerrainConflictChoice::KeepLocal));
+	CHECK(core.HasExternalConflict());
+	CHECK(core.GetContentGeneration() == std::numeric_limits<uint64_t>::max());
+	CheckLayers(core.GetWorkingSet()->edit_layers, layers_before);
+	CHECK(core.ResolveConflict(AshEditor::TerrainConflictChoice::ReloadDiscard));
+	CHECK_FALSE(core.HasExternalConflict());
+}
+
+TEST_CASE("Terrain clean external generations queue reload and old generations are stale")
+{
+	AshEngine::TerrainWorkingSet working_set = MakeLayerWorkingSet();
+	working_set.content_generation = 5u;
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(std::move(working_set)));
+	const uint64_t current = core.GetContentGeneration();
+
+	CHECK(core.NotifyExternalContentGeneration(current - 1u) ==
+		AshEditor::TerrainExternalChangeResult::IgnoredStale);
+	CHECK(core.NotifyExternalContentGeneration(current + 1u) ==
+		AshEditor::TerrainExternalChangeResult::ReloadQueued);
+	CHECK_FALSE(core.HasExternalConflict());
+	CHECK_FALSE(core.ResolveConflict(AshEditor::TerrainConflictChoice::ReloadDiscard));
+
+	core.Close();
+	CHECK(core.NotifyExternalContentGeneration(current + 2u) ==
+		AshEditor::TerrainExternalChangeResult::Failed);
+}
+
+TEST_CASE("Terrain physical source rollback enters conflict even when the session is clean")
+{
+	AshEngine::TerrainWorkingSet workingSet = MakeLayerWorkingSet();
+	workingSet.content_generation = 5u;
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(std::move(workingSet)));
+	CHECK_FALSE(core.IsDirty());
+
+	CHECK(core.NotifyExternalContentGeneration(4u, true) ==
+		AshEditor::TerrainExternalChangeResult::Conflict);
+	CHECK(core.HasExternalConflict());
+	CHECK(core.GetExternalContentGeneration() == 4u);
+	CHECK(core.ResolveConflict(AshEditor::TerrainConflictChoice::ReloadDiscard));
+	CHECK_FALSE(core.HasExternalConflict());
+}

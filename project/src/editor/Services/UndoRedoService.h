@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/IEditorCommandExecutor.h"
+#include "Function/Asset/TerrainData.h"
 
 #include <cstdint>
 #include <memory>
@@ -61,6 +62,8 @@ namespace AshEditor
 
 		// Clears undo/redo history and closes any open transaction.
 		void Clear();
+		// Removes stale commands for one reloaded Terrain while preserving all unrelated history.
+		bool RemoveCommandsForTerrainAsset(AshEngine::TerrainAssetId assetId) noexcept;
 
 		// Marks the current history state as "saved" (used to compute dirty state).
 		void MarkSaved();

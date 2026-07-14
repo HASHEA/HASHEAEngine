@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Function/Asset/TerrainData.h"
+
 #include <cstdint>
 #include <memory>
 
@@ -22,6 +24,12 @@ namespace AshEditor
 		virtual bool ExecuteCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
 		virtual EditorCommandRecordResult RecordExecutedCommand(
 			std::unique_ptr<EditorCommand> upCommand) = 0;
+		virtual bool RemoveCommandsForTerrainAsset(
+			const AshEngine::TerrainAssetId assetId) noexcept
+		{
+			(void)assetId;
+			return true;
+		}
 		virtual bool BeginCommandTransaction(const char* pLabel)
 		{
 			(void)pLabel;

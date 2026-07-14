@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -67,18 +68,6 @@ namespace AshEditor
 			refResult.intents.push_back(std::move(intent));
 		}
 
-		void DrawUnavailableFileOperation(
-			AshEngine::UIContext& refUi,
-			const char* pLabel,
-			const char* pAvailability)
-		{
-			refUi.begin_disabled(true);
-			refUi.button(pLabel);
-			refUi.end_disabled();
-			refUi.same_line();
-			refUi.text_unformatted(pAvailability);
-		}
-
 		bool IsFileOperationInProgress(const TerrainModeView& refView)
 		{
 			if (!refView.p_file_operation_state)
@@ -87,7 +76,26 @@ namespace AshEditor
 			}
 			return refView.p_file_operation_state->status ==
 					TerrainFileOperationStatus::AwaitingPublication ||
-				refView.p_file_operation_state->status == TerrainFileOperationStatus::Running;
+				refView.p_file_operation_state->status == TerrainFileOperationStatus::Running ||
+				refView.p_file_operation_state->status ==
+					TerrainFileOperationStatus::PublishedAwaitingCatalog;
+		}
+
+		bool IsTerrainReadOnly(const TerrainModeView& refView)
+		{
+			return refView.p_external_change_state &&
+				refView.p_external_change_state->read_only;
+		}
+
+		bool IsTerrainRecoveryState(const TerrainModeView& refView)
+		{
+			if (!refView.p_external_change_state)
+			{
+				return false;
+			}
+			return refView.p_external_change_state->status ==
+					TerrainExternalChangeStatus::RecoveredReadOnly ||
+				refView.p_external_change_state->status == TerrainExternalChangeStatus::Failed;
 		}
 
 		const char* QueryFileOperationKindLabel(const TerrainFileOperationKind eKind)
@@ -100,6 +108,12 @@ namespace AshEditor
 				return "Save Copy As";
 			case TerrainFileOperationKind::Optimize:
 				return "Optimize";
+			case TerrainFileOperationKind::Create:
+				return "Create Flat";
+			case TerrainFileOperationKind::Import:
+				return "Import Heightmap";
+			case TerrainFileOperationKind::Export:
+				return "Export Heightmap";
 			default:
 				return "File operation";
 			}
@@ -120,7 +134,17 @@ namespace AshEditor
 				refUi.text("%s: waiting for Terrain composition...", pKind);
 				break;
 			case TerrainFileOperationStatus::Running:
-				refUi.text("%s: writing Terrain data...", pKind);
+				refUi.text("%s: processing Terrain data...", pKind);
+				break;
+			case TerrainFileOperationStatus::PublishedAwaitingCatalog:
+			{
+				const std::string message =
+					TerrainModeState::BuildPublishedAwaitingCatalogMessage(refState);
+				refUi.text_wrapped("%s: %s", pKind, message.c_str());
+				break;
+			}
+			case TerrainFileOperationStatus::Cancelled:
+				refUi.text("%s cancelled.", pKind);
 				break;
 			case TerrainFileOperationStatus::Succeeded:
 				refUi.text("%s completed.", pKind);
@@ -133,6 +157,10 @@ namespace AshEditor
 				break;
 			default:
 				break;
+			}
+			for (const std::string& warning : refState.warnings)
+			{
+				refUi.text_wrapped("%s warning: %s", pKind, warning.c_str());
 			}
 		}
 
@@ -155,12 +183,19 @@ namespace AshEditor
 
 		void DrawTerrainStatus(AshEngine::UIContext& refUi, const TerrainModeView& refView)
 		{
+			const TerrainExternalChangeState* pExternal = refView.p_external_change_state;
 			if (!refView.p_working_set)
 			{
 				refUi.text_wrapped("No Terrain asset is open for authoring. Select a Terrain asset before using this panel.");
 				if (refView.blocking_operation)
 				{
 					refUi.text_unformatted("Loading Terrain asset...");
+				}
+				if (pExternal && pExternal->status == TerrainExternalChangeStatus::Failed)
+				{
+					refUi.text_wrapped(
+						"Failed Terrain source is read only: %s",
+						pExternal->diagnostic.empty() ? "Unknown load error." : pExternal->diagnostic.c_str());
 				}
 				return;
 			}
@@ -180,6 +215,19 @@ namespace AshEditor
 				static_cast<unsigned long long>(refView.p_working_set->residency_revision));
 			refUi.text("Query status: %s", QueryStatusLabel(refView.preview.query_status));
 			refUi.text("Unsaved changes: %s", refView.dirty ? "yes" : "no");
+			if (pExternal && pExternal->status == TerrainExternalChangeStatus::RecoveredReadOnly)
+			{
+				refUi.text_wrapped(
+					"Recovered Terrain source is read only: %s",
+					pExternal->diagnostic.empty() ? "The previous valid generation was recovered." :
+						pExternal->diagnostic.c_str());
+			}
+			else if (pExternal && pExternal->status == TerrainExternalChangeStatus::Failed)
+			{
+				refUi.text_wrapped(
+					"Failed Terrain source is read only: %s",
+					pExternal->diagnostic.empty() ? "Unknown reload error." : pExternal->diagnostic.c_str());
+			}
 			if (refView.pending_composition)
 			{
 				refUi.text_unformatted("Composing edited Terrain components...");
@@ -201,40 +249,142 @@ namespace AshEditor
 			refUi.separator();
 			refUi.text_unformatted("File operations");
 
-			refUi.begin_disabled(true);
-			refUi.input_text("New Terrain asset", refState.create_asset_path);
-			refUi.end_disabled();
-			DrawUnavailableFileOperation(refUi, "Create Flat", "Available with the create/import job slice.");
-
-			refUi.begin_disabled(true);
-			refUi.input_text("Heightmap input", refState.import_heightmap_path);
-			const std::vector<const char*> importFormats{ "PNG", "RAW", "EXR" };
-			refUi.combo("Import format", refState.import_format_index, importFormats);
-			const std::vector<const char*> rawFormats{ "R16", "R32F" };
-			refUi.combo("RAW format", refState.raw_format_index, rawFormats);
-			const std::vector<const char*> rawEndianness{ "Little endian", "Big endian" };
-			refUi.combo("RAW endian", refState.raw_endian_index, rawEndianness);
-			const std::vector<const char*> rawAxes{ "Rows are +Z", "Rows are -Z" };
-			refUi.combo("RAW axis", refState.raw_axis_index, rawAxes);
-			const std::vector<const char*> exrChannels{ "Y", "R", "G", "B", "A" };
-			refUi.combo("EXR channel", refState.exr_channel_index, exrChannels);
-			const std::vector<const char*> resizePolicies{ "Reject mismatch", "Crop", "Catmull-Rom resample" };
-			refUi.combo("Size mismatch", refState.resize_policy_index, resizePolicies);
-			refUi.end_disabled();
-			DrawUnavailableFileOperation(refUi, "Import Heightmap", "Available with the create/import job slice.");
-
-			refUi.begin_disabled(true);
-			refUi.input_text("Heightmap output", refState.export_heightmap_path);
-			const std::vector<const char*> exportSources{ "Final composed", "Base import", "Selected layer" };
-			refUi.combo("Export source", refState.export_source_index, exportSources);
-			refUi.end_disabled();
-			DrawUnavailableFileOperation(refUi, "Export Heightmap", "Available with the export job slice.");
-
 			const bool fileOperationInProgress = IsFileOperationInProgress(refView);
 			const bool hasWorkingSet = refView.p_working_set != nullptr;
 			const bool strokeActive = refView.preview.stroke_active;
+			const bool readOnly = IsTerrainReadOnly(refView);
+			const bool recoveryState = IsTerrainRecoveryState(refView);
+			const bool canCancelFileOperation = refView.p_file_operation_state &&
+				TerrainModeState::ShouldShowCancelFileOperation(
+					refView.p_file_operation_state->status,
+					refView.p_file_operation_state->kind);
+			if (canCancelFileOperation)
+			{
+				if (refUi.button("Cancel File Operation"))
+				{
+					TerrainEditorIntent intent{};
+					intent.kind = TerrainEditorIntent::Kind::CancelFileOperation;
+					refResult.intents.push_back(std::move(intent));
+				}
+			}
+			const bool canReplaceSession =
+				!fileOperationInProgress && !strokeActive && !refView.blocking_operation &&
+				!refView.dirty && !readOnly && !recoveryState;
+
+			refUi.begin_disabled(fileOperationInProgress);
+			refUi.input_text("Create asset path", refState.create_asset_path);
+			refUi.input_float("Minimum height (m)", refState.create_height_min, 1.0f, 10.0f, "%.3f");
+			refUi.input_float("Maximum height (m)", refState.create_height_max, 1.0f, 10.0f, "%.3f");
+			refUi.input_float("Flat height (m)", refState.flat_height, 1.0f, 10.0f, "%.3f");
+			refUi.end_disabled();
+			const bool canCreate = canReplaceSession && !refState.create_asset_path.empty() &&
+				refState.HasValidCreateParameters();
+			refUi.begin_disabled(!canCreate);
+			if (refUi.button("Create Flat"))
+			{
+				TerrainEditorIntent intent{};
+				intent.kind = TerrainEditorIntent::Kind::Create;
+				intent.asset_path = refState.create_asset_path;
+				intent.create_desc = refState.BuildCreateDesc();
+				refResult.intents.push_back(std::move(intent));
+			}
+			refUi.end_disabled();
+			refUi.text_unformatted("Create uses the production 8193 x 8193, 1 m Terrain layout.");
+
+			refUi.begin_disabled(fileOperationInProgress);
+			refUi.input_text("Import asset path", refState.import_asset_path);
+			refUi.input_text("Heightmap input", refState.import_heightmap_path);
+			refUi.input_uint("Source width", refState.import_source_width);
+			refUi.input_uint("Source height", refState.import_source_height);
+			refUi.input_float("Height offset (m)", refState.import_height_offset, 1.0f, 10.0f, "%.3f");
+			refUi.input_float("Height range (m)", refState.import_height_range, 1.0f, 10.0f, "%.3f");
+			const std::vector<const char*> importFormats{ "PNG", "RAW", "EXR" };
+			refUi.combo("Import format", refState.import_format_index, importFormats);
+			const std::vector<const char*> rawFormats{ "R16", "R32F" };
+			refUi.combo("Import RAW format", refState.import_raw_format_index, rawFormats);
+			const std::vector<const char*> rawEndianness{ "Little endian", "Big endian" };
+			refUi.combo("Import RAW endian", refState.import_raw_endian_index, rawEndianness);
+			refUi.checkbox("Flip X", refState.import_flip_x);
+			const std::vector<const char*> rawAxes{ "Rows are +Z", "Flip Z" };
+			refUi.combo("Heightmap Z axis", refState.import_raw_axis_index, rawAxes);
+			refUi.input_text("Import EXR channel", refState.import_exr_channel);
+			const std::vector<const char*> resizePolicies{ "Reject mismatch", "Crop", "Catmull-Rom resample" };
+			refUi.combo("Size mismatch", refState.import_resize_policy_index, resizePolicies);
+			refUi.end_disabled();
+			const AshEngine::TerrainHeightFileFormat importFormat =
+				TerrainModeState::ResolveHeightFileFormat(
+					refState.import_format_index, refState.import_raw_format_index);
+			const bool validImportChannel =
+				importFormat != AshEngine::TerrainHeightFileFormat::Exr ||
+				!refState.import_exr_channel.empty();
+			const bool canImport =
+				canReplaceSession && !refState.import_asset_path.empty() &&
+				!refState.import_heightmap_path.empty() &&
+				refState.import_source_width > 0u && refState.import_source_height > 0u &&
+				std::isfinite(refState.import_height_offset) &&
+				std::isfinite(refState.import_height_range) &&
+				refState.import_height_range > 0.0f && validImportChannel;
+			refUi.begin_disabled(!canImport);
+			if (refUi.button("Import Heightmap"))
+			{
+				TerrainEditorIntent intent{};
+				intent.kind = TerrainEditorIntent::Kind::Import;
+				intent.asset_path = refState.import_asset_path;
+				intent.import_desc = refState.BuildImportDesc();
+				refResult.intents.push_back(std::move(intent));
+			}
+			refUi.end_disabled();
+
+			refUi.separator();
+			refUi.begin_disabled(fileOperationInProgress);
+			refUi.input_text("Heightmap output", refState.export_heightmap_path);
+			const std::vector<const char*> exportFormats{ "PNG", "RAW", "EXR" };
+			refUi.combo("Export format", refState.export_format_index, exportFormats);
+			refUi.combo("Export RAW format", refState.export_raw_format_index, rawFormats);
+			refUi.combo("Export RAW endian", refState.export_raw_endian_index, rawEndianness);
+			const std::vector<const char*> exportSources{
+				"Final composed", "Base import", "Selected height layer", "Material weight layer" };
+			refUi.combo("Export source", refState.export_source_index, exportSources);
+			refUi.input_uint("Export material layer", refState.export_material_layer_index);
+			refUi.input_text("Export EXR channel", refState.export_exr_channel);
+			const std::vector<const char*> exrPixelTypes{ "Half", "Float" };
+			refUi.combo("EXR pixel type", refState.export_exr_pixel_type_index, exrPixelTypes);
+			refUi.end_disabled();
+			refUi.text_wrapped(
+				"Export creates a new file and never overwrites an existing destination.");
+			const AshEngine::TerrainExportSource exportSource =
+				TerrainModeState::ResolveExportSource(refState.export_source_index);
+			const AshEngine::TerrainHeightFileFormat exportFormat =
+				TerrainModeState::ResolveHeightFileFormat(
+					refState.export_format_index, refState.export_raw_format_index);
+			const bool hasSelectedExportLayer =
+				(exportSource != AshEngine::TerrainExportSource::HeightEditLayer &&
+				 exportSource != AshEngine::TerrainExportSource::MaterialWeightLayer) ||
+				refView.authoring_config.brush.layer_id.is_valid();
+			const bool validMaterialExport =
+				exportSource != AshEngine::TerrainExportSource::MaterialWeightLayer ||
+				refState.export_material_layer_index < AshEngine::k_terrain_material_layer_count;
+			const bool validExportChannel =
+				exportFormat != AshEngine::TerrainHeightFileFormat::Exr ||
+				!refState.export_exr_channel.empty();
+			const bool canExport =
+				hasWorkingSet && !fileOperationInProgress && !strokeActive &&
+				!refState.export_heightmap_path.empty() &&
+				hasSelectedExportLayer && validMaterialExport && validExportChannel;
+			refUi.begin_disabled(!canExport);
+			if (refUi.button("Export Heightmap"))
+			{
+				TerrainEditorIntent intent{};
+				intent.kind = TerrainEditorIntent::Kind::Export;
+				intent.export_desc = refState.BuildExportDesc(
+					refView.authoring_config.brush.layer_id);
+				refResult.intents.push_back(std::move(intent));
+			}
+			refUi.end_disabled();
+
+			refUi.separator();
 			const bool canSave =
-				hasWorkingSet && refView.dirty && !fileOperationInProgress && !strokeActive;
+				hasWorkingSet && refView.dirty && !fileOperationInProgress && !strokeActive && !readOnly;
 			refUi.begin_disabled(!canSave);
 			if (refUi.button("Save"))
 			{
@@ -249,7 +399,8 @@ namespace AshEditor
 			refUi.end_disabled();
 			const bool canSaveAs =
 				hasWorkingSet && !refState.save_as_asset_path.empty() &&
-				!fileOperationInProgress && !strokeActive;
+				!fileOperationInProgress && !strokeActive &&
+				(!readOnly || (recoveryState && refView.p_external_change_state->can_save_as));
 			refUi.begin_disabled(!canSaveAs);
 			if (refUi.button("Save Copy As"))
 			{
@@ -261,11 +412,36 @@ namespace AshEditor
 			refUi.end_disabled();
 			refUi.text_wrapped("Save Copy As writes a new file without rebinding or clearing the current Terrain asset.");
 
-			DrawUnavailableFileOperation(refUi, "Reload", "Available with conflict resolution.");
+			if (recoveryState)
+			{
+				const bool canRepair = refView.p_external_change_state->can_repair &&
+					!fileOperationInProgress && !strokeActive;
+				refUi.begin_disabled(!canRepair);
+				if (refUi.button("Repair"))
+				{
+					TerrainEditorIntent intent{};
+					intent.kind = TerrainEditorIntent::Kind::Repair;
+					refResult.intents.push_back(std::move(intent));
+				}
+				refUi.end_disabled();
+			}
+			else
+			{
+				const bool canReload = hasWorkingSet && !refView.blocking_operation &&
+					!fileOperationInProgress && !strokeActive && !readOnly;
+				refUi.begin_disabled(!canReload);
+				if (refUi.button("Reload"))
+				{
+					TerrainEditorIntent intent{};
+					intent.kind = TerrainEditorIntent::Kind::Reload;
+					refResult.intents.push_back(std::move(intent));
+				}
+				refUi.end_disabled();
+			}
 
 			const bool canOptimize =
 				hasWorkingSet && !refView.dirty && !refView.pending_composition &&
-				!refView.blocking_operation && !fileOperationInProgress && !strokeActive;
+				!refView.blocking_operation && !fileOperationInProgress && !strokeActive && !readOnly;
 			refUi.begin_disabled(!canOptimize);
 			if (refUi.button("Optimize"))
 			{
@@ -564,11 +740,12 @@ namespace AshEditor
 			TerrainModeState& refState,
 			TerrainModeDrawResult& refResult)
 		{
+			const bool readOnly = IsTerrainReadOnly(refView);
 			const bool canEditLayers =
 				refView.p_working_set &&
 				refView.preview.query_status == AshEngine::TerrainQueryStatus::Ready &&
 				!refView.preview.stroke_active &&
-				!refView.blocking_operation;
+				!refView.blocking_operation && !readOnly;
 			refUi.begin_disabled(!canEditLayers);
 			refUi.input_text("New layer name", refState.new_layer_name);
 			const std::vector<const char*> blendModes{ "Additive", "Alpha" };
@@ -606,6 +783,7 @@ namespace AshEditor
 		TerrainAuthoringConfig config = refView.authoring_config;
 		bool configChanged = false;
 		const bool lockTabs = refView.preview.stroke_active;
+		const bool readOnly = IsTerrainReadOnly(refView);
 		if (!refView.last_error.empty())
 		{
 			refUi.text_wrapped("Last error: %s", refView.last_error.c_str());
@@ -620,7 +798,7 @@ namespace AshEditor
 
 		if (refUi.begin_tab_item("Manage"))
 		{
-			if (config.mode != TerrainEditorMode::Manage)
+			if (!readOnly && config.mode != TerrainEditorMode::Manage)
 			{
 				config.mode = TerrainEditorMode::Manage;
 				configChanged = true;
@@ -630,31 +808,31 @@ namespace AshEditor
 		}
 		if (refUi.begin_tab_item("Sculpt"))
 		{
-			if (config.mode != TerrainEditorMode::Sculpt)
+			if (!readOnly && config.mode != TerrainEditorMode::Sculpt)
 			{
 				config.mode = TerrainEditorMode::Sculpt;
 				configChanged = true;
 			}
-			refUi.begin_disabled(refView.preview.stroke_active);
+			refUi.begin_disabled(refView.preview.stroke_active || readOnly);
 			configChanged = DrawSculptTab(refUi, refView, config) || configChanged;
 			refUi.end_disabled();
 			refUi.end_tab_item();
 		}
 		if (refUi.begin_tab_item("Paint"))
 		{
-			if (config.mode != TerrainEditorMode::Paint)
+			if (!readOnly && config.mode != TerrainEditorMode::Paint)
 			{
 				config.mode = TerrainEditorMode::Paint;
 				configChanged = true;
 			}
-			refUi.begin_disabled(refView.preview.stroke_active);
+			refUi.begin_disabled(refView.preview.stroke_active || readOnly);
 			configChanged = DrawPaintTab(refUi, refView, config) || configChanged;
 			refUi.end_disabled();
 			refUi.end_tab_item();
 		}
 		if (refUi.begin_tab_item("Layers"))
 		{
-			if (config.mode != TerrainEditorMode::Layers)
+			if (!readOnly && config.mode != TerrainEditorMode::Layers)
 			{
 				config.mode = TerrainEditorMode::Layers;
 				configChanged = true;
@@ -665,7 +843,7 @@ namespace AshEditor
 		refUi.end_tab_bar();
 		refUi.end_disabled();
 
-		if (configChanged && !lockTabs)
+		if (configChanged && !lockTabs && !readOnly)
 		{
 			TerrainEditorIntent configure{};
 			configure.kind = TerrainEditorIntent::Kind::ConfigureAuthoring;

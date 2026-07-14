@@ -325,6 +325,7 @@ namespace AshEditor
 			*_upSelectionService,
 			*_upUndoRedoService,
 			*_upSettingsService,
+			_upTerrainEditorService.get(),
 			_upEventBus.get(),
 			this
 		};
@@ -457,6 +458,13 @@ namespace AshEditor
 		std::unique_ptr<EditorCommand> upCommand)
 	{
 		return _upUndoRedoService->RecordExecuted(std::move(upCommand), _editorContext);
+	}
+
+	bool EditorApplicationImpl::RemoveCommandsForTerrainAsset(
+		const AshEngine::TerrainAssetId assetId) noexcept
+	{
+		return _upUndoRedoService &&
+			_upUndoRedoService->RemoveCommandsForTerrainAsset(assetId);
 	}
 
 	bool EditorApplicationImpl::BeginCommandTransaction(const char* pLabel)

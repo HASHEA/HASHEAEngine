@@ -64,6 +64,7 @@ namespace AshEditor
 				context.refSelectionService,
 				context.refUndoRedoService,
 				context.refSettingsService,
+				context.refEditorContext.pTerrainEditorService,
 				&context.refEventBus,
 				&context.refNotificationSink
 			};
@@ -168,6 +169,13 @@ namespace AshEditor
 
 	bool EditorActionCoordinator::CanExecuteAction(std::string_view svActionId) const
 	{
+		if ((svActionId == EditorActionIds::FileNewScene ||
+			 svActionId == EditorActionIds::FileOpenScene ||
+			 svActionId == EditorActionIds::FileReloadScene) &&
+			_optPendingSceneSave)
+		{
+			return false;
+		}
 		if (svActionId == EditorActionIds::FileSaveScene)
 		{
 			return !_optPendingSceneSave.has_value();
@@ -384,6 +392,11 @@ namespace AshEditor
 
 	void EditorActionCoordinator::HandleNewScene()
 	{
+		if (_optPendingSceneSave)
+		{
+			Notify(_context, "New Scene is unavailable while Terrain content is being saved for the active Scene.");
+			return;
+		}
 		CancelPendingSceneSave("a new Scene was requested");
 		SceneWorkflowContext sceneWorkflowContext = MakeSceneWorkflowContext(_context);
 		const std::filesystem::path pathNewScene =
@@ -396,12 +409,23 @@ namespace AshEditor
 			return;
 		}
 
-		_context.refSceneWorkflowCoordinator.ActivateNewScene(sceneWorkflowContext, kUntitledSceneName);
+		if (!_context.refSceneWorkflowCoordinator.ActivateNewScene(
+				sceneWorkflowContext,
+				kUntitledSceneName))
+		{
+			Notify(_context, "New Scene was blocked by the active Terrain authoring session.");
+			return;
+		}
 		Notify(_context, "Failed to copy the startup scene template. Created a new default scene instead.");
 	}
 
 	bool EditorActionCoordinator::OpenSceneFromDialog(const char* pSource)
 	{
+		if (_optPendingSceneSave)
+		{
+			Notify(_context, "Open Scene is unavailable while Terrain content is being saved for the active Scene.");
+			return false;
+		}
 		OpenFileDialogOptions options{};
 		options.strTitle = L"Open Scene";
 		options.pFilter = kSceneFileDialogFilter;
@@ -422,6 +446,11 @@ namespace AshEditor
 		(void)pSource;
 		if (pathScene.empty())
 		{
+			return false;
+		}
+		if (_optPendingSceneSave)
+		{
+			Notify(_context, "Open Scene is unavailable while Terrain content is being saved for the active Scene.");
 			return false;
 		}
 		CancelPendingSceneSave("another Scene was opened");
@@ -455,6 +484,11 @@ namespace AshEditor
 
 	void EditorActionCoordinator::HandleReloadScene()
 	{
+		if (_optPendingSceneSave)
+		{
+			Notify(_context, "Reload Scene is unavailable while Terrain content is being saved for the active Scene.");
+			return;
+		}
 		CancelPendingSceneSave("the active Scene was reloaded");
 		SceneWorkflowContext sceneWorkflowContext = MakeSceneWorkflowContext(_context);
 		_context.refSceneWorkflowCoordinator.ReloadActiveScene(sceneWorkflowContext);

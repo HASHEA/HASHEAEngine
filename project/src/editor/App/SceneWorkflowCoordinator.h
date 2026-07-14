@@ -14,6 +14,7 @@ namespace AshEditor
 	class INotificationSink;
 	class SceneService;
 	class SelectionService;
+	class TerrainEditorService;
 	class UndoRedoService;
 
 	struct SceneWorkflowContext
@@ -22,6 +23,7 @@ namespace AshEditor
 		SelectionService& refSelectionService;
 		UndoRedoService& refUndoRedoService;
 		EditorSettingsService& refSettingsService;
+		TerrainEditorService* pTerrainEditorService = nullptr;
 		EditorEventBus* pEventBus = nullptr;
 		INotificationSink* pNotificationSink = nullptr;
 	};
@@ -30,8 +32,8 @@ namespace AshEditor
 	{
 		Skipped = 0,
 		Reloaded,
-		// Reload failed, but the editor already recovered into a usable default scene.
-		FallbackActivated
+		// Reload failed atomically; the current in-memory Scene and editor state are preserved.
+		Failed
 	};
 
 	class SceneWorkflowCoordinator final
@@ -39,7 +41,7 @@ namespace AshEditor
 	public:
 		// Scene switches must reset selection and undo/redo through one shared path.
 		void ResetEditorStateAfterSceneChange(SceneWorkflowContext& context) const;
-		void ActivateNewScene(SceneWorkflowContext& context, const std::string& strSceneName) const;
+		bool ActivateNewScene(SceneWorkflowContext& context, const std::string& strSceneName) const;
 		std::filesystem::path CreateNewSceneFromStartupTemplate(
 			SceneWorkflowContext& context,
 			std::string_view svSceneName) const;
@@ -48,7 +50,12 @@ namespace AshEditor
 		SceneReloadResult ReloadActiveScene(SceneWorkflowContext& context) const;
 
 	private:
-		bool LoadSceneIntoEditor(
+		bool PrepareTerrainForSceneChange(SceneWorkflowContext& context) const;
+		void CommitTerrainSceneChange(SceneWorkflowContext& context) const;
+		void ActivateNewScenePrepared(
+			SceneWorkflowContext& context,
+			const std::string& strSceneName) const;
+		bool LoadSceneIntoEditorPrepared(
 			SceneWorkflowContext& context,
 			const std::filesystem::path& pathScene,
 			EditorDocumentOperationKind eDocumentOperationKind) const;

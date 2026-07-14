@@ -68,7 +68,7 @@ When a real Editor-core test needs a production translation unit, append only th
 - Create: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
 - Modify by Terrain-only hunk: `project/src/tests/premake5.lua`
 
-- [ ] **Step 1: Write the failing core smoke test**
+- [x] **Step 1: Write the failing core smoke test**
 
 ```cpp
 TEST_CASE("Terrain editor session core starts without mutable asset state")
@@ -80,7 +80,7 @@ TEST_CASE("Terrain editor session core starts without mutable asset state")
 }
 ```
 
-- [ ] **Step 2: Run the focused test and observe RED**
+- [x] **Step 2: Run the focused test and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain editor session core*"
@@ -88,7 +88,7 @@ TEST_CASE("Terrain editor session core starts without mutable asset state")
 
 Expected: compile failure for `TerrainEditorSessionCore`.
 
-- [ ] **Step 3: Add the minimal UI-free core**
+- [x] **Step 3: Add the minimal UI-free core**
 
 ```cpp
 using AshEngine::TerrainAssetId;
@@ -131,7 +131,7 @@ private:
 
 This core may depend on Function Terrain values but not `UIContext`, panels, ImGui, Graphics, or platform windows.
 
-- [ ] **Step 4: Add one exact production source line to Tests**
+- [x] **Step 4: Add one exact production source line to Tests**
 
 Append this entry inside the existing `files` block without changing existing gizmo entries:
 
@@ -139,7 +139,7 @@ Append this entry inside the existing `files` block without changing existing gi
 "%{wks.location}/project/src/editor/Core/TerrainEditorSessionCore.cpp",
 ```
 
-- [ ] **Step 5: Run the focused test GREEN**
+- [x] **Step 5: Run the focused test GREEN**
 
 ```powershell
 .\generate_vs2022.bat
@@ -148,7 +148,7 @@ Append this entry inside the existing `files` block without changing existing gi
 
 Expected: generation exits 0 and the smoke test passes.
 
-- [ ] **Step 6: Stage only the Terrain hunk and commit**
+- [x] **Step 6: Stage only the Terrain hunk and commit**
 
 ```powershell
 git add project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Core/TerrainEditorSessionCore.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp
@@ -179,7 +179,7 @@ Expected: cached premake diff contains exactly one Terrain source line and prese
 - Modify: `project/src/editor/Core/EntityCommands.cpp`
 - Modify: `project/src/editor/Core/SceneSnapshotComponentUtils.cpp`
 
-- [ ] **Step 1: Write the failing Inspector/component source-contract test**
+- [x] **Step 1: Write the failing Inspector/component source-contract test**
 
 ```cpp
 static std::string ReadText(const std::filesystem::path& path)
@@ -208,7 +208,7 @@ TEST_CASE("Terrain Inspector routes component changes through an EditorCommand")
 }
 ```
 
-- [ ] **Step 2: Run the focused test and observe RED**
+- [x] **Step 2: Run the focused test and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain Inspector*"
@@ -216,11 +216,11 @@ TEST_CASE("Terrain Inspector routes component changes through an EditorCommand")
 
 Expected: assertions fail because the Terrain Inspector and command do not exist.
 
-- [ ] **Step 3: Add Terrain draft plumbing**
+- [x] **Step 3: Add Terrain draft plumbing**
 
 Add `TerrainDraft { SceneEntityId uEntityId; optional<TerrainComponent> optOriginalValue; optional<TerrainComponent> optCurrentValue; }` to `InspectorPanelState`. Add `SyncTerrainDraft`, `ResetTerrainDraftToLive`, `ResetTerrainDraftToDefaults`, and `CommitTerrainDraft` to `IInspectorComponentHost`. `SyncTerrainDraft` copies live data into both optionals when the entity id changes, and refreshes both only while current still equals original. Live reset copies the entity value into both optionals; default reset changes only current to `TerrainComponent{}`. Commit rejects invalid/equal state, executes `SetTerrainComponentCommand(entity_id, original, current)`, advances original to current only on success, and restores current from original on failure.
 
-- [ ] **Step 4: Add SetTerrainComponentCommand**
+- [x] **Step 4: Add SetTerrainComponentCommand**
 
 ```cpp
 class SetTerrainComponentCommand final : public EditorCommand
@@ -239,11 +239,11 @@ public:
 
 Reject empty/equal edits, select the Terrain entity after execute/undo, and use generic add/remove component facades. Snapshot copy/delete/restore must include Terrain.
 
-- [ ] **Step 5: Implement the Inspector editor**
+- [x] **Step 5: Implement the Inspector editor**
 
 Draw asset path, visible, casts shadow, receives shadow, and eight override paths through `UIContext`. Positive scale stays in the existing Transform section; when a selected Terrain has rotation or non-positive scale, display an error and disable commit rather than correcting silently.
 
-- [ ] **Step 6: Register the editor and run GREEN**
+- [x] **Step 6: Register the editor and run GREEN**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain Inspector*"
@@ -252,7 +252,7 @@ Draw asset path, visible, casts shadow, receives shadow, and eight override path
 
 Expected: source-contract case passes; Editor links all new Inspector methods.
 
-- [ ] **Step 7: Commit the Inspector closure**
+- [x] **Step 7: Commit the Inspector closure**
 
 ```powershell
 git add project/src/editor/Panels/Inspector/TerrainComponentEditor.h project/src/editor/Panels/Inspector/TerrainComponentEditor.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp project/src/editor/Panels/Inspector/InspectorComponentEditorRegistry.cpp project/src/editor/Panels/Inspector/IInspectorComponentHost.h project/src/editor/Panels/Inspector/InspectorPanelState.h project/src/editor/Panels/Inspector/InspectorPanelDrafts.cpp project/src/editor/Panels/Inspector/InspectorPanelSupport.h project/src/editor/Panels/Inspector/InspectorPanelSupport.cpp project/src/editor/Core/EditorComponentComparison.h project/src/editor/Core/EditorComponentComparison.cpp project/src/editor/Core/EntityCommands.h project/src/editor/Core/EntityCommands.cpp project/src/editor/Core/SceneSnapshotComponentUtils.cpp
@@ -274,7 +274,7 @@ Expected: no Render/Graphics file staged.
 - Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
 
-- [ ] **Step 1: Write the intent ownership RED test**
+- [x] **Step 1: Write the intent ownership RED test**
 
 ```cpp
 TEST_CASE("Terrain editor core accepts one selected asset and immutable intents")
@@ -289,7 +289,7 @@ TEST_CASE("Terrain editor core accepts one selected asset and immutable intents"
 }
 ```
 
-- [ ] **Step 2: Run the focused test and observe RED**
+- [x] **Step 2: Run the focused test and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain editor core accepts*"
@@ -297,7 +297,7 @@ TEST_CASE("Terrain editor core accepts one selected asset and immutable intents"
 
 Expected: compile failure for `TerrainEditorIntent` or `Reduce`.
 
-- [ ] **Step 3: Define immutable intents in the UI-free core**
+- [x] **Step 3: Define immutable intents in the UI-free core**
 
 ```cpp
 enum class TerrainLayerActionKind : uint8_t
@@ -346,7 +346,7 @@ Implement `TerrainEditorSessionCore::Reduce` as a deterministic state transition
 
 Add `bool Open(AshEngine::TerrainWorkingSet working_set)` and `const AshEngine::TerrainWorkingSet* GetWorkingSet() const`. `Open` takes the mutable working set by value and rejects asset id zero or invalid layout; no mutable working-set reference leaves the core.
 
-- [ ] **Step 4: Define the service public surface**
+- [x] **Step 4: Define the service public surface**
 
 ```cpp
 class TerrainEditorService final
@@ -364,11 +364,11 @@ public:
 
 The core owns selected ids plus sequence/content-generation reduction; the service owns the editable Phase 1 session and task handles. `TerrainEditorService` contains one core by value; panels never construct another production core or retain mutable Terrain layer/tile pointers.
 
-- [ ] **Step 5: Wire lifecycle into EditorApplicationImpl**
+- [x] **Step 5: Wire lifecycle into EditorApplicationImpl**
 
 Construct the service with other Editor services, initialize after AssetDatabase, call `Update` before panel update, call `Shutdown` before AssetDatabase/UndoRedo teardown, and store it as `std::unique_ptr<TerrainEditorService>`.
 
-- [ ] **Step 6: Run contract/build GREEN**
+- [x] **Step 6: Run contract/build GREEN**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain editor core accepts*"
@@ -377,7 +377,7 @@ Construct the service with other Editor services, initialize after AssetDatabase
 
 Expected: test and Editor build pass; `rg -n "Graphics/|Vulkan|DirectX12|RenderGraph" project/src/editor/Services/TerrainEditorService.*` returns no match.
 
-- [ ] **Step 7: Commit service ownership**
+- [x] **Step 7: Commit service ownership**
 
 ```powershell
 git add project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Core/TerrainEditorSessionCore.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
@@ -405,7 +405,7 @@ Expected: one lifecycle/ownership commit.
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
 
-- [ ] **Step 1: Add Engine-linked command replay RED tests**
+- [x] **Step 1: Add Engine-linked command replay RED tests**
 
 ```cpp
 TEST_CASE("Terrain stroke command replays the Engine patch API by stable identity")
@@ -427,11 +427,11 @@ TEST_CASE("Terrain stroke command replays the Engine patch API by stable identit
 }
 ```
 
-- [ ] **Step 2: Add an already-executed history RED test**
+- [x] **Step 2: Add an already-executed history RED test**
 
 Start the harness in the brush-produced `edited` state, create a `TerrainStrokeCommand` from its patches, and call `IEditorCommandExecutor::RecordExecutedCommand`. Assert recording does not call `Execute` and therefore does not double-apply the stroke. Then assert Undo restores exact before bytes and Redo restores exact after bytes. Add an empty-patch case that records no history entry.
 
-- [ ] **Step 3: Run the command tests and observe RED**
+- [x] **Step 3: Run the command tests and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain stroke command*"
@@ -440,7 +440,7 @@ Start the harness in the brush-produced `edited` state, create a `TerrainStrokeC
 
 Expected: command/history contracts fail because the already-executed path does not exist.
 
-- [ ] **Step 4: Add a precise already-executed command path**
+- [x] **Step 4: Add a precise already-executed command path**
 
 Extend `IEditorCommandExecutor` with:
 
@@ -458,7 +458,7 @@ virtual EditorCommandRecordResult RecordExecutedCommand(
 
 Add `UndoRedoService::RecordExecuted(std::unique_ptr<EditorCommand>, EditorContext&)`. It never calls `EditorCommand::Execute`; it pre-reserves the standalone history storage, then clears redo, records one normal history state, applies post-execute selection, and publishes the same history/dirty notifications as a successful `Execute`. An already-executed command cannot enter an open transaction: delayed commit/cancel has no synchronous tri-state channel through which the mutation owner could prove compensation, so this path immediately calls the command's atomic `Undo`. Any storage/selection failure does the same; return `RolledBack` only when compensation succeeds and `RollbackFailed` otherwise. `EditorApplicationImpl::RecordExecutedCommand` forwards the tri-state result through this method with its owned context. Normal `ExecuteCommand` semantics remain unchanged, and every test double implementing the executor must opt into the new path explicitly.
 
-- [ ] **Step 5: Define TerrainStrokeCommand over Engine replay**
+- [x] **Step 5: Define TerrainStrokeCommand over Engine replay**
 
 ```cpp
 class TerrainStrokeCommand final : public EditorCommand
@@ -475,7 +475,7 @@ public:
 
 Add `TerrainEditorService* pTerrainEditorService` to `EditorContext`; `EditorApplicationImpl::WireServices` fills it. `TerrainStrokeCommand` fails without this pointer instead of falling back to direct asset mutation.
 
-- [ ] **Step 6: Add production sources to the real Editor tests**
+- [x] **Step 6: Add production sources to the real Editor tests**
 
 Append only the exact Terrain production lines required by the real command/service test to the existing Tests `files` block:
 
@@ -484,11 +484,11 @@ Append only the exact Terrain production lines required by the real command/serv
 "%{wks.location}/project/src/editor/Services/TerrainEditorService.cpp",
 ```
 
-- [ ] **Step 7: Make stroke completion emit exactly one recorded command**
+- [x] **Step 7: Make stroke completion emit exactly one recorded command**
 
 On BeginStroke, allocate one sequence, reserve both forward and compensation generations, and freeze parameters/metric. AddStrokeSample only appends the raw terrain-local sample; it never pre-resamples or invokes a kernel. EndStroke calls Phase 1 `apply_terrain_brush_stroke` exactly once against the service-owned working set, constructs one already-executed `TerrainStrokeCommand`, installs the resulting full-dirty composition request, and then records exactly that command. An empty patch submits none. CancelStroke clears the raw path and submits none because no mutation occurred. Command-construction failure replays the retained patches with Engine Undo; history-recording failure uses `RecordExecuted`'s required Undo, whose higher-generation request replaces the forward request. A `RolledBack` result is accepted only when the higher rollback generation and matching pending dirty set are observable. `RollbackFailed`, an exception, or a malformed rollback result discards pending publication and quarantines the session until reload/asset replacement. Both rollback paths invalidate stale compose work, preserve monotonic generation, and never publish untracked logical edits.
 
-- [ ] **Step 8: Add source-contract assertions and run GREEN**
+- [x] **Step 8: Add source-contract assertions and run GREEN**
 
 ```cpp
 CHECK(CountText(serviceSource, "RecordExecutedCommand(") == 1);
@@ -507,7 +507,7 @@ Run:
 
 Expected: recording leaves applied bytes unchanged, Undo/Redo are byte-exact and generation-monotonic, and Editor links the command/executor changes.
 
-- [ ] **Step 9: Stage the mixed premake hunk and commit stroke history**
+- [x] **Step 9: Stage the mixed premake hunk and commit stroke history**
 
 ```powershell
 git add project/src/editor/Core/TerrainCommands.h project/src/editor/Core/TerrainCommands.cpp project/src/tests/Editor/terrain_commands_tests.cpp project/src/editor/Core/IEditorCommandExecutor.h project/src/editor/Core/EditorContext.h project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
@@ -527,7 +527,7 @@ Expected: no scene-wide image copy and no Editor-side patch decoder; cached prem
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
 
-- [ ] **Step 1: Write raw-path routing RED tests**
+- [x] **Step 1: Write raw-path routing RED tests**
 
 ```cpp
 TEST_CASE("Terrain editor forwards one raw path to one Engine brush transaction")
@@ -544,11 +544,11 @@ TEST_CASE("Terrain editor forwards one raw path to one Engine brush transaction"
 
 Add Cancel/empty-stroke cases, invalid non-uniform scale/metric cases, incompatible tool/layer failure, and Pending/Outside/Failed query-state rejection. Phase 1 already owns frame-density and all kernel-value tests; do not duplicate their implementation in Editor.
 
-- [ ] **Step 2: Add ordered compose/publication RED tests**
+- [x] **Step 2: Add ordered compose/publication RED tests**
 
 Start two successful mutations and complete their compose jobs out of order. Assert the service discards stale generations, publishes only the exact current full dirty set, clears dirty only after successful `publish_terrain_working_set`, and leaves dirty/generation/session bytes intact on compose or publication failure. Undo during a pending compose invalidates that job and schedules the Undo generation.
 
-- [ ] **Step 3: Run the focused tests and observe RED**
+- [x] **Step 3: Run the focused tests and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain editor forwards one raw path*"
@@ -557,19 +557,19 @@ Start two successful mutations and complete their compose jobs out of order. Ass
 
 Expected: routing or ordered-publication assertions fail.
 
-- [ ] **Step 4: Capture a valid world metric at BeginStroke**
+- [x] **Step 4: Capture a valid world metric at BeginStroke**
 
 Consume the Ready Scene adapter hit's preserved `TerrainRayHit::local_sample` through the Task 7 query-to-intent adapter; do not repeat the Phase 2 axis-aligned transform inside the authoring service. Preserve both positive non-uniform scale axes as `TerrainBrushMetric::world_meters_per_terrain_meter`; never collapse them to one scalar. Task 4 freezes the caller-provided brush parameters and metric for the stroke, and rejects BeginStroke unless the selected asset/layer/query state and metric are valid. Task 7 supplies real viewport hits; Task 4 tests the service boundary with explicit terrain-local samples.
 
-- [ ] **Step 5: Forward raw samples without pre-resampling**
+- [x] **Step 5: Forward raw samples without pre-resampling**
 
 Store raw `TerrainStrokeSample` points and pressure in arrival order. Do not clamp invalid brush values, call `resample_terrain_stroke`, apply one dab per UI frame, or mutate on AddStrokeSample. On EndStroke call `apply_terrain_brush_stroke(working_set, frozen_params, frozen_metric, raw_path, ...)` exactly once; Engine remains the second-line validator for stale/scripted intents.
 
-- [ ] **Step 6: Enforce ordered deferred publication**
+- [x] **Step 6: Enforce ordered deferred publication**
 
 Each deferred request captures asset id, stroke sequence, operation serial, content generation, and the exact full dirty coordinate set for that generation. A newer mutation replaces the older request before `Update()` performs composition. Publish only when all captured identity fields still equal the current session; any stale request is discarded without clearing dirty state. Publication success uses the Phase 1 atomic API, updates the immutable preview snapshot, and only then advertises completion/readiness. True background completion ordering is deferred to Phase 4 because Phase 3 has no immutable/COW working-set capture.
 
-- [ ] **Step 7: Run routing/publication GREEN**
+- [x] **Step 7: Run routing/publication GREEN**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain editor forwards one raw path*"
@@ -579,7 +579,7 @@ Each deferred request captures asset id, stroke sequence, operation serial, cont
 
 Expected: Editor invokes one Engine brush transaction per completed stroke, stale jobs never publish, and the authoritative Phase 1 brush suite remains green.
 
-- [ ] **Step 8: Commit routing and sequencing**
+- [x] **Step 8: Commit routing and sequencing**
 
 ```powershell
 git add project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp
@@ -744,7 +744,7 @@ Add `EditorPanelIds::TerrainMode = "terrain_mode"` and `EditorWindowTitles::Terr
 
 - [x] **Step 4: Implement Manage tab**
 
-Draw current asset/query/progress, `content_generation`, `residency_revision`, dirty and error state. Show the approved flat-create, PNG/RAW/EXR import, final/base/layer export, Save, Save As, Reload and Optimize fields, but keep them explicitly disabled until Tasks 9–10 provide the generation-aware file-job and conflict contracts; no unsupported intent is submitted. RAW placeholders include format/endian/axis, EXR includes channel, and size mismatch exposes reject/crop/Catmull-Rom choices.
+Draw current asset/query/progress, `content_generation`, `residency_revision`, dirty and error state. Show the approved flat-create, PNG/RAW/EXR import, final/base/layer export, Save, Save As, Reload and Optimize fields, but keep create/import/export explicitly disabled until Task 11 supplies their immutable background-job and publication contracts; no unsupported intent is submitted. RAW placeholders include format/endian/axis, EXR includes channel, and size mismatch exposes reject/crop/Catmull-Rom choices.
 
 - [x] **Step 5: Implement Sculpt and Paint tabs**
 
@@ -773,7 +773,7 @@ git commit -m "feat(editor): add terrain authoring mode"
 
 Expected: one focused Terrain Mode UI plus service-owned authoring-configuration contract commit.
 
-Result: Terrain Mode is registered and defaults closed, Asset Browser Terrain selection routes through the service, Manage exposes status plus explicit disabled future file-job boundaries, Sculpt/Paint use the service-owned compatible brush configuration, and Layers submits stable-ID actions with draft-safe undo/redo behavior. Focused Terrain Mode tests pass (9/9, 110 assertions); final Debug and Release suites pass (296/296, 21178 assertions each). ArchGate, AIDevDoctor, fresh Premake generation, Editor/Sandbox Debug/Release builds, and the four-combination readiness matrix all pass. The readiness matrix exited from the shared readiness signal, fresh logs had zero rejection hits, and all four runtime configuration files were restored byte-for-byte. RenderGate was not run because this slice changes Editor UI/service authoring contracts but no renderer, shader, scene presentation, or golden-visible output.
+Result: Terrain Mode is registered and defaults closed, Asset Browser Terrain selection routes through the service, Manage exposes status plus explicit disabled Task 11 file-job boundaries, Sculpt/Paint use the service-owned compatible brush configuration, and Layers submits stable-ID actions with draft-safe undo/redo behavior. Focused Terrain Mode tests pass (9/9, 110 assertions); final Debug and Release suites pass (296/296, 21178 assertions each). ArchGate, AIDevDoctor, fresh Premake generation, Editor/Sandbox Debug/Release builds, and the four-combination readiness matrix all pass. The readiness matrix exited from the shared readiness signal, fresh logs had zero rejection hits, and all four runtime configuration files were restored byte-for-byte. RenderGate was not run because this slice changes Editor UI/service authoring contracts but no renderer, shader, scene presentation, or golden-visible output.
 
 ### Task 7: Add viewport input arbitration
 
@@ -963,7 +963,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mod
 
 Expected: facade assertions pass, both configurations link the generated Editor/Sandbox projects, all four runtime/backend combinations reach readiness and exit cleanly, RenderGate passes without blessing, runtime configuration bytes are restored exactly, and fresh logs contain no validation/device-loss/fatal diagnostics. Do not commit until every command above passes.
 
-Result: The focused overlay suite passes 5/5 cases and 613 assertions; the full Debug and Release suites each pass 311/311 cases and 21952 assertions. Fresh Premake generation, Editor/Sandbox Debug/Release builds, ArchGate (35 unchanged legacy warnings), and AIDevDoctor ValidatePlan all pass. The readiness matrix exits 0; because this branch still has minute-granularity runtime log names, each Editor/Sandbox x DX12/Vulkan cell was also rerun into an independent console artifact under `Intermediate/test-reports/terrain-task8/readiness-20260715-0010`, where every cell reports `readiness automation succeeded`, both Sandbox cells report `clean_exit=yes`, and all four have zero error/critical/validation/device-loss/fatal rejection hits. `RunRenderGate.bat` passes without blessing in report `Intermediate/test-reports/render-gate/20260715-000831-166-44808-59c80666`: sandbox Vulkan/DX12/cross SSIM is 0.996278/0.996177/0.999747 and particles is 1/1/1. The pre-run bytes of Engine.ini, EditorSettings.json, imgui.ini, and ViewportLayout.json were restored with all four SHA-256 values matching; no effective Editor/Sandbox/AshImageDiff/gate root remains. Interactive Terrain overlay appearance remains part of the phase-wide Task 11 manual checklist rather than being inferred from non-Terrain RenderGate scenes.
+Result: The focused overlay suite passes 5/5 cases and 613 assertions; the full Debug and Release suites each pass 311/311 cases and 21952 assertions. Fresh Premake generation, Editor/Sandbox Debug/Release builds, ArchGate (35 unchanged legacy warnings), and AIDevDoctor ValidatePlan all pass. The readiness matrix exits 0; because this branch still has minute-granularity runtime log names, each Editor/Sandbox x DX12/Vulkan cell was also rerun into an independent console artifact under `Intermediate/test-reports/terrain-task8/readiness-20260715-0010`, where every cell reports `readiness automation succeeded`, both Sandbox cells report `clean_exit=yes`, and all four have zero error/critical/validation/device-loss/fatal rejection hits. `RunRenderGate.bat` passes without blessing in report `Intermediate/test-reports/render-gate/20260715-000831-166-44808-59c80666`: sandbox Vulkan/DX12/cross SSIM is 0.996278/0.996177/0.999747 and particles is 1/1/1. The pre-run bytes of Engine.ini, EditorSettings.json, imgui.ini, and ViewportLayout.json were restored with all four SHA-256 values matching; no effective Editor/Sandbox/AshImageDiff/gate root remains. Interactive Terrain overlay appearance remains part of the phase-wide Task 12 manual checklist rather than being inferred from non-Terrain RenderGate scenes.
 
 - [x] **Step 7: Commit brush overlay**
 
@@ -979,7 +979,7 @@ Expected: overlay uses Function presentation types only.
 
 ### Task 9: Implement async save generations and Ctrl+S ordering
 
-**Implementation status:** Complete on 2026-07-15. The focused Task 9 tests, full Debug/Release tests, Editor/Sandbox Debug/Release builds, architecture gate, plan audit, and four-combination runtime readiness matrix listed below are confirmed. Phase-wide render and performance gates remain Task 11 work and are not implied by this status.
+**Implementation status:** Complete on 2026-07-15. The focused Task 9 tests, full Debug/Release tests, Editor/Sandbox Debug/Release builds, architecture gate, plan audit, and four-combination runtime readiness matrix listed below are confirmed. Phase-wide render and performance gates remain Task 12 work and are not implied by this status.
 
 **Files:**
 - Modify: `project/src/engine/Function/Asset/TerrainContainer.cpp`
@@ -1051,7 +1051,7 @@ For an existing container, the incremental dirty payload must be exactly the Com
 
 `Save`, `SaveAs`, and `Optimize` start non-blocking Phase 1 operations. `Update` first finishes a requested composition/publication, then dispatches a worker that captures only the immutable snapshot, cumulative dirty payloads, and resolved path required by that operation. The state exposed to UI is `AwaitingPublication`, `Running`, `Succeeded`, or `Failed`; missing workers and dispatch failures fail quickly instead of running disk I/O inline on the Editor thread. Production file paths must remain below the AssetDatabase root and use `.AshTerrain`.
 
-`Save` advances the captured persisted generation only after success. `Save` and `Optimize` are source-bound: they use the current working-set `source_path` and reject any explicit destination. Only `SaveAs` accepts a destination, and it is intentionally **Save Copy As**: it stages and validates a complete same-directory temporary container, then durably publishes it with non-replacing atomic create semantics. A destination that appears after submission is preserved and every handled failure removes the temporary artifact. Save Copy As does not rebind the current asset and does not clear dirty state. Every file operation requires a valid AssetDatabase root; an unrooted absolute path is rejected. `Optimize` is available only for a clean, saved source. Manage submits these three intents and displays operation/error state; Create/Import/Export remain future file jobs, while Reload remains disabled until Task 10 defines conflict handling.
+`Save` advances the captured persisted generation only after success. `Save` and `Optimize` are source-bound: they use the current working-set `source_path` and reject any explicit destination. Only `SaveAs` accepts a destination, and it is intentionally **Save Copy As**: it stages and validates a complete same-directory temporary container, then durably publishes it with non-replacing atomic create semantics. A destination that appears after submission is preserved and every handled failure removes the temporary artifact. Save Copy As does not rebind the current asset and does not clear dirty state. Every container operation requires a valid AssetDatabase root; an unrooted absolute path is rejected. `Optimize` is available only for a clean, saved source. Manage submits these three intents and displays operation/error state; Create/Import/Export stay disabled until Task 11 adds their approved file jobs, while Reload remains disabled until Task 10 defines conflict handling.
 
 - [x] **Step 5: Order Ctrl+S Terrain before Scene with identity guards**
 
@@ -1076,7 +1076,7 @@ Assert `SaveDirtyReferencedTerrains` appears before the Scene save call, the app
 .\build_editor.bat Release
 ```
 
-Confirmed post-fix evidence at this update: the focused Terrain editor suite passes 44/44 cases with 640 assertions and `Terrain Ctrl+S*` passes 2/2 cases with 35 assertions. This includes executable coverage for Save Copy As destination races, worker shutdown waiting, active-file-operation × history-quarantine session replacement, and order-independent root-contained `Current / Different / Unsafe` Scene-reference set classification; the small coordinator source contract checks collection-before-classification and result mapping. Full Debug and Release suites each pass 335/335 cases with 22350 assertions. Editor and Sandbox Debug/Release builds all exit 0, with Editor Debug/Release rebuilt after the final service contract change. ArchGate passes with the unchanged 35 grandfathered warnings and AIDevDoctor ValidatePlan exits 0. The final `run.bat all Debug --smoke-test-seconds=120` evidence is captured at `Intermediate/test-reports/terrain-task9/readiness-20260715-014646-028`: all four target/backend cells report readiness success, both Sandbox cells report `clean_exit=yes`, the combined console has zero rejection hits, all four runtime configuration SHA-256 values are restored exactly, and no effective GPU root remains. RenderGate and Standard PerfGate remain in the Task 11 exit matrix.
+Confirmed post-fix evidence at this update: the focused Terrain editor suite passes 44/44 cases with 640 assertions and `Terrain Ctrl+S*` passes 2/2 cases with 35 assertions. This includes executable coverage for Save Copy As destination races, worker shutdown waiting, active-file-operation × history-quarantine session replacement, and order-independent root-contained `Current / Different / Unsafe` Scene-reference set classification; the small coordinator source contract checks collection-before-classification and result mapping. Full Debug and Release suites each pass 335/335 cases with 22350 assertions. Editor and Sandbox Debug/Release builds all exit 0, with Editor Debug/Release rebuilt after the final service contract change. ArchGate passes with the unchanged 35 grandfathered warnings and AIDevDoctor ValidatePlan exits 0. The final `run.bat all Debug --smoke-test-seconds=120` evidence is captured at `Intermediate/test-reports/terrain-task9/readiness-20260715-014646-028`: all four target/backend cells report readiness success, both Sandbox cells report `clean_exit=yes`, the combined console has zero rejection hits, all four runtime configuration SHA-256 values are restored exactly, and no effective GPU root remains. RenderGate and Standard PerfGate remain in the Task 12 exit matrix.
 
 - [x] **Step 7: Commit save ordering (main-thread handoff)**
 
@@ -1100,7 +1100,7 @@ Result: the Task 9 boundary is selectively staged and committed without the prot
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
 
-- [ ] **Step 1: Write conflict/reload RED tests**
+- [x] **Step 1: Write conflict/reload RED tests**
 
 ```cpp
 TEST_CASE("Terrain external modification never discards dirty local state silently")
@@ -1116,7 +1116,7 @@ TEST_CASE("Terrain external modification never discards dirty local state silent
 
 Add clean auto-reload, ReloadDiscard, SaveAs, failed reload, and stale command-history cases.
 
-- [ ] **Step 2: Run conflict tests and observe RED**
+- [x] **Step 2: Run conflict tests and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain external modification*"
@@ -1124,7 +1124,7 @@ Add clean auto-reload, ReloadDiscard, SaveAs, failed reload, and stale command-h
 
 Expected: missing conflict choice or dirty-preservation assertion fails.
 
-- [ ] **Step 3: Complete Phase 1 conflict state behavior**
+- [x] **Step 3: Complete Phase 1 conflict state behavior**
 
 Clean sessions accept background reload and publish an immutable new snapshot at a frame boundary. Dirty sessions enter Conflict and keep memory unchanged until explicit ReloadDiscard, KeepLocal, or SaveAs. Failed/CRC-recovery assets remain read-only and report the exact content generation/block error.
 
@@ -1137,19 +1137,19 @@ TerrainExternalChangeResult NotifyExternalContentGeneration(uint64_t disk_conten
 bool ResolveConflict(TerrainConflictChoice choice);
 ```
 
-- [ ] **Step 4: Add selective Terrain history removal**
+- [x] **Step 4: Add selective Terrain history removal**
 
 Extend `EditorCommand` with an optional `GetAffectedTerrainAssetId()` returning zero by default, and add `UndoRedoService::RemoveCommandsForTerrainAsset(TerrainAssetId)`. Successful reload removes only entries for that asset and recomputes saved/current history state; unrelated entity commands remain.
 
-- [ ] **Step 5: Add Terrain Mode conflict dialog**
+- [x] **Step 5: Add Terrain Mode conflict dialog**
 
 Use `UIContext::begin_popup_modal` to display disk/local content generations and Reload/Discard, Keep Local, Save As actions. Failed assets show Repair and Save As but disable overwrite Save and all stroke controls.
 
-- [ ] **Step 6: Reset sessions on Scene workflow changes**
+- [x] **Step 6: Reset sessions on Scene workflow changes**
 
 During New/Open/Reload Scene, ask TerrainEditorService to finish/cancel active strokes, resolve blocking save choices, clear selected Terrain, then let existing Selection/UndoRedo reset proceed. Never leave a command pointing at a destroyed session.
 
-- [ ] **Step 7: Run conflict/history tests GREEN**
+- [x] **Step 7: Run conflict/history tests GREEN**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain external modification*"
@@ -1169,7 +1169,161 @@ git commit -m "feat(editor): resolve terrain reload conflicts"
 
 Expected: unrelated undo history survives Terrain-only reload.
 
-### Task 11: Run Phase 3 exit gates and manual authoring workflow
+### Task 11: Implement asynchronous flat create and heightmap import/export
+
+**Files:**
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.h`
+- Modify: `project/src/editor/Services/TerrainEditorService.h`
+- Modify: `project/src/editor/Services/TerrainEditorService.cpp`
+- Modify: `project/src/editor/Panels/Terrain/TerrainModeState.h`
+- Modify: `project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/asset.md`
+- Modify: `docs/specs/modules/editor.md`
+- Modify: `docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md`
+- Reuse without changing: `project/src/engine/Function/Asset/TerrainData.*`, `TerrainImport.*`, `TerrainContainer.*`, and the RAW/PNG/EXR codecs
+
+- [x] **Step 1: Write RED service tests for immutable jobs and destination safety**
+
+Add executable tests that submit `Create`, `Import`, `Export`, and `CancelFileOperation` intents through a real `TerrainEditorService`. The create descriptor must default to `make_default_terrain_grid_layout()` and prove `8193 × 8193` samples, `32 × 32` Components, `256` quads per Component, and `1.0 m` spacing. Cover these failures before implementation:
+
+```cpp
+TEST_CASE("Terrain editor create uses the production layout and never replaces a raced destination");
+TEST_CASE("Terrain editor import publishes a unique validated stage without replacing its destination");
+TEST_CASE("Terrain editor file jobs reject root escape and fail quickly without a worker");
+TEST_CASE("Terrain editor export captures one immutable generation and supports cancellation");
+TEST_CASE("Terrain editor external heightmap paths accept root-outside absolute paths and root-based relative paths");
+TEST_CASE("Terrain editor exports every source through every approved format without replacement");
+TEST_CASE("Terrain Mode maps independent create import and export drafts and only shows valid cancellation");
+```
+
+The tests must also assert that `..`, absolute paths outside the configured asset root, and directory-junction escape are rejected for `.AshTerrain` destinations; absolute Import source and Export destination paths outside the root are accepted; relative external heightmap paths resolve from the asset root; and a destination created after submission remains byte-identical. Cover the complete `4 sources × 4 formats` export matrix, including `[0,1]` PNG/RAW R16 material-weight mapping. Every handled failure/cancellation removes the unique stage and any codec temporary, while a worker rejection never runs the synchronous codec on the Editor thread. Use small valid layouts for ordinary tests and inspect the production default without allocating an 8193² fixture.
+
+- [x] **Step 2: Run the focused tests and observe RED**
+
+```powershell
+.\RunTests.bat Debug --test-case="Terrain editor create*"
+.\RunTests.bat Debug --test-case="Terrain editor import*"
+.\RunTests.bat Debug --test-case="Terrain editor export*"
+.\RunTests.bat Debug --test-case="Terrain editor file jobs*"
+```
+
+Expected: compile failures for the missing create/cancel intents and file-operation kinds, followed by behavioral failures for the still-disabled Manage controls.
+
+- [x] **Step 3: Define immutable intent and result values**
+
+Add a value-only create descriptor and extend the existing intent without exposing mutable Terrain state:
+
+```cpp
+struct TerrainCreateAssetDesc
+{
+    AshEngine::TerrainGridLayout layout = AshEngine::make_default_terrain_grid_layout();
+    AshEngine::TerrainHeightMapping height_mapping{};
+    float flat_height = 0.0f;
+};
+
+enum class Kind : uint8_t
+{
+    SelectAsset = 0,
+    SelectLayer,
+    ConfigureAuthoring,
+    BeginStroke,
+    AddStrokeSample,
+    EndStroke,
+    CancelStroke,
+    LayerAction,
+    Save,
+    Reload,
+    Repair,
+    KeepLocal,
+    SaveAs,
+    Optimize,
+    Create,
+    Import,
+    Export,
+    CancelFileOperation
+};
+
+TerrainCreateAssetDesc create_desc{};
+std::optional<AshEngine::TerrainHeightImportDesc> import_desc{};
+std::optional<AshEngine::TerrainHeightExportDesc> export_desc{};
+```
+
+Extend `TerrainFileOperationKind` with `Create`, `Import`, and `Export`, and extend `TerrainFileOperationStatus` with the distinct terminal value `Cancelled`. The worker result carries only owned values: success/cancel/error, the created/imported immutable snapshot, `TerrainImportReport`, and the final destination. A cancellation result maps to `Cancelled`, never `Succeeded` or `Failed`, and cannot report a successful publication.
+
+- [x] **Step 4: Validate paths and reserve non-replacing publication**
+
+Create and Import share a container-destination resolver. It requires a valid AssetDatabase root, canonicalizes through existing parents, rejects junction/symlink escape, requires `.AshTerrain`, and treats the UI value as root-relative (`terrain/NewTerrain.AshTerrain`, not `product/assets/terrain/...`). Check non-existence at submission for immediate feedback, but treat `publish_staged_terrain_container_new` under the destination commit lease as the authoritative race check.
+
+Import source and heightmap Export destination are external workflow paths, not AssetDatabase identities. An absolute external path may be outside the asset root; a relative external path resolves against the asset root. Validate the Import source as an existing regular file, validate the Export parent plus format/extension pair (`.png`, `.raw`, `.exr`), and never pass either through the `.AshTerrain` containment resolver. Export is always create-new / never-overwrite / non-replacing: expose that fixed policy beside the output field, provide no overwrite switch, stage privately, and preserve any pre-existing or raced destination. No implicit format inference may disagree with the selected descriptor.
+
+- [x] **Step 5: Dispatch create/import/export without capturing mutable service state**
+
+Use the established promise plus `dispatch_background_task` pattern. The lambda must capture only copies of operation serial/kind, resolved paths, descriptors/cancellation token, flat parameters, and for Export a `std::shared_ptr<const TerrainAssetSnapshot>`. It must not capture `[this]`, `TerrainWorkingSet*`, `TerrainModeState&`, `refIntent&`, or a reference to `_publishedSnapshot`.
+
+The worker call chains are fixed:
+
+```text
+Create: create_flat_terrain_snapshot
+        -> unique staged full-container write and validation
+        -> publish_staged_terrain_container_new(final)
+
+Import: import_terrain_height_to_container(unique_staged)
+        -> publish_staged_terrain_container_new(final)
+
+Export: export_terrain_height(captured_immutable_snapshot, copied_desc_with_unique_stage)
+        -> non-replacing create-new publish(final)
+```
+
+Import deliberately gives `import_terrain_height_to_container` a unique staged destination, never the final asset path. This retains the approved one-GiB pipeline estimate while the final named-lease publication remains non-replacing. An RAII guard owns the unique stage and the codec's `.import.tmp` until publication succeeds. `CancelFileOperation` is accepted only for a Running Import or Export and calls that job's copied `TerrainCancellationToken`; Create is not an explicitly cancellable UI operation. Shutdown requests cancellation for a cancellable Running job and then waits for every Running worker before releasing service state. Cancellation must remove the unique stage and codec `.import.tmp`, leave the final destination unpublished, and resolve as `Cancelled`.
+
+- [x] **Step 6: Commit results only on the Editor update boundary**
+
+`Update()` consumes the ready future once and compares the captured operation serial and session identity before changing Editor state. After Create/Import publishes a file, refresh AssetDatabase on the Editor thread, find the final relative path to obtain its real path-derived `AssetId`, normalize a copied snapshot to that ID/path, publish it, and open/select it only if the captured session is still safe to replace. A durable file whose catalog refresh/open step fails is retained and reported with its final path; never delete a successfully published user asset to hide an Editor integration failure.
+
+PNG 8-bit precision warnings from `TerrainImportReport` remain visible in operation status. Failure, `Cancelled`, stale completion, allocation/codec exception, unavailable worker, or a raced destination must preserve the current working set, publication, dirty state, and history. Completion polling consumes a cancelled result exactly once and must not run catalog refresh or final publication afterward.
+
+- [x] **Step 7: Enable Manage controls and map every approved descriptor field**
+
+Replace the unavailable placeholders with UIContext controls that submit one immutable intent. Create defaults to the production layout, height minimum `0`, height maximum `1024`, flat height `0`, and root-relative `terrain/NewTerrain.AshTerrain`; validate finite `minimum < maximum`, then submit `height_offset = minimum` and `height_range = maximum - minimum`. Import exposes its own source/destination paths, source width/height, PNG/RAW R16/RAW R32F/EXR, RAW byte order, independent X/Z flips, exact EXR channel, and Reject/Crop/Catmull-Rom. Export exposes a separate destination, PNG/RAW R16/RAW R32F/EXR, RAW byte order, exact EXR channel plus half/float, and Final Composed/Base/selected Height Layer/selected Material Weight Layer with material index `0..7`; none of its draft fields may alias Import state.
+
+All four Export sources support all four formats. For Material Weight Layer, PNG and RAW R16 encode the selected lane with a fixed normalized `[0,1]` mapping, while RAW R32F and EXR emit the normalized floating value directly; Terrain height offset/range must not rescale material weights. The output field states that Export creates a new file and never overwrites.
+
+Disable Create/Import while another file job, load, stroke, composition, dirty-session replacement, conflict, recovery, or history quarantine makes session replacement unsafe. Export requires a published immutable snapshot and no active file job, but never reads a mutable working set in the worker. Show a Cancel button only while a cancellable Import/Export job is Running.
+
+- [x] **Step 8: Run focused GREEN and regression tests**
+
+```powershell
+.\RunTests.bat Debug --test-case="Terrain editor create*"
+.\RunTests.bat Debug --test-case="Terrain editor import*"
+.\RunTests.bat Debug --test-case="Terrain editor export*"
+.\RunTests.bat Debug --test-case="Terrain editor file jobs*"
+.\RunTests.bat Debug --test-case="Terrain Mode*"
+.\RunTests.bat Debug --test-case="Terrain import*"
+.\RunArchGate.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\AIDevDoctor.ps1 -Mode ValidatePlan
+```
+
+Expected: every focused test exits 0; the existing RAW/PNG/EXR codec suite remains green; ArchGate adds no legacy boundary; AIDevDoctor accepts the updated plan. Full build, runtime, render, performance, and manual evidence remains Task 12 and must not be inferred here.
+
+- [ ] **Step 9: Update long-lived contracts and commit the slice**
+
+Update the Terrain, Asset, and Editor specs with the exact path, immutable-job, cancellation, warning, publication, and UI contracts. Do not record runtime evidence until Step 8 actually ran.
+
+```powershell
+git add project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp
+git add project/src/editor/Panels/Terrain/TerrainModeState.h project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp
+git add project/src/tests/Editor/terrain_editor_service_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
+git add docs/specs/features/terrain.md docs/specs/modules/asset.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
+git diff --cached --check
+git commit -m "feat(editor): add terrain create import export jobs"
+```
+
+Expected: one focused Editor/Asset integration commit; no Graphics, golden, performance-baseline, scene fixture, or runtime configuration file is staged.
+
+### Task 12: Run Phase 3 exit gates and manual authoring workflow
 
 **Files:**
 - Verify: all Phase 3 files above
@@ -1177,7 +1331,7 @@ Expected: unrelated undo history survives Terrain-only reload.
 - Do not modify: `tools/render/goldens/`
 - Do not modify: `tools/perf/perf_gate_baselines.json`
 
-- [ ] **Step 1: Run complete tests in Debug and Release**
+- [x] **Step 1: Run complete tests in Debug and Release**
 
 ```powershell
 .\RunTests.bat Debug
@@ -1186,7 +1340,7 @@ Expected: unrelated undo history survives Terrain-only reload.
 
 Expected: both exit 0, including Terrain authoring and Editor source-contract cases.
 
-- [ ] **Step 2: Run fresh Editor/Sandbox builds**
+- [x] **Step 2: Run fresh Editor/Sandbox builds**
 
 ```powershell
 .\generate_vs2022.bat
@@ -1198,7 +1352,7 @@ Expected: both exit 0, including Terrain authoring and Editor source-contract ca
 
 Expected: all exit 0; no unresolved Terrain command/service symbol.
 
-- [ ] **Step 3: Run architecture and plan gates**
+- [x] **Step 3: Run architecture and plan gates**
 
 ```powershell
 .\RunArchGate.bat
@@ -1208,7 +1362,7 @@ rg -n "#include .*Graphics/|#include .*Vulkan|#include .*DirectX12|ImGui::" proj
 
 Expected: gates exit 0 and `rg` prints no forbidden dependency.
 
-- [ ] **Step 4: Run Editor readiness on both backends**
+- [x] **Step 4: Run Editor readiness on both backends**
 
 ```powershell
 .\run.bat editor vulkan Debug --scene=product/assets/scenes/Terrain.scene.json --smoke-test-seconds=120
@@ -1219,7 +1373,7 @@ Expected: both exit 0 after Terrain asset/render/present readiness; no fixed-fra
 
 - [ ] **Step 5: Execute the manual Terrain Mode checklist**
 
-On both backends: create a flat 8193 terrain; import PNG, RAW, and EXR; run Raise, Lower, Smooth, Flatten, Noise, Paint, and Erase; add/duplicate/reorder/hide/lock/opacity-change layers; undo/redo each operation; save/close/reload; trigger clean external reload and dirty conflict choices; export and reimport each supported format.
+On both backends: create a flat 8193 terrain; import PNG, RAW R16, RAW R32F, and EXR; run Raise, Lower, Smooth, Flatten, Noise, Paint, and Erase; add/duplicate/reorder/hide/lock/opacity-change layers; undo/redo each operation; save/close/reload; trigger clean external reload and dirty conflict choices; export and reimport each supported format.
 
 Expected: one drag equals one history entry, stroke path is stable at different viewport frame rates, locked/Pending/Failed states cannot edit, and reload/save errors preserve local work.
 
@@ -1227,7 +1381,7 @@ Expected: one drag equals one history entry, stroke path is stable at different 
 
 Expected: Ready/Pending/locked brush rings use their defined colors and follow the Terrain surface; active stroke blocks gizmo/selection; Alt+LMB, RMB, MMB, wheel, and focus camera controls remain responsive; Game viewport never authors Terrain.
 
-- [ ] **Step 7: Run existing render/performance regression gates**
+- [x] **Step 7: Run existing render/performance regression gates**
 
 ```powershell
 .\RunRenderGate.bat
@@ -1245,6 +1399,8 @@ git log --oneline --grep="terrain" -12
 ```
 
 Expected: no whitespace errors, no unrelated Editor changes, no direct Graphics include, and every Phase 3 commit is focused.
+
+2026-07-15 automated exit evidence: Debug/Release full tests, fresh solution generation, Editor/Sandbox Debug/Release builds, ArchGate, AIDevDoctor, Terrain Editor Vulkan/DX12 readiness, four-combination readiness, Standard / Empty / Debug / TimingValidation, default sandbox/particles RenderGate, and Standard PerfGate 4/4 all passed. No golden or performance baseline was blessed, and the four runtime configuration files were restored byte-for-byte. Standard 四格 baseline status 均为 `MISSING`，所以该结果是零 warning/failure 的采样健康证据，不是历史性能回归比较。Steps 5-6 remain open because the approved checklist requires real interaction in the Editor main Scene viewport; readiness, source-contract tests, and the default non-Terrain RenderGate do not substitute for it.
 
 ## Phase 3 completion criteria
 

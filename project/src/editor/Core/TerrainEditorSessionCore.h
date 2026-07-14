@@ -44,6 +44,21 @@ namespace AshEditor
 		SetOpacity
 	};
 
+	enum class TerrainExternalChangeResult : uint8_t
+	{
+		ReloadQueued = 0,
+		Conflict,
+		IgnoredStale,
+		Failed
+	};
+
+	enum class TerrainConflictChoice : uint8_t
+	{
+		ReloadDiscard = 0,
+		KeepLocal,
+		SaveAs
+	};
+
 	struct TerrainLayerActionIntent
 	{
 		TerrainLayerActionKind kind = TerrainLayerActionKind::Add;
@@ -53,6 +68,13 @@ namespace AshEditor
 		uint32_t destination_index = 0;
 		float opacity = 1.0f;
 		bool flag_value = false;
+	};
+
+	struct TerrainCreateAssetDesc
+	{
+		AshEngine::TerrainGridLayout layout = AshEngine::make_default_terrain_grid_layout();
+		AshEngine::TerrainHeightMapping height_mapping{};
+		float flat_height = 0.0f;
 	};
 
 	struct TerrainEditorIntent
@@ -69,11 +91,14 @@ namespace AshEditor
 			LayerAction,
 			Save,
 			Reload,
+			Repair,
 			KeepLocal,
 			SaveAs,
 			Optimize,
+			Create,
 			Import,
-			Export
+			Export,
+			CancelFileOperation
 		};
 
 		Kind kind = Kind::SelectAsset;
@@ -87,6 +112,7 @@ namespace AshEditor
 		AshEngine::TerrainBrushParameters brush{};
 		TerrainLayerActionIntent layer_action{};
 		std::filesystem::path asset_path{};
+		TerrainCreateAssetDesc create_desc{};
 		std::optional<AshEngine::TerrainHeightImportDesc> import_desc{};
 		std::optional<AshEngine::TerrainHeightExportDesc> export_desc{};
 	};
@@ -170,6 +196,12 @@ namespace AshEditor
 		uint64_t GetContentGeneration() const;
 		uint64_t GetPersistedContentGeneration() const;
 		bool IsDirty() const;
+		TerrainExternalChangeResult NotifyExternalContentGeneration(
+			uint64_t diskContentGeneration,
+			bool physicalSourceRevisionChanged = false);
+		bool ResolveConflict(TerrainConflictChoice choice);
+		bool HasExternalConflict() const;
+		uint64_t GetExternalContentGeneration() const;
 		bool SetViewportPreview(const TerrainViewportPreviewState& refPreview);
 		void ClearViewportPreview();
 		void SetPreviewQueryStatus(AshEngine::TerrainQueryStatus eStatus);
@@ -185,6 +217,9 @@ namespace AshEditor
 		AshEngine::TerrainLayerId _selectedLayerId{};
 		uint64_t _activeSequence = 0;
 		uint64_t _persistedContentGeneration = 0;
+		uint64_t _observedDiskContentGeneration = 0;
+		uint64_t _externalContentGeneration = 0;
+		bool _externalConflict = false;
 		std::optional<AshEngine::TerrainWorkingSet> _optWorkingSet{};
 		TerrainEditorPreviewState _preview{};
 	};

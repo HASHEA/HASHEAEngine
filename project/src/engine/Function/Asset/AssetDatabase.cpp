@@ -9,6 +9,7 @@
 #include <fstream>
 #include <iterator>
 #include <mutex>
+#include <new>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -626,31 +627,42 @@ namespace AshEngine
 		static auto load_terrain_snapshot_from_file(
 			const ResolvedAssetInfo& resolved,
 			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot,
-			std::string& out_error) -> bool
+			std::string& out_error) -> TerrainContainerResult
 		{
+			// editor begin 修改原因：把容器恢复元数据原子附着到不可变 snapshot，供 Terrain 恢复 UI 使用。
+			out_snapshot.reset();
 			std::shared_ptr<const TerrainAssetSnapshot> loaded{};
+			TerrainContainerLoadReport report{};
 			const TerrainContainerResult result = load_terrain_container(
 				resolved.absolute_path,
 				loaded,
-				nullptr,
+				&report,
 				&out_error);
 			if ((result != TerrainContainerResult::Success &&
 				result != TerrainContainerResult::RecoveredPreviousGeneration) ||
 				!loaded)
 			{
+				loaded.reset();
+				out_snapshot.reset();
 				if (out_error.empty())
 				{
 					out_error = "Failed to load Terrain asset container.";
 				}
-				return false;
+				return result;
 			}
 
 			auto prepared = std::make_shared<TerrainAssetSnapshot>(*loaded);
 			prepared->asset_id = resolved.info.id;
 			prepared->source_path = resolved.info.relative_path;
+			prepared->recovered_previous_generation =
+				report.recovered_previous_generation;
+			prepared->rejected_content_generation = report.rejected_generation;
+			prepared->recovery_detail = std::move(report.recovery_detail);
+			prepared->source_revision = report.source_revision;
 			out_snapshot = std::move(prepared);
 			out_error.clear();
-			return true;
+			// editor end
+			return result;
 		}
 
 		static auto complete_terrain_load(
@@ -795,9 +807,17 @@ namespace AshEngine
 		{
 			std::shared_ptr<const TerrainAssetSnapshot> loaded{};
 			std::string error{};
+			TerrainContainerResult load_result = TerrainContainerResult::InvalidData;
 			try
 			{
-				load_terrain_snapshot_from_file(resolved, loaded, error);
+				// editor begin 修改原因：Terrain 恢复加载失败时强制保持空结果，禁止 Editor 缓存半成品。
+				load_result = load_terrain_snapshot_from_file(resolved, loaded, error);
+				if (load_result != TerrainContainerResult::Success &&
+					load_result != TerrainContainerResult::RecoveredPreviousGeneration)
+				{
+					loaded.reset();
+				}
+				// editor end
 			}
 			catch (const std::exception& exception)
 			{
@@ -817,7 +837,8 @@ namespace AshEngine
 				promise,
 				std::move(loaded),
 				error,
-				true);
+				load_result != TerrainContainerResult::Busy &&
+					load_result != TerrainContainerResult::SourceChanged);
 		}
 
 		static auto validate_terrain_asset_locked(
@@ -933,6 +954,160 @@ namespace AshEngine
 			}
 			return request.future;
 		}
+
+		// editor begin 修改原因：为 Terrain 冲突/恢复提供不写共享 cache 的隔离候选加载。
+		static auto make_failed_terrain_candidate(
+			const TerrainAssetId asset_id,
+			std::string error,
+			const bool retryable = false) noexcept
+			-> std::shared_ptr<const TerrainAssetSnapshot>
+		{
+			try
+			{
+				auto failed = std::make_shared<TerrainAssetSnapshot>();
+				failed->asset_id = asset_id;
+				failed->failed = true;
+				failed->retryable_failure = retryable;
+				failed->failure_detail = error.empty()
+					? "Terrain candidate load failed." : std::move(error);
+				return failed;
+			}
+			catch (...)
+			{
+				return {};
+			}
+		}
+
+		struct TerrainCandidateDispatchState
+		{
+			TerrainAssetId asset_id = 0u;
+			std::shared_ptr<std::promise<
+				std::shared_ptr<const TerrainAssetSnapshot>>> promise{};
+			std::thread::id caller_thread{};
+			std::atomic<bool> enqueue_in_progress{ true };
+			std::atomic<bool> started{ false };
+
+			TerrainCandidateDispatchState(
+				const TerrainAssetId in_asset_id,
+				std::shared_ptr<std::promise<
+					std::shared_ptr<const TerrainAssetSnapshot>>> in_promise)
+				: asset_id(in_asset_id)
+				, promise(std::move(in_promise))
+				, caller_thread(std::this_thread::get_id())
+			{
+			}
+
+			~TerrainCandidateDispatchState()
+			{
+				if (!started.exchange(true, std::memory_order_acq_rel))
+				{
+					Resolve({}, "Terrain candidate worker command was rejected before execution.");
+				}
+			}
+
+			void Resolve(
+				std::shared_ptr<const TerrainAssetSnapshot> snapshot,
+				std::string error,
+				const bool retryable = false) noexcept
+			{
+				if (!snapshot)
+				{
+					snapshot = make_failed_terrain_candidate(
+						asset_id, std::move(error), retryable);
+				}
+				try
+				{
+					promise->set_value(std::move(snapshot));
+				}
+				catch (...)
+				{
+				}
+			}
+		};
+
+		static auto load_terrain_candidate_resolved_async(
+			const ResolvedAssetInfo& resolved)
+			-> std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>>
+		{
+			auto promise = std::make_shared<
+				std::promise<std::shared_ptr<const TerrainAssetSnapshot>>>();
+			auto future = promise->get_future().share();
+			std::shared_ptr<TerrainCandidateDispatchState> dispatch_state{};
+			try
+			{
+				dispatch_state = std::make_shared<TerrainCandidateDispatchState>(
+					resolved.info.id, std::move(promise));
+				dispatch_background_task(
+					"AssetDatabase::load_terrain_candidate_by_id_async",
+					[dispatch_state, resolved]() mutable
+					{
+						const bool inline_fallback =
+							std::this_thread::get_id() == dispatch_state->caller_thread &&
+							dispatch_state->enqueue_in_progress.load(std::memory_order_acquire);
+						if (dispatch_state->started.exchange(true, std::memory_order_acq_rel))
+						{
+							return;
+						}
+						if (inline_fallback)
+						{
+							dispatch_state->Resolve(
+								{}, "Terrain candidate async load requires an available worker thread.");
+							return;
+						}
+
+						std::shared_ptr<const TerrainAssetSnapshot> loaded{};
+						std::string error{};
+						TerrainContainerResult loadResult = TerrainContainerResult::InvalidData;
+						try
+						{
+							loadResult = load_terrain_snapshot_from_file(resolved, loaded, error);
+							if (loadResult != TerrainContainerResult::Success &&
+								loadResult != TerrainContainerResult::RecoveredPreviousGeneration)
+							{
+								loaded.reset();
+							}
+						}
+						catch (const std::exception& exception)
+						{
+							loaded.reset();
+							error = exception.what();
+						}
+						catch (...)
+						{
+							loaded.reset();
+							error = "Terrain candidate load raised an unknown exception.";
+						}
+						dispatch_state->Resolve(
+							std::move(loaded),
+							std::move(error),
+							loadResult == TerrainContainerResult::Busy ||
+								loadResult == TerrainContainerResult::SourceChanged);
+					});
+			dispatch_state->enqueue_in_progress.store(false, std::memory_order_release);
+			}
+			catch (...)
+			{
+				if (dispatch_state)
+				{
+					dispatch_state->enqueue_in_progress.store(false, std::memory_order_release);
+					dispatch_state.reset();
+				}
+				else
+				{
+					try
+					{
+						promise->set_value(make_failed_terrain_candidate(
+							resolved.info.id,
+							"Terrain candidate worker allocation failed."));
+					}
+					catch (...)
+					{
+					}
+				}
+			}
+			return future;
+		}
+		// editor end
 	}
 
 	AssetDatabase::AssetDatabase(std::shared_ptr<Impl> impl)
@@ -1845,6 +2020,62 @@ namespace AshEngine
 		return load_terrain_resolved_async(m_impl, resolved);
 	}
 
+	// editor begin 修改原因：只有用户接受 Terrain 磁盘候选后才切换共享发布版本。
+	std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>>
+		AssetDatabase::load_terrain_candidate_by_id_async(const TerrainAssetId id)
+	{
+		if (!m_impl)
+		{
+			return make_ready_future(
+				std::shared_ptr<const TerrainAssetSnapshot>{});
+		}
+
+		ResolvedAssetInfo resolved{};
+		{
+			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			if (!resolve_asset_by_id_locked(m_impl, id, resolved))
+			{
+				return make_ready_future(make_failed_terrain_candidate(
+					id, "Asset id was not found."));
+			}
+			if (resolved.info.is_directory || resolved.info.type != AssetType::Terrain)
+			{
+				return make_ready_future(make_failed_terrain_candidate(
+					id,
+					resolved.info.is_directory
+						? "Cannot load a directory as Terrain."
+						: "Asset is not a Terrain container."));
+			}
+		}
+		return load_terrain_candidate_resolved_async(resolved);
+	}
+
+	TerrainSnapshotPublicationToken AssetDatabase::capture_terrain_snapshot_publication(
+		const TerrainAssetId id) const
+	{
+		TerrainSnapshotPublicationToken token{};
+		if (!m_impl)
+		{
+			return token;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->mutex);
+		token.asset_id = id;
+		token.catalog_generation = m_impl->catalog_generation;
+		const auto serial = m_impl->terrain_load_serial_by_id.find(id);
+		if (serial != m_impl->terrain_load_serial_by_id.end())
+		{
+			token.load_serial = serial->second;
+		}
+		const auto cached = m_impl->terrain_cache.find(id);
+		if (cached != m_impl->terrain_cache.end())
+		{
+			token.snapshot = cached->second;
+		}
+		return token;
+	}
+	// editor end
+
 	bool AssetDatabase::publish_terrain_snapshot(
 		TerrainAssetId id,
 		std::shared_ptr<const TerrainAssetSnapshot> snapshot)
@@ -1891,6 +2122,117 @@ namespace AshEngine
 		set_load_success_locked(*m_impl, id);
 		return true;
 	}
+
+	// editor begin 修改原因：用户接受 Terrain 磁盘候选时只可切换未被并发修改的共享发布版本。
+	bool AssetDatabase::compare_exchange_terrain_snapshot(
+		const TerrainAssetId id,
+		const TerrainSnapshotPublicationToken& expected,
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot,
+		TerrainSnapshotPublicationToken* const p_result)
+	{
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->mutex);
+		const auto indexed = m_impl->index_by_id.find(id);
+		if (indexed == m_impl->index_by_id.end() ||
+			m_impl->assets[indexed->second].is_directory ||
+			m_impl->assets[indexed->second].type != AssetType::Terrain)
+		{
+			set_last_error_locked(*m_impl, "Terrain asset id is not indexed.");
+			return false;
+		}
+		if (snapshot && (snapshot->failed || snapshot->asset_id != id))
+		{
+			set_last_error_locked(*m_impl, "Terrain replacement snapshot is invalid or belongs to another asset.");
+			return false;
+		}
+		const auto serial = m_impl->terrain_load_serial_by_id.find(id);
+		const uint64_t current_serial = serial != m_impl->terrain_load_serial_by_id.end()
+			? serial->second : 0u;
+		const auto cached = m_impl->terrain_cache.find(id);
+		const std::shared_ptr<const TerrainAssetSnapshot> current =
+			cached != m_impl->terrain_cache.end() ? cached->second : nullptr;
+		if (expected.asset_id != id ||
+			expected.catalog_generation != m_impl->catalog_generation ||
+			expected.load_serial != current_serial || expected.snapshot != current)
+		{
+			set_last_error_locked(
+				*m_impl, "Terrain snapshot publication changed before replacement.");
+			return false;
+		}
+
+		auto mutable_serial = m_impl->terrain_load_serial_by_id.find(id);
+		auto mutable_cache = m_impl->terrain_cache.find(id);
+		bool inserted_serial = false;
+		bool inserted_cache = false;
+		try
+		{
+			if (mutable_serial == m_impl->terrain_load_serial_by_id.end())
+			{
+				auto inserted = m_impl->terrain_load_serial_by_id.try_emplace(id, current_serial);
+				mutable_serial = inserted.first;
+				inserted_serial = inserted.second;
+			}
+			if (snapshot && mutable_cache == m_impl->terrain_cache.end())
+			{
+				auto inserted = m_impl->terrain_cache.try_emplace(id, current);
+				mutable_cache = inserted.first;
+				inserted_cache = inserted.second;
+			}
+		}
+		catch (const std::bad_alloc&)
+		{
+			if (inserted_cache)
+			{
+				m_impl->terrain_cache.erase(id);
+			}
+			if (inserted_serial)
+			{
+				m_impl->terrain_load_serial_by_id.erase(id);
+			}
+			try
+			{
+				set_last_error_locked(*m_impl, "Terrain snapshot publication allocation failed.");
+			}
+			catch (...)
+			{
+			}
+			return false;
+		}
+
+		const uint64_t replacement_serial = next_terrain_load_serial_locked(*m_impl);
+		mutable_serial->second = replacement_serial;
+		if (snapshot)
+		{
+			mutable_cache->second = snapshot;
+		}
+		else
+		{
+			m_impl->terrain_cache.erase(id);
+		}
+		m_impl->inflight_terrain_loads.erase(id);
+		if (snapshot)
+		{
+			set_load_success_locked(*m_impl, id);
+		}
+		else
+		{
+			set_last_error_locked(*m_impl, {});
+			set_load_info_locked(*m_impl, id, AssetLoadState::Unloaded, {});
+		}
+		if (p_result)
+		{
+			p_result->snapshot = std::move(snapshot);
+			p_result->asset_id = id;
+			p_result->catalog_generation = m_impl->catalog_generation;
+			p_result->load_serial = replacement_serial;
+		}
+		return true;
+	}
+	// editor end
 
 	bool AssetDatabase::invalidate_terrain_snapshot(TerrainAssetId id)
 	{

@@ -54,6 +54,16 @@ namespace AshEngine
 		uint64_t last_write_time_ticks = 0;
 	};
 
+	// editor begin 修改原因：Terrain 候选接受必须比较完整的共享发布血缘，不能覆盖并发更新。
+	struct TerrainSnapshotPublicationToken
+	{
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		TerrainAssetId asset_id = 0;
+		uint64_t catalog_generation = 0;
+		uint64_t load_serial = 0;
+	};
+	// editor end
+
 	class ASH_API AssetDatabase
 	{
 	public:
@@ -108,9 +118,22 @@ namespace AshEngine
 			TerrainAssetId id);
 		std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>> load_terrain_by_path_async(
 			const std::filesystem::path& path);
+		// editor begin 修改原因：冲突候选必须隔离加载，用户确认前不得污染全局 Terrain cache。
+		// Loads a disk candidate without changing the globally published Terrain cache.
+		std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>>
+			load_terrain_candidate_by_id_async(TerrainAssetId id);
+		TerrainSnapshotPublicationToken capture_terrain_snapshot_publication(
+			TerrainAssetId id) const;
 		bool publish_terrain_snapshot(
 			TerrainAssetId id,
 			std::shared_ptr<const TerrainAssetSnapshot> snapshot);
+		// Replaces the globally published snapshot only if its captured lineage is unchanged.
+		bool compare_exchange_terrain_snapshot(
+			TerrainAssetId id,
+			const TerrainSnapshotPublicationToken& expected,
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot,
+			TerrainSnapshotPublicationToken* p_result = nullptr);
+		// editor end
 		bool invalidate_terrain_snapshot(TerrainAssetId id);
 
 	private:

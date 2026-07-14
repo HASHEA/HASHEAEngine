@@ -127,6 +127,52 @@ namespace AshEngine
 		std::vector<TerrainSparseWeightBlock> weight_blocks{};
 	};
 
+	// Transient container lineage carried with an immutable snapshot. These fields
+	// are not serialized as Terrain content; they identify the exact header/file
+	// revision that produced the snapshot for checked Editor save/reload decisions.
+	struct TerrainContainerDescriptorRevision
+	{
+		uint64_t generation = 0;
+		uint64_t index_offset = 0;
+		uint64_t index_size = 0;
+		uint32_t index_crc32 = 0;
+
+		auto operator==(const TerrainContainerDescriptorRevision& other) const noexcept -> bool
+		{
+			return generation == other.generation &&
+				index_offset == other.index_offset &&
+				index_size == other.index_size &&
+				index_crc32 == other.index_crc32;
+		}
+
+		auto operator!=(const TerrainContainerDescriptorRevision& other) const noexcept -> bool
+		{
+			return !(*this == other);
+		}
+	};
+
+	struct TerrainContainerRevision
+	{
+		uint64_t file_size = 0;
+		std::array<TerrainContainerDescriptorRevision, 2> descriptors{};
+
+		auto is_valid() const noexcept -> bool
+		{
+			return file_size != 0u &&
+				(descriptors[0].generation != 0u || descriptors[1].generation != 0u);
+		}
+
+		auto operator==(const TerrainContainerRevision& other) const noexcept -> bool
+		{
+			return file_size == other.file_size && descriptors == other.descriptors;
+		}
+
+		auto operator!=(const TerrainContainerRevision& other) const noexcept -> bool
+		{
+			return !(*this == other);
+		}
+	};
+
 	struct TerrainAssetSnapshot
 	{
 		TerrainAssetId asset_id = 0;
@@ -136,8 +182,17 @@ namespace AshEngine
 		std::array<TerrainMaterialLayerDesc, k_terrain_material_layer_count> material_layers{};
 		uint64_t content_generation = 0;
 		uint64_t residency_revision = 0;
+		TerrainContainerRevision source_revision{};
 		bool failed = false;
+		// Transient cooperative-writer/revision races may be retried and must not
+		// poison AssetDatabase's persistent failure cache or freeze Editor reload.
+		bool retryable_failure = false;
 		std::string failure_detail{};
+		// editor begin 修改原因：让 Terrain 恢复 UI 区分已加载旧代与被拒绝的新代，并保持只读恢复语义。
+		bool recovered_previous_generation = false;
+		uint64_t rejected_content_generation = 0;
+		std::string recovery_detail{};
+		// editor end
 		std::shared_ptr<const std::vector<uint16_t>> base_heights{};
 		std::shared_ptr<const std::vector<TerrainEditLayer>> edit_layers{};
 		std::vector<std::shared_ptr<const TerrainComponentSnapshot>> components{};

@@ -9,6 +9,7 @@
 #include "Services/EditorSettingsService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+#include "Services/TerrainEditorService.h"
 #include "Services/UndoRedoService.h"
 
 #include <fstream>
@@ -68,15 +69,34 @@ namespace AshEditor
 		}
 	}
 
+	bool SceneWorkflowCoordinator::PrepareTerrainForSceneChange(
+		SceneWorkflowContext& context) const
+	{
+		return !context.pTerrainEditorService ||
+			context.pTerrainEditorService->PrepareForSceneChange();
+	}
+
+	void SceneWorkflowCoordinator::CommitTerrainSceneChange(
+		SceneWorkflowContext& context) const
+	{
+		if (context.pTerrainEditorService)
+		{
+			context.pTerrainEditorService->CommitSceneChange();
+		}
+	}
+
 	void SceneWorkflowCoordinator::ResetEditorStateAfterSceneChange(SceneWorkflowContext& context) const
 	{
-		// Keep selection/undo reset centralized so reload/new/load all leave the editor in the same lifecycle state.
+		// Terrain commands must lose their mutable session before the shared Scene history is cleared.
+		CommitTerrainSceneChange(context);
 		context.refSelectionService.Clear();
 		context.refUndoRedoService.Clear();
 		SelectDefaultEntity(context);
 	}
 
-	void SceneWorkflowCoordinator::ActivateNewScene(SceneWorkflowContext& context, const std::string& strSceneName) const
+	void SceneWorkflowCoordinator::ActivateNewScenePrepared(
+		SceneWorkflowContext& context,
+		const std::string& strSceneName) const
 	{
 		context.refSceneService.NewScene(strSceneName);
 		UpdateLastScenePathSetting(context, {});
@@ -85,10 +105,44 @@ namespace AshEditor
 		PublishDocumentOperation(context, EditorDocumentOperationKind::NewScene, EditorDocumentOperationResult::Succeeded, {});
 	}
 
+	bool SceneWorkflowCoordinator::ActivateNewScene(
+		SceneWorkflowContext& context,
+		const std::string& strSceneName) const
+	{
+		if (!PrepareTerrainForSceneChange(context))
+		{
+			PublishDocumentOperation(
+				context,
+				EditorDocumentOperationKind::NewScene,
+				EditorDocumentOperationResult::Skipped,
+				{});
+			if (context.pNotificationSink)
+			{
+				context.pNotificationSink->Notify(
+					context.pTerrainEditorService && !context.pTerrainEditorService->GetLastError().empty()
+						? context.pTerrainEditorService->GetLastError()
+						: "New Scene is blocked by the active Terrain authoring session.");
+			}
+			return false;
+		}
+
+		ActivateNewScenePrepared(context, strSceneName);
+		return true;
+	}
+
 	std::filesystem::path SceneWorkflowCoordinator::CreateNewSceneFromStartupTemplate(
 		SceneWorkflowContext& context,
 		std::string_view svSceneName) const
 	{
+		if (!PrepareTerrainForSceneChange(context))
+		{
+			PublishDocumentOperation(
+				context,
+				EditorDocumentOperationKind::NewScene,
+				EditorDocumentOperationResult::Skipped,
+				{});
+			return {};
+		}
 		const std::filesystem::path pathTemplateScene = context.refSettingsService.GetStartupScenePath();
 		if (pathTemplateScene.empty())
 		{
@@ -112,7 +166,7 @@ namespace AshEditor
 			return {};
 		}
 
-		if (!LoadSceneIntoEditor(context, pathScene, EditorDocumentOperationKind::NewScene))
+		if (!LoadSceneIntoEditorPrepared(context, pathScene, EditorDocumentOperationKind::NewScene))
 		{
 			std::filesystem::remove(pathScene, errorCode);
 			return {};
@@ -125,10 +179,38 @@ namespace AshEditor
 		SceneWorkflowContext& context,
 		const std::filesystem::path& pathScene) const
 	{
-		return LoadSceneIntoEditor(context, pathScene, EditorDocumentOperationKind::LoadScene);
+		if (pathScene.empty())
+		{
+			PublishDocumentOperation(
+				context,
+				EditorDocumentOperationKind::LoadScene,
+				EditorDocumentOperationResult::Skipped,
+				pathScene);
+			return false;
+		}
+		if (!PrepareTerrainForSceneChange(context))
+		{
+			PublishDocumentOperation(
+				context,
+				EditorDocumentOperationKind::LoadScene,
+				EditorDocumentOperationResult::Skipped,
+				pathScene);
+			if (context.pNotificationSink)
+			{
+				context.pNotificationSink->Notify(
+					context.pTerrainEditorService && !context.pTerrainEditorService->GetLastError().empty()
+						? context.pTerrainEditorService->GetLastError()
+						: "Open Scene is blocked by the active Terrain authoring session.");
+			}
+			return false;
+		}
+		return LoadSceneIntoEditorPrepared(
+			context,
+			pathScene,
+			EditorDocumentOperationKind::LoadScene);
 	}
 
-	bool SceneWorkflowCoordinator::LoadSceneIntoEditor(
+	bool SceneWorkflowCoordinator::LoadSceneIntoEditorPrepared(
 		SceneWorkflowContext& context,
 		const std::filesystem::path& pathScene,
 		EditorDocumentOperationKind eDocumentOperationKind) const
@@ -165,9 +247,28 @@ namespace AshEditor
 			}
 			return SceneReloadResult::Skipped;
 		}
+		if (!PrepareTerrainForSceneChange(context))
+		{
+			PublishDocumentOperation(
+				context,
+				EditorDocumentOperationKind::ReloadScene,
+				EditorDocumentOperationResult::Skipped,
+				pathActiveScene);
+			if (context.pNotificationSink)
+			{
+				context.pNotificationSink->Notify(
+					context.pTerrainEditorService && !context.pTerrainEditorService->GetLastError().empty()
+						? context.pTerrainEditorService->GetLastError()
+						: "Reload Scene is blocked by the active Terrain authoring session.");
+			}
+			return SceneReloadResult::Skipped;
+		}
 
 		const std::string strActiveScenePath = pathActiveScene.generic_string();
-		if (LoadSceneIntoEditor(context, pathActiveScene))
+		if (LoadSceneIntoEditorPrepared(
+				context,
+				pathActiveScene,
+				EditorDocumentOperationKind::ReloadScene))
 		{
 			HLogInfo("Scene reloaded from '{}'.", strActiveScenePath);
 			if (context.pNotificationSink)
@@ -177,23 +278,17 @@ namespace AshEditor
 			return SceneReloadResult::Reloaded;
 		}
 
-		ActivateNewScene(context, kUntitledSceneName);
-		PublishDocumentOperation(
-			context,
-			EditorDocumentOperationKind::ReloadScene,
-			EditorDocumentOperationResult::FallbackActivated,
-			pathActiveScene);
 		HLogWarning(
-			"Failed to reload scene from '{}'. Editor activated a new default scene as fallback.",
+			"Failed to reload scene from '{}'. The current in-memory scene was preserved.",
 			strActiveScenePath);
 		if (context.pNotificationSink)
 		{
 			context.pNotificationSink->Notify(
 				"Failed to reload scene from " +
 				strActiveScenePath +
-				". Editor fell back to a new default scene.");
+				". The current in-memory scene was preserved.");
 		}
-		return SceneReloadResult::FallbackActivated;
+		return SceneReloadResult::Failed;
 	}
 
 	void SceneWorkflowCoordinator::UpdateLastScenePathSetting(

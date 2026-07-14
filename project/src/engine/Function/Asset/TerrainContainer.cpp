@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -939,6 +940,220 @@ namespace AshEngine
 #endif
 		}
 
+		// editor begin 修改原因：文件来源使用容器结构 revision，而不是可能复用/丢精度的 write-time。
+		auto make_container_revision(
+			uint64_t file_size,
+			const FileHeaderDisk& header) noexcept -> TerrainContainerRevision
+		{
+			TerrainContainerRevision revision{};
+			revision.file_size = file_size;
+			for (size_t slot = 0u; slot < revision.descriptors.size(); ++slot)
+			{
+				const IndexDescriptorDisk& source = header.index_descriptors[slot];
+				TerrainContainerDescriptorRevision& destination = revision.descriptors[slot];
+				destination.generation = source.generation_le;
+				destination.index_offset = source.index_offset_le;
+				destination.index_size = source.index_size_le;
+				destination.index_crc32 = source.index_crc32_le;
+			}
+			return revision;
+		}
+
+		auto read_container_revision(
+			const std::filesystem::path& path,
+			TerrainContainerRevision& out_revision,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			out_revision = {};
+			std::error_code error_code{};
+			if (!std::filesystem::exists(path, error_code))
+			{
+				return set_error(error_code ? TerrainContainerResult::IoFailure :
+					TerrainContainerResult::NotFound, out_error,
+					error_code ? "Failed to inspect the terrain container revision." :
+					"Terrain container was not found while checking its revision.");
+			}
+			const uint64_t file_size = std::filesystem::file_size(path, error_code);
+			if (error_code)
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to inspect the terrain container revision size.");
+			}
+			if (file_size < sizeof(FileHeaderDisk))
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain container changed to a truncated revision.");
+			}
+			std::ifstream input(path, std::ios::binary);
+			FileHeaderDisk header{};
+			if (!input.read(reinterpret_cast<char*>(&header), sizeof(header)))
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to read the terrain container revision.");
+			}
+			if (header.magic != TerrainContainerFormat::k_magic)
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain container revision has invalid magic.");
+			}
+			if (header.version_le != TerrainContainerFormat::k_version ||
+				header.endian_marker_le != TerrainContainerFormat::k_little_endian_marker)
+			{
+				return set_error(TerrainContainerResult::UnsupportedVersion, out_error,
+					"Terrain container revision has an unsupported version or byte order.");
+			}
+			if (header.header_size_le != sizeof(FileHeaderDisk) || header.reserved_le != 0u ||
+				std::any_of(header.reserved_bytes.begin(), header.reserved_bytes.end(),
+					[](uint8_t byte) { return byte != 0u; }))
+			{
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain container revision header fields are invalid.");
+			}
+			out_revision = make_container_revision(file_size, header);
+			if (!out_revision.is_valid())
+			{
+				out_revision = {};
+				return set_error(TerrainContainerResult::Corrupt, out_error,
+					"Terrain container revision has no committed descriptor.");
+			}
+			return TerrainContainerResult::Success;
+		}
+
+		auto canonical_writer_target(
+			const std::filesystem::path& path,
+			std::filesystem::path& out_path) -> bool
+		{
+			std::error_code error_code{};
+			const std::filesystem::path absolute = std::filesystem::absolute(path, error_code);
+			if (error_code)
+			{
+				return false;
+			}
+			out_path = std::filesystem::weakly_canonical(absolute, error_code);
+			return !error_code && !out_path.empty();
+		}
+
+		auto make_container_lease_name(const std::filesystem::path& canonical)
+			-> std::wstring
+		{
+#if defined(_WIN32)
+			std::wstring identity = canonical.native();
+			if (!identity.empty())
+			{
+				CharLowerBuffW(identity.data(), static_cast<DWORD>(identity.size()));
+			}
+			uint64_t hash = 14695981039346656037ull;
+			for (const wchar_t value : identity)
+			{
+				hash ^= static_cast<uint16_t>(value);
+				hash *= 1099511628211ull;
+			}
+			constexpr wchar_t hex[] = L"0123456789abcdef";
+			std::wstring name = L"Local\\AshEngine.TerrainContainer.";
+			for (int shift = 60; shift >= 0; shift -= 4)
+			{
+				name.push_back(hex[(hash >> shift) & 0x0full]);
+			}
+			return name;
+#else
+			(void)canonical;
+			return {};
+#endif
+		}
+
+		class TerrainContainerCommitLease
+		{
+		public:
+			TerrainContainerCommitLease() = default;
+			TerrainContainerCommitLease(const TerrainContainerCommitLease&) = delete;
+			auto operator=(const TerrainContainerCommitLease&)
+				-> TerrainContainerCommitLease& = delete;
+
+			~TerrainContainerCommitLease()
+			{
+#if defined(_WIN32)
+				if (m_handle != nullptr)
+				{
+					if (m_owned)
+					{
+						ReleaseMutex(m_handle);
+					}
+					CloseHandle(m_handle);
+				}
+#endif
+			}
+
+			auto acquire(
+				const std::filesystem::path& path,
+				std::string* out_error) -> TerrainContainerResult
+			{
+				std::filesystem::path canonical{};
+				if (!canonical_writer_target(path, canonical))
+				{
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to canonicalize the terrain writer target.");
+				}
+#if defined(_WIN32)
+				const std::wstring lease_name = make_container_lease_name(canonical);
+				m_handle = CreateMutexW(nullptr, FALSE, lease_name.c_str());
+				if (m_handle == nullptr)
+				{
+					const DWORD platform_error = GetLastError();
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to create the Terrain container commit lease (Windows error " +
+						std::to_string(static_cast<uint32_t>(platform_error)) + ").");
+				}
+				const DWORD wait_result = WaitForSingleObject(m_handle, 0u);
+				if (wait_result == WAIT_OBJECT_0 || wait_result == WAIT_ABANDONED)
+				{
+					m_owned = true;
+				}
+				else if (wait_result == WAIT_TIMEOUT)
+				{
+					return set_error(TerrainContainerResult::Busy, out_error,
+						"Another Terrain container writer owns the canonical target lease.");
+				}
+				else
+				{
+					const DWORD platform_error = GetLastError();
+					return set_error(TerrainContainerResult::IoFailure, out_error,
+						"Failed to wait for the Terrain container commit lease (Windows error " +
+						std::to_string(static_cast<uint32_t>(platform_error)) + ").");
+				}
+#else
+				(void)canonical;
+#endif
+				return TerrainContainerResult::Success;
+			}
+
+		private:
+#if defined(_WIN32)
+			HANDLE m_handle = nullptr;
+			bool m_owned = false;
+#endif
+		};
+
+		auto check_expected_revision(
+			const std::filesystem::path& path,
+			const TerrainContainerRevision& expected,
+			std::string* out_error) -> TerrainContainerResult
+		{
+			TerrainContainerRevision current{};
+			const TerrainContainerResult revision_result =
+				read_container_revision(path, current, out_error);
+			if (revision_result == TerrainContainerResult::IoFailure)
+			{
+				return revision_result;
+			}
+			if (revision_result != TerrainContainerResult::Success || current != expected)
+			{
+				return set_error(TerrainContainerResult::SourceChanged, out_error,
+					"Terrain container source revision changed before commit.");
+			}
+			return TerrainContainerResult::Success;
+		}
+		// editor end
+
 		auto read_file_range(
 			std::ifstream& input,
 			uint64_t offset,
@@ -1520,6 +1735,7 @@ namespace AshEngine
 			std::string* out_error) -> TerrainContainerResult
 		{
 			uint64_t index_end = 0u;
+			// editor begin 修改原因：恢复 UI 需要精确指出被拒绝 generation，而非固定旧代文案。
 			if (descriptor.generation_le == 0u || descriptor.reserved_le != 0u ||
 				descriptor.index_size_le == 0u ||
 				descriptor.index_size_le % sizeof(BlockRecordDisk) != 0u ||
@@ -1531,7 +1747,8 @@ namespace AshEngine
 					static_cast<uint64_t>(std::numeric_limits<std::streamoff>::max()))
 			{
 				return set_error(TerrainContainerResult::Corrupt, out_error,
-					"Terrain generation-one index descriptor is invalid.");
+					"Terrain generation " + std::to_string(descriptor.generation_le) +
+					" index descriptor is invalid.");
 			}
 			std::vector<uint8_t> index_bytes{};
 			if (!read_file_range(input, descriptor.index_offset_le,
@@ -1544,8 +1761,10 @@ namespace AshEngine
 				descriptor.index_crc32_le)
 			{
 				return set_error(TerrainContainerResult::Corrupt, out_error,
-					"Terrain generation-one index CRC is invalid.");
+					"Terrain generation " + std::to_string(descriptor.generation_le) +
+					" index CRC is invalid.");
 			}
+			// editor end
 			out_records.resize(index_bytes.size() / sizeof(BlockRecordDisk));
 			std::memcpy(out_records.data(), index_bytes.data(), index_bytes.size());
 			for (size_t index = 0u; index < out_records.size(); ++index)
@@ -1566,6 +1785,10 @@ namespace AshEngine
 			IndexDescriptorDisk descriptor{};
 			std::vector<BlockRecordDisk> records{};
 			bool recovered_previous_generation = false;
+			// editor begin 修改原因：保留恢复时被拒绝的新代身份与诊断，供 Editor 只读恢复状态使用。
+			uint64_t rejected_generation = 0;
+			std::string recovery_detail{};
+			// editor end
 		};
 
 		auto select_live_index(
@@ -1577,11 +1800,13 @@ namespace AshEngine
 		{
 			std::array<std::vector<BlockRecordDisk>, 2> records{};
 			std::array<bool, 2> valid{};
+			// editor begin 修改原因：成功回退旧代时仍向 Editor 返回新代失败的精确原因。
+			std::array<std::string, 2> validation_errors{};
 			for (size_t slot = 0u; slot < valid.size(); ++slot)
 			{
-				std::string ignored{};
 				valid[slot] = load_records(
-					input, file_size, header.index_descriptors[slot], records[slot], &ignored) ==
+					input, file_size, header.index_descriptors[slot], records[slot],
+					&validation_errors[slot]) ==
 					TerrainContainerResult::Success;
 			}
 			if (!valid[0] && !valid[1])
@@ -1606,6 +1831,13 @@ namespace AshEngine
 			out_selection.recovered_previous_generation =
 				!valid[other] && header.index_descriptors[other].generation_le >
 					out_selection.descriptor.generation_le;
+			if (out_selection.recovered_previous_generation)
+			{
+				out_selection.rejected_generation =
+					header.index_descriptors[other].generation_le;
+				out_selection.recovery_detail = std::move(validation_errors[other]);
+			}
+			// editor end
 			return TerrainContainerResult::Success;
 		}
 
@@ -2168,12 +2400,14 @@ namespace AshEngine
 				return set_error(TerrainContainerResult::IoFailure, out_error,
 					"Failed to durably commit the terrain index descriptor.");
 			}
+			header.index_descriptors[0u] = descriptor;
 			if (out_report != nullptr)
 			{
 				out_report->previous_generation = 0u;
 				out_report->committed_generation = snapshot.content_generation;
 				out_report->bytes_appended = offset;
 				out_report->blocks_written = static_cast<uint32_t>(records.size());
+				out_report->committed_revision = make_container_revision(offset, header);
 			}
 			return TerrainContainerResult::Success;
 		}
@@ -2182,6 +2416,7 @@ namespace AshEngine
 			const std::filesystem::path& path,
 			const TerrainAssetSnapshot& snapshot,
 			const IndexSelection& previous,
+			FileHeaderDisk header,
 			uint64_t file_size,
 			std::vector<PendingBlock> appended,
 			std::vector<BlockRecordDisk> live_records,
@@ -2263,21 +2498,137 @@ namespace AshEngine
 				return set_error(TerrainContainerResult::IoFailure, out_error,
 					"Failed to durably commit the incremental terrain descriptor.");
 			}
+			header.index_descriptors[commit_slot] = descriptor;
 			if (out_report != nullptr)
 			{
 				out_report->previous_generation = previous.descriptor.generation_le;
 				out_report->committed_generation = snapshot.content_generation;
 				out_report->bytes_appended = offset - file_size;
 				out_report->blocks_written = static_cast<uint32_t>(appended.size());
+				out_report->committed_revision = make_container_revision(offset, header);
 			}
 			return TerrainContainerResult::Success;
 		}
+	}
+
+	TerrainContainerResult inspect_terrain_container_revision(
+		const std::filesystem::path& path,
+		TerrainContainerRevision& out_revision,
+		std::string* out_error)
+	{
+		TerrainContainerCommitLease read_lease{};
+		const TerrainContainerResult lease_result = read_lease.acquire(path, out_error);
+		if (lease_result != TerrainContainerResult::Success)
+		{
+			out_revision = {};
+			return lease_result;
+		}
+		return read_container_revision(path, out_revision, out_error);
+	}
+
+	TerrainContainerResult publish_staged_terrain_container_new(
+		const std::filesystem::path& destination,
+		const std::filesystem::path& staged_path,
+		std::string* out_error)
+	{
+		if (out_error != nullptr)
+		{
+			out_error->clear();
+		}
+		if (destination.empty() || staged_path.empty())
+		{
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"Terrain staged publish paths are invalid.");
+		}
+
+		std::filesystem::path canonical_destination{};
+		std::filesystem::path canonical_staged{};
+		if (!canonical_writer_target(destination, canonical_destination) ||
+			!canonical_writer_target(staged_path, canonical_staged) ||
+			canonical_destination == canonical_staged)
+		{
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"Terrain staged publish paths do not identify distinct canonical files.");
+		}
+
+		TerrainContainerCommitLease destination_lease{};
+		const TerrainContainerResult lease_result =
+			destination_lease.acquire(canonical_destination, out_error);
+		if (lease_result != TerrainContainerResult::Success)
+		{
+			return lease_result;
+		}
+
+		std::error_code error_code{};
+		if (std::filesystem::exists(canonical_destination, error_code))
+		{
+			return set_error(TerrainContainerResult::SourceChanged, out_error,
+				"Terrain Save As destination appeared before the copy was published.");
+		}
+		if (error_code)
+		{
+			return set_error(TerrainContainerResult::IoFailure, out_error,
+				"Terrain Save Copy As could not inspect the destination.");
+		}
+
+		TerrainContainerRevision staged_revision{};
+		const TerrainContainerResult staged_result =
+			read_container_revision(canonical_staged, staged_revision, out_error);
+		if (staged_result != TerrainContainerResult::Success)
+		{
+			return staged_result;
+		}
+
+#if defined(_WIN32)
+		if (MoveFileExW(
+				canonical_staged.c_str(),
+				canonical_destination.c_str(),
+				MOVEFILE_WRITE_THROUGH) == FALSE)
+#else
+		std::filesystem::create_hard_link(
+			canonical_staged, canonical_destination, error_code);
+		if (error_code)
+#endif
+		{
+			error_code.clear();
+			const bool destination_exists =
+				std::filesystem::exists(canonical_destination, error_code) && !error_code;
+			return set_error(
+				destination_exists
+					? TerrainContainerResult::SourceChanged
+					: TerrainContainerResult::IoFailure,
+				out_error,
+				destination_exists
+					? "Terrain Save As destination appeared before the copy was published."
+					: "Terrain Save Copy As failed to atomically publish the new asset.");
+		}
+#if !defined(_WIN32)
+		std::filesystem::remove(canonical_staged, error_code);
+		if (error_code)
+		{
+			return set_error(TerrainContainerResult::IoFailure, out_error,
+				"Terrain Save Copy As published but could not remove its temporary link.");
+		}
+#endif
+		return TerrainContainerResult::Success;
 	}
 
 	TerrainContainerResult save_terrain_container_incremental(
 		const std::filesystem::path& path,
 		const TerrainAssetSnapshot& snapshot,
 		const std::vector<TerrainDirtyComponentPayload>& dirty_components,
+		TerrainContainerSaveReport* out_report,
+		std::string* out_error)
+	{
+		return save_terrain_container_incremental(
+			path, snapshot, dirty_components, nullptr, out_report, out_error);
+	}
+
+	TerrainContainerResult save_terrain_container_incremental(
+		const std::filesystem::path& path,
+		const TerrainAssetSnapshot& snapshot,
+		const std::vector<TerrainDirtyComponentPayload>& dirty_components,
+		const TerrainContainerRevision* expected_revision,
 		TerrainContainerSaveReport* out_report,
 		std::string* out_error)
 	{
@@ -2295,16 +2646,43 @@ namespace AshEngine
 				"Terrain container path is invalid.");
 		}
 
+		if (!validate_snapshot(snapshot, dirty_components, out_error))
+		{
+			return TerrainContainerResult::InvalidData;
+		}
+
 		std::error_code error_code{};
+		const std::filesystem::path parent = path.parent_path();
+		if (!parent.empty())
+		{
+			std::filesystem::create_directories(parent, error_code);
+			if (error_code)
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to create the terrain container directory.");
+			}
+		}
+		TerrainContainerCommitLease writer_lease{};
+		const TerrainContainerResult lease_result = writer_lease.acquire(path, out_error);
+		if (lease_result != TerrainContainerResult::Success)
+		{
+			return lease_result;
+		}
+		if (expected_revision != nullptr)
+		{
+			const TerrainContainerResult expected_result =
+				check_expected_revision(path, *expected_revision, out_error);
+			if (expected_result != TerrainContainerResult::Success)
+			{
+				return expected_result;
+			}
+		}
+
 		const bool exists = std::filesystem::exists(path, error_code);
 		if (error_code)
 		{
 			return set_error(TerrainContainerResult::IoFailure, out_error,
 				"Failed to inspect the terrain container path.");
-		}
-		if (!validate_snapshot(snapshot, dirty_components, out_error))
-		{
-			return TerrainContainerResult::InvalidData;
 		}
 		if (!exists && !dirty_components.empty())
 		{
@@ -2406,7 +2784,7 @@ namespace AshEngine
 					return build_result;
 				}
 				return append_incremental_generation(
-					path, snapshot, previous, file_size,
+					path, snapshot, previous, header, file_size,
 					std::move(appended), std::move(retained), out_report, out_error);
 			}
 			catch (const std::bad_alloc&)
@@ -2605,15 +2983,38 @@ namespace AshEngine
 				state.snapshot->components.push_back(state.components[index]);
 			}
 
-			std::shared_ptr<const TerrainAssetSnapshot> published = std::move(state.snapshot);
-			out_snapshot = std::move(published);
+			// editor begin 修改原因：原子发布恢复报告与 snapshot，避免 Editor 观察到无诊断的半成品。
+			TerrainContainerLoadReport completedReport{};
+			completedReport.loaded_generation = selection.descriptor.generation_le;
+			completedReport.recovered_previous_generation =
+				selection.recovered_previous_generation;
+			completedReport.rejected_generation = selection.rejected_generation;
+			completedReport.recovery_detail = std::move(selection.recovery_detail);
+			completedReport.decoded_block_count = decoded_count;
+			completedReport.source_revision = make_container_revision(file_size, header);
+			TerrainContainerRevision stableRevision{};
+			std::string stabilityError{};
+			const TerrainContainerResult stabilityResult =
+				inspect_terrain_container_revision(path, stableRevision, &stabilityError);
+			if (stabilityResult != TerrainContainerResult::Success)
+			{
+				return set_error(stabilityResult, out_error, stabilityError.empty()
+					? "Terrain container revision could not be stabilized after decoding."
+					: stabilityError);
+			}
+			if (stableRevision != completedReport.source_revision)
+			{
+				return set_error(TerrainContainerResult::Busy, out_error,
+					"Terrain container changed while its immutable snapshot was decoded.");
+			}
+			state.snapshot->source_revision = completedReport.source_revision;
 			if (out_report != nullptr)
 			{
-				out_report->loaded_generation = selection.descriptor.generation_le;
-				out_report->recovered_previous_generation =
-					selection.recovered_previous_generation;
-				out_report->decoded_block_count = decoded_count;
+				*out_report = std::move(completedReport);
 			}
+			std::shared_ptr<const TerrainAssetSnapshot> published = std::move(state.snapshot);
+			out_snapshot = std::move(published);
+			// editor end
 			return selection.recovered_previous_generation
 				? TerrainContainerResult::RecoveredPreviousGeneration
 				: TerrainContainerResult::Success;
@@ -2635,8 +3036,91 @@ namespace AshEngine
 		}
 	}
 
+	namespace TerrainContainerInternal
+	{
+		TerrainContainerResult commit_staged_terrain_container_optimization(
+			const std::filesystem::path& path,
+			const std::filesystem::path& staged_path,
+			const TerrainContainerRevision& expected_source_revision,
+			const TerrainContainerRevision& expected_staged_revision,
+			std::string* out_error)
+		{
+			if (out_error != nullptr)
+			{
+				out_error->clear();
+			}
+			if (path.empty() || staged_path.empty() ||
+				!expected_source_revision.is_valid() ||
+				!expected_staged_revision.is_valid())
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain optimize commit revisions are invalid.");
+			}
+			std::filesystem::path canonical_source{};
+			std::filesystem::path canonical_staged{};
+			if (!canonical_writer_target(path, canonical_source) ||
+				!canonical_writer_target(staged_path, canonical_staged) ||
+				canonical_source == canonical_staged)
+			{
+				return set_error(TerrainContainerResult::InvalidData, out_error,
+					"Terrain optimize staging path is invalid.");
+			}
+
+			TerrainContainerCommitLease writer_lease{};
+			const TerrainContainerResult lease_result = writer_lease.acquire(path, out_error);
+			if (lease_result != TerrainContainerResult::Success)
+			{
+				return lease_result;
+			}
+			const TerrainContainerResult source_result =
+				check_expected_revision(path, expected_source_revision, out_error);
+			if (source_result != TerrainContainerResult::Success)
+			{
+				return source_result;
+			}
+			TerrainContainerRevision staged_revision{};
+			const TerrainContainerResult staged_result =
+				read_container_revision(staged_path, staged_revision, out_error);
+			if (staged_result == TerrainContainerResult::IoFailure)
+			{
+				return staged_result;
+			}
+			if (staged_result != TerrainContainerResult::Success ||
+				staged_revision != expected_staged_revision)
+			{
+				return set_error(TerrainContainerResult::SourceChanged, out_error,
+					"Terrain optimize staging revision changed before commit.");
+			}
+
+			std::error_code error_code{};
+#if defined(_WIN32)
+			const BOOL replaced = ReplaceFileW(
+				path.c_str(), staged_path.c_str(), nullptr,
+				REPLACEFILE_WRITE_THROUGH, nullptr, nullptr);
+			if (replaced == FALSE)
+#else
+			std::filesystem::rename(staged_path, path, error_code);
+			if (error_code)
+#endif
+			{
+				return set_error(TerrainContainerResult::IoFailure, out_error,
+					"Failed to atomically replace the terrain container.");
+			}
+			return TerrainContainerResult::Success;
+		}
+	}
+
 	TerrainContainerResult optimize_terrain_container(
 		const std::filesystem::path& path,
+		TerrainContainerSaveReport* out_report,
+		std::string* out_error)
+	{
+		return optimize_terrain_container(path, nullptr, out_report, out_error);
+	}
+
+	TerrainContainerResult optimize_terrain_container(
+		const std::filesystem::path& path,
+		const TerrainContainerRevision* expected_revision,
 		TerrainContainerSaveReport* out_report,
 		std::string* out_error)
 	{
@@ -2653,10 +3137,23 @@ namespace AshEngine
 			return set_error(TerrainContainerResult::InvalidData, out_error,
 				"Terrain container path is empty.");
 		}
+		if (expected_revision != nullptr && !expected_revision->is_valid())
+		{
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"Terrain optimize expected revision is invalid.");
+		}
+
+		static std::atomic<uint64_t> temporary_serial{ 0u };
 		std::filesystem::path temporary = path;
-		temporary += ".optimize.tmp";
+		const uint64_t serial = temporary_serial.fetch_add(1u, std::memory_order_relaxed) + 1u;
+#if defined(_WIN32)
+		const uint64_t process_id = static_cast<uint64_t>(GetCurrentProcessId());
+#else
+		const uint64_t process_id = 0u;
+#endif
+		temporary += ".optimize." + std::to_string(process_id) + "." +
+			std::to_string(serial) + ".tmp";
 		std::error_code error_code{};
-		std::filesystem::remove(temporary, error_code);
 		try
 		{
 			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
@@ -2668,11 +3165,18 @@ namespace AshEngine
 			{
 				return load_result;
 			}
-			if (!snapshot)
+			if (!snapshot || !load_report.source_revision.is_valid())
 			{
 				return set_error(TerrainContainerResult::Corrupt, out_error,
-					"Terrain optimize could not resolve a live snapshot.");
+					"Terrain optimize could not resolve a live source revision.");
 			}
+			if (expected_revision != nullptr &&
+				load_report.source_revision != *expected_revision)
+			{
+				return set_error(TerrainContainerResult::SourceChanged, out_error,
+					"Terrain container source revision changed before optimize staging.");
+			}
+
 			TerrainContainerSaveReport compact_report{};
 			const TerrainContainerResult write_result = write_full_container(
 				temporary, *snapshot, &compact_report, out_error);
@@ -2687,30 +3191,27 @@ namespace AshEngine
 					temporary, validated, &validated_report, out_error) !=
 					TerrainContainerResult::Success || !validated ||
 				validated_report.loaded_generation != load_report.loaded_generation ||
-				validated->components.size() != snapshot->components.size())
+				validated->components.size() != snapshot->components.size() ||
+				validated_report.source_revision != compact_report.committed_revision)
 			{
 				std::filesystem::remove(temporary, error_code);
 				return set_error(TerrainContainerResult::Corrupt, out_error,
 					"Optimized terrain container failed validation.");
 			}
 
-#if defined(_WIN32)
-			const BOOL replaced = std::filesystem::exists(path)
-				? ReplaceFileW(
-					path.c_str(), temporary.c_str(), nullptr,
-					REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)
-				: MoveFileExW(
-					temporary.c_str(), path.c_str(),
-					MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-			if (replaced == FALSE)
-#else
-			std::filesystem::rename(temporary, path, error_code);
-			if (error_code)
-#endif
+			const TerrainContainerRevision& commit_expected =
+				expected_revision != nullptr ? *expected_revision : load_report.source_revision;
+			const TerrainContainerResult commit_result =
+				TerrainContainerInternal::commit_staged_terrain_container_optimization(
+					path,
+					temporary,
+					commit_expected,
+					validated_report.source_revision,
+					out_error);
+			if (commit_result != TerrainContainerResult::Success)
 			{
 				std::filesystem::remove(temporary, error_code);
-				return set_error(TerrainContainerResult::IoFailure, out_error,
-					"Failed to atomically replace the terrain container.");
+				return commit_result;
 			}
 			if (out_report != nullptr)
 			{
@@ -2718,6 +3219,7 @@ namespace AshEngine
 				out_report->committed_generation = load_report.loaded_generation;
 				out_report->bytes_appended = compact_report.bytes_appended;
 				out_report->blocks_written = compact_report.blocks_written;
+				out_report->committed_revision = validated_report.source_revision;
 			}
 			return TerrainContainerResult::Success;
 		}

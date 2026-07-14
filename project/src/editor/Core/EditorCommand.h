@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/EditorSceneTypes.h"
+#include "Function/Asset/TerrainData.h"
 
 #include <cstdint>
 #include <memory>
@@ -70,6 +71,10 @@ namespace AshEditor
 		virtual const char* GetLabel() const = 0;
 		virtual bool Execute(EditorContext& refContext) = 0;
 		virtual bool Undo(EditorContext& refContext) = 0;
+		virtual AshEngine::TerrainAssetId GetAffectedTerrainAssetId() const noexcept
+		{
+			return 0u;
+		}
 		virtual bool TryMerge(const EditorCommand& refSubsequentCommand)
 		{
 			(void)refSubsequentCommand;

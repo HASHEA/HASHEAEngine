@@ -4,6 +4,8 @@
 #include "Function/Asset/TerrainContainerFormat.h"
 #include "Function/Asset/TerrainBlockCodec.h"
 #include "Function/Asset/TerrainSpatialData.h"
+#include "Terrain/TerrainCommitLeaseTestUtils.h"
+#include "Terrain/TerrainTestUtils.h"
 
 #include <algorithm>
 #include <array>
@@ -381,6 +383,7 @@ TEST_CASE("Terrain container generation one round-trips immutable source and cac
 	CHECK(save_report.previous_generation == 0u);
 	CHECK(save_report.committed_generation == source->content_generation);
 	CHECK(save_report.blocks_written > source->components.size());
+	CHECK(save_report.committed_revision.is_valid());
 
 	std::ifstream bytes(path, std::ios::binary);
 	std::array<uint8_t, 8> magic{};
@@ -395,6 +398,7 @@ TEST_CASE("Terrain container generation one round-trips immutable source and cac
 	REQUIRE(loaded);
 	CHECK(error.empty());
 	CHECK(load_report.loaded_generation == source->content_generation);
+	CHECK(load_report.source_revision == save_report.committed_revision);
 	CHECK(loaded->asset_id == 0u);
 	CHECK(loaded->source_path == path);
 	CHECK(loaded->layout.sample_count_x == source->layout.sample_count_x);
@@ -1099,7 +1103,15 @@ TEST_CASE("Terrain container recovery selects the previous valid descriptor")
 		}
 	}
 
-	for (const auto& path : { descriptor_path, truncate_path })
+	const std::array recovery_cases{
+		std::pair{
+			descriptor_path,
+			std::string("Terrain generation 2 index CRC is invalid.") },
+		std::pair{
+			truncate_path,
+			std::string("Terrain generation 2 index descriptor is invalid.") }
+	};
+	for (const auto& [path, expected_recovery_detail] : recovery_cases)
 	{
 		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
 		AshEngine::TerrainContainerLoadReport report{};
@@ -1110,17 +1122,103 @@ TEST_CASE("Terrain container recovery selects the previous valid descriptor")
 		CHECK(loaded->content_generation == 1u);
 		CHECK(report.loaded_generation == 1u);
 		CHECK(report.recovered_previous_generation);
+		CHECK(report.rejected_generation == 2u);
+		CHECK(report.recovery_detail == expected_recovery_detail);
+		CHECK(error.empty());
 	}
 	{
-		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded = generation_one;
+		AshEngine::TerrainContainerLoadReport report{};
+		report.loaded_generation = 99u;
+		report.recovered_previous_generation = true;
+		report.rejected_generation = 100u;
+		report.recovery_detail = "sentinel";
+		report.decoded_block_count = 17u;
 		error.clear();
-		CHECK(AshEngine::load_terrain_container(both_path, loaded, nullptr, &error) ==
+		CHECK(AshEngine::load_terrain_container(both_path, loaded, &report, &error) ==
 			AshEngine::TerrainContainerResult::Corrupt);
 		CHECK_FALSE(loaded);
-		CHECK_FALSE(error.empty());
+		CHECK(report.loaded_generation == 0u);
+		CHECK_FALSE(report.recovered_previous_generation);
+		CHECK(report.rejected_generation == 0u);
+		CHECK(report.recovery_detail.empty());
+		CHECK(report.decoded_block_count == 0u);
+		CHECK(error == "Terrain container has no valid index descriptor.");
 	}
 
 	for (const auto& path : { source_path, descriptor_path, truncate_path, both_path })
+	{
+		std::filesystem::remove(path);
+	}
+}
+
+TEST_CASE("Terrain container refuses a corrupt newest payload instead of recovering")
+{
+	const std::filesystem::path source_path =
+		TestDirectory() / "payload-recovery-source.AshTerrain";
+	const std::filesystem::path corrupt_path =
+		TestDirectory() / "payload-recovery-corrupt.AshTerrain";
+	for (const auto& path : { source_path, corrupt_path })
+	{
+		std::filesystem::remove(path);
+	}
+
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		source_path, *generation_one, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	const AdvancedGeneration generation_two = AdvanceGeneration(generation_one, 2u, 3.0f);
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		source_path, *generation_two.snapshot, { generation_two.dirty }, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	FileHeaderDisk header{};
+	std::ifstream input(source_path, std::ios::binary);
+	REQUIRE(input.read(reinterpret_cast<char*>(&header), sizeof(header)));
+	const size_t newest_slot = header.index_descriptors[1].generation_le >
+		header.index_descriptors[0].generation_le ? 1u : 0u;
+	const auto& newest = header.index_descriptors[newest_slot];
+	REQUIRE(newest.generation_le == 2u);
+	REQUIRE(newest.index_size_le % sizeof(BlockRecordDisk) == 0u);
+	std::vector<BlockRecordDisk> newest_records(
+		static_cast<size_t>(newest.index_size_le / sizeof(BlockRecordDisk)));
+	input.seekg(static_cast<std::streamoff>(newest.index_offset_le));
+	REQUIRE(input.read(
+		reinterpret_cast<char*>(newest_records.data()),
+		static_cast<std::streamsize>(newest.index_size_le)));
+	REQUIRE(TestCrc32(
+		reinterpret_cast<const uint8_t*>(newest_records.data()),
+		static_cast<size_t>(newest.index_size_le)) == newest.index_crc32_le);
+	const auto metadata = std::find_if(
+		newest_records.begin(), newest_records.end(), [](const BlockRecordDisk& record)
+		{
+			return record.kind == static_cast<uint8_t>(BlockKind::Metadata);
+		});
+	REQUIRE(metadata != newest_records.end());
+	input.close();
+	FlipPayloadByte(source_path, corrupt_path, *metadata);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded = generation_one;
+	AshEngine::TerrainContainerLoadReport report{};
+	report.loaded_generation = 99u;
+	report.recovered_previous_generation = true;
+	report.rejected_generation = 100u;
+	report.recovery_detail = "sentinel";
+	report.decoded_block_count = 17u;
+	error = "sentinel";
+	CHECK(AshEngine::load_terrain_container(corrupt_path, loaded, &report, &error) ==
+		AshEngine::TerrainContainerResult::Corrupt);
+	CHECK_FALSE(loaded);
+	CHECK(report.loaded_generation == 0u);
+	CHECK_FALSE(report.recovered_previous_generation);
+	CHECK(report.rejected_generation == 0u);
+	CHECK(report.recovery_detail.empty());
+	CHECK(report.decoded_block_count == 0u);
+	CHECK(error == "Terrain block CRC mismatch at offset " +
+		std::to_string(metadata->offset_le) + ".");
+
+	for (const auto& path : { source_path, corrupt_path })
 	{
 		std::filesystem::remove(path);
 	}
@@ -1147,6 +1245,57 @@ TEST_CASE("Terrain container incremental validation failure preserves committed 
 		AshEngine::TerrainContainerResult::Success);
 	REQUIRE(loaded);
 	CHECK(loaded->content_generation == 1u);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container checked save rejects a changed source revision without touching its bytes")
+{
+	const std::filesystem::path path =
+		TestDirectory() / "checked-save-source-changed.AshTerrain";
+	std::filesystem::remove(path);
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	AshEngine::TerrainContainerLoadReport original_report{};
+	REQUIRE(AshEngine::load_terrain_container(
+		path, loaded, &original_report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(original_report.source_revision.is_valid());
+
+	const AdvancedGeneration external_generation =
+		AdvanceGeneration(generation_one, 2u, 17.0f);
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path,
+		*external_generation.snapshot,
+		{ external_generation.dirty },
+		nullptr,
+		&error) == AshEngine::TerrainContainerResult::Success);
+	const std::vector<uint8_t> external_bytes = ReadAllBytes(path);
+
+	const AdvancedGeneration local_generation =
+		AdvanceGeneration(generation_one, 3u, 29.0f);
+	AshEngine::TerrainContainerSaveReport save_report{};
+	CHECK(AshEngine::save_terrain_container_incremental(
+		path,
+		*local_generation.snapshot,
+		{ local_generation.dirty },
+		&original_report.source_revision,
+		&save_report,
+		&error) == AshEngine::TerrainContainerResult::SourceChanged);
+	CHECK_FALSE(error.empty());
+	CHECK_FALSE(save_report.committed_revision.is_valid());
+	CHECK(ReadAllBytes(path) == external_bytes);
+
+	AshEngine::TerrainContainerLoadReport final_report{};
+	REQUIRE(AshEngine::load_terrain_container(
+		path, loaded, &final_report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(final_report.loaded_generation == 2u);
+	CHECK(final_report.source_revision != original_report.source_revision);
 	std::filesystem::remove(path);
 }
 
@@ -1179,10 +1328,13 @@ TEST_CASE("Terrain container optimize compacts generations atomically and idempo
 	CHECK(size_after < size_before);
 	CHECK(report.previous_generation == 4u);
 	CHECK(report.committed_generation == 4u);
+	CHECK(report.committed_revision.is_valid());
 	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> after{};
-	REQUIRE(AshEngine::load_terrain_container(path, after, nullptr, &error) ==
+	AshEngine::TerrainContainerLoadReport optimized_load_report{};
+	REQUIRE(AshEngine::load_terrain_container(path, after, &optimized_load_report, &error) ==
 		AshEngine::TerrainContainerResult::Success);
 	REQUIRE(after);
+	CHECK(optimized_load_report.source_revision == report.committed_revision);
 	CheckSnapshotLogicalEqual(*after, *before);
 	REQUIRE(AshEngine::optimize_terrain_container(path, &report, &error) ==
 		AshEngine::TerrainContainerResult::Success);
@@ -1194,3 +1346,172 @@ TEST_CASE("Terrain container optimize compacts generations atomically and idempo
 	CheckSnapshotLogicalEqual(*second, *before);
 	std::filesystem::remove(path);
 }
+
+TEST_CASE("Terrain container optimize commit preserves a source changed after staging")
+{
+	const std::filesystem::path path =
+		TestDirectory() / "optimize-source-changed.AshTerrain";
+	const std::filesystem::path staged =
+		TestDirectory() / "optimize-source-changed.stage.AshTerrain";
+	for (const auto& candidate : { path, staged })
+	{
+		std::filesystem::remove(candidate);
+	}
+
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	AshEngine::TerrainContainerLoadReport original_report{};
+	REQUIRE(AshEngine::load_terrain_container(
+		path, loaded, &original_report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		staged, *generation_one, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	AshEngine::TerrainContainerLoadReport staged_report{};
+	REQUIRE(AshEngine::load_terrain_container(
+		staged, loaded, &staged_report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	const AdvancedGeneration external_generation =
+		AdvanceGeneration(generation_one, 2u, 41.0f);
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path,
+		*external_generation.snapshot,
+		{ external_generation.dirty },
+		nullptr,
+		&error) == AshEngine::TerrainContainerResult::Success);
+	const std::vector<uint8_t> external_bytes = ReadAllBytes(path);
+
+	CHECK(AshEngine::TerrainContainerInternal::commit_staged_terrain_container_optimization(
+		path,
+		staged,
+		original_report.source_revision,
+		staged_report.source_revision,
+		&error) == AshEngine::TerrainContainerResult::SourceChanged);
+	CHECK_FALSE(error.empty());
+	CHECK(ReadAllBytes(path) == external_bytes);
+
+	AshEngine::TerrainContainerLoadReport final_report{};
+	REQUIRE(AshEngine::load_terrain_container(
+		path, loaded, &final_report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(final_report.loaded_generation == 2u);
+	CHECK(final_report.source_revision != original_report.source_revision);
+
+	for (const auto& candidate : { path, staged })
+	{
+		std::filesystem::remove(candidate);
+	}
+}
+
+TEST_CASE("Terrain container revision probe rejects an invalid header")
+{
+	const std::filesystem::path path =
+		TestDirectory() / "revision-probe-invalid-header.AshTerrain";
+	std::filesystem::remove(path);
+	const auto snapshot = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	{
+		std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out);
+		REQUIRE(stream);
+		std::array<uint8_t, 8> invalidMagic{};
+		invalidMagic.fill(0x5au);
+		stream.write(
+			reinterpret_cast<const char*>(invalidMagic.data()),
+			static_cast<std::streamsize>(invalidMagic.size()));
+		REQUIRE(stream);
+	}
+
+	AshEngine::TerrainContainerRevision revision{};
+	revision.file_size = 123u;
+	CHECK(AshEngine::inspect_terrain_container_revision(path, revision, &error) ==
+		AshEngine::TerrainContainerResult::Corrupt);
+	CHECK_FALSE(revision.is_valid());
+	CHECK(error.find("magic") != std::string::npos);
+	std::filesystem::remove(path);
+}
+
+#if defined(_WIN32)
+TEST_CASE("Terrain container commit lease reports Busy and recovers after release")
+{
+	const std::filesystem::path path =
+		TestDirectory() / "revision-probe-busy.AshTerrain";
+	std::filesystem::remove(path);
+	const auto snapshot = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	{
+		TerrainTests::ScopedTerrainCommitLeaseForTest lease(path);
+		REQUIRE(lease.acquired());
+		AshEngine::TerrainContainerRevision revision{};
+		CHECK(AshEngine::inspect_terrain_container_revision(path, revision, &error) ==
+			AshEngine::TerrainContainerResult::Busy);
+		CHECK_FALSE(revision.is_valid());
+		CHECK(error.find("lease") != std::string::npos);
+
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded = snapshot;
+		AshEngine::TerrainContainerLoadReport report{};
+		report.loaded_generation = 99u;
+		CHECK(AshEngine::load_terrain_container(path, loaded, &report, &error) ==
+			AshEngine::TerrainContainerResult::Busy);
+		CHECK_FALSE(loaded);
+		CHECK(report.loaded_generation == 0u);
+	}
+
+	AshEngine::TerrainContainerRevision revision{};
+	CHECK(AshEngine::inspect_terrain_container_revision(path, revision, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(revision.is_valid());
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	CHECK(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(loaded != nullptr);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain staged new publish shares the destination commit lease")
+{
+	const std::filesystem::path destination =
+		TestDirectory() / "staged-publish-destination.AshTerrain";
+	const std::filesystem::path staged =
+		TestDirectory() / "staged-publish-source.AshTerrain";
+	std::filesystem::remove(destination);
+	std::filesystem::remove(staged);
+	const auto snapshot = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		staged, *snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	{
+		TerrainTests::ScopedTerrainCommitLeaseForTest lease(destination);
+		REQUIRE(lease.acquired());
+		CHECK(AshEngine::publish_staged_terrain_container_new(
+			destination, staged, &error) == AshEngine::TerrainContainerResult::Busy);
+		CHECK(std::filesystem::exists(staged));
+		CHECK_FALSE(std::filesystem::exists(destination));
+	}
+
+	REQUIRE(AshEngine::publish_staged_terrain_container_new(
+		destination, staged, &error) == AshEngine::TerrainContainerResult::Success);
+	CHECK_FALSE(std::filesystem::exists(staged));
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(destination, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	CHECK(loaded->content_generation == snapshot->content_generation);
+	std::filesystem::remove(destination);
+}
+#endif

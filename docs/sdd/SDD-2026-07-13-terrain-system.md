@@ -217,13 +217,13 @@ v1 block codec 支持 `None` 与内建确定性 `RLE`。加载时验证两个 in
 ### Import and export
 
 - PNG：支持 8/16-bit grayscale；8-bit 显示精度警告。实现使用 Windows Imaging Component（WIC）原生 PNG codec；后台 worker 自行初始化 COM MTA。16-bit 导出必须请求并复核 `GUID_WICPixelFormat16bppGray`，编码器返回其他格式时直接失败，禁止静默降为 8-bit。
-- RAW：支持 R16、R32F、大小端和 X/Y axis flip。
+- RAW：支持 R16、R32F、大小端和独立 X/Z axis flip。
 - EXR：支持用户选择的 half/float 单通道。
 - 平坦地形：直接生成 Base height 与隐式 Layer 0 权重。
 
 输入不是 8193 × 8193 时不得静默缩放。用户必须显式选择 crop 或 deterministic Catmull-Rom resample。导入在后台写临时容器，只有全部 block/index 校验通过后才发布 AssetDatabase entry。取消或失败删除临时文件。WIC 像素格式契约以 Microsoft 的 [Native pixel formats overview](https://learn.microsoft.com/en-us/windows/win32/wic/-wic-codec-native-pixel-formats) 为准。
 
-导出支持最终合成高度、Base height、指定高度层和指定材质权重层。输出保持线性数值。RAW/PNG 流式编码；EXR 在分配连续缓冲前检查内存并允许取消。导入峰值内存门槛为 1 GiB。
+导出支持最终合成高度、Base height、指定高度层和指定材质权重层，四类来源都支持 PNG、RAW R16、RAW R32F 和 EXR。高度来源保持其线性高度数值；材质权重来源在 PNG/RAW R16 这类 normalized 格式中固定使用 `[0,1]` 映射，不复用 Terrain 高度映射，RAW R32F/EXR 则直接输出 `[0,1]` 浮点值。RAW/PNG 流式编码；EXR 在分配连续缓冲前检查内存并允许取消。导入峰值内存门槛为 1 GiB。
 
 ### TinyEXR dependency
 
@@ -399,6 +399,23 @@ Editor 分别跟踪 Scene dirty 和每个 Terrain asset 的 dirty generation。`
 - Reload 成功后清除引用该 Terrain asset 的 undo/redo 记录。
 
 最新 index 损坏时回退上一有效 generation 并警告。两个 index 都无效或关键 block 无法恢复时，资产进入 `Failed`，Renderer 显示诊断占位，Editor 进入只读恢复状态，readiness 失败。保存失败不得覆盖旧 generation、清 dirty 或删除 undo 历史。
+
+2026-07-15 Phase 3 Task 10 implementation reconciliation：
+
+- 外部变化使用 500 ms wall-clock 轮询与两次连续 metadata-failure debounce，不使用固定帧数。`TerrainContainerRevision`（文件大小 + 双 descriptor 的 generation/index offset/index size/index CRC）是物理来源变化与 checked CAS 的权威，write time 仅作辅助 metadata；候选加载期间到达的第二次提交会因 revision 不同再次触发 reload。同 asset 重选不取消 pending future 或清恢复诊断。
+- Windows TerrainContainer writer/inspect 使用按 lowercase canonical target 命名的 process-external mutex 作为 commit lease。它只协调遵守 TerrainContainer API 的 writer，不承诺拦截绕过 API 的任意外部写入。`Busy` 表示 lease 正被占用且不消耗 Editor poll 的失败预算；`SourceChanged` 表示持 lease 复核时 expected revision 或 non-replacing destination 已改变，两者都按可重试并发结果处理。
+- recovered candidate 以 rejected generation 参与 conflict/stale 排序，但内容仍来自最后有效 generation；容器与 AssetDatabase 先完整构造恢复报告，再无抛出地发布 report/snapshot，失败输出保持空。
+- reload candidate 绕过 AssetDatabase cache；只有 Editor 接受后才以 publication token CAS 显式替换共享 cache。普通 AssetDatabase load 遇到 container `Busy` / `SourceChanged` 回到 `Unloaded`，candidate load 以 `retryable_failure` 返回且不改 cache/load diagnostics。clean reload 在 Editor update 边界提交并只移除目标 Terrain asset 的历史；历史删除为无抛出、可失败门槛，失败时回滚 cache 并保持本地、候选与 conflict/recovery 状态。dirty 或物理 revision 回退只进入 Conflict；Reload、Save Copy As、Keep Local 都保持显式，Keep Local 在磁盘有效代之上推进 generation 并全量重合成。
+- Save/Optimize worker 携带 observed revision 调用 checked API；writer 在 destination lease 内复核 expected revision，成功通过 `TerrainContainerSaveReport::committed_revision` 返回实际提交版本。write time 只与该 committed revision 配对作为辅助信息，无法采样时操作失败且不推进 persisted generation。Save Copy As 先完整写入并回读 staged container，再通过 `publish_staged_terrain_container_new` 与 Save/Optimize 共用 destination lease，在 lease 内执行最终 no-exist 检查和 durable non-replacing publish；竞态目标与失败不被覆盖。Save、Save Copy As、Optimize 以及 Create/Import 产生的 `.AshTerrain` 目标先做 canonical AssetDatabase root-boundary 检查，联接/符号链接不可逃逸；该约束不套用于外部高度图 source/destination。
+- `RecoveredReadOnly` / `Failed` 禁止覆盖保存、Optimize、笔刷和图层 mutation，只保留 Repair 与 Save Copy As。New/Open/Reload Scene 先做 Terrain preflight，成功后按 Terrain commit、Selection clear、history clear 收尾；Scene load/reload 失败时 `SceneService` 原子保留当前内存 Scene 与 active path，workflow 不激活 fallback，也不丢 Selection、history 或 Terrain recovery/error 状态。
+
+2026-07-15 Phase 3 Task 11 approved file-workflow reconciliation：
+
+- Create/Import 的 `.AshTerrain` target 是 AssetDatabase 资产，必须留在 canonical asset root 内，并经唯一 stage、校验与 non-replacing publish 创建。Import source 与 Export destination 是外部高度图 workflow：绝对路径可以位于 asset root 外，相对路径统一以 asset root 为基准解析；两者不获得 AssetId，也不进入 `.AshTerrain` root resolver。
+- Export 固定为 create-new / never-overwrite。UI 不提供覆盖开关；既有 destination 或提交后的竞态 destination 都保持原样，失败/取消只清理本次唯一 stage。PNG、RAW R16、RAW R32F、EXR 均支持最终合成、Base、指定高度层和指定材质权重层；材质权重的 normalized 输出使用明确 `[0,1]` 映射。
+- Manage 为 Create 显式提供 height minimum、height maximum 与 flat height，提交时映射为 `height_offset = minimum`、`height_range = maximum - minimum`；Import 与 Export 使用彼此独立的路径、格式、RAW byte order、EXR channel 和其余 descriptor 草稿，禁止共享 UI state 造成串值。Cancel 控件只在 Running Import/Export 时绘制；取消进入独立 `Cancelled` 终态。
+- Running Import/Export 的取消与 worker 最终发布共享一个原子 phase 线性化点：主线程先把 `Cancellable` claim 为 `Cancelled` 时 worker 禁止发布，取消赢家保持 `Cancelled` 直到 future 被消费并重置 operation；worker 先 claim 为 `Publishing` 时 `CancelFileOperation` 必须返回 false，不能在 final destination 已可发布后误报取消成功，发布路径最终收敛为 `Completed`。非取消的提前失败可从 `Cancellable` 直接收敛为 `Completed`。
+- Create/Import 已 durable publish 但 catalog refresh/open 尚未成功时进入 `PublishedAwaitingCatalog`，不得删除用户文件来伪装事务失败。Manage UI 必须显示最终持久路径、当前重试状态与最近一次 catalog/open 错误，并允许 service 在后续 `Update()` 重试绑定真实 path-derived AssetId。
 
 ### Readiness contract
 

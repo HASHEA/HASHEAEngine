@@ -21,6 +21,7 @@ namespace AshEditor
 		const char* GetLabel() const override;
 		bool Execute(EditorContext& refContext) override;
 		bool Undo(EditorContext& refContext) override;
+		AshEngine::TerrainAssetId GetAffectedTerrainAssetId() const noexcept override;
 
 	private:
 		bool Replay(EditorContext& refContext, AshEngine::TerrainEditPatchDirection eDirection);
@@ -45,6 +46,7 @@ namespace AshEditor
 		const char* GetLabel() const override;
 		bool Execute(EditorContext& refContext) override;
 		bool Undo(EditorContext& refContext) override;
+		AshEngine::TerrainAssetId GetAffectedTerrainAssetId() const noexcept override;
 
 	private:
 		bool Replay(EditorContext& refContext, AshEngine::TerrainEditPatchDirection eDirection);
