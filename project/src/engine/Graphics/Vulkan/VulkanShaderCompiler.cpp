@@ -384,6 +384,67 @@ namespace RHI
 
 			return rewritten;
 		}
+
+		static bool rewrite_unorm_storage_images_for_vulkan(std::string& shader_text)
+		{
+			// IDxcRewriter2 removes Vulkan attributes from the preprocessed text.
+			// The engine's unorm float4 storage-image contract is RGBA8_UNORM, so
+			// restore the explicit SPIR-V image format after preprocessing.
+			static constexpr std::string_view k_declaration =
+				"RWTexture2D<unorm float4>";
+			static constexpr std::string_view k_attribute =
+				"[[vk::image_format(\"rgba8\")]]";
+			bool rewritten = false;
+			size_t search_begin = 0u;
+			while (search_begin < shader_text.size())
+			{
+				const size_t declaration_index =
+					shader_text.find(k_declaration, search_begin);
+				if (declaration_index == std::string::npos)
+				{
+					break;
+				}
+
+				size_t previous_non_whitespace = declaration_index;
+				while (previous_non_whitespace > 0u &&
+					std::isspace(static_cast<unsigned char>(
+						shader_text[previous_non_whitespace - 1u])) != 0)
+				{
+					--previous_non_whitespace;
+				}
+				const bool already_annotated =
+					previous_non_whitespace >= k_attribute.size() &&
+					shader_text.compare(
+						previous_non_whitespace - k_attribute.size(),
+						k_attribute.size(),
+						k_attribute) == 0;
+				const size_t line_begin =
+					shader_text.rfind('\n', declaration_index);
+				const size_t prefix_begin =
+					line_begin == std::string::npos ? 0u : line_begin + 1u;
+				const bool declaration_starts_line = std::all_of(
+					shader_text.begin() + prefix_begin,
+					shader_text.begin() + declaration_index,
+					[](char character) {
+						return std::isspace(
+							static_cast<unsigned char>(character)) != 0;
+					});
+				if (!already_annotated && declaration_starts_line)
+				{
+					shader_text.insert(
+						declaration_index,
+						std::string(k_attribute) + " ");
+					rewritten = true;
+					search_begin = declaration_index + k_attribute.size() +
+						1u + k_declaration.size();
+					continue;
+				}
+
+				search_begin = declaration_index + k_declaration.size();
+			}
+
+			return rewritten;
+		}
 	}
 
 	// Helper function to convert UTF-8 to wide string
@@ -539,6 +600,7 @@ namespace RHI
 
 		std::string vulkanShaderText = shaderFullText;
 		rewrite_root_constant_blocks_for_vulkan(vulkanShaderText);
+		rewrite_unorm_storage_images_for_vulkan(vulkanShaderText);
 
 		// Build pass key hash (from shader file info)
 		DigestBuilder<SHA1> passKeyBuilder{};
@@ -553,7 +615,7 @@ namespace RHI
 		DigestBuilder<SHA1> shaderTextBuilder{};
 		shaderTextBuilder.append(vulkanShaderText);
 		shaderTextBuilder.append(fileInfo.stage);
-		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0-dxlayout-bindingshift-inverty-rootconstrewrite-vertexdeclloc-v3"));
+		shaderTextBuilder.append(std::string("dxc-spirv-vulkan1.0-dxlayout-bindingshift-inverty-rootconstrewrite-vertexdeclloc-v3-storageimageformat-v1"));
 		SHA1::Digest textKey = shaderTextBuilder.finalize();
 
 		// Try to read from cache

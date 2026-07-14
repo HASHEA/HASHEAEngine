@@ -213,6 +213,24 @@ TEST_CASE("Terrain atlas shader uses raw weights and three texture UAVs")
 	CHECK(shader.find("[numthreads(8, 8, 1)]") != std::string::npos);
 }
 
+TEST_CASE("Terrain RGBA8 storage images receive a Vulkan format annotation")
+{
+	const std::string shader = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainAtlasUpdate.hlsl");
+	const std::string compiler = ReadSource(
+		"project/src/engine/Graphics/Vulkan/VulkanShaderCompiler.cpp");
+
+	CHECK(CountText(shader, "RWTexture2D<unorm float4>") == 3u);
+	CHECK(compiler.find("rewrite_unorm_storage_images_for_vulkan") !=
+		std::string::npos);
+	CHECK(compiler.find("[[vk::image_format(\\\"rgba8\\\")]]") !=
+		std::string::npos);
+	CHECK(compiler.find(
+		"rewrite_unorm_storage_images_for_vulkan(vulkanShaderText)") !=
+		std::string::npos);
+	CHECK(compiler.find("storageimageformat-v1") != std::string::npos);
+}
+
 TEST_CASE("Terrain shared grid covers all nine LOD resolutions")
 {
 	for (uint8_t lod = 0u; lod < AshEngine::k_terrain_lod_count; ++lod)
