@@ -1,5 +1,6 @@
 ﻿#include "Application.h"
 #include "Graphics/DynamicRHI.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/Swapchain.h"
 #include "Function/Gui/UIContext.h"
@@ -306,7 +307,18 @@ namespace AshEngine
 		resolvedPerfGateConfig.resolved_height = swapChain->get_height();
 		resolvedPerfGateConfig.resolved_vsync = runtimeVsync;
 		resolvedPerfGateConfig.resolved_validation = runtimeValidation;
-		perfGateController.configure(resolvedPerfGateConfig, resolvedConfig.title, activeBackend);
+		RHI::GpuTimingTelemetryInfo gpuTimingInfo{};
+		const RHI::GpuTimingTelemetryInfo* gpuTimingInfoForPerfGate = nullptr;
+		if (RHI::IGpuTimingTelemetry* gpuTimingTelemetry = graphicsContext->get_gpu_timing_telemetry())
+		{
+			gpuTimingInfo = gpuTimingTelemetry->get_info();
+			gpuTimingInfoForPerfGate = &gpuTimingInfo;
+		}
+		perfGateController.configure(
+			resolvedPerfGateConfig,
+			resolvedConfig.title,
+			activeBackend,
+			gpuTimingInfoForPerfGate);
 		if (pendingPerfGateConfig.enabled || hasWindowExtentOverride ||
 			pendingPerfGateConfig.vsync != PerfGateBooleanOverride::Inherit ||
 			pendingPerfGateConfig.validation != PerfGateBooleanOverride::Inherit ||
@@ -560,7 +572,7 @@ namespace AshEngine
 					perfGateController.sample_after_frame(renderer->get_frame_stats());
 					if (perfGateController.should_request_exit())
 					{
-						HLogInfo("PerfGate sample window complete; requesting application exit.");
+						HLogInfo("PerfGate collection complete; requesting application exit.");
 						request_exit();
 					}
 				}

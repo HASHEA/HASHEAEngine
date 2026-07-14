@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-13
+last_reviewed: 2026-07-14
 status: active
 ---
 
@@ -27,6 +27,7 @@ status: active
 - `Application(EngineInitConfig)` → `initialize()` → `start()`（阻塞跑主循环并返回运行成功/失败）→ 析构/`_shutdown_runtime()`；EntryPoint 将失败映射为非零进程退出码。
 - `initialize` 顺序：LogService → MemoryService → threading（当前线程注册为 Render 角色）→ 解析 RHI 配置（Engine.ini + `initConfig.backend` 覆盖，路径默认 `product/config/Engine.ini`）并应用本进程 PerfGate validation/vsync override → 发布同一份渲染 feature 配置 → `Window::create` → `GraphicsContext::create`（按需启用 GPU timing）→ `Swapchain::create` → RenderDevice/Renderer → `UIContext`。窗口 extent 在创建 Window 前合并进 `EngineInitConfig`；用于报告的 resolved extent 必须取初始化后的 Swapchain 实际尺寸，而不是 GLFW 请求尺寸。`PerfGateController` 只在上述初始化成功末尾配置，初始化失败不得写出误导性的 0-sample 正常报告。
 - 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → readiness 观察 → 帧计数。`--smoke-test-seconds` 在第一个完整 ready+present-completed 帧提前成功，秒数只作硬失败上限；PerfGate 采样窗口与显式 `--run-for-*` watchdog 仍可请求正常退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。acquire 与 present 结果从 RHI 以同一三态传播：Completed 才继续录制或满足 readiness，Retryable 跳过本帧并等下一帧，Failed 立即终止并返回非零；acquire Retryable 不消费已 arm 的 capture，DXGI OCCLUDED 是成功 present 状态。
+- PerfGate GPU 归档使用 `Warmup → Sampling → Draining → Complete` 状态机：仅记录 sampling 窗口内得到精确 submit acknowledgement 的 renderer frame ID，延迟完成 sample 只按自身 frame ID 归属；telemetry 关闭时不进入 drain，开启时 pending 全部完成便提前结束，否则最多 drain 配置时长且不等待 device idle。schema v2 保留 schema v1 的 CPU 顶层字段，并追加 runtime、backend metadata、总 `valid/submitted` coverage 与逐 metric `present/submitted` coverage；backend 判为 invalid 的 sample 不进入 percentile，缺失 metric 不把整帧改判 invalid，也不序列化伪造的 `0` duration。profile 阈值与必需 metric 判定由 `RunPerfGate` 工具层执行。
 - 可选 logic 线程：`EngineThreadingConfig.enable_logic_thread` 开启，输入经快照（`_publish/_consume_logic_input_snapshot`）跨线程传递；尚未消费的 render-frame 快照按“最新 down/位置、OR pressed/released、累加 scroll”合并，每批瞬态只允许一次 `_on_logic_update()` 观察，持续状态保留到新快照；logic 线程异常会被捕获并终止主循环。
 - 应用侧扩展点：`_on_startup/_on_update/_on_gui/_on_render/_on_logic_*/_on_shutdown` 等虚函数。
 - 静态访问器：`Application::get()`、`get_window/get_graphics_context/get_swapchain/get_render_device/get_renderer/get_ui_context/get_input/get_rhi_backend` 等。

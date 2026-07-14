@@ -57,7 +57,7 @@ run.bat sandbox <vulkan|dx12> Debug --smoke-test-seconds=120 --rhi-selftest-cons
 
 最后一条是 opt-in 的双后端 constant-buffer 可见性诊断；CI 会在 WARP/lavapipe 上把它与 indirect 自测独立执行。每次进程运行会在 `product/logs` 生成 session 后缀相同且不会覆盖旧会话的 Engine/Application 日志对，矩阵证据审计规则见 `docs/VERIFY.md`。按变更类型的完整验证矩阵同样见该文档；渲染改动必须双后端验证。
 
-PerfGate 的 `--window-width/--window-height` 必须成对给出；`--perf-gate-gpu-timing/validation/vsync=on|off` 与时长参数只覆盖当前进程，不改写 `Engine.ini`。GPU timing 仅在启用 PerfGate 且显式为 `on` 时向 RHI 请求启用；Vulkan/DX12 都只在精确 graphics submit 已绑定既有 completion primitive 后确认本帧 submitted，Renderer 以固定容量、非阻塞方式携带延迟完成 sample。PerfGate 对这些 sample 的结构化归档与 coverage 判定仍由后续任务接入。validation 的实际启用状态仍受 Debug/Release 编译能力约束。
+PerfGate 的 `--window-width/--window-height` 必须成对给出；`--perf-gate-gpu-timing/validation/vsync=on|off` 与时长参数只覆盖当前进程，不改写 `Engine.ini`。GPU timing 仅在启用 PerfGate 且显式为 `on` 时向 RHI 请求启用；Vulkan/DX12 都只在精确 graphics submit 已绑定既有 completion primitive 后确认本帧 submitted，Renderer 以固定容量、非阻塞方式携带延迟完成 sample。PerfGate 以 frame ID 做 Warmup/Sampling/Draining/Complete 归档并输出 schema v2；总 coverage 与逐 metric coverage 分开记录，profile 阈值由 `RunPerfGate` 判定。validation 的实际启用状态仍受 Debug/Release 编译能力约束。
 
 ## 文档
 
