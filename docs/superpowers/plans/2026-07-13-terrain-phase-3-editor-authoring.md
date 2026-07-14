@@ -1159,7 +1159,7 @@ During New/Open/Reload Scene, ask TerrainEditorService to finish/cancel active s
 
 Expected: explicit conflict choices, selective history clearing, failed-state read-only behavior, and Editor build pass.
 
-- [ ] **Step 8: Commit reload/conflict behavior**
+- [x] **Step 8: Commit reload/conflict behavior**
 
 ```powershell
 git add project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/editor/Panels/Terrain/TerrainModePanel.cpp project/src/editor/App/SceneWorkflowCoordinator.cpp project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
@@ -1308,7 +1308,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\AIDevDoctor.ps1 -Mod
 
 Expected: every focused test exits 0; the existing RAW/PNG/EXR codec suite remains green; ArchGate adds no legacy boundary; AIDevDoctor accepts the updated plan. Full build, runtime, render, performance, and manual evidence remains Task 12 and must not be inferred here.
 
-- [ ] **Step 9: Update long-lived contracts and commit the slice**
+- [x] **Step 9: Update long-lived contracts and commit the slice**
 
 Update the Terrain, Asset, and Editor specs with the exact path, immutable-job, cancellation, warning, publication, and UI contracts. Do not record runtime evidence until Step 8 actually ran.
 
@@ -1322,6 +1322,8 @@ git commit -m "feat(editor): add terrain create import export jobs"
 ```
 
 Expected: one focused Editor/Asset integration commit; no Graphics, golden, performance-baseline, scene fixture, or runtime configuration file is staged.
+
+2026-07-15 commit reconciliation: Tasks 10 and 11 landed together in focused Phase 3 closure commit `45638d8c7e0546f482292db6626e97dcfd10c629` because their revision/CAS, non-replacing publication, catalog binding, and file-operation tests form one consistency boundary. The prospective per-task commit commands above remain design-time examples and were not executed as separate commits.
 
 ### Task 12: Run Phase 3 exit gates and manual authoring workflow
 
@@ -1390,7 +1392,7 @@ Expected: Ready/Pending/locked brush rings use their defined colors and follow t
 
 Expected: both pass; no golden or baseline is blessed in Phase 3.
 
-- [ ] **Step 8: Inspect Phase 3 diff and status**
+- [x] **Step 8: Inspect Phase 3 diff and status**
 
 ```powershell
 git diff --check
@@ -1400,7 +1402,7 @@ git log --oneline --grep="terrain" -12
 
 Expected: no whitespace errors, no unrelated Editor changes, no direct Graphics include, and every Phase 3 commit is focused.
 
-2026-07-15 automated exit evidence: Debug/Release full tests, fresh solution generation, Editor/Sandbox Debug/Release builds, ArchGate, AIDevDoctor, Terrain Editor Vulkan/DX12 readiness, four-combination readiness, Standard / Empty / Debug / TimingValidation, default sandbox/particles RenderGate, and Standard PerfGate 4/4 all passed. No golden or performance baseline was blessed, and the four runtime configuration files were restored byte-for-byte. Standard 四格 baseline status 均为 `MISSING`，所以该结果是零 warning/failure 的采样健康证据，不是历史性能回归比较。Steps 5-6 remain open because the approved checklist requires real interaction in the Editor main Scene viewport; readiness, source-contract tests, and the default non-Terrain RenderGate do not substitute for it.
+2026-07-15 automated exit evidence: Debug/Release full tests, fresh solution generation, Editor/Sandbox Debug/Release builds, ArchGate, AIDevDoctor, Terrain Editor Vulkan/DX12 readiness, four-combination readiness, Standard / Empty / Debug / TimingValidation, default sandbox/particles RenderGate, and Standard PerfGate 4/4 all passed. No golden or performance baseline was blessed, and the four runtime configuration files were restored byte-for-byte. Standard 四格 baseline status 均为 `MISSING`，所以该结果是零 warning/failure 的采样健康证据，不是历史性能回归比较。Final cached review staged exactly 40 Task 10/11 files and excluded the pre-existing user/runtime changes in `EditorSettings.json`, `imgui.ini`, and `Untitled Scene 3.scene.json`. Steps 5-6 remain open because the approved checklist requires real interaction in the Editor main Scene viewport; readiness, source-contract tests, and the default non-Terrain RenderGate do not substitute for it.
 
 ## Phase 3 completion criteria
 
