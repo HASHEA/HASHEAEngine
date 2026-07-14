@@ -34,7 +34,7 @@ Make `StringBuffer` and `StringArray` fail closed at capacity boundaries and pai
 ## Verification
 
 - Focused RED established the original ownership/capacity/leak failures; GREEN: StringBuffer `3/3` cases and `20/20` assertions, StringArray `2/2` cases and `17/17` assertions.
-- `RunTests.bat Debug`: `66/66` cases and `876/876` assertions pass.
+- `RunTests.bat Debug`: `71/71` cases and `895/895` assertions pass on the final branch after integrating `origin/main` / PR #4.
 - `RunArchGate.bat`: PASS with the unchanged 35-entry legacy warning set.
 - `build_editor.bat Debug` and `build_sandbox.bat Debug`: PASS.
 - `run.bat all Debug --smoke-test-seconds=120`: PASS; child processes exit, fresh logs contain no error/fatal/validation failure, and `product/config/Engine.ini` SHA-256 returns to its pre-run value.
