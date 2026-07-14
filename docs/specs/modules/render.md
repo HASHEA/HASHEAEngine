@@ -20,6 +20,7 @@ status: active
 | `ScenePresentationSubsystem.h/.cpp` | 输出目标 / view binding 管理；`update_presentations()` 构建帧快照，`submit_presentations()` 调 `SceneRenderer::render_visible_frame()` |
 | `RenderScene.h/.cpp` | `VisibleRenderFrame` 定义与 `build_visible_render_frame()` |
 | `TerrainRenderProxy.h/.cpp` | Terrain snapshot/render-asset proxy、world AABB 与 `VisibleTerrainFrame` 生成 |
+| `TerrainLod.h/.cpp` | 纯 CPU Component quadtree culling、投影误差选级、邻接修复与稳定 per-LOD instance batches |
 | `SceneRenderView.h` | `SceneRenderViewContext`（输出目标、clear、viewport、pick state 等 per-view 上下文） |
 | `SceneDeferredGraphResources.h` | 一帧 graph 内共享的 texture ref 集合（GBuffer、depth、HDR、shadow、volumetric 等） |
 | `GBufferLayout.h/.cpp` | DeferredHQ GBuffer 布局（5 个 attachment，D=motion vector，E=normal） |
@@ -35,6 +36,7 @@ status: active
 - `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`。`Texture2DArrayUploadDesc` 可创建一个带原生 2D-array SRV 的 sampled 资源；提供初始数据时必须覆盖每个唯一 `(array layer, mip)`，上传会按 layer-major / mip-major 紧密重排，紧密数据总量必须落在 RHI 的 32 位上传大小上限内。返回值是单个 `RenderTarget`，shader 的 `Texture2DArray` 参数通过 `set_texture` 绑定，不把各 layer 当成 `set_texture_array` 的多资源描述符数组。
 - `TerrainRenderAsset`：消费不可变 `TerrainAssetSnapshot`，按 Component pointer diff 生成当前 content generation 的 packed R16 高度和两路 RGBA8 权重 payload；拥有 height/staging buffers、两张 weight atlas、coarse weight target、三张 8-slice material arrays 与帧边界 slot metadata。`RenderAssetManager` 以规范化 Terrain key 把 request/finalize、pending/failed 和 activity epoch 合入通用 readiness；GPU finalize 仅允许 render thread。
 - `RenderTerrainProxy` / `RenderScene`：按 Scene Terrain extraction 构建不可变 snapshot generation 的 proxy，维护 world bounds，transform-only 更新以新 proxy 集合原子替换；`build_visible_render_frame` 对 bounds 做 frustum 裁剪并写入 `VisibleRenderFrame::terrains`。当前没有 pass 消费该数组，实际 Terrain draw 由后续 slice 接入。
+- `TerrainLod`：消费一个 immutable Terrain snapshot、world transform 与 `SceneView`，以 Component 根 min/max 构建隐式 quadtree，按投影误差选择 9 级共享网格并只向更细方向修复邻接。输出每个非空 LOD 一个 `first_instance == 0` 的稳定 batch，instance 携带坐标、较粗邻边掩码和 morph factor；当前结果尚未上传或 draw。
 - `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。
 
 ### Pass 序列（`SceneRenderer::render_visible_frame`，代码实际顺序）
