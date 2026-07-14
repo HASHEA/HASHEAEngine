@@ -457,7 +457,6 @@ namespace AshEngine
 		auto validate_snapshot(
 			const TerrainAssetSnapshot& snapshot,
 			const std::vector<TerrainDirtyComponentPayload>& dirty_components,
-			bool require_all_components_current,
 			std::string* out_error) -> bool
 		{
 			if (snapshot.failed || snapshot.content_generation == 0u ||
@@ -589,8 +588,8 @@ namespace AshEngine
 				const size_t dirty_index =
 					static_cast<size_t>(dirty.coord.z) * snapshot.layout.component_count_x +
 					dirty.coord.x;
-				if (!dirty.component || dirty.content_generation != snapshot.content_generation ||
-					dirty.component->content_generation != snapshot.content_generation ||
+				if (!dirty.component ||
+					dirty.content_generation != dirty.component->content_generation ||
 					!(dirty.coord == dirty.component->coord) ||
 					dirty.coord.x >= snapshot.layout.component_count_x ||
 					dirty.coord.z >= snapshot.layout.component_count_z ||
@@ -604,17 +603,30 @@ namespace AshEngine
 					return false;
 				}
 			}
+			return true;
+		}
+
+		auto validate_incremental_dirty_set(
+			const TerrainAssetSnapshot& snapshot,
+			const std::vector<TerrainDirtyComponentPayload>& dirty_components,
+			const uint64_t persisted_generation,
+			std::string* out_error) -> bool
+		{
+			std::set<std::pair<uint16_t, uint16_t>> dirty_coords{};
+			for (const TerrainDirtyComponentPayload& dirty : dirty_components)
+			{
+				dirty_coords.insert({ dirty.coord.z, dirty.coord.x });
+			}
 			for (const auto& component : snapshot.components)
 			{
-				const bool current =
-					component->content_generation == snapshot.content_generation;
-				const bool dirty = dirty_coords.find(
+				const bool changed_since_disk =
+					component->content_generation > persisted_generation;
+				const bool supplied = dirty_coords.find(
 					{ component->coord.z, component->coord.x }) != dirty_coords.end();
-				if ((require_all_components_current && !current) ||
-					(!require_all_components_current && current != dirty))
+				if (changed_since_disk != supplied)
 				{
 					set_error(TerrainContainerResult::InvalidData, out_error,
-						"Terrain component generations do not match the dirty payload set.");
+						"Terrain dirty component payloads do not match changes since the persisted generation.");
 					return false;
 				}
 			}
@@ -2290,9 +2302,14 @@ namespace AshEngine
 			return set_error(TerrainContainerResult::IoFailure, out_error,
 				"Failed to inspect the terrain container path.");
 		}
-		if (!validate_snapshot(snapshot, dirty_components, !exists, out_error))
+		if (!validate_snapshot(snapshot, dirty_components, out_error))
 		{
 			return TerrainContainerResult::InvalidData;
+		}
+		if (!exists && !dirty_components.empty())
+		{
+			return set_error(TerrainContainerResult::InvalidData, out_error,
+				"A new Terrain container must be written as a complete snapshot.");
 		}
 
 		if (exists)
@@ -2350,6 +2367,14 @@ namespace AshEngine
 				{
 					return set_error(TerrainContainerResult::InvalidData, out_error,
 						"Incremental terrain generation must increase monotonically.");
+				}
+				if (!validate_incremental_dirty_set(
+						snapshot,
+						dirty_components,
+						previous_metadata->content_generation,
+						out_error))
+				{
+					return TerrainContainerResult::InvalidData;
 				}
 				const auto same_layout = [](const TerrainGridLayout& lhs,
 					const TerrainGridLayout& rhs)

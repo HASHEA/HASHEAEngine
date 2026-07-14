@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-15
 status: active
 ---
 
@@ -8,7 +8,7 @@ status: active
 
 ## 当前范围
 
-Phase 1 提供 Terrain 的纯 CPU 资产核心：网格与分块数据、不可变快照、非破坏编辑层、笔刷与 patch 回放、空间查询、`.AshTerrain` 容器、RAW/PNG/EXR 高度图导入导出，以及 `AssetDatabase` 发布与失效接口。Phase 2 已完成九个 rendering slice：Scene v6 `TerrainComponent`、独立 revision/extraction 和 world-space CPU query adapter；Function-only 原生 2D texture-array wrapper；`TerrainRenderAsset` 的 content-generation 状态、不可变 Component pointer diff、GPU 资源 ownership 和 `RenderAssetManager` readiness/activity 接入；`RenderTerrainProxy`、`VisibleRenderFrame::terrains` 与 ScenePresentation 的独立 terrain revision 同步；纯 CPU Component quadtree culling、投影误差 LOD、邻接修复与稳定 draw batch 生成；dirty weight-atlas 的 raw upload、RenderGraph UAV→SRV 契约与 compute shader；9 级共享 index grid、packed-height/morph surface shader 和固定 top-four 材质混合；`SceneRenderer` 的既有 GBuffer/方向光阴影接入、LOD debug、按 view 的 TAA history 失效和 Terrain capture readiness；以及 production-size 确定性 fixture 与 generation 驱动的 load/compose/upload/atlas/scene-submit readiness evaluator。Phase 3 已接入 UI-free authoring session、stroke 与图层栈命令/undo-redo，以及 UIContext-only Terrain Mode：Asset Browser 的 Terrain 选择、service-owned Manage/Sculpt/Paint/Layers 配置、兼容笔刷控件、稳定 ID 图层操作、primary Scene viewport 笔刷输入仲裁和 world-space brush overlay 已可用；文件 job、保存/重载与外部冲突处理仍未接入。
+Phase 1 提供 Terrain 的纯 CPU 资产核心：网格与分块数据、不可变快照、非破坏编辑层、笔刷与 patch 回放、空间查询、`.AshTerrain` 容器、RAW/PNG/EXR 高度图导入导出，以及 `AssetDatabase` 发布与失效接口。Phase 2 已完成九个 rendering slice：Scene v6 `TerrainComponent`、独立 revision/extraction 和 world-space CPU query adapter；Function-only 原生 2D texture-array wrapper；`TerrainRenderAsset` 的 content-generation 状态、不可变 Component pointer diff、GPU 资源 ownership 和 `RenderAssetManager` readiness/activity 接入；`RenderTerrainProxy`、`VisibleRenderFrame::terrains` 与 ScenePresentation 的独立 terrain revision 同步；纯 CPU Component quadtree culling、投影误差 LOD、邻接修复与稳定 draw batch 生成；dirty weight-atlas 的 raw upload、RenderGraph UAV→SRV 契约与 compute shader；9 级共享 index grid、packed-height/morph surface shader 和固定 top-four 材质混合；`SceneRenderer` 的既有 GBuffer/方向光阴影接入、LOD debug、按 view 的 TAA history 失效和 Terrain capture readiness；以及 production-size 确定性 fixture 与 generation 驱动的 load/compose/upload/atlas/scene-submit readiness evaluator。Phase 3 已接入 UI-free authoring session、stroke 与图层栈命令/undo-redo，以及 UIContext-only Terrain Mode：Asset Browser 的 Terrain 选择、service-owned Manage/Sculpt/Paint/Layers 配置、兼容笔刷控件、稳定 ID 图层操作、primary Scene viewport 笔刷输入仲裁、world-space brush overlay，以及基于不可变快照的异步 Save / Save Copy As / Optimize 已可用；Reload 与外部修改冲突处理留待 Phase 3 Task 10。
 
 生产默认布局为 8193 × 8193 个高度采样、8192 × 8192 个 quad、32 × 32 个 Component，每个 Component 为 256 × 256 quad、257 × 257 个快照采样，默认间距 1 m。纯 CPU API 也接受满足 `sample_count = component_count × component_quad_count + 1` 且采样间距为有限正数的小布局，供测试和工具使用；这不改变生产默认布局。
 
@@ -42,6 +42,16 @@ Brush preview 只在 authoring session Ready、canonical primary Scene 可接收
 拓扑 patch 只保留被添加、删除或复制的单层稀疏 block；metadata 与顺序 patch 不复制稀疏内容，禁止用整栈 snapshot 承载 8193² authoring history。删除、复制、可见性、强度和移动会把受影响层的 canonical occupancy 与既有 dirty 集合合并；移动还包含跨越层。空 Add、Rename、锁定以及幂等编辑不会制造额外 dirty，其中幂等编辑返回 `has_change()==false`、不推进 generation，也不得进入 Editor 历史。
 
 `TerrainEditorService` 先通过 Function API 完成原子 mutation，再把同一 patch 包装为 `TerrainLayerCommand` 交给 `RecordExecutedCommand`。历史记录失败沿同一 patch 回滚；回滚结果无法证明时沿用 stroke 的 generation/pending-publication 隔离和 session quarantine 契约。选择只保存稳定 layer ID；锁定层会同步到 preview，并拒绝开始 stroke。
+
+## 异步保存与 Scene 顺序
+
+`TerrainEditorSessionCore` 分开跟踪当前 `content_generation` 和已持久化 generation。Save 请求若遇到待合成内容，先进入 `AwaitingPublication`；该短暂阶段暂停新 authoring mutation，直到所请求 generation 完整合成并发布。随后 worker 按操作只捕获所需的 immutable snapshot、累积 dirty payload 和解析后路径，不捕获 service、working set 或 UI 状态；进入 `Running` 后的后续编辑可继续生成新 generation，但任何 session replacement（包括 history quarantine 的逃生选择）都必须等该文件操作完成，不能让 worker 的捕获身份与当前 session 分离。Editor 主线程由 `Update()` 轮询 `Succeeded` / `Failed`，普通 `Ctrl+S` 不在 UI 线程同步等待磁盘。worker 不可用、派发被拒绝或异常时必须快速失败，不回退为 UI 线程内联写文件；service shutdown 必须等待已经 Running 的 worker 收敛。
+
+普通 Save 对已有容器构造“自磁盘已持久化 generation 以来”的累积 dirty 集合：Component 保留自己最后变化时的 generation，必须且只能提交 `component.content_generation > persisted_generation` 的坐标，payload generation 必须与对应 Component generation 相等。因此多次发布后一次保存可同时包含不同 Component generation，不会丢掉较早未落盘的 Component。新容器则以空 dirty 列表写完整 snapshot，同样允许 Component generation 混合，但任何 Component generation 都不得超过 snapshot generation。
+
+Save 成功只把启动时捕获的 generation 推进为 persisted；worker 运行期间产生的更新 generation 仍为 dirty。失败不推进 persisted generation，不清理 working data 或 undo/redo 历史。Save 和 Optimize 始终绑定当前 working set 的 `source_path`，且拒绝显式目标路径，避免普通保存或压实意外写到其他资产。只有 Save Copy As 接受显式新路径：它先在目标同目录把完整容器写入唯一临时文件并回读校验，再用 durable、non-replacing 原子发布创建尚不存在的 `.AshTerrain`；目标在检查后出现或任一步失败时保留目标并清理临时文件。Save Copy As 不重绑当前会话，也不清 dirty。Optimize 只接受无 dirty、已保存的源资产。三种操作都强制要求有效 AssetDatabase root，最终解析路径必须位于该根内且扩展名为 `.AshTerrain`；仅提供绝对路径而未配置资产根不能绕过此约束。
+
+`Ctrl+S` 保持 Terrain asset dirty 与 Scene dirty 两条独立轨迹。当唯一 mutable authoring session 中选中的 dirty Terrain 被当前 Scene 引用时，`EditorActionCoordinator` 先发起 Save（或附着到同一资产已在进行的 Save），记录精确 operation serial，并把 Scene 写盘延后到 Terrain `Succeeded`。Scene 引用暂时无法从 catalog 解析时，coordinator 只允许在资产根内规范化后与 working-set source path 精确匹配；路径身份无法安全证明则 fail closed，不能跳过 dirty Terrain 继续写 Scene。Terrain 失败会把精确资产路径和错误传递给 Scene save failure，且不写 Scene；等待期间 Scene content epoch 变化也会取消该次写入，避免把新 Scene 写到旧请求的路径。Terrain 成功后再保存同一 epoch 的 active Scene；只有当 undo/redo history state 仍等于 `Ctrl+S` 时的 checkpoint 才调用 `MarkSaved()`，否则文件虽已写出，更新命令仍保持 unsaved。
 
 ## CPU 空间查询
 
@@ -94,7 +104,8 @@ Brush preview 只在 authoring session Ready、canonical primary Scene 可接收
 - block kind 覆盖 metadata、Base height、edit height/weight、composed Component、min/max 和 LOD error。
 - block codec 为 `None` 或确定性 `Rle`。
 - layer metadata 保持既有 version-1 字段布局，并可追加 `ASHL` revision 1 锁定状态 trailer；没有 trailer 的旧资产按全部 `locked=false` 加载，未知 revision、数量不匹配、非法布尔值或 trailer 尾随数据均 fail closed。
-- 增量保存追加 dirty block 和新索引，flush 后才覆盖较旧 descriptor；任一步失败都保留上一有效 generation。
+- 增量保存的 dirty payload 必须精确覆盖所有 `component.content_generation > persisted_generation` 的 Component；payload generation 与对应 Component 一致，而非强制等于最新 snapshot generation。writer 追加这一累积 dirty 集合和新索引，flush 后才覆盖较旧 descriptor；任一步失败都保留上一有效 generation。
+- 首次写新容器时 dirty payload 必须为空，并把完整 snapshot 写入。完整 snapshot 和后续增量 snapshot 都允许多个 Component 保留不同的最后修改 generation。
 - 加载选择 generation 最大的有效 descriptor。最新 descriptor 或 index 无效时可恢复上一 generation；两个 descriptor 都无效时返回 `Corrupt`。选中 index 后若 payload CRC、解码或逻辑 block 校验失败则直接返回错误，不再回退另一 descriptor，也不得发布快照。
 - `optimize_terrain_container` 把 live block 写入临时容器，验证后原子替换原文件；失败时原容器仍可读。
 
@@ -143,6 +154,8 @@ Brush preview 只在 authoring session Ready、canonical primary Scene 可接收
 | `project/src/engine/Function/Render/TerrainRenderPass.h/.cpp`、`Shaders/Terrain/*` | persistent weight resources 的 graph 注册、单 Component raw staging、gutter/coarse compute 更新、9 级共享 grid、GBuffer/shadow/LOD debug draw 与 capture readiness |
 | `project/src/engine/Function/Render/SceneRenderer.h/.cpp`、`TemporalAAPass.*` | 既有 GBuffer/方向光 shadow 编排接入、Terrain debug 注册、按 view TAA 失效与粒子/Terrain readiness 合并 |
 | `project/src/editor/Services/TerrainBrushOverlayRenderer.h/.cpp`、`Panels/ViewportPanelCanvas.cpp` | primary Scene 的 64 段 world-XZ brush preview、immutable snapshot 高度贴合与 Function overlay 提交 |
+| `project/src/editor/Core/TerrainEditorSessionCore.*`、`Services/TerrainEditorService.*`、`Panels/Terrain/*` | mutable authoring 唯一所有者、persisted generation、异步 Save / Save Copy As / Optimize 状态与 Manage UI |
+| `project/src/editor/App/EditorActionCoordinator.*`、`EditorApplicationImpl.cpp`、`Services/UndoRedoService.*` | Terrain→Scene `Ctrl+S` continuation、Scene epoch 与 history checkpoint 守卫 |
 | `project/src/tests/Terrain/` | Phase 1 单元、Phase 2 readiness/fixture、故障注入和源码边界契约 |
 | `project/src/tests/Scene/terrain_component_tests.cpp` | Scene v6、层级不变量、revision 与 world-query 契约 |
 
@@ -150,12 +163,12 @@ Brush preview 只在 authoring session Ready、canonical primary Scene 可接收
 
 - Scene Terrain 尚未并入通用 mesh `ray_cast_scene`、Editor GPU pick 或完整角色控制器；当前 world adapter 是这些调用方可直接使用的 CPU 契约。
 - Component 实际流送策略/LRU、真实材质层 texture-array cook/填充，以及多 Terrain 同帧独立材质/atlas 绑定。当前首期渲染路径面向一个 8193² Scene 主 Terrain。
-- Terrain Mode 的创建/导入/导出文件 job、保存/重载和外部冲突工作流。现有 Manage 页会显示状态与这些操作的后续边界，但在对应 service 契约完成前保持禁用。
+- Terrain Mode 的创建/导入/导出 file job，以及 Reload 和外部修改冲突工作流。Save、Save Copy As 与 clean-only Optimize 已接入；Reload 仍显示后续边界并保持禁用，直到 Task 10 提供冲突与历史清理契约。
 - Terrain 专用 golden、300 FPS 最终性能验收和 Phase 2–4 的内存/流送压力验证。当前 `Terrain.scene.json` 是可见 integration fixture，尚未授权新增或 bless Terrain golden。
 
 ## 验证
 
-- `RunTests.bat Debug` 与 `RunTests.bat Release`：Terrain layout/data/composition/brush/patch/layer-stack/spatial/query/container/import/AssetDatabase，以及 Editor stroke/layer command 和 world-space brush overlay 的全部契约。
+- `RunTests.bat Debug` 与 `RunTests.bat Release`：Terrain layout/data/composition/brush/patch/layer-stack/spatial/query/container/import/AssetDatabase，以及 Editor stroke/layer command、world-space brush overlay、累积保存 generation、Save Copy As / Optimize 和 Terrain→Scene `Ctrl+S` continuation 契约。
 - 依赖或工程生成发生变化时 fresh `generate_vs2022.bat`，并构建 Editor/Sandbox Debug 与 Release。
 - `RunArchGate.bat`：Asset/Scene 公共边界无新增越界。
 - `run.bat all Debug --smoke-test-seconds=120`：Editor/Sandbox × Vulkan/DX12 readiness 与正常退出。

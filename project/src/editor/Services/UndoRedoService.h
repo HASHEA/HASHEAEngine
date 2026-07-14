@@ -69,6 +69,7 @@ namespace AshEditor
 		bool CanRedo() const;
 		bool HasOpenTransaction() const;
 		const std::string& GetOpenTransactionLabel() const;
+		uint64_t GetCurrentHistoryStateId() const;
 		bool IsDirty() const;
 
 	private:

@@ -979,14 +979,32 @@ Expected: overlay uses Function presentation types only.
 
 ### Task 9: Implement async save generations and Ctrl+S ordering
 
+**Implementation status:** Complete on 2026-07-15. The focused Task 9 tests, full Debug/Release tests, Editor/Sandbox Debug/Release builds, architecture gate, plan audit, and four-combination runtime readiness matrix listed below are confirmed. Phase-wide render and performance gates remain Task 11 work and are not implied by this status.
+
 **Files:**
+- Modify: `project/src/engine/Function/Asset/TerrainContainer.cpp`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.h`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.cpp`
 - Modify: `project/src/editor/Services/TerrainEditorService.h`
 - Modify: `project/src/editor/Services/TerrainEditorService.cpp`
+- Modify: `project/src/editor/Panels/Terrain/TerrainModeState.h`
+- Modify: `project/src/editor/Panels/Terrain/TerrainModeWidgets.h`
+- Modify: `project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp`
+- Modify: `project/src/editor/Panels/Terrain/TerrainModePanel.cpp`
+- Modify: `project/src/editor/App/EditorActionCoordinator.h`
 - Modify: `project/src/editor/App/EditorActionCoordinator.cpp`
+- Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
+- Modify: `project/src/editor/Services/UndoRedoService.h`
+- Modify: `project/src/editor/Services/UndoRedoService.cpp`
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
+- Modify: `project/src/tests/Terrain/terrain_container_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/editor.md`
+- Modify: `docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md`
 
-- [ ] **Step 1: Write save-generation RED tests**
+- [x] **Step 1: Write save-generation and cumulative-container RED tests**
 
 ```cpp
 TEST_CASE("Terrain save completion clears only the captured content generation")
@@ -1001,58 +1019,74 @@ TEST_CASE("Terrain save completion clears only the captured content generation")
 }
 ```
 
-Add a failed-save case proving dirty state and undo data remain.
+Add a failed-save case proving dirty state and undo data remain. Add container cases for disk generation g1 followed by Component A at g2 and Component B at g3, proving one later save must include the exact cumulative set `{A@g2, B@g3}`. Also reject an incomplete cumulative set and accept a full new snapshot whose Components retain mixed last-modified generations.
 
-- [ ] **Step 2: Run save tests and observe RED**
+- [x] **Step 2: Run save/container tests and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain save completion*"
+.\RunTests.bat Debug --test-case="Terrain failed save*"
+.\RunTests.bat Debug --test-case="Terrain container *component*"
 ```
 
-Expected: generation/dirty assertion fails.
+Observed: the prior session core had no persisted-generation completion contract, and the prior incremental-container validation could not represent cumulative unsaved Components from more than one publication.
 
-- [ ] **Step 3: Complete Phase 1 save generation behavior**
+- [x] **Step 3: Complete save-generation and container behavior**
 
-Capture the latest completed compose `content_generation` at save start. Successful completion marks only that content generation persisted; edits after capture remain dirty. Failure retains working data, dirty state, and reversible patches.
+Capture the latest completed compose `content_generation` at save start. Successful completion advances only that captured generation to persisted; edits after capture remain dirty. Failure retains working data, dirty state, and reversible patches.
 
 Expose the exact core bookkeeping methods used by the service and tests:
 
 ```cpp
-uint64_t BeginSaveContentGeneration();
+uint64_t BeginSaveContentGeneration() const;
 bool CompleteSaveContentGeneration(uint64_t saved_content_generation, bool succeeded);
 uint64_t GetContentGeneration() const;
+uint64_t GetPersistedContentGeneration() const;
 bool IsDirty() const;
 ```
 
-- [ ] **Step 4: Add service save intents and progress**
+For an existing container, the incremental dirty payload must be exactly the Components whose own `content_generation` is greater than the generation already persisted on disk. A payload carries its Component's generation, which may be older than the immutable snapshot's current generation. A new file uses an empty dirty list and writes the complete snapshot, including valid mixed-generation Components. This cumulative contract prevents a later save from losing an earlier unpublished-to-disk Component change.
 
-`Save`, `SaveAs`, and `Optimize` start non-blocking Phase 1 operations. `Update` polls completion and publishes progress/error state. Exit/reload may expose Wait/Cancel/Discard choices, but ordinary `Ctrl+S` never blocks the UI thread.
+- [x] **Step 4: Add service save intents, immutable jobs, progress, and Manage UI**
 
-- [ ] **Step 5: Order Ctrl+S Terrain assets before Scene**
+`Save`, `SaveAs`, and `Optimize` start non-blocking Phase 1 operations. `Update` first finishes a requested composition/publication, then dispatches a worker that captures only the immutable snapshot, cumulative dirty payloads, and resolved path required by that operation. The state exposed to UI is `AwaitingPublication`, `Running`, `Succeeded`, or `Failed`; missing workers and dispatch failures fail quickly instead of running disk I/O inline on the Editor thread. Production file paths must remain below the AssetDatabase root and use `.AshTerrain`.
 
-In `EditorActionCoordinator`, gather dirty Terrain assets referenced by the active Scene, request their saves, and defer Scene save until all captured Terrain saves succeed. A Terrain failure leaves the Scene dirty and displays the exact asset error.
+`Save` advances the captured persisted generation only after success. `Save` and `Optimize` are source-bound: they use the current working-set `source_path` and reject any explicit destination. Only `SaveAs` accepts a destination, and it is intentionally **Save Copy As**: it stages and validates a complete same-directory temporary container, then durably publishes it with non-replacing atomic create semantics. A destination that appears after submission is preserved and every handled failure removes the temporary artifact. Save Copy As does not rebind the current asset and does not clear dirty state. Every file operation requires a valid AssetDatabase root; an unrooted absolute path is rejected. `Optimize` is available only for a clean, saved source. Manage submits these three intents and displays operation/error state; Create/Import/Export remain future file jobs, while Reload remains disabled until Task 10 defines conflict handling.
 
-- [ ] **Step 6: Add source-contract assertion and run GREEN**
+- [x] **Step 5: Order Ctrl+S Terrain before Scene with identity guards**
 
-Assert `SaveDirtyReferencedTerrains` appears before the existing Scene save call. Run:
+In the current single mutable authoring-session boundary, `EditorActionCoordinator` checks whether the selected dirty Terrain is referenced by the active Scene. Catalog misses use a root-contained normalized comparison against the working-set source path; an unresolved path whose identity cannot be proven fails closed instead of skipping Terrain persistence. It starts Save, or attaches to the same asset's existing Save, captures the exact operation serial, and defers Scene save until that operation succeeds. `EditorApplicationImpl` updates `TerrainEditorService` before `EditorActionCoordinator`, so completion is observed without blocking.
+
+The continuation captures the Scene path/name, Scene content epoch, and undo/redo history state. A Terrain failure stops Scene write and reports the exact asset path/error; an operation-serial mismatch or Scene epoch change cancels the deferred write. After Terrain succeeds, Scene is written, but `MarkSaved()` runs only if the history state is still the captured checkpoint. Commands created while Terrain was saving therefore remain dirty.
+
+- [x] **Step 6: Add behavior/source contracts and run focused GREEN**
+
+Assert `SaveDirtyReferencedTerrains` appears before the Scene save call, the application update order is Terrain service then action coordinator, and the Scene continuation contains operation-serial, epoch, history-checkpoint, success and failure guards. Run:
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain save completion*"
-.\RunTests.bat Debug --test-case="Terrain Ctrl+S*"
+.\RunTests.bat Debug --test-case="Terrain failed save*"
+.\RunTests.bat Debug --test-case="Terrain container *component*"
+.\RunTests.bat Debug --test-case="Terrain editor *save*"
+.\RunTests.bat Debug --test-case="Terrain editor Save and Optimize cannot target*"
+.\RunTests.bat Debug --no-build --test-case="Terrain Ctrl+S*"
 .\build_editor.bat Debug
+.\RunTests.bat Debug
+.\RunTests.bat Release
+.\build_editor.bat Release
 ```
 
-Expected: content-generation tests and ordering contract pass.
+Confirmed post-fix evidence at this update: the focused Terrain editor suite passes 44/44 cases with 640 assertions and `Terrain Ctrl+S*` passes 2/2 cases with 35 assertions. This includes executable coverage for Save Copy As destination races, worker shutdown waiting, active-file-operation × history-quarantine session replacement, and order-independent root-contained `Current / Different / Unsafe` Scene-reference set classification; the small coordinator source contract checks collection-before-classification and result mapping. Full Debug and Release suites each pass 335/335 cases with 22350 assertions. Editor and Sandbox Debug/Release builds all exit 0, with Editor Debug/Release rebuilt after the final service contract change. ArchGate passes with the unchanged 35 grandfathered warnings and AIDevDoctor ValidatePlan exits 0. The final `run.bat all Debug --smoke-test-seconds=120` evidence is captured at `Intermediate/test-reports/terrain-task9/readiness-20260715-014646-028`: all four target/backend cells report readiness success, both Sandbox cells report `clean_exit=yes`, the combined console has zero rejection hits, all four runtime configuration SHA-256 values are restored exactly, and no effective GPU root remains. RenderGate and Standard PerfGate remain in the Task 11 exit matrix.
 
-- [ ] **Step 7: Commit save ordering**
+- [x] **Step 7: Commit save ordering (main-thread handoff)**
 
 ```powershell
-git add project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/editor/App/EditorActionCoordinator.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
+git add project/src/engine/Function/Asset/TerrainContainer.cpp project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Core/TerrainEditorSessionCore.cpp project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/editor/Panels/Terrain/TerrainModeState.h project/src/editor/Panels/Terrain/TerrainModeWidgets.h project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp project/src/editor/Panels/Terrain/TerrainModePanel.cpp project/src/editor/App/EditorActionCoordinator.h project/src/editor/App/EditorActionCoordinator.cpp project/src/editor/App/EditorApplicationImpl.cpp project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Terrain/terrain_container_tests.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
 git diff --cached --check
 git commit -m "feat(editor): save terrain assets transactionally"
 ```
 
-Expected: scene and asset dirty states remain distinct.
+Result: the Task 9 boundary is selectively staged and committed without the protected runtime/user files; Scene and asset dirty states remain distinct.
 
 ### Task 10: Implement reload and external-modification conflict flow
 

@@ -282,18 +282,20 @@ namespace
 	auto AdvanceGeneration(
 		const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& previous,
 		uint64_t generation,
-		float delta) -> AdvancedGeneration
+		float delta,
+		size_t component_index = 0u) -> AdvancedGeneration
 	{
+		REQUIRE(component_index < previous->components.size());
 		auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>(*previous);
 		snapshot->content_generation = generation;
 		auto component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
-			*snapshot->components[0u]);
+			*snapshot->components[component_index]);
 		component->content_generation = generation;
 		component->heights[0] += delta;
 		std::string error{};
 		REQUIRE(AshEngine::build_terrain_component_spatial_data(
 			*component, component->sample_width, component->sample_height, &error));
-		snapshot->components[0u] = component;
+		snapshot->components[component_index] = component;
 		return {
 			snapshot,
 			{ component->coord, generation, component }
@@ -888,6 +890,87 @@ TEST_CASE("Terrain container incremental save appends only one dirty component g
 	CHECK(loaded->components[0]->heights == generation_two.snapshot->components[0]->heights);
 	CHECK(loaded->components[1]->content_generation == 1u);
 	CHECK(loaded->components[1]->heights == generation_one->components[1]->heights);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container incremental save commits every component changed since disk generation")
+{
+	const std::filesystem::path path = TestDirectory() / "incremental-cumulative-dirty.AshTerrain";
+	std::filesystem::remove(path);
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+
+	const AdvancedGeneration generation_two =
+		AdvanceGeneration(generation_one, 2u, 7.0f, 0u);
+	const AdvancedGeneration generation_three =
+		AdvanceGeneration(generation_two.snapshot, 3u, 11.0f, 1u);
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path,
+		*generation_three.snapshot,
+		{ generation_two.dirty, generation_three.dirty },
+		nullptr,
+		&error) == AshEngine::TerrainContainerResult::Success);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	CHECK(loaded->content_generation == 3u);
+	CHECK(loaded->components[0u]->content_generation == 2u);
+	CHECK(loaded->components[0u]->heights ==
+		generation_two.snapshot->components[0u]->heights);
+	CHECK(loaded->components[1u]->content_generation == 3u);
+	CHECK(loaded->components[1u]->heights ==
+		generation_three.snapshot->components[1u]->heights);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container rejects an incomplete cumulative dirty component set atomically")
+{
+	const std::filesystem::path path = TestDirectory() / "incremental-cumulative-missing.AshTerrain";
+	std::filesystem::remove(path);
+	const auto generation_one = MakeIncrementalSnapshot();
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_one, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+	const std::vector<uint8_t> before = ReadAllBytes(path);
+
+	const AdvancedGeneration generation_two =
+		AdvanceGeneration(generation_one, 2u, 7.0f, 0u);
+	const AdvancedGeneration generation_three =
+		AdvanceGeneration(generation_two.snapshot, 3u, 11.0f, 1u);
+	CHECK(AshEngine::save_terrain_container_incremental(
+		path,
+		*generation_three.snapshot,
+		{ generation_three.dirty },
+		nullptr,
+		&error) == AshEngine::TerrainContainerResult::InvalidData);
+	CHECK(ReadAllBytes(path) == before);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container full save accepts immutable snapshots with mixed component generations")
+{
+	const std::filesystem::path path = TestDirectory() / "full-mixed-component-generations.AshTerrain";
+	std::filesystem::remove(path);
+	const auto generation_one = MakeIncrementalSnapshot();
+	const AdvancedGeneration generation_two =
+		AdvanceGeneration(generation_one, 2u, 7.0f, 0u);
+	const AdvancedGeneration generation_three =
+		AdvanceGeneration(generation_two.snapshot, 3u, 11.0f, 1u);
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *generation_three.snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	CHECK(loaded->components[0u]->content_generation == 2u);
+	CHECK(loaded->components[1u]->content_generation == 3u);
 	std::filesystem::remove(path);
 }
 

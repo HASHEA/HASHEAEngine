@@ -2,6 +2,7 @@
 
 #include "Function/Gui/UIContext.h"
 #include "Panels/Terrain/TerrainModeState.h"
+#include "Services/TerrainEditorService.h"
 
 #include <algorithm>
 #include <array>
@@ -78,6 +79,63 @@ namespace AshEditor
 			refUi.text_unformatted(pAvailability);
 		}
 
+		bool IsFileOperationInProgress(const TerrainModeView& refView)
+		{
+			if (!refView.p_file_operation_state)
+			{
+				return false;
+			}
+			return refView.p_file_operation_state->status ==
+					TerrainFileOperationStatus::AwaitingPublication ||
+				refView.p_file_operation_state->status == TerrainFileOperationStatus::Running;
+		}
+
+		const char* QueryFileOperationKindLabel(const TerrainFileOperationKind eKind)
+		{
+			switch (eKind)
+			{
+			case TerrainFileOperationKind::Save:
+				return "Save";
+			case TerrainFileOperationKind::SaveAs:
+				return "Save Copy As";
+			case TerrainFileOperationKind::Optimize:
+				return "Optimize";
+			default:
+				return "File operation";
+			}
+		}
+
+		void DrawFileOperationStatus(AshEngine::UIContext& refUi, const TerrainModeView& refView)
+		{
+			if (!refView.p_file_operation_state)
+			{
+				return;
+			}
+
+			const TerrainFileOperationState& refState = *refView.p_file_operation_state;
+			const char* pKind = QueryFileOperationKindLabel(refState.kind);
+			switch (refState.status)
+			{
+			case TerrainFileOperationStatus::AwaitingPublication:
+				refUi.text("%s: waiting for Terrain composition...", pKind);
+				break;
+			case TerrainFileOperationStatus::Running:
+				refUi.text("%s: writing Terrain data...", pKind);
+				break;
+			case TerrainFileOperationStatus::Succeeded:
+				refUi.text("%s completed.", pKind);
+				break;
+			case TerrainFileOperationStatus::Failed:
+				refUi.text_wrapped(
+					"%s failed: %s",
+					pKind,
+					refState.error.empty() ? "Unknown error." : refState.error.c_str());
+				break;
+			default:
+				break;
+			}
+		}
+
 		const char* QueryStatusLabel(const AshEngine::TerrainQueryStatus eStatus)
 		{
 			switch (eStatus)
@@ -135,9 +193,11 @@ namespace AshEditor
 		void DrawManageTab(
 			AshEngine::UIContext& refUi,
 			const TerrainModeView& refView,
-			TerrainModeState& refState)
+			TerrainModeState& refState,
+			TerrainModeDrawResult& refResult)
 		{
 			DrawTerrainStatus(refUi, refView);
+			DrawFileOperationStatus(refUi, refView);
 			refUi.separator();
 			refUi.text_unformatted("File operations");
 
@@ -169,10 +229,55 @@ namespace AshEditor
 			refUi.combo("Export source", refState.export_source_index, exportSources);
 			refUi.end_disabled();
 			DrawUnavailableFileOperation(refUi, "Export Heightmap", "Available with the export job slice.");
-			DrawUnavailableFileOperation(refUi, "Save", "Available with generation-aware save.");
-			DrawUnavailableFileOperation(refUi, "Save As", "Available with generation-aware save.");
+
+			const bool fileOperationInProgress = IsFileOperationInProgress(refView);
+			const bool hasWorkingSet = refView.p_working_set != nullptr;
+			const bool strokeActive = refView.preview.stroke_active;
+			const bool canSave =
+				hasWorkingSet && refView.dirty && !fileOperationInProgress && !strokeActive;
+			refUi.begin_disabled(!canSave);
+			if (refUi.button("Save"))
+			{
+				TerrainEditorIntent intent{};
+				intent.kind = TerrainEditorIntent::Kind::Save;
+				refResult.intents.push_back(std::move(intent));
+			}
+			refUi.end_disabled();
+
+			refUi.begin_disabled(fileOperationInProgress);
+			refUi.input_text("Save copy asset path", refState.save_as_asset_path);
+			refUi.end_disabled();
+			const bool canSaveAs =
+				hasWorkingSet && !refState.save_as_asset_path.empty() &&
+				!fileOperationInProgress && !strokeActive;
+			refUi.begin_disabled(!canSaveAs);
+			if (refUi.button("Save Copy As"))
+			{
+				TerrainEditorIntent intent{};
+				intent.kind = TerrainEditorIntent::Kind::SaveAs;
+				intent.asset_path = refState.save_as_asset_path;
+				refResult.intents.push_back(std::move(intent));
+			}
+			refUi.end_disabled();
+			refUi.text_wrapped("Save Copy As writes a new file without rebinding or clearing the current Terrain asset.");
+
 			DrawUnavailableFileOperation(refUi, "Reload", "Available with conflict resolution.");
-			DrawUnavailableFileOperation(refUi, "Optimize", "Available with generation-aware save.");
+
+			const bool canOptimize =
+				hasWorkingSet && !refView.dirty && !refView.pending_composition &&
+				!refView.blocking_operation && !fileOperationInProgress && !strokeActive;
+			refUi.begin_disabled(!canOptimize);
+			if (refUi.button("Optimize"))
+			{
+				TerrainEditorIntent intent{};
+				intent.kind = TerrainEditorIntent::Kind::Optimize;
+				refResult.intents.push_back(std::move(intent));
+			}
+			refUi.end_disabled();
+			if (refView.dirty)
+			{
+				refUi.text_unformatted("Save dirty Terrain changes before optimizing the container.");
+			}
 		}
 
 		bool DrawCommonBrushControls(
@@ -520,7 +625,7 @@ namespace AshEditor
 				config.mode = TerrainEditorMode::Manage;
 				configChanged = true;
 			}
-			DrawManageTab(refUi, refView, refState);
+			DrawManageTab(refUi, refView, refState, result);
 			refUi.end_tab_item();
 		}
 		if (refUi.begin_tab_item("Sculpt"))

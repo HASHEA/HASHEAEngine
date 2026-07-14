@@ -2,8 +2,10 @@
 #include "Core/EditorCommand.h"
 #include "Core/EditorContext.h"
 #include "Core/IEditorCommandExecutor.h"
+#include "Base/hthreading.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Asset/TerrainComposition.h"
+#include "Function/Asset/TerrainContainer.h"
 #include "Services/TerrainEditorService.h"
 #include "Terrain/TerrainTestUtils.h"
 #ifdef TYPE_TO_STRING
@@ -11,13 +13,17 @@
 #endif
 #include "doctest.h"
 
+#include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -290,6 +296,13 @@ namespace
 			return false;
 		}
 		begin.brush = refService.GetAuthoringConfig().brush;
+		if (begin.asset_id == 83u)
+		{
+			if (const AshEngine::TerrainWorkingSet* workingSet = refService.GetWorkingSet())
+			{
+				begin.asset_id = workingSet->asset_id;
+			}
+		}
 		return refService.SubmitIntent(begin);
 	}
 
@@ -328,6 +341,114 @@ namespace
 		intent.kind = AshEditor::TerrainEditorIntent::Kind::SelectLayer;
 		intent.layer_id = layerId;
 		return intent;
+	}
+
+	struct TerrainEditorThreadingScope
+	{
+		~TerrainEditorThreadingScope()
+		{
+			AshEngine::shutdown_threading();
+		}
+	};
+
+	struct TerrainEditorWorkerBlocker
+	{
+		std::promise<void> release_promise{};
+		std::shared_future<void> release_future{};
+		AshEngine::ThreadCommandFuture blocker_future{};
+		bool released = false;
+
+		TerrainEditorWorkerBlocker()
+		{
+			release_future = release_promise.get_future().share();
+			std::promise<void> startedPromise{};
+			auto startedFuture = startedPromise.get_future();
+			blocker_future = AshEngine::dispatch_background_task(
+				"TerrainEditorServiceTests::WorkerBlocker",
+				[started = std::move(startedPromise), release = release_future]() mutable
+				{
+					started.set_value();
+					release.wait();
+				});
+			startedFuture.wait();
+		}
+
+		~TerrainEditorWorkerBlocker()
+		{
+			Release();
+			if (blocker_future.valid())
+			{
+				blocker_future.wait();
+			}
+		}
+
+		void Release()
+		{
+			if (!released)
+			{
+				released = true;
+				release_promise.set_value();
+			}
+		}
+	};
+
+	std::filesystem::path TerrainEditorFilePath(const char* name)
+	{
+		const std::filesystem::path directory =
+			std::filesystem::temp_directory_path() / "AshEngineTerrainEditorSaveTests";
+		std::filesystem::create_directories(directory);
+		return directory / name;
+	}
+
+	std::filesystem::path TerrainEditorAssetRoot(const char* name)
+	{
+		const std::filesystem::path root = TerrainEditorFilePath(name);
+		std::filesystem::remove_all(root);
+		std::filesystem::create_directories(root);
+		return root;
+	}
+
+	void SaveTerrainEditorSnapshot(
+		const std::filesystem::path& path,
+		const AshEngine::TerrainAssetSnapshot& snapshot)
+	{
+		std::filesystem::remove(path);
+		std::string error{};
+		REQUIRE(AshEngine::save_terrain_container_incremental(
+			path, snapshot, {}, nullptr, &error) == AshEngine::TerrainContainerResult::Success);
+		REQUIRE_MESSAGE(error.empty(), error);
+	}
+
+	void BindTerrainEditorSnapshotToAssetDatabase(
+		AshEngine::AssetDatabase& assets,
+		const std::filesystem::path& path,
+		AshEngine::TerrainAssetSnapshot& snapshot)
+	{
+		const std::filesystem::path relative = path.lexically_relative(assets.get_root_path());
+		const AshEngine::AssetInfo* info = assets.find_asset_by_path(relative);
+		REQUIRE(info != nullptr);
+		REQUIRE(info->type == AshEngine::AssetType::Terrain);
+		snapshot.asset_id = info->id;
+	}
+
+	bool WaitForTerrainFileOperation(
+		AshEditor::TerrainEditorService& service,
+		const std::chrono::milliseconds timeout = std::chrono::seconds(2))
+	{
+		const auto deadline = std::chrono::steady_clock::now() + timeout;
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			service.Update();
+			const AshEditor::TerrainFileOperationStatus status =
+				service.GetFileOperationState().status;
+			if (status == AshEditor::TerrainFileOperationStatus::Succeeded ||
+				status == AshEditor::TerrainFileOperationStatus::Failed)
+			{
+				return status == AshEditor::TerrainFileOperationStatus::Succeeded;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		return false;
 	}
 }
 
@@ -580,6 +701,647 @@ TEST_CASE("Terrain editor publishes generations using only the latest complete d
 	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration + 2u);
 	CHECK(service.GetWorkingSet()->dirty_components.empty());
 	CHECK_FALSE(service.HasPendingComposition());
+}
+
+TEST_CASE("Terrain editor save persists cumulative published component generations")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("cumulative-save-root");
+	const std::filesystem::path path = root / "cumulative-save.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(1.0f, 1.0f)));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	service.Update();
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(7.0f, 7.0f)));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	service.Update();
+	const std::shared_ptr<const AshEngine::TerrainAssetSnapshot> expected =
+		service.GetPublishedSnapshot();
+	REQUIRE(expected);
+	CHECK(expected->content_generation == initial.content_generation + 2u);
+	CHECK(std::any_of(
+		expected->components.begin(), expected->components.end(),
+		[&initial](const auto& component)
+		{
+			return component->content_generation == initial.content_generation + 1u;
+		}));
+
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Save)));
+	const uint64_t operationSerial = service.GetFileOperationState().operation_serial;
+	REQUIRE(operationSerial != 0u);
+	REQUIRE(WaitForTerrainFileOperation(service));
+	CHECK(service.GetFileOperationState().operation_serial == operationSerial);
+	CHECK_FALSE(service.HasDirtyAssets());
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	std::string error{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->components.size() == expected->components.size());
+	for (size_t index = 0u; index < loaded->components.size(); ++index)
+	{
+		CHECK(loaded->components[index]->content_generation ==
+			expected->components[index]->content_generation);
+		CHECK(loaded->components[index]->heights == expected->components[index]->heights);
+	}
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor save completion leaves edits made after capture dirty")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("save-generation-capture-root");
+	const std::filesystem::path path = root / "save-generation-capture.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Captured Save";
+	REQUIRE(service.SubmitIntent(rename));
+	service.Update();
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Save)));
+	const uint64_t capturedGeneration = service.GetFileOperationState().content_generation;
+
+	rename.layer_action.name = "Later Edit";
+	REQUIRE(service.SubmitIntent(rename));
+	REQUIRE(WaitForTerrainFileOperation(service));
+	service.Update();
+	CHECK(service.HasDirtyAssets());
+	REQUIRE(service.GetWorkingSet());
+	CHECK(service.GetWorkingSet()->content_generation > capturedGeneration);
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Later Edit");
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	std::string error{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->edit_layers);
+	CHECK(loaded->edit_layers->front().name == "Captured Save");
+	CHECK(commands.record_count == 2u);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor save waits for the requested composition before dispatch")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("save-awaits-publication-root");
+	const std::filesystem::path path = root / "save-awaits-publication.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Awaited Publication";
+	REQUIRE(service.SubmitIntent(rename));
+	REQUIRE(service.HasPendingComposition());
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Save)));
+	CHECK(service.GetFileOperationState().status ==
+		AshEditor::TerrainFileOperationStatus::AwaitingPublication);
+	CHECK(service.HasBlockingOperation());
+
+	rename.layer_action.name = "Must Be Rejected";
+	CHECK_FALSE(service.SubmitIntent(rename));
+	CHECK(service.GetLastError().find("paused") != std::string::npos);
+	REQUIRE(WaitForTerrainFileOperation(service));
+	CHECK_FALSE(service.HasPendingComposition());
+	CHECK_FALSE(service.HasDirtyAssets());
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	std::string error{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->edit_layers);
+	CHECK(loaded->edit_layers->front().name == "Awaited Publication");
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor async save fails quickly without a worker and preserves the file")
+{
+	AshEngine::shutdown_threading();
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("save-no-worker-root");
+	const std::filesystem::path path = root / "save-no-worker.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Must Not Reach Disk";
+	REQUIRE(service.SubmitIntent(rename));
+	service.Update();
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Save)));
+	CHECK_FALSE(WaitForTerrainFileOperation(service, std::chrono::milliseconds(250)));
+	CHECK(service.GetFileOperationState().status ==
+		AshEditor::TerrainFileOperationStatus::Failed);
+	CHECK(service.GetFileOperationState().error.find("worker") != std::string::npos);
+	CHECK(service.HasDirtyAssets());
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	std::string error{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->edit_layers);
+	CHECK(loaded->edit_layers->front().name == "Sculpt");
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor failed save preserves dirty state and command history")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("failed-save-root");
+	const std::filesystem::path parent = root / "terrain";
+	std::filesystem::create_directories(parent);
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = parent / "failed-save.AshTerrain";
+	SaveTerrainEditorSnapshot(initial.source_path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, initial.source_path, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+	std::filesystem::remove_all(parent);
+	{
+		std::ofstream blocker(parent, std::ios::binary);
+		REQUIRE(blocker.is_open());
+		blocker.put('x');
+	}
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Unsaved After Failure";
+	REQUIRE(service.SubmitIntent(rename));
+	service.Update();
+
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Save)));
+	CHECK_FALSE(WaitForTerrainFileOperation(service));
+	CHECK(service.GetFileOperationState().status ==
+		AshEditor::TerrainFileOperationStatus::Failed);
+	CHECK(service.HasDirtyAssets());
+	CHECK(commands.record_count == 1u);
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Unsaved After Failure");
+	CHECK_FALSE(service.GetLastError().empty());
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor SaveAs writes a copy without rebinding or clearing dirty state")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("save-as-copy-root");
+	const std::filesystem::path sourcePath = root / "save-as-source.AshTerrain";
+	const std::filesystem::path copyPath = root / "save-as-copy.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = sourcePath;
+	SaveTerrainEditorSnapshot(sourcePath, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, sourcePath, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Saved Copy";
+	REQUIRE(service.SubmitIntent(rename));
+	service.Update();
+
+	AshEditor::TerrainEditorIntent saveAs = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::SaveAs);
+	saveAs.asset_path = copyPath;
+	const bool submitted = service.SubmitIntent(saveAs);
+	REQUIRE_MESSAGE(submitted, service.GetLastError());
+	REQUIRE(WaitForTerrainFileOperation(service));
+	CHECK(service.HasDirtyAssets());
+	CHECK(service.GetWorkingSet()->source_path == sourcePath);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> copy{};
+	std::string error{};
+	REQUIRE(AshEngine::load_terrain_container(sourcePath, source, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(AshEngine::load_terrain_container(copyPath, copy, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(source);
+	REQUIRE(source->edit_layers);
+	REQUIRE(copy);
+	REQUIRE(copy->edit_layers);
+	CHECK(source->edit_layers->front().name == "Sculpt");
+	CHECK(copy->edit_layers->front().name == "Saved Copy");
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor SaveAs atomically refuses a destination that appears after submit")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("save-as-race-root");
+	const std::filesystem::path sourcePath = root / "source.AshTerrain";
+	const std::filesystem::path copyPath = root / "appeared.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = sourcePath;
+	SaveTerrainEditorSnapshot(sourcePath, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, sourcePath, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	TerrainEditorWorkerBlocker blocker{};
+	AshEditor::TerrainEditorIntent saveAs = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::SaveAs);
+	saveAs.asset_path = copyPath;
+	REQUIRE(service.SubmitIntent(saveAs));
+	const std::string appearedBytes = "external writer owns this destination";
+	{
+		std::ofstream appeared(copyPath, std::ios::binary | std::ios::trunc);
+		REQUIRE(appeared.is_open());
+		appeared.write(appearedBytes.data(), static_cast<std::streamsize>(appearedBytes.size()));
+		REQUIRE(appeared.good());
+	}
+	blocker.Release();
+
+	CHECK_FALSE(WaitForTerrainFileOperation(service));
+	CHECK(service.GetFileOperationState().status ==
+		AshEditor::TerrainFileOperationStatus::Failed);
+	INFO(service.GetFileOperationState().error);
+	CHECK(service.GetFileOperationState().error.find("appeared") != std::string::npos);
+	CHECK(ReadTerrainEditorText(copyPath) == appearedBytes);
+	for (const auto& entry : std::filesystem::directory_iterator(root))
+	{
+		CHECK(entry.path().filename().string().find(".save-copy.") == std::string::npos);
+	}
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor shutdown waits for an active file worker without losing its result")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("shutdown-waits-for-file-worker-root");
+	const std::filesystem::path sourcePath = root / "source.AshTerrain";
+	const std::filesystem::path copyPath = root / "copy.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = sourcePath;
+	SaveTerrainEditorSnapshot(sourcePath, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, sourcePath, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	TerrainEditorWorkerBlocker blocker{};
+	AshEditor::TerrainEditorIntent saveAs = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::SaveAs);
+	saveAs.asset_path = copyPath;
+	REQUIRE(service.SubmitIntent(saveAs));
+	REQUIRE(service.GetFileOperationState().status ==
+		AshEditor::TerrainFileOperationStatus::Running);
+
+	std::promise<void> shutdownStartedPromise{};
+	auto shutdownStarted = shutdownStartedPromise.get_future();
+	auto shutdown = std::async(
+		std::launch::async,
+		[&service, started = std::move(shutdownStartedPromise)]() mutable
+		{
+			started.set_value();
+			service.Shutdown();
+		});
+	REQUIRE(shutdownStarted.wait_for(std::chrono::seconds(1)) == std::future_status::ready);
+	CHECK(shutdown.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout);
+	CHECK_FALSE(std::filesystem::exists(copyPath));
+
+	blocker.Release();
+	REQUIRE(shutdown.wait_for(std::chrono::seconds(2)) == std::future_status::ready);
+	shutdown.get();
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> copy{};
+	std::string error{};
+	REQUIRE(AshEngine::load_terrain_container(copyPath, copy, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(copy != nullptr);
+	CHECK(copy->content_generation == initial.content_generation);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor SaveAs rejects paths outside the configured asset root")
+{
+	const std::filesystem::path root = TerrainEditorFilePath("save-as-root");
+	std::filesystem::remove_all(root);
+	std::filesystem::create_directories(root / "terrain");
+	const std::filesystem::path sourcePath = root / "terrain" / "source.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = sourcePath;
+	SaveTerrainEditorSnapshot(sourcePath, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, sourcePath, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	AshEditor::TerrainEditorIntent saveAs = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::SaveAs);
+	saveAs.asset_path = "../escaped.AshTerrain";
+	CHECK_FALSE(service.SubmitIntent(saveAs));
+	CHECK(service.GetLastError().find("inside") != std::string::npos);
+	CHECK_FALSE(std::filesystem::exists(root.parent_path() / "escaped.AshTerrain"));
+
+	saveAs.asset_path = "terrain/not-terrain.bin";
+	CHECK_FALSE(service.SubmitIntent(saveAs));
+	CHECK(service.GetLastError().find(".AshTerrain") != std::string::npos);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor file operations require a configured asset root")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = TerrainEditorFilePath("unrooted-source.AshTerrain");
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	AshEditor::TerrainEditorIntent saveAs = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::SaveAs);
+	saveAs.asset_path = TerrainEditorFilePath("unrooted-copy.AshTerrain");
+	CHECK_FALSE(service.SubmitIntent(saveAs));
+	CHECK(service.GetLastError().find("asset root") != std::string::npos);
+	CHECK_FALSE(std::filesystem::exists(saveAs.asset_path));
+}
+
+TEST_CASE("Terrain editor classifies unresolved Scene references fail closed")
+{
+	const std::filesystem::path root = TerrainEditorAssetRoot("scene-reference-classification-root");
+	const std::filesystem::path sourcePath = root / "active.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = sourcePath;
+	SaveTerrainEditorSnapshot(sourcePath, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, sourcePath, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	CHECK(service.ClassifyCurrentAssetReferences({}) ==
+		AshEditor::TerrainAssetReferenceMatch::Different);
+	CHECK(service.ClassifyCurrentAssetReferences({ sourcePath }) ==
+		AshEditor::TerrainAssetReferenceMatch::Current);
+	CHECK(service.ClassifyCurrentAssetReferences({ "active.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Current);
+	CHECK(service.ClassifyCurrentAssetReferences({ "folder/../active.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Current);
+	CHECK(service.ClassifyCurrentAssetReferences({ "other.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Different);
+	CHECK(service.ClassifyCurrentAssetReferences({ "../outside.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Unsafe);
+	CHECK(service.ClassifyCurrentAssetReferences(
+		{ "../outside.AshTerrain", "active.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Current);
+	CHECK(service.ClassifyCurrentAssetReferences(
+		{ "active.AshTerrain", "../outside.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Current);
+	CHECK(service.ClassifyCurrentAssetReferences(
+		{ "../outside.AshTerrain", "other.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Unsafe);
+
+	AshEngine::TerrainAssetSnapshot outside = MakeEditorStrokeSnapshot();
+	outside.source_path = root.parent_path() / "outside-source.AshTerrain";
+	AshEditor::TerrainEditorService outsideService{};
+	REQUIRE(outsideService.Initialize(assets, commands));
+	REQUIRE(outsideService.OpenSnapshotForAuthoring(outside));
+	CHECK(outsideService.ClassifyCurrentAssetReferences({ "active.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Unsafe);
+
+	AshEditor::TerrainEditorService unrooted{};
+	REQUIRE(unrooted.Initialize(commands));
+	REQUIRE(unrooted.OpenSnapshotForAuthoring(initial));
+	CHECK(unrooted.ClassifyCurrentAssetReferences({ "active.AshTerrain" }) ==
+		AshEditor::TerrainAssetReferenceMatch::Unsafe);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor Save and Optimize cannot target another Terrain asset")
+{
+	const std::filesystem::path root = TerrainEditorFilePath("bound-source-root");
+	std::filesystem::remove_all(root);
+	std::filesystem::create_directories(root / "terrain");
+	const std::filesystem::path sourcePath = root / "terrain" / "source.AshTerrain";
+	const std::filesystem::path otherPath = root / "terrain" / "other.AshTerrain";
+	AshEngine::TerrainAssetSnapshot source = MakeEditorStrokeSnapshot();
+	source.source_path = sourcePath;
+	AshEngine::TerrainAssetSnapshot other = MakeEditorStrokeSnapshot();
+	other.asset_id = 84u;
+	other.source_path = otherPath;
+	SaveTerrainEditorSnapshot(sourcePath, source);
+	SaveTerrainEditorSnapshot(otherPath, other);
+	const std::string otherBefore = ReadTerrainEditorText(otherPath);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, sourcePath, source);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(source));
+
+	AshEditor::TerrainEditorIntent optimize = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Optimize);
+	optimize.asset_path = "terrain/other.AshTerrain";
+	CHECK_FALSE(service.SubmitIntent(optimize));
+	CHECK(service.GetLastError().find("current Terrain") != std::string::npos);
+	CHECK(ReadTerrainEditorText(otherPath) == otherBefore);
+
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Wrong Target";
+	REQUIRE(service.SubmitIntent(rename));
+	service.Update();
+	AshEditor::TerrainEditorIntent save = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Save);
+	save.asset_path = "terrain/other.AshTerrain";
+	CHECK_FALSE(service.SubmitIntent(save));
+	CHECK(service.GetLastError().find("current Terrain") != std::string::npos);
+	CHECK(service.HasDirtyAssets());
+	CHECK(ReadTerrainEditorText(otherPath) == otherBefore);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor Optimize rejects dirty state and runs only on a clean source")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("optimize-clean-source-root");
+	const std::filesystem::path path = root / "optimize-clean-source.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+	AshEditor::TerrainEditorIntent optimize = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Optimize);
+	REQUIRE(service.SubmitIntent(optimize));
+	REQUIRE(WaitForTerrainFileOperation(service));
+
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Dirty";
+	REQUIRE(service.SubmitIntent(rename));
+	service.Update();
+	CHECK_FALSE(service.SubmitIntent(optimize));
+	CHECK(service.GetLastError().find("dirty") != std::string::npos);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain editor file operation blocks asset replacement after history quarantine")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("file-operation-quarantine-root");
+	const std::filesystem::path path = root / "active.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+	FailedRollbackTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(initial));
+
+	TerrainEditorWorkerBlocker blocker{};
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::Optimize)));
+	REQUIRE(service.HasFileOperationInProgress());
+
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename, service.GetSelectedLayerId());
+	rename.layer_action.name = "Quarantined while optimize runs";
+	CHECK_FALSE(service.SubmitIntent(rename));
+	REQUIRE(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
+	AshEngine::TerrainAssetSnapshot replacement = MakeEditorStrokeSnapshot();
+	replacement.asset_id = initial.asset_id + 2u;
+	replacement.source_path = root / "replacement.AshTerrain";
+	CHECK_FALSE(service.OpenSnapshotForAuthoring(replacement));
+	CHECK(service.GetSelectedAssetId() == initial.asset_id);
+
+	AshEditor::TerrainEditorIntent select = MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::SelectAsset);
+	select.asset_id = initial.asset_id + 1u;
+	CHECK_FALSE(service.SubmitIntent(select));
+	CHECK(service.GetLastError().find("file operation") != std::string::npos);
+	CHECK(service.GetSelectedAssetId() == initial.asset_id);
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	CHECK(service.GetWorkingSet()->asset_id == initial.asset_id);
+
+	blocker.Release();
+	REQUIRE(WaitForTerrainFileOperation(service));
+	CHECK(service.GetSelectedAssetId() == initial.asset_id);
+	select.asset_id = 0u;
+	REQUIRE(service.SubmitIntent(select));
+	CHECK(service.GetWorkingSet() == nullptr);
+	std::filesystem::remove_all(root);
 }
 
 TEST_CASE("Terrain editor undo invalidates pending composition and publishes the undo generation")

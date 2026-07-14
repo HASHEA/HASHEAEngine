@@ -7,6 +7,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <string_view>
 
 namespace AshEditor
@@ -55,6 +57,7 @@ namespace AshEditor
 			IAssetBrowserActionTarget* pAssetBrowserActionTarget,
 			ISceneHierarchyActionTarget* pSceneHierarchyActionTarget);
 		void RegisterActions();
+		void Update();
 
 		bool CanExecuteAction(std::string_view svActionId) const override;
 		void ExecuteAction(std::string_view svActionId) override;
@@ -62,6 +65,22 @@ namespace AshEditor
 		bool OpenSceneFromPath(const std::filesystem::path& pathScene, const char* pSource) override;
 
 	private:
+		enum class DirtyTerrainSaveStartResult : uint8_t
+		{
+			NotRequired = 0,
+			Started,
+			Failed
+		};
+
+		struct PendingSceneSave
+		{
+			std::filesystem::path path{};
+			std::string scene_name{};
+			uint64_t scene_content_epoch = 0u;
+			uint64_t history_state_id = 0u;
+			uint64_t terrain_operation_serial = 0u;
+		};
+
 		void HandleNewScene();
 		void HandleOpenScene();
 		void HandleReloadScene();
@@ -70,6 +89,13 @@ namespace AshEditor
 		void HandleResetLayout();
 		void HandleUndo();
 		void HandleRedo();
+		DirtyTerrainSaveStartResult SaveDirtyReferencedTerrains(PendingSceneSave& refPending);
+		bool SaveSceneNow(
+			const std::filesystem::path& pathScene,
+			const std::string& strSceneName,
+			std::optional<uint64_t> optCapturedHistoryState = std::nullopt);
+		void FailSceneSave(const std::filesystem::path& pathScene, const std::string& message);
+		void CancelPendingSceneSave(const char* reason);
 
 		bool HasSelectedEntity() const;
 		bool HasSingleSelectedEntity() const;
@@ -78,5 +104,6 @@ namespace AshEditor
 		EditorActionCoordinatorContext _context;
 		IAssetBrowserActionTarget* _pAssetBrowserActionTarget = nullptr;
 		ISceneHierarchyActionTarget* _pSceneHierarchyActionTarget = nullptr;
+		std::optional<PendingSceneSave> _optPendingSceneSave{};
 	};
 }

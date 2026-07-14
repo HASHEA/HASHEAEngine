@@ -1,3 +1,4 @@
+#include "Core/TerrainEditorSessionCore.h"
 #include "Function/Asset/TerrainComposition.h"
 #include "Function/Asset/TerrainLayerStack.h"
 #include "Terrain/TerrainTestUtils.h"
@@ -697,4 +698,61 @@ TEST_CASE("Terrain layer command rejects malformed order metadata and retained b
 		{ { 0u, 0u }, { 1u, 1u, 2u, 2u }, { 2.0f }, { 1.0f } });
 	patch.retained_layer = std::move(malformed_layer);
 	CheckRejectedPatch(pristine, patch);
+}
+
+TEST_CASE("Terrain save completion clears only the captured content generation")
+{
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(MakeLayerWorkingSet()));
+	CHECK_FALSE(core.IsDirty());
+
+	auto AddLayer = [&core](const uint8_t seed, const char* name)
+	{
+		AshEngine::TerrainLayerStackEdit edit{};
+		edit.kind = AshEngine::TerrainLayerStackEditKind::Add;
+		edit.new_layer_id = MakeLayerId(seed);
+		edit.name = name;
+		edit.destination_index = core.GetWorkingSet()->edit_layers.size();
+		AshEngine::TerrainLayerStackPatch patch{};
+		std::vector<AshEngine::TerrainComponentCoord> dirty{};
+		std::string error{};
+		REQUIRE(core.ApplyLayerStackEdit(edit, patch, dirty, &error));
+		CHECK(error.empty());
+	};
+
+	AddLayer(0x66u, "Before Save");
+	const uint64_t saving_generation = core.BeginSaveContentGeneration();
+	REQUIRE(saving_generation == core.GetContentGeneration());
+	REQUIRE(saving_generation != 0u);
+
+	AddLayer(0x77u, "After Save");
+	REQUIRE(core.GetContentGeneration() > saving_generation);
+	CHECK(core.CompleteSaveContentGeneration(saving_generation, true));
+	CHECK(core.IsDirty());
+	CHECK(core.GetContentGeneration() > saving_generation);
+}
+
+TEST_CASE("Terrain failed save preserves dirty generation and retry state")
+{
+	AshEditor::TerrainEditorSessionCore core{};
+	REQUIRE(core.Open(MakeLayerWorkingSet()));
+
+	AshEngine::TerrainLayerStackEdit edit{};
+	edit.kind = AshEngine::TerrainLayerStackEditKind::Rename;
+	edit.layer_id = core.GetWorkingSet()->edit_layers.front().id;
+	edit.name = "Unsaved Rename";
+	AshEngine::TerrainLayerStackPatch patch{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	std::string error{};
+	REQUIRE(core.ApplyLayerStackEdit(edit, patch, dirty, &error));
+	const uint64_t saving_generation = core.BeginSaveContentGeneration();
+	REQUIRE(saving_generation == core.GetContentGeneration());
+
+	CHECK(core.CompleteSaveContentGeneration(saving_generation, false));
+	CHECK(core.IsDirty());
+	CHECK(core.BeginSaveContentGeneration() == saving_generation);
+	CHECK_FALSE(core.CompleteSaveContentGeneration(saving_generation + 1u, true));
+	CHECK(core.IsDirty());
+	CHECK(core.CompleteSaveContentGeneration(saving_generation, true));
+	CHECK_FALSE(core.IsDirty());
 }

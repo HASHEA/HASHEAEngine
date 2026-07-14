@@ -10,6 +10,7 @@ namespace AshEditor
 	struct TerrainModeState
 	{
 		std::string create_asset_path{ "product/assets/terrain/NewTerrain.ashterrain" };
+		std::string save_as_asset_path{ "terrain/TerrainCopy.AshTerrain" };
 		std::string import_heightmap_path{};
 		std::string export_heightmap_path{};
 		int32_t import_format_index = 0;

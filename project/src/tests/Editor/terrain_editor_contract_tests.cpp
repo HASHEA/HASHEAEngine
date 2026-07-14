@@ -145,7 +145,7 @@ TEST_CASE("Terrain Mode exposes approved manage sculpt paint and stable layer ac
 	const std::string terrainUi = panel + widgets + state;
 
 	for (const char* label : {
-		"Create Flat", "Import Heightmap", "Export Heightmap", "Save", "Save As", "Reload", "Optimize" })
+		"Create Flat", "Import Heightmap", "Export Heightmap", "Save", "Save Copy As", "Reload", "Optimize" })
 	{
 		CHECK_MESSAGE(terrainUi.find(label) != std::string::npos, label);
 	}
@@ -168,6 +168,32 @@ TEST_CASE("Terrain Mode exposes approved manage sculpt paint and stable layer ac
 	CHECK(terrainUi.find("k_terrain_material_layer_count") != std::string::npos);
 	CHECK(terrainUi.find("TerrainLayerId") != std::string::npos);
 	CHECK(terrainUi.find("DrawUnavailableFileOperation") != std::string::npos);
+}
+
+TEST_CASE("Terrain Mode wires generation-aware file operations and keeps reload unavailable")
+{
+	const std::string panel = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModePanel.cpp");
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	const std::string state = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeState.h");
+
+	CHECK(state.find("save_as_asset_path") != std::string::npos);
+	CHECK(panel.find("GetFileOperationState()") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Save") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::SaveAs") != std::string::npos);
+	CHECK(widgets.find("TerrainEditorIntent::Kind::Optimize") != std::string::npos);
+	CHECK(widgets.find("intent.asset_path = refState.save_as_asset_path") != std::string::npos);
+	CHECK(widgets.find("const bool canOptimize") != std::string::npos);
+	CHECK(widgets.find("!refView.dirty") != std::string::npos);
+	CHECK(widgets.find("TerrainFileOperationStatus::AwaitingPublication") != std::string::npos);
+	CHECK(widgets.find("TerrainFileOperationStatus::Running") != std::string::npos);
+	CHECK(widgets.find("TerrainFileOperationStatus::Succeeded") != std::string::npos);
+	CHECK(widgets.find("TerrainFileOperationStatus::Failed") != std::string::npos);
+	CHECK(widgets.find(
+		"DrawUnavailableFileOperation(refUi, \"Reload\", \"Available with conflict resolution.\")") !=
+		std::string::npos);
 }
 
 TEST_CASE("Terrain Mode locks tab changes while a stroke owns the authoring configuration")
@@ -386,6 +412,138 @@ TEST_CASE("Terrain Mode can leave an authoring session quarantined by unverifiab
 	CHECK(service.GetSelectedAssetId() == 0u);
 	CHECK(service.GetWorkingSet() == nullptr);
 	CHECK_FALSE(service.HasDirtyAssets());
+}
+
+TEST_CASE("Terrain Ctrl+S waits for referenced Terrain before saving the Scene")
+{
+	const std::string coordinator = ReadTerrainContractText(
+		"project/src/editor/App/EditorActionCoordinator.cpp");
+	const std::string application = ReadTerrainContractText(
+		"project/src/editor/App/EditorApplicationImpl.cpp");
+	const size_t handleSave = coordinator.find("EditorActionCoordinator::HandleSaveScene()");
+	const size_t saveTerrain = coordinator.find(
+		"SaveDirtyReferencedTerrains(pending)", handleSave);
+	const size_t waitState = coordinator.find(
+		"_optPendingSceneSave = std::move(pending)", saveTerrain);
+	const size_t saveScene = coordinator.find("SaveSceneNow(pathScene", saveTerrain);
+	REQUIRE(handleSave != std::string::npos);
+	REQUIRE(saveTerrain != std::string::npos);
+	REQUIRE(waitState != std::string::npos);
+	REQUIRE(saveScene != std::string::npos);
+	CHECK(saveTerrain < waitState);
+	CHECK(waitState < saveScene);
+	CHECK(coordinator.find("TerrainFileOperationStatus::Succeeded") != std::string::npos);
+	CHECK(coordinator.find("TerrainFileOperationStatus::Failed") != std::string::npos);
+	CHECK(coordinator.find("get_content_epoch()") != std::string::npos);
+	CHECK(coordinator.find("canMarkCurrentHistorySaved") != std::string::npos);
+	CHECK(coordinator.find(
+		"existing.content_generation != pWorkingSet->content_generation") !=
+		std::string::npos);
+
+	const size_t terrainUpdate = application.find("_upTerrainEditorService->Update()");
+	const size_t actionUpdate = application.find("_upActionCoordinator->Update()");
+	const size_t panelUpdate = application.find("_upPanelManager->Update()");
+	REQUIRE(terrainUpdate != std::string::npos);
+	REQUIRE(actionUpdate != std::string::npos);
+	REQUIRE(panelUpdate != std::string::npos);
+	CHECK(terrainUpdate < actionUpdate);
+	CHECK(actionUpdate < panelUpdate);
+}
+
+TEST_CASE("Terrain Ctrl+S batches catalog misses before resolving or failing closed")
+{
+	const std::string coordinator = ReadTerrainContractText(
+		"project/src/editor/App/EditorActionCoordinator.cpp");
+	const size_t saveTerrains = coordinator.find(
+		"EditorActionCoordinator::SaveDirtyReferencedTerrains");
+	const size_t catalogLookup = coordinator.find(
+		"refAssetDatabaseService.FindByPath", saveTerrains);
+	const size_t catalogMiss = coordinator.find("if (!pAsset)", catalogLookup);
+	const size_t collectFallback = coordinator.find(
+		"unresolvedTerrainReferences.push_back(pathReference)", catalogMiss);
+	const size_t classifyGuard = coordinator.find(
+		"if (!referenced && !unresolvedTerrainReferences.empty())", collectFallback);
+	const size_t classifyFallback = coordinator.find(
+		"ClassifyCurrentAssetReferences(unresolvedTerrainReferences)", classifyGuard);
+	const size_t currentMatch = coordinator.find(
+		"TerrainAssetReferenceMatch::Current", classifyFallback);
+	const size_t currentWins = coordinator.find("referenced = true;", currentMatch);
+	const size_t unsafeMatch = coordinator.find(
+		"TerrainAssetReferenceMatch::Unsafe", currentWins);
+	const size_t failClosed = coordinator.find(
+		"Scene save cannot safely identify an unresolved Terrain reference", unsafeMatch);
+	const size_t failClosedReturn = coordinator.find(
+		"return DirtyTerrainSaveStartResult::Failed;", failClosed);
+
+	REQUIRE(saveTerrains != std::string::npos);
+	REQUIRE(catalogLookup != std::string::npos);
+	REQUIRE(catalogMiss != std::string::npos);
+	REQUIRE(collectFallback != std::string::npos);
+	REQUIRE(classifyGuard != std::string::npos);
+	REQUIRE(classifyFallback != std::string::npos);
+	REQUIRE(currentMatch != std::string::npos);
+	REQUIRE(currentWins != std::string::npos);
+	REQUIRE(unsafeMatch != std::string::npos);
+	REQUIRE(failClosed != std::string::npos);
+	REQUIRE(failClosedReturn != std::string::npos);
+	CHECK(catalogLookup < catalogMiss);
+	CHECK(catalogMiss < collectFallback);
+	CHECK(collectFallback < classifyGuard);
+	CHECK(classifyGuard < classifyFallback);
+	CHECK(classifyFallback < currentMatch);
+	CHECK(currentMatch < currentWins);
+	CHECK(currentWins < unsafeMatch);
+	CHECK(failClosed < failClosedReturn);
+}
+
+TEST_CASE("Terrain file worker owns immutable inputs and resolves worker exceptions")
+{
+	const std::string service = ReadTerrainContractText(
+		"project/src/editor/Services/TerrainEditorService.cpp");
+	const size_t dispatch = service.find("dispatch_background_task(");
+	const size_t capture = service.find("[dispatchState,", dispatch);
+	const size_t captureEnd = service.find("]() mutable", capture);
+	const size_t enqueueComplete = service.find(
+		"dispatchState->enqueue_in_progress.store", captureEnd);
+	const size_t workerCatch = service.find(
+		"catch (const std::exception& exception)", captureEnd);
+	const size_t workerResolve = service.find(
+		"dispatchState->Resolve(false, exception.what())", workerCatch);
+	REQUIRE(dispatch != std::string::npos);
+	REQUIRE(capture != std::string::npos);
+	REQUIRE(captureEnd != std::string::npos);
+	REQUIRE(enqueueComplete != std::string::npos);
+	REQUIRE(workerCatch != std::string::npos);
+	REQUIRE(workerResolve != std::string::npos);
+	CHECK(service.substr(capture, captureEnd - capture).find("this") == std::string::npos);
+	CHECK(workerCatch < enqueueComplete);
+	CHECK(workerResolve < enqueueComplete);
+}
+
+TEST_CASE("Terrain Save Copy As stages and atomically publishes without replacement")
+{
+	const std::string service = ReadTerrainContractText(
+		"project/src/editor/Services/TerrainEditorService.cpp");
+	const size_t helper = service.find("SaveTerrainCopyNew(");
+	const size_t helperEnd = service.find("bool IsTerrainFileOperationInProgress", helper);
+	const size_t temporaryGuard = service.find("TerrainCopyTemporaryGuard", helper);
+	const size_t stagedWrite = service.find(
+		"save_terrain_container_incremental(temporary", helper);
+	const size_t atomicPublish = service.find("MoveFileExW(", stagedWrite);
+	const size_t writeThrough = service.find("MOVEFILE_WRITE_THROUGH", atomicPublish);
+
+	REQUIRE(helper != std::string::npos);
+	REQUIRE(helperEnd != std::string::npos);
+	REQUIRE(temporaryGuard != std::string::npos);
+	REQUIRE(stagedWrite != std::string::npos);
+	REQUIRE(atomicPublish != std::string::npos);
+	REQUIRE(writeThrough != std::string::npos);
+	CHECK(helper < temporaryGuard);
+	CHECK(temporaryGuard < stagedWrite);
+	CHECK(stagedWrite < atomicPublish);
+	CHECK(atomicPublish < writeThrough);
+	CHECK(service.substr(helper, helperEnd - helper).find("MOVEFILE_REPLACE_EXISTING") ==
+		std::string::npos);
 }
 
 TEST_CASE("Terrain viewport interaction keeps camera terrain gizmo and selection ordering")

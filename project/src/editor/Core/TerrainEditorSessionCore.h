@@ -165,6 +165,10 @@ namespace AshEditor
 			const TerrainSnapshotPublisher& refPublisher,
 			std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& refSnapshot,
 			std::string* pError = nullptr);
+		uint64_t BeginSaveContentGeneration() const;
+		bool CompleteSaveContentGeneration(uint64_t savedContentGeneration, bool succeeded);
+		uint64_t GetContentGeneration() const;
+		uint64_t GetPersistedContentGeneration() const;
 		bool IsDirty() const;
 		bool SetViewportPreview(const TerrainViewportPreviewState& refPreview);
 		void ClearViewportPreview();

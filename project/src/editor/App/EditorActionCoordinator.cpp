@@ -17,15 +17,17 @@
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+#include "Services/TerrainEditorService.h"
 #include "Services/UndoRedoService.h"
 #include "Shell/DockLayoutController.h"
 #include "Shell/EditorCommandPaletteController.h"
 #include "Shell/PanelManager.h"
 
-#include <cstring>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace AshEditor
 {
@@ -100,8 +102,76 @@ namespace AshEditor
 		EditorActionRegistrar::Register(context);
 	}
 
+	void EditorActionCoordinator::Update()
+	{
+		if (!_optPendingSceneSave)
+		{
+			return;
+		}
+
+		const PendingSceneSave pending = *_optPendingSceneSave;
+		if (_context.refSceneService.GetActiveScene().get_content_epoch() !=
+			pending.scene_content_epoch)
+		{
+			_optPendingSceneSave.reset();
+			FailSceneSave(
+				pending.path,
+				"Scene save canceled because the active Scene changed while Terrain data was saving.");
+			return;
+		}
+
+		TerrainEditorService* pTerrainService = _context.refEditorContext.pTerrainEditorService;
+		if (!pTerrainService)
+		{
+			_optPendingSceneSave.reset();
+			FailSceneSave(pending.path, "Scene save failed because Terrain authoring became unavailable.");
+			return;
+		}
+
+		const TerrainFileOperationState& fileState = pTerrainService->GetFileOperationState();
+		if (fileState.operation_serial != pending.terrain_operation_serial)
+		{
+			_optPendingSceneSave.reset();
+			FailSceneSave(pending.path, "Scene save lost its referenced Terrain save operation.");
+			return;
+		}
+		if (fileState.status == TerrainFileOperationStatus::AwaitingPublication ||
+			fileState.status == TerrainFileOperationStatus::Running)
+		{
+			return;
+		}
+
+		_optPendingSceneSave.reset();
+		if (fileState.status == TerrainFileOperationStatus::Failed)
+		{
+			const std::string detail = fileState.error.empty()
+				? pTerrainService->GetLastError()
+				: fileState.error;
+			FailSceneSave(
+				pending.path,
+				"Scene save stopped because referenced Terrain '" +
+				fileState.path.generic_string() + "' failed: " +
+				(detail.empty() ? "unknown Terrain save error" : detail));
+			return;
+		}
+		if (fileState.status != TerrainFileOperationStatus::Succeeded)
+		{
+			FailSceneSave(pending.path, "Scene save observed an invalid Terrain operation state.");
+			return;
+		}
+
+		SaveSceneNow(
+			pending.path,
+			pending.scene_name,
+			pending.history_state_id);
+	}
+
 	bool EditorActionCoordinator::CanExecuteAction(std::string_view svActionId) const
 	{
+		if (svActionId == EditorActionIds::FileSaveScene)
+		{
+			return !_optPendingSceneSave.has_value();
+		}
 		if (svActionId == EditorActionIds::FileReloadScene)
 		{
 			return !_context.refSceneService.GetActiveScenePath().empty();
@@ -314,6 +384,7 @@ namespace AshEditor
 
 	void EditorActionCoordinator::HandleNewScene()
 	{
+		CancelPendingSceneSave("a new Scene was requested");
 		SceneWorkflowContext sceneWorkflowContext = MakeSceneWorkflowContext(_context);
 		const std::filesystem::path pathNewScene =
 			_context.refSceneWorkflowCoordinator.CreateNewSceneFromStartupTemplate(
@@ -353,6 +424,7 @@ namespace AshEditor
 		{
 			return false;
 		}
+		CancelPendingSceneSave("another Scene was opened");
 
 		std::error_code errorCode{};
 		if (!std::filesystem::exists(pathScene, errorCode) || errorCode)
@@ -383,12 +455,116 @@ namespace AshEditor
 
 	void EditorActionCoordinator::HandleReloadScene()
 	{
+		CancelPendingSceneSave("the active Scene was reloaded");
 		SceneWorkflowContext sceneWorkflowContext = MakeSceneWorkflowContext(_context);
 		_context.refSceneWorkflowCoordinator.ReloadActiveScene(sceneWorkflowContext);
 	}
 
+	EditorActionCoordinator::DirtyTerrainSaveStartResult
+		EditorActionCoordinator::SaveDirtyReferencedTerrains(PendingSceneSave& refPending)
+	{
+		TerrainEditorService* pTerrainService = _context.refEditorContext.pTerrainEditorService;
+		if (!pTerrainService || !pTerrainService->HasDirtyAssets())
+		{
+			return DirtyTerrainSaveStartResult::NotRequired;
+		}
+
+		const AshEngine::TerrainAssetId dirtyAssetId = pTerrainService->GetSelectedAssetId();
+		const AshEngine::TerrainWorkingSet* pWorkingSet = pTerrainService->GetWorkingSet();
+		bool referenced = false;
+		std::vector<std::filesystem::path> unresolvedTerrainReferences{};
+		for (const AshEngine::Entity& entity :
+			_context.refSceneService.GetActiveScene().get_entities_with_component(
+				AshEngine::SceneComponentType::Terrain))
+		{
+			if (!entity.is_valid() || !entity.has_terrain_component())
+			{
+				continue;
+			}
+			const std::filesystem::path pathReference =
+				entity.get_terrain_component().asset_path;
+			const AshEngine::AssetInfo* pAsset =
+				_context.refAssetDatabaseService.FindByPath(pathReference);
+			if (!pAsset)
+			{
+				unresolvedTerrainReferences.push_back(pathReference);
+				continue;
+			}
+			if (pAsset->id == dirtyAssetId)
+			{
+				referenced = true;
+				break;
+			}
+		}
+		if (!referenced && !unresolvedTerrainReferences.empty())
+		{
+			const TerrainAssetReferenceMatch match =
+				pTerrainService->ClassifyCurrentAssetReferences(unresolvedTerrainReferences);
+			if (match == TerrainAssetReferenceMatch::Current)
+			{
+				referenced = true;
+			}
+			else if (match == TerrainAssetReferenceMatch::Unsafe)
+			{
+				FailSceneSave(
+					refPending.path,
+					"Scene save cannot safely identify an unresolved Terrain reference inside the asset root.");
+				return DirtyTerrainSaveStartResult::Failed;
+			}
+		}
+		if (!referenced)
+		{
+			return DirtyTerrainSaveStartResult::NotRequired;
+		}
+
+		const TerrainFileOperationState& existing = pTerrainService->GetFileOperationState();
+		if (pTerrainService->HasFileOperationInProgress())
+		{
+			if (existing.kind != TerrainFileOperationKind::Save ||
+				existing.asset_id != dirtyAssetId)
+			{
+				FailSceneSave(
+					refPending.path,
+					"Scene save cannot wait on an unrelated Terrain file operation.");
+				return DirtyTerrainSaveStartResult::Failed;
+			}
+			if (!pWorkingSet ||
+				existing.content_generation != pWorkingSet->content_generation)
+			{
+				FailSceneSave(
+					refPending.path,
+					"Scene save cannot attach to an older Terrain generation; wait for the current Terrain save and retry.");
+				return DirtyTerrainSaveStartResult::Failed;
+			}
+			refPending.terrain_operation_serial = existing.operation_serial;
+			return DirtyTerrainSaveStartResult::Started;
+		}
+
+		TerrainEditorIntent save{};
+		save.kind = TerrainEditorIntent::Kind::Save;
+		if (!pTerrainService->SubmitIntent(save))
+		{
+			FailSceneSave(
+				refPending.path,
+				"Scene save could not start referenced Terrain '" +
+				std::to_string(dirtyAssetId) + "': " + pTerrainService->GetLastError());
+			return DirtyTerrainSaveStartResult::Failed;
+		}
+
+		refPending.terrain_operation_serial =
+			pTerrainService->GetFileOperationState().operation_serial;
+		return refPending.terrain_operation_serial != 0u
+			? DirtyTerrainSaveStartResult::Started
+			: DirtyTerrainSaveStartResult::Failed;
+	}
+
 	void EditorActionCoordinator::HandleSaveScene()
 	{
+		if (_optPendingSceneSave)
+		{
+			Notify(_context, "Scene save is already waiting for referenced Terrain data.");
+			return;
+		}
 		const std::filesystem::path pathActiveScene = _context.refSceneService.GetActiveScenePath();
 		const std::string& strSceneName = _context.refSceneService.GetActiveScene().get_name();
 		const std::filesystem::path pathScene = pathActiveScene.empty()
@@ -407,9 +583,43 @@ namespace AshEditor
 			Notify(_context, "Failed to choose a save path for the scene.");
 			return;
 		}
+
+		PendingSceneSave pending{};
+		pending.path = pathScene;
+		pending.scene_name = strSceneName;
+		pending.scene_content_epoch =
+			_context.refSceneService.GetActiveScene().get_content_epoch();
+		pending.history_state_id =
+			_context.refUndoRedoService.GetCurrentHistoryStateId();
+		const DirtyTerrainSaveStartResult terrainStart = SaveDirtyReferencedTerrains(pending);
+		if (terrainStart == DirtyTerrainSaveStartResult::Failed)
+		{
+			return;
+		}
+		if (terrainStart == DirtyTerrainSaveStartResult::Started)
+		{
+			_optPendingSceneSave = std::move(pending);
+			Notify(_context, "Saving referenced Terrain data before the Scene...");
+			return;
+		}
+		SaveSceneNow(pathScene, strSceneName);
+	}
+
+	bool EditorActionCoordinator::SaveSceneNow(
+		const std::filesystem::path& pathScene,
+		const std::string& strSceneName,
+		const std::optional<uint64_t> optCapturedHistoryState)
+	{
 		if (_context.refSceneService.SaveScene(pathScene))
 		{
-			_context.refUndoRedoService.MarkSaved();
+			const bool canMarkCurrentHistorySaved =
+				!optCapturedHistoryState.has_value() ||
+				_context.refUndoRedoService.GetCurrentHistoryStateId() ==
+					*optCapturedHistoryState;
+			if (canMarkCurrentHistorySaved)
+			{
+				_context.refUndoRedoService.MarkSaved();
+			}
 			_context.refSettingsService.GetSettings().strLastScenePath =
 				MakeScenePathForSettings(_context.refSettingsService, pathScene);
 			_context.refSettingsService.RecordRecentScenePath(pathScene);
@@ -417,20 +627,46 @@ namespace AshEditor
 			_context.refEventBus.Publish(EditorDocumentOperationEvent{
 				EditorDocumentOperationKind::SaveScene,
 				EditorDocumentOperationResult::Succeeded,
-				_context.refSceneService.GetActiveScene().get_name(),
+				strSceneName,
 				pathScene.generic_string()
 			});
 			Notify(_context, "Scene saved to " + pathScene.generic_string());
-			return;
+			if (!canMarkCurrentHistorySaved)
+			{
+				Notify(_context, "Scene saved, but newer Editor commands remain unsaved.");
+			}
+			return true;
 		}
 
+		FailSceneSave(pathScene, "Failed to save scene.");
+		return false;
+	}
+
+	void EditorActionCoordinator::FailSceneSave(
+		const std::filesystem::path& pathScene,
+		const std::string& message)
+	{
 		_context.refEventBus.Publish(EditorDocumentOperationEvent{
 			EditorDocumentOperationKind::SaveScene,
 			EditorDocumentOperationResult::Failed,
 			_context.refSceneService.GetActiveScene().get_name(),
 			pathScene.generic_string()
 		});
-		Notify(_context, "Failed to save scene.");
+		Notify(_context, message);
+	}
+
+	void EditorActionCoordinator::CancelPendingSceneSave(const char* reason)
+	{
+		if (!_optPendingSceneSave)
+		{
+			return;
+		}
+		const std::filesystem::path path = _optPendingSceneSave->path;
+		_optPendingSceneSave.reset();
+		FailSceneSave(
+			path,
+			std::string("Scene save canceled because ") +
+				(reason ? reason : "the active document changed") + ".");
 	}
 
 	void EditorActionCoordinator::HandleRefreshAssets()

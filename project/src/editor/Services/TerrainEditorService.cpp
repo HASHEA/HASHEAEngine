@@ -2,10 +2,14 @@
 
 #include "Core/IEditorCommandExecutor.h"
 #include "Core/TerrainCommands.h"
+#include "Base/hthreading.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Asset/TerrainComposition.h"
+#include "Function/Asset/TerrainContainer.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <exception>
@@ -13,12 +17,239 @@
 #include <memory>
 #include <new>
 #include <stdexcept>
+#include <thread>
 #include <utility>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace AshEditor
 {
 	namespace
 	{
+		using TerrainFileJobResult = std::pair<bool, std::string>;
+
+		bool TryNormalizeAssetPathWithinRoot(
+			const std::filesystem::path& pathAssetRoot,
+			const std::filesystem::path& pathCandidate,
+			std::filesystem::path& outRelativePath)
+		{
+			outRelativePath.clear();
+			if (pathAssetRoot.empty() || pathCandidate.empty())
+			{
+				return false;
+			}
+
+			std::error_code errorCode{};
+			const std::filesystem::path pathAbsoluteRoot = pathAssetRoot.is_absolute()
+				? pathAssetRoot
+				: std::filesystem::absolute(pathAssetRoot, errorCode);
+			if (errorCode)
+			{
+				return false;
+			}
+			const std::filesystem::path pathNormalizedRoot =
+				std::filesystem::weakly_canonical(pathAbsoluteRoot, errorCode);
+			if (errorCode || pathNormalizedRoot.empty())
+			{
+				return false;
+			}
+
+			const std::filesystem::path pathAbsoluteCandidate = pathCandidate.is_absolute()
+				? pathCandidate
+				: pathNormalizedRoot / pathCandidate;
+			const std::filesystem::path pathNormalizedCandidate =
+				std::filesystem::weakly_canonical(pathAbsoluteCandidate, errorCode);
+			if (errorCode || pathNormalizedCandidate.empty())
+			{
+				return false;
+			}
+
+			std::filesystem::path pathRelative = std::filesystem::relative(
+				pathNormalizedCandidate,
+				pathNormalizedRoot,
+				errorCode).lexically_normal();
+			if (errorCode || pathRelative.empty() || pathRelative.is_absolute())
+			{
+				return false;
+			}
+			for (const std::filesystem::path& pathSegment : pathRelative)
+			{
+				if (pathSegment == "..")
+				{
+					return false;
+				}
+			}
+
+			std::string key = pathRelative.generic_string();
+			std::transform(
+				key.begin(),
+				key.end(),
+				key.begin(),
+				[](const unsigned char character)
+				{
+					return static_cast<char>(std::tolower(character));
+				});
+			outRelativePath = std::filesystem::path(std::move(key));
+			return true;
+		}
+
+		struct TerrainCopyTemporaryGuard
+		{
+			std::filesystem::path path{};
+			bool released = false;
+
+			~TerrainCopyTemporaryGuard()
+			{
+				if (!released && !path.empty())
+				{
+					std::error_code ignored{};
+					std::filesystem::remove(path, ignored);
+				}
+			}
+
+			void Release() noexcept
+			{
+				released = true;
+			}
+		};
+
+		std::atomic<uint64_t> g_nextTerrainCopyTemporarySerial{ 0u };
+
+		std::filesystem::path MakeTerrainCopyTemporaryPath(
+			const std::filesystem::path& destination)
+		{
+			const uint64_t serial =
+				g_nextTerrainCopyTemporarySerial.fetch_add(1u, std::memory_order_relaxed) + 1u;
+#if defined(_WIN32)
+			const uint64_t processId = static_cast<uint64_t>(GetCurrentProcessId());
+#else
+			const uint64_t processId = static_cast<uint64_t>(
+				std::chrono::steady_clock::now().time_since_epoch().count());
+#endif
+			std::filesystem::path temporary = destination;
+			temporary += ".save-copy." + std::to_string(processId) + "." +
+				std::to_string(serial) + ".tmp";
+			return temporary;
+		}
+
+		AshEngine::TerrainContainerResult SaveTerrainCopyNew(
+			const std::filesystem::path& destination,
+			const AshEngine::TerrainAssetSnapshot& snapshot,
+			std::string& outError)
+		{
+			const std::filesystem::path temporary =
+				MakeTerrainCopyTemporaryPath(destination);
+			TerrainCopyTemporaryGuard temporaryGuard{ temporary };
+			std::error_code errorCode{};
+			if (std::filesystem::exists(temporary, errorCode) || errorCode)
+			{
+				outError = "Terrain Save Copy As could not reserve a unique temporary path.";
+				return AshEngine::TerrainContainerResult::IoFailure;
+			}
+
+			const AshEngine::TerrainContainerResult writeResult =
+				AshEngine::save_terrain_container_incremental(temporary, snapshot, {}, nullptr, &outError);
+			if (writeResult != AshEngine::TerrainContainerResult::Success)
+			{
+				return writeResult;
+			}
+
+			std::shared_ptr<const AshEngine::TerrainAssetSnapshot> validated{};
+			std::string validationError{};
+			const AshEngine::TerrainContainerResult validationResult =
+				AshEngine::load_terrain_container(temporary, validated, nullptr, &validationError);
+			if (validationResult != AshEngine::TerrainContainerResult::Success || !validated ||
+				validated->content_generation != snapshot.content_generation ||
+				validated->components.size() != snapshot.components.size())
+			{
+				outError = validationError.empty()
+					? "Terrain Save Copy As temporary container failed validation."
+					: std::move(validationError);
+				return AshEngine::TerrainContainerResult::Corrupt;
+			}
+
+#if defined(_WIN32)
+			if (MoveFileExW(
+					temporary.c_str(), destination.c_str(), MOVEFILE_WRITE_THROUGH) == FALSE)
+#else
+			std::filesystem::create_hard_link(temporary, destination, errorCode);
+			if (errorCode)
+#endif
+			{
+				std::error_code existsError{};
+				const bool destinationExists =
+					std::filesystem::exists(destination, existsError) && !existsError;
+				outError = destinationExists
+					? "Terrain Save As destination appeared before the copy was published."
+					: "Terrain Save Copy As failed to atomically publish the new asset.";
+				return AshEngine::TerrainContainerResult::IoFailure;
+			}
+#if !defined(_WIN32)
+			std::filesystem::remove(temporary, errorCode);
+			if (errorCode)
+			{
+				outError = "Terrain Save Copy As published but could not remove its temporary link.";
+				return AshEngine::TerrainContainerResult::IoFailure;
+			}
+#endif
+			temporaryGuard.Release();
+			outError.clear();
+			return AshEngine::TerrainContainerResult::Success;
+		}
+
+		struct TerrainFileDispatchState
+		{
+			std::shared_ptr<std::promise<TerrainFileJobResult>> promise{};
+			std::thread::id caller_thread{};
+			std::atomic<bool> enqueue_in_progress{ true };
+			std::atomic<bool> started{ false };
+
+			explicit TerrainFileDispatchState(
+				std::shared_ptr<std::promise<TerrainFileJobResult>> inPromise)
+				: promise(std::move(inPromise))
+				, caller_thread(std::this_thread::get_id())
+			{
+			}
+
+			~TerrainFileDispatchState()
+			{
+				if (!started.exchange(true, std::memory_order_acq_rel))
+				{
+					Resolve(false, "Terrain file worker command was rejected before execution.");
+				}
+			}
+
+			void Resolve(bool succeeded, std::string error) noexcept
+			{
+				try
+				{
+					promise->set_value({ succeeded, std::move(error) });
+				}
+				catch (...)
+				{
+				}
+			}
+		};
+
+		bool IsTerrainFileOperationInProgress(const TerrainFileOperationStatus status)
+		{
+			return status == TerrainFileOperationStatus::AwaitingPublication ||
+				status == TerrainFileOperationStatus::Running;
+		}
+
+		bool HasParentTraversal(const std::filesystem::path& path)
+		{
+			return std::any_of(path.begin(), path.end(), [](const std::filesystem::path& part)
+			{
+				return part == "..";
+			});
+		}
+
 		bool IsValidUnitFloat(const float value)
 		{
 			return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
@@ -109,15 +340,24 @@ namespace AshEditor
 
 	void TerrainEditorService::Shutdown()
 	{
+		if (_fileOperationState.status == TerrainFileOperationStatus::Running &&
+			_pendingFileOperation.valid())
+		{
+			_pendingFileOperation.wait();
+			CompletePendingFileOperation();
+		}
 		_pendingLoad = {};
 		_pendingLoadAssetId = 0u;
 		_optActiveStroke.reset();
 		_optPendingComposition.reset();
+		_pendingFileOperation = {};
+		_fileOperationState = {};
 		_publishedSnapshot.reset();
 		_nextStrokeSequence = 0u;
 		_nextLayerSequence = 0u;
 		_nextCompositionSerial = 0u;
 		_latestCompositionSourceSequence = 0u;
+		_nextFileOperationSerial = 0u;
 		_historyRollbackFailed = false;
 		_strLastError.clear();
 		_authoringConfig = {};
@@ -138,6 +378,17 @@ namespace AshEditor
 		{
 			CompletePendingComposition();
 		}
+
+		if (_fileOperationState.status == TerrainFileOperationStatus::AwaitingPublication)
+		{
+			TryStartFileOperation();
+		}
+		if (_fileOperationState.status == TerrainFileOperationStatus::Running &&
+			_pendingFileOperation.valid() &&
+			_pendingFileOperation.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+		{
+			CompletePendingFileOperation();
+		}
 	}
 
 	bool TerrainEditorService::SubmitIntent(const TerrainEditorIntent& refIntent)
@@ -151,6 +402,15 @@ namespace AshEditor
 		{
 			_strLastError =
 				"Terrain authoring is quarantined because command-history rollback failed; reload or select another asset.";
+			return false;
+		}
+		if (_fileOperationState.status == TerrainFileOperationStatus::AwaitingPublication &&
+			refIntent.kind != TerrainEditorIntent::Kind::Save &&
+			refIntent.kind != TerrainEditorIntent::Kind::SaveAs &&
+			refIntent.kind != TerrainEditorIntent::Kind::Optimize)
+		{
+			_strLastError =
+				"Terrain authoring is briefly paused until the requested save generation is published.";
 			return false;
 		}
 
@@ -172,6 +432,10 @@ namespace AshEditor
 			return CancelStroke(refIntent);
 		case TerrainEditorIntent::Kind::LayerAction:
 			return SubmitLayerAction(refIntent);
+		case TerrainEditorIntent::Kind::Save:
+		case TerrainEditorIntent::Kind::SaveAs:
+		case TerrainEditorIntent::Kind::Optimize:
+			return SubmitFileOperation(refIntent);
 		default:
 			return false;
 		}
@@ -180,6 +444,11 @@ namespace AshEditor
 	bool TerrainEditorService::OpenSnapshotForAuthoring(
 		const AshEngine::TerrainAssetSnapshot& refSnapshot)
 	{
+		if (HasFileOperationInProgress())
+		{
+			_strLastError = "Terrain authoring cannot replace an asset while a file operation is running.";
+			return false;
+		}
 		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> initialSnapshot{};
 		try
 		{
@@ -207,6 +476,8 @@ namespace AshEditor
 		_pendingLoadAssetId = 0u;
 		_optActiveStroke.reset();
 		_optPendingComposition.reset();
+		_pendingFileOperation = {};
+		_fileOperationState = {};
 		_publishedSnapshot = std::move(initialSnapshot);
 		_historyRollbackFailed = false;
 		_strLastError.clear();
@@ -350,6 +621,53 @@ namespace AshEditor
 		return _core.GetWorkingSet();
 	}
 
+	TerrainAssetReferenceMatch TerrainEditorService::ClassifyCurrentAssetReferences(
+		const std::vector<std::filesystem::path>& refReferences) const
+	{
+		if (refReferences.empty())
+		{
+			return TerrainAssetReferenceMatch::Different;
+		}
+
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (!_pAssets || !_pAssets->is_valid() || !pWorkingSet)
+		{
+			return TerrainAssetReferenceMatch::Unsafe;
+		}
+
+		std::filesystem::path pathWorkingSetRelative{};
+		const std::filesystem::path& pathAssetRoot = _pAssets->get_root_path();
+		if (!TryNormalizeAssetPathWithinRoot(
+				pathAssetRoot,
+				pWorkingSet->source_path,
+				pathWorkingSetRelative))
+		{
+			return TerrainAssetReferenceMatch::Unsafe;
+		}
+
+		bool sawUnsafeReference = false;
+		for (const std::filesystem::path& pathReference : refReferences)
+		{
+			std::filesystem::path pathReferenceRelative{};
+			if (!TryNormalizeAssetPathWithinRoot(
+					pathAssetRoot,
+					pathReference,
+					pathReferenceRelative))
+			{
+				sawUnsafeReference = true;
+				continue;
+			}
+			if (pathReferenceRelative == pathWorkingSetRelative)
+			{
+				return TerrainAssetReferenceMatch::Current;
+			}
+		}
+
+		return sawUnsafeReference
+			? TerrainAssetReferenceMatch::Unsafe
+			: TerrainAssetReferenceMatch::Different;
+	}
+
 	const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>&
 		TerrainEditorService::GetPublishedSnapshot() const
 	{
@@ -368,7 +686,18 @@ namespace AshEditor
 
 	bool TerrainEditorService::HasBlockingOperation() const
 	{
-		return _pendingLoad.valid() || _optPendingComposition.has_value();
+		return _pendingLoad.valid() || _optPendingComposition.has_value() ||
+			_fileOperationState.status == TerrainFileOperationStatus::AwaitingPublication;
+	}
+
+	bool TerrainEditorService::HasFileOperationInProgress() const
+	{
+		return IsTerrainFileOperationInProgress(_fileOperationState.status);
+	}
+
+	const TerrainFileOperationState& TerrainEditorService::GetFileOperationState() const
+	{
+		return _fileOperationState;
 	}
 
 	const std::string& TerrainEditorService::GetLastError() const
@@ -382,6 +711,12 @@ namespace AshEditor
 		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
 		const bool alreadyOpen = pWorkingSet && pWorkingSet->asset_id == refIntent.asset_id;
 		const bool changesAsset = previousAssetId != refIntent.asset_id;
+		if (changesAsset && HasFileOperationInProgress())
+		{
+			_strLastError =
+				"Terrain asset selection cannot replace a session while a file operation is in progress.";
+			return false;
+		}
 		if (changesAsset && !_historyRollbackFailed &&
 			(_core.IsDirty() || _optActiveStroke || _core.HasActiveStroke() ||
 			_optPendingComposition))
@@ -945,6 +1280,399 @@ namespace AshEditor
 
 		_strLastError.clear();
 		return true;
+	}
+
+	bool TerrainEditorService::ResolveFileOperationPath(
+		const TerrainEditorIntent& refIntent,
+		std::filesystem::path& outPath,
+		std::string& outError) const
+	{
+		outPath.clear();
+		outError.clear();
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (!pWorkingSet)
+		{
+			outError = "Terrain file operation requires an open authoring session.";
+			return false;
+		}
+
+		std::filesystem::path requested = refIntent.asset_path;
+		if (requested.empty())
+		{
+			requested = pWorkingSet->source_path;
+		}
+		if (requested.empty())
+		{
+			outError = "Terrain file operation requires an asset path.";
+			return false;
+		}
+
+		if (!_pAssets || !_pAssets->is_valid() || _pAssets->get_root_path().empty())
+		{
+			outError = "Terrain file operation requires a configured asset root.";
+			return false;
+		}
+		const std::filesystem::path root = _pAssets->get_root_path();
+		if (requested.is_relative())
+		{
+			requested = root / requested;
+		}
+
+		std::error_code errorCode{};
+		std::filesystem::path absolute = std::filesystem::absolute(requested, errorCode);
+		if (errorCode)
+		{
+			outError = "Terrain asset path could not be resolved.";
+			return false;
+		}
+		absolute = absolute.lexically_normal();
+		{
+			std::filesystem::path absoluteRoot = std::filesystem::absolute(root, errorCode);
+			if (errorCode)
+			{
+				outError = "Terrain asset root could not be resolved.";
+				return false;
+			}
+			absoluteRoot = absoluteRoot.lexically_normal();
+			const std::filesystem::path relative =
+				std::filesystem::relative(absolute, absoluteRoot, errorCode);
+			if (errorCode || relative.empty() || relative.is_absolute() || HasParentTraversal(relative))
+			{
+				outError = "Terrain asset path must stay inside the configured asset root.";
+				return false;
+			}
+		}
+
+		std::string extension = absolute.extension().string();
+		std::transform(extension.begin(), extension.end(), extension.begin(),
+			[](const unsigned char value) { return static_cast<char>(std::tolower(value)); });
+		if (extension != ".ashterrain")
+		{
+			outError = "Terrain asset path must use the .AshTerrain extension.";
+			return false;
+		}
+		outPath = std::move(absolute);
+		return true;
+	}
+
+	bool TerrainEditorService::SubmitFileOperation(const TerrainEditorIntent& refIntent)
+	{
+		if (HasFileOperationInProgress())
+		{
+			_strLastError = "A Terrain file operation is already in progress.";
+			return false;
+		}
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (!pWorkingSet || !_publishedSnapshot)
+		{
+			_strLastError = "Terrain file operation requires a published authoring snapshot.";
+			return false;
+		}
+		if (_optActiveStroke || _core.HasActiveStroke())
+		{
+			_strLastError = "Terrain file operation is unavailable while a stroke is active.";
+			return false;
+		}
+
+		TerrainFileOperationKind kind = TerrainFileOperationKind::None;
+		switch (refIntent.kind)
+		{
+		case TerrainEditorIntent::Kind::Save:
+			kind = TerrainFileOperationKind::Save;
+			if (!_core.IsDirty())
+			{
+				_strLastError = "Terrain asset has no unsaved changes.";
+				return false;
+			}
+			break;
+		case TerrainEditorIntent::Kind::SaveAs:
+			kind = TerrainFileOperationKind::SaveAs;
+			if (refIntent.asset_path.empty())
+			{
+				_strLastError = "Terrain Save As requires a destination path.";
+				return false;
+			}
+			break;
+		case TerrainEditorIntent::Kind::Optimize:
+			kind = TerrainFileOperationKind::Optimize;
+			if (_core.IsDirty())
+			{
+				_strLastError = "Terrain Optimize requires a clean, saved asset; save dirty changes first.";
+				return false;
+			}
+			if (_optPendingComposition)
+			{
+				_strLastError = "Terrain Optimize cannot start while composition is pending.";
+				return false;
+			}
+			break;
+		default:
+			return false;
+		}
+		if (kind != TerrainFileOperationKind::SaveAs && !refIntent.asset_path.empty())
+		{
+			_strLastError =
+				"Terrain Save and Optimize always target the current Terrain; use Save Copy As for a new path.";
+			return false;
+		}
+
+		std::filesystem::path path{};
+		std::string error{};
+		if (!ResolveFileOperationPath(refIntent, path, error))
+		{
+			_strLastError = std::move(error);
+			return false;
+		}
+		if (kind == TerrainFileOperationKind::SaveAs)
+		{
+			std::error_code existsError{};
+			if (std::filesystem::exists(path, existsError) || existsError)
+			{
+				_strLastError = existsError
+					? "Terrain Save As destination could not be inspected."
+					: "Terrain Save As writes a new copy and will not overwrite an existing asset.";
+				return false;
+			}
+		}
+
+		++_nextFileOperationSerial;
+		if (_nextFileOperationSerial == 0u)
+		{
+			++_nextFileOperationSerial;
+		}
+		_fileOperationState = {};
+		_fileOperationState.kind = kind;
+		_fileOperationState.status = TerrainFileOperationStatus::AwaitingPublication;
+		_fileOperationState.operation_serial = _nextFileOperationSerial;
+		_fileOperationState.asset_id = pWorkingSet->asset_id;
+		_fileOperationState.content_generation = pWorkingSet->content_generation;
+		_fileOperationState.path = std::move(path);
+		_strLastError.clear();
+
+		if (!_optPendingComposition)
+		{
+			TryStartFileOperation();
+		}
+		return _fileOperationState.status != TerrainFileOperationStatus::Failed;
+	}
+
+	void TerrainEditorService::FailFileOperation(std::string error)
+	{
+		if (error.empty())
+		{
+			error = "Terrain file operation failed.";
+		}
+		_fileOperationState.status = TerrainFileOperationStatus::Failed;
+		_fileOperationState.error = error;
+		_strLastError = std::move(error);
+	}
+
+	bool TerrainEditorService::TryStartFileOperation()
+	{
+		if (_fileOperationState.status != TerrainFileOperationStatus::AwaitingPublication)
+		{
+			return false;
+		}
+		if (_optPendingComposition || _optActiveStroke || _core.HasActiveStroke())
+		{
+			return true;
+		}
+
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (!pWorkingSet || pWorkingSet->asset_id != _fileOperationState.asset_id ||
+			pWorkingSet->content_generation != _fileOperationState.content_generation)
+		{
+			FailFileOperation("Terrain save generation changed before its immutable snapshot was captured.");
+			return false;
+		}
+		if (!_publishedSnapshot || _publishedSnapshot->asset_id != pWorkingSet->asset_id ||
+			_publishedSnapshot->content_generation != pWorkingSet->content_generation ||
+			!pWorkingSet->dirty_components.empty())
+		{
+			FailFileOperation(_strLastError.empty()
+				? "Terrain save could not capture the requested published generation."
+				: _strLastError);
+			return false;
+		}
+
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+		std::vector<AshEngine::TerrainDirtyComponentPayload> dirtyPayloads{};
+		if (_fileOperationState.kind != TerrainFileOperationKind::Optimize)
+		{
+			snapshot = _publishedSnapshot;
+			if (_fileOperationState.kind == TerrainFileOperationKind::Save)
+			{
+				const uint64_t savingGeneration = _core.BeginSaveContentGeneration();
+				if (savingGeneration == 0u || savingGeneration != _fileOperationState.content_generation)
+				{
+					FailFileOperation("Terrain save could not capture a dirty content generation.");
+					return false;
+				}
+				std::error_code existsError{};
+				const bool exists = std::filesystem::exists(_fileOperationState.path, existsError);
+				if (existsError)
+				{
+					FailFileOperation("Terrain save destination could not be inspected.");
+					return false;
+				}
+				if (exists)
+				{
+					const uint64_t persistedGeneration = _core.GetPersistedContentGeneration();
+					for (const auto& component : snapshot->components)
+					{
+						if (component && component->content_generation > persistedGeneration)
+						{
+							dirtyPayloads.push_back({
+								component->coord,
+								component->content_generation,
+								component
+							});
+						}
+					}
+				}
+			}
+		}
+
+		try
+		{
+			auto promise = std::make_shared<std::promise<TerrainFileJobResult>>();
+			_pendingFileOperation = promise->get_future().share();
+			auto dispatchState = std::make_shared<TerrainFileDispatchState>(std::move(promise));
+			const TerrainFileOperationKind kind = _fileOperationState.kind;
+			const std::filesystem::path path = _fileOperationState.path;
+			_fileOperationState.status = TerrainFileOperationStatus::Running;
+			try
+			{
+				const auto dispatchFuture = AshEngine::dispatch_background_task(
+					"TerrainEditorService::file_operation",
+					[dispatchState,
+					 kind,
+					 path,
+					 snapshot = std::move(snapshot),
+					 dirtyPayloads = std::move(dirtyPayloads)]() mutable
+					{
+						const bool inlineFallback =
+							std::this_thread::get_id() == dispatchState->caller_thread &&
+							dispatchState->enqueue_in_progress.load(std::memory_order_acquire);
+						if (dispatchState->started.exchange(true, std::memory_order_acq_rel))
+						{
+							return;
+						}
+						if (inlineFallback)
+						{
+							dispatchState->Resolve(
+								false,
+								"Terrain async file operation requires an available worker thread.");
+							return;
+						}
+
+						try
+						{
+							std::string error{};
+							AshEngine::TerrainContainerResult result =
+								AshEngine::TerrainContainerResult::InvalidData;
+							if (kind == TerrainFileOperationKind::Optimize)
+							{
+								result = AshEngine::optimize_terrain_container(path, nullptr, &error);
+							}
+							else if (kind == TerrainFileOperationKind::SaveAs)
+							{
+								result = SaveTerrainCopyNew(path, *snapshot, error);
+							}
+							else
+							{
+								result = AshEngine::save_terrain_container_incremental(
+									path, *snapshot, dirtyPayloads, nullptr, &error);
+							}
+							const bool succeeded =
+								result == AshEngine::TerrainContainerResult::Success;
+							if (!succeeded && error.empty())
+							{
+								error = "Terrain container operation failed.";
+							}
+							dispatchState->Resolve(succeeded, std::move(error));
+						}
+						catch (const std::exception& exception)
+						{
+							dispatchState->Resolve(false, exception.what());
+						}
+						catch (...)
+						{
+							dispatchState->Resolve(
+								false,
+								"Terrain file worker raised an unknown exception.");
+						}
+					});
+				(void)dispatchFuture;
+				dispatchState->enqueue_in_progress.store(false, std::memory_order_release);
+			}
+			catch (...)
+			{
+				dispatchState->enqueue_in_progress.store(false, std::memory_order_release);
+				throw;
+			}
+		}
+		catch (const std::exception& exception)
+		{
+			_pendingFileOperation = {};
+			FailFileOperation(exception.what());
+			return false;
+		}
+		catch (...)
+		{
+			_pendingFileOperation = {};
+			FailFileOperation("Terrain file operation dispatch failed.");
+			return false;
+		}
+		return true;
+	}
+
+	void TerrainEditorService::CompletePendingFileOperation()
+	{
+		if (_fileOperationState.status != TerrainFileOperationStatus::Running ||
+			!_pendingFileOperation.valid())
+		{
+			return;
+		}
+
+		TerrainFileJobResult result{};
+		try
+		{
+			result = _pendingFileOperation.get();
+		}
+		catch (const std::exception& exception)
+		{
+			result = { false, exception.what() };
+		}
+		catch (...)
+		{
+			result = { false, "Terrain file worker raised an unknown exception." };
+		}
+		_pendingFileOperation = {};
+
+		if (!result.first)
+		{
+			if (_fileOperationState.kind == TerrainFileOperationKind::Save)
+			{
+				_core.CompleteSaveContentGeneration(
+					_fileOperationState.content_generation, false);
+			}
+			FailFileOperation(std::move(result.second));
+			return;
+		}
+		if (_fileOperationState.kind == TerrainFileOperationKind::Save &&
+			(_core.GetAssetId() != _fileOperationState.asset_id ||
+			 !_core.CompleteSaveContentGeneration(
+				 _fileOperationState.content_generation, true)))
+		{
+			FailFileOperation(
+				"Terrain file was written, but the captured generation no longer belongs to this session.");
+			return;
+		}
+
+		_fileOperationState.status = TerrainFileOperationStatus::Succeeded;
+		_fileOperationState.error.clear();
+		_strLastError.clear();
 	}
 
 	void TerrainEditorService::ScheduleComposition(

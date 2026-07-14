@@ -428,6 +428,39 @@ namespace AshEditor
 		return _optWorkingSet && _optWorkingSet->content_generation != _persistedContentGeneration;
 	}
 
+	uint64_t TerrainEditorSessionCore::BeginSaveContentGeneration() const
+	{
+		return IsDirty() ? _optWorkingSet->content_generation : 0u;
+	}
+
+	bool TerrainEditorSessionCore::CompleteSaveContentGeneration(
+		const uint64_t savedContentGeneration,
+		const bool succeeded)
+	{
+		if (!_optWorkingSet || savedContentGeneration == 0u ||
+			savedContentGeneration <= _persistedContentGeneration ||
+			savedContentGeneration > _optWorkingSet->content_generation)
+		{
+			return false;
+		}
+
+		if (succeeded)
+		{
+			_persistedContentGeneration = savedContentGeneration;
+		}
+		return true;
+	}
+
+	uint64_t TerrainEditorSessionCore::GetContentGeneration() const
+	{
+		return _optWorkingSet ? _optWorkingSet->content_generation : 0u;
+	}
+
+	uint64_t TerrainEditorSessionCore::GetPersistedContentGeneration() const
+	{
+		return _optWorkingSet ? _persistedContentGeneration : 0u;
+	}
+
 	bool TerrainEditorSessionCore::SetViewportPreview(
 		const TerrainViewportPreviewState& refPreview)
 	{

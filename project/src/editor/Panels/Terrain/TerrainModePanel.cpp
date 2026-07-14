@@ -91,6 +91,7 @@ namespace AshEditor
 		view.dirty = _pTerrainEditorService->HasDirtyAssets();
 		view.pending_composition = _pTerrainEditorService->HasPendingComposition();
 		view.blocking_operation = _pTerrainEditorService->HasBlockingOperation();
+		view.p_file_operation_state = &_pTerrainEditorService->GetFileOperationState();
 		view.last_error = _pTerrainEditorService->GetLastError();
 
 		TerrainModeDrawResult result = DrawTerrainModeTabs(refUi, view, _state);

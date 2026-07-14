@@ -2,10 +2,13 @@
 
 #include "Core/TerrainEditorSessionCore.h"
 
+#include <cstdint>
+#include <filesystem>
 #include <future>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace AshEngine
@@ -17,6 +20,41 @@ namespace AshEngine
 namespace AshEditor
 {
 	class IEditorCommandExecutor;
+
+	enum class TerrainFileOperationKind : uint8_t
+	{
+		None = 0,
+		Save,
+		SaveAs,
+		Optimize
+	};
+
+	enum class TerrainFileOperationStatus : uint8_t
+	{
+		Idle = 0,
+		AwaitingPublication,
+		Running,
+		Succeeded,
+		Failed
+	};
+
+	enum class TerrainAssetReferenceMatch : uint8_t
+	{
+		Current = 0,
+		Different,
+		Unsafe
+	};
+
+	struct TerrainFileOperationState
+	{
+		TerrainFileOperationKind kind = TerrainFileOperationKind::None;
+		TerrainFileOperationStatus status = TerrainFileOperationStatus::Idle;
+		uint64_t operation_serial = 0u;
+		AshEngine::TerrainAssetId asset_id = 0u;
+		uint64_t content_generation = 0u;
+		std::filesystem::path path{};
+		std::string error{};
+	};
 
 	class TerrainEditorService final
 	{
@@ -49,10 +87,14 @@ namespace AshEditor
 		AshEngine::TerrainAssetId GetSelectedAssetId() const;
 		AshEngine::TerrainLayerId GetSelectedLayerId() const;
 		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
+		TerrainAssetReferenceMatch ClassifyCurrentAssetReferences(
+			const std::vector<std::filesystem::path>& refReferences) const;
 		const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& GetPublishedSnapshot() const;
 		bool HasDirtyAssets() const;
 		bool HasPendingComposition() const;
 		bool HasBlockingOperation() const;
+		bool HasFileOperationInProgress() const;
+		const TerrainFileOperationState& GetFileOperationState() const;
 		const std::string& GetLastError() const;
 
 	private:
@@ -83,6 +125,14 @@ namespace AshEditor
 		bool EndStroke(const TerrainEditorIntent& refIntent);
 		bool CancelStroke(const TerrainEditorIntent& refIntent);
 		bool SubmitLayerAction(const TerrainEditorIntent& refIntent);
+		bool SubmitFileOperation(const TerrainEditorIntent& refIntent);
+		bool TryStartFileOperation();
+		void CompletePendingFileOperation();
+		void FailFileOperation(std::string error);
+		bool ResolveFileOperationPath(
+			const TerrainEditorIntent& refIntent,
+			std::filesystem::path& outPath,
+			std::string& outError) const;
 		void ScheduleComposition(
 			uint64_t sourceSequence,
 			std::vector<AshEngine::TerrainComponentCoord> dirtyComponents);
@@ -107,11 +157,14 @@ namespace AshEditor
 		AshEngine::TerrainAssetId _pendingLoadAssetId = 0;
 		std::optional<ActiveStroke> _optActiveStroke{};
 		std::optional<PendingComposition> _optPendingComposition{};
+		std::shared_future<std::pair<bool, std::string>> _pendingFileOperation{};
+		TerrainFileOperationState _fileOperationState{};
 		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> _publishedSnapshot{};
 		uint64_t _nextStrokeSequence = 0u;
 		uint64_t _nextLayerSequence = 0u;
 		uint64_t _nextCompositionSerial = 0u;
 		uint64_t _latestCompositionSourceSequence = 0u;
+		uint64_t _nextFileOperationSerial = 0u;
 		bool _historyRollbackFailed = false;
 		std::string _strLastError{};
 	};

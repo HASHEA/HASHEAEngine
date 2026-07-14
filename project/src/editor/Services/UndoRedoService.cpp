@@ -287,6 +287,11 @@ namespace AshEditor
 		return _upPendingTransaction ? _upPendingTransaction->strLabel : k_empty_label;
 	}
 
+	uint64_t UndoRedoService::GetCurrentHistoryStateId() const
+	{
+		return _uCurrentHistoryStateId;
+	}
+
 	bool UndoRedoService::IsDirty() const
 	{
 		return

@@ -184,6 +184,7 @@ namespace AshEditor
 			_upLogBridge->FlushPending();
 		}
 		_upTerrainEditorService->Update();
+		_upActionCoordinator->Update();
 		_upPanelManager->Update();
 
 		const bool bDragging = _editorContext.pUiContext && _editorContext.pUiContext->has_drag_drop_payload();
