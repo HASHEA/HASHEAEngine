@@ -18,7 +18,17 @@
 - Editor contract: `docs/specs/modules/editor.md`
 - Scene/asset contracts: `docs/specs/modules/scene.md`, `docs/specs/modules/asset.md`
 
-Phase 1/2 provide the exact contracts `TerrainAssetId`, 16-byte `TerrainLayerId`, `TerrainAssetSnapshot`, `TerrainEditPatch`, `TerrainBrushParameters`, `TerrainQueryStatus`, `query_height`, `query_normal`, `ray_cast_terrain`, `prefetch_query_region`, async save/load/import/export handles, and Scene v6 `TerrainComponent`. This phase uses those names and shapes directly; it does not duplicate brush math, layer composition, container writing, or Terrain ray intersection inside Editor.
+Phase 1/2 provide the exact contracts `TerrainAssetId`, 16-byte `TerrainLayerId`, `TerrainAssetSnapshot`, `TerrainEditPatch`, `TerrainBrushParameters`, `TerrainQueryStatus`, `query_height`, `query_normal`, `ray_cast_terrain`, `prefetch_query_region`, container/import/export functions, async AssetDatabase load, and Scene v6 `TerrainComponent`. This phase uses those names and shapes directly; it does not duplicate brush math, layer composition, container writing, or Terrain ray intersection inside Editor.
+
+### 2026-07-14 implementation reconciliation
+
+The completed Phase 1/2 code is the implementation source of truth where this pre-written plan used prospective names:
+
+- `AssetDatabase` provides synchronous and asynchronous Terrain **load**, but container save/optimize and PNG/RAW/EXR import/export are synchronous Engine functions. `TerrainEditorService` therefore owns background jobs over immutable input copies and polls their futures on the Editor thread; panels never block and Engine APIs are not renamed merely to match the plan text.
+- The actual composition boundary is `make_terrain_working_set` -> `compose_terrain_components` -> `publish_terrain_working_set`. Every editor mutation composes and publishes the complete current dirty-coordinate set before advertising a ready generation.
+- The actual layer metadata currently has stable id, name, visibility, strength, blend mode, and sparse height/weight blocks, but no persisted lock bit and no public layer-stack mutation API. Task 5 must first add a Function-owned `TerrainLayerStack` API plus backward-compatible container metadata for the lock state; Editor commands call that API and do not mutate layer vectors themselves.
+- `SceneOverlayLine`/`SceneOverlayBatchDesc` and `ScenePresentationSubsystem::submit_scene_overlay` are the existing overlay facade. Phase 3 reuses them without changing Graphics or RenderGraph.
+- The execution mode is **inline task-by-task** in the current Terrain worktree. Each task keeps RED/GREEN evidence and a focused commit; no subagent execution is used, and nothing is pushed without an explicit user request.
 
 Editor code may include Function headers but must not include `Graphics/`, Vulkan, DirectX 12, RenderGraph, or backend headers. `TerrainEditorService` owns every mutable session; `TerrainModePanel`, Inspector, and `ViewportPanel` may only call its intent/query methods.
 
@@ -564,11 +574,17 @@ Expected: one routing/sequencing commit with no brush kernel or patch codec dupl
 ### Task 5: Add undoable non-destructive layer management
 
 **Files:**
+- Create: `project/src/engine/Function/Asset/TerrainLayerStack.h`
+- Create: `project/src/engine/Function/Asset/TerrainLayerStack.cpp`
+- Modify: `project/src/engine/Function/Asset/TerrainData.h`
+- Modify: `project/src/engine/Function/Asset/TerrainContainer.cpp`
+- Modify: `project/src/engine/premake5.lua`
 - Modify: `project/src/editor/Core/TerrainCommands.h`
 - Modify: `project/src/editor/Core/TerrainCommands.cpp`
 - Modify: `project/src/editor/Services/TerrainEditorService.h`
 - Modify: `project/src/editor/Services/TerrainEditorService.cpp`
 - Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
+- Modify: `project/src/tests/Terrain/terrain_container_tests.cpp`
 
 - [ ] **Step 1: Write layer-stack RED tests**
 
@@ -597,9 +613,11 @@ Add delete/restore, duplicate-new-UUID, rename, lock, and affected-occupancy dir
 
 Expected: at least one command/restore/dirty-union assertion fails.
 
-- [ ] **Step 3: Complete Function layer-stack mutations**
+- [ ] **Step 3: Complete Function layer-stack mutations and persistence**
 
 Make add/delete/duplicate/rename/reorder/visibility/opacity/lock return reversible metadata patches. Recomposition dirties only the occupancy union of affected layers; deleting a layer retains its sparse blocks in the undo patch.
+
+Implement those operations in `TerrainLayerStack.*`, including stable 16-byte id allocation and duplicate-id rejection. Add `locked` to `TerrainEditLayer` and persist it through a backward-compatible container metadata revision: existing version-1 assets load with `locked=false`, newly saved metadata round-trips the bit, and unsupported future versions still fail closed. Add container tests for old-unlocked input and new locked round-trip before Editor wiring.
 
 Add these UI-free core methods with stable-id lookup and no index persistence:
 
