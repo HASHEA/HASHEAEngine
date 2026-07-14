@@ -1675,7 +1675,7 @@ function Test-TelemetryData {
             }
         }
 
-        if ($gpuRequired -or $runtimeV2Required) {
+        if ($gpuRequired) {
             if ($null -eq $gpu) {
                 Add-Failure $Record "GPU hardware metadata was missing because telemetry.gpu was absent"
             }
@@ -2177,6 +2177,12 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($telemetryOffSchemaV1Record.status -eq "FAIL" -and (@($telemetryOffSchemaV1Record.failures) -join " ") -match "schema_version 2") "Telemetry-off Vegetation A/B still requires schema v2 runtime metadata."
 
     $validV2 = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $telemetryOffWithoutGpuMetadata = $validV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $telemetryOffWithoutGpuMetadata.PSObject.Properties.Remove("gpu")
+    $telemetryOffWithoutGpuMetadataRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $telemetryOffWithoutGpuMetadataRecord -Telemetry $telemetryOffWithoutGpuMetadata -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Off"
+    Assert-SelfTest ($telemetryOffWithoutGpuMetadataRecord.status -eq "PASS" -and -not $telemetryOffWithoutGpuMetadataRecord.gpu_baseline_comparable) "Telemetry-off fixed-runtime A/B must validate schema v2 runtime metadata without requiring disabled GPU timing metadata."
+
     $candidateRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     $candidateRecord.root_exited = $true
     $candidateRecord.tree_termination_confirmed = $true
@@ -2228,8 +2234,8 @@ function Invoke-RunPerfGateSelfTest {
     $blankDriverTelemetry.gpu.backend_info | Add-Member -MemberType NoteProperty -Name "driver_name" -Value "`t"
 
     $hardwareMetadataCases = @(
-        [PSCustomObject]@{ label = "missing gpu"; telemetry = $missingGpuTelemetry; telemetry_mode = "Off"; failure_pattern = "GPU hardware metadata" },
-        [PSCustomObject]@{ label = "missing backend_info"; telemetry = $missingBackendInfoTelemetry; telemetry_mode = "Off"; failure_pattern = "backend_info" },
+        [PSCustomObject]@{ label = "missing gpu"; telemetry = $missingGpuTelemetry; telemetry_mode = "Profile"; failure_pattern = "GPU hardware metadata" },
+        [PSCustomObject]@{ label = "missing backend_info"; telemetry = $missingBackendInfoTelemetry; telemetry_mode = "Profile"; failure_pattern = "backend_info" },
         [PSCustomObject]@{ label = "missing adapter"; telemetry = $missingAdapterTelemetry; telemetry_mode = "Profile"; failure_pattern = "adapter" },
         [PSCustomObject]@{ label = "blank adapter aliases"; telemetry = $blankAdapterTelemetry; telemetry_mode = "Profile"; failure_pattern = "adapter" },
         [PSCustomObject]@{ label = "missing driver"; telemetry = $missingDriverTelemetry; telemetry_mode = "Profile"; failure_pattern = "driver" },

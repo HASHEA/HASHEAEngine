@@ -43,6 +43,14 @@ RunPerfGate.bat -Profile Standard
 RunPerfGate.bat -Profile Standard -SkipBuild
 ```
 
+在保持 profile 的场景、分辨率、相机和其他运行时约束不变时，关闭 GPU timing 做采集开销 A/B：
+
+```bat
+RunPerfGate.bat -Profile VegetationFullPipeline -TelemetryMode Off -SkipBuild
+```
+
+该模式仍要求固定运行时 profile 产出完整 schema v2 runtime 元数据，但不会要求已关闭的 GPU timing `backend_info`、adapter 或 driver。结果标记为 GPU baseline 不可比，且不能与 `-BlessBaseline` 同时使用。
+
 只验证脚本流程和报告生成，不启动目标程序：
 
 ```bat
