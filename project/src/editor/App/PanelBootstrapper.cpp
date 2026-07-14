@@ -29,6 +29,7 @@ namespace AshEditor
 			deps.pGizmoState = refContext.pGizmoState;
 			deps.pGizmoService = refContext.pGizmoService;
 			deps.pSelectionService = refContext.pSelectionService;
+			deps.pTerrainEditorService = refContext.pTerrainEditorService;
 			deps.pDragDropTransferService = refContext.pDragDropTransferService;
 			deps.pCommandExecutor = refContext.pCommandExecutor;
 			return deps;

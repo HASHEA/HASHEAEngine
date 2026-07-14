@@ -41,6 +41,10 @@ namespace AshEditor
 			uint64_t sequence);
 
 		const TerrainEditorPreviewState& GetPreviewState() const;
+		bool SetViewportPreview(
+			AshEngine::TerrainAssetId assetId,
+			const TerrainViewportPreviewState& refPreview);
+		void ClearViewportPreview();
 		const TerrainAuthoringConfig& GetAuthoringConfig() const;
 		AshEngine::TerrainAssetId GetSelectedAssetId() const;
 		AshEngine::TerrainLayerId GetSelectedLayerId() const;

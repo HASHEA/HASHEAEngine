@@ -25,6 +25,7 @@ namespace AshEditor
 			const EditorViewportInstance& refViewport,
 			const AshEngine::UIRect& rectContent,
 			bool bContentHovered,
+			ViewportPanelTerrainInteractionState& refTerrainInteractionState,
 			ViewportPanelSceneSelectionState& refSceneSelectionState);
 		void DrawSceneBoxSelectionOverlay(
 			AshEngine::UIContext& refUi,

@@ -25,22 +25,6 @@ namespace AshEditor
 {
 	namespace
 	{
-		bool TryBuildSceneInteractionRay(
-			const ViewportPanelDeps& refDeps,
-			const std::string& strViewportId,
-			const AshEngine::UIRect& rectContent,
-			const AshEngine::UIVec2& vecMousePosition,
-			AshEngine::SceneRay& outRay)
-		{
-			return
-				refDeps.pViewportCameraService &&
-				refDeps.pViewportCameraService->TryBuildViewportRay(
-					strViewportId,
-					rectContent,
-					vecMousePosition,
-					outRay);
-		}
-
 		bool TryQuerySceneInteraction(
 			const ViewportPanelDeps& refDeps,
 			const std::string& strViewportId,
@@ -53,7 +37,12 @@ namespace AshEditor
 			{
 				return false;
 			}
-			if (!TryBuildSceneInteractionRay(refDeps, strViewportId, rectContent, vecMousePosition, outRay))
+			if (!ViewportPanelSupport::TryBuildSceneInteractionRay(
+				refDeps,
+				strViewportId,
+				rectContent,
+				vecMousePosition,
+				outRay))
 			{
 				return false;
 			}
@@ -333,6 +322,22 @@ namespace AshEditor
 
 	namespace ViewportPanelSupport
 	{
+		bool TryBuildSceneInteractionRay(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId,
+			const AshEngine::UIRect& rectContent,
+			const AshEngine::UIVec2& vecMousePosition,
+			AshEngine::SceneRay& outRay)
+		{
+			return
+				refDeps.pViewportCameraService &&
+				refDeps.pViewportCameraService->TryBuildViewportRay(
+					strViewportId,
+					rectContent,
+					vecMousePosition,
+					outRay);
+		}
+
 		EditorGizmoService::InteractionResult UpdateSceneGizmoInteraction(
 			const ViewportPanelDeps& refDeps,
 			AshEngine::UIContext& refUi,

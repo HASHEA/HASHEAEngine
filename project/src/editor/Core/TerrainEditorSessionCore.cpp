@@ -3,9 +3,12 @@
 #include "Function/Asset/TerrainComposition.h"
 
 #include <algorithm>
+#include <cmath>
 #include <new>
 #include <stdexcept>
 #include <utility>
+
+#include <glm/geometric.hpp>
 
 namespace AshEditor
 {
@@ -425,9 +428,87 @@ namespace AshEditor
 		return _optWorkingSet && _optWorkingSet->content_generation != _persistedContentGeneration;
 	}
 
+	bool TerrainEditorSessionCore::SetViewportPreview(
+		const TerrainViewportPreviewState& refPreview)
+	{
+		if (_preview.query_status != AshEngine::TerrainQueryStatus::Ready)
+		{
+			return false;
+		}
+
+		switch (refPreview.query_status)
+		{
+		case AshEngine::TerrainQueryStatus::Ready:
+			if (!refPreview.has_world_position)
+			{
+				return false;
+			}
+			break;
+		case AshEngine::TerrainQueryStatus::Pending:
+		case AshEngine::TerrainQueryStatus::Failed:
+		{
+			TerrainViewportPreviewState retained = _preview.viewport;
+			retained.query_status = refPreview.query_status;
+			if (!retained.has_world_position)
+			{
+				retained = {};
+				retained.query_status = refPreview.query_status;
+				_preview.viewport = retained;
+				return true;
+			}
+			if (!std::isfinite(refPreview.radius_meters) ||
+				refPreview.radius_meters <= 0.0f)
+			{
+				return false;
+			}
+			// A non-ready query may recolor the last service-owned brush radius,
+			// but it cannot replace the last validated same-session hit anchor.
+			retained.radius_meters = refPreview.radius_meters;
+			_preview.viewport = retained;
+			return true;
+		}
+		case AshEngine::TerrainQueryStatus::Outside:
+			_preview.viewport = {};
+			return true;
+		default:
+			return false;
+		}
+
+		TerrainViewportPreviewState candidate = refPreview;
+		const bool finiteCenter =
+			std::isfinite(candidate.center_ws.x) &&
+			std::isfinite(candidate.center_ws.y) &&
+			std::isfinite(candidate.center_ws.z);
+		const bool finiteNormal =
+			std::isfinite(candidate.normal_ws.x) &&
+			std::isfinite(candidate.normal_ws.y) &&
+			std::isfinite(candidate.normal_ws.z);
+		const float normalLength = glm::length(candidate.normal_ws);
+		if (candidate.terrain_entity_id == 0u ||
+			!finiteCenter || !finiteNormal || !std::isfinite(normalLength) ||
+			normalLength <= 1.0e-6f ||
+			!std::isfinite(candidate.radius_meters) || candidate.radius_meters <= 0.0f)
+		{
+			return false;
+		}
+
+		candidate.normal_ws /= normalLength;
+		_preview.viewport = candidate;
+		return true;
+	}
+
+	void TerrainEditorSessionCore::ClearViewportPreview()
+	{
+		_preview.viewport = {};
+	}
+
 	void TerrainEditorSessionCore::SetPreviewQueryStatus(const AshEngine::TerrainQueryStatus eStatus)
 	{
 		_preview.query_status = eStatus;
+		if (eStatus != AshEngine::TerrainQueryStatus::Ready)
+		{
+			ClearViewportPreview();
+		}
 	}
 
 	void TerrainEditorSessionCore::SelectAfterLayerTransition(

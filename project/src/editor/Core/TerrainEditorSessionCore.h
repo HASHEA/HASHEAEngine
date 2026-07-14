@@ -91,12 +91,21 @@ namespace AshEditor
 		std::optional<AshEngine::TerrainHeightExportDesc> export_desc{};
 	};
 
-	struct TerrainEditorPreviewState
+	struct TerrainViewportPreviewState
 	{
 		AshEngine::TerrainQueryStatus query_status = AshEngine::TerrainQueryStatus::Outside;
 		glm::vec3 center_ws{ 0.0f };
 		glm::vec3 normal_ws{ 0.0f, 1.0f, 0.0f };
-		float radius = 1.0f;
+		float radius_meters = 1.0f;
+		uint64_t terrain_entity_id = 0u;
+		bool has_world_position = false;
+	};
+
+	struct TerrainEditorPreviewState
+	{
+		// Session readiness is intentionally independent from the live viewport hit.
+		AshEngine::TerrainQueryStatus query_status = AshEngine::TerrainQueryStatus::Outside;
+		TerrainViewportPreviewState viewport{};
 		bool layer_locked = false;
 		bool stroke_active = false;
 	};
@@ -157,6 +166,8 @@ namespace AshEditor
 			std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& refSnapshot,
 			std::string* pError = nullptr);
 		bool IsDirty() const;
+		bool SetViewportPreview(const TerrainViewportPreviewState& refPreview);
+		void ClearViewportPreview();
 		void SetPreviewQueryStatus(AshEngine::TerrainQueryStatus eStatus);
 
 	private:

@@ -62,6 +62,7 @@ namespace AshEditor
 		ViewportPanelDeps _deps{};
 		EditorEventBindings _eventBindings{};
 		std::string _strViewportId{};
+		ViewportPanelTerrainInteractionState _terrainInteraction{};
 		ViewportPanelSceneSelectionState _sceneSelection{};
 	};
 }

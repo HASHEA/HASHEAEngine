@@ -47,7 +47,7 @@ Editor code may include Function headers but must not include `Graphics/`, Vulka
 - `project/src/editor/Panels/Terrain/TerrainModePanel.h/.cpp`: Manage/Sculpt/Paint/Layers UI and immutable intents.
 - `project/src/editor/Panels/Terrain/TerrainModeWidgets.h/.cpp`: reusable brush/layer/status controls using UIContext.
 - `project/src/editor/Services/TerrainBrushOverlayRenderer.h/.cpp`: convert immutable preview state to world-space overlay lines and submit them.
-- `project/src/editor/Core/PanelDeps/ViewportPanelDeps.h`, `Panels/ViewportPanelInteraction.cpp`, `Panels/ViewportPanelCanvas.cpp`, `Panels/ViewportPanelToolbar.cpp`: Terrain input priority and presentation hookup.
+- `project/src/editor/Core/PanelDeps/ViewportPanelDeps.h`, `Panels/ViewportPanelInteraction.cpp`, `Panels/ViewportPanelTerrainInteraction.h/.cpp`, `Panels/ViewportPanelCanvas.cpp`, `Panels/ViewportPanelToolbar.cpp`: the main interaction file only coordinates camera → Terrain → gizmo → selection; the Terrain split owns ray/query adaptation and intent orchestration; Canvas/Toolbar own presentation hookup.
 - `project/src/editor/App/EditorApplicationImpl.h/.cpp`, `App/PanelBootstrapper.h/.cpp`: service lifecycle and panel dependency injection.
 - `project/src/editor/App/SceneWorkflowCoordinator.cpp`, `App/EditorActionCoordinator.cpp`: close/reload/save ordering and history reset.
 - `project/src/editor/Core/EditorIds.h`, `Shell/DockLayoutController.cpp`: stable panel id/title and default right-side dock.
@@ -98,12 +98,20 @@ using AshEngine::TerrainLayerId;
 
 enum class TerrainEditorMode : uint8_t { Manage, Sculpt, Paint, Layers };
 
-struct TerrainEditorPreviewState
+struct TerrainViewportPreviewState
 {
     AshEngine::TerrainQueryStatus query_status = AshEngine::TerrainQueryStatus::Outside;
     glm::vec3 center_ws{ 0.0f };
     glm::vec3 normal_ws{ 0.0f, 1.0f, 0.0f };
-    float radius = 1.0f;
+    float radius_meters = 1.0f;
+    uint64_t terrain_entity_id = 0;
+    bool has_world_position = false;
+};
+
+struct TerrainEditorPreviewState
+{
+    AshEngine::TerrainQueryStatus query_status = AshEngine::TerrainQueryStatus::Outside;
+    TerrainViewportPreviewState viewport{};
     bool layer_locked = false;
     bool stroke_active = false;
 };
@@ -772,17 +780,30 @@ Result: Terrain Mode is registered and defaults closed, Asset Browser Terrain se
 **Files:**
 - Create: `project/src/editor/Core/TerrainViewportInputRouter.h`
 - Create: `project/src/editor/Core/TerrainViewportInputRouter.cpp`
+- Create: `project/src/editor/Panels/ViewportPanelTerrainInteraction.h`
+- Create: `project/src/editor/Panels/ViewportPanelTerrainInteraction.cpp`
 - Create: `project/src/tests/Editor/terrain_viewport_interaction_tests.cpp`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.h`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.cpp`
 - Modify: `project/src/editor/Core/PanelDeps/ViewportPanelDeps.h`
 - Modify: `project/src/editor/App/PanelBootstrapper.cpp`
 - Modify: `project/src/editor/Panels/ViewportPanelInteraction.h`
 - Modify: `project/src/editor/Panels/ViewportPanelInteraction.cpp`
+- Modify: `project/src/editor/Panels/ViewportPanelSupport.h`
 - Modify: `project/src/editor/Panels/ViewportPanelInteractionSupport.cpp`
 - Modify: `project/src/editor/Panels/ViewportPanelToolbar.cpp`
+- Modify: `project/src/editor/Panels/ViewportPanelState.h`
+- Modify: `project/src/editor/Panels/ViewportPanel.h`
+- Modify: `project/src/editor/Panels/ViewportPanel.cpp`
+- Modify: `project/src/editor/Services/TerrainEditorService.h`
+- Modify: `project/src/editor/Services/TerrainEditorService.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/editor.md`
 - Modify by Terrain-only hunk: `project/src/tests/premake5.lua`
 
-- [ ] **Step 1: Write the real arbitration RED test**
+- [x] **Step 1: Write the real arbitration RED test**
 
 ```cpp
 TEST_CASE("Terrain viewport router consumes only authoring mouse-left")
@@ -801,7 +822,7 @@ TEST_CASE("Terrain viewport router consumes only authoring mouse-left")
 }
 ```
 
-- [ ] **Step 2: Run focused test and observe RED**
+- [x] **Step 2: Run focused test and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain viewport router*"
@@ -809,46 +830,49 @@ TEST_CASE("Terrain viewport router consumes only authoring mouse-left")
 
 Expected: compile failure for `TerrainViewportRouteInput`.
 
-- [ ] **Step 3: Implement the UI-free router and link it to Tests**
+- [x] **Step 3: Implement the UI-free router and link it to Tests**
 
 ```cpp
 struct TerrainViewportRouteResult
 {
-    bool send_camera = true;
-    bool send_terrain = false;
     bool send_gizmo = true;
-    bool send_selection = true;
     bool consume_mouse_left = false;
+    bool release_mouse_left_press = false;
 };
 ```
 
-Sculpt/Paint on the primary Scene viewport sends Terrain only when no Alt/RMB/MMB camera gesture is active. A Ready left press/down/release consumes selection and gizmo; Manage/Layers/Game/aux routes preserve existing behavior. Append only this source line to Tests:
+Sculpt/Paint on the primary Scene viewport sends Terrain only when no Alt/RMB/MMB/wheel/F camera gesture is active. A claimed press is latched through physical release; Ready press adds the first sample, Ready release adds the last sample, Outside ends the valid partial stroke, and Pending/Failed cancels. Manage/Layers/Game/aux routes preserve existing behavior. Append only this source line to Tests:
 
 ```lua
 "%{wks.location}/project/src/editor/Core/TerrainViewportInputRouter.cpp",
 ```
 
-- [ ] **Step 4: Pass TerrainEditorService through ViewportPanelDeps**
+- [x] **Step 4: Pass TerrainEditorService through ViewportPanelDeps**
 
 Add `TerrainEditorService* pTerrainEditorService` and populate it in `MakeViewportPanelDeps`. Game/aux viewports receive the pointer but do not author Terrain.
 
-- [ ] **Step 5: Reuse the existing viewport ray builder**
+- [x] **Step 5: Reuse the existing viewport ray builder**
 
 Extract the local `TryBuildSceneInteractionRay` wrapper so Terrain interaction calls `EditorViewportCameraService::TryBuildViewportRay`; do not reproduce inverse projection math.
 
-- [ ] **Step 6: Insert Terrain arbitration after camera update**
+- [x] **Step 6: Insert Terrain arbitration after camera update**
 
-Only the primary Scene viewport with active Sculpt/Paint mode may call `UpdateTerrainInteraction`. Alt+LMB, RMB, MMB, mouse wheel, and camera focus remain camera-owned. A Ready, unmodified LMB stroke consumes mouse-left; Pending/Outside/Failed does not begin a stroke and cancels selection start for that press only when Terrain mode explicitly owns the tool.
+Only the canonical primary Scene viewport with active Sculpt/Paint mode may call `ViewportPanelTerrainInteraction::Update`. Alt+LMB, RMB, MMB, mouse wheel, and camera focus remain camera-owned. A Ready, unmodified LMB stroke consumes mouse-left; Pending/Outside/Failed does not begin a stroke and cancels selection start for the latched press. Ready hits must map back to the selected Terrain asset, convert sample index to terrain-local meters with working-set spacing, and preserve nonuniform world X/Z metric. A pointer outside the content is `Outside`, while missing working-set/ray/camera context is `Failed` so an active stroke cancels rather than committing a partial segment. Begin validates the asset ID again inside `TerrainEditorService`.
 
-- [ ] **Step 7: Skip gizmo/selection on a consumed stroke**
+Keep the main `ViewportPanelInteraction.cpp` as the camera → terrain → gizmo → selection coordinator. Put Terrain ray/query adaptation and intent orchestration in the dedicated `ViewportPanelTerrainInteraction.*` vertical split; do not turn the stateless `*Support` helpers into a stateful controller.
 
-Pass `terrainInteraction.bConsumesMouseLeft || gizmoInteraction.bConsumesMouseLeft` into selection. Do not invoke gizmo update while a Terrain stroke is active. Disable W/E/R gizmo shortcuts in active Sculpt/Paint mode; keep them in Manage/Layers.
+Keep `TerrainEditorPreviewState.query_status` as the session load/quarantine status. Add a separate validated viewport-preview sub-state for live cursor query status, world anchor/normal, service-owned radius, and Terrain entity identity. Only the selected asset in canonical primary Scene Sculpt/Paint may publish it; lifecycle/Outside clears it, Pending/Failed may retain the last valid same-session anchor, and foreign hits never publish a new anchor.
 
-- [ ] **Step 8: Run router, ordering contract, and build GREEN**
+- [x] **Step 7: Gate gizmo and consume selection on a Terrain-owned press**
+
+Pass `terrainInteraction.consume_mouse_left || gizmoInteraction.bConsumesMouseLeft` into selection, which remains called so it can clear pending GPU pick/box state. Do not invoke gizmo update while Terrain owns the press. Disable W/E/R and toolbar Move/Scale/Rotate in owning Sculpt/Paint mode; keep them in Manage/Layers. Escape, owner/content loss, panel collapse/reset and detach cancel an active canonical Scene stroke.
+
+- [x] **Step 8: Run router, ordering contract, and build GREEN**
 
 Also retain the source-order assertion `camera < terrain < gizmo < selection` in `terrain_editor_contract_tests.cpp` so the real router and the panel wiring are both covered.
 
 ```powershell
+.\generate_vs2022.bat
 .\RunTests.bat Debug --test-case="Terrain viewport router*"
 .\RunTests.bat Debug --test-case="Terrain viewport interaction*"
 .\build_editor.bat Debug
@@ -856,10 +880,10 @@ Also retain the source-order assertion `camera < terrain < gizmo < selection` in
 
 Expected: call order/consumption assertions pass and Editor builds.
 
-- [ ] **Step 9: Stage the Terrain premake hunk and commit viewport arbitration**
+- [x] **Step 9: Stage the Terrain premake hunk and commit viewport arbitration**
 
 ```powershell
-git add project/src/editor/Core/TerrainViewportInputRouter.h project/src/editor/Core/TerrainViewportInputRouter.cpp project/src/tests/Editor/terrain_viewport_interaction_tests.cpp project/src/editor/Core/PanelDeps/ViewportPanelDeps.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/Panels/ViewportPanelInteraction.h project/src/editor/Panels/ViewportPanelInteraction.cpp project/src/editor/Panels/ViewportPanelInteractionSupport.cpp project/src/editor/Panels/ViewportPanelToolbar.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
+git add project/src/editor/Core/TerrainViewportInputRouter.h project/src/editor/Core/TerrainViewportInputRouter.cpp project/src/editor/Panels/ViewportPanelTerrainInteraction.h project/src/editor/Panels/ViewportPanelTerrainInteraction.cpp project/src/tests/Editor/terrain_viewport_interaction_tests.cpp project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Core/TerrainEditorSessionCore.cpp project/src/editor/Core/PanelDeps/ViewportPanelDeps.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/Panels/ViewportPanelInteraction.h project/src/editor/Panels/ViewportPanelInteraction.cpp project/src/editor/Panels/ViewportPanelSupport.h project/src/editor/Panels/ViewportPanelInteractionSupport.cpp project/src/editor/Panels/ViewportPanelToolbar.cpp project/src/editor/Panels/ViewportPanelState.h project/src/editor/Panels/ViewportPanel.h project/src/editor/Panels/ViewportPanel.cpp project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
 git add -p project/src/tests/premake5.lua
 git diff --cached -- project/src/tests/premake5.lua
 git diff --cached --check
@@ -868,6 +892,8 @@ git commit -m "feat(editor): route terrain viewport input"
 
 Expected: no Graphics include or duplicated ray math; cached premake diff adds only the Terrain viewport router and preserves all earlier Terrain/gizmo lines.
 
+Result: The canonical primary Scene viewport now routes camera → Terrain → gizmo → selection, validates the selected Terrain asset/entity and world metric, and turns one physical LMB press into at most one service-owned stroke. Ready/Outside/Pending/Failed, camera takeover, short-click, lost-release and lifecycle paths have explicit End/Cancel/latch behavior; cursor preview readiness is independent from session readiness and only retains a validated same-session anchor. Focused viewport tests pass (9/9, 142 assertions), and final Debug/Release suites pass (306/306, 21339 assertions each). ArchGate and AIDevDoctor pass; fresh Premake generation plus Editor/Sandbox Debug/Release builds pass. The four-combination Debug readiness matrix exits from the shared readiness signal with zero independently captured log rejection hits, Sandbox clean exit on both backends, exact restoration of all four runtime configuration files, and zero active roots. RenderGate was not run because this slice changes Editor input/service state only and does not alter renderer, shader, scene presentation output, overlay geometry, or golden-visible pixels.
+
 ### Task 8: Add world-space brush preview with SceneOverlayLine
 
 **Files:**
@@ -875,6 +901,10 @@ Expected: no Graphics include or duplicated ray math; cached premake diff adds o
 - Create: `project/src/editor/Services/TerrainBrushOverlayRenderer.cpp`
 - Modify: `project/src/editor/Panels/ViewportPanelCanvas.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
+- Modify by Terrain-only hunk: `project/src/tests/premake5.lua`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/editor.md`
+- Modify: `docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md`
 
 - [ ] **Step 1: Write overlay RED contract**
 
@@ -889,6 +919,10 @@ TEST_CASE("Terrain brush preview uses the ScenePresentation overlay facade")
 }
 ```
 
+Add behavior tests for a flat 64-segment closed loop, a sloped/nonuniformly scaled Terrain whose world-XZ radius remains exact, non-Ready height samples that create a gap instead of a bridge, Ready/Pending/Failed/locked color selection, and Outside/invalid binding paths that submit nothing. The source-facade assertion supplements these geometry tests; it is not the only acceptance evidence.
+
+Append `TerrainBrushOverlayRenderer.cpp` as an isolated Tests premake source hunk so the geometry behavior tests link, then fresh-generate the Visual Studio projects before GREEN.
+
 - [ ] **Step 2: Run focused test and observe RED**
 
 ```powershell
@@ -899,19 +933,20 @@ Expected: overlay file/calls are absent.
 
 - [ ] **Step 3: Implement deterministic ring geometry**
 
-Generate 64 segments in the tangent plane formed from preview normal, center each point with a `query_height` Ready result, and use `SceneOverlayDepthMode::DepthTestNoWrite`. Colors are Ready green, Pending amber, and locked/Failed red; Outside emits no lines.
+Generate a 64-segment world-XZ circle with radius `preview.viewport.radius_meters`; do not use a tangent-plane circle because the brush kernel defines its footprint in world-XZ metric and a tangent projection would shrink it on slopes. Transform each candidate point into the validated Terrain snapshot's local XZ, accept only `query_height` Ready endpoints, transform the sampled height back to world space, and use `SceneOverlayDepthMode::DepthTestNoWrite`. Never bridge across a non-Ready endpoint. Colors are Ready green, Pending amber, and locked/Failed red; Outside or `has_world_position == false` emits no lines.
 
 - [ ] **Step 4: Submit through the viewport binding facade**
 
-`TerrainBrushOverlayRenderer::Submit` takes `TerrainEditorPreviewState` plus `SceneViewBindingHandle`, builds a local vector of `SceneOverlayLine`, and calls `submit_scene_overlay`. Invalid binding or empty line list returns false without retaining pointers.
+`TerrainBrushOverlayRenderer::Submit` takes `TerrainEditorPreviewState`, the service's currently published immutable `TerrainAssetSnapshot`, the cursor entity's current world transform, and `SceneViewBindingHandle`; it builds a local vector of `SceneOverlayLine` and calls `submit_scene_overlay`. Using the published snapshot keeps overlay height aligned with the rendered generation and avoids resolving an AssetDatabase future for every point. Invalid binding/transform, unavailable anchor, non-Ready height sample, or empty line list returns false without retaining pointers.
 
 - [ ] **Step 5: Hook Scene viewport decoration**
 
-In `ViewportPanelCanvas::DrawDecorations`, after helper overlays and before 2D box-selection decoration, submit the Terrain brush overlay for the primary Scene viewport. `ScenePresentationSubsystem` owns the per-binding copy and clears it after consumption.
+In `ViewportPanelCanvas::DrawDecorations`, after helper overlays and before 2D box-selection decoration, resolve the preview entity from the active Scene, obtain its current world transform plus the service's published snapshot, and submit the Terrain brush overlay for the primary Scene viewport. `ScenePresentationSubsystem` owns the per-binding copy and clears it after consumption.
 
 - [ ] **Step 6: Run overlay contract/build GREEN**
 
 ```powershell
+.\generate_vs2022.bat
 .\RunTests.bat Debug --test-case="Terrain brush preview*"
 .\build_editor.bat Debug
 ```
@@ -921,7 +956,9 @@ Expected: facade assertions pass and Editor links the overlay renderer.
 - [ ] **Step 7: Commit brush overlay**
 
 ```powershell
-git add project/src/editor/Services/TerrainBrushOverlayRenderer.h project/src/editor/Services/TerrainBrushOverlayRenderer.cpp project/src/editor/Panels/ViewportPanelCanvas.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
+git add project/src/editor/Services/TerrainBrushOverlayRenderer.h project/src/editor/Services/TerrainBrushOverlayRenderer.cpp project/src/editor/Panels/ViewportPanelCanvas.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
+git add -p project/src/tests/premake5.lua
+git diff --cached -- project/src/tests/premake5.lua
 git diff --cached --check
 git commit -m "feat(editor): preview terrain brushes in scene"
 ```

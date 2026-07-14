@@ -11,6 +11,7 @@ namespace AshEditor
 	class IEditorCommandExecutor;
 	class SceneService;
 	class SelectionService;
+	class TerrainEditorService;
 	struct EditorGizmoState;
 
 	struct ViewportPanelDeps
@@ -23,6 +24,7 @@ namespace AshEditor
 		SceneService* pSceneService = nullptr;
 		EditorGizmoState* pGizmoState = nullptr;
 		SelectionService* pSelectionService = nullptr;
+		TerrainEditorService* pTerrainEditorService = nullptr;
 		DragDropTransferService* pDragDropTransferService = nullptr;
 		IEditorCommandExecutor* pCommandExecutor = nullptr;
 	};

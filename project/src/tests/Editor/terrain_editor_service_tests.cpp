@@ -265,6 +265,7 @@ namespace
 	{
 		AshEditor::TerrainEditorIntent intent{};
 		intent.kind = AshEditor::TerrainEditorIntent::Kind::BeginStroke;
+		intent.asset_id = 83u;
 		intent.layer_id = MakeEditorStrokeLayerId();
 		intent.brush.tool = AshEngine::TerrainBrushTool::Raise;
 		intent.brush.radius_meters = 1.0f;
@@ -531,6 +532,11 @@ TEST_CASE("Terrain editor cancel and empty stroke create no mutation or history"
 	invalidMetric.brush_metric.world_meters_per_terrain_meter.x =
 		std::numeric_limits<float>::quiet_NaN();
 	CHECK_FALSE(SubmitConfiguredBeginStroke(service, invalidMetric));
+
+	AshEditor::TerrainEditorIntent wrongAsset = MakeBeginStrokeIntent();
+	wrongAsset.asset_id = 84u;
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service, wrongAsset));
+	CHECK_FALSE(service.GetPreviewState().stroke_active);
 }
 
 TEST_CASE("Terrain editor reserves a generation for history rollback")
@@ -991,6 +997,111 @@ TEST_CASE("Terrain editor rejects incompatible layers and non-ready stroke state
 	CHECK_FALSE(core.BeginStroke(1u));
 	core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
 	CHECK_FALSE(core.BeginStroke(1u));
+}
+
+TEST_CASE("Terrain viewport preview stays independent from authoring session readiness")
+{
+	AshEditor::TerrainEditorSessionCore core{};
+	AshEngine::TerrainWorkingSet workingSet{};
+	std::string error{};
+	REQUIRE(AshEngine::make_terrain_working_set(
+		MakeEditorStrokeSnapshot(),
+		workingSet,
+		&error));
+	REQUIRE(core.Open(std::move(workingSet)));
+
+	AshEditor::TerrainViewportPreviewState viewport{};
+	viewport.query_status = AshEngine::TerrainQueryStatus::Ready;
+	viewport.center_ws = { 12.0f, 3.0f, -5.0f };
+	viewport.normal_ws = { 0.0f, 2.0f, 0.0f };
+	viewport.radius_meters = 24.0f;
+	viewport.terrain_entity_id = 91u;
+	viewport.has_world_position = true;
+	REQUIRE(core.SetViewportPreview(viewport));
+
+	const AshEditor::TerrainEditorPreviewState& ready = core.GetPreviewState();
+	CHECK(ready.query_status == AshEngine::TerrainQueryStatus::Ready);
+	CHECK(ready.viewport.query_status == AshEngine::TerrainQueryStatus::Ready);
+	CHECK(ready.viewport.has_world_position);
+	CHECK(ready.viewport.center_ws.x == doctest::Approx(12.0f));
+	CHECK(ready.viewport.normal_ws.y == doctest::Approx(1.0f));
+	CHECK(ready.viewport.radius_meters == doctest::Approx(24.0f));
+
+	viewport.query_status = AshEngine::TerrainQueryStatus::Pending;
+	viewport.center_ws = { -100.0f, -200.0f, -300.0f };
+	viewport.normal_ws = { 1.0f, 0.0f, 0.0f };
+	viewport.radius_meters = 12.0f;
+	viewport.terrain_entity_id = 999u;
+	REQUIRE(core.SetViewportPreview(viewport));
+	CHECK(core.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready);
+	CHECK(core.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Pending);
+	CHECK(core.GetPreviewState().viewport.center_ws.x == doctest::Approx(12.0f));
+	CHECK(core.GetPreviewState().viewport.normal_ws.y == doctest::Approx(1.0f));
+	CHECK(core.GetPreviewState().viewport.terrain_entity_id == 91u);
+	CHECK(core.GetPreviewState().viewport.radius_meters == doctest::Approx(12.0f));
+
+	viewport.query_status = AshEngine::TerrainQueryStatus::Ready;
+	viewport.normal_ws = {};
+	CHECK_FALSE(core.SetViewportPreview(viewport));
+	CHECK(core.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Pending);
+	viewport.normal_ws = { 0.0f, 1.0f, 0.0f };
+	viewport.terrain_entity_id = 0u;
+	CHECK_FALSE(core.SetViewportPreview(viewport));
+	CHECK(core.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Pending);
+	viewport.terrain_entity_id = 91u;
+	viewport.center_ws.x = std::numeric_limits<float>::quiet_NaN();
+	CHECK_FALSE(core.SetViewportPreview(viewport));
+	CHECK(core.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Pending);
+	viewport.query_status = AshEngine::TerrainQueryStatus::Outside;
+	REQUIRE(core.SetViewportPreview(viewport));
+	CHECK(core.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Outside);
+	CHECK(core.GetPreviewState().viewport.terrain_entity_id == 0u);
+	CHECK_FALSE(core.GetPreviewState().viewport.has_world_position);
+
+	core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+	CHECK(core.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
+	CHECK(core.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Outside);
+	CHECK_FALSE(core.GetPreviewState().viewport.has_world_position);
+}
+
+TEST_CASE("Terrain editor service validates viewport preview ownership and owns brush radius")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+
+	AshEditor::TerrainViewportPreviewState viewport{};
+	viewport.query_status = AshEngine::TerrainQueryStatus::Ready;
+	viewport.center_ws = { 1.0f, 2.0f, 3.0f };
+	viewport.normal_ws = { 0.0f, 1.0f, 0.0f };
+	viewport.radius_meters = 999.0f;
+	viewport.terrain_entity_id = 17u;
+	viewport.has_world_position = true;
+	CHECK_FALSE(service.SetViewportPreview(83u, viewport));
+	CHECK_FALSE(service.GetPreviewState().viewport.has_world_position);
+
+	AshEditor::TerrainEditorIntent configure{};
+	configure.kind = AshEditor::TerrainEditorIntent::Kind::ConfigureAuthoring;
+	configure.mode = AshEditor::TerrainEditorMode::Sculpt;
+	configure.brush = MakeBeginStrokeIntent().brush;
+	REQUIRE(service.SubmitIntent(configure));
+	CHECK_FALSE(service.SetViewportPreview(999u, viewport));
+	CHECK_FALSE(service.GetPreviewState().viewport.has_world_position);
+	REQUIRE(service.SetViewportPreview(83u, viewport));
+	CHECK(service.GetPreviewState().viewport.has_world_position);
+	CHECK(service.GetPreviewState().viewport.terrain_entity_id == 17u);
+	CHECK(service.GetPreviewState().viewport.radius_meters == doctest::Approx(
+		service.GetAuthoringConfig().brush.radius_meters));
+
+	configure.brush.radius_meters = 4.5f;
+	REQUIRE(service.SubmitIntent(configure));
+	CHECK(service.GetPreviewState().viewport.radius_meters == doctest::Approx(4.5f));
+	configure.mode = AshEditor::TerrainEditorMode::Manage;
+	REQUIRE(service.SubmitIntent(configure));
+	CHECK(service.GetPreviewState().viewport.query_status == AshEngine::TerrainQueryStatus::Outside);
+	CHECK(service.GetPreviewState().viewport.terrain_entity_id == 0u);
+	CHECK_FALSE(service.GetPreviewState().viewport.has_world_position);
 }
 
 TEST_CASE("Terrain editor invalid raw samples fail without mutation or history")

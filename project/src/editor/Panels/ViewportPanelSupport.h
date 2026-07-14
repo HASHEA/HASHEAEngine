@@ -12,6 +12,7 @@
 
 namespace AshEngine
 {
+	struct SceneRay;
 	class UIContext;
 }
 
@@ -29,6 +30,12 @@ namespace AshEditor::ViewportPanelSupport
 		const AshEngine::UIVec2& refSecondPoint);
 	bool RectsIntersect(const AshEngine::UIRect& refLeftRect, const AshEngine::UIRect& refRightRect);
 	float DistanceSquared(const AshEngine::UIVec2& refFirstPoint, const AshEngine::UIVec2& refSecondPoint);
+	bool TryBuildSceneInteractionRay(
+		const ViewportPanelDeps& refDeps,
+		const std::string& strViewportId,
+		const AshEngine::UIRect& rectContent,
+		const AshEngine::UIVec2& vecMousePosition,
+		AshEngine::SceneRay& outRay);
 
 	void DrawViewportDisplayOptionsMenu(
 		AshEngine::UIContext& refUi,

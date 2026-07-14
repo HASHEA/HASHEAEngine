@@ -4,6 +4,8 @@
 #include "Core/EditorIds.h"
 #include "Core/EditorSelection.h"
 #include "Function/Gui/UIContext.h"
+#include "Function/Scene/SceneQuery.h"
+#include "Panels/ViewportPanelTerrainInteraction.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/AssetDatabaseService.h"
 #include "Services/DragDropTransferService.h"
@@ -12,6 +14,7 @@
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+#include "Services/TerrainEditorService.h"
 #include "Widgets/EditorThemeColors.h"
 
 #include <cstring>
@@ -23,7 +26,6 @@ namespace AshEditor
 	{
 		constexpr float kSceneBoxSelectionDragThresholdPixels = 5.0f;
 		constexpr double kSceneClickPickFallbackDelaySeconds = 0.2;
-
 		void ClearSceneBoxSelectionTracking(ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
 		{
 			refSceneBoxSelectionState.bTracking = false;
@@ -105,9 +107,14 @@ namespace AshEditor
 			AshEngine::UIContext& refUi,
 			const EditorViewportInputState& refInput,
 			const bool bViewportHovered,
+			const bool bTerrainOwnsSceneTools,
 			EditorGizmoState* pGizmoState)
 		{
-			if (!pGizmoState || !bViewportHovered || refUi.is_any_item_active() || refUi.wants_text_input())
+			if (!pGizmoState ||
+				!bViewportHovered ||
+				bTerrainOwnsSceneTools ||
+				refUi.is_any_item_active() ||
+				refUi.wants_text_input())
 			{
 				return;
 			}
@@ -153,6 +160,7 @@ namespace AshEditor
 			}
 
 			static constexpr AshEngine::UIKey kKeys[] = {
+				AshEngine::UIKey::Escape,
 				AshEngine::UIKey::F,
 				AshEngine::UIKey::W,
 				AshEngine::UIKey::E,
@@ -173,7 +181,7 @@ namespace AshEditor
 			AshEngine::UIContext& refUi,
 			const EditorViewportInputState& refInput,
 			const EditorViewportInstance& refViewport,
-			bool bGizmoConsumesMouseLeft,
+			bool bMouseLeftConsumed,
 			ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
 		{
 			if (!refDeps.pSelectionService ||
@@ -181,6 +189,12 @@ namespace AshEditor
 				!refDeps.pAssetDatabaseService)
 			{
 				refSceneBoxSelectionState = {};
+				return;
+			}
+			if (bMouseLeftConsumed)
+			{
+				ClearScenePendingPick(refSceneBoxSelectionState);
+				ClearSceneBoxSelectionTracking(refSceneBoxSelectionState);
 				return;
 			}
 
@@ -192,7 +206,7 @@ namespace AshEditor
 
 			const bool bCanStartSelection =
 				refViewport.state.bContentHovered &&
-				!bGizmoConsumesMouseLeft &&
+				!bMouseLeftConsumed &&
 				!refInput.IsModifierDown(AshEngine::UIModifierFlagBits::Alt) &&
 				!refInput.IsMouseDown(AshEngine::UIMouseButton::Middle) &&
 				!refInput.IsMouseDown(AshEngine::UIMouseButton::Right) &&
@@ -291,6 +305,7 @@ namespace AshEditor
 			const EditorViewportInstance& refViewport,
 			const AshEngine::UIRect& rectContent,
 			bool bContentHovered,
+			ViewportPanelTerrainInteractionState& refTerrainInteractionState,
 			ViewportPanelSceneSelectionState& refSceneBoxSelectionState)
 		{
 			if (!refFrameContext.pUiContext ||
@@ -299,17 +314,38 @@ namespace AshEditor
 				!refDeps.pSceneService ||
 				!refDeps.pAssetDatabaseService)
 			{
+				if (strViewportId == EditorViewportIds::Scene && refDeps.pTerrainEditorService)
+				{
+					ViewportPanelTerrainInteraction::CancelActiveStroke(
+						*refDeps.pTerrainEditorService);
+					refDeps.pTerrainEditorService->ClearViewportPreview();
+				}
+				refTerrainInteractionState = {};
 				return;
 			}
 
 			const EditorViewportPresentation* pPresentation = refDeps.pViewportService->GetPresentation(strViewportId);
 			if (!pPresentation || pPresentation->eKind != EditorViewportKind::Scene)
 			{
+				if (strViewportId == EditorViewportIds::Scene && refDeps.pTerrainEditorService)
+				{
+					ViewportPanelTerrainInteraction::CancelActiveStroke(
+						*refDeps.pTerrainEditorService);
+					refDeps.pTerrainEditorService->ClearViewportPreview();
+				}
+				refTerrainInteractionState = {};
 				refSceneBoxSelectionState = {};
 				return;
 			}
 			if (rectContent.width <= 1.0f || rectContent.height <= 1.0f)
 			{
+				if (strViewportId == EditorViewportIds::Scene && refDeps.pTerrainEditorService)
+				{
+					ViewportPanelTerrainInteraction::CancelActiveStroke(
+						*refDeps.pTerrainEditorService);
+					refDeps.pTerrainEditorService->ClearViewportPreview();
+				}
+				refTerrainInteractionState = {};
 				refSceneBoxSelectionState = {};
 				return;
 			}
@@ -338,20 +374,39 @@ namespace AshEditor
 				refFrameContext.pUiContext->get_time_seconds(),
 				inputContext);
 
+			const TerrainViewportRouteResult terrainInteraction =
+				ViewportPanelTerrainInteraction::Update(
+				refDeps,
+				strViewportId,
+				refViewport,
+				*pPresentation,
+				inputState,
+				rectContent,
+				bContentHovered,
+				refTerrainInteractionState);
+
 			EditorGizmoService::InteractionResult gizmoInteraction{};
 			if (pPresentation->bAcceptsInput && strViewportId == EditorViewportIds::Scene)
 			{
+				const bool terrainOwnsSceneTools =
+					refDeps.pViewportService->IsPrimaryViewport(strViewportId) &&
+					ViewportPanelTerrainInteraction::IsAuthoringMode(
+						refDeps.pTerrainEditorService);
 				HandleSceneViewportModeShortcuts(
 					*refFrameContext.pUiContext,
 					inputState,
 					bContentHovered || refViewport.state.bFocused,
+					terrainOwnsSceneTools,
 					refDeps.pGizmoState);
-				gizmoInteraction = ViewportPanelSupport::UpdateSceneGizmoInteraction(
-					refDeps,
-					*refFrameContext.pUiContext,
-					inputState,
-					bContentHovered,
-					rectContent);
+				if (terrainInteraction.send_gizmo)
+				{
+					gizmoInteraction = ViewportPanelSupport::UpdateSceneGizmoInteraction(
+						refDeps,
+						*refFrameContext.pUiContext,
+						inputState,
+						bContentHovered,
+						rectContent);
+				}
 			}
 
 			if (pPresentation->bAcceptsInput)
@@ -362,7 +417,8 @@ namespace AshEditor
 					*refFrameContext.pUiContext,
 					inputState,
 					refViewport,
-					gizmoInteraction.bConsumesMouseLeft,
+					terrainInteraction.consume_mouse_left ||
+						gizmoInteraction.bConsumesMouseLeft,
 					refSceneBoxSelectionState);
 				return;
 			}

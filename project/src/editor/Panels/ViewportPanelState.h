@@ -7,6 +7,11 @@
 
 namespace AshEditor
 {
+	struct ViewportPanelTerrainInteractionState
+	{
+		bool bOwnsMouseLeftPress = false;
+	};
+
 	struct ViewportPanelSceneSelectionState
 	{
 		bool bTracking = false;

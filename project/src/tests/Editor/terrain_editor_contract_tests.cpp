@@ -287,6 +287,7 @@ TEST_CASE("Terrain Mode authoring configuration is the only stroke source")
 
 	AshEditor::TerrainEditorIntent begin{};
 	begin.kind = AshEditor::TerrainEditorIntent::Kind::BeginStroke;
+	begin.asset_id = service.GetSelectedAssetId();
 	begin.layer_id = service.GetSelectedLayerId();
 	begin.brush = service.GetAuthoringConfig().brush;
 	begin.brush.layer_id = service.GetSelectedLayerId();
@@ -381,4 +382,68 @@ TEST_CASE("Terrain Mode can leave an authoring session quarantined by unverifiab
 	CHECK(service.GetSelectedAssetId() == 0u);
 	CHECK(service.GetWorkingSet() == nullptr);
 	CHECK_FALSE(service.HasDirtyAssets());
+}
+
+TEST_CASE("Terrain viewport interaction keeps camera terrain gizmo and selection ordering")
+{
+	const std::string interaction = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelInteraction.cpp");
+	const size_t camera = interaction.rfind("UpdateViewportInput(");
+	const size_t terrain = interaction.rfind("ViewportPanelTerrainInteraction::Update(");
+	const size_t gizmo = interaction.rfind("UpdateSceneGizmoInteraction(");
+	const size_t selection = interaction.rfind("UpdateSceneViewportSelectionInput(");
+
+	REQUIRE(camera != std::string::npos);
+	REQUIRE(terrain != std::string::npos);
+	REQUIRE(gizmo != std::string::npos);
+	REQUIRE(selection != std::string::npos);
+	CHECK(camera < terrain);
+	CHECK(terrain < gizmo);
+	CHECK(gizmo < selection);
+	CHECK(interaction.find("terrainInteraction.consume_mouse_left ||") != std::string::npos);
+	CHECK(interaction.find("ClearScenePendingPick(refSceneBoxSelectionState);") != std::string::npos);
+}
+
+TEST_CASE("Terrain viewport interaction reuses rays validates assets and handles cancellation")
+{
+	const std::string interaction = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelInteraction.cpp");
+	const std::string terrainInteraction = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelTerrainInteraction.cpp");
+	const std::string support = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelInteractionSupport.cpp");
+	const std::string panel = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanel.cpp");
+	const std::string toolbar = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelToolbar.cpp");
+	const std::string service = ReadTerrainContractText(
+		"project/src/editor/Services/TerrainEditorService.cpp");
+	const std::string bootstrap = ReadTerrainContractText(
+		"project/src/editor/App/PanelBootstrapper.cpp");
+
+	CHECK(support.find("TryBuildViewportRay(") != std::string::npos);
+	CHECK(terrainInteraction.find("TryBuildSceneInteractionRay(") != std::string::npos);
+	const size_t rayBuild = terrainInteraction.find("TryBuildSceneInteractionRay(");
+	const size_t failedRay = terrainInteraction.find(
+		"query.status = AshEngine::TerrainQueryStatus::Failed;",
+		rayBuild);
+	REQUIRE(rayBuild != std::string::npos);
+	REQUIRE(failedRay != std::string::npos);
+	CHECK(rayBuild < failedRay);
+	CHECK(terrainInteraction.find("FindByPath(terrain.asset_path)") != std::string::npos);
+	CHECK(terrainInteraction.find(
+		"pHitAsset->id != refDeps.pTerrainEditorService->GetSelectedAssetId()") !=
+		std::string::npos);
+	CHECK(terrainInteraction.find("sample_spacing_meters") != std::string::npos);
+	CHECK(terrainInteraction.find("worldTransform[0]") != std::string::npos);
+	CHECK(terrainInteraction.find("worldTransform[2]") != std::string::npos);
+	CHECK(terrainInteraction.find("UIKey::Escape") != std::string::npos);
+	CHECK(terrainInteraction.find("UIKey::F") != std::string::npos);
+	CHECK(terrainInteraction.find("vecMouseWheelDelta") != std::string::npos);
+	CHECK(terrainInteraction.find("route.release_mouse_left_press") != std::string::npos);
+	CHECK(panel.find("CancelTerrainStrokeIfActive") != std::string::npos);
+	CHECK(toolbar.find("begin_disabled(terrainOwnsSceneTools)") != std::string::npos);
+	CHECK(service.find("refIntent.asset_id != pWorkingSet->asset_id") != std::string::npos);
+	CHECK(bootstrap.find("deps.pTerrainEditorService = refContext.pTerrainEditorService;") !=
+		std::string::npos);
 }

@@ -7,6 +7,7 @@
 #include "Core/EditorEvents.h"
 #include "Function/Gui/UIContext.h"
 #include "Services/EditorViewportService.h"
+#include "Services/TerrainEditorService.h"
 
 #include <utility>
 
@@ -18,9 +19,11 @@ namespace AshEditor
 
 		void ResetViewportRuntimeState(
 			EditorViewportInstance* pViewport,
+			ViewportPanelTerrainInteractionState& refTerrainInteraction,
 			ViewportPanelSceneSelectionState& refSceneSelection,
 			bool bResetRequestedSize)
 		{
+			refTerrainInteraction = {};
 			refSceneSelection = {};
 			if (!pViewport)
 			{
@@ -36,6 +39,26 @@ namespace AshEditor
 				pViewport->state.uRequestedWidth = 0;
 				pViewport->state.uRequestedHeight = 0;
 			}
+		}
+
+		void CancelTerrainStrokeIfActive(
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId)
+		{
+			if (strViewportId != EditorViewportIds::Scene ||
+				!refDeps.pTerrainEditorService)
+			{
+				return;
+			}
+			refDeps.pTerrainEditorService->ClearViewportPreview();
+			if (!refDeps.pTerrainEditorService->GetPreviewState().stroke_active)
+			{
+				return;
+			}
+
+			TerrainEditorIntent cancel{};
+			cancel.kind = TerrainEditorIntent::Kind::CancelStroke;
+			refDeps.pTerrainEditorService->SubmitIntent(cancel);
 		}
 
 		void SyncViewportPanelOpenState(
@@ -105,6 +128,7 @@ namespace AshEditor
 			const std::string& strViewportId,
 			EditorViewportInstance* pViewport,
 			const ViewportPanelCanvasDrawResult& refDrawResult,
+			ViewportPanelTerrainInteractionState& refTerrainInteraction,
 			ViewportPanelSceneSelectionState& refSceneSelection)
 		{
 			if (!refFrameContext.pUiContext)
@@ -115,12 +139,17 @@ namespace AshEditor
 			AshEngine::UIContext& refUi = *refFrameContext.pUiContext;
 			if (!pViewport)
 			{
+				CancelTerrainStrokeIfActive(refDeps, strViewportId);
+				refTerrainInteraction = {};
 				refSceneSelection = {};
 				refUi.text_wrapped("Scene surface is not available yet.");
 				return;
 			}
 			if (!refDrawResult.bHasViewportContent)
 			{
+				CancelTerrainStrokeIfActive(refDeps, strViewportId);
+				refTerrainInteraction = {};
+				refSceneSelection = {};
 				return;
 			}
 
@@ -131,6 +160,7 @@ namespace AshEditor
 				*pViewport,
 				refDrawResult.rectContent,
 				refDrawResult.bContentHovered,
+				refTerrainInteraction,
 				refSceneSelection);
 			ViewportPanelCanvas::DrawDecorations(
 				refFrameContext,
@@ -203,6 +233,8 @@ namespace AshEditor
 
 	void ViewportPanel::OnDetach()
 	{
+		CancelTerrainStrokeIfActive(_deps, _strViewportId);
+		_terrainInteraction = {};
 		UnsubscribeEvents();
 		ClearDeps();
 	}
@@ -214,7 +246,12 @@ namespace AshEditor
 
 	void ViewportPanel::ResetRuntimeViewportState()
 	{
-		ResetViewportRuntimeState(ResolveViewport(), _sceneSelection, true);
+		CancelTerrainStrokeIfActive(_deps, _strViewportId);
+		ResetViewportRuntimeState(
+			ResolveViewport(),
+			_terrainInteraction,
+			_sceneSelection,
+			true);
 	}
 
 	void ViewportPanel::OnUpdate()
@@ -246,14 +283,24 @@ namespace AshEditor
 
 		if (!bWindowVisible)
 		{
-			ResetViewportRuntimeState(pViewport, _sceneSelection, false);
+			CancelTerrainStrokeIfActive(_deps, _strViewportId);
+			ResetViewportRuntimeState(
+				pViewport,
+				_terrainInteraction,
+				_sceneSelection,
+				false);
 			EndPanelWindow(frameContext);
 			return;
 		}
 
 		if (!frameContext.pUiContext)
 		{
-			ResetViewportRuntimeState(pViewport, _sceneSelection, false);
+			CancelTerrainStrokeIfActive(_deps, _strViewportId);
+			ResetViewportRuntimeState(
+				pViewport,
+				_terrainInteraction,
+				_sceneSelection,
+				false);
 			EndPanelWindow(frameContext);
 			return;
 		}
@@ -277,6 +324,7 @@ namespace AshEditor
 			_strViewportId,
 			pViewport,
 			drawResult,
+			_terrainInteraction,
 			_sceneSelection);
 
 		ViewportPanelInteraction::HandleDragDropTarget(

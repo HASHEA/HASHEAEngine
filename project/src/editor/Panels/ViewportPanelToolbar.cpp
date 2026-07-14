@@ -5,6 +5,7 @@
 #include "Function/Gui/UIContext.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/EditorViewportService.h"
+#include "Services/TerrainEditorService.h"
 #include "Widgets/EditorButtonWidgets.h"
 
 namespace AshEditor
@@ -165,8 +166,21 @@ namespace AshEditor
 			if (refDeps.pGizmoState && bSceneViewport)
 			{
 				EditorGizmoState& refGizmo = *refDeps.pGizmoState;
+				bool terrainOwnsSceneTools = false;
+				if (strViewportId == EditorViewportIds::Scene &&
+					bIsPrimary &&
+					refDeps.pTerrainEditorService)
+				{
+					const TerrainEditorMode mode =
+						refDeps.pTerrainEditorService->GetAuthoringConfig().mode;
+					terrainOwnsSceneTools =
+						mode == TerrainEditorMode::Sculpt ||
+						mode == TerrainEditorMode::Paint;
+				}
 				DrawToolbarDivider(refUi);
+				refUi.begin_disabled(terrainOwnsSceneTools);
 				DrawSceneGizmoModeControls(refUi, refGizmo);
+				refUi.end_disabled();
 				DrawToolbarDivider(refUi);
 				DrawSceneGizmoSpaceControls(refUi, refGizmo);
 			}

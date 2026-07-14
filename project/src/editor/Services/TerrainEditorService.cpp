@@ -306,6 +306,30 @@ namespace AshEditor
 		return _core.GetPreviewState();
 	}
 
+	bool TerrainEditorService::SetViewportPreview(
+		const AshEngine::TerrainAssetId assetId,
+		const TerrainViewportPreviewState& refPreview)
+	{
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		const bool authoringMode =
+			_authoringConfig.mode == TerrainEditorMode::Sculpt ||
+			_authoringConfig.mode == TerrainEditorMode::Paint;
+		if (!pWorkingSet || assetId == 0u || assetId != pWorkingSet->asset_id ||
+			!authoringMode)
+		{
+			return false;
+		}
+
+		TerrainViewportPreviewState candidate = refPreview;
+		candidate.radius_meters = _authoringConfig.brush.radius_meters;
+		return _core.SetViewportPreview(candidate);
+	}
+
+	void TerrainEditorService::ClearViewportPreview()
+	{
+		_core.ClearViewportPreview();
+	}
+
 	const TerrainAuthoringConfig& TerrainEditorService::GetAuthoringConfig() const
 	{
 		return _authoringConfig;
@@ -457,6 +481,23 @@ namespace AshEditor
 		}
 
 		_authoringConfig = std::move(candidate);
+		const bool authoringMode =
+			_authoringConfig.mode == TerrainEditorMode::Sculpt ||
+			_authoringConfig.mode == TerrainEditorMode::Paint;
+		if (!authoringMode)
+		{
+			_core.ClearViewportPreview();
+		}
+		else if (_core.GetPreviewState().viewport.query_status !=
+			AshEngine::TerrainQueryStatus::Outside)
+		{
+			TerrainViewportPreviewState viewport = _core.GetPreviewState().viewport;
+			viewport.radius_meters = _authoringConfig.brush.radius_meters;
+			if (!_core.SetViewportPreview(viewport))
+			{
+				_core.ClearViewportPreview();
+			}
+		}
 		_strLastError.clear();
 		return true;
 	}
@@ -476,11 +517,12 @@ namespace AshEditor
 		if (!pWorkingSet || _optActiveStroke || _core.HasActiveStroke() ||
 			_core.GetPreviewState().query_status != AshEngine::TerrainQueryStatus::Ready ||
 			!authoringMode || !validMetric || !selectedLayerId.is_valid() ||
+			refIntent.asset_id != pWorkingSet->asset_id ||
 			refIntent.layer_id != selectedLayerId ||
 			_authoringConfig.brush.layer_id != selectedLayerId ||
 			!BrushParametersMatch(refIntent.brush, _authoringConfig.brush))
 		{
-			_strLastError = "Terrain stroke begin state, mode, metric, layer, or authoring configuration is invalid.";
+			_strLastError = "Terrain stroke begin state, asset, mode, metric, layer, or authoring configuration is invalid.";
 			return false;
 		}
 		if (pWorkingSet->content_generation >= std::numeric_limits<uint64_t>::max() - 1u)
