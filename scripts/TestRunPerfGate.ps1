@@ -17,6 +17,55 @@ if ($outputText -notmatch "RunPerfGate self-test PASS") {
     throw "RunPerfGate self-test did not report PASS.`n$outputText"
 }
 
+$runBatProbeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-run-bat-test-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
+try {
+    $runBatProbeBin = Join-Path $runBatProbeRoot "product\bin64\Debug-windows-x86_64"
+    $runBatProbeConfig = Join-Path $runBatProbeRoot "product\config"
+    New-Item -ItemType Directory -Force -Path $runBatProbeBin, $runBatProbeConfig | Out-Null
+    Copy-Item -LiteralPath (Join-Path $repoRoot.Path "run.bat") -Destination (Join-Path $runBatProbeRoot "run.bat")
+    "[RHI]`nBackend=Vulkan" | Set-Content -LiteralPath (Join-Path $runBatProbeConfig "Engine.ini") -Encoding ASCII
+
+    $probeExecutable = Join-Path $runBatProbeBin "Sandbox.exe"
+    Add-Type -TypeDefinition @'
+using System;
+
+public static class RunBatArgumentProbe
+{
+    public static int Main(string[] args)
+    {
+        Console.WriteLine("ARG_COUNT=" + args.Length);
+        for (int index = 0; index < args.Length; ++index)
+        {
+            Console.WriteLine("ARG_" + index + "=" + args[index]);
+        }
+        return 0;
+    }
+}
+'@ -Language CSharp -OutputAssembly $probeExecutable -OutputType ConsoleApplication
+
+    $probeArguments = @(1..12 | ForEach-Object { "--probe-$_=value-$_" })
+    $quotedProbeArguments = @($probeArguments | ForEach-Object { '"' + $_ + '"' })
+    $probeCommand = '"' + (Join-Path $runBatProbeRoot "run.bat") + '" sandbox current Debug ' + ($quotedProbeArguments -join ' ')
+    $probeOutput = & cmd.exe /d /s /c $probeCommand 2>&1
+    $probeExitCode = $LASTEXITCODE
+    $probeText = ($probeOutput | Out-String)
+    if ($probeExitCode -ne 0) {
+        throw "run.bat argument probe failed with exit code $probeExitCode.`n$probeText"
+    }
+    if ($probeText -notmatch "(?m)^ARG_COUNT=12\s*$") {
+        throw "run.bat did not forward all 12 application arguments.`n$probeText"
+    }
+    for ($index = 0; $index -lt $probeArguments.Count; ++$index) {
+        $expectedLine = "ARG_$index=$($probeArguments[$index])"
+        if ($probeText -notlike "*$expectedLine*") {
+            throw "run.bat did not preserve application argument '$($probeArguments[$index])'.`n$probeText"
+        }
+    }
+}
+finally {
+    Remove-Item -LiteralPath $runBatProbeRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $dryRunOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $runnerScript -Profile VegetationFullPipeline -DryRun 2>&1
 $dryRunExitCode = $LASTEXITCODE
 $dryRunText = ($dryRunOutput | Out-String)
