@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace AshEngine
@@ -18,8 +19,24 @@ namespace AshEngine
 	{
 		static constexpr const char* k_terrain_atlas_update_shader_path =
 			"project/src/engine/Shaders/Terrain/TerrainAtlasUpdate.hlsl";
+		static constexpr const char* k_terrain_surface_shader_path =
+			"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl";
+		static constexpr const char* k_terrain_common_shader_path =
+			"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli";
 		static constexpr uint32_t k_terrain_atlas_slot_grid_width = 16u;
 		static constexpr uint32_t k_terrain_atlas_update_group_size = 8u;
+		static constexpr std::array<const char*, k_terrain_lod_count>
+			k_terrain_grid_names = {
+				"TerrainSharedGridLod0",
+				"TerrainSharedGridLod1",
+				"TerrainSharedGridLod2",
+				"TerrainSharedGridLod3",
+				"TerrainSharedGridLod4",
+				"TerrainSharedGridLod5",
+				"TerrainSharedGridLod6",
+				"TerrainSharedGridLod7",
+				"TerrainSharedGridLod8"
+			};
 
 		struct TerrainAtlasUpdateConstants
 		{
@@ -33,7 +50,7 @@ namespace AshEngine
 
 		static_assert(sizeof(TerrainAtlasUpdateConstants) == 32u);
 
-		uint64_t build_source_hash()
+		uint64_t build_atlas_source_hash()
 		{
 			uint64_t hash_value = 0u;
 			RHI::hash_shader_file_signature(
@@ -41,6 +58,74 @@ namespace AshEngine
 			return hash_value;
 		}
 
+		uint64_t build_surface_source_hash()
+		{
+			uint64_t hash_value = 0u;
+			RHI::hash_shader_file_signature(
+				hash_value, k_terrain_surface_shader_path);
+			RHI::hash_shader_file_signature(
+				hash_value, k_terrain_common_shader_path);
+			return hash_value;
+		}
+
+		GraphicsProgramDesc make_surface_program_desc(
+			const char* macro,
+			const char* name)
+		{
+			GraphicsProgramState state{};
+			state.cull_mode = RenderCullMode::Back;
+			state.front_face = RenderFrontFace::CounterClockwise;
+			state.primitive_topology = RenderPrimitiveTopology::TriangleList;
+			state.depth_test = true;
+			state.depth_write = true;
+			state.depth_compare = RenderCompareOp::LessEqual;
+			state.blend_mode = RenderBlendMode::Opaque;
+
+			GraphicsProgramDesc desc{};
+			desc.shader_path = k_terrain_surface_shader_path;
+			desc.base_shader_path = k_terrain_surface_shader_path;
+			desc.vertex_entry = "VSMain";
+			desc.fragment_entry = "PSMain";
+			desc.shader_macro = macro;
+			desc.source_hash = build_surface_source_hash();
+			desc.state = state;
+			desc.name = name;
+			return desc;
+		}
+
+	}
+
+	bool build_terrain_shared_grid_indices(
+		uint8_t lod,
+		std::vector<uint32_t>& out_indices)
+	{
+		if (lod >= k_terrain_lod_count)
+		{
+			return false;
+		}
+
+		const uint32_t resolution = k_terrain_component_quad_count >> lod;
+		const uint32_t row_stride = resolution + 1u;
+		std::vector<uint32_t> indices{};
+		indices.reserve(static_cast<size_t>(6u) * resolution * resolution);
+		for (uint32_t z = 0u; z < resolution; ++z)
+		{
+			for (uint32_t x = 0u; x < resolution; ++x)
+			{
+				const uint32_t i00 = z * row_stride + x;
+				const uint32_t i10 = i00 + 1u;
+				const uint32_t i01 = i00 + row_stride;
+				const uint32_t i11 = i01 + 1u;
+				indices.push_back(i00);
+				indices.push_back(i01);
+				indices.push_back(i10);
+				indices.push_back(i10);
+				indices.push_back(i01);
+				indices.push_back(i11);
+			}
+		}
+		out_indices = std::move(indices);
+		return true;
 	}
 
 	bool TerrainRenderPass::add_atlas_update_pass(
@@ -187,14 +272,55 @@ namespace AshEngine
 	bool TerrainRenderPass::initialize(Renderer& renderer)
 	{
 		shutdown();
-		ComputeProgramDesc desc{};
-		desc.shader_path = k_terrain_atlas_update_shader_path;
-		desc.compute_entry = "CSMain";
-		desc.source_hash = build_source_hash();
-		desc.name = "TerrainWeightAtlasUpdate";
-		m_weight_atlas_update_program = renderer.create_compute_program(desc);
-		if (!m_weight_atlas_update_program)
+		for (uint8_t lod = 0u; lod < k_terrain_lod_count; ++lod)
 		{
+			std::vector<uint32_t> indices{};
+			if (!build_terrain_shared_grid_indices(lod, indices))
+			{
+				shutdown();
+				return false;
+			}
+			IndexBufferDesc desc{};
+			desc.size = static_cast<uint32_t>(indices.size() * sizeof(uint32_t));
+			desc.format = RenderIndexFormat::UInt32;
+			desc.initial_data = indices.data();
+			desc.name = k_terrain_grid_names[lod];
+			m_shared_grid_index_buffers[lod] = renderer.create_index_buffer(desc);
+			if (!m_shared_grid_index_buffers[lod])
+			{
+				shutdown();
+				return false;
+			}
+		}
+
+		RenderSamplerDesc weight_sampler_desc{};
+		weight_sampler_desc.address_u = RenderSamplerAddressMode::ClampToEdge;
+		weight_sampler_desc.address_v = RenderSamplerAddressMode::ClampToEdge;
+		weight_sampler_desc.address_w = RenderSamplerAddressMode::ClampToEdge;
+		m_weight_sampler = renderer.create_sampler(
+			weight_sampler_desc, "TerrainWeightSampler");
+		RenderSamplerDesc material_sampler_desc{};
+		m_material_sampler = renderer.create_sampler(
+			material_sampler_desc, "TerrainMaterialSampler");
+
+		m_gbuffer_program = renderer.create_graphics_program(
+			make_surface_program_desc("TERRAIN_GBUFFER=1", "TerrainGBuffer"));
+		m_depth_program = renderer.create_graphics_program(
+			make_surface_program_desc("TERRAIN_DEPTH_ONLY=1", "TerrainDepthOnly"));
+
+		ComputeProgramDesc atlas_desc{};
+		atlas_desc.shader_path = k_terrain_atlas_update_shader_path;
+		atlas_desc.compute_entry = "CSMain";
+		atlas_desc.source_hash = build_atlas_source_hash();
+		atlas_desc.name = "TerrainWeightAtlasUpdate";
+		m_weight_atlas_update_program = renderer.create_compute_program(atlas_desc);
+		if (!m_weight_sampler ||
+			!m_material_sampler ||
+			!m_gbuffer_program ||
+			!m_depth_program ||
+			!m_weight_atlas_update_program)
+		{
+			shutdown();
 			return false;
 		}
 		m_renderer = &renderer;
@@ -203,7 +329,12 @@ namespace AshEngine
 
 	void TerrainRenderPass::shutdown()
 	{
+		m_gbuffer_program.reset();
+		m_depth_program.reset();
 		m_weight_atlas_update_program.reset();
+		m_shared_grid_index_buffers.fill(nullptr);
+		m_weight_sampler.reset();
+		m_material_sampler.reset();
 		m_renderer = nullptr;
 	}
 

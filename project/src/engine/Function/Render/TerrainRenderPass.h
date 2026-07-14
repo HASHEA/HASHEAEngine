@@ -2,14 +2,19 @@
 
 #include "Base/hcore.h"
 #include "Function/Render/RenderGraphFwd.h"
+#include "Function/Render/TerrainLod.h"
 #include "Function/Render/TerrainRenderAsset.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace AshEngine
 {
 	class ComputeProgram;
+	class GraphicsProgram;
+	class RenderSampler;
 	class Renderer;
 	struct VisibleRenderFrame;
 
@@ -22,6 +27,10 @@ namespace AshEngine
 
 		bool is_valid() const;
 	};
+
+	ASH_API bool build_terrain_shared_grid_indices(
+		uint8_t lod,
+		std::vector<uint32_t>& out_indices);
 
 	class ASH_API TerrainRenderPass
 	{
@@ -50,7 +59,13 @@ namespace AshEngine
 
 	private:
 		Renderer* m_renderer = nullptr;
+		std::array<std::shared_ptr<IndexBuffer>, k_terrain_lod_count>
+			m_shared_grid_index_buffers{};
+		std::unique_ptr<GraphicsProgram> m_gbuffer_program{};
+		std::unique_ptr<GraphicsProgram> m_depth_program{};
 		std::unique_ptr<ComputeProgram> m_weight_atlas_update_program{};
+		std::shared_ptr<RenderSampler> m_weight_sampler{};
+		std::shared_ptr<RenderSampler> m_material_sampler{};
 	};
 
 	// Headless contract used by RenderGraph tests. Runtime graph construction uses

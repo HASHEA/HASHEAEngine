@@ -1,5 +1,6 @@
 #include "Function/Render/RenderGraphBuilder.h"
 #include "Function/Render/RenderGraphCompiler.h"
+#include "Function/Render/TerrainLod.h"
 #include "Function/Render/TerrainRenderPass.h"
 
 #ifdef TYPE_TO_STRING
@@ -7,9 +8,11 @@
 #endif
 #include "doctest.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -116,4 +119,79 @@ TEST_CASE("Terrain atlas shader uses raw weights and three texture UAVs")
 	CHECK(shader.find("RWTexture2D<unorm float4> TerrainCoarseWeights") !=
 		std::string::npos);
 	CHECK(shader.find("[numthreads(8, 8, 1)]") != std::string::npos);
+}
+
+TEST_CASE("Terrain shared grid covers all nine LOD resolutions")
+{
+	for (uint8_t lod = 0u; lod < AshEngine::k_terrain_lod_count; ++lod)
+	{
+		const uint32_t resolution =
+			AshEngine::k_terrain_component_quad_count >> lod;
+		CAPTURE(lod, resolution);
+		std::vector<uint32_t> indices{};
+		REQUIRE(AshEngine::build_terrain_shared_grid_indices(lod, indices));
+		REQUIRE(indices.size() ==
+			static_cast<size_t>(6u) * resolution * resolution);
+		REQUIRE(indices.size() >= 6u);
+		CHECK(indices[0] == 0u);
+		CHECK(indices[1] == resolution + 1u);
+		CHECK(indices[2] == 1u);
+		CHECK(indices[3] == 1u);
+		CHECK(indices[4] == resolution + 1u);
+		CHECK(indices[5] == resolution + 2u);
+		const uint32_t vertex_count = (resolution + 1u) * (resolution + 1u);
+		uint32_t max_index = 0u;
+		for (uint32_t index : indices)
+		{
+			max_index = std::max(max_index, index);
+		}
+		CHECK(max_index == vertex_count - 1u);
+	}
+	std::vector<uint32_t> preserved{ 7u, 11u };
+	CHECK_FALSE(AshEngine::build_terrain_shared_grid_indices(
+		AshEngine::k_terrain_lod_count, preserved));
+	CHECK(preserved == std::vector<uint32_t>{ 7u, 11u });
+
+	AshEngine::TerrainLodInput input =
+		AshEngine::make_full_terrain_lod_test_input();
+	AshEngine::TerrainLodResult result{};
+	REQUIRE(AshEngine::build_terrain_lod_batches(input, result));
+	REQUIRE_FALSE(result.batches.empty());
+	for (const AshEngine::TerrainLodBatch& batch : result.batches)
+	{
+		CHECK(batch.first_instance == 0u);
+	}
+}
+
+TEST_CASE("Terrain shader bindings include fixed surface resources")
+{
+	const std::string common = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli");
+	const std::string surface = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
+	const std::string shader = common + surface;
+	const std::vector<std::string> binding_names = {
+		"TerrainHeightWords",
+		"TerrainInstances",
+		"TerrainWeightAtlas0",
+		"TerrainWeightAtlas1",
+		"TerrainCoarseWeights",
+		"TerrainBaseColorLayers",
+		"TerrainNormalLayers",
+		"TerrainOrmLayers",
+		"TerrainWeightSampler",
+		"TerrainMaterialSampler"
+	};
+	for (const std::string& binding : binding_names)
+	{
+		CAPTURE(binding);
+		CHECK(shader.find(binding) != std::string::npos);
+	}
+	CHECK(surface.find("TERRAIN_GBUFFER") != std::string::npos);
+	CHECK(surface.find("TERRAIN_DEPTH_ONLY") != std::string::npos);
+	CHECK(surface.find("SV_VertexID") != std::string::npos);
+	CHECK(surface.find("SV_InstanceID") != std::string::npos);
+	CHECK(common.find("AshTerrainDecodeHeight") != std::string::npos);
+	CHECK(common.find("AshTerrainMorphHeight") != std::string::npos);
+	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);
 }
