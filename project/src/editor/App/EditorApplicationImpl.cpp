@@ -369,6 +369,7 @@ namespace AshEditor
 			_upSelectionService.get(),
 			_upSceneService.get(),
 			_upAssetDatabaseService.get(),
+			_upTerrainEditorService.get(),
 			_upAssetPreviewService.get(),
 			_upCommandService.get(),
 			this,

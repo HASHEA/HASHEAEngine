@@ -9,6 +9,7 @@
 #include "Panels/NodeCanvasDemoPanel.h"
 #include "Panels/PropertyEditorDemoPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Panels/Terrain/TerrainModePanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Services/EditorViewportCameraService.h"
 #include "Shell/PanelManager.h"
@@ -109,6 +110,9 @@ namespace AshEditor
 			MakeSceneHierarchyPanelDeps(refContext));
 		InspectorPanel* pInspectorPanel = refPanelManager.CreatePanel<InspectorPanel>(
 			MakeInspectorPanelDeps(refContext));
+		TerrainModePanel* pTerrainModePanel = refPanelManager.CreatePanel<TerrainModePanel>(
+			refContext.pTerrainEditorService,
+			refContext.pAssetDatabaseService);
 		AssetPreviewPanel* pAssetPreviewPanel = refPanelManager.CreatePanel<AssetPreviewPanel>(
 			MakeAssetPreviewPanelDeps(refContext));
 		ConsolePanel* pConsolePanel = refPanelManager.CreatePanel<ConsolePanel>(
@@ -135,6 +139,11 @@ namespace AshEditor
 		if (pInspectorPanel)
 		{
 			pInspectorPanel->BindEventBus(&refEventBus);
+		}
+		if (pTerrainModePanel)
+		{
+			pTerrainModePanel->SetOpen(false);
+			pTerrainModePanel->BindEventBus(&refEventBus);
 		}
 		(void)pAssetPreviewPanel;
 		if (pConsolePanel)

@@ -102,6 +102,7 @@ namespace AshEditor
 		refUi.dock_builder_dock_window(EditorWindowTitles::Console, uBottomNode);
 		refUi.dock_builder_dock_window(EditorWindowTitles::AssetBrowser, uBottomNode);
 		refUi.dock_builder_dock_window(EditorWindowTitles::Inspector, uInspectorNode);
+		refUi.dock_builder_dock_window(EditorWindowTitles::TerrainMode, uInspectorNode);
 		refUi.dock_builder_finish(uDockspaceId);
 	}
 }

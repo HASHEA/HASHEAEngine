@@ -276,6 +276,22 @@ namespace
 		return intent;
 	}
 
+	bool SubmitConfiguredBeginStroke(
+		AshEditor::TerrainEditorService& refService,
+		AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent())
+	{
+		AshEditor::TerrainEditorIntent configure{};
+		configure.kind = AshEditor::TerrainEditorIntent::Kind::ConfigureAuthoring;
+		configure.mode = AshEditor::TerrainEditorMode::Sculpt;
+		configure.brush = begin.brush;
+		if (!refService.SubmitIntent(configure))
+		{
+			return false;
+		}
+		begin.brush = refService.GetAuthoringConfig().brush;
+		return refService.SubmitIntent(begin);
+	}
+
 	AshEditor::TerrainEditorIntent MakeStrokeSampleIntent(float x, float z)
 	{
 		AshEditor::TerrainEditorIntent intent{};
@@ -408,7 +424,7 @@ TEST_CASE("Terrain editor forwards one raw path to one Engine brush transaction"
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(1.0f, 2.0f)));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(3.0f, 4.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
@@ -458,7 +474,7 @@ TEST_CASE("Terrain editor preserves raw sample values and the frozen non-uniform
 	AshEditor::TerrainEditorService service{};
 	REQUIRE(service.Initialize(commands));
 	REQUIRE(service.OpenSnapshotForAuthoring(snapshot));
-	REQUIRE(service.SubmitIntent(begin));
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
 	begin.brush.radius_meters = 128.0f;
 	begin.brush_metric.world_meters_per_terrain_meter = { 1.0f, 1.0f };
 	AshEditor::TerrainEditorIntent first = MakeStrokeSampleIntent(1.0f, 2.0f);
@@ -485,13 +501,13 @@ TEST_CASE("Terrain editor cancel and empty stroke create no mutation or history"
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
 	CHECK(commands.record_count == 0u);
 	CHECK(service.GetWorkingSet()->content_generation == initialGeneration);
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
@@ -501,20 +517,20 @@ TEST_CASE("Terrain editor cancel and empty stroke create no mutation or history"
 	CHECK_FALSE(service.HasPendingComposition());
 	CHECK(service.GetWorkingSet()->dirty_components.empty());
 	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
 
 	AshEditor::TerrainEditorIntent invalidMetric = MakeBeginStrokeIntent();
 	invalidMetric.brush_metric.world_meters_per_terrain_meter.x = 0.0f;
-	CHECK_FALSE(service.SubmitIntent(invalidMetric));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service, invalidMetric));
 	invalidMetric = MakeBeginStrokeIntent();
 	invalidMetric.brush_metric.world_meters_per_terrain_meter.y = -1.0f;
-	CHECK_FALSE(service.SubmitIntent(invalidMetric));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service, invalidMetric));
 	invalidMetric = MakeBeginStrokeIntent();
 	invalidMetric.brush_metric.world_meters_per_terrain_meter.x =
 		std::numeric_limits<float>::quiet_NaN();
-	CHECK_FALSE(service.SubmitIntent(invalidMetric));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service, invalidMetric));
 }
 
 TEST_CASE("Terrain editor reserves a generation for history rollback")
@@ -526,7 +542,7 @@ TEST_CASE("Terrain editor reserves a generation for history rollback")
 	snapshot.content_generation = std::numeric_limits<uint64_t>::max() - 1u;
 	REQUIRE(service.OpenSnapshotForAuthoring(snapshot));
 
-	CHECK_FALSE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	CHECK(service.GetWorkingSet()->content_generation == snapshot.content_generation);
 	CHECK(commands.record_count == 0u);
@@ -541,11 +557,11 @@ TEST_CASE("Terrain editor publishes generations using only the latest complete d
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(1.0f, 1.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(3.0f, 3.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -569,7 +585,7 @@ TEST_CASE("Terrain editor undo invalidates pending composition and publishes the
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -593,12 +609,12 @@ TEST_CASE("Terrain editor blocks command replay while a stroke is active")
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	REQUIRE(service.GetWorkingSet() != nullptr);
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
 	const uint64_t editedGeneration = service.GetWorkingSet()->content_generation;
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 
 	AshEditor::EditorContext context{};
 	context.pTerrainEditorService = &service;
@@ -674,7 +690,7 @@ TEST_CASE("Terrain editor selects layers by stable id and strokes only the selec
 	AshEditor::TerrainEditorIntent beginSecond = MakeBeginStrokeIntent();
 	beginSecond.layer_id = secondId;
 	beginSecond.brush.layer_id = secondId;
-	CHECK_FALSE(service.SubmitIntent(beginSecond));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service, beginSecond));
 	if (service.GetPreviewState().stroke_active)
 	{
 		REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
@@ -692,7 +708,7 @@ TEST_CASE("Terrain editor selects layers by stable id and strokes only the selec
 	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(secondId)));
 	CHECK(service.GetSelectedLayerId() == secondId);
 	CHECK_FALSE(service.GetPreviewState().layer_locked);
-	REQUIRE(service.SubmitIntent(beginSecond));
+	REQUIRE(SubmitConfiguredBeginStroke(service, beginSecond));
 	CHECK_FALSE(service.SubmitIntent(MakeSelectLayerIntent(firstId)));
 	CHECK(service.GetSelectedLayerId() == secondId);
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
@@ -797,7 +813,7 @@ TEST_CASE("Terrain editor lock state blocks strokes and layer actions cannot int
 	REQUIRE(service.OpenSnapshotForAuthoring(snapshot));
 	CHECK(service.GetSelectedLayerId() == MakeEditorStrokeLayerId());
 	CHECK(service.GetPreviewState().layer_locked);
-	CHECK_FALSE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service));
 	CHECK(commands.record_count == 0u);
 
 	AshEditor::TerrainEditorIntent unlock = MakeLayerActionIntent(
@@ -806,7 +822,7 @@ TEST_CASE("Terrain editor lock state blocks strokes and layer actions cannot int
 	unlock.layer_action.flag_value = false;
 	REQUIRE(service.SubmitIntent(unlock));
 	CHECK_FALSE(service.GetPreviewState().layer_locked);
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
 		AshEditor::TerrainLayerActionKind::Rename,
 		MakeEditorStrokeLayerId());
@@ -913,7 +929,7 @@ TEST_CASE("Terrain editor quarantines a malformed rollback claim")
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	const auto initialPublishedSnapshot = service.GetPublishedSnapshot();
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -934,7 +950,7 @@ TEST_CASE("Terrain editor quarantines a history recording exception")
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	const auto initialPublishedSnapshot = service.GetPublishedSnapshot();
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -954,12 +970,12 @@ TEST_CASE("Terrain editor rejects incompatible layers and non-ready stroke state
 	REQUIRE(service.Initialize(commands));
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot(
 		AshEngine::TerrainHeightBlendMode::Alpha)));
-	CHECK_FALSE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service));
 
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	AshEditor::TerrainEditorIntent smooth = MakeBeginStrokeIntent();
 	smooth.brush.tool = AshEngine::TerrainBrushTool::Smooth;
-	CHECK_FALSE(service.SubmitIntent(smooth));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service, smooth));
 
 	AshEditor::TerrainEditorSessionCore core{};
 	AshEngine::TerrainWorkingSet workingSet{};
@@ -986,7 +1002,7 @@ TEST_CASE("Terrain editor invalid raw samples fail without mutation or history")
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	AshEditor::TerrainEditorIntent invalidSample = MakeStrokeSampleIntent(2.0f, 2.0f);
 	invalidSample.stroke_sample.pressure = std::numeric_limits<float>::quiet_NaN();
 	REQUIRE(service.SubmitIntent(invalidSample));
@@ -1013,7 +1029,7 @@ TEST_CASE("Terrain editor publication failure preserves the edited working set")
 	REQUIRE(service.GetPublishedSnapshot() != nullptr);
 	const auto initialPublishedSnapshot = service.GetPublishedSnapshot();
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -1050,7 +1066,7 @@ TEST_CASE("Terrain editor history rejection publishes the rollback generation")
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -1076,7 +1092,7 @@ TEST_CASE("Terrain editor redo supersedes pending undo publication")
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -1106,7 +1122,7 @@ TEST_CASE("Terrain editor stale sequence intents do not mutate the active stroke
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 
 	AshEditor::TerrainEditorIntent staleSample = MakeStrokeSampleIntent(2.0f, 2.0f);
 	staleSample.sequence = 999u;
@@ -1135,7 +1151,7 @@ TEST_CASE("Terrain editor quarantines a mutation when history rollback fails")
 	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
 	const auto initialPublishedSnapshot = service.GetPublishedSnapshot();
 
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
 	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
@@ -1146,14 +1162,14 @@ TEST_CASE("Terrain editor quarantines a mutation when history rollback fails")
 	CHECK_FALSE(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
 	CHECK_FALSE(service.HasPendingComposition());
 	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
-	CHECK_FALSE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	CHECK_FALSE(SubmitConfiguredBeginStroke(service));
 
 	service.Update();
 	CHECK(service.GetPublishedSnapshot() == initialPublishedSnapshot);
 	CHECK_FALSE(service.GetWorkingSet()->dirty_components.empty());
 
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
-	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
 }

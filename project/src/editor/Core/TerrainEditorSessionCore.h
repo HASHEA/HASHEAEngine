@@ -26,6 +26,12 @@ namespace AshEditor
 		Layers
 	};
 
+	struct TerrainAuthoringConfig
+	{
+		TerrainEditorMode mode = TerrainEditorMode::Manage;
+		AshEngine::TerrainBrushParameters brush{};
+	};
+
 	enum class TerrainLayerActionKind : uint8_t
 	{
 		Add = 0,
@@ -55,6 +61,7 @@ namespace AshEditor
 		{
 			SelectAsset = 0,
 			SelectLayer,
+			ConfigureAuthoring,
 			BeginStroke,
 			AddStrokeSample,
 			EndStroke,
@@ -70,6 +77,7 @@ namespace AshEditor
 		};
 
 		Kind kind = Kind::SelectAsset;
+		TerrainEditorMode mode = TerrainEditorMode::Manage;
 		AshEngine::TerrainAssetId asset_id = 0;
 		AshEngine::TerrainLayerId layer_id{};
 		uint64_t sequence = 0;

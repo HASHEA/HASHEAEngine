@@ -696,13 +696,19 @@ Expected: stable ids, not vector positions, identify commands.
 - Create: `project/src/editor/Panels/Terrain/TerrainModePanel.h`
 - Create: `project/src/editor/Panels/Terrain/TerrainModePanel.cpp`
 - Modify: `project/src/editor/Core/EditorIds.h`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.h`
+- Modify: `project/src/editor/Services/TerrainEditorService.h`
+- Modify: `project/src/editor/Services/TerrainEditorService.cpp`
 - Modify: `project/src/editor/App/PanelBootstrapper.h`
 - Modify: `project/src/editor/App/PanelBootstrapper.cpp`
 - Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
 - Modify: `project/src/editor/Shell/DockLayoutController.cpp`
 - Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/editor.md`
 
-- [ ] **Step 1: Write panel/bootstrap RED contracts**
+- [x] **Step 1: Write panel/bootstrap RED contracts**
 
 ```cpp
 TEST_CASE("Terrain Mode is a UIContext panel backed by TerrainEditorService")
@@ -716,7 +722,7 @@ TEST_CASE("Terrain Mode is a UIContext panel backed by TerrainEditorService")
 }
 ```
 
-- [ ] **Step 2: Run focused test and observe RED**
+- [x] **Step 2: Run focused test and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain Mode*"
@@ -724,23 +730,23 @@ TEST_CASE("Terrain Mode is a UIContext panel backed by TerrainEditorService")
 
 Expected: panel/bootstrap assertions fail.
 
-- [ ] **Step 3: Add stable panel ids and dependency injection**
+- [x] **Step 3: Add stable panel ids and dependency injection**
 
 Add `EditorPanelIds::TerrainMode = "terrain_mode"` and `EditorWindowTitles::TerrainMode = "Terrain"`. Pass `TerrainEditorService*` through `PanelBootstrapContext`, create one panel, bind its event bus, set it closed by default, and dock its title on the Inspector node.
 
-- [ ] **Step 4: Implement Manage tab**
+- [x] **Step 4: Implement Manage tab**
 
-Draw flat create, PNG/RAW/EXR import, final/base/layer export, Save, Save As, Reload, Optimize, progress, `content_generation`, `residency_revision`, and error state. RAW fields include format/endian/axis; EXR includes channel; size mismatch requires explicit crop or Catmull-Rom resample selection.
+Draw current asset/query/progress, `content_generation`, `residency_revision`, dirty and error state. Show the approved flat-create, PNG/RAW/EXR import, final/base/layer export, Save, Save As, Reload and Optimize fields, but keep them explicitly disabled until Tasks 9–10 provide the generation-aware file-job and conflict contracts; no unsupported intent is submitted. RAW placeholders include format/endian/axis, EXR includes channel, and size mismatch exposes reject/crop/Catmull-Rom choices.
 
-- [ ] **Step 5: Implement Sculpt and Paint tabs**
+- [x] **Step 5: Implement Sculpt and Paint tabs**
 
-Sculpt offers Raise, Lower, Smooth, Flatten, Noise. Paint offers Paint, Erase, and exactly eight material layers. Common controls expose radius, strength, falloff, spacing, and deterministic seed; every control changes `TerrainModeState` then submits an immutable selection/config intent.
+Sculpt offers Raise, Lower, Smooth, Flatten, Noise. Paint offers Paint, Erase, and exactly eight material layers. Common controls expose radius, strength, falloff, spacing, and deterministic seed; every control edits a frame-local copy and submits one immutable, service-validated configuration intent. `BeginStroke` must match that service-owned configuration, and active strokes lock mode/config changes.
 
-- [ ] **Step 6: Implement Layers tab**
+- [x] **Step 6: Implement Layers tab**
 
 Draw add/delete/duplicate/rename/reorder/hide/lock/opacity controls keyed by stable layer id. Buttons submit LayerAction intents and never mutate a `TerrainAssetSnapshot` directly.
 
-- [ ] **Step 7: Run panel contract/build GREEN**
+- [x] **Step 7: Run panel contract/build GREEN**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain Mode*"
@@ -749,15 +755,17 @@ Draw add/delete/duplicate/rename/reorder/hide/lock/opacity controls keyed by sta
 
 Expected: test passes, Editor links panel/widgets, and `rg -n "ImGui::|Graphics/|Vulkan|DirectX12" project/src/editor/Panels/Terrain` returns no match.
 
-- [ ] **Step 8: Commit Terrain Mode UI**
+- [x] **Step 8: Commit Terrain Mode UI**
 
 ```powershell
-git add project/src/editor/Panels/Terrain/TerrainModeState.h project/src/editor/Panels/Terrain/TerrainModeWidgets.h project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp project/src/editor/Panels/Terrain/TerrainModePanel.h project/src/editor/Panels/Terrain/TerrainModePanel.cpp project/src/editor/Core/EditorIds.h project/src/editor/App/PanelBootstrapper.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/App/EditorApplicationImpl.cpp project/src/editor/Shell/DockLayoutController.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp
+git add project/src/editor/Panels/Terrain/TerrainModeState.h project/src/editor/Panels/Terrain/TerrainModeWidgets.h project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp project/src/editor/Panels/Terrain/TerrainModePanel.h project/src/editor/Panels/Terrain/TerrainModePanel.cpp project/src/editor/Core/EditorIds.h project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/editor/App/PanelBootstrapper.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/App/EditorApplicationImpl.cpp project/src/editor/Shell/DockLayoutController.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
 git diff --cached --check
 git commit -m "feat(editor): add terrain authoring mode"
 ```
 
-Expected: one UI-only intent submission commit.
+Expected: one focused Terrain Mode UI plus service-owned authoring-configuration contract commit.
+
+Result: Terrain Mode is registered and defaults closed, Asset Browser Terrain selection routes through the service, Manage exposes status plus explicit disabled future file-job boundaries, Sculpt/Paint use the service-owned compatible brush configuration, and Layers submits stable-ID actions with draft-safe undo/redo behavior. Focused Terrain Mode tests pass (9/9, 110 assertions); final Debug and Release suites pass (296/296, 21178 assertions each). ArchGate, AIDevDoctor, fresh Premake generation, Editor/Sandbox Debug/Release builds, and the four-combination readiness matrix all pass. The readiness matrix exited from the shared readiness signal, fresh logs had zero rejection hits, and all four runtime configuration files were restored byte-for-byte. RenderGate was not run because this slice changes Editor UI/service authoring contracts but no renderer, shader, scene presentation, or golden-visible output.
 
 ### Task 7: Add viewport input arbitration
 

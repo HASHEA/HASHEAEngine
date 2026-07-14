@@ -41,6 +41,7 @@ namespace AshEditor
 			uint64_t sequence);
 
 		const TerrainEditorPreviewState& GetPreviewState() const;
+		const TerrainAuthoringConfig& GetAuthoringConfig() const;
 		AshEngine::TerrainAssetId GetSelectedAssetId() const;
 		AshEngine::TerrainLayerId GetSelectedLayerId() const;
 		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
@@ -72,6 +73,7 @@ namespace AshEditor
 
 		bool SubmitSelectAssetIntent(const TerrainEditorIntent& refIntent);
 		bool SubmitSelectLayerIntent(const TerrainEditorIntent& refIntent);
+		bool SubmitConfigureAuthoringIntent(const TerrainEditorIntent& refIntent);
 		bool BeginStroke(const TerrainEditorIntent& refIntent);
 		bool AddStrokeSample(const TerrainEditorIntent& refIntent);
 		bool EndStroke(const TerrainEditorIntent& refIntent);
@@ -90,11 +92,13 @@ namespace AshEditor
 			uint64_t sequence);
 		void CompletePendingLoad();
 		void CompletePendingComposition();
+		void SyncAuthoringLayerSelection();
 
 	private:
 		AshEngine::AssetDatabase* _pAssets = nullptr;
 		IEditorCommandExecutor* _pCommands = nullptr;
 		TerrainEditorSessionCore _core{};
+		TerrainAuthoringConfig _authoringConfig{};
 		std::shared_future<std::shared_ptr<const AshEngine::TerrainAssetSnapshot>> _pendingLoad{};
 		AshEngine::TerrainAssetId _pendingLoadAssetId = 0;
 		std::optional<ActiveStroke> _optActiveStroke{};

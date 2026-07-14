@@ -17,6 +17,80 @@
 
 namespace AshEditor
 {
+	namespace
+	{
+		bool IsValidUnitFloat(const float value)
+		{
+			return std::isfinite(value) && value >= 0.0f && value <= 1.0f;
+		}
+
+		bool IsValidAuthoringConfig(const TerrainAuthoringConfig& refConfig)
+		{
+			const uint8_t modeValue = static_cast<uint8_t>(refConfig.mode);
+			const uint8_t toolValue = static_cast<uint8_t>(refConfig.brush.tool);
+			if (modeValue > static_cast<uint8_t>(TerrainEditorMode::Layers) ||
+				toolValue > static_cast<uint8_t>(AshEngine::TerrainBrushTool::Erase) ||
+				!std::isfinite(refConfig.brush.radius_meters) ||
+				refConfig.brush.radius_meters <= 0.0f ||
+				refConfig.brush.radius_meters > 2048.0f ||
+				!IsValidUnitFloat(refConfig.brush.strength) ||
+				!IsValidUnitFloat(refConfig.brush.falloff) ||
+				!std::isfinite(refConfig.brush.stroke_spacing_meters) ||
+				refConfig.brush.stroke_spacing_meters <= 0.0f ||
+				refConfig.brush.material_layer_index >= AshEngine::k_terrain_material_layer_count)
+			{
+				return false;
+			}
+
+			const bool heightTool =
+				refConfig.brush.tool >= AshEngine::TerrainBrushTool::Raise &&
+				refConfig.brush.tool <= AshEngine::TerrainBrushTool::Noise;
+			const bool weightTool =
+				refConfig.brush.tool == AshEngine::TerrainBrushTool::Paint ||
+				refConfig.brush.tool == AshEngine::TerrainBrushTool::Erase;
+			return (refConfig.mode != TerrainEditorMode::Sculpt || heightTool) &&
+				(refConfig.mode != TerrainEditorMode::Paint || weightTool);
+		}
+
+		bool BrushParametersMatch(
+			const AshEngine::TerrainBrushParameters& refLeft,
+			const AshEngine::TerrainBrushParameters& refRight)
+		{
+			return refLeft.tool == refRight.tool &&
+				refLeft.radius_meters == refRight.radius_meters &&
+				refLeft.strength == refRight.strength &&
+				refLeft.falloff == refRight.falloff &&
+				refLeft.stroke_spacing_meters == refRight.stroke_spacing_meters &&
+				refLeft.layer_id == refRight.layer_id &&
+				refLeft.material_layer_index == refRight.material_layer_index &&
+				refLeft.random_seed == refRight.random_seed;
+		}
+
+		bool IsToolCompatibleWithLayer(
+			const TerrainEditorMode eMode,
+			const AshEngine::TerrainBrushTool eTool,
+			const AshEngine::TerrainHeightBlendMode eBlendMode)
+		{
+			if (eMode == TerrainEditorMode::Paint)
+			{
+				return eTool == AshEngine::TerrainBrushTool::Paint ||
+					eTool == AshEngine::TerrainBrushTool::Erase;
+			}
+			if (eMode != TerrainEditorMode::Sculpt)
+			{
+				return true;
+			}
+			if (eBlendMode == AshEngine::TerrainHeightBlendMode::Additive)
+			{
+				return eTool == AshEngine::TerrainBrushTool::Raise ||
+					eTool == AshEngine::TerrainBrushTool::Lower ||
+					eTool == AshEngine::TerrainBrushTool::Noise;
+			}
+			return eTool == AshEngine::TerrainBrushTool::Smooth ||
+				eTool == AshEngine::TerrainBrushTool::Flatten;
+		}
+	}
+
 	bool TerrainEditorService::Initialize(IEditorCommandExecutor& refCommands)
 	{
 		Shutdown();
@@ -46,6 +120,7 @@ namespace AshEditor
 		_latestCompositionSourceSequence = 0u;
 		_historyRollbackFailed = false;
 		_strLastError.clear();
+		_authoringConfig = {};
 		_core.Close();
 		_pCommands = nullptr;
 		_pAssets = nullptr;
@@ -85,6 +160,8 @@ namespace AshEditor
 			return SubmitSelectAssetIntent(refIntent);
 		case TerrainEditorIntent::Kind::SelectLayer:
 			return SubmitSelectLayerIntent(refIntent);
+		case TerrainEditorIntent::Kind::ConfigureAuthoring:
+			return SubmitConfigureAuthoringIntent(refIntent);
 		case TerrainEditorIntent::Kind::BeginStroke:
 			return BeginStroke(refIntent);
 		case TerrainEditorIntent::Kind::AddStrokeSample:
@@ -124,6 +201,7 @@ namespace AshEditor
 				: std::move(strError);
 			return false;
 		}
+		SyncAuthoringLayerSelection();
 
 		_pendingLoad = {};
 		_pendingLoadAssetId = 0u;
@@ -217,6 +295,7 @@ namespace AshEditor
 			return false;
 		}
 
+		SyncAuthoringLayerSelection();
 		ScheduleComposition(sequence, std::move(dirtyComponents));
 		_strLastError.clear();
 		return true;
@@ -225,6 +304,11 @@ namespace AshEditor
 	const TerrainEditorPreviewState& TerrainEditorService::GetPreviewState() const
 	{
 		return _core.GetPreviewState();
+	}
+
+	const TerrainAuthoringConfig& TerrainEditorService::GetAuthoringConfig() const
+	{
+		return _authoringConfig;
 	}
 
 	AshEngine::TerrainAssetId TerrainEditorService::GetSelectedAssetId() const
@@ -273,6 +357,16 @@ namespace AshEditor
 		const AshEngine::TerrainAssetId previousAssetId = _core.GetAssetId();
 		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
 		const bool alreadyOpen = pWorkingSet && pWorkingSet->asset_id == refIntent.asset_id;
+		const bool changesAsset = previousAssetId != refIntent.asset_id;
+		if (changesAsset && !_historyRollbackFailed &&
+			(_core.IsDirty() || _optActiveStroke || _core.HasActiveStroke() ||
+			_optPendingComposition))
+		{
+			_strLastError = _core.IsDirty()
+				? "Terrain asset selection cannot replace a dirty authoring session."
+				: "Terrain asset selection cannot replace an active authoring operation.";
+			return false;
+		}
 		if (refIntent.asset_id != 0u && !alreadyOpen && !_pAssets)
 		{
 			_strLastError = "Terrain asset selection requires an AssetDatabase.";
@@ -292,6 +386,7 @@ namespace AshEditor
 			_optPendingComposition.reset();
 			_publishedSnapshot.reset();
 			_historyRollbackFailed = false;
+			SyncAuthoringLayerSelection();
 		}
 		if (refIntent.asset_id == 0u || alreadyOpen)
 		{
@@ -321,6 +416,47 @@ namespace AshEditor
 			return false;
 		}
 
+		SyncAuthoringLayerSelection();
+		_strLastError.clear();
+		return true;
+	}
+
+	bool TerrainEditorService::SubmitConfigureAuthoringIntent(const TerrainEditorIntent& refIntent)
+	{
+		if (_optActiveStroke || _core.HasActiveStroke())
+		{
+			_strLastError = "Terrain authoring configuration cannot change during an active stroke.";
+			return false;
+		}
+
+		TerrainAuthoringConfig candidate{};
+		candidate.mode = refIntent.mode;
+		candidate.brush = refIntent.brush;
+		candidate.brush.layer_id = _core.GetSelectedLayerId();
+		if (!IsValidAuthoringConfig(candidate))
+		{
+			_strLastError = "Terrain authoring mode or brush configuration is invalid.";
+			return false;
+		}
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (pWorkingSet && candidate.brush.layer_id.is_valid())
+		{
+			const auto layer = std::find_if(
+				pWorkingSet->edit_layers.begin(),
+				pWorkingSet->edit_layers.end(),
+				[&candidate](const AshEngine::TerrainEditLayer& refLayer)
+				{
+					return refLayer.id == candidate.brush.layer_id;
+				});
+			if (layer == pWorkingSet->edit_layers.end() ||
+				!IsToolCompatibleWithLayer(candidate.mode, candidate.brush.tool, layer->height_blend_mode))
+			{
+				_strLastError = "Terrain authoring tool is incompatible with the selected layer.";
+				return false;
+			}
+		}
+
+		_authoringConfig = std::move(candidate);
 		_strLastError.clear();
 		return true;
 	}
@@ -334,15 +470,17 @@ namespace AshEditor
 			refIntent.brush_metric.world_meters_per_terrain_meter.x > 0.0f &&
 			std::isfinite(refIntent.brush_metric.world_meters_per_terrain_meter.y) &&
 			refIntent.brush_metric.world_meters_per_terrain_meter.y > 0.0f;
-		const uint8_t toolValue = static_cast<uint8_t>(refIntent.brush.tool);
+		const bool authoringMode =
+			_authoringConfig.mode == TerrainEditorMode::Sculpt ||
+			_authoringConfig.mode == TerrainEditorMode::Paint;
 		if (!pWorkingSet || _optActiveStroke || _core.HasActiveStroke() ||
 			_core.GetPreviewState().query_status != AshEngine::TerrainQueryStatus::Ready ||
-			!validMetric || !selectedLayerId.is_valid() ||
+			!authoringMode || !validMetric || !selectedLayerId.is_valid() ||
 			refIntent.layer_id != selectedLayerId ||
-			refIntent.brush.layer_id != selectedLayerId ||
-			toolValue > static_cast<uint8_t>(AshEngine::TerrainBrushTool::Erase))
+			_authoringConfig.brush.layer_id != selectedLayerId ||
+			!BrushParametersMatch(refIntent.brush, _authoringConfig.brush))
 		{
-			_strLastError = "Terrain stroke begin state, metric, layer, or tool is invalid.";
+			_strLastError = "Terrain stroke begin state, mode, metric, layer, or authoring configuration is invalid.";
 			return false;
 		}
 		if (pWorkingSet->content_generation >= std::numeric_limits<uint64_t>::max() - 1u)
@@ -369,17 +507,10 @@ namespace AshEditor
 			return false;
 		}
 
-		const bool additiveHeightTool =
-			refIntent.brush.tool == AshEngine::TerrainBrushTool::Raise ||
-			refIntent.brush.tool == AshEngine::TerrainBrushTool::Lower ||
-			refIntent.brush.tool == AshEngine::TerrainBrushTool::Noise;
-		const bool alphaHeightTool =
-			refIntent.brush.tool == AshEngine::TerrainBrushTool::Smooth ||
-			refIntent.brush.tool == AshEngine::TerrainBrushTool::Flatten;
-		if ((additiveHeightTool &&
-				layer->height_blend_mode != AshEngine::TerrainHeightBlendMode::Additive) ||
-			(alphaHeightTool &&
-				layer->height_blend_mode != AshEngine::TerrainHeightBlendMode::Alpha))
+		if (!IsToolCompatibleWithLayer(
+				_authoringConfig.mode,
+				_authoringConfig.brush.tool,
+				layer->height_blend_mode))
 		{
 			_strLastError = "Terrain brush tool is incompatible with the selected layer.";
 			return false;
@@ -394,7 +525,7 @@ namespace AshEditor
 		_optActiveStroke->asset_id = pWorkingSet->asset_id;
 		_optActiveStroke->layer_id = selectedLayerId;
 		_optActiveStroke->sequence = _nextStrokeSequence;
-		_optActiveStroke->parameters = refIntent.brush;
+		_optActiveStroke->parameters = _authoringConfig.brush;
 		_optActiveStroke->metric = refIntent.brush_metric;
 		if (!_core.BeginStroke(_nextStrokeSequence))
 		{
@@ -656,6 +787,7 @@ namespace AshEditor
 			return true;
 		}
 		const AshEngine::TerrainLayerId selectedAfter = _core.GetSelectedLayerId();
+		SyncAuthoringLayerSelection();
 
 		++_nextLayerSequence;
 		if (_nextLayerSequence == 0u)
@@ -839,6 +971,7 @@ namespace AshEditor
 			return false;
 		}
 
+		SyncAuthoringLayerSelection();
 		ScheduleComposition(sequence, std::move(dirtyComponents));
 		return true;
 	}
@@ -945,5 +1078,48 @@ namespace AshEditor
 
 		_publishedSnapshot = std::move(snapshot);
 		_strLastError.clear();
+	}
+
+	void TerrainEditorService::SyncAuthoringLayerSelection()
+	{
+		_authoringConfig.brush.layer_id = _core.GetSelectedLayerId();
+		if (_authoringConfig.mode == TerrainEditorMode::Paint)
+		{
+			if (_authoringConfig.brush.tool != AshEngine::TerrainBrushTool::Paint &&
+				_authoringConfig.brush.tool != AshEngine::TerrainBrushTool::Erase)
+			{
+				_authoringConfig.brush.tool = AshEngine::TerrainBrushTool::Paint;
+			}
+			return;
+		}
+		if (_authoringConfig.mode != TerrainEditorMode::Sculpt)
+		{
+			return;
+		}
+
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (!pWorkingSet)
+		{
+			_authoringConfig.brush.tool = AshEngine::TerrainBrushTool::Raise;
+			return;
+		}
+		const auto layer = std::find_if(
+			pWorkingSet->edit_layers.begin(),
+			pWorkingSet->edit_layers.end(),
+			[this](const AshEngine::TerrainEditLayer& refLayer)
+			{
+				return refLayer.id == _authoringConfig.brush.layer_id;
+			});
+		if (layer != pWorkingSet->edit_layers.end() &&
+			!IsToolCompatibleWithLayer(
+				_authoringConfig.mode,
+				_authoringConfig.brush.tool,
+				layer->height_blend_mode))
+		{
+			_authoringConfig.brush.tool =
+				layer->height_blend_mode == AshEngine::TerrainHeightBlendMode::Additive
+				? AshEngine::TerrainBrushTool::Raise
+				: AshEngine::TerrainBrushTool::Smooth;
+		}
 	}
 }

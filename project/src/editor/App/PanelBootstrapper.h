@@ -19,6 +19,7 @@ namespace AshEditor
 	class PanelManager;
 	class SceneService;
 	class SelectionService;
+	class TerrainEditorService;
 	struct EditorGizmoState;
 
 	struct PanelBootstrapContext
@@ -26,6 +27,7 @@ namespace AshEditor
 		SelectionService* pSelectionService = nullptr;
 		SceneService* pSceneService = nullptr;
 		AssetDatabaseService* pAssetDatabaseService = nullptr;
+		TerrainEditorService* pTerrainEditorService = nullptr;
 		AssetPreviewService* pAssetPreviewService = nullptr;
 		CommandService* pCommandService = nullptr;
 		IEditorCommandExecutor* pCommandExecutor = nullptr;
