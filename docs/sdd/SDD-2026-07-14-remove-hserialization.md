@@ -1,6 +1,6 @@
 # Mini SDD: 移除未使用的 hserialization 模块
 
-Status: Review
+Status: Done
 
 ## Goal
 
@@ -23,6 +23,7 @@ Status: Review
 - 删除 `project/src/engine/Base/hserialization.cpp`
 - 删除 `project/src/tests/Base/hserialization_tests.cpp`
 - 更新 `docs/specs/modules/base.md`
+- 新增 `docs/plans/2026-07-14-remove-hserialization.md`
 - 更新本 SDD 的状态与完成结论
 
 ## Approach
@@ -53,3 +54,7 @@ Status: Review
 - 风险：遗漏未纳入仓库扫描的消费者。用户已确认不存在仓外依赖；仓内遗漏会由重新生成、全量测试和两个可执行目标构建暴露。
 - 风险：生成工程仍缓存已删除源文件。通过重新运行 Premake 并检查生成结果消除。
 - 回滚：整体 revert 本包提交即可恢复原模块、测试和文档描述；不涉及资产迁移或持久化数据转换。
+
+## Outcome
+
+已完整删除 `hserialization` 的声明、实现和专属 doctest，重新生成工程后仓内代码不存在残留引用。Base 长期 spec 已同步移除二进制序列化职责；未增加兼容层或替代格式。

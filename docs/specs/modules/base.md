@@ -8,7 +8,7 @@ status: active
 
 ## 职责与边界
 
-`project/src/engine/Base/` 提供与渲染无关的基础设施：日志、内存分配、窗口与输入、基础数据结构、时间与 CPU profiler、二进制序列化、线程模型、文件访问、ini 配置与服务注册。它不依赖 Graphics/Function/Editor 任何上层模块（`window/Window.h` 仅引用 `Graphics/RHIBackend.h` 的 `Backend` 枚举用于窗口配置）；所有上层模块都可以依赖 Base。
+`project/src/engine/Base/` 提供与渲染无关的基础设施：日志、内存分配、窗口与输入、基础数据结构、时间与 CPU profiler、线程模型、文件访问、ini 配置与服务注册。它不依赖 Graphics/Function/Editor 任何上层模块（`window/Window.h` 仅引用 `Graphics/RHIBackend.h` 的 `Backend` 枚举用于窗口配置）；所有上层模块都可以依赖 Base。
 
 ## 目录与关键文件
 
@@ -21,7 +21,6 @@ status: active
 | `ds/harray.hpp`、`ds/hhash_map.hpp` | `Array/ArrayView`、`FlatHashMap`（自带 allocator 的容器） |
 | `htime.h/.cpp` | tick 计时服务：`time_now` 及 micro/milli/seconds 换算 |
 | `hprofiler.h` | Tracy CPU profile 门面宏 `ASH_PROFILE_*`（无 `TRACY_ENABLE` 时全为 no-op） |
-| `hserialization.h/.cpp` | 可内存映射 blob 序列化：`Blob/BlobHeader`、`RelativePointer/RelativeArray` |
 | `hthreading.h/.cpp` | 线程角色与命令队列：`EngineThreadingConfig`、render/logic/worker 线程 |
 | `hfile.h/.cpp` | `file_read_binary/text`、`file_write_binary`、目录操作 |
 | `IniConfig.h/.cpp` | `IniConfig` ini 读取器 + `resolve_runtime_config_path/trim_ini_string/to_lower_ascii` |
@@ -68,3 +67,4 @@ status: active
 - [SDD-2026-07-12-logic-input-consumption](../../sdd/SDD-2026-07-12-logic-input-consumption.md)：定义跨线程输入快照的批次合并与一次性瞬态消费语义。
 - [SDD-2026-07-13-base-string-storage-safety](../../sdd/SDD-2026-07-13-base-string-storage-safety.md)：收紧 `StringBuffer` / `StringArray` 容量边界、allocator/lifetime 配对与 hash collision 正确性。
 - [SDD-2026-07-14-directory-path-safety](../../sdd/SDD-2026-07-14-directory-path-safety.md)：目录路径改为有界局部构造和事务式句柄替换，失败不破坏原状态，关闭操作幂等。
+- [SDD-2026-07-14-remove-hserialization](../../sdd/SDD-2026-07-14-remove-hserialization.md)：删除零调用、无兼容需求且存在边界与所有权缺陷的旧 `hserialization` 模块；Base 不再提供通用二进制序列化能力。
