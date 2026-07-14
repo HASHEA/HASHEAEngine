@@ -267,6 +267,19 @@ namespace RHI
 		}
 	}
 
+	DX12GpuTimingSafetyState
+	advance_dx12_gpu_timing_safety_state_after_abort(
+		DX12GpuTimingSafetyState current_state,
+		bool submission_bound)
+	{
+		if (current_state == DX12GpuTimingSafetyState::Quarantined ||
+			submission_bound)
+		{
+			return DX12GpuTimingSafetyState::Quarantined;
+		}
+		return DX12GpuTimingSafetyState::Operational;
+	}
+
 	uint32_t terminate_dx12_gpu_timing_tracking(
 		GpuTimingFrameState& frame_state,
 		std::array<uint64_t, kGpuTimingFrameRingDepth>& slot_frame_ids,
@@ -686,6 +699,7 @@ namespace RHI
 			submit_result);
 		if (submit_result != DX12GpuTimingSubmitResult::Accepted)
 		{
+			const uint32_t abandoned_slot = m_active_slot;
 			m_frame_state.abort_frame(
 				m_active_frame_id,
 				GpuTimingInvalidReason::SubmissionFailed);
@@ -693,6 +707,10 @@ namespace RHI
 			if (m_safety_state == DX12GpuTimingSafetyState::Quarantined)
 			{
 				m_available_slot = kGpuTimingFrameRingDepth;
+			}
+			else
+			{
+				m_available_slot = abandoned_slot;
 			}
 			return;
 		}
@@ -823,7 +841,7 @@ namespace RHI
 		m_frame_ended = true;
 	}
 
-	void DX12GpuTimingTelemetry::commit_frame(uint64_t frame_id)
+	bool DX12GpuTimingTelemetry::commit_frame(uint64_t frame_id)
 	{
 		if (!m_supported || m_device_removed ||
 			m_safety_state == DX12GpuTimingSafetyState::Quarantined ||
@@ -831,21 +849,24 @@ namespace RHI
 			m_active_slot >= kGpuTimingFrameRingDepth ||
 			m_active_frame_id != frame_id)
 		{
-			return;
+			return false;
 		}
 
 		if (!m_submission_bound || m_active_fence_target == 0u ||
 			!m_frame_state.commit_frame(frame_id))
 		{
+			m_safety_state = DX12GpuTimingSafetyState::Quarantined;
 			m_frame_state.abort_frame(frame_id, GpuTimingInvalidReason::SubmissionFailed);
 			clear_active_frame();
-			return;
+			m_available_slot = kGpuTimingFrameRingDepth;
+			return false;
 		}
 
 		m_slot_frame_ids[m_active_slot] = frame_id;
 		m_slot_fence_targets[m_active_slot] = m_active_fence_target;
 		m_slot_has_frame[m_active_slot] = true;
 		clear_active_frame();
+		return true;
 	}
 
 	void DX12GpuTimingTelemetry::abort_frame(
@@ -857,8 +878,16 @@ namespace RHI
 		{
 			return;
 		}
+		const uint32_t abandoned_slot = m_active_slot;
+		m_safety_state = advance_dx12_gpu_timing_safety_state_after_abort(
+			m_safety_state,
+			m_submission_bound);
 		m_frame_state.abort_frame(frame_id, reason);
 		clear_active_frame();
+		if (m_safety_state == DX12GpuTimingSafetyState::Operational)
+		{
+			m_available_slot = abandoned_slot;
+		}
 	}
 
 	GpuTimingPollResult DX12GpuTimingTelemetry::poll_completed_frame(

@@ -12,6 +12,30 @@
 
 namespace AshEngine
 {
+	uint32_t drain_completed_gpu_timing_samples(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RendererFrameStats& frame_stats)
+	{
+		if (!telemetry)
+		{
+			return 0u;
+		}
+
+		const uint32_t initial_count = frame_stats.completed_gpu_sample_count;
+		while (frame_stats.completed_gpu_sample_count < RHI::kGpuTimingFrameRingDepth)
+		{
+			RHI::GpuFrameTimingSample sample{};
+			if (telemetry->poll_completed_frame(sample) !=
+				RHI::GpuTimingPollResult::Ready)
+			{
+				break;
+			}
+			frame_stats.completed_gpu_samples[
+				frame_stats.completed_gpu_sample_count++] = sample;
+		}
+		return frame_stats.completed_gpu_sample_count - initial_count;
+	}
+
 	namespace
 	{
 		static auto pointer_sort_key(const void* pointer) -> uintptr_t
@@ -152,6 +176,10 @@ namespace AshEngine
 		}
 
 		m_frame_in_progress = true;
+		m_frame_stats.render_frame_id = m_render_device->get_render_frame_id();
+		drain_completed_gpu_timing_samples(
+			m_render_device->get_gpu_timing_telemetry(),
+			m_frame_stats);
 		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
 		{
 			m_frame_stats.frame_width = back_buffer->get_width();
@@ -185,6 +213,14 @@ namespace AshEngine
 			}
 		}
 		const bool result = m_render_device && m_render_device->end_frame();
+		if (m_render_device)
+		{
+			m_frame_stats.gpu_timing_frame_submitted =
+				m_render_device->was_gpu_timing_frame_submitted();
+			drain_completed_gpu_timing_samples(
+				m_render_device->get_gpu_timing_telemetry(),
+				m_frame_stats);
+		}
 		const auto render_end_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.render_end_frame_time_ms =
 			std::chrono::duration<double, std::milli>(render_end_end_time - render_end_start_time).count();
@@ -381,6 +417,12 @@ namespace AshEngine
 
 	void Renderer::complete_frame_timing()
 	{
+		if (m_render_device)
+		{
+			drain_completed_gpu_timing_samples(
+				m_render_device->get_gpu_timing_telemetry(),
+				m_frame_stats);
+		}
 		const auto frame_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
 		m_frame_stats.instantaneous_fps =

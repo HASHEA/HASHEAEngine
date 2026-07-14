@@ -99,8 +99,9 @@ namespace
 		{
 		}
 
-		void commit_frame(uint64_t) override
+		bool commit_frame(uint64_t) override
 		{
+			return true;
 		}
 
 		void abort_frame(uint64_t, RHI::GpuTimingInvalidReason) override

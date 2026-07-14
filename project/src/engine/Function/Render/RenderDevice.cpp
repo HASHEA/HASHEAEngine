@@ -10,6 +10,7 @@
 #include "Graphics/Texture.h"
 #include "Graphics/VertexInputLayout.h"
 #include "Graphics/GpuProfilerRHI.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Function/Render/RenderFormatUtils.h"
@@ -23,6 +24,89 @@
 
 namespace AshEngine
 {
+	bool GpuTimingFrameLifecycleCoordinator::begin(
+		RHI::SwapchainPresentResult acquire_result,
+		bool begin_record_succeeded,
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer,
+		uint64_t frame_id)
+	{
+		if (active())
+		{
+			abort(RHI::GpuTimingInvalidReason::FrameStateError);
+		}
+		if (acquire_result != RHI::SwapchainPresentResult::Completed ||
+			!begin_record_succeeded || !telemetry || !command_buffer ||
+			!telemetry->begin_frame(command_buffer, frame_id))
+		{
+			return false;
+		}
+
+		m_telemetry = telemetry;
+		m_command_buffer = command_buffer;
+		m_frame_id = frame_id;
+		m_ended = false;
+		return true;
+	}
+
+	bool GpuTimingFrameLifecycleCoordinator::end(
+		RHI::CommandBuffer* command_buffer)
+	{
+		if (!active() || m_ended)
+		{
+			return false;
+		}
+		if (command_buffer != m_command_buffer)
+		{
+			abort(RHI::GpuTimingInvalidReason::FrameStateError);
+			return false;
+		}
+
+		m_telemetry->end_frame(m_command_buffer, m_frame_id);
+		m_ended = true;
+		return true;
+	}
+
+	bool GpuTimingFrameLifecycleCoordinator::commit()
+	{
+		if (!active())
+		{
+			return false;
+		}
+		if (!m_ended)
+		{
+			abort(RHI::GpuTimingInvalidReason::FrameStateError);
+			return false;
+		}
+
+		const bool committed = m_telemetry->commit_frame(m_frame_id);
+		reset();
+		return committed;
+	}
+
+	void GpuTimingFrameLifecycleCoordinator::abort(
+		RHI::GpuTimingInvalidReason reason)
+	{
+		if (active())
+		{
+			m_telemetry->abort_frame(m_frame_id, reason);
+		}
+		reset();
+	}
+
+	bool GpuTimingFrameLifecycleCoordinator::active() const
+	{
+		return m_telemetry != nullptr;
+	}
+
+	void GpuTimingFrameLifecycleCoordinator::reset()
+	{
+		m_telemetry = nullptr;
+		m_command_buffer = nullptr;
+		m_frame_id = 0u;
+		m_ended = false;
+	}
+
 	namespace
 	{
 		struct RenderPassSignature
@@ -1146,6 +1230,8 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget::Impl> swapchain_target = nullptr;
 		std::unordered_map<uint64_t, std::vector<std::shared_ptr<RenderTarget>>> transient_render_target_pool;
 		uint64_t frame_index = 0;
+		GpuTimingFrameLifecycleCoordinator gpu_timing_frame_lifecycle{};
+		bool gpu_timing_frame_submitted = false;
 		uint32_t last_swapchain_width = 0;
 		uint32_t last_swapchain_height = 0;
 		bool viewport_override_active = false;
@@ -3199,6 +3285,8 @@ namespace AshEngine
 		{
 			return;
 		}
+		m_impl->gpu_timing_frame_lifecycle.abort(
+			RHI::GpuTimingInvalidReason::FrameStateError);
 
 		m_impl->current_command_buffer = nullptr;
 		m_impl->current_framebuffer.reset();
@@ -3221,6 +3309,7 @@ namespace AshEngine
 			RHI::SwapchainPresentResult::Completed,
 			RHI::SwapchainPresentResult::Failed);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain);
+		m_impl->gpu_timing_frame_submitted = false;
 
 		m_impl->graphics_context->begin_frame();
 		const RHI::SwapchainPresentResult acquire_result = m_impl->swapchain->begin_frame();
@@ -3255,10 +3344,15 @@ namespace AshEngine
 		sync_swapchain_target();
 		ASH_PROCESS_ERROR(ensure_back_buffer_target());
 		m_impl->current_command_buffer = m_impl->graphics_context->get_command_buffer(0);
-		ASH_PROCESS_ERROR(m_impl->current_command_buffer);
+		const bool command_buffer_available =
+			m_impl->current_command_buffer != nullptr;
+		ASH_PROCESS_ERROR(command_buffer_available);
 
 		m_impl->current_command_buffer->begin_record();
-		ASH_PROCESS_ERROR(validate_command_buffer_status(m_impl->current_command_buffer, "begin_frame::begin_record"));
+		const bool begin_record_succeeded = validate_command_buffer_status(
+			m_impl->current_command_buffer,
+			"begin_frame::begin_record");
+		ASH_PROCESS_ERROR(begin_record_succeeded);
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
@@ -3266,6 +3360,12 @@ namespace AshEngine
 		m_impl->scissor_override_active = false;
 		m_impl->back_buffer_written_this_frame = false;
 		m_impl->swapchain_written_this_frame = false;
+		m_impl->gpu_timing_frame_lifecycle.begin(
+			acquire_result,
+			begin_record_succeeded,
+			m_impl->graphics_context->get_gpu_timing_telemetry(),
+			m_impl->current_command_buffer,
+			m_impl->frame_index);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, RHI::SwapchainPresentResult::Failed);
 	}
 
@@ -3305,16 +3405,29 @@ namespace AshEngine
 
 		if (command_buffer->get_state() == RHI::AshCommandBufferState::ASH_Recording)
 		{
+			if (frame_recording_success)
+			{
+				m_impl->gpu_timing_frame_lifecycle.end(command_buffer);
+			}
+			else
+			{
+				m_impl->gpu_timing_frame_lifecycle.abort(
+					RHI::GpuTimingInvalidReason::SubmissionFailed);
+			}
 			command_buffer->end_record();
 			if (!validate_command_buffer_status(command_buffer, "end_frame::end_record"))
 			{
 				frame_recording_success = false;
+				m_impl->gpu_timing_frame_lifecycle.abort(
+					RHI::GpuTimingInvalidReason::SubmissionFailed);
 			}
 		}
 		else if (frame_recording_success)
 		{
 			HLogError("RenderDevice: command buffer is not recording at end_frame (state={}).", static_cast<uint32_t>(command_buffer->get_state()));
 			frame_recording_success = false;
+			m_impl->gpu_timing_frame_lifecycle.abort(
+				RHI::GpuTimingInvalidReason::FrameStateError);
 		}
 
 		if (frame_recording_success)
@@ -3324,10 +3437,14 @@ namespace AshEngine
 		else
 		{
 			HLogError("RenderDevice: skipping command buffer submit because frame recording failed.");
+			m_impl->gpu_timing_frame_lifecycle.abort(
+				RHI::GpuTimingInvalidReason::SubmissionFailed);
 		}
 
 		m_impl->swapchain->end_frame();
 		m_impl->graphics_context->end_frame();
+		m_impl->gpu_timing_frame_submitted = frame_recording_success &&
+			m_impl->gpu_timing_frame_lifecycle.commit();
 		m_impl->current_command_buffer = nullptr;
 		bResult = frame_recording_success;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -4443,6 +4560,16 @@ namespace AshEngine
 		return m_impl && m_impl->graphics_context ?
 			m_impl->graphics_context->get_gpu_timing_telemetry() :
 			nullptr;
+	}
+
+	uint64_t RenderDevice::get_render_frame_id() const
+	{
+		return m_impl ? m_impl->frame_index : 0u;
+	}
+
+	bool RenderDevice::was_gpu_timing_frame_submitted() const
+	{
+		return m_impl && m_impl->gpu_timing_frame_submitted;
 	}
 
 	std::shared_ptr<RHI::TextureView> RenderDevice::get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const

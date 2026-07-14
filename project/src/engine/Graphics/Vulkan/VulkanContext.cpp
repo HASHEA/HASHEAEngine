@@ -2177,6 +2177,8 @@ auto VulkanContext::destroy() -> void
 		}		
 		const bool has_swapchain_image =
 			has_acquired_swapchain_image && vulkanPresentCompleteSemaphore != VK_NULL_HANDLE;
+		VkResult graphics_submit_result = VK_ERROR_UNKNOWN;
+		bool graphics_completion_binding_established = false;
 		if (has_acquired_swapchain_image && !has_swapchain_image)
 		{
 			HLogError("VulkanContext: acquired swapchain frame is missing its render-complete semaphore.");
@@ -2217,7 +2219,11 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+					graphics_completion_binding_established =
+						vulkanGraphicsSemaphore != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 				wait_semaphores.shutdown();
 				signal_semaphores.shutdown();
@@ -2269,7 +2275,11 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+					graphics_completion_binding_established =
+						vulkanGraphicsSemaphore != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 				wait_semaphores.shutdown();
 				wait_values.shutdown();
@@ -2306,7 +2316,13 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+					const VkFence completion_fence =
+						get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle();
+					graphics_completion_binding_established =
+						completion_fence != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, completion_fence);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 				wait_semaphores.shutdown();
 				signal_semaphores.shutdown();
@@ -2326,9 +2342,23 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+					const VkFence completion_fence =
+						get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle();
+					graphics_completion_binding_established =
+						completion_fence != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit(vulkanMainQueue, 1, &submit_info, completion_fence);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 			}		
+		}
+		if (gpuTimingTelemetry)
+		{
+			gpuTimingTelemetry->observe_submission(
+				count > 0u ? cmds : nullptr,
+				static_cast<uint32_t>(count),
+				graphics_submit_result,
+				graphics_completion_binding_established);
 		}
 		frameActive = false;
 		currentUploadCommandBuffer = nullptr;

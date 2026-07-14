@@ -1,8 +1,11 @@
 #include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/RenderProgram.h"
+#include "Graphics/Swapchain.h"
 #include "Graphics/DirectX12/DX12GpuTimingTelemetry.h"
 #include "Graphics/Vulkan/VulkanGpuTimingTelemetry.h"
+#include "Function/Render/RenderDevice.h"
+#include "Function/Render/Renderer.h"
 
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -19,6 +22,89 @@
 
 namespace
 {
+	class LifecycleTelemetry final : public RHI::IGpuTimingTelemetry
+	{
+	public:
+		bool begin_frame(RHI::CommandBuffer* cmd, uint64_t frame_id) override
+		{
+			++begin_count;
+			last_command_buffer = cmd;
+			last_frame_id = frame_id;
+			return begin_result;
+		}
+
+		bool begin_scope(RHI::CommandBuffer*, RHI::GpuTimingMetric) override
+		{
+			return true;
+		}
+
+		void end_scope(RHI::CommandBuffer*, RHI::GpuTimingMetric) override
+		{
+		}
+
+		void end_frame(RHI::CommandBuffer* cmd, uint64_t frame_id) override
+		{
+			++end_count;
+			last_command_buffer = cmd;
+			last_frame_id = frame_id;
+		}
+
+		bool commit_frame(uint64_t frame_id) override
+		{
+			++commit_count;
+			last_frame_id = frame_id;
+			return commit_result;
+		}
+
+		void abort_frame(uint64_t frame_id, RHI::GpuTimingInvalidReason reason) override
+		{
+			++abort_count;
+			last_frame_id = frame_id;
+			last_abort_reason = reason;
+		}
+
+		RHI::GpuTimingPollResult poll_completed_frame(
+			RHI::GpuFrameTimingSample& out_sample) override
+		{
+			++poll_count;
+			if (completed_sample_cursor < completed_sample_count)
+			{
+				out_sample = completed_samples[completed_sample_cursor++];
+				return RHI::GpuTimingPollResult::Ready;
+			}
+			return pending_after_completed ?
+				RHI::GpuTimingPollResult::Pending :
+				RHI::GpuTimingPollResult::Empty;
+		}
+
+		RHI::GpuTimingTelemetryInfo get_info() const override
+		{
+			return {};
+		}
+
+		bool begin_result = true;
+		bool commit_result = true;
+		bool pending_after_completed = false;
+		uint32_t begin_count = 0u;
+		uint32_t end_count = 0u;
+		uint32_t commit_count = 0u;
+		uint32_t abort_count = 0u;
+		uint32_t poll_count = 0u;
+		uint32_t completed_sample_count = 0u;
+		uint32_t completed_sample_cursor = 0u;
+		uint64_t last_frame_id = 0u;
+		RHI::CommandBuffer* last_command_buffer = nullptr;
+		RHI::GpuTimingInvalidReason last_abort_reason =
+			RHI::GpuTimingInvalidReason::None;
+		std::array<RHI::GpuFrameTimingSample, RHI::kGpuTimingFrameRingDepth>
+			completed_samples{};
+	};
+
+	RHI::CommandBuffer* fake_timing_command_buffer(uintptr_t value = 1u)
+	{
+		return reinterpret_cast<RHI::CommandBuffer*>(value);
+	}
+
 	class MinimalGraphicsContext final : public RHI::GraphicsContext
 	{
 	public:
@@ -51,6 +137,213 @@ namespace
 		void submit(const RHI::SubmitInfo&) override {}
 		void submit_immediately(const RHI::SubmitInfo&) override {}
 	};
+}
+
+TEST_CASE("GPU timing lifecycle acknowledges only an exact committed frame")
+{
+	LifecycleTelemetry telemetry{};
+	AshEngine::GpuTimingFrameLifecycleCoordinator lifecycle{};
+	RHI::CommandBuffer* command_buffer = fake_timing_command_buffer();
+
+	CHECK_FALSE(lifecycle.begin(
+		RHI::SwapchainPresentResult::Completed,
+		true,
+		nullptr,
+		command_buffer,
+		500u));
+	CHECK_FALSE(lifecycle.begin(
+		RHI::SwapchainPresentResult::Completed,
+		true,
+		&telemetry,
+		nullptr,
+		500u));
+	CHECK(telemetry.begin_count == 0u);
+
+	REQUIRE(lifecycle.begin(
+		RHI::SwapchainPresentResult::Completed,
+		true,
+		&telemetry,
+		command_buffer,
+		501u));
+	CHECK(lifecycle.active());
+	CHECK(telemetry.begin_count == 1u);
+	CHECK(telemetry.last_frame_id == 501u);
+	CHECK(telemetry.last_command_buffer == command_buffer);
+	REQUIRE(lifecycle.end(command_buffer));
+	CHECK(telemetry.end_count == 1u);
+	CHECK(lifecycle.commit());
+	CHECK_FALSE(lifecycle.active());
+	CHECK(telemetry.commit_count == 1u);
+	CHECK(telemetry.last_frame_id == 501u);
+
+	telemetry.commit_result = false;
+	REQUIRE(lifecycle.begin(
+		RHI::SwapchainPresentResult::Completed,
+		true,
+		&telemetry,
+		command_buffer,
+		502u));
+	REQUIRE(lifecycle.end(command_buffer));
+	CHECK_FALSE(lifecycle.commit());
+	CHECK_FALSE(lifecycle.active());
+	CHECK(telemetry.commit_count == 2u);
+
+	REQUIRE(lifecycle.begin(
+		RHI::SwapchainPresentResult::Completed,
+		true,
+		&telemetry,
+		command_buffer,
+		503u));
+	lifecycle.abort(RHI::GpuTimingInvalidReason::SubmissionFailed);
+	CHECK_FALSE(lifecycle.active());
+	CHECK(telemetry.abort_count == 1u);
+	CHECK(telemetry.last_frame_id == 503u);
+	CHECK(telemetry.last_abort_reason ==
+		RHI::GpuTimingInvalidReason::SubmissionFailed);
+}
+
+TEST_CASE("GPU timing lifecycle aborts a mismatched end instead of committing")
+{
+	LifecycleTelemetry telemetry{};
+	AshEngine::GpuTimingFrameLifecycleCoordinator lifecycle{};
+	RHI::CommandBuffer* command_buffer = fake_timing_command_buffer(1u);
+	RHI::CommandBuffer* other_command_buffer = fake_timing_command_buffer(2u);
+
+	REQUIRE(lifecycle.begin(
+		RHI::SwapchainPresentResult::Completed,
+		true,
+		&telemetry,
+		command_buffer,
+		510u));
+	CHECK_FALSE(lifecycle.end(other_command_buffer));
+	CHECK_FALSE(lifecycle.active());
+	CHECK(telemetry.end_count == 0u);
+	CHECK(telemetry.abort_count == 1u);
+	CHECK(telemetry.last_abort_reason ==
+		RHI::GpuTimingInvalidReason::FrameStateError);
+	CHECK_FALSE(lifecycle.commit());
+	CHECK(telemetry.commit_count == 0u);
+}
+
+TEST_CASE("GPU timing begin policy waits for completed acquire and successful command recording")
+{
+	using Result = RHI::SwapchainPresentResult;
+	LifecycleTelemetry telemetry{};
+	AshEngine::GpuTimingFrameLifecycleCoordinator lifecycle{};
+	RHI::CommandBuffer* command_buffer = fake_timing_command_buffer();
+
+	CHECK_FALSE(lifecycle.begin(
+		Result::Retryable,
+		true,
+		&telemetry,
+		command_buffer,
+		520u));
+	CHECK_FALSE(lifecycle.begin(
+		Result::Failed,
+		true,
+		&telemetry,
+		command_buffer,
+		521u));
+	CHECK_FALSE(lifecycle.begin(
+		Result::Completed,
+		false,
+		&telemetry,
+		command_buffer,
+		522u));
+	CHECK(telemetry.begin_count == 0u);
+
+	REQUIRE(lifecycle.begin(
+		Result::Completed,
+		true,
+		&telemetry,
+		command_buffer,
+		523u));
+	CHECK(telemetry.begin_count == 1u);
+	CHECK(telemetry.last_frame_id == 523u);
+	lifecycle.abort(RHI::GpuTimingInvalidReason::Aborted);
+}
+
+TEST_CASE("GPU timing renderer transport is fixed capacity and stops on pending")
+{
+	LifecycleTelemetry telemetry{};
+	AshEngine::RendererFrameStats frame_stats{};
+	for (uint32_t index = 0u; index < RHI::kGpuTimingFrameRingDepth; ++index)
+	{
+		telemetry.completed_samples[index].frame_id = 600u + index;
+	}
+	telemetry.completed_sample_count = RHI::kGpuTimingFrameRingDepth;
+
+	CHECK(AshEngine::drain_completed_gpu_timing_samples(
+		&telemetry,
+		frame_stats) == RHI::kGpuTimingFrameRingDepth);
+	CHECK(frame_stats.completed_gpu_sample_count ==
+		RHI::kGpuTimingFrameRingDepth);
+	CHECK(telemetry.poll_count == RHI::kGpuTimingFrameRingDepth);
+	for (uint32_t index = 0u; index < RHI::kGpuTimingFrameRingDepth; ++index)
+	{
+		CHECK(frame_stats.completed_gpu_samples[index].frame_id == 600u + index);
+	}
+	CHECK(AshEngine::drain_completed_gpu_timing_samples(
+		&telemetry,
+		frame_stats) == 0u);
+	CHECK(telemetry.poll_count == RHI::kGpuTimingFrameRingDepth);
+
+	LifecycleTelemetry pending_telemetry{};
+	pending_telemetry.completed_samples[0].frame_id = 700u;
+	pending_telemetry.completed_sample_count = 1u;
+	pending_telemetry.pending_after_completed = true;
+	AshEngine::RendererFrameStats pending_stats{};
+	CHECK(AshEngine::drain_completed_gpu_timing_samples(
+		&pending_telemetry,
+		pending_stats) == 1u);
+	CHECK(pending_stats.completed_gpu_sample_count == 1u);
+	CHECK(pending_telemetry.poll_count == 2u);
+	CHECK(AshEngine::drain_completed_gpu_timing_samples(
+		nullptr,
+		pending_stats) == 0u);
+}
+
+TEST_CASE("GPU timing Vulkan submit distinguishes safe abort from quarantine")
+{
+	using Submit = RHI::VulkanGpuTimingSubmitResult;
+	using Safety = RHI::VulkanGpuTimingSafetyState;
+	VkCommandBuffer expected = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(1u));
+	VkCommandBuffer other = reinterpret_cast<VkCommandBuffer>(static_cast<uintptr_t>(2u));
+	VkCommandBuffer exact_batch[] = { other, expected };
+	VkCommandBuffer skipped_batch[] = { other };
+
+	CHECK(RHI::classify_vulkan_gpu_timing_submit(
+		expected, exact_batch, 2u, VK_SUCCESS, true) == Submit::Accepted);
+	CHECK(RHI::classify_vulkan_gpu_timing_submit(
+		expected, skipped_batch, 1u, VK_ERROR_DEVICE_LOST, false) ==
+		Submit::CommandBufferNotExecuted);
+	CHECK(RHI::classify_vulkan_gpu_timing_submit(
+		expected, exact_batch, 2u, VK_ERROR_DEVICE_LOST, true) ==
+		Submit::QueueSubmitFailed);
+	CHECK(RHI::classify_vulkan_gpu_timing_submit(
+		expected, exact_batch, 2u, VK_SUCCESS, false) ==
+		Submit::CompletionBindingMissing);
+
+	CHECK(RHI::advance_vulkan_gpu_timing_safety_state(
+		Safety::Operational,
+		Submit::CommandBufferNotExecuted) == Safety::Operational);
+	CHECK(RHI::vulkan_gpu_timing_slots_reusable(Safety::Operational));
+	CHECK(RHI::advance_vulkan_gpu_timing_safety_state(
+		Safety::Operational,
+		Submit::QueueSubmitFailed) == Safety::Quarantined);
+	CHECK_FALSE(RHI::vulkan_gpu_timing_slots_reusable(Safety::Quarantined));
+	CHECK(RHI::advance_vulkan_gpu_timing_safety_state(
+		Safety::Quarantined,
+		Submit::Accepted) == Safety::Quarantined);
+	CHECK(RHI::advance_vulkan_gpu_timing_safety_state_after_abort(
+		Safety::Operational,
+		false) == Safety::Operational);
+	CHECK(RHI::advance_vulkan_gpu_timing_safety_state_after_abort(
+		Safety::Operational,
+		true) == Safety::Quarantined);
+	CHECK(RHI::advance_vulkan_gpu_timing_safety_state_after_abort(
+		Safety::Quarantined,
+		false) == Safety::Quarantined);
 }
 
 TEST_CASE("GPU timing graphics context is opt-in and exposes a telemetry getter")
@@ -775,6 +1068,15 @@ TEST_CASE("GPU timing DX12 submission safety state quarantines untrackable execu
 	CHECK(RHI::advance_dx12_gpu_timing_safety_state(
 		SafetyState::Quarantined,
 		SubmitResult::Accepted) == SafetyState::Quarantined);
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state_after_abort(
+		SafetyState::Operational,
+		false) == SafetyState::Operational);
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state_after_abort(
+		SafetyState::Operational,
+		true) == SafetyState::Quarantined);
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state_after_abort(
+		SafetyState::Quarantined,
+		false) == SafetyState::Quarantined);
 }
 
 TEST_CASE("GPU timing DX12 graphics completion state poisons only executed untrackable batches")

@@ -1,5 +1,6 @@
 #pragma once
 #include "RenderDevice.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -111,6 +112,11 @@ namespace AshEngine
 
 	struct RendererFrameStats
 	{
+		uint64_t render_frame_id = 0u;
+		bool gpu_timing_frame_submitted = false;
+		std::array<RHI::GpuFrameTimingSample, RHI::kGpuTimingFrameRingDepth>
+			completed_gpu_samples{};
+		uint32_t completed_gpu_sample_count = 0u;
 		uint32_t frame_width = 0;
 		uint32_t frame_height = 0;
 		uint32_t graphics_pass_count = 0;
@@ -124,6 +130,10 @@ namespace AshEngine
 		double average_cpu_frame_time_ms = 0.0;
 		double average_fps = 0.0;
 	};
+
+	ASH_API uint32_t drain_completed_gpu_timing_samples(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RendererFrameStats& frame_stats);
 
 	class ASH_API Renderer
 	{

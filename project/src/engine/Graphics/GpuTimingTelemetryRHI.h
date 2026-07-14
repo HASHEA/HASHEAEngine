@@ -95,7 +95,9 @@ namespace RHI
 		virtual bool begin_scope(CommandBuffer* cmd, GpuTimingMetric metric) = 0;
 		virtual void end_scope(CommandBuffer* cmd, GpuTimingMetric metric) = 0;
 		virtual void end_frame(CommandBuffer* cmd, uint64_t frame_id) = 0;
-		virtual void commit_frame(uint64_t frame_id) = 0;
+		// Returns true only after the backend has bound this exact frame submission
+		// to a completion primitive and moved it into pollable Pending state.
+		virtual bool commit_frame(uint64_t frame_id) = 0;
 		virtual void abort_frame(uint64_t frame_id, GpuTimingInvalidReason reason) = 0;
 		virtual GpuTimingPollResult poll_completed_frame(GpuFrameTimingSample& out_sample) = 0;
 		virtual GpuTimingTelemetryInfo get_info() const = 0;

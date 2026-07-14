@@ -63,6 +63,10 @@ namespace RHI
 	ASH_API DX12GpuTimingSafetyState advance_dx12_gpu_timing_safety_state(
 		DX12GpuTimingSafetyState current_state,
 		DX12GpuTimingSubmitResult submit_result);
+	ASH_API DX12GpuTimingSafetyState
+	advance_dx12_gpu_timing_safety_state_after_abort(
+		DX12GpuTimingSafetyState current_state,
+		bool submission_bound);
 	ASH_API uint32_t terminate_dx12_gpu_timing_tracking(
 		GpuTimingFrameState& frame_state,
 		std::array<uint64_t, kGpuTimingFrameRingDepth>& slot_frame_ids,
@@ -96,7 +100,7 @@ namespace RHI
 		bool begin_scope(CommandBuffer* cmd, GpuTimingMetric metric) override;
 		void end_scope(CommandBuffer* cmd, GpuTimingMetric metric) override;
 		void end_frame(CommandBuffer* cmd, uint64_t frame_id) override;
-		void commit_frame(uint64_t frame_id) override;
+		bool commit_frame(uint64_t frame_id) override;
 		void abort_frame(uint64_t frame_id, GpuTimingInvalidReason reason) override;
 		GpuTimingPollResult poll_completed_frame(GpuFrameTimingSample& out_sample) override;
 		GpuTimingTelemetryInfo get_info() const override;

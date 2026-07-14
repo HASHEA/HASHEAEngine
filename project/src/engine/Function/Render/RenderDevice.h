@@ -15,6 +15,7 @@ namespace RHI
 	enum class AshResourceState : uint32_t;
 	class GraphicsContext;
 	class IGpuTimingTelemetry;
+	enum class GpuTimingInvalidReason : uint8_t;
 	class Swapchain;
 	enum class SwapchainPresentResult : uint8_t;
 	class CommandBuffer;
@@ -560,6 +561,31 @@ namespace AshEngine
 		uint32_t color_attachment_count = 1u,
 		bool reverse_z = false);
 
+	// Backend-neutral state machine used by RenderDevice to keep a timing frame
+	// paired with its exact command buffer and canonical renderer frame ID.
+	class ASH_API GpuTimingFrameLifecycleCoordinator
+	{
+	public:
+		bool begin(
+			RHI::SwapchainPresentResult acquire_result,
+			bool begin_record_succeeded,
+			RHI::IGpuTimingTelemetry* telemetry,
+			RHI::CommandBuffer* command_buffer,
+			uint64_t frame_id);
+		bool end(RHI::CommandBuffer* command_buffer);
+		bool commit();
+		void abort(RHI::GpuTimingInvalidReason reason);
+		bool active() const;
+
+	private:
+		void reset();
+
+		RHI::IGpuTimingTelemetry* m_telemetry = nullptr;
+		RHI::CommandBuffer* m_command_buffer = nullptr;
+		uint64_t m_frame_id = 0u;
+		bool m_ended = false;
+	};
+
 	class ASH_API RenderDevice
 	{
 	public:
@@ -609,6 +635,8 @@ namespace AshEngine
 		// Context-owned, non-owning view. Invalid after RenderDevice/context shutdown;
 		// disabled telemetry returns nullptr.
 		RHI::IGpuTimingTelemetry* get_gpu_timing_telemetry() const;
+		uint64_t get_render_frame_id() const;
+		bool was_gpu_timing_frame_submitted() const;
 		std::shared_ptr<RHI::TextureView> get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const;
 		bool transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target);
 		bool has_back_buffer_content() const;

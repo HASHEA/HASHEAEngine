@@ -135,6 +135,79 @@ namespace RHI
 		return VulkanGpuTimingResolveResult::Ready;
 	}
 
+	VulkanGpuTimingSubmitResult classify_vulkan_gpu_timing_submit(
+		VkCommandBuffer expected_command_buffer,
+		const VkCommandBuffer* executed_command_buffers,
+		uint32_t executed_command_buffer_count,
+		VkResult queue_submit_result,
+		bool completion_binding_established)
+	{
+		bool exact_command_buffer_executed = false;
+		if (expected_command_buffer != VK_NULL_HANDLE && executed_command_buffers)
+		{
+			for (uint32_t index = 0u; index < executed_command_buffer_count; ++index)
+			{
+				if (executed_command_buffers[index] == expected_command_buffer)
+				{
+					exact_command_buffer_executed = true;
+					break;
+				}
+			}
+		}
+		if (!exact_command_buffer_executed)
+		{
+			return VulkanGpuTimingSubmitResult::CommandBufferNotExecuted;
+		}
+		if (queue_submit_result != VK_SUCCESS)
+		{
+			return VulkanGpuTimingSubmitResult::QueueSubmitFailed;
+		}
+		if (!completion_binding_established)
+		{
+			return VulkanGpuTimingSubmitResult::CompletionBindingMissing;
+		}
+		return VulkanGpuTimingSubmitResult::Accepted;
+	}
+
+	VulkanGpuTimingSafetyState advance_vulkan_gpu_timing_safety_state(
+		VulkanGpuTimingSafetyState current_state,
+		VulkanGpuTimingSubmitResult submit_result)
+	{
+		if (current_state == VulkanGpuTimingSafetyState::Quarantined)
+		{
+			return current_state;
+		}
+		switch (submit_result)
+		{
+		case VulkanGpuTimingSubmitResult::Accepted:
+		case VulkanGpuTimingSubmitResult::CommandBufferNotExecuted:
+			return VulkanGpuTimingSafetyState::Operational;
+		case VulkanGpuTimingSubmitResult::QueueSubmitFailed:
+		case VulkanGpuTimingSubmitResult::CompletionBindingMissing:
+		default:
+			return VulkanGpuTimingSafetyState::Quarantined;
+		}
+	}
+
+	VulkanGpuTimingSafetyState
+	advance_vulkan_gpu_timing_safety_state_after_abort(
+		VulkanGpuTimingSafetyState current_state,
+		bool submission_bound)
+	{
+		if (current_state == VulkanGpuTimingSafetyState::Quarantined ||
+			submission_bound)
+		{
+			return VulkanGpuTimingSafetyState::Quarantined;
+		}
+		return VulkanGpuTimingSafetyState::Operational;
+	}
+
+	bool vulkan_gpu_timing_slots_reusable(
+		VulkanGpuTimingSafetyState safety_state)
+	{
+		return safety_state == VulkanGpuTimingSafetyState::Operational;
+	}
+
 	VulkanGpuTimingTelemetry::~VulkanGpuTimingTelemetry()
 	{
 		shutdown();
@@ -240,10 +313,9 @@ namespace RHI
 		m_completed_head = 0u;
 		m_completed_count = 0u;
 		m_available_slot = kGpuTimingFrameRingDepth;
-		m_active_slot = kGpuTimingFrameRingDepth;
-		m_active_frame_id = 0u;
-		m_active_command_buffer = nullptr;
+		clear_active_frame();
 		m_supported = false;
+		m_safety_state = VulkanGpuTimingSafetyState::Operational;
 	}
 
 	bool VulkanGpuTimingTelemetry::enqueue_completed_sample(const GpuFrameTimingSample& sample)
@@ -272,12 +344,24 @@ namespace RHI
 		return true;
 	}
 
+	void VulkanGpuTimingTelemetry::clear_active_frame()
+	{
+		m_active_slot = kGpuTimingFrameRingDepth;
+		m_active_frame_id = 0u;
+		m_active_command_buffer = nullptr;
+		m_active_native_command_buffer = VK_NULL_HANDLE;
+		m_frame_ended = false;
+		m_submission_bound = false;
+	}
+
 	bool VulkanGpuTimingTelemetry::resolve_recycled_slot(
 		uint32_t physical_slot,
 		bool completion_observed)
 	{
 		m_available_slot = kGpuTimingFrameRingDepth;
-		if (!m_supported || physical_slot >= kGpuTimingFrameRingDepth)
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			physical_slot >= kGpuTimingFrameRingDepth)
 		{
 			return false;
 		}
@@ -369,9 +453,53 @@ namespace RHI
 		return true;
 	}
 
+	void VulkanGpuTimingTelemetry::observe_submission(
+		const VkCommandBuffer* executed_command_buffers,
+		uint32_t executed_command_buffer_count,
+		VkResult queue_submit_result,
+		bool completion_binding_established)
+	{
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			!m_frame_ended ||
+			m_active_slot >= kGpuTimingFrameRingDepth ||
+			m_submission_bound)
+		{
+			return;
+		}
+
+		const VulkanGpuTimingSubmitResult submit_result =
+			classify_vulkan_gpu_timing_submit(
+				m_active_native_command_buffer,
+				executed_command_buffers,
+				executed_command_buffer_count,
+				queue_submit_result,
+				completion_binding_established);
+		m_safety_state = advance_vulkan_gpu_timing_safety_state(
+			m_safety_state,
+			submit_result);
+		if (submit_result == VulkanGpuTimingSubmitResult::Accepted)
+		{
+			m_submission_bound = true;
+			return;
+		}
+
+		const uint32_t abandoned_slot = m_active_slot;
+		m_frame_state.abort_frame(
+			m_active_frame_id,
+			GpuTimingInvalidReason::SubmissionFailed);
+		clear_active_frame();
+		m_available_slot =
+			submit_result == VulkanGpuTimingSubmitResult::CommandBufferNotExecuted
+				? abandoned_slot
+				: kGpuTimingFrameRingDepth;
+	}
+
 	bool VulkanGpuTimingTelemetry::begin_frame(CommandBuffer* cmd, uint64_t frame_id)
 	{
-		if (!m_supported || !cmd || !cmd->get_native_handle() ||
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			!cmd || !cmd->get_native_handle() ||
 			m_available_slot >= kGpuTimingFrameRingDepth ||
 			m_active_slot < kGpuTimingFrameRingDepth ||
 			m_slot_has_frame[m_available_slot])
@@ -402,12 +530,17 @@ namespace RHI
 		m_available_slot = kGpuTimingFrameRingDepth;
 		m_active_frame_id = frame_id;
 		m_active_command_buffer = cmd;
+		m_active_native_command_buffer = command_buffer;
+		m_frame_ended = false;
+		m_submission_bound = false;
 		return true;
 	}
 
 	bool VulkanGpuTimingTelemetry::begin_scope(CommandBuffer* cmd, GpuTimingMetric metric)
 	{
-		if (!m_supported || !cmd || cmd != m_active_command_buffer ||
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			!cmd || cmd != m_active_command_buffer || m_frame_ended ||
 			m_active_slot >= kGpuTimingFrameRingDepth)
 		{
 			return false;
@@ -428,7 +561,9 @@ namespace RHI
 
 	void VulkanGpuTimingTelemetry::end_scope(CommandBuffer* cmd, GpuTimingMetric metric)
 	{
-		if (!m_supported || !cmd || cmd != m_active_command_buffer ||
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			!cmd || cmd != m_active_command_buffer || m_frame_ended ||
 			m_active_slot >= kGpuTimingFrameRingDepth)
 		{
 			return;
@@ -448,7 +583,9 @@ namespace RHI
 
 	void VulkanGpuTimingTelemetry::end_frame(CommandBuffer* cmd, uint64_t frame_id)
 	{
-		if (!m_supported || !cmd || cmd != m_active_command_buffer ||
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			!cmd || cmd != m_active_command_buffer || m_frame_ended ||
 			m_active_slot >= kGpuTimingFrameRingDepth ||
 			m_active_frame_id != frame_id)
 		{
@@ -466,22 +603,35 @@ namespace RHI
 				query_index);
 		}
 		m_active_command_buffer = nullptr;
+		m_frame_ended = true;
 	}
 
-	void VulkanGpuTimingTelemetry::commit_frame(uint64_t frame_id)
+	bool VulkanGpuTimingTelemetry::commit_frame(uint64_t frame_id)
 	{
-		if (!m_supported || m_active_command_buffer ||
+		if (!m_supported ||
+			!vulkan_gpu_timing_slots_reusable(m_safety_state) ||
+			m_active_command_buffer || !m_frame_ended ||
 			m_active_slot >= kGpuTimingFrameRingDepth ||
-			m_active_frame_id != frame_id ||
-			!m_frame_state.commit_frame(frame_id))
+			m_active_frame_id != frame_id)
 		{
-			return;
+			return false;
+		}
+
+		if (!m_submission_bound || !m_frame_state.commit_frame(frame_id))
+		{
+			m_safety_state = VulkanGpuTimingSafetyState::Quarantined;
+			m_frame_state.abort_frame(
+				frame_id,
+				GpuTimingInvalidReason::SubmissionFailed);
+			clear_active_frame();
+			m_available_slot = kGpuTimingFrameRingDepth;
+			return false;
 		}
 
 		m_slot_frame_ids[m_active_slot] = frame_id;
 		m_slot_has_frame[m_active_slot] = true;
-		m_active_slot = kGpuTimingFrameRingDepth;
-		m_active_frame_id = 0u;
+		clear_active_frame();
+		return true;
 	}
 
 	void VulkanGpuTimingTelemetry::abort_frame(
@@ -493,10 +643,16 @@ namespace RHI
 		{
 			return;
 		}
+		const uint32_t abandoned_slot = m_active_slot;
+		m_safety_state = advance_vulkan_gpu_timing_safety_state_after_abort(
+			m_safety_state,
+			m_submission_bound);
 		m_frame_state.abort_frame(frame_id, reason);
-		m_active_slot = kGpuTimingFrameRingDepth;
-		m_active_frame_id = 0u;
-		m_active_command_buffer = nullptr;
+		clear_active_frame();
+		if (vulkan_gpu_timing_slots_reusable(m_safety_state))
+		{
+			m_available_slot = abandoned_slot;
+		}
 	}
 
 	GpuTimingPollResult VulkanGpuTimingTelemetry::poll_completed_frame(
