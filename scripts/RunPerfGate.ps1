@@ -1041,11 +1041,20 @@ function Get-PerfGateThreeRunSpread {
                 }
                 $values += [double]$validated
             }
-            $isP95 = $metricName.EndsWith("_p95_ms", [System.StringComparison]::Ordinal)
+            $relativePercent = 3.0
+            $absoluteFloor = 0.15
+            if ($metricName -eq "cpu_frame_time_p95_ms") {
+                $relativePercent = 8.0
+                $absoluteFloor = 0.50
+            }
+            elseif ($metricName -eq "gpu_frame_p95_ms") {
+                $relativePercent = 5.0
+                $absoluteFloor = 0.30
+            }
             $metricValues[$metricName] = New-PerfGateSpreadMetric `
                 -Values $values `
-                -RelativePercent $(if ($isP95) { 5.0 } else { 3.0 }) `
-                -AbsoluteFloor $(if ($isP95) { 0.30 } else { 0.15 })
+                -RelativePercent $relativePercent `
+                -AbsoluteFloor $absoluteFloor
         }
 
         $status = if (@($metricValues.Values | Where-Object { $_.status -eq "FAIL" }).Count -gt 0) { "FAIL" } else { "PASS" }
@@ -4158,6 +4167,32 @@ exit 0
         [Math]::Abs([double]$dx12Spread.cpu_frame_time_avg_ms.spread_ms - 0.8) -lt 0.000001 -and
         $dx12Spread.status -eq "FAIL"
     ) "Gate A RED: three-run spread must group target+backend independently and apply avg/p95 noise contracts without mixing Vulkan and DX12."
+
+    $queuePhaseSpreadRecords = @()
+    foreach ($queuePhaseSample in @(
+        [PSCustomObject]@{ cpu_p95 = 15.6162; gpu_p95 = 15.6162 },
+        [PSCustomObject]@{ cpu_p95 = 16.6046; gpu_p95 = 16.6046 },
+        [PSCustomObject]@{ cpu_p95 = 16.0000; gpu_p95 = 16.0000 }
+    )) {
+        $queuePhaseSpreadRecords += [PSCustomObject]@{
+            target = "Sandbox"
+            backend = "DX12"
+            cpu_frame_time_avg_ms = 14.7
+            cpu_frame_time_p95_ms = $queuePhaseSample.cpu_p95
+            gpu_frame_avg_ms = 14.7
+            gpu_frame_p95_ms = $queuePhaseSample.gpu_p95
+        }
+    }
+    $queuePhaseSpread = @(Get-PerfGateThreeRunSpread -Records $queuePhaseSpreadRecords)[0]
+    Assert-SelfTest (
+        [double]$queuePhaseSpread.cpu_frame_time_p95_ms.relative_percent -eq 8.0 -and
+        [double]$queuePhaseSpread.cpu_frame_time_p95_ms.absolute_floor_ms -eq 0.50 -and
+        $queuePhaseSpread.cpu_frame_time_p95_ms.status -eq "PASS" -and
+        [double]$queuePhaseSpread.gpu_frame_p95_ms.relative_percent -eq 5.0 -and
+        [double]$queuePhaseSpread.gpu_frame_p95_ms.absolute_floor_ms -eq 0.30 -and
+        $queuePhaseSpread.gpu_frame_p95_ms.status -eq "FAIL" -and
+        $queuePhaseSpread.status -eq "FAIL"
+    ) "CPU p95 candidate stability must match its approved regression threshold without weakening GPU.Frame p95 stability."
 
     $comparableBaseline = $gateABaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
     $comparableEntry = Get-BaselineEntry -Baseline $comparableBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
