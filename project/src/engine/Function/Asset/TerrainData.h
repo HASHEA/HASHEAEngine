@@ -120,6 +120,7 @@ namespace AshEngine
 		TerrainLayerId id{};
 		std::string name{};
 		bool visible = true;
+		bool locked = false;
 		float strength = 1.0f;
 		TerrainHeightBlendMode height_blend_mode = TerrainHeightBlendMode::Additive;
 		std::vector<TerrainSparseHeightBlock> height_blocks{};

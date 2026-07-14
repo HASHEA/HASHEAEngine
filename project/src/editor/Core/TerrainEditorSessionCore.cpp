@@ -2,6 +2,7 @@
 
 #include "Function/Asset/TerrainComposition.h"
 
+#include <algorithm>
 #include <new>
 #include <stdexcept>
 #include <utility>
@@ -11,6 +12,11 @@ namespace AshEditor
 	AshEngine::TerrainAssetId TerrainEditorSessionCore::GetAssetId() const
 	{
 		return _assetId;
+	}
+
+	AshEngine::TerrainLayerId TerrainEditorSessionCore::GetSelectedLayerId() const
+	{
+		return _selectedLayerId;
 	}
 
 	const TerrainEditorPreviewState& TerrainEditorSessionCore::GetPreviewState() const
@@ -35,6 +41,7 @@ namespace AshEditor
 			_optWorkingSet.reset();
 			_persistedContentGeneration = 0u;
 			_activeSequence = 0u;
+			_selectedLayerId = {};
 			_preview = {};
 		}
 		_assetId = refIntent.asset_id;
@@ -52,8 +59,11 @@ namespace AshEditor
 		_persistedContentGeneration = workingSet.content_generation;
 		_optWorkingSet = std::move(workingSet);
 		_activeSequence = 0u;
+		_selectedLayerId = _optWorkingSet->edit_layers.empty()
+			? AshEngine::TerrainLayerId{} : _optWorkingSet->edit_layers.front().id;
 		_preview = {};
 		_preview.query_status = AshEngine::TerrainQueryStatus::Ready;
+		RefreshSelectedLayerPreview();
 		return true;
 	}
 
@@ -62,6 +72,7 @@ namespace AshEditor
 		_assetId = 0u;
 		_activeSequence = 0u;
 		_persistedContentGeneration = 0u;
+		_selectedLayerId = {};
 		_optWorkingSet.reset();
 		_preview = {};
 	}
@@ -71,10 +82,45 @@ namespace AshEditor
 		return _optWorkingSet ? &*_optWorkingSet : nullptr;
 	}
 
+	bool TerrainEditorSessionCore::SelectLayer(const AshEngine::TerrainLayerId layerId)
+	{
+		if (!_optWorkingSet || _activeSequence != 0u || !layerId.is_valid())
+		{
+			return false;
+		}
+		const auto selected = std::find_if(
+			_optWorkingSet->edit_layers.begin(),
+			_optWorkingSet->edit_layers.end(),
+			[layerId](const AshEngine::TerrainEditLayer& refLayer)
+			{
+				return refLayer.id == layerId;
+			});
+		if (selected == _optWorkingSet->edit_layers.end())
+		{
+			return false;
+		}
+
+		_selectedLayerId = layerId;
+		RefreshSelectedLayerPreview();
+		return true;
+	}
+
 	bool TerrainEditorSessionCore::BeginStroke(const uint64_t sequence)
 	{
 		if (!_optWorkingSet || sequence == 0u || _activeSequence != 0u ||
-			_preview.query_status != AshEngine::TerrainQueryStatus::Ready)
+			_preview.query_status != AshEngine::TerrainQueryStatus::Ready ||
+			!_selectedLayerId.is_valid())
+		{
+			return false;
+		}
+		const auto selected = std::find_if(
+			_optWorkingSet->edit_layers.begin(),
+			_optWorkingSet->edit_layers.end(),
+			[this](const AshEngine::TerrainEditLayer& refLayer)
+			{
+				return refLayer.id == _selectedLayerId;
+			});
+		if (selected == _optWorkingSet->edit_layers.end() || selected->locked)
 		{
 			return false;
 		}
@@ -177,6 +223,92 @@ namespace AshEditor
 			eDirection,
 			refDirtyComponents,
 			pError);
+	}
+
+	bool TerrainEditorSessionCore::ApplyLayerStackEdit(
+		const AshEngine::TerrainLayerStackEdit& refEdit,
+		AshEngine::TerrainLayerStackPatch& refPatch,
+		std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+		std::string* pError)
+	{
+		if (pError)
+		{
+			pError->clear();
+		}
+		if (!_optWorkingSet || _activeSequence != 0u)
+		{
+			if (pError)
+			{
+				*pError = "Terrain layer edit requires an idle open authoring session.";
+			}
+			return false;
+		}
+
+		if (!AshEngine::apply_terrain_layer_stack_edit(
+				*_optWorkingSet,
+				refEdit,
+				refPatch,
+				refDirtyComponents,
+				pError))
+		{
+			return false;
+		}
+		if (refPatch.has_change())
+		{
+			SelectAfterLayerTransition(refPatch, AshEngine::TerrainEditPatchDirection::Redo);
+		}
+		return true;
+	}
+
+	bool TerrainEditorSessionCore::ApplyLayerStackPatch(
+		const AshEngine::TerrainAssetId assetId,
+		const AshEngine::TerrainLayerStackPatch& refPatch,
+		const AshEngine::TerrainEditPatchDirection eDirection,
+		const AshEngine::TerrainLayerId selectedLayerId,
+		std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+		std::string* pError)
+	{
+		if (pError)
+		{
+			pError->clear();
+		}
+		if (!_optWorkingSet || _activeSequence != 0u || assetId == 0u ||
+			assetId != _assetId || refPatch.asset_id != assetId)
+		{
+			if (pError)
+			{
+				*pError = "Terrain layer command does not match an idle open authoring session.";
+			}
+			return false;
+		}
+		const std::vector<AshEngine::TerrainLayerId>& targetOrder =
+			eDirection == AshEngine::TerrainEditPatchDirection::Undo
+			? refPatch.before_order : refPatch.after_order;
+		const bool validSelection = targetOrder.empty()
+			? !selectedLayerId.is_valid()
+			: selectedLayerId.is_valid() &&
+				std::find(targetOrder.begin(), targetOrder.end(), selectedLayerId) != targetOrder.end();
+		if (!validSelection)
+		{
+			if (pError)
+			{
+				*pError = "Terrain layer command selection does not exist in the target layer order.";
+			}
+			return false;
+		}
+
+		if (!AshEngine::apply_terrain_layer_stack_patch(
+				*_optWorkingSet,
+				refPatch,
+				eDirection,
+				refDirtyComponents,
+				pError))
+		{
+			return false;
+		}
+		_selectedLayerId = selectedLayerId;
+		RefreshSelectedLayerPreview();
+		return true;
 	}
 
 	bool TerrainEditorSessionCore::ComposeComponents(
@@ -296,5 +428,56 @@ namespace AshEditor
 	void TerrainEditorSessionCore::SetPreviewQueryStatus(const AshEngine::TerrainQueryStatus eStatus)
 	{
 		_preview.query_status = eStatus;
+	}
+
+	void TerrainEditorSessionCore::SelectAfterLayerTransition(
+		const AshEngine::TerrainLayerStackPatch& refPatch,
+		const AshEngine::TerrainEditPatchDirection eDirection)
+	{
+		const std::vector<AshEngine::TerrainLayerId>& targetOrder =
+			eDirection == AshEngine::TerrainEditPatchDirection::Undo
+			? refPatch.before_order : refPatch.after_order;
+		const std::vector<AshEngine::TerrainLayerId>& sourceOrder =
+			eDirection == AshEngine::TerrainEditPatchDirection::Undo
+			? refPatch.after_order : refPatch.before_order;
+		const auto target = std::find(targetOrder.begin(), targetOrder.end(), refPatch.layer_id);
+		if (target != targetOrder.end())
+		{
+			_selectedLayerId = refPatch.layer_id;
+		}
+		else if (!targetOrder.empty())
+		{
+			const auto source = std::find(sourceOrder.begin(), sourceOrder.end(), refPatch.layer_id);
+			const size_t sourceIndex = source == sourceOrder.end()
+				? 0u : static_cast<size_t>(source - sourceOrder.begin());
+			_selectedLayerId = targetOrder[std::min(sourceIndex, targetOrder.size() - 1u)];
+		}
+		else
+		{
+			_selectedLayerId = {};
+		}
+		RefreshSelectedLayerPreview();
+	}
+
+	void TerrainEditorSessionCore::RefreshSelectedLayerPreview()
+	{
+		_preview.layer_locked = false;
+		if (!_optWorkingSet || !_selectedLayerId.is_valid())
+		{
+			return;
+		}
+		const auto selected = std::find_if(
+			_optWorkingSet->edit_layers.begin(),
+			_optWorkingSet->edit_layers.end(),
+			[this](const AshEngine::TerrainEditLayer& refLayer)
+			{
+				return refLayer.id == _selectedLayerId;
+			});
+		if (selected == _optWorkingSet->edit_layers.end())
+		{
+			_selectedLayerId = {};
+			return;
+		}
+		_preview.layer_locked = selected->locked;
 	}
 }

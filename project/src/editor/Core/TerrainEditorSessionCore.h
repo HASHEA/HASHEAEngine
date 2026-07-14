@@ -3,6 +3,7 @@
 #include "Function/Asset/TerrainData.h"
 #include "Function/Asset/TerrainBrush.h"
 #include "Function/Asset/TerrainImport.h"
+#include "Function/Asset/TerrainLayerStack.h"
 #include "Function/Scene/TerrainQuery.h"
 
 #include <cstdint>
@@ -53,6 +54,7 @@ namespace AshEditor
 		enum class Kind : uint8_t
 		{
 			SelectAsset = 0,
+			SelectLayer,
 			BeginStroke,
 			AddStrokeSample,
 			EndStroke,
@@ -99,12 +101,14 @@ namespace AshEditor
 			const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>&)>;
 
 		AshEngine::TerrainAssetId GetAssetId() const;
+		AshEngine::TerrainLayerId GetSelectedLayerId() const;
 		const TerrainEditorPreviewState& GetPreviewState() const;
 		bool HasActiveStroke() const;
 		bool Reduce(const TerrainEditorIntent& refIntent);
 		bool Open(AshEngine::TerrainWorkingSet workingSet);
 		void Close();
 		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
+		bool SelectLayer(AshEngine::TerrainLayerId layerId);
 		bool BeginStroke(uint64_t sequence);
 		bool EndStroke(uint64_t sequence);
 		void CancelStroke();
@@ -123,6 +127,18 @@ namespace AshEditor
 			AshEngine::TerrainEditPatchDirection eDirection,
 			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
 			std::string* pError = nullptr);
+		bool ApplyLayerStackEdit(
+			const AshEngine::TerrainLayerStackEdit& refEdit,
+			AshEngine::TerrainLayerStackPatch& refPatch,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+			std::string* pError = nullptr);
+		bool ApplyLayerStackPatch(
+			AshEngine::TerrainAssetId assetId,
+			const AshEngine::TerrainLayerStackPatch& refPatch,
+			AshEngine::TerrainEditPatchDirection eDirection,
+			AshEngine::TerrainLayerId selectedLayerId,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+			std::string* pError = nullptr);
 		bool ComposeComponents(
 			const std::vector<AshEngine::TerrainComponentCoord>& refRequestedComponents,
 			std::vector<AshEngine::TerrainDirtyComponentPayload>& refPayloads,
@@ -136,7 +152,14 @@ namespace AshEditor
 		void SetPreviewQueryStatus(AshEngine::TerrainQueryStatus eStatus);
 
 	private:
+		void SelectAfterLayerTransition(
+			const AshEngine::TerrainLayerStackPatch& refPatch,
+			AshEngine::TerrainEditPatchDirection eDirection);
+		void RefreshSelectedLayerPreview();
+
+	private:
 		AshEngine::TerrainAssetId _assetId = 0;
+		AshEngine::TerrainLayerId _selectedLayerId{};
 		uint64_t _activeSequence = 0;
 		uint64_t _persistedContentGeneration = 0;
 		std::optional<AshEngine::TerrainWorkingSet> _optWorkingSet{};

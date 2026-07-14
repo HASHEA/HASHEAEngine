@@ -7,9 +7,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -170,6 +172,73 @@ namespace
 		std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
 		REQUIRE(file.is_open());
 		file.seekp(static_cast<std::streamoff>(descriptor.index_offset_le));
+		REQUIRE(file.write(
+			reinterpret_cast<const char*>(records.data()),
+			static_cast<std::streamsize>(descriptor.index_size_le)));
+		file.seekp(static_cast<std::streamoff>(
+			offsetof(FileHeaderDisk, index_descriptors)));
+		REQUIRE(file.write(
+			reinterpret_cast<const char*>(&descriptor), sizeof(descriptor)));
+	}
+
+	auto RewriteMetadataPayload(
+		const std::filesystem::path& path,
+		const std::function<void(std::vector<uint8_t>&)>& rewrite) -> void
+	{
+		FileHeaderDisk header{};
+		std::vector<BlockRecordDisk> records{};
+		REQUIRE(ReadHeaderAndIndex(path, header, records));
+		auto metadata = std::find_if(records.begin(), records.end(), [](const BlockRecordDisk& record)
+		{
+			return record.kind == static_cast<uint8_t>(BlockKind::Metadata);
+		});
+		REQUIRE(metadata != records.end());
+
+		std::ifstream input(path, std::ios::binary);
+		REQUIRE(input.is_open());
+		std::vector<uint8_t> stored(static_cast<size_t>(metadata->stored_size_le));
+		input.seekg(static_cast<std::streamoff>(metadata->offset_le));
+		REQUIRE(input.read(
+			reinterpret_cast<char*>(stored.data()),
+			static_cast<std::streamsize>(stored.size())));
+		input.close();
+
+		std::vector<uint8_t> decoded{};
+		if (metadata->codec == static_cast<uint8_t>(AshEngine::TerrainBlockCodec::None))
+		{
+			REQUIRE(metadata->stored_size_le == metadata->decoded_size_le);
+			decoded = std::move(stored);
+		}
+		else
+		{
+			REQUIRE(metadata->codec == static_cast<uint8_t>(AshEngine::TerrainBlockCodec::Rle));
+			REQUIRE(AshEngine::decode_terrain_rle(
+				stored,
+				static_cast<size_t>(metadata->decoded_size_le),
+				decoded));
+		}
+		rewrite(decoded);
+		REQUIRE_FALSE(decoded.empty());
+
+		std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::ate);
+		REQUIRE(file.is_open());
+		const std::streamoff appended_offset = file.tellp();
+		REQUIRE(appended_offset >= 0);
+		metadata->codec = static_cast<uint8_t>(AshEngine::TerrainBlockCodec::None);
+		metadata->offset_le = static_cast<uint64_t>(appended_offset);
+		metadata->stored_size_le = decoded.size();
+		metadata->decoded_size_le = decoded.size();
+		metadata->payload_crc32_le = TestCrc32(decoded.data(), decoded.size());
+		auto& descriptor = header.index_descriptors[0];
+		descriptor.index_offset_le =
+			static_cast<uint64_t>(appended_offset) + decoded.size();
+		descriptor.index_size_le = records.size() * sizeof(BlockRecordDisk);
+		descriptor.index_crc32_le = TestCrc32(
+			reinterpret_cast<const uint8_t*>(records.data()),
+			static_cast<size_t>(descriptor.index_size_le));
+		REQUIRE(file.write(
+			reinterpret_cast<const char*>(decoded.data()),
+			static_cast<std::streamsize>(decoded.size())));
 		REQUIRE(file.write(
 			reinterpret_cast<const char*>(records.data()),
 			static_cast<std::streamsize>(descriptor.index_size_le)));
@@ -468,6 +537,106 @@ TEST_CASE("Terrain container preserves ordered edit layer source blocks")
 	std::filesystem::remove(path);
 }
 
+TEST_CASE("Terrain container layer lock metadata round-trips and legacy v1 defaults unlocked")
+{
+	const std::filesystem::path current_path =
+		TestDirectory() / "edit-layer-lock-current.AshTerrain";
+	const std::filesystem::path legacy_path =
+		TestDirectory() / "edit-layer-lock-legacy.AshTerrain";
+	std::filesystem::remove(current_path);
+	std::filesystem::remove(legacy_path);
+
+	const auto flat = MakeContainerSnapshot();
+	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>(*flat);
+	auto layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>();
+	AshEngine::TerrainEditLayer layer{};
+	layer.id.bytes[0] = 0x52u;
+	layer.id.bytes[15] = 0xa7u;
+	layer.name = "Locked authoring layer";
+	layer.locked = true;
+	layers->push_back(layer);
+	snapshot->edit_layers = layers;
+
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		current_path, *snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(current_path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->edit_layers);
+	REQUIRE(loaded->edit_layers->size() == 1u);
+	CHECK(loaded->edit_layers->front().locked);
+
+	std::filesystem::copy_file(
+		current_path, legacy_path, std::filesystem::copy_options::overwrite_existing);
+	RewriteMetadataPayload(legacy_path, [](std::vector<uint8_t>& metadata)
+	{
+		const size_t extension_size =
+			AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic.size() +
+			2u + 4u + 1u;
+		REQUIRE(metadata.size() > extension_size);
+		const size_t extension_offset = metadata.size() - extension_size;
+		CHECK(std::equal(
+			AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic.begin(),
+			AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic.end(),
+			metadata.begin() + static_cast<std::ptrdiff_t>(extension_offset)));
+		metadata.resize(extension_offset);
+	});
+	loaded.reset();
+	const AshEngine::TerrainContainerResult legacy_result =
+		AshEngine::load_terrain_container(legacy_path, loaded, nullptr, &error);
+	INFO(error);
+	REQUIRE(legacy_result == AshEngine::TerrainContainerResult::Success);
+	REQUIRE(loaded);
+	REQUIRE(loaded->edit_layers);
+	REQUIRE(loaded->edit_layers->size() == 1u);
+	CHECK_FALSE(loaded->edit_layers->front().locked);
+
+	std::filesystem::remove(current_path);
+	std::filesystem::remove(legacy_path);
+}
+
+TEST_CASE("Terrain container rejects an unsupported layer metadata revision")
+{
+	const std::filesystem::path path =
+		TestDirectory() / "edit-layer-lock-future.AshTerrain";
+	std::filesystem::remove(path);
+
+	const auto flat = MakeContainerSnapshot();
+	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>(*flat);
+	auto layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>(1u);
+	(*layers)[0].id.bytes[0] = 0x63u;
+	(*layers)[0].name = "Future metadata";
+	snapshot->edit_layers = layers;
+
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	RewriteMetadataPayload(path, [](std::vector<uint8_t>& metadata)
+	{
+		const size_t extension_size =
+			AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic.size() +
+			2u + 4u + 1u;
+		REQUIRE(metadata.size() > extension_size);
+		const size_t version_offset =
+			metadata.size() - extension_size +
+			AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic.size();
+		metadata[version_offset] = 2u;
+		metadata[version_offset + 1u] = 0u;
+	});
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	const AshEngine::TerrainContainerResult future_result =
+		AshEngine::load_terrain_container(path, loaded, nullptr, &error);
+	INFO(error);
+	CHECK(future_result == AshEngine::TerrainContainerResult::Corrupt);
+	CHECK_FALSE(loaded);
+	std::filesystem::remove(path);
+}
+
 TEST_CASE("Terrain container reports corrupt raw and RLE payload offsets")
 {
 	const std::filesystem::path source_path = TestDirectory() / "crc-source.AshTerrain";
@@ -614,7 +783,15 @@ TEST_CASE("Terrain container bounds metadata block declarations by the live inde
 			static_cast<std::streamsize>(metadata.size())));
 	}
 	const size_t height_count_offset = 202u + (*layers)[0].name.size();
-	REQUIRE(height_count_offset + 4u == metadata.size());
+	const size_t extension_offset = height_count_offset + 4u;
+	const auto& extension_magic =
+		AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic;
+	REQUIRE(extension_offset + extension_magic.size() + 2u + 4u + layers->size() ==
+		metadata.size());
+	CHECK(std::equal(
+		extension_magic.begin(),
+		extension_magic.end(),
+		metadata.begin() + static_cast<std::ptrdiff_t>(extension_offset)));
 	metadata[height_count_offset] = 0xffu;
 	metadata[height_count_offset + 1u] = 0xffu;
 	metadata[height_count_offset + 2u] = 0xffu;

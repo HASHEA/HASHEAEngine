@@ -664,6 +664,15 @@ namespace AshEngine
 				writer.put_u16(static_cast<uint16_t>(layer.height_blocks.size()));
 				writer.put_u16(static_cast<uint16_t>(layer.weight_blocks.size()));
 			}
+			writer.put_bytes(
+				TerrainContainerFormat::k_layer_metadata_extension_magic.data(),
+				TerrainContainerFormat::k_layer_metadata_extension_magic.size());
+			writer.put_u16(TerrainContainerFormat::k_layer_metadata_extension_version);
+			writer.put_u32(static_cast<uint32_t>(snapshot.edit_layers->size()));
+			for (const TerrainEditLayer& layer : *snapshot.edit_layers)
+			{
+				writer.put_u8(layer.locked ? 1u : 0u);
+			}
 			out_bytes = writer.take();
 			return true;
 		}
@@ -1088,8 +1097,35 @@ namespace AshEngine
 				state.weight_blocks_seen[index].resize(weight_count, false);
 				state.layer_indices.emplace(layer.id.bytes, index);
 			}
-			if (!reader.finished() ||
-				matched_expected_layers != state.expected_edit_records.size())
+			if (matched_expected_layers != state.expected_edit_records.size())
+			{
+				return false;
+			}
+			if (!reader.finished())
+			{
+				std::array<uint8_t,
+					TerrainContainerFormat::k_layer_metadata_extension_magic.size()> magic{};
+				uint16_t revision = 0u;
+				uint32_t locked_count = 0u;
+				if (!reader.get_bytes(magic.data(), magic.size()) ||
+					magic != TerrainContainerFormat::k_layer_metadata_extension_magic ||
+					!reader.get_u16(revision) ||
+					revision != TerrainContainerFormat::k_layer_metadata_extension_version ||
+					!reader.get_u32(locked_count) || locked_count != layer_count)
+				{
+					return false;
+				}
+				for (TerrainEditLayer& layer : *layers)
+				{
+					uint8_t locked = 0u;
+					if (!reader.get_u8(locked) || locked > 1u)
+					{
+						return false;
+					}
+					layer.locked = locked != 0u;
+				}
+			}
+			if (!reader.finished())
 			{
 				return false;
 			}

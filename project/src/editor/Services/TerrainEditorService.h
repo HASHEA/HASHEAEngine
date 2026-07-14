@@ -33,9 +33,16 @@ namespace AshEditor
 			const std::vector<AshEngine::TerrainEditPatch>& refPatches,
 			AshEngine::TerrainEditPatchDirection eDirection,
 			uint64_t sequence);
+		bool ApplyLayerStackPatch(
+			AshEngine::TerrainAssetId assetId,
+			const AshEngine::TerrainLayerStackPatch& refPatch,
+			AshEngine::TerrainEditPatchDirection eDirection,
+			AshEngine::TerrainLayerId selectedLayerId,
+			uint64_t sequence);
 
 		const TerrainEditorPreviewState& GetPreviewState() const;
 		AshEngine::TerrainAssetId GetSelectedAssetId() const;
+		AshEngine::TerrainLayerId GetSelectedLayerId() const;
 		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
 		const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& GetPublishedSnapshot() const;
 		bool HasDirtyAssets() const;
@@ -64,16 +71,23 @@ namespace AshEditor
 		};
 
 		bool SubmitSelectAssetIntent(const TerrainEditorIntent& refIntent);
+		bool SubmitSelectLayerIntent(const TerrainEditorIntent& refIntent);
 		bool BeginStroke(const TerrainEditorIntent& refIntent);
 		bool AddStrokeSample(const TerrainEditorIntent& refIntent);
 		bool EndStroke(const TerrainEditorIntent& refIntent);
 		bool CancelStroke(const TerrainEditorIntent& refIntent);
+		bool SubmitLayerAction(const TerrainEditorIntent& refIntent);
 		void ScheduleComposition(
 			uint64_t sourceSequence,
 			std::vector<AshEngine::TerrainComponentCoord> dirtyComponents);
 		bool RollBackStroke(
 			const ActiveStroke& refStroke,
 			const std::vector<AshEngine::TerrainEditPatch>& refPatches);
+		bool RollBackLayerAction(
+			AshEngine::TerrainAssetId assetId,
+			const AshEngine::TerrainLayerStackPatch& refPatch,
+			AshEngine::TerrainLayerId selectedLayerId,
+			uint64_t sequence);
 		void CompletePendingLoad();
 		void CompletePendingComposition();
 
@@ -87,6 +101,7 @@ namespace AshEditor
 		std::optional<PendingComposition> _optPendingComposition{};
 		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> _publishedSnapshot{};
 		uint64_t _nextStrokeSequence = 0u;
+		uint64_t _nextLayerSequence = 0u;
 		uint64_t _nextCompositionSerial = 0u;
 		uint64_t _latestCompositionSourceSequence = 0u;
 		bool _historyRollbackFailed = false;

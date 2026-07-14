@@ -586,81 +586,101 @@ Expected: one routing/sequencing commit with no brush kernel or patch codec dupl
 **Files:**
 - Create: `project/src/engine/Function/Asset/TerrainLayerStack.h`
 - Create: `project/src/engine/Function/Asset/TerrainLayerStack.cpp`
+- Create: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
 - Modify: `project/src/engine/Function/Asset/TerrainData.h`
+- Modify: `project/src/engine/Function/Asset/TerrainContainerFormat.h`
 - Modify: `project/src/engine/Function/Asset/TerrainContainer.cpp`
-- Modify: `project/src/engine/premake5.lua`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.h`
+- Modify: `project/src/editor/Core/TerrainEditorSessionCore.cpp`
 - Modify: `project/src/editor/Core/TerrainCommands.h`
 - Modify: `project/src/editor/Core/TerrainCommands.cpp`
 - Modify: `project/src/editor/Services/TerrainEditorService.h`
 - Modify: `project/src/editor/Services/TerrainEditorService.cpp`
-- Modify: `project/src/tests/Terrain/terrain_authoring_session_tests.cpp`
 - Modify: `project/src/tests/Terrain/terrain_container_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_commands_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/editor.md`
+- Modify: `docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md`
 
-- [ ] **Step 1: Write layer-stack RED tests**
+- [x] **Step 1: Write layer-stack RED tests**
 
 ```cpp
 TEST_CASE("Terrain layer commands preserve ids order occupancy and undo")
 {
-    AshEditor::TerrainEditorSessionCore core = MakeSmallTerrainEditorCore();
-    const TerrainLayerId first = core.AddLayer("First", AshEngine::TerrainHeightBlendMode::Additive);
-    const TerrainLayerId second = core.AddLayer("Second", AshEngine::TerrainHeightBlendMode::Alpha);
-    const auto before = core.CaptureLayerStack();
-    CHECK(core.MoveLayer(second, 0));
-    CHECK(core.SetLayerVisible(first, false));
-    CHECK(core.SetLayerOpacity(first, 0.25f));
-    CHECK(core.RestoreLayerStack(before));
-    CHECK(core.CaptureLayerStack() == before);
+	TerrainWorkingSet working_set = MakeSmallTerrainWorkingSet();
+	TerrainLayerStackPatch patch{};
+	REQUIRE(apply_terrain_layer_stack_edit(working_set, edit, patch, dirty, &error));
+	CHECK(patch.has_change());
+	REQUIRE(apply_terrain_layer_stack_patch(
+		working_set, patch, TerrainEditPatchDirection::Undo, dirty, &error));
 }
 ```
 
-Add delete/restore, duplicate-new-UUID, rename, lock, and affected-occupancy dirty-union cases.
+Add delete/restore, duplicate-new-ID, rename, move, visibility, opacity, lock, idempotent `has_change()==false`, affected-occupancy dirty-union, stale replay, malformed patch and atomic failure cases. Editor tests cover direct command replay, stable selection, lock rejection, and history rollback/quarantine.
 
-- [ ] **Step 2: Run layer tests and observe RED**
+- [x] **Step 2: Run layer tests and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain layer commands*"
 ```
 
-Expected: at least one command/restore/dirty-union assertion fails.
+Observed: build failed on missing `TerrainLayerStack.h`, `TerrainLayerCommand`, and selected-layer API before production implementation.
 
-- [ ] **Step 3: Complete Function layer-stack mutations and persistence**
+- [x] **Step 3: Complete Function layer-stack mutations and persistence**
 
-Make add/delete/duplicate/rename/reorder/visibility/opacity/lock return reversible metadata patches. Recomposition dirties only the occupancy union of affected layers; deleting a layer retains its sparse blocks in the undo patch.
+Make add/delete/duplicate/rename/reorder/visibility/opacity/lock return reversible patches. Recomposition dirties only the occupancy union of affected layers; deleting and duplicating retain only the affected layer's sparse blocks in the patch.
 
 Implement those operations in `TerrainLayerStack.*`, including stable 16-byte id allocation and duplicate-id rejection. Add `locked` to `TerrainEditLayer` and persist it through a backward-compatible container metadata revision: existing version-1 assets load with `locked=false`, newly saved metadata round-trips the bit, and unsupported future versions still fail closed. Add container tests for old-unlocked input and new locked round-trip before Editor wiring.
 
-Add these UI-free core methods with stable-id lookup and no index persistence:
+Use these Function APIs with stable-id lookup and no index persistence:
 
 ```cpp
-TerrainLayerId AddLayer(std::string name, AshEngine::TerrainHeightBlendMode mode);
-bool MoveLayer(TerrainLayerId layer_id, uint32_t destination_index);
-bool SetLayerVisible(TerrainLayerId layer_id, bool visible);
-bool SetLayerOpacity(TerrainLayerId layer_id, float opacity);
-TerrainLayerStackSnapshot CaptureLayerStack() const;
-bool RestoreLayerStack(const TerrainLayerStackSnapshot& snapshot);
+bool apply_terrain_layer_stack_edit(
+	TerrainWorkingSet&, const TerrainLayerStackEdit&, TerrainLayerStackPatch&,
+	std::vector<TerrainComponentCoord>&, std::string*);
+bool apply_terrain_layer_stack_patch(
+	TerrainWorkingSet&, const TerrainLayerStackPatch&, TerrainEditPatchDirection,
+	std::vector<TerrainComponentCoord>&, std::string*);
 ```
 
-- [ ] **Step 4: Add Editor layer commands**
+This reversible patch contract supersedes the early `CaptureLayerStack`/`RestoreLayerStack` sketch. Topology patches retain one affected layer; metadata and order patches retain no sparse blocks, so history never deep-copies the whole 8193² layer stack. A successful idempotent edit returns `patch.has_change()==false` and must not enter history.
 
-Define `TerrainLayerCommand` with explicit operation enum and before/after metadata patch. Execute/Undo use asset id and stable layer ids; no command depends on current selection or list index.
+- [x] **Step 4: Add Editor layer commands**
 
-- [ ] **Step 5: Route LayerAction intents through command execution**
+Define `TerrainLayerCommand` around one validated Function patch plus stable selected-before/selected-after IDs. Execute/Undo replay by asset id and sequence; no command depends on a vector index or guesses selection from an insertion slot.
 
-`TerrainEditorService::SubmitIntent(LayerAction)` validates the selected asset, creates exactly one layer command, and updates selected layer id after successful execution. Locked layers reject stroke begin and expose `layer_locked=true` in preview state.
+- [x] **Step 5: Route LayerAction intents through command execution**
 
-- [ ] **Step 6: Run layer tests GREEN**
+`TerrainEditorService::SubmitIntent(LayerAction)` validates the selected asset, performs exactly one Function mutation, schedules its generation, records exactly one already-executed layer command, and updates selected layer id from the stable target order. Empty patches produce no history or publication. `SelectLayer` is a non-history stable-ID intent; BeginStroke requires intent, brush, and current selection IDs to match. Locked layers reject stroke begin and expose `layer_locked=true` in preview state. Record failure uses the same verified generation/selection/pending rollback and quarantine contract as stroke.
+
+- [x] **Step 6: Run layer tests and Task 5 gates GREEN**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain layer commands*"
+.\RunTests.bat Debug --test-case="Terrain layer command*"
+.\RunTests.bat Debug --test-case="Terrain editor *layer*"
+.\RunTests.bat Debug --test-case="Terrain container *layer*"
+.\RunTests.bat Debug
+.\RunTests.bat Release
+.\RunArchGate.bat
+.\generate_vs2022.bat
 .\build_editor.bat Debug
+.\build_sandbox.bat Debug
+.\build_editor.bat Release
+.\build_sandbox.bat Release
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mode ValidatePlan
+.\run.bat all Debug --smoke-test-seconds=120
 ```
 
-Expected: all metadata/dirty/undo assertions pass and Editor builds.
+Result: Function/editor layer filters pass, including exact selection and rollback quarantine contracts. Full Debug/Release tests pass (287/287, 21068 assertions), ArchGate and AIDevDoctor pass, fresh generation plus Editor/Sandbox Debug/Release builds pass, and all four readiness combinations exit successfully from the scene-ready signal with clean Sandbox shutdown and zero fresh-log rejection hits. Runtime configuration bytes are restored exactly after the matrix.
 
-- [ ] **Step 7: Commit layer management**
+- [x] **Step 7: Commit layer management**
 
 ```powershell
-git add project/src/editor/Core/TerrainCommands.h project/src/editor/Core/TerrainCommands.cpp project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp project/src/tests/Terrain/terrain_authoring_session_tests.cpp
+git add project/src/engine/Function/Asset/TerrainLayerStack.h project/src/engine/Function/Asset/TerrainLayerStack.cpp project/src/engine/Function/Asset/TerrainData.h project/src/engine/Function/Asset/TerrainContainerFormat.h project/src/engine/Function/Asset/TerrainContainer.cpp
+git add project/src/editor/Core/TerrainEditorSessionCore.h project/src/editor/Core/TerrainEditorSessionCore.cpp project/src/editor/Core/TerrainCommands.h project/src/editor/Core/TerrainCommands.cpp project/src/editor/Services/TerrainEditorService.h project/src/editor/Services/TerrainEditorService.cpp
+git add project/src/tests/Terrain/terrain_authoring_session_tests.cpp project/src/tests/Terrain/terrain_container_tests.cpp project/src/tests/Editor/terrain_commands_tests.cpp project/src/tests/Editor/terrain_editor_service_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
 git diff --cached --check
 git commit -m "feat(editor): manage terrain edit layers"
 ```

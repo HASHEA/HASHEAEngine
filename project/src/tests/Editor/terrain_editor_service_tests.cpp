@@ -36,6 +36,13 @@ namespace
 		return id;
 	}
 
+	AshEngine::TerrainLayerId MakeEditorLayerId(const uint8_t value)
+	{
+		AshEngine::TerrainLayerId id{};
+		id.bytes[0] = value;
+		return id;
+	}
+
 	AshEngine::TerrainAssetSnapshot MakeEditorStrokeSnapshot(
 		AshEngine::TerrainHeightBlendMode blendMode = AshEngine::TerrainHeightBlendMode::Additive)
 	{
@@ -58,6 +65,25 @@ namespace
 		layer.height_blend_mode = blendMode;
 		snapshot.edit_layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>(
 			std::vector<AshEngine::TerrainEditLayer>{ std::move(layer) });
+		return snapshot;
+	}
+
+	AshEngine::TerrainAssetSnapshot MakeEditorLayerSelectionSnapshot(
+		const bool lockThird = false)
+	{
+		AshEngine::TerrainAssetSnapshot snapshot = MakeEditorStrokeSnapshot();
+		auto layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>(
+			*snapshot.edit_layers);
+		AshEngine::TerrainEditLayer second{};
+		second.id = MakeEditorLayerId(48u);
+		second.name = "Second";
+		layers->push_back(std::move(second));
+		AshEngine::TerrainEditLayer third{};
+		third.id = MakeEditorLayerId(49u);
+		third.name = "Third";
+		third.locked = lockThird;
+		layers->push_back(std::move(third));
+		snapshot.edit_layers = std::move(layers);
 		return snapshot;
 	}
 
@@ -185,6 +211,36 @@ namespace
 		bool command_received = false;
 	};
 
+	class WrongSelectionRollbackTerrainCommandExecutor final : public AshEditor::IEditorCommandExecutor
+	{
+	public:
+		bool ExecuteCommand(std::unique_ptr<AshEditor::EditorCommand>) override
+		{
+			return false;
+		}
+
+		AshEditor::EditorCommandRecordResult RecordExecutedCommand(
+			std::unique_ptr<AshEditor::EditorCommand> upCommand) override
+		{
+			rollback_succeeded = upCommand && p_context && upCommand->Undo(*p_context);
+			if (rollback_succeeded && p_context->pTerrainEditorService)
+			{
+				AshEditor::TerrainEditorIntent select{};
+				select.kind = AshEditor::TerrainEditorIntent::Kind::SelectLayer;
+				select.layer_id = wrong_selection;
+				selection_changed = p_context->pTerrainEditorService->SubmitIntent(select);
+			}
+			return rollback_succeeded
+				? AshEditor::EditorCommandRecordResult::RolledBack
+				: AshEditor::EditorCommandRecordResult::RollbackFailed;
+		}
+
+		AshEditor::EditorContext* p_context = nullptr;
+		AshEngine::TerrainLayerId wrong_selection{};
+		bool rollback_succeeded = false;
+		bool selection_changed = false;
+	};
+
 	class ThrowingTerrainCommandExecutor final : public AshEditor::IEditorCommandExecutor
 	{
 	public:
@@ -234,6 +290,26 @@ namespace
 	{
 		AshEditor::TerrainEditorIntent intent{};
 		intent.kind = kind;
+		return intent;
+	}
+
+	AshEditor::TerrainEditorIntent MakeLayerActionIntent(
+		const AshEditor::TerrainLayerActionKind kind,
+		const AshEngine::TerrainLayerId layer_id = {})
+	{
+		AshEditor::TerrainEditorIntent intent{};
+		intent.kind = AshEditor::TerrainEditorIntent::Kind::LayerAction;
+		intent.layer_action.kind = kind;
+		intent.layer_action.layer_id = layer_id;
+		return intent;
+	}
+
+	AshEditor::TerrainEditorIntent MakeSelectLayerIntent(
+		const AshEngine::TerrainLayerId layerId)
+	{
+		AshEditor::TerrainEditorIntent intent{};
+		intent.kind = AshEditor::TerrainEditorIntent::Kind::SelectLayer;
+		intent.layer_id = layerId;
 		return intent;
 	}
 }
@@ -531,6 +607,302 @@ TEST_CASE("Terrain editor blocks command replay while a stroke is active")
 	CHECK(service.GetPreviewState().stroke_active);
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+}
+
+TEST_CASE("Terrain editor records one already-executed layer command and tracks stable selection")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+	const AshEngine::TerrainLayerId original_id = MakeEditorStrokeLayerId();
+	REQUIRE(service.GetSelectedLayerId() == original_id);
+	const uint64_t initial_generation = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent add = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Add);
+	add.layer_action.name = "Detail";
+	add.layer_action.blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
+	add.layer_action.destination_index = 1u;
+	REQUIRE(service.SubmitIntent(add));
+	CHECK(commands.execute_count == 0u);
+	CHECK(commands.record_count == 1u);
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation + 1u);
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 2u);
+	const AshEngine::TerrainLayerId added_id = service.GetSelectedLayerId();
+	CHECK(added_id.is_valid());
+	CHECK(added_id != original_id);
+	CHECK(service.GetWorkingSet()->edit_layers[1].id == added_id);
+	CHECK(service.HasPendingComposition());
+
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	REQUIRE(commands.UndoLatest(context));
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	CHECK(service.GetSelectedLayerId() == original_id);
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation + 2u);
+	REQUIRE(commands.RedoLatest(context));
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 2u);
+	CHECK(service.GetSelectedLayerId() == added_id);
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation + 3u);
+
+	service.Update();
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation + 3u);
+}
+
+TEST_CASE("Terrain editor selects layers by stable id and strokes only the selected layer")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorLayerSelectionSnapshot(true)));
+	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
+	const AshEngine::TerrainLayerId firstId = MakeEditorStrokeLayerId();
+	const AshEngine::TerrainLayerId secondId = MakeEditorLayerId(48u);
+	const AshEngine::TerrainLayerId lockedId = MakeEditorLayerId(49u);
+	REQUIRE(service.GetSelectedLayerId() == firstId);
+
+	AshEditor::TerrainEditorIntent intentMismatch = MakeBeginStrokeIntent();
+	intentMismatch.layer_id = secondId;
+	CHECK_FALSE(service.SubmitIntent(intentMismatch));
+	AshEditor::TerrainEditorIntent brushMismatch = MakeBeginStrokeIntent();
+	brushMismatch.brush.layer_id = secondId;
+	CHECK_FALSE(service.SubmitIntent(brushMismatch));
+
+	AshEditor::TerrainEditorIntent beginSecond = MakeBeginStrokeIntent();
+	beginSecond.layer_id = secondId;
+	beginSecond.brush.layer_id = secondId;
+	CHECK_FALSE(service.SubmitIntent(beginSecond));
+	if (service.GetPreviewState().stroke_active)
+	{
+		REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+			AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+	}
+
+	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(lockedId)));
+	CHECK(service.GetSelectedLayerId() == lockedId);
+	CHECK(service.GetPreviewState().layer_locked);
+	AshEditor::TerrainEditorIntent beginLocked = MakeBeginStrokeIntent();
+	beginLocked.layer_id = lockedId;
+	beginLocked.brush.layer_id = lockedId;
+	CHECK_FALSE(service.SubmitIntent(beginLocked));
+
+	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(secondId)));
+	CHECK(service.GetSelectedLayerId() == secondId);
+	CHECK_FALSE(service.GetPreviewState().layer_locked);
+	REQUIRE(service.SubmitIntent(beginSecond));
+	CHECK_FALSE(service.SubmitIntent(MakeSelectLayerIntent(firstId)));
+	CHECK(service.GetSelectedLayerId() == secondId);
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+	CHECK_FALSE(service.SubmitIntent(MakeSelectLayerIntent(MakeEditorLayerId(99u))));
+	CHECK(service.GetSelectedLayerId() == secondId);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration);
+	CHECK(commands.record_count == 0u);
+	CHECK_FALSE(service.HasPendingComposition());
+}
+
+TEST_CASE("Terrain editor layer history restores the exact selection before a non-adjacent insertion")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorLayerSelectionSnapshot()));
+	const AshEngine::TerrainLayerId selectedBefore = MakeEditorLayerId(49u);
+	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(selectedBefore)));
+	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent add = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Add);
+	add.layer_action.name = "Inserted";
+	add.layer_action.destination_index = 0u;
+	REQUIRE(service.SubmitIntent(add));
+	const AshEngine::TerrainLayerId selectedAfter = service.GetSelectedLayerId();
+	REQUIRE(selectedAfter.is_valid());
+	CHECK(selectedAfter != selectedBefore);
+	CHECK(service.GetWorkingSet()->edit_layers.front().id == selectedAfter);
+
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	REQUIRE(commands.UndoLatest(context));
+	CHECK(service.GetSelectedLayerId() == selectedBefore);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
+	REQUIRE(commands.RedoLatest(context));
+	CHECK(service.GetSelectedLayerId() == selectedAfter);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 3u);
+}
+
+TEST_CASE("Terrain editor duplicate history restores selection independent of insertion index")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorLayerSelectionSnapshot()));
+	const AshEngine::TerrainLayerId selectedBefore = MakeEditorLayerId(48u);
+	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(selectedBefore)));
+	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent duplicate = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Duplicate,
+		MakeEditorStrokeLayerId());
+	duplicate.layer_action.name = "First copy";
+	duplicate.layer_action.destination_index = 2u;
+	REQUIRE(service.SubmitIntent(duplicate));
+	const AshEngine::TerrainLayerId selectedAfter = service.GetSelectedLayerId();
+	REQUIRE(selectedAfter.is_valid());
+	CHECK(service.GetWorkingSet()->edit_layers[2].id == selectedAfter);
+
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	REQUIRE(commands.UndoLatest(context));
+	CHECK(service.GetSelectedLayerId() == selectedBefore);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
+	REQUIRE(commands.RedoLatest(context));
+	CHECK(service.GetSelectedLayerId() == selectedAfter);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 3u);
+}
+
+TEST_CASE("Terrain editor treats an idempotent layer action as success without recording history")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+	const uint64_t initial_generation = service.GetWorkingSet()->content_generation;
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename,
+		MakeEditorStrokeLayerId());
+	rename.layer_action.name = "Sculpt";
+	REQUIRE(service.SubmitIntent(rename));
+	CHECK(commands.execute_count == 0u);
+	CHECK(commands.record_count == 0u);
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+	CHECK(service.GetSelectedLayerId() == MakeEditorStrokeLayerId());
+	CHECK_FALSE(service.HasPendingComposition());
+	CHECK(service.GetLastError().empty());
+}
+
+TEST_CASE("Terrain editor lock state blocks strokes and layer actions cannot interrupt an active stroke")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	AshEngine::TerrainAssetSnapshot snapshot = MakeEditorStrokeSnapshot();
+	auto layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>(
+		*snapshot.edit_layers);
+	layers->front().locked = true;
+	snapshot.edit_layers = std::move(layers);
+	REQUIRE(service.OpenSnapshotForAuthoring(snapshot));
+	CHECK(service.GetSelectedLayerId() == MakeEditorStrokeLayerId());
+	CHECK(service.GetPreviewState().layer_locked);
+	CHECK_FALSE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	CHECK(commands.record_count == 0u);
+
+	AshEditor::TerrainEditorIntent unlock = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::SetLocked,
+		MakeEditorStrokeLayerId());
+	unlock.layer_action.flag_value = false;
+	REQUIRE(service.SubmitIntent(unlock));
+	CHECK_FALSE(service.GetPreviewState().layer_locked);
+	REQUIRE(service.SubmitIntent(MakeBeginStrokeIntent()));
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename,
+		MakeEditorStrokeLayerId());
+	rename.layer_action.name = "Blocked rename";
+	CHECK_FALSE(service.SubmitIntent(rename));
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Sculpt");
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+}
+
+TEST_CASE("Terrain editor layer history rejection rolls back or quarantines unverifiable mutation")
+{
+	RejectingTerrainCommandExecutor rejecting{};
+	AshEditor::TerrainEditorService rolled_back{};
+	REQUIRE(rolled_back.Initialize(rejecting));
+	REQUIRE(rolled_back.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &rolled_back;
+	rejecting.p_context = &context;
+	const uint64_t initial_generation = rolled_back.GetWorkingSet()->content_generation;
+	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Rename,
+		MakeEditorStrokeLayerId());
+	rename.layer_action.name = "Rejected";
+	CHECK_FALSE(rolled_back.SubmitIntent(rename));
+	CHECK(rejecting.rollback_succeeded);
+	CHECK(rolled_back.GetWorkingSet()->edit_layers.front().name == "Sculpt");
+	CHECK(rolled_back.GetWorkingSet()->content_generation == initial_generation + 2u);
+	CHECK(rolled_back.HasPendingComposition());
+	CHECK(rolled_back.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready);
+
+	MalformedRollbackTerrainCommandExecutor malformed{};
+	AshEditor::TerrainEditorService quarantined{};
+	REQUIRE(quarantined.Initialize(malformed));
+	REQUIRE(quarantined.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+	CHECK_FALSE(quarantined.SubmitIntent(rename));
+	CHECK(quarantined.GetWorkingSet()->edit_layers.front().name == "Rejected");
+	CHECK_FALSE(quarantined.HasPendingComposition());
+	CHECK(quarantined.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
+	CHECK_FALSE(quarantined.SubmitIntent(rename));
+}
+
+TEST_CASE("Terrain editor rejected layer history restores selection and lock preview")
+{
+	RejectingTerrainCommandExecutor rejecting{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(rejecting));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorLayerSelectionSnapshot(true)));
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	rejecting.p_context = &context;
+	const AshEngine::TerrainLayerId selectedBefore = MakeEditorLayerId(49u);
+	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(selectedBefore)));
+	REQUIRE(service.GetPreviewState().layer_locked);
+	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent add = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Add);
+	add.layer_action.name = "Rejected insertion";
+	add.layer_action.destination_index = 0u;
+	CHECK_FALSE(service.SubmitIntent(add));
+	CHECK(rejecting.rollback_succeeded);
+	CHECK(service.GetWorkingSet()->edit_layers.size() == 3u);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
+	CHECK(service.GetSelectedLayerId() == selectedBefore);
+	CHECK(service.GetPreviewState().layer_locked);
+	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready);
+	CHECK(service.HasPendingComposition());
+}
+
+TEST_CASE("Terrain editor quarantines a layer rollback that restores data but not selection")
+{
+	WrongSelectionRollbackTerrainCommandExecutor executor{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(executor));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorLayerSelectionSnapshot(true)));
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	executor.p_context = &context;
+	executor.wrong_selection = MakeEditorStrokeLayerId();
+	REQUIRE(service.SubmitIntent(MakeSelectLayerIntent(MakeEditorLayerId(49u))));
+	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent add = MakeLayerActionIntent(
+		AshEditor::TerrainLayerActionKind::Add);
+	add.layer_action.name = "Rejected insertion";
+	add.layer_action.destination_index = 0u;
+	CHECK_FALSE(service.SubmitIntent(add));
+	CHECK(executor.rollback_succeeded);
+	CHECK(executor.selection_changed);
+	CHECK(service.GetWorkingSet()->edit_layers.size() == 3u);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
+	CHECK(service.GetSelectedLayerId() == executor.wrong_selection);
+	CHECK_FALSE(service.HasPendingComposition());
+	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
+	CHECK_FALSE(service.SubmitIntent(MakeSelectLayerIntent(MakeEditorLayerId(48u))));
 }
 
 TEST_CASE("Terrain editor quarantines a malformed rollback claim")

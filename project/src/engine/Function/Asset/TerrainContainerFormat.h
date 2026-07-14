@@ -13,6 +13,9 @@ namespace AshEngine::TerrainContainerFormat
 		{ 'A', 'S', 'H', 'T', 'E', 'R', 'R', 0 };
 	static constexpr uint32_t k_version = 1u;
 	static constexpr uint32_t k_little_endian_marker = 0x01020304u;
+	static constexpr std::array<uint8_t, 4> k_layer_metadata_extension_magic =
+		{ 'A', 'S', 'H', 'L' };
+	static constexpr uint16_t k_layer_metadata_extension_version = 1u;
 
 	enum class BlockKind : uint8_t
 	{

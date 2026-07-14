@@ -2,6 +2,7 @@
 #include "Core/TerrainCommands.h"
 #include "Function/Asset/TerrainBrush.h"
 #include "Function/Asset/TerrainComposition.h"
+#include "Function/Asset/TerrainLayerStack.h"
 #include "Services/TerrainEditorService.h"
 #include "Terrain/TerrainTestUtils.h"
 #ifdef TYPE_TO_STRING
@@ -158,6 +159,79 @@ TEST_CASE("Terrain stroke command rejects a mismatched session without mutation"
 	CHECK_FALSE(command.Execute(context));
 	CHECK(service.GetWorkingSet()->content_generation == beforeGeneration);
 	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
+}
+
+TEST_CASE("Terrain layer command replays a Function patch by stable asset and layer identity")
+{
+	const AshEngine::TerrainAssetSnapshot snapshot = MakeTerrainCommandSnapshot();
+	AshEngine::TerrainWorkingSet edited = MakeTerrainCommandWorkingSet(snapshot);
+	AshEngine::TerrainLayerStackEdit edit{};
+	edit.kind = AshEngine::TerrainLayerStackEditKind::Rename;
+	edit.layer_id = MakeTerrainCommandLayerId();
+	edit.name = "Renamed Sculpt";
+	AshEngine::TerrainLayerStackPatch patch{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	std::string error{};
+	REQUIRE(AshEngine::apply_terrain_layer_stack_edit(
+		edited, edit, patch, dirty, &error));
+
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.OpenSnapshotForAuthoring(snapshot));
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	AshEditor::TerrainLayerCommand command(
+		73u,
+		9u,
+		patch,
+		MakeTerrainCommandLayerId(),
+		MakeTerrainCommandLayerId());
+
+	REQUIRE(command.Execute(context));
+	REQUIRE(service.GetWorkingSet());
+	CHECK(service.GetWorkingSet()->edit_layers.front().id == MakeTerrainCommandLayerId());
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Renamed Sculpt");
+	const uint64_t execute_generation = service.GetWorkingSet()->content_generation;
+	REQUIRE(command.Undo(context));
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Sculpt");
+	CHECK(service.GetWorkingSet()->content_generation == execute_generation + 1u);
+	REQUIRE(command.Execute(context));
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Renamed Sculpt");
+
+	AshEngine::TerrainLayerId missingSelection{};
+	missingSelection.bytes[0] = 99u;
+	AshEditor::TerrainEditorService invalidSelectionService{};
+	REQUIRE(invalidSelectionService.OpenSnapshotForAuthoring(snapshot));
+	AshEditor::EditorContext invalidSelectionContext{};
+	invalidSelectionContext.pTerrainEditorService = &invalidSelectionService;
+	AshEditor::TerrainLayerCommand invalidSelectionCommand(
+		73u,
+		10u,
+		patch,
+		MakeTerrainCommandLayerId(),
+		missingSelection);
+	const uint64_t beforeInvalidSelection =
+		invalidSelectionService.GetWorkingSet()->content_generation;
+	CHECK_FALSE(invalidSelectionCommand.Execute(invalidSelectionContext));
+	CHECK(invalidSelectionService.GetWorkingSet()->content_generation == beforeInvalidSelection);
+	CHECK(invalidSelectionService.GetWorkingSet()->edit_layers.front().name == "Sculpt");
+
+	AshEditor::TerrainLayerCommand invalidUndoSelectionCommand(
+		73u,
+		11u,
+		patch,
+		missingSelection,
+		MakeTerrainCommandLayerId());
+	CHECK_FALSE(invalidUndoSelectionCommand.Execute(invalidSelectionContext));
+	CHECK(invalidSelectionService.GetWorkingSet()->content_generation == beforeInvalidSelection);
+	CHECK(invalidSelectionService.GetWorkingSet()->edit_layers.front().name == "Sculpt");
+
+	AshEngine::TerrainAssetSnapshot other = snapshot;
+	other.asset_id = 74u;
+	REQUIRE(service.OpenSnapshotForAuthoring(other));
+	const uint64_t before_mismatch = service.GetWorkingSet()->content_generation;
+	CHECK_FALSE(command.Undo(context));
+	CHECK(service.GetWorkingSet()->content_generation == before_mismatch);
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Sculpt");
 }
 
 TEST_CASE("Terrain already-executed history path never re-executes a command")

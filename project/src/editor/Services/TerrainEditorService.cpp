@@ -41,6 +41,7 @@ namespace AshEditor
 		_optPendingComposition.reset();
 		_publishedSnapshot.reset();
 		_nextStrokeSequence = 0u;
+		_nextLayerSequence = 0u;
 		_nextCompositionSerial = 0u;
 		_latestCompositionSourceSequence = 0u;
 		_historyRollbackFailed = false;
@@ -82,6 +83,8 @@ namespace AshEditor
 		{
 		case TerrainEditorIntent::Kind::SelectAsset:
 			return SubmitSelectAssetIntent(refIntent);
+		case TerrainEditorIntent::Kind::SelectLayer:
+			return SubmitSelectLayerIntent(refIntent);
 		case TerrainEditorIntent::Kind::BeginStroke:
 			return BeginStroke(refIntent);
 		case TerrainEditorIntent::Kind::AddStrokeSample:
@@ -90,6 +93,8 @@ namespace AshEditor
 			return EndStroke(refIntent);
 		case TerrainEditorIntent::Kind::CancelStroke:
 			return CancelStroke(refIntent);
+		case TerrainEditorIntent::Kind::LayerAction:
+			return SubmitLayerAction(refIntent);
 		default:
 			return false;
 		}
@@ -173,6 +178,50 @@ namespace AshEditor
 		return true;
 	}
 
+	bool TerrainEditorService::ApplyLayerStackPatch(
+		const AshEngine::TerrainAssetId assetId,
+		const AshEngine::TerrainLayerStackPatch& refPatch,
+		const AshEngine::TerrainEditPatchDirection eDirection,
+		const AshEngine::TerrainLayerId selectedLayerId,
+		const uint64_t sequence)
+	{
+		if (_historyRollbackFailed)
+		{
+			_strLastError =
+				"Terrain layer command replay is disabled because the authoring session is quarantined.";
+			return false;
+		}
+		if (_optActiveStroke || _core.HasActiveStroke())
+		{
+			_strLastError = "Terrain layer command replay is disabled while a stroke is active.";
+			return false;
+		}
+		if (sequence == 0u)
+		{
+			_strLastError = "Terrain layer patch replay sequence is invalid.";
+			return false;
+		}
+
+		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
+		std::string strError{};
+		if (!_core.ApplyLayerStackPatch(
+				assetId,
+				refPatch,
+				eDirection,
+				selectedLayerId,
+				dirtyComponents,
+				&strError))
+		{
+			_strLastError = strError.empty()
+				? "Terrain layer patch replay failed." : std::move(strError);
+			return false;
+		}
+
+		ScheduleComposition(sequence, std::move(dirtyComponents));
+		_strLastError.clear();
+		return true;
+	}
+
 	const TerrainEditorPreviewState& TerrainEditorService::GetPreviewState() const
 	{
 		return _core.GetPreviewState();
@@ -181,6 +230,11 @@ namespace AshEditor
 	AshEngine::TerrainAssetId TerrainEditorService::GetSelectedAssetId() const
 	{
 		return _core.GetAssetId();
+	}
+
+	AshEngine::TerrainLayerId TerrainEditorService::GetSelectedLayerId() const
+	{
+		return _core.GetSelectedLayerId();
 	}
 
 	const AshEngine::TerrainWorkingSet* TerrainEditorService::GetWorkingSet() const
@@ -257,9 +311,24 @@ namespace AshEditor
 		return true;
 	}
 
+	bool TerrainEditorService::SubmitSelectLayerIntent(const TerrainEditorIntent& refIntent)
+	{
+		if (_optActiveStroke || _core.HasActiveStroke() ||
+			!_core.SelectLayer(refIntent.layer_id))
+		{
+			_strLastError =
+				"Terrain layer selection requires an idle session and an existing stable layer ID.";
+			return false;
+		}
+
+		_strLastError.clear();
+		return true;
+	}
+
 	bool TerrainEditorService::BeginStroke(const TerrainEditorIntent& refIntent)
 	{
 		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		const AshEngine::TerrainLayerId selectedLayerId = _core.GetSelectedLayerId();
 		const bool validMetric =
 			std::isfinite(refIntent.brush_metric.world_meters_per_terrain_meter.x) &&
 			refIntent.brush_metric.world_meters_per_terrain_meter.x > 0.0f &&
@@ -268,8 +337,9 @@ namespace AshEditor
 		const uint8_t toolValue = static_cast<uint8_t>(refIntent.brush.tool);
 		if (!pWorkingSet || _optActiveStroke || _core.HasActiveStroke() ||
 			_core.GetPreviewState().query_status != AshEngine::TerrainQueryStatus::Ready ||
-			!validMetric || !refIntent.layer_id.is_valid() ||
-			refIntent.brush.layer_id != refIntent.layer_id ||
+			!validMetric || !selectedLayerId.is_valid() ||
+			refIntent.layer_id != selectedLayerId ||
+			refIntent.brush.layer_id != selectedLayerId ||
 			toolValue > static_cast<uint8_t>(AshEngine::TerrainBrushTool::Erase))
 		{
 			_strLastError = "Terrain stroke begin state, metric, layer, or tool is invalid.";
@@ -284,13 +354,18 @@ namespace AshEditor
 		const auto layer = std::find_if(
 			pWorkingSet->edit_layers.begin(),
 			pWorkingSet->edit_layers.end(),
-			[&](const AshEngine::TerrainEditLayer& refLayer)
+			[selectedLayerId](const AshEngine::TerrainEditLayer& refLayer)
 			{
-				return refLayer.id == refIntent.layer_id;
+				return refLayer.id == selectedLayerId;
 			});
 		if (layer == pWorkingSet->edit_layers.end())
 		{
 			_strLastError = "Terrain stroke layer does not exist.";
+			return false;
+		}
+		if (layer->locked)
+		{
+			_strLastError = "Terrain stroke layer is locked.";
 			return false;
 		}
 
@@ -317,7 +392,7 @@ namespace AshEditor
 		}
 		_optActiveStroke.emplace();
 		_optActiveStroke->asset_id = pWorkingSet->asset_id;
-		_optActiveStroke->layer_id = refIntent.layer_id;
+		_optActiveStroke->layer_id = selectedLayerId;
 		_optActiveStroke->sequence = _nextStrokeSequence;
 		_optActiveStroke->parameters = refIntent.brush;
 		_optActiveStroke->metric = refIntent.brush_metric;
@@ -511,6 +586,193 @@ namespace AshEditor
 		return true;
 	}
 
+	bool TerrainEditorService::SubmitLayerAction(const TerrainEditorIntent& refIntent)
+	{
+		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
+		if (!pWorkingSet || _optActiveStroke || _core.HasActiveStroke() ||
+			_core.GetPreviewState().query_status != AshEngine::TerrainQueryStatus::Ready)
+		{
+			_strLastError = "Terrain layer action requires an idle ready authoring session.";
+			return false;
+		}
+		if (pWorkingSet->content_generation >= std::numeric_limits<uint64_t>::max() - 1u)
+		{
+			_strLastError = "Terrain content generation cannot reserve a layer rollback generation.";
+			return false;
+		}
+		const AshEngine::TerrainLayerId selectedBefore = _core.GetSelectedLayerId();
+		const bool selectedBeforeLocked = _core.GetPreviewState().layer_locked;
+
+		AshEngine::TerrainLayerStackEdit edit{};
+		edit.layer_id = refIntent.layer_action.layer_id;
+		edit.name = refIntent.layer_action.name;
+		edit.destination_index = refIntent.layer_action.destination_index;
+		edit.opacity = refIntent.layer_action.opacity;
+		edit.flag_value = refIntent.layer_action.flag_value;
+		edit.blend_mode = refIntent.layer_action.blend_mode;
+		switch (refIntent.layer_action.kind)
+		{
+		case TerrainLayerActionKind::Add:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::Add;
+			break;
+		case TerrainLayerActionKind::Delete:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::Delete;
+			break;
+		case TerrainLayerActionKind::Duplicate:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::Duplicate;
+			break;
+		case TerrainLayerActionKind::Rename:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::Rename;
+			break;
+		case TerrainLayerActionKind::Move:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::Move;
+			break;
+		case TerrainLayerActionKind::SetVisible:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::SetVisible;
+			break;
+		case TerrainLayerActionKind::SetLocked:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::SetLocked;
+			break;
+		case TerrainLayerActionKind::SetOpacity:
+			edit.kind = AshEngine::TerrainLayerStackEditKind::SetOpacity;
+			break;
+		default:
+			_strLastError = "Terrain layer action kind is invalid.";
+			return false;
+		}
+
+		AshEngine::TerrainLayerStackPatch patch{};
+		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
+		std::string strError{};
+		if (!_core.ApplyLayerStackEdit(edit, patch, dirtyComponents, &strError))
+		{
+			_strLastError = strError.empty()
+				? "Terrain layer transaction failed." : std::move(strError);
+			return false;
+		}
+		if (!patch.has_change())
+		{
+			_strLastError.clear();
+			return true;
+		}
+		const AshEngine::TerrainLayerId selectedAfter = _core.GetSelectedLayerId();
+
+		++_nextLayerSequence;
+		if (_nextLayerSequence == 0u)
+		{
+			++_nextLayerSequence;
+		}
+		const uint64_t sequence = _nextLayerSequence;
+		const AshEngine::TerrainAssetId assetId = patch.asset_id;
+		pWorkingSet = _core.GetWorkingSet();
+		if (!pWorkingSet || pWorkingSet->asset_id != assetId)
+		{
+			_historyRollbackFailed = true;
+			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+			_strLastError = "Terrain layer mutation lost its authoring working set.";
+			return false;
+		}
+		const uint64_t forwardGeneration = pWorkingSet->content_generation;
+		ScheduleComposition(sequence, std::move(dirtyComponents));
+
+		const auto rollbackIsComplete = [
+			this,
+			assetId,
+			sequence,
+			forwardGeneration,
+			selectedBefore,
+			selectedBeforeLocked]()
+		{
+			const AshEngine::TerrainWorkingSet* pCurrentWorkingSet = _core.GetWorkingSet();
+			const TerrainEditorPreviewState& preview = _core.GetPreviewState();
+			return pCurrentWorkingSet && pCurrentWorkingSet->asset_id == assetId &&
+				pCurrentWorkingSet->content_generation == forwardGeneration + 1u &&
+				_core.GetSelectedLayerId() == selectedBefore &&
+				preview.layer_locked == selectedBeforeLocked &&
+				preview.query_status == AshEngine::TerrainQueryStatus::Ready &&
+				_optPendingComposition && _optPendingComposition->asset_id == assetId &&
+				_optPendingComposition->source_sequence == sequence &&
+				_optPendingComposition->content_generation == pCurrentWorkingSet->content_generation &&
+				_optPendingComposition->dirty_components == pCurrentWorkingSet->dirty_components;
+		};
+		const auto quarantineMutation = [this](const char* pError)
+		{
+			_optPendingComposition.reset();
+			_historyRollbackFailed = true;
+			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+			_strLastError = pError;
+		};
+
+		std::unique_ptr<TerrainLayerCommand> upCommand{};
+		try
+		{
+			AshEngine::TerrainLayerStackPatch commandPatch = patch;
+			upCommand = std::make_unique<TerrainLayerCommand>(
+				assetId,
+				sequence,
+				std::move(commandPatch),
+				selectedBefore,
+				selectedAfter);
+		}
+		catch (const std::bad_alloc&)
+		{
+			const bool rolledBack = RollBackLayerAction(
+				assetId, patch, selectedBefore, sequence);
+			if (!rolledBack || !rollbackIsComplete())
+			{
+				quarantineMutation(
+					"Terrain layer command allocation and rollback failed; authoring was quarantined.");
+			}
+			else
+			{
+				_strLastError = "Terrain layer command allocation failed; the mutation was rolled back.";
+			}
+			return false;
+		}
+		catch (const std::length_error&)
+		{
+			const bool rolledBack = RollBackLayerAction(
+				assetId, patch, selectedBefore, sequence);
+			if (!rolledBack || !rollbackIsComplete())
+			{
+				quarantineMutation(
+					"Terrain layer command size and rollback failed; authoring was quarantined.");
+			}
+			else
+			{
+				_strLastError = "Terrain layer command size is unsupported; the mutation was rolled back.";
+			}
+			return false;
+		}
+
+		EditorCommandRecordResult recordResult = EditorCommandRecordResult::RollbackFailed;
+		try
+		{
+			recordResult = _pCommands->RecordExecutedCommand(std::move(upCommand));
+		}
+		catch (...)
+		{
+			quarantineMutation(
+				"Terrain layer history recording raised an exception; authoring was quarantined.");
+			return false;
+		}
+		if (recordResult == EditorCommandRecordResult::RolledBack && rollbackIsComplete())
+		{
+			_strLastError =
+				"Terrain layer history recording failed; the command contract rolled back the mutation.";
+			return false;
+		}
+		if (recordResult != EditorCommandRecordResult::Recorded)
+		{
+			quarantineMutation(
+				"Terrain layer history recording could not prove rollback; authoring was quarantined.");
+			return false;
+		}
+
+		_strLastError.clear();
+		return true;
+	}
+
 	void TerrainEditorService::ScheduleComposition(
 		const uint64_t sourceSequence,
 		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents)
@@ -555,6 +817,29 @@ namespace AshEditor
 		}
 
 		ScheduleComposition(refStroke.sequence, std::move(dirtyComponents));
+		return true;
+	}
+
+	bool TerrainEditorService::RollBackLayerAction(
+		const AshEngine::TerrainAssetId assetId,
+		const AshEngine::TerrainLayerStackPatch& refPatch,
+		const AshEngine::TerrainLayerId selectedLayerId,
+		const uint64_t sequence)
+	{
+		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
+		std::string strError{};
+		if (!_core.ApplyLayerStackPatch(
+				assetId,
+				refPatch,
+				AshEngine::TerrainEditPatchDirection::Undo,
+				selectedLayerId,
+				dirtyComponents,
+				&strError))
+		{
+			return false;
+		}
+
+		ScheduleComposition(sequence, std::move(dirtyComponents));
 		return true;
 	}
 
