@@ -3,6 +3,7 @@
 #include "Base/hcore.h"
 #include "Base/hplatform.h"
 #include "Function/Asset/AssetData.h"
+#include "Function/Asset/TerrainData.h"
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -27,7 +28,8 @@ namespace AshEngine
 		Prefab,
 		Material,
 		Text,
-		Binary
+		Binary,
+		Terrain
 	};
 
 	enum class AssetLoadState : uint8_t
@@ -96,6 +98,20 @@ namespace AshEngine
 		bool load_ashasset_by_path(const std::filesystem::path& path, std::shared_ptr<const AshAsset>& out_asset);
 		std::shared_future<std::shared_ptr<const AshAsset>> load_ashasset_by_id_async(AssetId id);
 		std::shared_future<std::shared_ptr<const AshAsset>> load_ashasset_by_path_async(const std::filesystem::path& path);
+		bool load_terrain_by_id(
+			TerrainAssetId id,
+			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot);
+		bool load_terrain_by_path(
+			const std::filesystem::path& path,
+			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot);
+		std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>> load_terrain_by_id_async(
+			TerrainAssetId id);
+		std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>> load_terrain_by_path_async(
+			const std::filesystem::path& path);
+		bool publish_terrain_snapshot(
+			TerrainAssetId id,
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot);
+		bool invalidate_terrain_snapshot(TerrainAssetId id);
 
 	private:
 		std::shared_ptr<Impl> m_impl{};

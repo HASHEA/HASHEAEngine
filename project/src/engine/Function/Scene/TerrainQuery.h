@@ -47,4 +47,8 @@ namespace AshEngine
 		const TerrainRay& ray,
 		float max_distance,
 		TerrainRayHit& out_hit) -> TerrainQueryStatus;
+	ASH_API auto prefetch_query_region(
+		AssetDatabase& database,
+		TerrainAssetId asset_id,
+		const TerrainSampleRect& sample_region) -> TerrainQueryStatus;
 }

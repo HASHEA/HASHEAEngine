@@ -1,7 +1,10 @@
 #include "Function/Scene/TerrainQuery.h"
 
+#include "Function/Asset/AssetDatabase.h"
+
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -702,5 +705,49 @@ namespace AshEngine
 		{
 			return TerrainQueryStatus::Failed;
 		}
+	}
+
+	auto prefetch_query_region(
+		AssetDatabase& database,
+		TerrainAssetId asset_id,
+		const TerrainSampleRect& sample_region) -> TerrainQueryStatus
+	{
+		if (sample_region.empty())
+		{
+			return TerrainQueryStatus::Outside;
+		}
+
+		auto future = database.load_terrain_by_id_async(asset_id);
+		if (!future.valid())
+		{
+			return TerrainQueryStatus::Failed;
+		}
+		if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		{
+			return TerrainQueryStatus::Pending;
+		}
+
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		try
+		{
+			snapshot = future.get();
+		}
+		catch (...)
+		{
+			return TerrainQueryStatus::Failed;
+		}
+		if (!snapshot || snapshot->failed ||
+			!is_valid_terrain_grid_layout(snapshot->layout))
+		{
+			return TerrainQueryStatus::Failed;
+		}
+		if (sample_region.min_x >= snapshot->layout.sample_count_x ||
+			sample_region.min_z >= snapshot->layout.sample_count_z ||
+			sample_region.max_x_exclusive > snapshot->layout.sample_count_x ||
+			sample_region.max_z_exclusive > snapshot->layout.sample_count_z)
+		{
+			return TerrainQueryStatus::Outside;
+		}
+		return TerrainQueryStatus::Ready;
 	}
 }

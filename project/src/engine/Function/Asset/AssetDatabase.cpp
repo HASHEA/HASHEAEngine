@@ -1,13 +1,16 @@
 #include "AssetDatabase.h"
 
 #include "Base/hthreading.h"
+#include "Function/Asset/TerrainContainer.h"
 #include "Function/Render/Material.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <fstream>
 #include <iterator>
 #include <mutex>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -25,6 +28,7 @@ namespace AshEngine
 		{
 			AssetInfo info{};
 			std::filesystem::path absolute_path{};
+			uint64_t catalog_generation = 0;
 		};
 
 		static auto normalize_asset_key(const std::filesystem::path& path) -> std::string
@@ -93,6 +97,10 @@ namespace AshEngine
 			{
 				return AssetType::Text;
 			}
+			if (ext == ".ashterrain")
+			{
+				return AssetType::Terrain;
+			}
 			return AssetType::Binary;
 		}
 
@@ -140,6 +148,13 @@ namespace AshEngine
 	class AssetDatabase::Impl
 	{
 	public:
+		struct InflightTerrainLoad
+		{
+			uint64_t serial = 0;
+			std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>> future{};
+		};
+
+	public:
 		std::filesystem::path root_path{};
 		std::vector<AssetInfo> assets{};
 		std::unordered_map<AssetId, size_t> index_by_id{};
@@ -149,10 +164,15 @@ namespace AshEngine
 		std::unordered_map<AssetId, std::shared_ptr<Model>> model_cache{};
 		std::unordered_map<std::string, std::shared_ptr<MaterialInterface>> material_cache{};
 		std::unordered_map<AssetId, std::shared_ptr<AshAsset>> ashasset_cache{};
+		std::unordered_map<TerrainAssetId, std::shared_ptr<const TerrainAssetSnapshot>> terrain_cache{};
 		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const Mesh>>> inflight_mesh_loads{};
 		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const Model>>> inflight_model_loads{};
 		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const MaterialInterface>>> inflight_material_loads{};
 		std::unordered_map<AssetId, std::shared_future<std::shared_ptr<const AshAsset>>> inflight_ashasset_loads{};
+		std::unordered_map<TerrainAssetId, InflightTerrainLoad> inflight_terrain_loads{};
+		std::unordered_map<TerrainAssetId, uint64_t> terrain_load_serial_by_id{};
+		uint64_t next_terrain_load_serial = 0;
+		uint64_t catalog_generation = 0;
 		std::string last_error{};
 		mutable std::mutex mutex{};
 	};
@@ -164,6 +184,9 @@ namespace AshEngine
 		static auto set_load_loading_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
 		static auto set_load_success_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
 		static auto try_get_cached_load_failure_locked(AssetDatabase::Impl& impl, AssetId id, std::string& out_error) -> bool;
+		static auto validate_terrain_asset_locked(
+			AssetDatabase::Impl& impl,
+			const ResolvedAssetInfo& resolved) -> bool;
 		static auto resolve_asset_by_path(
 			const std::shared_ptr<AssetDatabase::Impl>& impl,
 			const std::filesystem::path& path,
@@ -396,6 +419,7 @@ namespace AshEngine
 
 			out_resolved.info = impl->assets[found->second];
 			out_resolved.absolute_path = impl->root_path / out_resolved.info.relative_path;
+			out_resolved.catalog_generation = impl->catalog_generation;
 			return true;
 		}
 
@@ -420,6 +444,7 @@ namespace AshEngine
 
 			out_resolved.info = impl->assets[found->second];
 			out_resolved.absolute_path = impl->root_path / out_resolved.info.relative_path;
+			out_resolved.catalog_generation = impl->catalog_generation;
 			return true;
 		}
 
@@ -510,6 +535,404 @@ namespace AshEngine
 			}
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 		}
+
+		struct TerrainLoadRequest
+		{
+			std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>> future{};
+			std::shared_ptr<std::promise<std::shared_ptr<const TerrainAssetSnapshot>>> promise{};
+			uint64_t captured_load_serial = 0;
+		};
+
+		static auto next_terrain_load_serial_locked(AssetDatabase::Impl& impl) -> uint64_t
+		{
+			++impl.next_terrain_load_serial;
+			if (impl.next_terrain_load_serial == 0)
+			{
+				++impl.next_terrain_load_serial;
+			}
+			return impl.next_terrain_load_serial;
+		}
+
+		static auto advance_catalog_generation_locked(AssetDatabase::Impl& impl) -> void
+		{
+			++impl.catalog_generation;
+			if (impl.catalog_generation == 0)
+			{
+				++impl.catalog_generation;
+			}
+		}
+
+		static auto prepare_terrain_load(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const ResolvedAssetInfo& resolved) -> TerrainLoadRequest
+		{
+			TerrainLoadRequest request{};
+			std::scoped_lock<std::mutex> lock(impl->mutex);
+			const auto indexed = impl->index_by_id.find(resolved.info.id);
+			const bool current_catalog =
+				resolved.catalog_generation == impl->catalog_generation;
+			if (!current_catalog || indexed == impl->index_by_id.end() ||
+				impl->assets[indexed->second].relative_path != resolved.info.relative_path)
+			{
+				set_last_error_locked(*impl, "Asset catalog changed before Terrain load started.");
+				request.future = make_ready_future(
+					std::shared_ptr<const TerrainAssetSnapshot>{});
+				return request;
+			}
+			if (!validate_terrain_asset_locked(*impl, resolved))
+			{
+				request.future = make_ready_future(
+					std::shared_ptr<const TerrainAssetSnapshot>{});
+				return request;
+			}
+			const auto cached = impl->terrain_cache.find(resolved.info.id);
+			if (cached != impl->terrain_cache.end())
+			{
+				set_load_success_locked(*impl, resolved.info.id);
+				request.future = make_ready_future(cached->second);
+				return request;
+			}
+
+			std::string cached_error{};
+			if (try_get_cached_load_failure_locked(*impl, resolved.info.id, cached_error))
+			{
+				request.future = make_ready_future(
+					std::shared_ptr<const TerrainAssetSnapshot>{});
+				return request;
+			}
+
+			const auto inflight = impl->inflight_terrain_loads.find(resolved.info.id);
+			if (inflight != impl->inflight_terrain_loads.end())
+			{
+				request.future = inflight->second.future;
+				return request;
+			}
+
+			request.promise = std::make_shared<
+				std::promise<std::shared_ptr<const TerrainAssetSnapshot>>>();
+			request.future = request.promise->get_future().share();
+			const uint64_t captured_load_serial = next_terrain_load_serial_locked(*impl);
+			request.captured_load_serial = captured_load_serial;
+			impl->terrain_load_serial_by_id[resolved.info.id] =
+				captured_load_serial;
+			impl->inflight_terrain_loads[resolved.info.id] = {
+				captured_load_serial,
+				request.future
+			};
+			set_load_loading_locked(*impl, resolved.info.id);
+			return request;
+		}
+
+		static auto load_terrain_snapshot_from_file(
+			const ResolvedAssetInfo& resolved,
+			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot,
+			std::string& out_error) -> bool
+		{
+			std::shared_ptr<const TerrainAssetSnapshot> loaded{};
+			const TerrainContainerResult result = load_terrain_container(
+				resolved.absolute_path,
+				loaded,
+				nullptr,
+				&out_error);
+			if ((result != TerrainContainerResult::Success &&
+				result != TerrainContainerResult::RecoveredPreviousGeneration) ||
+				!loaded)
+			{
+				if (out_error.empty())
+				{
+					out_error = "Failed to load Terrain asset container.";
+				}
+				return false;
+			}
+
+			auto prepared = std::make_shared<TerrainAssetSnapshot>(*loaded);
+			prepared->asset_id = resolved.info.id;
+			prepared->source_path = resolved.info.relative_path;
+			out_snapshot = std::move(prepared);
+			out_error.clear();
+			return true;
+		}
+
+		static auto complete_terrain_load(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			TerrainAssetId asset_id,
+			uint64_t captured_load_serial,
+			const std::shared_ptr<
+				std::promise<std::shared_ptr<const TerrainAssetSnapshot>>>& promise,
+			std::shared_ptr<const TerrainAssetSnapshot> loaded_snapshot,
+			const std::string& load_error,
+			bool persistent_failure) -> void
+		{
+			std::shared_ptr<const TerrainAssetSnapshot> completion_snapshot{};
+			{
+				std::scoped_lock<std::mutex> lock(impl->mutex);
+				const auto serial = impl->terrain_load_serial_by_id.find(asset_id);
+				const uint64_t current_load_serial =
+					serial != impl->terrain_load_serial_by_id.end() ? serial->second : 0;
+				const auto inflight = impl->inflight_terrain_loads.find(asset_id);
+				const bool owns_inflight =
+					current_load_serial == captured_load_serial &&
+					inflight != impl->inflight_terrain_loads.end() &&
+					inflight->second.serial == captured_load_serial;
+				if (owns_inflight)
+				{
+					if (loaded_snapshot)
+					{
+						impl->terrain_cache[asset_id] = loaded_snapshot;
+						completion_snapshot = std::move(loaded_snapshot);
+						set_load_success_locked(*impl, asset_id);
+					}
+					else
+					{
+						const std::string error = load_error.empty() ?
+							"Failed to load Terrain asset." : load_error;
+						if (persistent_failure)
+						{
+							set_load_failed_locked(*impl, asset_id, error);
+						}
+						else
+						{
+							set_last_error_locked(*impl, error);
+							set_load_info_locked(
+								*impl, asset_id, AssetLoadState::Unloaded, error);
+						}
+					}
+					impl->inflight_terrain_loads.erase(inflight);
+				}
+				else
+				{
+					const auto current = impl->terrain_cache.find(asset_id);
+					if (current != impl->terrain_cache.end())
+					{
+						completion_snapshot = current->second;
+					}
+				}
+			}
+			promise->set_value(std::move(completion_snapshot));
+		}
+
+		static auto resolve_terrain_dispatch_failure(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			TerrainAssetId asset_id,
+			uint64_t captured_load_serial,
+			const std::shared_ptr<
+				std::promise<std::shared_ptr<const TerrainAssetSnapshot>>>& promise,
+			const char* error) noexcept -> void
+		{
+			try
+			{
+				complete_terrain_load(
+					impl,
+					asset_id,
+					captured_load_serial,
+					promise,
+					{},
+					error ? error : "Terrain worker command failed.",
+					false);
+			}
+			catch (...)
+			{
+				try
+				{
+					promise->set_value({});
+				}
+				catch (...)
+				{
+				}
+			}
+		}
+
+		struct TerrainDispatchState
+		{
+			std::shared_ptr<AssetDatabase::Impl> impl{};
+			TerrainAssetId asset_id = 0;
+			uint64_t captured_load_serial = 0;
+			std::shared_ptr<
+				std::promise<std::shared_ptr<const TerrainAssetSnapshot>>> promise{};
+			std::thread::id caller_thread{};
+			std::atomic<bool> enqueue_in_progress{ true };
+			std::atomic<bool> started{ false };
+
+			TerrainDispatchState(
+				std::shared_ptr<AssetDatabase::Impl> in_impl,
+				TerrainAssetId in_asset_id,
+				uint64_t in_captured_load_serial,
+				std::shared_ptr<std::promise<
+					std::shared_ptr<const TerrainAssetSnapshot>>> in_promise)
+				: impl(std::move(in_impl)),
+				  asset_id(in_asset_id),
+				  captured_load_serial(in_captured_load_serial),
+				  promise(std::move(in_promise)),
+				  caller_thread(std::this_thread::get_id())
+			{
+			}
+
+			~TerrainDispatchState()
+			{
+				if (!started.exchange(true, std::memory_order_acq_rel))
+				{
+					resolve_failure("Terrain worker command was rejected before execution.");
+				}
+			}
+
+			void resolve_failure(const char* error) noexcept
+			{
+				resolve_terrain_dispatch_failure(
+					impl,
+					asset_id,
+					captured_load_serial,
+					promise,
+					error);
+			}
+		};
+
+		static auto perform_terrain_load(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			ResolvedAssetInfo resolved,
+			uint64_t captured_load_serial,
+			std::shared_ptr<
+				std::promise<std::shared_ptr<const TerrainAssetSnapshot>>> promise) -> void
+		{
+			std::shared_ptr<const TerrainAssetSnapshot> loaded{};
+			std::string error{};
+			try
+			{
+				load_terrain_snapshot_from_file(resolved, loaded, error);
+			}
+			catch (const std::exception& exception)
+			{
+				loaded.reset();
+				error = exception.what();
+			}
+			catch (...)
+			{
+				loaded.reset();
+				error = "Terrain asset load raised an unknown exception.";
+			}
+
+			complete_terrain_load(
+				impl,
+				resolved.info.id,
+				captured_load_serial,
+				promise,
+				std::move(loaded),
+				error,
+				true);
+		}
+
+		static auto validate_terrain_asset_locked(
+			AssetDatabase::Impl& impl,
+			const ResolvedAssetInfo& resolved) -> bool
+		{
+			if (!resolved.info.is_directory &&
+				resolved.info.type == AssetType::Terrain)
+			{
+				return true;
+			}
+
+			set_load_failed_locked(
+				impl,
+				resolved.info.id,
+				resolved.info.is_directory ?
+					"Cannot load a directory as Terrain." :
+					"Asset is not a Terrain container.");
+			return false;
+		}
+
+		static auto load_terrain_resolved(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const ResolvedAssetInfo& resolved,
+			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot) -> bool
+		{
+			TerrainLoadRequest request = prepare_terrain_load(impl, resolved);
+			if (request.promise)
+			{
+				perform_terrain_load(
+					impl,
+					resolved,
+					request.captured_load_serial,
+					request.promise);
+			}
+
+			try
+			{
+				out_snapshot = request.future.get();
+			}
+			catch (...)
+			{
+				out_snapshot.reset();
+			}
+			return out_snapshot != nullptr;
+		}
+
+		static auto load_terrain_resolved_async(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const ResolvedAssetInfo& resolved)
+			-> std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>>
+		{
+			TerrainLoadRequest request = prepare_terrain_load(impl, resolved);
+			if (request.promise)
+			{
+				std::shared_ptr<TerrainDispatchState> dispatch_state{};
+				try
+				{
+					dispatch_state = std::make_shared<TerrainDispatchState>(
+						impl,
+						resolved.info.id,
+						request.captured_load_serial,
+						request.promise);
+					dispatch_background_task(
+						"AssetDatabase::load_terrain_by_path_async",
+						[dispatch_state, resolved]() mutable -> void
+						{
+							const bool inline_fallback =
+								std::this_thread::get_id() == dispatch_state->caller_thread &&
+								dispatch_state->enqueue_in_progress.load(
+									std::memory_order_acquire);
+							if (dispatch_state->started.exchange(
+									true, std::memory_order_acq_rel))
+							{
+								return;
+							}
+							if (inline_fallback)
+							{
+								dispatch_state->resolve_failure(
+									"Terrain async load requires an available worker thread.");
+								return;
+							}
+							perform_terrain_load(
+								dispatch_state->impl,
+								std::move(resolved),
+								dispatch_state->captured_load_serial,
+								dispatch_state->promise);
+						});
+				}
+				catch (...)
+				{
+					if (dispatch_state)
+					{
+						dispatch_state->enqueue_in_progress.store(
+							false, std::memory_order_release);
+						dispatch_state.reset();
+					}
+					else
+					{
+						resolve_terrain_dispatch_failure(
+							impl,
+							resolved.info.id,
+							request.captured_load_serial,
+							request.promise,
+							"Terrain worker command allocation failed.");
+					}
+				}
+				if (dispatch_state)
+				{
+					dispatch_state->enqueue_in_progress.store(
+						false, std::memory_order_release);
+				}
+			}
+			return request.future;
+		}
 	}
 
 	AssetDatabase::AssetDatabase(std::shared_ptr<Impl> impl)
@@ -561,6 +984,7 @@ namespace AshEngine
 		if (root_path.empty() || !std::filesystem::exists(root_path, exists_error))
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			advance_catalog_generation_locked(*m_impl);
 			m_impl->assets.clear();
 			m_impl->index_by_id.clear();
 			m_impl->index_by_key.clear();
@@ -569,10 +993,13 @@ namespace AshEngine
 			m_impl->model_cache.clear();
 			m_impl->material_cache.clear();
 			m_impl->ashasset_cache.clear();
+			m_impl->terrain_cache.clear();
 			m_impl->inflight_mesh_loads.clear();
 			m_impl->inflight_model_loads.clear();
 			m_impl->inflight_material_loads.clear();
 			m_impl->inflight_ashasset_loads.clear();
+			m_impl->inflight_terrain_loads.clear();
+			m_impl->terrain_load_serial_by_id.clear();
 			m_impl->last_error = exists_error ? exists_error.message() : "Asset root path does not exist.";
 			ASH_PROCESS_ERROR(false);
 		}
@@ -641,6 +1068,7 @@ namespace AshEngine
 		}
 
 		std::scoped_lock<std::mutex> lock(m_impl->mutex);
+		advance_catalog_generation_locked(*m_impl);
 		m_impl->assets = std::move(assets);
 		m_impl->index_by_id = std::move(index_by_id);
 		m_impl->index_by_key = std::move(index_by_key);
@@ -649,10 +1077,13 @@ namespace AshEngine
 		m_impl->model_cache.clear();
 		m_impl->material_cache.clear();
 		m_impl->ashasset_cache.clear();
+		m_impl->terrain_cache.clear();
 		m_impl->inflight_mesh_loads.clear();
 		m_impl->inflight_model_loads.clear();
 		m_impl->inflight_material_loads.clear();
 		m_impl->inflight_ashasset_loads.clear();
+		m_impl->inflight_terrain_loads.clear();
+		m_impl->terrain_load_serial_by_id.clear();
 		m_impl->last_error.clear();
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -1336,5 +1767,154 @@ namespace AshEngine
 			});
 		}
 		ASH_PROCESS_GUARD_RETURN_END(result, empty_future);
+	}
+
+	bool AssetDatabase::load_terrain_by_id(
+		TerrainAssetId id,
+		std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot)
+	{
+		out_snapshot.reset();
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		if (!resolve_asset_by_id(m_impl, id, resolved, error))
+		{
+			return false;
+		}
+		return load_terrain_resolved(m_impl, resolved, out_snapshot);
+	}
+
+	bool AssetDatabase::load_terrain_by_path(
+		const std::filesystem::path& path,
+		std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot)
+	{
+		out_snapshot.reset();
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		if (!resolve_asset_by_path(m_impl, path, resolved, error))
+		{
+			return false;
+		}
+		return load_terrain_resolved(m_impl, resolved, out_snapshot);
+	}
+
+	std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>>
+		AssetDatabase::load_terrain_by_id_async(TerrainAssetId id)
+	{
+		if (!m_impl)
+		{
+			return make_ready_future(
+				std::shared_ptr<const TerrainAssetSnapshot>{});
+		}
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		if (!resolve_asset_by_id(m_impl, id, resolved, error))
+		{
+			return make_ready_future(
+				std::shared_ptr<const TerrainAssetSnapshot>{});
+		}
+		return load_terrain_resolved_async(m_impl, resolved);
+	}
+
+	std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>>
+		AssetDatabase::load_terrain_by_path_async(const std::filesystem::path& path)
+	{
+		if (!m_impl)
+		{
+			return make_ready_future(
+				std::shared_ptr<const TerrainAssetSnapshot>{});
+		}
+
+		ResolvedAssetInfo resolved{};
+		std::string error{};
+		if (!resolve_asset_by_path(m_impl, path, resolved, error))
+		{
+			return make_ready_future(
+				std::shared_ptr<const TerrainAssetSnapshot>{});
+		}
+		return load_terrain_resolved_async(m_impl, resolved);
+	}
+
+	bool AssetDatabase::publish_terrain_snapshot(
+		TerrainAssetId id,
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot)
+	{
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->mutex);
+		const auto indexed = m_impl->index_by_id.find(id);
+		if (indexed == m_impl->index_by_id.end() ||
+			m_impl->assets[indexed->second].is_directory ||
+			m_impl->assets[indexed->second].type != AssetType::Terrain)
+		{
+			set_last_error_locked(*m_impl, "Terrain asset id is not indexed.");
+			return false;
+		}
+		if (!snapshot || snapshot->failed || snapshot->asset_id != id)
+		{
+			set_last_error_locked(*m_impl, "Terrain snapshot is invalid or belongs to another asset.");
+			return false;
+		}
+
+		const auto cached = m_impl->terrain_cache.find(id);
+		if (cached != m_impl->terrain_cache.end())
+		{
+			const TerrainAssetSnapshot& current = *cached->second;
+			const bool newer =
+				snapshot->content_generation > current.content_generation ||
+				(snapshot->content_generation == current.content_generation &&
+					snapshot->residency_revision > current.residency_revision);
+			if (!newer)
+			{
+				set_last_error_locked(*m_impl, "Terrain snapshot publication is stale.");
+				return false;
+			}
+		}
+
+		m_impl->terrain_load_serial_by_id[id] =
+			next_terrain_load_serial_locked(*m_impl);
+		m_impl->terrain_cache[id] = std::move(snapshot);
+		m_impl->inflight_terrain_loads.erase(id);
+		set_load_success_locked(*m_impl, id);
+		return true;
+	}
+
+	bool AssetDatabase::invalidate_terrain_snapshot(TerrainAssetId id)
+	{
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_impl->mutex);
+		const auto indexed = m_impl->index_by_id.find(id);
+		if (indexed == m_impl->index_by_id.end() ||
+			m_impl->assets[indexed->second].is_directory ||
+			m_impl->assets[indexed->second].type != AssetType::Terrain)
+		{
+			set_last_error_locked(*m_impl, "Terrain asset id is not indexed.");
+			return false;
+		}
+
+		m_impl->terrain_load_serial_by_id[id] =
+			next_terrain_load_serial_locked(*m_impl);
+		m_impl->terrain_cache.erase(id);
+		m_impl->inflight_terrain_loads.erase(id);
+		set_last_error_locked(*m_impl, {});
+		set_load_info_locked(*m_impl, id, AssetLoadState::Unloaded, {});
+		return true;
 	}
 }
