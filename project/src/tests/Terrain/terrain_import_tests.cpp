@@ -656,3 +656,245 @@ TEST_CASE("Terrain import RAW source contract prepares publication before replac
 	CHECK(container_source.find("encode_rle_candidate_if_smaller(") ==
 		std::string::npos);
 }
+
+TEST_CASE("Terrain import PNG 16-bit grayscale round trips linearly")
+{
+	const auto directory = TestDirectory();
+	const auto raw_path = directory / "png-gradient.raw";
+	const auto png_path = directory / "png-gradient.png";
+	const std::vector<uint16_t> encoded = {
+		0u, 1u, 8192u,
+		16384u, 32768u, 49152u,
+		57344u, 65534u, 65535u
+	};
+	WriteR16(raw_path, encoded, AshEngine::TerrainByteOrder::LittleEndian);
+	const auto layout = MakeLayout(3u, 3u);
+	auto raw_desc = MakeImportDesc(raw_path, 3u, 3u, layout);
+	const auto source = Import(raw_desc);
+
+	AshEngine::TerrainHeightExportDesc export_desc{};
+	export_desc.destination_path = png_path;
+	export_desc.format = AshEngine::TerrainHeightFileFormat::Png;
+	std::string error{};
+	REQUIRE(AshEngine::export_terrain_height(*source, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	REQUIRE_MESSAGE(error.empty(), error);
+
+	auto png_desc = MakeImportDesc(png_path, 3u, 3u, layout);
+	png_desc.format = AshEngine::TerrainHeightFileFormat::Png;
+	AshEngine::TerrainImportReport report{};
+	const auto round_trip = Import(png_desc, &report);
+	CHECK(report.source_width == 3u);
+	CHECK(report.source_height == 3u);
+	CHECK(report.source_bits_per_sample == 16u);
+	CHECK(report.warnings.empty());
+	const auto expected = FinalHeights(*source);
+	const auto actual = FinalHeights(*round_trip);
+	REQUIRE(actual.size() == expected.size());
+	const float tolerance = source->height_mapping.height_range / 65535.0f;
+	for (size_t index = 0u; index < actual.size(); ++index)
+	{
+		CHECK(std::abs(actual[index] - expected[index]) <= tolerance);
+	}
+
+	std::filesystem::remove(raw_path);
+	std::filesystem::remove(png_path);
+}
+
+TEST_CASE("Terrain import PNG 8-bit grayscale warns about precision")
+{
+	const auto path = TestDirectory() / "png-gray8.png";
+	const std::array<uint8_t, 77> png = {
+		0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au,
+		0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u, 0x52u,
+		0x00u, 0x00u, 0x00u, 0x03u, 0x00u, 0x00u, 0x00u, 0x03u,
+		0x08u, 0x00u, 0x00u, 0x00u, 0x00u, 0x73u, 0x43u, 0xeau,
+		0x63u, 0x00u, 0x00u, 0x00u, 0x14u, 0x49u, 0x44u, 0x41u,
+		0x54u, 0x78u, 0xdau, 0x63u, 0x60u, 0x50u, 0x70u, 0x60u,
+		0x48u, 0x68u, 0x58u, 0xc0u, 0x70u, 0xe0u, 0xc1u, 0x7fu,
+		0x00u, 0x11u, 0x4bu, 0x04u, 0x80u, 0xf9u, 0xdfu, 0x38u,
+		0xcfu, 0x00u, 0x00u, 0x00u, 0x00u, 0x49u, 0x45u, 0x4eu,
+		0x44u, 0xaeu, 0x42u, 0x60u, 0x82u
+	};
+	{
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		REQUIRE(output.write(
+			reinterpret_cast<const char*>(png.data()), png.size()));
+	}
+
+	auto desc = MakeImportDesc(path, 3u, 3u, MakeLayout(3u, 3u));
+	desc.format = AshEngine::TerrainHeightFileFormat::Png;
+	AshEngine::TerrainImportReport report{};
+	const auto snapshot = Import(desc, &report);
+	CHECK(report.source_bits_per_sample == 8u);
+	REQUIRE(report.warnings.size() == 1u);
+	CHECK(report.warnings[0] ==
+		"8-bit PNG height source reduces terrain precision.");
+	const std::array<uint8_t, 9> values = {
+		0u, 32u, 64u, 96u, 128u, 160u, 192u, 224u, 255u
+	};
+	const auto heights = FinalHeights(*snapshot);
+	REQUIRE(heights.size() == values.size());
+	const float tolerance = desc.height_mapping.height_range / 65535.0f;
+	for (size_t index = 0u; index < heights.size(); ++index)
+	{
+		const float expected = desc.height_mapping.height_offset +
+			desc.height_mapping.height_range * values[index] / 255.0f;
+		CHECK(std::abs(heights[index] - expected) <= tolerance);
+	}
+
+	desc.flip_x = true;
+	const auto flipped_x = FinalHeights(*Import(desc));
+	desc.flip_x = false;
+	desc.flip_z = true;
+	const auto flipped_z = FinalHeights(*Import(desc));
+	for (uint32_t z = 0u; z < 3u; ++z)
+	{
+		for (uint32_t x = 0u; x < 3u; ++x)
+		{
+			const size_t output = static_cast<size_t>(z) * 3u + x;
+			const float expected_x = desc.height_mapping.height_offset +
+				desc.height_mapping.height_range * values[z * 3u + (2u - x)] / 255.0f;
+			const float expected_z = desc.height_mapping.height_offset +
+				desc.height_mapping.height_range * values[(2u - z) * 3u + x] / 255.0f;
+			CHECK(std::abs(flipped_x[output] - expected_x) <= tolerance);
+			CHECK(std::abs(flipped_z[output] - expected_z) <= tolerance);
+		}
+	}
+
+	desc.flip_z = false;
+	desc.source_width = 5u;
+	desc.target_layout = MakeLayout(5u, 3u);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> mismatched{};
+	std::string mismatch_error{};
+	CHECK(AshEngine::import_terrain_height(
+		17u, desc, mismatched, nullptr, &mismatch_error) ==
+		AshEngine::TerrainImportResult::InvalidDimensions);
+	CHECK_FALSE(mismatched);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain import PNG enforces exact WIC pixel negotiation")
+{
+	const std::string source = ReadTextFile(
+		"project/src/engine/Function/Asset/TerrainPngCodecWin.cpp");
+	CHECK(source.find("SetPixelFormat") != std::string::npos);
+	CHECK(source.find("GUID_WICPixelFormat16bppGray") != std::string::npos);
+	CHECK(source.find("IsEqualGUID") != std::string::npos);
+}
+
+TEST_CASE("Terrain import PNG removes temporary output when row production fails")
+{
+	const auto destination = TestDirectory() / "png-row-failure.png";
+	const auto temporary = std::filesystem::path(destination.string() + ".tmp");
+	std::filesystem::remove(destination);
+	std::filesystem::remove(temporary);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	std::string error{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		23u, MakeLayout(3u, 3u), { -100.0f, 1000.0f }, 25.0f,
+		source, &error));
+	REQUIRE(source);
+	auto broken = std::make_shared<AshEngine::TerrainAssetSnapshot>(*source);
+	REQUIRE_FALSE(broken->components.empty());
+	broken->components[0].reset();
+
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.destination_path = destination;
+	desc.format = AshEngine::TerrainHeightFileFormat::Png;
+	CHECK(AshEngine::export_terrain_height(*broken, desc, &error) ==
+		AshEngine::TerrainImportResult::EncodeFailure);
+	CHECK_FALSE(std::filesystem::exists(destination));
+	CHECK_FALSE(std::filesystem::exists(temporary));
+
+	const auto cancelled_destination = TestDirectory() / "png-cancelled.png";
+	const auto cancelled_temporary =
+		std::filesystem::path(cancelled_destination.string() + ".tmp");
+	std::filesystem::remove(cancelled_destination);
+	std::filesystem::remove(cancelled_temporary);
+	desc.destination_path = cancelled_destination;
+	desc.cancellation.cancel();
+	CHECK(AshEngine::export_terrain_height(*source, desc, &error) ==
+		AshEngine::TerrainImportResult::Cancelled);
+	CHECK_FALSE(std::filesystem::exists(cancelled_destination));
+	CHECK_FALSE(std::filesystem::exists(cancelled_temporary));
+}
+
+TEST_CASE("Terrain import PNG rejects color pixels without luminance conversion")
+{
+	const auto path = TestDirectory() / "png-color.png";
+	const std::array<uint8_t, 91> png = {
+		0x89u, 0x50u, 0x4eu, 0x47u, 0x0du, 0x0au, 0x1au, 0x0au,
+		0x00u, 0x00u, 0x00u, 0x0du, 0x49u, 0x48u, 0x44u, 0x52u,
+		0x00u, 0x00u, 0x00u, 0x03u, 0x00u, 0x00u, 0x00u, 0x03u,
+		0x08u, 0x02u, 0x00u, 0x00u, 0x00u, 0xd9u, 0x4au, 0x22u,
+		0xe8u, 0x00u, 0x00u, 0x00u, 0x22u, 0x49u, 0x44u, 0x41u,
+		0x54u, 0x78u, 0xdau, 0x63u, 0xf8u, 0xcfu, 0xc0u, 0xc0u,
+		0x00u, 0xc1u, 0x0au, 0x0eu, 0x09u, 0x0du, 0x0du, 0x0du,
+		0xffu, 0xffu, 0xffu, 0x67u, 0xe0u, 0x12u, 0x91u, 0xd3u,
+		0x30u, 0xb2u, 0x71u, 0x0bu, 0x88u, 0x02u, 0x00u, 0x98u,
+		0xe1u, 0x09u, 0xfdu, 0x27u, 0xb9u, 0xafu, 0x8fu, 0x00u,
+		0x00u, 0x00u, 0x00u, 0x49u, 0x45u, 0x4eu, 0x44u, 0xaeu,
+		0x42u, 0x60u, 0x82u
+	};
+	{
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		REQUIRE(output.write(
+			reinterpret_cast<const char*>(png.data()), png.size()));
+	}
+	auto desc = MakeImportDesc(path, 3u, 3u, MakeLayout(3u, 3u));
+	desc.format = AshEngine::TerrainHeightFileFormat::Png;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		29u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::UnsupportedFormat);
+	CHECK_FALSE(snapshot);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain import PNG rejects a grayscale TIFF with a PNG extension")
+{
+	const auto path = TestDirectory() / "not-really-png.png";
+	const std::array<uint8_t, 171> tiff = {
+		0x49u, 0x49u, 0x2au, 0x00u, 0x08u, 0x00u, 0x00u, 0x00u,
+		0x0bu, 0x00u, 0x00u, 0x01u, 0x04u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x03u, 0x00u, 0x00u, 0x00u, 0x01u, 0x01u,
+		0x04u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x03u, 0x00u,
+		0x00u, 0x00u, 0x02u, 0x01u, 0x03u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x08u, 0x00u, 0x00u, 0x00u, 0x03u, 0x01u,
+		0x03u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x06u, 0x01u, 0x03u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x11u, 0x01u,
+		0x04u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0xa2u, 0x00u,
+		0x00u, 0x00u, 0x15u, 0x01u, 0x03u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x16u, 0x01u,
+		0x04u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x03u, 0x00u,
+		0x00u, 0x00u, 0x17u, 0x01u, 0x04u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x09u, 0x00u, 0x00u, 0x00u, 0x1au, 0x01u,
+		0x05u, 0x00u, 0x01u, 0x00u, 0x00u, 0x00u, 0x92u, 0x00u,
+		0x00u, 0x00u, 0x1bu, 0x01u, 0x05u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x9au, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,
+		0x00u, 0x00u, 0x48u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x48u, 0x00u, 0x00u, 0x00u, 0x01u, 0x00u,
+		0x00u, 0x00u, 0x00u, 0x20u, 0x40u, 0x60u, 0x80u, 0xa0u,
+		0xc0u, 0xe0u, 0xffu
+	};
+	{
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		REQUIRE(output.write(
+			reinterpret_cast<const char*>(tiff.data()), tiff.size()));
+	}
+	auto desc = MakeImportDesc(path, 3u, 3u, MakeLayout(3u, 3u));
+	desc.format = AshEngine::TerrainHeightFileFormat::Png;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		31u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::UnsupportedFormat);
+	CHECK_FALSE(snapshot);
+	std::filesystem::remove(path);
+}

@@ -38,6 +38,20 @@ namespace AshEngine::TerrainImportDetail
 		const TerrainHeightMapping& mapping,
 		const RawRowProvider& row_provider,
 		std::string* out_error) -> TerrainImportResult;
+
+	auto decode_png_height_file(
+		const TerrainHeightImportDesc& desc,
+		std::vector<float>& out_heights,
+		uint32_t& out_bits_per_sample,
+		std::string* out_error) -> TerrainImportResult;
+
+	auto write_png_height_file(
+		const TerrainHeightExportDesc& desc,
+		uint32_t width,
+		uint32_t height,
+		const TerrainHeightMapping& mapping,
+		const RawRowProvider& row_provider,
+		std::string* out_error) -> TerrainImportResult;
 }
 
 namespace AshEngine
@@ -346,10 +360,11 @@ namespace AshEngine
 					"Terrain height import arguments are invalid.");
 			}
 			if (desc.format != TerrainHeightFileFormat::RawR16 &&
-				desc.format != TerrainHeightFileFormat::RawR32F)
+				desc.format != TerrainHeightFileFormat::RawR32F &&
+				desc.format != TerrainHeightFileFormat::Png)
 			{
 				return set_error(TerrainImportResult::UnsupportedFormat, out_error,
-					"This Terrain height format is not implemented by the RAW importer.");
+					"This Terrain height import format is not implemented.");
 			}
 			const bool dimensions_match =
 				desc.source_width == desc.target_layout.sample_count_x &&
@@ -380,8 +395,13 @@ namespace AshEngine
 			}
 
 			std::vector<float> source{};
+			uint32_t source_bits_per_sample =
+				desc.format == TerrainHeightFileFormat::RawR16 ? 16u : 32u;
 			const TerrainImportResult decode_result =
-				TerrainImportDetail::decode_raw_height_file(desc, source, out_error);
+				desc.format == TerrainHeightFileFormat::Png
+				? TerrainImportDetail::decode_png_height_file(
+					desc, source, source_bits_per_sample, out_error)
+				: TerrainImportDetail::decode_raw_height_file(desc, source, out_error);
 			if (decode_result != TerrainImportResult::Success)
 			{
 				return decode_result;
@@ -551,8 +571,13 @@ namespace AshEngine
 			TerrainImportReport report{};
 			report.source_width = desc.source_width;
 			report.source_height = desc.source_height;
-			report.source_bits_per_sample =
-				desc.format == TerrainHeightFileFormat::RawR16 ? 16u : 32u;
+			report.source_bits_per_sample = source_bits_per_sample;
+			if (desc.format == TerrainHeightFileFormat::Png &&
+				source_bits_per_sample == 8u)
+			{
+				report.warnings.emplace_back(
+					"8-bit PNG height source reduces terrain precision.");
+			}
 			if (out_report != nullptr)
 			{
 				out_report->source_width = report.source_width;
@@ -596,10 +621,11 @@ namespace AshEngine
 				"Terrain height export arguments are invalid.");
 		}
 		if (desc.format != TerrainHeightFileFormat::RawR16 &&
-			desc.format != TerrainHeightFileFormat::RawR32F)
+			desc.format != TerrainHeightFileFormat::RawR32F &&
+			desc.format != TerrainHeightFileFormat::Png)
 		{
 			return set_error(TerrainImportResult::UnsupportedFormat, out_error,
-				"This Terrain height format is not implemented by the RAW exporter.");
+				"This Terrain height export format is not implemented.");
 		}
 
 		const TerrainEditLayer* selected_layer = nullptr;
@@ -754,13 +780,21 @@ namespace AshEngine
 				return true;
 			};
 
-		return TerrainImportDetail::write_raw_height_file(
-			desc,
-			snapshot.layout.sample_count_x,
-			snapshot.layout.sample_count_z,
-			snapshot.height_mapping,
-			provider,
-			out_error);
+		return desc.format == TerrainHeightFileFormat::Png
+			? TerrainImportDetail::write_png_height_file(
+				desc,
+				snapshot.layout.sample_count_x,
+				snapshot.layout.sample_count_z,
+				snapshot.height_mapping,
+				provider,
+				out_error)
+			: TerrainImportDetail::write_raw_height_file(
+				desc,
+				snapshot.layout.sample_count_x,
+				snapshot.layout.sample_count_z,
+				snapshot.height_mapping,
+				provider,
+				out_error);
 	}
 
 	TerrainImportResult import_terrain_height_to_container(
@@ -791,7 +825,8 @@ namespace AshEngine
 				valid_height_mapping(desc.height_mapping) && valid_byte_order(desc.byte_order) &&
 				valid_resize_policy(desc.resize_policy) &&
 				(desc.format == TerrainHeightFileFormat::RawR16 ||
-					desc.format == TerrainHeightFileFormat::RawR32F))
+					desc.format == TerrainHeightFileFormat::RawR32F ||
+					desc.format == TerrainHeightFileFormat::Png))
 			{
 				uint64_t pipeline_peak = 0u;
 				if (!estimate_container_pipeline_peak_bytes(desc, pipeline_peak) ||

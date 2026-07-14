@@ -76,6 +76,15 @@ project "Engine"
 		"meshoptimizer",
 	}
 
+	filter "system:windows"
+		links
+		{
+			"windowscodecs",
+			"ole32",
+		}
+
+	filter {}
+
 	filter "files:**.hlsl"
 		buildaction "None"
 
