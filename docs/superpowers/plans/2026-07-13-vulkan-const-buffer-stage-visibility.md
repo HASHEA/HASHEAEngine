@@ -1119,7 +1119,9 @@ Then perform the required Application lifecycle check: launch `run.bat editor vu
 
 Use `apply_patch` to enable `[VulkanValidation] Enabled=true` plus synchronization validation in this worktree's `product/config/Engine.ini`, run the Vulkan constant-buffer self-test, and scan the newly generated log for validation errors. Restore the exact original lines with `apply_patch`. Repeat with `[DX12Validation] Enabled=true` and `GpuValidation=true` for DX12. Always restore configuration in the same turn, even when the run fails.
 
-Do not scan the file with the latest timestamp: logs use minute-granularity names and append within the same minute. Immediately before each run, snapshot the byte length of every `product/logs/*.logfile`; after the process exits, read only bytes appended after those offsets (and all bytes of newly created files). Use a PowerShell helper equivalent to:
+> Revision note (2026-07-14): `SDD-2026-07-14-log-file-session-identity` supersedes this workaround on newer revisions: every `LogService::init` now creates a unique Engine/Application file pair, so validation should snapshot existing paths and inspect the newly created pair. The byte-offset fallback below applies only when executing this plan against an older revision.
+
+On revisions predating the log-session fix, do not scan only the file with the latest timestamp: logs use minute-granularity names and may truncate or reuse a same-minute path. Immediately before each run, snapshot the byte length of every `product/logs/*.logfile`; after the process exits, read only bytes appended after those offsets (and all bytes of newly created files), rejecting any truncation. Use a PowerShell helper equivalent to:
 
 ```powershell
 function Get-LogOffsets {

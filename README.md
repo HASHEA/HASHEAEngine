@@ -55,7 +55,7 @@ RunPerfGate.bat -Profile Standard    :: 性能门禁
 run.bat sandbox <vulkan|dx12> Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
 ```
 
-最后一条是 opt-in 的双后端 constant-buffer 可见性诊断；CI 会在 WARP/lavapipe 上把它与 indirect 自测独立执行。按变更类型的完整验证矩阵见 `docs/VERIFY.md`。渲染改动必须双后端验证。
+最后一条是 opt-in 的双后端 constant-buffer 可见性诊断；CI 会在 WARP/lavapipe 上把它与 indirect 自测独立执行。每次进程运行会在 `product/logs` 生成 session 后缀相同且不会覆盖旧会话的 Engine/Application 日志对，矩阵证据审计规则见 `docs/VERIFY.md`。按变更类型的完整验证矩阵同样见该文档；渲染改动必须双后端验证。
 
 ## 文档
 

@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved
+Done
 
 ## Goal
 
@@ -21,8 +21,10 @@ Approved
 
 - `project/src/engine/Base/hlog.cpp`
 - `project/src/tests/Base/hlog_tests.cpp`
+- `README.md`
 - `docs/specs/modules/base.md`
 - `docs/VERIFY.md`
+- `docs/superpowers/plans/2026-07-13-vulkan-const-buffer-stage-visibility.md`（标记旧分钟粒度 workaround 的适用版本）
 - `docs/sdd/SDD-2026-07-14-log-file-session-identity.md`
 - `docs/plans/2026-07-14-log-file-session-identity.md`
 
@@ -54,3 +56,13 @@ Approved
 - 文件数量由“每分钟最多一对”变为“每次初始化一对”，会更快暴露日志保留/清理策略缺口；本包不偷偷增加清理策略，避免误删用户诊断证据。
 - 下游若错误依赖旧的分钟文件名会失效；仓库内消费方均以 `*.logfile` 和文件时间扫描，验证阶段会复核相关脚本。
 - 回滚可整体恢复 `hlog.cpp`、测试与文档；不涉及配置、资产、渲染基线或持久化格式。
+
+## Completion evidence
+
+- RED：定向用例 1 case / 30 assertions 中 6 个断言按预期失败，三次快速初始化仅留下一个路径，前两次 Engine/Application 标记均被截断。
+- GREEN：定向用例 1 case / 33 assertions 全通过；实际生成三组同秒、同 PID、不同微秒/序号的成对文件，前序标记全部保留。
+- `RunTests.bat Debug`：最终 rebase 后 78/78 cases、961/961 assertions。
+- `RunArchGate.bat`：PASS（35 条既有 legacy warning，无新增越界）。
+- `build_editor.bat Debug`、`build_sandbox.bat Debug`：PASS。
+- AIDevDoctor ValidatePlan：PASS，最终 rebase 后报告位于 `Intermediate/test-reports/ai-dev/20260714-050819/`。
+- `run.bat all Debug --smoke-test-seconds=120`：exit 0；四个目标/后端格各一，恰好新增四组 session/八个成对日志，四份 readiness 成功，诊断拒绝词为 0；`Engine.ini` SHA-256 前后均为 `FF5E59BD907F3A5C0CCCFB8C1743AC472B7F68ADFD1AC8FE78AD9FE9C35AE645`，相关子进程全部退出。
