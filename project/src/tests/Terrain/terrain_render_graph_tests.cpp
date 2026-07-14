@@ -1,5 +1,6 @@
 #include "Function/Render/RenderGraphBuilder.h"
 #include "Function/Render/RenderGraphCompiler.h"
+#include "Function/Render/RenderScene.h"
 #include "Function/Render/TerrainLod.h"
 #include "Function/Render/TerrainRenderPass.h"
 
@@ -40,6 +41,97 @@ namespace
 			std::istreambuf_iterator<char>(input),
 			std::istreambuf_iterator<char>());
 	}
+
+	auto CountText(const std::string& source, const std::string& text) -> size_t
+	{
+		size_t count = 0u;
+		size_t offset = 0u;
+		while ((offset = source.find(text, offset)) != std::string::npos)
+		{
+			++count;
+			offset += text.size();
+		}
+		return count;
+	}
+}
+
+TEST_CASE("Terrain SceneRenderer integration preserves deferred pass order")
+{
+	const std::string source = ReadSource(
+		"project/src/engine/Function/Render/SceneRenderer.cpp");
+	const size_t prepare = source.find("m_terrain_render_pass.prepare_graph");
+	const size_t gbuffer = source.find("\"SceneGBufferPass\"", prepare);
+	const size_t terrain_gbuffer = source.find(
+		"m_terrain_render_pass.render_gbuffer", gbuffer);
+	const size_t ao = source.find("m_ambient_occlusion_pass.add_passes", gbuffer);
+	const size_t shadow = source.find(
+		"m_sunlight_shadow_pass.add_depth_passes", ao);
+	const size_t lighting = source.find(
+		"m_deferred_lighting_pass.add_base_pass", shadow);
+
+	REQUIRE(prepare != std::string::npos);
+	REQUIRE(gbuffer != std::string::npos);
+	REQUIRE(terrain_gbuffer != std::string::npos);
+	REQUIRE(ao != std::string::npos);
+	REQUIRE(shadow != std::string::npos);
+	REQUIRE(lighting != std::string::npos);
+	CHECK(prepare < gbuffer);
+	CHECK(gbuffer < terrain_gbuffer);
+	CHECK(terrain_gbuffer < ao);
+	CHECK(ao < shadow);
+	CHECK(shadow < lighting);
+	CHECK(CountText(source, "graph.add_raster_pass(\n\t\t\t\"SceneGBufferPass\"") == 1u);
+}
+
+TEST_CASE("Terrain SceneRenderer composes shadows timing and readiness")
+{
+	const std::string renderer = ReadSource(
+		"project/src/engine/Function/Render/SceneRenderer.cpp");
+	const std::string terrain_pass = ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp");
+	const size_t static_shadow = renderer.find(
+		"render_shadow_static_meshes_to_pass");
+	const size_t terrain_shadow = renderer.find(
+		"m_terrain_render_pass.render_shadow", static_shadow);
+
+	REQUIRE(static_shadow != std::string::npos);
+	REQUIRE(terrain_shadow != std::string::npos);
+	CHECK(static_shadow < terrain_shadow);
+	CHECK(renderer.find("m_particle_system_pass.is_capture_ready(frame) &&") !=
+		std::string::npos);
+	CHECK(renderer.find("m_terrain_render_pass.is_capture_ready(frame)") !=
+		std::string::npos);
+	CHECK(renderer.find("invalidate_history(temporal_view_key)") !=
+		std::string::npos);
+	CHECK(renderer.find("\"TerrainLodColor\"") != std::string::npos);
+	CHECK(terrain_pass.find("Terrain.GBuffer") != std::string::npos);
+	CHECK(terrain_pass.find("Terrain.Shadow") != std::string::npos);
+}
+
+TEST_CASE("Terrain SceneRenderer pending generation blocks capture readiness")
+{
+	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	snapshot->asset_id = 91u;
+	snapshot->layout = AshEngine::make_default_terrain_grid_layout();
+	snapshot->height_mapping = { 0.0f, 100.0f };
+	snapshot->content_generation = 1u;
+	snapshot->components.resize(
+		static_cast<size_t>(snapshot->layout.component_count_x) *
+		snapshot->layout.component_count_z);
+	auto asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	REQUIRE(asset->accept_snapshot(snapshot));
+	REQUIRE(asset->readiness() ==
+		AshEngine::TerrainRenderReadiness::Pending);
+
+	AshEngine::VisibleRenderFrame frame{};
+	AshEngine::VisibleTerrainFrame terrain{};
+	terrain.entity_id = 7u;
+	terrain.asset_snapshot = snapshot;
+	terrain.render_asset = asset;
+	frame.terrains.push_back(terrain);
+
+	AshEngine::TerrainRenderPass pass{};
+	CHECK_FALSE(pass.is_capture_ready(frame));
 }
 
 TEST_CASE("Terrain atlas update declares texture UAV before GBuffer SRV")
@@ -189,8 +281,11 @@ TEST_CASE("Terrain shader bindings include fixed surface resources")
 	}
 	CHECK(surface.find("TERRAIN_GBUFFER") != std::string::npos);
 	CHECK(surface.find("TERRAIN_DEPTH_ONLY") != std::string::npos);
+	CHECK(surface.find("TERRAIN_LOD_DEBUG") != std::string::npos);
 	CHECK(surface.find("SV_VertexID") != std::string::npos);
 	CHECK(surface.find("SV_InstanceID") != std::string::npos);
+	CHECK(surface.find("AshTerrainFlags.y + instance_id") !=
+		std::string::npos);
 	CHECK(common.find("AshTerrainDecodeHeight") != std::string::npos);
 	CHECK(common.find("AshTerrainMorphHeight") != std::string::npos);
 	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);

@@ -578,6 +578,29 @@ namespace AshEngine
 			return draw.entity_id != 0 ? static_cast<uint64_t>(draw.entity_id) : draw.primitive_id;
 		}
 
+		static auto resolve_terrain_content_signature(
+			const VisibleRenderFrame& frame) -> uint64_t
+		{
+			uint64_t hash = 14695981039346656037ull;
+			for (const VisibleTerrainFrame& terrain : frame.terrains)
+			{
+				const uint64_t values[2] = {
+					static_cast<uint64_t>(terrain.entity_id),
+					terrain.asset_snapshot ?
+						terrain.asset_snapshot->content_generation : 0u
+				};
+				for (uint64_t value : values)
+				{
+					for (uint32_t byte = 0u; byte < 8u; ++byte)
+					{
+						hash ^= static_cast<uint8_t>(value >> (byte * 8u));
+						hash *= 1099511628211ull;
+					}
+				}
+			}
+			return hash;
+		}
+
 		static auto resolve_render_frame_index(const VisibleRenderFrame& frame) -> uint64_t
 		{
 			Application* application = Application::get();
@@ -723,6 +746,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_ambient_occlusion_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sunlight_shadow_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_directional_light_shadow_pass.initialize(m_renderer));
+		ASH_PROCESS_ERROR(m_terrain_render_pass.initialize(*m_renderer));
 		ASH_PROCESS_ERROR(m_deferred_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_environment_lighting_pass.initialize(m_renderer));
 		ASH_PROCESS_ERROR(m_sky_background_pass.initialize(m_renderer));
@@ -772,6 +796,7 @@ namespace AshEngine
 		m_deferred_lighting_pass.shutdown();
 		m_directional_light_shadow_pass.shutdown();
 		m_sunlight_shadow_pass.shutdown();
+		m_terrain_render_pass.shutdown();
 		m_ambient_occlusion_pass.shutdown();
 		m_render_debug_view.shutdown();
 		m_instance_buffers.clear();
@@ -798,6 +823,7 @@ namespace AshEngine
 	void SceneRenderer::release_scene_runtime_state(uint64_t scene_runtime_id)
 	{
 		m_particle_system_pass.release_scene(scene_runtime_id);
+		m_terrain_render_pass.release_scene(scene_runtime_id);
 	}
 
 	bool SceneRenderer::should_use_instanced_static_mesh_path(size_t visible_static_mesh_draw_count)
@@ -871,6 +897,8 @@ namespace AshEngine
 		SceneTemporalViewState& state = m_temporal_view_states[view_key];
 		state.view_projection = frame.view_projection;
 		state.jitter_ndc = frame.taa_jitter_ndc;
+		state.terrain_content_signature =
+			resolve_terrain_content_signature(frame);
 		state.static_mesh_world_transforms.clear();
 		state.static_mesh_world_transforms.reserve(frame.static_mesh_draws.size());
 		for (const VisibleStaticMeshDraw& draw : frame.static_mesh_draws)
@@ -953,6 +981,20 @@ namespace AshEngine
 		RenderGraphBuilder graph(*m_renderer, view_context.debug_name ? view_context.debug_name : "SceneRenderGraph");
 		RenderGraphTextureRef output = graph.register_external_texture(view_context.output_target, "SceneOutput");
 		const uint64_t temporal_view_key = resolve_temporal_view_key(view_context);
+		const SceneTemporalViewState* previous_temporal_state =
+			find_previous_temporal_view_state(temporal_view_key);
+		const uint64_t terrain_content_signature =
+			resolve_terrain_content_signature(frame);
+		const bool terrain_temporal_valid = previous_temporal_state &&
+			previous_temporal_state->terrain_content_signature ==
+				terrain_content_signature;
+		if (previous_temporal_state && !terrain_temporal_valid)
+		{
+			m_taa_pass.invalidate_history(temporal_view_key);
+		}
+		const glm::mat4 terrain_previous_view_projection =
+			terrain_temporal_valid ? previous_temporal_state->view_projection :
+				frame.view_projection;
 
 		// TAA sub-pixel jitter: perturb the projection so each frame samples a different
 		// in-pixel location, then the TAA resolve accumulates them. The previous frame's
@@ -982,9 +1024,9 @@ namespace AshEngine
 					taa_config.jitter_sequence_length,
 					output_width,
 					output_height);
-			if (const SceneTemporalViewState* previous_state = find_previous_temporal_view_state(temporal_view_key))
+			if (previous_temporal_state)
 			{
-				frame.taa_previous_jitter_ndc = previous_state->jitter_ndc;
+				frame.taa_previous_jitter_ndc = previous_temporal_state->jitter_ndc;
 			}
 			frame.taa_jitter_ndc = jitter_ndc;
 			frame.taa_enabled = true;
@@ -1112,27 +1154,121 @@ namespace AshEngine
 			output_width,
 			output_height);
 
+		const TerrainGraphResources terrain_graph_resources =
+			m_terrain_render_pass.prepare_graph(
+				graph,
+				frame,
+				render_frame_index);
+		if (terrain_graph_resources.is_valid())
+		{
+			register_render_debug_item(
+				m_render_debug_view,
+				"TerrainWeightAtlas0",
+				"Terrain Weight Atlas 0",
+				terrain_graph_resources.weight_atlas_0,
+				RenderDebugVisualization::Color,
+				RenderTextureFormat::RGBA8_UNORM,
+				k_terrain_weight_atlas_extent,
+				k_terrain_weight_atlas_extent);
+			register_render_debug_item(
+				m_render_debug_view,
+				"TerrainWeightAtlas1",
+				"Terrain Weight Atlas 1",
+				terrain_graph_resources.weight_atlas_1,
+				RenderDebugVisualization::Color,
+				RenderTextureFormat::RGBA8_UNORM,
+				k_terrain_weight_atlas_extent,
+				k_terrain_weight_atlas_extent);
+			register_render_debug_item(
+				m_render_debug_view,
+				"TerrainCoarseWeights",
+				"Terrain Coarse Weights",
+				terrain_graph_resources.coarse_weights,
+				RenderDebugVisualization::Color,
+				RenderTextureFormat::RGBA8_UNORM,
+				k_terrain_coarse_weight_extent,
+				k_terrain_coarse_weight_extent);
+		}
+
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneGBufferPass",
 			RenderGraphPassFlags::None,
-			[&](RenderGraphRasterPassBuilder& pass)
+			[&, terrain_graph_resources](RenderGraphRasterPassBuilder& pass)
 			{
 				for (uint8_t index = 0; index < static_cast<uint8_t>(graph_resources.gbuffer_targets.size()); ++index)
 				{
 					pass.write_color(index, graph_resources.gbuffer_targets[index], RenderLoadAction::Clear, {});
 				}
 				pass.write_depth(graph_resources.depth, RenderLoadAction::Clear, view_context.depth_clear_value);
+				if (terrain_graph_resources.is_valid())
+				{
+					pass.read_texture(
+						terrain_graph_resources.weight_atlas_0,
+						RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(
+						terrain_graph_resources.weight_atlas_1,
+						RenderGraphAccess::GraphicsSRV);
+					pass.read_texture(
+						terrain_graph_resources.coarse_weights,
+						RenderGraphAccess::GraphicsSRV);
+				}
 			},
-			[this, &frame, &view_context, render_frame_index](RenderGraphRasterContext& context) -> bool
+			[this,
+				&frame,
+				&view_context,
+				render_frame_index,
+				terrain_graph_resources,
+				terrain_previous_view_projection,
+				terrain_temporal_valid](RenderGraphRasterContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC("SceneGBufferPass", AshEngine::Profile::Color::Draw);
-				return render_static_meshes_to_pass(
+				if (!render_static_meshes_to_pass(
 					frame,
 					view_context,
 					context,
 					render_frame_index,
-					PassFamily::GBuffer);
+					PassFamily::GBuffer))
+				{
+					return false;
+				}
+				return !terrain_graph_resources.is_valid() ||
+					m_terrain_render_pass.render_gbuffer(
+						frame,
+						view_context,
+						terrain_graph_resources,
+						context,
+						render_frame_index,
+						terrain_previous_view_projection,
+						terrain_temporal_valid);
 			}));
+
+		const RenderDebugViewConfig terrain_debug_config =
+			get_runtime_render_debug_view_config();
+		const bool draw_terrain_lod_debug =
+			terrain_debug_config.enabled &&
+			terrain_debug_config.selected == "TerrainLodColor" &&
+			terrain_graph_resources.is_valid();
+		const RenderGraphTextureRef terrain_lod_debug =
+			terrain_graph_resources.is_valid() ?
+			m_terrain_render_pass.add_lod_debug_output(
+				graph,
+				frame,
+				view_context,
+				graph_resources.depth,
+				render_frame_index,
+				draw_terrain_lod_debug) : RenderGraphTextureRef{};
+		if (terrain_lod_debug)
+		{
+			register_render_debug_item(
+				m_render_debug_view,
+				"TerrainLodColor",
+				"Terrain LOD Color",
+				terrain_lod_debug,
+				RenderDebugVisualization::Color,
+				RenderTextureFormat::RGBA8_UNORM,
+				output_width,
+				output_height);
+		}
 
 		// editor begin 修改原因：P2 GPU ID buffer picking
 		if (view_context.pick_state != nullptr && view_context.pick_state->request_active)
@@ -1196,7 +1332,16 @@ namespace AshEngine
 					uint64_t shadow_render_frame_index,
 					ShadowCasterMobilityFilter mobility_filter) -> bool
 				{
-					return render_shadow_static_meshes_to_pass(
+					if (!render_shadow_static_meshes_to_pass(
+						shadow_frame,
+						shadow_view_context,
+						context,
+						shadow_render_frame_index,
+						mobility_filter))
+					{
+						return false;
+					}
+					return m_terrain_render_pass.render_shadow(
 						shadow_frame,
 						shadow_view_context,
 						context,
@@ -1646,7 +1791,8 @@ namespace AshEngine
 
 	bool SceneRenderer::is_visible_frame_capture_ready(const VisibleRenderFrame& frame) const
 	{
-		return m_particle_system_pass.is_capture_ready(frame);
+		return m_particle_system_pass.is_capture_ready(frame) &&
+			m_terrain_render_pass.is_capture_ready(frame);
 	}
 
 	void SceneRenderer::draw_render_debug_view_ui(UIContext& ui_context)

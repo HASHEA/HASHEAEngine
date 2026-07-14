@@ -5,6 +5,9 @@
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/Renderer.h"
 #include "Function/Render/RenderScene.h"
+#include "Function/Render/SceneRenderView.h"
+#include "Function/Render/SceneView.h"
+#include "Function/Render/SunLightShadowPass.h"
 #include "Graphics/Shader.h"
 
 #include <algorithm>
@@ -25,6 +28,8 @@ namespace AshEngine
 			"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli";
 		static constexpr uint32_t k_terrain_atlas_slot_grid_width = 16u;
 		static constexpr uint32_t k_terrain_atlas_update_group_size = 8u;
+		static constexpr uint32_t k_terrain_instance_frame_lag = 3u;
+		static constexpr float k_terrain_material_uv_scale = 1.0f / 16.0f;
 		static constexpr std::array<const char*, k_terrain_lod_count>
 			k_terrain_grid_names = {
 				"TerrainSharedGridLod0",
@@ -49,6 +54,82 @@ namespace AshEngine
 		};
 
 		static_assert(sizeof(TerrainAtlasUpdateConstants) == 32u);
+
+		struct TerrainPackedInstance
+		{
+			uint32_t component_lod_edges = 0u;
+			uint32_t morph_factor_bits = 0u;
+			uint32_t atlas_slot = 0u;
+			uint32_t flags = 0u;
+		};
+
+		struct TerrainSurfaceConstants
+		{
+			glm::mat4 object_to_clip{ 1.0f };
+			glm::mat4 previous_object_to_clip{ 1.0f };
+			glm::mat4 object_to_world{ 1.0f };
+			glm::vec4 height_spacing_uv_scale{ 0.0f };
+			glm::uvec4 flags{ 0u };
+		};
+
+		static_assert(sizeof(TerrainPackedInstance) == 16u);
+		static_assert(sizeof(TerrainSurfaceConstants) == 224u);
+		static_assert(sizeof(TerrainSurfaceConstants) <=
+			GraphicsDrawDesc::InlineConstDataCapacity);
+
+		uint32_t float_bits(float value)
+		{
+			uint32_t bits = 0u;
+			std::memcpy(&bits, &value, sizeof(bits));
+			return bits;
+		}
+
+		void apply_view_context(
+			GraphicsDrawDesc& draw,
+			const SceneRenderViewContext& view_context)
+		{
+			draw.has_viewport = view_context.has_viewport;
+			if (draw.has_viewport)
+			{
+				draw.viewport = view_context.viewport;
+			}
+			draw.has_scissor = view_context.has_scissor;
+			if (draw.has_scissor)
+			{
+				draw.scissor = view_context.scissor;
+			}
+			draw.reverse_z = view_context.reverse_z;
+		}
+
+		void attach_constants(
+			GraphicsDrawDesc& draw,
+			const TerrainSurfaceConstants& constants)
+		{
+			draw.const_data_size = sizeof(constants);
+			draw.inline_const_data_valid = true;
+			std::memcpy(
+				draw.inline_const_data.data(),
+				&constants,
+				sizeof(constants));
+		}
+
+		bool make_lod_view(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			SceneView& out_view)
+		{
+			const uint32_t width = view_context.output_target ?
+				view_context.output_target->get_width() : 0u;
+			const uint32_t height = view_context.output_target ?
+				view_context.output_target->get_height() : 0u;
+			return width > 0u && height > 0u && build_scene_view_from_matrices(
+				{ width, height },
+				frame.view,
+				frame.projection,
+				frame.camera_position,
+				frame.reverse_z,
+				out_view);
+		}
 
 		uint64_t build_atlas_source_hash()
 		{
@@ -77,7 +158,7 @@ namespace AshEngine
 			state.front_face = RenderFrontFace::CounterClockwise;
 			state.primitive_topology = RenderPrimitiveTopology::TriangleList;
 			state.depth_test = true;
-			state.depth_write = true;
+			state.depth_write = std::strcmp(macro, "TERRAIN_LOD_DEBUG=1") != 0;
 			state.depth_compare = RenderCompareOp::LessEqual;
 			state.blend_mode = RenderBlendMode::Opaque;
 
@@ -135,7 +216,8 @@ namespace AshEngine
 		TerrainComponentCoord coord,
 		uint64_t content_generation,
 		uint32_t atlas_slot,
-		bool write_high_resolution)
+		bool write_high_resolution,
+		uint64_t render_frame_index)
 	{
 		ComputeProgram* program = m_weight_atlas_update_program.get();
 		return graph.add_compute_pass(
@@ -153,12 +235,14 @@ namespace AshEngine
 						resources.coarse_weights,
 						RenderGraphAccess::ComputeUAV);
 				},
-				[resources,
+				[this,
+					resources,
 					asset,
 					coord,
 					content_generation,
 					atlas_slot,
 					write_high_resolution,
+					render_frame_index,
 					program](RenderGraphComputeContext& context) -> bool
 				{
 					ASH_PROFILE_SCOPE_NC(
@@ -257,6 +341,11 @@ namespace AshEngine
 					}
 					asset->m_pending_component_uploads.erase(
 						asset->m_pending_component_uploads.begin());
+					m_atlas_completions[asset.get()] = {
+						asset,
+						content_generation,
+						render_frame_index
+					};
 					return true;
 				});
 	}
@@ -307,6 +396,8 @@ namespace AshEngine
 			make_surface_program_desc("TERRAIN_GBUFFER=1", "TerrainGBuffer"));
 		m_depth_program = renderer.create_graphics_program(
 			make_surface_program_desc("TERRAIN_DEPTH_ONLY=1", "TerrainDepthOnly"));
+		m_lod_debug_program = renderer.create_graphics_program(
+			make_surface_program_desc("TERRAIN_LOD_DEBUG=1", "TerrainLodDebug"));
 
 		ComputeProgramDesc atlas_desc{};
 		atlas_desc.shader_path = k_terrain_atlas_update_shader_path;
@@ -318,6 +409,7 @@ namespace AshEngine
 			!m_material_sampler ||
 			!m_gbuffer_program ||
 			!m_depth_program ||
+			!m_lod_debug_program ||
 			!m_weight_atlas_update_program)
 		{
 			shutdown();
@@ -331,18 +423,43 @@ namespace AshEngine
 	{
 		m_gbuffer_program.reset();
 		m_depth_program.reset();
+		m_lod_debug_program.reset();
 		m_weight_atlas_update_program.reset();
 		m_shared_grid_index_buffers.fill(nullptr);
 		m_weight_sampler.reset();
 		m_material_sampler.reset();
+		m_instance_buffers.clear();
+		m_instance_buffer_frame_index = UINT64_MAX;
+		m_last_prepared_frame_index = 0u;
+		m_next_instance_buffer_slot = 0u;
+		m_atlas_completions.clear();
 		m_renderer = nullptr;
+	}
+
+	void TerrainRenderPass::release_scene(uint64_t scene_runtime_id)
+	{
+		(void)scene_runtime_id;
+		for (auto it = m_atlas_completions.begin();
+			it != m_atlas_completions.end();)
+		{
+			if (it->second.asset.expired())
+			{
+				it = m_atlas_completions.erase(it);
+			}
+			else
+			{
+				++it;
+			}
+		}
 	}
 
 	TerrainGraphResources TerrainRenderPass::prepare_graph(
 		RenderGraphBuilder& graph,
-		const VisibleRenderFrame& frame)
+		const VisibleRenderFrame& frame,
+		uint64_t render_frame_index)
 	{
 		TerrainGraphResources resources{};
+		m_last_prepared_frame_index = render_frame_index;
 		if (!m_renderer || !m_weight_atlas_update_program)
 		{
 			return resources;
@@ -482,7 +599,8 @@ namespace AshEngine
 					coord,
 					content_generation,
 					atlas_slot,
-					write_high_resolution))
+					write_high_resolution,
+					render_frame_index))
 				{
 					resources.has_update_pass = true;
 				}
@@ -490,6 +608,373 @@ namespace AshEngine
 			return resources;
 		}
 		return resources;
+	}
+
+	std::shared_ptr<StorageBuffer> TerrainRenderPass::ensure_instance_buffer(
+		uint64_t render_frame_index,
+		const void* instances,
+		uint32_t instance_count)
+	{
+		if (!m_renderer || !instances || instance_count == 0u)
+		{
+			return nullptr;
+		}
+		if (m_instance_buffer_frame_index != render_frame_index)
+		{
+			m_instance_buffer_frame_index = render_frame_index;
+			m_next_instance_buffer_slot = 0u;
+		}
+
+		const size_t logical_slot = m_next_instance_buffer_slot++;
+		const size_t physical_slot =
+			logical_slot * k_terrain_instance_frame_lag +
+			static_cast<size_t>(render_frame_index % k_terrain_instance_frame_lag);
+		if (physical_slot >= m_instance_buffers.size())
+		{
+			m_instance_buffers.resize(physical_slot + 1u);
+		}
+
+		TerrainInstanceBufferEntry& entry = m_instance_buffers[physical_slot];
+		const uint32_t byte_size =
+			instance_count * static_cast<uint32_t>(sizeof(TerrainPackedInstance));
+		if (!entry.buffer || entry.capacity < instance_count)
+		{
+			StorageBufferDesc desc{};
+			desc.size = byte_size;
+			desc.stride = sizeof(TerrainPackedInstance);
+			desc.cpu_write = true;
+			desc.initial_data = instances;
+			desc.name = "TerrainInstances";
+			entry.buffer = m_renderer->create_storage_buffer(desc);
+			entry.capacity = entry.buffer ? instance_count : 0u;
+		}
+		else if (!entry.buffer->update(0u, byte_size, instances))
+		{
+			return nullptr;
+		}
+		return entry.buffer;
+	}
+
+	bool TerrainRenderPass::render_surface(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphRasterContext& context,
+		uint64_t render_frame_index,
+		GraphicsProgram& program,
+		const TerrainGraphResources* resources,
+		const glm::mat4& previous_view_projection,
+		bool temporal_valid,
+		bool bind_material_resources,
+		bool shadow_only)
+	{
+		const VisibleTerrainFrame* terrain = nullptr;
+		for (const VisibleTerrainFrame& candidate : frame.terrains)
+		{
+			if (!candidate.asset_snapshot || !candidate.render_asset ||
+				(shadow_only && !candidate.casts_shadow))
+			{
+				continue;
+			}
+			terrain = &candidate;
+			break;
+		}
+		if (!terrain)
+		{
+			return true;
+		}
+
+		SceneView lod_view{};
+		if (!make_lod_view(frame, view_context, lod_view))
+		{
+			return false;
+		}
+		TerrainLodInput lod_input{};
+		lod_input.asset_snapshot = terrain->asset_snapshot;
+		lod_input.world_transform = terrain->world_transform;
+		lod_input.view = lod_view;
+		TerrainLodResult lod_result{};
+		if (!build_terrain_lod_batches(lod_input, lod_result))
+		{
+			return false;
+		}
+		if (lod_result.batches.empty())
+		{
+			return true;
+		}
+
+		std::vector<TerrainPackedInstance> packed_instances{};
+		packed_instances.reserve(lod_result.components.size());
+		std::vector<uint32_t> batch_offsets{};
+		batch_offsets.reserve(lod_result.batches.size());
+		{
+			std::scoped_lock<std::mutex> lock(terrain->render_asset->m_mutex);
+			for (const TerrainLodBatch& batch : lod_result.batches)
+			{
+				batch_offsets.push_back(
+					static_cast<uint32_t>(packed_instances.size()));
+				for (const TerrainInstanceData& instance : batch.instances)
+				{
+					uint32_t atlas_slot = 0u;
+					bool high_resolution = false;
+					for (uint32_t slot_index = 0u;
+						slot_index < terrain->render_asset->m_frame_boundary_atlas_slots.size();
+						++slot_index)
+					{
+						TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
+							terrain->render_asset->m_frame_boundary_atlas_slots[slot_index];
+						if (slot.occupied && slot.coord == instance.coord &&
+							slot.content_generation == terrain->asset_snapshot->content_generation)
+						{
+							atlas_slot = slot_index;
+							high_resolution = true;
+							slot.last_used_frame = render_frame_index;
+							break;
+						}
+					}
+
+					TerrainPackedInstance packed{};
+					packed.component_lod_edges =
+						(static_cast<uint32_t>(instance.coord.x) & 31u) |
+						((static_cast<uint32_t>(instance.coord.z) & 31u) << 5u) |
+						((static_cast<uint32_t>(instance.lod) & 15u) << 10u) |
+						((static_cast<uint32_t>(instance.neighbor_edge_mask) & 15u) << 14u);
+					packed.morph_factor_bits = float_bits(instance.morph_factor);
+					packed.atlas_slot = atlas_slot;
+					packed.flags = high_resolution ? 1u : 0u;
+					packed_instances.push_back(packed);
+				}
+			}
+		}
+		if (packed_instances.empty())
+		{
+			return true;
+		}
+
+		const std::shared_ptr<StorageBuffer> instance_buffer = ensure_instance_buffer(
+			render_frame_index,
+			packed_instances.data(),
+			static_cast<uint32_t>(packed_instances.size()));
+		const std::shared_ptr<StorageBuffer> height_buffer =
+			terrain->render_asset->packed_height_buffer();
+		if (!instance_buffer || !height_buffer ||
+			!program.set_storage_buffer("TerrainHeightWords", height_buffer) ||
+			!program.set_storage_buffer("TerrainInstances", instance_buffer))
+		{
+			return false;
+		}
+
+		if (bind_material_resources)
+		{
+			if (!resources || !resources->is_valid())
+			{
+				return false;
+			}
+			const std::shared_ptr<RenderTarget> atlas_0 =
+				context.get_texture(resources->weight_atlas_0);
+			const std::shared_ptr<RenderTarget> atlas_1 =
+				context.get_texture(resources->weight_atlas_1);
+			const std::shared_ptr<RenderTarget> coarse =
+				context.get_texture(resources->coarse_weights);
+			const std::shared_ptr<RenderTarget> base_color =
+				terrain->render_asset->material_texture_array(0u);
+			const std::shared_ptr<RenderTarget> normal =
+				terrain->render_asset->material_texture_array(1u);
+			const std::shared_ptr<RenderTarget> orm =
+				terrain->render_asset->material_texture_array(2u);
+			if (!atlas_0 || !atlas_1 || !coarse || !base_color || !normal || !orm ||
+				!program.set_texture("TerrainWeightAtlas0", atlas_0) ||
+				!program.set_texture("TerrainWeightAtlas1", atlas_1) ||
+				!program.set_texture("TerrainCoarseWeights", coarse) ||
+				!program.set_texture("TerrainBaseColorLayers", base_color) ||
+				!program.set_texture("TerrainNormalLayers", normal) ||
+				!program.set_texture("TerrainOrmLayers", orm) ||
+				!program.set_sampler("TerrainWeightSampler", m_weight_sampler) ||
+				!program.set_sampler("TerrainMaterialSampler", m_material_sampler))
+			{
+				return false;
+			}
+		}
+
+		for (size_t batch_index = 0u;
+			batch_index < lod_result.batches.size();
+			++batch_index)
+		{
+			const TerrainLodBatch& batch = lod_result.batches[batch_index];
+			if (batch.lod >= k_terrain_lod_count || batch.instances.empty() ||
+				!m_shared_grid_index_buffers[batch.lod])
+			{
+				continue;
+			}
+
+			TerrainSurfaceConstants constants{};
+			constants.object_to_clip = frame.view_projection * terrain->world_transform;
+			constants.previous_object_to_clip =
+				previous_view_projection * terrain->world_transform;
+			constants.object_to_world = terrain->world_transform;
+			constants.height_spacing_uv_scale = {
+				terrain->asset_snapshot->height_mapping.height_offset,
+				terrain->asset_snapshot->height_mapping.height_range,
+				terrain->asset_snapshot->layout.sample_spacing_meters,
+				k_terrain_material_uv_scale
+			};
+			constants.flags = {
+				temporal_valid && !shadow_only ? 1u : 0u,
+				batch_offsets[batch_index],
+				batch.lod,
+				0u
+			};
+
+			const uint32_t resolution =
+				k_terrain_component_quad_count >> batch.lod;
+			GraphicsDrawDesc draw{};
+			draw.program = &program;
+			draw.index_buffer = m_shared_grid_index_buffers[batch.lod];
+			draw.index_count = 6u * resolution * resolution;
+			draw.instance_count = static_cast<uint32_t>(batch.instances.size());
+			draw.first_instance = 0u;
+			attach_constants(draw, constants);
+			apply_view_context(draw, view_context);
+			if (!context.draw(draw))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool TerrainRenderPass::render_gbuffer(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		const TerrainGraphResources& resources,
+		RenderGraphRasterContext& context,
+		uint64_t render_frame_index,
+		const glm::mat4& previous_view_projection,
+		bool temporal_valid)
+	{
+		ASH_PROFILE_SCOPE_NC("Terrain.GBuffer", AshEngine::Profile::Color::Draw);
+		return m_gbuffer_program && render_surface(
+			frame,
+			view_context,
+			context,
+			render_frame_index,
+			*m_gbuffer_program,
+			&resources,
+			previous_view_projection,
+			temporal_valid,
+			true,
+			false);
+	}
+
+	bool TerrainRenderPass::render_shadow(
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphRasterContext& context,
+		uint64_t render_frame_index,
+		ShadowCasterMobilityFilter mobility_filter)
+	{
+		ASH_PROFILE_SCOPE_NC("Terrain.Shadow", AshEngine::Profile::Color::Draw);
+		if (mobility_filter == ShadowCasterMobilityFilter::DynamicOnly)
+		{
+			return true;
+		}
+		return m_depth_program && render_surface(
+			frame,
+			view_context,
+			context,
+			render_frame_index,
+			*m_depth_program,
+			nullptr,
+			frame.view_projection,
+			false,
+			false,
+			true);
+	}
+
+	RenderGraphTextureRef TerrainRenderPass::add_lod_debug_output(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphTextureRef depth,
+		uint64_t render_frame_index,
+		bool draw_output)
+	{
+		if (!m_lod_debug_program || !depth || !view_context.output_target ||
+			frame.terrains.empty())
+		{
+			return {};
+		}
+		RenderGraphTextureDesc desc{};
+		desc.width = static_cast<uint16_t>(view_context.output_target->get_width());
+		desc.height = static_cast<uint16_t>(view_context.output_target->get_height());
+		desc.format = RenderTextureFormat::RGBA8_UNORM;
+		desc.shader_resource = true;
+		desc.unordered_access = false;
+		desc.use_optimized_clear_value = true;
+		desc.optimized_clear_color = {};
+		const RenderGraphTextureRef output =
+			graph.create_texture(desc, "TerrainLodColor");
+		if (!draw_output)
+		{
+			return output;
+		}
+		if (!graph.add_raster_pass(
+			"TerrainLodDebugPass",
+			RenderGraphPassFlags::None,
+			[depth, output](RenderGraphRasterPassBuilder& pass)
+			{
+				pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestOnly);
+				pass.write_color(0u, output, RenderLoadAction::Clear, {});
+			},
+			[this, &frame, &view_context, render_frame_index](
+				RenderGraphRasterContext& context) -> bool
+			{
+				ASH_PROFILE_SCOPE_NC(
+					"Terrain.LodDebug", AshEngine::Profile::Color::Draw);
+				return render_surface(
+					frame,
+					view_context,
+					context,
+					render_frame_index,
+					*m_lod_debug_program,
+					nullptr,
+					frame.view_projection,
+					false,
+					false,
+					false);
+			}))
+		{
+			return {};
+		}
+		return output;
+	}
+
+	bool TerrainRenderPass::is_capture_ready(
+		const VisibleRenderFrame& frame) const
+	{
+		for (const VisibleTerrainFrame& terrain : frame.terrains)
+		{
+			if (!terrain.asset_snapshot || !terrain.render_asset ||
+				terrain.render_asset->readiness() != TerrainRenderReadiness::Ready ||
+				terrain.render_asset->accepted_content_generation() !=
+					terrain.asset_snapshot->content_generation ||
+				terrain.render_asset->published_content_generation() !=
+					terrain.asset_snapshot->content_generation ||
+				terrain.render_asset->pending_component_upload_count() != 0u)
+			{
+				return false;
+			}
+			const auto completion = m_atlas_completions.find(
+				terrain.render_asset.get());
+			if (completion != m_atlas_completions.end() &&
+				completion->second.asset.lock().get() == terrain.render_asset.get() &&
+				completion->second.content_generation ==
+					terrain.asset_snapshot->content_generation &&
+				m_last_prepared_frame_index <= completion->second.update_frame_index)
+			{
+				return false;
+			}
+		}
+		return true;
 	}
 
 	bool add_terrain_atlas_contract_for_tests(

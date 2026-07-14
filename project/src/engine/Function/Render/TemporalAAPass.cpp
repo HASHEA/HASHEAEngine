@@ -122,6 +122,15 @@ namespace AshEngine
 		m_history_entries.clear();
 	}
 
+	void TemporalAAPass::invalidate_history(uint64_t view_key)
+	{
+		const auto found = m_history_entries.find(view_key);
+		if (found != m_history_entries.end())
+		{
+			found->second.valid = false;
+		}
+	}
+
 	bool TemporalAAPass::create_resources(Renderer& renderer)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);

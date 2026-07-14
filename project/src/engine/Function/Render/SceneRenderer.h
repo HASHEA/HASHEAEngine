@@ -18,6 +18,7 @@
 #include "Function/Render/Renderer.h"
 #include "Function/Render/SceneRenderView.h"
 #include "Function/Render/TemporalAAPass.h"
+#include "Function/Render/TerrainRenderPass.h"
 #include "Function/Render/VolumetricLightingPass.h"
 #include <cstddef>
 #include <cstdint>
@@ -71,6 +72,7 @@ namespace AshEngine
 			glm::mat4 view_projection{ 1.0f };
 			glm::vec2 jitter_ndc{ 0.0f, 0.0f };
 			std::unordered_map<uint64_t, glm::mat4> static_mesh_world_transforms{};
+			uint64_t terrain_content_signature = 0u;
 			bool valid = false;
 		};
 
@@ -136,6 +138,7 @@ namespace AshEngine
 		EnvironmentLightingPass m_environment_lighting_pass{};
 		SkyBackgroundPass m_sky_background_pass{};
 		ParticleSystemPass m_particle_system_pass{};
+		TerrainRenderPass m_terrain_render_pass{};
 		VolumetricLightingPass m_volumetric_lighting_pass{};
 		TemporalAAPass m_taa_pass{};
 		BloomPass m_bloom_pass{};

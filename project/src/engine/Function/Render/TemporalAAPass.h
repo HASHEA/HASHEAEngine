@@ -32,6 +32,7 @@ namespace AshEngine
 		bool initialize(Renderer* renderer);
 		void shutdown();
 		void clear_history();
+		void invalidate_history(uint64_t view_key);
 
 		TemporalAAPassOutputs add_passes(
 			RenderGraphBuilder& graph,

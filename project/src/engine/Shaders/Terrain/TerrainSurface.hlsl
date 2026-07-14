@@ -8,6 +8,10 @@
 #define TERRAIN_DEPTH_ONLY 0
 #endif
 
+#ifndef TERRAIN_LOD_DEBUG
+#define TERRAIN_LOD_DEBUG 0
+#endif
+
 cbuffer AshRootConstants : register(b0)
 {
     float4x4 AshTerrainObjectToClip;
@@ -45,6 +49,9 @@ struct AshTerrainVertexOutput
     nointerpolation uint atlas_slot : TEXCOORD5;
     nointerpolation uint high_resolution_weights : TEXCOORD6;
     nointerpolation uint2 component_coord : TEXCOORD7;
+#endif
+#if TERRAIN_LOD_DEBUG
+    nointerpolation uint lod : TEXCOORD0;
 #endif
 };
 
@@ -135,7 +142,7 @@ float2 AshTerrainClipToUv(float4 clip)
 AshTerrainVertexOutput VSMain(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID)
 {
     const AshTerrainInstance instance =
-        AshTerrainDecodeInstance(TerrainInstances[instance_id]);
+        AshTerrainDecodeInstance(TerrainInstances[AshTerrainFlags.y + instance_id]);
     const uint resolution = AshTerrainComponentQuads >> instance.lod;
     const uint row_stride = resolution + 1u;
     const uint2 grid_coord = uint2(vertex_id % row_stride, vertex_id / row_stride);
@@ -179,6 +186,9 @@ AshTerrainVertexOutput VSMain(uint vertex_id : SV_VertexID, uint instance_id : S
     output.atlas_slot = instance.atlas_slot;
     output.high_resolution_weights = instance.high_resolution_weights ? 1u : 0u;
     output.component_coord = instance.component_coord;
+#endif
+#if TERRAIN_LOD_DEBUG
+    output.lod = instance.lod;
 #endif
     return output;
 }
@@ -250,6 +260,22 @@ AshTerrainGBufferOutput PSMain(AshTerrainVertexOutput input)
         temporal_valid ? 1.0 : 0.0);
     output.target4 = float4(AshTerrainEncodeNormalOct(normal_ws), 0.0, 0.0);
     return output;
+}
+#elif TERRAIN_LOD_DEBUG
+float4 PSMain(AshTerrainVertexOutput input) : SV_Target0
+{
+    static const float3 colors[9] = {
+        float3(0.10, 0.80, 0.25),
+        float3(0.30, 0.90, 0.20),
+        float3(0.70, 0.90, 0.15),
+        float3(1.00, 0.75, 0.10),
+        float3(1.00, 0.45, 0.10),
+        float3(0.95, 0.15, 0.10),
+        float3(0.75, 0.10, 0.55),
+        float3(0.35, 0.15, 0.85),
+        float3(0.10, 0.45, 1.00)
+    };
+    return float4(colors[min(input.lod, 8u)], 1.0);
 }
 #else
 void PSMain(AshTerrainVertexOutput input)
