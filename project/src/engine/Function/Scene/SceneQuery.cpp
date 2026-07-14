@@ -2,14 +2,122 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <future>
 #include <limits>
+#include <memory>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace AshEngine
 {
 	namespace
 	{
+		struct AxisAlignedTerrainTransform
+		{
+			glm::vec3 translation{};
+			glm::vec3 scale{ 1.0f };
+		};
+
+		static auto finite_vec3(const glm::vec3& value) -> bool
+		{
+			return std::isfinite(value.x) &&
+				std::isfinite(value.y) &&
+				std::isfinite(value.z);
+		}
+
+		static auto extract_axis_aligned_terrain_transform(
+			const glm::mat4& matrix,
+			AxisAlignedTerrainTransform& out_transform) -> bool
+		{
+			constexpr float epsilon = 1.0e-5f;
+			for (glm::length_t column = 0; column < 4; ++column)
+			{
+				for (glm::length_t row = 0; row < 4; ++row)
+				{
+					if (!std::isfinite(matrix[column][row]))
+					{
+						return false;
+					}
+				}
+			}
+
+			const bool axis_aligned =
+				std::abs(matrix[0][1]) <= epsilon &&
+				std::abs(matrix[0][2]) <= epsilon &&
+				std::abs(matrix[0][3]) <= epsilon &&
+				std::abs(matrix[1][0]) <= epsilon &&
+				std::abs(matrix[1][2]) <= epsilon &&
+				std::abs(matrix[1][3]) <= epsilon &&
+				std::abs(matrix[2][0]) <= epsilon &&
+				std::abs(matrix[2][1]) <= epsilon &&
+				std::abs(matrix[2][3]) <= epsilon &&
+				std::abs(matrix[3][3] - 1.0f) <= epsilon;
+			const glm::vec3 scale{ matrix[0][0], matrix[1][1], matrix[2][2] };
+			if (!axis_aligned || !finite_vec3(scale) ||
+				scale.x <= 0.0f || scale.y <= 0.0f || scale.z <= 0.0f)
+			{
+				return false;
+			}
+
+			out_transform.translation = glm::vec3(matrix[3]);
+			out_transform.scale = scale;
+			return finite_vec3(out_transform.translation);
+		}
+
+		static auto resolve_terrain_snapshot(
+			AssetDatabase& assets,
+			const std::string& asset_path,
+			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot)
+			-> TerrainQueryStatus
+		{
+			out_snapshot.reset();
+			if (!assets.is_valid() || asset_path.empty())
+			{
+				return TerrainQueryStatus::Failed;
+			}
+
+			auto future = assets.load_terrain_by_path_async(asset_path);
+			if (!future.valid())
+			{
+				return TerrainQueryStatus::Failed;
+			}
+			if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+			{
+				return TerrainQueryStatus::Pending;
+			}
+			try
+			{
+				out_snapshot = future.get();
+			}
+			catch (...)
+			{
+				return TerrainQueryStatus::Failed;
+			}
+			return out_snapshot && !out_snapshot->failed
+				? TerrainQueryStatus::Ready
+				: TerrainQueryStatus::Failed;
+		}
+
+		static auto resolve_scene_terrain(
+			const Scene& scene,
+			AssetDatabase& assets,
+			EntityId terrain_entity,
+			AxisAlignedTerrainTransform& out_transform,
+			std::shared_ptr<const TerrainAssetSnapshot>& out_snapshot)
+			-> TerrainQueryStatus
+		{
+			const Entity entity = scene.find_entity(terrain_entity);
+			if (!entity.is_valid() || !entity.has_terrain_component() ||
+				!extract_axis_aligned_terrain_transform(
+					scene.get_entity_world_transform(terrain_entity), out_transform))
+			{
+				return TerrainQueryStatus::Failed;
+			}
+			return resolve_terrain_snapshot(
+				assets, entity.get_terrain_component().asset_path, out_snapshot);
+		}
+
 		static auto transform_point(const glm::mat4& matrix, const glm::vec3& point) -> glm::vec3
 		{
 			return glm::vec3(matrix * glm::vec4(point, 1.0f));
@@ -291,6 +399,222 @@ namespace AshEngine
 			return lhs.entity_id < rhs.entity_id;
 		});
 		return hits;
+	}
+
+	TerrainQueryStatus query_height(
+		const Scene& scene,
+		AssetDatabase& assets,
+		EntityId terrain_entity,
+		const glm::vec3& world_position,
+		float& out_world_height)
+	{
+		if (!scene.is_valid() || !finite_vec3(world_position))
+		{
+			return TerrainQueryStatus::Failed;
+		}
+
+		AxisAlignedTerrainTransform transform{};
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		const TerrainQueryStatus resolve_status = resolve_scene_terrain(
+			scene,
+			assets,
+			terrain_entity,
+			transform,
+			snapshot);
+		if (resolve_status != TerrainQueryStatus::Ready)
+		{
+			return resolve_status;
+		}
+
+		const glm::vec2 local_xz{
+			(world_position.x - transform.translation.x) / transform.scale.x,
+			(world_position.z - transform.translation.z) / transform.scale.z
+		};
+		float local_height = 0.0f;
+		const TerrainQueryStatus status =
+			query_height(*snapshot, local_xz, local_height);
+		if (status == TerrainQueryStatus::Ready)
+		{
+			const float world_height =
+				transform.translation.y + local_height * transform.scale.y;
+			if (!std::isfinite(world_height))
+			{
+				return TerrainQueryStatus::Failed;
+			}
+			out_world_height = world_height;
+		}
+		return status;
+	}
+
+	TerrainQueryStatus query_normal(
+		const Scene& scene,
+		AssetDatabase& assets,
+		EntityId terrain_entity,
+		const glm::vec3& world_position,
+		glm::vec3& out_world_normal)
+	{
+		if (!scene.is_valid() || !finite_vec3(world_position))
+		{
+			return TerrainQueryStatus::Failed;
+		}
+
+		AxisAlignedTerrainTransform transform{};
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		const TerrainQueryStatus resolve_status = resolve_scene_terrain(
+			scene,
+			assets,
+			terrain_entity,
+			transform,
+			snapshot);
+		if (resolve_status != TerrainQueryStatus::Ready)
+		{
+			return resolve_status;
+		}
+
+		const glm::vec2 local_xz{
+			(world_position.x - transform.translation.x) / transform.scale.x,
+			(world_position.z - transform.translation.z) / transform.scale.z
+		};
+		glm::vec3 local_normal{};
+		const TerrainQueryStatus status =
+			query_normal(*snapshot, local_xz, local_normal);
+		if (status == TerrainQueryStatus::Ready)
+		{
+			const glm::vec3 transformed{
+				local_normal.x / transform.scale.x,
+				local_normal.y / transform.scale.y,
+				local_normal.z / transform.scale.z
+			};
+			const float length = glm::length(transformed);
+			if (!std::isfinite(length) || length <= 1.0e-8f)
+			{
+				return TerrainQueryStatus::Failed;
+			}
+			out_world_normal = transformed / length;
+		}
+		return status;
+	}
+
+	TerrainQueryStatus ray_cast_terrain(
+		const Scene& scene,
+		AssetDatabase& assets,
+		const TerrainRay& world_ray,
+		float max_distance,
+		EntityId& out_terrain_entity,
+		TerrainRayHit& out_world_hit)
+	{
+		if (!scene.is_valid() || !assets.is_valid() ||
+			!finite_vec3(world_ray.origin) || !finite_vec3(world_ray.direction) ||
+			!std::isfinite(max_distance) || max_distance <= 0.0f)
+		{
+			return TerrainQueryStatus::Failed;
+		}
+
+		const float world_direction_length = glm::length(world_ray.direction);
+		if (!std::isfinite(world_direction_length) || world_direction_length <= 1.0e-8f)
+		{
+			return TerrainQueryStatus::Failed;
+		}
+		const glm::vec3 world_direction =
+			world_ray.direction / world_direction_length;
+
+		bool pending = false;
+		bool found = false;
+		float nearest_distance = std::numeric_limits<float>::infinity();
+		EntityId nearest_entity = 0;
+		TerrainRayHit nearest_hit{};
+		for (const SceneTerrainExtractionDesc& desc : scene.extract_terrain_entities())
+		{
+			AxisAlignedTerrainTransform transform{};
+			if (!extract_axis_aligned_terrain_transform(desc.world_transform, transform))
+			{
+				return TerrainQueryStatus::Failed;
+			}
+
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+			const TerrainQueryStatus resolve_status =
+				resolve_terrain_snapshot(assets, desc.terrain.asset_path, snapshot);
+			if (resolve_status == TerrainQueryStatus::Pending)
+			{
+				pending = true;
+				continue;
+			}
+			if (resolve_status != TerrainQueryStatus::Ready)
+			{
+				return resolve_status;
+			}
+
+			const glm::vec3 local_origin =
+				(world_ray.origin - transform.translation) / transform.scale;
+			const glm::vec3 local_velocity = world_direction / transform.scale;
+			const float local_velocity_length = glm::length(local_velocity);
+			if (!std::isfinite(local_velocity_length) || local_velocity_length <= 1.0e-8f)
+			{
+				return TerrainQueryStatus::Failed;
+			}
+
+			TerrainRayHit local_hit{};
+			const TerrainQueryStatus hit_status = AshEngine::ray_cast_terrain(
+				*snapshot,
+				{ local_origin, local_velocity },
+				max_distance * local_velocity_length,
+				local_hit);
+			if (hit_status == TerrainQueryStatus::Pending)
+			{
+				pending = true;
+				continue;
+			}
+			if (hit_status == TerrainQueryStatus::Failed)
+			{
+				return hit_status;
+			}
+			if (hit_status != TerrainQueryStatus::Ready)
+			{
+				continue;
+			}
+
+			const float world_distance =
+				local_hit.distance / local_velocity_length;
+			if (world_distance >= nearest_distance)
+			{
+				continue;
+			}
+
+			glm::vec3 world_normal{
+				local_hit.normal.x / transform.scale.x,
+				local_hit.normal.y / transform.scale.y,
+				local_hit.normal.z / transform.scale.z
+			};
+			const float normal_length = glm::length(world_normal);
+			if (!std::isfinite(world_distance) ||
+				!std::isfinite(normal_length) || normal_length <= 1.0e-8f)
+			{
+				return TerrainQueryStatus::Failed;
+			}
+			world_normal /= normal_length;
+
+			TerrainRayHit candidate = local_hit;
+			candidate.distance = world_distance;
+			candidate.position =
+				transform.translation + local_hit.position * transform.scale;
+			candidate.normal = world_normal;
+			nearest_distance = world_distance;
+			nearest_entity = desc.entity_id;
+			nearest_hit = candidate;
+			found = true;
+		}
+
+		if (pending)
+		{
+			return TerrainQueryStatus::Pending;
+		}
+		if (!found)
+		{
+			return TerrainQueryStatus::Outside;
+		}
+		out_terrain_entity = nearest_entity;
+		out_world_hit = nearest_hit;
+		return TerrainQueryStatus::Ready;
 	}
 
 	// editor begin 修改原因：为 Editor 资源投放提供统一落点计算接口

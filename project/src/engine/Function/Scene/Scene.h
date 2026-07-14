@@ -96,6 +96,13 @@ namespace AshEngine
 		glm::mat4 world_transform{ 1.0f };
 	};
 
+	struct ASH_API SceneTerrainExtractionDesc
+	{
+		EntityId entity_id = 0;
+		TerrainComponent terrain{};
+		glm::mat4 world_transform{ 1.0f };
+	};
+
 	class Scene;
 
 	class ASH_API Entity
@@ -151,6 +158,12 @@ namespace AshEngine
 		bool add_particle_component(const ParticleComponent& component = {});
 		bool set_particle_component(const ParticleComponent& component);
 		bool remove_particle_component();
+
+		bool has_terrain_component() const;
+		TerrainComponent get_terrain_component() const;
+		bool add_terrain_component(const TerrainComponent& component);
+		bool set_terrain_component(const TerrainComponent& component);
+		bool remove_terrain_component();
 
 		bool has_component(SceneComponentType type) const;
 		std::vector<SceneComponentType> get_component_types() const;
@@ -222,6 +235,7 @@ namespace AshEngine
 		std::vector<SceneMeshExtractionDesc> extract_visible_mesh_entities() const;
 		std::vector<SceneLightExtractionDesc> extract_light_entities() const;
 		std::vector<SceneParticleExtractionDesc> extract_particle_entities() const;
+		std::vector<SceneTerrainExtractionDesc> extract_terrain_entities() const;
 		bool extract_active_environment(SceneEnvironmentExtractionDesc& out_environment) const;
 		bool try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const;
 
@@ -247,6 +261,7 @@ namespace AshEngine
 		uint64_t get_render_light_version() const;
 		uint64_t get_render_environment_version() const;
 		uint64_t get_render_particle_version() const;
+		uint64_t get_render_terrain_version() const;
 		uint64_t get_render_config_version() const;
 		void mark_clean();
 

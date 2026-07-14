@@ -189,7 +189,7 @@ TEST_CASE("ParticleComponent facade, extraction, and scene serialization preserv
 	REQUIRE(scene.save_to_file(scene_path, &error_message));
 	CHECK(error_message.empty());
 	json saved_json = ReadJson(scene_path);
-	CHECK(saved_json.at("version") == 5u);
+	CHECK(saved_json.at("version") == 6u);
 	REQUIRE(saved_json.at("entities").size() == 1u);
 	CHECK(saved_json.at("entities")[0].at("particle").at("blend_mode") == "AlphaBlend");
 

@@ -2,6 +2,7 @@
 
 #include "Base/hcore.h"
 #include "Base/hplatform.h"
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -17,7 +18,8 @@ namespace AshEngine
 		Light,
 		Mesh,
 		Environment,
-		Particle
+		Particle,
+		Terrain
 	};
 
 	enum class ScenePropertyType : uint8_t
@@ -169,6 +171,15 @@ namespace AshEngine
 		ParticleBlendMode blend_mode = ParticleBlendMode::Additive;
 		uint32_t random_seed = 0;
 		bool emitting = true;
+	};
+
+	struct TerrainComponent
+	{
+		std::string asset_path{};
+		bool visible = true;
+		bool casts_shadow = true;
+		bool receives_shadow = true;
+		std::array<std::string, 8> material_layer_overrides{};
 	};
 
 	struct SceneEnumValueDesc

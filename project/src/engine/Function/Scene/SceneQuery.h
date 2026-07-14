@@ -3,6 +3,7 @@
 #include "Base/hcore.h"
 #include "Function/Asset/AssetDatabase.h"
 #include "Function/Scene/Scene.h"
+#include "Function/Scene/TerrainQuery.h"
 #include <cfloat>
 #include <vector>
 #include <glm/glm.hpp>
@@ -66,6 +67,28 @@ namespace AshEngine
 		AssetDatabase& database,
 		const SceneRay& ray,
 		float max_distance = FLT_MAX);
+
+	ASH_API auto query_height(
+		const Scene& scene,
+		AssetDatabase& assets,
+		EntityId terrain_entity,
+		const glm::vec3& world_position,
+		float& out_world_height) -> TerrainQueryStatus;
+
+	ASH_API auto query_normal(
+		const Scene& scene,
+		AssetDatabase& assets,
+		EntityId terrain_entity,
+		const glm::vec3& world_position,
+		glm::vec3& out_world_normal) -> TerrainQueryStatus;
+
+	ASH_API auto ray_cast_terrain(
+		const Scene& scene,
+		AssetDatabase& assets,
+		const TerrainRay& world_ray,
+		float max_distance,
+		EntityId& out_terrain_entity,
+		TerrainRayHit& out_world_hit) -> TerrainQueryStatus;
 
 	// editor begin 修改原因：为 Editor 资源投放提供统一落点计算接口
 	// 射线与平面相交测试

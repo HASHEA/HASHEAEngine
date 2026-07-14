@@ -54,6 +54,7 @@ namespace AshEngine
 			uint64_t render_light_version = 0;
 			uint64_t render_environment_version = 0;
 			uint64_t render_particle_version = 0;
+			uint64_t render_terrain_version = 0;
 			uint64_t render_config_version = 0;
 			// editor begin 修改原因：Scene Change Event 订阅管理
 			std::unordered_map<uint32_t, SceneChangeCallback> change_callbacks{};
@@ -61,7 +62,7 @@ namespace AshEngine
 			// editor end
 		};
 
-		static constexpr uint32_t k_scene_file_version = 5;
+		static constexpr uint32_t k_scene_file_version = 6;
 		static constexpr const char* k_environment_sun_light_name = "EnvironmentSunLight";
 		static constexpr float k_environment_sun_light_intensity = 2.5f;
 		static constexpr uint32_t k_environment_sun_light_shadow_priority = 255u;
@@ -172,6 +173,14 @@ namespace AshEngine
 			{ "random_seed", ScenePropertyType::UInt32, static_cast<uint32_t>(offsetof(ParticleComponent, random_seed)), static_cast<uint32_t>(sizeof(uint32_t)), nullptr, "Random Seed", "Deterministic simulation seed.", ScenePropertyEditorHint::Default },
 		};
 
+		static ScenePropertyDesc k_terrain_properties[] =
+		{
+			{ "asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(TerrainComponent, asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr, "Asset Path", "Terrain asset file path.", ScenePropertyEditorHint::AssetPath },
+			{ "visible", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(TerrainComponent, visible)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "casts_shadow", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(TerrainComponent, casts_shadow)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+			{ "receives_shadow", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(TerrainComponent, receives_shadow)), static_cast<uint32_t>(sizeof(bool)), nullptr },
+		};
+
 		static SceneComponentDesc k_scene_component_descs[] =
 		{
 			{ SceneComponentType::Name, "NameComponent", k_name_properties, static_cast<uint32_t>(std::size(k_name_properties)), static_cast<uint32_t>(sizeof(NameComponent)) },
@@ -181,6 +190,7 @@ namespace AshEngine
 			{ SceneComponentType::Mesh, "MeshComponent", k_mesh_properties, static_cast<uint32_t>(std::size(k_mesh_properties)), static_cast<uint32_t>(sizeof(MeshComponent)) },
 			{ SceneComponentType::Environment, "EnvironmentComponent", k_environment_properties, static_cast<uint32_t>(std::size(k_environment_properties)), static_cast<uint32_t>(sizeof(EnvironmentComponent)) },
 			{ SceneComponentType::Particle, "ParticleComponent", k_particle_properties, static_cast<uint32_t>(std::size(k_particle_properties)), static_cast<uint32_t>(sizeof(ParticleComponent)) },
+			{ SceneComponentType::Terrain, "TerrainComponent", k_terrain_properties, static_cast<uint32_t>(std::size(k_terrain_properties)), static_cast<uint32_t>(sizeof(TerrainComponent)) },
 		};
 
 		static auto to_json_vec3(const glm::vec3& value) -> json
@@ -488,6 +498,40 @@ namespace AshEngine
 				component.blend_mode = defaults.blend_mode;
 			}
 			return component;
+		}
+
+		static auto is_valid_terrain_component(const TerrainComponent& component) -> bool
+		{
+			return !component.asset_path.empty();
+		}
+
+		static auto is_valid_terrain_transform(const TransformComponent& component) -> bool
+		{
+			const bool finite_position =
+				std::isfinite(component.position.x) &&
+				std::isfinite(component.position.y) &&
+				std::isfinite(component.position.z);
+			const bool zero_finite_rotation =
+				std::isfinite(component.rotation_euler_degrees.x) &&
+				std::isfinite(component.rotation_euler_degrees.y) &&
+				std::isfinite(component.rotation_euler_degrees.z) &&
+				component.rotation_euler_degrees == glm::vec3(0.0f);
+			const bool positive_finite_scale =
+				std::isfinite(component.scale.x) && component.scale.x > 0.0f &&
+				std::isfinite(component.scale.y) && component.scale.y > 0.0f &&
+				std::isfinite(component.scale.z) && component.scale.z > 0.0f;
+			return finite_position && zero_finite_rotation && positive_finite_scale;
+		}
+
+		static auto terrain_components_equal(
+			const TerrainComponent& lhs,
+			const TerrainComponent& rhs) -> bool
+		{
+			return lhs.asset_path == rhs.asset_path &&
+				lhs.visible == rhs.visible &&
+				lhs.casts_shadow == rhs.casts_shadow &&
+				lhs.receives_shadow == rhs.receives_shadow &&
+				lhs.material_layer_overrides == rhs.material_layer_overrides;
 		}
 
 		static auto deserialize_scene_render_config(const json& root) -> SceneRenderConfig
@@ -895,6 +939,10 @@ namespace AshEngine
 			{
 				return SceneComponentType::Particle;
 			}
+			else if constexpr (std::is_same_v<TComponent, TerrainComponent>)
+			{
+				return SceneComponentType::Terrain;
+			}
 			else
 			{
 				return SceneComponentType::Name;
@@ -926,6 +974,10 @@ namespace AshEngine
 			else if (component_type == SceneComponentType::Particle)
 			{
 				storage.render_particle_version = storage.change_version;
+			}
+			else if (component_type == SceneComponentType::Terrain)
+			{
+				storage.render_terrain_version = storage.change_version;
 			}
 
 			SceneChangeEvent event{};
@@ -1448,6 +1500,57 @@ namespace AshEngine
 			storage.entities.erase(found);
 			return true;
 		}
+
+		static auto entity_subtree_has_terrain(const SceneStorage& storage, EntityId id) -> bool
+		{
+			const auto found = storage.entities.find(id);
+			if (found == storage.entities.end())
+			{
+				return false;
+			}
+			if (storage.registry.any_of<TerrainComponent>(found->second))
+			{
+				return true;
+			}
+			const HierarchyComponent* hierarchy =
+				storage.registry.try_get<HierarchyComponent>(found->second);
+			if (!hierarchy)
+			{
+				return false;
+			}
+			for (EntityId child_id : hierarchy->children)
+			{
+				if (entity_subtree_has_terrain(storage, child_id))
+				{
+					return true;
+				}
+			}
+			return false;
+		}
+
+		static auto entity_transform_chain_is_valid_for_terrain(
+			const SceneStorage& storage,
+			EntityId id) -> bool
+		{
+			while (id != 0)
+			{
+				const auto found = storage.entities.find(id);
+				if (found == storage.entities.end())
+				{
+					return false;
+				}
+				const TransformComponent* transform =
+					storage.registry.try_get<TransformComponent>(found->second);
+				const HierarchyComponent* hierarchy =
+					storage.registry.try_get<HierarchyComponent>(found->second);
+				if (!transform || !hierarchy || !is_valid_terrain_transform(*transform))
+				{
+					return false;
+				}
+				id = hierarchy->parent;
+			}
+			return true;
+		}
 	}
 
 	Entity::Entity(std::shared_ptr<Impl> impl, EntityId id)
@@ -1498,7 +1601,24 @@ namespace AshEngine
 
 	bool Entity::set_transform_component(const TransformComponent& component)
 	{
-		return emplace_or_replace_entity_component(std::static_pointer_cast<Scene::Impl>(m_impl), m_id, component);
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		if (handle == entt::null)
+		{
+			return false;
+		}
+		if (entity_subtree_has_terrain(impl->storage, m_id))
+		{
+			const HierarchyComponent* hierarchy =
+				impl->storage.registry.try_get<HierarchyComponent>(handle);
+			if (!hierarchy || !is_valid_terrain_transform(component) ||
+				!entity_transform_chain_is_valid_for_terrain(
+					impl->storage, hierarchy->parent))
+			{
+				return false;
+			}
+		}
+		return emplace_or_replace_entity_component(impl, m_id, component);
 	}
 
 	// editor begin 修改原因：为编辑器预览相机提供静默更新 Transform 的能力，避免每帧操作触发正式编辑副作用。
@@ -1508,6 +1628,15 @@ namespace AshEngine
 		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
 		const entt::entity handle = find_handle(impl, m_id);
 		ASH_PROCESS_ERROR(handle != entt::null);
+		if (entity_subtree_has_terrain(impl->storage, m_id))
+		{
+			const HierarchyComponent* hierarchy =
+				impl->storage.registry.try_get<HierarchyComponent>(handle);
+			ASH_PROCESS_ERROR(
+				hierarchy && is_valid_terrain_transform(component) &&
+				entity_transform_chain_is_valid_for_terrain(
+					impl->storage, hierarchy->parent));
+		}
 		impl->storage.registry.emplace_or_replace<TransformComponent>(handle, component);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -1696,6 +1825,60 @@ namespace AshEngine
 		return remove_entity_component_if_present<ParticleComponent>(std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
+	bool Entity::has_terrain_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		return handle != entt::null && impl->storage.registry.any_of<TerrainComponent>(handle);
+	}
+
+	TerrainComponent Entity::get_terrain_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		if (handle != entt::null)
+		{
+			if (const TerrainComponent* component =
+				impl->storage.registry.try_get<TerrainComponent>(handle))
+			{
+				return *component;
+			}
+		}
+		return {};
+	}
+
+	bool Entity::add_terrain_component(const TerrainComponent& component)
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		if (handle == entt::null || !is_valid_terrain_component(component))
+		{
+			return false;
+		}
+		if (!entity_transform_chain_is_valid_for_terrain(impl->storage, m_id))
+		{
+			return false;
+		}
+		if (const TerrainComponent* existing =
+			impl->storage.registry.try_get<TerrainComponent>(handle);
+			existing && terrain_components_equal(*existing, component))
+		{
+			return true;
+		}
+		return emplace_or_replace_entity_component(impl, m_id, component);
+	}
+
+	bool Entity::set_terrain_component(const TerrainComponent& component)
+	{
+		return add_terrain_component(component);
+	}
+
+	bool Entity::remove_terrain_component()
+	{
+		return remove_entity_component_if_present<TerrainComponent>(
+			std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
+	}
+
 	bool Entity::has_component(SceneComponentType type) const
 	{
 		switch (type)
@@ -1713,6 +1896,8 @@ namespace AshEngine
 			return has_environment_component();
 		case SceneComponentType::Particle:
 			return has_particle_component();
+		case SceneComponentType::Terrain:
+			return has_terrain_component();
 		default:
 			return false;
 		}
@@ -1747,6 +1932,10 @@ namespace AshEngine
 		if (has_particle_component())
 		{
 			result.push_back(SceneComponentType::Particle);
+		}
+		if (has_terrain_component())
+		{
+			result.push_back(SceneComponentType::Terrain);
 		}
 		return result;
 	}
@@ -1811,6 +2000,14 @@ namespace AshEngine
 			if (handled)
 			{
 				*static_cast<ParticleComponent*>(out_component) = get_particle_component();
+			}
+		}
+		else if (type == SceneComponentType::Terrain)
+		{
+			handled = component_size == sizeof(TerrainComponent) && has_terrain_component();
+			if (handled)
+			{
+				*static_cast<TerrainComponent*>(out_component) = get_terrain_component();
 			}
 		}
 		else
@@ -1883,6 +2080,14 @@ namespace AshEngine
 			if (handled)
 			{
 				bResult = set_particle_component(*static_cast<const ParticleComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Terrain)
+		{
+			handled = component_size == sizeof(TerrainComponent);
+			if (handled)
+			{
+				bResult = set_terrain_component(*static_cast<const TerrainComponent*>(component_data));
 			}
 		}
 		else
@@ -2018,6 +2223,7 @@ namespace AshEngine
 
 		std::vector<std::pair<EntityId, EntityId>> desired_parents{};
 		EntityId max_id = 0;
+		bool entity_components_valid = true;
 		for (const json& entity_json : entities_json)
 		{
 			const EntityId id = entity_json.value("id", static_cast<EntityId>(0));
@@ -2131,7 +2337,56 @@ namespace AshEngine
 				}
 				entity.add_particle_component(particle);
 			}
+
+			if (version >= 6u && entity_json.contains("terrain"))
+			{
+				const json& terrain_json = entity_json["terrain"];
+				TerrainComponent terrain{};
+				bool terrain_json_valid = terrain_json.is_object();
+				try
+				{
+					if (terrain_json_valid)
+					{
+						terrain.asset_path = terrain_json.value("asset_path", std::string{});
+						terrain.visible = terrain_json.value("visible", terrain.visible);
+						terrain.casts_shadow = terrain_json.value("casts_shadow", terrain.casts_shadow);
+						terrain.receives_shadow = terrain_json.value("receives_shadow", terrain.receives_shadow);
+						if (const auto overrides = terrain_json.find("material_layer_overrides");
+							overrides != terrain_json.end())
+						{
+							terrain_json_valid = overrides->is_array() &&
+								overrides->size() <= terrain.material_layer_overrides.size();
+							if (terrain_json_valid)
+							{
+								for (size_t layer = 0; layer < overrides->size(); ++layer)
+								{
+									if (!(*overrides)[layer].is_string())
+									{
+										terrain_json_valid = false;
+										break;
+									}
+									terrain.material_layer_overrides[layer] =
+										(*overrides)[layer].get<std::string>();
+								}
+							}
+						}
+					}
+				}
+				catch (const std::exception&)
+				{
+					terrain_json_valid = false;
+				}
+				if (!terrain_json_valid || !entity.add_terrain_component(terrain))
+				{
+					make_scene_error(
+						out_error,
+						"Scene contains an invalid TerrainComponent or Terrain transform.");
+					entity_components_valid = false;
+					break;
+				}
+			}
 		}
+		ASH_PROCESS_ERROR(entity_components_valid);
 
 		const EntityId saved_next_entity_id = root.value("next_entity_id", static_cast<EntityId>(0));
 		scene.m_impl->storage.next_entity_id = std::max(scene.m_impl->storage.next_entity_id, max_id + 1);
@@ -2313,6 +2568,7 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl);
 
+		const bool removed_terrain = entity_subtree_has_terrain(m_impl->storage, id);
 		bResult = destroy_entity_recursive(m_impl->storage, id);
 		if (bResult)
 		{
@@ -2320,6 +2576,10 @@ namespace AshEngine
 			mark_scene_storage_modified(m_impl->storage, SceneChangeKind::EntityRemoved, id);
 			// editor end
 			mark_scene_render_primitives_modified(m_impl->storage);
+			if (removed_terrain)
+			{
+				m_impl->storage.render_terrain_version = allocate_scene_change_version();
+			}
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -2335,6 +2595,10 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_impl && id != 0 && id != new_parent_id);
 		ASH_PROCESS_ERROR(find_handle(m_impl, id) != entt::null);
 		ASH_PROCESS_ERROR(new_parent_id == 0 || (find_handle(m_impl, new_parent_id) != entt::null && !is_scene_descendant(m_impl, id, new_parent_id)));
+		ASH_PROCESS_ERROR(
+			!entity_subtree_has_terrain(m_impl->storage, id) ||
+			entity_transform_chain_is_valid_for_terrain(
+				m_impl->storage, new_parent_id));
 
 		detach_from_current_siblings(m_impl->storage, id);
 		if (!attach_to_parent(m_impl->storage, id, new_parent_id, sibling_index))
@@ -2583,6 +2847,38 @@ namespace AshEngine
 			result.push_back(std::move(desc));
 		}
 
+		return result;
+	}
+
+	std::vector<SceneTerrainExtractionDesc> Scene::extract_terrain_entities() const
+	{
+		std::vector<SceneTerrainExtractionDesc> result{};
+		if (!m_impl)
+		{
+			return result;
+		}
+
+		for (EntityId id : m_impl->storage.entity_order)
+		{
+			const entt::entity handle = find_handle(m_impl, id);
+			if (handle == entt::null)
+			{
+				continue;
+			}
+
+			const TerrainComponent* terrain =
+				m_impl->storage.registry.try_get<TerrainComponent>(handle);
+			if (!terrain)
+			{
+				continue;
+			}
+
+			SceneTerrainExtractionDesc desc{};
+			desc.entity_id = id;
+			desc.terrain = *terrain;
+			desc.world_transform = get_entity_world_matrix(m_impl, id);
+			result.push_back(std::move(desc));
+		}
 		return result;
 	}
 
@@ -3065,6 +3361,19 @@ namespace AshEngine
 				};
 			}
 
+			if (const TerrainComponent* terrain =
+				m_impl->storage.registry.try_get<TerrainComponent>(handle))
+			{
+				entity_json["terrain"] =
+				{
+					{ "asset_path", terrain->asset_path },
+					{ "visible", terrain->visible },
+					{ "casts_shadow", terrain->casts_shadow },
+					{ "receives_shadow", terrain->receives_shadow },
+					{ "material_layer_overrides", terrain->material_layer_overrides },
+				};
+			}
+
 			root["entities"].push_back(std::move(entity_json));
 			for (EntityId child_id : hierarchy.children)
 			{
@@ -3184,6 +3493,11 @@ namespace AshEngine
 		return m_impl ? m_impl->storage.render_particle_version : 0;
 	}
 
+	uint64_t Scene::get_render_terrain_version() const
+	{
+		return m_impl ? m_impl->storage.render_terrain_version : 0;
+	}
+
 	uint64_t Scene::get_render_config_version() const
 	{
 		return m_impl ? m_impl->storage.render_config_version : 0;
@@ -3257,6 +3571,10 @@ namespace AshEngine
 			return !entity.has_environment_component();
 		case SceneComponentType::Particle:
 			return !entity.has_particle_component();
+		case SceneComponentType::Terrain:
+			// Terrain requires an explicit non-empty asset path, which this
+			// parameterless facade cannot provide.
+			return false;
 		default:
 			return false;
 		}
@@ -3284,6 +3602,8 @@ namespace AshEngine
 			return entity.has_environment_component();
 		case SceneComponentType::Particle:
 			return entity.has_particle_component();
+		case SceneComponentType::Terrain:
+			return entity.has_terrain_component();
 		default:
 			return false;
 		}
@@ -3308,6 +3628,8 @@ namespace AshEngine
 			return entity.add_environment_component({});
 		case SceneComponentType::Particle:
 			return entity.add_particle_component({});
+		case SceneComponentType::Terrain:
+			return false;
 		default:
 			return false;
 		}
@@ -3332,6 +3654,8 @@ namespace AshEngine
 			return entity.remove_environment_component();
 		case SceneComponentType::Particle:
 			return entity.remove_particle_component();
+		case SceneComponentType::Terrain:
+			return entity.remove_terrain_component();
 		default:
 			return false;
 		}
