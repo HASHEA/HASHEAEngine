@@ -14,6 +14,7 @@ namespace AshEngine
 	struct LightComponent;
 	struct MeshComponent;
 	struct ParticleComponent;
+	struct TerrainComponent;
 	struct TransformComponent;
 	class UIContext;
 }
@@ -28,6 +29,7 @@ namespace AshEditor
 	std::optional<AshEngine::MeshComponent> GetMeshComponentValue(const AshEngine::Entity& refEntity);
 	std::optional<AshEngine::EnvironmentComponent> GetEnvironmentComponentValue(const AshEngine::Entity& refEntity);
 	std::optional<AshEngine::ParticleComponent> GetParticleComponentValue(const AshEngine::Entity& refEntity);
+	std::optional<AshEngine::TerrainComponent> GetTerrainComponentValue(const AshEngine::Entity& refEntity);
 
 	bool ApplyCameraComponentValue(
 		AshEngine::Entity entity,
@@ -44,6 +46,9 @@ namespace AshEditor
 	bool ApplyParticleComponentValue(
 		AshEngine::Entity entity,
 		const std::optional<AshEngine::ParticleComponent>& optValue);
+	bool ApplyTerrainComponentValue(
+		AshEngine::Entity entity,
+		const std::optional<AshEngine::TerrainComponent>& optValue);
 
 	void DrawInspectorPanelIntro(
 		AshEngine::UIContext& refUi,

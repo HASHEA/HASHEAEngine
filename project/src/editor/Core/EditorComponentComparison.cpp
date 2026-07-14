@@ -120,4 +120,16 @@ namespace AshEditor
 			refLeft.random_seed == refRight.random_seed &&
 			refLeft.emitting == refRight.emitting;
 	}
+
+	bool TerrainComponentsEqual(
+		const AshEngine::TerrainComponent& refLeft,
+		const AshEngine::TerrainComponent& refRight)
+	{
+		return
+			refLeft.asset_path == refRight.asset_path &&
+			refLeft.visible == refRight.visible &&
+			refLeft.casts_shadow == refRight.casts_shadow &&
+			refLeft.receives_shadow == refRight.receives_shadow &&
+			refLeft.material_layer_overrides == refRight.material_layer_overrides;
+	}
 }

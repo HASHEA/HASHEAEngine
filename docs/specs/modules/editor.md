@@ -30,7 +30,7 @@ status: active
 - 事件：`EditorEventBus`（类型索引的同步事件总线，`Subscribe<T>/Unsubscribe/Publish<T>`，非线程安全），事件类型在 `Core/EditorEventTypes.h`/`EditorEvents.h`。
 - 上下文：`EditorContext`（SelectionService/SceneService/UIContext 指针）供命令执行；`EditorFrameContext` 携带 `AshEngine::UIContext*` 供每帧 GUI。
 - Services（全部，位于 `Services/`）：`AssetDatabaseService`、`AssetPreviewService`、`CommandService`、`DragDropTransferService`、`EditorGizmoService`（含 `EditorGizmoMath/Transform/Viewport/Style/SelectionUtils`、`MoveScaleGizmoTool`、`RotateGizmoTool`）、`EditorIconService`（接口 `IEditorIconService`）、`EditorSessionStateService`、`EditorSettingsService`、`EditorShortcutService`、`EditorViewportCameraService`、`EditorViewportService`、`SceneService`、`SelectionService`、`SelectionOverlayRenderer`、`UndoRedoService`。
-- Inspector：Camera/Light/Mesh/Environment/Particle 五类 component editor 经 `InspectorComponentEditorRegistry` 注册，Name/Transform 由固定 section 绘制；Particle 草稿可编辑容量、模拟、颜色/尺寸、混合和完整 uint32 seed，提交为 `SetParticleComponentCommand`。
+- Inspector：Camera/Light/Mesh/Environment/Particle/Terrain 六类 component editor 经 `InspectorComponentEditorRegistry` 注册，Name/Transform 由固定 section 绘制；Particle 草稿可编辑容量、模拟、颜色/尺寸、混合和完整 uint32 seed，提交为 `SetParticleComponentCommand`。Terrain 草稿编辑 `.AshTerrain` 资产、可见性、投射/接收阴影及固定八层材质覆盖，提交为 `SetTerrainComponentCommand`；空/错误类型资产、无效材质覆盖或 Terrain 层级中非零旋转/非正缩放会阻止提交。Terrain 的 entity snapshot 使用专用序列化保留八层覆盖，复制、删除恢复和 undo/redo 不丢字段。
 - readiness smoke：`Editor::_get_automation_readiness` 要求 bootstrap、UI renderer、AssetDatabase refresh 与 viewport presentation 同步成功；最终 ready 仍由 Application 的当前帧全 scene packet + asset epoch + present 公共契约证明。Editor 不生成 golden。
 
 ## 约束与不变式

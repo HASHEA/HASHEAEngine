@@ -125,6 +125,29 @@ namespace AshEditor
 			return entity.set_particle_component(*optValue);
 		}
 
+		bool ApplyTerrainComponentState(
+			AshEngine::Entity entity,
+			const std::optional<AshEngine::TerrainComponent>& optValue)
+		{
+			if (!entity.is_valid())
+			{
+				return false;
+			}
+
+			if (!optValue.has_value())
+			{
+				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Terrain);
+			}
+
+			if (!entity.has_terrain_component() &&
+				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Terrain))
+			{
+				return false;
+			}
+
+			return entity.set_terrain_component(*optValue);
+		}
+
 		SceneEntityId GetEntityParentId(const AshEngine::Entity& refEntity)
 		{
 			const AshEngine::Entity parentEntity = refEntity.get_parent();
@@ -717,6 +740,73 @@ namespace AshEditor
 	}
 
 	EditorCommandSelection SetParticleComponentCommand::GetSelectionAfterUndo() const
+	{
+		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
+	SetTerrainComponentCommand::SetTerrainComponentCommand(
+		SceneEntityId uEntityId,
+		std::optional<AshEngine::TerrainComponent> optBeforeValue,
+		std::optional<AshEngine::TerrainComponent> optAfterValue)
+		: _uEntityId(uEntityId)
+		, _optBeforeValue(std::move(optBeforeValue))
+		, _optAfterValue(std::move(optAfterValue))
+	{
+	}
+
+	const char* SetTerrainComponentCommand::GetLabel() const
+	{
+		if (!_optBeforeValue.has_value() && _optAfterValue.has_value())
+		{
+			return "Add Terrain Component";
+		}
+		if (_optBeforeValue.has_value() && !_optAfterValue.has_value())
+		{
+			return "Remove Terrain Component";
+		}
+		return "Edit Terrain Component";
+	}
+
+	bool SetTerrainComponentCommand::Execute(EditorContext& refContext)
+	{
+		if (!refContext.pSceneService || _uEntityId == 0 ||
+			OptionalComponentsEqual(_optBeforeValue, _optAfterValue, &TerrainComponentsEqual))
+		{
+			return false;
+		}
+
+		return ApplyTerrainComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optAfterValue);
+	}
+
+	bool SetTerrainComponentCommand::Undo(EditorContext& refContext)
+	{
+		return refContext.pSceneService && _uEntityId != 0 &&
+			ApplyTerrainComponentState(refContext.pSceneService->FindEntity(_uEntityId), _optBeforeValue);
+	}
+
+	bool SetTerrainComponentCommand::TryMerge(const EditorCommand& refSubsequentCommand)
+	{
+		const SetTerrainComponentCommand* pSubsequent =
+			dynamic_cast<const SetTerrainComponentCommand*>(&refSubsequentCommand);
+		if (!pSubsequent || pSubsequent->_uEntityId != _uEntityId ||
+			!_optBeforeValue.has_value() || !_optAfterValue.has_value() ||
+			!pSubsequent->_optBeforeValue.has_value() || !pSubsequent->_optAfterValue.has_value() ||
+			!TerrainComponentsEqual(*_optAfterValue, *pSubsequent->_optBeforeValue) ||
+			TerrainComponentsEqual(*_optBeforeValue, *pSubsequent->_optAfterValue))
+		{
+			return false;
+		}
+
+		_optAfterValue = pSubsequent->_optAfterValue;
+		return true;
+	}
+
+	EditorCommandSelection SetTerrainComponentCommand::GetSelectionAfterExecute() const
+	{
+		return EditorCommandSelection::Entity(_uEntityId);
+	}
+
+	EditorCommandSelection SetTerrainComponentCommand::GetSelectionAfterUndo() const
 	{
 		return EditorCommandSelection::Entity(_uEntityId);
 	}

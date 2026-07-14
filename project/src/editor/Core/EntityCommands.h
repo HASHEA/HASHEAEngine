@@ -179,6 +179,27 @@ namespace AshEditor
 		std::optional<AshEngine::ParticleComponent> _optAfterValue{};
 	};
 
+	class SetTerrainComponentCommand final : public EditorCommand
+	{
+	public:
+		SetTerrainComponentCommand(
+			SceneEntityId uEntityId,
+			std::optional<AshEngine::TerrainComponent> optBeforeValue,
+			std::optional<AshEngine::TerrainComponent> optAfterValue);
+
+		const char* GetLabel() const override;
+		bool Execute(EditorContext& refContext) override;
+		bool Undo(EditorContext& refContext) override;
+		bool TryMerge(const EditorCommand& refSubsequentCommand) override;
+		EditorCommandSelection GetSelectionAfterExecute() const override;
+		EditorCommandSelection GetSelectionAfterUndo() const override;
+
+	private:
+		SceneEntityId _uEntityId = 0;
+		std::optional<AshEngine::TerrainComponent> _optBeforeValue{};
+		std::optional<AshEngine::TerrainComponent> _optAfterValue{};
+	};
+
 	class CreateEntityCommand final : public EditorCommand
 	{
 	public:

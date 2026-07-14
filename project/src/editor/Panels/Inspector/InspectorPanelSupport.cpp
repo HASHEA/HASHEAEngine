@@ -195,6 +195,13 @@ namespace AshEditor
 			: std::nullopt;
 	}
 
+	std::optional<AshEngine::TerrainComponent> GetTerrainComponentValue(const AshEngine::Entity& refEntity)
+	{
+		return refEntity.has_terrain_component()
+			? std::optional<AshEngine::TerrainComponent>{ refEntity.get_terrain_component() }
+			: std::nullopt;
+	}
+
 	bool ApplyCameraComponentValue(
 		AshEngine::Entity entity,
 		const std::optional<AshEngine::CameraComponent>& optValue)
@@ -308,6 +315,29 @@ namespace AshEditor
 		}
 
 		return entity.set_particle_component(*optValue);
+	}
+
+	bool ApplyTerrainComponentValue(
+		AshEngine::Entity entity,
+		const std::optional<AshEngine::TerrainComponent>& optValue)
+	{
+		if (!entity.is_valid())
+		{
+			return false;
+		}
+
+		if (!optValue.has_value())
+		{
+			return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Terrain);
+		}
+
+		if (!entity.has_terrain_component() &&
+			!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Terrain))
+		{
+			return false;
+		}
+
+		return entity.set_terrain_component(*optValue);
 	}
 
 	void DrawInspectorPanelIntro(

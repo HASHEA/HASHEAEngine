@@ -2,12 +2,16 @@
 
 #include "Core/SceneComponentSerialization.h"
 
+#include <json.hpp>
+
 namespace AshEditor
 {
 	namespace SceneSnapshotComponentUtils
 	{
 		namespace
 		{
+			using json = nlohmann::json;
+
 			template<typename Component>
 			std::optional<SceneComponentSnapshot> MakeComponentSnapshot(
 				const AshEngine::SceneComponentType eType,
@@ -24,6 +28,55 @@ namespace AshEditor
 				snapshot.strSerializedValue =
 					SceneComponentSerialization::SerializeComponentPayload(&refComponent, *pComponentDesc);
 				return snapshot;
+			}
+
+			std::optional<SceneComponentSnapshot> MakeTerrainComponentSnapshot(
+				const AshEngine::TerrainComponent& refComponent)
+			{
+				SceneComponentSnapshot snapshot{};
+				snapshot.eType = AshEngine::SceneComponentType::Terrain;
+				snapshot.strSerializedValue = json{
+					{ "asset_path", refComponent.asset_path },
+					{ "visible", refComponent.visible },
+					{ "casts_shadow", refComponent.casts_shadow },
+					{ "receives_shadow", refComponent.receives_shadow },
+					{ "material_layer_overrides", refComponent.material_layer_overrides }
+				}.dump();
+				return snapshot;
+			}
+
+			bool ApplyTerrainComponentSnapshot(
+				AshEngine::Entity entity,
+				const SceneComponentSnapshot& refSnapshot)
+			{
+				try
+				{
+					const json value = json::parse(refSnapshot.strSerializedValue);
+					if (!value.is_object() || !value.contains("material_layer_overrides") ||
+						!value["material_layer_overrides"].is_array() ||
+						value["material_layer_overrides"].size() != AshEngine::TerrainComponent{}.material_layer_overrides.size())
+					{
+						return false;
+					}
+
+					AshEngine::TerrainComponent component{};
+					component.asset_path = value.at("asset_path").get<std::string>();
+					component.visible = value.at("visible").get<bool>();
+					component.casts_shadow = value.at("casts_shadow").get<bool>();
+					component.receives_shadow = value.at("receives_shadow").get<bool>();
+					for (size_t uIndex = 0; uIndex < component.material_layer_overrides.size(); ++uIndex)
+					{
+						component.material_layer_overrides[uIndex] =
+							value["material_layer_overrides"][uIndex].get<std::string>();
+					}
+					return entity.has_terrain_component()
+						? entity.set_terrain_component(component)
+						: entity.add_terrain_component(component);
+				}
+				catch (const json::exception&)
+				{
+					return false;
+				}
 			}
 
 			template<typename Component>
@@ -91,6 +144,8 @@ namespace AshEditor
 					return !entity.has_environment_component() || entity.remove_environment_component();
 				case AshEngine::SceneComponentType::Particle:
 					return !entity.has_particle_component() || entity.remove_particle_component();
+				case AshEngine::SceneComponentType::Terrain:
+					return !entity.has_terrain_component() || entity.remove_terrain_component();
 				default:
 					return true;
 				}
@@ -139,6 +194,10 @@ namespace AshEditor
 				return refEntity.has_particle_component()
 					? MakeComponentSnapshot(eType, refEntity.get_particle_component())
 					: std::nullopt;
+			case AshEngine::SceneComponentType::Terrain:
+				return refEntity.has_terrain_component()
+					? MakeTerrainComponentSnapshot(refEntity.get_terrain_component())
+					: std::nullopt;
 			default:
 				return std::nullopt;
 			}
@@ -173,6 +232,7 @@ namespace AshEditor
 				AshEngine::SceneComponentType::Mesh,
 				AshEngine::SceneComponentType::Environment,
 				AshEngine::SceneComponentType::Particle,
+				AshEngine::SceneComponentType::Terrain,
 			};
 			for (const AshEngine::SceneComponentType eType : arrOptionalTypes)
 			{
@@ -249,6 +309,12 @@ namespace AshEditor
 						&AshEngine::Entity::has_particle_component,
 						&AshEngine::Entity::set_particle_component,
 						&AshEngine::Entity::add_particle_component))
+					{
+						return false;
+					}
+					break;
+				case AshEngine::SceneComponentType::Terrain:
+					if (!ApplyTerrainComponentSnapshot(entity, refComponentSnapshot))
 					{
 						return false;
 					}

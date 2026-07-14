@@ -11,8 +11,25 @@
 #include <memory>
 #include <optional>
 
+#include <cmath>
+
 namespace AshEditor
 {
+	namespace
+	{
+		bool TerrainTransformSupportsComponent(const AshEngine::TransformComponent& refTransform)
+		{
+			return
+				std::isfinite(refTransform.position.x) &&
+				std::isfinite(refTransform.position.y) &&
+				std::isfinite(refTransform.position.z) &&
+				refTransform.rotation_euler_degrees == glm::vec3(0.0f) &&
+				std::isfinite(refTransform.scale.x) && refTransform.scale.x > 0.0f &&
+				std::isfinite(refTransform.scale.y) && refTransform.scale.y > 0.0f &&
+				std::isfinite(refTransform.scale.z) && refTransform.scale.z > 0.0f;
+		}
+	}
+
 	void InspectorPanel::ResetEntityDrafts()
 	{
 		InspectorPanelState& state = GetState();
@@ -23,6 +40,7 @@ namespace AshEditor
 		state.draftMesh = {};
 		state.draftEnvironment = {};
 		state.draftParticle = {};
+		state.draftTerrain = {};
 	}
 
 	void InspectorPanel::ResetIdentityDraftToLive(const AshEngine::Entity& entity)
@@ -201,6 +219,36 @@ namespace AshEditor
 		SanitizeOptionalParticleComponent(state.draftParticle.optCurrentValue);
 	}
 
+	void InspectorPanel::ResetTerrainDraftToLive(const AshEngine::Entity& entity)
+	{
+		if (!entity.is_valid())
+		{
+			return;
+		}
+
+		InspectorPanelState& state = GetState();
+		state.draftTerrain.uEntityId = entity.get_id();
+		state.draftTerrain.optOriginalValue = GetTerrainComponentValue(entity);
+		state.draftTerrain.optCurrentValue = state.draftTerrain.optOriginalValue;
+	}
+
+	void InspectorPanel::ResetTerrainDraftToDefaults(const AshEngine::Entity& entity)
+	{
+		if (!entity.is_valid())
+		{
+			return;
+		}
+
+		InspectorPanelState& state = GetState();
+		state.draftTerrain.uEntityId = entity.get_id();
+		const AshEngine::TerrainComponent defaults{};
+		AshEngine::TerrainComponent value = state.draftTerrain.optCurrentValue.value_or(defaults);
+		const std::string assetPath = value.asset_path;
+		value = defaults;
+		value.asset_path = assetPath;
+		state.draftTerrain.optCurrentValue = std::move(value);
+	}
+
 	void InspectorPanel::SyncEntityDrafts(const AshEngine::Entity& refEntity)
 	{
 		InspectorPanelState& state = GetState();
@@ -333,6 +381,26 @@ namespace AshEditor
 		}
 	}
 
+	void InspectorPanel::SyncTerrainDraft(const AshEngine::Entity& refEntity)
+	{
+		InspectorPanelState& state = GetState();
+		const std::optional<AshEngine::TerrainComponent> optLiveValue = GetTerrainComponentValue(refEntity);
+		if (state.draftTerrain.uEntityId != refEntity.get_id())
+		{
+			state.draftTerrain.uEntityId = refEntity.get_id();
+			state.draftTerrain.optOriginalValue = optLiveValue;
+			state.draftTerrain.optCurrentValue = optLiveValue;
+		}
+		else if (OptionalComponentsEqual(
+			state.draftTerrain.optCurrentValue,
+			state.draftTerrain.optOriginalValue,
+			&TerrainComponentsEqual))
+		{
+			state.draftTerrain.optOriginalValue = optLiveValue;
+			state.draftTerrain.optCurrentValue = optLiveValue;
+		}
+	}
+
 	bool InspectorPanel::HasPendingIdentityChanges() const
 	{
 		const InspectorPanelState& state = GetState();
@@ -388,6 +456,15 @@ namespace AshEditor
 			state.draftParticle.optCurrentValue,
 			state.draftParticle.optOriginalValue,
 			&ParticleComponentsEqual);
+	}
+
+	bool InspectorPanel::HasPendingTerrainChanges() const
+	{
+		const InspectorPanelState& state = GetState();
+		return !OptionalComponentsEqual(
+			state.draftTerrain.optCurrentValue,
+			state.draftTerrain.optOriginalValue,
+			&TerrainComponentsEqual);
 	}
 
 	bool InspectorPanel::CommitIdentityDraft(AshEngine::Entity entity)
@@ -660,6 +737,44 @@ namespace AshEditor
 
 		HLogWarning("InspectorPanel failed to commit Particle changes. Entity={}.", uEntityId);
 		state.draftParticle.optCurrentValue = state.draftParticle.optOriginalValue;
+		return false;
+	}
+
+	bool InspectorPanel::CommitTerrainDraft(AshEngine::Entity entity)
+	{
+		InspectorPanelState& state = GetState();
+		if (!entity.is_valid() || !HasPendingTerrainChanges() ||
+			(state.draftTerrain.optCurrentValue.has_value() &&
+				(state.draftTerrain.optCurrentValue->asset_path.empty() ||
+				 !TerrainTransformSupportsComponent(entity.get_transform_component()))))
+		{
+			return false;
+		}
+
+		if (!_deps.pCommandExecutor)
+		{
+			HLogWarning(
+				"InspectorPanel refused a non-undoable Terrain component edit. Entity={}.",
+				static_cast<unsigned long long>(entity.get_id()));
+			state.draftTerrain.optCurrentValue = state.draftTerrain.optOriginalValue;
+			return false;
+		}
+
+		const bool bApplied = _deps.pCommandExecutor->ExecuteCommand(
+			std::make_unique<SetTerrainComponentCommand>(
+				entity.get_id(),
+				state.draftTerrain.optOriginalValue,
+				state.draftTerrain.optCurrentValue));
+		if (bApplied)
+		{
+			state.draftTerrain.optOriginalValue = state.draftTerrain.optCurrentValue;
+			return true;
+		}
+
+		HLogWarning(
+			"InspectorPanel failed to commit Terrain changes. Entity={}.",
+			static_cast<unsigned long long>(entity.get_id()));
+		state.draftTerrain.optCurrentValue = state.draftTerrain.optOriginalValue;
 		return false;
 	}
 }
