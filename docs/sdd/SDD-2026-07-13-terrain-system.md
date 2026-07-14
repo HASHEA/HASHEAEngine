@@ -496,6 +496,7 @@ Render golden 只能在用户目视确认预期画面后通过 `RunRenderGate.ba
    - 增加 Scene v6 `TerrainComponent`、RenderTerrainProxy、可见帧数据和 readiness。
    - 实现 height buffer、weight atlas compute update、texture arrays、LOD batches、shadow/GBuffer/debug view。
    - 验收：双后端 validation、readiness smoke、RenderGate 临时 capture 通过；不 bless 未确认画面。
+   - 2026-07-14 exit gate：Vulkan core/synchronization validation 与 DX12 GPU validation 的 Terrain readiness capture 均零 validation/error/warning；既有 RenderGate 与 Standard PerfGate 四组合 PASS，未 bless。Standard 历史 baseline 缺失，故该 PerfGate 只证明本次运行健康，300 FPS 与历史回归仍属于 Phase 4。
 4. **Phase 3：Editor authoring**
    - 实现 Terrain Mode、Inspector、TerrainEditorService、overlay 和 TerrainStrokeCommand。
    - 完成 7 工具/6 kernel family、layer 管理、undo/redo、save/reload/conflict UI。
