@@ -36,6 +36,28 @@ namespace AshEngine
 			return runtimeConfig;
 		}
 
+		static auto is_runtime_validation_enabled(
+			RHI::Backend backend,
+			const RHI::RuntimeRHIConfig& config) -> bool
+		{
+#if defined(ASH_DEBUG)
+			switch (backend)
+			{
+			case RHI::Backend::Vulkan:
+				return config.vulkanValidation.enableValidation;
+			case RHI::Backend::DirectX12:
+				return config.dx12Validation.enableDebugLayer;
+			case RHI::Backend::Default:
+			default:
+				return false;
+			}
+#else
+			(void)backend;
+			(void)config;
+			return false;
+#endif
+		}
+
 	}
 
 	Application* Application::app = nullptr;
@@ -62,11 +84,17 @@ namespace AshEngine
 		{
 			return true;
 		}
+		EngineInitConfig resolvedConfig = config;
+		if (hasWindowExtentOverride)
+		{
+			resolvedConfig.initWidth = windowExtentOverrideWidth;
+			resolvedConfig.initHeight = windowExtentOverrideHeight;
+		}
 
 		ASH_PROCESS_GUARD_BEGIN(bool, bResult, true);
 		app = this;
-		initConfig = config;
-		threadingConfig = config.threading;
+		initConfig = resolvedConfig;
+		threadingConfig = resolvedConfig.threading;
 
 		/*init at very first to ensure log*/
 		if (!logServiceInitialized)
@@ -93,21 +121,61 @@ namespace AshEngine
 			HLogWarning("Logic-thread mode was requested but is unavailable because engine threading initialization did not complete.");
 		}
 
-		const RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(config);
-		const RenderFeatureConfig runtimeRenderFeatureConfig = load_runtime_render_feature_config(config.backendConfigPath);
+		RHI::RuntimeRHIConfig runtimeRhiConfig = resolve_application_rhi_config(resolvedConfig);
+		RenderFeatureConfig runtimeRenderFeatureConfig = load_runtime_render_feature_config(resolvedConfig.backendConfigPath);
+		switch (pendingPerfGateConfig.vsync)
+		{
+		case PerfGateBooleanOverride::On:
+			runtimeRenderFeatureConfig.set_enabled(RenderSwitch::VSync, true);
+			break;
+		case PerfGateBooleanOverride::Off:
+			runtimeRenderFeatureConfig.set_enabled(RenderSwitch::VSync, false);
+			break;
+		case PerfGateBooleanOverride::Inherit:
+		default:
+			break;
+		}
+		switch (pendingPerfGateConfig.validation)
+		{
+		case PerfGateBooleanOverride::On:
+			runtimeRhiConfig.vulkanValidation.enableValidation = true;
+			runtimeRhiConfig.vulkanValidation.enableGpuAssisted = false;
+			runtimeRhiConfig.vulkanValidation.enableSynchronizationValidation = true;
+			runtimeRhiConfig.vulkanValidation.breakOnValidationError = false;
+			runtimeRhiConfig.dx12Validation.enableDebugLayer = true;
+			runtimeRhiConfig.dx12Validation.enableGpuValidation = true;
+			break;
+		case PerfGateBooleanOverride::Off:
+			runtimeRhiConfig.vulkanValidation.enableValidation = false;
+			runtimeRhiConfig.vulkanValidation.enableGpuAssisted = false;
+			runtimeRhiConfig.vulkanValidation.enableSynchronizationValidation = false;
+			runtimeRhiConfig.vulkanValidation.breakOnValidationError = false;
+			runtimeRhiConfig.dx12Validation.enableDebugLayer = false;
+			runtimeRhiConfig.dx12Validation.enableGpuValidation = false;
+			break;
+		case PerfGateBooleanOverride::Inherit:
+		default:
+			break;
+		}
 		set_runtime_render_feature_config(runtimeRenderFeatureConfig);
 		const bool runtimeVsync = runtimeRenderFeatureConfig.is_enabled(RenderSwitch::VSync);
-		const RenderDebugViewConfig renderDebugViewConfig = load_runtime_render_debug_view_config(config.backendConfigPath);
+		const RenderDebugViewConfig renderDebugViewConfig = load_runtime_render_debug_view_config(resolvedConfig.backendConfigPath);
 		set_runtime_render_debug_view_config(renderDebugViewConfig);
 		const EnvironmentLightingConfig environmentLightingConfig =
-			load_runtime_environment_lighting_config(config.backendConfigPath);
+			load_runtime_environment_lighting_config(resolvedConfig.backendConfigPath);
 		set_runtime_environment_lighting_config(environmentLightingConfig);
 		const RHI::Backend resolvedBackend = runtimeRhiConfig.backend;
+		const bool runtimeValidation = is_runtime_validation_enabled(resolvedBackend, runtimeRhiConfig);
 		activeBackend = resolvedBackend;
 		HLogInfo("Initializing engine RHI backend: {}", RHI::backend_to_string(resolvedBackend));
 
 		/*window*/
-		WindowConfig windowConfig = { config.initWidth, config.initHeight, runtimeVsync, config.title, resolvedBackend };
+		WindowConfig windowConfig = {
+			resolvedConfig.initWidth,
+			resolvedConfig.initHeight,
+			runtimeVsync,
+			resolvedConfig.title,
+			resolvedBackend };
 		window = Window::create();
 		if (!window)
 		{
@@ -126,6 +194,8 @@ namespace AshEngine
 		gfxConfig.window = window->get_native_interface();
 		gfxConfig.width = window->get_width();
 		gfxConfig.height = window->get_height();
+		gfxConfig.enableGpuTimingTelemetry = pendingPerfGateConfig.enabled &&
+			pendingPerfGateConfig.gpu_timing == PerfGateBooleanOverride::On;
 		gfxConfig.backend = resolvedBackend;
 		gfxConfig.vulkanValidation = runtimeRhiConfig.vulkanValidation;
 		gfxConfig.dx12Validation = runtimeRhiConfig.dx12Validation;
@@ -165,7 +235,7 @@ namespace AshEngine
 			std::vector<RHI::AshPresentMode>{ RHI::ASH_PRESENT_MODE_MAILBOX_KHR, RHI::ASH_PRESENT_MODE_IMMEDIATE_KHR, RHI::ASH_PRESENT_MODE_FIFO_KHR };
 		HLogInfo("Runtime present sync config loaded. vsync={}.", runtimeVsync ? "true" : "false");
 		RHI::SwapChainInitConfig scConfig{};
-		scConfig.swapchainBufferCount = config.swapchainBufferCount;
+		scConfig.swapchainBufferCount = resolvedConfig.swapchainBufferCount;
 		scConfig.window = window->get_native_interface();
 		scConfig.width = window->get_width();
 		scConfig.height = window->get_height();
@@ -210,26 +280,45 @@ namespace AshEngine
 		}
 		uiContext = new UIContext();
 		UIContextConfig uiConfig{};
-		uiConfig.ini_path = config.uiIniPath;
-		uiConfig.theme_preset = config.uiThemePreset;
-		uiConfig.theme_id = config.uiThemeId;
-		uiConfig.theme_definition = config.uiThemeDefinition;
+		uiConfig.ini_path = resolvedConfig.uiIniPath;
+		uiConfig.theme_preset = resolvedConfig.uiThemePreset;
+		uiConfig.theme_id = resolvedConfig.uiThemeId;
+		uiConfig.theme_definition = resolvedConfig.uiThemeDefinition;
 		// editor begin 修改原因：把编辑器多视口开关注入 UIContext，允许 Dock 面板拖出为系统窗口。
-		uiConfig.enable_viewports = config.bUiEnableViewports;
+		uiConfig.enable_viewports = resolvedConfig.bUiEnableViewports;
 		// editor end
 		// editor begin 修改原因：把编辑器字体配置注入 UIContext，支持中文与强调字重的编辑器排版。
-		uiConfig.font_path = config.uiFontPath;
-		uiConfig.font_merge_path = config.uiFontMergePath;
-		uiConfig.strong_font_path = config.uiStrongFontPath;
-		uiConfig.strong_font_merge_path = config.uiStrongFontMergePath;
-		uiConfig.font_size_pixels = config.uiFontSizePixels;
-		uiConfig.use_full_chinese_glyph_range = config.bUiUseFullChineseGlyphRange;
+		uiConfig.font_path = resolvedConfig.uiFontPath;
+		uiConfig.font_merge_path = resolvedConfig.uiFontMergePath;
+		uiConfig.strong_font_path = resolvedConfig.uiStrongFontPath;
+		uiConfig.strong_font_merge_path = resolvedConfig.uiStrongFontMergePath;
+		uiConfig.font_size_pixels = resolvedConfig.uiFontSizePixels;
+		uiConfig.use_full_chinese_glyph_range = resolvedConfig.bUiUseFullChineseGlyphRange;
 		// editor end
 		if (!uiContext->init(window, graphicsContext, renderDevice, uiConfig))
 		{
 			HLogWarning("UIContext initialization failed. Engine UI facade will remain disabled.");
 			delete uiContext;
 			uiContext = nullptr;
+		}
+		PerfGateConfig resolvedPerfGateConfig = pendingPerfGateConfig;
+		resolvedPerfGateConfig.resolved_width = swapChain->get_width();
+		resolvedPerfGateConfig.resolved_height = swapChain->get_height();
+		resolvedPerfGateConfig.resolved_vsync = runtimeVsync;
+		resolvedPerfGateConfig.resolved_validation = runtimeValidation;
+		perfGateController.configure(resolvedPerfGateConfig, resolvedConfig.title, activeBackend);
+		if (pendingPerfGateConfig.enabled || hasWindowExtentOverride ||
+			pendingPerfGateConfig.vsync != PerfGateBooleanOverride::Inherit ||
+			pendingPerfGateConfig.validation != PerfGateBooleanOverride::Inherit ||
+			pendingPerfGateConfig.gpu_timing != PerfGateBooleanOverride::Inherit)
+		{
+			HLogInfo(
+				"Launch overrides resolved. extent={}x{}, vsync={}, validation={}, gpu_timing={}.",
+				resolvedPerfGateConfig.resolved_width,
+				resolvedPerfGateConfig.resolved_height,
+				resolvedPerfGateConfig.resolved_vsync ? "on" : "off",
+				resolvedPerfGateConfig.resolved_validation ? "on" : "off",
+				gfxConfig.enableGpuTimingTelemetry ? "on" : "off");
 		}
 		initialized = true;
 		ASH_PROCESS_GUARD_END(bResult, false);
@@ -327,7 +416,13 @@ namespace AshEngine
 	}
 	auto Application::configure_perf_gate(const PerfGateConfig& config) -> void
 	{
-		perfGateController.configure(config, initConfig.title, activeBackend);
+		pendingPerfGateConfig = config;
+	}
+	auto Application::set_window_extent_override(uint16_t width, uint16_t height) -> void
+	{
+		windowExtentOverrideWidth = width;
+		windowExtentOverrideHeight = height;
+		hasWindowExtentOverride = width > 0 && height > 0;
 	}
 	auto Application::set_frame_dump_path(std::string path) -> void
 	{

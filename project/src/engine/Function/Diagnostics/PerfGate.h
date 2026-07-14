@@ -14,14 +14,35 @@
 
 namespace AshEngine
 {
+	enum class PerfGateBooleanOverride : uint8_t
+	{
+		Inherit = 0,
+		Off,
+		On
+	};
+
 	struct PerfGateConfig
 	{
 		bool enabled = false;
+		bool valid = true;
 		std::string profile = "Standard";
 		std::string output_path{};
 		std::string target_name{};
 		double warmup_seconds = 10.0;
 		double sample_seconds = 30.0;
+		double drain_seconds = 5.0;
+		PerfGateBooleanOverride gpu_timing = PerfGateBooleanOverride::Inherit;
+		PerfGateBooleanOverride validation = PerfGateBooleanOverride::Inherit;
+		PerfGateBooleanOverride vsync = PerfGateBooleanOverride::Inherit;
+#if defined(ASH_DEBUG) || defined(ASH_APP_DEBUG)
+		std::string configuration = "Debug";
+#else
+		std::string configuration = "Release";
+#endif
+		uint32_t resolved_width = 0;
+		uint32_t resolved_height = 0;
+		bool resolved_vsync = false;
+		bool resolved_validation = false;
 	};
 
 	struct PerfGateFrameTimeSummary

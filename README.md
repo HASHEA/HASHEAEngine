@@ -57,6 +57,8 @@ run.bat sandbox <vulkan|dx12> Debug --smoke-test-seconds=120 --rhi-selftest-cons
 
 最后一条是 opt-in 的双后端 constant-buffer 可见性诊断；CI 会在 WARP/lavapipe 上把它与 indirect 自测独立执行。每次进程运行会在 `product/logs` 生成 session 后缀相同且不会覆盖旧会话的 Engine/Application 日志对，矩阵证据审计规则见 `docs/VERIFY.md`。按变更类型的完整验证矩阵同样见该文档；渲染改动必须双后端验证。
 
+PerfGate 的 `--window-width/--window-height` 必须成对给出；`--perf-gate-gpu-timing/validation/vsync=on|off` 与时长参数只覆盖当前进程，不改写 `Engine.ini`。GPU timing 仅在启用 PerfGate 且显式为 `on` 时向 RHI 请求启用（结构化双后端采集仍在 Phase 0 后续任务中），validation 的实际启用状态仍受 Debug/Release 编译能力约束。
+
 ## 文档
 
 | 入口 | 内容 |

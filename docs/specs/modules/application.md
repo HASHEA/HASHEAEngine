@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-13
 status: active
 ---
 
@@ -25,7 +25,7 @@ status: active
 ### 生命周期
 
 - `Application(EngineInitConfig)` → `initialize()` → `start()`（阻塞跑主循环并返回运行成功/失败）→ 析构/`_shutdown_runtime()`；EntryPoint 将失败映射为非零进程退出码。
-- `initialize` 顺序：LogService → MemoryService → threading（当前线程注册为 Render 角色）→ 解析 RHI 配置（Engine.ini + `initConfig.backend` 覆盖，路径默认 `product/config/Engine.ini`）→ 渲染 feature/debug view/环境光配置 → `Window::create` → `GraphicsContext::create` → `Swapchain::create` → RenderDevice/Renderer → `UIContext`。
+- `initialize` 顺序：LogService → MemoryService → threading（当前线程注册为 Render 角色）→ 解析 RHI 配置（Engine.ini + `initConfig.backend` 覆盖，路径默认 `product/config/Engine.ini`）并应用本进程 PerfGate validation/vsync override → 发布同一份渲染 feature 配置 → `Window::create` → `GraphicsContext::create`（按需启用 GPU timing）→ `Swapchain::create` → RenderDevice/Renderer → `UIContext`。窗口 extent 在创建 Window 前合并进 `EngineInitConfig`；用于报告的 resolved extent 必须取初始化后的 Swapchain 实际尺寸，而不是 GLFW 请求尺寸。`PerfGateController` 只在上述初始化成功末尾配置，初始化失败不得写出误导性的 0-sample 正常报告。
 - 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → readiness 观察 → 帧计数。`--smoke-test-seconds` 在第一个完整 ready+present-completed 帧提前成功，秒数只作硬失败上限；PerfGate 采样窗口与显式 `--run-for-*` watchdog 仍可请求正常退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。acquire 与 present 结果从 RHI 以同一三态传播：Completed 才继续录制或满足 readiness，Retryable 跳过本帧并等下一帧，Failed 立即终止并返回非零；acquire Retryable 不消费已 arm 的 capture，DXGI OCCLUDED 是成功 present 状态。
 - 可选 logic 线程：`EngineThreadingConfig.enable_logic_thread` 开启，输入经快照（`_publish/_consume_logic_input_snapshot`）跨线程传递；尚未消费的 render-frame 快照按“最新 down/位置、OR pressed/released、累加 scroll”合并，每批瞬态只允许一次 `_on_logic_update()` 观察，持续状态保留到新快照；logic 线程异常会被捕获并终止主循环。
 - 应用侧扩展点：`_on_startup/_on_update/_on_gui/_on_render/_on_logic_*/_on_shutdown` 等虚函数。
@@ -39,13 +39,14 @@ status: active
 | `--run-for-seconds=S` / `--run-for-frames=N` | 显式固定时长/帧数运行，供 PerfGate watchdog、soak 或调试使用；到达上限是正常退出，不代表 readiness 成功 |
 | `--smoke-test[=N]` | deprecated 的 `--run-for-frames=N` 别名（裸选项 N=3）；`ASH_ENGINE_SMOKE_TEST_FRAMES` 同样仅是旧 fixed-run 别名并打印告警 |
 | `--rhi=<vulkan\|vk\|directx12\|dx12\|d3d12>` | 后端覆盖，经 `set_backend_override` 在 `initialize()` 之前注入（顺序是硬约束）；非法值直接退出码 1 |
+| `--window-width=W --window-height=H` | 本进程窗口 extent 覆盖；两项必须成对出现且各自位于 `1..65535`，缺项、0、负数或越界都在 `create_application()` 前失败；是否启用 PerfGate 不影响该覆盖 |
 | `--dump-frame=<png>` | 隐式启用 readiness capture；通常配 `--smoke-test-seconds=S`，未给 S 时默认 120 秒。只有通过 epoch 双重复核的 capture 才原子发布 PNG，超时/失败会删除旧目标并非零退出 |
 | `--scene=<json>` | 场景路径覆盖，应用层经 `get_scene_path_override()` 消费 |
 | `--engine-self-test` | 只跑 Base 自测后退出 |
 | `--rhi-selftest-indirect` | opt-in 的首帧前双后端 indirect draw/dispatch GPU 诊断；失败设置既有 runtime-failure 状态并使 readiness smoke 非零退出 |
 | `--rhi-selftest-constant-buffer` | opt-in 的首帧前双后端 constant-buffer 可见性 GPU 诊断；setup、命令录制、校验或读回任一失败均设置既有 runtime-failure 状态并使 readiness smoke 非零退出。与 `--rhi-selftest-indirect` 相互独立；两项同时请求时都会执行，任一失败均在 `_on_startup()` 与首帧前 fail-fast |
 | `--bake-ashibl <src.hdr> <out.ashibl> [...]` | IBL 离线烘焙子命令，跑完即退出 |
-| PerfGate 系列 | `parse_perf_gate_config` 解析后 `configure_perf_gate` |
+| PerfGate 系列 | `--perf-gate` 与 `--perf-gate-gpu-timing/validation/vsync=on\|off`、`--perf-gate-{warmup,sample,drain}-seconds=S` 在创建应用前严格解析；识别到但缺少 `=` 值的选项直接失败，validation/vsync 未给时继承运行时配置，时长必须有限且大于 0。合法配置无条件在 initialize 前存为 pending，validation/vsync 显式值不因 `--perf-gate` 缺失而丢失；GPU timing 未显式请求时保持 off，仅在同时给出 `--perf-gate` 与 `--perf-gate-gpu-timing=on` 时向 RHI 请求启用。resolved validation 记录编译后端的实际能力（Release 两后端均为 false），而非仅记录请求值。所有覆盖只作用于当前进程，不写 `Engine.ini` |
 
 - 工作目录：`main` 先 `init_dir()`——从当前目录向上（≤16 层）找同时含 `AshEngine.sln`、`project/`、`product/` 的仓库根并 `fs::current_path` 切过去；全部相对路径以仓库根为基准。
 
@@ -70,7 +71,7 @@ status: active
 
 ## 约束与不变式
 
-- `set_backend_override` 必须在 `initialize()` 之前调用，之后无效。
+- backend、window extent、PerfGate、scene 与两个 RHI self-test 请求必须在 `initialize()` 之前注入；readiness/run watchdog 与 frame dump 控制在成功初始化之后注入。EntryPoint 必须在 `create_application()` 前拒绝非法 automation、extent、PerfGate 或 RHI 参数。
 - Editor 及其他上层 UI 代码禁止绕过 `UIContext` 直接调用 ImGui 或 Graphics；需要新能力时给 `UIContext` 加封装接口。
 - `Application` 是全局单例（`Application::app`）；主循环线程即 render 线程，渲染命令只能在该线程 pump。
 - readiness automation 未成功前的窗口关闭、logic/render/scene/资产/capture 失败或超时均返回非零；固定 `--run-for-*` 不得冒充 smoke 成功。
@@ -89,3 +90,4 @@ status: active
 - [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 `--rhi/--dump-frame/--scene` 命令行与抓帧模式 overlay 隐藏。
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：以 readiness + asset epoch + 当前帧提交快照替代固定帧成功条件。
 - [SDD-2026-07-12-logic-input-consumption](../../sdd/SDD-2026-07-12-logic-input-consumption.md)：修正 logic mailbox 的瞬态重复/覆盖丢失，并定义消费批次边界。
+- [SDD-2026-07-13-gpu-performance-observability](../../sdd/SDD-2026-07-13-gpu-performance-observability.md)：新增成对 extent 与 PerfGate tri-state 启动覆盖，并把所有影响 Window/RHI 的配置前移到 initialize 前。

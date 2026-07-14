@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-13
 status: active
 ---
 
@@ -22,7 +22,8 @@ status: active
 | `RasterizerConvention.h` | mesh winding → 各 API front-face 的唯一映射点（SPIR-V `-fvk-invert-y` 差异收口处） |
 | `ShaderCompiler.h`、`DXC/DXCHelper.*`、`DXC/DXCIncludeHandler.*` | `ShaderCompiler` 接口、`AshDXCContext` DXC 封装与 include 解析 |
 | `ShaderCache.h/.cpp` | shader/pipeline 缓存格式：SHA1 摘要、`ShaderCacheIndexHeader`、`PipelineCacheFileHeaderV2`，缓存目录 `product/caches/ShaderCaches/{vulkan,dx12}` |
-| `GpuProfilerRHI.h/.cpp` | GPU 计时抽象 |
+| `GpuProfilerRHI.h/.cpp` | Tracy GPU profiler 抽象 |
+| `GpuTimingTelemetryRHI.h/.cpp` | PerfGate 按需 GPU timing 契约、固定 metric/frame 状态与后端无关 sample/info 类型 |
 | `Vulkan/` | `VulkanContext/VulkanSwapchain/Vulkan*` 全套实现 + `VulkanShaderCompiler`（HLSL→SPIR-V） |
 | `DirectX12/` | `DX12Context/DX12Swapchain/DX12*` 全套实现 + `DX12ShaderCompiler`（HLSL→DXIL） |
 | `Shaders/AshVertexDeclLocations.hlsli` | 顶点声明 location 约定 |
@@ -31,6 +32,7 @@ status: active
 
 - 后端选择：`RHI::load_runtime_rhi_config(configPath)` 读 Engine.ini —— `[RHI] Backend`（内部 `parse_backend_name` 接受 `vulkan/vk/directx12/dx12/d3d12`，大小写不敏感，非法值回退编译期默认并告警）、`[VulkanValidation]`（Enabled/GpuAssisted/SynchronizationValidation/BreakOnValidationError）、`[DX12Validation]`（Enabled/GpuValidation，非 Debug 构建强制关闭）。`resolve_runtime_backend` 处理未编译后端的回退；Windows 默认后端为 DX12。
 - 工厂：`GraphicsContext::create(Backend)`、`Swapchain::create(Backend)` 按解析后端实例化对应后端对象。
+- GPU timing 初始化：`GraphicsContextInitConfig.enableGpuTimingTelemetry` 默认 false；Application 仅在 PerfGate 已启用且显式请求 `gpu-timing=on` 时置 true，普通运行和仅给 timing override 而未启用 PerfGate 的运行都不得创建或启用这套 telemetry。validation 的 Vulkan/DX12 两份 resolved config 与该开关一起在 `GraphicsContext::init` 前注入；resolved validation 元数据必须反映后端实际编译能力，Release 构建即使收到 `validation=on` 请求也记录 false。
 - 设备接口（`GraphicsContext`）：`init/shutdown/destroy`、`create_shader/buffer/buffer_view/texture/texture_view/render_pass/framebuffer/graphics_render_program/compute_render_program/sampler`、`get_sampler(AshSamplerState)`、`begin_frame/end_frame`、`get_command_buffer(threadIdx)`、`wait_idle`、带纳秒上限的 `wait_for_frame_completion`、`get_render_memory_stats`。资源以 `std::shared_ptr` 交付。
 - 命令接口（`CommandBuffer`）：barrier（`cmd_transition_resource_state`）、render pass（`cmd_begin/end_render_pass`，debug_scope_name 用于 RenderDoc/PIX 标签）、绑定/draw/dispatch/copy/update 全家族；错误经 `has_error()/get_last_error()` 暴露。
 - Readback（SDD-2026-07-07-render-gate 新增，验证/调试用途，非热路径）：`CommandBuffer::cmd_copy_texture_to_buffer(source, destination, buffer_offset, row_pitch_bytes)` 把 mip0/layer0 整层拷入 CPU 可读 buffer，仅支持 4 字节颜色格式（RGBA8/BGRA8），row pitch 须 ≥ width*4 且为 256 的倍数（D3D12 约束）；另有区域版 `cmd_copy_texture_region_to_buffer`。上层 backbuffer 回读封装在 `Function/Render` 的 RenderDevice（`request_back_buffer_capture/fetch_back_buffer_capture`）；fetch 必须传有限 timeout，并通过 `wait_for_frame_completion` 只等待产生该 readback 的当前 graphics frame，禁止用无上限的 device `wait_idle`。
@@ -71,4 +73,5 @@ status: active
 - [SDD-2026-07-09-vulkan-optional-device-caps Vulkan 设备能力分级](../../sdd/SDD-2026-07-09-vulkan-optional-device-caps.md)：sparse binding 从 boot 硬断言降级为可选能力位（CI lavapipe 冒烟撞出）,确立必需/可选能力分级原则。
 - [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 backbuffer 回读 RHI 接口与双后端实现。
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：新增双后端 acquire/present 三态结果、Vulkan no-image 同步闭环并传播到 readiness。
+- [SDD-2026-07-13-gpu-performance-observability](../../sdd/SDD-2026-07-13-gpu-performance-observability.md)：新增默认关闭、仅由 PerfGate 启动配置 opt-in 的后端无关 GPU timing telemetry 契约。
 - [SDD-2026-07-07-dx12-mailbox-present-tearing DX12 MAILBOX present 语义修正](../../sdd/SDD-2026-07-07-dx12-mailbox-present-tearing.md)：MAILBOX 去除误加的 `ALLOW_TEARING`。注：其"抖动根因是撕裂"的判断后被推翻，真根因见 [SDD-2026-07-07-taa-jitter-double-apply](../../sdd/SDD-2026-07-07-taa-jitter-double-apply.md)（Function 层 TAA jitter 重复施加）；present 语义修正本身仍然成立。

@@ -3,6 +3,8 @@
 #include "Base/hlog.h"
 
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -15,11 +17,41 @@ namespace AshEngine
 	{
 		using json = nlohmann::json;
 
-		auto parse_double_arg(const std::string& value, double fallback) -> double
+		auto parse_positive_finite_double(const std::string& value, double& out_value) -> bool
 		{
+			if (value.empty() ||
+				std::isspace(static_cast<unsigned char>(value.front())) ||
+				std::isspace(static_cast<unsigned char>(value.back())))
+			{
+				return false;
+			}
+			errno = 0;
 			char* end = nullptr;
 			const double parsed = std::strtod(value.c_str(), &end);
-			return end != value.c_str() && parsed > 0.0 ? parsed : fallback;
+			if (errno == ERANGE || end == value.c_str() || !end || *end != '\0' ||
+				!std::isfinite(parsed) || parsed <= 0.0)
+			{
+				return false;
+			}
+			out_value = parsed;
+			return true;
+		}
+
+		auto parse_boolean_override(
+			const std::string& value,
+			PerfGateBooleanOverride& out_override) -> bool
+		{
+			if (value == "on")
+			{
+				out_override = PerfGateBooleanOverride::On;
+				return true;
+			}
+			if (value == "off")
+			{
+				out_override = PerfGateBooleanOverride::Off;
+				return true;
+			}
+			return false;
 		}
 
 		auto starts_with(const std::string& value, const char* prefix) -> bool
@@ -56,9 +88,41 @@ namespace AshEngine
 	auto parse_perf_gate_config(int argc, char* argv[]) -> PerfGateConfig
 	{
 		PerfGateConfig config{};
+		const auto parse_duration = [&config](const std::string& value, double& target)
+		{
+			double parsed = 0.0;
+			if (!parse_positive_finite_double(value, parsed))
+			{
+				config.valid = false;
+				return;
+			}
+			target = parsed;
+		};
+		const auto parse_override = [&config](
+			const std::string& value,
+			PerfGateBooleanOverride& target)
+		{
+			PerfGateBooleanOverride parsed = PerfGateBooleanOverride::Inherit;
+			if (!parse_boolean_override(value, parsed))
+			{
+				config.valid = false;
+				return;
+			}
+			target = parsed;
+		};
 		for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
 		{
 			const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+			if (argument == "--perf-gate-warmup-seconds" ||
+				argument == "--perf-gate-sample-seconds" ||
+				argument == "--perf-gate-drain-seconds" ||
+				argument == "--perf-gate-gpu-timing" ||
+				argument == "--perf-gate-validation" ||
+				argument == "--perf-gate-vsync")
+			{
+				config.valid = false;
+				continue;
+			}
 			if (argument == "--perf-gate")
 			{
 				config.enabled = true;
@@ -81,16 +145,44 @@ namespace AshEngine
 			}
 			if (starts_with(argument, "--perf-gate-warmup-seconds="))
 			{
-				config.warmup_seconds = parse_double_arg(
+				parse_duration(
 					argument.substr(std::char_traits<char>::length("--perf-gate-warmup-seconds=")),
 					config.warmup_seconds);
 				continue;
 			}
 			if (starts_with(argument, "--perf-gate-sample-seconds="))
 			{
-				config.sample_seconds = parse_double_arg(
+				parse_duration(
 					argument.substr(std::char_traits<char>::length("--perf-gate-sample-seconds=")),
 					config.sample_seconds);
+				continue;
+			}
+			if (starts_with(argument, "--perf-gate-drain-seconds="))
+			{
+				parse_duration(
+					argument.substr(std::char_traits<char>::length("--perf-gate-drain-seconds=")),
+					config.drain_seconds);
+				continue;
+			}
+			if (starts_with(argument, "--perf-gate-gpu-timing="))
+			{
+				parse_override(
+					argument.substr(std::char_traits<char>::length("--perf-gate-gpu-timing=")),
+					config.gpu_timing);
+				continue;
+			}
+			if (starts_with(argument, "--perf-gate-validation="))
+			{
+				parse_override(
+					argument.substr(std::char_traits<char>::length("--perf-gate-validation=")),
+					config.validation);
+				continue;
+			}
+			if (starts_with(argument, "--perf-gate-vsync="))
+			{
+				parse_override(
+					argument.substr(std::char_traits<char>::length("--perf-gate-vsync=")),
+					config.vsync);
 				continue;
 			}
 		}
