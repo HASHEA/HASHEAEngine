@@ -3,6 +3,7 @@
 #include "Core/IEditorCommandExecutor.h"
 #include "Function/Asset/TerrainComposition.h"
 #include "Panels/Terrain/TerrainModeState.h"
+#include "Services/TerrainBrushOverlayRenderer.h"
 #include "Services/TerrainEditorService.h"
 #include "Terrain/TerrainTestUtils.h"
 
@@ -21,6 +22,9 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include <glm/mat4x4.hpp>
+#include <glm/geometric.hpp>
 
 namespace
 {
@@ -446,4 +450,292 @@ TEST_CASE("Terrain viewport interaction reuses rays validates assets and handles
 	CHECK(service.find("refIntent.asset_id != pWorkingSet->asset_id") != std::string::npos);
 	CHECK(bootstrap.find("deps.pTerrainEditorService = refContext.pTerrainEditorService;") !=
 		std::string::npos);
+}
+
+namespace
+{
+	AshEngine::TerrainAssetSnapshot MakeTerrainOverlaySnapshot(float slopeX = 0.0f, float slopeZ = 0.0f)
+	{
+		AshEngine::TerrainAssetSnapshot snapshot = MakeTerrainModeSnapshot();
+		for (uint32_t componentZ = 0u; componentZ < snapshot.layout.component_count_z; ++componentZ)
+		{
+			for (uint32_t componentX = 0u; componentX < snapshot.layout.component_count_x; ++componentX)
+			{
+				const AshEngine::TerrainComponentCoord coord{
+					static_cast<uint16_t>(componentX),
+					static_cast<uint16_t>(componentZ)
+				};
+				const size_t componentIndex =
+					static_cast<size_t>(componentZ) * snapshot.layout.component_count_x + componentX;
+				if (componentIndex >= snapshot.components.size() || !snapshot.components[componentIndex])
+				{
+					throw std::runtime_error("Terrain overlay fixture is missing a component.");
+				}
+
+				auto component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
+					*snapshot.components[componentIndex]);
+				const AshEngine::TerrainSampleRect rect =
+					AshEngine::get_terrain_component_snapshot_rect(snapshot.layout, coord);
+				for (uint32_t localZ = 0u; localZ < component->sample_height; ++localZ)
+				{
+					for (uint32_t localX = 0u; localX < component->sample_width; ++localX)
+					{
+						const float terrainX = static_cast<float>(rect.min_x + localX) *
+							snapshot.layout.sample_spacing_meters;
+						const float terrainZ = static_cast<float>(rect.min_z + localZ) *
+							snapshot.layout.sample_spacing_meters;
+						component->heights[
+							static_cast<size_t>(localZ) * component->sample_width + localX] =
+							slopeX * terrainX + slopeZ * terrainZ;
+					}
+				}
+				snapshot.components[componentIndex] = std::move(component);
+			}
+		}
+		return snapshot;
+	}
+
+	glm::mat4 MakeTerrainOverlayTransform(const glm::vec3& translation, const glm::vec3& scale)
+	{
+		glm::mat4 transform{ 1.0f };
+		transform[0][0] = scale.x;
+		transform[1][1] = scale.y;
+		transform[2][2] = scale.z;
+		transform[3] = glm::vec4(translation, 1.0f);
+		return transform;
+	}
+
+	AshEditor::TerrainEditorPreviewState MakeTerrainOverlayPreview(
+		AshEngine::TerrainQueryStatus status,
+		const glm::vec3& center,
+		float radius)
+	{
+		AshEditor::TerrainEditorPreviewState preview{};
+		preview.query_status = AshEngine::TerrainQueryStatus::Ready;
+		preview.viewport.query_status = status;
+		preview.viewport.center_ws = center;
+		preview.viewport.radius_meters = radius;
+		preview.viewport.terrain_entity_id = 77u;
+		preview.viewport.has_world_position = true;
+		return preview;
+	}
+
+	void CheckOverlayVector(const glm::vec3& actual, const glm::vec3& expected)
+	{
+		CHECK(actual.x == doctest::Approx(expected.x));
+		CHECK(actual.y == doctest::Approx(expected.y));
+		CHECK(actual.z == doctest::Approx(expected.z));
+	}
+
+	void CheckOverlayColor(const glm::vec4& actual, const glm::vec4& expected)
+	{
+		CHECK(actual.r == doctest::Approx(expected.r));
+		CHECK(actual.g == doctest::Approx(expected.g));
+		CHECK(actual.b == doctest::Approx(expected.b));
+		CHECK(actual.a == doctest::Approx(expected.a));
+	}
+
+	uint32_t gTerrainOverlaySubmitCalls = 0u;
+	AshEngine::SceneViewBindingHandle gTerrainOverlaySubmittedBinding{};
+	std::vector<AshEngine::SceneOverlayLine> gTerrainOverlaySubmittedLines{};
+
+	bool CaptureTerrainOverlaySubmission(
+		AshEngine::SceneViewBindingHandle binding,
+		const AshEngine::SceneOverlayBatchDesc& desc)
+	{
+		++gTerrainOverlaySubmitCalls;
+		gTerrainOverlaySubmittedBinding = binding;
+		gTerrainOverlaySubmittedLines.assign(desc.lines, desc.lines + desc.line_count);
+		return true;
+	}
+
+	void ResetTerrainOverlaySubmissionCapture()
+	{
+		gTerrainOverlaySubmitCalls = 0u;
+		gTerrainOverlaySubmittedBinding = {};
+		gTerrainOverlaySubmittedLines.clear();
+	}
+}
+
+TEST_CASE("Terrain brush preview builds a closed 64 segment world space loop")
+{
+	const AshEngine::TerrainAssetSnapshot snapshot = MakeTerrainOverlaySnapshot();
+	const glm::mat4 transform = MakeTerrainOverlayTransform({ 10.0f, 5.0f, 20.0f }, { 1.0f, 2.0f, 1.0f });
+	const AshEditor::TerrainEditorPreviewState preview = MakeTerrainOverlayPreview(
+		AshEngine::TerrainQueryStatus::Ready,
+		{ 14.0f, 5.0f, 24.0f },
+		2.0f);
+
+	const std::vector<AshEngine::SceneOverlayLine> lines =
+		AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, transform);
+	REQUIRE(lines.size() == 64u);
+	for (size_t index = 0u; index < lines.size(); ++index)
+	{
+		const AshEngine::SceneOverlayLine& line = lines[index];
+		const AshEngine::SceneOverlayLine& next = lines[(index + 1u) % lines.size()];
+		CheckOverlayVector(line.end, next.start);
+		CHECK(line.start.y == doctest::Approx(5.0f));
+		CHECK(glm::length(glm::vec2(line.start.x - preview.viewport.center_ws.x,
+			line.start.z - preview.viewport.center_ws.z)) == doctest::Approx(2.0f));
+		CHECK(line.depth_mode == AshEngine::SceneOverlayDepthMode::DepthTestNoWrite);
+	}
+	CheckOverlayColor(lines.front().color, { 0.20f, 1.00f, 0.25f, 1.00f });
+}
+
+TEST_CASE("Terrain brush preview preserves world XZ radius on sloped nonuniform terrain")
+{
+	const AshEngine::TerrainAssetSnapshot snapshot = MakeTerrainOverlaySnapshot(0.25f, 0.5f);
+	const glm::vec3 translation{ 10.0f, 5.0f, 20.0f };
+	const glm::vec3 scale{ 2.0f, 4.0f, 3.0f };
+	const glm::mat4 transform = MakeTerrainOverlayTransform(translation, scale);
+	const AshEditor::TerrainEditorPreviewState preview = MakeTerrainOverlayPreview(
+		AshEngine::TerrainQueryStatus::Ready,
+		{ 18.0f, 17.0f, 32.0f },
+		3.0f);
+
+	const std::vector<AshEngine::SceneOverlayLine> lines =
+		AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, transform);
+	REQUIRE(lines.size() == 64u);
+	for (const AshEngine::SceneOverlayLine& line : lines)
+	{
+		const float worldRadius = glm::length(glm::vec2(
+			line.start.x - preview.viewport.center_ws.x,
+			line.start.z - preview.viewport.center_ws.z));
+		CHECK(worldRadius == doctest::Approx(preview.viewport.radius_meters));
+
+		const float terrainX = (line.start.x - translation.x) / scale.x;
+		const float terrainZ = (line.start.z - translation.z) / scale.z;
+		const float expectedWorldY = translation.y +
+			(0.25f * terrainX + 0.5f * terrainZ) * scale.y;
+		CHECK(line.start.y == doctest::Approx(expectedWorldY));
+	}
+}
+
+TEST_CASE("Terrain brush preview leaves gaps for unavailable height samples")
+{
+	AshEngine::TerrainAssetSnapshot snapshot = MakeTerrainOverlaySnapshot();
+	REQUIRE(snapshot.components.size() == 4u);
+	snapshot.components[1].reset();
+	const AshEditor::TerrainEditorPreviewState preview = MakeTerrainOverlayPreview(
+		AshEngine::TerrainQueryStatus::Pending,
+		{ 4.0f, 0.0f, 4.0f },
+		3.0f);
+
+	const std::vector<AshEngine::SceneOverlayLine> lines =
+		AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, glm::mat4(1.0f));
+	REQUIRE_FALSE(lines.empty());
+	CHECK(lines.size() < 64u);
+	const float oneSegmentChord = 2.0f * preview.viewport.radius_meters *
+		std::sin(3.14159265358979323846f / 64.0f);
+	for (const AshEngine::SceneOverlayLine& line : lines)
+	{
+		const float chord = glm::length(glm::vec2(
+			line.end.x - line.start.x,
+			line.end.z - line.start.z));
+		CHECK(chord == doctest::Approx(oneSegmentChord).epsilon(0.001));
+	}
+	CheckOverlayColor(lines.front().color, { 1.00f, 0.65f, 0.10f, 1.00f });
+}
+
+TEST_CASE("Terrain brush preview colors failure and rejects unavailable submissions")
+{
+	const AshEngine::TerrainAssetSnapshot snapshot = MakeTerrainOverlaySnapshot();
+	const glm::mat4 validTransform{ 1.0f };
+	AshEditor::TerrainEditorPreviewState preview = MakeTerrainOverlayPreview(
+		AshEngine::TerrainQueryStatus::Failed,
+		{ 4.0f, 0.0f, 4.0f },
+		2.0f);
+
+	std::vector<AshEngine::SceneOverlayLine> lines =
+		AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, validTransform);
+	REQUIRE_FALSE(lines.empty());
+	CheckOverlayColor(lines.front().color, { 1.00f, 0.20f, 0.20f, 1.00f });
+
+	preview.viewport.query_status = AshEngine::TerrainQueryStatus::Ready;
+	preview.layer_locked = true;
+	lines = AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, validTransform);
+	REQUIRE_FALSE(lines.empty());
+	CheckOverlayColor(lines.front().color, { 1.00f, 0.20f, 0.20f, 1.00f });
+
+	ResetTerrainOverlaySubmissionCapture();
+	CHECK_FALSE(AshEditor::TerrainBrushOverlayRenderer::Submit(
+		preview,
+		std::make_shared<const AshEngine::TerrainAssetSnapshot>(snapshot),
+		validTransform,
+		{},
+		&CaptureTerrainOverlaySubmission));
+	CHECK(gTerrainOverlaySubmitCalls == 0u);
+
+	preview.layer_locked = false;
+	preview.viewport.query_status = AshEngine::TerrainQueryStatus::Outside;
+	CHECK(AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, validTransform).empty());
+	ResetTerrainOverlaySubmissionCapture();
+	CHECK_FALSE(AshEditor::TerrainBrushOverlayRenderer::Submit(
+		preview,
+		std::make_shared<const AshEngine::TerrainAssetSnapshot>(snapshot),
+		validTransform,
+		AshEngine::SceneViewBindingHandle{ 7u },
+		&CaptureTerrainOverlaySubmission));
+	CHECK(gTerrainOverlaySubmitCalls == 0u);
+
+	preview.viewport.query_status = AshEngine::TerrainQueryStatus::Ready;
+	preview.viewport.has_world_position = false;
+	CHECK(AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, validTransform).empty());
+
+	preview.viewport.has_world_position = true;
+	glm::mat4 invalidTransform{ 1.0f };
+	invalidTransform[0][0] = 0.0f;
+	CHECK(AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, invalidTransform).empty());
+	ResetTerrainOverlaySubmissionCapture();
+	CHECK_FALSE(AshEditor::TerrainBrushOverlayRenderer::Submit(
+		preview,
+		std::make_shared<const AshEngine::TerrainAssetSnapshot>(snapshot),
+		invalidTransform,
+		AshEngine::SceneViewBindingHandle{ 9u },
+		&CaptureTerrainOverlaySubmission));
+	CHECK(gTerrainOverlaySubmitCalls == 0u);
+
+	preview.query_status = AshEngine::TerrainQueryStatus::Pending;
+	CHECK(AshEditor::TerrainBrushOverlayRenderer::BuildLines(preview, snapshot, validTransform).empty());
+	preview.query_status = AshEngine::TerrainQueryStatus::Ready;
+
+	ResetTerrainOverlaySubmissionCapture();
+	CHECK(AshEditor::TerrainBrushOverlayRenderer::Submit(
+		preview,
+		std::make_shared<const AshEngine::TerrainAssetSnapshot>(snapshot),
+		validTransform,
+		AshEngine::SceneViewBindingHandle{ 11u },
+		&CaptureTerrainOverlaySubmission));
+	CHECK(gTerrainOverlaySubmitCalls == 1u);
+	CHECK(gTerrainOverlaySubmittedBinding.value == 11u);
+	CHECK(gTerrainOverlaySubmittedLines.size() == 64u);
+}
+
+TEST_CASE("Terrain brush preview uses the ScenePresentation overlay facade")
+{
+	const std::string overlay = ReadTerrainContractText(
+		"project/src/editor/Services/TerrainBrushOverlayRenderer.cpp");
+	const std::string canvas = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelCanvas.cpp");
+
+	CHECK(overlay.find("SceneOverlayLine") != std::string::npos);
+	CHECK(overlay.find("submit_scene_overlay") != std::string::npos);
+	CHECK(overlay.find("SceneOverlayDepthMode::DepthTestNoWrite") != std::string::npos);
+	CHECK(overlay.find("draw_window_line") == std::string::npos);
+	CHECK(overlay.find("Graphics/") == std::string::npos);
+	CHECK(canvas.find("TerrainBrushOverlayRenderer::Submit") != std::string::npos);
+	CHECK(canvas.find("IsPrimaryViewport(strViewportId)") != std::string::npos);
+	CHECK(canvas.find("refPresentation.bAcceptsInput") != std::string::npos);
+	CHECK(canvas.find("GetPublishedSnapshot()") != std::string::npos);
+	CHECK(canvas.find("GetSelectedAssetId()") != std::string::npos);
+	CHECK(canvas.find("FindByPath(terrain.asset_path)") != std::string::npos);
+	CHECK(canvas.find("get_entity_world_transform") != std::string::npos);
+	const size_t helpers = canvas.find("UpdateSceneViewportOverlayHelpers(");
+	const size_t terrain = canvas.find("SubmitTerrainBrushOverlay(refDeps");
+	const size_t selection = canvas.find("DrawSceneBoxSelectionOverlay(");
+	REQUIRE(helpers != std::string::npos);
+	REQUIRE(terrain != std::string::npos);
+	REQUIRE(selection != std::string::npos);
+	CHECK(helpers < terrain);
+	CHECK(terrain < selection);
 }

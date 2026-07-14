@@ -897,6 +897,7 @@ Result: The canonical primary Scene viewport now routes camera → Terrain → g
 ### Task 8: Add world-space brush preview with SceneOverlayLine
 
 **Files:**
+- Modify: `README.md`
 - Create: `project/src/editor/Services/TerrainBrushOverlayRenderer.h`
 - Create: `project/src/editor/Services/TerrainBrushOverlayRenderer.cpp`
 - Modify: `project/src/editor/Panels/ViewportPanelCanvas.cpp`
@@ -906,7 +907,7 @@ Result: The canonical primary Scene viewport now routes camera → Terrain → g
 - Modify: `docs/specs/modules/editor.md`
 - Modify: `docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md`
 
-- [ ] **Step 1: Write overlay RED contract**
+- [x] **Step 1: Write overlay RED contract**
 
 ```cpp
 TEST_CASE("Terrain brush preview uses the ScenePresentation overlay facade")
@@ -923,7 +924,7 @@ Add behavior tests for a flat 64-segment closed loop, a sloped/nonuniformly scal
 
 Append `TerrainBrushOverlayRenderer.cpp` as an isolated Tests premake source hunk so the geometry behavior tests link, then fresh-generate the Visual Studio projects before GREEN.
 
-- [ ] **Step 2: Run focused test and observe RED**
+- [x] **Step 2: Run focused test and observe RED**
 
 ```powershell
 .\RunTests.bat Debug --test-case="Terrain brush preview*"
@@ -931,32 +932,43 @@ Append `TerrainBrushOverlayRenderer.cpp` as an isolated Tests premake source hun
 
 Expected: overlay file/calls are absent.
 
-- [ ] **Step 3: Implement deterministic ring geometry**
+- [x] **Step 3: Implement deterministic ring geometry**
 
 Generate a 64-segment world-XZ circle with radius `preview.viewport.radius_meters`; do not use a tangent-plane circle because the brush kernel defines its footprint in world-XZ metric and a tangent projection would shrink it on slopes. Transform each candidate point into the validated Terrain snapshot's local XZ, accept only `query_height` Ready endpoints, transform the sampled height back to world space, and use `SceneOverlayDepthMode::DepthTestNoWrite`. Never bridge across a non-Ready endpoint. Colors are Ready green, Pending amber, and locked/Failed red; Outside or `has_world_position == false` emits no lines.
 
-- [ ] **Step 4: Submit through the viewport binding facade**
+- [x] **Step 4: Submit through the viewport binding facade**
 
-`TerrainBrushOverlayRenderer::Submit` takes `TerrainEditorPreviewState`, the service's currently published immutable `TerrainAssetSnapshot`, the cursor entity's current world transform, and `SceneViewBindingHandle`; it builds a local vector of `SceneOverlayLine` and calls `submit_scene_overlay`. Using the published snapshot keeps overlay height aligned with the rendered generation and avoids resolving an AssetDatabase future for every point. Invalid binding/transform, unavailable anchor, non-Ready height sample, or empty line list returns false without retaining pointers.
+`TerrainBrushOverlayRenderer::Submit` takes `TerrainEditorPreviewState`, the service's currently published immutable `TerrainAssetSnapshot`, the cursor entity's current world transform, and `SceneViewBindingHandle`; it builds a local vector of `SceneOverlayLine` and calls `submit_scene_overlay`. Using the published snapshot keeps overlay height aligned with the rendered generation and avoids resolving an AssetDatabase future for every point. An individual non-Ready sample removes only its two adjacent edges; invalid binding/transform, unavailable anchor, session non-readiness, or a final empty line list returns false without retaining pointers. A same-signature function-pointer seam proves invalid paths make zero facade calls while production explicitly selects `AshEngine::submit_scene_overlay`.
 
-- [ ] **Step 5: Hook Scene viewport decoration**
+- [x] **Step 5: Hook Scene viewport decoration**
 
-In `ViewportPanelCanvas::DrawDecorations`, after helper overlays and before 2D box-selection decoration, resolve the preview entity from the active Scene, obtain its current world transform plus the service's published snapshot, and submit the Terrain brush overlay for the primary Scene viewport. `ScenePresentationSubsystem` owns the per-binding copy and clears it after consumption.
+In `ViewportPanelCanvas::DrawDecorations`, after helper overlays and before 2D box-selection decoration, resolve the preview entity from the active Scene, revalidate that its current Terrain component still maps to the selected/published asset, obtain its current world transform plus a local shared copy of the service's published snapshot, and submit the Terrain brush overlay for the canonical primary input-accepting Scene viewport. `ScenePresentationSubsystem` owns the per-binding copy and clears it after consumption.
 
-- [ ] **Step 6: Run overlay contract/build GREEN**
+- [x] **Step 6: Run the complete Task 8 verification matrix**
 
 ```powershell
 .\generate_vs2022.bat
 .\RunTests.bat Debug --test-case="Terrain brush preview*"
+.\RunTests.bat Debug
+.\RunTests.bat Release
 .\build_editor.bat Debug
+.\build_sandbox.bat Debug
+.\build_editor.bat Release
+.\build_sandbox.bat Release
+.\RunArchGate.bat
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mode ValidatePlan
+.\run.bat all Debug --smoke-test-seconds=120
+.\RunRenderGate.bat
 ```
 
-Expected: facade assertions pass and Editor links the overlay renderer.
+Expected: facade assertions pass, both configurations link the generated Editor/Sandbox projects, all four runtime/backend combinations reach readiness and exit cleanly, RenderGate passes without blessing, runtime configuration bytes are restored exactly, and fresh logs contain no validation/device-loss/fatal diagnostics. Do not commit until every command above passes.
 
-- [ ] **Step 7: Commit brush overlay**
+Result: The focused overlay suite passes 5/5 cases and 613 assertions; the full Debug and Release suites each pass 311/311 cases and 21952 assertions. Fresh Premake generation, Editor/Sandbox Debug/Release builds, ArchGate (35 unchanged legacy warnings), and AIDevDoctor ValidatePlan all pass. The readiness matrix exits 0; because this branch still has minute-granularity runtime log names, each Editor/Sandbox x DX12/Vulkan cell was also rerun into an independent console artifact under `Intermediate/test-reports/terrain-task8/readiness-20260715-0010`, where every cell reports `readiness automation succeeded`, both Sandbox cells report `clean_exit=yes`, and all four have zero error/critical/validation/device-loss/fatal rejection hits. `RunRenderGate.bat` passes without blessing in report `Intermediate/test-reports/render-gate/20260715-000831-166-44808-59c80666`: sandbox Vulkan/DX12/cross SSIM is 0.996278/0.996177/0.999747 and particles is 1/1/1. The pre-run bytes of Engine.ini, EditorSettings.json, imgui.ini, and ViewportLayout.json were restored with all four SHA-256 values matching; no effective Editor/Sandbox/AshImageDiff/gate root remains. Interactive Terrain overlay appearance remains part of the phase-wide Task 11 manual checklist rather than being inferred from non-Terrain RenderGate scenes.
+
+- [x] **Step 7: Commit brush overlay**
 
 ```powershell
-git add project/src/editor/Services/TerrainBrushOverlayRenderer.h project/src/editor/Services/TerrainBrushOverlayRenderer.cpp project/src/editor/Panels/ViewportPanelCanvas.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
+git add README.md project/src/editor/Services/TerrainBrushOverlayRenderer.h project/src/editor/Services/TerrainBrushOverlayRenderer.cpp project/src/editor/Panels/ViewportPanelCanvas.cpp project/src/tests/Editor/terrain_editor_contract_tests.cpp docs/specs/features/terrain.md docs/specs/modules/editor.md docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md
 git add -p project/src/tests/premake5.lua
 git diff --cached -- project/src/tests/premake5.lua
 git diff --cached --check

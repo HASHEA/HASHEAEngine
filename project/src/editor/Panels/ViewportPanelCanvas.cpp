@@ -6,8 +6,12 @@
 #include "Panels/ViewportPanel.h"
 #include "Panels/ViewportPanelSceneSupportInternal.h"
 #include "Panels/ViewportPanelSupport.h"
+#include "Services/AssetDatabaseService.h"
 #include "Services/EditorGizmoMath.h"
 #include "Services/EditorViewportService.h"
+#include "Services/SceneService.h"
+#include "Services/TerrainBrushOverlayRenderer.h"
+#include "Services/TerrainEditorService.h"
 #include "Widgets/EditorThemeColors.h"
 #include "Widgets/ViewportAxisIndicator.h"
 
@@ -173,6 +177,58 @@ namespace AshEditor
 				fTextY += refFrameContext.pUiContext->calc_text_size(vecLines[uIndex].c_str()).y + fLineSpacing;
 			}
 		}
+
+		void SubmitTerrainBrushOverlay(
+			const ViewportPanelDeps& refDeps,
+			const EditorViewportPresentation& refPresentation,
+			const std::string& strViewportId)
+		{
+			if (strViewportId != EditorViewportIds::Scene ||
+				refPresentation.eKind != EditorViewportKind::Scene ||
+				!refPresentation.bAcceptsInput ||
+				!refDeps.pAssetDatabaseService ||
+				!refDeps.pViewportService ||
+				!refDeps.pViewportService->IsPrimaryViewport(strViewportId) ||
+				!refDeps.pSceneService ||
+				!refDeps.pTerrainEditorService)
+			{
+				return;
+			}
+
+			const TerrainEditorPreviewState& preview =
+				refDeps.pTerrainEditorService->GetPreviewState();
+			const std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot =
+				refDeps.pTerrainEditorService->GetPublishedSnapshot();
+			if (!snapshot ||
+				snapshot->asset_id != refDeps.pTerrainEditorService->GetSelectedAssetId() ||
+				preview.viewport.terrain_entity_id == 0u)
+			{
+				return;
+			}
+
+			AshEngine::Scene& scene = refDeps.pSceneService->GetActiveScene();
+			const AshEngine::Entity terrainEntity =
+				scene.find_entity(preview.viewport.terrain_entity_id);
+			if (!terrainEntity.is_valid() || !terrainEntity.has_terrain_component())
+			{
+				return;
+			}
+			const AshEngine::TerrainComponent terrain = terrainEntity.get_terrain_component();
+			const AshEngine::AssetInfo* pTerrainAsset =
+				refDeps.pAssetDatabaseService->FindByPath(terrain.asset_path);
+			if (!pTerrainAsset ||
+				pTerrainAsset->type != AshEngine::AssetType::Terrain ||
+				pTerrainAsset->id != snapshot->asset_id)
+			{
+				return;
+			}
+
+			TerrainBrushOverlayRenderer::Submit(
+				preview,
+				snapshot,
+				scene.get_entity_world_transform(terrainEntity.get_id()),
+				refDeps.pViewportService->GetSceneViewBindingHandle(strViewportId));
+		}
 	}
 
 	namespace ViewportPanelCanvas
@@ -289,6 +345,7 @@ namespace AshEditor
 					*pPresentation,
 					strViewportId,
 					rectContent);
+				SubmitTerrainBrushOverlay(refDeps, *pPresentation, strViewportId);
 
 				ViewportPanelSupport::DrawSceneGizmoOverlay(
 					refDeps,
