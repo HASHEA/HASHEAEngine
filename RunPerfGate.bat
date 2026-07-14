@@ -44,5 +44,7 @@ echo   -SkipBuild
 echo   -DryRun
 echo   -TelemetryMode Profile^|Off
 echo   -BlessBaseline
+echo   -BlessBaselineFromReport Intermediate\test-reports\perf-gate\^<run^>\summary.json
+echo   -ExpectedReportSha256 ^<64-hex-sha256^>
 echo   -BaselinePath tools\perf\perf_gate_baselines.json
 exit /b 0

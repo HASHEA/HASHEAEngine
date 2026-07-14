@@ -6,6 +6,8 @@ param(
     [switch]$SkipBuild,
     [switch]$DryRun,
     [switch]$BlessBaseline,
+    [string]$BlessBaselineFromReport = "",
+    [string]$ExpectedReportSha256 = "",
     [ValidateSet("Profile", "Off")]
     [string]$TelemetryMode = "Profile",
     [switch]$SelfTest
@@ -276,7 +278,9 @@ function Assert-PerfGateOptions {
         [bool]$BlessBaseline,
         [bool]$DryRun,
         [ValidateSet("Profile", "Off")]
-        [string]$TelemetryMode
+        [string]$TelemetryMode,
+        [string]$BlessBaselineFromReport = "",
+        [string]$ExpectedReportSha256 = ""
     )
 
     if ($BlessBaseline -and $DryRun) {
@@ -284,6 +288,23 @@ function Assert-PerfGateOptions {
     }
     if ($BlessBaseline -and $TelemetryMode -eq "Off") {
         throw "-TelemetryMode Off cannot be used with -BlessBaseline."
+    }
+    $hasImportPath = -not [string]::IsNullOrWhiteSpace($BlessBaselineFromReport)
+    $hasImportHash = -not [string]::IsNullOrWhiteSpace($ExpectedReportSha256)
+    if ($hasImportPath -and -not $hasImportHash) {
+        throw "-ExpectedReportSha256 is required with -BlessBaselineFromReport."
+    }
+    if ($hasImportHash -and -not $hasImportPath) {
+        throw "-BlessBaselineFromReport is required with -ExpectedReportSha256."
+    }
+    if ($hasImportPath -and $BlessBaseline) {
+        throw "-BlessBaselineFromReport cannot be used with -BlessBaseline."
+    }
+    if ($hasImportPath -and $DryRun) {
+        throw "-BlessBaselineFromReport cannot be used with -DryRun."
+    }
+    if ($hasImportPath -and $TelemetryMode -eq "Off") {
+        throw "-BlessBaselineFromReport requires -TelemetryMode Profile."
     }
 }
 
@@ -767,6 +788,41 @@ function Write-PerfGateJsonFile {
     $json = $json.TrimEnd([char[]]@("`n")) + "`n"
     $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($LiteralPath, $json, $utf8WithoutBom)
+}
+
+function Write-PerfGateJsonFileAtomically {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [object]$InputObject,
+
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath,
+
+        [ValidateRange(1, 100)]
+        [int]$Depth = 16
+    )
+
+    $destinationPath = [System.IO.Path]::GetFullPath($LiteralPath)
+    $destinationDirectory = [System.IO.Path]::GetDirectoryName($destinationPath)
+    if (-not (Test-Path -LiteralPath $destinationDirectory -PathType Container)) {
+        throw "PerfGate JSON destination directory does not exist: $destinationDirectory"
+    }
+    $temporaryPath = Join-Path $destinationDirectory (".{0}.{1}.tmp" -f [System.IO.Path]::GetFileName($destinationPath), [Guid]::NewGuid().ToString("N"))
+    $backupPath = Join-Path $destinationDirectory (".{0}.{1}.bak" -f [System.IO.Path]::GetFileName($destinationPath), [Guid]::NewGuid().ToString("N"))
+    try {
+        Write-PerfGateJsonFile -InputObject $InputObject -LiteralPath $temporaryPath -Depth $Depth
+        if (Test-Path -LiteralPath $destinationPath -PathType Leaf) {
+            [System.IO.File]::Replace($temporaryPath, $destinationPath, $backupPath, $true)
+        }
+        else {
+            [System.IO.File]::Move($temporaryPath, $destinationPath)
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function New-PerfGateWorkloadIdentity {
@@ -1258,7 +1314,8 @@ function Compare-RecordToBaseline {
 function New-BaselineEntry {
     param(
         [object]$Record,
-        [string]$ReportRoot
+        [string]$ReportRoot,
+        [string]$SourceReportSha256 = ""
     )
 
     $entry = [PSCustomObject][ordered]@{
@@ -1271,6 +1328,10 @@ function New-BaselineEntry {
         process_private_bytes_peak_mb = [Math]::Round([double]$Record.process_private_bytes_peak_mb, 6)
         engine_heap_peak_mb = [Math]::Round([double]$Record.engine_heap_peak_mb, 6)
         draw_calls_avg = [Math]::Round([double]$Record.draw_calls_avg, 6)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SourceReportSha256)) {
+        $entry | Add-Member -MemberType NoteProperty -Name "source_report_sha256" -Value $SourceReportSha256.ToLowerInvariant()
     }
 
     if ($Record.gpu_baseline_comparable -and
@@ -1347,7 +1408,8 @@ function Update-BaselinesFromRecords {
         [string]$Profile,
         [string]$Configuration,
         [object[]]$Records,
-        [string]$ReportRoot
+        [string]$ReportRoot,
+        [string]$SourceReportSha256 = ""
     )
 
     Assert-PerfGateRunRecords -Records $Records
@@ -1374,7 +1436,230 @@ function Update-BaselinesFromRecords {
 
     foreach ($record in $Records) {
         $targetNode = Ensure-ObjectProperty $configurationNode $record.target
-        Set-ObjectProperty $targetNode $record.backend (New-BaselineEntry -Record $record -ReportRoot $ReportRoot)
+        Set-ObjectProperty $targetNode $record.backend (New-BaselineEntry -Record $record -ReportRoot $ReportRoot -SourceReportSha256 $SourceReportSha256)
+    }
+}
+
+function Import-PerfGateBaselineFromReport {
+    param(
+        [object]$Baseline,
+        [string]$BaselinePath,
+        [string]$Profile,
+        [string]$Configuration,
+        [object]$ProfileConfig,
+        [string]$RepoRoot,
+        [string]$ReportPath,
+        [string]$ExpectedReportSha256,
+        [string]$CurrentSourceSha
+    )
+
+    if ($ExpectedReportSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+        throw "Expected report SHA-256 must contain exactly 64 hexadecimal characters."
+    }
+    if (-not (Test-Path -LiteralPath $ReportPath -PathType Leaf)) {
+        throw "Approved perf report does not exist: $ReportPath"
+    }
+    if ($CurrentSourceSha -notmatch '^[0-9a-fA-F]{40,64}$') {
+        throw "Current source SHA must be a full Git object id."
+    }
+
+    $repoFullPath = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    $reportFullPath = [System.IO.Path]::GetFullPath($ReportPath)
+    $approvedRoot = [System.IO.Path]::GetFullPath((Join-Path $repoFullPath "Intermediate/test-reports/perf-gate")).TrimEnd('\', '/')
+    $approvedPrefix = $approvedRoot + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $reportFullPath.StartsWith($approvedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Approved perf report must be inside '$approvedRoot'."
+    }
+
+    $reportBytes = [System.IO.File]::ReadAllBytes($reportFullPath)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $actualReportSha256 = (($sha256.ComputeHash($reportBytes) | ForEach-Object { $_.ToString("x2") }) -join "")
+    }
+    finally {
+        $sha256.Dispose()
+    }
+    if (-not [string]::Equals($actualReportSha256, $ExpectedReportSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Approved perf report SHA-256 mismatch: expected '$ExpectedReportSha256', actual '$actualReportSha256'."
+    }
+
+    try {
+        $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+        $summary = $strictUtf8.GetString($reportBytes) | ConvertFrom-Json
+    }
+    catch {
+        throw "Approved perf report is not valid JSON: $($_.Exception.Message)"
+    }
+
+    if ([int](Get-ProfileProperty $summary "schema_version") -ne 2) {
+        throw "Approved perf report must use schema_version 2."
+    }
+    if (-not [string]::Equals([string](Get-ProfileProperty $summary "profile"), $Profile, [System.StringComparison]::Ordinal)) {
+        throw "Approved perf report profile does not match '$Profile'."
+    }
+    if (-not [string]::Equals([string](Get-ProfileProperty $summary "configuration"), $Configuration, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Approved perf report configuration does not match '$Configuration'."
+    }
+    if ([string](Get-ProfileProperty $summary "telemetry_mode") -ne "Profile" -or
+        -not [bool](Get-ProfileProperty $summary "gpu_baseline_comparable") -or
+        [string](Get-ProfileProperty $summary "status") -ne "PASS" -or
+        [bool](Get-ProfileProperty $summary "baseline_blessed")) {
+        throw "Approved perf report must be an unblessed PASS with comparable Profile telemetry."
+    }
+
+    $expectedBaselinePath = [System.IO.Path]::GetFullPath($BaselinePath)
+    $reportedBaselinePath = [System.IO.Path]::GetFullPath([string](Get-ProfileProperty $summary "baseline_path"))
+    if (-not [string]::Equals($reportedBaselinePath, $expectedBaselinePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Approved perf report baseline path does not match the requested baseline."
+    }
+
+    Assert-PerfGateProfileMatrix -ProfileConfig $ProfileConfig
+    Assert-PerfGateComparisonProfileContract -ProfileConfig $ProfileConfig
+    $expectedIdentity = New-PerfGateWorkloadIdentity -ProfileConfig $ProfileConfig -RepoRoot $RepoRoot
+    $summaryReportRoot = [System.IO.Path]::GetFullPath([string](Get-ProfileProperty $summary "report_root")).TrimEnd('\', '/')
+    $reportParent = [System.IO.Path]::GetDirectoryName($reportFullPath).TrimEnd('\', '/')
+    if (-not [string]::Equals($summaryReportRoot, $reportParent, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Approved perf report report_root does not match its containing directory."
+    }
+    $records = @(Get-ProfileProperty $summary "runs")
+    $expectedPairs = @{}
+    foreach ($targetConfig in @($ProfileConfig.targets)) {
+        $target = Get-PerfGateTargetName $targetConfig
+        foreach ($backend in @($targetConfig.backends)) {
+            $expectedPairs[("{0}|{1}" -f $target, $backend).ToLowerInvariant()] = $true
+        }
+    }
+    if ($records.Count -ne $expectedPairs.Count) {
+        throw "Approved perf report run matrix does not match the current profile."
+    }
+
+    $expectedMetricNames = [string[]]@(Get-ProfileProperty $ProfileConfig "required_gpu_metrics")
+    [Array]::Sort($expectedMetricNames, [System.StringComparer]::Ordinal)
+    $minimumCoverage = [double](Get-ProfileProperty $ProfileConfig "min_gpu_coverage")
+    $expectedWidth = [int](Get-ProfileProperty $ProfileConfig "window_width")
+    $expectedHeight = [int](Get-ProfileProperty $ProfileConfig "window_height")
+    $expectedValidation = [bool](Get-ProfileProperty $ProfileConfig "validation")
+    $expectedVsync = [bool](Get-ProfileProperty $ProfileConfig "vsync")
+    $expectedFixedCamera = [bool](Get-ProfileProperty $ProfileConfig "fixed_camera")
+    $expectedFrameCap = [string](Get-ProfileProperty $ProfileConfig "frame_cap")
+    $seenPairs = @{}
+    foreach ($record in $records) {
+        $pair = ("{0}|{1}" -f [string]$record.target, [string]$record.backend).ToLowerInvariant()
+        if (-not $expectedPairs.ContainsKey($pair) -or $seenPairs.ContainsKey($pair)) {
+            throw "Approved perf report run matrix contains an unexpected or duplicate '$pair' entry."
+        }
+        $seenPairs[$pair] = $true
+        if ([string](Get-ProfileProperty $record "status") -ne "PASS") {
+            throw "Approved perf report runs must all have PASS status."
+        }
+        if (@(Get-ProfileProperty $record "warnings").Count -ne 0) {
+            throw "Approved perf report run warnings must be empty."
+        }
+        if (@(Get-ProfileProperty $record "failures").Count -ne 0) {
+            throw "Approved perf report run failures must be empty."
+        }
+        if (-not [bool](Get-ProfileProperty $record "root_exited") -or
+            -not [bool](Get-ProfileProperty $record "tree_termination_confirmed") -or
+            -not [bool](Get-ProfileProperty $record "job_kill_on_close") -or
+            -not [bool](Get-ProfileProperty $record "job_assigned") -or
+            -not [bool](Get-ProfileProperty $record "job_cleanup_confirmed") -or
+            [int](Get-ProfileProperty $record "job_active_processes_after_cleanup") -ne 0 -or
+            [int](Get-ProfileProperty $record "exit_code") -ne 0) {
+            throw "Approved perf report run cleanup proof is incomplete."
+        }
+        if (-not [string]::Equals([string](Get-ProfileProperty $record "configuration"), $Configuration, [System.StringComparison]::OrdinalIgnoreCase) -or
+            [string](Get-ProfileProperty $record "telemetry_mode") -ne "Profile" -or
+            -not [bool](Get-ProfileProperty $record "gpu_baseline_comparable") -or
+            -not [bool](Get-ProfileProperty $record "baseline_identity_required")) {
+            if (-not [bool](Get-ProfileProperty $record "baseline_identity_required")) {
+                throw "Approved perf report comparison identity is required."
+            }
+            throw "Approved perf report run configuration or telemetry contract does not match the import request."
+        }
+        if ([int](Get-ProfileProperty $record "actual_width") -ne $expectedWidth -or
+            [int](Get-ProfileProperty $record "actual_height") -ne $expectedHeight -or
+            -not [bool](Get-ProfileProperty $record "extent_stable") -or
+            [bool](Get-ProfileProperty $record "validation") -ne $expectedValidation -or
+            [bool](Get-ProfileProperty $record "vsync") -ne $expectedVsync -or
+            [bool](Get-ProfileProperty $record "fixed_camera") -ne $expectedFixedCamera -or
+            -not [string]::Equals([string](Get-ProfileProperty $record "frame_cap"), $expectedFrameCap, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Approved perf report run extent or runtime flags do not match the current profile."
+        }
+        if (-not [string]::Equals([string]$record.source_sha, $CurrentSourceSha, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Approved perf report source SHA does not match the current source SHA."
+        }
+        if (-not [string]::Equals([string]$record.workload_fingerprint, [string]$expectedIdentity.fingerprint, [System.StringComparison]::Ordinal)) {
+            throw "Approved perf report workload fingerprint does not match the current profile."
+        }
+        $recordWorkload = Get-ProfileProperty $record "workload"
+        if ($null -eq $recordWorkload) {
+            throw "Approved perf report readable workload attribution is missing."
+        }
+        $expectedWorkloadJson = $expectedIdentity.workload | ConvertTo-Json -Depth 8 -Compress
+        $recordWorkloadJson = $recordWorkload | ConvertTo-Json -Depth 8 -Compress
+        if (-not [string]::Equals($recordWorkloadJson, $expectedWorkloadJson, [System.StringComparison]::Ordinal)) {
+            throw "Approved perf report readable workload does not match the current profile."
+        }
+
+        if ([int64](Get-ProfileProperty $record "frames_sampled") -le 0) {
+            throw "Approved perf report must contain sampled frames."
+        }
+        foreach ($metricName in @(
+            "cpu_frame_time_avg_ms",
+            "cpu_frame_time_p95_ms",
+            "cpu_frame_time_p99_ms",
+            "process_private_bytes_peak_mb",
+            "engine_heap_peak_mb",
+            "draw_calls_avg"
+        )) {
+            $metricValue = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record $metricName)
+            if ($null -eq $metricValue -or $metricValue -lt 0.0) {
+                throw "Approved perf report CPU/memory/draw metrics must be finite non-negative numbers."
+            }
+        }
+
+        $recordMetricNames = [string[]]@(Get-ProfileProperty $record "required_gpu_metrics")
+        [Array]::Sort($recordMetricNames, [System.StringComparer]::Ordinal)
+        if (($recordMetricNames -join "`n") -cne ($expectedMetricNames -join "`n")) {
+            throw "Approved perf report required GPU metrics do not match the current profile."
+        }
+        $gpuCoverage = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "gpu_coverage")
+        $gpuSubmitted = [int64](Get-ProfileProperty $record "gpu_submitted")
+        $gpuResolved = [int64](Get-ProfileProperty $record "gpu_resolved")
+        $gpuValid = [int64](Get-ProfileProperty $record "gpu_valid")
+        $gpuInvalid = [int64](Get-ProfileProperty $record "gpu_invalid")
+        if ($null -eq $gpuCoverage -or $gpuCoverage -lt $minimumCoverage -or
+            $gpuSubmitted -le 0 -or $gpuResolved -ne $gpuSubmitted -or
+            $gpuValid -ne $gpuSubmitted -or $gpuInvalid -ne 0) {
+            throw "Approved perf report GPU coverage and acknowledgement counts are incomplete."
+        }
+        $metricSummaries = Get-ProfileProperty $record "gpu_metric_summaries"
+        foreach ($metricName in $expectedMetricNames) {
+            $metric = Get-ProfileProperty $metricSummaries $metricName
+            $coverage = if ($null -eq $metric) { $null } else { ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $metric "coverage") }
+            $average = if ($null -eq $metric) { $null } else { ConvertTo-PerfGateFiniteDouble (Get-GpuMetricSummaryValue $metric "avg") }
+            $p95 = if ($null -eq $metric) { $null } else { ConvertTo-PerfGateFiniteDouble (Get-GpuMetricSummaryValue $metric "p95") }
+            if ($null -eq $metric -or $null -eq $coverage -or $coverage -lt $minimumCoverage -or
+                $null -eq $average -or $average -lt 0.0 -or $null -eq $p95 -or $p95 -lt 0.0) {
+                throw "Approved perf report required GPU metric '$metricName' is missing or invalid."
+            }
+        }
+    }
+
+    $baselineClone = $Baseline | ConvertTo-Json -Depth 32 | ConvertFrom-Json
+    $reportRelativePath = $reportFullPath.Substring($repoFullPath.Length + 1).Replace('\', '/')
+    Update-BaselinesFromRecords `
+        -Baseline $baselineClone `
+        -Profile $Profile `
+        -Configuration $Configuration `
+        -Records $records `
+        -ReportRoot $reportRelativePath `
+        -SourceReportSha256 $actualReportSha256
+
+    return [PSCustomObject]@{
+        baseline = $baselineClone
+        report_path = $reportRelativePath
+        report_sha256 = $actualReportSha256
     }
 }
 
@@ -4017,6 +4302,182 @@ exit 0
         $null -ne $blessRoundTripEntry.workload
     ) "Gate A RED: baseline bless must persist adapter, driver, OS build, source SHA, workload fingerprint, and readable workload fields."
 
+    $reportImportRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-report-import-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
+    try {
+        $scenePath = Join-Path $reportImportRoot "product/assets/scenes/VegetationBaseline.scene.json"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $scenePath) | Out-Null
+        '{ "self_test": true }' | Set-Content -LiteralPath $scenePath -Encoding UTF8
+        $candidateRoot = Join-Path $reportImportRoot "Intermediate/test-reports/perf-gate/candidate"
+        New-Item -ItemType Directory -Force -Path $candidateRoot | Out-Null
+        $candidateSummaryPath = Join-Path $candidateRoot "summary.json"
+        $candidateBaselinePath = Join-Path $reportImportRoot "tools/perf/perf_gate_baselines.json"
+        $candidateIdentity = New-PerfGateWorkloadIdentity -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot
+        $candidateSourceSha = ("9" * 40)
+
+        $candidateVulkan = $allMetricsBaselineRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $candidateVulkan.root_exited = $true
+        $candidateVulkan.job_kill_on_close = $true
+        $candidateVulkan.job_assigned = $true
+        $candidateVulkan.job_active_processes_after_cleanup = 0
+        $candidateVulkan.exit_code = 0
+        $candidateVulkan.frames_sampled = 100
+        $candidateVulkan.gpu_coverage = 1.0
+        $candidateVulkan.gpu_submitted = 100
+        $candidateVulkan.gpu_resolved = 100
+        $candidateVulkan.gpu_valid = 100
+        $candidateVulkan.gpu_invalid = 0
+        $candidateVulkan.source_sha = $candidateSourceSha
+        $candidateVulkan.workload_fingerprint = $candidateIdentity.fingerprint
+        $candidateVulkan.workload = $candidateIdentity.workload
+        $candidateVulkan.actual_width = [int]$vegetationProfile.window_width
+        $candidateVulkan.actual_height = [int]$vegetationProfile.window_height
+        $candidateVulkan.extent_stable = $true
+        $candidateVulkan.validation = [bool]$vegetationProfile.validation
+        $candidateVulkan.vsync = [bool]$vegetationProfile.vsync
+        $candidateVulkan.fixed_camera = [bool]$vegetationProfile.fixed_camera
+        $candidateVulkan.frame_cap = [string]$vegetationProfile.frame_cap
+        $candidateVulkan.telemetry_mode = "Profile"
+        $candidateVulkan.gpu_baseline_comparable = $true
+        $candidateVulkan.baseline_status = "MISSING"
+        $candidateVulkan.failures = @()
+        $candidateVulkan.warnings = @()
+
+        $candidateDx12 = $candidateVulkan | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $candidateDx12.backend = "DX12"
+        $candidateDx12.gpu_driver = "SelfTest DX12 Driver"
+        $candidateSummary = [PSCustomObject][ordered]@{
+            schema_version = 2
+            profile = "VegetationFullPipeline"
+            profile_source = "catalog"
+            configuration = "Release"
+            telemetry_mode = "Profile"
+            gpu_baseline_comparable = $true
+            status = "PASS"
+            baseline_path = $candidateBaselinePath
+            baseline_blessed = $false
+            report_root = $candidateRoot
+            runs = @($candidateVulkan, $candidateDx12)
+        }
+        Write-PerfGateJsonFile -InputObject $candidateSummary -LiteralPath $candidateSummaryPath -Depth 16
+        $candidateSummarySha = Get-PerfGateFileSha256 -Path $candidateSummaryPath
+
+        $importBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+        $importResult = Import-PerfGateBaselineFromReport `
+            -Baseline $importBaseline `
+            -BaselinePath $candidateBaselinePath `
+            -Profile "VegetationFullPipeline" `
+            -Configuration "Release" `
+            -ProfileConfig $vegetationProfile `
+            -RepoRoot $reportImportRoot `
+            -ReportPath $candidateSummaryPath `
+            -ExpectedReportSha256 $candidateSummarySha `
+            -CurrentSourceSha $candidateSourceSha
+        $importedVulkan = Get-BaselineEntry -Baseline $importResult.baseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
+        $importedDx12 = Get-BaselineEntry -Baseline $importResult.baseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "DX12"
+        Assert-SelfTest (
+            $null -ne $importedVulkan -and
+            $null -ne $importedDx12 -and
+            $importedVulkan.source_report_sha256 -eq $candidateSummarySha -and
+            $importedDx12.source_report_sha256 -eq $candidateSummarySha
+        ) "Protected report import must produce both baseline entries and persist the approved report SHA-256."
+
+        $hashMismatchBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $hashMismatchBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $candidateSummaryPath -ExpectedReportSha256 ("0" * 64) -CurrentSourceSha $candidateSourceSha | Out-Null
+        } "SHA-256.*mismatch" "Protected report import must reject a report whose bytes do not match the approved SHA-256."
+        Assert-SelfTest (@($hashMismatchBaseline.baselines.PSObject.Properties).Count -eq 0) "Report hash rejection must not mutate the baseline object."
+
+        $sourceMismatchBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $sourceMismatchBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $candidateSummaryPath -ExpectedReportSha256 $candidateSummarySha -CurrentSourceSha ("8" * 40) | Out-Null
+        } "source SHA.*current" "Protected report import must reject candidate evidence from a different tool commit."
+        Assert-SelfTest (@($sourceMismatchBaseline.baselines.PSObject.Properties).Count -eq 0) "Report source rejection must not mutate the baseline object."
+
+        $outsideSummaryPath = Join-Path $reportImportRoot "outside-summary.json"
+        Copy-Item -LiteralPath $candidateSummaryPath -Destination $outsideSummaryPath
+        $outsideSummarySha = Get-PerfGateFileSha256 -Path $outsideSummaryPath
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $importBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $outsideSummaryPath -ExpectedReportSha256 $outsideSummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
+        } "inside.*Intermediate.*perf-gate" "Protected report import must reject evidence outside the repository report root."
+
+        $unsafeSummaryCases = @(
+            [PSCustomObject]@{
+                name = "already-blessed"
+                expected = "unblessed PASS"
+                mutate = { param($value) $value.baseline_blessed = $true }
+            },
+            [PSCustomObject]@{
+                name = "warning"
+                expected = "warnings.*empty"
+                mutate = { param($value) $value.runs[0].warnings = @("self-test warning") }
+            },
+            [PSCustomObject]@{
+                name = "warnings-property-missing"
+                expected = "warnings.*empty"
+                mutate = { param($value) $value.runs[0].PSObject.Properties.Remove("warnings") }
+            },
+            [PSCustomObject]@{
+                name = "missing-required-metric"
+                expected = "required GPU metrics.*current profile"
+                mutate = { param($value) $value.runs[0].required_gpu_metrics = @($value.runs[0].required_gpu_metrics | Select-Object -Skip 1) }
+            },
+            [PSCustomObject]@{
+                name = "incomplete-cleanup"
+                expected = "cleanup"
+                mutate = { param($value) $value.runs[0].job_cleanup_confirmed = $false }
+            },
+            [PSCustomObject]@{
+                name = "identity-disabled"
+                expected = "identity.*required"
+                mutate = { param($value) $value.runs[0].baseline_identity_required = $false }
+            },
+            [PSCustomObject]@{
+                name = "readable-workload-mismatch"
+                expected = "readable workload.*current profile"
+                mutate = { param($value) $value.runs[0].workload.scene = "product/assets/scenes/not-approved.scene.json" }
+            },
+            [PSCustomObject]@{
+                name = "invalid-cpu-metric"
+                expected = "CPU/memory/draw metrics"
+                mutate = { param($value) $value.runs[0].cpu_frame_time_avg_ms = "NaN" }
+            }
+        )
+        foreach ($unsafeCase in $unsafeSummaryCases) {
+            $unsafeSummary = $candidateSummary | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+            & $unsafeCase.mutate $unsafeSummary
+            $unsafePath = Join-Path $candidateRoot ("summary-{0}.json" -f $unsafeCase.name)
+            Write-PerfGateJsonFile -InputObject $unsafeSummary -LiteralPath $unsafePath -Depth 16
+            $unsafeSha = Get-PerfGateFileSha256 -Path $unsafePath
+            $unsafeBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+            Assert-SelfTestThrows {
+                Import-PerfGateBaselineFromReport -Baseline $unsafeBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $unsafePath -ExpectedReportSha256 $unsafeSha -CurrentSourceSha $candidateSourceSha | Out-Null
+            } $unsafeCase.expected "Protected report import must reject unsafe '$($unsafeCase.name)' evidence."
+            Assert-SelfTest (@($unsafeBaseline.baselines.PSObject.Properties).Count -eq 0) "Unsafe '$($unsafeCase.name)' evidence must not mutate the baseline object."
+        }
+
+        Assert-SelfTestThrows {
+            Assert-PerfGateOptions -BlessBaseline $false -DryRun $false -TelemetryMode "Profile" -BlessBaselineFromReport $candidateSummaryPath -ExpectedReportSha256 ""
+        } "ExpectedReportSha256.*required" "Report import must require an approved SHA-256."
+        Assert-SelfTestThrows {
+            Assert-PerfGateOptions -BlessBaseline $true -DryRun $false -TelemetryMode "Profile" -BlessBaselineFromReport $candidateSummaryPath -ExpectedReportSha256 $candidateSummarySha
+        } "cannot be used with -BlessBaseline" "Report import and live bless must be mutually exclusive."
+        Assert-SelfTestThrows {
+            Assert-PerfGateOptions -BlessBaseline $false -DryRun $false -TelemetryMode "Profile" -BlessBaselineFromReport "" -ExpectedReportSha256 $candidateSummarySha
+        } "BlessBaselineFromReport.*required" "An approved SHA-256 without a report path must be rejected."
+
+        $atomicBaselinePath = Join-Path $candidateRoot "atomic-baseline.json"
+        Write-PerfGateJsonFile -InputObject ([PSCustomObject]@{ old = $true }) -LiteralPath $atomicBaselinePath
+        Write-PerfGateJsonFileAtomically -InputObject $importResult.baseline -LiteralPath $atomicBaselinePath -Depth 16
+        $atomicBaseline = Get-Content -LiteralPath $atomicBaselinePath -Raw | ConvertFrom-Json
+        Assert-SelfTest (
+            $null -ne (Get-BaselineEntry -Baseline $atomicBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan") -and
+            @(Get-ChildItem -LiteralPath $candidateRoot -Filter ".atomic-baseline.json.*.tmp").Count -eq 0
+        ) "Protected report import must publish the validated baseline atomically and remove its temporary file."
+    }
+    finally {
+        Remove-Item -LiteralPath $reportImportRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "RunPerfGate self-test PASS"
 }
 
@@ -4027,13 +4488,46 @@ if ($SelfTest) {
 
 $repoRoot = Get-RepoRoot
 $baselinePath = if ([string]::IsNullOrWhiteSpace($BaselinePath)) { Join-Path $repoRoot "tools/perf/perf_gate_baselines.json" } else { $BaselinePath }
+if (-not [System.IO.Path]::IsPathRooted($baselinePath)) {
+    $baselinePath = Join-Path $repoRoot $baselinePath
+}
+$baselinePath = [System.IO.Path]::GetFullPath($baselinePath)
 $profilesPath = Join-Path $repoRoot "tools/perf/perf_gate_profiles.json"
 $profileCatalog = Import-PerfGateProfileCatalog -ProfilesPath $profilesPath -BaselinePath $baselinePath
 $baseline = $profileCatalog.baseline
 $profileConfig = Get-PerfGateProfileConfig -Catalog $profileCatalog -Profile $Profile
 $Configuration = Resolve-PerfGateConfiguration -ProfileConfig $profileConfig -RequestedConfiguration $Configuration
-Assert-PerfGateOptions -BlessBaseline ([bool]$BlessBaseline) -DryRun ([bool]$DryRun) -TelemetryMode $TelemetryMode
+Assert-PerfGateOptions `
+    -BlessBaseline ([bool]$BlessBaseline) `
+    -DryRun ([bool]$DryRun) `
+    -TelemetryMode $TelemetryMode `
+    -BlessBaselineFromReport $BlessBaselineFromReport `
+    -ExpectedReportSha256 $ExpectedReportSha256
 Assert-PerfGateComparisonProfileContract -ProfileConfig $profileConfig
+
+if (-not [string]::IsNullOrWhiteSpace($BlessBaselineFromReport)) {
+    $importReportPath = if ([System.IO.Path]::IsPathRooted($BlessBaselineFromReport)) {
+        [System.IO.Path]::GetFullPath($BlessBaselineFromReport)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $repoRoot $BlessBaselineFromReport))
+    }
+    $importResult = Import-PerfGateBaselineFromReport `
+        -Baseline $baseline `
+        -BaselinePath $baselinePath `
+        -Profile $Profile `
+        -Configuration $Configuration `
+        -ProfileConfig $profileConfig `
+        -RepoRoot $repoRoot `
+        -ReportPath $importReportPath `
+        -ExpectedReportSha256 $ExpectedReportSha256 `
+        -CurrentSourceSha (Get-PerfGateSourceSha -RepoRoot $repoRoot)
+    Write-PerfGateJsonFileAtomically -InputObject $importResult.baseline -LiteralPath $baselinePath -Depth 16
+    Write-Host "Baseline imported from approved report: $($importResult.report_path)"
+    Write-Host "Approved report SHA-256: $($importResult.report_sha256)"
+    Write-Host "Baseline updated: $baselinePath"
+    exit 0
+}
 
 $timestamp = "{0}-{1}-{2}" -f (Get-Date -Format "yyyyMMdd-HHmmss-fff"), $PID, [Guid]::NewGuid().ToString("N").Substring(0, 8)
 $reportRoot = Join-Path $repoRoot "Intermediate/test-reports/perf-gate/$timestamp"

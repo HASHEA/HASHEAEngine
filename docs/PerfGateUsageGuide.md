@@ -64,6 +64,12 @@ RunPerfGate.bat -Profile Standard -SkipBuild -DryRun
 RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 ```
 
+把已由用户批准、SHA-256 锁定的固定 profile 候选报告导入基线（不重新运行目标程序）：
+
+```bat
+RunPerfGate.bat -Profile VegetationFullPipeline -Configuration Release -BlessBaselineFromReport Intermediate\test-reports\perf-gate\<run>\summary.json -ExpectedReportSha256 <64-hex-sha256>
+```
+
 指定基线文件：
 
 ```bat
@@ -281,6 +287,14 @@ baselines.<Profile>.<Configuration>.<Target>.<Backend>
 ```
 
 固定 profile entry 会同时写 CPU/memory/draw、全部 required GPU avg/p95、adapter/driver/OS build、source SHA、workload fingerprint 与可读 workload 字段。不要用失败、`DRY_RUN`、`NOT_COMPARABLE`、`TelemetryMode Off` 或明显受后台负载影响的结果更新基线；任何 baseline 更新仍需用户明确确认。
+
+当 fresh bless 跨越人工审批窗口会引入不可归因的主机状态漂移时，可改用受保护 report-import。先在同一空闲窗口背靠背采集并审核候选，再锁定被批准 `summary.json` 的精确字节哈希：
+
+```powershell
+(Get-FileHash -Algorithm SHA256 Intermediate\test-reports\perf-gate\<run>\summary.json).Hash
+```
+
+随后执行上一节的 `-BlessBaselineFromReport` 命令。导入只接受当前仓库报告目录内的 schema v2、未 bless、整体及逐 run 全 PASS 证据，并逐项核对 profile/configuration/baseline path、精确矩阵、当前 source SHA、workload fingerprint、extent/runtime flags、required metrics、coverage、warnings/failures 与进程树/Job cleanup。报告或哈希不符时 baseline 保持原样；成功时 entry 额外持久化 `source_report_sha256`，并在任何构建、GPU 运行或新报告目录创建前退出。导入后仍必须立刻跑一次普通 non-bless profile，确认全部 run 为 `COMPARED` 且无未解释 WARN/FAIL。
 
 ## 10. 推荐提交前流程
 
