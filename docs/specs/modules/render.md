@@ -19,6 +19,7 @@ status: active
 | `RenderDevice.h/.cpp` | 资源创建（RT/buffer/sampler/program）、pass begin/end、barrier 提交、present、backbuffer capture 与主 command buffer GPU timing；Impl 持有 `RHI::GraphicsContext` + `RHI::Swapchain` |
 | `ScenePresentationSubsystem.h/.cpp` | 输出目标 / view binding 管理；`update_presentations()` 构建帧快照，`submit_presentations()` 调 `SceneRenderer::render_visible_frame()` |
 | `RenderScene.h/.cpp` | `VisibleRenderFrame` 定义与 `build_visible_render_frame()` |
+| `TerrainRenderProxy.h/.cpp` | Terrain snapshot/render-asset proxy、world AABB 与 `VisibleTerrainFrame` 生成 |
 | `SceneRenderView.h` | `SceneRenderViewContext`（输出目标、clear、viewport、pick state 等 per-view 上下文） |
 | `SceneDeferredGraphResources.h` | 一帧 graph 内共享的 texture ref 集合（GBuffer、depth、HDR、shadow、volumetric 等） |
 | `GBufferLayout.h/.cpp` | DeferredHQ GBuffer 布局（5 个 attachment，D=motion vector，E=normal） |
@@ -33,6 +34,7 @@ status: active
 - `Renderer`：`begin_frame/end_frame/present`、资源创建转发、`begin_pass()+GraphicsPassContext::draw()`（支持 direct 或单条 non-indexed indirect draw）、`dispatch()`、`acquire/release_transient_render_target()`、`get_frame_stats()`。`RendererFrameStats::submitted_frame_index/gpu_timing_record_result` 暴露最后一次真实提交身份与当前 timing recording 结果。`begin_frame` 透传 swapchain acquire 三态；Retryable 时不创建/录制 command buffer，RenderDevice 只平衡 backend frame lifecycle。
 - `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`。`Texture2DArrayUploadDesc` 可创建一个带原生 2D-array SRV 的 sampled 资源；提供初始数据时必须覆盖每个唯一 `(array layer, mip)`，上传会按 layer-major / mip-major 紧密重排，紧密数据总量必须落在 RHI 的 32 位上传大小上限内。返回值是单个 `RenderTarget`，shader 的 `Texture2DArray` 参数通过 `set_texture` 绑定，不把各 layer 当成 `set_texture_array` 的多资源描述符数组。
 - `TerrainRenderAsset`：消费不可变 `TerrainAssetSnapshot`，按 Component pointer diff 生成当前 content generation 的 packed R16 高度和两路 RGBA8 权重 payload；拥有 height/staging buffers、两张 weight atlas、coarse weight target、三张 8-slice material arrays 与帧边界 slot metadata。`RenderAssetManager` 以规范化 Terrain key 把 request/finalize、pending/failed 和 activity epoch 合入通用 readiness；GPU finalize 仅允许 render thread。
+- `RenderTerrainProxy` / `RenderScene`：按 Scene Terrain extraction 构建不可变 snapshot generation 的 proxy，维护 world bounds，transform-only 更新以新 proxy 集合原子替换；`build_visible_render_frame` 对 bounds 做 frustum 裁剪并写入 `VisibleRenderFrame::terrains`。当前没有 pass 消费该数组，实际 Terrain draw 由后续 slice 接入。
 - `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。
 
 ### Pass 序列（`SceneRenderer::render_visible_frame`，代码实际顺序）
@@ -88,6 +90,7 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 ## 约束与不变式
 
 - `VisibleRenderFrame` 是快照：渲染只读场景数据（TAA 字段除外，由 SceneRenderer 写回）；不得在渲染路径回访 `Scene`（pick 回读除外，经显式 readback 队列）。
+- Terrain topology 使用独立 scene revision；同帧 topology 与 transform 均变化时先重建 proxy 集合，再更新 transform，避免访问已删除实体。已发布 `VisibleTerrainFrame` 持有自己的 const snapshot 与 render asset shared ownership，后续 rebuild 不得改写它。
 - 每 view 每帧新建 `RenderGraphBuilder`，graph 资源/ref 不跨帧缓存；跨帧资源（TAA history、shadow static cache）由 pass 类自持 `RenderTarget` 并以 external 注册。
 - 输出尺寸上限 `uint16_t`（graph texture desc 限制）。
 - temporal 状态按 view key（`view_id`，否则 output target 指针）隔离，多 viewport 互不污染。

@@ -52,6 +52,29 @@ namespace AshEngine
 			out_light.near_shadow_distance = light.near_shadow_distance;
 			return true;
 		}
+
+		static auto intersects_frustum(const PrimitiveBounds& bounds, const SceneView& view) -> bool
+		{
+			if (!bounds.is_valid)
+			{
+				return false;
+			}
+
+			for (const SceneFrustumPlane& plane : view.frustum_planes)
+			{
+				const glm::vec3 positive_vertex =
+				{
+					plane.normal.x >= 0.0f ? bounds.world_max.x : bounds.world_min.x,
+					plane.normal.y >= 0.0f ? bounds.world_max.y : bounds.world_min.y,
+					plane.normal.z >= 0.0f ? bounds.world_max.z : bounds.world_min.z
+				};
+				if (glm::dot(plane.normal, positive_vertex) + plane.distance < 0.0f)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
 	}
 
 	RenderScene::RenderScene(const RenderScene& other)
@@ -59,6 +82,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex> lock(other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
+		m_terrain_proxies = other.m_terrain_proxies;
 		m_lights = other.m_lights;
 		m_environment = other.m_environment;
 		m_particle_emitters = other.m_particle_emitters;
@@ -70,6 +94,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex> lock(other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
+		m_terrain_proxies = std::move(other.m_terrain_proxies);
 		m_lights = std::move(other.m_lights);
 		m_environment = std::move(other.m_environment);
 		m_particle_emitters = std::move(other.m_particle_emitters);
@@ -87,6 +112,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex, std::mutex> lock(m_mutex, other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = other.m_static_mesh_primitives;
+		m_terrain_proxies = other.m_terrain_proxies;
 		m_lights = other.m_lights;
 		m_environment = other.m_environment;
 		m_particle_emitters = other.m_particle_emitters;
@@ -103,6 +129,7 @@ namespace AshEngine
 		std::scoped_lock<std::mutex, std::mutex> lock(m_mutex, other.m_mutex);
 		m_next_primitive_id = other.m_next_primitive_id;
 		m_static_mesh_primitives = std::move(other.m_static_mesh_primitives);
+		m_terrain_proxies = std::move(other.m_terrain_proxies);
 		m_lights = std::move(other.m_lights);
 		m_environment = std::move(other.m_environment);
 		m_particle_emitters = std::move(other.m_particle_emitters);
@@ -156,10 +183,82 @@ namespace AshEngine
 			m_static_mesh_primitives = std::move(rebuilt_primitives);
 			m_next_primitive_id = next_primitive_id;
 		}
+		ASH_PROCESS_ERROR(rebuild_terrains_from_scene(scene, render_asset_manager));
 		ASH_PROCESS_ERROR(rebuild_lights_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_environment_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_particles_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_render_config_from_scene(scene));
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderScene::rebuild_terrains_from_scene(
+		Scene& scene,
+		RenderAssetManager& render_asset_manager)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_terrains_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+		AssetDatabase* asset_database = render_asset_manager.get_asset_database();
+		ASH_PROCESS_ERROR(asset_database != nullptr);
+
+		std::vector<std::shared_ptr<RenderTerrainProxy>> rebuilt_proxies{};
+		const std::vector<SceneTerrainExtractionDesc> terrain_entities =
+			scene.extract_terrain_entities();
+		rebuilt_proxies.reserve(terrain_entities.size());
+		for (const SceneTerrainExtractionDesc& terrain_desc : terrain_entities)
+		{
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+			ASH_PROCESS_ERROR(asset_database->load_terrain_by_path(
+				terrain_desc.terrain.asset_path,
+				snapshot));
+			ASH_PROCESS_ERROR(snapshot && !snapshot->failed);
+
+			std::shared_ptr<TerrainRenderAsset> render_asset =
+				render_asset_manager.request_terrain_asset(
+					terrain_desc.terrain.asset_path,
+					snapshot);
+			ASH_PROCESS_ERROR(render_asset != nullptr);
+
+			auto proxy = std::make_shared<RenderTerrainProxy>();
+			ASH_PROCESS_ERROR(proxy->initialize(
+				terrain_desc.entity_id,
+				snapshot,
+				terrain_desc.world_transform,
+				terrain_desc.terrain.visible,
+				terrain_desc.terrain.casts_shadow,
+				terrain_desc.terrain.receives_shadow,
+				std::move(render_asset)));
+			rebuilt_proxies.push_back(std::move(proxy));
+		}
+
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_terrain_proxies = std::move(rebuilt_proxies);
+		}
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderScene::update_terrain_transforms_from_scene(const Scene& scene)
+	{
+		ASH_PROFILE_SCOPE_NC("RenderScene::update_terrain_transforms_from_scene", AshEngine::Profile::Color::Scene);
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(scene.is_valid());
+
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		std::vector<std::shared_ptr<RenderTerrainProxy>> updated_proxies{};
+		updated_proxies.reserve(m_terrain_proxies.size());
+		for (const std::shared_ptr<RenderTerrainProxy>& proxy : m_terrain_proxies)
+		{
+			ASH_PROCESS_ERROR(proxy != nullptr);
+			const Entity entity = scene.find_entity(proxy->get_entity_id());
+			ASH_PROCESS_ERROR(entity.is_valid() && entity.has_terrain_component());
+
+			auto updated_proxy = std::make_shared<RenderTerrainProxy>(*proxy);
+			ASH_PROCESS_ERROR(updated_proxy->update_world_transform(
+				scene.get_entity_world_transform(proxy->get_entity_id())));
+			updated_proxies.push_back(std::move(updated_proxy));
+		}
+		m_terrain_proxies = std::move(updated_proxies);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -292,9 +391,11 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(view.is_valid);
 
 		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> primitives_snapshot;
+		std::vector<std::shared_ptr<RenderTerrainProxy>> terrain_snapshot;
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			primitives_snapshot = m_static_mesh_primitives;
+			terrain_snapshot = m_terrain_proxies;
 		}
 
 		VisibilityResult visibility{};
@@ -355,6 +456,17 @@ namespace AshEngine
 			draw.bounds = primitive.get_bounds();
 			draw.mobility = primitive.get_mobility();
 			out_frame.shadow_caster_static_mesh_draws.push_back(std::move(draw));
+		}
+
+		out_frame.terrains.reserve(terrain_snapshot.size());
+		for (const std::shared_ptr<RenderTerrainProxy>& terrain : terrain_snapshot)
+		{
+			if (!terrain || !terrain->is_visible() ||
+				!intersects_frustum(terrain->get_bounds(), view))
+			{
+				continue;
+			}
+			out_frame.terrains.push_back(terrain->make_visible_frame());
 		}
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);

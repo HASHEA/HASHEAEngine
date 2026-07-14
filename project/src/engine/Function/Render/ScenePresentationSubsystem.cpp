@@ -64,6 +64,7 @@ namespace AshEngine
 			uint64_t last_light_version = 0;
 			uint64_t last_environment_version = 0;
 			uint64_t last_particle_version = 0;
+			uint64_t last_terrain_version = 0;
 			uint64_t last_render_config_version = 0;
 			bool render_scene_valid = false;
 			RenderScene render_scene{};
@@ -661,6 +662,7 @@ namespace AshEngine
 				const uint64_t scene_light_version = binding.scene->get_render_light_version();
 				const uint64_t scene_environment_version = binding.scene->get_render_environment_version();
 				const uint64_t scene_particle_version = binding.scene->get_render_particle_version();
+				const uint64_t scene_terrain_version = binding.scene->get_render_terrain_version();
 				const uint64_t scene_render_config_version = binding.scene->get_render_config_version();
 				if (binding.refresh_requested ||
 					!scene_state->render_scene_valid ||
@@ -674,11 +676,29 @@ namespace AshEngine
 					scene_state->last_light_version = scene_light_version;
 					scene_state->last_environment_version = scene_environment_version;
 					scene_state->last_particle_version = scene_particle_version;
+					scene_state->last_terrain_version = scene_terrain_version;
 					scene_state->last_render_config_version = scene_render_config_version;
 					if (!scene_state->render_scene_valid)
 					{
 						HLogError(
 							"ScenePresentationSubsystem: failed to rebuild RenderScene for binding '{}' and scene '{}'.",
+							binding.debug_name,
+							binding.scene->get_name());
+					}
+				}
+				if (scene_state->last_terrain_version != scene_terrain_version)
+				{
+					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneTerrains", AshEngine::Profile::Color::Scene);
+					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
+					const bool terrains_rebuilt = scene_state->render_scene.rebuild_terrains_from_scene(
+						*binding.scene,
+						*m_impl->render_asset_manager);
+					scene_state->render_scene_valid = scene_state->render_scene_valid && terrains_rebuilt;
+					scene_state->last_terrain_version = scene_terrain_version;
+					if (!terrains_rebuilt)
+					{
+						HLogError(
+							"ScenePresentationSubsystem: failed to rebuild RenderScene terrains for binding '{}' and scene '{}'.",
 							binding.debug_name,
 							binding.scene->get_name());
 					}
@@ -691,6 +711,7 @@ namespace AshEngine
 						scene_state->last_environment_version != scene_environment_version;
 					const bool transform_update_succeeded =
 						scene_state->render_scene.update_transforms_from_scene(*binding.scene) &&
+						scene_state->render_scene.update_terrain_transforms_from_scene(*binding.scene) &&
 						scene_state->render_scene.rebuild_lights_from_scene(*binding.scene) &&
 						(!environment_changed || scene_state->render_scene.rebuild_environment_from_scene(*binding.scene)) &&
 						scene_state->render_scene.rebuild_particles_from_scene(*binding.scene);

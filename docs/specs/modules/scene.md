@@ -38,7 +38,7 @@ status: active
   - 帧驱动：`update_presentations`（逻辑侧同步）+ `submit_presentations`（提交渲染）+ `get_last_scene_submission_snapshot`；快照绑定 Application frame，记录全部预期 packet 的 attempted/succeeded/failed/capture-ready 与提交结束时 asset epoch。
   - 编辑器扩展：overlay（`submit_scene_overlay` / `clear_scene_overlay`）、GPU 拾取（`request_scene_entity_pick` / `poll_scene_entity_pick_result` / `complete_gpu_pick_readbacks`）、`get_scene_view_stats`。
 
-数据流：每帧按 Scene 的 render 版本号增量同步到 `RenderScene`（现有链含 primitives/transforms/lights/environment/particles/config），`build_visible_render_frame` 产出相机、draw、灯光、环境、particle emitters 与配置快照；`ScenePresentationSubsystem` 再补入 scene runtime/content 标识和 render-submit delta，交给 `SceneRenderer`。Terrain 已有独立 extraction/revision，但接入 `RenderScene` 的增量同步属于后续 Phase 2 rendering slice。
+数据流：每帧按 Scene 的 render 版本号增量同步到 `RenderScene`（现有链含 primitives/transforms/lights/environment/particles/terrain/config），`build_visible_render_frame` 产出相机、draw、灯光、环境、particle emitters、frustum-cull 后的 terrain proxy 快照与配置；`ScenePresentationSubsystem` 再补入 scene runtime/content 标识和 render-submit delta，交给 `SceneRenderer`。Terrain topology 使用独立 revision，transform-only 变化只复制更新 proxy 的 world transform/bounds；当前 `SceneRenderer` 尚未消费 terrain 数组进行 draw。
 
 ## 约束与不变式
 
@@ -50,6 +50,7 @@ status: active
 - 组件集合固定为 `SceneComponentType` 八项（Name/Transform/Camera/Light/Mesh/Environment/Particle/Terrain）。当前 scene JSON schema 为 version 6；v3-v5 场景继续加载且没有隐式 Terrain。Particle 的 `blend_mode` 写为 `Additive` / `AlphaBlend` 字符串，读取兼容旧整数。
 - `TerrainComponent` 必须引用非空资产路径，保存 8 个材质层覆盖位；Terrain Entity 的完整 transform chain 只允许有限平移、零旋转与有限正缩放。非法 add/set/reparent/load 原子失败，不静默修正或替换既有组件。
 - Terrain 内容组件变化只推进 `render_terrain_version`；普通合法 transform/reparent 只推进 transform revision，不重建 Terrain asset data。参数为空的通用 `add_scene_component` 无法构造合法 Terrain，故 Terrain 创建必须使用携带资产路径的 typed facade；通用 read/write/remove 仍支持 Terrain。
+- ScenePresentation 同帧观察到 Terrain topology 与 transform 变化时，必须先按最新 extraction 重建 proxy 集合，再更新 transform；失败保持旧集合或将 render scene 标为无效并在下一帧全量重试，不发布半构建 Terrain 集合。
 - Scene Terrain world adapter 将 world 坐标按平移与正缩放映射到 snapshot-local；高度、逆转置法线和射线距离再转换回 world space。多 Terrain 射线在任何候选资产仍 Pending 时保守返回 Pending；Failed 优先于结果，所有非 Ready 路径保持输出不变。Terrain 尚未并入通用 mesh `ray_cast_scene` 或 Editor GPU pick。
 - `get_content_epoch()` 只在 load/reload/replace 内容时变化，普通组件编辑不得推进；它用于重置跨帧渲染状态，不替代细粒度 render version。
 - 粒子 GPU 状态以进程内 `scene_runtime_id + entity_id` 隔离；场景解绑会显式释放该 runtime 的状态。
