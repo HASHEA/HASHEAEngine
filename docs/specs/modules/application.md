@@ -40,7 +40,7 @@ status: active
 | `--run-for-seconds=S` / `--run-for-frames=N` | 显式固定时长/帧数运行，供 PerfGate watchdog、soak 或调试使用；到达上限是正常退出，不代表 readiness 成功 |
 | `--smoke-test[=N]` | deprecated 的 `--run-for-frames=N` 别名（裸选项 N=3）；`ASH_ENGINE_SMOKE_TEST_FRAMES` 同样仅是旧 fixed-run 别名并打印告警 |
 | `--rhi=<vulkan\|vk\|directx12\|dx12\|d3d12>` | 后端覆盖，经 `set_backend_override` 在 `initialize()` 之前注入（顺序是硬约束）；非法值直接退出码 1 |
-| `--window-width=W --window-height=H` | 本进程窗口 extent 覆盖；两项必须成对出现且各自位于 `1..65535`，缺项、0、负数或越界都在 `create_application()` 前失败；是否启用 PerfGate 不影响该覆盖 |
+| `--window-width=W --window-height=H` | 本进程窗口 extent 覆盖；两项必须成对出现且各自位于 `1..65535`，缺项、0、负数或越界都在 `create_application()` 前失败。PerfGate 启用且提供成对 extent 时，Window 使用无边框 exact-client 模式，避免 Windows 标题栏/工作区把 2560×1440 client 压成 2560×1415；普通运行（含未启用 PerfGate 的 extent override）继续使用带装饰窗口 |
 | `--dump-frame=<png>` | 隐式启用 readiness capture；通常配 `--smoke-test-seconds=S`，未给 S 时默认 120 秒。只有通过 epoch 双重复核的 capture 才原子发布 PNG，超时/失败会删除旧目标并非零退出 |
 | `--scene=<json>` | 场景路径覆盖，应用层经 `get_scene_path_override()` 消费 |
 | `--engine-self-test` | 只跑 Base 自测后退出 |

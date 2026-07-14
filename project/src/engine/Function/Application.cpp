@@ -177,6 +177,7 @@ namespace AshEngine
 			runtimeVsync,
 			resolvedConfig.title,
 			resolvedBackend };
+		windowConfig.exactClientExtent = pendingPerfGateConfig.enabled && hasWindowExtentOverride;
 		window = Window::create();
 		if (!window)
 		{
