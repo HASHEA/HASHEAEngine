@@ -5,6 +5,7 @@
 #include <future>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace AshEngine
 {
@@ -23,9 +24,16 @@ namespace AshEditor
 		void Shutdown();
 		void Update();
 		bool SubmitIntent(const TerrainEditorIntent& refIntent);
+		bool OpenSnapshotForAuthoring(const AshEngine::TerrainAssetSnapshot& refSnapshot);
+		bool ApplyStrokePatches(
+			AshEngine::TerrainAssetId assetId,
+			AshEngine::TerrainLayerId layerId,
+			const std::vector<AshEngine::TerrainEditPatch>& refPatches,
+			AshEngine::TerrainEditPatchDirection eDirection);
 
 		const TerrainEditorPreviewState& GetPreviewState() const;
 		AshEngine::TerrainAssetId GetSelectedAssetId() const;
+		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
 		bool HasDirtyAssets() const;
 		bool HasBlockingOperation() const;
 		const std::string& GetLastError() const;

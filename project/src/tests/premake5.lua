@@ -31,6 +31,8 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Services/EditorGizmoMath.cpp",
 		"%{wks.location}/project/src/editor/Services/EditorGizmoViewport.cpp",
 		"%{wks.location}/project/src/editor/Core/TerrainEditorSessionCore.cpp",
+		"%{wks.location}/project/src/editor/Core/TerrainCommands.cpp",
+		"%{wks.location}/project/src/editor/Services/TerrainEditorService.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxFreeCameraController.cpp",
 	}
 

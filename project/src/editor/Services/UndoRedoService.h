@@ -26,6 +26,10 @@ namespace AshEditor
 		// Returns true only if the command execute path succeeded and state was recorded.
 		bool Execute(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext);
 
+		// Records a command whose mutation has already completed. This path never executes the command.
+		// If history ownership cannot be secured, the command is undone before failure is returned.
+		bool RecordExecuted(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext);
+
 		// Undoes the last committed command.
 		// Returns false if there is an open transaction, history is empty, or undo failed (history is preserved).
 		bool Undo(EditorContext& refContext);

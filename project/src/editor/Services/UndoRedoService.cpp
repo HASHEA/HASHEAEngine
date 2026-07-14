@@ -33,6 +33,91 @@ namespace AshEditor
 			: ExecuteStandalone(std::move(upCommand), refContext);
 	}
 
+	bool UndoRedoService::RecordExecuted(
+		std::unique_ptr<EditorCommand> upCommand,
+		EditorContext& refContext)
+	{
+		if (!upCommand)
+		{
+			return false;
+		}
+
+		const bool bTransactional = _upPendingTransaction != nullptr;
+		try
+		{
+			const EditorCommandSelection selection = upCommand->GetSelectionAfterExecute();
+			if (bTransactional)
+			{
+				_upPendingTransaction->vecCommands.reserve(
+					_upPendingTransaction->vecCommands.size() + 1u);
+				const bool bFirstTransactionCommand = _upPendingTransaction->vecCommands.empty();
+				_upPendingTransaction->vecCommands.push_back(std::move(upCommand));
+				try
+				{
+					ApplySelection(refContext, selection);
+				}
+				catch (...)
+				{
+					upCommand = std::move(_upPendingTransaction->vecCommands.back());
+					_upPendingTransaction->vecCommands.pop_back();
+					throw;
+				}
+				if (bFirstTransactionCommand)
+				{
+					_vecRedoStack.clear();
+				}
+			}
+			else
+			{
+				_vecUndoStack.reserve(_vecUndoStack.size() + 1u);
+				const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
+				_vecUndoStack.push_back(HistoryEntry{ std::move(upCommand), uNewHistoryStateId });
+				try
+				{
+					ApplySelection(refContext, selection);
+				}
+				catch (...)
+				{
+					upCommand = std::move(_vecUndoStack.back().upCommand);
+					_vecUndoStack.pop_back();
+					throw;
+				}
+				_vecRedoStack.clear();
+				_uCurrentHistoryStateId = uNewHistoryStateId;
+			}
+		}
+		catch (...)
+		{
+			try
+			{
+				if (upCommand && !upCommand->Undo(refContext))
+				{
+					HLogError("Failed to roll back an already-executed command after history recording failed.");
+				}
+			}
+			catch (...)
+			{
+				HLogError("Already-executed command rollback raised an exception after history recording failed.");
+			}
+			return false;
+		}
+
+		try
+		{
+			NotifyHistoryChanged();
+			if (bTransactional)
+			{
+				NotifyTransactionStateChanged();
+			}
+			NotifyDocumentDirtyStateChanged();
+		}
+		catch (...)
+		{
+			HLogWarning("Already-executed command was recorded, but a history notification failed.");
+		}
+		return true;
+	}
+
 	bool UndoRedoService::Undo(EditorContext& refContext)
 	{
 		if (_upPendingTransaction || _vecUndoStack.empty())

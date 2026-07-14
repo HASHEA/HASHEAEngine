@@ -74,6 +74,50 @@ namespace AshEditor
 		return true;
 	}
 
+	bool TerrainEditorService::OpenSnapshotForAuthoring(
+		const AshEngine::TerrainAssetSnapshot& refSnapshot)
+	{
+		_pendingLoad = {};
+		_pendingLoadAssetId = 0u;
+		_strLastError.clear();
+		AshEngine::TerrainWorkingSet workingSet{};
+		std::string strError{};
+		if (AshEngine::make_terrain_working_set(refSnapshot, workingSet, &strError) &&
+			_core.Open(std::move(workingSet)))
+		{
+			return true;
+		}
+
+		_strLastError = strError.empty()
+			? "Terrain snapshot is invalid for authoring."
+			: std::move(strError);
+		return false;
+	}
+
+	bool TerrainEditorService::ApplyStrokePatches(
+		const AshEngine::TerrainAssetId assetId,
+		const AshEngine::TerrainLayerId layerId,
+		const std::vector<AshEngine::TerrainEditPatch>& refPatches,
+		const AshEngine::TerrainEditPatchDirection eDirection)
+	{
+		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
+		std::string strError{};
+		if (!_core.ApplyStrokePatches(
+				assetId,
+				layerId,
+				refPatches,
+				eDirection,
+				dirtyComponents,
+				&strError))
+		{
+			_strLastError = strError.empty() ? "Terrain stroke patch replay failed." : std::move(strError);
+			return false;
+		}
+
+		_strLastError.clear();
+		return true;
+	}
+
 	const TerrainEditorPreviewState& TerrainEditorService::GetPreviewState() const
 	{
 		return _core.GetPreviewState();
@@ -82,6 +126,11 @@ namespace AshEditor
 	AshEngine::TerrainAssetId TerrainEditorService::GetSelectedAssetId() const
 	{
 		return _core.GetAssetId();
+	}
+
+	const AshEngine::TerrainWorkingSet* TerrainEditorService::GetWorkingSet() const
+	{
+		return _core.GetWorkingSet();
 	}
 
 	bool TerrainEditorService::HasDirtyAssets() const
@@ -123,15 +172,13 @@ namespace AshEditor
 				return;
 			}
 
-			AshEngine::TerrainWorkingSet workingSet{};
-			std::string strError{};
-			if (!AshEngine::make_terrain_working_set(*snapshot, workingSet, &strError) ||
-				!_core.Open(std::move(workingSet)))
+			if (!OpenSnapshotForAuthoring(*snapshot))
 			{
 				_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
-				_strLastError = strError.empty()
-					? "Terrain asset could not open an authoring working set."
-					: std::move(strError);
+				if (_strLastError.empty())
+				{
+					_strLastError = "Terrain asset could not open an authoring working set.";
+				}
 				return;
 			}
 

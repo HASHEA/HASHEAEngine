@@ -316,6 +316,7 @@ namespace AshEditor
 
 		_editorContext.pSelectionService = _upSelectionService.get();
 		_editorContext.pSceneService = _upSceneService.get();
+		_editorContext.pTerrainEditorService = _upTerrainEditorService.get();
 		RefreshUiContext();
 
 		SceneWorkflowContext sceneWorkflowContext{
@@ -448,6 +449,11 @@ namespace AshEditor
 	bool EditorApplicationImpl::ExecuteCommand(std::unique_ptr<EditorCommand> upCommand)
 	{
 		return _upUndoRedoService->Execute(std::move(upCommand), _editorContext);
+	}
+
+	bool EditorApplicationImpl::RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand)
+	{
+		return _upUndoRedoService->RecordExecuted(std::move(upCommand), _editorContext);
 	}
 
 	bool EditorApplicationImpl::BeginCommandTransaction(const char* pLabel)

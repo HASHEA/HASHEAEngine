@@ -67,6 +67,48 @@ namespace AshEditor
 		return _optWorkingSet ? &*_optWorkingSet : nullptr;
 	}
 
+	bool TerrainEditorSessionCore::ApplyStrokePatches(
+		const AshEngine::TerrainAssetId assetId,
+		const AshEngine::TerrainLayerId layerId,
+		const std::vector<AshEngine::TerrainEditPatch>& refPatches,
+		const AshEngine::TerrainEditPatchDirection eDirection,
+		std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+		std::string* pError)
+	{
+		if (pError)
+		{
+			pError->clear();
+		}
+		if (!_optWorkingSet || assetId == 0u || assetId != _assetId || !layerId.is_valid() ||
+			refPatches.empty())
+		{
+			if (pError)
+			{
+				*pError = "Terrain stroke command does not match an open authoring session.";
+			}
+			return false;
+		}
+
+		for (const AshEngine::TerrainEditPatch& refPatch : refPatches)
+		{
+			if (refPatch.asset_id != assetId || refPatch.layer_id != layerId)
+			{
+				if (pError)
+				{
+					*pError = "Terrain stroke patch identity does not match its command.";
+				}
+				return false;
+			}
+		}
+
+		return AshEngine::apply_terrain_edit_patches(
+			*_optWorkingSet,
+			refPatches,
+			eDirection,
+			refDirtyComponents,
+			pError);
+	}
+
 	bool TerrainEditorSessionCore::IsDirty() const
 	{
 		return _optWorkingSet && _optWorkingSet->content_generation != _persistedContentGeneration;

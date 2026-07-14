@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -98,6 +99,13 @@ namespace AshEditor
 		bool Open(AshEngine::TerrainWorkingSet workingSet);
 		void Close();
 		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
+		bool ApplyStrokePatches(
+			AshEngine::TerrainAssetId assetId,
+			AshEngine::TerrainLayerId layerId,
+			const std::vector<AshEngine::TerrainEditPatch>& refPatches,
+			AshEngine::TerrainEditPatchDirection eDirection,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+			std::string* pError = nullptr);
 		bool IsDirty() const;
 		void SetPreviewQueryStatus(AshEngine::TerrainQueryStatus eStatus);
 

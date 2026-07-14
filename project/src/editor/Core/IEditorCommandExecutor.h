@@ -12,6 +12,7 @@ namespace AshEditor
 		virtual ~IEditorCommandExecutor() = default;
 
 		virtual bool ExecuteCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
+		virtual bool RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
 		virtual bool BeginCommandTransaction(const char* pLabel)
 		{
 			(void)pLabel;
