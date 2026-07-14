@@ -31,7 +31,7 @@ status: active
 - `SceneRenderer::render_visible_frame(VisibleRenderFrame&, const SceneRenderViewContext&)`：一次 view 渲染入口。会写回 frame 的 `taa_enabled / taa_jitter_ndc / taa_previous_jitter_ndc` 并 jitter 投影矩阵。
 - `SceneRenderer::draw_render_debug_view_ui(UIContext&)`、`complete_pending_pick_readbacks()`（editor GPU picking 回读）。
 - `Renderer`：`begin_frame/end_frame/present`、资源创建转发、`begin_pass()+GraphicsPassContext::draw()`（支持 direct 或单条 non-indexed indirect draw）、`dispatch()`、`acquire/release_transient_render_target()`、`get_frame_stats()`。`RendererFrameStats::submitted_frame_index/gpu_timing_record_result` 暴露最后一次真实提交身份与当前 timing recording 结果。`begin_frame` 透传 swapchain acquire 三态；Retryable 时不创建/录制 command buffer，RenderDevice 只平衡 backend frame lifecycle。
-- `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`。
+- `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`。`Texture2DArrayUploadDesc` 可创建一个带原生 2D-array SRV 的 sampled 资源；提供初始数据时必须覆盖每个唯一 `(array layer, mip)`，上传会按 layer-major / mip-major 紧密重排，紧密数据总量必须落在 RHI 的 32 位上传大小上限内。返回值是单个 `RenderTarget`，shader 的 `Texture2DArray` 参数通过 `set_texture` 绑定，不把各 layer 当成 `set_texture_array` 的多资源描述符数组。
 - `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。
 
 ### Pass 序列（`SceneRenderer::render_visible_frame`，代码实际顺序）

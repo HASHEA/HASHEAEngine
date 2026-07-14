@@ -251,6 +251,22 @@ namespace AshEngine
 		uint32_t slice_pitch = 0;
 	};
 
+	struct Texture2DArrayUploadDesc
+	{
+		uint16_t width = 1;
+		uint16_t height = 1;
+		RenderTextureFormat format = RenderTextureFormat::RGBA8_UNORM;
+		uint16_t array_layer_count = 1;
+		uint8_t mip_level_count = 1;
+		const TextureSubresourceUploadDesc* subresources = nullptr;
+		uint32_t subresource_count = 0;
+		const char* name = nullptr;
+	};
+
+	ASH_API bool validate_texture_2d_array_upload_desc(
+		const Texture2DArrayUploadDesc& desc,
+		std::string* out_error = nullptr);
+
 	struct TextureCubeUploadDesc
 	{
 		uint16_t width = 1;
@@ -573,6 +589,7 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget> get_back_buffer();
 		std::shared_ptr<RenderTarget> create_render_target(const RenderTargetDesc& desc);
 		std::shared_ptr<RenderTarget> create_texture_2d(const TextureUploadDesc& desc);
+		std::shared_ptr<RenderTarget> create_texture_2d_array(const Texture2DArrayUploadDesc& desc);
 		std::shared_ptr<RenderTarget> create_texture_cube(const TextureCubeUploadDesc& desc);
 		std::shared_ptr<RenderTarget> acquire_transient_render_target(const RenderTargetDesc& desc);
 		void release_transient_render_target(const std::shared_ptr<RenderTarget>& render_target);

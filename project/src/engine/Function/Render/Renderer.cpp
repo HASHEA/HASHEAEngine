@@ -250,6 +250,13 @@ namespace AshEngine
 		return m_render_device ? m_render_device->create_texture_2d(desc) : nullptr;
 	}
 
+	std::shared_ptr<RenderTarget> Renderer::create_texture_2d_array(
+		const Texture2DArrayUploadDesc& desc)
+	{
+		return m_render_device ?
+			m_render_device->create_texture_2d_array(desc) : nullptr;
+	}
+
 	std::shared_ptr<RenderTarget> Renderer::create_texture_cube(const TextureCubeUploadDesc& desc)
 	{
 		return m_render_device ? m_render_device->create_texture_cube(desc) : nullptr;
