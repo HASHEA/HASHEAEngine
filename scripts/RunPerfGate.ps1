@@ -218,6 +218,11 @@ function New-RunRecord {
         required_gpu_metrics = @()
         gpu_adapter = "n/a"
         gpu_driver = "n/a"
+        os_build = "n/a"
+        source_sha = "n/a"
+        workload_fingerprint = ""
+        workload = $null
+        baseline_identity_required = $false
         actual_width = $null
         actual_height = $null
         extent_stable = $null
@@ -599,7 +604,8 @@ function New-BaselineDelta {
         [string]$Label,
         [double]$Current,
         [object]$BaselineValue,
-        [double]$ThresholdPercent
+        [AllowNull()][object]$ThresholdPercent,
+        [double]$AbsoluteFloor = 0.0
     )
 
     if ($null -eq $BaselineValue) {
@@ -609,9 +615,12 @@ function New-BaselineDelta {
     $baselineDouble = [double]$BaselineValue
     $deltaPercent = $null
     $status = "PASS"
+    $relativeThreshold = if ($null -eq $ThresholdPercent) { 0.0 } else { ([Math]::Abs($baselineDouble) * [double]$ThresholdPercent) / 100.0 }
+    $allowedIncrease = [Math]::Max($relativeThreshold, $AbsoluteFloor)
+    $actualIncrease = $Current - $baselineDouble
     if ([Math]::Abs($baselineDouble) -gt [double]::Epsilon) {
         $deltaPercent = (($Current - $baselineDouble) / $baselineDouble) * 100.0
-        if ($deltaPercent -gt $ThresholdPercent) {
+        if ($actualIncrease -gt $allowedIncrease) {
             $status = "WARN"
         }
     }
@@ -619,7 +628,9 @@ function New-BaselineDelta {
         $deltaPercent = 0.0
     }
     elseif ($Current -gt 0.0) {
-        $status = "WARN"
+        if ($actualIncrease -gt $allowedIncrease) {
+            $status = "WARN"
+        }
     }
 
     return [PSCustomObject]@{
@@ -630,6 +641,9 @@ function New-BaselineDelta {
         delta_percent = $deltaPercent
         delta_text = Format-DeltaPercent $deltaPercent
         threshold_percent = $ThresholdPercent
+        absolute_floor = $AbsoluteFloor
+        allowed_increase = $allowedIncrease
+        actual_increase = $actualIncrease
         status = $status
     }
 }
@@ -655,8 +669,459 @@ function Add-BaselineDelta {
     }
 
     if ($Delta.status -eq "WARN") {
-        Add-Warning $Record ("Baseline regression: {0} {1} exceeded {2:N1}% threshold" -f $Delta.label, $Delta.delta_text, [double]$Delta.threshold_percent)
+        Add-Warning $Record ("Baseline regression: {0} {1} (+{2:N4}) exceeded allowed increase {3:N4}" -f $Delta.label, $Delta.delta_text, [double]$Delta.actual_increase, [double]$Delta.allowed_increase)
     }
+}
+
+function Add-ConfiguredBaselineDelta {
+    param(
+        [object]$Record,
+        [string]$Metric,
+        [string]$Label,
+        [object]$Current,
+        [object]$BaselineValue,
+        [object]$Threshold
+    )
+
+    $relativePercent = Get-ProfileProperty $Threshold "relative_percent"
+    $absoluteFloor = Get-ProfileProperty $Threshold "absolute_floor"
+    if ($null -eq $absoluteFloor) { $absoluteFloor = 0.0 }
+    Add-BaselineDelta $Record (New-BaselineDelta `
+        -Metric $Metric `
+        -Label $Label `
+        -Current ([double]$Current) `
+        -BaselineValue $BaselineValue `
+        -ThresholdPercent $relativePercent `
+        -AbsoluteFloor ([double]$absoluteFloor))
+}
+
+function Get-RequiredComparisonDouble {
+    param(
+        [object]$Record,
+        [AllowNull()][object]$Value,
+        [string]$MetricLabel,
+        [ValidateSet("baseline", "current")]
+        [string]$Side
+    )
+
+    $validated = ConvertTo-PerfGateFiniteDouble $Value
+    if ($null -eq $validated -or $validated -lt 0.0) {
+        Add-Failure $Record "Required $MetricLabel $Side value must be a finite non-negative number"
+        return $null
+    }
+    return [double]$validated
+}
+
+function Get-PerfGateSha256Text {
+    param([string]$Text)
+
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join "")
+    }
+    finally {
+        $sha256.Dispose()
+    }
+}
+
+function Get-PerfGateFileSha256 {
+    param([string]$Path)
+
+    $stream = $null
+    $sha256 = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read)
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "")
+    }
+    finally {
+        if ($null -ne $sha256) {
+            $sha256.Dispose()
+        }
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function New-PerfGateWorkloadIdentity {
+    param(
+        [object]$ProfileConfig,
+        [string]$RepoRoot
+    )
+
+    $sceneValue = Get-ProfileProperty $ProfileConfig "scene"
+    if ($null -eq $sceneValue -or [string]::IsNullOrWhiteSpace([string]$sceneValue)) {
+        throw "Comparable perf profile must define scene."
+    }
+
+    $rootFullPath = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    $sceneInput = [string]$sceneValue
+    $sceneFullPath = if ([System.IO.Path]::IsPathRooted($sceneInput)) {
+        [System.IO.Path]::GetFullPath($sceneInput)
+    }
+    else {
+        [System.IO.Path]::GetFullPath((Join-Path $rootFullPath $sceneInput))
+    }
+    $rootPrefix = $rootFullPath + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $sceneFullPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Comparable perf profile scene must remain inside the repository root."
+    }
+    if (-not (Test-Path -LiteralPath $sceneFullPath -PathType Leaf)) {
+        throw "Comparable perf profile scene does not exist: $sceneFullPath"
+    }
+    $normalizedScene = $sceneFullPath.Substring($rootPrefix.Length).Replace('\', '/').ToLowerInvariant()
+    $sceneSha256 = Get-PerfGateFileSha256 -Path $sceneFullPath
+
+    $widthValue = Get-ProfileProperty $ProfileConfig "window_width"
+    $heightValue = Get-ProfileProperty $ProfileConfig "window_height"
+    if ($widthValue -isnot [System.Int32] -and $widthValue -isnot [System.Int64]) {
+        throw "Comparable perf profile window_width must be an integer."
+    }
+    if ($heightValue -isnot [System.Int32] -and $heightValue -isnot [System.Int64]) {
+        throw "Comparable perf profile window_height must be an integer."
+    }
+    $width = [int64]$widthValue
+    $height = [int64]$heightValue
+    if ($width -le 0 -or $height -le 0) {
+        throw "Comparable perf profile extent must be positive."
+    }
+
+    $fixedCamera = Get-ProfileProperty $ProfileConfig "fixed_camera"
+    $vsync = Get-ProfileProperty $ProfileConfig "vsync"
+    $validation = Get-ProfileProperty $ProfileConfig "validation"
+    if ($fixedCamera -isnot [bool] -or $vsync -isnot [bool] -or $validation -isnot [bool]) {
+        throw "Comparable perf profile fixed_camera, vsync, and validation must be booleans."
+    }
+    $frameCapValue = Get-ProfileProperty $ProfileConfig "frame_cap"
+    if ($null -eq $frameCapValue -or [string]::IsNullOrWhiteSpace([string]$frameCapValue)) {
+        throw "Comparable perf profile frame_cap must be non-blank."
+    }
+
+    $metricValues = @(Get-ProfileProperty $ProfileConfig "required_gpu_metrics")
+    if ($metricValues.Count -eq 0) {
+        throw "Comparable perf profile must define required_gpu_metrics."
+    }
+    $metricSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($metricValue in $metricValues) {
+        $metricName = [string]$metricValue
+        if ([string]::IsNullOrWhiteSpace($metricName) -or -not $metricSet.Add($metricName)) {
+            throw "Comparable perf profile required_gpu_metrics must be non-blank and unique."
+        }
+    }
+    $sortedMetrics = [string[]]@($metricSet)
+    [Array]::Sort($sortedMetrics, [System.StringComparer]::Ordinal)
+
+    $workload = [PSCustomObject][ordered]@{
+        scene = $normalizedScene
+        scene_sha256 = $sceneSha256
+        extent = [PSCustomObject][ordered]@{ width = $width; height = $height }
+        fixed_camera = [bool]$fixedCamera
+        vsync = [bool]$vsync
+        validation = [bool]$validation
+        frame_cap = ([string]$frameCapValue).Trim().ToLowerInvariant()
+        required_gpu_metrics = $sortedMetrics
+    }
+    $canonical = $workload | ConvertTo-Json -Depth 8 -Compress
+    return [PSCustomObject]@{
+        fingerprint = Get-PerfGateSha256Text $canonical
+        workload = $workload
+    }
+}
+
+function Get-PerfGateSourceSha {
+    param([string]$RepoRoot)
+
+    $shaOutput = @(& git -C $RepoRoot rev-parse HEAD 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to resolve PerfGate source SHA: $($shaOutput -join ' ')"
+    }
+    $sha = ([string]($shaOutput | Select-Object -First 1)).Trim().ToLowerInvariant()
+    if ($sha -notmatch '^[0-9a-f]{40,64}$') {
+        throw "PerfGate source SHA was not a full Git object id: '$sha'"
+    }
+    return $sha
+}
+
+function Get-PerfGateOsBuild {
+    try {
+        $windowsVersion = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+        $build = [string]$windowsVersion.CurrentBuildNumber
+        $revision = [string]$windowsVersion.UBR
+        if (-not [string]::IsNullOrWhiteSpace($build)) {
+            if (-not [string]::IsNullOrWhiteSpace($revision)) {
+                return "$build.$revision"
+            }
+            return $build
+        }
+    }
+    catch {
+    }
+
+    $version = [System.Environment]::OSVersion.Version
+    return "$($version.Major).$($version.Minor).$($version.Build).$($version.Revision)"
+}
+
+function Test-PerfGateFixedGpuComparisonProfile {
+    param([object]$ProfileConfig)
+
+    return [string](Get-ProfileProperty $ProfileConfig "gpu_timing") -eq "required"
+}
+
+function Set-PerfGateRunIdentity {
+    param(
+        [AllowEmptyCollection()][object[]]$Records,
+        [object]$ProfileConfig,
+        [string]$RepoRoot,
+        [string]$SourceSha = "",
+        [string]$OsBuild = ""
+    )
+
+    if ([string]::IsNullOrWhiteSpace($SourceSha)) {
+        $SourceSha = Get-PerfGateSourceSha -RepoRoot $RepoRoot
+    }
+    $SourceSha = $SourceSha.Trim().ToLowerInvariant()
+    if ($SourceSha -notmatch '^[0-9a-f]{40,64}$') {
+        throw "PerfGate source SHA was not a full Git object id: '$SourceSha'"
+    }
+    if ([string]::IsNullOrWhiteSpace($OsBuild)) {
+        $OsBuild = Get-PerfGateOsBuild
+    }
+    $OsBuild = $OsBuild.Trim()
+    if ([string]::IsNullOrWhiteSpace($OsBuild)) {
+        throw "PerfGate OS build attribution was blank."
+    }
+
+    Assert-PerfGateComparisonProfileContract -ProfileConfig $ProfileConfig
+    $identityRequired = Test-PerfGateFixedGpuComparisonProfile -ProfileConfig $ProfileConfig
+    $workloadIdentity = if ($identityRequired) {
+        New-PerfGateWorkloadIdentity -ProfileConfig $ProfileConfig -RepoRoot $RepoRoot
+    }
+    else {
+        $null
+    }
+    foreach ($record in @($Records)) {
+        $record.source_sha = $SourceSha
+        $record.os_build = $OsBuild
+        $record.baseline_identity_required = $identityRequired
+        if ($identityRequired) {
+            $record.workload_fingerprint = [string]$workloadIdentity.fingerprint
+            $record.workload = $workloadIdentity.workload
+        }
+    }
+}
+
+function New-PerfGateSpreadMetric {
+    param(
+        [double[]]$Values,
+        [double]$RelativePercent,
+        [double]$AbsoluteFloor
+    )
+
+    $minimum = [double](($Values | Measure-Object -Minimum).Minimum)
+    $maximum = [double](($Values | Measure-Object -Maximum).Maximum)
+    $spread = $maximum - $minimum
+    $allowed = [Math]::Max(([Math]::Abs($minimum) * $RelativePercent) / 100.0, $AbsoluteFloor)
+    return [PSCustomObject][ordered]@{
+        minimum_ms = $minimum
+        maximum_ms = $maximum
+        spread_ms = $spread
+        relative_percent = $RelativePercent
+        absolute_floor_ms = $AbsoluteFloor
+        allowed_spread_ms = $allowed
+        status = if ($spread -gt $allowed) { "FAIL" } else { "PASS" }
+    }
+}
+
+function Get-PerfGateThreeRunSpread {
+    param([object[]]$Records)
+
+    $groups = @($Records | Group-Object -Property target, backend)
+    foreach ($group in $groups) {
+        $runs = @($group.Group)
+        $target = [string]$runs[0].target
+        $backend = [string]$runs[0].backend
+        if ($runs.Count -ne 3) {
+            throw "Spread group '$target/$backend' must contain exactly three runs; got $($runs.Count)."
+        }
+
+        $metricValues = [ordered]@{}
+        foreach ($metricName in @(
+            "cpu_frame_time_avg_ms",
+            "cpu_frame_time_p95_ms",
+            "gpu_frame_avg_ms",
+            "gpu_frame_p95_ms"
+        )) {
+            $values = @()
+            foreach ($run in $runs) {
+                $validated = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $run $metricName)
+                if ($null -eq $validated -or $validated -lt 0.0) {
+                    throw "Spread group '$target/$backend' metric '$metricName' must contain finite non-negative values."
+                }
+                $values += [double]$validated
+            }
+            $isP95 = $metricName.EndsWith("_p95_ms", [System.StringComparison]::Ordinal)
+            $metricValues[$metricName] = New-PerfGateSpreadMetric `
+                -Values $values `
+                -RelativePercent $(if ($isP95) { 5.0 } else { 3.0 }) `
+                -AbsoluteFloor $(if ($isP95) { 0.30 } else { 0.15 })
+        }
+
+        $status = if (@($metricValues.Values | Where-Object { $_.status -eq "FAIL" }).Count -gt 0) { "FAIL" } else { "PASS" }
+        [PSCustomObject][ordered]@{
+            target = $target
+            backend = $backend
+            run_count = $runs.Count
+            status = $status
+            cpu_frame_time_avg_ms = $metricValues["cpu_frame_time_avg_ms"]
+            cpu_frame_time_p95_ms = $metricValues["cpu_frame_time_p95_ms"]
+            gpu_frame_avg_ms = $metricValues["gpu_frame_avg_ms"]
+            gpu_frame_p95_ms = $metricValues["gpu_frame_p95_ms"]
+        }
+    }
+}
+
+function Get-PerfGateComparisonProfileContractErrors {
+    param([object]$ProfileConfig)
+
+    $errors = @()
+    $fixedGpuComparison = Test-PerfGateFixedGpuComparisonProfile -ProfileConfig $ProfileConfig
+    $comparisonThresholds = Get-ProfileProperty $ProfileConfig "comparison_thresholds"
+    if ($null -eq $comparisonThresholds) {
+        if ($fixedGpuComparison) {
+            $errors += "gpu_timing=required profile must define non-null comparison_thresholds"
+        }
+        return @($errors)
+    }
+    if (-not $fixedGpuComparison) {
+        $errors += "comparison_thresholds may only be defined when gpu_timing=required"
+    }
+
+    foreach ($thresholdName in @(
+        "cpu_frame_time_avg_ms",
+        "cpu_frame_time_p95_ms",
+        "cpu_frame_time_p99_ms",
+        "process_private_bytes_peak_mb",
+        "engine_heap_peak_mb",
+        "draw_calls_avg",
+        "gpu_frame_avg_ms",
+        "gpu_frame_p95_ms"
+    )) {
+        $threshold = Get-ProfileProperty $comparisonThresholds $thresholdName
+        $relative = if ($null -eq $threshold) { $null } else { ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $threshold "relative_percent") }
+        $absolute = if ($null -eq $threshold) { $null } else { ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $threshold "absolute_floor") }
+        if ($null -eq $threshold -or $null -eq $relative -or $relative -lt 0.0 -or $null -eq $absolute -or $absolute -lt 0.0) {
+            $errors += "$thresholdName must define finite non-negative relative_percent and absolute_floor"
+        }
+    }
+
+    $tiers = @(Get-ProfileProperty $comparisonThresholds "gpu_pass_tiers")
+    if ($tiers.Count -ne 3) {
+        $errors += "gpu_pass_tiers must define exactly three tiers"
+    }
+    else {
+        $expectedMinimums = @(0.5, 0.1, 0.0)
+        $validatedTiers = @()
+        foreach ($tier in $tiers) {
+            $minimum = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $tier "minimum_baseline_avg_ms")
+            if ($null -eq $minimum -or $minimum -lt 0.0) {
+                $errors += "gpu_pass_tiers minimum_baseline_avg_ms values must be finite non-negative numbers"
+                continue
+            }
+            $validatedTiers += [PSCustomObject]@{ minimum = [double]$minimum; tier = $tier }
+        }
+        $sortedTiers = @($validatedTiers | Sort-Object minimum -Descending)
+        for ($tierIndex = 0; $tierIndex -lt $sortedTiers.Count; ++$tierIndex) {
+            $tier = $sortedTiers[$tierIndex].tier
+            $minimum = [double]$sortedTiers[$tierIndex].minimum
+            if ([Math]::Abs($minimum - $expectedMinimums[$tierIndex]) -gt 0.0000001) {
+                $errors += "gpu_pass_tiers minimum_baseline_avg_ms values must be 0.5, 0.1, and 0.0"
+            }
+            foreach ($statName in @("avg", "p95")) {
+                $threshold = Get-ProfileProperty $tier $statName
+                $absolute = if ($null -eq $threshold) { $null } else { ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $threshold "absolute_floor") }
+                $relativeRaw = if ($null -eq $threshold) { $null } else { Get-ProfileProperty $threshold "relative_percent" }
+                $relative = ConvertTo-PerfGateFiniteDouble $relativeRaw
+                $absoluteOnly = $tierIndex -eq 2
+                $relativeIsValid = if ($absoluteOnly) { $null -eq $relativeRaw } else { $null -ne $relative -and $relative -ge 0.0 }
+                if ($null -eq $threshold -or $null -eq $absolute -or $absolute -lt 0.0 -or -not $relativeIsValid) {
+                    $errors += "gpu_pass_tiers[$tierIndex].$statName has an invalid threshold definition"
+                }
+            }
+        }
+    }
+
+    return @($errors)
+}
+
+function Assert-PerfGateComparisonProfileContract {
+    param([object]$ProfileConfig)
+
+    $errors = @(Get-PerfGateComparisonProfileContractErrors -ProfileConfig $ProfileConfig)
+    if ($errors.Count -gt 0) {
+        throw ("Invalid fixed GPU comparison profile: {0}" -f ($errors -join "; "))
+    }
+}
+
+function Test-PerfGateBaselineComparable {
+    param(
+        [object]$Record,
+        [object]$BaselineEntry,
+        [string]$Configuration
+    )
+
+    $attribution = Get-ProfileProperty $BaselineEntry "attribution"
+    $mismatches = @()
+    if ($null -eq $attribution) {
+        $mismatches += "baseline attribution was missing"
+    }
+    else {
+        foreach ($contract in @(
+            [PSCustomObject]@{ label = "target"; current = [string]$Record.target; baseline = [string](Get-ProfileProperty $attribution "target"); ignore_case = $true },
+            [PSCustomObject]@{ label = "backend"; current = [string]$Record.backend; baseline = [string](Get-ProfileProperty $attribution "backend"); ignore_case = $true },
+            [PSCustomObject]@{ label = "configuration"; current = [string]$Configuration; baseline = [string](Get-ProfileProperty $attribution "configuration"); ignore_case = $true },
+            [PSCustomObject]@{ label = "adapter"; current = [string]$Record.gpu_adapter; baseline = [string](Get-ProfileProperty $attribution "adapter"); ignore_case = $false },
+            [PSCustomObject]@{ label = "driver"; current = [string]$Record.gpu_driver; baseline = [string](Get-ProfileProperty $attribution "driver"); ignore_case = $false },
+            [PSCustomObject]@{ label = "OS build"; current = [string]$Record.os_build; baseline = [string](Get-ProfileProperty $attribution "os_build"); ignore_case = $false }
+        )) {
+            if ([string]::IsNullOrWhiteSpace($contract.current) -or [string]::IsNullOrWhiteSpace($contract.baseline)) {
+                $mismatches += "$($contract.label) attribution was missing"
+                continue
+            }
+            $comparison = if ($contract.ignore_case) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+            if (-not [string]::Equals($contract.current, $contract.baseline, $comparison)) {
+                $mismatches += "$($contract.label) mismatch ('$($contract.baseline)' baseline vs '$($contract.current)' current)"
+            }
+        }
+
+        $baselineSourceSha = [string](Get-ProfileProperty $attribution "source_sha")
+        if ([string]::IsNullOrWhiteSpace($baselineSourceSha) -or [string]::IsNullOrWhiteSpace([string]$Record.source_sha)) {
+            $mismatches += "source SHA attribution was missing"
+        }
+    }
+
+    $baselineFingerprint = [string](Get-ProfileProperty $BaselineEntry "workload_fingerprint")
+    if ([string]::IsNullOrWhiteSpace($baselineFingerprint) -or [string]::IsNullOrWhiteSpace([string]$Record.workload_fingerprint)) {
+        $mismatches += "workload fingerprint was missing"
+    }
+    elseif (-not [string]::Equals($baselineFingerprint, [string]$Record.workload_fingerprint, [System.StringComparison]::Ordinal)) {
+        $mismatches += "workload fingerprint mismatch ('$baselineFingerprint' baseline vs '$($Record.workload_fingerprint)' current)"
+    }
+    if ($null -eq (Get-ProfileProperty $BaselineEntry "workload") -or $null -eq $Record.workload) {
+        $mismatches += "readable workload attribution was missing"
+    }
+
+    if ($mismatches.Count -gt 0) {
+        $Record.baseline_status = "NOT_COMPARABLE"
+        Add-Failure $Record ("Baseline NOT_COMPARABLE: {0}" -f ($mismatches -join "; "))
+        return $false
+    }
+    return $true
 }
 
 function Compare-RecordToBaseline {
@@ -668,13 +1133,96 @@ function Compare-RecordToBaseline {
         [string]$Configuration
     )
 
+    $comparisonContractErrors = @(Get-PerfGateComparisonProfileContractErrors -ProfileConfig $ProfileConfig)
+    if ($comparisonContractErrors.Count -gt 0) {
+        Add-Failure $Record ("Invalid comparison profile contract: {0}" -f ($comparisonContractErrors -join "; "))
+        return
+    }
+    $comparisonThresholds = Get-ProfileProperty $ProfileConfig "comparison_thresholds"
+
     $entry = Get-BaselineEntry -Baseline $Baseline -Profile $Profile -Configuration $Configuration -Target $Record.target -Backend $Record.backend
     if ($null -eq $entry) {
         $Record.baseline_status = "MISSING"
         return
     }
 
+    if ($null -ne $comparisonThresholds -and -not [bool]$Record.gpu_baseline_comparable) {
+        $Record.baseline_status = "NOT_COMPARED"
+        return
+    }
+
     $Record.baseline_status = "COMPARED"
+    if ($null -ne $comparisonThresholds) {
+        if (-not (Test-PerfGateBaselineComparable -Record $Record -BaselineEntry $entry -Configuration $Configuration)) {
+            return
+        }
+        foreach ($metricContract in @(
+            [PSCustomObject]@{ name = "cpu_frame_time_avg_ms"; label = "CPU Avg" },
+            [PSCustomObject]@{ name = "cpu_frame_time_p95_ms"; label = "CPU P95" },
+            [PSCustomObject]@{ name = "cpu_frame_time_p99_ms"; label = "CPU P99" },
+            [PSCustomObject]@{ name = "process_private_bytes_peak_mb"; label = "Private MB" },
+            [PSCustomObject]@{ name = "engine_heap_peak_mb"; label = "Heap MB" },
+            [PSCustomObject]@{ name = "draw_calls_avg"; label = "Draw Calls" }
+        )) {
+            $currentValue = Get-RequiredComparisonDouble $Record (Get-ProfileProperty $Record $metricContract.name) $metricContract.label "current"
+            $baselineValue = Get-RequiredComparisonDouble $Record (Get-ProfileProperty $entry $metricContract.name) $metricContract.label "baseline"
+            if ($null -eq $currentValue -or $null -eq $baselineValue) { continue }
+            Add-ConfiguredBaselineDelta `
+                -Record $Record `
+                -Metric $metricContract.name `
+                -Label $metricContract.label `
+                -Current $currentValue `
+                -BaselineValue $baselineValue `
+                -Threshold (Get-ProfileProperty $comparisonThresholds $metricContract.name)
+        }
+
+        $baselineGpuMetrics = Get-ProfileProperty $entry "gpu_metrics"
+        $baselineFrame = Get-ProfileProperty $baselineGpuMetrics "GPU.Frame"
+        $currentFrame = Get-ProfileProperty $Record.gpu_metric_summaries "GPU.Frame"
+        if ($null -eq $baselineFrame) {
+            Add-Failure $Record "Required GPU.Frame baseline metric was missing"
+        }
+        if ($null -eq $currentFrame) {
+            Add-Failure $Record "Required GPU.Frame current metric was missing"
+        }
+        if ($null -ne $baselineFrame -and $null -ne $currentFrame) {
+            foreach ($statContract in @(
+                [PSCustomObject]@{ name = "avg"; threshold = "gpu_frame_avg_ms" },
+                [PSCustomObject]@{ name = "p95"; threshold = "gpu_frame_p95_ms" }
+            )) {
+                $currentValue = Get-RequiredComparisonDouble $Record (Get-GpuMetricSummaryValue $currentFrame $statContract.name) "GPU.Frame current $($statContract.name)" "current"
+                $baselineValue = Get-RequiredComparisonDouble $Record (Get-GpuMetricSummaryValue $baselineFrame $statContract.name) "GPU.Frame baseline $($statContract.name)" "baseline"
+                if ($null -eq $currentValue -or $null -eq $baselineValue) { continue }
+                Add-ConfiguredBaselineDelta $Record "gpu.GPU.Frame.$($statContract.name)" "GPU.Frame $($statContract.name)" $currentValue $baselineValue (Get-ProfileProperty $comparisonThresholds $statContract.threshold)
+            }
+        }
+        $passTiers = @(Get-ProfileProperty $comparisonThresholds "gpu_pass_tiers" | Sort-Object { [double](Get-ProfileProperty $_ "minimum_baseline_avg_ms") } -Descending)
+        foreach ($metricName in @($Record.required_gpu_metrics)) {
+            if ([string]$metricName -eq "GPU.Frame") { continue }
+            $baselineMetric = Get-ProfileProperty $baselineGpuMetrics ([string]$metricName)
+            $currentMetric = Get-ProfileProperty $Record.gpu_metric_summaries ([string]$metricName)
+            if ($null -eq $baselineMetric) {
+                Add-Failure $Record "Required GPU metric '$metricName' baseline metric was missing"
+                continue
+            }
+            if ($null -eq $currentMetric) {
+                Add-Failure $Record "Required GPU metric '$metricName' current metric was missing"
+                continue
+            }
+
+            $baselineAverage = Get-RequiredComparisonDouble $Record (Get-GpuMetricSummaryValue $baselineMetric "avg") "$metricName avg" "baseline"
+            $currentAverage = Get-RequiredComparisonDouble $Record (Get-GpuMetricSummaryValue $currentMetric "avg") "$metricName avg" "current"
+            $baselineP95 = Get-RequiredComparisonDouble $Record (Get-GpuMetricSummaryValue $baselineMetric "p95") "$metricName p95" "baseline"
+            $currentP95 = Get-RequiredComparisonDouble $Record (Get-GpuMetricSummaryValue $currentMetric "p95") "$metricName p95" "current"
+            if ($null -eq $baselineAverage -or $null -eq $currentAverage -or $null -eq $baselineP95 -or $null -eq $currentP95) { continue }
+            $tier = @($passTiers | Where-Object { $baselineAverage -ge [double](Get-ProfileProperty $_ "minimum_baseline_avg_ms") } | Select-Object -First 1)
+            if ($tier.Count -eq 0) { continue }
+            Add-ConfiguredBaselineDelta $Record "gpu.$metricName.avg" "$metricName avg" $currentAverage $baselineAverage (Get-ProfileProperty $tier[0] "avg")
+            Add-ConfiguredBaselineDelta $Record "gpu.$metricName.p95" "$metricName p95" $currentP95 $baselineP95 (Get-ProfileProperty $tier[0] "p95")
+        }
+        return
+    }
+
     $warnThresholds = Get-ProfileProperty $ProfileConfig "warn_thresholds"
     if ($null -eq $warnThresholds) {
         return
@@ -708,6 +1256,36 @@ function New-BaselineEntry {
     if ($Record.gpu_baseline_comparable -and
         @($Record.required_gpu_metrics).Count -gt 0 -and
         $null -ne $Record.gpu_metric_summaries) {
+        $identityRequiredProperty = $Record.PSObject.Properties["baseline_identity_required"]
+        $identityRequired = $null -ne $identityRequiredProperty -and [bool]$identityRequiredProperty.Value
+        if ($identityRequired) {
+            foreach ($identityContract in @(
+                [PSCustomObject]@{ label = "adapter"; value = [string]$Record.gpu_adapter },
+                [PSCustomObject]@{ label = "driver"; value = [string]$Record.gpu_driver },
+                [PSCustomObject]@{ label = "OS build"; value = [string]$Record.os_build },
+                [PSCustomObject]@{ label = "source SHA"; value = [string]$Record.source_sha },
+                [PSCustomObject]@{ label = "workload fingerprint"; value = [string]$Record.workload_fingerprint }
+            )) {
+                if ([string]::IsNullOrWhiteSpace($identityContract.value) -or $identityContract.value -eq "n/a") {
+                    throw "Cannot bless comparable GPU baseline: $($identityContract.label) attribution was missing."
+                }
+            }
+            if ($null -eq $Record.workload) {
+                throw "Cannot bless comparable GPU baseline: readable workload attribution was missing."
+            }
+            $entry | Add-Member -MemberType NoteProperty -Name "attribution" -Value ([PSCustomObject][ordered]@{
+                target = [string]$Record.target
+                backend = [string]$Record.backend
+                configuration = [string]$Record.configuration
+                adapter = [string]$Record.gpu_adapter
+                driver = [string]$Record.gpu_driver
+                os_build = [string]$Record.os_build
+                source_sha = [string]$Record.source_sha
+            })
+            $entry | Add-Member -MemberType NoteProperty -Name "workload_fingerprint" -Value ([string]$Record.workload_fingerprint)
+            $entry | Add-Member -MemberType NoteProperty -Name "workload" -Value $Record.workload
+        }
+
         $gpuMetrics = [PSCustomObject]@{}
         foreach ($metricName in @($Record.required_gpu_metrics)) {
             $metric = Get-ProfileProperty $Record.gpu_metric_summaries ([string]$metricName)
@@ -1505,18 +2083,31 @@ function Test-TelemetryData {
     }
 
     $Record.frames_sampled = [int64]$Telemetry.frames_sampled
-    $Record.cpu_frame_time_avg_ms = [double]$Telemetry.cpu_frame_time_ms.avg
-    $Record.cpu_frame_time_p95_ms = [double]$Telemetry.cpu_frame_time_ms.p95
-    $Record.cpu_frame_time_p99_ms = [double]$Telemetry.cpu_frame_time_ms.p99
-    $Record.process_private_bytes_peak_mb = [double]$Telemetry.memory.process_private_bytes_peak_mb
-    $Record.engine_heap_peak_mb = [double]$Telemetry.memory.engine_heap_peak_mb
-    $Record.draw_calls_avg = [double]$Telemetry.render_stats.draw_calls_avg
-
-    if ([int64]$Telemetry.memory.engine_heap_shutdown_live_bytes -ne 0) {
-        Add-Failure $Record "Engine heap live bytes at shutdown: $($Telemetry.memory.engine_heap_shutdown_live_bytes)"
+    $cpuFrameTime = Get-ProfileProperty $Telemetry "cpu_frame_time_ms"
+    $memory = Get-ProfileProperty $Telemetry "memory"
+    $renderStats = Get-ProfileProperty $Telemetry "render_stats"
+    foreach ($metricContract in @(
+        [PSCustomObject]@{ container = $cpuFrameTime; source = "avg"; record = "cpu_frame_time_avg_ms"; label = "CPU Avg" },
+        [PSCustomObject]@{ container = $cpuFrameTime; source = "p95"; record = "cpu_frame_time_p95_ms"; label = "CPU P95" },
+        [PSCustomObject]@{ container = $cpuFrameTime; source = "p99"; record = "cpu_frame_time_p99_ms"; label = "CPU P99" },
+        [PSCustomObject]@{ container = $memory; source = "process_private_bytes_peak_mb"; record = "process_private_bytes_peak_mb"; label = "Private MB" },
+        [PSCustomObject]@{ container = $memory; source = "engine_heap_peak_mb"; record = "engine_heap_peak_mb"; label = "Heap MB" },
+        [PSCustomObject]@{ container = $renderStats; source = "draw_calls_avg"; record = "draw_calls_avg"; label = "Draw Calls" }
+    )) {
+        $rawValue = Get-ProfileProperty $metricContract.container $metricContract.source
+        $validatedValue = ConvertTo-PerfGateFiniteDouble $rawValue
+        if ($null -eq $validatedValue -or $validatedValue -lt 0.0) {
+            Add-Failure $Record "Required current $($metricContract.label) value must be a finite non-negative number"
+            continue
+        }
+        $Record.($metricContract.record) = [double]$validatedValue
     }
-    if ([bool]$Telemetry.memory.gpu_allocator_supported -and [int64]$Telemetry.memory.gpu_allocator_shutdown_live_bytes -ne 0) {
-        Add-Failure $Record "GPU allocator live bytes at shutdown: $($Telemetry.memory.gpu_allocator_shutdown_live_bytes)"
+
+    if ([int64]$memory.engine_heap_shutdown_live_bytes -ne 0) {
+        Add-Failure $Record "Engine heap live bytes at shutdown: $($memory.engine_heap_shutdown_live_bytes)"
+    }
+    if ([bool]$memory.gpu_allocator_supported -and [int64]$memory.gpu_allocator_shutdown_live_bytes -ne 0) {
+        Add-Failure $Record "GPU allocator live bytes at shutdown: $($memory.gpu_allocator_shutdown_live_bytes)"
     }
 
     $absoluteCaps = Get-ProfileProperty $ProfileConfig "absolute_caps"
@@ -1930,6 +2521,16 @@ function Invoke-RunPerfGateSelfTest {
         }
     }
 
+    $hashOraclePath = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-sha256-{0}-{1}.bin" -f $PID, [Guid]::NewGuid().ToString("N"))
+    try {
+        [System.IO.File]::WriteAllBytes($hashOraclePath, [System.Text.Encoding]::ASCII.GetBytes("abc"))
+        $hashOracleActual = Get-PerfGateFileSha256 -Path $hashOraclePath
+        Assert-SelfTest ($hashOracleActual -eq "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") "File SHA256 helper did not match the known abc digest."
+    }
+    finally {
+        Remove-Item -LiteralPath $hashOraclePath -Force -ErrorAction SilentlyContinue
+    }
+
     $repoRoot = Get-RepoRoot
     $loaderPath = Join-Path $repoRoot "scripts/PerfGateProfileConfig.ps1"
     if (-not (Test-Path -LiteralPath $loaderPath)) {
@@ -2140,6 +2741,37 @@ function Invoke-RunPerfGateSelfTest {
     }
 
     $standardProfile = Get-PerfGateProfileConfig -Catalog $repoCatalog -Profile "Standard"
+    $missingComparisonThresholdProfile = $vegetationProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $missingComparisonThresholdProfile.PSObject.Properties.Remove("comparison_thresholds")
+    Assert-SelfTestThrows {
+        Assert-PerfGateComparisonProfileContract -ProfileConfig $missingComparisonThresholdProfile
+    } "comparison_thresholds" "A gpu_timing=required profile without comparison_thresholds must fail preflight."
+
+    $nullComparisonThresholdProfile = $vegetationProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $nullComparisonThresholdProfile.comparison_thresholds = $null
+    Assert-SelfTestThrows {
+        Assert-PerfGateComparisonProfileContract -ProfileConfig $nullComparisonThresholdProfile
+    } "comparison_thresholds" "A gpu_timing=required profile with null comparison_thresholds must fail preflight."
+
+    $negativeFloorProfile = $vegetationProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $negativeFloorProfile.comparison_thresholds.gpu_frame_avg_ms.absolute_floor = -0.01
+    Assert-SelfTestThrows {
+        Assert-PerfGateComparisonProfileContract -ProfileConfig $negativeFloorProfile
+    } "gpu_frame_avg_ms" "A fixed GPU profile with a negative comparison floor must fail preflight."
+
+    $wrongTierProfile = $vegetationProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $wrongTierProfile.comparison_thresholds.gpu_pass_tiers[0].minimum_baseline_avg_ms = 0.25
+    Assert-SelfTestThrows {
+        Assert-PerfGateComparisonProfileContract -ProfileConfig $wrongTierProfile
+    } "gpu_pass_tiers" "A fixed GPU profile with malformed pass tiers must fail preflight."
+
+    $nonRequiredGpuComparisonProfile = $vegetationProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $nonRequiredGpuComparisonProfile.gpu_timing = "optional"
+    Assert-SelfTestThrows {
+        Assert-PerfGateComparisonProfileContract -ProfileConfig $nonRequiredGpuComparisonProfile
+    } "gpu_timing=required" "comparison_thresholds must not activate fixed comparison without required GPU timing and identity."
+
+    Assert-PerfGateComparisonProfileContract -ProfileConfig $standardProfile
     $schemaV1 = ConvertFrom-Json @'
 {
   "schema_version": 1,
@@ -2402,6 +3034,20 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest (@($candidateBaseline.gpu_metrics.PSObject.Properties).Count -eq 11) "Bless must write avg/p95 for all required GPU metrics."
 
     $runnerSource = Get-Content -Raw -LiteralPath $PSCommandPath
+    $mainSource = $runnerSource.Substring($runnerSource.LastIndexOf('$repoRoot = Get-RepoRoot'))
+    $comparisonPreflightIndex = $mainSource.IndexOf('Assert-PerfGateComparisonProfileContract -ProfileConfig $profileConfig')
+    $timestampIndex = $mainSource.IndexOf('$timestamp =')
+    $runPlanIndex = $mainSource.IndexOf('$records = @(New-PerfGateRunPlan')
+    $reportSideEffectIndex = $mainSource.IndexOf('New-Item -ItemType Directory -Force -Path $reportRoot')
+    $buildSideEffectIndex = $mainSource.IndexOf('Invoke-BatchCommand')
+    Assert-SelfTest (
+        $comparisonPreflightIndex -ge 0 -and
+        $timestampIndex -gt $comparisonPreflightIndex -and
+        $runPlanIndex -gt $comparisonPreflightIndex -and
+        $reportSideEffectIndex -gt $comparisonPreflightIndex -and
+        $buildSideEffectIndex -gt $comparisonPreflightIndex
+    ) "Fixed GPU comparison contract validation must precede timestamp, run-plan, report, build, and process side effects."
+
     $cmdLaunchAssignments = [regex]::Matches($runnerSource, '(?m)\.FileName\s*=\s*"cmd\.exe"')
     if ($cmdLaunchAssignments.Count -ne 1) {
         $qualityContractFailures += "cmd.exe is still used outside .bat builds"
@@ -2879,6 +3525,446 @@ exit 0
         throw "Blessed CPU average was not preserved."
     }
 
+    $gateAProfile = ConvertFrom-Json @'
+{
+  "gpu_timing": "required",
+  "min_gpu_coverage": 0.95,
+  "required_gpu_metrics": [ "GPU.Frame", "GPU.GBuffer" ],
+  "comparison_thresholds": {
+    "cpu_frame_time_avg_ms": { "relative_percent": 5, "absolute_floor": 0.25 },
+    "cpu_frame_time_p95_ms": { "relative_percent": 8, "absolute_floor": 0.50 },
+    "cpu_frame_time_p99_ms": { "relative_percent": 12, "absolute_floor": 1.00 },
+    "process_private_bytes_peak_mb": { "relative_percent": 5, "absolute_floor": 128 },
+    "engine_heap_peak_mb": { "relative_percent": 10, "absolute_floor": 1 },
+    "draw_calls_avg": { "relative_percent": 0, "absolute_floor": 0 },
+    "gpu_frame_avg_ms": { "relative_percent": 5, "absolute_floor": 0.25 },
+    "gpu_frame_p95_ms": { "relative_percent": 8, "absolute_floor": 0.50 },
+    "gpu_pass_tiers": [
+      {
+        "minimum_baseline_avg_ms": 0.5,
+        "avg": { "relative_percent": 8, "absolute_floor": 0.10 },
+        "p95": { "relative_percent": 12, "absolute_floor": 0.20 }
+      },
+      {
+        "minimum_baseline_avg_ms": 0.1,
+        "avg": { "relative_percent": 15, "absolute_floor": 0.05 },
+        "p95": { "relative_percent": 20, "absolute_floor": 0.10 }
+      },
+      {
+        "minimum_baseline_avg_ms": 0.0,
+        "avg": { "absolute_floor": 0.03 },
+        "p95": { "absolute_floor": 0.05 }
+      }
+    ]
+  }
+}
+'@
+    $gateABaseline = ConvertFrom-Json @'
+{
+  "baselines": {
+    "VegetationFullPipeline": {
+      "Release": {
+        "Sandbox": {
+          "Vulkan": {
+            "cpu_frame_time_avg_ms": 1.0,
+            "cpu_frame_time_p95_ms": 2.0,
+            "cpu_frame_time_p99_ms": 3.0,
+            "process_private_bytes_peak_mb": 1000.0,
+            "engine_heap_peak_mb": 10.0,
+            "draw_calls_avg": 50.0,
+            "gpu_metrics": {
+              "GPU.Frame": { "avg": 10.0, "p95": 12.0 },
+              "GPU.GBuffer": { "avg": 1.0, "p95": 1.2 }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'@
+    $gateABaselineEntry = Get-BaselineEntry -Baseline $gateABaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
+    Set-ObjectProperty $gateABaselineEntry "attribution" ([PSCustomObject]@{
+        target = "Sandbox"; backend = "Vulkan"; configuration = "Release"
+        adapter = "SelfTest GPU"; driver = "SelfTest Driver"; os_build = "10.0.26100.1"; source_sha = ("a" * 40)
+    })
+    Set-ObjectProperty $gateABaselineEntry "workload_fingerprint" ("c" * 64)
+    Set-ObjectProperty $gateABaselineEntry "workload" ([PSCustomObject]@{ self_test = $true })
+    $gateARecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $gateARecord.status = "PASS"
+    $gateARecord.gpu_adapter = "SelfTest GPU"
+    $gateARecord.gpu_driver = "SelfTest Driver"
+    $gateARecord.os_build = "10.0.26100.1"
+    $gateARecord.source_sha = ("b" * 40)
+    $gateARecord.workload_fingerprint = ("c" * 64)
+    $gateARecord.workload = [PSCustomObject]@{ self_test = $true }
+    $gateARecord.required_gpu_metrics = @("GPU.Frame", "GPU.GBuffer")
+    $gateARecord.gpu_metric_summaries = ConvertFrom-Json @'
+{
+  "GPU.Frame": { "avg": 10.51, "p95": 12.0 },
+  "GPU.GBuffer": { "avg": 1.0, "p95": 1.2 }
+}
+'@
+    Compare-RecordToBaseline -Record $gateARecord -Baseline $gateABaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($gateARecord.status -eq "WARN") "Gate A RED: GPU.Frame avg regression must produce WARN."
+    Assert-SelfTest (@($gateARecord.warnings).Count -eq 1) "Gate A RED: GPU.Frame must emit exactly one dedicated warning and must not enter pass-tier comparison."
+
+    $gateAPassRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $gateAPassRecord.status = "PASS"
+    $gateAPassRecord.gpu_adapter = "SelfTest GPU"
+    $gateAPassRecord.gpu_driver = "SelfTest Driver"
+    $gateAPassRecord.os_build = "10.0.26100.1"
+    $gateAPassRecord.source_sha = ("b" * 40)
+    $gateAPassRecord.workload_fingerprint = ("c" * 64)
+    $gateAPassRecord.workload = [PSCustomObject]@{ self_test = $true }
+    $gateAPassRecord.required_gpu_metrics = @("GPU.Frame", "GPU.GBuffer")
+    $gateAPassRecord.gpu_metric_summaries = ConvertFrom-Json @'
+{
+  "GPU.Frame": { "avg": 10.0, "p95": 12.0 },
+  "GPU.GBuffer": { "avg": 1.11, "p95": 1.2 }
+}
+'@
+    Compare-RecordToBaseline -Record $gateAPassRecord -Baseline $gateABaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($gateAPassRecord.status -eq "WARN" -and (@($gateAPassRecord.warnings) -join " ") -match "GPU.GBuffer avg") "Gate A RED: every required pass metric must use its baseline-avg tier and emit a per-metric WARN."
+
+    foreach ($tierCase in @(
+        [PSCustomObject]@{ label = "medium floor"; baseline_avg = 0.20; baseline_p95 = 0.30; current_avg = 0.251; current_p95 = 0.30; warning_count = 1 },
+        [PSCustomObject]@{ label = "medium relative"; baseline_avg = 0.40; baseline_p95 = 0.30; current_avg = 0.461; current_p95 = 0.30; warning_count = 1 },
+        [PSCustomObject]@{ label = "tiny absolute-only"; baseline_avg = 0.05; baseline_p95 = 0.08; current_avg = 0.081; current_p95 = 0.131; warning_count = 2 }
+    )) {
+        $tierBaseline = $gateABaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $tierBaselineMetric = (Get-BaselineEntry -Baseline $tierBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan").gpu_metrics.'GPU.GBuffer'
+        $tierBaselineMetric.avg = $tierCase.baseline_avg
+        $tierBaselineMetric.p95 = $tierCase.baseline_p95
+        $tierRecord = $gateARecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $tierRecord.status = "PASS"
+        $tierRecord.failures = @()
+        $tierRecord.warnings = @()
+        $tierRecord.baseline_deltas = @()
+        $tierRecord.gpu_metric_summaries.'GPU.Frame'.avg = 10.0
+        $tierRecord.gpu_metric_summaries.'GPU.GBuffer'.avg = $tierCase.current_avg
+        $tierRecord.gpu_metric_summaries.'GPU.GBuffer'.p95 = $tierCase.current_p95
+        Compare-RecordToBaseline -Record $tierRecord -Baseline $tierBaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+        Assert-SelfTest ($tierRecord.status -eq "WARN" -and @($tierRecord.warnings).Count -eq $tierCase.warning_count) "GPU pass $($tierCase.label) tier did not use the approved larger-of threshold."
+    }
+
+    $gateACpuFloorRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $gateACpuFloorRecord.status = "PASS"
+    $gateACpuFloorRecord.gpu_adapter = "SelfTest GPU"
+    $gateACpuFloorRecord.gpu_driver = "SelfTest Driver"
+    $gateACpuFloorRecord.os_build = "10.0.26100.1"
+    $gateACpuFloorRecord.source_sha = ("b" * 40)
+    $gateACpuFloorRecord.workload_fingerprint = ("c" * 64)
+    $gateACpuFloorRecord.workload = [PSCustomObject]@{ self_test = $true }
+    $gateACpuFloorRecord.cpu_frame_time_avg_ms = 1.26
+    $gateACpuFloorRecord.cpu_frame_time_p95_ms = 2.0
+    $gateACpuFloorRecord.cpu_frame_time_p99_ms = 3.0
+    $gateACpuFloorRecord.process_private_bytes_peak_mb = 1000.0
+    $gateACpuFloorRecord.engine_heap_peak_mb = 10.0
+    $gateACpuFloorRecord.draw_calls_avg = 50.0
+    $gateACpuFloorRecord.required_gpu_metrics = @("GPU.Frame", "GPU.GBuffer")
+    $gateACpuFloorRecord.gpu_metric_summaries = ConvertFrom-Json @'
+{
+  "GPU.Frame": { "avg": 10.0, "p95": 12.0 },
+  "GPU.GBuffer": { "avg": 1.0, "p95": 1.2 }
+}
+'@
+    Compare-RecordToBaseline -Record $gateACpuFloorRecord -Baseline $gateABaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($gateACpuFloorRecord.status -eq "WARN" -and (@($gateACpuFloorRecord.warnings) -join " ") -match "CPU Avg") "Gate A RED: CPU comparison must use the larger absolute floor when its relative threshold is smaller."
+
+    $gateAMissingCurrentMetric = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $gateAMissingCurrentMetric.status = "PASS"
+    $gateAMissingCurrentMetric.gpu_adapter = "SelfTest GPU"
+    $gateAMissingCurrentMetric.gpu_driver = "SelfTest Driver"
+    $gateAMissingCurrentMetric.os_build = "10.0.26100.1"
+    $gateAMissingCurrentMetric.source_sha = ("b" * 40)
+    $gateAMissingCurrentMetric.workload_fingerprint = ("c" * 64)
+    $gateAMissingCurrentMetric.workload = [PSCustomObject]@{ self_test = $true }
+    $gateAMissingCurrentMetric.required_gpu_metrics = @("GPU.Frame", "GPU.GBuffer")
+    $gateAMissingCurrentMetric.gpu_metric_summaries = ConvertFrom-Json @'
+{
+  "GPU.Frame": { "avg": 10.0, "p95": 12.0 },
+  "GPU.GBuffer": { "avg": 1.0 }
+}
+'@
+    Compare-RecordToBaseline -Record $gateAMissingCurrentMetric -Baseline $gateABaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($gateAMissingCurrentMetric.status -eq "FAIL" -and (@($gateAMissingCurrentMetric.failures) -join " ") -match "GPU.GBuffer.*(current.*p95|p95.*current)") "Gate A RED: a missing current required GPU metric statistic must fail closed."
+
+    $nonfiniteCurrentTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $nonfiniteCurrentTelemetry.cpu_frame_time_ms.avg = [double]::NaN
+    $nonfiniteCurrentRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $nonfiniteCurrentRecord -Telemetry $nonfiniteCurrentTelemetry -ProfileConfig $gateAProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest ($nonfiniteCurrentRecord.status -eq "FAIL" -and (@($nonfiniteCurrentRecord.failures) -join " ") -match "CPU Avg.*finite") "Gate A RED: non-finite current CPU/memory/draw comparison metrics must fail closed before baseline lookup."
+
+    $identityTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-perf-identity-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $identityTestRoot | Out-Null
+    try {
+        $identityScenePath = Join-Path $identityTestRoot "scene.json"
+        '{ "scene": "one" }' | Set-Content -LiteralPath $identityScenePath -Encoding UTF8
+        $identityProfile = ConvertFrom-Json @'
+{
+  "scene": "scene.json",
+  "window_width": 2560,
+  "window_height": 1440,
+  "fixed_camera": true,
+  "vsync": false,
+  "validation": false,
+  "frame_cap": "off",
+  "required_gpu_metrics": [ "GPU.GBuffer", "GPU.Frame" ]
+}
+'@
+        $referenceIdentity = New-PerfGateWorkloadIdentity -ProfileConfig $identityProfile -RepoRoot $identityTestRoot
+        $normalizedEquivalentProfile = $identityProfile | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+        $normalizedEquivalentProfile.scene = ".\scene.json"
+        $normalizedEquivalentProfile.required_gpu_metrics = @("GPU.Frame", "GPU.GBuffer")
+        $normalizedEquivalentIdentity = New-PerfGateWorkloadIdentity -ProfileConfig $normalizedEquivalentProfile -RepoRoot $identityTestRoot
+        Assert-SelfTest ($normalizedEquivalentIdentity.fingerprint -eq $referenceIdentity.fingerprint) "Workload fingerprint must normalize an equivalent scene path and required-metric ordering."
+        foreach ($mutation in @(
+            { param($value) $value.window_width = 1920 },
+            { param($value) $value.fixed_camera = $false },
+            { param($value) $value.vsync = $true },
+            { param($value) $value.validation = $true },
+            { param($value) $value.frame_cap = "60" },
+            { param($value) $value.required_gpu_metrics = @("GPU.Frame") }
+        )) {
+            $mutatedProfile = $identityProfile | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+            & $mutation $mutatedProfile
+            $mutatedIdentity = New-PerfGateWorkloadIdentity -ProfileConfig $mutatedProfile -RepoRoot $identityTestRoot
+            Assert-SelfTest ($mutatedIdentity.fingerprint -ne $referenceIdentity.fingerprint) "Gate A RED: every workload contract field mutation must change the fingerprint."
+        }
+
+        '{ "scene": "two" }' | Set-Content -LiteralPath $identityScenePath -Encoding UTF8
+        $contentMutatedIdentity = New-PerfGateWorkloadIdentity -ProfileConfig $identityProfile -RepoRoot $identityTestRoot
+        Assert-SelfTest ($contentMutatedIdentity.fingerprint -ne $referenceIdentity.fingerprint) "Gate A RED: a scene content mutation must change the workload fingerprint."
+    }
+    finally {
+        Remove-Item -LiteralPath $identityTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    $identityInjectionProfile = $vegetationProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    Set-ObjectProperty $identityInjectionProfile "comparison_thresholds" $gateAProfile.comparison_thresholds
+    $identityInjectionRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Set-PerfGateRunIdentity `
+        -Records @($identityInjectionRecord) `
+        -ProfileConfig $identityInjectionProfile `
+        -RepoRoot $repoRoot `
+        -SourceSha ("d" * 40) `
+        -OsBuild "10.0.26100.1"
+    Assert-SelfTest (
+        $identityInjectionRecord.baseline_identity_required -and
+        $identityInjectionRecord.source_sha -eq ("d" * 40) -and
+        $identityInjectionRecord.os_build -eq "10.0.26100.1" -and
+        $identityInjectionRecord.workload_fingerprint -match '^[0-9a-f]{64}$' -and
+        $null -ne $identityInjectionRecord.workload
+    ) "Gate A RED: actual run records must receive source SHA, OS build, normalized workload fields, and fingerprint before execution."
+    $identityMainSource = $runnerSource.Substring($runnerSource.LastIndexOf('$repoRoot = Get-RepoRoot'))
+    $identityPlanIndex = $identityMainSource.IndexOf('$records = @(New-PerfGateRunPlan')
+    $identityInjectionIndex = $identityMainSource.IndexOf('Set-PerfGateRunIdentity')
+    $identitySideEffectIndex = $identityMainSource.IndexOf('New-Item -ItemType Directory -Force -Path $reportRoot')
+    Assert-SelfTest (
+        $identityInjectionIndex -gt $identityPlanIndex -and
+        $identitySideEffectIndex -gt $identityInjectionIndex
+    ) "Gate A RED: main runner must inject comparison identity into actual records before report/build/process side effects."
+
+    $spreadRecords = @()
+    foreach ($spreadSample in @(
+        [PSCustomObject]@{ backend = "Vulkan"; cpu_avg = 10.0; cpu_p95 = 12.0; gpu_avg = 8.0; gpu_p95 = 10.0 },
+        [PSCustomObject]@{ backend = "Vulkan"; cpu_avg = 10.1; cpu_p95 = 12.2; gpu_avg = 8.1; gpu_p95 = 10.2 },
+        [PSCustomObject]@{ backend = "Vulkan"; cpu_avg = 10.2; cpu_p95 = 12.4; gpu_avg = 8.2; gpu_p95 = 10.4 },
+        [PSCustomObject]@{ backend = "DX12"; cpu_avg = 20.0; cpu_p95 = 22.0; gpu_avg = 18.0; gpu_p95 = 20.0 },
+        [PSCustomObject]@{ backend = "DX12"; cpu_avg = 20.4; cpu_p95 = 22.2; gpu_avg = 18.1; gpu_p95 = 20.2 },
+        [PSCustomObject]@{ backend = "DX12"; cpu_avg = 20.8; cpu_p95 = 22.4; gpu_avg = 18.2; gpu_p95 = 20.4 }
+    )) {
+        $spreadRecords += [PSCustomObject]@{
+            target = "Sandbox"
+            backend = $spreadSample.backend
+            cpu_frame_time_avg_ms = $spreadSample.cpu_avg
+            cpu_frame_time_p95_ms = $spreadSample.cpu_p95
+            gpu_frame_avg_ms = $spreadSample.gpu_avg
+            gpu_frame_p95_ms = $spreadSample.gpu_p95
+        }
+    }
+    $spreadSummary = @(Get-PerfGateThreeRunSpread -Records $spreadRecords)
+    $vulkanSpread = @($spreadSummary | Where-Object { $_.backend -eq "Vulkan" })[0]
+    $dx12Spread = @($spreadSummary | Where-Object { $_.backend -eq "DX12" })[0]
+    Assert-SelfTest (
+        $spreadSummary.Count -eq 2 -and
+        $vulkanSpread.run_count -eq 3 -and
+        [Math]::Abs([double]$vulkanSpread.cpu_frame_time_avg_ms.spread_ms - 0.2) -lt 0.000001 -and
+        $vulkanSpread.status -eq "PASS" -and
+        [Math]::Abs([double]$dx12Spread.cpu_frame_time_avg_ms.spread_ms - 0.8) -lt 0.000001 -and
+        $dx12Spread.status -eq "FAIL"
+    ) "Gate A RED: three-run spread must group target+backend independently and apply avg/p95 noise contracts without mixing Vulkan and DX12."
+
+    $comparableBaseline = $gateABaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $comparableEntry = Get-BaselineEntry -Baseline $comparableBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
+    Set-ObjectProperty $comparableEntry "attribution" ([PSCustomObject]@{
+        target = "Sandbox"
+        backend = "Vulkan"
+        configuration = "Release"
+        adapter = "SelfTest GPU"
+        driver = "SelfTest Driver"
+        os_build = "10.0.26100.1"
+        source_sha = ("a" * 40)
+    })
+    Set-ObjectProperty $comparableEntry "workload_fingerprint" $referenceIdentity.fingerprint
+    Set-ObjectProperty $comparableEntry "workload" $referenceIdentity.workload
+
+    $comparableRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $comparableRecord.configuration = "Release"
+    $comparableRecord.status = "PASS"
+    $comparableRecord.baseline_identity_required = $true
+    $comparableRecord.cpu_frame_time_avg_ms = 1.0
+    $comparableRecord.cpu_frame_time_p95_ms = 2.0
+    $comparableRecord.cpu_frame_time_p99_ms = 3.0
+    $comparableRecord.process_private_bytes_peak_mb = 1000.0
+    $comparableRecord.engine_heap_peak_mb = 10.0
+    $comparableRecord.draw_calls_avg = 50.0
+    $comparableRecord.required_gpu_metrics = @("GPU.Frame", "GPU.GBuffer")
+    $comparableRecord.gpu_metric_summaries = ConvertFrom-Json '{ "GPU.Frame": { "coverage": 0.96, "avg": 10.0, "p95": 12.0 }, "GPU.GBuffer": { "coverage": 0.96, "avg": 1.0, "p95": 1.2 } }'
+    $comparableRecord.gpu_adapter = "SelfTest GPU"
+    $comparableRecord.gpu_driver = "SelfTest Driver"
+    Set-ObjectProperty $comparableRecord "os_build" "10.0.26100.1"
+    Set-ObjectProperty $comparableRecord "source_sha" ("b" * 40)
+    Set-ObjectProperty $comparableRecord "workload_fingerprint" $referenceIdentity.fingerprint
+    Set-ObjectProperty $comparableRecord "workload" $referenceIdentity.workload
+
+    $differentSourceRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    Compare-RecordToBaseline -Record $differentSourceRecord -Baseline $comparableBaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($differentSourceRecord.status -eq "PASS" -and $differentSourceRecord.baseline_status -eq "COMPARED") "Gate A RED: source SHA must be attributed but is allowed to differ across comparisons."
+
+    $telemetryOffComparisonRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $telemetryOffComparisonRecord.gpu_baseline_comparable = $false
+    $telemetryOffComparisonRecord.gpu_adapter = "n/a"
+    $telemetryOffComparisonRecord.gpu_driver = "n/a"
+    $telemetryOffComparisonRecord.gpu_metric_summaries = [PSCustomObject]@{}
+    Compare-RecordToBaseline -Record $telemetryOffComparisonRecord -Baseline $comparableBaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($telemetryOffComparisonRecord.status -eq "PASS" -and $telemetryOffComparisonRecord.baseline_status -eq "NOT_COMPARED") "Gate A RED: TelemetryMode Off A/B must remain runnable when a GPU baseline exists, while staying excluded from comparison and bless."
+
+    foreach ($coreRegression in @(
+        [PSCustomObject]@{ name = "cpu_frame_time_avg_ms"; label = "CPU Avg"; current = 1.26 },
+        [PSCustomObject]@{ name = "cpu_frame_time_p95_ms"; label = "CPU P95"; current = 2.51 },
+        [PSCustomObject]@{ name = "cpu_frame_time_p99_ms"; label = "CPU P99"; current = 4.01 },
+        [PSCustomObject]@{ name = "process_private_bytes_peak_mb"; label = "Private MB"; current = 1128.01 },
+        [PSCustomObject]@{ name = "engine_heap_peak_mb"; label = "Heap MB"; current = 11.01 },
+        [PSCustomObject]@{ name = "draw_calls_avg"; label = "Draw Calls"; current = 50.01 }
+    )) {
+        $coreRegressionRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        Set-ObjectProperty $coreRegressionRecord $coreRegression.name $coreRegression.current
+        Compare-RecordToBaseline -Record $coreRegressionRecord -Baseline $comparableBaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+        Assert-SelfTest (
+            $coreRegressionRecord.status -eq "WARN" -and
+            @($coreRegressionRecord.warnings).Count -eq 1 -and
+            (@($coreRegressionRecord.warnings) -join " ") -match ([regex]::Escape($coreRegression.label))
+        ) "Approved CPU/memory/draw thresholds must emit one warning for $($coreRegression.name)."
+    }
+
+    $missingCoreBaseline = $comparableBaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    (Get-BaselineEntry -Baseline $missingCoreBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan").PSObject.Properties.Remove("cpu_frame_time_p99_ms")
+    $missingCoreBaselineRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    Compare-RecordToBaseline -Record $missingCoreBaselineRecord -Baseline $missingCoreBaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($missingCoreBaselineRecord.status -eq "FAIL" -and (@($missingCoreBaselineRecord.failures) -join " ") -match "CPU P99.*baseline.*finite") "Missing baseline CPU/memory/draw metrics must fail closed."
+
+    $allMetricsBaselineRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    $allMetricsBaselineRecord.configuration = "Release"
+    $allMetricsBaselineRecord.status = "PASS"
+    $allMetricsBaselineRecord.tree_termination_confirmed = $true
+    $allMetricsBaselineRecord.job_cleanup_confirmed = $true
+    $allMetricsBaselineRecord.baseline_identity_required = $true
+    $allMetricsBaselineRecord.cpu_frame_time_avg_ms = 2.0
+    $allMetricsBaselineRecord.cpu_frame_time_p95_ms = 2.5
+    $allMetricsBaselineRecord.cpu_frame_time_p99_ms = 3.0
+    $allMetricsBaselineRecord.process_private_bytes_peak_mb = 100.0
+    $allMetricsBaselineRecord.engine_heap_peak_mb = 10.0
+    $allMetricsBaselineRecord.draw_calls_avg = 50.0
+    $allMetricsBaselineRecord.required_gpu_metrics = @($vegetationProfile.required_gpu_metrics)
+    $allMetricsBaselineRecord.gpu_metric_summaries = $validV2.gpu.metrics | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $allMetricsBaselineRecord.gpu_adapter = "SelfTest GPU"
+    $allMetricsBaselineRecord.gpu_driver = "SelfTest Driver"
+    $allMetricsBaselineRecord.os_build = "10.0.26100.1"
+    $allMetricsBaselineRecord.source_sha = ("a" * 40)
+    $allMetricsBaselineRecord.workload_fingerprint = ("e" * 64)
+    $allMetricsBaselineRecord.workload = [PSCustomObject]@{ self_test = "all-required-metrics" }
+    $allMetricsBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    Update-BaselinesFromRecords -Baseline $allMetricsBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Records @($allMetricsBaselineRecord) -ReportRoot "self-test"
+
+    foreach ($requiredMetricName in @($vegetationProfile.required_gpu_metrics)) {
+        foreach ($statName in @("avg", "p95")) {
+            $metricRegressionRecord = $allMetricsBaselineRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+            $metricRegressionRecord.status = "PASS"
+            $metricRegressionRecord.failures = @()
+            $metricRegressionRecord.warnings = @()
+            $metricRegressionRecord.baseline_deltas = @()
+            $metricRegressionRecord.baseline_status = "NOT_COMPARED"
+            $metric = Get-ProfileProperty $metricRegressionRecord.gpu_metric_summaries ([string]$requiredMetricName)
+            $baselineValue = [double](Get-GpuMetricSummaryValue $metric $statName)
+            $allowedIncrease = if ($requiredMetricName -eq "GPU.Frame") {
+                if ($statName -eq "avg") { [Math]::Max($baselineValue * 0.05, 0.25) } else { [Math]::Max($baselineValue * 0.08, 0.50) }
+            }
+            elseif ($statName -eq "avg") {
+                [Math]::Max($baselineValue * 0.08, 0.10)
+            }
+            else {
+                [Math]::Max($baselineValue * 0.12, 0.20)
+            }
+            Set-ObjectProperty $metric $statName ($baselineValue + $allowedIncrease + 0.01)
+            Compare-RecordToBaseline -Record $metricRegressionRecord -Baseline $allMetricsBaseline -ProfileConfig $vegetationProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+            Assert-SelfTest (
+                $metricRegressionRecord.status -eq "WARN" -and
+                @($metricRegressionRecord.warnings).Count -eq 1 -and
+                (@($metricRegressionRecord.warnings) -join " ") -match ([regex]::Escape("$requiredMetricName $statName"))
+            ) "Every required GPU metric avg/p95 regression must emit exactly one per-metric warning; failed for $requiredMetricName $statName."
+        }
+    }
+
+    $missingBaselineMetricDocument = $allMetricsBaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    (Get-BaselineEntry -Baseline $missingBaselineMetricDocument -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan").gpu_metrics.PSObject.Properties.Remove("GPU.GBuffer")
+    $missingBaselineMetricRecord = $allMetricsBaselineRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    Compare-RecordToBaseline -Record $missingBaselineMetricRecord -Baseline $missingBaselineMetricDocument -ProfileConfig $vegetationProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($missingBaselineMetricRecord.status -eq "FAIL" -and (@($missingBaselineMetricRecord.failures) -join " ") -match "GPU.GBuffer.*baseline.*missing") "Missing baseline required GPU metrics must fail closed."
+
+    $nonfiniteBaselineDocument = $allMetricsBaseline | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    (Get-BaselineEntry -Baseline $nonfiniteBaselineDocument -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan").gpu_metrics.'GPU.GBuffer'.avg = [double]::NaN
+    $nonfiniteBaselineRecord = $allMetricsBaselineRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    Compare-RecordToBaseline -Record $nonfiniteBaselineRecord -Baseline $nonfiniteBaselineDocument -ProfileConfig $vegetationProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($nonfiniteBaselineRecord.status -eq "FAIL" -and (@($nonfiniteBaselineRecord.failures) -join " ") -match "GPU.GBuffer avg.*baseline.*finite") "Non-finite baseline required GPU metrics must fail closed."
+
+    $missingTierProfile = $gateAProfile | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $missingTierProfile.comparison_thresholds.PSObject.Properties.Remove("gpu_pass_tiers")
+    $missingTierRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    Compare-RecordToBaseline -Record $missingTierRecord -Baseline $comparableBaseline -ProfileConfig $missingTierProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+    Assert-SelfTest ($missingTierRecord.status -eq "FAIL" -and (@($missingTierRecord.failures) -join " ") -match "gpu_pass_tiers") "Gate A RED: missing or malformed GPU pass tiers must fail closed instead of silently skipping required metrics."
+
+    foreach ($attributionMutation in @(
+        { param($value) $value.gpu_adapter = "Other GPU" },
+        { param($value) $value.gpu_driver = "Other Driver" },
+        { param($value) $value.os_build = "10.0.99999.1" },
+        { param($value) $value.workload_fingerprint = ("f" * 64) }
+    )) {
+        $notComparableRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        & $attributionMutation $notComparableRecord
+        Compare-RecordToBaseline -Record $notComparableRecord -Baseline $comparableBaseline -ProfileConfig $gateAProfile -Profile "VegetationFullPipeline" -Configuration "Release"
+        Assert-SelfTest ($notComparableRecord.status -eq "FAIL" -and $notComparableRecord.baseline_status -eq "NOT_COMPARABLE") "Gate A RED: adapter, driver, OS build, and workload fingerprint mismatches must be NOT_COMPARABLE + FAIL."
+    }
+
+    $blessRoundTripRecord = $comparableRecord | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $blessRoundTripRecord.status = "PASS"
+    $blessRoundTripRecord.tree_termination_confirmed = $true
+    $blessRoundTripRecord.job_cleanup_confirmed = $true
+    $blessRoundTripBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+    Update-BaselinesFromRecords -Baseline $blessRoundTripBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Records @($blessRoundTripRecord) -ReportRoot "self-test"
+    $blessRoundTripEntry = Get-BaselineEntry -Baseline $blessRoundTripBaseline -Profile "VegetationFullPipeline" -Configuration "Release" -Target "Sandbox" -Backend "Vulkan"
+    $blessAttribution = Get-ProfileProperty $blessRoundTripEntry "attribution"
+    Assert-SelfTest (
+        $null -ne $blessAttribution -and
+        $blessAttribution.adapter -eq $blessRoundTripRecord.gpu_adapter -and
+        $blessAttribution.driver -eq $blessRoundTripRecord.gpu_driver -and
+        $blessAttribution.os_build -eq $blessRoundTripRecord.os_build -and
+        $blessAttribution.source_sha -eq $blessRoundTripRecord.source_sha -and
+        $blessRoundTripEntry.workload_fingerprint -eq $blessRoundTripRecord.workload_fingerprint -and
+        $null -ne $blessRoundTripEntry.workload
+    ) "Gate A RED: baseline bless must persist adapter, driver, OS build, source SHA, workload fingerprint, and readable workload fields."
+
     Write-Host "RunPerfGate self-test PASS"
 }
 
@@ -2895,6 +3981,7 @@ $baseline = $profileCatalog.baseline
 $profileConfig = Get-PerfGateProfileConfig -Catalog $profileCatalog -Profile $Profile
 $Configuration = Resolve-PerfGateConfiguration -ProfileConfig $profileConfig -RequestedConfiguration $Configuration
 Assert-PerfGateOptions -BlessBaseline ([bool]$BlessBaseline) -DryRun ([bool]$DryRun) -TelemetryMode $TelemetryMode
+Assert-PerfGateComparisonProfileContract -ProfileConfig $profileConfig
 
 $timestamp = "{0}-{1}-{2}" -f (Get-Date -Format "yyyyMMdd-HHmmss-fff"), $PID, [Guid]::NewGuid().ToString("N").Substring(0, 8)
 $reportRoot = Join-Path $repoRoot "Intermediate/test-reports/perf-gate/$timestamp"
@@ -2908,6 +3995,10 @@ $records = @(New-PerfGateRunPlan `
     -Configuration $Configuration `
     -TelemetryMode $TelemetryMode)
 Assert-PerfGateRunRecords -Records $records
+Set-PerfGateRunIdentity `
+    -Records $records `
+    -ProfileConfig $profileConfig `
+    -RepoRoot $repoRoot
 
 $buildCommands = @(Get-PerfGateBuildCommands -ProfileConfig $profileConfig -Configuration $Configuration)
 New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
@@ -3051,6 +4142,28 @@ $markdown += New-MarkdownTable `
     -Headers @("Target", "Backend", "Status", "Baseline", "Frames", "CPU Avg ms", "CPU Avg delta", "CPU P95 ms", "CPU P95 delta", "CPU P99 delta", "Private MB", "Private delta", "Heap MB", "Heap delta", "Draw delta", "GPU Avg ms", "GPU P95 ms", "GPU coverage", "Adapter", "Driver", "Actual extent", "Validation", "VSync", "Failures", "Warnings") `
     -Alignments @("Left", "Left", "Left", "Left", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Left", "Left", "Left", "Left", "Left", "Left", "Left") `
     -Rows $summaryRows
+$markdown += ""
+$markdown += "## Comparison identity"
+$markdown += ""
+$identityRows = New-Object 'System.Collections.Generic.List[object[]]'
+foreach ($record in $records) {
+    $workloadText = if ($null -eq $record.workload) { "n/a" } else { $record.workload | ConvertTo-Json -Depth 8 -Compress }
+    $fingerprintText = if ([string]::IsNullOrWhiteSpace([string]$record.workload_fingerprint)) { "n/a" } else { [string]$record.workload_fingerprint }
+    $identityRows.Add([object[]]@(
+        $record.target,
+        $record.backend,
+        $record.gpu_adapter,
+        $record.gpu_driver,
+        $record.os_build,
+        $record.source_sha,
+        $fingerprintText,
+        $workloadText
+    )) | Out-Null
+}
+$markdown += New-MarkdownTable `
+    -Headers @("Target", "Backend", "Adapter", "Driver", "OS build", "Source SHA", "Workload fingerprint", "Workload") `
+    -Alignments @("Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left") `
+    -Rows $identityRows
 $markdown | Set-Content -LiteralPath (Join-Path $reportRoot "summary.md") -Encoding UTF8
 
 Write-Host "Perf gate report: $reportRoot"

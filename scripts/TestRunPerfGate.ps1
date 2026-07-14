@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $runnerScript = Join-Path $repoRoot.Path "scripts\RunPerfGate.ps1"
+$runnerLauncher = Join-Path $repoRoot.Path "RunPerfGate.bat"
 $menuScript = Join-Path $repoRoot.Path "scripts\RunPerfGateMenu.ps1"
 
 $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runnerScript -SelfTest 2>&1
@@ -15,6 +16,40 @@ if ($exitCode -ne 0) {
 
 if ($outputText -notmatch "RunPerfGate self-test PASS") {
     throw "RunPerfGate self-test did not report PASS.`n$outputText"
+}
+
+$profilesPath = Join-Path $repoRoot.Path "tools\perf\perf_gate_profiles.json"
+$profileDocument = Get-Content -Raw -LiteralPath $profilesPath | ConvertFrom-Json
+$vegetationProfile = $profileDocument.profiles.VegetationFullPipeline
+$comparisonThresholdsProperty = $vegetationProfile.PSObject.Properties["comparison_thresholds"]
+if ($null -eq $comparisonThresholdsProperty) {
+    throw "Gate A RED: VegetationFullPipeline is missing comparison_thresholds."
+}
+$comparisonThresholds = $comparisonThresholdsProperty.Value
+foreach ($expectedThreshold in @(
+    [PSCustomObject]@{ name = "cpu_frame_time_avg_ms"; relative = 5.0; absolute = 0.25 },
+    [PSCustomObject]@{ name = "cpu_frame_time_p95_ms"; relative = 8.0; absolute = 0.50 },
+    [PSCustomObject]@{ name = "cpu_frame_time_p99_ms"; relative = 12.0; absolute = 1.00 },
+    [PSCustomObject]@{ name = "process_private_bytes_peak_mb"; relative = 5.0; absolute = 128.0 },
+    [PSCustomObject]@{ name = "engine_heap_peak_mb"; relative = 10.0; absolute = 1.0 },
+    [PSCustomObject]@{ name = "draw_calls_avg"; relative = 0.0; absolute = 0.0 },
+    [PSCustomObject]@{ name = "gpu_frame_avg_ms"; relative = 5.0; absolute = 0.25 },
+    [PSCustomObject]@{ name = "gpu_frame_p95_ms"; relative = 8.0; absolute = 0.50 }
+)) {
+    $thresholdProperty = $comparisonThresholds.PSObject.Properties[$expectedThreshold.name]
+    if ($null -eq $thresholdProperty -or
+        [double]$thresholdProperty.Value.relative_percent -ne $expectedThreshold.relative -or
+        [double]$thresholdProperty.Value.absolute_floor -ne $expectedThreshold.absolute) {
+        throw "VegetationFullPipeline threshold '$($expectedThreshold.name)' does not match the approved Gate A contract."
+    }
+}
+
+$tiers = @($comparisonThresholds.gpu_pass_tiers)
+if ($tiers.Count -ne 3 -or
+    [double]$tiers[0].minimum_baseline_avg_ms -ne 0.5 -or [double]$tiers[0].avg.relative_percent -ne 8.0 -or [double]$tiers[0].avg.absolute_floor -ne 0.10 -or [double]$tiers[0].p95.relative_percent -ne 12.0 -or [double]$tiers[0].p95.absolute_floor -ne 0.20 -or
+    [double]$tiers[1].minimum_baseline_avg_ms -ne 0.1 -or [double]$tiers[1].avg.relative_percent -ne 15.0 -or [double]$tiers[1].avg.absolute_floor -ne 0.05 -or [double]$tiers[1].p95.relative_percent -ne 20.0 -or [double]$tiers[1].p95.absolute_floor -ne 0.10 -or
+    [double]$tiers[2].minimum_baseline_avg_ms -ne 0.0 -or $null -ne $tiers[2].avg.PSObject.Properties["relative_percent"] -or [double]$tiers[2].avg.absolute_floor -ne 0.03 -or $null -ne $tiers[2].p95.PSObject.Properties["relative_percent"] -or [double]$tiers[2].p95.absolute_floor -ne 0.05) {
+    throw "VegetationFullPipeline GPU pass tiers do not match the approved Gate A contract."
 }
 
 $runBatProbeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ash-run-bat-test-{0}-{1}" -f $PID, [Guid]::NewGuid().ToString("N"))
@@ -84,7 +119,7 @@ finally {
     Remove-Item -LiteralPath $runBatProbeRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-$dryRunOutput = & powershell -NoProfile -ExecutionPolicy Bypass -File $runnerScript -Profile VegetationFullPipeline -DryRun 2>&1
+$dryRunOutput = & $runnerLauncher -Profile VegetationFullPipeline -DryRun 2>&1
 $dryRunExitCode = $LASTEXITCODE
 $dryRunText = ($dryRunOutput | Out-String)
 if ($dryRunExitCode -ne 0) {
