@@ -1,4 +1,5 @@
 #include "TerrainComposition.h"
+#include "Function/Asset/TerrainSpatialData.h"
 
 #include <algorithm>
 #include <array>
@@ -760,6 +761,14 @@ namespace AshEngine
 				{
 					mutable_component->weights.push_back(quantize_terrain_weights(weights));
 				}
+			}
+			if (!build_terrain_component_spatial_data(
+					*mutable_component,
+					mutable_component->sample_width,
+					mutable_component->sample_height,
+					out_error))
+			{
+				return false;
 			}
 
 			out_component = std::move(mutable_component);

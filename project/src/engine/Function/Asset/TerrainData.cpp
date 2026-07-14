@@ -1,4 +1,5 @@
 #include "TerrainData.h"
+#include "Function/Asset/TerrainSpatialData.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -357,6 +358,14 @@ namespace AshEngine
 								(*mutable_base_heights)[global_index],
 								mapping));
 						}
+					}
+					if (!build_terrain_component_spatial_data(
+							*mutable_component,
+							mutable_component->sample_width,
+							mutable_component->sample_height,
+							out_error))
+					{
+						return false;
 					}
 					mutable_snapshot->components.push_back(std::move(mutable_component));
 				}
