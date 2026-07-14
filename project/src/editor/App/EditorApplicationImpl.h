@@ -41,6 +41,7 @@ namespace AshEditor
 	class SceneService;
 	class SceneWorkflowCoordinator;
 	class SelectionService;
+	class TerrainEditorService;
 	class UndoRedoService;
 
 	class EditorApplicationImpl final
@@ -101,6 +102,7 @@ namespace AshEditor
 		std::unique_ptr<SelectionService> _upSelectionService{};
 		std::unique_ptr<SceneService> _upSceneService{};
 		std::unique_ptr<AssetDatabaseService> _upAssetDatabaseService{};
+		std::unique_ptr<TerrainEditorService> _upTerrainEditorService{};
 		std::unique_ptr<AssetPreviewService> _upAssetPreviewService{};
 		std::unique_ptr<EditorViewportService> _upViewportService{};
 		std::unique_ptr<EditorViewportCameraService> _upViewportCameraService{};

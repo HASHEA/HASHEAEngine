@@ -32,6 +32,7 @@
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
+#include "Services/TerrainEditorService.h"
 #include "Services/UndoRedoService.h"
 #include "Shell/DockLayoutController.h"
 #include "Shell/EditorCommandPaletteController.h"
@@ -49,6 +50,7 @@ namespace AshEditor
 		, _upSelectionService(std::make_unique<SelectionService>())
 		, _upSceneService(std::make_unique<SceneService>())
 		, _upAssetDatabaseService(std::make_unique<AssetDatabaseService>())
+		, _upTerrainEditorService(std::make_unique<TerrainEditorService>())
 		, _upAssetPreviewService(std::make_unique<AssetPreviewService>())
 		, _upViewportService(std::make_unique<EditorViewportService>())
 		, _upViewportCameraService(std::make_unique<EditorViewportCameraService>())
@@ -150,6 +152,7 @@ namespace AshEditor
 			_upLogBridge->Detach();
 		}
 		ShutdownPanels();
+		_upTerrainEditorService->Shutdown();
 		if (!_bDeterministicBenchmarkLayout)
 		{
 			SavePersistentState();
@@ -180,6 +183,7 @@ namespace AshEditor
 		{
 			_upLogBridge->FlushPending();
 		}
+		_upTerrainEditorService->Update();
 		_upPanelManager->Update();
 
 		const bool bDragging = _editorContext.pUiContext && _editorContext.pUiContext->has_drag_drop_payload();
@@ -288,6 +292,10 @@ namespace AshEditor
 		const bool bStartupSceneLoaded = _upSceneService->Initialize(pathStartupScene);
 		_upAssetDatabaseService->SetAssetRoot(_upSettingsService->GetAssetsRootPath());
 		_bAssetDatabaseReady = _upAssetDatabaseService->Refresh();
+		if (!_upTerrainEditorService->Initialize(_upAssetDatabaseService->GetDatabase(), *this))
+		{
+			_bAssetDatabaseReady = false;
+		}
 		_upIconService->Initialize(pathWorkspaceRoot);
 		return bStartupSceneLoaded;
 	}
