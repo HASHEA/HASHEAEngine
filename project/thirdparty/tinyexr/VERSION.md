@@ -1,0 +1,21 @@
+# TinyEXR vendored provenance
+
+- Version: `v3.2.0`
+- Commit: `6f470c9ab24bf3992bc512ce07e8ecb00d9bf105`
+- Source: <https://github.com/syoyo/tinyexr/tree/v3.2.0>
+- Vendored date: `2026-07-13`
+- TinyEXR license: BSD-3-Clause (see `LICENSE`)
+- miniz license: MIT/public-domain dual terms as declared by the vendored miniz sources
+
+## SHA-256
+
+- `tinyexr.h`: `B1D33CA1350D64E2B9A199614991CFFD45D7982FF3D68F107020A1230BDE38EC`
+- `exr_reader.hh`: `9E0BFEF0487B9C3082165B2A637C75EF91D9FCC4AA55A5F32EB97F77DB19F99B`
+- `streamreader.hh`: `81F2D1502930CA9CA9957E7607C2A7924D3EF2FE4B08B1A4001245DC6D3FEFB6`
+- `deps/miniz/miniz.h`: `295D1A0041AEA09609598C0F1F35C1977CA05AD662ACBADCFDAAC44C140AF37B`
+- `deps/miniz/miniz.c`: `8756860E8AB4D8C6942E12496B8081CFD291442CDBC6D13DBA4B993905128872`
+- `LICENSE`: `B90388AAADC2B6F77A5C01278697A2A0539EAB471A3BEFC6A081728BECDC3390`
+
+## Upgrade rule
+
+Replace approved files and update every hash.

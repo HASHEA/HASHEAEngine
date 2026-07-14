@@ -24,6 +24,7 @@ project "Engine"
 		thirdparty .. "/ImGui/**.cpp",
 		thirdparty .. "/tlsf/**.h",
 		thirdparty .. "/tlsf/**.c",
+		thirdparty .. "/tinyexr/deps/miniz/miniz.c",
 		-- editor begin 修改原因：节点画布真库必须与 ImGui 同处 Engine.dll，Editor 只通过 Engine facade 使用。
 		-- 仅显式列出核心 4 个 cpp，避免把 examples/external 带进构建。
 		thirdparty .. "/imgui-node-editor/imgui_node_editor.cpp",
@@ -60,6 +61,8 @@ project "Engine"
 		thirdparty .. "/tlsf",
 		thirdparty .. "/wyhash",
 		thirdparty .. "/thsvs",
+		thirdparty .. "/tinyexr",
+		thirdparty .. "/tinyexr/deps/miniz",
 		assetsdir,
 	}
 	if not _OPTIONS["no-tracy"] then

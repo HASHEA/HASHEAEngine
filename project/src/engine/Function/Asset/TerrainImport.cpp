@@ -4,6 +4,7 @@
 #include "Function/Asset/TerrainContainer.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -50,6 +51,19 @@ namespace AshEngine::TerrainImportDetail
 		uint32_t width,
 		uint32_t height,
 		const TerrainHeightMapping& mapping,
+		const RawRowProvider& row_provider,
+		std::string* out_error) -> TerrainImportResult;
+
+	auto decode_exr_height_file(
+		const TerrainHeightImportDesc& desc,
+		std::vector<float>& out_heights,
+		uint32_t& out_bits_per_sample,
+		std::string* out_error) -> TerrainImportResult;
+
+	auto write_exr_height_file(
+		const TerrainHeightExportDesc& desc,
+		uint32_t width,
+		uint32_t height,
 		const RawRowProvider& row_provider,
 		std::string* out_error) -> TerrainImportResult;
 }
@@ -152,7 +166,8 @@ namespace AshEngine
 			{
 				return false;
 			}
-			if (desc.format == TerrainHeightFileFormat::RawR32F &&
+			if ((desc.format == TerrainHeightFileFormat::RawR32F ||
+				desc.format == TerrainHeightFileFormat::Exr) &&
 				!checked_multiply(target_samples, 2u * sizeof(float), precision_bytes))
 			{
 				return false;
@@ -208,7 +223,8 @@ namespace AshEngine
 			{
 				return false;
 			}
-			if (desc.format == TerrainHeightFileFormat::RawR32F &&
+			if ((desc.format == TerrainHeightFileFormat::RawR32F ||
+				desc.format == TerrainHeightFileFormat::Exr) &&
 				(!checked_multiply(target_samples, 8u, value) ||
 					!checked_add(resident, value, resident)))
 			{
@@ -361,7 +377,8 @@ namespace AshEngine
 			}
 			if (desc.format != TerrainHeightFileFormat::RawR16 &&
 				desc.format != TerrainHeightFileFormat::RawR32F &&
-				desc.format != TerrainHeightFileFormat::Png)
+				desc.format != TerrainHeightFileFormat::Png &&
+				desc.format != TerrainHeightFileFormat::Exr)
 			{
 				return set_error(TerrainImportResult::UnsupportedFormat, out_error,
 					"This Terrain height import format is not implemented.");
@@ -396,12 +413,24 @@ namespace AshEngine
 
 			std::vector<float> source{};
 			uint32_t source_bits_per_sample =
-				desc.format == TerrainHeightFileFormat::RawR16 ? 16u : 32u;
-			const TerrainImportResult decode_result =
-				desc.format == TerrainHeightFileFormat::Png
-				? TerrainImportDetail::decode_png_height_file(
-					desc, source, source_bits_per_sample, out_error)
-				: TerrainImportDetail::decode_raw_height_file(desc, source, out_error);
+				desc.format == TerrainHeightFileFormat::RawR16 ? 16u :
+				desc.format == TerrainHeightFileFormat::RawR32F ? 32u : 0u;
+			TerrainImportResult decode_result = TerrainImportResult::UnsupportedFormat;
+			if (desc.format == TerrainHeightFileFormat::Png)
+			{
+				decode_result = TerrainImportDetail::decode_png_height_file(
+					desc, source, source_bits_per_sample, out_error);
+			}
+			else if (desc.format == TerrainHeightFileFormat::Exr)
+			{
+				decode_result = TerrainImportDetail::decode_exr_height_file(
+					desc, source, source_bits_per_sample, out_error);
+			}
+			else
+			{
+				decode_result = TerrainImportDetail::decode_raw_height_file(
+					desc, source, out_error);
+			}
 			if (decode_result != TerrainImportResult::Success)
 			{
 				return decode_result;
@@ -415,19 +444,25 @@ namespace AshEngine
 				desc.target_layout.component_count_z;
 			std::vector<uint16_t> encoded(target_count);
 			TerrainEditLayer precision_layer{};
-			const bool preserve_r32f = desc.format == TerrainHeightFileFormat::RawR32F;
-			if (preserve_r32f)
+			const bool preserve_float_precision =
+				desc.format == TerrainHeightFileFormat::RawR32F ||
+				desc.format == TerrainHeightFileFormat::Exr;
+			if (preserve_float_precision)
 			{
 				if (component_count > std::numeric_limits<uint16_t>::max())
 				{
 					return set_error(TerrainImportResult::InvalidDimensions, out_error,
-						"Terrain R32F precision layer exceeds the container block limit.");
+						"Terrain float precision layer exceeds the container block limit.");
 				}
-				precision_layer.id.bytes = {
-					0x41u, 0x73u, 0x68u, 0x52u, 0x33u, 0x32u, 0x46u, 0x50u,
-					0x72u, 0x65u, 0x63u, 0x69u, 0x73u, 0x69u, 0x6fu, 0x6eu
-				};
-				precision_layer.name = "Imported R32F Precision";
+				precision_layer.id.bytes = desc.format == TerrainHeightFileFormat::Exr
+					? std::array<uint8_t, 16>{
+						0x41u, 0x73u, 0x68u, 0x45u, 0x58u, 0x52u, 0x50u, 0x72u,
+						0x65u, 0x63u, 0x69u, 0x73u, 0x69u, 0x6fu, 0x6eu, 0x31u }
+					: std::array<uint8_t, 16>{
+						0x41u, 0x73u, 0x68u, 0x52u, 0x33u, 0x32u, 0x46u, 0x50u,
+						0x72u, 0x65u, 0x63u, 0x69u, 0x73u, 0x69u, 0x6fu, 0x6eu };
+				precision_layer.name = desc.format == TerrainHeightFileFormat::Exr
+					? "Imported EXR Precision" : "Imported R32F Precision";
 				precision_layer.height_blend_mode = TerrainHeightBlendMode::Alpha;
 				precision_layer.height_blocks.reserve(component_count);
 				for (uint32_t component_z = 0u;
@@ -488,7 +523,7 @@ namespace AshEngine
 					}
 					encoded[static_cast<size_t>(z) * target_width + x] =
 						encode_terrain_height_r16(world_height, desc.height_mapping);
-					if (preserve_r32f)
+					if (preserve_float_precision)
 					{
 						const TerrainComponentCoord owner = get_terrain_sample_owner(
 							desc.target_layout, x, z);
@@ -510,7 +545,7 @@ namespace AshEngine
 			working_set.height_mapping = desc.height_mapping;
 			working_set.content_generation = 1u;
 			working_set.base_heights = std::move(encoded);
-			if (preserve_r32f)
+			if (preserve_float_precision)
 			{
 				working_set.edit_layers.push_back(std::move(precision_layer));
 			}
@@ -622,7 +657,8 @@ namespace AshEngine
 		}
 		if (desc.format != TerrainHeightFileFormat::RawR16 &&
 			desc.format != TerrainHeightFileFormat::RawR32F &&
-			desc.format != TerrainHeightFileFormat::Png)
+			desc.format != TerrainHeightFileFormat::Png &&
+			desc.format != TerrainHeightFileFormat::Exr)
 		{
 			return set_error(TerrainImportResult::UnsupportedFormat, out_error,
 				"This Terrain height export format is not implemented.");
@@ -788,6 +824,13 @@ namespace AshEngine
 				snapshot.height_mapping,
 				provider,
 				out_error)
+			: desc.format == TerrainHeightFileFormat::Exr
+			? TerrainImportDetail::write_exr_height_file(
+				desc,
+				snapshot.layout.sample_count_x,
+				snapshot.layout.sample_count_z,
+				provider,
+				out_error)
 			: TerrainImportDetail::write_raw_height_file(
 				desc,
 				snapshot.layout.sample_count_x,
@@ -826,7 +869,8 @@ namespace AshEngine
 				valid_resize_policy(desc.resize_policy) &&
 				(desc.format == TerrainHeightFileFormat::RawR16 ||
 					desc.format == TerrainHeightFileFormat::RawR32F ||
-					desc.format == TerrainHeightFileFormat::Png))
+					desc.format == TerrainHeightFileFormat::Png ||
+					desc.format == TerrainHeightFileFormat::Exr))
 			{
 				uint64_t pipeline_peak = 0u;
 				if (!estimate_container_pipeline_peak_bytes(desc, pipeline_peak) ||

@@ -11,6 +11,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
@@ -103,6 +104,229 @@ namespace
 		return std::string(
 			std::istreambuf_iterator<char>(input),
 			std::istreambuf_iterator<char>());
+	}
+
+	enum class TestExrPixelType : int32_t
+	{
+		Half = 1,
+		Float = 2
+	};
+
+	struct TestExrChannel
+	{
+		std::string name{};
+		TestExrPixelType pixel_type = TestExrPixelType::Float;
+		std::vector<float> values{};
+	};
+
+	auto FloatToHalf(float value) -> uint16_t
+	{
+		uint32_t bits = 0u;
+		std::memcpy(&bits, &value, sizeof(bits));
+		const uint16_t sign = static_cast<uint16_t>((bits >> 16u) & 0x8000u);
+		uint32_t mantissa = bits & 0x007fffffu;
+		int32_t exponent = static_cast<int32_t>((bits >> 23u) & 0xffu) - 127 + 15;
+		if (exponent <= 0)
+		{
+			if (exponent < -10)
+			{
+				return sign;
+			}
+			mantissa = (mantissa | 0x00800000u) >> (1 - exponent);
+			if ((mantissa & 0x00001000u) != 0u)
+			{
+				mantissa += 0x00002000u;
+			}
+			return static_cast<uint16_t>(sign | (mantissa >> 13u));
+		}
+		if (exponent >= 31)
+		{
+			return static_cast<uint16_t>(sign | 0x7c00u);
+		}
+		if ((mantissa & 0x00001000u) != 0u)
+		{
+			mantissa += 0x00002000u;
+			if ((mantissa & 0x00800000u) != 0u)
+			{
+				mantissa = 0u;
+				++exponent;
+				if (exponent >= 31)
+				{
+					return static_cast<uint16_t>(sign | 0x7c00u);
+				}
+			}
+		}
+		return static_cast<uint16_t>(
+			sign | static_cast<uint16_t>(exponent << 10u) |
+			static_cast<uint16_t>(mantissa >> 13u));
+	}
+
+	auto WriteUncompressedExr(
+		const std::filesystem::path& path,
+		uint32_t width,
+		uint32_t height,
+		const std::vector<TestExrChannel>& channels,
+		bool header_only = false) -> void
+	{
+		REQUIRE(width > 0u);
+		REQUIRE(height > 0u);
+		REQUIRE_FALSE(channels.empty());
+		const size_t sample_count = static_cast<size_t>(width) * height;
+	for (const TestExrChannel& channel : channels)
+	{
+		REQUIRE_FALSE(channel.name.empty());
+		if (!header_only)
+		{
+			REQUIRE(channel.values.size() == sample_count);
+		}
+	}
+
+		std::vector<uint8_t> bytes{};
+		const auto append_u8 = [&](uint8_t value) { bytes.push_back(value); };
+		const auto append_u16 = [&](uint16_t value)
+			{
+				bytes.push_back(static_cast<uint8_t>(value));
+				bytes.push_back(static_cast<uint8_t>(value >> 8u));
+			};
+		const auto append_u32 = [&](uint32_t value)
+			{
+				for (uint32_t shift = 0u; shift < 32u; shift += 8u)
+				{
+					bytes.push_back(static_cast<uint8_t>(value >> shift));
+				}
+			};
+		const auto append_u64 = [&](uint64_t value)
+			{
+				for (uint32_t shift = 0u; shift < 64u; shift += 8u)
+				{
+					bytes.push_back(static_cast<uint8_t>(value >> shift));
+				}
+			};
+		const auto append_float = [&](float value)
+			{
+				uint32_t encoded = 0u;
+				std::memcpy(&encoded, &value, sizeof(encoded));
+				append_u32(encoded);
+			};
+		const auto append_string = [&](const std::string& value)
+			{
+				bytes.insert(bytes.end(), value.begin(), value.end());
+				append_u8(0u);
+			};
+		const auto append_attribute = [&](
+			const std::string& name,
+			const std::string& type,
+			const std::vector<uint8_t>& payload)
+			{
+				append_string(name);
+				append_string(type);
+				append_u32(static_cast<uint32_t>(payload.size()));
+				bytes.insert(bytes.end(), payload.begin(), payload.end());
+			};
+		const auto make_payload = [&](const std::function<void()>& writer)
+			{
+				std::vector<uint8_t> prefix{};
+				prefix.swap(bytes);
+				writer();
+				std::vector<uint8_t> payload{};
+				payload.swap(bytes);
+				bytes.swap(prefix);
+				return payload;
+			};
+
+		append_u32(0x01312f76u);
+		append_u32(2u);
+		append_attribute("channels", "chlist", make_payload([&]()
+			{
+				for (const TestExrChannel& channel : channels)
+				{
+					append_string(channel.name);
+					append_u32(static_cast<uint32_t>(channel.pixel_type));
+					append_u8(0u);
+					append_u8(0u);
+					append_u8(0u);
+					append_u8(0u);
+					append_u32(1u);
+					append_u32(1u);
+				}
+				append_u8(0u);
+			}));
+		append_attribute("compression", "compression", make_payload([&]()
+			{
+				append_u8(0u);
+			}));
+		const auto append_window = [&]()
+			{
+				append_u32(0u);
+				append_u32(0u);
+				append_u32(width - 1u);
+				append_u32(height - 1u);
+			};
+		append_attribute("dataWindow", "box2i", make_payload(append_window));
+		append_attribute("displayWindow", "box2i", make_payload(append_window));
+		append_attribute("lineOrder", "lineOrder", make_payload([&]()
+			{
+				append_u8(0u);
+			}));
+		append_attribute("pixelAspectRatio", "float", make_payload([&]()
+			{
+				append_float(1.0f);
+			}));
+		append_attribute("screenWindowCenter", "v2f", make_payload([&]()
+			{
+				append_float(0.0f);
+				append_float(0.0f);
+			}));
+		append_attribute("screenWindowWidth", "float", make_payload([&]()
+			{
+				append_float(1.0f);
+			}));
+		append_u8(0u);
+		if (header_only)
+		{
+			std::ofstream output(path, std::ios::binary | std::ios::trunc);
+			REQUIRE(output.is_open());
+			REQUIRE(output.write(
+				reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+			return;
+		}
+
+		uint64_t scanline_bytes = 0u;
+		for (const TestExrChannel& channel : channels)
+		{
+			scanline_bytes += static_cast<uint64_t>(width) *
+				(channel.pixel_type == TestExrPixelType::Half ? 2u : 4u);
+		}
+		uint64_t scanline_offset = bytes.size() + static_cast<uint64_t>(height) * 8u;
+		for (uint32_t y = 0u; y < height; ++y)
+		{
+			append_u64(scanline_offset);
+			scanline_offset += 8u + scanline_bytes;
+		}
+		for (uint32_t y = 0u; y < height; ++y)
+		{
+			append_u32(y);
+			append_u32(static_cast<uint32_t>(scanline_bytes));
+			for (const TestExrChannel& channel : channels)
+			{
+				for (uint32_t x = 0u; x < width; ++x)
+				{
+					const float value = channel.values[static_cast<size_t>(y) * width + x];
+					if (channel.pixel_type == TestExrPixelType::Half)
+					{
+						append_u16(FloatToHalf(value));
+					}
+					else
+					{
+						append_float(value);
+					}
+				}
+			}
+		}
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		REQUIRE(output.write(
+			reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 	}
 
 	auto ReadR32F(
@@ -897,4 +1121,349 @@ TEST_CASE("Terrain import PNG rejects a grayscale TIFF with a PNG extension")
 		AshEngine::TerrainImportResult::UnsupportedFormat);
 	CHECK_FALSE(snapshot);
 	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain import EXR selects half and float channels linearly")
+{
+	const auto path = TestDirectory() / "terrain-channels.exr";
+	const std::vector<float> half_values = {
+		-100.0f, -50.0f, -25.0f,
+		0.0f, 25.0f, 50.0f,
+		100.0f, 500.0f, 900.0f
+	};
+	const std::vector<float> float_values = {
+		-80.25f, -40.5f, -1.0f,
+		0.0f, 1.0f, 40.5f,
+		80.25f, 320.75f, 899.5f
+	};
+	WriteUncompressedExr(path, 3u, 3u, {
+		{ "Height", TestExrPixelType::Float, float_values },
+		{ "Y", TestExrPixelType::Half, half_values }
+	});
+	auto desc = MakeImportDesc(path, 3u, 3u, MakeLayout(3u, 3u));
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.exr_channel = "Y";
+	AshEngine::TerrainImportReport half_report{};
+	const auto half_snapshot = Import(desc, &half_report);
+	CHECK(half_report.source_bits_per_sample == 16u);
+	CHECK(half_report.warnings.empty());
+	CHECK(FinalHeights(*half_snapshot) == half_values);
+
+	desc.exr_channel = "Height";
+	AshEngine::TerrainImportReport float_report{};
+	const auto float_snapshot = Import(desc, &float_report);
+	CHECK(float_report.source_bits_per_sample == 32u);
+	CHECK(float_report.warnings.empty());
+	CHECK(FinalHeights(*float_snapshot) == float_values);
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain import EXR round trips named float and half height channels")
+{
+	const auto directory = TestDirectory();
+	const auto raw_path = directory / "exr-round-trip.raw";
+	const auto float_path = directory / "exr-round-trip-float.exr";
+	const auto half_path = directory / "exr-round-trip-half.exr";
+	const std::vector<float> values = {
+		-99.75f, -20.125f, -0.0f,
+		0.125f, 100.5f, 300.25f,
+		500.75f, 700.5f, 899.875f
+	};
+	WriteR32F(raw_path, values, AshEngine::TerrainByteOrder::LittleEndian);
+	auto raw_desc = MakeImportDesc(raw_path, 3u, 3u, MakeLayout(3u, 3u));
+	raw_desc.format = AshEngine::TerrainHeightFileFormat::RawR32F;
+	const auto source = Import(raw_desc);
+
+	AshEngine::TerrainHeightExportDesc export_desc{};
+	export_desc.destination_path = float_path;
+	export_desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	export_desc.exr_channel = "Height";
+	export_desc.exr_pixel_type = AshEngine::TerrainExrPixelType::Float;
+	std::string error{};
+	REQUIRE(AshEngine::export_terrain_height(*source, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	REQUIRE_MESSAGE(error.empty(), error);
+
+	auto exr_desc = MakeImportDesc(float_path, 3u, 3u, source->layout);
+	exr_desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	exr_desc.exr_channel = "Height";
+	AshEngine::TerrainImportReport report{};
+	const auto round_trip = Import(exr_desc, &report);
+	CHECK(report.source_bits_per_sample == 32u);
+	CHECK(FinalHeights(*round_trip) == values);
+
+	export_desc.destination_path = half_path;
+	export_desc.exr_pixel_type = AshEngine::TerrainExrPixelType::Half;
+	REQUIRE(AshEngine::export_terrain_height(*source, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	REQUIRE_MESSAGE(error.empty(), error);
+	exr_desc.source_path = half_path;
+	AshEngine::TerrainImportReport half_report{};
+	const auto half_round_trip = Import(exr_desc, &half_report);
+	CHECK(half_report.source_bits_per_sample == 16u);
+	const std::vector<float> half_values = FinalHeights(*half_round_trip);
+	REQUIRE(half_values.size() == values.size());
+	for (size_t index = 0u; index < values.size(); ++index)
+	{
+		CHECK(std::abs(half_values[index] - values[index]) <= 0.25f);
+	}
+	std::filesystem::remove(raw_path);
+	std::filesystem::remove(float_path);
+	std::filesystem::remove(half_path);
+}
+
+TEST_CASE("Terrain import EXR rejects missing channels and malformed files")
+{
+	const auto directory = TestDirectory();
+	const auto valid_path = directory / "exr-missing-channel.exr";
+	const auto malformed_path = directory / "exr-malformed.exr";
+	WriteUncompressedExr(valid_path, 3u, 3u, {
+		{ "Y", TestExrPixelType::Float, std::vector<float>(9u, 12.0f) }
+	});
+	{
+		std::ofstream output(malformed_path, std::ios::binary | std::ios::trunc);
+		REQUIRE(output.is_open());
+		const std::array<uint8_t, 8> malformed = {
+			0x76u, 0x2fu, 0x31u, 0x01u, 0xffu, 0xffu, 0xffu, 0xffu
+		};
+		REQUIRE(output.write(
+			reinterpret_cast<const char*>(malformed.data()), malformed.size()));
+	}
+
+	auto desc = MakeImportDesc(valid_path, 3u, 3u, MakeLayout(3u, 3u));
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.exr_channel = "Missing";
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		47u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::DecodeFailure);
+	CHECK_FALSE(snapshot);
+
+	desc.source_path = malformed_path;
+	desc.exr_channel = "Y";
+	CHECK(AshEngine::import_terrain_height(
+		47u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::DecodeFailure);
+	CHECK_FALSE(snapshot);
+	std::filesystem::remove(valid_path);
+	std::filesystem::remove(malformed_path);
+}
+
+TEST_CASE("Terrain import EXR marks and reloads long channel names")
+{
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	std::string error{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		51u, MakeLayout(3u, 3u), { -100.0f, 1000.0f }, 42.0f,
+		source, &error));
+	const auto destination = TestDirectory() / "exr-long-channel.exr";
+	const std::string channel_name = "TerrainHeightChannelNameLongerThanThirtyOne";
+	AshEngine::TerrainHeightExportDesc export_desc{};
+	export_desc.destination_path = destination;
+	export_desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	export_desc.exr_channel = channel_name;
+	REQUIRE(AshEngine::export_terrain_height(*source, export_desc, &error) ==
+		AshEngine::TerrainImportResult::Success);
+	REQUIRE_MESSAGE(error.empty(), error);
+	const std::vector<uint8_t> bytes = ReadAllBytes(destination);
+	REQUIRE(bytes.size() >= 8u);
+	CHECK((bytes[5] & 0x04u) != 0u);
+
+	auto import_desc = MakeImportDesc(destination, 3u, 3u, source->layout);
+	import_desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	import_desc.exr_channel = channel_name;
+	const auto reloaded = Import(import_desc);
+	CHECK(FinalHeights(*reloaded) == FinalHeights(*source));
+	std::filesystem::remove(destination);
+}
+
+TEST_CASE("Terrain import EXR cancels before publication and removes temporary output")
+{
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> source{};
+	std::string error{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		53u, MakeLayout(3u, 3u), { -100.0f, 1000.0f }, 0.0f,
+		source, &error));
+	const auto destination = TestDirectory() / "exr-cancelled.exr";
+	const auto temporary = std::filesystem::path(destination.string() + ".tmp");
+	std::filesystem::remove(destination);
+	std::filesystem::remove(temporary);
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.destination_path = destination;
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.exr_channel = "Y";
+	desc.cancellation.cancel();
+	CHECK(AshEngine::export_terrain_height(*source, desc, &error) ==
+		AshEngine::TerrainImportResult::Cancelled);
+	CHECK_FALSE(std::filesystem::exists(destination));
+	CHECK_FALSE(std::filesystem::exists(temporary));
+}
+
+TEST_CASE("Terrain import EXR cancels after encoding starts and before final rename")
+{
+	AshEngine::TerrainGridLayout layout{};
+	layout.sample_count_x = 2049u;
+	layout.sample_count_z = 2049u;
+	layout.component_count_x = 8u;
+	layout.component_count_z = 8u;
+	layout.component_quad_count = 256u;
+	layout.sample_spacing_meters = 1.0f;
+	REQUIRE(AshEngine::is_valid_terrain_grid_layout(layout));
+	auto source = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	source->layout = layout;
+	source->height_mapping = { -100.0f, 1000.0f };
+	std::vector<uint16_t> base_heights(
+		static_cast<size_t>(layout.sample_count_x) * layout.sample_count_z);
+	uint32_t random_state = 0x6b8b4567u;
+	for (uint16_t& value : base_heights)
+	{
+		random_state = random_state * 1664525u + 1013904223u;
+		value = static_cast<uint16_t>(random_state >> 16u);
+	}
+	source->base_heights =
+		std::make_shared<const std::vector<uint16_t>>(std::move(base_heights));
+
+	const auto destination = TestDirectory() / "exr-cancelled-after-encode.exr";
+	const auto temporary = std::filesystem::path(destination.string() + ".tmp");
+	std::filesystem::remove(destination);
+	std::filesystem::remove(temporary);
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.destination_path = destination;
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.source = AshEngine::TerrainExportSource::BaseHeight;
+	desc.exr_channel = "Y";
+	AshEngine::TerrainImportResult result = AshEngine::TerrainImportResult::Success;
+	std::string error{};
+	std::thread exporter([&]()
+		{
+			result = AshEngine::export_terrain_height(*source, desc, &error);
+		});
+	bool temporary_observed = false;
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+	while (std::chrono::steady_clock::now() < deadline)
+	{
+		if (std::filesystem::exists(temporary))
+		{
+			temporary_observed = true;
+			desc.cancellation.cancel();
+			break;
+		}
+		if (std::filesystem::exists(destination))
+		{
+			break;
+		}
+		std::this_thread::yield();
+	}
+	if (!temporary_observed)
+	{
+		desc.cancellation.cancel();
+	}
+	exporter.join();
+	CHECK(temporary_observed);
+	CHECK(result == AshEngine::TerrainImportResult::Cancelled);
+	CHECK_FALSE(std::filesystem::exists(destination));
+	CHECK_FALSE(std::filesystem::exists(temporary));
+}
+
+TEST_CASE("Terrain import EXR enforces one GiB before contiguous export allocation")
+{
+	AshEngine::TerrainGridLayout layout{};
+	layout.sample_count_x = 32769u;
+	layout.sample_count_z = 32769u;
+	layout.component_count_x = 128u;
+	layout.component_count_z = 128u;
+	layout.component_quad_count = 256u;
+	layout.sample_spacing_meters = 1.0f;
+	REQUIRE(AshEngine::is_valid_terrain_grid_layout(layout));
+	auto source = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	source->layout = layout;
+	source->height_mapping = { -100.0f, 1000.0f };
+	AshEngine::TerrainLayerId layer_id{};
+	layer_id.bytes[0] = 0x5au;
+	AshEngine::TerrainEditLayer layer{};
+	layer.id = layer_id;
+	source->edit_layers =
+		std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+			std::vector<AshEngine::TerrainEditLayer>{ layer });
+
+	const auto destination = TestDirectory() / "exr-over-budget.exr";
+	std::filesystem::remove(destination);
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.destination_path = destination;
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.source = AshEngine::TerrainExportSource::HeightEditLayer;
+	desc.source_layer_id = layer_id;
+	desc.exr_channel = "Y";
+	std::string error{};
+	CHECK(AshEngine::export_terrain_height(*source, desc, &error) ==
+		AshEngine::TerrainImportResult::MemoryLimitExceeded);
+	CHECK_FALSE(std::filesystem::exists(destination));
+}
+
+TEST_CASE("Terrain import EXR budgets pixel and encoded buffers before allocation")
+{
+	AshEngine::TerrainGridLayout layout{};
+	layout.sample_count_x = 10241u;
+	layout.sample_count_z = 10241u;
+	layout.component_count_x = 40u;
+	layout.component_count_z = 40u;
+	layout.component_quad_count = 256u;
+	layout.sample_spacing_meters = 1.0f;
+	REQUIRE(AshEngine::is_valid_terrain_grid_layout(layout));
+	auto source = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	source->layout = layout;
+	source->height_mapping = { -100.0f, 1000.0f };
+	AshEngine::TerrainLayerId layer_id{};
+	layer_id.bytes[0] = 0x7cu;
+	AshEngine::TerrainEditLayer layer{};
+	layer.id = layer_id;
+	source->edit_layers =
+		std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+			std::vector<AshEngine::TerrainEditLayer>{ layer });
+
+	const auto destination = TestDirectory() / "exr-combined-over-budget.exr";
+	const auto temporary = std::filesystem::path(destination.string() + ".tmp");
+	std::filesystem::remove(destination);
+	std::filesystem::remove(temporary);
+	AshEngine::TerrainHeightExportDesc desc{};
+	desc.destination_path = destination;
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.source = AshEngine::TerrainExportSource::HeightEditLayer;
+	desc.source_layer_id = layer_id;
+	desc.exr_channel = "Y";
+	desc.exr_pixel_type = AshEngine::TerrainExrPixelType::Float;
+	std::string error{};
+	CHECK(AshEngine::export_terrain_height(*source, desc, &error) ==
+		AshEngine::TerrainImportResult::MemoryLimitExceeded);
+	CHECK_FALSE(std::filesystem::exists(destination));
+	CHECK_FALSE(std::filesystem::exists(temporary));
+}
+
+TEST_CASE("Terrain import EXR rejects multi-channel decode above its peak budget")
+{
+	const auto source_path = TestDirectory() / "exr-multi-channel-over-budget.exr";
+	std::vector<TestExrChannel> channels{};
+	channels.reserve(64u);
+	for (uint32_t index = 0u; index < 64u; ++index)
+	{
+		channels.push_back({
+			index == 0u ? "Height" : "C" + std::to_string(index),
+			TestExrPixelType::Float,
+			{}
+		});
+	}
+	WriteUncompressedExr(source_path, 257u, 257u, channels, true);
+	auto desc = MakeImportDesc(
+		source_path, 257u, 257u, MakeLayout(257u, 257u, 256u));
+	desc.format = AshEngine::TerrainHeightFileFormat::Exr;
+	desc.exr_channel = "Height";
+	desc.peak_memory_limit_bytes = 40ull * 1024ull * 1024ull;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+	std::string error{};
+	CHECK(AshEngine::import_terrain_height(
+		59u, desc, snapshot, nullptr, &error) ==
+		AshEngine::TerrainImportResult::MemoryLimitExceeded);
+	CHECK_FALSE(snapshot);
+	std::filesystem::remove(source_path);
 }

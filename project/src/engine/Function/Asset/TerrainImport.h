@@ -26,6 +26,12 @@ namespace AshEngine
 		BigEndian
 	};
 
+	enum class TerrainExrPixelType : uint8_t
+	{
+		Half = 0,
+		Float
+	};
+
 	enum class TerrainResizePolicy : uint8_t
 	{
 		Reject = 0,
@@ -98,6 +104,7 @@ namespace AshEngine
 		uint32_t material_layer_index = 0;
 		TerrainByteOrder byte_order = TerrainByteOrder::LittleEndian;
 		std::string exr_channel = "Y";
+		TerrainExrPixelType exr_pixel_type = TerrainExrPixelType::Float;
 		TerrainCancellationToken cancellation{};
 	};
 
