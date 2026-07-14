@@ -1,6 +1,7 @@
 #include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/RenderProgram.h"
+#include "Graphics/DirectX12/DX12GpuTimingTelemetry.h"
 #include "Graphics/Vulkan/VulkanGpuTimingTelemetry.h"
 
 #ifdef TYPE_TO_STRING
@@ -8,9 +9,13 @@
 #endif
 #include "doctest.h"
 
+#include <atomic>
 #include <array>
 #include <limits>
 #include <string>
+#include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace
 {
@@ -545,4 +550,556 @@ TEST_CASE("GPU timing Vulkan aborted and unsubmitted frames never become valid s
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
 	REQUIRE(state.abort_frame(721u, RHI::GpuTimingInvalidReason::SubmissionFailed));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+}
+
+TEST_CASE("GPU timing DX12 rejects an invalid timestamp frequency")
+{
+	RHI::GpuTimingFrameRecord record{};
+	record.frame_id = 800u;
+	record.slot_index = 0u;
+	record.query_count = 2u;
+	record.valid = true;
+	record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+		{ 0u, 1u, true, true };
+
+	std::array<uint64_t, RHI::kGpuTimingQueriesPerFrame> timestamps{};
+	timestamps[0] = 10u;
+	timestamps[1] = 20u;
+
+	RHI::GpuFrameTimingSample sample{};
+	CHECK(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 0u, sample) ==
+		RHI::DX12GpuTimingResolveResult::Unsupported);
+	CHECK(sample.frame_id == 800u);
+	CHECK_FALSE(sample.valid);
+	CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::BackendUnsupported);
+}
+
+TEST_CASE("GPU timing DX12 resolves 64-bit timestamp wrap from its queue frequency")
+{
+	RHI::GpuTimingFrameRecord record{};
+	record.frame_id = 801u;
+	record.slot_index = 1u;
+	record.query_count = 2u;
+	record.valid = true;
+	const uint32_t slot_begin = RHI::kGpuTimingQueriesPerFrame;
+	record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+		{ slot_begin, slot_begin + 1u, true, true };
+
+	std::array<uint64_t, RHI::kGpuTimingQueriesPerFrame> timestamps{};
+	timestamps[0] = std::numeric_limits<uint64_t>::max() - 4u;
+	timestamps[1] = 3u;
+
+	RHI::GpuFrameTimingSample sample{};
+	REQUIRE(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 1000000u, sample) ==
+		RHI::DX12GpuTimingResolveResult::Ready);
+	REQUIRE(sample.valid);
+	const auto& frame_sample =
+		sample.metrics[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)];
+	REQUIRE(frame_sample.valid);
+	CHECK(frame_sample.duration_ms == doctest::Approx(0.008));
+}
+
+TEST_CASE("GPU timing DX12 rejects missing or malformed whole-frame queries")
+{
+	std::array<uint64_t, RHI::kGpuTimingQueriesPerFrame> timestamps{};
+	timestamps[0] = 10u;
+	timestamps[1] = 20u;
+
+	SUBCASE("zero query count")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 802u;
+		record.valid = true;
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 1000000u, sample) ==
+			RHI::DX12GpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::FrameStateError);
+	}
+
+	SUBCASE("missing frame pair")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 803u;
+		record.query_count = 2u;
+		record.valid = true;
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 1000000u, sample) ==
+			RHI::DX12GpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::IncompleteScope);
+	}
+
+	SUBCASE("reversed frame query order")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 804u;
+		record.query_count = 2u;
+		record.valid = true;
+		record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+			{ 1u, 0u, true, true };
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 1000000u, sample) ==
+			RHI::DX12GpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::FrameStateError);
+	}
+
+	SUBCASE("frame query exceeds the resolved range")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 805u;
+		record.query_count = 2u;
+		record.valid = true;
+		record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+			{ 0u, 2u, true, true };
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 1000000u, sample) ==
+			RHI::DX12GpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::FrameStateError);
+	}
+
+	SUBCASE("frame query belongs to another physical slot")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 806u;
+		record.slot_index = 1u;
+		record.query_count = 2u;
+		record.valid = true;
+		record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+			{ 0u, 1u, true, true };
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_dx12_gpu_timing_record(record, timestamps, 1000000u, sample) ==
+			RHI::DX12GpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::FrameStateError);
+	}
+}
+
+TEST_CASE("GPU timing DX12 fence observation distinguishes pending and device removal")
+{
+	CHECK(RHI::classify_dx12_gpu_timing_fence(4u, 5u) ==
+		RHI::DX12GpuTimingFencePollResult::Pending);
+	CHECK(RHI::classify_dx12_gpu_timing_fence(5u, 5u) ==
+		RHI::DX12GpuTimingFencePollResult::Ready);
+	CHECK(RHI::classify_dx12_gpu_timing_fence(6u, 5u) ==
+		RHI::DX12GpuTimingFencePollResult::Ready);
+	CHECK(RHI::classify_dx12_gpu_timing_fence(UINT64_MAX, 5u) ==
+		RHI::DX12GpuTimingFencePollResult::DeviceRemoved);
+	CHECK(RHI::classify_dx12_gpu_timing_fence(UINT64_MAX, 0u) ==
+		RHI::DX12GpuTimingFencePollResult::DeviceRemoved);
+	CHECK(RHI::classify_dx12_gpu_timing_fence(0u, 0u) ==
+		RHI::DX12GpuTimingFencePollResult::InvalidTarget);
+}
+
+TEST_CASE("GPU timing DX12 resolve ranges remain inside the segmented readback")
+{
+	RHI::DX12GpuTimingResolveRange range{};
+	REQUIRE(RHI::make_dx12_gpu_timing_resolve_range(
+		2u,
+		RHI::kGpuTimingQueriesPerFrame,
+		range));
+	CHECK(range.start_query == 2u * RHI::kGpuTimingQueriesPerFrame);
+	CHECK(range.query_count == RHI::kGpuTimingQueriesPerFrame);
+	CHECK(range.destination_offset_bytes ==
+		2u * RHI::kGpuTimingQueriesPerFrame * sizeof(uint64_t));
+	CHECK(range.destination_offset_bytes + range.query_count * sizeof(uint64_t) ==
+		RHI::kGpuTimingQueryCapacity * sizeof(uint64_t));
+
+	CHECK_FALSE(RHI::make_dx12_gpu_timing_resolve_range(
+		RHI::kGpuTimingFrameRingDepth,
+		1u,
+		range));
+	CHECK_FALSE(RHI::make_dx12_gpu_timing_resolve_range(0u, 0u, range));
+	CHECK_FALSE(RHI::make_dx12_gpu_timing_resolve_range(
+		0u,
+		RHI::kGpuTimingQueriesPerFrame + 1u,
+		range));
+}
+
+TEST_CASE("GPU timing DX12 binds only the exact executed command list and successful fence target")
+{
+	auto* expected = reinterpret_cast<ID3D12CommandList*>(uintptr_t{ 0x1000u });
+	auto* upload = reinterpret_cast<ID3D12CommandList*>(uintptr_t{ 0x2000u });
+	auto* other = reinterpret_cast<ID3D12CommandList*>(uintptr_t{ 0x3000u });
+	ID3D12CommandList* executed[] = { upload, expected };
+
+	RHI::DX12FenceSignalResult signal{};
+	signal.hresult = S_OK;
+	signal.target_value = 7u;
+	CHECK(RHI::classify_dx12_gpu_timing_submit(expected, executed, 2u, signal) ==
+		RHI::DX12GpuTimingSubmitResult::Accepted);
+
+	ID3D12CommandList* skipped[] = { upload, other };
+	CHECK(RHI::classify_dx12_gpu_timing_submit(expected, skipped, 2u, signal) ==
+		RHI::DX12GpuTimingSubmitResult::CommandListNotExecuted);
+	CHECK(RHI::classify_dx12_gpu_timing_submit(expected, nullptr, 0u, signal) ==
+		RHI::DX12GpuTimingSubmitResult::CommandListNotExecuted);
+
+	signal.hresult = E_FAIL;
+	signal.target_value = 0u;
+	CHECK(RHI::classify_dx12_gpu_timing_submit(expected, executed, 2u, signal) ==
+		RHI::DX12GpuTimingSubmitResult::FenceSignalFailed);
+
+	signal.hresult = S_OK;
+	CHECK(RHI::classify_dx12_gpu_timing_submit(expected, executed, 2u, signal) ==
+		RHI::DX12GpuTimingSubmitResult::InvalidFenceTarget);
+}
+
+TEST_CASE("GPU timing DX12 submission safety state quarantines untrackable execution")
+{
+	using SafetyState = RHI::DX12GpuTimingSafetyState;
+	using SubmitResult = RHI::DX12GpuTimingSubmitResult;
+
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state(
+		SafetyState::Operational,
+		SubmitResult::CommandListNotExecuted) == SafetyState::Operational);
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state(
+		SafetyState::Operational,
+		SubmitResult::FenceSignalFailed) == SafetyState::Quarantined);
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state(
+		SafetyState::Operational,
+		SubmitResult::InvalidFenceTarget) == SafetyState::Quarantined);
+
+	// Quarantine is monotonic for the telemetry lifetime. Neither a later safe
+	// abort nor an accepted observation may make an untracked slot reusable.
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state(
+		SafetyState::Quarantined,
+		SubmitResult::CommandListNotExecuted) == SafetyState::Quarantined);
+	CHECK(RHI::advance_dx12_gpu_timing_safety_state(
+		SafetyState::Quarantined,
+		SubmitResult::Accepted) == SafetyState::Quarantined);
+}
+
+TEST_CASE("GPU timing DX12 graphics completion state poisons only executed untrackable batches")
+{
+	using CompletionState = RHI::DX12GraphicsCompletionState;
+
+	RHI::DX12FenceSignalResult failed_signal{};
+	failed_signal.hresult = E_FAIL;
+	CHECK(RHI::advance_dx12_graphics_completion_state(
+		CompletionState::Trackable,
+		false,
+		failed_signal) == CompletionState::Trackable);
+	CHECK(RHI::advance_dx12_graphics_completion_state(
+		CompletionState::Trackable,
+		true,
+		failed_signal) == CompletionState::Lost);
+
+	RHI::DX12FenceSignalResult invalid_target{};
+	invalid_target.hresult = S_OK;
+	CHECK(RHI::advance_dx12_graphics_completion_state(
+		CompletionState::Trackable,
+		true,
+		invalid_target) == CompletionState::Lost);
+
+	RHI::DX12FenceSignalResult tracked_signal{};
+	tracked_signal.hresult = S_OK;
+	tracked_signal.target_value = 9u;
+	CHECK(RHI::advance_dx12_graphics_completion_state(
+		CompletionState::Trackable,
+		true,
+		tracked_signal) == CompletionState::Trackable);
+	CHECK(RHI::advance_dx12_graphics_completion_state(
+		CompletionState::Lost,
+		true,
+		tracked_signal) == CompletionState::Lost);
+
+	RHI::DX12GraphicsCompletionPolicy empty_success_policy{};
+	empty_success_policy.observe_submission(false, tracked_signal);
+	CHECK(empty_success_policy.can_issue_work());
+	CHECK(empty_success_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+	RHI::DX12GraphicsCompletionPolicy empty_failure_policy{};
+	empty_failure_policy.observe_submission(false, failed_signal);
+	CHECK(empty_failure_policy.can_issue_work());
+	CHECK(empty_failure_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+
+	RHI::DX12GraphicsCompletionPolicy policy{};
+	CHECK(policy.can_issue_work());
+	CHECK(policy.can_reuse_frame_resources());
+	CHECK(policy.can_report_completion());
+	CHECK_FALSE(policy.is_lost());
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+
+	policy.observe_submission(false, failed_signal);
+	CHECK(policy.can_issue_work());
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+	policy.observe_submission(true, failed_signal);
+	CHECK(policy.is_lost());
+	CHECK_FALSE(policy.can_issue_work());
+	CHECK_FALSE(policy.can_reuse_frame_resources());
+	CHECK_FALSE(policy.can_report_completion());
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+
+	policy.record_teardown_readiness(RHI::DX12GraphicsTeardownReadiness::Drained);
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+	CHECK(policy.is_lost());
+	// A later failed/redundant proof attempt cannot erase an already proven
+	// terminal state when no new queue work was issued.
+	policy.observe_required_completion_signal(failed_signal);
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+
+	policy.observe_submission(true, tracked_signal);
+	CHECK(policy.is_lost());
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+	policy.reset_after_shutdown();
+	CHECK_FALSE(policy.is_lost());
+	CHECK(policy.can_issue_work());
+	CHECK(policy.can_reuse_frame_resources());
+	CHECK(policy.can_report_completion());
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+
+	RHI::DX12GraphicsCompletionPolicy queue_work_policy{};
+	queue_work_policy.observe_queue_work();
+	CHECK(queue_work_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+	queue_work_policy.record_teardown_readiness(
+		RHI::DX12GraphicsTeardownReadiness::DeviceRemoved);
+	CHECK(queue_work_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::DeviceRemoved);
+	CHECK(queue_work_policy.is_lost());
+
+	RHI::DX12GraphicsCompletionPolicy wait_idle_policy{};
+	wait_idle_policy.observe_queue_work();
+	wait_idle_policy.observe_required_completion_signal(failed_signal);
+	CHECK(wait_idle_policy.is_lost());
+	CHECK(wait_idle_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+
+	RHI::DX12GraphicsCompletionPolicy required_success_policy{};
+	required_success_policy.observe_required_completion_signal(tracked_signal);
+	CHECK(required_success_policy.can_issue_work());
+	CHECK(required_success_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+	required_success_policy.record_teardown_readiness(
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+	required_success_policy.observe_required_completion_signal(tracked_signal);
+	CHECK(required_success_policy.can_issue_work());
+	CHECK(required_success_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Unknown);
+
+	RHI::DX12GraphicsCompletionPolicy required_failed_proven_policy{};
+	required_failed_proven_policy.observe_required_completion_signal(failed_signal);
+	CHECK(required_failed_proven_policy.can_issue_work());
+	CHECK(required_failed_proven_policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::Drained);
+}
+
+TEST_CASE("GPU timing DX12 teardown requires a proven queue tail or confirmed device removal")
+{
+	RHI::DX12FenceSignalResult tracked_signal{};
+	tracked_signal.hresult = S_OK;
+	tracked_signal.target_value = 12u;
+	CHECK(RHI::classify_dx12_graphics_teardown_readiness(
+		tracked_signal,
+		12u,
+		S_OK) == RHI::DX12GraphicsTeardownReadiness::Drained);
+	CHECK(RHI::classify_dx12_graphics_teardown_readiness(
+		tracked_signal,
+		11u,
+		S_OK) == RHI::DX12GraphicsTeardownReadiness::Unknown);
+	CHECK(RHI::classify_dx12_graphics_teardown_readiness(
+		tracked_signal,
+		UINT64_MAX,
+		S_OK) == RHI::DX12GraphicsTeardownReadiness::Unknown);
+
+	RHI::DX12FenceSignalResult failed_signal{};
+	failed_signal.hresult = E_FAIL;
+	CHECK(RHI::classify_dx12_graphics_teardown_readiness(
+		failed_signal,
+		0u,
+		S_OK) == RHI::DX12GraphicsTeardownReadiness::Unknown);
+	CHECK(RHI::classify_dx12_graphics_teardown_readiness(
+		failed_signal,
+		UINT64_MAX,
+		DXGI_ERROR_DEVICE_REMOVED) ==
+		RHI::DX12GraphicsTeardownReadiness::DeviceRemoved);
+}
+
+TEST_CASE("GPU timing DX12 graphics completion policy publishes terminal state across threads")
+{
+	RHI::DX12GraphicsCompletionPolicy policy{};
+	policy.observe_queue_work();
+	std::atomic<bool> reader_observed_initial_state{ false };
+	std::atomic<bool> invariant_violated{ false };
+
+	std::thread reader([&]()
+	{
+		if (policy.cached_teardown_readiness() !=
+			RHI::DX12GraphicsTeardownReadiness::Unknown)
+		{
+			invariant_violated.store(true, std::memory_order_release);
+		}
+		reader_observed_initial_state.store(true, std::memory_order_release);
+		bool observed_terminal_readiness = false;
+		for (uint32_t attempt = 0u; attempt < 1'000'000u; ++attempt)
+		{
+			if (policy.cached_teardown_readiness() ==
+				RHI::DX12GraphicsTeardownReadiness::DeviceRemoved)
+			{
+				observed_terminal_readiness = true;
+				break;
+			}
+			if (policy.is_lost() && policy.can_issue_work())
+			{
+				invariant_violated.store(true, std::memory_order_release);
+			}
+			std::this_thread::yield();
+		}
+		if (!observed_terminal_readiness ||
+			!policy.is_lost() ||
+			policy.can_issue_work())
+		{
+			invariant_violated.store(true, std::memory_order_release);
+		}
+	});
+
+	while (!reader_observed_initial_state.load(std::memory_order_acquire))
+	{
+		std::this_thread::yield();
+	}
+	policy.record_teardown_readiness(
+		RHI::DX12GraphicsTeardownReadiness::DeviceRemoved);
+	reader.join();
+
+	CHECK_FALSE(invariant_violated.load(std::memory_order_acquire));
+	CHECK(policy.is_lost());
+	CHECK(policy.cached_teardown_readiness() ==
+		RHI::DX12GraphicsTeardownReadiness::DeviceRemoved);
+}
+
+TEST_CASE("GPU timing DX12 fence wait reports every terminal outcome")
+{
+	static_assert(std::is_same_v<
+		decltype(std::declval<RHI::DX12Fence&>().wait(0u)),
+		RHI::DX12FenceWaitResult>);
+
+	using Status = RHI::DX12FenceWaitStatus;
+	CHECK(RHI::classify_dx12_fence_wait_status(
+		5u, 5u, false, S_OK, false, WAIT_FAILED) == Status::Completed);
+	CHECK(RHI::classify_dx12_fence_wait_status(
+		UINT64_MAX, 5u, false, S_OK, false, WAIT_FAILED) == Status::DeviceRemoved);
+	CHECK(RHI::classify_dx12_fence_wait_status(
+		4u, 5u, true, E_FAIL, false, WAIT_FAILED) ==
+		Status::EventRegistrationFailed);
+	CHECK(RHI::classify_dx12_fence_wait_status(
+		4u, 5u, true, S_OK, true, WAIT_TIMEOUT) == Status::Timeout);
+	CHECK(RHI::classify_dx12_fence_wait_status(
+		4u, 5u, true, S_OK, true, WAIT_FAILED) == Status::WaitFailed);
+
+	RHI::DX12FenceWaitResult invalid_wait{};
+	CHECK(invalid_wait.status == Status::InvalidFence);
+	CHECK_FALSE(invalid_wait.completed());
+}
+
+TEST_CASE("GPU timing DX12 fence wait continues only after a stale object wake")
+{
+	RHI::DX12FenceWaitResult wait_result{};
+	wait_result.target_value = 8u;
+	wait_result.completed_value = 7u;
+	wait_result.event_registration_attempted = true;
+	wait_result.event_registration_hresult = S_OK;
+	wait_result.wait_attempted = true;
+	wait_result.wait_result = WAIT_OBJECT_0;
+	CHECK(wait_result.should_continue_after_wake());
+
+	wait_result.completed_value = wait_result.target_value;
+	CHECK_FALSE(wait_result.should_continue_after_wake());
+	wait_result.completed_value = UINT64_MAX;
+	CHECK_FALSE(wait_result.should_continue_after_wake());
+	wait_result.completed_value = 7u;
+	wait_result.wait_result = WAIT_TIMEOUT;
+	CHECK_FALSE(wait_result.should_continue_after_wake());
+	wait_result.wait_result = WAIT_FAILED;
+	CHECK_FALSE(wait_result.should_continue_after_wake());
+}
+
+TEST_CASE("GPU timing DX12 device removal drains every committed frame as invalid")
+{
+	RHI::GpuTimingFrameState state{};
+	std::array<uint64_t, RHI::kGpuTimingFrameRingDepth> slot_frame_ids{};
+	std::array<uint64_t, RHI::kGpuTimingFrameRingDepth> slot_fence_targets{};
+	std::array<bool, RHI::kGpuTimingFrameRingDepth> slot_has_frame{};
+	uint32_t query_index = 0u;
+	for (uint64_t frame_id = 900u; frame_id < 902u; ++frame_id)
+	{
+		const uint32_t slot = static_cast<uint32_t>(frame_id - 900u);
+		REQUIRE(state.begin_frame(frame_id, slot, query_index));
+		REQUIRE(state.end_frame(frame_id, query_index));
+		REQUIRE(state.commit_frame(frame_id));
+		slot_frame_ids[slot] = frame_id;
+		slot_fence_targets[slot] = frame_id + 10u;
+		slot_has_frame[slot] = true;
+	}
+
+	std::array<RHI::GpuFrameTimingSample, RHI::kGpuTimingFrameRingDepth> samples{};
+	const uint32_t sample_count =
+		RHI::terminate_dx12_gpu_timing_tracking(
+			state,
+			slot_frame_ids,
+			slot_fence_targets,
+			slot_has_frame,
+			RHI::GpuTimingInvalidReason::DeviceRemoved,
+			samples);
+	REQUIRE(sample_count == 2u);
+	CHECK(samples[0].frame_id == 900u);
+	CHECK(samples[1].frame_id == 901u);
+	for (uint32_t index = 0u; index < sample_count; ++index)
+	{
+		CHECK_FALSE(samples[index].valid);
+		CHECK(samples[index].invalid_reason == RHI::GpuTimingInvalidReason::DeviceRemoved);
+	}
+
+	RHI::GpuTimingFrameRecord record{};
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+	std::array<uint64_t, RHI::kGpuTimingFrameRingDepth> empty_u64{};
+	std::array<bool, RHI::kGpuTimingFrameRingDepth> empty_bool{};
+	CHECK(slot_frame_ids == empty_u64);
+	CHECK(slot_fence_targets == empty_u64);
+	CHECK(slot_has_frame == empty_bool);
+
+	std::array<RHI::GpuFrameTimingSample, RHI::kGpuTimingFrameRingDepth> repeated_samples{};
+	CHECK(RHI::terminate_dx12_gpu_timing_tracking(
+		state,
+		slot_frame_ids,
+		slot_fence_targets,
+		slot_has_frame,
+		RHI::GpuTimingInvalidReason::DeviceRemoved,
+		repeated_samples) == 0u);
+
+	RHI::GpuTimingFrameState drained_state{};
+	REQUIRE(drained_state.begin_frame(902u, 2u, query_index));
+	REQUIRE(drained_state.end_frame(902u, query_index));
+	REQUIRE(drained_state.commit_frame(902u));
+	slot_frame_ids[2] = 902u;
+	slot_fence_targets[2] = 912u;
+	slot_has_frame[2] = true;
+	std::array<RHI::GpuFrameTimingSample, RHI::kGpuTimingFrameRingDepth> drained_samples{};
+	REQUIRE(RHI::terminate_dx12_gpu_timing_tracking(
+		drained_state,
+		slot_frame_ids,
+		slot_fence_targets,
+		slot_has_frame,
+		RHI::GpuTimingInvalidReason::SubmissionFailed,
+		drained_samples) == 1u);
+	CHECK(drained_samples[0].frame_id == 902u);
+	CHECK(drained_samples[0].invalid_reason ==
+		RHI::GpuTimingInvalidReason::SubmissionFailed);
+	CHECK(drained_state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+
 }
