@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/IEditorCommandExecutor.h"
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -27,8 +29,12 @@ namespace AshEditor
 		bool Execute(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext);
 
 		// Records a command whose mutation has already completed. This path never executes the command.
-		// If history ownership cannot be secured, the command is undone before failure is returned.
-		bool RecordExecuted(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext);
+		// If history ownership cannot be secured, the result distinguishes a completed rollback
+		// from a rollback failure so callers never publish an untracked mutation. Already-executed
+		// commands cannot join an open transaction and are synchronously rolled back instead.
+		EditorCommandRecordResult RecordExecuted(
+			std::unique_ptr<EditorCommand> upCommand,
+			EditorContext& refContext);
 
 		// Undoes the last committed command.
 		// Returns false if there is an open transaction, history is empty, or undo failed (history is preserved).

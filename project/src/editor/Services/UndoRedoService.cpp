@@ -33,64 +33,22 @@ namespace AshEditor
 			: ExecuteStandalone(std::move(upCommand), refContext);
 	}
 
-	bool UndoRedoService::RecordExecuted(
+	EditorCommandRecordResult UndoRedoService::RecordExecuted(
 		std::unique_ptr<EditorCommand> upCommand,
 		EditorContext& refContext)
 	{
 		if (!upCommand)
 		{
-			return false;
+			return EditorCommandRecordResult::RollbackFailed;
 		}
 
-		const bool bTransactional = _upPendingTransaction != nullptr;
-		try
+		const auto rollBackAlreadyExecuted = [&]()
 		{
-			const EditorCommandSelection selection = upCommand->GetSelectionAfterExecute();
-			if (bTransactional)
-			{
-				_upPendingTransaction->vecCommands.reserve(
-					_upPendingTransaction->vecCommands.size() + 1u);
-				const bool bFirstTransactionCommand = _upPendingTransaction->vecCommands.empty();
-				_upPendingTransaction->vecCommands.push_back(std::move(upCommand));
-				try
-				{
-					ApplySelection(refContext, selection);
-				}
-				catch (...)
-				{
-					upCommand = std::move(_upPendingTransaction->vecCommands.back());
-					_upPendingTransaction->vecCommands.pop_back();
-					throw;
-				}
-				if (bFirstTransactionCommand)
-				{
-					_vecRedoStack.clear();
-				}
-			}
-			else
-			{
-				_vecUndoStack.reserve(_vecUndoStack.size() + 1u);
-				const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
-				_vecUndoStack.push_back(HistoryEntry{ std::move(upCommand), uNewHistoryStateId });
-				try
-				{
-					ApplySelection(refContext, selection);
-				}
-				catch (...)
-				{
-					upCommand = std::move(_vecUndoStack.back().upCommand);
-					_vecUndoStack.pop_back();
-					throw;
-				}
-				_vecRedoStack.clear();
-				_uCurrentHistoryStateId = uNewHistoryStateId;
-			}
-		}
-		catch (...)
-		{
+			bool bRolledBack = false;
 			try
 			{
-				if (upCommand && !upCommand->Undo(refContext))
+				bRolledBack = upCommand && upCommand->Undo(refContext);
+				if (!bRolledBack)
 				{
 					HLogError("Failed to roll back an already-executed command after history recording failed.");
 				}
@@ -99,23 +57,54 @@ namespace AshEditor
 			{
 				HLogError("Already-executed command rollback raised an exception after history recording failed.");
 			}
-			return false;
+			return bRolledBack
+				? EditorCommandRecordResult::RolledBack
+				: EditorCommandRecordResult::RollbackFailed;
+		};
+
+		// An already-executed mutation cannot safely enter a deferred transaction: a later
+		// commit/cancel failure would no longer have a synchronous tri-state result through
+		// which its owner could quarantine the mutation. Compensate while ownership is local.
+		if (_upPendingTransaction)
+		{
+			HLogWarning("Already-executed commands cannot join an open Editor transaction; rolling back.");
+			return rollBackAlreadyExecuted();
+		}
+
+		try
+		{
+			const EditorCommandSelection selection = upCommand->GetSelectionAfterExecute();
+			_vecUndoStack.reserve(_vecUndoStack.size() + 1u);
+			const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
+			_vecUndoStack.push_back(HistoryEntry{ std::move(upCommand), uNewHistoryStateId });
+			try
+			{
+				ApplySelection(refContext, selection);
+			}
+			catch (...)
+			{
+				upCommand = std::move(_vecUndoStack.back().upCommand);
+				_vecUndoStack.pop_back();
+				throw;
+			}
+			_vecRedoStack.clear();
+			_uCurrentHistoryStateId = uNewHistoryStateId;
+		}
+		catch (...)
+		{
+			return rollBackAlreadyExecuted();
 		}
 
 		try
 		{
 			NotifyHistoryChanged();
-			if (bTransactional)
-			{
-				NotifyTransactionStateChanged();
-			}
 			NotifyDocumentDirtyStateChanged();
 		}
 		catch (...)
 		{
 			HLogWarning("Already-executed command was recorded, but a history notification failed.");
 		}
-		return true;
+		return EditorCommandRecordResult::Recorded;
 	}
 
 	bool UndoRedoService::Undo(EditorContext& refContext)

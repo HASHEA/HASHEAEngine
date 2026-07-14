@@ -172,10 +172,14 @@ TEST_CASE("Terrain already-executed history path never re-executes a command")
 	const size_t recordEnd = undoRedo.find("UndoRedoService::Undo", recordBegin);
 
 	CHECK(executor.find("RecordExecutedCommand") != std::string::npos);
+	CHECK(executor.find("EditorCommandRecordResult") != std::string::npos);
 	REQUIRE(recordBegin != std::string::npos);
 	REQUIRE(recordEnd != std::string::npos);
 	const std::string recordBody = undoRedo.substr(recordBegin, recordEnd - recordBegin);
 	CHECK(recordBody.find("->Execute(") == std::string::npos);
+	CHECK(recordBody.find("RollbackFailed") != std::string::npos);
+	CHECK(recordBody.find("_upPendingTransaction") != std::string::npos);
+	CHECK(recordBody.find("vecCommands.push_back") == std::string::npos);
 	CHECK(recordBody.find(".reserve(") < recordBody.find(".push_back("));
 	CHECK(command.find("TerrainEditPatchDirection::Undo") != std::string::npos);
 	CHECK(command.find("TerrainEditPatchDirection::Redo") != std::string::npos);

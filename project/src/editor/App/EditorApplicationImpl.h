@@ -88,7 +88,8 @@ namespace AshEditor
 		void Notify(const std::string& strMessage, const char* pSource = "Editor") override;
 		bool InvokeAction(const char* pActionId, const char* pSource) override;
 		bool ExecuteCommand(std::unique_ptr<EditorCommand> upCommand) override;
-		bool RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand) override;
+		EditorCommandRecordResult RecordExecutedCommand(
+			std::unique_ptr<EditorCommand> upCommand) override;
 		bool BeginCommandTransaction(const char* pLabel) override;
 		bool CommitCommandTransaction() override;
 		void CancelCommandTransaction() override;

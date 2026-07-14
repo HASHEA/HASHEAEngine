@@ -44,6 +44,7 @@ namespace AshEditor
 				_assetId,
 				_layerId,
 				_patches,
-				eDirection);
+				eDirection,
+				_sequence);
 	}
 }

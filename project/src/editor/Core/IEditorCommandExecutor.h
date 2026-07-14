@@ -1,10 +1,18 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 
 namespace AshEditor
 {
 	class EditorCommand;
+
+	enum class EditorCommandRecordResult : uint8_t
+	{
+		Recorded = 0,
+		RolledBack,
+		RollbackFailed
+	};
 
 	class IEditorCommandExecutor
 	{
@@ -12,7 +20,8 @@ namespace AshEditor
 		virtual ~IEditorCommandExecutor() = default;
 
 		virtual bool ExecuteCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
-		virtual bool RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
+		virtual EditorCommandRecordResult RecordExecutedCommand(
+			std::unique_ptr<EditorCommand> upCommand) = 0;
 		virtual bool BeginCommandTransaction(const char* pLabel)
 		{
 			(void)pLabel;

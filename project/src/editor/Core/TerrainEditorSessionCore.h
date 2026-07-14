@@ -7,6 +7,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -92,6 +94,10 @@ namespace AshEditor
 	class TerrainEditorSessionCore final
 	{
 	public:
+		using TerrainSnapshotPublisher = std::function<bool(
+			AshEngine::TerrainAssetId,
+			const std::shared_ptr<const AshEngine::TerrainAssetSnapshot>&)>;
+
 		AshEngine::TerrainAssetId GetAssetId() const;
 		const TerrainEditorPreviewState& GetPreviewState() const;
 		bool HasActiveStroke() const;
@@ -99,12 +105,32 @@ namespace AshEditor
 		bool Open(AshEngine::TerrainWorkingSet workingSet);
 		void Close();
 		const AshEngine::TerrainWorkingSet* GetWorkingSet() const;
+		bool BeginStroke(uint64_t sequence);
+		bool EndStroke(uint64_t sequence);
+		void CancelStroke();
+		bool ApplyBrushStroke(
+			uint64_t sequence,
+			const AshEngine::TerrainBrushParameters& refParameters,
+			const AshEngine::TerrainBrushMetric& refMetric,
+			const std::vector<AshEngine::TerrainStrokeSample>& refRawSamples,
+			std::vector<AshEngine::TerrainEditPatch>& refPatches,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+			std::string* pError = nullptr);
 		bool ApplyStrokePatches(
 			AshEngine::TerrainAssetId assetId,
 			AshEngine::TerrainLayerId layerId,
 			const std::vector<AshEngine::TerrainEditPatch>& refPatches,
 			AshEngine::TerrainEditPatchDirection eDirection,
 			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+			std::string* pError = nullptr);
+		bool ComposeComponents(
+			const std::vector<AshEngine::TerrainComponentCoord>& refRequestedComponents,
+			std::vector<AshEngine::TerrainDirtyComponentPayload>& refPayloads,
+			std::string* pError = nullptr) const;
+		bool PublishDirtyComponents(
+			const std::vector<AshEngine::TerrainDirtyComponentPayload>& refPayloads,
+			const TerrainSnapshotPublisher& refPublisher,
+			std::shared_ptr<const AshEngine::TerrainAssetSnapshot>& refSnapshot,
 			std::string* pError = nullptr);
 		bool IsDirty() const;
 		void SetPreviewQueryStatus(AshEngine::TerrainQueryStatus eStatus);

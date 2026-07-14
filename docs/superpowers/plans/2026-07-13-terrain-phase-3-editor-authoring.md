@@ -26,6 +26,8 @@ The completed Phase 1/2 code is the implementation source of truth where this pr
 
 - `AssetDatabase` provides synchronous and asynchronous Terrain **load**, but container save/optimize and PNG/RAW/EXR import/export are synchronous Engine functions. `TerrainEditorService` therefore owns background jobs over immutable input copies and polls their futures on the Editor thread; panels never block and Engine APIs are not renamed merely to match the plan text.
 - The actual composition boundary is `make_terrain_working_set` -> `compose_terrain_components` -> `publish_terrain_working_set`. Every editor mutation composes and publishes the complete current dirty-coordinate set before advertising a ready generation.
+- Phase 3 coalesces mutations into one latest-generation composition request and executes that request from `TerrainEditorService::Update()` on the Editor thread. Capturing the mutable 8193 x 8193 working set for a background job would either race later strokes or copy roughly 128 MiB of Base height data per request; safe asynchronous composition therefore remains a Phase 4 COW/immutable-capture task. Phase 3 still verifies asset id, operation serial, source stroke sequence, content generation, and the exact complete dirty set before publication, and adds no whole-working-set copy beyond the already-approved Phase 1 snapshot publication boundary.
+- The Phase 2 Scene adapter already converts a world-space Terrain ray and preserves the hit's terrain-local coordinate in `TerrainRayHit::local_sample` while returning world position/normal. The later Task 7 viewport adapter owns query-to-intent conversion and supplies that local sample plus the positive non-uniform metric; Task 4 freezes and forwards those values without duplicating transform math inside `TerrainEditorService`. `TerrainEditorIntent::world_position` remains reserved for the preview/viewport wiring in Tasks 7-8.
 - The actual layer metadata currently has stable id, name, visibility, strength, blend mode, and sparse height/weight blocks, but no persisted lock bit and no public layer-stack mutation API. Task 5 must first add a Function-owned `TerrainLayerStack` API plus backward-compatible container metadata for the lock state; Editor commands call that API and do not mutate layer vectors themselves.
 - `SceneOverlayLine`/`SceneOverlayBatchDesc` and `ScenePresentationSubsystem::submit_scene_overlay` are the existing overlay facade. Phase 3 reuses them without changing Graphics or RenderGraph.
 - The execution mode is **inline task-by-task** in the current Terrain worktree. Each task keeps RED/GREEN evidence and a focused commit; no subagent execution is used, and nothing is pushed without an explicit user request.
@@ -435,10 +437,18 @@ Expected: command/history contracts fail because the already-executed path does 
 Extend `IEditorCommandExecutor` with:
 
 ```cpp
-virtual bool RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand) = 0;
+enum class EditorCommandRecordResult : uint8_t
+{
+    Recorded = 0,
+    RolledBack,
+    RollbackFailed
+};
+
+virtual EditorCommandRecordResult RecordExecutedCommand(
+    std::unique_ptr<EditorCommand> upCommand) = 0;
 ```
 
-Add `UndoRedoService::RecordExecuted(std::unique_ptr<EditorCommand>, EditorContext&)`. It never calls `EditorCommand::Execute`; it pre-reserves the destination history storage, then clears redo, records one normal history state (or appends to the current transaction), applies post-execute selection, and publishes the same history/dirty notifications as a successful `Execute`. If preallocation/history ownership cannot be completed, call the command's atomic `Undo` before returning failure so an applied Terrain mutation is never orphaned outside history. `EditorApplicationImpl::RecordExecutedCommand` forwards through this method with its owned context. Normal `ExecuteCommand` semantics remain unchanged, and every test double implementing the executor must opt into the new path explicitly.
+Add `UndoRedoService::RecordExecuted(std::unique_ptr<EditorCommand>, EditorContext&)`. It never calls `EditorCommand::Execute`; it pre-reserves the standalone history storage, then clears redo, records one normal history state, applies post-execute selection, and publishes the same history/dirty notifications as a successful `Execute`. An already-executed command cannot enter an open transaction: delayed commit/cancel has no synchronous tri-state channel through which the mutation owner could prove compensation, so this path immediately calls the command's atomic `Undo`. Any storage/selection failure does the same; return `RolledBack` only when compensation succeeds and `RollbackFailed` otherwise. `EditorApplicationImpl::RecordExecutedCommand` forwards the tri-state result through this method with its owned context. Normal `ExecuteCommand` semantics remain unchanged, and every test double implementing the executor must opt into the new path explicitly.
 
 - [ ] **Step 5: Define TerrainStrokeCommand over Engine replay**
 
@@ -468,7 +478,7 @@ Append only the exact Terrain production lines required by the real command/serv
 
 - [ ] **Step 7: Make stroke completion emit exactly one recorded command**
 
-On BeginStroke, allocate one sequence and freeze parameters/metric. AddStrokeSample only appends the raw terrain-local sample; it never pre-resamples or invokes a kernel. EndStroke calls Phase 1 `apply_terrain_brush_stroke` exactly once against the service-owned working set, constructs and records exactly one already-executed `TerrainStrokeCommand`, then enqueues composition for the resulting full dirty set. An empty patch submits none. CancelStroke clears the raw path and submits none because no mutation occurred. Command-construction failure replays the retained patches with Engine Undo; history-recording failure uses `RecordExecuted`'s required Undo. Both rollback paths invalidate stale compose work, preserve monotonic generation, and never leave untracked logical edits.
+On BeginStroke, allocate one sequence, reserve both forward and compensation generations, and freeze parameters/metric. AddStrokeSample only appends the raw terrain-local sample; it never pre-resamples or invokes a kernel. EndStroke calls Phase 1 `apply_terrain_brush_stroke` exactly once against the service-owned working set, constructs one already-executed `TerrainStrokeCommand`, installs the resulting full-dirty composition request, and then records exactly that command. An empty patch submits none. CancelStroke clears the raw path and submits none because no mutation occurred. Command-construction failure replays the retained patches with Engine Undo; history-recording failure uses `RecordExecuted`'s required Undo, whose higher-generation request replaces the forward request. A `RolledBack` result is accepted only when the higher rollback generation and matching pending dirty set are observable. `RollbackFailed`, an exception, or a malformed rollback result discards pending publication and quarantines the session until reload/asset replacement. Both rollback paths invalidate stale compose work, preserve monotonic generation, and never publish untracked logical edits.
 
 - [ ] **Step 8: Add source-contract assertions and run GREEN**
 
@@ -541,15 +551,15 @@ Expected: routing or ordered-publication assertions fail.
 
 - [ ] **Step 4: Capture a valid world metric at BeginStroke**
 
-Convert the Ready world hit to terrain-local XZ through the Phase 2 axis-aligned positive transform adapter. Preserve both positive non-uniform scale axes as `TerrainBrushMetric::world_meters_per_terrain_meter`; never collapse them to one scalar. Freeze brush parameters and metric for the stroke. Reject BeginStroke unless the selected asset/layer/query state and metric are valid.
+Consume the Ready Scene adapter hit's preserved `TerrainRayHit::local_sample` through the Task 7 query-to-intent adapter; do not repeat the Phase 2 axis-aligned transform inside the authoring service. Preserve both positive non-uniform scale axes as `TerrainBrushMetric::world_meters_per_terrain_meter`; never collapse them to one scalar. Task 4 freezes the caller-provided brush parameters and metric for the stroke, and rejects BeginStroke unless the selected asset/layer/query state and metric are valid. Task 7 supplies real viewport hits; Task 4 tests the service boundary with explicit terrain-local samples.
 
 - [ ] **Step 5: Forward raw samples without pre-resampling**
 
 Store raw `TerrainStrokeSample` points and pressure in arrival order. Do not clamp invalid brush values, call `resample_terrain_stroke`, apply one dab per UI frame, or mutate on AddStrokeSample. On EndStroke call `apply_terrain_brush_stroke(working_set, frozen_params, frozen_metric, raw_path, ...)` exactly once; Engine remains the second-line validator for stale/scripted intents.
 
-- [ ] **Step 6: Enforce ordered async publication**
+- [ ] **Step 6: Enforce ordered deferred publication**
 
-Each compose job captures asset id, stroke sequence, content generation, and the exact full dirty coordinate set for that generation. Publish only when all four still equal the current session. Later completion does not leapfrog an earlier current sequence; any job older than the working-set generation is discarded without clearing dirty state. Publication success uses the Phase 1 atomic API, updates the immutable preview snapshot, and only then advertises completion/readiness.
+Each deferred request captures asset id, stroke sequence, operation serial, content generation, and the exact full dirty coordinate set for that generation. A newer mutation replaces the older request before `Update()` performs composition. Publish only when all captured identity fields still equal the current session; any stale request is discarded without clearing dirty state. Publication success uses the Phase 1 atomic API, updates the immutable preview snapshot, and only then advertises completion/readiness. True background completion ordering is deferred to Phase 4 because Phase 3 has no immutable/COW working-set capture.
 
 - [ ] **Step 7: Run routing/publication GREEN**
 

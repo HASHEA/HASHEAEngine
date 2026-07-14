@@ -451,7 +451,8 @@ namespace AshEditor
 		return _upUndoRedoService->Execute(std::move(upCommand), _editorContext);
 	}
 
-	bool EditorApplicationImpl::RecordExecutedCommand(std::unique_ptr<EditorCommand> upCommand)
+	EditorCommandRecordResult EditorApplicationImpl::RecordExecutedCommand(
+		std::unique_ptr<EditorCommand> upCommand)
 	{
 		return _upUndoRedoService->RecordExecuted(std::move(upCommand), _editorContext);
 	}
