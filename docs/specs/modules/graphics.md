@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-13
+last_reviewed: 2026-07-14
 status: active
 ---
 
@@ -33,6 +33,7 @@ status: active
 - 后端选择：`RHI::load_runtime_rhi_config(configPath)` 读 Engine.ini —— `[RHI] Backend`（内部 `parse_backend_name` 接受 `vulkan/vk/directx12/dx12/d3d12`，大小写不敏感，非法值回退编译期默认并告警）、`[VulkanValidation]`（Enabled/GpuAssisted/SynchronizationValidation/BreakOnValidationError）、`[DX12Validation]`（Enabled/GpuValidation，非 Debug 构建强制关闭）。`resolve_runtime_backend` 处理未编译后端的回退；Windows 默认后端为 DX12。
 - 工厂：`GraphicsContext::create(Backend)`、`Swapchain::create(Backend)` 按解析后端实例化对应后端对象。
 - GPU timing 初始化：`GraphicsContextInitConfig.enableGpuTimingTelemetry` 默认 false；Application 仅在 PerfGate 已启用且显式请求 `gpu-timing=on` 时置 true，普通运行和仅给 timing override 而未启用 PerfGate 的运行都不得创建或启用这套 telemetry。validation 的 Vulkan/DX12 两份 resolved config 与该开关一起在 `GraphicsContext::init` 前注入；resolved validation 元数据必须反映后端实际编译能力，Release 构建即使收到 `validation=on` 请求也记录 false。
+- Vulkan GPU timing：启用时由 `VulkanContext` 独占一个 66-query timestamp pool（3 个后端 frame slot × 每帧 22 queries），持久记录主 graphics queue family 的 `timestampValidBits`、设备 `timestampPeriod` 与 adapter/driver 元数据。旧 slot 只能在既有 timeline/fence completion 明确成功后读取并复用；读取固定使用 `64_BIT | WITH_AVAILABILITY`，禁止 `WAIT_BIT`、额外 fence wait 或 device idle。零 query、缺失/倒序的 `GPU.Frame` pair 均产出 invalid sample，禁止伪造有效 0 ms。CPU completed queue 为固定容量；若消费者持续滞后至队列满，已确认完成的最旧 sample 作为 unresolved 丢弃并立即释放其物理 query slot，coverage 会暴露该背压，禁止连锁覆盖 pending slot。关闭 telemetry 时不得创建该 query pool。
 - 设备接口（`GraphicsContext`）：`init/shutdown/destroy`、`create_shader/buffer/buffer_view/texture/texture_view/render_pass/framebuffer/graphics_render_program/compute_render_program/sampler`、`get_sampler(AshSamplerState)`、`begin_frame/end_frame`、`get_command_buffer(threadIdx)`、`wait_idle`、带纳秒上限的 `wait_for_frame_completion`、`get_render_memory_stats`。资源以 `std::shared_ptr` 交付。
 - 命令接口（`CommandBuffer`）：barrier（`cmd_transition_resource_state`）、render pass（`cmd_begin/end_render_pass`，debug_scope_name 用于 RenderDoc/PIX 标签）、绑定/draw/dispatch/copy/update 全家族；错误经 `has_error()/get_last_error()` 暴露。
 - Readback（SDD-2026-07-07-render-gate 新增，验证/调试用途，非热路径）：`CommandBuffer::cmd_copy_texture_to_buffer(source, destination, buffer_offset, row_pitch_bytes)` 把 mip0/layer0 整层拷入 CPU 可读 buffer，仅支持 4 字节颜色格式（RGBA8/BGRA8），row pitch 须 ≥ width*4 且为 256 的倍数（D3D12 约束）；另有区域版 `cmd_copy_texture_region_to_buffer`。上层 backbuffer 回读封装在 `Function/Render` 的 RenderDevice（`request_back_buffer_capture/fetch_back_buffer_capture`）；fetch 必须传有限 timeout，并通过 `wait_for_frame_completion` 只等待产生该 readback 的当前 graphics frame，禁止用无上限的 device `wait_idle`。

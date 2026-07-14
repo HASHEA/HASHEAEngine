@@ -1,6 +1,7 @@
 #include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Graphics/GraphicsContext.h"
 #include "Graphics/RenderProgram.h"
+#include "Graphics/Vulkan/VulkanGpuTimingTelemetry.h"
 
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -379,5 +380,169 @@ TEST_CASE("GPU timing fixed ring never overwrites pending and aborts unsubmitted
 
 	REQUIRE(state.begin_frame(4u, 1u, query_index));
 	REQUIRE(state.abort_frame(4u, RHI::GpuTimingInvalidReason::Aborted));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+}
+
+TEST_CASE("GPU timing Vulkan reports zero timestamp valid bits as unsupported")
+{
+	RHI::GpuTimingFrameRecord record{};
+	record.frame_id = 700u;
+	record.slot_index = 0u;
+	record.query_count = 2u;
+	record.valid = true;
+	record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+		{ 0u, 1u, true, true };
+
+	std::array<RHI::VulkanGpuTimingRawQueryResult, RHI::kGpuTimingQueriesPerFrame> raw_results{};
+	raw_results[0] = { 10u, 1u };
+	raw_results[1] = { 20u, 1u };
+
+	RHI::GpuFrameTimingSample sample{};
+	CHECK(RHI::resolve_vulkan_gpu_timing_record(record, raw_results, 0u, 1.0, sample) ==
+		RHI::VulkanGpuTimingResolveResult::Unsupported);
+	CHECK(sample.frame_id == 700u);
+	CHECK_FALSE(sample.valid);
+	CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::BackendUnsupported);
+	CHECK_FALSE(sample.metrics[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)].valid);
+}
+
+TEST_CASE("GPU timing Vulkan keeps unavailable timestamps pending without fabricating a duration")
+{
+	RHI::GpuTimingFrameRecord record{};
+	record.frame_id = 701u;
+	record.slot_index = 0u;
+	record.query_count = 2u;
+	record.valid = true;
+	record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+		{ 0u, 1u, true, true };
+
+	std::array<RHI::VulkanGpuTimingRawQueryResult, RHI::kGpuTimingQueriesPerFrame> raw_results{};
+	raw_results[0] = { 10u, 1u };
+	raw_results[1] = { 20u, 0u };
+
+	RHI::GpuFrameTimingSample sample{};
+	sample.frame_id = 999u;
+	auto& frame_sample = sample.metrics[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)];
+	frame_sample.valid = true;
+	frame_sample.duration_ms = 123.0;
+
+	CHECK(RHI::resolve_vulkan_gpu_timing_record(record, raw_results, 64u, 1.0, sample) ==
+		RHI::VulkanGpuTimingResolveResult::Pending);
+	CHECK(sample.frame_id == 999u);
+	CHECK(frame_sample.valid);
+	CHECK(frame_sample.duration_ms == 123.0);
+}
+
+TEST_CASE("GPU timing Vulkan rejects missing or malformed whole-frame queries")
+{
+	std::array<RHI::VulkanGpuTimingRawQueryResult, RHI::kGpuTimingQueriesPerFrame> raw_results{};
+	raw_results[0] = { 10u, 1u };
+	raw_results[1] = { 20u, 1u };
+
+	SUBCASE("zero query count")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 703u;
+		record.valid = true;
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_vulkan_gpu_timing_record(record, raw_results, 64u, 1.0, sample) ==
+			RHI::VulkanGpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::FrameStateError);
+	}
+
+	SUBCASE("missing frame pair")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 704u;
+		record.query_count = 2u;
+		record.valid = true;
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_vulkan_gpu_timing_record(record, raw_results, 64u, 1.0, sample) ==
+			RHI::VulkanGpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::IncompleteScope);
+	}
+
+	SUBCASE("reversed frame query order")
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 705u;
+		record.query_count = 2u;
+		record.valid = true;
+		record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+			{ 1u, 0u, true, true };
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_vulkan_gpu_timing_record(record, raw_results, 64u, 1.0, sample) ==
+			RHI::VulkanGpuTimingResolveResult::Ready);
+		CHECK_FALSE(sample.valid);
+		CHECK(sample.invalid_reason == RHI::GpuTimingInvalidReason::FrameStateError);
+	}
+}
+
+TEST_CASE("GPU timing Vulkan resolves 36-bit wrap and 64-bit deltas")
+{
+	const auto resolve_frame_delta = [](uint64_t begin_tick, uint64_t end_tick, uint32_t valid_bits)
+	{
+		RHI::GpuTimingFrameRecord record{};
+		record.frame_id = 702u;
+		record.slot_index = 1u;
+		record.query_count = 2u;
+		record.valid = true;
+		const uint32_t slot_begin = RHI::kGpuTimingQueriesPerFrame;
+		record.query_pairs[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)] =
+			{ slot_begin, slot_begin + 1u, true, true };
+
+		std::array<RHI::VulkanGpuTimingRawQueryResult, RHI::kGpuTimingQueriesPerFrame> raw_results{};
+		raw_results[0] = { begin_tick, 1u };
+		raw_results[1] = { end_tick, 1u };
+
+		RHI::GpuFrameTimingSample sample{};
+		REQUIRE(RHI::resolve_vulkan_gpu_timing_record(record, raw_results, valid_bits, 1000.0, sample) ==
+			RHI::VulkanGpuTimingResolveResult::Ready);
+		REQUIRE(sample.valid);
+		const auto& frame_sample = sample.metrics[static_cast<uint32_t>(RHI::GpuTimingMetric::Frame)];
+		REQUIRE(frame_sample.valid);
+		return frame_sample.duration_ms;
+	};
+
+	const uint64_t wrap_36 = uint64_t{ 1 } << 36u;
+	CHECK(resolve_frame_delta(wrap_36 - 5u, 3u, 36u) == doctest::Approx(0.008));
+	CHECK(resolve_frame_delta(std::numeric_limits<uint64_t>::max() - 4u, 3u, 64u) ==
+		doctest::Approx(0.008));
+}
+
+TEST_CASE("GPU timing Vulkan pending slots are never overwritten")
+{
+	RHI::GpuTimingFrameState state{};
+	RHI::GpuTimingFrameRecord record{};
+	uint32_t query_index = 0u;
+
+	REQUIRE(state.begin_frame(710u, 2u, query_index));
+	REQUIRE(state.end_frame(710u, query_index));
+	REQUIRE(state.commit_frame(710u));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
+	CHECK_FALSE(state.begin_frame(713u, 2u, query_index));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Pending);
+	CHECK(record.frame_id == 710u);
+}
+
+TEST_CASE("GPU timing Vulkan aborted and unsubmitted frames never become valid samples")
+{
+	RHI::GpuTimingFrameState state{};
+	RHI::GpuTimingFrameRecord record{};
+	uint32_t query_index = 0u;
+
+	REQUIRE(state.begin_frame(720u, 0u, query_index));
+	REQUIRE(state.abort_frame(720u, RHI::GpuTimingInvalidReason::Aborted));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+
+	REQUIRE(state.begin_frame(721u, 1u, query_index));
+	REQUIRE(state.end_frame(721u, query_index));
+	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
+	REQUIRE(state.abort_frame(721u, RHI::GpuTimingInvalidReason::SubmissionFailed));
 	CHECK(state.poll_frame(record) == RHI::GpuTimingPollResult::Empty);
 }

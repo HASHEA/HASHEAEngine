@@ -30,6 +30,7 @@ namespace RHI
 	class VulkanFence;
 	class VulkanBuffer;
 	class VulkanDynamicBuffer;
+	class VulkanGpuTimingTelemetry;
 	struct VulkanCommandBufferManager;
 	struct GPUTimeQuery;
 	struct GpuTimeQueryTree;
@@ -74,8 +75,9 @@ namespace RHI
 		auto shutdown() -> bool override;
 		auto destroy() -> void override;
 		auto get_render_memory_stats() const -> RenderMemoryStats override;
-		VulkanContext() { instance = this; }
-		~VulkanContext() {}
+		auto get_gpu_timing_telemetry() -> IGpuTimingTelemetry* override;
+		VulkanContext();
+		~VulkanContext();
 	public:
 		inline const auto get_absolute_frame_count_internal() const 
 		{
@@ -452,6 +454,7 @@ private:
 		uint32_t								maxFramebufferLayers = 1;
 		VkExtent2D								minFragmentShadingRateTexelSize{};
 		std::shared_ptr<VulkanDynamicBuffer>	global_dynamic_buffer = nullptr;
+		std::unique_ptr<VulkanGpuTimingTelemetry>	gpuTimingTelemetry{};
 		uint32_t								currentFrame = UINT32_MAX;
 		uint32_t								previousFrame = UINT32_MAX;
 		uint64_t								absoluteFrame = UINT64_MAX;
