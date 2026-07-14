@@ -71,17 +71,17 @@ if defined ARG1 if not "%ARG1:~0,1%"=="-" (
     set "CONFIG=%~1"
     shift
 )
-:capture_matrix_remaining_args
-if "%~1"=="" goto :matrix_args_captured
+:mx_arg_loop
+if "%~1"=="" goto :mx_args_done
 if defined APP_ARGS (
     set "APP_ARGS=!APP_ARGS! "%~1""
 ) else (
     set "APP_ARGS="%~1""
 )
 shift
-goto :capture_matrix_remaining_args
+goto :mx_arg_loop
 
-:matrix_args_captured
+:mx_args_done
 call :run_single "Editor" "DX12" "%CONFIG%"
 set "RUN_RESULT=!ERRORLEVEL!"
 if not "!RUN_RESULT!"=="0" set "EXIT_CODE=!RUN_RESULT!"

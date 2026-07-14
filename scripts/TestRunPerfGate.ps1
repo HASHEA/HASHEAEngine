@@ -61,6 +61,24 @@ public static class RunBatArgumentProbe
             throw "run.bat did not preserve application argument '$($probeArguments[$index])'.`n$probeText"
         }
     }
+
+    Copy-Item -LiteralPath $probeExecutable -Destination (Join-Path $runBatProbeBin "Editor.exe")
+    $matrixProbeCommand = '"' + (Join-Path $runBatProbeRoot "run.bat") + '" all Debug ' + ($quotedProbeArguments -join ' ')
+    $matrixProbeOutput = & cmd.exe /d /s /c $matrixProbeCommand 2>&1
+    $matrixProbeExitCode = $LASTEXITCODE
+    $matrixProbeText = ($matrixProbeOutput | Out-String)
+    if ($matrixProbeExitCode -ne 0) {
+        throw "run.bat matrix argument probe failed with exit code $matrixProbeExitCode.`n$matrixProbeText"
+    }
+    if ([regex]::Matches($matrixProbeText, "(?m)^ARG_COUNT=12\s*$").Count -ne 4) {
+        throw "run.bat matrix did not forward all 12 application arguments to all four runs.`n$matrixProbeText"
+    }
+    for ($index = 0; $index -lt $probeArguments.Count; ++$index) {
+        $expectedLine = "ARG_$index=$($probeArguments[$index])"
+        if ([regex]::Matches($matrixProbeText, "(?m)^$([regex]::Escape($expectedLine))\s*$").Count -ne 4) {
+            throw "run.bat matrix did not preserve application argument '$($probeArguments[$index])' for all four runs.`n$matrixProbeText"
+        }
+    }
 }
 finally {
     Remove-Item -LiteralPath $runBatProbeRoot -Recurse -Force -ErrorAction SilentlyContinue
