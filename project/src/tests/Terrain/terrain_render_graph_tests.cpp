@@ -290,3 +290,23 @@ TEST_CASE("Terrain shader bindings include fixed surface resources")
 	CHECK(common.find("AshTerrainMorphHeight") != std::string::npos);
 	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);
 }
+
+TEST_CASE("Terrain instance storage uses the cross-backend staging upload path")
+{
+	const std::string source = ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp");
+	const size_t function = source.find(
+		"TerrainRenderPass::ensure_instance_buffer");
+	const size_t descriptor = source.find("StorageBufferDesc desc{};", function);
+	const size_t creation = source.find(
+		"m_renderer->create_storage_buffer(desc)", descriptor);
+
+	REQUIRE(function != std::string::npos);
+	REQUIRE(descriptor != std::string::npos);
+	REQUIRE(creation != std::string::npos);
+	const std::string descriptor_setup = source.substr(
+		descriptor,
+		creation - descriptor);
+	CHECK(descriptor_setup.find("desc.cpu_write = true") ==
+		std::string::npos);
+}

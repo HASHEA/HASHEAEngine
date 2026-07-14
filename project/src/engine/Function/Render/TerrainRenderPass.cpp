@@ -642,7 +642,8 @@ namespace AshEngine
 			StorageBufferDesc desc{};
 			desc.size = byte_size;
 			desc.stride = sizeof(TerrainPackedInstance);
-			desc.cpu_write = true;
+			// Keep storage/UAV resources GPU-only: DX12 upload heaps reject
+			// D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS.
 			desc.initial_data = instances;
 			desc.name = "TerrainInstances";
 			entry.buffer = m_renderer->create_storage_buffer(desc);
