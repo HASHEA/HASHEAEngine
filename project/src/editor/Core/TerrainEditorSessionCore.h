@@ -63,7 +63,6 @@ namespace AshEditor
 	{
 		TerrainLayerActionKind kind = TerrainLayerActionKind::Add;
 		AshEngine::TerrainLayerId layer_id{};
-		AshEngine::TerrainHeightBlendMode blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
 		std::string name{};
 		uint32_t destination_index = 0;
 		float opacity = 1.0f;

@@ -417,8 +417,8 @@ namespace
 		AshEngine::TerrainEditLayer layer{};
 		layer.id = out_layer_id;
 		layer.name = "Export Layer";
-		layer.height_blocks.push_back({
-			{ 0u, 0u }, { 0u, 0u, 1u, 1u }, { 23.5f }, { 1.0f }
+	layer.height_blocks.push_back({
+			{ 0u, 0u }, { 0u, 0u, 1u, 1u }, { 1.0f }, { 23.5f }
 		});
 		std::array<float, AshEngine::k_terrain_material_layer_count> weights{};
 		weights[3] = 1.0f;

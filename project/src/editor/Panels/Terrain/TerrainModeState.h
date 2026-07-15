@@ -42,7 +42,6 @@ namespace AshEditor
 		int32_t export_exr_pixel_type_index = 1;
 
 		std::string new_layer_name{ "Layer" };
-		int32_t new_layer_blend_mode_index = 0;
 		AshEngine::TerrainAssetId layer_draft_asset_id = 0u;
 		AshEngine::TerrainLayerId rename_layer_id{};
 		std::string rename_layer_name{};

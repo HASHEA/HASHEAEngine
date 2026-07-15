@@ -33,7 +33,6 @@ namespace AshEngine
 		bool flag_value = false;
 		// Editor-facing opacity is stored by TerrainEditLayer as strength.
 		float opacity = 1.0f;
-		TerrainHeightBlendMode blend_mode = TerrainHeightBlendMode::Additive;
 	};
 
 	struct TerrainLayerMetadata
@@ -43,7 +42,6 @@ namespace AshEngine
 		bool visible = true;
 		bool locked = false;
 		float strength = 1.0f;
-		TerrainHeightBlendMode height_blend_mode = TerrainHeightBlendMode::Additive;
 	};
 
 	// Replays are deliberately source-state checked. before_order/after_order store stable

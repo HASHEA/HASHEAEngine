@@ -396,8 +396,7 @@ namespace AshEditor
 
 		bool IsToolCompatibleWithLayer(
 			const TerrainEditorMode eMode,
-			const AshEngine::TerrainBrushTool eTool,
-			const AshEngine::TerrainHeightBlendMode eBlendMode)
+			const AshEngine::TerrainBrushTool eTool)
 		{
 			if (eMode == TerrainEditorMode::Paint)
 			{
@@ -408,14 +407,8 @@ namespace AshEditor
 			{
 				return true;
 			}
-			if (eBlendMode == AshEngine::TerrainHeightBlendMode::Additive)
-			{
-				return eTool == AshEngine::TerrainBrushTool::Raise ||
-					eTool == AshEngine::TerrainBrushTool::Lower ||
-					eTool == AshEngine::TerrainBrushTool::Noise;
-			}
-			return eTool == AshEngine::TerrainBrushTool::Smooth ||
-				eTool == AshEngine::TerrainBrushTool::Flatten;
+			return eTool >= AshEngine::TerrainBrushTool::Raise &&
+				eTool <= AshEngine::TerrainBrushTool::Noise;
 		}
 	}
 
@@ -1831,7 +1824,7 @@ namespace AshEditor
 					return refLayer.id == candidate.brush.layer_id;
 				});
 			if (layer == pWorkingSet->edit_layers.end() ||
-				!IsToolCompatibleWithLayer(candidate.mode, candidate.brush.tool, layer->height_blend_mode))
+				!IsToolCompatibleWithLayer(candidate.mode, candidate.brush.tool))
 			{
 				_strLastError = "Terrain authoring tool is incompatible with the selected layer.";
 				return false;
@@ -1909,8 +1902,7 @@ namespace AshEditor
 
 		if (!IsToolCompatibleWithLayer(
 				_authoringConfig.mode,
-				_authoringConfig.brush.tool,
-				layer->height_blend_mode))
+				_authoringConfig.brush.tool))
 		{
 			_strLastError = "Terrain brush tool is incompatible with the selected layer.";
 			return false;
@@ -2140,7 +2132,6 @@ namespace AshEditor
 		edit.destination_index = refIntent.layer_action.destination_index;
 		edit.opacity = refIntent.layer_action.opacity;
 		edit.flag_value = refIntent.layer_action.flag_value;
-		edit.blend_mode = refIntent.layer_action.blend_mode;
 		switch (refIntent.layer_action.kind)
 		{
 		case TerrainLayerActionKind::Add:
@@ -3840,13 +3831,9 @@ namespace AshEditor
 		if (layer != pWorkingSet->edit_layers.end() &&
 			!IsToolCompatibleWithLayer(
 				_authoringConfig.mode,
-				_authoringConfig.brush.tool,
-				layer->height_blend_mode))
+				_authoringConfig.brush.tool))
 		{
-			_authoringConfig.brush.tool =
-				layer->height_blend_mode == AshEngine::TerrainHeightBlendMode::Additive
-				? AshEngine::TerrainBrushTool::Raise
-				: AshEngine::TerrainBrushTool::Smooth;
+			_authoringConfig.brush.tool = AshEngine::TerrainBrushTool::Raise;
 		}
 	}
 }

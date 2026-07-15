@@ -57,12 +57,13 @@ namespace
 		layer.id = MakeLayerId(id_seed);
 		layer.name = "Height";
 		layer.strength = strength;
-		layer.height_blend_mode = blend_mode;
 		AshEngine::TerrainSparseHeightBlock block{};
 		block.owner = { 0u, 0u };
 		block.changed_rect = { 2u, 2u, 3u, 3u };
-		block.values = { value };
-		block.coverage = { coverage };
+		block.scales = {
+			blend_mode == AshEngine::TerrainHeightBlendMode::Alpha ? 1.0f - coverage : 1.0f
+		};
+		block.biases = { value * coverage };
 		layer.height_blocks.push_back(std::move(block));
 		return layer;
 	}
@@ -84,6 +85,39 @@ namespace
 		layer.weight_blocks.push_back(std::move(block));
 		return layer;
 	}
+}
+
+TEST_CASE("Terrain affine layers preserve tool order and strength")
+{
+	auto ComposeHeight = [](float scale, float bias, float strength)
+	{
+		AshEngine::TerrainWorkingSet working_set = MakeFlatWorkingSet();
+		working_set.content_generation = 2u;
+		AshEngine::TerrainEditLayer layer{};
+		layer.id = MakeLayerId(31u);
+		layer.name = "Affine";
+		layer.strength = strength;
+		AshEngine::TerrainSparseHeightBlock block{};
+		block.owner = { 0u, 0u };
+		block.changed_rect = { 2u, 2u, 3u, 3u };
+		block.scales = { scale };
+		block.biases = { bias };
+		layer.height_blocks.push_back(std::move(block));
+		working_set.edit_layers.push_back(std::move(layer));
+
+		std::vector<AshEngine::TerrainDirtyComponentPayload> payloads{};
+		REQUIRE(AshEngine::compose_terrain_components(
+			working_set, { { 0u, 0u } }, payloads));
+		REQUIRE(payloads.size() == 1u);
+		return payloads[0].component->heights[2u * 5u + 2u];
+	};
+
+	// Flatten toward 20 at 50%, then Raise by 3: .5H + 13.
+	CHECK(ComposeHeight(0.5f, 13.0f, 1.0f) == doctest::Approx(18.0f));
+	CHECK(ComposeHeight(0.5f, 13.0f, 0.5f) == doctest::Approx(14.0f));
+	CHECK(ComposeHeight(0.5f, 13.0f, 0.0f) == doctest::Approx(10.0f));
+	// Raise by 3, then flatten toward 20 at 50%: .5H + 11.5.
+	CHECK(ComposeHeight(0.5f, 11.5f, 1.0f) == doctest::Approx(16.5f));
 }
 
 TEST_CASE("Terrain composition applies Additive and Alpha height layers in order")
@@ -428,7 +462,7 @@ TEST_CASE("Terrain composition rejects invalid layers and blocks without partial
 		4.0f,
 		1.0f,
 		1.0f));
-	invalid.edit_layers[0].height_blocks[0].values.clear();
+	invalid.edit_layers[0].height_blocks[0].scales.clear();
 	CheckFailure(invalid);
 
 	invalid = MakeFlatWorkingSet();
@@ -439,8 +473,8 @@ TEST_CASE("Terrain composition rejects invalid layers and blocks without partial
 		1.0f,
 		1.0f));
 	invalid.edit_layers[0].height_blocks[0].changed_rect = { 3u, 3u, 6u, 4u };
-	invalid.edit_layers[0].height_blocks[0].values.assign(3u, 4.0f);
-	invalid.edit_layers[0].height_blocks[0].coverage.assign(3u, 1.0f);
+	invalid.edit_layers[0].height_blocks[0].scales.assign(3u, 1.0f);
+	invalid.edit_layers[0].height_blocks[0].biases.assign(3u, 4.0f);
 	CheckFailure(invalid);
 
 	invalid = MakeFlatWorkingSet();
@@ -551,8 +585,8 @@ TEST_CASE("Terrain composition working-set creation rejects non-canonical covera
 		1.0f,
 		1.0f);
 	all_zero.height_blocks[0].changed_rect = { 1u, 1u, 3u, 3u };
-	all_zero.height_blocks[0].values.assign(4u, 4.0f);
-	all_zero.height_blocks[0].coverage.assign(4u, 0.0f);
+	all_zero.height_blocks[0].scales.assign(4u, 1.0f);
+	all_zero.height_blocks[0].biases.assign(4u, 0.0f);
 	CheckRejected(std::move(all_zero));
 
 	auto zero_border = MakeHeightLayer(
@@ -562,25 +596,29 @@ TEST_CASE("Terrain composition working-set creation rejects non-canonical covera
 		1.0f,
 		1.0f);
 	zero_border.height_blocks[0].changed_rect = { 1u, 1u, 3u, 3u };
-	zero_border.height_blocks[0].values.assign(4u, 4.0f);
-	zero_border.height_blocks[0].coverage = { 0.0f, 0.0f, 0.0f, 1.0f };
+	zero_border.height_blocks[0].scales.assign(4u, 1.0f);
+	zero_border.height_blocks[0].biases = { 0.0f, 0.0f, 0.0f, 4.0f };
 	CheckRejected(std::move(zero_border));
 
-	auto negative_coverage = MakeHeightLayer(
+	auto non_finite_scale = MakeHeightLayer(
 		3u,
 		AshEngine::TerrainHeightBlendMode::Additive,
 		4.0f,
-		-0.01f,
+		1.0f,
 		1.0f);
-	CheckRejected(std::move(negative_coverage));
+	non_finite_scale.height_blocks[0].scales[0] =
+		std::numeric_limits<float>::quiet_NaN();
+	CheckRejected(std::move(non_finite_scale));
 
-	auto excessive_coverage = MakeHeightLayer(
+	auto non_finite_bias = MakeHeightLayer(
 		4u,
 		AshEngine::TerrainHeightBlendMode::Additive,
 		4.0f,
-		1.01f,
+		1.0f,
 		1.0f);
-	CheckRejected(std::move(excessive_coverage));
+	non_finite_bias.height_blocks[0].biases[0] =
+		std::numeric_limits<float>::infinity();
+	CheckRejected(std::move(non_finite_bias));
 
 	std::array<float, AshEngine::k_terrain_material_layer_count> weight_target{};
 	weight_target[2] = 1.0f;
@@ -618,8 +656,8 @@ TEST_CASE("Terrain composition working-set creation accepts cross-domain owners 
 	AshEngine::TerrainSparseHeightBlock later_owner{};
 	later_owner.owner = { 1u, 1u };
 	later_owner.changed_rect = { 5u, 5u, 6u, 6u };
-	later_owner.values = { 2.0f };
-	later_owner.coverage = { 1.0f };
+	later_owner.scales = { 1.0f };
+	later_owner.biases = { 2.0f };
 	layer.height_blocks.insert(layer.height_blocks.begin(), std::move(later_owner));
 
 	AshEngine::TerrainSparseWeightBlock same_owner_other_domain{};
@@ -668,7 +706,7 @@ TEST_CASE("Terrain composition deep-validates only blocks relevant to requested 
 	REQUIRE(payloads.size() == 1u);
 	CheckCoord(payloads[0].coord, 0u, 0u);
 
-	working_set.edit_layers[0].height_blocks[0].values.clear();
+	working_set.edit_layers[0].height_blocks[0].scales.clear();
 	payloads.resize(1u);
 	error = "stale";
 	CHECK_FALSE(AshEngine::compose_terrain_components(
@@ -679,7 +717,8 @@ TEST_CASE("Terrain composition deep-validates only blocks relevant to requested 
 	CHECK(payloads.empty());
 	CHECK_FALSE(error.empty());
 	CHECK(error != "stale");
-	working_set.edit_layers[0].height_blocks[0].values = {
+	working_set.edit_layers[0].height_blocks[0].scales = { 1.0f };
+	working_set.edit_layers[0].height_blocks[0].biases = {
 		std::numeric_limits<float>::quiet_NaN()
 	};
 

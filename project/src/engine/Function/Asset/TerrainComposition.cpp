@@ -199,8 +199,7 @@ namespace AshEngine
 
 			uint64_t area = 0u;
 			if (!get_rect_area(block.changed_rect, area) ||
-				area != block.values.size() ||
-				area != block.coverage.size())
+				area != block.scales.size() || area != block.biases.size())
 			{
 				return fail(out_error, "Terrain height block arrays do not match its global rectangle.");
 			}
@@ -211,18 +210,41 @@ namespace AshEngine
 			const TerrainSparseHeightBlock& block,
 			std::string* out_error) -> bool
 		{
-			for (size_t index = 0u; index < block.values.size(); ++index)
+			bool has_edit = false;
+			bool touches_min_x = false;
+			bool touches_max_x = false;
+			bool touches_min_z = false;
+			bool touches_max_z = false;
+			for (uint32_t local_z = 0u; local_z < block.changed_rect.height(); ++local_z)
 			{
-				if (!std::isfinite(block.values[index]))
+				for (uint32_t local_x = 0u; local_x < block.changed_rect.width(); ++local_x)
 				{
-					return fail(out_error, "Terrain height block contains a non-finite height value.");
+					const size_t index = static_cast<size_t>(local_z) *
+						block.changed_rect.width() + local_x;
+					const float scale = block.scales[index];
+					const float bias = block.biases[index];
+					if (!std::isfinite(scale) || !std::isfinite(bias))
+					{
+						return fail(out_error, "Terrain affine height block contains a non-finite value.");
+					}
+					if (scale == 1.0f && bias == 0.0f)
+					{
+						continue;
+					}
+					has_edit = true;
+					touches_min_x = touches_min_x || local_x == 0u;
+					touches_max_x = touches_max_x || local_x + 1u == block.changed_rect.width();
+					touches_min_z = touches_min_z || local_z == 0u;
+					touches_max_z = touches_max_z || local_z + 1u == block.changed_rect.height();
 				}
 			}
-			return validate_canonical_coverage(
-				block.changed_rect,
-				block.coverage,
-				"Terrain height block coverage is outside [0,1] or is not a minimal non-zero rectangle.",
-				out_error);
+			if (!has_edit || !touches_min_x || !touches_max_x ||
+				!touches_min_z || !touches_max_z)
+			{
+				return fail(out_error,
+					"Terrain affine height block is identity-only or is not a minimal edited rectangle.");
+			}
+			return true;
 		}
 
 		auto validate_weight_block_shape(
@@ -293,11 +315,6 @@ namespace AshEngine
 				if (!std::isfinite(layer.strength))
 				{
 					return fail(out_error, "Terrain edit layer strength is non-finite.");
-				}
-				if (layer.height_blend_mode != TerrainHeightBlendMode::Additive &&
-					layer.height_blend_mode != TerrainHeightBlendMode::Alpha)
-				{
-					return fail(out_error, "Terrain height blend mode is invalid.");
 				}
 				for (const TerrainSparseHeightBlock& block : layer.height_blocks)
 				{
@@ -679,19 +696,13 @@ namespace AshEngine
 								static_cast<size_t>(sample_z - component_rect.min_z) *
 									component_rect.width() +
 								(sample_x - component_rect.min_x);
-							const double factor =
-								std::clamp(static_cast<double>(block->coverage[block_index]), 0.0, 1.0) *
-								strength;
-							if (factor <= 0.0)
-							{
-								continue;
-							}
-
 							const double current = mutable_component->heights[component_index];
-							const double value = block->values[block_index];
-							const double composed = layer.height_blend_mode == TerrainHeightBlendMode::Additive
-								? current + value * factor
-								: factor >= 1.0 ? value : current + (value - current) * factor;
+							const double scale = block->scales[block_index];
+							const double bias = block->biases[block_index];
+							const double transformed = scale == 0.0
+								? bias : scale * current + bias;
+							const double composed = strength >= 1.0
+								? transformed : current + (transformed - current) * strength;
 							if (!is_float_result_representable(composed))
 							{
 								return fail(out_error, "Terrain height composition produced a non-finite result.");

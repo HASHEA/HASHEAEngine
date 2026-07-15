@@ -632,13 +632,11 @@ TEST_CASE("Terrain world bounds conservatively include edits when residency is i
 	AshEngine::TerrainEditLayer additive{};
 	additive.id.bytes[0] = 1u;
 	additive.name = "Additive high range";
-	additive.height_blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
-	additive.height_blocks.push_back({ { 0u, 0u }, { 0u, 0u, 1u, 1u }, { 250.0f }, { 1.0f } });
+	additive.height_blocks.push_back({ { 0u, 0u }, { 0u, 0u, 1u, 1u }, { 1.0f }, { 250.0f } });
 	AshEngine::TerrainEditLayer alpha{};
 	alpha.id.bytes[0] = 2u;
 	alpha.name = "Alpha low range";
-	alpha.height_blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
-	alpha.height_blocks.push_back({ { 0u, 0u }, { 0u, 0u, 1u, 1u }, { -80.0f }, { 1.0f } });
+	alpha.height_blocks.push_back({ { 0u, 0u }, { 0u, 0u, 1u, 1u }, { 0.0f }, { -80.0f } });
 	incomplete->edit_layers =
 		std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
 			std::vector<AshEngine::TerrainEditLayer>{ additive, alpha });

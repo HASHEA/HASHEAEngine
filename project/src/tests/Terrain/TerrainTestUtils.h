@@ -5,6 +5,17 @@
 #include <cstddef>
 #include <memory>
 
+// Test-only vocabulary for constructing v1-equivalent affine fixtures. Runtime
+// Terrain edit layers deliberately expose no Additive/Alpha mode.
+namespace AshEngine
+{
+	enum class TerrainHeightBlendMode : uint8_t
+	{
+		Additive = 0,
+		Alpha
+	};
+}
+
 namespace TerrainTests
 {
 	inline auto MakeSmallLayout() -> AshEngine::TerrainGridLayout

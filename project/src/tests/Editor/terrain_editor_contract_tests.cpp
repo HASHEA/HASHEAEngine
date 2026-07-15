@@ -61,7 +61,6 @@ namespace
 		AshEngine::TerrainEditLayer layer{};
 		layer.id = MakeTerrainModeLayerId();
 		layer.name = "Sculpt";
-		layer.height_blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
 		snapshot.edit_layers = std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
 			std::vector<AshEngine::TerrainEditLayer>{ std::move(layer) });
 		return snapshot;
@@ -931,10 +930,9 @@ TEST_CASE("Terrain Mode authoring configuration is validated and service owned")
 	addAlpha.kind = AshEditor::TerrainEditorIntent::Kind::LayerAction;
 	addAlpha.layer_action.kind = AshEditor::TerrainLayerActionKind::Add;
 	addAlpha.layer_action.name = "Alpha";
-	addAlpha.layer_action.blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 	REQUIRE(service.SubmitIntent(addAlpha));
 	CHECK(service.GetAuthoringConfig().brush.layer_id == service.GetSelectedLayerId());
-	CHECK(service.GetAuthoringConfig().brush.tool == AshEngine::TerrainBrushTool::Smooth);
+	CHECK(service.GetAuthoringConfig().brush.tool == AshEngine::TerrainBrushTool::Noise);
 }
 
 TEST_CASE("Terrain Mode authoring configuration is the only stroke source")
@@ -999,7 +997,6 @@ TEST_CASE("Terrain Mode asset selection preserves a dirty authoring session")
 	add.kind = AshEditor::TerrainEditorIntent::Kind::LayerAction;
 	add.layer_action.kind = AshEditor::TerrainLayerActionKind::Add;
 	add.layer_action.name = "Unsaved";
-	add.layer_action.blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
 	REQUIRE(service.SubmitIntent(add));
 	service.Update();
 	REQUIRE(service.HasDirtyAssets());

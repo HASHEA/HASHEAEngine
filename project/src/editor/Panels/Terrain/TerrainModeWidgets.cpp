@@ -53,8 +53,7 @@ namespace AshEditor
 			const std::string& strName = {},
 			const uint32_t uDestinationIndex = 0u,
 			const float fOpacity = 1.0f,
-			const bool bFlagValue = false,
-			const AshEngine::TerrainHeightBlendMode eBlendMode = AshEngine::TerrainHeightBlendMode::Additive)
+			const bool bFlagValue = false)
 		{
 			TerrainEditorIntent intent{};
 			intent.kind = TerrainEditorIntent::Kind::LayerAction;
@@ -64,7 +63,6 @@ namespace AshEditor
 			intent.layer_action.destination_index = uDestinationIndex;
 			intent.layer_action.opacity = fOpacity;
 			intent.layer_action.flag_value = bFlagValue;
-			intent.layer_action.blend_mode = eBlendMode;
 			refResult.intents.push_back(std::move(intent));
 		}
 
@@ -507,56 +505,33 @@ namespace AshEditor
 				refUi.text_wrapped("The selected edit layer is locked.");
 			}
 
+			const std::array<AshEngine::TerrainBrushTool, 5> tools{
+				AshEngine::TerrainBrushTool::Raise,
+				AshEngine::TerrainBrushTool::Lower,
+				AshEngine::TerrainBrushTool::Smooth,
+				AshEngine::TerrainBrushTool::Flatten,
+				AshEngine::TerrainBrushTool::Noise
+			};
+			const std::vector<const char*> labels{
+				"Raise", "Lower", "Smooth", "Flatten", "Noise"
+			};
+			const auto found = std::find(tools.begin(), tools.end(), refConfig.brush.tool);
 			int32_t toolIndex = 0;
-			if (pLayer->height_blend_mode == AshEngine::TerrainHeightBlendMode::Additive)
+			if (found == tools.end())
 			{
-				const std::array<AshEngine::TerrainBrushTool, 3> tools{
-					AshEngine::TerrainBrushTool::Raise,
-					AshEngine::TerrainBrushTool::Lower,
-					AshEngine::TerrainBrushTool::Noise
-				};
-				const std::vector<const char*> labels{ "Raise", "Lower", "Noise" };
-				const auto found = std::find(tools.begin(), tools.end(), refConfig.brush.tool);
-				if (found == tools.end())
-				{
-					refConfig.brush.tool = tools.front();
-					changed = true;
-				}
-				else
-				{
-					toolIndex = static_cast<int32_t>(std::distance(tools.begin(), found));
-				}
-				if (refUi.combo("Sculpt tool", toolIndex, labels))
-				{
-					refConfig.brush.tool = tools[static_cast<size_t>(toolIndex)];
-					changed = true;
-				}
-				refUi.text_unformatted("Additive layers support Raise, Lower, and Noise.");
+				refConfig.brush.tool = tools.front();
+				changed = true;
 			}
 			else
 			{
-				const std::array<AshEngine::TerrainBrushTool, 2> tools{
-					AshEngine::TerrainBrushTool::Smooth,
-					AshEngine::TerrainBrushTool::Flatten
-				};
-				const std::vector<const char*> labels{ "Smooth", "Flatten" };
-				const auto found = std::find(tools.begin(), tools.end(), refConfig.brush.tool);
-				if (found == tools.end())
-				{
-					refConfig.brush.tool = tools.front();
-					changed = true;
-				}
-				else
-				{
-					toolIndex = static_cast<int32_t>(std::distance(tools.begin(), found));
-				}
-				if (refUi.combo("Sculpt tool", toolIndex, labels))
-				{
-					refConfig.brush.tool = tools[static_cast<size_t>(toolIndex)];
-					changed = true;
-				}
-				refUi.text_unformatted("Alpha layers support Smooth and Flatten.");
+				toolIndex = static_cast<int32_t>(std::distance(tools.begin(), found));
 			}
+			if (refUi.combo("Sculpt tool", toolIndex, labels))
+			{
+				refConfig.brush.tool = tools[static_cast<size_t>(toolIndex)];
+				changed = true;
+			}
+			refUi.text_unformatted("Edit layers support all sculpt tools in stroke order.");
 
 			refUi.begin_disabled(
 				pLayer->locked || refView.blocking_operation || refView.preview.stroke_active);
@@ -765,8 +740,6 @@ namespace AshEditor
 				!refView.blocking_operation && !readOnly;
 			refUi.begin_disabled(!canEditLayers);
 			refUi.input_text("New layer name", refState.new_layer_name);
-			const std::vector<const char*> blendModes{ "Additive", "Alpha" };
-			refUi.combo("Height blend", refState.new_layer_blend_mode_index, blendModes);
 			if (refUi.button("Add Layer") && !refState.new_layer_name.empty())
 			{
 				AppendLayerAction(
@@ -776,10 +749,7 @@ namespace AshEditor
 					refState.new_layer_name,
 					0u,
 					1.0f,
-					false,
-					refState.new_layer_blend_mode_index == 0
-						? AshEngine::TerrainHeightBlendMode::Additive
-						: AshEngine::TerrainHeightBlendMode::Alpha);
+					false);
 			}
 			refUi.end_disabled();
 

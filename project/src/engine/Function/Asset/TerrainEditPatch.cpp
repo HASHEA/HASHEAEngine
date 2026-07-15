@@ -159,10 +159,9 @@ namespace AshEngine
 		{
 			for (size_t index = 0u; index < sample_count; ++index)
 			{
-				const float value = read_float_le(raw, index * 2u);
-				const float coverage = read_float_le(raw, index * 2u + 1u);
-				if (!std::isfinite(value) || !std::isfinite(coverage) ||
-					coverage < 0.0f || coverage > 1.0f)
+				const float scale = read_float_le(raw, index * 2u);
+				const float bias = read_float_le(raw, index * 2u + 1u);
+				if (!std::isfinite(scale) || !std::isfinite(bias))
 				{
 					return fail(out_error, "Terrain Height patch contains invalid logical floats.");
 				}
@@ -320,8 +319,8 @@ namespace AshEngine
 						layout,
 						block.owner,
 						block.changed_rect,
-						block.values.size(),
-						block.coverage.size(),
+						block.scales.size(),
+						block.biases.size(),
 						"Terrain current Height block shape is invalid.",
 						out_error))
 				{
@@ -334,18 +333,31 @@ namespace AshEngine
 					return fail(out_error, "Terrain current Height blocks contain a duplicate owner.");
 				}
 				owners[owner_index] = true;
-				for (float value : block.values)
+				for (float value : block.scales)
 				{
 					if (!std::isfinite(value))
 					{
 						return fail(out_error, "Terrain current Height block contains a non-finite value.");
 					}
 				}
+				for (float value : block.biases)
+				{
+					if (!std::isfinite(value))
+					{
+						return fail(out_error, "Terrain current Height block contains a non-finite value.");
+					}
+				}
+				std::vector<float> edit_mask(block.scales.size(), 0.0f);
+				for (size_t index = 0u; index < edit_mask.size(); ++index)
+				{
+					edit_mask[index] = block.scales[index] == 1.0f &&
+						block.biases[index] == 0.0f ? 0.0f : 1.0f;
+				}
 				if (!validate_canonical_coverage(
-						block.changed_rect,
-						block.coverage,
-						"Terrain current Height block coverage is not canonical.",
-						out_error))
+					block.changed_rect,
+					edit_mask,
+					"Terrain current affine Height block is not canonical.",
+					out_error))
 				{
 					return false;
 				}
@@ -406,8 +418,8 @@ namespace AshEngine
 		struct HeightCandidate
 		{
 			TerrainSampleRect owned_rect{};
-			std::vector<float> values{};
-			std::vector<float> coverage{};
+			std::vector<float> scales{};
+			std::vector<float> biases{};
 		};
 
 		struct WeightCandidate
@@ -432,14 +444,14 @@ namespace AshEngine
 			{
 				return fail(out_error, "Terrain Height patch owner area is unsupported.");
 			}
-			candidate.values.assign(area, 0.0f);
-			candidate.coverage.assign(area, 0.0f);
+			candidate.scales.assign(area, 1.0f);
+			candidate.biases.assign(area, 0.0f);
 			if (existing != nullptr)
 			{
 				size_t existing_area = 0u;
 				if (!rect_contains(candidate.owned_rect, existing->changed_rect) ||
 					!checked_multiply(existing->changed_rect.width(), existing->changed_rect.height(), existing_area) ||
-					existing_area != existing->values.size() || existing_area != existing->coverage.size())
+					existing_area != existing->scales.size() || existing_area != existing->biases.size())
 				{
 					return fail(out_error, "Terrain existing Height block shape is invalid.");
 				}
@@ -449,14 +461,13 @@ namespace AshEngine
 					{
 						const size_t source = sample_index(existing->changed_rect, x, z);
 						const size_t destination = sample_index(candidate.owned_rect, x, z);
-						if (!std::isfinite(existing->values[source]) ||
-							!std::isfinite(existing->coverage[source]) ||
-							existing->coverage[source] < 0.0f || existing->coverage[source] > 1.0f)
+						if (!std::isfinite(existing->scales[source]) ||
+							!std::isfinite(existing->biases[source]))
 						{
-							return fail(out_error, "Terrain existing Height block data is invalid.");
+							return fail(out_error, "Terrain existing affine Height block data is invalid.");
 						}
-						candidate.values[destination] = existing->values[source];
-						candidate.coverage[destination] = existing->coverage[source];
+						candidate.scales[destination] = existing->scales[source];
+						candidate.biases[destination] = existing->biases[source];
 					}
 				}
 			}
@@ -535,8 +546,8 @@ namespace AshEngine
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x)
 				{
 					const size_t index = sample_index(candidate.owned_rect, x, z);
-					append_float_le(candidate.values[index], raw);
-					append_float_le(candidate.coverage[index], raw);
+					append_float_le(candidate.scales[index], raw);
+					append_float_le(candidate.biases[index], raw);
 				}
 			}
 			return raw;
@@ -581,8 +592,8 @@ namespace AshEngine
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x, ++raw_sample)
 				{
 					const size_t destination = sample_index(candidate.owned_rect, x, z);
-					candidate.values[destination] = read_float_le(raw, raw_sample * 2u);
-					candidate.coverage[destination] = read_float_le(raw, raw_sample * 2u + 1u);
+					candidate.scales[destination] = read_float_le(raw, raw_sample * 2u);
+					candidate.biases[destination] = read_float_le(raw, raw_sample * 2u + 1u);
 				}
 			}
 		}
@@ -619,7 +630,8 @@ namespace AshEngine
 			{
 				for (uint32_t x = candidate.owned_rect.min_x; x < candidate.owned_rect.max_x_exclusive; ++x)
 				{
-					if (candidate.coverage[sample_index(candidate.owned_rect, x, z)] == 0.0f)
+					const size_t index = sample_index(candidate.owned_rect, x, z);
+					if (candidate.scales[index] == 1.0f && candidate.biases[index] == 0.0f)
 					{
 						continue;
 					}
@@ -651,8 +663,8 @@ namespace AshEngine
 				for (uint32_t x = bounds.min_x; x < bounds.max_x_exclusive; ++x)
 				{
 					const size_t index = sample_index(candidate.owned_rect, x, z);
-					block.values.push_back(candidate.values[index]);
-					block.coverage.push_back(candidate.coverage[index]);
+					block.scales.push_back(candidate.scales[index]);
+					block.biases.push_back(candidate.biases[index]);
 				}
 			}
 			out_block = std::move(block);
@@ -720,16 +732,16 @@ namespace AshEngine
 			{
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x, ++raw_sample)
 				{
-					float value = 0.0f;
-					float coverage = 0.0f;
+					float scale = 1.0f;
+					float bias = 0.0f;
 					if (has_block && rect_contains_sample(block.changed_rect, x, z))
 					{
 						const size_t index = sample_index(block.changed_rect, x, z);
-						value = block.values[index];
-						coverage = block.coverage[index];
+						scale = block.scales[index];
+						bias = block.biases[index];
 					}
-					if (!raw_float_equals(raw, raw_sample * 2u, value) ||
-						!raw_float_equals(raw, raw_sample * 2u + 1u, coverage))
+					if (!raw_float_equals(raw, raw_sample * 2u, scale) ||
+						!raw_float_equals(raw, raw_sample * 2u + 1u, bias))
 					{
 						return false;
 					}
@@ -973,7 +985,11 @@ namespace AshEngine
 					mutation.had_block = existing != nullptr;
 					HeightCandidate candidate{};
 					if (!make_height_candidate(
-						working_set.layout, patch.owner, existing, candidate, out_error))
+						working_set.layout,
+						patch.owner,
+						existing,
+						candidate,
+						out_error))
 					{
 						return false;
 					}

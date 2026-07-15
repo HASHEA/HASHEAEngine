@@ -72,12 +72,6 @@ namespace AshEngine
 		float height_range = 1024.0f;
 	};
 
-	enum class TerrainHeightBlendMode : uint8_t
-	{
-		Additive = 0,
-		Alpha
-	};
-
 	struct TerrainMaterialLayerDesc
 	{
 		std::string name{};
@@ -103,8 +97,9 @@ namespace AshEngine
 	{
 		TerrainComponentCoord owner{};
 		TerrainSampleRect changed_rect{};
-		std::vector<float> values{};
-		std::vector<float> coverage{};
+		// Generic edit-layer representation: T(H) = scale * H + bias.
+		std::vector<float> scales{};
+		std::vector<float> biases{};
 	};
 
 	struct TerrainSparseWeightBlock
@@ -122,7 +117,6 @@ namespace AshEngine
 		bool visible = true;
 		bool locked = false;
 		float strength = 1.0f;
-		TerrainHeightBlendMode height_blend_mode = TerrainHeightBlendMode::Additive;
 		std::vector<TerrainSparseHeightBlock> height_blocks{};
 		std::vector<TerrainSparseWeightBlock> weight_blocks{};
 	};

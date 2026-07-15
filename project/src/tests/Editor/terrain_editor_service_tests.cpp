@@ -81,7 +81,7 @@ namespace
 		AshEngine::TerrainEditLayer layer{};
 		layer.id = MakeEditorStrokeLayerId();
 		layer.name = "Sculpt";
-		layer.height_blend_mode = blendMode;
+		(void)blendMode;
 		snapshot.edit_layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>(
 			std::vector<AshEngine::TerrainEditLayer>{ std::move(layer) });
 		return snapshot;
@@ -123,7 +123,7 @@ namespace
 				left.changed_rect.min_z != right.changed_rect.min_z ||
 				left.changed_rect.max_x_exclusive != right.changed_rect.max_x_exclusive ||
 				left.changed_rect.max_z_exclusive != right.changed_rect.max_z_exclusive ||
-				left.values != right.values || left.coverage != right.coverage)
+				left.scales != right.scales || left.biases != right.biases)
 			{
 				return false;
 			}
@@ -1702,7 +1702,6 @@ TEST_CASE("Terrain editor records one already-executed layer command and tracks 
 	AshEditor::TerrainEditorIntent add = MakeLayerActionIntent(
 		AshEditor::TerrainLayerActionKind::Add);
 	add.layer_action.name = "Detail";
-	add.layer_action.blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 	add.layer_action.destination_index = 1u;
 	REQUIRE(service.SubmitIntent(add));
 	CHECK(commands.execute_count == 0u);
@@ -2028,19 +2027,23 @@ TEST_CASE("Terrain editor quarantines a history recording exception")
 	CHECK(service.GetPublishedSnapshot() == initialPublishedSnapshot);
 }
 
-TEST_CASE("Terrain editor rejects incompatible layers and non-ready stroke state")
+TEST_CASE("Terrain editor accepts every sculpt tool on generic layers and rejects non-ready stroke state")
 {
 	RecordingTerrainCommandExecutor commands{};
 	AshEditor::TerrainEditorService service{};
 	REQUIRE(service.Initialize(commands));
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot(
 		AshEngine::TerrainHeightBlendMode::Alpha)));
-	CHECK_FALSE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
 
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	AshEditor::TerrainEditorIntent smooth = MakeBeginStrokeIntent();
 	smooth.brush.tool = AshEngine::TerrainBrushTool::Smooth;
-	CHECK_FALSE(SubmitConfiguredBeginStroke(service, smooth));
+	REQUIRE(SubmitConfiguredBeginStroke(service, smooth));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
 
 	AshEditor::TerrainEditorSessionCore core{};
 	AshEngine::TerrainWorkingSet workingSet{};

@@ -11,7 +11,8 @@ namespace AshEngine::TerrainContainerFormat
 {
 	static constexpr std::array<uint8_t, 8> k_magic =
 		{ 'A', 'S', 'H', 'T', 'E', 'R', 'R', 0 };
-	static constexpr uint32_t k_version = 1u;
+	static constexpr uint32_t k_legacy_version = 1u;
+	static constexpr uint32_t k_version = 2u;
 	static constexpr uint32_t k_little_endian_marker = 0x01020304u;
 	static constexpr std::array<uint8_t, 4> k_layer_metadata_extension_magic =
 		{ 'A', 'S', 'H', 'L' };
@@ -73,4 +74,5 @@ namespace AshEngine::TerrainContainerFormat
 	auto crc32_update(uint32_t state, const uint8_t* bytes, size_t size) -> uint32_t;
 	auto crc32_finalize(uint32_t state) -> uint32_t;
 	auto crc32(const uint8_t* bytes, size_t size) -> uint32_t;
+	auto is_supported_version(uint32_t version) -> bool;
 }

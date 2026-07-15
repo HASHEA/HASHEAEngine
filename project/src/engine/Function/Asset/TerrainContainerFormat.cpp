@@ -30,4 +30,9 @@ namespace AshEngine::TerrainContainerFormat
 	{
 		return crc32_finalize(crc32_update(crc32_initial_state(), bytes, size));
 	}
+
+	bool is_supported_version(uint32_t version)
+	{
+		return version == k_legacy_version || version == k_version;
+	}
 }

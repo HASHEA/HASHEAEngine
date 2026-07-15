@@ -36,12 +36,6 @@ namespace AshEngine
 				kind <= TerrainLayerStackEditKind::SetLocked;
 		}
 
-		auto valid_blend_mode(const TerrainHeightBlendMode mode) -> bool
-		{
-			return mode == TerrainHeightBlendMode::Additive ||
-				mode == TerrainHeightBlendMode::Alpha;
-		}
-
 		auto component_coord_less(
 			const TerrainComponentCoord lhs,
 			const TerrainComponentCoord rhs) -> bool
@@ -68,7 +62,7 @@ namespace AshEngine
 			const TerrainSparseHeightBlock& rhs) -> bool
 		{
 			return lhs.owner == rhs.owner && rect_equal(lhs.changed_rect, rhs.changed_rect) &&
-				lhs.values == rhs.values && lhs.coverage == rhs.coverage;
+				lhs.scales == rhs.scales && lhs.biases == rhs.biases;
 		}
 
 		auto weight_block_equal(
@@ -86,8 +80,7 @@ namespace AshEngine
 				layer.name,
 				layer.visible,
 				layer.locked,
-				layer.strength,
-				layer.height_blend_mode
+				layer.strength
 			};
 		}
 
@@ -96,14 +89,13 @@ namespace AshEngine
 			const TerrainLayerMetadata& rhs) -> bool
 		{
 			return lhs.id == rhs.id && lhs.name == rhs.name && lhs.visible == rhs.visible &&
-				lhs.locked == rhs.locked && lhs.strength == rhs.strength &&
-				lhs.height_blend_mode == rhs.height_blend_mode;
+				lhs.locked == rhs.locked && lhs.strength == rhs.strength;
 		}
 
 		auto valid_metadata(const TerrainLayerMetadata& metadata) -> bool
 		{
 			return metadata.id.is_valid() && metadata.name.size() <= k_max_layer_name_size &&
-				std::isfinite(metadata.strength) && valid_blend_mode(metadata.height_blend_mode);
+				std::isfinite(metadata.strength);
 		}
 
 		auto metadata_matches_layer(
@@ -267,13 +259,49 @@ namespace AshEngine
 				touches_min_z && touches_max_z;
 		}
 
+		auto validate_canonical_affine_height(
+			const TerrainSampleRect& rect,
+			const std::vector<float>& scales,
+			const std::vector<float>& biases) -> bool
+		{
+			bool has_effect = false;
+			bool touches_min_x = false;
+			bool touches_max_x = false;
+			bool touches_min_z = false;
+			bool touches_max_z = false;
+			for (uint32_t local_z = 0u; local_z < rect.height(); ++local_z)
+			{
+				for (uint32_t local_x = 0u; local_x < rect.width(); ++local_x)
+				{
+					const size_t index = static_cast<size_t>(local_z) * rect.width() + local_x;
+					const float scale = scales[index];
+					const float bias = biases[index];
+					if (!std::isfinite(scale) || !std::isfinite(bias))
+					{
+						return false;
+					}
+					if (scale == 1.0f && bias == 0.0f)
+					{
+						continue;
+					}
+					has_effect = true;
+					touches_min_x = touches_min_x || local_x == 0u;
+					touches_max_x = touches_max_x || local_x + 1u == rect.width();
+					touches_min_z = touches_min_z || local_z == 0u;
+					touches_max_z = touches_max_z || local_z + 1u == rect.height();
+				}
+			}
+			return has_effect && touches_min_x && touches_max_x &&
+				touches_min_z && touches_max_z;
+		}
+
 		auto validate_layer_contents(
 			const TerrainWorkingSet& working_set,
 			const TerrainEditLayer& layer,
 			std::string* out_error) -> bool
 		{
 			if (!layer.id.is_valid() || layer.name.size() > k_max_layer_name_size ||
-				!std::isfinite(layer.strength) || !valid_blend_mode(layer.height_blend_mode))
+				!std::isfinite(layer.strength))
 			{
 				return fail(out_error, "Terrain layer stack metadata is invalid.");
 			}
@@ -282,10 +310,9 @@ namespace AshEngine
 				const TerrainSparseHeightBlock& block = layer.height_blocks[block_index];
 				if (!validate_block_shape(
 						working_set, block.owner, block.changed_rect,
-						block.values.size(), block.coverage.size()) ||
-					!std::all_of(block.values.begin(), block.values.end(),
-						[](const float value) { return std::isfinite(value); }) ||
-					!validate_canonical_coverage(block.changed_rect, block.coverage))
+						block.scales.size(), block.biases.size()) ||
+					!validate_canonical_affine_height(
+						block.changed_rect, block.scales, block.biases))
 				{
 					return fail(out_error, "Terrain layer stack Height block shape is invalid.");
 				}
@@ -592,26 +619,22 @@ namespace AshEngine
 					const bool same_visible = before.visible == after.visible;
 					const bool same_locked = before.locked == after.locked;
 					const bool same_strength = before.strength == after.strength;
-					const bool same_blend = before.height_blend_mode == after.height_blend_mode;
 					bool valid_transition = false;
 					switch (patch.kind)
 					{
 					case TerrainLayerStackEditKind::Rename:
-						valid_transition = !same_name && same_visible && same_locked &&
-							same_strength && same_blend;
+						valid_transition = !same_name && same_visible && same_locked && same_strength;
 						break;
 					case TerrainLayerStackEditKind::SetVisible:
-						valid_transition = same_name && !same_visible && same_locked &&
-							same_strength && same_blend;
+						valid_transition = same_name && !same_visible && same_locked && same_strength;
 						break;
 					case TerrainLayerStackEditKind::SetOpacity:
 						valid_transition = same_name && same_visible && same_locked &&
-							!same_strength && same_blend &&
+							!same_strength &&
 							after.strength >= 0.0f && after.strength <= 1.0f;
 						break;
 					case TerrainLayerStackEditKind::SetLocked:
-						valid_transition = same_name && same_visible && !same_locked &&
-							same_strength && same_blend;
+						valid_transition = same_name && same_visible && !same_locked && same_strength;
 						break;
 					default:
 						break;
@@ -661,7 +684,7 @@ namespace AshEngine
 			case TerrainLayerStackEditKind::Add:
 			{
 				if (edit.destination_index > working_set.edit_layers.size() ||
-					edit.name.size() > k_max_layer_name_size || !valid_blend_mode(edit.blend_mode))
+					edit.name.size() > k_max_layer_name_size)
 				{
 					return fail(out_error, "Terrain layer stack add parameters are invalid.");
 				}
@@ -674,7 +697,6 @@ namespace AshEngine
 				}
 				candidate.id = new_id;
 				candidate.name = edit.name;
-				candidate.height_blend_mode = edit.blend_mode;
 				patch.layer_id = new_id;
 				patch.after_order.insert(
 					patch.after_order.begin() + edit.destination_index, new_id);
@@ -836,7 +858,6 @@ namespace AshEngine
 				layer.visible = patch.after_metadata->visible;
 				layer.locked = patch.after_metadata->locked;
 				layer.strength = patch.after_metadata->strength;
-				layer.height_blend_mode = patch.after_metadata->height_blend_mode;
 			}
 
 			working_set.content_generation += 1u;
@@ -967,8 +988,7 @@ namespace AshEngine
 			if (source_has_layer && target_has_layer && target_metadata != nullptr)
 			{
 				if (target_metadata->name.size() > k_max_layer_name_size ||
-					!std::isfinite(target_metadata->strength) ||
-					!valid_blend_mode(target_metadata->height_blend_mode))
+					!std::isfinite(target_metadata->strength))
 				{
 					return fail(out_error, "Terrain layer stack patch target metadata is invalid.");
 				}
@@ -996,7 +1016,6 @@ namespace AshEngine
 				layer.visible = target_metadata->visible;
 				layer.locked = target_metadata->locked;
 				layer.strength = target_metadata->strength;
-				layer.height_blend_mode = target_metadata->height_blend_mode;
 			}
 			else
 			{

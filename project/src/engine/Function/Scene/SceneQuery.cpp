@@ -235,9 +235,7 @@ namespace AshEngine
 			{
 				for (const TerrainEditLayer& layer : *snapshot.edit_layers)
 				{
-					if (!std::isfinite(layer.strength) ||
-						(layer.height_blend_mode != TerrainHeightBlendMode::Additive &&
-							layer.height_blend_mode != TerrainHeightBlendMode::Alpha))
+					if (!std::isfinite(layer.strength))
 					{
 						return false;
 					}
@@ -253,75 +251,38 @@ namespace AshEngine
 						continue;
 					}
 
-					if (layer.height_blend_mode == TerrainHeightBlendMode::Additive)
+					double next_minimum = minimum;
+					double next_maximum = maximum;
+					for (const TerrainSparseHeightBlock& block : layer.height_blocks)
 					{
-						double minimum_effect = 0.0;
-						double maximum_effect = 0.0;
-						for (const TerrainSparseHeightBlock& block : layer.height_blocks)
+						if (block.scales.size() != block.biases.size())
 						{
-							if (block.values.size() != block.coverage.size())
+							return false;
+						}
+						for (size_t index = 0u; index < block.scales.size(); ++index)
+						{
+							const double scale = block.scales[index];
+							const double bias = block.biases[index];
+							if (!std::isfinite(scale) || !std::isfinite(bias))
 							{
 								return false;
 							}
-							for (size_t index = 0u; index < block.values.size(); ++index)
-							{
-								const double value = block.values[index];
-								const double coverage = block.coverage[index];
-								if (!std::isfinite(value) ||
-									!std::isfinite(coverage) ||
-									coverage < 0.0 || coverage > 1.0)
-								{
-									return false;
-								}
-								const double effect = value * coverage * strength;
-								if (!std::isfinite(effect))
-								{
-									return false;
-								}
-								minimum_effect = std::min(minimum_effect, effect);
-								maximum_effect = std::max(maximum_effect, effect);
-							}
-						}
-						minimum += minimum_effect;
-						maximum += maximum_effect;
-					}
-					else
-					{
-						double next_minimum = minimum;
-						double next_maximum = maximum;
-						for (const TerrainSparseHeightBlock& block : layer.height_blocks)
-						{
-							if (block.values.size() != block.coverage.size())
+							const double effective_scale = 1.0 + (scale - 1.0) * strength;
+							const double effective_bias = bias * strength;
+							const double endpoint_a = effective_scale * minimum + effective_bias;
+							const double endpoint_b = effective_scale * maximum + effective_bias;
+							if (!std::isfinite(endpoint_a) || !std::isfinite(endpoint_b))
 							{
 								return false;
 							}
-							for (size_t index = 0u; index < block.values.size(); ++index)
-							{
-								const double value = block.values[index];
-								const double coverage = block.coverage[index];
-								if (!std::isfinite(value) ||
-									!std::isfinite(coverage) ||
-									coverage < 0.0 || coverage > 1.0)
-								{
-									return false;
-								}
-								const double factor = coverage * strength;
-								const double candidate_minimum =
-									minimum + (value - minimum) * factor;
-								const double candidate_maximum =
-									maximum + (value - maximum) * factor;
-								if (!std::isfinite(candidate_minimum) ||
-									!std::isfinite(candidate_maximum))
-								{
-									return false;
-								}
-								next_minimum = std::min(next_minimum, candidate_minimum);
-								next_maximum = std::max(next_maximum, candidate_maximum);
-							}
+							next_minimum = std::min(
+								next_minimum, std::min(endpoint_a, endpoint_b));
+							next_maximum = std::max(
+								next_maximum, std::max(endpoint_a, endpoint_b));
 						}
-						minimum = next_minimum;
-						maximum = next_maximum;
 					}
+					minimum = next_minimum;
+					maximum = next_maximum;
 
 					if (!std::isfinite(minimum) || !std::isfinite(maximum))
 					{

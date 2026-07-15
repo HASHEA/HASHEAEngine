@@ -59,7 +59,6 @@ namespace
 			0x11u, "First", { 0u, 0u }, { 1u, 1u, 2u, 2u }));
 		layers->push_back(MakeHeightLayer(
 			0x22u, "Second", { 1u, 1u }, { 5u, 5u, 6u, 6u }));
-		layers->back().height_blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 		snapshot->edit_layers = std::move(layers);
 
 		AshEngine::TerrainWorkingSet working_set{};
@@ -112,7 +111,6 @@ namespace
 		CHECK(actual.visible == expected.visible);
 		CHECK(actual.locked == expected.locked);
 		CHECK(actual.strength == doctest::Approx(expected.strength));
-		CHECK(actual.height_blend_mode == expected.height_blend_mode);
 
 		REQUIRE(actual.height_blocks.size() == expected.height_blocks.size());
 		for (size_t index = 0u; index < expected.height_blocks.size(); ++index)
@@ -121,8 +119,8 @@ namespace
 			const AshEngine::TerrainSparseHeightBlock& expected_block = expected.height_blocks[index];
 			CHECK(actual_block.owner == expected_block.owner);
 			CheckRect(actual_block.changed_rect, expected_block.changed_rect);
-			CHECK(actual_block.values == expected_block.values);
-			CHECK(actual_block.coverage == expected_block.coverage);
+			CHECK(actual_block.scales == expected_block.scales);
+			CHECK(actual_block.biases == expected_block.biases);
 		}
 
 		REQUIRE(actual.weight_blocks.size() == expected.weight_blocks.size());
@@ -365,7 +363,6 @@ TEST_CASE("Terrain layer commands add duplicate delete and restore complete spar
 	working_set.edit_layers[0].visible = false;
 	working_set.edit_layers[0].locked = true;
 	working_set.edit_layers[0].strength = 0.65f;
-	working_set.edit_layers[0].height_blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 	const AshEngine::TerrainEditLayer source_layer = working_set.edit_layers[0];
 	AshEngine::TerrainLayerStackPatch patch{};
 	std::vector<AshEngine::TerrainComponentCoord> dirty{};
@@ -375,7 +372,6 @@ TEST_CASE("Terrain layer commands add duplicate delete and restore complete spar
 	AshEngine::TerrainLayerStackEdit add{};
 	add.kind = AshEngine::TerrainLayerStackEditKind::Add;
 	add.name = "Added";
-	add.blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 	add.destination_index = 1u;
 	REQUIRE(AshEngine::apply_terrain_layer_stack_edit(
 		working_set, add, patch, dirty, &error));

@@ -114,9 +114,7 @@ namespace AshEngine
 			for (size_t layer_index = 0u; layer_index <= selected_layer_index; ++layer_index)
 			{
 				const TerrainEditLayer& layer = working_set.edit_layers[layer_index];
-				if (!std::isfinite(layer.strength) ||
-					(layer.height_blend_mode != TerrainHeightBlendMode::Additive &&
-						layer.height_blend_mode != TerrainHeightBlendMode::Alpha))
+				if (!std::isfinite(layer.strength))
 				{
 					return fail(out_error, "Terrain brush source layer metadata is invalid.");
 				}
@@ -216,16 +214,17 @@ namespace AshEngine
 					continue;
 				}
 				const size_t index = block_sample_index(block->changed_rect, sample_x, sample_z);
-				if (index >= block->values.size() || index >= block->coverage.size() ||
-					!std::isfinite(block->values[index]) ||
-					!is_valid_unit_float(block->coverage[index]))
+				if (index >= block->scales.size() || index >= block->biases.size() ||
+					!std::isfinite(block->scales[index]) ||
+					!std::isfinite(block->biases[index]))
 				{
-					return fail(out_error, "Terrain brush encountered invalid frozen height data.");
+					return fail(out_error, "Terrain brush encountered invalid affine height data.");
 				}
-				const double factor = block->coverage[index] * strength;
-				height = layer.height_blend_mode == TerrainHeightBlendMode::Additive
-					? height + static_cast<double>(block->values[index]) * factor
-					: height + (static_cast<double>(block->values[index]) - height) * factor;
+				const double scale = block->scales[index];
+				const double bias = block->biases[index];
+				const double transformed = scale == 0.0 ? bias : scale * height + bias;
+				height = strength >= 1.0
+					? transformed : height + (transformed - height) * strength;
 				if (!std::isfinite(height) ||
 					std::abs(height) > std::numeric_limits<float>::max())
 				{
@@ -361,10 +360,10 @@ namespace AshEngine
 		{
 			TerrainComponentCoord owner{};
 			TerrainSampleRect owned_rect{};
-			std::vector<float> before_values{};
-			std::vector<float> before_coverage{};
-			std::vector<float> values{};
-			std::vector<float> coverage{};
+			std::vector<float> before_scales{};
+			std::vector<float> before_biases{};
+			std::vector<float> scales{};
+			std::vector<float> biases{};
 		};
 
 		struct WeightCandidate
@@ -393,15 +392,15 @@ namespace AshEngine
 			{
 				return fail(out_error, "Terrain brush height candidate area is unsupported.");
 			}
-			candidate.values.assign(area, 0.0f);
-			candidate.coverage.assign(area, 0.0f);
+			candidate.scales.assign(area, 1.0f);
+			candidate.biases.assign(area, 0.0f);
 
 			if (const TerrainSparseHeightBlock* block = existing_block)
 			{
 				size_t block_area = 0u;
 				if (block->changed_rect.empty() ||
 					!checked_multiply(block->changed_rect.width(), block->changed_rect.height(), block_area) ||
-					block_area != block->values.size() || block_area != block->coverage.size())
+					block_area != block->scales.size() || block_area != block->biases.size())
 				{
 					return fail(out_error, "Terrain brush selected height block shape is invalid.");
 				}
@@ -415,18 +414,18 @@ namespace AshEngine
 						}
 						const size_t source_index = block_sample_index(block->changed_rect, x, z);
 						const size_t destination_index = block_sample_index(candidate.owned_rect, x, z);
-						if (!std::isfinite(block->values[source_index]) ||
-							!is_valid_unit_float(block->coverage[source_index]))
+						if (!std::isfinite(block->scales[source_index]) ||
+							!std::isfinite(block->biases[source_index]))
 						{
-							return fail(out_error, "Terrain brush selected height block data is invalid.");
+							return fail(out_error, "Terrain brush selected affine height data is invalid.");
 						}
-						candidate.values[destination_index] = block->values[source_index];
-						candidate.coverage[destination_index] = block->coverage[source_index];
+						candidate.scales[destination_index] = block->scales[source_index];
+						candidate.biases[destination_index] = block->biases[source_index];
 					}
 				}
 			}
-			candidate.before_values = candidate.values;
-			candidate.before_coverage = candidate.coverage;
+			candidate.before_scales = candidate.scales;
+			candidate.before_biases = candidate.biases;
 			out_candidate = std::move(candidate);
 			return true;
 		}
@@ -546,7 +545,8 @@ namespace AshEngine
 				for (uint32_t x = candidate.owned_rect.min_x; x < candidate.owned_rect.max_x_exclusive; ++x)
 				{
 					const size_t index = block_sample_index(candidate.owned_rect, x, z);
-					if (candidate.coverage[index] == 0.0f)
+					if (candidate.scales[index] == 1.0f &&
+						candidate.biases[index] == 0.0f)
 					{
 						continue;
 					}
@@ -579,15 +579,15 @@ namespace AshEngine
 			{
 				return false;
 			}
-			block.values.reserve(area);
-			block.coverage.reserve(area);
+			block.scales.reserve(area);
+			block.biases.reserve(area);
 			for (uint32_t z = non_zero.min_z; z < non_zero.max_z_exclusive; ++z)
 			{
 				for (uint32_t x = non_zero.min_x; x < non_zero.max_x_exclusive; ++x)
 				{
 					const size_t index = block_sample_index(candidate.owned_rect, x, z);
-					block.values.push_back(candidate.values[index]);
-					block.coverage.push_back(candidate.coverage[index]);
+					block.scales.push_back(candidate.scales[index]);
+					block.biases.push_back(candidate.biases[index]);
 				}
 			}
 			out_block = std::move(block);
@@ -683,8 +683,8 @@ namespace AshEngine
 				for (uint32_t x = candidate.owned_rect.min_x; x < candidate.owned_rect.max_x_exclusive; ++x)
 				{
 					const size_t index = block_sample_index(candidate.owned_rect, x, z);
-					if (float_bits_equal(candidate.before_values[index], candidate.values[index]) &&
-						float_bits_equal(candidate.before_coverage[index], candidate.coverage[index]))
+					if (float_bits_equal(candidate.before_scales[index], candidate.scales[index]) &&
+						float_bits_equal(candidate.before_biases[index], candidate.biases[index]))
 					{
 						continue;
 					}
@@ -723,10 +723,10 @@ namespace AshEngine
 				for (uint32_t x = changed.min_x; x < changed.max_x_exclusive; ++x)
 				{
 					const size_t index = block_sample_index(candidate.owned_rect, x, z);
-					append_float_le(candidate.before_values[index], before);
-					append_float_le(candidate.before_coverage[index], before);
-					append_float_le(candidate.values[index], after);
-					append_float_le(candidate.coverage[index], after);
+					append_float_le(candidate.before_scales[index], before);
+					append_float_le(candidate.before_biases[index], before);
+					append_float_le(candidate.scales[index], after);
+					append_float_le(candidate.biases[index], after);
 				}
 			}
 
@@ -1108,12 +1108,6 @@ namespace AshEngine
 			const bool alpha_height_tool =
 				params.tool == TerrainBrushTool::Smooth ||
 				params.tool == TerrainBrushTool::Flatten;
-			if ((additive_height_tool && selected_layer.height_blend_mode != TerrainHeightBlendMode::Additive) ||
-				(alpha_height_tool && selected_layer.height_blend_mode != TerrainHeightBlendMode::Alpha))
-			{
-				return fail(out_error, "Terrain brush tool is incompatible with the selected height blend mode.");
-			}
-
 			std::vector<TerrainStrokeSample> samples{};
 			if (!resample_terrain_stroke(
 				raw_input,
@@ -1317,67 +1311,59 @@ namespace AshEngine
 									candidate.owned_rect,
 									sample_x,
 									sample_z);
-								const double old_coverage = candidate.coverage[index];
-								const double new_coverage = influence + old_coverage * (1.0 - influence);
-								const float stored_new_coverage = static_cast<float>(new_coverage);
-								if (stored_new_coverage > 0.0f)
+								if (additive_height_tool)
 								{
-									double result = 0.0;
-									if (additive_height_tool)
+									double signed_value = 1.0;
+									if (params.tool == TerrainBrushTool::Lower)
 									{
-										double signed_value = 1.0;
-										if (params.tool == TerrainBrushTool::Lower)
-										{
-											signed_value = -1.0;
-										}
-										else if (params.tool == TerrainBrushTool::Noise)
-										{
-											signed_value = noise_value(sample_x, sample_z, params.random_seed);
-										}
-										const double premultiplied =
-											static_cast<double>(candidate.values[index]) * old_coverage +
-											signed_value * influence;
-										result = premultiplied / new_coverage;
+										signed_value = -1.0;
 									}
-									else
+									else if (params.tool == TerrainBrushTool::Noise)
 									{
-										float target = flatten_target;
-										if (params.tool == TerrainBrushTool::Smooth)
-										{
+										signed_value = noise_value(sample_x, sample_z, params.random_seed);
+									}
+									const double next_bias = static_cast<double>(candidate.biases[index]) +
+										signed_value * influence;
+									if (!std::isfinite(next_bias) ||
+										std::abs(next_bias) > std::numeric_limits<float>::max())
+									{
+										return fail(out_error, "Terrain height brush result is not representable.");
+									}
+									candidate.biases[index] = static_cast<float>(next_bias);
+								}
+								else
+								{
+									float target = flatten_target;
+									if (params.tool == TerrainBrushTool::Smooth)
+									{
 										const uint32_t left = sample_x == 0u ? 0u : sample_x - 1u;
-										const uint32_t right = std::min(
-											sample_x + 1u,
-											working_set.layout.sample_count_x - 1u);
+										const uint32_t right = std::min(sample_x + 1u, working_set.layout.sample_count_x - 1u);
 										const uint32_t top = sample_z == 0u ? 0u : sample_z - 1u;
-										const uint32_t bottom = std::min(
-											sample_z + 1u,
-											working_set.layout.sample_count_z - 1u);
+										const uint32_t bottom = std::min(sample_z + 1u, working_set.layout.sample_count_z - 1u);
 										float h_left = 0.0f;
 										float h_right = 0.0f;
 										float h_top = 0.0f;
 										float h_bottom = 0.0f;
-											if (!compose_frozen_height(working_set, layer_lookups, selected_layer_index, left, sample_z, h_left, out_error) ||
-												!compose_frozen_height(working_set, layer_lookups, selected_layer_index, right, sample_z, h_right, out_error) ||
-												!compose_frozen_height(working_set, layer_lookups, selected_layer_index, sample_x, top, h_top, out_error) ||
-												!compose_frozen_height(working_set, layer_lookups, selected_layer_index, sample_x, bottom, h_bottom, out_error))
+										if (!compose_frozen_height(working_set, layer_lookups, selected_layer_index, left, sample_z, h_left, out_error) ||
+											!compose_frozen_height(working_set, layer_lookups, selected_layer_index, right, sample_z, h_right, out_error) ||
+											!compose_frozen_height(working_set, layer_lookups, selected_layer_index, sample_x, top, h_top, out_error) ||
+											!compose_frozen_height(working_set, layer_lookups, selected_layer_index, sample_x, bottom, h_bottom, out_error))
 										{
 											return false;
 										}
-											target = static_cast<float>((
-											static_cast<double>(h_left) + h_right + h_top + h_bottom) * 0.25);
-										}
-										result =
-										(static_cast<double>(target) * influence +
-											static_cast<double>(candidate.values[index]) *
-												old_coverage * (1.0 - influence)) /
-										new_coverage;
+										target = static_cast<float>((static_cast<double>(h_left) + h_right + h_top + h_bottom) * 0.25);
 									}
-									if (!std::isfinite(result) || std::abs(result) > std::numeric_limits<float>::max())
+									const double retain = 1.0 - influence;
+									const double next_scale = retain * candidate.scales[index];
+									const double next_bias = retain * candidate.biases[index] + influence * target;
+									if (!std::isfinite(next_scale) || !std::isfinite(next_bias) ||
+										std::abs(next_scale) > std::numeric_limits<float>::max() ||
+										std::abs(next_bias) > std::numeric_limits<float>::max())
 									{
-										return fail(out_error, "Terrain height brush result is not representable.");
+										return fail(out_error, "Terrain affine height brush result is not representable.");
 									}
-									candidate.values[index] = static_cast<float>(result);
-									candidate.coverage[index] = stored_new_coverage;
+									candidate.scales[index] = static_cast<float>(next_scale);
+									candidate.biases[index] = static_cast<float>(next_bias);
 								}
 							}
 						}

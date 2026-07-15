@@ -192,7 +192,7 @@ namespace
 		AshEngine::TerrainEditLayer layer{};
 		layer.id = MakeLayerId(1u);
 		layer.name = "Selected";
-		layer.height_blend_mode = mode;
+		(void)mode;
 		working_set.edit_layers.push_back(std::move(layer));
 		return working_set;
 	}
@@ -219,8 +219,8 @@ namespace
 		AshEngine::TerrainSparseHeightBlock block{};
 		block.owner = owner;
 		block.changed_rect = { sample_x, sample_z, sample_x + 1u, sample_z + 1u };
-		block.values = { value };
-		block.coverage = { coverage };
+		block.scales = { 1.0f };
+		block.biases = { value * coverage };
 		return block;
 	}
 
@@ -313,7 +313,7 @@ namespace
 	}
 }
 
-TEST_CASE("Terrain brush rejects invalid parameters and incompatible height modes atomically")
+TEST_CASE("Terrain brush rejects invalid parameters atomically")
 {
 	const auto valid = MakeBrushParameters(AshEngine::TerrainBrushTool::Raise);
 
@@ -374,12 +374,44 @@ TEST_CASE("Terrain brush rejects invalid parameters and incompatible height mode
 	CheckRejected(MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Additive), valid,
 		{}, { { { 2.0f, 2.0f }, -0.01f } });
 
-	invalid = MakeBrushParameters(AshEngine::TerrainBrushTool::Smooth);
-	CheckRejected(MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Additive), invalid,
-		{}, { { { 2.0f, 2.0f }, 1.0f } });
-	invalid = valid;
-	CheckRejected(MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha), invalid,
-		{}, { { { 2.0f, 2.0f }, 1.0f } });
+}
+
+TEST_CASE("Terrain brush composes all sculpt tools in one generic edit layer")
+{
+	auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Additive, 10.0f);
+	std::vector<AshEngine::TerrainEditPatch> patches{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+
+	auto raise = MakeBrushParameters(AshEngine::TerrainBrushTool::Raise);
+	REQUIRE(ApplySingleDab(working_set, raise, { 2.0f, 2.0f }, patches, dirty));
+	auto flatten = MakeBrushParameters(AshEngine::TerrainBrushTool::Flatten);
+	flatten.strength = 0.5f;
+	REQUIRE(ApplySingleDab(working_set, flatten, { 2.0f, 2.0f }, patches, dirty));
+	auto lower = MakeBrushParameters(AshEngine::TerrainBrushTool::Lower);
+	lower.strength = 0.25f;
+	REQUIRE(ApplySingleDab(working_set, lower, { 2.0f, 2.0f }, patches, dirty));
+	auto noise = MakeBrushParameters(AshEngine::TerrainBrushTool::Noise);
+	noise.strength = 0.25f;
+	noise.random_seed = 17u;
+	REQUIRE(ApplySingleDab(working_set, noise, { 2.0f, 2.0f }, patches, dirty));
+	auto smooth = MakeBrushParameters(AshEngine::TerrainBrushTool::Smooth);
+	smooth.strength = 0.25f;
+	REQUIRE(ApplySingleDab(working_set, smooth, { 2.0f, 2.0f }, patches, dirty));
+
+	REQUIRE(working_set.edit_layers.size() == 1u);
+	REQUIRE(working_set.edit_layers[0].height_blocks.size() == 1u);
+	const auto& block = working_set.edit_layers[0].height_blocks[0];
+	REQUIRE(block.scales.size() == block.biases.size());
+	for (float value : block.scales) CHECK(std::isfinite(value));
+	for (float value : block.biases) CHECK(std::isfinite(value));
+
+	auto paint = MakeBrushParameters(AshEngine::TerrainBrushTool::Paint);
+	paint.material_layer_index = 2u;
+	REQUIRE(ApplySingleDab(working_set, paint, { 2.0f, 2.0f }, patches, dirty));
+	auto erase = MakeBrushParameters(AshEngine::TerrainBrushTool::Erase);
+	erase.material_layer_index = 2u;
+	REQUIRE(ApplySingleDab(working_set, erase, { 2.0f, 2.0f }, patches, dirty));
+	CHECK(working_set.edit_layers.size() == 1u);
 }
 
 TEST_CASE("Terrain brush signed sculpt and Noise kernels produce deterministic logical blocks")
@@ -396,15 +428,14 @@ TEST_CASE("Terrain brush signed sculpt and Noise kernels produce deterministic l
 		REQUIRE(ApplySingleDab(working_set, params, { 2.0f, 2.0f }, patches, dirty));
 		REQUIRE(patches.size() == 1u);
 		const auto after = DecodePatchBytes(patches[0], true);
-		CHECK(ReadFloatLe(after, 0u) == doctest::Approx(tool_and_expected.second));
-		CHECK(ReadFloatLe(after, 1u) == doctest::Approx(0.5f));
+		CHECK(ReadFloatLe(after, 0u) == doctest::Approx(1.0f));
+		CHECK(ReadFloatLe(after, 1u) == doctest::Approx(tool_and_expected.second * 0.5f));
 		CHECK(patches[0].changed_rect.width() == 1u);
 		CHECK(patches[0].changed_rect.height() == 1u);
 		REQUIRE(working_set.edit_layers[0].height_blocks.size() == 1u);
-		CHECK(working_set.edit_layers[0].height_blocks[0].values[0] ==
-			doctest::Approx(tool_and_expected.second));
-		CHECK(working_set.edit_layers[0].height_blocks[0].coverage[0] ==
-			doctest::Approx(0.5f));
+		CHECK(working_set.edit_layers[0].height_blocks[0].scales[0] == 1.0f);
+		CHECK(working_set.edit_layers[0].height_blocks[0].biases[0] ==
+			doctest::Approx(tool_and_expected.second * 0.5f));
 	}
 
 	auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Additive);
@@ -415,9 +446,8 @@ TEST_CASE("Terrain brush signed sculpt and Noise kernels produce deterministic l
 	REQUIRE(ApplySingleDab(working_set, params, { 2.0f, 3.0f }, patches, dirty));
 	REQUIRE(patches.size() == 1u);
 	const auto after = DecodePatchBytes(patches[0], true);
-	CHECK(ReadFloatLe(after, 0u) == doctest::Approx(-0.0241159811f));
-	CHECK(ReadFloatLe(after, 1u) == 1.0f);
-	CHECK(HashBytes(after) == 0x9638bb639d549c5eull);
+	CHECK(ReadFloatLe(after, 0u) == 1.0f);
+	CHECK(ReadFloatLe(after, 1u) == doctest::Approx(-0.0241159811f));
 
 	SUBCASE("multiple dabs accumulate existing premultiplied additive contribution")
 	{
@@ -440,8 +470,8 @@ TEST_CASE("Terrain brush signed sculpt and Noise kernels produce deterministic l
 		const size_t center_index =
 			static_cast<size_t>(2u - block.changed_rect.min_z) * block.changed_rect.width() +
 			(2u - block.changed_rect.min_x);
-		CHECK(block.values[center_index] == doctest::Approx(3.0f));
-		CHECK(block.coverage[center_index] == 1.0f);
+		CHECK(block.scales[center_index] == 1.0f);
+		CHECK(block.biases[center_index] == doctest::Approx(3.0f));
 	}
 }
 
@@ -504,7 +534,7 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 		REQUIRE(patches.size() == 1u);
 		const auto after = DecodePatchBytes(patches[0], true);
 		CHECK(ReadFloatLe(after, 0u) == 0.0f);
-		CHECK(ReadFloatLe(after, 1u) == 1.0f);
+		CHECK(ReadFloatLe(after, 1u) == 0.0f);
 	}
 
 	SUBCASE("Smooth clamps all four neighbors at Terrain edges")
@@ -522,8 +552,8 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 		REQUIRE(ApplySingleDab(working_set, params, { 0.0f, 0.0f }, patches, dirty));
 		REQUIRE(patches.size() == 1u);
 		const auto after = DecodePatchBytes(patches[0], true);
-		CHECK(ReadFloatLe(after, 0u) == doctest::Approx(5.0f));
-		CHECK(ReadFloatLe(after, 1u) == 1.0f);
+		CHECK(ReadFloatLe(after, 0u) == 0.0f);
+		CHECK(ReadFloatLe(after, 1u) == doctest::Approx(5.0f));
 	}
 
 	SUBCASE("Flatten includes selected and lower layers but excludes higher layers")
@@ -533,19 +563,17 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 
 		AshEngine::TerrainEditLayer lower{};
 		lower.id = MakeLayerId(1u);
-		lower.height_blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
 		lower.height_blocks.push_back(MakeHeightBlock({ 0u, 0u }, 2u, 2u, 2.0f, 1.0f));
 		working_set.edit_layers.push_back(std::move(lower));
 
 		AshEngine::TerrainEditLayer selected{};
 		selected.id = MakeLayerId(2u);
-		selected.height_blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 		selected.height_blocks.push_back(MakeHeightBlock({ 0u, 0u }, 2u, 2u, 10.0f, 0.5f));
+		selected.height_blocks.back().scales[0] = 0.5f;
 		working_set.edit_layers.push_back(std::move(selected));
 
 		AshEngine::TerrainEditLayer higher{};
 		higher.id = MakeLayerId(3u);
-		higher.height_blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
 		higher.height_blocks.push_back(MakeHeightBlock({ 0u, 0u }, 2u, 2u, 100.0f, 1.0f));
 		working_set.edit_layers.push_back(std::move(higher));
 
@@ -556,8 +584,8 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 		REQUIRE(ApplySingleDab(working_set, params, { 2.0f, 2.0f }, patches, dirty));
 		REQUIRE(patches.size() == 1u);
 		const auto after = DecodePatchBytes(patches[0], true);
-		CHECK(ReadFloatLe(after, 0u) == doctest::Approx(7.0f));
-		CHECK(ReadFloatLe(after, 1u) == 1.0f);
+		CHECK(ReadFloatLe(after, 0u) == 0.0f);
+		CHECK(ReadFloatLe(after, 1u) == doctest::Approx(7.0f));
 	}
 
 	SUBCASE("Flatten captures only the first dab and ignores stale component caches")
@@ -589,8 +617,8 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 		const size_t later_sample_index =
 			static_cast<size_t>(1u - patches[0].changed_rect.min_z) * patches[0].changed_rect.width() +
 			(3u - patches[0].changed_rect.min_x);
-		CHECK(ReadFloatLe(after, later_sample_index * 2u) == doctest::Approx(10.0f));
-		CHECK(ReadFloatLe(after, later_sample_index * 2u + 1u) == 1.0f);
+		CHECK(ReadFloatLe(after, later_sample_index * 2u) == 0.0f);
+		CHECK(ReadFloatLe(after, later_sample_index * 2u + 1u) == doctest::Approx(10.0f));
 	}
 }
 
@@ -630,7 +658,6 @@ TEST_CASE("Terrain brush Paint and Erase produce deterministic one-hot and renor
 		working_set.edit_layers.push_back(std::move(lower));
 		AshEngine::TerrainEditLayer selected{};
 		selected.id = MakeLayerId(2u);
-		selected.height_blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
 		working_set.edit_layers.push_back(std::move(selected));
 
 		auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Erase);
@@ -701,8 +728,12 @@ TEST_CASE("Terrain brush emits canonical patches and merges the complete dirty h
 	CHECK(patches[0].changed_rect.min_z == 4u);
 	CHECK(patches[0].changed_rect.max_x_exclusive == 5u);
 	CHECK(patches[0].changed_rect.max_z_exclusive == 5u);
-	CHECK(patches[0].before_codec == AshEngine::TerrainBlockCodec::Rle);
-	CHECK(patches[0].after_codec == AshEngine::TerrainBlockCodec::None);
+	const auto before = DecodePatchBytes(patches[0], false);
+	const auto after = DecodePatchBytes(patches[0], true);
+	CHECK(ReadFloatLe(before, 0u) == 1.0f);
+	CHECK(ReadFloatLe(before, 1u) == 0.0f);
+	CHECK(ReadFloatLe(after, 0u) == 1.0f);
+	CHECK(ReadFloatLe(after, 1u) == 1.0f);
 	REQUIRE(dirty.size() == 4u);
 	CHECK((dirty[0] == AshEngine::TerrainComponentCoord{ 0u, 0u }));
 	CHECK((dirty[1] == AshEngine::TerrainComponentCoord{ 1u, 0u }));
@@ -750,8 +781,8 @@ TEST_CASE("Terrain brush sorts one patch per touched owner and preserves no-op g
 		REQUIRE(found != working_set.edit_layers[0].height_blocks.end());
 		CHECK(found->changed_rect.min_x == untouched.changed_rect.min_x);
 		CHECK(found->changed_rect.min_z == untouched.changed_rect.min_z);
-		CHECK(found->values == untouched.values);
-		CHECK(found->coverage == untouched.coverage);
+		CHECK(found->scales == untouched.scales);
+		CHECK(found->biases == untouched.biases);
 	}
 
 	SUBCASE("zero-strength strokes are no-ops")

@@ -485,8 +485,6 @@ namespace AshEngine
 			{
 				if (!layer.id.is_valid() || !layer_ids.insert(layer.id.bytes).second ||
 					!std::isfinite(layer.strength) ||
-					(layer.height_blend_mode != TerrainHeightBlendMode::Additive &&
-						layer.height_blend_mode != TerrainHeightBlendMode::Alpha) ||
 					layer.name.size() > k_max_string_size ||
 					layer.height_blocks.size() > std::numeric_limits<uint16_t>::max() ||
 					layer.weight_blocks.size() > std::numeric_limits<uint16_t>::max())
@@ -501,7 +499,7 @@ namespace AshEngine
 					size_t area = 0u;
 					if (!valid_rect(snapshot.layout, block.owner, block.changed_rect) ||
 						!checked_multiply(block.changed_rect.width(), block.changed_rect.height(), area) ||
-						block.values.size() != area || block.coverage.size() != area ||
+						block.scales.size() != area || block.biases.size() != area ||
 						!height_owners.insert({ block.owner.z, block.owner.x }).second)
 					{
 						set_error(TerrainContainerResult::InvalidData, out_error,
@@ -510,9 +508,8 @@ namespace AshEngine
 					}
 					for (size_t index = 0u; index < area; ++index)
 					{
-						if (!std::isfinite(block.values[index]) ||
-							!std::isfinite(block.coverage[index]) ||
-							block.coverage[index] < 0.0f || block.coverage[index] > 1.0f)
+						if (!std::isfinite(block.scales[index]) ||
+							!std::isfinite(block.biases[index]))
 						{
 							set_error(TerrainContainerResult::InvalidData, out_error,
 								"Terrain sparse height block values are invalid.");
@@ -673,7 +670,6 @@ namespace AshEngine
 				}
 				writer.put_u8(layer.visible ? 1u : 0u);
 				writer.put_float(layer.strength);
-				writer.put_u8(static_cast<uint8_t>(layer.height_blend_mode));
 				writer.put_u16(static_cast<uint16_t>(layer.height_blocks.size()));
 				writer.put_u16(static_cast<uint16_t>(layer.weight_blocks.size()));
 			}
@@ -709,14 +705,14 @@ namespace AshEngine
 			writer.put_u32(block.changed_rect.min_z);
 			writer.put_u32(block.changed_rect.max_x_exclusive);
 			writer.put_u32(block.changed_rect.max_z_exclusive);
-			writer.put_u32(static_cast<uint32_t>(block.values.size()));
-			for (float value : block.values)
+			writer.put_u32(static_cast<uint32_t>(block.scales.size()));
+			for (float value : block.scales)
 			{
 				writer.put_float(value);
 			}
-			for (float coverage : block.coverage)
+			for (float bias : block.biases)
 			{
-				writer.put_float(coverage);
+				writer.put_float(bias);
 			}
 			return writer.take();
 		}
@@ -996,7 +992,7 @@ namespace AshEngine
 				return set_error(TerrainContainerResult::Corrupt, out_error,
 					"Terrain container revision has invalid magic.");
 			}
-			if (header.version_le != TerrainContainerFormat::k_version ||
+			if (!TerrainContainerFormat::is_supported_version(header.version_le) ||
 				header.endian_marker_le != TerrainContainerFormat::k_little_endian_marker)
 			{
 				return set_error(TerrainContainerResult::UnsupportedVersion, out_error,
@@ -1224,6 +1220,7 @@ namespace AshEngine
 
 		struct LoadState
 		{
+			uint32_t container_version = TerrainContainerFormat::k_version;
 			std::shared_ptr<TerrainAssetSnapshot> snapshot{};
 			std::shared_ptr<std::vector<uint16_t>> base_heights{};
 			std::shared_ptr<std::vector<TerrainEditLayer>> edit_layers{};
@@ -1232,6 +1229,7 @@ namespace AshEngine
 			std::vector<bool> lod_error_seen{};
 			std::vector<std::vector<bool>> height_blocks_seen{};
 			std::vector<std::vector<bool>> weight_blocks_seen{};
+			std::vector<uint8_t> legacy_height_blend_modes{};
 			std::map<std::array<uint8_t, 16>, ExpectedEditRecordCount>
 				expected_edit_records{};
 			std::map<std::array<uint8_t, 16>, size_t> layer_indices{};
@@ -1276,13 +1274,16 @@ namespace AshEngine
 				}
 			}
 			uint32_t layer_count = 0u;
-			constexpr size_t minimum_layer_metadata_size = 30u;
+			const size_t minimum_layer_metadata_size =
+				state.container_version == TerrainContainerFormat::k_legacy_version
+					? 30u : 29u;
 			if (!reader.get_u32(layer_count) || layer_count > k_max_index_records ||
 				layer_count > reader.remaining() / minimum_layer_metadata_size)
 			{
 				return false;
 			}
 			auto layers = std::make_shared<std::vector<TerrainEditLayer>>(layer_count);
+			state.legacy_height_blend_modes.assign(layer_count, 0u);
 			state.height_blocks_seen.resize(layer_count);
 			state.weight_blocks_seen.resize(layer_count);
 			std::set<std::array<uint8_t, 16>> ids{};
@@ -1297,7 +1298,8 @@ namespace AshEngine
 				if (!reader.get_bytes(layer.id.bytes.data(), layer.id.bytes.size()) ||
 					!reader.get_string(layer.name) || !reader.get_u8(visible) || visible > 1u ||
 					!reader.get_float(layer.strength) || !std::isfinite(layer.strength) ||
-					!reader.get_u8(blend) || blend > static_cast<uint8_t>(TerrainHeightBlendMode::Alpha) ||
+					(state.container_version == TerrainContainerFormat::k_legacy_version &&
+						(!reader.get_u8(blend) || blend > 1u)) ||
 					!reader.get_u16(height_count) || !reader.get_u16(weight_count) ||
 					!layer.id.is_valid() || !ids.insert(layer.id.bytes).second)
 				{
@@ -1317,7 +1319,7 @@ namespace AshEngine
 					++matched_expected_layers;
 				}
 				layer.visible = visible != 0u;
-				layer.height_blend_mode = static_cast<TerrainHeightBlendMode>(blend);
+				state.legacy_height_blend_modes[index] = blend;
 				layer.height_blocks.resize(height_count);
 				layer.weight_blocks.resize(weight_count);
 				state.height_blocks_seen[index].resize(height_count, false);
@@ -1440,21 +1442,49 @@ namespace AshEngine
 			{
 				return false;
 			}
-			block.values.resize(area);
-			block.coverage.resize(area);
-			for (float& value : block.values)
+			block.scales.resize(area);
+			block.biases.resize(area);
+			if (state.container_version == TerrainContainerFormat::k_legacy_version)
 			{
-				if (!reader.get_float(value) || !std::isfinite(value))
+				std::vector<float> values(area, 0.0f);
+				std::vector<float> coverage(area, 0.0f);
+				for (float& value : values)
 				{
-					return false;
+					if (!reader.get_float(value) || !std::isfinite(value))
+					{
+						return false;
+					}
+				}
+				for (float& value : coverage)
+				{
+					if (!reader.get_float(value) || !std::isfinite(value) ||
+						value < 0.0f || value > 1.0f)
+					{
+						return false;
+					}
+				}
+				const bool alpha = state.legacy_height_blend_modes[layer_index] == 1u;
+				for (size_t index = 0u; index < area; ++index)
+				{
+					block.scales[index] = alpha ? 1.0f - coverage[index] : 1.0f;
+					block.biases[index] = coverage[index] * values[index];
 				}
 			}
-			for (float& coverage : block.coverage)
+			else
 			{
-				if (!reader.get_float(coverage) || !std::isfinite(coverage) ||
-					coverage < 0.0f || coverage > 1.0f)
+				for (float& value : block.scales)
 				{
-					return false;
+					if (!reader.get_float(value) || !std::isfinite(value))
+					{
+						return false;
+					}
+				}
+				for (float& value : block.biases)
+				{
+					if (!reader.get_float(value) || !std::isfinite(value))
+					{
+						return false;
+					}
 				}
 			}
 			if (!reader.finished())
@@ -1897,11 +1927,11 @@ namespace AshEngine
 				!reader.get_u32(rect.max_x_exclusive) ||
 				!reader.get_u32(rect.max_z_exclusive) || !reader.get_u32(count) ||
 				!exact_rect_equal(rect, block.changed_rect) ||
-				count != block.values.size() || block.coverage.size() != block.values.size())
+				count != block.scales.size() || block.biases.size() != block.scales.size())
 			{
 				return false;
 			}
-			for (float expected : block.values)
+			for (float expected : block.scales)
 			{
 				float value = 0.0f;
 				if (!reader.get_float(value) || !exact_float_equal(value, expected))
@@ -1909,7 +1939,7 @@ namespace AshEngine
 					return false;
 				}
 			}
-			for (float expected : block.coverage)
+			for (float expected : block.biases)
 			{
 				float value = 0.0f;
 				if (!reader.get_float(value) || !exact_float_equal(value, expected))
@@ -1960,11 +1990,13 @@ namespace AshEngine
 		auto load_previous_terrain_metadata(
 			std::ifstream& input,
 			const std::vector<BlockRecordDisk>& records,
+			uint32_t container_version,
 			uint64_t expected_generation,
 			std::shared_ptr<TerrainAssetSnapshot>& out_metadata,
 			std::string* out_error) -> TerrainContainerResult
 		{
 			LoadState state{};
+			state.container_version = container_version;
 			for (const BlockRecordDisk& record : records)
 			{
 				const bool height = record.kind == static_cast<uint8_t>(BlockKind::EditHeight);
@@ -2712,7 +2744,7 @@ namespace AshEngine
 					return set_error(TerrainContainerResult::Corrupt, out_error,
 						"Terrain container magic is invalid.");
 				}
-				if (header.version_le != TerrainContainerFormat::k_version ||
+				if (!TerrainContainerFormat::is_supported_version(header.version_le) ||
 					header.endian_marker_le != TerrainContainerFormat::k_little_endian_marker)
 				{
 					return set_error(TerrainContainerResult::UnsupportedVersion, out_error,
@@ -2725,6 +2757,80 @@ namespace AshEngine
 					return set_error(TerrainContainerResult::Corrupt, out_error,
 						"Terrain container header fields are invalid.");
 				}
+				if (header.version_le == TerrainContainerFormat::k_legacy_version)
+				{
+					input.close();
+					std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot{};
+					TerrainContainerLoadReport previous_report{};
+					const TerrainContainerResult load_result = load_terrain_container(
+						path, previous_snapshot, &previous_report, out_error);
+					if (load_result != TerrainContainerResult::Success &&
+						load_result != TerrainContainerResult::RecoveredPreviousGeneration)
+					{
+						return load_result;
+					}
+					if (!previous_snapshot ||
+						snapshot.content_generation <= previous_snapshot->content_generation ||
+						!validate_incremental_dirty_set(
+							snapshot,
+							dirty_components,
+							previous_snapshot->content_generation,
+							out_error))
+					{
+						return set_error(TerrainContainerResult::InvalidData, out_error,
+							"Terrain v1 upgrade requires a monotonic complete generation.");
+					}
+
+					static std::atomic<uint64_t> upgrade_serial{ 0u };
+					std::filesystem::path staged = path;
+					const uint64_t serial = upgrade_serial.fetch_add(
+						1u, std::memory_order_relaxed) + 1u;
+#if defined(_WIN32)
+					const uint64_t process_id = static_cast<uint64_t>(GetCurrentProcessId());
+#else
+					const uint64_t process_id = 0u;
+#endif
+					staged += ".upgrade." + std::to_string(process_id) + "." +
+						std::to_string(serial) + ".tmp";
+					TerrainContainerSaveReport staged_report{};
+					const TerrainContainerResult write_result = write_full_container(
+						staged, snapshot, &staged_report, out_error);
+					if (write_result != TerrainContainerResult::Success)
+					{
+						std::filesystem::remove(staged, error_code);
+						return write_result;
+					}
+					std::shared_ptr<const TerrainAssetSnapshot> validated{};
+					TerrainContainerLoadReport validated_report{};
+					if (load_terrain_container(
+							staged, validated, &validated_report, out_error) !=
+							TerrainContainerResult::Success || !validated ||
+						validated->content_generation != snapshot.content_generation ||
+						validated_report.source_revision != staged_report.committed_revision)
+					{
+						std::filesystem::remove(staged, error_code);
+						return set_error(TerrainContainerResult::Corrupt, out_error,
+							"Terrain v1 upgrade staging validation failed.");
+					}
+					const TerrainContainerResult commit_result =
+						TerrainContainerInternal::commit_staged_terrain_container_optimization(
+							path,
+							staged,
+							previous_report.source_revision,
+							validated_report.source_revision,
+							out_error);
+					if (commit_result != TerrainContainerResult::Success)
+					{
+						std::filesystem::remove(staged, error_code);
+						return commit_result;
+					}
+					if (out_report)
+					{
+						*out_report = staged_report;
+						out_report->previous_generation = previous_snapshot->content_generation;
+					}
+					return TerrainContainerResult::Success;
+				}
 				IndexSelection previous{};
 				const TerrainContainerResult selection_result =
 					select_live_index(input, file_size, header, previous, out_error);
@@ -2734,7 +2840,8 @@ namespace AshEngine
 				}
 				std::shared_ptr<TerrainAssetSnapshot> previous_metadata{};
 				const TerrainContainerResult metadata_result = load_previous_terrain_metadata(
-					input, previous.records, previous.descriptor.generation_le,
+					input, previous.records, header.version_le,
+					previous.descriptor.generation_le,
 					previous_metadata, out_error);
 				if (metadata_result != TerrainContainerResult::Success)
 				{
@@ -2875,7 +2982,7 @@ namespace AshEngine
 				return set_error(TerrainContainerResult::Corrupt, out_error,
 					"Terrain container magic is invalid.");
 			}
-			if (header.version_le != TerrainContainerFormat::k_version ||
+			if (!TerrainContainerFormat::is_supported_version(header.version_le) ||
 				header.endian_marker_le != TerrainContainerFormat::k_little_endian_marker)
 			{
 				return set_error(TerrainContainerResult::UnsupportedVersion, out_error,
@@ -2899,6 +3006,7 @@ namespace AshEngine
 			std::vector<BlockRecordDisk>& records = selection.records;
 
 			LoadState state{};
+			state.container_version = header.version_le;
 			for (const BlockRecordDisk& record : records)
 			{
 				const bool height = record.kind == static_cast<uint8_t>(BlockKind::EditHeight);

@@ -250,6 +250,26 @@ namespace
 			reinterpret_cast<const char*>(&descriptor), sizeof(descriptor)));
 	}
 
+	auto ReadU32Le(const std::vector<uint8_t>& bytes, size_t offset) -> uint32_t
+	{
+		REQUIRE(offset + 4u <= bytes.size());
+		return static_cast<uint32_t>(bytes[offset]) |
+			(static_cast<uint32_t>(bytes[offset + 1u]) << 8u) |
+			(static_cast<uint32_t>(bytes[offset + 2u]) << 16u) |
+			(static_cast<uint32_t>(bytes[offset + 3u]) << 24u);
+	}
+
+	auto RewriteFileVersion(
+		const std::filesystem::path& path,
+		uint32_t version) -> void
+	{
+		std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+		REQUIRE(file.is_open());
+		file.seekp(static_cast<std::streamoff>(offsetof(FileHeaderDisk, version_le)));
+		REQUIRE(file.write(
+			reinterpret_cast<const char*>(&version), sizeof(version)));
+	}
+
 	auto CheckMaterialEqual(
 		const AshEngine::TerrainMaterialLayerDesc& lhs,
 		const AshEngine::TerrainMaterialLayerDesc& rhs) -> void
@@ -489,7 +509,6 @@ TEST_CASE("Terrain container preserves ordered edit layer source blocks")
 	layer.name = "Sculpt and Paint";
 	layer.visible = false;
 	layer.strength = 0.375f;
-	layer.height_blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
 	layer.height_blocks.push_back({
 		{ 0u, 0u }, { 0u, 0u, 2u, 1u }, { 3.5f, -1.25f }, { 1.0f, 0.5f }
 	});
@@ -518,7 +537,6 @@ TEST_CASE("Terrain container preserves ordered edit layer source blocks")
 	CHECK(actual.name == layer.name);
 	CHECK(actual.visible == layer.visible);
 	CHECK(actual.strength == layer.strength);
-	CHECK(actual.height_blend_mode == layer.height_blend_mode);
 	REQUIRE(actual.height_blocks.size() == 1u);
 	CHECK(actual.height_blocks[0].owner == layer.height_blocks[0].owner);
 	CHECK(actual.height_blocks[0].changed_rect.min_x == layer.height_blocks[0].changed_rect.min_x);
@@ -527,8 +545,8 @@ TEST_CASE("Terrain container preserves ordered edit layer source blocks")
 		layer.height_blocks[0].changed_rect.max_x_exclusive);
 	CHECK(actual.height_blocks[0].changed_rect.max_z_exclusive ==
 		layer.height_blocks[0].changed_rect.max_z_exclusive);
-	CHECK(actual.height_blocks[0].values == layer.height_blocks[0].values);
-	CHECK(actual.height_blocks[0].coverage == layer.height_blocks[0].coverage);
+	CHECK(actual.height_blocks[0].scales == layer.height_blocks[0].scales);
+	CHECK(actual.height_blocks[0].biases == layer.height_blocks[0].biases);
 	REQUIRE(actual.weight_blocks.size() == 1u);
 	CHECK(actual.weight_blocks[0].owner == layer.weight_blocks[0].owner);
 	CHECK(actual.weight_blocks[0].changed_rect.min_x == layer.weight_blocks[0].changed_rect.min_x);
@@ -540,6 +558,100 @@ TEST_CASE("Terrain container preserves ordered edit layer source blocks")
 	CHECK(actual.weight_blocks[0].values == layer.weight_blocks[0].values);
 	CHECK(actual.weight_blocks[0].coverage == layer.weight_blocks[0].coverage);
 
+	std::filesystem::remove(path);
+}
+
+TEST_CASE("Terrain container migrates v1 height layers to affine v2 exactly")
+{
+	const std::filesystem::path path =
+		TestDirectory() / "height-layer-v1-migration.AshTerrain";
+	std::filesystem::remove(path);
+	const auto flat = MakeContainerSnapshot();
+	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>(*flat);
+	auto layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>();
+	for (uint8_t index = 0u; index < 2u; ++index)
+	{
+		AshEngine::TerrainEditLayer layer{};
+		layer.id.bytes[0] = static_cast<uint8_t>(0x80u + index);
+		layer.name = index == 0u ? "Legacy Additive" : "Legacy Alpha";
+		AshEngine::TerrainSparseHeightBlock block{};
+		block.owner = { 0u, 0u };
+		block.changed_rect = { 1u, 1u, 2u, 2u };
+		// The v2 writer emits these two planes verbatim. After the metadata/header
+		// fixture rewrite, the v1 reader interprets them as value/coverage.
+		block.scales = { index == 0u ? 4.0f : 20.0f };
+		block.biases = { index == 0u ? 0.5f : 0.25f };
+		layer.height_blocks.push_back(std::move(block));
+		layers->push_back(std::move(layer));
+	}
+	snapshot->edit_layers = layers;
+	std::string error{};
+	REQUIRE(AshEngine::save_terrain_container_incremental(
+		path, *snapshot, {}, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+
+	RewriteMetadataPayload(path, [](std::vector<uint8_t>& metadata)
+	{
+		size_t cursor = 44u;
+		for (size_t material = 0u;
+			material < AshEngine::k_terrain_material_layer_count;
+			++material)
+		{
+			for (size_t field = 0u; field < 4u; ++field)
+			{
+				const uint32_t length = ReadU32Le(metadata, cursor);
+				cursor += 4u + length;
+			}
+		}
+		REQUIRE(ReadU32Le(metadata, cursor) == 2u);
+		cursor += 4u;
+		for (uint8_t layer = 0u; layer < 2u; ++layer)
+		{
+			cursor += 16u;
+			const uint32_t name_length = ReadU32Le(metadata, cursor);
+			cursor += 4u + name_length;
+			cursor += 1u + 4u;
+			metadata.insert(
+				metadata.begin() + static_cast<std::ptrdiff_t>(cursor),
+				layer);
+			++cursor;
+			cursor += 2u + 2u;
+		}
+	});
+	RewriteFileVersion(path, AshEngine::TerrainContainerFormat::k_legacy_version);
+	const std::vector<uint8_t> v1_bytes = ReadAllBytes(path);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded{};
+	REQUIRE(AshEngine::load_terrain_container(path, loaded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	CHECK(ReadAllBytes(path) == v1_bytes);
+	REQUIRE(loaded);
+	REQUIRE(loaded->edit_layers);
+	REQUIRE(loaded->edit_layers->size() == 2u);
+	const auto& additive = (*loaded->edit_layers)[0].height_blocks[0];
+	const auto& alpha = (*loaded->edit_layers)[1].height_blocks[0];
+	CHECK(additive.scales[0] == 1.0f);
+	CHECK(additive.biases[0] == doctest::Approx(2.0f));
+	CHECK(alpha.scales[0] == doctest::Approx(0.75f));
+	CHECK(alpha.biases[0] == doctest::Approx(5.0f));
+
+	AshEngine::TerrainContainerSaveReport optimize_report{};
+	REQUIRE(AshEngine::optimize_terrain_container(
+		path, &optimize_report, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	FileHeaderDisk upgraded_header{};
+	std::vector<BlockRecordDisk> upgraded_records{};
+	REQUIRE(ReadHeaderAndIndex(path, upgraded_header, upgraded_records));
+	CHECK(upgraded_header.version_le == AshEngine::TerrainContainerFormat::k_version);
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> upgraded{};
+	REQUIRE(AshEngine::load_terrain_container(path, upgraded, nullptr, &error) ==
+		AshEngine::TerrainContainerResult::Success);
+	REQUIRE(upgraded);
+	REQUIRE(upgraded->edit_layers);
+	CHECK((*upgraded->edit_layers)[0].height_blocks[0].scales == additive.scales);
+	CHECK((*upgraded->edit_layers)[0].height_blocks[0].biases == additive.biases);
+	CHECK((*upgraded->edit_layers)[1].height_blocks[0].scales == alpha.scales);
+	CHECK((*upgraded->edit_layers)[1].height_blocks[0].biases == alpha.biases);
 	std::filesystem::remove(path);
 }
 
@@ -788,7 +900,7 @@ TEST_CASE("Terrain container bounds metadata block declarations by the live inde
 			reinterpret_cast<char*>(metadata.data()),
 			static_cast<std::streamsize>(metadata.size())));
 	}
-	const size_t height_count_offset = 202u + (*layers)[0].name.size();
+	const size_t height_count_offset = 201u + (*layers)[0].name.size();
 	const size_t extension_offset = height_count_offset + 4u;
 	const auto& extension_magic =
 		AshEngine::TerrainContainerFormat::k_layer_metadata_extension_magic;
@@ -855,8 +967,8 @@ TEST_CASE("Terrain container indexes many distinct edit layer IDs without ambigu
 	REQUIRE(loaded->edit_layers->size() == layer_count);
 	CHECK((*loaded->edit_layers)[0].id == (*layers)[0].id);
 	CHECK((*loaded->edit_layers)[layer_count - 1u].id == (*layers)[layer_count - 1u].id);
-	CHECK((*loaded->edit_layers)[0].height_blocks[0].values[0] == 0.0f);
-	CHECK((*loaded->edit_layers)[layer_count - 1u].height_blocks[0].values[0] ==
+	CHECK((*loaded->edit_layers)[0].height_blocks[0].scales[0] == 0.0f);
+	CHECK((*loaded->edit_layers)[layer_count - 1u].height_blocks[0].scales[0] ==
 		static_cast<float>(layer_count - 1u));
 	std::filesystem::remove(path);
 }
@@ -1035,7 +1147,7 @@ TEST_CASE("Terrain container source contract streams full saves and builds only 
 		source, "build_full_block_sources(snapshot, sources)") == 1u);
 	CHECK(source.find("stream_terrain_rle(") != std::string::npos);
 	CHECK(source.find("load_previous_terrain_metadata(") != std::string::npos);
-	CHECK(source.find("previous_snapshot") == std::string::npos);
+	CHECK(source.find("TerrainContainerFormat::k_legacy_version") != std::string::npos);
 }
 
 TEST_CASE("Terrain container recovery selects the previous valid descriptor")

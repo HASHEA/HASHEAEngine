@@ -383,7 +383,7 @@ TEST_CASE("Terrain stroke command replays the Engine patch API by stable identit
 	const std::vector<AshEngine::TerrainEditPatch> patches = MakeRaisePatches(edited);
 	REQUIRE_FALSE(patches.empty());
 	REQUIRE_FALSE(edited.edit_layers.front().height_blocks.empty());
-	const std::vector<float> expectedAfter = edited.edit_layers.front().height_blocks.front().values;
+	const std::vector<float> expectedAfter = edited.edit_layers.front().height_blocks.front().biases;
 
 	AshEditor::TerrainEditorService service{};
 	REQUIRE(service.OpenSnapshotForAuthoring(snapshot));
@@ -399,7 +399,7 @@ TEST_CASE("Terrain stroke command replays the Engine patch API by stable identit
 	const AshEngine::TerrainWorkingSet* applied = service.GetWorkingSet();
 	REQUIRE(applied != nullptr);
 	REQUIRE_FALSE(applied->edit_layers.front().height_blocks.empty());
-	CHECK(applied->edit_layers.front().height_blocks.front().values == expectedAfter);
+	CHECK(applied->edit_layers.front().height_blocks.front().biases == expectedAfter);
 	const uint64_t afterExecuteGeneration = applied->content_generation;
 
 	CHECK(command.Undo(context));
@@ -413,7 +413,7 @@ TEST_CASE("Terrain stroke command replays the Engine patch API by stable identit
 	const AshEngine::TerrainWorkingSet* redone = service.GetWorkingSet();
 	REQUIRE(redone != nullptr);
 	REQUIRE_FALSE(redone->edit_layers.front().height_blocks.empty());
-	CHECK(redone->edit_layers.front().height_blocks.front().values == expectedAfter);
+	CHECK(redone->edit_layers.front().height_blocks.front().biases == expectedAfter);
 	CHECK(redone->content_generation > afterUndoGeneration);
 }
 

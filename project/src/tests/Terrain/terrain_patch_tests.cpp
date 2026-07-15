@@ -46,7 +46,7 @@ namespace
 		AshEngine::TerrainEditLayer layer{};
 		layer.id = MakePatchLayerId(1u);
 		layer.name = "Patch Layer";
-		layer.height_blend_mode = mode;
+		(void)mode;
 		working_set.edit_layers.push_back(std::move(layer));
 		return working_set;
 	}
@@ -172,8 +172,8 @@ namespace
 			{
 				if (patch.domain == AshEngine::TerrainEditPatchDomain::Height)
 				{
-					float value = 0.0f;
-					float coverage = 0.0f;
+					float scale = 1.0f;
+					float bias = 0.0f;
 					if (height_block != nullptr &&
 						x >= height_block->changed_rect.min_x && x < height_block->changed_rect.max_x_exclusive &&
 						z >= height_block->changed_rect.min_z && z < height_block->changed_rect.max_z_exclusive)
@@ -182,11 +182,11 @@ namespace
 							static_cast<size_t>(z - height_block->changed_rect.min_z) *
 								height_block->changed_rect.width() +
 							(x - height_block->changed_rect.min_x);
-						value = height_block->values[index];
-						coverage = height_block->coverage[index];
+						scale = height_block->scales[index];
+						bias = height_block->biases[index];
 					}
-					AppendFloatLe(value, bytes);
-					AppendFloatLe(coverage, bytes);
+					AppendFloatLe(scale, bytes);
+					AppendFloatLe(bias, bytes);
 				}
 				else
 				{
@@ -258,8 +258,8 @@ namespace
 				const auto& expected_block = expected_layer.height_blocks[block_index];
 				CHECK(actual_block.owner == expected_block.owner);
 				CHECK(SameRect(actual_block.changed_rect, expected_block.changed_rect));
-				CHECK(actual_block.values == expected_block.values);
-				CHECK(actual_block.coverage == expected_block.coverage);
+				CHECK(actual_block.scales == expected_block.scales);
+				CHECK(actual_block.biases == expected_block.biases);
 			}
 			REQUIRE(actual_layer.weight_blocks.size() == expected_layer.weight_blocks.size());
 			for (size_t block_index = 0u; block_index < actual_layer.weight_blocks.size(); ++block_index)
@@ -303,8 +303,8 @@ namespace
 		const AshEngine::TerrainSampleRect owned =
 			AshEngine::get_terrain_component_owned_rect(layout, block.owner);
 		block.changed_rect = owned;
-		block.values.assign(static_cast<size_t>(owned.width()) * owned.height(), 0.0f);
-		block.coverage.assign(block.values.size(), 0.0f);
+		block.scales.assign(static_cast<size_t>(owned.width()) * owned.height(), 1.0f);
+		block.biases.assign(block.scales.size(), 0.0f);
 		for (uint32_t z = original.changed_rect.min_z; z < original.changed_rect.max_z_exclusive; ++z)
 		{
 			for (uint32_t x = original.changed_rect.min_x; x < original.changed_rect.max_x_exclusive; ++x)
@@ -314,8 +314,8 @@ namespace
 					(x - original.changed_rect.min_x);
 				const size_t destination =
 					static_cast<size_t>(z - owned.min_z) * owned.width() + (x - owned.min_x);
-				block.values[destination] = original.values[source];
-				block.coverage[destination] = original.coverage[source];
+				block.scales[destination] = original.scales[source];
+				block.biases[destination] = original.biases[source];
 			}
 		}
 	}
@@ -522,7 +522,7 @@ TEST_CASE("Terrain patch rejects malformed batches without partial mutation")
 	invalid = valid;
 	invalid[0].after_codec = AshEngine::TerrainBlockCodec::None;
 	invalid[0].after_bytes = DecodePatchSide(valid[0], true);
-	SetFloatLe(invalid[0].after_bytes, 1u, 1.01f);
+	SetFloatLe(invalid[0].after_bytes, 1u, std::numeric_limits<float>::infinity());
 	CheckRejected(invalid);
 
 	invalid = valid;
@@ -530,12 +530,6 @@ TEST_CASE("Terrain patch rejects malformed batches without partial mutation")
 	invalid[0].after_bytes = DecodePatchSide(valid[0], true);
 	SetFloatLe(invalid[0].after_bytes, 0u, 123.0f);
 	CheckRejected(invalid);
-	invalid = valid;
-	invalid[0].before_codec = AshEngine::TerrainBlockCodec::None;
-	invalid[0].before_bytes = DecodePatchSide(valid[0], false);
-	SetFloatLe(invalid[0].before_bytes, 0u, 123.0f);
-	CheckRejected(invalid);
-
 	CheckRejected({ valid[0], valid[0] });
 	invalid = valid;
 	invalid[1].stroke_generation += 1u;

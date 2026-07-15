@@ -463,7 +463,6 @@ namespace AshEngine
 						0x72u, 0x65u, 0x63u, 0x69u, 0x73u, 0x69u, 0x6fu, 0x6eu };
 				precision_layer.name = desc.format == TerrainHeightFileFormat::Exr
 					? "Imported EXR Precision" : "Imported R32F Precision";
-				precision_layer.height_blend_mode = TerrainHeightBlendMode::Alpha;
 				precision_layer.height_blocks.reserve(component_count);
 				for (uint32_t component_z = 0u;
 					component_z < desc.target_layout.component_count_z; ++component_z)
@@ -480,8 +479,8 @@ namespace AshEngine
 							desc.target_layout, block.owner);
 						const size_t area = static_cast<size_t>(block.changed_rect.width()) *
 							block.changed_rect.height();
-						block.values.resize(area);
-						block.coverage.assign(area, 1.0f);
+						block.scales.assign(area, 0.0f);
+						block.biases.resize(area);
 						precision_layer.height_blocks.push_back(std::move(block));
 					}
 				}
@@ -532,7 +531,7 @@ namespace AshEngine
 								desc.target_layout.component_count_x + owner.x];
 						const size_t local = static_cast<size_t>(z - block.changed_rect.min_z) *
 							block.changed_rect.width() + (x - block.changed_rect.min_x);
-						block.values[local] = world_height;
+						block.biases[local] = world_height;
 					}
 				}
 			}
@@ -772,12 +771,14 @@ namespace AshEngine
 						{
 							const size_t local = static_cast<size_t>(z - block.changed_rect.min_z) *
 								block.changed_rect.width() + (x - block.changed_rect.min_x);
-							if (x >= width || local >= block.values.size() ||
-								local >= block.coverage.size())
+							if (x >= width || local >= block.scales.size() ||
+								local >= block.biases.size())
 							{
 								return false;
 							}
-							out_values[x] = block.values[local] * block.coverage[local];
+							// A standalone heightmap cannot encode the input-dependent scale plane;
+							// export the layer's additive/target contribution (T(0)).
+							out_values[x] = block.biases[local];
 						}
 					}
 					return true;
