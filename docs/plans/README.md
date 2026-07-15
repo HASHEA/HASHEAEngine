@@ -4,7 +4,7 @@
 
 ## Active
 
-当前无 active plan。
+- 2026-07-14-gpu-driven-foundation.md：大世界 GPU 植被 Phase 1；Gate B 三轮、90% sample-time coverage、受保护 import 与 non-bless COMPARED 已全部通过，Task 1 可开始，尚未改 Phase 1 生产代码。
 
 ## Archived
 
