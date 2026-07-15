@@ -11,9 +11,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -324,23 +327,74 @@ TEST_CASE("Terrain shader bindings include fixed surface resources")
 	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);
 }
 
-TEST_CASE("Terrain GBuffer normals follow the morphed raster surface")
+TEST_CASE("Terrain GBuffer normals use canonical gradients and coarse-edge interpolation")
 {
+	const std::string common = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli");
 	const std::string surface = ReadSource(
 		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
+	const std::string compact_common = CompactSource(common);
 	const std::string compact_surface = CompactSource(surface);
 
 	CHECK(compact_surface.find(
-		"#ifTERRAIN_GBUFFERfloat3position_ws:TEXCOORD0;") !=
+		"#ifTERRAIN_GBUFFERfloat3position_ws:TEXCOORD0;"
+		"float3normal_ws:TEXCOORD1;") !=
 		std::string::npos);
 	CHECK(CountText(surface, "position_ws : TEXCOORD0") == 1u);
-	CHECK(surface.find("normal_ws : TEXCOORD0") == std::string::npos);
+	CHECK(CountText(surface, "normal_ws : TEXCOORD1") == 1u);
+	CHECK(common.find("AshTerrainCanonicalHeightGradient") != std::string::npos);
+	CHECK(common.find("AshTerrainInterpolateCanonicalEdgeGradient") !=
+		std::string::npos);
+	CHECK(common.find("AshTerrainShadingHeightGradient") != std::string::npos);
+	CHECK(compact_common.find(
+		"constfloat2canonical_gradient=AshTerrainCanonicalHeightGradient("
+		"height_words,global_sample,height_offset,height_range,"
+		"sample_spacing);") != std::string::npos);
+	CHECK(compact_common.find(
+		"constuintcoarse_neighbor_step=min((1u<<instance.lod)*2u,"
+		"AshTerrainComponentQuads);") != std::string::npos);
+	CHECK(compact_common.find(
+		"returnAshTerrainInterpolateCanonicalEdgeGradient("
+		"height_words,global_sample,coarse_neighbor_step,false,"
+		"height_offset,height_range,sample_spacing);") !=
+		std::string::npos);
+	CHECK(compact_common.find(
+		"returnAshTerrainInterpolateCanonicalEdgeGradient("
+		"height_words,global_sample,coarse_neighbor_step,true,"
+		"height_offset,height_range,sample_spacing);") !=
+		std::string::npos);
+	CHECK(common.find("AshTerrainHeightGradientAtStride") == std::string::npos);
+	CHECK(common.find("AshTerrainMorphHeightGradient") == std::string::npos);
 	CHECK(compact_surface.find(
 		"#ifTERRAIN_GBUFFERoutput.position_ws=mul((float3x3)"
 		"AshTerrainObjectToWorld,position_os);") != std::string::npos);
 	CHECK(compact_surface.find(
-		"output.position_ws=mul(AshTerrainObjectToWorld,"
-		"float4(position_os,1.0)).xyz;") == std::string::npos);
+		"constfloat2height_gradient_os=AshTerrainShadingHeightGradient("
+		"TerrainHeightWords,instance,local_sample,"
+		"AshTerrainHeightSpacingUvScale.x,AshTerrainHeightSpacingUvScale.y,"
+		"AshTerrainHeightSpacingUvScale.z);") != std::string::npos);
+	CHECK(compact_surface.find(
+		"constfloat3normal_vector_ws=cross(tangent_z_ws,tangent_x_ws);") !=
+		std::string::npos);
+	CHECK(compact_surface.find(
+		"output.normal_ws=isfinite(normal_length_squared)&&"
+		"normal_length_squared>0.0?normal_vector_ws:0.0.xxx;") !=
+		std::string::npos);
+
+	const size_t shading_gradient = compact_surface.find(
+		"constfloat2height_gradient_os=AshTerrainShadingHeightGradient(");
+	const size_t raw_normal_output = compact_surface.find(
+		"output.normal_ws=", shading_gradient);
+	REQUIRE(shading_gradient != std::string::npos);
+	REQUIRE(raw_normal_output != std::string::npos);
+	CHECK(compact_surface.substr(
+		shading_gradient,
+		raw_normal_output - shading_gradient).find("rsqrt(") ==
+		std::string::npos);
+	CHECK(compact_surface.substr(
+		shading_gradient,
+		raw_normal_output - shading_gradient).find("normalize(") ==
+		std::string::npos);
 
 	const size_t vertex_shader_end = surface.find("return output;");
 	const size_t pixel_gbuffer_begin = surface.find(
@@ -353,50 +407,25 @@ TEST_CASE("Terrain GBuffer normals follow the morphed raster surface")
 		pixel_gbuffer_begin,
 		lod_debug_begin - pixel_gbuffer_begin));
 
+	const size_t smooth_normal_check = pixel_gbuffer.find(
+		"constfloatinterpolated_normal_length_squared="
+		"dot(input.normal_ws,input.normal_ws);");
+	const size_t derivative_fallback = pixel_gbuffer.find(
+		"constfloat3position_dx_ws=ddx(input.position_ws);");
+	REQUIRE(smooth_normal_check != std::string::npos);
+	REQUIRE(derivative_fallback != std::string::npos);
+	CHECK(smooth_normal_check < derivative_fallback);
 	CHECK(pixel_gbuffer.find(
-		"constfloat3terrain_up_vector_ws=mul((float3x3)"
-		"AshTerrainObjectToWorld,float3(0.0,1.0,0.0));") != std::string::npos);
-	CHECK(pixel_gbuffer.find(
-		"constfloatterrain_up_length_squared=dot(terrain_up_vector_ws,"
-		"terrain_up_vector_ws);") != std::string::npos);
-	CHECK(pixel_gbuffer.find(
-		"float3terrain_up_ws=float3(0.0,1.0,0.0);if(isfinite("
-		"terrain_up_length_squared)&&terrain_up_length_squared>0.0){"
-		"terrain_up_ws=terrain_up_vector_ws*rsqrt("
-		"terrain_up_length_squared);}") != std::string::npos);
-
-	CHECK(pixel_gbuffer.find(
-		"constfloat3position_dx_ws=ddx(input.position_ws);"
-		"constfloat3position_dy_ws=ddy(input.position_ws);") != std::string::npos);
-	CHECK(pixel_gbuffer.find(
-		"constfloatposition_dx_length_squared=dot(position_dx_ws,position_dx_ws);"
-		"constfloatposition_dy_length_squared=dot(position_dy_ws,position_dy_ws);") !=
+		"if(isfinite(interpolated_normal_length_squared)&&"
+		"interpolated_normal_length_squared>0.0){geometric_normal="
+		"input.normal_ws*rsqrt(interpolated_normal_length_squared);") !=
 		std::string::npos);
 	CHECK(pixel_gbuffer.find(
-		"if(isfinite(position_dx_length_squared)&&position_dx_length_squared>0.0&&"
-		"isfinite(position_dy_length_squared)&&position_dy_length_squared>0.0){"
-		"constfloat3position_dx_direction_ws=position_dx_ws*rsqrt("
-		"position_dx_length_squared);constfloat3position_dy_direction_ws="
-		"position_dy_ws*rsqrt(position_dy_length_squared);") != std::string::npos);
-	const bool cross_uses_derivative_directions = pixel_gbuffer.find(
-		"constfloat3geometric_normal_cross=cross(position_dx_direction_ws,"
-		"position_dy_direction_ws);") != std::string::npos || pixel_gbuffer.find(
-		"constfloat3geometric_normal_cross=cross(position_dy_direction_ws,"
-		"position_dx_direction_ws);") != std::string::npos;
-	CHECK(cross_uses_derivative_directions);
-	CHECK(pixel_gbuffer.find(
-		"constfloatgeometric_normal_length_squared=dot(geometric_normal_cross,"
-		"geometric_normal_cross);") != std::string::npos);
-	CHECK(pixel_gbuffer.find("float3geometric_normal=terrain_up_ws;") !=
+		"else{constfloat3position_dx_ws=ddx(input.position_ws);"
+		"constfloat3position_dy_ws=ddy(input.position_ws);") !=
 		std::string::npos);
-	CHECK(pixel_gbuffer.find(
-		"if(isfinite(geometric_normal_length_squared)&&"
-		"geometric_normal_length_squared>1e-8){geometric_normal="
-		"geometric_normal_cross*rsqrt(geometric_normal_length_squared);"
-		"if(dot(geometric_normal,terrain_up_ws)<0.0){"
-		"geometric_normal=-geometric_normal;}}") != std::string::npos);
-	CHECK(pixel_gbuffer.find("geometric_normal_length_squared>1e-12") ==
-		std::string::npos);
+	CHECK(CountText(pixel_gbuffer, "ddx(") == 1u);
+	CHECK(CountText(pixel_gbuffer, "ddy(") == 1u);
 
 	const std::string non_gbuffer_pixel_shaders = CompactSource(
 		surface.substr(lod_debug_begin));
@@ -404,6 +433,213 @@ TEST_CASE("Terrain GBuffer normals follow the morphed raster surface")
 	CHECK(non_gbuffer_pixel_shaders.find("ddx(") == std::string::npos);
 	CHECK(non_gbuffer_pixel_shaders.find("ddy(") == std::string::npos);
 	CHECK(surface.find("AshTerrainLocalNormal(") == std::string::npos);
+}
+
+TEST_CASE("Terrain canonical edge normals match adjacent LOD interpolation")
+{
+	const std::string common = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli");
+	REQUIRE(common.find("AshTerrainShadingHeightGradient") !=
+		std::string::npos);
+
+	struct Gradient
+	{
+		double x = 0.0;
+		double z = 0.0;
+	};
+	struct Instance
+	{
+		uint32_t component_x = 0u;
+		uint32_t component_z = 0u;
+		uint32_t lod = 0u;
+		uint32_t edge_mask = 0u;
+		uint32_t local_x = 0u;
+		uint32_t local_z = 0u;
+		double morph = 0.0;
+	};
+	constexpr int component_quads = 256;
+	constexpr int max_sample = 8192;
+	auto height = [](double x, double z)
+	{
+		return 0.000001 * x * x * x +
+			0.000002 * z * z * z +
+			0.0000001 * x * z * z;
+	};
+	auto canonical_gradient = [&](int global_x, int global_z)
+	{
+		global_x = std::clamp(global_x, 0, max_sample);
+		global_z = std::clamp(global_z, 0, max_sample);
+		const int west = std::max(global_x - 1, 0);
+		const int east = std::min(global_x + 1, max_sample);
+		const int north = std::max(global_z - 1, 0);
+		const int south = std::min(global_z + 1, max_sample);
+		return Gradient{
+			(height(east, global_z) - height(west, global_z)) /
+				static_cast<double>(east - west),
+			(height(global_x, south) - height(global_x, north)) /
+				static_cast<double>(south - north)
+		};
+	};
+	auto interpolate = [](Gradient begin, Gradient end, double fraction)
+	{
+		return Gradient{
+			begin.x + (end.x - begin.x) * fraction,
+			begin.z + (end.z - begin.z) * fraction
+		};
+	};
+	auto edge_gradient = [&](int global_x,
+		int global_z,
+		int coarse_step,
+		bool along_x)
+	{
+		const int varying = along_x ? global_x : global_z;
+		const int segment_begin = (varying / coarse_step) * coarse_step;
+		const int segment_end = std::min(
+			segment_begin + coarse_step, max_sample);
+		if (segment_end <= segment_begin)
+		{
+			return canonical_gradient(global_x, global_z);
+		}
+		const Gradient begin = along_x
+			? canonical_gradient(segment_begin, global_z)
+			: canonical_gradient(global_x, segment_begin);
+		const Gradient end = along_x
+			? canonical_gradient(segment_end, global_z)
+			: canonical_gradient(global_x, segment_end);
+		return interpolate(
+			begin,
+			end,
+			static_cast<double>(varying - segment_begin) /
+				static_cast<double>(segment_end - segment_begin));
+	};
+	auto shading_gradient = [&](const Instance& instance)
+	{
+		const int global_x = static_cast<int>(instance.component_x) *
+			component_quads + static_cast<int>(instance.local_x);
+		const int global_z = static_cast<int>(instance.component_z) *
+			component_quads + static_cast<int>(instance.local_z);
+		const bool west = instance.local_x == 0u &&
+			(instance.edge_mask & 1u) != 0u;
+		const bool east = instance.local_x == component_quads &&
+			(instance.edge_mask & 2u) != 0u;
+		const bool north = instance.local_z == 0u &&
+			(instance.edge_mask & 4u) != 0u;
+		const bool south = instance.local_z == component_quads &&
+			(instance.edge_mask & 8u) != 0u;
+		const int coarse_neighbor_step = std::min(
+			(1 << instance.lod) * 2, component_quads);
+		(void)instance.morph;
+		if (west || east)
+		{
+			return edge_gradient(
+				global_x, global_z, coarse_neighbor_step, false);
+		}
+		if (north || south)
+		{
+			return edge_gradient(
+				global_x, global_z, coarse_neighbor_step, true);
+		}
+		return canonical_gradient(global_x, global_z);
+	};
+	auto check_equal = [](Gradient actual, Gradient expected)
+	{
+		CHECK(actual.x == doctest::Approx(expected.x).epsilon(1e-10));
+		CHECK(actual.z == doctest::Approx(expected.z).epsilon(1e-10));
+	};
+
+	// Same-LOD components reach one shared global sample through different
+	// component-local coordinates.
+	const Instance same_lod_west{ 0u, 0u, 2u, 0u, 256u, 12u, 0.0 };
+	const Instance same_lod_east{ 1u, 0u, 2u, 0u, 0u, 12u, 1.0 };
+	check_equal(
+		shading_gradient(same_lod_west),
+		shading_gradient(same_lod_east));
+
+	// Fine LOD1 z=10 is halfway between the adjacent LOD2 edge vertices z=8
+	// and z=12. The fine edge mask must select that exact raster interpolation.
+	const Instance fine_edge{ 0u, 0u, 1u, 2u, 256u, 10u, 0.0 };
+	const Instance coarse_begin{ 1u, 0u, 2u, 0u, 0u, 8u, 0.0 };
+	const Instance coarse_end{ 1u, 0u, 2u, 0u, 0u, 12u, 1.0 };
+	const Gradient coarse_raster_interpolation = interpolate(
+		shading_gradient(coarse_begin),
+		shading_gradient(coarse_end),
+		0.5);
+	const Gradient fine_edge_gradient = shading_gradient(fine_edge);
+	check_equal(fine_edge_gradient, coarse_raster_interpolation);
+	Instance fine_without_edge_mask = fine_edge;
+	fine_without_edge_mask.edge_mask = 0u;
+	CHECK(std::abs(
+		shading_gradient(fine_without_edge_mask).z -
+		fine_edge_gradient.z) > 1e-9);
+
+	// Shading intentionally ignores geomorph factor; all three morph states
+	// must preserve the same seam normal field.
+	Instance fine_half_morph = fine_edge;
+	fine_half_morph.morph = 0.5;
+	Instance fine_full_morph = fine_edge;
+	fine_full_morph.morph = 1.0;
+	check_equal(shading_gradient(fine_half_morph), fine_edge_gradient);
+	check_equal(shading_gradient(fine_full_morph), fine_edge_gradient);
+
+	// A corner with two coarse neighbours is an endpoint of both segments, so
+	// edge priority cannot change its canonical gradient.
+	const Instance double_coarse_corner{
+		0u, 0u, 1u, 2u | 8u, 256u, 256u, 0.5 };
+	check_equal(
+		shading_gradient(double_coarse_corner),
+		canonical_gradient(256, 256));
+
+	// Global outer boundaries use finite one-sided full-resolution differences.
+	const Instance global_west{ 0u, 0u, 0u, 0u, 0u, 16u, 0.0 };
+	const Instance global_east{ 31u, 0u, 0u, 0u, 256u, 16u, 0.0 };
+	const Gradient west_gradient = shading_gradient(global_west);
+	const Gradient east_gradient = shading_gradient(global_east);
+	CHECK(west_gradient.x == doctest::Approx(
+		height(1.0, 16.0) - height(0.0, 16.0)).epsilon(1e-10));
+	CHECK(east_gradient.x == doctest::Approx(
+		height(8192.0, 16.0) - height(8191.0, 16.0)).epsilon(1e-10));
+
+	// The previous stride-4 derivative is not the adjacent coarse raster
+	// interpolation and therefore cannot be used as the fine-edge contract.
+	const Gradient rejected_stride_gradient{
+		(height(260.0, 10.0) - height(252.0, 10.0)) / 8.0,
+		(height(256.0, 14.0) - height(256.0, 6.0)) / 8.0
+	};
+	CHECK(std::abs(
+		rejected_stride_gradient.z - coarse_raster_interpolation.z) > 1e-9);
+
+	struct Vec3
+	{
+		double x = 0.0;
+		double y = 0.0;
+		double z = 0.0;
+	};
+	auto transform_raw_normal = [](Gradient value)
+	{
+		// cross(diag(2,3,4) * (0,dz,1),
+		//       diag(2,3,4) * (1,dx,0))
+		return Vec3{ -12.0 * value.x, 8.0, -6.0 * value.z };
+	};
+	auto interpolate_vec3 = [](Vec3 begin, Vec3 end, double fraction)
+	{
+		return Vec3{
+			begin.x + (end.x - begin.x) * fraction,
+			begin.y + (end.y - begin.y) * fraction,
+			begin.z + (end.z - begin.z) * fraction
+		};
+	};
+	const Vec3 coarse_world_interpolation = interpolate_vec3(
+		transform_raw_normal(shading_gradient(coarse_begin)),
+		transform_raw_normal(shading_gradient(coarse_end)),
+		0.5);
+	const Vec3 fine_world_normal = transform_raw_normal(
+		fine_edge_gradient);
+	CHECK(fine_world_normal.x ==
+		doctest::Approx(coarse_world_interpolation.x));
+	CHECK(fine_world_normal.y ==
+		doctest::Approx(coarse_world_interpolation.y));
+	CHECK(fine_world_normal.z ==
+		doctest::Approx(coarse_world_interpolation.z));
 }
 
 TEST_CASE("Terrain instance storage uses the cross-backend staging upload path")

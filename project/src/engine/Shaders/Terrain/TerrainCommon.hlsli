@@ -116,6 +116,22 @@ float AshTerrainCoarseTriangleHeight(
         (1.0 - fraction.x) * (h01 - h11);
 }
 
+float AshTerrainMorphFactorAtSample(
+    AshTerrainInstance instance,
+    uint2 local_sample)
+{
+    const bool west = local_sample.x == 0u &&
+        (instance.neighbor_edge_mask & 1u) != 0u;
+    const bool east = local_sample.x == AshTerrainComponentQuads &&
+        (instance.neighbor_edge_mask & 2u) != 0u;
+    const bool north = local_sample.y == 0u &&
+        (instance.neighbor_edge_mask & 4u) != 0u;
+    const bool south = local_sample.y == AshTerrainComponentQuads &&
+        (instance.neighbor_edge_mask & 8u) != 0u;
+    return (west || east || north || south) ?
+        1.0 : saturate(instance.morph_factor);
+}
+
 float AshTerrainMorphHeight(
     StructuredBuffer<uint> height_words,
     AshTerrainInstance instance,
@@ -139,6 +155,136 @@ float AshTerrainMorphHeight(
         height_offset,
         height_range);
 
+    const float morph = AshTerrainMorphFactorAtSample(
+        instance,
+        local_sample);
+    return lerp(fine_height, coarse_height, morph);
+}
+
+float2 AshTerrainCanonicalHeightGradient(
+    StructuredBuffer<uint> height_words,
+    int2 global_sample,
+    float height_offset,
+    float height_range,
+    float sample_spacing)
+{
+    const int max_sample = int(
+        AshTerrainComponentCount * AshTerrainComponentQuads);
+    const int2 center_sample = clamp(
+        global_sample,
+        int2(0, 0),
+        int2(max_sample, max_sample));
+    const int2 west_sample = int2(
+        max(center_sample.x - 1, 0),
+        center_sample.y);
+    const int2 east_sample = int2(
+        min(center_sample.x + 1, max_sample),
+        center_sample.y);
+    const int2 north_sample = int2(
+        center_sample.x,
+        max(center_sample.y - 1, 0));
+    const int2 south_sample = int2(
+        center_sample.x,
+        min(center_sample.y + 1, max_sample));
+    const float west = AshTerrainLoadGlobalHeight(
+        height_words, west_sample, height_offset, height_range);
+    const float east = AshTerrainLoadGlobalHeight(
+        height_words, east_sample, height_offset, height_range);
+    const float north = AshTerrainLoadGlobalHeight(
+        height_words, north_sample, height_offset, height_range);
+    const float south = AshTerrainLoadGlobalHeight(
+        height_words, south_sample, height_offset, height_range);
+    const float safe_spacing = max(sample_spacing, 1e-5);
+    const float x_span = max(
+        float(east_sample.x - west_sample.x) * safe_spacing,
+        1e-5);
+    const float z_span = max(
+        float(south_sample.y - north_sample.y) * safe_spacing,
+        1e-5);
+    const float2 gradient = float2(
+        (east - west) / x_span,
+        (south - north) / z_span);
+    return isfinite(gradient.x) && isfinite(gradient.y) ?
+        gradient : 0.0.xx;
+}
+
+float2 AshTerrainInterpolateCanonicalEdgeGradient(
+    StructuredBuffer<uint> height_words,
+    int2 global_sample,
+    uint coarse_neighbor_step,
+    bool along_x,
+    float height_offset,
+    float height_range,
+    float sample_spacing)
+{
+    const int max_sample = int(
+        AshTerrainComponentCount * AshTerrainComponentQuads);
+    const int2 center_sample = clamp(
+        global_sample,
+        int2(0, 0),
+        int2(max_sample, max_sample));
+    const int safe_step = int(max(coarse_neighbor_step, 1u));
+    const int varying_sample = along_x ?
+        center_sample.x : center_sample.y;
+    const int segment_begin =
+        (varying_sample / safe_step) * safe_step;
+    const int segment_end = min(segment_begin + safe_step, max_sample);
+    if (segment_end <= segment_begin)
+    {
+        return AshTerrainCanonicalHeightGradient(
+            height_words,
+            center_sample,
+            height_offset,
+            height_range,
+            sample_spacing);
+    }
+
+    int2 begin_sample = center_sample;
+    int2 end_sample = center_sample;
+    if (along_x)
+    {
+        begin_sample.x = segment_begin;
+        end_sample.x = segment_end;
+    }
+    else
+    {
+        begin_sample.y = segment_begin;
+        end_sample.y = segment_end;
+    }
+    const float2 begin_gradient = AshTerrainCanonicalHeightGradient(
+        height_words,
+        begin_sample,
+        height_offset,
+        height_range,
+        sample_spacing);
+    const float2 end_gradient = AshTerrainCanonicalHeightGradient(
+        height_words,
+        end_sample,
+        height_offset,
+        height_range,
+        sample_spacing);
+    const float fraction = saturate(
+        float(varying_sample - segment_begin) /
+        float(segment_end - segment_begin));
+    return lerp(begin_gradient, end_gradient, fraction);
+}
+
+float2 AshTerrainShadingHeightGradient(
+    StructuredBuffer<uint> height_words,
+    AshTerrainInstance instance,
+    uint2 local_sample,
+    float height_offset,
+    float height_range,
+    float sample_spacing)
+{
+    const int2 global_sample = int2(
+        instance.component_coord * AshTerrainComponentQuads + local_sample);
+    const float2 canonical_gradient = AshTerrainCanonicalHeightGradient(
+        height_words,
+        global_sample,
+        height_offset,
+        height_range,
+        sample_spacing);
     const bool west = local_sample.x == 0u &&
         (instance.neighbor_edge_mask & 1u) != 0u;
     const bool east = local_sample.x == AshTerrainComponentQuads &&
@@ -147,28 +293,32 @@ float AshTerrainMorphHeight(
         (instance.neighbor_edge_mask & 4u) != 0u;
     const bool south = local_sample.y == AshTerrainComponentQuads &&
         (instance.neighbor_edge_mask & 8u) != 0u;
-    const float morph = (west || east || north || south) ?
-        1.0 : saturate(instance.morph_factor);
-    return lerp(fine_height, coarse_height, morph);
-}
-
-float3 AshTerrainLocalNormal(
-    StructuredBuffer<uint> height_words,
-    int2 global_sample,
-    float height_offset,
-    float height_range,
-    float sample_spacing)
-{
-    const float west = AshTerrainLoadGlobalHeight(
-        height_words, global_sample + int2(-1, 0), height_offset, height_range);
-    const float east = AshTerrainLoadGlobalHeight(
-        height_words, global_sample + int2(1, 0), height_offset, height_range);
-    const float north = AshTerrainLoadGlobalHeight(
-        height_words, global_sample + int2(0, -1), height_offset, height_range);
-    const float south = AshTerrainLoadGlobalHeight(
-        height_words, global_sample + int2(0, 1), height_offset, height_range);
-    const float safe_spacing = max(sample_spacing, 1e-5);
-    return normalize(float3(west - east, 2.0 * safe_spacing, north - south));
+    const uint coarse_neighbor_step = min(
+        (1u << instance.lod) * 2u,
+        AshTerrainComponentQuads);
+    if (west || east)
+    {
+        return AshTerrainInterpolateCanonicalEdgeGradient(
+            height_words,
+            global_sample,
+            coarse_neighbor_step,
+            false,
+            height_offset,
+            height_range,
+            sample_spacing);
+    }
+    if (north || south)
+    {
+        return AshTerrainInterpolateCanonicalEdgeGradient(
+            height_words,
+            global_sample,
+            coarse_neighbor_step,
+            true,
+            height_offset,
+            height_range,
+            sample_spacing);
+    }
+    return canonical_gradient;
 }
 
 float2 AshTerrainAtlasUv(AshTerrainInstance instance, float2 local_sample)

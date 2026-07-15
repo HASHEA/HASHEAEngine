@@ -42,13 +42,14 @@ struct AshTerrainVertexOutput
     float4 position : SV_Position;
 #if TERRAIN_GBUFFER
     float3 position_ws : TEXCOORD0;
-    float2 local_sample : TEXCOORD1;
-    float2 material_uv : TEXCOORD2;
-    float4 current_clip : TEXCOORD3;
-    float4 previous_clip : TEXCOORD4;
-    nointerpolation uint atlas_slot : TEXCOORD5;
-    nointerpolation uint high_resolution_weights : TEXCOORD6;
-    nointerpolation uint2 component_coord : TEXCOORD7;
+    float3 normal_ws : TEXCOORD1;
+    float2 local_sample : TEXCOORD2;
+    float2 material_uv : TEXCOORD3;
+    float4 current_clip : TEXCOORD4;
+    float4 previous_clip : TEXCOORD5;
+    nointerpolation uint atlas_slot : TEXCOORD6;
+    nointerpolation uint high_resolution_weights : TEXCOORD7;
+    nointerpolation uint2 component_coord : TEXCOORD8;
 #endif
 #if TERRAIN_LOD_DEBUG
     nointerpolation uint lod : TEXCOORD0;
@@ -165,6 +166,25 @@ AshTerrainVertexOutput VSMain(uint vertex_id : SV_VertexID, uint instance_id : S
     output.position_ws = mul(
         (float3x3)AshTerrainObjectToWorld,
         position_os);
+    const float2 height_gradient_os = AshTerrainShadingHeightGradient(
+        TerrainHeightWords,
+        instance,
+        local_sample,
+        AshTerrainHeightSpacingUvScale.x,
+        AshTerrainHeightSpacingUvScale.y,
+        AshTerrainHeightSpacingUvScale.z);
+    const float3 tangent_x_ws = mul(
+        (float3x3)AshTerrainObjectToWorld,
+        float3(1.0, height_gradient_os.x, 0.0));
+    const float3 tangent_z_ws = mul(
+        (float3x3)AshTerrainObjectToWorld,
+        float3(0.0, height_gradient_os.y, 1.0));
+    const float3 normal_vector_ws = cross(tangent_z_ws, tangent_x_ws);
+    const float normal_length_squared = dot(
+        normal_vector_ws,
+        normal_vector_ws);
+    output.normal_ws = isfinite(normal_length_squared) &&
+        normal_length_squared > 0.0 ? normal_vector_ws : 0.0.xxx;
     output.local_sample = float2(local_sample);
     output.material_uv = local_xz * AshTerrainHeightSpacingUvScale.w;
     output.current_clip = output.position;
@@ -230,30 +250,49 @@ AshTerrainGBufferOutput PSMain(AshTerrainVertexOutput input)
     {
         terrain_up_ws = terrain_up_vector_ws * rsqrt(terrain_up_length_squared);
     }
-    const float3 position_dx_ws = ddx(input.position_ws);
-    const float3 position_dy_ws = ddy(input.position_ws);
-    const float position_dx_length_squared = dot(position_dx_ws, position_dx_ws);
-    const float position_dy_length_squared = dot(position_dy_ws, position_dy_ws);
     float3 geometric_normal = terrain_up_ws;
-    if (isfinite(position_dx_length_squared) && position_dx_length_squared > 0.0 &&
-        isfinite(position_dy_length_squared) && position_dy_length_squared > 0.0)
+    const float interpolated_normal_length_squared =
+        dot(input.normal_ws, input.normal_ws);
+    if (isfinite(interpolated_normal_length_squared) &&
+        interpolated_normal_length_squared > 0.0)
     {
-        const float3 position_dx_direction_ws = position_dx_ws *
-            rsqrt(position_dx_length_squared);
-        const float3 position_dy_direction_ws = position_dy_ws *
-            rsqrt(position_dy_length_squared);
-        const float3 geometric_normal_cross = cross(
-            position_dx_direction_ws, position_dy_direction_ws);
-        const float geometric_normal_length_squared = dot(
-            geometric_normal_cross, geometric_normal_cross);
-        if (isfinite(geometric_normal_length_squared) &&
-            geometric_normal_length_squared > 1e-8)
+        geometric_normal = input.normal_ws *
+            rsqrt(interpolated_normal_length_squared);
+        if (dot(geometric_normal, terrain_up_ws) < 0.0)
         {
-            geometric_normal = geometric_normal_cross *
-                rsqrt(geometric_normal_length_squared);
-            if (dot(geometric_normal, terrain_up_ws) < 0.0)
+            geometric_normal = -geometric_normal;
+        }
+    }
+    else
+    {
+        const float3 position_dx_ws = ddx(input.position_ws);
+        const float3 position_dy_ws = ddy(input.position_ws);
+        const float position_dx_length_squared = dot(
+            position_dx_ws, position_dx_ws);
+        const float position_dy_length_squared = dot(
+            position_dy_ws, position_dy_ws);
+        if (isfinite(position_dx_length_squared) &&
+            position_dx_length_squared > 0.0 &&
+            isfinite(position_dy_length_squared) &&
+            position_dy_length_squared > 0.0)
+        {
+            const float3 position_dx_direction_ws = position_dx_ws *
+                rsqrt(position_dx_length_squared);
+            const float3 position_dy_direction_ws = position_dy_ws *
+                rsqrt(position_dy_length_squared);
+            const float3 derivative_normal_cross = cross(
+                position_dx_direction_ws, position_dy_direction_ws);
+            const float derivative_normal_length_squared = dot(
+                derivative_normal_cross, derivative_normal_cross);
+            if (isfinite(derivative_normal_length_squared) &&
+                derivative_normal_length_squared > 1e-8)
             {
-                geometric_normal = -geometric_normal;
+                geometric_normal = derivative_normal_cross *
+                    rsqrt(derivative_normal_length_squared);
+                if (dot(geometric_normal, terrain_up_ws) < 0.0)
+                {
+                    geometric_normal = -geometric_normal;
+                }
             }
         }
     }
