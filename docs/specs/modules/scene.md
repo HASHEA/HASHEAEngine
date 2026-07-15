@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-15
 status: active
 ---
 
@@ -30,7 +30,7 @@ status: active
 - 变更事件：`SceneChangeKind`（EntityAdded/EntityRemoved/HierarchyChanged/ComponentChanged/SceneReplaced/SceneReloaded/DirtyStateChanged）+ `subscribe_change_events` / `unsubscribe_change_events` / `notify_change_event`，同步回调。
 - 组件反射：`get_scene_component_descriptor(s)`、`get_scene_enum_descriptor`、通用 `can_add/can_remove/add/remove_scene_component` facade（Inspector 依赖）。
 - 实例化：`instantiate_model` / `instantiate_ashasset` / `instantiate_mesh` / 自由函数 `instantiate_asset(Scene&, AssetDatabase&, AssetId, SceneInstantiationDesc)`。
-- `SceneQuery`：`get_entity_world_bounds` / `get_entity_subtree_world_bounds` / `screen_to_world_ray` / `ray_cast_scene` / `project_ray_to_plane` / `find_scene_drop_point`；Terrain overload 按 Entity 或全 Scene 提供 world-space `query_height` / `query_normal` / `ray_cast_terrain`。
+- `SceneQuery`：`get_entity_world_bounds` / `get_entity_subtree_world_bounds` / `screen_to_world_ray` / `ray_cast_scene` / `project_ray_to_plane` / `find_scene_drop_point`；Terrain overload 按 Entity 或全 Scene 提供 world-space `query_height` / `query_normal` / `ray_cast_terrain`。通用 bounds 会合并同一 Entity 的 Mesh 与 Terrain：完整 resident Terrain 聚合全部 Component root min/max，未完整 resident 时用 height mapping 给出不低估的保守 Y 范围；layout/spacing 定义 X/Z，完整 parent chain 的有限正非均匀缩放参与 world AABB。
 - `TerrainQuery`：对 `TerrainAssetSnapshot` 的 terrain-local `query_height` / `query_normal` / `ray_cast_terrain`，以及通过 `AssetDatabase` 启动整资产异步加载的 `prefetch_query_region`；状态为 Ready/Pending/Outside/Failed。Scene adapter 通过异步资产 future 保留这四种状态，非 Ready 不写调用方输出。射线查询遍历 Component min/max 层级并对真实三角形求交，不使用固定步进。
 - `ScenePresentationSubsystem`：
   - 输出：`create_output` / `update_output` / `destroy_output`（`SceneOutputDesc`：Window/Offscreen、尺寸、`SceneOutputFormat`）；`get_ui_surface` 供 UI 显示离屏输出。
@@ -38,7 +38,7 @@ status: active
   - 帧驱动：`update_presentations`（逻辑侧同步）+ `submit_presentations`（提交渲染）+ `get_last_scene_submission_snapshot`；快照绑定 Application frame，记录全部预期 packet 的 attempted/succeeded/failed/capture-ready 与提交结束时 asset epoch。
   - 编辑器扩展：overlay（`submit_scene_overlay` / `clear_scene_overlay`）、GPU 拾取（`request_scene_entity_pick` / `poll_scene_entity_pick_result` / `complete_gpu_pick_readbacks`）、`get_scene_view_stats`。
 
-数据流：每帧按 Scene 的 render 版本号增量同步到 `RenderScene`（现有链含 primitives/transforms/lights/environment/particles/terrain/config），`build_visible_render_frame` 产出相机、draw、灯光、环境、particle emitters、frustum-cull 后的 terrain proxy 快照与配置；`ScenePresentationSubsystem` 再补入 scene runtime/content 标识和 render-submit delta，交给 `SceneRenderer`。Terrain topology 使用独立 revision，transform-only 变化只复制更新 proxy 的 world transform/bounds；当前 `SceneRenderer` 尚未消费 terrain 数组进行 draw。
+数据流：每帧按 Scene 的 render 版本号增量同步到 `RenderScene`（现有链含 primitives/transforms/lights/environment/particles/terrain/config），`build_visible_render_frame` 产出相机、draw、灯光、环境、particle emitters、frustum-cull 后的 terrain proxy 快照与配置；`ScenePresentationSubsystem` 再补入 scene runtime/content 标识和 render-submit delta，交给 `SceneRenderer`。Terrain topology 使用独立 revision，transform-only 变化只复制更新 proxy 的 world transform/bounds；`SceneRenderer` 在既有 GBuffer 与方向光 shadow caster callback 中消费 terrain 数组。
 
 ## 约束与不变式
 

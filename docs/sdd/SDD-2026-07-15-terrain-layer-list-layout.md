@@ -41,4 +41,4 @@ Implementing
 
 ## Result
 
-`DrawLayerList` 已改为带表头的稳定三列表格；稳定 layer ID、选择与 Visible/Locked action 语义保持不变。Focused 源码契约在实现前因缺少 table/column 设置按预期 RED，实现后 GREEN；`build_editor.bat Debug` 与 `RunArchGate.bat` 已通过。自动化实现/测试已完成，但 Editor smoke 与 Vulkan/DX12 人工 UI 验证未完成，因此未宣告 SDD Done。
+`DrawLayerList` 已改为带表头的稳定三列表格；稳定 layer ID、选择与 Visible/Locked action 语义保持不变。Focused 源码契约在实现前因缺少 table/column 设置按预期 RED，实现后 GREEN。Fresh `RunTests.bat Debug` / `Release` 分别通过 `419/419` test cases、`24897/24897` assertions 与 `419/419` test cases、`24896/24896` assertions；Editor/Sandbox Debug/Release 构建、`RunArchGate.bat` 与 AIDevDoctor ValidatePlan 均通过。自动化实现/测试已完成，但四组合 readiness 与 Vulkan/DX12 人工 UI 验证尚未完成，因此未宣告 SDD Done。

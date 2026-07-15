@@ -10,7 +10,7 @@ HASHEAEngine（AshEngine）是一个以现代实时渲染和引擎架构实验�
 - Vulkan / DX12 双后端 RHI，HLSL 经 DXC 编译（SPIR-V / DXIL），shader 反射驱动绑定布局
 - RenderGraph 声明式帧编排 + Deferred 渲染主链路（GBuffer、AO、CSM 阴影、IBL、体积光、Bloom、TAA、tone-map）
 - Scene-driven 静态网格渲染：ECS-style Scene → 不可变可见帧 → 渲染线程消费
-- Terrain 渲染核心：8193² 高度场、Component LOD、权重 atlas、deferred GBuffer / 方向光阴影与 readiness 驱动抓帧
+- Terrain 渲染核心：8193² 高度场、Component LOD、权重 atlas、deferred GBuffer / 方向光阴影与 readiness 驱动抓帧；有限正缩放由 Scene bounds、Editor 动态 reverse-Z 取景、跨 LOD 平滑法线和 receiver-plane PCF 共同保持远近表面稳定
 - Terrain 编辑会话（Phase 3）：Editor 只提交 raw stroke intent，Engine 原子生成 patch；主 Scene 视口已接入笔刷输入仲裁与贴合高度快照的 world-space 笔刷预览，每个完成 stroke 对应一个 undo/redo 命令；Manage 支持 generation-aware 异步 Save、Save Copy As、clean-only Optimize、Reload/外部冲突处理，以及 non-replacing 的 flat Create、PNG/RAW/EXR Import/Export 后台任务，Ctrl+S 会先保存当前 Scene 引用的 dirty Terrain
 - 材质 V2：`.AshMat` 基材质 + `.AshMatIns` 实例，engine host shader 与用户材质 shader 拼合
 - Editor 基础壳（视口、层级、属性、资产浏览、undo/redo）；Sandbox 为标准验证程序（Sponza 场景）

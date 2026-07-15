@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementing
+Superseded
 
 ## Goal
 
@@ -51,4 +51,8 @@ Implementing
 - 数值复核 RED：第一版仍传递含平移的绝对 world position、以固定 world-unit threshold 判断叉积退化，并裸 `normalize` transformed local +Y；收敛后的 source contract 对这些不安全路径按预期失败。
 - 实现：GBuffer varying 原位改传实际 geomorph 后的 translation-free world-space offset；PS 安全单位化 up 与两条 pixel derivative direction，用相对角度退化判定生成定向几何法线，并移除 Terrain surface 对 raw `AshTerrainLocalNormal` 的调用。
 - GREEN：`RunTests.bat Debug --test-case="Terrain GBuffer normals follow the morphed raster surface"` 通过，1/1 用例、23/23 断言成功；既有 shader binding focused 用例通过，1/1 用例、21/21 断言成功。
-- Status 保持 Implementing；双后端 GPU A/B、RenderGate、PerfGate 与人工确认尚未执行。
+- Fresh 全量：`RunTests.bat Debug` / `Release` 分别通过 `419/419` test cases、`24897/24897` assertions 与 `419/419` test cases、`24896/24896` assertions；Editor/Sandbox Debug/Release 构建、`RunArchGate.bat` 与 AIDevDoctor ValidatePlan 均通过。
+- 非 bless `RunRenderGate.bat` PASS：Sandbox Vulkan/DX12/cross SSIM 为 `0.996278 / 0.996177 / 0.999747`，Particles 为 `1 / 1 / 1`；未更新 golden。Standard PerfGate 四组合均 PASS、`failures=[]`、`warnings=[]`、GPU timing coverage 为 `1.0`；四格 baseline 均为 `MISSING`，因此该项只证明绝对门槛与运行健康，不声称历史性能比较。
+- 双后端 readiness capture 均由资源就绪信号触发并 clean exit。标准 Terrain Final 与 `SceneGBufferE` 的 Vulkan/DX12 对比均为 SSIM `1.0`；使用缺陷诊断时的同一 shifted scene，Final cross-backend SSIM `1.0`、仅 194 像素有不超过 2 的通道差，GBuffer 仅 43 像素有不超过 1 的通道差。
+- 该次同场景 pre/post 差异只隔离了 fixture 坡面带，不能证明用户随后在平面、远距和新雕刻曲面报告的规则纹路已消失；因此不得把剩余条纹归因为 fixture 实际几何。
+- 本设计以逐三角 derivative normal 为目标，已被用户批准的 [Terrain 编辑取景与表面稳定性 S2](SDD-2026-07-15-terrain-authoring-visual-stability.md) 取代。新合同使用全分辨率 canonical shading gradient、粗邻边端点插值和 PS 归一化；本 SDD 标记 Superseded，不再作为人工验收依据。

@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementing
+Done
 
 ## Goal
 
@@ -44,4 +44,5 @@ Implementing
 - RED：起始 HEAD 上 focused 用例稳定 `0/1`，失败为 saved generation 实际 1、期望 2；根因是测试 loader 与一次性 Save writer 竞争同一 zero-timeout commit lease，且随后外部 rewrite 仍可与 worker metadata/result 捕获竞争。
 - Focused GREEN：实现后连续运行 3 次同一 Debug focused 命令，三次均为 `1/1` test case、`18/18` assertions、exit 0。
 - Bounded-wait GREEN：质量复核修订后再次连续运行 3 次同一 Debug focused 命令，三次均为 `1/1` test case、`19/19` assertions、exit 0。
-- 保持 `Implementing`；Debug/Release 全量与 ArchGate 由主任务统一验证后再决定 Done/归档。
+- Fresh 全量：`RunTests.bat Debug` 为 `419/419` test cases、`24897/24897` assertions；`RunTests.bat Release` 为 `419/419` test cases、`24896/24896` assertions，均 exit 0。
+- `RunArchGate.bat` PASS，仅报告 35 条既有 legacy WARN；规格与质量复核均为 clean、P0/P1/P2 为 0。
