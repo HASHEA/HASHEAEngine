@@ -1159,6 +1159,15 @@ namespace AshEngine
 				graph,
 				frame,
 				render_frame_index);
+		const TerrainPreparedDrawPtr terrain_prepared_draw =
+			m_terrain_render_pass.prepare_draw(
+				frame,
+				view_context,
+				terrain_graph_resources,
+				render_frame_index);
+		ASH_PROCESS_ERROR(
+			terrain_prepared_draw &&
+			terrain_prepared_draw->status != TerrainPreparedDrawStatus::Failed);
 		if (terrain_graph_resources.is_valid())
 		{
 			register_render_debug_item(
@@ -1218,6 +1227,7 @@ namespace AshEngine
 				&view_context,
 				render_frame_index,
 				terrain_graph_resources,
+				terrain_prepared_draw,
 				terrain_previous_view_projection,
 				terrain_temporal_valid](RenderGraphRasterContext& context) -> bool
 			{
@@ -1233,11 +1243,11 @@ namespace AshEngine
 				}
 				return !terrain_graph_resources.is_valid() ||
 					m_terrain_render_pass.render_gbuffer(
+						terrain_prepared_draw,
 						frame,
 						view_context,
 						terrain_graph_resources,
 						context,
-						render_frame_index,
 						terrain_previous_view_projection,
 						terrain_temporal_valid);
 			}));
@@ -1252,10 +1262,10 @@ namespace AshEngine
 			terrain_graph_resources.is_valid() ?
 			m_terrain_render_pass.add_lod_debug_output(
 				graph,
+				terrain_prepared_draw,
 				frame,
 				view_context,
 				graph_resources.depth,
-				render_frame_index,
 				draw_terrain_lod_debug) : RenderGraphTextureRef{};
 		if (terrain_lod_debug)
 		{
@@ -1325,7 +1335,7 @@ namespace AshEngine
 		{
 			const DirectionalShadowConfig& directional_shadow_config = frame.render_config.directional_shadows;
 			const DirectionalShadowCasterDrawCallback shadow_draw_callback =
-				[this](
+				[this, terrain_prepared_draw](
 					const VisibleRenderFrame& shadow_frame,
 					const SceneRenderViewContext& shadow_view_context,
 					RenderGraphRasterContext& context,
@@ -1342,10 +1352,10 @@ namespace AshEngine
 						return false;
 					}
 					return m_terrain_render_pass.render_shadow(
+						terrain_prepared_draw,
 						shadow_frame,
 						shadow_view_context,
 						context,
-						shadow_render_frame_index,
 						mobility_filter);
 				};
 

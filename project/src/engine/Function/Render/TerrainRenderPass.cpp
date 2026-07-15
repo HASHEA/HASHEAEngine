@@ -355,6 +355,13 @@ namespace AshEngine
 		return weight_atlas_0 && weight_atlas_1 && coarse_weights;
 	}
 
+	bool TerrainPreparedDraw::is_drawable() const
+	{
+		return status == TerrainPreparedDrawStatus::Ready &&
+			asset_snapshot && render_asset && instance_buffer &&
+			!lod.batches.empty() && batch_offsets.size() == lod.batches.size();
+	}
+
 	TerrainRenderPass::TerrainRenderPass() = default;
 	TerrainRenderPass::~TerrainRenderPass() = default;
 
@@ -603,6 +610,10 @@ namespace AshEngine
 					render_frame_index))
 				{
 					resources.has_update_pass = true;
+					resources.has_pending_atlas_slot = write_high_resolution;
+					resources.pending_atlas_coord = coord;
+					resources.pending_atlas_generation = content_generation;
+					resources.pending_atlas_slot = atlas_slot;
 				}
 			}
 			return resources;
@@ -656,62 +667,62 @@ namespace AshEngine
 		return entry.buffer;
 	}
 
-	bool TerrainRenderPass::render_surface(
+	TerrainPreparedDrawPtr TerrainRenderPass::prepare_draw(
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
-		RenderGraphRasterContext& context,
-		uint64_t render_frame_index,
-		GraphicsProgram& program,
-		const TerrainGraphResources* resources,
-		const glm::mat4& previous_view_projection,
-		bool temporal_valid,
-		bool bind_material_resources,
-		bool shadow_only)
+		const TerrainGraphResources& resources,
+		uint64_t render_frame_index)
 	{
+		auto prepared = std::make_shared<TerrainPreparedDraw>();
+		prepared->render_frame_index = render_frame_index;
+
 		const VisibleTerrainFrame* terrain = nullptr;
 		for (const VisibleTerrainFrame& candidate : frame.terrains)
 		{
-			if (!candidate.asset_snapshot || !candidate.render_asset ||
-				(shadow_only && !candidate.casts_shadow))
+			if (candidate.asset_snapshot && candidate.render_asset)
 			{
-				continue;
+				terrain = &candidate;
+				break;
 			}
-			terrain = &candidate;
-			break;
 		}
 		if (!terrain)
 		{
-			return true;
+			return prepared;
 		}
+
+		prepared->asset_snapshot = terrain->asset_snapshot;
+		prepared->render_asset = terrain->render_asset;
+		prepared->world_transform = terrain->world_transform;
+		prepared->casts_shadow = terrain->casts_shadow;
 
 		SceneView lod_view{};
 		if (!make_lod_view(frame, view_context, lod_view))
 		{
-			return false;
+			prepared->status = TerrainPreparedDrawStatus::Failed;
+			return prepared;
 		}
 		TerrainLodInput lod_input{};
 		lod_input.asset_snapshot = terrain->asset_snapshot;
 		lod_input.world_transform = terrain->world_transform;
 		lod_input.view = lod_view;
-		TerrainLodResult lod_result{};
-		if (!build_terrain_lod_batches(lod_input, lod_result))
+		if (!build_terrain_lod_batches(lod_input, prepared->lod))
 		{
-			return false;
+			prepared->status = TerrainPreparedDrawStatus::Failed;
+			return prepared;
 		}
-		if (lod_result.batches.empty())
+		if (prepared->lod.batches.empty())
 		{
-			return true;
+			return prepared;
 		}
 
 		std::vector<TerrainPackedInstance> packed_instances{};
-		packed_instances.reserve(lod_result.components.size());
-		std::vector<uint32_t> batch_offsets{};
-		batch_offsets.reserve(lod_result.batches.size());
+		packed_instances.reserve(prepared->lod.components.size());
+		prepared->batch_offsets.reserve(prepared->lod.batches.size());
 		{
 			std::scoped_lock<std::mutex> lock(terrain->render_asset->m_mutex);
-			for (const TerrainLodBatch& batch : lod_result.batches)
+			for (const TerrainLodBatch& batch : prepared->lod.batches)
 			{
-				batch_offsets.push_back(
+				prepared->batch_offsets.push_back(
 					static_cast<uint32_t>(packed_instances.size()));
 				for (const TerrainInstanceData& instance : batch.instances)
 				{
@@ -732,6 +743,14 @@ namespace AshEngine
 							break;
 						}
 					}
+					if (resources.has_pending_atlas_slot &&
+						resources.pending_atlas_coord == instance.coord &&
+						resources.pending_atlas_generation ==
+							terrain->asset_snapshot->content_generation)
+					{
+						atlas_slot = resources.pending_atlas_slot;
+						high_resolution = true;
+					}
 
 					TerrainPackedInstance packed{};
 					packed.component_lod_edges =
@@ -748,18 +767,50 @@ namespace AshEngine
 		}
 		if (packed_instances.empty())
 		{
-			return true;
+			return prepared;
 		}
 
-		const std::shared_ptr<StorageBuffer> instance_buffer = ensure_instance_buffer(
+		prepared->instance_buffer = ensure_instance_buffer(
 			render_frame_index,
 			packed_instances.data(),
 			static_cast<uint32_t>(packed_instances.size()));
+		prepared->status = prepared->instance_buffer ?
+			TerrainPreparedDrawStatus::Ready : TerrainPreparedDrawStatus::Failed;
+		return prepared;
+	}
+
+	bool TerrainRenderPass::render_prepared_surface(
+		const TerrainPreparedDrawPtr& prepared_draw,
+		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
+		RenderGraphRasterContext& context,
+		GraphicsProgram& program,
+		const TerrainGraphResources* resources,
+		const glm::mat4& previous_view_projection,
+		bool temporal_valid,
+		bool bind_material_resources,
+		bool shadow_only)
+	{
+		if (!prepared_draw ||
+			prepared_draw->status == TerrainPreparedDrawStatus::Failed)
+		{
+			return false;
+		}
+		if (prepared_draw->status == TerrainPreparedDrawStatus::Empty)
+		{
+			return true;
+		}
+		if (!prepared_draw->is_drawable() ||
+			(shadow_only && !prepared_draw->casts_shadow))
+		{
+			return shadow_only && !prepared_draw->casts_shadow;
+		}
 		const std::shared_ptr<StorageBuffer> height_buffer =
-			terrain->render_asset->packed_height_buffer();
-		if (!instance_buffer || !height_buffer ||
+			prepared_draw->render_asset->packed_height_buffer();
+		if (!height_buffer ||
 			!program.set_storage_buffer("TerrainHeightWords", height_buffer) ||
-			!program.set_storage_buffer("TerrainInstances", instance_buffer))
+			!program.set_storage_buffer(
+				"TerrainInstances", prepared_draw->instance_buffer))
 		{
 			return false;
 		}
@@ -777,11 +828,11 @@ namespace AshEngine
 			const std::shared_ptr<RenderTarget> coarse =
 				context.get_texture(resources->coarse_weights);
 			const std::shared_ptr<RenderTarget> base_color =
-				terrain->render_asset->material_texture_array(0u);
+				prepared_draw->render_asset->material_texture_array(0u);
 			const std::shared_ptr<RenderTarget> normal =
-				terrain->render_asset->material_texture_array(1u);
+				prepared_draw->render_asset->material_texture_array(1u);
 			const std::shared_ptr<RenderTarget> orm =
-				terrain->render_asset->material_texture_array(2u);
+				prepared_draw->render_asset->material_texture_array(2u);
 			if (!atlas_0 || !atlas_1 || !coarse || !base_color || !normal || !orm ||
 				!program.set_texture("TerrainWeightAtlas0", atlas_0) ||
 				!program.set_texture("TerrainWeightAtlas1", atlas_1) ||
@@ -797,10 +848,10 @@ namespace AshEngine
 		}
 
 		for (size_t batch_index = 0u;
-			batch_index < lod_result.batches.size();
+			batch_index < prepared_draw->lod.batches.size();
 			++batch_index)
 		{
-			const TerrainLodBatch& batch = lod_result.batches[batch_index];
+			const TerrainLodBatch& batch = prepared_draw->lod.batches[batch_index];
 			if (batch.lod >= k_terrain_lod_count || batch.instances.empty() ||
 				!m_shared_grid_index_buffers[batch.lod])
 			{
@@ -808,19 +859,20 @@ namespace AshEngine
 			}
 
 			TerrainSurfaceConstants constants{};
-			constants.object_to_clip = frame.view_projection * terrain->world_transform;
+			constants.object_to_clip =
+				frame.view_projection * prepared_draw->world_transform;
 			constants.previous_object_to_clip =
-				previous_view_projection * terrain->world_transform;
-			constants.object_to_world = terrain->world_transform;
+				previous_view_projection * prepared_draw->world_transform;
+			constants.object_to_world = prepared_draw->world_transform;
 			constants.height_spacing_uv_scale = {
-				terrain->asset_snapshot->height_mapping.height_offset,
-				terrain->asset_snapshot->height_mapping.height_range,
-				terrain->asset_snapshot->layout.sample_spacing_meters,
+				prepared_draw->asset_snapshot->height_mapping.height_offset,
+				prepared_draw->asset_snapshot->height_mapping.height_range,
+				prepared_draw->asset_snapshot->layout.sample_spacing_meters,
 				k_terrain_material_uv_scale
 			};
 			constants.flags = {
 				temporal_valid && !shadow_only ? 1u : 0u,
-				batch_offsets[batch_index],
+				prepared_draw->batch_offsets[batch_index],
 				batch.lod,
 				0u
 			};
@@ -844,20 +896,20 @@ namespace AshEngine
 	}
 
 	bool TerrainRenderPass::render_gbuffer(
+		const TerrainPreparedDrawPtr& prepared_draw,
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
 		const TerrainGraphResources& resources,
 		RenderGraphRasterContext& context,
-		uint64_t render_frame_index,
 		const glm::mat4& previous_view_projection,
 		bool temporal_valid)
 	{
 		ASH_PROFILE_SCOPE_NC("Terrain.GBuffer", AshEngine::Profile::Color::Draw);
-		return m_gbuffer_program && render_surface(
+		return m_gbuffer_program && render_prepared_surface(
+			prepared_draw,
 			frame,
 			view_context,
 			context,
-			render_frame_index,
 			*m_gbuffer_program,
 			&resources,
 			previous_view_projection,
@@ -867,10 +919,10 @@ namespace AshEngine
 	}
 
 	bool TerrainRenderPass::render_shadow(
+		const TerrainPreparedDrawPtr& prepared_draw,
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
 		RenderGraphRasterContext& context,
-		uint64_t render_frame_index,
 		ShadowCasterMobilityFilter mobility_filter)
 	{
 		ASH_PROFILE_SCOPE_NC("Terrain.Shadow", AshEngine::Profile::Color::Draw);
@@ -878,11 +930,11 @@ namespace AshEngine
 		{
 			return true;
 		}
-		return m_depth_program && render_surface(
+		return m_depth_program && render_prepared_surface(
+			prepared_draw,
 			frame,
 			view_context,
 			context,
-			render_frame_index,
 			*m_depth_program,
 			nullptr,
 			frame.view_projection,
@@ -893,10 +945,10 @@ namespace AshEngine
 
 	RenderGraphTextureRef TerrainRenderPass::add_lod_debug_output(
 		RenderGraphBuilder& graph,
+		const TerrainPreparedDrawPtr& prepared_draw,
 		const VisibleRenderFrame& frame,
 		const SceneRenderViewContext& view_context,
 		RenderGraphTextureRef depth,
-		uint64_t render_frame_index,
 		bool draw_output)
 	{
 		if (!m_lod_debug_program || !depth || !view_context.output_target ||
@@ -926,16 +978,16 @@ namespace AshEngine
 				pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestOnly);
 				pass.write_color(0u, output, RenderLoadAction::Clear, {});
 			},
-			[this, &frame, &view_context, render_frame_index](
+			[this, prepared_draw, &frame, &view_context](
 				RenderGraphRasterContext& context) -> bool
 			{
 				ASH_PROFILE_SCOPE_NC(
 					"Terrain.LodDebug", AshEngine::Profile::Color::Draw);
-				return render_surface(
+				return render_prepared_surface(
+					prepared_draw,
 					frame,
 					view_context,
 					context,
-					render_frame_index,
 					*m_lod_debug_program,
 					nullptr,
 					frame.view_projection,

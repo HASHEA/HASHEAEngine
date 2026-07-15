@@ -126,6 +126,35 @@ TEST_CASE("Terrain SceneRenderer composes shadows timing and readiness")
 	CHECK(terrain_pass.find("Terrain.Shadow") != std::string::npos);
 }
 
+TEST_CASE("Terrain SceneRenderer prepares one immutable draw for GBuffer and shadows")
+{
+	const std::string renderer = ReadSource(
+		"project/src/engine/Function/Render/SceneRenderer.cpp");
+	const std::string terrain_pass = ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp");
+
+	const size_t prepare = renderer.find(
+		"m_terrain_render_pass.prepare_draw(");
+	const size_t gbuffer = renderer.find(
+		"m_terrain_render_pass.render_gbuffer(");
+	const size_t shadow = renderer.find(
+		"m_terrain_render_pass.render_shadow(");
+	REQUIRE(prepare != std::string::npos);
+	REQUIRE(gbuffer != std::string::npos);
+	REQUIRE(shadow != std::string::npos);
+	CHECK(CountText(renderer, "m_terrain_render_pass.prepare_draw(") == 1u);
+	CHECK(prepare < gbuffer);
+	CHECK(prepare < shadow);
+	CHECK(renderer.find("terrain_prepared_draw") != std::string::npos);
+
+	const size_t consumer_begin = terrain_pass.find(
+		"bool TerrainRenderPass::render_prepared_surface");
+	REQUIRE(consumer_begin != std::string::npos);
+	const std::string consumers = terrain_pass.substr(consumer_begin);
+	CHECK(consumers.find("build_terrain_lod_batches") == std::string::npos);
+	CHECK(consumers.find("ensure_instance_buffer") == std::string::npos);
+}
+
 TEST_CASE("Terrain SceneRenderer pending generation blocks capture readiness")
 {
 	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();

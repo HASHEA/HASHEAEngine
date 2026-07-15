@@ -27,10 +27,38 @@ namespace AshEngine
 		RenderGraphTextureRef weight_atlas_0{};
 		RenderGraphTextureRef weight_atlas_1{};
 		RenderGraphTextureRef coarse_weights{};
+		TerrainComponentCoord pending_atlas_coord{};
+		uint64_t pending_atlas_generation = 0u;
+		uint32_t pending_atlas_slot = 0u;
 		bool has_update_pass = false;
+		bool has_pending_atlas_slot = false;
 
 		bool is_valid() const;
 	};
+
+	enum class TerrainPreparedDrawStatus : uint8_t
+	{
+		Empty = 0,
+		Ready,
+		Failed
+	};
+
+	struct TerrainPreparedDraw
+	{
+		std::shared_ptr<const TerrainAssetSnapshot> asset_snapshot{};
+		std::shared_ptr<TerrainRenderAsset> render_asset{};
+		glm::mat4 world_transform{ 1.0f };
+		TerrainLodResult lod{};
+		std::vector<uint32_t> batch_offsets{};
+		std::shared_ptr<StorageBuffer> instance_buffer{};
+		uint64_t render_frame_index = 0u;
+		TerrainPreparedDrawStatus status = TerrainPreparedDrawStatus::Empty;
+		bool casts_shadow = false;
+
+		bool is_drawable() const;
+	};
+
+	using TerrainPreparedDrawPtr = std::shared_ptr<const TerrainPreparedDraw>;
 
 	ASH_API bool build_terrain_shared_grid_indices(
 		uint8_t lod,
@@ -52,26 +80,31 @@ namespace AshEngine
 			RenderGraphBuilder& graph,
 			const VisibleRenderFrame& frame,
 			uint64_t render_frame_index);
+		TerrainPreparedDrawPtr prepare_draw(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			const TerrainGraphResources& resources,
+			uint64_t render_frame_index);
 		bool render_gbuffer(
+			const TerrainPreparedDrawPtr& prepared_draw,
 			const VisibleRenderFrame& frame,
 			const SceneRenderViewContext& view_context,
 			const TerrainGraphResources& resources,
 			RenderGraphRasterContext& context,
-			uint64_t render_frame_index,
 			const glm::mat4& previous_view_projection,
 			bool temporal_valid);
 		bool render_shadow(
+			const TerrainPreparedDrawPtr& prepared_draw,
 			const VisibleRenderFrame& frame,
 			const SceneRenderViewContext& view_context,
 			RenderGraphRasterContext& context,
-			uint64_t render_frame_index,
 			ShadowCasterMobilityFilter mobility_filter);
 		RenderGraphTextureRef add_lod_debug_output(
 			RenderGraphBuilder& graph,
+			const TerrainPreparedDrawPtr& prepared_draw,
 			const VisibleRenderFrame& frame,
 			const SceneRenderViewContext& view_context,
 			RenderGraphTextureRef depth,
-			uint64_t render_frame_index,
 			bool draw_output);
 		bool is_capture_ready(const VisibleRenderFrame& frame) const;
 
@@ -85,11 +118,11 @@ namespace AshEngine
 			uint32_t atlas_slot,
 			bool write_high_resolution,
 			uint64_t render_frame_index);
-		bool render_surface(
+		bool render_prepared_surface(
+			const TerrainPreparedDrawPtr& prepared_draw,
 			const VisibleRenderFrame& frame,
 			const SceneRenderViewContext& view_context,
 			RenderGraphRasterContext& context,
-			uint64_t render_frame_index,
 			GraphicsProgram& program,
 			const TerrainGraphResources* resources,
 			const glm::mat4& previous_view_projection,
