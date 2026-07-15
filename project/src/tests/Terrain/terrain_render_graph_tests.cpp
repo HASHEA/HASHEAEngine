@@ -10,6 +10,7 @@
 #include "doctest.h"
 
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iterator>
 #include <string>
@@ -52,6 +53,20 @@ namespace
 			offset += text.size();
 		}
 		return count;
+	}
+
+	auto CompactSource(const std::string& source) -> std::string
+	{
+		std::string compact{};
+		compact.reserve(source.size());
+		for (const unsigned char character : source)
+		{
+			if (!std::isspace(character))
+			{
+				compact.push_back(static_cast<char>(character));
+			}
+		}
+		return compact;
 	}
 }
 
@@ -307,6 +322,88 @@ TEST_CASE("Terrain shader bindings include fixed surface resources")
 	CHECK(common.find("AshTerrainDecodeHeight") != std::string::npos);
 	CHECK(common.find("AshTerrainMorphHeight") != std::string::npos);
 	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);
+}
+
+TEST_CASE("Terrain GBuffer normals follow the morphed raster surface")
+{
+	const std::string surface = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
+	const std::string compact_surface = CompactSource(surface);
+
+	CHECK(compact_surface.find(
+		"#ifTERRAIN_GBUFFERfloat3position_ws:TEXCOORD0;") !=
+		std::string::npos);
+	CHECK(CountText(surface, "position_ws : TEXCOORD0") == 1u);
+	CHECK(surface.find("normal_ws : TEXCOORD0") == std::string::npos);
+	CHECK(compact_surface.find(
+		"#ifTERRAIN_GBUFFERoutput.position_ws=mul((float3x3)"
+		"AshTerrainObjectToWorld,position_os);") != std::string::npos);
+	CHECK(compact_surface.find(
+		"output.position_ws=mul(AshTerrainObjectToWorld,"
+		"float4(position_os,1.0)).xyz;") == std::string::npos);
+
+	const size_t vertex_shader_end = surface.find("return output;");
+	const size_t pixel_gbuffer_begin = surface.find(
+		"#if TERRAIN_GBUFFER", vertex_shader_end);
+	const size_t lod_debug_begin = surface.find(
+		"#elif TERRAIN_LOD_DEBUG", pixel_gbuffer_begin);
+	REQUIRE(pixel_gbuffer_begin != std::string::npos);
+	REQUIRE(lod_debug_begin != std::string::npos);
+	const std::string pixel_gbuffer = CompactSource(surface.substr(
+		pixel_gbuffer_begin,
+		lod_debug_begin - pixel_gbuffer_begin));
+
+	CHECK(pixel_gbuffer.find(
+		"constfloat3terrain_up_vector_ws=mul((float3x3)"
+		"AshTerrainObjectToWorld,float3(0.0,1.0,0.0));") != std::string::npos);
+	CHECK(pixel_gbuffer.find(
+		"constfloatterrain_up_length_squared=dot(terrain_up_vector_ws,"
+		"terrain_up_vector_ws);") != std::string::npos);
+	CHECK(pixel_gbuffer.find(
+		"float3terrain_up_ws=float3(0.0,1.0,0.0);if(isfinite("
+		"terrain_up_length_squared)&&terrain_up_length_squared>0.0){"
+		"terrain_up_ws=terrain_up_vector_ws*rsqrt("
+		"terrain_up_length_squared);}") != std::string::npos);
+
+	CHECK(pixel_gbuffer.find(
+		"constfloat3position_dx_ws=ddx(input.position_ws);"
+		"constfloat3position_dy_ws=ddy(input.position_ws);") != std::string::npos);
+	CHECK(pixel_gbuffer.find(
+		"constfloatposition_dx_length_squared=dot(position_dx_ws,position_dx_ws);"
+		"constfloatposition_dy_length_squared=dot(position_dy_ws,position_dy_ws);") !=
+		std::string::npos);
+	CHECK(pixel_gbuffer.find(
+		"if(isfinite(position_dx_length_squared)&&position_dx_length_squared>0.0&&"
+		"isfinite(position_dy_length_squared)&&position_dy_length_squared>0.0){"
+		"constfloat3position_dx_direction_ws=position_dx_ws*rsqrt("
+		"position_dx_length_squared);constfloat3position_dy_direction_ws="
+		"position_dy_ws*rsqrt(position_dy_length_squared);") != std::string::npos);
+	const bool cross_uses_derivative_directions = pixel_gbuffer.find(
+		"constfloat3geometric_normal_cross=cross(position_dx_direction_ws,"
+		"position_dy_direction_ws);") != std::string::npos || pixel_gbuffer.find(
+		"constfloat3geometric_normal_cross=cross(position_dy_direction_ws,"
+		"position_dx_direction_ws);") != std::string::npos;
+	CHECK(cross_uses_derivative_directions);
+	CHECK(pixel_gbuffer.find(
+		"constfloatgeometric_normal_length_squared=dot(geometric_normal_cross,"
+		"geometric_normal_cross);") != std::string::npos);
+	CHECK(pixel_gbuffer.find("float3geometric_normal=terrain_up_ws;") !=
+		std::string::npos);
+	CHECK(pixel_gbuffer.find(
+		"if(isfinite(geometric_normal_length_squared)&&"
+		"geometric_normal_length_squared>1e-8){geometric_normal="
+		"geometric_normal_cross*rsqrt(geometric_normal_length_squared);"
+		"if(dot(geometric_normal,terrain_up_ws)<0.0){"
+		"geometric_normal=-geometric_normal;}}") != std::string::npos);
+	CHECK(pixel_gbuffer.find("geometric_normal_length_squared>1e-12") ==
+		std::string::npos);
+
+	const std::string non_gbuffer_pixel_shaders = CompactSource(
+		surface.substr(lod_debug_begin));
+	CHECK(non_gbuffer_pixel_shaders.find("position_ws") == std::string::npos);
+	CHECK(non_gbuffer_pixel_shaders.find("ddx(") == std::string::npos);
+	CHECK(non_gbuffer_pixel_shaders.find("ddy(") == std::string::npos);
+	CHECK(surface.find("AshTerrainLocalNormal(") == std::string::npos);
 }
 
 TEST_CASE("Terrain instance storage uses the cross-backend staging upload path")

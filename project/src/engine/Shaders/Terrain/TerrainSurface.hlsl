@@ -41,7 +41,7 @@ struct AshTerrainVertexOutput
 {
     float4 position : SV_Position;
 #if TERRAIN_GBUFFER
-    float3 normal_ws : TEXCOORD0;
+    float3 position_ws : TEXCOORD0;
     float2 local_sample : TEXCOORD1;
     float2 material_uv : TEXCOORD2;
     float4 current_clip : TEXCOORD3;
@@ -162,21 +162,9 @@ AshTerrainVertexOutput VSMain(uint vertex_id : SV_VertexID, uint instance_id : S
     AshTerrainVertexOutput output;
     output.position = mul(AshTerrainObjectToClip, float4(position_os, 1.0));
 #if TERRAIN_GBUFFER
-    const int2 global_sample = int2(
-        instance.component_coord * AshTerrainComponentQuads + local_sample);
-    const float3 normal_os = AshTerrainLocalNormal(
-        TerrainHeightWords,
-        global_sample,
-        AshTerrainHeightSpacingUvScale.x,
-        AshTerrainHeightSpacingUvScale.y,
-        AshTerrainHeightSpacingUvScale.z);
-    const float3 tangent_x_ws = mul(
+    output.position_ws = mul(
         (float3x3)AshTerrainObjectToWorld,
-        float3(1.0, (-normal_os.x / max(normal_os.y, 1e-5)), 0.0));
-    const float3 tangent_z_ws = mul(
-        (float3x3)AshTerrainObjectToWorld,
-        float3(0.0, (-normal_os.z / max(normal_os.y, 1e-5)), 1.0));
-    output.normal_ws = normalize(cross(tangent_z_ws, tangent_x_ws));
+        position_os);
     output.local_sample = float2(local_sample);
     output.material_uv = local_xz * AshTerrainHeightSpacingUvScale.w;
     output.current_clip = output.position;
@@ -232,7 +220,43 @@ AshTerrainGBufferOutput PSMain(AshTerrainVertexOutput input)
             TerrainMaterialSampler, uv_layer).rgb * weight;
     }
 
-    const float3 geometric_normal = normalize(input.normal_ws);
+    const float3 terrain_up_vector_ws = mul(
+        (float3x3)AshTerrainObjectToWorld,
+        float3(0.0, 1.0, 0.0));
+    const float terrain_up_length_squared = dot(
+        terrain_up_vector_ws, terrain_up_vector_ws);
+    float3 terrain_up_ws = float3(0.0, 1.0, 0.0);
+    if (isfinite(terrain_up_length_squared) && terrain_up_length_squared > 0.0)
+    {
+        terrain_up_ws = terrain_up_vector_ws * rsqrt(terrain_up_length_squared);
+    }
+    const float3 position_dx_ws = ddx(input.position_ws);
+    const float3 position_dy_ws = ddy(input.position_ws);
+    const float position_dx_length_squared = dot(position_dx_ws, position_dx_ws);
+    const float position_dy_length_squared = dot(position_dy_ws, position_dy_ws);
+    float3 geometric_normal = terrain_up_ws;
+    if (isfinite(position_dx_length_squared) && position_dx_length_squared > 0.0 &&
+        isfinite(position_dy_length_squared) && position_dy_length_squared > 0.0)
+    {
+        const float3 position_dx_direction_ws = position_dx_ws *
+            rsqrt(position_dx_length_squared);
+        const float3 position_dy_direction_ws = position_dy_ws *
+            rsqrt(position_dy_length_squared);
+        const float3 geometric_normal_cross = cross(
+            position_dx_direction_ws, position_dy_direction_ws);
+        const float geometric_normal_length_squared = dot(
+            geometric_normal_cross, geometric_normal_cross);
+        if (isfinite(geometric_normal_length_squared) &&
+            geometric_normal_length_squared > 1e-8)
+        {
+            geometric_normal = geometric_normal_cross *
+                rsqrt(geometric_normal_length_squared);
+            if (dot(geometric_normal, terrain_up_ws) < 0.0)
+            {
+                geometric_normal = -geometric_normal;
+            }
+        }
+    }
     float3 tangent_ws = mul(
         (float3x3)AshTerrainObjectToWorld, float3(1.0, 0.0, 0.0));
     tangent_ws = normalize(tangent_ws - geometric_normal * dot(tangent_ws, geometric_normal));
