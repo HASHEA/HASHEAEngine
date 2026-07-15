@@ -1,5 +1,6 @@
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderGraphExecutor.h"
+#include "Graphics/Buffer.h"
 
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -32,6 +33,77 @@ namespace
 		std::vector<AshEngine::RenderGraphBufferNode> buffers{};
 		std::vector<AshEngine::RenderGraphPassNode> passes{};
 	};
+
+	class TestRhiBuffer final : public RHI::Buffer
+	{
+	public:
+		explicit TestRhiBuffer(uint32_t size)
+		{
+			m_creation.size = size;
+		}
+
+		void* get_native_handle() override { return nullptr; }
+		uint32_t get_size() override { return m_creation.size; }
+		const char* get_name() override { return "RenderGraphBindingTestBuffer"; }
+		uint32_t get_global_offset() override { return 0u; }
+		bool is_ready() override { return true; }
+		uint8_t* get_mapped_data() override { return nullptr; }
+		bool is_dynamic() override { return false; }
+		std::shared_ptr<RHI::BufferView> get_default_cbv() override { return nullptr; }
+		std::shared_ptr<RHI::BufferView> get_default_srv() override { return nullptr; }
+		std::shared_ptr<RHI::BufferView> get_default_uav() override { return nullptr; }
+		bool update(uint32_t, uint32_t, void*) override { return false; }
+		uint64_t get_buffer_device_address() override { return 0u; }
+		const RHI::BufferCreation& get_buffer_creation_info() const override { return m_creation; }
+
+	private:
+		RHI::BufferCreation m_creation{};
+	};
+
+	struct BindingScopeFixture
+	{
+		std::string pass_name = "BindingPass";
+		std::vector<AshEngine::RenderGraphResolvedBufferBinding> graph_owned{};
+		std::vector<AshEngine::RenderGraphResolvedBufferBinding> declared{};
+
+		AshEngine::RenderGraphBufferBindingScope view() const
+		{
+			AshEngine::RenderGraphBufferBindingScope scope{};
+			scope.pass_name = pass_name.c_str();
+			scope.graph_owned_buffers = graph_owned.data();
+			scope.graph_owned_buffer_count = graph_owned.size();
+			scope.declared_buffers = declared.data();
+			scope.declared_buffer_count = declared.size();
+			return scope;
+		}
+
+		void own(const std::shared_ptr<AshEngine::StorageBuffer>& buffer, const char* resource_name)
+		{
+			graph_owned.push_back({ buffer.get(), resource_name, RenderGraphAccess::Unknown });
+		}
+
+		void declare(
+			const std::shared_ptr<AshEngine::StorageBuffer>& buffer,
+			const char* resource_name,
+			RenderGraphAccess access)
+		{
+			declared.push_back({ buffer.get(), resource_name, access });
+		}
+	};
+
+	std::shared_ptr<AshEngine::StorageBuffer> make_binding_test_buffer(
+		AshEngine::RenderDevice& device,
+		bool indirect_args = false)
+	{
+		AshEngine::StorageBufferDesc desc{};
+		desc.size = 256u;
+		desc.stride = 16u;
+		desc.indirect_args = indirect_args;
+		desc.name = "BindingTestBuffer";
+		return device.create_storage_buffer_for_tests(
+			desc,
+			std::make_shared<TestRhiBuffer>(desc.size));
+	}
 
 	enum class ExecutionEvent : uint8_t
 	{
@@ -1030,4 +1102,196 @@ TEST_CASE("RenderGraph buffer pool reuses only released compatible buffers and c
 	device->clear_transient_storage_buffers();
 	CHECK(device->get_transient_storage_buffer_pool_size_for_tests() == 0u);
 	CHECK(device->acquire_transient_storage_buffer(desc) == nullptr);
+}
+
+TEST_CASE("RenderGraph buffer graphics bindings require declared identity and access")
+{
+	std::unique_ptr<AshEngine::RenderDevice> device = AshEngine::RenderDevice::create_headless_for_tests();
+	REQUIRE(device != nullptr);
+	std::unique_ptr<AshEngine::GraphicsProgram> program = device->create_graphics_program_for_tests();
+	REQUIRE(program != nullptr);
+	const std::shared_ptr<AshEngine::StorageBuffer> buffer_a = make_binding_test_buffer(*device);
+	const std::shared_ptr<AshEngine::StorageBuffer> buffer_b = make_binding_test_buffer(*device);
+	REQUIRE(buffer_a != nullptr);
+	REQUIRE(buffer_b != nullptr);
+
+	BindingScopeFixture fixture{};
+	fixture.pass_name = "GraphicsBindingPass";
+	fixture.own(buffer_a, "GraphBufferA");
+	fixture.own(buffer_b, "GraphBufferB");
+	fixture.declare(buffer_a, "GraphBufferA", RenderGraphAccess::GraphicsSRV);
+	const AshEngine::RenderGraphBufferBindingScope scope = fixture.view();
+
+	size_t barrier_count = SIZE_MAX;
+	std::string diagnostic{};
+	REQUIRE(program->set_storage_buffer("VisibleInstances", buffer_a));
+	CHECK(device->inspect_graphics_program_buffer_bindings_for_tests(
+		program.get(), scope, barrier_count, diagnostic));
+	CHECK(barrier_count == 0u);
+	CHECK(diagnostic.empty());
+
+	SUBCASE("undeclared graph-owned buffer fails with complete identity diagnostic")
+	{
+		fixture.declared.clear();
+		const AshEngine::RenderGraphBufferBindingScope undeclared_scope = fixture.view();
+		barrier_count = SIZE_MAX;
+		diagnostic.clear();
+		CHECK_FALSE(device->inspect_graphics_program_buffer_bindings_for_tests(
+			program.get(), undeclared_scope, barrier_count, diagnostic));
+		CHECK(diagnostic.find("GraphicsBindingPass") != std::string::npos);
+		CHECK(diagnostic.find("GraphBufferA") != std::string::npos);
+		CHECK(diagnostic.find("VisibleInstances") != std::string::npos);
+		CHECK(diagnostic.find("Undeclared") != std::string::npos);
+		CHECK(diagnostic.find("GraphicsSRV") != std::string::npos);
+	}
+
+	SUBCASE("SRV declaration rejects UAV binding")
+	{
+		REQUIRE(program->set_storage_buffer("VisibleInstances", nullptr));
+		REQUIRE(program->set_rw_storage_buffer("VisibleInstances", buffer_a));
+		barrier_count = SIZE_MAX;
+		diagnostic.clear();
+		CHECK_FALSE(device->inspect_graphics_program_buffer_bindings_for_tests(
+			program.get(), scope, barrier_count, diagnostic));
+		CHECK(diagnostic.find("GraphicsSRV") != std::string::npos);
+		CHECK(diagnostic.find("GraphicsUAV") != std::string::npos);
+	}
+
+	SUBCASE("same binding name pointing at another graph buffer fails closed")
+	{
+		REQUIRE(program->set_storage_buffer("VisibleInstances", buffer_b));
+		barrier_count = SIZE_MAX;
+		diagnostic.clear();
+		CHECK_FALSE(device->inspect_graphics_program_buffer_bindings_for_tests(
+			program.get(), scope, barrier_count, diagnostic));
+		CHECK(diagnostic.find("GraphBufferB") != std::string::npos);
+		CHECK(diagnostic.find("VisibleInstances") != std::string::npos);
+	}
+}
+
+TEST_CASE("RenderGraph buffer compute bindings require declared UAV access")
+{
+	std::unique_ptr<AshEngine::RenderDevice> device = AshEngine::RenderDevice::create_headless_for_tests();
+	REQUIRE(device != nullptr);
+	std::unique_ptr<AshEngine::ComputeProgram> program = device->create_compute_program_for_tests();
+	REQUIRE(program != nullptr);
+	const std::shared_ptr<AshEngine::StorageBuffer> buffer = make_binding_test_buffer(*device);
+	REQUIRE(buffer != nullptr);
+
+	BindingScopeFixture fixture{};
+	fixture.pass_name = "ComputeBindingPass";
+	fixture.own(buffer, "VisibleOutput");
+	fixture.declare(buffer, "VisibleOutput", RenderGraphAccess::ComputeUAV);
+	const AshEngine::RenderGraphBufferBindingScope scope = fixture.view();
+
+	size_t barrier_count = SIZE_MAX;
+	std::string diagnostic{};
+	REQUIRE(program->set_rw_storage_buffer("Output", buffer));
+	CHECK(device->inspect_compute_program_buffer_bindings_for_tests(
+		program.get(), scope, barrier_count, diagnostic));
+	CHECK(barrier_count == 0u);
+	CHECK(diagnostic.empty());
+
+	REQUIRE(program->set_rw_storage_buffer("Output", nullptr));
+	REQUIRE(program->set_storage_buffer("Output", buffer));
+	barrier_count = SIZE_MAX;
+	diagnostic.clear();
+	CHECK_FALSE(device->inspect_compute_program_buffer_bindings_for_tests(
+		program.get(), scope, barrier_count, diagnostic));
+	CHECK(diagnostic.find("ComputeUAV") != std::string::npos);
+	CHECK(diagnostic.find("ComputeSRV") != std::string::npos);
+}
+
+TEST_CASE("RenderGraph buffer binding validation deduplicates graph state and preserves external barriers")
+{
+	std::unique_ptr<AshEngine::RenderDevice> device = AshEngine::RenderDevice::create_headless_for_tests();
+	REQUIRE(device != nullptr);
+	std::unique_ptr<AshEngine::GraphicsProgram> program = device->create_graphics_program_for_tests();
+	REQUIRE(program != nullptr);
+	const std::shared_ptr<AshEngine::StorageBuffer> graph_buffer = make_binding_test_buffer(*device);
+	const std::shared_ptr<AshEngine::StorageBuffer> external_buffer = make_binding_test_buffer(*device);
+	REQUIRE(graph_buffer != nullptr);
+	REQUIRE(external_buffer != nullptr);
+
+	BindingScopeFixture fixture{};
+	fixture.own(graph_buffer, "SharedVisibleList");
+	fixture.declare(graph_buffer, "SharedVisibleList", RenderGraphAccess::GraphicsSRV);
+	const AshEngine::RenderGraphBufferBindingScope scope = fixture.view();
+
+	size_t barrier_count = SIZE_MAX;
+	std::string diagnostic{};
+	REQUIRE(program->set_storage_buffer("VisibleA", graph_buffer));
+	REQUIRE(program->set_storage_buffer("VisibleB", graph_buffer));
+	CHECK(device->inspect_graphics_program_buffer_bindings_for_tests(
+		program.get(), scope, barrier_count, diagnostic));
+	CHECK(barrier_count == 0u);
+
+	REQUIRE(program->set_storage_buffer("VisibleA", nullptr));
+	REQUIRE(program->set_storage_buffer("VisibleB", nullptr));
+	REQUIRE(program->set_storage_buffer("ExternalA", external_buffer));
+	REQUIRE(program->set_storage_buffer("ExternalB", external_buffer));
+	barrier_count = SIZE_MAX;
+	diagnostic.clear();
+	CHECK(device->inspect_graphics_program_buffer_bindings_for_tests(
+		program.get(), scope, barrier_count, diagnostic));
+	CHECK(barrier_count == 1u);
+}
+
+TEST_CASE("RenderGraph buffer indirect args require an IndirectArgs declaration")
+{
+	std::unique_ptr<AshEngine::RenderDevice> device = AshEngine::RenderDevice::create_headless_for_tests();
+	REQUIRE(device != nullptr);
+	const std::shared_ptr<AshEngine::StorageBuffer> args = make_binding_test_buffer(*device, true);
+	REQUIRE(args != nullptr);
+
+	BindingScopeFixture fixture{};
+	fixture.pass_name = "IndirectPass";
+	fixture.own(args, "DrawArgs");
+	fixture.declare(args, "DrawArgs", RenderGraphAccess::GraphicsSRV);
+	AshEngine::RenderGraphBufferBindingScope scope = fixture.view();
+	size_t barrier_count = SIZE_MAX;
+	std::string diagnostic{};
+	CHECK_FALSE(device->inspect_indirect_args_buffer_binding_for_tests(
+		args, scope, barrier_count, diagnostic));
+	CHECK(diagnostic.find("DrawArgs") != std::string::npos);
+	CHECK(diagnostic.find("IndirectArgs") != std::string::npos);
+
+	fixture.declared.clear();
+	fixture.declare(args, "DrawArgs", RenderGraphAccess::IndirectArgs);
+	scope = fixture.view();
+	barrier_count = SIZE_MAX;
+	diagnostic.clear();
+	CHECK(device->inspect_indirect_args_buffer_binding_for_tests(
+		args, scope, barrier_count, diagnostic));
+	CHECK(barrier_count == 0u);
+}
+
+TEST_CASE("RenderGraph buffer graphics validation reads final bindings after draw enqueue")
+{
+	std::unique_ptr<AshEngine::RenderDevice> device = AshEngine::RenderDevice::create_headless_for_tests();
+	REQUIRE(device != nullptr);
+	std::unique_ptr<AshEngine::GraphicsProgram> program = device->create_graphics_program_for_tests();
+	REQUIRE(program != nullptr);
+	const std::shared_ptr<AshEngine::StorageBuffer> queued_buffer = make_binding_test_buffer(*device);
+	const std::shared_ptr<AshEngine::StorageBuffer> mutated_buffer = make_binding_test_buffer(*device);
+	REQUIRE(queued_buffer != nullptr);
+	REQUIRE(mutated_buffer != nullptr);
+
+	BindingScopeFixture fixture{};
+	fixture.pass_name = "FinalBindingPass";
+	fixture.own(queued_buffer, "QueuedBuffer");
+	fixture.own(mutated_buffer, "MutatedBuffer");
+	fixture.declare(queued_buffer, "QueuedBuffer", RenderGraphAccess::GraphicsSRV);
+	const AshEngine::RenderGraphBufferBindingScope scope = fixture.view();
+
+	REQUIRE(program->set_storage_buffer("Instances", queued_buffer));
+	AshEngine::GraphicsDrawDesc queued_draw{};
+	queued_draw.program = program.get();
+	REQUIRE(program->set_storage_buffer("Instances", mutated_buffer));
+
+	size_t barrier_count = SIZE_MAX;
+	std::string diagnostic{};
+	CHECK_FALSE(device->inspect_graphics_program_buffer_bindings_for_tests(
+		queued_draw.program, scope, barrier_count, diagnostic));
+	CHECK(diagnostic.find("MutatedBuffer") != std::string::npos);
 }

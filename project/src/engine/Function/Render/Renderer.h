@@ -114,6 +114,7 @@ namespace AshEngine
 		uint32_t group_count_x = 1;
 		uint32_t group_count_y = 1;
 		uint32_t group_count_z = 1;
+		const RenderGraphBufferBindingScope* graph_buffer_binding_scope = nullptr;
 	};
 
 	struct RendererFrameStats

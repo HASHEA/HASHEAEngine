@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@ namespace RHI
 	class Swapchain;
 	enum class SwapchainPresentResult : uint8_t;
 	class CommandBuffer;
+	class Buffer;
 	class TextureView;
 	struct ShaderParameterBlockLayout;
 	struct ShaderResourceBindingLayout;
@@ -27,6 +29,8 @@ namespace RHI
 namespace AshEngine
 {
 	struct RenderGraphResolvedBufferTransition;
+	struct RenderGraphBufferBindingScope;
+	struct ProgramBindingState;
 	class GraphicsProgram;
 	class ComputeProgram;
 	class Renderer;
@@ -553,6 +557,7 @@ namespace AshEngine
 		PassDepthAttachment depth_attachment{};
 		const char* name = nullptr;
 		bool allow_reorder_draws = false;
+		const RenderGraphBufferBindingScope* graph_buffer_binding_scope = nullptr;
 	};
 
 	ASH_API RenderColorValue get_engine_back_buffer_clear_color();
@@ -672,18 +677,57 @@ namespace AshEngine
 		bool fetch_back_buffer_capture(BackBufferCaptureResult& out_result, uint64_t timeout_nanoseconds);
 
 		static std::unique_ptr<RenderDevice> create_headless_for_tests();
+		std::unique_ptr<GraphicsProgram> create_graphics_program_for_tests();
+		std::unique_ptr<ComputeProgram> create_compute_program_for_tests();
+		std::shared_ptr<StorageBuffer> create_storage_buffer_for_tests(
+			const StorageBufferDesc& desc,
+			const std::shared_ptr<RHI::Buffer>& rhi_buffer);
 		std::shared_ptr<StorageBuffer> seed_transient_storage_buffer_for_tests(const StorageBufferDesc& desc);
 		size_t get_transient_storage_buffer_pool_size_for_tests() const;
+		bool inspect_graphics_program_buffer_bindings_for_tests(
+			GraphicsProgram* program,
+			const RenderGraphBufferBindingScope& scope,
+			size_t& out_barrier_count,
+			std::string& out_diagnostic);
+		bool inspect_compute_program_buffer_bindings_for_tests(
+			ComputeProgram* program,
+			const RenderGraphBufferBindingScope& scope,
+			size_t& out_barrier_count,
+			std::string& out_diagnostic);
+		bool inspect_indirect_args_buffer_binding_for_tests(
+			const std::shared_ptr<StorageBuffer>& buffer,
+			const RenderGraphBufferBindingScope& scope,
+			size_t& out_barrier_count,
+			std::string& out_diagnostic);
 
 	private:
 		bool ensure_back_buffer_target();
 		void sync_swapchain_target();
 		bool render_present_to_swapchain();
 		bool record_back_buffer_capture();
-		bool collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_graphics_program_resource_barriers(
+			GraphicsProgram* program,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic = nullptr);
+		bool collect_compute_program_resource_barriers(
+			ComputeProgram* program,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic = nullptr);
+		bool collect_program_resource_barriers(
+			const ProgramBindingState& bindings,
+			bool graphics_pipeline,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic);
 		bool collect_vertex_buffer_barrier(const std::shared_ptr<VertexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
-		bool collect_indirect_args_buffer_barrier(const std::shared_ptr<StorageBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_indirect_args_buffer_barrier(
+			const std::shared_ptr<StorageBuffer>& buffer,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic = nullptr);
 		bool collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers);
 		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
@@ -691,7 +735,9 @@ namespace AshEngine
 			const RenderGraphResolvedBufferTransition* transitions,
 			size_t transition_count);
 		bool transition_graphics_program_resources(GraphicsProgram* program);
-		bool transition_compute_program_resources(ComputeProgram* program);
+		bool transition_compute_program_resources(
+			ComputeProgram* program,
+			const RenderGraphBufferBindingScope* graph_scope = nullptr);
 		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);
 		bool transition_index_buffer(const std::shared_ptr<IndexBuffer>& buffer);
 

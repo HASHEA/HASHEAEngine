@@ -3,6 +3,7 @@
 #include "Function/Render/Renderer.h"
 #include "Function/Render/RenderGraphResource.h"
 #include "Graphics/GpuTimingTelemetryRHI.h"
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -52,6 +53,24 @@ namespace AshEngine
 		RenderGraphBufferRef buffer{};
 		RenderGraphAccess access = RenderGraphAccess::Unknown;
 		bool write = false;
+	};
+
+	struct RenderGraphResolvedBufferBinding
+	{
+		const StorageBuffer* buffer = nullptr;
+		const char* resource_name = nullptr;
+		RenderGraphAccess access = RenderGraphAccess::Unknown;
+	};
+
+	// Non-owning view whose lifetime is one RenderGraph pass execution. The
+	// executor owns both arrays until raster end or compute dispatch returns.
+	struct RenderGraphBufferBindingScope
+	{
+		const char* pass_name = nullptr;
+		const RenderGraphResolvedBufferBinding* graph_owned_buffers = nullptr;
+		size_t graph_owned_buffer_count = 0u;
+		const RenderGraphResolvedBufferBinding* declared_buffers = nullptr;
+		size_t declared_buffer_count = 0u;
 	};
 
 	class RenderGraphRasterContext;

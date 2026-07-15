@@ -392,7 +392,9 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(desc.group_count_x) * desc.group_count_y * desc.group_count_z);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_render_device && desc.program && !m_active_pass);
-		ASH_PROCESS_ERROR(m_render_device->transition_compute_program_resources(desc.program));
+		ASH_PROCESS_ERROR(m_render_device->transition_compute_program_resources(
+			desc.program,
+			desc.graph_buffer_binding_scope));
 		ASH_PROCESS_ERROR(m_render_device->bind_compute_program(desc.program));
 
 		m_render_device->dispatch(desc.group_count_x, desc.group_count_y, desc.group_count_z);
@@ -524,7 +526,10 @@ namespace AshEngine
 					break;
 				}
 				if (transitioned_program_scratch.insert(draw_desc.program).second &&
-					!m_render_device->collect_graphics_program_resource_barriers(draw_desc.program, pass_barrier_scratch))
+					!m_render_device->collect_graphics_program_resource_barriers(
+						draw_desc.program,
+						pass_context->m_desc.graph_buffer_binding_scope,
+						pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_graphics_program_resource_barriers failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
@@ -564,7 +569,10 @@ namespace AshEngine
 
 				if (draw_desc.indirect_args_buffer &&
 					transitioned_indirect_args_scratch.insert(draw_desc.indirect_args_buffer.get()).second &&
-					!m_render_device->collect_indirect_args_buffer_barrier(draw_desc.indirect_args_buffer, pass_barrier_scratch))
+					!m_render_device->collect_indirect_args_buffer_barrier(
+						draw_desc.indirect_args_buffer,
+						pass_context->m_desc.graph_buffer_binding_scope,
+						pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_indirect_args_buffer_barrier failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;

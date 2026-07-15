@@ -108,10 +108,12 @@ namespace AshEngine
 			ComputeContext(
 				Renderer* renderer,
 				std::vector<RenderGraphTextureNode>& textures,
-				std::vector<RenderGraphBufferNode>& buffers)
+				std::vector<RenderGraphBufferNode>& buffers,
+				const RenderGraphBufferBindingScope* graph_buffer_binding_scope)
 				: m_renderer(renderer)
 				, m_textures(textures)
 				, m_buffers(buffers)
+				, m_graph_buffer_binding_scope(graph_buffer_binding_scope)
 			{
 			}
 
@@ -127,13 +129,16 @@ namespace AshEngine
 
 			bool dispatch(const ComputeDispatchDesc& desc) override
 			{
-				return m_renderer && m_renderer->dispatch(desc);
+				ComputeDispatchDesc graph_desc = desc;
+				graph_desc.graph_buffer_binding_scope = m_graph_buffer_binding_scope;
+				return m_renderer && m_renderer->dispatch(graph_desc);
 			}
 
 		private:
 			Renderer* m_renderer = nullptr;
 			std::vector<RenderGraphTextureNode>& m_textures;
 			std::vector<RenderGraphBufferNode>& m_buffers;
+			const RenderGraphBufferBindingScope* m_graph_buffer_binding_scope = nullptr;
 		};
 
 		bool texture_is_depth_format(RenderTextureFormat format)
@@ -324,10 +329,62 @@ namespace AshEngine
 		}
 		std::vector<RenderGraphResolvedBufferTransition> resolved_buffer_transitions{};
 		resolved_buffer_transitions.reserve(maximum_buffer_transition_count);
+		std::vector<RenderGraphResolvedBufferBinding> graph_owned_buffer_bindings{};
+		graph_owned_buffer_bindings.reserve(buffers.size());
+		for (const RenderGraphBufferNode& buffer : buffers)
+		{
+			if (buffer.external_buffer)
+			{
+				graph_owned_buffer_bindings.push_back({
+					buffer.external_buffer.get(),
+					buffer.name.c_str(),
+					RenderGraphAccess::Unknown });
+			}
+		}
+		std::vector<RenderGraphResolvedBufferBinding> declared_buffer_bindings{};
 
 		for (uint32_t pass_index : compiled.live_pass_indices)
 		{
 			const RenderGraphPassNode& pass = passes[pass_index];
+			declared_buffer_bindings.clear();
+			declared_buffer_bindings.reserve(pass.buffer_usages.size());
+			for (const RenderGraphBufferUsage& usage : pass.buffer_usages)
+			{
+				if (!usage.buffer || usage.buffer.index >= buffers.size() ||
+					!buffers[usage.buffer.index].external_buffer)
+				{
+					HLogError("RenderGraph: pass '{}' has an unresolved declared buffer binding.", pass.name);
+					return fail_execution();
+				}
+				const RenderGraphBufferNode& buffer = buffers[usage.buffer.index];
+				const StorageBuffer* identity = buffer.external_buffer.get();
+				const auto existing = std::find_if(
+					declared_buffer_bindings.begin(),
+					declared_buffer_bindings.end(),
+					[identity](const RenderGraphResolvedBufferBinding& binding)
+					{
+						return binding.buffer == identity;
+					});
+				if (existing != declared_buffer_bindings.end())
+				{
+					if (existing->access != usage.access)
+					{
+						HLogError(
+							"RenderGraph: pass '{}' declares conflicting access for buffer '{}'.",
+							pass.name,
+							buffer.name);
+						return fail_execution();
+					}
+					continue;
+				}
+				declared_buffer_bindings.push_back({ identity, buffer.name.c_str(), usage.access });
+			}
+			const RenderGraphBufferBindingScope graph_binding_scope{
+				pass.name.c_str(),
+				graph_owned_buffer_bindings.data(),
+				graph_owned_buffer_bindings.size(),
+				declared_buffer_bindings.data(),
+				declared_buffer_bindings.size() };
 			gpu_timing_scope.transition_to(pass.timing_metric);
 			resolved_buffer_transitions.clear();
 			for (const RenderGraphBufferTransition& transition : compiled.pass_barriers[pass_index].buffer_transitions)
@@ -359,7 +416,7 @@ namespace AshEngine
 			{
 				ASH_PROFILE_SCOPE_NC("RenderGraph::ExecuteComputePass", AshEngine::Profile::Color::Submit);
 				ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
-				ComputeContext context(renderer, textures, buffers);
+				ComputeContext context(renderer, textures, buffers, &graph_binding_scope);
 				if (!pass.compute_execute || !pass.compute_execute(context))
 				{
 					HLogError("RenderGraph: compute pass '{}' failed.", pass.name);
@@ -372,6 +429,7 @@ namespace AshEngine
 			ASH_PROFILE_SCOPE_TEXT(pass.name.c_str(), pass.name.size());
 			PassDesc pass_desc{};
 			pass_desc.name = pass.name.c_str();
+			pass_desc.graph_buffer_binding_scope = &graph_binding_scope;
 			for (const RenderGraphTextureUsage& usage : pass.texture_usages)
 			{
 				if (!usage.texture || usage.texture.index >= textures.size())

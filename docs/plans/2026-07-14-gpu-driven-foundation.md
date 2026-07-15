@@ -533,7 +533,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - Modify: project/src/engine/Function/Render/RenderDevice.cpp
 - Modify: project/src/tests/Function/render_graph_buffer_tests.cpp
 
-- [ ] Step 1: Add RED identity/access cases
+- [x] Step 1: Add RED identity/access cases
 
 覆盖 graphics 与 compute 两条真实调用路径：
 
@@ -548,19 +548,19 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - raster draw 入队后若 program binding 被修改，必须按 end_active_pass 时的最终 binding 重新核对并 fail-closed，禁止 TOCTOU。
 - 错误包含 pass、resource、binding 与 expected/actual access。
 
-- [ ] Step 2: Implement one production validator
+- [x] Step 2: Implement one production validator
 
 实现由 raster draw 与 compute dispatch 共用的 graph-owned buffer identity/access validator；这是两个真实生产调用点，不建立 test-only free function。
 
 Context 保存当前 pass declared buffer map。compute 在即时 dispatch 点核对；raster 把 declared map 带入 GraphicsPassContext，并在 end_active_pass 的实际 barrier collection/command submission 点读取最终 GraphicsProgram bindings 后核对，不能只在 RasterContext::draw 入队时检查。已由 graph plan transition 的 buffer 不再被 program-binding collector 重复改写；未纳入 graph 的资源继续走旧路径。
 
-- [ ] Step 3: GREEN and full CPU gates
+- [x] Step 3: GREEN and full CPU gates
 
     RunTests.bat Debug --test-case="RenderGraph buffer*"
     RunTests.bat Debug
     RunArchGate.bat
 
-- [ ] Step 4: Focused commit
+- [x] Step 4: Focused commit
 
 建议提交信息：
 
