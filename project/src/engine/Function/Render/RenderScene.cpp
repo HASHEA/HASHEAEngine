@@ -4,9 +4,13 @@
 #include "Function/Render/SceneView.h"
 #include "Function/Render/Visibility.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace AshEngine
 {
@@ -136,6 +140,31 @@ namespace AshEngine
 				}
 			}
 			return true;
+		}
+	}
+
+	bool terrain_scene_resolve_transition_changed(
+		const TerrainSceneResolveResult& previous,
+		const TerrainSceneResolveResult& current)
+	{
+		return previous.status != current.status ||
+			previous.asset_path != current.asset_path ||
+			previous.diagnostic != current.diagnostic ||
+			previous.content_generation != current.content_generation;
+	}
+
+	TerrainReadinessStage evaluate_terrain_scene_resolve_readiness(
+		TerrainSceneResolveStatus status)
+	{
+		switch (status)
+		{
+		case TerrainSceneResolveStatus::Failed:
+			return TerrainReadinessStage::Failed;
+		case TerrainSceneResolveStatus::Pending:
+			return TerrainReadinessStage::Pending;
+		case TerrainSceneResolveStatus::Ready:
+		default:
+			return TerrainReadinessStage::Ready;
 		}
 	}
 
@@ -286,6 +315,8 @@ namespace AshEngine
 		m_environment = other.m_environment;
 		m_particle_emitters = other.m_particle_emitters;
 		m_render_config = other.m_render_config;
+		m_pending_terrain_loads = other.m_pending_terrain_loads;
+		m_last_terrain_resolve_result = other.m_last_terrain_resolve_result;
 	}
 
 	RenderScene::RenderScene(RenderScene&& other) noexcept
@@ -298,8 +329,12 @@ namespace AshEngine
 		m_environment = std::move(other.m_environment);
 		m_particle_emitters = std::move(other.m_particle_emitters);
 		m_render_config = std::move(other.m_render_config);
+		m_pending_terrain_loads = std::move(other.m_pending_terrain_loads);
+		m_last_terrain_resolve_result =
+			std::move(other.m_last_terrain_resolve_result);
 		other.m_next_primitive_id = 1;
 		other.m_render_config = make_default_scene_render_config();
+		other.m_last_terrain_resolve_result = {};
 	}
 
 	RenderScene& RenderScene::operator=(const RenderScene& other)
@@ -316,6 +351,8 @@ namespace AshEngine
 		m_environment = other.m_environment;
 		m_particle_emitters = other.m_particle_emitters;
 		m_render_config = other.m_render_config;
+		m_pending_terrain_loads = other.m_pending_terrain_loads;
+		m_last_terrain_resolve_result = other.m_last_terrain_resolve_result;
 		return *this;
 	}
 
@@ -333,8 +370,12 @@ namespace AshEngine
 		m_environment = std::move(other.m_environment);
 		m_particle_emitters = std::move(other.m_particle_emitters);
 		m_render_config = std::move(other.m_render_config);
+		m_pending_terrain_loads = std::move(other.m_pending_terrain_loads);
+		m_last_terrain_resolve_result =
+			std::move(other.m_last_terrain_resolve_result);
 		other.m_next_primitive_id = 1;
 		other.m_render_config = make_default_scene_render_config();
+		other.m_last_terrain_resolve_result = {};
 		return *this;
 	}
 
@@ -382,7 +423,7 @@ namespace AshEngine
 			m_static_mesh_primitives = std::move(rebuilt_primitives);
 			m_next_primitive_id = next_primitive_id;
 		}
-		ASH_PROCESS_ERROR(rebuild_terrains_from_scene(scene, render_asset_manager));
+		(void)rebuild_terrains_from_scene(scene, render_asset_manager);
 		ASH_PROCESS_ERROR(rebuild_lights_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_environment_from_scene(scene));
 		ASH_PROCESS_ERROR(rebuild_particles_from_scene(scene));
@@ -390,51 +431,260 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool RenderScene::rebuild_terrains_from_scene(
+	TerrainSceneResolveResult RenderScene::rebuild_terrains_from_scene(
 		Scene& scene,
 		RenderAssetManager& render_asset_manager)
 	{
 		ASH_PROFILE_SCOPE_NC("RenderScene::rebuild_terrains_from_scene", AshEngine::Profile::Color::Scene);
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(scene.is_valid());
-		AssetDatabase* asset_database = render_asset_manager.get_asset_database();
-		ASH_PROCESS_ERROR(asset_database != nullptr);
+		auto PublishResult = [this](TerrainSceneResolveResult result)
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_last_terrain_resolve_result = result;
+			return result;
+		};
+		auto MakeFailure = [this, &PublishResult](
+			std::string asset_path,
+			std::string diagnostic,
+			uint64_t content_generation = 0u)
+		{
+			TerrainSceneResolveResult result{};
+			result.status = TerrainSceneResolveStatus::Failed;
+			result.asset_path = std::move(asset_path);
+			result.diagnostic = std::move(diagnostic);
+			result.content_generation = content_generation;
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				m_terrain_proxies.clear();
+				m_pending_terrain_loads.clear();
+			}
+			return PublishResult(std::move(result));
+		};
 
-		std::vector<std::shared_ptr<RenderTerrainProxy>> rebuilt_proxies{};
+		if (!scene.is_valid())
+		{
+			return MakeFailure({}, "Scene is invalid.");
+		}
+		AssetDatabase* asset_database = render_asset_manager.get_asset_database();
+		if (!asset_database)
+		{
+			return MakeFailure({}, "RenderAssetManager has no AssetDatabase.");
+		}
+
 		const std::vector<SceneTerrainExtractionDesc> terrain_entities =
 			scene.extract_terrain_entities();
-		rebuilt_proxies.reserve(terrain_entities.size());
+		if (terrain_entities.empty())
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_terrain_proxies.clear();
+			m_pending_terrain_loads.clear();
+			m_last_terrain_resolve_result = {};
+			return m_last_terrain_resolve_result;
+		}
+
+		struct ResolvedTerrain
+		{
+			SceneTerrainExtractionDesc desc{};
+			std::string canonical_path{};
+			AssetId asset_id = 0u;
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		};
+		std::vector<ResolvedTerrain> resolved_terrains{};
+		resolved_terrains.reserve(terrain_entities.size());
+		std::vector<std::string> active_paths{};
+		active_paths.reserve(terrain_entities.size());
+		std::unordered_map<EntityId, AssetId> expected_asset_ids{};
+		expected_asset_ids.reserve(terrain_entities.size());
+		TerrainSceneResolveResult pending_result{};
+		pending_result.status = TerrainSceneResolveStatus::Ready;
+
 		for (const SceneTerrainExtractionDesc& terrain_desc : terrain_entities)
 		{
-			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
-			ASH_PROCESS_ERROR(asset_database->load_terrain_by_path(
-				terrain_desc.terrain.asset_path,
-				snapshot));
-			ASH_PROCESS_ERROR(snapshot && !snapshot->failed);
+			const AssetInfo* asset_info = asset_database->find_asset_by_path(
+				terrain_desc.terrain.asset_path);
+			if (!asset_info || asset_info->is_directory ||
+				asset_info->type != AssetType::Terrain)
+			{
+				return MakeFailure(
+					std::filesystem::path(terrain_desc.terrain.asset_path)
+						.lexically_normal().generic_string(),
+					"Terrain asset path was not found as a Terrain asset.");
+			}
 
+			const AssetInfo copied_info = *asset_info;
+			const std::string canonical_path =
+				copied_info.relative_path.lexically_normal().generic_string();
+			active_paths.push_back(canonical_path);
+			expected_asset_ids[terrain_desc.entity_id] = copied_info.id;
+			TerrainSceneLoadRequest request{};
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				const auto found = m_pending_terrain_loads.find(canonical_path);
+				if (found != m_pending_terrain_loads.end() &&
+					found->second.asset_id == copied_info.id)
+				{
+					request = found->second;
+				}
+			}
+			if (!request.future.valid())
+			{
+				request.asset_id = copied_info.id;
+				request.future = asset_database->load_terrain_by_path_async(
+					copied_info.relative_path);
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				m_pending_terrain_loads[canonical_path] = request;
+			}
+			if (!request.future.valid())
+			{
+				return MakeFailure(
+					canonical_path,
+					"Terrain asynchronous load request is invalid.");
+			}
+
+			if (request.future.wait_for(std::chrono::seconds(0)) !=
+				std::future_status::ready)
+			{
+				if (pending_result.status != TerrainSceneResolveStatus::Pending)
+				{
+					pending_result.status = TerrainSceneResolveStatus::Pending;
+					pending_result.asset_path = canonical_path;
+				}
+				continue;
+			}
+
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+			try
+			{
+				snapshot = request.future.get();
+			}
+			catch (const std::exception& exception)
+			{
+				return MakeFailure(canonical_path, exception.what());
+			}
+			catch (...)
+			{
+				return MakeFailure(
+					canonical_path,
+					"Terrain asynchronous load raised an unknown exception.");
+			}
+
+			if (!snapshot || snapshot->failed)
+			{
+				std::string diagnostic = snapshot ? snapshot->failure_detail :
+					asset_database->get_asset_last_error(copied_info.id);
+				if (diagnostic.empty())
+				{
+					diagnostic = "Terrain asynchronous load returned no valid snapshot.";
+				}
+				return MakeFailure(
+					canonical_path,
+					std::move(diagnostic),
+					snapshot ? snapshot->content_generation : 0u);
+			}
+
+			resolved_terrains.push_back({
+				terrain_desc,
+				canonical_path,
+				copied_info.id,
+				std::move(snapshot)
+			});
+		}
+
+		if (pending_result.status == TerrainSceneResolveStatus::Pending)
+		{
+			const std::unordered_set<std::string> active_path_set(
+				active_paths.begin(), active_paths.end());
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			m_terrain_proxies.erase(
+				std::remove_if(
+					m_terrain_proxies.begin(),
+					m_terrain_proxies.end(),
+					[&expected_asset_ids](
+						const std::shared_ptr<RenderTerrainProxy>& proxy)
+					{
+						if (!proxy)
+						{
+							return true;
+						}
+						const auto expected = expected_asset_ids.find(
+							proxy->get_entity_id());
+						const auto snapshot = proxy->get_snapshot();
+						return expected == expected_asset_ids.end() ||
+							!snapshot || snapshot->failed ||
+							snapshot->asset_id != expected->second;
+					}),
+				m_terrain_proxies.end());
+			for (auto request = m_pending_terrain_loads.begin();
+				request != m_pending_terrain_loads.end();)
+			{
+				if (active_path_set.find(request->first) == active_path_set.end())
+				{
+					request = m_pending_terrain_loads.erase(request);
+				}
+				else
+				{
+					++request;
+				}
+			}
+			m_last_terrain_resolve_result = pending_result;
+			return pending_result;
+		}
+
+		std::vector<std::shared_ptr<RenderTerrainProxy>> rebuilt_proxies{};
+		rebuilt_proxies.reserve(terrain_entities.size());
+		for (const ResolvedTerrain& terrain : resolved_terrains)
+		{
 			std::shared_ptr<TerrainRenderAsset> render_asset =
 				render_asset_manager.request_terrain_asset(
-					terrain_desc.terrain.asset_path,
-					snapshot);
-			ASH_PROCESS_ERROR(render_asset != nullptr);
+					terrain.canonical_path,
+					terrain.snapshot);
+			if (!render_asset)
+			{
+				return MakeFailure(
+					terrain.canonical_path,
+					"RenderAssetManager rejected the Terrain snapshot.",
+					terrain.snapshot->content_generation);
+			}
 
 			auto proxy = std::make_shared<RenderTerrainProxy>();
-			ASH_PROCESS_ERROR(proxy->initialize(
-				terrain_desc.entity_id,
-				snapshot,
-				terrain_desc.world_transform,
-				terrain_desc.terrain.visible,
-				terrain_desc.terrain.casts_shadow,
-				terrain_desc.terrain.receives_shadow,
-				std::move(render_asset)));
+			if (!proxy->initialize(
+					terrain.desc.entity_id,
+					terrain.snapshot,
+					terrain.desc.world_transform,
+					terrain.desc.terrain.visible,
+					terrain.desc.terrain.casts_shadow,
+					terrain.desc.terrain.receives_shadow,
+					std::move(render_asset)))
+			{
+				return MakeFailure(
+					terrain.canonical_path,
+					"RenderTerrainProxy rejected the Terrain snapshot.",
+					terrain.snapshot->content_generation);
+			}
 			rebuilt_proxies.push_back(std::move(proxy));
 		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_terrain_proxies = std::move(rebuilt_proxies);
+			for (const std::string& path : active_paths)
+			{
+				m_pending_terrain_loads.erase(path);
+			}
+			m_last_terrain_resolve_result = {};
+			for (const ResolvedTerrain& terrain : resolved_terrains)
+			{
+				m_last_terrain_resolve_result.content_generation = std::max(
+					m_last_terrain_resolve_result.content_generation,
+					terrain.snapshot->content_generation);
+			}
+			return m_last_terrain_resolve_result;
 		}
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	TerrainSceneResolveResult RenderScene::last_terrain_resolve_result() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return m_last_terrain_resolve_result;
 	}
 
 	bool RenderScene::update_terrain_transforms_from_scene(const Scene& scene)
@@ -595,6 +845,8 @@ namespace AshEngine
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			primitives_snapshot = m_static_mesh_primitives;
 			terrain_snapshot = m_terrain_proxies;
+			out_frame.terrain_resolve_status =
+				m_last_terrain_resolve_result.status;
 		}
 
 		VisibilityResult visibility{};

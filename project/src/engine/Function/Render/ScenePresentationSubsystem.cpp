@@ -67,6 +67,8 @@ namespace AshEngine
 			uint64_t last_terrain_version = 0;
 			uint64_t last_render_config_version = 0;
 			bool render_scene_valid = false;
+			bool has_terrain_resolve_result = false;
+			TerrainSceneResolveResult terrain_resolve_result{};
 			RenderScene render_scene{};
 		};
 
@@ -82,6 +84,54 @@ namespace AshEngine
 			std::shared_ptr<VisibleRenderFrame> visible_frame = nullptr;
 			bool scene_packet_expected = false;
 		};
+
+		static void record_terrain_resolve_transition(
+			SceneState& scene_state,
+			const BindingState& binding,
+			const TerrainSceneResolveResult& current)
+		{
+			const bool changed = !scene_state.has_terrain_resolve_result ||
+				terrain_scene_resolve_transition_changed(
+					scene_state.terrain_resolve_result,
+					current);
+			if (!changed)
+			{
+				return;
+			}
+
+			const TerrainSceneResolveStatus previous_status =
+				scene_state.terrain_resolve_result.status;
+			const bool had_previous = scene_state.has_terrain_resolve_result;
+			scene_state.terrain_resolve_result = current;
+			scene_state.has_terrain_resolve_result = true;
+			if (current.status == TerrainSceneResolveStatus::Failed)
+			{
+				HLogError(
+					"ScenePresentationSubsystem: Terrain resolve failed for binding '{}' and scene '{}', asset '{}', generation {}: {}",
+					binding.debug_name,
+					binding.scene ? binding.scene->get_name() : std::string{},
+					current.asset_path,
+					current.content_generation,
+					current.diagnostic);
+			}
+			else if (current.status == TerrainSceneResolveStatus::Pending)
+			{
+				HLogInfo(
+					"ScenePresentationSubsystem: Terrain resolve pending for binding '{}' and scene '{}', asset '{}'.",
+					binding.debug_name,
+					binding.scene ? binding.scene->get_name() : std::string{},
+					current.asset_path);
+			}
+			else if (had_previous &&
+				previous_status != TerrainSceneResolveStatus::Ready)
+			{
+				HLogInfo(
+					"ScenePresentationSubsystem: Terrain resolve recovered for binding '{}' and scene '{}', generation {}.",
+					binding.debug_name,
+					binding.scene ? binding.scene->get_name() : std::string{},
+					current.content_generation);
+			}
+		}
 
 		// editor begin 修改原因：Scene Overlay per-viewport / depth 语义
 		struct OverlayState
@@ -196,7 +246,13 @@ namespace AshEngine
 			bool capture_ready,
 			bool scene_packet_succeeded) -> TerrainReadinessStage
 		{
-			TerrainReadinessStage result = TerrainReadinessStage::Ready;
+			TerrainReadinessStage result =
+				evaluate_terrain_scene_resolve_readiness(
+					frame.terrain_resolve_status);
+			if (result != TerrainReadinessStage::Ready)
+			{
+				return result;
+			}
 			for (const VisibleTerrainFrame& terrain : frame.terrains)
 			{
 				TerrainReadinessInputs inputs{};
@@ -787,23 +843,26 @@ namespace AshEngine
 							binding.debug_name,
 							binding.scene->get_name());
 					}
+					Impl::record_terrain_resolve_transition(
+						*scene_state,
+						binding,
+						scene_state->render_scene.last_terrain_resolve_result());
 				}
-				if (scene_state->last_terrain_version != scene_terrain_version)
+				if (scene_state->last_terrain_version != scene_terrain_version ||
+					scene_state->terrain_resolve_result.status ==
+						TerrainSceneResolveStatus::Pending)
 				{
 					ASH_PROFILE_SCOPE_NC("ScenePresentation::RebuildRenderSceneTerrains", AshEngine::Profile::Color::Scene);
 					ASH_PROFILE_SCOPE_TEXT(binding.debug_name.c_str(), binding.debug_name.size());
-					const bool terrains_rebuilt = scene_state->render_scene.rebuild_terrains_from_scene(
+					const TerrainSceneResolveResult terrain_result =
+						scene_state->render_scene.rebuild_terrains_from_scene(
 						*binding.scene,
 						*m_impl->render_asset_manager);
-					scene_state->render_scene_valid = scene_state->render_scene_valid && terrains_rebuilt;
 					scene_state->last_terrain_version = scene_terrain_version;
-					if (!terrains_rebuilt)
-					{
-						HLogError(
-							"ScenePresentationSubsystem: failed to rebuild RenderScene terrains for binding '{}' and scene '{}'.",
-							binding.debug_name,
-							binding.scene->get_name());
-					}
+					Impl::record_terrain_resolve_transition(
+						*scene_state,
+						binding,
+						terrain_result);
 				}
 				if (scene_state->last_transform_version != scene_transform_version)
 				{

@@ -1,4 +1,5 @@
 #include "Function/Asset/AssetDatabase.h"
+#include "Base/hthreading.h"
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneView.h"
@@ -11,12 +12,15 @@
 #endif
 #include "doctest.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace
@@ -74,6 +78,149 @@ namespace
 			std::istreambuf_iterator<char>(input),
 			std::istreambuf_iterator<char>());
 	}
+
+	struct ThreadingScope
+	{
+		~ThreadingScope()
+		{
+			AshEngine::shutdown_threading();
+		}
+	};
+
+	struct WorkerBlocker
+	{
+		std::promise<void> release_promise{};
+		std::shared_future<void> release_future{};
+		AshEngine::ThreadCommandFuture blocker_future{};
+		bool released = false;
+
+		WorkerBlocker()
+		{
+			release_future = release_promise.get_future().share();
+			std::promise<void> started_promise{};
+			auto started_future = started_promise.get_future();
+			blocker_future = AshEngine::dispatch_background_task(
+				"TerrainRenderSceneTests::WorkerBlocker",
+				[started = std::move(started_promise),
+					release = release_future]() mutable
+				{
+					started.set_value();
+					release.wait();
+				});
+			started_future.wait();
+		}
+
+		~WorkerBlocker()
+		{
+			release();
+			if (blocker_future.valid())
+			{
+				blocker_future.wait();
+			}
+		}
+
+		void release()
+		{
+			if (!released)
+			{
+				released = true;
+				release_promise.set_value();
+			}
+		}
+	};
+}
+
+TEST_CASE("Terrain RenderScene async resolve keeps non Terrain content valid while pending")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threading_config{};
+	threading_config.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threading_config));
+	ThreadingScope threading_scope{};
+	WorkerBlocker blocker{};
+
+	const std::filesystem::path root = MakeTestRoot("async-pending");
+	const std::filesystem::path relative_path = "terrain/Pending.AshTerrain";
+	{
+		std::ofstream placeholder(root / relative_path, std::ios::binary);
+		REQUIRE(placeholder.is_open());
+		placeholder.put('\0');
+	}
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	AshEngine::RenderAssetManager render_asset_manager{};
+	render_asset_manager.initialize(&database, nullptr);
+
+	AshEngine::Scene scene = AshEngine::Scene::create("Pending Terrain Scene");
+	AshEngine::Entity terrain_entity = scene.create_entity("Terrain");
+	AshEngine::TerrainComponent terrain{};
+	terrain.asset_path = relative_path.generic_string();
+	REQUIRE(terrain_entity.add_terrain_component(terrain));
+
+	AshEngine::RenderScene render_scene{};
+	CHECK(render_scene.rebuild_from_scene(scene, render_asset_manager));
+	const AshEngine::TerrainSceneResolveResult result =
+		render_scene.last_terrain_resolve_result();
+	CHECK(result.status == AshEngine::TerrainSceneResolveStatus::Pending);
+	CHECK(result.asset_path == relative_path.generic_string());
+	CHECK(result.diagnostic.empty());
+	AshEngine::VisibleRenderFrame visible_frame{};
+	CHECK(render_scene.build_visible_render_frame(
+		1u, MakeInclusiveView(), visible_frame));
+	CHECK(visible_frame.terrains.empty());
+	CHECK(visible_frame.terrain_resolve_status ==
+		AshEngine::TerrainSceneResolveStatus::Pending);
+
+	blocker.release();
+	AshEngine::TerrainSceneResolveResult completed = result;
+	const auto deadline = std::chrono::steady_clock::now() +
+		std::chrono::seconds(2);
+	while (completed.status == AshEngine::TerrainSceneResolveStatus::Pending &&
+		std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		completed = render_scene.rebuild_terrains_from_scene(
+			scene, render_asset_manager);
+	}
+	CHECK(completed.status == AshEngine::TerrainSceneResolveStatus::Failed);
+	render_asset_manager.shutdown();
+	std::error_code error{};
+	std::filesystem::remove_all(root, error);
+}
+
+TEST_CASE("Terrain RenderScene async resolve reports stable failure diagnostics")
+{
+	const std::filesystem::path root = MakeTestRoot("async-failed");
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	AshEngine::RenderAssetManager render_asset_manager{};
+	render_asset_manager.initialize(&database, nullptr);
+
+	AshEngine::Scene scene = AshEngine::Scene::create("Failed Terrain Scene");
+	AshEngine::Entity terrain_entity = scene.create_entity("Terrain");
+	AshEngine::TerrainComponent terrain{};
+	terrain.asset_path = "terrain/Missing.AshTerrain";
+	REQUIRE(terrain_entity.add_terrain_component(terrain));
+
+	AshEngine::RenderScene render_scene{};
+	const AshEngine::TerrainSceneResolveResult result =
+		render_scene.rebuild_terrains_from_scene(scene, render_asset_manager);
+	CHECK(result.status == AshEngine::TerrainSceneResolveStatus::Failed);
+	CHECK(result.asset_path == terrain.asset_path);
+	CHECK_FALSE(result.diagnostic.empty());
+	CHECK(result.content_generation == 0u);
+
+	AshEngine::TerrainSceneResolveResult same = result;
+	CHECK_FALSE(AshEngine::terrain_scene_resolve_transition_changed(result, same));
+	same.diagnostic += " changed";
+	CHECK(AshEngine::terrain_scene_resolve_transition_changed(result, same));
+	same = result;
+	same.status = AshEngine::TerrainSceneResolveStatus::Ready;
+	CHECK(AshEngine::terrain_scene_resolve_transition_changed(result, same));
+
+	render_asset_manager.shutdown();
+	std::error_code error{};
+	std::filesystem::remove_all(root, error);
 }
 
 TEST_CASE("Visible terrain frame keeps an immutable content-generation snapshot")
@@ -172,7 +319,8 @@ TEST_CASE("Visible terrain frame culls bounds and keeps transform updates immuta
 
 	AshEngine::RenderScene render_scene{};
 	REQUIRE(render_scene.rebuild_terrains_from_scene(
-		scene, render_asset_manager));
+		scene, render_asset_manager).status ==
+		AshEngine::TerrainSceneResolveStatus::Ready);
 	AshEngine::SceneView inclusive_view = MakeInclusiveView();
 	AshEngine::VisibleRenderFrame first_frame{};
 	REQUIRE(render_scene.build_visible_render_frame(
@@ -211,7 +359,8 @@ TEST_CASE("Visible terrain frame culls bounds and keeps transform updates immuta
 	const auto second_snapshot =
 		PublishFixedSnapshot(database, relative_path, 2u);
 	REQUIRE(render_scene.rebuild_terrains_from_scene(
-		scene, render_asset_manager));
+		scene, render_asset_manager).status ==
+		AshEngine::TerrainSceneResolveStatus::Ready);
 	AshEngine::VisibleRenderFrame rebuilt_frame{};
 	REQUIRE(render_scene.build_visible_render_frame(
 		4u, inclusive_view, rebuilt_frame));
@@ -238,12 +387,31 @@ TEST_CASE("Terrain presentation tracks an independent terrain revision")
 		std::string::npos);
 
 	const size_t terrain_rebuild_branch = source.find(
-		"if (scene_state->last_terrain_version != scene_terrain_version)");
+		"if (scene_state->last_terrain_version != scene_terrain_version ||");
 	const size_t transform_update_branch = source.find(
 		"if (scene_state->last_transform_version != scene_transform_version)");
 	REQUIRE(terrain_rebuild_branch != std::string::npos);
 	REQUIRE(transform_update_branch != std::string::npos);
 	CHECK(terrain_rebuild_branch < transform_update_branch);
+}
+
+TEST_CASE("Terrain presentation logs typed resolve state transitions once")
+{
+	const std::string source = ReadSource(
+		"project/src/engine/Function/Render/ScenePresentationSubsystem.cpp");
+	CHECK(source.find("record_terrain_resolve_transition") !=
+		std::string::npos);
+	CHECK(source.find("terrain_scene_resolve_transition_changed") !=
+		std::string::npos);
+	CHECK(source.find("Terrain resolve pending") != std::string::npos);
+	CHECK(source.find("Terrain resolve failed") != std::string::npos);
+	CHECK(source.find("Terrain resolve recovered") != std::string::npos);
+	CHECK(source.find(
+		"failed to rebuild RenderScene terrains for binding") ==
+		std::string::npos);
+	CHECK(source.find(
+		"terrain_resolve_result.status ==\n\t\t\t\t\t\tTerrainSceneResolveStatus::Pending") !=
+		std::string::npos);
 }
 
 TEST_CASE("Static shadow caster revision binds scene identity and exact static mesh draws")

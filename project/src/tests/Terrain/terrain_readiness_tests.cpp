@@ -1,4 +1,5 @@
 #include "Function/Render/RenderAssetManager.h"
+#include "Function/Render/RenderScene.h"
 #include "Function/Asset/TerrainComposition.h"
 #include "Function/Asset/TerrainContainer.h"
 #include "Function/Render/TerrainLod.h"
@@ -1133,6 +1134,19 @@ TEST_CASE("Terrain readiness rejects stale generation checkpoints")
 	inputs.height_upload = AshEngine::TerrainReadinessStage::Failed;
 	CHECK(AshEngine::evaluate_terrain_readiness(inputs) ==
 		AshEngine::TerrainReadinessStage::Pending);
+}
+
+TEST_CASE("Terrain scene resolve status remains fail closed for automation")
+{
+	CHECK(AshEngine::evaluate_terrain_scene_resolve_readiness(
+		AshEngine::TerrainSceneResolveStatus::Ready) ==
+		AshEngine::TerrainReadinessStage::Ready);
+	CHECK(AshEngine::evaluate_terrain_scene_resolve_readiness(
+		AshEngine::TerrainSceneResolveStatus::Pending) ==
+		AshEngine::TerrainReadinessStage::Pending);
+	CHECK(AshEngine::evaluate_terrain_scene_resolve_readiness(
+		AshEngine::TerrainSceneResolveStatus::Failed) ==
+		AshEngine::TerrainReadinessStage::Failed);
 }
 
 TEST_CASE("Terrain readiness fixture loads all LOD and material regions")

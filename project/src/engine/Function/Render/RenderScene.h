@@ -5,15 +5,39 @@
 #include "Function/Render/SceneProxy.h"
 #include "Function/Render/TerrainRenderProxy.h"
 #include "Function/Scene/SceneConfig.h"
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <vector>
 #include <glm/glm.hpp>
 
 namespace AshEngine
 {
 	struct SceneView;
+
+	enum class TerrainSceneResolveStatus : uint8_t
+	{
+		Ready = 0,
+		Pending,
+		Failed
+	};
+
+	struct ASH_API TerrainSceneResolveResult
+	{
+		TerrainSceneResolveStatus status = TerrainSceneResolveStatus::Ready;
+		std::string asset_path{};
+		std::string diagnostic{};
+		uint64_t content_generation = 0u;
+	};
+
+	ASH_API bool terrain_scene_resolve_transition_changed(
+		const TerrainSceneResolveResult& previous,
+		const TerrainSceneResolveResult& current);
+	ASH_API TerrainReadinessStage evaluate_terrain_scene_resolve_readiness(
+		TerrainSceneResolveStatus status);
 
 	struct ASH_API VisibleStaticMeshDraw
 	{
@@ -94,6 +118,8 @@ namespace AshEngine
 		std::optional<VisibleEnvironmentData> environment{};
 		std::vector<VisibleParticleEmitter> particle_emitters{};
 		std::vector<VisibleTerrainFrame> terrains{};
+		TerrainSceneResolveStatus terrain_resolve_status =
+			TerrainSceneResolveStatus::Ready;
 		// SDD-2026-07-10-gpu-particles：由 ScenePresentationSubsystem 构建快照时一次写入；
 		// frame-dump 模式强制 1/60（确定性契约，对齐 TAA jitter 归零先例）
 		float delta_seconds = 0.0f;
@@ -119,7 +145,10 @@ namespace AshEngine
 	public:
 		bool rebuild_from_scene(Scene& scene, RenderAssetManager& render_asset_manager);
 		bool update_transforms_from_scene(const Scene& scene);
-		bool rebuild_terrains_from_scene(Scene& scene, RenderAssetManager& render_asset_manager);
+		TerrainSceneResolveResult rebuild_terrains_from_scene(
+			Scene& scene,
+			RenderAssetManager& render_asset_manager);
+		TerrainSceneResolveResult last_terrain_resolve_result() const;
 		bool update_terrain_transforms_from_scene(const Scene& scene);
 		bool rebuild_lights_from_scene(const Scene& scene);
 		bool rebuild_environment_from_scene(const Scene& scene);
@@ -140,6 +169,12 @@ namespace AshEngine
 		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> get_static_mesh_primitives_snapshot() const;
 
 	private:
+		struct TerrainSceneLoadRequest
+		{
+			AssetId asset_id = 0u;
+			std::shared_future<std::shared_ptr<const TerrainAssetSnapshot>> future{};
+		};
+
 		uint64_t m_next_primitive_id = 1;
 		std::vector<std::shared_ptr<StaticMeshPrimitiveProxy>> m_static_mesh_primitives{};
 		std::vector<std::shared_ptr<RenderTerrainProxy>> m_terrain_proxies{};
@@ -147,6 +182,9 @@ namespace AshEngine
 		std::optional<VisibleEnvironmentData> m_environment{};
 		std::vector<VisibleParticleEmitter> m_particle_emitters{};
 		SceneRenderConfig m_render_config = make_default_scene_render_config();
+		std::unordered_map<std::string, TerrainSceneLoadRequest>
+			m_pending_terrain_loads{};
+		TerrainSceneResolveResult m_last_terrain_resolve_result{};
 		mutable std::mutex m_mutex{};
 	};
 }
