@@ -10,9 +10,12 @@
 #include "Graphics/Texture.h"
 #include "Graphics/VertexInputLayout.h"
 #include "Graphics/GpuProfilerRHI.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Function/Render/RenderFormatUtils.h"
+#include "Function/Render/RenderGraphExecutor.h"
+#include "Function/Render/Renderer.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -23,6 +26,89 @@
 
 namespace AshEngine
 {
+	bool GpuTimingFrameLifecycleCoordinator::begin(
+		RHI::SwapchainPresentResult acquire_result,
+		bool begin_record_succeeded,
+		RHI::IGpuTimingTelemetry* telemetry,
+		RHI::CommandBuffer* command_buffer,
+		uint64_t frame_id)
+	{
+		if (active())
+		{
+			abort(RHI::GpuTimingInvalidReason::FrameStateError);
+		}
+		if (acquire_result != RHI::SwapchainPresentResult::Completed ||
+			!begin_record_succeeded || !telemetry || !command_buffer ||
+			!telemetry->begin_frame(command_buffer, frame_id))
+		{
+			return false;
+		}
+
+		m_telemetry = telemetry;
+		m_command_buffer = command_buffer;
+		m_frame_id = frame_id;
+		m_ended = false;
+		return true;
+	}
+
+	bool GpuTimingFrameLifecycleCoordinator::end(
+		RHI::CommandBuffer* command_buffer)
+	{
+		if (!active() || m_ended)
+		{
+			return false;
+		}
+		if (command_buffer != m_command_buffer)
+		{
+			abort(RHI::GpuTimingInvalidReason::FrameStateError);
+			return false;
+		}
+
+		m_telemetry->end_frame(m_command_buffer, m_frame_id);
+		m_ended = true;
+		return true;
+	}
+
+	bool GpuTimingFrameLifecycleCoordinator::commit()
+	{
+		if (!active())
+		{
+			return false;
+		}
+		if (!m_ended)
+		{
+			abort(RHI::GpuTimingInvalidReason::FrameStateError);
+			return false;
+		}
+
+		const bool committed = m_telemetry->commit_frame(m_frame_id);
+		reset();
+		return committed;
+	}
+
+	void GpuTimingFrameLifecycleCoordinator::abort(
+		RHI::GpuTimingInvalidReason reason)
+	{
+		if (active())
+		{
+			m_telemetry->abort_frame(m_frame_id, reason);
+		}
+		reset();
+	}
+
+	bool GpuTimingFrameLifecycleCoordinator::active() const
+	{
+		return m_telemetry != nullptr;
+	}
+
+	void GpuTimingFrameLifecycleCoordinator::reset()
+	{
+		m_telemetry = nullptr;
+		m_command_buffer = nullptr;
+		m_frame_id = 0u;
+		m_ended = false;
+	}
+
 	namespace
 	{
 		struct RenderPassSignature
@@ -912,6 +998,15 @@ namespace AshEngine
 			return hash_value;
 		}
 
+		static uint64_t hash_storage_buffer_desc(const StorageBufferDesc& desc)
+		{
+			uint64_t hash_value = desc.size;
+			hash_value = (hash_value * 16777619ull) ^ desc.stride;
+			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.cpu_write ? 1 : 0);
+			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.indirect_args ? 1 : 0);
+			return hash_value;
+		}
+
 		static std::shared_ptr<RHI::CommandBuffer> make_command_buffer_ref(RHI::CommandBuffer* command_buffer)
 		{
 			return std::shared_ptr<RHI::CommandBuffer>(command_buffer, [](RHI::CommandBuffer*) {});
@@ -1006,6 +1101,7 @@ namespace AshEngine
 	{
 	public:
 		std::shared_ptr<BufferResource> resource = nullptr;
+		bool cpu_write = false;
 		bool indirect_args = false;
 	};
 
@@ -1145,7 +1241,10 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget::Impl> back_buffer_target = nullptr;
 		std::shared_ptr<RenderTarget::Impl> swapchain_target = nullptr;
 		std::unordered_map<uint64_t, std::vector<std::shared_ptr<RenderTarget>>> transient_render_target_pool;
+		std::unordered_map<uint64_t, std::vector<std::shared_ptr<StorageBuffer>>> transient_storage_buffer_pool;
 		uint64_t frame_index = 0;
+		GpuTimingFrameLifecycleCoordinator gpu_timing_frame_lifecycle{};
+		bool gpu_timing_frame_submitted = false;
 		uint32_t last_swapchain_width = 0;
 		uint32_t last_swapchain_height = 0;
 		bool viewport_override_active = false;
@@ -2011,89 +2110,175 @@ namespace AshEngine
 		}
 	}
 
-		static bool collect_program_resource_barriers(const ProgramBindingState& bindings, bool graphics_pipeline, std::vector<RHI::AshBarrier>& out_barriers)
+	bool RenderDevice::collect_program_resource_barriers(
+		const ProgramBindingState& bindings,
+		bool graphics_pipeline,
+		const RenderGraphBufferBindingScope* graph_scope,
+		std::vector<RHI::AshBarrier>& out_barriers,
+		std::string* out_diagnostic)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		if (out_diagnostic)
 		{
-			ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-			const RHI::AshResourceState srv_state = graphics_pipeline ? RHI::AshResourceState::SRVGraphics : RHI::AshResourceState::SRVCompute;
-			const RHI::AshResourceState uav_state = graphics_pipeline ? RHI::AshResourceState::UAVGraphics : RHI::AshResourceState::UAVCompute;
-			bool barriers_valid = true;
+			out_diagnostic->clear();
+		}
+		const RHI::AshResourceState srv_state = graphics_pipeline ? RHI::AshResourceState::SRVGraphics : RHI::AshResourceState::SRVCompute;
+		const RHI::AshResourceState uav_state = graphics_pipeline ? RHI::AshResourceState::UAVGraphics : RHI::AshResourceState::UAVCompute;
+		const RenderGraphAccess srv_access = graphics_pipeline ? RenderGraphAccess::GraphicsSRV : RenderGraphAccess::ComputeSRV;
+		const RenderGraphAccess uav_access = graphics_pipeline ? RenderGraphAccess::GraphicsUAV : RenderGraphAccess::ComputeUAV;
+		bool barriers_valid = true;
 
-			for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
+		const auto append_external_storage_barrier = [&](const std::shared_ptr<StorageBuffer::Impl>& buffer_impl, RHI::AshResourceState state)
+		{
+			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
 			{
-				(void)name;
-				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
-				{
-					barriers_valid = false;
-					break;
-				}
-				append_buffer_barrier(out_barriers, buffer_impl->resource, RHI::AshResourceState::ConstBuffer);
+				return false;
 			}
-
-			for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
+			const auto existing = std::find_if(
+				out_barriers.begin(),
+				out_barriers.end(),
+				[&](const RHI::AshBarrier& barrier)
+				{
+					return barrier.eType == RHI::AshBarrier::EType::Buffer &&
+						barrier.pBuffer == buffer_impl->resource->buffer &&
+						barrier.eDSTAccess == state;
+				});
+			if (existing == out_barriers.end())
 			{
-				(void)name;
-				if (!barriers_valid)
-				{
-					break;
-				}
-				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
-				{
-					barriers_valid = false;
-					break;
-				}
-				append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
+				append_buffer_barrier(out_barriers, buffer_impl->resource, state);
 			}
+			return true;
+		};
 
-			for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
+		const auto validate_storage_binding = [&](
+			const char* binding_name,
+			const std::shared_ptr<StorageBuffer::Impl>& buffer_impl,
+			RenderGraphAccess actual_access,
+			RHI::AshResourceState external_state)
+		{
+			if (!buffer_impl || !buffer_impl->resource)
 			{
-				(void)name;
-				for (const auto& buffer_impl : buffer_impls)
+				return false;
+			}
+			const RenderGraphResolvedBufferBinding* graph_owned = nullptr;
+			if (graph_scope)
+			{
+				for (size_t index = 0; index < graph_scope->graph_owned_buffer_count; ++index)
 				{
-					if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+					const RenderGraphResolvedBufferBinding& candidate = graph_scope->graph_owned_buffers[index];
+					if (candidate.buffer && candidate.buffer->m_impl.get() == buffer_impl.get())
 					{
-						barriers_valid = false;
+						graph_owned = &candidate;
 						break;
 					}
-					append_buffer_barrier(out_barriers, buffer_impl->resource, srv_state);
 				}
-				if (!barriers_valid)
+			}
+			if (!graph_owned)
+			{
+				return append_external_storage_barrier(buffer_impl, external_state);
+			}
+
+			const RenderGraphResolvedBufferBinding* declared = nullptr;
+			for (size_t index = 0; index < graph_scope->declared_buffer_count; ++index)
+			{
+				const RenderGraphResolvedBufferBinding& candidate = graph_scope->declared_buffers[index];
+				if (candidate.buffer && candidate.buffer->m_impl.get() == buffer_impl.get())
 				{
+					declared = &candidate;
 					break;
 				}
 			}
 
-			for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
+			if (declared && declared->access == actual_access)
 			{
-				(void)name;
-				if (!barriers_valid)
-				{
-					break;
-				}
-				if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+				return true;
+			}
+
+			const char* pass_name = graph_scope->pass_name ? graph_scope->pass_name : "<unnamed>";
+			const char* resource_name = graph_owned->resource_name ? graph_owned->resource_name : "<unnamed>";
+			const char* expected_access = declared ? render_graph_access_name(declared->access) : "Undeclared";
+			const char* actual_access_name = render_graph_access_name(actual_access);
+			std::string diagnostic = "RenderGraph buffer binding mismatch: pass='";
+			diagnostic += pass_name;
+			diagnostic += "' resource='";
+			diagnostic += resource_name;
+			diagnostic += "' binding='";
+			diagnostic += binding_name ? binding_name : "<unnamed>";
+			diagnostic += "' expected='";
+			diagnostic += expected_access;
+			diagnostic += "' actual='";
+			diagnostic += actual_access_name;
+			diagnostic += "'.";
+			if (out_diagnostic)
+			{
+				*out_diagnostic = diagnostic;
+			}
+			HLogError("{}", diagnostic);
+			return false;
+		};
+
+		for (const auto& [name, buffer_impl] : bindings.uniform_buffers)
+		{
+			(void)name;
+			if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
+			{
+				barriers_valid = false;
+				break;
+			}
+			append_buffer_barrier(out_barriers, buffer_impl->resource, RHI::AshResourceState::ConstBuffer);
+		}
+
+		for (const auto& [name, buffer_impl] : bindings.storage_buffer_srvs)
+		{
+			if (!barriers_valid)
+			{
+				break;
+			}
+			barriers_valid = validate_storage_binding(name.c_str(), buffer_impl, srv_access, srv_state);
+		}
+
+		for (const auto& [name, buffer_impls] : bindings.storage_buffer_srv_arrays)
+		{
+			for (size_t index = 0; index < buffer_impls.size(); ++index)
+			{
+				std::string indexed_name = name + "[" + std::to_string(index) + "]";
+				if (!validate_storage_binding(indexed_name.c_str(), buffer_impls[index], srv_access, srv_state))
 				{
 					barriers_valid = false;
 					break;
 				}
-				append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
 			}
-
-			for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
+			if (!barriers_valid)
 			{
-				(void)name;
-				for (const auto& buffer_impl : buffer_impls)
+				break;
+			}
+		}
+
+		for (const auto& [name, buffer_impl] : bindings.storage_buffer_uavs)
+		{
+			if (!barriers_valid)
+			{
+				break;
+			}
+			barriers_valid = validate_storage_binding(name.c_str(), buffer_impl, uav_access, uav_state);
+		}
+
+		for (const auto& [name, buffer_impls] : bindings.storage_buffer_uav_arrays)
+		{
+			for (size_t index = 0; index < buffer_impls.size(); ++index)
+			{
+				std::string indexed_name = name + "[" + std::to_string(index) + "]";
+				if (!validate_storage_binding(indexed_name.c_str(), buffer_impls[index], uav_access, uav_state))
 				{
-					if (!buffer_impl || !buffer_impl->resource || !buffer_impl->resource->buffer)
-					{
-						barriers_valid = false;
-						break;
-					}
-					append_buffer_barrier(out_barriers, buffer_impl->resource, uav_state);
-				}
-				if (!barriers_valid)
-				{
+					barriers_valid = false;
 					break;
 				}
 			}
+			if (!barriers_valid)
+			{
+				break;
+			}
+		}
 
 			for (const auto& [name, texture_impl] : bindings.texture_srvs)
 			{
@@ -2161,9 +2346,9 @@ namespace AshEngine
 				}
 			}
 
-			ASH_PROCESS_ERROR(barriers_valid);
-			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
-		}
+		ASH_PROCESS_ERROR(barriers_valid);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
 
 		static bool submit_rhi_resource_barriers(RHI::CommandBuffer* command_buffer, const std::vector<RHI::AshBarrier>& barriers)
 		{
@@ -2453,6 +2638,11 @@ namespace AshEngine
 	uint32_t StorageBuffer::get_element_count() const
 	{
 		return (m_impl && m_impl->resource && m_impl->resource->stride > 0) ? m_impl->resource->size / m_impl->resource->stride : 0;
+	}
+
+	bool StorageBuffer::is_indirect_args() const
+	{
+		return m_impl && m_impl->indirect_args;
 	}
 
 	bool StorageBuffer::update(uint32_t offset, uint32_t size, const void* data)
@@ -3193,12 +3383,50 @@ namespace AshEngine
 		}
 	}
 
+	std::unique_ptr<RenderDevice> RenderDevice::create_headless_for_tests()
+	{
+		return std::unique_ptr<RenderDevice>(new RenderDevice(nullptr, nullptr));
+	}
+
+	std::unique_ptr<GraphicsProgram> RenderDevice::create_graphics_program_for_tests()
+	{
+		return std::unique_ptr<GraphicsProgram>(
+			new GraphicsProgram(std::make_unique<GraphicsProgram::Impl>()));
+	}
+
+	std::unique_ptr<ComputeProgram> RenderDevice::create_compute_program_for_tests()
+	{
+		return std::unique_ptr<ComputeProgram>(
+			new ComputeProgram(std::make_unique<ComputeProgram::Impl>()));
+	}
+
+	std::shared_ptr<StorageBuffer> RenderDevice::create_storage_buffer_for_tests(
+		const StorageBufferDesc& desc,
+		const std::shared_ptr<RHI::Buffer>& rhi_buffer)
+	{
+		if (!m_impl || desc.size == 0u)
+		{
+			return nullptr;
+		}
+		auto resource = std::make_shared<BufferResource>();
+		resource->buffer = rhi_buffer;
+		resource->size = desc.size;
+		resource->stride = desc.stride;
+		auto impl = std::make_shared<StorageBuffer::Impl>();
+		impl->resource = resource;
+		impl->cpu_write = desc.cpu_write;
+		impl->indirect_args = desc.indirect_args;
+		return std::shared_ptr<StorageBuffer>(new StorageBuffer(impl));
+	}
+
 	RenderDevice::~RenderDevice()
 	{
 		if (!m_impl)
 		{
 			return;
 		}
+		m_impl->gpu_timing_frame_lifecycle.abort(
+			RHI::GpuTimingInvalidReason::FrameStateError);
 
 		m_impl->current_command_buffer = nullptr;
 		m_impl->current_framebuffer.reset();
@@ -3208,6 +3436,7 @@ namespace AshEngine
 		m_impl->back_buffer_target.reset();
 		m_impl->swapchain_target.reset();
 		m_impl->transient_render_target_pool.clear();
+		m_impl->transient_storage_buffer_pool.clear();
 		m_impl->graphics_context = nullptr;
 		m_impl->swapchain = nullptr;
 	}
@@ -3221,6 +3450,7 @@ namespace AshEngine
 			RHI::SwapchainPresentResult::Completed,
 			RHI::SwapchainPresentResult::Failed);
 		ASH_PROCESS_ERROR(m_impl && m_impl->graphics_context && m_impl->swapchain);
+		m_impl->gpu_timing_frame_submitted = false;
 
 		m_impl->graphics_context->begin_frame();
 		const RHI::SwapchainPresentResult acquire_result = m_impl->swapchain->begin_frame();
@@ -3255,10 +3485,15 @@ namespace AshEngine
 		sync_swapchain_target();
 		ASH_PROCESS_ERROR(ensure_back_buffer_target());
 		m_impl->current_command_buffer = m_impl->graphics_context->get_command_buffer(0);
-		ASH_PROCESS_ERROR(m_impl->current_command_buffer);
+		const bool command_buffer_available =
+			m_impl->current_command_buffer != nullptr;
+		ASH_PROCESS_ERROR(command_buffer_available);
 
 		m_impl->current_command_buffer->begin_record();
-		ASH_PROCESS_ERROR(validate_command_buffer_status(m_impl->current_command_buffer, "begin_frame::begin_record"));
+		const bool begin_record_succeeded = validate_command_buffer_status(
+			m_impl->current_command_buffer,
+			"begin_frame::begin_record");
+		ASH_PROCESS_ERROR(begin_record_succeeded);
 		m_impl->current_framebuffer.reset();
 		m_impl->current_render_pass.reset();
 		m_impl->current_pass_committed_graphics_binding_versions.clear();
@@ -3266,6 +3501,12 @@ namespace AshEngine
 		m_impl->scissor_override_active = false;
 		m_impl->back_buffer_written_this_frame = false;
 		m_impl->swapchain_written_this_frame = false;
+		m_impl->gpu_timing_frame_lifecycle.begin(
+			acquire_result,
+			begin_record_succeeded,
+			m_impl->graphics_context->get_gpu_timing_telemetry(),
+			m_impl->current_command_buffer,
+			m_impl->frame_index);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, RHI::SwapchainPresentResult::Failed);
 	}
 
@@ -3305,16 +3546,29 @@ namespace AshEngine
 
 		if (command_buffer->get_state() == RHI::AshCommandBufferState::ASH_Recording)
 		{
+			if (frame_recording_success)
+			{
+				m_impl->gpu_timing_frame_lifecycle.end(command_buffer);
+			}
+			else
+			{
+				m_impl->gpu_timing_frame_lifecycle.abort(
+					RHI::GpuTimingInvalidReason::SubmissionFailed);
+			}
 			command_buffer->end_record();
 			if (!validate_command_buffer_status(command_buffer, "end_frame::end_record"))
 			{
 				frame_recording_success = false;
+				m_impl->gpu_timing_frame_lifecycle.abort(
+					RHI::GpuTimingInvalidReason::SubmissionFailed);
 			}
 		}
 		else if (frame_recording_success)
 		{
 			HLogError("RenderDevice: command buffer is not recording at end_frame (state={}).", static_cast<uint32_t>(command_buffer->get_state()));
 			frame_recording_success = false;
+			m_impl->gpu_timing_frame_lifecycle.abort(
+				RHI::GpuTimingInvalidReason::FrameStateError);
 		}
 
 		if (frame_recording_success)
@@ -3324,10 +3578,14 @@ namespace AshEngine
 		else
 		{
 			HLogError("RenderDevice: skipping command buffer submit because frame recording failed.");
+			m_impl->gpu_timing_frame_lifecycle.abort(
+				RHI::GpuTimingInvalidReason::SubmissionFailed);
 		}
 
 		m_impl->swapchain->end_frame();
 		m_impl->graphics_context->end_frame();
+		m_impl->gpu_timing_frame_submitted = frame_recording_success &&
+			m_impl->gpu_timing_frame_lifecycle.commit();
 		m_impl->current_command_buffer = nullptr;
 		bResult = frame_recording_success;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -3611,9 +3869,141 @@ namespace AshEngine
 
 		auto impl = std::make_shared<StorageBuffer::Impl>();
 		impl->resource = resource;
+		impl->cpu_write = desc.cpu_write;
 		impl->indirect_args = desc.indirect_args;
 		result = std::shared_ptr<StorageBuffer>(new StorageBuffer(impl));
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
+	std::shared_ptr<StorageBuffer> RenderDevice::acquire_transient_storage_buffer(const StorageBufferDesc& desc)
+	{
+		if (!m_impl || desc.size == 0u)
+		{
+			return nullptr;
+		}
+
+		auto& bucket = m_impl->transient_storage_buffer_pool[hash_storage_buffer_desc(desc)];
+		for (auto it = bucket.rbegin(); it != bucket.rend(); ++it)
+		{
+			const std::shared_ptr<StorageBuffer>& candidate = *it;
+			if (!candidate || !candidate->m_impl || !candidate->m_impl->resource ||
+				candidate->m_impl->resource->size != desc.size ||
+				candidate->m_impl->resource->stride != desc.stride ||
+				candidate->m_impl->cpu_write != desc.cpu_write ||
+				candidate->m_impl->indirect_args != desc.indirect_args)
+			{
+				continue;
+			}
+
+			std::shared_ptr<StorageBuffer> result = candidate;
+			bucket.erase(std::next(it).base());
+			return result;
+		}
+		return create_storage_buffer(desc);
+	}
+
+	void RenderDevice::release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer)
+	{
+		if (!m_impl || !buffer || !buffer->m_impl || !buffer->m_impl->resource)
+		{
+			return;
+		}
+
+		StorageBufferDesc desc{};
+		desc.size = buffer->m_impl->resource->size;
+		desc.stride = buffer->m_impl->resource->stride;
+		desc.cpu_write = buffer->m_impl->cpu_write;
+		desc.indirect_args = buffer->m_impl->indirect_args;
+		m_impl->transient_storage_buffer_pool[hash_storage_buffer_desc(desc)].push_back(buffer);
+	}
+
+	void RenderDevice::clear_transient_storage_buffers()
+	{
+		if (m_impl)
+		{
+			m_impl->transient_storage_buffer_pool.clear();
+		}
+	}
+
+	std::shared_ptr<StorageBuffer> RenderDevice::seed_transient_storage_buffer_for_tests(const StorageBufferDesc& desc)
+	{
+		if (!m_impl || desc.size == 0u)
+		{
+			return nullptr;
+		}
+
+		auto resource = std::make_shared<BufferResource>();
+		resource->size = desc.size;
+		resource->stride = desc.stride;
+		auto impl = std::make_shared<StorageBuffer::Impl>();
+		impl->resource = resource;
+		impl->cpu_write = desc.cpu_write;
+		impl->indirect_args = desc.indirect_args;
+		std::shared_ptr<StorageBuffer> buffer(new StorageBuffer(impl));
+		release_transient_storage_buffer(buffer);
+		return buffer;
+	}
+
+	size_t RenderDevice::get_transient_storage_buffer_pool_size_for_tests() const
+	{
+		size_t count = 0u;
+		if (m_impl)
+		{
+			for (const auto& [hash_value, bucket] : m_impl->transient_storage_buffer_pool)
+			{
+				(void)hash_value;
+				count += bucket.size();
+			}
+		}
+		return count;
+	}
+
+	bool RenderDevice::inspect_graphics_program_buffer_bindings_for_tests(
+		GraphicsProgram* program,
+		const RenderGraphBufferBindingScope& scope,
+		size_t& out_barrier_count,
+		std::string& out_diagnostic)
+	{
+		std::vector<RHI::AshBarrier> barriers{};
+		const bool result = collect_graphics_program_resource_barriers(
+			program,
+			&scope,
+			barriers,
+			&out_diagnostic);
+		out_barrier_count = barriers.size();
+		return result;
+	}
+
+	bool RenderDevice::inspect_compute_program_buffer_bindings_for_tests(
+		ComputeProgram* program,
+		const RenderGraphBufferBindingScope& scope,
+		size_t& out_barrier_count,
+		std::string& out_diagnostic)
+	{
+		std::vector<RHI::AshBarrier> barriers{};
+		const bool result = collect_compute_program_resource_barriers(
+			program,
+			&scope,
+			barriers,
+			&out_diagnostic);
+		out_barrier_count = barriers.size();
+		return result;
+	}
+
+	bool RenderDevice::inspect_indirect_args_buffer_binding_for_tests(
+		const std::shared_ptr<StorageBuffer>& buffer,
+		const RenderGraphBufferBindingScope& scope,
+		size_t& out_barrier_count,
+		std::string& out_diagnostic)
+	{
+		std::vector<RHI::AshBarrier> barriers{};
+		const bool result = collect_indirect_args_buffer_barrier(
+			buffer,
+			&scope,
+			barriers,
+			&out_diagnostic);
+		out_barrier_count = barriers.size();
+		return result;
 	}
 
 	std::shared_ptr<RenderSampler> RenderDevice::create_sampler(const RenderSamplerDesc& desc, const char* debug_name)
@@ -4178,11 +4568,37 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool RenderDevice::collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers)
+	bool RenderDevice::collect_graphics_program_resource_barriers(
+		GraphicsProgram* program,
+		const RenderGraphBufferBindingScope* graph_scope,
+		std::vector<RHI::AshBarrier>& out_barriers,
+		std::string* out_diagnostic)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
-		bResult = collect_program_resource_barriers(program->m_impl->bindings, true, out_barriers);
+		ASH_PROCESS_ERROR(m_impl && program && program->m_impl);
+		bResult = collect_program_resource_barriers(
+			program->m_impl->bindings,
+			true,
+			graph_scope,
+			out_barriers,
+			out_diagnostic);
+		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::collect_compute_program_resource_barriers(
+		ComputeProgram* program,
+		const RenderGraphBufferBindingScope* graph_scope,
+		std::vector<RHI::AshBarrier>& out_barriers,
+		std::string* out_diagnostic)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && program && program->m_impl);
+		bResult = collect_program_resource_barriers(
+			program->m_impl->bindings,
+			false,
+			graph_scope,
+			out_barriers,
+			out_diagnostic);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -4204,12 +4620,67 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool RenderDevice::collect_indirect_args_buffer_barrier(const std::shared_ptr<StorageBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers)
+	bool RenderDevice::collect_indirect_args_buffer_barrier(
+		const std::shared_ptr<StorageBuffer>& buffer,
+		const RenderGraphBufferBindingScope* graph_scope,
+		std::vector<RHI::AshBarrier>& out_barriers,
+		std::string* out_diagnostic)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer &&
-			buffer && buffer->m_impl && buffer->m_impl->resource && buffer->m_impl->resource->buffer);
-		out_barriers.emplace_back(buffer->m_impl->resource->buffer, RHI::AshResourceState::IndirectArgs);
+		if (out_diagnostic)
+		{
+			out_diagnostic->clear();
+		}
+		ASH_PROCESS_ERROR(m_impl && buffer && buffer->m_impl && buffer->m_impl->resource);
+		const RenderGraphResolvedBufferBinding* graph_owned = nullptr;
+		if (graph_scope)
+		{
+			for (size_t index = 0; index < graph_scope->graph_owned_buffer_count; ++index)
+			{
+				const RenderGraphResolvedBufferBinding& candidate = graph_scope->graph_owned_buffers[index];
+				if (candidate.buffer && candidate.buffer->m_impl.get() == buffer->m_impl.get())
+				{
+					graph_owned = &candidate;
+					break;
+				}
+			}
+		}
+		if (!graph_owned)
+		{
+			ASH_PROCESS_ERROR(buffer->m_impl->resource->buffer != nullptr);
+			out_barriers.emplace_back(buffer->m_impl->resource->buffer, RHI::AshResourceState::IndirectArgs);
+			break;
+		}
+
+		const RenderGraphResolvedBufferBinding* declared = nullptr;
+		for (size_t index = 0; index < graph_scope->declared_buffer_count; ++index)
+		{
+			const RenderGraphResolvedBufferBinding& candidate = graph_scope->declared_buffers[index];
+			if (candidate.buffer && candidate.buffer->m_impl.get() == buffer->m_impl.get())
+			{
+				declared = &candidate;
+				break;
+			}
+		}
+		if (!declared || declared->access != RenderGraphAccess::IndirectArgs)
+		{
+			const char* pass_name = graph_scope->pass_name ? graph_scope->pass_name : "<unnamed>";
+			const char* resource_name = graph_owned->resource_name ? graph_owned->resource_name : "<unnamed>";
+			const char* expected_access = declared ? render_graph_access_name(declared->access) : "Undeclared";
+			std::string diagnostic = "RenderGraph buffer binding mismatch: pass='";
+			diagnostic += pass_name;
+			diagnostic += "' resource='";
+			diagnostic += resource_name;
+			diagnostic += "' binding='IndirectArgs' expected='";
+			diagnostic += expected_access;
+			diagnostic += "' actual='IndirectArgs'.";
+			if (out_diagnostic)
+			{
+				*out_diagnostic = diagnostic;
+			}
+			HLogError("{}", diagnostic);
+			ASH_PROCESS_ERROR(false);
+		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -4241,22 +4712,50 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool RenderDevice::submit_graph_buffer_transitions(
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count)
+	{
+		if (!transitions || transition_count == 0u)
+		{
+			return transition_count == 0u;
+		}
+
+		std::vector<RHI::AshBarrier> barriers{};
+		barriers.reserve(transition_count);
+		for (size_t index = 0; index < transition_count; ++index)
+		{
+			const RenderGraphResolvedBufferTransition& transition = transitions[index];
+			if (!transition.buffer || !transition.buffer->m_impl ||
+				!transition.buffer->m_impl->resource ||
+				!transition.buffer->m_impl->resource->buffer ||
+				transition.state == RHI::AshResourceState::Unknown)
+			{
+				return false;
+			}
+			barriers.emplace_back(transition.buffer->m_impl->resource->buffer, transition.state);
+		}
+		return submit_graph_resource_barriers(barriers);
+	}
+
 	bool RenderDevice::transition_graphics_program_resources(GraphicsProgram* program)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		std::vector<RHI::AshBarrier> barriers;
-		ASH_PROCESS_ERROR(collect_graphics_program_resource_barriers(program, barriers));
+		ASH_PROCESS_ERROR(collect_graphics_program_resource_barriers(program, nullptr, barriers));
 		bResult = submit_resource_barriers(barriers);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	bool RenderDevice::transition_compute_program_resources(ComputeProgram* program)
+	bool RenderDevice::transition_compute_program_resources(
+		ComputeProgram* program,
+		const RenderGraphBufferBindingScope* graph_scope)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_impl && program && program->m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
 
 		std::vector<RHI::AshBarrier> barriers;
-		ASH_PROCESS_ERROR(collect_program_resource_barriers(program->m_impl->bindings, false, barriers));
+		ASH_PROCESS_ERROR(collect_compute_program_resource_barriers(program, graph_scope, barriers));
 
 		bResult = submit_resource_barriers(barriers);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
@@ -4338,7 +4837,9 @@ namespace AshEngine
 		}
 	}
 
-	bool RenderDevice::draw_indirect(const std::shared_ptr<StorageBuffer>& args_buffer, uint64_t args_offset)
+	bool RenderDevice::draw_indirect(
+		const std::shared_ptr<StorageBuffer>& args_buffer,
+		const GraphicsIndirectValidationResult& validation)
 	{
 		if (!m_impl)
 		{
@@ -4356,37 +4857,95 @@ namespace AshEngine
 			HLogError("RenderDevice: draw_indirect received an invalid args buffer resource.");
 			return false;
 		}
-		if (!args_buffer->m_impl->indirect_args)
-		{
-			HLogError("RenderDevice: draw_indirect args buffer was not created with indirect_args usage.");
-			return false;
-		}
 
-		constexpr uint64_t indirect_args_alignment = 4u;
-		if ((args_offset % indirect_args_alignment) != 0u)
+		GraphicsIndirectValidationFacts facts{};
+		facts.kind = GraphicsIndirectKind::NonIndexed;
+		facts.args_resource_present = true;
+		facts.args_buffer_size = args_buffer->m_impl->resource->size;
+		facts.args_buffer_indirect_usage = args_buffer->m_impl->indirect_args;
+		facts.args_offset = validation.args_offset;
+		facts.draw_count = validation.draw_count;
+		facts.stride = validation.stride;
+		facts.instance_count = 1u;
+		const GraphicsIndirectValidationResult checked = validate_graphics_indirect(facts);
+		if (!validation.valid ||
+			validation.kind != GraphicsIndirectKind::NonIndexed ||
+			!checked.valid ||
+			checked.args_offset != validation.args_offset ||
+			checked.draw_count != validation.draw_count ||
+			checked.stride != validation.stride ||
+			checked.args_range_end != validation.args_range_end)
 		{
 			HLogError(
-				"RenderDevice: draw_indirect args offset {} is not {}-byte aligned.",
-				args_offset,
-				indirect_args_alignment);
-			return false;
-		}
-
-		constexpr uint64_t indirect_args_size = sizeof(RHI::AshDrawIndirectArgs);
-		const uint64_t buffer_size = args_buffer->m_impl->resource->size;
-		if (args_offset > buffer_size || indirect_args_size > buffer_size - args_offset)
-		{
-			HLogError(
-				"RenderDevice: draw_indirect args offset {} plus args size {} exceeds buffer size {}.",
-				args_offset,
-				indirect_args_size,
-				buffer_size);
+				"RenderDevice: draw_indirect rejected inconsistent validation facts (error {}).",
+				static_cast<uint32_t>(checked.error));
 			return false;
 		}
 
 		command_buffer->cmd_draw_indirect(
-			args_buffer->m_impl->resource->buffer, args_offset, 1u, sizeof(RHI::AshDrawIndirectArgs));
+			args_buffer->m_impl->resource->buffer,
+			validation.args_offset,
+			validation.draw_count,
+			validation.stride);
 		return validate_command_buffer_status(command_buffer, "draw_indirect::record");
+	}
+
+	bool RenderDevice::draw_indexed_indirect(
+		const std::shared_ptr<IndexBuffer>& index_buffer,
+		const std::shared_ptr<StorageBuffer>& args_buffer,
+		const GraphicsIndirectValidationResult& validation)
+	{
+		if (!m_impl)
+		{
+			HLogError("RenderDevice: draw_indexed_indirect requires an initialized render device.");
+			return false;
+		}
+
+		RHI::CommandBuffer* command_buffer = m_impl->current_command_buffer;
+		if (!validate_command_buffer_status(command_buffer, "draw_indexed_indirect::before_record"))
+		{
+			return false;
+		}
+		if (!index_buffer || !index_buffer->m_impl || !index_buffer->m_impl->resource ||
+			!index_buffer->m_impl->resource->buffer ||
+			!args_buffer || !args_buffer->m_impl || !args_buffer->m_impl->resource ||
+			!args_buffer->m_impl->resource->buffer)
+		{
+			HLogError("RenderDevice: draw_indexed_indirect received an invalid index or args buffer resource.");
+			return false;
+		}
+
+		GraphicsIndirectValidationFacts facts{};
+		facts.kind = GraphicsIndirectKind::Indexed;
+		facts.args_resource_present = true;
+		facts.args_buffer_size = args_buffer->m_impl->resource->size;
+		facts.args_buffer_indirect_usage = args_buffer->m_impl->indirect_args;
+		facts.index_buffer_present = true;
+		facts.args_offset = validation.args_offset;
+		facts.draw_count = validation.draw_count;
+		facts.stride = validation.stride;
+		facts.instance_count = 1u;
+		const GraphicsIndirectValidationResult checked = validate_graphics_indirect(facts);
+		if (!validation.valid ||
+			validation.kind != GraphicsIndirectKind::Indexed ||
+			!checked.valid ||
+			checked.args_offset != validation.args_offset ||
+			checked.draw_count != validation.draw_count ||
+			checked.stride != validation.stride ||
+			checked.args_range_end != validation.args_range_end)
+		{
+			HLogError(
+				"RenderDevice: draw_indexed_indirect rejected inconsistent validation facts (error {}).",
+				static_cast<uint32_t>(checked.error));
+			return false;
+		}
+
+		command_buffer->cmd_draw_indexed_indirect(
+			args_buffer->m_impl->resource->buffer,
+			validation.args_offset,
+			validation.draw_count,
+			validation.stride);
+		return validate_command_buffer_status(command_buffer, "draw_indexed_indirect::record");
 	}
 
 	void RenderDevice::dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
@@ -4436,6 +4995,23 @@ namespace AshEngine
 	RHI::CommandBuffer* RenderDevice::get_current_command_buffer() const
 	{
 		return m_impl ? m_impl->current_command_buffer : nullptr;
+	}
+
+	RHI::IGpuTimingTelemetry* RenderDevice::get_gpu_timing_telemetry() const
+	{
+		return m_impl && m_impl->graphics_context ?
+			m_impl->graphics_context->get_gpu_timing_telemetry() :
+			nullptr;
+	}
+
+	uint64_t RenderDevice::get_render_frame_id() const
+	{
+		return m_impl ? m_impl->frame_index : 0u;
+	}
+
+	bool RenderDevice::was_gpu_timing_frame_submitted() const
+	{
+		return m_impl && m_impl->gpu_timing_frame_submitted;
 	}
 
 	std::shared_ptr<RHI::TextureView> RenderDevice::get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const

@@ -2427,6 +2427,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"ShadowConsumer",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(dynamic_atlas, RenderGraphAccess::GraphicsSRV);
@@ -2511,6 +2512,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneGBufferPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::GBuffer,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (uint8_t index = 0; index < static_cast<uint8_t>(resources.gbuffer_targets.size()); ++index)
@@ -2527,6 +2529,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneAmbientOcclusionPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::AmbientOcclusion,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.gbuffer_targets[4], RenderGraphAccess::GraphicsSRV);
@@ -2541,6 +2544,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDirectionalShadowDepthPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Shadows,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.write_depth(transient_atlas, RenderLoadAction::Clear, {});
@@ -2553,6 +2557,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredLightingBasePass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
@@ -2572,6 +2577,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDirectionalShadowMaskPass_0",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
@@ -2587,6 +2593,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredDirectionalLightingShadowedPass_0",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
@@ -2607,6 +2614,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDirectionalLightShadowMaskPass_1",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
@@ -2622,6 +2630,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredDirectionalLightingShadowedPass_1",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
@@ -2642,6 +2651,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredCompositePass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::EnvironmentAndSky,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.lighting_diffuse, RenderGraphAccess::GraphicsSRV);
@@ -2656,6 +2666,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredToneMapPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::ToneMapAndOverlays,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
@@ -3000,6 +3011,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SelectedProducer",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Invalid,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.write_color(0, selected, RenderLoadAction::Clear, {});
@@ -3907,6 +3919,7 @@ namespace AshEngine
 			const bool added = graph.add_raster_pass(
 				"SelfTestRasterPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Invalid,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					setup_called = true;
@@ -3945,6 +3958,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"LiveProducer",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Invalid,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.write_color(0, live_temp, RenderLoadAction::Clear, {});
@@ -3957,6 +3971,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"LiveConsumer",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Invalid,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(live_temp, RenderGraphAccess::GraphicsSRV);
@@ -3970,6 +3985,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"DeadProducer",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Invalid,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.write_color(0, dead_temp, RenderLoadAction::Clear, {});
@@ -3982,6 +3998,7 @@ namespace AshEngine
 			graph.add_compute_pass(
 				"SideEffectCompute",
 				RenderGraphPassFlags::NeverCull,
+				RHI::GpuTimingMetric::Invalid,
 				[](RenderGraphComputePassBuilder&)
 				{
 				},
@@ -4036,6 +4053,7 @@ namespace AshEngine
 				graph.add_raster_pass(
 					"Producer",
 					RenderGraphPassFlags::None,
+					RHI::GpuTimingMetric::Invalid,
 					[&](RenderGraphRasterPassBuilder& pass)
 					{
 						pass.write_color(0, temp, RenderLoadAction::Clear, {});
@@ -4047,6 +4065,7 @@ namespace AshEngine
 				graph.add_raster_pass(
 					"Consumer",
 					RenderGraphPassFlags::None,
+					RHI::GpuTimingMetric::Invalid,
 					[&](RenderGraphRasterPassBuilder& pass)
 					{
 						pass.read_texture(temp, RenderGraphAccess::GraphicsSRV);
@@ -4130,6 +4149,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneGBufferPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::GBuffer,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (uint8_t index = 0; index < static_cast<uint8_t>(resources.gbuffer_targets.size()); ++index)
@@ -4146,6 +4166,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneAmbientOcclusionPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::AmbientOcclusion,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.gbuffer_targets[4], RenderGraphAccess::GraphicsSRV);
@@ -4160,6 +4181,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredLightingBasePass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
@@ -4179,6 +4201,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredEnvironmentLightingPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::EnvironmentAndSky,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (RenderGraphTextureRef gbuffer : resources.gbuffer_targets)
@@ -4200,6 +4223,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredCompositePass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::EnvironmentAndSky,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.lighting_diffuse, RenderGraphAccess::GraphicsSRV);
@@ -4214,6 +4238,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneSkyBackgroundPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::EnvironmentAndSky,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(resources.depth, RenderGraphAccess::GraphicsSRV);
@@ -4228,6 +4253,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				"SceneDeferredToneMapPass",
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::ToneMapAndOverlays,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(scene_hdr_with_sky, RenderGraphAccess::GraphicsSRV);

@@ -1,5 +1,6 @@
 #pragma once
 #include "RenderDevice.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -9,6 +10,12 @@
 
 namespace AshEngine
 {
+	class Renderer;
+	struct RenderGraphResolvedBufferTransition;
+	bool submit_render_graph_buffer_transitions(
+		Renderer& renderer,
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count);
 	struct VertexBufferBinding
 	{
 		uint32_t slot = 0;
@@ -71,6 +78,77 @@ namespace AshEngine
 		std::vector<VertexBufferBinding> m_overflow{};
 	};
 
+	enum class GraphicsIndirectKind : uint8_t
+	{
+		None = 0,
+		NonIndexed,
+		Indexed
+	};
+
+	enum class GraphicsIndirectValidationError : uint8_t
+	{
+		None = 0,
+		UnexpectedArgsBuffer,
+		MissingArgsBuffer,
+		MissingIndirectUsage,
+		MissingIndexBuffer,
+		UnexpectedIndexBuffer,
+		InvalidDrawCount,
+		InvalidStride,
+		MisalignedOffset,
+		RangeOutOfBounds,
+		RangeOverflow,
+		ConflictingDirectArguments
+	};
+
+	struct GraphicsIndirectValidationFacts
+	{
+		GraphicsIndirectKind kind = GraphicsIndirectKind::None;
+		bool args_resource_present = false;
+		uint64_t args_buffer_size = 0;
+		bool args_buffer_indirect_usage = false;
+		bool index_buffer_present = false;
+		uint64_t args_offset = 0;
+		uint32_t draw_count = 1;
+		uint32_t stride = 0;
+		uint32_t vertex_count = 0;
+		uint32_t index_count = 0;
+		uint32_t instance_count = 1;
+		uint32_t first_vertex = 0;
+		uint32_t first_instance = 0;
+		uint32_t first_index = 0;
+		int32_t vertex_offset = 0;
+	};
+
+	struct GraphicsIndirectValidationResult
+	{
+		bool valid = false;
+		GraphicsIndirectValidationError error = GraphicsIndirectValidationError::None;
+		GraphicsIndirectKind kind = GraphicsIndirectKind::None;
+		uint64_t args_offset = 0;
+		uint32_t draw_count = 0;
+		uint32_t stride = 0;
+		uint64_t args_range_end = 0;
+	};
+
+	ASH_API GraphicsIndirectValidationResult validate_graphics_indirect(
+		const GraphicsIndirectValidationFacts& facts);
+
+	struct GraphicsIndirectDrawOperations
+	{
+		void* user_data = nullptr;
+		bool (*bind_index_buffer)(void*, const std::shared_ptr<IndexBuffer>&, uint64_t) = nullptr;
+		bool (*draw_non_indexed)(
+			void*,
+			const std::shared_ptr<StorageBuffer>&,
+			const GraphicsIndirectValidationResult&) = nullptr;
+		bool (*draw_indexed)(
+			void*,
+			const std::shared_ptr<IndexBuffer>&,
+			const std::shared_ptr<StorageBuffer>&,
+			const GraphicsIndirectValidationResult&) = nullptr;
+	};
+
 	struct GraphicsDrawDesc
 	{
 		static constexpr uint32_t InlineConstDataCapacity = 256;
@@ -95,11 +173,17 @@ namespace AshEngine
 		bool reverse_z = false;
 		std::array<uint8_t, InlineConstDataCapacity> inline_const_data{};
 		std::vector<uint8_t> const_data{};
-		// SDD-2026-07-10-gpu-particles：非空即走 cmd_draw_indirect（drawCount=1，非索引），
-		// 忽略 vertex_count/instance_count/index_buffer
+		GraphicsIndirectKind indirect_kind = GraphicsIndirectKind::None;
 		std::shared_ptr<StorageBuffer> indirect_args_buffer = nullptr;
 		uint64_t indirect_args_offset = 0;
+		uint32_t indirect_draw_count = 1;
+		uint32_t indirect_stride = 0;
 	};
+
+	ASH_API bool route_graphics_indirect_draw(
+		const GraphicsDrawDesc& desc,
+		const GraphicsIndirectValidationResult& result,
+		const GraphicsIndirectDrawOperations& operations);
 
 	struct ComputeDispatchDesc
 	{
@@ -107,10 +191,16 @@ namespace AshEngine
 		uint32_t group_count_x = 1;
 		uint32_t group_count_y = 1;
 		uint32_t group_count_z = 1;
+		const RenderGraphBufferBindingScope* graph_buffer_binding_scope = nullptr;
 	};
 
 	struct RendererFrameStats
 	{
+		uint64_t render_frame_id = 0u;
+		bool gpu_timing_frame_submitted = false;
+		std::array<RHI::GpuFrameTimingSample, RHI::kGpuTimingFrameRingDepth>
+			completed_gpu_samples{};
+		uint32_t completed_gpu_sample_count = 0u;
 		uint32_t frame_width = 0;
 		uint32_t frame_height = 0;
 		uint32_t graphics_pass_count = 0;
@@ -124,6 +214,10 @@ namespace AshEngine
 		double average_cpu_frame_time_ms = 0.0;
 		double average_fps = 0.0;
 	};
+
+	ASH_API uint32_t drain_completed_gpu_timing_samples(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RendererFrameStats& frame_stats);
 
 	class ASH_API Renderer
 	{
@@ -142,7 +236,7 @@ namespace AshEngine
 		public:
 			bool is_valid() const;
 			bool draw(const GraphicsDrawDesc& desc);
-			void end();
+			bool end();
 
 		private:
 			explicit GraphicsPassContext(Renderer* renderer);
@@ -180,6 +274,9 @@ namespace AshEngine
 		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
 		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
 		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+		std::shared_ptr<StorageBuffer> acquire_transient_storage_buffer(const StorageBufferDesc& desc);
+		void release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer);
+		void clear_transient_storage_buffers();
 		std::shared_ptr<RenderSampler> create_sampler(const RenderSamplerDesc& desc, const char* debug_name = nullptr);
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
@@ -197,8 +294,10 @@ namespace AshEngine
 		const RendererFrameStats& get_frame_stats() const;
 
 	private:
-		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
-		void end_active_pass(GraphicsPassContext* pass_context);
+		bool submit_graph_buffer_transitions(
+			const RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count);
+		bool end_active_pass(GraphicsPassContext* pass_context);
 
 	private:
 		void update_frame_timing_history(double frame_time_ms);
@@ -216,6 +315,9 @@ namespace AshEngine
 		uint32_t m_frame_time_history_head = 0;
 		double m_frame_time_history_sum_ms = 0.0;
 		friend class RenderGraphBuilder;
-		friend class RenderGraphExecutor;
+		friend bool submit_render_graph_buffer_transitions(
+			Renderer& renderer,
+			const RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count);
 	};
 }

@@ -44,6 +44,7 @@ namespace RHI {
     class Framebuffer;
     class IGraphicsRenderProgram;
     class IComputeRenderProgram;
+    class IGpuTimingTelemetry;
     struct GpuDescriptorPoolCreation {
 
         uint16_t                             samplers = 256;
@@ -67,6 +68,7 @@ namespace RHI {
         uint16_t                             height = 1;
         uint16_t                             num_threads = 1;
         uint16_t							 queryCount = 32;
+        bool                                 enableGpuTimingTelemetry = false;
         Backend                              backend = Backend::Default;
         VulkanValidationConfig               vulkanValidation{};
         DX12ValidationConfig                 dx12Validation{};
@@ -99,6 +101,12 @@ namespace RHI {
         virtual auto get_render_memory_stats() const -> RenderMemoryStats
         {
             return {};
+        }
+        // Context-owned, non-owning view. The pointer becomes invalid after shutdown()
+        // or when this GraphicsContext is destroyed; disabled telemetry returns nullptr.
+        virtual auto get_gpu_timing_telemetry() -> IGpuTimingTelemetry*
+        {
+            return nullptr;
         }
         static GraphicsContext* create(Backend backend);
     public:

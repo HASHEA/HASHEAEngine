@@ -34,11 +34,17 @@ echo.
 echo   RunPerfGate.bat -Profile Standard -SkipBuild
 echo       Pass arguments directly to scripts\RunPerfGate.ps1.
 echo.
+echo   RunPerfGate.bat -Profile VegetationFullPipeline
+echo       Run the locked Release Sandbox Vulkan+DX12 2560x1440 GPU timing profile.
+echo.
 echo Common arguments:
-echo   -Profile Standard
-echo   -Configuration Debug
+echo   -Profile Standard^|VegetationFullPipeline
+echo   -Configuration Debug^|Release  ^(unlocked profiles only^)
 echo   -SkipBuild
 echo   -DryRun
+echo   -TelemetryMode Profile^|Off
 echo   -BlessBaseline
+echo   -BlessBaselineFromReport Intermediate\test-reports\perf-gate\^<run^>\summary.json
+echo   -ExpectedReportSha256 ^<64-hex-sha256^>
 echo   -BaselinePath tools\perf\perf_gate_baselines.json
 exit /b 0

@@ -119,6 +119,7 @@ public:
 		auto set_max_run_seconds(double inMaxRunSeconds) -> void;
 		auto set_readiness_smoke_timeout_seconds(double timeoutSeconds) -> void;
 		auto configure_perf_gate(const PerfGateConfig& config) -> void;
+		auto set_window_extent_override(uint16_t width, uint16_t height) -> void;
 		// RenderGate：readiness capture 通过 post-present/asset-epoch 复核后原子发布 PNG；--scene 供应用层覆盖默认场景
 		auto set_frame_dump_path(std::string path) -> void;
 		auto set_scene_path_override(std::string path) -> void;
@@ -214,6 +215,7 @@ public:
 		ScenePresentationSubsystem scenePresentation{};
 		DebugDrawService		debugDrawService{};
 		PerfGateController		perfGateController{};
+		PerfGateConfig			pendingPerfGateConfig{};
 		ApplicationAutomationController automationController{};
 		EngineThreadingConfig	threadingConfig{};
 		InputState				inputState{};
@@ -229,8 +231,11 @@ public:
 		uint64_t				maxFrameCount			= 0;
 		double					maxRunSeconds			= 0.0;
 		double					readinessSmokeTimeoutSeconds = 0.0;
+		uint16_t				windowExtentOverrideWidth = 0;
+		uint16_t				windowExtentOverrideHeight = 0;
 		std::string				frameDumpPath{};
 		std::string				scenePathOverride{};
+		bool					hasWindowExtentOverride = false;
 		bool					frameDumpCapturePending	= false;
 		bool					frameDumpWritten		= false;
 		bool					currentFrameRenderSucceeded = false;

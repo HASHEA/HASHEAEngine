@@ -6,6 +6,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "PerfGateProfileConfig.ps1")
+
 function Get-RepoRoot {
     $path = Resolve-Path (Join-Path $PSScriptRoot "..")
     if (-not (Test-Path -LiteralPath (Join-Path $path.Path "AshEngine.sln"))) {
@@ -34,19 +36,6 @@ function Join-Arguments {
         $quoted += Quote-Argument $argument
     }
     return ($quoted -join " ")
-}
-
-function Get-ProfileConfig {
-    param(
-        [object]$Baseline,
-        [string]$Profile
-    )
-
-    $property = $Baseline.profiles.PSObject.Properties[$Profile]
-    if ($null -eq $property) {
-        throw "Unknown perf gate profile '$Profile'."
-    }
-    return $property.Value
 }
 
 function Select-MenuOption {
@@ -143,14 +132,15 @@ if ($Help) {
 $repoRoot = Get-RepoRoot
 $runnerScript = Join-Path $repoRoot "scripts\RunPerfGate.ps1"
 $baselinePath = Join-Path $repoRoot "tools\perf\perf_gate_baselines.json"
-$baseline = Get-Content -Raw -LiteralPath $baselinePath | ConvertFrom-Json
-$profiles = @($baseline.profiles.PSObject.Properties.Name)
+$profilesPath = Join-Path $repoRoot "tools\perf\perf_gate_profiles.json"
+$profileCatalog = Import-PerfGateProfileCatalog -ProfilesPath $profilesPath -BaselinePath $baselinePath
+$profiles = @(Get-PerfGateProfileNames -Catalog $profileCatalog)
 if ($profiles.Count -eq 0) {
-    throw "No perf gate profiles are defined in $baselinePath."
+    throw "No perf gate profiles are defined in $profilesPath or $baselinePath."
 }
 
 $defaultProfile = if ($profiles -contains "Standard") { "Standard" } else { $profiles[0] }
-$defaultProfileConfig = Get-ProfileConfig -Baseline $baseline -Profile $defaultProfile
+$defaultProfileConfig = Get-PerfGateProfileConfig -Catalog $profileCatalog -Profile $defaultProfile
 $defaultArguments = New-RunnerArguments `
     -Profile $defaultProfile `
     -Configuration $defaultProfileConfig.configuration `
@@ -160,6 +150,7 @@ $defaultArguments = New-RunnerArguments `
     -BlessBaseline $false
 
 if ($Preview) {
+    Write-Host ("Available profiles: {0}" -f ($profiles -join ", "))
     Write-Host ("powershell -NoProfile -ExecutionPolicy Bypass -File {0} {1}" -f (Quote-Argument $runnerScript), (Join-Arguments $defaultArguments))
     exit 0
 }
@@ -174,19 +165,28 @@ while ($true) {
         exit 0
     }
     $profile = $profiles[$profileIndex]
-    $profileConfig = Get-ProfileConfig -Baseline $baseline -Profile $profile
+    $profileConfig = Get-PerfGateProfileConfig -Catalog $profileCatalog -Profile $profile
+    $lockedValue = Get-PerfGateObjectProperty $profileConfig "configuration_locked"
+    $configurationLocked = $null -ne $lockedValue -and [bool]$lockedValue
 
-    $configurationOptions = @(
-        "Profile default ($($profileConfig.configuration))",
-        "Debug",
-        "Release"
-    )
-    $configurationIndex = Select-MenuOption -Title "Configuration" -Options $configurationOptions -DefaultIndex 0
-    if ($configurationIndex -lt 0) {
-        exit 0
+    if ($configurationLocked) {
+        $useProfileConfiguration = $true
+        $configuration = Resolve-PerfGateConfiguration -ProfileConfig $profileConfig -RequestedConfiguration ""
     }
-    $useProfileConfiguration = ($configurationIndex -eq 0)
-    $configuration = if ($useProfileConfiguration) { [string]$profileConfig.configuration } else { $configurationOptions[$configurationIndex] }
+    else {
+        $configurationOptions = @(
+            "Profile default ($($profileConfig.configuration))",
+            "Debug",
+            "Release"
+        )
+        $configurationIndex = Select-MenuOption -Title "Configuration" -Options $configurationOptions -DefaultIndex 0
+        if ($configurationIndex -lt 0) {
+            exit 0
+        }
+        $useProfileConfiguration = ($configurationIndex -eq 0)
+        $requestedConfiguration = if ($useProfileConfiguration) { "" } else { $configurationOptions[$configurationIndex] }
+        $configuration = Resolve-PerfGateConfiguration -ProfileConfig $profileConfig -RequestedConfiguration $requestedConfiguration
+    }
 
     $buildIndex = Select-MenuOption -Title "Build" -Options @("Build before run", "Skip build") -DefaultIndex 0
     if ($buildIndex -lt 0) {
@@ -223,7 +223,7 @@ while ($true) {
     Write-Host $commandLine -ForegroundColor Yellow
     Write-Host ""
     Write-Host ("Profile:       {0}" -f $profile)
-    Write-Host ("Configuration: {0}" -f ($(if ($useProfileConfiguration) { "Profile default ($configuration)" } else { $configuration })))
+    Write-Host ("Configuration: {0}" -f ($(if ($configurationLocked) { "Profile locked ($configuration)" } elseif ($useProfileConfiguration) { "Profile default ($configuration)" } else { $configuration })))
     Write-Host ("Build:         {0}" -f ($(if ($skipBuild) { "Skip build" } else { "Build before run" })))
     Write-Host ("Run mode:      {0}" -f ($(if ($dryRun) { "Dry run only" } elseif ($blessBaseline) { "Full gate and bless baseline" } else { "Full gate" })))
     Write-Host ""

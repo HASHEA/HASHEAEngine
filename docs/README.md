@@ -18,6 +18,10 @@
   - 长期现状规格：模块 spec + feature spec；动某模块/feature 前先读对应 spec，索引见 `docs/specs/README.md`
 - `docs/sdd/`
   - 变更设计文档（SDD），S1 起需要；模板见 `docs/sdd/TEMPLATE.md`；Done 后结论回写 `docs/specs/`
+- `docs/adr/`
+  - 架构决策记录（ADR）；S3 用它记录跨阶段长期边界，具体实现和验证仍由分阶段 SDD 承担
+- `docs/plans/`
+  - 已批准 SDD 的可执行实施计划；按任务列明测试先行步骤、精确文件范围和阶段验收，不替代长期 spec
 
 ## 1. 按任务选入口
 
@@ -35,6 +39,10 @@
   - `docs/MaterialEditorArchitecture.md`
   - `docs/MaterialNodeDataModel.md`
   - `docs/EditorNodeCanvasWidget.md`
+- 架构级 / S3 任务：
+  - `docs/adr/README.md`（长期决策索引）
+  - `docs/sdd/`（总体 SDD + 可单独批准的阶段 SDD）
+  - `docs/plans/`（批准后的逐项实施计划）
 
 ## 2. 维护规则
 

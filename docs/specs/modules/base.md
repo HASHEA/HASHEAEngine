@@ -33,7 +33,7 @@ status: active
 
 - 日志：`LogService::instance()` 初始化后使用 `HLogInfo/Warning/Error/Trace` 宏；引擎/应用双 logger 由 `ASH_ENGINE` 宏区分。每次 `init` 为本次进程会话创建一对 `product/logs/{AshEngineLogFile,AshAppLogFile}_<session>.logfile`，两者共享 session 后缀；后缀由本地时间（微秒）、PID 与进程内单调序号构成。
 - 内存：所有引擎堆对象经 `Ash_New<T>(allocator, args...)` / `Ash_Delete` 分配释放；`Allocator` 为抽象接口（`eHeap/eStack/eLinear`）；默认走 `MemoryService::instance()->get_system_allocator()`。
-- 窗口：`Window::create()` 工厂 + `init(WindowConfig)`；事件用 `poll_event(WindowEvent&)` 逐个取出，类型见 `WindowEventType`（Resize/Key/Mouse/CloseRequested 等）。
+- 窗口：`Window::create()` 工厂 + `init(WindowConfig)`；事件用 `poll_event(WindowEvent&)` 逐个取出，类型见 `WindowEventType`（Resize/Key/Mouse/CloseRequested 等）。`WindowConfig::exactClientExtent` 默认 false；显式开启时 Windows/GLFW 在创建前禁用窗口装饰，避免标题栏/工作区把目标 client extent 压小，并在创建后以实际 client size 回写窗口尺寸。该模式只解决自动化的精确交换链尺寸，不改变普通交互窗口的装饰与尺寸策略。
 - 输入：`InputState::begin_frame()` / `clear_transient_state()` 清空 pressed/released/scroll，保留 down 与鼠标位置；`merge_frame_snapshot()` 以最新持续状态、逐项 OR 边沿、累加 scroll 的规则合并尚未消费帧。`set_key_state/set_mouse_button_state` 由窗口事件驱动；消费方查询 down/pressed/released。
 - 时间：`time_service_init/shutdown` 启停一次，`time_now()` 返回 tick，配套换算函数。
 - 线程：`initialize_threading(EngineThreadingConfig)`；`register_current_thread_role` + `is_in_render/logic/worker_thread` 判定；跨线程投递用 `enqueue_render_command` / `pump_render_commands` / `flush_render_commands`；后台任务用 `dispatch_background_task`。

@@ -11,6 +11,7 @@
 #include "DX12RenderProgram.h"
 #include "DX12StagingBufferPool.h"
 #include "DX12GpuProfiler.h"
+#include "DX12GpuTimingTelemetry.h"
 #include "Graphics/GpuProfilerRHI.h"
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
@@ -19,15 +20,44 @@
 #include "Graphics/TextureUploadUtils.h"
 #include "Base/hthreading.h"
 #include "D3D12MemAlloc.h"
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
 namespace RHI
 {
 	DX12Context* DX12Context::s_instance = nullptr;
+	static_assert(
+		k_dx12_max_frames == kGpuTimingFrameRingDepth,
+		"DX12 timing query segmentation must match the backend frame ring.");
+
+	DX12Context::DX12Context()
+	{
+		s_instance = this;
+	}
+
+	DX12Context::~DX12Context() = default;
 
 	namespace
 	{
+		constexpr uint64_t k_required_fence_wait_timeout_milliseconds = 30'000u;
+
+		constexpr const char* dx12_fence_wait_status_to_string(
+			DX12FenceWaitStatus status)
+		{
+			switch (status)
+			{
+			case DX12FenceWaitStatus::Completed: return "Completed";
+			case DX12FenceWaitStatus::Timeout: return "Timeout";
+			case DX12FenceWaitStatus::DeviceRemoved: return "DeviceRemoved";
+			case DX12FenceWaitStatus::EventRegistrationFailed:
+				return "EventRegistrationFailed";
+			case DX12FenceWaitStatus::WaitFailed: return "WaitFailed";
+			case DX12FenceWaitStatus::InvalidFence: return "InvalidFence";
+			default: return "Unknown";
+			}
+		}
+
 		constexpr bool should_log_d3d12_debug_message(D3D12_MESSAGE_SEVERITY severity)
 		{
 			return severity == D3D12_MESSAGE_SEVERITY_WARNING ||
@@ -149,6 +179,10 @@ namespace RHI
 
 	auto DX12Context::queue_buffer_upload(const std::shared_ptr<Buffer>& buffer, uint32_t offset, uint32_t size, void* data) -> bool
 	{
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			return false;
+		}
 		if (!buffer || !data || size == 0)
 		{
 			return false;
@@ -164,6 +198,10 @@ namespace RHI
 
 	auto DX12Context::queue_texture_upload(const std::shared_ptr<Texture>& texture, const void* data) -> bool
 	{
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			return false;
+		}
 		if (!texture || !data)
 		{
 			return false;
@@ -373,6 +411,23 @@ namespace RHI
 		if (!_create_descriptor_heaps()) return false;
 		if (!_create_frame_resources(cfg.num_threads)) return false;
 
+		if (cfg.enableGpuTimingTelemetry)
+		{
+			auto telemetry = std::make_unique<DX12GpuTimingTelemetry>();
+			if (telemetry->init(
+					m_device.Get(),
+					m_graphicsQueue.get_queue(),
+					m_adapter.Get()))
+			{
+				m_gpuTimingTelemetry = std::move(telemetry);
+				HLogInfo("DX12 GPU timing telemetry enabled.");
+			}
+			else
+			{
+				HLogWarning("DX12 GPU timing telemetry was requested but is unavailable.");
+			}
+		}
+
 		// Create staging buffer
 		m_stagingBuffer = Ash_New<DX12StagingBufferPool>();
 		m_stagingBuffer->init(m_device.Get(), m_d3d12maAllocator);
@@ -389,7 +444,23 @@ namespace RHI
 
 	auto DX12Context::shutdown() -> bool
 	{
-		wait_idle();
+		const DX12GraphicsTeardownReadiness teardown_readiness =
+			_establish_graphics_teardown_readiness();
+		if (teardown_readiness == DX12GraphicsTeardownReadiness::Unknown)
+		{
+			HLogError(
+				"DX12Context: shutdown cannot prove graphics queue completion; "
+				"terminating before any potentially in-flight GPU resource is released.");
+			std::abort();
+		}
+		if (teardown_readiness == DX12GraphicsTeardownReadiness::DeviceRemoved)
+		{
+			HLogError(
+				"DX12Context: device removal confirmed during shutdown; "
+				"terminating before telemetry, Tracy, or any GPU-owned resource is released.");
+			std::abort();
+		}
+		m_gpuTimingTelemetry.reset();
 
 		// 卸载 Tracy GPU profiler，必须在 device/queue 销毁之前。
 		if (auto* profiler = gpu_profiler_get())
@@ -453,9 +524,15 @@ namespace RHI
 		m_adapter.Reset();
 		m_factory.Reset();
 
+		m_graphicsCompletionPolicy.reset_after_shutdown();
 		s_instance = nullptr;
 		HLogInfo("DX12Context: Shutdown complete.");
 		return true;
+	}
+
+	auto DX12Context::get_gpu_timing_telemetry() -> IGpuTimingTelemetry*
+	{
+		return m_gpuTimingTelemetry.get();
 	}
 
 	auto DX12Context::destroy() -> void
@@ -1017,20 +1094,203 @@ namespace RHI
 		return true;
 	}
 
+	auto DX12Context::_observe_graphics_submission(
+		bool batch_executed,
+		const DX12FenceSignalResult& signal_result,
+		const char* phase) -> void
+	{
+		const bool completion_was_lost = m_graphicsCompletionPolicy.is_lost();
+		m_graphicsCompletionPolicy.observe_submission(batch_executed, signal_result);
+		if (!completion_was_lost && m_graphicsCompletionPolicy.is_lost())
+		{
+			m_frameActive = false;
+			HLogError(
+				"DX12Context: graphics completion became untrackable after {} "
+				"(hr={:#x}, target={}); future GPU work and frame-resource reuse are disabled.",
+				phase ? phase : "submission",
+				static_cast<uint32_t>(signal_result.hresult),
+				signal_result.target_value);
+			_fail_closed_after_graphics_completion_loss(phase);
+		}
+	}
+
+	auto DX12Context::_fail_closed_after_graphics_completion_loss(const char* phase) -> void
+	{
+		const DX12GraphicsTeardownReadiness readiness =
+			_establish_graphics_teardown_readiness();
+		if (readiness == DX12GraphicsTeardownReadiness::Unknown)
+		{
+			HLogError(
+				"DX12Context: {} lost graphics completion and a fresh queue-tail marker "
+				"could not prove the queue drained; terminating before returning to "
+				"callers that may release in-flight resources.",
+				phase ? phase : "submission");
+			std::abort();
+		}
+		if (readiness == DX12GraphicsTeardownReadiness::DeviceRemoved)
+		{
+			HLogWarning(
+				"DX12Context: {} lost graphics completion, but device removal was "
+				"confirmed; runtime GPU work remains disabled.",
+				phase ? phase : "submission");
+		}
+		else
+		{
+			if (m_gpuTimingTelemetry)
+			{
+				m_gpuTimingTelemetry->notify_terminal_completion(
+					GpuTimingInvalidReason::SubmissionFailed);
+			}
+			HLogWarning(
+				"DX12Context: {} lost its original completion marker; a fresh queue-tail "
+				"marker drained the queue, but runtime GPU work remains disabled.",
+				phase ? phase : "submission");
+		}
+	}
+
+	auto DX12Context::_record_confirmed_device_removal() -> bool
+	{
+		if (!m_device || m_device->GetDeviceRemovedReason() == S_OK)
+		{
+			return false;
+		}
+		m_graphicsCompletionPolicy.record_teardown_readiness(
+			DX12GraphicsTeardownReadiness::DeviceRemoved);
+		if (m_gpuTimingTelemetry)
+		{
+			m_gpuTimingTelemetry->notify_terminal_completion(
+				GpuTimingInvalidReason::DeviceRemoved);
+		}
+		return true;
+	}
+
+	auto DX12Context::_establish_graphics_teardown_readiness()
+		-> DX12GraphicsTeardownReadiness
+	{
+		// A previously proven Drained cache cannot mask a device removal that was
+		// reported later. Upgrade it before any caller considers releasing Tracy or
+		// other GPU-owned state.
+		if (_record_confirmed_device_removal())
+		{
+			return DX12GraphicsTeardownReadiness::DeviceRemoved;
+		}
+		const DX12GraphicsTeardownReadiness cached_readiness =
+			m_graphicsCompletionPolicy.cached_teardown_readiness();
+		if (cached_readiness != DX12GraphicsTeardownReadiness::Unknown)
+		{
+			return cached_readiness;
+		}
+		if (!m_device)
+		{
+			m_graphicsCompletionPolicy.record_teardown_readiness(
+				DX12GraphicsTeardownReadiness::Drained);
+			return DX12GraphicsTeardownReadiness::Drained;
+		}
+
+		DX12FenceSignalResult tail_signal_result{};
+		uint64_t completed_value = 0u;
+		if (!m_frameResources.empty() &&
+			m_frameResources.front().fence &&
+			m_graphicsQueue.get_queue())
+		{
+			DX12Fence* tail_fence = m_frameResources.front().fence;
+			tail_signal_result = tail_fence->signal(m_graphicsQueue.get_queue());
+			m_graphicsCompletionPolicy.observe_required_completion_signal(
+				tail_signal_result);
+			if (tail_signal_result.succeeded())
+			{
+				const DX12FenceWaitResult wait_result = tail_fence->wait(
+					k_required_fence_wait_timeout_milliseconds);
+				completed_value = wait_result.completed_value;
+				if (!wait_result.completed())
+				{
+					HLogError(
+						"DX12Context: queue-tail fence wait did not complete "
+						"(status={}, completed={}, target={}, event_hr={:#x}, "
+						"wait_result={:#x}, wait_error={}).",
+						dx12_fence_wait_status_to_string(wait_result.status),
+						wait_result.completed_value,
+						wait_result.target_value,
+						static_cast<uint32_t>(wait_result.event_registration_hresult),
+						wait_result.wait_result,
+						wait_result.wait_error);
+				}
+			}
+		}
+		else
+		{
+			m_graphicsCompletionPolicy.mark_completion_lost();
+		}
+
+		const HRESULT device_removed_reason = m_device->GetDeviceRemovedReason();
+		const DX12GraphicsTeardownReadiness readiness =
+			classify_dx12_graphics_teardown_readiness(
+				tail_signal_result,
+				completed_value,
+				device_removed_reason);
+		if (readiness == DX12GraphicsTeardownReadiness::Unknown)
+		{
+			m_graphicsCompletionPolicy.mark_completion_lost();
+		}
+		else
+		{
+			m_graphicsCompletionPolicy.record_teardown_readiness(readiness);
+			if (readiness == DX12GraphicsTeardownReadiness::DeviceRemoved &&
+				m_gpuTimingTelemetry)
+			{
+				m_gpuTimingTelemetry->notify_terminal_completion(
+					GpuTimingInvalidReason::DeviceRemoved);
+			}
+		}
+		return readiness;
+	}
+
 	// ──────────────────────────────────────────────────────────────
 	// Frame Management
 	// ──────────────────────────────────────────────────────────────
 	auto DX12Context::begin_frame() -> void
 	{
 		ASH_PROFILE_SCOPE_NC("DX12Context::begin_frame", AshEngine::Profile::Color::RHI);
+		m_frameActive = false;
+		if (!m_graphicsCompletionPolicy.can_reuse_frame_resources())
+		{
+			return;
+		}
 		m_currentFrame = static_cast<uint32_t>(m_absoluteFrame % k_dx12_max_frames);
 
 		auto& fr = m_frameResources[m_currentFrame];
 
 		// Wait for this frame's previous work to complete
+		DX12FenceWaitResult wait_result{};
 		{
 			ASH_PROFILE_SCOPE_NC("DX12Context::WaitFrameFence", AshEngine::Profile::Color::RHI);
-			fr.fence->wait();
+			wait_result = fr.fence->wait(k_required_fence_wait_timeout_milliseconds);
+		}
+		const uint64_t completed_fence_value = wait_result.completed_value;
+		if (m_gpuTimingTelemetry)
+		{
+			m_gpuTimingTelemetry->resolve_recycled_slot(
+				m_currentFrame,
+				completed_fence_value);
+		}
+		if (!wait_result.completed())
+		{
+			const bool device_removed = _record_confirmed_device_removal();
+			m_graphicsCompletionPolicy.mark_completion_lost();
+			HLogError(
+				"DX12Context: frame-slot fence wait did not complete "
+				"(status={}, completed={}, target={}, event_hr={:#x}, "
+				"wait_result={:#x}, wait_error={}, device_removed={}); "
+				"allocator and transient resources will not be reused.",
+				dx12_fence_wait_status_to_string(wait_result.status),
+				wait_result.completed_value,
+				wait_result.target_value,
+				static_cast<uint32_t>(wait_result.event_registration_hresult),
+				wait_result.wait_result,
+				wait_result.wait_error,
+				device_removed);
+			_fail_closed_after_graphics_completion_loss("frame-slot wait");
+			return;
 		}
 
 		// Reset command allocator for this frame
@@ -1068,6 +1328,11 @@ namespace RHI
 	{
 		(void)has_acquired_swapchain_image;
 		ASH_PROFILE_SCOPE_NC("DX12Context::end_frame", AshEngine::Profile::Color::RHI);
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			m_frameActive = false;
+			return;
+		}
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
 		{
@@ -1081,13 +1346,26 @@ namespace RHI
 					m_graphicsQueue.execute_command_lists(static_cast<UINT>(uploadCmdLists.size()), uploadCmdLists.data());
 				}
 				fr.uploadCmdBuffer->set_state(ASH_Submitted);
-				fr.fence->signal(m_graphicsQueue.get_queue());
+				const DX12FenceSignalResult signal_result =
+					fr.fence->signal(m_graphicsQueue.get_queue());
+				_observe_graphics_submission(true, signal_result, "upload submission");
+				if (!signal_result.succeeded())
+				{
+					HLogError(
+						"DX12Context: failed to signal the frame fence after upload submit (hr={:#x}).",
+						static_cast<uint32_t>(signal_result.hresult));
+				}
 			}
 			else
 			{
 				HLogError("DX12Context: skipping errored upload command buffer submit in end_frame.");
 			}
 			fr.uploadCommandsPending = false;
+		}
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			m_frameActive = false;
+			return;
 		}
 		_drain_d3d12_debug_messages("frame-end");
 
@@ -1096,6 +1374,9 @@ namespace RHI
 		if (auto* profiler = gpu_profiler_get())
 		{
 			profiler->collect(nullptr);
+#if defined(TRACY_ENABLE)
+			m_graphicsCompletionPolicy.observe_queue_work();
+#endif
 		}
 
 		m_frameActive = false;
@@ -1105,16 +1386,27 @@ namespace RHI
 
 	auto DX12Context::wait_idle() -> void
 	{
-		// Signal and wait on all queues
-		for (auto& fr : m_frameResources)
+		const DX12GraphicsTeardownReadiness readiness =
+			_establish_graphics_teardown_readiness();
+		if (readiness == DX12GraphicsTeardownReadiness::Unknown)
 		{
-			fr.fence->signal(m_graphicsQueue.get_queue());
-			fr.fence->wait();
+			HLogError(
+				"DX12Context: wait_idle could not prove graphics queue completion; "
+				"terminating before callers may release in-flight resources.");
+			std::abort();
+		}
+		else if (readiness == DX12GraphicsTeardownReadiness::DeviceRemoved)
+		{
+			HLogError("DX12Context: wait_idle observed confirmed device removal.");
 		}
 	}
 
 	auto DX12Context::wait_for_frame_completion(uint64_t timeout_nanoseconds) -> bool
 	{
+		if (!m_graphicsCompletionPolicy.can_report_completion())
+		{
+			return false;
+		}
 		if (m_frameResources.empty() || m_currentFrame >= m_frameResources.size())
 		{
 			return true;
@@ -1135,18 +1427,48 @@ namespace RHI
 		{
 			timeout_milliseconds = maximum_finite_wait_milliseconds;
 		}
-		frame_fence->wait(timeout_milliseconds);
-		const uint64_t completed_value = frame_fence->get_completed_value();
-		if (completed_value == UINT64_MAX)
+		const DX12FenceWaitResult wait_result =
+			frame_fence->wait(timeout_milliseconds);
+		if (wait_result.completed())
 		{
-			HLogError("DX12Context: frame completion wait failed because the device was removed.");
+			return true;
+		}
+		const uint64_t completed_value = wait_result.completed_value;
+		const bool device_removed = _record_confirmed_device_removal();
+		if (wait_result.status == DX12FenceWaitStatus::Timeout && !device_removed)
+		{
 			return false;
 		}
-		return completed_value >= frame_fence->get_current_value();
+		if (wait_result.status == DX12FenceWaitStatus::DeviceRemoved ||
+			completed_value == UINT64_MAX ||
+			device_removed)
+		{
+			HLogError("DX12Context: frame completion wait failed because the device was removed.");
+		}
+		else
+		{
+			HLogError(
+				"DX12Context: bounded frame completion wait failed "
+				"(status={}, completed={}, target={}, event_hr={:#x}, "
+				"wait_result={:#x}, wait_error={}).",
+				dx12_fence_wait_status_to_string(wait_result.status),
+				wait_result.completed_value,
+				wait_result.target_value,
+				static_cast<uint32_t>(wait_result.event_registration_hresult),
+				wait_result.wait_result,
+				wait_result.wait_error);
+		}
+		m_graphicsCompletionPolicy.mark_completion_lost();
+		_fail_closed_after_graphics_completion_loss("bounded frame-completion wait");
+		return false;
 	}
 
 	auto DX12Context::get_command_buffer(uint32_t threadIndx) -> CommandBuffer*
 	{
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			return nullptr;
+		}
 		uint32_t index = m_currentFrame * m_numThread + threadIndx;
 		H_ASSERT(index < m_commandBuffers.size());
 		auto* cb = m_commandBuffers[index];
@@ -1205,6 +1527,10 @@ namespace RHI
 
 	auto DX12Context::submit(const SubmitInfo& info) -> void
 	{
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			return;
+		}
 		std::vector<ID3D12CommandList*> cmdLists;
 		auto& fr = m_frameResources[m_currentFrame];
 		if (fr.uploadCommandsPending)
@@ -1244,22 +1570,67 @@ namespace RHI
 			dx12Cb->set_state(ASH_Submitted);
 		}
 
-		if (!cmdLists.empty())
+		const bool batch_executed = !cmdLists.empty();
+		if (batch_executed)
 		{
 			m_graphicsQueue.execute_command_lists(static_cast<UINT>(cmdLists.size()), cmdLists.data());
 		}
 
-		// Signal fence for this frame
-		fr.fence->signal(m_graphicsQueue.get_queue());
+		// Bind the structured timing slot only when its exact native command list was
+		// part of the executed batch and this frame's existing fence was signaled.
+		const DX12FenceSignalResult signal_result =
+			fr.fence->signal(m_graphicsQueue.get_queue());
+		if (!signal_result.succeeded())
+		{
+			HLogError(
+				"DX12Context: failed to signal the frame fence after submit (hr={:#x}).",
+				static_cast<uint32_t>(signal_result.hresult));
+		}
+		if (m_gpuTimingTelemetry)
+		{
+			m_gpuTimingTelemetry->observe_submission(
+				cmdLists.empty() ? nullptr : cmdLists.data(),
+				static_cast<uint32_t>(cmdLists.size()),
+				signal_result);
+		}
+		_observe_graphics_submission(batch_executed, signal_result, "main submission");
 		_drain_d3d12_debug_messages("submit");
 	}
 
 	auto DX12Context::submit_immediately(const SubmitInfo& info) -> void
 	{
+		if (!m_graphicsCompletionPolicy.can_issue_work())
+		{
+			return;
+		}
 		submit(info);
+		if (!m_graphicsCompletionPolicy.can_report_completion())
+		{
+			return;
+		}
 		// Immediately wait
 		auto& fr = m_frameResources[m_currentFrame];
-		fr.fence->wait();
+		const DX12FenceWaitResult wait_result = fr.fence->wait(
+			k_required_fence_wait_timeout_milliseconds);
+		if (!wait_result.completed())
+		{
+			const bool device_removed = _record_confirmed_device_removal();
+			m_graphicsCompletionPolicy.mark_completion_lost();
+			m_frameActive = false;
+			HLogError(
+				"DX12Context: immediate submission completion could not be proven "
+				"(status={}, completed={}, target={}, event_hr={:#x}, "
+				"wait_result={:#x}, wait_error={}, device_removed={}); "
+				"future GPU work is disabled.",
+				dx12_fence_wait_status_to_string(wait_result.status),
+				wait_result.completed_value,
+				wait_result.target_value,
+				static_cast<uint32_t>(wait_result.event_registration_hresult),
+				wait_result.wait_result,
+				wait_result.wait_error,
+				device_removed);
+			_fail_closed_after_graphics_completion_loss("immediate submission wait");
+		}
 	}
 
 	// ──────────────────────────────────────────────────────────────

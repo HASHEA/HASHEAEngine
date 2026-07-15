@@ -1,6 +1,6 @@
 # PerfGate 性能门禁使用说明
 
-PerfGate 是性能敏感改动提交前的标准检查流程。它会自动运行指定目标程序，采集帧耗时、FPS、进程内存、Engine heap、后端内存、draw/pass/dispatch 数量和日志诊断，并生成可追溯报告。
+PerfGate 是性能敏感改动提交前的标准检查流程。它会自动运行指定目标程序，采集 CPU 帧耗时、按需 GPU frame/pass-group timing、FPS、进程内存、Engine heap、后端内存、draw/pass/dispatch 数量和日志诊断，并生成可追溯报告。
 
 当前标准入口是仓库根目录的 `RunPerfGate.bat`：
 
@@ -19,6 +19,7 @@ RunPerfGate.bat
 | 只改文档、注释、纯脚本展示逻辑 | `RunPerfGate.bat -Profile Standard -SkipBuild -DryRun` |
 | 改 Engine、Renderer、RHI、Scene、Asset、Application 生命周期或配置 | `RunPerfGate.bat -Profile Standard` |
 | 改性能敏感路径，但刚刚已经完成本地构建 | `RunPerfGate.bat -Profile Standard -SkipBuild` |
+| 采集固定 2K Release 无植被完整管线候选 | `RunPerfGate.bat -Profile VegetationFullPipeline` |
 | 已确认当前性能状态是新的可接受基线 | `RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline` |
 
 提交前的默认要求是：性能敏感改动至少跑一次完整 `Standard` 门禁。`FAIL` 必须先修；`WARN` 需要判断是否是可接受的趋势变化。
@@ -43,6 +44,14 @@ RunPerfGate.bat -Profile Standard
 RunPerfGate.bat -Profile Standard -SkipBuild
 ```
 
+在保持 profile 的场景、分辨率、相机和其他运行时约束不变时，关闭 GPU timing 做采集开销 A/B：
+
+```bat
+RunPerfGate.bat -Profile VegetationFullPipeline -TelemetryMode Off -SkipBuild
+```
+
+该模式仍要求固定运行时 profile 产出完整 schema v2 runtime 元数据，但不会要求已关闭的 GPU timing `backend_info`、adapter 或 driver。结果标记为 GPU baseline 不可比，且不能与 `-BlessBaseline` 同时使用。
+
 只验证脚本流程和报告生成，不启动目标程序：
 
 ```bat
@@ -53,6 +62,12 @@ RunPerfGate.bat -Profile Standard -SkipBuild -DryRun
 
 ```bat
 RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
+```
+
+把已由用户批准、SHA-256 锁定的固定 profile 候选报告导入基线（不重新运行目标程序）：
+
+```bat
+RunPerfGate.bat -Profile VegetationFullPipeline -Configuration Release -BlessBaselineFromReport Intermediate\test-reports\perf-gate\<run>\summary.json -ExpectedReportSha256 <64-hex-sha256>
 ```
 
 指定基线文件：
@@ -91,6 +106,43 @@ tools/perf/perf_gate_baselines.json
 
 脚本会按矩阵切换 backend，运行对应程序，采集 telemetry，并扫描 stdout/stderr 中的 validation、debug-layer、leak 和异常模式。
 
+### VegetationFullPipeline 固定候选
+
+`VegetationFullPipeline` 定义在 `tools/perf/perf_gate_profiles.json`，用于大世界植被 Phase 0 及后续性能归因。它不是 Standard 的替代品，而是固定的 Release benchmark：
+
+| 项目 | 固定值 |
+| --- | --- |
+| Configuration / target | `Release` / `Sandbox` |
+| Backends | `Vulkan`、`DX12` |
+| Extent | `2560×1440` actual client extent；不接受静默缩小 |
+| Scene | `product/assets/scenes/VegetationBaseline.scene.json`（无植被、完整 pipeline） |
+| Warmup / sample / drain / timeout | `10 / 30 / 5 / 90` 秒 |
+| Runtime | fixed camera、vsync off、frame cap off、performance validation off |
+| GPU timing | required；总 coverage 与 11 个 required metric coverage 均至少 95% |
+| Sampling evidence | schema v2 elapsed span 至少覆盖 90%；最大相邻间隔 `<= 0.25 s`；采样率 `>= 30 Hz` |
+
+该 profile 的已批准回归阈值取“相对比例”和“绝对噪声 floor”中的较大值：
+
+| 指标 | WARN 阈值 |
+| --- | --- |
+| CPU avg / p95 / p99 | `max(5%, 0.25 ms)` / `max(8%, 0.50 ms)` / `max(12%, 1.00 ms)` |
+| Private bytes / Engine heap | `max(5%, 128 MiB)` / `max(10%, 1 MiB)` |
+| Draw calls | `0`（任何上升都 WARN） |
+| `GPU.Frame` avg / p95 | `max(5%, 0.25 ms)` / `max(8%, 0.50 ms)` |
+| pass baseline avg `>= 0.5 ms` | avg `max(8%, 0.10 ms)`；p95 `max(12%, 0.20 ms)` |
+| pass baseline avg `[0.1, 0.5) ms` | avg `max(15%, 0.05 ms)`；p95 `max(20%, 0.10 ms)` |
+| pass baseline avg `< 0.1 ms` | avg `+0.03 ms`；p95 `+0.05 ms`（absolute-only；p95 WARN 还要求 avg 同时超阈） |
+
+`GPU.Frame` 只使用专用阈值，不进入 pass tier。其余十个 required metric 由 baseline avg 选择 tier。baseline avg `>= 0.1 ms` 的 pass 仍由 avg/p95 各自独立产生 WARN；tiny pass 的 p95 只在 avg 也超过 `+0.03 ms` 时追加 WARN，用双信号避免双峰短 pass 在 95% 分位点附近发生量化翻转。未获 avg 佐证的 p95 delta 仍写入 `baseline_deltas`，保留 current/baseline/allowed 数值，并以 `threshold_exceeded=true`、`corroborated=false` 标明未升级门禁。三轮候选的稳定性按 target+backend 独立汇总，不混合 Vulkan/DX12：CPU avg 与 `GPU.Frame` avg 的 max-min spread 不得超过 `max(3%, 0.15 ms)`；CPU p95 使用与其回归门禁一致的 `max(8%, 0.50 ms)`，避免 `begin_frame`/`present` 队列回压相位迁移造成内部合同冲突；`GPU.Frame` p95 保持 `max(5%, 0.30 ms)`。
+
+正式候选命令：
+
+```bat
+RunPerfGate.bat -Profile VegetationFullPipeline
+```
+
+正确性验证与正式性能 run 分离：Vulkan validation、DX12 debug/GPU validation 应用短 Debug run 验证 query/reset/resolve/fence 生命周期；正式 Release 数字必须保持 validation off，并由 telemetry 回报实际状态。
+
 ## 4. 输出文件在哪里
 
 每次运行会生成一个独立目录：
@@ -107,6 +159,8 @@ Intermediate/test-reports/perf-gate/<timestamp>/
 | `summary.json` | 机器可读汇总，适合后续 CI 或脚本处理 |
 | `Sandbox-Vulkan.json` 等 | 单个目标和后端的 telemetry 原始结果 |
 | stdout/stderr 日志 | 单次运行的控制台输出与诊断信息 |
+
+`summary.json.runs[*].engine_logs` 只列该子进程启动前/退出后新增的精确日志路径集合；每个引擎进程正常对应同一 session 后缀的 Engine/Application 两份日志。不要按分钟或 LastWriteTime 猜测矩阵归属。
 
 `Intermediate/` 下的报告是本地生成物，不要提交。
 
@@ -127,17 +181,23 @@ Intermediate/test-reports/perf-gate/<timestamp>/
 | --- | --- |
 | `Target` / `Backend` | 当前结果来自哪个程序和图形后端 |
 | `Status` | 单项结果：`PASS`、`WARN`、`FAIL` 或 `DRY_RUN` |
+| `Baseline` | `MISSING`、`COMPARED`、`NOT_COMPARABLE` 或未比较状态 |
 | `Frames` | 采样窗口内统计到的帧数 |
+| `Sample-time coverage` | schema v2 的首末采样 wall-clock span 占 profile 采样时长的比例；低于 90% 直接 FAIL，并同时受最大间隔、最低采样率和 timeline 数学一致性约束 |
 | `CPU Avg ms` | CPU 侧 frame orchestration/submit 平均耗时 |
 | `CPU P95 ms` | 95% 帧低于该 CPU 帧耗时，反映常见长尾 |
 | `CPU P99 delta` | CPU P99 相对基线的变化 |
 | `Private MB` | 进程 private bytes 峰值 |
 | `Heap MB` | Engine heap 峰值 |
 | `Draw delta` | draw call 平均值相对基线的变化 |
+| `GPU Avg/P95 ms` | `GPU.Frame` 主 command buffer 的 timestamp 汇总；不是显示延迟或 Present wall time |
+| `GPU coverage` | `valid / submitted`；required metric 另有 `present / submitted` coverage |
+| `Adapter` / `Driver` | timing run 的硬件归因元数据 |
+| `Actual extent` | 采样窗口内实际 swapchain client extent 与稳定性 |
 | `Failures` | 硬失败原因 |
 | `Warnings` | 趋势回归或日志警告 |
 
-注意：当前 `CPU Avg/P95/P99 ms` 是 CPU 侧帧调度与提交耗时，不是 GPU 执行耗时。GPU timestamp query 后续应写入独立的 `gpu_frame_time_ms` 字段。
+`CPU Avg/P95/P99 ms` 仍是 CPU 侧帧调度与提交耗时；GPU 结果单独位于 schema v2 的 `gpu`、`gpu_metric_summaries` 与 summary GPU 列。GPU sample 通过原始 renderer frame ID 延迟归档，不能按 poll 顺序与当前 CPU 帧强配对。`summary.json.runs[*].baseline_deltas` 保留每个 CPU/GPU statistic 的 current、baseline、percent delta、实际增量与允许增量；每个 GPU 超限 statistic 也会以含 metric 名的独立文本进入 `warnings` 和 Markdown 的 Warnings 列。
 
 ## 6. 和哪些数据对比
 
@@ -155,25 +215,28 @@ Profile / Configuration / Target / Backend
 
 也就是说，`Standard + Debug + Sandbox + Vulkan` 只会和自己的基线比较，不会和 `Editor`、`DX12` 或其他 profile 混比。
 
-当前会和基线比较的主要指标：
+Standard 继续使用 baseline 文件里的 legacy 百分比阈值：
 
 | 指标 | WARN 阈值 |
 | --- | --- |
-| CPU frame time avg | `10%` |
-| CPU frame time p95 | `15%` |
-| CPU frame time p99 | `25%` |
-| Process private bytes peak | `15%` |
-| Engine heap peak | `15%` |
+| CPU frame time avg / p95 / p99 | `10%` / `15%` / `25%` |
+| Process private bytes / Engine heap peak | `15%` / `15%` |
 | Draw calls avg | `10%` |
+
+`VegetationFullPipeline` 使用上一节的 larger-of 阈值，并比较全部 11 个 required GPU metric 的 avg/p95。baseline entry 还保存 adapter、driver、OS build、baseline source SHA，以及可读 workload 字段和 SHA-256 fingerprint。workload 包含规范化 repo-relative scene 路径与 scene 内容 SHA-256、extent、fixed_camera、vsync、validation、frame_cap、按 ordinal 排序的 required GPU metric 集合。current source SHA 同样进入 run record，但允许和 baseline source SHA 不同。
 
 对比规则：
 
 | 情况 | 报告表现 |
 | --- | --- |
-| 找到同 key 基线 | 显示百分比 delta，超过阈值则 WARN |
-| 没有同 key 基线 | delta 显示 `n/a`，不产生趋势 WARN |
+| 找到同 key 且归因相同的基线 | 标 `COMPARED`；显示 delta，超过阈值则逐 metric WARN |
+| 没有同 key 基线 | 标 `MISSING` candidate；delta 为 `n/a`，不产生趋势 WARN |
+| adapter/driver/OS/fingerprint 不同或缺失 | 标 `NOT_COMPARABLE` 并 FAIL，不做数值比较 |
+| baseline 已存在但 required baseline/current metric 缺失、负值或非有限 | fail-closed |
 | 基线为 0，当前也为 0 | delta 为 `0.0%` |
 | 基线为 0，当前大于 0 | delta 显示 `new`，按新增趋势处理 |
+
+`-TelemetryMode Off` 只用于同配置 A/B，结果标记 GPU baseline 不可比，且仍禁止 bless。
 
 ## 7. 什么时候会 FAIL
 
@@ -184,7 +247,13 @@ Profile / Configuration / Target / Backend
 | 非 0 退出码 | 目标程序异常退出 |
 | Timeout | 超过 profile 的 `timeout_seconds` |
 | Telemetry 缺失或格式错误 | 没有产出可解析的性能数据 |
+| Sampling evidence 不完整 | elapsed span 低于 90%、最大间隔超过 0.25 秒、采样率低于 30 Hz，或 frames/span/max-gap 数学不一致 |
 | Backend mismatch | 期望 backend 与实际运行 backend 不一致 |
+| 固定运行时契约不匹配 | schema 不是 v2，或 configuration、extent、fixed camera、vsync/validation/frame cap 与 profile 不一致 |
+| GPU timing 不完整 | required timing 缺失、coverage 低于阈值、required metric/summary 缺失或 sample count 不一致 |
+| 硬件归因缺失 | timing required 时 adapter/driver/backend metadata 缺失或为空 |
+| Baseline 不可比 | 固定 profile 的 adapter、driver、OS build 或 workload fingerprint 与 baseline 不同/缺失 |
+| 比较合同不完整 | baseline 已存在，但任一 required CPU/GPU statistic 缺失、负值、非有限，或 tier 配置不合法 |
 | Validation/debug-layer error | Vulkan validation 或 DX12 debug layer 报错 |
 | Engine heap shutdown live bytes 非 0 | 引擎堆在退出时仍有存活分配 |
 | Vulkan VMA shutdown live bytes 非 0 | Vulkan VMA 检测到退出时仍有存活分配 |
@@ -201,9 +270,10 @@ Profile / Configuration / Target / Backend
 | CPU 帧耗时超过阈值 | 判断是否由本次性能敏感改动引入 |
 | private bytes 或 Engine heap 峰值上升 | 判断是否是资源常驻、缓存策略或泄露风险 |
 | draw calls 上升 | 判断是否是可接受的渲染质量或场景变化 |
+| `GPU.Frame` 或 required pass avg/p95 超阈值 | 按 Warnings 中的 metric/statistic 逐项归因；`GPU.Frame` 不会重复进入 pass tier |
 | stdout/stderr 出现警告模式 | 优先阅读日志确认是否影响稳定性 |
 
-如果 WARN 是预期变化，并且你确认当前结果是新的可接受状态，可以在修正或确认后运行 `-BlessBaseline` 更新基线。
+如果 WARN 是预期变化，并且你确认当前结果是新的可接受状态，可以在修正或确认后运行 `-BlessBaseline` 更新基线。首次 `VegetationFullPipeline` 的 `MISSING` candidate 不是 WARN；仍须先确认机器、驱动、场景、extent、coverage 和 A/B 采集开销，不能自动 bless。
 
 ## 9. 如何更新基线
 
@@ -213,13 +283,23 @@ Profile / Configuration / Target / Backend
 RunPerfGate.bat -Profile Standard -SkipBuild -BlessBaseline
 ```
 
-`-BlessBaseline` 会把非 `FAIL`、非 `DRY_RUN` 的记录写入：
+`-BlessBaseline` 会把终态为 PASS/WARN、已确认进程树/Job Object 清理且可比性归因完整的记录写入：
 
 ```text
 baselines.<Profile>.<Configuration>.<Target>.<Backend>
 ```
 
-不要用失败结果更新基线。也不要把一次明显受本机后台负载影响的异常结果 bless 成基线。
+固定 profile entry 会同时写 CPU/memory/draw、全部 required GPU avg/p95、adapter/driver/OS build、source SHA、workload fingerprint 与可读 workload 字段。不要用失败、`DRY_RUN`、`NOT_COMPARABLE`、`TelemetryMode Off` 或明显受后台负载影响的结果更新基线；任何 baseline 更新仍需用户明确确认。
+
+当 fresh bless 跨越人工审批窗口会引入不可归因的主机状态漂移时，可改用受保护 report-import。先在同一空闲窗口背靠背采集并审核候选，再锁定被批准 `summary.json` 的精确字节哈希：
+
+```powershell
+(Get-FileHash -Algorithm SHA256 Intermediate\test-reports\perf-gate\<run>\summary.json).Hash
+```
+
+随后执行上一节的 `-BlessBaselineFromReport` 命令。导入只接受当前仓库报告目录内的 schema v2、未 bless、整体及逐 run 全 PASS 证据。summary 和每份 raw telemetry 都以一次 byte snapshot 同时完成 strict UTF-8 JSON 解析与 SHA-256，且 artifact 顶层必须是原生 JSON object；summary 内的 report-relative raw 路径、digest、当前 source SHA、OS build、workload、矩阵、cleanup 必须匹配。工具再从 raw telemetry 走与 live gate 相同的 canonical validator，重建 CPU/memory/draw、runtime extent/flags、GPU adapter/driver/counts/coverage 与全部 required metric，并逐项核对所有会写入 baseline 或决定可比性的 summary 字段；最终落盘值取 canonical raw，不取容差接近的 summary 副本。所有 schema scalar 必须是原生 JSON string/number/integer/boolean；`workload`、`runtime`、CPU/memory/render stats、GPU/metrics/backend info 与逐 metric 等容器必须是原生 object。单元素数组不能经 PowerShell 管道展开后伪装成标量或对象；adapter/driver 必须是非空 string，shutdown live-byte proof 必须是非负 integer。elapsed span `>= 90%`、最大 gap `<= 0.25 s`、最低 `30 Hz` 和 timeline 数学关系也全部 fail-closed。不能靠改 summary 并重算报告哈希绕过 raw 证据。报告或哈希不符时 baseline 保持原样；成功时 entry 额外持久化 `source_report_sha256`，并在任何构建、GPU 运行或新报告目录创建前退出。导入后仍必须立刻跑一次普通 non-bless profile，确认全部 run 为 `COMPARED` 且无未解释 WARN/FAIL。
+
+路径防护会拒绝报告根内已有的 symlink/junction/reparse 组件，并要求 raw 保持在 report 目录内。受保护导入的本地威胁模型仍假定同权限用户不会在检查与打开之间恶意替换目录组件；当前实现没有用持久句柄固定最终路径，因此不把它当作抵御恶意本地并发写者的安全边界。
 
 ## 10. 推荐提交前流程
 
@@ -253,5 +333,5 @@ baselines.<Profile>.<Configuration>.<Target>.<Backend>
 
 - 同一台机器、同一构建配置、同一 backend 下的趋势对比才有意义。
 - `Debug` 配置下的 validation/debug-layer 会影响绝对帧耗时，因此不要把 Debug PerfGate 数字直接当成 Release 性能。
-- 当前门禁更适合发现明显回归、内存泄露、backend 错配和 validation 问题；精细 GPU 性能分析仍应使用 RenderDoc、Tracy 或后续 GPU timestamp telemetry。
+- Standard 更适合发现常规趋势回归、内存泄露、backend 错配和 validation 问题；`VegetationFullPipeline` 提供结构化 GPU timestamp 归因。需要单 draw/dispatch、shader wave 或 cache 级诊断时仍使用 RenderDoc、Tracy 或厂商 profiler。
 - `summary.md` 是人工入口，`summary.json` 是自动化入口。后续接 CI 时应优先消费 JSON。

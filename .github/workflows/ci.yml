@@ -91,8 +91,8 @@ jobs:
         shell: cmd
         run: call build_sandbox.bat Release
       # hosted runner 无 GPU:DX12 冒烟跑在 WARP(Windows 自带软件光栅化)上,已验证可行
-      # --rhi-selftest-indirect 与 --rhi-selftest-constant-buffer 是相互独立的首帧前 RHI 自测；
-      # 两者均覆盖软件后端，任一 FAIL 都会传播为 runtime failure 并让 smoke 非零退出
+      # --rhi-selftest-indirect 同时覆盖首帧前 raw RHI 与 Function RenderGraph full-chain indirect 自测；
+      # constant-buffer 自测保持独立。任一 FAIL 都会传播为 runtime failure；全部 PASS 后同进程继续 readiness
       - name: Smoke test Sandbox (DX12/WARP, Release)
         shell: cmd
         run: call run.bat sandbox dx12 Release --smoke-test-seconds=120 --rhi-selftest-indirect --rhi-selftest-constant-buffer

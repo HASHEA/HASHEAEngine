@@ -154,6 +154,63 @@ static bool try_parse_positive_seconds(const std::string& text, double& outValue
 	return true;
 }
 
+static bool parse_window_extent_override(
+	int argc,
+	char* argv[],
+	uint16_t& outWidth,
+	uint16_t& outHeight,
+	bool& outSpecified)
+{
+	outWidth = 0;
+	outHeight = 0;
+	outSpecified = false;
+	bool widthSpecified = false;
+	bool heightSpecified = false;
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		const bool widthOption = argument == "--window-width" || argument.rfind("--window-width=", 0) == 0;
+		const bool heightOption = argument == "--window-height" || argument.rfind("--window-height=", 0) == 0;
+		if (!widthOption && !heightOption)
+		{
+			continue;
+		}
+		bool& dimensionSpecified = widthOption ? widthSpecified : heightSpecified;
+		uint16_t& dimension = widthOption ? outWidth : outHeight;
+		if (dimensionSpecified)
+		{
+			return false;
+		}
+		dimensionSpecified = true;
+
+		std::string value{};
+		const size_t equals = argument.find('=');
+		if (equals != std::string::npos)
+		{
+			value = argument.substr(equals + 1);
+		}
+		else if (argumentIndex + 1 < argc)
+		{
+			value = argv[++argumentIndex] ? argv[argumentIndex] : "";
+		}
+
+		uint64_t parsed = 0;
+		if (!try_parse_positive_uint64(value, parsed) ||
+			parsed > static_cast<uint64_t>(std::numeric_limits<uint16_t>::max()))
+		{
+			return false;
+		}
+		dimension = static_cast<uint16_t>(parsed);
+	}
+
+	if (widthSpecified != heightSpecified)
+	{
+		return false;
+	}
+	outSpecified = widthSpecified;
+	return true;
+}
+
 static uint64_t parse_run_for_frame_count(int argc, char* argv[], bool& outInvalid, bool& outDeprecated)
 {
 	constexpr uint64_t defaultLegacyFrameCount = 3;
@@ -314,6 +371,21 @@ static bool should_run_rhi_constant_buffer_self_test(int argc, char* argv[])
 	return false;
 }
 
+static double resolve_process_readiness_timeout_seconds(
+	double smoke_test_seconds,
+	bool frame_dump_requested,
+	bool indirect_self_test_requested)
+{
+	constexpr double default_bounded_gpu_operation_timeout_seconds = 120.0;
+	if (smoke_test_seconds > 0.0)
+	{
+		return smoke_test_seconds;
+	}
+	return frame_dump_requested || indirect_self_test_requested
+		? default_bounded_gpu_operation_timeout_seconds
+		: 0.0;
+}
+
 // RenderGate（SDD-2026-07-07-render-gate）：--dump-frame=<png> / --scene=<path> 字符串选项解析
 static std::string parse_string_option(int argc, char* argv[], const char* option_name)
 {
@@ -335,6 +407,20 @@ static std::string parse_string_option(int argc, char* argv[], const char* optio
 		}
 	}
 	return {};
+}
+
+static bool is_string_option_specified(int argc, char* argv[], const char* option_name)
+{
+	const std::string prefix = std::string(option_name) + "=";
+	for (int32_t argumentIndex = 1; argumentIndex < argc; ++argumentIndex)
+	{
+		const std::string argument = argv[argumentIndex] ? argv[argumentIndex] : "";
+		if (argument == option_name || argument.rfind(prefix, 0) == 0)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 static void print_ashibl_bake_usage()
@@ -531,10 +617,63 @@ int32_t main(int argc, char* argv[])
 		return 1;
 	}
 	const std::string frameDumpPath = parse_string_option(argc, argv, "--dump-frame");
-	constexpr double default_frame_dump_timeout_seconds = 120.0;
-	const double process_readiness_timeout_seconds = smokeTestSeconds > 0.0
-		? smokeTestSeconds
-		: (!frameDumpPath.empty() ? default_frame_dump_timeout_seconds : 0.0);
+	uint16_t windowWidthOverride = 0;
+	uint16_t windowHeightOverride = 0;
+	bool windowExtentSpecified = false;
+	const bool validWindowExtent = parse_window_extent_override(
+		argc,
+		argv,
+		windowWidthOverride,
+		windowHeightOverride,
+		windowExtentSpecified);
+	if (!validWindowExtent)
+	{
+		std::cerr << "Fatal Error: --window-width and --window-height must be specified together as values from 1 to 65535." << std::endl;
+		return 1;
+	}
+	const AshEngine::PerfGateConfig perfGateConfig = AshEngine::parse_perf_gate_config(argc, argv);
+	if (!perfGateConfig.valid)
+	{
+		std::cerr << "Fatal Error: PerfGate durations require finite positive values and boolean overrides require on or off." << std::endl;
+		return 1;
+	}
+	// RenderGate（SDD-2026-07-07-render-gate）：先验证 --rhi，禁止无效参数创建应用或触发 RHI 初始化。
+	const bool rhiOptionSpecified = is_string_option_specified(argc, argv, "--rhi");
+	const std::string rhiOverride = parse_string_option(argc, argv, "--rhi");
+	if (rhiOptionSpecified && rhiOverride.empty())
+	{
+		std::cerr << "Fatal Error: --rhi requires a non-empty vulkan or dx12 value." << std::endl;
+		return 1;
+	}
+	RHI::Backend backendOverride = RHI::Backend::Default;
+	if (!rhiOverride.empty())
+	{
+		std::string normalizedRhi = rhiOverride;
+		for (char& character : normalizedRhi)
+		{
+			character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+		}
+		if (normalizedRhi == "vulkan" || normalizedRhi == "vk")
+		{
+			backendOverride = RHI::Backend::Vulkan;
+		}
+		else if (normalizedRhi == "directx12" || normalizedRhi == "dx12" || normalizedRhi == "d3d12")
+		{
+			backendOverride = RHI::Backend::DirectX12;
+		}
+		else
+		{
+			std::cerr << "Fatal Error: Unknown --rhi value '" << rhiOverride << "' (expected vulkan or dx12)." << std::endl;
+			return 1;
+		}
+	}
+	const std::string scenePathOverride = parse_string_option(argc, argv, "--scene");
+	const bool rhiIndirectSelfTestRequested = should_run_rhi_indirect_self_test(argc, argv);
+	const bool rhiConstantBufferSelfTestRequested = should_run_rhi_constant_buffer_self_test(argc, argv);
+	const double process_readiness_timeout_seconds = resolve_process_readiness_timeout_seconds(
+		smokeTestSeconds,
+		!frameDumpPath.empty(),
+		rhiIndirectSelfTestRequested);
 	ReadinessProcessWatchdog readiness_watchdog{};
 	readiness_watchdog.start(process_readiness_timeout_seconds);
 	AshEngine::Application* application = create_application();
@@ -547,32 +686,26 @@ int32_t main(int argc, char* argv[])
 	{
 		AshEngine::Application::app = application;
 	}
-	// RenderGate（SDD-2026-07-07-render-gate）：--rhi 覆盖后端选择，必须在 initialize() 之前注入
-	const std::string rhiOverride = parse_string_option(argc, argv, "--rhi");
-	if (!rhiOverride.empty())
+	if (backendOverride != RHI::Backend::Default)
 	{
-		std::string normalizedRhi = rhiOverride;
-		for (char& character : normalizedRhi)
-		{
-			character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
-		}
-		RHI::Backend backendOverride = RHI::Backend::Default;
-		if (normalizedRhi == "vulkan" || normalizedRhi == "vk")
-		{
-			backendOverride = RHI::Backend::Vulkan;
-		}
-		else if (normalizedRhi == "directx12" || normalizedRhi == "dx12" || normalizedRhi == "d3d12")
-		{
-			backendOverride = RHI::Backend::DirectX12;
-		}
-		else
-		{
-			std::cerr << "Fatal Error: Unknown --rhi value '" << rhiOverride << "' (expected vulkan or dx12)." << std::endl;
-			destroy_application(application);
-			AshEngine::Application::app = nullptr;
-			return 1;
-		}
 		application->set_backend_override(backendOverride);
+	}
+	if (windowExtentSpecified)
+	{
+		application->set_window_extent_override(windowWidthOverride, windowHeightOverride);
+	}
+	application->configure_perf_gate(perfGateConfig);
+	if (!scenePathOverride.empty())
+	{
+		application->set_scene_path_override(scenePathOverride);
+	}
+	if (rhiIndirectSelfTestRequested)
+	{
+		application->set_rhi_indirect_self_test_requested(true);
+	}
+	if (rhiConstantBufferSelfTestRequested)
+	{
+		application->set_rhi_constant_buffer_self_test_requested(true);
 	}
 	if (!application->initialize())
 	{
@@ -604,27 +737,9 @@ int32_t main(int argc, char* argv[])
 	{
 		std::cerr << "Warning: --smoke-test=N and ASH_ENGINE_SMOKE_TEST_FRAMES are deprecated fixed-run aliases; use --run-for-frames=N. Readiness smoke uses --smoke-test-seconds=S." << std::endl;
 	}
-	const AshEngine::PerfGateConfig perfGateConfig = AshEngine::parse_perf_gate_config(argc, argv);
-	if (perfGateConfig.enabled)
-	{
-		application->configure_perf_gate(perfGateConfig);
-	}
 	if (!frameDumpPath.empty())
 	{
 		application->set_frame_dump_path(frameDumpPath);
-	}
-	const std::string scenePathOverride = parse_string_option(argc, argv, "--scene");
-	if (!scenePathOverride.empty())
-	{
-		application->set_scene_path_override(scenePathOverride);
-	}
-	if (should_run_rhi_indirect_self_test(argc, argv))
-	{
-		application->set_rhi_indirect_self_test_requested(true);
-	}
-	if (should_run_rhi_constant_buffer_self_test(argc, argv))
-	{
-		application->set_rhi_constant_buffer_self_test_requested(true);
 	}
 	const bool runSucceeded = application->start();
 	destroy_application(application);

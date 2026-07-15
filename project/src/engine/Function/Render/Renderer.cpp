@@ -8,12 +8,221 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <unordered_set>
 
 namespace AshEngine
 {
+	uint32_t drain_completed_gpu_timing_samples(
+		RHI::IGpuTimingTelemetry* telemetry,
+		RendererFrameStats& frame_stats)
+	{
+		if (!telemetry)
+		{
+			return 0u;
+		}
+
+		const uint32_t initial_count = frame_stats.completed_gpu_sample_count;
+		while (frame_stats.completed_gpu_sample_count < RHI::kGpuTimingFrameRingDepth)
+		{
+			RHI::GpuFrameTimingSample sample{};
+			if (telemetry->poll_completed_frame(sample) !=
+				RHI::GpuTimingPollResult::Ready)
+			{
+				break;
+			}
+			frame_stats.completed_gpu_samples[
+				frame_stats.completed_gpu_sample_count++] = sample;
+		}
+		return frame_stats.completed_gpu_sample_count - initial_count;
+	}
+
+	GraphicsIndirectValidationResult validate_graphics_indirect(
+		const GraphicsIndirectValidationFacts& facts)
+	{
+		GraphicsIndirectValidationResult result{};
+		result.kind = facts.kind;
+		result.args_offset = facts.args_offset;
+		result.draw_count = facts.draw_count;
+
+		auto fail = [&result](GraphicsIndirectValidationError error)
+		{
+			result.error = error;
+			return result;
+		};
+
+		if (facts.kind == GraphicsIndirectKind::None)
+		{
+			if (facts.args_resource_present)
+			{
+				return fail(GraphicsIndirectValidationError::UnexpectedArgsBuffer);
+			}
+			result.valid = true;
+			return result;
+		}
+
+		if (!facts.args_resource_present)
+		{
+			return fail(GraphicsIndirectValidationError::MissingArgsBuffer);
+		}
+		if (!facts.args_buffer_indirect_usage)
+		{
+			return fail(GraphicsIndirectValidationError::MissingIndirectUsage);
+		}
+		if (facts.kind == GraphicsIndirectKind::Indexed && !facts.index_buffer_present)
+		{
+			return fail(GraphicsIndirectValidationError::MissingIndexBuffer);
+		}
+		if (facts.kind == GraphicsIndirectKind::NonIndexed && facts.index_buffer_present)
+		{
+			return fail(GraphicsIndirectValidationError::UnexpectedIndexBuffer);
+		}
+		if (facts.vertex_count != 0u ||
+			facts.index_count != 0u ||
+			facts.instance_count != 1u ||
+			facts.first_vertex != 0u ||
+			facts.first_instance != 0u ||
+			facts.first_index != 0u ||
+			facts.vertex_offset != 0)
+		{
+			return fail(GraphicsIndirectValidationError::ConflictingDirectArguments);
+		}
+		if (facts.draw_count == 0u)
+		{
+			return fail(GraphicsIndirectValidationError::InvalidDrawCount);
+		}
+
+		const uint32_t native_stride = facts.kind == GraphicsIndirectKind::Indexed
+			? static_cast<uint32_t>(sizeof(RHI::AshDrawIndexedIndirectArgs))
+			: static_cast<uint32_t>(sizeof(RHI::AshDrawIndirectArgs));
+		result.stride = facts.stride == 0u ? native_stride : facts.stride;
+		if (result.stride != native_stride)
+		{
+			return fail(GraphicsIndirectValidationError::InvalidStride);
+		}
+		if ((facts.args_offset % 4u) != 0u)
+		{
+			return fail(GraphicsIndirectValidationError::MisalignedOffset);
+		}
+
+		const uint64_t repeat_count = static_cast<uint64_t>(facts.draw_count - 1u);
+		const uint64_t stride = result.stride;
+		if (repeat_count != 0u && stride > std::numeric_limits<uint64_t>::max() / repeat_count)
+		{
+			return fail(GraphicsIndirectValidationError::RangeOverflow);
+		}
+		const uint64_t repeated_span = repeat_count * stride;
+		const uint64_t native_size = native_stride;
+		if (facts.args_offset > std::numeric_limits<uint64_t>::max() - repeated_span ||
+			facts.args_offset + repeated_span > std::numeric_limits<uint64_t>::max() - native_size)
+		{
+			return fail(GraphicsIndirectValidationError::RangeOverflow);
+		}
+
+		result.args_range_end = facts.args_offset + repeated_span + native_size;
+		if (result.args_range_end > facts.args_buffer_size)
+		{
+			return fail(GraphicsIndirectValidationError::RangeOutOfBounds);
+		}
+
+		result.valid = true;
+		return result;
+	}
+
+	bool route_graphics_indirect_draw(
+		const GraphicsDrawDesc& desc,
+		const GraphicsIndirectValidationResult& result,
+		const GraphicsIndirectDrawOperations& operations)
+	{
+		if (!result.valid ||
+			result.kind == GraphicsIndirectKind::None ||
+			desc.indirect_kind != result.kind ||
+			!desc.indirect_args_buffer ||
+			desc.indirect_args_offset != result.args_offset ||
+			desc.indirect_draw_count != result.draw_count ||
+			(desc.indirect_stride != 0u && desc.indirect_stride != result.stride))
+		{
+			return false;
+		}
+
+		if (result.kind == GraphicsIndirectKind::Indexed)
+		{
+			return desc.index_buffer &&
+				operations.bind_index_buffer &&
+				operations.draw_indexed &&
+				operations.bind_index_buffer(
+					operations.user_data,
+					desc.index_buffer,
+					desc.index_buffer_offset) &&
+				operations.draw_indexed(
+					operations.user_data,
+					desc.index_buffer,
+					desc.indirect_args_buffer,
+					result);
+		}
+
+		return operations.draw_non_indexed &&
+			operations.draw_non_indexed(
+				operations.user_data,
+				desc.indirect_args_buffer,
+				result);
+	}
+
 	namespace
 	{
+		static GraphicsIndirectValidationFacts make_graphics_indirect_facts(
+			const GraphicsDrawDesc& desc)
+		{
+			GraphicsIndirectValidationFacts facts{};
+			facts.kind = desc.indirect_kind;
+			facts.args_resource_present = desc.indirect_args_buffer != nullptr;
+			facts.args_buffer_size = desc.indirect_args_buffer
+				? desc.indirect_args_buffer->get_size()
+				: 0u;
+			facts.args_buffer_indirect_usage =
+				desc.indirect_args_buffer && desc.indirect_args_buffer->is_indirect_args();
+			facts.index_buffer_present = desc.index_buffer && desc.index_buffer->get_size() > 0u;
+			facts.args_offset = desc.indirect_args_offset;
+			facts.draw_count = desc.indirect_draw_count;
+			facts.stride = desc.indirect_stride;
+			facts.vertex_count = desc.vertex_count;
+			facts.index_count = desc.index_count;
+			facts.instance_count = desc.instance_count;
+			facts.first_vertex = desc.first_vertex;
+			facts.first_instance = desc.first_instance;
+			facts.first_index = desc.first_index;
+			facts.vertex_offset = desc.vertex_offset;
+			return facts;
+		}
+
+		static bool bind_indirect_index_buffer(
+			void* user_data,
+			const std::shared_ptr<IndexBuffer>& index_buffer,
+			uint64_t offset)
+		{
+			return static_cast<RenderDevice*>(user_data)->bind_index_buffer(index_buffer, offset);
+		}
+
+		static bool submit_non_indexed_indirect(
+			void* user_data,
+			const std::shared_ptr<StorageBuffer>& args_buffer,
+			const GraphicsIndirectValidationResult& validation)
+		{
+			return static_cast<RenderDevice*>(user_data)->draw_indirect(args_buffer, validation);
+		}
+
+		static bool submit_indexed_indirect(
+			void* user_data,
+			const std::shared_ptr<IndexBuffer>& index_buffer,
+			const std::shared_ptr<StorageBuffer>& args_buffer,
+			const GraphicsIndirectValidationResult& validation)
+		{
+			return static_cast<RenderDevice*>(user_data)->draw_indexed_indirect(
+				index_buffer,
+				args_buffer,
+				validation);
+		}
+
 		static auto pointer_sort_key(const void* pointer) -> uintptr_t
 		{
 			return reinterpret_cast<uintptr_t>(pointer);
@@ -112,12 +321,13 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	void Renderer::GraphicsPassContext::end()
+	bool Renderer::GraphicsPassContext::end()
 	{
 		if (m_renderer)
 		{
-			m_renderer->end_active_pass(this);
+			return m_renderer->end_active_pass(this);
 		}
+		return !m_active;
 	}
 
 	Renderer::Renderer(RenderDevice* render_device)
@@ -152,6 +362,10 @@ namespace AshEngine
 		}
 
 		m_frame_in_progress = true;
+		m_frame_stats.render_frame_id = m_render_device->get_render_frame_id();
+		drain_completed_gpu_timing_samples(
+			m_render_device->get_gpu_timing_telemetry(),
+			m_frame_stats);
 		if (std::shared_ptr<RenderTarget> back_buffer = get_back_buffer())
 		{
 			m_frame_stats.frame_width = back_buffer->get_width();
@@ -185,6 +399,14 @@ namespace AshEngine
 			}
 		}
 		const bool result = m_render_device && m_render_device->end_frame();
+		if (m_render_device)
+		{
+			m_frame_stats.gpu_timing_frame_submitted =
+				m_render_device->was_gpu_timing_frame_submitted();
+			drain_completed_gpu_timing_samples(
+				m_render_device->get_gpu_timing_telemetry(),
+				m_frame_stats);
+		}
 		const auto render_end_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.render_end_frame_time_ms =
 			std::chrono::duration<double, std::milli>(render_end_end_time - render_end_start_time).count();
@@ -276,6 +498,27 @@ namespace AshEngine
 		return m_render_device ? m_render_device->create_storage_buffer(desc) : nullptr;
 	}
 
+	std::shared_ptr<StorageBuffer> Renderer::acquire_transient_storage_buffer(const StorageBufferDesc& desc)
+	{
+		return m_render_device ? m_render_device->acquire_transient_storage_buffer(desc) : nullptr;
+	}
+
+	void Renderer::release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer)
+	{
+		if (m_render_device)
+		{
+			m_render_device->release_transient_storage_buffer(buffer);
+		}
+	}
+
+	void Renderer::clear_transient_storage_buffers()
+	{
+		if (m_render_device)
+		{
+			m_render_device->clear_transient_storage_buffers();
+		}
+	}
+
 	std::shared_ptr<RenderSampler> Renderer::create_sampler(const RenderSamplerDesc& desc, const char* debug_name)
 	{
 		return m_render_device ? m_render_device->create_sampler(desc, debug_name) : nullptr;
@@ -334,7 +577,9 @@ namespace AshEngine
 		ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(desc.group_count_x) * desc.group_count_y * desc.group_count_z);
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		ASH_PROCESS_ERROR(m_render_device && desc.program && !m_active_pass);
-		ASH_PROCESS_ERROR(m_render_device->transition_compute_program_resources(desc.program));
+		ASH_PROCESS_ERROR(m_render_device->transition_compute_program_resources(
+			desc.program,
+			desc.graph_buffer_binding_scope));
 		ASH_PROCESS_ERROR(m_render_device->bind_compute_program(desc.program));
 
 		m_render_device->dispatch(desc.group_count_x, desc.group_count_y, desc.group_count_z);
@@ -352,9 +597,20 @@ namespace AshEngine
 		return m_last_completed_frame_stats;
 	}
 
-	bool Renderer::submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers)
+	bool Renderer::submit_graph_buffer_transitions(
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count)
 	{
-		return m_render_device && m_render_device->submit_graph_resource_barriers(barriers);
+		return m_render_device &&
+			m_render_device->submit_graph_buffer_transitions(transitions, transition_count);
+	}
+
+	bool submit_render_graph_buffer_transitions(
+		Renderer& renderer,
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count)
+	{
+		return renderer.submit_graph_buffer_transitions(transitions, transition_count);
 	}
 
 	void Renderer::update_frame_timing_history(double frame_time_ms)
@@ -381,6 +637,12 @@ namespace AshEngine
 
 	void Renderer::complete_frame_timing()
 	{
+		if (m_render_device)
+		{
+			drain_completed_gpu_timing_samples(
+				m_render_device->get_gpu_timing_telemetry(),
+				m_frame_stats);
+		}
 		const auto frame_end_time = std::chrono::steady_clock::now();
 		m_frame_stats.cpu_frame_time_ms = std::chrono::duration<double, std::milli>(frame_end_time - m_frame_start_time).count();
 		m_frame_stats.instantaneous_fps =
@@ -391,11 +653,11 @@ namespace AshEngine
 		m_frame_in_progress = false;
 	}
 
-	void Renderer::end_active_pass(GraphicsPassContext* pass_context)
+	bool Renderer::end_active_pass(GraphicsPassContext* pass_context)
 	{
 		if (!pass_context || pass_context != m_active_pass)
 		{
-			return;
+			return false;
 		}
 
 		const char* pass_name = pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass";
@@ -413,6 +675,8 @@ namespace AshEngine
 
 		bool pass_started = false;
 		bool success = m_render_device != nullptr;
+		std::vector<GraphicsIndirectValidationResult> indirect_validations(
+			pass_context->m_draw_calls.size());
 		if (success)
 		{
 			ASH_PROFILE_SCOPE_NC("Renderer::PassTransitions", AshEngine::Profile::Color::Barrier);
@@ -448,8 +712,23 @@ namespace AshEngine
 					success = false;
 					break;
 				}
+				indirect_validations[draw_index] = validate_graphics_indirect(
+					make_graphics_indirect_facts(draw_desc));
+				if (!indirect_validations[draw_index].valid)
+				{
+					HLogError(
+						"Renderer: indirect draw validation failed for pass '{}' draw {} with error {}.",
+						pass_name,
+						draw_index,
+						static_cast<uint32_t>(indirect_validations[draw_index].error));
+					success = false;
+					break;
+				}
 				if (transitioned_program_scratch.insert(draw_desc.program).second &&
-					!m_render_device->collect_graphics_program_resource_barriers(draw_desc.program, pass_barrier_scratch))
+					!m_render_device->collect_graphics_program_resource_barriers(
+						draw_desc.program,
+						pass_context->m_desc.graph_buffer_binding_scope,
+						pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_graphics_program_resource_barriers failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
@@ -487,9 +766,12 @@ namespace AshEngine
 					break;
 				}
 
-				if (draw_desc.indirect_args_buffer &&
+				if (indirect_validations[draw_index].kind != GraphicsIndirectKind::None &&
 					transitioned_indirect_args_scratch.insert(draw_desc.indirect_args_buffer.get()).second &&
-					!m_render_device->collect_indirect_args_buffer_barrier(draw_desc.indirect_args_buffer, pass_barrier_scratch))
+					!m_render_device->collect_indirect_args_buffer_barrier(
+						draw_desc.indirect_args_buffer,
+						pass_context->m_desc.graph_buffer_binding_scope,
+						pass_barrier_scratch))
 				{
 					HLogError("Renderer: collect_indirect_args_buffer_barrier failed for pass '{}' draw {}.", pass_name, draw_index);
 					success = false;
@@ -526,6 +808,11 @@ namespace AshEngine
 		{
 			ASH_PROFILE_SCOPE_NC("Renderer::SubmitDraws", AshEngine::Profile::Color::Draw);
 			ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(pass_context->m_draw_calls.size()));
+			GraphicsIndirectDrawOperations indirect_operations{};
+			indirect_operations.user_data = m_render_device;
+			indirect_operations.bind_index_buffer = &bind_indirect_index_buffer;
+			indirect_operations.draw_non_indexed = &submit_non_indexed_indirect;
+			indirect_operations.draw_indexed = &submit_indexed_indirect;
 			for (size_t draw_index = 0; draw_index < pass_context->m_draw_calls.size(); ++draw_index)
 			{
 				const GraphicsDrawDesc& draw_desc = pass_context->m_draw_calls[draw_index];
@@ -581,11 +868,14 @@ namespace AshEngine
 					m_render_device->set_scissor(draw_desc.scissor);
 				}
 
-				if (draw_desc.indirect_args_buffer)
+				if (indirect_validations[draw_index].kind != GraphicsIndirectKind::None)
 				{
-					if (!m_render_device->draw_indirect(draw_desc.indirect_args_buffer, draw_desc.indirect_args_offset))
+					if (!route_graphics_indirect_draw(
+						draw_desc,
+						indirect_validations[draw_index],
+						indirect_operations))
 					{
-						HLogError("Renderer: draw_indirect failed for pass '{}' draw {}.", pass_name, draw_index);
+						HLogError("Renderer: indirect draw routing failed for pass '{}' draw {}.", pass_name, draw_index);
 						success = false;
 						break;
 					}
@@ -626,5 +916,6 @@ namespace AshEngine
 		pass_context->m_active = false;
 		pass_context->m_renderer = nullptr;
 		m_active_pass = nullptr;
+		return success;
 	}
 }

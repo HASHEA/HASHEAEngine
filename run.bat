@@ -50,7 +50,17 @@ if defined ARG1 if not "%ARG1:~0,1%"=="-" (
     shift
 )
 
-call :capture_remaining_args %1 %2 %3 %4 %5 %6 %7 %8 %9
+:capture_single_remaining_args
+if "%~1"=="" goto :single_args_captured
+if defined APP_ARGS (
+    set "APP_ARGS=!APP_ARGS! "%~1""
+) else (
+    set "APP_ARGS="%~1""
+)
+shift
+goto :capture_single_remaining_args
+
+:single_args_captured
 call :run_single "%TARGET%" "%BACKEND%" "%CONFIG%"
 set "EXIT_CODE=%ERRORLEVEL%"
 goto :cleanup
@@ -61,8 +71,17 @@ if defined ARG1 if not "%ARG1:~0,1%"=="-" (
     set "CONFIG=%~1"
     shift
 )
-call :capture_remaining_args %1 %2 %3 %4 %5 %6 %7 %8 %9
+:mx_arg_loop
+if "%~1"=="" goto :mx_args_done
+if defined APP_ARGS (
+    set "APP_ARGS=!APP_ARGS! "%~1""
+) else (
+    set "APP_ARGS="%~1""
+)
+shift
+goto :mx_arg_loop
 
+:mx_args_done
 call :run_single "Editor" "DX12" "%CONFIG%"
 set "RUN_RESULT=!ERRORLEVEL!"
 if not "!RUN_RESULT!"=="0" set "EXIT_CODE=!RUN_RESULT!"
@@ -166,18 +185,6 @@ if errorlevel 1 (
     exit /b 1
 )
 exit /b 0
-
-:capture_remaining_args
-set "APP_ARGS="
-:capture_remaining_args_loop
-if "%~1"=="" exit /b 0
-if defined APP_ARGS (
-    set "APP_ARGS=!APP_ARGS! %~1"
-) else (
-    set "APP_ARGS=%~1"
-)
-shift
-goto :capture_remaining_args_loop
 
 :resolve_executable_name
 set "%~2="

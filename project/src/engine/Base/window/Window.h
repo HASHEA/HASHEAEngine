@@ -46,6 +46,7 @@ namespace AshEngine
 		bool		vsync;
 		const char*	title;
 		RHI::Backend backend = RHI::Backend::Default;
+		bool		exactClientExtent = false;
 	};
 	class ASH_API Window
 	{

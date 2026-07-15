@@ -1,36 +1,235 @@
 {
-  "schema_version": 1,
-  "profiles": {
-    "Standard": {
-      "configuration": "Debug",
-      "warmup_seconds": 10,
-      "sample_seconds": 30,
-      "timeout_seconds": 90,
-      "targets": [
-        {
-          "target": "Sandbox",
-          "backends": [ "Vulkan", "DX12" ],
-          "trend_source": true
-        },
-        {
-          "target": "Editor",
-          "backends": [ "Vulkan", "DX12" ],
-          "trend_source": false
-        }
-      ],
-      "absolute_caps": {
-        "sandbox_private_bytes_mb": 4096,
-        "editor_private_bytes_mb": 6144
-      },
-      "warn_thresholds": {
-        "cpu_frame_time_avg_percent": 10,
-        "cpu_frame_time_p95_percent": 15,
-        "cpu_frame_time_p99_percent": 25,
-        "private_bytes_peak_percent": 15,
-        "engine_heap_peak_percent": 15,
-        "draw_call_count_percent": 10
-      }
-    }
-  },
-  "baselines": {}
+    "schema_version":  1,
+    "profiles":  {
+                     "Standard":  {
+                                      "configuration":  "Debug",
+                                      "warmup_seconds":  10,
+                                      "sample_seconds":  30,
+                                      "timeout_seconds":  90,
+                                      "targets":  [
+                                                      {
+                                                          "target":  "Sandbox",
+                                                          "backends":  [
+                                                                           "Vulkan",
+                                                                           "DX12"
+                                                                       ],
+                                                          "trend_source":  true
+                                                      },
+                                                      {
+                                                          "target":  "Editor",
+                                                          "backends":  [
+                                                                           "Vulkan",
+                                                                           "DX12"
+                                                                       ],
+                                                          "trend_source":  false
+                                                      }
+                                                  ],
+                                      "absolute_caps":  {
+                                                            "sandbox_private_bytes_mb":  4096,
+                                                            "editor_private_bytes_mb":  6144
+                                                        },
+                                      "warn_thresholds":  {
+                                                              "cpu_frame_time_avg_percent":  10,
+                                                              "cpu_frame_time_p95_percent":  15,
+                                                              "cpu_frame_time_p99_percent":  25,
+                                                              "private_bytes_peak_percent":  15,
+                                                              "engine_heap_peak_percent":  15,
+                                                              "draw_call_count_percent":  10
+                                                          }
+                                  }
+                 },
+    "baselines":  {
+                      "VegetationFullPipeline":  {
+                                                     "Release":  {
+                                                                     "Sandbox":  {
+                                                                                     "Vulkan":  {
+                                                                                                    "updated_utc":  "2026-07-15T02:44:18.1416293Z",
+                                                                                                    "source_report":  "Intermediate/test-reports/perf-gate/20260715-103805-242-24656-c4be4b1b/summary.json",
+                                                                                                    "frames_sampled":  2043,
+                                                                                                    "cpu_frame_time_avg_ms":  14.491081,
+                                                                                                    "cpu_frame_time_p95_ms":  15.4114,
+                                                                                                    "cpu_frame_time_p99_ms":  16.0478,
+                                                                                                    "process_private_bytes_peak_mb":  3705.488281,
+                                                                                                    "engine_heap_peak_mb":  2.207848,
+                                                                                                    "draw_calls_avg":  233,
+                                                                                                    "source_report_sha256":  "aa996554c85cd41850446775a8d4400ad3cf5d3f8318436555389d2a6010300c",
+                                                                                                    "attribution":  {
+                                                                                                                        "target":  "Sandbox",
+                                                                                                                        "backend":  "Vulkan",
+                                                                                                                        "configuration":  "Release",
+                                                                                                                        "adapter":  "NVIDIA GeForce RTX 5060",
+                                                                                                                        "driver":  "NVIDIA 580.97",
+                                                                                                                        "os_build":  "19045.6456",
+                                                                                                                        "source_sha":  "231831f1de7930df9ccc0b23dc6565ff1a6c6d0c"
+                                                                                                                    },
+                                                                                                    "workload_fingerprint":  "02cec7deddda8cdd7a83c95c52347a7ecab229363e30ab6632756b27569e9b6e",
+                                                                                                    "workload":  {
+                                                                                                                     "scene":  "product/assets/scenes/vegetationbaseline.scene.json",
+                                                                                                                     "scene_sha256":  "4686f78aba32e48fb6d3ab1d2be157c6e0dd11029561429f77c69e1d104f8bef",
+                                                                                                                     "extent":  {
+                                                                                                                                    "width":  2560,
+                                                                                                                                    "height":  1440
+                                                                                                                                },
+                                                                                                                     "fixed_camera":  true,
+                                                                                                                     "vsync":  false,
+                                                                                                                     "validation":  false,
+                                                                                                                     "frame_cap":  "off",
+                                                                                                                     "required_gpu_metrics":  [
+                                                                                                                                                  "GPU.AmbientOcclusion",
+                                                                                                                                                  "GPU.Bloom",
+                                                                                                                                                  "GPU.DeferredLighting",
+                                                                                                                                                  "GPU.EnvironmentAndSky",
+                                                                                                                                                  "GPU.Frame",
+                                                                                                                                                  "GPU.GBuffer",
+                                                                                                                                                  "GPU.Particles",
+                                                                                                                                                  "GPU.Shadows",
+                                                                                                                                                  "GPU.TemporalAA",
+                                                                                                                                                  "GPU.ToneMapAndOverlays",
+                                                                                                                                                  "GPU.VolumetricLighting"
+                                                                                                                                              ]
+                                                                                                                 },
+                                                                                                    "gpu_metrics":  {
+                                                                                                                        "GPU.Frame":  {
+                                                                                                                                          "avg":  14.461025,
+                                                                                                                                          "p95":  14.909344
+                                                                                                                                      },
+                                                                                                                        "GPU.GBuffer":  {
+                                                                                                                                            "avg":  0.725219,
+                                                                                                                                            "p95":  0.732832
+                                                                                                                                        },
+                                                                                                                        "GPU.AmbientOcclusion":  {
+                                                                                                                                                     "avg":  11.087116,
+                                                                                                                                                     "p95":  11.547072
+                                                                                                                                                 },
+                                                                                                                        "GPU.Shadows":  {
+                                                                                                                                            "avg":  0.219843,
+                                                                                                                                            "p95":  0.3592
+                                                                                                                                        },
+                                                                                                                        "GPU.DeferredLighting":  {
+                                                                                                                                                     "avg":  0.521947,
+                                                                                                                                                     "p95":  0.690848
+                                                                                                                                                 },
+                                                                                                                        "GPU.EnvironmentAndSky":  {
+                                                                                                                                                      "avg":  0.341876,
+                                                                                                                                                      "p95":  0.479936
+                                                                                                                                                  },
+                                                                                                                        "GPU.Particles":  {
+                                                                                                                                              "avg":  0.030481,
+                                                                                                                                              "p95":  0.034592
+                                                                                                                                          },
+                                                                                                                        "GPU.VolumetricLighting":  {
+                                                                                                                                                       "avg":  1.011968,
+                                                                                                                                                       "p95":  1.136704
+                                                                                                                                                   },
+                                                                                                                        "GPU.Bloom":  {
+                                                                                                                                          "avg":  0.203129,
+                                                                                                                                          "p95":  0.19776
+                                                                                                                                      },
+                                                                                                                        "GPU.TemporalAA":  {
+                                                                                                                                               "avg":  0.250549,
+                                                                                                                                               "p95":  0.391264
+                                                                                                                                           },
+                                                                                                                        "GPU.ToneMapAndOverlays":  {
+                                                                                                                                                       "avg":  0.051076,
+                                                                                                                                                       "p95":  0.05056
+                                                                                                                                                   }
+                                                                                                                    }
+                                                                                                },
+                                                                                     "DX12":  {
+                                                                                                  "updated_utc":  "2026-07-15T02:44:18.1616337Z",
+                                                                                                  "source_report":  "Intermediate/test-reports/perf-gate/20260715-103805-242-24656-c4be4b1b/summary.json",
+                                                                                                  "frames_sampled":  1997,
+                                                                                                  "cpu_frame_time_avg_ms":  14.809499,
+                                                                                                  "cpu_frame_time_p95_ms":  16.5653,
+                                                                                                  "cpu_frame_time_p99_ms":  18.2001,
+                                                                                                  "process_private_bytes_peak_mb":  3077.570312,
+                                                                                                  "engine_heap_peak_mb":  0.013123,
+                                                                                                  "draw_calls_avg":  233,
+                                                                                                  "source_report_sha256":  "aa996554c85cd41850446775a8d4400ad3cf5d3f8318436555389d2a6010300c",
+                                                                                                  "attribution":  {
+                                                                                                                      "target":  "Sandbox",
+                                                                                                                      "backend":  "DX12",
+                                                                                                                      "configuration":  "Release",
+                                                                                                                      "adapter":  "NVIDIA GeForce RTX 5060",
+                                                                                                                      "driver":  "32.0.15.8097",
+                                                                                                                      "os_build":  "19045.6456",
+                                                                                                                      "source_sha":  "231831f1de7930df9ccc0b23dc6565ff1a6c6d0c"
+                                                                                                                  },
+                                                                                                  "workload_fingerprint":  "02cec7deddda8cdd7a83c95c52347a7ecab229363e30ab6632756b27569e9b6e",
+                                                                                                  "workload":  {
+                                                                                                                   "scene":  "product/assets/scenes/vegetationbaseline.scene.json",
+                                                                                                                   "scene_sha256":  "4686f78aba32e48fb6d3ab1d2be157c6e0dd11029561429f77c69e1d104f8bef",
+                                                                                                                   "extent":  {
+                                                                                                                                  "width":  2560,
+                                                                                                                                  "height":  1440
+                                                                                                                              },
+                                                                                                                   "fixed_camera":  true,
+                                                                                                                   "vsync":  false,
+                                                                                                                   "validation":  false,
+                                                                                                                   "frame_cap":  "off",
+                                                                                                                   "required_gpu_metrics":  [
+                                                                                                                                                "GPU.AmbientOcclusion",
+                                                                                                                                                "GPU.Bloom",
+                                                                                                                                                "GPU.DeferredLighting",
+                                                                                                                                                "GPU.EnvironmentAndSky",
+                                                                                                                                                "GPU.Frame",
+                                                                                                                                                "GPU.GBuffer",
+                                                                                                                                                "GPU.Particles",
+                                                                                                                                                "GPU.Shadows",
+                                                                                                                                                "GPU.TemporalAA",
+                                                                                                                                                "GPU.ToneMapAndOverlays",
+                                                                                                                                                "GPU.VolumetricLighting"
+                                                                                                                                            ]
+                                                                                                               },
+                                                                                                  "gpu_metrics":  {
+                                                                                                                      "GPU.Frame":  {
+                                                                                                                                        "avg":  14.668777,
+                                                                                                                                        "p95":  14.938976
+                                                                                                                                    },
+                                                                                                                      "GPU.GBuffer":  {
+                                                                                                                                          "avg":  0.716078,
+                                                                                                                                          "p95":  0.724608
+                                                                                                                                      },
+                                                                                                                      "GPU.AmbientOcclusion":  {
+                                                                                                                                                   "avg":  11.161671,
+                                                                                                                                                   "p95":  11.31184
+                                                                                                                                               },
+                                                                                                                      "GPU.Shadows":  {
+                                                                                                                                          "avg":  0.325627,
+                                                                                                                                          "p95":  0.441344
+                                                                                                                                      },
+                                                                                                                      "GPU.DeferredLighting":  {
+                                                                                                                                                   "avg":  0.415425,
+                                                                                                                                                   "p95":  0.429056
+                                                                                                                                               },
+                                                                                                                      "GPU.EnvironmentAndSky":  {
+                                                                                                                                                    "avg":  0.324678,
+                                                                                                                                                    "p95":  0.326208
+                                                                                                                                                },
+                                                                                                                      "GPU.Particles":  {
+                                                                                                                                            "avg":  0.015677,
+                                                                                                                                            "p95":  0.016544
+                                                                                                                                        },
+                                                                                                                      "GPU.VolumetricLighting":  {
+                                                                                                                                                     "avg":  1.044985,
+                                                                                                                                                     "p95":  1.119936
+                                                                                                                                                 },
+                                                                                                                      "GPU.Bloom":  {
+                                                                                                                                        "avg":  0.181951,
+                                                                                                                                        "p95":  0.181312
+                                                                                                                                    },
+                                                                                                                      "GPU.TemporalAA":  {
+                                                                                                                                             "avg":  0.357688,
+                                                                                                                                             "p95":  0.451776
+                                                                                                                                         },
+                                                                                                                      "GPU.ToneMapAndOverlays":  {
+                                                                                                                                                     "avg":  0.111136,
+                                                                                                                                                     "p95":  0.238944
+                                                                                                                                                 }
+                                                                                                                  }
+                                                                                              }
+                                                                                 }
+                                                                 }
+                                                 }
+                  }
 }

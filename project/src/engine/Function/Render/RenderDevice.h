@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -14,9 +15,12 @@ namespace RHI
 	struct AshBarrier;
 	enum class AshResourceState : uint32_t;
 	class GraphicsContext;
+	class IGpuTimingTelemetry;
+	enum class GpuTimingInvalidReason : uint8_t;
 	class Swapchain;
 	enum class SwapchainPresentResult : uint8_t;
 	class CommandBuffer;
+	class Buffer;
 	class TextureView;
 	struct ShaderParameterBlockLayout;
 	struct ShaderResourceBindingLayout;
@@ -24,6 +28,10 @@ namespace RHI
 
 namespace AshEngine
 {
+	struct RenderGraphResolvedBufferTransition;
+	struct RenderGraphBufferBindingScope;
+	struct GraphicsIndirectValidationResult;
+	struct ProgramBindingState;
 	class GraphicsProgram;
 	class ComputeProgram;
 	class Renderer;
@@ -406,6 +414,7 @@ namespace AshEngine
 		uint32_t get_size() const;
 		uint32_t get_stride() const;
 		uint32_t get_element_count() const;
+		bool is_indirect_args() const;
 		bool update(uint32_t offset, uint32_t size, const void* data);
 
 	private:
@@ -549,6 +558,7 @@ namespace AshEngine
 		PassDepthAttachment depth_attachment{};
 		const char* name = nullptr;
 		bool allow_reorder_draws = false;
+		const RenderGraphBufferBindingScope* graph_buffer_binding_scope = nullptr;
 	};
 
 	ASH_API RenderColorValue get_engine_back_buffer_clear_color();
@@ -558,6 +568,31 @@ namespace AshEngine
 		RHI::PipelineCreation& pipeline,
 		uint32_t color_attachment_count = 1u,
 		bool reverse_z = false);
+
+	// Backend-neutral state machine used by RenderDevice to keep a timing frame
+	// paired with its exact command buffer and canonical renderer frame ID.
+	class ASH_API GpuTimingFrameLifecycleCoordinator
+	{
+	public:
+		bool begin(
+			RHI::SwapchainPresentResult acquire_result,
+			bool begin_record_succeeded,
+			RHI::IGpuTimingTelemetry* telemetry,
+			RHI::CommandBuffer* command_buffer,
+			uint64_t frame_id);
+		bool end(RHI::CommandBuffer* command_buffer);
+		bool commit();
+		void abort(RHI::GpuTimingInvalidReason reason);
+		bool active() const;
+
+	private:
+		void reset();
+
+		RHI::IGpuTimingTelemetry* m_telemetry = nullptr;
+		RHI::CommandBuffer* m_command_buffer = nullptr;
+		uint64_t m_frame_id = 0u;
+		bool m_ended = false;
+	};
 
 	class ASH_API RenderDevice
 	{
@@ -581,6 +616,9 @@ namespace AshEngine
 		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
 		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
 		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+		std::shared_ptr<StorageBuffer> acquire_transient_storage_buffer(const StorageBufferDesc& desc);
+		void release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer);
+		void clear_transient_storage_buffers();
 		std::shared_ptr<RenderSampler> create_sampler(const RenderSamplerDesc& desc, const char* debug_name = nullptr);
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
@@ -600,11 +638,22 @@ namespace AshEngine
 		void set_scissor(const RenderScissor& scissor);
 		void draw(uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex = 0, uint32_t first_instance = 0);
 		void draw_indexed(uint32_t index_count, uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0);
-		bool draw_indirect(const std::shared_ptr<StorageBuffer>& args_buffer, uint64_t args_offset);
+		bool draw_indirect(
+			const std::shared_ptr<StorageBuffer>& args_buffer,
+			const GraphicsIndirectValidationResult& validation);
+		bool draw_indexed_indirect(
+			const std::shared_ptr<IndexBuffer>& index_buffer,
+			const std::shared_ptr<StorageBuffer>& args_buffer,
+			const GraphicsIndirectValidationResult& validation);
 		void dispatch(uint32_t group_count_x, uint32_t group_count_y = 1, uint32_t group_count_z = 1);
 		bool end_pass();
 
 		RHI::CommandBuffer* get_current_command_buffer() const;
+		// Context-owned, non-owning view. Invalid after RenderDevice/context shutdown;
+		// disabled telemetry returns nullptr.
+		RHI::IGpuTimingTelemetry* get_gpu_timing_telemetry() const;
+		uint64_t get_render_frame_id() const;
+		bool was_gpu_timing_frame_submitted() const;
 		std::shared_ptr<RHI::TextureView> get_shader_resource_view(const std::shared_ptr<RenderTarget>& render_target) const;
 		bool transition_render_target_for_sampling(const std::shared_ptr<RenderTarget>& render_target);
 		bool has_back_buffer_content() const;
@@ -634,20 +683,68 @@ namespace AshEngine
 		bool request_back_buffer_capture();
 		bool fetch_back_buffer_capture(BackBufferCaptureResult& out_result, uint64_t timeout_nanoseconds);
 
+		static std::unique_ptr<RenderDevice> create_headless_for_tests();
+		std::unique_ptr<GraphicsProgram> create_graphics_program_for_tests();
+		std::unique_ptr<ComputeProgram> create_compute_program_for_tests();
+		std::shared_ptr<StorageBuffer> create_storage_buffer_for_tests(
+			const StorageBufferDesc& desc,
+			const std::shared_ptr<RHI::Buffer>& rhi_buffer);
+		std::shared_ptr<StorageBuffer> seed_transient_storage_buffer_for_tests(const StorageBufferDesc& desc);
+		size_t get_transient_storage_buffer_pool_size_for_tests() const;
+		bool inspect_graphics_program_buffer_bindings_for_tests(
+			GraphicsProgram* program,
+			const RenderGraphBufferBindingScope& scope,
+			size_t& out_barrier_count,
+			std::string& out_diagnostic);
+		bool inspect_compute_program_buffer_bindings_for_tests(
+			ComputeProgram* program,
+			const RenderGraphBufferBindingScope& scope,
+			size_t& out_barrier_count,
+			std::string& out_diagnostic);
+		bool inspect_indirect_args_buffer_binding_for_tests(
+			const std::shared_ptr<StorageBuffer>& buffer,
+			const RenderGraphBufferBindingScope& scope,
+			size_t& out_barrier_count,
+			std::string& out_diagnostic);
+
 	private:
 		bool ensure_back_buffer_target();
 		void sync_swapchain_target();
 		bool render_present_to_swapchain();
 		bool record_back_buffer_capture();
-		bool collect_graphics_program_resource_barriers(GraphicsProgram* program, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_graphics_program_resource_barriers(
+			GraphicsProgram* program,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic = nullptr);
+		bool collect_compute_program_resource_barriers(
+			ComputeProgram* program,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic = nullptr);
+		bool collect_program_resource_barriers(
+			const ProgramBindingState& bindings,
+			bool graphics_pipeline,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic);
 		bool collect_vertex_buffer_barrier(const std::shared_ptr<VertexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
 		bool collect_index_buffer_barrier(const std::shared_ptr<IndexBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
-		bool collect_indirect_args_buffer_barrier(const std::shared_ptr<StorageBuffer>& buffer, std::vector<RHI::AshBarrier>& out_barriers);
+		bool collect_indirect_args_buffer_barrier(
+			const std::shared_ptr<StorageBuffer>& buffer,
+			const RenderGraphBufferBindingScope* graph_scope,
+			std::vector<RHI::AshBarrier>& out_barriers,
+			std::string* out_diagnostic = nullptr);
 		bool collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers);
 		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
+		bool submit_graph_buffer_transitions(
+			const RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count);
 		bool transition_graphics_program_resources(GraphicsProgram* program);
-		bool transition_compute_program_resources(ComputeProgram* program);
+		bool transition_compute_program_resources(
+			ComputeProgram* program,
+			const RenderGraphBufferBindingScope* graph_scope = nullptr);
 		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);
 		bool transition_index_buffer(const std::shared_ptr<IndexBuffer>& buffer);
 

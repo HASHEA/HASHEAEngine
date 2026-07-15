@@ -20,6 +20,7 @@
 #include "VulkanShaderCompiler.h"
 #include "VulkanStagingBuffer.h"
 #include "VulkanGpuProfiler.h"
+#include "VulkanGpuTimingTelemetry.h"
 #include "Graphics/GpuProfilerRHI.h"
 #if defined(ASH_HAS_DXC)
 #include "Graphics/DXC/DXCHelper.h"
@@ -40,6 +41,17 @@
 #endif
 namespace RHI
 {
+	static_assert(
+		k_max_frames == kGpuTimingFrameRingDepth,
+		"Vulkan timing query segmentation must match the backend frame ring.");
+
+	VulkanContext::VulkanContext()
+	{
+		instance = this;
+	}
+
+	VulkanContext::~VulkanContext() = default;
+
 	constexpr const char* k_pipeline_cache_path = "product\\caches\\PipelineCaches\\AshVulkanPipelineCache.pipelineCacheVK";
 	namespace
 	{
@@ -1632,6 +1644,24 @@ namespace RHI
 		bRetCode = _create_frame_pool_and_data(vkConfig.num_threads, vkConfig.queryCount);
 		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to create FrameData !");
 
+		if (vkConfig.enableGpuTimingTelemetry)
+		{
+			auto telemetry = std::make_unique<VulkanGpuTimingTelemetry>();
+			if (telemetry->init(
+					vulkanPhysicalDevice,
+					vulkanDevice,
+					vulkanMainQueueFamily,
+					vulkanAllocationCallbacks))
+			{
+				gpuTimingTelemetry = std::move(telemetry);
+				HLogInfo("Vulkan GPU timing telemetry enabled.");
+			}
+			else
+			{
+				HLogWarning("Vulkan GPU timing telemetry was requested but is unavailable.");
+			}
+		}
+
 		bRetCode = _load_cache();
 		ASH_LOG_PROCESS_ERROR(bRetCode, "Fatal : Failed to load cache !");
 
@@ -1666,6 +1696,7 @@ namespace RHI
 
 		//wait idle
 		wait_idle();
+		gpuTimingTelemetry.reset();
 
 		// 卸载 Tracy GPU profiler，必须在 device 销毁之前。
 		if (auto* profiler = gpu_profiler_get())
@@ -1714,6 +1745,11 @@ namespace RHI
 		_shutdown_instance();
 
 		return true;
+	}
+
+	auto VulkanContext::get_gpu_timing_telemetry() -> IGpuTimingTelemetry*
+	{
+		return gpuTimingTelemetry.get();
 	}
 
 auto VulkanContext::destroy() -> void
@@ -2031,6 +2067,7 @@ auto VulkanContext::destroy() -> void
 			currentFrame = (currentFrame + 1) % k_max_frames;
 			absoluteFrame++;
 		}
+		bool recycled_slot_completion_observed = false;
 		if (get_device_extension_enabled(DeviceExtensionAndFeaturesFlags::TimelineSemaphore))
 		{
 			if (absoluteFrame >= k_max_frames) {
@@ -2043,13 +2080,26 @@ auto VulkanContext::destroy() -> void
 				semaphore_wait_info.semaphoreCount = 1;
 				semaphore_wait_info.pSemaphores = semaphores;
 				semaphore_wait_info.pValues = wait_values;
-				vkWaitSemaphores(vulkanDevice, &semaphore_wait_info, ~0ull);
+				recycled_slot_completion_observed =
+					vkWaitSemaphores(vulkanDevice, &semaphore_wait_info, ~0ull) == VK_SUCCESS;
 			}
 		}
 		else
 		{
 			ASH_PROFILE_SCOPE_NC("VulkanContext::WaitFrameFence", AshEngine::Profile::Color::RHI);
-			get_frame_data_internal().vulkanCommandBufferExecutedFence->wait_and_reset();
+			VulkanFence* frame_fence =
+				get_frame_data_internal().vulkanCommandBufferExecutedFence;
+			recycled_slot_completion_observed = frame_fence->wait();
+			if (recycled_slot_completion_observed)
+			{
+				frame_fence->reset();
+			}
+		}
+		if (gpuTimingTelemetry)
+		{
+			gpuTimingTelemetry->resolve_recycled_slot(
+				currentFrame,
+				recycled_slot_completion_observed);
 		}
 		vulkanPresentCompleteSemaphore = VK_NULL_HANDLE;
 		//flush deletion queue
@@ -2127,6 +2177,8 @@ auto VulkanContext::destroy() -> void
 		}		
 		const bool has_swapchain_image =
 			has_acquired_swapchain_image && vulkanPresentCompleteSemaphore != VK_NULL_HANDLE;
+		VkResult graphics_submit_result = VK_ERROR_UNKNOWN;
+		bool graphics_completion_binding_established = false;
 		if (has_acquired_swapchain_image && !has_swapchain_image)
 		{
 			HLogError("VulkanContext: acquired swapchain frame is missing its render-complete semaphore.");
@@ -2167,7 +2219,11 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+					graphics_completion_binding_established =
+						vulkanGraphicsSemaphore != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 				wait_semaphores.shutdown();
 				signal_semaphores.shutdown();
@@ -2219,7 +2275,11 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE));
+					graphics_completion_binding_established =
+						vulkanGraphicsSemaphore != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit(vulkanMainQueue, 1, &submit_info, VK_NULL_HANDLE);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 				wait_semaphores.shutdown();
 				wait_values.shutdown();
@@ -2256,7 +2316,13 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit2", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+					const VkFence completion_fence =
+						get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle();
+					graphics_completion_binding_established =
+						completion_fence != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit2KHR(vulkanMainQueue, 1, &submit_info, completion_fence);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 				wait_semaphores.shutdown();
 				signal_semaphores.shutdown();
@@ -2276,9 +2342,23 @@ auto VulkanContext::destroy() -> void
 				{
 					ASH_PROFILE_SCOPE_NC("VulkanContext::QueueSubmit", AshEngine::Profile::Color::RHI);
 					ASH_PROFILE_SCOPE_VALUE(static_cast<uint64_t>(count));
-					VK_CHECK_RESULT(vkQueueSubmit(vulkanMainQueue, 1, &submit_info, get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle()));
+					const VkFence completion_fence =
+						get_frame_data_internal().vulkanCommandBufferExecutedFence->get_handle();
+					graphics_completion_binding_established =
+						completion_fence != VK_NULL_HANDLE;
+					graphics_submit_result =
+						vkQueueSubmit(vulkanMainQueue, 1, &submit_info, completion_fence);
+					VK_CHECK_RESULT(graphics_submit_result);
 				}
 			}		
+		}
+		if (gpuTimingTelemetry)
+		{
+			gpuTimingTelemetry->observe_submission(
+				count > 0u ? cmds : nullptr,
+				static_cast<uint32_t>(count),
+				graphics_submit_result,
+				graphics_completion_binding_established);
 		}
 		frameActive = false;
 		currentUploadCommandBuffer = nullptr;
