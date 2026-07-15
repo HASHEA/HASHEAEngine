@@ -42,6 +42,10 @@ namespace AshEngine
 		MeshPrimitiveTopology topology = MeshPrimitiveTopology::Triangles;
 		std::shared_ptr<const MaterialInterface> material = nullptr;
 		std::shared_ptr<MaterialRenderProxy> material_proxy = nullptr;
+		// Process-local identity of the prepared DepthOnly publication consumed by
+		// this frame. The proxy address alone is insufficient because preparation
+		// can replace its program or bindings in place.
+		uint64_t depth_only_publication_identity = 0u;
 	};
 
 	struct ASH_API StaticMeshRenderBounds

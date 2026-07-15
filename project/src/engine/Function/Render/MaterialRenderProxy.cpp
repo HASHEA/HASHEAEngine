@@ -96,6 +96,32 @@ namespace AshEngine
 			nullptr;
 	}
 
+	uint64_t MaterialRenderProxy::get_surface_staticmesh_depthonly_publication_identity() const
+	{
+		constexpr uint64_t offset = 14695981039346656037ull;
+		constexpr uint64_t prime = 1099511628211ull;
+		uint64_t identity = offset;
+		const auto mix = [&](uint64_t value)
+		{
+			for (uint32_t byte = 0u; byte < 8u; ++byte)
+			{
+				identity ^= static_cast<uint8_t>(value >> (byte * 8u));
+				identity *= prime;
+			}
+		};
+
+		mix(m_v2_compile_hash);
+		mix(m_material_version);
+		mix(m_bound_binding_version);
+		mix(m_surface_staticmesh_depthonly_resource.combined_source_hash);
+		mix(m_surface_staticmesh_depthonly_resource.shader_file_signature_hash);
+		mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+			m_surface_staticmesh_depthonly_resource.program)));
+		mix(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(
+			m_surface_staticmesh_depthonly_resource.material_uniforms.get())));
+		return identity;
+	}
+
 	const MaterialResource* MaterialRenderProxy::get_surface_staticmesh_gbuffer_resource() const
 	{
 		return m_surface_staticmesh_gbuffer_template != nullptr ?

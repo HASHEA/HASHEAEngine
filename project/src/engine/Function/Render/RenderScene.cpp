@@ -5,12 +5,74 @@
 #include "Function/Render/Visibility.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace AshEngine
 {
 	namespace
 	{
+		constexpr uint64_t k_shadow_revision_fnv_offset = 14695981039346656037ull;
+		constexpr uint64_t k_shadow_revision_fnv_prime = 1099511628211ull;
+
+		static void hash_shadow_revision_u64(uint64_t& hash, uint64_t value)
+		{
+			for (uint32_t byte = 0u; byte < 8u; ++byte)
+			{
+				hash ^= static_cast<uint8_t>(value >> (byte * 8u));
+				hash *= k_shadow_revision_fnv_prime;
+			}
+		}
+
+		static void hash_shadow_revision_float(uint64_t& hash, float value)
+		{
+			uint32_t bits = 0u;
+			static_assert(sizeof(bits) == sizeof(value));
+			std::memcpy(&bits, &value, sizeof(bits));
+			hash_shadow_revision_u64(hash, bits);
+		}
+
+		static void hash_shadow_revision_pointer(
+			uint64_t& hash,
+			const void* value)
+		{
+			hash_shadow_revision_u64(
+				hash,
+				static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value)));
+		}
+
+		static void hash_shadow_revision_string(
+			uint64_t& hash,
+			const std::string& value)
+		{
+			hash_shadow_revision_u64(hash, value.size());
+			for (const unsigned char byte : value)
+			{
+				hash ^= byte;
+				hash *= k_shadow_revision_fnv_prime;
+			}
+		}
+
+		static void hash_shadow_revision_matrix(
+			uint64_t& hash,
+			const glm::mat4& matrix)
+		{
+			for (glm::length_t column = 0; column < 4; ++column)
+			{
+				for (glm::length_t row = 0; row < 4; ++row)
+				{
+					hash_shadow_revision_float(hash, matrix[column][row]);
+				}
+			}
+		}
+
+		static auto is_static_shadow_caster(
+			const VisibleStaticMeshDraw& draw) -> bool
+		{
+			return draw.mobility == SceneMobility::Static ||
+				draw.mobility == SceneMobility::Stationary;
+		}
+
 		static auto normalize_or_fallback(const glm::vec3& value, const glm::vec3& fallback) -> glm::vec3
 		{
 			const float length = glm::length(value);
@@ -75,6 +137,143 @@ namespace AshEngine
 			}
 			return true;
 		}
+	}
+
+	uint64_t compute_static_shadow_caster_revision(
+		const VisibleRenderFrame& frame)
+	{
+		uint64_t hash = k_shadow_revision_fnv_offset;
+		hash_shadow_revision_u64(hash, frame.scene_runtime_id);
+		hash_shadow_revision_u64(hash, frame.scene_content_epoch);
+
+		const size_t static_mesh_caster_count = static_cast<size_t>(
+			std::count_if(
+				frame.shadow_caster_static_mesh_draws.begin(),
+				frame.shadow_caster_static_mesh_draws.end(),
+				is_static_shadow_caster));
+		hash_shadow_revision_u64(hash, static_mesh_caster_count);
+		for (const VisibleStaticMeshDraw& draw :
+			frame.shadow_caster_static_mesh_draws)
+		{
+			if (!is_static_shadow_caster(draw))
+			{
+				continue;
+			}
+
+			hash_shadow_revision_u64(hash, draw.primitive_id);
+			hash_shadow_revision_u64(hash, draw.entity_id);
+			hash_shadow_revision_u64(
+				hash, static_cast<uint64_t>(draw.mobility));
+			hash_shadow_revision_matrix(hash, draw.world_transform);
+
+			const StaticMeshRenderAsset* render_asset = draw.render_asset.get();
+			hash_shadow_revision_pointer(hash, render_asset);
+			if (render_asset)
+			{
+				std::scoped_lock<std::mutex> asset_lock(render_asset->mutex);
+				hash_shadow_revision_string(hash, render_asset->asset_path);
+				hash_shadow_revision_u64(hash, render_asset->mesh_index);
+				hash_shadow_revision_u64(
+					hash, static_cast<uint64_t>(render_asset->state));
+				hash_shadow_revision_u64(hash, render_asset->load_generation);
+
+				const StaticMeshRenderResource* resource =
+					render_asset->resource.get();
+				hash_shadow_revision_pointer(hash, resource);
+				if (resource)
+				{
+					hash_shadow_revision_pointer(
+						hash, resource->vertex_buffer.get());
+					hash_shadow_revision_pointer(
+						hash, resource->index_buffer.get());
+					hash_shadow_revision_pointer(
+						hash, resource->vertex_decl.get());
+					hash_shadow_revision_u64(hash, resource->vertex_count);
+					hash_shadow_revision_u64(hash, resource->index_count);
+					hash_shadow_revision_u64(
+						hash, static_cast<uint64_t>(resource->index_format));
+				}
+			}
+
+			hash_shadow_revision_u64(hash, draw.sections.size());
+			for (const ResolvedStaticMeshSection& section : draw.sections)
+			{
+				hash_shadow_revision_u64(hash, section.first_index);
+				hash_shadow_revision_u64(hash, section.index_count);
+				hash_shadow_revision_u64(hash, section.material_slot);
+				hash_shadow_revision_u64(
+					hash, static_cast<uint64_t>(section.topology));
+				hash_shadow_revision_pointer(hash, section.material.get());
+				hash_shadow_revision_pointer(
+					hash, section.material_proxy.get());
+				hash_shadow_revision_u64(
+					hash, section.depth_only_publication_identity);
+			}
+		}
+
+		const size_t terrain_caster_count = static_cast<size_t>(
+			std::count_if(
+				frame.terrains.begin(),
+				frame.terrains.end(),
+				[](const VisibleTerrainFrame& terrain)
+				{
+					return terrain.casts_shadow;
+				}));
+		hash_shadow_revision_u64(hash, terrain_caster_count);
+
+		for (const VisibleTerrainFrame& terrain : frame.terrains)
+		{
+			if (!terrain.casts_shadow)
+			{
+				continue;
+			}
+			hash_shadow_revision_u64(hash, terrain.entity_id);
+
+			const TerrainAssetSnapshot* snapshot = terrain.asset_snapshot.get();
+			hash_shadow_revision_pointer(hash, snapshot);
+			if (snapshot)
+			{
+				hash_shadow_revision_u64(hash, snapshot->asset_id);
+				hash_shadow_revision_u64(hash, snapshot->content_generation);
+				hash_shadow_revision_u64(hash, snapshot->residency_revision);
+			}
+
+			const TerrainRenderAsset* render_asset = terrain.render_asset.get();
+			hash_shadow_revision_pointer(hash, render_asset);
+			if (render_asset)
+			{
+				const TerrainShadowCasterIdentity identity =
+					render_asset->snapshot_shadow_caster_identity();
+				hash_shadow_revision_u64(
+					hash, identity.accepted_snapshot_identity);
+				hash_shadow_revision_u64(
+					hash, identity.accepted_asset_id);
+				hash_shadow_revision_u64(
+					hash, identity.accepted_content_generation);
+				hash_shadow_revision_u64(
+					hash, identity.accepted_residency_revision);
+				hash_shadow_revision_u64(
+					hash, identity.active_content_generation);
+				hash_shadow_revision_u64(
+					hash, identity.published_content_generation);
+				hash_shadow_revision_u64(
+					hash, identity.required_upload_count);
+				hash_shadow_revision_u64(
+					hash, identity.completed_upload_count);
+				hash_shadow_revision_u64(
+					hash, identity.pending_component_upload_count);
+				hash_shadow_revision_u64(
+					hash, identity.pending_component_removal_count);
+				hash_shadow_revision_u64(
+					hash, static_cast<uint64_t>(identity.readiness));
+				hash_shadow_revision_u64(
+					hash, identity.has_accepted_snapshot ? 1u : 0u);
+			}
+
+			hash_shadow_revision_matrix(hash, terrain.world_transform);
+		}
+
+		return hash == 0u ? 1u : hash;
 	}
 
 	RenderScene::RenderScene(const RenderScene& other)

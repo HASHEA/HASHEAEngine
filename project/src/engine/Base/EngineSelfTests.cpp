@@ -44,6 +44,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -2008,7 +2009,7 @@ namespace AshEngine
 			return true;
 		}
 
-		auto test_directional_shadow_static_cache_invalidates_when_cascade_matrix_changes() -> bool
+		auto test_directional_shadow_static_cache_commits_only_after_successful_recording() -> bool
 		{
 			DirectionalShadowConfig config = make_default_directional_shadow_config();
 			config.default_cascade_count = 4;
@@ -2054,7 +2055,7 @@ namespace AshEngine
 				first_plan) ||
 				first_plan.cascades.size() != 4u)
 			{
-				return report_self_test_failure("DirectionalShadow static cache", "failed to seed static cache for matrix invalidation test");
+				return report_self_test_failure("DirectionalShadow static cache", "failed to allocate static cache for recording test");
 			}
 
 			DirectionalShadowFramePlan same_view_plan{};
@@ -2070,15 +2071,53 @@ namespace AshEngine
 				return report_self_test_failure("DirectionalShadow static cache", "failed to rebuild same-view static cache plan");
 			}
 
+			bool same_view_still_refreshes = true;
+			for (uint32_t cascade_index = 1u; cascade_index < 4u; ++cascade_index)
+			{
+				same_view_still_refreshes = same_view_still_refreshes &&
+					same_view_plan.cascades[cascade_index].cache_mode == DirectionalShadowCacheMode::StaticRefresh;
+			}
+			if (!same_view_still_refreshes)
+			{
+				return report_self_test_failure(
+					"DirectionalShadow static cache",
+					"planning alone committed an unrecorded static cache tile");
+			}
+
+			for (uint32_t cascade_index = 1u; cascade_index < 4u; ++cascade_index)
+			{
+				SunLightShadowDetail::commit_static_cache_refresh_for_tests(
+					runtime_pass,
+					first_plan.cascades[cascade_index],
+					first_plan.static_shadow_caster_revision);
+			}
+
+			DirectionalShadowFramePlan committed_plan{};
+			if (!SunLightShadowDetail::build_sunlight_shadow_frame_plan_internal(
+				first_frame,
+				config,
+				1920u,
+				1080u,
+				&runtime_pass,
+				committed_plan) ||
+				committed_plan.cascades.size() != 4u)
+			{
+				return report_self_test_failure(
+					"DirectionalShadow static cache",
+					"failed to rebuild committed static cache plan");
+			}
 			bool same_view_cached = true;
 			for (uint32_t cascade_index = 1u; cascade_index < 4u; ++cascade_index)
 			{
 				same_view_cached = same_view_cached &&
-					same_view_plan.cascades[cascade_index].cache_mode == DirectionalShadowCacheMode::StaticCached;
+					committed_plan.cascades[cascade_index].cache_mode ==
+						DirectionalShadowCacheMode::StaticCached;
 			}
 			if (!same_view_cached)
 			{
-				return report_self_test_failure("DirectionalShadow static cache", "unchanged cascade matrices did not reuse static cache");
+				return report_self_test_failure(
+					"DirectionalShadow static cache",
+					"successful static-only recording did not make the tile reusable");
 			}
 
 			const VisibleRenderFrame rotated_frame = make_frame(
@@ -2104,7 +2143,7 @@ namespace AshEngine
 					rotated_plan.cascades[cascade_index].cache_mode == DirectionalShadowCacheMode::StaticRefresh;
 			}
 			return rotated_view_refreshed ||
-				report_self_test_failure("DirectionalShadow static cache", "camera-dependent cascade matrices reused stale static cache");
+					report_self_test_failure("DirectionalShadow static cache", "camera-dependent cascade matrices reused stale static cache");
 		}
 
 		auto test_directional_shadow_planner_builds_monotonic_cascades() -> bool
@@ -2184,6 +2223,133 @@ namespace AshEngine
 			return ok || report_self_test_failure("DirectionalShadow mask shader", "normal bias was not applied along the surface normal");
 		}
 
+		auto test_directional_shadow_mask_corrects_receiver_plane_per_pcf_tap() -> bool
+		{
+			std::ifstream shader_file("project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
+			if (!shader_file.is_open())
+			{
+				return report_self_test_failure(
+					"DirectionalShadow receiver-plane PCF",
+					"failed to open DirectionalShadowMask.hlsl");
+			}
+			std::string shader_source{
+				std::istreambuf_iterator<char>(shader_file),
+				std::istreambuf_iterator<char>() };
+			std::string compact_source = shader_source;
+			compact_source.erase(
+				std::remove_if(
+					compact_source.begin(),
+					compact_source.end(),
+					[](unsigned char character)
+					{
+						return std::isspace(character) != 0;
+					}),
+				compact_source.end());
+
+			auto count_text = [](const std::string& source, const char* text) -> size_t
+			{
+				size_t count = 0u;
+				size_t offset = 0u;
+				while ((offset = source.find(text, offset)) != std::string::npos)
+				{
+					++count;
+					offset += std::strlen(text);
+				}
+				return count;
+			};
+
+			const bool source_contract =
+				shader_source.find("TryComputeReceiverPlaneDepthGradient") != std::string::npos &&
+				shader_source.find("ReceiverPlaneDepthOffsetOrZero") != std::string::npos &&
+				shader_source.find("kReceiverPlaneJacobianRelativeEpsilon") != std::string::npos &&
+				shader_source.find("kReceiverPlaneMaximumDepthOffset") != std::string::npos &&
+				compact_source.find(
+					"constfloatjacobian_determinant="
+					"atlas_uv_dx.x*atlas_uv_dy.y-atlas_uv_dx.y*atlas_uv_dy.x;") !=
+					std::string::npos &&
+				compact_source.find(
+					"constfloat3position_dx_ws=ddx(position_ws);"
+					"constfloat3position_dy_ws=ddy(position_ws);") !=
+					std::string::npos &&
+				compact_source.find(
+					"depth_gradient=float2(depth_dx*atlas_uv_dy.y-"
+					"depth_dy*atlas_uv_dx.y,depth_dy*atlas_uv_dx.x-"
+					"depth_dx*atlas_uv_dy.x)*rcp(jacobian_determinant);") !=
+					std::string::npos &&
+				compact_source.find(
+					"constfloatreceiver_plane_depth_offset="
+					"ReceiverPlaneDepthOffsetOrZero(receiver_plane_depth_gradient,"
+					"tap_offset,has_receiver_plane_depth_gradient);") !=
+					std::string::npos &&
+				compact_source.find(
+					"constfloatcomparison_depth=shadow_ndc.z+"
+					"receiver_plane_depth_offset-cascade.split_depth_bias.z;") !=
+					std::string::npos &&
+				compact_source.find(
+					"SampleCascadeShadow(buffer_index,position_ws,normal_ws,"
+					"position_dx_ws,position_dy_ws)") != std::string::npos &&
+				shader_source.find(
+					"lit += (shadow_ndc.z - cascade.split_depth_bias.z)") ==
+					std::string::npos &&
+				count_text(shader_source,
+					"DirectionalShadowDynamicAtlas.SampleLevel") == 1u;
+			const size_t gradient_helper_begin = shader_source.find(
+				"bool TryComputeReceiverPlaneDepthGradient");
+			const size_t sample_function_begin = shader_source.find(
+				"float SampleCascadeShadow", gradient_helper_begin);
+			const bool gradient_helper_has_no_derivative_intrinsics =
+				gradient_helper_begin != std::string::npos &&
+				sample_function_begin != std::string::npos &&
+				shader_source.substr(
+					gradient_helper_begin,
+					sample_function_begin - gradient_helper_begin).find("ddx(") ==
+					std::string::npos &&
+				shader_source.substr(
+					gradient_helper_begin,
+					sample_function_begin - gradient_helper_begin).find("ddy(") ==
+					std::string::npos;
+
+			// Validate the Jacobian solve independently with a known receiver plane.
+			const glm::vec2 expected_gradient{ 2.0f, -3.0f };
+			const glm::vec2 atlas_uv_dx{ 0.5f, 0.25f };
+			const glm::vec2 atlas_uv_dy{ -0.2f, 0.4f };
+			const float depth_dx = glm::dot(expected_gradient, atlas_uv_dx);
+			const float depth_dy = glm::dot(expected_gradient, atlas_uv_dy);
+			const float determinant =
+				atlas_uv_dx.x * atlas_uv_dy.y -
+				atlas_uv_dx.y * atlas_uv_dy.x;
+			const glm::vec2 recovered_gradient{
+				(depth_dx * atlas_uv_dy.y - depth_dy * atlas_uv_dx.y) /
+					determinant,
+				(depth_dy * atlas_uv_dx.x - depth_dx * atlas_uv_dy.x) /
+					determinant
+			};
+			const glm::vec2 tap_offset{ 0.01f, -0.02f };
+			const float tap_depth_offset = glm::dot(
+				recovered_gradient, tap_offset);
+			const glm::vec2 degenerate_uv_dx{ 1.0f, 2.0f };
+			const glm::vec2 degenerate_uv_dy{ 2.0f, 4.0f };
+			const float degenerate_determinant =
+				degenerate_uv_dx.x * degenerate_uv_dy.y -
+				degenerate_uv_dx.y * degenerate_uv_dy.x;
+			const float degenerate_fallback_offset =
+				std::abs(degenerate_determinant) > 1e-6f
+					? glm::dot(expected_gradient, tap_offset)
+					: 0.0f;
+			const bool math_contract =
+				std::abs(recovered_gradient.x - expected_gradient.x) <= 1e-5f &&
+				std::abs(recovered_gradient.y - expected_gradient.y) <= 1e-5f &&
+				std::abs(tap_depth_offset - 0.08f) <= 1e-5f &&
+				std::isfinite(degenerate_fallback_offset) &&
+				degenerate_fallback_offset == 0.0f;
+
+			return (source_contract &&
+				gradient_helper_has_no_derivative_intrinsics &&
+				math_contract) || report_self_test_failure(
+				"DirectionalShadow receiver-plane PCF",
+				"PCF taps must predict finite receiver-plane depth and fall back on a degenerate UV Jacobian");
+		}
+
 		auto test_directional_shadow_mask_blends_cascade_transition() -> bool
 		{
 			std::ifstream shader_file("project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
@@ -2199,8 +2365,23 @@ namespace AshEngine
 				std::istreambuf_iterator<char>() };
 			const bool computes_transition =
 				shader_source.find("ComputeCascadeTransitionWeight") != std::string::npos;
+			const size_t next_sample_begin = shader_source.find(
+				"const float next_shadow = SampleCascadeShadow(");
+			const size_t next_sample_end = shader_source.find(
+				");", next_sample_begin);
+			const std::string next_sample =
+				next_sample_begin != std::string::npos &&
+				next_sample_end != std::string::npos
+					? shader_source.substr(
+						next_sample_begin,
+						next_sample_end - next_sample_begin)
+					: std::string{};
 			const bool samples_next_cascade =
-				shader_source.find("SampleCascadeShadow(next_buffer_index, position_ws, normal_ws)") != std::string::npos;
+				next_sample.find("next_buffer_index") != std::string::npos &&
+				next_sample.find("position_ws") != std::string::npos &&
+				next_sample.find("normal_ws") != std::string::npos &&
+				next_sample.find("position_dx_ws") != std::string::npos &&
+				next_sample.find("position_dy_ws") != std::string::npos;
 			const bool blends_cascades =
 				shader_source.find("lerp(shadow, next_shadow, transition_weight)") != std::string::npos;
 			const bool ok = computes_transition && samples_next_cascade && blends_cascades;
@@ -5453,10 +5634,11 @@ namespace AshEngine
 		all_passed = test_directional_light_shadow_planner_handles_each_ordinary_light_without_global_budget() && all_passed;
 		all_passed = test_directional_light_shadow_planner_uses_uncached_cascades() && all_passed;
 		all_passed = test_directional_shadow_static_cache_reuses_evicted_tiles() && all_passed;
-		all_passed = test_directional_shadow_static_cache_invalidates_when_cascade_matrix_changes() && all_passed;
+		all_passed = test_directional_shadow_static_cache_commits_only_after_successful_recording() && all_passed;
 		all_passed = test_directional_shadow_planner_builds_monotonic_cascades() && all_passed;
 		all_passed = test_visible_static_mesh_draws_carry_shadow_mobility() && all_passed;
 		all_passed = test_directional_shadow_mask_normal_bias_offsets_along_normal() && all_passed;
+		all_passed = test_directional_shadow_mask_corrects_receiver_plane_per_pcf_tap() && all_passed;
 		all_passed = test_directional_shadow_mask_blends_cascade_transition() && all_passed;
 		all_passed = test_directional_shadow_cascade_buffer_uses_two_dimensional_texel_size() && all_passed;
 		all_passed = test_directional_shadow_cascade_projection_snaps_to_texel_grid() && all_passed;

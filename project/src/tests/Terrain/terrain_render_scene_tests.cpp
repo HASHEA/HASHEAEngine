@@ -2,6 +2,7 @@
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneView.h"
+#include "Function/Render/SunLightShadowPass.h"
 #include "Function/Render/TerrainRenderProxy.h"
 #include "Function/Scene/Scene.h"
 
@@ -16,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -242,4 +244,282 @@ TEST_CASE("Terrain presentation tracks an independent terrain revision")
 	REQUIRE(terrain_rebuild_branch != std::string::npos);
 	REQUIRE(transform_update_branch != std::string::npos);
 	CHECK(terrain_rebuild_branch < transform_update_branch);
+}
+
+TEST_CASE("Static shadow caster revision binds scene identity and exact static mesh draws")
+{
+	AshEngine::VisibleRenderFrame frame{};
+	frame.scene_runtime_id = 101u;
+	frame.scene_content_epoch = 7u;
+	frame.static_scene_revision = 11u;
+	frame.transform_scene_revision = 17u;
+
+	auto static_asset = std::make_shared<AshEngine::StaticMeshRenderAsset>();
+	static_asset->asset_path = "models/static.glb";
+	static_asset->mesh_index = 2u;
+	static_asset->state = AshEngine::StaticMeshRenderAssetState::GpuReady;
+	static_asset->resource =
+		std::make_shared<AshEngine::StaticMeshRenderResource>();
+
+	AshEngine::VisibleStaticMeshDraw static_draw{};
+	static_draw.primitive_id = 4u;
+	static_draw.entity_id = 8u;
+	static_draw.mobility = AshEngine::SceneMobility::Static;
+	static_draw.render_asset = static_asset;
+	static_draw.world_transform = glm::mat4(1.0f);
+	AshEngine::ResolvedStaticMeshSection section{};
+	section.first_index = 3u;
+	section.index_count = 12u;
+	section.depth_only_publication_identity = 23u;
+	static_draw.sections.push_back(section);
+	frame.shadow_caster_static_mesh_draws.push_back(static_draw);
+
+	AshEngine::VisibleStaticMeshDraw movable_draw = static_draw;
+	movable_draw.primitive_id = 5u;
+	movable_draw.entity_id = 9u;
+	movable_draw.mobility = AshEngine::SceneMobility::Movable;
+	frame.shadow_caster_static_mesh_draws.push_back(movable_draw);
+
+	const uint64_t original =
+		AshEngine::compute_static_shadow_caster_revision(frame);
+	CHECK(original != 0u);
+	CHECK(AshEngine::compute_static_shadow_caster_revision(frame) == original);
+
+	AshEngine::VisibleRenderFrame changed = frame;
+	changed.scene_runtime_id += 1u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+
+	changed = frame;
+	changed.scene_content_epoch += 1u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+
+	changed = frame;
+	changed.static_scene_revision += 1u;
+	changed.shadow_caster_static_mesh_draws[1].sections[0].index_count += 3u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) == original);
+
+	changed = frame;
+	changed.transform_scene_revision += 1u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) == original);
+
+	changed = frame;
+	changed.shadow_caster_static_mesh_draws[1].world_transform[3][0] = 50.0f;
+	changed.shadow_caster_static_mesh_draws[1].sections[0].index_count += 3u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) == original);
+
+	changed = frame;
+	changed.shadow_caster_static_mesh_draws[0].world_transform[3][0] = 8.0f;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+
+	changed = frame;
+	changed.shadow_caster_static_mesh_draws[0].sections[0].index_count += 3u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+
+	changed = frame;
+	changed.shadow_caster_static_mesh_draws[0]
+		.sections[0].depth_only_publication_identity += 1u;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+
+	changed = frame;
+	changed.shadow_caster_static_mesh_draws[0].render_asset =
+		std::make_shared<AshEngine::StaticMeshRenderAsset>();
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+
+	static_asset->resource =
+		std::make_shared<AshEngine::StaticMeshRenderResource>();
+	CHECK(AshEngine::compute_static_shadow_caster_revision(frame) != original);
+}
+
+TEST_CASE("Static shadow caster revision includes only enabled terrain casters")
+{
+	AshEngine::VisibleRenderFrame frame{};
+	frame.scene_runtime_id = 101u;
+	frame.scene_content_epoch = 7u;
+	frame.static_scene_revision = 11u;
+
+	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	snapshot->asset_id = 42u;
+	snapshot->layout = AshEngine::make_default_terrain_grid_layout();
+	snapshot->content_generation = 5u;
+	snapshot->residency_revision = 3u;
+	snapshot->components.resize(AshEngine::k_terrain_render_component_capacity);
+
+	auto render_asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	REQUIRE(render_asset->accept_snapshot(snapshot));
+
+	AshEngine::VisibleTerrainFrame terrain{};
+	terrain.entity_id = 9u;
+	terrain.asset_snapshot = snapshot;
+	terrain.render_asset = render_asset;
+	terrain.world_transform = glm::mat4(1.0f);
+	terrain.casts_shadow = false;
+	frame.terrains.push_back(terrain);
+
+	const uint64_t original =
+		AshEngine::compute_static_shadow_caster_revision(frame);
+	AshEngine::VisibleRenderFrame changed = frame;
+	auto changed_snapshot =
+		std::make_shared<AshEngine::TerrainAssetSnapshot>(*snapshot);
+	changed_snapshot->content_generation += 1u;
+	changed.terrains[0].asset_snapshot = changed_snapshot;
+	changed.terrains[0].world_transform[3][0] = 8.0f;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) == original);
+
+	changed = frame;
+	changed.terrains[0].casts_shadow = true;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != original);
+	const uint64_t enabled =
+		AshEngine::compute_static_shadow_caster_revision(changed);
+
+	AshEngine::VisibleRenderFrame changed_enabled = changed;
+	changed_snapshot =
+		std::make_shared<AshEngine::TerrainAssetSnapshot>(*snapshot);
+	changed_snapshot->residency_revision += 1u;
+	changed_enabled.terrains[0].asset_snapshot = changed_snapshot;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed_enabled) != enabled);
+
+	changed_enabled = changed;
+	changed_enabled.terrains[0].world_transform[3][0] = 8.0f;
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed_enabled) != enabled);
+
+	auto next_snapshot =
+		std::make_shared<AshEngine::TerrainAssetSnapshot>(*snapshot);
+	next_snapshot->content_generation += 1u;
+	REQUIRE(render_asset->accept_snapshot(next_snapshot));
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != enabled);
+}
+
+TEST_CASE("Terrain shadow caster identity is captured by one immutable snapshot")
+{
+	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+	snapshot->asset_id = 42u;
+	snapshot->layout = AshEngine::make_default_terrain_grid_layout();
+	snapshot->content_generation = 5u;
+	snapshot->residency_revision = 3u;
+	snapshot->components.resize(AshEngine::k_terrain_render_component_capacity);
+
+	AshEngine::TerrainRenderAsset render_asset{};
+	REQUIRE(render_asset.accept_snapshot(snapshot));
+	const AshEngine::TerrainShadowCasterIdentity identity =
+		render_asset.snapshot_shadow_caster_identity();
+	CHECK(identity.has_accepted_snapshot);
+	CHECK(identity.accepted_asset_id == 42u);
+	CHECK(identity.accepted_content_generation == 5u);
+	CHECK(identity.accepted_residency_revision == 3u);
+	CHECK(identity.active_content_generation == 5u);
+	CHECK(identity.pending_component_upload_count == 0u);
+	CHECK(identity.pending_component_removal_count == 0u);
+
+	auto next_snapshot =
+		std::make_shared<AshEngine::TerrainAssetSnapshot>(*snapshot);
+	next_snapshot->content_generation = 6u;
+	next_snapshot->residency_revision = 4u;
+	REQUIRE(render_asset.accept_snapshot(next_snapshot));
+	const AshEngine::TerrainShadowCasterIdentity changed =
+		render_asset.snapshot_shadow_caster_identity();
+	CHECK(changed.accepted_snapshot_identity !=
+		identity.accepted_snapshot_identity);
+	CHECK(changed.accepted_content_generation == 6u);
+	CHECK(changed.accepted_residency_revision == 4u);
+	CHECK(changed.active_content_generation == 6u);
+}
+
+TEST_CASE("Sunlight static cache consumes the complete shadow caster revision")
+{
+	const std::string source = ReadSource(
+		"project/src/engine/Function/Render/SunLightShadowPass.cpp");
+	const std::string presentation_source = ReadSource(
+		"project/src/engine/Function/Render/ScenePresentationSubsystem.cpp");
+	CHECK(source.find(
+		"compute_static_shadow_caster_revision(frame)") !=
+		std::string::npos);
+	CHECK(source.find("frame.transform_scene_revision") == std::string::npos);
+
+	const size_t planner_begin = source.find(
+		"bool build_sunlight_shadow_frame_plan_internal(");
+	const size_t planner_end = source.find(
+		"void commit_static_cache_refresh_for_tests(", planner_begin);
+	REQUIRE(planner_begin != std::string::npos);
+	REQUIRE(planner_end != std::string::npos);
+	CHECK(source.substr(planner_begin, planner_end - planner_begin).find(
+		"commit_static_cache_refresh(") == std::string::npos);
+
+	const size_t refresh_pass_begin = source.find(
+		"SceneDirectionalShadowStaticCacheRefreshPass");
+	const size_t dynamic_pass_begin = source.find(
+		"SceneDirectionalShadowDynamicCascadePass_", refresh_pass_begin);
+	REQUIRE(refresh_pass_begin != std::string::npos);
+	REQUIRE(dynamic_pass_begin != std::string::npos);
+	const std::string refresh_pass = source.substr(
+		refresh_pass_begin, dynamic_pass_begin - refresh_pass_begin);
+	const size_t clear_draw = refresh_pass.find("context.draw(");
+	const size_t static_draw = refresh_pass.find("draw_callback(");
+	const size_t commit = refresh_pass.find("commit_static_cache_refresh(");
+	REQUIRE(clear_draw != std::string::npos);
+	REQUIRE(static_draw != std::string::npos);
+	REQUIRE(commit != std::string::npos);
+	CHECK(clear_draw < static_draw);
+	CHECK(static_draw < commit);
+	const size_t publication_capture = presentation_source.find(
+		"section.depth_only_publication_identity =");
+	const size_t publication_identity = presentation_source.find(
+		"material_proxy->get_surface_staticmesh_depthonly_publication_identity()",
+		publication_capture);
+	REQUIRE(publication_capture != std::string::npos);
+	REQUIRE(publication_identity != std::string::npos);
+	CHECK(publication_identity - publication_capture < 160u);
+}
+
+TEST_CASE("Static shadow cache refresh commits only after clear and caster recording succeed")
+{
+	auto record = [](bool clear_succeeds,
+		bool caster_draw_succeeds,
+		std::vector<std::string>& events,
+		bool& committed)
+	{
+		return AshEngine::SunLightShadowDetail::record_static_cache_refresh_if_complete(
+			[&]()
+			{
+				events.emplace_back("clear");
+				return clear_succeeds;
+			},
+			[&]()
+			{
+				events.emplace_back("casters");
+				return caster_draw_succeeds;
+			},
+			[&]()
+			{
+				events.emplace_back("commit");
+				committed = true;
+			});
+	};
+
+	SUBCASE("clear failure stops before caster recording")
+	{
+		std::vector<std::string> events{};
+		bool committed = false;
+		CHECK_FALSE(record(false, true, events, committed));
+		CHECK((events == std::vector<std::string>{ "clear" }));
+		CHECK_FALSE(committed);
+	}
+
+	SUBCASE("caster failure leaves the cache uncommitted")
+	{
+		std::vector<std::string> events{};
+		bool committed = false;
+		CHECK_FALSE(record(true, false, events, committed));
+		CHECK((events == std::vector<std::string>{ "clear", "casters" }));
+		CHECK_FALSE(committed);
+	}
+
+	SUBCASE("both recordings commit exactly once and in order")
+	{
+		std::vector<std::string> events{};
+		bool committed = false;
+		CHECK(record(true, true, events, committed));
+		CHECK((events ==
+			std::vector<std::string>{ "clear", "casters", "commit" }));
+		CHECK(committed);
+	}
 }

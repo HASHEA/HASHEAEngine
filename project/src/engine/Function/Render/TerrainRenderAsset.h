@@ -39,6 +39,24 @@ namespace AshEngine
 		Failed
 	};
 
+	// Immutable, one-lock view of every TerrainRenderAsset field that can change
+	// the depth recorded for a static shadow cache tile.
+	struct ASH_API TerrainShadowCasterIdentity
+	{
+		uint64_t accepted_snapshot_identity = 0u;
+		uint64_t accepted_asset_id = 0u;
+		uint64_t accepted_content_generation = 0u;
+		uint64_t accepted_residency_revision = 0u;
+		uint64_t active_content_generation = 0u;
+		uint64_t published_content_generation = 0u;
+		uint32_t required_upload_count = 0u;
+		uint32_t completed_upload_count = 0u;
+		uint32_t pending_component_upload_count = 0u;
+		uint32_t pending_component_removal_count = 0u;
+		TerrainRenderReadiness readiness = TerrainRenderReadiness::Pending;
+		bool has_accepted_snapshot = false;
+	};
+
 	class ASH_API TerrainRenderAssetState
 	{
 	public:
@@ -92,6 +110,7 @@ namespace AshEngine
 		uint32_t pending_component_removal_count() const;
 		bool has_pending_component_removal(TerrainComponentCoord coord) const;
 		std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot() const;
+		TerrainShadowCasterIdentity snapshot_shadow_caster_identity() const;
 		std::string get_last_error() const;
 
 		std::shared_ptr<StorageBuffer> packed_height_buffer() const;

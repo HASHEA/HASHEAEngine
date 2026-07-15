@@ -386,9 +386,13 @@ namespace AshEngine
 				out_plan = {};
 				return true;
 			}
+			const uint64_t static_shadow_caster_revision =
+				compute_static_shadow_caster_revision(frame);
 
 			out_plan = {};
 			out_plan.dynamic_tiles.atlas_size = config.dynamic_atlas_size;
+			out_plan.static_shadow_caster_revision =
+				static_shadow_caster_revision;
 			out_plan.dynamic_tiles.capacity_tiles =
 				compute_dynamic_tile_capacity(config.dynamic_atlas_size, std::min(config.outer_cascade_resolution, config.near_cascade_resolution));
 
@@ -557,7 +561,7 @@ namespace AshEngine
 							runtime_pass->resolve_cascade_cache_mode(
 								cascade_plan.cascade_index,
 								light.entity_id,
-								frame.static_scene_revision,
+								static_shadow_caster_revision,
 								cascade_plan.light_view_projection,
 								cascade_plan.cache_mode);
 							if (cascade_plan.cache_mode == DirectionalShadowCacheMode::StaticRefresh ||
@@ -575,14 +579,6 @@ namespace AshEngine
 								else
 								{
 									cascade_plan.has_static_cache_tile = true;
-									if (cascade_plan.cache_mode == DirectionalShadowCacheMode::StaticRefresh)
-									{
-										runtime_pass->commit_static_cache_refresh(
-											light.entity_id,
-											cascade_plan.cascade_index,
-											frame.static_scene_revision,
-											cascade_plan.light_view_projection);
-									}
 								}
 							}
 						}
@@ -611,6 +607,18 @@ namespace AshEngine
 
 			out_plan.dynamic_tiles.used_tiles = static_cast<uint32_t>(out_plan.cascades.size());
 			return true;
+		}
+
+		void commit_static_cache_refresh_for_tests(
+			SunLightShadowPass& runtime_pass,
+			const DirectionalShadowCascadePlan& cascade,
+			uint64_t static_shadow_caster_revision)
+		{
+			runtime_pass.commit_static_cache_refresh(
+				cascade.light_entity_id,
+				cascade.cascade_index,
+				static_shadow_caster_revision,
+				cascade.light_view_projection);
 		}
 	}
 
@@ -857,7 +865,7 @@ namespace AshEngine
 	bool SunLightShadowPass::resolve_cascade_cache_mode(
 		uint32_t cascade_index,
 		EntityId light_entity_id,
-		uint64_t static_scene_revision,
+		uint64_t static_shadow_caster_revision,
 		const glm::mat4& light_view_projection,
 		DirectionalShadowCacheMode& out_mode) const
 	{
@@ -870,7 +878,8 @@ namespace AshEngine
 		const uint64_t cache_key = (static_cast<uint64_t>(light_entity_id) << 32u) | static_cast<uint64_t>(cascade_index);
 		const auto found = m_static_cache_entries.find(cache_key);
 		if (found != m_static_cache_entries.end() &&
-			found->second.static_scene_revision == static_scene_revision &&
+			found->second.static_shadow_caster_revision ==
+				static_shadow_caster_revision &&
 			matrices_nearly_equal(found->second.light_view_projection, light_view_projection))
 		{
 			out_mode = DirectionalShadowCacheMode::StaticCached;
@@ -942,7 +951,7 @@ namespace AshEngine
 
 		DirectionalShadowStaticCacheEntry entry{};
 		entry.tile = tile;
-		entry.static_scene_revision = 0;
+		entry.static_shadow_caster_revision = 0;
 		entry.last_used_frame = m_frame_counter;
 		m_static_cache_entries.emplace(cache_key, entry);
 		out_tile = tile;
@@ -952,14 +961,15 @@ namespace AshEngine
 	void SunLightShadowPass::commit_static_cache_refresh(
 		EntityId light_entity_id,
 		uint32_t cascade_index,
-		uint64_t static_scene_revision,
+		uint64_t static_shadow_caster_revision,
 		const glm::mat4& light_view_projection)
 	{
 		const uint64_t cache_key = (static_cast<uint64_t>(light_entity_id) << 32u) | static_cast<uint64_t>(cascade_index);
 		const auto found = m_static_cache_entries.find(cache_key);
 		if (found != m_static_cache_entries.end())
 		{
-			found->second.static_scene_revision = static_scene_revision;
+			found->second.static_shadow_caster_revision =
+				static_shadow_caster_revision;
 			found->second.last_used_frame = m_frame_counter;
 			found->second.light_view_projection = light_view_projection;
 		}
@@ -1164,6 +1174,8 @@ namespace AshEngine
 
 		const float atlas_size_f = static_cast<float>(m_config.dynamic_atlas_size);
 		const float static_atlas_size_f = static_cast<float>(m_config.static_cache_atlas_size);
+		const uint64_t static_shadow_caster_revision =
+			outputs.plan.static_shadow_caster_revision;
 
 		for (size_t cascade_index = 0; cascade_index < outputs.plan.cascades.size(); ++cascade_index)
 		{
@@ -1178,29 +1190,43 @@ namespace AshEngine
 					{
 						pass.write_depth(static_cache_atlas, RenderLoadAction::Load, k_shadow_depth_clear);
 					},
-					[this, &frame, &view_context, cascade, draw_callback, render_frame_index, static_atlas_size_f](RenderGraphRasterContext& context) -> bool
+					[this, &frame, &view_context, cascade, draw_callback, render_frame_index, static_atlas_size_f, static_shadow_caster_revision](RenderGraphRasterContext& context) -> bool
 					{
 						ASH_PROFILE_SCOPE_NC("SceneDirectionalShadowStaticCacheRefreshPass", AshEngine::Profile::Color::Draw);
-						ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 						const SceneRenderViewContext shadow_view_context =
 							make_shadow_view_context(view_context, cascade.static_cache_tile, static_atlas_size_f);
-
-						DirectionalShadowTileClearConstants clear_constants{};
-						clear_constants.clear_params.x = 1.0f;
-						ASH_PROCESS_ERROR(context.draw(create_fullscreen_draw(
-							m_tile_clear_program.get(),
-							shadow_view_context,
-							clear_constants)));
-
-						VisibleRenderFrame shadow_frame = frame;
-						shadow_frame.view_projection = cascade.light_view_projection;
-						ASH_PROCESS_ERROR(draw_callback(
-							shadow_frame,
-							shadow_view_context,
-							context,
-							render_frame_index,
-							ShadowCasterMobilityFilter::StaticOnly));
-						ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+						return SunLightShadowDetail::record_static_cache_refresh_if_complete(
+							[&]()
+							{
+								DirectionalShadowTileClearConstants clear_constants{};
+								clear_constants.clear_params.x = 1.0f;
+								return context.draw(create_fullscreen_draw(
+									m_tile_clear_program.get(),
+									shadow_view_context,
+									clear_constants));
+							},
+							[&]()
+							{
+								VisibleRenderFrame shadow_frame = frame;
+								shadow_frame.view_projection = cascade.light_view_projection;
+								return draw_callback(
+									shadow_frame,
+									shadow_view_context,
+									context,
+									render_frame_index,
+									ShadowCasterMobilityFilter::StaticOnly);
+							},
+							[&]()
+							{
+								// This is the narrow success boundary available today: both
+								// static-cache draws were accepted into CPU command recording.
+								// RenderGraph does not expose pass-end/submission/GPU completion here.
+								commit_static_cache_refresh(
+									cascade.light_entity_id,
+									cascade.cascade_index,
+									static_shadow_caster_revision,
+									cascade.light_view_projection);
+							});
 					});
 			}
 		}

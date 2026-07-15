@@ -99,6 +99,12 @@ namespace AshEngine
 		SceneRenderConfig render_config{};
 	};
 
+	// Stable identity for the complete set of static shadow casters represented by
+	// a visible frame. Terrain GPU publication state is included so a cache tile
+	// rendered while an asset is still pending cannot be reused after it becomes ready.
+	ASH_API uint64_t compute_static_shadow_caster_revision(
+		const VisibleRenderFrame& frame);
+
 	class ASH_API RenderScene
 	{
 	public:

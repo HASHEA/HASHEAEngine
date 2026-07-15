@@ -642,6 +642,218 @@ TEST_CASE("Terrain canonical edge normals match adjacent LOD interpolation")
 		doctest::Approx(coarse_world_interpolation.z));
 }
 
+TEST_CASE("Directional shadow receiver plane stays quad uniform and fails soft")
+{
+	const std::string shader = ReadSource(
+		"project/src/engine/Shaders/Shadow/DirectionalShadowMask.hlsl");
+	const std::string compact = CompactSource(shader);
+	const size_t pixel_shader = compact.find(
+		"float4PSMain(VSFullscreenOutputinput):SV_Target0{");
+	const size_t reconstruct = compact.find(
+		"constfloat3position_ws=ReconstructWorldPosition(input.uv,scene_depth);",
+		pixel_shader);
+	const size_t derivative = compact.find(
+		"constfloat3position_dx_ws=ddx(position_ws);", reconstruct);
+	const size_t background_branch = compact.find(
+		"if(IsBackgroundDepth(scene_depth)){return1.0.xxxx;}", pixel_shader);
+	REQUIRE(pixel_shader != std::string::npos);
+	REQUIRE(reconstruct != std::string::npos);
+	REQUIRE(derivative != std::string::npos);
+	REQUIRE(background_branch != std::string::npos);
+	CHECK(reconstruct < derivative);
+	CHECK(derivative < background_branch);
+
+	CHECK(compact.find(
+		"constfloatshadow_clip_w_squared=shadow_clip.w*shadow_clip.w;") !=
+		std::string::npos);
+	CHECK(compact.find(
+		"if(!isfinite(shadow_clip_w_squared)||"
+		"shadow_clip_w_squared<=1e-12){returnfalse;}") !=
+		std::string::npos);
+	CHECK(compact.find(
+		"constfloat3shadow_ndc_dx=(shadow_clip_dx.xyz*shadow_clip.w-"
+		"shadow_clip.xyz*shadow_clip_dx.w)/shadow_clip_w_squared;") !=
+		std::string::npos);
+	CHECK(compact.find(
+		"constfloat3shadow_ndc_dy=(shadow_clip_dy.xyz*shadow_clip.w-"
+		"shadow_clip.xyz*shadow_clip_dy.w)/shadow_clip_w_squared;") !=
+		std::string::npos);
+	CHECK(compact.find(
+		"constfloat2atlas_uv_dx=shadow_ndc_dx.xy*float2(0.5,-0.5)*"
+		"cascade.atlas_uv_scale_bias.xy;") != std::string::npos);
+	CHECK(compact.find(
+		"jacobian_determinant*jacobian_determinant<="
+		"kReceiverPlaneJacobianRelativeEpsilon*jacobian_scale_squared") !=
+		std::string::npos);
+	CHECK(compact.find(
+		"isfinite(depth_offset)&&abs(depth_offset)<="
+		"kReceiverPlaneMaximumDepthOffset?depth_offset:0.0") !=
+		std::string::npos);
+
+	struct Vec2
+	{
+		double x = 0.0;
+		double y = 0.0;
+	};
+	struct Vec3
+	{
+		double x = 0.0;
+		double y = 0.0;
+		double z = 0.0;
+	};
+	struct Vec4
+	{
+		double x = 0.0;
+		double y = 0.0;
+		double z = 0.0;
+		double w = 0.0;
+	};
+	auto projective_derivative = [](Vec4 clip, Vec4 clip_derivative, Vec3& derivative)
+	{
+		derivative = {};
+		const double w_squared = clip.w * clip.w;
+		if (!std::isfinite(w_squared) || w_squared <= 1e-12)
+		{
+			return false;
+		}
+		derivative = {
+			(clip_derivative.x * clip.w - clip.x * clip_derivative.w) /
+				w_squared,
+			(clip_derivative.y * clip.w - clip.y * clip_derivative.w) /
+				w_squared,
+			(clip_derivative.z * clip.w - clip.z * clip_derivative.w) /
+				w_squared
+		};
+		return std::isfinite(derivative.x) &&
+			std::isfinite(derivative.y) &&
+			std::isfinite(derivative.z);
+	};
+
+	Vec3 projected{};
+	REQUIRE(projective_derivative(
+		{ 4.0, 6.0, 8.0, 2.0 },
+		{ 1.0, 2.0, 3.0, 0.5 },
+		projected));
+	CHECK(projected.x == doctest::Approx(0.0));
+	CHECK(projected.y == doctest::Approx(0.25));
+	CHECK(projected.z == doctest::Approx(0.5));
+
+	for (const double invalid_w : {
+		1e-7,
+		0.0,
+		std::numeric_limits<double>::quiet_NaN(),
+		std::numeric_limits<double>::infinity() })
+	{
+		projected = { 7.0, 8.0, 9.0 };
+		CHECK_FALSE(projective_derivative(
+			{ 4.0, 6.0, 8.0, invalid_w },
+			{ 1.0, 2.0, 3.0, 0.5 },
+			projected));
+		CHECK(projected.x == 0.0);
+		CHECK(projected.y == 0.0);
+		CHECK(projected.z == 0.0);
+	}
+	auto dot = [](Vec2 lhs, Vec2 rhs)
+	{
+		return lhs.x * rhs.x + lhs.y * rhs.y;
+	};
+	auto solve_gradient = [&](Vec2 ndc_xy_dx,
+		Vec2 ndc_xy_dy,
+		double depth_dx,
+		double depth_dy,
+		Vec2 tile_scale,
+		Vec2& gradient)
+	{
+		const Vec2 atlas_uv_dx{
+			ndc_xy_dx.x * 0.5 * tile_scale.x,
+			ndc_xy_dx.y * -0.5 * tile_scale.y
+		};
+		const Vec2 atlas_uv_dy{
+			ndc_xy_dy.x * 0.5 * tile_scale.x,
+			ndc_xy_dy.y * -0.5 * tile_scale.y
+		};
+		const double determinant =
+			atlas_uv_dx.x * atlas_uv_dy.y -
+			atlas_uv_dx.y * atlas_uv_dy.x;
+		const double scale_squared =
+			dot(atlas_uv_dx, atlas_uv_dx) *
+			dot(atlas_uv_dy, atlas_uv_dy);
+		if (!std::isfinite(depth_dx) || !std::isfinite(depth_dy) ||
+			!std::isfinite(determinant) || !std::isfinite(scale_squared) ||
+			scale_squared <= 0.0 ||
+			determinant * determinant <= 1e-8 * scale_squared)
+		{
+			gradient = {};
+			return false;
+		}
+		gradient = {
+			(depth_dx * atlas_uv_dy.y - depth_dy * atlas_uv_dx.y) /
+				determinant,
+			(depth_dy * atlas_uv_dx.x - depth_dx * atlas_uv_dy.x) /
+				determinant
+		};
+		return std::isfinite(gradient.x) && std::isfinite(gradient.y);
+	};
+
+	const Vec2 expected_gradient{ 1.5, -0.75 };
+	const Vec2 tile_scale{ 0.25, 0.5 };
+	const Vec2 ndc_xy_dx{ 0.2, 0.1 };
+	const Vec2 ndc_xy_dy{ -0.1, 0.3 };
+	const Vec2 atlas_uv_dx{
+		ndc_xy_dx.x * 0.5 * tile_scale.x,
+		ndc_xy_dx.y * -0.5 * tile_scale.y
+	};
+	const Vec2 atlas_uv_dy{
+		ndc_xy_dy.x * 0.5 * tile_scale.x,
+		ndc_xy_dy.y * -0.5 * tile_scale.y
+	};
+	Vec2 recovered{};
+	REQUIRE(solve_gradient(
+		ndc_xy_dx,
+		ndc_xy_dy,
+		dot(expected_gradient, atlas_uv_dx),
+		dot(expected_gradient, atlas_uv_dy),
+		tile_scale,
+		recovered));
+	CHECK(recovered.x == doctest::Approx(expected_gradient.x));
+	CHECK(recovered.y == doctest::Approx(expected_gradient.y));
+	const Vec2 atlas_texel_tap{ 1.0 / 4096.0, -2.0 / 4096.0 };
+	CHECK(dot(recovered, atlas_texel_tap) ==
+		doctest::Approx(0.000732421875));
+
+	Vec2 fallback{ 7.0, 9.0 };
+	CHECK_FALSE(solve_gradient(
+		{ 1.0, 2.0 },
+		{ 2.0, 4.0 + 1e-12 },
+		0.1,
+		0.2,
+		{ 1.0, 1.0 },
+		fallback));
+	CHECK(fallback.x == 0.0);
+	CHECK(fallback.y == 0.0);
+	CHECK_FALSE(solve_gradient(
+		{ 1.0, 0.0 },
+		{ 0.0, 1.0 },
+		std::numeric_limits<double>::quiet_NaN(),
+		0.2,
+		{ 1.0, 1.0 },
+		fallback));
+
+	auto guarded_offset = [](Vec2 gradient, Vec2 tap, bool valid)
+	{
+		const double offset = gradient.x * tap.x + gradient.y * tap.y;
+		return valid && std::isfinite(offset) && std::abs(offset) <= 0.05 ?
+			offset : 0.0;
+	};
+	CHECK(guarded_offset({ 1.0, 0.0 }, { 0.049, 0.0 }, true) ==
+		doctest::Approx(0.049));
+	CHECK(guarded_offset({ 1.0, 0.0 }, { 0.051, 0.0 }, true) == 0.0);
+	CHECK(guarded_offset(
+		{ std::numeric_limits<double>::infinity(), 0.0 },
+		{ 0.001, 0.0 },
+		true) == 0.0);
+}
+
 TEST_CASE("Terrain instance storage uses the cross-backend staging upload path")
 {
 	const std::string source = ReadSource(

@@ -37,6 +37,7 @@ namespace AshEngine
 		const MaterialResource* get_surface_staticmesh_basepass_resource() const;
 		const MaterialResource* get_surface_staticmesh_depthonly_resource() const;
 		const MaterialResource* get_surface_staticmesh_gbuffer_resource() const;
+		uint64_t get_surface_staticmesh_depthonly_publication_identity() const;
 		bool prepare_surface_staticmesh(RenderAssetManager& asset_manager, Renderer& renderer);
 		bool ensure_program(Renderer& renderer);
 		bool update_bindings(RenderAssetManager& asset_manager);

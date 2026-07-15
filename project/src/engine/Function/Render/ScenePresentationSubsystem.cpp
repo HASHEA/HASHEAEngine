@@ -291,6 +291,8 @@ namespace AshEngine
 
 						if (section.material_proxy && !section.material_proxy->needs_surface_staticmesh_preparation())
 						{
+							section.depth_only_publication_identity =
+								section.material_proxy->get_surface_staticmesh_depthonly_publication_identity();
 							continue;
 						}
 
@@ -318,6 +320,8 @@ namespace AshEngine
 							}
 						}
 
+						section.depth_only_publication_identity =
+							material_proxy->get_surface_staticmesh_depthonly_publication_identity();
 						section.material_proxy = std::move(material_proxy);
 					}
 				}

@@ -464,6 +464,36 @@ namespace AshEngine
 		return m_accepted_snapshot;
 	}
 
+	TerrainShadowCasterIdentity
+		TerrainRenderAsset::snapshot_shadow_caster_identity() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		TerrainShadowCasterIdentity identity{};
+		identity.accepted_snapshot_identity = static_cast<uint64_t>(
+			reinterpret_cast<uintptr_t>(m_accepted_snapshot.get()));
+		identity.has_accepted_snapshot = m_accepted_snapshot != nullptr;
+		if (m_accepted_snapshot)
+		{
+			identity.accepted_asset_id = m_accepted_snapshot->asset_id;
+			identity.accepted_content_generation =
+				m_accepted_snapshot->content_generation;
+			identity.accepted_residency_revision =
+				m_accepted_snapshot->residency_revision;
+		}
+		identity.active_content_generation =
+			m_state.active_content_generation();
+		identity.published_content_generation =
+			m_state.published_content_generation();
+		identity.required_upload_count = m_state.required_upload_count();
+		identity.completed_upload_count = m_state.completed_upload_count();
+		identity.pending_component_upload_count = static_cast<uint32_t>(
+			m_pending_component_uploads.size());
+		identity.pending_component_removal_count = static_cast<uint32_t>(
+			m_pending_component_removals.size());
+		identity.readiness = m_state.readiness();
+		return identity;
+	}
+
 	std::string TerrainRenderAsset::get_last_error() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);

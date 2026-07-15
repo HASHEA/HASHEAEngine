@@ -87,6 +87,7 @@ namespace AshEngine
 		std::vector<DirectionalShadowLightPlan> shadowed_lights{};
 		std::vector<DirectionalShadowCascadePlan> cascades{};
 		DirectionalShadowTileBudget dynamic_tiles{};
+		uint64_t static_shadow_caster_revision = 0u;
 		uint32_t input_directional_shadow_light_count = 0;
 		uint32_t skipped_shadow_light_count = 0;
 		uint32_t degraded_outer_cascade_count = 0;
@@ -114,13 +115,31 @@ namespace AshEngine
 	struct DirectionalShadowStaticCacheEntry
 	{
 		DirectionalShadowAtlasTile tile{};
-		uint64_t static_scene_revision = 0;
+		uint64_t static_shadow_caster_revision = 0;
 		uint64_t last_used_frame = 0;
 		glm::mat4 light_view_projection{ 1.0f };
 	};
 
 	namespace SunLightShadowDetail
 	{
+		template<typename ClearRecord, typename CasterRecord, typename Commit>
+		bool record_static_cache_refresh_if_complete(
+			ClearRecord clear_record,
+			CasterRecord caster_record,
+			Commit commit)
+		{
+			if (!clear_record())
+			{
+				return false;
+			}
+			if (!caster_record())
+			{
+				return false;
+			}
+			commit();
+			return true;
+		}
+
 		bool build_sunlight_shadow_frame_plan_internal(
 			const VisibleRenderFrame& frame,
 			const DirectionalShadowConfig& config,
@@ -128,6 +147,10 @@ namespace AshEngine
 			uint32_t output_height,
 			SunLightShadowPass* runtime_pass,
 			DirectionalShadowFramePlan& out_plan);
+		void commit_static_cache_refresh_for_tests(
+			SunLightShadowPass& runtime_pass,
+			const DirectionalShadowCascadePlan& cascade,
+			uint64_t static_shadow_caster_revision);
 	}
 
 	class SunLightShadowPass
@@ -139,6 +162,10 @@ namespace AshEngine
 			uint32_t output_height,
 			SunLightShadowPass* runtime_pass,
 			DirectionalShadowFramePlan& out_plan);
+		friend void SunLightShadowDetail::commit_static_cache_refresh_for_tests(
+			SunLightShadowPass& runtime_pass,
+			const DirectionalShadowCascadePlan& cascade,
+			uint64_t static_shadow_caster_revision);
 
 	public:
 		bool initialize(Renderer* renderer);
@@ -182,7 +209,7 @@ namespace AshEngine
 		bool resolve_cascade_cache_mode(
 			uint32_t cascade_index,
 			EntityId light_entity_id,
-			uint64_t static_scene_revision,
+			uint64_t static_shadow_caster_revision,
 			const glm::mat4& light_view_projection,
 			DirectionalShadowCacheMode& out_mode) const;
 		bool ensure_static_cache_tile(
@@ -193,7 +220,7 @@ namespace AshEngine
 		void commit_static_cache_refresh(
 			EntityId light_entity_id,
 			uint32_t cascade_index,
-			uint64_t static_scene_revision,
+			uint64_t static_shadow_caster_revision,
 			const glm::mat4& light_view_projection);
 		uint64_t compute_static_cache_used_bytes() const;
 		bool take_reusable_static_cache_tile(uint32_t resolution, DirectionalShadowAtlasTile& out_tile);
