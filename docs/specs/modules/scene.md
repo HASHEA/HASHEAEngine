@@ -52,6 +52,8 @@ status: active
 - Terrain 内容组件变化只推进 `render_terrain_version`；普通合法 transform/reparent 只推进 transform revision，不重建 Terrain asset data。参数为空的通用 `add_scene_component` 无法构造合法 Terrain，故 Terrain 创建必须使用携带资产路径的 typed facade；通用 read/write/remove 仍支持 Terrain。
 - ScenePresentation 同帧观察到 Terrain topology 与 transform 变化时，必须先按最新 extraction 重建 proxy 集合，再更新 transform；失败保持旧集合或将 render scene 标为无效并在下一帧全量重试，不发布半构建 Terrain 集合。
 - Scene Terrain world adapter 将 world 坐标按平移与正缩放映射到 snapshot-local；高度、逆转置法线和射线距离再转换回 world space。多 Terrain 射线在任何候选资产仍 Pending 时保守返回 Pending；Failed 优先于结果，所有非 Ready 路径保持输出不变。Terrain 尚未并入通用 mesh `ray_cast_scene` 或 Editor GPU pick。
+- Particle v6 的 `sprite_texture_path` 是 RGBA sprite 资产引用，默认空路径表示默认 White sprite；`radial_falloff`（默认 1.0，范围 0..1）是 sprite-only 与 analytic radial mask 的混合权重，`radial_sharpness`（默认 2.0，范围 0.25..8）是径向 mask 的 power exponent；`soft_particles`（默认 true）控制 opaque scene depth 相交处淡出，`soft_fade_distance`（默认 0.25，范围 0.001..10）是 world-space 深度淡出区间。version 5 缺少这些键时保持默认值。render/submit thread 通过 `RenderAssetManager` 消费 sprite 路径；空路径使用 White fallback，显式失败路径保持 Failed readiness 与错误日志，同时用 fallback resource 保持可见。
+- Particle JSON malformed sanitation：字符串/布尔类型错误保留默认值；新增浮点字段的非有限值先回退默认，再 clamp 到各自范围。Scene add/set/load 继续共享同一数值 sanitize 契约。
 - `get_content_epoch()` 只在 load/reload/replace 内容时变化，普通组件编辑不得推进；它用于重置跨帧渲染状态，不替代细粒度 render version。
 - 粒子 GPU 状态以进程内 `scene_runtime_id + entity_id` 隔离；场景解绑会显式释放该 runtime 的状态。
 - 边界：custom pass、compute、后处理实验、调试渲染继续走 Renderer 直驱，不强行塞进 scene presentation；上层需求统一表达为 Scene + Camera + Output + Overrides，不把 `RenderScene`/`SceneView`/`VisibleRenderFrame`/`SceneRenderer` 暴露回上层；UI 显示离屏输出用 `UISurfaceHandle` + `draw_surface_fill_available`。
@@ -62,7 +64,7 @@ status: active
 对齐 `docs/VERIFY.md` "Scene / Asset / Application 生命周期"行：
 
 - 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke）
-- Editor 打开默认场景操作一遍（层级/Inspector/保存）
+- 人类在 Editor 打开默认场景操作一遍（层级/Inspector/保存）；Agent 只移交清单
 - 改动波及渲染数据流（extraction、VisibleRenderFrame、SceneRenderConfig）时加跑 `RunRenderGate.bat`
 - 只改 snapshot-local 或 Scene world-space Terrain 查询时按 `docs/VERIFY.md` "Terrain Asset / CPU logic" 行执行；它不产生 rendered frame 变化。
 

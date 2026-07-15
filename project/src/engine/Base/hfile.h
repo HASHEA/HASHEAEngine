@@ -19,10 +19,10 @@ namespace AshEngine
     static const uint32_t                k_max_path = 512;
 
     struct Directory {
-        char                        path[k_max_path];
+        char                        path[k_max_path]{};
 
 #if defined (_WIN64)
-        void* os_handle;
+        void* os_handle = nullptr;
 #endif
     }; // struct Directory
 
@@ -57,12 +57,12 @@ namespace AshEngine
     auto directory_exists(const char* path) -> bool;
     auto directory_create(const char* path) -> bool;
     auto directory_delete(const char* path) -> bool;
-    auto directory_current(Directory* directory) -> void;
+    ASH_API auto directory_current(Directory* directory) -> void;
     auto directory_change(const char* path) -> bool;
-    auto file_open_directory(const char* path, Directory* outDirectory) -> bool;
-    auto file_close_directory(Directory* directory) -> bool;
-    auto file_parent_directory(Directory* directory) -> void;
-    auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> bool;
+    ASH_API auto file_open_directory(const char* path, Directory* outDirectory) -> bool;
+    ASH_API auto file_close_directory(Directory* directory) -> bool;
+    ASH_API auto file_parent_directory(Directory* directory) -> void;
+    ASH_API auto file_sub_directory(Directory* directory, const char* subDirectoryName) -> bool;
     auto file_find_files_in_path(const char* filePattern,StringArray& files) -> void;
     auto file_find_files_in_path(const char* extension,const char* searchPattern, StringArray& files, StringArray& directories) -> void;
     auto env_var_get(const char* name, char* output, uint32_t outputSize) -> void;

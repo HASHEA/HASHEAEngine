@@ -14,8 +14,8 @@ namespace RHI
 	{
 		std::string name;
 		AshResourceViewType viewType;
-		D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = {};
-		std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> cpuHandles; // for arrays
+		DX12DescriptorHandle descriptorHandle = {};
+		std::vector<DX12DescriptorHandle> descriptorHandles; // for arrays
 		bool isArray = false;
 	};
 

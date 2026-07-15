@@ -32,6 +32,7 @@ namespace RHI
 		uint32_t m_descriptorSize = 0;
 		uint32_t m_maxDescriptors = 0;
 		uint32_t m_currentIndex = 0;
+		uint64_t m_nextAllocationSerial = 0;
 		std::vector<uint32_t> m_freeList;
 		std::mutex m_mutex;
 		D3D12_CPU_DESCRIPTOR_HANDLE m_cpuStart = {};
@@ -77,18 +78,60 @@ namespace RHI
 		struct DescriptorTableCacheKey
 		{
 			static constexpr uint32_t InlineHandleCapacity = 8;
+			struct DescriptorIdentity
+			{
+				SIZE_T cpuHandle = 0;
+				uint64_t allocationSerial = 0;
+
+				bool operator==(const DescriptorIdentity& other) const
+				{
+					return cpuHandle == other.cpuHandle && allocationSerial == other.allocationSerial;
+				}
+			};
 
 			D3D12_DESCRIPTOR_HEAP_TYPE heapType = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 			uint32_t descriptorCount = 0;
-			std::array<SIZE_T, InlineHandleCapacity> inlineCpuHandles{};
-			std::vector<SIZE_T> overflowCpuHandles{};
+			std::array<DescriptorIdentity, InlineHandleCapacity> inlineDescriptors{};
+			std::vector<DescriptorIdentity> overflowDescriptors{};
+
+			// Precondition: caller validated non-null handles, nonzero count, and nonzero CPU address/allocation serial per element.
+			static DescriptorTableCacheKey from_handles(
+				D3D12_DESCRIPTOR_HEAP_TYPE heapType,
+				const DX12DescriptorHandle* descriptorHandles,
+				uint32_t descriptorCount)
+			{
+				DescriptorTableCacheKey key{};
+				key.heapType = heapType;
+				key.descriptorCount = descriptorCount;
+				if (descriptorCount > InlineHandleCapacity)
+				{
+					key.overflowDescriptors.reserve(descriptorCount - InlineHandleCapacity);
+				}
+
+				for (uint32_t index = 0; index < descriptorCount; ++index)
+				{
+					const DescriptorIdentity identity{
+						descriptorHandles[index].cpuHandle.ptr,
+						descriptorHandles[index].allocationSerial
+					};
+					if (index < InlineHandleCapacity)
+					{
+						key.inlineDescriptors[index] = identity;
+					}
+					else
+					{
+						key.overflowDescriptors.push_back(identity);
+					}
+				}
+				return key;
+			}
 
 			bool operator==(const DescriptorTableCacheKey& other) const
 			{
 				return heapType == other.heapType &&
 					descriptorCount == other.descriptorCount &&
-					inlineCpuHandles == other.inlineCpuHandles &&
-					overflowCpuHandles == other.overflowCpuHandles;
+					inlineDescriptors == other.inlineDescriptors &&
+					overflowDescriptors == other.overflowDescriptors;
 			}
 		};
 
@@ -97,16 +140,22 @@ namespace RHI
 			size_t operator()(const DescriptorTableCacheKey& key) const
 			{
 				size_t hash = static_cast<size_t>(key.heapType);
-				hash ^= static_cast<size_t>(key.descriptorCount) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+				const auto combine = [&hash](size_t value)
+				{
+					hash ^= value + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+				};
+				combine(static_cast<size_t>(key.descriptorCount));
 				const uint32_t inlineCount = std::min<uint32_t>(key.descriptorCount, DescriptorTableCacheKey::InlineHandleCapacity);
 				for (uint32_t index = 0; index < inlineCount; ++index)
 				{
-					const SIZE_T handle = key.inlineCpuHandles[index];
-					hash ^= static_cast<size_t>(handle) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+					const DescriptorTableCacheKey::DescriptorIdentity& identity = key.inlineDescriptors[index];
+					combine(static_cast<size_t>(identity.cpuHandle));
+					combine(static_cast<size_t>(identity.allocationSerial));
 				}
-				for (SIZE_T handle : key.overflowCpuHandles)
+				for (const DescriptorTableCacheKey::DescriptorIdentity& identity : key.overflowDescriptors)
 				{
-					hash ^= static_cast<size_t>(handle) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+					combine(static_cast<size_t>(identity.cpuHandle));
+					combine(static_cast<size_t>(identity.allocationSerial));
 				}
 				return hash;
 			}
@@ -125,7 +174,7 @@ namespace RHI
 		bool find_or_create_shader_visible_table(
 			ID3D12Device* device,
 			D3D12_DESCRIPTOR_HEAP_TYPE heapType,
-			const D3D12_CPU_DESCRIPTOR_HANDLE* cpuHandles,
+			const DX12DescriptorHandle* descriptorHandles,
 			uint32_t descriptorCount,
 			DX12DescriptorHandle& outHandle);
 

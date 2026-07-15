@@ -68,6 +68,18 @@ TEST_CASE("readiness smoke succeeds on the first fully presented ready frame")
 	CHECK(controller.outcome() == AshEngine::ApplicationAutomationOutcome::Succeeded);
 }
 
+TEST_CASE("entry point recognizes the constant-buffer RHI self-test flag")
+{
+	char executable[] = "Tests.exe";
+	char self_test_option[] = "--rhi-selftest-constant-buffer";
+	char* requested_argv[] = { executable, self_test_option };
+	CHECK(should_run_rhi_constant_buffer_self_test(2, requested_argv));
+
+	char unrelated_option[] = "--rhi-selftest-indirect";
+	char* unrelated_argv[] = { executable, unrelated_option };
+	CHECK_FALSE(should_run_rhi_constant_buffer_self_test(2, unrelated_argv));
+}
+
 TEST_CASE("entry point rejects negative separated automation limits")
 {
 	char executable[] = "Tests.exe";

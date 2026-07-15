@@ -72,6 +72,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mod
 按 `docs/VERIFY.md` 的变更矩阵执行；交付时说明跑过哪些验证、结果如何。
 PerfGate `FAIL` 禁止提交；`WARN` 需写明判断理由。渲染改动必须跑 `RunRenderGate.bat`；FAIL 时先看 heatmap 定位，确属预期画面变化且经用户确认后才允许 `-BlessGolden` 刷新基线。
 
+### UI 验证职责边界
+
+- 凡需要真实 UI 操作的验证（鼠标点击、键盘输入、拖放、文件对话框、窗口布局或交互式 undo/redo 等）一律交给人类执行；Agent 禁止用坐标点击、输入注入、桌面自动化或无障碍脚本模拟人工验收。
+- Agent 可以执行构建、readiness smoke、仓库内自动化测试，并可只读检查截图和日志；若未来仓库提供可重复、可判定退出码的 UI 自动化命令，可按普通自动化测试运行。
+- 交付时必须把 UI 项列成明确的人工检查清单并标记“待人工验收”；未经人类回报不得声称这些项目 PASS，也不得用自动化证据替代未覆盖的交互结论。
+
 ## High-risk paths
 
 | Path | Rule |

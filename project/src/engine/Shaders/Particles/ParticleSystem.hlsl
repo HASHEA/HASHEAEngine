@@ -202,19 +202,31 @@ void CSWriteArgs()
 cbuffer AshRootConstants : register(b0)
 {
     float4x4 AshViewProjection;
-    float4 AshCameraRightStartSize;
-    float4 AshCameraUpEndSize;
-    float4 AshParticleStartColor;
-    float4 AshParticleEndColor;
+    // xy = projection scale, z/w = start/end size.
+    float4 AshProjectionScaleStartEndSize;
+    // start xy, start zw, end xy, end zw as packed half2 values.
+    uint4 AshPackedStartEndColor;
+    // Projection coefficients (P22, P23, P32, P33).
+    float4 AshDepthReconstruct;
+    // radial falloff, radial sharpness, soft fade distance.
+    float3 AshRadialSoftParameters;
+    // bit 0 = reverse Z, bit 1 = soft particles.
+    uint AshParticleFlags;
 };
 
 StructuredBuffer<AshParticleData> ParticlePool : register(t0);
+Texture2D<float4> ParticleSprite : register(t1);
+SamplerState ParticleSpriteSampler : register(s0);
+#if defined(PARTICLE_SOFT_DEPTH)
+Texture2D<float> SceneDepth : register(t2);
+#endif
 
 struct VSOutput
 {
     float4 position : SV_Position;
     float4 color : COLOR0;
     float2 corner : TEXCOORD0;
+    float2 uv : TEXCOORD1;
 };
 
 // Two CCW triangles: (-1,-1) (1,-1) (1,1) / (-1,-1) (1,1) (-1,1).
@@ -224,34 +236,85 @@ static const float2 k_particle_corners[6] =
     float2(-1.0, -1.0), float2(1.0, 1.0), float2(-1.0, 1.0)
 };
 
+float2 AshUnpackHalf2(uint packed_value)
+{
+    return float2(
+        f16tof32(packed_value & 0xffffu),
+        f16tof32(packed_value >> 16u));
+}
+
+#if defined(PARTICLE_SOFT_DEPTH)
+float AshReconstructLinearViewDepth(float device_depth)
+{
+    const float denominator = device_depth * AshDepthReconstruct.y - AshDepthReconstruct.x;
+    return abs(
+        (AshDepthReconstruct.z - device_depth * AshDepthReconstruct.w) /
+        (abs(denominator) > 1.0e-6 ? denominator : 1.0e-6));
+}
+#endif
+
 VSOutput VSMain(uint vertex_id : SV_VertexID, uint instance_id : SV_InstanceID)
 {
     const AshParticleData particle = ParticlePool[instance_id];
     const float life_t = saturate(particle.age / max(particle.lifetime, 1e-5));
-    const float size = lerp(AshCameraRightStartSize.w, AshCameraUpEndSize.w, life_t);
+    const float size = lerp(
+        AshProjectionScaleStartEndSize.z,
+        AshProjectionScaleStartEndSize.w,
+        life_t);
     const float2 corner = k_particle_corners[vertex_id];
-    const float3 world_position =
-        particle.position +
-        (AshCameraRightStartSize.xyz * corner.x + AshCameraUpEndSize.xyz * corner.y) * (size * 0.5);
+    float4 clip_position = mul(AshViewProjection, float4(particle.position, 1.0));
+    clip_position.xy += corner * (size * 0.5) * AshProjectionScaleStartEndSize.xy;
+
+    const float4 start_color = float4(
+        AshUnpackHalf2(AshPackedStartEndColor.x),
+        AshUnpackHalf2(AshPackedStartEndColor.y));
+    const float4 end_color = float4(
+        AshUnpackHalf2(AshPackedStartEndColor.z),
+        AshUnpackHalf2(AshPackedStartEndColor.w));
 
     VSOutput output;
-    output.position = mul(AshViewProjection, float4(world_position, 1.0));
-    output.color = lerp(AshParticleStartColor, AshParticleEndColor, life_t);
+    output.position = clip_position;
+    output.color = lerp(start_color, end_color, life_t);
     output.corner = corner;
+    output.uv = corner * float2(0.5, -0.5) + 0.5;
     return output;
 }
 
 float4 PSMain(VSOutput input) : SV_Target0
 {
-    const float radius_sq = dot(input.corner, input.corner);
-    const float falloff_base = saturate(1.0 - radius_sq);
-    const float falloff = falloff_base * falloff_base;
-    const float alpha = saturate(input.color.a * falloff);
+    const float4 sprite = ParticleSprite.Sample(ParticleSpriteSampler, input.uv);
+    const float radial = pow(
+        saturate(1.0 - dot(input.corner, input.corner)),
+        max(AshRadialSoftParameters.y, 0.25));
+    const float shaped = lerp(1.0, radial, saturate(AshRadialSoftParameters.x));
+    float coverage = input.color.a * sprite.a * shaped;
+    const float3 rgb = input.color.rgb * sprite.rgb;
+
+#if defined(PARTICLE_SOFT_DEPTH)
+    if ((AshParticleFlags & 2u) != 0u)
+    {
+        const uint2 pixel_position = uint2(input.position.xy);
+        const float scene_device_depth = SceneDepth.Load(int3(pixel_position, 0));
+        const bool background = (AshParticleFlags & 1u) != 0u
+            ? scene_device_depth <= 1.0e-6
+            : scene_device_depth >= 0.999999;
+        if (!background)
+        {
+            const float scene_linear_depth = AshReconstructLinearViewDepth(scene_device_depth);
+            const float particle_linear_depth = AshReconstructLinearViewDepth(input.position.z);
+            const float soft_fade = saturate(
+                (scene_linear_depth - particle_linear_depth) /
+                max(AshRadialSoftParameters.z, 0.001));
+            coverage *= soft_fade;
+        }
+    }
+#endif
+
 #if defined(PARTICLE_ALPHA_BLEND)
-    return float4(input.color.rgb, alpha);
+    return float4(rgb, coverage);
 #else
     // Additive (ONE/ONE): pre-multiply so alpha shapes the contribution.
-    return float4(input.color.rgb * alpha, alpha);
+    return float4(rgb * coverage, coverage);
 #endif
 }
 

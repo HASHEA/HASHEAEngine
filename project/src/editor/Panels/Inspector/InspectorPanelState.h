@@ -82,11 +82,13 @@ namespace AshEditor
 		std::vector<std::string> vecRecentMaterialPaths{};
 		std::vector<std::string> vecRecentEnvironmentIblPaths{};
 		std::vector<std::string> vecRecentEnvironmentTexturePaths{};
+		std::vector<std::string> vecRecentParticleSpritePaths{};
 		std::vector<std::string> vecRecentTerrainPaths{};
 		std::string strAssetPickerSearch{};
 		std::string strMaterialAssetPickerSearch{};
 		std::string strEnvironmentIblAssetPickerSearch{};
 		std::string strEnvironmentTextureAssetPickerSearch{};
+		std::string strParticleSpriteAssetPickerSearch{};
 		std::string strTerrainAssetPickerSearch{};
 
 		void PushRecentMeshPath(const std::string& strPath)

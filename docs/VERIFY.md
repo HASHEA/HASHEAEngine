@@ -10,6 +10,8 @@ status: active
 按变更类型给出必须执行的验证。原则：**没有对应验证证据的改动不算完成**。
 视觉正确性与双后端一致性由 RenderGate 自动回归（`RunRenderGate.bat`，SDD-2026-07-07-render-gate）；RenderDoc 自动取证仍是缺口，见文末"待自动化"。
 
+执行边界：凡需真实鼠标、键盘、拖放、文件对话框或窗口交互的 UI 验证只由人类执行。Agent 不得用坐标点击、输入注入、桌面自动化或无障碍脚本代替人工验收；Agent 负责自动化命令、只读截图/日志诊断，并在交付时输出“待人工验收”清单。只有仓库内提供可重复且有明确退出码的 UI 自动化测试时，Agent 才可把它作为自动化证据运行。
+
 ## Fast path
 
 ```bat
@@ -22,16 +24,16 @@ RunRenderGate.bat             :: 渲染改动必跑：双后端 golden SSIM 回�
 
 ## Change matrix
 
-| Change | Commands | 补充人工检查 |
+| Change | Commands | 补充检查（交互项仅人类执行） |
 | --- | --- | --- |
 | 纯文档 / 注释 | `git diff --check` | — |
 | Base 层纯逻辑（容器/字符串/序列化/内存等） | `RunTests.bat`（doctest 单测 + legacy 自测桥接） | 新逻辑应补对应 `project/src/tests/` 用例 |
 | 渲染 Pass / shader / 材质 | 构建 + `RunRenderGate.bat`（双后端 golden SSIM 回归 + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard` | 检查 `product/logs` 无 validation 报错；预期内的画面变化经用户确认后 `-BlessGolden` 更新基线 |
 | RHI 接口 / 双后端实现 | 构建 + `RunRenderGate.bat` + PerfGate Standard；Engine.ini 开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 smoke | 跨后端 diff FAIL 视同 bug；改 GPU timing 还须 focused tests + Debug TimingValidation + Release NoTracy |
 | RenderGraph 核心（compile/barrier/lifetime） | 同 RHI 级别 | 关注 barrier/lifetime 相关 validation 输出 |
-| Scene / Asset / Application 生命周期 | 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；通常 ready 后数秒即提前退出） | Editor 打开默认场景操作一遍 |
+| Scene / Asset / Application 生命周期 | 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；通常 ready 后数秒即提前退出） | 人类在 Editor 打开默认场景并操作一遍；Agent 只移交清单 |
 | Terrain Asset / CPU logic | `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`；依赖或工程生成变化时 fresh `generate_vs2022.bat` 并构建 Editor/Sandbox Debug+Release；最后 `run.bat all Debug --smoke-test-seconds=120` | 检查 `.AshTerrain` recovery、RAW/PNG/EXR、不可变 snapshot、dirty publication 与 local query focused tests；Phase 1 无 rendered frame 变化时不跑 RenderGate |
-| Editor 面板 / UI | 构建 + `run.bat editor Debug --smoke-test-seconds=120`（readiness 后自动关闭）+ `run.bat editor` 手动过一遍改动路径 | 面板打开、交互、无报错日志 |
+| Editor 面板 / UI | 构建 + `run.bat editor Debug --smoke-test-seconds=120`（readiness 后自动关闭）+ 相关自动化测试 | 人类运行 `run.bat editor`，检查面板打开、交互和日志；Agent 禁止直接驱动 UI，只移交清单 |
 | `product/config/Engine.ini` | 双后端各 smoke 一次 + 查日志 | 确认开关生效；配置项语义/默认值变化同步 `docs/CONFIG.md` |
 | 性能敏感路径 | PerfGate Standard；Terrain/1440p 相关还须 Release Empty immutable gate，`FAIL` 必须修，`WARN` 需说明判断 | 对比 `summary.md` 趋势；Empty CPU/GPU P95 任一超过 3.33 ms 即阻断 Terrain |
 | `scripts/` / `tools/` | `scripts/TestAIDevDoctor.ps1`、`scripts/TestRunPerfGate.ps1`、`scripts/TestCheckArchBoundary.ps1`（按所改工具） | — |
@@ -86,6 +88,11 @@ Terrain Phase 0 的标准 Tracy-enabled Release 证据（NVIDIA GeForce RTX 5060
 | Vulkan | 1.0674 ms | 0.7860 ms | 30397 / 30397 | 128 | 2560 × 1440 | PASS |
 | DX12 | 1.0274 ms | 0.8176 ms | 33444 / 33444 | 258 | 2560 × 1440 | PASS |
 
+## 日志证据
+
+- 每次 `LogService::init` 在 `product/logs` 创建一对唯一 Engine/Application 日志；文件名共享 `YYYYMMDD_HHMMSS_ffffff_p<PID>_s<SEQ>` session 后缀。不同进程或同进程快速重启不得覆盖、追加或交织到旧会话文件。
+- smoke/validation 前记录现有 `*.logfile` 路径集合，结束后审计本次新增的精确文件对；矩阵运行应逐会话保留 readiness、clean-exit 与 validation 证据。禁止只取“最新一个日志”代表整个矩阵，也不得再按分钟文件名推测增量范围。
+
 ## RenderGate（渲染回归门禁）
 
 - 机制：默认对 `sandbox,particles` 两个场景执行 Sandbox `--rhi=<backend> --smoke-test-seconds=120 --dump-frame=<png>`；同一进程只有在 readiness smoke 与 capture 双重成功后才以 0 退出并发布 PNG，随后每图与 golden 做 SSIM、同场景做 Vulkan vs DX12 diff。可用 `-Scenes`/`-Backends` 选择子集；wall-clock 超时非零退出且不得留下可 bless 图片。脚本级 grace 超时先以有界 `taskkill /T` 请求终止树；失败时有界终止真实根进程，并在报告记录 termination 状态。
@@ -111,5 +118,5 @@ Terrain Phase 0 的标准 Tracy-enabled Release 证据（NVIDIA GeForce RTX 5060
 | ~~双后端一致性~~ | ✅ RenderGate 跨后端 diff（SDD-2026-07-07-render-gate） | — |
 | 渲染 bug 取证 | 手动开 RenderDoc | headless 自动出 capture，供 AI 经 RenderDoc MCP 分析 |
 | RenderGate 场景覆盖 | 默认 Sandbox + GPU particles 两场景 | 继续扩充不同光照/后处理/材质组合 |
-| Editor UI 自动化 | 仅启动冒烟 + 纯人工走查 | headless/脚本化面板交互 smoke（打开各面板、执行代表性命令、断言无报错） |
+| Editor UI 自动化 | Agent 仅运行 readiness smoke；交互走查由人类完成 | 仓库内提供 headless/脚本化面板测试命令（明确断言与退出码），避免 Agent 直接驱动桌面 UI |
 | ~~RenderGate 流送等待~~ | ✅ readiness + asset epoch + 当前帧全 packet + present 驱动；只有 wall-clock 失败上限，无固定帧成功/fallback（SDD-2026-07-11-readiness-driven-automation） | — |

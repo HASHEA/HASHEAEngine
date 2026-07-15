@@ -393,6 +393,34 @@ namespace AshEditor
 		return TryGetInspectorAssetPathValidationMessage(desc, pAssetDatabaseService, strOutMessage);
 	}
 
+	bool TryGetParticleSpriteTextureValidationMessage(
+		const InspectorPanelState::ParticleDraft& refDraft,
+		const AssetDatabaseService* pAssetDatabaseService,
+		std::string& strOutMessage)
+	{
+		strOutMessage.clear();
+		if (!refDraft.optCurrentValue.has_value())
+		{
+			return false;
+		}
+
+		InspectorAssetPathValidationDesc desc{};
+		desc.strAssetPath = refDraft.optCurrentValue->sprite_texture_path;
+		desc.strOriginalAssetPath = refDraft.optOriginalValue.has_value()
+			? refDraft.optOriginalValue->sprite_texture_path
+			: std::string{};
+		desc.vecAllowedAssetTypes = { AshEngine::AssetType::Texture };
+		desc.pMissingAssetMessage = "The particle sprite path is missing; runtime will use Default Particle Sprite.";
+		desc.pUnsupportedAssetTypeMessage = "The particle sprite must be a texture resource.";
+		desc.pLoadStateProblemPrefix = "The particle sprite is currently ";
+		desc.bValidateOnlyWhenChanged = false;
+		desc.bBlockWhenEmpty = false;
+		desc.bBlockWhenMissingAsset = false;
+		desc.bBlockWhenUnsupportedAssetType = true;
+		desc.bBlockWhenLoadStateProblem = false;
+		return TryGetInspectorAssetPathValidationMessage(desc, pAssetDatabaseService, strOutMessage);
+	}
+
 	bool TryGetInspectorAssetPathValidationMessage(
 		const InspectorAssetPathValidationDesc& refDesc,
 		const AssetDatabaseService* pAssetDatabaseService,
@@ -565,6 +593,21 @@ namespace AshEditor
 			kInspectorMaximumParticleSize);
 		sanitizeClampedColor(refComponent.start_color, defaultValue.start_color);
 		sanitizeClampedColor(refComponent.end_color, defaultValue.end_color);
+		refComponent.radial_falloff = SanitizeClampedScalar(
+			refComponent.radial_falloff,
+			defaultValue.radial_falloff,
+			0.0f,
+			1.0f);
+		refComponent.radial_sharpness = SanitizeClampedScalar(
+			refComponent.radial_sharpness,
+			defaultValue.radial_sharpness,
+			0.25f,
+			8.0f);
+		refComponent.soft_fade_distance = SanitizeClampedScalar(
+			refComponent.soft_fade_distance,
+			defaultValue.soft_fade_distance,
+			0.001f,
+			10.0f);
 		if (refComponent.blend_mode != AshEngine::ParticleBlendMode::Additive &&
 			refComponent.blend_mode != AshEngine::ParticleBlendMode::AlphaBlend)
 		{

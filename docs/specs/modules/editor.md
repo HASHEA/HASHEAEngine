@@ -43,7 +43,7 @@ status: active
 - `TerrainEditorPreviewState.query_status` 只表示 authoring session 的加载/可编辑/quarantine 状态；实时光标命中保存在独立 `viewport` 子状态，包含 cursor query status、经归一化的 world center/normal、service-owned brush radius、选中 Terrain 的 scene entity ID 和显式 `has_world_position`。只有当前选中 asset、Sculpt/Paint mode 和 canonical primary Scene 可更新该状态；Outside、模式/主视口/输入资格丢失及 Scene panel 生命周期结束会清空。Pending/Failed 可保留同一 session 上一个合法 anchor 用于状态着色，但 foreign Terrain hit 不得发布新 anchor。该分离禁止 mouse Outside/Pending 反向禁用 Layers 或覆盖 session quarantine 语义，并为 world-space overlay 提供可查询地表的稳定 entity 身份。
 - `TerrainBrushOverlayRenderer` 只消费 service preview、当前 immutable published snapshot、preview entity 的现行 axis-aligned world transform 与 Scene binding。它生成固定 64 段 world-XZ 圆并逐点查询 snapshot 高度；只连接相邻 Ready 端点，缺失 Component 留出 gap，不跨空白。session 非 Ready、Outside/无 anchor、非法 transform/binding、实体资产换绑或空线集均零提交；Ready 绿、cursor Pending 琥珀、cursor Failed/locked 红。Canvas 必须在 helper overlay 的当帧 clear 之后、2D box selection 之前，仅为 canonical primary 且可输入的 Scene 调用；提交只走 Function `SceneOverlayLine`/`submit_scene_overlay`，不访问 Graphics。
 - Scene `Ctrl+S` 是由 `EditorActionCoordinator::Update()` 驱动的异步 continuation；`EditorApplicationImpl` 每帧必须先更新 `TerrainEditorService`，再更新 action coordinator。当选中的 dirty Terrain 确实被 active Scene 引用时，coordinator 先启动或附着到该资产的 Save，只在同一 operation serial 进入 `Succeeded` 后写 Scene。catalog miss 由 service 对资产根、working-set source path 与全部未解析 Scene 引用做顺序无关的 `Current / Different / Unsafe` 集合分类：任一 root-contained 的精确 `Current` 都能证明身份并优先于同集合中的 `Unsafe`；仅在没有 `Current` 且存在无法安全归一化的引用时 fail closed。Terrain failure 发布 Scene save failure并传递资产路径/原始错误；Scene content epoch 变化取消延后写入。Scene 写入后只在当前 undo/redo history state 仍等于 `Ctrl+S` 捕获的 checkpoint 时 `MarkSaved()`，否则保留新命令的 dirty 状态。
-- Inspector：Camera/Light/Mesh/Environment/Particle/Terrain 六类 component editor 经 `InspectorComponentEditorRegistry` 注册，Name/Transform 由固定 section 绘制；Particle 草稿可编辑容量、模拟、颜色/尺寸、混合和完整 uint32 seed，提交为 `SetParticleComponentCommand`。Terrain 草稿编辑 `.AshTerrain` 资产、可见性、投射/接收阴影及固定八层材质覆盖，提交为 `SetTerrainComponentCommand`；空/错误类型资产、无效材质覆盖或 Terrain 层级中非零旋转/非正缩放会阻止提交。Terrain 的 entity snapshot 使用专用序列化保留八层覆盖，复制、删除恢复和 undo/redo 不丢字段。
+- Inspector：Camera/Light/Mesh/Environment/Particle/Terrain 六类 component editor 经 `InspectorComponentEditorRegistry` 注册，Name/Transform 由固定 section 绘制。Particle 草稿按 Main、Emission、Shape & Motion、Size Over Lifetime、Color Over Lifetime、Renderer 固定顺序分组，Main/Emission/Renderer 默认展开，尺寸与颜色各有只读的起止预览；Renderer 的 sprite Texture 字段支持搜索、Asset Browser 拖放和 recent paths，空路径显示 Default White fallback，已知缺失路径警告但可提交，已知非 Texture 类型阻塞提交，Soft Particles 关闭时 fade distance 控件禁用但保值。Particle 字段继续通过既有 draft/sanitize/`SetParticleComponentCommand` 提交，reset/restore/remove、保存重载、undo/redo 与连续字段 merge 语义不变。Terrain 草稿编辑 `.AshTerrain` 资产、可见性、投射/接收阴影及固定八层材质覆盖，提交为 `SetTerrainComponentCommand`；空/错误类型资产、无效材质覆盖或 Terrain 层级中非零旋转/非正缩放会阻止提交。Terrain 的 entity snapshot 使用专用序列化保留八层覆盖，复制、删除恢复和 undo/redo 不丢字段。
 - readiness smoke：`Editor::_get_automation_readiness` 要求 bootstrap、UI renderer、AssetDatabase refresh 与 viewport presentation 同步成功；最终 ready 仍由 Application 的当前帧全 scene packet + asset epoch + present 公共契约证明。Editor 不生成 golden。
 
 ## 约束与不变式
@@ -53,6 +53,7 @@ status: active
 - Gizmo 视觉与命中投影必须同源：Scene viewport 的中央 gizmo 与右上角 XYZ 指示器使用当前相机的同一 view basis；Move/Scale 平面手柄的世界四角必须逐点做透视投影，绘制和命中共用所得凸四边形。相机上下文不可用或投影退化时隐藏对应视觉，禁止回退到 identity 朝向或屏幕轴对齐矩形。
 - 场景修改必须封装为 `EditorCommand` 经 CommandService 执行，保证 undo/redo 与选择一致性；面板间通信走 `EditorEventBus` 或 Services，不得互相直接引用。
 - Particle 必须进入 entity snapshot 的复制/删除/撤销恢复路径。连续属性编辑只在 command 前后状态结构连续时合并；跨 saved checkpoint 不合并，最终状态等于初始状态时不得生成空历史项。
+- Particle sprite 的空路径与已知缺失路径沿用运行时 Default White fallback，因此不得阻止 Inspector 提交；资产库能确认路径是非 Texture 类型时必须阻止提交。Soft Particles 开关只控制 fade distance 的可编辑状态，不得清空该值。
 - 场景 new/load/reload 的重置语义由 `SceneWorkflowCoordinator` 统一执行：先做 Terrain preflight；Scene mutation 成功后按 Terrain session commit → 清 Selection → 清 UndoRedo → 选中默认实体执行。Scene load/reload 失败时原子保留当前内存 Scene、active path、Selection、history 与 Terrain recovery/error 状态，不激活 fallback Scene；未完成的异步 `Ctrl+S` continuation 也不会被新请求静默取消。primary viewport 唯一，viewport 共享状态只由 primary 发布。
 - 稳定标识：action/panel/viewport 的 id、drag payload type 与 Terrain layer 的 16-byte ID 是持久化/交互契约；layer command 和选择不得持久化 vector index。
 - 冻结快捷键（改动需用户确认）：Ctrl+N / Ctrl+R / Ctrl+S / Ctrl+Shift+R / Ctrl+Shift+A / Ctrl+Alt+A / F2 / Ctrl+Shift+P / Delete / Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / F5，AssetBrowser 内容区 Enter/Backspace。
@@ -66,9 +67,11 @@ status: active
 
 ## 验证
 
-对齐 `docs/VERIFY.md` "Editor 面板 / UI"行：
+对齐 `docs/VERIFY.md` "Editor 面板 / UI"行。需要鼠标、键盘、拖放或窗口交互的项目只由人类执行；Agent 仅运行自动化命令、检查只读截图/日志并移交清单，不得直接驱动 UI 或自行声称人工项目通过：
 
-- 构建 + `run.bat editor`，手动过一遍改动路径（面板打开、交互、无报错日志）
+- Agent：构建 + `run.bat editor Debug --smoke-test-seconds=120` readiness smoke + 相关自动化测试；只读检查截图与日志
+- 人类：运行 `run.bat editor`，手工覆盖面板打开、交互与无报错日志
+- Particle Inspector 人工清单：六个 header、Texture 搜索/拖放/recent、missing fallback、wrong-type 阻塞、soft disable retain、两种预览，以及保存/重载、reset/restore/remove/undo/redo
 - 涉及场景生命周期（打开/保存/reload）时升级为 `run.bat all Debug --smoke-test-seconds=120`
 - Terrain authoring 还需运行 focused create/import/export immutable-job、路径逃逸、destination race、取消/临时件清理、catalog identity、stroke/layer/viewport/brush-overlay/save-generation/file-operation/reload-conflict-recovery/selective-history/`Ctrl+S` 行为测试、幂等历史门禁、稳定选择、锁定与 rollback/quarantine 契约，以及 Debug/Release 全量 `RunTests.bat`；brush overlay 改变 scene presentation output，必须额外运行双后端 `RunRenderGate.bat`。
 

@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-15
 status: active
 ---
 
@@ -54,7 +54,7 @@ status: active
 6. `SceneDeferredLightingBasePass`；随后逐光源：shadow mask pass（sunlight CSM 或普通方向光路径）+ directional / point / spot lighting pass，MRT 累加 diffuse/specular。普通方向光 shadow caster 同样包含 Terrain。
 7. `SceneDeferredEnvironmentLightingPass` → `SceneDeferredCompositePass`（写 `SceneDeferredSceneHDRLinear`）。
 8. `SceneSkyBackgroundPass`。
-9. `ParticleSystemPass`：每 emitter 稳定 compute 压实 + GPU 写 indirect args + billboard indirect draw，写回 HDR、深度只读。
+9. `ParticleSystemPass`：每 emitter 稳定 compute 压实 + GPU 写 indirect args + billboard indirect draw，写回 HDR、深度只读；SoftOff 使用 `DepthTestOnly`，SoftOn 使用 `DepthTestAndShaderResource` 并在线性 view depth 中做相交淡出。
 10. 体积光 pass 族（`VolumetricLightingPass::add_passes`，froxel compute 链或屏幕空间 fallback，输出替换 HDR ref）。
 11. Bloom pass 族（`BloomPass::add_passes`，输出替换 HDR ref）。
 12. `SceneTemporalAAResolvePass`（compute，输出替换 HDR ref）。
@@ -87,6 +87,8 @@ PerfGate 与 smoke/capture 复用同一 readiness 判定：application ready、r
 
 `RenderAssetManager::query_readiness()` 在一次锁内 O(1) 返回 `activity_epoch/pending/failed`；新 render-visible cache miss 与异步终态推进 epoch，cache hit 不推进。Static mesh 在同步 CPU load 前登记 pending，render finalizer 对 Loading asset 使用非阻塞锁，禁止让 render 线程等待 logic 线程磁盘 IO。Texture 显式 Failed 即使持有 fallback 也使自动化失败；材质/IBL 成功 fallback 仍是合法降级。
 
+可见帧资产准备属于 submit/render thread：`finalize_pending_assets()` 仍在 submit 开头执行，随后 material proxy prepare 成功后为每个 particle emitter 请求 sRGB sprite（空路径为 White fallback），并把 `TextureAsset` shared handle 写入该次 `VisibleRenderFrame`。logic-side `RenderScene::rebuild_particles_from_scene()` 只复制 `ParticleComponent`/path，不请求 GPU texture；准备失败计入对应 scene packet failure，且不进入 `SceneRenderer`。
+
 ### TAA jitter 确定性约定
 
 frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame index 每帧稳定递增，`delta_seconds` 固定为 `1/60`，使跨帧模拟不受 logic/render 调度速度影响。改动此约定必须同步改 RenderGate 阈值预期。
@@ -109,6 +111,7 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 - 实例 buffer 为「逻辑 slot + 3 帧物理 ring」，epoch 取渲染侧 `Application::get_frame_index()`（不是 `VisibleRenderFrame::frame_index`）；temporal history 只允许 GBuffer pass 使用。禁止改回单物理 slot：Vulkan Release 下 CPU 写 host-visible buffer 会覆盖 GPU 正在读的上一帧实例矩阵，导致 GBuffer depth/normal/motion vector 裂缝闪烁。
 - GPU timing 的 pass 名称及其稳定 hash 是遥测身份。每帧同名 scope 先求和再进入 percentile；duplicate/unexpected/missing frame、scope overflow、required scope 缺失、hash collision/mismatch 或后端 timing failure 都是 PerfGate fatal，禁止静默补 CPU 值或复用别帧结果。
 - 双后端等价：所有 pass 必须 Vulkan / DX12 行为一致，跨后端 diff FAIL 视同 bug。
+- 粒子 sprite/radial/soft-depth 仅扩展 Function pass、frame asset prepare 与 HLSL program variants；pass 顺序保持 Sky 后、Volumetric 前，未修改 RHI 或 RenderGraph core 接口。
 
 ## 验证
 
