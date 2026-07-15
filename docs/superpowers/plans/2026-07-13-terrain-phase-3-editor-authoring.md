@@ -1377,11 +1377,13 @@ Expected: both exit 0 after Terrain asset/render/present readiness; no fixed-fra
 
 On both backends: create a flat 8193 terrain; import PNG, RAW R16, RAW R32F, and EXR; run Raise, Lower, Smooth, Flatten, Noise, Paint, and Erase; add/duplicate/reorder/hide/lock/opacity-change layers; undo/redo each operation; save/close/reload; trigger clean external reload and dirty conflict choices; export and reimport each supported format.
 
-Expected: one drag equals one history entry, stroke path is stable at different viewport frame rates, locked/Pending/Failed states cannot edit, and reload/save errors preserve local work.
+This step must be performed personally by a named human tester. AI agents and UI automation may not operate the checklist or mark it complete. The tester records both backends in `docs/templates/TerrainEditorManualSignoff.md` and commits the completed record under `docs/verification/terrain/`.
+
+Expected: one drag equals one history entry, stroke path is stable at different viewport frame rates, locked/Pending/Failed states cannot edit, and reload/save errors preserve local work. The step remains open until the human record is complete and signed PASS.
 
 - [ ] **Step 6: Inspect overlay and input behavior**
 
-Expected: Ready/Pending/locked brush rings use their defined colors and follow the Terrain surface; active stroke blocks gizmo/selection; Alt+LMB, RMB, MMB, wheel, and focus camera controls remain responsive; Game viewport never authors Terrain.
+Expected: the same human tester confirms that Ready/Pending/locked brush rings use their defined colors and follow the Terrain surface; active stroke blocks gizmo/selection; Alt+LMB, RMB, MMB, wheel, and focus camera controls remain responsive; Game viewport never authors Terrain. Screenshots/logs are supporting evidence only and cannot replace the tester's signed judgment.
 
 - [x] **Step 7: Run existing render/performance regression gates**
 
@@ -1417,3 +1419,4 @@ Expected: no whitespace errors, no unrelated Editor changes, no direct Graphics 
 - Terrain viewport strokes take mouse-left priority while camera controls remain available.
 - Brush preview uses world-space `SceneOverlayLine` through ScenePresentation and never accesses Graphics.
 - Debug/Release builds, tests, ArchGate, both-backend Editor readiness, RenderGate, Standard PerfGate, and the manual checklist pass.
+- A completed human sign-off record for the exact tested commit is committed under `docs/verification/terrain/`; no AI or automation result can satisfy this criterion.
