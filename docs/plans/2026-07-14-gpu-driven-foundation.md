@@ -885,13 +885,15 @@ EntryPoint 为 indirect self-test 提供默认 120 秒 process watchdog；Applic
 - Phase 1 SDD 标 Done，记录实际验证、baseline report 和未完成项。
 - plan 全部 checkbox 完成后移到 Archived；后续生产 grass/tree 进入新的 S2 设计，不自动开始。
 
-- [ ] Step 7: Final selective commit and integration handoff
+- [x] Step 7: Final selective commit and integration handoff
 
 确认 staged paths 只包含本计划文件；Tracy 两 exe 永不暂存。Phase 0 先合入，再 rebase/retarget Phase 1。最终提交/PR 前重跑 git diff --check 和 branch ancestry audit。
 
 建议文档提交信息：
 
     docs(render): close gpu-driven foundation phase
+
+执行记录（2026-07-15）：最终文档收口提交为 `b9063f044f484633d61a02db653a77b27b387d45`；`origin/main` 的 `c56773ae3221aeea10d8a036247f9c76ba03cb91` 与 Phase 0 集成点 `61c4a02b1398c3ff1230a7c95d135d4f9d4f0867` 均为当前分支祖先。分支 `codex/gpu-driven-foundation` 已普通 push，并创建 ready PR [#9](https://github.com/HASHEA/HASHEAEngine/pull/9)。选择性提交始终排除 `project/thirdparty/tracy/tracy-csvexport.exe` 与 `project/thirdparty/tracy/tracy-profiler.exe` 两项既有 LFS 工作树噪声。
 
 ---
 
