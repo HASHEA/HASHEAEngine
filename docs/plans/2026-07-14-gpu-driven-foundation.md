@@ -1,6 +1,6 @@
 # GPU-driven Foundation Implementation Plan
 
-**Status:** Gate B Done；Phase 1 Task 1 可开始。稳定工具提交 `231831f1de7930df9ccc0b23dc6565ff1a6c6d0c` 的三轮候选、90% sample-time coverage、八项 spread、受保护 report import 与唯一 non-bless COMPARED 已全部通过；批准 baseline SHA-256 为 `49D3FCCB0C068D0A90E5D2BAE667A5FDA3EB6476E6B444885F0DC103716A4659`。后续任务仍须按本计划逐项 TDD、验证和聚焦提交。
+**Status:** Done（2026-07-15）。Phase 1 RenderGraph buffer、explicit indirect、generation-safe GPUDriven page 与双后端 full-chain self-test 已交付；最终 Standard / VegetationFullPipeline non-bless、RenderGate、validation、readiness、CPU gates 与双路静态审查全部通过。批准 baseline SHA-256 保持 `49D3FCCB0C068D0A90E5D2BAE667A5FDA3EB6476E6B444885F0DC103716A4659`。
 
 > 实施时使用 executing-plans + test-driven-development；每个任务严格 RED → GREEN → focused/full verification → 双路只读审查。计划不授权直接编辑 perf baseline 或 render golden。
 
@@ -806,7 +806,7 @@ EntryPoint 为 indirect self-test 提供默认 120 秒 process watchdog；Applic
 - Modify: docs/plans/2026-07-14-gpu-driven-foundation.md
 - Modify: docs/plans/README.md
 
-- [ ] Step 1: Fresh CPU evidence
+- [x] Step 1: Fresh CPU evidence
 
     generate_vs2022.bat
     RunTests.bat Debug
@@ -818,7 +818,9 @@ EntryPoint 为 indirect self-test 提供默认 120 秒 process watchdog；Applic
 
 记录 exact cases/assertions、legacy WARN、build exits 和 git diff --check。
 
-- [ ] Step 2: Readiness and validation
+执行：focused 19/19 cases、330/330 assertions；full 176/176 cases、2510/2510 assertions；ArchGate PASS（35 legacy WARN）；Debug Editor/Sandbox、Release Sandbox、fresh generate、AIDevDoctor 与 diff-check 均 PASS。
+
+- [x] Step 2: Readiness and validation
 
 申请 GPU 窗口后运行：
 
@@ -826,13 +828,17 @@ EntryPoint 为 indirect self-test 提供默认 120 秒 process watchdog；Applic
 
 随后按项目既有 validation 配置分别运行 Vulkan/DX12 self-test 和短 Sandbox smoke。finally 恢复 Engine.ini、EditorSettings.json、ViewportLayout.json、imgui.ini，并用运行前 SHA-256 精确审计。
 
-- [ ] Step 3: RenderGate
+执行：四组合 readiness PASS；Debug Vulkan/DX12 validation + raw RHI/Function graph self-test PASS；Release Vulkan/DX12 bounded self-test PASS。Release validation 按既有编译能力关闭，已明确记录为功能证据而非 validation 证据。四配置逐字节恢复。
+
+- [x] Step 3: RenderGate
 
     RunRenderGate.bat
 
 要求双后端 golden/cross 全 PASS、无 bless、fresh logs clean。
 
-- [ ] Step 4: Performance gates
+执行：报告 `20260715-123227-061-46660-b5d80489` PASS、未 bless；sandbox Vulkan/DX12/cross 为 `0.996278 / 0.996177 / 0.999747`，particles 为 `1 / 1 / 1`，fresh logs clean。
+
+- [x] Step 4: Performance gates
 
 取得 CPU/GPU 全独占后运行：
 
@@ -850,7 +856,9 @@ EntryPoint 为 indirect self-test 提供默认 120 秒 process watchdog；Applic
 - no-content disabled path 不新增 graph buffer allocation/pass/draw。
 - 不 bless。
 
-- [ ] Step 5: Two independent static reviews
+执行：最终工具提交 `0ef8da1efa24bd85107681047907d7790c59c4a0`。同一 exact HEAD 的 Standard `20260715-151351-919-17136-479faf75` 四组合 PASS；最终有效 VFP Release non-bless `20260715-153105-257-3488-3a9c623c` 双后端 PASS/COMPARED，11/11 metrics、总/逐项 GPU coverage=1、valid=submitted `2038/2038 / 2000/2000`、sample coverage `0.999322 / 0.999452`、最大 gap `0.01955 / 0.02968 s`，warnings/failures=0。此前 `20260715-151707-464-42192-cf2c5176` 的两项尾部 WARN 按 stop-rule 提交用户裁定；获批确认运行 `20260715-152401-160-51052-857648f5` 又因 Vulkan 窗口被最小化而被 coverage 合同拒绝，均未作为最终证据。全程未 import/bless，baseline 未变。
+
+- [x] Step 5: Two independent static reviews
 
 审查重点：
 
@@ -866,7 +874,9 @@ EntryPoint 为 indirect self-test 提供默认 120 秒 process watchdog；Applic
 
 任何 P0/P1/P2 finding 先补 RED 再修，之后按影响重跑 gates。
 
-- [ ] Step 6: Write back stable contracts
+执行：最终脚本锁定 `0ef8da1efa24bd85107681047907d7790c59c4a0`、SHA-256 `89CC3FC984C6E0324E1402C704C0E5B310846BD98B3B87C7D8D489E0DB5A3C50`；两路独立只读终审均为 P0/P1/P2=0、CLEAN。此前 findings 已通过 RED→GREEN 关闭，审查期间未再修改冻结字节。
+
+- [x] Step 6: Write back stable contracts
 
 - render-graph.md：buffer public API、allowed access、dependency/culling/lifetime/cache/barrier/binding validation。
 - render.md：explicit indirect policy、Particle migration、GPUDriven experimental foundation。

@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved（2026-07-13，用户审阅通过；实施仍以 Phase 0 Done 且取得 approved baseline/thresholds 为前置）
+Done（2026-07-15；Phase 1 通用底座与全部自动门禁完成）
 
 ## Context
 
@@ -243,5 +243,16 @@ headless compiler tests覆盖 read-before-write、external root、dead transient
 
 ## Open questions
 
-- 无实现阻塞项。Phase 0 产出的 approved performance thresholds 是本阶段批准/实施前置输入。
+- 无实现阻塞项。Phase 0 产出的 approved performance thresholds 已作为本阶段最终性能比较输入。
 - `GpuDrivenInstancePage` 的具体 compact payload bit allocation 延后到 GPU grass SDD；Phase 1 只冻结 encoding/version/stride contract，不猜测最终量化精度。
+
+## Implementation outcome
+
+- RenderGraph 已把 external/transient `StorageBuffer` 纳入 public API、dependency/culling/lifetime/cache、pre-pass barrier 与 program-binding identity/access validation；texture-only/default scene 不创建新增 graph buffer pass/resource/allocation。
+- Function draw 已使用显式 `None/NonIndexed/Indexed` indirect contract；Particle 迁移为 explicit non-indexed。既有 Vulkan/DX12 RHI virtual surface 未扩张。
+- `Function/Render/GPUDriven/` 已提供 prototype/page/view/draw-group、generation-safe page retirement、layout validation 与 storage ownership helper；它是后续 grass/tree 与全局 GPUDriven 合流的通用底座，不包含生产植被、刷子、流送、GPU culling、HZB、HLOD 或 SpeedTree 资产入口。
+- raw RHI 与 Function RenderGraph bounded full-chain self-test 在 Vulkan/DX12 Debug/Release 均 PASS；Debug 双后端确认 validation 启用。Release 构建按既有策略没有 Vulkan/DX12 validation 能力，因此 Release 结果只作为功能证据，没有虚报 validation。
+- 最终 CPU 证据为 focused 19/19 cases、330/330 assertions；full 176/176 cases、2510/2510 assertions；ArchGate PASS（35 条既有 legacy WARN）；Debug Editor/Sandbox 与 Release Sandbox 构建 PASS，AIDevDoctor PASS。
+- readiness、双后端 Debug validation/self-test、RenderGate 与性能门禁全部通过。RenderGate 报告 `20260715-123227-061-46660-b5d80489` 未 bless；sandbox Vulkan/DX12/cross SSIM 为 `0.996278 / 0.996177 / 0.999747`，particles 三项为 `1.0`。
+- 最终性能工具提交为 `0ef8da1efa24bd85107681047907d7790c59c4a0`。同一 exact HEAD 的 Standard 报告 `20260715-151351-919-17136-479faf75` 四组合 PASS；最终有效 VegetationFullPipeline Release non-bless 报告 `20260715-153105-257-3488-3a9c623c` 双后端 PASS/COMPARED、11/11 metrics、总/逐项 GPU coverage=1、warnings/failures=0。中间 WARN 与窗口最小化造成的 coverage FAIL 均按 stop-rule 排除；未 import/bless，baseline 保持批准 SHA-256 `49D3FCCB0C068D0A90E5D2BAE667A5FDA3EB6476E6B444885F0DC103716A4659`。
+- 本阶段不声称达到最终“2K 300 FPS 百万植被”产品目标；当前 VFP 是 no-content foundation baseline。生产草/树、分块流送、GPU culling、HLOD/远景替代和地形笔刷接线必须进入后续独立 S2 设计。

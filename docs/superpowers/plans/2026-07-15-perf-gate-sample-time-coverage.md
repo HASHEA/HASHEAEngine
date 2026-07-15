@@ -1,5 +1,7 @@
 # PerfGate Sample-Time Coverage Implementation Plan
 
+> **Superseded in part (2026-07-15):** 初版使用 `frames_sampled * CPU avg` 推断采样窗口，后续验证证明 renderer-only CPU 时间不能覆盖主循环 stall。最终合同改为 schema v2 wall-clock elapsed span + maximum gap + 30 Hz minimum density，并把受保护 import 绑定到同一 byte snapshot 的 raw telemetry canonical record。权威行为见 `docs/specs/modules/tools.md` 与 `docs/sdd/SDD-2026-07-14-perf-gate-sample-time-coverage.md`；下文保留为 TDD 历史，不再作为现行公式。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make PerfGate reject telemetry and protected report imports whose sampled frames account for less than 90% of the configured sampling window.

@@ -1,20 +1,20 @@
 # Mini SDD: PerfGate 采样时间覆盖率守卫
 
-**Status:** Done
+**Status:** Done（2026-07-15）
 
 ## Goal
 
-PerfGate 必须拒绝没有覆盖配置采样窗口的报告。对每条 run 计算：
+PerfGate 必须拒绝没有连续覆盖配置采样窗口的报告。固定 profile 的 schema v2 telemetry 由 Application 提供 wall-clock 证据，对每条 run 计算：
 
-`sample_time_coverage = frames_sampled * cpu_frame_time_avg_ms / (sample_seconds * 1000)`
+`sample_time_coverage = sample_observed_seconds / profile.sample_seconds`
 
-只有有限且不小于 `0.90` 的覆盖率才允许 run PASS、进入候选 spread 或被受保护 report import。当前异常证据为 30 秒 DX12 采样只有 704 帧、CPU avg 14.5188 ms，覆盖率约 `0.341`；同 SHA 正常样本约 `0.96..0.99`。
+只有 coverage 不小于 `0.90`、最大相邻 gap 不超过 `0.25 s`、平均采样率不低于 `30 Hz`，且 `span <= (frames_sampled - 1) * max_gap` 时，run 才允许 PASS、进入候选 spread 或受保护 report import。旧的 `frames * renderer CPU avg` 只能反映 renderer 内计时，不能证明主循环连续运行，现已废弃为 v2 完整性证据。
 
 ## Non-goals
 
 - 不放宽 CPU/GPU 回归阈值或三轮 spread 阈值。
-- 不改变 Application telemetry schema、采样时长、预热时长或 workload fingerprint。
-- 不引入固定最小 FPS/帧数；低帧率 workload 只要累计 frame time 覆盖窗口仍可通过。
+- 不放宽采样时长、预热时长、workload fingerprint 或性能阈值。
+- 不把 renderer CPU avg 当成 whole-loop latency；采样完整性由独立 wall-clock span/gap/rate 约束。
 - 不修改 perf baseline，不开始 GPU-driven Phase 1 生产代码。
 
 ## Files
@@ -28,13 +28,12 @@ PerfGate 必须拒绝没有覆盖配置采样窗口的报告。对每条 run 计
 
 ## Approach
 
-1. 在真实 telemetry 聚合边界读取并验证 `sample_seconds`、`frames_sampled` 与 CPU avg，计算观测 frame-time 总量和覆盖率。
-2. 覆盖率 `< 0.90`、非有限或输入无效时给 run 添加明确 failure，并使整体 PerfGate FAIL；错误必须包含 observed/expected/ratio，便于区分性能回归与证据缺失。
-3. summary run 新增 `sample_seconds`、`observed_frame_time_ms` 和 `sample_time_coverage`，保持 schema v2 的向后兼容扩展。
-4. 受保护 report import 重新计算覆盖率而非只信任序列化结果；缺字段、字段不一致或覆盖不足均 fail-closed，baseline object 保持不变。
-5. TDD 先锁定 `0.90` 边界通过、当前 `0.341` 异常失败、import 无法绕过；再做最小实现。修复后工具 source SHA 改变，旧候选全部不可导入，必须重采。
-
-固定最小帧数会把 workload 性能混入证据完整性判断；Application 级 wall-clock schema 扩展能提供更强观测，但会扩大到 Function/Application 接线。当前方案直接使用已有真实数据，范围最小且能精确拦截已观察到的漏检。
+1. `PerfGateController` 在 sampling 窗口记录首末 wall-clock 时间与最大相邻 sample gap，并输出 schema v2 的 `sample_observed_seconds` / `sample_max_gap_seconds`；schema v1 无条件保留 legacy 展示路径。
+2. runner 同时校验 coverage、最大 gap、`frames / sample_seconds >= 30 Hz` 和 timeline 数学一致性；任一失败都使整体 PerfGate FAIL。
+3. live report 从一次 `ReadAllBytes` snapshot 同时解析 raw JSON 和计算 SHA，summary 持久化 report-relative raw 路径与 digest。
+4. 受保护 import 对 summary/raw 分别使用同一-byte parse+hash，要求 artifact 顶层及 `workload/runtime/CPU/memory/render stats/GPU/metrics/backend info/逐 metric` 容器为原生 JSON object，并严格检查 JSON 原生 string/number/integer/boolean scalar；单元素数组不能伪装成标量或对象。导入复用 live canonical validator 从 raw 重建所有 baseline 数值、GPU metric 与 runtime/identity 字段；summary 与 canonical raw 逐项一致后才克隆并发布 baseline。
+5. summary/raw 路径逐组件拒绝 `ReparsePoint`；同权限本地恶意并发目录替换不在威胁模型内，当前实现不宣称 handle-pinned path security。
+6. TDD 覆盖两端点跨窗但中间大 gap、约 4 FPS 连续样本、timeline 自相矛盾、same-byte snapshot、顶层/嵌套对象及字符串/整数/浮点/布尔的单元素数组伪装、summary 一致伪造、raw digest 与 reparse 逃逸。
 
 ## Verification
 
@@ -48,10 +47,10 @@ RunPerfGate.bat --help
 RunPerfGate.bat -Profile VegetationFullPipeline -Configuration Release -DryRun
 ```
 
-CPU 验证和双路静态复审通过后提交新工具 SHA；随后重新协调 CPU/GPU 独占窗口，采集一组全新三轮候选。只有 8 项 spread 全 PASS 才执行受保护 import 与唯一一次 non-bless COMPARED。
+最终工具提交为 `0ef8da1efa24bd85107681047907d7790c59c4a0`，脚本 SHA-256 为 `89CC3FC984C6E0324E1402C704C0E5B310846BD98B3B87C7D8D489E0DB5A3C50`。`RunPerfGate.ps1 -SelfTest`、`TestRunPerfGate.ps1`、`git diff --check` 与两路静态复审均通过。exact-SHA 最终门禁：Standard 报告 `20260715-151351-919-17136-479faf75` 四组合 PASS；最终有效 VegetationFullPipeline Release non-bless 报告 `20260715-153105-257-3488-3a9c623c` 双后端 PASS/COMPARED，11/11 required metrics、总/逐项 GPU coverage=1、sample-time coverage 为 `0.999322 / 0.999452`，最大 gap 为 `0.01955 / 0.02968 s`，warnings/failures 均为 0。中间 WARN 与窗口最小化导致的 coverage FAIL 均按 stop-rule 停止并排除。baseline SHA-256 保持 `49D3FCCB0C068D0A90E5D2BAE667A5FDA3EB6476E6B444885F0DC103716A4659`，本修复没有 import 或 bless。
 
 ## Risk / rollback
 
-- `0.90` 是证据完整性下限，不是性能阈值。正常同 SHA 样本约 `0.96..0.99`，保留至少 6 个百分点余量。
-- 若某 profile 合法使用 frame cap/vsync 或外部等待导致覆盖不足，应先把等待计入 frame time 或把该 profile 标成不可比较；禁止单独绕过守卫。
+- `0.90`、`0.25 s` 与 `30 Hz` 是证据完整性下限，不是 CPU/GPU 回归阈值。
+- 若某 profile 合法使用低帧率 frame cap，应在 profile 设计阶段调整完整性合同并重新评审；禁止在候选或 import 阶段绕过守卫。
 - 回滚只需撤销工具、测试与文档提交；baseline 在修复验证和新候选批准前保持原字节。

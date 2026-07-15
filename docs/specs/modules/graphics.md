@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-15
 status: active
 ---
 
@@ -41,7 +41,7 @@ status: active
 - 设备接口（`GraphicsContext`）：`init/shutdown/destroy`、`create_shader/buffer/buffer_view/texture/texture_view/render_pass/framebuffer/graphics_render_program/compute_render_program/sampler`、`get_sampler(AshSamplerState)`、`begin_frame/end_frame`、`get_command_buffer(threadIdx)`、`wait_idle`、带纳秒上限的 `wait_for_frame_completion`、`get_render_memory_stats`。资源以 `std::shared_ptr` 交付。
 - 命令接口（`CommandBuffer`）：barrier（`cmd_transition_resource_state`）、render pass（`cmd_begin/end_render_pass`，debug_scope_name 用于 RenderDoc/PIX 标签）、绑定/draw/dispatch/copy/update 全家族；错误经 `has_error()/get_last_error()` 暴露。
 - Readback（SDD-2026-07-07-render-gate 新增，验证/调试用途，非热路径）：`CommandBuffer::cmd_copy_texture_to_buffer(source, destination, buffer_offset, row_pitch_bytes)` 把 mip0/layer0 整层拷入 CPU 可读 buffer，仅支持 4 字节颜色格式（RGBA8/BGRA8），row pitch 须 ≥ width*4 且为 256 的倍数（D3D12 约束）；另有区域版 `cmd_copy_texture_region_to_buffer`。上层 backbuffer 回读封装在 `Function/Render` 的 RenderDevice（`request_back_buffer_capture/fetch_back_buffer_capture`）；fetch 必须传有限 timeout，并通过 `wait_for_frame_completion` 只等待产生该 readback 的当前 graphics frame，禁止用无上限的 device `wait_idle`。
-- Indirect draw/dispatch（SDD-2026-07-09-indirect-draw-substrate 新增）：`CommandBuffer::cmd_draw_indirect(buffer, offset, drawCount, stride)`、`cmd_draw_indexed_indirect(buffer, offset, drawCount, stride)`、`cmd_dispatch_indirect(buffer, offset)`；args 结构体 `AshDrawIndirectArgs`/`AshDrawIndexedIndirectArgs`/`AshDispatchIndirectArgs` 定义在 `RHICommon.h`。Vulkan 直通 `vkCmd*Indirect`；DX12 经三种固定 argument-only command signature（设备级懒创建缓存于 `DX12Context`）+ `ExecuteIndirect`。自测链路 `--rhi-selftest-indirect`（`Function/Render/RHIIndirectSelfTest.cpp`）覆盖 compute 写 args → barrier → 三个 indirect API → readback 校验，日志标记 `[RHISelfTest] ... PASS/FAIL`。
+- Indirect draw/dispatch（SDD-2026-07-09-indirect-draw-substrate 新增）：`CommandBuffer::cmd_draw_indirect(buffer, offset, drawCount, stride)`、`cmd_draw_indexed_indirect(buffer, offset, drawCount, stride)`、`cmd_dispatch_indirect(buffer, offset)`；args 结构体 `AshDrawIndirectArgs`/`AshDrawIndexedIndirectArgs`/`AshDispatchIndirectArgs` 定义在 `RHICommon.h`。Vulkan 直通 `vkCmd*Indirect`；DX12 经三种固定 argument-only command signature（设备级懒创建缓存于 `DX12Context`）+ `ExecuteIndirect`。`--rhi-selftest-indirect` 先由 `RHIIndirectSelfTest` 覆盖 compute 写 args → barrier → 三个 raw indirect API → readback，再由 Function `RenderGraphIndirectSelfTest` 覆盖 graph-managed `StorageBuffer` UAV→IndirectArgs/SRV 与 indexed draw；日志分别标记 `[RHISelfTest]`、`[RenderGraphSelfTest]`。Phase 1 完全复用上述接口与既有 `StorageBuffer` state，没有新增或修改 Graphics virtual API。
 - Swapchain：`present/resize_swapchain/get_swapchain_buffer/get_format/begin_frame/end_frame`。`begin_frame()` 与 `present()` 均返回 `SwapchainPresentResult`：`Completed` 表示 acquire/present 无致命错误地完成，`Retryable` 表示当前无法处理但可继续（Vulkan no-image/out-of-date），`Failed` 表示致命后端错误。Vulkan acquire Retryable 帧不录制命令、不 present；`GraphicsContext::end_frame(false)` 仍推进 timeline/fence，但不等待未 signal 的 acquire binary semaphore，也不 signal 无人消费的 present binary semaphore。Vulkan `SUBOPTIMAL` 视为 Completed；DX12 acquire 为 Completed，所有 `SUCCEEDED(hr)` present（含 `DXGI_STATUS_OCCLUDED`）也为 Completed。DX12 fence 的 `GetCompletedValue()==UINT64_MAX` 表示 device removed，必须作为 Failed，禁止误判 capture 完成。只有完成 acquire 后才录制，只有完成 present 才可满足 readiness。
 - Shader 编译：`ShaderCompiler::check_and_compile_shader` 由 `VulkanShaderCompiler`/`DX12ShaderCompiler` 实现，均走 DXC（`AshDXCContext`），产物按 SHA1（编译器输入 hash + 内容 hash）落盘到各自缓存目录，命中则跳过编译。注意 `ShaderCache.h` 中 `class ShaderCache` 为空壳，缓存读写逻辑在两个后端 compiler 内。
 - Shader 预处理（rewrite）阶段的坑（SDD-2026-07-07-taa-uav-image-format 实证）：`AshDXCContext::preprocess_shader_file_to_full_text` 用 `IDxcRewriter2::RewriteWithOptions`（AST 重发射，非 `-P`），**`[[...]]` 属性会被丢弃**——这是 `[[vk::push_constant]]` 需在 rewrite 后由 `rewrite_root_constant_blocks_for_vulkan` 注入的原因。且 rewrite 阶段完整执行预处理，彼时仅 item.macroDefine 生效、`ASH_VULKAN` **未定义**（compile 阶段才 `-D` 注入），shader 源码里 `#if ASH_VULKAN` 的分支在 Vulkan 运行时路径永远不会存活。需要影响 SPIR-V 元数据时只能靠能活过 rewrite 的语言构造（如元素类型，storage image 格式经 `min16float4` 推导 `Rgba16f`）或 rewrite 后文本注入。
@@ -70,11 +70,13 @@ status: active
 
 - 双后端构建 + `RunRenderGate.bat`（双后端 golden SSIM 回归 + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard`（全矩阵）。
 - Engine.ini 分别开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 readiness smoke（`run.bat sandbox <backend> Debug --smoke-test-seconds=120`），检查 `product/logs` 无 validation 报错。
+- graph buffer / Function indirect 改动额外在双后端 Debug validation 下运行 `run.bat sandbox <backend> Debug --rhi-selftest-indirect --run-for-frames=1`，要求 raw 与 graph 两段 PASS、clean exit。Release 运行相同功能自测，但现有编译策略只允许 Debug validation，不得把 Release PASS 写成 validation 证据。
 - 改 shader 编译/缓存时清空 `product/caches/ShaderCaches/` 后重跑冷启动验证。
 
 ## 历史
 
 - [SDD-2026-07-09-indirect-draw-substrate GPU-driven 基建（indirect draw/dispatch）](../../sdd/SDD-2026-07-09-indirect-draw-substrate.md)：新增三个 indirect 命令接口与双后端实现（Vulkan 直通 / DX12 command signature + ExecuteIndirect），确立 args 布局权威、firstInstance==0、IndirectArgs barrier 三条跨后端契约；自测链路 `--rhi-selftest-indirect`。
+- [SDD-2026-07-13-gpu-driven-foundation](../../sdd/SDD-2026-07-13-gpu-driven-foundation.md)：Function/RenderGraph 复用既有 RHI StorageBuffer 与 indirect API，未扩张 Graphics virtual surface。
 - [SDD-2026-07-09-vulkan-optional-device-caps Vulkan 设备能力分级](../../sdd/SDD-2026-07-09-vulkan-optional-device-caps.md)：sparse binding 从 boot 硬断言降级为可选能力位（CI lavapipe 冒烟撞出）,确立必需/可选能力分级原则。
 - [SDD-2026-07-07-render-gate 渲染验证安全网（RenderGate）](../../sdd/SDD-2026-07-07-render-gate.md)：新增 backbuffer 回读 RHI 接口与双后端实现。
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：新增双后端 acquire/present 三态结果、Vulkan no-image 同步闭环并传播到 readiness。

@@ -119,7 +119,7 @@ tools/perf/perf_gate_baselines.json
 | Warmup / sample / drain / timeout | `10 / 30 / 5 / 90` 秒 |
 | Runtime | fixed camera、vsync off、frame cap off、performance validation off |
 | GPU timing | required；总 coverage 与 11 个 required metric coverage 均至少 95% |
-| Sample-time coverage | `frames_sampled * CPU avg / (sample_seconds * 1000)` 至少 90% |
+| Sampling evidence | schema v2 elapsed span 至少覆盖 90%；最大相邻间隔 `<= 0.25 s`；采样率 `>= 30 Hz` |
 
 该 profile 的已批准回归阈值取“相对比例”和“绝对噪声 floor”中的较大值：
 
@@ -183,7 +183,7 @@ Intermediate/test-reports/perf-gate/<timestamp>/
 | `Status` | 单项结果：`PASS`、`WARN`、`FAIL` 或 `DRY_RUN` |
 | `Baseline` | `MISSING`、`COMPARED`、`NOT_COMPARABLE` 或未比较状态 |
 | `Frames` | 采样窗口内统计到的帧数 |
-| `Sample-time coverage` | 已统计帧的 CPU frame time 总量占 profile 采样时长的比例；低于 90% 表示证据窗口不完整并直接 FAIL |
+| `Sample-time coverage` | schema v2 的首末采样 wall-clock span 占 profile 采样时长的比例；低于 90% 直接 FAIL，并同时受最大间隔、最低采样率和 timeline 数学一致性约束 |
 | `CPU Avg ms` | CPU 侧 frame orchestration/submit 平均耗时 |
 | `CPU P95 ms` | 95% 帧低于该 CPU 帧耗时，反映常见长尾 |
 | `CPU P99 delta` | CPU P99 相对基线的变化 |
@@ -247,6 +247,7 @@ Standard 继续使用 baseline 文件里的 legacy 百分比阈值：
 | 非 0 退出码 | 目标程序异常退出 |
 | Timeout | 超过 profile 的 `timeout_seconds` |
 | Telemetry 缺失或格式错误 | 没有产出可解析的性能数据 |
+| Sampling evidence 不完整 | elapsed span 低于 90%、最大间隔超过 0.25 秒、采样率低于 30 Hz，或 frames/span/max-gap 数学不一致 |
 | Backend mismatch | 期望 backend 与实际运行 backend 不一致 |
 | 固定运行时契约不匹配 | schema 不是 v2，或 configuration、extent、fixed camera、vsync/validation/frame cap 与 profile 不一致 |
 | GPU timing 不完整 | required timing 缺失、coverage 低于阈值、required metric/summary 缺失或 sample count 不一致 |
@@ -296,7 +297,9 @@ baselines.<Profile>.<Configuration>.<Target>.<Backend>
 (Get-FileHash -Algorithm SHA256 Intermediate\test-reports\perf-gate\<run>\summary.json).Hash
 ```
 
-随后执行上一节的 `-BlessBaselineFromReport` 命令。导入只接受当前仓库报告目录内的 schema v2、未 bless、整体及逐 run 全 PASS 证据，并逐项核对 profile/configuration/baseline path、精确矩阵、当前 source SHA、workload fingerprint、extent/runtime flags、required metrics、coverage、warnings/failures 与进程树/Job cleanup。profile 的 `sample_seconds` 是采样时长真源；summary schema v2 以向后兼容方式增加 `sample_seconds`、`observed_frame_time_ms`、`sample_time_coverage`，导入会根据 `frames_sampled` 与 CPU avg 重新计算覆盖率，而不会信任 JSON 中已序列化的比值。缺字段、字段不一致或覆盖率低于 90% 均 fail-closed。报告或哈希不符时 baseline 保持原样；成功时 entry 额外持久化 `source_report_sha256`，并在任何构建、GPU 运行或新报告目录创建前退出。导入后仍必须立刻跑一次普通 non-bless profile，确认全部 run 为 `COMPARED` 且无未解释 WARN/FAIL。
+随后执行上一节的 `-BlessBaselineFromReport` 命令。导入只接受当前仓库报告目录内的 schema v2、未 bless、整体及逐 run 全 PASS 证据。summary 和每份 raw telemetry 都以一次 byte snapshot 同时完成 strict UTF-8 JSON 解析与 SHA-256，且 artifact 顶层必须是原生 JSON object；summary 内的 report-relative raw 路径、digest、当前 source SHA、OS build、workload、矩阵、cleanup 必须匹配。工具再从 raw telemetry 走与 live gate 相同的 canonical validator，重建 CPU/memory/draw、runtime extent/flags、GPU adapter/driver/counts/coverage 与全部 required metric，并逐项核对所有会写入 baseline 或决定可比性的 summary 字段；最终落盘值取 canonical raw，不取容差接近的 summary 副本。所有 schema scalar 必须是原生 JSON string/number/integer/boolean；`workload`、`runtime`、CPU/memory/render stats、GPU/metrics/backend info 与逐 metric 等容器必须是原生 object。单元素数组不能经 PowerShell 管道展开后伪装成标量或对象；adapter/driver 必须是非空 string，shutdown live-byte proof 必须是非负 integer。elapsed span `>= 90%`、最大 gap `<= 0.25 s`、最低 `30 Hz` 和 timeline 数学关系也全部 fail-closed。不能靠改 summary 并重算报告哈希绕过 raw 证据。报告或哈希不符时 baseline 保持原样；成功时 entry 额外持久化 `source_report_sha256`，并在任何构建、GPU 运行或新报告目录创建前退出。导入后仍必须立刻跑一次普通 non-bless profile，确认全部 run 为 `COMPARED` 且无未解释 WARN/FAIL。
+
+路径防护会拒绝报告根内已有的 symlink/junction/reparse 组件，并要求 raw 保持在 report 目录内。受保护导入的本地威胁模型仍假定同权限用户不会在检查与打开之间恶意替换目录组件；当前实现没有用持久句柄固定最终路径，因此不把它当作抵御恶意本地并发写者的安全边界。
 
 ## 10. 推荐提交前流程
 

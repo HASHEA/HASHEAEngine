@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-15
 status: active
 ---
 
@@ -30,7 +30,7 @@ status: active
 - `SceneRenderer::initialize(Renderer*, DebugDrawService*)` / `shutdown()` / `handle_output_resized()` / `invalidate_temporal_history()`；后者清理 AO、TAA、体积光 history，不重置粒子模拟状态。
 - `SceneRenderer::render_visible_frame(VisibleRenderFrame&, const SceneRenderViewContext&)`：一次 view 渲染入口。会写回 frame 的 `taa_enabled / taa_jitter_ndc / taa_previous_jitter_ndc` 并 jitter 投影矩阵。
 - `SceneRenderer::draw_render_debug_view_ui(UIContext&)`、`complete_pending_pick_readbacks()`（editor GPU picking 回读）。
-- `Renderer`：`begin_frame/end_frame/present`、资源创建转发、`begin_pass()+GraphicsPassContext::draw()`（支持 direct 或单条 non-indexed indirect draw）、`dispatch()`、`acquire/release_transient_render_target()`、`get_frame_stats()`。`begin_frame` 透传 swapchain acquire 三态；Retryable 时不创建/录制 command buffer，RenderDevice 只平衡 backend frame lifecycle。`RendererFrameStats` 同时携带 canonical `render_frame_id`、该帧 timing 的精确提交确认位，以及最多 3 个带各自 `frame_id` 的延迟完成 GPU sample。
+- `Renderer`：`begin_frame/end_frame/present`、资源创建转发、`begin_pass()+GraphicsPassContext::draw()`（direct、显式 `NonIndexed` 或 `Indexed` indirect）、`dispatch()`、transient render-target/storage-buffer pool 转发、`get_frame_stats()`。`begin_frame` 透传 swapchain acquire 三态；Retryable 时不创建/录制 command buffer，RenderDevice 只平衡 backend frame lifecycle。`RendererFrameStats` 同时携带 canonical `render_frame_id`、该帧 timing 的精确提交确认位，以及最多 3 个带各自 `frame_id` 的延迟完成 GPU sample。
 - `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`；`get_render_frame_id()` 暴露只在成功 acquire 后递增的 canonical ID，`was_gpu_timing_frame_submitted()` 只返回本帧后端精确提交确认。
 - `ScenePresentationSubsystem`：`create_output/create_view_binding/update_presentations/submit_presentations`，以及自动化使用的当前帧 `SceneSubmissionSnapshot`（attempted/succeeded/failed/capture-ready + render asset epoch）。
 
@@ -64,7 +64,17 @@ GPU timing 生命周期由 `RenderDevice` 的后端无关 coordinator 与精确 
 
 完成样本是延迟、非阻塞传输：`Renderer` 在 begin/end/complete 三个安全点轮询，每次写入 `RendererFrameStats` 的固定 3-entry array，遇到 Pending/Empty 或数组满立即停止，不等待 GPU、不分配动态内存。sample 的 `frame_id` 可早于当前 `render_frame_id`，关联必须使用 sample 自带 ID，禁止按“当前帧”猜测归属。
 
-`StorageBufferDesc::indirect_args` 申请可被 GPU 写入并被 draw 间接消费的 buffer；`GraphicsDrawDesc::indirect_args_buffer/offset` 选择 indirect 路径。提交前必须转换到 `AshResourceState::IndirectArgs`，且 indirect 与 direct 参数互斥。
+### Graphics indirect contract
+
+`GraphicsDrawDesc::indirect_kind` 必须显式为 `None / NonIndexed / Indexed`。indirect 路径同时提供带 `indirect_args` usage 的 `StorageBuffer`、对齐 offset、非零 draw count，以及 0（使用原生结构大小）或合法结构 stride；范围计算使用 checked arithmetic。`Indexed` 必须绑定 index buffer并先完成 index bind，`NonIndexed` 禁止携带 index buffer。两类 indirect 都与 direct 的 count/first/offset 字段互斥，冲突输入 fail-closed，不静默忽略。提交前 args 必须转换到 `AshResourceState::IndirectArgs`；RHI 仍复用既有 `cmd_draw_indirect` / `cmd_draw_indexed_indirect`，没有新增 Graphics virtual API。Particle 已显式迁移为 `NonIndexed`，其渲染行为不变。
+
+### GPUDriven experimental foundation
+
+`Function/Render/GPUDriven/` 提供后续 grass/tree 与普通 static-mesh GPU path 可共用的最小底座：非零 `GpuDrivenPrototypeId`、`slot+generation` page handle、按 canonical completed frame 延迟回收的 page allocator、版本化 instance page desc、`CompressedTRS` 32-byte / `Affine3x4F32` 48-byte encoding、view/draw-group 数据，以及验证后创建 `StorageBuffer` 的 ownership helper。generation 回绕会永久 seal slot，避免 ABA；payload 字节数、capacity/count 与 stride 都先做 checked validation。
+
+该目录当前是 experimental foundation，不是生产植被系统：尚未实现 prototype 资产入口、SpeedTree、分块流送、GPU culling/HZB、HLOD/远景替代、GPU grass/tree shader family 或 Editor 植被笔刷。后续功能必须另写 S2 设计并复用这里的通用 page/buffer 契约，禁止向底座泄漏 vegetation-specific 字段。
+
+全链诊断 `--rhi-selftest-indirect --run-for-frames=1` 在 raw RHI 自测后执行一次 Function lifecycle：external candidate → transient visible/args → compute UAV → indexed indirect raster → args `GraphicsSRV` validation → bounded capture。begin 成功后 scope guard 保证 `end_frame` exactly-once；回调异常转受控失败。oracle 用非恒等 index/firstIndex=1，误发 non-indexed native command 会退化而不能伪 PASS。
 
 ### Backbuffer capture（RenderGate，SDD-2026-07-07-render-gate）
 
@@ -95,7 +105,7 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 
 ## 验证
 
-对齐 `docs/VERIFY.md`「渲染 Pass / shader / 材质」行：构建 + `RunRenderGate.bat`（双后端 golden SSIM + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard`；检查 `product/logs` 无 validation 报错。渲染异常用 `[RenderDebugView]` 分通道定位。
+对齐 `docs/VERIFY.md`「渲染 Pass / shader / 材质」与「RenderGraph 核心」行：构建 + `RunRenderGate.bat` + PerfGate Standard；改 graph buffer/indirect/GPUDriven 底座时还必须运行双后端 bounded indirect self-test 与 `VegetationFullPipeline` non-bless compare。检查每个 session 的日志无 validation/debug-layer 报错。渲染异常用 `[RenderDebugView]` 分通道定位。
 
 ## 历史
 
@@ -105,3 +115,4 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 - `docs/sdd/SDD-2026-07-07-render-gate.md`（backbuffer capture + 抓帧确定性）
 - [SDD-2026-07-10-gpu-particles](../../sdd/SDD-2026-07-10-gpu-particles.md)（GPU 粒子 pass 与稳定 capture-ready）
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)（资源 epoch、提交快照与 temporal history invalidation）
+- [SDD-2026-07-13-gpu-driven-foundation](../../sdd/SDD-2026-07-13-gpu-driven-foundation.md)（显式 indexed/non-indexed Function contract、GPUDriven experimental foundation 与全链自测）

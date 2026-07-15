@@ -4,10 +4,11 @@
 
 ## Active
 
-- 2026-07-14-gpu-driven-foundation.md：大世界 GPU 植被 Phase 1；Gate B 三轮、90% sample-time coverage、受保护 import 与 non-bless COMPARED 已全部通过，Task 1 可开始，尚未改 Phase 1 生产代码。
+- 当前无 active GPU-driven foundation 计划；生产草/树、流送、GPU culling 与 HLOD 需新建后续 S2。
 
 ## Archived
 
+- `2026-07-14-gpu-driven-foundation.md`：大世界 GPU 植被 Phase 1；RenderGraph buffer、explicit indirect、generation-safe GPUDriven page 与双后端全链自测完成，2026-07-15 全部门禁通过。
 - `2026-07-13-gpu-performance-observability.md`：大世界 GPU 植被 Phase 0；2026-07-14 完成双后端 GPU timing telemetry、固定 2K Release candidate 与全部门禁，未 bless baseline。
 
 ## Maintenance
