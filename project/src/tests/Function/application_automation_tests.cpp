@@ -13,6 +13,7 @@
 
 #include <fstream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 
 namespace
@@ -27,6 +28,11 @@ namespace
 		bool capture_result = true;
 		bool end_result = true;
 		bool fetch_result = true;
+		bool throw_from_graph = false;
+		bool throw_from_capture = false;
+		bool throw_from_end = false;
+		bool throw_from_present = false;
+		bool throw_from_fetch = false;
 		uint32_t begin_count = 0u;
 		uint32_t graph_count = 0u;
 		uint32_t capture_count = 0u;
@@ -45,6 +51,10 @@ namespace
 		{
 			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
 			++recorder.graph_count;
+			if (recorder.throw_from_graph)
+			{
+				throw std::runtime_error("injected graph exception");
+			}
 			return recorder.graph_result;
 		}
 
@@ -52,6 +62,10 @@ namespace
 		{
 			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
 			++recorder.capture_count;
+			if (recorder.throw_from_capture)
+			{
+				throw std::runtime_error("injected capture exception");
+			}
 			return recorder.capture_result;
 		}
 
@@ -59,6 +73,10 @@ namespace
 		{
 			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
 			++recorder.end_count;
+			if (recorder.throw_from_end)
+			{
+				throw std::runtime_error("injected end exception");
+			}
 			return recorder.end_result;
 		}
 
@@ -66,6 +84,10 @@ namespace
 		{
 			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
 			++recorder.present_count;
+			if (recorder.throw_from_present)
+			{
+				throw std::runtime_error("injected present exception");
+			}
 			return recorder.present_result;
 		}
 
@@ -73,6 +95,10 @@ namespace
 		{
 			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
 			++recorder.fetch_count;
+			if (recorder.throw_from_fetch)
+			{
+				throw std::runtime_error("injected fetch exception");
+			}
 			return recorder.fetch_result;
 		}
 
@@ -235,6 +261,74 @@ TEST_CASE("indirect self-test closes acquired frames and fails closed at every s
 		IndirectLifecycleRecorder recorder{};
 		recorder.fetch_result = false;
 		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::CaptureFetch);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 1u);
+	}
+}
+
+TEST_CASE("indirect self-test frame guard closes acquired frames when callbacks throw")
+{
+	SUBCASE("graph exception is converted to a controlled graph failure")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.throw_from_graph = true;
+		AshEngine::RenderGraphIndirectSelfTestLifecycleResult result{};
+		CHECK_NOTHROW(result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations()));
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::Graph);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("capture exception is converted to a controlled capture failure")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.throw_from_capture = true;
+		AshEngine::RenderGraphIndirectSelfTestLifecycleResult result{};
+		CHECK_NOTHROW(result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations()));
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::CaptureRequest);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("end exception is converted without retrying frame close")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.throw_from_end = true;
+		AshEngine::RenderGraphIndirectSelfTestLifecycleResult result{};
+		CHECK_NOTHROW(result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations()));
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::EndFrame);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 0u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("present exception is converted without fetching capture")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.throw_from_present = true;
+		AshEngine::RenderGraphIndirectSelfTestLifecycleResult result{};
+		CHECK_NOTHROW(result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations()));
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::Present);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("fetch exception is converted after one complete submitted frame")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.throw_from_fetch = true;
+		AshEngine::RenderGraphIndirectSelfTestLifecycleResult result{};
+		CHECK_NOTHROW(result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations()));
 		CHECK_FALSE(result.succeeded);
 		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::CaptureFetch);
 		CHECK(recorder.end_count == 1u);

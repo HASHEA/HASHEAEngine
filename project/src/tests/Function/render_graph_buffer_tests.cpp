@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -1354,4 +1356,22 @@ TEST_CASE("RenderGraph buffer indirect self-test declares the complete compute t
 	CHECK(passes[2].buffer_usages.size() == 1u);
 	CHECK(passes[2].buffer_usages[0].buffer == args);
 	CHECK(passes[2].buffer_usages[0].access == AshEngine::RenderGraphAccess::GraphicsSRV);
+}
+
+TEST_CASE("RenderGraph indirect self-test oracle rejects a non-indexed native command")
+{
+	std::ifstream cpp_file("project/src/engine/Function/Render/RenderGraphIndirectSelfTest.cpp");
+	std::ifstream shader_file("project/src/engine/Shaders/SelfTest/RenderGraphIndirectSelfTest.hlsl");
+	REQUIRE(cpp_file.good());
+	REQUIRE(shader_file.good());
+	const std::string cpp_source(
+		(std::istreambuf_iterator<char>(cpp_file)),
+		std::istreambuf_iterator<char>());
+	const std::string shader_source(
+		(std::istreambuf_iterator<char>(shader_file)),
+		std::istreambuf_iterator<char>());
+
+	CHECK(cpp_source.find("const uint32_t indices[] = { UINT32_MAX, 0u, 1u, 2u };") != std::string::npos);
+	CHECK(shader_source.find("DrawArgs.Store(8, 1u);") != std::string::npos);
+	CHECK(shader_source.find("ValidationArgs.Load(8) == 1u") != std::string::npos);
 }

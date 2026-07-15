@@ -37,6 +37,44 @@ namespace AshEngine
 			}
 		}
 
+		class IndirectSelfTestFrameGuard
+		{
+		public:
+			explicit IndirectSelfTestFrameGuard(
+				const RenderGraphIndirectSelfTestLifecycleOperations& operations)
+				: m_operations(operations)
+			{
+			}
+
+			~IndirectSelfTestFrameGuard()
+			{
+				close();
+			}
+
+			bool close() noexcept
+			{
+				if (m_closed)
+				{
+					return m_end_succeeded;
+				}
+				m_closed = true;
+				try
+				{
+					m_end_succeeded = m_operations.end_frame(m_operations.user_data);
+				}
+				catch (...)
+				{
+					m_end_succeeded = false;
+				}
+				return m_end_succeeded;
+			}
+
+		private:
+			const RenderGraphIndirectSelfTestLifecycleOperations& m_operations;
+			bool m_closed = false;
+			bool m_end_succeeded = false;
+		};
+
 		bool has_expected_tile(
 			const RenderDevice::BackBufferCaptureResult& capture,
 			uint32_t center_x,
@@ -106,7 +144,7 @@ namespace AshEngine
 				candidate_desc.name = "RenderGraphSelfTestCandidate";
 				candidate = renderer->create_storage_buffer(candidate_desc);
 
-				const uint32_t indices[] = { 0u, 1u, 2u };
+				const uint32_t indices[] = { UINT32_MAX, 0u, 1u, 2u };
 				IndexBufferDesc index_desc{};
 				index_desc.size = sizeof(indices);
 				index_desc.format = RenderIndexFormat::UInt32;
@@ -295,27 +333,48 @@ namespace AshEngine
 			return result;
 		}
 
-		result.begin_result = operations.begin_frame(operations.user_data);
+		try
+		{
+			result.begin_result = operations.begin_frame(operations.user_data);
+		}
+		catch (...)
+		{
+			result.failure = RenderGraphIndirectSelfTestFailure::BeginFrame;
+			return result;
+		}
 		if (result.begin_result != RHI::SwapchainPresentResult::Completed)
 		{
 			result.failure = RenderGraphIndirectSelfTestFailure::BeginFrame;
 			return result;
 		}
+		IndirectSelfTestFrameGuard frame_guard(operations);
 
-		if (!operations.execute_graph(operations.user_data))
+		try
+		{
+			if (!operations.execute_graph(operations.user_data))
+			{
+				result.failure = RenderGraphIndirectSelfTestFailure::Graph;
+			}
+			else
+			{
+				try
+				{
+					result.failure = operations.request_capture(operations.user_data)
+						? RenderGraphIndirectSelfTestFailure::None
+						: RenderGraphIndirectSelfTestFailure::CaptureRequest;
+				}
+				catch (...)
+				{
+					result.failure = RenderGraphIndirectSelfTestFailure::CaptureRequest;
+				}
+			}
+		}
+		catch (...)
 		{
 			result.failure = RenderGraphIndirectSelfTestFailure::Graph;
 		}
-		else if (!operations.request_capture(operations.user_data))
-		{
-			result.failure = RenderGraphIndirectSelfTestFailure::CaptureRequest;
-		}
-		else
-		{
-			result.failure = RenderGraphIndirectSelfTestFailure::None;
-		}
 
-		const bool end_succeeded = operations.end_frame(operations.user_data);
+		const bool end_succeeded = frame_guard.close();
 		if (!end_succeeded)
 		{
 			if (result.failure == RenderGraphIndirectSelfTestFailure::None)
@@ -325,7 +384,15 @@ namespace AshEngine
 			return result;
 		}
 
-		const RHI::SwapchainPresentResult present_result = operations.present(operations.user_data);
+		RHI::SwapchainPresentResult present_result = RHI::SwapchainPresentResult::Failed;
+		try
+		{
+			present_result = operations.present(operations.user_data);
+		}
+		catch (...)
+		{
+			present_result = RHI::SwapchainPresentResult::Failed;
+		}
 		if (present_result != RHI::SwapchainPresentResult::Completed)
 		{
 			if (result.failure == RenderGraphIndirectSelfTestFailure::None)
@@ -339,7 +406,16 @@ namespace AshEngine
 		{
 			return result;
 		}
-		if (!operations.fetch_capture(operations.user_data))
+		bool capture_fetched = false;
+		try
+		{
+			capture_fetched = operations.fetch_capture(operations.user_data);
+		}
+		catch (...)
+		{
+			capture_fetched = false;
+		}
+		if (!capture_fetched)
 		{
 			result.failure = RenderGraphIndirectSelfTestFailure::CaptureFetch;
 			return result;

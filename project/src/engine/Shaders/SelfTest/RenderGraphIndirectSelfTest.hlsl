@@ -10,7 +10,7 @@ void CSBuildVisibleAndArgs()
     Visible[0] = Candidate[0];
     DrawArgs.Store(0, 3u);
     DrawArgs.Store(4, 1u);
-    DrawArgs.Store(8, 0u);
+    DrawArgs.Store(8, 1u);
     DrawArgs.Store(12, 0u);
     DrawArgs.Store(16, 0u);
 }
@@ -61,7 +61,7 @@ float4 PSValidation(VSOutput input) : SV_Target0
 {
     const bool valid = ValidationArgs.Load(0) == 3u &&
         ValidationArgs.Load(4) == 1u &&
-        ValidationArgs.Load(8) == 0u &&
+        ValidationArgs.Load(8) == 1u &&
         ValidationArgs.Load(12) == 0u &&
         ValidationArgs.Load(16) == 0u;
     return valid
