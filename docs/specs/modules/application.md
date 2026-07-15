@@ -44,7 +44,7 @@ status: active
 | `--dump-frame=<png>` | 隐式启用 readiness capture；通常配 `--smoke-test-seconds=S`，未给 S 时默认 120 秒。只有通过 epoch 双重复核的 capture 才原子发布 PNG，超时/失败会删除旧目标并非零退出 |
 | `--scene=<json>` | 场景路径覆盖，应用层经 `get_scene_path_override()` 消费 |
 | `--engine-self-test` | 只跑 Base 自测后退出 |
-| `--rhi-selftest-indirect` | opt-in 的首帧前双后端 indirect draw/dispatch GPU 诊断；失败设置既有 runtime-failure 状态并使 readiness smoke 非零退出 |
+| `--rhi-selftest-indirect` | opt-in 的首帧前双后端 raw RHI indirect draw/dispatch 与 Function RenderGraph full-chain GPU 诊断。失败设置 runtime-failure、立即请求退出并返回非零；成功且 readiness 已启用时继续普通 render/present 帧直到 readiness 得出最终结果；成功且未启用 readiness 时保持 bounded one-shot 退出 |
 | `--rhi-selftest-constant-buffer` | opt-in 的首帧前双后端 constant-buffer 可见性 GPU 诊断；setup、命令录制、校验或读回任一失败均设置既有 runtime-failure 状态并使 readiness smoke 非零退出。与 `--rhi-selftest-indirect` 相互独立；两项同时请求时都会执行，任一失败均在 `_on_startup()` 与首帧前 fail-fast |
 | `--bake-ashibl <src.hdr> <out.ashibl> [...]` | IBL 离线烘焙子命令，跑完即退出 |
 | PerfGate 系列 | `--perf-gate` 与 `--perf-gate-gpu-timing/validation/vsync=on\|off`、`--perf-gate-{warmup,sample,drain}-seconds=S` 在创建应用前严格解析；识别到但缺少 `=` 值的选项直接失败，validation/vsync 未给时继承运行时配置，时长必须有限且大于 0。合法配置无条件在 initialize 前存为 pending，validation/vsync 显式值不因 `--perf-gate` 缺失而丢失；GPU timing 未显式请求时保持 off，仅在同时给出 `--perf-gate` 与 `--perf-gate-gpu-timing=on` 时向 RHI 请求启用。resolved validation 记录编译后端的实际能力（Release 两后端均为 false），而非仅记录请求值。所有覆盖只作用于当前进程，不写 `Engine.ini` |

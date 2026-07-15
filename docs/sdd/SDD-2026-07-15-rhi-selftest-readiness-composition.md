@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved
+Done
 
 ## Goal
 
@@ -36,6 +36,15 @@ Approved
 - `RunTests.bat Debug --test-case=*indirect self-test*`（若新增 focused doctest）。
 - `RunTests.bat Debug`、`RunArchGate.bat`、`scripts/AIDevDoctor.ps1 -Mode ValidatePlan`、`git diff --check`。
 - 作为 Application 生命周期/渲染启动修复，按 `docs/VERIFY.md` 重跑 `RunRenderGate.bat`；不 bless。
+
+完成证据（2026-07-15）：
+
+- RED：原始 Release DX12 组合命令中 raw indirect、constant buffer、RenderGraph indirect 均 PASS，但进程因 `readiness automation terminated before reaching a final outcome` 返回 1，Sandbox `clean_exit=no`。
+- GREEN：相同 DX12 组合命令三项 self-test 均 PASS，readiness 在后续普通帧成功，exit 0、`clean_exit=yes`；Vulkan 对称组合同样 exit 0、`clean_exit=yes`。
+- one-shot：Release DX12 `--rhi-selftest-indirect --rhi-selftest-constant-buffer --run-for-frames=1` exit 0，无需 readiness 成功。
+- CPU/架构：focused 与 full `RunTests.bat Debug` 均 176/176 cases、2510/2510 assertions；`RunArchGate.bat` PASS（35 条既有 legacy WARN）。
+- readiness/渲染：`run.bat all Debug --smoke-test-seconds=120` 四组合 exit 0；`RunRenderGate.bat` PASS，报告 `20260715-182519-783-24392-0b404b76`，未 bless。
+- 工具/边界：AIDevDoctor ValidatePlan、`git diff --check`、配置哈希恢复与有效进程根审计均 PASS。
 
 ## Risk / rollback
 

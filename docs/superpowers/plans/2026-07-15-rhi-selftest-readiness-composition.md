@@ -17,11 +17,11 @@
 - Inspect: `project/src/engine/Function/Application.cpp:537-549`
 - Evidence: `product/logs/*.logfile`
 
-- [ ] **Step 1: Wait for the shared CPU/GPU window**
+- [x] **Step 1: Wait for the shared CPU/GPU window**
 
 Do not start build, Sandbox, validation, RenderGate, or PerfGate while another worktree owns the shared window. Fresh-precheck effective roots before running the reproduction.
 
-- [ ] **Step 2: Build the exact CI target**
+- [x] **Step 2: Build the exact CI target**
 
 Run:
 
@@ -31,7 +31,7 @@ build_sandbox.bat Release
 
 Expected: exit 0 and `product/bin64/Release-windows-x86_64/Sandbox.exe` is fresh.
 
-- [ ] **Step 3: Run the current DX12 combined command**
+- [x] **Step 3: Run the current DX12 combined command**
 
 Run:
 
@@ -46,7 +46,7 @@ Expected RED: raw indirect, constant buffer, and RenderGraph indirect log PASS; 
 **Files:**
 - Modify: `project/src/engine/Function/Application.cpp:539-549`
 
-- [ ] **Step 1: Apply the minimal lifecycle condition**
+- [x] **Step 1: Apply the minimal lifecycle condition**
 
 Replace the unconditional exit after the RenderGraph indirect self-test with failure-terminal and no-automation one-shot behavior:
 
@@ -67,7 +67,7 @@ else if (!automationEnabled)
 
 Do not add a helper or public API. On pass + readiness, the current iteration may be observed as non-ready; the next iteration enters the existing normal render/present path and readiness controller.
 
-- [ ] **Step 2: Rebuild Sandbox Release**
+- [x] **Step 2: Rebuild Sandbox Release**
 
 Run:
 
@@ -77,7 +77,7 @@ build_sandbox.bat Release
 
 Expected: exit 0.
 
-- [ ] **Step 3: Re-run the DX12 command as GREEN**
+- [x] **Step 3: Re-run the DX12 command as GREEN**
 
 Run:
 
@@ -87,7 +87,7 @@ run.bat sandbox dx12 Release --smoke-test-seconds=120 --rhi-selftest-indirect --
 
 Expected GREEN: all three self-tests PASS, readiness succeeds on a later normal frame, Sandbox reports `clean_exit=yes`, process exits 0, and fresh logs contain no generic error/critical, validation error, device lost, access violation, fatal, or assert.
 
-- [ ] **Step 4: Verify the one-shot contract remains bounded**
+- [x] **Step 4: Verify the one-shot contract remains bounded**
 
 Run:
 
@@ -104,11 +104,11 @@ Expected: all requested self-tests PASS and process exits 0 without requiring re
 - Modify: `docs/specs/modules/application.md`
 - Modify: `docs/sdd/SDD-2026-07-15-rhi-selftest-readiness-composition.md`
 
-- [ ] **Step 1: Update the CI comments without changing commands**
+- [x] **Step 1: Update the CI comments without changing commands**
 
 State that `--rhi-selftest-indirect` now covers raw RHI plus the Function RenderGraph full-chain self-test, and that a passing self-test composes with readiness in the same process. Keep both DX12 and Vulkan commands unchanged so they remain the regression oracle.
 
-- [ ] **Step 2: Update the Application command-line contract**
+- [x] **Step 2: Update the Application command-line contract**
 
 Document these exact outcomes under `--rhi-selftest-indirect`:
 
@@ -118,7 +118,7 @@ success + readiness enabled -> continue normal frames until readiness completes
 success + readiness disabled -> bounded one-shot exit
 ```
 
-- [ ] **Step 3: Mark the Mini SDD Done**
+- [x] **Step 3: Mark the Mini SDD Done**
 
 Change its status from `Approved` to `Done` and record the RED/GREEN commands plus final verification results. Do not claim a backend or gate passed until fresh evidence exists.
 
@@ -127,7 +127,7 @@ Change its status from `Approved` to `Done` and record the RED/GREEN commands pl
 **Files:**
 - Verify only; do not edit baselines or configuration persistently.
 
-- [ ] **Step 1: Run the Vulkan combined command**
+- [x] **Step 1: Run the Vulkan combined command**
 
 Run:
 
@@ -137,7 +137,7 @@ run.bat sandbox vulkan Release --smoke-test-seconds=120 --rhi-selftest-indirect 
 
 Expected: same four-stage PASS contract as DX12, exit 0, `clean_exit=yes`, reject patterns 0.
 
-- [ ] **Step 2: Run focused and full CPU tests**
+- [x] **Step 2: Run focused and full CPU tests**
 
 Run:
 
@@ -149,7 +149,7 @@ RunArchGate.bat
 
 Expected: all exit 0; ArchGate introduces no new violations.
 
-- [ ] **Step 3: Run the Application readiness matrix**
+- [x] **Step 3: Run the Application readiness matrix**
 
 Run:
 
@@ -159,7 +159,7 @@ run.bat all Debug --smoke-test-seconds=120
 
 Expected: Editor/Sandbox × Vulkan/DX12 all exit 0; Sandbox clean exits; fresh reject patterns 0; runtime configuration files restored byte-for-byte.
 
-- [ ] **Step 4: Run the rendering regression gate**
+- [x] **Step 4: Run the rendering regression gate**
 
 Run:
 
@@ -169,7 +169,7 @@ RunRenderGate.bat
 
 Expected: PASS without `-BlessGolden`; no golden changes.
 
-- [ ] **Step 5: Run static/tooling checks**
+- [x] **Step 5: Run static/tooling checks**
 
 Run:
 
@@ -187,7 +187,7 @@ Expected: both exit 0.
 - Exclude: `project/thirdparty/tracy/tracy-csvexport.exe`
 - Exclude: `project/thirdparty/tracy/tracy-profiler.exe`
 
-- [ ] **Step 1: Audit the staged paths**
+- [x] **Step 1: Audit the staged paths**
 
 Run:
 

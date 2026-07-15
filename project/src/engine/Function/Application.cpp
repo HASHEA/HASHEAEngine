@@ -544,8 +544,12 @@ namespace AshEngine
 					if (!graphSelfTestPassed)
 					{
 						runtimeFailureDetected.store(true, std::memory_order_release);
+						request_exit();
 					}
-					request_exit();
+					else if (!automationEnabled)
+					{
+						request_exit();
+					}
 				}
 				else
 				{
