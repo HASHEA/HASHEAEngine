@@ -20,6 +20,63 @@ namespace AshEngine
 {
 	namespace
 	{
+		static constexpr uint32_t k_terrain_material_array_extent = 1024u;
+		static constexpr uint8_t k_terrain_material_array_mip_count = 11u;
+
+		static auto create_terrain_fallback_material_array(
+			Renderer& renderer,
+			RenderTextureFormat format,
+			const std::array<uint8_t, 4>& value,
+			const char* name) -> std::shared_ptr<RenderTarget>
+		{
+			std::vector<uint8_t> pixels(
+				static_cast<size_t>(k_terrain_material_array_extent) *
+					k_terrain_material_array_extent * 4u);
+			for (size_t offset = 0u; offset < pixels.size(); offset += 4u)
+			{
+				pixels[offset] = value[0];
+				pixels[offset + 1u] = value[1];
+				pixels[offset + 2u] = value[2];
+				pixels[offset + 3u] = value[3];
+			}
+
+			std::array<TextureSubresourceUploadDesc,
+				k_terrain_material_layer_count *
+					k_terrain_material_array_mip_count> subresources{};
+			for (uint32_t layer = 0u;
+				layer < k_terrain_material_layer_count;
+				++layer)
+			{
+				for (uint32_t mip = 0u;
+					mip < k_terrain_material_array_mip_count;
+					++mip)
+				{
+					const uint32_t mip_extent = std::max<uint32_t>(
+						1u,
+						k_terrain_material_array_extent >> mip);
+					TextureSubresourceUploadDesc& subresource =
+						subresources[static_cast<size_t>(layer) *
+							k_terrain_material_array_mip_count + mip];
+					subresource.mip_level = mip;
+					subresource.array_layer = layer;
+					subresource.data = pixels.data();
+					subresource.row_pitch = mip_extent * 4u;
+					subresource.slice_pitch = mip_extent * mip_extent * 4u;
+				}
+			}
+
+			Texture2DArrayUploadDesc desc{};
+			desc.width = static_cast<uint16_t>(k_terrain_material_array_extent);
+			desc.height = static_cast<uint16_t>(k_terrain_material_array_extent);
+			desc.format = format;
+			desc.array_layer_count = k_terrain_material_layer_count;
+			desc.mip_level_count = k_terrain_material_array_mip_count;
+			desc.subresources = subresources.data();
+			desc.subresource_count = static_cast<uint32_t>(subresources.size());
+			desc.name = name;
+			return renderer.create_texture_2d_array(desc);
+		}
+
 		static auto to_lower_copy(std::string value) -> std::string
 		{
 			std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
@@ -219,6 +276,7 @@ namespace AshEngine
 		m_logged_environment_warnings.clear();
 		m_environment_maps.clear();
 		m_fallback_environment_map.reset();
+		m_terrain_fallback_material_arrays.reset();
 		m_default_white_texture.reset();
 		m_default_normal_texture.reset();
 		m_default_black_texture.reset();
@@ -227,6 +285,44 @@ namespace AshEngine
 		m_renderer = nullptr;
 		m_activity_epoch = 0;
 		m_pending_render_asset_count = 0;
+	}
+
+	std::shared_ptr<const TerrainFallbackMaterialArrays>
+	RenderAssetManager::request_terrain_fallback_material_arrays()
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		if (m_terrain_fallback_material_arrays)
+		{
+			return m_terrain_fallback_material_arrays;
+		}
+		if (!m_renderer || !is_in_render_thread())
+		{
+			return nullptr;
+		}
+
+		auto arrays = std::make_shared<TerrainFallbackMaterialArrays>();
+		arrays->arrays[0] = create_terrain_fallback_material_array(
+			*m_renderer,
+			RenderTextureFormat::RGBA8_SRGB,
+			{ 255u, 255u, 255u, 255u },
+			"TerrainBaseColorLayers");
+		arrays->arrays[1] = create_terrain_fallback_material_array(
+			*m_renderer,
+			RenderTextureFormat::RGBA8_UNORM,
+			{ 128u, 128u, 255u, 255u },
+			"TerrainNormalLayers");
+		arrays->arrays[2] = create_terrain_fallback_material_array(
+			*m_renderer,
+			RenderTextureFormat::RGBA8_UNORM,
+			{ 255u, 255u, 0u, 255u },
+			"TerrainOrmLayers");
+		if (!arrays->is_valid())
+		{
+			return nullptr;
+		}
+
+		m_terrain_fallback_material_arrays = arrays;
+		return arrays;
 	}
 
 	std::shared_ptr<StaticMeshRenderAsset> RenderAssetManager::request_static_mesh_asset(const std::string& asset_path, uint32_t mesh_index)
@@ -849,8 +945,20 @@ namespace AshEngine
 		}
 		else if (terminal_state == TerrainRenderReadiness::Pending)
 		{
-			std::string error{};
-			succeeded = asset->finalize_gpu_resources(*m_renderer, &error);
+			const auto fallback_arrays =
+				request_terrain_fallback_material_arrays();
+			if (!fallback_arrays ||
+				!asset->set_fallback_material_arrays(fallback_arrays))
+			{
+				std::scoped_lock<std::mutex> asset_lock(asset->m_mutex);
+				asset->fail_active_generation(
+					"failed to create shared Terrain fallback material arrays.");
+			}
+			else
+			{
+				std::string error{};
+				succeeded = asset->finalize_gpu_resources(*m_renderer, &error);
+			}
 		}
 
 		terminal_state = asset->readiness();

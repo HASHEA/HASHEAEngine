@@ -40,6 +40,13 @@ namespace AshEngine
 		Failed
 	};
 
+	struct ASH_API TerrainFallbackMaterialArrays
+	{
+		std::array<std::shared_ptr<RenderTarget>, 3> arrays{};
+
+		bool is_valid() const;
+	};
+
 	// Immutable, one-lock view of every TerrainRenderAsset field that can change
 	// the depth recorded for a static shadow cache tile.
 	struct ASH_API TerrainShadowCasterIdentity
@@ -137,6 +144,8 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget> weight_atlas(uint32_t index) const;
 		std::shared_ptr<RenderTarget> coarse_weight_target() const;
 		std::shared_ptr<RenderTarget> material_texture_array(uint32_t index) const;
+		bool set_fallback_material_arrays(
+			const std::shared_ptr<const TerrainFallbackMaterialArrays>& arrays);
 
 	private:
 		struct TerrainGpuComponentUpload
@@ -173,7 +182,8 @@ namespace AshEngine
 		std::shared_ptr<StorageBuffer> m_dirty_weight_staging_buffer{};
 		std::array<std::shared_ptr<RenderTarget>, 2> m_weight_atlases{};
 		std::shared_ptr<RenderTarget> m_coarse_weight_target{};
-		std::array<std::shared_ptr<RenderTarget>, 3> m_material_texture_arrays{};
+		std::shared_ptr<const TerrainFallbackMaterialArrays>
+			m_fallback_material_arrays{};
 		std::array<TerrainAtlasSlotMetadata, k_terrain_weight_atlas_slot_count>
 			m_frame_boundary_atlas_slots{};
 		friend class RenderAssetManager;

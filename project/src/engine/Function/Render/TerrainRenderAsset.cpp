@@ -16,8 +16,6 @@ namespace AshEngine
 {
 	namespace
 	{
-		static constexpr uint32_t k_material_array_extent = 1024u;
-		static constexpr uint8_t k_material_array_mip_count = 11u;
 		static constexpr uint64_t k_height_upload_byte_budget = 4ull * 1024ull * 1024ull;
 		static constexpr auto k_height_upload_wall_clock_budget =
 			std::chrono::milliseconds(2);
@@ -76,53 +74,17 @@ namespace AshEngine
 			return true;
 		}
 
-		auto create_fallback_material_array(
-			Renderer& renderer,
-			RenderTextureFormat format,
-			const std::array<uint8_t, 4>& value,
-			const char* name) -> std::shared_ptr<RenderTarget>
-		{
-			std::vector<uint8_t> pixels(
-				static_cast<size_t>(k_material_array_extent) *
-				k_material_array_extent * 4u);
-			for (size_t offset = 0u; offset < pixels.size(); offset += 4u)
-			{
-				pixels[offset] = value[0];
-				pixels[offset + 1u] = value[1];
-				pixels[offset + 2u] = value[2];
-				pixels[offset + 3u] = value[3];
-			}
+	}
 
-			std::array<TextureSubresourceUploadDesc,
-				k_terrain_material_layer_count * k_material_array_mip_count> subresources{};
-			for (uint32_t layer = 0u; layer < k_terrain_material_layer_count; ++layer)
+	bool TerrainFallbackMaterialArrays::is_valid() const
+	{
+		return std::all_of(
+			arrays.begin(),
+			arrays.end(),
+			[](const std::shared_ptr<RenderTarget>& array)
 			{
-				for (uint32_t mip = 0u; mip < k_material_array_mip_count; ++mip)
-				{
-					const uint32_t mip_extent = std::max<uint32_t>(
-						1u, k_material_array_extent >> mip);
-					TextureSubresourceUploadDesc& subresource =
-						subresources[static_cast<size_t>(layer) *
-							k_material_array_mip_count + mip];
-					subresource.mip_level = mip;
-					subresource.array_layer = layer;
-					subresource.data = pixels.data();
-					subresource.row_pitch = mip_extent * 4u;
-					subresource.slice_pitch = mip_extent * mip_extent * 4u;
-				}
-			}
-
-			Texture2DArrayUploadDesc desc{};
-			desc.width = static_cast<uint16_t>(k_material_array_extent);
-			desc.height = static_cast<uint16_t>(k_material_array_extent);
-			desc.format = format;
-			desc.array_layer_count = k_terrain_material_layer_count;
-			desc.mip_level_count = k_material_array_mip_count;
-			desc.subresources = subresources.data();
-			desc.subresource_count = static_cast<uint32_t>(subresources.size());
-			desc.name = name;
-			return renderer.create_texture_2d_array(desc);
-		}
+				return array != nullptr;
+			});
 	}
 
 	void TerrainRenderAssetState::begin_content_generation(
@@ -664,8 +626,22 @@ namespace AshEngine
 	std::shared_ptr<RenderTarget> TerrainRenderAsset::material_texture_array(uint32_t index) const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return index < m_material_texture_arrays.size() ?
-			m_material_texture_arrays[index] : nullptr;
+		return m_fallback_material_arrays &&
+			index < m_fallback_material_arrays->arrays.size() ?
+			m_fallback_material_arrays->arrays[index] : nullptr;
+	}
+
+	bool TerrainRenderAsset::set_fallback_material_arrays(
+		const std::shared_ptr<const TerrainFallbackMaterialArrays>& arrays)
+	{
+		if (!arrays || !arrays->is_valid())
+		{
+			return false;
+		}
+
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		m_fallback_material_arrays = arrays;
+		return true;
 	}
 
 	void TerrainRenderAsset::fail_active_generation(const std::string& error)
@@ -754,39 +730,13 @@ namespace AshEngine
 				"TerrainCoarseWeights"
 			});
 		}
-		if (!m_material_texture_arrays[0])
-		{
-			m_material_texture_arrays[0] = create_fallback_material_array(
-				renderer,
-				RenderTextureFormat::RGBA8_SRGB,
-				{ 255u, 255u, 255u, 255u },
-				"TerrainBaseColorLayers");
-		}
-		if (!m_material_texture_arrays[1])
-		{
-			m_material_texture_arrays[1] = create_fallback_material_array(
-				renderer,
-				RenderTextureFormat::RGBA8_UNORM,
-				{ 128u, 128u, 255u, 255u },
-				"TerrainNormalLayers");
-		}
-		if (!m_material_texture_arrays[2])
-		{
-			m_material_texture_arrays[2] = create_fallback_material_array(
-				renderer,
-				RenderTextureFormat::RGBA8_UNORM,
-				{ 255u, 255u, 0u, 255u },
-				"TerrainOrmLayers");
-		}
-
 		if (!m_packed_height_buffer ||
 			!m_dirty_weight_staging_buffer ||
 			!m_weight_atlases[0] ||
 			!m_weight_atlases[1] ||
 			!m_coarse_weight_target ||
-			!m_material_texture_arrays[0] ||
-			!m_material_texture_arrays[1] ||
-			!m_material_texture_arrays[2])
+			!m_fallback_material_arrays ||
+			!m_fallback_material_arrays->is_valid())
 		{
 			fail_active_generation("failed to create Terrain GPU resources.");
 			return fail_with_error(out_error, m_last_error.c_str());

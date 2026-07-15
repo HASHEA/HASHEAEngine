@@ -83,6 +83,8 @@ namespace AshEngine
 		std::shared_ptr<TerrainRenderAsset> request_terrain_asset(
 			const std::string& asset_path,
 			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot);
+		std::shared_ptr<const TerrainFallbackMaterialArrays>
+			request_terrain_fallback_material_arrays();
 		std::shared_ptr<RenderSampler> request_sampler(const RenderSamplerDesc& desc);
 		std::shared_ptr<RenderSampler> request_default_sampler();
 		bool resolve_static_mesh_primitive_sections(
@@ -170,6 +172,8 @@ namespace AshEngine
 		std::shared_ptr<TextureAsset> m_default_black_texture{};
 		std::unordered_map<std::string, std::shared_ptr<EnvironmentMapRuntimeResource>> m_environment_maps{};
 		std::shared_ptr<EnvironmentMapRuntimeResource> m_fallback_environment_map{};
+		std::shared_ptr<TerrainFallbackMaterialArrays>
+			m_terrain_fallback_material_arrays{};
 		uint64_t m_activity_epoch = 0;
 		uint32_t m_pending_render_asset_count = 0;
 		MaterialSystem m_material_system{};

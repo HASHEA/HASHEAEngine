@@ -392,3 +392,40 @@ TEST_CASE("Terrain render asset fixed GPU layout matches the approved residency 
 		AshEngine::k_terrain_render_component_capacity * sizeof(uint32_t) ==
 		135270400ull);
 }
+
+TEST_CASE("Terrain fallback material arrays are manager owned and shared")
+{
+	auto MakeOpaqueRenderTarget = [](uint32_t value)
+	{
+		auto owner = std::make_shared<uint32_t>(value);
+		return std::shared_ptr<AshEngine::RenderTarget>(
+			owner,
+			reinterpret_cast<AshEngine::RenderTarget*>(owner.get()));
+	};
+
+	auto shared_arrays =
+		std::make_shared<AshEngine::TerrainFallbackMaterialArrays>();
+	for (uint32_t index = 0u; index < shared_arrays->arrays.size(); ++index)
+	{
+		shared_arrays->arrays[index] = MakeOpaqueRenderTarget(index + 1u);
+	}
+	REQUIRE(shared_arrays->is_valid());
+	std::weak_ptr<const AshEngine::TerrainFallbackMaterialArrays> weak_arrays =
+		shared_arrays;
+	{
+		AshEngine::TerrainRenderAsset first{};
+		AshEngine::TerrainRenderAsset second{};
+		REQUIRE(first.set_fallback_material_arrays(shared_arrays));
+		REQUIRE(second.set_fallback_material_arrays(shared_arrays));
+		for (uint32_t index = 0u; index < shared_arrays->arrays.size(); ++index)
+		{
+			CHECK(first.material_texture_array(index) ==
+				second.material_texture_array(index));
+			CHECK(first.material_texture_array(index) ==
+				shared_arrays->arrays[index]);
+		}
+		shared_arrays.reset();
+		CHECK_FALSE(weak_arrays.expired());
+	}
+	CHECK(weak_arrays.expired());
+}
