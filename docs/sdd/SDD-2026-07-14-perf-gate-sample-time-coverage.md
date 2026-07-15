@@ -1,6 +1,6 @@
 # Mini SDD: PerfGate 采样时间覆盖率守卫
 
-**Status:** Review
+**Status:** Done
 
 ## Goal
 

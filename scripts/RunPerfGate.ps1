@@ -15,6 +15,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+$script:PerfGateMinimumSampleTimeCoverage = 0.90
 
 . (Join-Path $PSScriptRoot "PerfGateProfileConfig.ps1")
 
@@ -203,6 +204,9 @@ function New-RunRecord {
         failures = @()
         warnings = @()
         frames_sampled = 0
+        sample_seconds = 0.0
+        observed_frame_time_ms = 0.0
+        sample_time_coverage = 0.0
         cpu_frame_time_avg_ms = 0.0
         cpu_frame_time_p95_ms = 0.0
         cpu_frame_time_p99_ms = 0.0
@@ -543,6 +547,36 @@ function ConvertTo-PerfGateFiniteDouble {
         return $null
     }
     return $converted
+}
+
+function Get-PerfGateSampleTimeCoverage {
+    param(
+        [int64]$FramesSampled,
+        [double]$CpuFrameTimeAvgMs,
+        [double]$SampleSeconds
+    )
+
+    $validatedCpuFrameTimeAvgMs = ConvertTo-PerfGateFiniteDouble $CpuFrameTimeAvgMs
+    $validatedSampleSeconds = ConvertTo-PerfGateFiniteDouble $SampleSeconds
+    if ($FramesSampled -le 0 -or
+        $null -eq $validatedCpuFrameTimeAvgMs -or $validatedCpuFrameTimeAvgMs -lt 0.0 -or
+        $null -eq $validatedSampleSeconds -or $validatedSampleSeconds -le 0.0) {
+        return $null
+    }
+
+    $observedFrameTimeMs = [double]$FramesSampled * $validatedCpuFrameTimeAvgMs
+    $expectedFrameTimeMs = $validatedSampleSeconds * 1000.0
+    $coverage = $observedFrameTimeMs / $expectedFrameTimeMs
+    if ($null -eq (ConvertTo-PerfGateFiniteDouble $observedFrameTimeMs) -or
+        $null -eq (ConvertTo-PerfGateFiniteDouble $coverage)) {
+        return $null
+    }
+
+    [PSCustomObject][ordered]@{
+        sample_seconds = $validatedSampleSeconds
+        observed_frame_time_ms = $observedFrameTimeMs
+        coverage = $coverage
+    }
 }
 
 function ConvertTo-PerfGateNonNegativeInt64 {
@@ -1653,6 +1687,31 @@ function Import-PerfGateBaselineFromReport {
             }
         }
 
+        $expectedSampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $ProfileConfig "sample_seconds")
+        $recordSampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "sample_seconds")
+        $recordObservedFrameTimeMs = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "observed_frame_time_ms")
+        $recordSampleTimeCoverage = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "sample_time_coverage")
+        if ($null -eq $expectedSampleSeconds -or $expectedSampleSeconds -le 0.0 -or
+            $null -eq $recordSampleSeconds -or
+            [Math]::Abs($recordSampleSeconds - $expectedSampleSeconds) -gt 0.000001) {
+            throw "Approved perf report sample time coverage duration is missing or does not match the current profile."
+        }
+
+        $recomputedSampleTimeCoverage = Get-PerfGateSampleTimeCoverage `
+            -FramesSampled ([int64](Get-ProfileProperty $record "frames_sampled")) `
+            -CpuFrameTimeAvgMs ([double](Get-ProfileProperty $record "cpu_frame_time_avg_ms")) `
+            -SampleSeconds $expectedSampleSeconds
+        if ($null -eq $recomputedSampleTimeCoverage -or
+            $recomputedSampleTimeCoverage.coverage -lt $script:PerfGateMinimumSampleTimeCoverage) {
+            throw ("Approved perf report sample time coverage was below required {0:N2}." -f $script:PerfGateMinimumSampleTimeCoverage)
+        }
+        if ($null -eq $recordObservedFrameTimeMs -or
+            [Math]::Abs($recordObservedFrameTimeMs - $recomputedSampleTimeCoverage.observed_frame_time_ms) -gt 0.001 -or
+            $null -eq $recordSampleTimeCoverage -or
+            [Math]::Abs($recordSampleTimeCoverage - $recomputedSampleTimeCoverage.coverage) -gt 0.000001) {
+            throw "Approved perf report sample time coverage fields do not match the recomputed frame-time evidence."
+        }
+
         $recordMetricNames = [string[]]@(Get-ProfileProperty $record "required_gpu_metrics")
         [Array]::Sort($recordMetricNames, [System.StringComparer]::Ordinal)
         if (($recordMetricNames -join "`n") -cne ($expectedMetricNames -join "`n")) {
@@ -2443,6 +2502,33 @@ function Test-TelemetryData {
         $Record.($metricContract.record) = [double]$validatedValue
     }
 
+    $sampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $ProfileConfig "sample_seconds")
+    $sampleTimeCoverage = if ($null -eq $sampleSeconds) {
+        $null
+    }
+    else {
+        Get-PerfGateSampleTimeCoverage `
+            -FramesSampled $Record.frames_sampled `
+            -CpuFrameTimeAvgMs $Record.cpu_frame_time_avg_ms `
+            -SampleSeconds $sampleSeconds
+    }
+    if ($null -eq $sampleTimeCoverage) {
+        Add-Failure $Record "Sample time coverage inputs must contain positive sampled frames, a finite non-negative CPU average, and a finite positive profile sample duration"
+    }
+    else {
+        $Record.sample_seconds = [double]$sampleTimeCoverage.sample_seconds
+        $Record.observed_frame_time_ms = [double]$sampleTimeCoverage.observed_frame_time_ms
+        $Record.sample_time_coverage = [double]$sampleTimeCoverage.coverage
+        if ($Record.sample_time_coverage -lt $script:PerfGateMinimumSampleTimeCoverage) {
+            Add-Failure $Record ("Sample time coverage {0:N6} was below required {1:N2}: observed {2:N3} ms across {3} frames for a {4:N3} ms window" -f `
+                $Record.sample_time_coverage,
+                $script:PerfGateMinimumSampleTimeCoverage,
+                $Record.observed_frame_time_ms,
+                $Record.frames_sampled,
+                ($Record.sample_seconds * 1000.0))
+        }
+    }
+
     if ([int64]$memory.engine_heap_shutdown_live_bytes -ne 0) {
         Add-Failure $Record "Engine heap live bytes at shutdown: $($memory.engine_heap_shutdown_live_bytes)"
     }
@@ -2826,7 +2912,7 @@ function Invoke-RunPerfGateSelfTest {
         return [PSCustomObject]@{
             schema_version = 2
             backend_actual = "Vulkan"
-            frames_sampled = 120
+            frames_sampled = 15000
             cpu_frame_time_ms = [PSCustomObject]@{ avg = 2.0; p95 = 2.5; p99 = 3.0 }
             memory = [PSCustomObject]@{
                 process_private_bytes_peak_mb = 100.0
@@ -3148,7 +3234,7 @@ function Invoke-RunPerfGateSelfTest {
 {
   "schema_version": 1,
   "backend_actual": "Vulkan",
-  "frames_sampled": 120,
+  "frames_sampled": 15000,
   "cpu_frame_time_ms": { "avg": 2.0, "p95": 2.5, "p99": 3.0 },
   "memory": {
     "process_private_bytes_peak_mb": 100.0,
@@ -3181,6 +3267,26 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($telemetryOffSchemaV1Record.status -eq "FAIL" -and (@($telemetryOffSchemaV1Record.failures) -join " ") -match "schema_version 2") "Telemetry-off Vegetation A/B still requires schema v2 runtime metadata."
 
     $validV2 = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+
+    $incompleteTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $incompleteTelemetry.frames_sampled = 704
+    $incompleteTelemetry.cpu_frame_time_ms.avg = 14.5188190340909
+    $incompleteRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $incompleteRecord -Telemetry $incompleteTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $incompleteRecord.status -eq "FAIL" -and
+        (@($incompleteRecord.failures) -join " ") -match "sample time coverage"
+    ) "A 30-second report with only about 10.22 seconds of observed frame time must fail closed."
+
+    $boundaryTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $boundaryTelemetry.frames_sampled = 13500
+    $boundaryRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $boundaryRecord -Telemetry $boundaryTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $boundaryRecord.status -eq "PASS" -and
+        [Math]::Abs([double](Get-ProfileProperty $boundaryRecord "sample_time_coverage") - 0.90) -le 0.000001
+    ) "Exactly 90% sample-time coverage must pass and be serialized."
+
     $telemetryOffWithoutGpuMetadata = $validV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json
     $telemetryOffWithoutGpuMetadata.PSObject.Properties.Remove("gpu")
     $telemetryOffWithoutGpuMetadataRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
@@ -4418,7 +4524,11 @@ exit 0
         $candidateVulkan.job_assigned = $true
         $candidateVulkan.job_active_processes_after_cleanup = 0
         $candidateVulkan.exit_code = 0
-        $candidateVulkan.frames_sampled = 100
+        $candidateVulkan.frames_sampled = 15000
+        $candidateVulkan.cpu_frame_time_avg_ms = 2.0
+        $candidateVulkan.sample_seconds = 30.0
+        $candidateVulkan.observed_frame_time_ms = 30000.0
+        $candidateVulkan.sample_time_coverage = 1.0
         $candidateVulkan.gpu_coverage = 1.0
         $candidateVulkan.gpu_submitted = 100
         $candidateVulkan.gpu_resolved = 100
@@ -4538,6 +4648,23 @@ exit 0
                 name = "invalid-cpu-metric"
                 expected = "CPU/memory/draw metrics"
                 mutate = { param($value) $value.runs[0].cpu_frame_time_avg_ms = "NaN" }
+            },
+            [PSCustomObject]@{
+                name = "forged-sample-time-coverage"
+                expected = "sample time coverage"
+                mutate = {
+                    param($value)
+                    $value.runs[0].frames_sampled = 704
+                    $value.runs[0].cpu_frame_time_avg_ms = 14.5188190340909
+                    $value.runs[0].sample_seconds = 30.0
+                    $value.runs[0].observed_frame_time_ms = 30000.0
+                    $value.runs[0].sample_time_coverage = 1.0
+                }
+            },
+            [PSCustomObject]@{
+                name = "missing-sample-seconds"
+                expected = "sample time coverage"
+                mutate = { param($value) $value.runs[0].PSObject.Properties.Remove("sample_seconds") }
             }
         )
         foreach ($unsafeCase in $unsafeSummaryCases) {
