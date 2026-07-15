@@ -16,6 +16,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $script:PerfGateMinimumSampleTimeCoverage = 0.90
+$script:PerfGateMaximumSampleGapSeconds = 0.25
+$script:PerfGateMinimumSampleRateHz = 30.0
 
 . (Join-Path $PSScriptRoot "PerfGateProfileConfig.ps1")
 
@@ -205,8 +207,13 @@ function New-RunRecord {
         warnings = @()
         frames_sampled = 0
         sample_seconds = 0.0
+        sample_time_evidence = ""
         observed_frame_time_ms = 0.0
         sample_time_coverage = 0.0
+        sample_max_gap_seconds = 0.0
+        sample_rate_hz = 0.0
+        telemetry_artifact = ""
+        telemetry_sha256 = ""
         cpu_frame_time_avg_ms = 0.0
         cpu_frame_time_p95_ms = 0.0
         cpu_frame_time_p99_ms = 0.0
@@ -526,6 +533,79 @@ function Get-ProfileProperty {
     return $property.Value
 }
 
+function Test-PerfGateJsonIntegerValue {
+    param([AllowNull()][object]$Value)
+
+    return $Value -is [System.Int32] -or $Value -is [System.Int64]
+}
+
+function Test-PerfGateSampleTimelineConsistency {
+    param(
+        [int64]$FramesSampled,
+        [double]$ObservedSampleSeconds,
+        [double]$MaximumSamplingGapSeconds
+    )
+
+    if ($FramesSampled -le 0 -or
+        [double]::IsNaN($ObservedSampleSeconds) -or [double]::IsInfinity($ObservedSampleSeconds) -or
+        [double]::IsNaN($MaximumSamplingGapSeconds) -or [double]::IsInfinity($MaximumSamplingGapSeconds) -or
+        $ObservedSampleSeconds -lt 0.0 -or $MaximumSamplingGapSeconds -lt 0.0) {
+        return $false
+    }
+    if ($ObservedSampleSeconds -le 0.000001) {
+        return $true
+    }
+    if ($FramesSampled -lt 2) {
+        return $false
+    }
+
+    $maximumRepresentableSpan = [double]($FramesSampled - 1) * $MaximumSamplingGapSeconds
+    return $ObservedSampleSeconds -le $maximumRepresentableSpan + 0.000001
+}
+
+function Assert-PerfGatePathHasNoReparsePoints {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [Parameter(Mandatory = $true)]
+        [string]$TrustedRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Label
+    )
+
+    $trustedFullPath = [System.IO.Path]::GetFullPath($TrustedRoot).TrimEnd('\', '/')
+    $pathFullPath = [System.IO.Path]::GetFullPath($Path)
+    $trustedPrefix = $trustedFullPath + [System.IO.Path]::DirectorySeparatorChar
+    if (-not [string]::Equals($pathFullPath, $trustedFullPath, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not $pathFullPath.StartsWith($trustedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Label must remain inside the trusted root '$trustedFullPath'."
+    }
+
+    $components = @($trustedFullPath)
+    $relativePath = $pathFullPath.Substring($trustedFullPath.Length).TrimStart('\', '/')
+    if (-not [string]::IsNullOrEmpty($relativePath)) {
+        $currentPath = $trustedFullPath
+        foreach ($component in $relativePath.Split(
+            [char[]]@('\', '/'),
+            [System.StringSplitOptions]::RemoveEmptyEntries)) {
+            $currentPath = Join-Path $currentPath $component
+            $components += $currentPath
+        }
+    }
+
+    foreach ($componentPath in $components) {
+        if (-not (Test-Path -LiteralPath $componentPath)) {
+            continue
+        }
+        $attributes = (Get-Item -Force -LiteralPath $componentPath).Attributes
+        if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Label must not traverse a reparse point: '$componentPath'."
+        }
+    }
+}
+
 function ConvertTo-PerfGateFiniteDouble {
     param([AllowNull()][object]$Value)
 
@@ -553,7 +633,8 @@ function Get-PerfGateSampleTimeCoverage {
     param(
         [int64]$FramesSampled,
         [double]$CpuFrameTimeAvgMs,
-        [double]$SampleSeconds
+        [double]$SampleSeconds,
+        [AllowNull()][object]$ObservedSampleSeconds = $null
     )
 
     $validatedCpuFrameTimeAvgMs = ConvertTo-PerfGateFiniteDouble $CpuFrameTimeAvgMs
@@ -564,7 +645,26 @@ function Get-PerfGateSampleTimeCoverage {
         return $null
     }
 
-    $observedFrameTimeMs = [double]$FramesSampled * $validatedCpuFrameTimeAvgMs
+    $validatedObservedSampleSeconds = if ($null -eq $ObservedSampleSeconds) {
+        $null
+    }
+    else {
+        ConvertTo-PerfGateFiniteDouble $ObservedSampleSeconds
+    }
+    if ($null -ne $ObservedSampleSeconds -and
+        ($null -eq $validatedObservedSampleSeconds -or
+         $validatedObservedSampleSeconds -lt 0.0 -or
+         $validatedObservedSampleSeconds -gt $validatedSampleSeconds)) {
+        return $null
+    }
+
+    $sampleTimeEvidence = if ($null -eq $ObservedSampleSeconds) { "cpu_frame_sum_legacy" } else { "elapsed_span" }
+    $observedFrameTimeMs = if ($null -eq $ObservedSampleSeconds) {
+        [double]$FramesSampled * $validatedCpuFrameTimeAvgMs
+    }
+    else {
+        $validatedObservedSampleSeconds * 1000.0
+    }
     $expectedFrameTimeMs = $validatedSampleSeconds * 1000.0
     $coverage = $observedFrameTimeMs / $expectedFrameTimeMs
     if ($null -eq (ConvertTo-PerfGateFiniteDouble $observedFrameTimeMs) -or
@@ -574,6 +674,7 @@ function Get-PerfGateSampleTimeCoverage {
 
     [PSCustomObject][ordered]@{
         sample_seconds = $validatedSampleSeconds
+        evidence = $sampleTimeEvidence
         observed_frame_time_ms = $observedFrameTimeMs
         coverage = $coverage
     }
@@ -767,17 +868,22 @@ function Get-RequiredComparisonDouble {
     return [double]$validated
 }
 
-function Get-PerfGateSha256Text {
-    param([string]$Text)
+function Get-PerfGateSha256Bytes {
+    param([byte[]]$Bytes)
 
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
-        return (($sha256.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join "")
+        return (($sha256.ComputeHash($Bytes) | ForEach-Object { $_.ToString("x2") }) -join "")
     }
     finally {
         $sha256.Dispose()
     }
+}
+
+function Get-PerfGateSha256Text {
+    param([string]$Text)
+
+    return Get-PerfGateSha256Bytes -Bytes ([System.Text.Encoding]::UTF8.GetBytes($Text))
 }
 
 function Get-PerfGateFileSha256 {
@@ -1539,15 +1645,13 @@ function Import-PerfGateBaselineFromReport {
     if (-not $reportFullPath.StartsWith($approvedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Approved perf report must be inside '$approvedRoot'."
     }
+    Assert-PerfGatePathHasNoReparsePoints `
+        -Path $reportFullPath `
+        -TrustedRoot $repoFullPath `
+        -Label "Approved perf report"
 
     $reportBytes = [System.IO.File]::ReadAllBytes($reportFullPath)
-    $sha256 = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $actualReportSha256 = (($sha256.ComputeHash($reportBytes) | ForEach-Object { $_.ToString("x2") }) -join "")
-    }
-    finally {
-        $sha256.Dispose()
-    }
+    $actualReportSha256 = Get-PerfGateSha256Bytes -Bytes $reportBytes
     if (-not [string]::Equals($actualReportSha256, $ExpectedReportSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Approved perf report SHA-256 mismatch: expected '$ExpectedReportSha256', actual '$actualReportSha256'."
     }
@@ -1560,8 +1664,9 @@ function Import-PerfGateBaselineFromReport {
         throw "Approved perf report is not valid JSON: $($_.Exception.Message)"
     }
 
-    if ([int](Get-ProfileProperty $summary "schema_version") -ne 2) {
-        throw "Approved perf report must use schema_version 2."
+    $summarySchemaVersionValue = Get-ProfileProperty $summary "schema_version"
+    if (-not (Test-PerfGateJsonIntegerValue $summarySchemaVersionValue) -or [int64]$summarySchemaVersionValue -ne 2) {
+        throw "Approved perf report must use the JSON integer schema_version 2."
     }
     if (-not [string]::Equals([string](Get-ProfileProperty $summary "profile"), $Profile, [System.StringComparison]::Ordinal)) {
         throw "Approved perf report profile does not match '$Profile'."
@@ -1670,9 +1775,11 @@ function Import-PerfGateBaselineFromReport {
             throw "Approved perf report readable workload does not match the current profile."
         }
 
-        if ([int64](Get-ProfileProperty $record "frames_sampled") -le 0) {
+        $recordFramesSampledValue = Get-ProfileProperty $record "frames_sampled"
+        if (-not (Test-PerfGateJsonIntegerValue $recordFramesSampledValue) -or [int64]$recordFramesSampledValue -le 0) {
             throw "Approved perf report must contain sampled frames."
         }
+        $recordFramesSampled = [int64]$recordFramesSampledValue
         foreach ($metricName in @(
             "cpu_frame_time_avg_ms",
             "cpu_frame_time_p95_ms",
@@ -1691,16 +1798,107 @@ function Import-PerfGateBaselineFromReport {
         $recordSampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "sample_seconds")
         $recordObservedFrameTimeMs = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "observed_frame_time_ms")
         $recordSampleTimeCoverage = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "sample_time_coverage")
+        $recordSampleTimeEvidence = [string](Get-ProfileProperty $record "sample_time_evidence")
+        $recordMaximumSamplingGapSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "sample_max_gap_seconds")
+        $recordSampleRateHz = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $record "sample_rate_hz")
         if ($null -eq $expectedSampleSeconds -or $expectedSampleSeconds -le 0.0 -or
             $null -eq $recordSampleSeconds -or
             [Math]::Abs($recordSampleSeconds - $expectedSampleSeconds) -gt 0.000001) {
             throw "Approved perf report sample time coverage duration is missing or does not match the current profile."
         }
 
+        if ($recordSampleTimeEvidence -ne "elapsed_span") {
+            throw "Approved perf report sample time evidence must use the elapsed sampling span contract."
+        }
+
+        $telemetryArtifact = [string](Get-ProfileProperty $record "telemetry_artifact")
+        if ([string]::IsNullOrWhiteSpace($telemetryArtifact) -or [System.IO.Path]::IsPathRooted($telemetryArtifact)) {
+            throw "Approved perf report telemetry artifact must be a non-empty relative path."
+        }
+        $telemetryExpectedSha256 = [string](Get-ProfileProperty $record "telemetry_sha256")
+        if ($telemetryExpectedSha256 -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "Approved perf report telemetry SHA-256 must contain exactly 64 hexadecimal characters."
+        }
+        $reportDirectory = [System.IO.Path]::GetDirectoryName($reportFullPath).TrimEnd('\', '/')
+        $reportDirectoryPrefix = $reportDirectory + [System.IO.Path]::DirectorySeparatorChar
+        $telemetryFullPath = [System.IO.Path]::GetFullPath((Join-Path $reportDirectory $telemetryArtifact))
+        if (-not $telemetryFullPath.StartsWith($reportDirectoryPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Approved perf report telemetry artifact must remain inside the report directory."
+        }
+        if (-not (Test-Path -LiteralPath $telemetryFullPath -PathType Leaf)) {
+            throw "Approved perf report telemetry artifact does not exist."
+        }
+        Assert-PerfGatePathHasNoReparsePoints `
+            -Path $telemetryFullPath `
+            -TrustedRoot $reportDirectory `
+            -Label "Approved perf report telemetry artifact"
+        try {
+            $telemetryBytes = [System.IO.File]::ReadAllBytes($telemetryFullPath)
+        }
+        catch {
+            throw "Approved perf report telemetry artifact could not be read: $($_.Exception.Message)"
+        }
+        $telemetryActualSha256 = Get-PerfGateSha256Bytes -Bytes $telemetryBytes
+        if (-not [string]::Equals($telemetryActualSha256, $telemetryExpectedSha256, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Approved perf report telemetry SHA-256 mismatch."
+        }
+        try {
+            $telemetry = $strictUtf8.GetString($telemetryBytes) | ConvertFrom-Json
+        }
+        catch {
+            throw "Approved perf report telemetry artifact is not valid JSON: $($_.Exception.Message)"
+        }
+        $telemetrySchemaVersionValue = Get-ProfileProperty $telemetry "schema_version"
+        if (-not (Test-PerfGateJsonIntegerValue $telemetrySchemaVersionValue) -or [int64]$telemetrySchemaVersionValue -ne 2) {
+            throw "Approved perf report telemetry schema_version must be the JSON integer 2."
+        }
+        $telemetryFramesSampledValue = Get-ProfileProperty $telemetry "frames_sampled"
+        if (-not (Test-PerfGateJsonIntegerValue $telemetryFramesSampledValue) -or [int64]$telemetryFramesSampledValue -le 0) {
+            throw "Approved perf report telemetry frames_sampled must be a positive JSON integer."
+        }
+        $telemetryFramesSampled = [int64]$telemetryFramesSampledValue
+        if (-not [string]::Equals([string](Get-ProfileProperty $telemetry "target"), [string]$record.target, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string](Get-ProfileProperty $telemetry "backend_actual"), [string]$record.backend, [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string](Get-ProfileProperty $telemetry "profile"), $Profile, [System.StringComparison]::Ordinal)) {
+            throw "Approved perf report telemetry identity does not match its summary run."
+        }
+        $telemetryRuntime = Get-ProfileProperty $telemetry "runtime"
+        if (-not [string]::Equals([string](Get-ProfileProperty $telemetryRuntime "configuration"), $Configuration, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Approved perf report telemetry configuration does not match its summary run."
+        }
+        $telemetrySampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $telemetry "sample_seconds")
+        $telemetryObservedSampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $telemetry "sample_observed_seconds")
+        $telemetryMaximumSamplingGapSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $telemetry "sample_max_gap_seconds")
+        if ($null -eq $telemetrySampleSeconds -or [Math]::Abs($telemetrySampleSeconds - $expectedSampleSeconds) -gt 0.000001 -or
+            $telemetryFramesSampled -ne $recordFramesSampled -or
+            $null -eq $telemetryObservedSampleSeconds -or
+            $null -eq $telemetryMaximumSamplingGapSeconds -or
+            $telemetryMaximumSamplingGapSeconds -lt 0.0 -or
+            $telemetryMaximumSamplingGapSeconds -gt $script:PerfGateMaximumSampleGapSeconds) {
+            throw "Approved perf report telemetry sample evidence is missing, inconsistent, or discontinuous."
+        }
+        if ($null -eq $recordMaximumSamplingGapSeconds -or
+            [Math]::Abs($recordMaximumSamplingGapSeconds - $telemetryMaximumSamplingGapSeconds) -gt 0.000001) {
+            throw "Approved perf report summary sampling gap does not match the telemetry artifact."
+        }
+        if (-not (Test-PerfGateSampleTimelineConsistency `
+            -FramesSampled $telemetryFramesSampled `
+            -ObservedSampleSeconds $telemetryObservedSampleSeconds `
+            -MaximumSamplingGapSeconds $telemetryMaximumSamplingGapSeconds)) {
+            throw "Approved perf report telemetry sample timeline is mathematically inconsistent."
+        }
+        $minimumSampledFrames = [int64][Math]::Ceiling($expectedSampleSeconds * $script:PerfGateMinimumSampleRateHz)
+        $recomputedSampleRateHz = [double]$telemetryFramesSampled / $expectedSampleSeconds
+        if ($telemetryFramesSampled -lt $minimumSampledFrames -or
+            $null -eq $recordSampleRateHz -or
+            [Math]::Abs($recordSampleRateHz - $recomputedSampleRateHz) -gt 0.000001) {
+            throw "Approved perf report sample rate is missing, inconsistent, or below the required minimum."
+        }
         $recomputedSampleTimeCoverage = Get-PerfGateSampleTimeCoverage `
-            -FramesSampled ([int64](Get-ProfileProperty $record "frames_sampled")) `
+            -FramesSampled $recordFramesSampled `
             -CpuFrameTimeAvgMs ([double](Get-ProfileProperty $record "cpu_frame_time_avg_ms")) `
-            -SampleSeconds $expectedSampleSeconds
+            -SampleSeconds $expectedSampleSeconds `
+            -ObservedSampleSeconds $telemetryObservedSampleSeconds
         if ($null -eq $recomputedSampleTimeCoverage -or
             $recomputedSampleTimeCoverage.coverage -lt $script:PerfGateMinimumSampleTimeCoverage) {
             throw ("Approved perf report sample time coverage was below required {0:N2}." -f $script:PerfGateMinimumSampleTimeCoverage)
@@ -1709,7 +1907,7 @@ function Import-PerfGateBaselineFromReport {
             [Math]::Abs($recordObservedFrameTimeMs - $recomputedSampleTimeCoverage.observed_frame_time_ms) -gt 0.001 -or
             $null -eq $recordSampleTimeCoverage -or
             [Math]::Abs($recordSampleTimeCoverage - $recomputedSampleTimeCoverage.coverage) -gt 0.000001) {
-            throw "Approved perf report sample time coverage fields do not match the recomputed frame-time evidence."
+            throw "Approved perf report sample time coverage fields do not match the bound telemetry sample-time evidence."
         }
 
         $recordMetricNames = [string[]]@(Get-ProfileProperty $record "required_gpu_metrics")
@@ -2414,6 +2612,9 @@ function Test-Telemetry {
         return
     }
 
+    $Record.telemetry_artifact = [System.IO.Path]::GetFileName([string]$Record.telemetry)
+    $Record.telemetry_sha256 = Get-PerfGateFileSha256 -Path $Record.telemetry
+
     Test-TelemetryData `
         -Record $Record `
         -Telemetry $telemetry `
@@ -2469,7 +2670,7 @@ function Test-TelemetryData {
     )
 
     $schemaVersionValue = Get-ProfileProperty $Telemetry "schema_version"
-    $schemaVersionIsJsonInteger = $schemaVersionValue -is [System.Int32] -or $schemaVersionValue -is [System.Int64]
+    $schemaVersionIsJsonInteger = Test-PerfGateJsonIntegerValue $schemaVersionValue
     $schemaVersion = if ($schemaVersionIsJsonInteger) { [int64]$schemaVersionValue } else { $null }
     if (-not $schemaVersionIsJsonInteger -or $schemaVersion -notin @(1, 2)) {
         Add-Failure $Record "Unsupported telemetry schema_version: $schemaVersionValue"
@@ -2503,20 +2704,31 @@ function Test-TelemetryData {
     }
 
     $sampleSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $ProfileConfig "sample_seconds")
-    $sampleTimeCoverage = if ($null -eq $sampleSeconds) {
+    $observedSampleSeconds = if ($schemaVersion -eq 2) {
+        Get-ProfileProperty $Telemetry "sample_observed_seconds"
+    }
+    else {
+        $null
+    }
+    if ($schemaVersion -eq 2 -and $null -eq $observedSampleSeconds) {
+        Add-Failure $Record "Telemetry schema v2 requires elapsed sample_observed_seconds evidence"
+    }
+    $sampleTimeCoverage = if ($null -eq $sampleSeconds -or ($schemaVersion -eq 2 -and $null -eq $observedSampleSeconds)) {
         $null
     }
     else {
         Get-PerfGateSampleTimeCoverage `
             -FramesSampled $Record.frames_sampled `
             -CpuFrameTimeAvgMs $Record.cpu_frame_time_avg_ms `
-            -SampleSeconds $sampleSeconds
+            -SampleSeconds $sampleSeconds `
+            -ObservedSampleSeconds $observedSampleSeconds
     }
     if ($null -eq $sampleTimeCoverage) {
         Add-Failure $Record "Sample time coverage inputs must contain positive sampled frames, a finite non-negative CPU average, and a finite positive profile sample duration"
     }
     else {
         $Record.sample_seconds = [double]$sampleTimeCoverage.sample_seconds
+        $Record.sample_time_evidence = [string]$sampleTimeCoverage.evidence
         $Record.observed_frame_time_ms = [double]$sampleTimeCoverage.observed_frame_time_ms
         $Record.sample_time_coverage = [double]$sampleTimeCoverage.coverage
         if ($Record.sample_time_coverage -lt $script:PerfGateMinimumSampleTimeCoverage) {
@@ -2526,6 +2738,41 @@ function Test-TelemetryData {
                 $Record.observed_frame_time_ms,
                 $Record.frames_sampled,
                 ($Record.sample_seconds * 1000.0))
+        }
+    }
+
+    if ($schemaVersion -eq 2) {
+        $validatedObservedSampleSeconds = ConvertTo-PerfGateFiniteDouble $observedSampleSeconds
+        $maximumSamplingGapSeconds = ConvertTo-PerfGateFiniteDouble (Get-ProfileProperty $Telemetry "sample_max_gap_seconds")
+        if ($null -eq $maximumSamplingGapSeconds -or $maximumSamplingGapSeconds -lt 0.0) {
+            Add-Failure $Record "Telemetry schema v2 requires finite non-negative sample_max_gap_seconds evidence"
+        }
+        else {
+            $Record.sample_max_gap_seconds = [double]$maximumSamplingGapSeconds
+            if ($Record.sample_max_gap_seconds -gt $script:PerfGateMaximumSampleGapSeconds) {
+                Add-Failure $Record ("Maximum sampling gap {0:N6} seconds exceeded the allowed {1:N6} seconds" -f `
+                    $Record.sample_max_gap_seconds,
+                    $script:PerfGateMaximumSampleGapSeconds)
+            }
+            if ($null -ne $validatedObservedSampleSeconds -and
+                -not (Test-PerfGateSampleTimelineConsistency `
+                    -FramesSampled $Record.frames_sampled `
+                    -ObservedSampleSeconds $validatedObservedSampleSeconds `
+                    -MaximumSamplingGapSeconds $Record.sample_max_gap_seconds)) {
+                Add-Failure $Record "Telemetry sample timeline is mathematically inconsistent"
+            }
+        }
+    }
+
+    if ($null -ne $sampleSeconds -and $sampleSeconds -gt 0.0) {
+        $Record.sample_rate_hz = [double]$Record.frames_sampled / $sampleSeconds
+        $minimumSampledFrames = [int64][Math]::Ceiling($sampleSeconds * $script:PerfGateMinimumSampleRateHz)
+        if ($Record.frames_sampled -lt $minimumSampledFrames) {
+            Add-Failure $Record ("Sample rate {0:N6} Hz was below required {1:N6} Hz: {2} frames for a {3:N3} second window" -f `
+                $Record.sample_rate_hz,
+                $script:PerfGateMinimumSampleRateHz,
+                $Record.frames_sampled,
+                $sampleSeconds)
         }
     }
 
@@ -2913,6 +3160,8 @@ function Invoke-RunPerfGateSelfTest {
             schema_version = 2
             backend_actual = "Vulkan"
             frames_sampled = 15000
+            sample_observed_seconds = [double]$ProfileConfig.sample_seconds
+            sample_max_gap_seconds = 0.02
             cpu_frame_time_ms = [PSCustomObject]@{ avg = 2.0; p95 = 2.5; p99 = 3.0 }
             memory = [PSCustomObject]@{
                 process_private_bytes_peak_mb = 100.0
@@ -3252,6 +3501,16 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($schemaV1Record.status -eq "PASS") "Schema v1 must remain accepted for Standard."
     Assert-SelfTest ($schemaV1Record.baseline_status -eq "MISSING") "Missing Standard baseline must be reported as MISSING."
 
+    $schemaV1WithV2Fields = $schemaV1 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $schemaV1WithV2Fields | Add-Member -MemberType NoteProperty -Name "sample_observed_seconds" -Value 0.001
+    $schemaV1WithV2Fields | Add-Member -MemberType NoteProperty -Name "sample_max_gap_seconds" -Value 30.0
+    $schemaV1WithV2FieldsRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $schemaV1WithV2FieldsRecord -Telemetry $schemaV1WithV2Fields -ProfileConfig $standardProfile -Baseline $emptyBaselineForTelemetry -Profile "Standard" -Configuration "Debug" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $schemaV1WithV2FieldsRecord.status -eq "PASS" -and
+        $schemaV1WithV2FieldsRecord.sample_time_evidence -eq "cpu_frame_sum_legacy"
+    ) "Schema v1 must ignore v2-only elapsed fields and preserve the legacy sample-time contract."
+
     foreach ($invalidTelemetrySchemaVersion in @(1.1, "1")) {
         $invalidSchemaTelemetry = $schemaV1 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
         $invalidSchemaTelemetry.schema_version = $invalidTelemetrySchemaVersion
@@ -3268,24 +3527,66 @@ function Invoke-RunPerfGateSelfTest {
 
     $validV2 = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
 
+    $missingElapsedEvidenceTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $missingElapsedEvidenceTelemetry.PSObject.Properties.Remove("sample_observed_seconds")
+    $missingElapsedEvidenceRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $missingElapsedEvidenceRecord -Telemetry $missingElapsedEvidenceTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $missingElapsedEvidenceRecord.status -eq "FAIL" -and
+        (@($missingElapsedEvidenceRecord.failures) -join " ") -match "sample_observed_seconds"
+    ) "Schema v2 telemetry without elapsed sampling-span evidence must fail closed."
+
+    $missingGapEvidenceTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $missingGapEvidenceTelemetry.PSObject.Properties.Remove("sample_max_gap_seconds")
+    $missingGapEvidenceRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $missingGapEvidenceRecord -Telemetry $missingGapEvidenceTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $missingGapEvidenceRecord.status -eq "FAIL" -and
+        (@($missingGapEvidenceRecord.failures) -join " ") -match "sample_max_gap_seconds"
+    ) "Schema v2 telemetry without maximum sampling-gap evidence must fail closed."
+
+    $sparseSamplingTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $sparseSamplingTelemetry.sample_observed_seconds = [double]$vegetationProfile.sample_seconds
+    $sparseSamplingTelemetry.sample_max_gap_seconds = 20.0
+    $sparseSamplingRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $sparseSamplingRecord -Telemetry $sparseSamplingTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $sparseSamplingRecord.status -eq "FAIL" -and
+        (@($sparseSamplingRecord.failures) -join " ") -match "sampling gap"
+    ) "Two samples spanning the full window with a large middle gap must fail closed."
+
+    $lowDensityTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+    $lowDensityTelemetry.frames_sampled = 120
+    $lowDensityTelemetry.sample_observed_seconds = [double]$vegetationProfile.sample_seconds
+    $lowDensityTelemetry.sample_max_gap_seconds = 0.249
+    $lowDensityRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $lowDensityRecord -Telemetry $lowDensityTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $lowDensityRecord.status -eq "FAIL" -and
+        (@($lowDensityRecord.failures) -join " ") -match "sample rate"
+    ) "A full-span 30-second window sampled at about 4 FPS must fail the independent sample-density contract."
+
     $incompleteTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
-    $incompleteTelemetry.frames_sampled = 704
-    $incompleteTelemetry.cpu_frame_time_ms.avg = 14.5188190340909
+    $incompleteTelemetry.sample_observed_seconds = 10.2212486
     $incompleteRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     Test-TelemetryData -Record $incompleteRecord -Telemetry $incompleteTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
     Assert-SelfTest (
         $incompleteRecord.status -eq "FAIL" -and
         (@($incompleteRecord.failures) -join " ") -match "sample time coverage"
-    ) "A 30-second report with only about 10.22 seconds of observed frame time must fail closed."
+    ) "A 30-second report with only about 10.22 seconds of elapsed sampling span must fail closed."
 
     $boundaryTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
-    $boundaryTelemetry.frames_sampled = 13500
+    $boundaryTelemetry.frames_sampled = 900
+    $boundaryTelemetry.cpu_frame_time_ms.avg = 14.5188190340909
+    $boundaryTelemetry.sample_observed_seconds = 27.0
+    $boundaryTelemetry.sample_max_gap_seconds = $script:PerfGateMaximumSampleGapSeconds
     $boundaryRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
     Test-TelemetryData -Record $boundaryRecord -Telemetry $boundaryTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
     Assert-SelfTest (
         $boundaryRecord.status -eq "PASS" -and
-        [Math]::Abs([double](Get-ProfileProperty $boundaryRecord "sample_time_coverage") - 0.90) -le 0.000001
-    ) "Exactly 90% sample-time coverage must pass and be serialized."
+        [Math]::Abs([double](Get-ProfileProperty $boundaryRecord "sample_time_coverage") - 0.90) -le 0.000001 -and
+        [Math]::Abs([double](Get-ProfileProperty $boundaryRecord "sample_rate_hz") - 30.0) -le 0.000001
+    ) "Exactly 90% sample-time coverage and the 30 Hz sample-rate floor must pass and be serialized."
 
     $telemetryOffWithoutGpuMetadata = $validV2 | ConvertTo-Json -Depth 12 | ConvertFrom-Json
     $telemetryOffWithoutGpuMetadata.PSObject.Properties.Remove("gpu")
@@ -4527,8 +4828,11 @@ exit 0
         $candidateVulkan.frames_sampled = 15000
         $candidateVulkan.cpu_frame_time_avg_ms = 2.0
         $candidateVulkan.sample_seconds = 30.0
+        $candidateVulkan.sample_time_evidence = "elapsed_span"
         $candidateVulkan.observed_frame_time_ms = 30000.0
         $candidateVulkan.sample_time_coverage = 1.0
+        $candidateVulkan.sample_rate_hz = 500.0
+        $candidateVulkan.sample_max_gap_seconds = 0.02
         $candidateVulkan.gpu_coverage = 1.0
         $candidateVulkan.gpu_submitted = 100
         $candidateVulkan.gpu_resolved = 100
@@ -4550,9 +4854,26 @@ exit 0
         $candidateVulkan.failures = @()
         $candidateVulkan.warnings = @()
 
+        $candidateVulkanTelemetryName = "Sandbox-Vulkan.json"
+        $candidateVulkanTelemetryPath = Join-Path $candidateRoot $candidateVulkanTelemetryName
+        $candidateVulkanTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+        $candidateVulkanTelemetry | Add-Member -MemberType NoteProperty -Name "target" -Value "Sandbox"
+        $candidateVulkanTelemetry | Add-Member -MemberType NoteProperty -Name "profile" -Value "VegetationFullPipeline"
+        $candidateVulkanTelemetry | Add-Member -MemberType NoteProperty -Name "sample_seconds" -Value 30.0
+        Write-PerfGateJsonFile -InputObject $candidateVulkanTelemetry -LiteralPath $candidateVulkanTelemetryPath -Depth 16
+        $candidateVulkan.telemetry_artifact = $candidateVulkanTelemetryName
+        $candidateVulkan.telemetry_sha256 = Get-PerfGateFileSha256 -Path $candidateVulkanTelemetryPath
+
         $candidateDx12 = $candidateVulkan | ConvertTo-Json -Depth 16 | ConvertFrom-Json
         $candidateDx12.backend = "DX12"
         $candidateDx12.gpu_driver = "SelfTest DX12 Driver"
+        $candidateDx12TelemetryName = "Sandbox-DX12.json"
+        $candidateDx12TelemetryPath = Join-Path $candidateRoot $candidateDx12TelemetryName
+        $candidateDx12Telemetry = $candidateVulkanTelemetry | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $candidateDx12Telemetry.backend_actual = "DX12"
+        Write-PerfGateJsonFile -InputObject $candidateDx12Telemetry -LiteralPath $candidateDx12TelemetryPath -Depth 16
+        $candidateDx12.telemetry_artifact = $candidateDx12TelemetryName
+        $candidateDx12.telemetry_sha256 = Get-PerfGateFileSha256 -Path $candidateDx12TelemetryPath
         $candidateSummary = [PSCustomObject][ordered]@{
             schema_version = 2
             profile = "VegetationFullPipeline"
@@ -4601,12 +4922,113 @@ exit 0
         } "source SHA.*current" "Protected report import must reject candidate evidence from a different tool commit."
         Assert-SelfTest (@($sourceMismatchBaseline.baselines.PSObject.Properties).Count -eq 0) "Report source rejection must not mutate the baseline object."
 
+        foreach ($unsafeRawCase in @(
+            [PSCustomObject]@{
+                name = "string-schema"
+                expected = "telemetry schema_version"
+                mutate = { param($value) $value.schema_version = "2" }
+            },
+            [PSCustomObject]@{
+                name = "floating-frames"
+                expected = "telemetry frames_sampled"
+                mutate = { param($value) $value.frames_sampled = 15000.5 }
+            }
+        )) {
+            $unsafeRawTelemetry = $candidateVulkanTelemetry | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+            & $unsafeRawCase.mutate $unsafeRawTelemetry
+            $unsafeRawName = "Sandbox-Vulkan-$($unsafeRawCase.name).json"
+            $unsafeRawPath = Join-Path $candidateRoot $unsafeRawName
+            Write-PerfGateJsonFile -InputObject $unsafeRawTelemetry -LiteralPath $unsafeRawPath -Depth 16
+            $unsafeRawSummary = $candidateSummary | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+            $unsafeRawSummary.runs[0].telemetry_artifact = $unsafeRawName
+            $unsafeRawSummary.runs[0].telemetry_sha256 = Get-PerfGateFileSha256 -Path $unsafeRawPath
+            $unsafeRawSummaryPath = Join-Path $candidateRoot ("summary-raw-{0}.json" -f $unsafeRawCase.name)
+            Write-PerfGateJsonFile -InputObject $unsafeRawSummary -LiteralPath $unsafeRawSummaryPath -Depth 16
+            $unsafeRawSummarySha = Get-PerfGateFileSha256 -Path $unsafeRawSummaryPath
+            $unsafeRawBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+            Assert-SelfTestThrows {
+                Import-PerfGateBaselineFromReport -Baseline $unsafeRawBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $unsafeRawSummaryPath -ExpectedReportSha256 $unsafeRawSummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
+            } $unsafeRawCase.expected "Protected report import must reject non-integer raw '$($unsafeRawCase.name)' identity evidence."
+            Assert-SelfTest (@($unsafeRawBaseline.baselines.PSObject.Properties).Count -eq 0) "Invalid raw '$($unsafeRawCase.name)' evidence must not mutate the baseline object."
+        }
+
+        $inconsistentTimelineTelemetry = $candidateVulkanTelemetry | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $inconsistentTimelineTelemetry.frames_sampled = 900
+        $inconsistentTimelineTelemetry.sample_observed_seconds = 27.0
+        $inconsistentTimelineTelemetry.sample_max_gap_seconds = 0.02
+        $inconsistentTimelineName = "Sandbox-Vulkan-inconsistent-timeline.json"
+        $inconsistentTimelinePath = Join-Path $candidateRoot $inconsistentTimelineName
+        Write-PerfGateJsonFile -InputObject $inconsistentTimelineTelemetry -LiteralPath $inconsistentTimelinePath -Depth 16
+        $inconsistentTimelineSummary = $candidateSummary | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $inconsistentTimelineSummary.runs[0].frames_sampled = 900
+        $inconsistentTimelineSummary.runs[0].observed_frame_time_ms = 27000.0
+        $inconsistentTimelineSummary.runs[0].sample_time_coverage = 0.90
+        $inconsistentTimelineSummary.runs[0].sample_rate_hz = 30.0
+        $inconsistentTimelineSummary.runs[0].sample_max_gap_seconds = 0.02
+        $inconsistentTimelineSummary.runs[0].telemetry_artifact = $inconsistentTimelineName
+        $inconsistentTimelineSummary.runs[0].telemetry_sha256 = Get-PerfGateFileSha256 -Path $inconsistentTimelinePath
+        $inconsistentTimelineSummaryPath = Join-Path $candidateRoot "summary-inconsistent-timeline.json"
+        Write-PerfGateJsonFile -InputObject $inconsistentTimelineSummary -LiteralPath $inconsistentTimelineSummaryPath -Depth 16
+        $inconsistentTimelineSummarySha = Get-PerfGateFileSha256 -Path $inconsistentTimelineSummaryPath
+        $inconsistentTimelineBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $inconsistentTimelineBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $inconsistentTimelineSummaryPath -ExpectedReportSha256 $inconsistentTimelineSummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
+        } "sample timeline" "Protected report import must reject mathematically inconsistent frames/span/max-gap evidence even when raw and summary hashes agree."
+        Assert-SelfTest (@($inconsistentTimelineBaseline.baselines.PSObject.Properties).Count -eq 0) "Inconsistent sample timeline evidence must not mutate the baseline object."
+
+        $replacedTelemetryName = "Sandbox-Vulkan-replaced.json"
+        $replacedTelemetryPath = Join-Path $candidateRoot $replacedTelemetryName
+        Copy-Item -LiteralPath $candidateVulkanTelemetryPath -Destination $replacedTelemetryPath
+        $replacedTelemetrySummary = $candidateSummary | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $replacedTelemetrySummary.runs[0].telemetry_artifact = $replacedTelemetryName
+        $replacedTelemetrySummary.runs[0].telemetry_sha256 = Get-PerfGateFileSha256 -Path $replacedTelemetryPath
+        $replacementTelemetry = $candidateVulkanTelemetry | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $replacementTelemetry.sample_observed_seconds = 27.0
+        Write-PerfGateJsonFile -InputObject $replacementTelemetry -LiteralPath $replacedTelemetryPath -Depth 16
+        $replacedTelemetrySummaryPath = Join-Path $candidateRoot "summary-replaced-telemetry.json"
+        Write-PerfGateJsonFile -InputObject $replacedTelemetrySummary -LiteralPath $replacedTelemetrySummaryPath -Depth 16
+        $replacedTelemetrySummarySha = Get-PerfGateFileSha256 -Path $replacedTelemetrySummaryPath
+        $replacedTelemetryBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $replacedTelemetryBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $replacedTelemetrySummaryPath -ExpectedReportSha256 $replacedTelemetrySummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
+        } "telemetry SHA-256 mismatch" "Protected report import must reject a telemetry artifact replaced after its approved digest was captured."
+        Assert-SelfTest (@($replacedTelemetryBaseline.baselines.PSObject.Properties).Count -eq 0) "Replaced telemetry evidence must not mutate the baseline object."
+
         $outsideSummaryPath = Join-Path $reportImportRoot "outside-summary.json"
         Copy-Item -LiteralPath $candidateSummaryPath -Destination $outsideSummaryPath
         $outsideSummarySha = Get-PerfGateFileSha256 -Path $outsideSummaryPath
         Assert-SelfTestThrows {
             Import-PerfGateBaselineFromReport -Baseline $importBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $outsideSummaryPath -ExpectedReportSha256 $outsideSummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
         } "inside.*Intermediate.*perf-gate" "Protected report import must reject evidence outside the repository report root."
+
+        $outsideTelemetryRoot = Join-Path $reportImportRoot "outside-telemetry"
+        New-Item -ItemType Directory -Force -Path $outsideTelemetryRoot | Out-Null
+        Copy-Item -LiteralPath $candidateVulkanTelemetryPath -Destination (Join-Path $outsideTelemetryRoot $candidateVulkanTelemetryName)
+        $telemetryJunctionPath = Join-Path $candidateRoot "telemetry-junction"
+        New-Item -ItemType Junction -Path $telemetryJunctionPath -Target $outsideTelemetryRoot | Out-Null
+        $junctionTelemetrySummary = $candidateSummary | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        $junctionTelemetrySummary.runs[0].telemetry_artifact = "telemetry-junction/$candidateVulkanTelemetryName"
+        $junctionTelemetrySummary.runs[0].telemetry_sha256 = Get-PerfGateFileSha256 -Path (Join-Path $telemetryJunctionPath $candidateVulkanTelemetryName)
+        $junctionTelemetrySummaryPath = Join-Path $candidateRoot "summary-telemetry-junction.json"
+        Write-PerfGateJsonFile -InputObject $junctionTelemetrySummary -LiteralPath $junctionTelemetrySummaryPath -Depth 16
+        $junctionTelemetrySummarySha = Get-PerfGateFileSha256 -Path $junctionTelemetrySummaryPath
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $importBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $junctionTelemetrySummaryPath -ExpectedReportSha256 $junctionTelemetrySummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
+        } "reparse" "Protected report import must reject telemetry artifacts that escape through a junction."
+
+        $outsideReportRoot = Join-Path $reportImportRoot "outside-report"
+        New-Item -ItemType Directory -Force -Path $outsideReportRoot | Out-Null
+        Copy-Item -LiteralPath $candidateSummaryPath -Destination (Join-Path $outsideReportRoot "summary.json")
+        Copy-Item -LiteralPath $candidateVulkanTelemetryPath -Destination (Join-Path $outsideReportRoot $candidateVulkanTelemetryName)
+        Copy-Item -LiteralPath $candidateDx12TelemetryPath -Destination (Join-Path $outsideReportRoot $candidateDx12TelemetryName)
+        $approvedReportRoot = Join-Path $reportImportRoot "Intermediate/test-reports/perf-gate"
+        $reportJunctionPath = Join-Path $approvedReportRoot "report-junction"
+        New-Item -ItemType Junction -Path $reportJunctionPath -Target $outsideReportRoot | Out-Null
+        $junctionSummaryPath = Join-Path $reportJunctionPath "summary.json"
+        $junctionSummarySha = Get-PerfGateFileSha256 -Path $junctionSummaryPath
+        Assert-SelfTestThrows {
+            Import-PerfGateBaselineFromReport -Baseline $importBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $junctionSummaryPath -ExpectedReportSha256 $junctionSummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
+        } "reparse" "Protected report import must reject summary paths that escape through a report-root junction."
 
         $unsafeSummaryCases = @(
             [PSCustomObject]@{
@@ -4654,12 +5076,44 @@ exit 0
                 expected = "sample time coverage"
                 mutate = {
                     param($value)
-                    $value.runs[0].frames_sampled = 704
-                    $value.runs[0].cpu_frame_time_avg_ms = 14.5188190340909
                     $value.runs[0].sample_seconds = 30.0
-                    $value.runs[0].observed_frame_time_ms = 30000.0
+                    $value.runs[0].observed_frame_time_ms = 10221.2486
                     $value.runs[0].sample_time_coverage = 1.0
                 }
+            },
+            [PSCustomObject]@{
+                name = "summary-span-consistently-forged"
+                expected = "telemetry.*sample"
+                mutate = {
+                    param($value)
+                    $value.runs[0].observed_frame_time_ms = 27000.0
+                    $value.runs[0].sample_time_coverage = 0.90
+                }
+            },
+            [PSCustomObject]@{
+                name = "missing-telemetry-artifact"
+                expected = "telemetry artifact"
+                mutate = { param($value) $value.runs[0].PSObject.Properties.Remove("telemetry_artifact") }
+            },
+            [PSCustomObject]@{
+                name = "missing-telemetry-sha"
+                expected = "telemetry SHA-256"
+                mutate = { param($value) $value.runs[0].PSObject.Properties.Remove("telemetry_sha256") }
+            },
+            [PSCustomObject]@{
+                name = "telemetry-path-traversal"
+                expected = "inside the report directory"
+                mutate = { param($value) $value.runs[0].telemetry_artifact = "../outside.json" }
+            },
+            [PSCustomObject]@{
+                name = "telemetry-hash-mismatch"
+                expected = "telemetry SHA-256 mismatch"
+                mutate = { param($value) $value.runs[0].telemetry_sha256 = ("0" * 64) }
+            },
+            [PSCustomObject]@{
+                name = "missing-sample-time-evidence"
+                expected = "elapsed sampling span contract"
+                mutate = { param($value) $value.runs[0].PSObject.Properties.Remove("sample_time_evidence") }
             },
             [PSCustomObject]@{
                 name = "missing-sample-seconds"

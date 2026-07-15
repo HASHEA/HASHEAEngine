@@ -390,6 +390,37 @@ TEST_CASE("PerfGate GPU schema v2 preserves CPU fields and reports all timing me
 	cleanup_report_path(report_path);
 }
 
+TEST_CASE("PerfGate schema v2 reports elapsed sampling span and the largest sampling gap")
+{
+	const std::filesystem::path report_path = make_report_path("elapsed-sampling-span");
+	cleanup_report_path(report_path);
+	const AshEngine::PerfGateConfig config = make_controller_config(report_path);
+	AshEngine::PerfGateController controller{};
+	controller.configure(config, "Editor", RHI::Backend::Vulkan);
+	controller.begin();
+
+	AshEngine::RendererFrameStats warmup_frame = make_frame(450u, false);
+	warmup_frame.cpu_frame_time_ms = 100.0;
+	controller.sample_after_frame_at(warmup_frame, 0.9);
+
+	AshEngine::RendererFrameStats first_sampling_frame = make_frame(451u, false);
+	first_sampling_frame.cpu_frame_time_ms = 1.0;
+	controller.sample_after_frame_at(first_sampling_frame, 1.1);
+
+	AshEngine::RendererFrameStats last_sampling_frame = make_frame(452u, false);
+	last_sampling_frame.cpu_frame_time_ms = 1.0;
+	controller.sample_after_frame_at(last_sampling_frame, 2.9);
+	controller.sample_after_frame_at(make_frame(453u, false), 3.1);
+
+	REQUIRE(controller.write_report(false));
+	const json report = read_report(report_path);
+	CHECK(report.at("sample_observed_seconds") == doctest::Approx(1.8));
+	CHECK(report.at("sample_max_gap_seconds") == doctest::Approx(1.8));
+	CHECK(report.at("cpu_frame_time_ms").at("avg") == doctest::Approx(1.0));
+
+	cleanup_report_path(report_path);
+}
+
 TEST_CASE("PerfGate GPU schema omits unavailable duration summaries")
 {
 	const std::filesystem::path report_path = make_report_path("missing-duration");

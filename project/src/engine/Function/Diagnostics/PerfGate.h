@@ -177,6 +177,10 @@ namespace AshEngine
 		bool m_runtime_fixed_camera = false;
 		uint64_t m_frames_total = 0;
 		uint64_t m_frames_sampled = 0;
+		bool m_sampling_span_started = false;
+		double m_first_sampling_elapsed_seconds = 0.0;
+		double m_last_sampling_elapsed_seconds = 0.0;
+		double m_max_sampling_gap_seconds = 0.0;
 		std::vector<double> m_frame_time_samples_ms{};
 		std::vector<double> m_backend_begin_frame_samples_ms{};
 		std::vector<double> m_render_end_frame_samples_ms{};

@@ -459,6 +459,10 @@ namespace AshEngine
 		}
 		m_started = true;
 		m_start_time = std::chrono::steady_clock::now();
+		m_sampling_span_started = false;
+		m_first_sampling_elapsed_seconds = 0.0;
+		m_last_sampling_elapsed_seconds = 0.0;
+		m_max_sampling_gap_seconds = 0.0;
 		PerfGateGpuCollectorConfig gpu_config{};
 		gpu_config.telemetry_enabled = m_gpu_timing_info.has_value();
 		gpu_config.warmup_seconds = m_config.warmup_seconds;
@@ -532,6 +536,18 @@ namespace AshEngine
 		}
 
 		++m_frames_sampled;
+		if (!m_sampling_span_started)
+		{
+			m_sampling_span_started = true;
+			m_first_sampling_elapsed_seconds = elapsed;
+		}
+		else
+		{
+			m_max_sampling_gap_seconds = std::max(
+				m_max_sampling_gap_seconds,
+				std::max(0.0, elapsed - m_last_sampling_elapsed_seconds));
+		}
+		m_last_sampling_elapsed_seconds = elapsed;
 		m_frame_time_samples_ms.push_back(frame_stats.cpu_frame_time_ms);
 		m_backend_begin_frame_samples_ms.push_back(frame_stats.backend_begin_frame_time_ms);
 		m_render_end_frame_samples_ms.push_back(frame_stats.render_end_frame_time_ms);
@@ -589,6 +605,10 @@ namespace AshEngine
 		report["profile"] = m_config.profile;
 		report["warmup_seconds"] = m_config.warmup_seconds;
 		report["sample_seconds"] = m_config.sample_seconds;
+		report["sample_observed_seconds"] = m_sampling_span_started
+			? std::max(0.0, m_last_sampling_elapsed_seconds - m_first_sampling_elapsed_seconds)
+			: 0.0;
+		report["sample_max_gap_seconds"] = m_max_sampling_gap_seconds;
 		report["frames_total"] = m_frames_total;
 		report["frames_sampled"] = m_frames_sampled;
 
