@@ -170,6 +170,68 @@ TEST_CASE("Terrain Mode exposes approved manage sculpt paint and stable layer ac
 	CHECK(terrainUi.find("DrawUnavailableFileOperation") == std::string::npos);
 }
 
+TEST_CASE("Terrain layer list uses stable independent columns")
+{
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	const size_t layerListBegin = widgets.find("void DrawLayerList(");
+	const size_t layerListEnd = widgets.find("void DrawSelectedLayerActions(", layerListBegin);
+	REQUIRE(layerListBegin != std::string::npos);
+	REQUIRE(layerListEnd != std::string::npos);
+	const std::string layerList = widgets.substr(layerListBegin, layerListEnd - layerListBegin);
+
+	CHECK(std::regex_search(
+		layerList,
+		std::regex(R"(begin_table\s*\(\s*"TerrainLayerList"\s*,\s*3\s*,)")));
+	const size_t layerSetup = layerList.find(
+		"table_setup_column(\"Layer\", AshEngine::UITableColumnFlagBits::WidthStretch");
+	const size_t visibleSetup = layerList.find(
+		"table_setup_column(\"Visible\", AshEngine::UITableColumnFlagBits::WidthFixed");
+	const size_t lockedSetup = layerList.find(
+		"table_setup_column(\"Locked\", AshEngine::UITableColumnFlagBits::WidthFixed");
+	const size_t headers = layerList.find("table_headers_row()", lockedSetup);
+	REQUIRE(layerSetup != std::string::npos);
+	REQUIRE(visibleSetup != std::string::npos);
+	REQUIRE(lockedSetup != std::string::npos);
+	REQUIRE(headers != std::string::npos);
+	CHECK(layerSetup < visibleSetup);
+	CHECK(visibleSetup < lockedSetup);
+	CHECK(lockedSetup < headers);
+
+	const size_t row = layerList.find("refUi.table_next_row()", headers);
+	const size_t layerColumn = layerList.find("refUi.table_next_column()", row);
+	const size_t stableId = layerList.find("TerrainLayerIdToString(refLayer.id)", layerColumn);
+	const size_t pushedId = layerList.find("refUi.push_id(strStableId.c_str())", stableId);
+	const size_t selectable = layerList.find("refUi.selectable(", pushedId);
+	const size_t visibleColumn = layerList.find("refUi.table_next_column()", selectable);
+	const size_t visibleCheckbox = layerList.find("refUi.checkbox(\"##Visible\"", visibleColumn);
+	const size_t lockedColumn = layerList.find("refUi.table_next_column()", visibleCheckbox);
+	const size_t lockedCheckbox = layerList.find("refUi.checkbox(\"##Locked\"", lockedColumn);
+	const size_t poppedId = layerList.find("refUi.pop_id()", lockedCheckbox);
+	const size_t tableEnd = layerList.find("refUi.end_table()", poppedId);
+	REQUIRE(row != std::string::npos);
+	REQUIRE(layerColumn != std::string::npos);
+	REQUIRE(stableId != std::string::npos);
+	REQUIRE(pushedId != std::string::npos);
+	REQUIRE(selectable != std::string::npos);
+	REQUIRE(visibleColumn != std::string::npos);
+	REQUIRE(visibleCheckbox != std::string::npos);
+	REQUIRE(lockedColumn != std::string::npos);
+	REQUIRE(lockedCheckbox != std::string::npos);
+	REQUIRE(poppedId != std::string::npos);
+	REQUIRE(tableEnd != std::string::npos);
+	CHECK(row < layerColumn);
+	CHECK(layerColumn < selectable);
+	CHECK(selectable < visibleColumn);
+	CHECK(visibleColumn < visibleCheckbox);
+	CHECK(visibleCheckbox < lockedColumn);
+	CHECK(lockedColumn < lockedCheckbox);
+	CHECK(lockedCheckbox < poppedId);
+	CHECK(poppedId < tableEnd);
+	CHECK(layerList.find("same_line") == std::string::npos);
+	CHECK(layerList.find("SpanAllColumns") == std::string::npos);
+}
+
 TEST_CASE("Terrain Mode submits approved create import and export file jobs")
 {
 	const std::string widgets = ReadTerrainContractText(

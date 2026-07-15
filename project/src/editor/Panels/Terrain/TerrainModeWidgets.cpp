@@ -630,8 +630,24 @@ namespace AshEditor
 				return;
 			}
 
+			if (!refUi.begin_table(
+					"TerrainLayerList",
+					3,
+					AshEngine::UITableFlagBits::RowBg |
+						AshEngine::UITableFlagBits::BordersInner |
+						AshEngine::UITableFlagBits::SizingStretchProp))
+			{
+				return;
+			}
+
+			refUi.table_setup_column("Layer", AshEngine::UITableColumnFlagBits::WidthStretch);
+			refUi.table_setup_column("Visible", AshEngine::UITableColumnFlagBits::WidthFixed, 72.0f);
+			refUi.table_setup_column("Locked", AshEngine::UITableColumnFlagBits::WidthFixed, 72.0f);
+			refUi.table_headers_row();
 			for (const AshEngine::TerrainEditLayer& refLayer : refView.p_working_set->edit_layers)
 			{
+				refUi.table_next_row();
+				refUi.table_next_column();
 				const std::string strStableId = TerrainLayerIdToString(refLayer.id);
 				refUi.push_id(strStableId.c_str());
 				const bool selected = refLayer.id == refView.authoring_config.brush.layer_id;
@@ -642,22 +658,23 @@ namespace AshEditor
 					select.layer_id = refLayer.id;
 					refResult.intents.push_back(std::move(select));
 				}
-				refUi.same_line();
+				refUi.table_next_column();
 				bool visible = refLayer.visible;
-				if (refUi.checkbox("Visible", visible))
+				if (refUi.checkbox("##Visible", visible))
 				{
 					AppendLayerAction(
 						refResult, TerrainLayerActionKind::SetVisible, refLayer.id, {}, 0u, 1.0f, visible);
 				}
-				refUi.same_line();
+				refUi.table_next_column();
 				bool locked = refLayer.locked;
-				if (refUi.checkbox("Locked", locked))
+				if (refUi.checkbox("##Locked", locked))
 				{
 					AppendLayerAction(
 						refResult, TerrainLayerActionKind::SetLocked, refLayer.id, {}, 0u, 1.0f, locked);
 				}
 				refUi.pop_id();
 			}
+			refUi.end_table();
 		}
 
 		void DrawSelectedLayerActions(
