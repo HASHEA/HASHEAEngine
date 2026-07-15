@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,9 @@ namespace AshEngine
 	{
 		static constexpr uint32_t k_material_array_extent = 1024u;
 		static constexpr uint8_t k_material_array_mip_count = 11u;
+		static constexpr uint64_t k_height_upload_byte_budget = 4ull * 1024ull * 1024ull;
+		static constexpr auto k_height_upload_wall_clock_budget =
+			std::chrono::milliseconds(2);
 
 		auto fail_with_error(std::string* out_error, const char* message) -> bool
 		{
@@ -41,6 +45,35 @@ namespace AshEngine
 		auto component_linear_index(TerrainComponentCoord coord) -> uint32_t
 		{
 			return static_cast<uint32_t>(coord.z) * k_terrain_component_count + coord.x;
+		}
+
+		auto validate_component_shape(
+			const TerrainComponentSnapshot& component,
+			std::string* out_error) -> bool
+		{
+			if (component.sample_width != k_terrain_component_sample_count ||
+				component.sample_height != k_terrain_component_sample_count)
+			{
+				return fail_with_error(
+					out_error, "terrain component dimensions must be 257 x 257.");
+			}
+
+			constexpr size_t sample_count =
+				static_cast<size_t>(k_terrain_component_sample_count) *
+				k_terrain_component_sample_count;
+			if (component.heights.size() != sample_count)
+			{
+				return fail_with_error(
+					out_error,
+					"terrain component height count must match the sample count.");
+			}
+			if (!component.weights.empty() && component.weights.size() != sample_count)
+			{
+				return fail_with_error(
+					out_error,
+					"terrain component weight count must be zero or match the sample count.");
+			}
+			return true;
 		}
 
 		auto create_fallback_material_array(
@@ -188,37 +221,19 @@ namespace AshEngine
 		return m_completed_upload_count;
 	}
 
-	bool build_terrain_component_gpu_data(
+	bool build_terrain_component_height_words(
 		const TerrainComponentSnapshot& component,
 		const TerrainHeightMapping& height_mapping,
 		std::vector<uint32_t>& out_packed_height_words,
-		std::array<std::vector<uint8_t>, 2>& out_weight_rgba8,
 		std::string* out_error)
 	{
 		if (out_error)
 		{
 			out_error->clear();
 		}
-		if (component.sample_width != k_terrain_component_sample_count ||
-			component.sample_height != k_terrain_component_sample_count)
+		if (!validate_component_shape(component, out_error))
 		{
-			return fail_with_error(
-				out_error, "terrain component dimensions must be 257 x 257.");
-		}
-
-		constexpr size_t sample_count =
-			static_cast<size_t>(k_terrain_component_sample_count) *
-			k_terrain_component_sample_count;
-		if (component.heights.size() != sample_count)
-		{
-			return fail_with_error(
-				out_error, "terrain component height count must match the sample count.");
-		}
-		if (!component.weights.empty() && component.weights.size() != sample_count)
-		{
-			return fail_with_error(
-				out_error,
-				"terrain component weight count must be zero or match the sample count.");
+			return false;
 		}
 		if (!std::isfinite(height_mapping.height_offset) ||
 			!std::isfinite(height_mapping.height_range) ||
@@ -226,6 +241,9 @@ namespace AshEngine
 		{
 			return fail_with_error(out_error, "terrain height mapping is invalid.");
 		}
+		constexpr size_t sample_count =
+			static_cast<size_t>(k_terrain_component_sample_count) *
+			k_terrain_component_sample_count;
 
 		std::vector<uint32_t> packed_height_words(
 			(sample_count + 1u) / 2u, 0u);
@@ -243,32 +261,53 @@ namespace AshEngine
 			packed_height_words[sample / 2u] |= encoded << shift;
 		}
 
+		out_packed_height_words = std::move(packed_height_words);
+		return true;
+	}
+
+	bool build_terrain_component_weight_rgba8(
+		const TerrainComponentSnapshot& component,
+		std::array<std::vector<uint8_t>, 2>& out_weight_rgba8,
+		std::string* out_error)
+	{
+		if (out_error)
+		{
+			out_error->clear();
+		}
+		out_weight_rgba8 = {};
+		if (!validate_component_shape(component, out_error))
+		{
+			return false;
+		}
+		if (component.weights.empty())
+		{
+			return true;
+		}
+
+		constexpr size_t sample_count =
+			static_cast<size_t>(k_terrain_component_sample_count) *
+			k_terrain_component_sample_count;
+		for (const auto& weights : component.weights)
+		{
+			uint32_t sum = 0u;
+			for (uint8_t weight : weights)
+			{
+				sum += weight;
+			}
+			if (sum != 255u)
+			{
+				return fail_with_error(
+					out_error,
+					"terrain component weights must sum to 255 for every sample.");
+			}
+		}
+
 		std::array<std::vector<uint8_t>, 2> weight_rgba8{};
 		weight_rgba8[0].resize(sample_count * 4u, 0u);
 		weight_rgba8[1].resize(sample_count * 4u, 0u);
 		for (size_t sample = 0u; sample < sample_count; ++sample)
 		{
-			std::array<uint8_t, k_terrain_material_layer_count> weights{};
-			if (component.weights.empty())
-			{
-				weights[0] = 255u;
-			}
-			else
-			{
-				weights = component.weights[sample];
-				uint32_t sum = 0u;
-				for (uint8_t weight : weights)
-				{
-					sum += weight;
-				}
-				if (sum != 255u)
-				{
-					return fail_with_error(
-						out_error,
-						"terrain component weights must sum to 255 for every sample.");
-				}
-			}
-
+			const auto& weights = component.weights[sample];
 			const size_t output_offset = sample * 4u;
 			for (size_t channel = 0u; channel < 4u; ++channel)
 			{
@@ -277,9 +316,52 @@ namespace AshEngine
 			}
 		}
 
-		out_packed_height_words = std::move(packed_height_words);
 		out_weight_rgba8 = std::move(weight_rgba8);
 		return true;
+	}
+
+	bool build_terrain_component_gpu_data(
+		const TerrainComponentSnapshot& component,
+		const TerrainHeightMapping& height_mapping,
+		std::vector<uint32_t>& out_packed_height_words,
+		std::array<std::vector<uint8_t>, 2>& out_weight_rgba8,
+		std::string* out_error)
+	{
+		if (!build_terrain_component_height_words(
+			component, height_mapping, out_packed_height_words, out_error) ||
+			!build_terrain_component_weight_rgba8(
+				component, out_weight_rgba8, out_error))
+		{
+			return false;
+		}
+		if (out_weight_rgba8[0].empty())
+		{
+			constexpr size_t sample_count =
+				static_cast<size_t>(k_terrain_component_sample_count) *
+				k_terrain_component_sample_count;
+			out_weight_rgba8[0].resize(sample_count * 4u, 0u);
+			out_weight_rgba8[1].resize(sample_count * 4u, 0u);
+			for (size_t sample = 0u; sample < sample_count; ++sample)
+			{
+				out_weight_rgba8[0][sample * 4u] = 255u;
+			}
+		}
+		return true;
+	}
+
+	bool terrain_upload_budget_allows_next(
+		uint64_t completed_bytes,
+		uint64_t next_upload_bytes,
+		uint64_t byte_budget,
+		std::chrono::steady_clock::duration elapsed,
+		std::chrono::steady_clock::duration wall_clock_budget)
+	{
+		return next_upload_bytes != 0u &&
+			completed_bytes <= byte_budget &&
+			next_upload_bytes <= byte_budget - completed_bytes &&
+			wall_clock_budget > std::chrono::steady_clock::duration::zero() &&
+			elapsed >= std::chrono::steady_clock::duration::zero() &&
+			elapsed < wall_clock_budget;
 	}
 
 	TerrainRenderAsset::TerrainRenderAsset() = default;
@@ -322,6 +404,8 @@ namespace AshEngine
 				m_state.mark_failed(snapshot->content_generation);
 				m_accepted_snapshot = snapshot;
 				m_pending_component_uploads.clear();
+				m_pending_weight_updates.clear();
+				m_pending_implicit_weight_resets.clear();
 				m_pending_component_removals.clear();
 				m_last_error = std::move(error);
 				return fail_with_error(out_error, m_last_error.c_str());
@@ -337,6 +421,12 @@ namespace AshEngine
 			return reject_snapshot(
 				"terrain snapshot layout is not the fixed Phase 2 render layout.");
 		}
+		if (!std::isfinite(snapshot->height_mapping.height_offset) ||
+			!std::isfinite(snapshot->height_mapping.height_range) ||
+			snapshot->height_mapping.height_range <= 0.0f)
+		{
+			return reject_snapshot("terrain height mapping is invalid.");
+		}
 
 		const size_t expected_component_count =
 			static_cast<size_t>(snapshot->layout.component_count_x) *
@@ -349,7 +439,10 @@ namespace AshEngine
 
 		const bool rebuild_after_failure =
 			m_state.readiness() == TerrainRenderReadiness::Failed;
+		const bool rebuild_unpublished_generation =
+			m_state.readiness() != TerrainRenderReadiness::Ready;
 		std::vector<TerrainGpuComponentUpload> uploads{};
+		std::vector<TerrainComponentCoord> implicit_weight_resets{};
 		std::vector<TerrainComponentCoord> removals{};
 		for (size_t index = 0u; index < snapshot->components.size(); ++index)
 		{
@@ -362,14 +455,18 @@ namespace AshEngine
 			const std::shared_ptr<const TerrainComponentSnapshot> previous_component =
 				m_accepted_snapshot && index < m_accepted_snapshot->components.size() ?
 					m_accepted_snapshot->components[index] : nullptr;
-			if (!rebuild_after_failure && previous_component == component &&
+			if (!rebuild_unpublished_generation && previous_component == component &&
 				(m_accepted_snapshot || component))
 			{
 				continue;
 			}
 			if (!component)
 			{
-				if (rebuild_after_failure || previous_component)
+				const bool removal_was_pending = std::find(
+					m_pending_component_removals.begin(),
+					m_pending_component_removals.end(),
+					expected_coord) != m_pending_component_removals.end();
+				if (rebuild_after_failure || previous_component || removal_was_pending)
 				{
 					removals.push_back(expected_coord);
 				}
@@ -381,18 +478,30 @@ namespace AshEngine
 				return reject_snapshot(
 					"terrain component coordinate does not match its row-major slot.");
 			}
+			std::string shape_error{};
+			if (!validate_component_shape(*component, &shape_error))
+			{
+				return reject_snapshot(std::move(shape_error));
+			}
 			TerrainGpuComponentUpload upload{};
 			upload.coord = component->coord;
 			upload.content_generation = snapshot->content_generation;
-			std::string pack_error{};
-			if (!build_terrain_component_gpu_data(
-				*component,
-				snapshot->height_mapping,
-				upload.packed_height_words,
-				upload.weight_rgba8,
-				&pack_error))
+			upload.component = component;
+			if (component->weights.empty())
 			{
-				return reject_snapshot(std::move(pack_error));
+				const bool had_explicit_weights =
+					previous_component && !previous_component->weights.empty();
+				const bool has_resident_slot = std::any_of(
+					m_frame_boundary_atlas_slots.begin(),
+					m_frame_boundary_atlas_slots.end(),
+					[expected_coord](const TerrainAtlasSlotMetadata& slot)
+					{
+						return slot.occupied && slot.coord == expected_coord;
+					});
+				if (rebuild_after_failure || had_explicit_weights || has_resident_slot)
+				{
+					implicit_weight_resets.push_back(expected_coord);
+				}
 			}
 			uploads.push_back(std::move(upload));
 		}
@@ -402,6 +511,16 @@ namespace AshEngine
 			static_cast<uint32_t>(uploads.size() + removals.size()));
 		m_accepted_snapshot = snapshot;
 		m_pending_component_uploads = std::move(uploads);
+		m_pending_weight_updates.clear();
+		m_pending_weight_updates.reserve(m_pending_component_uploads.size());
+		for (const TerrainGpuComponentUpload& upload : m_pending_component_uploads)
+		{
+			if (upload.component && !upload.component->weights.empty())
+			{
+				m_pending_weight_updates.push_back(upload);
+			}
+		}
+		m_pending_implicit_weight_resets = std::move(implicit_weight_resets);
 		m_pending_component_removals = std::move(removals);
 		m_last_error.clear();
 		return true;
@@ -429,6 +548,24 @@ namespace AshEngine
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
 		return static_cast<uint32_t>(m_pending_component_uploads.size());
+	}
+
+	uint64_t TerrainRenderAsset::pending_cpu_payload_bytes() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return 0u;
+	}
+
+	uint64_t TerrainRenderAsset::pending_weight_payload_bytes() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return 0u;
+	}
+
+	uint32_t TerrainRenderAsset::pending_weight_update_count() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return static_cast<uint32_t>(m_pending_weight_updates.size());
 	}
 
 	bool TerrainRenderAsset::has_pending_component_upload(TerrainComponentCoord coord) const
@@ -658,22 +795,6 @@ namespace AshEngine
 		constexpr uint32_t component_height_bytes =
 			k_terrain_render_height_words_per_component * sizeof(uint32_t);
 		const uint64_t content_generation = m_state.active_content_generation();
-		for (const TerrainGpuComponentUpload& upload : m_pending_component_uploads)
-		{
-			const uint32_t offset =
-				component_linear_index(upload.coord) * component_height_bytes;
-			if (upload.packed_height_words.size() !=
-				k_terrain_render_height_words_per_component ||
-				!m_packed_height_buffer->update(
-					offset,
-					component_height_bytes,
-					upload.packed_height_words.data()) ||
-				!m_state.mark_component_uploaded(content_generation, upload.coord))
-			{
-				fail_active_generation("failed to upload Terrain component height data.");
-				return fail_with_error(out_error, m_last_error.c_str());
-			}
-		}
 		for (TerrainComponentCoord coord : m_pending_component_removals)
 		{
 			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
@@ -689,6 +810,78 @@ namespace AshEngine
 				return fail_with_error(out_error, m_last_error.c_str());
 			}
 		}
+		m_pending_component_removals.clear();
+
+		const auto upload_start = std::chrono::steady_clock::now();
+		uint64_t completed_bytes = 0u;
+		size_t completed_uploads = 0u;
+		std::vector<uint32_t> packed_height_words{};
+		while (completed_uploads < m_pending_component_uploads.size() &&
+			terrain_upload_budget_allows_next(
+				completed_bytes,
+				component_height_bytes,
+				k_height_upload_byte_budget,
+				std::chrono::steady_clock::now() - upload_start,
+				k_height_upload_wall_clock_budget))
+		{
+			const TerrainGpuComponentUpload& upload =
+				m_pending_component_uploads[completed_uploads];
+			if (upload.content_generation != content_generation || !upload.component)
+			{
+				fail_active_generation("Terrain height upload generation is stale.");
+				return fail_with_error(out_error, m_last_error.c_str());
+			}
+
+			std::string pack_error{};
+			packed_height_words.clear();
+			if (!build_terrain_component_height_words(
+					*upload.component,
+					m_accepted_snapshot->height_mapping,
+					packed_height_words,
+					&pack_error) ||
+				packed_height_words.size() !=
+					k_terrain_render_height_words_per_component)
+			{
+				fail_active_generation(pack_error.empty() ?
+					"failed to pack Terrain component height data." : pack_error);
+				return fail_with_error(out_error, m_last_error.c_str());
+			}
+
+			const uint32_t offset =
+				component_linear_index(upload.coord) * component_height_bytes;
+			if (!m_packed_height_buffer->update(
+					offset,
+					component_height_bytes,
+					packed_height_words.data()) ||
+				!m_state.mark_component_uploaded(content_generation, upload.coord))
+			{
+				fail_active_generation("failed to upload Terrain component height data.");
+				return fail_with_error(out_error, m_last_error.c_str());
+			}
+			completed_bytes += component_height_bytes;
+			++completed_uploads;
+		}
+		if (completed_uploads != 0u)
+		{
+			m_pending_component_uploads.erase(
+				m_pending_component_uploads.begin(),
+				m_pending_component_uploads.begin() + completed_uploads);
+		}
+		if (!m_pending_component_uploads.empty())
+		{
+			return false;
+		}
+		for (TerrainComponentCoord coord : m_pending_implicit_weight_resets)
+		{
+			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
+			{
+				if (slot.occupied && slot.coord == coord)
+				{
+					slot = {};
+				}
+			}
+		}
+		m_pending_implicit_weight_resets.clear();
 
 		if (!m_state.publish_content_generation(content_generation))
 		{

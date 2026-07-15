@@ -5,6 +5,7 @@
 #include "Function/Render/RenderDevice.h"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -88,6 +89,21 @@ namespace AshEngine
 		std::vector<uint32_t>& out_packed_height_words,
 		std::array<std::vector<uint8_t>, 2>& out_weight_rgba8,
 		std::string* out_error = nullptr);
+	ASH_API bool build_terrain_component_height_words(
+		const TerrainComponentSnapshot& component,
+		const TerrainHeightMapping& height_mapping,
+		std::vector<uint32_t>& out_packed_height_words,
+		std::string* out_error = nullptr);
+	ASH_API bool build_terrain_component_weight_rgba8(
+		const TerrainComponentSnapshot& component,
+		std::array<std::vector<uint8_t>, 2>& out_weight_rgba8,
+		std::string* out_error = nullptr);
+	ASH_API bool terrain_upload_budget_allows_next(
+		uint64_t completed_bytes,
+		uint64_t next_upload_bytes,
+		uint64_t byte_budget,
+		std::chrono::steady_clock::duration elapsed,
+		std::chrono::steady_clock::duration wall_clock_budget);
 
 	class ASH_API TerrainRenderAsset
 	{
@@ -106,6 +122,9 @@ namespace AshEngine
 		uint64_t accepted_content_generation() const;
 		uint64_t published_content_generation() const;
 		uint32_t pending_component_upload_count() const;
+		uint64_t pending_cpu_payload_bytes() const;
+		uint64_t pending_weight_payload_bytes() const;
+		uint32_t pending_weight_update_count() const;
 		bool has_pending_component_upload(TerrainComponentCoord coord) const;
 		uint32_t pending_component_removal_count() const;
 		bool has_pending_component_removal(TerrainComponentCoord coord) const;
@@ -124,8 +143,7 @@ namespace AshEngine
 		{
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
-			std::vector<uint32_t> packed_height_words{};
-			std::array<std::vector<uint8_t>, 2> weight_rgba8{};
+			std::shared_ptr<const TerrainComponentSnapshot> component{};
 		};
 
 		struct TerrainAtlasSlotMetadata
@@ -145,6 +163,8 @@ namespace AshEngine
 		std::string m_asset_path{};
 		std::shared_ptr<const TerrainAssetSnapshot> m_accepted_snapshot{};
 		std::vector<TerrainGpuComponentUpload> m_pending_component_uploads{};
+		std::vector<TerrainGpuComponentUpload> m_pending_weight_updates{};
+		std::vector<TerrainComponentCoord> m_pending_implicit_weight_resets{};
 		std::vector<TerrainComponentCoord> m_pending_component_removals{};
 		TerrainRenderAssetState m_state{};
 		std::string m_last_error{};

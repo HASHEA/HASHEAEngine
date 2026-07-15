@@ -256,12 +256,12 @@ namespace AshEngine
 					std::shared_ptr<StorageBuffer> staging{};
 					{
 						std::scoped_lock<std::mutex> lock(asset->m_mutex);
-						if (asset->m_pending_component_uploads.empty())
+						if (asset->m_pending_weight_updates.empty())
 						{
 							return true;
 						}
 						const TerrainRenderAsset::TerrainGpuComponentUpload& upload =
-							asset->m_pending_component_uploads.front();
+							asset->m_pending_weight_updates.front();
 						if (!(upload.coord == coord) ||
 							upload.content_generation != content_generation ||
 							!asset->m_accepted_snapshot ||
@@ -320,12 +320,12 @@ namespace AshEngine
 					}
 
 					std::scoped_lock<std::mutex> lock(asset->m_mutex);
-					if (asset->m_pending_component_uploads.empty())
+					if (asset->m_pending_weight_updates.empty())
 					{
 						return true;
 					}
 					const TerrainRenderAsset::TerrainGpuComponentUpload& upload =
-						asset->m_pending_component_uploads.front();
+						asset->m_pending_weight_updates.front();
 					if (!(upload.coord == coord) ||
 						upload.content_generation != content_generation)
 					{
@@ -339,8 +339,8 @@ namespace AshEngine
 						slot.content_generation = content_generation;
 						slot.occupied = true;
 					}
-					asset->m_pending_component_uploads.erase(
-						asset->m_pending_component_uploads.begin());
+					asset->m_pending_weight_updates.erase(
+						asset->m_pending_weight_updates.begin());
 					m_atlas_completions[asset.get()] = {
 						asset,
 						content_generation,
@@ -486,6 +486,8 @@ namespace AshEngine
 			uint32_t atlas_slot = 0u;
 			bool write_high_resolution = false;
 			bool invalid_pending_upload = false;
+			std::string pending_upload_error{};
+			std::shared_ptr<const TerrainComponentSnapshot> pending_component{};
 			std::shared_ptr<StorageBuffer> staging{};
 			std::array<std::shared_ptr<RenderTarget>, 2> atlases{};
 			std::shared_ptr<RenderTarget> coarse{};
@@ -503,31 +505,19 @@ namespace AshEngine
 				atlases = asset->m_weight_atlases;
 				coarse = asset->m_coarse_weight_target;
 				staging = asset->m_dirty_weight_staging_buffer;
-				if (!asset->m_pending_component_uploads.empty())
+				if (!asset->m_pending_weight_updates.empty())
 				{
 					const TerrainRenderAsset::TerrainGpuComponentUpload& upload =
-						asset->m_pending_component_uploads.front();
+						asset->m_pending_weight_updates.front();
 					coord = upload.coord;
 					content_generation = upload.content_generation;
 					if (content_generation == terrain.asset_snapshot->content_generation)
 					{
-						const size_t layer_size = upload.weight_rgba8[0].size();
-						if (staging &&
-							layer_size == upload.weight_rgba8[1].size() &&
-							layer_size * 2u == k_terrain_weight_upload_bytes &&
+						pending_component = upload.component;
+						if (pending_component && staging &&
 							staging->get_size() == k_terrain_weight_upload_bytes &&
 							staging->get_stride() == k_terrain_weight_upload_stride)
 						{
-							weight_upload.resize(layer_size * 2u);
-							std::memcpy(
-								weight_upload.data(),
-								upload.weight_rgba8[0].data(),
-								layer_size);
-							std::memcpy(
-								weight_upload.data() + layer_size,
-								upload.weight_rgba8[1].data(),
-								layer_size);
-
 							for (uint32_t slot = 0u;
 								slot < asset->m_frame_boundary_atlas_slots.size();
 								++slot)
@@ -559,7 +549,54 @@ namespace AshEngine
 						else
 						{
 							invalid_pending_upload = true;
+							pending_upload_error =
+								"Terrain dirty weight staging resources are invalid.";
 						}
+					}
+				}
+			}
+			if (pending_component && !invalid_pending_upload)
+			{
+				std::array<std::vector<uint8_t>, 2> weight_layers{};
+				if (!build_terrain_component_weight_rgba8(
+						*pending_component,
+						weight_layers,
+						&pending_upload_error))
+				{
+					invalid_pending_upload = true;
+				}
+				else if (weight_layers[0].empty() && weight_layers[1].empty())
+				{
+					weight_upload.assign(k_terrain_weight_upload_bytes, 0u);
+					constexpr size_t sample_count =
+						static_cast<size_t>(k_terrain_component_sample_count) *
+						k_terrain_component_sample_count;
+					for (size_t sample = 0u; sample < sample_count; ++sample)
+					{
+						weight_upload[sample * 4u] = 255u;
+					}
+				}
+				else
+				{
+					const size_t layer_size = weight_layers[0].size();
+					if (layer_size != weight_layers[1].size() ||
+						layer_size * 2u != k_terrain_weight_upload_bytes)
+					{
+						invalid_pending_upload = true;
+						pending_upload_error =
+							"Terrain dirty weight payload has an invalid size.";
+					}
+					else
+					{
+						weight_upload.resize(layer_size * 2u);
+						std::memcpy(
+							weight_upload.data(),
+							weight_layers[0].data(),
+							layer_size);
+						std::memcpy(
+							weight_upload.data() + layer_size,
+							weight_layers[1].data(),
+							layer_size);
 					}
 				}
 			}
@@ -576,14 +613,15 @@ namespace AshEngine
 			}
 			if (invalid_pending_upload)
 			{
-				HLogError(
-					"TerrainRenderPass: dirty weight payload does not match the raw staging contract.");
+				const std::string diagnostic = pending_upload_error.empty() ?
+					"Terrain dirty weight payload does not match the raw staging contract." :
+					pending_upload_error;
+				HLogError("TerrainRenderPass: %s", diagnostic.c_str());
 				std::scoped_lock<std::mutex> lock(asset->m_mutex);
 				if (asset->m_accepted_snapshot &&
 					asset->m_accepted_snapshot->content_generation == content_generation)
 				{
-					asset->fail_active_generation(
-						"Terrain dirty weight payload does not match the raw staging contract.");
+					asset->fail_active_generation(diagnostic);
 				}
 				return resources;
 			}
@@ -728,28 +766,38 @@ namespace AshEngine
 				{
 					uint32_t atlas_slot = 0u;
 					bool high_resolution = false;
-					for (uint32_t slot_index = 0u;
-						slot_index < terrain->render_asset->m_frame_boundary_atlas_slots.size();
-						++slot_index)
+					const size_t component_index =
+						static_cast<size_t>(instance.coord.z) *
+						k_terrain_component_count + instance.coord.x;
+					const bool implicit_layer_zero =
+						component_index < terrain->asset_snapshot->components.size() &&
+						terrain->asset_snapshot->components[component_index] &&
+						terrain->asset_snapshot->components[component_index]->weights.empty();
+					if (!implicit_layer_zero)
 					{
-						TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
-							terrain->render_asset->m_frame_boundary_atlas_slots[slot_index];
-						if (slot.occupied && slot.coord == instance.coord &&
-							slot.content_generation == terrain->asset_snapshot->content_generation)
+						for (uint32_t slot_index = 0u;
+							slot_index < terrain->render_asset->m_frame_boundary_atlas_slots.size();
+							++slot_index)
 						{
-							atlas_slot = slot_index;
-							high_resolution = true;
-							slot.last_used_frame = render_frame_index;
-							break;
+							TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
+								terrain->render_asset->m_frame_boundary_atlas_slots[slot_index];
+							if (slot.occupied && slot.coord == instance.coord &&
+								slot.content_generation == terrain->asset_snapshot->content_generation)
+							{
+								atlas_slot = slot_index;
+								high_resolution = true;
+								slot.last_used_frame = render_frame_index;
+								break;
+							}
 						}
-					}
-					if (resources.has_pending_atlas_slot &&
-						resources.pending_atlas_coord == instance.coord &&
-						resources.pending_atlas_generation ==
-							terrain->asset_snapshot->content_generation)
-					{
-						atlas_slot = resources.pending_atlas_slot;
-						high_resolution = true;
+						if (resources.has_pending_atlas_slot &&
+							resources.pending_atlas_coord == instance.coord &&
+							resources.pending_atlas_generation ==
+								terrain->asset_snapshot->content_generation)
+						{
+							atlas_slot = resources.pending_atlas_slot;
+							high_resolution = true;
+						}
 					}
 
 					TerrainPackedInstance packed{};
@@ -760,7 +808,8 @@ namespace AshEngine
 						((static_cast<uint32_t>(instance.neighbor_edge_mask) & 15u) << 14u);
 					packed.morph_factor_bits = float_bits(instance.morph_factor);
 					packed.atlas_slot = atlas_slot;
-					packed.flags = high_resolution ? 1u : 0u;
+					packed.flags = (high_resolution ? 1u : 0u) |
+						(implicit_layer_zero ? 2u : 0u);
 					packed_instances.push_back(packed);
 				}
 			}
@@ -1012,7 +1061,8 @@ namespace AshEngine
 					terrain.asset_snapshot->content_generation ||
 				terrain.render_asset->published_content_generation() !=
 					terrain.asset_snapshot->content_generation ||
-				terrain.render_asset->pending_component_upload_count() != 0u)
+				terrain.render_asset->pending_component_upload_count() != 0u ||
+				terrain.render_asset->pending_weight_update_count() != 0u)
 			{
 				return false;
 			}

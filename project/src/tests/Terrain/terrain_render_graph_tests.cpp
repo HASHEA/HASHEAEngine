@@ -356,6 +356,23 @@ TEST_CASE("Terrain shader bindings include fixed surface resources")
 	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);
 }
 
+TEST_CASE("Terrain surface treats empty weights as implicit layer zero")
+{
+	const std::string common = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli");
+	const std::string surface = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
+	const std::string terrain_pass = ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp");
+
+	CHECK(common.find("implicit_layer_zero") != std::string::npos);
+	CHECK(surface.find("input.implicit_layer_zero") != std::string::npos);
+	CHECK(surface.find("float4(1.0, 0.0, 0.0, 0.0)") !=
+		std::string::npos);
+	CHECK(terrain_pass.find("implicit_layer_zero ? 2u : 0u") !=
+		std::string::npos);
+}
+
 TEST_CASE("Terrain GBuffer normals use canonical gradients and coarse-edge interpolation")
 {
 	const std::string common = ReadSource(

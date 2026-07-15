@@ -17,12 +17,14 @@ struct AshTerrainInstance
     float morph_factor;
     uint atlas_slot;
     bool high_resolution_weights;
+    bool implicit_layer_zero;
 };
 
 AshTerrainInstance AshTerrainDecodeInstance(uint4 packed)
 {
     // packed.x: component x[0..4], z[5..9], lod[10..13], edge mask[14..17]
-    // packed.y: asuint(morph), packed.z: atlas slot, packed.w bit 0: high-res.
+    // packed.y: asuint(morph), packed.z: atlas slot.
+    // packed.w bit 0: high-res, bit 1: implicit material layer zero.
     AshTerrainInstance result;
     result.component_coord = uint2(packed.x & 31u, (packed.x >> 5u) & 31u);
     result.lod = (packed.x >> 10u) & 15u;
@@ -30,6 +32,7 @@ AshTerrainInstance AshTerrainDecodeInstance(uint4 packed)
     result.morph_factor = asfloat(packed.y);
     result.atlas_slot = packed.z;
     result.high_resolution_weights = (packed.w & 1u) != 0u;
+    result.implicit_layer_zero = (packed.w & 2u) != 0u;
     return result;
 }
 

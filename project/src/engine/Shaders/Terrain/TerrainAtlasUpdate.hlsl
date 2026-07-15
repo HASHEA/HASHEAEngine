@@ -1,5 +1,6 @@
-// Incremental Terrain weight upload. The CPU provides one 257x257 component
-// per frame through a raw buffer: RGBA layers 0..3 followed by RGBA layers 4..7.
+// Incremental Terrain weight upload. The CPU provides one painted 257x257
+// component per graph through a raw buffer: RGBA layers 0..3 followed by
+// RGBA layers 4..7. Empty weights stay implicit material layer zero.
 
 cbuffer AshRootConstants : register(b0)
 {

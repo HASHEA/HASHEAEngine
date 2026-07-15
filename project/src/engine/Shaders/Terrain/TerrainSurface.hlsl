@@ -50,6 +50,7 @@ struct AshTerrainVertexOutput
     nointerpolation uint atlas_slot : TEXCOORD6;
     nointerpolation uint high_resolution_weights : TEXCOORD7;
     nointerpolation uint2 component_coord : TEXCOORD8;
+    nointerpolation uint implicit_layer_zero : TEXCOORD9;
 #endif
 #if TERRAIN_LOD_DEBUG
     nointerpolation uint lod : TEXCOORD0;
@@ -194,6 +195,7 @@ AshTerrainVertexOutput VSMain(uint vertex_id : SV_VertexID, uint instance_id : S
     output.atlas_slot = instance.atlas_slot;
     output.high_resolution_weights = instance.high_resolution_weights ? 1u : 0u;
     output.component_coord = instance.component_coord;
+    output.implicit_layer_zero = instance.implicit_layer_zero ? 1u : 0u;
 #endif
 #if TERRAIN_LOD_DEBUG
     output.lod = instance.lod;
@@ -215,11 +217,14 @@ AshTerrainGBufferOutput PSMain(AshTerrainVertexOutput input)
     const float2 weight_uv = input.high_resolution_weights != 0u ?
         AshTerrainAtlasUv(weight_instance, input.local_sample) :
         AshTerrainCoarseUv(weight_instance, input.local_sample);
-    const float4 weights0 = input.high_resolution_weights != 0u ?
-        TerrainWeightAtlas0.Sample(TerrainWeightSampler, weight_uv) :
-        TerrainCoarseWeights.Sample(TerrainWeightSampler, weight_uv);
-    const float4 weights1 = input.high_resolution_weights != 0u ?
-        TerrainWeightAtlas1.Sample(TerrainWeightSampler, weight_uv) : 0.0.xxxx;
+    const float4 weights0 = input.implicit_layer_zero != 0u ?
+        float4(1.0, 0.0, 0.0, 0.0) :
+        input.high_resolution_weights != 0u ?
+            TerrainWeightAtlas0.Sample(TerrainWeightSampler, weight_uv) :
+            TerrainCoarseWeights.Sample(TerrainWeightSampler, weight_uv);
+    const float4 weights1 = input.implicit_layer_zero != 0u ? 0.0.xxxx :
+        input.high_resolution_weights != 0u ?
+            TerrainWeightAtlas1.Sample(TerrainWeightSampler, weight_uv) : 0.0.xxxx;
     uint4 layer_indices;
     float4 layer_weights;
     AshTerrainSelectTopFour(weights0, weights1, layer_indices, layer_weights);

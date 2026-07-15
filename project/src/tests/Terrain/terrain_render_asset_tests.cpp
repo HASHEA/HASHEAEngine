@@ -7,6 +7,7 @@
 #include "doctest.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -183,7 +184,70 @@ TEST_CASE("Terrain render asset rejects malformed component upload data")
 	CHECK(error == "terrain component heights must be finite.");
 }
 
-TEST_CASE("Terrain render asset derives uploads from immutable component pointer changes")
+TEST_CASE("Terrain render asset bounds pending CPU payload")
+{
+	auto snapshot = MakeSnapshot(1u);
+	snapshot->components[0] = MakeComponent({ 0u, 0u }, 1u);
+	snapshot->components[1] = MakeComponent({ 1u, 0u }, 1u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(snapshot, &error));
+	CHECK(asset.pending_component_upload_count() == 2u);
+	CHECK(asset.pending_weight_update_count() == 0u);
+	CHECK(asset.pending_cpu_payload_bytes() <=
+		static_cast<uint64_t>(
+			AshEngine::k_terrain_render_height_words_per_component) *
+			sizeof(uint32_t));
+	CHECK(asset.pending_weight_payload_bytes() == 0u);
+}
+
+TEST_CASE("Terrain render asset leaves empty weights implicit")
+{
+	const std::shared_ptr<const AshEngine::TerrainComponentSnapshot> component =
+		MakeComponent({ 0u, 0u }, 1u);
+	std::array<std::vector<uint8_t>, 2> weights{};
+	std::string error{};
+	REQUIRE(AshEngine::build_terrain_component_weight_rgba8(
+		*component, weights, &error));
+	CHECK(error.empty());
+	CHECK(weights[0].empty());
+	CHECK(weights[1].empty());
+
+	auto painted_snapshot = MakeSnapshot(2u);
+	auto painted_component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
+		*MakeComponent({ 0u, 0u }, 2u));
+	painted_component->weights.assign(
+		k_component_sample_total,
+		std::array<uint8_t, AshEngine::k_terrain_material_layer_count>{
+			255u, 0u, 0u, 0u, 0u, 0u, 0u, 0u });
+	painted_snapshot->components[0] = painted_component;
+	AshEngine::TerrainRenderAsset painted_asset{};
+	REQUIRE(painted_asset.accept_snapshot(painted_snapshot, &error));
+	CHECK(painted_asset.pending_weight_update_count() == 1u);
+	CHECK(painted_asset.pending_weight_payload_bytes() == 0u);
+}
+
+TEST_CASE("Terrain upload work budget is byte and wall clock bounded")
+{
+	using namespace std::chrono_literals;
+	constexpr uint64_t component_bytes =
+		static_cast<uint64_t>(
+			AshEngine::k_terrain_render_height_words_per_component) *
+			sizeof(uint32_t);
+	constexpr uint64_t byte_budget = component_bytes * 4u;
+	constexpr auto wall_clock_budget = 2ms;
+
+	CHECK(AshEngine::terrain_upload_budget_allows_next(
+		0u, component_bytes, byte_budget, 0ns, wall_clock_budget));
+	CHECK_FALSE(AshEngine::terrain_upload_budget_allows_next(
+		byte_budget, component_bytes, byte_budget, 1ms, wall_clock_budget));
+	CHECK_FALSE(AshEngine::terrain_upload_budget_allows_next(
+		component_bytes, component_bytes, byte_budget,
+		wall_clock_budget, wall_clock_budget));
+}
+
+TEST_CASE("Terrain render asset keeps unfinished pointer-equal uploads across generations")
 {
 	auto first = MakeSnapshot(1u);
 	first->components[0] = MakeComponent({ 0u, 0u }, 1u);
@@ -200,14 +264,15 @@ TEST_CASE("Terrain render asset derives uploads from immutable component pointer
 	second->components[0] = first->components[0];
 	second->components[1] = MakeComponent({ 1u, 0u }, 2u);
 	REQUIRE(asset.accept_snapshot(second, &error));
-	CHECK(asset.pending_component_upload_count() == 1u);
-	CHECK_FALSE(asset.has_pending_component_upload({ 0u, 0u }));
+	CHECK(asset.pending_component_upload_count() == 2u);
+	CHECK(asset.has_pending_component_upload({ 0u, 0u }));
 	CHECK(asset.has_pending_component_upload({ 1u, 0u }));
 
 	auto third = MakeSnapshot(3u);
 	third->components[1] = second->components[1];
 	REQUIRE(asset.accept_snapshot(third, &error));
-	CHECK(asset.pending_component_upload_count() == 0u);
+	CHECK(asset.pending_component_upload_count() == 1u);
+	CHECK(asset.has_pending_component_upload({ 1u, 0u }));
 	CHECK(asset.pending_component_removal_count() == 1u);
 	CHECK(asset.has_pending_component_removal({ 0u, 0u }));
 
