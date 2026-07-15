@@ -676,7 +676,7 @@ Context 保存当前 pass declared buffer map。compute 在即时 dispatch 点�
 - Create: project/src/engine/Function/Render/GPUDriven/GpuDrivenInstancePageStorage.cpp
 - Create: project/src/tests/Function/gpu_driven_foundation_tests.cpp
 
-- [ ] Step 1: Write deterministic RED cases
+- [x] Step 1: Write deterministic RED cases
 
 覆盖：
 
@@ -697,7 +697,7 @@ Context 保存当前 pass declared buffer map。compute 在即时 dispatch 点�
     generate_vs2022.bat
     RunTests.bat Debug --test-case="GPU-driven foundation*"
 
-- [ ] Step 2: Implement minimal production data
+- [x] Step 2: Implement minimal production data
 
 - 类型不得出现 grass、tree、SpeedTree、brush 或 terrain 字段。
 - page allocator 接收调用方的 canonical completed frame ID，不依赖 Graphics fence 类型。
@@ -705,7 +705,7 @@ Context 保存当前 pass declared buffer map。compute 在即时 dispatch 点�
 - InstancePageStorage 只持 desc、handle 和 shared_ptr<StorageBuffer>；不实现 culling/LOD。
 - 不定义 CompressedTRS 的最终 bit allocation。
 
-- [ ] Step 3: GREEN and architecture gates
+- [x] Step 3: GREEN and architecture gates
 
     RunTests.bat Debug --test-case="GPU-driven foundation*"
     RunTests.bat Debug
@@ -713,7 +713,7 @@ Context 保存当前 pass declared buffer map。compute 在即时 dispatch 点�
     build_editor.bat Debug
     build_sandbox.bat Debug
 
-- [ ] Step 4: Focused commit
+- [x] Step 4: Focused commit
 
 建议提交信息：
 
