@@ -371,6 +371,21 @@ static bool should_run_rhi_constant_buffer_self_test(int argc, char* argv[])
 	return false;
 }
 
+static double resolve_process_readiness_timeout_seconds(
+	double smoke_test_seconds,
+	bool frame_dump_requested,
+	bool indirect_self_test_requested)
+{
+	constexpr double default_bounded_gpu_operation_timeout_seconds = 120.0;
+	if (smoke_test_seconds > 0.0)
+	{
+		return smoke_test_seconds;
+	}
+	return frame_dump_requested || indirect_self_test_requested
+		? default_bounded_gpu_operation_timeout_seconds
+		: 0.0;
+}
+
 // RenderGate（SDD-2026-07-07-render-gate）：--dump-frame=<png> / --scene=<path> 字符串选项解析
 static std::string parse_string_option(int argc, char* argv[], const char* option_name)
 {
@@ -655,10 +670,10 @@ int32_t main(int argc, char* argv[])
 	const std::string scenePathOverride = parse_string_option(argc, argv, "--scene");
 	const bool rhiIndirectSelfTestRequested = should_run_rhi_indirect_self_test(argc, argv);
 	const bool rhiConstantBufferSelfTestRequested = should_run_rhi_constant_buffer_self_test(argc, argv);
-	constexpr double default_frame_dump_timeout_seconds = 120.0;
-	const double process_readiness_timeout_seconds = smokeTestSeconds > 0.0
-		? smokeTestSeconds
-		: (!frameDumpPath.empty() ? default_frame_dump_timeout_seconds : 0.0);
+	const double process_readiness_timeout_seconds = resolve_process_readiness_timeout_seconds(
+		smokeTestSeconds,
+		!frameDumpPath.empty(),
+		rhiIndirectSelfTestRequested);
 	ReadinessProcessWatchdog readiness_watchdog{};
 	readiness_watchdog.start(process_readiness_timeout_seconds);
 	AshEngine::Application* application = create_application();

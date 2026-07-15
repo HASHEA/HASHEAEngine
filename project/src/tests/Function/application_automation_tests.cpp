@@ -1,5 +1,6 @@
 #include "Function/ApplicationAutomation.h"
 #include "Function/Render/ParticleSystemPass.h"
+#include "Function/Render/RenderGraphIndirectSelfTest.h"
 
 #define main ash_entry_point_main_for_tests
 #include "EntryPoint.h"
@@ -17,6 +18,76 @@
 namespace
 {
 	bool g_create_application_called = false;
+
+	struct IndirectLifecycleRecorder
+	{
+		RHI::SwapchainPresentResult begin_result = RHI::SwapchainPresentResult::Completed;
+		RHI::SwapchainPresentResult present_result = RHI::SwapchainPresentResult::Completed;
+		bool graph_result = true;
+		bool capture_result = true;
+		bool end_result = true;
+		bool fetch_result = true;
+		uint32_t begin_count = 0u;
+		uint32_t graph_count = 0u;
+		uint32_t capture_count = 0u;
+		uint32_t end_count = 0u;
+		uint32_t present_count = 0u;
+		uint32_t fetch_count = 0u;
+
+		static RHI::SwapchainPresentResult begin(void* user_data)
+		{
+			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
+			++recorder.begin_count;
+			return recorder.begin_result;
+		}
+
+		static bool graph(void* user_data)
+		{
+			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
+			++recorder.graph_count;
+			return recorder.graph_result;
+		}
+
+		static bool capture(void* user_data)
+		{
+			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
+			++recorder.capture_count;
+			return recorder.capture_result;
+		}
+
+		static bool end(void* user_data)
+		{
+			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
+			++recorder.end_count;
+			return recorder.end_result;
+		}
+
+		static RHI::SwapchainPresentResult present(void* user_data)
+		{
+			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
+			++recorder.present_count;
+			return recorder.present_result;
+		}
+
+		static bool fetch(void* user_data)
+		{
+			auto& recorder = *static_cast<IndirectLifecycleRecorder*>(user_data);
+			++recorder.fetch_count;
+			return recorder.fetch_result;
+		}
+
+		AshEngine::RenderGraphIndirectSelfTestLifecycleOperations operations()
+		{
+			return {
+				this,
+				&IndirectLifecycleRecorder::begin,
+				&IndirectLifecycleRecorder::graph,
+				&IndirectLifecycleRecorder::capture,
+				&IndirectLifecycleRecorder::end,
+				&IndirectLifecycleRecorder::present,
+				&IndirectLifecycleRecorder::fetch };
+		}
+	};
 }
 
 AshEngine::Application* create_application()
@@ -78,6 +149,98 @@ TEST_CASE("entry point recognizes the constant-buffer RHI self-test flag")
 	char unrelated_option[] = "--rhi-selftest-indirect";
 	char* unrelated_argv[] = { executable, unrelated_option };
 	CHECK_FALSE(should_run_rhi_constant_buffer_self_test(2, unrelated_argv));
+}
+
+TEST_CASE("indirect self-test owns a bounded exactly-once frame lifecycle")
+{
+	IndirectLifecycleRecorder recorder{};
+	const AshEngine::RenderGraphIndirectSelfTestLifecycleResult result =
+		AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+
+	CHECK(result.succeeded);
+	CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::None);
+	CHECK(recorder.begin_count == 1u);
+	CHECK(recorder.graph_count == 1u);
+	CHECK(recorder.capture_count == 1u);
+	CHECK(recorder.end_count == 1u);
+	CHECK(recorder.present_count == 1u);
+	CHECK(recorder.fetch_count == 1u);
+	CHECK(resolve_process_readiness_timeout_seconds(0.0, false, true) == doctest::Approx(120.0));
+}
+
+TEST_CASE("indirect self-test closes acquired frames and fails closed at every stage")
+{
+	SUBCASE("retryable begin never opens a frame")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.begin_result = RHI::SwapchainPresentResult::Retryable;
+		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::BeginFrame);
+		CHECK(recorder.end_count == 0u);
+		CHECK(recorder.present_count == 0u);
+	}
+
+	SUBCASE("graph failure still ends and presents the acquired frame")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.graph_result = false;
+		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::Graph);
+		CHECK(recorder.capture_count == 0u);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("capture request failure still ends and presents without fetching")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.capture_result = false;
+		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::CaptureRequest);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("end failure is not presented")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.end_result = false;
+		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::EndFrame);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 0u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("present failure is not fetched")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.present_result = RHI::SwapchainPresentResult::Failed;
+		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::Present);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 0u);
+	}
+
+	SUBCASE("fetch failure propagates after a complete submitted frame")
+	{
+		IndirectLifecycleRecorder recorder{};
+		recorder.fetch_result = false;
+		const auto result = AshEngine::run_render_graph_indirect_self_test_lifecycle(recorder.operations());
+		CHECK_FALSE(result.succeeded);
+		CHECK(result.failure == AshEngine::RenderGraphIndirectSelfTestFailure::CaptureFetch);
+		CHECK(recorder.end_count == 1u);
+		CHECK(recorder.present_count == 1u);
+		CHECK(recorder.fetch_count == 1u);
+	}
 }
 
 TEST_CASE("entry point rejects negative separated automation limits")

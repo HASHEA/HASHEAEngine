@@ -11,6 +11,7 @@
 #include "Function/Render/Renderer.h"
 #include "Function/Render/RHIConstantBufferSelfTest.h"
 #include "Function/Render/RHIIndirectSelfTest.h"
+#include "Function/Render/RenderGraphIndirectSelfTest.h"
 #include "Base/hlog.h"
 #include "Base/hmemory.h"
 #include "Base/hfile.h"
@@ -521,6 +522,7 @@ namespace AshEngine
 		_on_startup();
 		perfGateController.begin();
 		_start_logic_thread_if_needed();
+		bool renderGraphIndirectSelfTestCompleted = false;
 
 		while (!_should_exit())
 		{
@@ -534,47 +536,61 @@ namespace AshEngine
 
 			if (_should_render_frame())
 			{
-				if (automationMode == ApplicationAutomationMode::FrameDump && !frameDumpWritten && renderDevice)
+				if (rhiIndirectSelfTestRequested && !renderGraphIndirectSelfTestCompleted)
 				{
-					const RenderAssetReadinessSnapshot assetReadiness = renderAssetManager.query_readiness();
-					ApplicationAutomationPreFrame preFrame{};
-					preFrame.application_readiness = runtimeFailureDetected.load(std::memory_order_acquire)
-						? ApplicationReadiness::Failed
-						: _get_automation_readiness();
-					preFrame.render_asset_epoch = assetReadiness.activity_epoch;
-					preFrame.render_assets_pending = assetReadiness.pending;
-					preFrame.render_assets_failed = assetReadiness.failed;
-					preFrame.render_commands_pending = has_pending_render_commands();
-					if (automationController.should_request_capture(preFrame))
+					renderGraphIndirectSelfTestCompleted = true;
+					const bool graphSelfTestPassed = renderer && run_render_graph_indirect_self_test(*renderer);
+					framePresentCompleted = graphSelfTestPassed;
+					if (!graphSelfTestPassed)
 					{
-						HLogInfo("Application: readiness capture armed at frame {}, asset epoch {}.", currentFrameIndex, assetReadiness.activity_epoch);
-						renderDevice->request_back_buffer_capture();
-						frameDumpCapturePending = true;
-						captureRequested = true;
+						runtimeFailureDetected.store(true, std::memory_order_release);
 					}
-				}
-
-				const RHI::SwapchainPresentResult frameRenderResult = _render_frame();
-				const bool frameRendered = frameRenderResult == RHI::SwapchainPresentResult::Completed;
-				if (!frameRendered)
-				{
-					captureRequested = false;
-					frameDumpCapturePending = false;
-				}
-				framePresentCompleted = currentFramePresentRequired && _present_frame();
-				if (frameRenderResult == RHI::SwapchainPresentResult::Failed)
-				{
-					runtimeFailureDetected.store(true, std::memory_order_release);
-					HLogError("Application: render frame {} failed; requesting exit.", currentFrameIndex);
 					request_exit();
 				}
-				if (frameRendered && renderer && perfGateController.is_enabled())
+				else
 				{
-					perfGateController.sample_after_frame(renderer->get_frame_stats());
-					if (perfGateController.should_request_exit())
+					if (automationMode == ApplicationAutomationMode::FrameDump && !frameDumpWritten && renderDevice)
 					{
-						HLogInfo("PerfGate collection complete; requesting application exit.");
+						const RenderAssetReadinessSnapshot assetReadiness = renderAssetManager.query_readiness();
+						ApplicationAutomationPreFrame preFrame{};
+						preFrame.application_readiness = runtimeFailureDetected.load(std::memory_order_acquire)
+							? ApplicationReadiness::Failed
+							: _get_automation_readiness();
+						preFrame.render_asset_epoch = assetReadiness.activity_epoch;
+						preFrame.render_assets_pending = assetReadiness.pending;
+						preFrame.render_assets_failed = assetReadiness.failed;
+						preFrame.render_commands_pending = has_pending_render_commands();
+						if (automationController.should_request_capture(preFrame))
+						{
+							HLogInfo("Application: readiness capture armed at frame {}, asset epoch {}.", currentFrameIndex, assetReadiness.activity_epoch);
+							renderDevice->request_back_buffer_capture();
+							frameDumpCapturePending = true;
+							captureRequested = true;
+						}
+					}
+
+					const RHI::SwapchainPresentResult frameRenderResult = _render_frame();
+					const bool frameRendered = frameRenderResult == RHI::SwapchainPresentResult::Completed;
+					if (!frameRendered)
+					{
+						captureRequested = false;
+						frameDumpCapturePending = false;
+					}
+					framePresentCompleted = currentFramePresentRequired && _present_frame();
+					if (frameRenderResult == RHI::SwapchainPresentResult::Failed)
+					{
+						runtimeFailureDetected.store(true, std::memory_order_release);
+						HLogError("Application: render frame {} failed; requesting exit.", currentFrameIndex);
 						request_exit();
+					}
+					if (frameRendered && renderer && perfGateController.is_enabled())
+					{
+						perfGateController.sample_after_frame(renderer->get_frame_stats());
+						if (perfGateController.should_request_exit())
+						{
+							HLogInfo("PerfGate collection complete; requesting application exit.");
+							request_exit();
+						}
 					}
 				}
 			}

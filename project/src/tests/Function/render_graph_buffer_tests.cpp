@@ -1,5 +1,6 @@
 #include "Function/Render/RenderGraph.h"
 #include "Function/Render/RenderGraphExecutor.h"
+#include "Function/Render/RenderGraphIndirectSelfTest.h"
 #include "Graphics/Buffer.h"
 
 #ifdef TYPE_TO_STRING
@@ -1294,4 +1295,63 @@ TEST_CASE("RenderGraph buffer graphics validation reads final bindings after dra
 	CHECK_FALSE(device->inspect_graphics_program_buffer_bindings_for_tests(
 		queued_draw.program, scope, barrier_count, diagnostic));
 	CHECK(diagnostic.find("MutatedBuffer") != std::string::npos);
+}
+
+TEST_CASE("RenderGraph buffer indirect self-test declares the complete compute to indexed chain")
+{
+	AshEngine::RenderGraphBuilder graph =
+		AshEngine::RenderGraphBuilder::create_headless_for_tests("IndirectSelfTestTopology");
+
+	AshEngine::RenderGraphBufferDesc candidate_desc{};
+	candidate_desc.size = sizeof(uint32_t);
+	candidate_desc.stride = sizeof(uint32_t);
+	candidate_desc.shader_resource = true;
+	const AshEngine::RenderGraphBufferRef candidate = graph.register_external_buffer_desc_for_tests(
+		candidate_desc,
+		"Candidate");
+
+	AshEngine::RenderGraphBufferDesc visible_desc = candidate_desc;
+	visible_desc.unordered_access = true;
+	const AshEngine::RenderGraphBufferRef visible = graph.create_buffer(visible_desc, "Visible");
+
+	AshEngine::RenderGraphBufferDesc args_desc{};
+	args_desc.size = 5u * sizeof(uint32_t);
+	args_desc.shader_resource = true;
+	args_desc.unordered_access = true;
+	args_desc.indirect_args = true;
+	const AshEngine::RenderGraphBufferRef args = graph.create_buffer(args_desc, "Args");
+
+	AshEngine::RenderGraphIndirectSelfTestResources resources{};
+	resources.output = AshEngine::RenderGraphTextureRef{ 0u };
+	resources.candidate = candidate;
+	resources.visible = visible;
+	resources.args = args;
+	AshEngine::RenderGraphIndirectSelfTestPassCallbacks callbacks{};
+	callbacks.compute = [](AshEngine::RenderGraphComputeContext&) { return true; };
+	callbacks.indexed_raster = [](AshEngine::RenderGraphRasterContext&) { return true; };
+	callbacks.validation_raster = [](AshEngine::RenderGraphRasterContext&) { return true; };
+	REQUIRE(AshEngine::add_render_graph_indirect_self_test_passes(graph, resources, callbacks));
+
+	const auto& passes = graph.get_passes_for_tests();
+	REQUIRE(passes.size() == 3u);
+	CHECK(passes[0].kind == AshEngine::RenderGraphPassKind::Compute);
+	CHECK(passes[1].kind == AshEngine::RenderGraphPassKind::Raster);
+	CHECK(passes[2].kind == AshEngine::RenderGraphPassKind::Raster);
+	CHECK(passes[0].buffer_usages.size() == 3u);
+	CHECK(passes[0].buffer_usages[0].buffer == candidate);
+	CHECK(passes[0].buffer_usages[0].access == AshEngine::RenderGraphAccess::ComputeSRV);
+	CHECK(passes[0].buffer_usages[1].buffer == visible);
+	CHECK(passes[0].buffer_usages[1].access == AshEngine::RenderGraphAccess::ComputeUAV);
+	CHECK(passes[0].buffer_usages[1].write);
+	CHECK(passes[0].buffer_usages[2].buffer == args);
+	CHECK(passes[0].buffer_usages[2].access == AshEngine::RenderGraphAccess::ComputeUAV);
+	CHECK(passes[0].buffer_usages[2].write);
+	CHECK(passes[1].buffer_usages.size() == 2u);
+	CHECK(passes[1].buffer_usages[0].buffer == visible);
+	CHECK(passes[1].buffer_usages[0].access == AshEngine::RenderGraphAccess::GraphicsSRV);
+	CHECK(passes[1].buffer_usages[1].buffer == args);
+	CHECK(passes[1].buffer_usages[1].access == AshEngine::RenderGraphAccess::IndirectArgs);
+	CHECK(passes[2].buffer_usages.size() == 1u);
+	CHECK(passes[2].buffer_usages[0].buffer == args);
+	CHECK(passes[2].buffer_usages[0].access == AshEngine::RenderGraphAccess::GraphicsSRV);
 }
