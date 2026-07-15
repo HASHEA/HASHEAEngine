@@ -22,7 +22,10 @@ namespace AshEditor
 		constexpr float kScrollDollySpeed = 0.12f;
 		constexpr float kDragDollySpeed = 0.015f;
 		constexpr float kMinOrbitDistance = 0.1f;
-		constexpr float kMaxOrbitDistance = 20000.0f;
+		constexpr float kDefaultMaxOrbitDistance = 20000.0f;
+		constexpr float kCameraFramingPaddingScale = 1.15f;
+		constexpr float kOrbitDistanceHeadroomScale = 2.0f;
+		constexpr bool kEditorCameraReverseZ = true;
 
 		bool IsPointInRect(const AshEngine::UIRect& refRect, const AshEngine::UIVec2& refPoint)
 		{
@@ -77,11 +80,17 @@ namespace AshEditor
 			const float fResolvedWidth = std::max(fViewportWidth, 1.0f);
 			const float fResolvedHeight = std::max(fViewportHeight, 1.0f);
 			const float fAspect = fResolvedWidth / fResolvedHeight;
+			float fResolvedNearPlane = std::max(fNearPlane, 0.001f);
+			float fResolvedFarPlane = std::max(fFarPlane, fNearPlane + 0.001f);
+			if (kEditorCameraReverseZ)
+			{
+				std::swap(fResolvedNearPlane, fResolvedFarPlane);
+			}
 			return glm::perspectiveLH_ZO(
 				glm::radians(std::clamp(fFovYDegrees, 1.0f, 179.0f)),
 				fAspect,
-				std::max(fNearPlane, 0.001f),
-				std::max(fFarPlane, fNearPlane + 0.001f));
+				fResolvedNearPlane,
+				fResolvedFarPlane);
 		}
 
 		glm::vec3 ComputeLookRotationDegrees(const glm::vec3& refDirection)
@@ -106,9 +115,11 @@ namespace AshEditor
 		bool TryComputeSceneFocusBounds(
 			const AshEngine::Scene& refScene,
 			AshEngine::AssetDatabase& refAssetDatabase,
-			AshEngine::SceneWorldBounds& outBounds)
+			AshEngine::SceneWorldBounds& outBounds,
+			bool& outBoundsComplete)
 		{
 			outBounds = {};
+			outBoundsComplete = true;
 			for (const AshEngine::Entity& refRoot : refScene.get_root_entities())
 			{
 				if (!refRoot.is_valid())
@@ -122,17 +133,24 @@ namespace AshEditor
 					continue;
 				}
 
-				if (!outBounds.is_valid)
+				AshEngine::merge_scene_world_bounds(outBounds, subtreeBounds);
+			}
+
+			for (const AshEngine::Entity& refTerrain :
+				refScene.get_entities_with_component(AshEngine::SceneComponentType::Terrain))
+			{
+				if (!refTerrain.is_valid())
 				{
-					outBounds = subtreeBounds;
 					continue;
 				}
-
-				outBounds.min = glm::min(outBounds.min, subtreeBounds.min);
-				outBounds.max = glm::max(outBounds.max, subtreeBounds.max);
-				outBounds.center = (outBounds.min + outBounds.max) * 0.5f;
-				outBounds.extents = (outBounds.max - outBounds.min) * 0.5f;
-				outBounds.is_valid = true;
+				const AshEngine::AssetInfo* pAsset = refAssetDatabase.find_asset_by_path(
+					refTerrain.get_terrain_component().asset_path);
+				if (!pAsset ||
+					refAssetDatabase.get_asset_load_state(pAsset->id) !=
+						AshEngine::AssetLoadState::Loaded)
+				{
+					outBoundsComplete = false;
+				}
 			}
 
 			return outBounds.is_valid;
@@ -179,13 +197,21 @@ namespace AshEditor
 		const SceneService& refSceneService,
 		const AssetDatabaseService& refAssetDatabaseService)
 	{
-		if (!refSceneService.GetActiveScene().is_valid())
+		const AshEngine::Scene& refActiveScene = refSceneService.GetActiveScene();
+		if (!refActiveScene.is_valid())
 		{
 			return;
 		}
 
+		++_uSceneSyncSequence;
+		if (_uSceneSyncSequence == 0)
+		{
+			++_uSceneSyncSequence;
+		}
 		ViewportCameraState& refState = EnsureState(EditorViewportIds::Scene);
 		SyncCameraState(refSceneService, refAssetDatabaseService, EditorViewportIds::Scene, refState);
+		refState.uLastSceneSyncSequence = _uSceneSyncSequence;
+		refState.uLastSceneContentEpoch = refActiveScene.get_content_epoch();
 	}
 
 	void EditorViewportCameraService::UpdateViewportInput(
@@ -201,7 +227,25 @@ namespace AshEditor
 		}
 
 		ViewportCameraState& refState = EnsureState(refContext.strViewportId);
-		SyncCameraState(refSceneService, refAssetDatabaseService, refContext.strViewportId, refState);
+		const AshEngine::Scene& refActiveScene = refSceneService.GetActiveScene();
+		const bool bSceneChangedSinceSync =
+			!refActiveScene.is_valid() ||
+			refState.pScene != &refActiveScene ||
+			refState.uLastSceneContentEpoch != refActiveScene.get_content_epoch();
+		if (_uSceneSyncSequence == 0 ||
+			refState.uLastSceneSyncSequence != _uSceneSyncSequence ||
+			bSceneChangedSinceSync)
+		{
+			SyncCameraState(
+				refSceneService,
+				refAssetDatabaseService,
+				refContext.strViewportId,
+				refState);
+			refState.uLastSceneSyncSequence = _uSceneSyncSequence;
+			refState.uLastSceneContentEpoch = refActiveScene.is_valid()
+				? refActiveScene.get_content_epoch()
+				: 0;
+		}
 		if (!refState.bInitialized)
 		{
 			return;
@@ -232,12 +276,15 @@ namespace AshEditor
 
 		if (bMouseInContent && std::abs(refInput.vecMouseWheelDelta.y) > 0.0f)
 		{
+			refState.bHasUserNavigated = true;
 			const float fSpeedScale = std::max(0.2f, refState.fMoveSpeed / 8.0f);
 			const float fDistanceDelta =
 				std::max(refState.fOrbitDistance * kScrollDollySpeed, kMinOrbitDistance) *
 				refInput.vecMouseWheelDelta.y *
 				fSpeedScale;
-			refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
+			refState.fOrbitDistance = ClampOrbitDistance(
+				refState.fOrbitDistance - fDistanceDelta,
+				refState.fMaxOrbitDistance);
 			UpdatePositionFromOrbit(refState);
 		}
 
@@ -248,6 +295,7 @@ namespace AshEditor
 
 		if (refInput.WasMousePressed(AshEngine::UIMouseButton::Middle) && bMouseInContent)
 		{
+			refState.bHasUserNavigated = true;
 			refState.eDragMode = CameraDragMode::Pan;
 			refState.bHasLastMousePosition = false;
 		}
@@ -255,6 +303,7 @@ namespace AshEditor
 			refInput.WasMousePressed(AshEngine::UIMouseButton::Left) &&
 			bMouseInContent)
 		{
+			refState.bHasUserNavigated = true;
 			refState.eDragMode = CameraDragMode::Orbit;
 			refState.bHasLastMousePosition = false;
 		}
@@ -262,6 +311,7 @@ namespace AshEditor
 			refInput.WasMousePressed(AshEngine::UIMouseButton::Right) &&
 			bMouseInContent)
 		{
+			refState.bHasUserNavigated = true;
 			refState.eDragMode = CameraDragMode::Dolly;
 			refState.bHasLastMousePosition = false;
 		}
@@ -295,12 +345,15 @@ namespace AshEditor
 
 		if (refInput.WasKeyPressed(AshEngine::UIKey::F) && (bMouseInContent || refContext.bViewportFocused))
 		{
-			FocusEntity(
+			if (FocusEntity(
 				refSceneService,
 				refAssetDatabaseService,
 				refContext.strViewportId,
 				refState,
-				refContext.uFocusEntityId);
+				refContext.uFocusEntityId))
+			{
+				refState.bHasUserNavigated = true;
+			}
 		}
 
 		if (refState.eDragMode != CameraDragMode::None)
@@ -351,7 +404,9 @@ namespace AshEditor
 						std::max(refState.fOrbitDistance * kDragDollySpeed, kMinOrbitDistance) *
 						static_cast<float>(-dMouseDeltaY) *
 						fSpeedScale;
-					refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
+					refState.fOrbitDistance = ClampOrbitDistance(
+						refState.fOrbitDistance - fDistanceDelta,
+						refState.fMaxOrbitDistance);
 					UpdatePositionFromOrbit(refState);
 					break;
 				}
@@ -408,6 +463,7 @@ namespace AshEditor
 	void EditorViewportCameraService::Reset()
 	{
 		_mapStates.clear();
+		_uSceneSyncSequence = 0;
 	}
 
 	EditorViewportCameraService::ViewportCameraState& EditorViewportCameraService::EnsureState(const std::string& strViewportId)
@@ -431,9 +487,14 @@ namespace AshEditor
 		return std::clamp(fMoveSpeed, kMinMoveSpeed, kMaxMoveSpeed);
 	}
 
-	float EditorViewportCameraService::ClampOrbitDistance(const float fOrbitDistance)
+	float EditorViewportCameraService::ClampOrbitDistance(
+		const float fOrbitDistance,
+		const float fMaxOrbitDistance)
 	{
-		return std::clamp(fOrbitDistance, kMinOrbitDistance, kMaxOrbitDistance);
+		return std::clamp(
+			fOrbitDistance,
+			kMinOrbitDistance,
+			std::max(kMinOrbitDistance, fMaxOrbitDistance));
 	}
 
 	void EditorViewportCameraService::SyncCameraState(
@@ -459,17 +520,28 @@ namespace AshEditor
 			!refState.bInitialized ||
 			refState.strSourceSceneName != refActiveScene.get_name() ||
 			refState.strSourceScenePath != strScenePath;
-		if (!bNeedsReseed)
+		if (bNeedsReseed)
 		{
+			SeedCameraFromSceneContent(refActiveScene, refAssetDatabaseService, refState);
+			refState.strSourceSceneName = refActiveScene.get_name();
+			refState.strSourceScenePath = strScenePath;
+			refState.eDragMode = CameraDragMode::None;
+			refState.bHasLastMousePosition = false;
+			refState.bInitialized = true;
+			RefreshCameraOverride(refState);
 			return;
 		}
 
-		SeedCameraFromSceneContent(refActiveScene, refAssetDatabaseService, refState);
-		refState.strSourceSceneName = refActiveScene.get_name();
-		refState.strSourceScenePath = strScenePath;
-		refState.eDragMode = CameraDragMode::None;
-		refState.bHasLastMousePosition = false;
-		refState.bInitialized = true;
+		const bool bBoundsComplete = RefreshSceneBounds(
+			refActiveScene, refAssetDatabaseService, refState);
+		if (refState.bAwaitingInitialSceneBounds && bBoundsComplete)
+		{
+			refState.bAwaitingInitialSceneBounds = false;
+			if (!refState.bHasUserNavigated && refState.sceneBounds.is_valid)
+			{
+				SeedCameraFromBounds(refState.sceneBounds, refState);
+			}
+		}
 		RefreshCameraOverride(refState);
 	}
 
@@ -481,33 +553,120 @@ namespace AshEditor
 		AshEngine::SceneWorldBounds sceneBounds{};
 		AshEngine::AssetDatabase& refAssetDatabase =
 			const_cast<AshEngine::AssetDatabase&>(refAssetDatabaseService.GetDatabase());
-		if (TryComputeSceneFocusBounds(refScene, refAssetDatabase, sceneBounds))
+		bool bBoundsComplete = false;
+		refState.lastFocusBounds = {};
+		refState.bHasUserNavigated = false;
+		refState.fMaxOrbitDistance = kDefaultMaxOrbitDistance;
+		if (TryComputeSceneFocusBounds(
+				refScene, refAssetDatabase, sceneBounds, bBoundsComplete))
 		{
-			const float fRadius = std::max(glm::length(sceneBounds.extents), 0.5f);
-			const float fFocusDistance = std::max(
-				kDefaultFocusDistance,
-				(fRadius / std::tan(glm::radians(refState.fFovYDegrees) * 0.5f)) * 1.15f);
-			const glm::vec3 vecTarget = sceneBounds.center;
-			const glm::vec3 vecViewDirection = glm::normalize(glm::vec3(-0.55f, 0.38f, -1.0f));
-			refState.vecOrbitTarget = vecTarget;
-			refState.vecPosition = vecTarget + vecViewDirection * fFocusDistance;
-			refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecTarget - refState.vecPosition);
-			refState.fOrbitDistance = ClampOrbitDistance(glm::length(refState.vecOrbitTarget - refState.vecPosition));
-			UpdatePositionFromOrbit(refState);
+			refState.sceneBounds = sceneBounds;
+			refState.bAwaitingInitialSceneBounds = !bBoundsComplete;
+			SeedCameraFromBounds(sceneBounds, refState);
 			return;
 		}
 
+		refState.sceneBounds = {};
+		refState.bAwaitingInitialSceneBounds = !bBoundsComplete;
 		const glm::vec3 vecFallbackTarget{ 0.0f, 0.9f, 0.0f };
 		refState.vecOrbitTarget = vecFallbackTarget;
 		refState.vecPosition = { -3.0f, 2.2f, -6.5f };
 		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecFallbackTarget - refState.vecPosition);
-		refState.fOrbitDistance = ClampOrbitDistance(glm::length(refState.vecOrbitTarget - refState.vecPosition));
+		refState.fOrbitDistance = ClampOrbitDistance(
+			glm::length(refState.vecOrbitTarget - refState.vecPosition),
+			refState.fMaxOrbitDistance);
 		UpdatePositionFromOrbit(refState);
+	}
+
+	void EditorViewportCameraService::SeedCameraFromBounds(
+		const AshEngine::SceneWorldBounds& refBounds,
+		ViewportCameraState& refState) const
+	{
+		float fFocusDistance = kDefaultFocusDistance;
+		float fFramingDistance = 0.0f;
+		if (AshEngine::compute_camera_bounds_framing_distance(
+				refBounds,
+				refState.fFovYDegrees,
+				kCameraFramingPaddingScale,
+				fFramingDistance))
+		{
+			fFocusDistance = std::max(fFocusDistance, fFramingDistance);
+		}
+		refState.fMaxOrbitDistance = std::max(refState.fMaxOrbitDistance, fFocusDistance);
+		float fNavigationLimit = 0.0f;
+		if (AshEngine::compute_camera_bounds_framing_distance(
+				refBounds,
+				refState.fFovYDegrees,
+				kCameraFramingPaddingScale * kOrbitDistanceHeadroomScale,
+				fNavigationLimit))
+		{
+			refState.fMaxOrbitDistance = std::max(refState.fMaxOrbitDistance, fNavigationLimit);
+		}
+		const glm::vec3 vecTarget = refBounds.center;
+		const glm::vec3 vecViewDirection = glm::normalize(glm::vec3(-0.55f, 0.38f, -1.0f));
+		refState.vecOrbitTarget = vecTarget;
+		refState.vecPosition = vecTarget + vecViewDirection * fFocusDistance;
+		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(
+			vecTarget - refState.vecPosition);
+		refState.fOrbitDistance = ClampOrbitDistance(
+			glm::length(refState.vecOrbitTarget - refState.vecPosition),
+			refState.fMaxOrbitDistance);
+		UpdatePositionFromOrbit(refState);
+	}
+
+	bool EditorViewportCameraService::RefreshSceneBounds(
+		const AshEngine::Scene& refScene,
+		const AssetDatabaseService& refAssetDatabaseService,
+		ViewportCameraState& refState) const
+	{
+		AshEngine::SceneWorldBounds sceneBounds{};
+		AshEngine::AssetDatabase& refAssetDatabase =
+			const_cast<AshEngine::AssetDatabase&>(refAssetDatabaseService.GetDatabase());
+		bool bBoundsComplete = false;
+		const bool bHasBounds = TryComputeSceneFocusBounds(
+			refScene, refAssetDatabase, sceneBounds, bBoundsComplete);
+		if (bBoundsComplete || !refState.sceneBounds.is_valid)
+		{
+			refState.sceneBounds = bHasBounds
+				? sceneBounds
+				: AshEngine::SceneWorldBounds{};
+		}
+		else if (bHasBounds)
+		{
+			AshEngine::merge_scene_world_bounds(refState.sceneBounds, sceneBounds);
+		}
+
+		if (refState.sceneBounds.is_valid)
+		{
+			float fNavigationLimit = 0.0f;
+			if (AshEngine::compute_camera_bounds_framing_distance(
+					refState.sceneBounds,
+					refState.fFovYDegrees,
+					kCameraFramingPaddingScale * kOrbitDistanceHeadroomScale,
+					fNavigationLimit))
+			{
+				refState.fMaxOrbitDistance = std::max(refState.fMaxOrbitDistance, fNavigationLimit);
+			}
+		}
+		return bBoundsComplete;
 	}
 
 	void EditorViewportCameraService::RefreshCameraOverride(ViewportCameraState& refState) const
 	{
 		refState.cameraOverride.view = ComputeViewMatrix(refState.vecPosition, refState.vecRotationEulerDegrees);
+		const AshEngine::SceneWorldBounds& refClipBounds = refState.sceneBounds.is_valid
+			? refState.sceneBounds
+			: refState.lastFocusBounds;
+		AshEngine::SceneCameraClipRange clipRange{};
+		if (AshEngine::compute_camera_clip_range(
+				refClipBounds,
+				refState.cameraOverride.view,
+				0.03f,
+				clipRange))
+		{
+			refState.fNearPlane = clipRange.near_plane;
+			refState.fFarPlane = clipRange.far_plane;
+		}
 		refState.cameraOverride.projection = ComputePerspectiveProjection(
 			static_cast<float>(refState.uViewportWidth),
 			static_cast<float>(refState.uViewportHeight),
@@ -515,6 +674,7 @@ namespace AshEditor
 			refState.fNearPlane,
 			refState.fFarPlane);
 		refState.cameraOverride.camera_position = refState.vecPosition;
+		refState.cameraOverride.reverse_z = kEditorCameraReverseZ;
 		refState.cameraOverride.enabled = true;
 	}
 
@@ -536,12 +696,14 @@ namespace AshEditor
 
 	void EditorViewportCameraService::UpdatePositionFromOrbit(ViewportCameraState& refState) const
 	{
-		refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance);
+		refState.fOrbitDistance = ClampOrbitDistance(
+			refState.fOrbitDistance,
+			refState.fMaxOrbitDistance);
 		const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
 		refState.vecPosition = refState.vecOrbitTarget - vecForward * refState.fOrbitDistance;
 	}
 
-	void EditorViewportCameraService::FocusEntity(
+	bool EditorViewportCameraService::FocusEntity(
 		const SceneService& refSceneService,
 		const AssetDatabaseService& refAssetDatabaseService,
 		const std::string& strViewportId,
@@ -550,13 +712,13 @@ namespace AshEditor
 	{
 		if (!IsSupportedSceneViewport(strViewportId) || uEntityId == 0)
 		{
-			return;
+			return false;
 		}
 
 		const AshEngine::Entity entity = refSceneService.FindEntity(uEntityId);
 		if (!entity.is_valid())
 		{
-			return;
+			return false;
 		}
 
 		AshEngine::SceneWorldBounds bounds{};
@@ -572,25 +734,49 @@ namespace AshEditor
 		float fFocusDistance = kDefaultFocusDistance;
 		if (bHasBounds)
 		{
+			refState.lastFocusBounds = bounds;
 			vecTarget = bounds.center;
-			const float fRadius = std::max(glm::length(bounds.extents), 0.5f);
-			fFocusDistance = std::max(
-				kDefaultFocusDistance,
-				(fRadius / std::tan(glm::radians(refState.fFovYDegrees) * 0.5f)) * 1.15f);
+			float fFramingDistance = 0.0f;
+			if (AshEngine::compute_camera_bounds_framing_distance(
+					bounds,
+					refState.fFovYDegrees,
+					kCameraFramingPaddingScale,
+					fFramingDistance))
+			{
+				fFocusDistance = std::max(fFocusDistance, fFramingDistance);
+			}
+			refState.fMaxOrbitDistance = std::max(refState.fMaxOrbitDistance, fFocusDistance);
+			float fNavigationLimit = 0.0f;
+			if (AshEngine::compute_camera_bounds_framing_distance(
+					bounds,
+					refState.fFovYDegrees,
+					kCameraFramingPaddingScale * kOrbitDistanceHeadroomScale,
+					fNavigationLimit))
+			{
+				refState.fMaxOrbitDistance = std::max(refState.fMaxOrbitDistance, fNavigationLimit);
+			}
 		}
 		else
 		{
 			const glm::mat4 matWorldTransform = refSceneService.GetActiveScene().get_entity_world_transform(uEntityId);
 			vecTarget = glm::vec3(matWorldTransform[3]);
+			refState.lastFocusBounds.is_valid = true;
+			refState.lastFocusBounds.min = vecTarget;
+			refState.lastFocusBounds.max = vecTarget;
+			refState.lastFocusBounds.center = vecTarget;
+			refState.lastFocusBounds.extents = glm::vec3(0.0f);
 		}
 
 		const glm::vec3 vecForward = ComputeForwardVector(refState.vecRotationEulerDegrees);
 		refState.vecOrbitTarget = vecTarget;
-		refState.fOrbitDistance = ClampOrbitDistance(fFocusDistance);
+		refState.fOrbitDistance = ClampOrbitDistance(
+			fFocusDistance,
+			refState.fMaxOrbitDistance);
 		refState.vecPosition = vecTarget - vecForward * refState.fOrbitDistance;
 		refState.vecRotationEulerDegrees = ComputeLookRotationDegrees(vecTarget - refState.vecPosition);
 		UpdatePositionFromOrbit(refState);
 		RefreshCameraOverride(refState);
+		return true;
 	}
 
 	bool EditorViewportCameraService::IsSupportedSceneViewport(const std::string& strViewportId)

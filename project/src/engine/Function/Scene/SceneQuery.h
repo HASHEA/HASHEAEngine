@@ -25,6 +25,12 @@ namespace AshEngine
 		glm::vec3 direction{ 0.0f, 0.0f, 1.0f };
 	};
 
+	struct ASH_API SceneCameraClipRange
+	{
+		float near_plane = 0.03f;
+		float far_plane = 1000.0f;
+	};
+
 	struct ASH_API SceneRayHit
 	{
 		EntityId entity_id = 0;
@@ -53,6 +59,22 @@ namespace AshEngine
 		AssetDatabase& database,
 		EntityId root_entity_id,
 		SceneWorldBounds& out_bounds);
+
+	ASH_API bool merge_scene_world_bounds(
+		SceneWorldBounds& in_out_bounds,
+		const SceneWorldBounds& addition);
+
+	ASH_API bool compute_camera_clip_range(
+		const SceneWorldBounds& world_bounds,
+		const glm::mat4& view,
+		float near_plane_floor,
+		SceneCameraClipRange& out_clip_range);
+
+	ASH_API bool compute_camera_bounds_framing_distance(
+		const SceneWorldBounds& world_bounds,
+		float vertical_fov_degrees,
+		float padding_scale,
+		float& out_distance);
 
 	ASH_API SceneRay screen_to_world_ray(
 		float screen_x,

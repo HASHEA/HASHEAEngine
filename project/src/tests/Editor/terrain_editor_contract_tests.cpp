@@ -94,6 +94,101 @@ TEST_CASE("Terrain Mode ids are stable Editor contracts")
 	CHECK(std::string(AshEditor::EditorWindowTitles::TerrainMode) == "Terrain");
 }
 
+TEST_CASE("Editor viewport camera keeps full scene dynamic clip bounds after focus and navigation")
+{
+	const std::string header = ReadTerrainContractText(
+		"project/src/editor/Services/EditorViewportCameraService.h");
+	const std::string source = ReadTerrainContractText(
+		"project/src/editor/Services/EditorViewportCameraService.cpp");
+	REQUIRE_FALSE(header.empty());
+	REQUIRE_FALSE(source.empty());
+
+	CHECK(header.find("SceneWorldBounds sceneBounds") != std::string::npos);
+	CHECK(header.find("SceneWorldBounds lastFocusBounds") != std::string::npos);
+	CHECK(header.find("bAwaitingInitialSceneBounds") != std::string::npos);
+	CHECK(header.find("bHasUserNavigated") != std::string::npos);
+	CHECK(header.find("fMaxOrbitDistance") != std::string::npos);
+	CHECK(header.find("uLastSceneSyncSequence") != std::string::npos);
+	CHECK(header.find("_uSceneSyncSequence") != std::string::npos);
+	CHECK(header.find("fFarPlane = 2000.0f") == std::string::npos);
+	CHECK(source.find("kMaxOrbitDistance = 20000.0f") == std::string::npos);
+	CHECK(source.find("kOrbitDistanceHeadroomScale = 2.0f") != std::string::npos);
+	CHECK(source.find("kEditorCameraReverseZ = true") != std::string::npos);
+
+	const size_t perspective_begin = source.find("glm::mat4 ComputePerspectiveProjection(");
+	const size_t perspective_end = source.find("glm::vec3 ComputeLookRotationDegrees(", perspective_begin);
+	const size_t sync_from_scene_begin = source.find("void EditorViewportCameraService::SyncFromScene(");
+	const size_t sync_begin = source.find("void EditorViewportCameraService::SyncCameraState(");
+	const size_t seed_begin = source.find("void EditorViewportCameraService::SeedCameraFromSceneContent(");
+	const size_t seed_bounds_begin = source.find("void EditorViewportCameraService::SeedCameraFromBounds(");
+	const size_t scene_bounds_begin = source.find("bool EditorViewportCameraService::RefreshSceneBounds(");
+	const size_t refresh_begin = source.find("void EditorViewportCameraService::RefreshCameraOverride(");
+	const size_t focus_begin = source.find("bool EditorViewportCameraService::FocusEntity(");
+	const size_t input_begin = source.find("void EditorViewportCameraService::UpdateViewportInput(");
+	REQUIRE(perspective_begin != std::string::npos);
+	REQUIRE(perspective_end != std::string::npos);
+	REQUIRE(sync_from_scene_begin != std::string::npos);
+	REQUIRE(sync_begin != std::string::npos);
+	REQUIRE(seed_begin != std::string::npos);
+	REQUIRE(seed_bounds_begin != std::string::npos);
+	REQUIRE(scene_bounds_begin != std::string::npos);
+	REQUIRE(refresh_begin != std::string::npos);
+	REQUIRE(focus_begin != std::string::npos);
+	REQUIRE(input_begin != std::string::npos);
+
+	const std::string perspective = source.substr(
+		perspective_begin, perspective_end - perspective_begin);
+	const std::string sync_from_scene = source.substr(
+		sync_from_scene_begin, input_begin - sync_from_scene_begin);
+	const std::string sync = source.substr(sync_begin, seed_begin - sync_begin);
+	const std::string seed = source.substr(seed_begin, seed_bounds_begin - seed_begin);
+	const std::string seed_bounds = source.substr(seed_bounds_begin, scene_bounds_begin - seed_bounds_begin);
+	const std::string scene_bounds = source.substr(scene_bounds_begin, refresh_begin - scene_bounds_begin);
+	const std::string refresh = source.substr(refresh_begin, focus_begin - refresh_begin);
+	const std::string focus = source.substr(focus_begin);
+	const std::string input = source.substr(input_begin, sync_begin - input_begin);
+	const size_t focus_key_begin = input.find("if (refInput.WasKeyPressed(AshEngine::UIKey::F)");
+	const size_t focus_key_end = input.find("if (refState.eDragMode != CameraDragMode::None)", focus_key_begin);
+	REQUIRE(focus_key_begin != std::string::npos);
+	REQUIRE(focus_key_end != std::string::npos);
+	const std::string focus_key = input.substr(
+		focus_key_begin, focus_key_end - focus_key_begin);
+
+	CHECK(perspective.find("std::swap(fResolvedNearPlane, fResolvedFarPlane)") != std::string::npos);
+	CHECK(sync_from_scene.find("++_uSceneSyncSequence") != std::string::npos);
+	CHECK(input.find("uLastSceneSyncSequence != _uSceneSyncSequence") != std::string::npos);
+	CHECK(input.find("get_content_epoch()") != std::string::npos);
+	CHECK(sync.find("RefreshSceneBounds") != std::string::npos);
+	CHECK(sync.find("bAwaitingInitialSceneBounds") != std::string::npos);
+	CHECK(sync.find("!refState.bHasUserNavigated") != std::string::npos);
+	CHECK(sync.find("SeedCameraFromBounds") != std::string::npos);
+	CHECK(seed.find("bAwaitingInitialSceneBounds") != std::string::npos);
+	CHECK(seed_bounds.find("compute_camera_bounds_framing_distance") != std::string::npos);
+	CHECK(seed_bounds.find("fMaxOrbitDistance") != std::string::npos);
+	CHECK(seed_bounds.find("kOrbitDistanceHeadroomScale") != std::string::npos);
+	CHECK(seed_bounds.find("std::max(refState.fMaxOrbitDistance, fNavigationLimit)") != std::string::npos);
+	CHECK(scene_bounds.find("compute_camera_bounds_framing_distance") != std::string::npos);
+	CHECK(scene_bounds.find("merge_scene_world_bounds") != std::string::npos);
+	CHECK(scene_bounds.find("bBoundsComplete || !refState.sceneBounds.is_valid") != std::string::npos);
+	CHECK(scene_bounds.find("kOrbitDistanceHeadroomScale") != std::string::npos);
+	CHECK(scene_bounds.find("std::max(refState.fMaxOrbitDistance, fNavigationLimit)") != std::string::npos);
+	CHECK(refresh.find("compute_camera_clip_range") != std::string::npos);
+	CHECK(refresh.find("refState.sceneBounds") != std::string::npos);
+	CHECK(refresh.find("cameraOverride.reverse_z = kEditorCameraReverseZ") != std::string::npos);
+	const size_t focus_call = focus_key.find("if (FocusEntity(");
+	const size_t focus_navigation = focus_key.find("bHasUserNavigated = true", focus_call);
+	REQUIRE(focus_call != std::string::npos);
+	REQUIRE(focus_navigation != std::string::npos);
+	CHECK(focus_call < focus_navigation);
+	CHECK(input.find("RefreshCameraOverride(refState)") != std::string::npos);
+	CHECK(focus.find("lastFocusBounds = bounds") != std::string::npos);
+	CHECK(focus.find("compute_camera_bounds_framing_distance") != std::string::npos);
+	CHECK(focus.find("kOrbitDistanceHeadroomScale") != std::string::npos);
+	CHECK(focus.find("std::max(refState.fMaxOrbitDistance, fNavigationLimit)") != std::string::npos);
+	CHECK(focus.find("sceneBounds = bounds") == std::string::npos);
+	CHECK(focus.find("return true;") != std::string::npos);
+}
+
 TEST_CASE("Terrain Mode is a UIContext panel backed by TerrainEditorService")
 {
 	const std::string panel = ReadTerrainContractText(

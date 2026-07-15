@@ -26,20 +26,29 @@ namespace AshEngine
 				std::isfinite(value.z);
 		}
 
+		static auto finite_mat4(const glm::mat4& value) -> bool
+		{
+			for (glm::length_t column = 0; column < 4; ++column)
+			{
+				for (glm::length_t row = 0; row < 4; ++row)
+				{
+					if (!std::isfinite(value[column][row]))
+					{
+						return false;
+					}
+				}
+			}
+			return true;
+		}
+
 		static auto extract_axis_aligned_terrain_transform(
 			const glm::mat4& matrix,
 			AxisAlignedTerrainTransform& out_transform) -> bool
 		{
 			constexpr float epsilon = 1.0e-5f;
-			for (glm::length_t column = 0; column < 4; ++column)
+			if (!finite_mat4(matrix))
 			{
-				for (glm::length_t row = 0; row < 4; ++row)
-				{
-					if (!std::isfinite(matrix[column][row]))
-					{
-						return false;
-					}
-				}
+				return false;
 			}
 
 			const bool axis_aligned =
@@ -134,9 +143,252 @@ namespace AshEngine
 			return bounds;
 		}
 
+		static auto try_get_resident_terrain_height_range(
+			const TerrainAssetSnapshot& snapshot,
+			float& out_minimum,
+			float& out_maximum) -> bool
+		{
+			const size_t component_count_x = snapshot.layout.component_count_x;
+			const size_t component_count_z = snapshot.layout.component_count_z;
+			if (component_count_x == 0u ||
+				component_count_z > std::numeric_limits<size_t>::max() / component_count_x)
+			{
+				return false;
+			}
+
+			const size_t expected_count = component_count_x * component_count_z;
+			if (snapshot.components.size() != expected_count)
+			{
+				return false;
+			}
+
+			std::vector<uint8_t> seen(expected_count, 0u);
+			float minimum = std::numeric_limits<float>::infinity();
+			float maximum = -std::numeric_limits<float>::infinity();
+			for (const auto& component : snapshot.components)
+			{
+				if (!component ||
+					component->coord.x >= snapshot.layout.component_count_x ||
+					component->coord.z >= snapshot.layout.component_count_z)
+				{
+					return false;
+				}
+
+				const size_t index =
+					static_cast<size_t>(component->coord.z) * component_count_x +
+					component->coord.x;
+				if (seen[index] != 0u)
+				{
+					return false;
+				}
+				seen[index] = 1u;
+
+				const TerrainSampleRect rect = get_terrain_component_snapshot_rect(
+					snapshot.layout, component->coord);
+				if (component->sample_width != rect.width() ||
+					component->sample_height != rect.height() ||
+					component->min_max_levels.empty() ||
+					component->min_max_level_offsets.front() != 0u ||
+					component->min_max_level_offsets.back() != component->min_max_levels.size())
+				{
+					return false;
+				}
+
+				const glm::vec2 root_range = component->min_max_levels.back();
+				if (!std::isfinite(root_range.x) ||
+					!std::isfinite(root_range.y) ||
+					root_range.x > root_range.y)
+				{
+					return false;
+				}
+				minimum = std::min(minimum, root_range.x);
+				maximum = std::max(maximum, root_range.y);
+			}
+
+			if (!std::isfinite(minimum) || !std::isfinite(maximum))
+			{
+				return false;
+			}
+			out_minimum = minimum;
+			out_maximum = maximum;
+			return true;
+		}
+
+		static auto try_get_conservative_terrain_height_range(
+			const TerrainAssetSnapshot& snapshot,
+			float& out_minimum,
+			float& out_maximum) -> bool
+		{
+			const double mapping_minimum = snapshot.height_mapping.height_offset;
+			const double mapping_maximum =
+				mapping_minimum + snapshot.height_mapping.height_range;
+			if (!std::isfinite(mapping_minimum) ||
+				!std::isfinite(mapping_maximum) ||
+				snapshot.height_mapping.height_range <= 0.0f)
+			{
+				return false;
+			}
+
+			double minimum = mapping_minimum;
+			double maximum = mapping_maximum;
+			if (snapshot.edit_layers)
+			{
+				for (const TerrainEditLayer& layer : *snapshot.edit_layers)
+				{
+					if (!std::isfinite(layer.strength) ||
+						(layer.height_blend_mode != TerrainHeightBlendMode::Additive &&
+							layer.height_blend_mode != TerrainHeightBlendMode::Alpha))
+					{
+						return false;
+					}
+					if (!layer.visible)
+					{
+						continue;
+					}
+
+					const double strength = std::clamp(
+						static_cast<double>(layer.strength), 0.0, 1.0);
+					if (strength <= 0.0)
+					{
+						continue;
+					}
+
+					if (layer.height_blend_mode == TerrainHeightBlendMode::Additive)
+					{
+						double minimum_effect = 0.0;
+						double maximum_effect = 0.0;
+						for (const TerrainSparseHeightBlock& block : layer.height_blocks)
+						{
+							if (block.values.size() != block.coverage.size())
+							{
+								return false;
+							}
+							for (size_t index = 0u; index < block.values.size(); ++index)
+							{
+								const double value = block.values[index];
+								const double coverage = block.coverage[index];
+								if (!std::isfinite(value) ||
+									!std::isfinite(coverage) ||
+									coverage < 0.0 || coverage > 1.0)
+								{
+									return false;
+								}
+								const double effect = value * coverage * strength;
+								if (!std::isfinite(effect))
+								{
+									return false;
+								}
+								minimum_effect = std::min(minimum_effect, effect);
+								maximum_effect = std::max(maximum_effect, effect);
+							}
+						}
+						minimum += minimum_effect;
+						maximum += maximum_effect;
+					}
+					else
+					{
+						double next_minimum = minimum;
+						double next_maximum = maximum;
+						for (const TerrainSparseHeightBlock& block : layer.height_blocks)
+						{
+							if (block.values.size() != block.coverage.size())
+							{
+								return false;
+							}
+							for (size_t index = 0u; index < block.values.size(); ++index)
+							{
+								const double value = block.values[index];
+								const double coverage = block.coverage[index];
+								if (!std::isfinite(value) ||
+									!std::isfinite(coverage) ||
+									coverage < 0.0 || coverage > 1.0)
+								{
+									return false;
+								}
+								const double factor = coverage * strength;
+								const double candidate_minimum =
+									minimum + (value - minimum) * factor;
+								const double candidate_maximum =
+									maximum + (value - maximum) * factor;
+								if (!std::isfinite(candidate_minimum) ||
+									!std::isfinite(candidate_maximum))
+								{
+									return false;
+								}
+								next_minimum = std::min(next_minimum, candidate_minimum);
+								next_maximum = std::max(next_maximum, candidate_maximum);
+							}
+						}
+						minimum = next_minimum;
+						maximum = next_maximum;
+					}
+
+					if (!std::isfinite(minimum) || !std::isfinite(maximum))
+					{
+						return false;
+					}
+				}
+			}
+
+			const double maximum_float = std::numeric_limits<float>::max();
+			if (minimum < -maximum_float || maximum > maximum_float || minimum > maximum)
+			{
+				return false;
+			}
+			out_minimum = static_cast<float>(minimum);
+			out_maximum = static_cast<float>(maximum);
+			return true;
+		}
+
+		static auto try_get_terrain_local_bounds(
+			const TerrainAssetSnapshot& snapshot,
+			SceneMeshBounds& out_bounds) -> bool
+		{
+			out_bounds = {};
+			if (snapshot.failed || !is_valid_terrain_grid_layout(snapshot.layout))
+			{
+				return false;
+			}
+
+			const double maximum_x =
+				static_cast<double>(snapshot.layout.sample_count_x - 1u) *
+				snapshot.layout.sample_spacing_meters;
+			const double maximum_z =
+				static_cast<double>(snapshot.layout.sample_count_z - 1u) *
+				snapshot.layout.sample_spacing_meters;
+			if (!std::isfinite(maximum_x) ||
+				!std::isfinite(maximum_z) ||
+				maximum_x > std::numeric_limits<float>::max() ||
+				maximum_z > std::numeric_limits<float>::max())
+			{
+				return false;
+			}
+
+			float minimum_y = 0.0f;
+			float maximum_y = 0.0f;
+			if (!try_get_resident_terrain_height_range(snapshot, minimum_y, maximum_y) &&
+				!try_get_conservative_terrain_height_range(snapshot, minimum_y, maximum_y))
+			{
+				return false;
+			}
+
+			out_bounds.is_valid = true;
+			out_bounds.local_min = { 0.0f, minimum_y, 0.0f };
+			out_bounds.local_max = {
+				static_cast<float>(maximum_x),
+				maximum_y,
+				static_cast<float>(maximum_z)
+			};
+			return true;
+		}
+
 		static auto transform_local_bounds(const SceneMeshBounds& local_bounds, const glm::mat4& world_transform) -> SceneWorldBounds
 		{
-			if (!local_bounds.is_valid)
+			if (!local_bounds.is_valid ||
+				!finite_vec3(local_bounds.local_min) ||
+				!finite_vec3(local_bounds.local_max) ||
+				glm::any(glm::greaterThan(local_bounds.local_min, local_bounds.local_max)) ||
+				!finite_mat4(world_transform))
 			{
 				return {};
 			}
@@ -160,6 +412,10 @@ namespace AshEngine
 			for (const glm::vec3& corner : corners)
 			{
 				const glm::vec3 transformed = transform_point(world_transform, corner);
+				if (!finite_vec3(transformed))
+				{
+					return {};
+				}
 				world_min = glm::min(world_min, transformed);
 				world_max = glm::max(world_max, transformed);
 			}
@@ -167,24 +423,30 @@ namespace AshEngine
 			return make_bounds(world_min, world_max);
 		}
 
-		static auto expand_bounds(SceneWorldBounds& bounds, const SceneWorldBounds& addition) -> void
+		static auto try_get_mesh_entity_world_bounds(
+			const Scene& scene,
+			AssetDatabase& database,
+			const Entity& entity,
+			SceneWorldBounds& out_bounds) -> bool
 		{
-			if (!addition.is_valid)
+			out_bounds = {};
+			if (!scene.is_valid() || !database.is_valid() ||
+				!entity.is_valid() || !entity.has_mesh_component())
 			{
-				return;
+				return false;
 			}
 
-			if (!bounds.is_valid)
+			SceneMeshBounds local_bounds{};
+			if (!scene.try_get_mesh_local_bounds(
+					database, entity.get_mesh_component(), local_bounds))
 			{
-				bounds = addition;
-				return;
+				return false;
 			}
 
-			bounds.min = glm::min(bounds.min, addition.min);
-			bounds.max = glm::max(bounds.max, addition.max);
-			bounds.center = (bounds.min + bounds.max) * 0.5f;
-			bounds.extents = (bounds.max - bounds.min) * 0.5f;
-			bounds.is_valid = true;
+			out_bounds = transform_local_bounds(
+				local_bounds,
+				scene.get_entity_world_transform(entity.get_id()));
+			return out_bounds.is_valid;
 		}
 
 		static auto normalize_or_fallback(const glm::vec3& value, const glm::vec3& fallback) -> glm::vec3
@@ -253,7 +515,7 @@ namespace AshEngine
 			SceneWorldBounds entity_bounds{};
 			if (get_entity_world_bounds(scene, database, entity.get_id(), entity_bounds))
 			{
-				expand_bounds(out_bounds, entity_bounds);
+				merge_scene_world_bounds(out_bounds, entity_bounds);
 			}
 
 			for (const Entity& child : entity.get_children())
@@ -266,27 +528,88 @@ namespace AshEngine
 		}
 	}
 
+	bool merge_scene_world_bounds(
+		SceneWorldBounds& in_out_bounds,
+		const SceneWorldBounds& addition)
+	{
+		const bool addition_valid =
+			addition.is_valid &&
+			finite_vec3(addition.min) &&
+			finite_vec3(addition.max) &&
+			!glm::any(glm::greaterThan(addition.min, addition.max));
+		if (!addition_valid)
+		{
+			return in_out_bounds.is_valid;
+		}
+
+		const bool accumulated_valid =
+			in_out_bounds.is_valid &&
+			finite_vec3(in_out_bounds.min) &&
+			finite_vec3(in_out_bounds.max) &&
+			!glm::any(glm::greaterThan(in_out_bounds.min, in_out_bounds.max));
+		if (!accumulated_valid)
+		{
+			in_out_bounds = addition;
+			return true;
+		}
+
+		in_out_bounds.min = glm::min(in_out_bounds.min, addition.min);
+		in_out_bounds.max = glm::max(in_out_bounds.max, addition.max);
+		in_out_bounds.center = (in_out_bounds.min + in_out_bounds.max) * 0.5f;
+		in_out_bounds.extents = (in_out_bounds.max - in_out_bounds.min) * 0.5f;
+		in_out_bounds.is_valid = true;
+		return true;
+	}
+
 	bool get_entity_world_bounds(
 		const Scene& scene,
 		AssetDatabase& database,
 		EntityId entity_id,
 		SceneWorldBounds& out_bounds)
 	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 		out_bounds = {};
-		ASH_PROCESS_ERROR(scene.is_valid());
-		ASH_PROCESS_ERROR(database.is_valid());
-		ASH_PROCESS_ERROR(entity_id != 0);
+		if (!scene.is_valid() || !database.is_valid() || entity_id == 0u)
+		{
+			return false;
+		}
 
 		const Entity entity = scene.find_entity(entity_id);
-		ASH_PROCESS_ERROR(entity.is_valid());
-		ASH_PROCESS_ERROR(entity.has_mesh_component());
+		if (!entity.is_valid())
+		{
+			return false;
+		}
 
-		SceneMeshBounds local_bounds{};
-		ASH_PROCESS_ERROR(scene.try_get_mesh_local_bounds(database, entity.get_mesh_component(), local_bounds));
-		out_bounds = transform_local_bounds(local_bounds, scene.get_entity_world_transform(entity_id));
-		bResult = out_bounds.is_valid;
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		const glm::mat4 world_transform = scene.get_entity_world_transform(entity_id);
+		SceneWorldBounds mesh_bounds{};
+		if (try_get_mesh_entity_world_bounds(
+				scene, database, entity, mesh_bounds))
+		{
+			merge_scene_world_bounds(out_bounds, mesh_bounds);
+		}
+
+		if (entity.has_terrain_component())
+		{
+			AxisAlignedTerrainTransform terrain_transform{};
+			std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+			if (extract_axis_aligned_terrain_transform(
+					world_transform, terrain_transform) &&
+				resolve_terrain_snapshot(
+					database,
+					entity.get_terrain_component().asset_path,
+					snapshot) == TerrainQueryStatus::Ready)
+			{
+				SceneMeshBounds terrain_local_bounds{};
+				if (snapshot &&
+					try_get_terrain_local_bounds(*snapshot, terrain_local_bounds))
+				{
+					merge_scene_world_bounds(
+						out_bounds,
+						transform_local_bounds(terrain_local_bounds, world_transform));
+				}
+			}
+		}
+
+		return out_bounds.is_valid;
 	}
 
 	bool get_entity_subtree_world_bounds(
@@ -306,6 +629,126 @@ namespace AshEngine
 		get_subtree_bounds_recursive(scene, database, root, out_bounds);
 		bResult = out_bounds.is_valid;
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool compute_camera_clip_range(
+		const SceneWorldBounds& world_bounds,
+		const glm::mat4& view,
+		float near_plane_floor,
+		SceneCameraClipRange& out_clip_range)
+	{
+		if (!world_bounds.is_valid ||
+			!finite_vec3(world_bounds.min) ||
+			!finite_vec3(world_bounds.max) ||
+			glm::any(glm::greaterThan(world_bounds.min, world_bounds.max)) ||
+			!finite_mat4(view) ||
+			!std::isfinite(near_plane_floor) ||
+			near_plane_floor <= 0.0f)
+		{
+			return false;
+		}
+
+		const std::array<glm::vec3, 8> corners =
+		{
+			glm::vec3(world_bounds.min.x, world_bounds.min.y, world_bounds.min.z),
+			glm::vec3(world_bounds.max.x, world_bounds.min.y, world_bounds.min.z),
+			glm::vec3(world_bounds.min.x, world_bounds.max.y, world_bounds.min.z),
+			glm::vec3(world_bounds.max.x, world_bounds.max.y, world_bounds.min.z),
+			glm::vec3(world_bounds.min.x, world_bounds.min.y, world_bounds.max.z),
+			glm::vec3(world_bounds.max.x, world_bounds.min.y, world_bounds.max.z),
+			glm::vec3(world_bounds.min.x, world_bounds.max.y, world_bounds.max.z),
+			glm::vec3(world_bounds.max.x, world_bounds.max.y, world_bounds.max.z),
+		};
+
+		float minimum_depth = std::numeric_limits<float>::infinity();
+		float maximum_depth = -std::numeric_limits<float>::infinity();
+		for (const glm::vec3& corner : corners)
+		{
+			const glm::vec4 view_corner = view * glm::vec4(corner, 1.0f);
+			if (!std::isfinite(view_corner.z))
+			{
+				return false;
+			}
+			minimum_depth = std::min(minimum_depth, view_corner.z);
+			maximum_depth = std::max(maximum_depth, view_corner.z);
+		}
+
+		if (maximum_depth <= near_plane_floor)
+		{
+			return false;
+		}
+
+		const double depth_span =
+			static_cast<double>(maximum_depth) - minimum_depth;
+		const double safety_margin = std::max(1.0, depth_span * 0.05);
+		const double resolved_near = minimum_depth <= near_plane_floor + safety_margin
+			? near_plane_floor
+			: std::max(
+				static_cast<double>(near_plane_floor),
+				static_cast<double>(minimum_depth) - safety_margin);
+		const double resolved_far =
+			static_cast<double>(maximum_depth) + safety_margin;
+		if (!std::isfinite(resolved_near) ||
+			!std::isfinite(resolved_far) ||
+			resolved_far <= resolved_near ||
+			resolved_far > std::numeric_limits<float>::max())
+		{
+			return false;
+		}
+
+		SceneCameraClipRange clip_range{};
+		clip_range.near_plane = static_cast<float>(resolved_near);
+		clip_range.far_plane = static_cast<float>(resolved_far);
+		out_clip_range = clip_range;
+		return true;
+	}
+
+	bool compute_camera_bounds_framing_distance(
+		const SceneWorldBounds& world_bounds,
+		float vertical_fov_degrees,
+		float padding_scale,
+		float& out_distance)
+	{
+		if (!world_bounds.is_valid ||
+			!finite_vec3(world_bounds.min) ||
+			!finite_vec3(world_bounds.max) ||
+			glm::any(glm::greaterThan(world_bounds.min, world_bounds.max)) ||
+			!std::isfinite(vertical_fov_degrees) ||
+			vertical_fov_degrees <= 0.0f ||
+			vertical_fov_degrees >= 180.0f ||
+			!std::isfinite(padding_scale) ||
+			padding_scale <= 0.0f)
+		{
+			return false;
+		}
+
+		constexpr double pi = 3.14159265358979323846;
+		const double half_extent_x =
+			(static_cast<double>(world_bounds.max.x) - world_bounds.min.x) * 0.5;
+		const double half_extent_y =
+			(static_cast<double>(world_bounds.max.y) - world_bounds.min.y) * 0.5;
+		const double half_extent_z =
+			(static_cast<double>(world_bounds.max.z) - world_bounds.min.z) * 0.5;
+		const double radius = std::sqrt(
+			half_extent_x * half_extent_x +
+			half_extent_y * half_extent_y +
+			half_extent_z * half_extent_z);
+		const double half_fov_radians =
+			static_cast<double>(vertical_fov_degrees) * pi / 360.0;
+		const double sine = std::sin(half_fov_radians);
+		const double distance = radius / sine * padding_scale;
+		if (!std::isfinite(radius) ||
+			!std::isfinite(sine) ||
+			sine <= 0.0 ||
+			!std::isfinite(distance) ||
+			distance < 0.0 ||
+			distance > std::numeric_limits<float>::max())
+		{
+			return false;
+		}
+
+		out_distance = static_cast<float>(distance);
+		return true;
 	}
 
 	SceneRay screen_to_world_ray(
@@ -372,7 +815,8 @@ namespace AshEngine
 			}
 
 			SceneWorldBounds bounds{};
-			if (!get_entity_world_bounds(scene, database, entity.get_id(), bounds))
+			if (!try_get_mesh_entity_world_bounds(
+					scene, database, entity, bounds))
 			{
 				continue;
 			}

@@ -12,6 +12,7 @@
 #include "doctest.h"
 
 #include <chrono>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -22,6 +23,7 @@
 #include <system_error>
 
 #include <json.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace
 {
@@ -43,6 +45,18 @@ namespace
 		std::ofstream output(path);
 		REQUIRE(output.is_open());
 		output << value.dump(2);
+		REQUIRE(output.good());
+	}
+
+	void WriteObj(const fs::path& path)
+	{
+		std::ofstream output(path);
+		REQUIRE(output.is_open());
+		output <<
+			"v -3 -4 -5\n"
+			"v -1 -4 -5\n"
+			"v -3 -2 -1\n"
+			"f 1 2 3\n";
 		REQUIRE(output.good());
 	}
 
@@ -142,6 +156,42 @@ namespace
 			path, snapshot, {}, nullptr, &error) ==
 			AshEngine::TerrainContainerResult::Success);
 		REQUIRE_MESSAGE(error.empty(), error);
+	}
+
+	auto MakeBounds(
+		const glm::vec3& minimum,
+		const glm::vec3& maximum) -> AshEngine::SceneWorldBounds
+	{
+		AshEngine::SceneWorldBounds bounds{};
+		bounds.is_valid = true;
+		bounds.min = minimum;
+		bounds.max = maximum;
+		bounds.center = (minimum + maximum) * 0.5f;
+		bounds.extents = (maximum - minimum) * 0.5f;
+		return bounds;
+	}
+
+	auto MaximumViewDepth(
+		const AshEngine::SceneWorldBounds& bounds,
+		const glm::mat4& view) -> float
+	{
+		const std::array<glm::vec3, 8> corners = {
+			glm::vec3(bounds.min.x, bounds.min.y, bounds.min.z),
+			glm::vec3(bounds.max.x, bounds.min.y, bounds.min.z),
+			glm::vec3(bounds.min.x, bounds.max.y, bounds.min.z),
+			glm::vec3(bounds.max.x, bounds.max.y, bounds.min.z),
+			glm::vec3(bounds.min.x, bounds.min.y, bounds.max.z),
+			glm::vec3(bounds.max.x, bounds.min.y, bounds.max.z),
+			glm::vec3(bounds.min.x, bounds.max.y, bounds.max.z),
+			glm::vec3(bounds.max.x, bounds.max.y, bounds.max.z),
+		};
+
+		float maximum = -std::numeric_limits<float>::infinity();
+		for (const glm::vec3& corner : corners)
+		{
+			maximum = std::max(maximum, (view * glm::vec4(corner, 1.0f)).z);
+		}
+		return maximum;
 	}
 
 	struct ThreadingScope
@@ -497,4 +547,310 @@ TEST_CASE("Terrain world query preserves outputs while asset loading is Pending"
 	REQUIRE(database.load_terrain_by_path_async(relative_path).get() != nullptr);
 	std::error_code filesystem_error{};
 	fs::remove_all(root, filesystem_error);
+}
+
+TEST_CASE("Terrain world bounds use resident roots and merge with Mesh subtrees")
+{
+	const fs::path root = TestRoot("world-bounds-resident");
+	const fs::path terrain_path = "terrain/sloped-bounds.AshTerrain";
+	const fs::path mesh_path = "bounds.obj";
+	SaveSnapshot(root / terrain_path, *MakeSlopedSnapshot(81u));
+	WriteObj(root / mesh_path);
+
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded_snapshot{};
+	REQUIRE(database.load_terrain_by_path(terrain_path, loaded_snapshot));
+
+	AshEngine::Scene scene = AshEngine::Scene::create("Terrain Bounds");
+	AshEngine::Entity parent = scene.create_entity("Scaled Parent");
+	AshEngine::TransformComponent parent_transform{};
+	parent_transform.position = { 10.0f, 20.0f, 30.0f };
+	parent_transform.scale = { 2.0f, 3.0f, 4.0f };
+	REQUIRE(parent.set_transform_component(parent_transform));
+
+	AshEngine::Entity terrain = parent.create_child("Terrain");
+	AshEngine::TransformComponent terrain_transform{};
+	terrain_transform.position = { 1.0f, 2.0f, 3.0f };
+	terrain_transform.scale = { 0.5f, 2.0f, 0.25f };
+	REQUIRE(terrain.set_transform_component(terrain_transform));
+	REQUIRE(terrain.add_terrain_component(MakeTerrain(terrain_path.generic_string())));
+
+	AshEngine::Entity mesh = parent.create_child("Mesh");
+	AshEngine::MeshComponent mesh_component{};
+	mesh_component.asset_path = mesh_path.generic_string();
+	REQUIRE(mesh.add_mesh_component(mesh_component));
+
+	AshEngine::SceneWorldBounds terrain_bounds{};
+	REQUIRE(AshEngine::get_entity_world_bounds(
+		scene, database, terrain.get_id(), terrain_bounds));
+	CHECK(terrain_bounds.min.x == doctest::Approx(12.0f));
+	CHECK(terrain_bounds.min.y == doctest::Approx(38.0f));
+	CHECK(terrain_bounds.min.z == doctest::Approx(42.0f));
+	CHECK(terrain_bounds.max.x == doctest::Approx(20.0f));
+	CHECK(terrain_bounds.max.y == doctest::Approx(86.0f));
+	CHECK(terrain_bounds.max.z == doctest::Approx(50.0f));
+
+	AshEngine::SceneWorldBounds subtree_bounds{};
+	REQUIRE(AshEngine::get_entity_subtree_world_bounds(
+		scene, database, parent.get_id(), subtree_bounds));
+	CHECK(subtree_bounds.min.x == doctest::Approx(4.0f));
+	CHECK(subtree_bounds.min.y == doctest::Approx(8.0f));
+	CHECK(subtree_bounds.min.z == doctest::Approx(10.0f));
+	CHECK(subtree_bounds.max.x == doctest::Approx(20.0f));
+	CHECK(subtree_bounds.max.y == doctest::Approx(86.0f));
+	CHECK(subtree_bounds.max.z == doctest::Approx(50.0f));
+
+	std::error_code filesystem_error{};
+	fs::remove_all(root, filesystem_error);
+}
+
+TEST_CASE("Terrain world bounds conservatively include edits when residency is incomplete")
+{
+	const fs::path root = TestRoot("world-bounds-incomplete");
+	const fs::path terrain_path = "terrain/incomplete-bounds.AshTerrain";
+	AshEngine::TerrainGridLayout layout = TerrainTests::MakeSmallLayout();
+	layout.sample_spacing_meters = 2.5f;
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> flat{};
+	std::string error{};
+	REQUIRE(AshEngine::create_flat_terrain_snapshot(
+		82u, layout, { 0.0f, 100.0f }, 50.0f, flat, &error));
+	REQUIRE_MESSAGE(error.empty(), error);
+	SaveSnapshot(root / terrain_path, *flat);
+
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded_snapshot{};
+	REQUIRE(database.load_terrain_by_path(terrain_path, loaded_snapshot));
+	REQUIRE(loaded_snapshot != nullptr);
+
+	auto incomplete = std::make_shared<AshEngine::TerrainAssetSnapshot>(*loaded_snapshot);
+	REQUIRE_FALSE(incomplete->components.empty());
+	incomplete->components.front().reset();
+	incomplete->residency_revision = loaded_snapshot->residency_revision + 1u;
+
+	AshEngine::TerrainEditLayer additive{};
+	additive.id.bytes[0] = 1u;
+	additive.name = "Additive high range";
+	additive.height_blend_mode = AshEngine::TerrainHeightBlendMode::Additive;
+	additive.height_blocks.push_back({ { 0u, 0u }, { 0u, 0u, 1u, 1u }, { 250.0f }, { 1.0f } });
+	AshEngine::TerrainEditLayer alpha{};
+	alpha.id.bytes[0] = 2u;
+	alpha.name = "Alpha low range";
+	alpha.height_blend_mode = AshEngine::TerrainHeightBlendMode::Alpha;
+	alpha.height_blocks.push_back({ { 0u, 0u }, { 0u, 0u, 1u, 1u }, { -80.0f }, { 1.0f } });
+	incomplete->edit_layers =
+		std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+			std::vector<AshEngine::TerrainEditLayer>{ additive, alpha });
+	REQUIRE(database.publish_terrain_snapshot(incomplete->asset_id, incomplete));
+
+	AshEngine::Scene scene = AshEngine::Scene::create("Incomplete Terrain Bounds");
+	AshEngine::Entity terrain = scene.create_entity("Terrain");
+	AshEngine::TransformComponent transform{};
+	transform.position.y = 5.0f;
+	transform.scale = { 1.0f, 2.0f, 1.0f };
+	REQUIRE(terrain.set_transform_component(transform));
+	REQUIRE(terrain.add_terrain_component(MakeTerrain(terrain_path.generic_string())));
+
+	AshEngine::SceneWorldBounds bounds{};
+	REQUIRE(AshEngine::get_entity_world_bounds(
+		scene, database, terrain.get_id(), bounds));
+	CHECK(bounds.min.x == doctest::Approx(0.0f));
+	CHECK(bounds.max.x == doctest::Approx(20.0f));
+	CHECK(bounds.min.z == doctest::Approx(0.0f));
+	CHECK(bounds.max.z == doctest::Approx(20.0f));
+	CHECK(bounds.min.y == doctest::Approx(-155.0f));
+	CHECK(bounds.max.y == doctest::Approx(705.0f));
+
+	std::error_code filesystem_error{};
+	fs::remove_all(root, filesystem_error);
+}
+
+TEST_CASE("ray_cast_scene keeps mixed Mesh Terrain entities mesh-only")
+{
+	const fs::path root = TestRoot("mixed-entity-mesh-ray");
+	const fs::path terrain_path = "terrain/mixed-ray.AshTerrain";
+	const fs::path mesh_path = "mixed-ray.obj";
+	SaveSnapshot(root / terrain_path, *MakeSlopedSnapshot(83u));
+	WriteObj(root / mesh_path);
+
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> loaded_snapshot{};
+	REQUIRE(database.load_terrain_by_path(terrain_path, loaded_snapshot));
+
+	AshEngine::Scene scene = AshEngine::Scene::create("Mixed Entity Ray");
+	AshEngine::Entity entity = scene.create_entity("Mesh and Terrain");
+	AshEngine::MeshComponent mesh_component{};
+	mesh_component.asset_path = mesh_path.generic_string();
+	REQUIRE(entity.add_mesh_component(mesh_component));
+	REQUIRE(entity.add_terrain_component(MakeTerrain(terrain_path.generic_string())));
+
+	AshEngine::SceneWorldBounds union_bounds{};
+	REQUIRE(AshEngine::get_entity_world_bounds(
+		scene, database, entity.get_id(), union_bounds));
+	CHECK(union_bounds.max.x == doctest::Approx(8.0f));
+	CHECK(union_bounds.max.z == doctest::Approx(8.0f));
+
+	const std::vector<AshEngine::SceneRayHit> hits = AshEngine::ray_cast_scene(
+		scene,
+		database,
+		{ { 4.0f, 100.0f, 4.0f }, { 0.0f, -1.0f, 0.0f } },
+		200.0f);
+	CHECK(hits.empty());
+
+	std::error_code filesystem_error{};
+	fs::remove_all(root, filesystem_error);
+}
+
+TEST_CASE("Camera clip range covers scene bounds through focus navigation and scale")
+{
+	// A positive 2x scale of an 8192-unit Terrain must not be truncated by the
+	// editor's former fixed 20 km orbit-distance ceiling.
+	const AshEngine::SceneWorldBounds doubled_terrain_bounds = MakeBounds(
+		{ 0.0f, -100.0f, 0.0f },
+		{ 16384.0f, 100.0f, 16384.0f });
+	float doubled_terrain_framing_distance = -1.0f;
+	REQUIRE(AshEngine::compute_camera_bounds_framing_distance(
+		doubled_terrain_bounds,
+		60.0f,
+		1.15f,
+		doubled_terrain_framing_distance));
+	const double doubled_terrain_radius = std::sqrt(
+		8192.0 * 8192.0 + 100.0 * 100.0 + 8192.0 * 8192.0);
+	const double minimum_enclosing_distance =
+		doubled_terrain_radius / std::sin(std::acos(-1.0) / 6.0) * 1.15;
+	CHECK(doubled_terrain_framing_distance == doctest::Approx(
+		static_cast<float>(minimum_enclosing_distance)).epsilon(0.00001));
+
+	float doubled_terrain_navigation_limit = -1.0f;
+	REQUIRE(AshEngine::compute_camera_bounds_framing_distance(
+		doubled_terrain_bounds,
+		60.0f,
+		1.15f * 2.0f,
+		doubled_terrain_navigation_limit));
+	CHECK(doubled_terrain_navigation_limit >=
+		doubled_terrain_framing_distance * 1.9999f);
+
+	float preserved_framing_distance = 123.0f;
+	CHECK_FALSE(AshEngine::compute_camera_bounds_framing_distance(
+		{}, 60.0f, 1.15f, preserved_framing_distance));
+	CHECK(preserved_framing_distance == 123.0f);
+	CHECK_FALSE(AshEngine::compute_camera_bounds_framing_distance(
+		doubled_terrain_bounds,
+		std::numeric_limits<float>::quiet_NaN(),
+		1.15f,
+		preserved_framing_distance));
+	CHECK(preserved_framing_distance == 123.0f);
+	CHECK_FALSE(AshEngine::compute_camera_bounds_framing_distance(
+		doubled_terrain_bounds, 180.0f, 1.15f, preserved_framing_distance));
+	CHECK(preserved_framing_distance == 123.0f);
+	CHECK_FALSE(AshEngine::compute_camera_bounds_framing_distance(
+		doubled_terrain_bounds,
+		60.0f,
+		std::numeric_limits<float>::max(),
+		preserved_framing_distance));
+	CHECK(preserved_framing_distance == 123.0f);
+
+	const AshEngine::SceneWorldBounds terrain_bounds = MakeBounds(
+		{ -32.0f, -10.0f, 100.0f },
+		{ 8192.0f, 250.0f, 8292.0f });
+	AshEngine::SceneCameraClipRange initial_clip{};
+	REQUIRE(AshEngine::compute_camera_clip_range(
+		terrain_bounds, glm::mat4(1.0f), 0.03f, initial_clip));
+	CHECK(initial_clip.near_plane >= 0.03f);
+	CHECK(initial_clip.near_plane < 100.0f);
+	CHECK(initial_clip.far_plane > MaximumViewDepth(terrain_bounds, glm::mat4(1.0f)));
+
+	const glm::mat4 dolly_view = glm::translate(
+		glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 2000.0f));
+	AshEngine::SceneCameraClipRange dolly_clip{};
+	REQUIRE(AshEngine::compute_camera_clip_range(
+		terrain_bounds, dolly_view, 0.03f, dolly_clip));
+	CHECK(dolly_clip.near_plane > initial_clip.near_plane);
+	CHECK(dolly_clip.far_plane > MaximumViewDepth(terrain_bounds, dolly_view));
+	CHECK(dolly_clip.far_plane > initial_clip.far_plane);
+
+	const glm::vec3 center = terrain_bounds.center;
+	const glm::mat4 orbit_view = glm::lookAtLH(
+		center + glm::vec3(-9000.0f, 5000.0f, -11000.0f),
+		center,
+		glm::vec3(0.0f, 1.0f, 0.0f));
+	AshEngine::SceneCameraClipRange orbit_clip{};
+	REQUIRE(AshEngine::compute_camera_clip_range(
+		terrain_bounds, orbit_view, 0.03f, orbit_clip));
+	CHECK(orbit_clip.far_plane > MaximumViewDepth(terrain_bounds, orbit_view));
+
+	AshEngine::SceneWorldBounds scaled_bounds = terrain_bounds;
+	scaled_bounds.max.z = 16484.0f;
+	scaled_bounds.center = (scaled_bounds.min + scaled_bounds.max) * 0.5f;
+	scaled_bounds.extents = (scaled_bounds.max - scaled_bounds.min) * 0.5f;
+	AshEngine::SceneCameraClipRange scaled_clip{};
+	REQUIRE(AshEngine::compute_camera_clip_range(
+		scaled_bounds, glm::mat4(1.0f), 0.03f, scaled_clip));
+	CHECK(scaled_clip.far_plane > MaximumViewDepth(scaled_bounds, glm::mat4(1.0f)));
+	CHECK(scaled_clip.far_plane > initial_clip.far_plane);
+
+	const AshEngine::SceneWorldBounds camera_inside_bounds = MakeBounds(
+		{ -10.0f, -10.0f, -10.0f },
+		{ 10.0f, 10.0f, 10.0f });
+	AshEngine::SceneCameraClipRange inside_clip{};
+	REQUIRE(AshEngine::compute_camera_clip_range(
+		camera_inside_bounds, glm::mat4(1.0f), 0.03f, inside_clip));
+	CHECK(inside_clip.near_plane == doctest::Approx(0.03f));
+	CHECK(inside_clip.far_plane > 10.0f);
+
+	// Focusing a small foreground Mesh must not replace the full-scene clip target
+	// and cut a large Terrain that remains visible behind it.
+	const AshEngine::SceneWorldBounds scene_after_small_focus = MakeBounds(
+		{ -1.0f, -1.0f, 4.0f },
+		{ 8192.0f, 250.0f, 8192.0f });
+	const glm::mat4 small_focus_view = glm::translate(
+		glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 5.0f));
+	AshEngine::SceneCameraClipRange small_focus_clip{};
+	REQUIRE(AshEngine::compute_camera_clip_range(
+		scene_after_small_focus, small_focus_view, 0.03f, small_focus_clip));
+	CHECK(small_focus_clip.far_plane >
+		MaximumViewDepth(scene_after_small_focus, small_focus_view));
+
+	AshEngine::SceneCameraClipRange preserved{ 7.0f, 11.0f };
+	CHECK_FALSE(AshEngine::compute_camera_clip_range(
+		{}, glm::mat4(1.0f), 0.03f, preserved));
+	CHECK(preserved.near_plane == 7.0f);
+	CHECK(preserved.far_plane == 11.0f);
+}
+
+TEST_CASE("Scene world bounds merge keeps incomplete camera coverage conservative")
+{
+	AshEngine::SceneWorldBounds accumulated = MakeBounds(
+		{ -100.0f, -20.0f, -40.0f },
+		{ 50.0f, 80.0f, 120.0f });
+	const AshEngine::SceneWorldBounds partial = MakeBounds(
+		{ -10.0f, -200.0f, 30.0f },
+		{ 400.0f, 60.0f, 500.0f });
+
+	REQUIRE(AshEngine::merge_scene_world_bounds(accumulated, partial));
+	CHECK(accumulated.min.x == doctest::Approx(-100.0f));
+	CHECK(accumulated.min.y == doctest::Approx(-200.0f));
+	CHECK(accumulated.min.z == doctest::Approx(-40.0f));
+	CHECK(accumulated.max.x == doctest::Approx(400.0f));
+	CHECK(accumulated.max.y == doctest::Approx(80.0f));
+	CHECK(accumulated.max.z == doctest::Approx(500.0f));
+	CHECK(accumulated.center.x == doctest::Approx(150.0f));
+	CHECK(accumulated.center.y == doctest::Approx(-60.0f));
+	CHECK(accumulated.center.z == doctest::Approx(230.0f));
+
+	const AshEngine::SceneWorldBounds preserved = accumulated;
+	CHECK(AshEngine::merge_scene_world_bounds(accumulated, {}));
+	CHECK(accumulated.min == preserved.min);
+	CHECK(accumulated.max == preserved.max);
+
+	AshEngine::SceneWorldBounds initially_empty{};
+	REQUIRE(AshEngine::merge_scene_world_bounds(initially_empty, partial));
+	CHECK(initially_empty.min == partial.min);
+	CHECK(initially_empty.max == partial.max);
+
+	AshEngine::SceneWorldBounds still_empty{};
+	CHECK_FALSE(AshEngine::merge_scene_world_bounds(still_empty, {}));
+	CHECK_FALSE(still_empty.is_valid);
 }

@@ -4,6 +4,7 @@
 #include "Core/EditorSceneTypes.h"
 #include "Core/IEditorViewportBindingResolver.h"
 #include "Function/Gui/UICommon.h"
+#include "Function/Scene/SceneQuery.h"
 
 #include <cstdint>
 #include <glm/vec3.hpp>
@@ -87,16 +88,23 @@ namespace AshEditor
 			glm::vec3 vecRotationEulerDegrees{ 12.0f, 0.0f, 0.0f };
 			glm::vec3 vecOrbitTarget{ 0.0f, 0.9f, 0.0f };
 			AshEngine::SceneViewCameraOverride cameraOverride{};
+			AshEngine::SceneWorldBounds sceneBounds{};
+			AshEngine::SceneWorldBounds lastFocusBounds{};
 			uint32_t uViewportWidth = 1;
 			uint32_t uViewportHeight = 1;
 			float fFovYDegrees = 60.0f;
 			float fNearPlane = 0.03f;
-			float fFarPlane = 2000.0f;
+			float fFarPlane = 1000.0f;
 			float fMoveSpeed = 8.0f;
 			float fOrbitDistance = 6.0f;
+			float fMaxOrbitDistance = 20000.0f;
 			CameraDragMode eDragMode = CameraDragMode::None;
 			bool bHasLastMousePosition = false;
 			bool bInitialized = false;
+			bool bAwaitingInitialSceneBounds = false;
+			bool bHasUserNavigated = false;
+			uint64_t uLastSceneSyncSequence = 0;
+			uint64_t uLastSceneContentEpoch = 0;
 			double dLastMouseX = 0.0;
 			double dLastMouseY = 0.0;
 		};
@@ -105,7 +113,7 @@ namespace AshEditor
 		ViewportCameraState& EnsureState(const std::string& strViewportId);
 		const ViewportCameraState* FindState(const std::string& strViewportId) const;
 		static float ClampMoveSpeed(float fMoveSpeed);
-		static float ClampOrbitDistance(float fOrbitDistance);
+		static float ClampOrbitDistance(float fOrbitDistance, float fMaxOrbitDistance);
 		void SyncCameraState(
 			const SceneService& refSceneService,
 			const AssetDatabaseService& refAssetDatabaseService,
@@ -115,10 +123,17 @@ namespace AshEditor
 			const AshEngine::Scene& refScene,
 			const AssetDatabaseService& refAssetDatabaseService,
 			ViewportCameraState& refState) const;
+		void SeedCameraFromBounds(
+			const AshEngine::SceneWorldBounds& refBounds,
+			ViewportCameraState& refState) const;
+		bool RefreshSceneBounds(
+			const AshEngine::Scene& refScene,
+			const AssetDatabaseService& refAssetDatabaseService,
+			ViewportCameraState& refState) const;
 		void RefreshCameraOverride(ViewportCameraState& refState) const;
 		void UpdateViewportExtent(const AshEngine::UIRect& rectContent, ViewportCameraState& refState) const;
 		void UpdatePositionFromOrbit(ViewportCameraState& refState) const;
-		void FocusEntity(
+		bool FocusEntity(
 			const SceneService& refSceneService,
 			const AssetDatabaseService& refAssetDatabaseService,
 			const std::string& strViewportId,
@@ -128,6 +143,7 @@ namespace AshEditor
 
 	private:
 		float _fDefaultMoveSpeed = 8.0f;
+		uint64_t _uSceneSyncSequence = 0;
 		std::unordered_map<std::string, ViewportCameraState> _mapStates{};
 	};
 }
