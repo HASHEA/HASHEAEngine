@@ -603,6 +603,20 @@ function Get-PerfGateRequiredJsonArray {
     return [object[]]$property.Value
 }
 
+function Get-PerfGateRequiredJsonObject {
+    param(
+        [object]$Object,
+        [string]$Name,
+        [string]$Label
+    )
+
+    $property = if ($null -eq $Object) { $null } else { $Object.PSObject.Properties[$Name] }
+    if ($null -eq $property -or $property.Value -isnot [System.Management.Automation.PSCustomObject]) {
+        throw "$Label '$Name' must be a required JSON object."
+    }
+    return $property.Value
+}
+
 function Test-PerfGateSampleTimelineConsistency {
     param(
         [int64]$FramesSampled,
@@ -1000,7 +1014,14 @@ function Read-PerfGateJsonArtifactSnapshot {
 
     try {
         $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-        $json = $strictUtf8.GetString($bytes) | ConvertFrom-Json
+        $jsonText = $strictUtf8.GetString($bytes)
+        if (-not $jsonText.TrimStart().StartsWith("{", [System.StringComparison]::Ordinal)) {
+            throw "$Label must contain a top-level JSON object."
+        }
+        $json = $jsonText | ConvertFrom-Json
+        if ($json -isnot [System.Management.Automation.PSCustomObject]) {
+            throw "$Label must contain a top-level JSON object."
+        }
     }
     catch {
         throw "$Label is not valid strict UTF-8 JSON: $($_.Exception.Message)"
@@ -1926,10 +1947,7 @@ function Import-PerfGateBaselineFromReport {
         if (-not [string]::Equals($recordWorkloadFingerprint, [string]$expectedIdentity.fingerprint, [System.StringComparison]::Ordinal)) {
             throw "Approved perf report workload fingerprint does not match the current profile."
         }
-        $recordWorkload = Get-ProfileProperty $record "workload"
-        if ($null -eq $recordWorkload) {
-            throw "Approved perf report readable workload attribution is missing."
-        }
+        $recordWorkload = Get-PerfGateRequiredJsonObject -Object $record -Name "workload" -Label "Approved perf report run"
         $expectedWorkloadJson = $expectedIdentity.workload | ConvertTo-Json -Depth 8 -Compress
         $recordWorkloadJson = $recordWorkload | ConvertTo-Json -Depth 8 -Compress
         if (-not [string]::Equals($recordWorkloadJson, $expectedWorkloadJson, [System.StringComparison]::Ordinal)) {
@@ -2018,7 +2036,7 @@ function Import-PerfGateBaselineFromReport {
             -not [string]::Equals($telemetryProfile, $Profile, [System.StringComparison]::Ordinal)) {
             throw "Approved perf report telemetry identity does not match its summary run."
         }
-        $telemetryRuntime = Get-ProfileProperty $telemetry "runtime"
+        $telemetryRuntime = Get-PerfGateRequiredJsonObject -Object $telemetry -Name "runtime" -Label "Approved perf report telemetry"
         $telemetryConfiguration = Get-PerfGateRequiredJsonString -Object $telemetryRuntime -Name "configuration" -Label "Approved perf report telemetry runtime"
         if (-not [string]::Equals($telemetryConfiguration, $Configuration, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Approved perf report telemetry configuration does not match its summary run."
@@ -2150,10 +2168,10 @@ function Import-PerfGateBaselineFromReport {
             -not [string]::Equals($summaryGpuDriver, [string]$canonicalRecord.gpu_driver, [System.StringComparison]::Ordinal)) {
             throw "Approved perf report GPU identity, coverage, or counts do not match the bound raw telemetry."
         }
-        $metricSummaries = Get-ProfileProperty $record "gpu_metric_summaries"
+        $metricSummaries = Get-PerfGateRequiredJsonObject -Object $record -Name "gpu_metric_summaries" -Label "Approved perf report run"
         foreach ($metricName in $expectedMetricNames) {
-            $metric = Get-ProfileProperty $metricSummaries $metricName
-            $rawMetric = Get-ProfileProperty $canonicalRecord.gpu_metric_summaries $metricName
+            $metric = Get-PerfGateRequiredJsonObject -Object $metricSummaries -Name $metricName -Label "Approved perf report GPU metric summaries"
+            $rawMetric = Get-PerfGateRequiredJsonObject -Object $canonicalRecord.gpu_metric_summaries -Name $metricName -Label "Approved perf report raw GPU metric summaries"
             $coverage = if ($null -eq $metric) { $null } else { Get-PerfGateFiniteJsonNumberProperty -Object $metric -Name "coverage" }
             $average = if ($null -eq $metric) { $null } else { Get-GpuMetricSummaryFiniteJsonNumber -Metric $metric -Name "avg" }
             $p95 = if ($null -eq $metric) { $null } else { Get-GpuMetricSummaryFiniteJsonNumber -Metric $metric -Name "p95" }
@@ -2956,9 +2974,15 @@ function Test-TelemetryData {
     else {
         $Record.frames_sampled = [int64]$framesSampledValue
     }
-    $cpuFrameTime = Get-ProfileProperty $Telemetry "cpu_frame_time_ms"
-    $memory = Get-ProfileProperty $Telemetry "memory"
-    $renderStats = Get-ProfileProperty $Telemetry "render_stats"
+    $cpuFrameTimeProperty = if ($null -eq $Telemetry) { $null } else { $Telemetry.PSObject.Properties["cpu_frame_time_ms"] }
+    $memoryProperty = if ($null -eq $Telemetry) { $null } else { $Telemetry.PSObject.Properties["memory"] }
+    $renderStatsProperty = if ($null -eq $Telemetry) { $null } else { $Telemetry.PSObject.Properties["render_stats"] }
+    $cpuFrameTime = if ($null -ne $cpuFrameTimeProperty -and $cpuFrameTimeProperty.Value -is [System.Management.Automation.PSCustomObject]) { $cpuFrameTimeProperty.Value } else { $null }
+    $memory = if ($null -ne $memoryProperty -and $memoryProperty.Value -is [System.Management.Automation.PSCustomObject]) { $memoryProperty.Value } else { $null }
+    $renderStats = if ($null -ne $renderStatsProperty -and $renderStatsProperty.Value -is [System.Management.Automation.PSCustomObject]) { $renderStatsProperty.Value } else { $null }
+    if ($null -eq $cpuFrameTime) { Add-Failure $Record "Telemetry cpu_frame_time_ms must be a required JSON object" }
+    if ($null -eq $memory) { Add-Failure $Record "Telemetry memory must be a required JSON object" }
+    if ($null -eq $renderStats) { Add-Failure $Record "Telemetry render_stats must be a required JSON object" }
     foreach ($metricContract in @(
         [PSCustomObject]@{ container = $cpuFrameTime; source = "avg"; record = "cpu_frame_time_avg_ms"; label = "CPU Avg" },
         [PSCustomObject]@{ container = $cpuFrameTime; source = "p95"; record = "cpu_frame_time_p95_ms"; label = "CPU P95" },
@@ -3099,12 +3123,17 @@ function Test-TelemetryData {
     }
 
     if ($schemaVersion -eq 2) {
-        $runtime = Get-ProfileProperty $Telemetry "runtime"
+        $runtimeProperty = if ($null -eq $Telemetry) { $null } else { $Telemetry.PSObject.Properties["runtime"] }
+        $runtime = if ($null -ne $runtimeProperty -and $runtimeProperty.Value -is [System.Management.Automation.PSCustomObject]) { $runtimeProperty.Value } else { $null }
         if ($null -eq $runtime) {
-            Add-Failure $Record "Telemetry schema v2 is missing runtime metadata"
+            Add-Failure $Record "Telemetry schema v2 runtime metadata must be a required JSON object"
         }
         else {
-            $runtimeExtent = Get-ProfileProperty $runtime "extent"
+            $runtimeExtentProperty = $runtime.PSObject.Properties["extent"]
+            $runtimeExtent = if ($null -ne $runtimeExtentProperty -and $runtimeExtentProperty.Value -is [System.Management.Automation.PSCustomObject]) { $runtimeExtentProperty.Value } else { $null }
+            if ($null -ne $runtimeExtentProperty -and $null -eq $runtimeExtent) {
+                Add-Failure $Record "Runtime extent must be a JSON object"
+            }
             if ($null -ne $runtimeExtent) {
                 $runtimeWidthProperty = $runtimeExtent.PSObject.Properties["width"]
                 $runtimeHeightProperty = $runtimeExtent.PSObject.Properties["height"]
@@ -3190,9 +3219,11 @@ function Test-TelemetryData {
             if ($null -ne $expectedFrameCap -and $Record.frame_cap -ne [string]$expectedFrameCap) {
                 Add-Failure $Record "Runtime frame cap did not match the profile"
             }
-            $runtimeConfiguration = Get-ProfileProperty $runtime "configuration"
+            $runtimeConfigurationProperty = $runtime.PSObject.Properties["configuration"]
+            $runtimeConfiguration = $null
+            if ($null -ne $runtimeConfigurationProperty) { $runtimeConfiguration = $runtimeConfigurationProperty.Value }
             if (($gpuRequired -or $runtimeV2Required) -and
-                ($runtimeConfiguration -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$runtimeConfiguration))) {
+                ($runtimeConfiguration -isnot [System.String] -or [string]::IsNullOrWhiteSpace([string]$runtimeConfiguration))) {
                 Add-Failure $Record "Runtime configuration metadata must be a non-empty JSON string"
             }
             elseif ($runtimeConfiguration -is [string] -and [string]$runtimeConfiguration -ne $Configuration) {
@@ -3200,7 +3231,11 @@ function Test-TelemetryData {
             }
         }
 
-        $gpu = Get-ProfileProperty $Telemetry "gpu"
+        $gpuProperty = if ($null -eq $Telemetry) { $null } else { $Telemetry.PSObject.Properties["gpu"] }
+        $gpu = if ($null -ne $gpuProperty -and $gpuProperty.Value -is [System.Management.Automation.PSCustomObject]) { $gpuProperty.Value } else { $null }
+        if ($null -ne $gpuProperty -and $null -eq $gpu) {
+            Add-Failure $Record "Telemetry gpu must be a JSON object"
+        }
         $backendInfo = $null
         $adapter = $null
         $driver = $null
@@ -3268,10 +3303,18 @@ function Test-TelemetryData {
                 }
             }
 
-            $metrics = Get-ProfileProperty $gpu "metrics"
-            if ($null -ne $metrics) { $Record.gpu_metric_summaries = $metrics }
+            $metricsProperty = $gpu.PSObject.Properties["metrics"]
+            $metrics = if ($null -ne $metricsProperty -and $metricsProperty.Value -is [System.Management.Automation.PSCustomObject]) { $metricsProperty.Value } else { $null }
+            if ($null -ne $metricsProperty -and $null -eq $metrics) {
+                Add-Failure $Record "GPU metrics must be a JSON object"
+            }
+            elseif ($null -ne $metrics) { $Record.gpu_metric_summaries = $metrics }
 
-            $backendInfo = Get-ProfileProperty $gpu "backend_info"
+            $backendInfoProperty = $gpu.PSObject.Properties["backend_info"]
+            $backendInfo = if ($null -ne $backendInfoProperty -and $backendInfoProperty.Value -is [System.Management.Automation.PSCustomObject]) { $backendInfoProperty.Value } else { $null }
+            if ($null -ne $backendInfoProperty -and $null -eq $backendInfo) {
+                Add-Failure $Record "GPU backend_info must be a JSON object"
+            }
             if ($null -ne $backendInfo) {
                 $adapter = Get-FirstNonBlankProperty $backendInfo @("adapter", "adapter_name")
                 if ($null -ne $adapter) { $Record.gpu_adapter = [string]$adapter }
@@ -3308,9 +3351,10 @@ function Test-TelemetryData {
                 }
 
                 foreach ($requiredMetric in @($ProfileConfig.required_gpu_metrics)) {
-                    $metric = Get-ProfileProperty $Record.gpu_metric_summaries ([string]$requiredMetric)
+                    $metricProperty = if ($null -eq $Record.gpu_metric_summaries) { $null } else { $Record.gpu_metric_summaries.PSObject.Properties[[string]$requiredMetric] }
+                    $metric = if ($null -ne $metricProperty -and $metricProperty.Value -is [System.Management.Automation.PSCustomObject]) { $metricProperty.Value } else { $null }
                     if ($null -eq $metric) {
-                        Add-Failure $Record "Required GPU metric '$requiredMetric' was missing"
+                        Add-Failure $Record "Required GPU metric '$requiredMetric' was missing or not a JSON object"
                         continue
                     }
                     $metricCoverageProperty = $metric.PSObject.Properties["coverage"]
@@ -3333,7 +3377,8 @@ function Test-TelemetryData {
                     }
                 }
 
-                $frameMetric = Get-ProfileProperty $Record.gpu_metric_summaries "GPU.Frame"
+                $frameMetricProperty = if ($null -eq $Record.gpu_metric_summaries) { $null } else { $Record.gpu_metric_summaries.PSObject.Properties["GPU.Frame"] }
+                $frameMetric = if ($null -ne $frameMetricProperty -and $frameMetricProperty.Value -is [System.Management.Automation.PSCustomObject]) { $frameMetricProperty.Value } else { $null }
                 if ($null -ne $frameMetric) {
                     $frameAverage = Get-GpuMetricSummaryFiniteJsonNumber -Metric $frameMetric -Name "avg"
                     $frameP95 = Get-GpuMetricSummaryFiniteJsonNumber -Metric $frameMetric -Name "p95"
@@ -3731,6 +3776,12 @@ function Invoke-RunPerfGateSelfTest {
             [System.Convert]::ToBase64String($firstJsonWriterBytes) -ceq
             [System.Convert]::ToBase64String($secondJsonWriterBytes)
         ) "PerfGate JSON writes must be byte-deterministic."
+
+        $topLevelArrayPath = Join-Path $tempRoot "top-level-array.json"
+        [System.IO.File]::WriteAllText($topLevelArrayPath, '[{"schema_version":2}]', (New-Object System.Text.UTF8Encoding($false)))
+        Assert-SelfTestThrows {
+            Read-PerfGateJsonArtifactSnapshot -Path $topLevelArrayPath -Label "Self-test artifact" | Out-Null
+        } "top-level JSON object" "PerfGate artifacts must reject a single-element top-level JSON array instead of accepting its pipeline-unwrapped object."
     }
     finally {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -3895,6 +3946,15 @@ function Invoke-RunPerfGateSelfTest {
     Assert-SelfTest ($telemetryOffSchemaV1Record.status -eq "FAIL" -and (@($telemetryOffSchemaV1Record.failures) -join " ") -match "schema_version 2") "Telemetry-off Vegetation A/B still requires schema v2 runtime metadata."
 
     $validV2 = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
+
+    $arrayRuntimeConfigurationTelemetry = $validV2 | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $arrayRuntimeConfigurationTelemetry.runtime.configuration = @("Release")
+    $arrayRuntimeConfigurationRecord = New-RunRecord "Sandbox" "Vulkan" "Sandbox.exe" "telemetry.json" "stdout.log" "stderr.log"
+    Test-TelemetryData -Record $arrayRuntimeConfigurationRecord -Telemetry $arrayRuntimeConfigurationTelemetry -ProfileConfig $vegetationProfile -Baseline $emptyBaselineForTelemetry -Profile "VegetationFullPipeline" -Configuration "Release" -TelemetryMode "Profile"
+    Assert-SelfTest (
+        $arrayRuntimeConfigurationRecord.status -eq "FAIL" -and
+        (@($arrayRuntimeConfigurationRecord.failures) -join " ") -match "runtime configuration.*JSON string"
+    ) "Live telemetry runtime configuration must reject a single-element JSON array (status=$($arrayRuntimeConfigurationRecord.status), failures=$(@($arrayRuntimeConfigurationRecord.failures) -join ' | '))."
 
     $missingElapsedEvidenceTelemetry = New-SelfTestTelemetryV2 -ProfileConfig $vegetationProfile
     $missingElapsedEvidenceTelemetry.PSObject.Properties.Remove("sample_observed_seconds")
@@ -5403,6 +5463,21 @@ exit 0
                 mutate = { param($value) $value.runtime.extent.width = @(2560) }
             },
             [PSCustomObject]@{
+                name = "array-runtime-object"
+                expected = "runtime.*JSON object"
+                mutate = { param($value) $value.runtime = @($value.runtime) }
+            },
+            [PSCustomObject]@{
+                name = "array-memory-object"
+                expected = "bound raw telemetry.*canonical validation"
+                mutate = { param($value) $value.memory = @($value.memory) }
+            },
+            [PSCustomObject]@{
+                name = "array-gpu-object"
+                expected = "bound raw telemetry.*canonical validation"
+                mutate = { param($value) $value.gpu = @($value.gpu) }
+            },
+            [PSCustomObject]@{
                 name = "array-gpu-allocator-supported"
                 expected = "bound raw telemetry.*canonical validation"
                 mutate = { param($value) $value.memory.gpu_allocator_supported = @($true) }
@@ -5452,7 +5527,7 @@ exit 0
             $unsafeRawBaseline = ConvertFrom-Json '{ "schema_version": 1, "baselines": {} }'
             Assert-SelfTestThrows {
                 Import-PerfGateBaselineFromReport -Baseline $unsafeRawBaseline -BaselinePath $candidateBaselinePath -Profile "VegetationFullPipeline" -Configuration "Release" -ProfileConfig $vegetationProfile -RepoRoot $reportImportRoot -ReportPath $unsafeRawSummaryPath -ExpectedReportSha256 $unsafeRawSummarySha -CurrentSourceSha $candidateSourceSha | Out-Null
-            } $unsafeRawCase.expected "Protected report import must reject non-integer raw '$($unsafeRawCase.name)' identity evidence."
+            } $unsafeRawCase.expected "Protected report import must reject unsafe raw '$($unsafeRawCase.name)' evidence."
             Assert-SelfTest (@($unsafeRawBaseline.baselines.PSObject.Properties).Count -eq 0) "Invalid raw '$($unsafeRawCase.name)' evidence must not mutate the baseline object."
         }
 
@@ -5659,6 +5734,16 @@ exit 0
                 name = "readable-workload-mismatch"
                 expected = "readable workload.*current profile"
                 mutate = { param($value) $value.runs[0].workload.scene = "product/assets/scenes/not-approved.scene.json" }
+            },
+            [PSCustomObject]@{
+                name = "array-readable-workload"
+                expected = "workload.*JSON object"
+                mutate = { param($value) $value.runs[0].workload = @($value.runs[0].workload) }
+            },
+            [PSCustomObject]@{
+                name = "array-gpu-metric-summaries"
+                expected = "gpu_metric_summaries.*JSON object"
+                mutate = { param($value) $value.runs[0].gpu_metric_summaries = @($value.runs[0].gpu_metric_summaries) }
             },
             [PSCustomObject]@{
                 name = "invalid-cpu-metric"
