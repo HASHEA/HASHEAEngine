@@ -2,7 +2,7 @@
 
 ## Status
 
-Validating (approved by user on 2026-07-15; CPU gates complete, GPU and manual sign-off pending)
+Awaiting manual sign-off (approved by user on 2026-07-15; CPU and automated GPU gates complete)
 
 ## Context
 
@@ -171,7 +171,12 @@ Terrain Phase 3 人工 Vulkan 验证暴露了三类可复现问题：
 - 合并最新 `origin/main` 后 fresh generate；`RunTests.bat Debug` 与 `RunTests.bat Release` 均通过 `463/463` test cases、`25584/25584` assertions，并报告 `All Memory Free`。
 - `build_editor.bat Debug/Release` 与 `build_sandbox.bat Debug/Release` 均成功；Terrain HLSL 的 GBuffer/depth/LOD permutations 已分别用 DXIL 与 SPIR-V 编译通过。
 - `RunArchGate.bat` PASS，仅保留 `35` 条既有 legacy warning；`AIDevDoctor.ps1 -Mode ValidatePlan` exit `0`。
-- 双后端 readiness、validation、专项图像 A/B、non-bless RenderGate、Standard PerfGate 与用户人工操作签署尚待在最新集成提交上执行；完成前本 SDD 不标记 Done，也不 bless golden/baseline。
+- 最新集成提交 `99efae0` 的 `run.bat all Debug --smoke-test-seconds=120` 四组合均在资源就绪信号后 exit `0`；Editor Vulkan/DX12 与 Sandbox Vulkan/DX12 全部 readiness success，Sandbox 两格 `clean_exit=yes`，fresh 日志拒绝词为 `0`。
+- Terrain 定向 validation 在 Vulkan 与 DX12 上分别完成 1920×1080 readiness-driven capture；Vulkan validation 与 DX12 Debug Layer/GPU Validation 日志无 error/critical/validation error/device loss/fatal/assert。两张 capture 的 SHA-256 均为 `A6EBD362BAFA79E38EC4E4CD48F91B89BDDC1A65316ED4DA60E594F591F9A696`，AshImageDiff 得到 SSIM `1.000000`、最大通道差 `0`、差异像素 `0`。DX12 首次尝试因窗口被系统最小化而在 readiness 前失效，已按环境无效尝试归档；保持窗口恢复后的 fresh 重跑才作为 PASS 证据。
+- non-bless RenderGate 报告 `20260715-172936-327-22680-6a0e3690` PASS：Sandbox Vulkan/DX12/cross SSIM 为 `0.996278/0.996177/0.999747`，Particles 三项均为 `1.0`；未 bless golden。
+- Standard PerfGate 报告 `20260715-173055-1602861-3a3e3cc2` 四组合全部 PASS，逐格 warnings/failures 为空；未 bless baseline。Sandbox Vulkan/DX12 CPU avg 为 `8.7588/8.8616 ms`，Editor Vulkan/DX12 CPU avg 为 `3.2746/4.3766 ms`。
+- 自动门禁后 Engine.ini、EditorSettings、ViewportLayout 与 imgui 四配置均恢复到运行前字节哈希；perf baseline 保持 `543EBC04B0AA2286AF61DB865297C53164B45BCF9E60A9CBEF88745400FF1214`，fresh 日志拒绝词为 `0`，有效 Editor/Sandbox/AshImageDiff/gate roots 为 `0`。
+- 用户人工 Vulkan/DX12 编辑操作签署仍待完成。人工检查必须从新建 `Create Flat` Terrain 开始，覆盖正数非均匀 scale、远近视角、雕刻坡面、图层 UI 与 Undo/Redo；完成前本 SDD 不标记 Done，也不 bless golden/baseline。
 
 ## Approved decisions
 
