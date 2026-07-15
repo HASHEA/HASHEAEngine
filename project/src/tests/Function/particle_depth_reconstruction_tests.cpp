@@ -76,6 +76,26 @@ TEST_CASE("Particle system retires previous soft depth binding before adding pas
 	CHECK(clear < empty_early_return);
 }
 
+TEST_CASE("Particle system declares its indirect draw as explicitly non-indexed")
+{
+	std::ifstream source_file("project/src/engine/Function/Render/ParticleSystemPass.cpp");
+	REQUIRE_MESSAGE(source_file.is_open(), "failed to open ParticleSystemPass.cpp source contract");
+	const std::string source{
+		std::istreambuf_iterator<char>(source_file),
+		std::istreambuf_iterator<char>() };
+
+	const std::string args_assignment = "draw_desc.indirect_args_buffer = draw_args;";
+	const std::string kind_assignment =
+		"draw_desc.indirect_kind = GraphicsIndirectKind::NonIndexed;";
+	const size_t args = source.find(args_assignment);
+	const size_t kind = source.find(kind_assignment);
+	REQUIRE(args != std::string::npos);
+	CHECK(source.find(args_assignment, args + 1u) == std::string::npos);
+	REQUIRE(kind != std::string::npos);
+	CHECK(source.find(kind_assignment, kind + 1u) == std::string::npos);
+	CHECK(kind < args);
+}
+
 TEST_CASE("Particle system reconstructs linear depth for supported projections")
 {
 	SUBCASE("perspective normal Z")

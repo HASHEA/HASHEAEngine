@@ -708,6 +708,7 @@ namespace AshEngine
 					}
 					GraphicsDrawDesc draw_desc{};
 					draw_desc.program = draw_program;
+					draw_desc.indirect_kind = GraphicsIndirectKind::NonIndexed;
 					draw_desc.indirect_args_buffer = draw_args;
 					draw_desc.indirect_args_offset = 0;
 					ASH_PROCESS_ERROR(attach_root_constants(draw_desc, draw_program, draw_constants));
