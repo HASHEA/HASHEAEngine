@@ -15,6 +15,7 @@
 #include "Base/hprofiler.h"
 #include "Function/Render/RenderFormatUtils.h"
 #include "Function/Render/RenderGraphExecutor.h"
+#include "Function/Render/Renderer.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -4836,7 +4837,9 @@ namespace AshEngine
 		}
 	}
 
-	bool RenderDevice::draw_indirect(const std::shared_ptr<StorageBuffer>& args_buffer, uint64_t args_offset)
+	bool RenderDevice::draw_indirect(
+		const std::shared_ptr<StorageBuffer>& args_buffer,
+		const GraphicsIndirectValidationResult& validation)
 	{
 		if (!m_impl)
 		{
@@ -4854,37 +4857,95 @@ namespace AshEngine
 			HLogError("RenderDevice: draw_indirect received an invalid args buffer resource.");
 			return false;
 		}
-		if (!args_buffer->m_impl->indirect_args)
-		{
-			HLogError("RenderDevice: draw_indirect args buffer was not created with indirect_args usage.");
-			return false;
-		}
 
-		constexpr uint64_t indirect_args_alignment = 4u;
-		if ((args_offset % indirect_args_alignment) != 0u)
+		GraphicsIndirectValidationFacts facts{};
+		facts.kind = GraphicsIndirectKind::NonIndexed;
+		facts.args_resource_present = true;
+		facts.args_buffer_size = args_buffer->m_impl->resource->size;
+		facts.args_buffer_indirect_usage = args_buffer->m_impl->indirect_args;
+		facts.args_offset = validation.args_offset;
+		facts.draw_count = validation.draw_count;
+		facts.stride = validation.stride;
+		facts.instance_count = 1u;
+		const GraphicsIndirectValidationResult checked = validate_graphics_indirect(facts);
+		if (!validation.valid ||
+			validation.kind != GraphicsIndirectKind::NonIndexed ||
+			!checked.valid ||
+			checked.args_offset != validation.args_offset ||
+			checked.draw_count != validation.draw_count ||
+			checked.stride != validation.stride ||
+			checked.args_range_end != validation.args_range_end)
 		{
 			HLogError(
-				"RenderDevice: draw_indirect args offset {} is not {}-byte aligned.",
-				args_offset,
-				indirect_args_alignment);
-			return false;
-		}
-
-		constexpr uint64_t indirect_args_size = sizeof(RHI::AshDrawIndirectArgs);
-		const uint64_t buffer_size = args_buffer->m_impl->resource->size;
-		if (args_offset > buffer_size || indirect_args_size > buffer_size - args_offset)
-		{
-			HLogError(
-				"RenderDevice: draw_indirect args offset {} plus args size {} exceeds buffer size {}.",
-				args_offset,
-				indirect_args_size,
-				buffer_size);
+				"RenderDevice: draw_indirect rejected inconsistent validation facts (error {}).",
+				static_cast<uint32_t>(checked.error));
 			return false;
 		}
 
 		command_buffer->cmd_draw_indirect(
-			args_buffer->m_impl->resource->buffer, args_offset, 1u, sizeof(RHI::AshDrawIndirectArgs));
+			args_buffer->m_impl->resource->buffer,
+			validation.args_offset,
+			validation.draw_count,
+			validation.stride);
 		return validate_command_buffer_status(command_buffer, "draw_indirect::record");
+	}
+
+	bool RenderDevice::draw_indexed_indirect(
+		const std::shared_ptr<IndexBuffer>& index_buffer,
+		const std::shared_ptr<StorageBuffer>& args_buffer,
+		const GraphicsIndirectValidationResult& validation)
+	{
+		if (!m_impl)
+		{
+			HLogError("RenderDevice: draw_indexed_indirect requires an initialized render device.");
+			return false;
+		}
+
+		RHI::CommandBuffer* command_buffer = m_impl->current_command_buffer;
+		if (!validate_command_buffer_status(command_buffer, "draw_indexed_indirect::before_record"))
+		{
+			return false;
+		}
+		if (!index_buffer || !index_buffer->m_impl || !index_buffer->m_impl->resource ||
+			!index_buffer->m_impl->resource->buffer ||
+			!args_buffer || !args_buffer->m_impl || !args_buffer->m_impl->resource ||
+			!args_buffer->m_impl->resource->buffer)
+		{
+			HLogError("RenderDevice: draw_indexed_indirect received an invalid index or args buffer resource.");
+			return false;
+		}
+
+		GraphicsIndirectValidationFacts facts{};
+		facts.kind = GraphicsIndirectKind::Indexed;
+		facts.args_resource_present = true;
+		facts.args_buffer_size = args_buffer->m_impl->resource->size;
+		facts.args_buffer_indirect_usage = args_buffer->m_impl->indirect_args;
+		facts.index_buffer_present = true;
+		facts.args_offset = validation.args_offset;
+		facts.draw_count = validation.draw_count;
+		facts.stride = validation.stride;
+		facts.instance_count = 1u;
+		const GraphicsIndirectValidationResult checked = validate_graphics_indirect(facts);
+		if (!validation.valid ||
+			validation.kind != GraphicsIndirectKind::Indexed ||
+			!checked.valid ||
+			checked.args_offset != validation.args_offset ||
+			checked.draw_count != validation.draw_count ||
+			checked.stride != validation.stride ||
+			checked.args_range_end != validation.args_range_end)
+		{
+			HLogError(
+				"RenderDevice: draw_indexed_indirect rejected inconsistent validation facts (error {}).",
+				static_cast<uint32_t>(checked.error));
+			return false;
+		}
+
+		command_buffer->cmd_draw_indexed_indirect(
+			args_buffer->m_impl->resource->buffer,
+			validation.args_offset,
+			validation.draw_count,
+			validation.stride);
+		return validate_command_buffer_status(command_buffer, "draw_indexed_indirect::record");
 	}
 
 	void RenderDevice::dispatch(uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)

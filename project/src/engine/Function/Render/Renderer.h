@@ -78,6 +78,77 @@ namespace AshEngine
 		std::vector<VertexBufferBinding> m_overflow{};
 	};
 
+	enum class GraphicsIndirectKind : uint8_t
+	{
+		None = 0,
+		NonIndexed,
+		Indexed
+	};
+
+	enum class GraphicsIndirectValidationError : uint8_t
+	{
+		None = 0,
+		UnexpectedArgsBuffer,
+		MissingArgsBuffer,
+		MissingIndirectUsage,
+		MissingIndexBuffer,
+		UnexpectedIndexBuffer,
+		InvalidDrawCount,
+		InvalidStride,
+		MisalignedOffset,
+		RangeOutOfBounds,
+		RangeOverflow,
+		ConflictingDirectArguments
+	};
+
+	struct GraphicsIndirectValidationFacts
+	{
+		GraphicsIndirectKind kind = GraphicsIndirectKind::None;
+		bool args_resource_present = false;
+		uint64_t args_buffer_size = 0;
+		bool args_buffer_indirect_usage = false;
+		bool index_buffer_present = false;
+		uint64_t args_offset = 0;
+		uint32_t draw_count = 1;
+		uint32_t stride = 0;
+		uint32_t vertex_count = 0;
+		uint32_t index_count = 0;
+		uint32_t instance_count = 1;
+		uint32_t first_vertex = 0;
+		uint32_t first_instance = 0;
+		uint32_t first_index = 0;
+		int32_t vertex_offset = 0;
+	};
+
+	struct GraphicsIndirectValidationResult
+	{
+		bool valid = false;
+		GraphicsIndirectValidationError error = GraphicsIndirectValidationError::None;
+		GraphicsIndirectKind kind = GraphicsIndirectKind::None;
+		uint64_t args_offset = 0;
+		uint32_t draw_count = 0;
+		uint32_t stride = 0;
+		uint64_t args_range_end = 0;
+	};
+
+	ASH_API GraphicsIndirectValidationResult validate_graphics_indirect(
+		const GraphicsIndirectValidationFacts& facts);
+
+	struct GraphicsIndirectDrawOperations
+	{
+		void* user_data = nullptr;
+		bool (*bind_index_buffer)(void*, const std::shared_ptr<IndexBuffer>&, uint64_t) = nullptr;
+		bool (*draw_non_indexed)(
+			void*,
+			const std::shared_ptr<StorageBuffer>&,
+			const GraphicsIndirectValidationResult&) = nullptr;
+		bool (*draw_indexed)(
+			void*,
+			const std::shared_ptr<IndexBuffer>&,
+			const std::shared_ptr<StorageBuffer>&,
+			const GraphicsIndirectValidationResult&) = nullptr;
+	};
+
 	struct GraphicsDrawDesc
 	{
 		static constexpr uint32_t InlineConstDataCapacity = 256;
@@ -102,11 +173,17 @@ namespace AshEngine
 		bool reverse_z = false;
 		std::array<uint8_t, InlineConstDataCapacity> inline_const_data{};
 		std::vector<uint8_t> const_data{};
-		// SDD-2026-07-10-gpu-particles：非空即走 cmd_draw_indirect（drawCount=1，非索引），
-		// 忽略 vertex_count/instance_count/index_buffer
+		GraphicsIndirectKind indirect_kind = GraphicsIndirectKind::None;
 		std::shared_ptr<StorageBuffer> indirect_args_buffer = nullptr;
 		uint64_t indirect_args_offset = 0;
+		uint32_t indirect_draw_count = 1;
+		uint32_t indirect_stride = 0;
 	};
+
+	ASH_API bool route_graphics_indirect_draw(
+		const GraphicsDrawDesc& desc,
+		const GraphicsIndirectValidationResult& result,
+		const GraphicsIndirectDrawOperations& operations);
 
 	struct ComputeDispatchDesc
 	{

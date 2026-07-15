@@ -30,6 +30,7 @@ namespace AshEngine
 {
 	struct RenderGraphResolvedBufferTransition;
 	struct RenderGraphBufferBindingScope;
+	struct GraphicsIndirectValidationResult;
 	struct ProgramBindingState;
 	class GraphicsProgram;
 	class ComputeProgram;
@@ -637,7 +638,13 @@ namespace AshEngine
 		void set_scissor(const RenderScissor& scissor);
 		void draw(uint32_t vertex_count, uint32_t instance_count = 1, uint32_t first_vertex = 0, uint32_t first_instance = 0);
 		void draw_indexed(uint32_t index_count, uint32_t instance_count = 1, uint32_t first_index = 0, int32_t vertex_offset = 0, uint32_t first_instance = 0);
-		bool draw_indirect(const std::shared_ptr<StorageBuffer>& args_buffer, uint64_t args_offset);
+		bool draw_indirect(
+			const std::shared_ptr<StorageBuffer>& args_buffer,
+			const GraphicsIndirectValidationResult& validation);
+		bool draw_indexed_indirect(
+			const std::shared_ptr<IndexBuffer>& index_buffer,
+			const std::shared_ptr<StorageBuffer>& args_buffer,
+			const GraphicsIndirectValidationResult& validation);
 		void dispatch(uint32_t group_count_x, uint32_t group_count_y = 1, uint32_t group_count_z = 1);
 		bool end_pass();
 
