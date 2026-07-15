@@ -139,10 +139,9 @@ namespace AshEditor
 				return AshEngine::remove_scene_component(entity, AshEngine::SceneComponentType::Terrain);
 			}
 
-			if (!entity.has_terrain_component() &&
-				!AshEngine::add_scene_component(entity, AshEngine::SceneComponentType::Terrain))
+			if (!entity.has_terrain_component())
 			{
-				return false;
+				return entity.add_terrain_component(*optValue);
 			}
 
 			return entity.set_terrain_component(*optValue);

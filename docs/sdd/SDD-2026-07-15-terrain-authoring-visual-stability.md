@@ -176,6 +176,7 @@ Terrain Phase 3 人工 Vulkan 验证暴露了三类可复现问题：
 - non-bless RenderGate 报告 `20260715-172936-327-22680-6a0e3690` PASS：Sandbox Vulkan/DX12/cross SSIM 为 `0.996278/0.996177/0.999747`，Particles 三项均为 `1.0`；未 bless golden。
 - Standard PerfGate 报告 `20260715-173055-1602861-3a3e3cc2` 四组合全部 PASS，逐格 warnings/failures 为空；未 bless baseline。Sandbox Vulkan/DX12 CPU avg 为 `8.7588/8.8616 ms`，Editor Vulkan/DX12 CPU avg 为 `3.2746/4.3766 ms`。
 - 自动门禁后 Engine.ini、EditorSettings、ViewportLayout 与 imgui 四配置均恢复到运行前字节哈希；perf baseline 保持 `543EBC04B0AA2286AF61DB865297C53164B45BCF9E60A9CBEF88745400FF1214`，fresh 日志拒绝词为 `0`，有效 Editor/Sandbox/AshImageDiff/gate roots 为 `0`。
+- 第一次用户人工 Vulkan 检查未通过：Inspector 的 Terrain `Add Component` 可用性与命令提交错误地复用了 intentionally fail-closed 的无资产参数通用 facade，导致菜单不提供 Terrain，且即使进入草稿也无法完成首次组件提交。该尝试不计 PASS。修复以 RED/GREEN 锁定 Terrain 菜单采用“尚无组件且无 pending draft”的条件、首次提交和遗留 Inspector apply helper 都调用 typed asset-backed `entity.add_terrain_component(value)`、后续修改调用 `set_terrain_component(value)`；修复后两个定向用例通过，`RunTests.bat Debug` 通过 `465/465` test cases、`25599/25599` assertions，`build_editor.bat Debug` 成功，`RunArchGate.bat` PASS（仅 `35` 条既有 legacy warning）。人工签署从修复后的精确提交重新开始。
 - 用户人工 Vulkan/DX12 编辑操作签署仍待完成。人工检查必须从新建 `Create Flat` Terrain 开始，覆盖正数非均匀 scale、远近视角、雕刻坡面、图层 UI 与 Undo/Redo；完成前本 SDD 不标记 Done，也不 bless golden/baseline。
 
 ## Approved decisions

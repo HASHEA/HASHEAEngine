@@ -133,7 +133,7 @@ namespace AshEditor
 		const bool bHasPendingDraft =
 			refState.draftTerrain.uEntityId == entity.get_id() &&
 			refState.draftTerrain.optCurrentValue.has_value();
-		return !bHasPendingDraft && AshEngine::can_add_scene_component(entity, GetComponentType());
+		return !bHasPendingDraft && !entity.has_terrain_component();
 	}
 
 	bool TerrainComponentEditor::AddDefault(

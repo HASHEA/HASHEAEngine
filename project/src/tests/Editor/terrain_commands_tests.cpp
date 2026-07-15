@@ -149,6 +149,53 @@ namespace
 	};
 }
 
+TEST_CASE("Terrain Inspector exposes asset-backed Terrain in the add component menu")
+{
+	const std::string editor = ReadTerrainCommandText(
+		"project/src/editor/Panels/Inspector/TerrainComponentEditor.cpp");
+	const size_t canAddBegin = editor.find("bool TerrainComponentEditor::CanAdd(");
+	const size_t addDefaultBegin = editor.find("bool TerrainComponentEditor::AddDefault(", canAddBegin);
+	REQUIRE(canAddBegin != std::string::npos);
+	REQUIRE(addDefaultBegin != std::string::npos);
+	const std::string canAdd = editor.substr(canAddBegin, addDefaultBegin - canAddBegin);
+
+	CHECK(canAdd.find("!entity.has_terrain_component()") != std::string::npos);
+	CHECK(canAdd.find("can_add_scene_component") == std::string::npos);
+	CHECK(editor.find("refUi.open_popup(\"TerrainAssetPickerPopup\")", addDefaultBegin) !=
+		std::string::npos);
+}
+
+TEST_CASE("Terrain component command uses the typed asset-backed add path")
+{
+	const std::string commands = ReadTerrainCommandText(
+		"project/src/editor/Core/EntityCommands.cpp");
+	const size_t applyBegin = commands.find("bool ApplyTerrainComponentState(");
+	const size_t applyEnd = commands.find("SceneEntityId GetEntityParentId", applyBegin);
+	REQUIRE(applyBegin != std::string::npos);
+	REQUIRE(applyEnd != std::string::npos);
+	const std::string apply = commands.substr(applyBegin, applyEnd - applyBegin);
+
+	CHECK(apply.find("entity.add_terrain_component(*optValue)") != std::string::npos);
+	CHECK(apply.find("add_scene_component(entity, AshEngine::SceneComponentType::Terrain)") ==
+		std::string::npos);
+	CHECK(apply.find("entity.set_terrain_component(*optValue)") != std::string::npos);
+
+	const std::string support = ReadTerrainCommandText(
+		"project/src/editor/Panels/Inspector/InspectorPanelSupport.cpp");
+	const size_t supportApplyBegin = support.find("bool ApplyTerrainComponentValue(");
+	const size_t supportApplyEnd = support.find("void DrawInspectorPanelIntro", supportApplyBegin);
+	REQUIRE(supportApplyBegin != std::string::npos);
+	REQUIRE(supportApplyEnd != std::string::npos);
+	const std::string supportApply = support.substr(
+		supportApplyBegin,
+		supportApplyEnd - supportApplyBegin);
+
+	CHECK(supportApply.find("entity.add_terrain_component(*optValue)") != std::string::npos);
+	CHECK(supportApply.find("add_scene_component(entity, AshEngine::SceneComponentType::Terrain)") ==
+		std::string::npos);
+	CHECK(supportApply.find("entity.set_terrain_component(*optValue)") != std::string::npos);
+}
+
 TEST_CASE("Terrain commands expose only their affected Terrain asset identity")
 {
 	std::vector<std::string> events{};
