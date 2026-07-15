@@ -21,16 +21,32 @@ namespace AshEngine
 		RHI::AshResourceState state = RHI::AshResourceState::Unknown;
 	};
 
+	struct RenderGraphBufferLifetime
+	{
+		bool used = false;
+		uint32_t first_pass = UINT32_MAX;
+		uint32_t last_pass = UINT32_MAX;
+	};
+
+	struct RenderGraphBufferTransition
+	{
+		RenderGraphBufferRef buffer{};
+		RHI::AshResourceState state = RHI::AshResourceState::Unknown;
+	};
+
 	struct RenderGraphPassBarrierPlan
 	{
 		std::vector<RenderGraphTextureTransition> transitions{};
 		std::vector<RHI::AshResourceState> texture_states{};
+		std::vector<RenderGraphBufferTransition> buffer_transitions{};
+		std::vector<RHI::AshResourceState> buffer_states{};
 	};
 
 	struct RenderGraphCompileResult
 	{
 		std::vector<uint32_t> live_pass_indices{};
 		std::vector<RenderGraphTextureLifetime> texture_lifetimes{};
+		std::vector<RenderGraphBufferLifetime> buffer_lifetimes{};
 		std::vector<RenderGraphPassBarrierPlan> pass_barriers{};
 	};
 
@@ -47,8 +63,18 @@ namespace AshEngine
 			const std::vector<RenderGraphTextureNode>& textures,
 			const std::vector<RenderGraphPassNode>& passes,
 			RenderGraphCompileResult& out_result);
+		static bool compile(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphBufferNode>& buffers,
+			const std::vector<RenderGraphPassNode>& passes,
+			RenderGraphCompileResult& out_result);
 		static bool compile_cached(
 			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphPassNode>& passes,
+			RenderGraphCompileResult& out_result);
+		static bool compile_cached(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphBufferNode>& buffers,
 			const std::vector<RenderGraphPassNode>& passes,
 			RenderGraphCompileResult& out_result);
 
@@ -57,8 +83,18 @@ namespace AshEngine
 		static ASH_API size_t hash_topology_for_tests(
 			const std::vector<RenderGraphTextureNode>& textures,
 			const std::vector<RenderGraphPassNode>& passes);
+		static ASH_API size_t hash_topology_for_tests(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphBufferNode>& buffers,
+			const std::vector<RenderGraphPassNode>& passes);
 		static ASH_API bool compile_cached_in_bucket_for_tests(
 			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphPassNode>& passes,
+			size_t topology_hash,
+			RenderGraphCompileResult& out_result);
+		static ASH_API bool compile_cached_in_bucket_for_tests(
+			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphBufferNode>& buffers,
 			const std::vector<RenderGraphPassNode>& passes,
 			size_t topology_hash,
 			RenderGraphCompileResult& out_result);
@@ -69,9 +105,11 @@ namespace AshEngine
 	private:
 		static size_t hash_topology(
 			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphBufferNode>& buffers,
 			const std::vector<RenderGraphPassNode>& passes);
 		static bool compile_cached_in_bucket(
 			const std::vector<RenderGraphTextureNode>& textures,
+			const std::vector<RenderGraphBufferNode>& buffers,
 			const std::vector<RenderGraphPassNode>& passes,
 			size_t topology_hash,
 			RenderGraphCompileResult& out_result);

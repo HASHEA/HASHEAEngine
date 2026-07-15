@@ -329,22 +329,12 @@ namespace AshEngine
 
 	bool RenderGraphBuilder::compile_for_tests(RenderGraphCompileResult& out_result) const
 	{
-		if (!m_buffers.empty())
-		{
-			HLogError("RenderGraph '{}': buffer compilation is not available in the declaration-only stage.", m_name);
-			return false;
-		}
-		return RenderGraphCompiler::compile(m_textures, m_passes, out_result);
+		return RenderGraphCompiler::compile(m_textures, m_buffers, m_passes, out_result);
 	}
 
 	bool RenderGraphBuilder::compile_cached_for_tests(RenderGraphCompileResult& out_result) const
 	{
-		if (!m_buffers.empty())
-		{
-			HLogError("RenderGraph '{}': cached buffer compilation is not available in the declaration-only stage.", m_name);
-			return false;
-		}
-		return RenderGraphCompiler::compile_cached(m_textures, m_passes, out_result);
+		return RenderGraphCompiler::compile_cached(m_textures, m_buffers, m_passes, out_result);
 	}
 
 	size_t RenderGraphBuilder::get_texture_count_for_tests() const

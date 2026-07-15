@@ -67,8 +67,8 @@ namespace AshEngine
 			const std::function<bool(RenderGraphComputeContext&)>& execute);
 
 		bool execute();
-		bool compile_for_tests(RenderGraphCompileResult& out_result) const;
-		bool compile_cached_for_tests(RenderGraphCompileResult& out_result) const;
+		ASH_API bool compile_for_tests(RenderGraphCompileResult& out_result) const;
+		ASH_API bool compile_cached_for_tests(RenderGraphCompileResult& out_result) const;
 
 		size_t get_texture_count_for_tests() const;
 		ASH_API size_t get_pass_count_for_tests() const;

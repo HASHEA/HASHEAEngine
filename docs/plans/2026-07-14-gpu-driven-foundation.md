@@ -403,7 +403,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - Modify: project/src/engine/Function/Render/RenderGraphBuilder.cpp
 - Modify: project/src/tests/Function/render_graph_buffer_tests.cpp
 
-- [ ] Step 1: Add RED compiler cases
+- [x] Step 1: Add RED compiler cases
 
 覆盖：
 
@@ -420,7 +420,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 
 预期 RED：compile result 只有 texture lifetime/transition/state，cache key 也只含 texture。
 
-- [ ] Step 2: Implement compiler data
+- [x] Step 2: Implement compiler data
 
 新增：
 
@@ -433,14 +433,14 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 
 本任务同步 RenderGraphBuilder 的 compile_for_tests/compile_cached_for_tests 调用。Compiler 保留 texture-only overload 并委托空 buffer 集合，供尚未迁移的 executor/legacy tests 编译；真正 executor buffer 参数与执行留到 Task 3。
 
-- [ ] Step 3: GREEN and regression
+- [x] Step 3: GREEN and regression
 
     RunTests.bat Debug --test-case="RenderGraph buffer*"
-    RunTests.bat Debug --test-case="*RenderGraph*"
+    RunTests.bat Debug --test-case="RenderGraph*"
     RunTests.bat Debug
     RunArchGate.bat
 
-- [ ] Step 4: Focused commit
+- [x] Step 4: Focused commit
 
 建议提交信息：
 
