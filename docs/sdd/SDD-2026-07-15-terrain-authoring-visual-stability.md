@@ -168,7 +168,7 @@ Terrain Phase 3 人工 Vulkan 验证暴露了三类可复现问题：
 ## Validation record
 
 - Focused RED/GREEN 已分别覆盖 Terrain world bounds / Editor clip、静态 caster cache / receiver-plane PCF、TerrainGate canonical/cooked 全域 oracle，以及跨 LOD canonical shading normal；camera、shadow、fixture、normal 四个边界的独立只读复核均为 `P0/P1/P2 = 0, CLEAN`。
-- Fresh 全量 `RunTests.bat Debug` 通过 `435/435` test cases、`25161/25161` assertions；Release `Tests.exe` 通过 `435/435` test cases、`25168/25168` assertions，二者均报告 `All Memory Free`。
+- 合并最新 `origin/main` 后 fresh generate；`RunTests.bat Debug` 与 `RunTests.bat Release` 均通过 `463/463` test cases、`25584/25584` assertions，并报告 `All Memory Free`。
 - `build_editor.bat Debug/Release` 与 `build_sandbox.bat Debug/Release` 均成功；Terrain HLSL 的 GBuffer/depth/LOD permutations 已分别用 DXIL 与 SPIR-V 编译通过。
 - `RunArchGate.bat` PASS，仅保留 `35` 条既有 legacy warning；`AIDevDoctor.ps1 -Mode ValidatePlan` exit `0`。
 - 双后端 readiness、validation、专项图像 A/B、non-bless RenderGate、Standard PerfGate 与用户人工操作签署尚待在最新集成提交上执行；完成前本 SDD 不标记 Done，也不 bless golden/baseline。
