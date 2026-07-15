@@ -105,7 +105,8 @@ namespace AshEditor
 		enum class FileJobTestPoint : uint8_t
 		{
 			BeforeCodec = 0,
-			AfterPublishClaim
+			AfterPublishClaim,
+			AfterSaveResultCaptured
 		};
 		using FileJobTestHook = std::function<void(
 			TerrainFileOperationKind,

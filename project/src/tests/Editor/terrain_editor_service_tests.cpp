@@ -479,6 +479,11 @@ namespace
 			state->entered_future.wait();
 		}
 
+		bool WaitUntilEnteredFor(const std::chrono::milliseconds timeout)
+		{
+			return state->entered_future.wait_for(timeout) == std::future_status::ready;
+		}
+
 		void Release()
 		{
 			if (!state->released.exchange(true, std::memory_order_acq_rel))
@@ -3609,23 +3614,25 @@ TEST_CASE("Terrain save completion does not swallow a later external write")
 	REQUIRE(service.SubmitIntent(rename));
 	service.Update();
 	const uint64_t savedGeneration = service.GetWorkingSet()->content_generation;
+	TerrainEditorFileJobHookBlocker hook(
+		AshEditor::TerrainFileOperationKind::Save,
+		AshEditor::TerrainEditorService::FileJobTestPoint::AfterSaveResultCaptured);
+	service.SetFileJobTestHook(hook.Callback());
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::Save)));
+	const bool entered = hook.WaitUntilEnteredFor(std::chrono::seconds(2));
+	if (!entered)
+	{
+		service.Update();
+	}
+	REQUIRE_MESSAGE(entered, service.GetFileOperationState().error);
 
 	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> written{};
-	const auto writeDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-	while (std::chrono::steady_clock::now() < writeDeadline)
-	{
-		std::string loadError{};
-		written.reset();
-		if (AshEngine::load_terrain_container(path, written, nullptr, &loadError) ==
-				AshEngine::TerrainContainerResult::Success &&
-			written && written->content_generation == savedGeneration)
-		{
-			break;
-		}
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-	}
+	std::string loadError{};
+	REQUIRE_MESSAGE(
+		AshEngine::load_terrain_container(path, written, nullptr, &loadError) ==
+			AshEngine::TerrainContainerResult::Success,
+		loadError);
 	REQUIRE(written);
 	REQUIRE(written->content_generation == savedGeneration);
 
@@ -3636,9 +3643,11 @@ TEST_CASE("Terrain save completion does not swallow a later external write")
 	std::filesystem::last_write_time(
 		path, std::filesystem::file_time_type::clock::now() + std::chrono::seconds(4));
 
-	service.Update();
-	REQUIRE(service.GetFileOperationState().status ==
-		AshEditor::TerrainFileOperationStatus::Succeeded);
+	hook.Release();
+	REQUIRE_MESSAGE(
+		WaitForTerrainFileOperationStatus(
+			service, AshEditor::TerrainFileOperationStatus::Succeeded),
+		service.GetFileOperationState().error);
 	const auto reloadDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
 	while (std::chrono::steady_clock::now() < reloadDeadline &&
 		service.GetWorkingSet()->content_generation != external.content_generation)
@@ -3646,7 +3655,7 @@ TEST_CASE("Terrain save completion does not swallow a later external write")
 		service.Update();
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
-	CHECK(service.GetWorkingSet()->content_generation == external.content_generation);
+	REQUIRE(service.GetWorkingSet()->content_generation == external.content_generation);
 	CHECK(service.GetWorkingSet()->edit_layers.front().name == "External B After Save");
 	std::filesystem::remove_all(root);
 }

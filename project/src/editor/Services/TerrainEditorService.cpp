@@ -3130,6 +3130,14 @@ namespace AshEditor
 									jobResult.source_write_time = writeTime;
 								}
 							}
+#if defined(ASH_TESTS)
+							if (jobResult.succeeded &&
+								kind == TerrainFileOperationKind::Save &&
+								fileJobTestHook)
+							{
+								fileJobTestHook(kind, FileJobTestPoint::AfterSaveResultCaptured);
+							}
+#endif
 							dispatchState->Resolve(std::move(jobResult));
 					}
 					catch (const std::exception& exception)
