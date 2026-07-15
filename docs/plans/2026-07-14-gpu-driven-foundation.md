@@ -463,7 +463,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - Modify: project/src/engine/Function/Render/RenderDevice.cpp
 - Modify: project/src/tests/Function/render_graph_buffer_tests.cpp
 
-- [ ] Step 1: Add RED executor/pool cases
+- [x] Step 1: Add RED executor/pool cases
 
 覆盖：
 
@@ -488,7 +488,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 
 新增 execute_render_graph_with_ops_for_tests，但它与正常入口调用完全相同的 execute_render_graph_core；不得暴露 StorageBuffer::Impl、复制 executor，或让测试绕过真实 cleanup 分支。该 seam 是获批 SDD 对 all-failure cleanup 的机械验证点，不是通用渲染抽象。
 
-- [ ] Step 2: Implement pool and Function-level transition submission
+- [x] Step 2: Implement pool and Function-level transition submission
 
 - Renderer 公开 graph executor 所需的 acquire/release/clear transient storage buffer facade。
 - 两类 RenderGraph context 在本任务新增 get_buffer(ref)，concrete RasterContext/ComputeContext 同步实现；execute_render_graph 及 test bridge 从此显式接收 buffers。
@@ -501,7 +501,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - GraphicsPassContext::end() 与 Renderer::end_active_pass() 返回真实 pass completion 结果；析构/move cleanup 可忽略返回值，但 executor 必须检查，并让 end_pass failure 进入统一 fail_execution cleanup。
 - Copy access 不加入实现。
 
-- [ ] Step 3: GREEN and CPU gates
+- [x] Step 3: GREEN and CPU gates
 
     RunTests.bat Debug --test-case="RenderGraph buffer*"
     RunTests.bat Debug
@@ -509,11 +509,11 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
     build_editor.bat Debug
     build_sandbox.bat Debug
 
-- [ ] Step 4: Short dual-backend validation checkpoint
+- [x] Step 4: Short dual-backend validation checkpoint
 
 先申请 GPU 窗口，再用一个默认无 graph-buffer 的短 smoke 验证 disabled-path 零 validation/debug-layer error。此 checkpoint 不运行 bless。
 
-- [ ] Step 5: Focused commit
+- [x] Step 5: Focused commit
 
 建议提交信息：
 

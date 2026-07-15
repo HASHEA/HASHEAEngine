@@ -26,6 +26,7 @@ namespace RHI
 
 namespace AshEngine
 {
+	struct RenderGraphResolvedBufferTransition;
 	class GraphicsProgram;
 	class ComputeProgram;
 	class Renderer;
@@ -609,6 +610,9 @@ namespace AshEngine
 		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
 		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
 		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+		std::shared_ptr<StorageBuffer> acquire_transient_storage_buffer(const StorageBufferDesc& desc);
+		void release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer);
+		void clear_transient_storage_buffers();
 		std::shared_ptr<RenderSampler> create_sampler(const RenderSamplerDesc& desc, const char* debug_name = nullptr);
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
@@ -667,6 +671,10 @@ namespace AshEngine
 		bool request_back_buffer_capture();
 		bool fetch_back_buffer_capture(BackBufferCaptureResult& out_result, uint64_t timeout_nanoseconds);
 
+		static std::unique_ptr<RenderDevice> create_headless_for_tests();
+		std::shared_ptr<StorageBuffer> seed_transient_storage_buffer_for_tests(const StorageBufferDesc& desc);
+		size_t get_transient_storage_buffer_pool_size_for_tests() const;
+
 	private:
 		bool ensure_back_buffer_target();
 		void sync_swapchain_target();
@@ -679,6 +687,9 @@ namespace AshEngine
 		bool collect_depth_attachment_barrier(const PassDepthAttachment& attachment, std::vector<RHI::AshBarrier>& out_barriers);
 		bool submit_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
 		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
+		bool submit_graph_buffer_transitions(
+			const RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count);
 		bool transition_graphics_program_resources(GraphicsProgram* program);
 		bool transition_compute_program_resources(ComputeProgram* program);
 		bool transition_vertex_buffer(const std::shared_ptr<VertexBuffer>& buffer);

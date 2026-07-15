@@ -136,12 +136,13 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
-	void Renderer::GraphicsPassContext::end()
+	bool Renderer::GraphicsPassContext::end()
 	{
 		if (m_renderer)
 		{
-			m_renderer->end_active_pass(this);
+			return m_renderer->end_active_pass(this);
 		}
+		return !m_active;
 	}
 
 	Renderer::Renderer(RenderDevice* render_device)
@@ -312,6 +313,27 @@ namespace AshEngine
 		return m_render_device ? m_render_device->create_storage_buffer(desc) : nullptr;
 	}
 
+	std::shared_ptr<StorageBuffer> Renderer::acquire_transient_storage_buffer(const StorageBufferDesc& desc)
+	{
+		return m_render_device ? m_render_device->acquire_transient_storage_buffer(desc) : nullptr;
+	}
+
+	void Renderer::release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer)
+	{
+		if (m_render_device)
+		{
+			m_render_device->release_transient_storage_buffer(buffer);
+		}
+	}
+
+	void Renderer::clear_transient_storage_buffers()
+	{
+		if (m_render_device)
+		{
+			m_render_device->clear_transient_storage_buffers();
+		}
+	}
+
 	std::shared_ptr<RenderSampler> Renderer::create_sampler(const RenderSamplerDesc& desc, const char* debug_name)
 	{
 		return m_render_device ? m_render_device->create_sampler(desc, debug_name) : nullptr;
@@ -388,9 +410,20 @@ namespace AshEngine
 		return m_last_completed_frame_stats;
 	}
 
-	bool Renderer::submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers)
+	bool Renderer::submit_graph_buffer_transitions(
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count)
 	{
-		return m_render_device && m_render_device->submit_graph_resource_barriers(barriers);
+		return m_render_device &&
+			m_render_device->submit_graph_buffer_transitions(transitions, transition_count);
+	}
+
+	bool submit_render_graph_buffer_transitions(
+		Renderer& renderer,
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count)
+	{
+		return renderer.submit_graph_buffer_transitions(transitions, transition_count);
 	}
 
 	void Renderer::update_frame_timing_history(double frame_time_ms)
@@ -433,11 +466,11 @@ namespace AshEngine
 		m_frame_in_progress = false;
 	}
 
-	void Renderer::end_active_pass(GraphicsPassContext* pass_context)
+	bool Renderer::end_active_pass(GraphicsPassContext* pass_context)
 	{
 		if (!pass_context || pass_context != m_active_pass)
 		{
-			return;
+			return false;
 		}
 
 		const char* pass_name = pass_context->m_desc.name ? pass_context->m_desc.name : "UnnamedPass";
@@ -668,5 +701,6 @@ namespace AshEngine
 		pass_context->m_active = false;
 		pass_context->m_renderer = nullptr;
 		m_active_pass = nullptr;
+		return success;
 	}
 }

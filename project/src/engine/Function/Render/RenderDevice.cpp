@@ -14,6 +14,7 @@
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include "Function/Render/RenderFormatUtils.h"
+#include "Function/Render/RenderGraphExecutor.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -996,6 +997,15 @@ namespace AshEngine
 			return hash_value;
 		}
 
+		static uint64_t hash_storage_buffer_desc(const StorageBufferDesc& desc)
+		{
+			uint64_t hash_value = desc.size;
+			hash_value = (hash_value * 16777619ull) ^ desc.stride;
+			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.cpu_write ? 1 : 0);
+			hash_value = (hash_value * 16777619ull) ^ static_cast<uint64_t>(desc.indirect_args ? 1 : 0);
+			return hash_value;
+		}
+
 		static std::shared_ptr<RHI::CommandBuffer> make_command_buffer_ref(RHI::CommandBuffer* command_buffer)
 		{
 			return std::shared_ptr<RHI::CommandBuffer>(command_buffer, [](RHI::CommandBuffer*) {});
@@ -1090,6 +1100,7 @@ namespace AshEngine
 	{
 	public:
 		std::shared_ptr<BufferResource> resource = nullptr;
+		bool cpu_write = false;
 		bool indirect_args = false;
 	};
 
@@ -1229,6 +1240,7 @@ namespace AshEngine
 		std::shared_ptr<RenderTarget::Impl> back_buffer_target = nullptr;
 		std::shared_ptr<RenderTarget::Impl> swapchain_target = nullptr;
 		std::unordered_map<uint64_t, std::vector<std::shared_ptr<RenderTarget>>> transient_render_target_pool;
+		std::unordered_map<uint64_t, std::vector<std::shared_ptr<StorageBuffer>>> transient_storage_buffer_pool;
 		uint64_t frame_index = 0;
 		GpuTimingFrameLifecycleCoordinator gpu_timing_frame_lifecycle{};
 		bool gpu_timing_frame_submitted = false;
@@ -3284,6 +3296,11 @@ namespace AshEngine
 		}
 	}
 
+	std::unique_ptr<RenderDevice> RenderDevice::create_headless_for_tests()
+	{
+		return std::unique_ptr<RenderDevice>(new RenderDevice(nullptr, nullptr));
+	}
+
 	RenderDevice::~RenderDevice()
 	{
 		if (!m_impl)
@@ -3301,6 +3318,7 @@ namespace AshEngine
 		m_impl->back_buffer_target.reset();
 		m_impl->swapchain_target.reset();
 		m_impl->transient_render_target_pool.clear();
+		m_impl->transient_storage_buffer_pool.clear();
 		m_impl->graphics_context = nullptr;
 		m_impl->swapchain = nullptr;
 	}
@@ -3733,9 +3751,93 @@ namespace AshEngine
 
 		auto impl = std::make_shared<StorageBuffer::Impl>();
 		impl->resource = resource;
+		impl->cpu_write = desc.cpu_write;
 		impl->indirect_args = desc.indirect_args;
 		result = std::shared_ptr<StorageBuffer>(new StorageBuffer(impl));
 		ASH_PROCESS_GUARD_RETURN_END(result, nullptr);
+	}
+
+	std::shared_ptr<StorageBuffer> RenderDevice::acquire_transient_storage_buffer(const StorageBufferDesc& desc)
+	{
+		if (!m_impl || desc.size == 0u)
+		{
+			return nullptr;
+		}
+
+		auto& bucket = m_impl->transient_storage_buffer_pool[hash_storage_buffer_desc(desc)];
+		for (auto it = bucket.rbegin(); it != bucket.rend(); ++it)
+		{
+			const std::shared_ptr<StorageBuffer>& candidate = *it;
+			if (!candidate || !candidate->m_impl || !candidate->m_impl->resource ||
+				candidate->m_impl->resource->size != desc.size ||
+				candidate->m_impl->resource->stride != desc.stride ||
+				candidate->m_impl->cpu_write != desc.cpu_write ||
+				candidate->m_impl->indirect_args != desc.indirect_args)
+			{
+				continue;
+			}
+
+			std::shared_ptr<StorageBuffer> result = candidate;
+			bucket.erase(std::next(it).base());
+			return result;
+		}
+		return create_storage_buffer(desc);
+	}
+
+	void RenderDevice::release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer)
+	{
+		if (!m_impl || !buffer || !buffer->m_impl || !buffer->m_impl->resource)
+		{
+			return;
+		}
+
+		StorageBufferDesc desc{};
+		desc.size = buffer->m_impl->resource->size;
+		desc.stride = buffer->m_impl->resource->stride;
+		desc.cpu_write = buffer->m_impl->cpu_write;
+		desc.indirect_args = buffer->m_impl->indirect_args;
+		m_impl->transient_storage_buffer_pool[hash_storage_buffer_desc(desc)].push_back(buffer);
+	}
+
+	void RenderDevice::clear_transient_storage_buffers()
+	{
+		if (m_impl)
+		{
+			m_impl->transient_storage_buffer_pool.clear();
+		}
+	}
+
+	std::shared_ptr<StorageBuffer> RenderDevice::seed_transient_storage_buffer_for_tests(const StorageBufferDesc& desc)
+	{
+		if (!m_impl || desc.size == 0u)
+		{
+			return nullptr;
+		}
+
+		auto resource = std::make_shared<BufferResource>();
+		resource->size = desc.size;
+		resource->stride = desc.stride;
+		auto impl = std::make_shared<StorageBuffer::Impl>();
+		impl->resource = resource;
+		impl->cpu_write = desc.cpu_write;
+		impl->indirect_args = desc.indirect_args;
+		std::shared_ptr<StorageBuffer> buffer(new StorageBuffer(impl));
+		release_transient_storage_buffer(buffer);
+		return buffer;
+	}
+
+	size_t RenderDevice::get_transient_storage_buffer_pool_size_for_tests() const
+	{
+		size_t count = 0u;
+		if (m_impl)
+		{
+			for (const auto& [hash_value, bucket] : m_impl->transient_storage_buffer_pool)
+			{
+				(void)hash_value;
+				count += bucket.size();
+			}
+		}
+		return count;
 	}
 
 	std::shared_ptr<RenderSampler> RenderDevice::create_sampler(const RenderSamplerDesc& desc, const char* debug_name)
@@ -4361,6 +4463,32 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(m_impl && m_impl->current_command_buffer && !m_impl->current_framebuffer);
 		bResult = submit_rhi_resource_barriers(m_impl->current_command_buffer, barriers);
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+	}
+
+	bool RenderDevice::submit_graph_buffer_transitions(
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count)
+	{
+		if (!transitions || transition_count == 0u)
+		{
+			return transition_count == 0u;
+		}
+
+		std::vector<RHI::AshBarrier> barriers{};
+		barriers.reserve(transition_count);
+		for (size_t index = 0; index < transition_count; ++index)
+		{
+			const RenderGraphResolvedBufferTransition& transition = transitions[index];
+			if (!transition.buffer || !transition.buffer->m_impl ||
+				!transition.buffer->m_impl->resource ||
+				!transition.buffer->m_impl->resource->buffer ||
+				transition.state == RHI::AshResourceState::Unknown)
+			{
+				return false;
+			}
+			barriers.emplace_back(transition.buffer->m_impl->resource->buffer, transition.state);
+		}
+		return submit_graph_resource_barriers(barriers);
 	}
 
 	bool RenderDevice::transition_graphics_program_resources(GraphicsProgram* program)

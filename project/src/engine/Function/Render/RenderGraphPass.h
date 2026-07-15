@@ -107,6 +107,7 @@ namespace AshEngine
 	public:
 		virtual ~RenderGraphRasterContext() = default;
 		virtual std::shared_ptr<RenderTarget> get_texture(RenderGraphTextureRef texture) = 0;
+		virtual std::shared_ptr<StorageBuffer> get_buffer(RenderGraphBufferRef buffer) = 0;
 		virtual bool draw(const GraphicsDrawDesc& desc) = 0;
 	};
 
@@ -115,6 +116,7 @@ namespace AshEngine
 	public:
 		virtual ~RenderGraphComputeContext() = default;
 		virtual std::shared_ptr<RenderTarget> get_texture(RenderGraphTextureRef texture) = 0;
+		virtual std::shared_ptr<StorageBuffer> get_buffer(RenderGraphBufferRef buffer) = 0;
 		virtual bool dispatch(const ComputeDispatchDesc& desc) = 0;
 	};
 }

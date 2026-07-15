@@ -1,12 +1,17 @@
 #include "Function/Render/RenderGraphBuilder.h"
 #include "Function/Render/RenderGraphCompiler.h"
+#include "Function/Render/RenderGraphExecutor.h"
 #include "Base/hlog.h"
 #include "Base/hprofiler.h"
 #include <utility>
 
 namespace AshEngine
 {
-	bool execute_render_graph(Renderer& renderer, std::vector<RenderGraphTextureNode>& textures, const std::vector<RenderGraphPassNode>& passes);
+	bool execute_render_graph(
+		Renderer& renderer,
+		std::vector<RenderGraphTextureNode>& textures,
+		std::vector<RenderGraphBufferNode>& buffers,
+		const std::vector<RenderGraphPassNode>& passes);
 
 	namespace
 	{
@@ -319,12 +324,7 @@ namespace AshEngine
 			HLogError("RenderGraph '{}': execute requires a renderer.", m_name);
 			return false;
 		}
-		if (!m_buffers.empty())
-		{
-			HLogError("RenderGraph '{}': buffer execution is not available until buffer compilation is enabled.", m_name);
-			return false;
-		}
-		return execute_render_graph(*m_renderer, m_textures, m_passes);
+		return execute_render_graph(*m_renderer, m_textures, m_buffers, m_passes);
 	}
 
 	bool RenderGraphBuilder::compile_for_tests(RenderGraphCompileResult& out_result) const

@@ -1,10 +1,12 @@
 #include "Function/Render/RenderGraph.h"
+#include "Function/Render/RenderGraphExecutor.h"
 
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
 #endif
 #include "doctest.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -29,6 +31,97 @@ namespace
 		std::vector<AshEngine::RenderGraphTextureNode> textures{};
 		std::vector<AshEngine::RenderGraphBufferNode> buffers{};
 		std::vector<AshEngine::RenderGraphPassNode> passes{};
+	};
+
+	enum class ExecutionEvent : uint8_t
+	{
+		Acquire,
+		Release,
+		SubmitTransitions,
+		BeginRaster,
+		ComputeBody,
+		RasterBody,
+		EndRaster
+	};
+
+	struct ExecutionRecorder
+	{
+		uint32_t acquire_calls = 0;
+		uint32_t fail_acquire_call = UINT32_MAX;
+		bool submit_result = true;
+		bool begin_result = true;
+		bool end_result = true;
+		std::vector<ExecutionEvent> events{};
+		std::vector<std::shared_ptr<AshEngine::StorageBuffer>> acquired{};
+		std::vector<std::shared_ptr<AshEngine::StorageBuffer>> released{};
+		std::vector<AshEngine::RenderGraphResolvedBufferTransition> submitted{};
+
+		static std::shared_ptr<AshEngine::StorageBuffer> acquire(
+			void* user_data,
+			const AshEngine::StorageBufferDesc&)
+		{
+			ExecutionRecorder& recorder = *static_cast<ExecutionRecorder*>(user_data);
+			recorder.events.push_back(ExecutionEvent::Acquire);
+			++recorder.acquire_calls;
+			if (recorder.acquire_calls == recorder.fail_acquire_call)
+			{
+				return nullptr;
+			}
+			std::shared_ptr<AshEngine::StorageBuffer> buffer = std::make_shared<AshEngine::StorageBuffer>();
+			recorder.acquired.push_back(buffer);
+			return buffer;
+		}
+
+		static void release(
+			void* user_data,
+			const std::shared_ptr<AshEngine::StorageBuffer>& buffer)
+		{
+			ExecutionRecorder& recorder = *static_cast<ExecutionRecorder*>(user_data);
+			recorder.events.push_back(ExecutionEvent::Release);
+			recorder.released.push_back(buffer);
+		}
+
+		static bool submit_transitions(
+			void* user_data,
+			const AshEngine::RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count)
+		{
+			ExecutionRecorder& recorder = *static_cast<ExecutionRecorder*>(user_data);
+			recorder.events.push_back(ExecutionEvent::SubmitTransitions);
+			recorder.submitted.assign(transitions, transitions + transition_count);
+			return recorder.submit_result;
+		}
+
+		static bool begin_raster(
+			void* user_data,
+			const AshEngine::PassDesc&,
+			AshEngine::Renderer::GraphicsPassContext&)
+		{
+			ExecutionRecorder& recorder = *static_cast<ExecutionRecorder*>(user_data);
+			recorder.events.push_back(ExecutionEvent::BeginRaster);
+			return recorder.begin_result;
+		}
+
+		static bool end_raster(
+			void* user_data,
+			AshEngine::Renderer::GraphicsPassContext&)
+		{
+			ExecutionRecorder& recorder = *static_cast<ExecutionRecorder*>(user_data);
+			recorder.events.push_back(ExecutionEvent::EndRaster);
+			return recorder.end_result;
+		}
+
+		AshEngine::RenderGraphExecutionOps make_ops()
+		{
+			AshEngine::RenderGraphExecutionOps ops{};
+			ops.user_data = this;
+			ops.acquire_transient_storage_buffer = &ExecutionRecorder::acquire;
+			ops.release_transient_storage_buffer = &ExecutionRecorder::release;
+			ops.submit_buffer_transitions = &ExecutionRecorder::submit_transitions;
+			ops.begin_raster_pass = &ExecutionRecorder::begin_raster;
+			ops.end_raster_pass = &ExecutionRecorder::end_raster;
+			return ops;
+		}
 	};
 
 	RenderGraphBufferDesc make_buffer_desc(
@@ -103,6 +196,17 @@ namespace
 			fixture.textures,
 			fixture.buffers,
 			fixture.passes);
+	}
+
+	bool execute_with_recorder(RenderGraphBuilder& graph, ExecutionRecorder& recorder)
+	{
+		std::vector<AshEngine::RenderGraphTextureNode> textures = graph.get_textures_for_tests();
+		std::vector<AshEngine::RenderGraphBufferNode> buffers = graph.get_buffers_for_tests();
+		return AshEngine::execute_render_graph_with_ops_for_tests(
+			textures,
+			buffers,
+			graph.get_passes_for_tests(),
+			recorder.make_ops());
 	}
 }
 
@@ -612,4 +716,318 @@ TEST_CASE("RenderGraph texture only cache keeps extent outside topology identity
 		AshEngine::RenderGraphCompiler::get_compile_cache_stats_for_tests();
 	CHECK(stats.misses == 1u);
 	CHECK(stats.hits == 1u);
+}
+
+TEST_CASE("RenderGraph buffer executor allocates only live transients and resolves context identity")
+{
+	SUBCASE("dead transient is not allocated")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("DeadTransientExecution");
+		const RenderGraphBufferRef dead = graph.create_buffer(make_buffer_desc(), "Dead");
+		REQUIRE(AshEngine::add_render_graph_compute_pass_for_tests(
+			graph,
+			"DeadProducer",
+			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Invalid,
+			[&](RenderGraphComputePassBuilder& pass)
+			{
+				pass.write_buffer(dead, RenderGraphAccess::ComputeUAV);
+			},
+			[](RenderGraphComputeContext&) { return true; }));
+		ExecutionRecorder recorder{};
+		REQUIRE(execute_with_recorder(graph, recorder));
+		CHECK(recorder.acquire_calls == 0u);
+		CHECK(recorder.released.empty());
+		CHECK(recorder.submitted.empty());
+	}
+
+	SUBCASE("live transient is allocated once and compute context returns the same identity")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("LiveTransientExecution");
+		const RenderGraphBufferRef live = graph.create_buffer(make_buffer_desc(), "Live");
+		std::shared_ptr<AshEngine::StorageBuffer> first_lookup{};
+		std::shared_ptr<AshEngine::StorageBuffer> second_lookup{};
+		REQUIRE(add_compute(graph, [&](RenderGraphComputePassBuilder& pass)
+		{
+			pass.write_buffer(live, RenderGraphAccess::ComputeUAV);
+		}));
+		std::vector<AshEngine::RenderGraphPassNode> passes = graph.get_passes_for_tests();
+		passes[0].compute_execute = [&](RenderGraphComputeContext& context)
+		{
+			first_lookup = context.get_buffer(live);
+			second_lookup = context.get_buffer(live);
+			return first_lookup != nullptr && first_lookup == second_lookup;
+		};
+		std::vector<AshEngine::RenderGraphTextureNode> textures = graph.get_textures_for_tests();
+		std::vector<AshEngine::RenderGraphBufferNode> buffers = graph.get_buffers_for_tests();
+		ExecutionRecorder recorder{};
+		REQUIRE(AshEngine::execute_render_graph_with_ops_for_tests(
+			textures,
+			buffers,
+			passes,
+			recorder.make_ops()));
+		CHECK(recorder.acquire_calls == 1u);
+		REQUIRE(recorder.acquired.size() == 1u);
+		CHECK(first_lookup == recorder.acquired[0]);
+		REQUIRE(recorder.released.size() == 1u);
+		CHECK(recorder.released[0] == recorder.acquired[0]);
+		REQUIRE(recorder.submitted.size() == 1u);
+		CHECK(recorder.submitted[0].buffer == recorder.acquired[0]);
+		CHECK(recorder.submitted[0].state == RHI::AshResourceState::UAVCompute);
+	}
+}
+
+TEST_CASE("RenderGraph buffer executor releases allocations on every failure path")
+{
+	SUBCASE("compile failure allocates nothing")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("ExecutorCompileFailure");
+		const RenderGraphBufferRef buffer = graph.create_buffer(make_buffer_desc(), "UnreadableTransient");
+		REQUIRE(add_compute(graph, [&](RenderGraphComputePassBuilder& pass)
+		{
+			pass.read_buffer(buffer, RenderGraphAccess::ComputeSRV);
+		}));
+		ExecutionRecorder recorder{};
+		CHECK_FALSE(execute_with_recorder(graph, recorder));
+		CHECK(recorder.acquire_calls == 0u);
+		CHECK(recorder.released.empty());
+	}
+
+	SUBCASE("allocation failure releases earlier allocations")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("ExecutorAllocationFailure");
+		const RenderGraphBufferRef first = graph.create_buffer(make_buffer_desc(), "First");
+		const RenderGraphBufferRef second = graph.create_buffer(make_buffer_desc(), "Second");
+		REQUIRE(add_compute(graph, [&](RenderGraphComputePassBuilder& pass)
+		{
+			pass.write_buffer(first, RenderGraphAccess::ComputeUAV);
+			pass.write_buffer(second, RenderGraphAccess::ComputeUAV);
+		}));
+		ExecutionRecorder recorder{};
+		recorder.fail_acquire_call = 2u;
+		CHECK_FALSE(execute_with_recorder(graph, recorder));
+		CHECK(recorder.acquire_calls == 2u);
+		REQUIRE(recorder.acquired.size() == 1u);
+		REQUIRE(recorder.released.size() == 1u);
+		CHECK(recorder.released[0] == recorder.acquired[0]);
+	}
+
+	SUBCASE("barrier failure prevents compute body and releases")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("ExecutorBarrierFailure");
+		const RenderGraphBufferRef buffer = graph.create_buffer(make_buffer_desc(), "BarrierBuffer");
+		bool body_called = false;
+		REQUIRE(add_compute(graph, [&](RenderGraphComputePassBuilder& pass)
+		{
+			pass.write_buffer(buffer, RenderGraphAccess::ComputeUAV);
+		}));
+		std::vector<AshEngine::RenderGraphPassNode> passes = graph.get_passes_for_tests();
+		passes[0].compute_execute = [&](RenderGraphComputeContext&)
+		{
+			body_called = true;
+			return true;
+		};
+		std::vector<AshEngine::RenderGraphTextureNode> textures = graph.get_textures_for_tests();
+		std::vector<AshEngine::RenderGraphBufferNode> buffers = graph.get_buffers_for_tests();
+		ExecutionRecorder recorder{};
+		recorder.submit_result = false;
+		CHECK_FALSE(AshEngine::execute_render_graph_with_ops_for_tests(
+			textures,
+			buffers,
+			passes,
+			recorder.make_ops()));
+		CHECK_FALSE(body_called);
+		REQUIRE(recorder.released.size() == 1u);
+	}
+
+	SUBCASE("compute failure releases")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("ExecutorComputeFailure");
+		const RenderGraphBufferRef buffer = graph.create_buffer(make_buffer_desc(), "ComputeBuffer");
+		REQUIRE(add_compute(graph, [&](RenderGraphComputePassBuilder& pass)
+		{
+			pass.write_buffer(buffer, RenderGraphAccess::ComputeUAV);
+		}));
+		std::vector<AshEngine::RenderGraphPassNode> passes = graph.get_passes_for_tests();
+		passes[0].compute_execute = [](RenderGraphComputeContext&) { return false; };
+		std::vector<AshEngine::RenderGraphTextureNode> textures = graph.get_textures_for_tests();
+		std::vector<AshEngine::RenderGraphBufferNode> buffers = graph.get_buffers_for_tests();
+		ExecutionRecorder recorder{};
+		CHECK_FALSE(AshEngine::execute_render_graph_with_ops_for_tests(
+			textures,
+			buffers,
+			passes,
+			recorder.make_ops()));
+		REQUIRE(recorder.released.size() == 1u);
+	}
+}
+
+TEST_CASE("RenderGraph buffer raster execution observes begin body and end failures")
+{
+	auto run_raster = [](bool begin_result, bool body_result, bool end_result, ExecutionRecorder& recorder)
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RasterBufferExecution");
+		const RenderGraphBufferRef buffer = graph.create_buffer(make_buffer_desc(), "RasterBuffer");
+		std::shared_ptr<AshEngine::StorageBuffer> resolved{};
+		REQUIRE(AshEngine::add_render_graph_raster_pass_for_tests(
+			graph,
+			"RasterBufferPass",
+			RenderGraphPassFlags::NeverCull,
+			RHI::GpuTimingMetric::Invalid,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				pass.write_buffer(buffer, RenderGraphAccess::GraphicsUAV);
+			},
+			[&](RenderGraphRasterContext& context)
+			{
+				recorder.events.push_back(ExecutionEvent::RasterBody);
+				resolved = context.get_buffer(buffer);
+				return body_result && resolved != nullptr;
+			}));
+		recorder.begin_result = begin_result;
+		recorder.end_result = end_result;
+		const bool result = execute_with_recorder(graph, recorder);
+		CHECK((resolved == nullptr || (!recorder.acquired.empty() && resolved == recorder.acquired[0])));
+		return result;
+	};
+
+	SUBCASE("begin failure")
+	{
+		ExecutionRecorder recorder{};
+		CHECK_FALSE(run_raster(false, true, true, recorder));
+		CHECK(std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::RasterBody) == recorder.events.end());
+		CHECK(std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::EndRaster) == recorder.events.end());
+		REQUIRE(recorder.released.size() == 1u);
+	}
+
+	SUBCASE("body failure still ends and releases")
+	{
+		ExecutionRecorder recorder{};
+		CHECK_FALSE(run_raster(true, false, true, recorder));
+		CHECK(std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::RasterBody) != recorder.events.end());
+		CHECK(std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::EndRaster) != recorder.events.end());
+		REQUIRE(recorder.released.size() == 1u);
+	}
+
+	SUBCASE("end failure is observable and releases")
+	{
+		ExecutionRecorder recorder{};
+		CHECK_FALSE(run_raster(true, true, false, recorder));
+		REQUIRE(recorder.released.size() == 1u);
+	}
+
+	SUBCASE("success resolves raster context identity")
+	{
+		ExecutionRecorder recorder{};
+		REQUIRE(run_raster(true, true, true, recorder));
+		REQUIRE(recorder.released.size() == 1u);
+	}
+}
+
+TEST_CASE("RenderGraph buffer transitions precede pass work and texture only execution stays idle")
+{
+	SUBCASE("compute transition precedes body")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("ComputeTransitionOrder");
+		const RenderGraphBufferRef buffer = graph.create_buffer(make_buffer_desc(), "ComputeOrdered");
+		ExecutionRecorder recorder{};
+		REQUIRE(AshEngine::add_render_graph_compute_pass_for_tests(
+			graph,
+			"ComputeOrderedPass",
+			RenderGraphPassFlags::NeverCull,
+			RHI::GpuTimingMetric::Invalid,
+			[&](RenderGraphComputePassBuilder& pass)
+			{
+				pass.write_buffer(buffer, RenderGraphAccess::ComputeUAV);
+			},
+			[&](RenderGraphComputeContext&)
+			{
+				recorder.events.push_back(ExecutionEvent::ComputeBody);
+				return true;
+			}));
+		REQUIRE(execute_with_recorder(graph, recorder));
+		const auto submit = std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::SubmitTransitions);
+		const auto body = std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::ComputeBody);
+		REQUIRE(submit != recorder.events.end());
+		REQUIRE(body != recorder.events.end());
+		CHECK(submit < body);
+	}
+
+	SUBCASE("raster transition precedes begin")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("RasterTransitionOrder");
+		const RenderGraphBufferRef buffer = graph.create_buffer(make_buffer_desc(), "RasterOrdered");
+		REQUIRE(AshEngine::add_render_graph_raster_pass_for_tests(
+			graph,
+			"RasterOrderedPass",
+			RenderGraphPassFlags::NeverCull,
+			RHI::GpuTimingMetric::Invalid,
+			[&](RenderGraphRasterPassBuilder& pass)
+			{
+				pass.write_buffer(buffer, RenderGraphAccess::GraphicsUAV);
+			},
+			[](RenderGraphRasterContext&) { return true; }));
+		ExecutionRecorder recorder{};
+		REQUIRE(execute_with_recorder(graph, recorder));
+		const auto submit = std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::SubmitTransitions);
+		const auto begin = std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::BeginRaster);
+		REQUIRE(submit != recorder.events.end());
+		REQUIRE(begin != recorder.events.end());
+		CHECK(submit < begin);
+	}
+
+	SUBCASE("texture only compute executes without buffer operations")
+	{
+		RenderGraphBuilder graph = RenderGraphBuilder::create_headless_for_tests("TextureOnlyExecutorIdle");
+		bool body_called = false;
+		REQUIRE(AshEngine::add_render_graph_compute_pass_for_tests(
+			graph,
+			"TextureOnlyInfrastructure",
+			RenderGraphPassFlags::NeverCull,
+			RHI::GpuTimingMetric::Invalid,
+			[](RenderGraphComputePassBuilder&) {},
+			[&](RenderGraphComputeContext&)
+			{
+				body_called = true;
+				return true;
+			}));
+		ExecutionRecorder recorder{};
+		REQUIRE(execute_with_recorder(graph, recorder));
+		CHECK(body_called);
+		CHECK(recorder.acquire_calls == 0u);
+		CHECK(recorder.submitted.empty());
+		CHECK(std::find(recorder.events.begin(), recorder.events.end(), ExecutionEvent::SubmitTransitions) == recorder.events.end());
+	}
+}
+
+TEST_CASE("RenderGraph buffer pool reuses only released compatible buffers and clears")
+{
+	std::unique_ptr<AshEngine::RenderDevice> device = AshEngine::RenderDevice::create_headless_for_tests();
+	REQUIRE(device != nullptr);
+	AshEngine::StorageBufferDesc desc{};
+	desc.size = 256u;
+	desc.stride = 16u;
+	desc.indirect_args = true;
+	desc.name = "PoolBuffer";
+	const std::shared_ptr<AshEngine::StorageBuffer> seeded = device->seed_transient_storage_buffer_for_tests(desc);
+	REQUIRE(seeded != nullptr);
+	CHECK(device->get_transient_storage_buffer_pool_size_for_tests() == 1u);
+
+	const std::shared_ptr<AshEngine::StorageBuffer> first = device->acquire_transient_storage_buffer(desc);
+	CHECK(first == seeded);
+	CHECK(device->get_transient_storage_buffer_pool_size_for_tests() == 0u);
+	CHECK(device->acquire_transient_storage_buffer(desc) == nullptr);
+
+	device->release_transient_storage_buffer(first);
+	CHECK(device->get_transient_storage_buffer_pool_size_for_tests() == 1u);
+	CHECK(device->acquire_transient_storage_buffer(desc) == seeded);
+	device->release_transient_storage_buffer(seeded);
+
+	AshEngine::StorageBufferDesc incompatible = desc;
+	incompatible.stride = 32u;
+	CHECK(device->acquire_transient_storage_buffer(incompatible) == nullptr);
+	CHECK(device->get_transient_storage_buffer_pool_size_for_tests() == 1u);
+	device->clear_transient_storage_buffers();
+	CHECK(device->get_transient_storage_buffer_pool_size_for_tests() == 0u);
+	CHECK(device->acquire_transient_storage_buffer(desc) == nullptr);
 }

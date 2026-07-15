@@ -10,6 +10,12 @@
 
 namespace AshEngine
 {
+	class Renderer;
+	struct RenderGraphResolvedBufferTransition;
+	bool submit_render_graph_buffer_transitions(
+		Renderer& renderer,
+		const RenderGraphResolvedBufferTransition* transitions,
+		size_t transition_count);
 	struct VertexBufferBinding
 	{
 		uint32_t slot = 0;
@@ -152,7 +158,7 @@ namespace AshEngine
 		public:
 			bool is_valid() const;
 			bool draw(const GraphicsDrawDesc& desc);
-			void end();
+			bool end();
 
 		private:
 			explicit GraphicsPassContext(Renderer* renderer);
@@ -190,6 +196,9 @@ namespace AshEngine
 		std::shared_ptr<VertexBuffer> create_vertex_buffer(const VertexBufferDesc& desc);
 		std::shared_ptr<IndexBuffer> create_index_buffer(const IndexBufferDesc& desc);
 		std::shared_ptr<StorageBuffer> create_storage_buffer(const StorageBufferDesc& desc);
+		std::shared_ptr<StorageBuffer> acquire_transient_storage_buffer(const StorageBufferDesc& desc);
+		void release_transient_storage_buffer(const std::shared_ptr<StorageBuffer>& buffer);
+		void clear_transient_storage_buffers();
 		std::shared_ptr<RenderSampler> create_sampler(const RenderSamplerDesc& desc, const char* debug_name = nullptr);
 
 		std::unique_ptr<GraphicsProgram> create_graphics_program(const GraphicsProgramDesc& desc);
@@ -207,8 +216,10 @@ namespace AshEngine
 		const RendererFrameStats& get_frame_stats() const;
 
 	private:
-		bool submit_graph_resource_barriers(const std::vector<RHI::AshBarrier>& barriers);
-		void end_active_pass(GraphicsPassContext* pass_context);
+		bool submit_graph_buffer_transitions(
+			const RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count);
+		bool end_active_pass(GraphicsPassContext* pass_context);
 
 	private:
 		void update_frame_timing_history(double frame_time_ms);
@@ -226,6 +237,9 @@ namespace AshEngine
 		uint32_t m_frame_time_history_head = 0;
 		double m_frame_time_history_sum_ms = 0.0;
 		friend class RenderGraphBuilder;
-		friend class RenderGraphExecutor;
+		friend bool submit_render_graph_buffer_transitions(
+			Renderer& renderer,
+			const RenderGraphResolvedBufferTransition* transitions,
+			size_t transition_count);
 	};
 }
