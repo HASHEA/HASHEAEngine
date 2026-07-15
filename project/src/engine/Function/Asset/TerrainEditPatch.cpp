@@ -192,6 +192,68 @@ namespace AshEngine
 			return true;
 		}
 
+		auto validate_active_samples(
+			const std::vector<uint8_t>& active_samples,
+			size_t sample_count,
+			std::string* out_error) -> bool
+		{
+			if (active_samples.empty())
+			{
+				return true;
+			}
+			if (active_samples.size() != sample_count)
+			{
+				return fail(out_error, "Terrain patch active-sample mask size is invalid.");
+			}
+			bool has_active_sample = false;
+			for (uint8_t value : active_samples)
+			{
+				if (value > 1u)
+				{
+					return fail(out_error, "Terrain patch active-sample mask contains an invalid value.");
+				}
+				has_active_sample = has_active_sample || value == 1u;
+			}
+			return has_active_sample ||
+				fail(out_error, "Terrain patch active-sample mask is empty.");
+		}
+
+		auto is_sample_active(
+			const std::vector<uint8_t>& active_samples,
+			size_t sample_index_value) -> bool
+		{
+			return active_samples.empty() || active_samples[sample_index_value] != 0u;
+		}
+
+		auto raw_matches_active_samples(
+			const std::vector<uint8_t>& actual,
+			const std::vector<uint8_t>& expected,
+			size_t stride,
+			const std::vector<uint8_t>& active_samples) -> bool
+		{
+			if (actual.size() != expected.size() || actual.size() % stride != 0u)
+			{
+				return false;
+			}
+			const size_t sample_count = actual.size() / stride;
+			for (size_t sample = 0u; sample < sample_count; ++sample)
+			{
+				if (!is_sample_active(active_samples, sample))
+				{
+					continue;
+				}
+				const size_t begin = sample * stride;
+				if (!std::equal(
+					actual.begin() + begin,
+					actual.begin() + begin + stride,
+					expected.begin() + begin))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
 		auto find_layer_index(
 			const TerrainWorkingSet& working_set,
 			TerrainLayerId id,
@@ -584,13 +646,18 @@ namespace AshEngine
 		auto apply_height_raw(
 			HeightCandidate& candidate,
 			const TerrainSampleRect& rect,
-			const std::vector<uint8_t>& raw) -> void
+			const std::vector<uint8_t>& raw,
+			const std::vector<uint8_t>& active_samples) -> void
 		{
 			size_t raw_sample = 0u;
 			for (uint32_t z = rect.min_z; z < rect.max_z_exclusive; ++z)
 			{
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x, ++raw_sample)
 				{
+					if (!is_sample_active(active_samples, raw_sample))
+					{
+						continue;
+					}
 					const size_t destination = sample_index(candidate.owned_rect, x, z);
 					candidate.scales[destination] = read_float_le(raw, raw_sample * 2u);
 					candidate.biases[destination] = read_float_le(raw, raw_sample * 2u + 1u);
@@ -601,13 +668,18 @@ namespace AshEngine
 		auto apply_weight_raw(
 			WeightCandidate& candidate,
 			const TerrainSampleRect& rect,
-			const std::vector<uint8_t>& raw) -> void
+			const std::vector<uint8_t>& raw,
+			const std::vector<uint8_t>& active_samples) -> void
 		{
 			size_t raw_sample = 0u;
 			for (uint32_t z = rect.min_z; z < rect.max_z_exclusive; ++z)
 			{
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x, ++raw_sample)
 				{
+					if (!is_sample_active(active_samples, raw_sample))
+					{
+						continue;
+					}
 					const size_t destination = sample_index(candidate.owned_rect, x, z);
 					for (size_t lane = 0u; lane < k_terrain_material_layer_count; ++lane)
 					{
@@ -725,13 +797,18 @@ namespace AshEngine
 			bool has_block,
 			const TerrainSparseHeightBlock& block,
 			const TerrainSampleRect& rect,
-			const std::vector<uint8_t>& raw) -> bool
+			const std::vector<uint8_t>& raw,
+			const std::vector<uint8_t>& active_samples) -> bool
 		{
 			size_t raw_sample = 0u;
 			for (uint32_t z = rect.min_z; z < rect.max_z_exclusive; ++z)
 			{
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x, ++raw_sample)
 				{
+					if (!is_sample_active(active_samples, raw_sample))
+					{
+						continue;
+					}
 					float scale = 1.0f;
 					float bias = 0.0f;
 					if (has_block && rect_contains_sample(block.changed_rect, x, z))
@@ -754,13 +831,18 @@ namespace AshEngine
 			bool has_block,
 			const TerrainSparseWeightBlock& block,
 			const TerrainSampleRect& rect,
-			const std::vector<uint8_t>& raw) -> bool
+			const std::vector<uint8_t>& raw,
+			const std::vector<uint8_t>& active_samples) -> bool
 		{
 			size_t raw_sample = 0u;
 			for (uint32_t z = rect.min_z; z < rect.max_z_exclusive; ++z)
 			{
 				for (uint32_t x = rect.min_x; x < rect.max_x_exclusive; ++x, ++raw_sample)
 				{
+					if (!is_sample_active(active_samples, raw_sample))
+					{
+						continue;
+					}
 					std::array<float, k_terrain_material_layer_count> values{};
 					float coverage = 0.0f;
 					if (has_block && rect_contains_sample(block.changed_rect, x, z))
@@ -787,6 +869,7 @@ namespace AshEngine
 
 		struct PatchKey
 		{
+			TerrainAssetId asset_id = 0;
 			TerrainLayerId layer_id{};
 			TerrainComponentCoord owner{};
 			TerrainEditPatchDomain domain = TerrainEditPatchDomain::Height;
@@ -800,7 +883,8 @@ namespace AshEngine
 
 		auto same_key(const PatchKey& lhs, const PatchKey& rhs) -> bool
 		{
-			return lhs.layer_id == rhs.layer_id && lhs.owner == rhs.owner && lhs.domain == rhs.domain;
+			return lhs.asset_id == rhs.asset_id && lhs.layer_id == rhs.layer_id &&
+				lhs.owner == rhs.owner && lhs.domain == rhs.domain;
 		}
 
 		struct PatchMutation
@@ -839,6 +923,114 @@ namespace AshEngine
 				{
 					return fail(out_error, "Terrain patch dirty set is invalid.");
 				}
+			}
+			return true;
+		}
+
+		struct DecodedPatch
+		{
+			size_t sample_count = 0u;
+			size_t stride = 0u;
+			std::vector<uint8_t> before{};
+			std::vector<uint8_t> after{};
+		};
+
+		auto decode_and_validate_patch(
+			const TerrainEditPatch& patch,
+			DecodedPatch& out_decoded,
+			std::string* out_error) -> bool
+		{
+			if (patch.asset_id == 0u || !patch.layer_id.is_valid() ||
+				patch.stroke_generation == 0u || patch.changed_rect.empty() ||
+				(patch.domain != TerrainEditPatchDomain::Height &&
+					patch.domain != TerrainEditPatchDomain::Weight))
+			{
+				return fail(out_error, "Terrain patch merge identity is invalid.");
+			}
+			DecodedPatch decoded{};
+			decoded.stride = patch.domain == TerrainEditPatchDomain::Height ? 8u : 36u;
+			size_t expected_size = 0u;
+			if (!checked_multiply(
+					patch.changed_rect.width(), patch.changed_rect.height(), decoded.sample_count) ||
+				!checked_multiply(decoded.sample_count, decoded.stride, expected_size))
+			{
+				return fail(out_error, "Terrain patch merge logical byte size overflowed.");
+			}
+			if (!validate_active_samples(patch.active_samples, decoded.sample_count, out_error) ||
+				!decode_patch_side(
+					patch.before_codec, patch.before_bytes, expected_size, decoded.before, out_error) ||
+				!decode_patch_side(
+					patch.after_codec, patch.after_bytes, expected_size, decoded.after, out_error))
+			{
+				return false;
+			}
+			if (patch.domain == TerrainEditPatchDomain::Height)
+			{
+				if (!validate_height_raw(decoded.before, decoded.sample_count, out_error) ||
+					!validate_height_raw(decoded.after, decoded.sample_count, out_error))
+				{
+					return false;
+				}
+			}
+			else if (!validate_weight_raw(decoded.before, decoded.sample_count, out_error) ||
+				!validate_weight_raw(decoded.after, decoded.sample_count, out_error))
+			{
+				return false;
+			}
+			out_decoded = std::move(decoded);
+			return true;
+		}
+
+		auto validate_patch_batch_for_merge(
+			const std::vector<TerrainEditPatch>& patches,
+			std::string* out_error) -> bool
+		{
+			if (patches.empty())
+			{
+				return true;
+			}
+			const TerrainAssetId asset_id = patches.front().asset_id;
+			const uint64_t generation = patches.front().stroke_generation;
+			std::vector<PatchKey> keys{};
+			keys.reserve(patches.size());
+			for (const TerrainEditPatch& patch : patches)
+			{
+				DecodedPatch decoded{};
+				if (patch.asset_id != asset_id || patch.stroke_generation != generation ||
+					!decode_and_validate_patch(patch, decoded, out_error))
+				{
+					return fail(out_error, "Terrain patch merge batch identity is inconsistent.");
+				}
+				const PatchKey key{ patch.asset_id, patch.layer_id, patch.owner, patch.domain };
+				if (std::find_if(keys.begin(), keys.end(),
+					[&](const PatchKey& existing) { return same_key(existing, key); }) != keys.end())
+				{
+					return fail(out_error, "Terrain patch merge batch contains a duplicate key.");
+				}
+				keys.push_back(key);
+			}
+			return true;
+		}
+
+		auto encode_patch_side(
+			std::vector<uint8_t> raw,
+			TerrainBlockCodec& out_codec,
+			std::vector<uint8_t>& out_bytes) -> bool
+		{
+			std::vector<uint8_t> encoded{};
+			if (!encode_terrain_rle_if_smaller(raw, encoded))
+			{
+				return false;
+			}
+			if (encoded.empty())
+			{
+				out_codec = TerrainBlockCodec::None;
+				out_bytes = std::move(raw);
+			}
+			else
+			{
+				out_codec = TerrainBlockCodec::Rle;
+				out_bytes = std::move(encoded);
 			}
 			return true;
 		}
@@ -906,7 +1098,7 @@ namespace AshEngine
 					return fail(out_error, "Terrain patch rectangle is outside its owner.");
 				}
 
-				const PatchKey key{ patch.layer_id, patch.owner, patch.domain };
+				const PatchKey key{ patch.asset_id, patch.layer_id, patch.owner, patch.domain };
 				if (std::find_if(keys.begin(), keys.end(),
 					[&](const PatchKey& existing) { return same_key(existing, key); }) != keys.end())
 				{
@@ -945,6 +1137,10 @@ namespace AshEngine
 					!checked_multiply(sample_count, stride, expected_size))
 				{
 					return fail(out_error, "Terrain patch logical byte size overflowed.");
+				}
+				if (!validate_active_samples(patch.active_samples, sample_count, out_error))
+				{
+					return false;
 				}
 				std::vector<uint8_t> before_raw{};
 				std::vector<uint8_t> after_raw{};
@@ -993,15 +1189,20 @@ namespace AshEngine
 					{
 						return false;
 					}
-					if (serialize_height_rect(candidate, patch.changed_rect) != source)
+					if (!raw_matches_active_samples(
+							serialize_height_rect(candidate, patch.changed_rect),
+							source,
+							stride,
+							patch.active_samples))
 					{
 						return fail(out_error, "Terrain Height patch source does not match current logical bytes.");
 					}
-					apply_height_raw(candidate, patch.changed_rect, target);
+					apply_height_raw(candidate, patch.changed_rect, target, patch.active_samples);
 					canonicalize_height(
 						candidate, patch.owner, mutation.has_block, mutation.height_block);
 					if (!canonical_height_matches_raw(
-							mutation.has_block, mutation.height_block, patch.changed_rect, target))
+							mutation.has_block, mutation.height_block, patch.changed_rect, target,
+							patch.active_samples))
 					{
 						return fail(out_error, "Terrain Height patch target is not canonical.");
 					}
@@ -1016,15 +1217,20 @@ namespace AshEngine
 					{
 						return false;
 					}
-					if (serialize_weight_rect(candidate, patch.changed_rect) != source)
+					if (!raw_matches_active_samples(
+							serialize_weight_rect(candidate, patch.changed_rect),
+							source,
+							stride,
+							patch.active_samples))
 					{
 						return fail(out_error, "Terrain Weight patch source does not match current logical bytes.");
 					}
-					apply_weight_raw(candidate, patch.changed_rect, target);
+					apply_weight_raw(candidate, patch.changed_rect, target, patch.active_samples);
 					canonicalize_weight(
 						candidate, patch.owner, mutation.has_block, mutation.weight_block);
 					if (!canonical_weight_matches_raw(
-							mutation.has_block, mutation.weight_block, patch.changed_rect, target))
+							mutation.has_block, mutation.weight_block, patch.changed_rect, target,
+							patch.active_samples))
 					{
 						return fail(out_error, "Terrain Weight patch target is not canonical.");
 					}
@@ -1130,6 +1336,192 @@ namespace AshEngine
 		catch (const std::length_error&)
 		{
 			return fail(out_error, "Terrain patch replay size is unsupported.");
+		}
+	}
+
+	bool merge_terrain_edit_patches(
+		const std::vector<TerrainEditPatch>& next,
+		std::vector<TerrainEditPatch>& in_out_aggregate,
+		std::string* out_error)
+	{
+		if (out_error != nullptr)
+		{
+			out_error->clear();
+		}
+		try
+		{
+			if (next.empty())
+			{
+				return true;
+			}
+			if (!validate_patch_batch_for_merge(next, out_error) ||
+				!validate_patch_batch_for_merge(in_out_aggregate, out_error))
+			{
+				return false;
+			}
+			if (in_out_aggregate.empty())
+			{
+				std::vector<TerrainEditPatch> initial = next;
+				in_out_aggregate.swap(initial);
+				return true;
+			}
+
+			const uint64_t aggregate_generation = in_out_aggregate.front().stroke_generation;
+			const uint64_t next_generation = next.front().stroke_generation;
+			if (in_out_aggregate.front().asset_id != next.front().asset_id ||
+				aggregate_generation == std::numeric_limits<uint64_t>::max() ||
+				next_generation != aggregate_generation + 1u)
+			{
+				return fail(out_error, "Terrain patch merge requires the next consecutive generation.");
+			}
+
+			std::vector<TerrainEditPatch> merged = in_out_aggregate;
+			for (TerrainEditPatch& patch : merged)
+			{
+				patch.stroke_generation = next_generation;
+			}
+
+			for (const TerrainEditPatch& incoming : next)
+			{
+				const PatchKey key{
+					incoming.asset_id, incoming.layer_id, incoming.owner, incoming.domain };
+				auto destination = std::find_if(
+					merged.begin(), merged.end(),
+					[&](const TerrainEditPatch& patch)
+					{
+						return same_key(
+							{ patch.asset_id, patch.layer_id, patch.owner, patch.domain }, key);
+					});
+				if (destination == merged.end())
+				{
+					merged.push_back(incoming);
+					continue;
+				}
+
+				DecodedPatch prior_raw{};
+				DecodedPatch incoming_raw{};
+				if (!decode_and_validate_patch(*destination, prior_raw, out_error) ||
+					!decode_and_validate_patch(incoming, incoming_raw, out_error) ||
+					prior_raw.stride != incoming_raw.stride)
+				{
+					return false;
+				}
+
+				const TerrainSampleRect union_rect{
+					std::min(destination->changed_rect.min_x, incoming.changed_rect.min_x),
+					std::min(destination->changed_rect.min_z, incoming.changed_rect.min_z),
+					std::max(destination->changed_rect.max_x_exclusive, incoming.changed_rect.max_x_exclusive),
+					std::max(destination->changed_rect.max_z_exclusive, incoming.changed_rect.max_z_exclusive)
+				};
+				size_t union_samples = 0u;
+				size_t union_bytes = 0u;
+				if (!checked_multiply(union_rect.width(), union_rect.height(), union_samples) ||
+					!checked_multiply(union_samples, prior_raw.stride, union_bytes))
+				{
+					return fail(out_error, "Terrain patch merge union size overflowed.");
+				}
+				std::vector<uint8_t> before(union_bytes, 0u);
+				std::vector<uint8_t> after(union_bytes, 0u);
+				std::vector<uint8_t> active(union_samples, 0u);
+
+				auto copy_prior = [&](uint32_t x, uint32_t z)
+				{
+					const size_t source_sample = sample_index(destination->changed_rect, x, z);
+					if (!is_sample_active(destination->active_samples, source_sample))
+					{
+						return;
+					}
+					const size_t target_sample = sample_index(union_rect, x, z);
+					const size_t source_offset = source_sample * prior_raw.stride;
+					const size_t target_offset = target_sample * prior_raw.stride;
+					std::copy_n(
+						prior_raw.before.begin() + source_offset,
+						prior_raw.stride,
+						before.begin() + target_offset);
+					std::copy_n(
+						prior_raw.after.begin() + source_offset,
+						prior_raw.stride,
+						after.begin() + target_offset);
+					active[target_sample] = 1u;
+				};
+				for (uint32_t z = destination->changed_rect.min_z;
+					z < destination->changed_rect.max_z_exclusive; ++z)
+				{
+					for (uint32_t x = destination->changed_rect.min_x;
+						x < destination->changed_rect.max_x_exclusive; ++x)
+					{
+						copy_prior(x, z);
+					}
+				}
+
+				for (uint32_t z = incoming.changed_rect.min_z;
+					z < incoming.changed_rect.max_z_exclusive; ++z)
+				{
+					for (uint32_t x = incoming.changed_rect.min_x;
+						x < incoming.changed_rect.max_x_exclusive; ++x)
+					{
+						const size_t source_sample = sample_index(incoming.changed_rect, x, z);
+						if (!is_sample_active(incoming.active_samples, source_sample))
+						{
+							continue;
+						}
+						const size_t target_sample = sample_index(union_rect, x, z);
+						const size_t source_offset = source_sample * incoming_raw.stride;
+						const size_t target_offset = target_sample * incoming_raw.stride;
+						if (active[target_sample] != 0u &&
+							!std::equal(
+								after.begin() + target_offset,
+								after.begin() + target_offset + incoming_raw.stride,
+								incoming_raw.before.begin() + source_offset))
+						{
+							return fail(out_error,
+								"Terrain patch merge source does not continue the aggregate target.");
+						}
+						if (active[target_sample] == 0u)
+						{
+							std::copy_n(
+								incoming_raw.before.begin() + source_offset,
+								incoming_raw.stride,
+								before.begin() + target_offset);
+						}
+						std::copy_n(
+							incoming_raw.after.begin() + source_offset,
+							incoming_raw.stride,
+							after.begin() + target_offset);
+						active[target_sample] = 1u;
+					}
+				}
+
+				TerrainEditPatch combined = *destination;
+				combined.changed_rect = union_rect;
+				combined.stroke_generation = next_generation;
+				combined.active_samples = std::move(active);
+				if (std::all_of(
+						combined.active_samples.begin(), combined.active_samples.end(),
+						[](uint8_t value) { return value == 1u; }))
+				{
+					combined.active_samples.clear();
+				}
+				if (!encode_patch_side(
+						std::move(before), combined.before_codec, combined.before_bytes) ||
+					!encode_patch_side(
+						std::move(after), combined.after_codec, combined.after_bytes))
+				{
+					return fail(out_error, "Terrain patch merge encoding failed.");
+				}
+				*destination = std::move(combined);
+			}
+
+			in_out_aggregate.swap(merged);
+			return true;
+		}
+		catch (const std::bad_alloc&)
+		{
+			return fail(out_error, "Terrain patch merge allocation failed.");
+		}
+		catch (const std::length_error&)
+		{
+			return fail(out_error, "Terrain patch merge size is unsupported.");
 		}
 	}
 }

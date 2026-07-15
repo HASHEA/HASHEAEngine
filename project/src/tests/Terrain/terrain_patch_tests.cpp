@@ -599,3 +599,49 @@ TEST_CASE("Terrain patch empty batches preserve generation and return current fu
 	CHECK(working_set.content_generation == generation);
 	CHECK(output == working_set.dirty_components);
 }
+
+TEST_CASE("Terrain affine patch merge preserves first before latest after across sparse union")
+{
+	auto baseline = MakePatchWorkingSet(AshEngine::TerrainHeightBlendMode::Additive);
+	auto current = baseline;
+	auto params = MakePatchBrush(AshEngine::TerrainBrushTool::Raise);
+	params.radius_meters = 0.25f;
+
+	std::vector<AshEngine::TerrainEditPatch> aggregate{};
+	std::vector<AshEngine::TerrainEditPatch> next{};
+	ApplyPatchBrush(current, params, { 1.0f, 1.0f }, next);
+	REQUIRE(AshEngine::merge_terrain_edit_patches(next, aggregate));
+	REQUIRE(aggregate.size() == 1u);
+
+	next.clear();
+	ApplyPatchBrush(current, params, { 3.0f, 3.0f }, next);
+	REQUIRE(AshEngine::merge_terrain_edit_patches(next, aggregate));
+	REQUIRE(aggregate.size() == 1u);
+	CHECK(aggregate[0].changed_rect.min_x == 1u);
+	CHECK(aggregate[0].changed_rect.min_z == 1u);
+	CHECK(aggregate[0].changed_rect.max_x_exclusive == 4u);
+	CHECK(aggregate[0].changed_rect.max_z_exclusive == 4u);
+
+	const auto completed = current;
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	REQUIRE(AshEngine::apply_terrain_edit_patches(
+		current, aggregate, AshEngine::TerrainEditPatchDirection::Undo, dirty));
+	CheckWorkingSetBlockStateEqual(current, baseline);
+	REQUIRE(AshEngine::apply_terrain_edit_patches(
+		current, aggregate, AshEngine::TerrainEditPatchDirection::Redo, dirty));
+	CheckWorkingSetBlockStateEqual(current, completed);
+
+	auto rejected_next = next;
+	for (auto& patch : rejected_next)
+	{
+		patch.stroke_generation += 2u;
+	}
+	const auto unchanged = aggregate;
+	std::string error{};
+	CHECK_FALSE(AshEngine::merge_terrain_edit_patches(
+		rejected_next, aggregate, &error));
+	CHECK(aggregate.size() == unchanged.size());
+	CHECK(aggregate[0].before_bytes == unchanged[0].before_bytes);
+	CHECK(aggregate[0].after_bytes == unchanged[0].after_bytes);
+	CHECK_FALSE(error.empty());
+}

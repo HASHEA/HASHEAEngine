@@ -65,6 +65,10 @@ namespace AshEngine
 		TerrainEditPatchDomain domain = TerrainEditPatchDomain::Height;
 		TerrainSampleRect changed_rect{};
 		uint64_t stroke_generation = 0;
+		// Empty means every sample in changed_rect is active. Aggregated live-preview
+		// patches use a mask so disjoint dabs can share one bounding rectangle
+		// without replaying untouched samples inside the gaps.
+		std::vector<uint8_t> active_samples{};
 		TerrainBlockCodec before_codec = TerrainBlockCodec::None;
 		TerrainBlockCodec after_codec = TerrainBlockCodec::None;
 		std::vector<uint8_t> before_bytes{};
@@ -92,5 +96,10 @@ namespace AshEngine
 		const std::vector<TerrainEditPatch>& patches,
 		TerrainEditPatchDirection direction,
 		std::vector<TerrainComponentCoord>& out_dirty_components,
+		std::string* out_error = nullptr) -> bool;
+
+	ASH_API auto merge_terrain_edit_patches(
+		const std::vector<TerrainEditPatch>& next,
+		std::vector<TerrainEditPatch>& in_out_aggregate,
 		std::string* out_error = nullptr) -> bool;
 }
