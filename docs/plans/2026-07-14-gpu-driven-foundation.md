@@ -348,7 +348,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - Modify: project/src/engine/Function/Render/RenderDevice.h
 - Modify: project/src/engine/Function/Render/RenderDevice.cpp
 
-- [ ] Step 1: Write focused RED cases
+- [x] Step 1: Write focused RED cases
 
 至少覆盖：
 
@@ -366,7 +366,7 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 
 预期 RED：RenderGraphBufferRef/Desc/Node/Usage/API 尚不存在；失败原因不得来自 premake、语法或 Tracy dirty。
 
-- [ ] Step 2: Implement only the public surface
+- [x] Step 2: Implement only the public surface
 
 - 新增独立 RenderGraphBufferRef。
 - 新增 RenderGraphBufferDesc 和显式 StorageBufferDesc 转换。
@@ -378,15 +378,15 @@ baseline 文件只能来自批准后的受保护 bless/report-import；同一提
 - register_external_buffer 必须保留 initial_access；不要顺手修复现有 texture initial_access 缺口。
 - Task 1 不给 context 增纯虚 get_buffer，也不改 compiler/executor 签名；buffer graph 在 Task 2/3 前不可执行，避免产生无法编译的半穿线状态。
 
-- [ ] Step 3: GREEN and local review
+- [x] Step 3: GREEN and local review
 
     RunTests.bat Debug --test-case="RenderGraph buffer*"
-    RunTests.bat Debug --test-case="RenderGraph GPU timing*"
+    RunTests.bat Debug --test-case="RenderGraph GPU metric*"
     RunArchGate.bat
 
 检查旧 texture API、GPU metric tests 和 cache test seam 无行为变化。
 
-- [ ] Step 4: Focused commit
+- [x] Step 4: Focused commit
 
 建议提交信息：
 

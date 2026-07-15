@@ -408,6 +408,7 @@ namespace AshEngine
 		uint32_t get_size() const;
 		uint32_t get_stride() const;
 		uint32_t get_element_count() const;
+		bool is_indirect_args() const;
 		bool update(uint32_t offset, uint32_t size, const void* data);
 
 	private:

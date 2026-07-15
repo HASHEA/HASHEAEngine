@@ -24,7 +24,8 @@ namespace AshEngine
 		ConstantBufferRead,
 		CopySrc,
 		CopyDst,
-		Present
+		Present,
+		IndirectArgs
 	};
 
 	enum class RenderGraphDepthReadMode : uint8_t
@@ -48,7 +49,19 @@ namespace AshEngine
 		RenderTargetDesc to_render_target_desc(const char* name) const;
 	};
 
-	RHI::AshResourceState render_graph_access_to_rhi_state(RenderGraphAccess access);
+	struct RenderGraphBufferDesc
+	{
+		uint32_t size = 0;
+		uint32_t stride = 0;
+		bool shader_resource = true;
+		bool unordered_access = false;
+		bool indirect_args = false;
+
+		static ASH_API RenderGraphBufferDesc from_storage_buffer_desc(const StorageBufferDesc& desc);
+		ASH_API StorageBufferDesc to_storage_buffer_desc(const char* name) const;
+	};
+
+	ASH_API RHI::AshResourceState render_graph_access_to_rhi_state(RenderGraphAccess access);
 	RHI::AshResourceState render_graph_depth_read_state(RenderGraphDepthReadMode mode);
-	const char* render_graph_access_name(RenderGraphAccess access);
+	ASH_API const char* render_graph_access_name(RenderGraphAccess access);
 }

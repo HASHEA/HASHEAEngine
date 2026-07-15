@@ -47,6 +47,13 @@ namespace AshEngine
 		RenderGraphDepthReadMode depth_read_mode = RenderGraphDepthReadMode::DepthTestOnly;
 	};
 
+	struct RenderGraphBufferUsage
+	{
+		RenderGraphBufferRef buffer{};
+		RenderGraphAccess access = RenderGraphAccess::Unknown;
+		bool write = false;
+	};
+
 	class RenderGraphRasterContext;
 	class RenderGraphComputeContext;
 
@@ -57,6 +64,7 @@ namespace AshEngine
 		RenderGraphPassFlags flags = RenderGraphPassFlags::None;
 		RHI::GpuTimingMetric timing_metric = RHI::GpuTimingMetric::Invalid;
 		std::vector<RenderGraphTextureUsage> texture_usages{};
+		std::vector<RenderGraphBufferUsage> buffer_usages{};
 		std::function<bool(RenderGraphRasterContext&)> raster_execute{};
 		std::function<bool(RenderGraphComputeContext&)> compute_execute{};
 	};
@@ -71,6 +79,8 @@ namespace AshEngine
 	public:
 		explicit RenderGraphRasterPassBuilder(RenderGraphPassNode& pass);
 		void read_texture(RenderGraphTextureRef texture, RenderGraphAccess access);
+		ASH_API void read_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
+		ASH_API void write_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
 		void write_color(uint8_t slot, RenderGraphTextureRef texture, RenderLoadAction load_action, RenderColorValue clear_color);
 		void write_depth(RenderGraphTextureRef texture, RenderLoadAction load_action, RenderDepthStencilValue clear_value);
 		void read_depth(RenderGraphTextureRef texture, RenderGraphDepthReadMode mode);
@@ -85,6 +95,8 @@ namespace AshEngine
 		explicit RenderGraphComputePassBuilder(RenderGraphPassNode& pass);
 		void read_texture(RenderGraphTextureRef texture, RenderGraphAccess access);
 		void write_texture(RenderGraphTextureRef texture, RenderGraphAccess access);
+		ASH_API void read_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
+		ASH_API void write_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
 
 	private:
 		RenderGraphPassNode* m_pass = nullptr;

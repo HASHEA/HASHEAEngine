@@ -18,6 +18,16 @@ namespace AshEngine
 		bool extracted = false;
 	};
 
+	struct RenderGraphBufferNode
+	{
+		std::string name{};
+		RenderGraphBufferDesc desc{};
+		std::shared_ptr<StorageBuffer> external_buffer = nullptr;
+		bool external = false;
+		bool extracted = false;
+		RenderGraphAccess initial_access = RenderGraphAccess::Unknown;
+	};
+
 	class RenderGraphBuilder
 	{
 	public:
@@ -31,6 +41,16 @@ namespace AshEngine
 		RenderGraphTextureRef register_external_texture_desc_for_tests(const RenderTargetDesc& desc, const char* name);
 		RenderGraphTextureRef create_texture(const RenderGraphTextureDesc& desc, const char* name);
 		void extract_texture(RenderGraphTextureRef texture);
+		ASH_API RenderGraphBufferRef register_external_buffer(
+			const std::shared_ptr<StorageBuffer>& buffer,
+			const char* name,
+			RenderGraphAccess initial_access = RenderGraphAccess::Unknown);
+		ASH_API RenderGraphBufferRef register_external_buffer_desc_for_tests(
+			const RenderGraphBufferDesc& desc,
+			const char* name,
+			RenderGraphAccess initial_access = RenderGraphAccess::Unknown);
+		ASH_API RenderGraphBufferRef create_buffer(const RenderGraphBufferDesc& desc, const char* name);
+		ASH_API void extract_buffer(RenderGraphBufferRef buffer);
 
 		bool add_raster_pass(
 			const char* name,
@@ -53,6 +73,8 @@ namespace AshEngine
 		size_t get_texture_count_for_tests() const;
 		ASH_API size_t get_pass_count_for_tests() const;
 		ASH_API const std::vector<RenderGraphTextureNode>& get_textures_for_tests() const;
+		ASH_API size_t get_buffer_count_for_tests() const;
+		ASH_API const std::vector<RenderGraphBufferNode>& get_buffers_for_tests() const;
 		ASH_API const std::vector<RenderGraphPassNode>& get_passes_for_tests() const;
 
 	private:
@@ -61,6 +83,7 @@ namespace AshEngine
 		Renderer* m_renderer = nullptr;
 		std::string m_name{};
 		std::vector<RenderGraphTextureNode> m_textures{};
+		std::vector<RenderGraphBufferNode> m_buffers{};
 		std::vector<RenderGraphPassNode> m_passes{};
 	};
 

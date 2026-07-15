@@ -2541,6 +2541,11 @@ namespace AshEngine
 		return (m_impl && m_impl->resource && m_impl->resource->stride > 0) ? m_impl->resource->size / m_impl->resource->stride : 0;
 	}
 
+	bool StorageBuffer::is_indirect_args() const
+	{
+		return m_impl && m_impl->indirect_args;
+	}
+
 	bool StorageBuffer::update(uint32_t offset, uint32_t size, const void* data)
 	{
 		return m_impl && m_impl->resource && m_impl->resource->buffer && data ?

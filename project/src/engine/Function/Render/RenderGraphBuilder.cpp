@@ -8,6 +8,75 @@ namespace AshEngine
 {
 	bool execute_render_graph(Renderer& renderer, std::vector<RenderGraphTextureNode>& textures, const std::vector<RenderGraphPassNode>& passes);
 
+	namespace
+	{
+		bool validate_buffer_usages(
+			const std::string& graph_name,
+			const RenderGraphPassNode& pass,
+			const std::vector<RenderGraphBufferNode>& buffers)
+		{
+			for (const RenderGraphBufferUsage& usage : pass.buffer_usages)
+			{
+				if (!usage.buffer.is_valid() || usage.buffer.index >= buffers.size())
+				{
+					HLogError(
+						"RenderGraph '{}': pass '{}' references invalid buffer {}.",
+						graph_name,
+						pass.name,
+						usage.buffer.index);
+					return false;
+				}
+
+				const RenderGraphBufferNode& buffer = buffers[usage.buffer.index];
+				RenderGraphAccess expected_access = RenderGraphAccess::Unknown;
+				if (usage.write)
+				{
+					expected_access = pass.kind == RenderGraphPassKind::Raster ?
+						RenderGraphAccess::GraphicsUAV : RenderGraphAccess::ComputeUAV;
+					if (usage.access != expected_access || !buffer.desc.unordered_access)
+					{
+						HLogError(
+							"RenderGraph '{}': pass '{}' cannot write buffer '{}' with access '{}'.",
+							graph_name,
+							pass.name,
+							buffer.name,
+							render_graph_access_name(usage.access));
+						return false;
+					}
+					continue;
+				}
+
+				if (usage.access == RenderGraphAccess::IndirectArgs)
+				{
+					if (!buffer.desc.indirect_args)
+					{
+						HLogError(
+							"RenderGraph '{}': pass '{}' reads buffer '{}' as IndirectArgs without indirect usage.",
+							graph_name,
+							pass.name,
+							buffer.name);
+						return false;
+					}
+					continue;
+				}
+
+				expected_access = pass.kind == RenderGraphPassKind::Raster ?
+					RenderGraphAccess::GraphicsSRV : RenderGraphAccess::ComputeSRV;
+				if (usage.access != expected_access || !buffer.desc.shader_resource)
+				{
+					HLogError(
+						"RenderGraph '{}': pass '{}' cannot read buffer '{}' with access '{}'.",
+						graph_name,
+						pass.name,
+						buffer.name,
+						render_graph_access_name(usage.access));
+					return false;
+				}
+			}
+			return true;
+		}
+	}
+
 	RenderGraphBuilder::RenderGraphBuilder(Renderer& renderer, const char* name)
 		: RenderGraphBuilder(&renderer, name)
 	{
@@ -76,6 +145,74 @@ namespace AshEngine
 		}
 	}
 
+	RenderGraphBufferRef RenderGraphBuilder::register_external_buffer(
+		const std::shared_ptr<StorageBuffer>& buffer,
+		const char* name,
+		RenderGraphAccess initial_access)
+	{
+		if (!buffer || buffer->get_size() == 0u)
+		{
+			HLogError("RenderGraph '{}': cannot register invalid external buffer '{}'.", m_name, name ? name : "<unnamed>");
+			return {};
+		}
+
+		RenderGraphBufferNode node{};
+		node.name = name ? name : "ExternalBuffer";
+		node.desc.size = buffer->get_size();
+		node.desc.stride = buffer->get_stride();
+		node.desc.shader_resource = true;
+		node.desc.unordered_access = true;
+		node.desc.indirect_args = buffer->is_indirect_args();
+		node.external_buffer = buffer;
+		node.external = true;
+		node.initial_access = initial_access;
+		m_buffers.push_back(std::move(node));
+		return { static_cast<uint32_t>(m_buffers.size() - 1u) };
+	}
+
+	RenderGraphBufferRef RenderGraphBuilder::register_external_buffer_desc_for_tests(
+		const RenderGraphBufferDesc& desc,
+		const char* name,
+		RenderGraphAccess initial_access)
+	{
+		if (desc.size == 0u)
+		{
+			HLogError("RenderGraph '{}': cannot register zero-sized external buffer '{}'.", m_name, name ? name : "<unnamed>");
+			return {};
+		}
+
+		RenderGraphBufferNode node{};
+		node.name = name ? name : "ExternalBufferForTests";
+		node.desc = desc;
+		node.external = true;
+		node.initial_access = initial_access;
+		m_buffers.push_back(std::move(node));
+		return { static_cast<uint32_t>(m_buffers.size() - 1u) };
+	}
+
+	RenderGraphBufferRef RenderGraphBuilder::create_buffer(const RenderGraphBufferDesc& desc, const char* name)
+	{
+		if (desc.size == 0u)
+		{
+			HLogError("RenderGraph '{}': cannot create zero-sized buffer '{}'.", m_name, name ? name : "<unnamed>");
+			return {};
+		}
+
+		RenderGraphBufferNode node{};
+		node.name = name ? name : "RenderGraphBuffer";
+		node.desc = desc;
+		m_buffers.push_back(std::move(node));
+		return { static_cast<uint32_t>(m_buffers.size() - 1u) };
+	}
+
+	void RenderGraphBuilder::extract_buffer(RenderGraphBufferRef buffer)
+	{
+		if (buffer.index < m_buffers.size())
+		{
+			m_buffers[buffer.index].extracted = true;
+		}
+	}
+
 	bool RenderGraphBuilder::add_raster_pass(
 		const char* name,
 		RenderGraphPassFlags flags,
@@ -104,6 +241,10 @@ namespace AshEngine
 		if (setup)
 		{
 			setup(builder);
+		}
+		if (!validate_buffer_usages(m_name, pass, m_buffers))
+		{
+			return false;
 		}
 		m_passes.push_back(std::move(pass));
 		return true;
@@ -137,6 +278,10 @@ namespace AshEngine
 		if (setup)
 		{
 			setup(builder);
+		}
+		if (!validate_buffer_usages(m_name, pass, m_buffers))
+		{
+			return false;
 		}
 		m_passes.push_back(std::move(pass));
 		return true;
@@ -174,16 +319,31 @@ namespace AshEngine
 			HLogError("RenderGraph '{}': execute requires a renderer.", m_name);
 			return false;
 		}
+		if (!m_buffers.empty())
+		{
+			HLogError("RenderGraph '{}': buffer execution is not available until buffer compilation is enabled.", m_name);
+			return false;
+		}
 		return execute_render_graph(*m_renderer, m_textures, m_passes);
 	}
 
 	bool RenderGraphBuilder::compile_for_tests(RenderGraphCompileResult& out_result) const
 	{
+		if (!m_buffers.empty())
+		{
+			HLogError("RenderGraph '{}': buffer compilation is not available in the declaration-only stage.", m_name);
+			return false;
+		}
 		return RenderGraphCompiler::compile(m_textures, m_passes, out_result);
 	}
 
 	bool RenderGraphBuilder::compile_cached_for_tests(RenderGraphCompileResult& out_result) const
 	{
+		if (!m_buffers.empty())
+		{
+			HLogError("RenderGraph '{}': cached buffer compilation is not available in the declaration-only stage.", m_name);
+			return false;
+		}
 		return RenderGraphCompiler::compile_cached(m_textures, m_passes, out_result);
 	}
 
@@ -200,6 +360,16 @@ namespace AshEngine
 	const std::vector<RenderGraphTextureNode>& RenderGraphBuilder::get_textures_for_tests() const
 	{
 		return m_textures;
+	}
+
+	size_t RenderGraphBuilder::get_buffer_count_for_tests() const
+	{
+		return m_buffers.size();
+	}
+
+	const std::vector<RenderGraphBufferNode>& RenderGraphBuilder::get_buffers_for_tests() const
+	{
+		return m_buffers;
 	}
 
 	const std::vector<RenderGraphPassNode>& RenderGraphBuilder::get_passes_for_tests() const
