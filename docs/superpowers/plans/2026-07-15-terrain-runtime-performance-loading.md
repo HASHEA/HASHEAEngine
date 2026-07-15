@@ -133,12 +133,12 @@ git commit -m "perf(terrain): reuse prepared draws across shadow passes"
 
 - [ ] **Step 1: Write RED tests for pending-memory and empty-weight behavior**
 
-Add tests that accept the canonical 1024-component snapshot and assert: pending entries retain component pointers rather than 1024 packed vectors; `pending_cpu_payload_bytes()` is capped at two packed height components; empty component weights require zero packed weight bytes; a stale generation cannot publish after replacement.
+Add tests that accept the canonical 1024-component snapshot and assert: pending entries retain component pointers rather than 1024 packed vectors; only one transient packed height payload exists at a time; empty component weights require zero packed weight bytes; a stale generation cannot publish after replacement. A fake work-budget clock proves that processing stops because the elapsed wall-clock budget was consumed, not because a fixed component/frame count was reached.
 
 ```cpp
 CHECK(asset.pending_component_upload_count() == 1024u);
 CHECK(asset.pending_cpu_payload_bytes() <=
-    2u * AshEngine::k_terrain_render_height_words_per_component * sizeof(uint32_t));
+    AshEngine::k_terrain_render_height_words_per_component * sizeof(uint32_t));
 CHECK(asset.pending_weight_payload_bytes() == 0u);
 ```
 
@@ -183,7 +183,7 @@ struct TerrainGpuComponentUpload
 };
 ```
 
-`accept_snapshot` validates shape/coord only and queues shared pointers. `finalize_gpu_resources` packs and uploads at most `k_terrain_height_upload_components_per_finalize = 2` entries per call, removes only successfully uploaded entries, keeps readiness Pending while work remains, and publishes only after uploads and removals are empty. Generation replacement drops old entries before they can write.
+`accept_snapshot` validates shape/coord only and queues shared pointers. `finalize_gpu_resources` packs one component into a reusable transient vector, uploads it, releases/reuses that vector, and continues while both a byte-work budget and a `std::chrono::steady_clock` deadline remain. The default deadline is a small render-update wall-clock budget; the loop has no fixed component/frame count. It removes only successfully uploaded entries, keeps readiness Pending while work remains, and publishes only after uploads and removals are empty. Generation replacement drops old entries before they can write. Tests inject a deterministic clock/budget helper so RED/GREEN does not depend on machine speed.
 
 - [ ] **Step 5: Pack weights only when an atlas slot needs an update**
 
