@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-16
 status: active
 ---
 
@@ -19,6 +19,7 @@ status: active
 | `project/src/engine/Function/Scene/SceneConfig.h/.cpp` | `SceneRenderConfig`（AO/Shadow/Bloom/Volumetric/TAA 子 config 聚合） |
 | `project/src/engine/Function/Scene/SceneQuery.h/.cpp` | 包围盒、射线、投放点，以及 Scene Terrain world-space 查询 adapter |
 | `project/src/engine/Function/Scene/TerrainQuery.h/.cpp` | snapshot-local Terrain 高度、法线、精确射线与非阻塞预取查询 |
+| `project/src/engine/Function/Scene/VegetationSurfaceProvider.h/.cpp` | Scene 侧 surface binding/provider capture 与 status-pointer shape validation |
 | `project/src/engine/Function/Render/ScenePresentationSubsystem.h/.cpp` | 输出/视图绑定管理，每帧 Scene → `VisibleRenderFrame` 同步 |
 | `project/src/engine/Function/Render/ScenePresentationHandles.h` | `SceneOutputHandle`/`SceneViewBindingHandle`/overlay/pick/stats 类型 |
 | `project/src/engine/Function/Render/RenderScene.h/.cpp` | 渲染侧场景镜像 `RenderScene` 与不可变帧数据 `VisibleRenderFrame` |
@@ -32,6 +33,7 @@ status: active
 - 实例化：`instantiate_model` / `instantiate_ashasset` / `instantiate_mesh` / 自由函数 `instantiate_asset(Scene&, AssetDatabase&, AssetId, SceneInstantiationDesc)`。
 - `SceneQuery`：`get_entity_world_bounds` / `get_entity_subtree_world_bounds` / `screen_to_world_ray` / `ray_cast_scene` / `project_ray_to_plane` / `find_scene_drop_point`；Terrain overload 按 Entity 或全 Scene 提供 world-space `query_height` / `query_normal` / `ray_cast_terrain`。通用 bounds 会合并同一 Entity 的 Mesh 与 Terrain：完整 resident Terrain 聚合全部 Component root min/max，未完整 resident 时用 height mapping 给出不低估的保守 Y 范围；layout/spacing 定义 X/Z，完整 parent chain 的有限正非均匀缩放参与 world AABB。
 - `TerrainQuery`：对 `TerrainAssetSnapshot` 的 terrain-local `query_height` / `query_normal` / `ray_cast_terrain`，以及通过 `AssetDatabase` 启动整资产异步加载的 `prefetch_query_region`；状态为 Ready/Pending/Outside/Failed。Scene adapter 通过异步资产 future 保留这四种状态，非 Ready 不写调用方输出。射线查询遍历 Component min/max 层级并对真实三角形求交，不使用固定步进。
+- 植被 surface provider：`VegetationSurfaceBinding` 以非零 `surface_entity_id` 消除 surface 歧义；`IVegetationSurfaceProvider::capture` 返回 immutable Asset-layer snapshot；`capture_vegetation_surface` 统一验证 provider、binding 与 status-pointer shape。
 - `ScenePresentationSubsystem`：
   - 输出：`create_output` / `update_output` / `destroy_output`（`SceneOutputDesc`：Window/Offscreen、尺寸、`SceneOutputFormat`）；`get_ui_surface` 供 UI 显示离屏输出。
   - 视图绑定：`create_view_binding` / `update_view_binding` / `destroy_view_binding`（`SceneViewBindingDesc`：Scene 指针 + `SceneCameraSelector`（PrimaryCamera/EntityId/Override）+ 输出句柄 + `SceneViewOverrides`（clear/rect/show flags）+ sort_order）；`set_binding_enabled` / `request_refresh`。
@@ -56,6 +58,7 @@ status: active
 - Particle JSON malformed sanitation：字符串/布尔类型错误保留默认值；新增浮点字段的非有限值先回退默认，再 clamp 到各自范围。Scene add/set/load 继续共享同一数值 sanitize 契约。
 - `get_content_epoch()` 只在 load/reload/replace 内容时变化，普通组件编辑不得推进；它用于重置跨帧渲染状态，不替代细粒度 render version。
 - 粒子 GPU 状态以进程内 `scene_runtime_id + entity_id` 隔离；场景解绑会显式释放该 runtime 的状态。
+- 植被 provider 依赖方向固定为 Scene → Asset。capture 仅允许 `Ready+snapshot`、`Pending+null`、`Failed+null`；无 provider、零 binding、`Outside`、异常或其它 shape 全部转为明确 Failed。capture 不读取 mutable Scene/Editor/Terrain 工作状态，worker 只消费捕获后的 immutable snapshot。
 - 边界：custom pass、compute、后处理实验、调试渲染继续走 Renderer 直驱，不强行塞进 scene presentation；上层需求统一表达为 Scene + Camera + Output + Overrides，不把 `RenderScene`/`SceneView`/`VisibleRenderFrame`/`SceneRenderer` 暴露回上层；UI 显示离屏输出用 `UISurfaceHandle` + `draw_surface_fill_available`。
 - 当前限制：view 的 viewport/scissor 只约束光栅化区域；clear 作用于整个 attachment 而非 rect（多 binding 共享 output 的保留语义后续用 preserve/load 解决）；Window output 不返回有效 `UISurfaceHandle`；`show_flags` 为预留字段。
 
@@ -74,3 +77,4 @@ status: active
 - [SDD-2026-07-10-gpu-particles](../../sdd/SDD-2026-07-10-gpu-particles.md)（ParticleComponent、schema v5 与提取链）
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)（当前帧 scene packet readiness 快照）
 - [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)（Terrain 总体设计；Phase 1 asset core 与 Scene v6 contract 已实现）
+- [SDD-2026-07-16-vegetation-authoring-and-bake](../../sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md)（植被 surface binding/provider 与 immutable snapshot 边界）
