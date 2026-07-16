@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make one generic non-destructive Terrain edit layer support every sculpt/paint tool, update the Terrain during drag at an 80–100 ms wall-clock cadence with one Undo/Redo record, and bind the Terrain panel directly from a selected Hierarchy entity.
+**Goal:** Make one generic non-destructive Terrain edit layer support every sculpt/paint tool, update the Terrain during drag at an 80–100 ms wall-clock cadence with one Undo/Redo record, bind the Terrain panel directly from a selected Hierarchy entity, keep Flatten fixed to one stroke-wide target, and release viewport ownership when the Terrain editing context becomes inactive.
 
-**Architecture:** Function Asset stores each height edit sample as an affine transform `T(H)=aH+b`; tools left-compose their dab so stroke order is preserved, and the v2 container migrates v1 Additive/Alpha data exactly in memory. `TerrainEditorService` owns one incremental stroke transaction with a resumable resampler, aggregate before/after patch, one in-flight complete-generation publication and delayed history recording. `TerrainModePanel` resolves a single selected entity through Scene/Selection/AssetDatabase services and reuses the existing `SelectAsset` intent instead of opening files itself.
+**Architecture:** Function Asset stores each height edit sample as an affine transform `T(H)=aH+b`; tools left-compose their dab so stroke order is preserved, and the v2 container migrates v1 Additive/Alpha data exactly in memory. `TerrainEditorService` owns one incremental stroke transaction with a resumable resampler, one stroke-wide target state, aggregate before/after patch, one in-flight complete-generation publication and delayed history recording. `TerrainModePanel` resolves a single selected entity through Scene/Selection/AssetDatabase services and reuses the existing `SelectAsset` intent instead of opening files itself. Viewport ownership is derived separately from Terrain panel visibility plus the exact current selection, so loss of editing context cancels the active stroke but never unloads the dirty authoring session.
 
 **Tech Stack:** C++17, Function Asset Terrain data/brush/composition/container, Editor service/core/commands/panels through UIContext, doctest, Premake5/MSBuild, Vulkan/DX12 validation, RenderGate, PerfGate and user-performed manual verification.
 
@@ -16,7 +16,7 @@
 - Required prerequisite: completed `2026-07-15-terrain-runtime-performance-loading.md` implementation and gates.
 - Long-term specs: `docs/specs/features/terrain.md`, `docs/specs/modules/asset.md`, `docs/specs/modules/editor.md`
 - Existing authoring plan/source contracts: `docs/superpowers/plans/2026-07-13-terrain-phase-3-editor-authoring.md`
-- Execution is inline in the current worktree. Each task is TDD-first and selectively committed; no subagent is requested.
+- Tasks 1–7 were executed inline in the current worktree. The user selected the recommended subagent-driven path for the Task 8 amendment; implementation and review stay in the same isolated Terrain worktree, remain TDD-first, and use explicit path staging only.
 - User/editor runtime files and Terrain assets remain unstaged. Container fixtures are created under test temp roots, never by rewriting user `.AshTerrain` files.
 
 ## File responsibility map
@@ -32,6 +32,8 @@
 - `project/src/editor/Core/TerrainCommands.h/.cpp`: one stroke command with an optional auto-layer patch.
 - `project/src/editor/Services/TerrainEditorService.h/.cpp`: live stroke transaction, fake clock seam, coalescing, rollback, delayed history.
 - `project/src/editor/Panels/Terrain/TerrainModePanel.h/.cpp`: entity selection resolver and current-selection sync.
+- `project/src/editor/Core/TerrainViewportInputRouter.h/.cpp`, `project/src/editor/Panels/ViewportPanelTerrainInteraction.h/.cpp`: fail-closed viewport authoring eligibility, active-stroke cancellation and input hand-back.
+- `project/src/editor/Core/PanelDeps/ViewportPanelDeps.h`, `project/src/editor/Services/EditorSessionStateService.h/.cpp`, `project/src/editor/App/PanelBootstrapper.h/.cpp`, `project/src/editor/App/EditorApplicationImpl.cpp`: expose current panel-open and selection state to the viewport without unloading Terrain state.
 - `project/src/editor/Panels/Terrain/TerrainModeState.h`, `TerrainModeWidgets.cpp`: terminology and generic-layer UI.
 - `project/src/editor/App/PanelBootstrapper.cpp`: inject SceneService and SelectionService.
 - `project/src/tests/Terrain/terrain_composition_tests.cpp`, `terrain_brush_tests.cpp`, `terrain_patch_tests.cpp`, `terrain_container_tests.cpp`, `terrain_query_tests.cpp`: affine/migration/patch/query contracts.
@@ -501,9 +503,132 @@ git diff --cached --check
 git commit -m "docs(terrain): record interactive authoring closure"
 ```
 
+### Task 8: Keep Flatten stroke-global and deactivate tools with the Terrain context
+
+**Files:**
+- Modify: `project/src/engine/Function/Asset/TerrainBrush.h`
+- Modify: `project/src/engine/Function/Asset/TerrainBrush.cpp`
+- Modify: `project/src/editor/Services/TerrainEditorService.h`
+- Modify: `project/src/editor/Services/TerrainEditorService.cpp`
+- Modify: `project/src/editor/Core/TerrainViewportInputRouter.h`
+- Modify: `project/src/editor/Core/TerrainViewportInputRouter.cpp`
+- Modify: `project/src/editor/Core/PanelDeps/ViewportPanelDeps.h`
+- Modify: `project/src/editor/Panels/ViewportPanelTerrainInteraction.h`
+- Modify: `project/src/editor/Panels/ViewportPanelTerrainInteraction.cpp`
+- Modify: `project/src/editor/Panels/ViewportPanelInteraction.cpp`
+- Modify: `project/src/editor/App/PanelBootstrapper.h`
+- Modify: `project/src/editor/App/PanelBootstrapper.cpp`
+- Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
+- Modify: `project/src/tests/Terrain/terrain_brush_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_viewport_interaction_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_service_tests.cpp`
+- Modify: `project/src/tests/Editor/terrain_editor_contract_tests.cpp`
+- Modify: `docs/specs/features/terrain.md`
+- Modify: `docs/specs/modules/editor.md`
+
+- [ ] **Step 1: Write the Flatten cross-batch RED**
+
+Add a test with frozen heights `H(P0)=10` and `H(P1)=30`, hard radius `0.25`, strength `1`, and spacing larger than the segment. Express the wished-for stroke state explicitly:
+
+```cpp
+AshEngine::TerrainBrushStrokeTargetState target_state{};
+REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+    working_set, flatten, metric, frozen_layers, target_state,
+    { TerrainStrokeSample{ { 1.0f, 1.0f }, 1.0f } }, patches, dirty));
+REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+    working_set, flatten, metric, frozen_layers, target_state,
+    { TerrainStrokeSample{ { 3.0f, 1.0f }, 1.0f } }, patches, dirty));
+REQUIRE(patches.size() == 1u);
+const auto second_after = DecodePatchBytes(patches.front(), true);
+CHECK(ReadFloatLe(second_after, 0u) == doctest::Approx(0.0f));
+CHECK(ReadFloatLe(second_after, 1u) == doctest::Approx(10.0f));
+```
+
+Run:
+
+```powershell
+.\RunTests.bat Debug --test-case="Terrain Flatten keeps one target across preview batches"
+```
+
+Expected RED: compile failure because `TerrainBrushStrokeTargetState` and the stateful overload do not exist. This proves the API cannot currently preserve a stroke-global target.
+
+- [ ] **Step 2: Write the viewport-context RED**
+
+Extend `TerrainViewportRouteInput` with a fail-closed `authoring_context_active` field and add two cases:
+
+```cpp
+input.mode = AshEditor::TerrainEditorMode::Sculpt;
+input.authoring_context_active = false;
+input.left_pressed = true;
+input.left_down = true;
+auto route = AshEditor::route_terrain_viewport_input(input);
+CHECK(route.send_gizmo);
+CHECK_FALSE(route.consume_mouse_left);
+CHECK_FALSE(route.begin_stroke);
+
+input.stroke_active = true;
+route = AshEditor::route_terrain_viewport_input(input);
+CHECK(route.cancel_stroke);
+CHECK(route.consume_mouse_left);
+CHECK_FALSE(route.send_gizmo);
+```
+
+Add source/integration contracts requiring `ViewportPanelTerrainInteraction` to read `EditorSessionStateService::IsPanelOpen(EditorPanelIds::TerrainMode, false)`, accept exactly one matching Entity or Terrain asset selection, and preserve the loaded `TerrainEditorService` working set on mismatch.
+
+Run:
+
+```powershell
+.\RunTests.bat Debug --test-case="Terrain viewport router deactivates with its editing context"
+.\RunTests.bat Debug --test-case="Terrain viewport authoring requires an open panel and matching selection"
+```
+
+Expected RED: the route input has no context flag and viewport dependencies do not expose session panel state.
+
+- [ ] **Step 3: Implement one atomic Flatten target state**
+
+In `TerrainBrush.h` add:
+
+```cpp
+struct TerrainBrushStrokeTargetState
+{
+    std::optional<float> flatten_height{};
+};
+```
+
+Pass it by non-const reference to `apply_resampled_terrain_brush_dabs`. For Flatten, copy the optional into a local candidate, sample frozen through-selected height at the first non-empty batch only when the candidate is empty, validate it is finite, and commit the candidate back to the state only after the brush mutation succeeds. `apply_terrain_brush_stroke` creates one local target state. `TerrainEditorService::ActiveStroke` stores the state and passes the same instance to every 80 ms batch. Non-Flatten tools do not read or change it.
+
+- [ ] **Step 4: Derive viewport ownership without unloading the session**
+
+Add `EditorSessionStateService* pSessionStateService` to `ViewportPanelDeps` and `PanelBootstrapContext`, wire it from `EditorApplicationImpl`, and use the cached panel/selection state in `ViewportPanelTerrainInteraction`:
+
+```cpp
+const bool panelOpen = deps.pSessionStateService &&
+    deps.pSessionStateService->IsPanelOpen(EditorPanelIds::TerrainMode, false);
+const bool matchingSelection = ResolveExactlyOneSelectedTerrainAsset(deps) ==
+    deps.pTerrainEditorService->GetSelectedAssetId();
+const bool contextActive = panelOpen && matchingSelection;
+```
+
+Only `contextActive && (Sculpt || Paint)` may query Terrain, show the brush overlay, consume LMB or disable W/E/R. Feed `contextActive` to the router; when it becomes false during an active stroke, reuse `CancelStroke`, clear the preview, and retain the mouse latch until physical release. Do not call `SelectAsset(0)`, close the working set, clear dirty/history, reset the active tab, or discard drafts.
+
+- [ ] **Step 5: Run focused GREEN and regression tests**
+
+```powershell
+.\RunTests.bat Debug --test-case="Terrain Flatten keeps one target across preview batches"
+.\RunTests.bat Debug --test-case="Terrain viewport*"
+.\RunTests.bat Debug --test-case="Terrain editor*stroke*"
+.\RunTests.bat Debug --test-case="Terrain mode*"
+```
+
+Expected: fixed target matches one-shot Flatten; panel close and selection mismatch return gizmo/selection input, active mismatch cancels one whole stroke, and the authoring session remains loaded and dirty.
+
+- [ ] **Step 6: Update specs and repeat closure gates**
+
+Record the stroke-global Flatten target and the panel/selection ownership predicate in the Terrain and Editor specs. Then run Debug/Release full tests, Editor/Sandbox Debug/Release builds, ArchGate, AIDevDoctor, four-combination readiness, non-bless RenderGate and Standard PerfGate. Restore the four runtime configs byte-for-byte, scan only fresh logs, and require the user to repeat Vulkan then DX12 manual checks for Flatten, panel close, non-Terrain selection, active-stroke cancellation and the already-passing near/far live preview.
+
 ## Plan self-review
 
-- Spec coverage: affine generic layers, exact v1 migration, Paint/Erase coexistence, wall-clock incremental preview, single history, rollback/quarantine, auto-layer, Hierarchy binding, terminology, dual-backend and human verification map to Tasks 1–7.
+- Spec coverage: affine generic layers, exact v1 migration, Paint/Erase coexistence, wall-clock incremental preview, single history, rollback/quarantine, auto-layer, Hierarchy binding, terminology, dual-backend and human verification map to Tasks 1–7; stroke-global Flatten and panel/selection tool deactivation map to Task 8.
 - Scope boundary: no GPU brush, Graphics/RHI API, infinite material layers, collaboration, baseline change or frame-count throttle is included.
-- Type consistency: affine `scales/biases`, resumable sampler, aggregate patches, optional auto-layer patch and panel service dependencies are introduced before use.
+- Type consistency: affine `scales/biases`, resumable sampler, aggregate patches, optional auto-layer patch, `TerrainBrushStrokeTargetState`, authoring-context route flag and session-state panel dependency are introduced before use.
 - Placeholder scan: every implementation task includes explicit RED, implementation contract, GREEN and selective commit; no TBD/TODO or deferred error-handling placeholders remain.
