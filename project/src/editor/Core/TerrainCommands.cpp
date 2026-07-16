@@ -12,11 +12,17 @@ namespace AshEditor
 		const AshEngine::TerrainAssetId assetId,
 		const AshEngine::TerrainLayerId layerId,
 		const uint64_t sequence,
-		std::vector<AshEngine::TerrainEditPatch> patches)
+		std::vector<AshEngine::TerrainEditPatch> patches,
+		std::optional<AshEngine::TerrainLayerStackPatch> autoLayerPatch,
+		const AshEngine::TerrainLayerId selectedBefore,
+		const AshEngine::TerrainLayerId selectedAfter)
 		: _assetId(assetId)
 		, _layerId(layerId)
 		, _sequence(sequence)
 		, _patches(std::move(patches))
+		, _autoLayerPatch(std::move(autoLayerPatch))
+		, _selectedBefore(selectedBefore)
+		, _selectedAfter(selectedAfter)
 	{
 	}
 
@@ -44,12 +50,35 @@ namespace AshEditor
 		EditorContext& refContext,
 		const AshEngine::TerrainEditPatchDirection eDirection)
 	{
+		if (_autoLayerPatch)
+		{
+			const auto isValidSelection = [](
+				const AshEngine::TerrainLayerId selectedLayerId,
+				const std::vector<AshEngine::TerrainLayerId>& layerOrder)
+			{
+				return layerOrder.empty()
+					? !selectedLayerId.is_valid()
+					: selectedLayerId.is_valid() &&
+						std::find(layerOrder.begin(), layerOrder.end(), selectedLayerId) !=
+							layerOrder.end();
+			};
+			if (_autoLayerPatch->asset_id != _assetId || !_autoLayerPatch->has_change() ||
+				_autoLayerPatch->layer_id != _layerId ||
+				!isValidSelection(_selectedBefore, _autoLayerPatch->before_order) ||
+				!isValidSelection(_selectedAfter, _autoLayerPatch->after_order))
+			{
+				return false;
+			}
+		}
 		return _assetId != 0u && _layerId.is_valid() && _sequence != 0u && !_patches.empty() &&
 			refContext.pTerrainEditorService &&
-			refContext.pTerrainEditorService->ApplyStrokePatches(
+			refContext.pTerrainEditorService->ApplyStrokeTransactionPatches(
 				_assetId,
 				_layerId,
 				_patches,
+				_autoLayerPatch,
+				_selectedBefore,
+				_selectedAfter,
 				eDirection,
 				_sequence);
 	}

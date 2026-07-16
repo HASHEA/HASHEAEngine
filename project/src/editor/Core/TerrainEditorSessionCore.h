@@ -163,6 +163,12 @@ namespace AshEditor
 			std::vector<AshEngine::TerrainEditPatch>& refPatches,
 			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
 			std::string* pError = nullptr);
+		bool ApplyAutoLayerForStroke(
+			uint64_t sequence,
+			const AshEngine::TerrainLayerStackEdit& refEdit,
+			AshEngine::TerrainLayerStackPatch& refPatch,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+			std::string* pError = nullptr);
 		bool ApplyStrokePatches(
 			AshEngine::TerrainAssetId assetId,
 			AshEngine::TerrainLayerId layerId,

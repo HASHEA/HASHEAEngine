@@ -788,6 +788,27 @@ namespace AshEditor
 		const AshEngine::TerrainEditPatchDirection eDirection,
 		const uint64_t sequence)
 	{
+		return ApplyStrokeTransactionPatches(
+			assetId,
+			layerId,
+			refPatches,
+			{},
+			{},
+			{},
+			eDirection,
+			sequence);
+	}
+
+	bool TerrainEditorService::ApplyStrokeTransactionPatches(
+		const AshEngine::TerrainAssetId assetId,
+		const AshEngine::TerrainLayerId layerId,
+		const std::vector<AshEngine::TerrainEditPatch>& refPatches,
+		const std::optional<AshEngine::TerrainLayerStackPatch>& refAutoLayerPatch,
+		const AshEngine::TerrainLayerId selectedBefore,
+		const AshEngine::TerrainLayerId selectedAfter,
+		const AshEngine::TerrainEditPatchDirection eDirection,
+		const uint64_t sequence)
+	{
 		if (_externalChangeState.status != TerrainExternalChangeStatus::None)
 		{
 			_strLastError = "Terrain command replay is disabled while reload recovery is active.";
@@ -809,18 +830,117 @@ namespace AshEditor
 			_strLastError = "Terrain stroke patch replay sequence is invalid.";
 			return false;
 		}
+		if (refPatches.empty() && !refAutoLayerPatch)
+		{
+			_strLastError = "Terrain stroke transaction has no mutation to replay.";
+			return false;
+		}
 
 		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
 		std::string strError{};
-		if (!_core.ApplyStrokePatches(
-				assetId,
-				layerId,
-				refPatches,
-				eDirection,
-				dirtyComponents,
-				&strError))
+		const auto quarantine = [this](const char* message)
 		{
-			_strLastError = strError.empty() ? "Terrain stroke patch replay failed." : std::move(strError);
+			_optPendingComposition.reset();
+			_historyRollbackFailed = true;
+			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+			_strLastError = message;
+			return false;
+		};
+		const auto applyStroke = [this, assetId, layerId, &refPatches](
+			const AshEngine::TerrainEditPatchDirection direction,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirty,
+			std::string& refError)
+		{
+			return refPatches.empty() || _core.ApplyStrokePatches(
+				assetId, layerId, refPatches, direction, refDirty, &refError);
+		};
+		const auto applyLayer = [this, assetId, &refAutoLayerPatch](
+			const AshEngine::TerrainEditPatchDirection direction,
+			const AshEngine::TerrainLayerId selection,
+			std::vector<AshEngine::TerrainComponentCoord>& refDirty,
+			std::string& refError)
+		{
+			return !refAutoLayerPatch || _core.ApplyLayerStackPatch(
+				assetId, *refAutoLayerPatch, direction, selection, refDirty, &refError);
+		};
+
+		if (eDirection == AshEngine::TerrainEditPatchDirection::Redo)
+		{
+			if (!applyLayer(eDirection, selectedAfter, dirtyComponents, strError))
+			{
+				_strLastError = strError.empty()
+					? "Terrain automatic edit layer replay failed." : std::move(strError);
+				return false;
+			}
+			if (refAutoLayerPatch)
+			{
+				SyncAuthoringLayerSelection();
+			}
+			if (!applyStroke(eDirection, dirtyComponents, strError))
+			{
+				const std::string replayError = strError.empty()
+					? "Terrain stroke patch replay failed." : strError;
+				if (!refAutoLayerPatch)
+				{
+					_strLastError = replayError;
+					return false;
+				}
+				std::vector<AshEngine::TerrainComponentCoord> restoredDirty{};
+				std::string restoreError{};
+				if (!applyLayer(
+						AshEngine::TerrainEditPatchDirection::Undo,
+						selectedBefore,
+						restoredDirty,
+						restoreError))
+				{
+					return quarantine(
+						"Terrain stroke replay and automatic layer compensation failed; authoring was quarantined.");
+				}
+				SyncAuthoringLayerSelection();
+				ScheduleComposition(sequence, std::move(restoredDirty));
+				_strLastError = replayError;
+				return false;
+			}
+		}
+		else if (eDirection == AshEngine::TerrainEditPatchDirection::Undo)
+		{
+			if (!applyStroke(eDirection, dirtyComponents, strError))
+			{
+				_strLastError = strError.empty()
+					? "Terrain stroke patch replay failed." : std::move(strError);
+				return false;
+			}
+			if (!applyLayer(eDirection, selectedBefore, dirtyComponents, strError))
+			{
+				const std::string replayError = strError.empty()
+					? "Terrain automatic edit layer replay failed." : strError;
+				if (refPatches.empty())
+				{
+					_strLastError = replayError;
+					return false;
+				}
+				std::vector<AshEngine::TerrainComponentCoord> restoredDirty{};
+				std::string restoreError{};
+				if (!applyStroke(
+						AshEngine::TerrainEditPatchDirection::Redo,
+						restoredDirty,
+						restoreError))
+				{
+					return quarantine(
+						"Terrain automatic layer replay and stroke compensation failed; authoring was quarantined.");
+				}
+				ScheduleComposition(sequence, std::move(restoredDirty));
+				_strLastError = replayError;
+				return false;
+			}
+			if (refAutoLayerPatch)
+			{
+				SyncAuthoringLayerSelection();
+			}
+		}
+		else
+		{
+			_strLastError = "Terrain stroke patch replay direction is invalid.";
 			return false;
 		}
 
@@ -1894,6 +2014,8 @@ namespace AshEditor
 	{
 		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
 		const AshEngine::TerrainLayerId selectedLayerId = _core.GetSelectedLayerId();
+		const bool layerlessSession = pWorkingSet && pWorkingSet->edit_layers.empty() &&
+			!selectedLayerId.is_valid();
 		const bool validMetric =
 			std::isfinite(refIntent.brush_metric.world_meters_per_terrain_meter.x) &&
 			refIntent.brush_metric.world_meters_per_terrain_meter.x > 0.0f &&
@@ -1907,7 +2029,8 @@ namespace AshEditor
 			_publishedSnapshot->content_generation != pWorkingSet->content_generation ||
 			_optActiveStroke || _core.HasActiveStroke() ||
 			_core.GetPreviewState().query_status != AshEngine::TerrainQueryStatus::Ready ||
-			!authoringMode || !validMetric || !selectedLayerId.is_valid() ||
+			!authoringMode || !validMetric ||
+			(!selectedLayerId.is_valid() && !layerlessSession) ||
 			refIntent.asset_id != pWorkingSet->asset_id ||
 			refIntent.layer_id != selectedLayerId ||
 			_authoringConfig.brush.layer_id != selectedLayerId ||
@@ -1916,28 +2039,33 @@ namespace AshEditor
 			_strLastError = "Terrain stroke begin state, asset, mode, metric, layer, or authoring configuration is invalid.";
 			return false;
 		}
-		if (pWorkingSet->content_generation >= std::numeric_limits<uint64_t>::max() - 1u)
+		const uint64_t reservedGenerations = layerlessSession ? 4u : 2u;
+		if (pWorkingSet->content_generation >
+			std::numeric_limits<uint64_t>::max() - reservedGenerations)
 		{
 			_strLastError = "Terrain content generation cannot reserve a rollback generation.";
 			return false;
 		}
 
-		const auto layer = std::find_if(
-			pWorkingSet->edit_layers.begin(),
-			pWorkingSet->edit_layers.end(),
-			[selectedLayerId](const AshEngine::TerrainEditLayer& refLayer)
+		if (!layerlessSession)
+		{
+			const auto layer = std::find_if(
+				pWorkingSet->edit_layers.begin(),
+				pWorkingSet->edit_layers.end(),
+				[selectedLayerId](const AshEngine::TerrainEditLayer& refLayer)
+				{
+					return refLayer.id == selectedLayerId;
+				});
+			if (layer == pWorkingSet->edit_layers.end())
 			{
-				return refLayer.id == selectedLayerId;
-			});
-		if (layer == pWorkingSet->edit_layers.end())
-		{
-			_strLastError = "Terrain stroke layer does not exist.";
-			return false;
-		}
-		if (layer->locked)
-		{
-			_strLastError = "Terrain stroke layer is locked.";
-			return false;
+				_strLastError = "Terrain stroke layer does not exist.";
+				return false;
+			}
+			if (layer->locked)
+			{
+				_strLastError = "Terrain stroke layer is locked.";
+				return false;
+			}
 		}
 
 		if (!IsToolCompatibleWithLayer(
@@ -1956,6 +2084,7 @@ namespace AshEditor
 		_optActiveStroke.emplace();
 		_optActiveStroke->asset_id = pWorkingSet->asset_id;
 		_optActiveStroke->layer_id = selectedLayerId;
+		_optActiveStroke->selected_before = selectedLayerId;
 		_optActiveStroke->sequence = _nextStrokeSequence;
 		_optActiveStroke->parameters = _authoringConfig.brush;
 		_optActiveStroke->metric = refIntent.brush_metric;
@@ -2116,8 +2245,70 @@ namespace AshEditor
 		{
 			return true;
 		}
+		if (!stroke.layer_id.is_valid())
+		{
+			const bool hasEffectivePressure = stroke.parameters.strength > 0.0f &&
+				std::any_of(
+					newSamples.begin(),
+					newSamples.end(),
+					[](const AshEngine::TerrainStrokeSample& refSample)
+					{
+						return refSample.pressure > 0.0f;
+					});
+			if (!hasEffectivePressure)
+			{
+				return true;
+			}
+
+			AshEngine::TerrainLayerStackEdit edit{};
+			edit.kind = AshEngine::TerrainLayerStackEditKind::Add;
+			edit.name = "Edit Layer";
+			edit.destination_index = 0u;
+			AshEngine::TerrainLayerStackPatch layerPatch{};
+			std::vector<AshEngine::TerrainComponentCoord> layerDirty{};
+			if (!_core.ApplyAutoLayerForStroke(
+					stroke.sequence,
+					edit,
+					layerPatch,
+					layerDirty,
+					&error))
+			{
+				return RestoreActiveStroke(
+					error.empty() ? "Terrain automatic edit layer creation failed." : std::move(error),
+					false);
+			}
+			stroke.auto_layer_patch = std::move(layerPatch);
+			stroke.layer_id = stroke.auto_layer_patch->layer_id;
+			stroke.parameters.layer_id = stroke.layer_id;
+			SyncAuthoringLayerSelection();
+			try
+			{
+				const AshEngine::TerrainWorkingSet* layerWorkingSet = _core.GetWorkingSet();
+				if (!layerWorkingSet)
+				{
+					return RestoreActiveStroke(
+						"Terrain automatic edit layer lost its working set.", false);
+				}
+				stroke.frozen_edit_layers =
+					std::make_shared<const std::vector<AshEngine::TerrainEditLayer>>(
+						layerWorkingSet->edit_layers);
+			}
+			catch (const std::bad_alloc&)
+			{
+				return RestoreActiveStroke(
+					"Terrain automatic edit layer snapshot allocation failed.", false);
+			}
+			catch (const std::length_error&)
+			{
+				return RestoreActiveStroke(
+					"Terrain automatic edit layer snapshot size is unsupported.", false);
+			}
+		}
+
 		const AshEngine::TerrainWorkingSet* current = _core.GetWorkingSet();
-		if (!current || current->content_generation >= std::numeric_limits<uint64_t>::max() - 1u)
+		const uint64_t remainingGenerations = stroke.auto_layer_patch ? 3u : 2u;
+		if (!current || current->content_generation >
+			std::numeric_limits<uint64_t>::max() - remainingGenerations)
 		{
 			return RestoreActiveStroke(
 				"Terrain live stroke cannot reserve its rollback generation.", false);
@@ -2189,6 +2380,10 @@ namespace AshEditor
 		}
 		if (_optActiveStroke->aggregate_patches.empty())
 		{
+			if (_optActiveStroke->auto_layer_patch)
+			{
+				return RestoreActiveStroke({}, true);
+			}
 			const uint64_t sequence = _optActiveStroke->sequence;
 			_optActiveStroke.reset();
 			if (!_core.EndStroke(sequence))
@@ -2209,7 +2404,10 @@ namespace AshEditor
 				_optActiveStroke->asset_id,
 				_optActiveStroke->layer_id,
 				_optActiveStroke->sequence,
-				_optActiveStroke->aggregate_patches);
+				_optActiveStroke->aggregate_patches,
+				_optActiveStroke->auto_layer_patch,
+				_optActiveStroke->selected_before,
+				_optActiveStroke->layer_id);
 		}
 		catch (const std::bad_alloc&)
 		{
@@ -2242,9 +2440,14 @@ namespace AshEditor
 		const auto rollbackIsComplete = [this, &completedStroke, forwardGeneration]()
 		{
 			const AshEngine::TerrainWorkingSet* current = _core.GetWorkingSet();
+			const uint64_t rollbackGenerationCount =
+				completedStroke.auto_layer_patch ? 2u : 1u;
+			const AshEngine::TerrainLayerId rollbackSelection =
+				completedStroke.auto_layer_patch
+				? completedStroke.selected_before : completedStroke.layer_id;
 			return current && current->asset_id == completedStroke.asset_id &&
-				current->content_generation == forwardGeneration + 1u &&
-				_core.GetSelectedLayerId() == completedStroke.layer_id &&
+				current->content_generation == forwardGeneration + rollbackGenerationCount &&
+				_core.GetSelectedLayerId() == rollbackSelection &&
 				_core.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready &&
 				_optPendingComposition &&
 				_optPendingComposition->asset_id == completedStroke.asset_id &&
@@ -2313,7 +2516,7 @@ namespace AshEditor
 		_optActiveStroke.reset();
 		_optPendingComposition.reset();
 		_core.CancelStroke();
-		if (stroke.aggregate_patches.empty())
+		if (stroke.aggregate_patches.empty() && !stroke.auto_layer_patch)
 		{
 			_strLastError = clearErrorOnSuccess ? std::string{} : std::move(finalError);
 			return clearErrorOnSuccess;
@@ -3679,21 +3882,15 @@ namespace AshEditor
 		const ActiveStroke& refStroke,
 		const std::vector<AshEngine::TerrainEditPatch>& refPatches)
 	{
-		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
-		std::string strError{};
-		if (!_core.ApplyStrokePatches(
-				refStroke.asset_id,
-				refStroke.layer_id,
-				refPatches,
-				AshEngine::TerrainEditPatchDirection::Undo,
-				dirtyComponents,
-				&strError))
-		{
-			return false;
-		}
-
-		ScheduleComposition(refStroke.sequence, std::move(dirtyComponents));
-		return true;
+		return ApplyStrokeTransactionPatches(
+			refStroke.asset_id,
+			refStroke.layer_id,
+			refPatches,
+			refStroke.auto_layer_patch,
+			refStroke.selected_before,
+			refStroke.layer_id,
+			AshEngine::TerrainEditPatchDirection::Undo,
+			refStroke.sequence);
 	}
 
 	bool TerrainEditorService::RollBackLayerAction(

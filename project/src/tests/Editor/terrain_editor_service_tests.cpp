@@ -106,6 +106,14 @@ namespace
 		return snapshot;
 	}
 
+	AshEngine::TerrainAssetSnapshot MakeLayerlessEditorStrokeSnapshot()
+	{
+		AshEngine::TerrainAssetSnapshot snapshot = MakeEditorStrokeSnapshot();
+		snapshot.edit_layers =
+			std::make_shared<std::vector<AshEngine::TerrainEditLayer>>();
+		return snapshot;
+	}
+
 	bool EqualHeightBlocks(
 		const std::vector<AshEngine::TerrainSparseHeightBlock>& lhs,
 		const std::vector<AshEngine::TerrainSparseHeightBlock>& rhs)
@@ -892,6 +900,139 @@ TEST_CASE("Terrain editor previews an active stroke by wall clock and records on
 	REQUIRE(service.GetPublishedSnapshot() != nullptr);
 	CHECK(service.GetPublishedSnapshot()->content_generation ==
 		service.GetWorkingSet()->content_generation);
+}
+
+TEST_CASE("Terrain editor auto-creates one edit layer inside the first effective stroke command")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeLayerlessEditorStrokeSnapshot()));
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	const uint64_t initial_generation = service.GetWorkingSet()->content_generation;
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
+
+	AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent();
+	begin.layer_id = {};
+	begin.brush.layer_id = {};
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(commands.record_count == 0u);
+
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(commands.record_count == 0u);
+
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	const AshEngine::TerrainLayerId auto_layer_id =
+		service.GetWorkingSet()->edit_layers.front().id;
+	CHECK(auto_layer_id.is_valid());
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Edit Layer");
+	CHECK_FALSE(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
+	CHECK(service.GetSelectedLayerId() == auto_layer_id);
+	CHECK(commands.record_count == 1u);
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	REQUIRE(commands.UndoLatest(context));
+	service.Update();
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+
+	REQUIRE(commands.RedoLatest(context));
+	service.Update();
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	CHECK(service.GetWorkingSet()->edit_layers.front().id == auto_layer_id);
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Edit Layer");
+	CHECK_FALSE(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
+	CHECK(service.GetSelectedLayerId() == auto_layer_id);
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+}
+
+TEST_CASE("Terrain editor rolls back an auto-created live preview layer on cancel")
+{
+	using namespace std::chrono_literals;
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	auto now = std::chrono::steady_clock::time_point{};
+	service.SetNowFunctionForTests([&now]() { return now; });
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeLayerlessEditorStrokeSnapshot()));
+
+	AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent();
+	begin.layer_id = {};
+	begin.brush.layer_id = {};
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	now += 80ms;
+	service.Update();
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	REQUIRE(service.GetPublishedSnapshot()->edit_layers->size() == 1u);
+
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(service.GetPublishedSnapshot()->edit_layers->empty());
+	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	CHECK(commands.record_count == 0u);
+}
+
+TEST_CASE("Terrain editor auto-creates the same generic edit layer for paint strokes")
+{
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeLayerlessEditorStrokeSnapshot()));
+
+	AshEditor::TerrainEditorIntent configure{};
+	configure.kind = AshEditor::TerrainEditorIntent::Kind::ConfigureAuthoring;
+	configure.mode = AshEditor::TerrainEditorMode::Paint;
+	configure.brush = MakeBeginStrokeIntent().brush;
+	configure.brush.tool = AshEngine::TerrainBrushTool::Paint;
+	configure.brush.layer_id = {};
+	configure.brush.material_layer_index = 2u;
+	REQUIRE(service.SubmitIntent(configure));
+
+	AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent();
+	begin.asset_id = service.GetSelectedAssetId();
+	begin.layer_id = {};
+	begin.brush = service.GetAuthoringConfig().brush;
+	REQUIRE(service.SubmitIntent(begin));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	const AshEngine::TerrainLayerId autoLayerId =
+		service.GetWorkingSet()->edit_layers.front().id;
+	CHECK(service.GetWorkingSet()->edit_layers.front().name == "Edit Layer");
+	CHECK_FALSE(service.GetWorkingSet()->edit_layers.front().weight_blocks.empty());
+	CHECK(commands.record_count == 1u);
+
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	REQUIRE(commands.UndoLatest(context));
+	service.Update();
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	REQUIRE(commands.RedoLatest(context));
+	service.Update();
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	CHECK(service.GetWorkingSet()->edit_layers.front().id == autoLayerId);
+	CHECK_FALSE(service.GetWorkingSet()->edit_layers.front().weight_blocks.empty());
 }
 
 TEST_CASE("Terrain editor preserves raw sample values and the frozen non-uniform metric")
@@ -2307,6 +2448,37 @@ TEST_CASE("Terrain editor history rejection publishes the rollback generation")
 	CHECK_FALSE(service.HasPendingComposition());
 	REQUIRE(service.GetPublishedSnapshot() != nullptr);
 	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration + 2u);
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+}
+
+TEST_CASE("Terrain editor history rejection removes its automatic edit layer atomically")
+{
+	RejectingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	AshEditor::EditorContext context{};
+	context.pTerrainEditorService = &service;
+	commands.p_context = &context;
+	REQUIRE(service.Initialize(commands));
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeLayerlessEditorStrokeSnapshot()));
+	const uint64_t initialGeneration = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent();
+	begin.layer_id = {};
+	begin.brush.layer_id = {};
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+
+	CHECK(commands.record_count == 1u);
+	CHECK(commands.rollback_succeeded);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 4u);
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
+	CHECK_FALSE(service.HasPendingComposition());
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration + 4u);
+	CHECK(service.GetPublishedSnapshot()->edit_layers->empty());
 	CHECK(service.GetWorkingSet()->dirty_components.empty());
 }
 

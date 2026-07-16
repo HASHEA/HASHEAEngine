@@ -128,6 +128,15 @@ namespace AshEditor
 			const std::vector<AshEngine::TerrainEditPatch>& refPatches,
 			AshEngine::TerrainEditPatchDirection eDirection,
 			uint64_t sequence);
+		bool ApplyStrokeTransactionPatches(
+			AshEngine::TerrainAssetId assetId,
+			AshEngine::TerrainLayerId layerId,
+			const std::vector<AshEngine::TerrainEditPatch>& refPatches,
+			const std::optional<AshEngine::TerrainLayerStackPatch>& refAutoLayerPatch,
+			AshEngine::TerrainLayerId selectedBefore,
+			AshEngine::TerrainLayerId selectedAfter,
+			AshEngine::TerrainEditPatchDirection eDirection,
+			uint64_t sequence);
 		bool ApplyLayerStackPatch(
 			AshEngine::TerrainAssetId assetId,
 			const AshEngine::TerrainLayerStackPatch& refPatch,
@@ -170,6 +179,7 @@ namespace AshEditor
 		{
 			AshEngine::TerrainAssetId asset_id = 0u;
 			AshEngine::TerrainLayerId layer_id{};
+			AshEngine::TerrainLayerId selected_before{};
 			uint64_t sequence = 0u;
 			AshEngine::TerrainBrushParameters parameters{};
 			AshEngine::TerrainBrushMetric metric{};
@@ -177,6 +187,7 @@ namespace AshEditor
 			std::vector<AshEngine::TerrainStrokeSample> raw_samples{};
 			AshEngine::TerrainStrokeResamplerState resampler{};
 			std::vector<AshEngine::TerrainEditPatch> aggregate_patches{};
+			std::optional<AshEngine::TerrainLayerStackPatch> auto_layer_patch{};
 			std::chrono::steady_clock::time_point next_preview_time{};
 			bool ending = false;
 			bool tail_flushed = false;

@@ -121,8 +121,19 @@ namespace AshEditor
 	bool TerrainEditorSessionCore::BeginStroke(const uint64_t sequence)
 	{
 		if (!_optWorkingSet || sequence == 0u || _activeSequence != 0u ||
-			_preview.query_status != AshEngine::TerrainQueryStatus::Ready ||
-			!_selectedLayerId.is_valid())
+			_preview.query_status != AshEngine::TerrainQueryStatus::Ready)
+		{
+			return false;
+		}
+		const bool layerlessSession =
+			_optWorkingSet->edit_layers.empty() && !_selectedLayerId.is_valid();
+		if (layerlessSession)
+		{
+			_activeSequence = sequence;
+			_preview.stroke_active = true;
+			return true;
+		}
+		if (!_selectedLayerId.is_valid())
 		{
 			return false;
 		}
@@ -194,6 +205,41 @@ namespace AshEditor
 			refDirtyComponents,
 			pError);
 		return applied;
+	}
+
+	bool TerrainEditorSessionCore::ApplyAutoLayerForStroke(
+		const uint64_t sequence,
+		const AshEngine::TerrainLayerStackEdit& refEdit,
+		AshEngine::TerrainLayerStackPatch& refPatch,
+		std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
+		std::string* pError)
+	{
+		if (pError)
+		{
+			pError->clear();
+		}
+		if (!_optWorkingSet || sequence == 0u || sequence != _activeSequence ||
+			_selectedLayerId.is_valid() || !_optWorkingSet->edit_layers.empty() ||
+			refEdit.kind != AshEngine::TerrainLayerStackEditKind::Add)
+		{
+			if (pError)
+			{
+				*pError = "Terrain automatic edit layer requires an active layerless stroke.";
+			}
+			return false;
+		}
+
+		if (!AshEngine::apply_terrain_layer_stack_edit(
+				*_optWorkingSet,
+				refEdit,
+				refPatch,
+				refDirtyComponents,
+				pError) || !refPatch.has_change())
+		{
+			return false;
+		}
+		SelectAfterLayerTransition(refPatch, AshEngine::TerrainEditPatchDirection::Redo);
+		return true;
 	}
 
 	bool TerrainEditorSessionCore::ApplyStrokePatches(

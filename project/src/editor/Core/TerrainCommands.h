@@ -5,6 +5,7 @@
 #include "Function/Asset/TerrainLayerStack.h"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace AshEditor
@@ -16,7 +17,10 @@ namespace AshEditor
 			AshEngine::TerrainAssetId assetId,
 			AshEngine::TerrainLayerId layerId,
 			uint64_t sequence,
-			std::vector<AshEngine::TerrainEditPatch> patches);
+			std::vector<AshEngine::TerrainEditPatch> patches,
+			std::optional<AshEngine::TerrainLayerStackPatch> autoLayerPatch = {},
+			AshEngine::TerrainLayerId selectedBefore = {},
+			AshEngine::TerrainLayerId selectedAfter = {});
 
 		const char* GetLabel() const override;
 		bool Execute(EditorContext& refContext) override;
@@ -31,6 +35,9 @@ namespace AshEditor
 		AshEngine::TerrainLayerId _layerId{};
 		uint64_t _sequence = 0;
 		std::vector<AshEngine::TerrainEditPatch> _patches{};
+		std::optional<AshEngine::TerrainLayerStackPatch> _autoLayerPatch{};
+		AshEngine::TerrainLayerId _selectedBefore{};
+		AshEngine::TerrainLayerId _selectedAfter{};
 	};
 
 	class TerrainLayerCommand final : public EditorCommand
