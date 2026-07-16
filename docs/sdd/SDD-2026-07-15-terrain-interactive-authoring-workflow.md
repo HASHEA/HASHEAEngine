@@ -2,7 +2,7 @@
 
 ## Status
 
-Review（聊天方案 2 已于 2026-07-15 获用户认可；本书面 SDD 待用户批准，批准前不修改生产代码或资产格式）
+Implementing（用户于 2026-07-15 批准本 SDD；production-size Base 深拷贝、远端 Component 跨代上传饥饿及编辑期查询/patch 热点均已修复并通过自动门禁，等待 Vulkan/DX12 人工重签）
 
 ## Context
 
@@ -97,6 +97,7 @@ Review（聊天方案 2 已于 2026-07-15 获用户认可；本书面 SDD 待用
 4. **Incremental preview transaction**
    - Begin 冻结 asset/layer/config/metric 和 lower-stack source，建立一个 active transaction；期间 mode/tool/layer/asset 切换继续被拒绝。
    - resampler 保存 segment continuation，只处理上次 preview 后的新路径；不得每 80–100 ms 重放整条 raw path。
+   - Flatten 的目标平面只在整笔首个有效 resampled dab 上从冻结 through-selected source 采样一次，并作为 active-stroke 状态传给后续所有 preview batch；禁止按 batch 的 `samples.front()` 重新采样。one-shot 与任意合法 incremental 分批必须得到相同 canonical affine block。
    - wall-clock deadline 默认 80 ms，允许 80–100 ms cadence；到期且无 pending publication 时 apply 新 segment。刷新条件不是 frame count。
    - 每次 preview mutation 产生新的 content generation，并以完整 dirty set 原子 compose/publish；同一 transaction 的 patch 在内存中按 sample identity 合并为“stroke 前值 → 当前值”。
    - history 在 End 前不入栈。End 等最后 composition/publication 成功后只提交一条 command；Undo/Redo 各自只推进一次对应 mutation generation。
@@ -113,6 +114,8 @@ Review（聊天方案 2 已于 2026-07-15 获用户认可；本书面 SDD 待用
    - 同 asset selection 为 no-op，保留 pending load、drafts、active tab 和 diagnostics。
    - 选择另一 Terrain 时沿用现有 session replacement contract：dirty/conflict/file operation/pending composition/quarantine 阻止切换并显示原因；绝不 silent discard。
    - Terrain Mode 打开时会同步检查当前 primary selection，解决“先选 entity、后开 panel”没有新 event 的情况。
+   - authoring session 的加载/dirty 状态与 viewport tool ownership 分离。视口只有在 Terrain Mode 面板打开，且当前恰好单选当前 Terrain Entity 或当前 Terrain asset 时，才允许 Sculpt/Paint 接管 LMB、W/E/R 和 brush overlay。
+   - 面板关闭、空选、多选、选择其他 asset/entity 或 Terrain asset identity 失配时，保留已加载 working set、dirty/history、tab/config 和 diagnostics，但立即清除 preview 并归还 gizmo/selection 输入；若当时有 active stroke，必须按既有 Cancel 合同回滚整笔后再失活。
 
 7. **Terminology and UI**
    - `Edit Layers / 地形编辑层`：非破坏 stack，可排序/隐藏/锁定/强度。
@@ -129,6 +132,7 @@ Review（聊天方案 2 已于 2026-07-15 获用户认可；本书面 SDD 待用
 
 - affine composition 与现有 value+coverage 同为每 sample 常数级运算，不增加 block 渐近复杂度；canonical block仍按 owner Component 稀疏存储。
 - incremental preview 只处理新增 resampled dabs和受影响 Components；禁止 O(total stroke history) 重放。
+- production-size Base Import 在 authoring session 内不可变；`TerrainWorkingSet`、打开时的 source snapshot 与所有 preview publication 必须共享同一 Base R16 allocation。笔刷只修改稀疏 edit layers，禁止为每次预览复制 8193² 高度数组。
 - visual feedback latency P95 `<=150 ms`；一次拖动 history count delta 必须为 1。
 - Standard PerfGate threshold 不调整。实时笔刷是人工/定向 workload，不用 Standard 平均值掩盖交互 hitch。
 
@@ -137,7 +141,7 @@ Review（聊天方案 2 已于 2026-07-15 获用户认可；本书面 SDD 待用
 | 验证 | 覆盖 | 命令 |
 | --- | --- | --- |
 | Function focused | affine composition/left-composition、v1 exact migration、patch merge/rollback、deterministic brush | `RunTests.bat Debug --test-case="*Terrain*"` 精确 filters |
-| Editor focused | entity auto-bind、layerless first stroke、single history、80ms wall-clock、coalescing、cancel/failure rollback、dirty/conflict block | Terrain editor/service/contract doctest filters |
+| Editor focused | entity auto-bind、panel/selection authoring eligibility、失活中途整笔 cancel、layerless first stroke、single history、80ms wall-clock、跨 batch 固定 Flatten target、coalescing、cancel/failure rollback、dirty/conflict block | Terrain editor/service/contract doctest filters |
 | 全量单测 | Debug/Release、legacy bridge、内存释放 | `RunTests.bat Debug`；`RunTests.bat Release` |
 | 构建 | Editor/Sandbox + container consumers | `build_editor.bat Debug/Release`；`build_sandbox.bat Debug/Release` |
 | 架构/计划 | UIContext-only、层级依赖、SDD/spec | `RunArchGate.bat`；`AIDevDoctor.ps1 -Mode ValidatePlan` |
@@ -158,6 +162,18 @@ Review（聊天方案 2 已于 2026-07-15 获用户认可；本书面 SDD 待用
 7. 收敛 UI 文案与默认 tab/selection，移除普通流程的 Additive/Alpha 控件，区分地形编辑层和材质槽。
 8. 完成全量 CPU/build/ArchGate/AIDevDoctor 后协调 GPU，串行双后端 readiness/validation/RenderGate/PerfGate；最后由用户人工签署。
 9. 回写 Terrain/editor spec、本 SDD validation record；v1 migration、实时 preview 或直接编辑任一未签署不得标记 Done。
+
+## Validation record
+
+- 2026-07-16 首次人工 Vulkan 签署确认单笔 history 与中途取消有效，但实时雕刻仍表现为松手后才更新，编辑模式约 10 FPS，松手后还需等待数秒。该会话启用了 GPU-assisted/core validation，因此帧率不能作为正常模式基线；但 publication 延迟属于真实缺陷。
+- 根因是 `make_terrain_working_set` 在打开 authoring 时复制整张 Base 高度图，`publish_terrain_working_set` 又在每个约 80 ms 的 preview generation 同步复制一次。production 8193² R16 为 67,125,249 samples，单次复制约 128 MiB；该主线程复制足以阻塞后续 preview dispatch并造成大幅内存带宽/峰值压力。
+- RED/GREEN 以 Base pointer identity 锁定结构合同：working set 与 source snapshot 共享 Base，dirty publication 后新 snapshot 仍共享相同 Base；mutable edit-layer stack 和 dirty Component snapshot 继续保持独立/不可变发布。
+- 修复后的自动证据：Debug/Release full tests exit 0（Debug 491/491、25,987 assertions）；Editor/Sandbox Debug/Release build PASS；ArchGate PASS（35 条既有 legacy WARN）；AIDevDoctor PASS；Terrain scene 四组合 Debug readiness exit 0；non-bless RenderGate `20260716-122708-552-69308-316ad9bb` PASS；Standard PerfGate `20260716-122813-2933376-2158fb09` PASS。20 份 fresh runtime logs 拒绝词为 0，四份运行配置逐字节恢复，未 bless baseline/golden。
+- 上述自动证据不代替人工实时交互签署。最终 Done 仍要求用户在正常非 validation Vulkan/DX12 Editor 中确认拖动期间约 80–100 ms 可见更新、松手无数秒 stall、完整拖动一条 history，并记录正常模式帧率。
+- 2026-07-16 正常非 validation Vulkan 人工复测确认：编辑模式约 60 FPS，靠近 Terrain 原点时可在拖动中看到预览，`Ctrl+Z` 正确撤销整笔；远离原点的 Component 仍只在松手后刷新。根因不是 brush 坐标或 layer transaction，而是上一 preview generation 尚为 `Pending` 时，`TerrainRenderAsset::accept_snapshot` 把 pointer-equal 的全部 1024 个 resident Component 重新按 row-major 排队；每代只在 4 MiB / 2 ms budget 内从 `(0,0)` 开始消费，连续约 80 ms generation 因而反复让近端先完成、远端饥饿。
+- 跨代 coalescing 修复改为只携带真正未完成的 height/weight/reset/removal，并重绑新 generation；已完成且 pointer-equal 的 height 直接复用，resident weight slot 原地重绑，新变化尾插。RED 证明部分完成后旧逻辑会重新产生 3 个 height work 且丢失 pending reset；GREEN 为 14/14 render-asset tests、151/151 assertions。失败恢复仍保留全量重建。
+- 编辑模式剩余 CPU 热点是每帧 brush cursor 的精确 Terrain ray cast：旧路径会对全部 XZ 候选先分配并深验 min/max 层级。现保留所有候选的常数级 shape fail-closed 校验，按 XZ entry 下界前到后遍历，仅对可能优于已确认最近命中的候选执行深验；far min/max 损坏可在安全 early-out 后跳过，far shape 损坏仍立即 `Failed` 且不写输出。拖动期还删除了 service 在每次增量合并前对持续增长 aggregate patch 的外层重复深拷贝；merge API 自身继续用局部副本提供强异常保证，late-failure 回归精确验证解码后的重叠 source 不连续时 aggregate 全字段不变。focused ray tests 为 4/4、31/31，focused merge test 为 1/1、55/55；最终帧率与远端可见 cadence 仍需人工重测。
+- 远端修复后的最终自动证据：Debug/Release full tests 均为 496/496 PASS、1 skipped、26,066 assertions；Editor/Sandbox Debug/Release build PASS；ArchGate PASS（35 条既有 legacy WARN）；AIDevDoctor PASS。四组合 Debug readiness exit 0；non-bless RenderGate `20260716-152459-779-58936-495b311c` PASS；Standard PerfGate `20260716-152553-5984733-eb4acc47` PASS；Release Empty PerfGate `20260716-152906-0383313-a583cec9` PASS。28 份 fresh runtime logs 拒绝词为 0，四份运行配置逐字节恢复，performance baseline SHA-256 保持 `543EBC04B0AA2286AF61DB865297C53164B45BCF9E60A9CBEF88745400FF1214`，未 bless baseline/golden。上述结果仍不代替远端实时笔刷与正常模式帧率的人工签署。
 
 ## Risks
 
