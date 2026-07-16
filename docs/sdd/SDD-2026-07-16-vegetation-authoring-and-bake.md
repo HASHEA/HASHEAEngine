@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved（2026-07-16；用户批准 contract-first 方案，并授权后续阶段采用明确标注的推荐方案时无需重复等待）
+Approved（2026-07-16；用户批准 contract-first 方案，并授权后续阶段采用明确标注的推荐方案时无需重复等待；Task 2 codec 执行澄清于同日按该持续授权并入）
 
 ## Context
 
@@ -228,6 +228,22 @@ cell fraction 直接使用 jitter 的最高16位，表示 `value / 65536` 的严
 normal使用已由surface wrapper单位化的 `(x,y,z)`，其中Y为world-up。先计算 `inv_l1=1/(abs(x)+abs(y)+abs(z))` 和 `old=(x*inv_l1,z*inv_l1)`；若 `y<0`，则同时更新为 `((1-abs(old.y))*sign_not_zero(old.x), (1-abs(old.x))*sign_not_zero(old.y))`，且 `sign_not_zero(0)=+1`。每分量 clamp 到 `[-1,1]`，再 `round_ties_even(value*32767)` 到i16并把negative-zero规范为0。golden vectors固定为 world-up→`(0,0)`、+X→`(32767,0)`、+Z→`(0,32767)`、world-down→`(32767,32767)`；yaw random high16为`0x8000`时落盘32768；scale `(min,max,r)=(3277,4915,32768)`时落盘4096。任何超范围/非有限值使整个 chunk失败，禁止 clamp或饱和后伪装成功。records 使用唯一 total key `(species_id, cell_z, cell_x, candidate_ordinal)` 排序；key字段进入record，所以量化位置碰撞仍不依赖生成/线程顺序。payload后必须精确EOF。Phase 3只从 Chunk DTO转换为 `GpuDrivenInstancePageDesc`，Asset层不 include Render类型。
 
 所有 count/size/乘法先做 checked arithmetic；未知 version、reserved非零、尾随 bytes、未排序/重复 record、非法 UTF-8、CRC、SHA或 shape错误均 fail closed。
+
+#### Codec v1 逻辑成本与 canonical reader 澄清
+
+`VegetationLoadCost::decoded_bytes` 是与 C++ 对象布局无关的稳定逻辑成本。v1 固定使用下列 checked 算式；空字符串贡献0，所有字符串长度均为 canonical UTF-8 byte count：
+
+- Species：`70 + 4 * mesh_lod_count + name_bytes + Σ(mesh_path_bytes + Σ(material_path_bytes)) + impostor_path_bytes + chunk_hlod_path_bytes`。固定70 bytes由species ID 16、bounds int32×6、candidate u16、scale u16×2、slope u16×2、两个8-byte slot数组，以及align/shadow/two-sided/deformation各1 byte组成；每个LOD固定4 bytes只计`screen_error_milli`。
+- Layer：`32 + Σ(48 + palette_path_bytes) + 16 * tile_count + Σ(17 + 1024)`，最后一项对每个已展开plane计一次。固定32 bytes为layer ID、generation和seed；palette固定48 bytes为ID+SHA；tile固定16 bytes为两轴坐标；plane固定17 bytes为kind+species ID，另计完整1024-byte R8值。
+- Chunk：`112 + Σ(48 + species_path_bytes) + 28 * instance_count`。固定112 bytes为layer ID、input SHA、chunk coord、surface ID、三项revision和精确height extrema；instance一律按wire的28-byte逻辑record收费。
+
+Species 的 `palette_records/tile_records/instance_records` 全为0；Layer分别为palette/tile/0；Chunk分别为species/0/instance。`file_bytes`为输入快照长度；Species `payload_bytes=file_bytes`，Layer/Chunk为header声明且经EOF核对的payload长度。所有预算均允许`actual == max`，0就是0预算。失败将DTO、cost与encode输出清空；encode先写临时buffer，全部验证成功后才发布。
+
+Layer plane writer先合并相邻同值texel形成最大RLE runs，仅当`3 * run_count < 1024`时使用RLE，否则使用Raw。合法run count下不存在恰好1024-byte的RLE；可执行边界是341 runs = 1023 bytes必须RLE、342 runs = 1026 bytes必须Raw。reader解码并校验CRC后必须从展开值重算同一canonical编码，要求codec及encoded bytes逐字节相等；因此拒绝可更短的Raw、非最大相邻runs和其他同值不同字节表示。这样合法Layer具有唯一writer byte stream。
+
+Standalone Chunk codec拒绝全零layer ID、input SHA或surface ID；revision允许0。instance的`scale_q12`为`1..65535`，normal oct每轴为`-32767..32767`，cell/candidate为`0..255`，fraction/yaw接受完整u16。Task 2只验证已量化wire字段；随机数到yaw/scale、浮点height/normal到整数record的派生helper与golden属于Task 8，不在Task 2新增单调用点API。
+
+Canonical text fixture由仓库属性强制`*.AshVegetation text eol=lf`；Layer/Chunk二进制扩展强制`-text`，避免Windows checkout改写测试与后续人工资产字节。
 
 `AssetDatabase` 为三类资产提供 immutable `shared_ptr<const T>` 的同步/异步 typed load，并复用现有 load-state/error contract。Phase 2 不增加 render readiness；资产/烘焙状态只由 AssetDatabase 与 Editor service 报告。
 

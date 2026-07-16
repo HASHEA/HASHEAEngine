@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Ready for execution against approved SDD SHA-256 `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`.
+**Status:** Ready for execution against approved SDD SHA-256 `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9` (includes the approved Task 2 codec execution clarification).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -16,7 +16,7 @@
 
 - Execute only in worktree `D:\workspace\AshEngine\HASHEAEngine\.worktrees\gpu-driven-vegetation-phase2` on branch `codex/gpu-driven-vegetation-phase2`.
 - Starting integration point is approved-design amendment commit `9b47dbaa0ca8856480db65b444c320767237fb1d` (approved base design `24d88c9bba3195caf0d8c2b8d5cc835612a44faa`); do not rebase a dirty implementation task.
-- Design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`. If the hash changes before Task 12, stop and review the new document before continuing. Task 12 alone may update Status/conclusions after all evidence exists and must record both this approved input hash and the final archived hash.
+- Design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`. If the hash changes before Task 12, stop and review the new document before continuing. Task 12 alone may update Status/conclusions after all evidence exists and must record both the original approved input hash `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, this execution-clarified input hash, and the final archived hash.
 - Existing user-owned dirty files are:
   - `project/thirdparty/tracy/tracy-csvexport.exe`
   - `project/thirdparty/tracy/tracy-profiler.exe`
@@ -85,7 +85,7 @@ namespace AshEngine
 ```
 
 - All decode APIs take a caller-provided `VegetationLoadBudget`; zero is a zero budget, not an implicit unlimited value.
-- `VegetationLoadCost` is wire-derived, not allocator-derived: `file_bytes` is the exact immutable byte snapshot length; `payload_bytes` is the declared binary payload length (or the exact Species JSON byte length); `decoded_bytes` is the checked sum of canonical UTF-8 string bytes, fixed logical records, and fully expanded 1024-byte planes/28-byte instance records. Counts are exact logical record counts. Never use `sizeof` on implementation DTOs, vector capacity, allocator overhead, or cache-container cost. The codec computes every term with checked arithmetic before allocation; cached admission reuses this exact value.
+- `VegetationLoadCost` is wire-derived, not allocator-derived: `file_bytes` is the exact immutable byte snapshot length; `payload_bytes` is the declared binary payload length (or the exact Species JSON byte length). `decoded_bytes` uses the exact v1 formulas locked in the SDD: Species `70 + 4*LOD count + all canonical DTO string bytes`; Layer `32 + Σ(48+palette path bytes) + 16*tile count + Σ(17+1024 per plane)`; Chunk `112 + Σ(48+species path bytes) + 28*instance count`. Counts are exact logical record counts. Never use `sizeof` on implementation DTOs, vector capacity, allocator overhead, or cache-container cost. The codec computes every term with checked arithmetic before DTO allocation/publication; cached admission reuses this exact value.
 - `VegetationComponent::surface_entity_id` is a `uint64_t` in `SceneComponents.h`. `EntityId` remains declared in `Scene.h`, which includes `SceneComponents.h`, so using the alias in the component header would create an ordering dependency.
 - All test names begin with `Vegetation` so `RunTests.bat <Config> --test-case="*Vegetation*"` is the common focused gate.
 
@@ -290,6 +290,7 @@ git commit -m "feat(vegetation): add core and surface contracts"
 
 - Create: `project/src/engine/Function/Asset/VegetationSpecies.h`
 - Create: `project/src/engine/Function/Asset/VegetationSpecies.cpp`
+- Create: `project/src/engine/Function/Asset/VegetationAssetCodecInternal.h`
 - Create: `project/src/engine/Function/Asset/VegetationLayer.h`
 - Create: `project/src/engine/Function/Asset/VegetationLayer.cpp`
 - Create: `project/src/engine/Function/Asset/VegetationChunk.h`
@@ -298,6 +299,8 @@ git commit -m "feat(vegetation): add core and surface contracts"
 - Create: `project/src/tests/fixtures/vegetation/Phase2ManualSpeciesReplacement.AshVegetation`
 - Create: `project/src/tests/Vegetation/vegetation_asset_format_tests.cpp`
 - Modify: `project/src/tests/Vegetation/VegetationTestSupport.h`
+- Modify: `docs/specs/modules/asset.md`
+- Modify: `.gitattributes`
 
 - [ ] **Step 1: Write strict-format RED cases**
 
@@ -306,6 +309,8 @@ Create the reviewed fixture directory before adding files:
 ```powershell
 New-Item -ItemType Directory -Force project/src/tests/fixtures/vegetation | Out-Null
 ```
+
+Before writing either canonical text fixture, add `*.AshVegetation text eol=lf`, `*.AshVegetationLayer -text`, and `*.AshVegetationChunk -text` to `.gitattributes`; fixture byte identity must not depend on a Windows checkout's `core.autocrlf` setting.
 
 Use canonical in-memory fixtures and mutate one byte/field at a time. The first cases include:
 
@@ -360,9 +365,9 @@ Add exact cases for:
 - name `1..256` bytes; asset path `1..4096` bytes; mesh path non-empty; material count `1..64`; LOD count `1..16`; `screen_error_milli 1..1000000` strictly increasing; ordered int32 bounds with `min < max`; candidates `1..256`; scale `1..65535`; slope `0..1571`; exact eight slot values; deformation enum;
 - nonzero lowercase 128-bit IDs and canonical asset-root-relative `/` paths without absolute, `.`, or `..` components;
 - ASVL exact 80-byte header, `tile_resolution=32`, `tile_size_cm=3200`, palette `0..65534`, nonzero generation/ID, CRC coverage, strict EOF, sort/duplicate/reserved rejection;
-- raw/RLE tie chooses Raw, RLE run sum 1024, decoded CRC, density-first, sorted weight planes, no all-zero plane or density-zero tile;
+- maximal RLE with 341 runs (1023 bytes) chooses RLE while 342 runs (1026 bytes) chooses Raw; reader rejects the opposite codec and non-maximal same-value run splits; also cover RLE sum 1024, decoded CRC, density-first, sorted weight planes, no all-zero plane or density-zero tile;
 - ASVC exact 160-byte header and 28-byte records; standalone codec species count `1..65534`; instances `1..u32 max` within budget; every species referenced; every species index and cell valid; candidate ordinal must be within the schema-wide `0..255` bound. A nonempty Chunk requires header `min_height_mm <= max_height_mm`, every record height inside that range, and canonical writer extrema equal the exact min/max record values; CRC-repaired loose or false extrema are rejected. A fixture accepts 65534 species and rejects 65535; zero-instance chunk is rejected because absence is represented by deleting its manifest coordinate. Actual `candidate_ordinal < referenced_species.candidates_per_cell` is a cross-asset semantic check in Task 3 typed Chunk load; source-Layer palette subset/count remains Task 8 where the Layer is available;
-- cell fraction `[0,65535]`, yaw `0x8000 -> 32768`, scale `(3277,4915,32768) -> 4096`, normal oct up/+X/+Z/down vectors, int32 height rounding, total record ordering, tail/CRC/shape corruption;
+- cell fraction/yaw full-u16 wire values, scale `1..65535`, normal oct `[-32767,32767]`, exact int32 height/extrema, total record ordering, tail/CRC/shape corruption; Task 8 owns random/float-to-record quantization helpers and their scale/normal/height golden vectors;
 - caller budgets for file bytes, payload bytes, decoded bytes, palette, tiles, and instances, each proving the output object remains empty after rejection.
 
 - [ ] **Step 2: Run RED**
@@ -415,7 +420,9 @@ ASH_API bool encode_vegetation_chunk(
     std::string* out_error);
 ```
 
-Parse binary streams field-by-field; never read a packed struct. Check every count, addition, multiplication, allocation, and string length before allocation. Decode into local temporaries and move into outputs only after header, payload, CRC, ordering, identity, shape, and exact EOF validation all succeed. On success return the exact `VegetationLoadCost`; on failure leave both DTO and cost zero. Species JSON uses a duplicate-key-aware parse path and native JSON type inspection; it must not use permissive numeric/string conversion.
+The public value DTOs use only wire-semantic fields: Species stores a 16-byte ID, UTF-8 name, ordered LODs (mesh path, material paths, `uint32_t screen_error_milli`), two `std::array<int32_t,3>` bounds, placement scalar/slot fields, native booleans, deformation enum and optional render paths. Layer stores ID/generation/seed, sorted `VegetationSpeciesReference { id, sha256, asset_path }`, and sorted tiles whose planes own expanded `std::array<uint8_t,1024>` values. Chunk stores layer/input/chunk/surface identity, exact height extrema, the same sorted Species references, and 28-byte-semantic instance fields. It does not expose encoded RLE buffers or packed headers.
+
+Parse binary streams field-by-field; never read a packed struct. `VegetationAssetCodecInternal.h` is a non-exported three-codec implementation seam for checked add/multiply/narrowing, bounds-owning little-endian cursor/writer, strict JSON scalar/path validation, budget admission, and shared palette records; it must not expose DTO behavior or be included outside these codecs. Check every count, addition, multiplication, allocation, and string length before allocation. Decode into local temporaries and move into outputs only after header, payload, CRC, ordering, identity, shape, exact logical-cost computation and exact EOF validation all succeed. On success return the exact `VegetationLoadCost`; on failure leave DTO, cost, and encode output empty. Species JSON uses a duplicate-key-aware parse path and native JSON type inspection; it must not use permissive numeric/string conversion. Layer writer merges adjacent equal texels into maximal RLE runs and selects RLE only when strictly shorter than 1024 bytes; reader decodes, validates CRC, re-encodes, and requires exact codec/encoded-byte equality. Standalone Chunk rejects zero layer/input/surface identity, zero scale and oct `-32768`; revision zero remains legal.
 
 - [ ] **Step 4: Run GREEN and corruption regression**
 
@@ -429,7 +436,7 @@ RunTests.bat Release --test-case="Vegetation Layer codec*"
 RunTests.bat Release --test-case="Vegetation Chunk codec*"
 RunTests.bat Debug --test-case="Vegetation core*"
 RunArchGate.bat
-git diff --check -- project/src/engine/Function/Asset/VegetationSpecies.h project/src/engine/Function/Asset/VegetationSpecies.cpp project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationChunk.h project/src/engine/Function/Asset/VegetationChunk.cpp project/src/tests/fixtures/vegetation/Phase2ManualSpecies.AshVegetation project/src/tests/fixtures/vegetation/Phase2ManualSpeciesReplacement.AshVegetation project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_format_tests.cpp
+git diff --check -- .gitattributes docs/specs/modules/asset.md project/src/engine/Function/Asset/VegetationAssetCodecInternal.h project/src/engine/Function/Asset/VegetationSpecies.h project/src/engine/Function/Asset/VegetationSpecies.cpp project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationChunk.h project/src/engine/Function/Asset/VegetationChunk.cpp project/src/tests/fixtures/vegetation/Phase2ManualSpecies.AshVegetation project/src/tests/fixtures/vegetation/Phase2ManualSpeciesReplacement.AshVegetation project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_format_tests.cpp
 ```
 
 - [ ] **Step 5: Review and selectively commit**
@@ -437,7 +444,7 @@ git diff --check -- project/src/engine/Function/Asset/VegetationSpecies.h projec
 Review 1 compares every byte offset, CRC domain, range, canonical ordering, and shape against the locked SDD. Review 2 attempts scalar-array coercion, overflow, tail, duplicate, and tiny-budget bypasses and confirms no partial output.
 
 ```bat
-git add -- project/src/engine/Function/Asset/VegetationSpecies.h project/src/engine/Function/Asset/VegetationSpecies.cpp project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationChunk.h project/src/engine/Function/Asset/VegetationChunk.cpp project/src/tests/fixtures/vegetation/Phase2ManualSpecies.AshVegetation project/src/tests/fixtures/vegetation/Phase2ManualSpeciesReplacement.AshVegetation project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_format_tests.cpp
+git add -- .gitattributes docs/specs/modules/asset.md project/src/engine/Function/Asset/VegetationAssetCodecInternal.h project/src/engine/Function/Asset/VegetationSpecies.h project/src/engine/Function/Asset/VegetationSpecies.cpp project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationChunk.h project/src/engine/Function/Asset/VegetationChunk.cpp project/src/tests/fixtures/vegetation/Phase2ManualSpecies.AshVegetation project/src/tests/fixtures/vegetation/Phase2ManualSpeciesReplacement.AshVegetation project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_format_tests.cpp
 git commit -m "feat(vegetation): add strict asset codecs"
 ```
 
