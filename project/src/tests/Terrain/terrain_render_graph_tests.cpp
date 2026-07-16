@@ -364,9 +364,14 @@ TEST_CASE("Terrain surface treats empty weights as implicit layer zero")
 		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
 	const std::string terrain_pass = ReadSource(
 		"project/src/engine/Function/Render/TerrainRenderPass.cpp");
+	const std::string compact_surface = CompactSource(surface);
 
 	CHECK(common.find("implicit_layer_zero") != std::string::npos);
 	CHECK(surface.find("input.implicit_layer_zero") != std::string::npos);
+	CHECK(compact_surface.find(
+		"constAshTerrainInstanceweight_instance={input.component_coord,0u,0u,"
+		"0.0,input.atlas_slot,input.high_resolution_weights!=0u,"
+		"input.implicit_layer_zero!=0u};") != std::string::npos);
 	CHECK(surface.find("float4(1.0, 0.0, 0.0, 0.0)") !=
 		std::string::npos);
 	CHECK(terrain_pass.find("implicit_layer_zero ? 2u : 0u") !=

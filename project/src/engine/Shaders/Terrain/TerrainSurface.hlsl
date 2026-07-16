@@ -212,7 +212,8 @@ AshTerrainGBufferOutput PSMain(AshTerrainVertexOutput input)
         0u,
         0.0,
         input.atlas_slot,
-        input.high_resolution_weights != 0u
+        input.high_resolution_weights != 0u,
+        input.implicit_layer_zero != 0u
     };
     const float2 weight_uv = input.high_resolution_weights != 0u ?
         AshTerrainAtlasUv(weight_instance, input.local_sample) :
