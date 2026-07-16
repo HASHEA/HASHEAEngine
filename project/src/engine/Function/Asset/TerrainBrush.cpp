@@ -185,13 +185,13 @@ namespace AshEngine
 		{
 			const size_t global_index =
 				static_cast<size_t>(sample_z) * working_set.layout.sample_count_x + sample_x;
-			if (global_index >= working_set.base_heights.size())
+			if (!working_set.base_heights || global_index >= working_set.base_heights->size())
 			{
 				return fail(out_error, "Terrain brush base-height storage is invalid.");
 			}
 
 			double height = decode_terrain_height_r16(
-				working_set.base_heights[global_index],
+				(*working_set.base_heights)[global_index],
 				working_set.height_mapping);
 			const TerrainComponentCoord owner =
 				get_terrain_sample_owner(working_set.layout, sample_x, sample_z);
@@ -1092,15 +1092,19 @@ namespace AshEngine
 		{
 			return false;
 		}
+		// editor begin 修改原因：one-shot 入口也显式建立整笔 stroke 的 Flatten 目标状态。
+		TerrainBrushStrokeTargetState target_state{};
 		return apply_resampled_terrain_brush_dabs(
 			working_set,
 			params,
 			metric,
 			working_set.edit_layers,
+			target_state,
 			resampled_dabs,
 			out_patches,
 			out_dirty_components,
 			out_error);
+		// editor end
 	}
 
 	bool apply_resampled_terrain_brush_dabs(
@@ -1108,6 +1112,9 @@ namespace AshEngine
 		const TerrainBrushParameters& params,
 		const TerrainBrushMetric& metric,
 		const std::vector<TerrainEditLayer>& frozen_edit_layers,
+		// editor begin 修改原因：接收 Editor ActiveStroke 持有的跨批 Flatten 目标状态。
+		TerrainBrushStrokeTargetState& target_state,
+		// editor end
 		const std::vector<TerrainStrokeSample>& resampled_dabs,
 		std::vector<TerrainEditPatch>& out_patches,
 		std::vector<TerrainComponentCoord>& out_dirty_components,
@@ -1158,7 +1165,8 @@ namespace AshEngine
 					working_set.layout.sample_count_x,
 					working_set.layout.sample_count_z,
 					global_sample_count) ||
-				working_set.base_heights.size() != global_sample_count ||
+				!working_set.base_heights ||
+				working_set.base_heights->size() != global_sample_count ||
 				!checked_multiply(
 					working_set.layout.component_count_x,
 					working_set.layout.component_count_z,
@@ -1265,19 +1273,36 @@ namespace AshEngine
 			std::vector<int32_t> candidate_lookup(component_count, -1);
 			std::vector<HeightCandidate> height_candidates{};
 			std::vector<WeightCandidate> weight_candidates{};
+			// editor begin 修改原因：仅 Flatten 读取状态；首次有效 dab 从 Begin 时冻结源采样候选值。
 			float flatten_target = 0.0f;
-			if (params.tool == TerrainBrushTool::Flatten &&
-				!sample_frozen_height_bilinear(
-					working_set,
-					frozen_edit_layers,
-					frozen_lookups,
-					selected_layer_index,
-					samples.front().terrain_local_xz,
-					flatten_target,
-					out_error))
+			bool captured_flatten_target = false;
+			if (params.tool == TerrainBrushTool::Flatten)
 			{
-				return false;
+				if (target_state.flatten_height.has_value())
+				{
+					flatten_target = *target_state.flatten_height;
+					if (!std::isfinite(flatten_target))
+					{
+						return fail(out_error, "Terrain Flatten stroke target is not finite.");
+					}
+				}
+				else
+				{
+					if (!sample_frozen_height_bilinear(
+							working_set,
+							frozen_edit_layers,
+							frozen_lookups,
+							selected_layer_index,
+							samples.front().terrain_local_xz,
+							flatten_target,
+							out_error))
+					{
+						return false;
+					}
+					captured_flatten_target = true;
+				}
 			}
+			// editor end
 
 			const double radius = params.radius_meters;
 			const double terrain_radius_x = radius / metric.world_meters_per_terrain_meter.x;
@@ -1548,6 +1573,12 @@ namespace AshEngine
 			{
 				std::vector<TerrainComponentCoord> current_dirty = working_set.dirty_components;
 				out_dirty_components.swap(current_dirty);
+				// editor begin 修改原因：空 canonical mutation 仍是成功消费的首个有效 Flatten dab。
+				if (captured_flatten_target)
+				{
+					target_state.flatten_height = flatten_target;
+				}
+				// editor end
 				return true;
 			}
 			if (working_set.content_generation == std::numeric_limits<uint64_t>::max())
@@ -1667,6 +1698,12 @@ namespace AshEngine
 			working_set.dirty_components.swap(dirty);
 			out_patches.swap(patches);
 			out_dirty_components.swap(dirty_output);
+			// editor begin 修改原因：整批 mutation 成功后才提交候选 target，失败保持调用方状态不变。
+			if (captured_flatten_target)
+			{
+				target_state.flatten_height = flatten_target;
+			}
+			// editor end
 			return true;
 		}
 		catch (const std::bad_alloc&)

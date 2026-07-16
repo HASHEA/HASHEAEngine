@@ -1,15 +1,44 @@
 #pragma once
 
+#include "Core/EditorSelection.h"
 #include "Core/TerrainEditorSessionCore.h"
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
+#include <vector>
+
 namespace AshEditor
 {
+	struct TerrainViewportAuthoringContextInput
+	{
+		bool panel_open = false;
+		size_t selection_count = 0u;
+		bool primary_matches_only_selection = false;
+		bool selection_resolves_to_terrain = false;
+		AshEngine::TerrainAssetId selected_asset_id = 0u;
+		AshEngine::TerrainAssetId selection_asset_id = 0u;
+	};
+
+	using TerrainViewportEntityAssetResolver = AshEngine::TerrainAssetId (*)(
+		uint64_t entityId,
+		const void* pContext);
+	using TerrainViewportAssetResolver = AshEngine::TerrainAssetId (*)(
+		uint64_t assetId,
+		const void* pContext);
+
+	struct TerrainViewportSelectionAssetResolvers
+	{
+		TerrainViewportEntityAssetResolver pResolveEntityAsset = nullptr;
+		TerrainViewportAssetResolver pResolveAsset = nullptr;
+		const void* pContext = nullptr;
+	};
+
 	struct TerrainViewportRouteInput
 	{
 		bool primary_scene_viewport = false;
 		bool accepts_input = false;
+		bool authoring_context_active = false;
 		bool viewport_hovered = false;
 		bool pointer_inside = false;
 		TerrainEditorMode mode = TerrainEditorMode::Manage;
@@ -49,6 +78,14 @@ namespace AshEditor
 
 	TerrainViewportRouteResult route_terrain_viewport_input(
 		const TerrainViewportRouteInput& refInput);
+	TerrainViewportAuthoringContextInput build_terrain_viewport_authoring_context_input(
+		bool panelOpen,
+		const EditorSelection& refPrimarySelection,
+		const std::vector<EditorSelection>& refSelections,
+		AshEngine::TerrainAssetId selectedAssetId,
+		const TerrainViewportSelectionAssetResolvers& refResolvers);
+	bool is_terrain_viewport_authoring_context_active(
+		const TerrainViewportAuthoringContextInput& refInput);
 	bool build_terrain_viewport_stroke_sample(
 		const TerrainViewportHitSampleInput& refInput,
 		AshEngine::TerrainStrokeSample& outSample,

@@ -391,7 +391,7 @@ namespace AshEditor
 				const bool terrainOwnsSceneTools =
 					refDeps.pViewportService->IsPrimaryViewport(strViewportId) &&
 					ViewportPanelTerrainInteraction::IsAuthoringMode(
-						refDeps.pTerrainEditorService);
+						refDeps);
 				HandleSceneViewportModeShortcuts(
 					*refFrameContext.pUiContext,
 					inputState,

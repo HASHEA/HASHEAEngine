@@ -2271,7 +2271,30 @@ namespace AshEditor
 					});
 			if (!hasEffectivePressure)
 			{
+				if (stroke.parameters.tool == AshEngine::TerrainBrushTool::Flatten &&
+					!stroke.pending_flatten_target_dab)
+				{
+					stroke.pending_flatten_target_dab = newSamples.front();
+				}
 				return true;
+			}
+			if (stroke.parameters.tool == AshEngine::TerrainBrushTool::Flatten &&
+				stroke.pending_flatten_target_dab)
+			{
+				try
+				{
+					newSamples.insert(newSamples.begin(), *stroke.pending_flatten_target_dab);
+				}
+				catch (const std::bad_alloc&)
+				{
+					return RestoreActiveStroke(
+						"Terrain deferred Flatten target allocation failed.", false);
+				}
+				catch (const std::length_error&)
+				{
+					return RestoreActiveStroke(
+						"Terrain deferred Flatten target size is unsupported.", false);
+				}
 			}
 
 			AshEngine::TerrainLayerStackEdit edit{};
@@ -2335,6 +2358,7 @@ namespace AshEditor
 				stroke.parameters,
 				stroke.metric,
 				*stroke.frozen_edit_layers,
+				stroke.target_state,
 				newSamples,
 				nextPatches,
 				dirtyComponents,
@@ -2344,13 +2368,14 @@ namespace AshEditor
 				error.empty() ? "Terrain live brush transaction failed." : std::move(error),
 				false);
 		}
+		stroke.pending_flatten_target_dab.reset();
 		if (nextPatches.empty())
 		{
 			return true;
 		}
 
-		std::vector<AshEngine::TerrainEditPatch> mergedPatches = stroke.aggregate_patches;
-		if (!AshEngine::merge_terrain_edit_patches(nextPatches, mergedPatches, &error))
+		if (!AshEngine::merge_terrain_edit_patches(
+				nextPatches, stroke.aggregate_patches, &error))
 		{
 			std::vector<AshEngine::TerrainComponentCoord> ignoredDirty{};
 			std::string ignoredError{};
@@ -2373,7 +2398,6 @@ namespace AshEditor
 				error.empty() ? "Terrain live patch aggregation failed." : std::move(error),
 				false);
 		}
-		stroke.aggregate_patches.swap(mergedPatches);
 		stroke.next_preview_time = _now() + std::chrono::milliseconds(80);
 		ScheduleComposition(stroke.sequence, std::move(dirtyComponents));
 		if (!_optPendingComposition)

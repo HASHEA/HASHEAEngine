@@ -4,6 +4,66 @@
 
 namespace AshEditor
 {
+	TerrainViewportAuthoringContextInput build_terrain_viewport_authoring_context_input(
+		const bool panelOpen,
+		const EditorSelection& refPrimarySelection,
+		const std::vector<EditorSelection>& refSelections,
+		const AshEngine::TerrainAssetId selectedAssetId,
+		const TerrainViewportSelectionAssetResolvers& refResolvers)
+	{
+		TerrainViewportAuthoringContextInput input{};
+		input.panel_open = panelOpen;
+		input.selection_count = refSelections.size();
+		input.primary_matches_only_selection =
+			refSelections.size() == 1u &&
+			refSelections.front().eKind == refPrimarySelection.eKind &&
+			refSelections.front().uId == refPrimarySelection.uId;
+		input.selected_asset_id = selectedAssetId;
+		if (!input.panel_open ||
+			!input.primary_matches_only_selection ||
+			input.selected_asset_id == 0u)
+		{
+			return input;
+		}
+
+		switch (refPrimarySelection.eKind)
+		{
+		case EditorSelectionKind::Entity:
+			if (refResolvers.pResolveEntityAsset)
+			{
+				input.selection_asset_id = refResolvers.pResolveEntityAsset(
+					refPrimarySelection.uId,
+					refResolvers.pContext);
+			}
+			break;
+		case EditorSelectionKind::Asset:
+			if (refResolvers.pResolveAsset)
+			{
+				input.selection_asset_id = refResolvers.pResolveAsset(
+					refPrimarySelection.uId,
+					refResolvers.pContext);
+			}
+			break;
+		case EditorSelectionKind::None:
+		default:
+			break;
+		}
+		input.selection_resolves_to_terrain = input.selection_asset_id != 0u;
+		return input;
+	}
+
+	bool is_terrain_viewport_authoring_context_active(
+		const TerrainViewportAuthoringContextInput& refInput)
+	{
+		return
+			refInput.panel_open &&
+			refInput.selection_count == 1u &&
+			refInput.primary_matches_only_selection &&
+			refInput.selection_resolves_to_terrain &&
+			refInput.selected_asset_id != 0u &&
+			refInput.selection_asset_id == refInput.selected_asset_id;
+	}
+
 	TerrainViewportRouteResult route_terrain_viewport_input(
 		const TerrainViewportRouteInput& refInput)
 	{
@@ -16,8 +76,9 @@ namespace AshEditor
 			hasOwnedPressCycle &&
 			(refInput.left_released || !refInput.left_down);
 		const bool authoringMode =
-			refInput.mode == TerrainEditorMode::Sculpt ||
-			refInput.mode == TerrainEditorMode::Paint;
+			refInput.authoring_context_active &&
+			(refInput.mode == TerrainEditorMode::Sculpt ||
+				refInput.mode == TerrainEditorMode::Paint);
 		const bool mustCancelActiveStroke =
 			refInput.stroke_active &&
 			(!refInput.primary_scene_viewport ||

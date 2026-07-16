@@ -159,6 +159,7 @@ namespace AshEditor
 			const AshEngine::TerrainBrushParameters& refParameters,
 			const AshEngine::TerrainBrushMetric& refMetric,
 			const std::vector<AshEngine::TerrainEditLayer>& refFrozenEditLayers,
+			AshEngine::TerrainBrushStrokeTargetState& refTargetState,
 			const std::vector<AshEngine::TerrainStrokeSample>& refResampledDabs,
 			std::vector<AshEngine::TerrainEditPatch>& refPatches,
 			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,

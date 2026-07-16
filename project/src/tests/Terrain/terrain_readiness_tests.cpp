@@ -917,6 +917,12 @@ namespace
 			(static_cast<uint32_t>(k_terrain_gate_last_component_x) -
 				k_terrain_gate_first_component_x + 1u) * quad_count + 1u;
 		const uint32_t design_height = quad_count + 1u;
+		if (!working_set.base_heights)
+		{
+			return Fail(out_error, "TerrainGate generator has no Base height array.");
+		}
+		auto mutable_base_heights =
+			std::make_shared<std::vector<uint16_t>>(*working_set.base_heights);
 		std::vector<float> designed_heights(
 			static_cast<size_t>(design_width) * design_height, 0.0f);
 		std::vector<uint8_t> assigned(designed_heights.size(), 0u);
@@ -982,16 +988,17 @@ namespace
 				const uint32_t sample_z = design_min_z + local_z;
 				const size_t global_index =
 					static_cast<size_t>(sample_z) * layout.sample_count_x + sample_x;
-				if (global_index >= working_set.base_heights.size())
+				if (global_index >= mutable_base_heights->size())
 				{
 					return Fail(out_error,
 						"TerrainGate ring design escaped the Base height array.");
 				}
-				working_set.base_heights[global_index] =
+				(*mutable_base_heights)[global_index] =
 					AshEngine::encode_terrain_height_r16(
 						designed_heights[design_index], working_set.height_mapping);
 			}
 		}
+		working_set.base_heights = std::move(mutable_base_heights);
 		return true;
 	}
 

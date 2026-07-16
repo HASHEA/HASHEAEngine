@@ -5,6 +5,7 @@ namespace AshEditor
 	class AssetDatabaseService;
 	class DragDropTransferService;
 	class EditorSettingsService;
+	class EditorSessionStateService;
 	class EditorGizmoService;
 	class EditorViewportCameraService;
 	class EditorViewportService;
@@ -24,6 +25,7 @@ namespace AshEditor
 		SceneService* pSceneService = nullptr;
 		EditorGizmoState* pGizmoState = nullptr;
 		SelectionService* pSelectionService = nullptr;
+		EditorSessionStateService* pSessionStateService = nullptr;
 		TerrainEditorService* pTerrainEditorService = nullptr;
 		DragDropTransferService* pDragDropTransferService = nullptr;
 		IEditorCommandExecutor* pCommandExecutor = nullptr;

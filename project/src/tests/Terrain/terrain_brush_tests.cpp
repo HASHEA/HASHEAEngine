@@ -485,11 +485,13 @@ TEST_CASE("Terrain resampled dab batches preserve the frozen stroke source")
 
 	std::vector<AshEngine::TerrainEditPatch> incremental_patches{};
 	std::vector<AshEngine::TerrainComponentCoord> incremental_dirty{};
+	AshEngine::TerrainBrushStrokeTargetState target_state{};
 	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
 		incremental_working_set,
 		params,
 		{},
 		frozen_layers,
+		target_state,
 		{ dabs[0], dabs[1] },
 		incremental_patches,
 		incremental_dirty));
@@ -498,6 +500,7 @@ TEST_CASE("Terrain resampled dab batches preserve the frozen stroke source")
 		params,
 		{},
 		frozen_layers,
+		target_state,
 		{ dabs[2] },
 		incremental_patches,
 		incremental_dirty));
@@ -517,6 +520,144 @@ TEST_CASE("Terrain resampled dab batches preserve the frozen stroke source")
 		CHECK(actual[index].scales == expected[index].scales);
 		CHECK(actual[index].biases == expected[index].biases);
 	}
+}
+
+TEST_CASE("Terrain Flatten keeps one target across preview batches")
+{
+	auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha);
+	auto base_heights = std::make_shared<std::vector<uint16_t>>(*working_set.base_heights);
+	(*base_heights)[1u * working_set.layout.sample_count_x + 1u] =
+		AshEngine::encode_terrain_height_r16(10.0f, working_set.height_mapping);
+	(*base_heights)[1u * working_set.layout.sample_count_x + 3u] =
+		AshEngine::encode_terrain_height_r16(30.0f, working_set.height_mapping);
+	working_set.base_heights = std::move(base_heights);
+	auto one_shot_working_set = working_set;
+	const std::vector<AshEngine::TerrainEditLayer> frozen_layers = working_set.edit_layers;
+
+	auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Flatten);
+	params.radius_meters = 0.25f;
+	params.strength = 1.0f;
+	params.falloff = 1.0f;
+	params.stroke_spacing_meters = 100.0f;
+	AshEngine::TerrainBrushStrokeTargetState target_state{};
+	std::vector<AshEngine::TerrainEditPatch> patches{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+	std::vector<AshEngine::TerrainEditPatch> one_shot_patches{};
+	std::vector<AshEngine::TerrainComponentCoord> one_shot_dirty{};
+	REQUIRE(AshEngine::apply_terrain_brush_stroke(
+		one_shot_working_set,
+		params,
+		{},
+		{ { { 1.0f, 1.0f }, 1.0f }, { { 3.0f, 1.0f }, 1.0f } },
+		one_shot_patches,
+		one_shot_dirty));
+
+	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+		working_set,
+		params,
+		{},
+		frozen_layers,
+		target_state,
+		{ { { 1.0f, 1.0f }, 1.0f } },
+		patches,
+		dirty));
+	REQUIRE(target_state.flatten_height.has_value());
+	CHECK(*target_state.flatten_height == doctest::Approx(10.0f));
+
+	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+		working_set,
+		params,
+		{},
+		frozen_layers,
+		target_state,
+		{ { { 3.0f, 1.0f }, 1.0f } },
+		patches,
+		dirty));
+	REQUIRE(patches.size() == 1u);
+	const auto after = DecodePatchBytes(patches[0], true);
+	const size_t sample_index =
+		static_cast<size_t>(1u - patches[0].changed_rect.min_z) * patches[0].changed_rect.width() +
+		(3u - patches[0].changed_rect.min_x);
+	CHECK(ReadFloatLe(after, sample_index * 2u) == 0.0f);
+	CHECK(ReadFloatLe(after, sample_index * 2u + 1u) == doctest::Approx(10.0f));
+
+	const auto& expected = one_shot_working_set.edit_layers.front().height_blocks;
+	const auto& actual = working_set.edit_layers.front().height_blocks;
+	REQUIRE(actual.size() == expected.size());
+	for (size_t index = 0u; index < expected.size(); ++index)
+	{
+		CHECK(actual[index].owner == expected[index].owner);
+		CHECK(actual[index].changed_rect.min_x == expected[index].changed_rect.min_x);
+		CHECK(actual[index].changed_rect.min_z == expected[index].changed_rect.min_z);
+		CHECK(actual[index].changed_rect.max_x_exclusive ==
+			expected[index].changed_rect.max_x_exclusive);
+		CHECK(actual[index].changed_rect.max_z_exclusive ==
+			expected[index].changed_rect.max_z_exclusive);
+		CHECK(actual[index].scales == expected[index].scales);
+		CHECK(actual[index].biases == expected[index].biases);
+	}
+}
+
+TEST_CASE("Terrain Flatten target state ignores empty batches and failed mutations")
+{
+	auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha);
+	const std::vector<AshEngine::TerrainEditLayer> frozen_layers = working_set.edit_layers;
+	auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Flatten);
+	params.radius_meters = 0.25f;
+	AshEngine::TerrainBrushStrokeTargetState target_state{};
+	std::vector<AshEngine::TerrainEditPatch> patches{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+
+	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+		working_set,
+		params,
+		{},
+		frozen_layers,
+		target_state,
+		{},
+		patches,
+		dirty));
+	CHECK_FALSE(target_state.flatten_height.has_value());
+
+	working_set.content_generation = std::numeric_limits<uint64_t>::max();
+	CHECK_FALSE(AshEngine::apply_resampled_terrain_brush_dabs(
+		working_set,
+		params,
+		{},
+		frozen_layers,
+		target_state,
+		{ { { 1.0f, 1.0f }, 1.0f } },
+		patches,
+		dirty));
+	CHECK_FALSE(target_state.flatten_height.has_value());
+	CHECK(working_set.content_generation == std::numeric_limits<uint64_t>::max());
+	CHECK(working_set.edit_layers.front().height_blocks.empty());
+	CHECK(working_set.dirty_components.empty());
+	CHECK(patches.empty());
+	CHECK(dirty.empty());
+}
+
+TEST_CASE("Terrain non-Flatten dabs leave stroke target state untouched")
+{
+	auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Additive);
+	const std::vector<AshEngine::TerrainEditLayer> frozen_layers = working_set.edit_layers;
+	const auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Raise);
+	AshEngine::TerrainBrushStrokeTargetState target_state{};
+	target_state.flatten_height = std::numeric_limits<float>::quiet_NaN();
+	std::vector<AshEngine::TerrainEditPatch> patches{};
+	std::vector<AshEngine::TerrainComponentCoord> dirty{};
+
+	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+		working_set,
+		params,
+		{},
+		frozen_layers,
+		target_state,
+		{ { { 1.0f, 1.0f }, 1.0f } },
+		patches,
+		dirty));
+	REQUIRE(target_state.flatten_height.has_value());
+	CHECK(std::isnan(*target_state.flatten_height));
 }
 
 TEST_CASE("Terrain brush composes all sculpt tools in one generic edit layer")
@@ -667,9 +808,11 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 	SUBCASE("Smooth reads frozen clamped four-neighbor heights")
 	{
 		auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha);
-		working_set.base_heights[
+		auto base_heights = std::make_shared<std::vector<uint16_t>>(*working_set.base_heights);
+		(*base_heights)[
 			2u * working_set.layout.sample_count_x + 2u] =
 			AshEngine::encode_terrain_height_r16(100.0f, working_set.height_mapping);
+		working_set.base_heights = std::move(base_heights);
 		auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Smooth);
 		std::vector<AshEngine::TerrainEditPatch> patches{};
 		std::vector<AshEngine::TerrainComponentCoord> dirty{};
@@ -683,12 +826,14 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 	SUBCASE("Smooth clamps all four neighbors at Terrain edges")
 	{
 		auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha);
-		working_set.base_heights[0u] =
+		auto base_heights = std::make_shared<std::vector<uint16_t>>(*working_set.base_heights);
+		(*base_heights)[0u] =
 			AshEngine::encode_terrain_height_r16(8.0f, working_set.height_mapping);
-		working_set.base_heights[1u] =
+		(*base_heights)[1u] =
 			AshEngine::encode_terrain_height_r16(4.0f, working_set.height_mapping);
-		working_set.base_heights[working_set.layout.sample_count_x] =
+		(*base_heights)[working_set.layout.sample_count_x] =
 			AshEngine::encode_terrain_height_r16(0.0f, working_set.height_mapping);
+		working_set.base_heights = std::move(base_heights);
 		auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Smooth);
 		std::vector<AshEngine::TerrainEditPatch> patches{};
 		std::vector<AshEngine::TerrainComponentCoord> dirty{};
@@ -734,10 +879,12 @@ TEST_CASE("Terrain brush Smooth and Flatten read the frozen through-selected hei
 	SUBCASE("Flatten captures only the first dab and ignores stale component caches")
 	{
 		auto working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha);
-		working_set.base_heights[1u * working_set.layout.sample_count_x + 1u] =
+		auto base_heights = std::make_shared<std::vector<uint16_t>>(*working_set.base_heights);
+		(*base_heights)[1u * working_set.layout.sample_count_x + 1u] =
 			AshEngine::encode_terrain_height_r16(10.0f, working_set.height_mapping);
-		working_set.base_heights[1u * working_set.layout.sample_count_x + 3u] =
+		(*base_heights)[1u * working_set.layout.sample_count_x + 3u] =
 			AshEngine::encode_terrain_height_r16(30.0f, working_set.height_mapping);
+		working_set.base_heights = std::move(base_heights);
 		auto stale_component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
 			*working_set.components[0]);
 		std::fill(stale_component->heights.begin(), stale_component->heights.end(), 999.0f);

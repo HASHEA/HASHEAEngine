@@ -35,6 +35,20 @@ namespace
 		return component;
 	}
 
+	auto MakePaintedComponent(
+		AshEngine::TerrainComponentCoord coord,
+		uint64_t content_generation) ->
+		std::shared_ptr<const AshEngine::TerrainComponentSnapshot>
+	{
+		auto component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
+			*MakeComponent(coord, content_generation));
+		component->weights.assign(
+			k_component_sample_total,
+			std::array<uint8_t, AshEngine::k_terrain_material_layer_count>{
+				255u, 0u, 0u, 0u, 0u, 0u, 0u, 0u });
+		return component;
+	}
+
 	auto MakeSnapshot(uint64_t content_generation) ->
 		std::shared_ptr<AshEngine::TerrainAssetSnapshot>
 	{
@@ -48,6 +62,116 @@ namespace
 			snapshot->layout.component_count_z);
 		return snapshot;
 	}
+}
+
+namespace AshEngine
+{
+	struct TerrainRenderAssetCpuTestSeam
+	{
+		struct PendingUpload
+		{
+			TerrainComponentCoord coord{};
+			uint64_t content_generation = 0u;
+		};
+
+		static bool complete_front_height_upload(TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			if (asset.m_pending_component_uploads.empty())
+			{
+				return false;
+			}
+
+			const TerrainRenderAsset::TerrainGpuComponentUpload upload =
+				asset.m_pending_component_uploads.front();
+			if (!asset.m_state.mark_component_uploaded(
+					upload.content_generation, upload.coord))
+			{
+				return false;
+			}
+			asset.m_pending_component_uploads.erase(
+				asset.m_pending_component_uploads.begin());
+			return true;
+		}
+
+		static bool complete_front_weight_update(TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			if (asset.m_pending_weight_updates.empty())
+			{
+				return false;
+			}
+
+			const TerrainRenderAsset::TerrainGpuComponentUpload upload =
+				asset.m_pending_weight_updates.front();
+			TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
+				asset.m_frame_boundary_atlas_slots.front();
+			slot.coord = upload.coord;
+			slot.content_generation = upload.content_generation;
+			slot.occupied = true;
+			asset.m_pending_weight_updates.erase(
+				asset.m_pending_weight_updates.begin());
+			return true;
+		}
+
+		static std::vector<PendingUpload> pending_height_uploads(
+			const TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			std::vector<PendingUpload> result{};
+			result.reserve(asset.m_pending_component_uploads.size());
+			for (const TerrainRenderAsset::TerrainGpuComponentUpload& upload :
+				asset.m_pending_component_uploads)
+			{
+				result.push_back({ upload.coord, upload.content_generation });
+			}
+			return result;
+		}
+
+		static std::vector<PendingUpload> pending_weight_updates(
+			const TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			std::vector<PendingUpload> result{};
+			result.reserve(asset.m_pending_weight_updates.size());
+			for (const TerrainRenderAsset::TerrainGpuComponentUpload& upload :
+				asset.m_pending_weight_updates)
+			{
+				result.push_back({ upload.coord, upload.content_generation });
+			}
+			return result;
+		}
+
+		static std::vector<TerrainComponentCoord> pending_implicit_weight_resets(
+			const TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			return asset.m_pending_implicit_weight_resets;
+		}
+
+		static std::vector<TerrainComponentCoord> pending_component_removals(
+			const TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			return asset.m_pending_component_removals;
+		}
+
+		static uint64_t resident_weight_generation(
+			const TerrainRenderAsset& asset,
+			TerrainComponentCoord coord)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			for (const TerrainRenderAsset::TerrainAtlasSlotMetadata& slot :
+				asset.m_frame_boundary_atlas_slots)
+			{
+				if (slot.occupied && slot.coord == coord)
+				{
+					return slot.content_generation;
+				}
+			}
+			return 0u;
+		}
+	};
 }
 
 TEST_CASE("Terrain render asset publishes only the newest completed content generation")
@@ -295,6 +419,101 @@ TEST_CASE("Terrain render asset keeps unfinished pointer-equal uploads across ge
 	CHECK(asset.has_pending_component_upload({ 0u, 0u }));
 }
 
+TEST_CASE("Terrain render asset coalesces partially completed uploads into a newer generation")
+{
+	auto first = MakeSnapshot(1u);
+	first->components[0] = MakeComponent({ 0u, 0u }, 1u);
+	first->components[1] = MakeComponent({ 1u, 0u }, 1u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(first, &error));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::complete_front_height_upload(asset));
+
+	auto second = MakeSnapshot(2u);
+	second->components[0] = first->components[0];
+	second->components[1] = first->components[1];
+	second->components[2] = MakeComponent({ 2u, 0u }, 2u);
+	REQUIRE(asset.accept_snapshot(second, &error));
+
+	const auto pending =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_height_uploads(asset);
+	REQUIRE(pending.size() == 2u);
+	CHECK(pending[0].coord == AshEngine::TerrainComponentCoord{ 1u, 0u });
+	CHECK(pending[0].content_generation == 2u);
+	CHECK(pending[1].coord == AshEngine::TerrainComponentCoord{ 2u, 0u });
+	CHECK(pending[1].content_generation == 2u);
+}
+
+TEST_CASE("Terrain render asset coalesces completed and pending weight work")
+{
+	auto first = MakeSnapshot(1u);
+	first->components[0] = MakePaintedComponent({ 0u, 0u }, 1u);
+	first->components[1] = MakePaintedComponent({ 1u, 0u }, 1u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(first, &error));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::complete_front_height_upload(asset));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::complete_front_weight_update(asset));
+
+	auto second = MakeSnapshot(2u);
+	second->components[0] = first->components[0];
+	second->components[1] = first->components[1];
+	second->components[2] = MakePaintedComponent({ 2u, 0u }, 2u);
+	REQUIRE(asset.accept_snapshot(second, &error));
+
+	const auto heights =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_height_uploads(asset);
+	REQUIRE(heights.size() == 2u);
+	CHECK(heights[0].coord == AshEngine::TerrainComponentCoord{ 1u, 0u });
+	CHECK(heights[1].coord == AshEngine::TerrainComponentCoord{ 2u, 0u });
+
+	const auto weights =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_weight_updates(asset);
+	REQUIRE(weights.size() == 2u);
+	CHECK(weights[0].coord == AshEngine::TerrainComponentCoord{ 1u, 0u });
+	CHECK(weights[0].content_generation == 2u);
+	CHECK(weights[1].coord == AshEngine::TerrainComponentCoord{ 2u, 0u });
+	CHECK(weights[1].content_generation == 2u);
+	CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::resident_weight_generation(
+		asset, { 0u, 0u }) == 2u);
+}
+
+TEST_CASE("Terrain render asset carries resets and removals before appending new work")
+{
+	auto first = MakeSnapshot(1u);
+	first->components[0] = MakePaintedComponent({ 0u, 0u }, 1u);
+	first->components[1] = MakePaintedComponent({ 1u, 0u }, 1u);
+	first->components[3] = MakePaintedComponent({ 3u, 0u }, 1u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(first, &error));
+
+	auto second = MakeSnapshot(2u);
+	second->components[0] = MakeComponent({ 0u, 0u }, 2u);
+	second->components[3] = first->components[3];
+	REQUIRE(asset.accept_snapshot(second, &error));
+	CHECK(asset.has_pending_component_removal({ 1u, 0u }));
+
+	auto third = MakeSnapshot(3u);
+	third->components[0] = second->components[0];
+	third->components[2] = MakeComponent({ 2u, 0u }, 3u);
+	REQUIRE(asset.accept_snapshot(third, &error));
+
+	const auto resets =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_implicit_weight_resets(asset);
+	REQUIRE(resets.size() == 1u);
+	CHECK(resets[0] == AshEngine::TerrainComponentCoord{ 0u, 0u });
+
+	const auto removals =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_component_removals(asset);
+	REQUIRE(removals.size() == 2u);
+	CHECK(removals[0] == AshEngine::TerrainComponentCoord{ 1u, 0u });
+	CHECK(removals[1] == AshEngine::TerrainComponentCoord{ 3u, 0u });
+}
+
 TEST_CASE("Terrain render asset rejects older generations after a malformed snapshot")
 {
 	AshEngine::TerrainRenderAsset asset{};
@@ -316,6 +535,10 @@ TEST_CASE("Terrain render asset rejects older generations after a malformed snap
 	CHECK(asset.pending_component_upload_count() == 1u);
 	CHECK(asset.pending_component_removal_count() ==
 		AshEngine::k_terrain_render_component_capacity - 1u);
+	const auto recovery_resets =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_implicit_weight_resets(asset);
+	REQUIRE(recovery_resets.size() == 1u);
+	CHECK(recovery_resets[0] == AshEngine::TerrainComponentCoord{ 0u, 0u });
 }
 
 TEST_CASE("Terrain render asset manager counts one pending owner per asset generation")

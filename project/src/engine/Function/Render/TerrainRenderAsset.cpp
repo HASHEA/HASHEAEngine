@@ -401,11 +401,125 @@ namespace AshEngine
 
 		const bool rebuild_after_failure =
 			m_state.readiness() == TerrainRenderReadiness::Failed;
-		const bool rebuild_unpublished_generation =
-			m_state.readiness() != TerrainRenderReadiness::Ready;
+		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
+			m_accepted_snapshot;
 		std::vector<TerrainGpuComponentUpload> uploads{};
+		std::vector<TerrainGpuComponentUpload> weight_updates{};
 		std::vector<TerrainComponentCoord> implicit_weight_resets{};
 		std::vector<TerrainComponentCoord> removals{};
+		std::vector<TerrainComponentCoord> resident_weight_rebinds{};
+		std::array<bool, k_terrain_render_component_capacity> upload_scheduled{};
+		std::array<bool, k_terrain_render_component_capacity> weight_scheduled{};
+		std::array<bool, k_terrain_render_component_capacity> reset_scheduled{};
+		std::array<bool, k_terrain_render_component_capacity> removal_scheduled{};
+
+		const auto try_component_index =
+			[](TerrainComponentCoord coord, size_t& out_index)
+			{
+				if (coord.x >= k_terrain_component_count ||
+					coord.z >= k_terrain_component_count)
+				{
+					return false;
+				}
+				out_index = component_linear_index(coord);
+				return true;
+			};
+		const auto append_upload =
+			[&](
+				std::vector<TerrainGpuComponentUpload>& destination,
+				std::array<bool, k_terrain_render_component_capacity>& scheduled,
+				const std::shared_ptr<const TerrainComponentSnapshot>& component)
+			{
+				const size_t index = component_linear_index(component->coord);
+				if (scheduled[index])
+				{
+					return;
+				}
+				TerrainGpuComponentUpload upload{};
+				upload.coord = component->coord;
+				upload.content_generation = snapshot->content_generation;
+				upload.component = component;
+				destination.push_back(std::move(upload));
+				scheduled[index] = true;
+			};
+		const auto append_coord =
+			[&](
+				std::vector<TerrainComponentCoord>& destination,
+				std::array<bool, k_terrain_render_component_capacity>& scheduled,
+				TerrainComponentCoord coord)
+			{
+				const size_t index = component_linear_index(coord);
+				if (!scheduled[index])
+				{
+					destination.push_back(coord);
+					scheduled[index] = true;
+				}
+			};
+
+		if (!rebuild_after_failure)
+		{
+			for (const TerrainGpuComponentUpload& pending :
+				m_pending_component_uploads)
+			{
+				size_t index = 0u;
+				if (!try_component_index(pending.coord, index) ||
+					index >= snapshot->components.size() ||
+					!pending.component ||
+					snapshot->components[index] != pending.component ||
+					upload_scheduled[index])
+				{
+					continue;
+				}
+				TerrainGpuComponentUpload carried = pending;
+				carried.content_generation = snapshot->content_generation;
+				uploads.push_back(std::move(carried));
+				upload_scheduled[index] = true;
+			}
+			for (const TerrainGpuComponentUpload& pending : m_pending_weight_updates)
+			{
+				size_t index = 0u;
+				if (!try_component_index(pending.coord, index) ||
+					index >= snapshot->components.size() ||
+					!pending.component ||
+					pending.component->weights.empty() ||
+					snapshot->components[index] != pending.component ||
+					weight_scheduled[index])
+				{
+					continue;
+				}
+				TerrainGpuComponentUpload carried = pending;
+				carried.content_generation = snapshot->content_generation;
+				weight_updates.push_back(std::move(carried));
+				weight_scheduled[index] = true;
+			}
+			for (TerrainComponentCoord coord : m_pending_implicit_weight_resets)
+			{
+				size_t index = 0u;
+				if (!try_component_index(coord, index) ||
+					index >= snapshot->components.size())
+				{
+					continue;
+				}
+				const std::shared_ptr<const TerrainComponentSnapshot>& component =
+					snapshot->components[index];
+				if (component && component->weights.empty())
+				{
+					append_coord(
+						implicit_weight_resets, reset_scheduled, coord);
+				}
+			}
+			for (TerrainComponentCoord coord : m_pending_component_removals)
+			{
+				size_t index = 0u;
+				if (try_component_index(coord, index) &&
+					index < snapshot->components.size() &&
+					!snapshot->components[index])
+				{
+					append_coord(removals, removal_scheduled, coord);
+				}
+			}
+		}
+
 		for (size_t index = 0u; index < snapshot->components.size(); ++index)
 		{
 			const std::shared_ptr<const TerrainComponentSnapshot>& component =
@@ -415,22 +529,13 @@ namespace AshEngine
 				static_cast<uint16_t>(index / k_terrain_component_count)
 			};
 			const std::shared_ptr<const TerrainComponentSnapshot> previous_component =
-				m_accepted_snapshot && index < m_accepted_snapshot->components.size() ?
-					m_accepted_snapshot->components[index] : nullptr;
-			if (!rebuild_unpublished_generation && previous_component == component &&
-				(m_accepted_snapshot || component))
-			{
-				continue;
-			}
+				previous_snapshot && index < previous_snapshot->components.size() ?
+					previous_snapshot->components[index] : nullptr;
 			if (!component)
 			{
-				const bool removal_was_pending = std::find(
-					m_pending_component_removals.begin(),
-					m_pending_component_removals.end(),
-					expected_coord) != m_pending_component_removals.end();
-				if (rebuild_after_failure || previous_component || removal_was_pending)
+				if (rebuild_after_failure || previous_component)
 				{
-					removals.push_back(expected_coord);
+					append_coord(removals, removal_scheduled, expected_coord);
 				}
 				continue;
 			}
@@ -445,10 +550,17 @@ namespace AshEngine
 			{
 				return reject_snapshot(std::move(shape_error));
 			}
-			TerrainGpuComponentUpload upload{};
-			upload.coord = component->coord;
-			upload.content_generation = snapshot->content_generation;
-			upload.component = component;
+
+			if (!rebuild_after_failure && previous_component == component)
+			{
+				if (!component->weights.empty() && !weight_scheduled[index])
+				{
+					resident_weight_rebinds.push_back(expected_coord);
+				}
+				continue;
+			}
+
+			append_upload(uploads, upload_scheduled, component);
 			if (component->weights.empty())
 			{
 				const bool had_explicit_weights =
@@ -462,26 +574,32 @@ namespace AshEngine
 					});
 				if (rebuild_after_failure || had_explicit_weights || has_resident_slot)
 				{
-					implicit_weight_resets.push_back(expected_coord);
+					append_coord(
+						implicit_weight_resets, reset_scheduled, expected_coord);
 				}
 			}
-			uploads.push_back(std::move(upload));
+			else
+			{
+				append_upload(weight_updates, weight_scheduled, component);
+			}
 		}
 
 		m_state.begin_content_generation(
 			snapshot->content_generation,
 			static_cast<uint32_t>(uploads.size() + removals.size()));
-		m_accepted_snapshot = snapshot;
-		m_pending_component_uploads = std::move(uploads);
-		m_pending_weight_updates.clear();
-		m_pending_weight_updates.reserve(m_pending_component_uploads.size());
-		for (const TerrainGpuComponentUpload& upload : m_pending_component_uploads)
+		for (TerrainComponentCoord coord : resident_weight_rebinds)
 		{
-			if (upload.component && !upload.component->weights.empty())
+			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
 			{
-				m_pending_weight_updates.push_back(upload);
+				if (slot.occupied && slot.coord == coord)
+				{
+					slot.content_generation = snapshot->content_generation;
+				}
 			}
 		}
+		m_accepted_snapshot = snapshot;
+		m_pending_component_uploads = std::move(uploads);
+		m_pending_weight_updates = std::move(weight_updates);
 		m_pending_implicit_weight_resets = std::move(implicit_weight_resets);
 		m_pending_component_removals = std::move(removals);
 		m_last_error.clear();

@@ -909,7 +909,8 @@ namespace AshEngine
 					working_set.layout.sample_count_x,
 					working_set.layout.sample_count_z,
 					global_samples) ||
-				working_set.base_heights.size() != global_samples)
+				!working_set.base_heights ||
+				working_set.base_heights->size() != global_samples)
 			{
 				return fail(out_error, "Terrain patch working-set header is invalid.");
 			}

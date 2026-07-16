@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-16
 status: active
 ---
 
@@ -18,10 +18,10 @@ status: active
 | `project/src/engine/Function/Asset/AssetData.h/.cpp` | CPU 侧资产数据结构：`Mesh`/`MeshVertex`/`MeshSection`、`MaterialSlot`、`Model`/`ModelNode`、`AshAsset`/`AshAssetNode` |
 | `project/src/engine/Function/Asset/AshAssetSerializer.cpp` | `.AshAsset` JSON 序列化/反序列化实现 |
 | `project/src/engine/Function/Asset/TerrainData.h/.cpp` | Terrain 布局、全局 sample ownership、不可变 snapshot 与可变 working set |
-| `project/src/engine/Function/Asset/TerrainComposition.h/.cpp` | 稀疏层合成、8 路权重量化、dirty Component 发布 |
-| `project/src/engine/Function/Asset/TerrainBrush.h/.cpp`、`TerrainEditPatch.cpp` | 7 个 brush、世界距离重采样、确定性 patch 与原子回放 |
+| `project/src/engine/Function/Asset/TerrainComposition.h/.cpp` | 仿射稀疏层合成、8 路权重量化、dirty Component 发布 |
+| `project/src/engine/Function/Asset/TerrainBrush.h/.cpp`、`TerrainEditPatch.cpp` | 7 个 brush、可续接世界距离重采样、仿射 patch 合并与原子回放 |
 | `project/src/engine/Function/Asset/TerrainSpatialData.h/.cpp` | Component min/max 层级与 LOD error |
-| `project/src/engine/Function/Asset/TerrainContainer*.h/.cpp`、`TerrainBlockCodec.*` | `.AshTerrain` v1 容器、双 descriptor recovery、增量保存、优化与 RLE |
+| `project/src/engine/Function/Asset/TerrainContainer*.h/.cpp`、`TerrainBlockCodec.*` | `.AshTerrain` v2 writer / v1-v2 reader、双 descriptor recovery、增量保存、优化与 RLE |
 | `project/src/engine/Function/Asset/TerrainImport.*`、`TerrainRawCodec.cpp`、`TerrainPngCodecWin.cpp`、`TerrainExrCodec.cpp` | RAW/PNG/EXR 高度图导入导出 |
 
 ## 公共接口
@@ -39,6 +39,7 @@ status: active
   - Terrain publication：`publish_terrain_snapshot(id, snapshot)` 按 `(content_generation, residency_revision)` 字典序发布常规更新。Editor 接受隔离磁盘候选前先用 `capture_terrain_snapshot_publication(id)` 捕获绑定资产 ID、catalog generation、每资产 load serial 与当前 snapshot pointer 的 token，再以 `compare_exchange_terrain_snapshot(id, expected, desired, result)` 原子切换；任一血缘字段变化都拒绝 stale candidate，成功返回的新 token 可用于历史提交失败时的精确回滚与重试。`desired == nullptr` 仅用于受同一 token 保护的回滚/失效，`invalidate_terrain_snapshot(id)` 则显式失效一个 Terrain 的 cache/in-flight。
   - Terrain recovery/concurrency metadata：`TerrainContainerLoadReport` 与发布的 `TerrainAssetSnapshot` 同时携带 recovered flag、loaded generation、rejected generation、精确 recovery detail 和稳定的 `TerrainContainerRevision`；调用方可区分“已加载的最后有效旧代”“磁盘上更新但损坏的新代”与可重试的并发写入。
   - Terrain create/import/export：`make_default_terrain_grid_layout()` 与 `create_flat_terrain_snapshot` 提供 8193² / 32² / 256 quad / 1 m 的生产 flat 数据；`TerrainHeightImportDesc`、`TerrainHeightExportDesc`、`TerrainImportReport` 和 `TerrainCancellationToken` 是不暴露 codec 类型的值合同。`import_terrain_height` / `import_terrain_height_to_container` 支持 PNG、RAW R16/R32F、EXR；`export_terrain_height` 对最终合成、Base、指定高度层和指定材质权重层都支持这四种格式。材质权重的 PNG/RAW R16 输出使用固定 `[0,1]` normalized 映射，RAW R32F/EXR 直接保留 `[0,1]` 浮点值。`publish_staged_terrain_container_new` 对已经验证的 staged container 执行 named-lease、non-replacing 最终发布。
+  - Terrain authoring primitive：每个高度稀疏 sample 保存仿射变换 `a × H + b`；同一编辑层按 stroke 顺序支持全部五种高度工具。`append_resampled_terrain_stroke` 续接上次 segment，只返回新增 dab；`merge_terrain_edit_patches` 把同一次 stroke 的 patch 聚合为首次 before 到最新 after，供一次历史提交或整体回滚。
 
 加载结果统一为 `std::shared_ptr<const T>` 共享不可变数据；上层（Scene 实例化、Editor AssetDatabaseService、RenderAssetManager）只应依赖上述接口。
 
@@ -47,7 +48,9 @@ status: active
 - 所有路径以资产根目录（运行时为 `product/assets`）为相对基准；`AssetId` 在一次索引内唯一。
 - 常规异步 API 返回 `shared_future`，同一资产的并发请求共享同一份加载结果；加载状态经 `get_asset_load_state` 观察（Loading → Loaded/Failed）。candidate load 有意绕过共享 in-flight/cache/load diagnostics，必须由上层在接受后以 publication token CAS 提交；跨资产 token、目录刷新后的旧 token 或并发发布后的旧 token都必须拒绝。
 - 加载产物为 const 数据，调用方不得修改；GPU 化由 render 侧另行处理。
+- `make_terrain_working_set` 必须共享 source snapshot 的不可变 Base R16 allocation；`publish_terrain_working_set` 也必须把同一 allocation 传给新 snapshot。可变 authoring 状态只存在于独立 edit-layer stack、dirty set 和新建的 dirty Component；production 8193² Base 不得因打开 session 或 preview generation 被深拷贝。
 - `.ashterrain` 扩展名大小写不敏感。实际容器损坏会缓存为 `Failed`，需精确 invalidate 后重试；worker 不可用、关停拒绝、派发异常以及 container `Busy` / `SourceChanged` 都回到可重试 `Unloaded`，不得永久停在 `Loading`。candidate load 不写这些共享状态，而是在失败 snapshot 上设置 `retryable_failure`；Editor 不得把该结果当作持久损坏或替换当前 cache。
+- `.AshTerrain` 当前 writer 固定写 version 2 仿射高度 block；reader 同时接受 version 1 和 2。v1 Additive sample 精确迁移为 `a=1, b=value×coverage`，v1 Alpha sample 迁移为 `a=1-coverage, b=coverage×value`；加载本身不改写磁盘，下一次 Save/Optimize 才写 v2。
 - Terrain create/import/export API 是同步纯 CPU/文件 API；Editor 必须在自己的 worker 上调用，并只捕获 descriptor、路径、cancellation token 和不可变 snapshot 的值/共享所有权。Asset API 不持有 Editor service、panel state 或 mutable working set，也不提供 UI 线程内联 fallback。
 - Create/Import 的最终 `.AshTerrain` 路径由 Editor 约束在 canonical AssetDatabase root 内，并要求 `.AshTerrain` 扩展名；提交前检查不能替代 `publish_staged_terrain_container_new` 在 commit lease 内的最终 non-replacing 检查。Import source 和高度图 Export destination 是外部工作流路径：绝对路径可以位于 root 外，相对路径以 AssetDatabase root 为基准解析，两者都不经过 `.AshTerrain` containment resolver，也不能被注册成未经 refresh 的 AssetDatabase 身份。Export 固定创建新文件且永不覆盖，不提供 overwrite 开关；调用方必须验证 parent、格式/扩展名并以唯一 stage 做 non-replacing publish，保留既有或竞态 destination。
 - Editor Import 必须先让 `import_terrain_height_to_container` 发布到唯一 staged destination，再把该 stage 交给 `publish_staged_terrain_container_new`；禁止直接以最终 asset path 调用 replacing container import。失败或取消清理 stage 与其 `.import.tmp`，PNG 8-bit warning 通过 `TerrainImportReport` 原样上送。
@@ -69,3 +72,4 @@ status: active
 
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)：资产加载结果通过 render asset readiness 间接参与 smoke/capture。
 - [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)：Terrain 总体设计；Phase 1–3 已接入 Asset、Render 与 Editor authoring/recovery 边界。
+- [SDD-2026-07-15-terrain-interactive-authoring-workflow](../../sdd/SDD-2026-07-15-terrain-interactive-authoring-workflow.md)：统一仿射编辑层、v1 精确迁移、增量 stroke patch 与默认编辑工作流。

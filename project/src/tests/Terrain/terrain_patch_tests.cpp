@@ -114,6 +114,28 @@ namespace
 		return decoded;
 	}
 
+	void CheckPatchEqual(
+		const AshEngine::TerrainEditPatch& actual,
+		const AshEngine::TerrainEditPatch& expected)
+	{
+		CHECK(actual.asset_id == expected.asset_id);
+		CHECK(actual.layer_id == expected.layer_id);
+		CHECK(actual.owner == expected.owner);
+		CHECK(actual.domain == expected.domain);
+		CHECK(actual.changed_rect.min_x == expected.changed_rect.min_x);
+		CHECK(actual.changed_rect.min_z == expected.changed_rect.min_z);
+		CHECK(actual.changed_rect.max_x_exclusive ==
+			expected.changed_rect.max_x_exclusive);
+		CHECK(actual.changed_rect.max_z_exclusive ==
+			expected.changed_rect.max_z_exclusive);
+		CHECK(actual.stroke_generation == expected.stroke_generation);
+		CHECK(actual.active_samples == expected.active_samples);
+		CHECK(actual.before_codec == expected.before_codec);
+		CHECK(actual.after_codec == expected.after_codec);
+		CHECK(actual.before_bytes == expected.before_bytes);
+		CHECK(actual.after_bytes == expected.after_bytes);
+	}
+
 	auto FindPatchLayer(
 		const AshEngine::TerrainWorkingSet& working_set,
 		AshEngine::TerrainLayerId id) -> const AshEngine::TerrainEditLayer*
@@ -631,17 +653,42 @@ TEST_CASE("Terrain affine patch merge preserves first before latest after across
 		current, aggregate, AshEngine::TerrainEditPatchDirection::Redo, dirty));
 	CheckWorkingSetBlockStateEqual(current, completed);
 
+	next.clear();
+	ApplyPatchBrush(current, params, { 3.0f, 3.0f }, next);
+	auto rejected_continuation = next;
+	REQUIRE_FALSE(rejected_continuation.empty());
+	for (auto& patch : rejected_continuation)
+	{
+		patch.stroke_generation = aggregate.front().stroke_generation + 1u;
+		patch.before_bytes = DecodePatchSide(patch, false);
+		patch.before_codec = AshEngine::TerrainBlockCodec::None;
+		SetFloatLe(patch.before_bytes, 0u, 2.0f);
+	}
+	const auto unchanged_after_late_failure = aggregate;
+	std::string error{};
+	CHECK_FALSE(AshEngine::merge_terrain_edit_patches(
+		rejected_continuation, aggregate, &error));
+	REQUIRE(aggregate.size() == unchanged_after_late_failure.size());
+	for (size_t index = 0u; index < aggregate.size(); ++index)
+	{
+		CheckPatchEqual(aggregate[index], unchanged_after_late_failure[index]);
+	}
+	CHECK(error ==
+		"Terrain patch merge source does not continue the aggregate target.");
+
 	auto rejected_next = next;
 	for (auto& patch : rejected_next)
 	{
 		patch.stroke_generation += 2u;
 	}
 	const auto unchanged = aggregate;
-	std::string error{};
+	error.clear();
 	CHECK_FALSE(AshEngine::merge_terrain_edit_patches(
 		rejected_next, aggregate, &error));
-	CHECK(aggregate.size() == unchanged.size());
-	CHECK(aggregate[0].before_bytes == unchanged[0].before_bytes);
-	CHECK(aggregate[0].after_bytes == unchanged[0].after_bytes);
+	REQUIRE(aggregate.size() == unchanged.size());
+	for (size_t index = 0u; index < aggregate.size(); ++index)
+	{
+		CheckPatchEqual(aggregate[index], unchanged[index]);
+	}
 	CHECK_FALSE(error.empty());
 }

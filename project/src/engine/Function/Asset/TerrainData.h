@@ -210,7 +210,10 @@ namespace AshEngine
 		TerrainHeightMapping height_mapping{};
 		uint64_t content_generation = 0;
 		uint64_t residency_revision = 0;
-		std::vector<uint16_t> base_heights{};
+		// Base Import is immutable for the lifetime of an authoring working set.
+		// Sculpt/Paint operations only mutate sparse edit layers, so published
+		// preview generations can safely share this production-sized allocation.
+		std::shared_ptr<const std::vector<uint16_t>> base_heights{};
 		std::array<TerrainMaterialLayerDesc, k_terrain_material_layer_count> material_layers{};
 		std::vector<TerrainEditLayer> edit_layers{};
 		std::vector<std::shared_ptr<const TerrainComponentSnapshot>> components{};

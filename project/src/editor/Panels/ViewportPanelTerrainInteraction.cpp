@@ -5,6 +5,7 @@
 #include "Function/Scene/SceneQuery.h"
 #include "Panels/ViewportPanelSupport.h"
 #include "Services/AssetDatabaseService.h"
+#include "Services/EditorSessionStateService.h"
 #include "Services/EditorViewportService.h"
 #include "Services/SceneService.h"
 #include "Services/TerrainEditorService.h"
@@ -134,18 +135,92 @@ namespace AshEditor
 
 			return query;
 		}
+
+		AshEngine::TerrainAssetId ResolveTerrainViewportEntityAsset(
+			const uint64_t entityId,
+			const void* pContext)
+		{
+			const auto* pDeps = static_cast<const ViewportPanelDeps*>(pContext);
+			if (!pDeps ||
+				!pDeps->pAssetDatabaseService ||
+				!pDeps->pSceneService ||
+				entityId == 0u)
+			{
+				return 0u;
+			}
+
+			const AshEngine::Entity entity = pDeps->pSceneService->FindEntity(entityId);
+			if (!entity.is_valid() || !entity.has_terrain_component())
+			{
+				return 0u;
+			}
+
+			const AshEngine::TerrainComponent terrain = entity.get_terrain_component();
+			const AshEngine::AssetInfo* pSelectionAsset =
+				pDeps->pAssetDatabaseService->FindByPath(terrain.asset_path);
+			return pSelectionAsset && pSelectionAsset->type == AshEngine::AssetType::Terrain
+				? pSelectionAsset->id
+				: 0u;
+		}
+
+		AshEngine::TerrainAssetId ResolveTerrainViewportAsset(
+			const uint64_t assetId,
+			const void* pContext)
+		{
+			const auto* pDeps = static_cast<const ViewportPanelDeps*>(pContext);
+			if (!pDeps || !pDeps->pAssetDatabaseService || assetId == 0u)
+			{
+				return 0u;
+			}
+
+			const AshEngine::AssetInfo* pSelectionAsset =
+				pDeps->pAssetDatabaseService->FindById(assetId);
+			return pSelectionAsset && pSelectionAsset->type == AshEngine::AssetType::Terrain
+				? pSelectionAsset->id
+				: 0u;
+		}
+
+		TerrainViewportAuthoringContextInput BuildAuthoringContextInput(
+			const ViewportPanelDeps& refDeps)
+		{
+			if (!refDeps.pSessionStateService || !refDeps.pTerrainEditorService)
+			{
+				return {};
+			}
+
+			return build_terrain_viewport_authoring_context_input(
+				refDeps.pSessionStateService->IsPanelOpen(
+					EditorPanelIds::TerrainMode,
+					false),
+				refDeps.pSessionStateService->GetSelection(),
+				refDeps.pSessionStateService->GetSelections(),
+				refDeps.pTerrainEditorService->GetSelectedAssetId(),
+				{
+					ResolveTerrainViewportEntityAsset,
+					ResolveTerrainViewportAsset,
+					&refDeps
+				});
+		}
 	}
 
 	namespace ViewportPanelTerrainInteraction
 	{
-		bool IsAuthoringMode(const TerrainEditorService* pService)
+		bool IsAuthoringContextActive(const ViewportPanelDeps& refDeps)
 		{
+			return is_terrain_viewport_authoring_context_active(
+				BuildAuthoringContextInput(refDeps));
+		}
+
+		bool IsAuthoringMode(const ViewportPanelDeps& refDeps)
+		{
+			const TerrainEditorService* pService = refDeps.pTerrainEditorService;
 			if (!pService)
 			{
 				return false;
 			}
 			const TerrainEditorMode mode = pService->GetAuthoringConfig().mode;
-			return mode == TerrainEditorMode::Sculpt || mode == TerrainEditorMode::Paint;
+			return IsAuthoringContextActive(refDeps) &&
+				(mode == TerrainEditorMode::Sculpt || mode == TerrainEditorMode::Paint);
 		}
 
 		void CancelActiveStroke(TerrainEditorService& refService)
@@ -183,9 +258,11 @@ namespace AshEditor
 				refDeps.pViewportService &&
 				refDeps.pViewportService->IsPrimaryViewport(strViewportId);
 			const TerrainAuthoringConfig& config = pService->GetAuthoringConfig();
+			const bool authoringContextActive = IsAuthoringContextActive(refDeps);
 			const bool authoringMode =
-				config.mode == TerrainEditorMode::Sculpt ||
-				config.mode == TerrainEditorMode::Paint;
+				authoringContextActive &&
+				(config.mode == TerrainEditorMode::Sculpt ||
+					config.mode == TerrainEditorMode::Paint);
 			const bool pointerInside =
 				ViewportPanelSupport::IsPointInRect(rectContent, refInput.vecMouseScreenPosition);
 			TerrainViewportQuery query{};
@@ -233,6 +310,7 @@ namespace AshEditor
 			TerrainViewportRouteInput input{};
 			input.primary_scene_viewport = isPrimaryScene;
 			input.accepts_input = refPresentation.bAcceptsInput;
+			input.authoring_context_active = authoringContextActive;
 			input.viewport_hovered = bContentHovered;
 			input.pointer_inside = pointerInside;
 			input.mode = config.mode;

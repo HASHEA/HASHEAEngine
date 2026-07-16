@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-16
 status: active
 ---
 
@@ -8,7 +8,7 @@ status: active
 
 ## 当前范围
 
-Phase 1 提供 Terrain 的纯 CPU 资产核心：网格与分块数据、不可变快照、非破坏编辑层、笔刷与 patch 回放、空间查询、`.AshTerrain` 容器、RAW/PNG/EXR 高度图导入导出，以及 `AssetDatabase` 发布与失效接口。Phase 2 已完成九个 rendering slice：Scene v6 `TerrainComponent`、独立 revision/extraction 和 world-space CPU query adapter；Function-only 原生 2D texture-array wrapper；`TerrainRenderAsset` 的 content-generation 状态、不可变 Component pointer diff、GPU 资源 ownership 和 `RenderAssetManager` readiness/activity 接入；`RenderTerrainProxy`、`VisibleRenderFrame::terrains` 与 ScenePresentation 的独立 terrain revision 同步；纯 CPU Component quadtree culling、投影误差 LOD、邻接修复与稳定 draw batch 生成；dirty weight-atlas 的 raw upload、RenderGraph UAV→SRV 契约与 compute shader；9 级共享 index grid、packed-height/morph surface shader 和固定 top-four 材质混合；`SceneRenderer` 的既有 GBuffer/方向光阴影接入、LOD debug、按 view 的 TAA history 失效和 Terrain capture readiness；以及 production-size 确定性 fixture 与 generation 驱动的 load/compose/upload/atlas/scene-submit readiness evaluator。Phase 3 当前实现包括 UI-free authoring session、stroke 与图层栈命令/undo-redo，以及 UIContext-only Terrain Mode：Asset Browser 的 Terrain 选择、service-owned Manage/Sculpt/Paint/Layers 配置、兼容笔刷控件、稳定 ID 图层操作、primary Scene viewport 笔刷输入仲裁、world-space brush overlay、异步 Create Flat / PNG、RAW R16、RAW R32F、EXR Import / Export、Save / Save Copy As / Optimize，以及 generation-aware Reload、外部修改冲突与只读恢复流程。
+Phase 1 提供 Terrain 的纯 CPU 资产核心：网格与分块数据、不可变快照、非破坏编辑层、笔刷与 patch 回放、空间查询、`.AshTerrain` 容器、RAW/PNG/EXR 高度图导入导出，以及 `AssetDatabase` 发布与失效接口。Phase 2 已完成九个 rendering slice：Scene v6 `TerrainComponent`、独立 revision/extraction 和 world-space CPU query adapter；Function-only 原生 2D texture-array wrapper；`TerrainRenderAsset` 的 content-generation 状态、不可变 Component pointer diff、GPU 资源 ownership 和 `RenderAssetManager` readiness/activity 接入；`RenderTerrainProxy`、`VisibleRenderFrame::terrains` 与 ScenePresentation 的独立 terrain revision 同步；纯 CPU Component quadtree culling、投影误差 LOD、邻接修复与稳定 draw batch 生成；dirty weight-atlas 的 raw upload、RenderGraph UAV→SRV 契约与 compute shader；9 级共享 index grid、packed-height/morph surface shader 和固定 top-four 材质混合；`SceneRenderer` 的既有 GBuffer/方向光阴影接入、LOD debug、按 view 的 TAA history 失效和 Terrain capture readiness；以及 production-size 确定性 fixture 与 generation 驱动的 load/compose/upload/atlas/scene-submit readiness evaluator。Phase 3 当前实现包括 UI-free authoring session、stroke 与图层栈命令/undo-redo，以及 UIContext-only Terrain Mode：Hierarchy 单选 Terrain 实体或 Asset Browser 选择 Terrain 资产均可绑定会话；layerless 资产第一次有效落笔自动创建通用编辑层；同一编辑层可混用全部高度工具和材质绘制；活动 stroke 按 80 ms wall-clock 节奏发布增量预览，但从按下到松开仍只提交一个历史命令。其余能力包括稳定 ID 图层操作、primary Scene viewport 笔刷输入仲裁、world-space brush overlay、异步 Create Flat / PNG、RAW R16、RAW R32F、EXR Import / Export、Save / Save Copy As / Optimize，以及 generation-aware Reload、外部修改冲突与只读恢复流程。
 
 生产默认布局为 8193 × 8193 个高度采样、8192 × 8192 个 quad、32 × 32 个 Component，每个 Component 为 256 × 256 quad、257 × 257 个快照采样，默认间距 1 m。纯 CPU API 也接受满足 `sample_count = component_count × component_quad_count + 1` 且采样间距为有限正数的小布局，供测试和工具使用；这不改变生产默认布局。
 
@@ -17,9 +17,9 @@ Phase 1 提供 Terrain 的纯 CPU 资产核心：网格与分块数据、不可�
 - `TerrainAssetSnapshot` 是发布给读取方的不可变资产快照。Base 高度、编辑层和 Component 通过 const 共享对象暴露；发布后不得修改。
 - `TerrainWorkingSet` 是从快照深验证后创建的受信可变编辑状态。编辑只通过 Terrain brush、patch 和 compose/publication API 完成。
 - 全局 sample coordinate 是持久化高度与权重的唯一真源。Component 内部边界样本只有一个 owner；依赖同一边界的全部 Component 都会进入 dirty 集合。
-- Base 高度以 R16 配合 `height_offset` / `height_range` 持久化，工作集、合成与查询使用 float32。
-- 全地形固定 8 个材质层。最终权重为 8 路 uint8，`quantize_terrain_weights` 保证每个 sample 的总和精确为 255；未绘制区域隐式为 Layer 0 = 255。
-- `TerrainEditLayer` 具有稳定 16-byte ID、名称、可见性、锁定状态、强度和 Additive/Alpha 高度混合模式。高度与权重分别保存按 owner Component 划分的 canonical 稀疏 block。
+- Base 高度以 R16 配合 `height_offset` / `height_range` 持久化，合成与查询解码为 float32。Base Import 在 authoring session 内不可变；source snapshot、`TerrainWorkingSet` 和所有 preview publication 共享同一 Base R16 allocation，笔刷只修改稀疏 edit layers，禁止按 preview 复制 production-size 8193² Base。
+- 全地形固定 8 个材质槽。最终权重为 8 路 uint8，`quantize_terrain_weights` 保证每个 sample 的总和精确为 255；未绘制区域隐式为材质槽 0 = 255。
+- `TerrainEditLayer`（地形编辑层）具有稳定 16-byte ID、名称、可见性、锁定状态和强度。每个高度稀疏 sample 保存仿射变换 `H' = a × H + b`；层强度 `s` 的最终结果为 `lerp(H, H', s)`。高度仿射 block 与材质权重 block 都按 owner Component 保存为 canonical 稀疏数据。
 
 每次非空内容修改只推进一次 `content_generation`。`dirty_components` 按 z/x 排序去重；边界修改按共享 sample 规则扩张。`compose_terrain_components` 只重建请求的 Component，`publish_terrain_working_set` 要求一次提交完整的当前 generation dirty 集合，成功后原子替换对应 const Component 指针并清空 dirty 集合；失败时工作集和旧快照保持不变，未修改 Component 继续共享旧指针。
 
@@ -27,13 +27,17 @@ Phase 1 提供 Terrain 的纯 CPU 资产核心：网格与分块数据、不可�
 
 当前工具为 Raise、Lower、Smooth、Flatten、Noise、Paint、Erase。公共参数使用世界空间半径、强度、falloff、stroke spacing、选中层、材质层和确定性 seed；`TerrainBrushMetric` 把 terrain-local XZ 映射到世界米，因此正数非均匀缩放下仍保持世界空间圆形影响。
 
-`resample_terrain_stroke` 和 `apply_terrain_brush_stroke` 按世界距离确定性重采样，同一几何路径不依赖输入点密度、帧率或 frame index。一次 stroke 在首次 mutation 前冻结 Base 与选中层及以下可见层，随后按 dab 顺序修改 canonical block。Noise 只依赖完整 64-bit seed 与全局 sample coordinate。
+`resample_terrain_stroke` 和可续接的 `append_resampled_terrain_stroke` 按世界距离确定性重采样，同一几何路径不依赖输入点密度、帧率或 frame index。一次 stroke 在首次 mutation 前冻结 Base 与选中层及以下可见层，随后按 dab 顺序左复合当前 sample 的仿射变换：Raise/Lower/Noise 更新 bias，Smooth/Flatten 以 coverage 对目标变换做顺序相关的左复合。因此五种高度工具可在同一编辑层按 stroke 顺序混用。Flatten 在整笔首个合法 resampled dab 处只从冻结的 through-selected source 采样一次目标高度；该目标属于 press/release 级 stroke state，后续所有 80 ms preview batch 复用它，one-shot 与任意合法增量分批必须生成相同 canonical affine block。首批 pressure 为 0 仍锁定目标，但全零压力 stroke 结束时不留下自动层、dirty 或历史。Noise 只依赖完整 64-bit seed 与全局 sample coordinate。
 
-Editor viewport 只允许 canonical primary Scene 在 Sculpt/Paint 模式提交笔刷。world ray 命中的 Terrain component 必须解析为当前选中 asset；`TerrainRayHit.local_sample` 是 sample index，进入 brush 前必须乘 `sample_spacing_meters` 转为 terrain-local 米，`TerrainBrushMetric` 则取命中 entity 世界矩阵 X/Z 轴长度以保留正非均匀缩放。一次 LMB press 最多 Begin 一次；Ready press 同帧加入首采样，Ready release 加入末采样后 End，同帧完成的短点击也必须走 Begin + Add + End。活动 stroke 进入 Outside 会 End 已完成段并锁存到 release，Pending/Failed、相机接管或 viewport 生命周期失效会 Cancel，禁止跳过无效区后重新连接 raw path。Authoring session readiness 与 cursor hit status 是两个独立状态：后者只由当前选中 asset 的 canonical primary Scene 更新，并携带 world anchor、normal、service-owned radius 和 Terrain entity identity；Outside/owner lifecycle 清空，foreign hit 不得替换合法 anchor。
+Editor viewport 只允许 canonical primary Scene 在 Sculpt/Paint 模式提交笔刷，并额外要求 Terrain Mode 面板已打开、当前恰好单选一个能解析为当前 session Terrain asset 的 Entity 或 Terrain asset。authoring session 与 viewport tool ownership 分离：关闭面板、空选、多选、选择非 Terrain 或 Terrain identity 失配时保留 working set、dirty/history、选中层与笔刷配置，但立即清 preview 并归还 LMB、Gizmo 和 W/E/R；若笔画正在进行则整笔 Cancel，并把已接管的 press 锁存到物理 release。重新打开面板并重新单选同一 Terrain 后才能恢复工具。world ray 命中的 Terrain component 必须解析为当前选中 asset；`TerrainRayHit.local_sample` 是 sample index，进入 brush 前必须乘 `sample_spacing_meters` 转为 terrain-local 米，`TerrainBrushMetric` 则取命中 entity 世界矩阵 X/Z 轴长度以保留正非均匀缩放。一次 LMB press 最多 Begin 一次；Ready press 同帧加入首采样，Ready release 加入末采样后 End，同帧完成的短点击也必须走 Begin + Add + End。活动 stroke 进入 Outside 会 End 已完成段并锁存到 release，Pending/Failed、相机接管或 viewport 生命周期失效会 Cancel，禁止跳过无效区后重新连接 raw path。Authoring session readiness 与 cursor hit status 是两个独立状态：后者只由当前选中 asset 的 canonical primary Scene 更新，并携带 world anchor、normal、service-owned radius 和 Terrain entity identity；Outside/owner lifecycle 清空，foreign hit 不得替换合法 anchor。
 
 Brush preview 只在 authoring session Ready、canonical primary Scene 可接收输入且当前 Terrain entity 仍绑定选中 snapshot 时提交。`TerrainBrushOverlayRenderer` 在 world-XZ 平面生成固定 64 段圆环，把每个候选点按有限平移与正非均匀缩放映射到 service 发布的 immutable snapshot，逐点调用 `query_height` 后还原 world Y；因此坡地上的 XZ 半径与实际 brush world metric 一致，不使用会在斜坡上收缩的切平面圆。只有相邻两个原始端点都 Ready 才生成该边，Pending/Outside/Failed Component 不会被跨越连接。Ready 为绿色、cursor Pending 为琥珀色、cursor Failed 或锁定层为红色；Outside、无 anchor、session 非 Ready、非法 transform/binding 或整圈无有效边均不提交。线段使用 `SceneOverlayDepthMode::DepthTestNoWrite` 并通过 Function `submit_scene_overlay` 深拷贝，Editor 不访问 Graphics 或持有 GPU 资源。
 
-一次 stroke 输出按 owner/domain 排序的 `TerrainEditPatch`。patch 分别记录 before/after 字节，可选择原始或确定性 RLE；`apply_terrain_edit_patches` 在写入前解码并验证整批 patch、当前 source bytes、目标层/owner/domain/rect 与 generation。任一 patch 无效时整批原子失败；成功时 generation 只推进一次，并重建完整 halo dirty 集合。Editor 的 `TerrainStrokeCommand` 只保存该 Engine patch，并经 `RecordExecutedCommand` 接入 undo/redo；Editor 不复制 patch codec 或 brush kernel。
+一次 brush apply 输出按 owner/domain 排序的 `TerrainEditPatch`。patch 分别记录 before/after 字节，可选择原始或确定性 RLE；仿射高度 patch 同时覆盖 scale 与 bias。`merge_terrain_edit_patches` 按 sample identity 合并同一 stroke 的增量 patch，结果固定为 stroke 首次 before 到最新 after；`apply_terrain_edit_patches` 在写入前解码并验证整批 patch、当前 source bytes、目标层/owner/domain/rect 与 generation。任一 patch 无效时整批原子失败；成功时 generation 只推进一次，并重建完整 halo dirty 集合。Editor 的 `TerrainStrokeCommand` 只保存聚合后的 Engine patch，并经 `RecordExecutedCommand` 接入 undo/redo；Editor 不复制 patch codec 或 brush kernel。
+
+`TerrainEditorService` 在 Begin 时建立一个 active transaction，保存 resampler continuation、尚未处理的 raw sample、聚合 patch、完整 dirty 集合和下一次 preview wall-clock 时间。Editor `Update()` 仅在没有 composition in-flight 且到达 80 ms cadence 时处理新增 dab，随后对该 generation 的完整 dirty 集合 compose，并把 immutable snapshot 同步发布到 Engine 与 AssetDatabase；End 强制冲刷尾段。一次 stroke 的中间预览不进入 undo/redo，只有 End 把聚合 patch记录为一个命令。Cancel、失焦、apply/compose/publication 失败或历史记录失败会逆序回放聚合 patch并重新发布回滚结果；无法证明回滚时 session 进入 quarantine，禁止把部分预览伪装成成功。
+
+layerless working set 可以进入 Sculpt/Paint Ready 状态，但选择、打开面板、hover、空 stroke 或 no-op dab 都不创建数据。第一次真正改变 canonical value 的 dab 会在同一 active transaction 中创建稳定 ID 的 `Edit Layer / 编辑层`；layer patch 与整次 stroke patch 合成一个历史命令。Undo 同时撤销内容并删除自动层，Redo 以相同 ID 恢复层和内容；已有有效选中层时不会额外创建。
 
 ## 图层栈与 undo/redo
 
@@ -71,10 +75,10 @@ New/Open/Reload Scene 在修改 Scene 前先调用 Terrain preflight：取消活
 
 - `query_height`：双线性采样高度。
 - `query_normal`：用相邻高度计算法线。
-- `ray_cast_terrain`：先遍历每个 Component 的 min/max 层级，再对叶节点中的真实三角形做精确相交；不使用固定步进。
+- `ray_cast_terrain`：先对所有与 ray 的 XZ 投影相交的非空 Component 做常数级 shape 校验，再按 XZ slab entry 的安全下界由近到远处理候选；只有仍可能优于已确认最近命中的候选才深验 min/max 层级并对叶节点真实三角形做精确相交，不使用固定步进。
 - `prefetch_query_region`：以非阻塞方式启动/观察 `AssetDatabase` Terrain 加载。
 
-返回状态为 `Ready`、`Pending`、`Outside` 或 `Failed`。缺少相交路径上所需 Component 时返回 `Pending`；非法或损坏数据返回 `Failed`。当前 prefetch 的粒度是整个 Terrain 资产，`sample_region` 只做范围验证，尚未实现 Component 流送。
+返回状态为 `Ready`、`Pending`、`Outside` 或 `Failed`。缺少且仍可能遮挡最近命中的 Component 时返回 `Pending`；非法 header/shape 一律返回 `Failed`，min/max 等深层数据损坏则在该候选仍可能成为最近命中时返回 `Failed`。已经确认更近命中后，严格位于其后的候选不再做昂贵深验。所有非 `Ready` 路径都保持输出不变。当前 prefetch 的粒度是整个 Terrain 资产，`sample_region` 只做范围验证，尚未实现 Component 流送。
 
 `SceneQuery.h/.cpp` 在这些 snapshot-local overload 之上提供 Scene world-space adapter。指定 Entity 的高度/法线查询和全 Scene Terrain 射线查询通过 `AssetDatabase` 的共享异步 future 解析资产；Pending/Outside/Failed 时不写输出。adapter 只接受完整 transform chain 上的有限平移、零旋转和有限正缩放；高度按 Y 缩放，法线按 inverse-transpose 缩放并归一化，非均匀缩放下的射线命中距离换算回 world meters。
 
@@ -89,7 +93,7 @@ New/Open/Reload Scene 在修改 Scene 前先调用 Terrain preflight：取消活
 ## Render asset contract
 
 - `TerrainRenderAssetState` 只接受单调递增的 `content_generation`，使用 1024-bit 固定 Component completion mask；同代或旧代结果不能清除 Failed，新 generation 完整成功后才发布 Ready。
-- 首次接受 snapshot 时为全部 resident Component 生成私有 GPU payload；后续 snapshot 只处理 `shared_ptr` 发生变化的 Component。`resident -> null` 作为 removal 参与同一 generation completion，并释放帧边界 atlas slot 元数据。任何失败 snapshot 也占用其 generation，禁止旧 generation 倒灌；失败后的新 generation 强制让全部 1024 个坐标参与重建（resident 重传、null retirement），避免复用指针掩盖未完成上传。
+- 首次接受 snapshot 时为全部 resident Component 生成私有 GPU payload；后续 snapshot 只处理 `shared_ptr` 发生变化的 Component。若更新代在前一代仍为 `Pending` 时到达，render asset 必须把 pointer-equal 的未完成 height/weight upload、隐式 weight reset 和 removal 原序携带并重绑到新 generation，把新变化尾插；已经完成且 pointer-equal 的 height 不得重排队，已驻留 weight atlas slot 的 generation 必须原地重绑。这样频繁 preview 不会反复从 row-major `(0,0)` 重启全 1024 项队列并饿死远端 Component。`resident -> null` 作为 removal 参与同一 generation completion，并释放帧边界 atlas slot 元数据。任何失败 snapshot 也占用其 generation，禁止旧 generation 倒灌；失败后的新 generation 仍强制让全部 1024 个坐标参与重建（resident 重传、null retirement），避免复用指针掩盖未完成上传。
 - 每个 257 × 257 高度 tile 按偶数 sample 在低 16 bit、奇数 sample 在高 16 bit 打包为 33025 个 `uint32_t`，末尾 padding lane 固定为 0。显式 8 路权重必须逐 sample 精确和为 255并原序拆入两路 RGBA8；空权重物化为 Layer 0 = 255。
 - GPU ownership 包含全 Terrain packed-height `StorageBuffer`、dirty-weight staging `StorageBuffer`、两张 4144 × 4144 RGBA8 UAV/SRV atlas、1025 × 1025 coarse target、三张 1024 × 1024 × 8 fallback material arrays 及 256-slot 帧边界 metadata。真实材质层 texture cook/填充留给后续渲染 slice。
 - `RenderAssetManager::request_terrain_asset/finalize_pending_terrain_asset` 按规范化资产 key 只登记一次 pending owner；Ready/Failed 只结算一次，并把 Terrain failed key 与 activity epoch 合入通用 readiness。GPU finalize 必须运行在 render thread。
@@ -111,12 +115,13 @@ New/Open/Reload Scene 在修改 Scene 前先调用 Terrain preflight：取消活
 
 ## `.AshTerrain` 容器
 
-`.AshTerrain` 是 little-endian version 1 分块容器：
+`.AshTerrain` 当前 writer 生成 little-endian version 2 分块容器，reader 同时接受 version 1 和 2：
 
 - 固定 96-byte header、两个 index descriptor 槽以及 CRC32。
 - block kind 覆盖 metadata、Base height、edit height/weight、composed Component、min/max 和 LOD error。
 - block codec 为 `None` 或确定性 `Rle`。
-- layer metadata 保持既有 version-1 字段布局，并可追加 `ASHL` revision 1 锁定状态 trailer；没有 trailer 的旧资产按全部 `locked=false` 加载，未知 revision、数量不匹配、非法布尔值或 trailer 尾随数据均 fail closed。
+- version 2 EditHeight block 保存逐 sample `scale + bias`；version 1 `values + coverage` 读取时按原 layer mode 精确迁移：Additive 为 `a=1, b=value×coverage`，Alpha 为 `a=1-coverage, b=coverage×value`。层 strength 保留，因此首次 composition 与 v1 数学等价。load 不原地升级文件，下一次 Save/Optimize 才写 version 2。
+- layer metadata 保持既有字段布局，并可追加 `ASHL` revision 1 锁定状态 trailer；没有 trailer 的旧资产按全部 `locked=false` 加载，未知 revision、数量不匹配、非法布尔值或 trailer 尾随数据均 fail closed。
 - `TerrainContainerRevision` 由文件大小和两个 descriptor 的 generation/index offset/index size/index CRC 组成，是同一 canonical path 上已提交物理版本的比较权威；generation 与 write time 都不能单独替代它。load 解码完成后会在 commit lease 下重新 inspect，只有 revision 未变化才发布 snapshot/report，否则返回可重试结果且输出保持空。
 - Windows 使用按 lowercase canonical target 派生名称的 process-external named mutex 作为 commit lease。Save、Optimize、revision inspect 与 staged new-file publish 共用它；该 lease 只协调遵守 TerrainContainer API 的 writer，不宣称阻止绕过 API 的任意外部文件写入。
 - `Busy` 表示另一合规 writer 正持有 lease；`SourceChanged` 表示取得 lease 后发现 expected revision 或 non-replacing destination 已变化。两者都属于可重试并发结果，不等同于容器损坏。
@@ -167,7 +172,7 @@ Create/Import 产生的 `.AshTerrain` target 必须以配置后的 AssetDatabase
 | `project/src/engine/Function/Asset/TerrainBrush.h/.cpp`、`TerrainEditPatch.cpp` | 笔刷、路径重采样、patch 生成与原子 undo/redo 回放 |
 | `project/src/engine/Function/Asset/TerrainLayerStack.h/.cpp` | 图层栈原子编辑、稳定 ID、精确 dirty union 与可逆 patch 回放 |
 | `project/src/engine/Function/Asset/TerrainSpatialData.h/.cpp` | Component min/max 层级与 LOD error 数据 |
-| `project/src/engine/Function/Asset/TerrainContainer*.h/.cpp`、`TerrainBlockCodec.*` | version 1 容器、CRC、generation recovery、增量保存、优化与 RLE |
+| `project/src/engine/Function/Asset/TerrainContainer*.h/.cpp`、`TerrainBlockCodec.*` | version 2 writer / v1-v2 reader、精确仿射迁移、CRC、generation recovery、增量保存、优化与 RLE |
 | `project/src/engine/Function/Asset/TerrainImport.*`、`TerrainRawCodec.cpp`、`TerrainPngCodecWin.cpp`、`TerrainExrCodec.cpp` | RAW/PNG/EXR 导入导出与取消/内存合同 |
 | `project/src/engine/Function/Asset/AssetDatabase.h/.cpp` | Terrain 索引、同步/异步 cache、发布与精确失效 |
 | `project/src/engine/Function/Scene/TerrainQuery.h/.cpp` | snapshot-local 高度、法线、射线与非阻塞预取查询 |
@@ -210,3 +215,4 @@ Create/Import 产生的 `.AshTerrain` target 必须以配置后的 AssetDatabase
 - [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)
 - [Phase 1 implementation plan](../../superpowers/plans/2026-07-13-terrain-phase-1-asset-core.md)
 - [Phase 2 rendering implementation plan](../../superpowers/plans/2026-07-13-terrain-phase-2-rendering.md)
+- [SDD-2026-07-15-terrain-interactive-authoring-workflow](../../sdd/SDD-2026-07-15-terrain-interactive-authoring-workflow.md)

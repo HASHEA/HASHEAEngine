@@ -543,7 +543,8 @@ namespace AshEngine
 			working_set.layout = desc.target_layout;
 			working_set.height_mapping = desc.height_mapping;
 			working_set.content_generation = 1u;
-			working_set.base_heights = std::move(encoded);
+			working_set.base_heights =
+				std::make_shared<const std::vector<uint16_t>>(std::move(encoded));
 			if (preserve_float_precision)
 			{
 				working_set.edit_layers.push_back(std::move(precision_layer));
@@ -575,8 +576,6 @@ namespace AshEngine
 					"Terrain height import was cancelled before publication.");
 			}
 			auto mutable_snapshot = std::make_shared<TerrainAssetSnapshot>();
-			auto immutable_base = std::make_shared<const std::vector<uint16_t>>(
-				std::move(working_set.base_heights));
 			auto immutable_layers = std::make_shared<const std::vector<TerrainEditLayer>>(
 				std::move(working_set.edit_layers));
 			mutable_snapshot->asset_id = working_set.asset_id;
@@ -586,7 +585,7 @@ namespace AshEngine
 			mutable_snapshot->material_layers = working_set.material_layers;
 			mutable_snapshot->content_generation = working_set.content_generation;
 			mutable_snapshot->residency_revision = working_set.residency_revision;
-			mutable_snapshot->base_heights = std::move(immutable_base);
+			mutable_snapshot->base_heights = working_set.base_heights;
 			mutable_snapshot->edit_layers = std::move(immutable_layers);
 			mutable_snapshot->components = std::move(working_set.components);
 			for (const TerrainDirtyComponentPayload& payload : payloads)

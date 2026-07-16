@@ -259,6 +259,55 @@ TEST_CASE("Terrain mode binds a selected Terrain entity through the existing ass
 	CHECK(panel.find("Graphics/") == std::string::npos);
 }
 
+TEST_CASE("Terrain viewport authoring requires an open panel and matching selection")
+{
+	const std::string deps = ReadTerrainContractText(
+		"project/src/editor/Core/PanelDeps/ViewportPanelDeps.h");
+	const std::string bootstrapHeader = ReadTerrainContractText(
+		"project/src/editor/App/PanelBootstrapper.h");
+	const std::string bootstrap = ReadTerrainContractText(
+		"project/src/editor/App/PanelBootstrapper.cpp");
+	const std::string application = ReadTerrainContractText(
+		"project/src/editor/App/EditorApplicationImpl.cpp");
+	const std::string terrainHeader = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelTerrainInteraction.h");
+	const std::string router = ReadTerrainContractText(
+		"project/src/editor/Core/TerrainViewportInputRouter.cpp");
+	const std::string terrain = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelTerrainInteraction.cpp");
+	const std::string interaction = ReadTerrainContractText(
+		"project/src/editor/Panels/ViewportPanelInteraction.cpp");
+
+	CHECK(deps.find("EditorSessionStateService* pSessionStateService") != std::string::npos);
+	CHECK(bootstrapHeader.find("EditorSessionStateService* pSessionStateService") != std::string::npos);
+	CHECK(bootstrap.find("deps.pSessionStateService = refContext.pSessionStateService") != std::string::npos);
+	CHECK(application.find("_upSessionStateService.get()") != std::string::npos);
+	CHECK(terrainHeader.find("IsAuthoringContextActive(const ViewportPanelDeps& refDeps)") !=
+		std::string::npos);
+	CHECK(terrain.find("IsPanelOpen(") != std::string::npos);
+	CHECK(terrain.find("EditorPanelIds::TerrainMode") != std::string::npos);
+	CHECK(terrain.find("GetSelections()") != std::string::npos);
+	CHECK(terrain.find("build_terrain_viewport_authoring_context_input(") !=
+		std::string::npos);
+	CHECK(router.find("refSelections.size() == 1u") != std::string::npos);
+	CHECK(router.find("EditorSelectionKind::Entity") != std::string::npos);
+	CHECK(router.find("EditorSelectionKind::Asset") != std::string::npos);
+	CHECK(terrain.find("ResolveTerrainViewportEntityAsset") != std::string::npos);
+	CHECK(terrain.find("ResolveTerrainViewportAsset") != std::string::npos);
+	CHECK(terrain.find("FindEntity(entityId)") != std::string::npos);
+	CHECK(terrain.find("entity.has_terrain_component()") != std::string::npos);
+	CHECK(terrain.find("FindByPath(") != std::string::npos);
+	CHECK(terrain.find("terrain.asset_path") != std::string::npos);
+	CHECK(terrain.find("FindById(") != std::string::npos);
+	CHECK(terrain.find("FindById(assetId)") != std::string::npos);
+	CHECK(terrain.find("AshEngine::AssetType::Terrain") != std::string::npos);
+	CHECK(terrain.find("GetSelectedAssetId()") != std::string::npos);
+	CHECK(terrain.find("input.authoring_context_active = authoringContextActive") != std::string::npos);
+	CHECK(interaction.find("ViewportPanelTerrainInteraction::IsAuthoringMode(") != std::string::npos);
+	CHECK(terrain.find("TerrainEditorIntent::Kind::SelectAsset") == std::string::npos);
+	CHECK(terrain.find("SelectAsset(0") == std::string::npos);
+}
+
 TEST_CASE("Terrain mode distinguishes edit layers and material slots for layerless authoring")
 {
 	const std::string state = ReadTerrainContractText(

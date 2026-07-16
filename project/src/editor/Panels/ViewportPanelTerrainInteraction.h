@@ -16,7 +16,8 @@ namespace AshEditor
 
 	namespace ViewportPanelTerrainInteraction
 	{
-		bool IsAuthoringMode(const TerrainEditorService* pService);
+		bool IsAuthoringContextActive(const ViewportPanelDeps& refDeps);
+		bool IsAuthoringMode(const ViewportPanelDeps& refDeps);
 		void CancelActiveStroke(TerrainEditorService& refService);
 		TerrainViewportRouteResult Update(
 			const ViewportPanelDeps& refDeps,

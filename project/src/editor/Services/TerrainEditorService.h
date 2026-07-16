@@ -186,6 +186,8 @@ namespace AshEditor
 			std::shared_ptr<const std::vector<AshEngine::TerrainEditLayer>> frozen_edit_layers{};
 			std::vector<AshEngine::TerrainStrokeSample> raw_samples{};
 			AshEngine::TerrainStrokeResamplerState resampler{};
+			AshEngine::TerrainBrushStrokeTargetState target_state{};
+			std::optional<AshEngine::TerrainStrokeSample> pending_flatten_target_dab{};
 			std::vector<AshEngine::TerrainEditPatch> aggregate_patches{};
 			std::optional<AshEngine::TerrainLayerStackPatch> auto_layer_patch{};
 			std::chrono::steady_clock::time_point next_preview_time{};

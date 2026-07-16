@@ -522,7 +522,8 @@ namespace AshEngine
 			uint64_t component_count = 0u;
 			if (!get_layout_counts(working_set.layout, global_samples, component_count) ||
 				!is_valid_height_mapping(working_set.height_mapping) ||
-				working_set.base_heights.size() != global_samples ||
+				!working_set.base_heights ||
+				working_set.base_heights->size() != global_samples ||
 				working_set.components.size() != component_count ||
 				!validate_edit_layers_shallow(
 					working_set.layout,
@@ -658,7 +659,7 @@ namespace AshEngine
 					const size_t global_index =
 						static_cast<size_t>(sample_z) * working_set.layout.sample_count_x + sample_x;
 					mutable_component->heights.push_back(decode_terrain_height_r16(
-						working_set.base_heights[global_index],
+						(*working_set.base_heights)[global_index],
 						working_set.height_mapping));
 				}
 			}
@@ -954,7 +955,7 @@ namespace AshEngine
 			working_set.height_mapping = snapshot.height_mapping;
 			working_set.content_generation = snapshot.content_generation;
 			working_set.residency_revision = snapshot.residency_revision;
-			working_set.base_heights = *snapshot.base_heights;
+			working_set.base_heights = snapshot.base_heights;
 			working_set.material_layers = snapshot.material_layers;
 			working_set.edit_layers = *snapshot.edit_layers;
 			working_set.components = snapshot.components;
@@ -1022,8 +1023,6 @@ namespace AshEngine
 				components[index] = payload.component;
 			}
 
-			auto mutable_base_heights =
-				std::make_shared<std::vector<uint16_t>>(working_set.base_heights);
 			auto mutable_edit_layers =
 				std::make_shared<std::vector<TerrainEditLayer>>(working_set.edit_layers);
 			auto mutable_snapshot = std::make_shared<TerrainAssetSnapshot>();
@@ -1034,7 +1033,7 @@ namespace AshEngine
 			mutable_snapshot->material_layers = working_set.material_layers;
 			mutable_snapshot->content_generation = working_set.content_generation;
 			mutable_snapshot->residency_revision = working_set.residency_revision;
-			mutable_snapshot->base_heights = std::move(mutable_base_heights);
+			mutable_snapshot->base_heights = working_set.base_heights;
 			mutable_snapshot->edit_layers = std::move(mutable_edit_layers);
 			mutable_snapshot->components = components;
 			std::shared_ptr<const TerrainAssetSnapshot> published = std::move(mutable_snapshot);

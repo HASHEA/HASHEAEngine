@@ -17,6 +17,7 @@ namespace AshEngine
 	class Renderer;
 	class RenderAssetManager;
 	class TerrainRenderPass;
+	struct TerrainRenderAssetCpuTestSeam;
 
 	static constexpr uint32_t k_terrain_render_component_capacity =
 		k_terrain_component_count * k_terrain_component_count;
@@ -188,5 +189,6 @@ namespace AshEngine
 			m_frame_boundary_atlas_slots{};
 		friend class RenderAssetManager;
 		friend class TerrainRenderPass;
+		friend struct TerrainRenderAssetCpuTestSeam;
 	};
 }

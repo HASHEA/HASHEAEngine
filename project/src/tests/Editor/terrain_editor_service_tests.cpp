@@ -114,6 +114,19 @@ namespace
 		return snapshot;
 	}
 
+	AshEngine::TerrainAssetSnapshot MakeEditorFlattenStrokeSnapshot()
+	{
+		AshEngine::TerrainAssetSnapshot snapshot = MakeEditorStrokeSnapshot();
+		snapshot.height_mapping = { 0.0f, 65535.0f };
+		auto base_heights = std::make_shared<std::vector<uint16_t>>(*snapshot.base_heights);
+		(*base_heights)[1u * snapshot.layout.sample_count_x + 1u] =
+			AshEngine::encode_terrain_height_r16(10.0f, snapshot.height_mapping);
+		(*base_heights)[1u * snapshot.layout.sample_count_x + 3u] =
+			AshEngine::encode_terrain_height_r16(30.0f, snapshot.height_mapping);
+		snapshot.base_heights = std::move(base_heights);
+		return snapshot;
+	}
+
 	bool EqualHeightBlocks(
 		const std::vector<AshEngine::TerrainSparseHeightBlock>& lhs,
 		const std::vector<AshEngine::TerrainSparseHeightBlock>& rhs)
@@ -874,6 +887,8 @@ TEST_CASE("Terrain editor previews an active stroke by wall clock and records on
 	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
 	REQUIRE(service.GetPublishedSnapshot() != nullptr);
 	const uint64_t initial_generation = service.GetPublishedSnapshot()->content_generation;
+	REQUIRE(service.GetPublishedSnapshot()->components.size() == 4u);
+	const auto far_component_before = service.GetPublishedSnapshot()->components[3u];
 
 	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
@@ -887,10 +902,19 @@ TEST_CASE("Terrain editor previews an active stroke by wall clock and records on
 	service.Update();
 	CHECK(service.GetWorkingSet()->content_generation == initial_generation + 1u);
 	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation + 1u);
+	CHECK(service.GetPublishedSnapshot()->components[3u] == far_component_before);
 	CHECK(commands.record_count == 0u);
 	CHECK(service.GetPreviewState().stroke_active);
 
-	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(3.0f, 2.0f)));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(7.0f, 7.0f)));
+	now += 80ms;
+	service.Update();
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation + 2u);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation + 2u);
+	CHECK(service.GetPublishedSnapshot()->components[3u] != far_component_before);
+	CHECK(commands.record_count == 0u);
+	CHECK(service.GetPreviewState().stroke_active);
+
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
 	service.Update();
@@ -900,6 +924,140 @@ TEST_CASE("Terrain editor previews an active stroke by wall clock and records on
 	REQUIRE(service.GetPublishedSnapshot() != nullptr);
 	CHECK(service.GetPublishedSnapshot()->content_generation ==
 		service.GetWorkingSet()->content_generation);
+}
+
+TEST_CASE("Terrain editor Flatten keeps its earliest target across zero-pressure preview batches")
+{
+	using namespace std::chrono_literals;
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	auto now = std::chrono::steady_clock::time_point{};
+	service.SetNowFunctionForTests([&now]() { return now; });
+	AshEngine::TerrainAssetSnapshot snapshot = MakeEditorFlattenStrokeSnapshot();
+	snapshot.edit_layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>();
+	REQUIRE(service.OpenSnapshotForAuthoring(std::move(snapshot)));
+	const uint64_t initial_generation = service.GetWorkingSet()->content_generation;
+
+	AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent();
+	begin.layer_id = {};
+	begin.brush.tool = AshEngine::TerrainBrushTool::Flatten;
+	begin.brush.radius_meters = 0.25f;
+	begin.brush.strength = 1.0f;
+	begin.brush.falloff = 1.0f;
+	begin.brush.stroke_spacing_meters = 2.0f;
+	begin.brush.layer_id = {};
+	begin.brush_metric.world_meters_per_terrain_meter = { 1.0f, 1.0f };
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+
+	AshEditor::TerrainEditorIntent first = MakeStrokeSampleIntent(1.0f, 1.0f);
+	first.stroke_sample.pressure = 0.0f;
+	REQUIRE(service.SubmitIntent(first));
+	now += 80ms;
+	service.Update();
+	CHECK(commands.record_count == 0u);
+	CHECK(service.GetPreviewState().stroke_active);
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+
+	AshEditor::TerrainEditorIntent second = MakeStrokeSampleIntent(3.0f, 1.0f);
+	second.stroke_sample.pressure = 0.0f;
+	REQUIRE(service.SubmitIntent(second));
+	now += 80ms;
+	service.Update();
+	CHECK(commands.record_count == 0u);
+	CHECK(service.GetPreviewState().stroke_active);
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(5.0f, 1.0f)));
+	now += 80ms;
+	service.Update();
+	REQUIRE(service.GetWorkingSet()->content_generation == initial_generation + 2u);
+	REQUIRE(service.GetWorkingSet()->edit_layers.size() == 1u);
+	const auto& blocks = service.GetWorkingSet()->edit_layers.front().height_blocks;
+	const AshEngine::TerrainComponentCoord owner = AshEngine::get_terrain_sample_owner(
+		service.GetWorkingSet()->layout, 5u, 1u);
+	const auto block = std::find_if(
+		blocks.begin(),
+		blocks.end(),
+		[owner](const AshEngine::TerrainSparseHeightBlock& refBlock)
+		{
+			return refBlock.owner == owner;
+		});
+	REQUIRE(block != blocks.end());
+	REQUIRE(5u >= block->changed_rect.min_x);
+	REQUIRE(5u < block->changed_rect.max_x_exclusive);
+	REQUIRE(1u >= block->changed_rect.min_z);
+	REQUIRE(1u < block->changed_rect.max_z_exclusive);
+	const size_t sample_index =
+		static_cast<size_t>(1u - block->changed_rect.min_z) * block->changed_rect.width() +
+		(5u - block->changed_rect.min_x);
+	REQUIRE(sample_index < block->biases.size());
+	CHECK(block->scales[sample_index] == 0.0f);
+	CHECK(block->biases[sample_index] == doctest::Approx(10.0f));
+
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	CHECK(commands.record_count == 1u);
+}
+
+TEST_CASE("Terrain editor all-zero-pressure Flatten leaves no automatic layer or history")
+{
+	using namespace std::chrono_literals;
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	auto now = std::chrono::steady_clock::time_point{};
+	service.SetNowFunctionForTests([&now]() { return now; });
+	AshEngine::TerrainAssetSnapshot snapshot = MakeEditorFlattenStrokeSnapshot();
+	snapshot.edit_layers = std::make_shared<std::vector<AshEngine::TerrainEditLayer>>();
+	REQUIRE(service.OpenSnapshotForAuthoring(std::move(snapshot)));
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	const uint64_t initial_generation = service.GetWorkingSet()->content_generation;
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation);
+	CHECK_FALSE(service.HasDirtyAssets());
+
+	AshEditor::TerrainEditorIntent begin = MakeBeginStrokeIntent();
+	begin.layer_id = {};
+	begin.brush.tool = AshEngine::TerrainBrushTool::Flatten;
+	begin.brush.radius_meters = 0.25f;
+	begin.brush.strength = 1.0f;
+	begin.brush.falloff = 1.0f;
+	begin.brush.stroke_spacing_meters = 2.0f;
+	begin.brush.layer_id = {};
+	begin.brush_metric.world_meters_per_terrain_meter = { 1.0f, 1.0f };
+	REQUIRE(SubmitConfiguredBeginStroke(service, begin));
+
+	AshEditor::TerrainEditorIntent sample = MakeStrokeSampleIntent(1.0f, 1.0f);
+	sample.stroke_sample.pressure = 0.0f;
+	REQUIRE(service.SubmitIntent(sample));
+	now += 80ms;
+	service.Update();
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(service.GetPublishedSnapshot()->edit_layers->empty());
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation);
+	CHECK_FALSE(service.HasDirtyAssets());
+	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	CHECK(service.GetPreviewState().stroke_active);
+	CHECK_FALSE(service.HasPendingComposition());
+	CHECK(commands.record_count == 0u);
+
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	CHECK(service.GetWorkingSet()->edit_layers.empty());
+	CHECK(service.GetPublishedSnapshot()->edit_layers->empty());
+	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation);
+	CHECK_FALSE(service.HasDirtyAssets());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	CHECK_FALSE(service.GetPreviewState().stroke_active);
+	CHECK_FALSE(service.HasPendingComposition());
+	CHECK(commands.record_count == 0u);
 }
 
 TEST_CASE("Terrain editor auto-creates one edit layer inside the first effective stroke command")
@@ -990,6 +1148,58 @@ TEST_CASE("Terrain editor rolls back an auto-created live preview layer on cance
 	CHECK_FALSE(service.GetSelectedLayerId().is_valid());
 	CHECK(service.GetWorkingSet()->dirty_components.empty());
 	CHECK(commands.record_count == 0u);
+}
+
+TEST_CASE("Terrain editor context cancellation preserves the loaded dirty authoring session")
+{
+	using namespace std::chrono_literals;
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	auto now = std::chrono::steady_clock::time_point{};
+	service.SetNowFunctionForTests([&now]() { return now; });
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	now += 80ms;
+	service.Update();
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	REQUIRE(commands.record_count == 1u);
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	REQUIRE(service.HasDirtyAssets());
+	const AshEngine::TerrainAssetId selectedAsset = service.GetSelectedAssetId();
+	const AshEngine::TerrainLayerId selectedLayer = service.GetSelectedLayerId();
+	const AshEditor::TerrainAuthoringConfig config = service.GetAuthoringConfig();
+	const std::vector<AshEngine::TerrainSparseHeightBlock> committedBlocks =
+		service.GetWorkingSet()->edit_layers.front().height_blocks;
+
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(3.0f, 3.0f)));
+	now += 80ms;
+	service.Update();
+	REQUIRE(service.GetPreviewState().stroke_active);
+	service.ClearViewportPreview();
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
+
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	CHECK(service.GetSelectedAssetId() == selectedAsset);
+	CHECK(service.GetSelectedLayerId() == selectedLayer);
+	CHECK(service.HasDirtyAssets());
+	CHECK(service.GetAuthoringConfig().mode == config.mode);
+	CHECK(service.GetAuthoringConfig().brush.tool == config.brush.tool);
+	CHECK(service.GetAuthoringConfig().brush.radius_meters ==
+		doctest::Approx(config.brush.radius_meters));
+	CHECK(EqualHeightBlocks(
+		service.GetWorkingSet()->edit_layers.front().height_blocks,
+		committedBlocks));
+	CHECK(commands.record_count == 1u);
+	CHECK_FALSE(service.GetPreviewState().stroke_active);
+	CHECK(service.GetPreviewState().viewport.query_status ==
+		AshEngine::TerrainQueryStatus::Outside);
+	CHECK_FALSE(service.GetPreviewState().viewport.has_world_position);
 }
 
 TEST_CASE("Terrain editor auto-creates the same generic edit layer for paint strokes")
@@ -4706,12 +4916,13 @@ TEST_CASE("Terrain editor file jobs create refreshes the catalog and opens a cle
 	CHECK(service.GetWorkingSet()->asset_id == realAssetId);
 	CHECK(service.GetWorkingSet()->source_path == relativePath);
 	CHECK_FALSE(service.HasDirtyAssets());
-	REQUIRE(service.GetWorkingSet()->base_heights.size() == 81u);
+	REQUIRE(service.GetWorkingSet()->base_heights);
+	REQUIRE(service.GetWorkingSet()->base_heights->size() == 81u);
 	const uint16_t encodedFlat = AshEngine::encode_terrain_height_r16(
 		create.create_desc.flat_height, create.create_desc.height_mapping);
 	CHECK(std::all_of(
-		service.GetWorkingSet()->base_heights.begin(),
-		service.GetWorkingSet()->base_heights.end(),
+		service.GetWorkingSet()->base_heights->begin(),
+		service.GetWorkingSet()->base_heights->end(),
 		[encodedFlat](const uint16_t value) { return value == encodedFlat; }));
 	REQUIRE(service.GetPublishedSnapshot());
 	CHECK(service.GetPublishedSnapshot()->asset_id == realAssetId);
@@ -4774,7 +4985,8 @@ TEST_CASE("Terrain editor file jobs import an absolute external RAW source and o
 	CHECK(service.GetSelectedAssetId() == realAssetId);
 	CHECK(service.GetWorkingSet()->asset_id == realAssetId);
 	CHECK(service.GetWorkingSet()->source_path == relativePath);
-	CHECK(service.GetWorkingSet()->base_heights == sourceValues);
+	REQUIRE(service.GetWorkingSet()->base_heights);
+	CHECK(*service.GetWorkingSet()->base_heights == sourceValues);
 	CHECK_FALSE(service.HasDirtyAssets());
 	CHECK(std::filesystem::exists(finalPath));
 	CHECK_FALSE(HasTerrainEditorFileJobTemporary(root));

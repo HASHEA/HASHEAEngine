@@ -297,6 +297,9 @@ namespace AshEngine
 			const TerrainComponentSnapshot* component = nullptr;
 			TerrainComponentCoord coord{};
 			std::vector<LevelShape> shapes{};
+			// Starts as the cheap XZ-slab lower bound used for front-to-back
+			// ordering. It is replaced by the exact root AABB entry immediately
+			// before traversing a component.
 			float entry = 0.0f;
 		};
 
@@ -642,25 +645,8 @@ namespace AshEngine
 					ComponentCandidate candidate{};
 					candidate.component = component.get();
 					candidate.coord = coord;
-					candidate.shapes.reserve(9u);
-					if (!validate_spatial_data(*component, candidate.shapes))
-					{
-						return TerrainQueryStatus::Failed;
-					}
-					const uint32_t root_level = static_cast<uint32_t>(candidate.shapes.size() - 1u);
-					if (node_entry(
-							snapshot,
-							candidate,
-							ray.origin,
-							direction,
-							max_distance,
-							root_level,
-							0u,
-							0u,
-							candidate.entry))
-					{
-						candidates.push_back(std::move(candidate));
-					}
+					candidate.entry = xz_entry;
+					candidates.push_back(std::move(candidate));
 				}
 			}
 			std::sort(candidates.begin(), candidates.end(),
@@ -671,12 +657,38 @@ namespace AshEngine
 
 			float nearest = std::numeric_limits<float>::infinity();
 			TerrainRayHit hit{};
-			for (const ComponentCandidate& candidate : candidates)
+			for (ComponentCandidate& candidate : candidates)
 			{
 				if (candidate.entry > nearest)
 				{
 					break;
 				}
+				if (!candidate.component)
+				{
+					return TerrainQueryStatus::Failed;
+				}
+				candidate.shapes.reserve(9u);
+				if (!validate_spatial_data(*candidate.component, candidate.shapes))
+				{
+					return TerrainQueryStatus::Failed;
+				}
+				const uint32_t root_level =
+					static_cast<uint32_t>(candidate.shapes.size() - 1u);
+				float root_entry = 0.0f;
+				if (!node_entry(
+						snapshot,
+						candidate,
+						ray.origin,
+						direction,
+						std::min(max_distance, nearest),
+						root_level,
+						0u,
+						0u,
+						root_entry))
+				{
+					continue;
+				}
+				candidate.entry = root_entry;
 				traverse_component(
 					snapshot,
 					candidate,

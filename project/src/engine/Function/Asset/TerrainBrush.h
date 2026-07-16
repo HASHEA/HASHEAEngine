@@ -53,6 +53,13 @@ namespace AshEngine
 		double distance_to_next_sample_meters = 0.0;
 	};
 
+	// editor begin 修改原因：让实时预览的多个增量批次共享整笔 Flatten 首个 dab 的冻结目标。
+	struct TerrainBrushStrokeTargetState
+	{
+		std::optional<float> flatten_height{};
+	};
+	// editor end
+
 	enum class TerrainEditPatchDomain : uint8_t
 	{
 		Height = 0,
@@ -110,16 +117,20 @@ namespace AshEngine
 	// Applies samples that were already produced by the deterministic stroke
 	// resampler. Incremental Editor preview uses this entry point so a dab is not
 	// spaced twice, while frozen_edit_layers keeps target-based tools anchored to
-	// the layer stack that existed when the stroke began.
+	// the layer stack that existed when the stroke began. target_state belongs to
+	// the whole stroke and is committed only after a batch succeeds.
+	// editor begin 修改原因：透传整笔 stroke 的 Flatten 冻结目标，避免按预览批次重新采样。
 	ASH_API auto apply_resampled_terrain_brush_dabs(
 		TerrainWorkingSet& working_set,
 		const TerrainBrushParameters& params,
 		const TerrainBrushMetric& metric,
 		const std::vector<TerrainEditLayer>& frozen_edit_layers,
+		TerrainBrushStrokeTargetState& target_state,
 		const std::vector<TerrainStrokeSample>& resampled_dabs,
 		std::vector<TerrainEditPatch>& out_patches,
 		std::vector<TerrainComponentCoord>& out_dirty_components,
 		std::string* out_error = nullptr) -> bool;
+	// editor end
 
 	ASH_API auto apply_terrain_edit_patches(
 		TerrainWorkingSet& working_set,

@@ -369,6 +369,7 @@ namespace AshEditor
 	{
 		const PanelBootstrapContext bootstrapContext{
 			_upSelectionService.get(),
+			_upSessionStateService.get(),
 			_upSceneService.get(),
 			_upAssetDatabaseService.get(),
 			_upTerrainEditorService.get(),

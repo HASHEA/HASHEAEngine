@@ -751,7 +751,7 @@ TEST_CASE("Terrain composition rejects duplicate and out-of-range requests")
 	CheckFailure({ { 0u, 2u } });
 }
 
-TEST_CASE("Terrain composition makes an isolated mutable working-set copy")
+TEST_CASE("Terrain composition shares immutable base heights and isolates mutable edit layers")
 {
 	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
 	REQUIRE(AshEngine::create_flat_terrain_snapshot(
@@ -764,16 +764,16 @@ TEST_CASE("Terrain composition makes an isolated mutable working-set copy")
 	CHECK(snapshot->edit_layers->empty());
 	AshEngine::TerrainWorkingSet working_set{};
 	REQUIRE(AshEngine::make_terrain_working_set(*snapshot, working_set));
-	REQUIRE(working_set.base_heights.size() == snapshot->base_heights->size());
+	REQUIRE(working_set.base_heights);
+	CHECK(working_set.base_heights == snapshot->base_heights);
 	CHECK(working_set.components == snapshot->components);
-	working_set.base_heights[0] = 1234u;
 	working_set.edit_layers.push_back(MakeHeightLayer(
 		1u,
 		AshEngine::TerrainHeightBlendMode::Additive,
 		1.0f,
 		1.0f,
 		1.0f));
-	CHECK((*snapshot->base_heights)[0] == 10u);
+	CHECK((*working_set.base_heights)[0] == 10u);
 	CHECK(snapshot->edit_layers->empty());
 
 	AshEngine::TerrainAssetSnapshot invalid = *snapshot;
@@ -782,7 +782,7 @@ TEST_CASE("Terrain composition makes an isolated mutable working-set copy")
 	std::string error{ "stale" };
 	CHECK_FALSE(AshEngine::make_terrain_working_set(invalid, working_set, &error));
 	CHECK(working_set.asset_id == 0u);
-	CHECK(working_set.base_heights.empty());
+	CHECK_FALSE(working_set.base_heights);
 	CHECK_FALSE(error.empty());
 	CHECK(error != "stale");
 
@@ -907,6 +907,7 @@ TEST_CASE("Terrain composition publishes dirty row-major replacements and shares
 	REQUIRE(published != nullptr);
 	CHECK(error.empty());
 	CHECK(published->content_generation == 2u);
+	CHECK(published->base_heights == source->base_heights);
 	REQUIRE(published->edit_layers != nullptr);
 	CHECK(published->edit_layers->size() == 1u);
 	REQUIRE(published->components.size() == 4u);

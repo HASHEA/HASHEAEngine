@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 
@@ -149,6 +150,76 @@ TEST_CASE("Terrain query ray cast hits both heightfield cell triangles exactly")
 		CHECK(hit.position.z == doctest::Approx(xz.y));
 		CHECK(hit.component == AshEngine::TerrainComponentCoord{ 0u, 0u });
 	}
+}
+
+TEST_CASE("Terrain query ray cast stops deep validation behind a confirmed nearer hit")
+{
+	const auto snapshot = MakeRaySnapshot();
+	const AshEngine::TerrainRay ray{
+		{ 0.5f, 2.0f, 0.5f },
+		{ 1.0f, -1.0f, 0.0f }
+	};
+
+	auto far_malformed = snapshot;
+	auto malformed_component =
+		std::make_shared<AshEngine::TerrainComponentSnapshot>(
+			*far_malformed.components[1u]);
+	REQUIRE_FALSE(malformed_component->min_max_levels.empty());
+	malformed_component->min_max_levels.front().x =
+		std::numeric_limits<float>::quiet_NaN();
+	far_malformed.components[1u] = std::move(malformed_component);
+
+	AshEngine::TerrainRayHit hit{};
+	CHECK(AshEngine::ray_cast_terrain(far_malformed, ray, 100.0f, hit) ==
+		AshEngine::TerrainQueryStatus::Ready);
+	CHECK(hit.component == AshEngine::TerrainComponentCoord{ 0u, 0u });
+
+	auto near_malformed = snapshot;
+	malformed_component = std::make_shared<AshEngine::TerrainComponentSnapshot>(
+		*near_malformed.components[0u]);
+	REQUIRE_FALSE(malformed_component->min_max_levels.empty());
+	malformed_component->min_max_levels.front().x =
+		std::numeric_limits<float>::quiet_NaN();
+	near_malformed.components[0u] = std::move(malformed_component);
+	hit.distance = 123.0f;
+	CHECK(AshEngine::ray_cast_terrain(near_malformed, ray, 100.0f, hit) ==
+		AshEngine::TerrainQueryStatus::Failed);
+	CHECK(hit.distance == 123.0f);
+}
+
+TEST_CASE("Terrain query ray cast validates far component shape before early out")
+{
+	auto snapshot = MakeRaySnapshot();
+	auto malformed_component =
+		std::make_shared<AshEngine::TerrainComponentSnapshot>(
+			*snapshot.components[1u]);
+	malformed_component->sample_width += 1u;
+	snapshot.components[1u] = std::move(malformed_component);
+
+	const AshEngine::TerrainRay ray{
+		{ 0.5f, 2.0f, 0.5f },
+		{ 1.0f, -1.0f, 0.0f }
+	};
+	AshEngine::TerrainRayHit hit{};
+	hit.distance = 123.0f;
+	hit.position = { 4.0f, 5.0f, 6.0f };
+	hit.normal = { 0.0f, 0.0f, 1.0f };
+	hit.component = { 7u, 8u };
+	hit.local_sample = { 9.0f, 10.0f };
+	const AshEngine::TerrainRayHit before = hit;
+
+	CHECK(AshEngine::ray_cast_terrain(snapshot, ray, 100.0f, hit) ==
+		AshEngine::TerrainQueryStatus::Failed);
+	CHECK(hit.distance == before.distance);
+	CHECK(hit.position.x == before.position.x);
+	CHECK(hit.position.y == before.position.y);
+	CHECK(hit.position.z == before.position.z);
+	CHECK(hit.normal.x == before.normal.x);
+	CHECK(hit.normal.y == before.normal.y);
+	CHECK(hit.normal.z == before.normal.z);
+	CHECK(hit.component == before.component);
+	CHECK(hit.local_sample.x == before.local_sample.x);
+	CHECK(hit.local_sample.y == before.local_sample.y);
 }
 
 TEST_CASE("Terrain query ray cast rejects invalid directions without changing output")

@@ -8,6 +8,7 @@ namespace AshEditor
 	class DragDropTransferService;
 	class EditorEventBus;
 	class EditorSettingsService;
+	class EditorSessionStateService;
 	class EditorShortcutService;
 	class EditorGizmoService;
 	class EditorViewportCameraService;
@@ -25,6 +26,7 @@ namespace AshEditor
 	struct PanelBootstrapContext
 	{
 		SelectionService* pSelectionService = nullptr;
+		EditorSessionStateService* pSessionStateService = nullptr;
 		SceneService* pSceneService = nullptr;
 		AssetDatabaseService* pAssetDatabaseService = nullptr;
 		TerrainEditorService* pTerrainEditorService = nullptr;
