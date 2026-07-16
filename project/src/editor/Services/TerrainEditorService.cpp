@@ -1437,8 +1437,24 @@ namespace AshEditor
 			_pendingPublishedBindAssetId == assetId && _fileOperationState.asset_id == assetId;
 		const std::optional<std::filesystem::file_time_type> candidateSourceWriteTime =
 			_externalCandidateSourceWriteTime;
+		AshEngine::TerrainSnapshotPublicationToken previousPublication =
+			*_externalCandidateExpectedPublication;
+		const bool reusesPublishedSnapshot = previousPublication.snapshot &&
+			!previousPublication.snapshot->failed &&
+			previousPublication.snapshot->asset_id == assetId &&
+			previousPublication.snapshot->content_generation == candidate->content_generation &&
+			previousPublication.snapshot->residency_revision == candidate->residency_revision &&
+			previousPublication.snapshot->source_revision.is_valid() &&
+			candidate->source_revision.is_valid() &&
+			previousPublication.snapshot->source_revision == candidate->source_revision;
+		// Reopening the same committed container must preserve pointer identity because
+		// TerrainRenderAsset rejects a different pointer at the same content generation.
+		// The no-op pointer replacement still goes through the publication CAS below so
+		// a concurrent publisher cannot be overwritten by this asynchronous load.
+		const std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshotToOpen =
+			reusesPublishedSnapshot ? previousPublication.snapshot : candidate;
 
-		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> preparedPublished = candidate;
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> preparedPublished = snapshotToOpen;
 		AshEngine::TerrainWorkingSet preparedWorkingSet{};
 		TerrainEditorSessionCore preparedCore{};
 		std::string preparedDiagnostic{};
@@ -1446,7 +1462,7 @@ namespace AshEditor
 		try
 		{
 			if (!AshEngine::make_terrain_working_set(
-					*candidate, preparedWorkingSet, &_strLastError) ||
+					*snapshotToOpen, preparedWorkingSet, &_strLastError) ||
 				!preparedCore.Open(std::move(preparedWorkingSet)))
 			{
 				if (_strLastError.empty())
@@ -1455,15 +1471,15 @@ namespace AshEditor
 				}
 				return false;
 			}
-			if (candidate->recovered_previous_generation)
+			if (snapshotToOpen->recovered_previous_generation)
 			{
 				preparedDiagnostic =
 					"Terrain container recovered generation " +
-					std::to_string(candidate->content_generation) +
+					std::to_string(snapshotToOpen->content_generation) +
 					" after rejecting generation " +
-					std::to_string(candidate->rejected_content_generation) +
-					(candidate->recovery_detail.empty()
-						? "." : ": " + candidate->recovery_detail);
+					std::to_string(snapshotToOpen->rejected_content_generation) +
+					(snapshotToOpen->recovery_detail.empty()
+						? "." : ": " + snapshotToOpen->recovery_detail);
 				preparedCore.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
 				preparedLastError = preparedDiagnostic;
 			}
@@ -1479,11 +1495,9 @@ namespace AshEditor
 			return false;
 		}
 
-		AshEngine::TerrainSnapshotPublicationToken previousPublication =
-			*_externalCandidateExpectedPublication;
 		AshEngine::TerrainSnapshotPublicationToken acceptedPublication{};
 		const bool exchanged = _pAssets->compare_exchange_terrain_snapshot(
-			assetId, previousPublication, candidate, &acceptedPublication);
+			assetId, previousPublication, snapshotToOpen, &acceptedPublication);
 		if (!exchanged)
 		{
 			_strLastError = _pAssets->get_last_error();
@@ -1543,15 +1557,15 @@ namespace AshEditor
 		SyncAuthoringLayerSelection();
 		ObserveLoadedSourceWriteTime(
 			candidateSourceWriteTime,
-			candidate->source_revision.is_valid()
-				? std::optional<AshEngine::TerrainContainerRevision>{ candidate->source_revision }
+			snapshotToOpen->source_revision.is_valid()
+				? std::optional<AshEngine::TerrainContainerRevision>{ snapshotToOpen->source_revision }
 				: std::nullopt);
-		if (candidate->recovered_previous_generation)
+		if (snapshotToOpen->recovered_previous_generation)
 		{
 			SetExternalChangeState(
 				TerrainExternalChangeStatus::RecoveredReadOnly,
-				candidate->content_generation,
-				GetEffectiveTerrainDiskGeneration(*candidate),
+				snapshotToOpen->content_generation,
+				GetEffectiveTerrainDiskGeneration(*snapshotToOpen),
 				std::move(preparedDiagnostic),
 				true,
 				_pAssets->is_valid() && assetId != 0u,

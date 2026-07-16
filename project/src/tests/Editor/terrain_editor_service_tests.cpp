@@ -3205,6 +3205,103 @@ TEST_CASE("Terrain asset selection bypasses a stale shared cache before observin
 	std::filesystem::remove_all(root);
 }
 
+TEST_CASE("Terrain asset selection reuses an identical published disk snapshot")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("selection-identical-publication-root");
+	const std::filesystem::path path = root / "selected.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> alreadyPublished{};
+	REQUIRE(assets.load_terrain_by_id(initial.asset_id, alreadyPublished));
+	REQUIRE(alreadyPublished);
+	REQUIRE(alreadyPublished->source_revision.is_valid());
+
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	AshEditor::TerrainEditorIntent select{};
+	select.kind = AshEditor::TerrainEditorIntent::Kind::SelectAsset;
+	select.asset_id = initial.asset_id;
+	REQUIRE(service.SubmitIntent(select));
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (std::chrono::steady_clock::now() < deadline && service.HasBlockingOperation())
+	{
+		service.Update();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+
+	REQUIRE_FALSE(service.HasBlockingOperation());
+	REQUIRE(service.GetWorkingSet());
+	REQUIRE(service.GetPublishedSnapshot());
+	CHECK(service.GetPublishedSnapshot() == alreadyPublished);
+	const AshEngine::TerrainSnapshotPublicationToken publication =
+		assets.capture_terrain_snapshot_publication(initial.asset_id);
+	CHECK(publication.snapshot == alreadyPublished);
+	CHECK(service.GetWorkingSet()->content_generation == alreadyPublished->content_generation);
+	CHECK(service.GetWorkingSet()->residency_revision == alreadyPublished->residency_revision);
+	std::filesystem::remove_all(root);
+}
+
+TEST_CASE("Terrain asset selection cannot reuse an identical snapshot over a concurrent publication")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threadingConfig{};
+	threadingConfig.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threadingConfig));
+	TerrainEditorThreadingScope threadingScope{};
+
+	const std::filesystem::path root = TerrainEditorAssetRoot("selection-identical-publication-race-root");
+	const std::filesystem::path path = root / "selected.AshTerrain";
+	AshEngine::TerrainAssetSnapshot initial = MakeEditorStrokeSnapshot();
+	initial.source_path = path;
+	SaveTerrainEditorSnapshot(path, initial);
+	AshEngine::AssetDatabase assets = AshEngine::AssetDatabase::create(root);
+	REQUIRE(assets.is_valid());
+	BindTerrainEditorSnapshotToAssetDatabase(assets, path, initial);
+
+	std::shared_ptr<const AshEngine::TerrainAssetSnapshot> alreadyPublished{};
+	REQUIRE(assets.load_terrain_by_id(initial.asset_id, alreadyPublished));
+	REQUIRE(alreadyPublished);
+
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(assets, commands));
+	AshEditor::TerrainEditorIntent select{};
+	select.kind = AshEditor::TerrainEditorIntent::Kind::SelectAsset;
+	select.asset_id = initial.asset_id;
+	REQUIRE(service.SubmitIntent(select));
+
+	auto concurrent = std::make_shared<AshEngine::TerrainAssetSnapshot>(*alreadyPublished);
+	++concurrent->content_generation;
+	REQUIRE(assets.publish_terrain_snapshot(initial.asset_id, concurrent));
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (std::chrono::steady_clock::now() < deadline && service.HasBlockingOperation())
+	{
+		service.Update();
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+
+	REQUIRE_FALSE(service.HasBlockingOperation());
+	CHECK_FALSE(service.GetWorkingSet());
+	CHECK_FALSE(service.GetPublishedSnapshot());
+	CHECK(service.GetLastError().find("publication changed before replacement") != std::string::npos);
+	const AshEngine::TerrainSnapshotPublicationToken publication =
+		assets.capture_terrain_snapshot_publication(initial.asset_id);
+	CHECK(publication.snapshot == concurrent);
+	std::filesystem::remove_all(root);
+}
+
 TEST_CASE("Terrain asset selection keeps the clean source session until the valid target commits")
 {
 	AshEngine::shutdown_threading();
