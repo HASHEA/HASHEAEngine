@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Ready for execution against approved SDD SHA-256 `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9` (includes the approved Task 2 codec execution clarification).
+**Status:** Ready for execution against approved SDD SHA-256 `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B` (includes the approved Task 2 codec and Task 3 typed-load execution clarifications).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -16,7 +16,7 @@
 
 - Execute only in worktree `D:\workspace\AshEngine\HASHEAEngine\.worktrees\gpu-driven-vegetation-phase2` on branch `codex/gpu-driven-vegetation-phase2`.
 - Starting integration point is approved-design amendment commit `9b47dbaa0ca8856480db65b444c320767237fb1d` (approved base design `24d88c9bba3195caf0d8c2b8d5cc835612a44faa`); do not rebase a dirty implementation task.
-- Design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`. If the hash changes before Task 12, stop and review the new document before continuing. Task 12 alone may update Status/conclusions after all evidence exists and must record both the original approved input hash `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, this execution-clarified input hash, and the final archived hash.
+- Design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`. If the hash changes before Task 12, stop and review the new document before continuing. Task 12 alone may update Status/conclusions after all evidence exists and must record the original approved input hash `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, the Task 2 execution-clarified hash `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, this Task 3 execution-clarified input hash, and the final archived hash.
 - Existing user-owned dirty files are:
   - `project/thirdparty/tracy/tracy-csvexport.exe`
   - `project/thirdparty/tracy/tracy-profiler.exe`
@@ -30,7 +30,7 @@
 - Do not include or copy Terrain branch internals. The only production surface provider in this phase is a nullable injected interface; deterministic providers live under `project/src/tests/` only.
 - Do not add a third-party dependency, a render-ready state, a GPU upload, a renderer registration, a `VisibleRenderFrame` field, or a GPUDriven conversion.
 - New test `.cpp` files require a fresh `generate_vs2022.bat`. `project/src/tests/premake5.lua` changes are limited to explicitly linking the Scene/Editor production `.cpp` files itemized by Tasks 4, 6, 9, and 11; do not add broad source globs.
-- GPU, RenderGate, and PerfGate commands in Task 12 require a newly coordinated exclusive window. No task before Task 12 uses GPU.
+- Every GPU, RenderGate, or PerfGate command requires a newly coordinated exclusive window. Before Task 12, the only GPU use is Task 3's repository-mandated four-combination Debug readiness smoke; Tasks 4–11 remain CPU/static only.
 - Every focused commit must use an explicit `git add -- <paths>` list and pass this staged-path audit before commit:
 
 ```powershell
@@ -422,7 +422,7 @@ ASH_API bool encode_vegetation_chunk(
 
 The public value DTOs use only wire-semantic fields: Species stores a 16-byte ID, UTF-8 name, ordered LODs (mesh path, material paths, `uint32_t screen_error_milli`), two `std::array<int32_t,3>` bounds, placement scalar/slot fields, native booleans, deformation enum and optional render paths. Layer stores ID/generation/seed, sorted `VegetationSpeciesReference { id, sha256, asset_path }`, and sorted tiles whose planes own expanded `std::array<uint8_t,1024>` values. Chunk stores layer/input/chunk/surface identity, exact height extrema, the same sorted Species references, and 28-byte-semantic instance fields. It does not expose encoded RLE buffers or packed headers.
 
-Parse binary streams field-by-field; never read a packed struct. `VegetationAssetCodecInternal.h` is a non-exported three-codec implementation seam for checked add/multiply/narrowing, bounds-owning little-endian cursor/writer, strict JSON scalar/path validation, budget admission, and shared palette records; it must not expose DTO behavior or be included outside these codecs. Check every count, addition, multiplication, allocation, and string length before allocation. Decode into local temporaries and move into outputs only after header, payload, CRC, ordering, identity, shape, exact logical-cost computation and exact EOF validation all succeed. On success return the exact `VegetationLoadCost`; on failure leave DTO, cost, and encode output empty. Species JSON uses a duplicate-key-aware parse path and native JSON type inspection; it must not use permissive numeric/string conversion. Layer writer merges adjacent equal texels into maximal RLE runs and selects RLE only when strictly shorter than 1024 bytes; reader decodes, validates CRC, re-encodes, and requires exact codec/encoded-byte equality. Standalone Chunk rejects zero layer/input/surface identity, zero scale and oct `-32768`; revision zero remains legal.
+Parse binary streams field-by-field; never read a packed struct. `VegetationAssetCodecInternal.h` is a non-exported three-codec implementation seam for checked add/multiply/narrowing, bounds-owning little-endian cursor/writer, strict JSON scalar/path validation, budget admission, and shared palette records; it must not expose DTO behavior or be included outside these codecs. Check every count, addition, multiplication, variable-size DTO/container allocation, and string length before that allocation. The already-owned immutable input snapshot and parser/token scratch are first bounded by admitted file/payload bytes and are not charged as wire-derived decoded ownership; no DTO reserve/copy may occur during that preflight. Decode into local temporaries and move into outputs only after header, payload, CRC, ordering, identity, shape, exact logical-cost computation and exact EOF validation all succeed. On success return the exact `VegetationLoadCost`; on failure leave DTO, cost, and encode output empty. Species JSON uses a duplicate-key-aware parse path and native JSON type inspection; it must not use permissive numeric/string conversion. Layer writer merges adjacent equal texels into maximal RLE runs and selects RLE only when strictly shorter than 1024 bytes; reader decodes, validates CRC, re-encodes, and requires exact codec/encoded-byte equality. Standalone Chunk rejects zero layer/input/surface identity, zero scale and oct `-32768`; revision zero remains legal.
 
 - [ ] **Step 4: Run GREEN and corruption regression**
 
@@ -452,11 +452,16 @@ git commit -m "feat(vegetation): add strict asset codecs"
 
 **Files:**
 
+- Modify: `project/src/engine/Base/hthreading.cpp`
 - Modify: `project/src/engine/Function/Asset/AssetDatabase.h`
 - Modify: `project/src/engine/Function/Asset/AssetDatabase.cpp`
 - Modify: `project/src/editor/Services/AssetDatabaseService.cpp`
+- Modify: `project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h`
 - Modify: `project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp`
+- Modify: `project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp`
 - Modify: `project/src/editor/Core/AssetPresentationUtils.cpp`
+- Modify: `docs/specs/modules/base.md`
+- Modify: `docs/specs/modules/asset.md`
 - Create: `project/src/tests/Vegetation/vegetation_asset_database_tests.cpp`
 - Modify: `project/src/tests/Vegetation/VegetationTestSupport.h`
 
@@ -489,7 +494,11 @@ TEST_CASE("Vegetation AssetDatabase detects case-insensitive types and deduplica
 }
 ```
 
-Add sync/async by-id/by-path cases for all three types, wrong-type requests, missing/corrupt files, tiny caller budgets, a generous successful load followed by a tiny-budget request that must still fail, and tiny-first followed by generous success. Concurrent same-budget requests share one in-flight result; different budgets have request-isolated results and cannot poison each other. For Layer typed loads, resolve every palette Species path through the same AssetDatabase catalog revision and require embedded ID plus canonical file SHA-256 equality; path/ID/digest mismatch is request-local `InvalidData`, returns no Layer and caches no partial asset. For Chunk typed loads, perform the same embedded Species path/ID/digest resolution and enforce `candidate_ordinal < resolved_species.candidates_per_cell`; mutate an ordinal from 7 to 8 against an 8-candidate species for the RED. Deterministic epoch tests call the production completion-publication reducer below with explicit old/new epoch and request tokens: an old completion after refresh may fulfill its private result but cannot erase the new in-flight token, refill cache, or change global state/error; same-epoch admitted failure and success in both orders produce the same final `Loaded` state. No test uses sleeps, large-file timing, or a test-only executor hook. `refresh()` invalidates all vegetation caches/in-flight maps. Confirm Species is text-previewable, Layer/Chunk are binary-style, and none is scene-instantiable.
+Add sync/async by-id/by-path cases for all three types, wrong-type requests, missing/corrupt files, tiny caller budgets, a generous successful load followed by a tiny-budget request that must still fail, and tiny-first followed by generous success. Concurrent same-budget requests share one in-flight result; different budgets have request-isolated results and cannot poison each other. For Layer typed loads, resolve every palette Species path through the same AssetDatabase catalog revision and require embedded ID plus canonical file SHA-256 equality; path/ID/digest mismatch is admitted outer-asset `InvalidData`, returns no Layer, caches no partial asset and participates in the outer AssetId global precedence reducer. For Chunk typed loads, perform the same embedded Species path/ID/digest resolution and enforce `candidate_ordinal < resolved_species.candidates_per_cell`; mutate an ordinal from 7 to 8 against an 8-candidate species for the RED. Deterministic epoch tests call the production completion-publication reducer below with explicit old/new epoch and request tokens: an old completion after refresh may fulfill its private result but cannot erase the new in-flight token, refill cache, or change global state/error; same-epoch admitted failure and success in both orders produce the same final `Loaded` state. No test uses sleeps, large-file timing, or a test-only executor hook. Successful catalog replacement and invalid-root reset invalidate vegetation caches/in-flight maps; a scan failure without replacement preserves epoch, catalog, cache and state. Confirm Species is text-previewable, Layer/Chunk are binary-style, and none is scene-instantiable.
+
+Budget admission is independently applied to the outer Layer/Chunk file and to every referenced Species file; dependency costs are not summed into the outer file cost. Cold and warm outcomes must be identical: a cached Layer/Chunk retains the exact outer cost plus immutable resolved Species assets and their exact costs, and every cache hit re-admits both the outer result and each dependency against the caller's six-field budget. Add Layer and Chunk cold/warm tests where the outer file fits but a referenced Species exceeds the caller budget. Successful decoded content is the only cacheable result; Missing/Io/InvalidData and request-local WrongType/BudgetExceeded are never negative-cached.
+
+The async test owns a single-worker RAII executor and queues a promise-controlled blocker before issuing requests. A production pure in-flight admission reducer, called by Species/Layer/Chunk, returns JoinExisting only for exact type/AssetId/epoch/six-field-budget identity and otherwise LaunchNew; direct reducer tests plus static map-use review prove same-budget sharing and different-budget isolation. Result pointer equality is retained only as immutable cache-identity evidence, not as proof of in-flight sharing. Worker admission tests cover both sides of shutdown without sleeps: a command accepted before the shutdown lifecycle lock flips must drain after the blocker and complete normally; once `is_threading_shutting_down()` is true, a second command must be rejected immediately and never execute. The typed wrapper converts that rejection to a ready non-throwing Failed/Io result and cleans its matching in-flight token before releasing/joining the blocker. A separate started-single-worker idle handshake followed by one sole command must reach bounded future completion with no later enqueue/notify, mechanically guarding the condition-variable lost-wake edge. Catalog publication reducer cases distinguish matching Success→PublishReplacement, matching InvalidRoot→ResetInvalidRoot, matching Failed→KeepLastKnownGood, and every stale root/epoch outcome→DiscardStale; stale InvalidRoot must not clear a newer root. Initial-Unloaded outer decoded-budget and dependency-budget failures assert global state/error and database error remain byte-identical, and a tiny+generous blocker case proves the tiny failure neither leaves Loading nor rolls back the generous request. Every temporary asset root is unique to the current worktree/process/test instance and is cleaned only by its owner.
 
 - [ ] **Step 2: Run RED**
 
@@ -549,6 +558,66 @@ struct VegetationAssetCompletionPublicationDecision
     std::string global_error{};
 };
 
+struct VegetationAssetInFlightAdmissionInput
+{
+    bool has_existing = false;
+    AssetType requested_type = AssetType::Unknown;
+    AssetType existing_type = AssetType::Unknown;
+    AssetId requested_id = 0;
+    AssetId existing_id = 0;
+    uint64_t requested_epoch = 0;
+    uint64_t existing_epoch = 0;
+    VegetationLoadBudget requested_budget{};
+    VegetationLoadBudget existing_budget{};
+};
+
+enum class VegetationAssetInFlightAdmissionDecision : uint8_t
+{
+    LaunchNew,
+    JoinExisting
+};
+
+ASH_API VegetationAssetInFlightAdmissionDecision
+decide_vegetation_asset_in_flight_admission(
+    const VegetationAssetInFlightAdmissionInput& input);
+
+enum class VegetationCatalogScanOutcome : uint8_t
+{
+    Succeeded,
+    InvalidRoot,
+    Failed
+};
+
+struct VegetationCatalogPublicationInput
+{
+    uint64_t captured_epoch = 0;
+    uint64_t current_epoch = 0;
+    std::filesystem::path captured_root{};
+    std::filesystem::path current_root{};
+    VegetationCatalogScanOutcome scan_outcome = VegetationCatalogScanOutcome::Failed;
+};
+
+enum class VegetationCatalogPublicationDecision : uint8_t
+{
+    KeepLastKnownGood,
+    PublishReplacement,
+    ResetInvalidRoot,
+    DiscardStale
+};
+
+ASH_API VegetationCatalogPublicationDecision decide_vegetation_catalog_publication(
+    const VegetationCatalogPublicationInput& input);
+
+namespace Detail
+{
+    // SDD-approved production seam used by every vegetation filesystem snapshot caller.
+    ASH_API bool read_vegetation_bounded_stream_snapshot(
+        std::istream& input,
+        uint64_t max_file_bytes,
+        std::vector<uint8_t>& out_bytes,
+        std::string* out_error);
+}
+
 ASH_API VegetationAssetCompletionPublicationDecision
 decide_vegetation_asset_completion_publication(
     const VegetationAssetCompletionPublicationInput& input);
@@ -576,19 +645,33 @@ std::shared_future<VegetationAssetLoadResult<VegetationSpecies>> load_vegetation
 std::shared_ptr<const VegetationAssetResolverSnapshot> capture_vegetation_resolver_snapshot() const;
 ```
 
-Mirror the four signatures for `VegetationLayerSnapshot` and `VegetationChunk`. `VegetationAssetResolverSnapshot` is an immutable, worker-safe catalog/root/path view with no back-pointer to mutable AssetDatabase state; typed Layer, typed Chunk, and Task 8 active-store validation are its three production consumers. Its Species load reads one byte snapshot, runs the strict codec and canonical SHA, and returns only a value/shared immutable asset. Typed Layer and Chunk success is published only after all referenced Species resolve against the same resolver snapshot and pass path/ID/canonical-digest checks; refresh invalidates the whole cross-asset result. A successful immutable cache stores the exact wire-derived `VegetationLoadCost`; every later caller must pass its own budget against that cost before receiving the cached pointer. Same-budget requests may share one in-flight future. Different-budget requests do not share an in-flight future; `VegetationAssetLoadFailure::BudgetExceeded` is request-local, is not cached as a content failure, and never changes `get_asset_load_state/get_asset_last_error`.
+Mirror the four signatures for `VegetationLayerSnapshot` and `VegetationChunk`. `VegetationAssetResolverSnapshot` is an immutable, worker-safe catalog/root/path view with no back-pointer to mutable AssetDatabase state; typed Layer, typed Chunk, and Task 8 active-store validation are its three production consumers. Its Species load reads one byte snapshot, runs the strict codec and canonical SHA, and returns only a value/shared immutable asset. Typed Layer and Chunk success is published only after all referenced Species resolve against the same resolver snapshot and pass path/ID/canonical-digest checks. Refresh invalidates shared cross-asset cache/publication/in-flight membership, while an old request still completes its private future from its captured immutable snapshot and is barred from shared publication. A successful immutable cache stores the exact wire-derived `VegetationLoadCost`; every later caller must pass its own budget against that cost before receiving the cached pointer. Same-budget requests may share one in-flight future. Different-budget requests do not share an in-flight future; `VegetationAssetLoadFailure::BudgetExceeded` is request-local, is not cached as a content failure, and never changes `get_asset_load_state`, `get_asset_last_error`, or database-level `get_last_error()`.
 
-`AssetDatabase::Impl` owns a mutex-protected `uint64_t vegetation_catalog_epoch` and monotonic request token. Every successful catalog replacement by `refresh()` and every reset increments the epoch before clearing vegetation caches/in-flight entries. A typed request captures the current epoch, token, and one immutable resolver snapshot. Completion always fulfills its request-local promise, but all Species/Layer/Chunk completion paths must call the exported pure `decide_vegetation_asset_completion_publication` reducer before touching shared state; these are three real production call sites, not a test-only abstraction. The reducer permits cache/global publication only when epochs match, permits erase only when both epoch and in-flight token match, and otherwise returns all side-effect flags false. Production applies the decision while holding the same epoch/state mutex and rechecks the decision inputs under that lock. Within one epoch global outcome precedence is fixed and completion-order independent: `Loaded` dominates all failures; otherwise admitted content failures rank `InvalidData > Io > Missing`, and equal-ranked failures retain the lexicographically smallest normalized diagnostic. `WrongType` and `BudgetExceeded` remain request-local. A later success upgrades Failed to Loaded and clears the global error; no failure can downgrade Loaded. Add tiny-first/generous, concurrent tiny+generous, both reducer completion orders, and explicit old/new epoch/token tests. Extend `Impl` caches/in-flight maps and clear them only under the same epoch/state mutex. Review proves every typed async completion uses the reducer and no parallel write path exists. Extend all exhaustive Editor presentation switches; do not add the types to `IsAssetTypeSceneInstantiable`.
+`AssetDatabase::Impl` owns a mutex-protected `uint64_t vegetation_catalog_epoch` and monotonic request token. Every successful catalog replacement by `refresh()` and every reset increments the epoch before clearing vegetation caches/in-flight entries. A typed request captures the current epoch, token, and one immutable resolver snapshot. Completion always fulfills its request-local promise, but all Species/Layer/Chunk completion paths must call the exported pure `decide_vegetation_asset_completion_publication` reducer before touching shared state; these are three real production call sites, not a test-only abstraction. The reducer permits cache/global publication only when epochs match, permits erase only when both epoch and in-flight token match, and otherwise returns all side-effect flags false. Production applies the decision while holding the same epoch/state mutex and rechecks the decision inputs under that lock. Within one epoch global outcome precedence is fixed and completion-order independent: `Loaded` dominates all failures; otherwise admitted content failures rank `InvalidData > Io > Missing`, and equal-ranked failures retain the lexicographically smallest normalized diagnostic. Vegetation typed request admission and in-flight registration never write global `Loading`; progress ownership is private to the exact in-flight key/token. Until the outer asset and every dependency have passed all six budget fields and cross-asset validation, global state/error and database `get_last_error()` remain byte-identical. Only terminal completion is reduced into Loaded/InvalidData/Io/Missing. Therefore `WrongType` and `BudgetExceeded` are fully request-local even from initial Unloaded and during a different-budget generous request, with no Loading residue or rollback. A later success upgrades Failed to Loaded and clears the global error; no failure can downgrade Loaded. Add tiny-first/generous, concurrent tiny+generous, both reducer completion orders, explicit old/new epoch/token tests, an initial-Unloaded decoded/dependency budget failure test, and an `InvalidData -> retry admitted -> Io/Missing` test that asserts the InvalidData aggregate persists during and after the lower-ranked completion while success still upgrades to Loaded. Assert request-local failures leave typed state/error and database `get_last_error()` byte-identical. Extend `Impl` caches/in-flight maps and clear them only under the same epoch/state mutex. Review proves every typed async completion uses the reducer and no parallel write path exists. Extend all exhaustive Editor presentation switches; do not add the types to `IsAssetTypeSceneInstantiable`.
+
+`set_root_path()` changes root, increments the vegetation epoch and clears the vegetation catalog/cache/in-flight/global state atomically under that same mutex; no request may observe old `AssetInfo` with a new root. `refresh()` begins by capturing `(scan_root, captured_epoch)` in that mutex, scans only the copied root outside the lock, then reacquires the mutex and calls the exported pure catalog-publication reducer against current root/epoch plus `VegetationCatalogScanOutcome::{Succeeded,InvalidRoot,Failed}` before any swap. Any root/epoch mismatch returns DiscardStale for all outcomes. On an exact match, Succeeded→PublishReplacement and bumps epoch even when catalog bytes are unchanged; InvalidRoot→ResetInvalidRoot and atomically bumps epoch/clears catalog, vegetation cache/in-flight/global state; Failed→KeepLastKnownGood without bumping or discarding. The reducer is an SDD-approved single-call mechanical race seam; static review proves refresh has no catalog/reset bypass. Tests include stale InvalidRoot after a new root and require zero clearing. By-id and by-path typed requests capture epoch, token, copied `AssetInfo`, root and immutable catalog index in one critical section. The resolver value-copies these data and never holds an `Impl`, mutex, catalog pointer or database back-pointer. Within one resolver snapshot, Species path resolutions are memoized so Layer/Chunk validation cannot mix disk generations. Missing means path absent; open/read failures are Io. Species reference digests are computed from strict decode followed by canonical re-encode, never from noncanonical source text bytes.
+
+Generic raw loads cannot be a parallel vegetation state writer. Add `load_text_by_id_bounded/load_text_by_path_bounded(..., uint64_t max_file_bytes, std::string&)`: it first performs a non-writing catalog lookup that copies root+`AssetInfo` together and never calls the legacy resolver that writes Missing/last_error. The filesystem wrapper opens exactly one binary stream/handle, performs no trusted pre-open `file_size` admission and never reopens, then uses an SDD-approved production bounded-stream helper to read fixed 64 KiB chunks into local bytes. Every append is checked; after exactly max bytes it probes one extra byte on the same handle, so exact EOF succeeds, max+1 or in-place growth fails, and zero admits only an empty file. A final partial chunk accompanied by EOF is normal success; a short read without EOF, badbit or another I/O error fails. Output is moved only after successful EOF. Atomic path replacement cannot change the already-open handle. The same wrapper/helper serves generic preview and typed Species/Layer/Chunk resolver reads, giving multiple real production consumers rather than a test-only abstraction. Direct helper tests feed controlled exact/final-partial+EOF/short-without-EOF/max+1/growing/error streams; public tests cover below/exact/zero, and static review locks one-open-to-EOF. The API never touches asset/global load state or errors. `AssetDatabaseService::LoadTextById` uses this bounded API for every Editor text preview with an Editor-owned named constant `kAssetTextPreviewMaxFileBytes = 1 MiB`; this is solely a raw preview/read cap and is unrelated to Task 9 typed resident/world budgets. Species is allowed through this bounded preview path. Existing unbounded `load_text_by_id/path` and all generic `load_binary_by_id/path` reject Species/Layer/Chunk request-locally with no typed state/error or database `get_last_error()` change; Layer/Chunk compact tooltips use catalog metadata and do not read payload bytes. No generic path calls legacy `set_load_loading/success/failed_locked` for the three vegetation types. Existing non-vegetation generic behavior remains unchanged. Add concurrent typed+bounded-preview assertions proving preview has zero shared side effects, plus static review of every generic entry point.
+
+Task 3 closes the Base worker enqueue/shutdown and condition-variable lost-wake races rather than assuming them away. `hthreading.cpp` reuses the existing `worker_condition_mutex` as the sole condition/lifecycle-admission mutex: the worker wait predicate reads stop/queue while holding it; enqueue holds it across `shutting_down`/initialized inspection and queue push, then unlocks before notify; shutdown holds it while atomically flipping `shutting_down` plus `worker_stop_requested`, then unlocks before notify/join. Lock order is always condition mutex before `CommandQueue`'s internal mutex, never the reverse; the outer worker `try_pop` only takes the queue mutex. Therefore producer cannot notify between a false predicate and atomic wait, and a command is either admitted-before-stop and drained or rejected-after-stop; push-after-worker-exit is impossible. Immediate/no-worker execution never holds this mutex while running user code. Add a started-one-worker idle→sole-command bounded-completion case with no subsequent notification, plus the blocker shutdown cases. Typed async submission uses `Detail::enqueue_worker_command` through one AssetDatabase-local wrapper rather than ignoring `dispatch_background_task`'s command completion. It retains the request result promise and inspects the returned `ThreadCommandFuture`; immediate rejection is synchronously reduced as Failed/Io, fulfills the result promise, and erases only the matching epoch/token. The wrapper catches enqueue invocation exceptions, ready command-future exceptions and all task exceptions, and converts each to the same non-throwing result shape exactly once. Thus no typed future can become `broken_promise` or remain Loading. Update the durable Base threading spec in the same commit.
+
+Every result shape is exact: Loaded has `failure=None`, a non-null asset, exact outer cost and empty error; Missing has `state=Missing`, `failure=Missing`, null asset, zero cost and a normalized non-empty error; BudgetExceeded/WrongType/Io/InvalidData have `state=Failed`, the matching failure, null asset, zero cost and a normalized non-empty error. Futures never throw and never complete in Loading. Normalized diagnostics are trimmed stable messages with path separators canonicalized to `/`; equal-rank reduction compares those normalized bytes. Append the three enum values without renumbering existing values. The Asset Browser filter array grows from 11 to 14 in the header, support implementation and toolbar consumer; Species is text-previewable, Layer/Chunk use compact binary tooltips, and all three remain non-instantiable. Update the durable Asset module spec in this task; the consolidated Editor authoring/usage contract remains Task 12's Editor-spec responsibility.
 
 - [ ] **Step 4: Run GREEN and existing asset regression**
+
+Run all focused/full CPU tests and both Debug builds first. Then obtain a fresh exclusive GPU window from every active worktree for the single `run.bat all Debug` readiness matrix. Immediately before that command, snapshot `product/config/Engine.ini`, `product/config/editor/EditorSettings.json`, `product/config/editor/ViewportLayout.json`, and `product/config/editor/imgui.ini` byte-for-byte and record their SHA-256 values. Do not run validation, RenderGate, PerfGate, or bless/import anything. Require Editor/Sandbox × Vulkan/DX12 exit zero, Sandbox clean exit, and every fresh Engine/Application log to have zero generic error/critical, validation/debug-layer, device-lost, access-violation, fatal, assertion, and bad-leak findings. In a finally-style cleanup, restore all four files to the exact pre-run bytes, verify their SHA-256 values, verify effective Editor/Sandbox/AshImageDiff/gate roots are zero, and explicitly release the GPU window even on failure.
 
 ```bat
 RunTests.bat Debug --test-case="Vegetation AssetDatabase*"
 RunTests.bat Release --test-case="Vegetation AssetDatabase*"
 RunTests.bat Debug --test-case="Vegetation * codec*"
+RunTests.bat Debug
+RunTests.bat Release
 build_editor.bat Debug
+build_sandbox.bat Debug
+run.bat all Debug --smoke-test-seconds=120
 RunArchGate.bat
-git diff --check -- project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Core/AssetPresentationUtils.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp
+git diff --check -- project/src/engine/Base/hthreading.cpp project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp project/src/editor/Core/AssetPresentationUtils.cpp docs/specs/modules/base.md docs/specs/modules/asset.md project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp
 ```
 
 - [ ] **Step 5: Review and selectively commit**
@@ -596,7 +679,7 @@ git diff --check -- project/src/engine/Function/Asset/AssetDatabase.h project/sr
 Review 1 checks load-cost admission, same-budget in-flight identity, request-local budget failure, global state precedence, and typed Chunk species/candidate validation. Review 2 checks every exhaustive `AssetType` switch, case-insensitive extension detection, immutable sharing, and refresh invalidation.
 
 ```bat
-git add -- project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Core/AssetPresentationUtils.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp
+git add -- project/src/engine/Base/hthreading.cpp project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp project/src/editor/Core/AssetPresentationUtils.cpp docs/specs/modules/base.md docs/specs/modules/asset.md project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp
 git commit -m "feat(asset): load vegetation asset types"
 ```
 
