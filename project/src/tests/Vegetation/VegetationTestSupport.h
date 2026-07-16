@@ -1,6 +1,9 @@
 #pragma once
 
 #include "Function/Asset/VegetationCodec.h"
+#include "Function/Asset/VegetationChunk.h"
+#include "Function/Asset/VegetationLayer.h"
+#include "Function/Asset/VegetationSpecies.h"
 #include "Function/Asset/VegetationSurface.h"
 #include "Function/Scene/VegetationSurfaceProvider.h"
 
@@ -10,7 +13,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -19,6 +24,206 @@
 
 namespace VegetationTest
 {
+	inline AshEngine::VegetationLoadBudget GenerousLoadBudget()
+	{
+		return { 64ull * 1024ull * 1024ull, 64ull * 1024ull * 1024ull,
+			64ull * 1024ull * 1024ull, 65534u, 65534u, 1000000u };
+	}
+
+	inline std::vector<uint8_t> ReadFixtureBytes(const std::string& relative_path)
+	{
+		std::ifstream input(relative_path, std::ios::binary);
+		return std::vector<uint8_t>(
+			std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+	}
+
+	inline std::vector<uint8_t> CanonicalGrassSpeciesJson()
+	{
+		return ReadFixtureBytes(
+			"project/src/tests/fixtures/vegetation/Phase2ManualSpecies.AshVegetation");
+	}
+
+	inline std::vector<uint8_t> ReplaceJsonToken(
+		const std::vector<uint8_t>& bytes,
+		const std::string& from,
+		const std::string& to)
+	{
+		std::string text(bytes.begin(), bytes.end());
+		const size_t position = text.find(from);
+		if (position == std::string::npos ||
+			text.find(from, position + from.size()) != std::string::npos)
+		{
+			throw std::runtime_error("JSON mutation token must occur exactly once");
+		}
+		text.replace(position, from.size(), to);
+		return std::vector<uint8_t>(text.begin(), text.end());
+	}
+
+	inline AshEngine::VegetationId SequentialId(const uint8_t first = 1)
+	{
+		AshEngine::VegetationId id{};
+		for (size_t index = 0; index < id.size(); ++index)
+		{
+			id[index] = static_cast<uint8_t>(first + index);
+		}
+		return id;
+	}
+
+	inline AshEngine::VegetationPaletteEntry MinimalPaletteEntry()
+	{
+		AshEngine::VegetationPaletteEntry entry{};
+		entry.species_id = SequentialId();
+		const std::vector<uint8_t> canonical = CanonicalGrassSpeciesJson();
+		entry.species_sha256 = AshEngine::vegetation_sha256(
+			canonical.data(), canonical.size());
+		entry.species_asset_path = "vegetation/Phase2ManualSpecies.AshVegetation";
+		return entry;
+	}
+
+	inline AshEngine::VegetationLayerSnapshot MinimalLayerSnapshot()
+	{
+		AshEngine::VegetationLayerSnapshot layer{};
+		layer.layer_id = SequentialId(33);
+		layer.content_generation = 1;
+		layer.layer_seed = 0x0123456789abcdefull;
+		layer.palette.push_back(MinimalPaletteEntry());
+		AshEngine::VegetationLayerTile tile{};
+		tile.tile_x = -2;
+		tile.tile_z = 3;
+		AshEngine::VegetationLayerPlane density{};
+		density.kind = AshEngine::VegetationLayerPlaneKind::Density;
+		density.values.fill(0);
+		density.values[0] = 255;
+		tile.planes.push_back(density);
+		AshEngine::VegetationLayerPlane weight{};
+		weight.kind = AshEngine::VegetationLayerPlaneKind::SpeciesWeight;
+		weight.species_id = layer.palette[0].species_id;
+		weight.values.fill(0);
+		weight.values[0] = 255;
+		tile.planes.push_back(weight);
+		layer.tiles.push_back(tile);
+		return layer;
+	}
+
+	inline std::vector<uint8_t> MinimalLayerBytes()
+	{
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		AshEngine::encode_vegetation_layer(MinimalLayerSnapshot(), bytes, &error);
+		return bytes;
+	}
+
+	inline AshEngine::VegetationChunk MinimalChunk()
+	{
+		AshEngine::VegetationChunk chunk{};
+		chunk.layer_id = SequentialId(33);
+		chunk.chunk_input_sha256.fill(0x5a);
+		chunk.chunk = { -2, 3 };
+		chunk.surface_identity.surface_id = SequentialId(65);
+		chunk.surface_identity.content_revision = 4;
+		chunk.surface_identity.residency_revision = 5;
+		chunk.surface_identity.transform_revision = 6;
+		chunk.species.push_back(MinimalPaletteEntry());
+		AshEngine::VegetationChunkInstance instance{};
+		instance.species_index = 0;
+		instance.cell_x = 17;
+		instance.cell_z = 29;
+		instance.candidate_ordinal = 5;
+		instance.cell_fraction_x_u16 = 65535;
+		instance.cell_fraction_z_u16 = 32768;
+		instance.yaw_turn_u16 = 0x8000;
+		instance.scale_q12 = 4096;
+		instance.normal_oct_x = 0;
+		instance.normal_oct_y = 0;
+		instance.world_height_mm = 1250;
+		chunk.instances.push_back(instance);
+		chunk.min_world_height_mm = 1250;
+		chunk.max_world_height_mm = 1250;
+		return chunk;
+	}
+
+	inline std::vector<uint8_t> MinimalChunkBytes()
+	{
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		AshEngine::encode_vegetation_chunk(MinimalChunk(), bytes, &error);
+		return bytes;
+	}
+
+	inline void WriteU32LE(std::vector<uint8_t>& bytes, const size_t offset, const uint32_t value)
+	{
+		for (size_t index = 0; index < 4; ++index)
+		{
+			bytes[offset + index] = static_cast<uint8_t>(value >> (index * 8));
+		}
+	}
+
+	inline uint16_t ReadU16LE(const std::vector<uint8_t>& bytes, const size_t offset)
+	{
+		return static_cast<uint16_t>(bytes[offset]) |
+			static_cast<uint16_t>(static_cast<uint16_t>(bytes[offset + 1]) << 8);
+	}
+
+	inline uint32_t ReadU32LE(const std::vector<uint8_t>& bytes, const size_t offset)
+	{
+		uint32_t value = 0;
+		for (size_t index = 0; index < 4; ++index)
+		{
+			value |= static_cast<uint32_t>(bytes[offset + index]) << (index * 8);
+		}
+		return value;
+	}
+
+	inline uint64_t ReadU64LE(const std::vector<uint8_t>& bytes, const size_t offset)
+	{
+		uint64_t value = 0;
+		for (size_t index = 0; index < 8; ++index)
+		{
+			value |= static_cast<uint64_t>(bytes[offset + index]) << (index * 8);
+		}
+		return value;
+	}
+
+	inline void WriteU16LE(std::vector<uint8_t>& bytes, const size_t offset, const uint16_t value)
+	{
+		bytes[offset] = static_cast<uint8_t>(value);
+		bytes[offset + 1] = static_cast<uint8_t>(value >> 8);
+	}
+
+	inline void WriteU64LE(std::vector<uint8_t>& bytes, const size_t offset, const uint64_t value)
+	{
+		for (size_t index = 0; index < 8; ++index)
+		{
+			bytes[offset + index] = static_cast<uint8_t>(value >> (index * 8));
+		}
+	}
+
+	inline void RepairHeaderCrc(std::vector<uint8_t>& bytes, const size_t header_size,
+		const size_t crc_offset)
+	{
+		WriteU32LE(bytes, crc_offset, 0);
+		WriteU32LE(bytes, crc_offset, AshEngine::vegetation_crc32(bytes.data(), header_size));
+	}
+
+	inline void RepairChunkHeaderCrc(std::vector<uint8_t>& bytes)
+	{
+		RepairHeaderCrc(bytes, 160, 148);
+	}
+
+	inline void RepairLayerCrcs(std::vector<uint8_t>& bytes)
+	{
+		WriteU32LE(bytes, 68, AshEngine::vegetation_crc32(
+			bytes.data() + 80, bytes.size() - 80));
+		RepairHeaderCrc(bytes, 80, 72);
+	}
+
+	inline void RepairChunkCrcs(std::vector<uint8_t>& bytes)
+	{
+		WriteU32LE(bytes, 144, AshEngine::vegetation_crc32(
+			bytes.data() + 160, bytes.size() - 160));
+		RepairChunkHeaderCrc(bytes);
+	}
+
 	inline std::string ToHex(const AshEngine::VegetationSha256& digest)
 	{
 		std::ostringstream stream;
