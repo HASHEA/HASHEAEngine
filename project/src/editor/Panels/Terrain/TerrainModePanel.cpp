@@ -5,6 +5,8 @@
 #include "Function/Gui/UIContext.h"
 #include "Panels/Terrain/TerrainModeWidgets.h"
 #include "Services/AssetDatabaseService.h"
+#include "Services/SceneService.h"
+#include "Services/SelectionService.h"
 #include "Services/TerrainEditorService.h"
 
 namespace AshEditor
@@ -116,11 +118,81 @@ namespace AshEditor
 
 	TerrainModePanel::TerrainModePanel(
 		TerrainEditorService* pTerrainEditorService,
-		AssetDatabaseService* pAssetDatabaseService)
+		AssetDatabaseService* pAssetDatabaseService,
+		SceneService* pSceneService,
+		SelectionService* pSelectionService)
 		: EditorPanel(EditorPanelIds::TerrainMode, EditorWindowTitles::TerrainMode)
 		, _pTerrainEditorService(pTerrainEditorService)
 		, _pAssetDatabaseService(pAssetDatabaseService)
+		, _pSceneService(pSceneService)
+		, _pSelectionService(pSelectionService)
 	{
+	}
+
+	bool TerrainModePanel::TryBindSelection(
+		const EditorSelection& refSelection,
+		const std::vector<EditorSelection>& refSelections)
+	{
+		if (!_pTerrainEditorService || !_pAssetDatabaseService || !_pSceneService ||
+			refSelections.size() != 1u || refSelection.eKind != EditorSelectionKind::Entity ||
+			refSelection.uId == 0u || refSelections.front() != refSelection)
+		{
+			return false;
+		}
+
+		const AshEngine::Entity entity = _pSceneService->FindEntity(refSelection.uId);
+		if (!entity.is_valid() || !entity.has_terrain_component())
+		{
+			return false;
+		}
+		const AshEngine::TerrainComponent terrain = entity.get_terrain_component();
+		if (terrain.asset_path.empty())
+		{
+			return false;
+		}
+		const AshEngine::AssetInfo* pAsset =
+			_pAssetDatabaseService->FindByPath(terrain.asset_path);
+		if (!pAsset || pAsset->type != AshEngine::AssetType::Terrain)
+		{
+			return false;
+		}
+		if (_pTerrainEditorService->GetSelectedAssetId() == pAsset->id)
+		{
+			return true;
+		}
+
+		TerrainEditorIntent select{};
+		select.kind = TerrainEditorIntent::Kind::SelectAsset;
+		select.asset_id = pAsset->id;
+		return _pTerrainEditorService->SubmitIntent(select);
+	}
+
+	bool TerrainModePanel::TryBindAssetSelection(
+		const EditorSelection& refSelection,
+		const std::vector<EditorSelection>& refSelections)
+	{
+		if (!_pTerrainEditorService || !_pAssetDatabaseService ||
+			refSelections.size() != 1u || refSelection.eKind != EditorSelectionKind::Asset ||
+			refSelection.uId == 0u || refSelections.front() != refSelection)
+		{
+			return false;
+		}
+
+		const AshEngine::AssetInfo* pAsset =
+			_pAssetDatabaseService->FindById(refSelection.uId);
+		if (!pAsset || pAsset->type != AshEngine::AssetType::Terrain)
+		{
+			return false;
+		}
+		if (_pTerrainEditorService->GetSelectedAssetId() == pAsset->id)
+		{
+			return true;
+		}
+
+		TerrainEditorIntent select{};
+		select.kind = TerrainEditorIntent::Kind::SelectAsset;
+		select.asset_id = pAsset->id;
+		return _pTerrainEditorService->SubmitIntent(select);
 	}
 
 	void TerrainModePanel::BindEventBus(EditorEventBus* pEventBus)
@@ -133,29 +205,21 @@ namespace AshEditor
 		_eventBindings.Subscribe<EditorSelectionChangedEvent>(
 			[this](const EditorSelectionChangedEvent& refEvent)
 			{
-				if (!_pTerrainEditorService || !_pAssetDatabaseService ||
-					refEvent.vecCurrentSelections.size() != 1u ||
-					refEvent.currentSelection.eKind != EditorSelectionKind::Asset)
+				_selectionSynchronized = true;
+				if (!TryBindSelection(
+						refEvent.currentSelection,
+						refEvent.vecCurrentSelections))
 				{
-					return;
+					TryBindAssetSelection(
+						refEvent.currentSelection,
+						refEvent.vecCurrentSelections);
 				}
-
-				const AshEngine::AssetInfo* pAsset =
-					_pAssetDatabaseService->FindById(refEvent.currentSelection.uId);
-				if (!pAsset || pAsset->type != AshEngine::AssetType::Terrain)
-				{
-					return;
-				}
-
-				TerrainEditorIntent select{};
-				select.kind = TerrainEditorIntent::Kind::SelectAsset;
-				select.asset_id = pAsset->id;
-				_pTerrainEditorService->SubmitIntent(select);
 			});
 		_eventBindings.Subscribe<EditorActiveSceneChangedEvent>(
 			[this](const EditorActiveSceneChangedEvent&)
 			{
 				_state.ResetTransientDrafts();
+				_selectionSynchronized = false;
 			});
 	}
 
@@ -164,6 +228,9 @@ namespace AshEditor
 		_eventBindings.Clear();
 		_pTerrainEditorService = nullptr;
 		_pAssetDatabaseService = nullptr;
+		_pSceneService = nullptr;
+		_pSelectionService = nullptr;
+		_selectionSynchronized = false;
 		_state.ResetTransientDrafts();
 	}
 
@@ -178,6 +245,16 @@ namespace AshEditor
 		{
 			EndPanelWindow(refFrameContext);
 			return;
+		}
+		if (!_selectionSynchronized && _pSelectionService)
+		{
+			_selectionSynchronized = true;
+			const EditorSelection selection = _pSelectionService->GetSelection();
+			const std::vector<EditorSelection>& selections = _pSelectionService->GetSelections();
+			if (!TryBindSelection(selection, selections))
+			{
+				TryBindAssetSelection(selection, selections);
+			}
 		}
 
 		AshEngine::UIContext& refUi = *refFrameContext.pUiContext;

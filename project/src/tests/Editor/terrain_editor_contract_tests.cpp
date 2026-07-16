@@ -228,6 +228,56 @@ TEST_CASE("Terrain Mode is a UIContext panel backed by TerrainEditorService")
 		std::regex(R"(dock_builder_dock_window\s*\(\s*EditorWindowTitles::TerrainMode\s*,\s*uInspectorNode\s*\))")));
 }
 
+TEST_CASE("Terrain mode binds a selected Terrain entity through the existing asset intent")
+{
+	const std::string header = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModePanel.h");
+	const std::string panel = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModePanel.cpp");
+	const std::string bootstrap = ReadTerrainContractText(
+		"project/src/editor/App/PanelBootstrapper.cpp");
+
+	CHECK(header.find("SceneService* pSceneService") != std::string::npos);
+	CHECK(header.find("SelectionService* pSelectionService") != std::string::npos);
+	CHECK(header.find("TryBindSelection(") != std::string::npos);
+	CHECK(panel.find("refSelections.size() != 1u") != std::string::npos);
+	CHECK(panel.find("EditorSelectionKind::Entity") != std::string::npos);
+	CHECK(panel.find("_pSceneService->FindEntity(refSelection.uId)") != std::string::npos);
+	CHECK(panel.find("entity.has_terrain_component()") != std::string::npos);
+	CHECK(panel.find("entity.get_terrain_component()") != std::string::npos);
+	CHECK(panel.find("FindByPath(terrain.asset_path)") != std::string::npos);
+	CHECK(panel.find("AshEngine::AssetType::Terrain") != std::string::npos);
+	CHECK(panel.find("TerrainEditorIntent::Kind::SelectAsset") != std::string::npos);
+	CHECK(panel.find("EditorSelectionKind::Asset") != std::string::npos);
+	CHECK(panel.find("FindById(refSelection.uId)") != std::string::npos);
+	CHECK(panel.find("_pSelectionService->GetSelection()") != std::string::npos);
+	CHECK(panel.find("_pSelectionService->GetSelections()") != std::string::npos);
+	CHECK(bootstrap.find("refContext.pSceneService") != std::string::npos);
+	CHECK(bootstrap.find("refContext.pSelectionService") != std::string::npos);
+	CHECK(panel.find("TerrainContainer") == std::string::npos);
+	CHECK(panel.find("load_terrain") == std::string::npos);
+	CHECK(panel.find("Graphics/") == std::string::npos);
+}
+
+TEST_CASE("Terrain mode distinguishes edit layers and material slots for layerless authoring")
+{
+	const std::string state = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeState.h");
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+
+	CHECK(state.find("new_layer_name{ \"Edit Layer\" }") != std::string::npos);
+	CHECK(widgets.find("Edit Layers / 地形编辑层") != std::string::npos);
+	CHECK(widgets.find("Material Slots / 材质槽") != std::string::npos);
+	CHECK(widgets.find("first effective sculpt dab creates") != std::string::npos);
+	CHECK(widgets.find("first effective paint dab creates") != std::string::npos);
+	CHECK(widgets.find("const bool layerlessSession") != std::string::npos);
+	CHECK(widgets.find("Add and select an edit layer before sculpting") == std::string::npos);
+	CHECK(widgets.find("Add and select an edit layer before painting") == std::string::npos);
+	CHECK(widgets.find("Additive") == std::string::npos);
+	CHECK(widgets.find("Alpha") == std::string::npos);
+}
+
 TEST_CASE("Terrain Mode exposes approved manage sculpt paint and stable layer actions")
 {
 	const std::string panel = ReadTerrainContractText(

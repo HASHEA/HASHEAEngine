@@ -494,13 +494,25 @@ namespace AshEditor
 				refConfig.brush.tool = AshEngine::TerrainBrushTool::Raise;
 				changed = true;
 			}
-			const AshEngine::TerrainEditLayer* pLayer = FindLayer(refView, refConfig.brush.layer_id);
-			if (!pLayer)
+			if (!refView.p_working_set)
 			{
-				refUi.text_wrapped("Add and select an edit layer before sculpting.");
+				refUi.text_wrapped("Select a Terrain entity in the Hierarchy to begin sculpting.");
 				return false;
 			}
-			if (pLayer->locked)
+			const AshEngine::TerrainEditLayer* pLayer = FindLayer(refView, refConfig.brush.layer_id);
+			const bool layerlessSession = refView.p_working_set->edit_layers.empty() &&
+				!refConfig.brush.layer_id.is_valid();
+			if (!pLayer && !layerlessSession)
+			{
+				refUi.text_wrapped("The selected edit layer is unavailable.");
+				return false;
+			}
+			if (layerlessSession)
+			{
+				refUi.text_wrapped(
+					"No edit layer yet; the first effective sculpt dab creates \"Edit Layer\" automatically.");
+			}
+			else if (pLayer->locked)
 			{
 				refUi.text_wrapped("The selected edit layer is locked.");
 			}
@@ -534,7 +546,8 @@ namespace AshEditor
 			refUi.text_unformatted("Edit layers support all sculpt tools in stroke order.");
 
 			refUi.begin_disabled(
-				pLayer->locked || refView.blocking_operation || refView.preview.stroke_active);
+				(pLayer && pLayer->locked) ||
+				refView.blocking_operation || refView.preview.stroke_active);
 			changed = DrawCommonBrushControls(refUi, refConfig) || changed;
 			refUi.end_disabled();
 			return changed;
@@ -552,11 +565,27 @@ namespace AshEditor
 				refConfig.brush.tool = AshEngine::TerrainBrushTool::Paint;
 				changed = true;
 			}
-			const AshEngine::TerrainEditLayer* pLayer = FindLayer(refView, refConfig.brush.layer_id);
-			if (!pLayer)
+			if (!refView.p_working_set)
 			{
-				refUi.text_wrapped("Add and select an edit layer before painting.");
+				refUi.text_wrapped("Select a Terrain entity in the Hierarchy to begin painting.");
 				return false;
+			}
+			const AshEngine::TerrainEditLayer* pLayer = FindLayer(refView, refConfig.brush.layer_id);
+			const bool layerlessSession = refView.p_working_set->edit_layers.empty() &&
+				!refConfig.brush.layer_id.is_valid();
+			if (!pLayer && !layerlessSession)
+			{
+				refUi.text_wrapped("The selected edit layer is unavailable.");
+				return false;
+			}
+			if (layerlessSession)
+			{
+				refUi.text_wrapped(
+					"No edit layer yet; the first effective paint dab creates \"Edit Layer\" automatically.");
+			}
+			else if (pLayer->locked)
+			{
+				refUi.text_wrapped("The selected edit layer is locked.");
 			}
 
 			const std::array<AshEngine::TerrainBrushTool, 2> tools{
@@ -571,6 +600,7 @@ namespace AshEditor
 				changed = true;
 			}
 
+			refUi.text_unformatted("Material Slots / 材质槽");
 			std::vector<std::string> materialLabels{};
 			materialLabels.reserve(AshEngine::k_terrain_material_layer_count);
 			for (uint32_t lane = 0u; lane < AshEngine::k_terrain_material_layer_count; ++lane)
@@ -588,7 +618,8 @@ namespace AshEditor
 			}
 
 			refUi.begin_disabled(
-				pLayer->locked || refView.blocking_operation || refView.preview.stroke_active);
+				(pLayer && pLayer->locked) ||
+				refView.blocking_operation || refView.preview.stroke_active);
 			changed = DrawCommonBrushControls(refUi, refConfig) || changed;
 			refUi.end_disabled();
 			return changed;
@@ -732,6 +763,7 @@ namespace AshEditor
 			TerrainModeState& refState,
 			TerrainModeDrawResult& refResult)
 		{
+			refUi.text_unformatted("Edit Layers / 地形编辑层");
 			const bool readOnly = IsTerrainReadOnly(refView);
 			const bool canEditLayers =
 				refView.p_working_set &&

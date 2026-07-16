@@ -113,7 +113,9 @@ namespace AshEditor
 			MakeInspectorPanelDeps(refContext));
 		TerrainModePanel* pTerrainModePanel = refPanelManager.CreatePanel<TerrainModePanel>(
 			refContext.pTerrainEditorService,
-			refContext.pAssetDatabaseService);
+			refContext.pAssetDatabaseService,
+			refContext.pSceneService,
+			refContext.pSelectionService);
 		AssetPreviewPanel* pAssetPreviewPanel = refPanelManager.CreatePanel<AssetPreviewPanel>(
 			MakeAssetPreviewPanelDeps(refContext));
 		ConsolePanel* pConsolePanel = refPanelManager.CreatePanel<ConsolePanel>(
