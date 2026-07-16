@@ -112,6 +112,8 @@ namespace AshEditor
 			TerrainFileOperationKind,
 			FileJobTestPoint)>;
 		void SetFileJobTestHook(FileJobTestHook hook);
+		void SetNowFunctionForTests(
+			std::function<std::chrono::steady_clock::time_point()> nowFunction);
 #endif
 
 		bool Initialize(IEditorCommandExecutor& refCommands);
@@ -171,7 +173,13 @@ namespace AshEditor
 			uint64_t sequence = 0u;
 			AshEngine::TerrainBrushParameters parameters{};
 			AshEngine::TerrainBrushMetric metric{};
+			std::shared_ptr<const std::vector<AshEngine::TerrainEditLayer>> frozen_edit_layers{};
 			std::vector<AshEngine::TerrainStrokeSample> raw_samples{};
+			AshEngine::TerrainStrokeResamplerState resampler{};
+			std::vector<AshEngine::TerrainEditPatch> aggregate_patches{};
+			std::chrono::steady_clock::time_point next_preview_time{};
+			bool ending = false;
+			bool tail_flushed = false;
 		};
 
 		struct PendingComposition
@@ -212,6 +220,9 @@ namespace AshEditor
 		bool AddStrokeSample(const TerrainEditorIntent& refIntent);
 		bool EndStroke(const TerrainEditorIntent& refIntent);
 		bool CancelStroke(const TerrainEditorIntent& refIntent);
+		bool TryAdvanceActiveStrokePreview(bool force);
+		bool FinalizeActiveStrokeHistory();
+		bool RestoreActiveStroke(std::string finalError, bool clearErrorOnSuccess);
 		bool SubmitLayerAction(const TerrainEditorIntent& refIntent);
 		bool SubmitReloadIntent(bool repair);
 		bool ResolveKeepLocalConflict();
@@ -256,7 +267,7 @@ namespace AshEditor
 			AshEngine::TerrainLayerId selectedLayerId,
 			uint64_t sequence);
 		void CompletePendingLoad();
-		void CompletePendingComposition();
+		bool CompletePendingComposition();
 		void SyncAuthoringLayerSelection();
 
 	private:
@@ -299,6 +310,10 @@ namespace AshEditor
 		std::optional<AshEngine::TerrainContainerRevision> _observedSourceRevision{};
 		std::chrono::steady_clock::time_point _nextExternalPollTime{};
 		std::chrono::steady_clock::time_point _nextPublishedCatalogRetryTime{};
+		std::function<std::chrono::steady_clock::time_point()> _now = []
+		{
+			return std::chrono::steady_clock::now();
+		};
 		uint32_t _sourceWriteTimeErrorCount = 0u;
 		bool _hasObservedSourceWriteTime = false;
 		bool _conflictSaveAsPending = false;

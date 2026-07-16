@@ -820,7 +820,7 @@ TEST_CASE("Terrain editor service owns async loading without backend dependencie
 	CHECK(terrainUpdate < panelUpdate);
 }
 
-TEST_CASE("Terrain editor forwards one raw path to one Engine brush transaction")
+TEST_CASE("Terrain editor streams resampled dabs and records one published stroke transaction")
 {
 	RecordingTerrainCommandExecutor commands{};
 	AshEditor::TerrainEditorService service{};
@@ -838,19 +838,60 @@ TEST_CASE("Terrain editor forwards one raw path to one Engine brush transaction"
 	CHECK(commands.execute_count == 0u);
 	CHECK(commands.record_count == 1u);
 	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 1u);
-	CHECK_FALSE(service.GetWorkingSet()->dirty_components.empty());
-	CHECK(service.HasPendingComposition());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	CHECK_FALSE(service.HasPendingComposition());
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration + 1u);
 
 	const std::string source = ReadTerrainEditorText(
 		"project/src/editor/Services/TerrainEditorService.cpp");
 	const std::string coreSource = ReadTerrainEditorText(
 		"project/src/editor/Core/TerrainEditorSessionCore.cpp");
-	CHECK(source.find("resample_terrain_stroke") == std::string::npos);
+	CHECK(source.find("append_resampled_terrain_stroke") != std::string::npos);
 	CHECK(coreSource.find("resample_terrain_stroke") == std::string::npos);
 	CHECK(source.find("apply_terrain_brush_stroke(") == std::string::npos);
-	const size_t brushCall = coreSource.find("apply_terrain_brush_stroke(");
+	const size_t brushCall = coreSource.find("apply_resampled_terrain_brush_dabs(");
 	REQUIRE(brushCall != std::string::npos);
-	CHECK(coreSource.find("apply_terrain_brush_stroke(", brushCall + 1u) == std::string::npos);
+	CHECK(coreSource.find("apply_resampled_terrain_brush_dabs(", brushCall + 1u) == std::string::npos);
+}
+
+TEST_CASE("Terrain editor previews an active stroke by wall clock and records one history item")
+{
+	using namespace std::chrono_literals;
+	RecordingTerrainCommandExecutor commands{};
+	AshEditor::TerrainEditorService service{};
+	REQUIRE(service.Initialize(commands));
+	auto now = std::chrono::steady_clock::time_point{};
+	service.SetNowFunctionForTests([&now]() { return now; });
+	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	const uint64_t initial_generation = service.GetPublishedSnapshot()->content_generation;
+
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
+	now += 79ms;
+	service.Update();
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation);
+	CHECK(commands.record_count == 0u);
+
+	now += 1ms;
+	service.Update();
+	CHECK(service.GetWorkingSet()->content_generation == initial_generation + 1u);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initial_generation + 1u);
+	CHECK(commands.record_count == 0u);
+	CHECK(service.GetPreviewState().stroke_active);
+
+	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(3.0f, 2.0f)));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	service.Update();
+	CHECK(commands.record_count == 1u);
+	CHECK_FALSE(service.GetPreviewState().stroke_active);
+	CHECK_FALSE(service.HasPendingComposition());
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot()->content_generation ==
+		service.GetWorkingSet()->content_generation);
 }
 
 TEST_CASE("Terrain editor preserves raw sample values and the frozen non-uniform metric")
@@ -891,7 +932,8 @@ TEST_CASE("Terrain editor preserves raw sample values and the frozen non-uniform
 
 	REQUIRE(service.GetWorkingSet() != nullptr);
 	CHECK(service.GetWorkingSet()->content_generation == expectedWorkingSet.content_generation);
-	CHECK(service.GetWorkingSet()->dirty_components == expectedDirty);
+	CHECK_FALSE(expectedDirty.empty());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
 	CHECK(EqualHeightBlocks(
 		service.GetWorkingSet()->edit_layers.front().height_blocks,
 		expectedWorkingSet.edit_layers.front().height_blocks));
@@ -1885,6 +1927,9 @@ TEST_CASE("Terrain editor lock state blocks strokes and layer actions cannot int
 	unlock.layer_action.flag_value = false;
 	REQUIRE(service.SubmitIntent(unlock));
 	CHECK_FALSE(service.GetPreviewState().layer_locked);
+	CHECK(service.HasPendingComposition());
+	service.Update();
+	CHECK_FALSE(service.HasPendingComposition());
 	REQUIRE(SubmitConfiguredBeginStroke(service));
 	AshEditor::TerrainEditorIntent rename = MakeLayerActionIntent(
 		AshEditor::TerrainLayerActionKind::Rename,
@@ -1985,7 +2030,7 @@ TEST_CASE("Terrain editor quarantines a layer rollback that restores data but no
 	CHECK_FALSE(service.SubmitIntent(MakeSelectLayerIntent(MakeEditorLayerId(48u))));
 }
 
-TEST_CASE("Terrain editor quarantines a malformed rollback claim")
+TEST_CASE("Terrain editor rejects a malformed rollback claim and restores with its inverse patch")
 {
 	MalformedRollbackTerrainCommandExecutor commands{};
 	AshEditor::TerrainEditorService service{};
@@ -2001,12 +2046,22 @@ TEST_CASE("Terrain editor quarantines a malformed rollback claim")
 	CHECK(commands.record_count == 1u);
 	CHECK(commands.command_received);
 	CHECK_FALSE(service.HasPendingComposition());
-	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
-	service.Update();
-	CHECK(service.GetPublishedSnapshot() == initialPublishedSnapshot);
+	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready);
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	CHECK(service.GetWorkingSet()->content_generation ==
+		initialPublishedSnapshot->content_generation + 2u);
+	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot() != initialPublishedSnapshot);
+	CHECK(service.GetPublishedSnapshot()->content_generation ==
+		initialPublishedSnapshot->content_generation + 2u);
+	REQUIRE(SubmitConfiguredBeginStroke(service));
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
 }
 
-TEST_CASE("Terrain editor quarantines a history recording exception")
+TEST_CASE("Terrain editor restores a stroke after a history recording exception")
 {
 	ThrowingTerrainCommandExecutor commands{};
 	AshEditor::TerrainEditorService service{};
@@ -2022,9 +2077,16 @@ TEST_CASE("Terrain editor quarantines a history recording exception")
 	CHECK(commands.record_count == 1u);
 	CHECK(commands.command_received);
 	CHECK_FALSE(service.HasPendingComposition());
-	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
-	service.Update();
-	CHECK(service.GetPublishedSnapshot() == initialPublishedSnapshot);
+	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready);
+	REQUIRE(service.GetWorkingSet() != nullptr);
+	CHECK(service.GetWorkingSet()->content_generation ==
+		initialPublishedSnapshot->content_generation + 2u);
+	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot() != initialPublishedSnapshot);
+	CHECK(service.GetPublishedSnapshot()->content_generation ==
+		initialPublishedSnapshot->content_generation + 2u);
 }
 
 TEST_CASE("Terrain editor accepts every sculpt tool on generic layers and rejects non-ready stroke state")
@@ -2178,9 +2240,10 @@ TEST_CASE("Terrain editor invalid raw samples fail without mutation or history")
 	REQUIRE(SubmitConfiguredBeginStroke(service));
 	AshEditor::TerrainEditorIntent invalidSample = MakeStrokeSampleIntent(2.0f, 2.0f);
 	invalidSample.stroke_sample.pressure = std::numeric_limits<float>::quiet_NaN();
-	REQUIRE(service.SubmitIntent(invalidSample));
-	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
-		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
+	CHECK_FALSE(service.SubmitIntent(invalidSample));
+	CHECK(service.GetPreviewState().stroke_active);
+	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));
 
 	CHECK(commands.record_count == 0u);
 	CHECK(service.GetWorkingSet()->content_generation == initialGeneration);
@@ -2189,7 +2252,7 @@ TEST_CASE("Terrain editor invalid raw samples fail without mutation or history")
 	CHECK_FALSE(service.GetPreviewState().stroke_active);
 }
 
-TEST_CASE("Terrain editor publication failure preserves the edited working set")
+TEST_CASE("Terrain editor publication failure restores stroke bytes and quarantines unverifiable publication")
 {
 	AshEngine::AssetDatabase invalidAssets{};
 	RecordingTerrainCommandExecutor commands{};
@@ -2204,26 +2267,19 @@ TEST_CASE("Terrain editor publication failure preserves the edited working set")
 
 	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeStrokeSampleIntent(2.0f, 2.0f)));
-	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
+	CHECK_FALSE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::EndStroke)));
-	REQUIRE_FALSE(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
-	const auto editedBlocks = service.GetWorkingSet()->edit_layers.front().height_blocks;
-	const auto expectedDirty = service.GetWorkingSet()->dirty_components;
-	const uint64_t editedGeneration = service.GetWorkingSet()->content_generation;
-
-	service.Update();
 
 	REQUIRE(service.GetWorkingSet() != nullptr);
-	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 1u);
-	CHECK(service.GetWorkingSet()->content_generation == editedGeneration);
-	CHECK(service.GetWorkingSet()->dirty_components == expectedDirty);
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
+	CHECK_FALSE(service.GetWorkingSet()->dirty_components.empty());
 	CHECK(service.GetWorkingSet()->components == initialComponents);
-	CHECK(EqualHeightBlocks(
-		service.GetWorkingSet()->edit_layers.front().height_blocks,
-		editedBlocks));
+	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
 	CHECK(service.GetPublishedSnapshot() == initialPublishedSnapshot);
 	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration);
 	CHECK_FALSE(service.HasPendingComposition());
+	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
+	CHECK(commands.record_count == 0u);
 	CHECK_FALSE(service.GetLastError().empty());
 }
 
@@ -2248,9 +2304,7 @@ TEST_CASE("Terrain editor history rejection publishes the rollback generation")
 	CHECK(commands.rollback_succeeded);
 	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
 	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
-	CHECK(service.HasPendingComposition());
-
-	service.Update();
+	CHECK_FALSE(service.HasPendingComposition());
 	REQUIRE(service.GetPublishedSnapshot() != nullptr);
 	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration + 2u);
 	CHECK(service.GetWorkingSet()->dirty_components.empty());
@@ -2314,7 +2368,7 @@ TEST_CASE("Terrain editor stale sequence intents do not mutate the active stroke
 	CHECK(commands.record_count == 0u);
 }
 
-TEST_CASE("Terrain editor quarantines a mutation when history rollback fails")
+TEST_CASE("Terrain editor restores a mutation when command history cannot roll it back")
 {
 	FailedRollbackTerrainCommandExecutor commands{};
 	AshEditor::TerrainEditorService service{};
@@ -2331,17 +2385,14 @@ TEST_CASE("Terrain editor quarantines a mutation when history rollback fails")
 
 	CHECK(commands.record_count == 1u);
 	CHECK(commands.command_received);
-	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 1u);
-	CHECK_FALSE(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
+	CHECK(service.GetWorkingSet()->content_generation == initialGeneration + 2u);
+	CHECK(service.GetWorkingSet()->edit_layers.front().height_blocks.empty());
 	CHECK_FALSE(service.HasPendingComposition());
-	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Failed);
-	CHECK_FALSE(SubmitConfiguredBeginStroke(service));
-
-	service.Update();
-	CHECK(service.GetPublishedSnapshot() == initialPublishedSnapshot);
-	CHECK_FALSE(service.GetWorkingSet()->dirty_components.empty());
-
-	REQUIRE(service.OpenSnapshotForAuthoring(MakeEditorStrokeSnapshot()));
+	CHECK(service.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready);
+	CHECK(service.GetWorkingSet()->dirty_components.empty());
+	REQUIRE(service.GetPublishedSnapshot() != nullptr);
+	CHECK(service.GetPublishedSnapshot() != initialPublishedSnapshot);
+	CHECK(service.GetPublishedSnapshot()->content_generation == initialGeneration + 2u);
 	REQUIRE(SubmitConfiguredBeginStroke(service));
 	REQUIRE(service.SubmitIntent(MakeSimpleTerrainIntent(
 		AshEditor::TerrainEditorIntent::Kind::CancelStroke)));

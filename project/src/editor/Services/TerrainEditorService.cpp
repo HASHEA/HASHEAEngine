@@ -417,6 +417,15 @@ namespace AshEditor
 	{
 		_fileJobTestHook = std::move(hook);
 	}
+
+	void TerrainEditorService::SetNowFunctionForTests(
+		std::function<std::chrono::steady_clock::time_point()> nowFunction)
+	{
+		_now = nowFunction ? std::move(nowFunction) : []
+		{
+			return std::chrono::steady_clock::now();
+		};
+	}
 #endif
 
 	bool TerrainEditorService::Initialize(IEditorCommandExecutor& refCommands)
@@ -500,6 +509,7 @@ namespace AshEditor
 #if defined(ASH_TESTS)
 		_fileJobTestHook = {};
 #endif
+		_now = [] { return std::chrono::steady_clock::now(); };
 		_authoringConfig = {};
 		_core.Close();
 		_pCommands = nullptr;
@@ -516,7 +526,34 @@ namespace AshEditor
 
 		if (_optPendingComposition)
 		{
-			CompletePendingComposition();
+			const bool completed = CompletePendingComposition();
+			if (!completed && _optActiveStroke)
+			{
+				const std::string error = _strLastError.empty()
+					? "Terrain live preview publication failed." : _strLastError;
+				RestoreActiveStroke(error, false);
+			}
+		}
+
+		if (_optActiveStroke && !_optPendingComposition &&
+			(_optActiveStroke->ending || _now() >= _optActiveStroke->next_preview_time))
+		{
+			if (TryAdvanceActiveStrokePreview(_optActiveStroke->ending) &&
+				_optPendingComposition)
+			{
+				const bool completed = CompletePendingComposition();
+				if (!completed && _optActiveStroke)
+				{
+					const std::string error = _strLastError.empty()
+						? "Terrain live preview publication failed." : _strLastError;
+					RestoreActiveStroke(error, false);
+				}
+			}
+			if (_optActiveStroke && _optActiveStroke->ending &&
+				_optActiveStroke->tail_flushed && !_optPendingComposition)
+			{
+				FinalizeActiveStrokeHistory();
+			}
 		}
 
 		if (_fileOperationState.status == TerrainFileOperationStatus::AwaitingPublication)
@@ -1865,7 +1902,10 @@ namespace AshEditor
 		const bool authoringMode =
 			_authoringConfig.mode == TerrainEditorMode::Sculpt ||
 			_authoringConfig.mode == TerrainEditorMode::Paint;
-		if (!pWorkingSet || _optActiveStroke || _core.HasActiveStroke() ||
+		if (!pWorkingSet || !_publishedSnapshot || !_publishedSnapshot->edit_layers ||
+			_publishedSnapshot->asset_id != pWorkingSet->asset_id ||
+			_publishedSnapshot->content_generation != pWorkingSet->content_generation ||
+			_optActiveStroke || _core.HasActiveStroke() ||
 			_core.GetPreviewState().query_status != AshEngine::TerrainQueryStatus::Ready ||
 			!authoringMode || !validMetric || !selectedLayerId.is_valid() ||
 			refIntent.asset_id != pWorkingSet->asset_id ||
@@ -1919,6 +1959,8 @@ namespace AshEditor
 		_optActiveStroke->sequence = _nextStrokeSequence;
 		_optActiveStroke->parameters = _authoringConfig.brush;
 		_optActiveStroke->metric = refIntent.brush_metric;
+		_optActiveStroke->frozen_edit_layers = _publishedSnapshot->edit_layers;
+		_optActiveStroke->next_preview_time = _now() + std::chrono::milliseconds(80);
 		if (!_core.BeginStroke(_nextStrokeSequence))
 		{
 			_optActiveStroke.reset();
@@ -1936,6 +1978,14 @@ namespace AshEditor
 			(refIntent.sequence != 0u && refIntent.sequence != _optActiveStroke->sequence))
 		{
 			_strLastError = "Terrain stroke sample does not match the active sequence.";
+			return false;
+		}
+		const AshEngine::TerrainStrokeSample& sample = refIntent.stroke_sample;
+		if (!std::isfinite(sample.terrain_local_xz.x) ||
+			!std::isfinite(sample.terrain_local_xz.y) ||
+			!std::isfinite(sample.pressure) || sample.pressure < 0.0f || sample.pressure > 1.0f)
+		{
+			_strLastError = "Terrain stroke sample must be finite with pressure in [0,1].";
 			return false;
 		}
 
@@ -1967,131 +2017,18 @@ namespace AshEditor
 			return false;
 		}
 
-		ActiveStroke stroke = std::move(*_optActiveStroke);
-		_optActiveStroke.reset();
-		if (stroke.raw_samples.empty())
+		_optActiveStroke->ending = true;
+		if (!TryAdvanceActiveStrokePreview(true))
 		{
-			if (!_core.EndStroke(stroke.sequence))
-			{
-				_strLastError = "Terrain session rejected empty stroke completion.";
-				return false;
-			}
-			_strLastError.clear();
-			return true;
-		}
-
-		std::vector<AshEngine::TerrainEditPatch> patches{};
-		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
-		std::string strError{};
-		if (!_core.ApplyBrushStroke(
-				stroke.sequence,
-				stroke.parameters,
-				stroke.metric,
-				stroke.raw_samples,
-				patches,
-				dirtyComponents,
-				&strError))
-		{
-			_strLastError = strError.empty() ? "Terrain brush transaction failed." : std::move(strError);
 			return false;
 		}
-		if (patches.empty())
+		if (_optPendingComposition && !CompletePendingComposition())
 		{
-			_strLastError.clear();
-			return true;
+			const std::string error = _strLastError.empty()
+				? "Terrain final live preview publication failed." : _strLastError;
+			return RestoreActiveStroke(error, false);
 		}
-
-		const AshEngine::TerrainWorkingSet* pForwardWorkingSet = _core.GetWorkingSet();
-		if (!pForwardWorkingSet)
-		{
-			_historyRollbackFailed = true;
-			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
-			_strLastError = "Terrain stroke mutation lost its authoring working set.";
-			return false;
-		}
-		const uint64_t forwardGeneration = pForwardWorkingSet->content_generation;
-		ScheduleComposition(stroke.sequence, std::move(dirtyComponents));
-		const auto rollbackIsComplete = [this, &stroke, forwardGeneration]()
-		{
-			const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
-			return pWorkingSet &&
-				pWorkingSet->asset_id == stroke.asset_id &&
-				pWorkingSet->content_generation == forwardGeneration + 1u &&
-				_optPendingComposition &&
-				_optPendingComposition->asset_id == stroke.asset_id &&
-				_optPendingComposition->source_sequence == stroke.sequence &&
-				_optPendingComposition->content_generation == pWorkingSet->content_generation &&
-				_optPendingComposition->dirty_components == pWorkingSet->dirty_components;
-		};
-		const auto quarantineMutation = [this](const char* pError)
-		{
-			_optPendingComposition.reset();
-			_historyRollbackFailed = true;
-			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
-			_strLastError = pError;
-		};
-		std::unique_ptr<TerrainStrokeCommand> upCommand{};
-		try
-		{
-			std::vector<AshEngine::TerrainEditPatch> commandPatches = patches;
-			upCommand = std::make_unique<TerrainStrokeCommand>(
-				stroke.asset_id,
-				stroke.layer_id,
-				stroke.sequence,
-				std::move(commandPatches));
-		}
-		catch (const std::bad_alloc&)
-		{
-			const bool rolledBack = RollBackStroke(stroke, patches);
-			if (!rolledBack || !rollbackIsComplete())
-			{
-				quarantineMutation("Terrain stroke command allocation and rollback failed; authoring was quarantined.");
-			}
-			else
-			{
-				_strLastError = "Terrain stroke command allocation failed; the mutation was rolled back.";
-			}
-			return false;
-		}
-		catch (const std::length_error&)
-		{
-			const bool rolledBack = RollBackStroke(stroke, patches);
-			if (!rolledBack || !rollbackIsComplete())
-			{
-				quarantineMutation("Terrain stroke command size and rollback failed; authoring was quarantined.");
-			}
-			else
-			{
-				_strLastError = "Terrain stroke command size is unsupported; the mutation was rolled back.";
-			}
-			return false;
-		}
-
-		EditorCommandRecordResult recordResult = EditorCommandRecordResult::RollbackFailed;
-		try
-		{
-			recordResult = _pCommands->RecordExecutedCommand(std::move(upCommand));
-		}
-		catch (...)
-		{
-			quarantineMutation("Terrain stroke history recording raised an exception; authoring was quarantined.");
-			return false;
-		}
-
-		if (recordResult == EditorCommandRecordResult::RolledBack && rollbackIsComplete())
-		{
-			_strLastError = "Terrain stroke history recording failed; the command contract rolled back the mutation.";
-			return false;
-		}
-		if (recordResult != EditorCommandRecordResult::Recorded)
-		{
-			quarantineMutation(
-				"Terrain stroke history recording could not prove rollback; authoring was quarantined.");
-			return false;
-		}
-
-		_strLastError.clear();
-		return true;
+		return _optActiveStroke && FinalizeActiveStrokeHistory();
 	}
 
 	bool TerrainEditorService::CancelStroke(const TerrainEditorIntent& refIntent)
@@ -2103,10 +2040,295 @@ namespace AshEditor
 			return false;
 		}
 
-		_optActiveStroke.reset();
-		_core.CancelStroke();
+		return RestoreActiveStroke({}, true);
+	}
+
+	bool TerrainEditorService::TryAdvanceActiveStrokePreview(const bool force)
+	{
+		if (!_optActiveStroke || !_core.HasActiveStroke() || _optPendingComposition)
+		{
+			return false;
+		}
+		ActiveStroke& stroke = *_optActiveStroke;
+		if (!stroke.frozen_edit_layers)
+		{
+			return RestoreActiveStroke(
+				"Terrain live stroke has no frozen layer source.", false);
+		}
+		if (!force && _now() < stroke.next_preview_time)
+		{
+			return true;
+		}
+
+		std::vector<AshEngine::TerrainStrokeSample> newSamples{};
+		std::string error{};
+		if (!AshEngine::append_resampled_terrain_stroke(
+				stroke.resampler,
+				stroke.metric,
+				stroke.parameters.stroke_spacing_meters,
+				stroke.raw_samples,
+				newSamples,
+				&error))
+		{
+			return RestoreActiveStroke(
+				error.empty() ? "Terrain live stroke resampling failed." : std::move(error),
+				false);
+		}
+		stroke.raw_samples.clear();
+
+		try
+		{
+			if (force && !stroke.tail_flushed && stroke.resampler.previous_input)
+			{
+				const AshEngine::TerrainStrokeSample& tail = *stroke.resampler.previous_input;
+				bool tailAlreadyEmitted = false;
+				if (stroke.resampler.previous_output)
+				{
+					const glm::vec2 delta =
+						tail.terrain_local_xz - stroke.resampler.previous_output->terrain_local_xz;
+					const glm::vec2 metricDelta =
+						delta * stroke.metric.world_meters_per_terrain_meter;
+					tailAlreadyEmitted = glm::dot(metricDelta, metricDelta) <= 1.0e-12f;
+				}
+				if (!tailAlreadyEmitted)
+				{
+					newSamples.push_back(tail);
+					stroke.resampler.previous_output = tail;
+				}
+			}
+			if (force)
+			{
+				stroke.tail_flushed = true;
+			}
+		}
+		catch (const std::bad_alloc&)
+		{
+			return RestoreActiveStroke(
+				"Terrain live stroke tail allocation failed.", false);
+		}
+		catch (const std::length_error&)
+		{
+			return RestoreActiveStroke(
+				"Terrain live stroke tail size is unsupported.", false);
+		}
+
+		if (newSamples.empty())
+		{
+			return true;
+		}
+		const AshEngine::TerrainWorkingSet* current = _core.GetWorkingSet();
+		if (!current || current->content_generation >= std::numeric_limits<uint64_t>::max() - 1u)
+		{
+			return RestoreActiveStroke(
+				"Terrain live stroke cannot reserve its rollback generation.", false);
+		}
+
+		std::vector<AshEngine::TerrainEditPatch> nextPatches{};
+		std::vector<AshEngine::TerrainComponentCoord> dirtyComponents{};
+		if (!_core.ApplyBrushStroke(
+				stroke.sequence,
+				stroke.parameters,
+				stroke.metric,
+				*stroke.frozen_edit_layers,
+				newSamples,
+				nextPatches,
+				dirtyComponents,
+				&error))
+		{
+			return RestoreActiveStroke(
+				error.empty() ? "Terrain live brush transaction failed." : std::move(error),
+				false);
+		}
+		if (nextPatches.empty())
+		{
+			return true;
+		}
+
+		std::vector<AshEngine::TerrainEditPatch> mergedPatches = stroke.aggregate_patches;
+		if (!AshEngine::merge_terrain_edit_patches(nextPatches, mergedPatches, &error))
+		{
+			std::vector<AshEngine::TerrainComponentCoord> ignoredDirty{};
+			std::string ignoredError{};
+			if (!_core.ApplyStrokePatches(
+					stroke.asset_id,
+					stroke.layer_id,
+					nextPatches,
+					AshEngine::TerrainEditPatchDirection::Undo,
+					ignoredDirty,
+					&ignoredError))
+			{
+				_optActiveStroke.reset();
+				_core.CancelStroke();
+				_historyRollbackFailed = true;
+				_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+				_strLastError = "Terrain live patch merge and immediate rollback failed; authoring was quarantined.";
+				return false;
+			}
+			return RestoreActiveStroke(
+				error.empty() ? "Terrain live patch aggregation failed." : std::move(error),
+				false);
+		}
+		stroke.aggregate_patches.swap(mergedPatches);
+		stroke.next_preview_time = _now() + std::chrono::milliseconds(80);
+		ScheduleComposition(stroke.sequence, std::move(dirtyComponents));
+		if (!_optPendingComposition)
+		{
+			return RestoreActiveStroke(
+				"Terrain live preview composition could not be scheduled.", false);
+		}
 		_strLastError.clear();
 		return true;
+	}
+
+	bool TerrainEditorService::FinalizeActiveStrokeHistory()
+	{
+		if (!_optActiveStroke || !_optActiveStroke->ending ||
+			!_optActiveStroke->tail_flushed || _optPendingComposition)
+		{
+			return false;
+		}
+		if (_optActiveStroke->aggregate_patches.empty())
+		{
+			const uint64_t sequence = _optActiveStroke->sequence;
+			_optActiveStroke.reset();
+			if (!_core.EndStroke(sequence))
+			{
+				_historyRollbackFailed = true;
+				_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+				_strLastError = "Terrain session rejected empty live stroke completion.";
+				return false;
+			}
+			_strLastError.clear();
+			return true;
+		}
+
+		std::unique_ptr<TerrainStrokeCommand> command{};
+		try
+		{
+			command = std::make_unique<TerrainStrokeCommand>(
+				_optActiveStroke->asset_id,
+				_optActiveStroke->layer_id,
+				_optActiveStroke->sequence,
+				_optActiveStroke->aggregate_patches);
+		}
+		catch (const std::bad_alloc&)
+		{
+			return RestoreActiveStroke(
+				"Terrain live stroke command allocation failed.", false);
+		}
+		catch (const std::length_error&)
+		{
+			return RestoreActiveStroke(
+				"Terrain live stroke command size is unsupported.", false);
+		}
+
+		const uint64_t sequence = _optActiveStroke->sequence;
+		if (!_core.EndStroke(sequence))
+		{
+			return RestoreActiveStroke(
+				"Terrain session rejected live stroke completion.", false);
+		}
+		ActiveStroke completedStroke = std::move(*_optActiveStroke);
+		_optActiveStroke.reset();
+		const AshEngine::TerrainWorkingSet* forwardWorkingSet = _core.GetWorkingSet();
+		if (!forwardWorkingSet || forwardWorkingSet->asset_id != completedStroke.asset_id)
+		{
+			_historyRollbackFailed = true;
+			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+			_strLastError = "Terrain live stroke lost its forward working set; authoring was quarantined.";
+			return false;
+		}
+		const uint64_t forwardGeneration = forwardWorkingSet->content_generation;
+		const auto rollbackIsComplete = [this, &completedStroke, forwardGeneration]()
+		{
+			const AshEngine::TerrainWorkingSet* current = _core.GetWorkingSet();
+			return current && current->asset_id == completedStroke.asset_id &&
+				current->content_generation == forwardGeneration + 1u &&
+				_core.GetSelectedLayerId() == completedStroke.layer_id &&
+				_core.GetPreviewState().query_status == AshEngine::TerrainQueryStatus::Ready &&
+				_optPendingComposition &&
+				_optPendingComposition->asset_id == completedStroke.asset_id &&
+				_optPendingComposition->source_sequence == completedStroke.sequence &&
+				_optPendingComposition->content_generation == current->content_generation &&
+				_optPendingComposition->dirty_components == current->dirty_components;
+		};
+
+		EditorCommandRecordResult recordResult = EditorCommandRecordResult::RollbackFailed;
+		try
+		{
+			recordResult = _pCommands->RecordExecutedCommand(std::move(command));
+		}
+		catch (...)
+		{
+			if (RollBackStroke(completedStroke, completedStroke.aggregate_patches) &&
+				CompletePendingComposition())
+			{
+				_strLastError = "Terrain stroke history recording raised an exception; the mutation was rolled back.";
+				return false;
+			}
+			_historyRollbackFailed = true;
+			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+			_strLastError = "Terrain stroke history exception could not be rolled back; authoring was quarantined.";
+			return false;
+		}
+		if (recordResult == EditorCommandRecordResult::Recorded)
+		{
+			_strLastError.clear();
+			return true;
+		}
+		if (recordResult == EditorCommandRecordResult::RolledBack)
+		{
+			if (rollbackIsComplete() && CompletePendingComposition())
+			{
+				_strLastError = "Terrain stroke history recording failed; the command contract rolled back the mutation.";
+				return false;
+			}
+			_optPendingComposition.reset();
+		}
+		if (RollBackStroke(completedStroke, completedStroke.aggregate_patches) &&
+			CompletePendingComposition())
+		{
+			_strLastError = "Terrain stroke history recording failed; the mutation was rolled back.";
+			return false;
+		}
+		_historyRollbackFailed = true;
+		_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+		_strLastError = "Terrain stroke history failure could not be rolled back; authoring was quarantined.";
+		return false;
+	}
+
+	bool TerrainEditorService::RestoreActiveStroke(
+		std::string finalError,
+		const bool clearErrorOnSuccess)
+	{
+		if (!_optActiveStroke)
+		{
+			if (!clearErrorOnSuccess)
+			{
+				_strLastError = std::move(finalError);
+			}
+			return clearErrorOnSuccess;
+		}
+		ActiveStroke stroke = std::move(*_optActiveStroke);
+		_optActiveStroke.reset();
+		_optPendingComposition.reset();
+		_core.CancelStroke();
+		if (stroke.aggregate_patches.empty())
+		{
+			_strLastError = clearErrorOnSuccess ? std::string{} : std::move(finalError);
+			return clearErrorOnSuccess;
+		}
+		if (!RollBackStroke(stroke, stroke.aggregate_patches) ||
+			!_optPendingComposition || !CompletePendingComposition())
+		{
+			_optPendingComposition.reset();
+			_historyRollbackFailed = true;
+			_core.SetPreviewQueryStatus(AshEngine::TerrainQueryStatus::Failed);
+			_strLastError = "Terrain live stroke rollback could not be published; authoring was quarantined.";
+			return false;
+		}
+		_strLastError = clearErrorOnSuccess ? std::string{} : std::move(finalError);
+		return clearErrorOnSuccess;
 	}
 
 	bool TerrainEditorService::SubmitLayerAction(const TerrainEditorIntent& refIntent)
@@ -3740,8 +3962,12 @@ namespace AshEditor
 		}
 	}
 
-	void TerrainEditorService::CompletePendingComposition()
+	bool TerrainEditorService::CompletePendingComposition()
 	{
+		if (!_optPendingComposition)
+		{
+			return false;
+		}
 		PendingComposition pending = std::move(*_optPendingComposition);
 		_optPendingComposition.reset();
 		const AshEngine::TerrainWorkingSet* pWorkingSet = _core.GetWorkingSet();
@@ -3751,7 +3977,7 @@ namespace AshEditor
 			pending.content_generation != pWorkingSet->content_generation ||
 			pending.dirty_components != pWorkingSet->dirty_components)
 		{
-			return;
+			return false;
 		}
 
 		std::vector<AshEngine::TerrainDirtyComponentPayload> payloads{};
@@ -3759,7 +3985,7 @@ namespace AshEditor
 		if (!_core.ComposeComponents(pending.dirty_components, payloads, &strError))
 		{
 			_strLastError = strError.empty() ? "Terrain dirty-component composition failed." : std::move(strError);
-			return;
+			return false;
 		}
 
 		pWorkingSet = _core.GetWorkingSet();
@@ -3769,7 +3995,7 @@ namespace AshEditor
 			pending.content_generation != pWorkingSet->content_generation ||
 			pending.dirty_components != pWorkingSet->dirty_components)
 		{
-			return;
+			return false;
 		}
 
 		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
@@ -3785,17 +4011,18 @@ namespace AshEditor
 			if (!_core.PublishDirtyComponents(payloads, publisher, snapshot, &strError))
 			{
 				_strLastError = strError.empty() ? "Terrain snapshot publication failed." : std::move(strError);
-				return;
+				return false;
 			}
 		}
 		catch (const std::bad_alloc&)
 		{
 			_strLastError = "Terrain publication callback allocation failed.";
-			return;
+			return false;
 		}
 
 		_publishedSnapshot = std::move(snapshot);
 		_strLastError.clear();
+		return true;
 	}
 
 	void TerrainEditorService::SyncAuthoringLayerSelection()

@@ -100,7 +100,8 @@ namespace AshEngine
 		}
 
 		auto build_layer_block_lookups(
-			const TerrainWorkingSet& working_set,
+			const TerrainGridLayout& layout,
+			const std::vector<TerrainEditLayer>& edit_layers,
 			size_t selected_layer_index,
 			bool need_height,
 			bool need_weight,
@@ -110,10 +111,14 @@ namespace AshEngine
 			std::vector<LayerBlockLookup>& out_lookups,
 			std::string* out_error) -> bool
 		{
+			if (selected_layer_index >= edit_layers.size())
+			{
+				return fail(out_error, "Terrain brush source layer index is invalid.");
+			}
 			std::vector<LayerBlockLookup> lookups(selected_layer_index + 1u);
 			for (size_t layer_index = 0u; layer_index <= selected_layer_index; ++layer_index)
 			{
-				const TerrainEditLayer& layer = working_set.edit_layers[layer_index];
+				const TerrainEditLayer& layer = edit_layers[layer_index];
 				if (!std::isfinite(layer.strength))
 				{
 					return fail(out_error, "Terrain brush source layer metadata is invalid.");
@@ -125,11 +130,11 @@ namespace AshEngine
 					lookup.height_by_owner.assign(component_count, nullptr);
 					for (const TerrainSparseHeightBlock& block : layer.height_blocks)
 					{
-						if (!is_valid_component_coord(working_set.layout, block.owner))
+						if (!is_valid_component_coord(layout, block.owner))
 						{
 							return fail(out_error, "Terrain brush source height owner is invalid.");
 						}
-						const size_t owner_index = component_owner_index(working_set.layout, block.owner);
+						const size_t owner_index = component_owner_index(layout, block.owner);
 						if (lookup.height_by_owner[owner_index] != nullptr)
 						{
 							return fail(out_error, "Terrain brush source height owners are not unique.");
@@ -142,11 +147,11 @@ namespace AshEngine
 					lookup.weight_by_owner.assign(component_count, nullptr);
 					for (const TerrainSparseWeightBlock& block : layer.weight_blocks)
 					{
-						if (!is_valid_component_coord(working_set.layout, block.owner))
+						if (!is_valid_component_coord(layout, block.owner))
 						{
 							return fail(out_error, "Terrain brush source weight owner is invalid.");
 						}
-						const size_t owner_index = component_owner_index(working_set.layout, block.owner);
+						const size_t owner_index = component_owner_index(layout, block.owner);
 						if (lookup.weight_by_owner[owner_index] != nullptr)
 						{
 							return fail(out_error, "Terrain brush source weight owners are not unique.");
@@ -170,6 +175,7 @@ namespace AshEngine
 
 		auto compose_frozen_height(
 			const TerrainWorkingSet& working_set,
+			const std::vector<TerrainEditLayer>& frozen_edit_layers,
 			const std::vector<LayerBlockLookup>& layer_lookups,
 			size_t selected_layer_index,
 			uint32_t sample_x,
@@ -191,7 +197,7 @@ namespace AshEngine
 				get_terrain_sample_owner(working_set.layout, sample_x, sample_z);
 			for (size_t layer_index = 0u; layer_index <= selected_layer_index; ++layer_index)
 			{
-				const TerrainEditLayer& layer = working_set.edit_layers[layer_index];
+				const TerrainEditLayer& layer = frozen_edit_layers[layer_index];
 				if (!std::isfinite(layer.strength))
 				{
 					return fail(out_error, "Terrain brush encountered non-finite layer strength.");
@@ -237,6 +243,7 @@ namespace AshEngine
 
 		auto compose_frozen_weights(
 			const TerrainWorkingSet& working_set,
+			const std::vector<TerrainEditLayer>& frozen_edit_layers,
 			const std::vector<LayerBlockLookup>& layer_lookups,
 			size_t selected_layer_index,
 			uint32_t sample_x,
@@ -250,7 +257,7 @@ namespace AshEngine
 				get_terrain_sample_owner(working_set.layout, sample_x, sample_z);
 			for (size_t layer_index = 0u; layer_index <= selected_layer_index; ++layer_index)
 			{
-				const TerrainEditLayer& layer = working_set.edit_layers[layer_index];
+				const TerrainEditLayer& layer = frozen_edit_layers[layer_index];
 				if (!std::isfinite(layer.strength))
 				{
 					return fail(out_error, "Terrain brush encountered non-finite layer strength.");
@@ -311,6 +318,7 @@ namespace AshEngine
 
 		auto sample_frozen_height_bilinear(
 			const TerrainWorkingSet& working_set,
+			const std::vector<TerrainEditLayer>& frozen_edit_layers,
 			const std::vector<LayerBlockLookup>& layer_lookups,
 			size_t selected_layer_index,
 			glm::vec2 terrain_local_xz,
@@ -336,10 +344,10 @@ namespace AshEngine
 			float h10 = 0.0f;
 			float h01 = 0.0f;
 			float h11 = 0.0f;
-			if (!compose_frozen_height(working_set, layer_lookups, selected_layer_index, x0, z0, h00, out_error) ||
-				!compose_frozen_height(working_set, layer_lookups, selected_layer_index, x1, z0, h10, out_error) ||
-				!compose_frozen_height(working_set, layer_lookups, selected_layer_index, x0, z1, h01, out_error) ||
-				!compose_frozen_height(working_set, layer_lookups, selected_layer_index, x1, z1, h11, out_error))
+			if (!compose_frozen_height(working_set, frozen_edit_layers, layer_lookups, selected_layer_index, x0, z0, h00, out_error) ||
+				!compose_frozen_height(working_set, frozen_edit_layers, layer_lookups, selected_layer_index, x1, z0, h10, out_error) ||
+				!compose_frozen_height(working_set, frozen_edit_layers, layer_lookups, selected_layer_index, x0, z1, h01, out_error) ||
+				!compose_frozen_height(working_set, frozen_edit_layers, layer_lookups, selected_layer_index, x1, z1, h11, out_error))
 			{
 				return false;
 			}
@@ -896,11 +904,12 @@ namespace AshEngine
 		}
 	}
 
-	bool resample_terrain_stroke(
-		const std::vector<TerrainStrokeSample>& input,
+	bool append_resampled_terrain_stroke(
+		TerrainStrokeResamplerState& state,
 		const TerrainBrushMetric& metric,
 		float spacing_meters,
-		std::vector<TerrainStrokeSample>& out_samples,
+		const std::vector<TerrainStrokeSample>& new_input,
+		std::vector<TerrainStrokeSample>& out_new_samples,
 		std::string* out_error)
 	{
 		if (out_error != nullptr)
@@ -916,89 +925,143 @@ namespace AshEngine
 			return fail(out_error, "Terrain stroke spacing and metric axes must be finite and positive.");
 		}
 
-		for (const TerrainStrokeSample& sample : input)
+		const auto valid_sample = [](const TerrainStrokeSample& sample)
 		{
-			if (!std::isfinite(sample.terrain_local_xz.x) ||
-				!std::isfinite(sample.terrain_local_xz.y) ||
-				!std::isfinite(sample.pressure) ||
-				sample.pressure < 0.0f || sample.pressure > 1.0f)
+			return std::isfinite(sample.terrain_local_xz.x) &&
+				std::isfinite(sample.terrain_local_xz.y) &&
+				std::isfinite(sample.pressure) &&
+				sample.pressure >= 0.0f && sample.pressure <= 1.0f;
+		};
+		for (const TerrainStrokeSample& sample : new_input)
+		{
+			if (!valid_sample(sample))
 			{
 				return fail(out_error, "Terrain stroke samples must be finite with pressure in [0,1].");
 			}
+		}
+		const bool empty_state = !state.previous_input && !state.previous_output &&
+			state.distance_to_next_sample_meters == 0.0;
+		const bool active_state = state.previous_input && state.previous_output &&
+			valid_sample(*state.previous_input) && valid_sample(*state.previous_output) &&
+			std::isfinite(state.distance_to_next_sample_meters) &&
+			state.distance_to_next_sample_meters > 0.0 &&
+			state.distance_to_next_sample_meters <= static_cast<double>(spacing_meters);
+		if (!empty_state && !active_state)
+		{
+			return fail(out_error, "Terrain stroke resampler state is invalid.");
 		}
 
 		try
 		{
 			constexpr double duplicate_distance_squared = 1.0e-12;
-			std::vector<TerrainStrokeSample> samples{};
-			samples.reserve(input.size());
-			for (const TerrainStrokeSample& sample : input)
-			{
-				if (!samples.empty() &&
-					metric_distance_squared(samples.back(), sample, metric) <= duplicate_distance_squared)
-				{
-					samples.back() = sample;
-				}
-				else
-				{
-					samples.push_back(sample);
-				}
-			}
-
-			if (samples.size() <= 1u)
-			{
-				out_samples.swap(samples);
-				return true;
-			}
-
-			std::vector<TerrainStrokeSample> resampled{};
-			resampled.push_back(samples.front());
+			TerrainStrokeResamplerState candidate = state;
+			std::vector<TerrainStrokeSample> emitted{};
+			emitted.reserve(new_input.size());
 			const double spacing = static_cast<double>(spacing_meters);
-			double accumulated_distance = 0.0;
-			double next_emission_distance = spacing;
 
-			for (size_t index = 1u; index < samples.size(); ++index)
+			for (const TerrainStrokeSample& sample : new_input)
 			{
-				const TerrainStrokeSample& segment_start = samples[index - 1u];
-				const TerrainStrokeSample& segment_end = samples[index];
-				const double segment_length = std::sqrt(
-					metric_distance_squared(segment_start, segment_end, metric));
-				const double segment_end_distance = accumulated_distance + segment_length;
-
-				while (next_emission_distance <= segment_end_distance)
+				if (!candidate.previous_input)
 				{
-					const double interpolation =
-						(next_emission_distance - accumulated_distance) / segment_length;
+					candidate.previous_input = sample;
+					candidate.previous_output = sample;
+					candidate.distance_to_next_sample_meters = spacing;
+					emitted.push_back(sample);
+					continue;
+				}
+
+				const TerrainStrokeSample segment_start = *candidate.previous_input;
+				const double segment_length_squared =
+					metric_distance_squared(segment_start, sample, metric);
+				if (segment_length_squared <= duplicate_distance_squared)
+				{
+					const bool output_was_segment_start = candidate.previous_output &&
+						metric_distance_squared(
+							*candidate.previous_output, segment_start, metric) <=
+						duplicate_distance_squared;
+					candidate.previous_input = sample;
+					if (output_was_segment_start)
+					{
+						candidate.previous_output = sample;
+						if (!emitted.empty() &&
+							metric_distance_squared(emitted.back(), segment_start, metric) <=
+							duplicate_distance_squared)
+						{
+							emitted.back() = sample;
+						}
+					}
+					continue;
+				}
+				const double segment_length = std::sqrt(segment_length_squared);
+				double next_distance = candidate.distance_to_next_sample_meters;
+				while (next_distance <= segment_length)
+				{
+					const double interpolation = next_distance / segment_length;
 					if (interpolation >= 1.0)
 					{
-						resampled.push_back(segment_end);
+						emitted.push_back(sample);
 					}
 					else
 					{
 						const float t = static_cast<float>(interpolation);
-						TerrainStrokeSample emitted{};
-						emitted.terrain_local_xz = segment_start.terrain_local_xz +
-							(segment_end.terrain_local_xz - segment_start.terrain_local_xz) * t;
-						emitted.pressure = segment_start.pressure +
-							(segment_end.pressure - segment_start.pressure) * t;
-						resampled.push_back(emitted);
+						TerrainStrokeSample output_sample{};
+						output_sample.terrain_local_xz = segment_start.terrain_local_xz +
+							(sample.terrain_local_xz - segment_start.terrain_local_xz) * t;
+						output_sample.pressure = segment_start.pressure +
+							(sample.pressure - segment_start.pressure) * t;
+						emitted.push_back(output_sample);
+						candidate.previous_output = output_sample;
 					}
-					next_emission_distance += spacing;
+					if (interpolation >= 1.0)
+					{
+						candidate.previous_output = sample;
+					}
+					next_distance += spacing;
 				}
-				accumulated_distance = segment_end_distance;
+				candidate.distance_to_next_sample_meters = next_distance - segment_length;
+				candidate.previous_input = sample;
 			}
 
-			const TerrainStrokeSample& final_sample = samples.back();
-			if (metric_distance_squared(resampled.back(), final_sample, metric) <=
-				duplicate_distance_squared)
-			{
-				resampled.back() = final_sample;
-			}
-			else
-			{
-				resampled.push_back(final_sample);
-			}
+			state = candidate;
+			out_new_samples.swap(emitted);
+			return true;
+		}
+		catch (...)
+		{
+			return fail(out_error, "Terrain stroke resampling could not allocate output storage.");
+		}
+	}
 
+	bool resample_terrain_stroke(
+		const std::vector<TerrainStrokeSample>& input,
+		const TerrainBrushMetric& metric,
+		float spacing_meters,
+		std::vector<TerrainStrokeSample>& out_samples,
+		std::string* out_error)
+	{
+		TerrainStrokeResamplerState state{};
+		std::vector<TerrainStrokeSample> resampled{};
+		if (!append_resampled_terrain_stroke(
+				state, metric, spacing_meters, input, resampled, out_error))
+		{
+			return false;
+		}
+		try
+		{
+			constexpr double duplicate_distance_squared = 1.0e-12;
+			if (state.previous_input)
+			{
+				if (!resampled.empty() &&
+					metric_distance_squared(resampled.back(), *state.previous_input, metric) <=
+					duplicate_distance_squared)
+				{
+					resampled.back() = *state.previous_input;
+				}
+				else
+				{
+					resampled.push_back(*state.previous_input);
+				}
+			}
 			out_samples.swap(resampled);
 			return true;
 		}
@@ -1013,6 +1076,39 @@ namespace AshEngine
 		const TerrainBrushParameters& params,
 		const TerrainBrushMetric& metric,
 		const std::vector<TerrainStrokeSample>& raw_input,
+		std::vector<TerrainEditPatch>& out_patches,
+		std::vector<TerrainComponentCoord>& out_dirty_components,
+		std::string* out_error)
+	{
+		out_patches.clear();
+		out_dirty_components.clear();
+		std::vector<TerrainStrokeSample> resampled_dabs{};
+		if (!resample_terrain_stroke(
+				raw_input,
+				metric,
+				params.stroke_spacing_meters,
+				resampled_dabs,
+				out_error))
+		{
+			return false;
+		}
+		return apply_resampled_terrain_brush_dabs(
+			working_set,
+			params,
+			metric,
+			working_set.edit_layers,
+			resampled_dabs,
+			out_patches,
+			out_dirty_components,
+			out_error);
+	}
+
+	bool apply_resampled_terrain_brush_dabs(
+		TerrainWorkingSet& working_set,
+		const TerrainBrushParameters& params,
+		const TerrainBrushMetric& metric,
+		const std::vector<TerrainEditLayer>& frozen_edit_layers,
+		const std::vector<TerrainStrokeSample>& resampled_dabs,
 		std::vector<TerrainEditPatch>& out_patches,
 		std::vector<TerrainComponentCoord>& out_dirty_components,
 		std::string* out_error)
@@ -1099,6 +1195,17 @@ namespace AshEngine
 			{
 				return fail(out_error, "Terrain brush selected layer does not exist.");
 			}
+			if (frozen_edit_layers.size() <= selected_layer_index)
+			{
+				return fail(out_error, "Terrain brush frozen layer stack is incomplete.");
+			}
+			for (size_t index = 0u; index <= selected_layer_index; ++index)
+			{
+				if (frozen_edit_layers[index].id != working_set.edit_layers[index].id)
+				{
+					return fail(out_error, "Terrain brush frozen layer stack identity does not match.");
+				}
+			}
 
 			const TerrainEditLayer& selected_layer = working_set.edit_layers[selected_layer_index];
 			const bool additive_height_tool =
@@ -1108,16 +1215,16 @@ namespace AshEngine
 			const bool alpha_height_tool =
 				params.tool == TerrainBrushTool::Smooth ||
 				params.tool == TerrainBrushTool::Flatten;
-			std::vector<TerrainStrokeSample> samples{};
-			if (!resample_terrain_stroke(
-				raw_input,
-				metric,
-				params.stroke_spacing_meters,
-				samples,
-				out_error))
+			for (const TerrainStrokeSample& sample : resampled_dabs)
 			{
-				return false;
+				if (!std::isfinite(sample.terrain_local_xz.x) ||
+					!std::isfinite(sample.terrain_local_xz.y) ||
+					!is_valid_unit_float(sample.pressure))
+				{
+					return fail(out_error, "Terrain brush dabs must be finite with pressure in [0,1].");
+				}
 			}
+			const std::vector<TerrainStrokeSample>& samples = resampled_dabs;
 			if (samples.empty())
 			{
 				std::vector<TerrainComponentCoord> current_dirty = working_set.dirty_components;
@@ -1125,16 +1232,32 @@ namespace AshEngine
 				return true;
 			}
 
-			std::vector<LayerBlockLookup> layer_lookups{};
+			std::vector<LayerBlockLookup> mutation_lookups{};
 			if (!build_layer_block_lookups(
-				working_set,
+				working_set.layout,
+				working_set.edit_layers,
 				selected_layer_index,
 				!weight_tool,
 				weight_tool,
+				false,
+				false,
+				component_count,
+				mutation_lookups,
+				out_error))
+			{
+				return false;
+			}
+			std::vector<LayerBlockLookup> frozen_lookups{};
+			if (!build_layer_block_lookups(
+				working_set.layout,
+				frozen_edit_layers,
+				selected_layer_index,
+				alpha_height_tool,
+				params.tool == TerrainBrushTool::Erase,
 				alpha_height_tool,
 				params.tool == TerrainBrushTool::Erase,
 				component_count,
-				layer_lookups,
+				frozen_lookups,
 				out_error))
 			{
 				return false;
@@ -1146,7 +1269,8 @@ namespace AshEngine
 			if (params.tool == TerrainBrushTool::Flatten &&
 				!sample_frozen_height_bilinear(
 					working_set,
-					layer_lookups,
+					frozen_edit_layers,
+					frozen_lookups,
 					selected_layer_index,
 					samples.front().terrain_local_xz,
 					flatten_target,
@@ -1213,7 +1337,7 @@ namespace AshEngine
 									WeightCandidate candidate{};
 									if (!create_weight_candidate(
 										working_set.layout,
-										layer_lookups[selected_layer_index].weight_by_owner[owner_index],
+										mutation_lookups[selected_layer_index].weight_by_owner[owner_index],
 										owner,
 										candidate,
 										out_error))
@@ -1238,7 +1362,8 @@ namespace AshEngine
 								{
 									if (!compose_frozen_weights(
 										working_set,
-										layer_lookups,
+										frozen_edit_layers,
+										frozen_lookups,
 										selected_layer_index,
 										sample_x,
 										sample_z,
@@ -1295,7 +1420,7 @@ namespace AshEngine
 									HeightCandidate candidate{};
 									if (!create_height_candidate(
 										working_set.layout,
-										layer_lookups[selected_layer_index].height_by_owner[owner_index],
+										mutation_lookups[selected_layer_index].height_by_owner[owner_index],
 										owner,
 										candidate,
 										out_error))
@@ -1344,10 +1469,10 @@ namespace AshEngine
 										float h_right = 0.0f;
 										float h_top = 0.0f;
 										float h_bottom = 0.0f;
-										if (!compose_frozen_height(working_set, layer_lookups, selected_layer_index, left, sample_z, h_left, out_error) ||
-											!compose_frozen_height(working_set, layer_lookups, selected_layer_index, right, sample_z, h_right, out_error) ||
-											!compose_frozen_height(working_set, layer_lookups, selected_layer_index, sample_x, top, h_top, out_error) ||
-											!compose_frozen_height(working_set, layer_lookups, selected_layer_index, sample_x, bottom, h_bottom, out_error))
+										if (!compose_frozen_height(working_set, frozen_edit_layers, frozen_lookups, selected_layer_index, left, sample_z, h_left, out_error) ||
+											!compose_frozen_height(working_set, frozen_edit_layers, frozen_lookups, selected_layer_index, right, sample_z, h_right, out_error) ||
+											!compose_frozen_height(working_set, frozen_edit_layers, frozen_lookups, selected_layer_index, sample_x, top, h_top, out_error) ||
+											!compose_frozen_height(working_set, frozen_edit_layers, frozen_lookups, selected_layer_index, sample_x, bottom, h_bottom, out_error))
 										{
 											return false;
 										}
@@ -1466,7 +1591,7 @@ namespace AshEngine
 			for (const HeightMutation& mutation : height_mutations)
 			{
 				if (mutation.has_block &&
-					layer_lookups[selected_layer_index].height_by_owner[
+					mutation_lookups[selected_layer_index].height_by_owner[
 						component_owner_index(working_set.layout, mutation.owner)] == nullptr)
 				{
 					++height_additions;
@@ -1476,7 +1601,7 @@ namespace AshEngine
 			for (const WeightMutation& mutation : weight_mutations)
 			{
 				if (mutation.has_block &&
-					layer_lookups[selected_layer_index].weight_by_owner[
+					mutation_lookups[selected_layer_index].weight_by_owner[
 						component_owner_index(working_set.layout, mutation.owner)] == nullptr)
 				{
 					++weight_additions;

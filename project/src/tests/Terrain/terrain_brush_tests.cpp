@@ -158,6 +158,80 @@ TEST_CASE("Terrain stroke sampling rejects invalid metric inputs without changin
 	CheckRejected(invalid, {}, 1.0f);
 }
 
+TEST_CASE("Terrain stroke sampling resumes across incremental input without replaying old path")
+{
+	AshEngine::TerrainStrokeResamplerState state{};
+	const AshEngine::TerrainBrushMetric metric{};
+	std::vector<AshEngine::TerrainStrokeSample> emitted{};
+	std::vector<AshEngine::TerrainStrokeSample> all{};
+
+	REQUIRE(AshEngine::append_resampled_terrain_stroke(
+		state, metric, 1.0f, { { { 0.0f, 0.0f }, 0.0f } }, emitted));
+	REQUIRE(emitted.size() == 1u);
+	all.insert(all.end(), emitted.begin(), emitted.end());
+	CheckSample(emitted[0], 0.0f, 0.0f, 0.0f);
+
+	REQUIRE(AshEngine::append_resampled_terrain_stroke(
+		state, metric, 1.0f, { { { 0.4f, 0.0f }, 0.4f } }, emitted));
+	CHECK(emitted.empty());
+	REQUIRE(AshEngine::append_resampled_terrain_stroke(
+		state, metric, 1.0f, { { { 1.3f, 0.0f }, 0.65f } }, emitted));
+	REQUIRE(emitted.size() == 1u);
+	all.insert(all.end(), emitted.begin(), emitted.end());
+	CheckSample(emitted[0], 1.0f, 0.0f, 0.5666667f);
+
+	REQUIRE(AshEngine::append_resampled_terrain_stroke(
+		state, metric, 1.0f, { { { 2.6f, 0.0f }, 1.0f } }, emitted));
+	REQUIRE(emitted.size() == 1u);
+	all.insert(all.end(), emitted.begin(), emitted.end());
+	CheckSample(emitted[0], 2.0f, 0.0f, 0.8384615f);
+	REQUIRE(state.previous_input.has_value());
+	const glm::vec2 tail_delta = all.back().terrain_local_xz - state.previous_input->terrain_local_xz;
+	if (glm::dot(tail_delta, tail_delta) > 1.0e-12f)
+	{
+		all.push_back(*state.previous_input);
+	}
+
+	std::vector<AshEngine::TerrainStrokeSample> batch{};
+	REQUIRE(AshEngine::resample_terrain_stroke(
+		{
+			{ { 0.0f, 0.0f }, 0.0f },
+			{ { 0.4f, 0.0f }, 0.4f },
+			{ { 1.3f, 0.0f }, 0.65f },
+			{ { 2.6f, 0.0f }, 1.0f }
+		}, metric, 1.0f, batch));
+	REQUIRE(all.size() == batch.size());
+	for (size_t index = 0u; index < all.size(); ++index)
+	{
+		CHECK(all[index].terrain_local_xz == batch[index].terrain_local_xz);
+		CHECK(all[index].pressure == batch[index].pressure);
+	}
+}
+
+TEST_CASE("Terrain incremental stroke sampling rejects invalid input atomically")
+{
+	AshEngine::TerrainStrokeResamplerState state{};
+	state.previous_input = AshEngine::TerrainStrokeSample{ { 1.0f, 2.0f }, 0.5f };
+	state.previous_output = state.previous_input;
+	state.distance_to_next_sample_meters = 0.75;
+	const auto unchanged = state;
+	std::vector<AshEngine::TerrainStrokeSample> output{ { { 9.0f, 9.0f }, 1.0f } };
+	std::string error{};
+	CHECK_FALSE(AshEngine::append_resampled_terrain_stroke(
+		state,
+		{},
+		1.0f,
+		{ { { std::numeric_limits<float>::quiet_NaN(), 0.0f }, 1.0f } },
+		output,
+		&error));
+	CHECK(state.previous_input->terrain_local_xz == unchanged.previous_input->terrain_local_xz);
+	CHECK(state.previous_output->terrain_local_xz == unchanged.previous_output->terrain_local_xz);
+	CHECK(state.distance_to_next_sample_meters == unchanged.distance_to_next_sample_meters);
+	REQUIRE(output.size() == 1u);
+	CheckSample(output[0], 9.0f, 9.0f, 1.0f);
+	CHECK_FALSE(error.empty());
+}
+
 namespace
 {
 	auto MakeLayerId(uint8_t value) -> AshEngine::TerrainLayerId
@@ -374,6 +448,75 @@ TEST_CASE("Terrain brush rejects invalid parameters atomically")
 	CheckRejected(MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Additive), valid,
 		{}, { { { 2.0f, 2.0f }, -0.01f } });
 
+}
+
+TEST_CASE("Terrain resampled dab batches preserve the frozen stroke source")
+{
+	auto batch_working_set = MakeBrushWorkingSet(AshEngine::TerrainHeightBlendMode::Alpha);
+	batch_working_set.edit_layers.front().height_blocks.push_back(MakeHeightBlock(
+		AshEngine::get_terrain_sample_owner(batch_working_set.layout, 2u, 2u),
+		2u,
+		2u,
+		10.0f,
+		1.0f));
+	auto incremental_working_set = batch_working_set;
+	const std::vector<AshEngine::TerrainEditLayer> frozen_layers =
+		incremental_working_set.edit_layers;
+	auto params = MakeBrushParameters(AshEngine::TerrainBrushTool::Smooth);
+	params.radius_meters = 1.5f;
+	const std::vector<AshEngine::TerrainStrokeSample> raw{
+		{ { 2.0f, 2.0f }, 1.0f },
+		{ { 4.0f, 2.0f }, 1.0f }
+	};
+	std::vector<AshEngine::TerrainStrokeSample> dabs{};
+	REQUIRE(AshEngine::resample_terrain_stroke(
+		raw, {}, params.stroke_spacing_meters, dabs));
+	REQUIRE(dabs.size() == 3u);
+
+	std::vector<AshEngine::TerrainEditPatch> batch_patches{};
+	std::vector<AshEngine::TerrainComponentCoord> batch_dirty{};
+	REQUIRE(AshEngine::apply_terrain_brush_stroke(
+		batch_working_set,
+		params,
+		{},
+		raw,
+		batch_patches,
+		batch_dirty));
+
+	std::vector<AshEngine::TerrainEditPatch> incremental_patches{};
+	std::vector<AshEngine::TerrainComponentCoord> incremental_dirty{};
+	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+		incremental_working_set,
+		params,
+		{},
+		frozen_layers,
+		{ dabs[0], dabs[1] },
+		incremental_patches,
+		incremental_dirty));
+	REQUIRE(AshEngine::apply_resampled_terrain_brush_dabs(
+		incremental_working_set,
+		params,
+		{},
+		frozen_layers,
+		{ dabs[2] },
+		incremental_patches,
+		incremental_dirty));
+
+	const auto& expected = batch_working_set.edit_layers.front().height_blocks;
+	const auto& actual = incremental_working_set.edit_layers.front().height_blocks;
+	REQUIRE(actual.size() == expected.size());
+	for (size_t index = 0u; index < expected.size(); ++index)
+	{
+		CHECK(actual[index].owner == expected[index].owner);
+		CHECK(actual[index].changed_rect.min_x == expected[index].changed_rect.min_x);
+		CHECK(actual[index].changed_rect.min_z == expected[index].changed_rect.min_z);
+		CHECK(actual[index].changed_rect.max_x_exclusive ==
+			expected[index].changed_rect.max_x_exclusive);
+		CHECK(actual[index].changed_rect.max_z_exclusive ==
+			expected[index].changed_rect.max_z_exclusive);
+		CHECK(actual[index].scales == expected[index].scales);
+		CHECK(actual[index].biases == expected[index].biases);
+	}
 }
 
 TEST_CASE("Terrain brush composes all sculpt tools in one generic edit layer")

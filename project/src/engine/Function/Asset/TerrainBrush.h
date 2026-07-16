@@ -4,6 +4,7 @@
 #include "Function/Asset/TerrainData.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,13 @@ namespace AshEngine
 		float pressure = 1.0f;
 	};
 
+	struct TerrainStrokeResamplerState
+	{
+		std::optional<TerrainStrokeSample> previous_input{};
+		std::optional<TerrainStrokeSample> previous_output{};
+		double distance_to_next_sample_meters = 0.0;
+	};
+
 	enum class TerrainEditPatchDomain : uint8_t
 	{
 		Height = 0,
@@ -82,11 +90,33 @@ namespace AshEngine
 		std::vector<TerrainStrokeSample>& out_samples,
 		std::string* out_error = nullptr) -> bool;
 
+	ASH_API auto append_resampled_terrain_stroke(
+		TerrainStrokeResamplerState& state,
+		const TerrainBrushMetric& metric,
+		float spacing_meters,
+		const std::vector<TerrainStrokeSample>& new_input,
+		std::vector<TerrainStrokeSample>& out_new_samples,
+		std::string* out_error = nullptr) -> bool;
+
 	ASH_API auto apply_terrain_brush_stroke(
 		TerrainWorkingSet& working_set,
 		const TerrainBrushParameters& params,
 		const TerrainBrushMetric& metric,
 		const std::vector<TerrainStrokeSample>& raw_input,
+		std::vector<TerrainEditPatch>& out_patches,
+		std::vector<TerrainComponentCoord>& out_dirty_components,
+		std::string* out_error = nullptr) -> bool;
+
+	// Applies samples that were already produced by the deterministic stroke
+	// resampler. Incremental Editor preview uses this entry point so a dab is not
+	// spaced twice, while frozen_edit_layers keeps target-based tools anchored to
+	// the layer stack that existed when the stroke began.
+	ASH_API auto apply_resampled_terrain_brush_dabs(
+		TerrainWorkingSet& working_set,
+		const TerrainBrushParameters& params,
+		const TerrainBrushMetric& metric,
+		const std::vector<TerrainEditLayer>& frozen_edit_layers,
+		const std::vector<TerrainStrokeSample>& resampled_dabs,
 		std::vector<TerrainEditPatch>& out_patches,
 		std::vector<TerrainComponentCoord>& out_dirty_components,
 		std::string* out_error = nullptr) -> bool;

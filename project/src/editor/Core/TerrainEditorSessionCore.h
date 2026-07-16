@@ -158,7 +158,8 @@ namespace AshEditor
 			uint64_t sequence,
 			const AshEngine::TerrainBrushParameters& refParameters,
 			const AshEngine::TerrainBrushMetric& refMetric,
-			const std::vector<AshEngine::TerrainStrokeSample>& refRawSamples,
+			const std::vector<AshEngine::TerrainEditLayer>& refFrozenEditLayers,
+			const std::vector<AshEngine::TerrainStrokeSample>& refResampledDabs,
 			std::vector<AshEngine::TerrainEditPatch>& refPatches,
 			std::vector<AshEngine::TerrainComponentCoord>& refDirtyComponents,
 			std::string* pError = nullptr);
