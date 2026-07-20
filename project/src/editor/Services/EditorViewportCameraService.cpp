@@ -2,6 +2,7 @@
 
 #include "Core/EditorIds.h"
 #include "Services/AssetDatabaseService.h"
+#include "Services/EditorViewportCameraMath.h"
 #include "Services/SceneService.h"
 
 #include "Function/Scene/SceneQuery.h"
@@ -19,8 +20,6 @@ namespace AshEditor
 	{
 		constexpr float kOrbitMouseSensitivity = 0.25f;
 		constexpr float kDefaultFocusDistance = 4.5f;
-		constexpr float kScrollDollySpeed = 0.12f;
-		constexpr float kDragDollySpeed = 0.015f;
 		constexpr float kMinOrbitDistance = 0.1f;
 		constexpr float kMaxOrbitDistance = 20000.0f;
 
@@ -230,15 +229,19 @@ namespace AshEditor
 			return;
 		}
 
+		const bool bShiftDown = refInput.IsModifierDown(AshEngine::UIModifierFlagBits::Shift);
 		if (bMouseInContent && std::abs(refInput.vecMouseWheelDelta.y) > 0.0f)
 		{
-			const float fSpeedScale = std::max(0.2f, refState.fMoveSpeed / 8.0f);
-			const float fDistanceDelta =
-				std::max(refState.fOrbitDistance * kScrollDollySpeed, kMinOrbitDistance) *
-				refInput.vecMouseWheelDelta.y *
-				fSpeedScale;
-			refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
-			UpdatePositionFromOrbit(refState);
+			const EditorViewportCameraMath::WheelTranslationResult translation =
+				EditorViewportCameraMath::ComputeWheelTranslation(
+					refState.vecPosition,
+					refState.vecOrbitTarget,
+					ComputeForwardVector(refState.vecRotationEulerDegrees),
+					refInput.vecMouseWheelDelta.y,
+					refState.fMoveSpeed,
+					bShiftDown);
+			refState.vecPosition = translation.vecPosition;
+			refState.vecOrbitTarget = translation.vecOrbitTarget;
 		}
 
 		const bool bAltDown = IsAltDown(refInput);
@@ -334,23 +337,25 @@ namespace AshEditor
 						(2.0f * std::tan(glm::radians(refState.fFovYDegrees) * 0.5f) *
 							std::max(refState.fOrbitDistance, kMinOrbitDistance)) /
 						fViewportHeight;
-					const float fPanScale = fPanUnitsPerPixel * std::max(0.25f, refState.fMoveSpeed / 8.0f);
-					const glm::vec3 vecRight = ComputeRightVector(refState.vecRotationEulerDegrees);
-					const glm::vec3 vecUp = ComputeUpVector(refState.vecRotationEulerDegrees);
-					const glm::vec3 vecPanDelta =
-						(-vecRight * static_cast<float>(dMouseDeltaX) + vecUp * static_cast<float>(dMouseDeltaY)) *
-						fPanScale;
+					const glm::vec3 vecPanDelta = EditorViewportCameraMath::ComputePanTranslation(
+						ComputeRightVector(refState.vecRotationEulerDegrees),
+						ComputeUpVector(refState.vecRotationEulerDegrees),
+						static_cast<float>(dMouseDeltaX),
+						static_cast<float>(dMouseDeltaY),
+						fPanUnitsPerPixel,
+						refState.fMoveSpeed,
+						bShiftDown);
 					refState.vecOrbitTarget += vecPanDelta;
 					refState.vecPosition += vecPanDelta;
 					break;
 				}
 				case CameraDragMode::Dolly:
 				{
-					const float fSpeedScale = std::max(0.25f, refState.fMoveSpeed / 8.0f);
-					const float fDistanceDelta =
-						std::max(refState.fOrbitDistance * kDragDollySpeed, kMinOrbitDistance) *
-						static_cast<float>(-dMouseDeltaY) *
-						fSpeedScale;
+					const float fDistanceDelta = EditorViewportCameraMath::ComputeDollyDistanceDelta(
+						refState.fOrbitDistance,
+						static_cast<float>(dMouseDeltaY),
+						refState.fMoveSpeed,
+						bShiftDown);
 					refState.fOrbitDistance = ClampOrbitDistance(refState.fOrbitDistance - fDistanceDelta);
 					UpdatePositionFromOrbit(refState);
 					break;

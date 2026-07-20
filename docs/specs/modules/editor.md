@@ -38,6 +38,7 @@ status: active
 - **Editor 只经 `UIContext` 与 Engine UI 交互，禁止直接使用 ImGui / Graphics API**：面板、控件、服务一律通过 `EditorFrameContext::pUiContext`（`ImGui/` 下的遗留桥接文件已被剔出构建）。
 - 单一真源：活动场景状态唯一真源在 `SceneService`；Selection 只由 `SelectionService` 维护、undo/redo 栈只由 `UndoRedoService` 维护、viewport presentation 绑定只由 `EditorViewportService` 维护；快捷键文案与触发规则同一真源（`EditorShortcutService`）。
 - Gizmo 视觉与命中投影必须同源：Scene viewport 的中央 gizmo 与右上角 XYZ 指示器使用当前相机的同一 view basis；Move/Scale 平面手柄的世界四角必须逐点做透视投影，绘制和命中共用所得凸四边形。相机上下文不可用或投影退化时隐藏对应视觉，禁止回退到 identity 朝向或屏幕轴对齐矩形。
+- Scene Viewport 相机移动：滚轮沿视线方向等步长平移 camera position 与 orbit target，不得随 orbit distance 缩短而减速；Shift 仅将滚轮、MMB Pan、Alt+RMB Dolly 的当次移动速度乘以 2，不得写回 Camera Speed 设置。Orbit 旋转灵敏度与 F Focus 不受 Shift 影响。
 - 场景修改必须封装为 `EditorCommand` 经 CommandService 执行，保证 undo/redo 与选择一致性；面板间通信走 `EditorEventBus` 或 Services，不得互相直接引用。
 - Particle 必须进入 entity snapshot 的复制/删除/撤销恢复路径。连续属性编辑只在 command 前后状态结构连续时合并；跨 saved checkpoint 不合并，最终状态等于初始状态时不得生成空历史项。
 - Particle sprite 的空路径与已知缺失路径沿用运行时 Default White fallback，因此不得阻止 Inspector 提交；资产库能确认路径是非 Texture 类型时必须阻止提交。Soft Particles 开关只控制 fade distance 的可编辑状态，不得清空该值。
