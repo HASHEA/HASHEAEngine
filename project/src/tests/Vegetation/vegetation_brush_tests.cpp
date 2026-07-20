@@ -517,6 +517,48 @@ TEST_CASE("Vegetation brush maps one meter texel centers across negative tile bo
 	CHECK(nonzero_values == expected.size() * 2u);
 }
 
+TEST_CASE("Vegetation brush maps negative exact-multiple texel cells to the owning tile in Release")
+{
+	struct BoundaryCase
+	{
+		int64_t tile_x = 0;
+		double world_x = 0.0;
+	};
+	constexpr std::array<BoundaryCase, 2> cases{ {
+		{ -1, -31.5 },
+		{ -2, -63.5 },
+	} };
+
+	for (const BoundaryCase& boundary : cases)
+	{
+		CAPTURE(boundary.tile_x);
+		CAPTURE(boundary.world_x);
+		AshEngine::VegetationLayerSnapshot source = VegetationTest::MinimalLayerSnapshot();
+		source.tiles[0].tile_x = boundary.tile_x;
+		AshEngine::VegetationLayerWorkingSet working(SharedSnapshot(source));
+		const uint64_t generation_before = working.content_generation();
+
+		const auto result = AshEngine::apply_vegetation_brush_stroke(
+			working,
+			SinglePointStroke(
+				AshEngine::VegetationBrushMode::Erase,
+				{},
+				VegetationTest::SurfaceRequest(boundary.world_x, 96.5),
+				250,
+				1,
+				0));
+
+		REQUIRE(result.status == AshEngine::VegetationMutationStatus::Applied);
+		CHECK(result.new_generation == generation_before + 1u);
+		REQUIRE(result.patch.entries.size() == 2u);
+		for (const AshEngine::VegetationLayerPatchEntry& entry : result.patch.entries)
+		{
+			CHECK(entry.tile_x == boundary.tile_x);
+			CHECK(entry.tile_z == 3);
+		}
+	}
+}
+
 TEST_CASE("Vegetation brush Erase removes a tile when its density reaches zero before weights")
 {
 	AshEngine::VegetationLayerSnapshot source = TwoSpeciesLayer();

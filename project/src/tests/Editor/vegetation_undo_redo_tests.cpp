@@ -189,16 +189,13 @@ namespace
 		stroke.strength = 1;
 		stroke.falloff = 0;
 		stroke.spacing_mm = 1;
-		stroke.path.push_back(VegetationTest::SurfaceRequest(0.5, 0.5));
+		stroke.path.push_back(VegetationTest::SurfaceRequest(-63.5, 96.5));
 		return stroke;
 	}
 
 	AshEngine::VegetationLayerSnapshot MakeCommandLayerSnapshot()
 	{
-		AshEngine::VegetationLayerSnapshot layer = VegetationTest::MinimalLayerSnapshot();
-		layer.tiles[0].tile_x = 0;
-		layer.tiles[0].tile_z = 0;
-		return layer;
+		return VegetationTest::MinimalLayerSnapshot();
 	}
 
 	AshEngine::VegetationPaletteEdit MakePaletteAdd()
@@ -523,16 +520,16 @@ TEST_CASE("Vegetation stroke command alternates canonical payload and advances i
 		MakeCommandLayerSnapshot());
 	REQUIRE(initial->tiles.size() == 1u);
 	REQUIRE(initial->tiles[0].planes.size() == 2u);
-	CHECK(initial->tiles[0].tile_x == 0);
-	CHECK(initial->tiles[0].tile_z == 0);
+	CHECK(initial->tiles[0].tile_x == -2);
+	CHECK(initial->tiles[0].tile_z == 3);
 	CHECK(initial->tiles[0].planes[0].values[0] == 255u);
 	const AshEngine::VegetationBrushStroke stroke = MakeSingleTexelEraseStroke();
 	REQUIRE(stroke.path.size() == 1u);
 	AshEngine::VegetationWorldMillimeterPoint point{};
 	REQUIRE(AshEngine::vegetation_surface_request_to_world_millimeter(
 		stroke.path[0], point));
-	CHECK(point.x == 500);
-	CHECK(point.z == 500);
+	CHECK(point.x == -63500);
+	CHECK(point.z == 96500);
 	CHECK(AshEngine::vegetation_brush_amount(
 		0, stroke.radius_mm, stroke.strength, stroke.falloff) == 1u);
 	auto working = std::make_shared<AshEngine::VegetationLayerWorkingSet>(initial);

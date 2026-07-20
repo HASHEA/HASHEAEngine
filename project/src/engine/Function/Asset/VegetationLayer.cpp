@@ -600,10 +600,14 @@ namespace AshEngine
 
 		int64_t floor_divide(const int64_t value, const int64_t divisor)
 		{
-			int64_t quotient = value / divisor;
-			const int64_t remainder = value % divisor;
-			if (remainder < 0) --quotient;
-			return quotient;
+			if (value >= 0)
+			{
+				return value / divisor;
+			}
+			// All callers use a positive divisor. This form is safe for INT64_MIN and
+			// avoids an optimized quotient/remainder sequence that miscompiled exact
+			// negative multiples with the Windows Release toolchain.
+			return -1 - (-(value + 1) / divisor);
 		}
 
 		VegetationChunkCoord mutation_chunk_coord(

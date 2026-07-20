@@ -57,7 +57,7 @@ status: active
 - surface snapshot：`IVegetationSurfaceSnapshot` 提供 immutable identity、coarse chunk bounds 与 resident-only batch sampling；`sample_vegetation_surface_batch` 统一验证请求、identity 前后稳定性、normal/材质权重、aggregate status、取消和绝对 deadline，失败不发布部分结果。
 - Phase 2 植被资产 codec：`decode/encode_vegetation_species`、`decode/encode_vegetation_layer`、`decode/encode_vegetation_chunk`。decoder 要求 caller 显式传入 `VegetationLoadBudget`，只在 strict shape、CRC、canonical ordering 与预算全部通过后一次性发布 DTO 和精确 `VegetationLoadCost`；encoder 同样使用临时 byte stream，失败清空输出。
 - Phase 2 Layer authoring：`VegetationLayerWorkingSet` 只发布 `shared_ptr<const VegetationLayerSnapshot>`；Paint/Erase 与 palette Add/Replace/Remove 返回可重复 apply/revert 的 direction-neutral patch。patch 按 `(tile_z,tile_x,plane_kind,species_id)` 排序，先验证 expected generation、canonical source、完整 source bytes、palette/species 与 target shape，再一次性提交 publication 和 bake-dirty evidence。成功恰好推进一代；read-only、`UINT64_MAX`、invalid/no-op 或任一 preflight 失败都不发布且不回绕。
-- 笔刷只接受 canonical `[0,256)` chunk-local 坐标，并 checked 转成 signed world millimeter；radius/strength/falloff/spacing、GCD 同向 run、safe segment、floor-isqrt、ties-to-even resampling/falloff 全按 v1 整数合同执行。稀疏 tile 坐标是 int64 且没有世界尺寸或实例总数硬上限；实际内存/文件准入仍由显式预算与上层 resident policy 控制。
+- 笔刷只接受 canonical `[0,256)` chunk-local 坐标，并 checked 转成 signed world millimeter；radius/strength/falloff/spacing、GCD 同向 run、safe segment、floor-isqrt、ties-to-even resampling/falloff 全按 v1 整数合同执行。cell→32×32 authoring tile 映射使用数学 floor division，负坐标恰落在 `-32`、`-64` 等整除边界时必须仍归属 `-1`、`-2`，Debug/Release 结果一致。稀疏 tile 坐标是 int64 且没有世界尺寸或实例总数硬上限；实际内存/文件准入仍由显式预算与上层 resident policy 控制。
 
 加载结果统一为 `std::shared_ptr<const T>` 共享不可变数据；上层（Scene 实例化、Editor AssetDatabaseService、RenderAssetManager）只应依赖上述接口。
 
