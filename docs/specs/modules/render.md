@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-20
 status: active
 ---
 
@@ -108,6 +108,7 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 - Terrain weight staging 是单个 raw buffer；一个 graph 最多上传并 dispatch 一个 Component。禁止为了批处理而在同一 graph 里反复覆盖该 staging 后再提交多个 dispatch，除非先引入可证明独立生命周期的 ring/offset 方案。
 - Terrain shared grid 固定使用 9 个 LOD、`uint32_t` index 和零 vertex stream；GBuffer/depth permutation 必须复用同一 packed-height/morph helper。材质权重 tie 只能以较小 layer index 获胜，全部为零必须回退 Layer 0，禁止依赖 texture/filter 遍历顺序。
 - Terrain GBuffer 必须复用既有 `SceneGBufferPass` 的 attachments 与一次 clear；atlas update 必须先写 `ComputeUAV`，GBuffer 再读 `GraphicsSRV`。方向光 shadow callback 组合 static mesh 与 Terrain，Terrain 不进入 `DynamicOnly` cache 更新。Terrain generation 变化只失效对应 temporal view 的 TAA history。
+- 屏幕空间 scene-depth coverage 必须通过 `Shaders/Scene/SceneDepthCommon.hlsli` 的统一 helper 判定：reverse-Z 仅 `depth <= 0.0`、normal-Z 仅 `depth >= 1.0` 视为 depth target 背景。禁止用固定 epsilon 代替 clear 端点，因为有限远平面下的合法远端 reverse-Z 深度可任意接近零。
 - 实例 buffer 为「逻辑 slot + 3 帧物理 ring」，epoch 取渲染侧 `Application::get_frame_index()`（不是 `VisibleRenderFrame::frame_index`）；temporal history 只允许 GBuffer pass 使用。禁止改回单物理 slot：Vulkan Release 下 CPU 写 host-visible buffer 会覆盖 GPU 正在读的上一帧实例矩阵，导致 GBuffer depth/normal/motion vector 裂缝闪烁。
 - GPU timing 的 pass 名称及其稳定 hash 是遥测身份。每帧同名 scope 先求和再进入 percentile；duplicate/unexpected/missing frame、scope overflow、required scope 缺失、hash collision/mismatch 或后端 timing failure 都是 PerfGate fatal，禁止静默补 CPU 值或复用别帧结果。
 - 双后端等价：所有 pass 必须 Vulkan / DX12 行为一致，跨后端 diff FAIL 视同 bug。

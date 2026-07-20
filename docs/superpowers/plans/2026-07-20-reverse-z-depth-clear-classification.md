@@ -23,11 +23,11 @@
 **Files:**
 - Create: `project/src/tests/Function/scene_depth_clear_contract_tests.cpp`
 
-- [ ] **Step 1: Ensure the visible Editor is safely closed before rebuilding**
+- [x] **Step 1: Ensure the visible Editor is safely closed before rebuilding**
 
 Do not terminate the process or discard unsaved scene/terrain state. Ask the human to save or discard explicitly, then verify the terrain Editor process has exited and no effective Tests/MSBuild/Premake/GPU/gate root remains.
 
-- [ ] **Step 2: Add the numeric and source-contract RED tests**
+- [x] **Step 2: Add the numeric and source-contract RED tests**
 
 Create the test file with a binary-safe source reader and these contracts:
 
@@ -112,20 +112,21 @@ TEST_CASE("Scene depth clear consumers use the shared exact-endpoint contract")
 		const std::string source = ReadSource(path);
 		CHECK(source.find("SceneDepthCommon.hlsli") != std::string::npos);
 		CHECK(source.find("AshSceneDepthIsBackground(") != std::string::npos);
-		CHECK(source.find("0.000001") == std::string::npos);
-		CHECK(source.find("0.999999") == std::string::npos);
-		CHECK(source.find("1.0e-6") == std::string::npos);
+		CHECK(source.find("depth <= 0.000001") == std::string::npos);
+		CHECK(source.find("depth >= 0.999999") == std::string::npos);
+		CHECK(source.find("scene_device_depth <= 1.0e-6") == std::string::npos);
+		CHECK(source.find("scene_device_depth >= 0.999999") == std::string::npos);
 	}
 }
 ```
 
-- [ ] **Step 3: Regenerate the solution so the globbed test file enters Tests.vcxproj**
+- [x] **Step 3: Regenerate the solution so the globbed test file enters Tests.vcxproj**
 
 Run: `generate_vs2022.bat`
 
 Expected: exit `0`; generated solution contains `scene_depth_clear_contract_tests.cpp`.
 
-- [ ] **Step 4: Run the focused test and verify RED**
+- [x] **Step 4: Run the focused test and verify RED**
 
 Run: `RunTests.bat Debug --test-case="*Scene depth clear*"`
 
@@ -145,7 +146,7 @@ Expected: FAIL because `SceneDepthCommon.hlsli` does not exist and the eight con
 - Modify: `project/src/engine/Shaders/Particles/ParticleSystem.hlsl`
 - Test: `project/src/tests/Function/scene_depth_clear_contract_tests.cpp`
 
-- [ ] **Step 1: Add the shared helper**
+- [x] **Step 1: Add the shared helper**
 
 ```hlsl
 #ifndef ASH_SCENE_DEPTH_COMMON_HLSLI
@@ -159,16 +160,22 @@ bool AshSceneDepthIsBackground(float depth, bool reverse_z)
 #endif
 ```
 
-- [ ] **Step 2: Include the helper and replace each local classifier**
+- [x] **Step 2: Include the helper and replace each local classifier**
 
-Each consumer includes `../Scene/SceneDepthCommon.hlsli`. Remove duplicate `AshSceneDepthIsBackground`, `AshAOSceneDepthIsBackground`, `AshVolumetricSceneDepthIsBackground`, or `IsBackgroundDepth` definitions and call the shared helper with the consumer's existing reverse-Z flag. Representative conversions:
+Each consumer includes `../Scene/SceneDepthCommon.hlsli`. Preserve existing one-argument wrapper names where other shaders already call them, but make every wrapper delegate to the shared helper with the consumer's existing reverse-Z flag. Debug and particle paths call the shared helper directly. Representative conversions:
 
 ```hlsl
-if (AshSceneDepthIsBackground(surface.depth, AshIsReverseZ()))
+bool AshSceneDepthIsBackground(float depth)
+{
+    return AshSceneDepthIsBackground(depth, AshIsReverseZ());
+}
 ```
 
 ```hlsl
-if (AshSceneDepthIsBackground(scene_depth, AshShadowLightParams.z > 0.5))
+bool IsBackgroundDepth(float depth)
+{
+    return AshSceneDepthIsBackground(depth, AshShadowLightParams.z > 0.5);
+}
 ```
 
 ```hlsl
@@ -181,15 +188,15 @@ const bool background = AshSceneDepthIsBackground(
     (AshParticleFlags & 1u) != 0u);
 ```
 
-Update AO/volumetric call sites directly rather than keeping wrappers, so the test can prove all consumers use the same definition.
+The wrappers contain no epsilon or endpoint policy of their own; the test proves each consumer includes and invokes the single shared definition without forcing unrelated caller-file churn.
 
-- [ ] **Step 3: Run the focused test and verify GREEN**
+- [x] **Step 3: Run the focused test and verify GREEN**
 
 Run: `RunTests.bat Debug --test-case="*Scene depth clear*"`
 
 Expected: PASS; the projected far Terrain depth remains positive and below the legacy epsilon, while all consumers reference the exact-endpoint helper.
 
-- [ ] **Step 4: Verify shader literals and diff scope**
+- [x] **Step 4: Verify shader literals and diff scope**
 
 Run:
 
@@ -200,7 +207,7 @@ git diff --check
 
 Expected: `rg` returns no scene-background classifiers; unrelated reconstruction, material-weight, or temporal tolerances remain unchanged. `git diff --check` passes.
 
-- [ ] **Step 5: Commit the GREEN code and test only**
+- [x] **Step 5: Commit the GREEN code and test only**
 
 Stage the new helper, new test, and eight exact shader files individually. Inspect `git diff --cached` before committing; exclude user scene, Terrain assets, Editor config, verification notes, baselines, and unrelated worktree files.
 
@@ -215,7 +222,7 @@ Commit message: `fix(render): preserve valid far reverse-z depth`
 - Modify: `docs/specs/features/render-debug-view.md`
 - Modify: `docs/sdd/SDD-2026-07-20-reverse-z-depth-clear-classification.md`
 
-- [ ] **Step 1: Update the module and feature specs**
+- [x] **Step 1: Update the module and feature specs**
 
 Record these exact invariants in the relevant existing sections:
 
@@ -224,11 +231,11 @@ Record these exact invariants in the relevant existing sections:
 - Deferred, environment, shadow mask/cascade debug, AO, volumetric, particle soft-depth, and depth debug share one HLSL helper.
 - `SceneSunLightShadowCascadeIndex` black background must not consume positive far-depth pixels; pixels outside all configured splits remain the debug pass's explicit unmatched color.
 
-- [ ] **Step 2: Mark the Mini SDD Done after verification evidence exists**
+- [x] **Step 2: Mark the Mini SDD Done after verification evidence exists**
 
 Change `Status` from `Approved` to `Done` only after Tasks 4 and 5 pass. Add a concise Result paragraph containing the implementation commit and report paths; do not claim the human A/B before it is signed.
 
-- [ ] **Step 3: Commit documentation only**
+- [x] **Step 3: Commit documentation only**
 
 Stage the four specs and this SDD individually, inspect the cached diff, then commit:
 
@@ -239,19 +246,19 @@ Stage the four specs and this SDD individually, inspect the cached diff, then co
 **Files:**
 - No source edits expected.
 
-- [ ] **Step 1: Run full doctest**
+- [x] **Step 1: Run full doctest**
 
 Run: `RunTests.bat Debug`
 
 Expected: all suites/cases PASS with exit `0`.
 
-- [ ] **Step 2: Run architecture gate**
+- [x] **Step 2: Run architecture gate**
 
 Run: `RunArchGate.bat`
 
 Expected: PASS; legacy warnings do not increase.
 
-- [ ] **Step 3: Build both Debug targets**
+- [x] **Step 3: Build both Debug targets**
 
 Run sequentially:
 
@@ -267,17 +274,17 @@ Expected: both exit `0`; shader compilation accepts the shared include from ever
 **Files:**
 - Runtime config files may be touched by applications but must be restored byte-for-byte after each bounded run.
 
-- [ ] **Step 1: Coordinate an exclusive CPU/GPU window and snapshot configuration**
+- [x] **Step 1: Coordinate an exclusive CPU/GPU window and snapshot configuration**
 
 Wait for all concurrent sessions to confirm release. Fresh-preflight Editor/Sandbox/AshImageDiff, Tests/MSBuild/Premake, validation, RenderGate, and PerfGate roots must be zero. Hash and back up `Engine.ini`, `EditorSettings.json`, `ViewportLayout.json`, `imgui.ini`, and the perf baseline without editing any baseline.
 
-- [ ] **Step 2: Run four-combination readiness**
+- [x] **Step 2: Run four-combination readiness**
 
 Run: `run.bat all Debug --smoke-test-seconds=120`
 
 Expected: Editor/Sandbox × Vulkan/DX12 all exit `0` after readiness; fresh logs contain no fatal/error/validation/device-loss findings.
 
-- [ ] **Step 3: Run dual-backend Debug timing validation**
+- [x] **Step 3: Run dual-backend Debug timing validation**
 
 Run:
 
@@ -287,7 +294,7 @@ RunPerfGate.bat -Profile Standard -Scenario Empty -Configuration Debug -TimingVa
 
 Expected: the built-in Vulkan and DX12 Debug validation matrix reaches readiness, produces complete timing snapshots, exits cleanly, and reports no validation/debug-layer warning or error.
 
-- [ ] **Step 4: Run non-bless render and performance gates**
+- [x] **Step 4: Run non-bless render and performance gates**
 
 Run sequentially:
 
@@ -298,10 +305,10 @@ RunPerfGate.bat -Profile Standard
 
 Expected: RenderGate PASS without golden changes. PerfGate has no FAIL; any WARN stops completion for explicit review. Do not bless golden or performance baseline.
 
-- [ ] **Step 5: Restore and audit runtime state**
+- [x] **Step 5: Restore and audit runtime state**
 
 Restore all snapshotted configuration bytes, confirm hashes match, confirm baseline diff is empty, and verify effective process roots are zero. Report all generated gate paths and any invalid diagnostic attempts separately.
 
-- [ ] **Step 6: Perform the human same-camera A/B**
+- [x] **Step 6: Perform the human same-camera A/B**
 
 Launch one visible Editor backend at a time only after coordination. The human verifies the same far corner in GBuffer E, `SceneSunLightShadowCascadeIndex`, and final lighting, then repeats on the second backend. The agent must not operate the UI or sign on the human's behalf. Close each Editor safely and restore configuration before changing backend.

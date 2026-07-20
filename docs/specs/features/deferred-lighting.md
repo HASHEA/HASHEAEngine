@@ -47,11 +47,16 @@ pass 类：`DeferredLightingPass`（`project/src/engine/Function/Render/Deferred
 所有光照 pass 采样 GBufferA–E、SceneDepth 与 `SceneAmbientOcclusion`（AO feature 输出；Off 时为 1x1 中性白）。
 资源经 `SceneDeferredGraphResources` 在 pass 间传递。
 
+Deferred surface、environment、AO 与 volumetric 的 SceneDepth coverage 统一调用
+`Shaders/Scene/SceneDepthCommon.hlsli`。reverse-Z 的背景是精确 clear 端点 `0.0`，normal-Z 是
+精确 clear 端点 `1.0`；不得用 `1e-6/0.999999` 等固定 epsilon 丢弃有限远平面内的合法像素。
+
 ## 约束与已知限制
 
 - 仅静态网格走 GBuffer 路径（`render_static_meshes_to_pass`，PassFamily::GBuffer）。
 - 逐光源独立全屏/体积 pass，无 light culling / clustered 优化。
 - GBuffer 布局当前只有 DeferredHQ 一种；`find_gbuffer_semantic_mapping` 供按语义定位。
+- 世界坐标重建的除零保护可以保留独立数值 epsilon，但该 epsilon 不得复用为 SceneDepth coverage/background 判据。
 
 ## 验证
 

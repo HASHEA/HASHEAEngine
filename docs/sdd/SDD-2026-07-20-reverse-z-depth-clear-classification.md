@@ -2,7 +2,7 @@
 
 ## Status
 
-Approved
+Done
 
 ## Goal
 
@@ -47,6 +47,10 @@ Approved
 - 渲染门禁：`RunRenderGate.bat`（non-bless）。
 - 性能门禁：`RunPerfGate.bat -Profile Standard`，不得 FAIL；WARN 需单独裁定。
 - 人工同机位复核：远角在 GBuffer E、SunLight Cascade Index 与最终光照中均保持覆盖；关闭 Terrain Cast Shadow 不改变覆盖；相机远近移动不得重新出现黑楔。
+
+## Result
+
+实现提交 `a4608b4` 新增统一 exact-clear helper，并迁移 8 个 screen-depth 消费者。focused contract 为 3/3、66/66，全量 Debug doctest 为 509/509、26354/26354；ArchGate PASS（35 条既有 legacy warning），Editor/Sandbox Debug 构建均 PASS。四组合 readiness exit 0；双后端 Debug TimingValidation 报告 `Intermediate/test-reports/perf-gate/20260720-151455-9734369-70a8ea78` PASS；non-bless RenderGate 报告 `Intermediate/test-reports/render-gate/20260720-151525-568-73252-f60c3464` PASS；Standard PerfGate 报告 `Intermediate/test-reports/perf-gate/20260720-151626-9346482-f636e52b` 四组合 PASS 且 warnings/failures 为空。自动矩阵与两次人工 Editor 共 32 份 fresh 日志拒绝词为 0，Vulkan/DX12 同机位人工 A/B 均确认 GBuffer E、Cascade Index、最终光照、Cast Shadow 开关与相机远近移动正确。未 bless/import；五份配置与性能 baseline 已逐字节恢复。
 
 ## Risk / rollback
 

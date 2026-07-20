@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-04
+last_reviewed: 2026-07-20
 status: active
 ---
 
@@ -14,6 +14,7 @@ status: active
 - 可视化方式 `RenderDebugVisualization` 枚举（每个注册项自带，非用户选择）：`Color` / `LinearHDR` / `Depth` / `Normal` / `MotionVector` / `AO` / `Scalar`。
 - 计算型 feature debug 条目（SDD-2026-07-07-taa-debugview-overlay，TAA 为首个消费者）：`SceneTemporalAADebugMotionVectors` / `SceneTemporalAADebugHistoryWeight` / `SceneTemporalAADebugVariance`。与普通条目不同，这些可视化不是现成中间纹理，而是 resolve shader 按配置写出的编码值——SceneRenderer 检测到 selected 命中时**覆盖当帧 TAA 有效配置的 `debug_view`**（scene JSON 值仍是未选中时的默认），条目纹理指向 `SceneTemporalAAResolved`（Color 直通，值已编码）。debug 输出会经 tone map 进主画面但被 overlay 全屏遮盖；TAA 历史缓冲始终写干净 resolved 色，切换无残留。
 - `draw_ui(UIContext&)`：引擎 overlay 里显示当前 selected 与命中状态；`set_runtime_render_debug_view_config` 可运行时切换。
+- Depth 可视化与其他 screen-depth 消费者共享 `Shaders/Scene/SceneDepthCommon.hlsli` 的 exact-clear 判定：reverse-Z `0.0` / normal-Z `1.0` 才是背景。有限远平面内接近端点但未等于端点的像素必须可视化，不能由固定 epsilon 吞掉。
 
 ## 配置
 

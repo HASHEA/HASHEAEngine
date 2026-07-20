@@ -18,6 +18,9 @@
 shadow mask pass 全屏执行：重建世界坐标（GBufferE 法线做 normal_bias 偏移），按 view depth 选级联，
 级联末端 8% 过渡带混合下一级联，(2r+1)² box PCF（r=pcf_radius），depth_bias 比较偏移。
 动态 atlas tile 分配失败时外层级联逐级降分辨率（degraded 计数），仍失败则跳过该光源。
+shadow mask 与 cascade debug 的 SceneDepth coverage 复用 `Shaders/Scene/SceneDepthCommon.hlsli`：
+reverse-Z 仅精确 `0.0` 是背景，normal-Z 仅精确 `1.0` 是背景。正的远端 reverse-Z 深度必须继续参与
+世界坐标重建和级联选择；超出全部 configured splits 的有效像素仍显示 cascade debug 明确规定的 unmatched 色，不能退化为黑色背景。
 
 ## 配置
 
