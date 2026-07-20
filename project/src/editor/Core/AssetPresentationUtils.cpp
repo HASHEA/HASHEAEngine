@@ -86,14 +86,6 @@ namespace AshEditor
 		return FormatLocalTime(fileTime);
 	}
 
-	bool IsSceneInstantiableAssetType(const AshEngine::AssetType type)
-	{
-		return
-			type == AshEngine::AssetType::Mesh ||
-			type == AshEngine::AssetType::Model ||
-			type == AshEngine::AssetType::Prefab;
-	}
-
 	std::string BuildSceneAssetEntityName(const AshEngine::AssetInfo& refAsset)
 	{
 		std::string strName = refAsset.relative_path.stem().string();
@@ -102,20 +94,6 @@ namespace AshEditor
 			strName = refAsset.name;
 		}
 		return strName.empty() ? "Scene Asset" : strName;
-	}
-
-	bool SupportsTextAssetPreview(const AshEngine::AssetInfo& refAsset)
-	{
-		switch (refAsset.type)
-		{
-		case AshEngine::AssetType::Scene:
-		case AshEngine::AssetType::Shader:
-		case AshEngine::AssetType::Material:
-		case AshEngine::AssetType::Text:
-			return true;
-		default:
-			return false;
-		}
 	}
 
 	std::string BuildTextAssetPreview(const std::string& strSource, const size_t uMaxCharacters)

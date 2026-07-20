@@ -9,6 +9,8 @@
 
 namespace AshEditor
 {
+	inline constexpr uint64_t kAssetTextPreviewMaxFileBytes = 1024ull * 1024ull;
+
 	class AssetDatabaseService
 	{
 	public:
@@ -60,7 +62,44 @@ namespace AshEditor
 			const std::filesystem::path& pathAssetRelativeOrAbsolute,
 			std::string* pOutError = nullptr);
 
-		static const char* GetTypeLabel(AshEngine::AssetType type);
+		static constexpr const char* GetTypeLabel(const AshEngine::AssetType type)
+		{
+			switch (type)
+			{
+			case AshEngine::AssetType::Directory:
+				return "Folder";
+			case AshEngine::AssetType::Scene:
+				return "Scene";
+			case AshEngine::AssetType::Shader:
+				return "Shader";
+			case AshEngine::AssetType::Texture:
+				return "Texture";
+			case AshEngine::AssetType::Mesh:
+				return "Mesh";
+			case AshEngine::AssetType::Model:
+				return "Model";
+			case AshEngine::AssetType::Prefab:
+				return "Prefab";
+			case AshEngine::AssetType::Material:
+				return "Material";
+			case AshEngine::AssetType::Text:
+				return "Text";
+			case AshEngine::AssetType::Binary:
+				return "Binary";
+			case AshEngine::AssetType::Terrain:
+				return "Terrain";
+			case AshEngine::AssetType::Species:
+				return "Species";
+			case AshEngine::AssetType::Layer:
+				return "Vegetation Layer";
+			case AshEngine::AssetType::Chunk:
+				return "Vegetation Chunk";
+			case AshEngine::AssetType::Unknown:
+			default:
+				return "Unknown";
+			}
+		}
+
 		static const char* GetLoadStateLabel(AshEngine::AssetLoadState state);
 
 	private:

@@ -46,7 +46,7 @@ namespace AshEditor
 		AshEngine::UIContext& refUi = *refViewContext.refFrameContext.pUiContext;
 		AssetBrowserPanelState& refState = refViewContext.refState;
 
-		const std::array<AssetTypeFilterOption, 11>& arrTypeFilters = AssetBrowserSupport::GetAssetTypeFilters();
+		const std::array<AssetTypeFilterOption, 14>& arrTypeFilters = AssetBrowserSupport::GetAssetTypeFilters();
 		std::vector<const char*> vecTypeLabels{};
 		vecTypeLabels.reserve(arrTypeFilters.size());
 		for (const AssetTypeFilterOption& refTypeFilter : arrTypeFilters)

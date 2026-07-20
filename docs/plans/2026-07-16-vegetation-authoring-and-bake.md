@@ -455,14 +455,18 @@ git commit -m "feat(vegetation): add strict asset codecs"
 - Modify: `project/src/engine/Base/hthreading.cpp`
 - Modify: `project/src/engine/Function/Asset/AssetDatabase.h`
 - Modify: `project/src/engine/Function/Asset/AssetDatabase.cpp`
+- Modify: `project/src/editor/Services/AssetDatabaseService.h`
 - Modify: `project/src/editor/Services/AssetDatabaseService.cpp`
 - Modify: `project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h`
 - Modify: `project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp`
 - Modify: `project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp`
+- Modify: `project/src/editor/Core/AssetPresentationUtils.h`
 - Modify: `project/src/editor/Core/AssetPresentationUtils.cpp`
 - Modify: `docs/specs/modules/base.md`
 - Modify: `docs/specs/modules/asset.md`
+- Modify: `docs/plans/2026-07-16-vegetation-authoring-and-bake.md`
 - Create: `project/src/tests/Vegetation/vegetation_asset_database_tests.cpp`
+- Create: `project/src/tests/Vegetation/vegetation_asset_presentation_tests.cpp`
 - Modify: `project/src/tests/Vegetation/VegetationTestSupport.h`
 
 - [ ] **Step 1: Write typed-load RED cases**
@@ -664,6 +668,8 @@ Run all focused/full CPU tests and both Debug builds first. Then obtain a fresh 
 ```bat
 RunTests.bat Debug --test-case="Vegetation AssetDatabase*"
 RunTests.bat Release --test-case="Vegetation AssetDatabase*"
+RunTests.bat Debug --test-case="Vegetation editor*"
+RunTests.bat Release --test-case="Vegetation editor*"
 RunTests.bat Debug --test-case="Vegetation * codec*"
 RunTests.bat Debug
 RunTests.bat Release
@@ -671,7 +677,7 @@ build_editor.bat Debug
 build_sandbox.bat Debug
 run.bat all Debug --smoke-test-seconds=120
 RunArchGate.bat
-git diff --check -- project/src/engine/Base/hthreading.cpp project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp project/src/editor/Core/AssetPresentationUtils.cpp docs/specs/modules/base.md docs/specs/modules/asset.md project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp
+git diff --check -- project/src/engine/Base/hthreading.cpp project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.h project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp project/src/editor/Core/AssetPresentationUtils.h project/src/editor/Core/AssetPresentationUtils.cpp docs/specs/modules/base.md docs/specs/modules/asset.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp project/src/tests/Vegetation/vegetation_asset_presentation_tests.cpp
 ```
 
 - [ ] **Step 5: Review and selectively commit**
@@ -679,7 +685,7 @@ git diff --check -- project/src/engine/Base/hthreading.cpp project/src/engine/Fu
 Review 1 checks load-cost admission, same-budget in-flight identity, request-local budget failure, global state precedence, and typed Chunk species/candidate validation. Review 2 checks every exhaustive `AssetType` switch, case-insensitive extension detection, immutable sharing, and refresh invalidation.
 
 ```bat
-git add -- project/src/engine/Base/hthreading.cpp project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp project/src/editor/Core/AssetPresentationUtils.cpp docs/specs/modules/base.md docs/specs/modules/asset.md project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp
+git add -- project/src/engine/Base/hthreading.cpp project/src/engine/Function/Asset/AssetDatabase.h project/src/engine/Function/Asset/AssetDatabase.cpp project/src/editor/Services/AssetDatabaseService.h project/src/editor/Services/AssetDatabaseService.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp project/src/editor/Panels/AssetBrowser/AssetBrowserToolbarView.cpp project/src/editor/Core/AssetPresentationUtils.h project/src/editor/Core/AssetPresentationUtils.cpp docs/specs/modules/base.md docs/specs/modules/asset.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_asset_database_tests.cpp project/src/tests/Vegetation/vegetation_asset_presentation_tests.cpp
 git commit -m "feat(asset): load vegetation asset types"
 ```
 

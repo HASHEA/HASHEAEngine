@@ -143,7 +143,8 @@ namespace AshEditor
 
 	bool AssetDatabaseService::LoadTextById(const uint64_t uAssetId, std::string& outText)
 	{
-		return _database.load_text_by_id(uAssetId, outText);
+		return _database.load_text_by_id_bounded(
+			uAssetId, kAssetTextPreviewMaxFileBytes, outText);
 	}
 
 	bool AssetDatabaseService::CreateDirectory(
@@ -637,37 +638,6 @@ namespace AshEditor
 			++_uCatalogRevision;
 		}
 	}
-
-	const char* AssetDatabaseService::GetTypeLabel(AshEngine::AssetType type)
-	{
-		switch (type)
-		{
-		case AshEngine::AssetType::Directory:
-			return "Folder";
-		case AshEngine::AssetType::Scene:
-			return "Scene";
-		case AshEngine::AssetType::Shader:
-			return "Shader";
-		case AshEngine::AssetType::Texture:
-			return "Texture";
-		case AshEngine::AssetType::Mesh:
-			return "Mesh";
-		case AshEngine::AssetType::Model:
-			return "Model";
-		case AshEngine::AssetType::Prefab:
-			return "Prefab";
-		case AshEngine::AssetType::Material:
-			return "Material";
-		case AshEngine::AssetType::Text:
-			return "Text";
-		case AshEngine::AssetType::Binary:
-			return "Binary";
-		case AshEngine::AssetType::Unknown:
-		default:
-			return "Unknown";
-		}
-	}
-
 	const char* AssetDatabaseService::GetLoadStateLabel(AshEngine::AssetLoadState state)
 	{
 		switch (state)

@@ -15,15 +15,86 @@
 #include <functional>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
+#include <limits>
 #include <memory>
+#include <filesystem>
+#include <process.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace VegetationTest
 {
+	class ScopedAssetRoot
+	{
+	public:
+		explicit ScopedAssetRoot(const std::string& label)
+		{
+			static std::atomic<uint64_t> next_serial{ 1 };
+			const uint64_t serial = next_serial.fetch_add(1, std::memory_order_relaxed);
+			const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+			m_path = std::filesystem::current_path() / "Intermediate" / "test-temp" /
+				"vegetation-task3" /
+				(label + "-p" + std::to_string(_getpid()) + "-t" +
+					std::to_string(timestamp) + "-s" + std::to_string(serial));
+			std::error_code error{};
+			if (!std::filesystem::create_directories(m_path, error) || error)
+			{
+				throw std::runtime_error("Failed to create scoped vegetation asset root");
+			}
+			m_owns_path = true;
+		}
+
+		~ScopedAssetRoot()
+		{
+			if (!m_owns_path)
+			{
+				return;
+			}
+			std::error_code error{};
+			std::filesystem::remove_all(m_path, error);
+		}
+
+		ScopedAssetRoot(const ScopedAssetRoot&) = delete;
+		ScopedAssetRoot& operator=(const ScopedAssetRoot&) = delete;
+
+		const std::filesystem::path& Path() const
+		{
+			return m_path;
+		}
+
+		void Write(const std::filesystem::path& relative_path, const std::vector<uint8_t>& bytes)
+		{
+			const std::filesystem::path destination = m_path / relative_path;
+			std::error_code error{};
+			std::filesystem::create_directories(destination.parent_path(), error);
+			if (error)
+			{
+				throw std::runtime_error("Failed to create scoped vegetation fixture directory");
+			}
+			std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+			if (!output.is_open())
+			{
+				throw std::runtime_error("Failed to open scoped vegetation fixture");
+			}
+			if (!bytes.empty())
+			{
+				output.write(reinterpret_cast<const char*>(bytes.data()),
+					static_cast<std::streamsize>(bytes.size()));
+			}
+			if (!output)
+			{
+				throw std::runtime_error("Failed to write scoped vegetation fixture");
+			}
+		}
+
+	private:
+		std::filesystem::path m_path{};
+		bool m_owns_path = false;
+	};
+
 	inline AshEngine::VegetationLoadBudget GenerousLoadBudget()
 	{
 		return { 64ull * 1024ull * 1024ull, 64ull * 1024ull * 1024ull,
@@ -32,9 +103,54 @@ namespace VegetationTest
 
 	inline std::vector<uint8_t> ReadFixtureBytes(const std::string& relative_path)
 	{
-		std::ifstream input(relative_path, std::ios::binary);
-		return std::vector<uint8_t>(
-			std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+		std::ifstream input(relative_path, std::ios::binary | std::ios::ate);
+		if (!input.is_open())
+		{
+			throw std::runtime_error("Failed to open vegetation fixture: " + relative_path);
+		}
+
+		const std::streampos end_position = input.tellg();
+		if (end_position < std::streampos(0))
+		{
+			throw std::runtime_error("Failed to size vegetation fixture: " + relative_path);
+		}
+		const std::streamoff byte_count = end_position - std::streampos(0);
+		std::vector<uint8_t> bytes{};
+		if (byte_count < 0 ||
+			static_cast<uint64_t>(byte_count) > static_cast<uint64_t>(bytes.max_size()) ||
+			byte_count > static_cast<std::streamoff>(
+				std::numeric_limits<std::streamsize>::max()))
+		{
+			throw std::runtime_error("Vegetation fixture size is not representable: " + relative_path);
+		}
+
+		input.seekg(0, std::ios::beg);
+		if (!input)
+		{
+			throw std::runtime_error("Failed to seek vegetation fixture: " + relative_path);
+		}
+		bytes.resize(static_cast<size_t>(byte_count));
+		if (!bytes.empty())
+		{
+			const std::streamsize expected = static_cast<std::streamsize>(bytes.size());
+			input.read(reinterpret_cast<char*>(bytes.data()), expected);
+			if (input.gcount() != expected || input.bad() || input.fail())
+			{
+				throw std::runtime_error("Failed to read complete vegetation fixture: " + relative_path);
+			}
+		}
+
+		char extra = 0;
+		input.get(extra);
+		if (input.gcount() == 1)
+		{
+			throw std::runtime_error("Vegetation fixture grew while reading: " + relative_path);
+		}
+		if (input.bad() || !input.eof())
+		{
+			throw std::runtime_error("Failed to confirm vegetation fixture EOF: " + relative_path);
+		}
+		return bytes;
 	}
 
 	inline std::vector<uint8_t> CanonicalGrassSpeciesJson()
@@ -109,7 +225,10 @@ namespace VegetationTest
 	{
 		std::vector<uint8_t> bytes{};
 		std::string error{};
-		AshEngine::encode_vegetation_layer(MinimalLayerSnapshot(), bytes, &error);
+		if (!AshEngine::encode_vegetation_layer(MinimalLayerSnapshot(), bytes, &error))
+		{
+			throw std::runtime_error("Minimal vegetation Layer fixture did not encode: " + error);
+		}
 		return bytes;
 	}
 
@@ -146,7 +265,75 @@ namespace VegetationTest
 	{
 		std::vector<uint8_t> bytes{};
 		std::string error{};
-		AshEngine::encode_vegetation_chunk(MinimalChunk(), bytes, &error);
+		if (!AshEngine::encode_vegetation_chunk(MinimalChunk(), bytes, &error))
+		{
+			throw std::runtime_error("Minimal vegetation Chunk fixture did not encode: " + error);
+		}
+		return bytes;
+	}
+
+	inline AshEngine::VegetationPaletteEntry ResolvedMinimalPaletteEntry()
+	{
+		const std::vector<uint8_t> source = CanonicalGrassSpeciesJson();
+		AshEngine::VegetationSpecies species{};
+		std::string error{};
+		if (!AshEngine::decode_vegetation_species(
+			source, GenerousLoadBudget(), species, &error))
+		{
+			throw std::runtime_error(
+				"Canonical vegetation Species fixture did not decode: " + error);
+		}
+		std::vector<uint8_t> canonical{};
+		if (!AshEngine::encode_vegetation_species(species, canonical, &error))
+		{
+			throw std::runtime_error(
+				"Canonical vegetation Species fixture did not re-encode: " + error);
+		}
+
+		AshEngine::VegetationPaletteEntry entry{};
+		entry.species_id = species.species_id;
+		entry.species_sha256 = AshEngine::vegetation_sha256(
+			canonical.data(), canonical.size());
+		entry.species_asset_path = "vegetation/Phase2ManualSpecies.AshVegetation";
+		return entry;
+	}
+
+	inline AshEngine::VegetationLayerSnapshot ResolvedMinimalLayerSnapshot()
+	{
+		AshEngine::VegetationLayerSnapshot layer = MinimalLayerSnapshot();
+		layer.palette[0] = ResolvedMinimalPaletteEntry();
+		layer.tiles[0].planes[1].species_id = layer.palette[0].species_id;
+		return layer;
+	}
+
+	inline std::vector<uint8_t> ResolvedMinimalLayerBytes()
+	{
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		if (!AshEngine::encode_vegetation_layer(ResolvedMinimalLayerSnapshot(), bytes, &error))
+		{
+			throw std::runtime_error(
+				"Resolved vegetation Layer fixture did not encode: " + error);
+		}
+		return bytes;
+	}
+
+	inline AshEngine::VegetationChunk ResolvedMinimalChunk()
+	{
+		AshEngine::VegetationChunk chunk = MinimalChunk();
+		chunk.species[0] = ResolvedMinimalPaletteEntry();
+		return chunk;
+	}
+
+	inline std::vector<uint8_t> ResolvedMinimalChunkBytes()
+	{
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		if (!AshEngine::encode_vegetation_chunk(ResolvedMinimalChunk(), bytes, &error))
+		{
+			throw std::runtime_error(
+				"Resolved vegetation Chunk fixture did not encode: " + error);
+		}
 		return bytes;
 	}
 

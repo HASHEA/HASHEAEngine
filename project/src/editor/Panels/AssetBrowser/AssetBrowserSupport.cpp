@@ -21,20 +21,6 @@ namespace AshEditor
 {
 	namespace
 	{
-		constexpr std::array<AssetTypeFilterOption, 11> kAssetTypeFilters{ {
-			{ "All", AshEngine::AssetType::Unknown, true },
-			{ "Folder", AshEngine::AssetType::Directory, false },
-			{ "Scene", AshEngine::AssetType::Scene, false },
-			{ "Shader", AshEngine::AssetType::Shader, false },
-			{ "Texture", AshEngine::AssetType::Texture, false },
-			{ "Mesh", AshEngine::AssetType::Mesh, false },
-			{ "Model", AshEngine::AssetType::Model, false },
-			{ "Prefab", AshEngine::AssetType::Prefab, false },
-			{ "Material", AshEngine::AssetType::Material, false },
-			{ "Text", AshEngine::AssetType::Text, false },
-			{ "Binary", AshEngine::AssetType::Binary, false },
-		} };
-
 		constexpr float kAssetBrowserIconSize = 16.0f;
 		constexpr float kAssetBrowserListIconTextSpacing = 6.0f;
 		constexpr const char* kAssetItemContextPopupId = "AssetBrowserItemContextMenu";
@@ -248,11 +234,6 @@ namespace AshEditor
 
 	namespace AssetBrowserSupport
 	{
-		const std::array<AssetTypeFilterOption, 11>& GetAssetTypeFilters()
-		{
-			return kAssetTypeFilters;
-		}
-
 		void NormalizeSelection(
 			const AssetDatabaseService& refService,
 			AssetBrowserPanelState& refState)
@@ -563,20 +544,6 @@ namespace AshEditor
 		EditorIconId GetAssetIconId(const AshEngine::AssetInfo& refAsset)
 		{
 			return refAsset.is_directory ? EditorIconId::FolderClosed : EditorIconId::File;
-		}
-
-		bool ShouldUseCompactAssetTooltip(AshEngine::AssetType eType)
-		{
-			switch (eType)
-			{
-			case AshEngine::AssetType::Directory:
-			case AshEngine::AssetType::Text:
-			case AshEngine::AssetType::Binary:
-			case AshEngine::AssetType::Shader:
-				return true;
-			default:
-				return false;
-			}
 		}
 
 		EditorTreeWidgetStyle MakeTreeStyle(AshEngine::UIContext& refUi)

@@ -186,15 +186,18 @@ namespace AshEngine
 
 	auto initialize_threading(const EngineThreadingConfig& config) -> bool
 	{
-		if (g_threading_state.initialized.load(std::memory_order_acquire))
 		{
-			register_current_thread_role(EngineThreadRole::Render);
-			return true;
-		}
+			std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+			if (g_threading_state.initialized.load(std::memory_order_acquire))
+			{
+				register_current_thread_role(EngineThreadRole::Render);
+				return true;
+			}
 
-		g_threading_state.config = config;
-		g_threading_state.shutting_down.store(false, std::memory_order_release);
-		g_threading_state.worker_stop_requested.store(false, std::memory_order_release);
+			g_threading_state.config = config;
+			g_threading_state.shutting_down.store(false, std::memory_order_release);
+			g_threading_state.worker_stop_requested.store(false, std::memory_order_release);
+		}
 
 		uint32_t worker_count = config.worker_thread_count;
 		if (worker_count == 0)
@@ -215,7 +218,10 @@ namespace AshEngine
 		catch (const std::exception& exception)
 		{
 			HLogError("Failed to initialize worker threads: {}", exception.what());
-			g_threading_state.worker_stop_requested.store(true, std::memory_order_release);
+			{
+				std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+				g_threading_state.worker_stop_requested.store(true, std::memory_order_release);
+			}
 			g_threading_state.worker_condition.notify_all();
 			for (std::thread& thread : g_threading_state.worker_threads)
 			{
@@ -225,10 +231,18 @@ namespace AshEngine
 				}
 			}
 			g_threading_state.worker_threads.clear();
+			{
+				std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+				g_threading_state.initialized.store(false, std::memory_order_release);
+				g_threading_state.shutting_down.store(false, std::memory_order_release);
+			}
 			return false;
 		}
 
-		g_threading_state.initialized.store(true, std::memory_order_release);
+		{
+			std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+			g_threading_state.initialized.store(true, std::memory_order_release);
+		}
 		register_current_thread_role(EngineThreadRole::Render);
 		HLogInfo(
 			"Threading initialized. logic_thread={}, worker_threads={}.",
@@ -239,13 +253,16 @@ namespace AshEngine
 
 	auto shutdown_threading() -> void
 	{
-		if (!g_threading_state.initialized.load(std::memory_order_acquire))
 		{
-			return;
-		}
+			std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+			if (!g_threading_state.initialized.load(std::memory_order_acquire))
+			{
+				return;
+			}
 
-		g_threading_state.shutting_down.store(true, std::memory_order_release);
-		g_threading_state.worker_stop_requested.store(true, std::memory_order_release);
+			g_threading_state.shutting_down.store(true, std::memory_order_release);
+			g_threading_state.worker_stop_requested.store(true, std::memory_order_release);
+		}
 		g_threading_state.worker_condition.notify_all();
 
 		for (std::thread& thread : g_threading_state.worker_threads)
@@ -259,8 +276,11 @@ namespace AshEngine
 
 		g_threading_state.render_queue.clear_pending_with_exception("Render command queue was shut down.");
 		g_threading_state.worker_queue.clear_pending_with_exception("Worker command queue was shut down.");
-		g_threading_state.initialized.store(false, std::memory_order_release);
-		g_threading_state.shutting_down.store(false, std::memory_order_release);
+		{
+			std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+			g_threading_state.initialized.store(false, std::memory_order_release);
+			g_threading_state.shutting_down.store(false, std::memory_order_release);
+		}
 		HLogInfo("Threading shutdown complete.");
 	}
 
@@ -404,13 +424,29 @@ namespace AshEngine
 				return make_ready_future();
 			}
 
-			if (g_threading_state.shutting_down.load(std::memory_order_acquire))
+			bool reject_for_shutdown = false;
+			bool execute_immediately = false;
+			ThreadCommandFuture future{};
+			{
+				std::scoped_lock<std::mutex> lifecycle_lock(g_threading_state.worker_condition_mutex);
+				reject_for_shutdown = g_threading_state.shutting_down.load(std::memory_order_acquire);
+				if (!reject_for_shutdown)
+				{
+					execute_immediately = !g_threading_state.initialized.load(std::memory_order_acquire);
+					if (!execute_immediately)
+					{
+						future = g_threading_state.worker_queue.enqueue(debug_name, std::move(command));
+					}
+				}
+			}
+
+			if (reject_for_shutdown)
 			{
 				HLogWarning("Rejected worker command '{}' because the threading system is shutting down.", debug_name ? debug_name : "UnnamedCommand");
 				return make_exception_future("Worker command queue is shutting down.");
 			}
 
-			if (!g_threading_state.initialized.load(std::memory_order_acquire) || g_threading_state.worker_threads.empty())
+			if (execute_immediately)
 			{
 				QueuedCommand immediate{};
 				immediate.debug_name = debug_name ? debug_name : "ImmediateWorkerCommand";
@@ -420,7 +456,6 @@ namespace AshEngine
 				return future;
 			}
 
-			ThreadCommandFuture future = g_threading_state.worker_queue.enqueue(debug_name, std::move(command));
 			g_threading_state.worker_condition.notify_one();
 			return future;
 		}

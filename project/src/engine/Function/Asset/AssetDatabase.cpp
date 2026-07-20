@@ -2,16 +2,24 @@
 
 #include "Base/hthreading.h"
 #include "Function/Asset/TerrainContainer.h"
+#include "Function/Asset/VegetationCodec.h"
 #include "Function/Render/Material.h"
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
+#include <chrono>
+#include <exception>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <new>
-#include <string_view>
 #include <thread>
+#include <optional>
+#include <sstream>
+#include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -102,7 +110,68 @@ namespace AshEngine
 			{
 				return AssetType::Terrain;
 			}
+			if (ext == ".ashvegetation")
+			{
+				return AssetType::Species;
+			}
+			if (ext == ".ashvegetationlayer")
+			{
+				return AssetType::Layer;
+			}
+			if (ext == ".ashvegetationchunk")
+			{
+				return AssetType::Chunk;
+			}
 			return AssetType::Binary;
+		}
+
+		static auto normalize_vegetation_diagnostic(std::string error) -> std::string
+		{
+			auto is_ascii_space = [](const unsigned char value) -> bool
+			{
+				return value == ' ' || value == '\t' || value == '\r' || value == '\n' ||
+					value == '\f' || value == '\v';
+			};
+			size_t first = 0;
+			while (first < error.size() && is_ascii_space(static_cast<unsigned char>(error[first])))
+			{
+				++first;
+			}
+			size_t last = error.size();
+			while (last > first && is_ascii_space(static_cast<unsigned char>(error[last - 1])))
+			{
+				--last;
+			}
+			error = error.substr(first, last - first);
+			std::replace(error.begin(), error.end(), '\\', '/');
+			return error.empty() ? std::string("Vegetation asset load failed.") : error;
+		}
+
+		static auto vegetation_budget_equal(
+			const VegetationLoadBudget& lhs,
+			const VegetationLoadBudget& rhs) -> bool
+		{
+			return lhs.max_file_bytes == rhs.max_file_bytes &&
+				lhs.max_payload_bytes == rhs.max_payload_bytes &&
+				lhs.max_decoded_bytes == rhs.max_decoded_bytes &&
+				lhs.max_palette_records == rhs.max_palette_records &&
+				lhs.max_tile_records == rhs.max_tile_records &&
+				lhs.max_instance_records == rhs.max_instance_records;
+		}
+
+		static auto vegetation_failure_rank(VegetationAssetLoadFailure failure) -> uint8_t
+		{
+			switch (failure)
+			{
+			case VegetationAssetLoadFailure::InvalidData:
+				return 3;
+			case VegetationAssetLoadFailure::Io:
+				return 2;
+			case VegetationAssetLoadFailure::Missing:
+				return 1;
+			default:
+				return 0;
+			}
 		}
 
 		template <typename TValue>
@@ -146,6 +215,383 @@ namespace AshEngine
 		}
 	}
 
+	VegetationAssetInFlightAdmissionDecision decide_vegetation_asset_in_flight_admission(
+		const VegetationAssetInFlightAdmissionInput& input)
+	{
+		if (!input.has_existing ||
+			input.requested_type != input.existing_type ||
+			input.requested_id != input.existing_id ||
+			input.requested_epoch != input.existing_epoch ||
+			!vegetation_budget_equal(input.requested_budget, input.existing_budget))
+		{
+			return VegetationAssetInFlightAdmissionDecision::LaunchNew;
+		}
+		return VegetationAssetInFlightAdmissionDecision::JoinExisting;
+	}
+
+	VegetationCatalogPublicationDecision decide_vegetation_catalog_publication(
+		const VegetationCatalogPublicationInput& input)
+	{
+		if (input.captured_epoch != input.current_epoch ||
+			input.captured_root.lexically_normal() != input.current_root.lexically_normal())
+		{
+			return VegetationCatalogPublicationDecision::DiscardStale;
+		}
+		switch (input.scan_outcome)
+		{
+		case VegetationCatalogScanOutcome::Succeeded:
+			return VegetationCatalogPublicationDecision::PublishReplacement;
+		case VegetationCatalogScanOutcome::InvalidRoot:
+			return VegetationCatalogPublicationDecision::ResetInvalidRoot;
+		case VegetationCatalogScanOutcome::Failed:
+		default:
+			return VegetationCatalogPublicationDecision::KeepLastKnownGood;
+		}
+	}
+
+	VegetationAssetCompletionPublicationDecision decide_vegetation_asset_completion_publication(
+		const VegetationAssetCompletionPublicationInput& input)
+	{
+		VegetationAssetCompletionPublicationDecision decision{};
+		if (input.captured_epoch != input.current_epoch)
+		{
+			return decision;
+		}
+
+		decision.erase_matching_in_flight =
+			input.captured_request_token == input.current_in_flight_token;
+		decision.publish_cache = input.completion_has_asset &&
+			input.completion_failure == VegetationAssetLoadFailure::None;
+
+		if (decision.publish_cache)
+		{
+			decision.publish_global_state = input.current_global_state != AssetLoadState::Loaded ||
+				input.current_global_failure != VegetationAssetLoadFailure::None ||
+				!input.current_global_error.empty();
+			decision.global_state = AssetLoadState::Loaded;
+			decision.global_failure = VegetationAssetLoadFailure::None;
+			decision.global_error.clear();
+			return decision;
+		}
+
+		const uint8_t completion_rank = vegetation_failure_rank(input.completion_failure);
+		if (completion_rank == 0 || input.current_global_state == AssetLoadState::Loaded)
+		{
+			return decision;
+		}
+
+		const uint8_t current_rank = vegetation_failure_rank(input.current_global_failure);
+		const std::string completion_error = normalize_vegetation_diagnostic(input.completion_error);
+		const std::string current_error = input.current_global_error.empty() ?
+			std::string{} : normalize_vegetation_diagnostic(input.current_global_error);
+		if (completion_rank < current_rank ||
+			(completion_rank == current_rank && !current_error.empty() && completion_error >= current_error))
+		{
+			return decision;
+		}
+
+		decision.publish_global_state = true;
+		decision.global_state = input.completion_failure == VegetationAssetLoadFailure::Missing ?
+			AssetLoadState::Missing : AssetLoadState::Failed;
+		decision.global_failure = input.completion_failure;
+		decision.global_error = completion_error;
+		return decision;
+	}
+
+	namespace Detail
+	{
+		bool read_vegetation_bounded_stream_snapshot(
+			std::istream& input,
+			const uint64_t max_file_bytes,
+			std::vector<uint8_t>& out_bytes,
+			std::string* out_error)
+		{
+			auto fail_snapshot = [&](const char* message) -> bool
+			{
+				if (out_error)
+				{
+					*out_error = message ? message : "Vegetation bounded stream read failed.";
+				}
+				return false;
+			};
+
+			try
+			{
+				constexpr size_t k_read_chunk_bytes = 64u * 1024u;
+				std::array<char, k_read_chunk_bytes> scratch{};
+				std::vector<uint8_t> bytes{};
+				const uint64_t reserve_bytes = std::min<uint64_t>(max_file_bytes, k_read_chunk_bytes);
+				bytes.reserve(static_cast<size_t>(reserve_bytes));
+
+				uint64_t total = 0;
+				while (total < max_file_bytes)
+				{
+					const uint64_t remaining = max_file_bytes - total;
+					const std::streamsize request = static_cast<std::streamsize>(
+						std::min<uint64_t>(remaining, k_read_chunk_bytes));
+					input.read(scratch.data(), request);
+					const std::streamsize read_count = input.gcount();
+					if (read_count < 0 ||
+						static_cast<uint64_t>(read_count) > remaining ||
+						static_cast<size_t>(read_count) > bytes.max_size() - bytes.size())
+					{
+						return fail_snapshot("Vegetation bounded stream size overflow.");
+					}
+					bytes.insert(bytes.end(), scratch.data(), scratch.data() + read_count);
+					total += static_cast<uint64_t>(read_count);
+
+					if (read_count < request)
+					{
+						if (input.bad())
+						{
+							return fail_snapshot("Vegetation bounded stream I/O failure.");
+						}
+						if (!input.eof())
+						{
+							return fail_snapshot("Vegetation bounded stream ended short without EOF.");
+						}
+
+						// basic_istream::read sets eofbit/failbit on every short bulk read. Clear
+						// those automatic flags, then probe the same stream before publishing.
+						input.clear();
+						char extra = 0;
+						input.get(extra);
+						if (input.gcount() == 1)
+						{
+							return fail_snapshot("Vegetation bounded stream ended short without EOF.");
+						}
+						if (input.bad() || !input.eof())
+						{
+							return fail_snapshot("Vegetation bounded stream I/O failure after short read.");
+						}
+
+						out_bytes = std::move(bytes);
+						if (out_error) out_error->clear();
+						return true;
+					}
+				}
+
+				char extra = 0;
+				input.get(extra);
+				if (input.gcount() == 1)
+				{
+					return fail_snapshot("Vegetation bounded stream exceeds maximum byte count.");
+				}
+				if (input.bad() || !input.eof())
+				{
+					return fail_snapshot("Vegetation bounded stream I/O failure after byte limit.");
+				}
+
+				out_bytes = std::move(bytes);
+				if (out_error) out_error->clear();
+				return true;
+			}
+			catch (const std::exception& exception)
+			{
+				if (out_error)
+				{
+					*out_error = std::string("Vegetation bounded stream read failed: ") + exception.what();
+				}
+				return false;
+			}
+			catch (...)
+			{
+				return fail_snapshot("Vegetation bounded stream read failed with an unknown exception.");
+			}
+		}
+	}
+
+	namespace
+	{
+		struct VegetationInFlightKey
+		{
+			AssetType type = AssetType::Unknown;
+			AssetId id = 0;
+			uint64_t epoch = 0;
+			VegetationLoadBudget budget{};
+
+			bool operator==(const VegetationInFlightKey& other) const
+			{
+				return type == other.type && id == other.id && epoch == other.epoch &&
+					vegetation_budget_equal(budget, other.budget);
+			}
+		};
+
+		struct VegetationInFlightKeyHash
+		{
+			size_t operator()(const VegetationInFlightKey& key) const
+			{
+				auto combine = [](size_t seed, const uint64_t value) -> size_t
+				{
+					return seed ^ (static_cast<size_t>(value) + 0x9e3779b97f4a7c15ull +
+						(seed << 6u) + (seed >> 2u));
+				};
+				size_t hash = combine(0, static_cast<uint8_t>(key.type));
+				hash = combine(hash, key.id);
+				hash = combine(hash, key.epoch);
+				hash = combine(hash, key.budget.max_file_bytes);
+				hash = combine(hash, key.budget.max_payload_bytes);
+				hash = combine(hash, key.budget.max_decoded_bytes);
+				hash = combine(hash, key.budget.max_palette_records);
+				hash = combine(hash, key.budget.max_tile_records);
+				return combine(hash, key.budget.max_instance_records);
+			}
+		};
+
+		struct VegetationResolvedDependency
+		{
+			std::filesystem::path path{};
+			VegetationId id{};
+			VegetationSha256 digest{};
+			std::shared_ptr<const VegetationSpecies> asset{};
+			VegetationLoadCost cost{};
+		};
+
+		template<typename T>
+		struct VegetationSuccessCacheEntry
+		{
+			std::shared_ptr<const T> asset{};
+			VegetationLoadCost cost{};
+			std::vector<VegetationResolvedDependency> dependencies{};
+		};
+
+		template<typename T>
+		struct VegetationInFlightEntry
+		{
+			uint64_t request_token = 0;
+			std::shared_future<VegetationAssetLoadResult<T>> future{};
+		};
+
+		template<typename T>
+		struct VegetationLoadedValue
+		{
+			VegetationAssetLoadResult<T> result{};
+			std::vector<VegetationResolvedDependency> dependencies{};
+		};
+
+		template<typename T>
+		static auto set_vegetation_io_failure_noexcept(
+			VegetationLoadedValue<T>& loaded,
+			const char* diagnostic = nullptr) noexcept -> void
+		{
+			loaded.dependencies.clear();
+			loaded.result.state = AssetLoadState::Failed;
+			loaded.result.failure = VegetationAssetLoadFailure::Io;
+			loaded.result.asset.reset();
+			loaded.result.cost = {};
+			try
+			{
+				loaded.result.error = diagnostic && diagnostic[0] != '\0' ?
+					normalize_vegetation_diagnostic(
+						std::string("Vegetation worker I/O failed: ") + diagnostic) :
+					std::string("Vegetation worker I/O failed.");
+			}
+			catch (...)
+			{
+				// Keep the emergency diagnostic short enough for the string's small buffer.
+				// Failure publication must never expose an empty diagnostic.
+				try
+				{
+					loaded.result.error = "I/O failed.";
+				}
+				catch (...)
+				{
+				}
+			}
+		}
+
+		static auto vegetation_cost_fits_budget(
+			const VegetationLoadCost& cost,
+			const VegetationLoadBudget& budget) -> bool
+		{
+			return cost.file_bytes <= budget.max_file_bytes &&
+				cost.payload_bytes <= budget.max_payload_bytes &&
+				cost.decoded_bytes <= budget.max_decoded_bytes &&
+				cost.palette_records <= budget.max_palette_records &&
+				cost.tile_records <= budget.max_tile_records &&
+				cost.instance_records <= budget.max_instance_records;
+		}
+
+		static auto is_vegetation_asset_type(const AssetType type) -> bool
+		{
+			return type == AssetType::Species || type == AssetType::Layer || type == AssetType::Chunk;
+		}
+
+		static auto is_opaque_vegetation_asset_type(const AssetType type) -> bool
+		{
+			return type == AssetType::Layer || type == AssetType::Chunk;
+		}
+
+		static auto error_indicates_budget_failure(const std::string& error) -> bool
+		{
+			return error == "Vegetation bounded stream exceeds maximum byte count.";
+		}
+
+		static auto is_explicit_vegetation_codec_budget_rejection(
+			const std::string& error) -> bool
+		{
+			return error == "Vegetation Species file size exceeds its budget." ||
+				error == "Vegetation Species decoded budget exceeded before DTO ownership." ||
+				error == "Vegetation Layer file budget exceeded before ownership." ||
+				error == "Vegetation Layer count or payload budget exceeded before ownership." ||
+				error == "Vegetation Layer decoded budget exceeded before ownership." ||
+				error == "Vegetation Layer decoded budget exceeded." ||
+				error == "Vegetation Chunk file budget exceeded before ownership." ||
+				error == "Vegetation Chunk count or payload budget exceeded before ownership." ||
+				error == "Vegetation Chunk decoded budget exceeded before ownership." ||
+				error == "Vegetation Chunk decoded budget exceeded.";
+		}
+
+		template<typename T>
+		static auto make_vegetation_failure_result(
+			const VegetationAssetLoadFailure failure,
+			std::string error) -> VegetationAssetLoadResult<T>
+		{
+			VegetationAssetLoadResult<T> result{};
+			result.failure = failure;
+			result.state = failure == VegetationAssetLoadFailure::Missing ?
+				AssetLoadState::Missing : AssetLoadState::Failed;
+			result.error = normalize_vegetation_diagnostic(std::move(error));
+			return result;
+		}
+
+		template<typename T>
+		static auto make_vegetation_loaded_result(
+			std::shared_ptr<const T> asset,
+			const VegetationLoadCost& cost) -> VegetationAssetLoadResult<T>
+		{
+			VegetationAssetLoadResult<T> result{};
+			result.state = AssetLoadState::Loaded;
+			result.failure = VegetationAssetLoadFailure::None;
+			result.asset = std::move(asset);
+			result.cost = cost;
+			return result;
+		}
+
+		template<typename T>
+		static auto read_cached_vegetation_result(
+			const VegetationSuccessCacheEntry<T>& cached,
+			const VegetationLoadBudget& budget) -> VegetationAssetLoadResult<T>
+		{
+			if (!vegetation_cost_fits_budget(cached.cost, budget))
+			{
+				return make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::BudgetExceeded,
+					"Vegetation outer asset exceeds the caller load budget.");
+			}
+			for (const VegetationResolvedDependency& dependency : cached.dependencies)
+			{
+				if (!vegetation_cost_fits_budget(dependency.cost, budget))
+				{
+					return make_vegetation_failure_result<T>(
+						VegetationAssetLoadFailure::BudgetExceeded,
+						"Vegetation Species dependency exceeds the caller load budget.");
+				}
+			}
+			return make_vegetation_loaded_result<T>(cached.asset, cached.cost);
+		}
+	}
+
 	class AssetDatabase::Impl
 	{
 	public:
@@ -174,12 +620,152 @@ namespace AshEngine
 		std::unordered_map<TerrainAssetId, uint64_t> terrain_load_serial_by_id{};
 		uint64_t next_terrain_load_serial = 0;
 		uint64_t catalog_generation = 0;
+		uint64_t vegetation_catalog_epoch = 0;
+		uint64_t next_vegetation_request_token = 0;
+		std::unordered_map<AssetId, VegetationAssetLoadFailure> vegetation_global_failure_by_id{};
+		std::unordered_map<AssetId, VegetationSuccessCacheEntry<VegetationSpecies>> vegetation_species_cache{};
+		std::unordered_map<AssetId, VegetationSuccessCacheEntry<VegetationLayerSnapshot>> vegetation_layer_cache{};
+		std::unordered_map<AssetId, VegetationSuccessCacheEntry<VegetationChunk>> vegetation_chunk_cache{};
+		std::unordered_map<VegetationInFlightKey, VegetationInFlightEntry<VegetationSpecies>, VegetationInFlightKeyHash> inflight_vegetation_species_loads{};
+		std::unordered_map<VegetationInFlightKey, VegetationInFlightEntry<VegetationLayerSnapshot>, VegetationInFlightKeyHash> inflight_vegetation_layer_loads{};
+		std::unordered_map<VegetationInFlightKey, VegetationInFlightEntry<VegetationChunk>, VegetationInFlightKeyHash> inflight_vegetation_chunk_loads{};
 		std::string last_error{};
+		mutable std::mutex mutex{};
+	};
+
+	class VegetationAssetResolverSnapshot::Impl
+	{
+	public:
+		std::filesystem::path root_path{};
+		std::unordered_map<std::string, AssetInfo> catalog_by_key{};
+		std::unordered_map<std::string, VegetationSuccessCacheEntry<VegetationSpecies>> species_cache{};
 		mutable std::mutex mutex{};
 	};
 
 	namespace
 	{
+		enum class VegetationSnapshotReadOutcome : uint8_t
+		{
+			Succeeded = 0,
+			Missing,
+			BudgetExceeded,
+			Io
+		};
+
+		static auto clear_vegetation_shared_state_locked(AssetDatabase::Impl& impl) -> void
+		{
+			impl.vegetation_species_cache.clear();
+			impl.vegetation_layer_cache.clear();
+			impl.vegetation_chunk_cache.clear();
+			impl.inflight_vegetation_species_loads.clear();
+			impl.inflight_vegetation_layer_loads.clear();
+			impl.inflight_vegetation_chunk_loads.clear();
+			impl.vegetation_global_failure_by_id.clear();
+		}
+
+		static auto clear_all_asset_shared_state_locked(AssetDatabase::Impl& impl) -> void
+		{
+			impl.load_info_by_id.clear();
+			impl.mesh_cache.clear();
+			impl.model_cache.clear();
+			impl.material_cache.clear();
+			impl.ashasset_cache.clear();
+			impl.terrain_cache.clear();
+			impl.inflight_mesh_loads.clear();
+			impl.inflight_model_loads.clear();
+			impl.inflight_material_loads.clear();
+			impl.inflight_ashasset_loads.clear();
+			impl.inflight_terrain_loads.clear();
+			impl.terrain_load_serial_by_id.clear();
+			clear_vegetation_shared_state_locked(impl);
+		}
+
+		static auto bump_vegetation_epoch_locked(AssetDatabase::Impl& impl) -> void
+		{
+			++impl.vegetation_catalog_epoch;
+			if (impl.vegetation_catalog_epoch == 0)
+			{
+				++impl.vegetation_catalog_epoch;
+			}
+		}
+
+		static auto next_vegetation_token_locked(AssetDatabase::Impl& impl) -> uint64_t
+		{
+			++impl.next_vegetation_request_token;
+			if (impl.next_vegetation_request_token == 0)
+			{
+				++impl.next_vegetation_request_token;
+			}
+			return impl.next_vegetation_request_token;
+		}
+
+		static auto normalize_resolver_path(
+			const std::filesystem::path& root_path,
+			const std::filesystem::path& path,
+			std::string& out_key) -> bool
+		{
+			std::filesystem::path relative = path.lexically_normal();
+			if (path.is_absolute())
+			{
+				std::error_code error{};
+				relative = std::filesystem::relative(path, root_path, error).lexically_normal();
+				if (error || relative.empty() || is_path_outside_root(relative))
+				{
+					return false;
+				}
+			}
+			if (relative.empty() || relative.is_absolute() || is_path_outside_root(relative))
+			{
+				return false;
+			}
+			out_key = normalize_asset_key(relative);
+			return !out_key.empty();
+		}
+
+		static auto read_vegetation_file_snapshot(
+			const std::filesystem::path& absolute_path,
+			const uint64_t max_file_bytes,
+			std::vector<uint8_t>& out_bytes,
+			std::string& out_error) -> VegetationSnapshotReadOutcome
+		{
+			std::ifstream input(absolute_path, std::ios::binary);
+			if (!input.is_open())
+			{
+				std::error_code exists_error{};
+				const bool exists = std::filesystem::exists(absolute_path, exists_error);
+				out_error = (!exists && !exists_error) ?
+					"Vegetation asset file is missing." :
+					"Vegetation asset file could not be opened.";
+				return (!exists && !exists_error) ?
+					VegetationSnapshotReadOutcome::Missing : VegetationSnapshotReadOutcome::Io;
+			}
+
+			std::vector<uint8_t> bytes{};
+			if (!Detail::read_vegetation_bounded_stream_snapshot(
+				input, max_file_bytes, bytes, &out_error))
+			{
+				return error_indicates_budget_failure(out_error) ?
+					VegetationSnapshotReadOutcome::BudgetExceeded : VegetationSnapshotReadOutcome::Io;
+			}
+			out_bytes = std::move(bytes);
+			out_error.clear();
+			return VegetationSnapshotReadOutcome::Succeeded;
+		}
+
+		static auto make_resolver_snapshot_locked(
+			const AssetDatabase::Impl& impl) -> std::shared_ptr<const VegetationAssetResolverSnapshot>
+		{
+			auto resolver_impl = std::make_shared<VegetationAssetResolverSnapshot::Impl>();
+			resolver_impl->root_path = impl.root_path;
+			resolver_impl->catalog_by_key.reserve(impl.index_by_key.size());
+			for (const auto& indexed : impl.index_by_key)
+			{
+				resolver_impl->catalog_by_key.emplace(indexed.first, impl.assets[indexed.second]);
+			}
+			return std::shared_ptr<const VegetationAssetResolverSnapshot>(
+				new VegetationAssetResolverSnapshot(std::move(resolver_impl)));
+		}
+
 		static auto set_last_error_locked(AssetDatabase::Impl& impl, const std::string& error) -> void;
 		static auto set_load_failed_locked(AssetDatabase::Impl& impl, AssetId id, const std::string& error) -> void;
 		static auto set_load_loading_locked(AssetDatabase::Impl& impl, AssetId id) -> void;
@@ -293,6 +879,11 @@ namespace AshEngine
 				set_load_failed_locked(*impl, resolved.info.id, out_error);
 				return false;
 			}
+			if (is_vegetation_asset_type(resolved.info.type))
+			{
+				out_error = "Vegetation assets require a typed AssetDatabase loader.";
+				return false;
+			}
 
 			{
 				std::scoped_lock<std::mutex> lock(impl->mutex);
@@ -361,6 +952,104 @@ namespace AshEngine
 
 			out_error.clear();
 			return true;
+		}
+	}
+
+	VegetationAssetResolverSnapshot::VegetationAssetResolverSnapshot(std::shared_ptr<Impl> impl)
+		: m_impl(std::move(impl))
+	{
+	}
+
+	VegetationAssetLoadResult<VegetationSpecies>
+	VegetationAssetResolverSnapshot::load_species_by_path(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget& budget) const
+	{
+		if (!m_impl)
+		{
+			return make_vegetation_failure_result<VegetationSpecies>(
+				VegetationAssetLoadFailure::Missing,
+				"Vegetation resolver snapshot is unavailable.");
+		}
+
+		try
+		{
+			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			std::string key{};
+			if (!normalize_resolver_path(m_impl->root_path, path, key))
+			{
+				return make_vegetation_failure_result<VegetationSpecies>(
+					VegetationAssetLoadFailure::Missing,
+					"Vegetation Species path is outside the resolver snapshot root.");
+			}
+
+			const auto indexed = m_impl->catalog_by_key.find(key);
+			if (indexed == m_impl->catalog_by_key.end())
+			{
+				return make_vegetation_failure_result<VegetationSpecies>(
+					VegetationAssetLoadFailure::Missing,
+					"Vegetation Species path was not found in the resolver snapshot.");
+			}
+			if (indexed->second.is_directory || indexed->second.type != AssetType::Species)
+			{
+				return make_vegetation_failure_result<VegetationSpecies>(
+					VegetationAssetLoadFailure::WrongType,
+					"Vegetation resolver path is not a Species asset.");
+			}
+
+			const auto cached = m_impl->species_cache.find(key);
+			if (cached != m_impl->species_cache.end())
+			{
+				return read_cached_vegetation_result(cached->second, budget);
+			}
+
+			std::vector<uint8_t> bytes{};
+			std::string error{};
+			const VegetationSnapshotReadOutcome read_outcome = read_vegetation_file_snapshot(
+				m_impl->root_path / indexed->second.relative_path,
+				budget.max_file_bytes,
+				bytes,
+				error);
+			if (read_outcome != VegetationSnapshotReadOutcome::Succeeded)
+			{
+				const VegetationAssetLoadFailure failure =
+					read_outcome == VegetationSnapshotReadOutcome::Missing ? VegetationAssetLoadFailure::Missing :
+					read_outcome == VegetationSnapshotReadOutcome::BudgetExceeded ? VegetationAssetLoadFailure::BudgetExceeded :
+					VegetationAssetLoadFailure::Io;
+				return make_vegetation_failure_result<VegetationSpecies>(failure, std::move(error));
+			}
+
+			VegetationSpecies species{};
+			VegetationLoadCost cost{};
+			if (!decode_vegetation_species(bytes, budget, species, &error, &cost))
+			{
+				const VegetationAssetLoadFailure failure =
+					is_explicit_vegetation_codec_budget_rejection(error) ?
+					VegetationAssetLoadFailure::BudgetExceeded : VegetationAssetLoadFailure::InvalidData;
+				return make_vegetation_failure_result<VegetationSpecies>(
+					failure,
+					std::move(error));
+			}
+
+			VegetationSuccessCacheEntry<VegetationSpecies> entry{};
+			entry.asset = std::make_shared<const VegetationSpecies>(std::move(species));
+			entry.cost = cost;
+			const auto inserted = m_impl->species_cache.emplace(key, std::move(entry));
+			return make_vegetation_loaded_result<VegetationSpecies>(
+				inserted.first->second.asset,
+				inserted.first->second.cost);
+		}
+		catch (const std::exception& exception)
+		{
+			return make_vegetation_failure_result<VegetationSpecies>(
+				VegetationAssetLoadFailure::Io,
+				std::string("Vegetation Species resolver failed: ") + exception.what());
+		}
+		catch (...)
+		{
+			return make_vegetation_failure_result<VegetationSpecies>(
+				VegetationAssetLoadFailure::Io,
+				"Vegetation Species resolver failed with an unknown exception.");
 		}
 	}
 
@@ -486,6 +1175,598 @@ namespace AshEngine
 			}
 			out_error.clear();
 			ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		}
+
+		struct VegetationTypedRequestContext
+		{
+			uint64_t catalog_epoch = 0;
+			ResolvedAssetInfo resolved{};
+			std::shared_ptr<const VegetationAssetResolverSnapshot> resolver{};
+		};
+
+		static auto map_dependency_failure(
+			const VegetationAssetLoadFailure failure) -> VegetationAssetLoadFailure
+		{
+			switch (failure)
+			{
+			case VegetationAssetLoadFailure::BudgetExceeded:
+				return VegetationAssetLoadFailure::BudgetExceeded;
+			case VegetationAssetLoadFailure::Io:
+				return VegetationAssetLoadFailure::Io;
+			case VegetationAssetLoadFailure::None:
+				return VegetationAssetLoadFailure::None;
+			case VegetationAssetLoadFailure::WrongType:
+			case VegetationAssetLoadFailure::Missing:
+			case VegetationAssetLoadFailure::InvalidData:
+			default:
+				return VegetationAssetLoadFailure::InvalidData;
+			}
+		}
+
+		static auto resolve_vegetation_species_dependency(
+			const std::shared_ptr<const VegetationAssetResolverSnapshot>& resolver,
+			const VegetationPaletteEntry& palette,
+			const VegetationLoadBudget& budget,
+			VegetationResolvedDependency& out_dependency,
+			std::string& out_error) -> VegetationAssetLoadFailure
+		{
+			if (!resolver)
+			{
+				out_error = "Vegetation Species resolver snapshot is unavailable.";
+				return VegetationAssetLoadFailure::Io;
+			}
+
+			const VegetationAssetLoadResult<VegetationSpecies> loaded =
+				resolver->load_species_by_path(palette.species_asset_path, budget);
+			if (!loaded.asset || loaded.failure != VegetationAssetLoadFailure::None)
+			{
+				out_error = std::string("Vegetation Species dependency '") +
+					palette.species_asset_path + "' failed: " + loaded.error;
+				return map_dependency_failure(loaded.failure);
+			}
+			if (loaded.asset->species_id != palette.species_id)
+			{
+				out_error = std::string("Vegetation Species dependency '") +
+					palette.species_asset_path + "' id does not match the palette record.";
+				return VegetationAssetLoadFailure::InvalidData;
+			}
+
+			std::vector<uint8_t> canonical{};
+			std::string encode_error{};
+			if (!encode_vegetation_species(*loaded.asset, canonical, &encode_error))
+			{
+				out_error = std::string("Vegetation Species dependency '") +
+					palette.species_asset_path + "' could not be canonicalized: " + encode_error;
+				return VegetationAssetLoadFailure::InvalidData;
+			}
+			const VegetationSha256 digest = vegetation_sha256(canonical.data(), canonical.size());
+			if (digest != palette.species_sha256)
+			{
+				out_error = std::string("Vegetation Species dependency '") +
+					palette.species_asset_path + "' digest does not match the palette record.";
+				return VegetationAssetLoadFailure::InvalidData;
+			}
+
+			out_dependency.path = palette.species_asset_path;
+			out_dependency.id = palette.species_id;
+			out_dependency.digest = digest;
+			out_dependency.asset = loaded.asset;
+			out_dependency.cost = loaded.cost;
+			out_error.clear();
+			return VegetationAssetLoadFailure::None;
+		}
+
+		static auto load_vegetation_species_value(
+			const VegetationTypedRequestContext& context,
+			const VegetationLoadBudget& budget) -> VegetationLoadedValue<VegetationSpecies>
+		{
+			VegetationLoadedValue<VegetationSpecies> loaded{};
+			loaded.result = context.resolver->load_species_by_path(
+				context.resolved.info.relative_path, budget);
+			return loaded;
+		}
+
+		static auto load_vegetation_layer_value(
+			const VegetationTypedRequestContext& context,
+			const VegetationLoadBudget& budget) -> VegetationLoadedValue<VegetationLayerSnapshot>
+		{
+			VegetationLoadedValue<VegetationLayerSnapshot> loaded{};
+			std::vector<uint8_t> bytes{};
+			std::string error{};
+			const VegetationSnapshotReadOutcome read_outcome = read_vegetation_file_snapshot(
+				context.resolved.absolute_path, budget.max_file_bytes, bytes, error);
+			if (read_outcome != VegetationSnapshotReadOutcome::Succeeded)
+			{
+				const VegetationAssetLoadFailure failure =
+					read_outcome == VegetationSnapshotReadOutcome::Missing ? VegetationAssetLoadFailure::Missing :
+					read_outcome == VegetationSnapshotReadOutcome::BudgetExceeded ? VegetationAssetLoadFailure::BudgetExceeded :
+					VegetationAssetLoadFailure::Io;
+				loaded.result = make_vegetation_failure_result<VegetationLayerSnapshot>(failure, std::move(error));
+				return loaded;
+			}
+
+			VegetationLayerSnapshot layer{};
+			VegetationLoadCost cost{};
+			if (!decode_vegetation_layer(bytes, budget, layer, &error, &cost))
+			{
+				const VegetationAssetLoadFailure failure =
+					is_explicit_vegetation_codec_budget_rejection(error) ?
+					VegetationAssetLoadFailure::BudgetExceeded : VegetationAssetLoadFailure::InvalidData;
+				loaded.result = make_vegetation_failure_result<VegetationLayerSnapshot>(failure, std::move(error));
+				return loaded;
+			}
+
+			loaded.dependencies.reserve(layer.palette.size());
+			for (const VegetationPaletteEntry& palette : layer.palette)
+			{
+				VegetationResolvedDependency dependency{};
+				const VegetationAssetLoadFailure failure = resolve_vegetation_species_dependency(
+					context.resolver, palette, budget, dependency, error);
+				if (failure != VegetationAssetLoadFailure::None)
+				{
+					loaded.dependencies.clear();
+					loaded.result = make_vegetation_failure_result<VegetationLayerSnapshot>(
+						failure, std::move(error));
+					return loaded;
+				}
+				loaded.dependencies.push_back(std::move(dependency));
+			}
+
+			loaded.result = make_vegetation_loaded_result<VegetationLayerSnapshot>(
+				std::make_shared<const VegetationLayerSnapshot>(std::move(layer)), cost);
+			return loaded;
+		}
+
+		static auto load_vegetation_chunk_value(
+			const VegetationTypedRequestContext& context,
+			const VegetationLoadBudget& budget) -> VegetationLoadedValue<VegetationChunk>
+		{
+			VegetationLoadedValue<VegetationChunk> loaded{};
+			std::vector<uint8_t> bytes{};
+			std::string error{};
+			const VegetationSnapshotReadOutcome read_outcome = read_vegetation_file_snapshot(
+				context.resolved.absolute_path, budget.max_file_bytes, bytes, error);
+			if (read_outcome != VegetationSnapshotReadOutcome::Succeeded)
+			{
+				const VegetationAssetLoadFailure failure =
+					read_outcome == VegetationSnapshotReadOutcome::Missing ? VegetationAssetLoadFailure::Missing :
+					read_outcome == VegetationSnapshotReadOutcome::BudgetExceeded ? VegetationAssetLoadFailure::BudgetExceeded :
+					VegetationAssetLoadFailure::Io;
+				loaded.result = make_vegetation_failure_result<VegetationChunk>(failure, std::move(error));
+				return loaded;
+			}
+
+			VegetationChunk chunk{};
+			VegetationLoadCost cost{};
+			if (!decode_vegetation_chunk(bytes, budget, chunk, &error, &cost))
+			{
+				const VegetationAssetLoadFailure failure =
+					is_explicit_vegetation_codec_budget_rejection(error) ?
+					VegetationAssetLoadFailure::BudgetExceeded : VegetationAssetLoadFailure::InvalidData;
+				loaded.result = make_vegetation_failure_result<VegetationChunk>(failure, std::move(error));
+				return loaded;
+			}
+
+			loaded.dependencies.reserve(chunk.species.size());
+			for (const VegetationPaletteEntry& palette : chunk.species)
+			{
+				VegetationResolvedDependency dependency{};
+				const VegetationAssetLoadFailure failure = resolve_vegetation_species_dependency(
+					context.resolver, palette, budget, dependency, error);
+				if (failure != VegetationAssetLoadFailure::None)
+				{
+					loaded.dependencies.clear();
+					loaded.result = make_vegetation_failure_result<VegetationChunk>(
+						failure, std::move(error));
+					return loaded;
+				}
+				loaded.dependencies.push_back(std::move(dependency));
+			}
+
+			for (const VegetationChunkInstance& instance : chunk.instances)
+			{
+				if (instance.species_index >= loaded.dependencies.size() ||
+					instance.candidate_ordinal >=
+						loaded.dependencies[instance.species_index].asset->placement.candidates_per_cell)
+				{
+					loaded.dependencies.clear();
+					loaded.result = make_vegetation_failure_result<VegetationChunk>(
+						VegetationAssetLoadFailure::InvalidData,
+						"Vegetation Chunk candidate ordinal exceeds the resolved Species contract.");
+					return loaded;
+				}
+			}
+
+			loaded.result = make_vegetation_loaded_result<VegetationChunk>(
+				std::make_shared<const VegetationChunk>(std::move(chunk)), cost);
+			return loaded;
+		}
+
+		template<typename T, typename TCacheMap>
+		static auto publish_vegetation_completion_locked(
+			AssetDatabase::Impl& impl,
+			const AssetId asset_id,
+			const uint64_t captured_epoch,
+			const uint64_t captured_request_token,
+			const uint64_t current_in_flight_token,
+			const VegetationLoadedValue<T>& loaded,
+			TCacheMap& cache) -> VegetationAssetCompletionPublicationDecision
+		{
+			const auto load_info = impl.load_info_by_id.find(asset_id);
+			const AssetLoadState current_state = load_info == impl.load_info_by_id.end() ?
+				AssetLoadState::Unloaded : load_info->second.state;
+			const std::string current_error = load_info == impl.load_info_by_id.end() ?
+				std::string{} : load_info->second.error;
+			const auto current_failure = impl.vegetation_global_failure_by_id.find(asset_id);
+			const VegetationAssetLoadFailure current_global_failure =
+				current_failure == impl.vegetation_global_failure_by_id.end() ?
+				VegetationAssetLoadFailure::None : current_failure->second;
+
+			const VegetationAssetCompletionPublicationDecision decision =
+				decide_vegetation_asset_completion_publication({
+					captured_epoch,
+					impl.vegetation_catalog_epoch,
+					captured_request_token,
+					current_in_flight_token,
+					current_state,
+					current_global_failure,
+					current_error,
+					loaded.result.failure,
+					loaded.result.error,
+					loaded.result.asset != nullptr });
+			if (decision.publish_cache)
+			{
+				VegetationSuccessCacheEntry<T> entry{};
+				entry.asset = loaded.result.asset;
+				entry.cost = loaded.result.cost;
+				entry.dependencies = loaded.dependencies;
+				cache[asset_id] = std::move(entry);
+			}
+			if (decision.publish_global_state)
+			{
+				impl.load_info_by_id[asset_id] = { decision.global_state, decision.global_error };
+				if (decision.global_failure == VegetationAssetLoadFailure::None)
+				{
+					impl.vegetation_global_failure_by_id.erase(asset_id);
+					impl.last_error.clear();
+				}
+				else
+				{
+					impl.vegetation_global_failure_by_id[asset_id] = decision.global_failure;
+					impl.last_error = decision.global_error;
+				}
+			}
+			return decision;
+		}
+
+		template<typename T, typename TCacheMap, typename ResolveFn, typename LoadFn>
+		static auto load_vegetation_sync_common(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const AssetType expected_type,
+			const VegetationLoadBudget& budget,
+			TCacheMap AssetDatabase::Impl::* cache_member,
+			ResolveFn&& resolve,
+			LoadFn&& load) -> VegetationAssetLoadResult<T>
+		{
+			if (!impl)
+			{
+				return make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::Missing, "AssetDatabase is unavailable.");
+			}
+
+			VegetationTypedRequestContext context{};
+			bool admitted = false;
+			try
+			{
+				{
+					std::scoped_lock<std::mutex> lock(impl->mutex);
+					if (!resolve(context.resolved))
+					{
+						return make_vegetation_failure_result<T>(
+							VegetationAssetLoadFailure::Missing,
+							"Vegetation asset was not found in the catalog snapshot.");
+					}
+					if (context.resolved.info.is_directory || context.resolved.info.type != expected_type)
+					{
+						return make_vegetation_failure_result<T>(
+							VegetationAssetLoadFailure::WrongType,
+							"Vegetation typed loader received an asset of the wrong type.");
+					}
+					auto& cache = impl.get()->*cache_member;
+					const auto cached = cache.find(context.resolved.info.id);
+					if (cached != cache.end())
+					{
+						return read_cached_vegetation_result(cached->second, budget);
+					}
+					context.catalog_epoch = impl->vegetation_catalog_epoch;
+					admitted = true;
+					context.resolver = make_resolver_snapshot_locked(*impl);
+				}
+
+				VegetationLoadedValue<T> loaded = load(context, budget);
+				{
+					std::scoped_lock<std::mutex> lock(impl->mutex);
+					auto& cache = impl.get()->*cache_member;
+					publish_vegetation_completion_locked(
+						*impl,
+						context.resolved.info.id,
+						context.catalog_epoch,
+						0,
+						0,
+						loaded,
+						cache);
+				}
+				return loaded.result;
+			}
+			catch (const std::exception& exception)
+			{
+				VegetationLoadedValue<T> failed{};
+				failed.result = make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::Io,
+					std::string("Vegetation typed load failed: ") + exception.what());
+				if (admitted)
+				{
+					try
+					{
+						std::scoped_lock<std::mutex> lock(impl->mutex);
+						auto& cache = impl.get()->*cache_member;
+						publish_vegetation_completion_locked(
+							*impl, context.resolved.info.id, context.catalog_epoch, 0, 0, failed, cache);
+					}
+					catch (...)
+					{
+					}
+				}
+				return failed.result;
+			}
+			catch (...)
+			{
+				VegetationLoadedValue<T> failed{};
+				failed.result = make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::Io,
+					"Vegetation typed load failed with an unknown exception.");
+				if (admitted)
+				{
+					try
+					{
+						std::scoped_lock<std::mutex> lock(impl->mutex);
+						auto& cache = impl.get()->*cache_member;
+						publish_vegetation_completion_locked(
+							*impl, context.resolved.info.id, context.catalog_epoch, 0, 0, failed, cache);
+					}
+					catch (...)
+					{
+					}
+				}
+				return failed.result;
+			}
+		}
+
+		template<typename T, typename TCacheMap, typename TInFlightMap, typename ResolveFn, typename LoadFn>
+		static auto load_vegetation_async_common(
+			const std::shared_ptr<AssetDatabase::Impl>& impl,
+			const AssetType expected_type,
+			const VegetationLoadBudget budget,
+			TCacheMap AssetDatabase::Impl::* cache_member,
+			TInFlightMap AssetDatabase::Impl::* in_flight_member,
+			ResolveFn&& resolve,
+			LoadFn load,
+			const char* debug_name) -> std::shared_future<VegetationAssetLoadResult<T>>
+		{
+			using Result = VegetationAssetLoadResult<T>;
+			struct AsyncRequestState
+			{
+				VegetationTypedRequestContext context{};
+				VegetationInFlightKey key{};
+				uint64_t request_token = 0;
+				std::shared_ptr<std::promise<Result>> promise{};
+				std::shared_future<Result> future{};
+				std::atomic_bool completed{ false };
+			};
+			if (!impl)
+			{
+				return make_ready_future(make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::Missing, "AssetDatabase is unavailable."));
+			}
+
+			try
+			{
+				auto state = std::make_shared<AsyncRequestState>();
+				{
+					std::scoped_lock<std::mutex> lock(impl->mutex);
+					if (!resolve(state->context.resolved))
+					{
+						return make_ready_future(make_vegetation_failure_result<T>(
+							VegetationAssetLoadFailure::Missing,
+							"Vegetation asset was not found in the catalog snapshot."));
+					}
+					if (state->context.resolved.info.is_directory || state->context.resolved.info.type != expected_type)
+					{
+						return make_ready_future(make_vegetation_failure_result<T>(
+							VegetationAssetLoadFailure::WrongType,
+							"Vegetation typed loader received an asset of the wrong type."));
+					}
+
+					auto& cache = impl.get()->*cache_member;
+					const auto cached = cache.find(state->context.resolved.info.id);
+					if (cached != cache.end())
+					{
+						return make_ready_future(read_cached_vegetation_result(cached->second, budget));
+					}
+
+					state->context.catalog_epoch = impl->vegetation_catalog_epoch;
+					state->key = {
+						expected_type,
+						state->context.resolved.info.id,
+						state->context.catalog_epoch,
+						budget };
+					auto& in_flight = impl.get()->*in_flight_member;
+					const auto existing = in_flight.find(state->key);
+					VegetationAssetInFlightAdmissionInput admission{};
+					admission.has_existing = existing != in_flight.end();
+					admission.requested_type = state->key.type;
+					admission.requested_id = state->key.id;
+					admission.requested_epoch = state->key.epoch;
+					admission.requested_budget = state->key.budget;
+					if (admission.has_existing)
+					{
+						admission.existing_type = existing->first.type;
+						admission.existing_id = existing->first.id;
+						admission.existing_epoch = existing->first.epoch;
+						admission.existing_budget = existing->first.budget;
+					}
+					if (decide_vegetation_asset_in_flight_admission(admission) ==
+						VegetationAssetInFlightAdmissionDecision::JoinExisting)
+					{
+						return existing->second.future;
+					}
+
+					state->context.resolver = make_resolver_snapshot_locked(*impl);
+					state->promise = std::make_shared<std::promise<Result>>();
+					state->future = state->promise->get_future().share();
+					state->request_token = next_vegetation_token_locked(*impl);
+					in_flight.emplace(
+						state->key,
+						VegetationInFlightEntry<T>{ state->request_token, state->future });
+				}
+
+				auto complete = [impl,
+					state,
+					cache_member,
+					in_flight_member](VegetationLoadedValue<T> loaded) noexcept -> void
+				{
+					bool expected = false;
+					if (!state->completed.compare_exchange_strong(
+						expected, true, std::memory_order_acq_rel))
+					{
+						return;
+					}
+
+					bool publication_succeeded = false;
+					try
+					{
+						std::scoped_lock<std::mutex> lock(impl->mutex);
+						auto& in_flight = impl.get()->*in_flight_member;
+						const auto current = in_flight.find(state->key);
+						const uint64_t current_token = current == in_flight.end() ? 0 : current->second.request_token;
+						auto& cache = impl.get()->*cache_member;
+						const VegetationAssetCompletionPublicationDecision decision =
+							publish_vegetation_completion_locked(
+								*impl,
+								state->context.resolved.info.id,
+								state->context.catalog_epoch,
+								state->request_token,
+								current_token,
+								loaded,
+								cache);
+						if (decision.erase_matching_in_flight && current != in_flight.end())
+						{
+							in_flight.erase(current);
+						}
+						publication_succeeded = true;
+					}
+					catch (...)
+					{
+						try
+						{
+							std::scoped_lock<std::mutex> lock(impl->mutex);
+							auto& in_flight = impl.get()->*in_flight_member;
+							const auto current = in_flight.find(state->key);
+							if (current != in_flight.end() &&
+								current->second.request_token == state->request_token)
+							{
+								in_flight.erase(current);
+							}
+						}
+						catch (...)
+						{
+						}
+					}
+
+					if (!publication_succeeded)
+					{
+						set_vegetation_io_failure_noexcept(loaded);
+					}
+					try
+					{
+						state->promise->set_value(std::move(loaded.result));
+					}
+					catch (...)
+					{
+					}
+				};
+
+				ThreadCommandFuture worker{};
+				try
+				{
+					worker = Detail::enqueue_worker_command(
+						debug_name,
+						[state, budget, load, complete]() mutable
+						{
+							VegetationLoadedValue<T> loaded{};
+							try
+							{
+								loaded = load(state->context, budget);
+							}
+							catch (const std::exception& exception)
+							{
+								set_vegetation_io_failure_noexcept(loaded, exception.what());
+							}
+							catch (...)
+							{
+								set_vegetation_io_failure_noexcept(loaded);
+							}
+							complete(std::move(loaded));
+						});
+				}
+				catch (const std::exception& exception)
+				{
+					VegetationLoadedValue<T> rejected{};
+					set_vegetation_io_failure_noexcept(rejected, exception.what());
+					complete(std::move(rejected));
+					return state->future;
+				}
+				catch (...)
+				{
+					VegetationLoadedValue<T> rejected{};
+					set_vegetation_io_failure_noexcept(rejected);
+					complete(std::move(rejected));
+					return state->future;
+				}
+
+				if (worker.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+				{
+					try
+					{
+						worker.get();
+					}
+					catch (const std::exception& exception)
+					{
+						VegetationLoadedValue<T> rejected{};
+						set_vegetation_io_failure_noexcept(rejected, exception.what());
+						complete(std::move(rejected));
+					}
+					catch (...)
+					{
+						VegetationLoadedValue<T> rejected{};
+						set_vegetation_io_failure_noexcept(rejected);
+						complete(std::move(rejected));
+					}
+				}
+				return state->future;
+			}
+			catch (const std::exception& exception)
+			{
+				return make_ready_future(make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::Io,
+					std::string("Vegetation async request failed: ") + exception.what()));
+			}
+			catch (...)
+			{
+				return make_ready_future(make_vegetation_failure_result<T>(
+					VegetationAssetLoadFailure::Io,
+					"Vegetation async request failed with an unknown exception."));
+			}
 		}
 
 		template <typename TResource, typename TCacheMap, typename LoaderFn, typename FinalizeFn>
@@ -1137,8 +2418,21 @@ namespace AshEngine
 
 		std::error_code absolute_error{};
 		const std::filesystem::path absolute_root = std::filesystem::absolute(root_path, absolute_error);
+		const std::filesystem::path normalized_root =
+			(absolute_error ? root_path : absolute_root).lexically_normal();
 		std::scoped_lock<std::mutex> lock(m_impl->mutex);
-		m_impl->root_path = absolute_error ? root_path.lexically_normal() : absolute_root.lexically_normal();
+		if (m_impl->root_path == normalized_root)
+		{
+			return true;
+		}
+
+		m_impl->root_path = normalized_root;
+		bump_vegetation_epoch_locked(*m_impl);
+		advance_catalog_generation_locked(*m_impl);
+		m_impl->assets.clear();
+		m_impl->index_by_id.clear();
+		m_impl->index_by_key.clear();
+		clear_all_asset_shared_state_locked(*m_impl);
 		m_impl->last_error.clear();
 		return true;
 	}
@@ -1151,58 +2445,93 @@ namespace AshEngine
 
 	bool AssetDatabase::refresh()
 	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_impl);
+		if (!m_impl)
+		{
+			return false;
+		}
 
-		std::error_code exists_error{};
-		const std::filesystem::path root_path = get_root_path();
-		if (root_path.empty() || !std::filesystem::exists(root_path, exists_error))
+		std::filesystem::path root_path{};
+		uint64_t captured_epoch = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->mutex);
-			advance_catalog_generation_locked(*m_impl);
-			m_impl->assets.clear();
-			m_impl->index_by_id.clear();
-			m_impl->index_by_key.clear();
-			m_impl->load_info_by_id.clear();
-			m_impl->mesh_cache.clear();
-			m_impl->model_cache.clear();
-			m_impl->material_cache.clear();
-			m_impl->ashasset_cache.clear();
-			m_impl->terrain_cache.clear();
-			m_impl->inflight_mesh_loads.clear();
-			m_impl->inflight_model_loads.clear();
-			m_impl->inflight_material_loads.clear();
-			m_impl->inflight_ashasset_loads.clear();
-			m_impl->inflight_terrain_loads.clear();
-			m_impl->terrain_load_serial_by_id.clear();
-			m_impl->last_error = exists_error ? exists_error.message() : "Asset root path does not exist.";
-			ASH_PROCESS_ERROR(false);
+			root_path = m_impl->root_path;
+			captured_epoch = m_impl->vegetation_catalog_epoch;
 		}
 
 		std::vector<AssetInfo> assets{};
 		std::unordered_map<AssetId, size_t> index_by_id{};
 		std::unordered_map<std::string, size_t> index_by_key{};
 		std::unordered_map<AssetId, AssetLoadInfo> load_info_by_id{};
-		bool iterate_ok = true;
+		VegetationCatalogScanOutcome scan_outcome = VegetationCatalogScanOutcome::Succeeded;
+		std::string scan_error{};
+
+		if (root_path.empty())
+		{
+			scan_outcome = VegetationCatalogScanOutcome::InvalidRoot;
+			scan_error = "Asset root path does not exist or is not a directory.";
+		}
+		else
+		{
+			std::error_code exists_error{};
+			const bool root_exists = std::filesystem::exists(root_path, exists_error);
+			if (exists_error)
+			{
+				scan_outcome = VegetationCatalogScanOutcome::Failed;
+				scan_error = exists_error.message();
+			}
+			else if (!root_exists)
+			{
+				scan_outcome = VegetationCatalogScanOutcome::InvalidRoot;
+				scan_error = "Asset root path does not exist or is not a directory.";
+			}
+			else
+			{
+				std::error_code directory_error{};
+				const bool root_is_directory = std::filesystem::is_directory(
+					root_path, directory_error);
+				if (directory_error)
+				{
+					scan_outcome = VegetationCatalogScanOutcome::Failed;
+					scan_error = directory_error.message();
+				}
+				else if (!root_is_directory)
+				{
+					scan_outcome = VegetationCatalogScanOutcome::InvalidRoot;
+					scan_error = "Asset root path does not exist or is not a directory.";
+				}
+			}
+		}
 
 		std::error_code iterate_error{};
-		for (std::filesystem::recursive_directory_iterator it(root_path, iterate_error), end; it != end; it.increment(iterate_error))
+		std::filesystem::recursive_directory_iterator iterator{};
+		if (scan_outcome == VegetationCatalogScanOutcome::Succeeded)
+		{
+			iterator = std::filesystem::recursive_directory_iterator(root_path, iterate_error);
+			if (iterate_error)
+			{
+				scan_outcome = VegetationCatalogScanOutcome::Failed;
+				scan_error = iterate_error.message();
+			}
+		}
+
+		for (std::filesystem::recursive_directory_iterator end;
+			scan_outcome == VegetationCatalogScanOutcome::Succeeded && iterator != end;
+			iterator.increment(iterate_error))
 		{
 			if (iterate_error)
 			{
-				std::scoped_lock<std::mutex> lock(m_impl->mutex);
-				m_impl->last_error = iterate_error.message();
-				iterate_ok = false;
+				scan_outcome = VegetationCatalogScanOutcome::Failed;
+				scan_error = iterate_error.message();
 				break;
 			}
 
-			const std::filesystem::directory_entry& entry = *it;
-			const std::filesystem::path relative_path = std::filesystem::relative(entry.path(), root_path, iterate_error).lexically_normal();
+			const std::filesystem::directory_entry& entry = *iterator;
+			const std::filesystem::path relative_path =
+				std::filesystem::relative(entry.path(), root_path, iterate_error).lexically_normal();
 			if (iterate_error)
 			{
-				std::scoped_lock<std::mutex> lock(m_impl->mutex);
-				m_impl->last_error = iterate_error.message();
-				iterate_ok = false;
+				scan_outcome = VegetationCatalogScanOutcome::Failed;
+				scan_error = iterate_error.message();
 				break;
 			}
 
@@ -1212,55 +2541,96 @@ namespace AshEngine
 			info.name = entry.path().filename().string();
 			info.relative_path = relative_path;
 			info.parent_path = relative_path.parent_path();
-			info.is_directory = entry.is_directory();
+			std::error_code metadata_error{};
+			info.is_directory = entry.is_directory(metadata_error);
+			if (metadata_error)
+			{
+				scan_outcome = VegetationCatalogScanOutcome::Failed;
+				scan_error = metadata_error.message();
+				break;
+			}
 			info.type = detect_asset_type(relative_path, info.is_directory);
 
-			std::error_code metadata_error{};
 			info.last_write_time_ticks = static_cast<uint64_t>(entry.last_write_time(metadata_error).time_since_epoch().count());
+			if (metadata_error)
+			{
+				scan_outcome = VegetationCatalogScanOutcome::Failed;
+				scan_error = metadata_error.message();
+				break;
+			}
 			if (!info.is_directory)
 			{
 				info.file_size = entry.file_size(metadata_error);
+				if (metadata_error)
+				{
+					scan_outcome = VegetationCatalogScanOutcome::Failed;
+					scan_error = metadata_error.message();
+					break;
+				}
 			}
 
 			assets.push_back(std::move(info));
 		}
-		ASH_PROCESS_ERROR(iterate_ok);
-
-		std::sort(assets.begin(), assets.end(), [](const AssetInfo& lhs, const AssetInfo& rhs)
+		if (scan_outcome == VegetationCatalogScanOutcome::Succeeded && iterate_error)
 		{
-			return lhs.relative_path.generic_string() < rhs.relative_path.generic_string();
-		});
+			scan_outcome = VegetationCatalogScanOutcome::Failed;
+			scan_error = iterate_error.message();
+		}
 
-		for (size_t index = 0; index < assets.size(); ++index)
+		if (scan_outcome == VegetationCatalogScanOutcome::Succeeded)
 		{
-			const AssetInfo& info = assets[index];
-			index_by_id[info.id] = index;
-			index_by_key[normalize_asset_key(info.relative_path)] = index;
-			if (!info.is_directory)
+			std::sort(assets.begin(), assets.end(), [](const AssetInfo& lhs, const AssetInfo& rhs)
 			{
-				load_info_by_id[info.id] = { AssetLoadState::Unloaded, {} };
+				return lhs.relative_path.generic_string() < rhs.relative_path.generic_string();
+			});
+
+			for (size_t index = 0; index < assets.size(); ++index)
+			{
+				const AssetInfo& info = assets[index];
+				index_by_id[info.id] = index;
+				index_by_key[normalize_asset_key(info.relative_path)] = index;
+				if (!info.is_directory)
+				{
+					load_info_by_id[info.id] = { AssetLoadState::Unloaded, {} };
+				}
 			}
 		}
 
 		std::scoped_lock<std::mutex> lock(m_impl->mutex);
-		advance_catalog_generation_locked(*m_impl);
-		m_impl->assets = std::move(assets);
-		m_impl->index_by_id = std::move(index_by_id);
-		m_impl->index_by_key = std::move(index_by_key);
-		m_impl->load_info_by_id = std::move(load_info_by_id);
-		m_impl->mesh_cache.clear();
-		m_impl->model_cache.clear();
-		m_impl->material_cache.clear();
-		m_impl->ashasset_cache.clear();
-		m_impl->terrain_cache.clear();
-		m_impl->inflight_mesh_loads.clear();
-		m_impl->inflight_model_loads.clear();
-		m_impl->inflight_material_loads.clear();
-		m_impl->inflight_ashasset_loads.clear();
-		m_impl->inflight_terrain_loads.clear();
-		m_impl->terrain_load_serial_by_id.clear();
-		m_impl->last_error.clear();
-		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
+		const VegetationCatalogPublicationDecision decision = decide_vegetation_catalog_publication({
+			captured_epoch,
+			m_impl->vegetation_catalog_epoch,
+			root_path,
+			m_impl->root_path,
+			scan_outcome });
+		switch (decision)
+		{
+		case VegetationCatalogPublicationDecision::PublishReplacement:
+			bump_vegetation_epoch_locked(*m_impl);
+			advance_catalog_generation_locked(*m_impl);
+			clear_all_asset_shared_state_locked(*m_impl);
+			m_impl->assets = std::move(assets);
+			m_impl->index_by_id = std::move(index_by_id);
+			m_impl->index_by_key = std::move(index_by_key);
+			m_impl->load_info_by_id = std::move(load_info_by_id);
+			m_impl->last_error.clear();
+			return true;
+		case VegetationCatalogPublicationDecision::ResetInvalidRoot:
+			bump_vegetation_epoch_locked(*m_impl);
+			advance_catalog_generation_locked(*m_impl);
+			m_impl->assets.clear();
+			m_impl->index_by_id.clear();
+			m_impl->index_by_key.clear();
+			clear_all_asset_shared_state_locked(*m_impl);
+			m_impl->last_error = normalize_vegetation_diagnostic(std::move(scan_error));
+			return false;
+		case VegetationCatalogPublicationDecision::KeepLastKnownGood:
+			m_impl->last_error = normalize_vegetation_diagnostic(std::move(scan_error));
+			return false;
+		case VegetationCatalogPublicationDecision::DiscardStale:
+		default:
+			return false;
+		}
 	}
 
 	const std::vector<AssetInfo>& AssetDatabase::get_assets() const
@@ -1359,6 +2729,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		if (resolved.info.is_directory)
 		{
@@ -1385,6 +2760,70 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	bool AssetDatabase::load_text_by_id_bounded(
+		const AssetId id,
+		const uint64_t max_file_bytes,
+		std::string& out_text)
+	{
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		ResolvedAssetInfo resolved{};
+		{
+			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			if (!resolve_asset_by_id_locked(m_impl, id, resolved) ||
+				resolved.info.is_directory || is_opaque_vegetation_asset_type(resolved.info.type))
+			{
+				return false;
+			}
+		}
+
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		if (read_vegetation_file_snapshot(
+			resolved.absolute_path, max_file_bytes, bytes, error) !=
+			VegetationSnapshotReadOutcome::Succeeded)
+		{
+			return false;
+		}
+		out_text.assign(bytes.begin(), bytes.end());
+		return true;
+	}
+
+	bool AssetDatabase::load_text_by_path_bounded(
+		const std::filesystem::path& path,
+		const uint64_t max_file_bytes,
+		std::string& out_text)
+	{
+		if (!m_impl)
+		{
+			return false;
+		}
+
+		ResolvedAssetInfo resolved{};
+		{
+			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			if (!resolve_asset_by_path_locked(m_impl, path, resolved) ||
+				resolved.info.is_directory || is_opaque_vegetation_asset_type(resolved.info.type))
+			{
+				return false;
+			}
+		}
+
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		if (read_vegetation_file_snapshot(
+			resolved.absolute_path, max_file_bytes, bytes, error) !=
+			VegetationSnapshotReadOutcome::Succeeded)
+		{
+			return false;
+		}
+		out_text.assign(bytes.begin(), bytes.end());
+		return true;
+	}
+
 	bool AssetDatabase::load_binary_by_id(AssetId id, std::vector<uint8_t>& out_bytes)
 	{
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -1405,6 +2844,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		if (resolved.info.is_directory)
 		{
@@ -1451,6 +2895,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		if (resolved.info.is_directory)
 		{
@@ -1498,6 +2947,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		std::shared_ptr<std::promise<std::shared_ptr<const Mesh>>> mesh_promise{};
 		std::filesystem::path mesh_relative_path{};
@@ -1582,6 +3036,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		if (resolved.info.is_directory)
 		{
@@ -1633,6 +3092,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		std::shared_ptr<std::promise<std::shared_ptr<const Model>>> model_promise{};
 		std::filesystem::path model_relative_path{};
@@ -1750,6 +3214,11 @@ namespace AshEngine
 			}
 			ASH_PROCESS_ERROR(false);
 		}
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		const std::string cache_key = normalize_asset_key(resolved.info.relative_path);
 		std::shared_ptr<const MaterialInterface> cached_material{};
@@ -1834,6 +3303,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		if (resolved.info.is_directory)
 		{
@@ -1881,6 +3355,11 @@ namespace AshEngine
 		ResolvedAssetInfo resolved{};
 		std::string error{};
 		ASH_PROCESS_ERROR(resolve_asset_by_path(m_impl, path, resolved, error));
+		if (is_vegetation_asset_type(resolved.info.type))
+		{
+			error = "Vegetation assets require a typed AssetDatabase loader.";
+			ASH_PROCESS_ERROR(false);
+		}
 
 		std::shared_ptr<std::promise<std::shared_ptr<const AshAsset>>> ashasset_promise{};
 		std::filesystem::path ashasset_relative_path{};
@@ -2258,5 +3737,251 @@ namespace AshEngine
 		set_last_error_locked(*m_impl, {});
 		set_load_info_locked(*m_impl, id, AssetLoadState::Unloaded, {});
 		return true;
+	}
+
+	VegetationAssetLoadResult<VegetationSpecies> AssetDatabase::load_vegetation_species_by_id(
+		const AssetId id,
+		const VegetationLoadBudget& budget)
+	{
+		const auto impl = m_impl;
+		return load_vegetation_sync_common<VegetationSpecies>(
+			impl,
+			AssetType::Species,
+			budget,
+			&Impl::vegetation_species_cache,
+			[impl, id](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_id_locked(impl, id, resolved);
+			},
+			load_vegetation_species_value);
+	}
+
+	VegetationAssetLoadResult<VegetationSpecies> AssetDatabase::load_vegetation_species_by_path(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget& budget)
+	{
+		const auto impl = m_impl;
+		const std::filesystem::path requested_path = path;
+		return load_vegetation_sync_common<VegetationSpecies>(
+			impl,
+			AssetType::Species,
+			budget,
+			&Impl::vegetation_species_cache,
+			[impl, requested_path](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_path_locked(impl, requested_path, resolved);
+			},
+			load_vegetation_species_value);
+	}
+
+	std::shared_future<VegetationAssetLoadResult<VegetationSpecies>>
+	AssetDatabase::load_vegetation_species_by_id_async(
+		const AssetId id,
+		const VegetationLoadBudget budget)
+	{
+		const auto impl = m_impl;
+		return load_vegetation_async_common<VegetationSpecies>(
+			impl,
+			AssetType::Species,
+			budget,
+			&Impl::vegetation_species_cache,
+			&Impl::inflight_vegetation_species_loads,
+			[impl, id](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_id_locked(impl, id, resolved);
+			},
+			load_vegetation_species_value,
+			"AssetDatabase::load_vegetation_species_by_id_async");
+	}
+
+	std::shared_future<VegetationAssetLoadResult<VegetationSpecies>>
+	AssetDatabase::load_vegetation_species_by_path_async(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget budget)
+	{
+		const auto impl = m_impl;
+		const std::filesystem::path requested_path = path;
+		return load_vegetation_async_common<VegetationSpecies>(
+			impl,
+			AssetType::Species,
+			budget,
+			&Impl::vegetation_species_cache,
+			&Impl::inflight_vegetation_species_loads,
+			[impl, requested_path](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_path_locked(impl, requested_path, resolved);
+			},
+			load_vegetation_species_value,
+			"AssetDatabase::load_vegetation_species_by_path_async");
+	}
+
+	VegetationAssetLoadResult<VegetationLayerSnapshot> AssetDatabase::load_vegetation_layer_by_id(
+		const AssetId id,
+		const VegetationLoadBudget& budget)
+	{
+		const auto impl = m_impl;
+		return load_vegetation_sync_common<VegetationLayerSnapshot>(
+			impl,
+			AssetType::Layer,
+			budget,
+			&Impl::vegetation_layer_cache,
+			[impl, id](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_id_locked(impl, id, resolved);
+			},
+			load_vegetation_layer_value);
+	}
+
+	VegetationAssetLoadResult<VegetationLayerSnapshot> AssetDatabase::load_vegetation_layer_by_path(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget& budget)
+	{
+		const auto impl = m_impl;
+		const std::filesystem::path requested_path = path;
+		return load_vegetation_sync_common<VegetationLayerSnapshot>(
+			impl,
+			AssetType::Layer,
+			budget,
+			&Impl::vegetation_layer_cache,
+			[impl, requested_path](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_path_locked(impl, requested_path, resolved);
+			},
+			load_vegetation_layer_value);
+	}
+
+	std::shared_future<VegetationAssetLoadResult<VegetationLayerSnapshot>>
+	AssetDatabase::load_vegetation_layer_by_id_async(
+		const AssetId id,
+		const VegetationLoadBudget budget)
+	{
+		const auto impl = m_impl;
+		return load_vegetation_async_common<VegetationLayerSnapshot>(
+			impl,
+			AssetType::Layer,
+			budget,
+			&Impl::vegetation_layer_cache,
+			&Impl::inflight_vegetation_layer_loads,
+			[impl, id](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_id_locked(impl, id, resolved);
+			},
+			load_vegetation_layer_value,
+			"AssetDatabase::load_vegetation_layer_by_id_async");
+	}
+
+	std::shared_future<VegetationAssetLoadResult<VegetationLayerSnapshot>>
+	AssetDatabase::load_vegetation_layer_by_path_async(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget budget)
+	{
+		const auto impl = m_impl;
+		const std::filesystem::path requested_path = path;
+		return load_vegetation_async_common<VegetationLayerSnapshot>(
+			impl,
+			AssetType::Layer,
+			budget,
+			&Impl::vegetation_layer_cache,
+			&Impl::inflight_vegetation_layer_loads,
+			[impl, requested_path](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_path_locked(impl, requested_path, resolved);
+			},
+			load_vegetation_layer_value,
+			"AssetDatabase::load_vegetation_layer_by_path_async");
+	}
+
+	VegetationAssetLoadResult<VegetationChunk> AssetDatabase::load_vegetation_chunk_by_id(
+		const AssetId id,
+		const VegetationLoadBudget& budget)
+	{
+		const auto impl = m_impl;
+		return load_vegetation_sync_common<VegetationChunk>(
+			impl,
+			AssetType::Chunk,
+			budget,
+			&Impl::vegetation_chunk_cache,
+			[impl, id](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_id_locked(impl, id, resolved);
+			},
+			load_vegetation_chunk_value);
+	}
+
+	VegetationAssetLoadResult<VegetationChunk> AssetDatabase::load_vegetation_chunk_by_path(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget& budget)
+	{
+		const auto impl = m_impl;
+		const std::filesystem::path requested_path = path;
+		return load_vegetation_sync_common<VegetationChunk>(
+			impl,
+			AssetType::Chunk,
+			budget,
+			&Impl::vegetation_chunk_cache,
+			[impl, requested_path](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_path_locked(impl, requested_path, resolved);
+			},
+			load_vegetation_chunk_value);
+	}
+
+	std::shared_future<VegetationAssetLoadResult<VegetationChunk>>
+	AssetDatabase::load_vegetation_chunk_by_id_async(
+		const AssetId id,
+		const VegetationLoadBudget budget)
+	{
+		const auto impl = m_impl;
+		return load_vegetation_async_common<VegetationChunk>(
+			impl,
+			AssetType::Chunk,
+			budget,
+			&Impl::vegetation_chunk_cache,
+			&Impl::inflight_vegetation_chunk_loads,
+			[impl, id](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_id_locked(impl, id, resolved);
+			},
+			load_vegetation_chunk_value,
+			"AssetDatabase::load_vegetation_chunk_by_id_async");
+	}
+
+	std::shared_future<VegetationAssetLoadResult<VegetationChunk>>
+	AssetDatabase::load_vegetation_chunk_by_path_async(
+		const std::filesystem::path& path,
+		const VegetationLoadBudget budget)
+	{
+		const auto impl = m_impl;
+		const std::filesystem::path requested_path = path;
+		return load_vegetation_async_common<VegetationChunk>(
+			impl,
+			AssetType::Chunk,
+			budget,
+			&Impl::vegetation_chunk_cache,
+			&Impl::inflight_vegetation_chunk_loads,
+			[impl, requested_path](ResolvedAssetInfo& resolved)
+			{
+				return resolve_asset_by_path_locked(impl, requested_path, resolved);
+			},
+			load_vegetation_chunk_value,
+			"AssetDatabase::load_vegetation_chunk_by_path_async");
+	}
+
+	std::shared_ptr<const VegetationAssetResolverSnapshot>
+	AssetDatabase::capture_vegetation_resolver_snapshot() const
+	{
+		if (!m_impl)
+		{
+			return {};
+		}
+		try
+		{
+			std::scoped_lock<std::mutex> lock(m_impl->mutex);
+			return make_resolver_snapshot_locked(*m_impl);
+		}
+		catch (...)
+		{
+			return {};
+		}
 	}
 }

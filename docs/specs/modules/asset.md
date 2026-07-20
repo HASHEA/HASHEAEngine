@@ -46,6 +46,12 @@ status: active
   - Terrain recovery/concurrency metadata：`TerrainContainerLoadReport` 与发布的 `TerrainAssetSnapshot` 同时携带 recovered flag、loaded generation、rejected generation、精确 recovery detail 和稳定的 `TerrainContainerRevision`；调用方可区分“已加载的最后有效旧代”“磁盘上更新但损坏的新代”与可重试的并发写入。
   - Terrain create/import/export：`normalize_terrain_authoring_extent_meters()` 与 `make_terrain_authoring_grid_layout()` 定义每轴 256–8192 m、最近 2 的幂且中点向上的 authoring 合同，默认 2048 × 2048 m；固定 256 quad/Component 与 1 m/sample。`make_default_terrain_grid_layout()` 为兼容既有调用和最大压力测试继续返回 8193² / 32² 的历史 full-pressure 布局。`TerrainHeightImportDesc`、`TerrainHeightExportDesc`、`TerrainImportReport` 和 `TerrainCancellationToken` 是不暴露 codec 类型的值合同。`import_terrain_height` / `import_terrain_height_to_container` 支持 PNG、RAW R16/R32F、EXR；`export_terrain_height` 对最终合成、Base、指定高度层和指定材质权重层都支持这四种格式。材质权重的 PNG/RAW R16 输出使用固定 `[0,1]` normalized 映射，RAW R32F/EXR 直接保留 `[0,1]` 浮点值。`publish_staged_terrain_container_new` 对已经验证的 staged container 执行 named-lease、non-replacing 最终发布。
   - Terrain authoring primitive：每个高度稀疏 sample 保存仿射变换 `a × H + b`；同一编辑层按 stroke 顺序支持全部五种高度工具。`append_resampled_terrain_stroke` 续接上次 segment，只返回新增 dab；`merge_terrain_edit_patches` 把同一次 stroke 的 patch 聚合为首次 before 到最新 after，供一次历史提交或整体回滚。
+  - `.AshVegetation` / `.AshVegetationLayer` / `.AshVegetationChunk` 分别映射为 `AssetType::Species/Layer/Chunk`；三类只能走显式预算的 typed sync/async API，旧 text/binary/mesh/model/material/ashasset 入口 fail-closed 且不污染 typed load state。所有 Editor 文本预览统一使用唯一 named `kAssetTextPreviewMaxFileBytes = 1 MiB` 的 bounded path；Species 新增为可文本预览类型，Layer/Chunk 只展示 compact metadata，三类都不可直接实例化到 Scene。
+  - typed 结果为 `VegetationAssetLoadResult<T>`：`BudgetExceeded` 与 `WrongType` 是 request-local、不得改 shared cache/global state；`Missing < Io < InvalidData < Loaded` 是确定性全局发布优先级，同级错误按规范化诊断字典序稳定选择。成功缓存仍逐次对 outer 与每个 Species dependency 的六项预算重新 admission。
+  - async in-flight identity 是 `{AssetType, AssetId, catalog_epoch, 六字段 VegetationLoadBudget}`；只允许精确 identity join，worker 投递只走 `Detail::enqueue_worker_command`，shutdown 拒绝必须产出 ready exceptional admission 并转换为 non-throwing typed failure result。成功 immutable asset 才可缓存，失败不得 memoize。
+  - catalog refresh 在 mutex 下捕获 `{root, epoch}`，锁外完整扫描，随后单次提交 replacement；同 root scan failure 保留 last-known-good，invalid root 显式 reset，root/epoch 已变化的 stale scan 丢弃。真实 root change 或成功/reset 发布会原子清理索引、load state、cache/in-flight 并推进 epoch；重复设置相同规范化 root 是 no-op。
+  - `VegetationAssetResolverSnapshot` 复制 immutable root+catalog、没有 database backpointer/借用指针，并仅在 snapshot 内 memoize 成功 Species。Layer/Chunk 发布前必须在同一 snapshot 解析每个 Species，校验 path、embedded ID 与 canonical SHA-256；Chunk 还校验 `candidate_ordinal < candidates_per_cell`。
+  - bounded reader 以固定 scratch 分块读取并 probe 第 `max_file_bytes+1` byte；只在 exact EOF 后一次性发布输出，short/bad/超限/异常均保持 caller output 不变。
 - 植被基础合同：`VegetationId` / `VegetationSha256`、`VegetationChunkCoord`、显式 `VegetationLoadBudget/VegetationLoadCost`；`vegetation_sha256`、`vegetation_crc32`、`vegetation_round_ties_even_u16` 与 `split_vegetation_world_xz`。
 - surface snapshot：`IVegetationSurfaceSnapshot` 提供 immutable identity、coarse chunk bounds 与 resident-only batch sampling；`sample_vegetation_surface_batch` 统一验证请求、identity 前后稳定性、normal/材质权重、aggregate status、取消和绝对 deadline，失败不发布部分结果。
 - Phase 2 植被资产 codec：`decode/encode_vegetation_species`、`decode/encode_vegetation_layer`、`decode/encode_vegetation_chunk`。decoder 要求 caller 显式传入 `VegetationLoadBudget`，只在 strict shape、CRC、canonical ordering 与预算全部通过后一次性发布 DTO 和精确 `VegetationLoadCost`；encoder 同样使用临时 byte stream，失败清空输出。
@@ -55,7 +61,7 @@ status: active
 ## 约束与不变式
 
 - 所有路径以资产根目录（运行时为 `product/assets`）为相对基准；`AssetId` 在一次索引内唯一。
-- 常规异步 API 返回 `shared_future`，同一资产的并发请求共享同一份加载结果；加载状态经 `get_asset_load_state` 观察（Loading → Loaded/Failed）。candidate load 有意绕过共享 in-flight/cache/load diagnostics，必须由上层在接受后以 publication token CAS 提交；跨资产 token、目录刷新后的旧 token 或并发发布后的旧 token都必须拒绝。
+- 旧有 Mesh/Model/Material/AshAsset/Terrain 异步 API 返回 `shared_future`，同一资产的并发请求共享同一份加载结果；加载状态经 `get_asset_load_state` 观察（Loading → Loaded/Failed）。Terrain candidate load 有意绕过共享 in-flight/cache/load diagnostics，必须由上层在接受后以 publication token CAS 提交；跨资产 token、目录刷新后的旧 token或并发发布后的旧 token 都必须拒绝。植被 typed API 按六字段 budget 隔离 in-flight，且不向 AssetId 全局状态发布 `Loading`。
 - 加载产物为 const 数据，调用方不得修改；GPU 化由 render 侧另行处理。
 - `make_terrain_working_set` 必须共享 source snapshot 的不可变 Base R16 allocation；`publish_terrain_working_set` 也必须把同一 allocation 传给新 snapshot。可变 authoring 状态只存在于独立 edit-layer stack、dirty set 和新建的 dirty Component；最大 8193² Base 不得因打开 session 或 preview generation 被深拷贝。
 - `.ashterrain` 扩展名大小写不敏感。实际容器损坏会缓存为 `Failed`，需精确 invalidate 后重试；worker 不可用、关停拒绝、派发异常以及 container `Busy` / `SourceChanged` 都回到可重试 `Unloaded`，不得永久停在 `Loading`。candidate load 不写这些共享状态，而是在失败 snapshot 上设置 `retryable_failure`；Editor 不得把该结果当作持久损坏或替换当前 cache。
@@ -82,7 +88,7 @@ status: active
 - 依赖/工程变化时 fresh generate，并构建 Editor/Sandbox Debug 与 Release
 - 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；Sandbox ready 要求标准场景引用资产已加载）
 - Editor 打开默认场景操作一遍（AssetBrowser 浏览、拖放实例化）
-- 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
+- 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` / `Vegetation AssetDatabase*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
 
 ## 历史
 

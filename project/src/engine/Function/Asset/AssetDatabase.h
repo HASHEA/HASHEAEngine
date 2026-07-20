@@ -4,9 +4,13 @@
 #include "Base/hplatform.h"
 #include "Function/Asset/AssetData.h"
 #include "Function/Asset/TerrainData.h"
+#include "Function/Asset/VegetationChunk.h"
+#include "Function/Asset/VegetationLayer.h"
+#include "Function/Asset/VegetationSpecies.h"
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <iosfwd>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,7 +33,10 @@ namespace AshEngine
 		Material,
 		Text,
 		Binary,
-		Terrain
+		Terrain,
+		Species,
+		Layer,
+		Chunk
 	};
 
 	enum class AssetLoadState : uint8_t
@@ -64,6 +71,130 @@ namespace AshEngine
 	};
 	// editor end
 
+	enum class VegetationAssetLoadFailure : uint8_t
+	{
+		None = 0,
+		BudgetExceeded,
+		WrongType,
+		Missing,
+		Io,
+		InvalidData
+	};
+
+	template<typename T>
+	struct VegetationAssetLoadResult
+	{
+		AssetLoadState state = AssetLoadState::Unloaded;
+		VegetationAssetLoadFailure failure = VegetationAssetLoadFailure::None;
+		std::shared_ptr<const T> asset{};
+		VegetationLoadCost cost{};
+		std::string error{};
+	};
+
+	struct VegetationAssetCompletionPublicationInput
+	{
+		uint64_t captured_epoch = 0;
+		uint64_t current_epoch = 0;
+		uint64_t captured_request_token = 0;
+		uint64_t current_in_flight_token = 0;
+		AssetLoadState current_global_state = AssetLoadState::Unloaded;
+		VegetationAssetLoadFailure current_global_failure = VegetationAssetLoadFailure::None;
+		std::string current_global_error{};
+		VegetationAssetLoadFailure completion_failure = VegetationAssetLoadFailure::None;
+		std::string completion_error{};
+		bool completion_has_asset = false;
+	};
+
+	struct VegetationAssetCompletionPublicationDecision
+	{
+		bool erase_matching_in_flight = false;
+		bool publish_cache = false;
+		bool publish_global_state = false;
+		AssetLoadState global_state = AssetLoadState::Unloaded;
+		VegetationAssetLoadFailure global_failure = VegetationAssetLoadFailure::None;
+		std::string global_error{};
+	};
+
+	struct VegetationAssetInFlightAdmissionInput
+	{
+		bool has_existing = false;
+		AssetType requested_type = AssetType::Unknown;
+		AssetType existing_type = AssetType::Unknown;
+		AssetId requested_id = 0;
+		AssetId existing_id = 0;
+		uint64_t requested_epoch = 0;
+		uint64_t existing_epoch = 0;
+		VegetationLoadBudget requested_budget{};
+		VegetationLoadBudget existing_budget{};
+	};
+
+	enum class VegetationAssetInFlightAdmissionDecision : uint8_t
+	{
+		LaunchNew = 0,
+		JoinExisting
+	};
+
+	ASH_API VegetationAssetInFlightAdmissionDecision
+	decide_vegetation_asset_in_flight_admission(
+		const VegetationAssetInFlightAdmissionInput& input);
+
+	enum class VegetationCatalogScanOutcome : uint8_t
+	{
+		Succeeded = 0,
+		InvalidRoot,
+		Failed
+	};
+
+	struct VegetationCatalogPublicationInput
+	{
+		uint64_t captured_epoch = 0;
+		uint64_t current_epoch = 0;
+		std::filesystem::path captured_root{};
+		std::filesystem::path current_root{};
+		VegetationCatalogScanOutcome scan_outcome = VegetationCatalogScanOutcome::Failed;
+	};
+
+	enum class VegetationCatalogPublicationDecision : uint8_t
+	{
+		KeepLastKnownGood = 0,
+		PublishReplacement,
+		ResetInvalidRoot,
+		DiscardStale
+	};
+
+	ASH_API VegetationCatalogPublicationDecision decide_vegetation_catalog_publication(
+		const VegetationCatalogPublicationInput& input);
+
+	ASH_API VegetationAssetCompletionPublicationDecision
+	decide_vegetation_asset_completion_publication(
+		const VegetationAssetCompletionPublicationInput& input);
+
+	namespace Detail
+	{
+		ASH_API bool read_vegetation_bounded_stream_snapshot(
+			std::istream& input,
+			uint64_t max_file_bytes,
+			std::vector<uint8_t>& out_bytes,
+			std::string* out_error);
+	}
+
+	class ASH_API VegetationAssetResolverSnapshot
+	{
+	public:
+		class Impl;
+
+	public:
+		VegetationAssetResolverSnapshot() = default;
+		explicit VegetationAssetResolverSnapshot(std::shared_ptr<Impl> impl);
+		VegetationAssetLoadResult<VegetationSpecies> load_species_by_path(
+			const std::filesystem::path& path,
+			const VegetationLoadBudget& budget) const;
+
+	private:
+		std::shared_ptr<Impl> m_impl{};
+
+	};
+
 	class ASH_API AssetDatabase
 	{
 	public:
@@ -90,6 +221,8 @@ namespace AshEngine
 
 		bool load_text_by_id(AssetId id, std::string& out_text);
 		bool load_text_by_path(const std::filesystem::path& path, std::string& out_text);
+		bool load_text_by_id_bounded(AssetId id, uint64_t max_file_bytes, std::string& out_text);
+		bool load_text_by_path_bounded(const std::filesystem::path& path, uint64_t max_file_bytes, std::string& out_text);
 		bool load_binary_by_id(AssetId id, std::vector<uint8_t>& out_bytes);
 		bool load_binary_by_path(const std::filesystem::path& path, std::vector<uint8_t>& out_bytes);
 		bool load_mesh_by_id(AssetId id, std::shared_ptr<const Mesh>& out_mesh);
@@ -135,6 +268,35 @@ namespace AshEngine
 			TerrainSnapshotPublicationToken* p_result = nullptr);
 		// editor end
 		bool invalidate_terrain_snapshot(TerrainAssetId id);
+
+		VegetationAssetLoadResult<VegetationSpecies> load_vegetation_species_by_id(
+			AssetId id, const VegetationLoadBudget& budget);
+		VegetationAssetLoadResult<VegetationSpecies> load_vegetation_species_by_path(
+			const std::filesystem::path& path, const VegetationLoadBudget& budget);
+		std::shared_future<VegetationAssetLoadResult<VegetationSpecies>> load_vegetation_species_by_id_async(
+			AssetId id, VegetationLoadBudget budget);
+		std::shared_future<VegetationAssetLoadResult<VegetationSpecies>> load_vegetation_species_by_path_async(
+			const std::filesystem::path& path, VegetationLoadBudget budget);
+
+		VegetationAssetLoadResult<VegetationLayerSnapshot> load_vegetation_layer_by_id(
+			AssetId id, const VegetationLoadBudget& budget);
+		VegetationAssetLoadResult<VegetationLayerSnapshot> load_vegetation_layer_by_path(
+			const std::filesystem::path& path, const VegetationLoadBudget& budget);
+		std::shared_future<VegetationAssetLoadResult<VegetationLayerSnapshot>> load_vegetation_layer_by_id_async(
+			AssetId id, VegetationLoadBudget budget);
+		std::shared_future<VegetationAssetLoadResult<VegetationLayerSnapshot>> load_vegetation_layer_by_path_async(
+			const std::filesystem::path& path, VegetationLoadBudget budget);
+
+		VegetationAssetLoadResult<VegetationChunk> load_vegetation_chunk_by_id(
+			AssetId id, const VegetationLoadBudget& budget);
+		VegetationAssetLoadResult<VegetationChunk> load_vegetation_chunk_by_path(
+			const std::filesystem::path& path, const VegetationLoadBudget& budget);
+		std::shared_future<VegetationAssetLoadResult<VegetationChunk>> load_vegetation_chunk_by_id_async(
+			AssetId id, VegetationLoadBudget budget);
+		std::shared_future<VegetationAssetLoadResult<VegetationChunk>> load_vegetation_chunk_by_path_async(
+			const std::filesystem::path& path, VegetationLoadBudget budget);
+
+		std::shared_ptr<const VegetationAssetResolverSnapshot> capture_vegetation_resolver_snapshot() const;
 
 	private:
 		std::shared_ptr<Impl> m_impl{};

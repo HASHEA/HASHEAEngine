@@ -83,7 +83,28 @@ namespace AshEditor
 
 	namespace AssetBrowserSupport
 	{
-		const std::array<AssetTypeFilterOption, 11>& GetAssetTypeFilters();
+		inline constexpr std::array<AssetTypeFilterOption, 14> kAssetTypeFilters{ {
+			{ "All", AshEngine::AssetType::Unknown, true },
+			{ "Folder", AshEngine::AssetType::Directory, false },
+			{ "Scene", AshEngine::AssetType::Scene, false },
+			{ "Shader", AshEngine::AssetType::Shader, false },
+			{ "Texture", AshEngine::AssetType::Texture, false },
+			{ "Mesh", AshEngine::AssetType::Mesh, false },
+			{ "Model", AshEngine::AssetType::Model, false },
+			{ "Prefab", AshEngine::AssetType::Prefab, false },
+			{ "Material", AshEngine::AssetType::Material, false },
+			{ "Text", AshEngine::AssetType::Text, false },
+			{ "Binary", AshEngine::AssetType::Binary, false },
+			{ "Species", AshEngine::AssetType::Species, false },
+			{ "Vegetation Layer", AshEngine::AssetType::Layer, false },
+			{ "Vegetation Chunk", AshEngine::AssetType::Chunk, false },
+		} };
+
+		inline constexpr const std::array<AssetTypeFilterOption, 14>& GetAssetTypeFilters()
+		{
+			return kAssetTypeFilters;
+		}
+
 		AssetBrowserFrameData BuildFrameData(
 			const AssetBrowserPanelDeps& refDeps,
 			AssetBrowserPanelState& refState);
@@ -124,7 +145,21 @@ namespace AshEditor
 			std::string_view svLabel);
 		void DrawItemFeedback(AshEngine::UIContext& refUi, bool bSelected, float fRounding = 4.0f);
 		EditorIconId GetAssetIconId(const AshEngine::AssetInfo& refAsset);
-		bool ShouldUseCompactAssetTooltip(AshEngine::AssetType eType);
+		inline constexpr bool ShouldUseCompactAssetTooltip(const AshEngine::AssetType eType)
+		{
+			switch (eType)
+			{
+			case AshEngine::AssetType::Directory:
+			case AshEngine::AssetType::Text:
+			case AshEngine::AssetType::Binary:
+			case AshEngine::AssetType::Shader:
+			case AshEngine::AssetType::Layer:
+			case AshEngine::AssetType::Chunk:
+				return true;
+			default:
+				return false;
+			}
+		}
 
 		EditorTreeWidgetStyle MakeTreeStyle(AshEngine::UIContext& refUi);
 		bool IsSameOrAncestorPath(
