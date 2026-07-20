@@ -3,6 +3,7 @@
 #include "Core/IEditorCommandExecutor.h"
 #include "Function/Asset/TerrainData.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -11,9 +12,11 @@
 namespace AshEditor
 {
 	class EditorCommand;
+	struct EditorCommandDocumentKey;
 	struct EditorCommandSelection;
 	struct EditorContext;
 	class EditorEventBus;
+	enum class EditorCommandRecordResult : uint8_t;
 
 	class UndoRedoService
 	{
@@ -29,13 +32,21 @@ namespace AshEditor
 		// Returns true only if the command execute path succeeded and state was recorded.
 		bool Execute(std::unique_ptr<EditorCommand> upCommand, EditorContext& refContext);
 
-		// Records a command whose mutation has already completed. This path never executes the command.
-		// If history ownership cannot be secured, the result distinguishes a completed rollback
-		// from a rollback failure so callers never publish an untracked mutation. Already-executed
-		// commands cannot join an open transaction and are synchronously rolled back instead.
-		EditorCommandRecordResult RecordExecuted(
+		// Records a command whose state mutation has already succeeded without executing it again.
+		// If recording is unavailable, the command is synchronously undone and the result reports
+		// whether that rollback succeeded. Already-executed commands are always recorded as
+		// standalone entries: this path never invokes user-defined merge logic after the external
+		// mutation has committed.
+		EditorCommandRecordResult RecordExecutedCommand(
 			std::unique_ptr<EditorCommand> upCommand,
 			EditorContext& refContext);
+
+		bool RemoveCommandsForTerrainAsset(
+			AshEngine::TerrainAssetId assetId) noexcept;
+
+		// Removes complete history entries that belong exclusively to one document. Mixed
+		// composites and unscoped commands are retained. Returns zero while a transaction is open.
+		std::size_t RemoveCommandsForDocument(const EditorCommandDocumentKey& refKey);
 
 		// Undoes the last committed command.
 		// Returns false if there is an open transaction, history is empty, or undo failed (history is preserved).
@@ -62,8 +73,6 @@ namespace AshEditor
 
 		// Clears undo/redo history and closes any open transaction.
 		void Clear();
-		// Removes stale commands for one reloaded Terrain while preserving all unrelated history.
-		bool RemoveCommandsForTerrainAsset(AshEngine::TerrainAssetId assetId) noexcept;
 
 		// Marks the current history state as "saved" (used to compute dirty state).
 		void MarkSaved();

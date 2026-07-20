@@ -2,12 +2,14 @@
 
 #include "Function/Asset/TerrainData.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
 namespace AshEditor
 {
 	class EditorCommand;
+	struct EditorCommandDocumentKey;
 
 	enum class EditorCommandRecordResult : uint8_t
 	{
@@ -30,6 +32,8 @@ namespace AshEditor
 			(void)assetId;
 			return true;
 		}
+		virtual std::size_t RemoveCommandsForDocument(
+			const EditorCommandDocumentKey& refKey) = 0;
 		virtual bool BeginCommandTransaction(const char* pLabel)
 		{
 			(void)pLabel;

@@ -91,6 +91,8 @@ namespace AshEditor
 		EditorCommandRecordResult RecordExecutedCommand(
 			std::unique_ptr<EditorCommand> upCommand) override;
 		bool RemoveCommandsForTerrainAsset(AshEngine::TerrainAssetId assetId) noexcept override;
+		std::size_t RemoveCommandsForDocument(
+			const EditorCommandDocumentKey& refKey) override;
 		bool BeginCommandTransaction(const char* pLabel) override;
 		bool CommitCommandTransaction() override;
 		void CancelCommandTransaction() override;

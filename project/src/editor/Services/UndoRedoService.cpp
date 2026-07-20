@@ -9,6 +9,7 @@
 #include "Services/SelectionService.h"
 
 #include <algorithm>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -34,7 +35,7 @@ namespace AshEditor
 			: ExecuteStandalone(std::move(upCommand), refContext);
 	}
 
-	EditorCommandRecordResult UndoRedoService::RecordExecuted(
+	EditorCommandRecordResult UndoRedoService::RecordExecutedCommand(
 		std::unique_ptr<EditorCommand> upCommand,
 		EditorContext& refContext)
 	{
@@ -43,69 +44,205 @@ namespace AshEditor
 			return EditorCommandRecordResult::RollbackFailed;
 		}
 
-		const auto rollBackAlreadyExecuted = [&]()
+		auto rollback = [&refContext, this](std::unique_ptr<EditorCommand>& refCommand)
 		{
-			bool bRolledBack = false;
 			try
 			{
-				bRolledBack = upCommand && upCommand->Undo(refContext);
-				if (!bRolledBack)
+				if (refCommand && refCommand->Undo(refContext))
 				{
-					HLogError("Failed to roll back an already-executed command after history recording failed.");
+					ApplySelection(refContext, refCommand->GetSelectionAfterUndo());
+					return EditorCommandRecordResult::RolledBack;
 				}
 			}
 			catch (...)
 			{
-				HLogError("Already-executed command rollback raised an exception after history recording failed.");
 			}
-			return bRolledBack
-				? EditorCommandRecordResult::RolledBack
-				: EditorCommandRecordResult::RollbackFailed;
+			return EditorCommandRecordResult::RollbackFailed;
 		};
 
-		// An already-executed mutation cannot safely enter a deferred transaction: a later
-		// commit/cancel failure would no longer have a synchronous tri-state result through
-		// which its owner could quarantine the mutation. Compensate while ownership is local.
 		if (_upPendingTransaction)
 		{
-			HLogWarning("Already-executed commands cannot join an open Editor transaction; rolling back.");
-			return rollBackAlreadyExecuted();
+			return rollback(upCommand);
 		}
 
+		EditorCommandSelection selection{};
 		try
 		{
-			const EditorCommandSelection selection = upCommand->GetSelectionAfterExecute();
 			_vecUndoStack.reserve(_vecUndoStack.size() + 1u);
-			const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
-			_vecUndoStack.push_back(HistoryEntry{ std::move(upCommand), uNewHistoryStateId });
+			selection = upCommand->GetSelectionAfterExecute();
+		}
+		catch (...)
+		{
+			return rollback(upCommand);
+		}
+
+		_vecRedoStack.clear();
+		const uint64_t uNewHistoryStateId = AllocateHistoryStateId();
+		// The mutation already happened outside this service. Keep this commit path
+		// non-virtual after reserve so a user-defined TryMerge cannot strand an
+		// applied mutation without a history entry.
+		_vecUndoStack.push_back(HistoryEntry{
+			std::move(upCommand),
+			uNewHistoryStateId
+		});
+		_uCurrentHistoryStateId = uNewHistoryStateId;
+
+		auto observe_committed_state = [](auto&& fnObserve)
+		{
 			try
 			{
-				ApplySelection(refContext, selection);
+				fnObserve();
 			}
 			catch (...)
 			{
-				upCommand = std::move(_vecUndoStack.back().upCommand);
-				_vecUndoStack.pop_back();
-				throw;
+				// Selection and synchronous UI observers run after the history entry
+				// is durable. Their failures must not escape the tri-state API or undo
+				// an already committed domain mutation.
 			}
-			_vecRedoStack.clear();
-			_uCurrentHistoryStateId = uNewHistoryStateId;
-		}
-		catch (...)
+		};
+		observe_committed_state([&]() { ApplySelection(refContext, selection); });
+		observe_committed_state([&]() { NotifyHistoryChanged(); });
+		observe_committed_state([&]() { NotifyDocumentDirtyStateChanged(); });
+		return EditorCommandRecordResult::Recorded;
+	}
+
+	std::size_t UndoRedoService::RemoveCommandsForDocument(
+		const EditorCommandDocumentKey& refKey)
+	{
+		if (_upPendingTransaction)
 		{
-			return rollBackAlreadyExecuted();
+			return 0u;
 		}
 
-		try
+		std::vector<bool> vecRemoveUndo(_vecUndoStack.size(), false);
+		std::vector<bool> vecRemoveRedo(_vecRedoStack.size(), false);
+		std::size_t uRemovedUndoCount = 0;
+		std::size_t uRemovedRedoCount = 0;
+
+		for (std::size_t uIndex = 0; uIndex < _vecUndoStack.size(); ++uIndex)
 		{
-			NotifyHistoryChanged();
-			NotifyDocumentDirtyStateChanged();
+			const HistoryEntry& refEntry = _vecUndoStack[uIndex];
+			const std::optional<EditorCommandDocumentKey> key =
+				refEntry.upCommand ? refEntry.upCommand->GetDocumentKey() : std::nullopt;
+			if (key.has_value() && *key == refKey)
+			{
+				vecRemoveUndo[uIndex] = true;
+				++uRemovedUndoCount;
+			}
 		}
-		catch (...)
+
+		for (std::size_t uIndex = 0; uIndex < _vecRedoStack.size(); ++uIndex)
 		{
-			HLogWarning("Already-executed command was recorded, but a history notification failed.");
+			const HistoryEntry& refEntry = _vecRedoStack[uIndex];
+			const std::optional<EditorCommandDocumentKey> key =
+				refEntry.upCommand ? refEntry.upCommand->GetDocumentKey() : std::nullopt;
+			if (key.has_value() && *key == refKey)
+			{
+				vecRemoveRedo[uIndex] = true;
+				++uRemovedRedoCount;
+			}
 		}
-		return EditorCommandRecordResult::Recorded;
+
+		const std::size_t uRemovedCount = uRemovedUndoCount + uRemovedRedoCount;
+		if (uRemovedCount == 0u)
+		{
+			return 0u;
+		}
+
+		if (_vecUndoStack.size() >
+			std::numeric_limits<std::size_t>::max() - _vecRedoStack.size())
+		{
+			return 0u;
+		}
+		const std::size_t uTimelineEntryCount =
+			_vecUndoStack.size() + _vecRedoStack.size();
+		if (uRemovedCount > uTimelineEntryCount)
+		{
+			return 0u;
+		}
+		const std::size_t uSurvivorCount = uTimelineEntryCount - uRemovedCount;
+		// Reserve IDs for every survivor, an optional unreachable-saved sentinel,
+		// the next state ID, and the increment performed by its first allocation.
+		if (static_cast<uintmax_t>(uSurvivorCount) >
+			std::numeric_limits<uint64_t>::max() - uint64_t{ 3 })
+		{
+			return 0u;
+		}
+
+		std::vector<uint64_t> vecUndoStateIds(_vecUndoStack.size(), 0u);
+		std::vector<uint64_t> vecRedoStateIds(_vecRedoStack.size(), 0u);
+		uint64_t uNextRemappedStateId = 1u;
+		bool bSavedStateFound = _uSavedHistoryStateId == 0u;
+		uint64_t uRemappedSavedStateId = 0u;
+
+		auto map_entry = [this, &bSavedStateFound, &uRemappedSavedStateId, &uNextRemappedStateId](
+			const HistoryEntry& refEntry,
+			const bool bRemove,
+			uint64_t& refOutStateId)
+		{
+			if (!bRemove)
+			{
+				refOutStateId = uNextRemappedStateId++;
+			}
+			if (refEntry.uStateId == _uSavedHistoryStateId)
+			{
+				bSavedStateFound = true;
+				uRemappedSavedStateId = uNextRemappedStateId - 1u;
+			}
+		};
+
+		for (std::size_t uIndex = 0; uIndex < _vecUndoStack.size(); ++uIndex)
+		{
+			map_entry(
+				_vecUndoStack[uIndex],
+				vecRemoveUndo[uIndex],
+				vecUndoStateIds[uIndex]);
+		}
+		for (std::size_t uOffset = _vecRedoStack.size(); uOffset > 0u; --uOffset)
+		{
+			const std::size_t uIndex = uOffset - 1u;
+			map_entry(
+				_vecRedoStack[uIndex],
+				vecRemoveRedo[uIndex],
+				vecRedoStateIds[uIndex]);
+		}
+
+		if (!bSavedStateFound)
+		{
+			uRemappedSavedStateId = uNextRemappedStateId++;
+		}
+
+		std::vector<HistoryEntry> vecNewUndoStack{};
+		std::vector<HistoryEntry> vecNewRedoStack{};
+		vecNewUndoStack.reserve(_vecUndoStack.size() - uRemovedUndoCount);
+		vecNewRedoStack.reserve(_vecRedoStack.size() - uRemovedRedoCount);
+
+		for (std::size_t uIndex = 0; uIndex < _vecUndoStack.size(); ++uIndex)
+		{
+			if (!vecRemoveUndo[uIndex])
+			{
+				_vecUndoStack[uIndex].uStateId = vecUndoStateIds[uIndex];
+				vecNewUndoStack.push_back(std::move(_vecUndoStack[uIndex]));
+			}
+		}
+		for (std::size_t uIndex = 0; uIndex < _vecRedoStack.size(); ++uIndex)
+		{
+			if (!vecRemoveRedo[uIndex])
+			{
+				_vecRedoStack[uIndex].uStateId = vecRedoStateIds[uIndex];
+				vecNewRedoStack.push_back(std::move(_vecRedoStack[uIndex]));
+			}
+		}
+
+		_vecUndoStack.swap(vecNewUndoStack);
+		_vecRedoStack.swap(vecNewRedoStack);
+		_uCurrentHistoryStateId =
+			_vecUndoStack.empty() ? 0u : _vecUndoStack.back().uStateId;
+		_uSavedHistoryStateId = uRemappedSavedStateId;
+		_uNextHistoryStateId = uNextRemappedStateId;
+		NotifyHistoryChanged();
+		NotifyDocumentDirtyStateChanged();
+		return uRemovedCount;
 	}
 
 	bool UndoRedoService::Undo(EditorContext& refContext)

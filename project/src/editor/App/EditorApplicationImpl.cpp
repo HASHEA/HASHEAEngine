@@ -458,7 +458,8 @@ namespace AshEditor
 	EditorCommandRecordResult EditorApplicationImpl::RecordExecutedCommand(
 		std::unique_ptr<EditorCommand> upCommand)
 	{
-		return _upUndoRedoService->RecordExecuted(std::move(upCommand), _editorContext);
+		return _upUndoRedoService->RecordExecutedCommand(
+			std::move(upCommand), _editorContext);
 	}
 
 	bool EditorApplicationImpl::RemoveCommandsForTerrainAsset(
@@ -466,6 +467,12 @@ namespace AshEditor
 	{
 		return _upUndoRedoService &&
 			_upUndoRedoService->RemoveCommandsForTerrainAsset(assetId);
+	}
+
+	std::size_t EditorApplicationImpl::RemoveCommandsForDocument(
+		const EditorCommandDocumentKey& refKey)
+	{
+		return _upUndoRedoService->RemoveCommandsForDocument(refKey);
 	}
 
 	bool EditorApplicationImpl::BeginCommandTransaction(const char* pLabel)

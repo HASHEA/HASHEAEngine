@@ -1087,8 +1087,9 @@ git commit -m "feat(vegetation): add deterministic brush patches"
 - Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
 - Modify: `project/src/tests/premake5.lua`
 - Create: `project/src/tests/Editor/vegetation_undo_redo_tests.cpp`
+- Modify: `docs/specs/modules/editor.md`
 
-- [ ] **Step 1: Write history RED cases**
+- [x] **Step 1: Write history RED cases**
 
 The test file defines this complete command helper:
 
@@ -1148,7 +1149,7 @@ TEST_CASE("Vegetation already-executed command rejection rolls back synchronousl
 
 Add cases for null commands, rollback failure returning `RollbackFailed`, redo clearing, selection application, no merge across saved checkpoint, homogeneous/mixed Composite keys, removal from undo and redo, removal of only one document, current/saved/next state-ID remapping, dirty-state preservation, and `VegetationStrokeCommand` apply/revert without copying a whole layer. The Vegetation command test starts from an already-applied patch, runs `Undo -> Redo -> Undo -> Redo`, proves generations increase monotonically on all four successful directions while `CanonicalAuthoringPayloadBytes` alternates exactly between before/after payloads, and checks the command's expected-generation cursor updates after each success. A second command applies an intervening working-set mutation and proves stale Undo/Redo returns false without moving history or changing payload/generation.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Keep the two snapshot/serialization sources added by Task 4 and add these additional Editor sources to `project/src/tests/premake5.lua`:
 
@@ -1171,7 +1172,7 @@ RunTests.bat Debug --test-case="Vegetation *history*"
 
 Expected RED: missing document key, tri-state record API, selective removal, and Vegetation command.
 
-- [ ] **Step 3: Implement the generic history contract**
+- [x] **Step 3: Implement the generic history contract**
 
 ```cpp
 struct EditorCommandDocumentKey
@@ -1204,9 +1205,9 @@ size_t UndoRedoService::RemoveCommandsForDocument(
     const EditorCommandDocumentKey& key);
 ```
 
-Add matching `IEditorCommandExecutor` methods and forward them through `EditorApplicationImpl`. `RecordExecutedCommand` never calls Execute, rejects an open transaction, and attempts Undo before returning either rollback state. `RemoveCommandsForDocument` removes matching undo/redo entries and remaps state IDs without changing surviving semantic order. `CompositeCommand::GetDocumentKey` returns a key only when every child has the same key. `VegetationStrokeCommand` owns one immutable `VegetationLayerPatch`, a weak working-set target, and a mutable `expected_current_generation` initialized from the generation produced by the already-applied edit. Execute applies for redo and Undo reverts using that cursor; after success it replaces the cursor with `working_set.content_generation()`, while failure leaves the cursor and history entry unchanged. Thus repeated cycles work and any intervening mutation fails closed.
+Add matching `IEditorCommandExecutor` methods and forward them through `EditorApplicationImpl`. `RecordExecutedCommand` never calls Execute or `TryMerge`: an externally committed mutation is recorded as a standalone entry so a user-defined merge cannot strand it without undo history. It rejects an open transaction and attempts Undo before returning either rollback state. `RemoveCommandsForDocument` removes matching undo/redo entries and remaps state IDs without changing surviving semantic order. `CompositeCommand::GetDocumentKey` returns a key only when every child has the same key. `VegetationStrokeCommand` owns one immutable `VegetationLayerPatch`, a weak working-set target, and a mutable `expected_current_generation` initialized from the generation produced by the already-applied edit. Execute applies for redo and Undo reverts using that cursor; after success it replaces the cursor with `working_set.content_generation()`, while failure leaves the cursor and history entry unchanged. Thus repeated cycles work and any intervening mutation fails closed.
 
-- [ ] **Step 4: Run GREEN and Editor command regression**
+- [x] **Step 4: Run GREEN and Editor command regression**
 
 ```bat
 generate_vs2022.bat
@@ -1220,14 +1221,23 @@ RunArchGate.bat
 git diff --check -- project/src/editor/Core/EditorCommand.h project/src/editor/Core/EditorCommand.cpp project/src/editor/Core/IEditorCommandExecutor.h project/src/editor/Core/VegetationCommands.h project/src/editor/Core/VegetationCommands.cpp project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/premake5.lua project/src/tests/Editor/vegetation_undo_redo_tests.cpp
 ```
 
-- [ ] **Step 5: Review and selectively commit**
+- [x] **Step 5: Review and selectively commit**
 
 Review 1 checks exactly-once execution, synchronous rollback, composite key semantics, and state-ID remapping. Review 2 checks old commands default to no key, selection behavior remains stable, and test-premake additions are minimal.
 
 ```bat
-git add -- project/src/editor/Core/EditorCommand.h project/src/editor/Core/EditorCommand.cpp project/src/editor/Core/IEditorCommandExecutor.h project/src/editor/Core/VegetationCommands.h project/src/editor/Core/VegetationCommands.cpp project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/premake5.lua project/src/tests/Editor/vegetation_undo_redo_tests.cpp
+git add -- project/src/editor/Core/EditorCommand.h project/src/editor/Core/EditorCommand.cpp project/src/editor/Core/IEditorCommandExecutor.h project/src/editor/Core/VegetationCommands.h project/src/editor/Core/VegetationCommands.cpp project/src/editor/Services/UndoRedoService.h project/src/editor/Services/UndoRedoService.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/premake5.lua project/src/tests/Editor/vegetation_undo_redo_tests.cpp docs/specs/modules/editor.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md
 git commit -m "feat(editor): add document-scoped command history"
 ```
+
+**Result:** RED first failed on the missing document-key/tri-state/selective-removal and
+vegetation-command APIs. Final focused Debug/Release history suites pass 3/3 cases and
+102/102 assertions; final full Debug/Release suites pass 279/279 cases and 6884/6884
+assertions. Editor Debug build, ArchGate, AIDevDoctor, and diff-check pass. Two independent
+read-only reviews report P0/P1/P2 = 0/CLEAN. The completed contract records already-executed
+mutations exactly once as standalone entries, rolls back synchronously on rejection, preserves
+selection/dirty checkpoints through document removal, and fails closed on stale or expired
+Vegetation patch targets.
 
 ## Task 7: Add checked Layer stage, commit, copy, and reload storage
 

@@ -47,6 +47,8 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Services/TerrainBrushOverlayRenderer.cpp",
 		"%{wks.location}/project/src/editor/Services/TerrainEditorService.cpp",
 		"%{wks.location}/project/src/editor/Core/SceneSnapshotUtils.cpp",
+		"%{wks.location}/project/src/editor/Core/EditorEventBus.cpp",
+		"%{wks.location}/project/src/editor/Core/VegetationCommands.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorComponentComparison.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorPathUtils.cpp",
 		"%{wks.location}/project/src/editor/Core/EntityCommands.cpp",

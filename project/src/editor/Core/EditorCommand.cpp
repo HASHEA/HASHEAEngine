@@ -6,6 +6,21 @@
 
 namespace AshEditor
 {
+	bool EditorCommandDocumentKey::operator==(const EditorCommandDocumentKey& refOther) const
+	{
+		return strDomain == refOther.strDomain && strIdentity == refOther.strIdentity;
+	}
+
+	bool EditorCommandDocumentKey::operator!=(const EditorCommandDocumentKey& refOther) const
+	{
+		return !(*this == refOther);
+	}
+
+	std::optional<EditorCommandDocumentKey> EditorCommand::GetDocumentKey() const
+	{
+		return std::nullopt;
+	}
+
 	CompositeCommand::CompositeCommand(std::string strLabel)
 		: _strLabel(std::move(strLabel))
 	{
@@ -83,6 +98,30 @@ namespace AshEditor
 			++uUndoneCount;
 		}
 		return true;
+	}
+
+	std::optional<EditorCommandDocumentKey> CompositeCommand::GetDocumentKey() const
+	{
+		if (_vecCommands.empty() || !_vecCommands.front())
+		{
+			return std::nullopt;
+		}
+
+		const std::optional<EditorCommandDocumentKey> key =
+			_vecCommands.front()->GetDocumentKey();
+		if (!key.has_value())
+		{
+			return std::nullopt;
+		}
+
+		for (size_t uIndex = 1; uIndex < _vecCommands.size(); ++uIndex)
+		{
+			if (!_vecCommands[uIndex] || _vecCommands[uIndex]->GetDocumentKey() != key)
+			{
+				return std::nullopt;
+			}
+		}
+		return key;
 	}
 
 	EditorCommandSelection CompositeCommand::GetSelectionAfterExecute() const

@@ -5,12 +5,29 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace AshEditor
 {
 	struct EditorContext;
+
+	struct EditorCommandDocumentKey
+	{
+		std::string strDomain{};
+		std::string strIdentity{};
+
+		bool operator==(const EditorCommandDocumentKey& refOther) const;
+		bool operator!=(const EditorCommandDocumentKey& refOther) const;
+	};
+
+	enum class EditorCommandRecordResult : uint8_t
+	{
+		Recorded = 0,
+		RolledBack,
+		RollbackFailed
+	};
 
 	enum class EditorCommandSelectionMode : uint8_t
 	{
@@ -75,6 +92,7 @@ namespace AshEditor
 		{
 			return 0u;
 		}
+		virtual std::optional<EditorCommandDocumentKey> GetDocumentKey() const;
 		virtual bool TryMerge(const EditorCommand& refSubsequentCommand)
 		{
 			(void)refSubsequentCommand;
@@ -103,6 +121,7 @@ namespace AshEditor
 		const char* GetLabel() const override;
 		bool Execute(EditorContext& refContext) override;
 		bool Undo(EditorContext& refContext) override;
+		std::optional<EditorCommandDocumentKey> GetDocumentKey() const override;
 		EditorCommandSelection GetSelectionAfterExecute() const override;
 		EditorCommandSelection GetSelectionAfterUndo() const override;
 
