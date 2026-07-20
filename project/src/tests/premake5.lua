@@ -32,6 +32,7 @@ project "Tests"
 		"**.lua",
 		"%{wks.location}/project/src/editor/Services/EditorGizmoMath.cpp",
 		"%{wks.location}/project/src/editor/Services/EditorGizmoViewport.cpp",
+		"%{wks.location}/project/src/editor/Services/EditorViewportCameraMath.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxFreeCameraController.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxStandardScene.cpp",
 	}
