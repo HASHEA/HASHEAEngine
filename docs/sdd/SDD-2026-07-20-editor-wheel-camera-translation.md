@@ -2,7 +2,7 @@
 
 ## Status
 
-Review
+Done
 
 ## Goal
 
@@ -48,3 +48,7 @@ Review
 ## Risk / rollback
 
 风险集中在滚轮手感和 Orbit 中心连续性。通过保持相机位置与 orbit target 的相对向量不变，避免滚轮后 Orbit 跳变。若回归，可回退滚轮平移分支及对应测试/规格，不涉及序列化或资产迁移。
+
+## Result
+
+实现将滚轮改为 camera position 与 orbit target 的同步固定步长平移，并统一对滚轮、Pan、Dolly 应用非持久化的 Shift ×2 倍率。长期行为契约已回写 `docs/specs/modules/editor.md`。
