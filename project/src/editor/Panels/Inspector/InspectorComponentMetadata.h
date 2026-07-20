@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Function/Asset/AssetDatabase.h"
 #include "Function/Scene/SceneComponents.h"
 #include "Widgets/InspectorAssetPathWidgets.h"
 #include "Widgets/InspectorPropertyWidgets.h"
@@ -13,7 +14,6 @@
 
 namespace AshEngine
 {
-	enum class AssetType : uint8_t;
 	class UIContext;
 }
 
@@ -60,8 +60,31 @@ namespace AshEditor
 		std::string strValidRange = {},
 		std::string strBehavior = {});
 	InspectorFieldSpec MakeInspectorSceneFieldSpec(const InspectorSceneFieldDesc& refDesc);
-	std::vector<AshEngine::AssetType> MakeInspectorAssetTypesForProperty(
-		const AshEngine::ScenePropertyDesc* pPropertyDesc);
+	inline std::vector<AshEngine::AssetType> MakeInspectorAssetTypesForProperty(
+		const AshEngine::ScenePropertyDesc* pPropertyDesc)
+	{
+		if (!pPropertyDesc)
+		{
+			return {};
+		}
+
+		switch (pPropertyDesc->asset_ref_kind)
+		{
+		case AshEngine::ScenePropertyAssetRefKind::Mesh:
+			return { AshEngine::AssetType::Mesh, AshEngine::AssetType::Model };
+		case AshEngine::ScenePropertyAssetRefKind::Material:
+			return { AshEngine::AssetType::Material };
+		case AshEngine::ScenePropertyAssetRefKind::Texture:
+			return { AshEngine::AssetType::Texture };
+		case AshEngine::ScenePropertyAssetRefKind::IBL:
+			return { AshEngine::AssetType::Texture, AshEngine::AssetType::Prefab };
+		case AshEngine::ScenePropertyAssetRefKind::VegetationLayer:
+			return { AshEngine::AssetType::Layer };
+		case AshEngine::ScenePropertyAssetRefKind::None:
+		default:
+			return {};
+		}
+	}
 	InspectorAssetPathFieldDesc MakeInspectorSceneAssetPathFieldDesc(
 		const InspectorSceneFieldDesc& refDesc,
 		const char* pLabel,

@@ -1,5 +1,6 @@
 #include "Core/AssetPresentationUtils.h"
 #include "Panels/AssetBrowser/AssetBrowserSupport.h"
+#include "Panels/Inspector/InspectorComponentMetadata.h"
 #include "Services/AssetDatabaseService.h"
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -80,4 +81,15 @@ TEST_CASE("Vegetation editor presentation keeps payload and instantiation polici
 TEST_CASE("Vegetation editor text preview has a named one MiB bounded-read cap")
 {
 	CHECK(AshEditor::kAssetTextPreviewMaxFileBytes == 1024ull * 1024ull);
+}
+
+TEST_CASE("Vegetation Inspector asset path accepts only vegetation layer assets")
+{
+	AshEngine::ScenePropertyDesc property{};
+	property.asset_ref_kind = AshEngine::ScenePropertyAssetRefKind::VegetationLayer;
+
+	const std::vector<AshEngine::AssetType> allowed_types =
+		AshEditor::MakeInspectorAssetTypesForProperty(&property);
+	REQUIRE(allowed_types.size() == 1u);
+	CHECK(allowed_types.front() == AshEngine::AssetType::Layer);
 }

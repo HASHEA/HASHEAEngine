@@ -1,6 +1,5 @@
 #include "Panels/Inspector/InspectorComponentMetadata.h"
 
-#include "Function/Asset/AssetDatabase.h"
 #include "Function/Scene/Scene.h"
 
 #include <algorithm>
@@ -149,30 +148,6 @@ namespace AshEditor
 			options.vecValues.push_back(refValueDesc.value);
 		}
 		return options;
-	}
-
-	std::vector<AshEngine::AssetType> MakeInspectorAssetTypesForProperty(
-		const AshEngine::ScenePropertyDesc* pPropertyDesc)
-	{
-		if (!pPropertyDesc)
-		{
-			return {};
-		}
-
-		switch (pPropertyDesc->asset_ref_kind)
-		{
-		case AshEngine::ScenePropertyAssetRefKind::Mesh:
-			return { AshEngine::AssetType::Mesh, AshEngine::AssetType::Model };
-		case AshEngine::ScenePropertyAssetRefKind::Material:
-			return { AshEngine::AssetType::Material };
-		case AshEngine::ScenePropertyAssetRefKind::Texture:
-			return { AshEngine::AssetType::Texture };
-		case AshEngine::ScenePropertyAssetRefKind::IBL:
-			return { AshEngine::AssetType::Texture, AshEngine::AssetType::Prefab };
-		case AshEngine::ScenePropertyAssetRefKind::None:
-		default:
-			return {};
-		}
 	}
 
 	InspectorAssetPathFieldDesc MakeInspectorSceneAssetPathFieldDesc(
