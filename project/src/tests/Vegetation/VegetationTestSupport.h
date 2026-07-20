@@ -232,6 +232,21 @@ namespace VegetationTest
 		return bytes;
 	}
 
+	inline std::vector<uint8_t> CanonicalAuthoringPayloadBytes(
+		const AshEngine::VegetationLayerSnapshot& snapshot)
+	{
+		AshEngine::VegetationLayerSnapshot canonical = snapshot;
+		canonical.content_generation = 1;
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		if (!AshEngine::encode_vegetation_layer(canonical, bytes, &error) || bytes.size() < 80)
+		{
+			throw std::runtime_error(
+				"Vegetation authoring payload fixture must be a canonical ASVL stream: " + error);
+		}
+		return std::vector<uint8_t>(bytes.begin() + 80, bytes.end());
+	}
+
 	inline AshEngine::VegetationChunk MinimalChunk()
 	{
 		AshEngine::VegetationChunk chunk{};

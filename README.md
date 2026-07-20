@@ -10,7 +10,7 @@ HASHEAEngine（AshEngine）是一个以现代实时渲染和引擎架构实验�
 - Vulkan / DX12 双后端 RHI，HLSL 经 DXC 编译（SPIR-V / DXIL），shader 反射驱动绑定布局
 - RenderGraph 声明式帧编排：texture 与 `StorageBuffer` 一等资源、transient 生命周期、barrier 与 binding 校验；Deferred 主链路覆盖 GBuffer、AO、CSM 阴影、IBL、体积光、Bloom、TAA、tone-map
 - GPU-driven Phase 1 通用底座：显式 indexed/non-indexed indirect、generation-safe instance page 与双后端 compute → indexed indirect 全链自测；生产 grass/tree、流送和 GPU culling 尚未接入
-- 植被 authoring 基础：严格 `.AshVegetation*` 资产 codec、immutable surface capture 与 Scene v7 reference-only `VegetationComponent`；GPU 草/树、分块流送、GPU culling/HLOD 仍在后续阶段接入
+- 植被 authoring 基础：严格 `.AshVegetation*` 资产 codec、immutable surface capture、Scene v7 reference-only `VegetationComponent`，以及确定性稀疏整数笔刷与原子可逆 patch；GPU 草/树、分块流送、GPU culling/HLOD 仍在后续阶段接入
 - Scene-driven 静态网格渲染：ECS-style Scene → 不可变可见帧 → 渲染线程消费
 - Terrain 渲染核心：8193² 高度场、Component LOD、权重 atlas、deferred GBuffer / 方向光阴影与 readiness 驱动抓帧；有限正缩放由 Scene bounds、Editor 动态 reverse-Z 取景、跨 LOD 平滑法线和 receiver-plane PCF 共同保持远近表面稳定
 - Terrain 编辑会话（Phase 3）：Hierarchy 单选 Terrain 实体即可进入 Terrain Mode；无编辑层资产在第一次有效落笔时自动创建通用编辑层。Raise/Lower/Smooth/Flatten/Noise/Paint/Erase 共用非破坏编辑层，拖动期间按 80 ms wall-clock 节奏发布增量预览，完整拖动仍只产生一个 undo/redo 命令；Manage 支持 generation-aware 异步 Save、Save Copy As、clean-only Optimize、Reload/外部冲突处理，以及 non-replacing 的 flat Create、PNG/RAW/EXR Import/Export 后台任务；相同物理容器版本的 refresh/reimport 保持渲染发布幂等，Asset Browser 以稳定路径和 catalog revision 隔离同步 Reimport/refresh，Ctrl+S 会先保存当前 Scene 引用的 dirty Terrain

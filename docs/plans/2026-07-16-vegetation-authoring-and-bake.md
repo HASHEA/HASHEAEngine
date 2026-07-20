@@ -842,8 +842,10 @@ git commit -m "feat(scene): add vegetation layer bindings"
 - Create: `project/src/engine/Function/Asset/VegetationBrush.cpp`
 - Create: `project/src/tests/Vegetation/vegetation_brush_tests.cpp`
 - Modify: `project/src/tests/Vegetation/VegetationTestSupport.h`
+- Modify: `docs/specs/modules/asset.md`
+- Modify: `README.md`
 
-- [ ] **Step 1: Write deterministic brush RED cases**
+- [x] **Step 1: Write deterministic brush RED cases**
 
 ```cpp
 TEST_CASE("Vegetation brush canonical stroke ignores collinear event density across ten billion millimeters")
@@ -912,7 +914,7 @@ Add cases for:
 - patch order `(tile_z,tile_x,plane_kind,species_id)`, compressed before/after bytes, caller-supplied expected-current-generation plus direction-specific shape/species/bytes preflight, apply/revert each incrementing generation exactly once, zero weight-plane/tile removal, and canonical authoring payload equality across repeated apply/revert cycles. `VegetationTest::CanonicalAuthoringPayloadBytes(snapshot)` serializes only the ASVL palette+tiles payload; it deliberately excludes the monotonic `content_generation` and all header/CRC bytes derived from that generation.
 - working-set bake dirty evidence accumulating touched density coords and per-species before/after nonzero-weight coords across apply, revert, Undo, Redo and Save; snapshotting evidence is non-destructive, an acknowledgement with the exact captured generation clears only after a matching successful bake commit, while stale/failed acknowledgement preserves it.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bat
 generate_vs2022.bat
@@ -922,7 +924,7 @@ RunTests.bat Debug --test-case="Vegetation patch*"
 
 Expected RED: working set, brush, canonicalization, resampling, and patch APIs are missing.
 
-- [ ] **Step 3: Implement integer-only mutation APIs**
+- [x] **Step 3: Implement integer-only mutation APIs**
 
 Expose this minimum shape:
 
@@ -1006,7 +1008,9 @@ struct VegetationPaletteEdit
 class ASH_API VegetationLayerWorkingSet
 {
 public:
-    explicit VegetationLayerWorkingSet(std::shared_ptr<const VegetationLayerSnapshot> snapshot);
+    explicit VegetationLayerWorkingSet(
+        std::shared_ptr<const VegetationLayerSnapshot> snapshot,
+        VegetationLayerMutationAccess access = VegetationLayerMutationAccess::Editable);
     std::shared_ptr<const VegetationLayerSnapshot> publish_snapshot() const;
     VegetationAuthoringDirtyEvidence snapshot_bake_dirty_evidence() const;
     bool acknowledge_bake_dirty_evidence(uint64_t captured_generation);
@@ -1042,9 +1046,9 @@ ASH_API VegetationPatchApplyStatus revert_vegetation_layer_patch(
     uint64_t expected_current_generation);
 ```
 
-`VegetationLayerPatch` is direction-neutral: it carries sorted tile before/after entries plus an optional complete palette before/after value, but no immutable “only valid at creation generation” gate. Each apply/revert call supplies `expected_current_generation`; the working set first requires exact equality, then validates every direction-specific source byte/shape/species entry, and only then commits atomically. Success advances generation once and returns the new generation through the brush/palette apply result; failure leaves generation/output unchanged. This lets one command reuse the same immutable patch while still rejecting intervening edits. Every successful apply/revert atomically merges the affected density coords and palette before/after nonzero-weight coords into working-set bake dirty evidence before publishing the new generation. Snapshotting that evidence never clears it; only an exact-generation acknowledgement after active-pointer commit may clear it, so Undo/Redo, Save and failed/stale bake cannot lose the pre-edit side of a Remove+clear. Use only the SDD integer formulas. Build the complete patch in temporary storage, validate every source entry, then commit the whole patch. Do not add real-time incremental preview semantics; End Stroke applies one canonical result.
+`VegetationLayerPatch` is direction-neutral: it carries sorted tile before/after entries plus an optional complete palette before/after value, but no immutable “only valid at creation generation” gate. Each apply/revert call supplies `expected_current_generation`; the working set first requires exact equality, then validates every direction-specific source byte/shape/species entry, and only then commits atomically. Success advances generation once and returns the new generation through the brush/palette apply result; failure leaves generation/output unchanged. `VegetationMutationResult` is explicitly tri-state (`Applied`, `NoChange`, `Rejected`), so a valid no-op cannot be mistaken for a committed patch. Read-only access and `UINT64_MAX` generation fail closed without publication or wraparound. This lets one command reuse the same immutable patch while still rejecting intervening edits. Every successful apply/revert atomically merges the affected density coords and palette before/after nonzero-weight coords into working-set bake dirty evidence before publishing the new generation. Palette Add/Replace/Remove retains the changed species ID even when both before/after weight-coordinate sets are empty, so the later bake can union active-manifest references. Snapshotting that evidence never clears it; only an exact-generation acknowledgement after active-pointer commit may clear it, so Undo/Redo, Save and failed/stale bake cannot lose the pre-edit side of a Remove+clear. Use only the SDD integer formulas. Build the complete patch in temporary storage, validate every source entry, then commit the whole patch. Do not add real-time incremental preview semantics; End Stroke applies one canonical result.
 
-- [ ] **Step 4: Run GREEN and codec round-trip**
+- [x] **Step 4: Run GREEN and codec round-trip**
 
 ```bat
 generate_vs2022.bat
@@ -1054,15 +1058,17 @@ RunTests.bat Release --test-case="Vegetation brush*"
 RunTests.bat Release --test-case="Vegetation patch*"
 RunTests.bat Debug --test-case="Vegetation Layer codec*"
 RunArchGate.bat
-git diff --check -- project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationBrush.h project/src/engine/Function/Asset/VegetationBrush.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_brush_tests.cpp
+git diff --check -- project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationBrush.h project/src/engine/Function/Asset/VegetationBrush.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_brush_tests.cpp docs/specs/modules/asset.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md README.md
 ```
 
-- [ ] **Step 5: Review and selectively commit**
+Result (2026-07-20): Debug/Release focused brush, patch, palette and mutation suites passed; frozen-byte full Debug/Release each passed `273/273` cases and `6716/6716` assertions; Layer codec passed `6/6` cases and `432/432` assertions; Editor/Sandbox Debug builds, ArchGate and AIDevDoctor passed. Four-combination Debug readiness passed with eight fresh logs clean and all four runtime/editor configuration files restored byte-exactly. Two independent read-only reviews reported `P0=0, P1=0, P2=0`.
+
+- [x] **Step 5: Review and selectively commit**
 
 Review 1 mechanically recomputes the long-stroke split, resampling, falloff, saturation, ordering, and generation rules. Review 2 probes overflow/no-op/atomicity and confirms no world-size or instance-count hard cap was introduced.
 
 ```bat
-git add -- project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationBrush.h project/src/engine/Function/Asset/VegetationBrush.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_brush_tests.cpp
+git add -- project/src/engine/Function/Asset/VegetationLayer.h project/src/engine/Function/Asset/VegetationLayer.cpp project/src/engine/Function/Asset/VegetationBrush.h project/src/engine/Function/Asset/VegetationBrush.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_brush_tests.cpp docs/specs/modules/asset.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md README.md
 git commit -m "feat(vegetation): add deterministic brush patches"
 ```
 

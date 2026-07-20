@@ -27,7 +27,8 @@ status: active
 | `project/src/engine/Function/Asset/VegetationCodec.h/.cpp` | 植被 SHA-256、CRC32、ties-even u16 舍入与负坐标 floor 分块基础合同 |
 | `project/src/engine/Function/Asset/VegetationSurface.h/.cpp` | immutable surface snapshot、批采样 DTO 与 fail-closed validation wrapper |
 | `project/src/engine/Function/Asset/VegetationSpecies.h/.cpp` | strict canonical `.AshVegetation` v1 DTO 与 JSON codec |
-| `project/src/engine/Function/Asset/VegetationLayer.h/.cpp` | 稀疏 ASVL v1 palette/tile/plane DTO 与顺序二进制 codec |
+| `project/src/engine/Function/Asset/VegetationLayer.h/.cpp` | 稀疏 ASVL v1 palette/tile/plane DTO、顺序二进制 codec、immutable publication 与原子 patch working set |
+| `project/src/engine/Function/Asset/VegetationBrush.h/.cpp` | world-mm 笔刷路径 canonicalization/resampling、整数 falloff 与 palette/brush mutation API |
 | `project/src/engine/Function/Asset/VegetationChunk.h/.cpp` | 烘焙 ASVC v1 species/量化 instance DTO 与顺序二进制 codec |
 
 ## 公共接口
@@ -55,6 +56,8 @@ status: active
 - 植被基础合同：`VegetationId` / `VegetationSha256`、`VegetationChunkCoord`、显式 `VegetationLoadBudget/VegetationLoadCost`；`vegetation_sha256`、`vegetation_crc32`、`vegetation_round_ties_even_u16` 与 `split_vegetation_world_xz`。
 - surface snapshot：`IVegetationSurfaceSnapshot` 提供 immutable identity、coarse chunk bounds 与 resident-only batch sampling；`sample_vegetation_surface_batch` 统一验证请求、identity 前后稳定性、normal/材质权重、aggregate status、取消和绝对 deadline，失败不发布部分结果。
 - Phase 2 植被资产 codec：`decode/encode_vegetation_species`、`decode/encode_vegetation_layer`、`decode/encode_vegetation_chunk`。decoder 要求 caller 显式传入 `VegetationLoadBudget`，只在 strict shape、CRC、canonical ordering 与预算全部通过后一次性发布 DTO 和精确 `VegetationLoadCost`；encoder 同样使用临时 byte stream，失败清空输出。
+- Phase 2 Layer authoring：`VegetationLayerWorkingSet` 只发布 `shared_ptr<const VegetationLayerSnapshot>`；Paint/Erase 与 palette Add/Replace/Remove 返回可重复 apply/revert 的 direction-neutral patch。patch 按 `(tile_z,tile_x,plane_kind,species_id)` 排序，先验证 expected generation、canonical source、完整 source bytes、palette/species 与 target shape，再一次性提交 publication 和 bake-dirty evidence。成功恰好推进一代；read-only、`UINT64_MAX`、invalid/no-op 或任一 preflight 失败都不发布且不回绕。
+- 笔刷只接受 canonical `[0,256)` chunk-local 坐标，并 checked 转成 signed world millimeter；radius/strength/falloff/spacing、GCD 同向 run、safe segment、floor-isqrt、ties-to-even resampling/falloff 全按 v1 整数合同执行。稀疏 tile 坐标是 int64 且没有世界尺寸或实例总数硬上限；实际内存/文件准入仍由显式预算与上层 resident policy 控制。
 
 加载结果统一为 `std::shared_ptr<const T>` 共享不可变数据；上层（Scene 实例化、Editor AssetDatabaseService、RenderAssetManager）只应依赖上述接口。
 
@@ -77,6 +80,7 @@ status: active
 - surface Ready sample 的材质 slot `0..7` 权重和必须为 255；normal 以 double 归一化，slope 使用共享的 ties-even 毫弧度规则。Pending/Failed/异常/identity 变化、取消或超时均 fail closed。
 - `.AshVegetation` 是 UTF-8 无 BOM 的 canonical compact JSON v1，拒绝重复/未知/missing key、scalar coercion、非法 ID/path/range，唯一末尾为 LF。ASVL/ASVC 都逐字段 little-endian 解析，禁止 packed struct；header/payload CRC、reserved、排序、shape 与 exact EOF 任一不符均失败。
 - Layer plane writer 使用最大合并相邻同值 run；仅当 `3*run_count < 1024` 时选 RLE，否则选 Raw。reader 展开并核对 decoded CRC 后重算 canonical encoding，拒绝非最大 RLE 或可换成更短 codec 的 byte stream。
+- authoring tile 必须有非零 density；Erase 使 density 归零时整 tile（含剩余 weight）进入 patch 并删除。bake-dirty evidence 累积 density coords 及 palette 变更物种的 before/after 非零 weight coords；即使两侧坐标都空也保留变更物种 ID，供后续与 active manifest references 求并集。snapshot evidence 不清除；只有与当前 publication 完全同代的成功 bake acknowledgement 才清除，stale/failed acknowledgement、Undo/Redo 与 Save 都保留证据。
 - `VegetationLoadCost` 收费是 wire-derived 固定合同：Species=`70 + 4*LOD + 全部 canonical UTF-8 bytes`；Layer=`32 + Σ(48+palette path) + 16*tile + Σ(17+1024 per expanded plane)`；Chunk=`112 + Σ(48+species path) + 28*instance`。实际值等于预算上限合法；零预算不是 unlimited。任意 decode 失败将 DTO/cost 归零。
 - codec 在建立 DTO ownership 前完成 exact-cost admission：ASVL/ASVC 第一遍只用 bounds-owning byte/string view 与已由 file/payload/count budget 准入的 bounded non-owning view/index scratch 验证完整 wire/CRC/canonical 合同并计算成本，第二遍才 reserve/copy；Species 的 duplicate-key/DOM parser scratch 先受 file/payload budget 限制，再从纯 JSON view 计算 exact decoded cost，准入后才复制到 DTO，发布前还必须与 DTO 重算成本逐字段一致。
 
@@ -88,7 +92,7 @@ status: active
 - 依赖/工程变化时 fresh generate，并构建 Editor/Sandbox Debug 与 Release
 - 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；Sandbox ready 要求标准场景引用资产已加载）
 - Editor 打开默认场景操作一遍（AssetBrowser 浏览、拖放实例化）
-- 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` / `Vegetation AssetDatabase*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
+- 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` / `Vegetation AssetDatabase*` / `Vegetation brush*` / `Vegetation palette*` / `Vegetation patch*` / `Vegetation mutation*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
 
 ## 历史
 
