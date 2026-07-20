@@ -130,6 +130,41 @@ namespace AshEditor
 					: (entity.*pfnAdd)(component);
 			}
 
+			bool ApplyVegetationComponent(
+				AshEngine::Entity entity,
+				const SceneComponentSnapshot& refSnapshot,
+				const SceneEntityIdRemap* pEntityIdRemap)
+			{
+				const AshEngine::SceneComponentDesc* pComponentDesc =
+					AshEngine::get_scene_component_descriptor(refSnapshot.eType);
+				if (!pComponentDesc)
+				{
+					return false;
+				}
+
+				AshEngine::VegetationComponent component{};
+				if (!SceneComponentSerialization::DeserializeComponentPayload(
+					refSnapshot.strSerializedValue,
+					*pComponentDesc,
+					&component))
+				{
+					return false;
+				}
+
+				if (pEntityIdRemap)
+				{
+					const auto found = pEntityIdRemap->find(component.surface_entity_id);
+					if (found != pEntityIdRemap->end())
+					{
+						component.surface_entity_id = found->second;
+					}
+				}
+
+				return entity.has_vegetation_component()
+					? entity.set_vegetation_component(component)
+					: entity.add_vegetation_component(component);
+			}
+
 			bool RemoveOptionalComponent(AshEngine::Entity entity, const AshEngine::SceneComponentType eType)
 			{
 				switch (eType)
@@ -146,6 +181,8 @@ namespace AshEditor
 					return !entity.has_particle_component() || entity.remove_particle_component();
 				case AshEngine::SceneComponentType::Terrain:
 					return !entity.has_terrain_component() || entity.remove_terrain_component();
+				case AshEngine::SceneComponentType::Vegetation:
+					return !entity.has_vegetation_component() || entity.remove_vegetation_component();
 				default:
 					return true;
 				}
@@ -198,6 +235,10 @@ namespace AshEditor
 				return refEntity.has_terrain_component()
 					? MakeTerrainComponentSnapshot(refEntity.get_terrain_component())
 					: std::nullopt;
+			case AshEngine::SceneComponentType::Vegetation:
+				return refEntity.has_vegetation_component()
+					? MakeComponentSnapshot(eType, refEntity.get_vegetation_component())
+					: std::nullopt;
 			default:
 				return std::nullopt;
 			}
@@ -218,7 +259,10 @@ namespace AshEditor
 			return vecSnapshots;
 		}
 
-		bool ApplyEntitySnapshot(AshEngine::Entity entity, const SceneEntitySnapshot& refSnapshot)
+		bool ApplyEntitySnapshot(
+			AshEngine::Entity entity,
+			const SceneEntitySnapshot& refSnapshot,
+			const SceneEntityIdRemap* pEntityIdRemap)
 		{
 			if (!entity.is_valid())
 			{
@@ -233,6 +277,7 @@ namespace AshEditor
 				AshEngine::SceneComponentType::Environment,
 				AshEngine::SceneComponentType::Particle,
 				AshEngine::SceneComponentType::Terrain,
+				AshEngine::SceneComponentType::Vegetation,
 			};
 			for (const AshEngine::SceneComponentType eType : arrOptionalTypes)
 			{
@@ -315,6 +360,12 @@ namespace AshEditor
 					break;
 				case AshEngine::SceneComponentType::Terrain:
 					if (!ApplyTerrainComponentSnapshot(entity, refComponentSnapshot))
+					{
+						return false;
+					}
+					break;
+				case AshEngine::SceneComponentType::Vegetation:
+					if (!ApplyVegetationComponent(entity, refComponentSnapshot, pEntityIdRemap))
 					{
 						return false;
 					}

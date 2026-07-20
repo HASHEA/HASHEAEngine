@@ -10,8 +10,10 @@
 #include <fstream>
 #include <functional>
 #include <json.hpp>
+#include <limits>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <entt/entt.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -55,14 +57,17 @@ namespace AshEngine
 			uint64_t render_environment_version = 0;
 			uint64_t render_particle_version = 0;
 			uint64_t render_terrain_version = 0;
+			uint64_t vegetation_version = 0;
 			uint64_t render_config_version = 0;
 			// editor begin 修改原因：Scene Change Event 订阅管理
 			std::unordered_map<uint32_t, SceneChangeCallback> change_callbacks{};
 			uint32_t next_subscription_id = 1;
+			bool creation_transaction_active = false;
+			std::vector<SceneChangeEvent> deferred_change_events{};
 			// editor end
 		};
 
-		static constexpr uint32_t k_scene_file_version = 6;
+		static constexpr uint32_t k_scene_file_version = 7;
 		static constexpr const char* k_environment_sun_light_name = "EnvironmentSunLight";
 		static constexpr float k_environment_sun_light_intensity = 2.5f;
 		static constexpr uint32_t k_environment_sun_light_shadow_priority = 255u;
@@ -186,6 +191,13 @@ namespace AshEngine
 			{ "receives_shadow", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(TerrainComponent, receives_shadow)), static_cast<uint32_t>(sizeof(bool)), nullptr },
 		};
 
+		static ScenePropertyDesc k_vegetation_properties[] =
+		{
+			{ "layer_asset_path", ScenePropertyType::String, static_cast<uint32_t>(offsetof(VegetationComponent, layer_asset_path)), static_cast<uint32_t>(sizeof(std::string)), nullptr, "Vegetation Layer", "Asset-root-relative .AshVegetationLayer path.", ScenePropertyEditorHint::AssetPath, ScenePropertyAssetRefKind::VegetationLayer },
+			{ "surface_entity_id", ScenePropertyType::UInt64, static_cast<uint32_t>(offsetof(VegetationComponent, surface_entity_id)), static_cast<uint32_t>(sizeof(uint64_t)), nullptr, "Surface Entity", "Entity id of the explicit vegetation surface binding.", ScenePropertyEditorHint::Default, ScenePropertyAssetRefKind::None, 0.0f, 0.0f, false, true },
+			{ "enabled", ScenePropertyType::Bool, static_cast<uint32_t>(offsetof(VegetationComponent, enabled)), static_cast<uint32_t>(sizeof(bool)), nullptr, "Enabled", "Whether this vegetation layer participates in authoring and runtime extraction." },
+		};
+
 		static SceneComponentDesc k_scene_component_descs[] =
 		{
 			{ SceneComponentType::Name, "NameComponent", k_name_properties, static_cast<uint32_t>(std::size(k_name_properties)), static_cast<uint32_t>(sizeof(NameComponent)) },
@@ -196,6 +208,7 @@ namespace AshEngine
 			{ SceneComponentType::Environment, "EnvironmentComponent", k_environment_properties, static_cast<uint32_t>(std::size(k_environment_properties)), static_cast<uint32_t>(sizeof(EnvironmentComponent)) },
 			{ SceneComponentType::Particle, "ParticleComponent", k_particle_properties, static_cast<uint32_t>(std::size(k_particle_properties)), static_cast<uint32_t>(sizeof(ParticleComponent)) },
 			{ SceneComponentType::Terrain, "TerrainComponent", k_terrain_properties, static_cast<uint32_t>(std::size(k_terrain_properties)), static_cast<uint32_t>(sizeof(TerrainComponent)) },
+			{ SceneComponentType::Vegetation, "VegetationComponent", k_vegetation_properties, static_cast<uint32_t>(std::size(k_vegetation_properties)), static_cast<uint32_t>(sizeof(VegetationComponent)) },
 		};
 
 		static auto to_json_vec3(const glm::vec3& value) -> json
@@ -542,6 +555,159 @@ namespace AshEngine
 				lhs.material_layer_overrides == rhs.material_layer_overrides;
 		}
 
+		static auto is_valid_vegetation_path_utf8(std::string_view text) -> bool
+		{
+			size_t index = 0;
+			while (index < text.size())
+			{
+				const uint8_t first = static_cast<uint8_t>(text[index]);
+				if (first <= 0x7fu)
+				{
+					if (first == 0u || first < 0x20u)
+					{
+						return false;
+					}
+					++index;
+					continue;
+				}
+
+				size_t count = 0;
+				uint32_t codepoint = 0;
+				uint32_t minimum = 0;
+				if ((first & 0xe0u) == 0xc0u)
+				{
+					count = 2u;
+					codepoint = first & 0x1fu;
+					minimum = 0x80u;
+				}
+				else if ((first & 0xf0u) == 0xe0u)
+				{
+					count = 3u;
+					codepoint = first & 0x0fu;
+					minimum = 0x800u;
+				}
+				else if ((first & 0xf8u) == 0xf0u)
+				{
+					count = 4u;
+					codepoint = first & 0x07u;
+					minimum = 0x10000u;
+				}
+				else
+				{
+					return false;
+				}
+				if (count > text.size() - index)
+				{
+					return false;
+				}
+				for (size_t continuation = 1; continuation < count; ++continuation)
+				{
+					const uint8_t value = static_cast<uint8_t>(text[index + continuation]);
+					if ((value & 0xc0u) != 0x80u)
+					{
+						return false;
+					}
+					codepoint = (codepoint << 6u) | (value & 0x3fu);
+				}
+				if (codepoint < minimum || codepoint > 0x10ffffu ||
+					(codepoint >= 0xd800u && codepoint <= 0xdfffu))
+				{
+					return false;
+				}
+				index += count;
+			}
+			return true;
+		}
+
+		static auto has_case_insensitive_suffix(std::string_view text, std::string_view suffix) -> bool
+		{
+			if (text.size() <= suffix.size())
+			{
+				return false;
+			}
+			const size_t offset = text.size() - suffix.size();
+			for (size_t index = 0; index < suffix.size(); ++index)
+			{
+				const unsigned char left = static_cast<unsigned char>(text[offset + index]);
+				const unsigned char right = static_cast<unsigned char>(suffix[index]);
+				if (std::tolower(left) != std::tolower(right))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		static auto is_valid_vegetation_layer_asset_path(std::string_view path) -> bool
+		{
+			if (path.empty() || path.size() > 4096u || !is_valid_vegetation_path_utf8(path) ||
+				path.front() == '/' || path.back() == '/' || path.find('\\') != std::string_view::npos ||
+				path.find(':') != std::string_view::npos || path.find("//") != std::string_view::npos)
+			{
+				return false;
+			}
+
+			size_t begin = 0;
+			while (begin < path.size())
+			{
+				const size_t end = path.find('/', begin);
+				const size_t count = (end == std::string_view::npos ? path.size() : end) - begin;
+				const std::string_view component = path.substr(begin, count);
+				if (component.empty() || component == "." || component == "..")
+				{
+					return false;
+				}
+				if (end == std::string_view::npos)
+				{
+					break;
+				}
+				begin = end + 1u;
+			}
+
+			return has_case_insensitive_suffix(path, ".AshVegetationLayer");
+		}
+
+		static auto validate_vegetation_component(
+			const SceneStorage& storage,
+			EntityId owner_entity_id,
+			const VegetationComponent& component) -> bool
+		{
+			return is_valid_vegetation_layer_asset_path(component.layer_asset_path) &&
+				component.surface_entity_id != 0 &&
+				component.surface_entity_id != owner_entity_id &&
+				storage.entities.find(component.surface_entity_id) != storage.entities.end();
+		}
+
+		static auto try_deserialize_vegetation_component(
+			const json& value,
+			VegetationComponent& out_component) -> bool
+		{
+			if (!value.is_object())
+			{
+				return false;
+			}
+			const auto path = value.find("layer_asset_path");
+			const auto surface = value.find("surface_entity_id");
+			const auto enabled = value.find("enabled");
+			if (path == value.end() || !path->is_string() ||
+				surface == value.end() || !surface->is_number_unsigned() ||
+				enabled == value.end() || !enabled->is_boolean())
+			{
+				return false;
+			}
+			try
+			{
+				out_component.layer_asset_path = path->get<std::string>();
+				out_component.surface_entity_id = surface->get<uint64_t>();
+				out_component.enabled = enabled->get<bool>();
+			}
+			catch (const std::exception&)
+			{
+				return false;
+			}
+			return true;
+		}
+
 		static auto deserialize_scene_render_config(const json& root) -> SceneRenderConfig
 		{
 			SceneRenderConfig config = make_default_scene_render_config();
@@ -873,6 +1039,11 @@ namespace AshEngine
 		// editor begin 修改原因：Scene Change Event 辅助函数
 		static auto notify_scene_change_event(SceneStorage& storage, const SceneChangeEvent& event) -> void
 		{
+			if (storage.creation_transaction_active)
+			{
+				storage.deferred_change_events.push_back(event);
+				return;
+			}
 			for (const auto& [id, callback] : storage.change_callbacks)
 			{
 				if (callback)
@@ -951,6 +1122,10 @@ namespace AshEngine
 			{
 				return SceneComponentType::Terrain;
 			}
+			else if constexpr (std::is_same_v<TComponent, VegetationComponent>)
+			{
+				return SceneComponentType::Vegetation;
+			}
 			else
 			{
 				return SceneComponentType::Name;
@@ -987,6 +1162,10 @@ namespace AshEngine
 			{
 				storage.render_terrain_version = storage.change_version;
 			}
+			else if (component_type == SceneComponentType::Vegetation)
+			{
+				storage.vegetation_version = storage.change_version;
+			}
 
 			SceneChangeEvent event{};
 			event.kind = SceneChangeKind::ComponentChanged;
@@ -997,8 +1176,13 @@ namespace AshEngine
 			notify_scene_change_event(storage, event);
 		}
 
-		static auto transfer_scene_storage_preserve_subscribers(SceneStorage& dst, SceneStorage&& src, SceneChangeKind kind) -> void
+		static auto transfer_scene_storage_preserve_subscribers(SceneStorage& dst, SceneStorage&& src, SceneChangeKind kind) -> bool
 		{
+			if (dst.creation_transaction_active || src.creation_transaction_active)
+			{
+				return false;
+			}
+
 			auto callbacks = std::move(dst.change_callbacks);
 			const uint32_t next_subscription_id = dst.next_subscription_id;
 			dst = std::move(src);
@@ -1012,6 +1196,7 @@ namespace AshEngine
 			event.change_version = dst.change_version;
 			event.dirty = dst.dirty;
 			notify_scene_change_event(dst, event);
+			return true;
 		}
 
 		static auto mark_scene_render_primitives_modified(SceneStorage& storage) -> void
@@ -1470,22 +1655,63 @@ namespace AshEngine
 				return {};
 			}
 
-			EntityId id = explicit_id != 0 ? explicit_id : impl->storage.next_entity_id++;
-			impl->storage.next_entity_id = std::max(impl->storage.next_entity_id, id + 1);
-			if (impl->storage.entities.find(id) != impl->storage.entities.end())
+			SceneStorage& storage = impl->storage;
+			const EntityId previous_next_entity_id = storage.next_entity_id;
+			const EntityId id = explicit_id != 0 ? explicit_id : storage.next_entity_id;
+			if (id == 0 || storage.entities.find(id) != storage.entities.end())
 			{
 				return {};
 			}
 
-			const entt::entity handle = impl->storage.registry.create();
-			impl->storage.registry.emplace<EntityIdComponent>(handle, EntityIdComponent{ id });
-			impl->storage.registry.emplace<NameComponent>(handle, NameComponent{ name.empty() ? std::string("Entity") : std::string(name) });
-			impl->storage.registry.emplace<TransformComponent>(handle, TransformComponent{});
-			impl->storage.registry.emplace<HierarchyComponent>(handle, HierarchyComponent{});
-			impl->storage.entities.emplace(id, handle);
-			impl->storage.entity_order.push_back(id);
-			impl->storage.root_order.push_back(id);
-			return Entity(impl, id);
+			storage.next_entity_id = id == std::numeric_limits<EntityId>::max()
+				? id
+				: std::max(previous_next_entity_id, id + 1u);
+
+			entt::entity handle = entt::null;
+			bool entity_mapped = false;
+			bool entity_order_appended = false;
+			bool root_order_appended = false;
+			try
+			{
+				handle = storage.registry.create();
+				storage.registry.emplace<EntityIdComponent>(handle, EntityIdComponent{ id });
+				storage.registry.emplace<NameComponent>(handle, NameComponent{ name.empty() ? std::string("Entity") : std::string(name) });
+				storage.registry.emplace<TransformComponent>(handle, TransformComponent{});
+				storage.registry.emplace<HierarchyComponent>(handle, HierarchyComponent{});
+				entity_mapped = storage.entities.emplace(id, handle).second;
+				if (!entity_mapped)
+				{
+					storage.registry.destroy(handle);
+					storage.next_entity_id = previous_next_entity_id;
+					return {};
+				}
+				storage.entity_order.push_back(id);
+				entity_order_appended = true;
+				storage.root_order.push_back(id);
+				root_order_appended = true;
+				return Entity(impl, id);
+			}
+			catch (...)
+			{
+				if (root_order_appended && !storage.root_order.empty() && storage.root_order.back() == id)
+				{
+					storage.root_order.pop_back();
+				}
+				if (entity_order_appended && !storage.entity_order.empty() && storage.entity_order.back() == id)
+				{
+					storage.entity_order.pop_back();
+				}
+				if (entity_mapped)
+				{
+					storage.entities.erase(id);
+				}
+				if (handle != entt::null && storage.registry.valid(handle))
+				{
+					storage.registry.destroy(handle);
+				}
+				storage.next_entity_id = previous_next_entity_id;
+				return {};
+			}
 		}
 
 		static auto destroy_entity_recursive(SceneStorage& storage, EntityId id) -> bool
@@ -1496,10 +1722,18 @@ namespace AshEngine
 				return false;
 			}
 
-			const std::vector<EntityId> children = storage.registry.get<HierarchyComponent>(found->second).children;
-			for (EntityId child_id : children)
+			while (true)
 			{
-				destroy_entity_recursive(storage, child_id);
+				const std::vector<EntityId>& children =
+					storage.registry.get<HierarchyComponent>(found->second).children;
+				if (children.empty())
+				{
+					break;
+				}
+				if (!destroy_entity_recursive(storage, children.back()))
+				{
+					return false;
+				}
 			}
 
 			detach_from_current_siblings(storage, id);
@@ -1559,7 +1793,222 @@ namespace AshEngine
 			}
 			return true;
 		}
+
+		static auto collect_entity_subtree_ids(
+			const SceneStorage& storage,
+			EntityId id,
+			std::unordered_set<EntityId>& out_ids) -> bool
+		{
+			const auto found = storage.entities.find(id);
+			if (found == storage.entities.end())
+			{
+				return false;
+			}
+			if (!out_ids.insert(id).second)
+			{
+				return true;
+			}
+			const HierarchyComponent* hierarchy =
+				storage.registry.try_get<HierarchyComponent>(found->second);
+			if (!hierarchy)
+			{
+				return false;
+			}
+			for (EntityId child_id : hierarchy->children)
+			{
+				if (!collect_entity_subtree_ids(storage, child_id, out_ids))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		static auto can_destroy_entity_subtree(
+			const SceneStorage& storage,
+			const std::unordered_set<EntityId>& subtree_ids,
+			bool& out_contains_vegetation) -> bool
+		{
+			out_contains_vegetation = false;
+			for (EntityId entity_id : storage.entity_order)
+			{
+				const auto found = storage.entities.find(entity_id);
+				if (found == storage.entities.end())
+				{
+					continue;
+				}
+				const VegetationComponent* vegetation =
+					storage.registry.try_get<VegetationComponent>(found->second);
+				if (!vegetation)
+				{
+					continue;
+				}
+
+				const bool owner_in_subtree = subtree_ids.find(entity_id) != subtree_ids.end();
+				if (owner_in_subtree)
+				{
+					out_contains_vegetation = true;
+					continue;
+				}
+				if (subtree_ids.find(vegetation->surface_entity_id) != subtree_ids.end())
+				{
+					return false;
+				}
+			}
+			return true;
+		}
 	}
+
+	// editor begin 修改原因：snapshot forest 创建失败时回滚实体、版本、ID 与事件。
+	class Scene::CreationTransaction::Impl
+	{
+	public:
+		std::shared_ptr<Scene::Impl> scene{};
+		size_t baseline_entity_count = 0;
+		EntityId next_entity_id = 1;
+		bool dirty = false;
+		uint64_t change_version = 0;
+		uint64_t render_primitive_version = 0;
+		uint64_t render_transform_version = 0;
+		uint64_t render_light_version = 0;
+		uint64_t render_environment_version = 0;
+		uint64_t render_particle_version = 0;
+		uint64_t render_terrain_version = 0;
+		uint64_t vegetation_version = 0;
+		uint64_t render_config_version = 0;
+		bool active = false;
+	};
+
+	Scene::CreationTransaction::CreationTransaction() = default;
+
+	Scene::CreationTransaction::CreationTransaction(std::unique_ptr<Impl> impl)
+		: m_impl(std::move(impl))
+	{
+	}
+
+	Scene::CreationTransaction::~CreationTransaction()
+	{
+		rollback();
+	}
+
+	Scene::CreationTransaction::CreationTransaction(CreationTransaction&& other) noexcept
+		: m_impl(std::move(other.m_impl))
+	{
+	}
+
+	Scene::CreationTransaction& Scene::CreationTransaction::operator=(CreationTransaction&& other) noexcept
+	{
+		if (this != &other)
+		{
+			rollback();
+			m_impl = std::move(other.m_impl);
+		}
+		return *this;
+	}
+
+	bool Scene::CreationTransaction::is_active() const
+	{
+		return m_impl && m_impl->active;
+	}
+
+	void Scene::CreationTransaction::rollback() noexcept
+	{
+		if (!m_impl || !m_impl->active || !m_impl->scene)
+		{
+			return;
+		}
+
+		SceneStorage& storage = m_impl->scene->storage;
+		while (storage.entity_order.size() > m_impl->baseline_entity_count)
+		{
+			const EntityId entity_id = storage.entity_order.back();
+			if (storage.entities.find(entity_id) == storage.entities.end() ||
+				!destroy_entity_recursive(storage, entity_id))
+			{
+				break;
+			}
+		}
+
+		storage.next_entity_id = m_impl->next_entity_id;
+		storage.dirty = m_impl->dirty;
+		storage.change_version = m_impl->change_version;
+		storage.render_primitive_version = m_impl->render_primitive_version;
+		storage.render_transform_version = m_impl->render_transform_version;
+		storage.render_light_version = m_impl->render_light_version;
+		storage.render_environment_version = m_impl->render_environment_version;
+		storage.render_particle_version = m_impl->render_particle_version;
+		storage.render_terrain_version = m_impl->render_terrain_version;
+		storage.vegetation_version = m_impl->vegetation_version;
+		storage.render_config_version = m_impl->render_config_version;
+		storage.deferred_change_events.clear();
+		storage.creation_transaction_active = false;
+		m_impl->active = false;
+	}
+
+	bool Scene::CreationTransaction::commit()
+	{
+		if (!is_active() || !m_impl->scene)
+		{
+			return false;
+		}
+
+		SceneStorage& storage = m_impl->scene->storage;
+		std::vector<SceneChangeEvent> events = std::move(storage.deferred_change_events);
+		storage.deferred_change_events.clear();
+		storage.creation_transaction_active = false;
+		m_impl->active = false;
+		for (const SceneChangeEvent& event : events)
+		{
+			try
+			{
+				notify_scene_change_event(storage, event);
+			}
+			catch (const std::exception& exception)
+			{
+				HLogWarning("Scene creation transaction change callback failed: {}", exception.what());
+			}
+			catch (...)
+			{
+				HLogWarning("Scene creation transaction change callback failed with an unknown exception.");
+			}
+		}
+		return true;
+	}
+
+	Scene::CreationTransaction Scene::begin_creation_transaction()
+	{
+		if (!m_impl || m_impl->storage.creation_transaction_active)
+		{
+			return {};
+		}
+
+		try
+		{
+			auto transaction = std::make_unique<CreationTransaction::Impl>();
+			transaction->scene = m_impl;
+			transaction->baseline_entity_count = m_impl->storage.entity_order.size();
+			transaction->next_entity_id = m_impl->storage.next_entity_id;
+			transaction->dirty = m_impl->storage.dirty;
+			transaction->change_version = m_impl->storage.change_version;
+			transaction->render_primitive_version = m_impl->storage.render_primitive_version;
+			transaction->render_transform_version = m_impl->storage.render_transform_version;
+			transaction->render_light_version = m_impl->storage.render_light_version;
+			transaction->render_environment_version = m_impl->storage.render_environment_version;
+			transaction->render_particle_version = m_impl->storage.render_particle_version;
+			transaction->render_terrain_version = m_impl->storage.render_terrain_version;
+			transaction->vegetation_version = m_impl->storage.vegetation_version;
+			transaction->render_config_version = m_impl->storage.render_config_version;
+			m_impl->storage.deferred_change_events.clear();
+			m_impl->storage.creation_transaction_active = true;
+			transaction->active = true;
+			return CreationTransaction(std::move(transaction));
+		}
+		catch (const std::exception&)
+		{
+			return {};
+		}
+	}
+	// editor end
 
 	Entity::Entity(std::shared_ptr<Impl> impl, EntityId id)
 		: m_impl(std::move(impl)), m_id(id)
@@ -1887,6 +2336,50 @@ namespace AshEngine
 			std::static_pointer_cast<Scene::Impl>(m_impl), m_id);
 	}
 
+	bool Entity::has_vegetation_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		return handle != entt::null && impl->storage.registry.any_of<VegetationComponent>(handle);
+	}
+
+	VegetationComponent Entity::get_vegetation_component() const
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		const entt::entity handle = find_handle(impl, m_id);
+		if (handle != entt::null)
+		{
+			if (const VegetationComponent* component =
+				impl->storage.registry.try_get<VegetationComponent>(handle))
+			{
+				return *component;
+			}
+		}
+		return {};
+	}
+
+	bool Entity::add_vegetation_component(const VegetationComponent& component)
+	{
+		const auto impl = std::static_pointer_cast<Scene::Impl>(m_impl);
+		if (!impl || !validate_vegetation_component(impl->storage, m_id, component))
+		{
+			return false;
+		}
+		return emplace_or_replace_entity_component(impl, m_id, component);
+	}
+
+	bool Entity::set_vegetation_component(const VegetationComponent& component)
+	{
+		return has_vegetation_component() && add_vegetation_component(component);
+	}
+
+	bool Entity::remove_vegetation_component()
+	{
+		return remove_entity_component_if_present<VegetationComponent>(
+			std::static_pointer_cast<Scene::Impl>(m_impl),
+			m_id);
+	}
+
 	bool Entity::has_component(SceneComponentType type) const
 	{
 		switch (type)
@@ -1906,6 +2399,8 @@ namespace AshEngine
 			return has_particle_component();
 		case SceneComponentType::Terrain:
 			return has_terrain_component();
+		case SceneComponentType::Vegetation:
+			return has_vegetation_component();
 		default:
 			return false;
 		}
@@ -1944,6 +2439,10 @@ namespace AshEngine
 		if (has_terrain_component())
 		{
 			result.push_back(SceneComponentType::Terrain);
+		}
+		if (has_vegetation_component())
+		{
+			result.push_back(SceneComponentType::Vegetation);
 		}
 		return result;
 	}
@@ -2016,6 +2515,14 @@ namespace AshEngine
 			if (handled)
 			{
 				*static_cast<TerrainComponent*>(out_component) = get_terrain_component();
+			}
+		}
+		else if (type == SceneComponentType::Vegetation)
+		{
+			handled = component_size == sizeof(VegetationComponent) && has_vegetation_component();
+			if (handled)
+			{
+				*static_cast<VegetationComponent*>(out_component) = get_vegetation_component();
 			}
 		}
 		else
@@ -2096,6 +2603,14 @@ namespace AshEngine
 			if (handled)
 			{
 				bResult = set_terrain_component(*static_cast<const TerrainComponent*>(component_data));
+			}
+		}
+		else if (type == SceneComponentType::Vegetation)
+		{
+			handled = component_size == sizeof(VegetationComponent);
+			if (handled)
+			{
+				bResult = set_vegetation_component(*static_cast<const VegetationComponent*>(component_data));
 			}
 		}
 		else
@@ -2230,6 +2745,8 @@ namespace AshEngine
 		}
 
 		std::vector<std::pair<EntityId, EntityId>> desired_parents{};
+		std::vector<std::pair<EntityId, VegetationComponent>> pending_vegetation{};
+		bool vegetation_payloads_valid = true;
 		EntityId max_id = 0;
 		bool entity_components_valid = true;
 		for (const json& entity_json : entities_json)
@@ -2398,8 +2915,40 @@ namespace AshEngine
 					break;
 				}
 			}
+
+			if (version >= 7u && entity_json.contains("vegetation"))
+			{
+				VegetationComponent vegetation{};
+				if (!try_deserialize_vegetation_component(entity_json["vegetation"], vegetation))
+				{
+					vegetation_payloads_valid = false;
+					break;
+				}
+				pending_vegetation.emplace_back(id, std::move(vegetation));
+			}
 		}
 		ASH_PROCESS_ERROR(entity_components_valid);
+		if (!vegetation_payloads_valid)
+		{
+			make_scene_error(out_error, "Scene file contains an invalid VegetationComponent payload.");
+		}
+		ASH_PROCESS_ERROR(vegetation_payloads_valid);
+
+		bool vegetation_references_valid = true;
+		for (const auto& [entity_id, vegetation] : pending_vegetation)
+		{
+			Entity entity = scene.find_entity(entity_id);
+			if (!entity.is_valid() || !entity.add_vegetation_component(vegetation))
+			{
+				vegetation_references_valid = false;
+				break;
+			}
+		}
+		if (!vegetation_references_valid)
+		{
+			make_scene_error(out_error, "Scene file contains an invalid VegetationComponent reference.");
+		}
+		ASH_PROCESS_ERROR(vegetation_references_valid);
 
 		const EntityId saved_next_entity_id = root.value("next_entity_id", static_cast<EntityId>(0));
 		scene.m_impl->storage.next_entity_id = std::max(scene.m_impl->storage.next_entity_id, max_id + 1);
@@ -2471,6 +3020,10 @@ namespace AshEngine
 		}
 
 		Entity entity = create_entity_internal(m_impl, 0, name);
+		if (!entity.is_valid())
+		{
+			return {};
+		}
 		if (entity.is_valid() && parent.is_valid() && std::static_pointer_cast<Scene::Impl>(parent.m_impl) == m_impl)
 		{
 			reparent_entity(entity.get_id(), parent.get_id(), sibling_index);
@@ -2504,6 +3057,10 @@ namespace AshEngine
 		}
 
 		Entity entity = create_entity_internal(m_impl, explicit_id, name);
+		if (!entity.is_valid())
+		{
+			return {};
+		}
 		if (entity.is_valid() && parent.is_valid() && std::static_pointer_cast<Scene::Impl>(parent.m_impl) == m_impl)
 		{
 			reparent_entity(entity.get_id(), parent.get_id(), sibling_index);
@@ -2522,6 +3079,12 @@ namespace AshEngine
 	// editor begin 修改原因：Scene Reload / Replace 语义
 	bool Scene::reload_from_file(const std::filesystem::path& path, std::string* out_error)
 	{
+		if (m_impl && m_impl->storage.creation_transaction_active)
+		{
+			make_scene_error(out_error, "Scene reload is not allowed during an active creation transaction.");
+			return false;
+		}
+
 		Scene loaded = load_from_file(path, out_error);
 		if (!loaded.is_valid())
 		{
@@ -2545,7 +3108,14 @@ namespace AshEngine
 			return is_valid();
 		}
 
-		transfer_scene_storage_preserve_subscribers(m_impl->storage, std::move(loaded.m_impl->storage), SceneChangeKind::SceneReloaded);
+		if (!transfer_scene_storage_preserve_subscribers(
+			m_impl->storage,
+			std::move(loaded.m_impl->storage),
+			SceneChangeKind::SceneReloaded))
+		{
+			make_scene_error(out_error, "Scene reload is not allowed during an active creation transaction.");
+			return false;
+		}
 		loaded.m_impl.reset();
 		return true;
 	}
@@ -2554,6 +3124,16 @@ namespace AshEngine
 	{
 		if (!other.m_impl)
 		{
+			return;
+		}
+		if (m_impl && m_impl == other.m_impl)
+		{
+			return;
+		}
+		if ((m_impl && m_impl->storage.creation_transaction_active) ||
+			other.m_impl->storage.creation_transaction_active)
+		{
+			HLogWarning("Scene replace ignored during an active creation transaction.");
 			return;
 		}
 
@@ -2571,28 +3151,110 @@ namespace AshEngine
 			return;
 		}
 
-		transfer_scene_storage_preserve_subscribers(m_impl->storage, std::move(other.m_impl->storage), SceneChangeKind::SceneReplaced);
+		if (!transfer_scene_storage_preserve_subscribers(
+			m_impl->storage,
+			std::move(other.m_impl->storage),
+			SceneChangeKind::SceneReplaced))
+		{
+			HLogWarning("Scene replace ignored during an active creation transaction.");
+			return;
+		}
 		other.m_impl.reset();
 	}
 	// editor end
 
 	bool Scene::destroy_entity(EntityId id)
 	{
-		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
-		ASH_PROCESS_ERROR(m_impl);
+		return destroy_entities({ id });
+	}
 
-		const bool removed_terrain = entity_subtree_has_terrain(m_impl->storage, id);
-		bResult = destroy_entity_recursive(m_impl->storage, id);
+	bool Scene::destroy_entities(const std::vector<EntityId>& ids)
+	{
+		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
+		ASH_PROCESS_ERROR(m_impl && !ids.empty());
+
+		std::unordered_set<EntityId> requestedIds{};
+		std::unordered_set<EntityId> subtreeIds{};
+		bool containsTerrain = false;
+		requestedIds.reserve(ids.size());
+		for (const EntityId id : ids)
+		{
+			ASH_PROCESS_ERROR(id != 0 && requestedIds.insert(id).second);
+			containsTerrain = containsTerrain || entity_subtree_has_terrain(m_impl->storage, id);
+			ASH_PROCESS_ERROR(collect_entity_subtree_ids(m_impl->storage, id, subtreeIds));
+		}
+
+		bool containsVegetation = false;
+		ASH_PROCESS_ERROR(can_destroy_entity_subtree(m_impl->storage, subtreeIds, containsVegetation));
+
+		std::vector<EntityId> rootIds{};
+		rootIds.reserve(ids.size());
+		for (const EntityId id : ids)
+		{
+			const auto found = m_impl->storage.entities.find(id);
+			ASH_PROCESS_ERROR(found != m_impl->storage.entities.end());
+			const HierarchyComponent* hierarchy =
+				m_impl->storage.registry.try_get<HierarchyComponent>(found->second);
+			ASH_PROCESS_ERROR(hierarchy);
+
+			bool nestedInSelectedSubtree = false;
+			EntityId parentId = hierarchy->parent;
+			while (parentId != 0)
+			{
+				if (subtreeIds.find(parentId) != subtreeIds.end())
+				{
+					nestedInSelectedSubtree = true;
+					break;
+				}
+				const auto parentFound = m_impl->storage.entities.find(parentId);
+				ASH_PROCESS_ERROR(parentFound != m_impl->storage.entities.end());
+				const HierarchyComponent* parentHierarchy =
+					m_impl->storage.registry.try_get<HierarchyComponent>(parentFound->second);
+				ASH_PROCESS_ERROR(parentHierarchy);
+				parentId = parentHierarchy->parent;
+			}
+			if (!nestedInSelectedSubtree)
+			{
+				rootIds.push_back(id);
+			}
+		}
+		ASH_PROCESS_ERROR(!rootIds.empty());
+
+		bResult = true;
+		for (const EntityId rootId : rootIds)
+		{
+			if (!destroy_entity_recursive(m_impl->storage, rootId))
+			{
+				bResult = false;
+				break;
+			}
+		}
 		if (bResult)
 		{
-			// editor begin 修改原因：触发 EntityRemoved 事件
-			mark_scene_storage_modified(m_impl->storage, SceneChangeKind::EntityRemoved, id);
-			// editor end
-			mark_scene_render_primitives_modified(m_impl->storage);
-			if (removed_terrain)
+			// editor begin 修改原因：每个实际删除 root 触发同一版本的 EntityRemoved 事件。
+			m_impl->storage.dirty = true;
+			m_impl->storage.change_version = allocate_scene_change_version();
+			const uint64_t removalVersion = m_impl->storage.change_version;
+			m_impl->storage.render_primitive_version = allocate_scene_change_version();
+			m_impl->storage.render_transform_version = allocate_scene_change_version();
+			if (containsVegetation)
 			{
-				m_impl->storage.render_terrain_version = allocate_scene_change_version();
+				m_impl->storage.vegetation_version = removalVersion;
 			}
+			if (containsTerrain)
+			{
+				m_impl->storage.render_terrain_version = removalVersion;
+			}
+			for (size_t rootIndex = 0; rootIndex < rootIds.size(); ++rootIndex)
+			{
+				SceneChangeEvent event{};
+				event.kind = SceneChangeKind::EntityRemoved;
+				event.entity_id = rootIds[rootIndex];
+				event.change_version = removalVersion;
+				event.dirty = m_impl->storage.dirty;
+				notify_scene_change_event(m_impl->storage, event);
+			}
+			// editor end
 		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
@@ -2890,6 +3552,37 @@ namespace AshEngine
 			desc.entity_id = id;
 			desc.terrain = *terrain;
 			desc.world_transform = get_entity_world_matrix(m_impl, id);
+			result.push_back(std::move(desc));
+		}
+		return result;
+	}
+
+	std::vector<SceneVegetationExtractionDesc> Scene::extract_vegetation_entities() const
+	{
+		std::vector<SceneVegetationExtractionDesc> result{};
+		if (!m_impl)
+		{
+			return result;
+		}
+
+		for (EntityId id : m_impl->storage.entity_order)
+		{
+			const entt::entity handle = find_handle(m_impl, id);
+			if (handle == entt::null)
+			{
+				continue;
+			}
+
+			const VegetationComponent* vegetation =
+				m_impl->storage.registry.try_get<VegetationComponent>(handle);
+			if (!vegetation)
+			{
+				continue;
+			}
+
+			SceneVegetationExtractionDesc desc{};
+			desc.entity_id = id;
+			desc.vegetation = *vegetation;
 			result.push_back(std::move(desc));
 		}
 		return result;
@@ -3392,6 +4085,16 @@ namespace AshEngine
 				};
 			}
 
+			if (const VegetationComponent* vegetation = m_impl->storage.registry.try_get<VegetationComponent>(handle))
+			{
+				entity_json["vegetation"] =
+				{
+					{ "layer_asset_path", vegetation->layer_asset_path },
+					{ "surface_entity_id", vegetation->surface_entity_id },
+					{ "enabled", vegetation->enabled },
+				};
+			}
+
 			root["entities"].push_back(std::move(entity_json));
 			for (EntityId child_id : hierarchy.children)
 			{
@@ -3516,6 +4219,11 @@ namespace AshEngine
 		return m_impl ? m_impl->storage.render_terrain_version : 0;
 	}
 
+	uint64_t Scene::get_vegetation_version() const
+	{
+		return m_impl ? m_impl->storage.vegetation_version : 0;
+	}
+
 	uint64_t Scene::get_render_config_version() const
 	{
 		return m_impl ? m_impl->storage.render_config_version : 0;
@@ -3556,13 +4264,7 @@ namespace AshEngine
 		{
 			return;
 		}
-		for (const auto& [id, callback] : m_impl->storage.change_callbacks)
-		{
-			if (callback)
-			{
-				callback(event);
-			}
-		}
+		notify_scene_change_event(m_impl->storage, event);
 	}
 	// editor end
 
@@ -3592,6 +4294,7 @@ namespace AshEngine
 		case SceneComponentType::Terrain:
 			// Terrain requires an explicit non-empty asset path, which this
 			// parameterless facade cannot provide.
+		case SceneComponentType::Vegetation:
 			return false;
 		default:
 			return false;
@@ -3622,6 +4325,8 @@ namespace AshEngine
 			return entity.has_particle_component();
 		case SceneComponentType::Terrain:
 			return entity.has_terrain_component();
+		case SceneComponentType::Vegetation:
+			return entity.has_vegetation_component();
 		default:
 			return false;
 		}
@@ -3647,6 +4352,7 @@ namespace AshEngine
 		case SceneComponentType::Particle:
 			return entity.add_particle_component({});
 		case SceneComponentType::Terrain:
+		case SceneComponentType::Vegetation:
 			return false;
 		default:
 			return false;
@@ -3674,6 +4380,8 @@ namespace AshEngine
 			return entity.remove_particle_component();
 		case SceneComponentType::Terrain:
 			return entity.remove_terrain_component();
+		case SceneComponentType::Vegetation:
+			return entity.remove_vegetation_component();
 		default:
 			return false;
 		}

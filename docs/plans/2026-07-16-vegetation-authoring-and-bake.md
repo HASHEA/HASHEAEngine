@@ -698,10 +698,21 @@ git commit -m "feat(asset): load vegetation asset types"
 - Modify: `project/src/engine/Function/Scene/Scene.cpp`
 - Modify: `project/src/editor/Core/SceneComponentSerialization.cpp`
 - Modify: `project/src/editor/Core/SceneSnapshotComponentUtils.cpp`
-- Modify: `project/src/editor/Panels/Inspector/InspectorComponentMetadata.cpp`
+- Modify: `project/src/editor/Core/SceneSnapshotComponentUtils.h`
+- Modify: `project/src/editor/Core/SceneSnapshotUtils.cpp`
+- Modify: `project/src/editor/Core/SceneSnapshotUtils.h`
+- Modify: `project/src/editor/Core/EntityCommands.cpp`
+- Modify: `project/src/editor/Services/SceneService.cpp`
+- Modify: `project/src/editor/Services/SceneService.h`
 - Modify: `project/src/tests/Scene/particle_component_tests.cpp`
 - Modify: `project/src/tests/premake5.lua`
+- Modify: `docs/specs/modules/scene.md`
+- Modify: `docs/specs/modules/editor.md`
+- Modify: `README.md`
+- Modify: `docs/plans/2026-07-16-vegetation-authoring-and-bake.md`
 - Create: `project/src/tests/Scene/vegetation_component_tests.cpp`
+- Create: `project/src/tests/Editor/entity_commands_vegetation_tests.cpp`
+- Integrate after Task 3: `project/src/editor/Panels/Inspector/InspectorComponentMetadata.cpp`
 
 - [ ] **Step 1: Write Scene v7 RED cases**
 
@@ -744,15 +755,24 @@ TEST_CASE("VegetationComponent rejects self binding and legacy v6 defaults absen
 }
 ```
 
-Add descriptor assertions for `UInt64` and `VegetationLayer`, typed add/set/remove, independent vegetation version only, v7 round-trip, invalid/absolute/dot-segment/non-layer paths, zero/missing/self surface IDs, v3-v6 default absence even when a vegetation-shaped unknown field is injected, generic add false, generic remove true, duplicate/copy/paste snapshot preservation, and component read/write serialization without uint64 truncation. Update only the current writer-version assertion in `particle_component_tests.cpp` from 6 to 7; preserve `vegetation_baseline_scene_tests.cpp` as explicit legacy-v6 evidence.
+Add descriptor assertions for `UInt64` and `VegetationLayer`, typed add/set/remove, independent vegetation version only, v7 round-trip, invalid/absolute/dot-segment/non-layer paths, zero/missing/self surface IDs, v3-v6 default absence even when a vegetation-shaped unknown field is injected, generic add false, generic remove true, duplicate/copy/paste snapshot preservation, and component read/write serialization without uint64 truncation. Multi-root duplicate/paste/undo must share one ID-remap transaction, restore must create the full forest in parent+sibling order before applying references while returning root IDs in request order, rollback must preserve caller outputs plus dirty/change/render/component versions, next entity ID and the synchronous event stream, and deletion must validate the complete selected closure before mutation. The creation-only transaction must reject reload/replace on either side and entity construction must be internally exception-safe before entering scene order. Execute real `DuplicateEntitiesCommand`, `PasteEntitySnapshotsCommand`, and `DeleteEntitiesCommand` through `UndoRedoService` for Execute/Undo/Redo, including both same-parent selection orders and reverse-order Delete undo with untouched middle/trailing siblings. Update only the current writer-version assertion in `particle_component_tests.cpp` from 6 to 7; preserve `vegetation_baseline_scene_tests.cpp` as explicit legacy-v6 evidence.
 
-- [ ] **Step 2: Wire the two real Editor snapshot sources and run RED**
+- [ ] **Step 2: Wire the real Editor snapshot/command sources and run RED**
 
-Add both direct implementation units together; `SceneSnapshotComponentUtils.cpp` calls `SceneComponentSerialization.cpp` and is not linkable alone:
+Add the production snapshot/command implementation units required by the focused tests; `SceneSnapshotComponentUtils.cpp` calls `SceneComponentSerialization.cpp`, while the real command lifecycle requires its complete Debug link closure:
 
 ```lua
 "%{wks.location}/project/src/editor/Core/SceneComponentSerialization.cpp",
 "%{wks.location}/project/src/editor/Core/SceneSnapshotComponentUtils.cpp",
+"%{wks.location}/project/src/editor/Core/SceneSnapshotUtils.cpp",
+"%{wks.location}/project/src/editor/Core/EditorCommand.cpp",
+"%{wks.location}/project/src/editor/Core/EditorComponentComparison.cpp",
+"%{wks.location}/project/src/editor/Core/EditorPathUtils.cpp",
+"%{wks.location}/project/src/editor/Core/EntityCommands.cpp",
+"%{wks.location}/project/src/editor/Services/AssetDatabaseService.cpp",
+"%{wks.location}/project/src/editor/Services/SceneService.cpp",
+"%{wks.location}/project/src/editor/Services/SelectionService.cpp",
+"%{wks.location}/project/src/editor/Services/UndoRedoService.cpp",
 ```
 
 ```bat
@@ -789,7 +809,7 @@ std::vector<SceneVegetationExtractionDesc> Scene::extract_vegetation_entities() 
 uint64_t Scene::get_vegetation_version() const;
 ```
 
-Append `SceneComponentType::Vegetation`, `ScenePropertyType::UInt64`, and `ScenePropertyAssetRefKind::VegetationLayer`. Bump writer schema to 7, load Vegetation only for schema 7, and validate all references before mutating storage. Add independent `vegetation_version`; do not add a `RenderScene`, `VisibleRenderFrame`, `ScenePresentationSubsystem`, or `SceneRenderer` path.
+Append `SceneComponentType::Vegetation`, `ScenePropertyType::UInt64`, and `ScenePropertyAssetRefKind::VegetationLayer`. Bump writer schema to 7, load Vegetation only for schema 7, and validate all references before mutating storage. Add independent `vegetation_version`; do not add a `RenderScene`, `VisibleRenderFrame`, `ScenePresentationSubsystem`, or `SceneRenderer` path. Use a two-phase forest restore inside a creation-only `Scene::CreationTransaction`: all event entry points remain buffered until commit, rollback removes all newly created entities and restores dirty/change/render/component versions plus `next_entity_id`, registry/map/order construction is locally exception-safe, and reload/replace fail closed while either participating scene has an active transaction. Schedule multi-root creation by target parent+sibling index while preserving request-order outputs, use one batch deletion transaction, emit one same-version `EntityRemoved` notification per actual root, and compute each duplicate's final sibling index from every selected same-parent source at or before it so insertion order cannot affect cross-root references or exact hierarchy order through Duplicate/Paste/Delete undo-redo. `VegetationLayer -> AssetType::Layer` Inspector filtering is applied at the Task 3 integration point because the typed `AssetType::Layer` enum is introduced by Task 3.
 
 - [ ] **Step 4: Run GREEN and legacy regression**
 
@@ -800,7 +820,7 @@ RunTests.bat Debug --test-case="ParticleComponent*"
 RunTests.bat Debug --test-case="Vegetation baseline*"
 build_editor.bat Debug
 RunArchGate.bat
-git diff --check -- project/src/engine/Function/Scene/SceneComponents.h project/src/engine/Function/Scene/Scene.h project/src/engine/Function/Scene/Scene.cpp project/src/editor/Core/SceneComponentSerialization.cpp project/src/editor/Core/SceneSnapshotComponentUtils.cpp project/src/editor/Panels/Inspector/InspectorComponentMetadata.cpp project/src/tests/Scene/particle_component_tests.cpp project/src/tests/Scene/vegetation_component_tests.cpp project/src/tests/premake5.lua
+git diff --check -- project/src/engine/Function/Scene/SceneComponents.h project/src/engine/Function/Scene/Scene.h project/src/engine/Function/Scene/Scene.cpp project/src/editor/Core/SceneComponentSerialization.cpp project/src/editor/Core/SceneSnapshotComponentUtils.h project/src/editor/Core/SceneSnapshotComponentUtils.cpp project/src/editor/Core/SceneSnapshotUtils.h project/src/editor/Core/SceneSnapshotUtils.cpp project/src/editor/Core/EntityCommands.cpp project/src/editor/Services/SceneService.h project/src/editor/Services/SceneService.cpp project/src/tests/Scene/particle_component_tests.cpp project/src/tests/Scene/vegetation_component_tests.cpp project/src/tests/Editor/entity_commands_vegetation_tests.cpp project/src/tests/premake5.lua docs/specs/modules/scene.md docs/specs/modules/editor.md README.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md
 ```
 
 - [ ] **Step 5: Review and selectively commit**
@@ -808,7 +828,7 @@ git diff --check -- project/src/engine/Function/Scene/SceneComponents.h project/
 Review 1 checks strict v7 serialization, v3-v6 compatibility, self-reference/path rejection, and independent versioning. Review 2 checks exhaustive component switches, snapshot duplication, uint64 handling, and proves there is no Function/Render diff.
 
 ```bat
-git add -- project/src/engine/Function/Scene/SceneComponents.h project/src/engine/Function/Scene/Scene.h project/src/engine/Function/Scene/Scene.cpp project/src/editor/Core/SceneComponentSerialization.cpp project/src/editor/Core/SceneSnapshotComponentUtils.cpp project/src/editor/Panels/Inspector/InspectorComponentMetadata.cpp project/src/tests/Scene/particle_component_tests.cpp project/src/tests/Scene/vegetation_component_tests.cpp project/src/tests/premake5.lua
+git add -- project/src/engine/Function/Scene/SceneComponents.h project/src/engine/Function/Scene/Scene.h project/src/engine/Function/Scene/Scene.cpp project/src/editor/Core/SceneComponentSerialization.cpp project/src/editor/Core/SceneSnapshotComponentUtils.h project/src/editor/Core/SceneSnapshotComponentUtils.cpp project/src/editor/Core/SceneSnapshotUtils.h project/src/editor/Core/SceneSnapshotUtils.cpp project/src/editor/Core/EntityCommands.cpp project/src/editor/Services/SceneService.h project/src/editor/Services/SceneService.cpp project/src/tests/Scene/particle_component_tests.cpp project/src/tests/Scene/vegetation_component_tests.cpp project/src/tests/Editor/entity_commands_vegetation_tests.cpp project/src/tests/premake5.lua docs/specs/modules/scene.md docs/specs/modules/editor.md README.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md
 git commit -m "feat(scene): add vegetation layer bindings"
 ```
 

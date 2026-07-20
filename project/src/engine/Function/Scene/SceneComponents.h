@@ -19,7 +19,8 @@ namespace AshEngine
 		Mesh,
 		Environment,
 		Particle,
-		Terrain
+		Terrain,
+		Vegetation
 	};
 
 	enum class ScenePropertyType : uint8_t
@@ -32,7 +33,8 @@ namespace AshEngine
 		Vec3,
 		Vec4,
 		String,
-		Enum
+		Enum,
+		UInt64
 	};
 
 	// editor begin 修改原因：组件元数据增强，供 Editor Inspector 读取 hint / range / asset ref
@@ -51,7 +53,8 @@ namespace AshEngine
 		Mesh,
 		Material,
 		Texture,
-		IBL
+		IBL,
+		VegetationLayer
 	};
 	// editor end
 
@@ -185,6 +188,13 @@ namespace AshEngine
 		bool casts_shadow = true;
 		bool receives_shadow = true;
 		std::array<std::string, 8> material_layer_overrides{};
+	};
+
+	struct VegetationComponent
+	{
+		std::string layer_asset_path{};
+		uint64_t surface_entity_id = 0;
+		bool enabled = true;
 	};
 
 	struct SceneEnumValueDesc

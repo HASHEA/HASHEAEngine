@@ -39,6 +39,7 @@ namespace AshEditor
 		// Modifies entity state. Returns false if the entity does not exist or the operation is not allowed.
 		bool RenameEntity(SceneEntityId uEntityId, std::string_view svName);
 		bool DestroyEntity(SceneEntityId uEntityId);
+		bool DestroyEntities(const std::vector<SceneEntityId>& vecEntityIds);
 		bool ReparentEntity(SceneEntityId uEntityId, SceneEntityId uNewParentId);
 		bool ReparentEntity(SceneEntityId uEntityId, SceneEntityId uNewParentId, uint32_t uSiblingIndex);
 

@@ -55,6 +55,7 @@ status: active
 - Scene Viewport 相机移动：滚轮沿视线方向等步长平移 camera position 与 orbit target，不得随 orbit distance 缩短而减速；Shift 仅将滚轮、MMB Pan、Alt+RMB Dolly 的当次移动速度乘以 2，不得写回 Camera Speed 设置。Orbit 旋转灵敏度与 F Focus 不受 Shift 影响。
 - 场景修改必须封装为 `EditorCommand` 经 CommandService 执行，保证 undo/redo 与选择一致性；面板间通信走 `EditorEventBus` 或 Services，不得互相直接引用。
 - Particle 必须进入 entity snapshot 的复制/删除/撤销恢复路径。连续属性编辑只在 command 前后状态结构连续时合并；跨 saved checkpoint 不合并，最终状态等于初始状态时不得生成空历史项。
+- Vegetation 必须进入 entity snapshot 的复制/删除/撤销恢复路径。多根 Duplicate/Paste/redo 用同一 forest ID remap，先按 parent+sibling index 创建完整 hierarchy，再应用组件，同时保持调用方 root ID 输出顺序；Delete/undo 以整批事务执行。跨根 `surface_entity_id` 必须指向对应 copy/restore 后实体；同父多选复制保持每个 copy 紧邻原 root，且不受选择顺序影响；逆序 Delete undo 即使选中根之间或之后仍有未删除 sibling，也必须恢复精确原顺序。任一晚失败要回滚全部新根、调用方输出 ID、dirty/change/render/component versions、下一实体 ID 与同步事件流；成功批删必须让每个实际 root 的逐实体 UI 状态收到同版本失效通知。
 - Particle sprite 的空路径与已知缺失路径沿用运行时 Default White fallback，因此不得阻止 Inspector 提交；资产库能确认路径是非 Texture 类型时必须阻止提交。Soft Particles 开关只控制 fade distance 的可编辑状态，不得清空该值。
 - 场景 new/load/reload 的重置语义由 `SceneWorkflowCoordinator` 统一执行：先做 Terrain preflight；Scene mutation 成功后按 Terrain session commit → 清 Selection → 清 UndoRedo → 选中默认实体执行。Scene load/reload 失败时原子保留当前内存 Scene、active path、Selection、history 与 Terrain recovery/error 状态，不激活 fallback Scene；未完成的异步 `Ctrl+S` continuation 也不会被新请求静默取消。primary viewport 唯一，viewport 共享状态只由 primary 发布。
 - 稳定标识：action/panel/viewport 的 id、drag payload type 与 Terrain layer 的 16-byte ID 是持久化/交互契约；layer command 和选择不得持久化 vector index。

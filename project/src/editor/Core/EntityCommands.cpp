@@ -164,29 +164,11 @@ namespace AshEditor
 			return parentEntity.is_valid() ? uPreferredParentId : 0;
 		}
 
-		void DestroyEntityRoots(SceneService& refSceneService, const std::vector<SceneEntityId>& vecEntityIds)
+		bool DestroyEntityRoots(SceneService& refSceneService, const std::vector<SceneEntityId>& vecEntityIds)
 		{
-			for (
-				std::vector<SceneEntityId>::const_reverse_iterator itEntityId = vecEntityIds.rbegin();
-				itEntityId != vecEntityIds.rend();
-				++itEntityId)
-			{
-				if (*itEntityId != 0)
-				{
-					refSceneService.DestroyEntity(*itEntityId);
-				}
-			}
+			return vecEntityIds.empty() || refSceneService.DestroyEntities(vecEntityIds);
 		}
 
-		void ClearCreatedEntityState(
-			std::vector<SceneEntityId>& refCreatedRootEntityIds,
-			std::vector<SceneEntityId>& refCreatedParentEntityIds,
-			std::vector<SceneEntitySnapshot>& refCreatedSnapshots)
-		{
-			refCreatedRootEntityIds.clear();
-			refCreatedParentEntityIds.clear();
-			refCreatedSnapshots.clear();
-		}
 	}
 
 	RenameEntityCommand::RenameEntityCommand(SceneEntityId uEntityId, std::string strNewName)
@@ -1260,35 +1242,45 @@ namespace AshEditor
 
 		if (!_vecCreatedSnapshots.empty())
 		{
-			_vecCreatedRootEntityIds.clear();
+			if (_vecCreatedSnapshots.size() != _vecCreatedParentEntityIds.size())
+			{
+				return false;
+			}
+
+			std::vector<SceneSnapshotUtils::SceneSnapshotRestoreRequest> requests{};
+			requests.reserve(_vecCreatedSnapshots.size());
 			for (size_t uIndex = 0; uIndex < _vecCreatedSnapshots.size(); ++uIndex)
 			{
-				const SceneEntityId uParentId =
-					uIndex < _vecCreatedParentEntityIds.size()
-					? _vecCreatedParentEntityIds[uIndex]
-					: 0;
-				AshEngine::Entity restored =
-					refContext.pSceneService->RestoreEntitySnapshot(_vecCreatedSnapshots[uIndex], uParentId);
-				if (!restored.is_valid())
-				{
-					DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-					return false;
-				}
-				_vecCreatedRootEntityIds.push_back(restored.get_id());
+				requests.push_back({
+					&_vecCreatedSnapshots[uIndex],
+					_vecCreatedParentEntityIds[uIndex],
+					_vecCreatedSnapshots[uIndex].uSiblingIndex,
+					nullptr });
 			}
-			return true;
+
+			std::vector<SceneEntityId> restoredRootIds{};
+			if (!SceneSnapshotUtils::RestoreEntitySnapshots(
+				refContext.pSceneService->GetActiveScene(),
+				requests,
+				restoredRootIds))
+			{
+				return false;
+			}
+			_vecCreatedRootEntityIds = std::move(restoredRootIds);
+			return !_vecCreatedRootEntityIds.empty();
 		}
 
-		_vecCreatedRootEntityIds.clear();
-		_vecCreatedParentEntityIds.clear();
-		_vecCreatedSnapshots.clear();
+		std::vector<SceneEntitySnapshot> sourceSnapshots{};
+		std::vector<SceneEntityId> createdParentEntityIds{};
+		std::vector<uint32_t> sourceSiblingIndices{};
+		sourceSnapshots.reserve(_vecSourceEntityIds.size());
+		createdParentEntityIds.reserve(_vecSourceEntityIds.size());
+		sourceSiblingIndices.reserve(_vecSourceEntityIds.size());
 		for (const SceneEntityId uSourceEntityId : _vecSourceEntityIds)
 		{
 			const AshEngine::Entity sourceEntity = refContext.pSceneService->FindEntity(uSourceEntityId);
 			if (!sourceEntity.is_valid())
 			{
-				DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-				ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
 				return false;
 			}
 
@@ -1296,40 +1288,64 @@ namespace AshEditor
 				refContext.pSceneService->CaptureEntitySnapshot(uSourceEntityId);
 			if (!optSourceSnapshot.has_value())
 			{
-				DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-				ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
 				return false;
 			}
-
-			const SceneEntityId uParentId = GetEntityParentId(sourceEntity);
-			const uint32_t uSiblingIndex = refContext.pSceneService->GetEntitySiblingIndex(uSourceEntityId) + 1u;
-			AshEngine::Entity duplicated = SceneSnapshotUtils::RestoreEntitySnapshotAsCopy(
-				refContext.pSceneService->GetActiveScene(),
-				*optSourceSnapshot,
-				uParentId,
-				uSiblingIndex,
-				nullptr,
-				" Copy");
-			if (!duplicated.is_valid())
-			{
-				DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-				ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
-				return false;
-			}
-
-			_vecCreatedRootEntityIds.push_back(duplicated.get_id());
-			_vecCreatedParentEntityIds.push_back(uParentId);
-			const std::optional<SceneEntitySnapshot> optCreatedSnapshot =
-				refContext.pSceneService->CaptureEntitySnapshot(duplicated.get_id());
-			if (!optCreatedSnapshot.has_value())
-			{
-				DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-				ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
-				return false;
-			}
-			_vecCreatedSnapshots.push_back(*optCreatedSnapshot);
+			sourceSnapshots.push_back(*optSourceSnapshot);
+			createdParentEntityIds.push_back(GetEntityParentId(sourceEntity));
+			sourceSiblingIndices.push_back(
+				refContext.pSceneService->GetEntitySiblingIndex(uSourceEntityId));
 		}
 
+		std::vector<SceneSnapshotUtils::SceneSnapshotRestoreRequest> requests{};
+		requests.reserve(sourceSnapshots.size());
+		for (size_t uIndex = 0; uIndex < sourceSnapshots.size(); ++uIndex)
+		{
+			uint64_t uTargetSiblingIndex = static_cast<uint64_t>(sourceSiblingIndices[uIndex]);
+			for (size_t uSelectedIndex = 0; uSelectedIndex < sourceSnapshots.size(); ++uSelectedIndex)
+			{
+				if (createdParentEntityIds[uSelectedIndex] == createdParentEntityIds[uIndex] &&
+					sourceSiblingIndices[uSelectedIndex] <= sourceSiblingIndices[uIndex])
+				{
+					++uTargetSiblingIndex;
+				}
+			}
+			if (uTargetSiblingIndex >= AshEngine::k_scene_append_sibling_index)
+			{
+				return false;
+			}
+			requests.push_back({
+				&sourceSnapshots[uIndex],
+				createdParentEntityIds[uIndex],
+				static_cast<uint32_t>(uTargetSiblingIndex),
+				" Copy" });
+		}
+
+		std::vector<SceneEntityId> createdRootEntityIds{};
+		if (!SceneSnapshotUtils::RestoreEntitySnapshotsAsCopies(
+			refContext.pSceneService->GetActiveScene(),
+			requests,
+			createdRootEntityIds))
+		{
+			return false;
+		}
+
+		std::vector<SceneEntitySnapshot> createdSnapshots{};
+		createdSnapshots.reserve(createdRootEntityIds.size());
+		for (const SceneEntityId createdRootEntityId : createdRootEntityIds)
+		{
+			const std::optional<SceneEntitySnapshot> optCreatedSnapshot =
+				refContext.pSceneService->CaptureEntitySnapshot(createdRootEntityId);
+			if (!optCreatedSnapshot.has_value())
+			{
+				DestroyEntityRoots(*refContext.pSceneService, createdRootEntityIds);
+				return false;
+			}
+			createdSnapshots.push_back(*optCreatedSnapshot);
+		}
+
+		_vecCreatedRootEntityIds = std::move(createdRootEntityIds);
+		_vecCreatedParentEntityIds = std::move(createdParentEntityIds);
+		_vecCreatedSnapshots = std::move(createdSnapshots);
 		return !_vecCreatedRootEntityIds.empty();
 	}
 
@@ -1340,8 +1356,7 @@ namespace AshEditor
 			return false;
 		}
 
-		DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-		return true;
+		return DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
 	}
 
 	EditorCommandSelection DuplicateEntitiesCommand::GetSelectionAfterExecute() const
@@ -1376,26 +1391,40 @@ namespace AshEditor
 
 		if (!_vecCreatedSnapshots.empty())
 		{
-			_vecCreatedRootEntityIds.clear();
+			if (_vecCreatedSnapshots.size() != _vecCreatedParentEntityIds.size())
+			{
+				return false;
+			}
+
+			std::vector<SceneSnapshotUtils::SceneSnapshotRestoreRequest> requests{};
+			requests.reserve(_vecCreatedSnapshots.size());
 			for (size_t uIndex = 0; uIndex < _vecCreatedSnapshots.size(); ++uIndex)
 			{
 				const SceneEntityId uParentId =
-					uIndex < _vecCreatedParentEntityIds.size()
-					? ResolvePreferredParentId(*refContext.pSceneService, _vecCreatedParentEntityIds[uIndex])
-					: 0;
-				AshEngine::Entity restored =
-					refContext.pSceneService->RestoreEntitySnapshot(_vecCreatedSnapshots[uIndex], uParentId);
-				if (!restored.is_valid())
-				{
-					DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-					return false;
-				}
-				_vecCreatedRootEntityIds.push_back(restored.get_id());
+					ResolvePreferredParentId(*refContext.pSceneService, _vecCreatedParentEntityIds[uIndex]);
+				requests.push_back({
+					&_vecCreatedSnapshots[uIndex],
+					uParentId,
+					_vecCreatedSnapshots[uIndex].uSiblingIndex,
+					nullptr });
 			}
-			return true;
+
+			std::vector<SceneEntityId> restoredRootIds{};
+			if (!SceneSnapshotUtils::RestoreEntitySnapshots(
+				refContext.pSceneService->GetActiveScene(),
+				requests,
+				restoredRootIds))
+			{
+				return false;
+			}
+			_vecCreatedRootEntityIds = std::move(restoredRootIds);
+			return !_vecCreatedRootEntityIds.empty();
 		}
 
-		ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
+		std::vector<SceneEntityId> createdParentEntityIds{};
+		std::vector<SceneSnapshotUtils::SceneSnapshotRestoreRequest> requests{};
+		createdParentEntityIds.reserve(_vecSourceSnapshots.size());
+		requests.reserve(_vecSourceSnapshots.size());
 		for (size_t uIndex = 0; uIndex < _vecSourceSnapshots.size(); ++uIndex)
 		{
 			const SceneEntitySnapshot& refSourceSnapshot = _vecSourceSnapshots[uIndex];
@@ -1404,33 +1433,40 @@ namespace AshEditor
 				? _vecPreferredParentEntityIds[uIndex]
 				: 0;
 			const SceneEntityId uParentId = ResolvePreferredParentId(*refContext.pSceneService, uPreferredParentId);
-			AshEngine::Entity pasted = SceneSnapshotUtils::RestoreEntitySnapshotAsCopy(
-				refContext.pSceneService->GetActiveScene(),
-				refSourceSnapshot,
+			createdParentEntityIds.push_back(uParentId);
+			requests.push_back({
+				&refSourceSnapshot,
 				uParentId,
 				kSceneAppendSiblingIndex,
-				nullptr,
-				" Copy");
-			if (!pasted.is_valid())
-			{
-				DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-				ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
-				return false;
-			}
-
-			_vecCreatedRootEntityIds.push_back(pasted.get_id());
-			_vecCreatedParentEntityIds.push_back(uParentId);
-			const std::optional<SceneEntitySnapshot> optCreatedSnapshot =
-				refContext.pSceneService->CaptureEntitySnapshot(pasted.get_id());
-			if (!optCreatedSnapshot.has_value())
-			{
-				DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-				ClearCreatedEntityState(_vecCreatedRootEntityIds, _vecCreatedParentEntityIds, _vecCreatedSnapshots);
-				return false;
-			}
-			_vecCreatedSnapshots.push_back(*optCreatedSnapshot);
+				" Copy" });
 		}
 
+		std::vector<SceneEntityId> createdRootEntityIds{};
+		if (!SceneSnapshotUtils::RestoreEntitySnapshotsAsCopies(
+			refContext.pSceneService->GetActiveScene(),
+			requests,
+			createdRootEntityIds))
+		{
+			return false;
+		}
+
+		std::vector<SceneEntitySnapshot> createdSnapshots{};
+		createdSnapshots.reserve(createdRootEntityIds.size());
+		for (const SceneEntityId createdRootEntityId : createdRootEntityIds)
+		{
+			const std::optional<SceneEntitySnapshot> optCreatedSnapshot =
+				refContext.pSceneService->CaptureEntitySnapshot(createdRootEntityId);
+			if (!optCreatedSnapshot.has_value())
+			{
+				DestroyEntityRoots(*refContext.pSceneService, createdRootEntityIds);
+				return false;
+			}
+			createdSnapshots.push_back(*optCreatedSnapshot);
+		}
+
+		_vecCreatedRootEntityIds = std::move(createdRootEntityIds);
+		_vecCreatedParentEntityIds = std::move(createdParentEntityIds);
+		_vecCreatedSnapshots = std::move(createdSnapshots);
 		return !_vecCreatedRootEntityIds.empty();
 	}
 
@@ -1441,8 +1477,7 @@ namespace AshEditor
 			return false;
 		}
 
-		DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
-		return true;
+		return DestroyEntityRoots(*refContext.pSceneService, _vecCreatedRootEntityIds);
 	}
 
 	EditorCommandSelection PasteEntitySnapshotsCommand::GetSelectionAfterExecute() const
@@ -1588,47 +1623,15 @@ namespace AshEditor
 			}
 		}
 
-		std::vector<SceneEntityId> vecDestroyedEntityIds{};
-		vecDestroyedEntityIds.reserve(_vecEntityIds.size());
-		for (
-			std::vector<SceneEntityId>::const_reverse_iterator itEntityId = _vecEntityIds.rbegin();
-			itEntityId != _vecEntityIds.rend();
-			++itEntityId)
+		if (!refContext.pSceneService->DestroyEntities(_vecEntityIds))
 		{
-			if (*itEntityId == 0)
-			{
-				continue;
-			}
-
-			if (!refContext.pSceneService->DestroyEntity(*itEntityId))
-			{
-				HLogWarning(
-					"DeleteEntitiesCommand failed to destroy entity id={}. Restoring already deleted entities.",
-					static_cast<unsigned long long>(*itEntityId));
-				for (size_t uRestoreIndex = 0; uRestoreIndex < _vecEntityIds.size(); ++uRestoreIndex)
-				{
-					if (std::find(vecDestroyedEntityIds.begin(), vecDestroyedEntityIds.end(), _vecEntityIds[uRestoreIndex]) ==
-						vecDestroyedEntityIds.end())
-					{
-						continue;
-					}
-
-					const SceneEntityId uParentId =
-						uRestoreIndex < _vecParentIds.size()
-						? _vecParentIds[uRestoreIndex]
-						: 0;
-					if (uRestoreIndex < _vecSnapshots.size())
-					{
-						refContext.pSceneService->RestoreEntitySnapshot(_vecSnapshots[uRestoreIndex], uParentId);
-					}
-				}
-				return false;
-			}
-
-			vecDestroyedEntityIds.push_back(*itEntityId);
+			HLogWarning(
+				"DeleteEntitiesCommand failed to destroy entity batch (count={}).",
+				static_cast<unsigned long long>(_vecEntityIds.size()));
+			return false;
 		}
 
-		return !vecDestroyedEntityIds.empty();
+		return true;
 	}
 
 	bool DeleteEntitiesCommand::Undo(EditorContext& refContext)
@@ -1645,26 +1648,28 @@ namespace AshEditor
 			return false;
 		}
 
-		std::vector<SceneEntityId> vecRestoredEntityIds{};
-		vecRestoredEntityIds.reserve(_vecSnapshots.size());
+		std::vector<SceneSnapshotUtils::SceneSnapshotRestoreRequest> requests{};
+		requests.reserve(_vecSnapshots.size());
 		for (size_t uIndex = 0; uIndex < _vecSnapshots.size(); ++uIndex)
 		{
-			AshEngine::Entity restored = refContext.pSceneService->RestoreEntitySnapshot(
-				_vecSnapshots[uIndex],
-				_vecParentIds[uIndex]);
-			if (!restored.is_valid())
-			{
-				HLogWarning(
-					"DeleteEntitiesCommand undo failed while restoring snapshot index={}.",
-					static_cast<unsigned long long>(uIndex));
-				DestroyEntityRoots(*refContext.pSceneService, vecRestoredEntityIds);
-				return false;
-			}
-
-			vecRestoredEntityIds.push_back(restored.get_id());
+			requests.push_back({
+				&_vecSnapshots[uIndex],
+				_vecParentIds[uIndex],
+				_vecSnapshots[uIndex].uSiblingIndex,
+				nullptr });
 		}
 
-		_vecEntityIds = std::move(vecRestoredEntityIds);
+		std::vector<SceneEntityId> restoredEntityIds{};
+		if (!SceneSnapshotUtils::RestoreEntitySnapshots(
+			refContext.pSceneService->GetActiveScene(),
+			requests,
+			restoredEntityIds))
+		{
+			HLogWarning("DeleteEntitiesCommand undo failed to restore the entity batch.");
+			return false;
+		}
+
+		_vecEntityIds = std::move(restoredEntityIds);
 		return !_vecEntityIds.empty();
 	}
 

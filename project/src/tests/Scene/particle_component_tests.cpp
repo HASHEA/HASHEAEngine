@@ -252,7 +252,7 @@ TEST_CASE("ParticleComponent facade, extraction, and scene serialization preserv
 	REQUIRE(scene.save_to_file(scene_path, &error_message));
 	CHECK(error_message.empty());
 	json saved_json = ReadJson(scene_path);
-	CHECK(saved_json.at("version") == 6u);
+	CHECK(saved_json.at("version") == 7u);
 	REQUIRE(saved_json.at("entities").size() == 1u);
 	const json& saved_particle = saved_json.at("entities")[0].at("particle");
 	CHECK(saved_particle.at("sprite_texture_path") == expected.sprite_texture_path);

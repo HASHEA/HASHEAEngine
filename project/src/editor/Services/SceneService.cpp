@@ -2,7 +2,7 @@
 #include "Base/hlog.h"
 #include "Core/EditorEventBus.h"
 #include "Core/EditorEvents.h"
-#include "Core/SceneSnapshotComponentUtils.h"
+#include "Core/SceneSnapshotUtils.h"
 
 #include <algorithm>
 
@@ -15,49 +15,6 @@ namespace AshEditor
 			return std::find(vecEntityIds.begin(), vecEntityIds.end(), uEntityId) != vecEntityIds.end();
 		}
 
-		SceneEntitySnapshot CaptureSnapshotRecursive(
-			const SceneService& refSceneService,
-			const AshEngine::Entity& refEntity)
-		{
-			SceneEntitySnapshot snapshot{};
-			snapshot.uEntityId = refEntity.get_id();
-			snapshot.uSiblingIndex = refSceneService.GetEntitySiblingIndex(refEntity.get_id());
-
-			snapshot.vecComponents = SceneSnapshotComponentUtils::CaptureComponentSnapshots(refEntity);
-
-			for (const AshEngine::Entity& refChild : refEntity.get_children())
-			{
-				snapshot.vecChildren.push_back(CaptureSnapshotRecursive(refSceneService, refChild));
-			}
-			return snapshot;
-		}
-
-		AshEngine::Entity RestoreSnapshotRecursive(
-			SceneService& refSceneService,
-			const SceneEntitySnapshot& refSnapshot,
-			const SceneEntityId uParentId)
-		{
-			AshEngine::Entity entity =
-				refSceneService.CreateEntityWithId(refSnapshot.uEntityId, "Entity", uParentId, refSnapshot.uSiblingIndex);
-			if (!entity.is_valid() || !SceneSnapshotComponentUtils::ApplyEntitySnapshot(entity, refSnapshot))
-			{
-				if (entity.is_valid())
-				{
-					refSceneService.DestroyEntity(entity.get_id());
-				}
-				return {};
-			}
-
-			for (const SceneEntitySnapshot& refChildSnapshot : refSnapshot.vecChildren)
-			{
-				if (!RestoreSnapshotRecursive(refSceneService, refChildSnapshot, entity.get_id()).is_valid())
-				{
-					refSceneService.DestroyEntity(entity.get_id());
-					return {};
-				}
-			}
-			return entity;
-		}
 	}
 
 	bool SceneService::Initialize(const std::filesystem::path& pathStartupScene)
@@ -181,12 +138,17 @@ namespace AshEditor
 
 	bool SceneService::DestroyEntity(const SceneEntityId uSceneEntityId)
 	{
-		const bool bDestroyed = uSceneEntityId != 0 && _activeScene.destroy_entity(uSceneEntityId);
+		return DestroyEntities({ uSceneEntityId });
+	}
+
+	bool SceneService::DestroyEntities(const std::vector<SceneEntityId>& vecEntityIds)
+	{
+		const bool bDestroyed = !vecEntityIds.empty() && _activeScene.destroy_entities(vecEntityIds);
 		if (!bDestroyed)
 		{
 			HLogWarning(
-				"SceneService failed to destroy entity id={}.",
-				static_cast<unsigned long long>(uSceneEntityId));
+				"SceneService failed to destroy entity batch (count={}).",
+				static_cast<unsigned long long>(vecEntityIds.size()));
 		}
 		return bDestroyed;
 	}
@@ -302,12 +264,13 @@ namespace AshEditor
 				static_cast<unsigned long long>(uSceneEntityId));
 			return std::nullopt;
 		}
-		return CaptureSnapshotRecursive(*this, entity);
+		return SceneSnapshotUtils::CaptureEntitySnapshot(_activeScene, uSceneEntityId);
 	}
 
 	AshEngine::Entity SceneService::RestoreEntitySnapshot(const SceneEntitySnapshot& refSnapshot, const SceneEntityId uParentId)
 	{
-		AshEngine::Entity entity = RestoreSnapshotRecursive(*this, refSnapshot, uParentId);
+		AshEngine::Entity entity =
+			SceneSnapshotUtils::RestoreEntitySnapshot(_activeScene, refSnapshot, uParentId);
 		if (!entity.is_valid())
 		{
 			HLogWarning(

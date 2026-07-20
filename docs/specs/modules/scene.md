@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-16
+last_reviewed: 2026-07-20
 status: active
 ---
 
@@ -26,9 +26,9 @@ status: active
 
 ## 公共接口
 
-- `Scene`：`create` / `load_from_file` / `reload_from_file` / `replace_contents` / `save_to_file`；实体 CRUD；提取接口 `extract_mesh_entities` / `extract_visible_mesh_entities` / `extract_light_entities` / `extract_active_environment` / `extract_particle_entities` / `extract_terrain_entities`；`get_render_config` / `set_render_config`；`get_render_{primitive,transform,light,environment,particle,terrain,config}_version` 供渲染侧增量同步；`get_content_epoch()` 标识 reload/replace 后的新场景内容世代。
-- `Entity`：`EntityId`（uint64）；八类组件 Name/Transform/Camera/Light/Mesh/Environment/Particle/Terrain 的 has/get/set/add/remove；通用 `read_component` / `write_component`；层级 API；`set_transform_component_silent`（编辑器临时实体静默更新，不走变更事件）。
-- 变更事件：`SceneChangeKind`（EntityAdded/EntityRemoved/HierarchyChanged/ComponentChanged/SceneReplaced/SceneReloaded/DirtyStateChanged）+ `subscribe_change_events` / `unsubscribe_change_events` / `notify_change_event`，同步回调。
+- `Scene`：`create` / `load_from_file` / `reload_from_file` / `replace_contents` / `save_to_file`；实体 CRUD（含事务性 `destroy_entities`）；creation-only `begin_creation_transaction`；提取接口 `extract_mesh_entities` / `extract_visible_mesh_entities` / `extract_light_entities` / `extract_active_environment` / `extract_particle_entities` / `extract_terrain_entities` / `extract_vegetation_entities`；`get_render_config` / `set_render_config`；`get_render_{primitive,transform,light,environment,particle,terrain,config}_version` 与独立 `get_vegetation_version`；`get_content_epoch()` 标识 reload/replace 后的新场景内容世代。
+- `Entity`：`EntityId`（uint64）；九类组件 Name/Transform/Camera/Light/Mesh/Environment/Particle/Terrain/Vegetation 的 has/get/set/add/remove；通用 `read_component` / `write_component`；层级 API；`set_transform_component_silent`（编辑器临时实体静默更新，不走变更事件）。Vegetation 只允许 typed add/set，generic add 保持禁用。
+- 变更事件：`SceneChangeKind`（EntityAdded/EntityRemoved/HierarchyChanged/ComponentChanged/SceneReplaced/SceneReloaded/DirtyStateChanged）+ `subscribe_change_events` / `unsubscribe_change_events` / `notify_change_event`，同步回调。creation transaction（仅允许创建新实体，不得改写既有实体）内包括公开 `notify_change_event` 在内的事件全部延迟到 commit；rollback 丢弃事件并恢复创建前的 dirty/change/render/component versions 与 `next_entity_id`。实体内部构造在 registry/map/order 任一步失败时自身先回滚，事务不得遗留不在 `entity_order` 中的 orphan。
 - 组件反射：`get_scene_component_descriptor(s)`、`get_scene_enum_descriptor`、通用 `can_add/can_remove/add/remove_scene_component` facade（Inspector 依赖）。
 - 实例化：`instantiate_model` / `instantiate_ashasset` / `instantiate_mesh` / 自由函数 `instantiate_asset(Scene&, AssetDatabase&, AssetId, SceneInstantiationDesc)`。
 - `SceneQuery`：`get_entity_world_bounds` / `get_entity_subtree_world_bounds` / `screen_to_world_ray` / `ray_cast_scene` / `project_ray_to_plane` / `find_scene_drop_point`；Terrain overload 按 Entity 或全 Scene 提供 world-space `query_height` / `query_normal` / `ray_cast_terrain`。通用 bounds 会合并同一 Entity 的 Mesh 与 Terrain：完整 resident Terrain 聚合全部 Component root min/max，未完整 resident 时用 height mapping 给出不低估的保守 Y 范围；layout/spacing 定义 X/Z，完整 parent chain 的有限正非均匀缩放参与 world AABB。
@@ -47,13 +47,16 @@ status: active
 - `ScenePresentationSubsystem` 是 Scene 通往渲染的唯一入口：上层（Editor/Sandbox）不得绕过它直接驱动 `SceneRenderer` / `RenderScene`。
 - 自动化不得用“任一 view 成功”代表整帧成功：每个 enabled 且绑定非空 Scene 的预期 packet 都必须计 attempted；output/extent、RenderScene/view/visible-frame、material 或最终 render 任一失败均计 failed。Application 只消费 frame index 与本次 present 对齐的快照。
 - 渲染侧只读 `VisibleRenderFrame`；帧数据构建后不可变，`SceneRenderConfig` 以快照形式随帧携带。
-- `Scene`/`Entity` 是 shared_ptr pimpl 句柄，拷贝共享同一底层数据；`replace_contents` / `reload_from_file` 保留变更事件订阅者。
+- `Scene`/`Entity` 是 shared_ptr pimpl 句柄，拷贝共享同一底层数据；`replace_contents` / `reload_from_file` 保留变更事件订阅者。任一 source/target 存在 active creation transaction 时 reload/replace 必须 fail-closed 且两侧内容均不移动。
 - 变更事件回调同步执行于调用线程；`RenderScene::get_static_mesh_primitives_snapshot` 是唯一声明线程安全的快照接口。
-- 组件集合固定为 `SceneComponentType` 八项（Name/Transform/Camera/Light/Mesh/Environment/Particle/Terrain）。当前 scene JSON schema 为 version 6；v3-v5 场景继续加载且没有隐式 Terrain。Particle 的 `blend_mode` 写为 `Additive` / `AlphaBlend` 字符串，读取兼容旧整数。
+- 组件集合固定为 `SceneComponentType` 九项（Name/Transform/Camera/Light/Mesh/Environment/Particle/Terrain/Vegetation）。当前 scene JSON schema 为 version 7；v3-v5 场景继续加载且没有隐式 Terrain，v3-v6 读取时即使出现 vegetation-shaped 未知字段也忽略并保持无 Vegetation。Particle 的 `blend_mode` 写为 `Additive` / `AlphaBlend` 字符串，读取兼容旧整数。
 - `TerrainComponent` 必须引用非空资产路径，保存 8 个材质层覆盖位；Terrain Entity 的完整 transform chain 只允许有限平移、零旋转与有限正缩放。非法 add/set/reparent/load 原子失败，不静默修正或替换既有组件。
 - Terrain 内容组件变化只推进 `render_terrain_version`；普通合法 transform/reparent 只推进 transform revision，不重建 Terrain asset data。参数为空的通用 `add_scene_component` 无法构造合法 Terrain，故 Terrain 创建必须使用携带资产路径的 typed facade；通用 read/write/remove 仍支持 Terrain。
 - ScenePresentation 同帧观察到 Terrain topology 与 transform 变化时，必须先按最新 extraction 重建 proxy 集合，再更新 transform；失败保持旧集合或将 render scene 标为无效并在下一帧全量重试，不发布半构建 Terrain 集合。
 - Scene Terrain world adapter 将 world 坐标按平移与正缩放映射到 snapshot-local；高度、逆转置法线和射线距离再转换回 world space。多 Terrain 射线在任何候选资产仍 Pending 时保守返回 Pending；Failed 优先于结果，所有非 Ready 路径保持输出不变。Terrain 尚未并入通用 mesh `ray_cast_scene` 或 Editor GPU pick。
+- `VegetationComponent` 只保存 asset-root-relative `.AshVegetationLayer` 路径、非零且存在且非 self 的 `surface_entity_id` 与 enabled。路径拒绝绝对路径、反斜杠、空/点段与非 layer 扩展；扩展名大小写不敏感。加载先创建全部实体，再应用 Vegetation，确保文件内前向引用有效；无效引用使 v7 load fail-closed。`surface_entity_id` 以原生 uint64 读写，不经浮点中转。
+- 删除 surface 前必须验证完整删除闭包：闭包外仍有 Vegetation 引用时整批拒绝且零 mutation；植被与 surface 同批/同 subtree 删除时允许，并只推进一次 vegetation version。成功批删为每个实际 top-level root 发布同一 change version 的 `EntityRemoved`，使逐实体 UI 状态全部失效。
+- 多根 snapshot 恢复的创建调度按 target parent 与原 sibling index 排序，但 root ID 输出仍保持调用请求顺序；因此逆序选择、根之间保留未删除 sibling、以及 Duplicate/Paste redo 都必须恢复精确 hierarchy order。
 - Particle v6 的 `sprite_texture_path` 是 RGBA sprite 资产引用，默认空路径表示默认 White sprite；`radial_falloff`（默认 1.0，范围 0..1）是 sprite-only 与 analytic radial mask 的混合权重，`radial_sharpness`（默认 2.0，范围 0.25..8）是径向 mask 的 power exponent；`soft_particles`（默认 true）控制 opaque scene depth 相交处淡出，`soft_fade_distance`（默认 0.25，范围 0.001..10）是 world-space 深度淡出区间。version 5 缺少这些键时保持默认值。render/submit thread 通过 `RenderAssetManager` 消费 sprite 路径；空路径使用 White fallback，显式失败路径保持 Failed readiness 与错误日志，同时用 fallback resource 保持可见。
 - Particle JSON malformed sanitation：字符串/布尔类型错误保留默认值；新增浮点字段的非有限值先回退默认，再 clamp 到各自范围。Scene add/set/load 继续共享同一数值 sanitize 契约。
 - `get_content_epoch()` 只在 load/reload/replace 内容时变化，普通组件编辑不得推进；它用于重置跨帧渲染状态，不替代细粒度 render version。

@@ -103,6 +103,12 @@ namespace AshEngine
 		glm::mat4 world_transform{ 1.0f };
 	};
 
+	struct ASH_API SceneVegetationExtractionDesc
+	{
+		EntityId entity_id = 0;
+		VegetationComponent vegetation{};
+	};
+
 	class Scene;
 
 	class ASH_API Entity
@@ -165,6 +171,12 @@ namespace AshEngine
 		bool set_terrain_component(const TerrainComponent& component);
 		bool remove_terrain_component();
 
+		bool has_vegetation_component() const;
+		VegetationComponent get_vegetation_component() const;
+		bool add_vegetation_component(const VegetationComponent& component);
+		bool set_vegetation_component(const VegetationComponent& component);
+		bool remove_vegetation_component();
+
 		bool has_component(SceneComponentType type) const;
 		std::vector<SceneComponentType> get_component_types() const;
 		bool read_component(SceneComponentType type, void* out_component, size_t component_size) const;
@@ -197,6 +209,9 @@ namespace AshEngine
 	{
 	public:
 		class Impl;
+		// editor begin 修改原因：Editor snapshot forest 需要可回滚的创建事务。
+		class CreationTransaction;
+		// editor end
 
 	public:
 		Scene() = default;
@@ -204,6 +219,11 @@ namespace AshEngine
 	public:
 		static Scene create(std::string_view name = "Untitled Scene");
 		static Scene load_from_file(const std::filesystem::path& path, std::string* out_error = nullptr);
+		// editor begin 修改原因：Editor snapshot forest 失败时恢复全部可观察 Scene 状态。
+		// Buffers scene change events and restores all creation-visible state unless committed.
+		// This scope is intentionally creation-only: callers must not mutate pre-existing entities.
+		CreationTransaction begin_creation_transaction();
+		// editor end
 		// editor begin 修改原因：Scene Reload / Replace 语义，保留 change event 订阅者
 		bool reload_from_file(const std::filesystem::path& path, std::string* out_error = nullptr);
 		void replace_contents(Scene&& other);
@@ -220,6 +240,7 @@ namespace AshEngine
 		Entity create_entity_with_id(EntityId explicit_id, std::string_view name, const Entity& parent);
 		Entity create_entity_with_id(EntityId explicit_id, std::string_view name, const Entity& parent, uint32_t sibling_index);
 		bool destroy_entity(EntityId id);
+		bool destroy_entities(const std::vector<EntityId>& ids);
 		bool reparent_entity(EntityId id, EntityId new_parent_id);
 		bool reparent_entity(EntityId id, EntityId new_parent_id, uint32_t sibling_index);
 		uint32_t get_entity_sibling_index(EntityId id) const;
@@ -236,6 +257,7 @@ namespace AshEngine
 		std::vector<SceneLightExtractionDesc> extract_light_entities() const;
 		std::vector<SceneParticleExtractionDesc> extract_particle_entities() const;
 		std::vector<SceneTerrainExtractionDesc> extract_terrain_entities() const;
+		std::vector<SceneVegetationExtractionDesc> extract_vegetation_entities() const;
 		bool extract_active_environment(SceneEnvironmentExtractionDesc& out_environment) const;
 		bool try_get_mesh_local_bounds(AssetDatabase& database, const MeshComponent& mesh_component, SceneMeshBounds& out_bounds) const;
 
@@ -262,6 +284,7 @@ namespace AshEngine
 		uint64_t get_render_environment_version() const;
 		uint64_t get_render_particle_version() const;
 		uint64_t get_render_terrain_version() const;
+		uint64_t get_vegetation_version() const;
 		uint64_t get_render_config_version() const;
 		void mark_clean();
 
@@ -278,6 +301,29 @@ namespace AshEngine
 		explicit Scene(std::shared_ptr<Impl> impl);
 		friend class Entity;
 	};
+
+	// editor begin 修改原因：Editor snapshot forest 的 creation-only RAII transaction。
+	class ASH_API Scene::CreationTransaction
+	{
+	public:
+		CreationTransaction();
+		~CreationTransaction();
+		CreationTransaction(CreationTransaction&& other) noexcept;
+		CreationTransaction& operator=(CreationTransaction&& other) noexcept;
+		CreationTransaction(const CreationTransaction&) = delete;
+		CreationTransaction& operator=(const CreationTransaction&) = delete;
+
+		bool is_active() const;
+		bool commit();
+
+	private:
+		class Impl;
+		explicit CreationTransaction(std::unique_ptr<Impl> impl);
+		void rollback() noexcept;
+		std::unique_ptr<Impl> m_impl{};
+		friend class Scene;
+	};
+	// editor end
 
 	ASH_API Entity instantiate_asset(
 		Scene& scene,

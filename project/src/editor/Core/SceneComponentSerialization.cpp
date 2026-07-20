@@ -222,6 +222,7 @@ namespace AshEditor::SceneComponentSerialization
 				refComponentJson[refPropertyDesc.name] = ReadSignedIntegral(pPropertyData, refPropertyDesc.size);
 				break;
 			case AshEngine::ScenePropertyType::UInt32:
+			case AshEngine::ScenePropertyType::UInt64:
 			case AshEngine::ScenePropertyType::Enum:
 				refComponentJson[refPropertyDesc.name] = ReadUnsignedIntegral(pPropertyData, refPropertyDesc.size);
 				break;
@@ -292,6 +293,7 @@ namespace AshEditor::SceneComponentSerialization
 				WriteSignedIntegral(pPropertyData, refPropertyDesc.size, refPropertyJson.get<int64_t>());
 				break;
 			case AshEngine::ScenePropertyType::UInt32:
+			case AshEngine::ScenePropertyType::UInt64:
 			case AshEngine::ScenePropertyType::Enum:
 				WriteUnsignedIntegral(pPropertyData, refPropertyDesc.size, refPropertyJson.get<uint64_t>());
 				break;
