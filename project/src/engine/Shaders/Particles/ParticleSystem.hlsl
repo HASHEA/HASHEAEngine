@@ -5,6 +5,8 @@
 // The two variants use different AshRootConstants layouts; the macro keeps them
 // from colliding on b0 within a single compilation.
 
+#include "../Scene/SceneDepthCommon.hlsli"
+
 // Must match ParticleGPUData in ParticleSystemPass.h (32 bytes).
 struct AshParticleData
 {
@@ -295,9 +297,9 @@ float4 PSMain(VSOutput input) : SV_Target0
     {
         const uint2 pixel_position = uint2(input.position.xy);
         const float scene_device_depth = SceneDepth.Load(int3(pixel_position, 0));
-        const bool background = (AshParticleFlags & 1u) != 0u
-            ? scene_device_depth <= 1.0e-6
-            : scene_device_depth >= 0.999999;
+        const bool background = AshSceneDepthIsBackground(
+            scene_device_depth,
+            (AshParticleFlags & 1u) != 0u);
         if (!background)
         {
             const float scene_linear_depth = AshReconstructLinearViewDepth(scene_device_depth);

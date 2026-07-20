@@ -1,4 +1,5 @@
 #include "../../Graphics/Shaders/AshVertexDeclLocations.hlsli"
+#include "../Scene/SceneDepthCommon.hlsli"
 
 Texture2D<float4> RenderDebugInput : register(t0);
 SamplerState ScenePointClampSampler : register(s0);
@@ -59,7 +60,7 @@ float3 AshDebugDecodeNormalOct(float2 encoded)
 
 float3 AshDebugVisualizeDepth(float depth, bool reverse_z)
 {
-    const bool background = reverse_z ? depth <= 0.000001 : depth >= 0.999999;
+    const bool background = AshSceneDepthIsBackground(depth, reverse_z);
     if (background)
     {
         return 0.0.xxx;

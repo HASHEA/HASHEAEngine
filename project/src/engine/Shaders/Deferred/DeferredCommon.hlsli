@@ -1,4 +1,5 @@
 #include "../../Graphics/Shaders/AshVertexDeclLocations.hlsli"
+#include "../Scene/SceneDepthCommon.hlsli"
 
 Texture2D<float4> SceneGBufferA : register(t0);
 Texture2D<float4> SceneGBufferB : register(t1);
@@ -98,7 +99,7 @@ bool AshIsReverseZ()
 
 bool AshSceneDepthIsBackground(float depth)
 {
-    return AshIsReverseZ() ? depth <= 0.000001 : depth >= 0.999999;
+    return AshSceneDepthIsBackground(depth, AshIsReverseZ());
 }
 
 struct AshDeferredSurface

@@ -1,3 +1,5 @@
+#include "../Scene/SceneDepthCommon.hlsli"
+
 cbuffer AshRootConstants : register(b0)
 {
     float4x4 AshInvViewProjection;
@@ -37,7 +39,7 @@ bool AshIsReverseZ()
 
 bool AshSceneDepthIsBackground(float depth)
 {
-    return AshIsReverseZ() ? depth <= 0.000001 : depth >= 0.999999;
+    return AshSceneDepthIsBackground(depth, AshIsReverseZ());
 }
 
 float3 AshReconstructWorldPosition(float2 uv, float depth)

@@ -1,4 +1,5 @@
 #include "DirectionalShadowCommon.hlsli"
+#include "../Scene/SceneDepthCommon.hlsli"
 
 Texture2D<float> SceneDepth : register(t0);
 Texture2D<float> DirectionalShadowDynamicAtlas : register(t1);
@@ -33,7 +34,7 @@ float3 ReconstructWorldPosition(float2 uv, float depth)
 
 bool IsBackgroundDepth(float depth)
 {
-    return AshShadowLightParams.z > 0.5 ? depth <= 0.000001 : depth >= 0.999999;
+    return AshSceneDepthIsBackground(depth, AshShadowLightParams.z > 0.5);
 }
 
 float3 ApplyNormalBias(float3 position_ws, float3 normal_ws, float normal_bias)

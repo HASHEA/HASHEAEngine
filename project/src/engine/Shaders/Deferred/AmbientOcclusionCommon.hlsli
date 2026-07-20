@@ -1,3 +1,5 @@
+#include "../Scene/SceneDepthCommon.hlsli"
+
 Texture2D<float> SceneDepth : register(t0);
 Texture2D<float4> SceneGBufferE : register(t1);
 Texture2D<float4> SceneAmbientOcclusionInput : register(t2);
@@ -50,7 +52,7 @@ bool AshAOIsReverseZ()
 
 bool AshAOSceneDepthIsBackground(float depth)
 {
-    return AshAOIsReverseZ() ? depth <= 0.000001 : depth >= 0.999999;
+    return AshSceneDepthIsBackground(depth, AshAOIsReverseZ());
 }
 
 float3 AshAODecodeNormalOct(float2 encoded)

@@ -1,4 +1,5 @@
 #include "DirectionalShadowCommon.hlsli"
+#include "../Scene/SceneDepthCommon.hlsli"
 
 Texture2D<float> SceneDepth : register(t0);
 StructuredBuffer<DirectionalShadowCascadeShaderData> SceneDirectionalShadowCascades : register(t2);
@@ -26,7 +27,7 @@ float3 ReconstructWorldPosition(float2 uv, float depth)
 
 bool IsBackgroundDepth(float depth)
 {
-    return AshShadowLightParams.z > 0.5 ? depth <= 0.000001 : depth >= 0.999999;
+    return AshSceneDepthIsBackground(depth, AshShadowLightParams.z > 0.5);
 }
 
 float4 PSMain(VSFullscreenOutput input) : SV_Target0

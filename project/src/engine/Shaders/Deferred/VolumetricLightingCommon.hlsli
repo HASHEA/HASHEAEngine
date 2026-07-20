@@ -1,4 +1,5 @@
 #include "../../Graphics/Shaders/AshVertexDeclLocations.hlsli"
+#include "../Scene/SceneDepthCommon.hlsli"
 
 struct VSFullscreenOutput
 {
@@ -44,7 +45,7 @@ bool AshVolumetricIsReverseZ()
 
 bool AshVolumetricSceneDepthIsBackground(float depth)
 {
-	return AshVolumetricIsReverseZ() ? depth <= 0.000001 : depth >= 0.999999;
+	return AshSceneDepthIsBackground(depth, AshVolumetricIsReverseZ());
 }
 
 uint AshVolumetricDepthSliceCount()
