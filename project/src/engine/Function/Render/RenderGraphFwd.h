@@ -26,12 +26,37 @@ namespace AshEngine
 		}
 	};
 
+	struct RenderGraphBufferRef
+	{
+		uint32_t index = UINT32_MAX;
+
+		bool is_valid() const
+		{
+			return index != UINT32_MAX;
+		}
+
+		explicit operator bool() const
+		{
+			return is_valid();
+		}
+	};
+
 	inline bool operator==(RenderGraphTextureRef lhs, RenderGraphTextureRef rhs)
 	{
 		return lhs.index == rhs.index;
 	}
 
 	inline bool operator!=(RenderGraphTextureRef lhs, RenderGraphTextureRef rhs)
+	{
+		return !(lhs == rhs);
+	}
+
+	inline bool operator==(RenderGraphBufferRef lhs, RenderGraphBufferRef rhs)
+	{
+		return lhs.index == rhs.index;
+	}
+
+	inline bool operator!=(RenderGraphBufferRef lhs, RenderGraphBufferRef rhs)
 	{
 		return !(lhs == rhs);
 	}

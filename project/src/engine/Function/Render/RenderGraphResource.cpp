@@ -31,6 +31,29 @@ namespace AshEngine
 		return result;
 	}
 
+	RenderGraphBufferDesc RenderGraphBufferDesc::from_storage_buffer_desc(const StorageBufferDesc& desc)
+	{
+		RenderGraphBufferDesc result{};
+		result.size = desc.size;
+		result.stride = desc.stride;
+		result.shader_resource = true;
+		result.unordered_access = true;
+		result.indirect_args = desc.indirect_args;
+		return result;
+	}
+
+	StorageBufferDesc RenderGraphBufferDesc::to_storage_buffer_desc(const char* name) const
+	{
+		StorageBufferDesc result{};
+		result.size = size;
+		result.stride = stride;
+		result.cpu_write = false;
+		result.indirect_args = indirect_args;
+		result.initial_data = nullptr;
+		result.name = name;
+		return result;
+	}
+
 	RHI::AshResourceState render_graph_access_to_rhi_state(RenderGraphAccess access)
 	{
 		switch (access)
@@ -61,6 +84,8 @@ namespace AshEngine
 			return RHI::AshResourceState::CopyDst;
 		case RenderGraphAccess::Present:
 			return RHI::AshResourceState::Present;
+		case RenderGraphAccess::IndirectArgs:
+			return RHI::AshResourceState::IndirectArgs;
 		case RenderGraphAccess::Unknown:
 		default:
 			return RHI::AshResourceState::Unknown;
@@ -107,6 +132,8 @@ namespace AshEngine
 			return "CopyDst";
 		case RenderGraphAccess::Present:
 			return "Present";
+		case RenderGraphAccess::IndirectArgs:
+			return "IndirectArgs";
 		case RenderGraphAccess::Unknown:
 		default:
 			return "Unknown";

@@ -217,6 +217,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredEnvironmentLightingPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::EnvironmentAndSky,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)

@@ -407,6 +407,7 @@ namespace AshEngine
 		return graph.add_raster_pass(
 			"SceneRenderDebugViewPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::ToneMapAndOverlays,
 			[selected, output](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(selected, RenderGraphAccess::GraphicsSRV);
@@ -463,6 +464,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneRenderDebugViewPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::ToneMapAndOverlays,
 			[item, output_target](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(item.texture, RenderGraphAccess::GraphicsSRV);

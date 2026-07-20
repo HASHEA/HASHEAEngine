@@ -47,6 +47,7 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Services/TerrainEditorService.cpp",
 		"%{wks.location}/project/src/editor/Services/UndoRedoService.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxFreeCameraController.cpp",
+		"%{wks.location}/project/src/sandbox/App/SandboxStandardScene.cpp",
 	}
 
 	links

@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-15
+last_reviewed: 2026-07-20
 review_cycle: monthly
 status: active
 ---
@@ -24,18 +24,19 @@ RunRenderGate.bat             :: 渲染改动必跑：双后端 golden SSIM 回�
 
 ## Change matrix
 
-| Change | Commands | 补充检查（交互项仅人类执行） |
+| Change | Commands | 人工检查（仅人类执行） |
 | --- | --- | --- |
 | 纯文档 / 注释 | `git diff --check` | — |
 | Base 层纯逻辑（容器/字符串/序列化/内存等） | `RunTests.bat`（doctest 单测 + legacy 自测桥接） | 新逻辑应补对应 `project/src/tests/` 用例 |
 | 渲染 Pass / shader / 材质 | 构建 + `RunRenderGate.bat`（双后端 golden SSIM 回归 + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard` | 检查 `product/logs` 无 validation 报错；预期内的画面变化经用户确认后 `-BlessGolden` 更新基线 |
-| RHI 接口 / 双后端实现 | 构建 + `RunRenderGate.bat` + PerfGate Standard；Engine.ini 开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 smoke | 跨后端 diff FAIL 视同 bug；改 GPU timing 还须 focused tests + Debug TimingValidation + Release NoTracy |
-| RenderGraph 核心（compile/barrier/lifetime） | 同 RHI 级别 | 关注 barrier/lifetime 相关 validation 输出 |
+| RHI 接口 / 双后端实现 | 构建 + `RunRenderGate.bat` + PerfGate Standard；Engine.ini 开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 smoke | 跨后端 diff FAIL 视同 bug |
+| RenderGraph 核心（compile/barrier/lifetime） | 同 RHI 级别 + 双后端 `run.bat sandbox <backend> Debug --rhi-selftest-indirect --run-for-frames=1` + `RunPerfGate.bat -Profile VegetationFullPipeline -Configuration Release` | raw RHI 与 Function RenderGraph 两段都须 PASS；关注 buffer barrier/lifetime/binding validation，profile 必须 COMPARED 且 coverage 合同满足 |
 | Scene / Asset / Application 生命周期 | 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；通常 ready 后数秒即提前退出） | 人类在 Editor 打开默认场景并操作一遍；Agent 只移交清单 |
-| Terrain Asset / CPU logic | `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`；依赖或工程生成变化时 fresh `generate_vs2022.bat` 并构建 Editor/Sandbox Debug+Release；最后 `run.bat all Debug --smoke-test-seconds=120` | 检查 `.AshTerrain` recovery、RAW/PNG/EXR、不可变 snapshot、dirty publication 与 local query focused tests；Phase 1 无 rendered frame 变化时不跑 RenderGate |
+| Terrain Asset / CPU logic | `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`；依赖或工程生成变化时 fresh `generate_vs2022.bat` 并构建 Editor/Sandbox Debug+Release；最后 `run.bat all Debug --smoke-test-seconds=120` | 检查 `.AshTerrain` recovery、RAW/PNG/EXR、不可变 snapshot、dirty publication 与 local query focused tests；涉及 rendered frame 时同时按「渲染 Pass / shader / 材质」行执行 |
 | Editor 面板 / UI | 构建 + `run.bat editor Debug --smoke-test-seconds=120`（readiness 后自动关闭）+ 相关自动化测试 | 人类运行 `run.bat editor`，检查面板打开、交互和日志；Agent 禁止直接驱动 UI，只移交清单 |
 | `product/config/Engine.ini` | 双后端各 smoke 一次 + 查日志 | 确认开关生效；配置项语义/默认值变化同步 `docs/CONFIG.md` |
-| 性能敏感路径 | PerfGate Standard；Terrain/1440p 相关还须 Release Empty immutable gate，`FAIL` 必须修，`WARN` 需说明判断 | 对比 `summary.md` 趋势；Empty CPU/GPU P95 任一超过 3.33 ms 即阻断 Terrain |
+| 性能敏感路径 | PerfGate Standard，`FAIL` 必须修，`WARN` 需说明判断 | 对比 `summary.md` 趋势 |
+| GPU timing telemetry / 固定性能 profile | `RunTests.bat Debug` + `scripts/TestRunPerfGate.ps1` + Editor Debug、Sandbox Debug/Release 构建 + 双后端 Debug validation 短 profile smoke + `RunRenderGate.bat` + PerfGate Standard + `RunPerfGate.bat -Profile VegetationFullPipeline` + 同 profile `-TelemetryMode Off -SkipBuild` A/B | 审计 adapter/driver、actual extent、fixed camera、总/逐 metric coverage、invalid/unresolved、每 run 精确日志；正式 candidate validation off，不 bless |
 | `scripts/` / `tools/` | `scripts/TestAIDevDoctor.ps1`、`scripts/TestRunPerfGate.ps1`、`scripts/TestCheckArchBoundary.ps1`（按所改工具） | — |
 | `premake5.lua` / 构建链 | 删 sln 后全新 `generate_vs2022.bat` + 构建；确认 PostBuild artifact 同步成功 | `product/bin64` 下 DXC/validation dll 是新的 |
 | `project/src/tests/` / 测试基建 | `RunTests.bat`（退出码 0 = 全绿）；改 premake 部分按上一行执行 | 断言失败退出码非 0；可用 doctest `--test-case=` 过滤 |
@@ -62,36 +63,19 @@ Phase 3 收口必须由一名具名的人类测试者在 Editor 主 Scene viewpo
 - Runtime: Windows x64，VS2022 工具链，仓库根有 `premake5.exe`
 - 工作目录: 可执行程序自动重置到仓库根；脚本假定从仓库根调用
 - 报告输出: `Intermediate/test-reports/`（perf-gate、render-gate、ai-dev），本地生成物不提交
-- 基线: 比较性能 `tools/perf/perf_gate_baselines.json` 可用 `-BlessBaseline` 更新；Terrain feasibility `tools/perf/terrain_feasibility_contract.json` 不可 bless；渲染 golden `tools/render/goldens/<scene>/<backend>.png` 仅在用户确认画面正确后用 `RunRenderGate.bat -BlessGolden` 更新
-
-## PerfGate（性能与 GPU timing 门禁）
-
-常规矩阵与 Empty 专项命令：
-
-```bat
-RunPerfGate.bat -Profile Standard
-RunPerfGate.bat -Profile Standard -Scenario Empty -Configuration Debug -TimingValidation
-RunPerfGate.bat -Profile Standard -Scenario Empty -Configuration Release -NoTracy
-RunPerfGate.bat -Profile Standard -Scenario Empty -Configuration Release
-```
-
-- 所有模式都先等 shared readiness：application ready、render asset 无 pending/failed、render command queue 排空、当前 scene packet 全成功、asset epoch 一致且 present 完成。readiness 的 submitted frame index 是采样 watermark；窗口结束后继续渲染并 non-blocking drain expected GPU frames。固定秒数只定义 warmup/sample 统计窗口，wall-clock timeout 只作失败上限；禁止以固定帧数认定成功。
-- Empty 使用 Editor 真实 Game viewport/primary scene camera，要求实际 scene output 为 2560 × 1440；报告中的 swapchain extent 独立，不能拿窗口尺寸冒充 scene output。schema v2 必须有 backend_actual、readiness、render_output、swapchain、GPU status/error/expected/received/frame percentiles、`passes` 对象与 error flags；已配置 required pass 时，其 entry 必须带 canonical name/hash/percentiles，Empty 的 required set 为空所以 `passes` 可为空。`expected == received > 0` 且无 timing error 才通过。
-- `-TimingValidation` 在 Debug 下启用目标后端 validation，warning/error 均失败；只要求 readiness + 至少一份完整 expected snapshot，不应用性能阈值。`-NoTracy` 必须 fresh no-Tracy clean build、双后端运行，并在 `finally` 恢复标准 solution/clean build。
-- 脚本以二进制快照事务保护 `Engine.ini`、`EditorSettings.json`、`ViewportLayout.json`、`imgui.ini`；每个后端从原始状态开始，正常或异常退出都要 SHA-256 验证逐字节恢复。
-- Empty 先应用 `terrain_feasibility_contract.json` 的不可 bless CPU/GPU frame P95 3.33 ms，再做比较 baseline。missing/duplicate/unexpected frame、overflow、hash collision、required scope 缺失、`DrainTimeout`、backend/output mismatch 或 incomplete telemetry 都是 FAIL。
-
-Terrain Phase 0 的标准 Tracy-enabled Release 证据（NVIDIA GeForce RTX 5060，报告 `Intermediate/test-reports/perf-gate/20260713-160641-8253384-74cce123/`）：
-
-| 后端 | CPU frame P95 | GPU frame P95 | expected/received | readiness frame | scene output | 结果 |
-| --- | ---: | ---: | ---: | ---: | --- | --- |
-| Vulkan | 1.0674 ms | 0.7860 ms | 30397 / 30397 | 128 | 2560 × 1440 | PASS |
-| DX12 | 1.0274 ms | 0.8176 ms | 33444 / 33444 | 258 | 2560 × 1440 | PASS |
+- 基线: 性能 `tools/perf/perf_gate_baselines.json`（`-BlessBaseline` 更新）；渲染 golden `tools/render/goldens/<scene>/<backend>.png`（`RunRenderGate.bat -BlessGolden` 更新，仅限用户确认画面正确后）
 
 ## 日志证据
 
 - 每次 `LogService::init` 在 `product/logs` 创建一对唯一 Engine/Application 日志；文件名共享 `YYYYMMDD_HHMMSS_ffffff_p<PID>_s<SEQ>` session 后缀。不同进程或同进程快速重启不得覆盖、追加或交织到旧会话文件。
 - smoke/validation 前记录现有 `*.logfile` 路径集合，结束后审计本次新增的精确文件对；矩阵运行应逐会话保留 readiness、clean-exit 与 validation 证据。禁止只取“最新一个日志”代表整个矩阵，也不得再按分钟文件名推测增量范围。
+
+## RenderGraph indirect 全链诊断
+
+- 使用 `run.bat sandbox <vulkan|dx12> Debug --rhi-selftest-indirect --run-for-frames=1`，并设置外层 120 秒 watchdog；禁止依赖人工关闭窗口。
+- 同一进程先要求 `[RHISelfTest] indirect draw substrate PASS`，再要求 `[RenderGraphSelfTest] compute-to-indexed-indirect PASS`，最后要求 Sandbox `clean_exit=yes`。后一段覆盖 external candidate、transient visible/args、compute UAV、indexed indirect、Graphics SRV args 校验和 backbuffer capture。
+- Debug Vulkan 必须确认 validation layer 实际加载，Debug DX12 必须确认 debug layer 与 GPU-based validation 实际启用；新增日志不得含 generic error/critical、validation error、device lost、access violation、fatal 或 assert。
+- Release 双后端仍运行相同 bounded self-test，但当前编译策略只允许 Debug validation：Vulkan validation 受 `VULKAN_DEBUG_REPORT` 限制，DX12 非 `ASH_DEBUG` 强制关闭。Release PASS 只能作为功能证据，不得写成 validation 已启用。
 
 ## RenderGate（渲染回归门禁）
 
@@ -105,8 +89,6 @@ Terrain Phase 0 的标准 Tracy-enabled Release 证据（NVIDIA GeForce RTX 5060
 - 构建失败：先看是否 PostBuild artifact 同步失败（stale DLL 隐患），再看编译错误
 - PerfGate `FAIL`：必须修复后重跑；不允许带 FAIL 提交
 - PerfGate `WARN`：允许提交，但必须在提交说明里写明判断理由
-- Empty 3.33 ms feasibility FAIL：不可 bless；停止 Terrain 后续实现并另写 performance-remediation SDD，禁止调低合同或用比较 baseline 覆盖
-- GPU timing incomplete/missing/duplicate/unexpected/overflow/`DrainTimeout`，以及 TimingValidation 的 validation warning/error：均按 bug 处理
 - validation / debug-layer 报错：视同 bug，定位根因，禁止靠关闭 validation 绕过
 - 渲染结果异常排查顺序：1. 看 `product/logs`；2. 按后端开启 validation（`[VulkanValidation]` / `[DX12Validation]`）重跑；3. 用 `[RenderDebugView]` 分通道定位；4. RenderDoc 抓帧（pass 事件名只来自 `PassDesc::name`，空名显示 `namelesspass`，不回退 framebuffer 名）；5. Vulkan 侧看 resource tracker / barrier 日志；6. 资源泄漏看 VMA leak dump
 

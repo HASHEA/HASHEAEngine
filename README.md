@@ -8,7 +8,8 @@ HASHEAEngine（AshEngine）是一个以现代实时渲染和引擎架构实验�
 
 - Engine 分层：`Base ← Graphics ← Function`，Editor / Sandbox 只依赖 Function 层公共接口
 - Vulkan / DX12 双后端 RHI，HLSL 经 DXC 编译（SPIR-V / DXIL），shader 反射驱动绑定布局
-- RenderGraph 声明式帧编排 + Deferred 渲染主链路（GBuffer、AO、CSM 阴影、IBL、体积光、Bloom、TAA、tone-map）
+- RenderGraph 声明式帧编排：texture 与 `StorageBuffer` 一等资源、transient 生命周期、barrier 与 binding 校验；Deferred 主链路覆盖 GBuffer、AO、CSM 阴影、IBL、体积光、Bloom、TAA、tone-map
+- GPU-driven Phase 1 通用底座：显式 indexed/non-indexed indirect、generation-safe instance page 与双后端 compute → indexed indirect 全链自测；生产 grass/tree、流送和 GPU culling 尚未接入
 - Scene-driven 静态网格渲染：ECS-style Scene → 不可变可见帧 → 渲染线程消费
 - Terrain 渲染核心：8193² 高度场、Component LOD、权重 atlas、deferred GBuffer / 方向光阴影与 readiness 驱动抓帧；有限正缩放由 Scene bounds、Editor 动态 reverse-Z 取景、跨 LOD 平滑法线和 receiver-plane PCF 共同保持远近表面稳定
 - Terrain 编辑会话（Phase 3）：Hierarchy 单选 Terrain 实体即可进入 Terrain Mode；无编辑层资产在第一次有效落笔时自动创建通用编辑层。Raise/Lower/Smooth/Flatten/Noise/Paint/Erase 共用非破坏编辑层，拖动期间按 80 ms wall-clock 节奏发布增量预览，完整拖动仍只产生一个 undo/redo 命令；Manage 支持 generation-aware 异步 Save、Save Copy As、clean-only Optimize、Reload/外部冲突处理，以及 non-replacing 的 flat Create、PNG/RAW/EXR Import/Export 后台任务，Ctrl+S 会先保存当前 Scene 引用的 dirty Terrain
@@ -55,9 +56,12 @@ RunArchGate.bat                      :: 分层依赖边界检查
 RunRenderGate.bat                    :: 渲染门禁：双后端 golden SSIM 回归 + 跨后端 diff
 RunPerfGate.bat -Profile Standard    :: 性能门禁
 run.bat sandbox <vulkan|dx12> Debug --smoke-test-seconds=120 --rhi-selftest-constant-buffer
+run.bat sandbox <vulkan|dx12> Debug --rhi-selftest-indirect --run-for-frames=1
 ```
 
-最后一条是 opt-in 的双后端 constant-buffer 可见性诊断；CI 会在 WARP/lavapipe 上把它与 indirect 自测独立执行。每次进程运行会在 `product/logs` 生成 session 后缀相同且不会覆盖旧会话的 Engine/Application 日志对，矩阵证据审计规则见 `docs/VERIFY.md`。按变更类型的完整验证矩阵同样见该文档；渲染改动必须双后端验证。
+最后两条分别是 opt-in 的 constant-buffer 可见性诊断和 bounded indirect 全链诊断。indirect 命令先运行 raw RHI compute/barrier/draw 自测，再运行 Function RenderGraph external candidate → transient visible/args → indexed draw → args SRV validation 自测；两段都必须输出 PASS 并 clean exit。CI 会在 WARP/lavapipe 上把两类诊断独立执行。每次进程运行会在 `product/logs` 生成 session 后缀相同且不会覆盖旧会话的 Engine/Application 日志对，矩阵证据审计规则见 `docs/VERIFY.md`。按变更类型的完整验证矩阵同样见该文档；渲染改动必须双后端验证。
+
+PerfGate 的 `--window-width/--window-height` 必须成对给出；`--perf-gate-gpu-timing/validation/vsync=on|off` 与时长参数只覆盖当前进程，不改写 `Engine.ini`。GPU timing 仅在启用 PerfGate 且显式为 `on` 时向 RHI 请求启用；Vulkan/DX12 都只在精确 graphics submit 已绑定既有 completion primitive 后确认本帧 submitted，Renderer 以固定容量、非阻塞方式携带延迟完成 sample。PerfGate 以 frame ID 做 Warmup/Sampling/Draining/Complete 归档并输出 schema v2；总 coverage 与逐 metric coverage 分开记录，固定 profile 还要求 wall-clock sampling span 至少覆盖 90%、最大 sample gap 不超过 0.25 秒且采样率不低于 30 Hz。`VegetationFullPipeline` 在 baseline 存在时比较 CPU、内存、draw、`GPU.Frame` 与全部 required pass avg/p95；baseline avg `< 0.1 ms` 的 tiny pass 只有在 avg 与 p95 同时超出各自绝对阈值时才由 p95 追加 WARN，较大 pass 与 `GPU.Frame` 仍独立门禁。可比性用 adapter、driver、OS build 和规范化 workload fingerprint 拒绝不匹配数据；source SHA 仅作归因，不要求与 baseline 相同。用户已批准的固定 profile 候选还可用 `-BlessBaselineFromReport` + 精确 SHA-256 经 fail-closed 校验后导入；该路径对同一 raw byte snapshot 做解析与哈希，并从 raw canonical record 逐项核对所有 baseline 字段，不重新运行程序，也禁止手工编辑基线。validation 的实际启用状态仍受 Debug/Release 编译能力约束。
 
 ## 文档
 

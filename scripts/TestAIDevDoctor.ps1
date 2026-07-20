@@ -118,7 +118,7 @@ if (-not $context.validation.gaps) {
 if (-not $context.validation.gaps.summary) {
     throw "AIDevDoctor context.json is missing validation.gaps.summary"
 }
-if (-not $context.validation.gaps.items) {
+if ($null -eq $context.validation.gaps.items) {
     throw "AIDevDoctor context.json is missing validation.gaps.items"
 }
 if (-not $context.validation.evidence_index) {

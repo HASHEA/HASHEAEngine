@@ -15,6 +15,22 @@ namespace AshEngine
 		}
 	}
 
+	void RenderGraphRasterPassBuilder::read_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access)
+	{
+		if (m_pass)
+		{
+			m_pass->buffer_usages.push_back({ buffer, access, false });
+		}
+	}
+
+	void RenderGraphRasterPassBuilder::write_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access)
+	{
+		if (m_pass)
+		{
+			m_pass->buffer_usages.push_back({ buffer, access, true });
+		}
+	}
+
 	void RenderGraphRasterPassBuilder::write_color(uint8_t slot, RenderGraphTextureRef texture, RenderLoadAction load_action, RenderColorValue clear_color)
 	{
 		if (m_pass)
@@ -75,6 +91,22 @@ namespace AshEngine
 		if (m_pass)
 		{
 			m_pass->texture_usages.push_back({ texture, access });
+		}
+	}
+
+	void RenderGraphComputePassBuilder::read_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access)
+	{
+		if (m_pass)
+		{
+			m_pass->buffer_usages.push_back({ buffer, access, false });
+		}
+	}
+
+	void RenderGraphComputePassBuilder::write_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access)
+	{
+		if (m_pass)
+		{
+			m_pass->buffer_usages.push_back({ buffer, access, true });
 		}
 	}
 }

@@ -214,6 +214,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredToneMapPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::ToneMapAndOverlays,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(hdr_linear_texture, RenderGraphAccess::GraphicsSRV);

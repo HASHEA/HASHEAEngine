@@ -28,7 +28,9 @@ namespace AshSandbox
 		return std::filesystem::path{ "product/assets/scenes/Sandbox.scene.json" };
 	}
 
-	auto SandboxStandardScene::start(AshEngine::AssetDatabase& asset_database) -> bool
+	auto SandboxStandardScene::start(
+		AshEngine::AssetDatabase& asset_database,
+		bool fixed_camera) -> bool
 	{
 		std::string failure_detail{};
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
@@ -42,7 +44,11 @@ namespace AshSandbox
 			ASH_PROCESS_ERROR(false);
 		}
 
-		ASH_PROCESS_ERROR(_load_scene_snapshot(asset_database, snapshot, failure_detail));
+		ASH_PROCESS_ERROR(_load_scene_snapshot(
+			asset_database,
+			fixed_camera,
+			snapshot,
+			failure_detail));
 
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
@@ -51,6 +57,7 @@ namespace AshSandbox
 			m_free_camera_controller.bind_camera_entity(m_snapshot.primary_camera_entity_id);
 			m_free_camera_controller.set_move_speed(m_snapshot.recommended_camera_move_speed);
 			m_has_logic_tick_time = false;
+			m_fixed_camera = fixed_camera;
 		}
 
 		HLogInfo(
@@ -63,6 +70,7 @@ namespace AshSandbox
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			m_snapshot = {};
 			m_snapshot.scene_path = get_standard_scene_path();
+			m_fixed_camera = false;
 			_set_failure_locked(
 				failure_detail.empty()
 				? std::string("Sandbox standard scene failed to start.")
@@ -78,6 +86,7 @@ namespace AshSandbox
 		m_snapshot.scene_path = get_standard_scene_path();
 		m_free_camera_controller.reset();
 		m_has_logic_tick_time = false;
+		m_fixed_camera = false;
 	}
 
 	auto SandboxStandardScene::update_logic(const AshEngine::InputState& input) -> bool
@@ -85,9 +94,11 @@ namespace AshSandbox
 		ASH_PROCESS_GUARD_RETURN(bool, bResult, true, false);
 
 		SandboxStandardSceneLoadState load_state = SandboxStandardSceneLoadState::Idle;
+		bool fixed_camera = false;
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			load_state = m_snapshot.load_state;
+			fixed_camera = m_fixed_camera;
 		}
 
 		if (load_state == SandboxStandardSceneLoadState::Failed)
@@ -95,7 +106,7 @@ namespace AshSandbox
 			ASH_PROCESS_ERROR(false);
 		}
 
-		if (load_state == SandboxStandardSceneLoadState::Ready)
+		if (load_state == SandboxStandardSceneLoadState::Ready && !fixed_camera)
 		{
 			SandboxStandardSceneSnapshot working_snapshot{};
 			{
@@ -171,6 +182,7 @@ namespace AshSandbox
 
 	auto SandboxStandardScene::_load_scene_snapshot(
 		AshEngine::AssetDatabase& asset_database,
+		bool fixed_camera,
 		SandboxStandardSceneSnapshot& out_snapshot,
 		std::string& out_error) const -> bool
 	{
@@ -195,7 +207,7 @@ namespace AshSandbox
 
 		// RenderGate（SDD-2026-07-07-render-gate）：抓帧测试时固定初始相机位置，保证画面确定性
 		if (AshEngine::Application* application = AshEngine::Application::get();
-			application && !application->get_frame_dump_path().empty())
+			!fixed_camera && application && !application->get_frame_dump_path().empty())
 		{
 			AshEngine::Entity camera_entity = out_snapshot.scene.find_entity(out_snapshot.primary_camera_entity_id);
 			if (camera_entity.is_valid())

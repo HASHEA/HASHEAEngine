@@ -2,6 +2,8 @@
 
 #include "Function/Render/Renderer.h"
 #include "Function/Render/RenderGraphResource.h"
+#include "Graphics/GpuTimingTelemetryRHI.h"
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -46,6 +48,31 @@ namespace AshEngine
 		RenderGraphDepthReadMode depth_read_mode = RenderGraphDepthReadMode::DepthTestOnly;
 	};
 
+	struct RenderGraphBufferUsage
+	{
+		RenderGraphBufferRef buffer{};
+		RenderGraphAccess access = RenderGraphAccess::Unknown;
+		bool write = false;
+	};
+
+	struct RenderGraphResolvedBufferBinding
+	{
+		const StorageBuffer* buffer = nullptr;
+		const char* resource_name = nullptr;
+		RenderGraphAccess access = RenderGraphAccess::Unknown;
+	};
+
+	// Non-owning view whose lifetime is one RenderGraph pass execution. The
+	// executor owns both arrays until raster end or compute dispatch returns.
+	struct RenderGraphBufferBindingScope
+	{
+		const char* pass_name = nullptr;
+		const RenderGraphResolvedBufferBinding* graph_owned_buffers = nullptr;
+		size_t graph_owned_buffer_count = 0u;
+		const RenderGraphResolvedBufferBinding* declared_buffers = nullptr;
+		size_t declared_buffer_count = 0u;
+	};
+
 	class RenderGraphRasterContext;
 	class RenderGraphComputeContext;
 
@@ -54,16 +81,25 @@ namespace AshEngine
 		std::string name{};
 		RenderGraphPassKind kind = RenderGraphPassKind::Raster;
 		RenderGraphPassFlags flags = RenderGraphPassFlags::None;
+		RHI::GpuTimingMetric timing_metric = RHI::GpuTimingMetric::Invalid;
 		std::vector<RenderGraphTextureUsage> texture_usages{};
+		std::vector<RenderGraphBufferUsage> buffer_usages{};
 		std::function<bool(RenderGraphRasterContext&)> raster_execute{};
 		std::function<bool(RenderGraphComputeContext&)> compute_execute{};
 	};
+
+	inline bool is_render_graph_gpu_timing_group_metric(RHI::GpuTimingMetric metric)
+	{
+		return metric > RHI::GpuTimingMetric::Frame && metric < RHI::GpuTimingMetric::Count;
+	}
 
 	class RenderGraphRasterPassBuilder
 	{
 	public:
 		explicit RenderGraphRasterPassBuilder(RenderGraphPassNode& pass);
 		void read_texture(RenderGraphTextureRef texture, RenderGraphAccess access);
+		ASH_API void read_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
+		ASH_API void write_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
 		void write_color(uint8_t slot, RenderGraphTextureRef texture, RenderLoadAction load_action, RenderColorValue clear_color);
 		void write_depth(RenderGraphTextureRef texture, RenderLoadAction load_action, RenderDepthStencilValue clear_value);
 		void read_depth(RenderGraphTextureRef texture, RenderGraphDepthReadMode mode);
@@ -78,6 +114,8 @@ namespace AshEngine
 		explicit RenderGraphComputePassBuilder(RenderGraphPassNode& pass);
 		void read_texture(RenderGraphTextureRef texture, RenderGraphAccess access);
 		void write_texture(RenderGraphTextureRef texture, RenderGraphAccess access);
+		ASH_API void read_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
+		ASH_API void write_buffer(RenderGraphBufferRef buffer, RenderGraphAccess access);
 
 	private:
 		RenderGraphPassNode* m_pass = nullptr;
@@ -88,6 +126,7 @@ namespace AshEngine
 	public:
 		virtual ~RenderGraphRasterContext() = default;
 		virtual std::shared_ptr<RenderTarget> get_texture(RenderGraphTextureRef texture) = 0;
+		virtual std::shared_ptr<StorageBuffer> get_buffer(RenderGraphBufferRef buffer) = 0;
 		virtual bool draw(const GraphicsDrawDesc& desc) = 0;
 	};
 
@@ -96,6 +135,7 @@ namespace AshEngine
 	public:
 		virtual ~RenderGraphComputeContext() = default;
 		virtual std::shared_ptr<RenderTarget> get_texture(RenderGraphTextureRef texture) = 0;
+		virtual std::shared_ptr<StorageBuffer> get_buffer(RenderGraphBufferRef buffer) = 0;
 		virtual bool dispatch(const ComputeDispatchDesc& desc) = 0;
 	};
 }

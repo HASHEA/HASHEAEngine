@@ -223,6 +223,7 @@ namespace AshEngine
 		return graph.add_compute_pass(
 				"TerrainWeightAtlasUpdatePass",
 				RenderGraphPassFlags::NeverCull,
+				RHI::GpuTimingMetric::Invalid,
 				[resources](RenderGraphComputePassBuilder& pass)
 				{
 					pass.write_texture(
@@ -1022,6 +1023,7 @@ namespace AshEngine
 		if (!graph.add_raster_pass(
 			"TerrainLodDebugPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Invalid,
 			[depth, output](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_depth(depth, RenderGraphDepthReadMode::DepthTestOnly);
@@ -1093,6 +1095,7 @@ namespace AshEngine
 			!graph.add_compute_pass(
 				"TerrainWeightAtlasUpdatePass",
 				RenderGraphPassFlags::NeverCull,
+				RHI::GpuTimingMetric::Invalid,
 				[atlas](RenderGraphComputePassBuilder& pass)
 				{
 					pass.write_texture(atlas, RenderGraphAccess::ComputeUAV);
@@ -1105,6 +1108,7 @@ namespace AshEngine
 		return graph.add_raster_pass(
 			"TerrainAtlasGBufferReadContract",
 			RenderGraphPassFlags::NeverCull,
+			RHI::GpuTimingMetric::Invalid,
 			[atlas](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(atlas, RenderGraphAccess::GraphicsSRV);

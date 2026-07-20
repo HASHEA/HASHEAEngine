@@ -687,6 +687,7 @@ namespace AshEngine
 		graph.add_raster_pass(
 			"SceneDirectionalShadowDynamicAtlasClearPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Shadows,
 			[dynamic_atlas](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.write_depth(dynamic_atlas, RenderLoadAction::Clear, k_shadow_depth_clear);
@@ -702,6 +703,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				pass_name.c_str(),
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Shadows,
 				[dynamic_atlas](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.write_depth(dynamic_atlas, RenderLoadAction::Load, k_shadow_depth_clear);
@@ -1163,6 +1165,7 @@ namespace AshEngine
 		graph.add_raster_pass(
 			"SceneDirectionalShadowDynamicAtlasClearPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Shadows,
 			[dynamic_atlas = outputs.dynamic_atlas](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.write_depth(dynamic_atlas, RenderLoadAction::Clear, k_shadow_depth_clear);
@@ -1186,6 +1189,7 @@ namespace AshEngine
 				graph.add_raster_pass(
 					refresh_pass_name.c_str(),
 					RenderGraphPassFlags::None,
+					RHI::GpuTimingMetric::Shadows,
 					[static_cache_atlas = outputs.static_cache_atlas](RenderGraphRasterPassBuilder& pass)
 					{
 						pass.write_depth(static_cache_atlas, RenderLoadAction::Load, k_shadow_depth_clear);
@@ -1242,6 +1246,7 @@ namespace AshEngine
 			graph.add_raster_pass(
 				dynamic_pass_name.c_str(),
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::Shadows,
 				[dynamic_atlas = outputs.dynamic_atlas,
 				 static_cache_atlas = outputs.static_cache_atlas,
 				 needs_static_cache_read](RenderGraphRasterPassBuilder& pass)
@@ -1332,6 +1337,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDirectionalShadowCascadeDebugPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::Invalid,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(scene_depth, RenderGraphAccess::GraphicsSRV);
@@ -1402,6 +1408,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			pass_name.c_str(),
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::DeferredLighting,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(deferred_resources.depth, RenderGraphAccess::GraphicsSRV);

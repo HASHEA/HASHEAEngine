@@ -33,12 +33,12 @@ status: active
 - `SceneRenderer::initialize(Renderer*, DebugDrawService*)` / `shutdown()` / `handle_output_resized()` / `invalidate_temporal_history()`；后者清理 AO、TAA、体积光 history，不重置粒子模拟状态。
 - `SceneRenderer::render_visible_frame(VisibleRenderFrame&, const SceneRenderViewContext&)`：一次 view 渲染入口。会写回 frame 的 `taa_enabled / taa_jitter_ndc / taa_previous_jitter_ndc` 并 jitter 投影矩阵。
 - `SceneRenderer::draw_render_debug_view_ui(UIContext&)`、`complete_pending_pick_readbacks()`（editor GPU picking 回读）。
-- `Renderer`：`begin_frame/end_frame/present`、资源创建转发、`begin_pass()+GraphicsPassContext::draw()`（支持 direct 或单条 non-indexed indirect draw）、`dispatch()`、`acquire/release_transient_render_target()`、`get_frame_stats()`。`RendererFrameStats::submitted_frame_index/gpu_timing_record_result` 暴露最后一次真实提交身份与当前 timing recording 结果。`begin_frame` 透传 swapchain acquire 三态；Retryable 时不创建/录制 command buffer，RenderDevice 只平衡 backend frame lifecycle。
-- `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`。`Texture2DArrayUploadDesc` 可创建一个带原生 2D-array SRV 的 sampled 资源；提供初始数据时必须覆盖每个唯一 `(array layer, mip)`，上传会按 layer-major / mip-major 紧密重排，紧密数据总量必须落在 RHI 的 32 位上传大小上限内。返回值是单个 `RenderTarget`，shader 的 `Texture2DArray` 参数通过 `set_texture` 绑定，不把各 layer 当成 `set_texture_array` 的多资源描述符数组。
+- `Renderer`：`begin_frame/end_frame/present`、资源创建转发、`begin_pass()+GraphicsPassContext::draw()`（direct、显式 `NonIndexed` 或 `Indexed` indirect）、`dispatch()`、transient render-target/storage-buffer pool 转发、`get_frame_stats()`。`begin_frame` 透传 swapchain acquire 三态；Retryable 时不创建/录制 command buffer，RenderDevice 只平衡 backend frame lifecycle。`RendererFrameStats` 同时携带 canonical `render_frame_id`、该帧 timing 的精确提交确认位，以及最多 3 个带各自 `frame_id` 的延迟完成 GPU sample。
+- `RenderDevice`：同名资源创建实现、`begin_pass/end_pass`、`request_back_buffer_capture()/fetch_back_buffer_capture()`、`queue_render_target_texel_read()`；`get_render_frame_id()` 暴露只在成功 acquire 后递增的 canonical ID，`was_gpu_timing_frame_submitted()` 只返回本帧后端精确提交确认。`Texture2DArrayUploadDesc` 可创建一个带原生 2D-array SRV 的 sampled 资源；提供初始数据时必须覆盖每个唯一 `(array layer, mip)`，上传按 layer-major / mip-major 紧密重排且总量受 RHI 32 位上传大小上限约束。返回值是单个 `RenderTarget`，shader 的 `Texture2DArray` 参数通过 `set_texture` 绑定，不把各 layer 当成 `set_texture_array` 的多资源描述符数组。
 - `TerrainRenderAsset`：消费不可变 `TerrainAssetSnapshot`，按 Component pointer diff 生成当前 content generation 的 packed R16 高度和两路 RGBA8 权重 payload；拥有 height/staging buffers、两张 weight atlas、coarse weight target、三张 8-slice material arrays 与帧边界 slot metadata。`RenderAssetManager` 以规范化 Terrain key 把 request/finalize、pending/failed 和 activity epoch 合入通用 readiness；GPU finalize 仅允许 render thread。
 - `RenderTerrainProxy` / `RenderScene`：按 Scene Terrain extraction 构建不可变 snapshot generation 的 proxy，维护 world bounds，transform-only 更新以新 proxy 集合原子替换；`build_visible_render_frame` 对 bounds 做 frustum 裁剪并写入 `VisibleRenderFrame::terrains`，由 `TerrainRenderPass` 在 GBuffer/shadow 路径消费。
 - `TerrainLod`：消费一个 immutable Terrain snapshot、world transform 与 `SceneView`，以 Component 根 min/max 构建隐式 quadtree，按投影误差选择 9 级共享网格并只向更细方向修复邻接。输出每个非空 LOD 一个 `first_instance == 0` 的稳定 batch，instance 携带坐标、较粗邻边掩码和 morph factor；渲染侧把所有 batch 打包到 3 帧 ring 的 StorageBuffer，以 root constant batch offset 索引。
-- `TerrainRenderPass::prepare_graph`：对第一个 snapshot 与 render asset generation 一致的 visible 主 Terrain 注册两张 4144² atlas 和一张 1025² coarse target；有 dirty payload 时最多排入一个 raw staging upload，并添加写三张 texture 的 `TerrainWeightAtlasUpdatePass`。dispatch 成功才更新 slot metadata并从 pending 队列消费该项。`SceneGBufferPass` 声明同三张 texture 的 `GraphicsSRV` 读取，形成 compute→graphics barrier；首期一个 scene/view 只渲染第一个有效主 Terrain，多 Terrain 独立 program binding 留待后续。
+- `TerrainRenderPass::prepare_graph`：对第一个 snapshot 与 render asset generation 一致的 visible 主 Terrain 注册两张 4144² atlas 和一张 1025² coarse target；有 dirty payload 时最多排入一个 raw staging upload，并添加写三张 texture 的 `TerrainWeightAtlasUpdatePass`。dispatch 成功才更新 slot metadata 并从 pending 队列消费该项。`SceneGBufferPass` 声明同三张 texture 的 `GraphicsSRV` 读取，形成 compute→graphics barrier；首期一个 scene/view 只渲染第一个有效主 Terrain，多 Terrain 独立 program binding 留待后续。
 - `TerrainRenderPass::initialize/render_gbuffer/render_shadow`：一次创建 LOD0..8 的 32-bit shared index buffers、weight/material samplers，以及 `TerrainSurface.hlsl` 的 GBuffer/depth-only/LOD-debug permutation。网格 draw 不绑定 vertex buffer，顶点坐标来自 index 值对应的 `SV_VertexID`；surface instance 使用 packed `uint4`，root constant layout 固定 224 bytes。GBuffer 在既有 clear pass 内执行，shadow 通过 sunlight/普通方向光共用 caster callback 执行并尊重 `casts_shadow` / mobility filter。
 - sunlight outer-cascade static cache 的 caster revision 绑定 scene runtime/content epoch，并逐项散列实际 Static/Stationary mesh shadow draw（transform、section、mesh GPU publication、已准备 DepthOnly material publication）及 `casts_shadow=true` Terrain（snapshot、一次锁内 render-publication identity、transform）。精确 draw 集合已覆盖 caster 增删，故全体 primitive/static-scene revision、全局 transform revision、Movable mesh 与 `casts_shadow=false` Terrain 都不进入该 identity。planner 不提交 cache；只有 static refresh callback 的 tile clear 与 `StaticOnly` draw 都成功录入 CPU command recording 后才提交 revision/light VP。RenderGraph 当前不暴露 pass-end、queue submit 或 GPU completion，故该提交点不宣称 GPU 完成。
 - `TerrainRenderPass::is_capture_ready`：要求 visible Terrain 的 snapshot、accepted/published generation、Ready 状态和 pending upload 全部一致，并等待 atlas compute 所在 frame 之后的后续 prepare；`SceneRenderer` 与粒子 readiness 取逻辑与，不使用固定帧数。
@@ -71,15 +71,27 @@ AO 处于 debug 可视化模式时，跳过阴影、光照合成、天空、粒�
 
 `Application` 用 `RHI::GraphicsContext` + `RHI::Swapchain` 构造 `RenderDevice`（私有构造，friend）；`Renderer` 组合 `RenderDevice` 提供 pass 级 draw 收集与帧统计。依赖方向：SceneRenderer/各 Pass → RenderGraph → Renderer → RenderDevice → RHI。Function/Render 层不 include 后端（Vulkan/DX12）头；backend 差异全部封在 `Graphics/`。
 
-`StorageBufferDesc::indirect_args` 申请可被 GPU 写入并被 draw 间接消费的 buffer；`GraphicsDrawDesc::indirect_args_buffer/offset` 选择 indirect 路径。提交前必须转换到 `AshResourceState::IndirectArgs`，且 indirect 与 direct 参数互斥。
+GPU timing 生命周期由 `RenderDevice` 的后端无关 coordinator 与精确 command buffer 配对。只有 swapchain acquire 为 Completed、command buffer 非空且 `begin_record` 状态验证成功后才允许 `begin_frame`；Retryable/Failed acquire 与 record 失败的路径必须保持 telemetry begin count 为 0。帧末先在同一 command buffer 仍处于 Recording 时写 end timestamp，再结束录制和提交；`GraphicsContext::end_frame` 完成后才调用 telemetry commit。只有 commit 返回 true 时 `gpu_timing_frame_submitted` 才为 true，消费者不得把失败或未确认帧计入 submitted/coverage。
+
+完成样本是延迟、非阻塞传输：`Renderer` 在 begin/end/complete 三个安全点轮询，每次写入 `RendererFrameStats` 的固定 3-entry array，遇到 Pending/Empty 或数组满立即停止，不等待 GPU、不分配动态内存。sample 的 `frame_id` 可早于当前 `render_frame_id`，关联必须使用 sample 自带 ID，禁止按“当前帧”猜测归属。
+
+### Graphics indirect contract
+
+`GraphicsDrawDesc::indirect_kind` 必须显式为 `None / NonIndexed / Indexed`。indirect 路径同时提供带 `indirect_args` usage 的 `StorageBuffer`、对齐 offset、非零 draw count，以及 0（使用原生结构大小）或合法结构 stride；范围计算使用 checked arithmetic。`Indexed` 必须绑定 index buffer并先完成 index bind，`NonIndexed` 禁止携带 index buffer。两类 indirect 都与 direct 的 count/first/offset 字段互斥，冲突输入 fail-closed，不静默忽略。提交前 args 必须转换到 `AshResourceState::IndirectArgs`；RHI 仍复用既有 `cmd_draw_indirect` / `cmd_draw_indexed_indirect`，没有新增 Graphics virtual API。Particle 已显式迁移为 `NonIndexed`，其渲染行为不变。
+
+### GPUDriven experimental foundation
+
+`Function/Render/GPUDriven/` 提供后续 grass/tree 与普通 static-mesh GPU path 可共用的最小底座：非零 `GpuDrivenPrototypeId`、`slot+generation` page handle、按 canonical completed frame 延迟回收的 page allocator、版本化 instance page desc、`CompressedTRS` 32-byte / `Affine3x4F32` 48-byte encoding、view/draw-group 数据，以及验证后创建 `StorageBuffer` 的 ownership helper。generation 回绕会永久 seal slot，避免 ABA；payload 字节数、capacity/count 与 stride 都先做 checked validation。
+
+该目录当前是 experimental foundation，不是生产植被系统：尚未实现 prototype 资产入口、SpeedTree、分块流送、GPU culling/HZB、HLOD/远景替代、GPU grass/tree shader family 或 Editor 植被笔刷。后续功能必须另写 S2 设计并复用这里的通用 page/buffer 契约，禁止向底座泄漏 vegetation-specific 字段。
+
+全链诊断 `--rhi-selftest-indirect --run-for-frames=1` 在 raw RHI 自测后执行一次 Function lifecycle：external candidate → transient visible/args → compute UAV → indexed indirect raster → args `GraphicsSRV` validation → bounded capture。begin 成功后 scope guard 保证 `end_frame` exactly-once；回调异常转受控失败。oracle 用非恒等 index/firstIndex=1，误发 non-indexed native command 会退化而不能伪 PASS。
 
 ### GPU timing / PerfGate bridge
 
-`RenderDevice` 在主 graphics command buffer 开始后记录 whole-frame timing，在该 command buffer 关闭前结束；每个经 `PassDesc` / `begin_pass` 进入 RenderDevice 的命名 raster/graphics pass 同时记录一个稳定 hash scope，Tracy zone 可并存但不是数据来源。RenderGraph compute 分支目前不产生 pass scope；若要把 compute 名称加入 required set，须先补对应 recording bridge。Editor 的 scene-output graphics pass 处于 whole-frame 区间内，因此固定 Game 输出的 GPU frame 时间包含实际 2560 × 1440 工作。失败、中止或没有真实提交的 frame 会 cancel timing recording，不得进入 PerfGate expected set。
+`RenderDevice` 在 canonical graphics command buffer 上拥有固定 `GPU.Frame` 生命周期；只有后端精确确认提交的 frame 才进入 PerfGate expected set。RenderGraph pass 只携带固定 `GpuTimingMetric` 或 `Invalid`：executor 把相邻同类 pass 合并为一个非重叠 group scope，metric 变化时先关闭前一组再打开后一组，失败/中止路径由 lifecycle coordinator fail-closed 收口。完成样本通过 `RendererFrameStats.completed_gpu_timing_samples` 延迟、非阻塞地交给 PerfGate，关联键始终是 sample 自带的 `frame_id`。
 
-PerfGate 与 smoke/capture 复用同一 readiness 判定：application ready、render asset 无 pending/failed、render command queue 已排空、当前 scene packet 全部成功、asset epoch 一致且 present 完成。controller 持续 drain pre-ready snapshot，但只在 readiness 后开始 warmup；readiness 对应的 submitted frame index 是 pre-window watermark，只有活动采样窗口内成功提交的 index 才进入 expected set。采样窗口结束后继续渲染并 non-blocking drain，直至 `expected == received` 或 wall-clock deadline 失败，不用固定帧数判成功。
-
-`Scenario Empty` 使用 Editor 的真实 Game viewport 与 primary scene camera，并要求实际 offscreen scene output 为 2560 × 1440。该 extent 与窗口/swapchain 独立；`RendererFrameStats` 继续报告真实 swapchain extent，禁止用 scene-output 数值覆盖。
+`SceneGBufferPass` 的固定组为 `GPU.GBuffer`，方向光阴影 pass 的固定组为 `GPU.Shadows`；Terrain draw 作为这些既有 pass 的 callback 工作被包含在组总时长中，但这不等价于独立的 `Terrain.GBuffer` / `Terrain.Shadow` 指标。Terrain atlas update、LOD debug 与测试 contract 当前使用 `Invalid`，不得把固定组聚合结果冒充 Terrain 专属 required scope；若需要专属可比较指标，必须另行完成 S2 设计与双后端验证。
 
 ### Backbuffer capture（RenderGate，SDD-2026-07-07-render-gate）
 
@@ -110,13 +122,13 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 - Terrain GBuffer 必须复用既有 `SceneGBufferPass` 的 attachments 与一次 clear；atlas update 必须先写 `ComputeUAV`，GBuffer 再读 `GraphicsSRV`。方向光 shadow callback 组合 static mesh 与 Terrain，Terrain 不进入 `DynamicOnly` cache 更新。Terrain generation 变化只失效对应 temporal view 的 TAA history。
 - 屏幕空间 scene-depth coverage 必须通过 `Shaders/Scene/SceneDepthCommon.hlsli` 的统一 helper 判定：reverse-Z 仅 `depth <= 0.0`、normal-Z 仅 `depth >= 1.0` 视为 depth target 背景。禁止用固定 epsilon 代替 clear 端点，因为有限远平面下的合法远端 reverse-Z 深度可任意接近零。
 - 实例 buffer 为「逻辑 slot + 3 帧物理 ring」，epoch 取渲染侧 `Application::get_frame_index()`（不是 `VisibleRenderFrame::frame_index`）；temporal history 只允许 GBuffer pass 使用。禁止改回单物理 slot：Vulkan Release 下 CPU 写 host-visible buffer 会覆盖 GPU 正在读的上一帧实例矩阵，导致 GBuffer depth/normal/motion vector 裂缝闪烁。
-- GPU timing 的 pass 名称及其稳定 hash 是遥测身份。每帧同名 scope 先求和再进入 percentile；duplicate/unexpected/missing frame、scope overflow、required scope 缺失、hash collision/mismatch 或后端 timing failure 都是 PerfGate fatal，禁止静默补 CPU 值或复用别帧结果。
+- GPU timing 身份来自固定 `GpuTimingMetric` 枚举而非 pass 名 hash；RenderGraph 同一时刻最多有一个 group scope。duplicate/overlap/incomplete、invalid/unresolved frame 与 coverage 不足均由主线 PerfGate schema v2 fail-closed，禁止静默补 CPU 值、复用别帧结果或把聚合组改名成 Terrain 专属指标。
 - 双后端等价：所有 pass 必须 Vulkan / DX12 行为一致，跨后端 diff FAIL 视同 bug。
 - 粒子 sprite/radial/soft-depth 仅扩展 Function pass、frame asset prepare 与 HLSL program variants；pass 顺序保持 Sky 后、Volumetric 前，未修改 RHI 或 RenderGraph core 接口。
 
 ## 验证
 
-对齐 `docs/VERIFY.md`「渲染 Pass / shader / 材质」行：构建 + `RunRenderGate.bat`（双后端 golden SSIM + 跨后端 diff）+ `RunPerfGate.bat -Profile Standard`；检查 `product/logs` 无 validation 报错。渲染异常用 `[RenderDebugView]` 分通道定位。
+对齐 `docs/VERIFY.md`「渲染 Pass / shader / 材质」与「RenderGraph 核心」行：构建 + `RunRenderGate.bat` + PerfGate Standard；改 graph buffer/indirect/GPUDriven 底座时还必须运行双后端 bounded indirect self-test 与 `VegetationFullPipeline` non-bless compare。检查每个 session 的日志无 validation/debug-layer 报错。渲染异常用 `[RenderDebugView]` 分通道定位。
 
 ## 历史
 
@@ -126,4 +138,5 @@ frame-dump 模式下 TAA jitter 强制为 `(0,0)`；提交给渲染侧的 frame 
 - `docs/sdd/SDD-2026-07-07-render-gate.md`（backbuffer capture + 抓帧确定性）
 - [SDD-2026-07-10-gpu-particles](../../sdd/SDD-2026-07-10-gpu-particles.md)（GPU 粒子 pass 与稳定 capture-ready）
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)（资源 epoch、提交快照与 temporal history invalidation）
-- [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)（Phase 0 GPU timing、readiness-driven PerfGate 与固定 1440p Empty 输出）
+- [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)（Terrain render asset、LOD、GBuffer/方向光阴影与 capture readiness）
+- [SDD-2026-07-13-gpu-driven-foundation](../../sdd/SDD-2026-07-13-gpu-driven-foundation.md)（显式 indexed/non-indexed Function contract、GPUDriven experimental foundation 与全链自测）

@@ -30,9 +30,9 @@ namespace RHI
 	constexpr uint32_t k_dx12_max_frames = 3;
 
 	class DX12CommandBuffer;
+	class DX12GpuTimingTelemetry;
 	class DX12StagingBufferPool;
 	class DX12Swapchain;
-	class DX12GpuTiming;
 
 	struct DX12FrameResources
 	{
@@ -54,8 +54,9 @@ namespace RHI
 		{
 			return {};
 		}
-		DX12Context() { s_instance = this; }
-		~DX12Context() {}
+		auto get_gpu_timing_telemetry() -> IGpuTimingTelemetry* override;
+		DX12Context();
+		~DX12Context();
 
 	public:
 		inline static auto get() { return s_instance; }
@@ -144,6 +145,13 @@ namespace RHI
 		auto _flush_pending_buffer_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _flush_pending_texture_uploads(DX12FrameResources& frameResources) -> bool;
 		auto _finalize_upload_command_buffer(DX12FrameResources& frameResources) -> bool;
+		auto _establish_graphics_teardown_readiness() -> DX12GraphicsTeardownReadiness;
+		auto _observe_graphics_submission(
+			bool batch_executed,
+			const DX12FenceSignalResult& signal_result,
+			const char* phase) -> void;
+		auto _fail_closed_after_graphics_completion_loss(const char* phase) -> void;
+		auto _record_confirmed_device_removal() -> bool;
 		auto create_sampler_uncached(const SamplerCreation& ci) -> std::shared_ptr<Sampler>;
 		static void __stdcall _d3d12_debug_message_callback(
 			D3D12_MESSAGE_CATEGORY category,
@@ -180,6 +188,8 @@ namespace RHI
 
 		DX12DescriptorHeapManager m_descriptorHeaps;
 		DX12ResourceTracker m_resourceTracker;
+		std::unique_ptr<DX12GpuTimingTelemetry> m_gpuTimingTelemetry{};
+		DX12GraphicsCompletionPolicy m_graphicsCompletionPolicy{};
 
 		// Per-frame resources
 		std::vector<DX12FrameResources> m_frameResources;
@@ -196,7 +206,6 @@ namespace RHI
 
 		// Staging buffer
 		DX12StagingBufferPool* m_stagingBuffer = nullptr;
-		DX12GpuTiming* m_gpuTimingContext = nullptr;
 		std::vector<PendingBufferUpload> m_pendingBufferUploads{};
 		std::vector<PendingTextureUpload> m_pendingTextureUploads{};
 		mutable std::mutex m_pendingUploadMutex{};

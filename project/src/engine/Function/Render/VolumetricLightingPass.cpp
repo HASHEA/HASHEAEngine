@@ -705,6 +705,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				k_screen_space_pass_name,
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::VolumetricLighting,
 				[scene_hdr_linear, scene_depth, mask, composite](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
@@ -742,6 +743,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricDensityPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[density](RenderGraphComputePassBuilder& pass)
 			{
 				pass.write_texture(density, RenderGraphAccess::ComputeUAV);
@@ -750,6 +752,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricLightInjectionPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[density, scattering](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(density, RenderGraphAccess::ComputeSRV);
@@ -759,6 +762,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricTemporalPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[scattering, temporal, validity](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(scattering, RenderGraphAccess::ComputeSRV);
@@ -769,6 +773,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricIntegratePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[temporal, scene_depth, integrated](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(temporal, RenderGraphAccess::ComputeSRV);
@@ -779,6 +784,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneVolumetricCompositePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[scene_hdr_linear, integrated, composite](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
@@ -835,6 +841,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				k_screen_space_pass_name,
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::VolumetricLighting,
 				[scene_hdr_linear, depth = deferred_resources.depth, mask = outputs.screen_space_mask, output = outputs.screen_space_final](RenderGraphRasterPassBuilder& pass)
 				{
 					pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);
@@ -981,6 +988,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricDensityPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[density = outputs.density](RenderGraphComputePassBuilder& pass)
 			{
 				pass.write_texture(density, RenderGraphAccess::ComputeUAV);
@@ -1005,6 +1013,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricLightInjectionPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[density = outputs.density, scattering = outputs.scattering, sunlight_shadow_atlas](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(density, RenderGraphAccess::ComputeSRV);
@@ -1038,6 +1047,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricTemporalPass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[scattering = outputs.scattering, temporal = outputs.temporal_scattering, validity = outputs.history_validity,
 				history_has_valid_read, history_read, history_write](RenderGraphComputePassBuilder& pass)
 			{
@@ -1091,6 +1101,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_compute_pass(
 			"SceneVolumetricIntegratePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[temporal = outputs.temporal_scattering, depth = deferred_resources.depth, integrated = outputs.integrated_lighting](RenderGraphComputePassBuilder& pass)
 			{
 				pass.read_texture(temporal, RenderGraphAccess::ComputeSRV);
@@ -1123,6 +1134,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneVolumetricCompositePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::VolumetricLighting,
 			[scene_hdr_linear, integrated = outputs.integrated_lighting, composite = outputs.composite_hdr](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(scene_hdr_linear, RenderGraphAccess::GraphicsSRV);

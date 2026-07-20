@@ -510,6 +510,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredLightingBasePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::DeferredLighting,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
@@ -598,6 +599,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			light_pass_name.c_str(),
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::DeferredLighting,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
@@ -669,6 +671,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			light_pass_name.c_str(),
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::DeferredLighting,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
@@ -726,6 +729,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			light_pass_name.c_str(),
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::DeferredLighting,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
@@ -784,6 +788,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredLightingBasePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::DeferredLighting,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
@@ -875,6 +880,7 @@ namespace AshEngine
 			ASH_PROCESS_ERROR(graph.add_raster_pass(
 				light_pass_name.c_str(),
 				RenderGraphPassFlags::None,
+				RHI::GpuTimingMetric::DeferredLighting,
 				[&](RenderGraphRasterPassBuilder& pass)
 				{
 					for (RenderGraphTextureRef gbuffer : deferred_resources.gbuffer_targets)
@@ -964,6 +970,7 @@ namespace AshEngine
 		ASH_PROCESS_ERROR(graph.add_raster_pass(
 			"SceneDeferredCompositePass",
 			RenderGraphPassFlags::None,
+			RHI::GpuTimingMetric::EnvironmentAndSky,
 			[&](RenderGraphRasterPassBuilder& pass)
 			{
 				pass.read_texture(deferred_resources.lighting_diffuse, RenderGraphAccess::GraphicsSRV);

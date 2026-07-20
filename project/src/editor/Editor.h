@@ -30,7 +30,5 @@ namespace AshEditor
 		std::unique_ptr<EditorApplication> _upEditorApplication = nullptr;
 		bool _bootstrapAttempted = false;
 		bool _bootstrapFailed = false;
-		bool _bPerfGateBenchmark = false;
-		bool _bPerfGateRenderOutputReady = false;
 	};
 }

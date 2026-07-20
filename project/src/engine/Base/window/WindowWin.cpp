@@ -43,11 +43,26 @@ namespace AshEngine
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 		glfwWindowHint(GLFW_SAMPLES, 4);
+		glfwWindowHint(GLFW_DECORATED, data.exactClientExtent ? GLFW_FALSE : GLFW_TRUE);
 		handle = glfwCreateWindow(data.width, data.height, data.title, nullptr, nullptr);
 		if (!handle)
 		{
 			HLogError("Fatal : failed to create glfw window !");
 			return;
+		}
+		int32_t actual_width = 0;
+		int32_t actual_height = 0;
+		glfwGetWindowSize(handle, &actual_width, &actual_height);
+		data.width = static_cast<uint32_t>(actual_width > 0 ? actual_width : 0);
+		data.height = static_cast<uint32_t>(actual_height > 0 ? actual_height : 0);
+		if (data.exactClientExtent)
+		{
+			HLogInfo(
+				"WindowWin: exact client extent requested {}x{}, actual {}x{}.",
+				w_data.width,
+				w_data.height,
+				data.width,
+				data.height);
 		}
 		shouldClose = false;
 		set_title(data.title);

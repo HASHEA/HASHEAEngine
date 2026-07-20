@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "profiles": {
+    "VegetationFullPipeline": {
+      "configuration": "Release",
+      "configuration_locked": true,
+      "targets": [
+        {
+          "name": "Sandbox",
+          "backends": [ "Vulkan", "DX12" ]
+        }
+      ],
+      "scene": "product/assets/scenes/VegetationBaseline.scene.json",
+      "window_width": 2560,
+      "window_height": 1440,
+      "warmup_seconds": 10,
+      "sample_seconds": 30,
+      "drain_seconds": 5,
+      "timeout_seconds": 90,
+      "gpu_timing": "required",
+      "min_gpu_coverage": 0.95,
+      "required_gpu_metrics": [
+        "GPU.Frame",
+        "GPU.GBuffer",
+        "GPU.AmbientOcclusion",
+        "GPU.Shadows",
+        "GPU.DeferredLighting",
+        "GPU.EnvironmentAndSky",
+        "GPU.Particles",
+        "GPU.VolumetricLighting",
+        "GPU.Bloom",
+        "GPU.TemporalAA",
+        "GPU.ToneMapAndOverlays"
+      ],
+      "comparison_thresholds": {
+        "cpu_frame_time_avg_ms": { "relative_percent": 5, "absolute_floor": 0.25 },
+        "cpu_frame_time_p95_ms": { "relative_percent": 8, "absolute_floor": 0.50 },
+        "cpu_frame_time_p99_ms": { "relative_percent": 12, "absolute_floor": 1.00 },
+        "process_private_bytes_peak_mb": { "relative_percent": 5, "absolute_floor": 128 },
+        "engine_heap_peak_mb": { "relative_percent": 10, "absolute_floor": 1 },
+        "draw_calls_avg": { "relative_percent": 0, "absolute_floor": 0 },
+        "gpu_frame_avg_ms": { "relative_percent": 5, "absolute_floor": 0.25 },
+        "gpu_frame_p95_ms": { "relative_percent": 8, "absolute_floor": 0.50 },
+        "gpu_pass_tiers": [
+          {
+            "minimum_baseline_avg_ms": 0.5,
+            "avg": { "relative_percent": 8, "absolute_floor": 0.10 },
+            "p95": { "relative_percent": 12, "absolute_floor": 0.20 }
+          },
+          {
+            "minimum_baseline_avg_ms": 0.1,
+            "avg": { "relative_percent": 15, "absolute_floor": 0.05 },
+            "p95": { "relative_percent": 20, "absolute_floor": 0.10 }
+          },
+          {
+            "minimum_baseline_avg_ms": 0.0,
+            "avg": { "absolute_floor": 0.03 },
+            "p95": { "absolute_floor": 0.05 }
+          }
+        ]
+      },
+      "vsync": false,
+      "validation": false,
+      "frame_cap": "off",
+      "fixed_camera": true
+    }
+  }
+}

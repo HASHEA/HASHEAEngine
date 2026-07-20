@@ -38,7 +38,7 @@ namespace AshSandbox
 	public:
 		static auto get_standard_scene_path() -> std::filesystem::path;
 
-		auto start(AshEngine::AssetDatabase& asset_database) -> bool;
+		auto start(AshEngine::AssetDatabase& asset_database, bool fixed_camera) -> bool;
 		auto reset() -> void;
 		auto update_logic(const AshEngine::InputState& input) -> bool;
 
@@ -52,6 +52,7 @@ namespace AshSandbox
 	private:
 		auto _load_scene_snapshot(
 			AshEngine::AssetDatabase& asset_database,
+			bool fixed_camera,
 			SandboxStandardSceneSnapshot& out_snapshot,
 			std::string& out_error) const -> bool;
 		auto _find_primary_camera(
@@ -72,5 +73,6 @@ namespace AshSandbox
 		SandboxFreeCameraController m_free_camera_controller{};
 		std::chrono::steady_clock::time_point m_last_logic_tick_time{};
 		bool m_has_logic_tick_time = false;
+		bool m_fixed_camera = false;
 	};
 }

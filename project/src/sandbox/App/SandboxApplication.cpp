@@ -41,6 +41,7 @@ namespace AshSandbox
 
 	auto SandboxApplication::_on_startup() -> void
 	{
+		perfGateController.set_runtime_fixed_camera(pendingPerfGateConfig.enabled);
 		HLogInfo("Sandbox render-thread startup begin.");
 		if (!is_logic_thread_enabled())
 		{
@@ -180,7 +181,7 @@ namespace AshSandbox
 
 	auto SandboxApplication::_start_standard_scene() -> bool
 	{
-		if (!m_standardScene.start(m_assetDatabase))
+		if (!m_standardScene.start(m_assetDatabase, pendingPerfGateConfig.enabled))
 		{
 			const std::string failure_detail = m_standardScene.get_failure_detail();
 			HLogError(

@@ -30,13 +30,13 @@ namespace RHI
 	class VulkanFence;
 	class VulkanBuffer;
 	class VulkanDynamicBuffer;
+	class VulkanGpuTimingTelemetry;
 	struct VulkanCommandBufferManager;
 	struct GPUTimeQuery;
 	struct GpuTimeQueryTree;
 	struct GpuPipelineStatistics;
 	struct GPUTimeQueriesManager;
 	class VulkanStagingBufferPool;
-	class VulkanGpuTiming;
 	//count = numThread * numFrame
 	struct FramePool
 	{
@@ -75,8 +75,9 @@ namespace RHI
 		auto shutdown() -> bool override;
 		auto destroy() -> void override;
 		auto get_render_memory_stats() const -> RenderMemoryStats override;
-		VulkanContext() { instance = this; }
-		~VulkanContext() {}
+		auto get_gpu_timing_telemetry() -> IGpuTimingTelemetry* override;
+		VulkanContext();
+		~VulkanContext();
 	public:
 		inline const auto get_absolute_frame_count_internal() const 
 		{
@@ -379,12 +380,6 @@ public:
 		auto _dump_vma_leaks() const -> void;
 		auto _capture_vma_allocation_stack(VmaTrackedAllocationInfo& info) const -> void;
 		auto _shutdown_shader_pool() -> bool;
-		auto _mark_gpu_timing_submitted(
-			uint64_t frame_completion_value,
-			VkFence completion_fence,
-			const VkCommandBuffer* submitted_command_buffers,
-			uint32_t submitted_command_buffer_count) -> void;
-		auto _fail_gpu_timing_submission() -> void;
 private:
 		struct PendingBufferUpload
 		{
@@ -446,7 +441,6 @@ private:
 		mutable std::mutex										pendingUploadMutex{};
 private:
 		GPUTimeQueriesManager* gpuTimeQueryManager = nullptr;
-		VulkanGpuTiming* gpuTimingContext = nullptr;
 		VulkanCommandBufferManager*  commandBufferRing   = nullptr;
 		VulkanCommandBuffer*		 currentUploadCommandBuffer = nullptr;
 		bool						 uploadCommandsPending = false;
@@ -460,6 +454,7 @@ private:
 		uint32_t								maxFramebufferLayers = 1;
 		VkExtent2D								minFragmentShadingRateTexelSize{};
 		std::shared_ptr<VulkanDynamicBuffer>	global_dynamic_buffer = nullptr;
+		std::unique_ptr<VulkanGpuTimingTelemetry>	gpuTimingTelemetry{};
 		uint32_t								currentFrame = UINT32_MAX;
 		uint32_t								previousFrame = UINT32_MAX;
 		uint64_t								absoluteFrame = UINT64_MAX;
