@@ -223,10 +223,11 @@ namespace AshEngine
 		RenderGraphBuilder& graph,
 		const TerrainGraphResources& resources,
 		const std::shared_ptr<TerrainRenderAsset>& asset,
-		const TerrainRenderAsset::TerrainGpuComponentUpload& pending_upload,
+		const TerrainGpuComponentUpload& pending_upload,
 		uint32_t atlas_slot,
 		bool write_high_resolution,
-		uint64_t render_frame_index)
+		uint64_t render_frame_index,
+		const TerrainRenderGraphOps& graph_ops)
 	{
 		ComputeProgram* program = m_weight_atlas_update_program.get();
 		return graph.add_compute_pass(
@@ -236,13 +237,13 @@ namespace AshEngine
 				[resources](RenderGraphComputePassBuilder& pass)
 				{
 					pass.write_texture(
-						resources.weight_atlas_0,
+						resources.update_weight_atlas_0,
 						RenderGraphAccess::ComputeUAV);
 					pass.write_texture(
-						resources.weight_atlas_1,
+						resources.update_weight_atlas_1,
 						RenderGraphAccess::ComputeUAV);
 					pass.write_texture(
-						resources.coarse_weights,
+						resources.update_coarse_weights,
 						RenderGraphAccess::ComputeUAV);
 				},
 				[this,
@@ -252,96 +253,202 @@ namespace AshEngine
 					atlas_slot,
 					write_high_resolution,
 					render_frame_index,
+					graph_ops,
 					program](RenderGraphComputeContext& context) -> bool
 				{
 					ASH_PROFILE_SCOPE_NC(
 						"TerrainWeightAtlasUpdatePass",
 						AshEngine::Profile::Color::Draw);
-					if (!asset || !program)
+					if (!asset || (!program && !graph_ops.is_override()))
 					{
 						return false;
 					}
 
-					std::shared_ptr<StorageBuffer> staging{};
-					TerrainRenderLayoutInfo pending_layout{};
+					const auto fail_current_work = [&](const std::string& diagnostic)
 					{
 						std::scoped_lock<std::mutex> lock(asset->m_mutex);
-						if (!asset->matches_pending_weight_update_locked(pending_upload) ||
-							!asset->m_has_accepted_render_layout)
+						if (resources.update_is_candidate)
 						{
-							// A newer immutable snapshot superseded this queued graph.
-							// Its upload remains pending and will be declared next frame.
+							asset->fail_candidate_locked(
+								resources.update_runtime,
+								resources.update_candidate_epoch,
+								diagnostic);
+						}
+						else if (!asset->m_candidate_state && asset->m_published_view &&
+							asset->m_published_view->runtime == resources.update_runtime &&
+							resources.update_runtime->target_snapshot ==
+								resources.update_snapshot)
+						{
+							asset->fail_latest_work_locked(diagnostic);
+						}
+					};
+
+					{
+						std::scoped_lock<std::mutex> lock(asset->m_mutex);
+						const bool current_candidate = resources.update_is_candidate &&
+							asset->m_candidate_state &&
+							asset->m_candidate_state->runtime == resources.update_runtime &&
+							asset->m_candidate_state->candidate_epoch ==
+								resources.update_candidate_epoch &&
+							asset->m_candidate_state->snapshot == resources.update_snapshot;
+						const bool current_incremental = !resources.update_is_candidate &&
+							!asset->m_candidate_state && asset->m_published_view &&
+							asset->m_published_view->runtime == resources.update_runtime &&
+							resources.update_runtime->target_snapshot ==
+								resources.update_snapshot;
+						if (!current_candidate && !current_incremental)
+						{
 							return true;
 						}
-						pending_layout = asset->m_accepted_render_layout;
-						staging = asset->m_dirty_weight_staging_buffer;
+						if (write_high_resolution)
+						{
+							if (!asset->matches_pending_weight_update_locked(
+									resources.update_runtime, pending_upload))
+							{
+								return true;
+							}
+						}
+						else if (!resources.update_is_candidate ||
+							asset->m_candidate_state->coarse_work.empty() ||
+							asset->m_candidate_state->coarse_work.front().component !=
+								pending_upload.component)
+						{
+							return true;
+						}
 					}
 
-					const std::shared_ptr<RenderTarget> atlas_0 =
-						context.get_texture(resources.weight_atlas_0);
-					const std::shared_ptr<RenderTarget> atlas_1 =
-						context.get_texture(resources.weight_atlas_1);
-					const std::shared_ptr<RenderTarget> coarse =
-						context.get_texture(resources.coarse_weights);
-					if (!staging || !atlas_0 || !atlas_1 || !coarse)
+					bool dispatch_succeeded = false;
+					if (graph_ops.is_override())
 					{
-						return false;
+						dispatch_succeeded = graph_ops.dispatch_atlas_update(
+							graph_ops.user_data,
+							context,
+							resources,
+							pending_upload,
+							atlas_slot,
+							write_high_resolution);
 					}
-
-					TerrainAtlasUpdateConstants constants{};
-					constants.atlas_origin_x =
-						(atlas_slot % k_terrain_atlas_slot_grid_width) *
-						k_terrain_weight_atlas_slot_extent;
-					constants.atlas_origin_y =
-						(atlas_slot / k_terrain_atlas_slot_grid_width) *
-						k_terrain_weight_atlas_slot_extent;
-					constants.component_x = pending_upload.coord.x;
-					constants.component_z = pending_upload.coord.z;
-					constants.write_high_resolution =
-						write_high_resolution ? 1u : 0u;
-					constants.component_count_x =
-						pending_layout.layout.component_count_x;
-					constants.component_count_z =
-						pending_layout.layout.component_count_z;
-
-					if (!program->set_const_data_block(sizeof(constants), &constants) ||
-						!program->set_storage_buffer("TerrainWeightUpload", staging) ||
-						!program->set_rw_texture("TerrainWeightAtlas0", atlas_0) ||
-						!program->set_rw_texture("TerrainWeightAtlas1", atlas_1) ||
-						!program->set_rw_texture("TerrainCoarseWeights", coarse))
+					else
 					{
-						return false;
+						const std::shared_ptr<RenderTarget> atlas_0 =
+							context.get_texture(resources.update_weight_atlas_0);
+						const std::shared_ptr<RenderTarget> atlas_1 =
+							context.get_texture(resources.update_weight_atlas_1);
+						const std::shared_ptr<RenderTarget> coarse =
+							context.get_texture(resources.update_coarse_weights);
+						const std::shared_ptr<StorageBuffer> staging =
+							resources.update_runtime ?
+								resources.update_runtime->resources.staging : nullptr;
+						if (!staging || !atlas_0 || !atlas_1 || !coarse)
+						{
+							fail_current_work(
+								"Terrain candidate graph resources are unavailable.");
+							return resources.update_is_candidate;
+						}
+
+						TerrainAtlasUpdateConstants constants{};
+						constants.atlas_origin_x =
+							(atlas_slot % k_terrain_atlas_slot_grid_width) *
+							k_terrain_weight_atlas_slot_extent;
+						constants.atlas_origin_y =
+							(atlas_slot / k_terrain_atlas_slot_grid_width) *
+							k_terrain_weight_atlas_slot_extent;
+						constants.component_x = pending_upload.coord.x;
+						constants.component_z = pending_upload.coord.z;
+						constants.write_high_resolution =
+							write_high_resolution ? 1u : 0u;
+						constants.component_count_x =
+							resources.update_layout.layout.component_count_x;
+						constants.component_count_z =
+							resources.update_layout.layout.component_count_z;
+
+						if (!program->set_const_data_block(sizeof(constants), &constants) ||
+							!program->set_storage_buffer("TerrainWeightUpload", staging) ||
+							!program->set_rw_texture("TerrainWeightAtlas0", atlas_0) ||
+							!program->set_rw_texture("TerrainWeightAtlas1", atlas_1) ||
+							!program->set_rw_texture("TerrainCoarseWeights", coarse))
+						{
+							fail_current_work(
+								"failed to bind Terrain candidate atlas update resources.");
+							return resources.update_is_candidate;
+						}
+
+						ComputeDispatchDesc dispatch{};
+						dispatch.program = program;
+						dispatch.group_count_x =
+							(k_terrain_weight_atlas_slot_extent +
+								k_terrain_atlas_update_group_size - 1u) /
+							k_terrain_atlas_update_group_size;
+						dispatch.group_count_y = dispatch.group_count_x;
+						dispatch_succeeded = context.dispatch(dispatch);
 					}
-
-					ComputeDispatchDesc dispatch{};
-					dispatch.program = program;
-					dispatch.group_count_x =
-						(k_terrain_weight_atlas_slot_extent +
-							k_terrain_atlas_update_group_size - 1u) /
-						k_terrain_atlas_update_group_size;
-					dispatch.group_count_y = dispatch.group_count_x;
-					if (!context.dispatch(dispatch))
+					if (!dispatch_succeeded)
 					{
-						return false;
+						fail_current_work(
+							"failed to dispatch Terrain candidate atlas update.");
+						return resources.update_is_candidate;
 					}
 
 					std::scoped_lock<std::mutex> lock(asset->m_mutex);
-					if (!asset->matches_pending_weight_update_locked(pending_upload))
+					const bool current_candidate = resources.update_is_candidate &&
+						asset->m_candidate_state &&
+						asset->m_candidate_state->runtime == resources.update_runtime &&
+						asset->m_candidate_state->candidate_epoch ==
+							resources.update_candidate_epoch &&
+						asset->m_candidate_state->snapshot == resources.update_snapshot;
+					const bool current_incremental = !resources.update_is_candidate &&
+						!asset->m_candidate_state && asset->m_published_view &&
+						asset->m_published_view->runtime == resources.update_runtime &&
+						resources.update_runtime->target_snapshot ==
+							resources.update_snapshot;
+					if (!current_candidate && !current_incremental)
 					{
 						return true;
 					}
-					if (write_high_resolution)
+					if (!write_high_resolution)
 					{
-						TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
-							asset->m_frame_boundary_atlas_slots[atlas_slot];
+						return asset->complete_candidate_coarse_locked(
+							resources.update_runtime,
+							resources.update_candidate_epoch,
+							pending_upload,
+							true, render_frame_index);
+					}
+					if (!asset->matches_pending_weight_update_locked(
+							resources.update_runtime, pending_upload))
+					{
+						return true;
+					}
+					if (resources.update_is_candidate)
+					{
+						return asset->complete_candidate_initial_locked(
+							resources.update_runtime,
+							resources.update_candidate_epoch,
+							pending_upload,
+							true, render_frame_index);
+					}
+					if (write_high_resolution &&
+						atlas_slot < resources.update_runtime->slots.size())
+					{
+						TerrainAtlasSlotMetadata& slot =
+							resources.update_runtime->slots[atlas_slot];
 						slot.asset_id = pending_upload.asset_id;
 						slot.coord = pending_upload.coord;
 						slot.content_generation = pending_upload.content_generation;
-						slot.residency_revision = pending_upload.residency_revision;
-						slot.occupied = true;
+							slot.residency_revision = pending_upload.residency_revision;
+							slot.last_used_frame = render_frame_index;
+							slot.occupied = true;
 					}
-					asset->m_pending_weight_updates.erase(
-						asset->m_pending_weight_updates.begin());
+					resources.update_runtime->weight_queue.erase(
+						resources.update_runtime->weight_queue.begin());
+					resources.update_runtime->last_atlas_completion_frame =
+						render_frame_index;
+					resources.update_runtime->has_atlas_completion = true;
+					if (resources.update_runtime->weight_queue.empty() &&
+						resources.update_runtime->height_queue.empty())
+					{
+						resources.update_runtime->work_status =
+							TerrainRenderWorkStatus::Ready;
+					}
 					m_atlas_completions[asset.get()] = {
 						asset,
 						pending_upload.accepted_snapshot,
@@ -362,7 +469,7 @@ namespace AshEngine
 	bool TerrainPreparedDraw::is_drawable() const
 	{
 		return status == TerrainPreparedDrawStatus::Ready &&
-			asset_snapshot && render_asset && instance_buffer &&
+			published_view && asset_snapshot && render_asset && instance_buffer &&
 			!lod.batches.empty() && batch_offsets.size() == lod.batches.size();
 	}
 
@@ -464,117 +571,238 @@ namespace AshEngine
 		}
 	}
 
-	TerrainGraphResources TerrainRenderPass::prepare_graph(
-		RenderGraphBuilder& graph,
+	void TerrainRenderPass::record_visible_requirements(
 		const VisibleRenderFrame& frame,
+		const SceneRenderViewContext& view_context,
 		uint64_t render_frame_index)
 	{
-		TerrainGraphResources resources{};
-		m_last_prepared_frame_index = render_frame_index;
-		if (!m_renderer || !m_weight_atlas_update_program)
+		SceneView lod_view{};
+		if (!make_lod_view(frame, view_context, lod_view))
 		{
-			return resources;
+			return;
 		}
-
 		for (const VisibleTerrainFrame& terrain : frame.terrains)
 		{
-			const std::shared_ptr<TerrainRenderAsset>& asset = terrain.render_asset;
-			if (!asset || !terrain.asset_snapshot)
+			if (!terrain.render_asset)
 			{
 				continue;
 			}
+			const auto view = terrain.render_asset->published_view();
+			const auto snapshot = view ? view->snapshot : terrain.asset_snapshot;
+			if (!snapshot)
+			{
+				continue;
+			}
+			TerrainLodInput input{};
+			input.asset_snapshot = snapshot;
+			input.world_transform = terrain.world_transform;
+			input.view = lod_view;
+			TerrainLodResult result{};
+			if (!build_terrain_lod_batches(input, result))
+			{
+				continue;
+			}
+			std::vector<TerrainComponentCoord> required{};
+			required.reserve(result.components.size());
+			for (const TerrainVisibleComponent& component : result.components)
+			{
+				required.push_back(component.coord);
+			}
+			terrain.render_asset->record_required_residency(
+				view, required, render_frame_index);
+		}
+	}
 
-			std::vector<uint8_t> weight_upload{};
-			TerrainComponentCoord coord{};
-			uint64_t content_generation = 0u;
-			uint64_t residency_revision = 0u;
-			uint32_t atlas_slot = 0u;
-			bool write_high_resolution = false;
-			bool invalid_pending_upload = false;
-			std::string pending_upload_error{};
-			TerrainRenderAsset::TerrainGpuComponentUpload pending_upload{};
-			std::shared_ptr<const TerrainComponentSnapshot> pending_component{};
-			std::shared_ptr<StorageBuffer> staging{};
-			std::array<std::shared_ptr<RenderTarget>, 2> atlases{};
-			std::shared_ptr<RenderTarget> coarse{};
+	TerrainGraphResources TerrainRenderPass::prepare_graph(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const std::shared_ptr<TerrainRenderAsset>& graph_asset,
+		uint64_t render_frame_index)
+	{
+		return prepare_graph_with_ops(
+			graph,
+			frame,
+			graph_asset,
+			render_frame_index,
+			TerrainRenderGraphOps{});
+	}
+
+	TerrainGraphResources TerrainRenderPass::prepare_graph_with_ops(
+		RenderGraphBuilder& graph,
+		const VisibleRenderFrame& frame,
+		const std::shared_ptr<TerrainRenderAsset>& graph_asset,
+		uint64_t render_frame_index,
+		const TerrainRenderGraphOps& graph_ops)
+	{
+		TerrainGraphResources resources{};
+		m_last_prepared_frame_index = render_frame_index;
+		if (!graph_ops.is_override() &&
+			(!m_renderer || !m_weight_atlas_update_program))
+		{
+			return resources;
+		}
+		const auto register_external_texture =
+			[&](const std::shared_ptr<RenderTarget>& texture,
+				const char* name,
+				RenderGraphAccess initial_access)
+			{
+				return graph_ops.is_override() ?
+					graph_ops.register_external_texture(
+						graph_ops.user_data,
+						graph,
+						texture,
+						name,
+						initial_access) :
+					graph.register_external_texture(
+						texture, name, initial_access);
+			};
+
+		for (const VisibleTerrainFrame& terrain : frame.terrains)
+		{
+			if (terrain.render_asset)
+			{
+				resources.published_view = terrain.render_asset->published_view();
+				break;
+			}
+		}
+		if (resources.published_view && resources.published_view->runtime &&
+			resources.published_view->runtime->resources.is_complete())
+		{
+			const auto& draw_resources = resources.published_view->runtime->resources;
+			resources.weight_atlas_0 = register_external_texture(
+				draw_resources.atlas[0], "TerrainWeights0",
+				RenderGraphAccess::GraphicsSRV);
+			resources.weight_atlas_1 = register_external_texture(
+				draw_resources.atlas[1], "TerrainWeights1",
+				RenderGraphAccess::GraphicsSRV);
+			resources.coarse_weights = register_external_texture(
+				draw_resources.coarse, "TerrainCoarseWeights",
+				RenderGraphAccess::GraphicsSRV);
+		}
+		if (!graph_asset)
+		{
+			return resources;
+		}
+		const std::shared_ptr<TerrainRenderAsset>& asset = graph_asset;
+
+		TerrainGpuComponentUpload pending_upload{};
+		uint32_t atlas_slot = 0u;
+		bool has_pending_upload = false;
+		bool write_high_resolution = false;
 			{
 				std::scoped_lock<std::mutex> lock(asset->m_mutex);
-				if (!asset->m_accepted_snapshot ||
-					asset->m_accepted_snapshot != terrain.asset_snapshot ||
-					!asset->m_weight_atlases[0] ||
-					!asset->m_weight_atlases[1] ||
-					!asset->m_coarse_weight_target)
+				if (asset->m_candidate_state && asset->m_candidate_state->runtime &&
+					asset->m_candidate_state->runtime->resources.is_complete() &&
+					asset->m_candidate_state->work_status ==
+						TerrainRenderWorkStatus::Pending)
 				{
-					continue;
-				}
-
-				atlases = asset->m_weight_atlases;
-				coarse = asset->m_coarse_weight_target;
-				staging = asset->m_dirty_weight_staging_buffer;
-				if (!asset->m_pending_weight_updates.empty())
-				{
-					const TerrainRenderAsset::TerrainGpuComponentUpload& upload =
-						asset->m_pending_weight_updates.front();
-					coord = upload.coord;
-					content_generation = upload.content_generation;
-					residency_revision = upload.residency_revision;
-					if (upload.asset_id == terrain.asset_snapshot->asset_id &&
-						upload.accepted_snapshot.lock() == terrain.asset_snapshot &&
-						content_generation == terrain.asset_snapshot->content_generation &&
-						residency_revision == terrain.asset_snapshot->residency_revision)
+					asset->freeze_candidate_initial_residency_locked(
+						render_frame_index);
+					resources.update_runtime = asset->m_candidate_state->runtime;
+					resources.update_snapshot = asset->m_candidate_state->snapshot;
+					resources.update_layout = asset->m_candidate_state->layout;
+					resources.update_candidate_epoch =
+						asset->m_candidate_state->candidate_epoch;
+					resources.update_is_candidate = true;
+					if (!asset->m_candidate_state->coarse_work.empty())
 					{
-						pending_upload = upload;
-						pending_component = upload.component;
-						if (pending_component && staging &&
-							staging->get_size() == k_terrain_weight_upload_bytes &&
-							staging->get_stride() == k_terrain_weight_upload_stride)
-						{
-							for (uint32_t slot = 0u;
-								slot < asset->m_frame_boundary_atlas_slots.size();
-								++slot)
-							{
-								const TerrainRenderAsset::TerrainAtlasSlotMetadata& metadata =
-									asset->m_frame_boundary_atlas_slots[slot];
-								if (metadata.occupied && metadata.coord == coord)
-								{
-									atlas_slot = slot;
-									write_high_resolution = true;
-									break;
-								}
-							}
-							if (!write_high_resolution)
-							{
-								for (uint32_t slot = 0u;
-									slot < asset->m_frame_boundary_atlas_slots.size();
-									++slot)
-								{
-									if (!asset->m_frame_boundary_atlas_slots[slot].occupied)
-									{
-										atlas_slot = slot;
-										write_high_resolution = true;
-										break;
-									}
-								}
-							}
+						pending_upload = asset->m_candidate_state->coarse_work.front();
+						has_pending_upload = true;
+					}
+					else if (!resources.update_runtime->weight_queue.empty())
+					{
+						pending_upload = resources.update_runtime->weight_queue.front();
+						has_pending_upload = true;
+						write_high_resolution = true;
+						atlas_slot = static_cast<uint32_t>(
+							asset->m_candidate_state->initial_resident_set.size() -
+							resources.update_runtime->weight_queue.size());
+					}
+				}
+				else if (asset->m_published_view &&
+					asset->m_published_view->runtime &&
+					asset->m_published_view->runtime->resources.is_complete() &&
+					asset->m_published_view->runtime->work_status ==
+						TerrainRenderWorkStatus::Pending &&
+					!asset->m_published_view->runtime->weight_queue.empty())
+				{
+					resources.update_runtime = asset->m_published_view->runtime;
+					resources.update_snapshot =
+						resources.update_runtime->target_snapshot;
+					resources.update_layout = asset->m_published_view->layout;
+					pending_upload = resources.update_runtime->weight_queue.front();
+					has_pending_upload = true;
+					write_high_resolution = true;
+					for (uint32_t slot = 0u;
+						slot < resources.update_runtime->slots.size(); ++slot)
+					{
+						const TerrainAtlasSlotMetadata& metadata =
+							resources.update_runtime->slots[slot];
+						if (metadata.occupied && metadata.coord == pending_upload.coord)
+					{
+							atlas_slot = slot;
+							break;
 						}
-						else
+					}
+					if (!resources.update_runtime->slots[atlas_slot].occupied)
+					{
+						const auto empty = std::find_if(
+							resources.update_runtime->slots.begin(),
+							resources.update_runtime->slots.end(),
+							[](const TerrainAtlasSlotMetadata& slot)
+							{
+								return !slot.occupied;
+							});
+						if (empty != resources.update_runtime->slots.end())
 						{
-							invalid_pending_upload = true;
-							pending_upload_error =
-								"Terrain dirty weight staging resources are invalid.";
+							atlas_slot = static_cast<uint32_t>(std::distance(
+								resources.update_runtime->slots.begin(), empty));
 						}
 					}
 				}
 			}
-			if (pending_component && !invalid_pending_upload)
+
+			if (!has_pending_upload || !resources.update_runtime)
+			{
+				return resources;
+			}
+			const auto& update_resources = resources.update_runtime->resources;
+			const bool updates_visible_published_runtime =
+				resources.published_view &&
+				resources.published_view->runtime == resources.update_runtime &&
+				resources.weight_atlas_0 && resources.weight_atlas_1 &&
+				resources.coarse_weights;
+			if (updates_visible_published_runtime)
+			{
+				resources.update_weight_atlas_0 = resources.weight_atlas_0;
+				resources.update_weight_atlas_1 = resources.weight_atlas_1;
+				resources.update_coarse_weights = resources.coarse_weights;
+			}
+			else
+			{
+				resources.update_weight_atlas_0 = register_external_texture(
+					update_resources.atlas[0], "TerrainUpdateWeights0",
+					RenderGraphAccess::ComputeUAV);
+				resources.update_weight_atlas_1 = register_external_texture(
+					update_resources.atlas[1], "TerrainUpdateWeights1",
+					RenderGraphAccess::ComputeUAV);
+				resources.update_coarse_weights = register_external_texture(
+					update_resources.coarse, "TerrainUpdateCoarseWeights",
+					RenderGraphAccess::ComputeUAV);
+			}
+
+			std::vector<uint8_t> weight_upload{};
+			std::string pending_upload_error{};
+			bool valid_upload = pending_upload.component != nullptr;
+			if (valid_upload)
 			{
 				std::array<std::vector<uint8_t>, 2> weight_layers{};
 				if (!build_terrain_component_weight_rgba8(
-						*pending_component,
+						*pending_upload.component,
 						weight_layers,
 						&pending_upload_error))
 				{
-					invalid_pending_upload = true;
+					valid_upload = false;
 				}
 				else if (weight_layers[0].empty() && weight_layers[1].empty())
 				{
@@ -593,7 +821,7 @@ namespace AshEngine
 					if (layer_size != weight_layers[1].size() ||
 						layer_size * 2u != k_terrain_weight_upload_bytes)
 					{
-						invalid_pending_upload = true;
+						valid_upload = false;
 						pending_upload_error =
 							"Terrain dirty weight payload has an invalid size.";
 					}
@@ -611,63 +839,104 @@ namespace AshEngine
 					}
 				}
 			}
-
-			resources.weight_atlas_0 = graph.register_external_texture(
-				atlases[0], "TerrainWeights0", RenderGraphAccess::GraphicsSRV);
-			resources.weight_atlas_1 = graph.register_external_texture(
-				atlases[1], "TerrainWeights1", RenderGraphAccess::GraphicsSRV);
-			resources.coarse_weights = graph.register_external_texture(
-				coarse, "TerrainCoarseWeights", RenderGraphAccess::GraphicsSRV);
-			if (!resources.is_valid())
-			{
-				return {};
-			}
-			if (invalid_pending_upload)
+			if (!valid_upload || weight_upload.size() != k_terrain_weight_upload_bytes)
 			{
 				const std::string diagnostic = pending_upload_error.empty() ?
 					"Terrain dirty weight payload does not match the raw staging contract." :
 					pending_upload_error;
 				HLogError("TerrainRenderPass: %s", diagnostic.c_str());
 				std::scoped_lock<std::mutex> lock(asset->m_mutex);
-				if (asset->matches_pending_weight_update_locked(pending_upload))
+				if (resources.update_is_candidate)
 				{
-					asset->fail_active_generation(diagnostic);
+					asset->fail_candidate_locked(
+						resources.update_runtime,
+						resources.update_candidate_epoch,
+						diagnostic);
+				}
+				else if (!asset->m_candidate_state && asset->m_published_view &&
+					asset->m_published_view->runtime == resources.update_runtime)
+				{
+					asset->fail_latest_work_locked(diagnostic);
 				}
 				return resources;
 			}
 
-			if (!weight_upload.empty())
-			{
-				if (!staging->update(
+			const std::shared_ptr<StorageBuffer> staging =
+				resources.update_runtime->resources.staging;
+			const bool staging_succeeded = graph_ops.is_override() ?
+				graph_ops.stage_weight_upload(
+					graph_ops.user_data,
+					staging,
+					weight_upload.data(),
+					static_cast<uint32_t>(weight_upload.size())) :
+				staging && staging->get_size() == k_terrain_weight_upload_bytes &&
+				staging->get_stride() == k_terrain_weight_upload_stride &&
+				staging->update(
 					0u,
 					static_cast<uint32_t>(weight_upload.size()),
-					weight_upload.data()))
+					weight_upload.data());
+			if (!staging_succeeded)
+			{
+				const std::string diagnostic =
+					"failed to queue the Terrain weight staging upload.";
+				HLogError("TerrainRenderPass: %s", diagnostic.c_str());
+				std::scoped_lock<std::mutex> lock(asset->m_mutex);
+				if (resources.update_is_candidate)
 				{
-					HLogError(
-						"TerrainRenderPass: failed to queue the dirty weight staging upload.");
-					return resources;
+					asset->fail_candidate_locked(
+						resources.update_runtime,
+						resources.update_candidate_epoch,
+						diagnostic);
 				}
-				if (add_atlas_update_pass(
+				else if (!asset->m_candidate_state && asset->m_published_view &&
+					asset->m_published_view->runtime == resources.update_runtime)
+				{
+					asset->fail_latest_work_locked(diagnostic);
+				}
+				return resources;
+			}
+
+			if (add_atlas_update_pass(
 					graph,
 					resources,
 					asset,
 					pending_upload,
 					atlas_slot,
 					write_high_resolution,
-					render_frame_index))
+					render_frame_index,
+					graph_ops))
+			{
+				resources.has_update_pass = true;
+				resources.has_pending_atlas_slot = write_high_resolution &&
+					resources.published_view &&
+					resources.published_view->runtime == resources.update_runtime;
+				resources.pending_atlas_asset_id = pending_upload.asset_id;
+				resources.pending_atlas_snapshot = resources.update_snapshot;
+				resources.pending_atlas_coord = pending_upload.coord;
+				resources.pending_atlas_generation =
+					pending_upload.content_generation;
+				resources.pending_atlas_revision =
+					pending_upload.residency_revision;
+				resources.pending_atlas_slot = atlas_slot;
+			}
+			else
+			{
+				const std::string diagnostic =
+					"failed to add the Terrain atlas update pass.";
+				std::scoped_lock<std::mutex> lock(asset->m_mutex);
+				if (resources.update_is_candidate)
 				{
-					resources.has_update_pass = true;
-					resources.has_pending_atlas_slot = write_high_resolution;
-					resources.pending_atlas_asset_id = pending_upload.asset_id;
-					resources.pending_atlas_snapshot = terrain.asset_snapshot;
-					resources.pending_atlas_coord = coord;
-					resources.pending_atlas_generation = content_generation;
-					resources.pending_atlas_revision = residency_revision;
-					resources.pending_atlas_slot = atlas_slot;
+					asset->fail_candidate_locked(
+						resources.update_runtime,
+						resources.update_candidate_epoch,
+						diagnostic);
+				}
+				else if (!asset->m_candidate_state && asset->m_published_view &&
+					asset->m_published_view->runtime == resources.update_runtime)
+				{
+					asset->fail_latest_work_locked(diagnostic);
 				}
 			}
-			return resources;
-		}
 		return resources;
 	}
 
@@ -740,10 +1009,17 @@ namespace AshEngine
 			return prepared;
 		}
 
-		prepared->asset_snapshot = terrain->asset_snapshot;
 		prepared->render_asset = terrain->render_asset;
 		prepared->world_transform = terrain->world_transform;
 		prepared->casts_shadow = terrain->casts_shadow;
+		prepared->published_view = resources.published_view;
+		const std::shared_ptr<const TerrainAssetSnapshot> lod_snapshot =
+			prepared->published_view ? prepared->published_view->snapshot :
+				terrain->asset_snapshot;
+		if (!lod_snapshot)
+		{
+			return prepared;
+		}
 
 		SceneView lod_view{};
 		if (!make_lod_view(frame, view_context, lod_view))
@@ -752,7 +1028,7 @@ namespace AshEngine
 			return prepared;
 		}
 		TerrainLodInput lod_input{};
-		lod_input.asset_snapshot = terrain->asset_snapshot;
+		lod_input.asset_snapshot = lod_snapshot;
 		lod_input.world_transform = terrain->world_transform;
 		lod_input.view = lod_view;
 		if (!build_terrain_lod_batches(lod_input, prepared->lod))
@@ -764,20 +1040,29 @@ namespace AshEngine
 		{
 			return prepared;
 		}
+		std::vector<TerrainComponentCoord> required{};
+		required.reserve(prepared->lod.components.size());
+		for (const TerrainVisibleComponent& instance : prepared->lod.components)
+		{
+			required.push_back(instance.coord);
+		}
+		terrain->render_asset->record_required_residency(
+			prepared->published_view, required, render_frame_index);
+		if (!prepared->published_view || !prepared->published_view->runtime ||
+			!prepared->published_view->runtime->resources.is_complete())
+		{
+			return prepared;
+		}
+		prepared->asset_snapshot = prepared->published_view->snapshot;
 
 		std::vector<TerrainPackedInstance> packed_instances{};
 		packed_instances.reserve(prepared->lod.components.size());
 		prepared->batch_offsets.reserve(prepared->lod.batches.size());
 		{
 			std::scoped_lock<std::mutex> lock(terrain->render_asset->m_mutex);
-			if (terrain->render_asset->m_accepted_snapshot != terrain->asset_snapshot ||
-				!terrain->render_asset->m_has_accepted_render_layout)
-			{
-				prepared->status = TerrainPreparedDrawStatus::Failed;
-				return prepared;
-			}
 			const TerrainRenderLayoutInfo& accepted_layout =
-				terrain->render_asset->m_accepted_render_layout;
+				prepared->published_view->layout;
+			const auto runtime = prepared->published_view->runtime;
 			for (const TerrainLodBatch& batch : prepared->lod.batches)
 			{
 				prepared->batch_offsets.push_back(
@@ -793,43 +1078,42 @@ namespace AshEngine
 					}
 					const size_t component_index =
 						accepted_layout.component_linear_index(instance.coord);
-					if (component_index >= terrain->asset_snapshot->components.size())
+					if (component_index >= prepared->asset_snapshot->components.size())
 					{
 						prepared->status = TerrainPreparedDrawStatus::Failed;
 						return prepared;
 					}
 					const bool implicit_layer_zero =
-						terrain->asset_snapshot->components[component_index] &&
-						terrain->asset_snapshot->components[component_index]->weights.empty();
+						prepared->asset_snapshot->components[component_index] &&
+						prepared->asset_snapshot->components[component_index]->weights.empty();
 					if (!implicit_layer_zero)
 					{
 						for (uint32_t slot_index = 0u;
-							slot_index < terrain->render_asset->m_frame_boundary_atlas_slots.size();
+							slot_index < runtime->slots.size();
 							++slot_index)
 						{
-							TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
-								terrain->render_asset->m_frame_boundary_atlas_slots[slot_index];
+							const TerrainAtlasSlotMetadata& slot =
+								runtime->slots[slot_index];
 							if (slot.occupied &&
-								slot.asset_id == terrain->asset_snapshot->asset_id &&
+								slot.asset_id == prepared->asset_snapshot->asset_id &&
 								slot.coord == instance.coord &&
-								slot.content_generation == terrain->asset_snapshot->content_generation &&
-								slot.residency_revision == terrain->asset_snapshot->residency_revision)
+								slot.content_generation == prepared->asset_snapshot->content_generation &&
+								slot.residency_revision == prepared->asset_snapshot->residency_revision)
 							{
 								atlas_slot = slot_index;
 								high_resolution = true;
-								slot.last_used_frame = render_frame_index;
 								break;
 							}
 						}
 						if (resources.has_pending_atlas_slot &&
 							resources.pending_atlas_asset_id ==
-								terrain->asset_snapshot->asset_id &&
-							resources.pending_atlas_snapshot == terrain->asset_snapshot &&
+								prepared->asset_snapshot->asset_id &&
+							resources.pending_atlas_snapshot == prepared->asset_snapshot &&
 							resources.pending_atlas_coord == instance.coord &&
 							resources.pending_atlas_generation ==
-								terrain->asset_snapshot->content_generation &&
+								prepared->asset_snapshot->content_generation &&
 							resources.pending_atlas_revision ==
-								terrain->asset_snapshot->residency_revision)
+								prepared->asset_snapshot->residency_revision)
 						{
 							atlas_slot = resources.pending_atlas_slot;
 							high_resolution = true;
@@ -891,7 +1175,8 @@ namespace AshEngine
 			return shadow_only && !prepared_draw->casts_shadow;
 		}
 		const std::shared_ptr<StorageBuffer> height_buffer =
-			prepared_draw->render_asset->packed_height_buffer();
+			prepared_draw->published_view && prepared_draw->published_view->runtime ?
+				prepared_draw->published_view->runtime->resources.height : nullptr;
 		if (!height_buffer ||
 			!program.set_storage_buffer("TerrainHeightWords", height_buffer) ||
 			!program.set_storage_buffer(
@@ -1140,37 +1425,36 @@ namespace AshEngine
 		return true;
 	}
 
-	bool add_terrain_atlas_contract_for_tests(
+	bool add_terrain_published_read_pass_for_tests(
 		RenderGraphBuilder& graph,
-		RenderGraphTextureRef atlas,
-		bool has_dirty_upload)
+		const TerrainGraphResources& resources,
+		uint32_t* execution_count)
 	{
-		if (!atlas)
+		if (!resources.weight_atlas_0 || !resources.weight_atlas_1 ||
+			!resources.coarse_weights)
 		{
 			return false;
 		}
-		if (has_dirty_upload &&
-			!graph.add_compute_pass(
-				"TerrainWeightAtlasUpdatePass",
-				RenderGraphPassFlags::NeverCull,
-				RHI::GpuTimingMetric::Invalid,
-				[atlas](RenderGraphComputePassBuilder& pass)
-				{
-					pass.write_texture(atlas, RenderGraphAccess::ComputeUAV);
-				},
-				[](RenderGraphComputeContext&) { return true; }))
-		{
-			return false;
-		}
-
 		return graph.add_raster_pass(
-			"TerrainAtlasGBufferReadContract",
+			"TerrainPublishedRaster",
 			RenderGraphPassFlags::NeverCull,
 			RHI::GpuTimingMetric::Invalid,
-			[atlas](RenderGraphRasterPassBuilder& pass)
+			[resources](RenderGraphRasterPassBuilder& pass)
 			{
-				pass.read_texture(atlas, RenderGraphAccess::GraphicsSRV);
+				pass.read_texture(
+					resources.weight_atlas_0, RenderGraphAccess::GraphicsSRV);
+				pass.read_texture(
+					resources.weight_atlas_1, RenderGraphAccess::GraphicsSRV);
+				pass.read_texture(
+					resources.coarse_weights, RenderGraphAccess::GraphicsSRV);
 			},
-			[](RenderGraphRasterContext&) { return true; });
+			[execution_count](RenderGraphRasterContext&)
+			{
+				if (execution_count)
+				{
+					++*execution_count;
+				}
+				return true;
+			});
 	}
 }

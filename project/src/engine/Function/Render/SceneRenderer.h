@@ -44,6 +44,7 @@ namespace AshEngine
 
 	public:
 		bool initialize(Renderer* renderer, DebugDrawService* debug_draw_service = nullptr);
+		void set_render_asset_manager(RenderAssetManager* render_asset_manager);
 		void shutdown();
 		void handle_output_resized();
 		void invalidate_temporal_history();
@@ -130,6 +131,7 @@ namespace AshEngine
 
 	private:
 		Renderer* m_renderer = nullptr;
+		RenderAssetManager* m_render_asset_manager = nullptr;
 		DebugDrawService* m_debug_draw_service = nullptr;
 		AmbientOcclusionPass m_ambient_occlusion_pass{};
 		SunLightShadowPass m_sunlight_shadow_pass{};

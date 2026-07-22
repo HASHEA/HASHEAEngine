@@ -1,5 +1,6 @@
 #include "Function/Render/RenderGraphBuilder.h"
 #include "Function/Render/RenderGraphCompiler.h"
+#include "Function/Render/RenderGraphExecutor.h"
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/TerrainLod.h"
 #include "Function/Render/TerrainRenderPass.h"
@@ -15,28 +16,14 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace
 {
-	auto MakeAtlas(
-		AshEngine::RenderGraphBuilder& graph,
-		const char* name) -> AshEngine::RenderGraphTextureRef
-	{
-		AshEngine::RenderTargetDesc desc{};
-		desc.width = static_cast<uint16_t>(
-			AshEngine::k_terrain_weight_atlas_extent);
-		desc.height = static_cast<uint16_t>(
-			AshEngine::k_terrain_weight_atlas_extent);
-		desc.format = AshEngine::RenderTextureFormat::RGBA8_UNORM;
-		desc.shader_resource = true;
-		desc.unordered_access = true;
-		desc.name = name;
-		return graph.register_external_texture_desc_for_tests(desc, name);
-	}
-
 	auto ReadSource(const char* path) -> std::string
 	{
 		std::ifstream input(path, std::ios::binary);
@@ -71,6 +58,263 @@ namespace
 		}
 		return compact;
 	}
+
+	struct TerrainGraphExecutionProbe
+	{
+		uint32_t staging_writes = 0u;
+		uint32_t dispatches = 0u;
+		uint32_t raster_draws = 0u;
+		bool dispatch_result = false;
+		std::vector<std::shared_ptr<AshEngine::RenderTarget>> registered_textures{};
+		std::vector<std::string> registered_names{};
+
+		static AshEngine::RenderGraphTextureRef RegisterTexture(
+			void* user_data,
+			AshEngine::RenderGraphBuilder& graph,
+			const std::shared_ptr<AshEngine::RenderTarget>& texture,
+			const char* name,
+			AshEngine::RenderGraphAccess)
+		{
+			TerrainGraphExecutionProbe& probe =
+				*static_cast<TerrainGraphExecutionProbe*>(user_data);
+			probe.registered_textures.push_back(texture);
+			probe.registered_names.emplace_back(name ? name : "");
+			AshEngine::RenderTargetDesc desc{};
+			desc.width = static_cast<uint16_t>(
+				AshEngine::k_terrain_weight_atlas_extent);
+			desc.height = desc.width;
+			desc.format = AshEngine::RenderTextureFormat::RGBA8_UNORM;
+			desc.shader_resource = true;
+			desc.unordered_access = true;
+			desc.name = name;
+			return graph.register_external_texture_desc_for_tests(desc, name);
+		}
+
+		static bool StageWeightUpload(
+			void* user_data,
+			const std::shared_ptr<AshEngine::StorageBuffer>&,
+			const uint8_t*,
+			uint32_t)
+		{
+			TerrainGraphExecutionProbe& probe =
+				*static_cast<TerrainGraphExecutionProbe*>(user_data);
+			++probe.staging_writes;
+			return true;
+		}
+
+		static bool DispatchAtlasUpdate(
+			void* user_data,
+			AshEngine::RenderGraphComputeContext&,
+			const AshEngine::TerrainGraphResources&,
+			const AshEngine::TerrainGpuComponentUpload&,
+			uint32_t,
+			bool)
+		{
+			TerrainGraphExecutionProbe& probe =
+				*static_cast<TerrainGraphExecutionProbe*>(user_data);
+			++probe.dispatches;
+			return probe.dispatch_result;
+		}
+
+		static std::shared_ptr<AshEngine::StorageBuffer> AcquireBuffer(
+			void*, const AshEngine::StorageBufferDesc&)
+		{
+			return std::make_shared<AshEngine::StorageBuffer>();
+		}
+
+		static void ReleaseBuffer(
+			void*, const std::shared_ptr<AshEngine::StorageBuffer>&)
+		{
+		}
+
+		static bool SubmitTransitions(
+			void*, const AshEngine::RenderGraphResolvedBufferTransition*, size_t)
+		{
+			return true;
+		}
+
+		static bool BeginRaster(
+			void*, const AshEngine::PassDesc&,
+			AshEngine::Renderer::GraphicsPassContext&)
+		{
+			return true;
+		}
+
+		static bool EndRaster(
+			void*, AshEngine::Renderer::GraphicsPassContext&)
+		{
+			return true;
+		}
+
+		AshEngine::RenderGraphExecutionOps MakeOps()
+		{
+			AshEngine::RenderGraphExecutionOps ops{};
+			ops.user_data = this;
+			ops.acquire_transient_storage_buffer = &AcquireBuffer;
+			ops.release_transient_storage_buffer = &ReleaseBuffer;
+			ops.submit_buffer_transitions = &SubmitTransitions;
+			ops.begin_raster_pass = &BeginRaster;
+			ops.end_raster_pass = &EndRaster;
+			return ops;
+		}
+
+		AshEngine::TerrainRenderGraphOps MakeTerrainOps()
+		{
+			AshEngine::TerrainRenderGraphOps ops{};
+			ops.user_data = this;
+			ops.register_external_texture = &RegisterTexture;
+			ops.stage_weight_upload = &StageWeightUpload;
+			ops.dispatch_atlas_update = &DispatchAtlasUpdate;
+			return ops;
+		}
+	};
+}
+
+namespace AshEngine
+{
+	struct TerrainRenderGraphTestSeam
+	{
+		struct CandidateToken
+		{
+			std::shared_ptr<TerrainRenderRuntimeState> runtime{};
+			uint64_t epoch = 0u;
+		};
+
+		static CandidateToken InstallPublishedAndCandidate(
+			TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			auto published_snapshot = std::make_shared<TerrainAssetSnapshot>();
+			published_snapshot->asset_id = 401u;
+			published_snapshot->content_generation = 7u;
+			published_snapshot->residency_revision = 2u;
+			published_snapshot->layout = make_default_terrain_grid_layout();
+
+			auto published_runtime = std::make_shared<TerrainRenderRuntimeState>();
+			published_runtime->target_snapshot = published_snapshot;
+			published_runtime->work_status = TerrainRenderWorkStatus::Ready;
+			InstallResourceSentinels(published_runtime->resources);
+			auto published_view = std::make_shared<TerrainPublishedRenderView>();
+			published_view->snapshot = published_snapshot;
+			REQUIRE(derive_terrain_render_layout(
+				published_snapshot->layout, published_view->layout));
+			published_view->runtime = published_runtime;
+			published_view->asset_id = published_snapshot->asset_id;
+			published_view->content_generation =
+				published_snapshot->content_generation;
+			published_view->residency_revision =
+				published_snapshot->residency_revision;
+			published_view->publication_epoch = 11u;
+			asset.m_published_view = std::move(published_view);
+
+			auto candidate_snapshot = std::make_shared<TerrainAssetSnapshot>(
+				*published_snapshot);
+			candidate_snapshot->content_generation = 8u;
+			candidate_snapshot->layout.component_count_x = 2u;
+			candidate_snapshot->layout.component_count_z = 1u;
+			candidate_snapshot->layout.sample_count_x =
+				2u * k_terrain_component_quad_count + 1u;
+			candidate_snapshot->layout.sample_count_z =
+				k_terrain_component_quad_count + 1u;
+			auto candidate_runtime = std::make_shared<TerrainRenderRuntimeState>();
+			candidate_runtime->target_snapshot = candidate_snapshot;
+			candidate_runtime->work_status = TerrainRenderWorkStatus::Pending;
+			InstallResourceSentinels(candidate_runtime->resources);
+			auto candidate = std::make_unique<TerrainRenderCandidateState>();
+			candidate->snapshot = candidate_snapshot;
+			REQUIRE(derive_terrain_render_layout(
+				candidate_snapshot->layout, candidate->layout));
+			candidate->runtime = candidate_runtime;
+			candidate->stage = TerrainRenderCandidateStage::AwaitGraphWork;
+			candidate->work_status = TerrainRenderWorkStatus::Pending;
+			candidate->candidate_epoch = asset.allocate_candidate_epoch_locked();
+			candidate->initial_set_frozen = true;
+
+			auto component = std::make_shared<TerrainComponentSnapshot>();
+			component->coord = { 0u, 0u };
+			component->content_generation = candidate_snapshot->content_generation;
+			component->sample_width = k_terrain_component_sample_count;
+			component->sample_height = k_terrain_component_sample_count;
+			component->heights.assign(
+				static_cast<size_t>(k_terrain_component_sample_count) *
+					k_terrain_component_sample_count,
+				0.0f);
+			TerrainGpuComponentUpload upload{};
+			upload.asset_id = candidate_snapshot->asset_id;
+			upload.accepted_snapshot = candidate_snapshot;
+			upload.component = component;
+			upload.coord = component->coord;
+			upload.content_generation = candidate_snapshot->content_generation;
+			upload.residency_revision = candidate_snapshot->residency_revision;
+			candidate->coarse_work = { upload, upload };
+			const uint64_t epoch = candidate->candidate_epoch;
+			asset.m_candidate_state = std::move(candidate);
+			return { candidate_runtime, epoch };
+		}
+
+		static TerrainGraphResources PrepareGraph(
+			TerrainRenderPass& pass,
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const std::shared_ptr<TerrainRenderAsset>& asset,
+			uint64_t render_frame_index,
+			const TerrainRenderGraphOps& ops)
+		{
+			return pass.prepare_graph_with_ops(
+				graph, frame, asset, render_frame_index, ops);
+		}
+
+		static std::shared_ptr<TerrainRenderRuntimeState>
+			InstallVisibleIncrementalWork(TerrainRenderAsset& asset)
+		{
+			InstallPublishedAndCandidate(asset);
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			asset.m_candidate_state.reset();
+			REQUIRE(asset.m_published_view != nullptr);
+			const auto runtime = asset.m_published_view->runtime;
+			REQUIRE(runtime != nullptr);
+			auto target_snapshot = std::make_shared<TerrainAssetSnapshot>(
+				*asset.m_published_view->snapshot);
+			++target_snapshot->content_generation;
+			auto component = std::make_shared<TerrainComponentSnapshot>();
+			component->coord = { 0u, 0u };
+			component->content_generation = target_snapshot->content_generation;
+			component->sample_width = k_terrain_component_sample_count;
+			component->sample_height = k_terrain_component_sample_count;
+			component->heights.assign(
+				static_cast<size_t>(k_terrain_component_sample_count) *
+					k_terrain_component_sample_count,
+				0.0f);
+			TerrainGpuComponentUpload upload{};
+			upload.asset_id = target_snapshot->asset_id;
+			upload.accepted_snapshot = target_snapshot;
+			upload.component = component;
+			upload.coord = component->coord;
+			upload.content_generation = target_snapshot->content_generation;
+			upload.residency_revision = target_snapshot->residency_revision;
+			runtime->target_snapshot = target_snapshot;
+			runtime->weight_queue = { upload };
+			runtime->work_status = TerrainRenderWorkStatus::Pending;
+			return runtime;
+		}
+
+		static size_t CandidateCoarseWorkCount(const TerrainRenderAsset& asset)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			return asset.m_candidate_state ?
+				asset.m_candidate_state->coarse_work.size() : 0u;
+		}
+
+	private:
+		static void InstallResourceSentinels(TerrainRenderResourceSet& resources)
+		{
+			resources.height = std::make_shared<StorageBuffer>();
+			resources.staging = std::make_shared<StorageBuffer>();
+			resources.atlas[0] = std::make_shared<RenderTarget>();
+			resources.atlas[1] = std::make_shared<RenderTarget>();
+			resources.coarse = std::make_shared<RenderTarget>();
+		}
+	};
 }
 
 TEST_CASE("Terrain SceneRenderer integration preserves deferred pass order")
@@ -171,15 +415,17 @@ TEST_CASE("Terrain prepared draw uses the rectangular snapshot row stride")
 	REQUIRE(prepare != std::string::npos);
 	REQUIRE(consumer != std::string::npos);
 	const std::string body = source.substr(prepare, consumer - prepare);
+	CHECK(body.find("prepared->published_view=resources.published_view") !=
+		std::string::npos);
 	CHECK(body.find(
-		"terrain->render_asset->m_accepted_snapshot!=terrain->asset_snapshot||"
-		"!terrain->render_asset->m_has_accepted_render_layout") !=
+		"prepared->asset_snapshot=prepared->published_view->snapshot") !=
 		std::string::npos);
 	CHECK(body.find("!accepted_layout.contains(instance.coord)") !=
 		std::string::npos);
 	CHECK(body.find("accepted_layout.component_linear_index(instance.coord)") !=
 		std::string::npos);
-	CHECK(body.find("component_index>=terrain->asset_snapshot->components.size()") !=
+	CHECK(body.find(
+		"component_index>=prepared->asset_snapshot->components.size()") !=
 		std::string::npos);
 	CHECK(body.find("k_terrain_component_count+instance.coord.x") ==
 		std::string::npos);
@@ -211,41 +457,211 @@ TEST_CASE("Terrain SceneRenderer pending generation blocks capture readiness")
 	CHECK_FALSE(pass.is_capture_ready(frame));
 }
 
-TEST_CASE("Terrain atlas update declares texture UAV before GBuffer SRV")
+TEST_CASE("Terrain candidate atlas UAV stays distinct from the published GBuffer SRV")
 {
+	auto asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	const auto candidate =
+		AshEngine::TerrainRenderGraphTestSeam::InstallPublishedAndCandidate(*asset);
+	const auto published_view = asset->published_view();
+	REQUIRE(published_view != nullptr);
+	REQUIRE(candidate.runtime != nullptr);
+	AshEngine::VisibleRenderFrame frame{};
+	AshEngine::VisibleTerrainFrame terrain{};
+	terrain.render_asset = asset;
+	terrain.asset_snapshot = published_view->snapshot;
+	frame.terrains.push_back(terrain);
+
 	AshEngine::RenderGraphBuilder graph =
 		AshEngine::RenderGraphBuilder::create_headless_for_tests("TerrainGraph");
-	const AshEngine::RenderGraphTextureRef atlas =
-		MakeAtlas(graph, "TerrainWeights0");
-	REQUIRE(AshEngine::add_terrain_atlas_contract_for_tests(
-		graph, atlas, true));
+	AshEngine::TerrainRenderPass terrain_pass{};
+	TerrainGraphExecutionProbe probe{};
+	probe.dispatch_result = true;
+	const AshEngine::TerrainGraphResources resources =
+		AshEngine::TerrainRenderGraphTestSeam::PrepareGraph(
+			terrain_pass,
+			graph,
+			frame,
+			asset,
+			71u,
+			probe.MakeTerrainOps());
+	REQUIRE(resources.has_update_pass);
+	REQUIRE(AshEngine::add_terrain_published_read_pass_for_tests(
+		graph, resources, nullptr));
 
 	const auto& passes = graph.get_passes_for_tests();
 	REQUIRE(passes.size() == 2u);
 	CHECK(passes[0].name == "TerrainWeightAtlasUpdatePass");
 	CHECK(passes[0].kind == AshEngine::RenderGraphPassKind::Compute);
-	REQUIRE(passes[0].texture_usages.size() == 1u);
-	CHECK(passes[0].texture_usages[0].texture == atlas);
+	REQUIRE(passes[0].texture_usages.size() == 3u);
+	CHECK(passes[0].texture_usages[0].texture ==
+		resources.update_weight_atlas_0);
 	CHECK(passes[0].texture_usages[0].access ==
 		AshEngine::RenderGraphAccess::ComputeUAV);
-	CHECK(passes[1].name == "TerrainAtlasGBufferReadContract");
+	CHECK(passes[1].name == "TerrainPublishedRaster");
 	CHECK(passes[1].kind == AshEngine::RenderGraphPassKind::Raster);
-	REQUIRE(passes[1].texture_usages.size() == 1u);
-	CHECK(passes[1].texture_usages[0].texture == atlas);
+	REQUIRE(passes[1].texture_usages.size() == 3u);
+	CHECK(passes[1].texture_usages[0].texture == resources.weight_atlas_0);
 	CHECK(passes[1].texture_usages[0].access ==
 		AshEngine::RenderGraphAccess::GraphicsSRV);
+	CHECK(resources.update_weight_atlas_0 != resources.weight_atlas_0);
+	CHECK(candidate.runtime->resources.atlas[0] !=
+		published_view->runtime->resources.atlas[0]);
+	CHECK(probe.staging_writes == 1u);
 
 	AshEngine::RenderGraphCompileResult compiled{};
 	REQUIRE(graph.compile_for_tests(compiled));
 	REQUIRE(compiled.live_pass_indices.size() == 2u);
 	CHECK(compiled.live_pass_indices[0] == 0u);
 	CHECK(compiled.live_pass_indices[1] == 1u);
-	REQUIRE(compiled.pass_barriers[0].texture_states.size() > atlas.index);
-	REQUIRE(compiled.pass_barriers[1].texture_states.size() > atlas.index);
-	CHECK(compiled.pass_barriers[0].texture_states[atlas.index] ==
+	REQUIRE(compiled.pass_barriers[0].texture_states.size() >
+		resources.update_weight_atlas_0.index);
+	REQUIRE(compiled.pass_barriers[1].texture_states.size() >
+		resources.weight_atlas_0.index);
+	CHECK(compiled.pass_barriers[0].texture_states[
+		resources.update_weight_atlas_0.index] ==
 		RHI::AshResourceState::UAVCompute);
-	CHECK(compiled.pass_barriers[1].texture_states[atlas.index] ==
+	CHECK(compiled.pass_barriers[1].texture_states[
+		resources.weight_atlas_0.index] ==
 		RHI::AshResourceState::SRVGraphics);
+}
+
+TEST_CASE("Terrain visible incremental atlas update reuses published graph identity")
+{
+	auto asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	const auto runtime =
+		AshEngine::TerrainRenderGraphTestSeam::InstallVisibleIncrementalWork(*asset);
+	const auto published_view = asset->published_view();
+	REQUIRE(runtime != nullptr);
+	REQUIRE(published_view != nullptr);
+	REQUIRE(runtime == published_view->runtime);
+
+	AshEngine::VisibleRenderFrame frame{};
+	AshEngine::VisibleTerrainFrame terrain{};
+	terrain.render_asset = asset;
+	terrain.asset_snapshot = published_view->snapshot;
+	frame.terrains.push_back(terrain);
+	AshEngine::RenderGraphBuilder graph =
+		AshEngine::RenderGraphBuilder::create_headless_for_tests(
+			"TerrainVisibleIncremental");
+	AshEngine::TerrainRenderPass terrain_pass{};
+	TerrainGraphExecutionProbe probe{};
+	probe.dispatch_result = true;
+	const AshEngine::TerrainGraphResources resources =
+		AshEngine::TerrainRenderGraphTestSeam::PrepareGraph(
+			terrain_pass,
+			graph,
+			frame,
+			asset,
+			72u,
+			probe.MakeTerrainOps());
+
+	REQUIRE(resources.has_update_pass);
+	CHECK_FALSE(resources.update_is_candidate);
+	CHECK(resources.update_runtime == published_view->runtime);
+	CHECK(resources.update_weight_atlas_0 == resources.weight_atlas_0);
+	CHECK(resources.update_weight_atlas_1 == resources.weight_atlas_1);
+	CHECK(resources.update_coarse_weights == resources.coarse_weights);
+	CHECK(probe.registered_textures.size() == 3u);
+	REQUIRE(AshEngine::add_terrain_published_read_pass_for_tests(
+		graph, resources, nullptr));
+
+	const auto& passes = graph.get_passes_for_tests();
+	REQUIRE(passes.size() == 2u);
+	REQUIRE(passes[0].texture_usages.size() == 3u);
+	REQUIRE(passes[1].texture_usages.size() == 3u);
+	CHECK(passes[0].texture_usages[0].texture ==
+		passes[1].texture_usages[0].texture);
+	AshEngine::RenderGraphCompileResult compiled{};
+	REQUIRE(graph.compile_for_tests(compiled));
+	REQUIRE(compiled.live_pass_indices.size() == 2u);
+	CHECK(compiled.pass_barriers[0].texture_states[
+		resources.weight_atlas_0.index] == RHI::AshResourceState::UAVCompute);
+	CHECK(compiled.pass_barriers[1].texture_states[
+		resources.weight_atlas_0.index] == RHI::AshResourceState::SRVGraphics);
+}
+
+TEST_CASE("Terrain candidate graph failure fails soft and preserves published texture identity")
+{
+	auto asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	const AshEngine::TerrainRenderGraphTestSeam::CandidateToken candidate =
+		AshEngine::TerrainRenderGraphTestSeam::InstallPublishedAndCandidate(*asset);
+	const auto published_view = asset->published_view();
+	REQUIRE(published_view != nullptr);
+	REQUIRE(candidate.runtime != nullptr);
+	REQUIRE(AshEngine::TerrainRenderGraphTestSeam::CandidateCoarseWorkCount(
+		*asset) == 2u);
+
+	AshEngine::VisibleRenderFrame frame{};
+	AshEngine::VisibleTerrainFrame terrain{};
+	terrain.render_asset = asset;
+	terrain.asset_snapshot = published_view->snapshot;
+	frame.terrains.push_back(terrain);
+
+	AshEngine::RenderGraphBuilder graph =
+		AshEngine::RenderGraphBuilder::create_headless_for_tests(
+			"TerrainAtomicCandidateFailure");
+	AshEngine::TerrainRenderPass terrain_pass{};
+	TerrainGraphExecutionProbe probe{};
+	const AshEngine::TerrainGraphResources resources =
+		AshEngine::TerrainRenderGraphTestSeam::PrepareGraph(
+			terrain_pass,
+			graph,
+			frame,
+			asset,
+			99u,
+			probe.MakeTerrainOps());
+	REQUIRE(resources.weight_atlas_0);
+	REQUIRE(resources.weight_atlas_1);
+	REQUIRE(resources.coarse_weights);
+	REQUIRE(resources.has_update_pass);
+	CHECK(resources.published_view == published_view);
+	CHECK(resources.update_runtime == candidate.runtime);
+	CHECK(resources.update_is_candidate);
+	CHECK(probe.staging_writes == 1u);
+	REQUIRE(probe.registered_textures.size() == 6u);
+	CHECK(probe.registered_textures[0] ==
+		published_view->runtime->resources.atlas[0]);
+	CHECK(probe.registered_textures[3] == candidate.runtime->resources.atlas[0]);
+	CHECK(probe.registered_textures[0] != probe.registered_textures[3]);
+
+	REQUIRE(AshEngine::add_terrain_published_read_pass_for_tests(
+		graph,
+		resources,
+		&probe.raster_draws));
+
+	const auto& passes = graph.get_passes_for_tests();
+	REQUIRE(passes.size() == 2u);
+	CHECK(passes[0].name == "TerrainWeightAtlasUpdatePass");
+	REQUIRE(passes[0].texture_usages.size() == 3u);
+	REQUIRE(passes[1].texture_usages.size() == 3u);
+	CHECK(passes[0].texture_usages[0].texture ==
+		resources.update_weight_atlas_0);
+	CHECK(passes[0].texture_usages[0].access ==
+		AshEngine::RenderGraphAccess::ComputeUAV);
+	CHECK(passes[1].texture_usages[0].texture == resources.weight_atlas_0);
+	CHECK(passes[1].texture_usages[0].access ==
+		AshEngine::RenderGraphAccess::GraphicsSRV);
+	CHECK(passes[0].texture_usages[0].texture !=
+		passes[1].texture_usages[0].texture);
+
+	std::vector<AshEngine::RenderGraphTextureNode> textures =
+		graph.get_textures_for_tests();
+	REQUIRE(textures.size() == probe.registered_textures.size());
+	for (size_t index = 0u; index < textures.size(); ++index)
+	{
+		textures[index].external_texture = probe.registered_textures[index];
+	}
+	std::vector<AshEngine::RenderGraphBufferNode> buffers =
+		graph.get_buffers_for_tests();
+	REQUIRE(AshEngine::execute_render_graph_with_ops_for_tests(
+		textures, buffers, passes, probe.MakeOps()));
+	CHECK(probe.staging_writes == 1u);
+	CHECK(probe.dispatches == 1u);
+	CHECK(probe.raster_draws == 1u);
+	CHECK(asset->latest_work_status() ==
+		AshEngine::TerrainRenderWorkStatus::Failed);
+	CHECK(asset->published_view() == published_view);
+	CHECK(asset->published_view()->runtime == published_view->runtime);
 }
 
 TEST_CASE("Terrain atlas update closes over the complete asset identity")
@@ -295,7 +711,8 @@ TEST_CASE("Terrain atlas update closes over the complete asset identity")
 	REQUIRE(atlas_end != std::string::npos);
 	const std::string atlas = source.substr(atlas_begin, atlas_end - atlas_begin);
 	CHECK(CountText(atlas,
-		"matches_pending_weight_update_locked(pending_upload)") == 2u);
+		"matches_pending_weight_update_locked("
+		"resources.update_runtime,pending_upload)") == 2u);
 	CHECK(atlas.find("slot.asset_id=pending_upload.asset_id") !=
 		std::string::npos);
 	const size_t prepare_graph_begin = source.find("TerrainRenderPass::prepare_graph(");
@@ -306,13 +723,13 @@ TEST_CASE("Terrain atlas update closes over the complete asset identity")
 	const std::string prepare_graph = source.substr(
 		prepare_graph_begin, prepare_draw_begin - prepare_graph_begin);
 	CHECK(prepare_graph.find(
-		"upload.asset_id==terrain.asset_snapshot->asset_id") !=
+		"resources.update_snapshot=asset->m_candidate_state->snapshot") !=
 		std::string::npos);
 	CHECK(prepare_graph.find(
 		"resources.pending_atlas_asset_id=pending_upload.asset_id") !=
 		std::string::npos);
 	CHECK(prepare_graph.find(
-		"resources.pending_atlas_snapshot=terrain.asset_snapshot") !=
+		"resources.pending_atlas_snapshot=resources.update_snapshot") !=
 		std::string::npos);
 
 	const size_t prepared_surface_begin = source.find(
@@ -321,13 +738,13 @@ TEST_CASE("Terrain atlas update closes over the complete asset identity")
 	const std::string prepare_draw = source.substr(
 		prepare_draw_begin, prepared_surface_begin - prepare_draw_begin);
 	CHECK(prepare_draw.find(
-		"slot.asset_id==terrain->asset_snapshot->asset_id") !=
+		"slot.asset_id==prepared->asset_snapshot->asset_id") !=
 		std::string::npos);
 	CHECK(prepare_draw.find(
-		"resources.pending_atlas_asset_id==terrain->asset_snapshot->asset_id") !=
+		"resources.pending_atlas_asset_id==prepared->asset_snapshot->asset_id") !=
 		std::string::npos);
 	CHECK(prepare_draw.find(
-		"resources.pending_atlas_snapshot==terrain->asset_snapshot") !=
+		"resources.pending_atlas_snapshot==prepared->asset_snapshot") !=
 		std::string::npos);
 
 	const size_t capture_begin = source.find("TerrainRenderPass::is_capture_ready(");
@@ -343,18 +760,39 @@ TEST_CASE("Terrain atlas update closes over the complete asset identity")
 
 TEST_CASE("Terrain atlas clean frame declares only the GBuffer read")
 {
+	auto asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	AshEngine::TerrainRenderGraphTestSeam::InstallPublishedAndCandidate(*asset);
+	const auto published_view = asset->published_view();
+	REQUIRE(published_view != nullptr);
+	AshEngine::VisibleRenderFrame frame{};
+	AshEngine::VisibleTerrainFrame terrain{};
+	terrain.render_asset = asset;
+	terrain.asset_snapshot = published_view->snapshot;
+	frame.terrains.push_back(terrain);
 	AshEngine::RenderGraphBuilder graph =
 		AshEngine::RenderGraphBuilder::create_headless_for_tests(
 			"TerrainCleanGraph");
-	const AshEngine::RenderGraphTextureRef atlas =
-		MakeAtlas(graph, "TerrainWeights0");
-	REQUIRE(AshEngine::add_terrain_atlas_contract_for_tests(
-		graph, atlas, false));
+	AshEngine::TerrainRenderPass terrain_pass{};
+	TerrainGraphExecutionProbe probe{};
+	const AshEngine::TerrainGraphResources resources =
+		AshEngine::TerrainRenderGraphTestSeam::PrepareGraph(
+			terrain_pass,
+			graph,
+			frame,
+			nullptr,
+			73u,
+			probe.MakeTerrainOps());
+	CHECK_FALSE(resources.has_update_pass);
+	CHECK(probe.staging_writes == 0u);
+	CHECK(probe.registered_textures.size() == 3u);
+	REQUIRE(AshEngine::add_terrain_published_read_pass_for_tests(
+		graph, resources, nullptr));
 
 	const auto& passes = graph.get_passes_for_tests();
 	REQUIRE(passes.size() == 1u);
 	CHECK(passes[0].kind == AshEngine::RenderGraphPassKind::Raster);
-	REQUIRE(passes[0].texture_usages.size() == 1u);
+	REQUIRE(passes[0].texture_usages.size() == 3u);
+	CHECK(passes[0].texture_usages[0].texture == resources.weight_atlas_0);
 	CHECK(passes[0].texture_usages[0].access ==
 		AshEngine::RenderGraphAccess::GraphicsSRV);
 
@@ -537,34 +975,22 @@ TEST_CASE("Terrain surface constants bind rectangular layout for every pass")
 		"uintAshTerrainComponentCountZ;"
 		"uintAshTerrainPadding;") != std::string::npos);
 	CHECK(compact_pass.find(
-		"constants.component_count_x=pending_layout.layout.component_count_x;") !=
+		"constants.component_count_x=resources.update_layout.layout.component_count_x;") !=
 		std::string::npos);
 	CHECK(compact_pass.find(
-		"constants.component_count_z=pending_layout.layout.component_count_z;") !=
+		"constants.component_count_z=resources.update_layout.layout.component_count_z;") !=
 		std::string::npos);
 
-	const size_t atlas_staging = terrain_pass.find(
-		"std::shared_ptr<StorageBuffer> staging{};");
-	const size_t atlas_lock = terrain_pass.find(
-		"std::scoped_lock<std::mutex> lock(asset->m_mutex);",
-		atlas_staging);
-	const size_t atlas_identity_guard = terrain_pass.find(
-		"asset->matches_pending_weight_update_locked(pending_upload)",
-		atlas_lock);
-	const size_t atlas_layout_capture = terrain_pass.find(
-		"pending_layout = asset->m_accepted_render_layout;",
-		atlas_identity_guard);
-	const size_t atlas_lock_end = terrain_pass.find(
-		"\n\t\t\t\t\t}", atlas_lock);
-	REQUIRE(atlas_staging != std::string::npos);
-	REQUIRE(atlas_lock != std::string::npos);
-	REQUIRE(atlas_identity_guard != std::string::npos);
-	REQUIRE(atlas_layout_capture != std::string::npos);
-	REQUIRE(atlas_lock_end != std::string::npos);
-	CHECK(atlas_staging < atlas_lock);
-	CHECK(atlas_lock < atlas_identity_guard);
-	CHECK(atlas_identity_guard < atlas_layout_capture);
-	CHECK(atlas_layout_capture < atlas_lock_end);
+	CHECK(compact_pass.find(
+		"resources.update_layout=asset->m_candidate_state->layout;") !=
+		std::string::npos);
+	CHECK(compact_pass.find(
+		"resources.update_layout=asset->m_published_view->layout;") !=
+		std::string::npos);
+	CHECK(compact_pass.find(
+		"[this,resources,asset,pending_upload,atlas_slot,"
+		"write_high_resolution,render_frame_index,graph_ops,program]") !=
+		std::string::npos);
 
 	constexpr uint32_t rectangular_component_count_x = 8u;
 	constexpr uint32_t rectangular_component_x = 0u;

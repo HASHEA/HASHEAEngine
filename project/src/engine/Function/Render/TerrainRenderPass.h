@@ -15,18 +15,28 @@ namespace AshEngine
 {
 	class ComputeProgram;
 	class GraphicsProgram;
+	class RenderTarget;
 	class RenderSampler;
 	class Renderer;
 	class StorageBuffer;
+	enum class RenderGraphAccess : uint16_t;
 	enum class ShadowCasterMobilityFilter : uint8_t;
 	struct SceneRenderViewContext;
 	struct VisibleRenderFrame;
 
 	struct TerrainGraphResources
 	{
+		std::shared_ptr<const TerrainPublishedRenderView> published_view{};
 		RenderGraphTextureRef weight_atlas_0{};
 		RenderGraphTextureRef weight_atlas_1{};
 		RenderGraphTextureRef coarse_weights{};
+		RenderGraphTextureRef update_weight_atlas_0{};
+		RenderGraphTextureRef update_weight_atlas_1{};
+		RenderGraphTextureRef update_coarse_weights{};
+		std::shared_ptr<TerrainRenderRuntimeState> update_runtime{};
+		std::shared_ptr<const TerrainAssetSnapshot> update_snapshot{};
+		TerrainRenderLayoutInfo update_layout{};
+		uint64_t update_candidate_epoch = 0u;
 		uint64_t pending_atlas_asset_id = 0u;
 		std::shared_ptr<const TerrainAssetSnapshot> pending_atlas_snapshot{};
 		TerrainComponentCoord pending_atlas_coord{};
@@ -35,8 +45,41 @@ namespace AshEngine
 		uint32_t pending_atlas_slot = 0u;
 		bool has_update_pass = false;
 		bool has_pending_atlas_slot = false;
+		bool update_is_candidate = false;
 
 		bool is_valid() const;
+	};
+
+	// Low-level seam for headless graph execution. Production leaves these
+	// callbacks empty and uses Renderer resources; tests replace only the GPU
+	// boundary while exercising the same resource selection and pass callback.
+	struct TerrainRenderGraphOps
+	{
+		void* user_data = nullptr;
+		RenderGraphTextureRef (*register_external_texture)(
+			void* user_data,
+			RenderGraphBuilder& graph,
+			const std::shared_ptr<RenderTarget>& texture,
+			const char* name,
+			RenderGraphAccess initial_access) = nullptr;
+		bool (*stage_weight_upload)(
+			void* user_data,
+			const std::shared_ptr<StorageBuffer>& staging,
+			const uint8_t* data,
+			uint32_t size) = nullptr;
+		bool (*dispatch_atlas_update)(
+			void* user_data,
+			RenderGraphComputeContext& context,
+			const TerrainGraphResources& resources,
+			const TerrainGpuComponentUpload& pending_upload,
+			uint32_t atlas_slot,
+			bool write_high_resolution) = nullptr;
+
+		bool is_override() const
+		{
+			return register_external_texture && stage_weight_upload &&
+				dispatch_atlas_update;
+		}
 	};
 
 	enum class TerrainPreparedDrawStatus : uint8_t
@@ -48,6 +91,7 @@ namespace AshEngine
 
 	struct TerrainPreparedDraw
 	{
+		std::shared_ptr<const TerrainPublishedRenderView> published_view{};
 		std::shared_ptr<const TerrainAssetSnapshot> asset_snapshot{};
 		std::shared_ptr<TerrainRenderAsset> render_asset{};
 		glm::mat4 world_transform{ 1.0f };
@@ -79,9 +123,14 @@ namespace AshEngine
 		bool initialize(Renderer& renderer);
 		void shutdown();
 		void release_scene(uint64_t scene_runtime_id);
+		void record_visible_requirements(
+			const VisibleRenderFrame& frame,
+			const SceneRenderViewContext& view_context,
+			uint64_t render_frame_index);
 		TerrainGraphResources prepare_graph(
 			RenderGraphBuilder& graph,
 			const VisibleRenderFrame& frame,
+			const std::shared_ptr<TerrainRenderAsset>& graph_asset,
 			uint64_t render_frame_index);
 		TerrainPreparedDrawPtr prepare_draw(
 			const VisibleRenderFrame& frame,
@@ -116,10 +165,17 @@ namespace AshEngine
 			RenderGraphBuilder& graph,
 			const TerrainGraphResources& resources,
 			const std::shared_ptr<TerrainRenderAsset>& asset,
-			const TerrainRenderAsset::TerrainGpuComponentUpload& pending_upload,
+			const TerrainGpuComponentUpload& pending_upload,
 			uint32_t atlas_slot,
 			bool write_high_resolution,
-			uint64_t render_frame_index);
+			uint64_t render_frame_index,
+			const TerrainRenderGraphOps& graph_ops);
+		TerrainGraphResources prepare_graph_with_ops(
+			RenderGraphBuilder& graph,
+			const VisibleRenderFrame& frame,
+			const std::shared_ptr<TerrainRenderAsset>& graph_asset,
+			uint64_t render_frame_index,
+			const TerrainRenderGraphOps& graph_ops);
 		bool render_prepared_surface(
 			const TerrainPreparedDrawPtr& prepared_draw,
 			const VisibleRenderFrame& frame,
@@ -166,12 +222,11 @@ namespace AshEngine
 		size_t m_next_instance_buffer_slot = 0u;
 		std::unordered_map<const TerrainRenderAsset*, TerrainAtlasCompletion>
 			m_atlas_completions{};
+		friend struct TerrainRenderGraphTestSeam;
 	};
 
-	// Headless contract used by RenderGraph tests. Runtime graph construction uses
-	// the same pass declarations for each Terrain atlas texture.
-	ASH_API bool add_terrain_atlas_contract_for_tests(
+	ASH_API bool add_terrain_published_read_pass_for_tests(
 		RenderGraphBuilder& graph,
-		RenderGraphTextureRef atlas,
-		bool has_dirty_upload);
+		const TerrainGraphResources& resources,
+		uint32_t* execution_count);
 }

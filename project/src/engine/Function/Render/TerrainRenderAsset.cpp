@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <new>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -574,24 +575,117 @@ namespace AshEngine
 			elapsed < wall_clock_budget;
 	}
 
+	bool TerrainRenderResourceSet::is_complete() const
+	{
+		return height && staging && atlas[0] && atlas[1] && coarse;
+	}
+
+	namespace
+	{
+		static constexpr uint64_t k_max_atomic_terrain_resource_bytes =
+			1024ull * 1024ull * 1024ull;
+
+		auto terrain_resource_bytes(
+			const TerrainRenderLayoutInfo& layout,
+			uint64_t& out_bytes) -> bool
+		{
+			uint64_t atlas_pixels = 0u;
+			uint64_t atlas_bytes = 0u;
+			uint64_t coarse_pixels = 0u;
+			uint64_t coarse_bytes = 0u;
+			uint64_t total = 0u;
+			return checked_multiply_u64(
+				k_terrain_weight_atlas_extent,
+				k_terrain_weight_atlas_extent,
+				atlas_pixels) &&
+				checked_multiply_u64(atlas_pixels, 8u, atlas_bytes) &&
+				checked_multiply_u64(
+					layout.coarse_width, layout.coarse_height, coarse_pixels) &&
+				checked_multiply_u64(coarse_pixels, 4u, coarse_bytes) &&
+				checked_add_u64(layout.height_buffer_bytes,
+					k_terrain_weight_upload_bytes, total) &&
+				checked_add_u64(total, atlas_bytes, total) &&
+				checked_add_u64(total, coarse_bytes, out_bytes);
+		}
+
+		class RendererTerrainGpuOps final : public TerrainRenderGpuOps
+		{
+		public:
+			explicit RendererTerrainGpuOps(Renderer& renderer) : m_renderer(renderer) {}
+
+			std::shared_ptr<StorageBuffer> create_storage_buffer(
+				const StorageBufferDesc& desc) override
+			{
+				return m_renderer.create_storage_buffer(desc);
+			}
+
+			std::shared_ptr<RenderTarget> create_render_target(
+				const RenderTargetDesc& desc) override
+			{
+				return m_renderer.create_render_target(desc);
+			}
+
+			bool update_storage_buffer(
+				const std::shared_ptr<StorageBuffer>& buffer,
+				uint32_t offset,
+				uint32_t size,
+				const void* data) override
+			{
+				return buffer && buffer->update(offset, size, data);
+			}
+
+		private:
+			Renderer& m_renderer;
+		};
+	}
+
 	TerrainRenderAsset::TerrainRenderAsset() = default;
 	TerrainRenderAsset::~TerrainRenderAsset() = default;
 
+	uint64_t TerrainRenderAsset::allocate_candidate_epoch_locked()
+	{
+		const uint64_t epoch = m_next_candidate_epoch++;
+		if (m_next_candidate_epoch == 0u)
+		{
+			m_next_candidate_epoch = 1u;
+		}
+		return epoch;
+	}
+
+	std::shared_ptr<const TerrainAssetSnapshot>
+		TerrainRenderAsset::latest_admitted_snapshot_locked() const
+	{
+		if (m_candidate_state && m_candidate_state->snapshot)
+		{
+			return m_candidate_state->snapshot;
+		}
+		if (m_published_view && m_published_view->runtime &&
+			m_published_view->runtime->target_snapshot)
+		{
+			return m_published_view->runtime->target_snapshot;
+		}
+		return m_published_view ? m_published_view->snapshot : nullptr;
+	}
+
+	std::shared_ptr<TerrainRenderRuntimeState>
+		TerrainRenderAsset::current_incremental_runtime_locked() const
+	{
+		return m_published_view ? m_published_view->runtime : nullptr;
+	}
+
 	bool TerrainRenderAsset::matches_pending_weight_update_locked(
+		const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
 		const TerrainGpuComponentUpload& expected) const
 	{
-		if (!m_accepted_snapshot || m_pending_weight_updates.empty())
+		if (!runtime || !runtime->target_snapshot || runtime->weight_queue.empty())
 		{
 			return false;
 		}
 		const std::shared_ptr<const TerrainAssetSnapshot> expected_snapshot =
 			expected.accepted_snapshot.lock();
-		const TerrainGpuComponentUpload& pending =
-			m_pending_weight_updates.front();
-		return expected_snapshot &&
-			m_accepted_snapshot == expected_snapshot &&
+		const TerrainGpuComponentUpload& pending = runtime->weight_queue.front();
+		return expected_snapshot && runtime->target_snapshot == expected_snapshot &&
 			pending.accepted_snapshot.lock() == expected_snapshot &&
-			m_accepted_snapshot->asset_id == expected.asset_id &&
 			pending.asset_id == expected.asset_id &&
 			pending.coord == expected.coord &&
 			pending.content_generation == expected.content_generation &&
@@ -599,8 +693,56 @@ namespace AshEngine
 			pending.component == expected.component;
 	}
 
+	void TerrainRenderAsset::fail_candidate_locked(
+		const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
+		uint64_t candidate_epoch,
+		const std::string& error)
+	{
+		if (!m_candidate_state || m_candidate_state->candidate_epoch != candidate_epoch ||
+			m_candidate_state->runtime != runtime)
+		{
+			return;
+		}
+		m_candidate_state->stage = TerrainRenderCandidateStage::Failed;
+		m_candidate_state->work_status = TerrainRenderWorkStatus::Failed;
+		m_candidate_state->error = error;
+		m_candidate_state->prepared_view.reset();
+		m_candidate_state->runtime.reset();
+		m_last_error = error;
+	}
+
+	void TerrainRenderAsset::fail_latest_work_locked(const std::string& error)
+	{
+		if (m_candidate_state)
+		{
+			fail_candidate_locked(
+				m_candidate_state->runtime,
+				m_candidate_state->candidate_epoch,
+				error);
+			return;
+		}
+		const auto runtime = current_incremental_runtime_locked();
+		if (runtime && runtime->target_snapshot)
+		{
+			runtime->state.mark_snapshot_failed(
+				runtime->target_snapshot->content_generation,
+				runtime->target_snapshot->residency_revision);
+			runtime->work_status = TerrainRenderWorkStatus::Failed;
+		}
+		m_last_error = error;
+	}
+
 	bool TerrainRenderAsset::accept_snapshot(
 		const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
+		std::string* out_error)
+	{
+		return accept_snapshot_with_peak_budget(
+			snapshot, k_max_atomic_terrain_resource_bytes, out_error);
+	}
+
+	bool TerrainRenderAsset::accept_snapshot_with_peak_budget(
+		const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
+		uint64_t peak_budget,
 		std::string* out_error)
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
@@ -612,461 +754,471 @@ namespace AshEngine
 		{
 			return fail_with_error(out_error, "terrain snapshot must not be null.");
 		}
-		if (m_accepted_snapshot == snapshot)
+
+		const auto latest = latest_admitted_snapshot_locked();
+		if (latest == snapshot)
 		{
-			if (m_state.readiness() == TerrainRenderReadiness::Failed)
+			const TerrainRenderWorkStatus status = m_candidate_state ?
+				m_candidate_state->work_status :
+				(m_published_view && m_published_view->runtime ?
+					m_published_view->runtime->work_status :
+					TerrainRenderWorkStatus::Pending);
+			if (status == TerrainRenderWorkStatus::Failed)
 			{
-				return fail_with_error(
-					out_error,
+				return fail_with_error(out_error,
 					m_last_error.empty() ? "terrain snapshot is failed." :
-						m_last_error.c_str());
+					m_last_error.c_str());
 			}
 			return true;
 		}
-		const bool same_accepted_asset = m_accepted_snapshot &&
-			snapshot->asset_id == m_accepted_snapshot->asset_id;
-		const bool newer_same_asset_snapshot = same_accepted_asset &&
-			(snapshot->content_generation > m_accepted_snapshot->content_generation ||
-				(snapshot->content_generation ==
-					m_accepted_snapshot->content_generation &&
-					snapshot->residency_revision >
-						m_accepted_snapshot->residency_revision));
-		if (same_accepted_asset && !newer_same_asset_snapshot)
+		const bool same_latest_asset = latest && latest->asset_id == snapshot->asset_id;
+		const bool newer_same_asset = same_latest_asset &&
+			(snapshot->content_generation > latest->content_generation ||
+				(snapshot->content_generation == latest->content_generation &&
+					snapshot->residency_revision > latest->residency_revision));
+		if (same_latest_asset && !newer_same_asset)
 		{
 			return fail_with_error(
 				out_error, "terrain snapshot content generation is stale.");
 		}
-		const auto reject_snapshot =
-			[&](
-				std::string error,
-				const TerrainRenderLayoutInfo* rejected_layout,
-				bool preserve_accepted)
+
+		TerrainRenderLayoutInfo render_layout{};
+		std::string error{};
+		const bool layout_valid = derive_terrain_render_layout(
+			snapshot->layout, render_layout, &error);
+		const bool same_published_asset = m_published_view &&
+			m_published_view->asset_id == snapshot->asset_id;
+		const bool same_published_layout = layout_valid && m_published_view &&
+			render_layouts_equal(
+				render_layout.layout, m_published_view->layout.layout);
+		const bool incremental = same_published_asset && same_published_layout;
+		const bool same_latest_layout = latest && layout_valid &&
+			render_layouts_equal(render_layout.layout, latest->layout);
+		const bool has_viable_first_load_candidate = !m_published_view &&
+			m_candidate_state && m_candidate_state->work_status !=
+				TerrainRenderWorkStatus::Failed;
+		const bool requires_dense_replacement = !incremental &&
+			(m_published_view || (has_viable_first_load_candidate &&
+				!(same_latest_asset && same_latest_layout)));
+
+		const auto reject = [&](std::string diagnostic) -> bool
+		{
+			m_last_error = std::move(diagnostic);
+			if (incremental)
 			{
-				if (preserve_accepted)
+				const auto runtime = current_incremental_runtime_locked();
+				if (runtime)
 				{
-					m_last_error = std::move(error);
-					return fail_with_error(out_error, m_last_error.c_str());
-				}
-				if (rejected_layout)
-				{
-					m_state.begin_snapshot_for_layout(
+					runtime->target_snapshot = snapshot;
+					runtime->state.begin_snapshot_for_layout(
 						snapshot->content_generation,
 						snapshot->residency_revision,
 						0u,
-						*rejected_layout);
-				}
-				else
-				{
-					TerrainRenderLayoutInfo fallback_layout{};
-					fallback_layout.layout.component_count_x =
-						k_terrain_component_count;
-					fallback_layout.layout.component_count_z =
-						k_terrain_component_count;
-					fallback_layout.component_count =
-						k_terrain_render_component_capacity;
-					fallback_layout.component_row_stride =
-						k_terrain_component_count;
-					m_state.begin_snapshot_for_layout(
+						render_layout);
+					runtime->state.mark_snapshot_failed(
 						snapshot->content_generation,
-						snapshot->residency_revision,
-						0u,
-						fallback_layout);
+						snapshot->residency_revision);
+					runtime->work_status = TerrainRenderWorkStatus::Failed;
 				}
-				m_state.mark_snapshot_failed(
-					snapshot->content_generation,
-					snapshot->residency_revision);
-				m_accepted_snapshot = snapshot;
-				if (!m_packed_height_buffer && !m_coarse_weight_target)
-				{
-					m_accepted_render_layout = {};
-					m_has_accepted_render_layout = false;
-				}
-				m_pending_component_uploads.clear();
-				m_pending_weight_updates.clear();
-				m_pending_implicit_weight_resets.clear();
-				m_pending_component_removals.clear();
-				m_last_error = std::move(error);
-				return fail_with_error(out_error, m_last_error.c_str());
-			};
+				m_candidate_state.reset();
+			}
+			else
+			{
+				auto failed = std::make_unique<TerrainRenderCandidateState>();
+				failed->snapshot = snapshot;
+				failed->layout = render_layout;
+				failed->candidate_epoch = allocate_candidate_epoch_locked();
+				failed->stage = TerrainRenderCandidateStage::Failed;
+				failed->work_status = TerrainRenderWorkStatus::Failed;
+				failed->error = m_last_error;
+				m_candidate_state = std::move(failed);
+			}
+			return fail_with_error(out_error, m_last_error.c_str());
+		};
 
 		if (snapshot->failed)
 		{
-			const bool is_replacement = m_has_accepted_render_layout &&
-				(!same_accepted_asset || !render_layouts_equal(
-					snapshot->layout, m_accepted_render_layout.layout));
-			return reject_snapshot(snapshot->failure_detail.empty() ?
-				"terrain snapshot is failed." : snapshot->failure_detail,
-				nullptr,
-				is_replacement);
+			return reject(snapshot->failure_detail.empty() ?
+				"terrain snapshot is failed." : snapshot->failure_detail);
 		}
-
-		TerrainRenderLayoutInfo render_layout{};
-		std::string render_layout_error{};
-		if (!derive_terrain_render_layout(
-				snapshot->layout, render_layout, &render_layout_error))
+		if (!layout_valid)
 		{
-			const bool is_replacement = m_has_accepted_render_layout &&
-				(!same_accepted_asset || !render_layouts_equal(
-					snapshot->layout, m_accepted_render_layout.layout));
-			return reject_snapshot(
-				std::move(render_layout_error), nullptr, is_replacement);
+			return reject(error);
 		}
-		const bool is_replacement = m_has_accepted_render_layout &&
-			(!same_accepted_asset || !render_layouts_equal(
-				render_layout.layout, m_accepted_render_layout.layout));
 		if (!std::isfinite(snapshot->height_mapping.height_offset) ||
 			!std::isfinite(snapshot->height_mapping.height_range) ||
 			snapshot->height_mapping.height_range <= 0.0f)
 		{
-			return reject_snapshot(
-				describe_layout_error(
-					snapshot->layout, "terrain height mapping is invalid."),
-				&render_layout,
-				is_replacement);
+			return reject(describe_layout_error(
+				snapshot->layout, "terrain height mapping is invalid."));
 		}
-
 		if (snapshot->components.size() != render_layout.component_count)
 		{
-			return reject_snapshot(
-				describe_layout_error(
-					snapshot->layout,
-					"component table contains " +
-						std::to_string(snapshot->components.size()) +
-						" entries; expected " +
-						std::to_string(render_layout.component_count) + "."),
-				&render_layout,
-				is_replacement);
+			return reject(describe_layout_error(
+				snapshot->layout,
+				"component table contains " +
+					std::to_string(snapshot->components.size()) +
+					" entries; expected " +
+					std::to_string(render_layout.component_count) + "."));
 		}
-
 		for (size_t index = 0u; index < snapshot->components.size(); ++index)
 		{
-			const std::shared_ptr<const TerrainComponentSnapshot>& component =
-				snapshot->components[index];
+			const auto& component = snapshot->components[index];
 			const TerrainComponentCoord expected_coord{
 				static_cast<uint16_t>(index % render_layout.component_row_stride),
-				static_cast<uint16_t>(index / render_layout.component_row_stride)
-			};
+				static_cast<uint16_t>(index / render_layout.component_row_stride) };
 			if (!component)
 			{
-				if (is_replacement)
+				if (requires_dense_replacement)
 				{
-					return reject_snapshot(
-						describe_layout_error(
-							snapshot->layout,
-							"replacement snapshot has a null component at "
-							"row-major slot " + std::to_string(index) + "."),
-						&render_layout,
-						true);
+					return reject(describe_layout_error(
+						snapshot->layout,
+						"replacement snapshot has a null component at row-major slot " +
+						std::to_string(index) + "."));
 				}
 				continue;
 			}
 			if (!(component->coord == expected_coord))
 			{
-				return reject_snapshot(
-					describe_layout_error(
-						snapshot->layout,
-						"component at row-major slot " + std::to_string(index) +
-							" has coord=(" + std::to_string(component->coord.x) +
-							"," + std::to_string(component->coord.z) +
-							"); expected=(" + std::to_string(expected_coord.x) +
-							"," + std::to_string(expected_coord.z) + ")."),
-					&render_layout,
-					is_replacement);
+				return reject(describe_layout_error(
+					snapshot->layout,
+					"component at row-major slot " + std::to_string(index) +
+						" has coord=(" + std::to_string(component->coord.x) + "," +
+						std::to_string(component->coord.z) + "); expected=(" +
+						std::to_string(expected_coord.x) + "," +
+						std::to_string(expected_coord.z) + ")."));
 			}
 			std::string shape_error{};
 			if (!validate_component_shape(*component, &shape_error))
 			{
-				return reject_snapshot(
-					describe_layout_error(snapshot->layout, shape_error),
-					&render_layout,
-					is_replacement);
+				return reject(describe_layout_error(snapshot->layout, shape_error));
 			}
 		}
 
-		if (is_replacement &&
-			(m_packed_height_buffer || m_coarse_weight_target))
+		const auto make_upload = [&](
+			const std::shared_ptr<const TerrainComponentSnapshot>& component)
 		{
-			return reject_snapshot(
-				describe_layout_error(
+			TerrainGpuComponentUpload upload{};
+			upload.asset_id = snapshot->asset_id;
+			upload.accepted_snapshot = snapshot;
+			upload.coord = component->coord;
+			upload.content_generation = snapshot->content_generation;
+			upload.residency_revision = snapshot->residency_revision;
+			upload.component = component;
+			return upload;
+		};
+
+		if (!incremental)
+		{
+			uint64_t candidate_bytes = 0u;
+			uint64_t peak_bytes = 0u;
+			if (!terrain_resource_bytes(render_layout, candidate_bytes))
+			{
+				return reject(describe_layout_error(
 					snapshot->layout,
-					"layout-dependent GPU resources already exist; "
-					"atomic Terrain replacement is not available."),
-				&render_layout,
-				true);
+					"candidate Terrain resource size arithmetic overflowed."));
+			}
+			peak_bytes = candidate_bytes;
+			if ((m_published_view &&
+				(!terrain_resource_bytes(m_published_view->layout, peak_bytes) ||
+					!checked_add_u64(peak_bytes, candidate_bytes, peak_bytes))) ||
+				peak_bytes > peak_budget)
+			{
+				return reject(describe_layout_error(
+					snapshot->layout,
+					"active plus candidate Terrain resource peak exceeds the approved budget."));
+			}
+
+			auto candidate = std::make_unique<TerrainRenderCandidateState>();
+			candidate->snapshot = snapshot;
+			candidate->layout = render_layout;
+			candidate->runtime = std::make_shared<TerrainRenderRuntimeState>();
+			candidate->runtime->target_snapshot = snapshot;
+			if (m_published_view && m_published_view->runtime)
+			{
+				candidate->runtime->latest_required_residency =
+					m_published_view->runtime->latest_required_residency;
+			}
+			candidate->candidate_epoch = allocate_candidate_epoch_locked();
+			candidate->peak_resource_bytes = peak_bytes;
+			for (const auto& component : snapshot->components)
+			{
+				if (!component)
+				{
+					continue;
+				}
+				const TerrainGpuComponentUpload upload = make_upload(component);
+				candidate->runtime->height_queue.push_back(upload);
+				candidate->coarse_work.push_back(upload);
+			}
+			candidate->runtime->state.begin_snapshot_for_layout(
+				snapshot->content_generation,
+				snapshot->residency_revision,
+				static_cast<uint32_t>(candidate->runtime->height_queue.size()),
+				render_layout);
+			try
+			{
+				candidate->prepared_view =
+					std::make_shared<TerrainPublishedRenderView>();
+			}
+			catch (const std::bad_alloc&)
+			{
+				candidate->stage = TerrainRenderCandidateStage::Failed;
+				candidate->work_status = TerrainRenderWorkStatus::Failed;
+				candidate->error =
+					"failed to allocate Terrain candidate publication view.";
+				candidate->runtime.reset();
+				m_last_error = candidate->error;
+				m_candidate_state = std::move(candidate);
+				return fail_with_error(out_error, m_last_error.c_str());
+			}
+			candidate->prepared_view->snapshot = snapshot;
+			candidate->prepared_view->layout = render_layout;
+			candidate->prepared_view->runtime = candidate->runtime;
+			candidate->prepared_view->asset_id = snapshot->asset_id;
+			candidate->prepared_view->content_generation =
+				snapshot->content_generation;
+			candidate->prepared_view->residency_revision =
+				snapshot->residency_revision;
+			m_candidate_state = std::move(candidate);
+			m_last_error.clear();
+			return true;
 		}
 
-		const bool rebuild_after_failure =
-			m_state.readiness() == TerrainRenderReadiness::Failed || is_replacement;
-		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
-			is_replacement ? nullptr : m_accepted_snapshot;
-		std::vector<TerrainGpuComponentUpload> uploads{};
-		std::vector<TerrainGpuComponentUpload> weight_updates{};
-		std::vector<TerrainComponentCoord> implicit_weight_resets{};
+		m_candidate_state.reset();
+		const auto runtime = current_incremental_runtime_locked();
+		if (!runtime)
+		{
+			return reject("published Terrain runtime is missing.");
+		}
+		const auto previous = runtime->target_snapshot ?
+			runtime->target_snapshot : m_published_view->snapshot;
+		const bool rebuild = runtime->work_status == TerrainRenderWorkStatus::Failed;
+		std::vector<TerrainGpuComponentUpload> heights{};
+		std::vector<TerrainGpuComponentUpload> weights{};
+		std::vector<TerrainComponentCoord> resets{};
 		std::vector<TerrainComponentCoord> removals{};
-		std::vector<TerrainComponentCoord> resident_weight_rebinds{};
-		std::array<bool, k_terrain_render_component_capacity> upload_scheduled{};
-		std::array<bool, k_terrain_render_component_capacity> weight_scheduled{};
-		std::array<bool, k_terrain_render_component_capacity> reset_scheduled{};
-		std::array<bool, k_terrain_render_component_capacity> removal_scheduled{};
+		std::array<bool, k_terrain_render_component_capacity> height_seen{};
+		std::array<bool, k_terrain_render_component_capacity> weight_seen{};
+		std::array<bool, k_terrain_render_component_capacity> reset_seen{};
+		std::array<bool, k_terrain_render_component_capacity> removal_seen{};
+		const auto append_coord = [&](std::vector<TerrainComponentCoord>& queue,
+			std::array<bool, k_terrain_render_component_capacity>& seen,
+			TerrainComponentCoord coord)
+		{
+			const size_t index = render_layout.component_linear_index(coord);
+			if (!seen[index])
+			{
+				queue.push_back(coord);
+				seen[index] = true;
+			}
+		};
+		const auto append_upload = [&](std::vector<TerrainGpuComponentUpload>& queue,
+			std::array<bool, k_terrain_render_component_capacity>& seen,
+			const std::shared_ptr<const TerrainComponentSnapshot>& component)
+		{
+			const size_t index = render_layout.component_linear_index(component->coord);
+			if (!seen[index])
+			{
+				queue.push_back(make_upload(component));
+				seen[index] = true;
+			}
+		};
 
-		const auto try_component_index =
-			[&render_layout](TerrainComponentCoord coord, size_t& out_index)
+		if (!rebuild)
+		{
+			for (const auto& pending : runtime->height_queue)
 			{
-				if (!render_layout.contains(coord))
+				const size_t index = render_layout.component_linear_index(pending.coord);
+				if (render_layout.contains(pending.coord) && pending.component &&
+					index < snapshot->components.size() &&
+					snapshot->components[index] == pending.component)
 				{
-					return false;
+					auto carried = pending;
+					carried.accepted_snapshot = snapshot;
+					carried.content_generation = snapshot->content_generation;
+					carried.residency_revision = snapshot->residency_revision;
+					heights.push_back(std::move(carried));
+					height_seen[index] = true;
 				}
-				out_index = render_layout.component_linear_index(coord);
-				return true;
-			};
-		const auto append_upload =
-			[&](
-				std::vector<TerrainGpuComponentUpload>& destination,
-				std::array<bool, k_terrain_render_component_capacity>& scheduled,
-				const std::shared_ptr<const TerrainComponentSnapshot>& component)
+			}
+			for (const auto& pending : runtime->weight_queue)
 			{
-				const size_t index =
-					render_layout.component_linear_index(component->coord);
-				if (scheduled[index])
+				const size_t index = render_layout.component_linear_index(pending.coord);
+				if (render_layout.contains(pending.coord) && pending.component &&
+					!pending.component->weights.empty() &&
+					index < snapshot->components.size() &&
+					snapshot->components[index] == pending.component)
 				{
-					return;
+					auto carried = pending;
+					carried.accepted_snapshot = snapshot;
+					carried.content_generation = snapshot->content_generation;
+					carried.residency_revision = snapshot->residency_revision;
+					weights.push_back(std::move(carried));
+					weight_seen[index] = true;
 				}
-				TerrainGpuComponentUpload upload{};
-				upload.asset_id = snapshot->asset_id;
-				upload.accepted_snapshot = snapshot;
-				upload.coord = component->coord;
-				upload.content_generation = snapshot->content_generation;
-				upload.residency_revision = snapshot->residency_revision;
-				upload.component = component;
-				destination.push_back(std::move(upload));
-				scheduled[index] = true;
-			};
-		const auto append_coord =
-			[&](
-				std::vector<TerrainComponentCoord>& destination,
-				std::array<bool, k_terrain_render_component_capacity>& scheduled,
-				TerrainComponentCoord coord)
+			}
+			for (const auto coord : runtime->reset_queue)
 			{
 				const size_t index = render_layout.component_linear_index(coord);
-				if (!scheduled[index])
+				if (render_layout.contains(coord) && index < snapshot->components.size() &&
+					snapshot->components[index] &&
+					snapshot->components[index]->weights.empty())
 				{
-					destination.push_back(coord);
-					scheduled[index] = true;
-				}
-			};
-
-		if (!rebuild_after_failure)
-		{
-			for (const TerrainGpuComponentUpload& pending :
-				m_pending_component_uploads)
-			{
-				size_t index = 0u;
-				if (!try_component_index(pending.coord, index) ||
-					index >= snapshot->components.size() ||
-					!pending.component ||
-					snapshot->components[index] != pending.component ||
-					upload_scheduled[index])
-				{
-					continue;
-				}
-				TerrainGpuComponentUpload carried = pending;
-				carried.asset_id = snapshot->asset_id;
-				carried.accepted_snapshot = snapshot;
-				carried.content_generation = snapshot->content_generation;
-				carried.residency_revision = snapshot->residency_revision;
-				uploads.push_back(std::move(carried));
-				upload_scheduled[index] = true;
-			}
-			for (const TerrainGpuComponentUpload& pending : m_pending_weight_updates)
-			{
-				size_t index = 0u;
-				if (!try_component_index(pending.coord, index) ||
-					index >= snapshot->components.size() ||
-					!pending.component ||
-					pending.component->weights.empty() ||
-					snapshot->components[index] != pending.component ||
-					weight_scheduled[index])
-				{
-					continue;
-				}
-				TerrainGpuComponentUpload carried = pending;
-				carried.asset_id = snapshot->asset_id;
-				carried.accepted_snapshot = snapshot;
-				carried.content_generation = snapshot->content_generation;
-				carried.residency_revision = snapshot->residency_revision;
-				weight_updates.push_back(std::move(carried));
-				weight_scheduled[index] = true;
-			}
-			for (TerrainComponentCoord coord : m_pending_implicit_weight_resets)
-			{
-				size_t index = 0u;
-				if (!try_component_index(coord, index) ||
-					index >= snapshot->components.size())
-				{
-					continue;
-				}
-				const std::shared_ptr<const TerrainComponentSnapshot>& component =
-					snapshot->components[index];
-				if (component && component->weights.empty())
-				{
-					append_coord(
-						implicit_weight_resets, reset_scheduled, coord);
+					append_coord(resets, reset_seen, coord);
 				}
 			}
-			for (TerrainComponentCoord coord : m_pending_component_removals)
+			for (const auto coord : runtime->removal_queue)
 			{
-				size_t index = 0u;
-				if (try_component_index(coord, index) &&
-					index < snapshot->components.size() &&
+				const size_t index = render_layout.component_linear_index(coord);
+				if (render_layout.contains(coord) && index < snapshot->components.size() &&
 					!snapshot->components[index])
 				{
-					append_coord(removals, removal_scheduled, coord);
+					append_coord(removals, removal_seen, coord);
 				}
 			}
 		}
 
 		for (size_t index = 0u; index < snapshot->components.size(); ++index)
 		{
-			const std::shared_ptr<const TerrainComponentSnapshot>& component =
-				snapshot->components[index];
-			const TerrainComponentCoord expected_coord{
+			const auto& component = snapshot->components[index];
+			const auto previous_component = previous && index < previous->components.size() ?
+				previous->components[index] : nullptr;
+			const TerrainComponentCoord coord{
 				static_cast<uint16_t>(index % render_layout.component_row_stride),
-				static_cast<uint16_t>(index / render_layout.component_row_stride)
-			};
-			const std::shared_ptr<const TerrainComponentSnapshot> previous_component =
-				previous_snapshot && index < previous_snapshot->components.size() ?
-					previous_snapshot->components[index] : nullptr;
+				static_cast<uint16_t>(index / render_layout.component_row_stride) };
 			if (!component)
 			{
-				if (rebuild_after_failure || previous_component)
+				if (rebuild || previous_component)
 				{
-					append_coord(removals, removal_scheduled, expected_coord);
+					append_coord(removals, removal_seen, coord);
 				}
 				continue;
 			}
-
-			if (!rebuild_after_failure && previous_component == component)
+			if (!rebuild && previous_component == component)
 			{
-				if (!component->weights.empty() && !weight_scheduled[index])
+				if (!component->weights.empty())
 				{
-					resident_weight_rebinds.push_back(expected_coord);
+					for (auto& slot : runtime->slots)
+					{
+						if (slot.occupied && slot.coord == coord)
+						{
+							slot.asset_id = snapshot->asset_id;
+							slot.content_generation = snapshot->content_generation;
+							slot.residency_revision = snapshot->residency_revision;
+						}
+					}
 				}
 				continue;
 			}
-
-			append_upload(uploads, upload_scheduled, component);
+			append_upload(heights, height_seen, component);
 			if (component->weights.empty())
 			{
-				const bool had_explicit_weights =
-					previous_component && !previous_component->weights.empty();
-				const bool has_resident_slot = std::any_of(
-					m_frame_boundary_atlas_slots.begin(),
-					m_frame_boundary_atlas_slots.end(),
-					[expected_coord](const TerrainAtlasSlotMetadata& slot)
+				const bool had_explicit = previous_component &&
+					!previous_component->weights.empty();
+				const bool resident = std::any_of(runtime->slots.begin(), runtime->slots.end(),
+					[coord](const TerrainAtlasSlotMetadata& slot)
 					{
-						return slot.occupied && slot.coord == expected_coord;
+						return slot.occupied && slot.coord == coord;
 					});
-				if (rebuild_after_failure || had_explicit_weights || has_resident_slot)
+				if (rebuild || had_explicit || resident)
 				{
-					append_coord(
-						implicit_weight_resets, reset_scheduled, expected_coord);
+					append_coord(resets, reset_seen, coord);
 				}
 			}
 			else
 			{
-				append_upload(weight_updates, weight_scheduled, component);
+				append_upload(weights, weight_seen, component);
 			}
 		}
 
-		m_state.begin_snapshot_for_layout(
+		runtime->target_snapshot = snapshot;
+		runtime->height_queue = std::move(heights);
+		runtime->weight_queue = std::move(weights);
+		runtime->reset_queue = std::move(resets);
+		runtime->removal_queue = std::move(removals);
+		runtime->state.begin_snapshot_for_layout(
 			snapshot->content_generation,
 			snapshot->residency_revision,
-			static_cast<uint32_t>(uploads.size() + removals.size()),
+			static_cast<uint32_t>(
+				runtime->height_queue.size() + runtime->removal_queue.size()),
 			render_layout);
-		for (TerrainComponentCoord coord : resident_weight_rebinds)
-		{
-			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
-			{
-				if (slot.occupied && slot.coord == coord)
-				{
-					slot.asset_id = snapshot->asset_id;
-					slot.content_generation = snapshot->content_generation;
-					slot.residency_revision = snapshot->residency_revision;
-				}
-			}
-		}
-		m_accepted_snapshot = snapshot;
-		m_accepted_render_layout = render_layout;
-		m_has_accepted_render_layout = true;
-		m_pending_component_uploads = std::move(uploads);
-		m_pending_weight_updates = std::move(weight_updates);
-		m_pending_implicit_weight_resets = std::move(implicit_weight_resets);
-		m_pending_component_removals = std::move(removals);
+		runtime->work_status = TerrainRenderWorkStatus::Pending;
 		m_last_error.clear();
 		return true;
 	}
 
-	TerrainRenderReadiness TerrainRenderAsset::readiness() const
+	TerrainRenderWorkStatus TerrainRenderAsset::latest_work_status() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_state.readiness();
+		if (m_candidate_state)
+		{
+			return m_candidate_state->work_status;
+		}
+		return m_published_view && m_published_view->runtime ?
+			m_published_view->runtime->work_status : TerrainRenderWorkStatus::Pending;
+	}
+
+	TerrainRenderReadiness TerrainRenderAsset::readiness() const
+	{
+		const TerrainRenderWorkStatus status = latest_work_status();
+		return status == TerrainRenderWorkStatus::Ready ?
+			TerrainRenderReadiness::Ready :
+			status == TerrainRenderWorkStatus::Failed ?
+				TerrainRenderReadiness::Failed : TerrainRenderReadiness::Pending;
 	}
 
 	uint64_t TerrainRenderAsset::accepted_content_generation() const
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_accepted_snapshot ? m_accepted_snapshot->content_generation : 0u;
+		const auto snapshot = accepted_snapshot();
+		return snapshot ? snapshot->content_generation : 0u;
 	}
 
 	uint64_t TerrainRenderAsset::accepted_residency_revision() const
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_accepted_snapshot ? m_accepted_snapshot->residency_revision : 0u;
+		const auto snapshot = accepted_snapshot();
+		return snapshot ? snapshot->residency_revision : 0u;
 	}
 
 	uint64_t TerrainRenderAsset::published_content_generation() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_state.published_content_generation();
+		return m_published_view ? m_published_view->content_generation : 0u;
 	}
 
 	uint64_t TerrainRenderAsset::published_residency_revision() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_state.m_published_residency_revision;
+		return m_published_view ? m_published_view->residency_revision : 0u;
 	}
 
 	uint32_t TerrainRenderAsset::pending_component_upload_count() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return static_cast<uint32_t>(m_pending_component_uploads.size());
+		const auto runtime = m_candidate_state ? m_candidate_state->runtime :
+			current_incremental_runtime_locked();
+		return runtime ? static_cast<uint32_t>(runtime->height_queue.size()) : 0u;
 	}
 
-	uint64_t TerrainRenderAsset::pending_cpu_payload_bytes() const
-	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return 0u;
-	}
-
-	uint64_t TerrainRenderAsset::pending_weight_payload_bytes() const
-	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return 0u;
-	}
+	uint64_t TerrainRenderAsset::pending_cpu_payload_bytes() const { return 0u; }
+	uint64_t TerrainRenderAsset::pending_weight_payload_bytes() const { return 0u; }
 
 	uint32_t TerrainRenderAsset::pending_weight_update_count() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return static_cast<uint32_t>(m_pending_weight_updates.size());
+		const auto runtime = m_candidate_state ? m_candidate_state->runtime :
+			current_incremental_runtime_locked();
+		return runtime ? static_cast<uint32_t>(runtime->weight_queue.size()) : 0u;
 	}
 
-	bool TerrainRenderAsset::has_pending_component_upload(TerrainComponentCoord coord) const
+	bool TerrainRenderAsset::has_pending_component_upload(
+		TerrainComponentCoord coord) const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return std::any_of(
-			m_pending_component_uploads.begin(),
-			m_pending_component_uploads.end(),
-			[coord](const TerrainGpuComponentUpload& upload)
+		const auto runtime = m_candidate_state ? m_candidate_state->runtime :
+			current_incremental_runtime_locked();
+		return runtime && std::any_of(runtime->height_queue.begin(),
+			runtime->height_queue.end(), [coord](const TerrainGpuComponentUpload& upload)
 			{
 				return upload.coord == coord;
 			});
@@ -1075,51 +1227,67 @@ namespace AshEngine
 	uint32_t TerrainRenderAsset::pending_component_removal_count() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return static_cast<uint32_t>(m_pending_component_removals.size());
+		const auto runtime = m_candidate_state ? m_candidate_state->runtime :
+			current_incremental_runtime_locked();
+		return runtime ? static_cast<uint32_t>(runtime->removal_queue.size()) : 0u;
 	}
 
-	bool TerrainRenderAsset::has_pending_component_removal(TerrainComponentCoord coord) const
+	bool TerrainRenderAsset::has_pending_component_removal(
+		TerrainComponentCoord coord) const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return std::find(
-			m_pending_component_removals.begin(),
-			m_pending_component_removals.end(),
-			coord) != m_pending_component_removals.end();
+		const auto runtime = m_candidate_state ? m_candidate_state->runtime :
+			current_incremental_runtime_locked();
+		return runtime && std::find(runtime->removal_queue.begin(),
+			runtime->removal_queue.end(), coord) != runtime->removal_queue.end();
 	}
 
 	std::shared_ptr<const TerrainAssetSnapshot> TerrainRenderAsset::accepted_snapshot() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_accepted_snapshot;
+		return latest_admitted_snapshot_locked();
 	}
 
-	TerrainShadowCasterIdentity
-		TerrainRenderAsset::snapshot_shadow_caster_identity() const
+	std::shared_ptr<const TerrainPublishedRenderView>
+		TerrainRenderAsset::published_view() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return m_published_view;
+	}
+
+	TerrainShadowCasterIdentity TerrainRenderAsset::snapshot_shadow_caster_identity() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
 		TerrainShadowCasterIdentity identity{};
+		const auto accepted = latest_admitted_snapshot_locked();
+		const auto runtime = m_candidate_state ? m_candidate_state->runtime :
+			current_incremental_runtime_locked();
 		identity.accepted_snapshot_identity = static_cast<uint64_t>(
-			reinterpret_cast<uintptr_t>(m_accepted_snapshot.get()));
-		identity.has_accepted_snapshot = m_accepted_snapshot != nullptr;
-		if (m_accepted_snapshot)
+			reinterpret_cast<uintptr_t>(accepted.get()));
+		identity.has_accepted_snapshot = accepted != nullptr;
+		if (accepted)
 		{
-			identity.accepted_asset_id = m_accepted_snapshot->asset_id;
-			identity.accepted_content_generation =
-				m_accepted_snapshot->content_generation;
-			identity.accepted_residency_revision =
-				m_accepted_snapshot->residency_revision;
+			identity.accepted_asset_id = accepted->asset_id;
+			identity.accepted_content_generation = accepted->content_generation;
+			identity.accepted_residency_revision = accepted->residency_revision;
 		}
-		identity.active_content_generation =
-			m_state.active_content_generation();
-		identity.published_content_generation =
-			m_state.published_content_generation();
-		identity.required_upload_count = m_state.required_upload_count();
-		identity.completed_upload_count = m_state.completed_upload_count();
-		identity.pending_component_upload_count = static_cast<uint32_t>(
-			m_pending_component_uploads.size());
-		identity.pending_component_removal_count = static_cast<uint32_t>(
-			m_pending_component_removals.size());
-		identity.readiness = m_state.readiness();
+		if (runtime)
+		{
+			identity.active_content_generation = runtime->state.active_content_generation();
+			identity.required_upload_count = runtime->state.required_upload_count();
+			identity.completed_upload_count = runtime->state.completed_upload_count();
+			identity.pending_component_upload_count = static_cast<uint32_t>(
+				runtime->height_queue.size());
+			identity.pending_component_removal_count = static_cast<uint32_t>(
+				runtime->removal_queue.size());
+		}
+		identity.published_content_generation = m_published_view ?
+			m_published_view->content_generation : 0u;
+		const auto status = m_candidate_state ? m_candidate_state->work_status :
+			(runtime ? runtime->work_status : TerrainRenderWorkStatus::Pending);
+		identity.readiness = status == TerrainRenderWorkStatus::Ready ?
+			TerrainRenderReadiness::Ready : status == TerrainRenderWorkStatus::Failed ?
+				TerrainRenderReadiness::Failed : TerrainRenderReadiness::Pending;
 		return identity;
 	}
 
@@ -1131,26 +1299,28 @@ namespace AshEngine
 
 	std::shared_ptr<StorageBuffer> TerrainRenderAsset::packed_height_buffer() const
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_packed_height_buffer;
+		const auto view = published_view();
+		return view && view->runtime ? view->runtime->resources.height : nullptr;
 	}
 
-	std::shared_ptr<StorageBuffer> TerrainRenderAsset::dirty_weight_staging_buffer() const
+	std::shared_ptr<StorageBuffer>
+		TerrainRenderAsset::dirty_weight_staging_buffer() const
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_dirty_weight_staging_buffer;
+		const auto view = published_view();
+		return view && view->runtime ? view->runtime->resources.staging : nullptr;
 	}
 
 	std::shared_ptr<RenderTarget> TerrainRenderAsset::weight_atlas(uint32_t index) const
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return index < m_weight_atlases.size() ? m_weight_atlases[index] : nullptr;
+		const auto view = published_view();
+		return view && view->runtime && index < view->runtime->resources.atlas.size() ?
+			view->runtime->resources.atlas[index] : nullptr;
 	}
 
 	std::shared_ptr<RenderTarget> TerrainRenderAsset::coarse_weight_target() const
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		return m_coarse_weight_target;
+		const auto view = published_view();
+		return view && view->runtime ? view->runtime->resources.coarse : nullptr;
 	}
 
 	std::shared_ptr<RenderTarget> TerrainRenderAsset::material_texture_array(uint32_t index) const
@@ -1174,142 +1344,111 @@ namespace AshEngine
 		return true;
 	}
 
-	void TerrainRenderAsset::fail_active_generation(const std::string& error)
-	{
-		m_state.mark_snapshot_failed(
-			m_state.active_content_generation(),
-			m_state.m_active_residency_revision);
-		m_last_error = error;
-	}
-
-	bool TerrainRenderAsset::finalize_gpu_resources(
-		Renderer& renderer,
+	bool TerrainRenderAsset::finalize_runtime_gpu_resources_locked(
+		TerrainRenderRuntimeState& runtime,
+		const TerrainRenderLayoutInfo& layout,
+		TerrainRenderGpuOps& gpu_ops,
+		bool candidate,
 		std::string* out_error)
 	{
-		std::scoped_lock<std::mutex> lock(m_mutex);
-		if (out_error)
+		const auto fail = [&](const std::string& error)
 		{
-			out_error->clear();
+			if (candidate && m_candidate_state)
+			{
+				fail_candidate_locked(
+					m_candidate_state->runtime,
+					m_candidate_state->candidate_epoch,
+					error);
+			}
+			else
+			{
+				fail_latest_work_locked(error);
+			}
+			return fail_with_error(out_error, error.c_str());
+		};
+
+		if (!runtime.resources.height)
+		{
+			runtime.resources.height = gpu_ops.create_storage_buffer({
+				static_cast<uint32_t>(layout.height_buffer_bytes), sizeof(uint32_t),
+				false, false, nullptr, "TerrainHeightWords" });
+			if (!runtime.resources.height)
+			{
+				return fail("failed to create Terrain height resource.");
+			}
 		}
-		if (m_state.readiness() == TerrainRenderReadiness::Ready)
+		if (!runtime.resources.staging)
 		{
-			return true;
+			runtime.resources.staging = gpu_ops.create_storage_buffer({
+				k_terrain_weight_upload_bytes, k_terrain_weight_upload_stride,
+				false, false, nullptr, "TerrainWeightUpload" });
+			if (!runtime.resources.staging)
+			{
+				return fail("failed to create Terrain staging resource.");
+			}
 		}
-		if (m_state.readiness() == TerrainRenderReadiness::Failed ||
-			!m_accepted_snapshot)
+		for (uint32_t atlas = 0u; atlas < runtime.resources.atlas.size(); ++atlas)
 		{
-			return fail_with_error(
-				out_error,
-				m_last_error.empty() ? "terrain render asset is not pending." :
-					m_last_error.c_str());
+			if (runtime.resources.atlas[atlas])
+			{
+				continue;
+			}
+			runtime.resources.atlas[atlas] = gpu_ops.create_render_target({
+				static_cast<uint16_t>(k_terrain_weight_atlas_extent),
+				static_cast<uint16_t>(k_terrain_weight_atlas_extent),
+				RenderTextureFormat::RGBA8_UNORM, true, true,
+				atlas == 0u ? "TerrainWeights0" : "TerrainWeights1" });
+			if (!runtime.resources.atlas[atlas])
+			{
+				return fail(atlas == 0u ?
+					"failed to create Terrain atlas 0 resource." :
+					"failed to create Terrain atlas 1 resource.");
+			}
+		}
+		if (!runtime.resources.coarse)
+		{
+			runtime.resources.coarse = gpu_ops.create_render_target({
+				static_cast<uint16_t>(layout.coarse_width),
+				static_cast<uint16_t>(layout.coarse_height),
+				RenderTextureFormat::RGBA8_UNORM, true, true,
+				"TerrainCoarseWeights" });
+			if (!runtime.resources.coarse)
+			{
+				return fail("failed to create Terrain coarse resource.");
+			}
 		}
 
-		TerrainRenderLayoutInfo render_layout{};
-		std::string render_layout_error{};
-		if (!derive_terrain_render_layout(
-				m_accepted_snapshot->layout,
-				render_layout,
-				&render_layout_error))
+		const auto target = runtime.target_snapshot;
+		if (!target)
 		{
-			fail_active_generation(render_layout_error);
-			return fail_with_error(out_error, m_last_error.c_str());
+			return fail("Terrain runtime target snapshot is missing.");
 		}
-
-		if (!m_packed_height_buffer)
+		const uint64_t content_generation = target->content_generation;
+		const uint64_t residency_revision = target->residency_revision;
+		for (const TerrainComponentCoord coord : runtime.removal_queue)
 		{
-			m_packed_height_buffer = renderer.create_storage_buffer({
-				static_cast<uint32_t>(render_layout.height_buffer_bytes),
-				sizeof(uint32_t),
-				false,
-				false,
-				nullptr,
-				"TerrainHeightWords"
-			});
-		}
-		if (!m_dirty_weight_staging_buffer)
-		{
-			m_dirty_weight_staging_buffer = renderer.create_storage_buffer({
-				k_terrain_weight_upload_bytes,
-				k_terrain_weight_upload_stride,
-				false,
-				false,
-				nullptr,
-				"TerrainWeightUpload"
-			});
-		}
-		if (!m_weight_atlases[0])
-		{
-			m_weight_atlases[0] = renderer.create_render_target({
-				static_cast<uint16_t>(k_terrain_weight_atlas_extent),
-				static_cast<uint16_t>(k_terrain_weight_atlas_extent),
-				RenderTextureFormat::RGBA8_UNORM,
-				true,
-				true,
-				"TerrainWeights0"
-			});
-		}
-		if (!m_weight_atlases[1])
-		{
-			m_weight_atlases[1] = renderer.create_render_target({
-				static_cast<uint16_t>(k_terrain_weight_atlas_extent),
-				static_cast<uint16_t>(k_terrain_weight_atlas_extent),
-				RenderTextureFormat::RGBA8_UNORM,
-				true,
-				true,
-				"TerrainWeights1"
-			});
-		}
-		if (!m_coarse_weight_target)
-		{
-			m_coarse_weight_target = renderer.create_render_target({
-				static_cast<uint16_t>(render_layout.coarse_width),
-				static_cast<uint16_t>(render_layout.coarse_height),
-				RenderTextureFormat::RGBA8_UNORM,
-				true,
-				true,
-				"TerrainCoarseWeights"
-			});
-		}
-		if (!m_packed_height_buffer ||
-			!m_dirty_weight_staging_buffer ||
-			!m_weight_atlases[0] ||
-			!m_weight_atlases[1] ||
-			!m_coarse_weight_target ||
-			!m_fallback_material_arrays ||
-			!m_fallback_material_arrays->is_valid())
-		{
-			fail_active_generation("failed to create Terrain GPU resources.");
-			return fail_with_error(out_error, m_last_error.c_str());
-		}
-
-		constexpr uint32_t component_height_bytes =
-			k_terrain_render_height_words_per_component * sizeof(uint32_t);
-		const uint64_t content_generation = m_state.active_content_generation();
-		const uint64_t residency_revision =
-			m_state.m_active_residency_revision;
-		for (TerrainComponentCoord coord : m_pending_component_removals)
-		{
-			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
+			for (auto& slot : runtime.slots)
 			{
 				if (slot.occupied && slot.coord == coord)
 				{
 					slot = {};
 				}
 			}
-			if (!m_state.mark_component_uploaded_for_snapshot(
+			if (!runtime.state.mark_component_uploaded_for_snapshot(
 					content_generation, residency_revision, coord))
 			{
-				fail_active_generation("failed to retire a Terrain component residency slot.");
-				return fail_with_error(out_error, m_last_error.c_str());
+				return fail("failed to retire a Terrain component residency slot.");
 			}
 		}
-		m_pending_component_removals.clear();
+		runtime.removal_queue.clear();
 
+		constexpr uint32_t component_height_bytes =
+			k_terrain_render_height_words_per_component * sizeof(uint32_t);
 		const auto upload_start = std::chrono::steady_clock::now();
 		uint64_t completed_bytes = 0u;
 		size_t completed_uploads = 0u;
 		std::vector<uint32_t> packed_height_words{};
-		while (completed_uploads < m_pending_component_uploads.size() &&
+		while (completed_uploads < runtime.height_queue.size() &&
 			terrain_upload_budget_allows_next(
 				completed_bytes,
 				component_height_bytes,
@@ -1317,75 +1456,58 @@ namespace AshEngine
 				std::chrono::steady_clock::now() - upload_start,
 				k_height_upload_wall_clock_budget))
 		{
-			const TerrainGpuComponentUpload& upload =
-				m_pending_component_uploads[completed_uploads];
-			if (upload.content_generation != content_generation ||
+			const auto& upload = runtime.height_queue[completed_uploads];
+			if (upload.accepted_snapshot.lock() != target || !upload.component ||
+				upload.content_generation != content_generation ||
 				upload.residency_revision != residency_revision ||
-				!upload.component)
+				!layout.contains(upload.coord))
 			{
-				fail_active_generation("Terrain height upload generation is stale.");
-				return fail_with_error(out_error, m_last_error.c_str());
+				return fail("Terrain height upload identity is stale.");
 			}
-
 			std::string pack_error{};
 			packed_height_words.clear();
 			if (!build_terrain_component_height_words(
-					*upload.component,
-					m_accepted_snapshot->height_mapping,
-					packed_height_words,
-					&pack_error) ||
+					*upload.component, target->height_mapping,
+					packed_height_words, &pack_error) ||
 				packed_height_words.size() !=
 					k_terrain_render_height_words_per_component)
 			{
-				fail_active_generation(pack_error.empty() ?
+				return fail(pack_error.empty() ?
 					"failed to pack Terrain component height data." : pack_error);
-				return fail_with_error(out_error, m_last_error.c_str());
 			}
-
-			if (!render_layout.contains(upload.coord))
-			{
-				fail_active_generation(
-					"Terrain height upload coordinate is outside the accepted layout.");
-				return fail_with_error(out_error, m_last_error.c_str());
-			}
-			const uint64_t offset_64 =
-				render_layout.component_linear_index(upload.coord) *
+			const uint64_t offset_64 = layout.component_linear_index(upload.coord) *
 				static_cast<uint64_t>(component_height_bytes);
 			if (offset_64 > std::numeric_limits<uint32_t>::max() ||
-				offset_64 + component_height_bytes >
-					render_layout.height_buffer_bytes)
+				offset_64 + component_height_bytes > layout.height_buffer_bytes)
 			{
-				fail_active_generation(
-					"Terrain height upload range exceeds the accepted layout buffer.");
-				return fail_with_error(out_error, m_last_error.c_str());
+				return fail("Terrain height upload exceeds its candidate resource.");
 			}
-			const uint32_t offset = static_cast<uint32_t>(offset_64);
-			if (!m_packed_height_buffer->update(
-					offset,
+			if (!gpu_ops.update_storage_buffer(
+					runtime.resources.height,
+					static_cast<uint32_t>(offset_64),
 					component_height_bytes,
 					packed_height_words.data()) ||
-				!m_state.mark_component_uploaded_for_snapshot(
+				!runtime.state.mark_component_uploaded_for_snapshot(
 					content_generation, residency_revision, upload.coord))
 			{
-				fail_active_generation("failed to upload Terrain component height data.");
-				return fail_with_error(out_error, m_last_error.c_str());
+				return fail("failed to upload Terrain component height data.");
 			}
 			completed_bytes += component_height_bytes;
 			++completed_uploads;
 		}
 		if (completed_uploads != 0u)
 		{
-			m_pending_component_uploads.erase(
-				m_pending_component_uploads.begin(),
-				m_pending_component_uploads.begin() + completed_uploads);
+			runtime.height_queue.erase(runtime.height_queue.begin(),
+				runtime.height_queue.begin() + completed_uploads);
 		}
-		if (!m_pending_component_uploads.empty())
+		if (!runtime.height_queue.empty())
 		{
 			return false;
 		}
-		for (TerrainComponentCoord coord : m_pending_implicit_weight_resets)
+
+		for (const TerrainComponentCoord coord : runtime.reset_queue)
 		{
-			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
+			for (auto& slot : runtime.slots)
 			{
 				if (slot.occupied && slot.coord == coord)
 				{
@@ -1393,14 +1515,379 @@ namespace AshEngine
 				}
 			}
 		}
-		m_pending_implicit_weight_resets.clear();
-
-		if (!m_state.publish_snapshot(content_generation, residency_revision))
+		runtime.reset_queue.clear();
+		if (runtime.state.readiness() == TerrainRenderReadiness::Pending &&
+			!runtime.state.publish_snapshot(content_generation, residency_revision))
 		{
-			fail_active_generation("failed to publish Terrain content generation.");
-			return fail_with_error(out_error, m_last_error.c_str());
+			return fail("failed to complete Terrain height publication state.");
 		}
+		if (!candidate)
+		{
+			if (m_published_view && m_published_view->runtime.get() == &runtime &&
+				m_published_view->snapshot != target)
+			{
+				auto next_view = std::make_shared<TerrainPublishedRenderView>();
+				*next_view = *m_published_view;
+				next_view->snapshot = target;
+				next_view->asset_id = target->asset_id;
+				next_view->content_generation = target->content_generation;
+				next_view->residency_revision = target->residency_revision;
+				++next_view->publication_epoch;
+				m_published_view = std::move(next_view);
+			}
+			runtime.work_status = runtime.weight_queue.empty() ?
+				TerrainRenderWorkStatus::Ready : TerrainRenderWorkStatus::Pending;
+		}
+		return !candidate && runtime.work_status == TerrainRenderWorkStatus::Ready;
+	}
+
+	bool TerrainRenderAsset::finalize_gpu_resources(
+		TerrainRenderGpuOps& gpu_ops,
+		std::string* out_error)
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		if (out_error)
+		{
+			out_error->clear();
+		}
+		if (m_candidate_state)
+		{
+			if (m_candidate_state->work_status == TerrainRenderWorkStatus::Failed)
+			{
+				return fail_with_error(out_error, m_candidate_state->error.c_str());
+			}
+			if (m_candidate_state->work_status ==
+				TerrainRenderWorkStatus::ReadyToPublish)
+			{
+				return false;
+			}
+			const auto runtime = m_candidate_state->runtime;
+			if (!runtime)
+			{
+				return fail_with_error(out_error, "Terrain candidate runtime is missing.");
+			}
+			m_candidate_state->stage = TerrainRenderCandidateStage::UploadHeights;
+			const bool complete = finalize_runtime_gpu_resources_locked(
+				*runtime, m_candidate_state->layout, gpu_ops, true, out_error);
+			if (!m_candidate_state ||
+				m_candidate_state->work_status == TerrainRenderWorkStatus::Failed)
+			{
+				return false;
+			}
+			if (runtime->height_queue.empty())
+			{
+				m_candidate_state->stage = TerrainRenderCandidateStage::AwaitGraphWork;
+				update_candidate_ready_locked();
+			}
+			(void)complete;
+			return false;
+		}
+
+		const auto runtime = current_incremental_runtime_locked();
+		if (!runtime || runtime->work_status == TerrainRenderWorkStatus::Failed)
+		{
+			return false;
+		}
+		if (runtime->work_status == TerrainRenderWorkStatus::Ready)
+		{
+			return true;
+		}
+		return finalize_runtime_gpu_resources_locked(
+			*runtime, m_published_view->layout, gpu_ops, false, out_error);
+	}
+
+	bool TerrainRenderAsset::finalize_gpu_resources(
+		Renderer& renderer,
+		std::string* out_error)
+	{
+		RendererTerrainGpuOps gpu_ops(renderer);
+		return finalize_gpu_resources(gpu_ops, out_error);
+	}
+
+	std::vector<TerrainComponentCoord>
+		TerrainRenderAsset::select_initial_resident_set(
+			const TerrainAssetSnapshot& snapshot,
+			const std::array<TerrainAtlasSlotMetadata,
+				k_terrain_weight_atlas_slot_count>& old_slots,
+			const std::vector<TerrainComponentCoord>& required)
+	{
+		TerrainRenderLayoutInfo layout{};
+		if (!derive_terrain_render_layout(snapshot.layout, layout) ||
+			snapshot.components.size() != layout.component_count)
+		{
+			return {};
+		}
+		struct Entry
+		{
+			TerrainComponentCoord coord{};
+			uint64_t last_used_frame = 0u;
+			bool required = false;
+		};
+		std::vector<Entry> entries{};
+		std::array<bool, k_terrain_render_component_capacity> seen{};
+		const auto valid = [&](TerrainComponentCoord coord)
+		{
+			if (!layout.contains(coord))
+			{
+				return false;
+			}
+			const auto& component =
+				snapshot.components[layout.component_linear_index(coord)];
+			return component && !component->weights.empty();
+		};
+		for (const auto coord : required)
+		{
+			if (!valid(coord))
+			{
+				continue;
+			}
+			const size_t index = layout.component_linear_index(coord);
+			if (!seen[index])
+			{
+				entries.push_back({ coord, 0u, true });
+				seen[index] = true;
+			}
+		}
+		for (const auto& slot : old_slots)
+		{
+			if (!slot.occupied || !valid(slot.coord))
+			{
+				continue;
+			}
+			const size_t index = layout.component_linear_index(slot.coord);
+			const auto found = std::find_if(entries.begin(), entries.end(),
+				[&](const Entry& entry) { return entry.coord == slot.coord; });
+			if (found != entries.end())
+			{
+				found->last_used_frame = std::max(
+					found->last_used_frame, slot.last_used_frame);
+			}
+			else if (!seen[index])
+			{
+				entries.push_back({ slot.coord, slot.last_used_frame, false });
+				seen[index] = true;
+			}
+		}
+		std::sort(entries.begin(), entries.end(),
+			[](const Entry& lhs, const Entry& rhs)
+			{
+				if (lhs.required != rhs.required)
+				{
+					return lhs.required > rhs.required;
+				}
+				if (lhs.last_used_frame != rhs.last_used_frame)
+				{
+					return lhs.last_used_frame > rhs.last_used_frame;
+				}
+				return lhs.coord.z != rhs.coord.z ?
+					lhs.coord.z < rhs.coord.z : lhs.coord.x < rhs.coord.x;
+			});
+		std::vector<TerrainComponentCoord> selected{};
+		selected.reserve(std::min(entries.size(),
+			static_cast<size_t>(k_terrain_weight_atlas_slot_count)));
+		for (size_t index = 0u;
+			index < entries.size() && index < k_terrain_weight_atlas_slot_count;
+			++index)
+		{
+			selected.push_back(entries[index].coord);
+		}
+		return selected;
+	}
+
+	void TerrainRenderAsset::freeze_candidate_initial_residency_locked(
+		uint64_t render_frame_index)
+	{
+		if (!m_candidate_state || !m_candidate_state->runtime ||
+			m_candidate_state->initial_set_frozen)
+		{
+			return;
+		}
+		const std::array<TerrainAtlasSlotMetadata,
+			k_terrain_weight_atlas_slot_count> empty_slots{};
+		const auto& old_slots = m_published_view && m_published_view->runtime ?
+			m_published_view->runtime->slots : empty_slots;
+		m_candidate_state->initial_resident_set = select_initial_resident_set(
+			*m_candidate_state->snapshot,
+			old_slots,
+			m_candidate_state->runtime->latest_required_residency);
+		m_candidate_state->runtime->weight_queue.clear();
+		for (const auto coord : m_candidate_state->initial_resident_set)
+		{
+			const size_t index = m_candidate_state->layout.component_linear_index(coord);
+			const auto& component = m_candidate_state->snapshot->components[index];
+			if (!component)
+			{
+				continue;
+			}
+			TerrainGpuComponentUpload upload{};
+			upload.asset_id = m_candidate_state->snapshot->asset_id;
+			upload.accepted_snapshot = m_candidate_state->snapshot;
+			upload.coord = coord;
+			upload.content_generation =
+				m_candidate_state->snapshot->content_generation;
+			upload.residency_revision =
+				m_candidate_state->snapshot->residency_revision;
+			upload.component = component;
+			m_candidate_state->runtime->weight_queue.push_back(std::move(upload));
+		}
+		m_candidate_state->initial_set_frozen = true;
+		m_candidate_state->last_progress_frame_index = render_frame_index;
+		update_candidate_ready_locked();
+	}
+
+	void TerrainRenderAsset::update_candidate_ready_locked()
+	{
+		if (!m_candidate_state || !m_candidate_state->runtime ||
+			m_candidate_state->work_status != TerrainRenderWorkStatus::Pending ||
+			!m_candidate_state->initial_set_frozen ||
+			!m_candidate_state->runtime->height_queue.empty() ||
+			!m_candidate_state->coarse_work.empty() ||
+			!m_candidate_state->runtime->weight_queue.empty())
+		{
+			return;
+		}
+		m_candidate_state->stage = TerrainRenderCandidateStage::ReadyToPublish;
+		m_candidate_state->work_status = TerrainRenderWorkStatus::ReadyToPublish;
+	}
+
+	bool TerrainRenderAsset::complete_candidate_coarse_locked(
+		const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
+		uint64_t candidate_epoch,
+		const TerrainGpuComponentUpload& expected,
+		bool succeeded,
+		uint64_t render_frame_index)
+	{
+		if (!m_candidate_state || !m_candidate_state->runtime ||
+			m_candidate_state->runtime != runtime ||
+			m_candidate_state->candidate_epoch != candidate_epoch ||
+			m_candidate_state->coarse_work.empty())
+		{
+			return false;
+		}
+		const TerrainGpuComponentUpload& pending =
+			m_candidate_state->coarse_work.front();
+		const auto expected_snapshot = expected.accepted_snapshot.lock();
+		if (!expected_snapshot || pending.accepted_snapshot.lock() != expected_snapshot ||
+			pending.asset_id != expected.asset_id || !(pending.coord == expected.coord) ||
+			pending.content_generation != expected.content_generation ||
+			pending.residency_revision != expected.residency_revision ||
+			pending.component != expected.component)
+		{
+			return false;
+		}
+		if (!succeeded)
+		{
+			fail_candidate_locked(m_candidate_state->runtime,
+				m_candidate_state->candidate_epoch,
+				"failed to dispatch Terrain candidate coarse work.");
+			return false;
+		}
+		m_candidate_state->coarse_work.erase(
+			m_candidate_state->coarse_work.begin());
+		m_candidate_state->last_progress_frame_index = render_frame_index;
+		update_candidate_ready_locked();
+		return true;
+	}
+
+	bool TerrainRenderAsset::complete_candidate_initial_locked(
+		const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
+		uint64_t candidate_epoch,
+		const TerrainGpuComponentUpload& expected,
+		bool succeeded,
+		uint64_t render_frame_index)
+	{
+		if (!m_candidate_state || !m_candidate_state->runtime ||
+			m_candidate_state->runtime != runtime ||
+			m_candidate_state->candidate_epoch != candidate_epoch ||
+			m_candidate_state->runtime->weight_queue.empty())
+		{
+			return false;
+		}
+		if (!matches_pending_weight_update_locked(runtime, expected))
+		{
+			return false;
+		}
+		if (!succeeded)
+		{
+			fail_candidate_locked(m_candidate_state->runtime,
+				m_candidate_state->candidate_epoch,
+				"failed to dispatch Terrain candidate initial resident work.");
+			return false;
+		}
+		const auto upload = m_candidate_state->runtime->weight_queue.front();
+		const size_t completed = m_candidate_state->initial_resident_set.size() -
+			m_candidate_state->runtime->weight_queue.size();
+		if (completed >= m_candidate_state->runtime->slots.size())
+		{
+			fail_candidate_locked(m_candidate_state->runtime,
+				m_candidate_state->candidate_epoch,
+				"Terrain candidate initial resident slot overflowed.");
+			return false;
+		}
+		auto& slot = m_candidate_state->runtime->slots[completed];
+		slot.asset_id = upload.asset_id;
+		slot.coord = upload.coord;
+		slot.content_generation = upload.content_generation;
+		slot.residency_revision = upload.residency_revision;
+		slot.last_used_frame = render_frame_index;
+		slot.occupied = true;
+		m_candidate_state->runtime->weight_queue.erase(
+			m_candidate_state->runtime->weight_queue.begin());
+		m_candidate_state->last_progress_frame_index = render_frame_index;
+		update_candidate_ready_locked();
+		return true;
+	}
+
+	bool TerrainRenderAsset::publish_ready_candidate_locked()
+	{
+		if (!m_candidate_state || !m_candidate_state->runtime ||
+			m_candidate_state->work_status != TerrainRenderWorkStatus::ReadyToPublish)
+		{
+			return false;
+		}
+		auto view = std::move(m_candidate_state->prepared_view);
+		if (!view || view->snapshot != m_candidate_state->snapshot ||
+			view->runtime != m_candidate_state->runtime)
+		{
+			const auto runtime = m_candidate_state->runtime;
+			const uint64_t candidate_epoch = m_candidate_state->candidate_epoch;
+			fail_candidate_locked(
+				runtime,
+				candidate_epoch,
+				"Terrain candidate publication view is unavailable.");
+			return false;
+		}
+		view->publication_epoch = m_published_view ?
+			m_published_view->publication_epoch + 1u : 1u;
+		m_candidate_state->runtime->work_status = TerrainRenderWorkStatus::Ready;
+		m_published_view = std::move(view);
+		m_candidate_state.reset();
 		m_last_error.clear();
 		return true;
+	}
+
+	void TerrainRenderAsset::record_required_residency(
+		const std::shared_ptr<const TerrainPublishedRenderView>& view,
+		const std::vector<TerrainComponentCoord>& required,
+		uint64_t render_frame_index)
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		if (view && view == m_published_view && view->runtime)
+		{
+			view->runtime->latest_required_residency = required;
+			for (auto& slot : view->runtime->slots)
+			{
+				if (slot.occupied && std::find(required.begin(), required.end(),
+					slot.coord) != required.end())
+				{
+					slot.last_used_frame = render_frame_index;
+				}
+			}
+		}
+		if (m_candidate_state && m_candidate_state->runtime &&
+			(!view || view == m_published_view))
+		{
+			m_candidate_state->runtime->latest_required_residency = required;
+		}
 	}
 }

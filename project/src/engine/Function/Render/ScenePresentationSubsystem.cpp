@@ -528,6 +528,11 @@ namespace AshEngine
 			m_impl->renderer != nullptr &&
 			m_impl->render_asset_manager != nullptr &&
 			m_impl->scene_renderer != nullptr;
+		if (bResult)
+		{
+			m_impl->scene_renderer->set_render_asset_manager(
+				m_impl->render_asset_manager);
+		}
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
@@ -553,6 +558,10 @@ namespace AshEngine
 		m_impl->has_last_delta_submit_time = false;
 		m_impl->last_delta_frame_index = std::numeric_limits<uint64_t>::max();
 		m_impl->last_scene_submission = {};
+		if (m_impl->scene_renderer)
+		{
+			m_impl->scene_renderer->set_render_asset_manager(nullptr);
+		}
 		m_impl->scene_renderer = nullptr;
 		m_impl->render_asset_manager = nullptr;
 		m_impl->renderer = nullptr;

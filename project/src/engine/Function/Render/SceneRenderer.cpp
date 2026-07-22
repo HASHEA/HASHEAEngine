@@ -770,6 +770,12 @@ namespace AshEngine
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);
 	}
 
+	void SceneRenderer::set_render_asset_manager(
+		RenderAssetManager* render_asset_manager)
+	{
+		m_render_asset_manager = render_asset_manager;
+	}
+
 	void SceneRenderer::shutdown()
 	{
 		m_debug_draw_vertex_capacity = 0;
@@ -805,6 +811,7 @@ namespace AshEngine
 		m_temporal_view_states.clear();
 		m_logged_warning_keys.clear();
 		m_logged_material_usage_keys.clear();
+		m_render_asset_manager = nullptr;
 		m_renderer = nullptr;
 	}
 
@@ -1154,10 +1161,18 @@ namespace AshEngine
 			output_width,
 			output_height);
 
+		m_terrain_render_pass.record_visible_requirements(
+			frame,
+			view_context,
+			render_frame_index);
+		const std::shared_ptr<TerrainRenderAsset> terrain_graph_asset =
+			m_render_asset_manager ?
+				m_render_asset_manager->acquire_next_terrain_graph_asset() : nullptr;
 		const TerrainGraphResources terrain_graph_resources =
 			m_terrain_render_pass.prepare_graph(
 				graph,
 				frame,
+				terrain_graph_asset,
 				render_frame_index);
 		const TerrainPreparedDrawPtr terrain_prepared_draw =
 			m_terrain_render_pass.prepare_draw(
@@ -1166,8 +1181,9 @@ namespace AshEngine
 				terrain_graph_resources,
 				render_frame_index);
 		const std::shared_ptr<RenderTarget> coarse_weight_target =
-			terrain_prepared_draw && terrain_prepared_draw->render_asset ?
-			terrain_prepared_draw->render_asset->coarse_weight_target() : nullptr;
+			terrain_prepared_draw && terrain_prepared_draw->published_view &&
+				terrain_prepared_draw->published_view->runtime ?
+				terrain_prepared_draw->published_view->runtime->resources.coarse : nullptr;
 		ASH_PROCESS_ERROR(
 			terrain_prepared_draw &&
 			terrain_prepared_draw->status != TerrainPreparedDrawStatus::Failed);

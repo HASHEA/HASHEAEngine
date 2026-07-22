@@ -285,6 +285,7 @@ namespace AshEngine
 		m_renderer = nullptr;
 		m_activity_epoch = 0;
 		m_pending_render_asset_count = 0;
+		m_last_terrain_graph_schedule_key.clear();
 	}
 
 	std::shared_ptr<const TerrainFallbackMaterialArrays>
@@ -975,17 +976,27 @@ namespace AshEngine
 			return false;
 		}
 
-		TerrainRenderReadiness terminal_state = asset->readiness();
-		bool succeeded = terminal_state == TerrainRenderReadiness::Ready;
-		if (terminal_state == TerrainRenderReadiness::Pending &&
+		TerrainRenderWorkStatus work_status = asset->latest_work_status();
+		if (work_status == TerrainRenderWorkStatus::ReadyToPublish)
+		{
+			std::scoped_lock<std::mutex> asset_lock(asset->m_mutex);
+			asset->publish_ready_candidate_locked();
+			work_status = asset->m_candidate_state ?
+				asset->m_candidate_state->work_status :
+				(asset->m_published_view && asset->m_published_view->runtime ?
+					asset->m_published_view->runtime->work_status :
+					TerrainRenderWorkStatus::Pending);
+		}
+		bool succeeded = work_status == TerrainRenderWorkStatus::Ready;
+		if (work_status == TerrainRenderWorkStatus::Pending &&
 			(!m_renderer ||
 				!require_render_thread_for_gpu_asset_work("finalize_pending_terrain_asset")))
 		{
 			std::scoped_lock<std::mutex> asset_lock(asset->m_mutex);
-			asset->fail_active_generation(
+			asset->fail_latest_work_locked(
 				"Terrain GPU resources must be finalized on the render thread.");
 		}
-		else if (terminal_state == TerrainRenderReadiness::Pending)
+		else if (work_status == TerrainRenderWorkStatus::Pending)
 		{
 			const auto fallback_arrays =
 				request_terrain_fallback_material_arrays();
@@ -993,7 +1004,7 @@ namespace AshEngine
 				!asset->set_fallback_material_arrays(fallback_arrays))
 			{
 				std::scoped_lock<std::mutex> asset_lock(asset->m_mutex);
-				asset->fail_active_generation(
+				asset->fail_latest_work_locked(
 					"failed to create shared Terrain fallback material arrays.");
 			}
 			else
@@ -1003,9 +1014,9 @@ namespace AshEngine
 			}
 		}
 
-		terminal_state = asset->readiness();
-		if (terminal_state != TerrainRenderReadiness::Ready &&
-			terminal_state != TerrainRenderReadiness::Failed)
+		work_status = asset->latest_work_status();
+		if (work_status != TerrainRenderWorkStatus::Ready &&
+			work_status != TerrainRenderWorkStatus::Failed)
 		{
 			return false;
 		}
@@ -1020,7 +1031,7 @@ namespace AshEngine
 		{
 			--m_pending_render_asset_count;
 		}
-		if (terminal_state == TerrainRenderReadiness::Failed)
+		if (work_status == TerrainRenderWorkStatus::Failed)
 		{
 			m_failed_terrain_requests.insert(key);
 		}
@@ -1030,6 +1041,69 @@ namespace AshEngine
 		}
 		++m_activity_epoch;
 		return succeeded;
+	}
+
+	std::shared_ptr<TerrainRenderAsset>
+		RenderAssetManager::acquire_next_terrain_graph_asset()
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		std::vector<std::string> keys(
+			m_pending_terrain_requests.begin(),
+			m_pending_terrain_requests.end());
+		if (keys.empty())
+		{
+			m_last_terrain_graph_schedule_key.clear();
+			return nullptr;
+		}
+		std::sort(keys.begin(), keys.end());
+		size_t start = 0u;
+		if (!m_last_terrain_graph_schedule_key.empty())
+		{
+			start = static_cast<size_t>(std::distance(
+				keys.begin(),
+				std::upper_bound(keys.begin(), keys.end(),
+					m_last_terrain_graph_schedule_key)));
+			if (start == keys.size())
+			{
+				start = 0u;
+			}
+		}
+
+		for (size_t offset = 0u; offset < keys.size(); ++offset)
+		{
+			const std::string& key = keys[(start + offset) % keys.size()];
+			const auto found = m_terrain_assets.find(key);
+			if (found == m_terrain_assets.end() || !found->second)
+			{
+				continue;
+			}
+			const auto& asset = found->second;
+			std::scoped_lock<std::mutex> asset_lock(asset->m_mutex);
+			const bool candidate_ready_for_graph =
+				asset->m_candidate_state &&
+				asset->m_candidate_state->runtime &&
+				asset->m_candidate_state->work_status ==
+					TerrainRenderWorkStatus::Pending &&
+				asset->m_candidate_state->runtime->resources.is_complete() &&
+				asset->m_candidate_state->runtime->height_queue.empty() &&
+				(!asset->m_candidate_state->initial_set_frozen ||
+					!asset->m_candidate_state->coarse_work.empty() ||
+					!asset->m_candidate_state->runtime->weight_queue.empty());
+			const bool incremental_ready_for_graph =
+				!asset->m_candidate_state && asset->m_published_view &&
+				asset->m_published_view->runtime &&
+				asset->m_published_view->runtime->work_status ==
+					TerrainRenderWorkStatus::Pending &&
+				asset->m_published_view->runtime->resources.is_complete() &&
+				asset->m_published_view->runtime->height_queue.empty() &&
+				!asset->m_published_view->runtime->weight_queue.empty();
+			if (candidate_ready_for_graph || incremental_ready_for_graph)
+			{
+				m_last_terrain_graph_schedule_key = key;
+				return asset;
+			}
+		}
+		return nullptr;
 	}
 
 	void RenderAssetManager::finalize_pending_assets()

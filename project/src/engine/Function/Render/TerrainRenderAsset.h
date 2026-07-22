@@ -138,6 +138,118 @@ namespace AshEngine
 		friend struct TerrainRenderAssetCpuTestSeam;
 	};
 
+	struct TerrainGpuComponentUpload
+	{
+		uint64_t asset_id = 0u;
+		std::weak_ptr<const TerrainAssetSnapshot> accepted_snapshot{};
+		TerrainComponentCoord coord{};
+		uint64_t content_generation = 0u;
+		uint64_t residency_revision = 0u;
+		std::shared_ptr<const TerrainComponentSnapshot> component{};
+	};
+
+	struct TerrainAtlasSlotMetadata
+	{
+		uint64_t asset_id = 0u;
+		TerrainComponentCoord coord{};
+		uint64_t content_generation = 0u;
+		uint64_t residency_revision = 0u;
+		uint64_t last_used_frame = 0u;
+		bool occupied = false;
+	};
+
+	struct ASH_API TerrainRenderResourceSet
+	{
+		std::shared_ptr<StorageBuffer> height{};
+		std::shared_ptr<StorageBuffer> staging{};
+		std::array<std::shared_ptr<RenderTarget>, 2> atlas{};
+		std::shared_ptr<RenderTarget> coarse{};
+
+		bool is_complete() const;
+	};
+
+	enum class TerrainRenderWorkStatus : uint8_t
+	{
+		Pending = 0,
+		ReadyToPublish,
+		Ready,
+		Failed
+	};
+
+	enum class TerrainRenderCandidateStage : uint8_t
+	{
+		CreateResources = 0,
+		UploadHeights,
+		AwaitGraphWork,
+		ReadyToPublish,
+		Failed
+	};
+
+	struct ASH_API TerrainRenderRuntimeState
+	{
+		TerrainRenderResourceSet resources{};
+		std::array<TerrainAtlasSlotMetadata, k_terrain_weight_atlas_slot_count>
+			slots{};
+		std::vector<TerrainGpuComponentUpload> height_queue{};
+		std::vector<TerrainGpuComponentUpload> weight_queue{};
+		std::vector<TerrainComponentCoord> reset_queue{};
+		std::vector<TerrainComponentCoord> removal_queue{};
+		TerrainRenderAssetState state{};
+		std::shared_ptr<const TerrainAssetSnapshot> target_snapshot{};
+		std::vector<TerrainComponentCoord> latest_required_residency{};
+		TerrainRenderWorkStatus work_status = TerrainRenderWorkStatus::Pending;
+		uint64_t last_atlas_completion_frame = 0u;
+		bool has_atlas_completion = false;
+	};
+
+	struct TerrainPublishedRenderView;
+
+	struct ASH_API TerrainRenderCandidateState
+	{
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		TerrainRenderLayoutInfo layout{};
+		std::shared_ptr<TerrainRenderRuntimeState> runtime{};
+		std::shared_ptr<TerrainPublishedRenderView> prepared_view{};
+		std::vector<TerrainComponentCoord> initial_resident_set{};
+		std::vector<TerrainGpuComponentUpload> coarse_work{};
+		TerrainRenderCandidateStage stage =
+			TerrainRenderCandidateStage::CreateResources;
+		TerrainRenderWorkStatus work_status = TerrainRenderWorkStatus::Pending;
+		uint64_t candidate_epoch = 0u;
+		uint64_t peak_resource_bytes = 0u;
+		uint64_t last_progress_frame_index = 0u;
+		std::string error{};
+		bool initial_set_frozen = false;
+	};
+
+	struct ASH_API TerrainPublishedRenderView
+	{
+		std::shared_ptr<const TerrainAssetSnapshot> snapshot{};
+		TerrainRenderLayoutInfo layout{};
+		std::shared_ptr<TerrainRenderRuntimeState> runtime{};
+		uint64_t asset_id = 0u;
+		uint64_t content_generation = 0u;
+		uint64_t residency_revision = 0u;
+		uint64_t publication_epoch = 0u;
+	};
+
+	// Function-private adapter seam. Production forwards to Renderer/resources;
+	// tests inject sentinel resources and deterministic stage failures.
+	class TerrainRenderGpuOps
+	{
+	public:
+		virtual ~TerrainRenderGpuOps() = default;
+		virtual std::shared_ptr<StorageBuffer> create_storage_buffer(
+			const StorageBufferDesc& desc) = 0;
+		virtual std::shared_ptr<RenderTarget> create_render_target(
+			const RenderTargetDesc& desc) = 0;
+		virtual bool update_storage_buffer(
+			const std::shared_ptr<StorageBuffer>& buffer,
+			uint32_t offset,
+			uint32_t size,
+			const void* data) = 0;
+	};
+
 	ASH_API bool build_terrain_component_gpu_data(
 		const TerrainComponentSnapshot& component,
 		const TerrainHeightMapping& height_mapping,
@@ -186,6 +298,8 @@ namespace AshEngine
 		uint32_t pending_component_removal_count() const;
 		bool has_pending_component_removal(TerrainComponentCoord coord) const;
 		std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot() const;
+		std::shared_ptr<const TerrainPublishedRenderView> published_view() const;
+		TerrainRenderWorkStatus latest_work_status() const;
 		TerrainShadowCasterIdentity snapshot_shadow_caster_identity() const;
 		std::string get_last_error() const;
 
@@ -198,55 +312,70 @@ namespace AshEngine
 			const std::shared_ptr<const TerrainFallbackMaterialArrays>& arrays);
 
 	private:
-		struct TerrainGpuComponentUpload
-		{
-			uint64_t asset_id = 0u;
-			std::weak_ptr<const TerrainAssetSnapshot> accepted_snapshot{};
-			TerrainComponentCoord coord{};
-			uint64_t content_generation = 0u;
-			uint64_t residency_revision = 0u;
-			std::shared_ptr<const TerrainComponentSnapshot> component{};
-		};
-
-		struct TerrainAtlasSlotMetadata
-		{
-			uint64_t asset_id = 0u;
-			TerrainComponentCoord coord{};
-			uint64_t content_generation = 0u;
-			uint64_t residency_revision = 0u;
-			uint64_t last_used_frame = 0u;
-			bool occupied = false;
-			bool pinned = false;
-		};
-
+		bool accept_snapshot_with_peak_budget(
+			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
+			uint64_t peak_budget,
+			std::string* out_error);
 		bool matches_pending_weight_update_locked(
+			const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
 			const TerrainGpuComponentUpload& expected) const;
 		bool finalize_gpu_resources(Renderer& renderer, std::string* out_error);
-		void fail_active_generation(const std::string& error);
+		bool finalize_gpu_resources(
+			TerrainRenderGpuOps& gpu_ops,
+			std::string* out_error);
+		bool finalize_runtime_gpu_resources_locked(
+			TerrainRenderRuntimeState& runtime,
+			const TerrainRenderLayoutInfo& layout,
+			TerrainRenderGpuOps& gpu_ops,
+			bool candidate,
+			std::string* out_error);
+		void fail_latest_work_locked(const std::string& error);
+		void fail_candidate_locked(
+			const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
+			uint64_t candidate_epoch,
+			const std::string& error);
+		void freeze_candidate_initial_residency_locked(uint64_t render_frame_index);
+		bool complete_candidate_coarse_locked(
+			const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
+			uint64_t candidate_epoch,
+			const TerrainGpuComponentUpload& expected,
+			bool succeeded,
+			uint64_t render_frame_index);
+		bool complete_candidate_initial_locked(
+			const std::shared_ptr<TerrainRenderRuntimeState>& runtime,
+			uint64_t candidate_epoch,
+			const TerrainGpuComponentUpload& expected,
+			bool succeeded,
+			uint64_t render_frame_index);
+		bool publish_ready_candidate_locked();
+		void update_candidate_ready_locked();
+		void record_required_residency(
+			const std::shared_ptr<const TerrainPublishedRenderView>& view,
+			const std::vector<TerrainComponentCoord>& required,
+			uint64_t render_frame_index);
+		static std::vector<TerrainComponentCoord> select_initial_resident_set(
+			const TerrainAssetSnapshot& snapshot,
+			const std::array<TerrainAtlasSlotMetadata,
+				k_terrain_weight_atlas_slot_count>& old_slots,
+			const std::vector<TerrainComponentCoord>& required);
+		std::shared_ptr<const TerrainAssetSnapshot>
+			latest_admitted_snapshot_locked() const;
+		std::shared_ptr<TerrainRenderRuntimeState>
+			current_incremental_runtime_locked() const;
+		uint64_t allocate_candidate_epoch_locked();
 
 	private:
 		mutable std::mutex m_mutex{};
 		std::string m_asset_path{};
-		std::shared_ptr<const TerrainAssetSnapshot> m_accepted_snapshot{};
-		TerrainRenderLayoutInfo m_accepted_render_layout{};
-		bool m_has_accepted_render_layout = false;
-		std::vector<TerrainGpuComponentUpload> m_pending_component_uploads{};
-		std::vector<TerrainGpuComponentUpload> m_pending_weight_updates{};
-		std::vector<TerrainComponentCoord> m_pending_implicit_weight_resets{};
-		std::vector<TerrainComponentCoord> m_pending_component_removals{};
-		TerrainRenderAssetState m_state{};
+		std::shared_ptr<const TerrainPublishedRenderView> m_published_view{};
+		std::unique_ptr<TerrainRenderCandidateState> m_candidate_state{};
+		uint64_t m_next_candidate_epoch = 1u;
 		std::string m_last_error{};
-
-		std::shared_ptr<StorageBuffer> m_packed_height_buffer{};
-		std::shared_ptr<StorageBuffer> m_dirty_weight_staging_buffer{};
-		std::array<std::shared_ptr<RenderTarget>, 2> m_weight_atlases{};
-		std::shared_ptr<RenderTarget> m_coarse_weight_target{};
 		std::shared_ptr<const TerrainFallbackMaterialArrays>
 			m_fallback_material_arrays{};
-		std::array<TerrainAtlasSlotMetadata, k_terrain_weight_atlas_slot_count>
-			m_frame_boundary_atlas_slots{};
 		friend class RenderAssetManager;
 		friend class TerrainRenderPass;
 		friend struct TerrainRenderAssetCpuTestSeam;
+		friend struct TerrainRenderGraphTestSeam;
 	};
 }

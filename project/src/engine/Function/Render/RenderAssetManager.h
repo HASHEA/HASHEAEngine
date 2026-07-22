@@ -93,6 +93,8 @@ namespace AshEngine
 			std::vector<ResolvedStaticMeshSection>& out_sections);
 		bool finalize_pending_static_mesh_asset(const std::shared_ptr<StaticMeshRenderAsset>& asset);
 		bool finalize_pending_terrain_asset(const std::shared_ptr<TerrainRenderAsset>& asset);
+		std::shared_ptr<TerrainRenderAsset>
+			acquire_next_terrain_graph_asset();
 		void finalize_pending_assets();
 		bool has_requested_render_assets() const;
 		bool has_pending_render_assets() const;
@@ -176,6 +178,7 @@ namespace AshEngine
 			m_terrain_fallback_material_arrays{};
 		uint64_t m_activity_epoch = 0;
 		uint32_t m_pending_render_asset_count = 0;
+		std::string m_last_terrain_graph_schedule_key{};
 		MaterialSystem m_material_system{};
 	};
 }
