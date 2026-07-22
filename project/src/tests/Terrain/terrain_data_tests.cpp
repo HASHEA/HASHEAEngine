@@ -49,6 +49,42 @@ TEST_CASE("Terrain data maps shared and outer samples to one owning component")
 	CHECK(last_owned.height() == 257u);
 }
 
+TEST_CASE("Terrain authoring extent normalization clamps and snaps ties upward")
+{
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(100u) == 256u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(300u) == 256u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(384u) == 512u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(500u) == 512u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(3000u) == 2048u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(3500u) == 4096u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(9000u) == 8192u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(256u) == 256u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(2048u) == 2048u);
+	CHECK(AshEngine::normalize_terrain_authoring_extent_meters(8192u) == 8192u);
+}
+
+TEST_CASE("Terrain authoring layouts derive independent axes at one meter spacing")
+{
+	auto CheckLayout = [](uint32_t requested_x, uint32_t requested_z,
+		uint32_t expected_sample_x, uint32_t expected_sample_z,
+		uint32_t expected_components_x, uint32_t expected_components_z)
+	{
+		const AshEngine::TerrainGridLayout layout =
+			AshEngine::make_terrain_authoring_grid_layout(requested_x, requested_z);
+		CHECK(layout.sample_count_x == expected_sample_x);
+		CHECK(layout.sample_count_z == expected_sample_z);
+		CHECK(layout.component_count_x == expected_components_x);
+		CHECK(layout.component_count_z == expected_components_z);
+		CHECK(layout.component_quad_count == 256u);
+		CHECK(layout.sample_spacing_meters == 1.0f);
+		CHECK(AshEngine::is_valid_terrain_grid_layout(layout));
+	};
+
+	CheckLayout(2048u, 2048u, 2049u, 2049u, 8u, 8u);
+	CheckLayout(256u, 8192u, 257u, 8193u, 1u, 32u);
+	CheckLayout(2048u, 4096u, 2049u, 4097u, 8u, 16u);
+}
+
 TEST_CASE("Terrain data validates layouts without overflowing count math")
 {
 	const AshEngine::TerrainGridLayout small = TerrainTests::MakeSmallLayout();

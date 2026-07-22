@@ -109,6 +109,42 @@ namespace AshEngine
 		return {};
 	}
 
+	uint32_t normalize_terrain_authoring_extent_meters(uint32_t requested_extent_meters) noexcept
+	{
+		const uint32_t clamped_extent = std::max(
+			k_terrain_authoring_extent_min_meters,
+			std::min(requested_extent_meters, k_terrain_authoring_extent_max_meters));
+		uint32_t lower_extent = k_terrain_authoring_extent_min_meters;
+		while (lower_extent < k_terrain_authoring_extent_max_meters)
+		{
+			const uint32_t upper_extent = lower_extent * 2u;
+			if (clamped_extent <= upper_extent)
+			{
+				return clamped_extent - lower_extent < upper_extent - clamped_extent
+					? lower_extent
+					: upper_extent;
+			}
+			lower_extent = upper_extent;
+		}
+		return k_terrain_authoring_extent_max_meters;
+	}
+
+	TerrainGridLayout make_terrain_authoring_grid_layout(
+		uint32_t requested_extent_x_meters,
+		uint32_t requested_extent_z_meters) noexcept
+	{
+		const uint32_t extent_x = normalize_terrain_authoring_extent_meters(requested_extent_x_meters);
+		const uint32_t extent_z = normalize_terrain_authoring_extent_meters(requested_extent_z_meters);
+		return {
+			extent_x + 1u,
+			extent_z + 1u,
+			extent_x / k_terrain_component_quad_count,
+			extent_z / k_terrain_component_quad_count,
+			k_terrain_component_quad_count,
+			1.0f
+		};
+	}
+
 	bool is_valid_terrain_grid_layout(const TerrainGridLayout& layout)
 	{
 		if (layout.sample_count_x == 0u ||

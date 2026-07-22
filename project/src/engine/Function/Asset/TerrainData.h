@@ -20,6 +20,9 @@ namespace AshEngine
 	static constexpr uint32_t k_terrain_component_quad_count = 256u;
 	static constexpr uint32_t k_terrain_component_sample_count = 257u;
 	static constexpr uint32_t k_terrain_material_layer_count = 8u;
+	inline constexpr uint32_t k_terrain_authoring_extent_min_meters = 256u;
+	inline constexpr uint32_t k_terrain_authoring_extent_default_meters = 2048u;
+	inline constexpr uint32_t k_terrain_authoring_extent_max_meters = 8192u;
 
 	struct TerrainLayerId
 	{
@@ -221,6 +224,10 @@ namespace AshEngine
 	};
 
 	ASH_API auto make_default_terrain_grid_layout() -> TerrainGridLayout;
+	ASH_API auto normalize_terrain_authoring_extent_meters(uint32_t requested_extent_meters) noexcept -> uint32_t;
+	ASH_API auto make_terrain_authoring_grid_layout(
+		uint32_t requested_extent_x_meters,
+		uint32_t requested_extent_z_meters) noexcept -> TerrainGridLayout;
 	ASH_API auto is_valid_terrain_grid_layout(const TerrainGridLayout& layout) -> bool;
 	ASH_API auto get_terrain_sample_owner(
 		const TerrainGridLayout& layout,
