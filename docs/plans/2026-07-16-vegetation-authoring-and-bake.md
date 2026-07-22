@@ -30,7 +30,7 @@
 - Do not include or copy Terrain branch internals. The only production surface provider in this phase is a nullable injected interface; deterministic providers live under `project/src/tests/` only.
 - Do not add a third-party dependency, a render-ready state, a GPU upload, a renderer registration, a `VisibleRenderFrame` field, or a GPUDriven conversion.
 - New test `.cpp` files require a fresh `generate_vs2022.bat`. `project/src/tests/premake5.lua` changes are limited to explicitly linking the Scene/Editor production `.cpp` files itemized by Tasks 4, 6, 9, and 11; do not add broad source globs.
-- Every GPU, RenderGate, or PerfGate command requires a newly coordinated exclusive window. Before Task 12, the only GPU use is Task 3's repository-mandated four-combination Debug readiness smoke; Tasks 4–11 remain CPU/static only.
+- Every GPU, RenderGate, or PerfGate command requires a newly coordinated exclusive window. Before Task 12, the only GPU use is the repository-mandated four-combination Debug readiness smoke in Tasks 3 and 7; Tasks 4–6 and 8–11 remain CPU/static only.
 - Every focused commit must use an explicit `git add -- <paths>` list and pass this staged-path audit before commit:
 
 ```powershell
@@ -177,6 +177,8 @@ Also add cases for:
 - capture `Ready+snapshot`, `Ready+null`, `Pending+null`, `Pending+snapshot`, `Failed+null`, `Outside`;
 - all-zero `surface_id` rejection and a scripted snapshot whose `identity()` returns one valid identity before `sample_batch` and a different content/residency/transform identity afterward; both must return `Failed` with no published samples;
 - a pre-cancelled control and an expired absolute deadline returning `Failed` before provider output is accepted.
+
+Identity REDs additionally prove: every present inspection and every successful stage carries a stable native volume/file-index identity; absent/failed shapes clear it; case-only and hard-link aliases to an existing target fail before writer use; and an alias formed only after the initial absent-target inspection is caught by the mandatory post-stage target reinspection. A consumed-publication RED leaves the registry in `Publishing` after the stage object has disappeared and requires exact-`NotFound` reconciliation to clear only that ghost entry.
 
 - [ ] **Step 2: Run RED**
 
@@ -1250,7 +1252,7 @@ Vegetation patch targets.
 - Create: `project/src/tests/Vegetation/vegetation_storage_tests.cpp`
 - Modify: `project/src/tests/Vegetation/VegetationTestSupport.h`
 
-- [ ] **Step 1: Write transactional storage RED cases**
+- [x] **Step 1: Write transactional storage RED cases**
 
 ```cpp
 TEST_CASE("Vegetation storage checked save never replaces an externally changed Layer")
@@ -1269,16 +1271,17 @@ TEST_CASE("Vegetation storage checked save never replaces an externally changed 
         AshEngine::prepare_vegetation_layer_write(
             root.Path(), target_relative, opened.revision, *opened.snapshot, 7,
             VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
-    REQUIRE(prepared.status == AshEngine::VegetationStorageStatus::Prepared);
+    REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
     const std::vector<uint8_t> external = VegetationTest::DifferentValidLayerBytes();
     VegetationTest::WriteAllBytes(target_absolute, external);
 
     const AshEngine::VegetationStorageResult committed =
         AshEngine::commit_vegetation_layer_write(
-            prepared, 7, cleanup_registry);
+            prepared, 7, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+            cleanup_registry);
     CHECK(committed.status == AshEngine::VegetationStorageStatus::SourceChanged);
     CHECK(VegetationTest::ReadAllBytes(target_absolute) == external);
-    CHECK_FALSE(std::filesystem::exists(prepared.stage_path));
+    CHECK_FALSE(std::filesystem::exists(prepared.stage_path()));
 }
 
 TEST_CASE("Vegetation storage Save Copy As is create-new and never rebinds the source")
@@ -1293,19 +1296,20 @@ TEST_CASE("Vegetation storage Save Copy As is create-new and never rebinds the s
     const auto prepared = AshEngine::prepare_vegetation_layer_copy_as(
         root.Path(), destination_relative, *VegetationTest::MinimalLayerSnapshot(), 11,
         VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
-    REQUIRE(prepared.status == AshEngine::VegetationStorageStatus::Prepared);
+    REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
     VegetationTest::WriteAllBytes(destination_absolute, VegetationTest::DifferentValidLayerBytes());
     const auto result = AshEngine::commit_vegetation_layer_copy_as(
-        prepared, 11, cleanup_registry);
+        prepared, 11, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+        cleanup_registry);
     CHECK(result.status == AshEngine::VegetationStorageStatus::AlreadyExists);
     CHECK(VegetationTest::ReadAllBytes(destination_absolute) == VegetationTest::DifferentValidLayerBytes());
     CHECK(std::filesystem::exists(source_absolute));
 }
 ```
 
-Add same-byte revision, same-buffer SHA/parse, lowercase canonical-path mutex identity, asset-root and extension checks, absolute/dot-segment/reparse rejection, idempotent checked parent creation, unique same-directory sibling stage file, strict readback, flush, source revision recheck, serial mismatch, create-new copy, cooperative two-writer race, stale completion, cancel before/after every <=1 MiB write block, directory/stage/readback/flush/replace failure injection, and shutdown cleanup. Add a FileOps legal-shape table test: valid absent `InspectPath` is `Succeeded` with canonical relative/absolute/identity populated and `exists=false,is_regular_file=false`; an existing file is `Succeeded/true/true`; an existing directory is `Succeeded/true/false`; invalid input is `InvalidPath` with every resolved identity/path cleared and both booleans false; absent `ReadAllBytes` is `NotFound` with empty bytes. A first-save test creates a previously absent nested parent through `EnsureDirectoryTree`; an nth-component failure leaves the target absent, while two cooperative creators converge on the same safe parent but receive distinct sibling stage files. `ScriptedVegetationFileOps` fails a selected `(VegetationFileOpKind, occurrence)` and records every path/offset/byte span, so each directory component, sibling-stage create, write-block, readback, flush, lease, replace, create-new, and owned-stage-file cleanup path is an independently reproducible RED. If `RemoveOwnedStageFile` fails, the operation remains Failed and retains only that exact owned stage file in its cleanup registry; shutdown retries it, never broadens deletion to the parent, and reports failure if it still cannot remove it. A RED fails the first cleanup, succeeds on shutdown retry, and proves no unrelated path is touched. Tests do not claim protection against a same-permission process that bypasses this API between revision check and replace.
+Add same-byte revision, same-buffer SHA/parse, bounded-read exact-limit/oversize rejection, lowercase canonical-path mutex identity, asset-root and extension checks, absolute/dot-segment/reparse rejection, idempotent checked parent creation, unique same-directory sibling stage file, stable writer-handle block ordering, strict readback, flush/close, source revision recheck, serial mismatch, bounded lease timeout, create-new copy, cooperative two-writer race, stale completion, cancel before/after every <=1 MiB write block, after lease acquisition, after target reread and immediately before publish, directory/stage/readback/flush/replace failure injection, and shutdown cleanup. Add a FileOps legal-shape table test: valid absent `InspectPath` is `Succeeded` with canonical relative/absolute/identity populated and `exists=false,is_regular_file=false`; an existing file is `Succeeded/true/true`; an existing directory is `Succeeded/true/false`; invalid input is `InvalidPath` with every resolved identity/path cleared and both booleans false; absent `ReadAllBytes` is `NotFound` with empty bytes, exact-limit succeeds, and limit+1 returns `LimitExceeded` with empty bytes. The same table rejects Succeeded stage results with empty path/null writer, failed results retaining either field, invalid stage-tree shapes, Acquired leases with null, non-Acquired leases with an object, `Replaced/TargetPreserved` carrying a recovery path, and `RecoveryRequired` with an empty/relative path; tests inject each illegal shape and require the storage consumer to fail before using its payload. The production failed-replace policy receives exact target/backup probe states and deterministically covers error 1177 with backup `PresentRegular / Missing / ProbeFailed / Invalid`, plus every `Publishing` terminal transition; it is not inferred from destructive live fault injection. Writer tests reject zero or >1 MiB spans, non-contiguous offsets, every call after successful `FlushAndClose`, and a second flush. Prepared-write tests prove external code cannot construct a populated/rebound capability, move leaves the source empty Failed, an incomplete operation control fails before mutation, `AtomicReplace` rejects an absent target, and an idempotent `ForgetConsumed*` cannot downgrade a successful replace or create-new publish. A first-save test creates a previously absent nested parent through `EnsureDirectoryTree`; an nth-component failure leaves the target absent, while two cooperative creators converge on the same safe parent but receive distinct sibling stage files. `ScriptedVegetationFileOps` fails a selected `(VegetationFileOpKind, occurrence)` and records every path/offset/byte span, so each directory component, sibling-stage create, write-block, readback, flush/close, lease, replace, create-new, and owned-stage-file cleanup path is an independently reproducible RED. If `RemoveOwnedStageFile` fails, the operation remains Failed and retains only that exact owned stage file in its cleanup registry; shutdown retries it, never broadens deletion to the parent, and reports failure if it still cannot remove it. A RED fails the first targeted cleanup, succeeds on shutdown retry, and proves no unrelated registry path is touched. Tests do not claim protection against a same-permission process that bypasses this API between revision check and replace.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bat
 generate_vs2022.bat
@@ -1314,13 +1318,20 @@ RunTests.bat Debug --test-case="Vegetation storage*"
 
 Expected RED: file revision, prepared write, named lease, checked commit, and copy APIs are missing.
 
-- [ ] **Step 3: Implement split worker/main-thread storage operations**
+- [x] **Step 3: Implement split worker/main-thread storage operations**
 
 ```cpp
 struct VegetationFileRevision
 {
     uint64_t file_size = 0;
     VegetationSha256 sha256{};
+};
+
+struct VegetationFileIdentity
+{
+    bool available = false;
+    uint64_t volume_serial_number = 0;
+    uint64_t file_index = 0;
 };
 
 enum class VegetationFileOpKind : uint8_t
@@ -1330,8 +1341,9 @@ enum class VegetationFileOpKind : uint8_t
     EnsureDirectoryTree,
     CreateUniqueSiblingStageFile,
     CreateUniqueStageTree,
+    CreateOwnedStageFile,
     WriteBlock,
-    Flush,
+    FlushAndClose,
     PublishImmutableFromStage,
     AcquireNamedLease,
     AtomicReplace,
@@ -1347,11 +1359,34 @@ enum class VegetationCreateNewStatus : uint8_t
     Failed
 };
 
+enum class VegetationAtomicReplaceStatus : uint8_t
+{
+    Replaced,
+    TargetPreserved,
+    RecoveryRequired
+};
+
+enum class VegetationStageFilePublishResolution : uint8_t
+{
+    TargetPreserved,
+    Consumed,
+    RecoveryRequired
+};
+
+struct VegetationAtomicReplaceResult
+{
+    VegetationAtomicReplaceStatus status =
+        VegetationAtomicReplaceStatus::RecoveryRequired;
+    std::filesystem::path recovery_path{};
+    std::string error{};
+};
+
 enum class VegetationFileResultStatus : uint8_t
 {
     Succeeded,
     NotFound,
     InvalidPath,
+    LimitExceeded,
     Failed
 };
 
@@ -1361,6 +1396,7 @@ struct VegetationFileInspection
     std::filesystem::path canonical_relative_path{};
     std::filesystem::path resolved_absolute_path{};
     std::string canonical_identity{};
+    VegetationFileIdentity file_identity{};
     bool exists = false;
     bool is_regular_file = false;
     std::string error{};
@@ -1373,10 +1409,14 @@ struct VegetationFileBytesResult
     std::string error{};
 };
 
+class IVegetationStageFileWriter;
+
 struct VegetationStageFileResult
 {
     VegetationFileResultStatus status = VegetationFileResultStatus::Failed;
     std::filesystem::path owned_stage_file{};
+    VegetationFileIdentity file_identity{};
+    std::unique_ptr<IVegetationStageFileWriter> writer{};
     std::string error{};
 };
 
@@ -1389,9 +1429,12 @@ struct VegetationStageTreeResult
 
 // Legal result shapes are part of the interface contract. A valid absent
 // InspectPath target is Succeeded with canonical paths/identity populated and
-// exists=false/is_regular_file=false. InvalidPath/Failed clear those fields.
-// ReadAllBytes uses NotFound only for an absent target and returns no bytes for
-// every non-Succeeded status.
+// exists=false/is_regular_file=false and unavailable file identity. Every
+// existing Succeeded inspection carries native file identity. Every
+// non-Succeeded inspection clears paths/identity and both booleans.
+// ReadAllBytes uses NotFound only for an absent target, LimitExceeded only when
+// the immutable snapshot cannot fit the caller ceiling, and returns no bytes
+// for every non-Succeeded status.
 
 class ASH_API IVegetationFileLease
 {
@@ -1399,10 +1442,33 @@ public:
     virtual ~IVegetationFileLease() = default;
 };
 
+enum class VegetationFileLeaseStatus : uint8_t
+{
+    Acquired,
+    Cancelled,
+    TimedOut,
+    Failed
+};
+
+struct VegetationFileLeaseResult
+{
+    VegetationFileLeaseStatus status = VegetationFileLeaseStatus::Failed;
+    std::unique_ptr<IVegetationFileLease> lease{};
+    std::string error{};
+};
+
 struct VegetationByteSpan
 {
     const uint8_t* data = nullptr;
     size_t size = 0;
+};
+
+class ASH_API IVegetationStageFileWriter
+{
+public:
+    virtual ~IVegetationStageFileWriter() = default;
+    virtual bool WriteBlock(uint64_t offset, VegetationByteSpan bytes) = 0;
+    virtual bool FlushAndClose() = 0;
 };
 
 class ASH_API IVegetationStageFileOps
@@ -1413,7 +1479,8 @@ public:
         const std::filesystem::path& asset_root,
         const std::filesystem::path& path) = 0;
     virtual VegetationFileBytesResult ReadAllBytes(
-        const std::filesystem::path& path) = 0;
+        const std::filesystem::path& path,
+        uint64_t max_bytes) = 0;
     virtual VegetationFileResultStatus EnsureDirectoryTree(
         const std::filesystem::path& asset_root,
         const std::filesystem::path& relative_directory) = 0;
@@ -1423,10 +1490,9 @@ public:
     virtual VegetationStageTreeResult CreateUniqueStageTree(
         const std::filesystem::path& store_root,
         uint64_t operation_serial) = 0;
-    virtual bool WriteBlock(const std::filesystem::path& stage,
-                            uint64_t offset,
-                            VegetationByteSpan bytes) = 0;
-    virtual bool Flush(const std::filesystem::path& path) = 0;
+    virtual VegetationStageFileResult CreateOwnedStageFile(
+        const std::filesystem::path& owned_stage_root,
+        const std::filesystem::path& relative_path) = 0;
     virtual bool RemoveOwnedStageFile(const std::filesystem::path& stage_file) = 0;
     virtual bool RemoveOwnedStageTree(const std::filesystem::path& stage_root) = 0;
 };
@@ -1444,10 +1510,13 @@ class ASH_API IVegetationCommitFileOps :
     public virtual IVegetationStageFileOps
 {
 public:
-    virtual std::unique_ptr<IVegetationFileLease> AcquireNamedLease(
-        std::string_view canonical_identity) = 0;
-    virtual bool AtomicReplace(const std::filesystem::path& stage,
-                               const std::filesystem::path& target) = 0;
+    virtual VegetationFileLeaseResult AcquireNamedLease(
+        std::string_view canonical_identity,
+        const VegetationOperationControl& control) = 0;
+    virtual VegetationAtomicReplaceResult AtomicReplace(
+        const std::filesystem::path& stage,
+        const std::filesystem::path& target,
+        VegetationOwnedStageCleanupRegistry& cleanup_registry) = 0;
     virtual VegetationCreateNewStatus CreateNewFromStage(
         const std::filesystem::path& stage,
         const std::filesystem::path& target) = 0;
@@ -1467,16 +1536,32 @@ struct VegetationOwnedStageCleanupStatus
 {
     bool all_removed = true;
     std::vector<std::filesystem::path> retained_stage_files{};
+    std::vector<std::filesystem::path> retained_recovery_stage_files{};
     std::vector<std::filesystem::path> retained_stage_trees{};
 };
 
-class ASH_API VegetationOwnedStageCleanupRegistry
+class VegetationOwnedStageCleanupRegistry
 {
 public:
-    void TrackStageFile(std::filesystem::path owned_stage_file);
-    void TrackStageTree(std::filesystem::path owned_stage_root);
-    VegetationOwnedStageCleanupStatus RetryAll(IVegetationStageFileOps& file_ops);
-    bool empty() const noexcept;
+    ASH_API bool TrackStageFile(std::filesystem::path owned_stage_file);
+    ASH_API bool TrackStageTree(std::filesystem::path owned_stage_root);
+    ASH_API bool CleanupStageFile(const std::filesystem::path& owned_stage_file,
+                                  IVegetationStageFileOps& file_ops);
+    ASH_API bool CleanupStageTree(const std::filesystem::path& owned_stage_root,
+                                  IVegetationStageFileOps& file_ops);
+    ASH_API bool OwnsStageFile(const std::filesystem::path& owned_stage_file) const noexcept;
+    ASH_API bool OwnsStageTree(const std::filesystem::path& owned_stage_root) const noexcept;
+    ASH_API bool BeginStageFilePublish(const std::filesystem::path& owned_stage_file) noexcept;
+    ASH_API bool ResolveStageFilePublish(const std::filesystem::path& owned_stage_file,
+                                         VegetationStageFilePublishResolution resolution) noexcept;
+    ASH_API bool TrackNewRecoveryStageFile(std::filesystem::path owned_stage_file);
+    ASH_API bool RetainStageFileForRecovery(std::filesystem::path owned_stage_file);
+    ASH_API bool ReleaseRecoveryStageFile(const std::filesystem::path& owned_stage_file);
+    ASH_API bool IsRecoveryStageFile(const std::filesystem::path& owned_stage_file) const noexcept;
+    ASH_API bool ForgetConsumedStageFile(const std::filesystem::path& owned_stage_file);
+    ASH_API bool ForgetConsumedStageTree(const std::filesystem::path& owned_stage_root);
+    ASH_API VegetationOwnedStageCleanupStatus RetryAll(IVegetationStageFileOps& file_ops);
+    ASH_API bool empty() const noexcept;
 };
 
 enum class VegetationStorageStatus : uint8_t
@@ -1485,10 +1570,26 @@ enum class VegetationStorageStatus : uint8_t
     Prepared,
     SourceChanged,
     AlreadyExists,
+    NotFound,
     InvalidPath,
     Cancelled,
+    TimedOut,
+    RecoveryRequired,
     Failed
 };
+
+struct VegetationStorageResult
+{
+    VegetationStorageStatus status = VegetationStorageStatus::Failed;
+    std::optional<VegetationFileRevision> resulting_revision{};
+    std::filesystem::path recovery_path{};
+    std::string error{};
+};
+
+// VegetationPreparedLayerWrite is populated only by the storage implementation.
+// Public default construction yields an empty Failed value. The capability is
+// move-only (copy and both assignment forms are deleted), exposes const accessors,
+// and privately binds target, stage, revision, kind, registry and serial.
 
 ASH_API VegetationLayerReadResult read_vegetation_layer_snapshot(
     const std::filesystem::path& asset_root,
@@ -1507,6 +1608,7 @@ ASH_API VegetationPreparedLayerWrite prepare_vegetation_layer_write(
 ASH_API VegetationStorageResult commit_vegetation_layer_write(
     const VegetationPreparedLayerWrite& prepared,
     uint64_t current_operation_serial,
+    VegetationOperationControl control,
     VegetationOwnedStageCleanupRegistry& cleanup_registry,
     IVegetationCommitFileOps& file_ops = get_default_vegetation_file_ops());
 ASH_API VegetationPreparedLayerWrite prepare_vegetation_layer_copy_as(
@@ -1520,39 +1622,64 @@ ASH_API VegetationPreparedLayerWrite prepare_vegetation_layer_copy_as(
 ASH_API VegetationStorageResult commit_vegetation_layer_copy_as(
     const VegetationPreparedLayerWrite& prepared,
     uint64_t current_operation_serial,
+    VegetationOperationControl control,
     VegetationOwnedStageCleanupRegistry& cleanup_registry,
     IVegetationCommitFileOps& file_ops = get_default_vegetation_file_ops());
 ```
 
-The split FileOps interfaces are a real production boundary shared by Layer storage and Chunk-set publication, not test-only free functions. A Layer worker receives only `IVegetationStageFileOps`, so target create/replace is mechanically unavailable. A Chunk publisher receives `IVegetationImmutablePublishFileOps`, which adds only collision-safe create-new for hash-named immutable objects/manifests. Main-thread commits alone receive `IVegetationCommitFileOps`, which owns the named lease, target create-new and active-pointer atomic replace. The production and scripted implementations satisfy the combined `IVegetationFileOps`; service tasks pass only the least-capability base-interface view required. Tri-state create-new distinguishes `Created`, atomic `AlreadyExists`, and I/O `Failed`; callers never collapse a collision into success.
+The split FileOps interfaces are a real production boundary shared by Layer storage and Chunk-set publication, not test-only free functions. A Layer worker receives only `IVegetationStageFileOps`, so target create/replace is mechanically unavailable. A Chunk publisher receives `IVegetationImmutablePublishFileOps`, which adds only collision-safe create-new for hash-named immutable objects/manifests. Main-thread commits alone receive `IVegetationCommitFileOps`, which owns the bounded named lease, target create-new and active-pointer atomic replace. The production and scripted implementations satisfy the combined `IVegetationFileOps`; service tasks pass only the least-capability base-interface view required. Tri-state create-new distinguishes `Created`, atomic `AlreadyExists`, and I/O `Failed`; callers never collapse a collision into success. `AtomicReplace` is replace-only: it requires an existing regular target and must fail if the target is absent; it is never a create-or-replace fallback. Its named result distinguishes `Replaced`, ordinary `TargetPreserved`, and `RecoveryRequired`. Production reserves a unique same-directory registry-owned backup before `ReplaceFileW`; error 1177 restores the original from that backup before returning ordinary failure, while a failed restore leaves the exact backup recovery-protected and reports its path. `ReadAllBytes` always receives a hard byte ceiling and returns no bytes on absence, overflow or failure; an oversized snapshot returns the distinct `LimitExceeded` status, and storage derives SHA, revision and strict parse from the single returned byte snapshot. A successful `VegetationStageFileResult` has exactly one nonempty owned path and one nonnull writer; every other status clears both. `VegetationFileLeaseResult::Acquired` has exactly one nonnull lease, while Cancelled/TimedOut/Failed always have null. Every storage/commit consumer validates the complete legal shape before reading or moving any result field; a production or scripted provider returning an illegal inspection, bytes, stage-file, stage-tree, lease or atomic-replace shape therefore fails closed at the consumer boundary.
 
-`EnsureDirectoryTree` is the only persistent directory-creation primitive. It accepts an asset root plus canonical relative directory, rejects absolute/dot-segment/reparse escapes, creates missing components one at a time, revalidates every component, and is idempotently `Succeeded` when a cooperative creator already made the same real directory. Every component attempt is a distinct scripted fault occurrence. Layer storage uses `CreateUniqueSiblingStageFile`: after the target parent is ensured, it atomically creates one collision-resistant operation-owned file directly in `target.parent_path()`, satisfying same-directory replace semantics. `RemoveOwnedStageFile` accepts only that exact registered file and never removes its parent. Chunk publication separately uses `CreateUniqueStageTree`: after the store root is ensured, it creates one unique operation-owned child directory that may contain object/manifest/pointer candidate files; `RemoveOwnedStageTree` accepts only that exact registered root. Two cooperative creators must receive distinct sibling files/trees. Empty persistent asset/store/objects/manifests directories created before a later failure may remain.
+`EnsureDirectoryTree` is the only persistent directory-creation primitive. It accepts an asset root plus canonical relative directory, rejects absolute/dot-segment/reparse escapes, creates missing components one at a time, revalidates every component, and is idempotently `Succeeded` when a cooperative creator already made the same real directory. Every component attempt is a distinct scripted fault occurrence. Layer storage uses `CreateUniqueSiblingStageFile`: after the target parent is ensured, it atomically creates one collision-resistant operation-owned file directly in `target.parent_path()`, satisfying same-directory replace semantics. Before the first write, storage independently proves the returned path is normalized absolute, distinct from the target, and an exact sibling. It returns an exclusive writer token holding one stable native handle; each `WriteBlock` must have size `1..1 MiB` and offset exactly equal to the token's cumulative bytes, and the one successful `FlushAndClose` closes the handle. Further write/flush calls fail closed; zero-byte artifacts are invalid. Raw `RemoveOwnedStageFile/Tree` primitives accept only normalized operation-owned naming shapes and never remove a parent; ordinary deletion is invoked through registry membership checks, while an unclaimed result is never deleted after ownership registration fails. Chunk publication separately uses `CreateUniqueStageTree`: after the store root is ensured, it creates one unique operation-owned child directory. `CreateOwnedStageFile` requires a canonical relative child, rejects absolute/dot/reparse/existing paths, atomically creates-new under the validated non-reparse stage root, and returns the same stable writer token. The registry tracks the stage tree as the ownership unit, not its child files; consumed children need no individual `Forget`, and targeted tree cleanup removes only the remaining owned tree. Two cooperative creators must receive distinct sibling files/trees. Empty persistent asset/store/objects/manifests directories created before a later failure may remain.
 
-`VegetationFileInspection` uses the commented legal shapes exactly. `Succeeded/true/true` is an existing regular file and `Succeeded/true/false` is an existing non-regular path. `InvalidPath` and `Failed` clear `canonical_relative_path`, `resolved_absolute_path`, `canonical_identity`, `exists`, and `is_regular_file`. `VegetationFileBytesResult::Succeeded` means one immutable byte snapshot was read; `NotFound`, `InvalidPath`, and `Failed` always carry empty bytes. Production and scripted implementations share these invariants.
+`VegetationFileInspection` uses the commented legal shapes exactly. `Succeeded/true/true` is an existing regular file and `Succeeded/true/false` is an existing non-regular path. `NotFound`, `InvalidPath`, `LimitExceeded` and `Failed` clear `canonical_relative_path`, `resolved_absolute_path`, `canonical_identity`, `exists`, and `is_regular_file`; a status not normally emitted by `InspectPath` remains a non-success result and is never interpreted as an alias for absence or success. `VegetationFileBytesResult::Succeeded` means one immutable bounded byte snapshot was read; `NotFound`, `InvalidPath`, `LimitExceeded` and `Failed` always carry empty bytes. `VegetationStageTreeResult::Succeeded` carries one nonempty absolute normalized owned root and every non-success carries none. Production and scripted implementations share these invariants, and consumers revalidate them rather than trusting injected FileOps.
 
-`VegetationOwnedStageCleanupRegistry` is a production value owner, not a global. Layer storage and Chunk publication register the exact file/tree immediately after successful creation and remove it only after a confirmed cleanup. `RetryAll` attempts each retained exact path through the matching FileOps removal method, erases only successes, and returns the remaining paths without broadening ownership. Task 7 tests call `RetryAll` directly to prove first-failure/second-success and repeated-failure reporting; Task 9 `VegetationEditorService` owns one registry and calls `RetryAll` during every operation completion and again during `Shutdown`, exposing a failed cleanup in its status instead of reporting clean.
+`VegetationOwnedStageCleanupRegistry` is a production value owner, not a global. Layer storage and Chunk publication register the exact file/tree immediately after successful creation, and a prepared Layer capability privately binds the exact registry instance that accepted it. On Windows every registry exact-path and strict-ancestor comparison is component-wise case-insensitive, so case-only spellings resolve to one ownership identity rather than two cleanup capabilities. Commit checks that binding plus `OwnsStageFile/Tree` before its first externally visible publish, so a forged prepared value or wrong registry fails before target mutation. Immediately before replace publication, `BeginStageFilePublish` atomically changes the exact entry from normal ownership to a cleanup-excluded publish pin; `ResolveStageFilePublish` performs the allocation-free terminal transition to target-preserved ownership, recovery protection, or consumed bookkeeping. An unresolved `Publishing` pin is itself a fail-closed protected recovery state: an invariant-failure return may surface that exact path, `IsRecoveryStageFile` and `ReleaseRecoveryStageFile` must recognize it, ordinary cleanup/`RetryAll` must not consume it, `RetryAll` must report it in `retained_recovery_stage_files`, and legitimate callers release it only after the synchronous `AtomicReplace` call has returned. A targeted cleanup removes only that registered path; successful rename/create-new consumption uses the matching `ForgetConsumed*` method, and neither operation can touch a different registry entry. `ForgetConsumedStageFile/Tree` is idempotent bookkeeping only: for a valid exact consumed path it succeeds even when another exact cleanup already erased the entry, performs no filesystem deletion, and can never turn an already successful publish into a reported failure. Once replace/create-new reports success, the storage result remains successful; registry reconciliation is not a second commit phase. `TrackNewRecoveryStageFile` is insert-only and cannot mutate an exact entry already owned by another operation, including a case-only spelling of that Windows path; it is mandatory when post-stage validation has not yet established registry ownership. `RetainStageFileForRecovery` remains for exact artifacts already created or bound inside a known atomic-replace transaction and is not used to adopt an unbound post-inspection stage. Recovery-protected files are retained until explicit `ReleaseRecoveryStageFile`. `RetryAll` attempts each other retained exact path through the matching FileOps removal method, erases only successes, and separately reports protected recovery paths without broadening ownership. Task 7 tests call ownership queries, publish pin transitions, targeted cleanup, idempotent forget, recovery protection and `RetryAll` directly to prove first-failure/second-success, unrelated-stage preservation, repeated-failure reporting and publish-success non-downgrade; Task 9 `VegetationEditorService` owns one registry and calls `RetryAll` during every operation completion and again during `Shutdown`, exposing a failed cleanup or recovery requirement in its status instead of reporting clean.
 
-Worker Layer preparation first calls `EnsureDirectoryTree` for the validated target parent, then may create, flush, reread, parse, and hash only its unique same-directory sibling stage file. `VegetationPreparedLayerWrite` captures the `std::optional<VegetationFileRevision>` passed to prepare; existing same-byte revision is distinct from the explicit absent identity (`nullopt`) used by a newly created unsaved Layer. Commit has no second caller-supplied revision that could rebase this optimistic check: it acquires the canonical-path named mutex, reads one target byte snapshot when the captured revision is present, derives revision from those same bytes, verifies serial and the prepared captured revision, then atomically replaces. With captured `nullopt` it uses atomic create-new; a target created after the unsaved session began is preserved and returns `AlreadyExists`. Copy commit acquires the same lease and always uses create-new/non-replacing publication. All failures preserve target bytes and delete only the exact operation-owned stage file; a failed file deletion is tracked for bounded shutdown retry rather than falsely reported clean.
+Worker Layer preparation first calls `EnsureDirectoryTree` for the validated target parent, then creates, validates, writes, flushes/closes, bounded-rereads, parses and hashes only its unique same-directory sibling stage file. `VegetationPreparedLayerWrite` is a storage-produced, externally read-only move-only capability: public default construction creates only the empty `Failed` state, copy and both assignment forms are deleted, only the storage implementation may populate its private data, and callers can inspect or transfer ownership but cannot forge or rebind kind, root/path/identity, stage ownership, revisions, registry identity or operation serial. It captures the `std::optional<VegetationFileRevision>` passed to prepare; existing same-byte revision is distinct from the explicit absent identity (`nullopt`) used by a newly created unsaved Layer. Commit has no second caller-supplied revision that could rebase this optimistic check. Every prepare/commit requires a complete `VegetationOperationControl` with a nonnull shared cancel flag and a non-default absolute deadline; incomplete control fails closed before lease or target mutation. Commit checks control before lease acquisition; the lease implementation polls the shared cancel flag while waiting and never waits beyond the supplied absolute deadline. Commit checks control again immediately after acquisition, after bounded target reread/revision validation, and immediately before `AtomicReplace`/`CreateNewFromStage`. Cancellation or timeout at any checkpoint preserves the target and performs only targeted stage cleanup. With a captured revision, exact equality and an existing regular target are required before replace-only `AtomicReplace`; absence is `SourceChanged`/failure, never implicit creation. `TargetPreserved` performs ordinary exact-stage cleanup. `RecoveryRequired` returns the exact protected backup/stage path and deliberately skips ordinary cleanup so shutdown cannot erase the only recovery artifact. With captured `nullopt` it uses atomic create-new; a target created after the unsaved session began is preserved and returns `AlreadyExists`. Copy commit follows the same checkpoints and always uses create-new/non-replacing publication. Successful replace/create-new consumes the stage and remains successful after idempotent registry forget; all ordinary pre-publish failures preserve target bytes and attempt targeted cleanup. A failed file deletion before publish upgrades the result to `Failed` and remains tracked for bounded shutdown retry rather than falsely reporting clean.
 
-- [ ] **Step 4: Run GREEN and codec regression**
+The successful `VegetationStageFileResult` legal shape is one normalized owned path, one available stable native identity captured from the same writer handle, and one nonnull writer; every non-success clears the path/writer, sets `available=false`, and zeros both numeric identity fields. An existing `InspectPath` result obtains final attributes, reparse status and volume/file-index from one `OPEN_REPARSE_POINT` handle rather than combining two object snapshots. Layer preparation reinspects the target after stage creation and before registry ownership or the first write. It rejects a stage whose identity equals either the initial or post-stage target identity, including case-only and hard-link aliases formed after an initially absent target check. A cooperative distinct target appearing in that window returns `AlreadyExists`/`SourceChanged` after targeted cleanup of only the identity-proven-distinct stage. If target reinspection fails and distinctness therefore cannot be proven, the writer closes and storage separately reinspects the exact stage path. Only a present regular stage whose identity matches the creation-handle identity and whose exact path is absent from the registry may be atomically inserted as new Recovery and return `RecoveryRequired`; a missing/mismatched stage or duplicate owner returns `Failed` without deleting, changing an old owner, or creating a ghost.
+
+If successful publication consumed the stage but the registry still holds an unresolved `Publishing` pin, `ReconcileConsumedStageFileAfterPublish` rereads that exact path through the same FileOps and erases only an `Owned`/`Publishing` entry after a legal `NotFound` result. A still-existing stage, malformed result or explicit `Recovery` entry remains protected. Reconciliation is bookkeeping after an already committed target mutation and cannot downgrade the successful storage result.
+
+- [x] **Step 4: Run GREEN and codec regression**
+
+Run all CPU tests and both Debug builds first. Then reuse Task 3 Step 4's fresh exclusive GPU-window protocol for the single readiness command below: obtain an explicit fresh release from every active worktree; byte-snapshot `product/config/Engine.ini`, `product/config/editor/EditorSettings.json`, `product/config/editor/ViewportLayout.json`, and `product/config/editor/imgui.ini` and record their SHA-256 values immediately before launch; and do not run validation, RenderGate, PerfGate, bless, or import. Require Editor/Sandbox x Vulkan/DX12 exit zero, Sandbox clean exit, and exactly eight fresh Engine/Application logs with zero generic error/critical, validation/debug-layer, device-lost, access-violation, fatal, assertion, or bad-leak findings. In finally-style cleanup, restore all four files byte-for-byte, verify all four hashes, verify effective Editor/Sandbox/AshImageDiff/gate roots are zero, and explicitly release the GPU window even on failure.
 
 ```bat
 generate_vs2022.bat
 RunTests.bat Debug --test-case="Vegetation storage*"
 RunTests.bat Release --test-case="Vegetation storage*"
 RunTests.bat Debug --test-case="Vegetation Layer codec*"
+RunTests.bat Debug
+RunTests.bat Release
 RunArchGate.bat
-git diff --check -- project/src/engine/Function/Asset/VegetationFileOps.h project/src/engine/Function/Asset/VegetationFileOps.cpp project/src/engine/Function/Asset/VegetationStorage.h project/src/engine/Function/Asset/VegetationStorage.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_storage_tests.cpp
+build_editor.bat Debug
+build_sandbox.bat Debug
+run.bat all Debug --smoke-test-seconds=120
+git diff --check -- project/src/engine/Function/Asset/VegetationFileOps.h project/src/engine/Function/Asset/VegetationFileOps.cpp project/src/engine/Function/Asset/VegetationStorage.h project/src/engine/Function/Asset/VegetationStorage.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_storage_tests.cpp docs/specs/modules/asset.md docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md
 ```
 
-- [ ] **Step 5: Review and selectively commit**
+- [x] **Step 5: Review and selectively commit**
 
 Review 1 follows every prepare/commit/cancel/fault path and verifies target preservation and same-byte identity. Review 2 checks root/reparse/mutex semantics, stage ownership, and the documented non-cooperative-writer limitation.
 
 ```bat
-git add -- project/src/engine/Function/Asset/VegetationFileOps.h project/src/engine/Function/Asset/VegetationFileOps.cpp project/src/engine/Function/Asset/VegetationStorage.h project/src/engine/Function/Asset/VegetationStorage.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_storage_tests.cpp
+git add -- project/src/engine/Function/Asset/VegetationFileOps.h project/src/engine/Function/Asset/VegetationFileOps.cpp project/src/engine/Function/Asset/VegetationStorage.h project/src/engine/Function/Asset/VegetationStorage.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_storage_tests.cpp docs/specs/modules/asset.md docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md
 git commit -m "feat(vegetation): add checked layer storage"
 ```
+
+**Result (2026-07-22):** The focused storage suites pass in Debug and Release
+with 29/29 cases and 573/573 assertions; the final full Debug and Release suites
+pass with 309/309 cases and 7471/7471 assertions. Editor Debug, Sandbox Debug,
+ArchGate (35 legacy warnings and no new violation), AIDevDoctor, and diff-check
+all pass. The final coordinated Debug readiness matrix passes Editor/Sandbox x
+Vulkan/DX12 4/4, produces exactly eight fresh Engine/Application logs with zero
+reject findings, and reports `clean_exit=yes` for both Sandbox runs. Engine.ini,
+EditorSettings.json, ViewportLayout.json, and imgui.ini were restored byte-for-byte
+to their pre-run SHA-256 values and effective GPU roots returned to zero. Two
+independent final read-only reviews report P0/P1/P2 = 0/CLEAN, including the
+Windows case-insensitive registry identity and post-stage native-identity recovery
+paths.
 
 ## Task 8: Add deterministic bake, ASVI input identity, and content-addressed Chunk publication
 
@@ -1672,6 +1799,7 @@ ASH_API VegetationPreparedChunkSet prepare_vegetation_chunk_set(
 ASH_API VegetationChunkSetCommitResult commit_vegetation_chunk_set(
     const VegetationPreparedChunkSet& prepared,
     const VegetationChunkSetExpectedIdentity& current_operation_identity,
+    VegetationOperationControl control,
     VegetationOwnedStageCleanupRegistry& cleanup_registry,
     IVegetationCommitFileOps& file_ops = get_default_vegetation_file_ops());
 ```
@@ -1682,7 +1810,7 @@ Bake consumes immutable layer/species/surface/resolver snapshots plus an immutab
 
 Use fixed integer traversal, SplitMix64 words and explicit streams `0..4`, the 16-bit R8 acceptance limit, batch size <=4096, exact quantization, and final total sorting. ASVI writes all 64 logical tile slots including explicit absence markers and layer seed. Palette/species changes use the exact three-way dirty union above; seed or surface identity/revision changes dirty `all_manifest_coords ∪ authoring_coords_with_nonzero_density`. If the active manifest's persisted Layer generation differs from the opened Layer and no same-session before-evidence journal proves a complete localized delta, use that same full-dirty union; never infer “no changes” from ASVI omitting global generation. Any dirty-chunk Pending/Failed/cancel/invalid result aborts the entire prepared generation. `prepare_vegetation_chunk_set` validates the canonical relative `layer_path`, derives exactly `<layer>.AshVegetationChunks/`, and binds that path/store identity into the prepared result; bake data alone never chooses a filesystem target. The worker publishes immutable objects/manifests durably through `IVegetationImmutablePublishFileOps`, which has no active-pointer replace capability. If a content-addressed object or manifest create-new reports `AlreadyExists`, the worker must read the existing bytes once, require exact size/SHA/strict decode equality with the candidate, and fail without overwrite on mismatch.
 
-`VegetationPreparedChunkSet` captures the validated layer/store target, operation identity and exact source-active identity from the read snapshot. Main-thread commit accepts only `IVegetationCommitFileOps`, revalidates the bound target, compares `current_operation_identity`, then acquires the chunk-store lease, reads one exact on-disk `active.asva` byte snapshot and its manifest identity, and requires equality with the captured source-active identity before staging the pointer. If both captured and on-disk identity are `NoActive`, commit must use `CreateNewFromStage`; `AlreadyExists` means a cooperative writer won and returns source-changed/stale without touching that pointer, while I/O `Failed` remains a controlled failure. Only an existing on-disk active identity that exactly matches the captured existing identity may use `AtomicReplace`. `AtomicReplace` is never create-or-replace. A caller-cached current pointer is not accepted as disk evidence. Cancellation is checked around each batch, chunk, and <=1 MiB write block.
+`VegetationPreparedChunkSet` captures the validated layer/store target, operation identity and exact source-active identity from the read snapshot. Main-thread commit accepts only `IVegetationCommitFileOps`, revalidates the bound target, compares `current_operation_identity`, then uses the supplied operation control to acquire the chunk-store lease with the same cancel polling and absolute deadline contract as Layer commit. It checks control before lease, immediately after acquisition, after bounded on-disk `active.asva` reread/identity validation, and immediately before pointer publish. The reread identity must equal the captured source-active identity before staging the pointer. If both captured and on-disk identity are `NoActive`, commit must use `CreateNewFromStage`; `AlreadyExists` means a cooperative writer won and returns source-changed/stale without touching that pointer, while I/O `Failed` remains a controlled failure. Only an existing on-disk active identity that exactly matches the captured existing identity may use `AtomicReplace`. `AtomicReplace` is never create-or-replace. A caller-cached current pointer is not accepted as disk evidence. Cancellation is checked around each batch, chunk, and <=1 MiB write block.
 
 - [ ] **Step 4: Run GREEN and byte-determinism regression**
 

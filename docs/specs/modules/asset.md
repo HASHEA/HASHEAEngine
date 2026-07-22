@@ -30,6 +30,8 @@ status: active
 | `project/src/engine/Function/Asset/VegetationLayer.h/.cpp` | 稀疏 ASVL v1 palette/tile/plane DTO、顺序二进制 codec、immutable publication 与原子 patch working set |
 | `project/src/engine/Function/Asset/VegetationBrush.h/.cpp` | world-mm 笔刷路径 canonicalization/resampling、整数 falloff 与 palette/brush mutation API |
 | `project/src/engine/Function/Asset/VegetationChunk.h/.cpp` | 烘焙 ASVC v1 species/量化 instance DTO 与顺序二进制 codec |
+| `project/src/engine/Function/Asset/VegetationFileOps.h/.cpp` | 植被有界读、稳定 stage writer、named lease、replace/create-new publication 与 exact-owned cleanup 边界 |
+| `project/src/engine/Function/Asset/VegetationStorage.h/.cpp` | `.AshVegetationLayer` 同 byte revision、checked prepare/commit、Copy As create-new 与 reload read contract |
 
 ## 公共接口
 
@@ -58,6 +60,9 @@ status: active
 - Phase 2 植被资产 codec：`decode/encode_vegetation_species`、`decode/encode_vegetation_layer`、`decode/encode_vegetation_chunk`。decoder 要求 caller 显式传入 `VegetationLoadBudget`，只在 strict shape、CRC、canonical ordering 与预算全部通过后一次性发布 DTO 和精确 `VegetationLoadCost`；encoder 同样使用临时 byte stream，失败清空输出。
 - Phase 2 Layer authoring：`VegetationLayerWorkingSet` 只发布 `shared_ptr<const VegetationLayerSnapshot>`；Paint/Erase 与 palette Add/Replace/Remove 返回可重复 apply/revert 的 direction-neutral patch。patch 按 `(tile_z,tile_x,plane_kind,species_id)` 排序，先验证 expected generation、canonical source、完整 source bytes、palette/species 与 target shape，再一次性提交 publication 和 bake-dirty evidence。成功恰好推进一代；read-only、`UINT64_MAX`、invalid/no-op 或任一 preflight 失败都不发布且不回绕。
 - 笔刷只接受 canonical `[0,256)` chunk-local 坐标，并 checked 转成 signed world millimeter；radius/strength/falloff/spacing、GCD 同向 run、safe segment、floor-isqrt、ties-to-even resampling/falloff 全按 v1 整数合同执行。cell→32×32 authoring tile 映射使用数学 floor division，负坐标恰落在 `-32`、`-64` 等整除边界时必须仍归属 `-1`、`-2`，Debug/Release 结果一致。稀疏 tile 坐标是 int64 且没有世界尺寸或实例总数硬上限；实际内存/文件准入仍由显式预算与上层 resident policy 控制。
+- Layer checked storage：`VegetationPreparedLayerWrite` 只能由storage内部构造有效payload；公开默认值为empty `Failed`，copy与copy/move assignment删除，只允许move构造转移，且move后source被显式重置为empty `Failed`，外部只有const getter，不能复制、伪造或重绑kind、target identity、stage ownership、registry identity、revision或operation serial。prepare在首次写前复核stage为normalized absolute、distinct target sibling；commit要求同一个绑定registry。prepare/commit都要求完整 `VegetationOperationControl`（nonnull shared cancel flag + non-default absolute deadline），并在每个规定checkpoint fail closed。`ReadAllBytes(path,max_bytes)` 从同一稳定handle发布单一snapshot；超过ceiling返回 `LimitExceeded` 且不返回部分bytes。不可信replace结果只有在prepared stage仍由exact registry持有、同一有界回读成功且revision仍等于staged revision时，才可把该stage转为fallback recovery；已消费或缺失stage不得重新登记成幽灵路径。已有revision的Save只允许replace-only `AtomicReplace`，目标不存在不创建；first Save与Copy As只用atomic create-new，Copy As不重绑source session。
+- FileOps结果的status/payload legal shape是consumer合同：inspection、bytes、stage file/tree、lease与atomic-replace在读取或move payload前都必须复核，非法production或scripted结果一律fail closed。存在的inspection与成功stage必须携带从稳定Windows handle取得的volume+file-index identity；缺失/失败结果不得伪造identity。Layer storage在首次写入前同时检查normalized sibling路径与真实file identity，并在stage创建后重新inspection target；因此初检已存在或初检缺失后才形成的大小写别名/hard-link都fail closed。replace使用唯一同目录backup并区分`Replaced / TargetPreserved / RecoveryRequired`；调用Windows publication前，registry把exact owned stage从`Owned`原子转为`Publishing`，使定向cleanup和`RetryAll`都不能并发消费它，并在结果确定后原子转为`Owned / Recovery / Consumed`。若终态转换因内部不变量失败而不能确认，未解析的`Publishing` pin本身仍是可查询、可显式`ReleaseRecoveryStageFile`释放的fail-closed recovery状态，且`RetryAll`必须把它列入`retained_recovery_stage_files`而非普通清理残留；合法caller只在同步`AtomicReplace`返回后释放，不得在调用执行中撤销pin。Windows部分失败先自动恢复；error 1177只有在backup明确`Missing`时才可改保replacement stage，backup为present、probe failed或invalid时都继续保护exact backup，普通`RetryAll`不得删除。stage publish成功后结果已经确定；`ForgetConsumedStageFile/Tree`只是exact-path幂等registry bookkeeping，不删除文件，entry已被定向清理也不能把成功publish降级。若已消费stage仍遗留`Publishing` pin，`ReconcileConsumedStageFileAfterPublish`必须先经FileOps证明exact path为`NotFound`，才可擦除`Owned/Publishing` bookkeeping；它不得删除仍存在的stage或显式`Recovery` entry。publish前普通失败只清理本operation登记的stage，失败删除保留到`RetryAll`，不得扩张到父目录或无关entry；raw remove primitive只验证operation-owned命名，registry才是普通删除的ownership gate。
+- `InspectPath` 对已存在末级路径使用一个带 `OPEN_REPARSE_POINT` 的稳定handle同时取得attributes、reparse判定和volume/file-index，不能把probe时旧对象的类型与第二次打开的新identity拼接。`available=false` 必须同时令两个identity数值为0。cleanup registry 的exact file/tree identity与ancestor判断在Windows上必须按不区分大小写的path component比较，case-only spelling不得形成第二个owner。若post-stage target reinspection失败，storage不得猜测删除可能是target别名的path；它必须先独立重开exact stage、证明regular/存在且identity等于创建handle快照，再用new-only原子登记直接进入Recovery并返回`RecoveryRequired`。stage缺失、identity漂移或同一Windows path（包括case-only spelling）已由另一operation登记时返回`Failed`，不改变旧owner状态、不创建ghost、不删除该path。
 
 加载结果统一为 `std::shared_ptr<const T>` 共享不可变数据；上层（Scene 实例化、Editor AssetDatabaseService、RenderAssetManager）只应依赖上述接口。
 
@@ -83,6 +88,7 @@ status: active
 - authoring tile 必须有非零 density；Erase 使 density 归零时整 tile（含剩余 weight）进入 patch 并删除。bake-dirty evidence 累积 density coords 及 palette 变更物种的 before/after 非零 weight coords；即使两侧坐标都空也保留变更物种 ID，供后续与 active manifest references 求并集。snapshot evidence 不清除；只有与当前 publication 完全同代的成功 bake acknowledgement 才清除，stale/failed acknowledgement、Undo/Redo 与 Save 都保留证据。
 - `VegetationLoadCost` 收费是 wire-derived 固定合同：Species=`70 + 4*LOD + 全部 canonical UTF-8 bytes`；Layer=`32 + Σ(48+palette path) + 16*tile + Σ(17+1024 per expanded plane)`；Chunk=`112 + Σ(48+species path) + 28*instance`。实际值等于预算上限合法；零预算不是 unlimited。任意 decode 失败将 DTO/cost 归零。
 - codec 在建立 DTO ownership 前完成 exact-cost admission：ASVL/ASVC 第一遍只用 bounds-owning byte/string view 与已由 file/payload/count budget 准入的 bounded non-owning view/index scratch 验证完整 wire/CRC/canonical 合同并计算成本，第二遍才 reserve/copy；Species 的 duplicate-key/DOM parser scratch 先受 file/payload budget 限制，再从纯 JSON view 计算 exact decoded cost，准入后才复制到 DTO，发布前还必须与 DTO 重算成本逐字段一致。
+- Layer/Chunk FileOps 的`AtomicReplace`只替换已存在regular target，绝不隐式创建；缺失目标必须走显式create-new合同。replace前保留同目录backup，只有`Replaced`或已确认/恢复原目标的`TargetPreserved`可结束普通路径；`RecoveryRequired`必须暴露并保护exact artifact。所有prepared publish先验证prepared identity、operation serial、完整control与绑定cleanup registry exact ownership，再取得有界lease并复核同byte revision；不接受caller重写prepared字段或缓存revision作为磁盘证据。
 
 ## 验证
 
@@ -92,7 +98,7 @@ status: active
 - 依赖/工程变化时 fresh generate，并构建 Editor/Sandbox Debug 与 Release
 - 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；Sandbox ready 要求标准场景引用资产已加载）
 - Editor 打开默认场景操作一遍（AssetBrowser 浏览、拖放实例化）
-- 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` / `Vegetation AssetDatabase*` / `Vegetation brush*` / `Vegetation palette*` / `Vegetation patch*` / `Vegetation mutation*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
+- 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` / `Vegetation AssetDatabase*` / `Vegetation brush*` / `Vegetation palette*` / `Vegetation patch*` / `Vegetation mutation*` / `Vegetation storage*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
 
 ## 历史
 

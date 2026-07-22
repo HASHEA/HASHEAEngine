@@ -153,6 +153,85 @@ namespace VegetationTest
 		return bytes;
 	}
 
+	inline void WriteAllBytes(
+		const std::filesystem::path& path,
+		const std::vector<uint8_t>& bytes)
+	{
+		std::error_code error{};
+		const std::filesystem::path parent = path.parent_path();
+		if (!parent.empty())
+		{
+			std::filesystem::create_directories(parent, error);
+			if (error)
+			{
+				throw std::runtime_error("Failed to create vegetation test directory");
+			}
+		}
+
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		if (!output.is_open())
+		{
+			throw std::runtime_error("Failed to open vegetation test file for writing");
+		}
+		if (!bytes.empty())
+		{
+			output.write(reinterpret_cast<const char*>(bytes.data()),
+				static_cast<std::streamsize>(bytes.size()));
+		}
+		if (!output)
+		{
+			throw std::runtime_error("Failed to write complete vegetation test file");
+		}
+	}
+
+	inline std::vector<uint8_t> ReadAllBytes(const std::filesystem::path& path)
+	{
+		std::ifstream input(path, std::ios::binary | std::ios::ate);
+		if (!input.is_open())
+		{
+			throw std::runtime_error("Failed to open vegetation test file for reading");
+		}
+
+		const std::streampos end_position = input.tellg();
+		if (end_position < std::streampos(0))
+		{
+			throw std::runtime_error("Failed to size vegetation test file");
+		}
+		const std::streamoff byte_count = end_position - std::streampos(0);
+		if (byte_count < 0 ||
+			static_cast<uint64_t>(byte_count) > static_cast<uint64_t>(
+				std::vector<uint8_t>{}.max_size()) ||
+			byte_count > static_cast<std::streamoff>(
+				std::numeric_limits<std::streamsize>::max()))
+		{
+			throw std::runtime_error("Vegetation test file size is not representable");
+		}
+
+		std::vector<uint8_t> bytes(static_cast<size_t>(byte_count));
+		input.seekg(0, std::ios::beg);
+		if (!input)
+		{
+			throw std::runtime_error("Failed to seek vegetation test file");
+		}
+		if (!bytes.empty())
+		{
+			const std::streamsize expected = static_cast<std::streamsize>(bytes.size());
+			input.read(reinterpret_cast<char*>(bytes.data()), expected);
+			if (input.gcount() != expected || input.bad() || input.fail())
+			{
+				throw std::runtime_error("Failed to read complete vegetation test file");
+			}
+		}
+
+		char extra = 0;
+		input.get(extra);
+		if (input.gcount() == 1 || input.bad() || !input.eof())
+		{
+			throw std::runtime_error("Vegetation test file changed while reading");
+		}
+		return bytes;
+	}
+
 	inline std::vector<uint8_t> CanonicalGrassSpeciesJson()
 	{
 		return ReadFixtureBytes(
@@ -228,6 +307,21 @@ namespace VegetationTest
 		if (!AshEngine::encode_vegetation_layer(MinimalLayerSnapshot(), bytes, &error))
 		{
 			throw std::runtime_error("Minimal vegetation Layer fixture did not encode: " + error);
+		}
+		return bytes;
+	}
+
+	inline std::vector<uint8_t> DifferentValidLayerBytes()
+	{
+		AshEngine::VegetationLayerSnapshot layer = MinimalLayerSnapshot();
+		++layer.content_generation;
+		layer.layer_seed ^= 0x55aa55aa55aa55aaull;
+		std::vector<uint8_t> bytes{};
+		std::string error{};
+		if (!AshEngine::encode_vegetation_layer(layer, bytes, &error))
+		{
+			throw std::runtime_error(
+				"Different vegetation Layer fixture did not encode: " + error);
 		}
 		return bytes;
 	}
