@@ -590,13 +590,16 @@ namespace AshEngine
 		{
 			return fail_with_error(out_error, "terrain snapshot must not be null.");
 		}
-		if (m_accepted_snapshot == snapshot &&
-			m_state.readiness() == TerrainRenderReadiness::Failed)
+		if (m_accepted_snapshot == snapshot)
 		{
-			return fail_with_error(
-				out_error,
-				m_last_error.empty() ? "terrain snapshot is failed." :
-					m_last_error.c_str());
+			if (m_state.readiness() == TerrainRenderReadiness::Failed)
+			{
+				return fail_with_error(
+					out_error,
+					m_last_error.empty() ? "terrain snapshot is failed." :
+						m_last_error.c_str());
+			}
+			return true;
 		}
 		const bool same_accepted_asset = m_accepted_snapshot &&
 			snapshot->asset_id == m_accepted_snapshot->asset_id;

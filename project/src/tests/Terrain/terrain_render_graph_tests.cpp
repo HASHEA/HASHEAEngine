@@ -155,6 +155,36 @@ TEST_CASE("Terrain SceneRenderer prepares one immutable draw for GBuffer and sha
 	CHECK(consumers.find("ensure_instance_buffer") == std::string::npos);
 }
 
+TEST_CASE("Terrain prepared draw uses the rectangular snapshot row stride")
+{
+	constexpr uint32_t component_count_x = 8u;
+	constexpr uint32_t component_x = 7u;
+	constexpr uint32_t component_z = 15u;
+	CHECK(component_z * component_count_x + component_x == 127u);
+	CHECK(component_z * AshEngine::k_terrain_component_count + component_x == 487u);
+
+	const std::string source = CompactSource(ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp"));
+	const size_t prepare = source.find("TerrainRenderPass::prepare_draw(");
+	const size_t consumer = source.find(
+		"TerrainRenderPass::render_prepared_surface", prepare);
+	REQUIRE(prepare != std::string::npos);
+	REQUIRE(consumer != std::string::npos);
+	const std::string body = source.substr(prepare, consumer - prepare);
+	CHECK(body.find(
+		"terrain->render_asset->m_accepted_snapshot!=terrain->asset_snapshot||"
+		"!terrain->render_asset->m_has_accepted_render_layout") !=
+		std::string::npos);
+	CHECK(body.find("!accepted_layout.contains(instance.coord)") !=
+		std::string::npos);
+	CHECK(body.find("accepted_layout.component_linear_index(instance.coord)") !=
+		std::string::npos);
+	CHECK(body.find("component_index>=terrain->asset_snapshot->components.size()") !=
+		std::string::npos);
+	CHECK(body.find("k_terrain_component_count+instance.coord.x") ==
+		std::string::npos);
+}
+
 TEST_CASE("Terrain SceneRenderer pending generation blocks capture readiness")
 {
 	auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();

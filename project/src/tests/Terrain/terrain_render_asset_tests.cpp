@@ -722,7 +722,46 @@ TEST_CASE("Terrain render asset orders same-asset snapshots by generation and re
 	REQUIRE(asset.accept_snapshot(newer_residency, &error));
 	CHECK(asset.accepted_snapshot() == newer_residency);
 	CHECK(asset.readiness() == AshEngine::TerrainRenderReadiness::Pending);
-	CHECK_FALSE(asset.accept_snapshot(newer_residency, &error));
+	const AshEngine::TerrainShadowCasterIdentity before_repeat =
+		asset.snapshot_shadow_caster_identity();
+	const auto before_repeat_heights =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_height_uploads(asset);
+	const auto before_repeat_weights =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_weight_updates(asset);
+	const auto before_repeat_resets =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_implicit_weight_resets(asset);
+	const auto before_repeat_removals =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_component_removals(asset);
+
+	CHECK(asset.accept_snapshot(newer_residency, &error));
+	CHECK(error.empty());
+	CHECK(asset.accepted_snapshot() == newer_residency);
+	const AshEngine::TerrainShadowCasterIdentity after_repeat =
+		asset.snapshot_shadow_caster_identity();
+	CHECK(after_repeat.accepted_snapshot_identity ==
+		before_repeat.accepted_snapshot_identity);
+	CHECK(after_repeat.active_content_generation ==
+		before_repeat.active_content_generation);
+	CHECK(after_repeat.published_content_generation ==
+		before_repeat.published_content_generation);
+	CHECK(after_repeat.required_upload_count == before_repeat.required_upload_count);
+	CHECK(after_repeat.completed_upload_count == before_repeat.completed_upload_count);
+	CHECK(after_repeat.readiness == before_repeat.readiness);
+	const auto after_repeat_heights =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_height_uploads(asset);
+	REQUIRE(after_repeat_heights.size() == before_repeat_heights.size());
+	REQUIRE(after_repeat_heights.size() == 1u);
+	CHECK(after_repeat_heights[0].coord == before_repeat_heights[0].coord);
+	CHECK(after_repeat_heights[0].content_generation ==
+		before_repeat_heights[0].content_generation);
+	CHECK(after_repeat_heights[0].residency_revision ==
+		before_repeat_heights[0].residency_revision);
+	CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::pending_weight_updates(asset).size() ==
+		before_repeat_weights.size());
+	CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::pending_implicit_weight_resets(asset) ==
+		before_repeat_resets);
+	CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::pending_component_removals(asset) ==
+		before_repeat_removals);
 
 	const auto accepted = asset.accepted_snapshot();
 	const AshEngine::TerrainShadowCasterIdentity accepted_state =

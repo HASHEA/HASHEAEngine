@@ -773,6 +773,14 @@ namespace AshEngine
 		prepared->batch_offsets.reserve(prepared->lod.batches.size());
 		{
 			std::scoped_lock<std::mutex> lock(terrain->render_asset->m_mutex);
+			if (terrain->render_asset->m_accepted_snapshot != terrain->asset_snapshot ||
+				!terrain->render_asset->m_has_accepted_render_layout)
+			{
+				prepared->status = TerrainPreparedDrawStatus::Failed;
+				return prepared;
+			}
+			const TerrainRenderLayoutInfo& accepted_layout =
+				terrain->render_asset->m_accepted_render_layout;
 			for (const TerrainLodBatch& batch : prepared->lod.batches)
 			{
 				prepared->batch_offsets.push_back(
@@ -781,11 +789,19 @@ namespace AshEngine
 				{
 					uint32_t atlas_slot = 0u;
 					bool high_resolution = false;
+					if (!accepted_layout.contains(instance.coord))
+					{
+						prepared->status = TerrainPreparedDrawStatus::Failed;
+						return prepared;
+					}
 					const size_t component_index =
-						static_cast<size_t>(instance.coord.z) *
-						k_terrain_component_count + instance.coord.x;
+						accepted_layout.component_linear_index(instance.coord);
+					if (component_index >= terrain->asset_snapshot->components.size())
+					{
+						prepared->status = TerrainPreparedDrawStatus::Failed;
+						return prepared;
+					}
 					const bool implicit_layer_zero =
-						component_index < terrain->asset_snapshot->components.size() &&
 						terrain->asset_snapshot->components[component_index] &&
 						terrain->asset_snapshot->components[component_index]->weights.empty();
 					if (!implicit_layer_zero)
