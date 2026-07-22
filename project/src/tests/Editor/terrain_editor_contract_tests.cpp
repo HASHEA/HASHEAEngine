@@ -439,8 +439,8 @@ TEST_CASE("Terrain Mode submits approved create import and export file jobs")
 	CHECK(widgets.find("intent.create_desc") != std::string::npos);
 	CHECK(widgets.find("intent.import_desc") != std::string::npos);
 	CHECK(widgets.find("intent.export_desc") != std::string::npos);
-	CHECK(widgets.find("BuildCreateDesc()") != std::string::npos);
-	CHECK(widgets.find("BuildImportDesc()") != std::string::npos);
+	CHECK(widgets.find("TryBuildCreateDesc(") != std::string::npos);
+	CHECK(widgets.find("TryBuildImportDesc(") != std::string::npos);
 	CHECK(widgets.find("BuildExportDesc(") != std::string::npos);
 	CHECK(state.find("TerrainHeightFileFormat::Png") != std::string::npos);
 	CHECK(state.find("TerrainHeightFileFormat::RawR16") != std::string::npos);
@@ -468,25 +468,147 @@ TEST_CASE("Terrain Mode submits approved create import and export file jobs")
 	CHECK(state.find("terrain/NewTerrain.AshTerrain") != std::string::npos);
 }
 
-TEST_CASE("Terrain create descriptor defaults to the production grid layout")
+TEST_CASE("Terrain create descriptor defaults to the 2048 meter authoring layout")
 {
 	const AshEditor::TerrainCreateAssetDesc desc{};
-	const AshEngine::TerrainGridLayout expected =
-		AshEngine::make_default_terrain_grid_layout();
 
 	CHECK(AshEngine::is_valid_terrain_grid_layout(desc.layout));
-	CHECK(desc.layout.sample_count_x == expected.sample_count_x);
-	CHECK(desc.layout.sample_count_z == expected.sample_count_z);
-	CHECK(desc.layout.component_count_x == expected.component_count_x);
-	CHECK(desc.layout.component_count_z == expected.component_count_z);
-	CHECK(desc.layout.component_quad_count == expected.component_quad_count);
-	CHECK(desc.layout.sample_spacing_meters ==
-		doctest::Approx(expected.sample_spacing_meters));
+	CHECK(desc.layout.sample_count_x == 2049u);
+	CHECK(desc.layout.sample_count_z == 2049u);
+	CHECK(desc.layout.component_count_x == 8u);
+	CHECK(desc.layout.component_count_z == 8u);
+	CHECK(desc.layout.component_quad_count == 256u);
+	CHECK(desc.layout.sample_spacing_meters == doctest::Approx(1.0f));
 
 	const std::string sessionContract = ReadTerrainContractText(
 		"project/src/editor/Core/TerrainEditorSessionCore.h");
 	CHECK(sessionContract.find(
-		"layout = AshEngine::make_default_terrain_grid_layout()") != std::string::npos);
+		"layout = AshEngine::make_terrain_authoring_grid_layout(2048u, 2048u)") !=
+		std::string::npos);
+	CHECK(sessionContract.find(
+		"layout = AshEngine::make_default_terrain_grid_layout()") == std::string::npos);
+}
+
+TEST_CASE("Terrain Mode target extent drafts normalize without losing invalid text")
+{
+	AshEditor::TerrainModeState state{};
+	CHECK(state.target_extent_x_meters_draft == "2048");
+	CHECK(state.target_extent_z_meters_draft == "2048");
+
+	state.target_extent_x_meters_draft = "300";
+	state.target_extent_z_meters_draft = "3500";
+	REQUIRE(state.NormalizeTargetExtentDrafts());
+	CHECK(state.target_extent_x_meters_draft == "256");
+	CHECK(state.target_extent_z_meters_draft == "4096");
+	CHECK(state.target_extent_x_error.empty());
+	CHECK(state.target_extent_z_error.empty());
+
+	state.target_extent_x_meters_draft = "384";
+	REQUIRE(AshEditor::TerrainModeState::NormalizeTargetExtentDraft(
+		state.target_extent_x_meters_draft,
+		state.target_extent_x_error));
+	CHECK(state.target_extent_x_meters_draft == "512");
+	CHECK(state.target_extent_x_error.empty());
+
+	state.target_extent_x_meters_draft = "2048x";
+	CHECK_FALSE(state.NormalizeTargetExtentDrafts());
+	CHECK(state.target_extent_x_meters_draft == "2048x");
+	CHECK_FALSE(state.target_extent_x_error.empty());
+	state.target_extent_x_meters_draft = "2048";
+	REQUIRE(state.NormalizeTargetExtentDrafts());
+	CHECK(state.target_extent_x_meters_draft == "2048");
+	CHECK(state.target_extent_x_error.empty());
+
+	for (const std::string invalid : {
+		std::string{}, std::string{ "+1" }, std::string{ "-1" },
+		std::string{ " 2048" }, std::string{ "2048 " }, std::string{ "20 48" },
+		std::string{ "4294967296" } })
+	{
+		CAPTURE(invalid);
+		std::string draft = invalid;
+		std::string error{};
+		CHECK_FALSE(AshEditor::TerrainModeState::NormalizeTargetExtentDraft(draft, error));
+		CHECK(draft == invalid);
+		CHECK_FALSE(error.empty());
+	}
+}
+
+TEST_CASE("Terrain Mode shares one target layout between create and import descriptors")
+{
+	AshEditor::TerrainModeState state{};
+	state.target_extent_x_meters_draft = "2048";
+	state.target_extent_z_meters_draft = "4096";
+	state.import_source_width = 513u;
+	state.import_source_height = 257u;
+	REQUIRE(state.NormalizeTargetExtentDrafts());
+
+	AshEditor::TerrainCreateAssetDesc createDesc{};
+	AshEngine::TerrainHeightImportDesc importDesc{};
+	REQUIRE(state.TryBuildCreateDesc(createDesc));
+	REQUIRE(state.TryBuildImportDesc(importDesc));
+
+	CHECK(createDesc.layout.sample_count_x == 2049u);
+	CHECK(createDesc.layout.sample_count_z == 4097u);
+	CHECK(createDesc.layout.component_count_x == 8u);
+	CHECK(createDesc.layout.component_count_z == 16u);
+	CHECK(createDesc.layout.component_quad_count == 256u);
+	CHECK(createDesc.layout.sample_spacing_meters == doctest::Approx(1.0f));
+	CHECK(importDesc.target_layout.sample_count_x == createDesc.layout.sample_count_x);
+	CHECK(importDesc.target_layout.sample_count_z == createDesc.layout.sample_count_z);
+	CHECK(importDesc.target_layout.component_count_x == createDesc.layout.component_count_x);
+	CHECK(importDesc.target_layout.component_count_z == createDesc.layout.component_count_z);
+	CHECK(importDesc.target_layout.component_quad_count == createDesc.layout.component_quad_count);
+	CHECK(importDesc.target_layout.sample_spacing_meters ==
+		doctest::Approx(createDesc.layout.sample_spacing_meters));
+	CHECK(importDesc.source_width == 513u);
+	CHECK(importDesc.source_height == 257u);
+}
+
+TEST_CASE("Terrain Mode target extent widgets normalize on Enter focus loss and submit")
+{
+	const std::string widgets = ReadTerrainContractText(
+		"project/src/editor/Panels/Terrain/TerrainModeWidgets.cpp");
+	const std::string inputCall = "refUi.input_text(";
+	const std::string deactivateCall = "refUi.is_item_deactivated_after_edit()";
+
+	const size_t xLabel = widgets.find("\"Target size X (m)\"");
+	const size_t xInput = widgets.rfind(inputCall, xLabel);
+	const size_t xNextUiCall = widgets.find("refUi.", xLabel);
+	const size_t zLabel = widgets.find("\"Target size Z (m)\"");
+	const size_t zInput = widgets.rfind(inputCall, zLabel);
+	const size_t zNextUiCall = widgets.find("refUi.", zLabel);
+	REQUIRE(xLabel != std::string::npos);
+	REQUIRE(xInput != std::string::npos);
+	REQUIRE(zLabel != std::string::npos);
+	REQUIRE(zInput != std::string::npos);
+	CHECK(widgets.substr(xInput, xNextUiCall - xInput).find(
+		"AshEngine::UIInputTextFlagBits::EnterReturnsTrue") != std::string::npos);
+	CHECK(widgets.substr(zInput, zNextUiCall - zInput).find(
+		"AshEngine::UIInputTextFlagBits::EnterReturnsTrue") != std::string::npos);
+	CHECK(widgets.compare(xNextUiCall, deactivateCall.size(), deactivateCall) == 0);
+	CHECK(widgets.compare(zNextUiCall, deactivateCall.size(), deactivateCall) == 0);
+	CHECK(widgets.find("target_extent_x_error", xNextUiCall) < zInput);
+	CHECK(widgets.find("target_extent_z_error", zNextUiCall) != std::string::npos);
+	CHECK(widgets.find(
+		"Samples %u x %u | Components %u x %u | 1 m/sample") != std::string::npos);
+
+	const size_t createButton = widgets.find("refUi.button(\"Create Flat\")");
+	const size_t createNormalize = widgets.find("NormalizeTargetExtentDrafts()", createButton);
+	const size_t createIntent = widgets.find("TerrainEditorIntent::Kind::Create", createButton);
+	const size_t importButton = widgets.find("refUi.button(\"Import Heightmap\")");
+	const size_t importNormalize = widgets.find("NormalizeTargetExtentDrafts()", importButton);
+	const size_t importIntent = widgets.find("TerrainEditorIntent::Kind::Import", importButton);
+	REQUIRE(createButton != std::string::npos);
+	REQUIRE(createNormalize != std::string::npos);
+	REQUIRE(createIntent != std::string::npos);
+	REQUIRE(importButton != std::string::npos);
+	REQUIRE(importNormalize != std::string::npos);
+	REQUIRE(importIntent != std::string::npos);
+	CHECK(createButton < createNormalize);
+	CHECK(createNormalize < createIntent);
+	CHECK(importButton < importNormalize);
+	CHECK(importNormalize < importIntent);
+	CHECK(widgets.find("production 8193 x 8193") == std::string::npos);
 }
 
 TEST_CASE("Terrain Mode state builds an explicit valid create height mapping")
@@ -501,16 +623,17 @@ TEST_CASE("Terrain Mode state builds an explicit valid create height mapping")
 	CHECK(mapping.height_range == doctest::Approx(2000.0f));
 	state.flat_height = -125.0f;
 	CHECK(state.HasValidCreateParameters());
-	const AshEditor::TerrainCreateAssetDesc createDesc = state.BuildCreateDesc();
-	const AshEngine::TerrainGridLayout defaultLayout =
-		AshEngine::make_default_terrain_grid_layout();
-	CHECK(createDesc.layout.sample_count_x == defaultLayout.sample_count_x);
-	CHECK(createDesc.layout.sample_count_z == defaultLayout.sample_count_z);
-	CHECK(createDesc.layout.component_count_x == defaultLayout.component_count_x);
-	CHECK(createDesc.layout.component_count_z == defaultLayout.component_count_z);
-	CHECK(createDesc.layout.component_quad_count == defaultLayout.component_quad_count);
+	AshEditor::TerrainCreateAssetDesc createDesc{};
+	REQUIRE(state.TryBuildCreateDesc(createDesc));
+	const AshEngine::TerrainGridLayout authoringLayout =
+		AshEngine::make_terrain_authoring_grid_layout(2048u, 2048u);
+	CHECK(createDesc.layout.sample_count_x == authoringLayout.sample_count_x);
+	CHECK(createDesc.layout.sample_count_z == authoringLayout.sample_count_z);
+	CHECK(createDesc.layout.component_count_x == authoringLayout.component_count_x);
+	CHECK(createDesc.layout.component_count_z == authoringLayout.component_count_z);
+	CHECK(createDesc.layout.component_quad_count == authoringLayout.component_quad_count);
 	CHECK(createDesc.layout.sample_spacing_meters ==
-		doctest::Approx(defaultLayout.sample_spacing_meters));
+		doctest::Approx(authoringLayout.sample_spacing_meters));
 	CHECK(createDesc.height_mapping.height_offset == doctest::Approx(-125.0f));
 	CHECK(createDesc.height_mapping.height_range == doctest::Approx(2000.0f));
 	CHECK(createDesc.flat_height == doctest::Approx(-125.0f));
@@ -545,7 +668,8 @@ TEST_CASE("Terrain Mode state keeps import and export encoding controls independ
 	state.export_exr_pixel_type_index = 0;
 
 	const AshEngine::TerrainLayerId layerId = MakeTerrainModeLayerId();
-	const AshEngine::TerrainHeightImportDesc importDesc = state.BuildImportDesc();
+	AshEngine::TerrainHeightImportDesc importDesc{};
+	REQUIRE(state.TryBuildImportDesc(importDesc));
 	const AshEngine::TerrainHeightExportDesc exportDesc = state.BuildExportDesc(layerId);
 	CHECK(importDesc.source_path == std::filesystem::path("height/input.raw"));
 	CHECK(importDesc.format == AshEngine::TerrainHeightFileFormat::RawR16);
@@ -564,8 +688,9 @@ TEST_CASE("Terrain Mode state keeps import and export encoding controls independ
 
 	state.import_format_index = 2;
 	state.export_format_index = 2;
-	CHECK(state.BuildImportDesc().format == AshEngine::TerrainHeightFileFormat::Exr);
-	CHECK(state.BuildImportDesc().exr_channel == "IMPORT_HEIGHT");
+	REQUIRE(state.TryBuildImportDesc(importDesc));
+	CHECK(importDesc.format == AshEngine::TerrainHeightFileFormat::Exr);
+	CHECK(importDesc.exr_channel == "IMPORT_HEIGHT");
 	CHECK(state.BuildExportDesc(layerId).format == AshEngine::TerrainHeightFileFormat::Exr);
 	CHECK(state.BuildExportDesc(layerId).exr_channel == "EXPORT_HEIGHT");
 }

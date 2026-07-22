@@ -4,9 +4,11 @@
 #include "Services/TerrainEditorService.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace AshEditor
 {
@@ -14,6 +16,10 @@ namespace AshEditor
 	{
 		std::string create_asset_path{ "terrain/NewTerrain.AshTerrain" };
 		std::string import_asset_path{ "terrain/ImportedTerrain.AshTerrain" };
+		std::string target_extent_x_meters_draft{ "2048" };
+		std::string target_extent_z_meters_draft{ "2048" };
+		std::string target_extent_x_error{};
+		std::string target_extent_z_error{};
 		float create_height_min = 0.0f;
 		float create_height_max = 1024.0f;
 		float flat_height = 0.0f;
@@ -151,21 +157,97 @@ namespace AshEditor
 				flat_height >= create_height_min && flat_height <= create_height_max;
 		}
 
-		TerrainCreateAssetDesc BuildCreateDesc() const
+		static bool TryParseTargetExtentDraft(
+			const std::string& refDraft,
+			uint32_t& outExtentMeters)
 		{
-			TerrainCreateAssetDesc desc{};
-			desc.layout = AshEngine::make_default_terrain_grid_layout();
-			desc.height_mapping = BuildCreateHeightMapping();
-			desc.flat_height = flat_height;
-			return desc;
+			if (refDraft.empty())
+			{
+				return false;
+			}
+
+			uint32_t parsed = 0u;
+			const char* const pBegin = refDraft.data();
+			const char* const pEnd = pBegin + refDraft.size();
+			const std::from_chars_result result = std::from_chars(pBegin, pEnd, parsed, 10);
+			if (result.ec != std::errc{} || result.ptr != pEnd)
+			{
+				return false;
+			}
+
+			outExtentMeters = parsed;
+			return true;
 		}
 
-		AshEngine::TerrainHeightImportDesc BuildImportDesc() const
+		static bool NormalizeTargetExtentDraft(
+			std::string& refDraft,
+			std::string& outError)
 		{
+			uint32_t requestedExtent = 0u;
+			if (!TryParseTargetExtentDraft(refDraft, requestedExtent))
+			{
+				outError = "Enter a whole number of meters using decimal digits only.";
+				return false;
+			}
+
+			const uint32_t normalizedExtent =
+				AshEngine::normalize_terrain_authoring_extent_meters(requestedExtent);
+			refDraft = std::to_string(normalizedExtent);
+			outError.clear();
+			return true;
+		}
+
+		bool NormalizeTargetExtentDrafts()
+		{
+			const bool validX = NormalizeTargetExtentDraft(
+				target_extent_x_meters_draft, target_extent_x_error);
+			const bool validZ = NormalizeTargetExtentDraft(
+				target_extent_z_meters_draft, target_extent_z_error);
+			return validX && validZ;
+		}
+
+		bool TryBuildTargetLayout(AshEngine::TerrainGridLayout& outLayout) const
+		{
+			uint32_t extentX = 0u;
+			uint32_t extentZ = 0u;
+			if (!TryParseTargetExtentDraft(target_extent_x_meters_draft, extentX) ||
+				!TryParseTargetExtentDraft(target_extent_z_meters_draft, extentZ))
+			{
+				return false;
+			}
+
+			outLayout = AshEngine::make_terrain_authoring_grid_layout(extentX, extentZ);
+			return true;
+		}
+
+		bool TryBuildCreateDesc(TerrainCreateAssetDesc& outDesc) const
+		{
+			AshEngine::TerrainGridLayout layout{};
+			if (!TryBuildTargetLayout(layout))
+			{
+				return false;
+			}
+
+			TerrainCreateAssetDesc desc{};
+			desc.layout = layout;
+			desc.height_mapping = BuildCreateHeightMapping();
+			desc.flat_height = flat_height;
+			outDesc = std::move(desc);
+			return true;
+		}
+
+		bool TryBuildImportDesc(AshEngine::TerrainHeightImportDesc& outDesc) const
+		{
+			AshEngine::TerrainGridLayout layout{};
+			if (!TryBuildTargetLayout(layout))
+			{
+				return false;
+			}
+
 			AshEngine::TerrainHeightImportDesc desc{};
 			desc.source_path = import_heightmap_path;
 			desc.format = ResolveHeightFileFormat(import_format_index, import_raw_format_index);
-			desc.target_layout = AshEngine::make_default_terrain_grid_layout();
+			desc.target_layout = layout;
 			desc.height_mapping = { import_height_offset, import_height_range };
 			desc.source_width = import_source_width;
 			desc.source_height = import_source_height;
@@ -174,7 +256,8 @@ namespace AshEditor
 			desc.flip_x = import_flip_x;
 			desc.flip_z = import_raw_axis_index == 1;
 			desc.exr_channel = import_exr_channel;
-			return desc;
+			outDesc = std::move(desc);
+			return true;
 		}
 
 		AshEngine::TerrainHeightExportDesc BuildExportDesc(

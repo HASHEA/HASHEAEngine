@@ -270,24 +270,73 @@ namespace AshEditor
 				!refView.dirty && !readOnly && !recoveryState;
 
 			refUi.begin_disabled(fileOperationInProgress);
+			const bool normalizeTargetXByEnter = refUi.input_text(
+				"Target size X (m)",
+				refState.target_extent_x_meters_draft,
+				AshEngine::UIInputTextFlagBits::EnterReturnsTrue);
+			const bool normalizeTargetXByFocusLoss = refUi.is_item_deactivated_after_edit();
+			if (normalizeTargetXByEnter || normalizeTargetXByFocusLoss)
+			{
+				TerrainModeState::NormalizeTargetExtentDraft(
+					refState.target_extent_x_meters_draft,
+					refState.target_extent_x_error);
+			}
+			if (!refState.target_extent_x_error.empty())
+			{
+				refUi.text_wrapped("Target size X: %s", refState.target_extent_x_error.c_str());
+			}
+			const bool normalizeTargetZByEnter = refUi.input_text(
+				"Target size Z (m)",
+				refState.target_extent_z_meters_draft,
+				AshEngine::UIInputTextFlagBits::EnterReturnsTrue);
+			const bool normalizeTargetZByFocusLoss = refUi.is_item_deactivated_after_edit();
+			if (normalizeTargetZByEnter || normalizeTargetZByFocusLoss)
+			{
+				TerrainModeState::NormalizeTargetExtentDraft(
+					refState.target_extent_z_meters_draft,
+					refState.target_extent_z_error);
+			}
+			if (!refState.target_extent_z_error.empty())
+			{
+				refUi.text_wrapped("Target size Z: %s", refState.target_extent_z_error.c_str());
+			}
+			AshEngine::TerrainGridLayout targetLayout{};
+			const bool hasValidTargetLayout = refState.TryBuildTargetLayout(targetLayout);
+			if (hasValidTargetLayout)
+			{
+				refUi.text(
+					"Samples %u x %u | Components %u x %u | 1 m/sample",
+					targetLayout.sample_count_x,
+					targetLayout.sample_count_z,
+					targetLayout.component_count_x,
+					targetLayout.component_count_z);
+			}
+			refUi.end_disabled();
+
+			refUi.begin_disabled(fileOperationInProgress);
 			refUi.input_text("Create asset path", refState.create_asset_path);
 			refUi.input_float("Minimum height (m)", refState.create_height_min, 1.0f, 10.0f, "%.3f");
 			refUi.input_float("Maximum height (m)", refState.create_height_max, 1.0f, 10.0f, "%.3f");
 			refUi.input_float("Flat height (m)", refState.flat_height, 1.0f, 10.0f, "%.3f");
 			refUi.end_disabled();
+			TerrainCreateAssetDesc createDesc{};
+			const bool hasValidCreateDesc = refState.TryBuildCreateDesc(createDesc);
 			const bool canCreate = canReplaceSession && !refState.create_asset_path.empty() &&
-				refState.HasValidCreateParameters();
+				refState.HasValidCreateParameters() && hasValidCreateDesc;
 			refUi.begin_disabled(!canCreate);
 			if (refUi.button("Create Flat"))
 			{
-				TerrainEditorIntent intent{};
-				intent.kind = TerrainEditorIntent::Kind::Create;
-				intent.asset_path = refState.create_asset_path;
-				intent.create_desc = refState.BuildCreateDesc();
-				refResult.intents.push_back(std::move(intent));
+				refState.NormalizeTargetExtentDrafts();
+				if (refState.TryBuildCreateDesc(createDesc))
+				{
+					TerrainEditorIntent intent{};
+					intent.kind = TerrainEditorIntent::Kind::Create;
+					intent.asset_path = refState.create_asset_path;
+					intent.create_desc = std::move(createDesc);
+					refResult.intents.push_back(std::move(intent));
+				}
 			}
 			refUi.end_disabled();
-			refUi.text_unformatted("Create uses the production 8193 x 8193, 1 m Terrain layout.");
 
 			refUi.begin_disabled(fileOperationInProgress);
 			refUi.input_text("Import asset path", refState.import_asset_path);
@@ -315,21 +364,27 @@ namespace AshEditor
 			const bool validImportChannel =
 				importFormat != AshEngine::TerrainHeightFileFormat::Exr ||
 				!refState.import_exr_channel.empty();
+			AshEngine::TerrainHeightImportDesc importDesc{};
+			const bool hasValidImportDesc = refState.TryBuildImportDesc(importDesc);
 			const bool canImport =
 				canReplaceSession && !refState.import_asset_path.empty() &&
 				!refState.import_heightmap_path.empty() &&
 				refState.import_source_width > 0u && refState.import_source_height > 0u &&
 				std::isfinite(refState.import_height_offset) &&
 				std::isfinite(refState.import_height_range) &&
-				refState.import_height_range > 0.0f && validImportChannel;
+				refState.import_height_range > 0.0f && validImportChannel && hasValidImportDesc;
 			refUi.begin_disabled(!canImport);
 			if (refUi.button("Import Heightmap"))
 			{
-				TerrainEditorIntent intent{};
-				intent.kind = TerrainEditorIntent::Kind::Import;
-				intent.asset_path = refState.import_asset_path;
-				intent.import_desc = refState.BuildImportDesc();
-				refResult.intents.push_back(std::move(intent));
+				refState.NormalizeTargetExtentDrafts();
+				if (refState.TryBuildImportDesc(importDesc))
+				{
+					TerrainEditorIntent intent{};
+					intent.kind = TerrainEditorIntent::Kind::Import;
+					intent.asset_path = refState.import_asset_path;
+					intent.import_desc = std::move(importDesc);
+					refResult.intents.push_back(std::move(intent));
+				}
 			}
 			refUi.end_disabled();
 

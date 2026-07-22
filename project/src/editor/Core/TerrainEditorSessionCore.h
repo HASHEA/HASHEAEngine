@@ -71,7 +71,7 @@ namespace AshEditor
 
 	struct TerrainCreateAssetDesc
 	{
-		AshEngine::TerrainGridLayout layout = AshEngine::make_default_terrain_grid_layout();
+		AshEngine::TerrainGridLayout layout = AshEngine::make_terrain_authoring_grid_layout(2048u, 2048u);
 		AshEngine::TerrainHeightMapping height_mapping{};
 		float flat_height = 0.0f;
 	};
