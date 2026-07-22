@@ -32,6 +32,7 @@ project "Tests"
 		"**.lua",
 		"%{wks.location}/project/src/editor/Services/EditorGizmoMath.cpp",
 		"%{wks.location}/project/src/editor/Services/EditorGizmoViewport.cpp",
+		"%{wks.location}/project/src/editor/Services/EditorViewportCameraMath.cpp",
 		"%{wks.location}/project/src/editor/App/SceneWorkflowCoordinator.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorCommand.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorScenePathUtils.cpp",
