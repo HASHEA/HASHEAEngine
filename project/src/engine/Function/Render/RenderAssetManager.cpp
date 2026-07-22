@@ -458,8 +458,37 @@ namespace AshEngine
 			asset->accepted_snapshot();
 		if (!owns_request && previous_snapshot == snapshot)
 		{
-			return asset->readiness() == TerrainRenderReadiness::Failed ?
-				nullptr : asset;
+			const TerrainRenderReadiness readiness = asset->readiness();
+			if (readiness == TerrainRenderReadiness::Failed)
+			{
+				return nullptr;
+			}
+			bool changed = false;
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				changed = m_failed_terrain_requests.erase(key) != 0u;
+				if (readiness == TerrainRenderReadiness::Pending)
+				{
+					if (m_pending_terrain_requests.insert(key).second)
+					{
+						++m_pending_render_asset_count;
+						changed = true;
+					}
+				}
+				else if (m_pending_terrain_requests.erase(key) != 0u)
+				{
+					if (m_pending_render_asset_count > 0u)
+					{
+						--m_pending_render_asset_count;
+					}
+					changed = true;
+				}
+				if (changed)
+				{
+					++m_activity_epoch;
+				}
+			}
+			return asset;
 		}
 
 		std::string accept_error{};
@@ -481,15 +510,20 @@ namespace AshEngine
 			}
 
 			std::scoped_lock<std::mutex> lock(m_mutex);
+			bool changed = false;
 			if (m_pending_terrain_requests.erase(key) != 0u)
 			{
 				if (m_pending_render_asset_count > 0u)
 				{
 					--m_pending_render_asset_count;
 				}
+				changed = true;
 			}
-			m_failed_terrain_requests.insert(key);
-			++m_activity_epoch;
+			changed = m_failed_terrain_requests.insert(key).second || changed;
+			if (changed)
+			{
+				++m_activity_epoch;
+			}
 			return nullptr;
 		}
 

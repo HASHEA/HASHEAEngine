@@ -200,6 +200,8 @@ namespace AshEngine
 	private:
 		struct TerrainGpuComponentUpload
 		{
+			uint64_t asset_id = 0u;
+			std::weak_ptr<const TerrainAssetSnapshot> accepted_snapshot{};
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
 			uint64_t residency_revision = 0u;
@@ -208,6 +210,7 @@ namespace AshEngine
 
 		struct TerrainAtlasSlotMetadata
 		{
+			uint64_t asset_id = 0u;
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
 			uint64_t residency_revision = 0u;
@@ -216,6 +219,8 @@ namespace AshEngine
 			bool pinned = false;
 		};
 
+		bool matches_pending_weight_update_locked(
+			const TerrainGpuComponentUpload& expected) const;
 		bool finalize_gpu_resources(Renderer& renderer, std::string* out_error);
 		void fail_active_generation(const std::string& error);
 

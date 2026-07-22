@@ -27,6 +27,8 @@ namespace AshEngine
 		RenderGraphTextureRef weight_atlas_0{};
 		RenderGraphTextureRef weight_atlas_1{};
 		RenderGraphTextureRef coarse_weights{};
+		uint64_t pending_atlas_asset_id = 0u;
+		std::shared_ptr<const TerrainAssetSnapshot> pending_atlas_snapshot{};
 		TerrainComponentCoord pending_atlas_coord{};
 		uint64_t pending_atlas_generation = 0u;
 		uint64_t pending_atlas_revision = 0u;
@@ -114,9 +116,7 @@ namespace AshEngine
 			RenderGraphBuilder& graph,
 			const TerrainGraphResources& resources,
 			const std::shared_ptr<TerrainRenderAsset>& asset,
-			TerrainComponentCoord coord,
-			uint64_t content_generation,
-			uint64_t residency_revision,
+			const TerrainRenderAsset::TerrainGpuComponentUpload& pending_upload,
 			uint32_t atlas_slot,
 			bool write_high_resolution,
 			uint64_t render_frame_index);
@@ -154,6 +154,8 @@ namespace AshEngine
 		struct TerrainAtlasCompletion
 		{
 			std::weak_ptr<TerrainRenderAsset> asset{};
+			std::weak_ptr<const TerrainAssetSnapshot> snapshot{};
+			uint64_t asset_id = 0u;
 			uint64_t content_generation = 0u;
 			uint64_t residency_revision = 0u;
 			uint64_t update_frame_index = 0u;

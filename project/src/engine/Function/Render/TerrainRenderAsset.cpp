@@ -577,6 +577,28 @@ namespace AshEngine
 	TerrainRenderAsset::TerrainRenderAsset() = default;
 	TerrainRenderAsset::~TerrainRenderAsset() = default;
 
+	bool TerrainRenderAsset::matches_pending_weight_update_locked(
+		const TerrainGpuComponentUpload& expected) const
+	{
+		if (!m_accepted_snapshot || m_pending_weight_updates.empty())
+		{
+			return false;
+		}
+		const std::shared_ptr<const TerrainAssetSnapshot> expected_snapshot =
+			expected.accepted_snapshot.lock();
+		const TerrainGpuComponentUpload& pending =
+			m_pending_weight_updates.front();
+		return expected_snapshot &&
+			m_accepted_snapshot == expected_snapshot &&
+			pending.accepted_snapshot.lock() == expected_snapshot &&
+			m_accepted_snapshot->asset_id == expected.asset_id &&
+			pending.asset_id == expected.asset_id &&
+			pending.coord == expected.coord &&
+			pending.content_generation == expected.content_generation &&
+			pending.residency_revision == expected.residency_revision &&
+			pending.component == expected.component;
+	}
+
 	bool TerrainRenderAsset::accept_snapshot(
 		const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
 		std::string* out_error)
@@ -813,6 +835,8 @@ namespace AshEngine
 					return;
 				}
 				TerrainGpuComponentUpload upload{};
+				upload.asset_id = snapshot->asset_id;
+				upload.accepted_snapshot = snapshot;
 				upload.coord = component->coord;
 				upload.content_generation = snapshot->content_generation;
 				upload.residency_revision = snapshot->residency_revision;
@@ -849,6 +873,8 @@ namespace AshEngine
 					continue;
 				}
 				TerrainGpuComponentUpload carried = pending;
+				carried.asset_id = snapshot->asset_id;
+				carried.accepted_snapshot = snapshot;
 				carried.content_generation = snapshot->content_generation;
 				carried.residency_revision = snapshot->residency_revision;
 				uploads.push_back(std::move(carried));
@@ -867,6 +893,8 @@ namespace AshEngine
 					continue;
 				}
 				TerrainGpuComponentUpload carried = pending;
+				carried.asset_id = snapshot->asset_id;
+				carried.accepted_snapshot = snapshot;
 				carried.content_generation = snapshot->content_generation;
 				carried.residency_revision = snapshot->residency_revision;
 				weight_updates.push_back(std::move(carried));
@@ -964,6 +992,7 @@ namespace AshEngine
 			{
 				if (slot.occupied && slot.coord == coord)
 				{
+					slot.asset_id = snapshot->asset_id;
 					slot.content_generation = snapshot->content_generation;
 					slot.residency_revision = snapshot->residency_revision;
 				}

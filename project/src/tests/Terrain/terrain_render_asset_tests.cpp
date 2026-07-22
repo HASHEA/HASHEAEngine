@@ -1,5 +1,7 @@
 #include "Function/Render/RenderAssetManager.h"
 #include "Function/Render/TerrainRenderAsset.h"
+#include "Function/Render/RenderScene.h"
+#include "Function/Render/TerrainRenderPass.h"
 
 #ifdef TYPE_TO_STRING
 #undef TYPE_TO_STRING
@@ -112,6 +114,9 @@ namespace AshEngine
 	{
 		struct PendingUpload
 		{
+			uint64_t asset_id = 0u;
+			std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot{};
+			std::shared_ptr<const TerrainComponentSnapshot> component{};
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
 			uint64_t residency_revision = 0u;
@@ -151,6 +156,7 @@ namespace AshEngine
 				asset.m_pending_weight_updates.front();
 			TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
 				asset.m_frame_boundary_atlas_slots.front();
+			slot.asset_id = upload.asset_id;
 			slot.coord = upload.coord;
 			slot.content_generation = upload.content_generation;
 			slot.residency_revision = upload.residency_revision;
@@ -170,6 +176,9 @@ namespace AshEngine
 				asset.m_pending_component_uploads)
 			{
 				result.push_back({
+					upload.asset_id,
+					upload.accepted_snapshot.lock(),
+					upload.component,
 					upload.coord,
 					upload.content_generation,
 					upload.residency_revision });
@@ -187,6 +196,9 @@ namespace AshEngine
 				asset.m_pending_weight_updates)
 			{
 				result.push_back({
+					upload.asset_id,
+					upload.accepted_snapshot.lock(),
+					upload.component,
 					upload.coord,
 					upload.content_generation,
 					upload.residency_revision });
@@ -271,20 +283,22 @@ namespace AshEngine
 			const PendingUpload& completion)
 		{
 			std::scoped_lock<std::mutex> lock(asset.m_mutex);
-			if (asset.m_pending_weight_updates.empty())
+			TerrainRenderAsset::TerrainGpuComponentUpload expected{};
+			expected.asset_id = completion.asset_id;
+			expected.accepted_snapshot = completion.accepted_snapshot;
+			expected.component = completion.component;
+			expected.coord = completion.coord;
+			expected.content_generation = completion.content_generation;
+			expected.residency_revision = completion.residency_revision;
+			if (!asset.matches_pending_weight_update_locked(expected))
 			{
 				return false;
 			}
 			const TerrainRenderAsset::TerrainGpuComponentUpload& upload =
 				asset.m_pending_weight_updates.front();
-			if (!(upload.coord == completion.coord) ||
-				upload.content_generation != completion.content_generation ||
-				upload.residency_revision != completion.residency_revision)
-			{
-				return false;
-			}
 			TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
 				asset.m_frame_boundary_atlas_slots.front();
+			slot.asset_id = upload.asset_id;
 			slot.coord = upload.coord;
 			slot.content_generation = upload.content_generation;
 			slot.residency_revision = upload.residency_revision;
@@ -842,6 +856,75 @@ TEST_CASE("Terrain render asset isolates completions across residency revisions"
 	CHECK(asset.accepted_snapshot() == revision_4);
 }
 
+TEST_CASE("Terrain atlas completion isolates different assets with the same tuple")
+{
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto asset_a = MakeSnapshot(5u, layout);
+	asset_a->asset_id = 101u;
+	asset_a->residency_revision = 4u;
+	asset_a->components[0] = MakePaintedComponent({ 0u, 0u }, 5u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(asset_a, &error));
+	const auto stale_a_upload =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_weight_updates(asset);
+	REQUIRE(stale_a_upload.size() == 1u);
+	CHECK(stale_a_upload[0].asset_id == 101u);
+	CHECK(stale_a_upload[0].accepted_snapshot == asset_a);
+
+	auto asset_b = MakeSnapshot(5u, layout);
+	asset_b->asset_id = 202u;
+	asset_b->residency_revision = 4u;
+	asset_b->components[0] = MakePaintedComponent({ 0u, 0u }, 5u);
+	REQUIRE(asset.accept_snapshot(asset_b, &error));
+	REQUIRE(asset.pending_weight_update_count() == 1u);
+
+	CHECK_FALSE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		complete_weight_update(asset, stale_a_upload.front()));
+	CHECK(asset.accepted_snapshot() == asset_b);
+	CHECK(asset.pending_weight_update_count() == 1u);
+	const auto pending_b =
+		AshEngine::TerrainRenderAssetCpuTestSeam::pending_weight_updates(asset);
+	REQUIRE(pending_b.size() == 1u);
+	CHECK(pending_b[0].asset_id == 202u);
+	CHECK(pending_b[0].accepted_snapshot == asset_b);
+	CHECK(pending_b[0].component == asset_b->components[0]);
+}
+
+TEST_CASE("Terrain capture rejects a stale visible snapshot with the same tuple")
+{
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto snapshot_a = MakeSnapshot(5u, layout);
+	snapshot_a->asset_id = 101u;
+	snapshot_a->residency_revision = 4u;
+	snapshot_a->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	auto render_asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	REQUIRE(render_asset->accept_snapshot(snapshot_a));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		complete_front_height_upload(*render_asset));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		publish_active_snapshot(*render_asset));
+
+	auto snapshot_b = MakeSnapshot(5u, layout);
+	snapshot_b->asset_id = 202u;
+	snapshot_b->residency_revision = 4u;
+	snapshot_b->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	REQUIRE(render_asset->accept_snapshot(snapshot_b));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		complete_front_height_upload(*render_asset));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		publish_active_snapshot(*render_asset));
+
+	AshEngine::VisibleRenderFrame frame{};
+	AshEngine::VisibleTerrainFrame visible{};
+	visible.asset_snapshot = snapshot_a;
+	visible.render_asset = render_asset;
+	frame.terrains.push_back(visible);
+	AshEngine::TerrainRenderPass pass{};
+	CHECK_FALSE(pass.is_capture_ready(frame));
+}
+
 TEST_CASE("Terrain render layout resets failed asset identity before recovery")
 {
 	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
@@ -1362,6 +1445,82 @@ TEST_CASE("Terrain render asset manager accounts newer-revision failures as fail
 		CHECK_FALSE(failed.pending);
 		CHECK(failed.failed);
 		CHECK(failed.activity_epoch == 2u);
+		manager.shutdown();
+	}
+}
+
+TEST_CASE("Terrain render asset manager recovers a rejected candidate idempotently")
+{
+	SUBCASE("ready accepted snapshot clears failure without reopening pending work")
+	{
+		AshEngine::RenderAssetManager manager{};
+		const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+		auto accepted = MakeSnapshot(1u, layout);
+		accepted->components[0] = MakeComponent({ 0u, 0u }, 1u);
+		const auto asset = manager.request_terrain_asset(
+			"terrain/RejectedReady.AshTerrain", accepted);
+		REQUIRE(asset != nullptr);
+		REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+			complete_front_height_upload(*asset));
+		REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+			publish_active_snapshot(*asset));
+		REQUIRE(manager.finalize_pending_terrain_asset(asset));
+		AshEngine::TerrainRenderAssetCpuTestSeam::
+			install_layout_dependent_resource_sentinels(*asset);
+		const auto ready = manager.query_readiness();
+		REQUIRE_FALSE(ready.pending);
+		REQUIRE_FALSE(ready.failed);
+
+		auto rejected = MakeSnapshot(2u, MakeRenderLayout(8u, 16u));
+		FillCompleteSnapshot(rejected);
+		CHECK(manager.request_terrain_asset(
+			"terrain/rejectedready.ashterrain", rejected) == nullptr);
+		const auto failed = manager.query_readiness();
+		CHECK_FALSE(failed.pending);
+		CHECK(failed.failed);
+
+		CHECK(manager.request_terrain_asset(
+			"terrain/rejectedready.ashterrain", rejected) == nullptr);
+		CHECK(manager.query_readiness().activity_epoch == failed.activity_epoch);
+
+		CHECK(manager.request_terrain_asset(
+			"terrain/rejectedready.ashterrain", accepted) == asset);
+		const auto recovered = manager.query_readiness();
+		CHECK_FALSE(recovered.pending);
+		CHECK_FALSE(recovered.failed);
+		CHECK(recovered.activity_epoch == failed.activity_epoch + 1u);
+		CHECK(manager.request_terrain_asset(
+			"terrain/rejectedready.ashterrain", accepted) == asset);
+		CHECK(manager.query_readiness().activity_epoch == recovered.activity_epoch);
+		manager.shutdown();
+	}
+
+	SUBCASE("pending accepted snapshot restores its pending owner")
+	{
+		AshEngine::RenderAssetManager manager{};
+		const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+		auto accepted = MakeSnapshot(1u, layout);
+		accepted->components[0] = MakeComponent({ 0u, 0u }, 1u);
+		const auto asset = manager.request_terrain_asset(
+			"terrain/RejectedPending.AshTerrain", accepted);
+		REQUIRE(asset != nullptr);
+		AshEngine::TerrainRenderAssetCpuTestSeam::
+			install_layout_dependent_resource_sentinels(*asset);
+
+		auto rejected = MakeSnapshot(2u, MakeRenderLayout(8u, 16u));
+		FillCompleteSnapshot(rejected);
+		CHECK(manager.request_terrain_asset(
+			"terrain/rejectedpending.ashterrain", rejected) == nullptr);
+		const auto failed = manager.query_readiness();
+		CHECK_FALSE(failed.pending);
+		CHECK(failed.failed);
+
+		CHECK(manager.request_terrain_asset(
+			"terrain/rejectedpending.ashterrain", accepted) == asset);
+		const auto recovered = manager.query_readiness();
+		CHECK(recovered.pending);
+		CHECK_FALSE(recovered.failed);
+		CHECK(recovered.activity_epoch == failed.activity_epoch + 1u);
 		manager.shutdown();
 	}
 }

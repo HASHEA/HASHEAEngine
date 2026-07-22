@@ -248,6 +248,99 @@ TEST_CASE("Terrain atlas update declares texture UAV before GBuffer SRV")
 		RHI::AshResourceState::SRVGraphics);
 }
 
+TEST_CASE("Terrain atlas update closes over the complete asset identity")
+{
+	const std::string header = CompactSource(ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.h"));
+	const std::string asset_header = CompactSource(ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderAsset.h"));
+	const std::string source = CompactSource(ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp"));
+
+	const size_t upload_begin = asset_header.find("structTerrainGpuComponentUpload");
+	const size_t upload_end = asset_header.find(
+		"structTerrainAtlasSlotMetadata", upload_begin);
+	REQUIRE(upload_begin != std::string::npos);
+	REQUIRE(upload_end != std::string::npos);
+	const std::string upload = asset_header.substr(
+		upload_begin, upload_end - upload_begin);
+	CHECK(upload.find("uint64_tasset_id=0u") != std::string::npos);
+	CHECK(upload.find("std::weak_ptr<constTerrainAssetSnapshot>accepted_snapshot") !=
+		std::string::npos);
+
+	const size_t resources_begin = header.find("structTerrainGraphResources");
+	const size_t resources_end = header.find(
+		"enumclassTerrainPreparedDrawStatus", resources_begin);
+	REQUIRE(resources_begin != std::string::npos);
+	REQUIRE(resources_end != std::string::npos);
+	const std::string resources = header.substr(
+		resources_begin, resources_end - resources_begin);
+	CHECK(resources.find("pending_atlas_asset_id") != std::string::npos);
+	CHECK(resources.find("pending_atlas_snapshot") != std::string::npos);
+
+	const size_t completion_begin = header.find("structTerrainAtlasCompletion");
+	const size_t completion_end = header.find(
+		"std::vector<TerrainInstanceBufferEntry>", completion_begin);
+	REQUIRE(completion_begin != std::string::npos);
+	REQUIRE(completion_end != std::string::npos);
+	const std::string completion = header.substr(
+		completion_begin, completion_end - completion_begin);
+	CHECK(completion.find("uint64_tasset_id=0u") != std::string::npos);
+	CHECK(completion.find("std::weak_ptr<constTerrainAssetSnapshot>snapshot") !=
+		std::string::npos);
+
+	const size_t atlas_begin = source.find("TerrainRenderPass::add_atlas_update_pass(");
+	const size_t atlas_end = source.find("TerrainGraphResources::is_valid", atlas_begin);
+	REQUIRE(atlas_begin != std::string::npos);
+	REQUIRE(atlas_end != std::string::npos);
+	const std::string atlas = source.substr(atlas_begin, atlas_end - atlas_begin);
+	CHECK(CountText(atlas,
+		"matches_pending_weight_update_locked(pending_upload)") == 2u);
+	CHECK(atlas.find("slot.asset_id=pending_upload.asset_id") !=
+		std::string::npos);
+	const size_t prepare_graph_begin = source.find("TerrainRenderPass::prepare_graph(");
+	const size_t prepare_draw_begin = source.find(
+		"TerrainRenderPass::prepare_draw(", prepare_graph_begin);
+	REQUIRE(prepare_graph_begin != std::string::npos);
+	REQUIRE(prepare_draw_begin != std::string::npos);
+	const std::string prepare_graph = source.substr(
+		prepare_graph_begin, prepare_draw_begin - prepare_graph_begin);
+	CHECK(prepare_graph.find(
+		"upload.asset_id==terrain.asset_snapshot->asset_id") !=
+		std::string::npos);
+	CHECK(prepare_graph.find(
+		"resources.pending_atlas_asset_id=pending_upload.asset_id") !=
+		std::string::npos);
+	CHECK(prepare_graph.find(
+		"resources.pending_atlas_snapshot=terrain.asset_snapshot") !=
+		std::string::npos);
+
+	const size_t prepared_surface_begin = source.find(
+		"TerrainRenderPass::render_prepared_surface", prepare_draw_begin);
+	REQUIRE(prepared_surface_begin != std::string::npos);
+	const std::string prepare_draw = source.substr(
+		prepare_draw_begin, prepared_surface_begin - prepare_draw_begin);
+	CHECK(prepare_draw.find(
+		"slot.asset_id==terrain->asset_snapshot->asset_id") !=
+		std::string::npos);
+	CHECK(prepare_draw.find(
+		"resources.pending_atlas_asset_id==terrain->asset_snapshot->asset_id") !=
+		std::string::npos);
+	CHECK(prepare_draw.find(
+		"resources.pending_atlas_snapshot==terrain->asset_snapshot") !=
+		std::string::npos);
+
+	const size_t capture_begin = source.find("TerrainRenderPass::is_capture_ready(");
+	REQUIRE(capture_begin != std::string::npos);
+	const std::string capture = source.substr(capture_begin);
+	CHECK(capture.find("accepted_snapshot!=terrain.asset_snapshot") !=
+		std::string::npos);
+	CHECK(capture.find("completion->second.asset_id==terrain.asset_snapshot->asset_id") !=
+		std::string::npos);
+	CHECK(capture.find("completion_snapshot==terrain.asset_snapshot") !=
+		std::string::npos);
+}
+
 TEST_CASE("Terrain atlas clean frame declares only the GBuffer read")
 {
 	AshEngine::RenderGraphBuilder graph =
