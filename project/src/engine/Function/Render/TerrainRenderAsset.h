@@ -6,6 +6,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -33,6 +34,24 @@ namespace AshEngine
 		k_terrain_component_sample_count * k_terrain_component_sample_count * 8u;
 	// ByteAddressBuffer requires a raw SRV rather than a structured stride.
 	static constexpr uint32_t k_terrain_weight_upload_stride = 0u;
+
+	struct ASH_API TerrainRenderLayoutInfo
+	{
+		TerrainGridLayout layout{};
+		uint32_t component_count = 0u;
+		uint32_t component_row_stride = 0u;
+		uint64_t height_buffer_bytes = 0u;
+		uint32_t coarse_width = 0u;
+		uint32_t coarse_height = 0u;
+
+		auto component_linear_index(TerrainComponentCoord coord) const -> size_t;
+		auto contains(TerrainComponentCoord coord) const -> bool;
+	};
+
+	ASH_API auto derive_terrain_render_layout(
+		const TerrainGridLayout& layout,
+		TerrainRenderLayoutInfo& out_info,
+		std::string* out_error = nullptr) -> bool;
 
 	enum class TerrainRenderReadiness : uint8_t
 	{
@@ -82,6 +101,12 @@ namespace AshEngine
 		uint32_t completed_upload_count() const;
 
 	private:
+		void begin_content_generation_for_layout(
+			uint64_t content_generation,
+			uint32_t required_uploads,
+			const TerrainRenderLayoutInfo& layout_info,
+			bool reset_generation_identity);
+
 		std::array<uint64_t, 16> m_completed_component_mask{};
 		uint64_t m_active_content_generation = 0u;
 		uint64_t m_published_content_generation = 0u;
@@ -89,6 +114,10 @@ namespace AshEngine
 		uint32_t m_completed_upload_count = 0u;
 		TerrainRenderReadiness m_readiness = TerrainRenderReadiness::Pending;
 		bool m_has_active_content_generation = false;
+		uint32_t m_component_count = k_terrain_render_component_capacity;
+		uint32_t m_component_row_stride = k_terrain_component_count;
+		uint32_t m_component_count_z = k_terrain_component_count;
+		friend class TerrainRenderAsset;
 	};
 
 	ASH_API bool build_terrain_component_gpu_data(
@@ -172,6 +201,8 @@ namespace AshEngine
 		mutable std::mutex m_mutex{};
 		std::string m_asset_path{};
 		std::shared_ptr<const TerrainAssetSnapshot> m_accepted_snapshot{};
+		TerrainRenderLayoutInfo m_accepted_render_layout{};
+		bool m_has_accepted_render_layout = false;
 		std::vector<TerrainGpuComponentUpload> m_pending_component_uploads{};
 		std::vector<TerrainGpuComponentUpload> m_pending_weight_updates{};
 		std::vector<TerrainComponentCoord> m_pending_implicit_weight_resets{};

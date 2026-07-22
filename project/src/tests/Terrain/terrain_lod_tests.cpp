@@ -25,6 +25,64 @@ namespace
 			});
 		return found == result.components.end() ? nullptr : &*found;
 	}
+
+	auto MakeRectangularLodInput(uint32_t component_count_x, uint32_t component_count_z) ->
+		AshEngine::TerrainLodInput
+	{
+		AshEngine::TerrainLodInput input =
+			AshEngine::make_full_terrain_lod_test_input();
+		auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+		snapshot->asset_id = 2u;
+		snapshot->layout.sample_count_x = component_count_x *
+			AshEngine::k_terrain_component_quad_count + 1u;
+		snapshot->layout.sample_count_z = component_count_z *
+			AshEngine::k_terrain_component_quad_count + 1u;
+		snapshot->layout.component_count_x = component_count_x;
+		snapshot->layout.component_count_z = component_count_z;
+		snapshot->layout.component_quad_count =
+			AshEngine::k_terrain_component_quad_count;
+		snapshot->layout.sample_spacing_meters = 1.0f;
+		snapshot->height_mapping = { -512.0f, 1024.0f };
+		snapshot->content_generation = 1u;
+
+		const auto source = input.asset_snapshot->components.front();
+		for (uint32_t z = 0u; z < component_count_z; ++z)
+		{
+			for (uint32_t x = 0u; x < component_count_x; ++x)
+			{
+				auto component =
+					std::make_shared<AshEngine::TerrainComponentSnapshot>(*source);
+				component->coord = {
+					static_cast<uint16_t>(x), static_cast<uint16_t>(z) };
+				snapshot->components.push_back(std::move(component));
+			}
+		}
+		input.asset_snapshot = std::move(snapshot);
+		input.requested_lods.assign(
+			static_cast<size_t>(component_count_x) * component_count_z, 0u);
+		return input;
+	}
+}
+
+TEST_CASE("Terrain rectangular LOD uses dense bounds indexes and neighbors")
+{
+	AshEngine::TerrainLodInput input = MakeRectangularLodInput(8u, 16u);
+	input.requested_lods[15u * 8u + 6u] = 1u;
+
+	AshEngine::TerrainLodResult result{};
+	REQUIRE(AshEngine::build_terrain_lod_batches(input, result));
+	CHECK(result.components.size() == 128u);
+
+	const AshEngine::TerrainVisibleComponent* corner =
+		FindComponent(result, 7u, 15u);
+	REQUIRE(corner != nullptr);
+	CHECK(corner->world_min.x == doctest::Approx(1792.0f));
+	CHECK(corner->world_min.z == doctest::Approx(3840.0f));
+	CHECK(corner->world_max.x == doctest::Approx(2048.0f));
+	CHECK(corner->world_max.z == doctest::Approx(4096.0f));
+	CHECK((corner->neighbor_edge_mask &
+		AshEngine::TerrainNeighborEdgeWest) != 0u);
+	CHECK(FindComponent(result, 8u, 15u) == nullptr);
 }
 
 TEST_CASE("Terrain LOD repair limits neighbors and emits zero-based batches")

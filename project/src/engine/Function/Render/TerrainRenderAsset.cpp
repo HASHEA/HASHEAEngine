@@ -8,7 +8,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -19,6 +21,7 @@ namespace AshEngine
 		static constexpr uint64_t k_height_upload_byte_budget = 4ull * 1024ull * 1024ull;
 		static constexpr auto k_height_upload_wall_clock_budget =
 			std::chrono::milliseconds(2);
+		static constexpr uint32_t k_terrain_coarse_cells_per_component = 32u;
 
 		auto fail_with_error(std::string* out_error, const char* message) -> bool
 		{
@@ -29,20 +32,71 @@ namespace AshEngine
 			return false;
 		}
 
-		auto is_supported_render_layout(const TerrainGridLayout& layout) -> bool
+		auto format_spacing(float spacing) -> std::string
 		{
-			return layout.sample_count_x == k_terrain_sample_count &&
-				layout.sample_count_z == k_terrain_sample_count &&
-				layout.component_count_x == k_terrain_component_count &&
-				layout.component_count_z == k_terrain_component_count &&
-				layout.component_quad_count == k_terrain_component_quad_count &&
-				std::isfinite(layout.sample_spacing_meters) &&
-				layout.sample_spacing_meters > 0.0f;
+			if (std::isnan(spacing))
+			{
+				return "nan";
+			}
+			if (std::isinf(spacing))
+			{
+				return std::signbit(spacing) ? "-inf" : "inf";
+			}
+			std::ostringstream stream{};
+			stream << std::setprecision(std::numeric_limits<float>::max_digits10) <<
+				spacing;
+			return stream.str();
 		}
 
-		auto component_linear_index(TerrainComponentCoord coord) -> uint32_t
+		auto describe_layout_error(
+			const TerrainGridLayout& layout,
+			const std::string& reason) -> std::string
 		{
-			return static_cast<uint32_t>(coord.z) * k_terrain_component_count + coord.x;
+			return "terrain render layout rejected: samples=" +
+				std::to_string(layout.sample_count_x) + "x" +
+				std::to_string(layout.sample_count_z) + ", components=" +
+				std::to_string(layout.component_count_x) + "x" +
+				std::to_string(layout.component_count_z) + ", quads=" +
+				std::to_string(layout.component_quad_count) + ", spacing=" +
+				format_spacing(layout.sample_spacing_meters) + "; reason=" + reason;
+		}
+
+		auto checked_multiply_u64(
+			uint64_t lhs,
+			uint64_t rhs,
+			uint64_t& out_product) -> bool
+		{
+			if (lhs != 0u && rhs > std::numeric_limits<uint64_t>::max() / lhs)
+			{
+				return false;
+			}
+			out_product = lhs * rhs;
+			return true;
+		}
+
+		auto checked_add_u64(
+			uint64_t lhs,
+			uint64_t rhs,
+			uint64_t& out_sum) -> bool
+		{
+			if (rhs > std::numeric_limits<uint64_t>::max() - lhs)
+			{
+				return false;
+			}
+			out_sum = lhs + rhs;
+			return true;
+		}
+
+		auto render_layouts_equal(
+			const TerrainGridLayout& lhs,
+			const TerrainGridLayout& rhs) -> bool
+		{
+			return lhs.sample_count_x == rhs.sample_count_x &&
+				lhs.sample_count_z == rhs.sample_count_z &&
+				lhs.component_count_x == rhs.component_count_x &&
+				lhs.component_count_z == rhs.component_count_z &&
+				lhs.component_quad_count == rhs.component_quad_count &&
+				lhs.sample_spacing_meters == rhs.sample_spacing_meters;
 		}
 
 		auto validate_component_shape(
@@ -76,6 +130,140 @@ namespace AshEngine
 
 	}
 
+	auto TerrainRenderLayoutInfo::component_linear_index(
+		TerrainComponentCoord coord) const -> size_t
+	{
+		return static_cast<size_t>(coord.z) * component_row_stride + coord.x;
+	}
+
+	auto TerrainRenderLayoutInfo::contains(TerrainComponentCoord coord) const -> bool
+	{
+		return coord.x < layout.component_count_x &&
+			coord.z < layout.component_count_z;
+	}
+
+	auto derive_terrain_render_layout(
+		const TerrainGridLayout& layout,
+		TerrainRenderLayoutInfo& out_info,
+		std::string* out_error) -> bool
+	{
+		if (out_error)
+		{
+			out_error->clear();
+		}
+		const auto reject =
+			[&](const std::string& reason)
+			{
+				const std::string error = describe_layout_error(layout, reason);
+				return fail_with_error(out_error, error.c_str());
+			};
+
+		if (layout.component_count_x < 1u ||
+			layout.component_count_x > k_terrain_component_count)
+		{
+			return reject("component_count_x must be in [1, 32].");
+		}
+		if (layout.component_count_z < 1u ||
+			layout.component_count_z > k_terrain_component_count)
+		{
+			return reject("component_count_z must be in [1, 32].");
+		}
+		if (layout.component_quad_count != k_terrain_component_quad_count)
+		{
+			return reject("component_quad_count must equal 256.");
+		}
+		if (!std::isfinite(layout.sample_spacing_meters))
+		{
+			return reject("sample_spacing_meters must be finite.");
+		}
+		if (layout.sample_spacing_meters <= 0.0f)
+		{
+			return reject("sample_spacing_meters must be greater than zero.");
+		}
+		if (layout.sample_spacing_meters != 1.0f)
+		{
+			return reject("sample_spacing_meters must equal 1.");
+		}
+
+		uint64_t expected_samples_x = 0u;
+		uint64_t expected_samples_z = 0u;
+		if (!checked_multiply_u64(
+				layout.component_count_x,
+				layout.component_quad_count,
+				expected_samples_x) ||
+			!checked_add_u64(expected_samples_x, 1u, expected_samples_x) ||
+			!checked_multiply_u64(
+				layout.component_count_z,
+				layout.component_quad_count,
+				expected_samples_z) ||
+			!checked_add_u64(expected_samples_z, 1u, expected_samples_z) ||
+			expected_samples_x > std::numeric_limits<uint32_t>::max() ||
+			expected_samples_z > std::numeric_limits<uint32_t>::max())
+		{
+			return reject("sample count derivation overflowed uint32_t.");
+		}
+		if (layout.sample_count_x != expected_samples_x ||
+			layout.sample_count_z != expected_samples_z)
+		{
+			return reject(
+				"sample counts must equal component counts * 256 + 1 "
+				"(expected samples=" + std::to_string(expected_samples_x) + "x" +
+				std::to_string(expected_samples_z) + ").");
+		}
+
+		uint64_t component_count = 0u;
+		uint64_t height_word_count = 0u;
+		uint64_t height_buffer_bytes = 0u;
+		if (!checked_multiply_u64(
+				layout.component_count_x,
+				layout.component_count_z,
+				component_count) ||
+			component_count > std::numeric_limits<uint32_t>::max())
+		{
+			return reject("component count overflowed uint32_t.");
+		}
+		if (!checked_multiply_u64(
+				component_count,
+				k_terrain_render_height_words_per_component,
+				height_word_count) ||
+			!checked_multiply_u64(
+				height_word_count,
+				sizeof(uint32_t),
+				height_buffer_bytes) ||
+			height_buffer_bytes > std::numeric_limits<uint32_t>::max())
+		{
+			return reject("height buffer byte count exceeds uint32_t resource size.");
+		}
+
+		uint64_t coarse_width = 0u;
+		uint64_t coarse_height = 0u;
+		if (!checked_multiply_u64(
+				layout.component_count_x,
+				k_terrain_coarse_cells_per_component,
+				coarse_width) ||
+			!checked_add_u64(coarse_width, 1u, coarse_width) ||
+			!checked_multiply_u64(
+				layout.component_count_z,
+				k_terrain_coarse_cells_per_component,
+				coarse_height) ||
+			!checked_add_u64(coarse_height, 1u, coarse_height) ||
+			coarse_width > std::numeric_limits<uint16_t>::max() ||
+			coarse_height > std::numeric_limits<uint16_t>::max())
+		{
+			return reject("coarse target dimensions exceed uint16_t resource extent.");
+		}
+
+		TerrainRenderLayoutInfo candidate{};
+		candidate.layout = layout;
+		candidate.component_count = static_cast<uint32_t>(component_count);
+		candidate.component_row_stride = layout.component_count_x;
+		candidate.height_buffer_bytes = height_buffer_bytes;
+		candidate.coarse_width = static_cast<uint32_t>(coarse_width);
+		candidate.coarse_height = static_cast<uint32_t>(coarse_height);
+		out_info = candidate;
+		return true;
+	}
+
 	bool TerrainFallbackMaterialArrays::is_valid() const
 	{
 		return std::all_of(
@@ -91,7 +279,22 @@ namespace AshEngine
 		uint64_t content_generation,
 		uint32_t required_uploads)
 	{
-		if (m_has_active_content_generation &&
+		TerrainRenderLayoutInfo layout_info{};
+		layout_info.layout.component_count_x = k_terrain_component_count;
+		layout_info.layout.component_count_z = k_terrain_component_count;
+		layout_info.component_count = k_terrain_render_component_capacity;
+		layout_info.component_row_stride = k_terrain_component_count;
+		begin_content_generation_for_layout(
+			content_generation, required_uploads, layout_info, false);
+	}
+
+	void TerrainRenderAssetState::begin_content_generation_for_layout(
+		uint64_t content_generation,
+		uint32_t required_uploads,
+		const TerrainRenderLayoutInfo& layout_info,
+		bool reset_generation_identity)
+	{
+		if (!reset_generation_identity && m_has_active_content_generation &&
 			content_generation <= m_active_content_generation)
 		{
 			return;
@@ -102,7 +305,10 @@ namespace AshEngine
 		m_required_upload_count = required_uploads;
 		m_completed_upload_count = 0u;
 		m_completed_component_mask.fill(0u);
-		m_readiness = required_uploads <= k_terrain_render_component_capacity ?
+		m_component_count = layout_info.component_count;
+		m_component_row_stride = layout_info.component_row_stride;
+		m_component_count_z = layout_info.layout.component_count_z;
+		m_readiness = required_uploads <= m_component_count ?
 			TerrainRenderReadiness::Pending : TerrainRenderReadiness::Failed;
 	}
 
@@ -113,14 +319,19 @@ namespace AshEngine
 		if (!m_has_active_content_generation ||
 			content_generation != m_active_content_generation ||
 			m_readiness != TerrainRenderReadiness::Pending ||
-			coord.x >= k_terrain_component_count ||
-			coord.z >= k_terrain_component_count ||
+			coord.x >= m_component_row_stride ||
+			coord.z >= m_component_count_z ||
 			m_completed_upload_count >= m_required_upload_count)
 		{
 			return false;
 		}
 
-		const uint32_t bit_index = component_linear_index(coord);
+		const uint32_t bit_index =
+			static_cast<uint32_t>(coord.z) * m_component_row_stride + coord.x;
+		if (bit_index >= m_component_count)
+		{
+			return false;
+		}
 		const uint32_t word_index = bit_index / 64u;
 		const uint64_t bit = uint64_t{ 1u } << (bit_index % 64u);
 		if ((m_completed_component_mask[word_index] & bit) != 0u)
@@ -353,18 +564,54 @@ namespace AshEngine
 			}
 			return true;
 		}
-		if (m_accepted_snapshot &&
+		const bool same_accepted_asset = m_accepted_snapshot &&
+			snapshot->asset_id == m_accepted_snapshot->asset_id;
+		if (same_accepted_asset &&
 			snapshot->content_generation <= m_accepted_snapshot->content_generation)
 		{
 			return fail_with_error(
 				out_error, "terrain snapshot content generation is stale.");
 		}
 		const auto reject_snapshot =
-			[&](std::string error)
+			[&](
+				std::string error,
+				const TerrainRenderLayoutInfo* rejected_layout,
+				bool preserve_accepted)
 			{
-				m_state.begin_content_generation(snapshot->content_generation, 0u);
+				if (preserve_accepted)
+				{
+					m_last_error = std::move(error);
+					return fail_with_error(out_error, m_last_error.c_str());
+				}
+				if (rejected_layout)
+				{
+					m_state.begin_content_generation_for_layout(
+						snapshot->content_generation,
+						0u,
+						*rejected_layout,
+						m_accepted_snapshot && !same_accepted_asset);
+				}
+				else
+				{
+					TerrainRenderLayoutInfo fallback_layout{};
+					fallback_layout.layout.component_count_x =
+						k_terrain_component_count;
+					fallback_layout.layout.component_count_z =
+						k_terrain_component_count;
+					fallback_layout.component_count =
+						k_terrain_render_component_capacity;
+					fallback_layout.component_row_stride =
+						k_terrain_component_count;
+					m_state.begin_content_generation_for_layout(
+						snapshot->content_generation,
+						0u,
+						fallback_layout,
+						m_accepted_snapshot && !same_accepted_asset);
+				}
 				m_state.mark_failed(snapshot->content_generation);
 				m_accepted_snapshot = snapshot;
+				m_accepted_render_layout = {};
+				m_has_accepted_render_layout = false;
 				m_pending_component_uploads.clear();
 				m_pending_weight_updates.clear();
 				m_pending_implicit_weight_resets.clear();
@@ -375,34 +622,103 @@ namespace AshEngine
 
 		if (snapshot->failed)
 		{
+			const bool is_replacement = m_has_accepted_render_layout &&
+				(!same_accepted_asset || !render_layouts_equal(
+					snapshot->layout, m_accepted_render_layout.layout));
 			return reject_snapshot(snapshot->failure_detail.empty() ?
-				"terrain snapshot is failed." : snapshot->failure_detail);
+				"terrain snapshot is failed." : snapshot->failure_detail,
+				nullptr,
+				is_replacement);
 		}
-		if (!is_supported_render_layout(snapshot->layout))
+
+		TerrainRenderLayoutInfo render_layout{};
+		std::string render_layout_error{};
+		if (!derive_terrain_render_layout(
+				snapshot->layout, render_layout, &render_layout_error))
 		{
+			const bool is_replacement = m_has_accepted_render_layout &&
+				(!same_accepted_asset || !render_layouts_equal(
+					snapshot->layout, m_accepted_render_layout.layout));
 			return reject_snapshot(
-				"terrain snapshot layout is not the fixed Phase 2 render layout.");
+				std::move(render_layout_error), nullptr, is_replacement);
 		}
+		const bool is_replacement = m_has_accepted_render_layout &&
+			(!same_accepted_asset || !render_layouts_equal(
+				render_layout.layout, m_accepted_render_layout.layout));
+
 		if (!std::isfinite(snapshot->height_mapping.height_offset) ||
 			!std::isfinite(snapshot->height_mapping.height_range) ||
 			snapshot->height_mapping.height_range <= 0.0f)
 		{
-			return reject_snapshot("terrain height mapping is invalid.");
+			return reject_snapshot(
+				describe_layout_error(
+					snapshot->layout, "terrain height mapping is invalid."),
+				&render_layout,
+				is_replacement);
 		}
 
-		const size_t expected_component_count =
-			static_cast<size_t>(snapshot->layout.component_count_x) *
-			snapshot->layout.component_count_z;
-		if (snapshot->components.size() != expected_component_count)
+		if (snapshot->components.size() != render_layout.component_count)
 		{
 			return reject_snapshot(
-				"terrain snapshot component table must contain 1024 entries.");
+				describe_layout_error(
+					snapshot->layout,
+					"component table contains " +
+						std::to_string(snapshot->components.size()) +
+						" entries; expected " +
+						std::to_string(render_layout.component_count) + "."),
+				&render_layout,
+				is_replacement);
+		}
+
+		for (size_t index = 0u; index < snapshot->components.size(); ++index)
+		{
+			const std::shared_ptr<const TerrainComponentSnapshot>& component =
+				snapshot->components[index];
+			const TerrainComponentCoord expected_coord{
+				static_cast<uint16_t>(index % render_layout.component_row_stride),
+				static_cast<uint16_t>(index / render_layout.component_row_stride)
+			};
+			if (!component)
+			{
+				if (is_replacement)
+				{
+					return reject_snapshot(
+						describe_layout_error(
+							snapshot->layout,
+							"replacement snapshot has a null component at "
+							"row-major slot " + std::to_string(index) + "."),
+						&render_layout,
+						true);
+				}
+				continue;
+			}
+			if (!(component->coord == expected_coord))
+			{
+				return reject_snapshot(
+					describe_layout_error(
+						snapshot->layout,
+						"component at row-major slot " + std::to_string(index) +
+							" has coord=(" + std::to_string(component->coord.x) +
+							"," + std::to_string(component->coord.z) +
+							"); expected=(" + std::to_string(expected_coord.x) +
+							"," + std::to_string(expected_coord.z) + ")."),
+					&render_layout,
+					is_replacement);
+			}
+			std::string shape_error{};
+			if (!validate_component_shape(*component, &shape_error))
+			{
+				return reject_snapshot(
+					describe_layout_error(snapshot->layout, shape_error),
+					&render_layout,
+					is_replacement);
+			}
 		}
 
 		const bool rebuild_after_failure =
-			m_state.readiness() == TerrainRenderReadiness::Failed;
+			m_state.readiness() == TerrainRenderReadiness::Failed || is_replacement;
 		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
-			m_accepted_snapshot;
+			is_replacement ? nullptr : m_accepted_snapshot;
 		std::vector<TerrainGpuComponentUpload> uploads{};
 		std::vector<TerrainGpuComponentUpload> weight_updates{};
 		std::vector<TerrainComponentCoord> implicit_weight_resets{};
@@ -414,14 +730,13 @@ namespace AshEngine
 		std::array<bool, k_terrain_render_component_capacity> removal_scheduled{};
 
 		const auto try_component_index =
-			[](TerrainComponentCoord coord, size_t& out_index)
+			[&render_layout](TerrainComponentCoord coord, size_t& out_index)
 			{
-				if (coord.x >= k_terrain_component_count ||
-					coord.z >= k_terrain_component_count)
+				if (!render_layout.contains(coord))
 				{
 					return false;
 				}
-				out_index = component_linear_index(coord);
+				out_index = render_layout.component_linear_index(coord);
 				return true;
 			};
 		const auto append_upload =
@@ -430,7 +745,8 @@ namespace AshEngine
 				std::array<bool, k_terrain_render_component_capacity>& scheduled,
 				const std::shared_ptr<const TerrainComponentSnapshot>& component)
 			{
-				const size_t index = component_linear_index(component->coord);
+				const size_t index =
+					render_layout.component_linear_index(component->coord);
 				if (scheduled[index])
 				{
 					return;
@@ -448,7 +764,7 @@ namespace AshEngine
 				std::array<bool, k_terrain_render_component_capacity>& scheduled,
 				TerrainComponentCoord coord)
 			{
-				const size_t index = component_linear_index(coord);
+				const size_t index = render_layout.component_linear_index(coord);
 				if (!scheduled[index])
 				{
 					destination.push_back(coord);
@@ -525,8 +841,8 @@ namespace AshEngine
 			const std::shared_ptr<const TerrainComponentSnapshot>& component =
 				snapshot->components[index];
 			const TerrainComponentCoord expected_coord{
-				static_cast<uint16_t>(index % k_terrain_component_count),
-				static_cast<uint16_t>(index / k_terrain_component_count)
+				static_cast<uint16_t>(index % render_layout.component_row_stride),
+				static_cast<uint16_t>(index / render_layout.component_row_stride)
 			};
 			const std::shared_ptr<const TerrainComponentSnapshot> previous_component =
 				previous_snapshot && index < previous_snapshot->components.size() ?
@@ -538,17 +854,6 @@ namespace AshEngine
 					append_coord(removals, removal_scheduled, expected_coord);
 				}
 				continue;
-			}
-
-			if (!(component->coord == expected_coord))
-			{
-				return reject_snapshot(
-					"terrain component coordinate does not match its row-major slot.");
-			}
-			std::string shape_error{};
-			if (!validate_component_shape(*component, &shape_error))
-			{
-				return reject_snapshot(std::move(shape_error));
 			}
 
 			if (!rebuild_after_failure && previous_component == component)
@@ -584,9 +889,11 @@ namespace AshEngine
 			}
 		}
 
-		m_state.begin_content_generation(
+		m_state.begin_content_generation_for_layout(
 			snapshot->content_generation,
-			static_cast<uint32_t>(uploads.size() + removals.size()));
+			static_cast<uint32_t>(uploads.size() + removals.size()),
+			render_layout,
+			m_accepted_snapshot && !same_accepted_asset);
 		for (TerrainComponentCoord coord : resident_weight_rebinds)
 		{
 			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
@@ -598,6 +905,8 @@ namespace AshEngine
 			}
 		}
 		m_accepted_snapshot = snapshot;
+		m_accepted_render_layout = render_layout;
+		m_has_accepted_render_layout = true;
 		m_pending_component_uploads = std::move(uploads);
 		m_pending_weight_updates = std::move(weight_updates);
 		m_pending_implicit_weight_resets = std::move(implicit_weight_resets);
@@ -790,13 +1099,21 @@ namespace AshEngine
 					m_last_error.c_str());
 		}
 
+		TerrainRenderLayoutInfo render_layout{};
+		std::string render_layout_error{};
+		if (!derive_terrain_render_layout(
+				m_accepted_snapshot->layout,
+				render_layout,
+				&render_layout_error))
+		{
+			fail_active_generation(render_layout_error);
+			return fail_with_error(out_error, m_last_error.c_str());
+		}
+
 		if (!m_packed_height_buffer)
 		{
-			constexpr uint32_t height_buffer_size =
-				k_terrain_render_height_words_per_component *
-				k_terrain_render_component_capacity * sizeof(uint32_t);
 			m_packed_height_buffer = renderer.create_storage_buffer({
-				height_buffer_size,
+				static_cast<uint32_t>(render_layout.height_buffer_bytes),
 				sizeof(uint32_t),
 				false,
 				false,
@@ -840,8 +1157,8 @@ namespace AshEngine
 		if (!m_coarse_weight_target)
 		{
 			m_coarse_weight_target = renderer.create_render_target({
-				static_cast<uint16_t>(k_terrain_coarse_weight_extent),
-				static_cast<uint16_t>(k_terrain_coarse_weight_extent),
+				static_cast<uint16_t>(render_layout.coarse_width),
+				static_cast<uint16_t>(render_layout.coarse_height),
 				RenderTextureFormat::RGBA8_UNORM,
 				true,
 				true,
@@ -915,8 +1232,24 @@ namespace AshEngine
 				return fail_with_error(out_error, m_last_error.c_str());
 			}
 
-			const uint32_t offset =
-				component_linear_index(upload.coord) * component_height_bytes;
+			if (!render_layout.contains(upload.coord))
+			{
+				fail_active_generation(
+					"Terrain height upload coordinate is outside the accepted layout.");
+				return fail_with_error(out_error, m_last_error.c_str());
+			}
+			const uint64_t offset_64 =
+				render_layout.component_linear_index(upload.coord) *
+				static_cast<uint64_t>(component_height_bytes);
+			if (offset_64 > std::numeric_limits<uint32_t>::max() ||
+				offset_64 + component_height_bytes >
+					render_layout.height_buffer_bytes)
+			{
+				fail_active_generation(
+					"Terrain height upload range exceeds the accepted layout buffer.");
+				return fail_with_error(out_error, m_last_error.c_str());
+			}
+			const uint32_t offset = static_cast<uint32_t>(offset_64);
 			if (!m_packed_height_buffer->update(
 					offset,
 					component_height_bytes,

@@ -6,6 +6,7 @@
 #endif
 #include "doctest.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -49,18 +50,43 @@ namespace
 		return component;
 	}
 
-	auto MakeSnapshot(uint64_t content_generation) ->
+	auto MakeRenderLayout(uint32_t component_count_x, uint32_t component_count_z) ->
+		AshEngine::TerrainGridLayout
+	{
+		AshEngine::TerrainGridLayout layout{};
+		layout.sample_count_x = component_count_x *
+			AshEngine::k_terrain_component_quad_count + 1u;
+		layout.sample_count_z = component_count_z *
+			AshEngine::k_terrain_component_quad_count + 1u;
+		layout.component_count_x = component_count_x;
+		layout.component_count_z = component_count_z;
+		layout.component_quad_count = AshEngine::k_terrain_component_quad_count;
+		layout.sample_spacing_meters = 1.0f;
+		return layout;
+	}
+
+	auto MakeSnapshot(
+		uint64_t content_generation,
+		const AshEngine::TerrainGridLayout& layout) ->
 		std::shared_ptr<AshEngine::TerrainAssetSnapshot>
 	{
 		auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();
 		snapshot->asset_id = 77u;
-		snapshot->layout = AshEngine::make_default_terrain_grid_layout();
+		snapshot->layout = layout;
 		snapshot->height_mapping = { 0.0f, 100.0f };
 		snapshot->content_generation = content_generation;
 		snapshot->components.resize(
 			static_cast<size_t>(snapshot->layout.component_count_x) *
 			snapshot->layout.component_count_z);
 		return snapshot;
+	}
+
+	auto MakeSnapshot(uint64_t content_generation) ->
+		std::shared_ptr<AshEngine::TerrainAssetSnapshot>
+	{
+		return MakeSnapshot(
+			content_generation,
+			AshEngine::make_default_terrain_grid_layout());
 	}
 }
 
@@ -210,6 +236,281 @@ TEST_CASE("Terrain render asset failure persists until a newer generation succee
 	CHECK(state.publish_content_generation(9u));
 	CHECK(state.readiness() == AshEngine::TerrainRenderReadiness::Ready);
 	CHECK(state.published_content_generation() == 9u);
+}
+
+TEST_CASE("Terrain render layout derives rectangular resource sizes")
+{
+	struct ExpectedLayout
+	{
+		uint32_t component_count_x = 0u;
+		uint32_t component_count_z = 0u;
+		uint32_t component_count = 0u;
+		uint64_t height_buffer_bytes = 0u;
+		uint32_t coarse_width = 0u;
+		uint32_t coarse_height = 0u;
+		AshEngine::TerrainComponentCoord last_coord{};
+		size_t last_index = 0u;
+	};
+	const std::array<ExpectedLayout, 5> expected_layouts =
+	{
+		ExpectedLayout{ 1u, 1u, 1u, 132100ull, 33u, 33u, { 0u, 0u }, 0u },
+		ExpectedLayout{ 1u, 32u, 32u, 4227200ull, 33u, 1025u, { 0u, 31u }, 31u },
+		ExpectedLayout{ 8u, 8u, 64u, 8454400ull, 257u, 257u, { 7u, 7u }, 63u },
+		ExpectedLayout{ 8u, 16u, 128u, 16908800ull, 257u, 513u, { 7u, 15u }, 127u },
+		ExpectedLayout{ 32u, 32u, 1024u, 135270400ull, 1025u, 1025u, { 31u, 31u }, 1023u }
+	};
+
+	for (const ExpectedLayout& expected : expected_layouts)
+	{
+		CAPTURE(expected.component_count_x);
+		CAPTURE(expected.component_count_z);
+		const AshEngine::TerrainGridLayout layout = MakeRenderLayout(
+			expected.component_count_x, expected.component_count_z);
+		AshEngine::TerrainRenderLayoutInfo info{};
+		std::string error = "stale";
+		REQUIRE(AshEngine::derive_terrain_render_layout(layout, info, &error));
+		CHECK(error.empty());
+		CHECK(info.layout.sample_count_x == layout.sample_count_x);
+		CHECK(info.layout.sample_count_z == layout.sample_count_z);
+		CHECK(info.layout.component_count_x == expected.component_count_x);
+		CHECK(info.layout.component_count_z == expected.component_count_z);
+		CHECK(info.component_count == expected.component_count);
+		CHECK(info.component_row_stride == expected.component_count_x);
+		CHECK(info.height_buffer_bytes == expected.height_buffer_bytes);
+		CHECK(info.coarse_width == expected.coarse_width);
+		CHECK(info.coarse_height == expected.coarse_height);
+		CHECK(info.contains(expected.last_coord));
+		CHECK(info.component_linear_index(expected.last_coord) ==
+			expected.last_index);
+		CHECK_FALSE(info.contains({
+			static_cast<uint16_t>(expected.component_count_x), 0u }));
+		CHECK_FALSE(info.contains({
+			0u, static_cast<uint16_t>(expected.component_count_z) }));
+	}
+}
+
+TEST_CASE("Terrain render layout fails closed with precise diagnostics")
+{
+	const auto CheckRejected = [](
+		const AshEngine::TerrainGridLayout& layout,
+		const std::string& reason,
+		const std::string& spacing)
+	{
+		AshEngine::TerrainRenderLayoutInfo info{};
+		info.component_count = 99u;
+		info.component_row_stride = 77u;
+		info.height_buffer_bytes = 55u;
+		std::string error{};
+		CHECK_FALSE(AshEngine::derive_terrain_render_layout(layout, info, &error));
+		CHECK(error.find(
+			"samples=" + std::to_string(layout.sample_count_x) + "x" +
+			std::to_string(layout.sample_count_z)) != std::string::npos);
+		CHECK(error.find(
+			"components=" + std::to_string(layout.component_count_x) + "x" +
+			std::to_string(layout.component_count_z)) != std::string::npos);
+		CHECK(error.find(
+			"quads=" + std::to_string(layout.component_quad_count)) !=
+			std::string::npos);
+		CHECK(error.find("spacing=" + spacing) != std::string::npos);
+		CHECK(error.find("reason=" + reason) != std::string::npos);
+		CHECK(info.component_count == 99u);
+		CHECK(info.component_row_stride == 77u);
+		CHECK(info.height_buffer_bytes == 55u);
+	};
+
+	AshEngine::TerrainGridLayout zero_x = MakeRenderLayout(0u, 1u);
+	CheckRejected(
+		zero_x,
+		"component_count_x must be in [1, 32].",
+		"1");
+
+	AshEngine::TerrainGridLayout too_many_z = MakeRenderLayout(1u, 33u);
+	CheckRejected(
+		too_many_z,
+		"component_count_z must be in [1, 32].",
+		"1");
+
+	AshEngine::TerrainGridLayout wrong_quads = MakeRenderLayout(1u, 1u);
+	wrong_quads.component_quad_count = 255u;
+	CheckRejected(
+		wrong_quads,
+		"component_quad_count must equal 256.",
+		"1");
+
+	AshEngine::TerrainGridLayout non_finite_spacing = MakeRenderLayout(1u, 1u);
+	non_finite_spacing.sample_spacing_meters =
+		std::numeric_limits<float>::infinity();
+	CheckRejected(
+		non_finite_spacing,
+		"sample_spacing_meters must be finite.",
+		"inf");
+
+	AshEngine::TerrainGridLayout zero_spacing = MakeRenderLayout(1u, 1u);
+	zero_spacing.sample_spacing_meters = 0.0f;
+	CheckRejected(
+		zero_spacing,
+		"sample_spacing_meters must be greater than zero.",
+		"0");
+
+	AshEngine::TerrainGridLayout wrong_spacing = MakeRenderLayout(1u, 1u);
+	wrong_spacing.sample_spacing_meters = 0.5f;
+	CheckRejected(
+		wrong_spacing,
+		"sample_spacing_meters must equal 1.",
+		"0.5");
+
+	AshEngine::TerrainGridLayout wrong_samples = MakeRenderLayout(8u, 16u);
+	--wrong_samples.sample_count_x;
+	CheckRejected(
+		wrong_samples,
+		"sample counts must equal component counts * 256 + 1 "
+		"(expected samples=2049x4097).",
+		"1");
+
+	AshEngine::TerrainGridLayout huge_components{};
+	huge_components.sample_count_x = std::numeric_limits<uint32_t>::max();
+	huge_components.sample_count_z = std::numeric_limits<uint32_t>::max();
+	huge_components.component_count_x = std::numeric_limits<uint32_t>::max();
+	huge_components.component_count_z = std::numeric_limits<uint32_t>::max();
+	CheckRejected(
+		huge_components,
+		"component_count_x must be in [1, 32].",
+		"1");
+
+	AshEngine::TerrainRenderLayoutInfo maximum{};
+	REQUIRE(AshEngine::derive_terrain_render_layout(
+		MakeRenderLayout(32u, 32u), maximum));
+	CHECK(maximum.height_buffer_bytes <=
+		std::numeric_limits<uint32_t>::max());
+	CHECK(maximum.coarse_width <= std::numeric_limits<uint16_t>::max());
+	CHECK(maximum.coarse_height <= std::numeric_limits<uint16_t>::max());
+}
+
+TEST_CASE("Terrain render layout validates rectangular snapshot shape")
+{
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(8u, 16u);
+
+	SUBCASE("component table size is exact")
+	{
+		auto snapshot = MakeSnapshot(1u, layout);
+		snapshot->components.pop_back();
+		AshEngine::TerrainRenderAsset asset{};
+		std::string error{};
+		CHECK_FALSE(asset.accept_snapshot(snapshot, &error));
+		CHECK(error.find("component table contains 127 entries; expected 128.") !=
+			std::string::npos);
+		CHECK(error.find("components=8x16") != std::string::npos);
+	}
+
+	SUBCASE("non-null components match their dense row-major slots")
+	{
+		auto snapshot = MakeSnapshot(1u, layout);
+		snapshot->components[127] = MakeComponent({ 6u, 15u }, 1u);
+		AshEngine::TerrainRenderAsset asset{};
+		std::string error{};
+		CHECK_FALSE(asset.accept_snapshot(snapshot, &error));
+		CHECK(error.find(
+			"component at row-major slot 127 has coord=(6,15); expected=(7,15).") !=
+			std::string::npos);
+	}
+
+	SUBCASE("first load may be sparse")
+	{
+		auto snapshot = MakeSnapshot(1u, layout);
+		snapshot->components[127] = MakeComponent({ 7u, 15u }, 1u);
+		AshEngine::TerrainRenderAsset asset{};
+		std::string error{};
+		REQUIRE(asset.accept_snapshot(snapshot, &error));
+		CHECK(error.empty());
+		CHECK(asset.pending_component_upload_count() == 1u);
+		CHECK(asset.has_pending_component_upload({ 7u, 15u }));
+		CHECK_FALSE(asset.has_pending_component_upload({ 8u, 15u }));
+	}
+}
+
+TEST_CASE("Terrain render layout rejects incomplete replacements without index pollution")
+{
+	const AshEngine::TerrainGridLayout initial_layout = MakeRenderLayout(1u, 1u);
+	auto initial = MakeSnapshot(7u, initial_layout);
+	initial->components[0] = MakeComponent({ 0u, 0u }, 7u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(initial, &error));
+	REQUIRE(asset.accepted_snapshot() == initial);
+	REQUIRE(asset.pending_component_upload_count() == 1u);
+
+	SUBCASE("asset replacement cannot reset generation with a null table entry")
+	{
+		auto replacement = MakeSnapshot(1u, initial_layout);
+		replacement->asset_id = 78u;
+		CHECK_FALSE(asset.accept_snapshot(replacement, &error));
+		CHECK(error.find(
+			"replacement snapshot has a null component at row-major slot 0.") !=
+			std::string::npos);
+		CHECK(asset.accepted_snapshot() == initial);
+		CHECK(asset.pending_component_upload_count() == 1u);
+		CHECK(asset.has_pending_component_upload({ 0u, 0u }));
+	}
+
+	SUBCASE("complete asset replacement resets CPU generation identity")
+	{
+		auto replacement = MakeSnapshot(1u, initial_layout);
+		replacement->asset_id = 78u;
+		replacement->components[0] = MakeComponent({ 0u, 0u }, 1u);
+		REQUIRE(asset.accept_snapshot(replacement, &error));
+		CHECK(asset.accepted_snapshot() == replacement);
+		CHECK(asset.pending_component_upload_count() == 1u);
+		CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::
+			complete_front_height_upload(asset));
+	}
+
+	SUBCASE("layout replacement validates row-major order before indexing")
+	{
+		const AshEngine::TerrainGridLayout replacement_layout =
+			MakeRenderLayout(8u, 16u);
+		auto replacement = MakeSnapshot(8u, replacement_layout);
+		const auto repeated_component = MakeComponent({ 0u, 0u }, 8u);
+		std::fill(
+			replacement->components.begin(),
+			replacement->components.end(),
+			repeated_component);
+		CHECK_FALSE(asset.accept_snapshot(replacement, &error));
+		CHECK(error.find(
+			"component at row-major slot 1 has coord=(0,0); expected=(1,0).") !=
+			std::string::npos);
+		CHECK(asset.accepted_snapshot() == initial);
+		CHECK(asset.pending_component_upload_count() == 1u);
+		CHECK(asset.has_pending_component_upload({ 0u, 0u }));
+		CHECK_FALSE(asset.has_pending_component_upload({ 7u, 15u }));
+	}
+}
+
+TEST_CASE("Terrain render layout resets failed asset identity before recovery")
+{
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+
+	auto first_failure = MakeSnapshot(10u, layout);
+	--first_failure->layout.sample_count_x;
+	CHECK_FALSE(asset.accept_snapshot(first_failure, &error));
+	CHECK(asset.accepted_content_generation() == 10u);
+
+	auto replacement_failure = MakeSnapshot(1u, layout);
+	replacement_failure->asset_id = 78u;
+	replacement_failure->failed = true;
+	replacement_failure->failure_detail = "replacement decode failed";
+	CHECK_FALSE(asset.accept_snapshot(replacement_failure, &error));
+	CHECK(error == "replacement decode failed");
+	CHECK(asset.accepted_content_generation() == 1u);
+
+	auto recovered = MakeSnapshot(2u, layout);
+	recovered->asset_id = 78u;
+	recovered->components[0] = MakeComponent({ 0u, 0u }, 2u);
+	REQUIRE(asset.accept_snapshot(recovered, &error));
+	CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::
+		complete_front_height_upload(asset));
 }
 
 TEST_CASE("Terrain render asset packs R16 heights and exact eight-lane weights")
@@ -603,7 +904,7 @@ TEST_CASE("Terrain render asset manager retires a failed pending owner only once
 	manager.shutdown();
 }
 
-TEST_CASE("Terrain render asset fixed GPU layout matches the approved residency budget")
+TEST_CASE("Terrain render asset keeps the approved maximum capacity and atlas residency budget")
 {
 	CHECK(AshEngine::k_terrain_render_height_words_per_component == 33025u);
 	CHECK(AshEngine::k_terrain_render_component_capacity == 1024u);
@@ -611,9 +912,6 @@ TEST_CASE("Terrain render asset fixed GPU layout matches the approved residency 
 	CHECK(AshEngine::k_terrain_weight_atlas_extent == 4144u);
 	CHECK(AshEngine::k_terrain_weight_atlas_slot_count == 256u);
 	CHECK(AshEngine::k_terrain_coarse_weight_extent == 1025u);
-	CHECK(static_cast<uint64_t>(AshEngine::k_terrain_render_height_words_per_component) *
-		AshEngine::k_terrain_render_component_capacity * sizeof(uint32_t) ==
-		135270400ull);
 }
 
 TEST_CASE("Terrain fallback material arrays are manager owned and shared")
