@@ -1,13 +1,11 @@
 #pragma once
 
-static const uint AshTerrainComponentCount = 32u;
 static const uint AshTerrainComponentQuads = 256u;
 static const uint AshTerrainComponentSamples = 257u;
 static const uint AshTerrainHeightWordsPerComponent = 33025u;
 static const uint AshTerrainAtlasSlotExtent = 259u;
 static const uint AshTerrainAtlasGridWidth = 16u;
 static const uint AshTerrainAtlasExtent = 4144u;
-static const uint AshTerrainCoarseExtent = 1025u;
 
 struct AshTerrainInstance
 {
@@ -47,7 +45,7 @@ uint AshTerrainLoadEncodedHeight(
     uint2 local_sample)
 {
     const uint component_index =
-        component_coord.y * AshTerrainComponentCount + component_coord.x;
+        component_coord.y * AshTerrainLayout.x + component_coord.x;
     const uint sample_index =
         local_sample.y * AshTerrainComponentSamples + local_sample.x;
     const uint packed = height_words[
@@ -74,11 +72,14 @@ float AshTerrainLoadGlobalHeight(
     float height_offset,
     float height_range)
 {
-    const int max_sample = int(AshTerrainComponentCount * AshTerrainComponentQuads);
-    const uint2 clamped_sample = uint2(clamp(global_sample, int2(0, 0), int2(max_sample, max_sample)));
+    const int2 max_sample = int2(AshTerrainLayout.zw) - int2(1, 1);
+    const uint2 clamped_sample = uint2(clamp(
+        global_sample,
+        int2(0, 0),
+        max_sample));
     const uint2 component_coord = min(
         clamped_sample / AshTerrainComponentQuads,
-        uint2(AshTerrainComponentCount - 1u, AshTerrainComponentCount - 1u));
+        AshTerrainLayout.xy - 1u);
     const uint2 local_sample =
         clamped_sample - component_coord * AshTerrainComponentQuads;
     return AshTerrainLoadHeight(
@@ -171,24 +172,23 @@ float2 AshTerrainCanonicalHeightGradient(
     float height_range,
     float sample_spacing)
 {
-    const int max_sample = int(
-        AshTerrainComponentCount * AshTerrainComponentQuads);
+    const int2 max_sample = int2(AshTerrainLayout.zw) - int2(1, 1);
     const int2 center_sample = clamp(
         global_sample,
         int2(0, 0),
-        int2(max_sample, max_sample));
+        max_sample);
     const int2 west_sample = int2(
         max(center_sample.x - 1, 0),
         center_sample.y);
     const int2 east_sample = int2(
-        min(center_sample.x + 1, max_sample),
+        min(center_sample.x + 1, max_sample.x),
         center_sample.y);
     const int2 north_sample = int2(
         center_sample.x,
         max(center_sample.y - 1, 0));
     const int2 south_sample = int2(
         center_sample.x,
-        min(center_sample.y + 1, max_sample));
+        min(center_sample.y + 1, max_sample.y));
     const float west = AshTerrainLoadGlobalHeight(
         height_words, west_sample, height_offset, height_range);
     const float east = AshTerrainLoadGlobalHeight(
@@ -220,18 +220,18 @@ float2 AshTerrainInterpolateCanonicalEdgeGradient(
     float height_range,
     float sample_spacing)
 {
-    const int max_sample = int(
-        AshTerrainComponentCount * AshTerrainComponentQuads);
+    const int2 max_sample = int2(AshTerrainLayout.zw) - int2(1, 1);
     const int2 center_sample = clamp(
         global_sample,
         int2(0, 0),
-        int2(max_sample, max_sample));
+        max_sample);
     const int safe_step = int(max(coarse_neighbor_step, 1u));
     const int varying_sample = along_x ?
         center_sample.x : center_sample.y;
+    const int varying_max = along_x ? max_sample.x : max_sample.y;
     const int segment_begin =
         (varying_sample / safe_step) * safe_step;
-    const int segment_end = min(segment_begin + safe_step, max_sample);
+    const int segment_end = min(segment_begin + safe_step, varying_max);
     if (segment_end <= segment_begin)
     {
         return AshTerrainCanonicalHeightGradient(
@@ -338,5 +338,6 @@ float2 AshTerrainCoarseUv(AshTerrainInstance instance, float2 local_sample)
 {
     const float2 global_sample =
         float2(instance.component_coord * AshTerrainComponentQuads) + local_sample;
-    return (global_sample / 8.0 + 0.5) / float(AshTerrainCoarseExtent);
+    const float2 coarse_extent = float2(AshTerrainLayout.xy * 32u + 1u);
+    return (global_sample / 8.0 + 0.5) / coarse_extent;
 }

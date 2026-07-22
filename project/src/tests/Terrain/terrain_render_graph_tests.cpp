@@ -479,6 +479,178 @@ TEST_CASE("Terrain shader bindings include fixed surface resources")
 	CHECK(surface.find("AshTerrainSelectTopFour") != std::string::npos);
 }
 
+TEST_CASE("Terrain surface constants bind rectangular layout for every pass")
+{
+	const std::string terrain_pass = ReadSource(
+		"project/src/engine/Function/Render/TerrainRenderPass.cpp");
+	const std::string surface = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
+	const std::string atlas = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainAtlasUpdate.hlsl");
+	const std::string compact_pass = CompactSource(terrain_pass);
+	const std::string compact_atlas = CompactSource(atlas);
+
+	CHECK(compact_pass.find("glm::uvec4layout{0u};") != std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(sizeof(TerrainSurfaceConstants) == 240u);") !=
+		std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(offsetof(TerrainSurfaceConstants, object_to_clip) == 0u);") !=
+		std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(offsetof(TerrainSurfaceConstants, previous_object_to_clip) == 64u);") !=
+		std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(offsetof(TerrainSurfaceConstants, object_to_world) == 128u);") !=
+		std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(offsetof(TerrainSurfaceConstants, height_spacing_uv_scale) == 192u);") !=
+		std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(offsetof(TerrainSurfaceConstants, flags) == 208u);") !=
+		std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(offsetof(TerrainSurfaceConstants, layout) == 224u);") !=
+		std::string::npos);
+	CHECK(surface.find("uint4 AshTerrainLayout;") != std::string::npos);
+	CHECK(CountText(terrain_pass, "TerrainSurfaceConstants constants{};") == 1u);
+	CHECK(CountText(terrain_pass, "render_prepared_surface(") == 4u);
+	CHECK(compact_pass.find(
+		"constants.layout={"
+		"prepared_draw->asset_snapshot->layout.component_count_x,"
+		"prepared_draw->asset_snapshot->layout.component_count_z,"
+		"prepared_draw->asset_snapshot->layout.sample_count_x,"
+		"prepared_draw->asset_snapshot->layout.sample_count_z};") !=
+		std::string::npos);
+
+	CHECK(compact_pass.find(
+		"uint32_twrite_high_resolution=0u;"
+		"uint32_tcomponent_count_x=0u;"
+		"uint32_tcomponent_count_z=0u;"
+		"uint32_tpadding=0u;") != std::string::npos);
+	CHECK(terrain_pass.find(
+		"static_assert(sizeof(TerrainAtlasUpdateConstants) == 32u);") !=
+		std::string::npos);
+	CHECK(compact_atlas.find(
+		"uintAshTerrainWriteHighResolution;"
+		"uintAshTerrainComponentCountX;"
+		"uintAshTerrainComponentCountZ;"
+		"uintAshTerrainPadding;") != std::string::npos);
+	CHECK(compact_pass.find(
+		"constants.component_count_x=pending_layout.layout.component_count_x;") !=
+		std::string::npos);
+	CHECK(compact_pass.find(
+		"constants.component_count_z=pending_layout.layout.component_count_z;") !=
+		std::string::npos);
+
+	const size_t atlas_staging = terrain_pass.find(
+		"std::shared_ptr<StorageBuffer> staging{};");
+	const size_t atlas_lock = terrain_pass.find(
+		"std::scoped_lock<std::mutex> lock(asset->m_mutex);",
+		atlas_staging);
+	const size_t atlas_identity_guard = terrain_pass.find(
+		"asset->matches_pending_weight_update_locked(pending_upload)",
+		atlas_lock);
+	const size_t atlas_layout_capture = terrain_pass.find(
+		"pending_layout = asset->m_accepted_render_layout;",
+		atlas_identity_guard);
+	const size_t atlas_lock_end = terrain_pass.find(
+		"\n\t\t\t\t\t}", atlas_lock);
+	REQUIRE(atlas_staging != std::string::npos);
+	REQUIRE(atlas_lock != std::string::npos);
+	REQUIRE(atlas_identity_guard != std::string::npos);
+	REQUIRE(atlas_layout_capture != std::string::npos);
+	REQUIRE(atlas_lock_end != std::string::npos);
+	CHECK(atlas_staging < atlas_lock);
+	CHECK(atlas_lock < atlas_identity_guard);
+	CHECK(atlas_identity_guard < atlas_layout_capture);
+	CHECK(atlas_layout_capture < atlas_lock_end);
+
+	constexpr uint32_t rectangular_component_count_x = 8u;
+	constexpr uint32_t rectangular_component_x = 0u;
+	constexpr uint32_t rectangular_component_z = 15u;
+	constexpr uint32_t rectangular_component_index =
+		rectangular_component_z * rectangular_component_count_x +
+		rectangular_component_x;
+	CHECK(rectangular_component_index == 120u);
+	CHECK(rectangular_component_index != 480u);
+}
+
+TEST_CASE("Terrain shaders contain no fixed whole-terrain stride or extent")
+{
+	const std::string common = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainCommon.hlsli");
+	const std::string surface = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainSurface.hlsl");
+	const std::string atlas = ReadSource(
+		"project/src/engine/Shaders/Terrain/TerrainAtlasUpdate.hlsl");
+	const std::string renderer = ReadSource(
+		"project/src/engine/Function/Render/SceneRenderer.cpp");
+	const std::string compact_common = CompactSource(common);
+	const std::string compact_atlas = CompactSource(atlas);
+
+	CHECK(common.find("AshTerrainComponentCount = 32u") == std::string::npos);
+	CHECK(common.find("AshTerrainCoarseExtent = 1025u") == std::string::npos);
+	CHECK(compact_common.find("component_coord.y*32u+component_coord.x") ==
+		std::string::npos);
+	CHECK(compact_common.find("int2(8192,8192)") == std::string::npos);
+	CHECK(compact_common.find("/8192.0") == std::string::npos);
+	CHECK(compact_common.find(
+		"component_coord.y*AshTerrainLayout.x+component_coord.x") !=
+		std::string::npos);
+	CHECK(CountText(compact_common,
+		"constint2max_sample=int2(AshTerrainLayout.zw)-int2(1,1);") == 3u);
+	CHECK(compact_common.find(
+		"min(clamped_sample/AshTerrainComponentQuads,AshTerrainLayout.xy-1u)") !=
+		std::string::npos);
+	CHECK(compact_common.find(
+		"constintvarying_max=along_x?max_sample.x:max_sample.y;") !=
+		std::string::npos);
+	CHECK(compact_common.find(
+		"constfloat2coarse_extent=float2(AshTerrainLayout.xy*32u+1u);") !=
+		std::string::npos);
+
+	const size_t root_constants = surface.find("cbuffer AshRootConstants");
+	const size_t layout = surface.find("uint4 AshTerrainLayout;");
+	const size_t common_include = surface.find("#include \"TerrainCommon.hlsli\"");
+	REQUIRE(root_constants != std::string::npos);
+	REQUIRE(layout != std::string::npos);
+	REQUIRE(common_include != std::string::npos);
+	CHECK(root_constants < layout);
+	CHECK(layout < common_include);
+	const size_t object_to_clip = surface.find(
+		"float4x4 AshTerrainObjectToClip;", root_constants);
+	const size_t previous_object_to_clip = surface.find(
+		"float4x4 AshTerrainPreviousObjectToClip;", object_to_clip);
+	const size_t object_to_world = surface.find(
+		"float4x4 AshTerrainObjectToWorld;", previous_object_to_clip);
+	const size_t height_spacing = surface.find(
+		"float4 AshTerrainHeightSpacingUvScale;", object_to_world);
+	const size_t flags = surface.find("uint4 AshTerrainFlags;", height_spacing);
+	REQUIRE(object_to_clip != std::string::npos);
+	REQUIRE(previous_object_to_clip != std::string::npos);
+	REQUIRE(object_to_world != std::string::npos);
+	REQUIRE(height_spacing != std::string::npos);
+	REQUIRE(flags != std::string::npos);
+	CHECK(object_to_clip < previous_object_to_clip);
+	CHECK(previous_object_to_clip < object_to_world);
+	CHECK(object_to_world < height_spacing);
+	CHECK(height_spacing < flags);
+	CHECK(flags < layout);
+
+	CHECK(compact_atlas.find("AshTerrainComponentCoord.x+1u=="
+		"AshTerrainComponentCountX") != std::string::npos);
+	CHECK(compact_atlas.find("AshTerrainComponentCoord.y+1u=="
+		"AshTerrainComponentCountZ") != std::string::npos);
+	CHECK(atlas.find("AshTerrainComponentCoord.x == 31u") == std::string::npos);
+	CHECK(atlas.find("AshTerrainComponentCoord.y == 31u") == std::string::npos);
+	CHECK(renderer.find("k_terrain_coarse_weight_extent") == std::string::npos);
+	CHECK(renderer.find("coarse_weight_target->get_width()") !=
+		std::string::npos);
+	CHECK(renderer.find("coarse_weight_target->get_height()") !=
+		std::string::npos);
+}
+
 TEST_CASE("Terrain surface treats empty weights as implicit layer zero")
 {
 	const std::string common = ReadSource(

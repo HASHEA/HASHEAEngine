@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -50,7 +51,9 @@ namespace AshEngine
 			uint32_t component_x = 0u;
 			uint32_t component_z = 0u;
 			uint32_t write_high_resolution = 0u;
-			uint32_t padding[3]{};
+			uint32_t component_count_x = 0u;
+			uint32_t component_count_z = 0u;
+			uint32_t padding = 0u;
 		};
 
 		static_assert(sizeof(TerrainAtlasUpdateConstants) == 32u);
@@ -70,10 +73,17 @@ namespace AshEngine
 			glm::mat4 object_to_world{ 1.0f };
 			glm::vec4 height_spacing_uv_scale{ 0.0f };
 			glm::uvec4 flags{ 0u };
+			glm::uvec4 layout{ 0u };
 		};
 
 		static_assert(sizeof(TerrainPackedInstance) == 16u);
-		static_assert(sizeof(TerrainSurfaceConstants) == 224u);
+		static_assert(sizeof(TerrainSurfaceConstants) == 240u);
+		static_assert(offsetof(TerrainSurfaceConstants, object_to_clip) == 0u);
+		static_assert(offsetof(TerrainSurfaceConstants, previous_object_to_clip) == 64u);
+		static_assert(offsetof(TerrainSurfaceConstants, object_to_world) == 128u);
+		static_assert(offsetof(TerrainSurfaceConstants, height_spacing_uv_scale) == 192u);
+		static_assert(offsetof(TerrainSurfaceConstants, flags) == 208u);
+		static_assert(offsetof(TerrainSurfaceConstants, layout) == 224u);
 		static_assert(sizeof(TerrainSurfaceConstants) <=
 			GraphicsDrawDesc::InlineConstDataCapacity);
 
@@ -253,14 +263,17 @@ namespace AshEngine
 					}
 
 					std::shared_ptr<StorageBuffer> staging{};
+					TerrainRenderLayoutInfo pending_layout{};
 					{
 						std::scoped_lock<std::mutex> lock(asset->m_mutex);
-						if (!asset->matches_pending_weight_update_locked(pending_upload))
+						if (!asset->matches_pending_weight_update_locked(pending_upload) ||
+							!asset->m_has_accepted_render_layout)
 						{
 							// A newer immutable snapshot superseded this queued graph.
 							// Its upload remains pending and will be declared next frame.
 							return true;
 						}
+						pending_layout = asset->m_accepted_render_layout;
 						staging = asset->m_dirty_weight_staging_buffer;
 					}
 
@@ -286,6 +299,10 @@ namespace AshEngine
 					constants.component_z = pending_upload.coord.z;
 					constants.write_high_resolution =
 						write_high_resolution ? 1u : 0u;
+					constants.component_count_x =
+						pending_layout.layout.component_count_x;
+					constants.component_count_z =
+						pending_layout.layout.component_count_z;
 
 					if (!program->set_const_data_block(sizeof(constants), &constants) ||
 						!program->set_storage_buffer("TerrainWeightUpload", staging) ||
@@ -943,6 +960,12 @@ namespace AshEngine
 				prepared_draw->batch_offsets[batch_index],
 				batch.lod,
 				0u
+			};
+			constants.layout = {
+				prepared_draw->asset_snapshot->layout.component_count_x,
+				prepared_draw->asset_snapshot->layout.component_count_z,
+				prepared_draw->asset_snapshot->layout.sample_count_x,
+				prepared_draw->asset_snapshot->layout.sample_count_z
 			};
 
 			const uint32_t resolution =

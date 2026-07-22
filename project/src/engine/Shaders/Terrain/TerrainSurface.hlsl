@@ -1,5 +1,3 @@
-#include "TerrainCommon.hlsli"
-
 #ifndef TERRAIN_GBUFFER
 #define TERRAIN_GBUFFER 0
 #endif
@@ -21,7 +19,11 @@ cbuffer AshRootConstants : register(b0)
     float4 AshTerrainHeightSpacingUvScale;
     // x=temporal valid
     uint4 AshTerrainFlags;
+    // x/z component counts followed by x/z sample counts.
+    uint4 AshTerrainLayout;
 };
+
+#include "TerrainCommon.hlsli"
 
 StructuredBuffer<uint> TerrainHeightWords : register(t0);
 StructuredBuffer<uint4> TerrainInstances : register(t1);

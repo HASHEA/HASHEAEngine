@@ -1165,6 +1165,9 @@ namespace AshEngine
 				view_context,
 				terrain_graph_resources,
 				render_frame_index);
+		const std::shared_ptr<RenderTarget> coarse_weight_target =
+			terrain_prepared_draw && terrain_prepared_draw->render_asset ?
+			terrain_prepared_draw->render_asset->coarse_weight_target() : nullptr;
 		ASH_PROCESS_ERROR(
 			terrain_prepared_draw &&
 			terrain_prepared_draw->status != TerrainPreparedDrawStatus::Failed);
@@ -1195,8 +1198,8 @@ namespace AshEngine
 				terrain_graph_resources.coarse_weights,
 				RenderDebugVisualization::Color,
 				RenderTextureFormat::RGBA8_UNORM,
-				k_terrain_coarse_weight_extent,
-				k_terrain_coarse_weight_extent);
+				coarse_weight_target ? coarse_weight_target->get_width() : 0u,
+				coarse_weight_target ? coarse_weight_target->get_height() : 0u);
 		}
 
 		ASH_PROCESS_ERROR(graph.add_raster_pass(

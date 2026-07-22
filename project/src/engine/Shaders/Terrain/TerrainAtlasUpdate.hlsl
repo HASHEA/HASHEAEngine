@@ -7,7 +7,9 @@ cbuffer AshRootConstants : register(b0)
     uint2 AshTerrainAtlasOrigin;
     uint2 AshTerrainComponentCoord;
     uint AshTerrainWriteHighResolution;
-    uint3 AshTerrainPadding;
+    uint AshTerrainComponentCountX;
+    uint AshTerrainComponentCountZ;
+    uint AshTerrainPadding;
 };
 
 ByteAddressBuffer TerrainWeightUpload : register(t0);
@@ -59,16 +61,18 @@ void CSMain(uint3 dispatch_id : SV_DispatchThreadID)
     }
 
     // A component owns its coarse samples except its +X/+Z boundary. The last
-    // component owns the final boundary, yielding exactly 1025 samples per axis.
+    // component on each axis owns that layout's final boundary.
     const bool is_component_sample =
         dispatch_id.x >= 1u && dispatch_id.x <= AshTerrainComponentSamples &&
         dispatch_id.y >= 1u && dispatch_id.y <= AshTerrainComponentSamples;
     const bool on_coarse_grid =
         (source.x & 7u) == 0u && (source.y & 7u) == 0u;
     const bool owns_x =
-        source.x < AshTerrainComponentQuads || AshTerrainComponentCoord.x == 31u;
+        source.x < AshTerrainComponentQuads ||
+        AshTerrainComponentCoord.x + 1u == AshTerrainComponentCountX;
     const bool owns_z =
-        source.y < AshTerrainComponentQuads || AshTerrainComponentCoord.y == 31u;
+        source.y < AshTerrainComponentQuads ||
+        AshTerrainComponentCoord.y + 1u == AshTerrainComponentCountZ;
     if (is_component_sample && on_coarse_grid && owns_x && owns_z)
     {
         const uint2 coarse_pixel =
