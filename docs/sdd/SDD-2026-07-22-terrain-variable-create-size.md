@@ -2,7 +2,9 @@
 
 ## Status
 
-Review
+Approved
+
+用户于 2026-07-22 复核并批准本书面 SDD；后续实施必须遵守本文范围和分批验证合同。任何扩大公共 RHI/RenderGraph API、改变 Terrain schema 或放宽原子回滚语义的方案都需要先修订 SDD 并重新批准。
 
 风险级别：**S2**。本变更同时修改 Editor authoring contract、Terrain render-resource sizing、CPU/HLSL 常量绑定以及 Vulkan/DX12 共用的渲染行为；必须在本 SDD 经用户书面复核批准后实施。本文批准前只允许提交设计文档，不修改生产代码。
 
@@ -241,4 +243,4 @@ Vulkan/DX12 都消费同一 HLSL 源码和 Function 常量。后端资源 API �
 
 ## Open questions
 
-无。产品选择、数值范围、吸附规则、默认值、X/Z 独立、Create/Import 共享目标以及验证边界均已在 2026-07-22 的任务讨论中确认；实施仅等待本书面 SDD 的最终批准。
+无。产品选择、数值范围、吸附规则、默认值、X/Z 独立、Create/Import 共享目标以及验证边界均已在 2026-07-22 的任务讨论中确认；本书面 SDD 已获用户批准，实施按对应 plan 的检查点执行。
