@@ -29,6 +29,7 @@ namespace AshEngine
 		RenderGraphTextureRef coarse_weights{};
 		TerrainComponentCoord pending_atlas_coord{};
 		uint64_t pending_atlas_generation = 0u;
+		uint64_t pending_atlas_revision = 0u;
 		uint32_t pending_atlas_slot = 0u;
 		bool has_update_pass = false;
 		bool has_pending_atlas_slot = false;
@@ -115,6 +116,7 @@ namespace AshEngine
 			const std::shared_ptr<TerrainRenderAsset>& asset,
 			TerrainComponentCoord coord,
 			uint64_t content_generation,
+			uint64_t residency_revision,
 			uint32_t atlas_slot,
 			bool write_high_resolution,
 			uint64_t render_frame_index);
@@ -153,6 +155,7 @@ namespace AshEngine
 		{
 			std::weak_ptr<TerrainRenderAsset> asset{};
 			uint64_t content_generation = 0u;
+			uint64_t residency_revision = 0u;
 			uint64_t update_frame_index = 0u;
 		};
 		std::vector<TerrainInstanceBufferEntry> m_instance_buffers{};

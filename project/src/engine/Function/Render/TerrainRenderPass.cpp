@@ -215,6 +215,7 @@ namespace AshEngine
 		const std::shared_ptr<TerrainRenderAsset>& asset,
 		TerrainComponentCoord coord,
 		uint64_t content_generation,
+		uint64_t residency_revision,
 		uint32_t atlas_slot,
 		bool write_high_resolution,
 		uint64_t render_frame_index)
@@ -241,6 +242,7 @@ namespace AshEngine
 					asset,
 					coord,
 					content_generation,
+					residency_revision,
 					atlas_slot,
 					write_high_resolution,
 					render_frame_index,
@@ -265,9 +267,12 @@ namespace AshEngine
 							asset->m_pending_weight_updates.front();
 						if (!(upload.coord == coord) ||
 							upload.content_generation != content_generation ||
+							upload.residency_revision != residency_revision ||
 							!asset->m_accepted_snapshot ||
 							asset->m_accepted_snapshot->content_generation !=
-								content_generation)
+								content_generation ||
+							asset->m_accepted_snapshot->residency_revision !=
+								residency_revision)
 						{
 							// A newer immutable snapshot superseded this queued graph.
 							// Its upload remains pending and will be declared next frame.
@@ -328,7 +333,8 @@ namespace AshEngine
 					const TerrainRenderAsset::TerrainGpuComponentUpload& upload =
 						asset->m_pending_weight_updates.front();
 					if (!(upload.coord == coord) ||
-						upload.content_generation != content_generation)
+						upload.content_generation != content_generation ||
+						upload.residency_revision != residency_revision)
 					{
 						return true;
 					}
@@ -338,6 +344,7 @@ namespace AshEngine
 							asset->m_frame_boundary_atlas_slots[atlas_slot];
 						slot.coord = coord;
 						slot.content_generation = content_generation;
+						slot.residency_revision = residency_revision;
 						slot.occupied = true;
 					}
 					asset->m_pending_weight_updates.erase(
@@ -345,6 +352,7 @@ namespace AshEngine
 					m_atlas_completions[asset.get()] = {
 						asset,
 						content_generation,
+						residency_revision,
 						render_frame_index
 					};
 					return true;
@@ -484,6 +492,7 @@ namespace AshEngine
 			std::vector<uint8_t> weight_upload{};
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
+			uint64_t residency_revision = 0u;
 			uint32_t atlas_slot = 0u;
 			bool write_high_resolution = false;
 			bool invalid_pending_upload = false;
@@ -512,7 +521,9 @@ namespace AshEngine
 						asset->m_pending_weight_updates.front();
 					coord = upload.coord;
 					content_generation = upload.content_generation;
-					if (content_generation == terrain.asset_snapshot->content_generation)
+					residency_revision = upload.residency_revision;
+					if (content_generation == terrain.asset_snapshot->content_generation &&
+						residency_revision == terrain.asset_snapshot->residency_revision)
 					{
 						pending_component = upload.component;
 						if (pending_component && staging &&
@@ -620,7 +631,8 @@ namespace AshEngine
 				HLogError("TerrainRenderPass: %s", diagnostic.c_str());
 				std::scoped_lock<std::mutex> lock(asset->m_mutex);
 				if (asset->m_accepted_snapshot &&
-					asset->m_accepted_snapshot->content_generation == content_generation)
+					asset->m_accepted_snapshot->content_generation == content_generation &&
+					asset->m_accepted_snapshot->residency_revision == residency_revision)
 				{
 					asset->fail_active_generation(diagnostic);
 				}
@@ -644,6 +656,7 @@ namespace AshEngine
 					asset,
 					coord,
 					content_generation,
+					residency_revision,
 					atlas_slot,
 					write_high_resolution,
 					render_frame_index))
@@ -652,6 +665,7 @@ namespace AshEngine
 					resources.has_pending_atlas_slot = write_high_resolution;
 					resources.pending_atlas_coord = coord;
 					resources.pending_atlas_generation = content_generation;
+					resources.pending_atlas_revision = residency_revision;
 					resources.pending_atlas_slot = atlas_slot;
 				}
 			}
@@ -783,7 +797,8 @@ namespace AshEngine
 							TerrainRenderAsset::TerrainAtlasSlotMetadata& slot =
 								terrain->render_asset->m_frame_boundary_atlas_slots[slot_index];
 							if (slot.occupied && slot.coord == instance.coord &&
-								slot.content_generation == terrain->asset_snapshot->content_generation)
+								slot.content_generation == terrain->asset_snapshot->content_generation &&
+								slot.residency_revision == terrain->asset_snapshot->residency_revision)
 							{
 								atlas_slot = slot_index;
 								high_resolution = true;
@@ -794,7 +809,9 @@ namespace AshEngine
 						if (resources.has_pending_atlas_slot &&
 							resources.pending_atlas_coord == instance.coord &&
 							resources.pending_atlas_generation ==
-								terrain->asset_snapshot->content_generation)
+								terrain->asset_snapshot->content_generation &&
+							resources.pending_atlas_revision ==
+								terrain->asset_snapshot->residency_revision)
 						{
 							atlas_slot = resources.pending_atlas_slot;
 							high_resolution = true;
@@ -1061,8 +1078,12 @@ namespace AshEngine
 				terrain.render_asset->readiness() != TerrainRenderReadiness::Ready ||
 				terrain.render_asset->accepted_content_generation() !=
 					terrain.asset_snapshot->content_generation ||
+				terrain.render_asset->accepted_residency_revision() !=
+					terrain.asset_snapshot->residency_revision ||
 				terrain.render_asset->published_content_generation() !=
 					terrain.asset_snapshot->content_generation ||
+				terrain.render_asset->published_residency_revision() !=
+					terrain.asset_snapshot->residency_revision ||
 				terrain.render_asset->pending_component_upload_count() != 0u ||
 				terrain.render_asset->pending_weight_update_count() != 0u)
 			{
@@ -1074,6 +1095,8 @@ namespace AshEngine
 				completion->second.asset.lock().get() == terrain.render_asset.get() &&
 				completion->second.content_generation ==
 					terrain.asset_snapshot->content_generation &&
+				completion->second.residency_revision ==
+					terrain.asset_snapshot->residency_revision &&
 				m_last_prepared_frame_index <= completion->second.update_frame_index)
 			{
 				return false;

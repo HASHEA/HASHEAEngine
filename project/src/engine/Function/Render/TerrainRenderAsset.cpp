@@ -299,9 +299,19 @@ namespace AshEngine
 		{
 			return;
 		}
+		begin_snapshot_for_layout(
+			content_generation, 0u, required_uploads, layout_info);
+	}
 
+	void TerrainRenderAssetState::begin_snapshot_for_layout(
+		uint64_t content_generation,
+		uint64_t residency_revision,
+		uint32_t required_uploads,
+		const TerrainRenderLayoutInfo& layout_info)
+	{
 		m_has_active_content_generation = true;
 		m_active_content_generation = content_generation;
+		m_active_residency_revision = residency_revision;
 		m_required_upload_count = required_uploads;
 		m_completed_upload_count = 0u;
 		m_completed_component_mask.fill(0u);
@@ -316,8 +326,18 @@ namespace AshEngine
 		uint64_t content_generation,
 		TerrainComponentCoord coord)
 	{
+		return mark_component_uploaded_for_snapshot(
+			content_generation, 0u, coord);
+	}
+
+	bool TerrainRenderAssetState::mark_component_uploaded_for_snapshot(
+		uint64_t content_generation,
+		uint64_t residency_revision,
+		TerrainComponentCoord coord)
+	{
 		if (!m_has_active_content_generation ||
 			content_generation != m_active_content_generation ||
+			residency_revision != m_active_residency_revision ||
 			m_readiness != TerrainRenderReadiness::Pending ||
 			coord.x >= m_component_row_stride ||
 			coord.z >= m_component_count_z ||
@@ -347,8 +367,16 @@ namespace AshEngine
 	bool TerrainRenderAssetState::publish_content_generation(
 		uint64_t content_generation)
 	{
+		return publish_snapshot(content_generation, 0u);
+	}
+
+	bool TerrainRenderAssetState::publish_snapshot(
+		uint64_t content_generation,
+		uint64_t residency_revision)
+	{
 		if (!m_has_active_content_generation ||
 			content_generation != m_active_content_generation ||
+			residency_revision != m_active_residency_revision ||
 			m_readiness != TerrainRenderReadiness::Pending ||
 			m_completed_upload_count != m_required_upload_count)
 		{
@@ -356,14 +384,23 @@ namespace AshEngine
 		}
 
 		m_published_content_generation = content_generation;
+		m_published_residency_revision = residency_revision;
 		m_readiness = TerrainRenderReadiness::Ready;
 		return true;
 	}
 
 	void TerrainRenderAssetState::mark_failed(uint64_t content_generation)
 	{
+		mark_snapshot_failed(content_generation, 0u);
+	}
+
+	void TerrainRenderAssetState::mark_snapshot_failed(
+		uint64_t content_generation,
+		uint64_t residency_revision)
+	{
 		if (m_has_active_content_generation &&
-			content_generation == m_active_content_generation)
+			content_generation == m_active_content_generation &&
+			residency_revision == m_active_residency_revision)
 		{
 			m_readiness = TerrainRenderReadiness::Failed;
 		}
@@ -553,21 +590,23 @@ namespace AshEngine
 		{
 			return fail_with_error(out_error, "terrain snapshot must not be null.");
 		}
-		if (m_accepted_snapshot == snapshot)
+		if (m_accepted_snapshot == snapshot &&
+			m_state.readiness() == TerrainRenderReadiness::Failed)
 		{
-			if (m_state.readiness() == TerrainRenderReadiness::Failed)
-			{
-				return fail_with_error(
-					out_error,
-					m_last_error.empty() ? "terrain snapshot is failed." :
-						m_last_error.c_str());
-			}
-			return true;
+			return fail_with_error(
+				out_error,
+				m_last_error.empty() ? "terrain snapshot is failed." :
+					m_last_error.c_str());
 		}
 		const bool same_accepted_asset = m_accepted_snapshot &&
 			snapshot->asset_id == m_accepted_snapshot->asset_id;
-		if (same_accepted_asset &&
-			snapshot->content_generation <= m_accepted_snapshot->content_generation)
+		const bool newer_same_asset_snapshot = same_accepted_asset &&
+			(snapshot->content_generation > m_accepted_snapshot->content_generation ||
+				(snapshot->content_generation ==
+					m_accepted_snapshot->content_generation &&
+					snapshot->residency_revision >
+						m_accepted_snapshot->residency_revision));
+		if (same_accepted_asset && !newer_same_asset_snapshot)
 		{
 			return fail_with_error(
 				out_error, "terrain snapshot content generation is stale.");
@@ -585,11 +624,11 @@ namespace AshEngine
 				}
 				if (rejected_layout)
 				{
-					m_state.begin_content_generation_for_layout(
+					m_state.begin_snapshot_for_layout(
 						snapshot->content_generation,
+						snapshot->residency_revision,
 						0u,
-						*rejected_layout,
-						m_accepted_snapshot && !same_accepted_asset);
+						*rejected_layout);
 				}
 				else
 				{
@@ -602,16 +641,21 @@ namespace AshEngine
 						k_terrain_render_component_capacity;
 					fallback_layout.component_row_stride =
 						k_terrain_component_count;
-					m_state.begin_content_generation_for_layout(
+					m_state.begin_snapshot_for_layout(
 						snapshot->content_generation,
+						snapshot->residency_revision,
 						0u,
-						fallback_layout,
-						m_accepted_snapshot && !same_accepted_asset);
+						fallback_layout);
 				}
-				m_state.mark_failed(snapshot->content_generation);
+				m_state.mark_snapshot_failed(
+					snapshot->content_generation,
+					snapshot->residency_revision);
 				m_accepted_snapshot = snapshot;
-				m_accepted_render_layout = {};
-				m_has_accepted_render_layout = false;
+				if (!m_packed_height_buffer && !m_coarse_weight_target)
+				{
+					m_accepted_render_layout = {};
+					m_has_accepted_render_layout = false;
+				}
 				m_pending_component_uploads.clear();
 				m_pending_weight_updates.clear();
 				m_pending_implicit_weight_resets.clear();
@@ -645,7 +689,6 @@ namespace AshEngine
 		const bool is_replacement = m_has_accepted_render_layout &&
 			(!same_accepted_asset || !render_layouts_equal(
 				render_layout.layout, m_accepted_render_layout.layout));
-
 		if (!std::isfinite(snapshot->height_mapping.height_offset) ||
 			!std::isfinite(snapshot->height_mapping.height_range) ||
 			snapshot->height_mapping.height_range <= 0.0f)
@@ -715,6 +758,21 @@ namespace AshEngine
 			}
 		}
 
+		const bool changes_accepted_layout = m_has_accepted_render_layout &&
+			!render_layouts_equal(
+				render_layout.layout, m_accepted_render_layout.layout);
+		if (changes_accepted_layout &&
+			(m_packed_height_buffer || m_coarse_weight_target))
+		{
+			return reject_snapshot(
+				describe_layout_error(
+					snapshot->layout,
+					"layout-dependent GPU resources already exist; "
+					"atomic layout replacement is not available."),
+				&render_layout,
+				true);
+		}
+
 		const bool rebuild_after_failure =
 			m_state.readiness() == TerrainRenderReadiness::Failed || is_replacement;
 		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
@@ -754,6 +812,7 @@ namespace AshEngine
 				TerrainGpuComponentUpload upload{};
 				upload.coord = component->coord;
 				upload.content_generation = snapshot->content_generation;
+				upload.residency_revision = snapshot->residency_revision;
 				upload.component = component;
 				destination.push_back(std::move(upload));
 				scheduled[index] = true;
@@ -788,6 +847,7 @@ namespace AshEngine
 				}
 				TerrainGpuComponentUpload carried = pending;
 				carried.content_generation = snapshot->content_generation;
+				carried.residency_revision = snapshot->residency_revision;
 				uploads.push_back(std::move(carried));
 				upload_scheduled[index] = true;
 			}
@@ -805,6 +865,7 @@ namespace AshEngine
 				}
 				TerrainGpuComponentUpload carried = pending;
 				carried.content_generation = snapshot->content_generation;
+				carried.residency_revision = snapshot->residency_revision;
 				weight_updates.push_back(std::move(carried));
 				weight_scheduled[index] = true;
 			}
@@ -889,11 +950,11 @@ namespace AshEngine
 			}
 		}
 
-		m_state.begin_content_generation_for_layout(
+		m_state.begin_snapshot_for_layout(
 			snapshot->content_generation,
+			snapshot->residency_revision,
 			static_cast<uint32_t>(uploads.size() + removals.size()),
-			render_layout,
-			m_accepted_snapshot && !same_accepted_asset);
+			render_layout);
 		for (TerrainComponentCoord coord : resident_weight_rebinds)
 		{
 			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
@@ -901,6 +962,7 @@ namespace AshEngine
 				if (slot.occupied && slot.coord == coord)
 				{
 					slot.content_generation = snapshot->content_generation;
+					slot.residency_revision = snapshot->residency_revision;
 				}
 			}
 		}
@@ -927,10 +989,22 @@ namespace AshEngine
 		return m_accepted_snapshot ? m_accepted_snapshot->content_generation : 0u;
 	}
 
+	uint64_t TerrainRenderAsset::accepted_residency_revision() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return m_accepted_snapshot ? m_accepted_snapshot->residency_revision : 0u;
+	}
+
 	uint64_t TerrainRenderAsset::published_content_generation() const
 	{
 		std::scoped_lock<std::mutex> lock(m_mutex);
 		return m_state.published_content_generation();
+	}
+
+	uint64_t TerrainRenderAsset::published_residency_revision() const
+	{
+		std::scoped_lock<std::mutex> lock(m_mutex);
+		return m_state.m_published_residency_revision;
 	}
 
 	uint32_t TerrainRenderAsset::pending_component_upload_count() const
@@ -1073,7 +1147,9 @@ namespace AshEngine
 
 	void TerrainRenderAsset::fail_active_generation(const std::string& error)
 	{
-		m_state.mark_failed(m_state.active_content_generation());
+		m_state.mark_snapshot_failed(
+			m_state.active_content_generation(),
+			m_state.m_active_residency_revision);
 		m_last_error = error;
 	}
 
@@ -1180,6 +1256,8 @@ namespace AshEngine
 		constexpr uint32_t component_height_bytes =
 			k_terrain_render_height_words_per_component * sizeof(uint32_t);
 		const uint64_t content_generation = m_state.active_content_generation();
+		const uint64_t residency_revision =
+			m_state.m_active_residency_revision;
 		for (TerrainComponentCoord coord : m_pending_component_removals)
 		{
 			for (TerrainAtlasSlotMetadata& slot : m_frame_boundary_atlas_slots)
@@ -1189,7 +1267,8 @@ namespace AshEngine
 					slot = {};
 				}
 			}
-			if (!m_state.mark_component_uploaded(content_generation, coord))
+			if (!m_state.mark_component_uploaded_for_snapshot(
+					content_generation, residency_revision, coord))
 			{
 				fail_active_generation("failed to retire a Terrain component residency slot.");
 				return fail_with_error(out_error, m_last_error.c_str());
@@ -1211,7 +1290,9 @@ namespace AshEngine
 		{
 			const TerrainGpuComponentUpload& upload =
 				m_pending_component_uploads[completed_uploads];
-			if (upload.content_generation != content_generation || !upload.component)
+			if (upload.content_generation != content_generation ||
+				upload.residency_revision != residency_revision ||
+				!upload.component)
 			{
 				fail_active_generation("Terrain height upload generation is stale.");
 				return fail_with_error(out_error, m_last_error.c_str());
@@ -1254,7 +1335,8 @@ namespace AshEngine
 					offset,
 					component_height_bytes,
 					packed_height_words.data()) ||
-				!m_state.mark_component_uploaded(content_generation, upload.coord))
+				!m_state.mark_component_uploaded_for_snapshot(
+					content_generation, residency_revision, upload.coord))
 			{
 				fail_active_generation("failed to upload Terrain component height data.");
 				return fail_with_error(out_error, m_last_error.c_str());
@@ -1284,7 +1366,7 @@ namespace AshEngine
 		}
 		m_pending_implicit_weight_resets.clear();
 
-		if (!m_state.publish_content_generation(content_generation))
+		if (!m_state.publish_snapshot(content_generation, residency_revision))
 		{
 			fail_active_generation("failed to publish Terrain content generation.");
 			return fail_with_error(out_error, m_last_error.c_str());

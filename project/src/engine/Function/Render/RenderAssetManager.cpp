@@ -454,7 +454,6 @@ namespace AshEngine
 		{
 			return nullptr;
 		}
-		const uint64_t previous_generation = asset->accepted_content_generation();
 		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
 			asset->accepted_snapshot();
 		if (!owns_request && previous_snapshot == snapshot)
@@ -466,8 +465,16 @@ namespace AshEngine
 		std::string accept_error{};
 		if (!asset->accept_snapshot(snapshot, &accept_error))
 		{
-			const bool stale_existing_request = !owns_request && previous_snapshot &&
-				snapshot->content_generation <= previous_generation;
+			const bool same_previous_asset = previous_snapshot &&
+				snapshot->asset_id == previous_snapshot->asset_id;
+			const bool newer_same_asset_snapshot = same_previous_asset &&
+				(snapshot->content_generation > previous_snapshot->content_generation ||
+					(snapshot->content_generation ==
+						previous_snapshot->content_generation &&
+						snapshot->residency_revision >
+							previous_snapshot->residency_revision));
+			const bool stale_existing_request = !owns_request &&
+				same_previous_asset && !newer_same_asset_snapshot;
 			if (stale_existing_request)
 			{
 				return nullptr;
@@ -486,9 +493,10 @@ namespace AshEngine
 			return nullptr;
 		}
 
-		const uint64_t accepted_generation = asset->accepted_content_generation();
+		const std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot =
+			asset->accepted_snapshot();
 		if (!owns_request && previous_snapshot &&
-			accepted_generation != previous_generation)
+			accepted_snapshot != previous_snapshot)
 		{
 			std::scoped_lock<std::mutex> lock(m_mutex);
 			if (m_pending_terrain_requests.insert(key).second)

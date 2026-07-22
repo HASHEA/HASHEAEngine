@@ -101,15 +101,32 @@ namespace AshEngine
 		uint32_t completed_upload_count() const;
 
 	private:
+		void begin_snapshot_for_layout(
+			uint64_t content_generation,
+			uint64_t residency_revision,
+			uint32_t required_uploads,
+			const TerrainRenderLayoutInfo& layout_info);
 		void begin_content_generation_for_layout(
 			uint64_t content_generation,
 			uint32_t required_uploads,
 			const TerrainRenderLayoutInfo& layout_info,
 			bool reset_generation_identity);
+		bool mark_component_uploaded_for_snapshot(
+			uint64_t content_generation,
+			uint64_t residency_revision,
+			TerrainComponentCoord coord);
+		bool publish_snapshot(
+			uint64_t content_generation,
+			uint64_t residency_revision);
+		void mark_snapshot_failed(
+			uint64_t content_generation,
+			uint64_t residency_revision);
 
 		std::array<uint64_t, 16> m_completed_component_mask{};
 		uint64_t m_active_content_generation = 0u;
+		uint64_t m_active_residency_revision = 0u;
 		uint64_t m_published_content_generation = 0u;
+		uint64_t m_published_residency_revision = 0u;
 		uint32_t m_required_upload_count = 0u;
 		uint32_t m_completed_upload_count = 0u;
 		TerrainRenderReadiness m_readiness = TerrainRenderReadiness::Pending;
@@ -118,6 +135,7 @@ namespace AshEngine
 		uint32_t m_component_row_stride = k_terrain_component_count;
 		uint32_t m_component_count_z = k_terrain_component_count;
 		friend class TerrainRenderAsset;
+		friend struct TerrainRenderAssetCpuTestSeam;
 	};
 
 	ASH_API bool build_terrain_component_gpu_data(
@@ -157,7 +175,9 @@ namespace AshEngine
 			std::string* out_error = nullptr);
 		TerrainRenderReadiness readiness() const;
 		uint64_t accepted_content_generation() const;
+		uint64_t accepted_residency_revision() const;
 		uint64_t published_content_generation() const;
+		uint64_t published_residency_revision() const;
 		uint32_t pending_component_upload_count() const;
 		uint64_t pending_cpu_payload_bytes() const;
 		uint64_t pending_weight_payload_bytes() const;
@@ -182,6 +202,7 @@ namespace AshEngine
 		{
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
+			uint64_t residency_revision = 0u;
 			std::shared_ptr<const TerrainComponentSnapshot> component{};
 		};
 
@@ -189,6 +210,7 @@ namespace AshEngine
 		{
 			TerrainComponentCoord coord{};
 			uint64_t content_generation = 0u;
+			uint64_t residency_revision = 0u;
 			uint64_t last_used_frame = 0u;
 			bool occupied = false;
 			bool pinned = false;
