@@ -783,17 +783,14 @@ namespace AshEngine
 			}
 		}
 
-		const bool changes_accepted_layout = m_has_accepted_render_layout &&
-			!render_layouts_equal(
-				render_layout.layout, m_accepted_render_layout.layout);
-		if (changes_accepted_layout &&
+		if (is_replacement &&
 			(m_packed_height_buffer || m_coarse_weight_target))
 		{
 			return reject_snapshot(
 				describe_layout_error(
 					snapshot->layout,
 					"layout-dependent GPU resources already exist; "
-					"atomic layout replacement is not available."),
+					"atomic Terrain replacement is not available."),
 				&render_layout,
 				true);
 		}

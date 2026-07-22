@@ -687,6 +687,53 @@ TEST_CASE("Terrain render asset keeps active resources when a different layout a
 	CHECK(asset.pending_component_removal_count() == 0u);
 }
 
+TEST_CASE("Terrain render asset rejects a different asset when active resources exist")
+{
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto accepted = MakeSnapshot(5u, layout);
+	accepted->asset_id = 101u;
+	accepted->residency_revision = 4u;
+	accepted->components[0] = MakeComponent({ 0u, 0u }, 5u);
+
+	AshEngine::TerrainRenderAsset asset{};
+	std::string error{};
+	REQUIRE(asset.accept_snapshot(accepted, &error));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		complete_front_height_upload(asset));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::publish_active_snapshot(asset));
+	AshEngine::TerrainRenderAssetCpuTestSeam::
+		install_layout_dependent_resource_sentinels(asset);
+	const auto old_height = asset.packed_height_buffer();
+	const auto old_coarse = asset.coarse_weight_target();
+	const AshEngine::TerrainShadowCasterIdentity old_state =
+		asset.snapshot_shadow_caster_identity();
+
+	auto replacement = MakeSnapshot(5u, layout);
+	replacement->asset_id = 202u;
+	replacement->residency_revision = 4u;
+	FillCompleteSnapshot(replacement);
+	CHECK_FALSE(asset.accept_snapshot(replacement, &error));
+	CHECK(error.find("layout-dependent GPU resources") != std::string::npos);
+	CHECK(asset.accepted_snapshot() == accepted);
+	CHECK(asset.packed_height_buffer() == old_height);
+	CHECK(asset.coarse_weight_target() == old_coarse);
+	const AshEngine::TerrainShadowCasterIdentity retained_state =
+		asset.snapshot_shadow_caster_identity();
+	CHECK(retained_state.accepted_snapshot_identity ==
+		old_state.accepted_snapshot_identity);
+	CHECK(retained_state.accepted_asset_id == old_state.accepted_asset_id);
+	CHECK(retained_state.active_content_generation ==
+		old_state.active_content_generation);
+	CHECK(retained_state.published_content_generation ==
+		old_state.published_content_generation);
+	CHECK(retained_state.readiness == AshEngine::TerrainRenderReadiness::Ready);
+	CHECK(asset.pending_component_upload_count() == 0u);
+	CHECK(asset.pending_weight_update_count() == 0u);
+	CHECK(asset.pending_component_removal_count() == 0u);
+	CHECK(AshEngine::TerrainRenderAssetCpuTestSeam::
+		pending_implicit_weight_resets(asset).empty());
+}
+
 TEST_CASE("Terrain render asset retains its resource layout guard after a same-layout failure")
 {
 	const AshEngine::TerrainGridLayout initial_layout = MakeRenderLayout(1u, 1u);
