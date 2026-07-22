@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Ready for execution against approved SDD SHA-256 `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B` (includes the approved Task 2 codec and Task 3 typed-load execution clarifications).
+**Status:** Ready for execution against approved SDD SHA-256 `B463782B7E1FF9A11A25D068989ADDF55857C6A90665722EA7E3E64FA44F3E9B` (includes the approved Task 2 codec, Task 3 typed-load, and Task 7 checked-storage execution clarifications).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -16,7 +16,7 @@
 
 - Execute only in worktree `D:\workspace\AshEngine\HASHEAEngine\.worktrees\gpu-driven-vegetation-phase2` on branch `codex/gpu-driven-vegetation-phase2`.
 - Starting integration point is approved-design amendment commit `9b47dbaa0ca8856480db65b444c320767237fb1d` (approved base design `24d88c9bba3195caf0d8c2b8d5cc835612a44faa`); do not rebase a dirty implementation task.
-- Design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`. If the hash changes before Task 12, stop and review the new document before continuing. Task 12 alone may update Status/conclusions after all evidence exists and must record the original approved input hash `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, the Task 2 execution-clarified hash `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, this Task 3 execution-clarified input hash, and the final archived hash.
+- Design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `B463782B7E1FF9A11A25D068989ADDF55857C6A90665722EA7E3E64FA44F3E9B`. If the hash changes before Task 12, stop and review the new document before continuing. Task 12 alone may update Status/conclusions after all evidence exists and must record the original approved input hash `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, the Task 2 execution-clarified hash `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, the Task 3 execution-clarified hash `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`, this Task 7 checked-storage execution-clarified hash, and the final archived hash.
 - Existing user-owned dirty files are:
   - `project/thirdparty/tracy/tracy-csvexport.exe`
   - `project/thirdparty/tracy/tracy-profiler.exe`
