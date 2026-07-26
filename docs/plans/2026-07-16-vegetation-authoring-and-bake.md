@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Ready for execution against current reviewed SDD SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`. Historical approval/execution locks remain preserved in the hash chain below.
+**Status:** Task 10 implementation, review remediation, required validation and two independent implementation reviews are complete; this focused commit records Step 5. Task 10 executed against reviewed SDD SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`; the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD` has independent text/spec approval and is the Task 10 SDD review lock. Task 11 is ready for execution after this focused commit. Historical approval/execution locks remain preserved in the hash chain below.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -16,7 +16,7 @@
 
 - Execute only in worktree `D:\workspace\AshEngine\HASHEAEngine\.worktrees\gpu-driven-vegetation-phase2` on branch `codex/gpu-driven-vegetation-phase2`.
 - Starting integration point is approved-design amendment commit `9b47dbaa0ca8856480db65b444c320767237fb1d` (approved base design `24d88c9bba3195caf0d8c2b8d5cc835612a44faa`); do not rebase a dirty implementation task.
-- Current reviewed design truth is `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`. If the hash changes before Task 12, stop and review the new document before continuing. Preserve the historical approval/execution chain exactly: original approved input `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, Task 2 execution clarification `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, Task 3 execution clarification `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`, Task 7 checked-storage approval/execution lock `B463782B7E1FF9A11A25D068989ADDF55857C6A90665722EA7E3E64FA44F3E9B`, the prior Task 8 reviewed input `FF21A9881782C422E431BDF0747067D15847E6C92C5FEDEDACDB89BA021189AC`, the Task 8 recovery-identity review lock `456BEC39AFCE29AC5AE373DB1C1ECF62789645046371CA09A79F4A8A9B520E3C`, the pre-Task-9 binding-gap reviewed input `623418757198CD4AF815C4BA27054C5151CA5F86E1302E85024E836449451CE5`, the user-approved Task 9 per-request binding lock `7295F14B1E322ABB5EBCA081DD44376EBC8FE0769E19FDADF88A344B0F855AB9`, the Task 9 validation-clarification lock `E56125D58E45A62012FC0BF0DD7222E413D54C9771CF3DC21BEE145176DD9ECB`, the Task 9 implementation-review lock `1E93FD7B5141B61EB3514F45688F1406AA87D3E5DB20D7645760F93FEAD9919A`, the Task 9 second-round lifecycle/exception review lock `8C58F62D4718E15BB8291BCA83F5713FAFD1E805667A96F9DBD62A0DEC846E7D`, the Task 9 command/state/record-consumption review lock `F3BD98175246CF267CEDE93A07419A2C151AF070AB5EF998785C21BA2C2CB1A2`, and the final Task 9 teardown/performance review lock `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`. Task 12 alone may update Status/conclusions after all evidence exists and must record this complete historical chain, the current reviewed input hash, and the final archived hash.
+- Task 10's reviewed design input was `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`. Its behavior/interface documentation synchronization produced SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which has independent text/spec approval and is the Task 10 SDD review lock; the review remediation does not change that SDD text. Task 11 remains blocked until Task 10 Step 5 records clean implementation reviews and the focused selective commit. Preserve the historical approval/execution chain exactly: original approved input `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, Task 2 execution clarification `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, Task 3 execution clarification `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`, Task 7 checked-storage approval/execution lock `B463782B7E1FF9A11A25D068989ADDF55857C6A90665722EA7E3E64FA44F3E9B`, the prior Task 8 reviewed input `FF21A9881782C422E431BDF0747067D15847E6C92C5FEDEDACDB89BA021189AC`, the Task 8 recovery-identity review lock `456BEC39AFCE29AC5AE373DB1C1ECF62789645046371CA09A79F4A8A9B520E3C`, the pre-Task-9 binding-gap reviewed input `623418757198CD4AF815C4BA27054C5151CA5F86E1302E85024E836449451CE5`, the user-approved Task 9 per-request binding lock `7295F14B1E322ABB5EBCA081DD44376EBC8FE0769E19FDADF88A344B0F855AB9`, the Task 9 validation-clarification lock `E56125D58E45A62012FC0BF0DD7222E413D54C9771CF3DC21BEE145176DD9ECB`, the Task 9 implementation-review lock `1E93FD7B5141B61EB3514F45688F1406AA87D3E5DB20D7645760F93FEAD9919A`, the Task 9 second-round lifecycle/exception review lock `8C58F62D4718E15BB8291BCA83F5713FAFD1E805667A96F9DBD62A0DEC846E7D`, the Task 9 command/state/record-consumption review lock `F3BD98175246CF267CEDE93A07419A2C151AF070AB5EF998785C21BA2C2CB1A2`, the final Task 9 teardown/performance review lock `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`, and the approved Task 10 SDD review lock `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`. Task 12 alone may update final Status/conclusions after all evidence exists and must record this complete historical chain, the reviewed Task 10 input hash, the Task 10 review lock, and the final archived hash.
 - Existing user-owned dirty files are:
   - `project/thirdparty/tracy/tracy-csvexport.exe`
   - `project/thirdparty/tracy/tracy-profiler.exe`
@@ -2120,7 +2120,7 @@ The behavior/interface tests, SDD, long-lived Asset/Editor specs, and this Task 
 - Modify: `project/src/editor/Services/VegetationEditorService.h`
 - Modify: `project/src/editor/Services/VegetationEditorService.cpp`
 
-- [ ] **Step 1: Write the full-chain RED test**
+- [x] **Step 1: Write the full-chain RED test**
 
 ```cpp
 TEST_CASE("Vegetation Phase 2 authoring and deterministic bake exit contract")
@@ -2155,13 +2155,31 @@ TEST_CASE("Vegetation Phase 2 authoring and deterministic bake exit contract")
     CHECK(service.GetStatusSnapshot().palette->size() == 1);
 
     const AshEngine::VegetationSurfaceBinding binding{ 42 };
-    const auto first = VegetationTest::CompleteBake(
-        service, executor, provider, binding, false);
-    const auto reordered = VegetationTest::CompleteBake(
-        service, executor, provider, binding, true);
-    CHECK(first.chunk_bytes == reordered.chunk_bytes);
-    CHECK(first.manifest_bytes == reordered.manifest_bytes);
-    CHECK(first.active_pointer_bytes == reordered.active_pointer_bytes);
+    const auto chunk_zero = VegetationTest::SurfaceRequest(
+        AshEngine::VegetationChunkCoord{0, 0}, glm::dvec2(128.0, 128.0));
+    const auto chunk_one = VegetationTest::SurfaceRequest(
+        AshEngine::VegetationChunkCoord{1, 0}, glm::dvec2(128.0, 128.0));
+    VegetationTest::ExecutePaintStroke(service_a, executor_a, provider_a,
+        binding, chunk_zero);
+    VegetationTest::ExecutePaintStroke(service_a, executor_a, provider_a,
+        binding, chunk_one);
+    VegetationTest::ExecutePaintStroke(service_b, executor_b, provider_b,
+        binding, chunk_one);
+    VegetationTest::ExecutePaintStroke(service_b, executor_b, provider_b,
+        binding, chunk_zero);
+    CHECK(provider_a.StrokeChunkOrder() == std::array<int64_t, 2>{0, 1});
+    CHECK(provider_b.StrokeChunkOrder() == std::array<int64_t, 2>{1, 0});
+    CHECK(provider_a.StrokeChunkOrder() != provider_b.StrokeChunkOrder());
+    REQUIRE(VegetationTest::CompleteSave(service_a, executor_a));
+    REQUIRE(VegetationTest::CompleteSave(service_b, executor_b));
+    CHECK(root_a.ReadLayerBytes() == root_b.ReadLayerBytes());
+    const auto baked_a = VegetationTest::CompleteBake(
+        service_a, executor_a, provider_a, binding);
+    const auto baked_b = VegetationTest::CompleteBake(
+        service_b, executor_b, provider_b, binding);
+    CHECK(baked_a.chunk_bytes == baked_b.chunk_bytes);
+    CHECK(baked_a.manifest_bytes == baked_b.manifest_bytes);
+    CHECK(baked_a.active_pointer_bytes == baked_b.active_pointer_bytes);
 
     provider.SetMode(VegetationTest::SurfaceMode::Failed);
     CHECK_FALSE(VegetationTest::CompleteBake(
@@ -2174,11 +2192,11 @@ TEST_CASE("Vegetation Phase 2 authoring and deterministic bake exit contract")
 }
 ```
 
-The same file adds provider `Pending`, malformed batch, source-changed reload, dirty ordinary reload, stale serial, object/manifest/pointer fault through a service-injected `ScriptedVegetationFileOps`, manifest-only versus authoring-density-only full-dirty coordinates, seed absent-to-present/present-to-absent, surface revision absent-to-present/present-to-absent, and shutdown during sample/write subcases. It also constructs the exact Remove+clear regression: active manifest coord C contains another species but not S, old authoring at C has nonzero S weight, Remove clears it, Save and a failed bake occur, then the next successful service bake must still include C from retained before-evidence and clear the evidence only after pointer commit. Every fixture uses deterministic explicit time and in-memory scripted provider/file state.
+The same file adds provider `Pending`, malformed batch, source-changed reload, dirty ordinary reload, stale serial, object/manifest/pointer fault through a service-injected `ScriptedVegetationFileOps`, manifest-only versus authoring-density-only full-dirty coordinates, seed absent-to-present/present-to-absent, surface revision absent-to-present/present-to-absent, and shutdown during sample/write subcases. It also constructs the exact Remove+clear regression: active manifest coord C contains another species but not S, old authoring at C has nonzero S weight, Remove clears it, Save and a failed bake occur, then the next successful service bake must still include C from retained before-evidence and clear the evidence only after pointer commit. The input-order case uses two fresh roots/services with an identical palette-only Layer, surface identity and binding; public `BeginStroke`/`AppendStrokePoint`/`EndStroke` calls paint disjoint chunk `{0,0}` and `{1,0}` points at local `{128,128}` in opposite encounter order, prove the provider histories differ, then prove canonical Layer, chunk-object, manifest and active-pointer bytes match. The original full authoring chain separately retains repeat-cook byte identity. Every fixture uses deterministic explicit time and in-memory scripted provider/file state.
 
-All async test helpers take the injected `ManualVegetationEditorTaskExecutor&` explicitly and drive `RunNext/RunAll` plus `service.Tick(explicit_now)`; none discovers an executor through globals. `CompleteBake` also takes `DeterministicSurfaceProvider&` and an explicit nonzero `VegetationSurfaceBinding` value, passes that binding to `RequestBake(binding, now)`, and sets its deterministic input-order mode before requesting the bake, then restores the mode before return. The helpers assert a task was queued, drive only that executor, and fail if the expected completion is not observed. This is the only mechanism by which the exit test advances save/reload/stroke/bake work.
+All ordinary async test helpers take the injected `ManualVegetationEditorTaskExecutor&` explicitly and drive `RunNext/RunAll` plus `service.Tick(explicit_now)`; none discovers an executor through globals. `CompleteBake` also takes `DeterministicSurfaceProvider&` and an explicit nonzero `VegetationSurfaceBinding` value and passes that binding to `RequestBake(binding, now)`. There is no provider-side reverse-processing knob or bookkeeping surrogate: order permutation occurs only through the public service stroke API above. The ordinary helpers assert a task was queued, drive only that executor, and fail if the expected completion is not observed. The shutdown-during-sample/write cases instead inject the production executor and use condition-variable barriers so `Shutdown()` cancels and joins work that is already running.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bat
 generate_vs2022.bat
@@ -2187,7 +2205,7 @@ RunTests.bat Debug --test-case="Vegetation Phase 2 authoring and deterministic b
 
 Expected RED: the production service has no coherent `VegetationEditorStatusSnapshot`/`GetStatusSnapshot()` containing published generation, active and last-known-good manifest identities, immutable palette, operation state and capabilities. The RED must not be manufactured with a test-only free function.
 
-- [ ] **Step 3: Add the production status snapshot and close sequencing gaps**
+- [x] **Step 3: Add the production status snapshot and close sequencing gaps**
 
 ```cpp
 struct VegetationEditorStatusSnapshot
@@ -2210,26 +2228,89 @@ VegetationEditorStatusSnapshot VegetationEditorService::GetStatusSnapshot() cons
 
 Return one Editor-thread value snapshot; its immutable palette pointer is replaced only after a complete successful load/edit/revert and the panel in Task 11 is its second production consumer. Fix only integration sequencing exposed by the test: successful checked commit advances publication/persisted state, while any failed, cancelled, stale, dirty-conflict, or malformed path preserves the prior coherent snapshot, palette and last-known-good pointer.
 
-- [ ] **Step 4: Run GREEN in both configurations**
+- [x] **Step 4: Run GREEN in both configurations**
 
 ```bat
 RunTests.bat Debug --test-case="Vegetation Phase 2 authoring and deterministic bake exit contract"
 RunTests.bat Release --test-case="Vegetation Phase 2 authoring and deterministic bake exit contract"
 RunTests.bat Debug --test-case="Vegetation service*"
+RunTests.bat Debug --test-case="Vegetation storage*"
 RunTests.bat Debug --test-case="Vegetation baker*"
 build_editor.bat Debug
 RunArchGate.bat
-git diff --check -- project/src/editor/Services/VegetationEditorService.h project/src/editor/Services/VegetationEditorService.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_phase2_exit_tests.cpp
+git diff --check -- docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md docs/specs/modules/editor.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md project/src/editor/Services/VegetationEditorService.h project/src/editor/Services/VegetationEditorService.cpp project/src/tests/Vegetation/VegetationTestSupport.h
+powershell -NoProfile -Command "$diagnostics = git diff --no-index --check -- NUL project/src/tests/Vegetation/vegetation_phase2_exit_tests.cpp 2>&1; if ($diagnostics) { $diagnostics; exit 1 }; exit 0"
 ```
 
-- [ ] **Step 5: Review and selectively commit**
+Task 10 execution evidence (2026-07-26, source HEAD
+`c534929e254e47d3b171f19c37e59d5d63cbaa42`, unstaged working tree) is:
+
+- fresh `generate_vs2022.bat` exited `0`; the first focused RED then failed at
+  compile time because production had neither
+  `VegetationEditorStatusSnapshot` nor `GetStatusSnapshot()`. The test did not
+  manufacture a test-only replacement.
+- the minimum production API returns one Editor-thread value snapshot after one
+  publication synchronization and derives capabilities from that same state.
+  Review-remediation RED then reproduced `content_generation=4` paired with
+  generation-3 palette publication and enabled capabilities after a Species
+  rebuild failure, Layer A's manifest digest leaking into Layer B, and a fresh
+  reopen returning zero instead of the restart-readable active digest.
+- ordinary async helpers use only the explicitly injected manual executor,
+  explicit nonzero binding and explicit `steady_clock` time. The two shutdown
+  cases instead use the production executor with a condition-variable barrier:
+  each worker is already blocked inside real sample/write work when the
+  Editor-thread `Shutdown` performs cancel -> acknowledgement -> exception
+  observation -> exact Join; no sleep or UI automation is used.
+- the final exact exit filter passed in Debug and Release with `1` case and
+  `583` assertions in each configuration. Debug regressions passed:
+  `Vegetation service*` = `49/49` cases and `25927/25927` assertions,
+  `Vegetation storage*` = `45/45` and `1084/1084`, and
+  `Vegetation baker*` = `34/34` and `589/589`.
+- the Remove+clear regression includes an authoring-only chunk D outside the
+  localized removal evidence. A temporary mutation that acknowledged evidence
+  on the failed bake made the next bake full-dirty, sampled D and failed the
+  exact `CHECK_FALSE(BatchContainsChunk(..., {1, 0}))`; restoring production
+  behavior passed the targeted subcase with `64/64` assertions.
+- the final input-order review replaces provider-side reverse bookkeeping with
+  two fresh public services. Their captured public stroke histories are
+  `{0,1}` and `{1,0}`, while saved canonical Layer bytes, nonempty chunk
+  objects, manifest and active ASVA bytes match. A same-order fixture mutation
+  failed the two history-sensitivity checks with `92/94` assertions before the
+  real opposite-order fixture passed `94/94`.
+- Layer A's valid store is copied below Layer B's path while B retains a
+  different `layer_id`. Removing the production `layer_id` guard failed both
+  B digest-zero checks with `29/31`; replacing the injected chunk-set budget
+  with the default likewise failed both 47-byte-budget digest-zero checks with
+  `29/31`. Restoring both contracts passed the targeted subcase with `31/31`,
+  and a subsequent default-budget fresh restart recovered A's baseline digest.
+- `build_editor.bat Debug` exited `0` with `0` errors (`33` pre-existing
+  C4251 warnings); `RunArchGate.bat` passed with the unchanged `35` legacy
+  warnings; focused tracked and untracked `git diff --check` passed.
+  `AIDevDoctor.ps1 -Mode ValidatePlan` exited `0` and wrote
+  `Intermediate/test-reports/ai-dev/20260726-132557/`; its generic runtime and
+  PerfGate gaps are intentionally deferred because the Task 10 hard scope is
+  CPU/static-only and Task 12 owns the coordinated GPU/readiness/performance
+  exit matrix.
+- before Step 5, no UI automation, GPU gate, render/performance baseline
+  mutation, staging or commit was performed. The two pre-existing Tracy LFS
+  worktree changes remain excluded. The Task 10 SDD text review lock is
+  `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`;
+  final independent specification and code-quality reviews both report
+  P0=P1=P2=P3=0.
+
+- [x] **Step 5: Review and selectively commit**
 
 Review 1 traces the full chain and proves byte identity across input order and repeat cook. Review 2 proves every negative path retains last-known-good and that `GetStatusSnapshot()` is a real panel-facing value boundary, not a test-only abstraction.
 
 ```bat
-git add -- project/src/editor/Services/VegetationEditorService.h project/src/editor/Services/VegetationEditorService.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_phase2_exit_tests.cpp
+git add -- docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md docs/specs/modules/editor.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md project/src/editor/Services/VegetationEditorService.h project/src/editor/Services/VegetationEditorService.cpp project/src/tests/Vegetation/VegetationTestSupport.h project/src/tests/Vegetation/vegetation_phase2_exit_tests.cpp
 git commit -m "feat(vegetation): close phase two exit contract"
 ```
+
+The selective path list explicitly excludes
+`project/thirdparty/tracy/tracy-csvexport.exe` and
+`project/thirdparty/tracy/tracy-profiler.exe`; neither pre-existing worktree
+artifact may be staged or committed.
 
 ## Task 11: Add the disabled-safe Vegetation panel and application lifecycle wiring
 

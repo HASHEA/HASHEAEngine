@@ -71,6 +71,21 @@ namespace AshEditor
 
 	using VegetationPaletteView = std::vector<VegetationPaletteViewEntry>;
 
+	struct VegetationEditorStatusSnapshot
+	{
+		VegetationSessionState session = VegetationSessionState::Failed;
+		VegetationOperationState operation = VegetationOperationState::Idle;
+		std::filesystem::path source_path{};
+		uint64_t content_generation = 0;
+		uint64_t persisted_generation = 0;
+		std::optional<AshEngine::VegetationFileRevision> observed_revision{};
+		AshEngine::VegetationSha256 active_manifest_digest{};
+		AshEngine::VegetationSha256 last_known_good_manifest_digest{};
+		std::shared_ptr<const VegetationPaletteView> palette{};
+		VegetationEditorCapabilities capabilities{};
+		std::string detail{};
+	};
+
 	struct VegetationEditorServiceDeps
 	{
 		AshEngine::AssetDatabase* pAssetDatabase = nullptr;
@@ -131,6 +146,7 @@ namespace AshEditor
 			const AshEngine::VegetationSurfaceBinding& binding,
 			std::chrono::steady_clock::time_point now);
 
+		VegetationEditorStatusSnapshot GetStatusSnapshot() const;
 		VegetationEditorCapabilities GetCapabilities() const;
 		std::shared_ptr<const VegetationPaletteView> GetPaletteView() const;
 		VegetationOperationState GetOperationState() const;

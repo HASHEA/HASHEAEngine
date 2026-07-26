@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <fstream>
 #include <iomanip>
@@ -686,6 +687,246 @@ namespace VegetationTest
 			}
 			return result;
 		}
+	};
+
+	enum class DeterministicSurfaceMode : uint8_t
+	{
+		Ready = 0,
+		Pending,
+		Failed,
+		MalformedBatch,
+		Outside
+	};
+
+	class DeterministicSurfaceSnapshot final :
+		public AshEngine::IVegetationSurfaceSnapshot
+	{
+	public:
+		explicit DeterministicSurfaceSnapshot(
+			AshEngine::VegetationSurfaceIdentity identity = SurfaceIdentity())
+			: m_identity(identity)
+		{
+		}
+
+		AshEngine::VegetationSurfaceIdentity identity() const override
+		{
+			return m_identity;
+		}
+
+		AshEngine::VegetationSurfaceBounds bounds() const override
+		{
+			return {
+				AshEngine::VegetationChunkCoord{ -1024, -1024 },
+				AshEngine::VegetationChunkCoord{ 1024, 1024 }
+			};
+		}
+
+		AshEngine::VegetationSurfaceBatchResult sample_batch(
+			const std::vector<AshEngine::VegetationSurfaceSampleRequest>& requests,
+			AshEngine::VegetationOperationControl control) const override
+		{
+			++m_sample_call_count;
+			m_batches.push_back(requests);
+			if (m_on_sample)
+			{
+				m_on_sample(control);
+			}
+			if (!control.cancel_requested ||
+				control.cancel_requested->load(std::memory_order_acquire))
+			{
+				return {
+					AshEngine::VegetationSurfaceStatus::Failed,
+					{},
+					"Deterministic test surface was cancelled."
+				};
+			}
+
+			if (m_mode == DeterministicSurfaceMode::MalformedBatch)
+			{
+				AshEngine::VegetationSurfaceBatchResult malformed{};
+				malformed.status = AshEngine::VegetationSurfaceStatus::Ready;
+				if (requests.size() > 1)
+				{
+					malformed.samples.reserve(requests.size() - 1);
+					for (size_t index = 0; index + 1 < requests.size(); ++index)
+					{
+						malformed.samples.push_back(ReadySurfaceSample(
+							static_cast<uint32_t>(index),
+							0.0,
+							glm::dvec3(0.0, 1.0, 0.0)));
+					}
+				}
+				return malformed;
+			}
+
+			const AshEngine::VegetationSurfaceStatus sample_status =
+				m_mode == DeterministicSurfaceMode::Pending
+					? AshEngine::VegetationSurfaceStatus::Pending
+				: m_mode == DeterministicSurfaceMode::Failed
+					? AshEngine::VegetationSurfaceStatus::Failed
+				: m_mode == DeterministicSurfaceMode::Outside
+					? AshEngine::VegetationSurfaceStatus::Outside
+					: AshEngine::VegetationSurfaceStatus::Ready;
+			AshEngine::VegetationSurfaceBatchResult result{};
+			result.status =
+				sample_status == AshEngine::VegetationSurfaceStatus::Pending
+					? AshEngine::VegetationSurfaceStatus::Pending
+				: sample_status == AshEngine::VegetationSurfaceStatus::Failed
+					? AshEngine::VegetationSurfaceStatus::Failed
+					: AshEngine::VegetationSurfaceStatus::Ready;
+			result.samples.resize(requests.size());
+			for (size_t index = 0; index < requests.size(); ++index)
+			{
+				result.samples[index] =
+					sample_status == AshEngine::VegetationSurfaceStatus::Ready
+						? ReadySurfaceSample(
+							static_cast<uint32_t>(index),
+							static_cast<double>(requests[index].chunk.x) * 0.25 +
+								static_cast<double>(requests[index].chunk.z) * 0.125,
+							glm::dvec3(0.0, 1.0, 0.0))
+						: NonReadySurfaceSample(
+							static_cast<uint32_t>(index), sample_status);
+			}
+			return result;
+		}
+
+		void SetIdentity(const AshEngine::VegetationSurfaceIdentity& identity)
+		{
+			m_identity = identity;
+		}
+
+		void SetMode(const DeterministicSurfaceMode mode)
+		{
+			m_mode = mode;
+		}
+
+		void SetOnSample(
+			std::function<void(const AshEngine::VegetationOperationControl&)>
+				on_sample)
+		{
+			m_on_sample = std::move(on_sample);
+		}
+
+		void ClearObservations() const
+		{
+			m_sample_call_count = 0;
+			m_batches.clear();
+		}
+
+		size_t SampleCallCount() const
+		{
+			return m_sample_call_count;
+		}
+
+		const std::vector<
+			std::vector<AshEngine::VegetationSurfaceSampleRequest>>&
+			Batches() const
+		{
+			return m_batches;
+		}
+
+	private:
+		AshEngine::VegetationSurfaceIdentity m_identity{};
+		DeterministicSurfaceMode m_mode =
+			DeterministicSurfaceMode::Ready;
+		std::function<void(const AshEngine::VegetationOperationControl&)>
+			m_on_sample{};
+		mutable size_t m_sample_call_count = 0;
+		mutable std::vector<
+			std::vector<AshEngine::VegetationSurfaceSampleRequest>>
+			m_batches{};
+	};
+
+	class DeterministicSurfaceProvider final :
+		public AshEngine::IVegetationSurfaceProvider
+	{
+	public:
+		explicit DeterministicSurfaceProvider(
+			const AshEngine::VegetationSurfaceIdentity identity =
+				SurfaceIdentity())
+			: m_snapshot(
+				std::make_shared<DeterministicSurfaceSnapshot>(identity))
+		{
+		}
+
+		AshEngine::VegetationSurfaceCaptureResult capture(
+			const AshEngine::VegetationSurfaceBinding binding) const override
+		{
+			++m_capture_count;
+			m_bindings.push_back(binding);
+			DeterministicSurfaceMode capture_mode = m_mode;
+			if (!m_capture_script.empty())
+			{
+				capture_mode = m_capture_script.front();
+				m_capture_script.pop_front();
+			}
+			if (capture_mode == DeterministicSurfaceMode::Pending)
+			{
+				return {
+					AshEngine::VegetationSurfaceStatus::Pending,
+					nullptr,
+					"Deterministic test surface is pending."
+				};
+			}
+			if (capture_mode == DeterministicSurfaceMode::Failed)
+			{
+				return {
+					AshEngine::VegetationSurfaceStatus::Failed,
+					nullptr,
+					"Deterministic test surface failed."
+				};
+			}
+			m_snapshot->SetMode(capture_mode);
+			return {
+				AshEngine::VegetationSurfaceStatus::Ready,
+				m_snapshot,
+				{}
+			};
+		}
+
+		void SetMode(const DeterministicSurfaceMode mode)
+		{
+			m_mode = mode;
+			m_snapshot->SetMode(mode);
+		}
+
+		void PushCaptureMode(
+			const DeterministicSurfaceMode mode,
+			const size_t count = 1)
+		{
+			for (size_t index = 0; index < count; ++index)
+			{
+				m_capture_script.push_back(mode);
+			}
+		}
+
+		void SetIdentity(const AshEngine::VegetationSurfaceIdentity& identity)
+		{
+			m_snapshot->SetIdentity(identity);
+		}
+
+		std::shared_ptr<DeterministicSurfaceSnapshot> Snapshot() const
+		{
+			return m_snapshot;
+		}
+
+		size_t CaptureCount() const
+		{
+			return m_capture_count;
+		}
+
+		const std::vector<AshEngine::VegetationSurfaceBinding>& Bindings() const
+		{
+			return m_bindings;
+		}
+
+	private:
+		std::shared_ptr<DeterministicSurfaceSnapshot> m_snapshot{};
+		DeterministicSurfaceMode m_mode =
+			DeterministicSurfaceMode::Ready;
+		mutable std::deque<DeterministicSurfaceMode> m_capture_script{};
+		mutable size_t m_capture_count = 0;
+		mutable std::vector<AshEngine::VegetationSurfaceBinding> m_bindings{};
 	};
 
 	class ManualVegetationEditorTaskExecutor final :

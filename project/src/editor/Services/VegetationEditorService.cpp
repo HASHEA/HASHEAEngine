@@ -452,6 +452,52 @@ namespace AshEditor
 				!active_stroke.has_value();
 		}
 
+		bool PublicationIsCoherent() const
+		{
+			return !working_set ||
+				working_set->content_generation() ==
+					published_view_generation;
+		}
+
+		AshEngine::VegetationSha256 ManifestDigestForLayer(
+			const std::filesystem::path& layer_path,
+			const AshEngine::VegetationLayerSnapshot& layer) const
+		{
+			AshEngine::VegetationSha256 digest{};
+			try
+			{
+				const auto resolver =
+					deps.pAssetDatabase
+						? deps.pAssetDatabase->
+							capture_vegetation_resolver_snapshot()
+						: nullptr;
+				if (!resolver || !p_file_ops)
+				{
+					return digest;
+				}
+				const AshEngine::VegetationActiveChunkSetReadResult active =
+					AshEngine::read_active_vegetation_chunk_set(
+						deps.asset_root,
+						layer_path,
+						*resolver,
+						deps.chunk_set_load_budget,
+						make_control(Clock::now() + k_operation_timeout),
+						*p_file_ops);
+				if (active.status ==
+						AshEngine::VegetationActiveChunkSetReadStatus::Succeeded &&
+					active.snapshot &&
+					active.snapshot->layer_id == layer.layer_id)
+				{
+					digest = active.snapshot->manifest_sha256;
+				}
+			}
+			catch (...)
+			{
+				digest.fill(0);
+			}
+			return digest;
+		}
+
 		bool PaletteIdentityMatches(
 			const AshEngine::VegetationLayerSnapshot& snapshot) const
 		{
@@ -527,6 +573,45 @@ namespace AshEditor
 				}
 			}
 			SynchronizePalettePublication(current);
+		}
+
+		VegetationEditorCapabilities CapabilitiesSnapshot() const
+		{
+			VegetationEditorCapabilities capabilities{};
+			if (!initialized || shutting_down ||
+				!PublicationIsCoherent())
+			{
+				return capabilities;
+			}
+			const bool idle = !cleanup_blocked &&
+				async_kind == AsyncKind::None &&
+				!active_stroke.has_value();
+			const bool has_layer = working_set != nullptr;
+			capabilities.can_create = idle &&
+				(!has_layer || session == VegetationSessionState::Clean);
+			capabilities.can_load = idle;
+			capabilities.can_save = idle && has_layer &&
+				(session == VegetationSessionState::Dirty ||
+					session == VegetationSessionState::Clean);
+			capabilities.can_save_copy_as = capabilities.can_save;
+			capabilities.can_reload = idle && has_layer &&
+				(session == VegetationSessionState::Clean ||
+					session == VegetationSessionState::Dirty);
+			capabilities.can_edit_palette = idle && has_layer &&
+				session != VegetationSessionState::Saving;
+			const bool surface_ready = deps.pSurfaceProvider != nullptr;
+			capabilities.can_paint =
+				surface_ready && capabilities.can_edit_palette;
+			capabilities.can_erase = capabilities.can_paint;
+			capabilities.can_bake =
+				surface_ready && idle && has_layer &&
+				observed_revision.has_value();
+			if (!surface_ready)
+			{
+				capabilities.surface_unavailable_reason =
+					"No vegetation surface provider is registered.";
+			}
+			return capabilities;
 		}
 
 		bool ApplyPaletteEdit(const AshEngine::VegetationPaletteEdit& edit)
@@ -1571,6 +1656,10 @@ namespace AshEditor
 				m_impl->FinalizeAsync();
 				return;
 			}
+			const AshEngine::VegetationSha256 manifest_digest =
+				m_impl->ManifestDigestForLayer(
+					current.canonical_relative_path,
+					*current.snapshot);
 			const EditorCommandDocumentKey old_key =
 				make_document_key(m_impl->source_path);
 			m_impl->deps.pCommandExecutor->RemoveCommandsForDocument(old_key);
@@ -1585,6 +1674,8 @@ namespace AshEditor
 			m_impl->palette_view = std::move(view);
 			m_impl->published_view_generation =
 				current.snapshot->content_generation;
+			m_impl->active_manifest_digest = manifest_digest;
+			m_impl->last_known_good_manifest_digest = manifest_digest;
 			m_impl->session = VegetationSessionState::Clean;
 			m_impl->operation = VegetationOperationState::Succeeded;
 			m_impl->detail.clear();
@@ -1963,6 +2054,10 @@ namespace AshEditor
 			m_impl->detail = std::move(error);
 			return false;
 		}
+		const AshEngine::VegetationSha256 manifest_digest =
+			m_impl->ManifestDigestForLayer(
+				read.canonical_relative_path,
+				*read.snapshot);
 		if (m_impl->working_set)
 		{
 			m_impl->deps.pCommandExecutor->RemoveCommandsForDocument(
@@ -1979,6 +2074,8 @@ namespace AshEditor
 		m_impl->palette_view = std::move(view);
 		m_impl->published_view_generation =
 			read.snapshot->content_generation;
+		m_impl->active_manifest_digest = manifest_digest;
+		m_impl->last_known_good_manifest_digest = manifest_digest;
 		m_impl->session = VegetationSessionState::Clean;
 		m_impl->operation = VegetationOperationState::Succeeded;
 		m_impl->detail.clear();
@@ -2259,45 +2356,44 @@ namespace AshEditor
 		return m_impl->BeginBakeRequest(binding, now);
 	}
 
+	VegetationEditorStatusSnapshot
+	VegetationEditorService::GetStatusSnapshot() const
+	{
+		VegetationEditorStatusSnapshot snapshot{};
+		if (!m_impl)
+		{
+			snapshot.palette =
+				std::make_shared<const VegetationPaletteView>();
+			return snapshot;
+		}
+		m_impl->SynchronizeWorkingSet();
+		snapshot.session = m_impl->session;
+		snapshot.operation = m_impl->operation;
+		snapshot.source_path = m_impl->source_path;
+		snapshot.content_generation = m_impl->working_set
+			? m_impl->published_view_generation
+			: 0;
+		snapshot.persisted_generation = m_impl->persisted_generation;
+		snapshot.observed_revision = m_impl->observed_revision;
+		snapshot.active_manifest_digest =
+			m_impl->active_manifest_digest;
+		snapshot.last_known_good_manifest_digest =
+			m_impl->last_known_good_manifest_digest;
+		snapshot.palette = m_impl->palette_view;
+		snapshot.capabilities = m_impl->CapabilitiesSnapshot();
+		snapshot.detail = m_impl->detail;
+		return snapshot;
+	}
+
 	VegetationEditorCapabilities
 	VegetationEditorService::GetCapabilities() const
 	{
-		VegetationEditorCapabilities capabilities{};
 		if (!m_impl || !m_impl->initialized || m_impl->shutting_down)
 		{
-			return capabilities;
+			return {};
 		}
 		m_impl->SynchronizeWorkingSet();
-		const bool idle = !m_impl->cleanup_blocked &&
-			m_impl->async_kind == Impl::AsyncKind::None &&
-			!m_impl->active_stroke.has_value();
-		const bool has_layer = m_impl->working_set != nullptr;
-		capabilities.can_create = idle &&
-			(!has_layer || m_impl->session == VegetationSessionState::Clean);
-		capabilities.can_load = idle;
-		capabilities.can_save = idle && has_layer &&
-			(m_impl->session == VegetationSessionState::Dirty ||
-				m_impl->session == VegetationSessionState::Clean);
-		capabilities.can_save_copy_as = capabilities.can_save;
-		capabilities.can_reload = idle && has_layer &&
-			(m_impl->session == VegetationSessionState::Clean ||
-				m_impl->session == VegetationSessionState::Dirty);
-		capabilities.can_edit_palette = idle && has_layer &&
-			m_impl->session != VegetationSessionState::Saving;
-		const bool surface_ready =
-			m_impl->deps.pSurfaceProvider != nullptr;
-		capabilities.can_paint =
-			surface_ready && capabilities.can_edit_palette;
-		capabilities.can_erase = capabilities.can_paint;
-		capabilities.can_bake =
-			surface_ready && idle && has_layer &&
-			m_impl->observed_revision.has_value();
-		if (!surface_ready)
-		{
-			capabilities.surface_unavailable_reason =
-				"No vegetation surface provider is registered.";
-		}
-		return capabilities;
+		return m_impl->CapabilitiesSnapshot();
 	}
 
 	std::shared_ptr<const VegetationPaletteView>
