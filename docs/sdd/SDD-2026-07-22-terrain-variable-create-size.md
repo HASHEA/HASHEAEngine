@@ -14,12 +14,13 @@ Implemented — Automated verification passed; named human sign-off pending
 
 - fresh `generate_vs2022.bat` 成功；Editor、Sandbox 的 Debug/Release 定向构建均退出 0，Debug `AshImageDiff` 工具目标也成功生成。
 - Debug 全量 `Tests.exe`：621 passed、2 skipped、30,823 assertions；`RunTests.bat Release` 构建与全量执行退出 0。新增回归先证明 plain smoke 在 `scene_packets_terrain_ready=0` 时保持 Running，之后才接入生产计数。
-- `RunArchGate.bat` PASS（35 条既有 legacy warning，无新增）；最终 `AIDevDoctor.ps1 -Mode ValidatePlan` PASS，报告位于 `Intermediate/test-reports/ai-dev/20260726-065522/`。
+- 当前 `main` 的 `499cbb4`（Editor SceneView camera-speed toolbar）与 `32a6bb1`（风险分级文档）已无冲突集成到最终 feature HEAD `884729e`。该 HEAD 上 Debug/Release 全量测试再次得到 621 passed、2 skipped、30,823 assertions；Editor/Sandbox Debug/Release 四目标构建退出 0；Editor 最大 TerrainGate Vulkan/DX12 分别在 generation 1 recovered 后第 3470/3604 帧成功。
+- `RunArchGate.bat` PASS（35 条既有 legacy warning，无新增）；最终 `AIDevDoctor.ps1 -Mode ValidatePlan` PASS，报告位于 `Intermediate/test-reports/ai-dev/20260726-065958/`。
 - readiness：Editor default Vulkan/DX12，加 Sandbox min/rect/default/max Vulkan/DX12，共 10/10 退出 0。首个修复后 Vulkan default 由旧的 Terrain Pending、0 draw、第 4 帧误成功，变为 Pending → generation 1 recovered → 第 217 帧成功；最大 TerrainGate 在普通 Vulkan/DX12 分别到第 4739/4459 帧才放行。
 - validation：通过 `cmd.exe /d /s /c` 保留 `--perf-gate-validation=on` 单 token，min/rect/default/max × Vulkan/DX12 共 8/8 退出 0。18 份精确 runtime log 均包含 Terrain recovered 与 readiness success；8 份 validation log 均记录 `validation=on`，没有 error/critical、VUID、GPU validation、device lost、fatal、assert、access violation 或 bad leak。
 - resource byte oracle 由生产 sizing helper 的单测精确锁定：min 1×1 height 132,100 B、coarse 33×33 RGBA8 4,356 B；default 8×8 height 8,454,400 B、coarse 257×257 RGBA8 264,196 B；rect 8×16 height 16,908,800 B、coarse 257×513 RGBA8 527,364 B；max 32×32 height 135,270,400 B、coarse 1025×1025 RGBA8 4,202,500 B。固定高分辨率 atlas 仍为 4144×4144、256 slots。
 - non-bless `RunRenderGate.bat` PASS，报告位于 `Intermediate/test-reports/render-gate/20260726-144643-892-68976-41fb0bcb/`：sandbox Vulkan/DX12 golden SSIM 0.996278/0.996177，跨后端 0.999747；particles 三项均为 1.0。
-- `RunPerfGate.bat -Profile Standard` PASS、无 WARN，报告位于 `Intermediate/test-reports/perf-gate/20260726-144837-035-73756-e03d5938/`；未 bless baseline。
+- `RunPerfGate.bat -Profile Standard` 在 Terrain 验证提交和最终集成 HEAD 上均 PASS、无 WARN；最终报告位于 `Intermediate/test-reports/perf-gate/20260726-150133-550-80548-2a1e7a92/`；未 bless baseline。
 - 审计确认 `Engine.ini`、`EditorSettings.json`、`ViewportLayout.json` 恢复为运行前 SHA-256，`imgui.ini` 的本轮 Terrain window 持久化噪声已移除；4 张 render golden 与 `perf_gate_baselines.json` 的 SHA-256 均与运行前快照一致。
 - 待办仅剩具名人类在 Vulkan/DX12 按 `docs/templates/TerrainEditorManualSignoff.md` 完成 Target Size、Create/Import、矩形最终画面和 reload failure retention 的真实 UI 签署；Agent 不代签。
 
