@@ -21,6 +21,7 @@ namespace AshEditor
 	class SceneService;
 	class SelectionService;
 	class TerrainEditorService;
+	class VegetationEditorService;
 	struct EditorGizmoState;
 
 	struct PanelBootstrapContext
@@ -41,6 +42,7 @@ namespace AshEditor
 		DragDropTransferService* pDragDropTransferService = nullptr;
 		EditorGizmoService* pGizmoService = nullptr;
 		EditorGizmoState* pGizmoState = nullptr;
+		VegetationEditorService* pVegetationService = nullptr;
 	};
 
 	struct PanelBootstrapResult

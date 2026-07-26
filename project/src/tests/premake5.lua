@@ -47,6 +47,7 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Services/TerrainBrushOverlayRenderer.cpp",
 		"%{wks.location}/project/src/editor/Services/TerrainEditorService.cpp",
 		"%{wks.location}/project/src/editor/Core/SceneSnapshotUtils.cpp",
+		"%{wks.location}/project/src/editor/Core/EditorPanel.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorEventBus.cpp",
 		"%{wks.location}/project/src/editor/Core/VegetationCommands.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorComponentComparison.cpp",
@@ -56,6 +57,7 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Services/UndoRedoService.cpp",
 		"%{wks.location}/project/src/editor/Services/VegetationEditorTaskExecutor.cpp",
 		"%{wks.location}/project/src/editor/Services/VegetationEditorService.cpp",
+		"%{wks.location}/project/src/editor/Panels/Vegetation/VegetationPanel.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxFreeCameraController.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxStandardScene.cpp",
 	}

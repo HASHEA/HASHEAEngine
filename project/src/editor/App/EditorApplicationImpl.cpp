@@ -34,11 +34,16 @@
 #include "Services/SelectionService.h"
 #include "Services/TerrainEditorService.h"
 #include "Services/UndoRedoService.h"
+#include "Services/VegetationEditorService.h"
+#include "Services/VegetationEditorTaskExecutor.h"
 #include "Shell/DockLayoutController.h"
 #include "Shell/EditorCommandPaletteController.h"
 #include "Shell/EditorStatusBarController.h"
 #include "Shell/MainMenuController.h"
 #include "Shell/PanelManager.h"
+
+#include <chrono>
+#include <utility>
 
 namespace AshEditor
 {
@@ -61,6 +66,8 @@ namespace AshEditor
 		, _upSessionStateService(std::make_unique<EditorSessionStateService>())
 		, _upIconService(std::make_unique<EditorIconService>())
 		, _upGizmoService(std::make_unique<EditorGizmoService>())
+		, _upVegetationTaskExecutor(
+			std::make_unique<VegetationEditorTaskExecutor>())
 		, _upPanelManager(std::make_unique<PanelManager>())
 		, _upDockLayoutController(std::make_unique<DockLayoutController>())
 		, _upStatusBarController(std::make_unique<EditorStatusBarController>())
@@ -109,6 +116,7 @@ namespace AshEditor
 		}
 
 		_bDeterministicBenchmarkLayout = refOptions.bDeterministicBenchmarkLayout;
+		_bVegetationServiceReady = false;
 		const std::filesystem::path pathWorkspaceRoot = DiscoverEditorWorkspaceRoot();
 		_upSettingsService->Initialize(pathWorkspaceRoot);
 
@@ -117,6 +125,10 @@ namespace AshEditor
 		const std::filesystem::path pathStartupScene = ResolveStartupScenePath(refSettings, refOptions.pathSceneOverride);
 		const bool bStartupSceneLoaded = CreateServices(pathWorkspaceRoot, pathStartupScene);
 		_bBenchmarkSceneLoaded = !_bDeterministicBenchmarkLayout || bStartupSceneLoaded;
+		if (!_bVegetationServiceReady)
+		{
+			return false;
+		}
 
 		WireServices();
 		CreateViewports();
@@ -143,6 +155,18 @@ namespace AshEditor
 	{
 		if (!_bInitialized)
 		{
+			_upTerrainEditorService->Shutdown();
+			if (_upVegetationEditorService)
+			{
+				_upVegetationEditorService->Shutdown();
+			}
+			if (_upVegetationTaskExecutor)
+			{
+				_upVegetationTaskExecutor->CancelAndJoinAll();
+			}
+			_upVegetationEditorService.reset();
+			_upVegetationTaskExecutor.reset();
+			_bVegetationServiceReady = false;
 			return;
 		}
 
@@ -153,6 +177,17 @@ namespace AshEditor
 		}
 		ShutdownPanels();
 		_upTerrainEditorService->Shutdown();
+		if (_upVegetationEditorService)
+		{
+			_upVegetationEditorService->Shutdown();
+		}
+		if (_upVegetationTaskExecutor)
+		{
+			_upVegetationTaskExecutor->CancelAndJoinAll();
+		}
+		_upVegetationEditorService.reset();
+		_upVegetationTaskExecutor.reset();
+		_bVegetationServiceReady = false;
 		if (!_bDeterministicBenchmarkLayout)
 		{
 			SavePersistentState();
@@ -185,6 +220,12 @@ namespace AshEditor
 		}
 		_upTerrainEditorService->Update();
 		_upActionCoordinator->Update();
+		if (_bVegetationServiceReady &&
+			_upVegetationEditorService)
+		{
+			_upVegetationEditorService->Tick(
+				std::chrono::steady_clock::now());
+		}
 		_upPanelManager->Update();
 
 		const bool bDragging = _editorContext.pUiContext && _editorContext.pUiContext->has_drag_drop_payload();
@@ -256,14 +297,21 @@ namespace AshEditor
 	{
 		return _bInitialized &&
 			_bAssetDatabaseReady &&
+			_bVegetationServiceReady &&
 			_bPresentationReady &&
 			_editorContext.bGuiRendererReady;
 	}
 
 	bool EditorApplicationImpl::HasAutomationFailure() const
 	{
-		return _bInitialized &&
-			(!_bAssetDatabaseReady || !_editorContext.bGuiRendererReady || !_bBenchmarkSceneLoaded);
+		const bool initializationStarted =
+			_bInitialized ||
+			_upVegetationEditorService != nullptr;
+		return initializationStarted &&
+			(!_bAssetDatabaseReady ||
+				!_bVegetationServiceReady ||
+				!_editorContext.bGuiRendererReady ||
+				!_bBenchmarkSceneLoaded);
 	}
 
 	EditorViewportInstance* EditorApplicationImpl::GetPrimaryViewport()
@@ -296,6 +344,36 @@ namespace AshEditor
 		if (!_upTerrainEditorService->Initialize(_upAssetDatabaseService->GetDatabase(), *this))
 		{
 			_bAssetDatabaseReady = false;
+		}
+		if (!_upVegetationTaskExecutor)
+		{
+			_upVegetationTaskExecutor =
+				std::make_unique<VegetationEditorTaskExecutor>();
+		}
+		VegetationEditorServiceDeps vegetationDeps{};
+		vegetationDeps.pAssetDatabase =
+			&_upAssetDatabaseService->GetDatabase();
+		vegetationDeps.asset_root =
+			_upAssetDatabaseService->GetAssetRoot();
+		vegetationDeps.pCommandExecutor = this;
+		vegetationDeps.pSurfaceProvider = nullptr;
+		vegetationDeps.pTaskExecutor =
+			_upVegetationTaskExecutor.get();
+		vegetationDeps.load_budget =
+			VegetationEditorService::DefaultLoadBudget();
+		vegetationDeps.chunk_set_load_budget =
+			VegetationEditorService::DefaultChunkSetLoadBudget();
+		vegetationDeps.pFileOps = nullptr;
+		_upVegetationEditorService =
+			std::make_unique<VegetationEditorService>(
+				std::move(vegetationDeps));
+		_bVegetationServiceReady =
+			_upVegetationEditorService->Initialize();
+		if (!_bVegetationServiceReady)
+		{
+			HLogError(
+				"Editor failed to initialize vegetation authoring service.");
+			return bStartupSceneLoaded;
 		}
 		_upIconService->Initialize(pathWorkspaceRoot);
 		return bStartupSceneLoaded;
@@ -383,7 +461,8 @@ namespace AshEditor
 			_upViewportCameraService.get(),
 			_upDragDropTransferService.get(),
 			_upGizmoService.get(),
-			&_gizmoState
+			&_gizmoState,
+			_upVegetationEditorService.get()
 		};
 		const PanelBootstrapResult bootstrapResult =
 			PanelBootstrapper::CreateDefaultPanels(*_upPanelManager, bootstrapContext, *_upEventBus);

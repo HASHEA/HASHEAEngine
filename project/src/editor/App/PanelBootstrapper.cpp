@@ -10,6 +10,7 @@
 #include "Panels/PropertyEditorDemoPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/Terrain/TerrainModePanel.h"
+#include "Panels/Vegetation/VegetationPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Services/EditorViewportCameraService.h"
 #include "Shell/PanelManager.h"
@@ -89,6 +90,15 @@ namespace AshEditor
 			deps.pDragDropTransferService = refContext.pDragDropTransferService;
 			return deps;
 		}
+
+		VegetationPanelDeps MakeVegetationPanelDeps(
+			const PanelBootstrapContext& refContext)
+		{
+			VegetationPanelDeps deps{};
+			deps.pVegetationService =
+				refContext.pVegetationService;
+			return deps;
+		}
 	}
 
 	PanelBootstrapResult PanelBootstrapper::CreateDefaultPanels(
@@ -123,6 +133,8 @@ namespace AshEditor
 			MakeConsolePanelDeps(refContext));
 		AssetBrowserPanel* pAssetBrowserPanel = refPanelManager.CreatePanel<AssetBrowserPanel>(
 			MakeAssetBrowserPanelDeps(refContext, refPanelManager));
+		refPanelManager.CreatePanel<VegetationPanel>(
+			MakeVegetationPanelDeps(refContext));
 		refPanelManager.CreatePanel<PropertyEditorDemoPanel>();
 		refPanelManager.CreatePanel<NodeCanvasDemoPanel>(&refEventBus);
 		result.pSceneHierarchyActionTarget = pSceneHierarchyPanel;

@@ -43,6 +43,8 @@ namespace AshEditor
 	class SelectionService;
 	class TerrainEditorService;
 	class UndoRedoService;
+	class VegetationEditorService;
+	class VegetationEditorTaskExecutor;
 
 	class EditorApplicationImpl final
 		: public IActionInvoker
@@ -118,6 +120,10 @@ namespace AshEditor
 		std::unique_ptr<EditorSessionStateService> _upSessionStateService{};
 		std::unique_ptr<IEditorIconService> _upIconService{};
 		std::unique_ptr<EditorGizmoService> _upGizmoService{};
+		std::unique_ptr<VegetationEditorTaskExecutor>
+			_upVegetationTaskExecutor{};
+		std::unique_ptr<VegetationEditorService>
+			_upVegetationEditorService{};
 		std::unique_ptr<PanelManager> _upPanelManager{};
 		std::unique_ptr<DockLayoutController> _upDockLayoutController{};
 		std::unique_ptr<EditorStatusBarController> _upStatusBarController{};
@@ -129,6 +135,7 @@ namespace AshEditor
 		EditorGizmoState _gizmoState{};
 		bool _bInitialized = false;
 		bool _bAssetDatabaseReady = false;
+		bool _bVegetationServiceReady = false;
 		bool _bPresentationReady = false;
 		bool _bDeterministicBenchmarkLayout = false;
 		bool _bBenchmarkSceneLoaded = true;

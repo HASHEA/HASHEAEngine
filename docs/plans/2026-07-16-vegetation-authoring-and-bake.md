@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Task 10 implementation, review remediation, required validation and two independent implementation reviews are complete; this focused commit records Step 5. Task 10 executed against reviewed SDD SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`; the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD` has independent text/spec approval and is the Task 10 SDD review lock. Task 11 is ready for execution after this focused commit. Historical approval/execution locks remain preserved in the hash chain below.
+**Status:** Task 11 implementation, review remediation, required validation and two independent implementation reviews are complete; this focused commit records Step 5. Task 11 executed against the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which remains unchanged and is the Task 11 SDD review lock. Task 12 is ready for execution after this focused commit. Historical approval/execution locks remain preserved in the hash chain below.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -2318,6 +2318,7 @@ artifact may be staged or committed.
 
 **Files:**
 
+- Modify: `docs/plans/2026-07-16-vegetation-authoring-and-bake.md`
 - Create: `project/src/editor/Core/PanelDeps/VegetationPanelDeps.h`
 - Create: `project/src/editor/Panels/Vegetation/VegetationPanel.h`
 - Create: `project/src/editor/Panels/Vegetation/VegetationPanel.cpp`
@@ -2329,7 +2330,7 @@ artifact may be staged or committed.
 - Modify: `project/src/editor/App/EditorApplicationImpl.cpp`
 - Modify: `project/src/tests/premake5.lua`
 
-- [ ] **Step 1: Write the panel and lifecycle RED contract**
+- [x] **Step 1: Write the panel and lifecycle RED contract**
 
 Create the panel directory before adding its files:
 
@@ -2366,9 +2367,9 @@ TEST_CASE("Vegetation panel exposes a disabled-safe no-provider contract")
 }
 ```
 
-Add public-behavior cases for attach/detach safety and no-provider `OnUpdate` using the real service plus the existing recording command executor. The CPU Tests target does not construct or fake a `UIContext`: repository `UIContext` initialization requires a real Window/GraphicsContext/RenderDevice and there is no approved headless-input seam. New Layer, Add/Replace/Remove Species, Save, Reload, palette mutation, exact Undo/Redo, and Save -> Reload intent effects are therefore mechanically covered at the real service boundary in Task 9; Task 11 checks the panel ID/title, lifecycle-safe cached status/capabilities and disabled reason without invoking `OnGui`. A code review maps every `OnGui` control to exactly one existing service intent and confirms Paint/Erase/Bake use disabled UI scopes when the provider is absent. Task 12's visible Vulkan/DX12 human gate is the executable evidence for actual control clicks. The test does not subclass the final service, inspect source text, invent a panel presenter abstraction, or call GUI without a real `UIContext`. Application ownership order is verified by the Editor build and the two independent lifecycle reviews rather than a test-only application abstraction.
+Add public-behavior cases for attach/detach safety and no-provider `OnUpdate` using the real service plus the existing recording command executor. The CPU Tests target does not construct or fake a `UIContext`: repository `UIContext` initialization requires a real Window/GraphicsContext/RenderDevice and there is no approved headless-input seam. New Layer, Add/Replace/Remove Species, Save, Reload, palette mutation, exact Undo/Redo, and Save -> Reload intent effects are therefore mechanically covered at the real service boundary in Task 9; Task 11 checks the panel ID/title, lifecycle-safe cached status/capabilities and disabled reason without invoking `OnGui`. A code review maps every `OnGui` control to exactly one existing service intent and confirms Paint/Erase/Bake use disabled UI scopes when the provider is absent. Task 12's visible Vulkan/DX12 human gate is the executable evidence for actual control clicks. The test does not subclass the final service, invent a panel presenter abstraction, or call GUI without a real `UIContext`. Tests generally do not inspect production source text; the sole narrow exception is the canonical Species fallback-extension contract, which rejects `.AshVegetationSpecies` and requires exactly two `.AshVegetation asset.` occurrences in `VegetationPanel.cpp`. Application ownership order is verified by the Editor build and the two independent lifecycle reviews rather than a test-only application abstraction.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Add `Core/EditorPanel.cpp`, the new panel `.cpp`, and only their already-required Editor dependencies to `project/src/tests/premake5.lua`, then run:
 
@@ -2379,7 +2380,7 @@ RunTests.bat Debug --test-case="Vegetation panel*"
 
 Expected RED: panel IDs/deps/class do not exist. Bootstrap/application wiring is compiled only after the panel GREEN, so an unrelated unresolved symbol is not accepted as this RED.
 
-- [ ] **Step 3: Implement the smallest production panel and bootstrap**
+- [x] **Step 3: Implement the smallest production panel and bootstrap**
 
 ```cpp
 struct VegetationPanelDeps
@@ -2405,7 +2406,7 @@ Add `EditorPanelIds::Vegetation = "vegetation"` and `EditorWindowTitles::Vegetat
 
 `EditorApplicationImpl` owns `VegetationEditorTaskExecutor` before `VegetationEditorService`, initializes the service after AssetDatabase, passes `DefaultLoadBudget()`, `DefaultChunkSetLoadBudget()`, the default FileOps and a null provider, ticks it before panel update, shuts panels down first, then invokes service shutdown/cancel/join, then releases the service and executor. A lifecycle review and the panel contract verify the bootstrap never passes zero budgets. Do not register a deterministic provider in product code.
 
-- [ ] **Step 4: Run GREEN and Editor regression**
+- [x] **Step 4: Run GREEN and Editor regression**
 
 ```bat
 generate_vs2022.bat
@@ -2414,15 +2415,77 @@ RunTests.bat Release --test-case="Vegetation panel*"
 RunTests.bat Debug --test-case="*Inspector*"
 build_editor.bat Debug
 RunArchGate.bat
-git diff --check -- project/src/editor/Core/PanelDeps/VegetationPanelDeps.h project/src/editor/Panels/Vegetation/VegetationPanel.h project/src/editor/Panels/Vegetation/VegetationPanel.cpp project/src/editor/Core/EditorIds.h project/src/editor/App/PanelBootstrapper.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/Editor/vegetation_panel_contract_tests.cpp project/src/tests/premake5.lua
+git diff --check -- docs/plans/2026-07-16-vegetation-authoring-and-bake.md project/src/editor/Core/PanelDeps/VegetationPanelDeps.h project/src/editor/Panels/Vegetation/VegetationPanel.h project/src/editor/Panels/Vegetation/VegetationPanel.cpp project/src/editor/Core/EditorIds.h project/src/editor/App/PanelBootstrapper.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/Editor/vegetation_panel_contract_tests.cpp project/src/tests/premake5.lua
 ```
 
-- [ ] **Step 5: Review and selectively commit**
+Task 11 execution evidence (2026-07-26, source HEAD
+`9cff0ab1b75d1f00ce52e89caaf16acc0164148f`, unstaged working tree) is:
+
+- fresh `generate_vs2022.bat` exited `0`; the focused RED then failed at compile
+  time with C1083 for the deliberately absent `VegetationPanel.cpp` and
+  `Panels/Vegetation/VegetationPanel.h`. No unrelated unresolved symbol was
+  accepted as the RED.
+- the minimum production panel maps New Layer, Load, Add/Replace/Remove Species,
+  Save and Reload controls directly to existing service intents. Every dispatch
+  consumes its bool result, refreshes the service snapshot and renders either
+  changed service detail or an actionable panel-local fallback. Each visible
+  frame refreshes before rendering capability, selection or status state.
+- Dirty Reload requires an explicit discard modal bound to the current source,
+  content generation and Dirty session. Its confirm path refreshes and
+  revalidates before calling `RequestReloadDiscard(true, now)`; Clean Reload
+  calls non-destructive `RequestReload`. Remove similarly binds source,
+  generation, session and Species ID, revalidates membership before the one
+  confirmed clear-weight-planes dispatch, and aborts stale confirmations.
+  Paint, Erase and Bake remain in disabled UI scopes with the exact no-provider
+  reason; product bootstrap passes `nullptr` and neither fabricates nor caches a
+  surface binding.
+- the first GREEN compile exposed one missing public command-executor include in
+  the test fixture; adding that single already-required include resolved the
+  test-harness dependency without changing production behavior. Review
+  remediation added a narrow read-only cached-status getter: its focused RED
+  failed only with C2039 for the missing getter. A later specification review
+  caught two fallback strings advertising the nonexistent
+  `.AshVegetationSpecies` extension: the source-text contract RED failed both
+  the forbidden-string and required-two-canonical-string assertions. After
+  changing only those Add/Replace fallbacks to `.AshVegetation`, the final exact
+  panel filter passed in Debug and Release with `4/4` cases and `49/49`
+  assertions in each configuration.
+- the cache case proves default-before-attach, no-provider capability publication
+  on attach, a real `CreateLayer` mutation remaining stale until `OnUpdate`, and
+  disabled/default cache reset on detach followed by lifetime-safe update.
+  Removing `OnAttach`, `OnUpdate` and `OnDetach` independently failed the same
+  case with respectively `2`, `3` and `5` assertions before each implementation
+  was restored.
+- application startup records `VegetationEditorService::Initialize()` in
+  `_bVegetationServiceReady`, returns false before wiring/viewports/panels on
+  failure, includes that state in automation readiness/failure, and resets and
+  safely destroys partial vegetation state on shutdown or reinitialization.
+- the earlier requested Debug Inspector batch invocation exited `0` and, because the
+  batch wrapper consumed the leading-star filter, ran the complete `514/514`
+  cases and `41753/41753` assertions. Directly invoking the generated doctest
+  executable with the exact `*Inspector*` filter independently passed `7/7`
+  cases and `166/166` assertions.
+- `build_editor.bat Debug` exited `0`; `RunArchGate.bat` passed with the
+  unchanged `35` legacy warnings. Focused tracked and untracked
+  `git diff --check` passed. `AIDevDoctor.ps1 -Mode ValidatePlan` exited `0` and
+  wrote `Intermediate/test-reports/ai-dev/20260726-141402/`; its generic runtime
+  and PerfGate gaps remain intentionally deferred because Task 12 owns the
+  coordinated Vulkan/DX12 UI, readiness, GPU and performance exit matrix.
+- independent final specification and quality reviews both reported no
+  P0/P1/P2/P3 findings after the reload/remove revision guards, lifecycle
+  observability and canonical Species extension remediations.
+- before Step 5, no UI automation, product provider, test-only application
+  abstraction, GPU/render/performance gate, baseline mutation, staging or commit
+  was performed. The two pre-existing Tracy LFS worktree changes remain
+  excluded. The Task 11 SDD text review lock is
+  `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`.
+
+- [x] **Step 5: Review and selectively commit**
 
 Review 1 checks panel intent-only behavior, palette edit/save/reload and exact disabled reason; only surface-dependent mutation is blocked without a provider. Review 2 checks construction/destruction order, cancellation/join, no product test provider, no Scene/Graphics/Terrain coupling, and exact test-premake additions.
 
 ```bat
-git add -- project/src/editor/Core/PanelDeps/VegetationPanelDeps.h project/src/editor/Panels/Vegetation/VegetationPanel.h project/src/editor/Panels/Vegetation/VegetationPanel.cpp project/src/editor/Core/EditorIds.h project/src/editor/App/PanelBootstrapper.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/Editor/vegetation_panel_contract_tests.cpp project/src/tests/premake5.lua
+git add -- docs/plans/2026-07-16-vegetation-authoring-and-bake.md project/src/editor/Core/PanelDeps/VegetationPanelDeps.h project/src/editor/Panels/Vegetation/VegetationPanel.h project/src/editor/Panels/Vegetation/VegetationPanel.cpp project/src/editor/Core/EditorIds.h project/src/editor/App/PanelBootstrapper.h project/src/editor/App/PanelBootstrapper.cpp project/src/editor/App/EditorApplicationImpl.h project/src/editor/App/EditorApplicationImpl.cpp project/src/tests/Editor/vegetation_panel_contract_tests.cpp project/src/tests/premake5.lua
 git commit -m "feat(editor): add vegetation authoring panel"
 ```
 
