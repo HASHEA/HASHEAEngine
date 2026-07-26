@@ -88,6 +88,7 @@ namespace AshEngine
 
 	struct VegetationAuthoringDirtyEvidence
 	{
+		uint64_t base_generation = 0;
 		uint64_t generation = 0;
 		std::vector<VegetationChunkCoord> density_coords{};
 		std::vector<VegetationAuthoringSpeciesDirtyEvidence> species_coords{};

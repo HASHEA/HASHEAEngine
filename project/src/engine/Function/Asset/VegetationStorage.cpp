@@ -107,6 +107,48 @@ namespace AshEngine
 			return extension == L".ashvegetationlayer";
 		}
 
+		bool is_canonical_rootless_relative_path(
+			const std::filesystem::path& path)
+		{
+			if (path.empty() || path.is_absolute() || path.has_root_name() ||
+				path.has_root_directory() || path.lexically_normal() != path)
+			{
+				return false;
+			}
+			for (const std::filesystem::path& component : path)
+			{
+				if (component.empty() || component == L"." || component == L"..")
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool is_strict_lexical_descendant(
+			const std::filesystem::path& candidate,
+			const std::filesystem::path& root)
+		{
+			if (candidate.empty() || root.empty() || !candidate.is_absolute() ||
+				!root.is_absolute() || candidate.lexically_normal() != candidate ||
+				root.lexically_normal() != root)
+			{
+				return false;
+			}
+			auto candidate_component = candidate.begin();
+			for (auto root_component = root.begin();
+				root_component != root.end();
+				++root_component, ++candidate_component)
+			{
+				if (candidate_component == candidate.end() ||
+					*candidate_component != *root_component)
+				{
+					return false;
+				}
+			}
+			return candidate_component != candidate.end();
+		}
+
 		VegetationFileRevision revision_from_bytes(const std::vector<uint8_t>& bytes)
 		{
 			VegetationFileRevision revision{};
@@ -321,6 +363,7 @@ namespace AshEngine
 					stage.error.empty() ? "Vegetation Layer stage creation failed" : stage.error);
 			}
 			prepared_data.stage_path = stage.owned_stage_file;
+			prepared_data.stage_file_identity = stage.file_identity;
 			if (!prepared_data.stage_path.is_absolute() ||
 				prepared_data.stage_path.lexically_normal() != prepared_data.stage_path ||
 				prepared_data.stage_path == prepared_data.resolved_absolute_path ||
@@ -330,6 +373,7 @@ namespace AshEngine
 			{
 				stage.writer.reset();
 				prepared_data.stage_path.clear();
+				prepared_data.stage_file_identity = {};
 				return fail(VegetationStorageStatus::Failed,
 					"Vegetation Layer stage is not a distinct normalized target sibling");
 			}
@@ -355,13 +399,14 @@ namespace AshEngine
 					stage_inspection.resolved_absolute_path == prepared_data.stage_path &&
 					same_file_identity(stage_inspection.file_identity, stage.file_identity);
 				if (verified_new_stage && cleanup_registry.TrackNewRecoveryStageFile(
-					prepared_data.stage_path))
+					prepared_data.stage_path, stage.file_identity))
 				{
 					prepared_data.cleanup_registry = &cleanup_registry;
 					return fail(VegetationStorageStatus::RecoveryRequired,
 						"Vegetation Layer target reinspection failed; the independently verified stage is retained for recovery");
 				}
 				prepared_data.stage_path.clear();
+				prepared_data.stage_file_identity = {};
 				return fail(VegetationStorageStatus::Failed,
 					"Vegetation Layer target reinspection failed and no new exact stage ownership could be proven");
 			}
@@ -370,6 +415,7 @@ namespace AshEngine
 			{
 				stage.writer.reset();
 				prepared_data.stage_path.clear();
+				prepared_data.stage_file_identity = {};
 				return fail(VegetationStorageStatus::Failed,
 					"Vegetation Layer stage aliases the target after creation");
 			}
@@ -387,9 +433,11 @@ namespace AshEngine
 			if (target_shape_changed)
 			{
 				stage.writer.reset();
-				if (!cleanup_registry.TrackStageFile(prepared_data.stage_path))
+				if (!cleanup_registry.TrackStageFile(
+					prepared_data.stage_path, stage.file_identity))
 				{
 					prepared_data.stage_path.clear();
+					prepared_data.stage_file_identity = {};
 					return fail(VegetationStorageStatus::Failed,
 						"Vegetation Layer target changed and stage ownership registration failed");
 				}
@@ -400,15 +448,18 @@ namespace AshEngine
 						"Vegetation Layer target changed before writing and stage cleanup failed");
 				}
 				prepared_data.stage_path.clear();
+				prepared_data.stage_file_identity = {};
 				return fail(inspection.exists
 						? VegetationStorageStatus::SourceChanged
 						: VegetationStorageStatus::AlreadyExists,
 					"Vegetation Layer target changed while creating its stage");
 			}
-			if (!cleanup_registry.TrackStageFile(prepared_data.stage_path))
+			if (!cleanup_registry.TrackStageFile(
+				prepared_data.stage_path, stage.file_identity))
 			{
 				stage.writer.reset();
 				prepared_data.stage_path.clear();
+				prepared_data.stage_file_identity = {};
 				return fail(VegetationStorageStatus::Failed,
 					"Vegetation Layer stage ownership registration failed");
 			}
@@ -423,6 +474,7 @@ namespace AshEngine
 					return fail(VegetationStorageStatus::Failed, std::move(error));
 				}
 				prepared_data.stage_path.clear();
+				prepared_data.stage_file_identity = {};
 				return fail(status, std::move(error));
 			};
 
@@ -499,25 +551,91 @@ namespace AshEngine
 		{
 			VegetationStorageResult result{};
 			const auto& prepared_data = VegetationStorageAccess::Data(prepared);
+			auto inspect_intact_prepared_stage = [&](bool* out_identity_drift = nullptr)
+			{
+				try
+				{
+					if (out_identity_drift)
+					{
+						*out_identity_drift = false;
+					}
+					if (!cleanup_registry.OwnsStageFile(prepared.stage_path()))
+					{
+						return false;
+					}
+					const std::filesystem::path stage_relative =
+						(prepared.canonical_relative_path().parent_path() /
+							prepared.stage_path().filename()).lexically_normal();
+					if (!is_canonical_rootless_relative_path(stage_relative) ||
+						!is_strict_lexical_descendant(
+							prepared.stage_path(), prepared.asset_root()) ||
+						prepared.stage_path() !=
+							(prepared.asset_root() / stage_relative).lexically_normal())
+					{
+						return false;
+					}
+					const VegetationFileInspection stage = file_ops.InspectPath(
+						prepared.asset_root(), stage_relative);
+					const bool stable_stage_path =
+						valid_inspection_shape(stage) &&
+						stage.status == VegetationFileResultStatus::Succeeded &&
+						stage.canonical_relative_path == stage_relative &&
+						stage.resolved_absolute_path == prepared.stage_path() &&
+						stage.canonical_identity != prepared.canonical_identity();
+					if (out_identity_drift && stable_stage_path &&
+						(!stage.exists ||
+							(stage.file_identity.available &&
+								!same_file_identity(
+									stage.file_identity,
+									prepared_data.stage_file_identity))))
+					{
+						*out_identity_drift = true;
+					}
+					return stable_stage_path && stage.exists &&
+						stage.is_regular_file &&
+						same_file_identity(
+							stage.file_identity, prepared_data.stage_file_identity);
+				}
+				catch (...)
+				{
+					return false;
+				}
+			};
 			auto protect_intact_prepared_stage = [&]()
 			{
-				if (!cleanup_registry.OwnsStageFile(prepared.stage_path()))
+				try
+				{
+					bool identity_drift = false;
+					if (!inspect_intact_prepared_stage(&identity_drift))
+					{
+						if (identity_drift)
+						{
+							(void)cleanup_registry.
+								AbandonStageFileOwnershipAfterIdentityDrift(
+									prepared.stage_path(),
+									prepared_data.stage_file_identity);
+						}
+						return false;
+					}
+					const VegetationFileBytesResult recovery_bytes = file_ops.ReadAllBytes(
+						prepared.stage_path(), prepared.staged_revision().file_size);
+					if (!valid_bytes_shape(
+							recovery_bytes, prepared.staged_revision().file_size) ||
+						recovery_bytes.status != VegetationFileResultStatus::Succeeded ||
+						revision_from_bytes(recovery_bytes.bytes) != prepared.staged_revision())
+					{
+						return false;
+					}
+					if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+					{
+						return true;
+					}
+					return cleanup_registry.RetainStageFileForRecovery(prepared.stage_path());
+				}
+				catch (...)
 				{
 					return false;
 				}
-				const VegetationFileBytesResult recovery_bytes = file_ops.ReadAllBytes(
-					prepared.stage_path(), prepared.staged_revision().file_size);
-				if (!valid_bytes_shape(recovery_bytes, prepared.staged_revision().file_size) ||
-					recovery_bytes.status != VegetationFileResultStatus::Succeeded ||
-					revision_from_bytes(recovery_bytes.bytes) != prepared.staged_revision())
-				{
-					return false;
-				}
-				if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
-				{
-					return true;
-				}
-				return cleanup_registry.RetainStageFileForRecovery(prepared.stage_path());
 			};
 			auto finish_with_cleanup = [&](const VegetationStorageStatus status, std::string error)
 			{
@@ -537,6 +655,7 @@ namespace AshEngine
 				prepared.operation_serial() == 0 ||
 				prepared.stage_path().empty() || prepared.canonical_relative_path().empty() ||
 				prepared.resolved_absolute_path().empty() || prepared.canonical_identity().empty() ||
+				!prepared_data.stage_file_identity.available ||
 				!has_layer_extension(prepared.canonical_relative_path()))
 			{
 				result.status = VegetationStorageStatus::Failed;
@@ -658,6 +777,11 @@ namespace AshEngine
 				return finish_with_cleanup(storage_status(state),
 					"Vegetation Layer commit expired after source validation");
 			}
+			if (!inspect_intact_prepared_stage())
+			{
+				return finish_with_cleanup(VegetationStorageStatus::Failed,
+					"Vegetation Layer stage identity changed before publish");
+			}
 
 			const VegetationFileBytesResult staged = file_ops.ReadAllBytes(
 				prepared.stage_path(), prepared.staged_revision().file_size);
@@ -677,8 +801,194 @@ namespace AshEngine
 
 			if (prepared.expected_revision().has_value())
 			{
-				const VegetationAtomicReplaceResult replaced = file_ops.AtomicReplace(
-					prepared.stage_path(), prepared.resolved_absolute_path(), cleanup_registry);
+				auto valid_distinct_recovery_backup = [&](
+					const std::filesystem::path& recovery_path)
+				{
+					try
+					{
+						const std::wstring filename = recovery_path.filename().native();
+						const std::wstring prefix =
+							L".ashveg-layer-stage-replace-backup-";
+						const std::wstring suffix = L".tmp";
+						if (recovery_path.empty() || !recovery_path.is_absolute() ||
+							recovery_path.lexically_normal() != recovery_path ||
+							recovery_path == prepared.stage_path() ||
+							recovery_path == prepared.resolved_absolute_path() ||
+							recovery_path.parent_path() !=
+								prepared.resolved_absolute_path().parent_path() ||
+							filename.size() <= prefix.size() + suffix.size() ||
+							filename.compare(0, prefix.size(), prefix) != 0 ||
+							filename.compare(filename.size() - suffix.size(),
+								suffix.size(), suffix) != 0)
+						{
+							return false;
+						}
+
+						const std::filesystem::path recovery_relative =
+							recovery_path.lexically_relative(prepared.asset_root());
+						if (!is_canonical_rootless_relative_path(recovery_relative) ||
+							!is_strict_lexical_descendant(
+								recovery_path, prepared.asset_root()))
+						{
+							return false;
+						}
+						const VegetationFileInspection recovery = file_ops.InspectPath(
+							prepared.asset_root(), recovery_relative);
+						if (!valid_inspection_shape(recovery) ||
+							recovery.status != VegetationFileResultStatus::Succeeded ||
+							!recovery.exists || !recovery.is_regular_file ||
+							recovery.canonical_relative_path != recovery_relative ||
+							recovery.resolved_absolute_path != recovery_path ||
+							!recovery.file_identity.available ||
+							same_file_identity(
+								recovery.file_identity, prepared_data.stage_file_identity))
+						{
+							return false;
+						}
+						if (!cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+								recovery_path, prepared.stage_path(),
+								prepared.resolved_absolute_path(),
+								recovery.file_identity))
+						{
+							if (!same_file_identity(
+									recovery.file_identity, inspection.file_identity))
+							{
+								(void)cleanup_registry.
+									AbandonStageFileOwnershipAfterIdentityDrift(
+										recovery_path, inspection.file_identity);
+							}
+							return false;
+						}
+
+						const VegetationFileRevision& expected_source_revision =
+							*prepared.expected_revision();
+						const VegetationFileBytesResult recovery_bytes = file_ops.ReadAllBytes(
+							recovery_path, expected_source_revision.file_size);
+						if (!valid_bytes_shape(
+								recovery_bytes, expected_source_revision.file_size) ||
+							recovery_bytes.status != VegetationFileResultStatus::Succeeded ||
+							revision_from_bytes(recovery_bytes.bytes) !=
+								expected_source_revision)
+						{
+							return false;
+						}
+
+						VegetationLoadBudget validation_budget{};
+						validation_budget.max_file_bytes = expected_source_revision.file_size;
+						validation_budget.max_payload_bytes = expected_source_revision.file_size;
+						validation_budget.max_decoded_bytes =
+							std::numeric_limits<uint64_t>::max();
+						validation_budget.max_palette_records =
+							std::numeric_limits<uint32_t>::max();
+						validation_budget.max_tile_records =
+							std::numeric_limits<uint32_t>::max();
+						validation_budget.max_instance_records =
+							std::numeric_limits<uint32_t>::max();
+						VegetationLayerSnapshot decoded_recovery{};
+						std::string recovery_codec_error{};
+						return decode_vegetation_layer(recovery_bytes.bytes,
+							validation_budget, decoded_recovery, &recovery_codec_error);
+					}
+					catch (...)
+					{
+						return false;
+					}
+				};
+
+				VegetationAtomicReplaceResult replaced{};
+				try
+				{
+					replaced = file_ops.AtomicReplace(
+						prepared.stage_path(), prepared.resolved_absolute_path(), cleanup_registry);
+				}
+				catch (...)
+				{
+					bool stage_was_consumed = false;
+					bool target_is_exact_staged_layer = false;
+					try
+					{
+						const VegetationFileBytesResult stage_after_exception =
+							file_ops.ReadAllBytes(
+								prepared.stage_path(), prepared.staged_revision().file_size);
+						stage_was_consumed =
+							valid_bytes_shape(
+								stage_after_exception, prepared.staged_revision().file_size) &&
+							stage_after_exception.status == VegetationFileResultStatus::NotFound;
+						if (stage_was_consumed)
+						{
+							const VegetationFileInspection target_after_exception =
+								file_ops.InspectPath(
+									prepared.asset_root(), prepared.canonical_relative_path());
+							if (valid_inspection_shape(target_after_exception) &&
+								target_after_exception.status ==
+									VegetationFileResultStatus::Succeeded &&
+								target_after_exception.canonical_relative_path ==
+									prepared.canonical_relative_path() &&
+								target_after_exception.resolved_absolute_path ==
+									prepared.resolved_absolute_path() &&
+								target_after_exception.canonical_identity ==
+									prepared.canonical_identity() &&
+								target_after_exception.exists &&
+								target_after_exception.is_regular_file &&
+								same_file_identity(target_after_exception.file_identity,
+									prepared_data.stage_file_identity))
+							{
+								const VegetationFileBytesResult target_bytes = file_ops.ReadAllBytes(
+									target_after_exception.resolved_absolute_path,
+									prepared.staged_revision().file_size);
+								target_is_exact_staged_layer =
+									valid_bytes_shape(
+										target_bytes, prepared.staged_revision().file_size) &&
+									target_bytes.status ==
+										VegetationFileResultStatus::Succeeded &&
+									target_bytes.bytes == staged.bytes &&
+									revision_from_bytes(target_bytes.bytes) ==
+										prepared.staged_revision();
+							}
+						}
+					}
+					catch (...)
+					{
+						result.status = VegetationStorageStatus::Failed;
+						result.error =
+							"Vegetation Layer atomic replace threw and outcome evidence could not be read";
+						return result;
+					}
+					if (stage_was_consumed && target_is_exact_staged_layer)
+					{
+						if (!cleanup_registry.ForgetConsumedStageFile(prepared.stage_path()))
+						{
+							(void)cleanup_registry.ReconcileConsumedStageFileAfterPublish(
+								prepared.stage_path(), file_ops);
+						}
+						result.status = VegetationStorageStatus::Succeeded;
+						result.resulting_revision = prepared.staged_revision();
+						return result;
+					}
+
+					if (cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+							prepared.stage_path(), prepared.stage_path(),
+							prepared.resolved_absolute_path(),
+							prepared_data.stage_file_identity) &&
+						protect_intact_prepared_stage())
+					{
+						result.status = VegetationStorageStatus::RecoveryRequired;
+						result.recovery_path = prepared.stage_path();
+						result.error =
+							"Vegetation Layer atomic replace threw after pinning its intact stage";
+						return result;
+					}
+
+					result.status = VegetationStorageStatus::Failed;
+					result.error = "Vegetation Layer atomic replace threw with no provable outcome";
+					if (cleanup_registry.OwnsStageFile(prepared.stage_path()) &&
+						!cleanup_registry.IsRecoveryStageFile(prepared.stage_path()) &&
+						!cleanup_registry.CleanupStageFile(prepared.stage_path(), file_ops))
+					{
+						result.error += "; stage cleanup failed";
+					}
+					return result;
+				}
 				if (!valid_atomic_replace_shape(replaced))
 				{
 					const bool retained = protect_intact_prepared_stage();
@@ -695,8 +1005,16 @@ namespace AshEngine
 				}
 				if (replaced.status == VegetationAtomicReplaceStatus::RecoveryRequired)
 				{
-					if (!cleanup_registry.OwnsStageFile(replaced.recovery_path) ||
-						!cleanup_registry.IsRecoveryStageFile(replaced.recovery_path))
+					const bool recovery_is_prepared_stage =
+						replaced.recovery_path == prepared.stage_path();
+					const bool valid_recovery_artifact = recovery_is_prepared_stage
+						? cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+								replaced.recovery_path, prepared.stage_path(),
+								prepared.resolved_absolute_path(),
+								prepared_data.stage_file_identity) &&
+							protect_intact_prepared_stage()
+						: valid_distinct_recovery_backup(replaced.recovery_path);
+					if (!valid_recovery_artifact)
 					{
 						const bool retained = protect_intact_prepared_stage();
 						result.status = retained ? VegetationStorageStatus::RecoveryRequired :
@@ -726,8 +1044,99 @@ namespace AshEngine
 			}
 			else
 			{
-				const VegetationCreateNewStatus created = file_ops.CreateNewFromStage(
-					prepared.stage_path(), prepared.resolved_absolute_path());
+				VegetationCreateNewStatus created = VegetationCreateNewStatus::Failed;
+				try
+				{
+					created = file_ops.CreateNewFromStage(
+						prepared.stage_path(), prepared.resolved_absolute_path());
+				}
+				catch (...)
+				{
+					bool published_exact_staged_layer = false;
+					try
+					{
+						const std::filesystem::path stage_relative =
+							(prepared.canonical_relative_path().parent_path() /
+								prepared.stage_path().filename()).lexically_normal();
+						const VegetationFileInspection stage_after = file_ops.InspectPath(
+							prepared.asset_root(), stage_relative);
+						const VegetationFileBytesResult stage_bytes_after =
+							file_ops.ReadAllBytes(
+								prepared.stage_path(), prepared.staged_revision().file_size);
+						const bool stage_was_consumed =
+							valid_inspection_shape(stage_after) &&
+							stage_after.status == VegetationFileResultStatus::Succeeded &&
+							!stage_after.exists && !stage_after.is_regular_file &&
+							stage_after.canonical_relative_path == stage_relative &&
+							stage_after.resolved_absolute_path == prepared.stage_path() &&
+							valid_bytes_shape(stage_bytes_after,
+								prepared.staged_revision().file_size) &&
+							stage_bytes_after.status == VegetationFileResultStatus::NotFound;
+						if (stage_was_consumed)
+						{
+							const VegetationFileInspection target_after =
+								file_ops.InspectPath(
+									prepared.asset_root(),
+									prepared.canonical_relative_path());
+							if (valid_inspection_shape(target_after) &&
+								target_after.status ==
+									VegetationFileResultStatus::Succeeded &&
+								target_after.exists && target_after.is_regular_file &&
+								target_after.canonical_relative_path ==
+									prepared.canonical_relative_path() &&
+								target_after.resolved_absolute_path ==
+									prepared.resolved_absolute_path() &&
+								target_after.canonical_identity ==
+									prepared.canonical_identity() &&
+								same_file_identity(target_after.file_identity,
+									prepared_data.stage_file_identity))
+							{
+								const VegetationFileBytesResult target_bytes =
+									file_ops.ReadAllBytes(
+										prepared.resolved_absolute_path(),
+										prepared.staged_revision().file_size);
+								published_exact_staged_layer =
+									valid_bytes_shape(target_bytes,
+										prepared.staged_revision().file_size) &&
+									target_bytes.status ==
+										VegetationFileResultStatus::Succeeded &&
+									target_bytes.bytes == staged.bytes &&
+									revision_from_bytes(target_bytes.bytes) ==
+										prepared.staged_revision();
+							}
+						}
+					}
+					catch (...)
+					{
+						published_exact_staged_layer = false;
+					}
+
+					if (published_exact_staged_layer)
+					{
+						if (!cleanup_registry.ForgetConsumedStageFile(
+								prepared.stage_path()))
+						{
+							(void)cleanup_registry.ReconcileConsumedStageFileAfterPublish(
+								prepared.stage_path(), file_ops);
+						}
+						result.status = VegetationStorageStatus::Succeeded;
+						result.resulting_revision = prepared.staged_revision();
+						result.error.clear();
+						return result;
+					}
+
+					result.status = VegetationStorageStatus::Failed;
+					result.error =
+						"Vegetation Layer create-new threw with no provable outcome";
+					if (cleanup_registry.OwnsStageFile(prepared.stage_path()) &&
+						!cleanup_registry.IsRecoveryStageFile(prepared.stage_path()) &&
+						!cleanup_registry.CleanupStageFile(
+							prepared.stage_path(), file_ops))
+					{
+						result.error += "; stage cleanup failed";
+					}
+					return result;
+				}
 				if (created == VegetationCreateNewStatus::AlreadyExists)
 				{
 					return finish_with_cleanup(VegetationStorageStatus::AlreadyExists,
@@ -752,6 +1161,36 @@ namespace AshEngine
 			result.status = VegetationStorageStatus::Succeeded;
 			result.resulting_revision = prepared.staged_revision();
 			return result;
+		}
+
+		VegetationStorageResult commit_layer_contained(
+			const VegetationPreparedLayerWriteKind expected_kind,
+			const VegetationPreparedLayerWrite& prepared,
+			const uint64_t current_operation_serial,
+			VegetationOperationControl control,
+			VegetationOwnedStageCleanupRegistry& cleanup_registry,
+			IVegetationCommitFileOps& file_ops)
+		{
+			try
+			{
+				return commit_layer(expected_kind, prepared, current_operation_serial,
+					std::move(control), cleanup_registry, file_ops);
+			}
+			catch (...)
+			{
+				VegetationStorageResult result{};
+				result.status = VegetationStorageStatus::Failed;
+				result.error =
+					"Vegetation Layer commit provider threw outside publication reconciliation";
+				if (!prepared.stage_path().empty() &&
+					cleanup_registry.OwnsStageFile(prepared.stage_path()) &&
+					!cleanup_registry.IsRecoveryStageFile(prepared.stage_path()) &&
+					!cleanup_registry.CleanupStageFile(prepared.stage_path(), file_ops))
+				{
+					result.error += "; stage cleanup failed";
+				}
+				return result;
+			}
 		}
 	}
 
@@ -855,7 +1294,7 @@ namespace AshEngine
 		VegetationOwnedStageCleanupRegistry& cleanup_registry,
 		IVegetationCommitFileOps& file_ops)
 	{
-		return commit_layer(VegetationPreparedLayerWriteKind::CheckedSave,
+		return commit_layer_contained(VegetationPreparedLayerWriteKind::CheckedSave,
 			prepared, current_operation_serial, std::move(control), cleanup_registry, file_ops);
 	}
 
@@ -880,7 +1319,7 @@ namespace AshEngine
 		VegetationOwnedStageCleanupRegistry& cleanup_registry,
 		IVegetationCommitFileOps& file_ops)
 	{
-		return commit_layer(VegetationPreparedLayerWriteKind::CopyAsCreateNew,
+		return commit_layer_contained(VegetationPreparedLayerWriteKind::CopyAsCreateNew,
 			prepared, current_operation_serial, std::move(control), cleanup_registry, file_ops);
 	}
 }

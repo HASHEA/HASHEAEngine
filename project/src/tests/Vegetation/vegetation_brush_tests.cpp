@@ -146,6 +146,7 @@ namespace
 		const AshEngine::VegetationAuthoringDirtyEvidence& lhs,
 		const AshEngine::VegetationAuthoringDirtyEvidence& rhs)
 	{
+		CHECK(lhs.base_generation == rhs.base_generation);
 		CHECK(lhs.generation == rhs.generation);
 		REQUIRE(lhs.density_coords.size() == rhs.density_coords.size());
 		for (size_t index = 0; index < lhs.density_coords.size(); ++index)
@@ -1205,6 +1206,8 @@ TEST_CASE("Vegetation patch dirty evidence snapshot is non-destructive across Un
 TEST_CASE("Vegetation patch dirty evidence clears only for the exact captured generation acknowledgement")
 {
 	AshEngine::VegetationLayerWorkingSet working(SharedSnapshot(EmptyLayer()));
+	const uint64_t opened_generation = working.content_generation();
+	CHECK(working.snapshot_bake_dirty_evidence().base_generation == opened_generation);
 	const AshEngine::VegetationId species = working.publish_snapshot()->palette[0].species_id;
 	const auto first = AshEngine::apply_vegetation_brush_stroke(working,
 		SinglePointStroke(AshEngine::VegetationBrushMode::Paint,
@@ -1212,6 +1215,7 @@ TEST_CASE("Vegetation patch dirty evidence clears only for the exact captured ge
 	REQUIRE(first.status == AshEngine::VegetationMutationStatus::Applied);
 	const auto captured = working.snapshot_bake_dirty_evidence();
 	REQUIRE_FALSE(captured.density_coords.empty());
+	CHECK(captured.base_generation == opened_generation);
 
 	CHECK_FALSE(working.acknowledge_bake_dirty_evidence(captured.generation - 1));
 	CHECK_FALSE(working.acknowledge_bake_dirty_evidence(
@@ -1225,12 +1229,14 @@ TEST_CASE("Vegetation patch dirty evidence clears only for the exact captured ge
 	REQUIRE(later.status == AshEngine::VegetationMutationStatus::Applied);
 	CHECK_FALSE(working.acknowledge_bake_dirty_evidence(captured.generation));
 	const auto retained = working.snapshot_bake_dirty_evidence();
+	CHECK(retained.base_generation == opened_generation);
 	CHECK(ContainsChunk(retained.density_coords, 0, 0));
 	CHECK(ContainsChunk(retained.density_coords, 1, 0));
 
 	CHECK(working.acknowledge_bake_dirty_evidence(retained.generation));
 	const auto cleared = working.snapshot_bake_dirty_evidence();
 	CHECK(cleared.generation == working.content_generation());
+	CHECK(cleared.base_generation == retained.generation);
 	CHECK(cleared.density_coords.empty());
 	CHECK(cleared.species_coords.empty());
 }

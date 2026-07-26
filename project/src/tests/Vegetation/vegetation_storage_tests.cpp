@@ -25,6 +25,13 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
+
 namespace
 {
 	class ScriptedVegetationFileOps final : public AshEngine::IVegetationStageFileOps
@@ -82,7 +89,9 @@ namespace
 			return m_backing.CreateOwnedStageFile(owned_stage_root, relative_path);
 		}
 
-		bool RemoveOwnedStageFile(const std::filesystem::path& stage_file) override
+		bool RemoveOwnedStageFile(
+			const std::filesystem::path& stage_file,
+			const AshEngine::VegetationFileIdentity& expected_identity) override
 		{
 			removed_stage_files.push_back(stage_file);
 			if (stage_file == failing_stage_file && remaining_remove_failures > 0)
@@ -90,13 +99,15 @@ namespace
 				--remaining_remove_failures;
 				return false;
 			}
-			return m_backing.RemoveOwnedStageFile(stage_file);
+			return m_backing.RemoveOwnedStageFile(stage_file, expected_identity);
 		}
 
-		bool RemoveOwnedStageTree(const std::filesystem::path& stage_root) override
+		bool RemoveOwnedStageTree(
+			const std::filesystem::path& stage_root,
+			const AshEngine::VegetationFileIdentity& expected_identity) override
 		{
 			removed_stage_trees.push_back(stage_root);
-			return m_backing.RemoveOwnedStageTree(stage_root);
+			return m_backing.RemoveOwnedStageTree(stage_root, expected_identity);
 		}
 
 	private:
@@ -242,7 +253,9 @@ namespace
 			const std::filesystem::path&, uint64_t)> create_stage{};
 		std::function<AshEngine::VegetationFileResultStatus(
 			const std::filesystem::path&, const std::filesystem::path&)> ensure_directory{};
-		std::function<bool(const std::filesystem::path&)> remove_stage{};
+		std::function<bool(
+			const std::filesystem::path&,
+			const AshEngine::VegetationFileIdentity&)> remove_stage{};
 		std::function<AshEngine::VegetationFileLeaseResult(
 			std::string_view, const AshEngine::VegetationOperationControl&)> acquire{};
 		std::function<AshEngine::VegetationAtomicReplaceResult(
@@ -259,6 +272,7 @@ namespace
 		size_t replace_call_count = 0;
 		size_t create_new_call_count = 0;
 		std::filesystem::path last_created_stage{};
+		AshEngine::VegetationFileIdentity last_created_stage_identity{};
 		std::string last_lease_identity{};
 		std::shared_ptr<const std::atomic_bool> last_lease_cancel_requested{};
 		std::chrono::steady_clock::time_point last_lease_deadline{};
@@ -296,6 +310,7 @@ namespace
 				? create_stage(target, operation_serial)
 				: m_backing.CreateUniqueSiblingStageFile(target, operation_serial);
 			last_created_stage = result.owned_stage_file;
+			last_created_stage_identity = result.file_identity;
 			return result;
 		}
 
@@ -313,16 +328,20 @@ namespace
 			return m_backing.CreateOwnedStageFile(owned_stage_root, relative_path);
 		}
 
-		bool RemoveOwnedStageFile(const std::filesystem::path& stage_file) override
+		bool RemoveOwnedStageFile(
+			const std::filesystem::path& stage_file,
+			const AshEngine::VegetationFileIdentity& expected_identity) override
 		{
 			++remove_stage_call_count;
-			return remove_stage ? remove_stage(stage_file)
-				: m_backing.RemoveOwnedStageFile(stage_file);
+			return remove_stage ? remove_stage(stage_file, expected_identity)
+				: m_backing.RemoveOwnedStageFile(stage_file, expected_identity);
 		}
 
-		bool RemoveOwnedStageTree(const std::filesystem::path& stage_root) override
+		bool RemoveOwnedStageTree(
+			const std::filesystem::path& stage_root,
+			const AshEngine::VegetationFileIdentity& expected_identity) override
 		{
-			return m_backing.RemoveOwnedStageTree(stage_root);
+			return m_backing.RemoveOwnedStageTree(stage_root, expected_identity);
 		}
 
 		AshEngine::VegetationFileLeaseResult AcquireNamedLease(
@@ -387,6 +406,74 @@ namespace
 		}
 		return bytes;
 	}
+
+	enum class CreateNewStorageApi : uint8_t
+	{
+		FirstSave = 0,
+		CopyAs
+	};
+
+	const char* CreateNewStorageApiName(const CreateNewStorageApi api)
+	{
+		return api == CreateNewStorageApi::FirstSave ? "first-save" : "copy-as";
+	}
+
+	AshEngine::VegetationPreparedLayerWrite PrepareCreateNewStorageWrite(
+		const CreateNewStorageApi api,
+		const std::filesystem::path& asset_root,
+		const std::filesystem::path& target,
+		const AshEngine::VegetationLayerSnapshot& snapshot,
+		const uint64_t operation_serial,
+		AshEngine::VegetationOwnedStageCleanupRegistry& cleanup_registry)
+	{
+		if (api == CreateNewStorageApi::FirstSave)
+		{
+			return AshEngine::prepare_vegetation_layer_write(
+				asset_root, target, std::nullopt, snapshot, operation_serial,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)),
+				cleanup_registry);
+		}
+		return AshEngine::prepare_vegetation_layer_copy_as(
+			asset_root, target, snapshot, operation_serial,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry);
+	}
+
+	AshEngine::VegetationStorageResult CommitCreateNewStorageWrite(
+		const CreateNewStorageApi api,
+		const AshEngine::VegetationPreparedLayerWrite& prepared,
+		const uint64_t operation_serial,
+		AshEngine::VegetationOwnedStageCleanupRegistry& cleanup_registry,
+		AshEngine::IVegetationCommitFileOps& file_ops)
+	{
+		if (api == CreateNewStorageApi::FirstSave)
+		{
+			return AshEngine::commit_vegetation_layer_write(
+				prepared, operation_serial,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)),
+				cleanup_registry, file_ops);
+		}
+		return AshEngine::commit_vegetation_layer_copy_as(
+			prepared, operation_serial,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, file_ops);
+	}
+
+#if defined(_WIN32)
+	std::wstring ExtendedWindowsPath(const std::filesystem::path& path)
+	{
+		const std::wstring value = path.native();
+		if (value.rfind(L"\\\\?\\", 0) == 0)
+		{
+			return value;
+		}
+		if (value.rfind(L"\\\\", 0) == 0)
+		{
+			return L"\\\\?\\UNC\\" + value.substr(2);
+		}
+		return L"\\\\?\\" + value;
+	}
+#endif
 }
 
 TEST_CASE("Vegetation storage FileOps returns legal path and bounded-read shapes")
@@ -492,8 +579,72 @@ TEST_CASE("Vegetation storage sibling writer is contiguous bounded and closes on
 
 	const std::vector<uint8_t> expected{ 1, 2, 3, 4, 5, 6, 7 };
 	CHECK(VegetationTest::ReadAllBytes(stage.owned_stage_file) == expected);
-	CHECK(file_ops.RemoveOwnedStageFile(stage.owned_stage_file));
+	CHECK(file_ops.RemoveOwnedStageFile(
+		stage.owned_stage_file, stage.file_identity));
 	CHECK_FALSE(std::filesystem::exists(stage.owned_stage_file));
+}
+
+TEST_CASE("Vegetation stage file registry abandons replaced identity without deleting replacement")
+{
+	VegetationTest::ScopedAssetRoot root("storage-stage-file-identity-cleanup");
+	AshEngine::IVegetationFileOps& file_ops =
+		AshEngine::get_default_vegetation_file_ops();
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), "vegetation") ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	const std::filesystem::path target =
+		root.Path() / "vegetation/meadow.AshVegetationLayer";
+	AshEngine::VegetationStageFileResult owned =
+		file_ops.CreateUniqueSiblingStageFile(target, 18);
+	AshEngine::VegetationStageFileResult replacement =
+		file_ops.CreateUniqueSiblingStageFile(target, 1801);
+	REQUIRE(owned.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(replacement.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(owned.file_identity.available);
+	REQUIRE(replacement.file_identity.available);
+	REQUIRE(owned.file_identity.volume_serial_number ==
+		replacement.file_identity.volume_serial_number);
+	REQUIRE(owned.file_identity.file_index != replacement.file_identity.file_index);
+	const std::array<uint8_t, 4> owned_bytes{ 1, 2, 3, 4 };
+	const std::array<uint8_t, 4> replacement_bytes{ 9, 8, 7, 6 };
+	REQUIRE(owned.writer->WriteBlock(
+		0, { owned_bytes.data(), owned_bytes.size() }));
+	REQUIRE(replacement.writer->WriteBlock(
+		0, { replacement_bytes.data(), replacement_bytes.size() }));
+	REQUIRE(owned.writer->FlushAndClose());
+	REQUIRE(replacement.writer->FlushAndClose());
+	owned.writer.reset();
+	replacement.writer.reset();
+
+	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
+	REQUIRE(registry.TrackStageFile(
+		owned.owned_stage_file, owned.file_identity));
+	REQUIRE(file_ops.RemoveOwnedStageFile(
+		owned.owned_stage_file, owned.file_identity));
+	std::error_code rename_error{};
+	std::filesystem::rename(
+		replacement.owned_stage_file, owned.owned_stage_file, rename_error);
+	REQUIRE_FALSE(rename_error);
+
+	CHECK(registry.CleanupStageFile(owned.owned_stage_file, file_ops));
+	CHECK(registry.empty());
+	const std::filesystem::path stage_relative =
+		owned.owned_stage_file.lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection survivor =
+		file_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(survivor.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(survivor.exists);
+	CHECK(survivor.is_regular_file);
+	CHECK(survivor.file_identity.volume_serial_number ==
+		replacement.file_identity.volume_serial_number);
+	CHECK(survivor.file_identity.file_index == replacement.file_identity.file_index);
+	const AshEngine::VegetationFileBytesResult survivor_bytes =
+		file_ops.ReadAllBytes(owned.owned_stage_file, replacement_bytes.size());
+	REQUIRE(survivor_bytes.status ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(survivor_bytes.bytes == std::vector<uint8_t>(
+		replacement_bytes.begin(), replacement_bytes.end()));
+	CHECK(file_ops.RemoveOwnedStageFile(
+		owned.owned_stage_file, replacement.file_identity));
 }
 
 TEST_CASE("Vegetation storage atomic replace never creates a missing target")
@@ -513,7 +664,8 @@ TEST_CASE("Vegetation storage atomic replace never creates a missing target")
 	stage.writer.reset();
 
 	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
-	REQUIRE(registry.TrackStageFile(stage.owned_stage_file));
+	REQUIRE(registry.TrackStageFile(
+		stage.owned_stage_file, stage.file_identity));
 	const AshEngine::VegetationAtomicReplaceResult replaced =
 		file_ops.AtomicReplace(stage.owned_stage_file, target, registry);
 	CHECK(replaced.status == AshEngine::VegetationAtomicReplaceStatus::TargetPreserved);
@@ -612,8 +764,10 @@ TEST_CASE("Vegetation storage cleanup retries only retained owned stage files")
 	REQUIRE(second.writer->FlushAndClose());
 
 	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
-	REQUIRE(registry.TrackStageFile(first.owned_stage_file));
-	REQUIRE(registry.TrackStageFile(second.owned_stage_file));
+	REQUIRE(registry.TrackStageFile(
+		first.owned_stage_file, first.file_identity));
+	REQUIRE(registry.TrackStageFile(
+		second.owned_stage_file, second.file_identity));
 	ScriptedVegetationFileOps scripted(default_ops);
 	scripted.failing_stage_file = first.owned_stage_file;
 	scripted.remaining_remove_failures = 2;
@@ -643,6 +797,260 @@ TEST_CASE("Vegetation storage cleanup retries only retained owned stage files")
 	CHECK(std::filesystem::exists(target.parent_path()));
 }
 
+TEST_CASE("Vegetation storage removes a long owned stage tree exactly")
+{
+	VegetationTest::ScopedAssetRoot root("storage-long-owned-tree-cleanup");
+	AshEngine::IVegetationFileOps& file_ops = AshEngine::get_default_vegetation_file_ops();
+	std::filesystem::path store_relative = "long-owned-tree-parent";
+	while ((root.Path() / store_relative).native().size() < 240)
+	{
+		store_relative /= "deterministic-segment";
+	}
+	const std::filesystem::path store_root =
+		(root.Path() / store_relative).lexically_normal();
+	REQUIRE(store_root.native().size() < 260);
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), store_relative) ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+
+	AshEngine::VegetationStageTreeResult stage =
+		file_ops.CreateUniqueStageTree(store_root, 21001);
+	REQUIRE(stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(stage.owned_stage_root.native().size() > 260);
+	const std::filesystem::path stage_relative =
+		stage.owned_stage_root.lexically_relative(root.Path());
+	REQUIRE_FALSE(stage_relative.empty());
+	const std::filesystem::path child_relative =
+		stage_relative / "nested-a" / "nested-b";
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), child_relative) ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	AshEngine::VegetationStageFileResult child = file_ops.CreateOwnedStageFile(
+		stage.owned_stage_root,
+		"nested-a/nested-b/.ashveg-layer-stage-direct.tmp");
+	REQUIRE(child.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	const std::array<uint8_t, 4> bytes{ 0x41, 0x53, 0x56, 0x43 };
+	REQUIRE(child.writer->WriteBlock(0, { bytes.data(), bytes.size() }));
+	REQUIRE(child.writer->FlushAndClose());
+	child.writer.reset();
+
+	const AshEngine::VegetationFileInspection retained =
+		file_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(retained.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(retained.exists);
+	CHECK_FALSE(retained.is_regular_file);
+	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
+	REQUIRE(registry.TrackStageTree(stage.owned_stage_root, stage.file_identity));
+	CHECK(registry.CleanupStageTree(stage.owned_stage_root, file_ops));
+	CHECK(registry.empty());
+
+	const AshEngine::VegetationFileInspection removed =
+		file_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(removed.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK_FALSE(removed.exists);
+	CHECK_FALSE(removed.is_regular_file);
+}
+
+#if defined(_WIN32)
+TEST_CASE("Vegetation storage owned tree cleanup never follows a child directory link")
+{
+	VegetationTest::ScopedAssetRoot root("storage-owned-tree-child-link");
+	AshEngine::IVegetationFileOps& file_ops = AshEngine::get_default_vegetation_file_ops();
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), "outside") ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), "store") ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	const std::array<uint8_t, 8> sentinel_bytes{
+		0x73, 0x65, 0x6e, 0x74, 0x69, 0x6e, 0x65, 0x6c };
+	root.Write("outside/sentinel.bin",
+		std::vector<uint8_t>(sentinel_bytes.begin(), sentinel_bytes.end()));
+	AshEngine::VegetationStageTreeResult stage = file_ops.CreateUniqueStageTree(
+		root.Path() / "store", 21002);
+	REQUIRE(stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	const std::filesystem::path link = stage.owned_stage_root / "outside-link";
+	const std::filesystem::path outside = root.Path() / "outside";
+	BOOL created = CreateSymbolicLinkW(
+		ExtendedWindowsPath(link).c_str(), ExtendedWindowsPath(outside).c_str(),
+		SYMBOLIC_LINK_FLAG_DIRECTORY | 0x2u);
+	if (created == FALSE && GetLastError() == ERROR_INVALID_PARAMETER)
+	{
+		created = CreateSymbolicLinkW(
+			ExtendedWindowsPath(link).c_str(), ExtendedWindowsPath(outside).c_str(),
+			SYMBOLIC_LINK_FLAG_DIRECTORY);
+	}
+	if (created == FALSE)
+	{
+		MESSAGE("Directory-link creation unavailable; Win32 error " << GetLastError());
+		CHECK(file_ops.RemoveOwnedStageTree(
+			stage.owned_stage_root, stage.file_identity));
+		return;
+	}
+
+	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
+	REQUIRE(registry.TrackStageTree(stage.owned_stage_root, stage.file_identity));
+	CHECK(registry.CleanupStageTree(stage.owned_stage_root, file_ops));
+	CHECK(registry.empty());
+	const AshEngine::VegetationFileInspection sentinel =
+		file_ops.InspectPath(root.Path(), "outside/sentinel.bin");
+	REQUIRE(sentinel.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(sentinel.exists);
+	CHECK(sentinel.is_regular_file);
+	const AshEngine::VegetationFileBytesResult bytes =
+		file_ops.ReadAllBytes(sentinel.resolved_absolute_path, sentinel_bytes.size());
+	REQUIRE(bytes.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(bytes.bytes ==
+		std::vector<uint8_t>(sentinel_bytes.begin(), sentinel_bytes.end()));
+}
+
+TEST_CASE("Vegetation storage directory pin rejects namespace mutation until retry")
+{
+	VegetationTest::ScopedAssetRoot root("storage-owned-tree-pin");
+	AshEngine::IVegetationFileOps& file_ops = AshEngine::get_default_vegetation_file_ops();
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), "store") ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	AshEngine::VegetationStageTreeResult stage = file_ops.CreateUniqueStageTree(
+		root.Path() / "store", 21003);
+	REQUIRE(stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
+	REQUIRE(registry.TrackStageTree(stage.owned_stage_root, stage.file_identity));
+
+	const HANDLE pin = CreateFileW(
+		ExtendedWindowsPath(stage.owned_stage_root).c_str(),
+		DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+		nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	REQUIRE(pin != INVALID_HANDLE_VALUE);
+	const std::filesystem::path renamed =
+		stage.owned_stage_root.parent_path() /
+		(stage.owned_stage_root.filename().wstring() + L"-renamed");
+	SetLastError(ERROR_SUCCESS);
+	CHECK_FALSE(MoveFileExW(
+		ExtendedWindowsPath(stage.owned_stage_root).c_str(),
+		ExtendedWindowsPath(renamed).c_str(), MOVEFILE_WRITE_THROUGH));
+	const DWORD rename_error = GetLastError();
+	const bool rename_was_rejected =
+		rename_error == ERROR_SHARING_VIOLATION || rename_error == ERROR_ACCESS_DENIED;
+	CHECK(rename_was_rejected);
+	SetLastError(ERROR_SUCCESS);
+	CHECK_FALSE(RemoveDirectoryW(
+		ExtendedWindowsPath(stage.owned_stage_root).c_str()));
+	const DWORD remove_error = GetLastError();
+	const bool remove_was_rejected =
+		remove_error == ERROR_SHARING_VIOLATION || remove_error == ERROR_ACCESS_DENIED;
+	CHECK(remove_was_rejected);
+	SetLastError(ERROR_SUCCESS);
+	const HANDLE blocked_writer = CreateFileW(
+		ExtendedWindowsPath(stage.owned_stage_root).c_str(), GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	CHECK(blocked_writer == INVALID_HANDLE_VALUE);
+	CHECK(GetLastError() == ERROR_SHARING_VIOLATION);
+	CHECK_FALSE(registry.CleanupStageTree(stage.owned_stage_root, file_ops));
+	CHECK(registry.OwnsStageTree(stage.owned_stage_root));
+	REQUIRE(CloseHandle(pin) != FALSE);
+	const HANDLE allowed_writer = CreateFileW(
+		ExtendedWindowsPath(stage.owned_stage_root).c_str(), GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		nullptr, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+	REQUIRE(allowed_writer != INVALID_HANDLE_VALUE);
+	REQUIRE(CloseHandle(allowed_writer) != FALSE);
+
+	CHECK(registry.CleanupStageTree(stage.owned_stage_root, file_ops));
+	CHECK(registry.empty());
+	const std::filesystem::path stage_relative =
+		stage.owned_stage_root.lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection removed =
+		file_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(removed.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK_FALSE(removed.exists);
+}
+
+TEST_CASE("Vegetation storage tree cleanup never takes over a same-name replacement")
+{
+	VegetationTest::ScopedAssetRoot root("storage-owned-tree-replacement");
+	AshEngine::IVegetationFileOps& file_ops = AshEngine::get_default_vegetation_file_ops();
+	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), "store") ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	AshEngine::VegetationStageTreeResult stage = file_ops.CreateUniqueStageTree(
+		root.Path() / "store", 21004);
+	REQUIRE(stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(stage.file_identity.available);
+	const std::filesystem::path exact = stage.owned_stage_root;
+	const std::filesystem::path original_away = exact.parent_path() /
+		(exact.filename().wstring() + L"-original");
+	const std::filesystem::path replacement_away = exact.parent_path() /
+		(exact.filename().wstring() + L"-replacement");
+	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
+	REQUIRE(registry.TrackStageTree(exact, stage.file_identity));
+	REQUIRE(MoveFileExW(
+		ExtendedWindowsPath(exact).c_str(),
+		ExtendedWindowsPath(original_away).c_str(), MOVEFILE_WRITE_THROUGH));
+	REQUIRE(CreateDirectoryW(ExtendedWindowsPath(exact).c_str(), nullptr));
+	AshEngine::VegetationStageFileResult sentinel = file_ops.CreateOwnedStageFile(
+		exact, ".ashveg-layer-stage-replacement-sentinel.tmp");
+	REQUIRE(sentinel.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	const std::array<uint8_t, 8> sentinel_bytes{
+		0x72, 0x65, 0x70, 0x6c, 0x61, 0x63, 0x65, 0x64 };
+	REQUIRE(sentinel.writer->WriteBlock(
+		0, { sentinel_bytes.data(), sentinel_bytes.size() }));
+	REQUIRE(sentinel.writer->FlushAndClose());
+	sentinel.writer.reset();
+	const std::filesystem::path exact_relative = exact.lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection replacement =
+		file_ops.InspectPath(root.Path(), exact_relative);
+	REQUIRE(replacement.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(replacement.exists);
+	REQUIRE_FALSE(replacement.is_regular_file);
+	REQUIRE(replacement.file_identity.available);
+	const bool replacement_is_distinct =
+		replacement.file_identity.file_index != stage.file_identity.file_index ||
+		replacement.file_identity.volume_serial_number !=
+			stage.file_identity.volume_serial_number;
+	CHECK(replacement_is_distinct);
+
+	CHECK_FALSE(registry.CleanupStageTree(exact, file_ops));
+	CHECK(registry.OwnsStageTree(exact));
+	const AshEngine::VegetationOwnedStageCleanupStatus retained = registry.RetryAll(file_ops);
+	CHECK_FALSE(retained.all_removed);
+	CHECK(retained.retained_stage_trees ==
+		std::vector<std::filesystem::path>{ exact });
+	const AshEngine::VegetationFileBytesResult preserved = file_ops.ReadAllBytes(
+		exact / ".ashveg-layer-stage-replacement-sentinel.tmp",
+		sentinel_bytes.size());
+	REQUIRE(preserved.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(preserved.bytes ==
+		std::vector<uint8_t>(sentinel_bytes.begin(), sentinel_bytes.end()));
+
+	REQUIRE(MoveFileExW(
+		ExtendedWindowsPath(exact).c_str(),
+		ExtendedWindowsPath(replacement_away).c_str(), MOVEFILE_WRITE_THROUGH));
+	REQUIRE(MoveFileExW(
+		ExtendedWindowsPath(original_away).c_str(),
+		ExtendedWindowsPath(exact).c_str(), MOVEFILE_WRITE_THROUGH));
+	const AshEngine::VegetationOwnedStageCleanupStatus cleaned = registry.RetryAll(file_ops);
+	CHECK(cleaned.all_removed);
+	CHECK(registry.empty());
+	const AshEngine::VegetationFileInspection exact_missing =
+		file_ops.InspectPath(root.Path(), exact_relative);
+	REQUIRE(exact_missing.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK_FALSE(exact_missing.exists);
+	const std::filesystem::path replacement_relative =
+		replacement_away.lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection replacement_retained =
+		file_ops.InspectPath(root.Path(), replacement_relative);
+	REQUIRE(replacement_retained.status ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	CHECK(replacement_retained.exists);
+	CHECK(replacement_retained.file_identity.available);
+	CHECK(replacement_retained.file_identity.volume_serial_number ==
+		replacement.file_identity.volume_serial_number);
+	CHECK(replacement_retained.file_identity.file_index ==
+		replacement.file_identity.file_index);
+	CHECK(file_ops.RemoveOwnedStageTree(
+		replacement_away, replacement.file_identity));
+}
+#endif
+
 TEST_CASE("Vegetation storage cleanup never removes a recovery-protected stage file")
 {
 	VegetationTest::ScopedAssetRoot root("storage-recovery-protection");
@@ -660,7 +1068,8 @@ TEST_CASE("Vegetation storage cleanup never removes a recovery-protected stage f
 	stage.writer.reset();
 
 	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
-	REQUIRE(registry.TrackStageFile(stage.owned_stage_file));
+	REQUIRE(registry.TrackStageFile(
+		stage.owned_stage_file, stage.file_identity));
 	REQUIRE(registry.RetainStageFileForRecovery(stage.owned_stage_file));
 	CHECK(registry.IsRecoveryStageFile(stage.owned_stage_file));
 	CHECK_FALSE(registry.CleanupStageFile(stage.owned_stage_file, file_ops));
@@ -692,13 +1101,15 @@ TEST_CASE("Vegetation storage consumed bookkeeping tolerates an exact cleanup in
 	stage.writer.reset();
 
 	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
-	REQUIRE(registry.TrackStageFile(stage.owned_stage_file));
+	REQUIRE(registry.TrackStageFile(
+		stage.owned_stage_file, stage.file_identity));
 	ScriptedCommitFileOps scripted(default_ops);
 	std::mutex mutex{};
 	std::condition_variable condition{};
 	bool entered = false;
 	bool release = false;
-	scripted.remove_stage = [&](const std::filesystem::path& path)
+	scripted.remove_stage = [&](const std::filesystem::path& path,
+		const AshEngine::VegetationFileIdentity& expected_identity)
 	{
 		{
 			std::unique_lock<std::mutex> lock(mutex);
@@ -706,7 +1117,7 @@ TEST_CASE("Vegetation storage consumed bookkeeping tolerates an exact cleanup in
 			condition.notify_one();
 			condition.wait(lock, [&] { return release; });
 		}
-		return default_ops.RemoveOwnedStageFile(path);
+		return default_ops.RemoveOwnedStageFile(path, expected_identity);
 	};
 	bool cleanup_succeeded = false;
 	std::thread cleanup([&]
@@ -745,8 +1156,9 @@ TEST_CASE("Vegetation storage publish state pins an owned stage until an atomic 
 	stage.writer.reset();
 
 	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
-	REQUIRE(registry.TrackStageFile(stage.owned_stage_file));
-	REQUIRE(registry.BeginStageFilePublish(stage.owned_stage_file));
+	REQUIRE(registry.TrackStageFile(
+		stage.owned_stage_file, stage.file_identity));
+	REQUIRE(registry.BeginStageFilePublish(stage.owned_stage_file, target));
 	CHECK_FALSE(registry.CleanupStageFile(stage.owned_stage_file, file_ops));
 	const AshEngine::VegetationOwnedStageCleanupStatus pinned = registry.RetryAll(file_ops);
 	CHECK_FALSE(pinned.all_removed);
@@ -761,7 +1173,7 @@ TEST_CASE("Vegetation storage publish state pins an owned stage until an atomic 
 	CHECK(registry.IsRecoveryStageFile(stage.owned_stage_file));
 	REQUIRE(registry.ReleaseRecoveryStageFile(stage.owned_stage_file));
 	CHECK_FALSE(registry.IsRecoveryStageFile(stage.owned_stage_file));
-	REQUIRE(registry.BeginStageFilePublish(stage.owned_stage_file));
+	REQUIRE(registry.BeginStageFilePublish(stage.owned_stage_file, target));
 
 	REQUIRE(registry.ResolveStageFilePublish(
 		stage.owned_stage_file,
@@ -769,12 +1181,79 @@ TEST_CASE("Vegetation storage publish state pins an owned stage until an atomic 
 	CHECK(registry.IsRecoveryStageFile(stage.owned_stage_file));
 	CHECK_FALSE(registry.CleanupStageFile(stage.owned_stage_file, file_ops));
 	REQUIRE(registry.ReleaseRecoveryStageFile(stage.owned_stage_file));
-	REQUIRE(registry.BeginStageFilePublish(stage.owned_stage_file));
+	REQUIRE(registry.BeginStageFilePublish(stage.owned_stage_file, target));
 	REQUIRE(registry.ResolveStageFilePublish(
 		stage.owned_stage_file,
 		AshEngine::VegetationStageFilePublishResolution::TargetPreserved));
 	CHECK(registry.CleanupStageFile(stage.owned_stage_file, file_ops));
 	CHECK(registry.empty());
+}
+
+TEST_CASE("Vegetation storage atomic recovery provenance is bound to source and target")
+{
+	VegetationTest::ScopedAssetRoot root("storage-atomic-recovery-provenance");
+	const std::filesystem::path source_a =
+		root.Path() / "vegetation/.ashveg-layer-stage-operation-a.tmp";
+	const std::filesystem::path target_a =
+		root.Path() / "vegetation/operation-a.AshVegetationLayer";
+	const std::filesystem::path backup_a =
+		root.Path() / "vegetation/.ashveg-layer-stage-replace-backup-operation-a.tmp";
+	const std::filesystem::path generic_recovery =
+		root.Path() / "vegetation/.ashveg-layer-stage-generic-recovery.tmp";
+	const std::filesystem::path source_b =
+		root.Path() / "vegetation/.ashveg-layer-stage-operation-b.tmp";
+	const std::filesystem::path target_b =
+		root.Path() / "vegetation/operation-b.AshVegetationLayer";
+	const std::filesystem::path backup_b =
+		root.Path() / "vegetation/.ashveg-layer-stage-replace-backup-operation-b.tmp";
+	const std::filesystem::path source_a_case_variant =
+		root.Path() / "VEGETATION/.ASHVEG-LAYER-STAGE-OPERATION-A.TMP";
+	const std::filesystem::path target_a_case_variant =
+		root.Path() / "VEGETATION/OPERATION-A.ASHVEGETATIONLAYER";
+
+	AshEngine::VegetationOwnedStageCleanupRegistry registry{};
+	const AshEngine::VegetationOwnedStageCleanupRegistry& const_registry = registry;
+	const AshEngine::VegetationFileIdentity source_a_identity{ true, 1u, 1u };
+	const AshEngine::VegetationFileIdentity source_b_identity{ true, 1u, 2u };
+	const AshEngine::VegetationFileIdentity backup_a_identity{ true, 1u, 3u };
+	const AshEngine::VegetationFileIdentity backup_b_identity{ true, 1u, 4u };
+	static_assert(noexcept(registry.BeginStageFilePublish(source_a, target_a)));
+	static_assert(noexcept(const_registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a, target_a, backup_a_identity)));
+	REQUIRE(registry.TrackStageFile(source_a, source_a_identity));
+	REQUIRE(registry.BeginStageFilePublish(source_a, target_a));
+	CHECK(registry.IsAtomicReplaceRecoveryStageFile(
+		source_a, source_a, target_a, source_a_identity));
+	CHECK_FALSE(registry.RetainStageFileForAtomicReplaceRecovery(
+		generic_recovery, source_a, target_a, backup_a_identity));
+	REQUIRE(registry.RetainStageFileForAtomicReplaceRecovery(
+		backup_a, source_a, target_a, backup_a_identity));
+	CHECK(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a, target_a, backup_a_identity));
+	CHECK(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a_case_variant, target_a_case_variant, backup_a_identity));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a, target_a, backup_b_identity));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a, target_a, {}));
+
+	REQUIRE(registry.TrackStageFile(source_b, source_b_identity));
+	REQUIRE(registry.BeginStageFilePublish(source_b, target_b));
+	REQUIRE(registry.RetainStageFileForAtomicReplaceRecovery(
+		backup_b, source_b, target_b, backup_b_identity));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_b, target_b, backup_a_identity));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_b, target_a, backup_a_identity));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a, target_b, backup_a_identity));
+
+	REQUIRE(registry.ReleaseRecoveryStageFile(backup_a));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		backup_a, source_a, target_a, backup_a_identity));
+	REQUIRE(registry.ReleaseRecoveryStageFile(source_a));
+	CHECK_FALSE(registry.IsAtomicReplaceRecoveryStageFile(
+		source_a, source_a, target_a, source_a_identity));
 }
 
 TEST_CASE("Vegetation storage checked save never replaces an externally changed Layer")
@@ -941,7 +1420,9 @@ TEST_CASE("Vegetation storage preparation failures never publish and retain only
 	{
 		writer_state->fail_write = true;
 		expect_retained_cleanup = true;
-		scripted.remove_stage = [](const std::filesystem::path&)
+		scripted.remove_stage = [](
+			const std::filesystem::path&,
+			const AshEngine::VegetationFileIdentity&)
 		{
 			return false;
 		};
@@ -1081,7 +1562,14 @@ TEST_CASE("Vegetation storage wrong cleanup registry cannot consume a prepared s
 			VegetationTest::ActiveControl(std::chrono::seconds(1)), owner_registry);
 	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
 	AshEngine::VegetationOwnedStageCleanupRegistry wrong_registry{};
-	REQUIRE(wrong_registry.TrackStageFile(prepared.stage_path()));
+	const AshEngine::VegetationFileInspection prepared_stage =
+		AshEngine::get_default_vegetation_file_ops().InspectPath(
+			root.Path(), prepared.stage_path().lexically_relative(root.Path()));
+	REQUIRE(prepared_stage.status ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(prepared_stage.file_identity.available);
+	REQUIRE(wrong_registry.TrackStageFile(
+		prepared.stage_path(), prepared_stage.file_identity));
 
 	const AshEngine::VegetationStorageResult committed =
 		AshEngine::commit_vegetation_layer_copy_as(
@@ -1377,7 +1865,9 @@ TEST_CASE("Vegetation storage rejects illegal byte and stage result shapes")
 		}
 		else if (std::filesystem::exists(scripted.last_created_stage))
 		{
-			CHECK(default_ops.RemoveOwnedStageFile(scripted.last_created_stage));
+			CHECK(default_ops.RemoveOwnedStageFile(
+				scripted.last_created_stage,
+				scripted.last_created_stage_identity));
 		}
 		CHECK(cleanup_registry.empty());
 	}
@@ -1397,7 +1887,8 @@ TEST_CASE("Vegetation storage rejects illegal byte and stage result shapes")
 		const std::filesystem::path existing_stage = existing.owned_stage_file;
 
 		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
-		REQUIRE(cleanup_registry.TrackStageFile(existing_stage));
+		REQUIRE(cleanup_registry.TrackStageFile(
+			existing_stage, existing.file_identity));
 		const std::shared_ptr<bool> writer_used = std::make_shared<bool>(false);
 		scripted.create_stage = [&](const std::filesystem::path&, const uint64_t)
 		{
@@ -1465,7 +1956,8 @@ TEST_CASE("Vegetation storage rejects illegal byte and stage result shapes")
 		REQUIRE(case_alias_stage != existing_stage);
 
 		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
-		REQUIRE(cleanup_registry.TrackStageFile(existing_stage));
+		REQUIRE(cleanup_registry.TrackStageFile(
+			existing_stage, existing.file_identity));
 		const std::shared_ptr<bool> writer_used = std::make_shared<bool>(false);
 		scripted.create_stage = [&](const std::filesystem::path&, const uint64_t)
 		{
@@ -1622,8 +2114,10 @@ TEST_CASE("Vegetation storage rejects illegal byte and stage result shapes")
 		CHECK(cleanup_registry.empty());
 		CHECK(std::filesystem::exists(actual_stage));
 		CHECK(std::filesystem::exists(reported_stage));
-		CHECK(default_ops.RemoveOwnedStageFile(actual_stage));
-		CHECK(default_ops.RemoveOwnedStageFile(reported_stage));
+		CHECK(default_ops.RemoveOwnedStageFile(
+			actual_stage, actual.file_identity));
+		CHECK(default_ops.RemoveOwnedStageFile(
+			reported_stage, reported.file_identity));
 	}
 
 	SUBCASE("stage aliasing the target is rejected before the writer can mutate it")
@@ -1803,7 +2297,8 @@ TEST_CASE("Vegetation storage rejects illegal byte and stage result shapes")
 		REQUIRE(existing.writer->FlushAndClose());
 		existing.writer.reset();
 		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
-		REQUIRE(cleanup_registry.TrackStageFile(existing.owned_stage_file));
+		REQUIRE(cleanup_registry.TrackStageFile(
+			existing.owned_stage_file, existing.file_identity));
 		const std::shared_ptr<bool> writer_used = std::make_shared<bool>(false);
 		scripted.create_stage = [&](const std::filesystem::path&, const uint64_t)
 		{
@@ -2107,15 +2602,25 @@ TEST_CASE("Vegetation storage publish failures preserve the old or absent target
 				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
 		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
 		const std::filesystem::path recovery_backup = target_absolute.parent_path() /
-			".ashveg-layer-stage-recovery-injected.tmp";
-		scripted.replace = [&](const std::filesystem::path&,
+			".ashveg-layer-stage-replace-backup-injected.tmp";
+		const AshEngine::VegetationFileInspection target_before_recovery =
+			default_ops.InspectPath(root.Path(), target_relative);
+		REQUIRE(target_before_recovery.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(target_before_recovery.file_identity.available);
+		scripted.replace = [&](const std::filesystem::path& stage,
 			const std::filesystem::path& target,
 			AshEngine::VegetationOwnedStageCleanupRegistry& registry)
 		{
+			REQUIRE(registry.BeginStageFilePublish(stage, target));
+			REQUIRE(registry.RetainStageFileForAtomicReplaceRecovery(
+				recovery_backup, stage, target,
+				target_before_recovery.file_identity));
 			std::error_code move_error{};
 			std::filesystem::rename(target, recovery_backup, move_error);
 			REQUIRE_FALSE(move_error);
-			REQUIRE(registry.RetainStageFileForRecovery(recovery_backup));
+			REQUIRE(registry.ResolveStageFilePublish(stage,
+				AshEngine::VegetationStageFilePublishResolution::TargetPreserved));
 			AshEngine::VegetationAtomicReplaceResult result{};
 			result.status = AshEngine::VegetationAtomicReplaceStatus::RecoveryRequired;
 			result.recovery_path = recovery_backup;
@@ -2133,6 +2638,9 @@ TEST_CASE("Vegetation storage publish failures preserve the old or absent target
 		CHECK(VegetationTest::ReadAllBytes(recovery_backup) == original);
 		CHECK(std::filesystem::exists(prepared.stage_path()));
 		CHECK(cleanup_registry.IsRecoveryStageFile(recovery_backup));
+		CHECK(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+			recovery_backup, prepared.stage_path(), target_absolute,
+			target_before_recovery.file_identity));
 		const AshEngine::VegetationOwnedStageCleanupStatus retained =
 			cleanup_registry.RetryAll(default_ops);
 		CHECK_FALSE(retained.all_removed);
@@ -2146,6 +2654,277 @@ TEST_CASE("Vegetation storage publish failures preserve the old or absent target
 		REQUIRE(cleanup_registry.ForgetConsumedStageFile(recovery_backup));
 		CHECK(cleanup_registry.empty());
 		CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+	}
+
+	SUBCASE("same-byte replacement of an associated recovery backup is rejected")
+	{
+		const std::filesystem::path target_relative =
+			"vegetation/recovery-backup-native-identity-drift.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+		root.Write(target_relative, original);
+		const AshEngine::VegetationLayerReadResult opened =
+			AshEngine::read_vegetation_layer_snapshot(
+				root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+		REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+		AshEngine::VegetationLayerSnapshot replacement =
+			VegetationTest::MinimalLayerSnapshot();
+		++replacement.content_generation;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			AshEngine::prepare_vegetation_layer_write(
+				root.Path(), target_relative, opened.revision, replacement, 7301,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		const std::filesystem::path recovery_backup = target_absolute.parent_path() /
+			".ashveg-layer-stage-replace-backup-native-identity-drift.tmp";
+		const AshEngine::VegetationFileInspection target_before_recovery =
+			default_ops.InspectPath(root.Path(), target_relative);
+		REQUIRE(target_before_recovery.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(target_before_recovery.file_identity.available);
+
+		AshEngine::VegetationStageFileResult same_bytes_replacement =
+			default_ops.CreateUniqueSiblingStageFile(target_absolute, 730101);
+		REQUIRE(same_bytes_replacement.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(same_bytes_replacement.file_identity.available);
+		REQUIRE(same_bytes_replacement.writer->WriteBlock(
+			0, { original.data(), original.size() }));
+		REQUIRE(same_bytes_replacement.writer->FlushAndClose());
+		same_bytes_replacement.writer.reset();
+		REQUIRE((same_bytes_replacement.file_identity.volume_serial_number !=
+			target_before_recovery.file_identity.volume_serial_number ||
+			same_bytes_replacement.file_identity.file_index !=
+				target_before_recovery.file_identity.file_index));
+
+		scripted.replace = [&](const std::filesystem::path& stage,
+			const std::filesystem::path& target,
+			AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+		{
+			REQUIRE(registry.BeginStageFilePublish(stage, target));
+			REQUIRE(registry.RetainStageFileForAtomicReplaceRecovery(
+				recovery_backup, stage, target,
+				target_before_recovery.file_identity));
+			std::error_code move_error{};
+			std::filesystem::rename(target, recovery_backup, move_error);
+			REQUIRE_FALSE(move_error);
+			REQUIRE(registry.ResolveStageFilePublish(stage,
+				AshEngine::VegetationStageFilePublishResolution::TargetPreserved));
+			REQUIRE(default_ops.RemoveOwnedStageFile(
+				recovery_backup, target_before_recovery.file_identity));
+			std::filesystem::rename(
+				same_bytes_replacement.owned_stage_file, recovery_backup, move_error);
+			REQUIRE_FALSE(move_error);
+			AshEngine::VegetationAtomicReplaceResult result{};
+			result.status = AshEngine::VegetationAtomicReplaceStatus::RecoveryRequired;
+			result.recovery_path = recovery_backup;
+			result.error = "injected recovery backup identity drift";
+			return result;
+		};
+
+		const AshEngine::VegetationStorageResult committed =
+			AshEngine::commit_vegetation_layer_write(
+				prepared, 7301, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+				cleanup_registry, scripted);
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::RecoveryRequired);
+		CHECK(committed.recovery_path == prepared.stage_path());
+		CHECK(committed.recovery_path != recovery_backup);
+		CHECK(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+		CHECK_FALSE(cleanup_registry.OwnsStageFile(recovery_backup));
+		const AshEngine::VegetationFileInspection replacement_after =
+			default_ops.InspectPath(
+				root.Path(), recovery_backup.lexically_relative(root.Path()));
+		REQUIRE(replacement_after.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(replacement_after.file_identity.available);
+		CHECK(replacement_after.file_identity.volume_serial_number ==
+			same_bytes_replacement.file_identity.volume_serial_number);
+		CHECK(replacement_after.file_identity.file_index ==
+			same_bytes_replacement.file_identity.file_index);
+		CHECK(VegetationTest::ReadAllBytes(recovery_backup) == original);
+
+		if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+		}
+		if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+		}
+		if (cleanup_registry.IsRecoveryStageFile(recovery_backup))
+		{
+			CHECK(cleanup_registry.ReleaseRecoveryStageFile(recovery_backup));
+		}
+		if (cleanup_registry.OwnsStageFile(recovery_backup))
+		{
+			CHECK(cleanup_registry.ForgetConsumedStageFile(recovery_backup));
+		}
+		CHECK(default_ops.RemoveOwnedStageFile(
+			recovery_backup, same_bytes_replacement.file_identity));
+		CHECK(cleanup_registry.empty());
+	}
+
+	SUBCASE("generic recovery state cannot masquerade as this atomic replace recovery")
+	{
+		const std::filesystem::path target_relative =
+			"vegetation/generic-recovery-decoy.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+		root.Write(target_relative, original);
+		const AshEngine::VegetationLayerReadResult opened =
+			AshEngine::read_vegetation_layer_snapshot(
+				root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+		REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+		AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+		++replacement.content_generation;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			AshEngine::prepare_vegetation_layer_write(
+				root.Path(), target_relative, opened.revision, replacement, 731,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		const std::filesystem::path decoy_relative =
+			"vegetation/.ashveg-layer-stage-generic-recovery-decoy.tmp";
+		const std::filesystem::path decoy = root.Path() / decoy_relative;
+		const std::vector<uint8_t> decoy_bytes{ 0x64, 0x65, 0x63, 0x6f, 0x79 };
+		root.Write(decoy_relative, decoy_bytes);
+		const AshEngine::VegetationFileInspection decoy_inspection =
+			default_ops.InspectPath(root.Path(), decoy_relative);
+		REQUIRE(decoy_inspection.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(decoy_inspection.file_identity.available);
+		scripted.replace = [&](const std::filesystem::path&,
+			const std::filesystem::path&,
+			AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+		{
+			REQUIRE(registry.TrackNewRecoveryStageFile(
+				decoy, decoy_inspection.file_identity));
+			AshEngine::VegetationAtomicReplaceResult result{};
+			result.status = AshEngine::VegetationAtomicReplaceStatus::RecoveryRequired;
+			result.recovery_path = decoy;
+			result.error = "injected generic recovery decoy";
+			return result;
+		};
+
+		const AshEngine::VegetationStorageResult committed =
+			AshEngine::commit_vegetation_layer_write(
+				prepared, 731, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+				cleanup_registry, scripted);
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::RecoveryRequired);
+		CHECK(committed.recovery_path == prepared.stage_path());
+		CHECK(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+		CHECK(std::filesystem::exists(prepared.stage_path()));
+		CHECK(cleanup_registry.IsRecoveryStageFile(decoy));
+		CHECK_FALSE(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+			decoy, prepared.stage_path(), target_absolute,
+			decoy_inspection.file_identity));
+		CHECK_FALSE(cleanup_registry.CleanupStageFile(decoy, default_ops));
+		CHECK(VegetationTest::ReadAllBytes(decoy) == decoy_bytes);
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+
+		if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+		}
+		if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+		}
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(decoy));
+		CHECK(cleanup_registry.CleanupStageFile(decoy, default_ops));
+		CHECK(cleanup_registry.empty());
+	}
+
+	SUBCASE("another atomic operation recovery cannot masquerade as this recovery")
+	{
+		const std::filesystem::path target_relative =
+			"vegetation/foreign-recovery-decoy.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+		root.Write(target_relative, original);
+		const AshEngine::VegetationLayerReadResult opened =
+			AshEngine::read_vegetation_layer_snapshot(
+				root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+		REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+		AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+		++replacement.content_generation;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			AshEngine::prepare_vegetation_layer_write(
+				root.Path(), target_relative, opened.revision, replacement, 732,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+
+		const std::filesystem::path other_source_relative =
+			"vegetation/.ashveg-layer-stage-other-operation.tmp";
+		const std::filesystem::path other_source = root.Path() / other_source_relative;
+		const std::filesystem::path other_target =
+			root.Path() / "vegetation/other-operation.AshVegetationLayer";
+		const std::filesystem::path decoy_relative =
+			"vegetation/.ashveg-layer-stage-replace-backup-other-operation.tmp";
+		const std::filesystem::path decoy = root.Path() / decoy_relative;
+		const std::vector<uint8_t> other_source_bytes{ 0x73, 0x6f, 0x75, 0x72, 0x63, 0x65 };
+		const std::vector<uint8_t> decoy_bytes{ 0x62, 0x61, 0x63, 0x6b, 0x75, 0x70 };
+		root.Write(other_source_relative, other_source_bytes);
+		root.Write(decoy_relative, decoy_bytes);
+		const AshEngine::VegetationFileInspection other_source_inspection =
+			default_ops.InspectPath(root.Path(), other_source_relative);
+		const AshEngine::VegetationFileInspection decoy_inspection =
+			default_ops.InspectPath(root.Path(), decoy_relative);
+		REQUIRE(other_source_inspection.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(other_source_inspection.file_identity.available);
+		REQUIRE(decoy_inspection.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(decoy_inspection.file_identity.available);
+		scripted.replace = [&](const std::filesystem::path&,
+			const std::filesystem::path&,
+			AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+		{
+			REQUIRE(registry.TrackStageFile(
+				other_source, other_source_inspection.file_identity));
+			REQUIRE(registry.BeginStageFilePublish(other_source, other_target));
+			REQUIRE(registry.RetainStageFileForAtomicReplaceRecovery(
+				decoy, other_source, other_target,
+				decoy_inspection.file_identity));
+			AshEngine::VegetationAtomicReplaceResult result{};
+			result.status = AshEngine::VegetationAtomicReplaceStatus::RecoveryRequired;
+			result.recovery_path = decoy;
+			result.error = "injected foreign operation recovery decoy";
+			return result;
+		};
+
+		const AshEngine::VegetationStorageResult committed =
+			AshEngine::commit_vegetation_layer_write(
+				prepared, 732, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+				cleanup_registry, scripted);
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::RecoveryRequired);
+		CHECK(committed.recovery_path == prepared.stage_path());
+		CHECK(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+		CHECK(std::filesystem::exists(prepared.stage_path()));
+		CHECK(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+			decoy, other_source, other_target, decoy_inspection.file_identity));
+		CHECK_FALSE(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+			decoy, prepared.stage_path(), target_absolute,
+			decoy_inspection.file_identity));
+		CHECK_FALSE(cleanup_registry.CleanupStageFile(decoy, default_ops));
+		CHECK(VegetationTest::ReadAllBytes(decoy) == decoy_bytes);
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+
+		if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+		}
+		if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+		}
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(other_source));
+		CHECK(cleanup_registry.CleanupStageFile(other_source, default_ops));
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(decoy));
+		CHECK(cleanup_registry.CleanupStageFile(decoy, default_ops));
+		CHECK(cleanup_registry.empty());
 	}
 
 	SUBCASE("illegal replace result shape retains the staged replacement for recovery")
@@ -2303,6 +3082,721 @@ TEST_CASE("Vegetation storage publish failures preserve the old or absent target
 	}
 }
 
+TEST_CASE("Vegetation storage converts an AtomicReplace exception after pinning into recovery")
+{
+	VegetationTest::ScopedAssetRoot root("storage-replace-pin-throw");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/pin-throw.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+	root.Write(target_relative, original);
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	const std::vector<uint8_t> replacement_bytes = EncodeLayerOrThrow(replacement);
+	AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+	const AshEngine::VegetationPreparedLayerWrite prepared =
+		AshEngine::prepare_vegetation_layer_write(
+			root.Path(), target_relative, opened.revision, replacement, 733,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+	ScriptedCommitFileOps scripted(default_ops);
+	scripted.replace = [](const std::filesystem::path& stage,
+		const std::filesystem::path& target,
+		AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+		-> AshEngine::VegetationAtomicReplaceResult
+	{
+		REQUIRE(registry.BeginStageFilePublish(stage, target));
+		throw std::runtime_error("injected exception after publish pin");
+	};
+
+	AshEngine::VegetationStorageResult committed{};
+	CHECK_NOTHROW(committed = AshEngine::commit_vegetation_layer_write(
+		prepared, 733, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+		cleanup_registry, scripted));
+	CHECK(committed.status == AshEngine::VegetationStorageStatus::RecoveryRequired);
+	CHECK(committed.recovery_path == prepared.stage_path());
+	CHECK(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+	const AshEngine::VegetationFileInspection retained_stage =
+		default_ops.InspectPath(
+			root.Path(), prepared.stage_path().lexically_relative(root.Path()));
+	REQUIRE(retained_stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(retained_stage.file_identity.available);
+	CHECK(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+		prepared.stage_path(), prepared.stage_path(), target_absolute,
+		retained_stage.file_identity));
+	CHECK(VegetationTest::ReadAllBytes(prepared.stage_path()) == replacement_bytes);
+	CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+
+	if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+	}
+	if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+	}
+	CHECK(cleanup_registry.empty());
+}
+
+TEST_CASE("Vegetation storage contains exceptions while proving post-replace stage evidence")
+{
+	VegetationTest::ScopedAssetRoot root("storage-replace-evidence-throw");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/evidence-throw.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+	root.Write(target_relative, original);
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	replacement.layer_seed ^= 0x51a9ull;
+
+	SUBCASE("a publishing pin remains protected when exception reconciliation cannot read the stage")
+	{
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			AshEngine::prepare_vegetation_layer_write(
+				root.Path(), target_relative, opened.revision, replacement, 739,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		ScriptedCommitFileOps scripted(default_ops);
+		scripted.read = [&](const std::filesystem::path& path, const uint64_t max_bytes)
+		{
+			if (path == prepared.stage_path() && scripted.read_call_count == 3)
+			{
+				throw std::runtime_error("injected post-replace stage evidence read failure");
+			}
+			return default_ops.ReadAllBytes(path, max_bytes);
+		};
+		scripted.replace = [](const std::filesystem::path& stage,
+			const std::filesystem::path& target,
+			AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+			-> AshEngine::VegetationAtomicReplaceResult
+		{
+			REQUIRE(registry.BeginStageFilePublish(stage, target));
+			throw std::runtime_error("injected exception after publish pin");
+		};
+
+		AshEngine::VegetationStorageResult committed{};
+		CHECK_NOTHROW(committed = AshEngine::commit_vegetation_layer_write(
+			prepared, 739, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, scripted));
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+		CHECK(committed.recovery_path.empty());
+		CHECK(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+		const AshEngine::VegetationFileInspection retained_stage =
+			default_ops.InspectPath(
+				root.Path(), prepared.stage_path().lexically_relative(root.Path()));
+		REQUIRE(retained_stage.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(retained_stage.file_identity.available);
+		CHECK(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+			prepared.stage_path(), prepared.stage_path(), target_absolute,
+			retained_stage.file_identity));
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+		CHECK(std::filesystem::exists(prepared.stage_path()));
+
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+		CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+		CHECK(cleanup_registry.empty());
+	}
+
+	SUBCASE("an owned stage proof failure is reported without escaping")
+	{
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			AshEngine::prepare_vegetation_layer_write(
+				root.Path(), target_relative, opened.revision, replacement, 740,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		ScriptedCommitFileOps scripted(default_ops);
+		scripted.read = [&](const std::filesystem::path& path, const uint64_t max_bytes)
+		{
+			if (path == prepared.stage_path() && scripted.read_call_count == 3)
+			{
+				throw std::runtime_error("injected intact-stage proof read failure");
+			}
+			return default_ops.ReadAllBytes(path, max_bytes);
+		};
+		scripted.replace = [](const std::filesystem::path& stage,
+			const std::filesystem::path&,
+			AshEngine::VegetationOwnedStageCleanupRegistry&)
+		{
+			AshEngine::VegetationAtomicReplaceResult illegal{};
+			illegal.status = AshEngine::VegetationAtomicReplaceStatus::Replaced;
+			illegal.recovery_path = stage;
+			return illegal;
+		};
+
+		AshEngine::VegetationStorageResult committed{};
+		CHECK_NOTHROW(committed = AshEngine::commit_vegetation_layer_write(
+			prepared, 740, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, scripted));
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+		CHECK(committed.recovery_path.empty());
+		CHECK_FALSE(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+		CHECK(cleanup_registry.OwnsStageFile(prepared.stage_path()));
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+		CHECK(std::filesystem::exists(prepared.stage_path()));
+
+		CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+		CHECK(cleanup_registry.empty());
+	}
+}
+
+TEST_CASE("Vegetation storage contains pre-publication commit provider exceptions")
+{
+	enum class Fault : uint8_t
+	{
+		AcquireLease = 0,
+		InspectTarget,
+		ReadSource,
+		ReadStage
+	};
+	struct Case
+	{
+		const char* name = nullptr;
+		Fault fault = Fault::AcquireLease;
+	};
+	const std::array<Case, 4> cases{{
+		{ "lease", Fault::AcquireLease },
+		{ "target inspection", Fault::InspectTarget },
+		{ "source read", Fault::ReadSource },
+		{ "stage read", Fault::ReadStage }
+	}};
+
+	for (size_t case_index = 0; case_index < cases.size(); ++case_index)
+	{
+		const Case& test_case = cases[case_index];
+		CAPTURE(test_case.name);
+		VegetationTest::ScopedAssetRoot root(
+			"storage-prepublish-throw-" + std::to_string(case_index));
+		AshEngine::IVegetationFileOps& default_ops =
+			AshEngine::get_default_vegetation_file_ops();
+		const std::filesystem::path target_relative =
+			"vegetation/prepublish-throw.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+		root.Write(target_relative, original);
+		const AshEngine::VegetationLayerReadResult opened =
+			AshEngine::read_vegetation_layer_snapshot(
+				root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+		REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+		AshEngine::VegetationLayerSnapshot replacement =
+			VegetationTest::MinimalLayerSnapshot();
+		++replacement.content_generation;
+		replacement.layer_seed ^= 0x7400ull + case_index;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const uint64_t operation_serial = 741 + case_index;
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			AshEngine::prepare_vegetation_layer_write(
+				root.Path(), target_relative, opened.revision, replacement,
+				operation_serial,
+				VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		const std::filesystem::path stage = prepared.stage_path();
+		ScriptedCommitFileOps scripted(default_ops);
+		if (test_case.fault == Fault::AcquireLease)
+		{
+			scripted.acquire = [](std::string_view,
+				const AshEngine::VegetationOperationControl&)
+				-> AshEngine::VegetationFileLeaseResult
+			{
+				throw std::runtime_error("injected lease exception");
+			};
+		}
+		if (test_case.fault == Fault::InspectTarget)
+		{
+			scripted.inspect = [](const std::filesystem::path&,
+				const std::filesystem::path&) -> AshEngine::VegetationFileInspection
+			{
+				throw std::runtime_error("injected inspection exception");
+			};
+		}
+		if (test_case.fault == Fault::ReadSource ||
+			test_case.fault == Fault::ReadStage)
+		{
+			scripted.read = [&](const std::filesystem::path& path,
+				const uint64_t max_bytes)
+			{
+				const bool inject_source = test_case.fault == Fault::ReadSource &&
+					path == target_absolute;
+				const bool inject_stage = test_case.fault == Fault::ReadStage &&
+					path == stage && scripted.read_call_count == 2;
+				if (inject_source || inject_stage)
+				{
+					throw std::runtime_error("injected pre-publication read exception");
+				}
+				return default_ops.ReadAllBytes(path, max_bytes);
+			};
+		}
+
+		AshEngine::VegetationStorageResult committed{};
+		CHECK_NOTHROW(committed = AshEngine::commit_vegetation_layer_write(
+			prepared, operation_serial,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, scripted));
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+		CHECK(committed.recovery_path.empty());
+		CHECK(scripted.replace_call_count == 0);
+		CHECK(scripted.create_new_call_count == 0);
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+		CHECK_FALSE(std::filesystem::exists(stage));
+		CHECK_FALSE(cleanup_registry.OwnsStageFile(stage));
+		CHECK(cleanup_registry.empty());
+	}
+}
+
+TEST_CASE("Vegetation storage preserves terminal replace success when its callback throws")
+{
+	VegetationTest::ScopedAssetRoot root("storage-replace-success-throw");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/success-throw.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	root.Write(target_relative, VegetationTest::MinimalLayerBytes());
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	replacement.layer_seed ^= 0x7337ull;
+	const std::vector<uint8_t> replacement_bytes = EncodeLayerOrThrow(replacement);
+	AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+	const AshEngine::VegetationPreparedLayerWrite prepared =
+		AshEngine::prepare_vegetation_layer_write(
+			root.Path(), target_relative, opened.revision, replacement, 734,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+	ScriptedCommitFileOps scripted(default_ops);
+	scripted.replace = [&](const std::filesystem::path& stage,
+		const std::filesystem::path& target,
+		AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+		-> AshEngine::VegetationAtomicReplaceResult
+	{
+		const AshEngine::VegetationAtomicReplaceResult replaced =
+			default_ops.AtomicReplace(stage, target, registry);
+		REQUIRE(replaced.status == AshEngine::VegetationAtomicReplaceStatus::Replaced);
+		throw std::runtime_error("injected exception after terminal replace success");
+	};
+
+	AshEngine::VegetationStorageResult committed{};
+	CHECK_NOTHROW(committed = AshEngine::commit_vegetation_layer_write(
+		prepared, 734, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+		cleanup_registry, scripted));
+	CHECK(committed.status == AshEngine::VegetationStorageStatus::Succeeded);
+	CHECK(committed.recovery_path.empty());
+	CHECK(committed.resulting_revision.has_value());
+	if (committed.resulting_revision.has_value())
+	{
+		CHECK(*committed.resulting_revision == prepared.staged_revision());
+	}
+	CHECK_FALSE(std::filesystem::exists(prepared.stage_path()));
+	CHECK_FALSE(cleanup_registry.OwnsStageFile(prepared.stage_path()));
+	CHECK(cleanup_registry.empty());
+	CHECK(VegetationTest::ReadAllBytes(target_absolute) == replacement_bytes);
+	const AshEngine::VegetationLayerReadResult reloaded =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(reloaded.status == AshEngine::VegetationStorageStatus::Succeeded);
+	CHECK(reloaded.revision == prepared.staged_revision());
+	REQUIRE(reloaded.snapshot != nullptr);
+	CHECK(reloaded.snapshot->content_generation == replacement.content_generation);
+	CHECK(reloaded.snapshot->layer_seed == replacement.layer_seed);
+
+	if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+	{
+		if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+		{
+			CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+		}
+		CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+	}
+}
+
+TEST_CASE("Vegetation storage rejects a same-byte replacement of its prepared stage")
+{
+	VegetationTest::ScopedAssetRoot root("storage-stage-native-identity-drift");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/stage-native-identity-drift.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+	root.Write(target_relative, original);
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+	const AshEngine::VegetationPreparedLayerWrite prepared =
+		AshEngine::prepare_vegetation_layer_write(
+			root.Path(), target_relative, opened.revision, replacement, 735,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+	const std::vector<uint8_t> staged_bytes =
+		VegetationTest::ReadAllBytes(prepared.stage_path());
+	const std::filesystem::path stage_relative =
+		prepared.stage_path().lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection original_stage =
+		default_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(original_stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(original_stage.exists);
+	REQUIRE(original_stage.is_regular_file);
+	REQUIRE(original_stage.file_identity.available);
+
+	AshEngine::VegetationStageFileResult same_bytes_replacement =
+		default_ops.CreateUniqueSiblingStageFile(target_absolute, 73501);
+	REQUIRE(same_bytes_replacement.status ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(same_bytes_replacement.file_identity.available);
+	REQUIRE((same_bytes_replacement.file_identity.volume_serial_number !=
+		original_stage.file_identity.volume_serial_number ||
+		same_bytes_replacement.file_identity.file_index !=
+			original_stage.file_identity.file_index));
+	REQUIRE(same_bytes_replacement.writer->WriteBlock(
+		0, { staged_bytes.data(), staged_bytes.size() }));
+	REQUIRE(same_bytes_replacement.writer->FlushAndClose());
+	same_bytes_replacement.writer.reset();
+	REQUIRE(default_ops.RemoveOwnedStageFile(
+		prepared.stage_path(), original_stage.file_identity));
+	std::error_code replace_error{};
+	std::filesystem::rename(same_bytes_replacement.owned_stage_file,
+		prepared.stage_path(), replace_error);
+	REQUIRE_FALSE(replace_error);
+	const AshEngine::VegetationFileInspection recreated_stage =
+		default_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(recreated_stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(recreated_stage.file_identity.available);
+	CHECK(recreated_stage.file_identity.volume_serial_number ==
+		same_bytes_replacement.file_identity.volume_serial_number);
+	CHECK(recreated_stage.file_identity.file_index ==
+		same_bytes_replacement.file_identity.file_index);
+	CHECK(VegetationTest::ReadAllBytes(prepared.stage_path()) == staged_bytes);
+
+	ScriptedCommitFileOps scripted(default_ops);
+	const AshEngine::VegetationStorageResult committed =
+		AshEngine::commit_vegetation_layer_write(
+			prepared, 735, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, scripted);
+	CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+	CHECK(committed.recovery_path.empty());
+	CHECK(scripted.replace_call_count == 0);
+	CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+
+	if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+	}
+	if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.ForgetConsumedStageFile(prepared.stage_path()));
+	}
+	CHECK(default_ops.RemoveOwnedStageFile(
+		prepared.stage_path(), same_bytes_replacement.file_identity));
+}
+
+TEST_CASE("Vegetation storage never infers replace success from an unrelated target identity")
+{
+	VegetationTest::ScopedAssetRoot root("storage-unrelated-target-success-proof");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/unrelated-target-success-proof.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	root.Write(target_relative, VegetationTest::MinimalLayerBytes());
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	replacement.layer_seed ^= 0x735ull;
+	AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+	const AshEngine::VegetationPreparedLayerWrite prepared =
+		AshEngine::prepare_vegetation_layer_write(
+			root.Path(), target_relative, opened.revision, replacement, 736,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+	const std::vector<uint8_t> staged_bytes =
+		VegetationTest::ReadAllBytes(prepared.stage_path());
+	const std::filesystem::path stage_relative =
+		prepared.stage_path().lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection original_stage =
+		default_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(original_stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(original_stage.file_identity.available);
+	AshEngine::VegetationFileIdentity forged_target_identity{};
+
+	ScriptedCommitFileOps scripted(default_ops);
+	scripted.replace = [&](const std::filesystem::path& stage,
+		const std::filesystem::path& target,
+		AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+		-> AshEngine::VegetationAtomicReplaceResult
+	{
+		AshEngine::VegetationStageFileResult forged_target =
+			default_ops.CreateUniqueSiblingStageFile(target, 73601);
+		REQUIRE(forged_target.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(forged_target.file_identity.available);
+		REQUIRE((forged_target.file_identity.volume_serial_number !=
+			original_stage.file_identity.volume_serial_number ||
+			forged_target.file_identity.file_index != original_stage.file_identity.file_index));
+		REQUIRE(forged_target.writer->WriteBlock(
+			0, { staged_bytes.data(), staged_bytes.size() }));
+		REQUIRE(forged_target.writer->FlushAndClose());
+		forged_target.writer.reset();
+		forged_target_identity = forged_target.file_identity;
+		REQUIRE(default_ops.RemoveOwnedStageFile(
+			stage, original_stage.file_identity));
+		std::error_code remove_error{};
+		REQUIRE(std::filesystem::remove(target, remove_error));
+		REQUIRE_FALSE(remove_error);
+		std::filesystem::rename(forged_target.owned_stage_file, target, remove_error);
+		REQUIRE_FALSE(remove_error);
+		REQUIRE(registry.ForgetConsumedStageFile(stage));
+		throw std::runtime_error("injected exception after unrelated target creation");
+	};
+
+	AshEngine::VegetationStorageResult committed{};
+	CHECK_NOTHROW(committed = AshEngine::commit_vegetation_layer_write(
+		prepared, 736, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+		cleanup_registry, scripted));
+	CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+	CHECK_FALSE(committed.resulting_revision.has_value());
+	CHECK(committed.recovery_path.empty());
+	CHECK_FALSE(std::filesystem::exists(prepared.stage_path()));
+	CHECK(cleanup_registry.empty());
+	CHECK(VegetationTest::ReadAllBytes(target_absolute) == staged_bytes);
+	const AshEngine::VegetationFileInspection forged_target =
+		default_ops.InspectPath(root.Path(), target_relative);
+	REQUIRE(forged_target.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(forged_target.file_identity.available);
+	CHECK(forged_target.file_identity.volume_serial_number ==
+		forged_target_identity.volume_serial_number);
+	CHECK(forged_target.file_identity.file_index == forged_target_identity.file_index);
+	CHECK((forged_target.file_identity.volume_serial_number !=
+		original_stage.file_identity.volume_serial_number ||
+		forged_target.file_identity.file_index != original_stage.file_identity.file_index));
+}
+
+TEST_CASE("Vegetation storage rejects exact-stage recovery after native identity loss")
+{
+	VegetationTest::ScopedAssetRoot root("storage-exact-recovery-native-identity");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/exact-recovery-native-identity.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+	root.Write(target_relative, original);
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+	const AshEngine::VegetationPreparedLayerWrite prepared =
+		AshEngine::prepare_vegetation_layer_write(
+			root.Path(), target_relative, opened.revision, replacement, 737,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+	const std::vector<uint8_t> staged_bytes =
+		VegetationTest::ReadAllBytes(prepared.stage_path());
+	const std::filesystem::path stage_relative =
+		prepared.stage_path().lexically_relative(root.Path());
+	const AshEngine::VegetationFileInspection original_stage =
+		default_ops.InspectPath(root.Path(), stage_relative);
+	REQUIRE(original_stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(original_stage.file_identity.available);
+
+	bool recreate_stage = false;
+	SUBCASE("missing exact recovery stage")
+	{
+	}
+	SUBCASE("same-byte exact recovery stage with a different native identity")
+	{
+		recreate_stage = true;
+	}
+	std::filesystem::path replacement_stage_path{};
+	AshEngine::VegetationFileIdentity replacement_stage_identity{};
+	if (recreate_stage)
+	{
+		AshEngine::VegetationStageFileResult identity_replacement =
+			default_ops.CreateUniqueSiblingStageFile(target_absolute, 73701);
+		REQUIRE(identity_replacement.status ==
+			AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(identity_replacement.file_identity.available);
+		REQUIRE((identity_replacement.file_identity.volume_serial_number !=
+			original_stage.file_identity.volume_serial_number ||
+			identity_replacement.file_identity.file_index !=
+				original_stage.file_identity.file_index));
+		REQUIRE(identity_replacement.writer->WriteBlock(
+			0, { staged_bytes.data(), staged_bytes.size() }));
+		REQUIRE(identity_replacement.writer->FlushAndClose());
+		identity_replacement.writer.reset();
+		replacement_stage_path = identity_replacement.owned_stage_file;
+		replacement_stage_identity = identity_replacement.file_identity;
+	}
+
+	ScriptedCommitFileOps scripted(default_ops);
+	scripted.replace = [&](const std::filesystem::path& stage,
+		const std::filesystem::path& target,
+		AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+	{
+		REQUIRE(registry.BeginStageFilePublish(stage, target));
+		REQUIRE(registry.ResolveStageFilePublish(
+			stage, AshEngine::VegetationStageFilePublishResolution::RecoveryRequired));
+		REQUIRE(default_ops.RemoveOwnedStageFile(
+			stage, original_stage.file_identity));
+		if (recreate_stage)
+		{
+			std::error_code recreate_error{};
+			std::filesystem::rename(replacement_stage_path, stage, recreate_error);
+			REQUIRE_FALSE(recreate_error);
+		}
+		AshEngine::VegetationAtomicReplaceResult result{};
+		result.status = AshEngine::VegetationAtomicReplaceStatus::RecoveryRequired;
+		result.recovery_path = stage;
+		result.error = "injected exact-stage identity loss";
+		return result;
+	};
+
+	const AshEngine::VegetationStorageResult committed =
+		AshEngine::commit_vegetation_layer_write(
+			prepared, 737, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, scripted);
+	CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+	CHECK(committed.recovery_path.empty());
+	CHECK(scripted.replace_call_count == 1);
+	CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+	CHECK(cleanup_registry.empty());
+	if (recreate_stage)
+	{
+		const AshEngine::VegetationFileInspection recreated_stage =
+			default_ops.InspectPath(root.Path(), stage_relative);
+		REQUIRE(recreated_stage.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(recreated_stage.file_identity.available);
+		CHECK(recreated_stage.file_identity.volume_serial_number ==
+			replacement_stage_identity.volume_serial_number);
+		CHECK(recreated_stage.file_identity.file_index ==
+			replacement_stage_identity.file_index);
+		CHECK(VegetationTest::ReadAllBytes(prepared.stage_path()) == staged_bytes);
+	}
+	else
+	{
+		CHECK_FALSE(std::filesystem::exists(prepared.stage_path()));
+	}
+
+	if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+	}
+	if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.ForgetConsumedStageFile(prepared.stage_path()));
+	}
+	const AshEngine::VegetationFileIdentity final_stage_identity =
+		recreate_stage ? replacement_stage_identity : original_stage.file_identity;
+	CHECK(default_ops.RemoveOwnedStageFile(
+		prepared.stage_path(), final_stage_identity));
+}
+
+TEST_CASE("Vegetation storage rejects invalid associated replace backups")
+{
+	VegetationTest::ScopedAssetRoot root("storage-invalid-associated-backup");
+	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
+	const std::filesystem::path target_relative =
+		"vegetation/invalid-associated-backup.AshVegetationLayer";
+	const std::filesystem::path target_absolute = root.Path() / target_relative;
+	const std::vector<uint8_t> original = VegetationTest::MinimalLayerBytes();
+	root.Write(target_relative, original);
+	const AshEngine::VegetationLayerReadResult opened =
+		AshEngine::read_vegetation_layer_snapshot(
+			root.Path(), target_relative, VegetationTest::GenerousLoadBudget());
+	REQUIRE(opened.status == AshEngine::VegetationStorageStatus::Succeeded);
+	AshEngine::VegetationLayerSnapshot replacement = VegetationTest::MinimalLayerSnapshot();
+	++replacement.content_generation;
+	AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+	const AshEngine::VegetationPreparedLayerWrite prepared =
+		AshEngine::prepare_vegetation_layer_write(
+			root.Path(), target_relative, opened.revision, replacement, 738,
+			VegetationTest::ActiveControl(std::chrono::seconds(1)), cleanup_registry);
+	REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+
+	std::vector<uint8_t> backup_bytes{};
+	SUBCASE("corrupt associated backup")
+	{
+		backup_bytes = { 0x62, 0x61, 0x64 };
+	}
+	SUBCASE("valid associated backup from the wrong old revision")
+	{
+		backup_bytes = VegetationTest::DifferentValidLayerBytes();
+		REQUIRE(backup_bytes != original);
+	}
+	const std::filesystem::path backup = target_absolute.parent_path() /
+		".ashveg-layer-stage-replace-backup-invalid-old-revision.tmp";
+	VegetationTest::WriteAllBytes(backup, backup_bytes);
+	const AshEngine::VegetationFileInspection backup_inspection =
+		default_ops.InspectPath(
+			root.Path(), backup.lexically_relative(root.Path()));
+	REQUIRE(backup_inspection.status ==
+		AshEngine::VegetationFileResultStatus::Succeeded);
+	REQUIRE(backup_inspection.file_identity.available);
+	ScriptedCommitFileOps scripted(default_ops);
+	scripted.replace = [&](const std::filesystem::path& stage,
+		const std::filesystem::path& target,
+		AshEngine::VegetationOwnedStageCleanupRegistry& registry)
+	{
+		REQUIRE(registry.BeginStageFilePublish(stage, target));
+		REQUIRE(registry.RetainStageFileForAtomicReplaceRecovery(
+			backup, stage, target, backup_inspection.file_identity));
+		REQUIRE(registry.ResolveStageFilePublish(
+			stage, AshEngine::VegetationStageFilePublishResolution::TargetPreserved));
+		AshEngine::VegetationAtomicReplaceResult result{};
+		result.status = AshEngine::VegetationAtomicReplaceStatus::RecoveryRequired;
+		result.recovery_path = backup;
+		result.error = "injected invalid associated backup";
+		return result;
+	};
+
+	const AshEngine::VegetationStorageResult committed =
+		AshEngine::commit_vegetation_layer_write(
+			prepared, 738, VegetationTest::ActiveControl(std::chrono::seconds(1)),
+			cleanup_registry, scripted);
+	CHECK(committed.status == AshEngine::VegetationStorageStatus::RecoveryRequired);
+	CHECK(committed.recovery_path == prepared.stage_path());
+	CHECK(cleanup_registry.IsRecoveryStageFile(prepared.stage_path()));
+	CHECK(std::filesystem::exists(prepared.stage_path()));
+	CHECK(cleanup_registry.IsAtomicReplaceRecoveryStageFile(
+		backup, prepared.stage_path(), target_absolute,
+		backup_inspection.file_identity));
+	CHECK_FALSE(cleanup_registry.CleanupStageFile(backup, default_ops));
+	CHECK(VegetationTest::ReadAllBytes(backup) == backup_bytes);
+	CHECK(VegetationTest::ReadAllBytes(target_absolute) == original);
+
+	if (cleanup_registry.IsRecoveryStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.ReleaseRecoveryStageFile(prepared.stage_path()));
+	}
+	if (cleanup_registry.OwnsStageFile(prepared.stage_path()))
+	{
+		CHECK(cleanup_registry.CleanupStageFile(prepared.stage_path(), default_ops));
+	}
+	CHECK(cleanup_registry.ReleaseRecoveryStageFile(backup));
+	CHECK(cleanup_registry.CleanupStageFile(backup, default_ops));
+	CHECK(cleanup_registry.empty());
+}
+
 TEST_CASE("Vegetation storage rejects every illegal atomic replace status payload shape")
 {
 	VegetationTest::ScopedAssetRoot root("storage-replace-shape-matrix");
@@ -2352,12 +3846,13 @@ TEST_CASE("Vegetation storage rejects every illegal atomic replace status payloa
 	}
 	AshEngine::IVegetationFileOps& default_ops = AshEngine::get_default_vegetation_file_ops();
 	ScriptedCommitFileOps scripted(default_ops);
-	scripted.replace = [&](const std::filesystem::path& stage, const std::filesystem::path&,
+	scripted.replace = [&](const std::filesystem::path& stage,
+		const std::filesystem::path& target,
 		AshEngine::VegetationOwnedStageCleanupRegistry& replace_registry)
 	{
 		if (leave_publish_pin)
 		{
-			REQUIRE(replace_registry.BeginStageFilePublish(stage));
+			REQUIRE(replace_registry.BeginStageFilePublish(stage, target));
 		}
 		return injected;
 	};
@@ -2546,6 +4041,235 @@ TEST_CASE("Vegetation storage create-new success is not downgraded by consumed b
 	CHECK(VegetationTest::ReadAllBytes(root.Path() / destination_relative) == expected_bytes);
 }
 
+TEST_CASE("Vegetation storage create-new APIs contain exceptions before target mutation")
+{
+	const std::array<CreateNewStorageApi, 2> apis = {
+		CreateNewStorageApi::FirstSave, CreateNewStorageApi::CopyAs
+	};
+	for (size_t index = 0; index < apis.size(); ++index)
+	{
+		const CreateNewStorageApi api = apis[index];
+		CAPTURE(std::string(CreateNewStorageApiName(api)));
+		VegetationTest::ScopedAssetRoot root(
+			"storage-create-new-throw-before-" + std::to_string(index));
+		const std::filesystem::path target_relative =
+			"vegetation/throw-before.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const uint64_t operation_serial = 850u + index;
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			PrepareCreateNewStorageWrite(
+				api, root.Path(), target_relative,
+				VegetationTest::MinimalLayerSnapshot(), operation_serial,
+				cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		const std::filesystem::path stage = prepared.stage_path();
+		AshEngine::IVegetationFileOps& default_ops =
+			AshEngine::get_default_vegetation_file_ops();
+		ScriptedCommitFileOps scripted(default_ops);
+		std::vector<std::filesystem::path> removed_stages{};
+		scripted.remove_stage = [&default_ops, &removed_stages](
+			const std::filesystem::path& path,
+			const AshEngine::VegetationFileIdentity& expected_identity)
+		{
+			removed_stages.push_back(path);
+			return default_ops.RemoveOwnedStageFile(path, expected_identity);
+		};
+		scripted.create_new = [](
+			const std::filesystem::path&,
+			const std::filesystem::path&) -> AshEngine::VegetationCreateNewStatus
+		{
+			throw std::runtime_error("injected create-new exception before mutation");
+		};
+
+		AshEngine::VegetationStorageResult committed{};
+		CHECK_NOTHROW(committed = CommitCreateNewStorageWrite(
+			api, prepared, operation_serial, cleanup_registry, scripted));
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+		CHECK_FALSE(committed.resulting_revision.has_value());
+		CHECK(committed.recovery_path.empty());
+		CHECK(scripted.create_new_call_count == 1);
+		CHECK(removed_stages == std::vector<std::filesystem::path>{ stage });
+		CHECK_FALSE(std::filesystem::exists(target_absolute));
+		CHECK_FALSE(std::filesystem::exists(stage));
+		CHECK(cleanup_registry.empty());
+
+		if (cleanup_registry.OwnsStageFile(stage))
+		{
+			CHECK(cleanup_registry.CleanupStageFile(stage, default_ops));
+		}
+	}
+}
+
+TEST_CASE("Vegetation storage create-new APIs recover terminal success after callback exceptions")
+{
+	const std::array<CreateNewStorageApi, 2> apis = {
+		CreateNewStorageApi::FirstSave, CreateNewStorageApi::CopyAs
+	};
+	for (size_t index = 0; index < apis.size(); ++index)
+	{
+		const CreateNewStorageApi api = apis[index];
+		CAPTURE(std::string(CreateNewStorageApiName(api)));
+		VegetationTest::ScopedAssetRoot root(
+			"storage-create-new-throw-after-created-" + std::to_string(index));
+		const std::filesystem::path target_relative =
+			"vegetation/throw-after-created.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		AshEngine::VegetationLayerSnapshot snapshot =
+			VegetationTest::MinimalLayerSnapshot();
+		++snapshot.content_generation;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const uint64_t operation_serial = 860u + index;
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			PrepareCreateNewStorageWrite(
+				api, root.Path(), target_relative, snapshot, operation_serial,
+				cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		const std::filesystem::path stage = prepared.stage_path();
+		const std::filesystem::path stage_relative =
+			stage.lexically_relative(root.Path());
+		AshEngine::IVegetationFileOps& default_ops =
+			AshEngine::get_default_vegetation_file_ops();
+		const AshEngine::VegetationFileInspection stage_before =
+			default_ops.InspectPath(root.Path(), stage_relative);
+		REQUIRE(stage_before.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(stage_before.exists);
+		REQUIRE(stage_before.file_identity.available);
+		const std::vector<uint8_t> staged_bytes =
+			VegetationTest::ReadAllBytes(stage);
+		ScriptedCommitFileOps scripted(default_ops);
+		scripted.create_new = [&default_ops](
+			const std::filesystem::path& source,
+			const std::filesystem::path& target) -> AshEngine::VegetationCreateNewStatus
+		{
+			if (default_ops.CreateNewFromStage(source, target) !=
+				AshEngine::VegetationCreateNewStatus::Created)
+			{
+				throw std::runtime_error("default create-new did not publish");
+			}
+			throw std::runtime_error("injected exception after terminal create-new");
+		};
+
+		AshEngine::VegetationStorageResult committed{};
+		CHECK_NOTHROW(committed = CommitCreateNewStorageWrite(
+			api, prepared, operation_serial, cleanup_registry, scripted));
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::Succeeded);
+		CHECK(committed.resulting_revision.has_value());
+		if (committed.resulting_revision.has_value())
+		{
+			CHECK(*committed.resulting_revision == prepared.staged_revision());
+		}
+		CHECK(committed.recovery_path.empty());
+		CHECK(scripted.create_new_call_count == 1);
+		CHECK(cleanup_registry.empty());
+		CHECK_FALSE(std::filesystem::exists(stage));
+		const AshEngine::VegetationFileInspection target_after =
+			default_ops.InspectPath(root.Path(), target_relative);
+		REQUIRE(target_after.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(target_after.exists);
+		REQUIRE(target_after.is_regular_file);
+		REQUIRE(target_after.file_identity.available);
+		CHECK(target_after.resolved_absolute_path == target_absolute);
+		CHECK(target_after.file_identity.volume_serial_number ==
+			stage_before.file_identity.volume_serial_number);
+		CHECK(target_after.file_identity.file_index ==
+			stage_before.file_identity.file_index);
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == staged_bytes);
+
+		if (cleanup_registry.OwnsStageFile(stage))
+		{
+			CHECK(cleanup_registry.ReconcileConsumedStageFileAfterPublish(
+				stage, default_ops));
+		}
+	}
+}
+
+TEST_CASE("Vegetation storage create-new APIs reject unrelated exact-byte target identities")
+{
+	const std::array<CreateNewStorageApi, 2> apis = {
+		CreateNewStorageApi::FirstSave, CreateNewStorageApi::CopyAs
+	};
+	for (size_t index = 0; index < apis.size(); ++index)
+	{
+		const CreateNewStorageApi api = apis[index];
+		CAPTURE(std::string(CreateNewStorageApiName(api)));
+		VegetationTest::ScopedAssetRoot root(
+			"storage-create-new-throw-decoy-" + std::to_string(index));
+		const std::filesystem::path target_relative =
+			"vegetation/throw-decoy.AshVegetationLayer";
+		const std::filesystem::path target_absolute = root.Path() / target_relative;
+		AshEngine::VegetationOwnedStageCleanupRegistry cleanup_registry{};
+		const uint64_t operation_serial = 870u + index;
+		const AshEngine::VegetationPreparedLayerWrite prepared =
+			PrepareCreateNewStorageWrite(
+				api, root.Path(), target_relative,
+				VegetationTest::MinimalLayerSnapshot(), operation_serial,
+				cleanup_registry);
+		REQUIRE(prepared.status() == AshEngine::VegetationStorageStatus::Prepared);
+		const std::filesystem::path stage = prepared.stage_path();
+		const std::filesystem::path stage_relative =
+			stage.lexically_relative(root.Path());
+		AshEngine::IVegetationFileOps& default_ops =
+			AshEngine::get_default_vegetation_file_ops();
+		const AshEngine::VegetationFileInspection stage_before =
+			default_ops.InspectPath(root.Path(), stage_relative);
+		REQUIRE(stage_before.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(stage_before.file_identity.available);
+		const std::vector<uint8_t> staged_bytes =
+			VegetationTest::ReadAllBytes(stage);
+		AshEngine::VegetationStageFileResult decoy =
+			default_ops.CreateUniqueSiblingStageFile(
+				target_absolute, operation_serial + 1000u);
+		REQUIRE(decoy.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(decoy.file_identity.available);
+		REQUIRE(decoy.writer->WriteBlock(
+			0, { staged_bytes.data(), staged_bytes.size() }));
+		REQUIRE(decoy.writer->FlushAndClose());
+		decoy.writer.reset();
+		const std::filesystem::path decoy_path = decoy.owned_stage_file;
+		const AshEngine::VegetationFileIdentity decoy_identity = decoy.file_identity;
+		ScriptedCommitFileOps scripted(default_ops);
+		scripted.create_new =
+			[&cleanup_registry, &default_ops, decoy_path, stage_before](
+				const std::filesystem::path& source,
+				const std::filesystem::path& target) -> AshEngine::VegetationCreateNewStatus
+		{
+			if (!default_ops.RemoveOwnedStageFile(
+					source, stage_before.file_identity) ||
+				default_ops.CreateNewFromStage(decoy_path, target) !=
+					AshEngine::VegetationCreateNewStatus::Created ||
+				!cleanup_registry.ForgetConsumedStageFile(source))
+			{
+				throw std::runtime_error("could not establish unrelated target");
+			}
+			throw std::runtime_error("injected exception after unrelated target creation");
+		};
+
+		AshEngine::VegetationStorageResult committed{};
+		CHECK_NOTHROW(committed = CommitCreateNewStorageWrite(
+			api, prepared, operation_serial, cleanup_registry, scripted));
+		CHECK(committed.status == AshEngine::VegetationStorageStatus::Failed);
+		CHECK(committed.status != AshEngine::VegetationStorageStatus::Succeeded);
+		CHECK_FALSE(committed.resulting_revision.has_value());
+		CHECK(committed.recovery_path.empty());
+		CHECK(cleanup_registry.empty());
+		CHECK_FALSE(std::filesystem::exists(stage));
+		const AshEngine::VegetationFileInspection target_after =
+			default_ops.InspectPath(root.Path(), target_relative);
+		REQUIRE(target_after.status == AshEngine::VegetationFileResultStatus::Succeeded);
+		REQUIRE(target_after.exists);
+		REQUIRE(target_after.file_identity.available);
+		CHECK(target_after.file_identity.volume_serial_number ==
+			decoy_identity.volume_serial_number);
+		CHECK(target_after.file_identity.file_index == decoy_identity.file_index);
+		CHECK((target_after.file_identity.volume_serial_number !=
+			stage_before.file_identity.volume_serial_number ||
+			target_after.file_identity.file_index !=
+				stage_before.file_identity.file_index));
+		CHECK(VegetationTest::ReadAllBytes(target_absolute) == staged_bytes);
+	}
+}
+
 TEST_CASE("Vegetation storage replace success reconciles a consumed publish pin")
 {
 	VegetationTest::ScopedAssetRoot root("storage-replace-publish-pin-reconcile");
@@ -2572,7 +4296,7 @@ TEST_CASE("Vegetation storage replace success reconciles a consumed publish pin"
 		const std::filesystem::path& target,
 		AshEngine::VegetationOwnedStageCleanupRegistry& registry)
 	{
-		REQUIRE(registry.BeginStageFilePublish(stage));
+		REQUIRE(registry.BeginStageFilePublish(stage, target));
 		std::error_code publish_error{};
 		REQUIRE(std::filesystem::remove(target, publish_error));
 		REQUIRE_FALSE(publish_error);

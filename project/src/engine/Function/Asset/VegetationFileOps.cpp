@@ -9,6 +9,7 @@
 #include <iterator>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <system_error>
 #include <utility>
 
@@ -90,34 +91,6 @@ namespace AshEngine
 			return child_component != child.end();
 		}
 
-		bool contains_exact_path(
-			const std::vector<std::filesystem::path>& paths,
-			const std::filesystem::path& path)
-		{
-			return std::find_if(paths.begin(), paths.end(),
-				[&](const std::filesystem::path& candidate)
-				{
-					return same_path_identity(candidate, path);
-				}) != paths.end();
-		}
-
-		bool erase_exact_path(
-			std::vector<std::filesystem::path>& paths,
-			const std::filesystem::path& path)
-		{
-			const auto found = std::find_if(paths.begin(), paths.end(),
-				[&](const std::filesystem::path& candidate)
-				{
-					return same_path_identity(candidate, path);
-				});
-			if (found == paths.end())
-			{
-				return false;
-			}
-			paths.erase(found);
-			return true;
-		}
-
 		VegetationFileInspection failed_inspection(
 			const VegetationFileResultStatus status,
 			std::string error)
@@ -197,6 +170,36 @@ namespace AshEngine
 				return L"\\\\?\\UNC\\" + value.substr(2);
 			}
 			return L"\\\\?\\" + value;
+		}
+
+		bool handle_matches_absolute_path(
+			const HANDLE handle,
+			const std::filesystem::path& absolute)
+		{
+			const DWORD flags = FILE_NAME_OPENED | VOLUME_NAME_DOS;
+			const DWORD required = GetFinalPathNameByHandleW(
+				handle, nullptr, 0, flags);
+			if (required == 0)
+			{
+				return false;
+			}
+			std::wstring opened(static_cast<size_t>(required), L'\0');
+			const DWORD written = GetFinalPathNameByHandleW(
+				handle, opened.data(), required, flags);
+			if (written == 0 || written >= required)
+			{
+				return false;
+			}
+			opened.resize(static_cast<size_t>(written));
+			const std::wstring expected = extended_path(absolute);
+			if (opened.size() > static_cast<size_t>(std::numeric_limits<int>::max()) ||
+				expected.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+			{
+				return false;
+			}
+			return CompareStringOrdinal(
+				opened.data(), static_cast<int>(opened.size()),
+				expected.data(), static_cast<int>(expected.size()), TRUE) == CSTR_EQUAL;
 		}
 
 		bool contains_dot_component(const std::filesystem::path& path)
@@ -480,6 +483,20 @@ namespace AshEngine
 
 			WindowsFileHandle(const WindowsFileHandle&) = delete;
 			WindowsFileHandle& operator=(const WindowsFileHandle&) = delete;
+			WindowsFileHandle(WindowsFileHandle&& other) noexcept
+				: m_handle(other.release())
+			{
+			}
+
+			WindowsFileHandle& operator=(WindowsFileHandle&& other) noexcept
+			{
+				if (this != &other)
+				{
+					close();
+					m_handle = other.release();
+				}
+				return *this;
+			}
 
 			HANDLE get() const noexcept { return m_handle; }
 
@@ -490,13 +507,56 @@ namespace AshEngine
 				return handle;
 			}
 
+			bool close_checked() noexcept
+			{
+				if (m_handle == INVALID_HANDLE_VALUE)
+				{
+					return true;
+				}
+				const HANDLE handle = m_handle;
+				m_handle = INVALID_HANDLE_VALUE;
+				return CloseHandle(handle) != FALSE;
+			}
+
 			void close() noexcept
+			{
+				(void)close_checked();
+			}
+
+		private:
+			HANDLE m_handle = INVALID_HANDLE_VALUE;
+		};
+
+		class WindowsFindHandle
+		{
+		public:
+			explicit WindowsFindHandle(const HANDLE handle = INVALID_HANDLE_VALUE)
+				: m_handle(handle)
+			{
+			}
+
+			~WindowsFindHandle()
 			{
 				if (m_handle != INVALID_HANDLE_VALUE)
 				{
-					CloseHandle(m_handle);
-					m_handle = INVALID_HANDLE_VALUE;
+					FindClose(m_handle);
 				}
+			}
+
+			WindowsFindHandle(const WindowsFindHandle&) = delete;
+			WindowsFindHandle& operator=(const WindowsFindHandle&) = delete;
+
+			HANDLE get() const noexcept { return m_handle; }
+
+			bool close() noexcept
+			{
+				if (m_handle == INVALID_HANDLE_VALUE)
+				{
+					return true;
+				}
+				const HANDLE handle = m_handle;
+				m_handle = INVALID_HANDLE_VALUE;
+				return FindClose(handle) != FALSE;
 			}
 
 		private:
@@ -533,6 +593,72 @@ namespace AshEngine
 				*out_file_attributes = information.dwFileAttributes;
 			}
 			return true;
+		}
+
+		bool same_available_file_identity(
+			const VegetationFileIdentity& lhs,
+			const VegetationFileIdentity& rhs) noexcept
+		{
+			return lhs.available && rhs.available &&
+				lhs.volume_serial_number == rhs.volume_serial_number &&
+				lhs.file_index == rhs.file_index;
+		}
+
+		bool pin_owned_stage_tree_ancestors(
+			const std::filesystem::path& absolute,
+			std::vector<WindowsFileHandle>& pins)
+		{
+			pins.clear();
+			std::filesystem::path current{};
+			const std::filesystem::path parent_relative =
+				absolute.parent_path().relative_path();
+			const auto pin_directory = [&](const std::filesystem::path& directory)
+			{
+				WindowsFileHandle pin(CreateFileW(
+					extended_path(directory).c_str(), FILE_READ_ATTRIBUTES,
+					FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+					FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+					nullptr));
+				VegetationFileIdentity identity{};
+				DWORD attributes = INVALID_FILE_ATTRIBUTES;
+				if (pin.get() == INVALID_HANDLE_VALUE ||
+					!query_file_identity(pin.get(), identity, &attributes) ||
+					!handle_matches_absolute_path(pin.get(), directory) ||
+					(attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+					(attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+				{
+					return false;
+				}
+				pins.emplace_back(std::move(pin));
+				return true;
+			};
+
+			current = absolute.root_path();
+			if (current.empty() || !pin_directory(current))
+			{
+				return false;
+			}
+			for (const std::filesystem::path& component : parent_relative)
+			{
+				current /= component;
+				if (!pin_directory(current))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool close_windows_file_handles(
+			std::vector<WindowsFileHandle>& handles) noexcept
+		{
+			bool closed = true;
+			for (auto handle = handles.rbegin(); handle != handles.rend(); ++handle)
+			{
+				closed = handle->close_checked() && closed;
+			}
+			handles.clear();
+			return closed;
 		}
 
 		class WindowsStageFileWriter final : public IVegetationStageFileWriter
@@ -655,6 +781,18 @@ namespace AshEngine
 				std::to_wstring(operation_serial) + L"-" + std::to_wstring(nonce) + suffix;
 		}
 
+		bool is_atomic_replace_backup_name(
+			const std::filesystem::path& path)
+		{
+			const std::wstring filename = path.filename().native();
+			const std::wstring prefix = L".ashveg-layer-stage-replace-backup-";
+			const std::wstring suffix = L".tmp";
+			return filename.size() > prefix.size() + suffix.size() &&
+				filename.compare(0, prefix.size(), prefix) == 0 &&
+				filename.compare(filename.size() - suffix.size(), suffix.size(), suffix) == 0 &&
+				is_valid_windows_component(path.filename());
+		}
+
 		VegetationStageFileResult create_stage_file_at(
 			const std::filesystem::path& absolute_path,
 			DWORD* out_win32_error = nullptr)
@@ -705,6 +843,117 @@ namespace AshEngine
 				}
 				return failed_stage_file("Vegetation stage writer allocation failed.");
 			}
+		}
+
+		bool remove_owned_stage_tree_entry(
+			const std::filesystem::path& absolute,
+			const bool is_root,
+			const VegetationFileIdentity& expected_root_identity)
+		{
+			WindowsFileHandle pin(CreateFileW(
+				extended_path(absolute).c_str(), DELETE | FILE_READ_ATTRIBUTES,
+				FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+				FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+				nullptr));
+			VegetationFileIdentity identity{};
+			DWORD attributes = INVALID_FILE_ATTRIBUTES;
+			if (pin.get() == INVALID_HANDLE_VALUE ||
+				!query_file_identity(pin.get(), identity, &attributes) ||
+				!handle_matches_absolute_path(pin.get(), absolute))
+			{
+				return false;
+			}
+			if (is_root &&
+				!same_available_file_identity(identity, expected_root_identity))
+			{
+				return false;
+			}
+			const bool is_directory =
+				(attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+			if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+			{
+				if (is_root)
+				{
+					return false;
+				}
+				FILE_DISPOSITION_INFO disposition{};
+				disposition.DeleteFile = TRUE;
+				if (SetFileInformationByHandle(
+					pin.get(), FileDispositionInfo, &disposition, sizeof(disposition)) == FALSE)
+				{
+					return false;
+				}
+				(void)pin.close_checked();
+				return true;
+			}
+			if (!is_directory)
+			{
+				if (is_root)
+				{
+					return false;
+				}
+				FILE_DISPOSITION_INFO disposition{};
+				disposition.DeleteFile = TRUE;
+				if (SetFileInformationByHandle(
+					pin.get(), FileDispositionInfo, &disposition, sizeof(disposition)) == FALSE)
+				{
+					return false;
+				}
+				(void)pin.close_checked();
+				return true;
+			}
+
+			WIN32_FIND_DATAW entry{};
+			const std::filesystem::path search = absolute / L"*";
+			WindowsFindHandle find(
+				FindFirstFileW(extended_path(search).c_str(), &entry));
+			if (find.get() == INVALID_HANDLE_VALUE)
+			{
+				if (GetLastError() != ERROR_FILE_NOT_FOUND)
+				{
+					return false;
+				}
+			}
+			else
+			{
+				std::vector<std::filesystem::path> children{};
+				DWORD enumeration_error = ERROR_SUCCESS;
+				for (;;)
+				{
+					const std::wstring_view name(entry.cFileName);
+					if (name != L"." && name != L"..")
+					{
+						children.emplace_back(absolute / entry.cFileName);
+					}
+					if (FindNextFileW(find.get(), &entry) == FALSE)
+					{
+						enumeration_error = GetLastError();
+						break;
+					}
+				}
+				const bool closed = find.close();
+				if (!closed || enumeration_error != ERROR_NO_MORE_FILES)
+				{
+					return false;
+				}
+				for (const std::filesystem::path& child : children)
+				{
+					if (!remove_owned_stage_tree_entry(
+						child, false, expected_root_identity))
+					{
+						return false;
+					}
+				}
+			}
+			FILE_DISPOSITION_INFO disposition{};
+			disposition.DeleteFile = TRUE;
+			if (SetFileInformationByHandle(
+				pin.get(), FileDispositionInfo, &disposition, sizeof(disposition)) == FALSE)
+			{
+				return false;
+			}
+			(void)pin.close_checked();
+			return true;
 		}
 
 		VegetationCreateNewStatus move_create_new(
@@ -1133,16 +1382,44 @@ namespace AshEngine
 							L".ashveg-stage-tree-", operation_serial, nonce, L"");
 						if (CreateDirectoryW(extended_path(stage_root).c_str(), nullptr))
 						{
+							WindowsFileHandle created(CreateFileW(
+								extended_path(stage_root).c_str(),
+								DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+								nullptr, OPEN_EXISTING,
+								FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+								nullptr));
+							VegetationFileIdentity identity{};
+							DWORD attributes = INVALID_FILE_ATTRIBUTES;
+							if (created.get() == INVALID_HANDLE_VALUE ||
+								!query_file_identity(created.get(), identity, &attributes) ||
+								!handle_matches_absolute_path(created.get(), stage_root) ||
+								(attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+								(attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+							{
+								return failed_stage_tree(
+									"Vegetation stage tree identity capture failed.");
+							}
 							try
 							{
 								VegetationStageTreeResult result{};
 								result.owned_stage_root = stage_root;
+								result.file_identity = identity;
 								result.status = VegetationFileResultStatus::Succeeded;
+								if (!created.close_checked())
+								{
+									return failed_stage_tree(
+										"Vegetation stage tree creation handle close failed.");
+								}
 								return result;
 							}
 							catch (...)
 							{
-								RemoveDirectoryW(extended_path(stage_root).c_str());
+								FILE_DISPOSITION_INFO disposition{};
+								disposition.DeleteFile = TRUE;
+								(void)SetFileInformationByHandle(
+									created.get(), FileDispositionInfo,
+									&disposition, sizeof(disposition));
+								(void)created.close_checked();
 								return failed_stage_tree(
 									"Vegetation stage tree result allocation failed.");
 							}
@@ -1226,29 +1503,52 @@ namespace AshEngine
 #endif
 			}
 
-			bool RemoveOwnedStageFile(const std::filesystem::path& stage_file) override
+			bool RemoveOwnedStageFile(
+				const std::filesystem::path& stage_file,
+				const VegetationFileIdentity& expected_identity) override
 			{
 #if defined(_WIN32)
 				try
 				{
 					std::filesystem::path absolute{};
 					if (!normalized_absolute_path(stage_file, true, absolute) ||
-						!stage_file_name_is_owned(absolute))
+						!stage_file_name_is_owned(absolute) ||
+						!expected_identity.available)
 					{
 						return false;
 					}
-					const PathProbe probe = probe_absolute_path(absolute);
-					if (probe.status == PathProbeStatus::Missing)
+					WindowsFileHandle pin(CreateFileW(
+						extended_path(absolute).c_str(),
+						DELETE | FILE_READ_ATTRIBUTES,
+						FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+						FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+					if (pin.get() == INVALID_HANDLE_VALUE)
+					{
+						return is_not_found_error(GetLastError());
+					}
+					VegetationFileIdentity identity{};
+					DWORD attributes = INVALID_FILE_ATTRIBUTES;
+					if (!query_file_identity(pin.get(), identity, &attributes) ||
+						!handle_matches_absolute_path(pin.get(), absolute) ||
+						(attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+						(attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+					{
+						return false;
+					}
+					if (!same_available_file_identity(identity, expected_identity))
 					{
 						return true;
 					}
-					if (probe.status != PathProbeStatus::Present ||
-						(probe.attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+					FILE_DISPOSITION_INFO disposition{};
+					disposition.DeleteFile = TRUE;
+					if (SetFileInformationByHandle(
+						pin.get(), FileDispositionInfo,
+						&disposition, sizeof(disposition)) == FALSE)
 					{
 						return false;
 					}
-					return DeleteFileW(extended_path(absolute).c_str()) != FALSE ||
-						is_not_found_error(GetLastError());
+					(void)pin.close_checked();
+					return true;
 				}
 				catch (...)
 				{
@@ -1256,18 +1556,22 @@ namespace AshEngine
 				}
 #else
 				(void)stage_file;
+				(void)expected_identity;
 				return false;
 #endif
 			}
 
-			bool RemoveOwnedStageTree(const std::filesystem::path& stage_root) override
+			bool RemoveOwnedStageTree(
+				const std::filesystem::path& stage_root,
+				const VegetationFileIdentity& expected_identity) override
 			{
 #if defined(_WIN32)
 				try
 				{
 					std::filesystem::path absolute{};
 					if (!normalized_absolute_path(stage_root, true, absolute) ||
-						!stage_tree_name_is_owned(absolute))
+						!stage_tree_name_is_owned(absolute) ||
+						!expected_identity.available)
 					{
 						return false;
 					}
@@ -1281,9 +1585,18 @@ namespace AshEngine
 					{
 						return false;
 					}
-					std::error_code error{};
-					std::filesystem::remove_all(absolute, error);
-					return !error && !std::filesystem::exists(absolute, error) && !error;
+					std::vector<WindowsFileHandle> ancestor_pins{};
+					if (!pin_owned_stage_tree_ancestors(absolute, ancestor_pins))
+					{
+						return false;
+					}
+					if (!remove_owned_stage_tree_entry(
+						absolute, true, expected_identity))
+					{
+						return false;
+					}
+					(void)close_windows_file_handles(ancestor_pins);
+					return true;
 				}
 				catch (...)
 				{
@@ -1291,6 +1604,7 @@ namespace AshEngine
 				}
 #else
 				(void)stage_root;
+				(void)expected_identity;
 				return false;
 #endif
 			}
@@ -1500,7 +1814,19 @@ namespace AshEngine
 				std::wstring target_native{};
 				std::wstring stage_native{};
 				std::wstring backup_native{};
+				VegetationFileIdentity backup_expected_identity{};
+				WindowsFileHandle target_identity_pin{};
 				bool backup_recovery_protected = false;
+				bool stage_publish_pinned = false;
+				auto release_backup_reservation = [&]() noexcept
+				{
+					if (backup_recovery_protected &&
+						cleanup_registry.ReleaseRecoveryStageFile(backup))
+					{
+						backup_recovery_protected = false;
+						(void)cleanup_registry.CleanupStageFile(backup, *this);
+					}
+				};
 				try
 				{
 					if (!normalized_absolute_path(stage, true, stage_absolute) ||
@@ -1528,6 +1854,33 @@ namespace AshEngine
 						return make_result(VegetationAtomicReplaceStatus::TargetPreserved,
 							std::move(parent_error));
 					}
+					target_native = extended_path(target_absolute);
+					stage_native = extended_path(stage_absolute);
+					target_identity_pin = WindowsFileHandle(CreateFileW(
+						target_native.c_str(), FILE_READ_ATTRIBUTES,
+						FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+						nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+					DWORD target_attributes = INVALID_FILE_ATTRIBUTES;
+					if (target_identity_pin.get() == INVALID_HANDLE_VALUE ||
+						!query_file_identity(
+							target_identity_pin.get(), backup_expected_identity,
+							&target_attributes) ||
+						!handle_matches_absolute_path(
+							target_identity_pin.get(), target_absolute) ||
+						(target_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+						(target_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+					{
+						return make_result(
+							VegetationAtomicReplaceStatus::TargetPreserved,
+							"Vegetation atomic replace could not pin the target identity.");
+					}
+					if (!cleanup_registry.BeginStageFilePublish(
+						stage_absolute, target_absolute))
+					{
+						return make_result(VegetationAtomicReplaceStatus::TargetPreserved,
+							"Vegetation atomic replace could not pin the owned stage for publication.");
+					}
+					stage_publish_pinned = true;
 
 					for (size_t attempt = 0; attempt < 128; ++attempt)
 					{
@@ -1539,7 +1892,9 @@ namespace AshEngine
 							backup.clear();
 							continue;
 						}
-						if (cleanup_registry.RetainStageFileForRecovery(backup))
+						if (cleanup_registry.RetainStageFileForAtomicReplaceRecovery(
+							backup, stage_absolute, target_absolute,
+							backup_expected_identity))
 						{
 							backup_recovery_protected = true;
 							break;
@@ -1548,29 +1903,37 @@ namespace AshEngine
 					}
 					if (backup.empty())
 					{
+						const bool stage_resolved = cleanup_registry.ResolveStageFilePublish(
+							stage_absolute,
+							VegetationStageFilePublishResolution::TargetPreserved);
+						stage_publish_pinned = !stage_resolved;
+						if (!stage_resolved)
+						{
+							return make_result(VegetationAtomicReplaceStatus::RecoveryRequired,
+								"Vegetation atomic replace could not resolve its pinned stage after backup reservation failed.",
+								stage_absolute);
+						}
 						return make_result(VegetationAtomicReplaceStatus::TargetPreserved,
 							"Vegetation atomic replace backup reservation failed.");
 					}
-					target_native = extended_path(target_absolute);
-					stage_native = extended_path(stage_absolute);
 					backup_native = extended_path(backup);
-					if (!cleanup_registry.BeginStageFilePublish(stage_absolute))
-					{
-						if (cleanup_registry.ReleaseRecoveryStageFile(backup))
-						{
-							backup_recovery_protected = false;
-							(void)cleanup_registry.CleanupStageFile(backup, *this);
-						}
-						return make_result(VegetationAtomicReplaceStatus::TargetPreserved,
-							"Vegetation atomic replace could not pin the owned stage for publication.");
-					}
 				}
 				catch (...)
 				{
-					if (backup_recovery_protected &&
-						cleanup_registry.ReleaseRecoveryStageFile(backup))
+					bool stage_resolved = true;
+					if (stage_publish_pinned)
 					{
-						(void)cleanup_registry.CleanupStageFile(backup, *this);
+						stage_resolved = cleanup_registry.ResolveStageFilePublish(
+							stage_absolute,
+							VegetationStageFilePublishResolution::TargetPreserved);
+						stage_publish_pinned = !stage_resolved;
+					}
+					release_backup_reservation();
+					if (!stage_resolved)
+					{
+						return make_result(VegetationAtomicReplaceStatus::RecoveryRequired,
+							"Vegetation atomic replace failed before publication and could not resolve its pinned stage.",
+							stage_absolute);
 					}
 					return make_result(VegetationAtomicReplaceStatus::TargetPreserved,
 						"Vegetation atomic replace failed unexpectedly before publication.");
@@ -1616,11 +1979,15 @@ namespace AshEngine
 							backup_recovery_protected = false;
 							(void)cleanup_registry.ForgetConsumedStageFile(backup);
 						}
+						if (!stage_preserved)
+						{
+							return make_result(VegetationAtomicReplaceStatus::RecoveryRequired,
+								"Vegetation atomic replace restored the target but retained its pinned stage.",
+								stage_absolute);
+						}
 						return make_result(VegetationAtomicReplaceStatus::TargetPreserved,
-							stage_preserved ?
-								win32_error("Vegetation atomic replace failed and restored the target",
-									replace_error) :
-								"Vegetation atomic replace restored the target but stage state is invalid.");
+							win32_error("Vegetation atomic replace failed and restored the target",
+								replace_error));
 					}
 					(void)cleanup_registry.ResolveStageFilePublish(
 						stage_absolute, VegetationStageFilePublishResolution::TargetPreserved);
@@ -1755,8 +2122,23 @@ namespace AshEngine
 
 		struct StageFileEntry
 		{
+			struct AtomicReplaceProvenance
+			{
+				std::filesystem::path source_stage{};
+				std::filesystem::path target{};
+			};
+
 			std::filesystem::path path{};
+			VegetationFileIdentity expected_identity{};
 			StageFileState state = StageFileState::Owned;
+			std::optional<AtomicReplaceProvenance> atomic_replace_provenance{};
+		};
+
+		struct StageTreeEntry
+		{
+			std::filesystem::path path{};
+			VegetationFileIdentity expected_identity{};
+			bool in_cleanup = false;
 		};
 
 		StageFileEntry* FindStageFile(const std::filesystem::path& path) noexcept
@@ -1795,10 +2177,45 @@ namespace AshEngine
 			return true;
 		}
 
+		StageTreeEntry* FindStageTree(const std::filesystem::path& path) noexcept
+		{
+			const auto found = std::find_if(stage_trees.begin(), stage_trees.end(),
+				[&](const StageTreeEntry& entry)
+				{
+					return same_path_identity(entry.path, path);
+				});
+			return found == stage_trees.end() ? nullptr : &*found;
+		}
+
+		const StageTreeEntry* FindStageTree(
+			const std::filesystem::path& path) const noexcept
+		{
+			const auto found = std::find_if(stage_trees.begin(), stage_trees.end(),
+				[&](const StageTreeEntry& entry)
+				{
+					return same_path_identity(entry.path, path);
+				});
+			return found == stage_trees.end() ? nullptr : &*found;
+		}
+
+		bool EraseStageTree(const std::filesystem::path& path)
+		{
+			const auto found = std::find_if(stage_trees.begin(), stage_trees.end(),
+				[&](const StageTreeEntry& entry)
+				{
+					return same_path_identity(entry.path, path);
+				});
+			if (found == stage_trees.end())
+			{
+				return false;
+			}
+			stage_trees.erase(found);
+			return true;
+		}
+
 		mutable std::mutex mutex{};
 		std::vector<StageFileEntry> stage_files{};
-		std::vector<std::filesystem::path> stage_trees{};
-		std::vector<std::filesystem::path> stage_trees_in_cleanup{};
+		std::vector<StageTreeEntry> stage_trees{};
 	};
 
 	VegetationOwnedStageCleanupRegistry::VegetationOwnedStageCleanupRegistry()
@@ -1809,10 +2226,12 @@ namespace AshEngine
 	VegetationOwnedStageCleanupRegistry::~VegetationOwnedStageCleanupRegistry() = default;
 
 	bool VegetationOwnedStageCleanupRegistry::TrackStageFile(
-		std::filesystem::path owned_stage_file)
+		std::filesystem::path owned_stage_file,
+		const VegetationFileIdentity expected_identity)
 	{
 		if (owned_stage_file.empty() || !owned_stage_file.is_absolute() ||
-			owned_stage_file.lexically_normal() != owned_stage_file)
+			owned_stage_file.lexically_normal() != owned_stage_file ||
+			!expected_identity.available)
 		{
 			return false;
 		}
@@ -1820,21 +2239,22 @@ namespace AshEngine
 		{
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
 			if (m_impl->FindStageFile(owned_stage_file) != nullptr ||
-				contains_exact_path(m_impl->stage_trees, owned_stage_file))
+				m_impl->FindStageTree(owned_stage_file) != nullptr)
 			{
 				return false;
 			}
 			if (std::any_of(
 				m_impl->stage_trees.begin(), m_impl->stage_trees.end(),
-				[&](const std::filesystem::path& tree)
+				[&](const Impl::StageTreeEntry& tree)
 				{
-					return is_strict_lexical_descendant(owned_stage_file, tree);
+					return is_strict_lexical_descendant(owned_stage_file, tree.path);
 				}))
 			{
 				return false;
 			}
 			m_impl->stage_files.push_back(
-				{ std::move(owned_stage_file), Impl::StageFileState::Owned });
+				{ std::move(owned_stage_file), expected_identity,
+					Impl::StageFileState::Owned });
 			return true;
 		}
 		catch (...)
@@ -1844,17 +2264,19 @@ namespace AshEngine
 	}
 
 	bool VegetationOwnedStageCleanupRegistry::TrackStageTree(
-		std::filesystem::path owned_stage_root)
+		std::filesystem::path owned_stage_root,
+		const VegetationFileIdentity expected_identity)
 	{
 		if (owned_stage_root.empty() || !owned_stage_root.is_absolute() ||
-			owned_stage_root.lexically_normal() != owned_stage_root)
+			owned_stage_root.lexically_normal() != owned_stage_root ||
+			!expected_identity.available)
 		{
 			return false;
 		}
 		try
 		{
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
-			if (contains_exact_path(m_impl->stage_trees, owned_stage_root) ||
+			if (m_impl->FindStageTree(owned_stage_root) != nullptr ||
 				m_impl->FindStageFile(owned_stage_root) != nullptr)
 			{
 				return false;
@@ -1867,15 +2289,17 @@ namespace AshEngine
 				}) ||
 				std::any_of(
 					m_impl->stage_trees.begin(), m_impl->stage_trees.end(),
-					[&](const std::filesystem::path& tree)
+					[&](const Impl::StageTreeEntry& tree)
 					{
-						return is_strict_lexical_descendant(tree, owned_stage_root) ||
-							is_strict_lexical_descendant(owned_stage_root, tree);
+						return is_strict_lexical_descendant(
+							tree.path, owned_stage_root) ||
+							is_strict_lexical_descendant(owned_stage_root, tree.path);
 					}))
 			{
 				return false;
 			}
-			m_impl->stage_trees.push_back(std::move(owned_stage_root));
+			m_impl->stage_trees.push_back(
+				{ std::move(owned_stage_root), expected_identity, false });
 			return true;
 		}
 		catch (...)
@@ -1890,6 +2314,7 @@ namespace AshEngine
 	{
 		try
 		{
+			VegetationFileIdentity expected_identity{};
 			{
 				std::lock_guard<std::mutex> lock(m_impl->mutex);
 				Impl::StageFileEntry* entry = m_impl->FindStageFile(owned_stage_file);
@@ -1898,11 +2323,13 @@ namespace AshEngine
 					return false;
 				}
 				entry->state = Impl::StageFileState::InCleanup;
+				expected_identity = entry->expected_identity;
 			}
 			bool removed = false;
 			try
 			{
-				removed = file_ops.RemoveOwnedStageFile(owned_stage_file);
+				removed = file_ops.RemoveOwnedStageFile(
+					owned_stage_file, expected_identity);
 			}
 			catch (...)
 			{
@@ -1933,31 +2360,39 @@ namespace AshEngine
 	{
 		try
 		{
+			VegetationFileIdentity expected_identity{};
 			{
 				std::lock_guard<std::mutex> lock(m_impl->mutex);
-				if (!contains_exact_path(m_impl->stage_trees, owned_stage_root) ||
-					contains_exact_path(m_impl->stage_trees_in_cleanup, owned_stage_root))
+				Impl::StageTreeEntry* entry = m_impl->FindStageTree(owned_stage_root);
+				if (entry == nullptr || entry->in_cleanup)
 				{
 					return false;
 				}
-				m_impl->stage_trees_in_cleanup.push_back(owned_stage_root);
+				entry->in_cleanup = true;
+				expected_identity = entry->expected_identity;
 			}
 			bool removed = false;
 			try
 			{
-				removed = file_ops.RemoveOwnedStageTree(owned_stage_root);
+				removed = file_ops.RemoveOwnedStageTree(
+					owned_stage_root, expected_identity);
 			}
 			catch (...)
 			{
 				removed = false;
 			}
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
-			erase_exact_path(m_impl->stage_trees_in_cleanup, owned_stage_root);
+			Impl::StageTreeEntry* entry = m_impl->FindStageTree(owned_stage_root);
+			if (entry == nullptr || !entry->in_cleanup)
+			{
+				return false;
+			}
+			entry->in_cleanup = false;
 			if (!removed)
 			{
 				return false;
 			}
-			return erase_exact_path(m_impl->stage_trees, owned_stage_root);
+			return m_impl->EraseStageTree(owned_stage_root);
 		}
 		catch (...)
 		{
@@ -1985,7 +2420,7 @@ namespace AshEngine
 		try
 		{
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
-			return contains_exact_path(m_impl->stage_trees, owned_stage_root);
+			return m_impl->FindStageTree(owned_stage_root) != nullptr;
 		}
 		catch (...)
 		{
@@ -1994,16 +2429,30 @@ namespace AshEngine
 	}
 
 	bool VegetationOwnedStageCleanupRegistry::BeginStageFilePublish(
-		const std::filesystem::path& owned_stage_file) noexcept
+		const std::filesystem::path& owned_stage_file,
+		const std::filesystem::path& target) noexcept
 	{
 		try
 		{
+			if (owned_stage_file.empty() || !owned_stage_file.is_absolute() ||
+				owned_stage_file.lexically_normal() != owned_stage_file ||
+				target.empty() || !target.is_absolute() ||
+				target.lexically_normal() != target ||
+				same_path_identity(owned_stage_file, target) ||
+				!same_path_identity(
+					owned_stage_file.parent_path(), target.parent_path()))
+			{
+				return false;
+			}
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
 			Impl::StageFileEntry* entry = m_impl->FindStageFile(owned_stage_file);
 			if (entry == nullptr || entry->state != Impl::StageFileState::Owned)
 			{
 				return false;
 			}
+			entry->atomic_replace_provenance.emplace(
+				Impl::StageFileEntry::AtomicReplaceProvenance{
+					entry->path, target });
 			entry->state = Impl::StageFileState::Publishing;
 			return true;
 		}
@@ -2029,6 +2478,7 @@ namespace AshEngine
 			{
 			case VegetationStageFilePublishResolution::TargetPreserved:
 				entry->state = Impl::StageFileState::Owned;
+				entry->atomic_replace_provenance.reset();
 				return true;
 			case VegetationStageFilePublishResolution::Consumed:
 				return m_impl->EraseStageFile(owned_stage_file);
@@ -2056,11 +2506,12 @@ namespace AshEngine
 		try
 		{
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
-			if (contains_exact_path(m_impl->stage_trees, owned_stage_file) ||
+			if (m_impl->FindStageTree(owned_stage_file) != nullptr ||
 				std::any_of(m_impl->stage_trees.begin(), m_impl->stage_trees.end(),
-					[&](const std::filesystem::path& tree)
+					[&](const Impl::StageTreeEntry& tree)
 					{
-						return is_strict_lexical_descendant(owned_stage_file, tree);
+						return is_strict_lexical_descendant(
+							owned_stage_file, tree.path);
 					}))
 			{
 				return false;
@@ -2068,9 +2519,7 @@ namespace AshEngine
 			Impl::StageFileEntry* entry = m_impl->FindStageFile(owned_stage_file);
 			if (entry == nullptr)
 			{
-				m_impl->stage_files.push_back(
-					{ std::move(owned_stage_file), Impl::StageFileState::Recovery });
-				return true;
+				return false;
 			}
 			if (entry->state == Impl::StageFileState::InCleanup ||
 				entry->state == Impl::StageFileState::Publishing)
@@ -2078,6 +2527,68 @@ namespace AshEngine
 				return false;
 			}
 			entry->state = Impl::StageFileState::Recovery;
+			entry->atomic_replace_provenance.reset();
+			return true;
+		}
+		catch (...)
+		{
+			return false;
+		}
+	}
+
+	bool VegetationOwnedStageCleanupRegistry::RetainStageFileForAtomicReplaceRecovery(
+		std::filesystem::path recovery_stage_file,
+		const std::filesystem::path& source_stage_file,
+		const std::filesystem::path& target,
+		const VegetationFileIdentity expected_identity)
+	{
+		if (recovery_stage_file.empty() || !recovery_stage_file.is_absolute() ||
+			recovery_stage_file.lexically_normal() != recovery_stage_file ||
+			source_stage_file.empty() || !source_stage_file.is_absolute() ||
+			source_stage_file.lexically_normal() != source_stage_file ||
+			target.empty() || !target.is_absolute() ||
+			target.lexically_normal() != target ||
+			!expected_identity.available ||
+			same_path_identity(recovery_stage_file, source_stage_file) ||
+			same_path_identity(recovery_stage_file, target) ||
+			!same_path_identity(
+				recovery_stage_file.parent_path(), source_stage_file.parent_path()) ||
+			!same_path_identity(
+				recovery_stage_file.parent_path(), target.parent_path()) ||
+			!is_atomic_replace_backup_name(recovery_stage_file))
+		{
+			return false;
+		}
+		try
+		{
+			std::lock_guard<std::mutex> lock(m_impl->mutex);
+			Impl::StageFileEntry* source_entry =
+				m_impl->FindStageFile(source_stage_file);
+			if (source_entry == nullptr ||
+				source_entry->state != Impl::StageFileState::Publishing ||
+				!source_entry->atomic_replace_provenance.has_value() ||
+				!same_path_identity(
+					source_entry->atomic_replace_provenance->source_stage,
+					source_stage_file) ||
+				!same_path_identity(
+					source_entry->atomic_replace_provenance->target, target) ||
+				m_impl->FindStageFile(recovery_stage_file) != nullptr ||
+				m_impl->FindStageTree(recovery_stage_file) != nullptr ||
+				std::any_of(m_impl->stage_trees.begin(), m_impl->stage_trees.end(),
+					[&](const Impl::StageTreeEntry& tree)
+					{
+						return is_strict_lexical_descendant(
+							recovery_stage_file, tree.path);
+					}))
+			{
+				return false;
+			}
+
+			const Impl::StageFileEntry::AtomicReplaceProvenance provenance =
+				*source_entry->atomic_replace_provenance;
+			m_impl->stage_files.push_back({
+				std::move(recovery_stage_file), expected_identity,
+				Impl::StageFileState::Recovery, provenance });
 			return true;
 		}
 		catch (...)
@@ -2087,10 +2598,12 @@ namespace AshEngine
 	}
 
 	bool VegetationOwnedStageCleanupRegistry::TrackNewRecoveryStageFile(
-		std::filesystem::path owned_stage_file)
+		std::filesystem::path owned_stage_file,
+		const VegetationFileIdentity expected_identity)
 	{
 		if (owned_stage_file.empty() || !owned_stage_file.is_absolute() ||
-			owned_stage_file.lexically_normal() != owned_stage_file)
+			owned_stage_file.lexically_normal() != owned_stage_file ||
+			!expected_identity.available)
 		{
 			return false;
 		}
@@ -2098,17 +2611,19 @@ namespace AshEngine
 		{
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
 			if (m_impl->FindStageFile(owned_stage_file) != nullptr ||
-				contains_exact_path(m_impl->stage_trees, owned_stage_file) ||
+				m_impl->FindStageTree(owned_stage_file) != nullptr ||
 				std::any_of(m_impl->stage_trees.begin(), m_impl->stage_trees.end(),
-					[&](const std::filesystem::path& tree)
+					[&](const Impl::StageTreeEntry& tree)
 					{
-						return is_strict_lexical_descendant(owned_stage_file, tree);
+						return is_strict_lexical_descendant(
+							owned_stage_file, tree.path);
 					}))
 			{
 				return false;
 			}
 			m_impl->stage_files.push_back(
-				{ std::move(owned_stage_file), Impl::StageFileState::Recovery });
+				{ std::move(owned_stage_file), expected_identity,
+					Impl::StageFileState::Recovery });
 			return true;
 		}
 		catch (...)
@@ -2136,7 +2651,47 @@ namespace AshEngine
 				return false;
 			}
 			entry->state = Impl::StageFileState::Owned;
+			entry->atomic_replace_provenance.reset();
 			return true;
+		}
+		catch (...)
+		{
+			return false;
+		}
+	}
+
+	bool VegetationOwnedStageCleanupRegistry::IsAtomicReplaceRecoveryStageFile(
+		const std::filesystem::path& recovery_stage_file,
+		const std::filesystem::path& source_stage_file,
+		const std::filesystem::path& target,
+		const VegetationFileIdentity& inspected_recovery_identity) const noexcept
+	{
+		try
+		{
+			if (recovery_stage_file.empty() || !recovery_stage_file.is_absolute() ||
+				recovery_stage_file.lexically_normal() != recovery_stage_file ||
+				source_stage_file.empty() || !source_stage_file.is_absolute() ||
+				source_stage_file.lexically_normal() != source_stage_file ||
+				target.empty() || !target.is_absolute() ||
+				target.lexically_normal() != target ||
+				!inspected_recovery_identity.available)
+			{
+				return false;
+			}
+			std::lock_guard<std::mutex> lock(m_impl->mutex);
+			const Impl::StageFileEntry* entry =
+				m_impl->FindStageFile(recovery_stage_file);
+			return entry != nullptr &&
+				(entry->state == Impl::StageFileState::Recovery ||
+					entry->state == Impl::StageFileState::Publishing) &&
+				entry->atomic_replace_provenance.has_value() &&
+				same_path_identity(
+					entry->atomic_replace_provenance->source_stage,
+					source_stage_file) &&
+				same_path_identity(
+					entry->atomic_replace_provenance->target, target) &&
+				same_available_file_identity(
+					entry->expected_identity, inspected_recovery_identity);
 		}
 		catch (...)
 		{
@@ -2182,6 +2737,40 @@ namespace AshEngine
 				return true;
 			}
 			if (entry->state != Impl::StageFileState::Owned)
+			{
+				return false;
+			}
+			return m_impl->EraseStageFile(owned_stage_file);
+		}
+		catch (...)
+		{
+			return false;
+		}
+	}
+
+	bool VegetationOwnedStageCleanupRegistry::
+		AbandonStageFileOwnershipAfterIdentityDrift(
+			const std::filesystem::path& owned_stage_file,
+			const VegetationFileIdentity& expected_identity) noexcept
+	{
+		try
+		{
+			if (owned_stage_file.empty() || !owned_stage_file.is_absolute() ||
+				owned_stage_file.lexically_normal() != owned_stage_file ||
+				!expected_identity.available)
+			{
+				return false;
+			}
+			std::lock_guard<std::mutex> lock(m_impl->mutex);
+			Impl::StageFileEntry* entry = m_impl->FindStageFile(owned_stage_file);
+			if (entry == nullptr)
+			{
+				return true;
+			}
+			if (entry->state == Impl::StageFileState::InCleanup ||
+				entry->state == Impl::StageFileState::Publishing ||
+				!same_available_file_identity(
+					entry->expected_identity, expected_identity))
 			{
 				return false;
 			}
@@ -2242,9 +2831,10 @@ namespace AshEngine
 		try
 		{
 			std::lock_guard<std::mutex> lock(m_impl->mutex);
-			if (!contains_exact_path(m_impl->stage_trees_in_cleanup, owned_stage_root))
+			Impl::StageTreeEntry* entry = m_impl->FindStageTree(owned_stage_root);
+			if (entry != nullptr && !entry->in_cleanup)
 			{
-				erase_exact_path(m_impl->stage_trees, owned_stage_root);
+				(void)m_impl->EraseStageTree(owned_stage_root);
 			}
 			return true;
 		}
@@ -2272,11 +2862,11 @@ namespace AshEngine
 					stage_files.push_back(entry.path);
 				}
 			}
-			for (const std::filesystem::path& path : m_impl->stage_trees)
+			for (const Impl::StageTreeEntry& entry : m_impl->stage_trees)
 			{
-				if (!contains_exact_path(m_impl->stage_trees_in_cleanup, path))
+				if (!entry.in_cleanup)
 				{
-					stage_trees.push_back(path);
+					stage_trees.push_back(entry.path);
 				}
 			}
 		}
@@ -2306,7 +2896,11 @@ namespace AshEngine
 					result.retained_recovery_stage_files.push_back(entry.path);
 				}
 			}
-			result.retained_stage_trees = m_impl->stage_trees;
+			result.retained_stage_trees.reserve(m_impl->stage_trees.size());
+			for (const Impl::StageTreeEntry& entry : m_impl->stage_trees)
+			{
+				result.retained_stage_trees.push_back(entry.path);
+			}
 		}
 		result.all_removed = result.retained_stage_files.empty() &&
 			result.retained_stage_trees.empty();

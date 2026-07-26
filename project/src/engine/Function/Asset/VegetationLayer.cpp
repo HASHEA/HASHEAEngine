@@ -1141,6 +1141,7 @@ namespace AshEngine
 		const VegetationLayerMutationAccess access)
 		: m_snapshot(std::move(snapshot)), m_access(access)
 	{
+		m_dirty_evidence.base_generation = content_generation();
 		m_dirty_evidence.generation = content_generation();
 	}
 
@@ -1166,6 +1167,7 @@ namespace AshEngine
 			return false;
 		}
 		m_dirty_evidence = {};
+		m_dirty_evidence.base_generation = captured_generation;
 		m_dirty_evidence.generation = captured_generation;
 		return true;
 	}

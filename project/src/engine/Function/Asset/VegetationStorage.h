@@ -113,6 +113,7 @@ namespace AshEngine
 			std::filesystem::path resolved_absolute_path{};
 			std::string canonical_identity{};
 			std::filesystem::path stage_path{};
+			VegetationFileIdentity stage_file_identity{};
 			std::optional<VegetationFileRevision> expected_revision{};
 			VegetationFileRevision staged_revision{};
 			uint64_t operation_serial = 0;

@@ -91,8 +91,11 @@ namespace AshEngine
 
 	struct VegetationStageTreeResult
 	{
+		// Succeeded carries one root and the identity captured from the stable
+		// creation handle. Every non-success status clears both payloads.
 		VegetationFileResultStatus status = VegetationFileResultStatus::Failed;
 		std::filesystem::path owned_stage_root{};
+		VegetationFileIdentity file_identity{};
 		std::string error{};
 	};
 
@@ -199,8 +202,12 @@ namespace AshEngine
 		virtual VegetationStageFileResult CreateOwnedStageFile(
 			const std::filesystem::path& owned_stage_root,
 			const std::filesystem::path& relative_path) = 0;
-		virtual bool RemoveOwnedStageFile(const std::filesystem::path& stage_file) = 0;
-		virtual bool RemoveOwnedStageTree(const std::filesystem::path& stage_root) = 0;
+		virtual bool RemoveOwnedStageFile(
+			const std::filesystem::path& stage_file,
+			const VegetationFileIdentity& expected_identity) = 0;
+		virtual bool RemoveOwnedStageTree(
+			const std::filesystem::path& stage_root,
+			const VegetationFileIdentity& expected_identity) = 0;
 	};
 
 	class ASH_API IVegetationImmutablePublishFileOps :
@@ -259,8 +266,12 @@ namespace AshEngine
 		VegetationOwnedStageCleanupRegistry& operator=(
 			const VegetationOwnedStageCleanupRegistry&) = delete;
 
-		ASH_API bool TrackStageFile(std::filesystem::path owned_stage_file);
-		ASH_API bool TrackStageTree(std::filesystem::path owned_stage_root);
+		ASH_API bool TrackStageFile(
+			std::filesystem::path owned_stage_file,
+			VegetationFileIdentity expected_identity);
+		ASH_API bool TrackStageTree(
+			std::filesystem::path owned_stage_root,
+			VegetationFileIdentity expected_identity);
 		ASH_API bool CleanupStageFile(
 			const std::filesystem::path& owned_stage_file,
 			IVegetationStageFileOps& file_ops);
@@ -273,9 +284,11 @@ namespace AshEngine
 			const std::filesystem::path& owned_stage_root) const noexcept;
 		// Pins one exact, normally owned stage before a publication call. Cleanup
 		// cannot consume the path until ResolveStageFilePublish atomically records
-		// the publication outcome.
+		// the publication outcome. The source/target pair is retained as the
+		// provenance for any recovery artifact produced by that exact publication.
 		ASH_API bool BeginStageFilePublish(
-			const std::filesystem::path& owned_stage_file) noexcept;
+			const std::filesystem::path& owned_stage_file,
+			const std::filesystem::path& target) noexcept;
 		ASH_API bool ResolveStageFilePublish(
 			const std::filesystem::path& owned_stage_file,
 			VegetationStageFilePublishResolution resolution) noexcept;
@@ -289,18 +302,41 @@ namespace AshEngine
 		// Unlike RetainStageFileForRecovery, this is insert-only and cannot take over an
 		// exact path already owned by another operation.
 		ASH_API bool TrackNewRecoveryStageFile(
-			std::filesystem::path owned_stage_file);
+			std::filesystem::path owned_stage_file,
+			VegetationFileIdentity expected_identity);
 		ASH_API bool RetainStageFileForRecovery(
 			std::filesystem::path owned_stage_file);
+		// Reserves one legal sibling ReplaceFile backup for the currently pinned
+		// source/target operation. This association is the only authority consumers
+		// may use to accept an AtomicReplace recovery result. The recovery query also
+		// requires the native identity from the consumer's stable inspection to match
+		// the identity captured when this reservation was created.
+		ASH_API bool RetainStageFileForAtomicReplaceRecovery(
+			std::filesystem::path recovery_stage_file,
+			const std::filesystem::path& source_stage_file,
+			const std::filesystem::path& target,
+			VegetationFileIdentity expected_identity);
 		ASH_API bool ReleaseRecoveryStageFile(
 			const std::filesystem::path& owned_stage_file);
 		ASH_API bool IsRecoveryStageFile(
 			const std::filesystem::path& owned_stage_file) const noexcept;
+		ASH_API bool IsAtomicReplaceRecoveryStageFile(
+			const std::filesystem::path& recovery_stage_file,
+			const std::filesystem::path& source_stage_file,
+			const std::filesystem::path& target,
+			const VegetationFileIdentity& inspected_recovery_identity) const noexcept;
 		// Publish already consumed the filesystem object. Forget is deliberately
 		// idempotent so a concurrent exact cleanup cannot turn a committed publish
 		// into a reported failure merely because the registry entry is already gone.
 		ASH_API bool ForgetConsumedStageFile(
 			const std::filesystem::path& owned_stage_file);
+		// A consumer that has independently proved an exact path is missing or now
+		// names a different native object must drop cleanup authority without
+		// deleting by path. The captured identity prevents another operation from
+		// abandoning an unrelated registry entry.
+		ASH_API bool AbandonStageFileOwnershipAfterIdentityDrift(
+			const std::filesystem::path& owned_stage_file,
+			const VegetationFileIdentity& expected_identity) noexcept;
 		// A synchronous publish may consume the filesystem object before its registry
 		// terminal transition is confirmed. This reconciliation first proves the exact
 		// path is absent through FileOps, then may erase an Owned/Publishing entry. It
