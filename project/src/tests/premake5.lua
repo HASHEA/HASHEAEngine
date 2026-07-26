@@ -54,6 +54,8 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Core/EntityCommands.cpp",
 		"%{wks.location}/project/src/editor/Services/AssetDatabaseService.cpp",
 		"%{wks.location}/project/src/editor/Services/UndoRedoService.cpp",
+		"%{wks.location}/project/src/editor/Services/VegetationEditorTaskExecutor.cpp",
+		"%{wks.location}/project/src/editor/Services/VegetationEditorService.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxFreeCameraController.cpp",
 		"%{wks.location}/project/src/sandbox/App/SandboxStandardScene.cpp",
 	}

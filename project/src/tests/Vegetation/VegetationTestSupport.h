@@ -6,6 +6,7 @@
 #include "Function/Asset/VegetationSpecies.h"
 #include "Function/Asset/VegetationSurface.h"
 #include "Function/Scene/VegetationSurfaceProvider.h"
+#include "Services/VegetationEditorTaskExecutor.h"
 
 #include <array>
 #include <atomic>
@@ -18,6 +19,8 @@
 #include <limits>
 #include <memory>
 #include <filesystem>
+#include <map>
+#include <mutex>
 #include <process.h>
 #include <sstream>
 #include <stdexcept>
@@ -683,5 +686,228 @@ namespace VegetationTest
 			}
 			return result;
 		}
+	};
+
+	class ManualVegetationEditorTaskExecutor final :
+		public AshEditor::IVegetationEditorTaskExecutor
+	{
+	public:
+		uint64_t Submit(AshEditor::VegetationEditorTaskSubmission submission) override
+		{
+			if (m_reject_next_submission)
+			{
+				m_reject_next_submission = false;
+				return 0;
+			}
+			if (!submission.work)
+			{
+				return 0;
+			}
+			const uint64_t task_id = m_next_task_id++;
+			Task task{};
+			task.submission = std::move(submission);
+			task.cancel_requested = std::make_shared<std::atomic_bool>(false);
+			m_tasks.emplace(task_id, std::move(task));
+			m_order.push_back(task_id);
+			return task_id;
+		}
+
+		void RequestCancel(const uint64_t task_id) override
+		{
+			auto found = m_tasks.find(task_id);
+			if (found != m_tasks.end())
+			{
+				found->second.cancel_requested->store(
+					true, std::memory_order_release);
+				Run(task_id, found->second);
+			}
+		}
+
+		bool IsComplete(const uint64_t task_id) const override
+		{
+			const auto found = m_tasks.find(task_id);
+			return found != m_tasks.end() && found->second.complete;
+		}
+
+		std::exception_ptr GetException(const uint64_t task_id) const override
+		{
+			const auto found = m_tasks.find(task_id);
+			return found == m_tasks.end()
+				? std::exception_ptr{}
+				: found->second.exception;
+		}
+
+		void Join(const uint64_t task_id) override
+		{
+			auto found = m_tasks.find(task_id);
+			if (found == m_tasks.end())
+			{
+				return;
+			}
+			if (!found->second.complete)
+			{
+				Run(task_id, found->second);
+			}
+			++m_joined_count;
+			m_tasks.erase(found);
+			for (auto ordered = m_order.begin(); ordered != m_order.end(); ++ordered)
+			{
+				if (*ordered == task_id)
+				{
+					m_order.erase(ordered);
+					break;
+				}
+			}
+		}
+
+		void CancelAndJoinAll() override
+		{
+			std::vector<uint64_t> task_ids{};
+			task_ids.reserve(m_tasks.size());
+			for (auto& task : m_tasks)
+			{
+				task.second.cancel_requested->store(
+					true, std::memory_order_release);
+				task_ids.push_back(task.first);
+			}
+			for (const uint64_t task_id : task_ids)
+			{
+				Join(task_id);
+			}
+		}
+
+		bool IsIdle() const override
+		{
+			for (const auto& task : m_tasks)
+			{
+				if (!task.second.complete)
+				{
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool RunNext()
+		{
+			for (const uint64_t task_id : m_order)
+			{
+				auto found = m_tasks.find(task_id);
+				if (found != m_tasks.end() && !found->second.complete)
+				{
+					Run(task_id, found->second);
+					return true;
+				}
+			}
+			return false;
+		}
+
+		void RunAll()
+		{
+			while (RunNext())
+			{
+			}
+		}
+
+		size_t PendingCount() const
+		{
+			size_t count = 0;
+			for (const auto& task : m_tasks)
+			{
+				if (!task.second.complete)
+				{
+					++count;
+				}
+			}
+			return count;
+		}
+
+		size_t JoinedCount() const
+		{
+			return m_joined_count;
+		}
+
+		size_t TaskRecordCount() const
+		{
+			return m_tasks.size();
+		}
+
+		size_t ScheduledOrderCount() const
+		{
+			return m_order.size();
+		}
+
+		uint64_t LastSubmittedTaskId() const
+		{
+			return m_order.empty() ? 0 : m_order.back();
+		}
+
+		void RejectNextSubmission()
+		{
+			m_reject_next_submission = true;
+		}
+
+		bool OverrideDeadline(
+			const uint64_t task_id,
+			const std::chrono::steady_clock::time_point deadline)
+		{
+			const auto found = m_tasks.find(task_id);
+			if (found == m_tasks.end() || found->second.complete)
+			{
+				return false;
+			}
+			found->second.submission.deadline = deadline;
+			return true;
+		}
+
+		std::shared_ptr<std::atomic_bool> CancellationState(
+			const uint64_t task_id) const
+		{
+			const auto found = m_tasks.find(task_id);
+			return found == m_tasks.end()
+				? std::shared_ptr<std::atomic_bool>{}
+				: found->second.cancel_requested;
+		}
+
+	private:
+		struct Task
+		{
+			AshEditor::VegetationEditorTaskSubmission submission{};
+			std::shared_ptr<std::atomic_bool> cancel_requested{};
+			std::exception_ptr exception{};
+			bool complete = false;
+		};
+
+		static void Run(const uint64_t task_id, Task& task)
+		{
+			(void)task_id;
+			if (task.complete)
+			{
+				return;
+			}
+			if (task.cancel_requested->load(std::memory_order_acquire))
+			{
+				task.complete = true;
+				return;
+			}
+			AshEngine::VegetationOperationControl control{};
+			control.cancel_requested = task.cancel_requested;
+			control.deadline = task.submission.deadline;
+			try
+			{
+				task.submission.work(std::move(control));
+			}
+			catch (...)
+			{
+				task.exception = std::current_exception();
+			}
+			task.complete = true;
+		}
+
+		uint64_t m_next_task_id = 1;
+		std::map<uint64_t, Task> m_tasks{};
+		std::vector<uint64_t> m_order{};
+		size_t m_joined_count = 0;
+		bool m_reject_next_submission = false;
 	};
 }
