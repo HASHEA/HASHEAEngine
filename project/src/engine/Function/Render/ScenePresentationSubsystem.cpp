@@ -782,6 +782,8 @@ namespace AshEngine
 			packet.sort_order = binding.sort_order;
 			packet.visible_frame = std::make_shared<VisibleRenderFrame>();
 			packet.visible_frame->frame_index = Application::get() ? Application::get()->get_frame_index() : 0;
+			packet.visible_frame->render_asset_epoch =
+				m_impl->render_asset_manager->query_readiness().activity_epoch;
 			packet.scene_packet_expected = binding.scene != nullptr;
 
 			const auto output_found = outputs.find(binding.output.value);
@@ -965,6 +967,9 @@ namespace AshEngine
 				scene_view_valid = Impl::build_binding_scene_view(binding, output_width, output_height, scene_view);
 				if (scene_view_valid && scene_state->render_scene_valid)
 				{
+					const uint64_t visible_frame_asset_epoch =
+						m_impl->render_asset_manager->query_readiness().
+							activity_epoch;
 					VisibleRenderFrame visible_frame{};
 					if (scene_state->render_scene.build_visible_render_frame(
 						packet.visible_frame->frame_index,
@@ -976,6 +981,7 @@ namespace AshEngine
 					{
 						visible_frame.scene_runtime_id = scene_state->runtime_id;
 						visible_frame.scene_content_epoch = binding.scene->get_content_epoch();
+						visible_frame.render_asset_epoch = visible_frame_asset_epoch;
 						packet.visible_frame = std::make_shared<VisibleRenderFrame>(std::move(visible_frame));
 					}
 					else
@@ -993,16 +999,6 @@ namespace AshEngine
 				packet.visible_frame->frame_index = Application::get() ? Application::get()->get_frame_index() : 0;
 			}
 			prepared_packets.push_back(std::move(packet));
-		}
-
-		const uint64_t prepared_asset_epoch =
-			m_impl->render_asset_manager->query_readiness().activity_epoch;
-		for (Impl::PreparedPacket& packet : prepared_packets)
-		{
-			if (packet.visible_frame)
-			{
-				packet.visible_frame->render_asset_epoch = prepared_asset_epoch;
-			}
 		}
 
 		{

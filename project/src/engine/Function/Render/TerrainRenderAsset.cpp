@@ -81,6 +81,32 @@ namespace AshEngine
 			}
 		}
 
+		auto describe_terrain_failure(
+			const std::string& asset_path,
+			bool published_view_retained,
+			const char* failure_scope,
+			const char* stage,
+			const TerrainGridLayout& layout,
+			const std::string& reason) -> std::string
+		{
+			if (asset_path.empty())
+			{
+				return reason;
+			}
+			return std::string(failure_scope) + "; " +
+				(published_view_retained ? "published view retained" :
+					"no published view available") +
+				"; asset_path=" + asset_path +
+				"; stage=" + stage +
+				"; samples=" + std::to_string(layout.sample_count_x) + "x" +
+					std::to_string(layout.sample_count_z) +
+				"; components=" + std::to_string(layout.component_count_x) + "x" +
+					std::to_string(layout.component_count_z) +
+				"; quads=" + std::to_string(layout.component_quad_count) +
+				"; spacing=" + format_spacing(layout.sample_spacing_meters) +
+				"; reason=" + reason;
+		}
+
 		auto checked_multiply_u64(
 			uint64_t lhs,
 			uint64_t rhs,
@@ -726,19 +752,13 @@ namespace AshEngine
 			m_candidate_state->stage;
 		const TerrainGridLayout layout = m_candidate_state->snapshot ?
 			m_candidate_state->snapshot->layout : TerrainGridLayout{};
-		const std::string detail =
-			std::string("Terrain candidate failed; ") +
-			(m_published_view ? "published view retained" :
-				"no published view available") +
-			"; asset_path=" + m_asset_path +
-			"; stage=" + terrain_candidate_stage_name(failed_stage) +
-			"; samples=" + std::to_string(layout.sample_count_x) + "x" +
-				std::to_string(layout.sample_count_z) +
-			"; components=" + std::to_string(layout.component_count_x) + "x" +
-				std::to_string(layout.component_count_z) +
-			"; quads=" + std::to_string(layout.component_quad_count) +
-			"; spacing=" + format_spacing(layout.sample_spacing_meters) +
-			"; reason=" + error;
+		const std::string detail = describe_terrain_failure(
+			m_asset_path,
+			m_published_view != nullptr,
+			"Terrain candidate failed",
+			terrain_candidate_stage_name(failed_stage),
+			layout,
+			error);
 		m_candidate_state->stage = TerrainRenderCandidateStage::Failed;
 		m_candidate_state->work_status = TerrainRenderWorkStatus::Failed;
 		m_candidate_state->error = detail;
@@ -765,7 +785,18 @@ namespace AshEngine
 				runtime->target_snapshot->residency_revision);
 			runtime->work_status = TerrainRenderWorkStatus::Failed;
 		}
-		m_last_error = error;
+		const TerrainGridLayout layout =
+			runtime && runtime->target_snapshot ?
+				runtime->target_snapshot->layout :
+				(m_published_view && m_published_view->snapshot ?
+					m_published_view->snapshot->layout : TerrainGridLayout{});
+		m_last_error = describe_terrain_failure(
+			m_asset_path,
+			m_published_view != nullptr,
+			"Terrain incremental update failed",
+			"IncrementalUpdate",
+			layout,
+			error);
 	}
 
 	bool TerrainRenderAsset::accept_snapshot(
@@ -788,7 +819,14 @@ namespace AshEngine
 		}
 		if (!snapshot)
 		{
-			return fail_with_error(out_error, "terrain snapshot must not be null.");
+			const std::string detail = describe_terrain_failure(
+				m_asset_path,
+				m_published_view != nullptr,
+				"Terrain snapshot rejected",
+				"ValidateSnapshot",
+				TerrainGridLayout{},
+				"terrain snapshot must not be null.");
+			return fail_with_error(out_error, detail.c_str());
 		}
 
 		const auto latest = latest_admitted_snapshot_locked();
@@ -814,8 +852,14 @@ namespace AshEngine
 					snapshot->residency_revision > latest->residency_revision));
 		if (same_latest_asset && !newer_same_asset)
 		{
-			return fail_with_error(
-				out_error, "terrain snapshot content generation is stale.");
+			const std::string detail = describe_terrain_failure(
+				m_asset_path,
+				m_published_view != nullptr,
+				"Terrain snapshot rejected",
+				"ValidateSnapshot",
+				snapshot->layout,
+				"terrain snapshot content generation is stale.");
+			return fail_with_error(out_error, detail.c_str());
 		}
 
 		TerrainRenderLayoutInfo render_layout{};
@@ -839,7 +883,13 @@ namespace AshEngine
 
 		const auto reject = [&](std::string diagnostic) -> bool
 		{
-			m_last_error = std::move(diagnostic);
+			m_last_error = describe_terrain_failure(
+				m_asset_path,
+				m_published_view != nullptr,
+				"Terrain snapshot rejected",
+				"ValidateSnapshot",
+				snapshot->layout,
+				diagnostic);
 			if (incremental)
 			{
 				const auto runtime = current_incremental_runtime_locked();
@@ -999,13 +1049,13 @@ namespace AshEngine
 			}
 			catch (const std::bad_alloc&)
 			{
-				candidate->stage = TerrainRenderCandidateStage::Failed;
-				candidate->work_status = TerrainRenderWorkStatus::Failed;
-				candidate->error =
-					"failed to allocate Terrain candidate publication view.";
-				candidate->runtime.reset();
-				m_last_error = candidate->error;
+				const auto runtime = candidate->runtime;
+				const uint64_t candidate_epoch = candidate->candidate_epoch;
 				m_candidate_state = std::move(candidate);
+				fail_candidate_locked(
+					runtime,
+					candidate_epoch,
+					"failed to allocate Terrain candidate publication view.");
 				return fail_with_error(out_error, m_last_error.c_str());
 			}
 			candidate->prepared_view->snapshot = snapshot;
@@ -1400,7 +1450,7 @@ namespace AshEngine
 			{
 				fail_latest_work_locked(error);
 			}
-			return fail_with_error(out_error, error.c_str());
+			return fail_with_error(out_error, m_last_error.c_str());
 		};
 
 		if (!runtime.resources.height)
@@ -1600,7 +1650,13 @@ namespace AshEngine
 			const auto runtime = m_candidate_state->runtime;
 			if (!runtime)
 			{
-				return fail_with_error(out_error, "Terrain candidate runtime is missing.");
+				const uint64_t candidate_epoch =
+					m_candidate_state->candidate_epoch;
+				fail_candidate_locked(
+					runtime,
+					candidate_epoch,
+					"Terrain candidate runtime is missing.");
+				return fail_with_error(out_error, m_last_error.c_str());
 			}
 			m_candidate_state->stage = TerrainRenderCandidateStage::UploadHeights;
 			const bool complete = finalize_runtime_gpu_resources_locked(

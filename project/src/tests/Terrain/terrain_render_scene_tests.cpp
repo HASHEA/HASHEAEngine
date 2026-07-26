@@ -533,6 +533,60 @@ TEST_CASE("Terrain published view stale empty frame cannot report capture ready 
 	CHECK_FALSE(AshEngine::terrain_frame_asset_epoch_is_current(frame, 41u));
 }
 
+TEST_CASE("Terrain first load stays pending and invisible until its publication is ready")
+{
+	const std::filesystem::path root = MakeTestRoot("first-load-publication");
+	const std::filesystem::path relative_path = "terrain/FirstLoad.AshTerrain";
+	{
+		std::ofstream placeholder(root / relative_path, std::ios::binary);
+		REQUIRE(placeholder.is_open());
+		placeholder.put('\0');
+	}
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	const AshEngine::AssetInfo* info = database.find_asset_by_path(relative_path);
+	REQUIRE(info != nullptr);
+	const auto snapshot = MakeSceneSnapshot(
+		info->id, relative_path, 1u, MakeSceneLayout(1u, 1u), true);
+	REQUIRE(database.publish_terrain_snapshot(info->id, snapshot));
+
+	AshEngine::RenderAssetManager manager{};
+	manager.initialize(&database, nullptr);
+	AshEngine::Scene scene = AshEngine::Scene::create("First Load Terrain");
+	AshEngine::Entity entity = scene.create_entity("Terrain");
+	AshEngine::TerrainComponent terrain{};
+	terrain.asset_path = relative_path.generic_string();
+	REQUIRE(entity.add_terrain_component(terrain));
+	AshEngine::RenderScene render_scene{};
+
+	const AshEngine::TerrainSceneResolveResult pending =
+		render_scene.rebuild_terrains_from_scene(scene, manager);
+	CHECK(pending.status == AshEngine::TerrainSceneResolveStatus::Pending);
+	CHECK_FALSE(pending.drawable_published_view);
+	AshEngine::VisibleRenderFrame pending_frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		1u, MakeInclusiveView(), pending_frame));
+	CHECK(pending_frame.terrains.empty());
+
+	const auto render_asset = manager.request_terrain_asset(
+		relative_path.generic_string(), snapshot);
+	REQUIRE(render_asset != nullptr);
+	const auto published = AshEngine::TerrainRenderSceneTestSeam::
+		InstallPublishedView(*render_asset, snapshot, 1u);
+	const AshEngine::TerrainSceneResolveResult ready =
+		render_scene.rebuild_terrains_from_scene(scene, manager);
+	CHECK(ready.status == AshEngine::TerrainSceneResolveStatus::Ready);
+	AshEngine::VisibleRenderFrame ready_frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		2u, MakeInclusiveView(), ready_frame));
+	REQUIRE(ready_frame.terrains.size() == 1u);
+	CHECK(ready_frame.terrains.front().published_view == published);
+
+	manager.shutdown();
+	std::error_code error{};
+	std::filesystem::remove_all(root, error);
+}
+
 TEST_CASE("Terrain candidate error retains same path published view with exact stage and layout")
 {
 	const std::filesystem::path root = MakeTestRoot("candidate-error-retains");
@@ -600,6 +654,82 @@ TEST_CASE("Terrain candidate error retains same path published view with exact s
 		std::string::npos);
 	CHECK(failed.diagnostic.find("published view retained") !=
 		std::string::npos);
+	AshEngine::VisibleRenderFrame failed_frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		3u, MakeInclusiveView(), failed_frame));
+	REQUIRE(failed_frame.terrains.size() == 1u);
+	CHECK(failed_frame.terrains.front().published_view == old_view);
+
+	manager.shutdown();
+	std::error_code error{};
+	std::filesystem::remove_all(root, error);
+}
+
+TEST_CASE("Terrain same path async reload failure retains its published view")
+{
+	AshEngine::shutdown_threading();
+	AshEngine::EngineThreadingConfig threading_config{};
+	threading_config.worker_thread_count = 1u;
+	REQUIRE(AshEngine::initialize_threading(threading_config));
+	ThreadingScope threading_scope{};
+
+	const std::filesystem::path root = MakeTestRoot("same-path-reload-failure");
+	const std::filesystem::path relative_path = "terrain/Reload.AshTerrain";
+	{
+		std::ofstream placeholder(root / relative_path, std::ios::binary);
+		REQUIRE(placeholder.is_open());
+		placeholder.put('\0');
+	}
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	const AshEngine::AssetInfo* info = database.find_asset_by_path(relative_path);
+	REQUIRE(info != nullptr);
+	const auto old_snapshot = MakeSceneSnapshot(
+		info->id, relative_path, 1u, MakeSceneLayout(1u, 1u), true);
+	REQUIRE(database.publish_terrain_snapshot(info->id, old_snapshot));
+
+	AshEngine::RenderAssetManager manager{};
+	manager.initialize(&database, nullptr);
+	const auto asset = manager.request_terrain_asset(
+		relative_path.generic_string(), old_snapshot);
+	REQUIRE(asset != nullptr);
+	const auto old_view = AshEngine::TerrainRenderSceneTestSeam::
+		InstallPublishedView(*asset, old_snapshot, 1u);
+	AshEngine::Scene scene = AshEngine::Scene::create("Reload Terrain Scene");
+	AshEngine::Entity entity = scene.create_entity("Terrain");
+	AshEngine::TerrainComponent terrain{};
+	terrain.asset_path = relative_path.generic_string();
+	REQUIRE(entity.add_terrain_component(terrain));
+	AshEngine::RenderScene render_scene{};
+	REQUIRE(render_scene.rebuild_terrains_from_scene(scene, manager).status ==
+		AshEngine::TerrainSceneResolveStatus::Ready);
+
+	REQUIRE(database.invalidate_terrain_snapshot(info->id));
+	WorkerBlocker blocker{};
+	const AshEngine::TerrainSceneResolveResult pending =
+		render_scene.rebuild_terrains_from_scene(scene, manager);
+	CHECK(pending.status == AshEngine::TerrainSceneResolveStatus::Pending);
+	CHECK(pending.drawable_published_view);
+	AshEngine::VisibleRenderFrame pending_frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		2u, MakeInclusiveView(), pending_frame));
+	REQUIRE(pending_frame.terrains.size() == 1u);
+	CHECK(pending_frame.terrains.front().published_view == old_view);
+
+	blocker.release();
+	AshEngine::TerrainSceneResolveResult failed = pending;
+	const auto deadline = std::chrono::steady_clock::now() +
+		std::chrono::seconds(2);
+	while (failed.status == AshEngine::TerrainSceneResolveStatus::Pending &&
+		std::chrono::steady_clock::now() < deadline)
+	{
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		failed = render_scene.rebuild_terrains_from_scene(scene, manager);
+	}
+	CHECK(failed.status == AshEngine::TerrainSceneResolveStatus::Failed);
+	CHECK(failed.asset_path == relative_path.generic_string());
+	CHECK_FALSE(failed.diagnostic.empty());
+	CHECK(failed.drawable_published_view);
 	AshEngine::VisibleRenderFrame failed_frame{};
 	REQUIRE(render_scene.build_visible_render_frame(
 		3u, MakeInclusiveView(), failed_frame));
@@ -683,6 +813,11 @@ TEST_CASE("Visible terrain frame culls bounds and keeps transform updates immuta
 		PublishFixedSnapshot(database, relative_path, 1u);
 	AshEngine::RenderAssetManager render_asset_manager{};
 	render_asset_manager.initialize(&database, nullptr);
+	const auto published_asset = render_asset_manager.request_terrain_asset(
+		relative_path.generic_string(), first_snapshot);
+	REQUIRE(published_asset != nullptr);
+	AshEngine::TerrainRenderSceneTestSeam::InstallPublishedView(
+		*published_asset, first_snapshot, 1u);
 
 	AshEngine::Scene scene = AshEngine::Scene::create("Terrain Render Scene");
 	AshEngine::Entity terrain_entity = scene.create_entity("Terrain");
@@ -733,6 +868,11 @@ TEST_CASE("Visible terrain frame culls bounds and keeps transform updates immuta
 		PublishFixedSnapshot(database, relative_path, 2u);
 	REQUIRE(render_scene.rebuild_terrains_from_scene(
 		scene, render_asset_manager).status ==
+		AshEngine::TerrainSceneResolveStatus::Pending);
+	AshEngine::TerrainRenderSceneTestSeam::InstallPublishedView(
+		*published_asset, second_snapshot, 2u);
+	REQUIRE(render_scene.rebuild_terrains_from_scene(
+		scene, render_asset_manager).status ==
 		AshEngine::TerrainSceneResolveStatus::Ready);
 	AshEngine::VisibleRenderFrame rebuilt_frame{};
 	REQUIRE(render_scene.build_visible_render_frame(
@@ -766,6 +906,26 @@ TEST_CASE("Terrain presentation tracks an independent terrain revision")
 	REQUIRE(terrain_rebuild_branch != std::string::npos);
 	REQUIRE(transform_update_branch != std::string::npos);
 	CHECK(terrain_rebuild_branch < transform_update_branch);
+}
+
+TEST_CASE("Terrain presentation stamps asset epoch before visible frame construction")
+{
+	const std::string source = ReadSource(
+		"project/src/engine/Function/Render/ScenePresentationSubsystem.cpp");
+	const size_t captured_epoch = source.find(
+		"const uint64_t visible_frame_asset_epoch =");
+	const size_t build_visible_frame = source.find(
+		"build_visible_render_frame(", captured_epoch);
+	const size_t stamp_visible_frame = source.find(
+		"visible_frame.render_asset_epoch = visible_frame_asset_epoch;",
+		build_visible_frame);
+	REQUIRE(captured_epoch != std::string::npos);
+	REQUIRE(build_visible_frame != std::string::npos);
+	REQUIRE(stamp_visible_frame != std::string::npos);
+	CHECK(captured_epoch < build_visible_frame);
+	CHECK(build_visible_frame < stamp_visible_frame);
+	CHECK(source.find("const uint64_t prepared_asset_epoch =") ==
+		std::string::npos);
 }
 
 TEST_CASE("Terrain presentation logs typed resolve state transitions once")

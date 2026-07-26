@@ -477,17 +477,44 @@ namespace AshEngine
 			uint64_t content_generation = 0u,
 			bool retain_published_proxies = false)
 		{
+			const std::string normalized_asset_path =
+				std::filesystem::path(asset_path)
+					.lexically_normal()
+					.generic_string();
+			if (!retain_published_proxies && !normalized_asset_path.empty())
+			{
+				std::scoped_lock<std::mutex> lock(m_mutex);
+				retain_published_proxies = std::any_of(
+					m_terrain_proxies.begin(),
+					m_terrain_proxies.end(),
+					[&normalized_asset_path](
+						const std::shared_ptr<RenderTerrainProxy>& proxy)
+					{
+						return proxy &&
+							std::filesystem::path(proxy->get_asset_path())
+								.lexically_normal()
+								.generic_string() == normalized_asset_path &&
+							proxy->get_render_asset() &&
+							proxy->get_render_asset()->published_view();
+					});
+			}
 			TerrainSceneResolveResult result{};
 			result.status = TerrainSceneResolveStatus::Failed;
-			result.asset_path = std::move(asset_path);
+			result.asset_path = normalized_asset_path;
 			result.diagnostic = std::move(diagnostic);
 			result.content_generation = content_generation;
 			result.drawable_published_view = retain_published_proxies;
-			if (!retain_published_proxies)
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
-				m_terrain_proxies.clear();
-				m_pending_terrain_loads.clear();
+				if (retain_published_proxies)
+				{
+					m_pending_terrain_loads.erase(normalized_asset_path);
+				}
+				else
+				{
+					m_terrain_proxies.clear();
+					m_pending_terrain_loads.clear();
+				}
 			}
 			return PublishResult(std::move(result));
 		};
@@ -524,8 +551,8 @@ namespace AshEngine
 		resolved_terrains.reserve(terrain_entities.size());
 		std::vector<std::string> active_paths{};
 		active_paths.reserve(terrain_entities.size());
-		std::unordered_map<EntityId, AssetId> expected_asset_ids{};
-		expected_asset_ids.reserve(terrain_entities.size());
+		std::unordered_map<EntityId, std::string> expected_asset_paths{};
+		expected_asset_paths.reserve(terrain_entities.size());
 		TerrainSceneResolveResult pending_result{};
 		pending_result.status = TerrainSceneResolveStatus::Ready;
 
@@ -546,7 +573,7 @@ namespace AshEngine
 			const std::string canonical_path =
 				copied_info.relative_path.lexically_normal().generic_string();
 			active_paths.push_back(canonical_path);
-			expected_asset_ids[terrain_desc.entity_id] = copied_info.id;
+			expected_asset_paths[terrain_desc.entity_id] = canonical_path;
 			TerrainSceneLoadRequest request{};
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
@@ -630,19 +657,21 @@ namespace AshEngine
 				std::remove_if(
 					m_terrain_proxies.begin(),
 					m_terrain_proxies.end(),
-					[&expected_asset_ids](
+					[&expected_asset_paths](
 						const std::shared_ptr<RenderTerrainProxy>& proxy)
 					{
 						if (!proxy)
 						{
 							return true;
 						}
-						const auto expected = expected_asset_ids.find(
+						const auto expected = expected_asset_paths.find(
 							proxy->get_entity_id());
 						const auto snapshot = proxy->get_snapshot();
-						return expected == expected_asset_ids.end() ||
+						return expected == expected_asset_paths.end() ||
 							!snapshot || snapshot->failed ||
-							snapshot->asset_id != expected->second;
+							std::filesystem::path(proxy->get_asset_path())
+								.lexically_normal()
+								.generic_string() != expected->second;
 					}),
 				m_terrain_proxies.end());
 			for (auto request = m_pending_terrain_loads.begin();
@@ -671,19 +700,6 @@ namespace AshEngine
 
 		std::vector<std::shared_ptr<RenderTerrainProxy>> rebuilt_proxies{};
 		rebuilt_proxies.reserve(terrain_entities.size());
-		std::unordered_map<EntityId, std::string> existing_proxy_paths{};
-		{
-			std::scoped_lock<std::mutex> lock(m_mutex);
-			for (const std::shared_ptr<RenderTerrainProxy>& proxy :
-				m_terrain_proxies)
-			{
-				if (proxy)
-				{
-					existing_proxy_paths[proxy->get_entity_id()] =
-						proxy->get_asset_path();
-				}
-			}
-		}
 		TerrainSceneResolveResult render_result{};
 		for (const ResolvedTerrain& terrain : resolved_terrains)
 		{
@@ -732,11 +748,6 @@ namespace AshEngine
 			const bool retains_older_publication = published_view &&
 				accepted_snapshot &&
 				published_view->snapshot != accepted_snapshot;
-			const auto previous_path = existing_proxy_paths.find(
-				terrain.desc.entity_id);
-			const bool replaces_existing_asset_path =
-				previous_path != existing_proxy_paths.end() &&
-				previous_path->second != terrain.canonical_path;
 			const TerrainRenderReadiness readiness =
 				render_asset->readiness();
 			if (!render_error.empty() ||
@@ -752,8 +763,7 @@ namespace AshEngine
 					published_view != nullptr;
 			}
 			else if (render_result.status != TerrainSceneResolveStatus::Failed &&
-				(retains_older_publication ||
-					(replaces_existing_asset_path && !published_view)) &&
+				(retains_older_publication || !published_view) &&
 				readiness == TerrainRenderReadiness::Pending)
 			{
 				render_result.status = TerrainSceneResolveStatus::Pending;

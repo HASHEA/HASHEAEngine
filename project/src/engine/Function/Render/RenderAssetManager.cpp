@@ -477,7 +477,7 @@ namespace AshEngine
 				{
 					*out_error = asset->get_last_error();
 				}
-				return out_error && asset->published_view() ? asset : nullptr;
+				return asset->published_view() ? asset : nullptr;
 			}
 			bool changed = false;
 			{
@@ -526,7 +526,7 @@ namespace AshEngine
 				{
 					*out_error = accept_error;
 				}
-				return nullptr;
+				return asset->published_view() ? asset : nullptr;
 			}
 
 			std::scoped_lock<std::mutex> lock(m_mutex);
@@ -549,7 +549,7 @@ namespace AshEngine
 				*out_error = accept_error.empty() ?
 					asset->get_last_error() : accept_error;
 			}
-			return out_error && asset->published_view() ? asset : nullptr;
+			return asset->published_view() ? asset : nullptr;
 		}
 
 		const std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot =

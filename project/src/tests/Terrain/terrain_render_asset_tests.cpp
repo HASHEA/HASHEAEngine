@@ -2202,6 +2202,106 @@ TEST_CASE("Terrain published runtime rejects stale same-layout snapshots without
 	CHECK(pending_after[0].component == pending_before[0].component);
 }
 
+TEST_CASE("Terrain manager returns a retained publication for stale requests independent of error output")
+{
+	AshEngine::RenderAssetManager manager{};
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto published = MakeSnapshot(5u, layout);
+	published->residency_revision = 3u;
+	published->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	const auto asset = manager.request_terrain_asset(
+		"terrain/StaleRetained.AshTerrain", published);
+	REQUIRE(asset != nullptr);
+	AshEngine::TerrainRenderAssetCpuTestSeam::install_published_bundle(
+		*asset, published);
+
+	auto pending = MakeSnapshot(5u, layout);
+	pending->residency_revision = 5u;
+	pending->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	REQUIRE(manager.request_terrain_asset(
+		"terrain/staleretained.ashterrain", pending) == asset);
+
+	auto stale = MakeSnapshot(5u, layout);
+	stale->residency_revision = 4u;
+	stale->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	CHECK(manager.request_terrain_asset(
+		"terrain/staleretained.ashterrain", stale) == asset);
+	std::string error{};
+	CHECK(manager.request_terrain_asset(
+		"terrain/staleretained.ashterrain", stale, &error) == asset);
+	CHECK(error.find("terrain snapshot content generation is stale.") !=
+		std::string::npos);
+	CHECK(asset->published_view()->snapshot == published);
+	CHECK(asset->accepted_snapshot() == pending);
+	manager.shutdown();
+}
+
+TEST_CASE("Terrain manager validation failure reports retained path stage and layout")
+{
+	AshEngine::RenderAssetManager manager{};
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto published = MakeSnapshot(1u, layout);
+	published->components[0] = MakeComponent({ 0u, 0u }, 1u);
+	const auto asset = manager.request_terrain_asset(
+		"terrain/ValidationContext.AshTerrain", published);
+	REQUIRE(asset != nullptr);
+	AshEngine::TerrainRenderAssetCpuTestSeam::install_published_bundle(
+		*asset, published);
+
+	auto rejected = MakeSnapshot(2u, layout);
+	rejected->components[0] = MakeComponent({ 1u, 0u }, 2u);
+	std::string error{};
+	CHECK(manager.request_terrain_asset(
+		"terrain/validationcontext.ashterrain", rejected, &error) == asset);
+	CHECK(error.find("published view retained") != std::string::npos);
+	CHECK(error.find(
+		"asset_path=terrain/ValidationContext.AshTerrain") !=
+		std::string::npos);
+	CHECK(error.find("stage=ValidateSnapshot") != std::string::npos);
+	CHECK(error.find("samples=257x257") != std::string::npos);
+	CHECK(error.find("components=1x1") != std::string::npos);
+	CHECK(error.find("quads=256") != std::string::npos);
+	CHECK(error.find("spacing=1") != std::string::npos);
+	CHECK(error.find("has coord=(1,0); expected=(0,0)") !=
+		std::string::npos);
+	CHECK(asset->published_view()->snapshot == published);
+	manager.shutdown();
+}
+
+TEST_CASE("Terrain same layout upload failure reports retained incremental context")
+{
+	AshEngine::RenderAssetManager manager{};
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto published = MakeSnapshot(1u, layout);
+	published->components[0] = MakeComponent({ 0u, 0u }, 1u);
+	const auto asset = manager.request_terrain_asset(
+		"terrain/IncrementalContext.AshTerrain", published);
+	REQUIRE(asset != nullptr);
+	AshEngine::TerrainRenderAssetCpuTestSeam::install_published_bundle(
+		*asset, published);
+
+	auto replacement = MakeSnapshot(2u, layout);
+	replacement->components[0] = MakeComponent({ 0u, 0u }, 2u);
+	REQUIRE(manager.request_terrain_asset(
+		"terrain/incrementalcontext.ashterrain", replacement) == asset);
+	AshEngine::TerrainRenderAssetCpuTestSeam::FakeGpuOps gpu_ops{};
+	gpu_ops.fail_height_upload_call = 1u;
+	CHECK_FALSE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		advance_candidate_resource_frame(*asset, gpu_ops).ready);
+	const std::string error = asset->get_last_error();
+	CHECK(error.find("published view retained") != std::string::npos);
+	CHECK(error.find(
+		"asset_path=terrain/IncrementalContext.AshTerrain") !=
+		std::string::npos);
+	CHECK(error.find("stage=IncrementalUpdate") != std::string::npos);
+	CHECK(error.find("samples=257x257") != std::string::npos);
+	CHECK(error.find("components=1x1") != std::string::npos);
+	CHECK(error.find("reason=failed to upload Terrain component height data.") !=
+		std::string::npos);
+	CHECK(asset->published_view()->snapshot == published);
+	manager.shutdown();
+}
+
 TEST_CASE("Terrain render asset isolates completions across residency revisions")
 {
 	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 3u);
@@ -2914,13 +3014,13 @@ TEST_CASE("Terrain render asset manager recovers a rejected latest attempt idemp
 		FillCompleteSnapshot(rejected);
 		rejected->components[1] = rejected->components[0];
 		CHECK(manager.request_terrain_asset(
-			"terrain/rejectedready.ashterrain", rejected) == nullptr);
+			"terrain/rejectedready.ashterrain", rejected) == asset);
 		const auto failed = manager.query_readiness();
 		CHECK_FALSE(failed.pending);
 		CHECK(failed.failed);
 
 		CHECK(manager.request_terrain_asset(
-			"terrain/rejectedready.ashterrain", rejected) == nullptr);
+			"terrain/rejectedready.ashterrain", rejected) == asset);
 		CHECK(manager.query_readiness().activity_epoch == failed.activity_epoch);
 
 		auto recovered_snapshot = MakeSnapshot(3u, layout);
