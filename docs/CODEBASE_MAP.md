@@ -67,11 +67,11 @@ status: active
 
 ### Terrain Asset flow
 
-1. `TerrainData` 定义生产默认 8193² 布局、全局 sample ownership、稀疏编辑层、受信 working set 与不可变 snapshot
+1. `TerrainData` 定义每轴 256–8192 m、最近 2 的幂、中点向上的 authoring layout helper（默认 2048² m），并保留 8193² 历史 full-pressure helper；同时定义全局 sample ownership、稀疏编辑层、受信 working set 与不可变 snapshot
 2. brush/patch 修改 working set 并产生完整 dirty Component 集合；composition 重建 Component，publication 原子发布新 generation
-3. `.AshTerrain` v1 通过双 index descriptor 做增量保存与上一 generation recovery；RAW/PNG/EXR IO 由 `TerrainImport` 统一调度
+3. `.AshTerrain` v2 writer / v1-v2 reader 通过双 index descriptor 做增量保存、兼容迁移与上一 generation recovery；RAW/PNG/EXR IO 由 `TerrainImport` 统一调度
 4. `AssetDatabase` 共享同步/异步缓存，并按 generation/revision 发布或精确失效单一 Terrain ID；Editor 外部重载使用隔离 candidate 与绑定资产/目录代/发布 serial 的 compare-exchange token
-5. `TerrainQuery` 查询 terrain-local snapshot，Scene v6/world-space adapter、Terrain render asset/proxy/pass/readiness 与 Editor Terrain Mode 消费同一 immutable snapshot；Terrain Mode 已通过 service-owned immutable jobs 提供 Create、Import、Export、保存、冲突与恢复流程
+5. `TerrainQuery` 查询 terrain-local snapshot，Scene v6/world-space adapter 与 Editor Terrain Mode 消费同一 immutable snapshot；Terrain render asset 从实际矩形布局动态分配 height/coarse 资源，并以完整 candidate bundle 在帧边界原子切换 published snapshot/resources/bounds；Terrain Mode 已通过 service-owned immutable jobs 提供共享 Target Size 的 Create/Import、Export、保存、冲突与恢复流程
 
 ## Public abstractions
 

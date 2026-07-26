@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-16
+last_reviewed: 2026-07-26
 status: active
 ---
 
@@ -38,7 +38,7 @@ status: active
   - Terrain 同步/异步加载：`load_terrain_by_{id,path}`、`load_terrain_by_{id,path}_async`，返回共享不可变 `TerrainAssetSnapshot`。Editor reload 另用 `load_terrain_candidate_by_id_async(id)` 直接验证磁盘候选；该接口不改变 cache、in-flight、load state 或 last error，遇到 container `Busy` / `SourceChanged` 时以 `retryable_failure` 标记候选，供上层保留原 publication 后重试。
   - Terrain publication：`publish_terrain_snapshot(id, snapshot)` 按 `(content_generation, residency_revision)` 字典序发布常规更新。Editor 接受隔离磁盘候选前先用 `capture_terrain_snapshot_publication(id)` 捕获绑定资产 ID、catalog generation、每资产 load serial 与当前 snapshot pointer 的 token，再以 `compare_exchange_terrain_snapshot(id, expected, desired, result)` 原子切换；任一血缘字段变化都拒绝 stale candidate，成功返回的新 token 可用于历史提交失败时的精确回滚与重试。`desired == nullptr` 仅用于受同一 token 保护的回滚/失效，`invalidate_terrain_snapshot(id)` 则显式失效一个 Terrain 的 cache/in-flight。
   - Terrain recovery/concurrency metadata：`TerrainContainerLoadReport` 与发布的 `TerrainAssetSnapshot` 同时携带 recovered flag、loaded generation、rejected generation、精确 recovery detail 和稳定的 `TerrainContainerRevision`；调用方可区分“已加载的最后有效旧代”“磁盘上更新但损坏的新代”与可重试的并发写入。
-  - Terrain create/import/export：`make_default_terrain_grid_layout()` 与 `create_flat_terrain_snapshot` 提供 8193² / 32² / 256 quad / 1 m 的生产 flat 数据；`TerrainHeightImportDesc`、`TerrainHeightExportDesc`、`TerrainImportReport` 和 `TerrainCancellationToken` 是不暴露 codec 类型的值合同。`import_terrain_height` / `import_terrain_height_to_container` 支持 PNG、RAW R16/R32F、EXR；`export_terrain_height` 对最终合成、Base、指定高度层和指定材质权重层都支持这四种格式。材质权重的 PNG/RAW R16 输出使用固定 `[0,1]` normalized 映射，RAW R32F/EXR 直接保留 `[0,1]` 浮点值。`publish_staged_terrain_container_new` 对已经验证的 staged container 执行 named-lease、non-replacing 最终发布。
+  - Terrain create/import/export：`normalize_terrain_authoring_extent_meters()` 与 `make_terrain_authoring_grid_layout()` 定义每轴 256–8192 m、最近 2 的幂且中点向上的 authoring 合同，默认 2048 × 2048 m；固定 256 quad/Component 与 1 m/sample。`make_default_terrain_grid_layout()` 为兼容既有调用和最大压力测试继续返回 8193² / 32² 的历史 full-pressure 布局。`TerrainHeightImportDesc`、`TerrainHeightExportDesc`、`TerrainImportReport` 和 `TerrainCancellationToken` 是不暴露 codec 类型的值合同。`import_terrain_height` / `import_terrain_height_to_container` 支持 PNG、RAW R16/R32F、EXR；`export_terrain_height` 对最终合成、Base、指定高度层和指定材质权重层都支持这四种格式。材质权重的 PNG/RAW R16 输出使用固定 `[0,1]` normalized 映射，RAW R32F/EXR 直接保留 `[0,1]` 浮点值。`publish_staged_terrain_container_new` 对已经验证的 staged container 执行 named-lease、non-replacing 最终发布。
   - Terrain authoring primitive：每个高度稀疏 sample 保存仿射变换 `a × H + b`；同一编辑层按 stroke 顺序支持全部五种高度工具。`append_resampled_terrain_stroke` 续接上次 segment，只返回新增 dab；`merge_terrain_edit_patches` 把同一次 stroke 的 patch 聚合为首次 before 到最新 after，供一次历史提交或整体回滚。
 
 加载结果统一为 `std::shared_ptr<const T>` 共享不可变数据；上层（Scene 实例化、Editor AssetDatabaseService、RenderAssetManager）只应依赖上述接口。
@@ -48,7 +48,7 @@ status: active
 - 所有路径以资产根目录（运行时为 `product/assets`）为相对基准；`AssetId` 在一次索引内唯一。
 - 常规异步 API 返回 `shared_future`，同一资产的并发请求共享同一份加载结果；加载状态经 `get_asset_load_state` 观察（Loading → Loaded/Failed）。candidate load 有意绕过共享 in-flight/cache/load diagnostics，必须由上层在接受后以 publication token CAS 提交；跨资产 token、目录刷新后的旧 token 或并发发布后的旧 token都必须拒绝。
 - 加载产物为 const 数据，调用方不得修改；GPU 化由 render 侧另行处理。
-- `make_terrain_working_set` 必须共享 source snapshot 的不可变 Base R16 allocation；`publish_terrain_working_set` 也必须把同一 allocation 传给新 snapshot。可变 authoring 状态只存在于独立 edit-layer stack、dirty set 和新建的 dirty Component；production 8193² Base 不得因打开 session 或 preview generation 被深拷贝。
+- `make_terrain_working_set` 必须共享 source snapshot 的不可变 Base R16 allocation；`publish_terrain_working_set` 也必须把同一 allocation 传给新 snapshot。可变 authoring 状态只存在于独立 edit-layer stack、dirty set 和新建的 dirty Component；最大 8193² Base 不得因打开 session 或 preview generation 被深拷贝。
 - `.ashterrain` 扩展名大小写不敏感。实际容器损坏会缓存为 `Failed`，需精确 invalidate 后重试；worker 不可用、关停拒绝、派发异常以及 container `Busy` / `SourceChanged` 都回到可重试 `Unloaded`，不得永久停在 `Loading`。candidate load 不写这些共享状态，而是在失败 snapshot 上设置 `retryable_failure`；Editor 不得把该结果当作持久损坏或替换当前 cache。
 - `.AshTerrain` 当前 writer 固定写 version 2 仿射高度 block；reader 同时接受 version 1 和 2。v1 Additive sample 精确迁移为 `a=1, b=value×coverage`，v1 Alpha sample 迁移为 `a=1-coverage, b=coverage×value`；加载本身不改写磁盘，下一次 Save/Optimize 才写 v2。
 - Terrain create/import/export API 是同步纯 CPU/文件 API；Editor 必须在自己的 worker 上调用，并只捕获 descriptor、路径、cancellation token 和不可变 snapshot 的值/共享所有权。Asset API 不持有 Editor service、panel state 或 mutable working set，也不提供 UI 线程内联 fallback。
@@ -56,14 +56,14 @@ status: active
 - Editor Import 必须先让 `import_terrain_height_to_container` 发布到唯一 staged destination，再把该 stage 交给 `publish_staged_terrain_container_new`；禁止直接以最终 asset path 调用 replacing container import。失败或取消清理 stage 与其 `.import.tmp`，PNG 8-bit warning 通过 `TerrainImportReport` 原样上送。
 - 双 descriptor 只在另一槽是 generation 更高但无效时报告 `RecoveredPreviousGeneration`；恢复报告先完整构造，再与 snapshot 以无抛出的 move 发布。任一失败结果必须把 snapshot 与 report 输出清空，禁止返回或缓存半成品。
 - refresh、publish、candidate CAS 与 invalidate 都会推进相应 Terrain 发布血缘；catalog generation、绑定资产 ID、每资产 load serial 和 snapshot identity 共同禁止过期磁盘结果覆盖新索引或新发布快照。CAS 在所需 map 节点分配完成前不修改 serial/cache，分配失败保持原 publication 不变。
-- Terrain 生产默认布局、编辑/容器/导入查询及后续 Scene/Render/Editor 消费契约见 [Terrain feature spec](../features/terrain.md)。Asset 模块只发布不可变 snapshot；Scene v6、RenderAssetManager 与 Editor Terrain Mode 已接入。
+- Terrain authoring 默认、历史 full-pressure 布局、编辑/容器/导入查询及后续 Scene/Render/Editor 消费契约见 [Terrain feature spec](../features/terrain.md)。Asset 模块只发布不可变 snapshot；Scene v6、RenderAssetManager 与 Editor Terrain Mode 已接入。
 - 依赖方向：Asset 依赖 Base 与材质接口类型，不依赖 Scene/Editor。
 
 ## 验证
 
 通用生命周期对齐 `docs/VERIFY.md` "Scene / Asset / Application 生命周期"行；Terrain 纯 CPU 逻辑对齐 "Terrain Asset / CPU logic" 行：
 
-- `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`，包含 PNG/RAW/EXR、8193 默认布局、内存上限、取消/临时件清理和 staged non-replacing publication 契约
+- `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`，包含 PNG/RAW/EXR、256×8192 / 2048×4096 / 2048×2048 / 8192×8192 target matrix、显式 8193² full-pressure fixture、内存上限、取消/临时件清理和 staged non-replacing publication 契约
 - 依赖/工程变化时 fresh generate，并构建 Editor/Sandbox Debug 与 Release
 - 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；Sandbox ready 要求标准场景引用资产已加载）
 - Editor 打开默认场景操作一遍（AssetBrowser 浏览、拖放实例化）

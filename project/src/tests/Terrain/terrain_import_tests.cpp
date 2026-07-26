@@ -679,6 +679,60 @@ TEST_CASE("Terrain import RAW applies explicit crop and deterministic Catmull-Ro
 	std::filesystem::remove(source_path);
 }
 
+TEST_CASE("Terrain import policies accept every supported authoring target layout")
+{
+	const auto directory = TestDirectory();
+	const auto missing_source = directory / "missing-layout-matrix.raw";
+	std::filesystem::remove(missing_source);
+	const std::array<std::pair<uint32_t, uint32_t>, 4> extents = {
+		std::pair{ 256u, 8192u },
+		std::pair{ 2048u, 4096u },
+		std::pair{ 2048u, 2048u },
+		std::pair{ 8192u, 8192u }
+	};
+	const std::array<AshEngine::TerrainResizePolicy, 3> policies = {
+		AshEngine::TerrainResizePolicy::Reject,
+		AshEngine::TerrainResizePolicy::Crop,
+		AshEngine::TerrainResizePolicy::CatmullRom
+	};
+
+	for (const auto& [extent_x, extent_z] : extents)
+	{
+		const AshEngine::TerrainGridLayout layout =
+			AshEngine::make_terrain_authoring_grid_layout(extent_x, extent_z);
+		REQUIRE(layout.sample_count_x == extent_x + 1u);
+		REQUIRE(layout.sample_count_z == extent_z + 1u);
+		REQUIRE(layout.component_count_x == extent_x / 256u);
+		REQUIRE(layout.component_count_z == extent_z / 256u);
+		REQUIRE(layout.component_quad_count == 256u);
+		REQUIRE(layout.sample_spacing_meters == doctest::Approx(1.0f));
+
+		for (const AshEngine::TerrainResizePolicy policy : policies)
+		{
+			const uint32_t source_width =
+				policy == AshEngine::TerrainResizePolicy::CatmullRom
+				? 1u
+				: layout.sample_count_x +
+					(policy == AshEngine::TerrainResizePolicy::Crop ? 2u : 0u);
+			const uint32_t source_height =
+				policy == AshEngine::TerrainResizePolicy::CatmullRom
+				? 1u
+				: layout.sample_count_z +
+					(policy == AshEngine::TerrainResizePolicy::Crop ? 2u : 0u);
+			auto desc = MakeImportDesc(
+				missing_source, source_width, source_height, layout);
+			desc.resize_policy = policy;
+			desc.peak_memory_limit_bytes = 1u;
+			std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+			std::string error{};
+			CHECK(AshEngine::import_terrain_height(
+				77u, desc, snapshot, nullptr, &error) ==
+				AshEngine::TerrainImportResult::MemoryLimitExceeded);
+			CHECK_FALSE(snapshot);
+		}
+	}
+}
+
 TEST_CASE("Terrain import RAW enforces memory budget and cancellation without publication")
 {
 	const auto directory = TestDirectory();

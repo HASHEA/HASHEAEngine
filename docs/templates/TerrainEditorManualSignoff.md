@@ -21,7 +21,13 @@ Use `PASS`, `FAIL`, or `BLOCKED`. Every non-PASS result requires a note and issu
 
 | Human-operated check | Vulkan result | Vulkan evidence | DX12 result | DX12 evidence |
 | --- | --- | --- | --- | --- |
-| Create production-default 8193² flat Terrain; save, close, and reopen | | | | |
+| New Terrain Mode starts at Target Size 2048 × 2048 m | | | | |
+| Enter `300`, `384`, and `3500`; verify Enter and focus loss normalize to `256`, `512`, and `4096` with tie-up behavior | | | | |
+| Derived Samples / Components / 1 m/sample labels match the normalized target | | | | |
+| Invalid target text remains visible and blocks both Create and Import | | | | |
+| Independent X/Z values are preserved and Create/Import share the same target; Import source dimensions remain independent | | | | |
+| Create a rectangular Terrain; save, close, reopen, and verify the final image | | | | |
+| Same-path reload/reimport layout failure retains the old image and reports path/stage/layout/reason/retention; success switches atomically | | | | |
 | Import and reimport PNG | | | | |
 | Import and reimport RAW R16 | | | | |
 | Import and reimport RAW R32F | | | | |

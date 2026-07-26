@@ -32,7 +32,7 @@ RunRenderGate.bat             :: 渲染改动必跑：双后端 golden SSIM 回�
 | RHI 接口 / 双后端实现 | 构建 + `RunRenderGate.bat` + PerfGate Standard；Engine.ini 开启 `[VulkanValidation]` 与 `[DX12Validation]` 各跑一次 smoke | 跨后端 diff FAIL 视同 bug |
 | RenderGraph 核心（compile/barrier/lifetime） | 同 RHI 级别 + 双后端 `run.bat sandbox <backend> Debug --rhi-selftest-indirect --run-for-frames=1` + `RunPerfGate.bat -Profile VegetationFullPipeline -Configuration Release` | raw RHI 与 Function RenderGraph 两段都须 PASS；关注 buffer barrier/lifetime/binding validation，profile 必须 COMPARED 且 coverage 合同满足 |
 | Scene / Asset / Application 生命周期 | 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；通常 ready 后数秒即提前退出） | 人类在 Editor 打开默认场景并操作一遍；Agent 只移交清单 |
-| Terrain Asset / CPU logic | `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`；依赖或工程生成变化时 fresh `generate_vs2022.bat` 并构建 Editor/Sandbox Debug+Release；最后 `run.bat all Debug --smoke-test-seconds=120` | 检查 `.AshTerrain` recovery、RAW/PNG/EXR、不可变 snapshot、dirty publication 与 local query focused tests；涉及 rendered frame 时同时按「渲染 Pass / shader / 材质」行执行 |
+| Terrain Asset / CPU logic | `RunTests.bat Debug` + `RunTests.bat Release` + `RunArchGate.bat`；依赖或工程生成变化时 fresh `generate_vs2022.bat` 并构建 Editor/Sandbox Debug+Release；最后 `run.bat all Debug --smoke-test-seconds=120` | 检查 `.AshTerrain` recovery、RAW/PNG/EXR、256×8192 / 2048×4096 / 2048×2048 / 8192×8192 target matrix、显式 8193² full-pressure fixture、不可变 snapshot、candidate rollback、dirty publication 与 local query focused tests；涉及 rendered frame 时同时按「渲染 Pass / shader / 材质」行执行 |
 | Editor 面板 / UI | 构建 + `run.bat editor Debug --smoke-test-seconds=120`（readiness 后自动关闭）+ 相关自动化测试 | 人类运行 `run.bat editor`，检查面板打开、交互和日志；Agent 禁止直接驱动 UI，只移交清单 |
 | `product/config/Engine.ini` | 双后端各 smoke 一次 + 查日志 | 确认开关生效；配置项语义/默认值变化同步 `docs/CONFIG.md` |
 | 性能敏感路径 | PerfGate Standard，`FAIL` 必须修，`WARN` 需说明判断 | 对比 `summary.md` 趋势 |
@@ -47,7 +47,9 @@ RunRenderGate.bat             :: 渲染改动必跑：双后端 golden SSIM 回�
 
 Phase 3 收口必须由一名具名的人类测试者在 Editor 主 Scene viewport 亲自逐项操作并签署结果。AI agent、鼠标/UI 自动化、readiness smoke、源码字符串测试和单元测试都不能执行或代签本清单；自动化只能准备 fixture、采集日志和提供辅助诊断。未取得人工签署记录时，本清单一律视为未通过，Phase 3 不得标记完成，也不得进入 Phase 4。
 
-- Terrain Mode 创建 production-default 8193² flat Terrain，并能保存、关闭、重开。
+- Terrain Mode 新打开时 Target Size 显示 2048 × 2048 m；分别输入 `300`、`384`、`3500`，确认 Enter 与失焦时规范化为 `256`、`512`、`4096`（中点向上），Samples / Components / 1 m/sample 标签同步更新。
+- 输入非法文本，确认原文本保持可见且 Create/Import 都 fail closed；设置不同 X/Z，确认 Create Flat 与 Import 共用同一 target，而 Import source width/height 保持独立。
+- 创建并保存矩形 Terrain，关闭重开后在 Vulkan/DX12 画面正确；同路径 reload/reimport 到不同布局时，失败必须保留旧画面并显示路径/阶段/layout/原因/retention 诊断，成功才原子切换最终画面。
 - 分别从 PNG、RAW R16、RAW R32F、EXR 导入高度图；导出四种格式并重新导入，核对尺寸、范围和方向。
 - Manage / Sculpt / Paint / Layers 全路径可用；Raise、Lower、Smooth、Flatten、Noise、Paint、Erase 各执行一次，并逐项 Undo/Redo。
 - 图层新增、复制、删除、重命名、排序、隐藏、强度与锁定保持稳定 ID；锁定层拒绝笔刷。

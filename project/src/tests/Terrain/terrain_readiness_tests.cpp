@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -43,6 +44,10 @@ namespace
 		"ASHENGINE_TERRAIN_GATE_FIXTURE_GENERATOR";
 	constexpr std::string_view k_terrain_gate_generator_token =
 		"GENERATE_CANONICAL_V1";
+	constexpr std::string_view k_terrain_layout_generator_environment =
+		"ASHENGINE_TERRAIN_LAYOUT_FIXTURE_GENERATOR";
+	constexpr std::string_view k_terrain_layout_generator_token =
+		"GENERATE_LAYOUT_MATRIX_V1";
 
 	AshEngine::TerrainReadinessInputs ReadyInputs(uint64_t generation)
 	{
@@ -1091,6 +1096,156 @@ namespace
 			value_size == actual.size() + 1u;
 	}
 
+	auto HasExactLayoutGeneratorOptIn() -> bool
+	{
+		char* value = nullptr;
+		size_t value_size = 0u;
+		const auto result = _dupenv_s(
+			&value, &value_size, k_terrain_layout_generator_environment.data());
+		std::unique_ptr<char, decltype(&std::free)> owned_value(value, &std::free);
+		if (result != 0 || value == nullptr)
+		{
+			return false;
+		}
+		const std::string_view actual(value);
+		return actual == k_terrain_layout_generator_token &&
+			value_size == actual.size() + 1u;
+	}
+
+	struct TerrainLayoutFixtureCase
+	{
+		std::string_view name{};
+		uint32_t extent_x_meters = 0u;
+		uint32_t extent_z_meters = 0u;
+	};
+
+	auto WriteTerrainLayoutScene(
+		const std::filesystem::path& path,
+		const TerrainLayoutFixtureCase& fixture) -> bool
+	{
+		const uint32_t camera_height =
+			std::clamp(fixture.extent_z_meters / 8u, 100u, 300u);
+		const uint32_t camera_back =
+			std::clamp(fixture.extent_z_meters / 4u, 250u, 500u);
+		const uint32_t far_plane =
+			std::max(12000u, fixture.extent_z_meters + 2000u);
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		if (!output.is_open())
+		{
+			return false;
+		}
+		output
+			<< "{\n"
+			<< "  \"entities\": [\n"
+			<< "    {\n"
+			<< "      \"id\": 1,\n"
+			<< "      \"name\": \"TerrainLayoutRoot\",\n"
+			<< "      \"parent\": 0,\n"
+			<< "      \"transform\": {\n"
+			<< "        \"position\": [0.0, 0.0, 0.0],\n"
+			<< "        \"rotation_euler_degrees\": [0.0, 0.0, 0.0],\n"
+			<< "        \"scale\": [1.0, 1.0, 1.0]\n"
+			<< "      }\n"
+			<< "    },\n"
+			<< "    {\n"
+			<< "      \"camera\": {\n"
+			<< "        \"far_plane\": " << far_plane << ".0,\n"
+			<< "        \"fov_y_degrees\": 60.0,\n"
+			<< "        \"near_plane\": 0.1,\n"
+			<< "        \"orthographic_height\": 10.0,\n"
+			<< "        \"primary\": true,\n"
+			<< "        \"projection\": 0,\n"
+			<< "        \"reverse_z\": true\n"
+			<< "      },\n"
+			<< "      \"id\": 2,\n"
+			<< "      \"name\": \"TerrainLayoutCamera\",\n"
+			<< "      \"parent\": 1,\n"
+			<< "      \"transform\": {\n"
+			<< "        \"position\": [" << fixture.extent_x_meters / 2u
+			<< ".0, " << camera_height << ".0, -" << camera_back << ".0],\n"
+			<< "        \"rotation_euler_degrees\": [16.5, 0.0, 0.0],\n"
+			<< "        \"scale\": [1.0, 1.0, 1.0]\n"
+			<< "      }\n"
+			<< "    },\n"
+			<< "    {\n"
+			<< "      \"id\": 3,\n"
+			<< "      \"light\": {\n"
+			<< "        \"casts_shadow\": true,\n"
+			<< "        \"color\": [1.0, 0.95, 0.88],\n"
+			<< "        \"inner_cone_angle_degrees\": 30.0,\n"
+			<< "        \"intensity\": 2.5,\n"
+			<< "        \"near_shadow_distance\": 64.0,\n"
+			<< "        \"outer_cone_angle_degrees\": 45.0,\n"
+			<< "        \"range\": 10.0,\n"
+			<< "        \"shadow_cascade_count\": 4,\n"
+			<< "        \"shadow_distance\": 5000.0,\n"
+			<< "        \"shadow_priority\": 255,\n"
+			<< "        \"sunlight\": true,\n"
+			<< "        \"type\": 0\n"
+			<< "      },\n"
+			<< "      \"name\": \"TerrainLayoutSunlight\",\n"
+			<< "      \"parent\": 1,\n"
+			<< "      \"transform\": {\n"
+			<< "        \"position\": [0.0, 0.0, 0.0],\n"
+			<< "        \"rotation_euler_degrees\": [45.0, -30.0, 0.0],\n"
+			<< "        \"scale\": [1.0, 1.0, 1.0]\n"
+			<< "      }\n"
+			<< "    },\n"
+			<< "    {\n"
+			<< "      \"id\": 4,\n"
+			<< "      \"name\": \"TerrainLayout\",\n"
+			<< "      \"parent\": 1,\n"
+			<< "      \"terrain\": {\n"
+			<< "        \"asset_path\": \"terrain/generated-layout-fixtures/"
+			<< fixture.name << "/TerrainLayout.AshTerrain\",\n"
+			<< "        \"casts_shadow\": true,\n"
+			<< "        \"material_layer_overrides\": [\"\", \"\", \"\", \"\", "
+				"\"\", \"\", \"\", \"\"],\n"
+			<< "        \"receives_shadow\": true,\n"
+			<< "        \"visible\": true\n"
+			<< "      },\n"
+			<< "      \"transform\": {\n"
+			<< "        \"position\": [0.0, 0.0, 0.0],\n"
+			<< "        \"rotation_euler_degrees\": [0.0, 0.0, 0.0],\n"
+			<< "        \"scale\": [1.0, 1.0, 1.0]\n"
+			<< "      }\n"
+			<< "    }\n"
+			<< "  ],\n"
+			<< "  \"name\": \"TerrainLayout-" << fixture.name << "\",\n"
+			<< "  \"next_entity_id\": 5,\n"
+			<< "  \"scene_config\": {\n"
+			<< "    \"ambient_occlusion\": { \"mode\": \"Off\" },\n"
+			<< "    \"bloom\": { \"enabled\": false },\n"
+			<< "    \"directional_shadows\": {\n"
+			<< "      \"default_cascade_count\": 4,\n"
+			<< "      \"default_shadow_distance\": 5000.0,\n"
+			<< "      \"enabled\": true,\n"
+			<< "      \"near_shadow_distance\": 64.0\n"
+			<< "    },\n"
+			<< "    \"temporal_aa\": { \"enabled\": false },\n"
+			<< "    \"tonemap\": { \"exposure\": 1.0 },\n"
+			<< "    \"volumetric_lighting\": { \"enabled\": false }\n"
+			<< "  },\n"
+			<< "  \"version\": 6\n"
+			<< "}\n";
+		return output.good();
+	}
+
+	struct ScopedGeneratedFixtureDirectory
+	{
+		std::filesystem::path path{};
+		bool committed = false;
+
+		~ScopedGeneratedFixtureDirectory()
+		{
+			if (!committed)
+			{
+				std::error_code ignored{};
+				std::filesystem::remove_all(path, ignored);
+			}
+		}
+	};
+
 	struct ScopedStagingCleanup
 	{
 		std::filesystem::path file{};
@@ -1376,6 +1531,124 @@ TEST_CASE("TerrainGate cooked oracle rejects height and min max mutations")
 	root_mutation.components[shaped_component_index] = changed_root;
 	CHECK_FALSE(TerrainGateCookedHeightAndMinMaxMatchIndependentOracle(
 		root_mutation, error));
+}
+
+TEST_CASE("TerrainGate full pressure layout is independent of the authoring default")
+{
+	const AshEngine::TerrainGridLayout full_pressure_layout{
+		8193u, 8193u, 32u, 32u, 256u, 1.0f
+	};
+	REQUIRE(AshEngine::is_valid_terrain_grid_layout(full_pressure_layout));
+	const AshEngine::TerrainGridLayout authoring_default =
+		AshEngine::make_terrain_authoring_grid_layout(2048u, 2048u);
+	CHECK(full_pressure_layout.sample_count_x == 8193u);
+	CHECK(full_pressure_layout.sample_count_z == 8193u);
+	CHECK(full_pressure_layout.component_count_x == 32u);
+	CHECK(full_pressure_layout.component_count_z == 32u);
+	CHECK(authoring_default.sample_count_x == 2049u);
+	CHECK(authoring_default.sample_count_z == 2049u);
+	CHECK(authoring_default.component_count_x == 8u);
+	CHECK(authoring_default.component_count_z == 8u);
+}
+
+TEST_CASE("Terrain layout runtime fixture generator emits isolated assets" *
+	doctest::skip())
+{
+	REQUIRE_MESSAGE(
+		HasExactLayoutGeneratorOptIn(),
+		"Generator is disabled. Explicitly run this skipped test with "
+		"ASHENGINE_TERRAIN_LAYOUT_FIXTURE_GENERATOR=GENERATE_LAYOUT_MATRIX_V1 "
+		"and --no-skip=true.");
+	const std::filesystem::path output_root =
+		"Intermediate/generated-fixtures/terrain-layouts";
+	std::error_code filesystem_error{};
+	const bool output_exists =
+		std::filesystem::exists(output_root, filesystem_error);
+	REQUIRE_MESSAGE(
+		!filesystem_error,
+		"Could not inspect the Terrain layout generated-fixture directory.");
+	REQUIRE_MESSAGE(
+		!output_exists,
+		"Refusing to replace the existing Terrain layout generated-fixture directory.");
+	const bool output_created =
+		std::filesystem::create_directories(output_root, filesystem_error);
+	const bool output_ready = !filesystem_error && output_created;
+	REQUIRE_MESSAGE(
+		output_ready,
+		"Could not create the Terrain layout generated-fixture directory.");
+	ScopedGeneratedFixtureDirectory cleanup{ output_root };
+
+	constexpr std::array<TerrainLayoutFixtureCase, 3> fixtures = {
+		TerrainLayoutFixtureCase{ "min", 256u, 256u },
+		TerrainLayoutFixtureCase{ "rect", 2048u, 4096u },
+		TerrainLayoutFixtureCase{ "default", 2048u, 2048u }
+	};
+	for (size_t index = 0u; index < fixtures.size(); ++index)
+	{
+		const TerrainLayoutFixtureCase& fixture = fixtures[index];
+		const std::filesystem::path fixture_directory =
+			output_root / fixture.name;
+		filesystem_error.clear();
+		const bool fixture_directory_created =
+			std::filesystem::create_directory(fixture_directory, filesystem_error);
+		const bool fixture_directory_ready =
+			!filesystem_error && fixture_directory_created;
+		REQUIRE_MESSAGE(
+			fixture_directory_ready,
+			"Could not create an isolated Terrain layout fixture directory.");
+
+		const AshEngine::TerrainGridLayout layout =
+			AshEngine::make_terrain_authoring_grid_layout(
+				fixture.extent_x_meters, fixture.extent_z_meters);
+		REQUIRE(layout.sample_count_x == fixture.extent_x_meters + 1u);
+		REQUIRE(layout.sample_count_z == fixture.extent_z_meters + 1u);
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> snapshot{};
+		std::string error{};
+		REQUIRE(AshEngine::create_flat_terrain_snapshot(
+			static_cast<AshEngine::TerrainAssetId>(1001u + index),
+			layout,
+			{ -100.0f, 1000.0f },
+			0.0f,
+			snapshot,
+			&error));
+		REQUIRE_MESSAGE(error.empty(), error);
+		REQUIRE(snapshot != nullptr);
+		const std::filesystem::path asset_path =
+			fixture_directory / "TerrainLayout.AshTerrain";
+		AshEngine::TerrainContainerSaveReport save_report{};
+		REQUIRE(AshEngine::save_terrain_container_incremental(
+			asset_path, *snapshot, {}, &save_report, &error) ==
+			AshEngine::TerrainContainerResult::Success);
+		REQUIRE_MESSAGE(error.empty(), error);
+		snapshot.reset();
+
+		std::shared_ptr<const AshEngine::TerrainAssetSnapshot> round_trip{};
+		AshEngine::TerrainContainerLoadReport load_report{};
+		REQUIRE(AshEngine::load_terrain_container(
+			asset_path, round_trip, &load_report, &error) ==
+			AshEngine::TerrainContainerResult::Success);
+		REQUIRE_MESSAGE(error.empty(), error);
+		REQUIRE(round_trip != nullptr);
+		CHECK(round_trip->layout.sample_count_x == layout.sample_count_x);
+		CHECK(round_trip->layout.sample_count_z == layout.sample_count_z);
+		CHECK(round_trip->layout.component_count_x == layout.component_count_x);
+		CHECK(round_trip->layout.component_count_z == layout.component_count_z);
+		round_trip.reset();
+
+		const std::filesystem::path scene_path =
+			fixture_directory / "Terrain.scene.json";
+		REQUIRE(WriteTerrainLayoutScene(scene_path, fixture));
+		std::ifstream scene_input(scene_path, std::ios::binary);
+		REQUIRE(scene_input.is_open());
+		const std::string scene_text{
+			std::istreambuf_iterator<char>(scene_input),
+			std::istreambuf_iterator<char>() };
+		CHECK(scene_text.find("\"version\": 6") != std::string::npos);
+		CHECK(scene_text.find(
+			"terrain/generated-layout-fixtures/" + std::string(fixture.name) +
+				"/TerrainLayout.AshTerrain") != std::string::npos);
+	}
+	cleanup.committed = true;
 }
 
 TEST_CASE("TerrainGate canonical fixture generator emits a staged candidate" *

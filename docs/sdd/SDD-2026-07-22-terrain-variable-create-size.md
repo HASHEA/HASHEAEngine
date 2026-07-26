@@ -2,11 +2,13 @@
 
 ## Status
 
-Approved
+Approved — Implementation in progress
 
 用户于 2026-07-22 复核并批准本书面 SDD；后续实施必须遵守本文范围和分批验证合同。任何扩大公共 RHI/RenderGraph API、改变 Terrain schema 或放宽原子回滚语义的方案都需要先修订 SDD 并重新批准。
 
 风险级别：**S2**。本变更同时修改 Editor authoring contract、Terrain render-resource sizing、CPU/HLSL 常量绑定以及 Vulkan/DX12 共用的渲染行为；必须在本 SDD 经用户书面复核批准后实施。本文批准前只允许提交设计文档，不修改生产代码。
+
+截至 2026-07-26，Task 1–7 已完成并通过对应 Debug/Release 单测与架构门禁：authoring normalization、共享 Create/Import target、动态矩形资源寻址、240-byte surface constants、完整 candidate replacement，以及 published snapshot/resources/bounds 的同代切换均已落地。首次 load 在 published view 建立前保持 Pending；同路径异步 load、validation、allocation、height、coarse 或 initial-atlas failure 保留旧 published view，实际路径变化才清除；Scene presentation 在 visible frame 构建前捕获 asset epoch，避免 publication race 被误标为 current。min/rect/default runtime fixture 由精确环境 token 生成到 ignored `Intermediate/generated-fixtures`，最大 case 继续使用显式 8193² TerrainGate；长期规格与具名人类 Vulkan/DX12 清单已同步。Task 8 的 fresh build、双后端 readiness/validation、non-bless RenderGate、Standard PerfGate 与具名人类交互签署完成前，本 SDD 不得标记 Done。
 
 ## Context
 
@@ -37,7 +39,7 @@ Terrain 资产和 CPU authoring API 已以 `TerrainGridLayout` 表示 X/Z 独立
 - 不新增 RHI/RenderGraph 公共 API，不增加第三方依赖，不刷新 golden/perf baseline。
 - 不把 UI 自动化当作人工交互签署；Agent 只执行自动门禁并移交人工清单。
 
-## Current implementation
+## Baseline at approval
 
 - Entry points:
   - `TerrainModeWidgets.cpp` 的 Create/Import UI 只收集路径、高度范围、flat height 和源图参数。
