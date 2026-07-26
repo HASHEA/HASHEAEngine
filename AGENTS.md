@@ -16,7 +16,7 @@ Engine（DLL）分 Base / Graphics / Function 三层，Editor 与 Sandbox 是其
 
 任务 → 定级 → 读 spec → (S1+) SDD → 实现 → 验证 → 回写：
 
-1. 按下方 SDD rules 表给变更定风险级（S0-S3），级别决定仪式量
+1. 按下方 SDD rules 表给变更定风险级（S0-S3），级别决定仪式量；**必须主动向用户声明定级结果与依据（含 S0），让用户知晓当前走的 SDD 流程档位并有机会否决**，禁止静默定级后直接动手
 2. 读 `docs/specs/` 对应模块/feature spec，用 `docs/CODEBASE_MAP.md` 定位代码
 3. S1 写 Mini SDD；S2/S3 写标准 SDD 并**等用户批准**后才动代码
 4. 实现：diff 小而聚焦（hook 会拦基线直改、对 Graphics/RenderGraph 编辑弹确认）

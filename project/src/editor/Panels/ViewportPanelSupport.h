@@ -44,9 +44,7 @@ namespace AshEditor::ViewportPanelSupport
 		AshEngine::UIContext& refUi,
 		EditorViewportPresentation& refPresentation);
 	void DrawViewportInteractionOptionsMenu(
-		const ViewportPanelDeps& refDeps,
 		AshEngine::UIContext& refUi,
-		const std::string& strViewportId,
 		EditorViewportPresentation& refPresentation);
 
 	std::vector<std::string> MakeOverlayLines(

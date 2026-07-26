@@ -4,6 +4,8 @@
 #include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Panels/ViewportPanelSupport.h"
+#include "Services/EditorSettingsService.h"
+#include "Services/EditorViewportCameraService.h"
 #include "Services/EditorViewportService.h"
 #include "Services/TerrainEditorService.h"
 #include "Widgets/EditorButtonWidgets.h"
@@ -51,9 +53,6 @@ namespace AshEditor
 
 		void DrawViewportOptionsPopup(
 			AshEngine::UIContext& refUi,
-			const EditorViewportPresentation& refPresentation,
-			const ViewportPanelDeps& refDeps,
-			const std::string& strViewportId,
 			EditorViewportPresentation& refMutablePresentation)
 		{
 			if (refUi.small_button("View"))
@@ -66,16 +65,41 @@ namespace AshEditor
 			}
 
 			ViewportPanelSupport::DrawViewportDisplayOptionsMenu(refUi, refMutablePresentation);
-			if (refPresentation.eKind == EditorViewportKind::Scene)
+			if (refMutablePresentation.eKind == EditorViewportKind::Scene)
 			{
 				ViewportPanelSupport::DrawSceneViewportHelperOptionsMenu(refUi, refMutablePresentation);
 			}
-			ViewportPanelSupport::DrawViewportInteractionOptionsMenu(
-				refDeps,
-				refUi,
-				strViewportId,
-				refMutablePresentation);
+			ViewportPanelSupport::DrawViewportInteractionOptionsMenu(refUi, refMutablePresentation);
 			refUi.end_popup();
+		}
+
+		void DrawSceneCameraSpeedControl(
+			AshEngine::UIContext& refUi,
+			const ViewportPanelDeps& refDeps,
+			const std::string& strViewportId)
+		{
+			const float fDragWidth = 120.0f;
+			const float fLabelWidth = refUi.calc_text_size("CameraSpeed").x;
+			const float fRightAlignedOffset =
+				refUi.get_window_width() - (fDragWidth + fLabelWidth + 20.0f);
+			refUi.same_line(fRightAlignedOffset);
+
+			float fMoveSpeed = refDeps.pViewportCameraService->GetMoveSpeed(strViewportId);
+			refUi.set_next_item_width(fDragWidth);
+			if (refUi.drag_float(
+				"CameraSpeed",
+				fMoveSpeed,
+				0.1f,
+				EditorViewportCameraService::kMinMoveSpeed,
+				EditorViewportCameraService::kMaxMoveSpeed,
+				"%.2f"))
+			{
+				refDeps.pViewportCameraService->SetMoveSpeed(strViewportId, fMoveSpeed);
+				if (refDeps.pSettingsService)
+				{
+					refDeps.pSettingsService->GetSettings().fSceneViewportCameraSpeed = fMoveSpeed;
+				}
+			}
 		}
 
 		void DrawSceneGizmoModeControls(AshEngine::UIContext& refUi, EditorGizmoState& refGizmo)
@@ -161,7 +185,7 @@ namespace AshEditor
 			}
 
 			refUi.same_line(0.0f, 10.0f);
-			DrawViewportOptionsPopup(refUi, *pPresentation, refDeps, strViewportId, *pPresentation);
+			DrawViewportOptionsPopup(refUi, *pPresentation);
 
 			if (refDeps.pGizmoState && bSceneViewport)
 			{
@@ -183,6 +207,11 @@ namespace AshEditor
 				refUi.end_disabled();
 				DrawToolbarDivider(refUi);
 				DrawSceneGizmoSpaceControls(refUi, refGizmo);
+			}
+
+			if (bSceneViewport && refDeps.pViewportCameraService)
+			{
+				DrawSceneCameraSpeedControl(refUi, refDeps, strViewportId);
 			}
 
 			refUi.pop_style_var(2);

@@ -1,8 +1,6 @@
 #include "Panels/ViewportPanelSupport.h"
 
 #include "Function/Gui/UIContext.h"
-#include "Services/EditorSettingsService.h"
-#include "Services/EditorViewportCameraService.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -134,40 +132,19 @@ namespace AshEditor
 		}
 
 		void DrawViewportInteractionOptionsMenu(
-			const ViewportPanelDeps& refDeps,
 			AshEngine::UIContext& refUi,
-			const std::string& strViewportId,
 			EditorViewportPresentation& refPresentation)
 		{
+			if (IsSceneViewportPresentation(refPresentation))
+			{
+				return;
+			}
 			if (!refUi.begin_menu("Interaction"))
 			{
 				return;
 			}
 
-			const bool bSceneViewport = IsSceneViewportPresentation(refPresentation);
-			if (!bSceneViewport)
-			{
-				refUi.menu_item("Accept Input", nullptr, &refPresentation.bAcceptsInput, true);
-			}
-			if (bSceneViewport && refDeps.pViewportCameraService)
-			{
-				float fMoveSpeed = refDeps.pViewportCameraService->GetMoveSpeed(strViewportId);
-				refUi.set_next_item_width(140.0f);
-				if (refUi.drag_float(
-					"Camera Speed",
-					fMoveSpeed,
-					0.1f,
-					EditorViewportCameraService::kMinMoveSpeed,
-					EditorViewportCameraService::kMaxMoveSpeed,
-					"%.2f"))
-				{
-					refDeps.pViewportCameraService->SetMoveSpeed(strViewportId, fMoveSpeed);
-					if (refDeps.pSettingsService)
-					{
-						refDeps.pSettingsService->GetSettings().fSceneViewportCameraSpeed = fMoveSpeed;
-					}
-				}
-			}
+			refUi.menu_item("Accept Input", nullptr, &refPresentation.bAcceptsInput, true);
 			refUi.end_menu();
 		}
 
