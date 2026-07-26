@@ -377,5 +377,6 @@ namespace AshEngine
 		friend class TerrainRenderPass;
 		friend struct TerrainRenderAssetCpuTestSeam;
 		friend struct TerrainRenderGraphTestSeam;
+		friend struct TerrainRenderSceneTestSeam;
 	};
 }

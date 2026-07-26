@@ -587,7 +587,7 @@ namespace AshEngine
 			{
 				continue;
 			}
-			const auto view = terrain.render_asset->published_view();
+			const auto view = terrain.published_view;
 			const auto snapshot = view ? view->snapshot : terrain.asset_snapshot;
 			if (!snapshot)
 			{
@@ -661,7 +661,7 @@ namespace AshEngine
 		{
 			if (terrain.render_asset)
 			{
-				resources.published_view = terrain.render_asset->published_view();
+				resources.published_view = terrain.published_view;
 				break;
 			}
 		}
@@ -1383,24 +1383,25 @@ namespace AshEngine
 	{
 		for (const VisibleTerrainFrame& terrain : frame.terrains)
 		{
-			if (!terrain.asset_snapshot || !terrain.render_asset)
+			if (!terrain.asset_snapshot || !terrain.render_asset ||
+				!terrain.published_view ||
+				terrain.published_view->snapshot != terrain.asset_snapshot ||
+				!terrain.published_view->runtime)
 			{
 				return false;
 			}
-			const std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot =
-				terrain.render_asset->accepted_snapshot();
-			if (!accepted_snapshot || accepted_snapshot != terrain.asset_snapshot ||
-				terrain.render_asset->readiness() != TerrainRenderReadiness::Ready ||
-				terrain.render_asset->accepted_content_generation() !=
+			const auto& view = terrain.published_view;
+			const auto& runtime = view->runtime;
+			if (view->asset_id != terrain.asset_snapshot->asset_id ||
+				view->content_generation !=
 					terrain.asset_snapshot->content_generation ||
-				terrain.render_asset->accepted_residency_revision() !=
+				view->residency_revision !=
 					terrain.asset_snapshot->residency_revision ||
-				terrain.render_asset->published_content_generation() !=
-					terrain.asset_snapshot->content_generation ||
-				terrain.render_asset->published_residency_revision() !=
-					terrain.asset_snapshot->residency_revision ||
-				terrain.render_asset->pending_component_upload_count() != 0u ||
-				terrain.render_asset->pending_weight_update_count() != 0u)
+				runtime->work_status != TerrainRenderWorkStatus::Ready ||
+				!runtime->resources.is_complete() ||
+				!runtime->height_queue.empty() ||
+				!runtime->weight_queue.empty() ||
+				!runtime->removal_queue.empty())
 			{
 				return false;
 			}

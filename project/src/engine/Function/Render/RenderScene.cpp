@@ -150,7 +150,9 @@ namespace AshEngine
 		return previous.status != current.status ||
 			previous.asset_path != current.asset_path ||
 			previous.diagnostic != current.diagnostic ||
-			previous.content_generation != current.content_generation;
+			previous.content_generation != current.content_generation ||
+			previous.drawable_published_view !=
+				current.drawable_published_view;
 	}
 
 	TerrainReadinessStage evaluate_terrain_scene_resolve_readiness(
@@ -166,6 +168,51 @@ namespace AshEngine
 		default:
 			return TerrainReadinessStage::Ready;
 		}
+	}
+
+	uint64_t compute_terrain_temporal_signature(
+		const VisibleRenderFrame& frame)
+	{
+		uint64_t hash = k_shadow_revision_fnv_offset;
+		hash_shadow_revision_u64(hash, frame.terrains.size());
+		for (const VisibleTerrainFrame& terrain : frame.terrains)
+		{
+			hash_shadow_revision_u64(hash, terrain.entity_id);
+			if (terrain.published_view)
+			{
+				hash_shadow_revision_u64(
+					hash, terrain.published_view->asset_id);
+				hash_shadow_revision_u64(
+					hash, terrain.published_view->content_generation);
+				hash_shadow_revision_u64(
+					hash, terrain.published_view->residency_revision);
+				hash_shadow_revision_u64(
+					hash, terrain.published_view->publication_epoch);
+			}
+			else if (terrain.asset_snapshot)
+			{
+				hash_shadow_revision_u64(
+					hash, terrain.asset_snapshot->asset_id);
+				hash_shadow_revision_u64(
+					hash, terrain.asset_snapshot->content_generation);
+				hash_shadow_revision_u64(
+					hash, terrain.asset_snapshot->residency_revision);
+			}
+			else
+			{
+				hash_shadow_revision_u64(hash, 0u);
+				hash_shadow_revision_u64(hash, 0u);
+				hash_shadow_revision_u64(hash, 0u);
+			}
+		}
+		return hash == 0u ? 1u : hash;
+	}
+
+	bool terrain_frame_asset_epoch_is_current(
+		const VisibleRenderFrame& frame,
+		uint64_t current_asset_epoch)
+	{
+		return frame.render_asset_epoch == current_asset_epoch;
 	}
 
 	uint64_t compute_static_shadow_caster_revision(
@@ -269,34 +316,16 @@ namespace AshEngine
 
 			const TerrainRenderAsset* render_asset = terrain.render_asset.get();
 			hash_shadow_revision_pointer(hash, render_asset);
-			if (render_asset)
+			if (terrain.published_view)
 			{
-				const TerrainShadowCasterIdentity identity =
-					render_asset->snapshot_shadow_caster_identity();
 				hash_shadow_revision_u64(
-					hash, identity.accepted_snapshot_identity);
+					hash, terrain.published_view->asset_id);
 				hash_shadow_revision_u64(
-					hash, identity.accepted_asset_id);
+					hash, terrain.published_view->content_generation);
 				hash_shadow_revision_u64(
-					hash, identity.accepted_content_generation);
+					hash, terrain.published_view->residency_revision);
 				hash_shadow_revision_u64(
-					hash, identity.accepted_residency_revision);
-				hash_shadow_revision_u64(
-					hash, identity.active_content_generation);
-				hash_shadow_revision_u64(
-					hash, identity.published_content_generation);
-				hash_shadow_revision_u64(
-					hash, identity.required_upload_count);
-				hash_shadow_revision_u64(
-					hash, identity.completed_upload_count);
-				hash_shadow_revision_u64(
-					hash, identity.pending_component_upload_count);
-				hash_shadow_revision_u64(
-					hash, identity.pending_component_removal_count);
-				hash_shadow_revision_u64(
-					hash, static_cast<uint64_t>(identity.readiness));
-				hash_shadow_revision_u64(
-					hash, identity.has_accepted_snapshot ? 1u : 0u);
+					hash, terrain.published_view->publication_epoch);
 			}
 
 			hash_shadow_revision_matrix(hash, terrain.world_transform);
@@ -445,13 +474,16 @@ namespace AshEngine
 		auto MakeFailure = [this, &PublishResult](
 			std::string asset_path,
 			std::string diagnostic,
-			uint64_t content_generation = 0u)
+			uint64_t content_generation = 0u,
+			bool retain_published_proxies = false)
 		{
 			TerrainSceneResolveResult result{};
 			result.status = TerrainSceneResolveStatus::Failed;
 			result.asset_path = std::move(asset_path);
 			result.diagnostic = std::move(diagnostic);
 			result.content_generation = content_generation;
+			result.drawable_published_view = retain_published_proxies;
+			if (!retain_published_proxies)
 			{
 				std::scoped_lock<std::mutex> lock(m_mutex);
 				m_terrain_proxies.clear();
@@ -625,42 +657,112 @@ namespace AshEngine
 					++request;
 				}
 			}
+			pending_result.drawable_published_view = std::any_of(
+				m_terrain_proxies.begin(),
+				m_terrain_proxies.end(),
+				[](const std::shared_ptr<RenderTerrainProxy>& proxy)
+				{
+					return proxy && proxy->get_render_asset() &&
+						proxy->get_render_asset()->published_view() != nullptr;
+				});
 			m_last_terrain_resolve_result = pending_result;
 			return pending_result;
 		}
 
 		std::vector<std::shared_ptr<RenderTerrainProxy>> rebuilt_proxies{};
 		rebuilt_proxies.reserve(terrain_entities.size());
+		std::unordered_map<EntityId, std::string> existing_proxy_paths{};
+		{
+			std::scoped_lock<std::mutex> lock(m_mutex);
+			for (const std::shared_ptr<RenderTerrainProxy>& proxy :
+				m_terrain_proxies)
+			{
+				if (proxy)
+				{
+					existing_proxy_paths[proxy->get_entity_id()] =
+						proxy->get_asset_path();
+				}
+			}
+		}
+		TerrainSceneResolveResult render_result{};
 		for (const ResolvedTerrain& terrain : resolved_terrains)
 		{
+			std::string render_error{};
 			std::shared_ptr<TerrainRenderAsset> render_asset =
 				render_asset_manager.request_terrain_asset(
 					terrain.canonical_path,
-					terrain.snapshot);
+					terrain.snapshot,
+					&render_error);
 			if (!render_asset)
 			{
 				return MakeFailure(
 					terrain.canonical_path,
-					"RenderAssetManager rejected the Terrain snapshot.",
+					render_error.empty() ?
+						"RenderAssetManager rejected the Terrain snapshot." :
+						render_error,
 					terrain.snapshot->content_generation);
 			}
 
+			const std::shared_ptr<const TerrainPublishedRenderView>
+				published_view = render_asset->published_view();
+			const std::shared_ptr<const TerrainAssetSnapshot> proxy_snapshot =
+				published_view && published_view->snapshot ?
+					published_view->snapshot : terrain.snapshot;
 			auto proxy = std::make_shared<RenderTerrainProxy>();
 			if (!proxy->initialize(
 					terrain.desc.entity_id,
-					terrain.snapshot,
+					proxy_snapshot,
 					terrain.desc.world_transform,
 					terrain.desc.terrain.visible,
 					terrain.desc.terrain.casts_shadow,
 					terrain.desc.terrain.receives_shadow,
-					std::move(render_asset)))
+					render_asset,
+					terrain.canonical_path))
 			{
 				return MakeFailure(
 					terrain.canonical_path,
 					"RenderTerrainProxy rejected the Terrain snapshot.",
-					terrain.snapshot->content_generation);
+					terrain.snapshot->content_generation,
+					published_view != nullptr);
 			}
 			rebuilt_proxies.push_back(std::move(proxy));
+
+			const std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot =
+				render_asset->accepted_snapshot();
+			const bool retains_older_publication = published_view &&
+				accepted_snapshot &&
+				published_view->snapshot != accepted_snapshot;
+			const auto previous_path = existing_proxy_paths.find(
+				terrain.desc.entity_id);
+			const bool replaces_existing_asset_path =
+				previous_path != existing_proxy_paths.end() &&
+				previous_path->second != terrain.canonical_path;
+			const TerrainRenderReadiness readiness =
+				render_asset->readiness();
+			if (!render_error.empty() ||
+				readiness == TerrainRenderReadiness::Failed)
+			{
+				render_result.status = TerrainSceneResolveStatus::Failed;
+				render_result.asset_path = terrain.canonical_path;
+				render_result.diagnostic = render_error.empty() ?
+					render_asset->get_last_error() : std::move(render_error);
+				render_result.content_generation =
+					terrain.snapshot->content_generation;
+				render_result.drawable_published_view =
+					published_view != nullptr;
+			}
+			else if (render_result.status != TerrainSceneResolveStatus::Failed &&
+				(retains_older_publication ||
+					(replaces_existing_asset_path && !published_view)) &&
+				readiness == TerrainRenderReadiness::Pending)
+			{
+				render_result.status = TerrainSceneResolveStatus::Pending;
+				render_result.asset_path = terrain.canonical_path;
+				render_result.content_generation =
+					terrain.snapshot->content_generation;
+				render_result.drawable_published_view =
+					published_view != nullptr;
+			}
 		}
 
 		{
@@ -670,7 +772,7 @@ namespace AshEngine
 			{
 				m_pending_terrain_loads.erase(path);
 			}
-			m_last_terrain_resolve_result = {};
+			m_last_terrain_resolve_result = std::move(render_result);
 			for (const ResolvedTerrain& terrain : resolved_terrains)
 			{
 				m_last_terrain_resolve_result.content_generation = std::max(
@@ -912,12 +1014,20 @@ namespace AshEngine
 		out_frame.terrains.reserve(terrain_snapshot.size());
 		for (const std::shared_ptr<RenderTerrainProxy>& terrain : terrain_snapshot)
 		{
-			if (!terrain || !terrain->is_visible() ||
-				!intersects_frustum(terrain->get_bounds(), view))
+			if (!terrain || !terrain->is_visible())
 			{
 				continue;
 			}
-			out_frame.terrains.push_back(terrain->make_visible_frame());
+			VisibleTerrainFrame visible_terrain = terrain->make_visible_frame();
+			if (!visible_terrain.asset_snapshot ||
+				(out_frame.terrain_resolve_status ==
+					TerrainSceneResolveStatus::Pending &&
+					!visible_terrain.published_view) ||
+				!intersects_frustum(visible_terrain.world_bounds, view))
+			{
+				continue;
+			}
+			out_frame.terrains.push_back(std::move(visible_terrain));
 		}
 
 		ASH_PROCESS_GUARD_RETURN_END(bResult, false);

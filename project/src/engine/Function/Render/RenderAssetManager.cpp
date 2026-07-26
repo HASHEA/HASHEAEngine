@@ -420,10 +420,21 @@ namespace AshEngine
 
 	std::shared_ptr<TerrainRenderAsset> RenderAssetManager::request_terrain_asset(
 		const std::string& asset_path,
-		const std::shared_ptr<const TerrainAssetSnapshot>& snapshot)
+		const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
+		std::string* out_error)
 	{
+		if (out_error)
+		{
+			out_error->clear();
+		}
 		if (asset_path.empty() || !snapshot)
 		{
+			if (out_error)
+			{
+				*out_error = asset_path.empty() ?
+					"Terrain asset path must not be empty." :
+					"Terrain snapshot must not be null.";
+			}
 			return nullptr;
 		}
 
@@ -462,7 +473,11 @@ namespace AshEngine
 			const TerrainRenderReadiness readiness = asset->readiness();
 			if (readiness == TerrainRenderReadiness::Failed)
 			{
-				return nullptr;
+				if (out_error)
+				{
+					*out_error = asset->get_last_error();
+				}
+				return out_error && asset->published_view() ? asset : nullptr;
 			}
 			bool changed = false;
 			{
@@ -507,6 +522,10 @@ namespace AshEngine
 				same_previous_asset && !newer_same_asset_snapshot;
 			if (stale_existing_request)
 			{
+				if (out_error)
+				{
+					*out_error = accept_error;
+				}
 				return nullptr;
 			}
 
@@ -525,7 +544,12 @@ namespace AshEngine
 			{
 				++m_activity_epoch;
 			}
-			return nullptr;
+			if (out_error)
+			{
+				*out_error = accept_error.empty() ?
+					asset->get_last_error() : accept_error;
+			}
+			return out_error && asset->published_view() ? asset : nullptr;
 		}
 
 		const std::shared_ptr<const TerrainAssetSnapshot> accepted_snapshot =

@@ -581,24 +581,7 @@ namespace AshEngine
 		static auto resolve_terrain_content_signature(
 			const VisibleRenderFrame& frame) -> uint64_t
 		{
-			uint64_t hash = 14695981039346656037ull;
-			for (const VisibleTerrainFrame& terrain : frame.terrains)
-			{
-				const uint64_t values[2] = {
-					static_cast<uint64_t>(terrain.entity_id),
-					terrain.asset_snapshot ?
-						terrain.asset_snapshot->content_generation : 0u
-				};
-				for (uint64_t value : values)
-				{
-					for (uint32_t byte = 0u; byte < 8u; ++byte)
-					{
-						hash ^= static_cast<uint8_t>(value >> (byte * 8u));
-						hash *= 1099511628211ull;
-					}
-				}
-			}
-			return hash;
+			return compute_terrain_temporal_signature(frame);
 		}
 
 		static auto resolve_render_frame_index(const VisibleRenderFrame& frame) -> uint64_t

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <utility>
 
 namespace AshEngine
@@ -130,6 +131,22 @@ namespace AshEngine
 			out_bounds = candidate;
 			return true;
 		}
+
+		auto normalized_asset_path(
+			const std::filesystem::path& path) -> std::string
+		{
+			return path.lexically_normal().generic_string();
+		}
+
+		auto published_view_matches_proxy(
+			const TerrainPublishedRenderView& view,
+			const std::string& asset_path) -> bool
+		{
+			return view.snapshot && !view.snapshot->failed &&
+				(asset_path.empty() ||
+					normalized_asset_path(view.snapshot->source_path) ==
+						normalized_asset_path(asset_path));
+		}
 	}
 
 	bool RenderTerrainProxy::initialize(
@@ -139,11 +156,18 @@ namespace AshEngine
 		bool visible,
 		bool casts_shadow,
 		bool receives_shadow,
-		std::shared_ptr<TerrainRenderAsset> render_asset)
+		std::shared_ptr<TerrainRenderAsset> render_asset,
+		std::string asset_path)
 	{
+		const std::shared_ptr<const TerrainPublishedRenderView> published_view =
+			render_asset ? render_asset->published_view() : nullptr;
+		const std::shared_ptr<const TerrainAssetSnapshot> bounds_snapshot =
+			published_view &&
+				published_view_matches_proxy(*published_view, asset_path) ?
+				published_view->snapshot : snapshot;
 		PrimitiveBounds bounds{};
-		if (entity_id == 0u || !snapshot ||
-			!try_build_bounds(*snapshot, world_transform, bounds))
+		if (entity_id == 0u || !bounds_snapshot ||
+			!try_build_bounds(*bounds_snapshot, world_transform, bounds))
 		{
 			return false;
 		}
@@ -153,6 +177,7 @@ namespace AshEngine
 		m_bounds = bounds;
 		m_snapshot = snapshot;
 		m_render_asset = std::move(render_asset);
+		m_asset_path = std::move(asset_path);
 		m_visible = visible;
 		m_casts_shadow = casts_shadow;
 		m_receives_shadow = receives_shadow;
@@ -176,8 +201,14 @@ namespace AshEngine
 			return false;
 		}
 
+		const std::shared_ptr<const TerrainPublishedRenderView> published_view =
+			m_render_asset ? m_render_asset->published_view() : nullptr;
+		const std::shared_ptr<const TerrainAssetSnapshot> bounds_snapshot =
+			published_view &&
+				published_view_matches_proxy(*published_view, m_asset_path) ?
+				published_view->snapshot : snapshot;
 		PrimitiveBounds bounds{};
-		if (!try_build_bounds(*snapshot, m_world_transform, bounds))
+		if (!try_build_bounds(*bounds_snapshot, m_world_transform, bounds))
 		{
 			return false;
 		}
@@ -190,9 +221,15 @@ namespace AshEngine
 	bool RenderTerrainProxy::update_world_transform(
 		const glm::mat4& world_transform)
 	{
+		const std::shared_ptr<const TerrainPublishedRenderView> published_view =
+			m_render_asset ? m_render_asset->published_view() : nullptr;
+		const std::shared_ptr<const TerrainAssetSnapshot> bounds_snapshot =
+			published_view &&
+				published_view_matches_proxy(*published_view, m_asset_path) ?
+				published_view->snapshot : m_snapshot;
 		PrimitiveBounds bounds{};
-		if (!m_snapshot ||
-			!try_build_bounds(*m_snapshot, world_transform, bounds))
+		if (!bounds_snapshot ||
+			!try_build_bounds(*bounds_snapshot, world_transform, bounds))
 		{
 			return false;
 		}
@@ -228,14 +265,31 @@ namespace AshEngine
 		return m_render_asset;
 	}
 
+	const std::string& RenderTerrainProxy::get_asset_path() const
+	{
+		return m_asset_path;
+	}
+
 	VisibleTerrainFrame RenderTerrainProxy::make_visible_frame() const
 	{
 		VisibleTerrainFrame frame{};
 		frame.entity_id = m_entity_id;
 		frame.world_transform = m_world_transform;
-		frame.world_bounds = m_bounds;
-		frame.asset_snapshot = m_snapshot;
 		frame.render_asset = m_render_asset;
+		frame.published_view = m_render_asset ?
+			m_render_asset->published_view() : nullptr;
+		frame.asset_snapshot =
+			frame.published_view &&
+				published_view_matches_proxy(
+					*frame.published_view, m_asset_path) ?
+				frame.published_view->snapshot : m_snapshot;
+		if (!frame.asset_snapshot ||
+			!try_build_bounds(
+				*frame.asset_snapshot, m_world_transform, frame.world_bounds))
+		{
+			frame.asset_snapshot.reset();
+			frame.published_view.reset();
+		}
 		frame.casts_shadow = m_casts_shadow;
 		frame.receives_shadow = m_receives_shadow;
 		return frame;

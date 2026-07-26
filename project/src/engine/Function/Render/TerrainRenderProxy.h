@@ -5,6 +5,7 @@
 #include "Function/Render/TerrainRenderAsset.h"
 
 #include <memory>
+#include <string>
 
 #include <glm/glm.hpp>
 
@@ -17,6 +18,7 @@ namespace AshEngine
 		PrimitiveBounds world_bounds{};
 		std::shared_ptr<const TerrainAssetSnapshot> asset_snapshot{};
 		std::shared_ptr<TerrainRenderAsset> render_asset{};
+		std::shared_ptr<const TerrainPublishedRenderView> published_view{};
 		bool casts_shadow = true;
 		bool receives_shadow = true;
 	};
@@ -31,7 +33,8 @@ namespace AshEngine
 			bool visible,
 			bool casts_shadow,
 			bool receives_shadow,
-			std::shared_ptr<TerrainRenderAsset> render_asset = nullptr);
+			std::shared_ptr<TerrainRenderAsset> render_asset = nullptr,
+			std::string asset_path = {});
 		bool replace_snapshot(
 			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot);
 		bool update_world_transform(const glm::mat4& world_transform);
@@ -41,6 +44,7 @@ namespace AshEngine
 		const PrimitiveBounds& get_bounds() const;
 		const std::shared_ptr<const TerrainAssetSnapshot>& get_snapshot() const;
 		const std::shared_ptr<TerrainRenderAsset>& get_render_asset() const;
+		const std::string& get_asset_path() const;
 		VisibleTerrainFrame make_visible_frame() const;
 
 	private:
@@ -49,6 +53,7 @@ namespace AshEngine
 		PrimitiveBounds m_bounds{};
 		std::shared_ptr<const TerrainAssetSnapshot> m_snapshot{};
 		std::shared_ptr<TerrainRenderAsset> m_render_asset{};
+		std::string m_asset_path{};
 		bool m_visible = true;
 		bool m_casts_shadow = true;
 		bool m_receives_shadow = true;

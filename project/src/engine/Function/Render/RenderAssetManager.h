@@ -82,7 +82,8 @@ namespace AshEngine
 		std::shared_ptr<EnvironmentMapRuntimeResource> request_fallback_environment_map();
 		std::shared_ptr<TerrainRenderAsset> request_terrain_asset(
 			const std::string& asset_path,
-			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot);
+			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
+			std::string* out_error = nullptr);
 		std::shared_ptr<const TerrainFallbackMaterialArrays>
 			request_terrain_fallback_material_arrays();
 		std::shared_ptr<RenderSampler> request_sampler(const RenderSamplerDesc& desc);

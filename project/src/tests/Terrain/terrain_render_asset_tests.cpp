@@ -1203,8 +1203,13 @@ TEST_CASE("Terrain publication preparation failure preserves the published bundl
 	AshEngine::TerrainRenderAssetCpuTestSeam::drop_candidate_prepared_view(*asset);
 	CHECK_FALSE(manager.finalize_pending_terrain_asset(asset));
 	CHECK(asset->latest_work_status() == AshEngine::TerrainRenderWorkStatus::Failed);
-	CHECK(asset->get_last_error() ==
-		"Terrain candidate publication view is unavailable.");
+	CHECK(asset->get_last_error().find("published view retained") !=
+		std::string::npos);
+	CHECK(asset->get_last_error().find("stage=ReadyToPublish") !=
+		std::string::npos);
+	CHECK(asset->get_last_error().find(
+		"reason=Terrain candidate publication view is unavailable.") !=
+		std::string::npos);
 	CHECK(asset->published_view() == old_view);
 	CHECK(old_view->snapshot == old_snapshot);
 	CHECK(old_view->runtime == old_runtime);

@@ -469,6 +469,7 @@ TEST_CASE("Terrain candidate atlas UAV stays distinct from the published GBuffer
 	AshEngine::VisibleTerrainFrame terrain{};
 	terrain.render_asset = asset;
 	terrain.asset_snapshot = published_view->snapshot;
+	terrain.published_view = published_view;
 	frame.terrains.push_back(terrain);
 
 	AshEngine::RenderGraphBuilder graph =
@@ -539,6 +540,7 @@ TEST_CASE("Terrain visible incremental atlas update reuses published graph ident
 	AshEngine::VisibleTerrainFrame terrain{};
 	terrain.render_asset = asset;
 	terrain.asset_snapshot = published_view->snapshot;
+	terrain.published_view = published_view;
 	frame.terrains.push_back(terrain);
 	AshEngine::RenderGraphBuilder graph =
 		AshEngine::RenderGraphBuilder::create_headless_for_tests(
@@ -595,6 +597,7 @@ TEST_CASE("Terrain candidate graph failure fails soft and preserves published te
 	AshEngine::VisibleTerrainFrame terrain{};
 	terrain.render_asset = asset;
 	terrain.asset_snapshot = published_view->snapshot;
+	terrain.published_view = published_view;
 	frame.terrains.push_back(terrain);
 
 	AshEngine::RenderGraphBuilder graph =
@@ -750,7 +753,8 @@ TEST_CASE("Terrain atlas update closes over the complete asset identity")
 	const size_t capture_begin = source.find("TerrainRenderPass::is_capture_ready(");
 	REQUIRE(capture_begin != std::string::npos);
 	const std::string capture = source.substr(capture_begin);
-	CHECK(capture.find("accepted_snapshot!=terrain.asset_snapshot") !=
+	CHECK(capture.find(
+		"terrain.published_view->snapshot!=terrain.asset_snapshot") !=
 		std::string::npos);
 	CHECK(capture.find("completion->second.asset_id==terrain.asset_snapshot->asset_id") !=
 		std::string::npos);
@@ -768,6 +772,7 @@ TEST_CASE("Terrain atlas clean frame declares only the GBuffer read")
 	AshEngine::VisibleTerrainFrame terrain{};
 	terrain.render_asset = asset;
 	terrain.asset_snapshot = published_view->snapshot;
+	terrain.published_view = published_view;
 	frame.terrains.push_back(terrain);
 	AshEngine::RenderGraphBuilder graph =
 		AshEngine::RenderGraphBuilder::create_headless_for_tests(

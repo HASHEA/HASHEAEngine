@@ -62,6 +62,25 @@ namespace AshEngine
 				format_spacing(layout.sample_spacing_meters) + "; reason=" + reason;
 		}
 
+		auto terrain_candidate_stage_name(
+			TerrainRenderCandidateStage stage) -> const char*
+		{
+			switch (stage)
+			{
+			case TerrainRenderCandidateStage::CreateResources:
+				return "CreateResources";
+			case TerrainRenderCandidateStage::UploadHeights:
+				return "UploadHeights";
+			case TerrainRenderCandidateStage::AwaitGraphWork:
+				return "AwaitGraphWork";
+			case TerrainRenderCandidateStage::ReadyToPublish:
+				return "ReadyToPublish";
+			case TerrainRenderCandidateStage::Failed:
+			default:
+				return "Failed";
+			}
+		}
+
 		auto checked_multiply_u64(
 			uint64_t lhs,
 			uint64_t rhs,
@@ -703,12 +722,29 @@ namespace AshEngine
 		{
 			return;
 		}
+		const TerrainRenderCandidateStage failed_stage =
+			m_candidate_state->stage;
+		const TerrainGridLayout layout = m_candidate_state->snapshot ?
+			m_candidate_state->snapshot->layout : TerrainGridLayout{};
+		const std::string detail =
+			std::string("Terrain candidate failed; ") +
+			(m_published_view ? "published view retained" :
+				"no published view available") +
+			"; asset_path=" + m_asset_path +
+			"; stage=" + terrain_candidate_stage_name(failed_stage) +
+			"; samples=" + std::to_string(layout.sample_count_x) + "x" +
+				std::to_string(layout.sample_count_z) +
+			"; components=" + std::to_string(layout.component_count_x) + "x" +
+				std::to_string(layout.component_count_z) +
+			"; quads=" + std::to_string(layout.component_quad_count) +
+			"; spacing=" + format_spacing(layout.sample_spacing_meters) +
+			"; reason=" + error;
 		m_candidate_state->stage = TerrainRenderCandidateStage::Failed;
 		m_candidate_state->work_status = TerrainRenderWorkStatus::Failed;
-		m_candidate_state->error = error;
+		m_candidate_state->error = detail;
 		m_candidate_state->prepared_view.reset();
 		m_candidate_state->runtime.reset();
-		m_last_error = error;
+		m_last_error = detail;
 	}
 
 	void TerrainRenderAsset::fail_latest_work_locked(const std::string& error)

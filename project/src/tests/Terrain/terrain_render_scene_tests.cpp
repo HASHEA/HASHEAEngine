@@ -4,6 +4,7 @@
 #include "Function/Render/RenderScene.h"
 #include "Function/Render/SceneView.h"
 #include "Function/Render/SunLightShadowPass.h"
+#include "Function/Render/TerrainRenderPass.h"
 #include "Function/Render/TerrainRenderProxy.h"
 #include "Function/Scene/Scene.h"
 
@@ -126,6 +127,136 @@ namespace
 				released = true;
 				release_promise.set_value();
 			}
+		}
+	};
+
+	auto MakeSceneLayout(uint32_t component_count_x, uint32_t component_count_z) ->
+		AshEngine::TerrainGridLayout
+	{
+		AshEngine::TerrainGridLayout layout{};
+		layout.sample_count_x =
+			component_count_x * AshEngine::k_terrain_component_quad_count + 1u;
+		layout.sample_count_z =
+			component_count_z * AshEngine::k_terrain_component_quad_count + 1u;
+		layout.component_count_x = component_count_x;
+		layout.component_count_z = component_count_z;
+		layout.component_quad_count = AshEngine::k_terrain_component_quad_count;
+		layout.sample_spacing_meters = 1.0f;
+		return layout;
+	}
+
+	auto MakeSceneComponent(
+		AshEngine::TerrainComponentCoord coord,
+		uint64_t generation) ->
+		std::shared_ptr<const AshEngine::TerrainComponentSnapshot>
+	{
+		auto component = std::make_shared<AshEngine::TerrainComponentSnapshot>();
+		component->coord = coord;
+		component->content_generation = generation;
+		component->sample_width = AshEngine::k_terrain_component_sample_count;
+		component->sample_height = AshEngine::k_terrain_component_sample_count;
+		component->heights.assign(
+			static_cast<size_t>(AshEngine::k_terrain_component_sample_count) *
+				AshEngine::k_terrain_component_sample_count,
+			0.0f);
+		return component;
+	}
+
+	auto MakeSceneSnapshot(
+		AshEngine::TerrainAssetId asset_id,
+		const std::filesystem::path& source_path,
+		uint64_t generation,
+		const AshEngine::TerrainGridLayout& layout,
+		bool dense) -> std::shared_ptr<AshEngine::TerrainAssetSnapshot>
+	{
+		auto snapshot = std::make_shared<AshEngine::TerrainAssetSnapshot>();
+		snapshot->asset_id = asset_id;
+		snapshot->source_path = source_path;
+		snapshot->layout = layout;
+		snapshot->height_mapping = { -100.0f, 1000.0f };
+		snapshot->content_generation = generation;
+		snapshot->components.resize(
+			static_cast<size_t>(layout.component_count_x) *
+				layout.component_count_z);
+		if (dense)
+		{
+			for (uint32_t z = 0u; z < layout.component_count_z; ++z)
+			{
+				for (uint32_t x = 0u; x < layout.component_count_x; ++x)
+				{
+					const size_t index =
+						static_cast<size_t>(z) * layout.component_count_x + x;
+					snapshot->components[index] = MakeSceneComponent(
+						{ static_cast<uint16_t>(x), static_cast<uint16_t>(z) },
+						generation);
+				}
+			}
+		}
+		return snapshot;
+	}
+}
+
+namespace AshEngine
+{
+	struct TerrainRenderSceneTestSeam
+	{
+		static auto InstallPublishedView(
+			TerrainRenderAsset& asset,
+			const std::shared_ptr<const TerrainAssetSnapshot>& snapshot,
+			uint64_t publication_epoch) ->
+			std::shared_ptr<const TerrainPublishedRenderView>
+		{
+			TerrainRenderLayoutInfo layout{};
+			REQUIRE(derive_terrain_render_layout(snapshot->layout, layout));
+			auto runtime = std::make_shared<TerrainRenderRuntimeState>();
+			runtime->target_snapshot = snapshot;
+			runtime->work_status = TerrainRenderWorkStatus::Ready;
+			runtime->resources.height = std::shared_ptr<StorageBuffer>(
+				reinterpret_cast<StorageBuffer*>(uintptr_t{ 1u }),
+				[](StorageBuffer*) {});
+			runtime->resources.staging = std::shared_ptr<StorageBuffer>(
+				reinterpret_cast<StorageBuffer*>(uintptr_t{ 2u }),
+				[](StorageBuffer*) {});
+			for (uint32_t index = 0u; index < runtime->resources.atlas.size(); ++index)
+			{
+				runtime->resources.atlas[index] = std::shared_ptr<RenderTarget>(
+					reinterpret_cast<RenderTarget*>(
+						uintptr_t{ static_cast<uintptr_t>(3u + index) }),
+					[](RenderTarget*) {});
+			}
+			runtime->resources.coarse = std::shared_ptr<RenderTarget>(
+				reinterpret_cast<RenderTarget*>(uintptr_t{ 5u }),
+				[](RenderTarget*) {});
+
+			auto view = std::make_shared<TerrainPublishedRenderView>();
+			view->snapshot = snapshot;
+			view->layout = layout;
+			view->runtime = runtime;
+			view->asset_id = snapshot->asset_id;
+			view->content_generation = snapshot->content_generation;
+			view->residency_revision = snapshot->residency_revision;
+			view->publication_epoch = publication_epoch;
+			{
+				std::scoped_lock<std::mutex> lock(asset.m_mutex);
+				asset.m_candidate_state.reset();
+				asset.m_published_view = view;
+				asset.m_last_error.clear();
+			}
+			return view;
+		}
+
+		static void FailCandidate(
+			TerrainRenderAsset& asset,
+			TerrainRenderCandidateStage stage,
+			const std::string& reason)
+		{
+			std::scoped_lock<std::mutex> lock(asset.m_mutex);
+			REQUIRE(asset.m_candidate_state != nullptr);
+			asset.m_candidate_state->stage = stage;
+			asset.fail_candidate_locked(
+				asset.m_candidate_state->runtime,
+				asset.m_candidate_state->candidate_epoch,
+				reason);
 		}
 	};
 }
@@ -292,6 +423,248 @@ TEST_CASE("Terrain proxy rejects overflowing bounds without changing published s
 	CHECK_FALSE(proxy.replace_snapshot(overflowing_snapshot));
 	CHECK(proxy.get_snapshot() == initial_snapshot);
 	CHECK(proxy.get_bounds().world_max == initial_frame.world_bounds.world_max);
+}
+
+TEST_CASE("Terrain published view switches bounds temporal and shadow identity only on next visible frame")
+{
+	const auto old_snapshot = MakeSceneSnapshot(
+		42u, "terrain/Coherent.AshTerrain", 5u, MakeSceneLayout(1u, 1u), true);
+	const auto new_snapshot = MakeSceneSnapshot(
+		42u, "terrain/Coherent.AshTerrain", 6u, MakeSceneLayout(2u, 1u), true);
+	auto render_asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	const auto old_view = AshEngine::TerrainRenderSceneTestSeam::
+		InstallPublishedView(*render_asset, old_snapshot, 7u);
+
+	AshEngine::RenderTerrainProxy proxy{};
+	REQUIRE(proxy.initialize(
+		9u,
+		old_snapshot,
+		glm::mat4(1.0f),
+		true,
+		true,
+		true,
+		render_asset,
+		"terrain/Coherent.AshTerrain"));
+	const AshEngine::VisibleTerrainFrame frame_n = proxy.make_visible_frame();
+	REQUIRE(frame_n.published_view == old_view);
+	CHECK(frame_n.asset_snapshot == old_snapshot);
+	CHECK(frame_n.world_bounds.local_max.x == doctest::Approx(256.0f));
+
+	AshEngine::VisibleRenderFrame visible_n{};
+	visible_n.scene_runtime_id = 11u;
+	visible_n.scene_content_epoch = 13u;
+	visible_n.terrains.push_back(frame_n);
+	const uint64_t temporal_n =
+		AshEngine::compute_terrain_temporal_signature(visible_n);
+	const uint64_t shadow_n =
+		AshEngine::compute_static_shadow_caster_revision(visible_n);
+
+	const auto new_view = AshEngine::TerrainRenderSceneTestSeam::
+		InstallPublishedView(*render_asset, new_snapshot, 8u);
+	CHECK(frame_n.published_view == old_view);
+	CHECK(frame_n.asset_snapshot == old_snapshot);
+	CHECK(frame_n.world_bounds.local_max.x == doctest::Approx(256.0f));
+	CHECK(AshEngine::compute_terrain_temporal_signature(visible_n) == temporal_n);
+	CHECK(AshEngine::compute_static_shadow_caster_revision(visible_n) == shadow_n);
+
+	const AshEngine::VisibleTerrainFrame frame_n_plus_1 =
+		proxy.make_visible_frame();
+	REQUIRE(frame_n_plus_1.published_view == new_view);
+	CHECK(frame_n_plus_1.asset_snapshot == new_snapshot);
+	CHECK(frame_n_plus_1.world_bounds.local_max.x == doctest::Approx(512.0f));
+	CHECK(frame_n_plus_1.published_view->runtime !=
+		frame_n.published_view->runtime);
+
+	AshEngine::VisibleRenderFrame visible_n_plus_1 = visible_n;
+	visible_n_plus_1.terrains = { frame_n_plus_1 };
+	CHECK(AshEngine::compute_terrain_temporal_signature(visible_n_plus_1) !=
+		temporal_n);
+	CHECK(AshEngine::compute_static_shadow_caster_revision(visible_n_plus_1) !=
+		shadow_n);
+}
+
+TEST_CASE("Terrain published view pins pending state and capture readiness against live getters")
+{
+	const auto old_snapshot = MakeSceneSnapshot(
+		42u, "terrain/Pending.AshTerrain", 5u, MakeSceneLayout(1u, 1u), true);
+	const auto candidate_snapshot = MakeSceneSnapshot(
+		42u, "terrain/Pending.AshTerrain", 6u, MakeSceneLayout(1u, 2u), true);
+	auto render_asset = std::make_shared<AshEngine::TerrainRenderAsset>();
+	const auto old_view = AshEngine::TerrainRenderSceneTestSeam::
+		InstallPublishedView(*render_asset, old_snapshot, 3u);
+
+	AshEngine::RenderTerrainProxy proxy{};
+	REQUIRE(proxy.initialize(
+		9u,
+		old_snapshot,
+		glm::mat4(1.0f),
+		true,
+		true,
+		true,
+		render_asset,
+		"terrain/Pending.AshTerrain"));
+	AshEngine::VisibleRenderFrame frame{};
+	frame.scene_runtime_id = 1u;
+	frame.scene_content_epoch = 1u;
+	frame.render_asset_epoch = 20u;
+	frame.terrains.push_back(proxy.make_visible_frame());
+	REQUIRE(frame.terrains.front().published_view == old_view);
+	const uint64_t temporal =
+		AshEngine::compute_terrain_temporal_signature(frame);
+	const uint64_t shadow =
+		AshEngine::compute_static_shadow_caster_revision(frame);
+
+	REQUIRE(render_asset->accept_snapshot(candidate_snapshot));
+	CHECK(proxy.make_visible_frame().published_view == old_view);
+	CHECK(AshEngine::compute_terrain_temporal_signature(frame) == temporal);
+	CHECK(AshEngine::compute_static_shadow_caster_revision(frame) == shadow);
+	AshEngine::TerrainRenderPass pass{};
+	CHECK(pass.is_capture_ready(frame));
+	CHECK(AshEngine::terrain_frame_asset_epoch_is_current(frame, 20u));
+	CHECK_FALSE(AshEngine::terrain_frame_asset_epoch_is_current(frame, 21u));
+}
+
+TEST_CASE("Terrain published view stale empty frame cannot report capture ready after asset epoch advances")
+{
+	AshEngine::VisibleRenderFrame frame{};
+	frame.render_asset_epoch = 40u;
+	CHECK(frame.terrains.empty());
+	CHECK(AshEngine::terrain_frame_asset_epoch_is_current(frame, 40u));
+	CHECK_FALSE(AshEngine::terrain_frame_asset_epoch_is_current(frame, 41u));
+}
+
+TEST_CASE("Terrain candidate error retains same path published view with exact stage and layout")
+{
+	const std::filesystem::path root = MakeTestRoot("candidate-error-retains");
+	const std::filesystem::path relative_path = "terrain/Retained.AshTerrain";
+	{
+		std::ofstream placeholder(root / relative_path, std::ios::binary);
+		REQUIRE(placeholder.is_open());
+		placeholder.put('\0');
+	}
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	const AshEngine::AssetInfo* info = database.find_asset_by_path(relative_path);
+	REQUIRE(info != nullptr);
+	const auto old_snapshot = MakeSceneSnapshot(
+		info->id, relative_path, 1u, MakeSceneLayout(1u, 1u), true);
+	REQUIRE(database.publish_terrain_snapshot(info->id, old_snapshot));
+
+	AshEngine::RenderAssetManager manager{};
+	manager.initialize(&database, nullptr);
+	const auto asset = manager.request_terrain_asset(
+		relative_path.generic_string(), old_snapshot);
+	REQUIRE(asset != nullptr);
+	const auto old_view = AshEngine::TerrainRenderSceneTestSeam::
+		InstallPublishedView(*asset, old_snapshot, 1u);
+
+	AshEngine::Scene scene = AshEngine::Scene::create("Retained Terrain Scene");
+	AshEngine::Entity terrain_entity = scene.create_entity("Terrain");
+	AshEngine::TerrainComponent terrain{};
+	terrain.asset_path = relative_path.generic_string();
+	REQUIRE(terrain_entity.add_terrain_component(terrain));
+	AshEngine::RenderScene render_scene{};
+	REQUIRE(render_scene.rebuild_terrains_from_scene(scene, manager).status ==
+		AshEngine::TerrainSceneResolveStatus::Ready);
+
+	const auto candidate_snapshot = MakeSceneSnapshot(
+		info->id, relative_path, 2u, MakeSceneLayout(1u, 2u), true);
+	REQUIRE(database.publish_terrain_snapshot(info->id, candidate_snapshot));
+	const AshEngine::TerrainSceneResolveResult pending =
+		render_scene.rebuild_terrains_from_scene(scene, manager);
+	CHECK(pending.status == AshEngine::TerrainSceneResolveStatus::Pending);
+	CHECK(pending.drawable_published_view);
+	AshEngine::VisibleRenderFrame pending_frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		2u, MakeInclusiveView(), pending_frame));
+	REQUIRE(pending_frame.terrains.size() == 1u);
+	CHECK(pending_frame.terrains.front().published_view == old_view);
+
+	AshEngine::TerrainRenderSceneTestSeam::FailCandidate(
+		*asset,
+		AshEngine::TerrainRenderCandidateStage::UploadHeights,
+		"injected height upload failure");
+	const AshEngine::TerrainSceneResolveResult failed =
+		render_scene.rebuild_terrains_from_scene(scene, manager);
+	CHECK(failed.status == AshEngine::TerrainSceneResolveStatus::Failed);
+	CHECK(failed.drawable_published_view);
+	CHECK(failed.asset_path == relative_path.generic_string());
+	CHECK(failed.diagnostic.find("stage=UploadHeights") != std::string::npos);
+	CHECK(failed.diagnostic.find("samples=257x513") != std::string::npos);
+	CHECK(failed.diagnostic.find("components=1x2") != std::string::npos);
+	CHECK(failed.diagnostic.find("quads=256") != std::string::npos);
+	CHECK(failed.diagnostic.find("spacing=1") != std::string::npos);
+	CHECK(failed.diagnostic.find("injected height upload failure") !=
+		std::string::npos);
+	CHECK(failed.diagnostic.find(relative_path.generic_string()) !=
+		std::string::npos);
+	CHECK(failed.diagnostic.find("published view retained") !=
+		std::string::npos);
+	AshEngine::VisibleRenderFrame failed_frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		3u, MakeInclusiveView(), failed_frame));
+	REQUIRE(failed_frame.terrains.size() == 1u);
+	CHECK(failed_frame.terrains.front().published_view == old_view);
+
+	manager.shutdown();
+	std::error_code error{};
+	std::filesystem::remove_all(root, error);
+}
+
+TEST_CASE("Terrain published view path change never retains the prior proxy")
+{
+	const std::filesystem::path root = MakeTestRoot("path-change");
+	const std::filesystem::path old_path = "terrain/Old.AshTerrain";
+	const std::filesystem::path new_path = "terrain/New.AshTerrain";
+	for (const auto& path : { old_path, new_path })
+	{
+		std::ofstream placeholder(root / path, std::ios::binary);
+		REQUIRE(placeholder.is_open());
+		placeholder.put('\0');
+	}
+	AshEngine::AssetDatabase database = AshEngine::AssetDatabase::create(root);
+	REQUIRE(database.is_valid());
+	const AshEngine::AssetInfo* old_info = database.find_asset_by_path(old_path);
+	const AshEngine::AssetInfo* new_info = database.find_asset_by_path(new_path);
+	REQUIRE(old_info != nullptr);
+	REQUIRE(new_info != nullptr);
+	const auto old_snapshot = MakeSceneSnapshot(
+		old_info->id, old_path, 1u, MakeSceneLayout(1u, 1u), true);
+	const auto new_snapshot = MakeSceneSnapshot(
+		new_info->id, new_path, 1u, MakeSceneLayout(1u, 2u), true);
+	REQUIRE(database.publish_terrain_snapshot(old_info->id, old_snapshot));
+	REQUIRE(database.publish_terrain_snapshot(new_info->id, new_snapshot));
+
+	AshEngine::RenderAssetManager manager{};
+	manager.initialize(&database, nullptr);
+	const auto old_asset = manager.request_terrain_asset(
+		old_path.generic_string(), old_snapshot);
+	REQUIRE(old_asset != nullptr);
+	AshEngine::TerrainRenderSceneTestSeam::InstallPublishedView(
+		*old_asset, old_snapshot, 1u);
+	AshEngine::Scene scene = AshEngine::Scene::create("Terrain Path Change");
+	AshEngine::Entity entity = scene.create_entity("Terrain");
+	AshEngine::TerrainComponent terrain{};
+	terrain.asset_path = old_path.generic_string();
+	REQUIRE(entity.add_terrain_component(terrain));
+	AshEngine::RenderScene render_scene{};
+	REQUIRE(render_scene.rebuild_terrains_from_scene(scene, manager).status ==
+		AshEngine::TerrainSceneResolveStatus::Ready);
+
+	terrain.asset_path = new_path.generic_string();
+	REQUIRE(entity.set_terrain_component(terrain));
+	const AshEngine::TerrainSceneResolveResult changed =
+		render_scene.rebuild_terrains_from_scene(scene, manager);
+	CHECK(changed.status == AshEngine::TerrainSceneResolveStatus::Pending);
+	CHECK_FALSE(changed.drawable_published_view);
+	AshEngine::VisibleRenderFrame frame{};
+	REQUIRE(render_scene.build_visible_render_frame(
+		2u, MakeInclusiveView(), frame));
+	CHECK(frame.terrains.empty());
+
+	manager.shutdown();
+	std::error_code error{};
+	std::filesystem::remove_all(root, error);
 }
 
 TEST_CASE("Visible terrain frame culls bounds and keeps transform updates immutable")
@@ -554,7 +927,7 @@ TEST_CASE("Static shadow caster revision includes only enabled terrain casters")
 		std::make_shared<AshEngine::TerrainAssetSnapshot>(*snapshot);
 	next_snapshot->content_generation += 1u;
 	REQUIRE(render_asset->accept_snapshot(next_snapshot));
-	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) != enabled);
+	CHECK(AshEngine::compute_static_shadow_caster_revision(changed) == enabled);
 }
 
 TEST_CASE("Terrain shadow caster identity is captured by one immutable snapshot")

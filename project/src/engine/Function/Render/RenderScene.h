@@ -31,6 +31,7 @@ namespace AshEngine
 		std::string asset_path{};
 		std::string diagnostic{};
 		uint64_t content_generation = 0u;
+		bool drawable_published_view = false;
 	};
 
 	ASH_API bool terrain_scene_resolve_transition_changed(
@@ -100,6 +101,9 @@ namespace AshEngine
 		// Process-local scene content identity. Full reload/replace resets stateful
 		// render history, while ordinary per-emitter edits stay isolated.
 		uint64_t scene_content_epoch = 0;
+		// Render-asset activity observed when this immutable scene frame was built.
+		// Capture readiness is valid only while the manager remains at this epoch.
+		uint64_t render_asset_epoch = 0;
 		SceneView* debug_view = nullptr;
 		glm::mat4 view{ 1.0f };
 		glm::mat4 projection{ 1.0f };
@@ -131,6 +135,11 @@ namespace AshEngine
 	// rendered while an asset is still pending cannot be reused after it becomes ready.
 	ASH_API uint64_t compute_static_shadow_caster_revision(
 		const VisibleRenderFrame& frame);
+	ASH_API uint64_t compute_terrain_temporal_signature(
+		const VisibleRenderFrame& frame);
+	ASH_API bool terrain_frame_asset_epoch_is_current(
+		const VisibleRenderFrame& frame,
+		uint64_t current_asset_epoch);
 
 	class ASH_API RenderScene
 	{

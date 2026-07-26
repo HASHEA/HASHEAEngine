@@ -995,6 +995,16 @@ namespace AshEngine
 			prepared_packets.push_back(std::move(packet));
 		}
 
+		const uint64_t prepared_asset_epoch =
+			m_impl->render_asset_manager->query_readiness().activity_epoch;
+		for (Impl::PreparedPacket& packet : prepared_packets)
+		{
+			if (packet.visible_frame)
+			{
+				packet.visible_frame->render_asset_epoch = prepared_asset_epoch;
+			}
+		}
+
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
 			m_impl->pending_scene_runtime_releases.insert(
@@ -1406,6 +1416,10 @@ namespace AshEngine
 					m_impl->scene_renderer->is_visible_frame_capture_ready(
 						*packet.visible_frame);
 				if (capture_ready &&
+					terrain_frame_asset_epoch_is_current(
+						*packet.visible_frame,
+						m_impl->render_asset_manager->query_readiness().
+							activity_epoch) &&
 					evaluate_visible_terrain_readiness(
 						*packet.visible_frame,
 						capture_ready,
@@ -1423,6 +1437,18 @@ namespace AshEngine
 			m_impl->last_delta_frame_index = render_frame_index;
 		}
 		submission.render_asset_epoch = m_impl->render_asset_manager->query_readiness().activity_epoch;
+		if (std::any_of(
+			prepared_packets.begin(),
+			prepared_packets.end(),
+			[&submission](const Impl::PreparedPacket& packet)
+			{
+				return packet.scene_packet_expected && packet.visible_frame &&
+					!terrain_frame_asset_epoch_is_current(
+						*packet.visible_frame, submission.render_asset_epoch);
+			}))
+		{
+			submission.scene_packets_capture_ready = 0u;
+		}
 
 		{
 			std::scoped_lock<std::mutex> lock(m_impl->state_mutex);
