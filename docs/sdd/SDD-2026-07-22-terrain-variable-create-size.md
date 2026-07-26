@@ -2,13 +2,26 @@
 
 ## Status
 
-Approved — Implementation in progress
+Implemented — Automated verification passed; named human sign-off pending
 
 用户于 2026-07-22 复核并批准本书面 SDD；后续实施必须遵守本文范围和分批验证合同。任何扩大公共 RHI/RenderGraph API、改变 Terrain schema 或放宽原子回滚语义的方案都需要先修订 SDD 并重新批准。
 
 风险级别：**S2**。本变更同时修改 Editor authoring contract、Terrain render-resource sizing、CPU/HLSL 常量绑定以及 Vulkan/DX12 共用的渲染行为；必须在本 SDD 经用户书面复核批准后实施。本文批准前只允许提交设计文档，不修改生产代码。
 
-截至 2026-07-26，Task 1–7 已完成并通过对应 Debug/Release 单测与架构门禁：authoring normalization、共享 Create/Import target、动态矩形资源寻址、240-byte surface constants、完整 candidate replacement，以及 published snapshot/resources/bounds 的同代切换均已落地。首次 load 在 published view 建立前保持 Pending；同路径异步 load、validation、allocation、height、coarse 或 initial-atlas failure 保留旧 published view，实际路径变化才清除；Scene presentation 在 visible frame 构建前捕获 asset epoch，避免 publication race 被误标为 current。min/rect/default runtime fixture 由精确环境 token 生成到 ignored `Intermediate/generated-fixtures`，最大 case 继续使用显式 8193² TerrainGate；长期规格与具名人类 Vulkan/DX12 清单已同步。Task 8 的 fresh build、双后端 readiness/validation、non-bless RenderGate、Standard PerfGate 与具名人类交互签署完成前，本 SDD 不得标记 Done。
+截至 2026-07-26，Task 1–8 的实现和自动验证已完成：authoring normalization、共享 Create/Import target、动态矩形资源寻址、240-byte surface constants、完整 candidate replacement，以及 published snapshot/resources/bounds 的同代切换均已落地。首次 load 在 published view 建立前保持 Pending；同路径异步 load、validation、allocation、height、coarse 或 initial-atlas failure 保留旧 published view，实际路径变化才清除；Scene presentation 在 visible frame 构建前捕获 asset epoch，并分别发布 Terrain content-ready 与通用 capture-ready，plain smoke 不再能在异步 Terrain 仍 Pending 的 0-draw 帧提前成功。min/rect/default runtime fixture 由精确环境 token 生成到 ignored `Intermediate/generated-fixtures`，最大 case 继续使用显式 8193² TerrainGate；长期规格与具名人类 Vulkan/DX12 清单已同步。自动证据全部通过，但 `docs/templates/TerrainEditorManualSignoff.md` 的具名人类双后端交互签署尚未完成；按本文已批准的停止条件，本 SDD 在收到该签署前不标记 Done。
+
+## Automated verification evidence — 2026-07-26
+
+- fresh `generate_vs2022.bat` 成功；Editor、Sandbox 的 Debug/Release 定向构建均退出 0，Debug `AshImageDiff` 工具目标也成功生成。
+- Debug 全量 `Tests.exe`：621 passed、2 skipped、30,823 assertions；`RunTests.bat Release` 构建与全量执行退出 0。新增回归先证明 plain smoke 在 `scene_packets_terrain_ready=0` 时保持 Running，之后才接入生产计数。
+- `RunArchGate.bat` PASS（35 条既有 legacy warning，无新增）；最终 `AIDevDoctor.ps1 -Mode ValidatePlan` PASS，报告位于 `Intermediate/test-reports/ai-dev/20260726-065522/`。
+- readiness：Editor default Vulkan/DX12，加 Sandbox min/rect/default/max Vulkan/DX12，共 10/10 退出 0。首个修复后 Vulkan default 由旧的 Terrain Pending、0 draw、第 4 帧误成功，变为 Pending → generation 1 recovered → 第 217 帧成功；最大 TerrainGate 在普通 Vulkan/DX12 分别到第 4739/4459 帧才放行。
+- validation：通过 `cmd.exe /d /s /c` 保留 `--perf-gate-validation=on` 单 token，min/rect/default/max × Vulkan/DX12 共 8/8 退出 0。18 份精确 runtime log 均包含 Terrain recovered 与 readiness success；8 份 validation log 均记录 `validation=on`，没有 error/critical、VUID、GPU validation、device lost、fatal、assert、access violation 或 bad leak。
+- resource byte oracle 由生产 sizing helper 的单测精确锁定：min 1×1 height 132,100 B、coarse 33×33 RGBA8 4,356 B；default 8×8 height 8,454,400 B、coarse 257×257 RGBA8 264,196 B；rect 8×16 height 16,908,800 B、coarse 257×513 RGBA8 527,364 B；max 32×32 height 135,270,400 B、coarse 1025×1025 RGBA8 4,202,500 B。固定高分辨率 atlas 仍为 4144×4144、256 slots。
+- non-bless `RunRenderGate.bat` PASS，报告位于 `Intermediate/test-reports/render-gate/20260726-144643-892-68976-41fb0bcb/`：sandbox Vulkan/DX12 golden SSIM 0.996278/0.996177，跨后端 0.999747；particles 三项均为 1.0。
+- `RunPerfGate.bat -Profile Standard` PASS、无 WARN，报告位于 `Intermediate/test-reports/perf-gate/20260726-144837-035-73756-e03d5938/`；未 bless baseline。
+- 审计确认 `Engine.ini`、`EditorSettings.json`、`ViewportLayout.json` 恢复为运行前 SHA-256，`imgui.ini` 的本轮 Terrain window 持久化噪声已移除；4 张 render golden 与 `perf_gate_baselines.json` 的 SHA-256 均与运行前快照一致。
+- 待办仅剩具名人类在 Vulkan/DX12 按 `docs/templates/TerrainEditorManualSignoff.md` 完成 Target Size、Create/Import、矩形最终画面和 reload failure retention 的真实 UI 签署；Agent 不代签。
 
 ## Context
 
