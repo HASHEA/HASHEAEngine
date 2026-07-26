@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-26
 status: active
 ---
 
@@ -26,7 +26,7 @@ status: active
 
 - `Application(EngineInitConfig)` → `initialize()` → `start()`（阻塞跑主循环并返回运行成功/失败）→ 析构/`_shutdown_runtime()`；EntryPoint 将失败映射为非零进程退出码。
 - `initialize` 顺序：LogService → MemoryService → threading（当前线程注册为 Render 角色）→ 解析 RHI 配置（Engine.ini + `initConfig.backend` 覆盖，路径默认 `product/config/Engine.ini`）并应用本进程 PerfGate validation/vsync override → 发布同一份渲染 feature 配置 → `Window::create` → `GraphicsContext::create`（按需启用 GPU timing）→ `Swapchain::create` → RenderDevice/Renderer → `UIContext`。窗口 extent 在创建 Window 前合并进 `EngineInitConfig`；用于报告的 resolved extent 必须取初始化后的 Swapchain 实际尺寸，而不是 GLFW 请求尺寸。`PerfGateController` 只在上述初始化成功末尾配置，初始化失败不得写出误导性的 0-sample 正常报告。
-- 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → readiness 观察 → 帧计数。`--smoke-test-seconds` 在第一个完整 ready+present-completed 帧提前成功，秒数只作硬失败上限；PerfGate 采样窗口与显式 `--run-for-*` watchdog 仍可请求正常退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。acquire 与 present 结果从 RHI 以同一三态传播：Completed 才继续录制或满足 readiness，Retryable 跳过本帧并等下一帧，Failed 立即终止并返回非零；acquire Retryable 不消费已 arm 的 capture，DXGI OCCLUDED 是成功 present 状态。
+- 主循环每帧：平台事件泵 → tick → `pump_render_commands` → 渲染 + present → readiness 观察 → 帧计数。`--smoke-test-seconds` 在第一个完整 ready+present-completed 帧提前成功，秒数只作硬失败上限；当前帧全部 scene packet 还必须分别满足提交成功与 Terrain 内容就绪，避免异步 Terrain 仍 Pending、提交 0 draw 时误报成功。普通 smoke 不等待粒子等无关动态 capture warmup，只有 frame dump 额外要求通用 capture-ready。PerfGate 采样窗口与显式 `--run-for-*` watchdog 仍可请求正常退出。默认渲染阶段固定顺序：begin_frame → `_on_render_debug` → scene presentation submit → `_on_gui` → end_frame。acquire 与 present 结果从 RHI 以同一三态传播：Completed 才继续录制或满足 readiness，Retryable 跳过本帧并等下一帧，Failed 立即终止并返回非零；acquire Retryable 不消费已 arm 的 capture，DXGI OCCLUDED 是成功 present 状态。
 - PerfGate GPU 归档使用 `Warmup → Sampling → Draining → Complete` 状态机：仅记录 sampling 窗口内得到精确 submit acknowledgement 的 renderer frame ID，延迟完成 sample 只按自身 frame ID 归属；telemetry 关闭时不进入 drain，开启时 pending 全部完成便提前结束，否则最多 drain 配置时长且不等待 device idle。schema v2 保留 schema v1 的 CPU 顶层字段，并追加 runtime、backend metadata、总 `valid/submitted` coverage 与逐 metric `present/submitted` coverage；backend 判为 invalid 的 sample 不进入 percentile，缺失 metric 不把整帧改判 invalid，也不序列化伪造的 `0` duration。profile 阈值与必需 metric 判定由 `RunPerfGate` 工具层执行。
 - 可选 logic 线程：`EngineThreadingConfig.enable_logic_thread` 开启，输入经快照（`_publish/_consume_logic_input_snapshot`）跨线程传递；尚未消费的 render-frame 快照按“最新 down/位置、OR pressed/released、累加 scroll”合并，每批瞬态只允许一次 `_on_logic_update()` 观察，持续状态保留到新快照；logic 线程异常会被捕获并终止主循环。
 - 应用侧扩展点：`_on_startup/_on_update/_on_gui/_on_render/_on_logic_*/_on_shutdown` 等虚函数。
@@ -36,7 +36,7 @@ status: active
 
 | 选项 | 行为 |
 | --- | --- |
-| `--smoke-test-seconds[=S]` | readiness smoke；等待应用、资源、当前帧全部 scene packet 与非致命 present completion 后成功退出，S 是覆盖初始化、运行与 teardown 的进程级 wall-clock 硬失败上限（裸选项 25 秒）；环境变量 `ASH_ENGINE_SMOKE_TEST_SECONDS` 等效 |
+| `--smoke-test-seconds[=S]` | readiness smoke；等待应用、资源、当前帧全部 scene packet、其中的 Terrain load/upload/atlas 内容与非致命 present completion 后成功退出，S 是覆盖初始化、运行与 teardown 的进程级 wall-clock 硬失败上限（裸选项 25 秒）；普通 smoke 不等待非 Terrain 动态 capture warmup；环境变量 `ASH_ENGINE_SMOKE_TEST_SECONDS` 等效 |
 | `--run-for-seconds=S` / `--run-for-frames=N` | 显式固定时长/帧数运行，供 PerfGate watchdog、soak 或调试使用；到达上限是正常退出，不代表 readiness 成功 |
 | `--smoke-test[=N]` | deprecated 的 `--run-for-frames=N` 别名（裸选项 N=3）；`ASH_ENGINE_SMOKE_TEST_FRAMES` 同样仅是旧 fixed-run 别名并打印告警 |
 | `--rhi=<vulkan\|vk\|directx12\|dx12\|d3d12>` | 后端覆盖，经 `set_backend_override` 在 `initialize()` 之前注入（顺序是硬约束）；非法值直接退出码 1 |
@@ -53,7 +53,7 @@ status: active
 
 ### Frame dump 与 engine overlay
 
-- readiness 由 `ApplicationAutomationController` 统一判定：派生应用 Ready、资源无 pending/failed、命令队列为空、当前 Application frame 的全部预期 scene packet 成功、scene 提交 epoch 等于最新资源 epoch，且 acquire/begin/end 成功、present Completed。Retryable acquire/present 保持 Pending；Sandbox 与 Editor 分别提供启动/场景及 bootstrap/UI/资产库 readiness hook。
+- readiness 由 `ApplicationAutomationController` 统一判定：派生应用 Ready、资源无 pending/failed、命令队列为空、当前 Application frame 的全部预期 scene packet 成功且 Terrain 内容 Ready、scene 提交 epoch 等于最新资源 epoch，且 acquire/begin/end 成功、present Completed。Terrain 内容计数独立于通用 capture-ready：因此 plain smoke 会等待 Terrain resolve、height upload 和当前可见 atlas residency，但仍不等待粒子等动态 capture 稳定；frame dump 同时要求两者。Retryable acquire/present 保持 Pending；Sandbox 与 Editor 分别提供启动/场景及 bootstrap/UI/资产库 readiness hook。
 - dump 使用两阶段握手：第一个 ready frame 清空可能混有 fallback 资源画面的 AO/TAA/体积光 temporal history，并 arm 资源 epoch；下一帧开始前 epoch 未变才请求 capture，present 后再验证同一 epoch 和全部 scene packet。变化时读回并丢弃、重新等待；超时绝不写不完整图片。粒子等动态内容还能提供 capture-ready 语义信号，当前按 `spawn_rate × (lifetime + variance)` 推导稳定窗口，不使用固定预热帧。
 - dump 模式的可见帧在提交前深拷贝，并使用渲染侧连续 frame index 与固定 `delta_seconds=1/60`；它与固定相机、隐藏 overlay、禁 TAA jitter 一起构成确定性契约。
 - 普通模式使用当前 Application render frame index，并以每个新 frame 实际进入的 scene render 调用作为模拟时钟。空 packet、输出/材质准备失败而未进入 render、以及重复同帧 submit 不推进时钟；一旦进入 render，即使该调用随后失败也推进一次，避免非事务式渲染失败后下一帧重复积分。

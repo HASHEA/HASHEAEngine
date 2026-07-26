@@ -629,6 +629,7 @@ namespace AshEngine
 					perfReadinessFrame.scene_packets_attempted = perfSubmission.scene_packets_attempted;
 					perfReadinessFrame.scene_packets_succeeded = perfSubmission.scene_packets_succeeded;
 					perfReadinessFrame.scene_packets_failed = perfSubmission.scene_packets_failed;
+					perfReadinessFrame.scene_packets_terrain_ready = perfSubmission.scene_packets_terrain_ready;
 					perfReadinessFrame.scene_packets_capture_ready = perfSubmission.scene_packets_capture_ready;
 				}
 				perfReadinessFrame.present_completed = framePresentCompleted;
@@ -675,6 +676,7 @@ namespace AshEngine
 					automationFrame.scene_packets_attempted = submission.scene_packets_attempted;
 					automationFrame.scene_packets_succeeded = submission.scene_packets_succeeded;
 					automationFrame.scene_packets_failed = submission.scene_packets_failed;
+					automationFrame.scene_packets_terrain_ready = submission.scene_packets_terrain_ready;
 					automationFrame.scene_packets_capture_ready = submission.scene_packets_capture_ready;
 				}
 				automationFrame.present_completed = framePresentCompleted;
@@ -742,7 +744,7 @@ namespace AshEngine
 					{
 						runtimeFailureDetected.store(true, std::memory_order_release);
 						HLogError(
-							"Application: readiness automation failed at frame {} (outcome={}, app={}, asset_epoch={}, asset_pending={}, asset_failed={}, commands_pending={}, submission_valid={}, submission_frame={}, submission_epoch={}, attempted={}, succeeded={}, failed={}, capture_ready={}, present_completed={}).",
+							"Application: readiness automation failed at frame {} (outcome={}, app={}, asset_epoch={}, asset_pending={}, asset_failed={}, commands_pending={}, submission_valid={}, submission_frame={}, submission_epoch={}, attempted={}, succeeded={}, failed={}, terrain_ready={}, capture_ready={}, present_completed={}).",
 							currentFrameIndex,
 							static_cast<uint32_t>(automationController.outcome()),
 							static_cast<uint32_t>(automationFrame.application_readiness),
@@ -756,6 +758,7 @@ namespace AshEngine
 							automationFrame.scene_packets_attempted,
 							automationFrame.scene_packets_succeeded,
 							automationFrame.scene_packets_failed,
+							automationFrame.scene_packets_terrain_ready,
 							automationFrame.scene_packets_capture_ready,
 							automationFrame.present_completed ? "yes" : "no");
 					}

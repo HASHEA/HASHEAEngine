@@ -928,6 +928,15 @@ TEST_CASE("Terrain presentation stamps asset epoch before visible frame construc
 		std::string::npos);
 }
 
+TEST_CASE("Terrain presentation reports content readiness separately from capture warmup")
+{
+	const std::string source = ReadSource(
+		"project/src/engine/Function/Render/ScenePresentationSubsystem.cpp");
+	CHECK(source.find("scene_packets_terrain_ready") != std::string::npos);
+	CHECK(source.find(
+		"evaluate_visible_terrain_readiness(") != std::string::npos);
+}
+
 TEST_CASE("Terrain presentation logs typed resolve state transitions once")
 {
 	const std::string source = ReadSource(

@@ -137,6 +137,7 @@ namespace
 		frame.scene_packets_attempted = 1u;
 		frame.scene_packets_succeeded = 1u;
 		frame.scene_packets_failed = 0u;
+		frame.scene_packets_terrain_ready = 1u;
 		frame.scene_packets_capture_ready = 1u;
 		frame.present_completed = true;
 		return frame;
@@ -760,6 +761,26 @@ TEST_CASE("plain smoke does not wait for dynamic capture stabilization")
 	frame.scene_packets_capture_ready = 0u;
 
 	CHECK(controller.observe_presented_frame(frame, false, false, 0.5).succeeded);
+}
+
+TEST_CASE("plain smoke waits for Terrain content without waiting generic capture warmup")
+{
+	AshEngine::ApplicationAutomationController controller{};
+	controller.configure(AshEngine::ApplicationAutomationMode::Smoke, 10.0);
+	AshEngine::ApplicationAutomationFrame frame = ReadyFrame();
+	frame.scene_packets_capture_ready = 0u;
+	frame.scene_packets_terrain_ready = 0u;
+
+	const AshEngine::ApplicationAutomationDecision pending =
+		controller.observe_presented_frame(frame, false, false, 0.5);
+	CHECK_FALSE(pending.request_exit);
+	CHECK(controller.outcome() == AshEngine::ApplicationAutomationOutcome::Running);
+
+	frame.scene_packets_terrain_ready = 1u;
+	const AshEngine::ApplicationAutomationDecision ready =
+		controller.observe_presented_frame(frame, false, false, 1.0);
+	CHECK(ready.request_exit);
+	CHECK(ready.succeeded);
 }
 
 TEST_CASE("frame dump waits for dynamic capture stabilization without a frame constant")

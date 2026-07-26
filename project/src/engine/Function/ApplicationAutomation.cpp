@@ -135,6 +135,7 @@ namespace AshEngine
 			frame.scene_packets_attempted > 0 &&
 			frame.scene_packets_failed == 0 &&
 			frame.scene_packets_succeeded == frame.scene_packets_attempted &&
+			frame.scene_packets_terrain_ready == frame.scene_packets_attempted &&
 			capture_content_ready &&
 			frame.scene_submission_asset_epoch == frame.render_asset_epoch;
 	}

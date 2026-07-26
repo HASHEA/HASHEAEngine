@@ -1411,15 +1411,24 @@ namespace AshEngine
 				const bool capture_ready =
 					m_impl->scene_renderer->is_visible_frame_capture_ready(
 						*packet.visible_frame);
-				if (capture_ready &&
+				const bool asset_epoch_current =
 					terrain_frame_asset_epoch_is_current(
 						*packet.visible_frame,
 						m_impl->render_asset_manager->query_readiness().
-							activity_epoch) &&
+							activity_epoch);
+				const TerrainReadinessStage terrain_readiness =
+					asset_epoch_current ?
 					evaluate_visible_terrain_readiness(
 						*packet.visible_frame,
 						capture_ready,
-						true) == TerrainReadinessStage::Ready)
+						true) :
+					TerrainReadinessStage::Pending;
+				if (terrain_readiness == TerrainReadinessStage::Ready)
+				{
+					++submission.scene_packets_terrain_ready;
+				}
+				if (capture_ready &&
+					terrain_readiness == TerrainReadinessStage::Ready)
 				{
 					++submission.scene_packets_capture_ready;
 				}
@@ -1443,6 +1452,7 @@ namespace AshEngine
 						*packet.visible_frame, submission.render_asset_epoch);
 			}))
 		{
+			submission.scene_packets_terrain_ready = 0u;
 			submission.scene_packets_capture_ready = 0u;
 		}
 

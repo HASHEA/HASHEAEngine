@@ -42,6 +42,7 @@ namespace AshEngine
 		uint32_t scene_packets_attempted = 0;
 		uint32_t scene_packets_succeeded = 0;
 		uint32_t scene_packets_failed = 0;
+		uint32_t scene_packets_terrain_ready = 0;
 		uint32_t scene_packets_capture_ready = 0;
 		bool present_completed = false;
 	};
