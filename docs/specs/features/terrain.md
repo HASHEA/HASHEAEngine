@@ -163,6 +163,7 @@ Create/Import 产生的 `.AshTerrain` target 必须以配置后的 AssetDatabase
 - refresh、publish 和 invalidate 通过 catalog generation 与每资产 load serial 阻止旧 worker 覆盖新索引或新发布结果。
 - `publish_terrain_snapshot` 只接受匹配 ID 的有效快照，并按 `(content_generation, residency_revision)` 字典序拒绝 stale publication。
 - `invalidate_terrain_snapshot(id)` 只清除该 Terrain 的 cache/in-flight，不做全局 refresh。
+- 全目录 refresh 后，同一规范化路径可能从未变化的容器物理版本解码出不同指针的 immutable snapshot。`RenderAssetManager` 仅在旧、新 snapshot 的资产 ID、`(content_generation, residency_revision)` 以及双方有效 `TerrainContainerRevision` 全部相同时，把该请求视为幂等并保留既有 accepted/published pointer、readiness 与 activity epoch；物理 revision 不同或无效的同代不同指针仍按 stale 拒绝。
 
 ## 实现位置
 

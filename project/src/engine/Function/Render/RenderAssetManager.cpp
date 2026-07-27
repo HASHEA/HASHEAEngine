@@ -468,7 +468,16 @@ namespace AshEngine
 		}
 		const std::shared_ptr<const TerrainAssetSnapshot> previous_snapshot =
 			asset->accepted_snapshot();
-		if (!owns_request && previous_snapshot == snapshot)
+		const bool same_committed_container_revision = previous_snapshot &&
+			!previous_snapshot->failed && !snapshot->failed &&
+			previous_snapshot->asset_id == snapshot->asset_id &&
+			previous_snapshot->content_generation == snapshot->content_generation &&
+			previous_snapshot->residency_revision == snapshot->residency_revision &&
+			previous_snapshot->source_revision.is_valid() &&
+			snapshot->source_revision.is_valid() &&
+			previous_snapshot->source_revision == snapshot->source_revision;
+		if (!owns_request &&
+			(previous_snapshot == snapshot || same_committed_container_revision))
 		{
 			const TerrainRenderReadiness readiness = asset->readiness();
 			if (readiness == TerrainRenderReadiness::Failed)

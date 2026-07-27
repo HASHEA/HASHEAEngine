@@ -93,6 +93,19 @@ namespace
 			AshEngine::make_default_terrain_grid_layout());
 	}
 
+	auto MakeSourceRevision(uint64_t generation) ->
+		AshEngine::TerrainContainerRevision
+	{
+		AshEngine::TerrainContainerRevision revision{};
+		revision.file_size = 4096u + generation;
+		revision.descriptors[0].generation = generation;
+		revision.descriptors[0].index_offset = 96u;
+		revision.descriptors[0].index_size = 512u;
+		revision.descriptors[0].index_crc32 =
+			static_cast<uint32_t>(0x12340000u + generation);
+		return revision;
+	}
+
 	void FillCompleteSnapshot(
 		const std::shared_ptr<AshEngine::TerrainAssetSnapshot>& snapshot)
 	{
@@ -2233,6 +2246,77 @@ TEST_CASE("Terrain manager returns a retained publication for stale requests ind
 		std::string::npos);
 	CHECK(asset->published_view()->snapshot == published);
 	CHECK(asset->accepted_snapshot() == pending);
+	manager.shutdown();
+}
+
+TEST_CASE("Terrain manager treats a reloaded identical container revision as the same request")
+{
+	AshEngine::RenderAssetManager manager{};
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto original = MakeSnapshot(5u, layout);
+	original->residency_revision = 3u;
+	original->source_revision = MakeSourceRevision(5u);
+	original->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	const auto asset = manager.request_terrain_asset(
+		"terrain/IdenticalReimport.AshTerrain", original);
+	REQUIRE(asset != nullptr);
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		complete_front_height_upload(*asset));
+	REQUIRE(AshEngine::TerrainRenderAssetCpuTestSeam::
+		publish_active_snapshot(*asset));
+	REQUIRE(manager.finalize_pending_terrain_asset(asset));
+	const AshEngine::RenderAssetReadinessSnapshot ready =
+		manager.query_readiness();
+	REQUIRE_FALSE(ready.pending);
+	REQUIRE_FALSE(ready.failed);
+
+	auto reloaded = MakeSnapshot(5u, layout);
+	reloaded->residency_revision = 3u;
+	reloaded->source_revision = original->source_revision;
+	reloaded->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	REQUIRE(reloaded != original);
+	REQUIRE(reloaded->components[0] != original->components[0]);
+	std::string error = "sentinel";
+	CHECK(manager.request_terrain_asset(
+		"terrain/identicalreimport.ashterrain", reloaded, &error) == asset);
+	CHECK(error.empty());
+	CHECK(asset->accepted_snapshot() == original);
+	REQUIRE(asset->published_view() != nullptr);
+	CHECK(asset->published_view()->snapshot == original);
+	const AshEngine::RenderAssetReadinessSnapshot after =
+		manager.query_readiness();
+	CHECK_FALSE(after.pending);
+	CHECK_FALSE(after.failed);
+	CHECK(after.activity_epoch == ready.activity_epoch);
+	manager.shutdown();
+}
+
+TEST_CASE("Terrain manager keeps equal generations with different container revisions stale")
+{
+	AshEngine::RenderAssetManager manager{};
+	const AshEngine::TerrainGridLayout layout = MakeRenderLayout(1u, 1u);
+	auto original = MakeSnapshot(5u, layout);
+	original->residency_revision = 3u;
+	original->source_revision = MakeSourceRevision(5u);
+	original->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	const auto asset = manager.request_terrain_asset(
+		"terrain/ChangedReimport.AshTerrain", original);
+	REQUIRE(asset != nullptr);
+	AshEngine::TerrainRenderAssetCpuTestSeam::install_published_bundle(
+		*asset, original);
+
+	auto changed = MakeSnapshot(5u, layout);
+	changed->residency_revision = 3u;
+	changed->source_revision = MakeSourceRevision(6u);
+	changed->components[0] = MakeComponent({ 0u, 0u }, 5u);
+	std::string error{};
+	CHECK(manager.request_terrain_asset(
+		"terrain/changedreimport.ashterrain", changed, &error) == asset);
+	CHECK(error.find("terrain snapshot content generation is stale.") !=
+		std::string::npos);
+	CHECK(asset->accepted_snapshot() == original);
+	REQUIRE(asset->published_view() != nullptr);
+	CHECK(asset->published_view()->snapshot == original);
 	manager.shutdown();
 }
 
