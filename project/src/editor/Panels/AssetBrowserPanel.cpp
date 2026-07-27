@@ -353,15 +353,16 @@ namespace AshEditor
 			return;
 		}
 
+		const std::filesystem::path pathSelectedAsset = pSelectedAsset->relative_path;
 		std::string strError{};
-		if (_upImpl->deps.pAssetDatabaseService->ReimportAsset(pSelectedAsset->relative_path, &strError))
+		if (_upImpl->deps.pAssetDatabaseService->ReimportAsset(pathSelectedAsset, &strError))
 		{
-			SelectAssetByPath(pSelectedAsset->relative_path);
-			HLogInfo("Asset reimported: {}", pSelectedAsset->relative_path.generic_string());
+			SelectAssetByPath(pathSelectedAsset);
+			HLogInfo("Asset reimported: {}", pathSelectedAsset.generic_string());
 			return;
 		}
 
-		const std::string strAssetPath = pSelectedAsset->relative_path.generic_string();
+		const std::string strAssetPath = pathSelectedAsset.generic_string();
 		if (!strError.empty())
 		{
 			HLogError("Asset reimport failed for {}. {}", strAssetPath, strError);

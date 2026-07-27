@@ -12,7 +12,7 @@ HASHEAEngine（AshEngine）是一个以现代实时渲染和引擎架构实验�
 - GPU-driven Phase 1 通用底座：显式 indexed/non-indexed indirect、generation-safe instance page 与双后端 compute → indexed indirect 全链自测；生产 grass/tree、流送和 GPU culling 尚未接入
 - Scene-driven 静态网格渲染：ECS-style Scene → 不可变可见帧 → 渲染线程消费
 - Terrain 渲染核心：8193² 高度场、Component LOD、权重 atlas、deferred GBuffer / 方向光阴影与 readiness 驱动抓帧；有限正缩放由 Scene bounds、Editor 动态 reverse-Z 取景、跨 LOD 平滑法线和 receiver-plane PCF 共同保持远近表面稳定
-- Terrain 编辑会话（Phase 3）：Hierarchy 单选 Terrain 实体即可进入 Terrain Mode；无编辑层资产在第一次有效落笔时自动创建通用编辑层。Raise/Lower/Smooth/Flatten/Noise/Paint/Erase 共用非破坏编辑层，拖动期间按 80 ms wall-clock 节奏发布增量预览，完整拖动仍只产生一个 undo/redo 命令；Manage 支持 generation-aware 异步 Save、Save Copy As、clean-only Optimize、Reload/外部冲突处理，以及 non-replacing 的 flat Create、PNG/RAW/EXR Import/Export 后台任务；相同物理容器版本的 refresh/reimport 保持渲染发布幂等，Ctrl+S 会先保存当前 Scene 引用的 dirty Terrain
+- Terrain 编辑会话（Phase 3）：Hierarchy 单选 Terrain 实体即可进入 Terrain Mode；无编辑层资产在第一次有效落笔时自动创建通用编辑层。Raise/Lower/Smooth/Flatten/Noise/Paint/Erase 共用非破坏编辑层，拖动期间按 80 ms wall-clock 节奏发布增量预览，完整拖动仍只产生一个 undo/redo 命令；Manage 支持 generation-aware 异步 Save、Save Copy As、clean-only Optimize、Reload/外部冲突处理，以及 non-replacing 的 flat Create、PNG/RAW/EXR Import/Export 后台任务；相同物理容器版本的 refresh/reimport 保持渲染发布幂等，Asset Browser 在 catalog refresh 前按值固定 Reimport 路径，Ctrl+S 会先保存当前 Scene 引用的 dirty Terrain
 - 材质 V2：`.AshMat` 基材质 + `.AshMatIns` 实例，engine host shader 与用户材质 shader 拼合
 - Editor 基础壳（视口、层级、属性、资产浏览、undo/redo）；Sandbox 为标准验证程序（Sponza 场景）
 - 自动门禁：PerfGate（性能回归）、RenderGate（双后端 golden image SSIM 回归 + 跨后端 diff）

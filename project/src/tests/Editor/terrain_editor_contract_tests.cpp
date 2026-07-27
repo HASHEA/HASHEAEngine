@@ -1765,3 +1765,27 @@ TEST_CASE("Terrain brush preview uses the ScenePresentation overlay facade")
 	CHECK(helpers < terrain);
 	CHECK(terrain < selection);
 }
+
+TEST_CASE("Asset Browser reimport keeps the selected path alive across catalog refresh")
+{
+	const std::string source = ReadTerrainContractText(
+		"project/src/editor/Panels/AssetBrowserPanel.cpp");
+	REQUIRE_FALSE(source.empty());
+
+	const size_t actionBegin = source.find("void AssetBrowserPanel::ExecuteReimportSelected()");
+	const size_t actionEnd = source.find(
+		"void AssetBrowserPanel::DispatchContentShortcuts(",
+		actionBegin);
+	REQUIRE(actionBegin != std::string::npos);
+	REQUIRE(actionEnd != std::string::npos);
+	const std::string action = source.substr(actionBegin, actionEnd - actionBegin);
+
+	const size_t pathCopy = action.find(
+		"const std::filesystem::path pathSelectedAsset = pSelectedAsset->relative_path;");
+	const size_t reimport = action.find("ReimportAsset(pathSelectedAsset, &strError)");
+	REQUIRE(pathCopy != std::string::npos);
+	REQUIRE(reimport != std::string::npos);
+	CHECK(pathCopy < reimport);
+	CHECK(action.find("pSelectedAsset->", reimport) == std::string::npos);
+	CHECK(action.find("SelectAssetByPath(pathSelectedAsset)") != std::string::npos);
+}
