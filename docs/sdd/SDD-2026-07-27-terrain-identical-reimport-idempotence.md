@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented; awaiting focused manual recheck
+Done（2026-07-27；自动验证与最终 Vulkan 三连 Reimport 人工复测通过）
 
 ## Goal
 
@@ -60,4 +60,9 @@ Implemented; awaiting focused manual recheck
 - Standard PerfGate：`20260727-110113-515-39348-fc6504c6`，Editor/Sandbox × Vulkan/DX12 四组合全部 PASS，无 failures/warnings，未 bless baseline。
 - 非 bless RenderGate：`20260727-110503-655-57552-f3038e03`，四个 backend/scene smoke、golden SSIM 与跨后端比较全部 PASS，未 bless golden。
 - AIDevDoctor：`20260727-030647`，4/4 fresh PASS，PerfGate/logs fresh，无 validation evidence gap；fresh gate 日志未命中 stale-generation、validation/debug-layer、device loss、assertion 或 resource-leak 拒绝模式。
-- Editor 设置/config 已恢复到人工验收前四文件 SHA-256 基线。人工仍需在该实现 commit 上复测未变化 Terrain 的 Reimport，并确认新会话日志无 stale-generation application error。
+- Editor 设置/config 已恢复到人工验收前四文件 SHA-256 基线。
+- 最终人工复测在包含本修复及 Asset Browser catalog-lifetime follow-up 的 commit
+  `5f50407f622a82f888cc52aa13d0069732c91fd0` 上执行。用户在 Vulkan Editor 中对
+  未变化的 `terrain/ManualB2VulkanRect.AshTerrain` 连续 Reimport 3 次并明确报告
+  “均成功且未闪退”；三次成功日志时间为 12:03:41、12:03:48、12:03:52。关联日志
+  无 stale-generation application error，且没有新 crash dump。

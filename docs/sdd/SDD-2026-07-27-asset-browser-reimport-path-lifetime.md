@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented; automated validation passed, awaiting focused manual recheck
+Done（2026-07-27；自动验证与最终 Vulkan 三连 Reimport 人工复测通过）
 
 ## Goal
 
@@ -118,4 +118,10 @@ catalog 未变化时产生保守的 frame-data 重建；该 false positive 不�
 - 仓库原生前台复跑 Standard PerfGate：
   `20260727-115341-549-55588-ec71ae82`，Editor/Sandbox × Vulkan/DX12 四组合全部
   PASS，无 failures/warnings，未 bless baseline。
-- frame-catalog 修复后的连续 Reimport 人工复测待执行。
+- 最终人工复测在 commit `5f50407f622a82f888cc52aa13d0069732c91fd0` 的 Vulkan
+  Editor 上执行。用户对 `terrain/ManualB2VulkanRect.AshTerrain` 连续执行 3 次
+  Reimport 并明确报告“均成功且未闪退”；应用日志
+  `AshAppLogFile_20260727_115854_590886_p55548_s0.logfile` 分别在
+  12:03:41、12:03:48、12:03:52 记录成功。审计时进程仍响应，未产生新 dump，关联
+  Engine/Application 日志未命中 stale-generation、validation、device-loss、
+  assertion、fatal 或 crash 信号。

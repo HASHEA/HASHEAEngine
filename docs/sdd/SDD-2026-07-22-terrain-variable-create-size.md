@@ -2,13 +2,20 @@
 
 ## Status
 
-Implemented — Automated verification passed; named human sign-off pending
+Implemented — Automated verification passed; integration authorized by explicit user direction with the full named dual-backend sign-off still incomplete
 
 用户于 2026-07-22 复核并批准本书面 SDD；后续实施必须遵守本文范围和分批验证合同。任何扩大公共 RHI/RenderGraph API、改变 Terrain schema 或放宽原子回滚语义的方案都需要先修订 SDD 并重新批准。
 
 风险级别：**S2**。本变更同时修改 Editor authoring contract、Terrain render-resource sizing、CPU/HLSL 常量绑定以及 Vulkan/DX12 共用的渲染行为；必须在本 SDD 经用户书面复核批准后实施。本文批准前只允许提交设计文档，不修改生产代码。
 
-截至 2026-07-26，Task 1–8 的实现和自动验证已完成：authoring normalization、共享 Create/Import target、动态矩形资源寻址、240-byte surface constants、完整 candidate replacement，以及 published snapshot/resources/bounds 的同代切换均已落地。首次 load 在 published view 建立前保持 Pending；同路径异步 load、validation、allocation、height、coarse 或 initial-atlas failure 保留旧 published view，实际路径变化才清除；Scene presentation 在 visible frame 构建前捕获 asset epoch，并分别发布 Terrain content-ready 与通用 capture-ready，plain smoke 不再能在异步 Terrain 仍 Pending 的 0-draw 帧提前成功。min/rect/default runtime fixture 由精确环境 token 生成到 ignored `Intermediate/generated-fixtures`，最大 case 继续使用显式 8193² TerrainGate；长期规格与具名人类 Vulkan/DX12 清单已同步。自动证据全部通过，但 `docs/templates/TerrainEditorManualSignoff.md` 的具名人类双后端交互签署尚未完成；按本文已批准的停止条件，本 SDD 在收到该签署前不标记 Done。
+截至 2026-07-26，Task 1–8 的实现和自动验证已完成：authoring normalization、共享 Create/Import target、动态矩形资源寻址、240-byte surface constants、完整 candidate replacement，以及 published snapshot/resources/bounds 的同代切换均已落地。首次 load 在 published view 建立前保持 Pending；同路径异步 load、validation、allocation、height、coarse 或 initial-atlas failure 保留旧 published view，实际路径变化才清除；Scene presentation 在 visible frame 构建前捕获 asset epoch，并分别发布 Terrain content-ready 与通用 capture-ready，plain smoke 不再能在异步 Terrain 仍 Pending 的 0-draw 帧提前成功。min/rect/default runtime fixture 由精确环境 token 生成到 ignored `Intermediate/generated-fixtures`，最大 case 继续使用显式 8193² TerrainGate；长期规格与具名人类 Vulkan/DX12 清单已同步。
+
+2026-07-27 的人工作业完成了 Vulkan 基础、交互、文件格式以及最终三连 Reimport
+复测，并发现后修复了相同物理版本 stale-generation 与 Asset Browser 两处
+use-after-free。用户此前明确要求跳过剩余人工验收并直接合入 `main`；该授权允许集成，
+但不等价于伪造完整的人类签署。`docs/templates/TerrainEditorManualSignoff.md` 要求的
+身份/签名字段及完整 DX12 人工列仍未填写，因此本 SDD 保持非 Done 状态；自动双后端、
+RenderGate、PerfGate 和本次 Vulkan 人工事实分别按实际证据记录。
 
 ## Automated verification evidence — 2026-07-26
 
