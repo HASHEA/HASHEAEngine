@@ -299,6 +299,7 @@ namespace AshEditor
 				return frameData;
 			}
 
+			frameData.uCatalogRevision = refDeps.pAssetDatabaseService->GetCatalogRevision();
 			const std::vector<AshEngine::AssetInfo>& vecAssets = refDeps.pAssetDatabaseService->GetItems();
 			NormalizeSelection(*refDeps.pAssetDatabaseService, refState);
 			refState.iTypeFilterIndex = std::clamp(

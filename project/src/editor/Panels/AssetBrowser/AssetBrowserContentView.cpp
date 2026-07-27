@@ -42,6 +42,16 @@ namespace AshEditor
 			AshEngine::UIWindowFlagBits::None
 		};
 
+		bool IsFrameCatalogCurrent(
+			const AssetBrowserViewContext& refViewContext,
+			const AssetBrowserFrameData& refFrameData)
+		{
+			return
+				!refViewContext.refDeps.pAssetDatabaseService ||
+				refViewContext.refDeps.pAssetDatabaseService->GetCatalogRevision() ==
+					refFrameData.uCatalogRevision;
+		}
+
 		void BeginAssetDragSource(
 			const AssetBrowserViewContext& refViewContext,
 			AshEngine::UIContext& refUi,
@@ -249,12 +259,26 @@ namespace AshEditor
 				AssetBrowserSupport::DrawListItemLabel(refUi, iconHandle, refVisibleItem.strDisplayLabel);
 				DrawAssetItemTooltip(refViewContext, refAsset, refVisibleItem.strDisplayLabel);
 				HandleAssetItemInteraction(refViewContext, refUi, refFrameData, refAsset, bPrimaryActivated, bDoubleClicked);
+				if (!IsFrameCatalogCurrent(refViewContext, refFrameData))
+				{
+					refUi.pop_id();
+					break;
+				}
 				if (refAsset.is_directory)
 				{
 					HandleAssetDirectoryDropTarget(refViewContext, refUi, refAsset.relative_path);
+					if (!IsFrameCatalogCurrent(refViewContext, refFrameData))
+					{
+						refUi.pop_id();
+						break;
+					}
 				}
 				refContextMenus.DrawAssetItemMenu(refViewContext, refAsset);
 				refUi.pop_id();
+				if (!IsFrameCatalogCurrent(refViewContext, refFrameData))
+				{
+					break;
+				}
 
 				refUi.table_next_column();
 				refUi.text_unformatted(AssetDatabaseService::GetTypeLabel(refAsset.type));
@@ -335,12 +359,26 @@ namespace AshEditor
 
 				DrawAssetItemTooltip(refViewContext, refAsset, refVisibleItem.strDisplayLabel);
 				HandleAssetItemInteraction(refViewContext, refUi, refFrameData, refAsset, bPrimaryActivated, bDoubleClicked);
+				if (!IsFrameCatalogCurrent(refViewContext, refFrameData))
+				{
+					refUi.pop_id();
+					break;
+				}
 				if (refAsset.is_directory)
 				{
 					HandleAssetDirectoryDropTarget(refViewContext, refUi, refAsset.relative_path);
+					if (!IsFrameCatalogCurrent(refViewContext, refFrameData))
+					{
+						refUi.pop_id();
+						break;
+					}
 				}
 				refContextMenus.DrawAssetItemMenu(refViewContext, refAsset);
 				refUi.pop_id();
+				if (!IsFrameCatalogCurrent(refViewContext, refFrameData))
+				{
+					break;
+				}
 
 				++iColumnIndex;
 				const bool bEndOfRow = iColumnIndex >= iColumnCount;

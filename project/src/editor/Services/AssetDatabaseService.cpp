@@ -63,14 +63,20 @@ namespace AshEditor
 			return false;
 		}
 
+		bool bRefreshed = false;
 		if (!_database.is_valid())
 		{
 			_database = AshEngine::AssetDatabase::create(_pathAssetRoot);
-			return _database.is_valid();
+			bRefreshed = _database.is_valid();
+		}
+		else
+		{
+			_database.set_root_path(_pathAssetRoot);
+			bRefreshed = _database.refresh();
 		}
 
-		_database.set_root_path(_pathAssetRoot);
-		return _database.refresh();
+		AdvanceCatalogRevision();
+		return bRefreshed;
 	}
 
 	AshEngine::AssetDatabase& AssetDatabaseService::GetDatabase()
@@ -86,6 +92,11 @@ namespace AshEditor
 	const std::filesystem::path& AssetDatabaseService::GetAssetRoot() const
 	{
 		return _pathAssetRoot;
+	}
+
+	uint64_t AssetDatabaseService::GetCatalogRevision() const noexcept
+	{
+		return _uCatalogRevision;
 	}
 
 	const std::vector<AshEngine::AssetInfo>& AssetDatabaseService::GetItems() const
@@ -616,6 +627,15 @@ namespace AshEditor
 				? std::string("Asset database refresh failed after the filesystem change.")
 				: strRefreshError);
 		return false;
+	}
+
+	void AssetDatabaseService::AdvanceCatalogRevision() noexcept
+	{
+		++_uCatalogRevision;
+		if (_uCatalogRevision == 0u)
+		{
+			++_uCatalogRevision;
+		}
 	}
 
 	const char* AssetDatabaseService::GetTypeLabel(AshEngine::AssetType type)

@@ -1789,3 +1789,37 @@ TEST_CASE("Asset Browser reimport keeps the selected path alive across catalog r
 	CHECK(action.find("pSelectedAsset->", reimport) == std::string::npos);
 	CHECK(action.find("SelectAssetByPath(pathSelectedAsset)") != std::string::npos);
 }
+
+TEST_CASE("Asset Browser stops using borrowed frame data after catalog mutation")
+{
+	const std::string serviceHeader = ReadTerrainContractText(
+		"project/src/editor/Services/AssetDatabaseService.h");
+	const std::string serviceSource = ReadTerrainContractText(
+		"project/src/editor/Services/AssetDatabaseService.cpp");
+	const std::string supportHeader = ReadTerrainContractText(
+		"project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.h");
+	const std::string supportSource = ReadTerrainContractText(
+		"project/src/editor/Panels/AssetBrowser/AssetBrowserSupport.cpp");
+	const std::string contentSource = ReadTerrainContractText(
+		"project/src/editor/Panels/AssetBrowser/AssetBrowserContentView.cpp");
+	const std::string panelSource = ReadTerrainContractText(
+		"project/src/editor/Panels/AssetBrowserPanel.cpp");
+	REQUIRE_FALSE(serviceHeader.empty());
+	REQUIRE_FALSE(serviceSource.empty());
+	REQUIRE_FALSE(supportHeader.empty());
+	REQUIRE_FALSE(supportSource.empty());
+	REQUIRE_FALSE(contentSource.empty());
+	REQUIRE_FALSE(panelSource.empty());
+
+	CHECK(serviceHeader.find("GetCatalogRevision() const noexcept") != std::string::npos);
+	CHECK(serviceHeader.find("_uCatalogRevision = 0u") != std::string::npos);
+	CHECK(serviceSource.find("AdvanceCatalogRevision()") != std::string::npos);
+	CHECK(supportHeader.find("uint64_t uCatalogRevision = 0u") != std::string::npos);
+	CHECK(supportSource.find(
+		"frameData.uCatalogRevision = refDeps.pAssetDatabaseService->GetCatalogRevision()") !=
+		std::string::npos);
+	CHECK(contentSource.find("IsFrameCatalogCurrent(") != std::string::npos);
+	CHECK(contentSource.find(
+		"if (!IsFrameCatalogCurrent(refViewContext, refFrameData))") != std::string::npos);
+	CHECK(panelSource.find("RefreshFrameDataIfCatalogChanged") != std::string::npos);
+}

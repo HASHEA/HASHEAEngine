@@ -1295,10 +1295,23 @@ namespace AshEditor
 		AssetBrowserFrameData frameData = AssetBrowserSupport::BuildFrameData(_upImpl->deps, _upImpl->state);
 		_upImpl->state.bActiveDirectoryExistsThisFrame = frameData.bActiveDirectoryExists;
 		_upImpl->state.bSelectedAssetVisibleThisFrame = frameData.bSelectedAssetVisible;
+		const auto RefreshFrameDataIfCatalogChanged = [&]()
+		{
+			if (frameData.uCatalogRevision ==
+				_upImpl->deps.pAssetDatabaseService->GetCatalogRevision())
+			{
+				return;
+			}
+
+			frameData = AssetBrowserSupport::BuildFrameData(_upImpl->deps, _upImpl->state);
+			_upImpl->state.bActiveDirectoryExistsThisFrame = frameData.bActiveDirectoryExists;
+			_upImpl->state.bSelectedAssetVisibleThisFrame = frameData.bSelectedAssetVisible;
+		};
 
 		AssetBrowserViewContext viewContext{ frameContext, _upImpl->deps, _upImpl->state, *this };
 
 		_upImpl->toolbarView.Draw(viewContext, frameData);
+		RefreshFrameDataIfCatalogChanged();
 		refUi.separator();
 
 		const AshEngine::UIVec2 vecAvailRegion = refUi.get_content_region_avail();
@@ -1311,6 +1324,7 @@ namespace AshEditor
 			_upImpl->directoryTreeView.Draw(viewContext, frameData);
 		}
 		refUi.end_child();
+		RefreshFrameDataIfCatalogChanged();
 		refUi.same_line();
 
 		if (refUi.begin_child("AssetBrowserContent", {}, AshEngine::UIChildFlagBits::Border))
@@ -1334,6 +1348,7 @@ namespace AshEditor
 
 			const AssetBrowserContentDrawResult drawResult =
 				_upImpl->contentView.Draw(viewContext, frameData, _upImpl->contextMenus);
+			RefreshFrameDataIfCatalogChanged();
 
 			if (drawResult.bOpenContentMenu)
 			{
@@ -1346,7 +1361,9 @@ namespace AshEditor
 
 			PublishContentShortcutScope(drawResult.bContentFocused);
 			DispatchContentShortcuts(frameContext, drawResult.bContentFocused);
+			RefreshFrameDataIfCatalogChanged();
 			_upImpl->contextMenus.DrawContentMenu(viewContext, frameData);
+			RefreshFrameDataIfCatalogChanged();
 
 			const AshEngine::AssetInfo* pSelectedAsset =
 				AssetBrowserSupport::GetSelectedAsset(*_upImpl->deps.pAssetDatabaseService, _upImpl->state.uSelectedAssetId);

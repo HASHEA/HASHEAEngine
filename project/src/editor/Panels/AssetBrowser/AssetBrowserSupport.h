@@ -65,6 +65,7 @@ namespace AshEditor
 		std::string strFilterSummary{};
 		std::string strLastError{};
 		const AssetTypeFilterOption* pTypeFilter = nullptr;
+		uint64_t uCatalogRevision = 0u;
 		uint32_t uFilteredCount = 0;
 		uint32_t uSelectedCount = 0;
 		bool bActiveDirectoryExists = false;

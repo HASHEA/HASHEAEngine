@@ -18,6 +18,7 @@ namespace AshEditor
 		AshEngine::AssetDatabase& GetDatabase();
 		const AshEngine::AssetDatabase& GetDatabase() const;
 		const std::filesystem::path& GetAssetRoot() const;
+		uint64_t GetCatalogRevision() const noexcept;
 		const std::vector<AshEngine::AssetInfo>& GetItems() const;
 		const AshEngine::AssetInfo* FindById(uint64_t uAssetId) const;
 		const AshEngine::AssetInfo* FindByPath(const std::filesystem::path& pathAssetRelativeOrAbsolute) const;
@@ -73,8 +74,10 @@ namespace AshEditor
 			std::filesystem::path& outRelativePath,
 			std::string* pOutError = nullptr) const;
 		bool RefreshAfterMutation(std::string* pOutError = nullptr);
+		void AdvanceCatalogRevision() noexcept;
 
 		std::filesystem::path _pathAssetRoot{};
 		AshEngine::AssetDatabase _database{};
+		uint64_t _uCatalogRevision = 0u;
 	};
 }
