@@ -199,7 +199,7 @@ namespace AshEditor
 			}
 		}
 
-		std::string document_identity(const std::filesystem::path& path)
+		std::string path_identity(const std::filesystem::path& path)
 		{
 			std::string value = path.generic_u8string();
 			std::transform(value.begin(), value.end(), value.begin(),
@@ -213,7 +213,7 @@ namespace AshEditor
 		EditorCommandDocumentKey make_document_key(
 			const std::filesystem::path& path)
 		{
-			return { "vegetation-layer", document_identity(path) };
+			return { "vegetation-layer", path_identity(path) };
 		}
 
 		AshEngine::VegetationOperationControl make_control(
@@ -1935,8 +1935,8 @@ namespace AshEditor
 			inspection.status !=
 				AshEngine::VegetationFileResultStatus::Succeeded ||
 			inspection.exists ||
-			inspection.canonical_relative_path.extension() !=
-				".AshVegetationLayer")
+			path_identity(inspection.canonical_relative_path.extension()) !=
+				".ashvegetationlayer")
 		{
 			return false;
 		}

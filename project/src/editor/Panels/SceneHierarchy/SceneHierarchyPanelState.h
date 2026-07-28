@@ -75,11 +75,18 @@ namespace AshEditor
 		SceneHierarchyReparentModalState reparentModal{};
 		SceneHierarchyDeleteModalState deleteModal{};
 
+		void ClearClipboard()
+		{
+			vecClipboardEntitySnapshots.clear();
+			vecClipboardPreferredParentEntityIds.clear();
+		}
+
 		void ResetTransientState()
 		{
 			uCreateChildAnchorParentId = 0;
 			bAwaitingCreateChildSelection = false;
 			uRangeSelectionAnchorEntityId = 0;
+			ClearClipboard();
 			renameModal.Reset();
 			reparentModal.Reset();
 			deleteModal.Reset();

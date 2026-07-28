@@ -5,6 +5,7 @@
 #include "Core/EditorIds.h"
 #include "Function/Gui/UIContext.h"
 #include "Function/Scene/Scene.h"
+#include "Panels/SceneHierarchy/SceneHierarchyPanelEvents.h"
 #include "Panels/SceneHierarchy/SceneHierarchyPanelSupport.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
@@ -92,21 +93,10 @@ namespace AshEditor
 					_state.deleteModal.Reset();
 				}
 			});
-		_eventBindings.Subscribe<EditorActiveSceneChangedEvent>(
-			[this](const EditorActiveSceneChangedEvent&)
-			{
-				_state.ResetTransientState();
-			});
+		BindSceneHierarchySceneLifetimeEvents(_eventBindings, _state);
 		_eventBindings.Subscribe<EditorSceneChangedEvent>(
 			[this](const EditorSceneChangedEvent& refEvent)
 			{
-				if (refEvent.eKind == AshEngine::SceneChangeKind::SceneReloaded ||
-					refEvent.eKind == AshEngine::SceneChangeKind::SceneReplaced)
-				{
-					_state.ResetTransientState();
-					return;
-				}
-
 				if (refEvent.eKind == AshEngine::SceneChangeKind::HierarchyChanged)
 				{
 					_state.treeWidgetStateEntities.ResetDragState();

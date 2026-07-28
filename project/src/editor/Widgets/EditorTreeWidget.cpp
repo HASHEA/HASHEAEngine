@@ -55,13 +55,6 @@ namespace AshEditor
 		}
 	}
 
-	void EditorTreeWidgetState::ResetDragState()
-	{
-		uHoverAutoExpandKey = 0;
-		uPendingAutoExpandKey = 0;
-		fHoverAutoExpandStartTimeSeconds = 0.0;
-	}
-
 	EditorTreeWidget::EditorTreeWidget(AshEngine::UIContext& refUi, EditorTreeWidgetState& refState, const EditorTreeWidgetStyle& refStyle)
 		: _refUi(refUi)
 		, _refState(refState)

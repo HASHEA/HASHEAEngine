@@ -3144,6 +3144,19 @@ TEST_CASE("Vegetation service Create Layer rejects unsafe paths and identities")
 	}
 
 	{
+		ServiceFixture fixture("service-create-mixed-case-extension", false);
+		AshEditor::VegetationEditorService service(std::move(fixture.deps));
+		REQUIRE(service.Initialize());
+		REQUIRE(service.CreateLayer(
+			"vegetation/mixed.aShVeGeTaTiOnLaYeR", 7));
+		const AshEditor::VegetationEditorStatusSnapshot status =
+			service.GetStatusSnapshot();
+		CHECK(status.source_path ==
+			std::filesystem::path("vegetation/mixed.aShVeGeTaTiOnLaYeR"));
+		CHECK(status.session == AshEditor::VegetationSessionState::Dirty);
+	}
+
+	{
 		ServiceFixture fixture("service-create-zero-id", false);
 		fixture.deps.create_layer_id = []
 		{

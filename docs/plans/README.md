@@ -4,6 +4,7 @@
 
 ## Active
 
+- `2026-07-16-vegetation-authoring-and-bake.md`：Phase 2 Tasks 1–11 与 Task 12 Steps 1–5 已完成；长期文档、fresh CPU/build/architecture gates、四组合 readiness、non-bless RenderGate、Standard/compared VFP 和人类 Vulkan/DX12 disabled-path 验收均通过。Step 6 首轮审查的两项 P2 已完成回归修复和受影响门禁，最终 diff lock、替换审查与选择性提交正在执行；Phase 2 SDD closure text 已标记 Done。
 - 当前无 active GPU-driven foundation 计划；生产草/树、流送、GPU culling 与 HLOD 需新建后续 S2。
 
 ## Archived

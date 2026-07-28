@@ -39,7 +39,7 @@ Approved（2026-07-13，用户审阅通过；任何阶段实现仍须遵守对�
 - 依赖 bindless、mesh shader、ray tracing、indirect-count 或 RTX 50 系独占能力保证正确性。
 - 在未测得 Release GPU 基线前承诺植被单项毫秒预算或 bless 性能水位。
 
-## Current implementation
+## Baseline at approval
 
 - Entry points:
   - Scene → render：`ScenePresentationSubsystem` 构建不可变 `VisibleRenderFrame`，`SceneRenderer` 组织 per-view RenderGraph。
@@ -152,7 +152,7 @@ Phase 0 于 2026-07-14 完成可归因候选报告：RTX 5060、2560×1440、Rel
 | --- | --- | --- |
 | 0（Done 2026-07-14） | GPU timestamp telemetry、Release 2K full-pipeline profile、空基线 | 双后端报告有效，extent=2560×1440，CPU/GPU sample coverage 达标，无同步 readback stall；candidate 未 bless |
 | 1 | RenderGraph buffer、Function indexed indirect、通用 page/prototype contract | headless compiler tests + 双后端 compute→buffer→indexed indirect self-test，默认场景无回归 |
-| 2 | `.AshVegetation*`、surface contract、brush、deterministic bake | 无 terrain provider 时安全禁用；test provider 下 paint/erase/undo/reload/cook byte-stable |
+| 2（Done 2026-07-28） | `.AshVegetation*`、surface contract、brush、deterministic bake | 无 terrain provider 时安全禁用；test provider 下 paint/erase/undo/reload/cook byte-stable |
 | 3 | streaming + GPU grass | 分块移动/逐出稳定，grass GBuffer/wind/near shadow 双后端 RenderGate 通过 |
 | 4 | GPU tree + SpeedTree-export adapter + impostor | mesh LOD/impostor/deformation/motion vector/shadow 通过视觉与 validation 门禁 |
 | 5 | previous-frame HZB + chunk HLOD + 性能收敛 | long-run memory plateau、跨后端一致、按 Phase 0 基线评估 300 FPS 与各子预算 |
@@ -161,6 +161,17 @@ Phase 0/1 的 Review SDD：
 
 - [SDD-2026-07-13-gpu-performance-observability](SDD-2026-07-13-gpu-performance-observability.md)
 - [SDD-2026-07-13-gpu-driven-foundation](SDD-2026-07-13-gpu-driven-foundation.md)
+
+Phase 2 的 CPU implementation 与 exit matrix 已于 2026-07-28 完成，当前长期
+合同见 [Vegetation feature spec](../specs/features/vegetation.md)，归档设计见
+[SDD-2026-07-16-vegetation-authoring-and-bake](SDD-2026-07-16-vegetation-authoring-and-bake.md)。
+Task 12 的长期文档、Debug/Release focused/full tests、四项 build、ArchGate、
+AIDevDoctor、Editor/Sandbox × Vulkan/DX12 readiness、non-bless
+RenderGate/PerfGate、配置/基线恢复，以及人类 Vulkan/DX12 disabled-path
+验收均已完成；人工操作未安装 test provider 或 fake Terrain，三次验收会话
+日志均无拒绝诊断。当前实现仍不包含 GPU grass/tree、streaming、culling、
+wind、shadow、impostor、HLOD 或 SpeedTree ingestion；这些继续由 Phase 3+
+独立 SDD 驱动，因此本总体 S3 仍为 Approved 而非 Done。
 
 ## Verification plan
 

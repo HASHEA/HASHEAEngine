@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Task 11 implementation, review remediation, required validation and two independent implementation reviews are complete; this focused commit records Step 5. Task 11 executed against the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which remains unchanged and is the Task 11 SDD review lock. Task 12 is ready for execution after this focused commit. Historical approval/execution locks remain preserved in the hash chain below.
+**Status:** Task 12 Steps 1–5 are complete: durable documentation, fresh CPU tests/builds, architecture/plan gates, two clean code-freeze pre-reviews, the coordinated readiness/render/performance matrix, and human Vulkan/DX12 disabled-path acceptance have passed. The first Step 6 final reviews found two P2 contract gaps; both now have RED/GREEN regression coverage and minimal fixes. Fresh affected tests, Editor builds, architecture/plan gates, and Vulkan/DX12 readiness are clean. Step 6 is waiting only for the immutable-candidate hashes, replacement independent reviews, and selective commit. The prior pre-remediation SDD hash `0ACE3FFFB9E955B131D1300ADF11F0CC56669FB43767413BB341AB7D7622C991` is invalid as the final archive lock. Task 11 executed against the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which is the Task 11 SDD review lock. Historical approval/execution locks remain preserved in the hash chain below.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -16,7 +16,7 @@
 
 - Execute only in worktree `D:\workspace\AshEngine\HASHEAEngine\.worktrees\gpu-driven-vegetation-phase2` on branch `codex/gpu-driven-vegetation-phase2`.
 - Starting integration point is approved-design amendment commit `9b47dbaa0ca8856480db65b444c320767237fb1d` (approved base design `24d88c9bba3195caf0d8c2b8d5cc835612a44faa`); do not rebase a dirty implementation task.
-- Task 10's reviewed design input was `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`. Its behavior/interface documentation synchronization produced SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which has independent text/spec approval and is the Task 10 SDD review lock; the review remediation does not change that SDD text. Task 11 remains blocked until Task 10 Step 5 records clean implementation reviews and the focused selective commit. Preserve the historical approval/execution chain exactly: original approved input `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, Task 2 execution clarification `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, Task 3 execution clarification `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`, Task 7 checked-storage approval/execution lock `B463782B7E1FF9A11A25D068989ADDF55857C6A90665722EA7E3E64FA44F3E9B`, the prior Task 8 reviewed input `FF21A9881782C422E431BDF0747067D15847E6C92C5FEDEDACDB89BA021189AC`, the Task 8 recovery-identity review lock `456BEC39AFCE29AC5AE373DB1C1ECF62789645046371CA09A79F4A8A9B520E3C`, the pre-Task-9 binding-gap reviewed input `623418757198CD4AF815C4BA27054C5151CA5F86E1302E85024E836449451CE5`, the user-approved Task 9 per-request binding lock `7295F14B1E322ABB5EBCA081DD44376EBC8FE0769E19FDADF88A344B0F855AB9`, the Task 9 validation-clarification lock `E56125D58E45A62012FC0BF0DD7222E413D54C9771CF3DC21BEE145176DD9ECB`, the Task 9 implementation-review lock `1E93FD7B5141B61EB3514F45688F1406AA87D3E5DB20D7645760F93FEAD9919A`, the Task 9 second-round lifecycle/exception review lock `8C58F62D4718E15BB8291BCA83F5713FAFD1E805667A96F9DBD62A0DEC846E7D`, the Task 9 command/state/record-consumption review lock `F3BD98175246CF267CEDE93A07419A2C151AF070AB5EF998785C21BA2C2CB1A2`, the final Task 9 teardown/performance review lock `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`, and the approved Task 10 SDD review lock `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`. Task 12 alone may update final Status/conclusions after all evidence exists and must record this complete historical chain, the reviewed Task 10 input hash, the Task 10 review lock, and the final archived hash.
+- Task 10's reviewed design input was `docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md` at exact SHA-256 `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`. Its behavior/interface documentation synchronization produced SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which has independent text/spec approval and is the Task 10 SDD review lock; the review remediation did not change that SDD text. Historically, Task 11 remained blocked until Task 10 Step 5 recorded clean implementation reviews and the focused selective commit; that prerequisite is complete. Preserve the historical approval/execution chain exactly: original approved input `947CF950782752599F3D6E51918D8E082039237FAC4B3A17F459E8481D4520CF`, Task 2 execution clarification `B51F296F830C21B5524D5C934262F38AD7A834AFE2F5E9435E8FFC6567D755C9`, Task 3 execution clarification `80D8CDE760EEF9FF8F9EA7EAB6AC66ACBDDDED827A69752519BE12A80777743B`, Task 7 checked-storage approval/execution lock `B463782B7E1FF9A11A25D068989ADDF55857C6A90665722EA7E3E64FA44F3E9B`, the prior Task 8 reviewed input `FF21A9881782C422E431BDF0747067D15847E6C92C5FEDEDACDB89BA021189AC`, the Task 8 recovery-identity review lock `456BEC39AFCE29AC5AE373DB1C1ECF62789645046371CA09A79F4A8A9B520E3C`, the pre-Task-9 binding-gap reviewed input `623418757198CD4AF815C4BA27054C5151CA5F86E1302E85024E836449451CE5`, the user-approved Task 9 per-request binding lock `7295F14B1E322ABB5EBCA081DD44376EBC8FE0769E19FDADF88A344B0F855AB9`, the Task 9 validation-clarification lock `E56125D58E45A62012FC0BF0DD7222E413D54C9771CF3DC21BEE145176DD9ECB`, the Task 9 implementation-review lock `1E93FD7B5141B61EB3514F45688F1406AA87D3E5DB20D7645760F93FEAD9919A`, the Task 9 second-round lifecycle/exception review lock `8C58F62D4718E15BB8291BCA83F5713FAFD1E805667A96F9DBD62A0DEC846E7D`, the Task 9 command/state/record-consumption review lock `F3BD98175246CF267CEDE93A07419A2C151AF070AB5EF998785C21BA2C2CB1A2`, the final Task 9 teardown/performance review lock `9B934CB1D8E5041E67D0A44F001975A902A81869CD23FD0C64FF543B3DB61E29`, and the approved Task 10 SDD review lock `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`. Task 12 alone may update final Status/conclusions after all evidence exists and must record this complete historical chain, the reviewed Task 10 input hash, the Task 10 review lock, and the final archived hash.
 - Existing user-owned dirty files are:
   - `project/thirdparty/tracy/tracy-csvexport.exe`
   - `project/thirdparty/tracy/tracy-profiler.exe`
@@ -87,7 +87,7 @@ namespace AshEngine
 - All decode APIs take a caller-provided `VegetationLoadBudget`; zero is a zero budget, not an implicit unlimited value.
 - `VegetationLoadCost` is wire-derived, not allocator-derived: `file_bytes` is the exact immutable byte snapshot length; `payload_bytes` is the declared binary payload length (or the exact Species JSON byte length). `decoded_bytes` uses the exact v1 formulas locked in the SDD: Species `70 + 4*LOD count + all canonical DTO string bytes`; Layer `32 + Σ(48+palette path bytes) + 16*tile count + Σ(17+1024 per plane)`; Chunk `112 + Σ(48+species path bytes) + 28*instance count`. Counts are exact logical record counts. Never use `sizeof` on implementation DTOs, vector capacity, allocator overhead, or cache-container cost. The codec computes every term with checked arithmetic before DTO allocation/publication; cached admission reuses this exact value.
 - `VegetationComponent::surface_entity_id` is a `uint64_t` in `SceneComponents.h`. `EntityId` remains declared in `Scene.h`, which includes `SceneComponents.h`, so using the alias in the component header would create an ordering dependency.
-- All test names begin with `Vegetation` so `RunTests.bat <Config> --test-case="*Vegetation*"` is the common focused gate.
+- All test names begin with `Vegetation`; the aggregate focused gate is the direct `product\bin64\Debug-windows-x86_64\Tests.exe --test-case="*Vegetation*"` and Release counterpart after building each Tests target. The wrapper form is not aggregate focused evidence because its leading-star filter is consumed.
 
 ## Task 1: Add core coordinates, hashes, cancellation control, and the immutable surface wrapper
 
@@ -2507,7 +2507,7 @@ git commit -m "feat(editor): add vegetation authoring panel"
 - Modify: `docs/plans/2026-07-16-vegetation-authoring-and-bake.md`
 - Modify: `docs/plans/README.md`
 
-- [ ] **Step 1: Run the documentation RED contract before editing docs**
+- [x] **Step 1: Run the documentation RED contract before editing docs**
 
 ```powershell
 $feature = 'docs/specs/features/vegetation.md'
@@ -2524,20 +2524,24 @@ $text = Get-Content -Raw $feature
 
 Expected RED: the feature spec does not yet exist. This is the only documentation-only RED; do not change production code in Task 12.
 
-- [ ] **Step 2: Write the long-lived contract**
+RED recorded at source HEAD `10dd9d1433dac84d38b4aa6bacf25a50956d36a1`: the command exited `1` solely with `vegetation feature spec missing`; token checks were not reached because the feature spec was absent.
+
+- [x] **Step 2: Write the long-lived contract**
 
 Document exact asset shapes and budgets, Asset-owned snapshot versus Scene-owned provider capture, Scene v7 reference-only component, brush integer formulas, palette/Create Layer behavior, document history, checked storage, deterministic hash/ASVI/ASVM/ASVA, the two exact manifest/authoring dirty unions, 65534 species ceiling, cooperative-provider limitation, no-provider behavior, lifecycle order, last-known-good semantics, and Phase 3 handoff. Update the root `README.md` verification/feature index with the public vegetation spec and the new focused verification entry; AIDevDoctor treats that root pointer as part of the durable documentation contract. Mark the Phase 2 SDD Done only after automated gates and human disabled-path checks have actually passed. Update `docs/CODEBASE_MAP.md` because new public Asset/Scene/Editor entry points exist. Mark the overall S3 Phase 2 complete without claiming GPU rendering exists.
 
-- [ ] **Step 3: Run fresh CPU generation, tests, builds, architecture and plan gates**
+Documentation implementation completed on 2026-07-26. The feature spec is now the durable cross-module contract. Step 3 is recorded below as complete; Task 12 Steps 4–6 readiness/render/performance, manual acceptance, and final evidence/review remain pending, so neither SDD is marked Done.
+
+- [x] **Step 3: Run fresh CPU generation, tests, builds, architecture and plan gates**
 
 Run strictly from the Phase 2 worktree and stop on the first failure:
 
 ```bat
 generate_vs2022.bat
-RunTests.bat Debug --test-case="*Vegetation*"
-RunTests.bat Release --test-case="*Vegetation*"
 RunTests.bat Debug
 RunTests.bat Release
+product\bin64\Debug-windows-x86_64\Tests.exe --test-case="*Vegetation*"
+product\bin64\Release-windows-x86_64\Tests.exe --test-case="*Vegetation*"
 build_editor.bat Debug
 build_editor.bat Release
 build_sandbox.bat Debug
@@ -2549,7 +2553,26 @@ git diff --check
 
 Record exact case/assertion counts, exit codes, ArchGate legacy warning count, build target/configuration, and the source HEAD. Request two read-only **code-freeze pre-reviews** before GPU/manual execution. One review follows all wire/hash/transaction/state contracts; the other audits dependency direction, lifetimes, no-provider product behavior, and forbidden paths. These pre-reviews do not certify the still-pending final evidence/docs diff. Any P0/P1/P2 finding reopens the relevant task and invalidates later evidence.
 
-- [ ] **Step 4: Run the coordinated GPU/readiness regression matrix**
+Step 3 completed against source HEAD `10dd9d1433dac84d38b4aa6bacf25a50956d36a1` with this exact evidence:
+
+- `generate_vs2022.bat`: exit `0`.
+- The nominal focused `RunTests.bat Debug/Release --test-case="*Vegetation*"` wrapper invocations consumed the leading-star filter and therefore actually ran the full suite. They are not focused-test evidence. Debug and Release each passed `515/515` cases and `41756/41756` assertions with exit `0`.
+- Direct `Tests.exe --test-case=*Vegetation*` provided the focused evidence: Debug and Release each passed `338/338` cases and `39276/39276` assertions, with `177` skipped and exit `0`.
+- `build_editor.bat Debug`, `build_editor.bat Release`, `build_sandbox.bat Debug`, and `build_sandbox.bat Release`: exit `0`.
+- `RunArchGate.bat`: PASS with `35` unchanged legacy warnings.
+- `AIDevDoctor.ps1 -Mode ValidatePlan`: exit `0`; report package at `Intermediate/test-reports/ai-dev/20260726-142748/`.
+- `git diff --check`: PASS.
+
+The two code-freeze pre-reviews returned four documentation P2 groups; this review-remediation pass addressed each without changing production code or execution evidence:
+
+- The feature spec lacked auditable exact wire/hash detail. It now records ASVL’s 80-byte header and palette/tile/plane records, ASVC’s 160-byte header and 28-byte records, ASVM’s 96-byte header/80-byte sorted entries/CRC/SHA rules, ASVA’s 48-byte layout/first-44-byte CRC, ASVI’s exact fields/64 slots/624-byte fixture, and both complete counter-hash state/stream0–4 vectors. Every value was cross-checked against the approved SDD, codec writers, and golden tests.
+- Feature/Phase 2 SDD/plan-index status had become stale after Step 3. They now agree that focused/full tests, four builds, ArchGate, and AIDevDoctor are complete; only Steps 4–6 remain pending, so the Phase 2 SDD stays Approved and non-Done.
+- Lifecycle wording overstated provider diagnosis and cleanup. Durable docs now describe cooperative cancel/completion observation/exact join, attempted exact-owned cleanup with precise retained stage ownership on failure, potentially unbounded normal teardown for a contract-violating in-process provider, and only the generic readiness process watchdog as an external forced-failure bound.
+- The wrapper was incorrectly advertised as focused. Reproducible focused commands now call the Debug and Release `product\bin64\<Config>-windows-x86_64\Tests.exe` binaries directly; the evidence above continues to identify the wrapper runs as full-suite, not focused.
+
+Both code-freeze pre-reviews returned P0/P1/P2/P3 `0` after the remediation.
+
+- [x] **Step 4: Run the coordinated GPU/readiness regression matrix**
 
 Obtain a fresh exclusive CPU/GPU window from every active worktree. Snapshot `product/config/Engine.ini`, `product/config/editor/EditorSettings.json`, `product/config/editor/ViewportLayout.json`, and `product/config/editor/imgui.ini` byte-for-byte before running. Do not bless or import anything.
 
@@ -2560,19 +2583,268 @@ RunPerfGate.bat -Profile Standard
 RunPerfGate.bat -Profile VegetationFullPipeline -Configuration Release
 ```
 
-Requirements: Editor/Sandbox × Vulkan/DX12 readiness all exit zero; Sandbox reports clean exit; every newly created Engine/Application log has zero generic error/critical, validation, debug-layer, device-lost, access-violation, fatal, assertion, and bad-leak findings; RenderGate is PASS non-bless; both PerfGate profiles are PASS/COMPARED with no warning/failure and no baseline change. Phase 2 does not run GPU validation because it makes no Graphics/backend/render integration; that starts with the Phase 3 rendering SDD. Restore all four config files to the exact pre-run bytes, verify their SHA-256 values, verify effective Editor/Sandbox/AshImageDiff/build/gate roots are zero, and explicitly release the window.
+Requirements: Editor/Sandbox × Vulkan/DX12 readiness all exit zero; Sandbox reports clean exit; every newly created Engine/Application log has zero generic error/critical, validation, debug-layer, device-lost, access-violation, fatal, assertion, and bad-leak findings; RenderGate is PASS non-bless; Standard is PASS with its canonical no-fixed-baseline `MISSING` status, while VegetationFullPipeline is PASS/COMPARED, both with no warning/failure and no baseline change. Phase 2 does not run GPU validation because it makes no Graphics/backend/render integration; that starts with the Phase 3 rendering SDD. Restore all four config files to the exact pre-run bytes, verify their SHA-256 values, verify effective Editor/Sandbox/AshImageDiff/build/gate roots are zero, and explicitly release the window.
 
-- [ ] **Step 5: Obtain the human disabled-path evidence**
+Task 12 Step 4 automated evidence (2026-07-26, source HEAD
+`10dd9d1433dac84d38b4aa6bacf25a50956d36a1`) is:
+
+- the first fresh window ran the four-combination readiness matrix successfully,
+  then `RunRenderGate.bat` stopped before capture because the independent Debug
+  `AshImageDiff.exe` prerequisite had not been built. The window was released
+  after byte-restoring all four configs and proving goldens/perf baseline
+  unchanged. Systematic diagnosis showed that Step 3 built only
+  Editor/Sandbox/Tests, while RenderGate intentionally does not build its
+  separate image-diff project. Building the existing
+  `tools/imagediff/AshImageDiff.vcxproj` `Build` target published the required
+  artifact without a source change. An attempted solution-level
+  `/t:AshImageDiff` invocation was rejected with MSB4057 and was not treated as
+  evidence.
+- a second independently acquired window used fresh byte snapshots. The
+  rerun `run.bat all Debug --smoke-test-seconds=120` passed Editor/Sandbox ×
+  Vulkan/DX12 with normal exits.
+- non-bless RenderGate passed at
+  `Intermediate/test-reports/render-gate/20260726-225756-841-51704-a9d2c145/`:
+  sandbox Vulkan/DX12/cross SSIM was
+  `0.996278/0.996177/0.999747`; particles Vulkan/DX12/cross was `1/1/1`.
+- Standard PerfGate passed all four Debug runs with no warnings or failures at
+  `Intermediate/test-reports/perf-gate/20260726-225855-409-62620-349c3c4a/`.
+  Sample-time coverage was `0.999585..0.999895`. Its baseline status is
+  `MISSING` by repository design: the baseline file defines the Standard
+  trend/profile contract but contains fixed comparison entries only for
+  VegetationFullPipeline. No baseline was created or blessed.
+- VegetationFullPipeline Release passed both backends with baseline status
+  `COMPARED`, GPU coverage `1.0`, stable `2560x1440` extent, common workload
+  fingerprint
+  `02cec7deddda8cdd7a83c95c52347a7ecab229363e30ab6632756b27569e9b6e`,
+  and no warnings/failures at
+  `Intermediate/test-reports/perf-gate/20260726-230214-725-37128-07947be8/`.
+- all `28` Engine/Application logs created by the successful retry window
+  passed the rejected-diagnostic scan. The restored config SHA-256 values are
+  `Engine.ini=FF5E59BD907F3A5C0CCCFB8C1743AC472B7F68ADFD1AC8FE78AD9FE9C35AE645`,
+  `EditorSettings.json=86D712A905329A9AA25A499352C44C5275214AFC7DFBAC83C294696CBD9CE3E3`,
+  `ViewportLayout.json=91757A8A6115BBD81876BA830C24120BAA7D8438E7E58C66F770A66B67CF9D43`,
+  and `imgui.ini=1568D5863F3EF9A4BEABB9DF41D840BB1FDA7C904191A98144D61294029F0875`.
+  Perf baseline SHA-256 remained
+  `49D3FCCB0C068D0A90E5D2BAE667A5FDA3EB6476E6B444885F0DC103716A4659`;
+  the four-file golden-tree SHA-256 remained
+  `7648013497D630883BD7B1503010411F1AD38107B486F387543D5DA22F36BD4D`.
+  Effective runtime/build/gate root counts were all zero and the window was
+  explicitly released. The two byte snapshots remain under ignored
+  `Intermediate/validation-snapshots/` as audit evidence because local policy
+  rejected their recursive deletion; they do not alter tracked state.
+
+- [x] **Step 5: Obtain the human disabled-path evidence**
 
 Before launch, create a unique session-owned directory under `product/assets/vegetation/manual-phase2/<session-id>/` and verify it did not preexist. Copy the exact reviewed and codec-round-tripped bytes of both `project/src/tests/fixtures/vegetation/Phase2ManualSpecies.AshVegetation` and `project/src/tests/fixtures/vegetation/Phase2ManualSpeciesReplacement.AshVegetation` into that directory; do not generate ad-hoc JSON or touch user assets. Assert before launch that both decode to the same embedded species ID and different canonical SHA-256 values. Snapshot `Engine.ini`, `EditorSettings.json`, `ViewportLayout.json`, and `imgui.ini` byte-for-byte immediately before the manual sequence. Coordinate a visible Editor window separately for Vulkan, then DX12. For each backend the human uses a distinct new filename (`manual-vulkan.AshVegetationLayer` then `manual-dx12.AshVegetationLayer`), adds the original Species, saves, reloads, verifies the palette ID/path/digest remains present, replaces it with the reviewed same-ID replacement fixture, removes it, undoes/redoes the palette edits, and confirms the Vegetation panel remains responsive. Paint/Erase/Bake must remain disabled with `No vegetation surface provider is registered.`, and no test provider or fake Terrain surface may appear.
 
 AI may launch and collect logs, but must not operate the UI, overwrite a preexisting path, or declare the human result. After each Editor closes, require normal exit and fresh Engine/Application logs with zero generic error/critical, validation/debug, device-lost, access-violation, fatal, assertion and bad-leak findings. After both backends, restore all four config files from the manual pre-snapshot, verify exact SHA-256, delete only the verified session-owned directory, confirm effective Editor/Sandbox/AshImageDiff/gate roots are zero, and explicitly release the GPU window. If the human is unavailable, record `automated gates passed; manual disabled-path pending`, preserve no temporary fixture/config mutation, and do not mark the SDD Done.
+
+Task 12 Step 5 human evidence (2026-07-28, source HEAD
+`10dd9d1433dac84d38b4aa6bacf25a50956d36a1`) is:
+
+- AI verified effective GPU roots were zero, created the previously absent
+  session-owned directory
+  `product/assets/vegetation/manual-phase2/manual-20260728-100807-064/`,
+  and copied only the two reviewed fixtures. Both decode to Species ID
+  `00112233445566778899aabbccddeeff`; the original SHA-256 is
+  `D0008575CA4C5A7207ED91415F8302A6D14D3287DCAF2FC70066B5DB8B18E0F2`
+  and the same-ID replacement SHA-256 is
+  `92A2715F687C2DF2FA9FD27CADE0D8CDE5899C70B8DC4B07AC3CAE37757B53FB`.
+  Copy hashes exactly matched their source fixtures.
+- the immediate pre-launch config snapshot is retained as ignored audit
+  evidence at
+  `Intermediate/validation-snapshots/manual-20260728-100807-064/`.
+  Its SHA-256 values are
+  `Engine.ini=FF5E59BD907F3A5C0CCCFB8C1743AC472B7F68ADFD1AC8FE78AD9FE9C35AE645`,
+  `EditorSettings.json=86D712A905329A9AA25A499352C44C5275214AFC7DFBAC83C294696CBD9CE3E3`,
+  `ViewportLayout.json=91757A8A6115BBD81876BA830C24120BAA7D8438E7E58C66F770A66B67CF9D43`,
+  and `imgui.ini=1568D5863F3EF9A4BEABB9DF41D840BB1FDA7C904191A98144D61294029F0875`.
+- AI launched visible Editors but performed no UI input. The human completed
+  the specified New Layer/Add/Save/Reload/same-ID Replace/Remove/Undo/Redo,
+  responsiveness, exact disabled-reason, and no-provider/no-fake-Terrain
+  checks and reported Vulkan PASS. The saved
+  `manual-vulkan.AshVegetationLayer` SHA-256 was
+  `19F895D0A24FB0FADFE5197553922D95CDE92F440B8B78CC284FC74EA1041EF3`.
+  PID `73800` exited normally; fresh logs
+  `AshAppLogFile_20260728_101024_955198_p73800_s0.logfile` and
+  `AshEngineLogFile_20260728_101024_955198_p73800_s0.logfile` had zero
+  rejected diagnostics and complete shutdown/leak-free markers.
+- the human initially reported DX12 PASS for PID `38096`, and that process
+  exited normally with zero rejected diagnostics in fresh log pair
+  `AshAppLogFile_20260728_101728_622087_p38096_s0.logfile` /
+  `AshEngineLogFile_20260728_101728_622087_p38096_s0.logfile`. The AI did not
+  accept that as artifact-complete evidence: recursive inspection found no
+  `manual-dx12.AshVegetationLayer` anywhere under the worktree and no other
+  Layer newly written during that run.
+- a corrective visible DX12 session used PID `48580`. After the human
+  created, added, and saved, AI read-only verification proved
+  `manual-dx12.AshVegetationLayer` existed, contained the original
+  Species ID/path/digest, and had SHA-256
+  `91F9D589C01C8E6A3BA84D03678546BA5B66DDC66E2756A7FF8CCA025827055F`.
+  The human then repeated Reload/Replace/Remove/Undo/Redo and exact
+  disabled-path checks and reported `DX12 补验 PASS`. PID `48580` exited
+  normally; fresh logs
+  `AshAppLogFile_20260728_102358_946478_p48580_s0.logfile` and
+  `AshEngineLogFile_20260728_102358_946478_p48580_s0.logfile` had zero
+  rejected diagnostics and complete shutdown/memory-free markers.
+- cleanup first verified that the session contained exactly the two fixtures
+  and the two distinct Layer files, with no nested directory or reparse
+  point. All four configs were restored byte-for-byte to the pre-launch
+  hashes above. Only the verified session directory was recursively deleted;
+  effective Editor/Sandbox/AshImageDiff/gate roots were `0`, and the GPU
+  window was explicitly released. No user asset, golden, or perf baseline
+  was modified.
 
 - [ ] **Step 6: Write final evidence, lock the final diff, re-review, and selectively commit**
 
 After automated and human evidence is complete, update every Task 12 spec/SDD/plan file with exact report paths, case/assertion counts, source HEAD, manual Vulkan/DX12 outcome, config/baseline restoration, remaining limitations, and Phase 3 handoff. Only now may the Phase 2 SDD status become Done; if human evidence is unavailable or failed, leave it non-Done and record the pending/failed gate. Run AIDevDoctor and `git diff --check`, then record SHA-256 for the complete plan, SDD, and final diff path list.
 
 Request two new independent read-only reviews against those exact final hashes. One rechecks code/wire/hash/transaction/state plus evidence; the other rechecks dependency/lifetime/no-provider behavior, all durable docs, forbidden paths, and that claims match reports. Both must return P0=0/P1=0/P2=0 CLEAN. After the hashes are sent, no file may change before staging/commit; any change invalidates both verdicts and requires fresh hashes/reviews (and reruns affected execution gates if behavior changed).
+
+The first final-review round correctly reopened Step 6 with two P2 findings:
+
+- `VegetationEditorService::CreateLayer` compared the canonical extension to
+  `.AshVegetationLayer` case-sensitively even though the approved SDD,
+  AssetDatabase, storage and Scene contracts are case-insensitive. A new
+  mixed-case Create Layer case first failed at the exact `CreateLayer` call.
+  The implementation now reuses the existing lowercase path identity helper;
+  the exact test passes and preserves the source-path spelling in the status
+  snapshot.
+- Scene Hierarchy kept entity snapshot/preferred-parent clipboard arrays across
+  active-scene replacement. Copying a Vegetation owner without its surface in
+  one scene could therefore preserve an unmatched numeric
+  `surface_entity_id`, then bind to an unrelated same-numbered entity after a
+  scene change. A new clipboard-lifetime test first failed because no clearing
+  contract existed. `ResetTransientState` now clears both arrays together,
+  covering new/load/reload/replace and panel detach while leaving same-scene
+  forest remap behavior unchanged.
+
+The exact new tests passed in Debug. The first post-remediation Debug and
+Release focused suites each passed `339/339` cases and `39275/39275`
+assertions with `177` skipped; full suites each passed `516/516` cases and
+`41755/41755` assertions. Debug and Release Editor builds both exited `0`.
+`RunArchGate.bat` passed with the same `35` legacy warnings, and the first
+post-remediation `AIDevDoctor.ps1 -Mode ValidatePlan` run exited `0` with
+report package `Intermediate/test-reports/ai-dev/20260728-030544/`; a final
+immutable-candidate run is required immediately before replacement review.
+
+Fresh affected readiness then passed in two bounded Editor runs:
+
+- Vulkan PID `62932` reached readiness at frame `3`, exited, and produced
+  `AshAppLogFile_20260728_110603_251205_p62932_s0.logfile` /
+  `AshEngineLogFile_20260728_110603_251205_p62932_s0.logfile`.
+- DX12 PID `82608` reached readiness at frame `3`, exited, and produced
+  `AshAppLogFile_20260728_110610_566652_p82608_s0.logfile` /
+  `AshEngineLogFile_20260728_110610_566652_p82608_s0.logfile`.
+- All four logs had zero rejected diagnostics; both Engine logs contained
+  complete shutdown and all-memory-free markers. The exact two run-root PIDs
+  no longer existed after the checks. A separate global process enumeration
+  reported four access-denied legacy `Editor` entries without usable path or
+  start-time identity; they were not children or roots of these runs and were
+  neither killed nor counted as remediation failures.
+- Configs were restored from
+  `Intermediate/validation-snapshots/p2-final-review-remediation-20260728/`.
+  SHA-256 values remained
+  `Engine.ini=FF5E59BD907F3A5C0CCCFB8C1743AC472B7F68ADFD1AC8FE78AD9FE9C35AE645`,
+  `EditorSettings.json=86D712A905329A9AA25A499352C44C5275214AFC7DFBAC83C294696CBD9CE3E3`,
+  `ViewportLayout.json=91757A8A6115BBD81876BA830C24120BAA7D8438E7E58C66F770A66B67CF9D43`,
+  and `imgui.ini=1568D5863F3EF9A4BEABB9DF41D840BB1FDA7C904191A98144D61294029F0875`.
+- Because the final AIDevDoctor freshness index correctly treated the
+  pre-remediation performance evidence as stale, Standard PerfGate was rerun
+  against the current candidate. It passed Sandbox/Editor × Vulkan/DX12 with
+  no run warning or failure at
+  `Intermediate/test-reports/perf-gate/20260728-111016-083-78468-8835755f/`;
+  all four roots exited with confirmed empty assigned job trees. Sample-time
+  coverage was `0.999610..0.999907`. The expected Standard baseline status
+  remained `MISSING`, no baseline was blessed, and the baseline SHA-256
+  remained
+  `49D3FCCB0C068D0A90E5D2BAE667A5FDA3EB6476E6B444885F0DC103716A4659`.
+  The same four config hashes were restored again after the gate.
+- The first replacement architecture review then found that the clipboard
+  regression called `ClearClipboard()` directly and did not lock the
+  production `ResetTransientState()` wiring. Changing the test to invoke that
+  lifecycle entry produced the expected RED: Tests linked every test source
+  but failed solely on unresolved
+  `EditorTreeWidgetState::ResetDragState`. That three-field data-only reset was
+  moved unchanged from `EditorTreeWidget.cpp` to its header so the state bag is
+  self-contained; the test now calls `ResetTransientState()` and passed
+  `1/1` case with `2/2` assertions in Debug.
+- After the evidence text above changed, a final freshness run was required.
+  The first frozen rerun at
+  `Intermediate/test-reports/perf-gate/20260728-111537-301-83988-122cc676/`
+  was a genuine `FAIL`: Sandbox/DX12 had one `1.785159 s` telemetry sampling
+  gap above the `0.250000 s` limit. The process still exited `0`, its assigned
+  tree was empty, and the other three runs passed, but the report was retained
+  and was not accepted. An unchanged full retry at
+  `Intermediate/test-reports/perf-gate/20260728-112001-249-78452-35b6d97b/`
+  passed all four runs with no warning/failure, minimum coverage
+  `0.999165`, and maximum sampling gap `0.089162 s`. All four expected
+  Standard baseline states were `MISSING`; configs and the baseline hash above
+  were restored unchanged.
+- The immutable-candidate AIDevDoctor package at
+  `Intermediate/test-reports/ai-dev/20260728-032406/` then indexed both the
+  retained transient FAIL and the final PASS, reported `4/4` fresh runtime
+  coverage, fresh logs/PerfGate, and no inferred validation gap.
+- After the review-driven lifecycle-test strengthening, Debug and Release
+  exact lifecycle tests each passed `1/1` case and `2/2` assertions; direct
+  focused suites each passed `339/339` cases and `39275/39275` assertions
+  (`177` skipped), and full suites each passed `516/516` cases and
+  `41755/41755` assertions. Editor Debug/Release builds and ArchGate passed,
+  with the same `35` legacy warnings.
+- Replacement contract review then found that the direct state call still did
+  not exercise the event-bus subscription contract. The panel now delegates
+  its `EditorActiveSceneChangedEvent` and
+  `EditorSceneChangedEvent::{SceneReloaded,SceneReplaced}` subscriptions to the
+  shared production `BindSceneHierarchySceneLifetimeEvents` helper. The
+  regression binds that helper to a real `EditorEventBus`, publishes all three
+  events, and requires both clipboard arrays to be empty after each event. The
+  missing helper produced the intended compile-time RED; fresh Debug and
+  Release GREEN each passed `1/1` case and `6/6` assertions.
+- The final direct Debug/Release focused suites each passed `339/339` cases and
+  `39279/39279` assertions (`177` skipped); full suites each passed `516/516`
+  cases and `41759/41759` assertions. The original documented totals were
+  `39276` focused and `41756` full. Remediation adds four mixed-case Create
+  Layer assertions plus six event-lifecycle assertions, while this Windows
+  session cannot create the optional directory symlink (`CreateSymbolicLinkW`
+  error `1314`) and therefore executes seven fewer conditional storage-test
+  assertions. The exact net change is consequently `+10-7=+3`, explaining
+  both final totals without treating the privilege-dependent branch as a
+  regression.
+- Editor Debug and Release were rebuilt after the production subscription
+  helper change and both exited `0`; ArchGate passed with the same `35`
+  legacy warnings. Fresh bounded Editor readiness then passed on Vulkan PID
+  `84004` and DX12 PID `34516`. The four exact logs
+  `AshAppLogFile_20260728_115423_540134_p84004_s0.logfile`,
+  `AshEngineLogFile_20260728_115423_540134_p84004_s0.logfile`,
+  `AshAppLogFile_20260728_115431_019941_p34516_s0.logfile`, and
+  `AshEngineLogFile_20260728_115431_019941_p34516_s0.logfile` contained zero
+  rejected diagnostics; both Engine logs reached readiness at frame `3`,
+  completed shutdown and reported all memory free. Both roots exited, and all
+  four configuration hashes were restored exactly.
+- Fresh Editor readiness passed on Vulkan PID `47536` and DX12 PID `16824`.
+  The exact four logs
+  `AshAppLogFile_20260728_113153_479493_p47536_s0.logfile`,
+  `AshEngineLogFile_20260728_113153_479493_p47536_s0.logfile`,
+  `AshAppLogFile_20260728_113200_635821_p16824_s0.logfile`, and
+  `AshEngineLogFile_20260728_113200_635821_p16824_s0.logfile` had zero
+  rejected diagnostics and complete shutdown/all-memory-free markers; both
+  roots exited. Config hashes again matched the four values above.
+- The first post-strengthening freeze Standard report at
+  `Intermediate/test-reports/perf-gate/20260728-113221-924-78488-26510d98/`
+  passed all four runs with no warning/failure, minimum coverage `0.999167`,
+  maximum gap `0.046864 s`, and confirmed empty root/job trees. All four
+  baseline states were the expected `MISSING`; configs and baseline remained
+  unchanged. After this final evidence text was frozen, Standard was run once
+  more solely to make runtime evidence newer than the documentation lock, and
+  AIDevDoctor was generated at the predetermined stable package
+  `Intermediate/test-reports/ai-dev/phase2-final-freeze-20260728-v2/`.
+  That package must report `4/4` fresh coverage, fresh logs/PerfGate, and no
+  inferred validation gap before the hashes below may be reviewed.
+
+These changes do not touch Graphics, RenderGraph, RHI, render content,
+fixtures, goldens, perf baselines, or the already accepted
+canonical-extension manual workflow. Final hashes and replacement independent
+review verdicts are the remaining pre-commit evidence.
 
 ```powershell
 $sddHash = (Get-FileHash -Algorithm SHA256 docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md).Hash
@@ -2588,8 +2860,8 @@ Write-Host "Final plan hash: $planHash"
 ```bat
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/AIDevDoctor.ps1 -Mode ValidatePlan
 git diff --check
-git add -- README.md docs/specs/features/vegetation.md docs/specs/README.md docs/specs/modules/asset.md docs/specs/modules/scene.md docs/specs/modules/editor.md docs/CODEBASE_MAP.md docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md docs/sdd/SDD-2026-07-13-world-scale-gpu-vegetation.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md docs/plans/README.md
-git commit -m "docs(vegetation): close phase two authoring"
+git add -- README.md docs/CODEBASE_MAP.md docs/plans/2026-07-16-vegetation-authoring-and-bake.md docs/plans/README.md docs/sdd/SDD-2026-07-13-world-scale-gpu-vegetation.md docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md docs/specs/README.md docs/specs/features/vegetation.md docs/specs/modules/asset.md docs/specs/modules/editor.md docs/specs/modules/scene.md project/src/editor/Panels/SceneHierarchy/SceneHierarchyPanelEvents.h project/src/editor/Panels/SceneHierarchy/SceneHierarchyPanelState.h project/src/editor/Panels/SceneHierarchyPanel.cpp project/src/editor/Services/VegetationEditorService.cpp project/src/editor/Widgets/EditorTreeWidget.cpp project/src/editor/Widgets/EditorTreeWidget.h project/src/tests/Editor/entity_commands_vegetation_tests.cpp project/src/tests/Editor/vegetation_editor_service_tests.cpp project/src/tests/premake5.lua
+git commit -m "fix(vegetation): close phase two review gaps"
 ```
 
 ## Dependency and contract coverage

@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-26
+last_reviewed: 2026-07-28
 status: active
 ---
 
@@ -8,7 +8,7 @@ status: active
 
 ## 职责与边界
 
-`AssetDatabase` 提供以资产根目录为范围的资产索引（扫描/查找）与按类型的同步/异步加载，及加载状态与错误查询。管磁盘资产到内存数据结构（Mesh/Model/Material/AshAsset/Terrain/文本/二进制）的读取；Terrain 的纯 CPU 数据、编辑、容器与高度图 IO 也属于本模块。不管 GPU 资源上传（由 render 模块 `TerrainRenderAsset` / `RenderAssetManager` 消费不可变 snapshot）、场景实例化（Scene v6 `TerrainComponent`）或 Editor 交互。
+`AssetDatabase` 提供以资产根目录为范围的资产索引（扫描/查找）与按类型的同步/异步加载，及加载状态与错误查询。管磁盘资产到内存数据结构（Mesh/Model/Material/AshAsset/Terrain/文本/二进制/植被）的读取；Terrain 的纯 CPU 数据、编辑、容器与高度图 IO，以及植被 immutable surface snapshot、authoring patch、checked storage 与 deterministic baker 也属于本模块。不管 GPU 资源上传（由 render 模块 `TerrainRenderAsset` / `RenderAssetManager` 消费不可变 snapshot）、场景实例化（属 scene 模块）、surface provider capture（属 scene 模块）或 Editor 交互。植被跨模块现状见 [feature spec](../features/vegetation.md)。
 
 ## 目录与关键文件
 
@@ -108,6 +108,7 @@ status: active
 - 构建 + `run.bat all Debug --smoke-test-seconds=120`（全矩阵 readiness smoke；Sandbox ready 要求标准场景引用资产已加载）
 - Editor 打开默认场景操作一遍（AssetBrowser 浏览、拖放实例化）
 - 植被纯合同改动先跑 `Vegetation core*` / `Vegetation surface*` / `Vegetation Species*` / `Vegetation Layer codec*` / `Vegetation Chunk codec*` / `Vegetation AssetDatabase*` / `Vegetation brush*` / `Vegetation palette*` / `Vegetation patch*` / `Vegetation mutation*` / `Vegetation storage*` / `Vegetation baker*` / `Vegetation chunk set*` Debug+Release focused tests、全量 `RunTests.bat` 与 `RunArchGate.bat`。
+- Phase 2 聚合验证、readiness/performance/manual exit 结果及 Phase 3 handoff 见 [vegetation feature spec](../features/vegetation.md)。
 
 ## 历史
 
@@ -115,3 +116,4 @@ status: active
 - [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)：Terrain 总体设计；Phase 1–3 已接入 Asset、Render 与 Editor authoring/recovery 边界。
 - [SDD-2026-07-15-terrain-interactive-authoring-workflow](../../sdd/SDD-2026-07-15-terrain-interactive-authoring-workflow.md)：统一仿射编辑层、v1 精确迁移、增量 stroke patch 与默认编辑工作流。
 - [SDD-2026-07-16-vegetation-authoring-and-bake](../../sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md)：植被稳定类型、immutable surface snapshot 与 Phase 2 authoring/bake 合同。
+- [Vegetation feature spec](../features/vegetation.md)：当前跨 Asset/Scene/Editor 长期契约与 Phase 3 handoff。

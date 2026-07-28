@@ -48,7 +48,12 @@ namespace AshEditor
 		uint64_t uPendingAutoExpandKey = 0;
 		double fHoverAutoExpandStartTimeSeconds = 0.0;
 
-		void ResetDragState();
+		void ResetDragState()
+		{
+			uHoverAutoExpandKey = 0;
+			uPendingAutoExpandKey = 0;
+			fHoverAutoExpandStartTimeSeconds = 0.0;
+		}
 	};
 
 	struct EditorTreeDragSourceDesc

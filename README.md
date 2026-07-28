@@ -10,7 +10,7 @@ HASHEAEngine（AshEngine）是一个以现代实时渲染和引擎架构实验�
 - Vulkan / DX12 双后端 RHI，HLSL 经 DXC 编译（SPIR-V / DXIL），shader 反射驱动绑定布局
 - RenderGraph 声明式帧编排：texture 与 `StorageBuffer` 一等资源、transient 生命周期、barrier 与 binding 校验；Deferred 主链路覆盖 GBuffer、AO、CSM 阴影、IBL、体积光、Bloom、TAA、tone-map
 - GPU-driven Phase 1 通用底座：显式 indexed/non-indexed indirect、generation-safe instance page 与双后端 compute → indexed indirect 全链自测；生产 grass/tree、流送和 GPU culling 尚未接入
-- 植被 authoring 与 bake 基础：严格 `.AshVegetation*` 资产 codec、immutable surface capture、Scene v7 reference-only `VegetationComponent`、确定性稀疏整数笔刷与原子可逆 patch，以及可恢复的 content-addressed Chunk-set/active-pointer 发布；GPU 草/树实例化、分块流送、GPU culling/HLOD 仍在后续阶段接入
+- [植被 Phase 2 authoring 与 deterministic bake](docs/specs/features/vegetation.md)：严格 `.AshVegetation*` 资产 codec、immutable surface capture、Scene v7 reference-only `VegetationComponent`、确定性稀疏整数笔刷与原子可逆 patch，以及可恢复的 content-addressed Chunk-set/active-pointer 发布；GPU 草/树实例化、分块流送、GPU culling/HLOD 仍在后续阶段接入
 - Scene-driven 静态网格渲染：ECS-style Scene → 不可变可见帧 → 渲染线程消费
 - Terrain 渲染核心：8193² 高度场、Component LOD、权重 atlas、deferred GBuffer / 方向光阴影与 readiness 驱动抓帧；有限正缩放由 Scene bounds、Editor 动态 reverse-Z 取景、跨 LOD 平滑法线和 receiver-plane PCF 共同保持远近表面稳定
 - Terrain 编辑会话（Phase 3）：Hierarchy 单选 Terrain 实体即可进入 Terrain Mode；无编辑层资产在第一次有效落笔时自动创建通用编辑层。Raise/Lower/Smooth/Flatten/Noise/Paint/Erase 共用非破坏编辑层，拖动期间按 80 ms wall-clock 节奏发布增量预览，完整拖动仍只产生一个 undo/redo 命令；Manage 支持 generation-aware 异步 Save、Save Copy As、clean-only Optimize、Reload/外部冲突处理，以及 non-replacing 的 flat Create、PNG/RAW/EXR Import/Export 后台任务；相同物理容器版本的 refresh/reimport 保持渲染发布幂等，Asset Browser 以稳定路径和 catalog revision 隔离同步 Reimport/refresh，Ctrl+S 会先保存当前 Scene 引用的 dirty Terrain
@@ -52,7 +52,10 @@ run.bat editor|sandbox|all [vulkan|dx12] [Debug]   :: 运行（all = 双程序 x
 ## 验证
 
 ```bat
-RunTests.bat                         :: doctest 单元测试
+RunTests.bat Debug                   :: build + Debug 全量 doctest
+RunTests.bat Release                 :: build + Release 全量 doctest
+product\bin64\Debug-windows-x86_64\Tests.exe --test-case="*Vegetation*"   :: 植被 Debug focused
+product\bin64\Release-windows-x86_64\Tests.exe --test-case="*Vegetation*" :: 植被 Release focused
 RunArchGate.bat                      :: 分层依赖边界检查
 RunRenderGate.bat                    :: 渲染门禁：双后端 golden SSIM 回归 + 跨后端 diff
 RunPerfGate.bat -Profile Standard    :: 性能门禁
@@ -71,6 +74,7 @@ PerfGate 的 `--window-width/--window-height` 必须成对给出；`--perf-gate-
 | [`AGENTS.md`](AGENTS.md) | AI/开发工作流、SDD 风险分级、架构红线、验证要求 |
 | [`docs/README.md`](docs/README.md) | 全部文档的路由索引 |
 | [`docs/specs/`](docs/specs/README.md) | 模块与 feature 的现状规格（权威出处） |
+| [`docs/specs/features/vegetation.md`](docs/specs/features/vegetation.md) | 植被 Phase 2 资产、surface、authoring、bake、LKG 与 Phase 3 handoff |
 | [`docs/VERIFY.md`](docs/VERIFY.md) | 按变更类型的验证矩阵 |
 | [`docs/CODEBASE_MAP.md`](docs/CODEBASE_MAP.md) | 代码库导航（入口、目录、常见任务） |
 

@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-20
+last_reviewed: 2026-07-28
 status: active
 ---
 
@@ -8,7 +8,7 @@ status: active
 
 ## 职责与边界
 
-逻辑场景数据模型（Entity/组件/层级/序列化/变更事件/空间查询）以及 Scene → 渲染数据的唯一桥 `ScenePresentationSubsystem`。管场景内容的增删改查与向渲染侧的增量同步；不管渲染 pass 编排（属 render 模块）、资产 IO（属 asset 模块）、编辑器交互（属 editor 模块）。
+逻辑场景数据模型（Entity/组件/层级/序列化/变更事件/空间查询）以及 Scene → 渲染数据的唯一桥 `ScenePresentationSubsystem`。管场景内容的增删改查、植被 reference-only 组件/surface provider capture 与向渲染侧的增量同步；不管渲染 pass 编排（属 render 模块）、资产 IO/snapshot sampling（属 asset 模块）、编辑器交互（属 editor 模块）。植被跨模块现状见 [feature spec](../features/vegetation.md)。
 
 ## 目录与关键文件
 
@@ -61,7 +61,7 @@ status: active
 - Particle JSON malformed sanitation：字符串/布尔类型错误保留默认值；新增浮点字段的非有限值先回退默认，再 clamp 到各自范围。Scene add/set/load 继续共享同一数值 sanitize 契约。
 - `get_content_epoch()` 只在 load/reload/replace 内容时变化，普通组件编辑不得推进；它用于重置跨帧渲染状态，不替代细粒度 render version。
 - 粒子 GPU 状态以进程内 `scene_runtime_id + entity_id` 隔离；场景解绑会显式释放该 runtime 的状态。
-- 植被 provider 依赖方向固定为 Scene → Asset。capture 仅允许 `Ready+snapshot`、`Pending+null`、`Failed+null`；无 provider、零 binding、`Outside`、异常或其它 shape 全部转为明确 Failed。capture 不读取 mutable Scene/Editor/Terrain 工作状态，worker 只消费捕获后的 immutable snapshot。
+- 植被 provider 依赖方向固定为 Scene → Asset。capture 仅允许 `Ready+snapshot`、`Pending+null`、`Failed+null`；无 provider、零 binding、`Outside`、异常或其它 shape 全部转为明确 Failed。capture 不读取 mutable Scene/Editor/Terrain 工作状态，worker 只消费捕获后的 immutable snapshot。provider 是 trusted in-process cooperative extension；违反 cancel/deadline 合同的调用可能使普通 teardown 无界等待，没有 provider-specific hard kill/guaranteed diagnostic，通用 readiness process watchdog 可终止进程并使门禁失败。
 - 边界：custom pass、compute、后处理实验、调试渲染继续走 Renderer 直驱，不强行塞进 scene presentation；上层需求统一表达为 Scene + Camera + Output + Overrides，不把 `RenderScene`/`SceneView`/`VisibleRenderFrame`/`SceneRenderer` 暴露回上层；UI 显示离屏输出用 `UISurfaceHandle` + `draw_surface_fill_available`。
 - 当前限制：view 的 viewport/scissor 只约束光栅化区域；clear 作用于整个 attachment 而非 rect（多 binding 共享 output 的保留语义后续用 preserve/load 解决）；Window output 不返回有效 `UISurfaceHandle`；`show_flags` 为预留字段。
 
@@ -73,6 +73,7 @@ status: active
 - 人类在 Editor 打开默认场景操作一遍（层级/Inspector/保存）；Agent 只移交清单
 - 改动波及渲染数据流（extraction、VisibleRenderFrame、SceneRenderConfig）时加跑 `RunRenderGate.bat`
 - 只改 snapshot-local 或 Scene world-space Terrain 查询时按 `docs/VERIFY.md` "Terrain Asset / CPU logic" 行执行；它不产生 rendered frame 变化。
+- 植被 schema/provider/extraction focused：先构建对应 Tests target，再分别运行 `product\bin64\Debug-windows-x86_64\Tests.exe --test-case="*Vegetation*"` 与 `product\bin64\Release-windows-x86_64\Tests.exe --test-case="*Vegetation*"`；Phase 2 的 extraction 不接 render packet，完整 exit 见 [vegetation feature spec](../features/vegetation.md)
 
 ## 历史
 
@@ -81,3 +82,4 @@ status: active
 - [SDD-2026-07-11-readiness-driven-automation](../../sdd/SDD-2026-07-11-readiness-driven-automation.md)（当前帧 scene packet readiness 快照）
 - [SDD-2026-07-13-terrain-system](../../sdd/SDD-2026-07-13-terrain-system.md)（Terrain 总体设计；Phase 1 asset core 与 Scene v6 contract 已实现）
 - [SDD-2026-07-16-vegetation-authoring-and-bake](../../sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md)（植被 surface binding/provider 与 immutable snapshot 边界）
+- [Vegetation feature spec](../features/vegetation.md)（Scene v7 reference、provider capture 与 Phase 3 边界）

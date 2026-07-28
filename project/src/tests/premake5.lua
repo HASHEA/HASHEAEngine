@@ -49,6 +49,7 @@ project "Tests"
 		"%{wks.location}/project/src/editor/Core/SceneSnapshotUtils.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorPanel.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorEventBus.cpp",
+		"%{wks.location}/project/src/editor/Core/EditorEventBindings.cpp",
 		"%{wks.location}/project/src/editor/Core/VegetationCommands.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorComponentComparison.cpp",
 		"%{wks.location}/project/src/editor/Core/EditorPathUtils.cpp",

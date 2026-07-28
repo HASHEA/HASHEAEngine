@@ -1,6 +1,11 @@
 #include "Core/EditorContext.h"
 #include "Core/EntityCommands.h"
+#include "Core/EditorEventBindings.h"
+#include "Core/EditorEventBus.h"
+#include "Core/EditorEvents.h"
 #include "Core/SceneSnapshotUtils.h"
+#include "Panels/SceneHierarchy/SceneHierarchyPanelEvents.h"
+#include "Panels/SceneHierarchy/SceneHierarchyPanelState.h"
 #include "Services/SceneService.h"
 #include "Services/SelectionService.h"
 #include "Services/UndoRedoService.h"
@@ -252,6 +257,42 @@ TEST_CASE("VegetationComponent PasteEntitySnapshotsCommand Execute Undo Redo pre
 	CHECK(harness.scene_service.FindEntity(copied_vegetation_id)
 		.get_vegetation_component().surface_entity_id == copied_surface_id);
 	CHECK(CollectRootOrder(harness.scene_service.GetActiveScene(), paste_order) == paste_order);
+}
+
+TEST_CASE("Vegetation scene hierarchy reset clears the scene-local snapshot clipboard")
+{
+	AshEditor::SceneHierarchyPanelState state{};
+	AshEditor::EditorEventBus event_bus{};
+	AshEditor::EditorEventBindings event_bindings{};
+	event_bindings.Bind(&event_bus);
+	AshEditor::BindSceneHierarchySceneLifetimeEvents(event_bindings, state);
+
+	const auto seed_clipboard = [&state]()
+		{
+			AshEditor::SceneEntitySnapshot snapshot{};
+			snapshot.uEntityId = 42;
+			state.vecClipboardEntitySnapshots.push_back(snapshot);
+			state.vecClipboardPreferredParentEntityIds.push_back(7);
+		};
+
+	seed_clipboard();
+	event_bus.Publish(AshEditor::EditorActiveSceneChangedEvent{});
+	CHECK(state.vecClipboardEntitySnapshots.empty());
+	CHECK(state.vecClipboardPreferredParentEntityIds.empty());
+
+	seed_clipboard();
+	AshEditor::EditorSceneChangedEvent reload_event{};
+	reload_event.eKind = AshEngine::SceneChangeKind::SceneReloaded;
+	event_bus.Publish(reload_event);
+	CHECK(state.vecClipboardEntitySnapshots.empty());
+	CHECK(state.vecClipboardPreferredParentEntityIds.empty());
+
+	seed_clipboard();
+	AshEditor::EditorSceneChangedEvent replace_event{};
+	replace_event.eKind = AshEngine::SceneChangeKind::SceneReplaced;
+	event_bus.Publish(replace_event);
+	CHECK(state.vecClipboardEntitySnapshots.empty());
+	CHECK(state.vecClipboardPreferredParentEntityIds.empty());
 }
 
 TEST_CASE("VegetationComponent DeleteEntitiesCommand Execute Undo Redo restores the complete reference pair")

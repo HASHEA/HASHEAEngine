@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-11
+last_reviewed: 2026-07-28
 status: active
 ---
 
@@ -58,6 +58,7 @@ status: active
 | [scene-config.md](features/scene-config.md) | scene json 的 `scene_config` 渲染配置 schema |
 | [render-debug-view.md](features/render-debug-view.md) | 中间纹理调试可视化 |
 | [debug-draw.md](features/debug-draw.md) | DebugDrawService 调试几何绘制 |
+| [vegetation.md](features/vegetation.md) | 植被 Phase 2 资产、surface snapshot/provider、Scene v7、authoring/history、deterministic bake 与 LKG |
 
 ## 模板
 

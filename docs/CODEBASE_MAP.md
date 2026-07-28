@@ -1,6 +1,6 @@
 ---
 owner: huyizhou
-last_reviewed: 2026-07-14
+last_reviewed: 2026-07-28
 review_cycle: monthly
 status: active
 ---
@@ -73,6 +73,14 @@ status: active
 4. `AssetDatabase` 共享同步/异步缓存，并按 generation/revision 发布或精确失效单一 Terrain ID；Editor 外部重载使用隔离 candidate 与绑定资产/目录代/发布 serial 的 compare-exchange token
 5. `TerrainQuery` 查询 terrain-local snapshot，Scene v6/world-space adapter 与 Editor Terrain Mode 消费同一 immutable snapshot；Terrain render asset 从实际矩形布局动态分配 height/coarse 资源，并以完整 candidate bundle 在帧边界原子切换 published snapshot/resources/bounds；Terrain Mode 已通过 service-owned immutable jobs 提供共享 Target Size 的 Create/Import、Export、保存、冲突与恢复流程
 
+### Vegetation Phase 2 authoring and bake flow
+
+1. `AssetDatabase` typed-loads canonical `.AshVegetation` Species and `.AshVegetationLayer` authoring state with explicit budgets and one immutable resolver snapshot.
+2. Scene v7 `VegetationComponent` stores only Layer path, surface entity ID, and enabled state; `IVegetationSurfaceProvider` captures an Asset-owned immutable snapshot.
+3. `VegetationPanel` submits intents through `VegetationEditorService`; palette/stroke mutations publish atomic patches and enter document-scoped history through `RecordExecutedCommand`.
+4. Workers sample only frozen snapshots and prepare deterministic ASVC objects plus an ASVM manifest; the Editor logic thread revalidates identities before switching `active.asva`.
+5. Any failed/stale/cancelled publication retains the prior last-known-good active manifest. Phase 2 does not submit vegetation to the renderer; see `docs/specs/features/vegetation.md`.
+
 ## Public abstractions
 
 | Name | Location | Purpose | Constraints |
@@ -86,6 +94,9 @@ status: active
 | `UIContext` | `engine/Function/` | Editor 与 Engine 的 UI 交互边界 | Editor 不得绕过它直用 ImGui/Graphics |
 | `UINodeEditor` / `UINodeGraphModel` | `engine/Function/Gui/` | 通用节点画布门面与纯数据图模型，封装 `imgui-node-editor` 交互边界 | 第三方库只在 Engine.dll 内使用；Editor 只提交节点/pin/link 数据 |
 | `TerrainAssetSnapshot` / `TerrainWorkingSet` | `engine/Function/Asset/TerrainData.*` | Terrain 不可变读取快照与受信可变编辑状态 | 发布后 snapshot 不可修改；Scene/Render/Editor 只消费公共 Function 接口，Editor 独占 mutable working set |
+| `IVegetationSurfaceSnapshot` | `engine/Function/Asset/VegetationSurface.*` | worker-safe immutable resident batch sampling | Asset owns DTO/wrapper；不引用 Scene/Terrain/Editor；失败不发布 partial result |
+| `VegetationSurfaceBinding` / `IVegetationSurfaceProvider` | `engine/Function/Scene/VegetationSurfaceProvider.*` | Scene surface identity binding 与逻辑线程 capture | Scene → Asset 单向依赖；worker 只持 capture 后 snapshot |
+| `VegetationEditorService` | `editor/Services/VegetationEditorService.*` | Layer/palette/stroke/history/save/reload/bake 状态机与 LKG | Panel 只提交 intent；worker 只 prepare，逻辑线程 checked commit |
 
 ## Dependency direction
 
@@ -108,6 +119,7 @@ Forbidden: Editor/Sandbox → Graphics（或任何 Vulkan/DX12 细节）
 | Editor 面板功能 | `docs/specs/modules/editor.md`、`docs/editor/EditorCodeStyleGuide.md` | `editor/Panels/`、`Services/` | Editor smoke run（`run.bat editor`） |
 | 场景/资产能力 | `docs/specs/modules/scene.md`、`docs/specs/modules/asset.md` | `Function/Scene/`、`Asset/`、scene json | Sandbox + Editor smoke run |
 | Terrain Asset / CPU logic | `docs/specs/features/terrain.md`、`docs/specs/modules/asset.md`、`docs/specs/modules/scene.md` | `Function/Asset/Terrain*`、`AssetDatabase.*`、`Function/Scene/TerrainQuery.*`、`tests/Terrain/` | Debug/Release tests + ArchGate + fresh builds（依赖变化时）+ 双后端/双目标 readiness smoke |
+| 植被 Phase 2 合同 | `docs/specs/features/vegetation.md`、Asset/Scene/Editor module specs | `Function/Asset/Vegetation*`、`Function/Scene/Vegetation*`、`editor/*Vegetation*` | Debug+Release `*Vegetation*` + full builds/readiness；GPU/manual closure 按 feature spec |
 | 改构建/工具链 | `premake5.lua`、对应脚本 | `scripts/`、`tools/`、根 `*.bat` | `TestAIDevDoctor.ps1` / `TestRunPerfGate.ps1` + 全新构建 |
 | Base 层纯逻辑改动 | `docs/specs/modules/base.md`、相邻实现 | `engine/Base/`、`project/src/tests/Base/` | `RunTests.bat` |
 
