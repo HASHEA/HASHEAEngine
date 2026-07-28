@@ -11,12 +11,7 @@ namespace AshEditor
 	class EditorCommand;
 	struct EditorCommandDocumentKey;
 
-	enum class EditorCommandRecordResult : uint8_t
-	{
-		Recorded = 0,
-		RolledBack,
-		RollbackFailed
-	};
+	enum class EditorCommandRecordResult : uint8_t;
 
 	class IEditorCommandExecutor
 	{
@@ -33,7 +28,11 @@ namespace AshEditor
 			return true;
 		}
 		virtual std::size_t RemoveCommandsForDocument(
-			const EditorCommandDocumentKey& refKey) = 0;
+			const EditorCommandDocumentKey& refKey)
+		{
+			(void)refKey;
+			return 0;
+		}
 		virtual bool BeginCommandTransaction(const char* pLabel)
 		{
 			(void)pLabel;

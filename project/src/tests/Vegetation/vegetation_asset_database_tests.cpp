@@ -31,9 +31,10 @@ static_assert(static_cast<uint8_t>(AshEngine::AssetType::Prefab) == 7);
 static_assert(static_cast<uint8_t>(AshEngine::AssetType::Material) == 8);
 static_assert(static_cast<uint8_t>(AshEngine::AssetType::Text) == 9);
 static_assert(static_cast<uint8_t>(AshEngine::AssetType::Binary) == 10);
-static_assert(static_cast<uint8_t>(AshEngine::AssetType::Species) == 11);
-static_assert(static_cast<uint8_t>(AshEngine::AssetType::Layer) == 12);
-static_assert(static_cast<uint8_t>(AshEngine::AssetType::Chunk) == 13);
+static_assert(static_cast<uint8_t>(AshEngine::AssetType::Terrain) == 11);
+static_assert(static_cast<uint8_t>(AshEngine::AssetType::Species) == 12);
+static_assert(static_cast<uint8_t>(AshEngine::AssetType::Layer) == 13);
+static_assert(static_cast<uint8_t>(AshEngine::AssetType::Chunk) == 14);
 
 namespace
 {

@@ -375,9 +375,9 @@ TEST_CASE("TerrainComponent rejects invalid state atomically and keeps revisions
 	CHECK(scene.extract_terrain_entities().empty());
 }
 
-TEST_CASE("Scene v6 preserves Terrain and v5 scenes migrate without Terrain")
+TEST_CASE("Scene v7 preserves Terrain and v5 scenes migrate without Terrain")
 {
-	const fs::path root = TestRoot("schema-v6");
+	const fs::path root = TestRoot("schema-v7");
 	const fs::path path = root / "terrain_component_roundtrip.scene.json";
 	AshEngine::Scene source = AshEngine::Scene::create("Terrain Save");
 	AshEngine::Entity entity = source.create_entity("Terrain");
@@ -391,7 +391,7 @@ TEST_CASE("Scene v6 preserves Terrain and v5 scenes migrate without Terrain")
 	REQUIRE(source.save_to_file(path, &error));
 	REQUIRE_MESSAGE(error.empty(), error);
 	json saved = ReadJson(path);
-	CHECK(saved.at("version") == 6u);
+	CHECK(saved.at("version") == 7u);
 	REQUIRE(saved.at("entities").size() == 1u);
 	const json& terrain_json = saved.at("entities")[0].at("terrain");
 	CHECK(terrain_json.at("asset_path") == "terrain/TerrainGate.AshTerrain");

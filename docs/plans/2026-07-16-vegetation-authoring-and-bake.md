@@ -1,6 +1,6 @@
 # Vegetation Authoring and Deterministic Bake Implementation Plan
 
-**Status:** Task 12 Steps 1–5 are complete: durable documentation, fresh CPU tests/builds, architecture/plan gates, two clean code-freeze pre-reviews, the coordinated readiness/render/performance matrix, and human Vulkan/DX12 disabled-path acceptance have passed. The first Step 6 final reviews found two P2 contract gaps; both now have RED/GREEN regression coverage and minimal fixes. Fresh affected tests, Editor builds, architecture/plan gates, and Vulkan/DX12 readiness are clean. Step 6 is waiting only for the immutable-candidate hashes, replacement independent reviews, and selective commit. The prior pre-remediation SDD hash `0ACE3FFFB9E955B131D1300ADF11F0CC56669FB43767413BB341AB7D7622C991` is invalid as the final archive lock. Task 11 executed against the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which is the Task 11 SDD review lock. Historical approval/execution locks remain preserved in the hash chain below.
+**Status:** Done. Tasks 1–12, final contract remediation, selective Phase 2 commits, the automated exit matrix, and Vulkan/DX12 human acceptance are complete. On 2026-07-28 the finished branch was rebased onto `main` at `d8b4db8137483037eb123dd89589d819c3b4e11c`; the post-rebase compatibility fixes and verification evidence are recorded in Step 6 below. The prior pre-remediation SDD hash `0ACE3FFFB9E955B131D1300ADF11F0CC56669FB43767413BB341AB7D7622C991` is invalid as the final archive lock. Task 11 executed against the synchronized Task 10 SDD text at SHA-256 `8B2ACD8B7F70154C666D7CAAA3E011C90801D811DF7AC8EB709DE5680913B5BD`, which is the Task 11 SDD review lock. Historical approval/execution locks remain preserved in the hash chain below.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use `superpowers:executing-plans` for task execution, `superpowers:test-driven-development` for every behavior change, `superpowers:receiving-code-review` for findings, and `superpowers:verification-before-completion` before any completion claim. Keep one implementation task in progress at a time and request two independent read-only reviews before each focused commit.
 
@@ -2695,7 +2695,7 @@ Task 12 Step 5 human evidence (2026-07-28, source HEAD
   window was explicitly released. No user asset, golden, or perf baseline
   was modified.
 
-- [ ] **Step 6: Write final evidence, lock the final diff, re-review, and selectively commit**
+- [x] **Step 6: Write final evidence, lock the final diff, re-review, and selectively commit**
 
 After automated and human evidence is complete, update every Task 12 spec/SDD/plan file with exact report paths, case/assertion counts, source HEAD, manual Vulkan/DX12 outcome, config/baseline restoration, remaining limitations, and Phase 3 handoff. Only now may the Phase 2 SDD status become Done; if human evidence is unavailable or failed, leave it non-Done and record the pending/failed gate. Run AIDevDoctor and `git diff --check`, then record SHA-256 for the complete plan, SDD, and final diff path list.
 
@@ -2841,10 +2841,52 @@ Fresh affected readiness then passed in two bounded Editor runs:
   That package must report `4/4` fresh coverage, fresh logs/PerfGate, and no
   inferred validation gap before the hashes below may be reviewed.
 
+Post-`main` integration retained both Terrain and Vegetation contracts instead
+of choosing one side of the former Scene/Asset/Editor conflicts. The rebased
+candidate has one authoritative `EditorCommandRecordResult` definition,
+keeps `RemoveCommandsForDocument` backward-compatible for existing executors,
+assigns `AssetType::Terrain=11` and Vegetation `Species/Layer/Chunk=12/13/14`,
+and updates the Terrain round-trip expectation to the combined Scene v7
+schema. Fresh generation and Debug/Release Tests, Editor, and Sandbox builds
+passed. Direct Debug/Release full suites each passed `965/965` cases with no
+failures (`2` privilege-dependent skips); the final runs executed
+`70115/70115` and `70116/70116` assertions respectively. `RunArchGate.bat`
+passed with the unchanged `35` legacy warnings, and AIDevDoctor validation
+passed.
+
+The post-rebase runtime evidence is:
+
+- Editor/Sandbox x Vulkan/DX12 Debug readiness completed with clean exits and
+  zero rejected diagnostics in the eight fresh Engine/Application logs.
+- Non-bless RenderGate report
+  `Intermediate/test-reports/render-gate/20260728-153908-200-65760-e3985ad5/`
+  passed both backends and cross-backend comparison.
+- Standard PerfGate report
+  `Intermediate/test-reports/perf-gate/20260728-154310-682-40936-353aa4d6/`
+  passed all four Sandbox/Editor x Vulkan/DX12 runs without warning or
+  failure and retained the expected `MISSING` baseline state.
+- The final uninterrupted VegetationFullPipeline report
+  `Intermediate/test-reports/perf-gate/20260728-161100-669-20676-c387bc32/`
+  completed both backends with `COMPARED`, zero failures, `100%` GPU metric
+  coverage, unchanged `233` draw calls, sample coverage above `99.94%`, and
+  maximum gaps of `70.483 ms` / `42.933 ms`. It is retained as `WARN`:
+  whole-frame GPU avg/p95 deltas were only `+4.4%/+3.7%` on Vulkan and
+  `+0.49%/+0.51%` on DX12, while warnings were limited to CPU P99 tails and
+  `0.1191 ms` / `0.0675 ms` DeferredLighting average deltas. Because Phase 2
+  changes no Graphics, RenderGraph, RHI, render content, or draw count, this
+  is accepted as environment/sub-millisecond variance under the repository
+  WARN policy; no baseline was blessed or modified.
+- Interrupted reports
+  `20260728-154936-592-35212-e6a00221` and
+  `20260728-155136-169-69520-5a65c8c1` remain retained as failures. Their
+  logs prove that the test window was minimized for about 20 seconds during
+  sampling; they are not used as passing evidence.
+- The user reported Vulkan PASS, DX12 PASS, confirmed the separate DX12 Layer
+  was saved, and reported DX12 supplemental PASS.
+
 These changes do not touch Graphics, RenderGraph, RHI, render content,
 fixtures, goldens, perf baselines, or the already accepted
-canonical-extension manual workflow. Final hashes and replacement independent
-review verdicts are the remaining pre-commit evidence.
+canonical-extension manual workflow.
 
 ```powershell
 $sddHash = (Get-FileHash -Algorithm SHA256 docs/sdd/SDD-2026-07-16-vegetation-authoring-and-bake.md).Hash

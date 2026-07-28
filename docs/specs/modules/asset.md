@@ -39,7 +39,7 @@ status: active
 
 - 标识与元数据：`AssetId`（uint64）；`AssetInfo`（id/type/name/relative_path/parent_path/is_directory/file_size/last_write_time_ticks）。
 - 枚举：
-  - `AssetType`：Unknown / Directory / Scene / Shader / Texture / Mesh / Model / Prefab / Material / Text / Binary / Terrain / Species / Layer / Chunk。
+  - `AssetType`：Unknown / Directory / Scene / Shader / Texture / Mesh / Model / Prefab / Material / Text / Binary / Terrain / Species / Layer / Chunk。持久数值中 Terrain 为 `11`，植被 Species / Layer / Chunk 为 `12` / `13` / `14`；集成不得复用或重排这些值。
   - `AssetLoadState`：Unknown / Unloaded / Loading / Loaded / Missing / Failed。
 - `AssetDatabase`（shared_ptr pimpl 值语义句柄）：
   - 生命周期与索引：`create(root_path)`、`is_valid`、`set_root_path` / `get_root_path`、`refresh`、`get_assets`、`find_asset_by_id` / `find_asset_by_path`。
