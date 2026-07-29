@@ -63,6 +63,9 @@ run.bat sandbox <vulkan|dx12> Debug --smoke-test-seconds=120 --rhi-selftest-cons
 run.bat sandbox <vulkan|dx12> Debug --rhi-selftest-indirect --run-for-frames=1
 ```
 
+源码边界类 doctest 必须跨 Git checkout 换行设置稳定；Windows 下以文本模式
+读取 C++ fixture，不把 CRLF/LF 的物理编码差异当作行为差异。
+
 最后两条分别是 opt-in 的 constant-buffer 可见性诊断和 bounded indirect 全链诊断。indirect 命令先运行 raw RHI compute/barrier/draw 自测，再运行 Function RenderGraph external candidate → transient visible/args → indexed draw → args SRV validation 自测；两段都必须输出 PASS 并 clean exit。CI 会在 WARP/lavapipe 上把两类诊断独立执行。每次进程运行会在 `product/logs` 生成 session 后缀相同且不会覆盖旧会话的 Engine/Application 日志对，矩阵证据审计规则见 `docs/VERIFY.md`。按变更类型的完整验证矩阵同样见该文档；渲染改动必须双后端验证。
 
 PerfGate 的 `--window-width/--window-height` 必须成对给出；`--perf-gate-gpu-timing/validation/vsync=on|off` 与时长参数只覆盖当前进程，不改写 `Engine.ini`。GPU timing 仅在启用 PerfGate 且显式为 `on` 时向 RHI 请求启用；Vulkan/DX12 都只在精确 graphics submit 已绑定既有 completion primitive 后确认本帧 submitted，Renderer 以固定容量、非阻塞方式携带延迟完成 sample。PerfGate 以 frame ID 做 Warmup/Sampling/Draining/Complete 归档并输出 schema v2；总 coverage 与逐 metric coverage 分开记录，固定 profile 还要求 wall-clock sampling span 至少覆盖 90%、最大 sample gap 不超过 0.25 秒且采样率不低于 30 Hz。`VegetationFullPipeline` 在 baseline 存在时比较 CPU、内存、draw、`GPU.Frame` 与全部 required pass avg/p95；baseline avg `< 0.1 ms` 的 tiny pass 只有在 avg 与 p95 同时超出各自绝对阈值时才由 p95 追加 WARN，较大 pass 与 `GPU.Frame` 仍独立门禁。可比性用 adapter、driver、OS build 和规范化 workload fingerprint 拒绝不匹配数据；source SHA 仅作归因，不要求与 baseline 相同。用户已批准的固定 profile 候选还可用 `-BlessBaselineFromReport` + 精确 SHA-256 经 fail-closed 校验后导入；该路径对同一 raw byte snapshot 做解析与哈希，并从 raw canonical record 逐项核对所有 baseline 字段，不重新运行程序，也禁止手工编辑基线。validation 的实际启用状态仍受 Debug/Release 编译能力约束。

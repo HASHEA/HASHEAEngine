@@ -208,6 +208,10 @@ Create/Import 产生的 `.AshTerrain` target 必须以配置后的 AssetDatabase
 - `RunRenderGate.bat`：渲染行为变更须保持双后端 golden SSIM 与跨后端 diff 通过；本阶段不新增或 bless Terrain golden。
 - `scripts/AIDevDoctor.ps1 -Mode ValidatePlan`：核对 dirty path 对应的验证计划。
 
+Terrain 的源码边界测试以文本模式读取 C++ fixture；Windows checkout 的 CRLF
+必须先由流转换为逻辑 LF，再执行需要换行结构的源码断言。测试不得把 Git
+工作树的物理换行编码当作 RenderGraph 或 ScenePresentation 行为契约。
+
 `SceneRenderer` integration slice 已通过 headless graph contract、DXIL/SPIR-V 全 permutation 离线编译、Debug/Release 全量单测与 Editor/Sandbox 构建、ArchGate，以及既有 sandbox/particles 的双后端 RenderGate 回归。production-size Terrain fixture 与纯 readiness contract 已加入。2026-07-14 的 Phase 2 exit gate 在隔离 worktree 中完成：Terrain Vulkan core/synchronization validation 与 DX12 GPU validation capture 均 readiness/clean exit 成功，fresh 日志零 error、warning、validation/device-loss/fatal；Vulkan SPIR-V 的三张权重 storage image 已确认与 RGBA8_UNORM view 匹配。Standard PerfGate 四组合均 PASS 且 Failures/Warnings 为空，未 bless；该报告的 Standard 历史 baseline 状态为 `MISSING`，因此 CPU/GPU 数值只作为本次运行健康证据，不替代 Phase 4 的 300 FPS 与历史回归验收。Terrain 专用 golden 仍未授权，且不得把既有非 Terrain 场景的 PASS 当作 Terrain 可见性证据。
 
 2026-07-15 的 Phase 3 自动 exit gate 已通过 Debug/Release 全量测试、fresh generate 与 Editor/Sandbox Debug/Release 构建、ArchGate、AIDevDoctor、Terrain Editor 双后端定向 readiness、四组合 readiness、Standard / Empty / Debug / TimingValidation、既有 sandbox/particles RenderGate 和 Standard PerfGate 4/4；全部运行未 bless，并逐字节恢复四份运行配置。Standard 四格 baseline status 均为 `MISSING`，所以这里只证明采样健康、零 warning/failure，不声称完成历史性能回归比较。该证据不替代 `docs/VERIFY.md` 的双后端 Terrain Mode 人工清单；Terrain 专用 capture/golden 仍属于 Phase 4。

@@ -801,13 +801,27 @@ TEST_CASE("Vegetation storage removes a long owned stage tree exactly")
 {
 	VegetationTest::ScopedAssetRoot root("storage-long-owned-tree-cleanup");
 	AshEngine::IVegetationFileOps& file_ops = AshEngine::get_default_vegetation_file_ops();
+	constexpr size_t store_root_target_size = 248u;
 	std::filesystem::path store_relative = "long-owned-tree-parent";
-	while ((root.Path() / store_relative).native().size() < 240)
+	while ((root.Path() / store_relative / "deterministic-segment")
+		.lexically_normal().native().size() <= store_root_target_size)
 	{
 		store_relative /= "deterministic-segment";
 	}
+	const std::filesystem::path unpadded_store_root =
+		(root.Path() / store_relative).lexically_normal();
+	REQUIRE(unpadded_store_root.native().size() <= store_root_target_size);
+	if (unpadded_store_root.native().size() < store_root_target_size)
+	{
+		const size_t one_character_size =
+			(unpadded_store_root / "x").lexically_normal().native().size();
+		REQUIRE(one_character_size <= store_root_target_size);
+		store_relative /=
+			std::string(store_root_target_size - one_character_size + 1u, 'x');
+	}
 	const std::filesystem::path store_root =
 		(root.Path() / store_relative).lexically_normal();
+	REQUIRE(store_root.native().size() == store_root_target_size);
 	REQUIRE(store_root.native().size() < 260);
 	REQUIRE(file_ops.EnsureDirectoryTree(root.Path(), store_relative) ==
 		AshEngine::VegetationFileResultStatus::Succeeded);
