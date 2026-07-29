@@ -73,7 +73,7 @@ namespace
 
 	auto ReadSource(const char* path) -> std::string
 	{
-		std::ifstream input(path, std::ios::binary);
+		std::ifstream input(path);
 		REQUIRE(input.is_open());
 		return std::string(
 			std::istreambuf_iterator<char>(input),
